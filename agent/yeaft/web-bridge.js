@@ -1605,7 +1605,13 @@ export function handleYeaftArchiveSession(msg) {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const result = archiveSession(yeaftDir, sessionId);
     invalidateGroupContext(sessionId);
-    sendSessionCrudResult({ op: 'archive', requestId, ok: true, sessionId: result.sessionId });
+    sendSessionCrudResult({
+      op: 'archive',
+      requestId,
+      ok: true,
+      sessionId: result.sessionId,
+      alreadyGone: !!result.alreadyGone,
+    });
     sendSessionSnapshotBroadcast();
   } catch (err) {
     sendSessionCrudResult({ op: 'archive', requestId, ok: false, error: sessionErrorPayload(err) });
@@ -1646,6 +1652,7 @@ export function handleYeaftDeleteSession(msg) {
       ok: true,
       sessionId: result.sessionId,
       messagesRemoved,
+      alreadyGone: !!result.alreadyGone,
     });
     sendSessionSnapshotBroadcast();
   } catch (err) {

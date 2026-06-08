@@ -356,8 +356,11 @@ export function archiveSession(yeaftDir, sessionId) {
   const groupYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
   const root = sessionsRoot(groupYeaftDir);
   const srcDir = join(root, sessionId);
+  // Idempotent — nothing on disk, nothing to archive. Workdir-registry is
+  // still cleared in case it points at a stale row.
   if (!existsSync(srcDir) || !loadSessionMeta(srcDir)) {
-    throw new SessionCrudError('not_found', sessionId);
+    unregisterSessionWorkDir(yeaftDir, sessionId);
+    return { sessionId, archivedAs: null, alreadyGone: true };
   }
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   // Append 4 hex chars to disambiguate same-millisecond archives (nit #5).
@@ -365,7 +368,7 @@ export function archiveSession(yeaftDir, sessionId) {
   const dstDir = join(root, `.archived-${ts}-${suffix}-${sessionId}`);
   renameSync(srcDir, dstDir);
   unregisterSessionWorkDir(yeaftDir, sessionId);
-  return { sessionId, archivedAs: dstDir };
+  return { sessionId, archivedAs: dstDir, alreadyGone: false };
 }
 
 /**
@@ -401,10 +404,12 @@ export function deleteSession(yeaftDir, sessionId, options = {}) {
     }
   }
 
-  if (!liveExists && legacyDirs.length === 0) {
-    throw new SessionCrudError('not_found', sessionId);
-  }
-
+  // Idempotent — POSIX `rm -f` / HTTP DELETE semantics. If nothing is on
+  // disk, treat as a successful no-op so callers (and any shadow / cache
+  // they maintain) can converge to "gone". We still cascade the memory
+  // scope and workdir-registry teardown below: a stale `summary.md` left
+  // over from a previous incarnation would otherwise contaminate a future
+  // recreate of the same id.
   if (liveExists) {
     rmSync(srcDir, { recursive: true, force: true });
   }
@@ -414,6 +419,7 @@ export function deleteSession(yeaftDir, sessionId, options = {}) {
 
   // Cascade: drop the group's memory scope so a recreate with the same id
   // starts clean. Best-effort — never let memory cleanup fail the CRUD op.
+  // Runs unconditionally so the idempotent path also clears stale memory.
   try {
     removeScopeDirSync({ kind: 'group', id: sessionId }, { root: memoryRoot });
   } catch (err) {
@@ -421,7 +427,12 @@ export function deleteSession(yeaftDir, sessionId, options = {}) {
   }
 
   unregisterSessionWorkDir(yeaftDir, sessionId);
-  return { sessionId, deleted: true, legacyCleanedUp: legacyDirs.length };
+  return {
+    sessionId,
+    deleted: liveExists,
+    legacyCleanedUp: legacyDirs.length,
+    alreadyGone: !liveExists && legacyDirs.length === 0,
+  };
 }
 
 /**
