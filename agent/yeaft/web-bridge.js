@@ -43,6 +43,9 @@ import {
   snapshotSessions,
   resolveSessionYeaftDir,
   sessionsRoot,
+  scanWorkdirSessions,
+  restoreSessionToRegistry,
+  readWorkDirRegistry,
 } from './sessions/session-crud.js';
 import { openSession, loadSessionMeta } from './sessions/session-store.js';
 import { loadSessionConfig, resolveSessionConfig, SessionConfigError } from './sessions/session-config.js';
@@ -1498,6 +1501,63 @@ export function handleYeaftCreateSession(msg) {
     sendSessionSnapshotBroadcast();
   } catch (err) {
     sendSessionCrudResult({ op: 'create', requestId, ok: false, error: sessionErrorPayload(err) });
+  }
+}
+
+/**
+ * `yeaft_scan_workdir_sessions` — read-only probe: list every yeaft
+ * session physically present under `<workDir>/.yeaft/sessions/` along with
+ * an `alreadyRegistered` flag (so the restore UI can disable sessions
+ * already visible in the sidebar). Never mutates the registry; never
+ * throws on missing/empty directories.
+ *
+ * Pairs with `handleYeaftRestoreSession` for the "Restore session from a
+ * workdir" flow — see plan rosy-snuggling-waterfall.md.
+ */
+export function handleYeaftScanWorkdirSessions(msg) {
+  const requestId = msg && msg.requestId;
+  try {
+    const workDir = String(msg && msg.workDir || '').trim();
+    if (!workDir) throw new SessionCrudError('invalid_workdir', null, 'workDir required');
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    // scanWorkdirSessions is a layer-pure utility — it doesn't read the
+    // central workdir registry. The handler is the right layer to fold in
+    // `alreadyRegistered` because that flag couples the per-workdir scan
+    // to a specific agent's registry (the same scan from a CLI tool or
+    // a different agent would compare against a different registry).
+    const sessions = scanWorkdirSessions(workDir);
+    const registry = readWorkDirRegistry(yeaftDir);
+    const decorated = sessions.map(s => ({
+      ...s,
+      alreadyRegistered: Object.prototype.hasOwnProperty.call(registry, s.id),
+    }));
+    sendSessionCrudResult({ op: 'scan_workdir', requestId, ok: true, sessions: decorated });
+  } catch (err) {
+    sendSessionCrudResult({ op: 'scan_workdir', requestId, ok: false, error: sessionErrorPayload(err) });
+  }
+}
+
+/**
+ * `yeaft_restore_session` — register `(sessionId, workDir)` in the
+ * central workdir registry so the next `snapshotSessions()` includes
+ * the session. Validates the session dir exists; rebroadcasts the
+ * snapshot on success so connected sidebars refresh.
+ *
+ * Idempotent: re-restoring an already-registered session succeeds.
+ */
+export function handleYeaftRestoreSession(msg) {
+  const requestId = msg && msg.requestId;
+  const sessionId = msg && msg.sessionId;
+  const workDir = String(msg && msg.workDir || '').trim();
+  try {
+    if (!sessionId) throw new SessionCrudError('invalid_session_id', null);
+    if (!workDir) throw new SessionCrudError('invalid_workdir', sessionId);
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const meta = restoreSessionToRegistry(yeaftDir, sessionId, workDir);
+    sendSessionCrudResult({ op: 'restore', requestId, ok: true, session: meta });
+    sendSessionSnapshotBroadcast();
+  } catch (err) {
+    sendSessionCrudResult({ op: 'restore', requestId, ok: false, error: sessionErrorPayload(err) });
   }
 }
 

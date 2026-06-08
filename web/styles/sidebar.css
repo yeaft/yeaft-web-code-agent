@@ -499,6 +499,12 @@
   width: 16px;
   height: 16px;
 }
+/* feat-yeaft-session-restore: when both Create + Restore action buttons
+   sit in the same tab header, only the first (Create) grabs the auto
+   margin — subsequent buttons sit flush next to it with a small gap. */
+.session-tab.session-tab-solo .session-tab-add-btn + .session-tab-add-btn {
+  margin-left: 4px;
+}
 
 .session-tab-count {
   font-size: 11px;

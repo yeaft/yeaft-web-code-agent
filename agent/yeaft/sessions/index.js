@@ -52,6 +52,8 @@ export {
   snapshotSessions,
   updateSessionConfig,
   updateSessionAnnouncement,
+  scanWorkdirSessions,
+  restoreSessionToRegistry,
 } from './session-crud.js';
 export {
   loadSessionConfig,
