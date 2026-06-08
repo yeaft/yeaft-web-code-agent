@@ -1503,7 +1503,16 @@ export function handleYeaftCreateSession(msg) {
 
 export function handleYeaftRenameSession(msg) {
   const requestId = msg && msg.requestId;
-  const sessionId = msg && msg.sessionId;
+  // fix-yeaft-delete-and-agent-revert: accept legacy `groupId` in
+  // addition to `sessionId`. The contract documented in
+  // `web/stores/sessions.js` header ("Inbound payloads may carry
+  // either sessionId (new) or groupId (legacy); both are accepted,
+  // prefer sessionId") was only honored on web-side reads; the agent
+  // handlers were silently rejecting the older wire shape that today's
+  // SessionSettingsModal still sends. That's what made delete/rename/
+  // archive/update_config/add_member/remove_member/set_default_vp
+  // all throw `not_found` on undefined ids.
+  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
   const name = msg && msg.name;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
@@ -1532,7 +1541,8 @@ export function handleYeaftRenameSession(msg) {
  */
 export function handleYeaftUpdateSession(msg) {
   const requestId = msg && msg.requestId;
-  const sessionId = msg && msg.sessionId;
+  // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
+  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
   const patch = (msg && msg.patch && typeof msg.patch === 'object') ? msg.patch : null;
   try {
     const hasName = patch && typeof patch.name === 'string' && patch.name.trim().length > 0;
@@ -1566,7 +1576,8 @@ export function handleYeaftUpdateSession(msg) {
  */
 export function handleYeaftUpdateSessionConfig(msg) {
   const requestId = msg && msg.requestId;
-  const sessionId = msg && msg.sessionId;
+  // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
+  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
   const partial = (msg && msg.config && typeof msg.config === 'object') ? msg.config : null;
   try {
     if (!sessionId) throw new SessionConfigError('missing_group_id', 'sessionId required');
@@ -1588,7 +1599,8 @@ export function handleYeaftUpdateSessionConfig(msg) {
 
 export function handleYeaftArchiveSession(msg) {
   const requestId = msg && msg.requestId;
-  const sessionId = msg && msg.sessionId;
+  // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
+  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const result = archiveSession(yeaftDir, sessionId);
@@ -1602,7 +1614,8 @@ export function handleYeaftArchiveSession(msg) {
 
 export function handleYeaftDeleteSession(msg) {
   const requestId = msg && msg.requestId;
-  const sessionId = msg && msg.sessionId;
+  // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
+  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const result = deleteSession(yeaftDir, sessionId);
@@ -1642,7 +1655,8 @@ export function handleYeaftDeleteSession(msg) {
 
 export function handleYeaftSessionAddMember(msg) {
   const requestId = msg && msg.requestId;
-  const sessionId = msg && msg.sessionId;
+  // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
+  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
   const vpId = msg && msg.vpId;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
@@ -1657,7 +1671,8 @@ export function handleYeaftSessionAddMember(msg) {
 
 export function handleYeaftSessionRemoveMember(msg) {
   const requestId = msg && msg.requestId;
-  const sessionId = msg && msg.sessionId;
+  // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
+  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
   const vpId = msg && msg.vpId;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
@@ -1678,7 +1693,8 @@ export function handleYeaftSessionRemoveMember(msg) {
 
 export function handleYeaftSessionSetDefaultVp(msg) {
   const requestId = msg && msg.requestId;
-  const sessionId = msg && msg.sessionId;
+  // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
+  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
   const vpId = msg && msg.vpId;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;

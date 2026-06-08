@@ -130,12 +130,21 @@ export const useSessionsStore = defineStore('sessions', {
       let lastViewed = null;
       try { lastViewed = localStorage.getItem('lastViewedYeaftSession') || null; }
       catch (_) {}
+      // fix-yeaft-delete-and-agent-revert: when this snapshot belongs
+      // to a specific agent, only trust `lastViewed` if that id is
+      // ALSO owned by the same agent. Otherwise the sanitizer below
+      // silently jumps the UI back to the previous agent (the
+      // create-in-B-then-click-reverts-to-A bug). Prefer `null`
+      // (i.e. fall through to `sessionOrder[0]`) over wrong.
+      const lastViewedSession = lastViewed ? this.sessions[lastViewed] : null;
+      const lastViewedOk = lastViewedSession
+        && (!agentId || lastViewedSession.agentId === agentId);
       if (this.activeSessionId && !this.sessions[this.activeSessionId]) {
-        this.activeSessionId = (lastViewed && this.sessions[lastViewed])
+        this.activeSessionId = lastViewedOk
           ? lastViewed
           : (this.sessionOrder[0] || null);
       } else if (!this.activeSessionId && this.sessionOrder.length > 0) {
-        this.activeSessionId = (lastViewed && this.sessions[lastViewed])
+        this.activeSessionId = lastViewedOk
           ? lastViewed
           : this.sessionOrder[0];
       }
@@ -145,10 +154,13 @@ export const useSessionsStore = defineStore('sessions', {
       try {
         const chat = window.Pinia?.useChatStore?.();
         if (chat && chat.yeaftActiveSessionFilter && !this.sessions[chat.yeaftActiveSessionFilter]) {
-          chat.yeaftActiveSessionFilter = (lastViewed && this.sessions[lastViewed])
+          chat.yeaftActiveSessionFilter = lastViewedOk
             ? lastViewed
             : (this.sessionOrder[0] || null);
-        } else if (chat && !chat.yeaftActiveSessionFilter && lastViewed && this.sessions[lastViewed]) {
+        } else if (chat && !chat.yeaftActiveSessionFilter && lastViewedOk) {
+          // Only auto-seed the filter from lastViewed when it belongs
+          // to the agent whose snapshot we just applied. Cross-agent
+          // seeding is what made create-in-B revert to A on next click.
           chat.yeaftActiveSessionFilter = lastViewed;
         }
       } catch (_) {}
