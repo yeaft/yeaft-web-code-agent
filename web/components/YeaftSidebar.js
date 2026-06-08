@@ -403,18 +403,16 @@ export default {
     // (sessions store applySnapshot) keeps this array in sync with the
     // yeaft_sessions.is_pinned column.
     isSessionPinned(id) {
-      try {
-        const fn = this.chatStore && this.chatStore.isSessionPinned;
-        if (typeof fn === 'function') return !!fn.call(this.chatStore, id);
-      } catch (_) {}
-      return false;
+      const fn = this.chatStore && this.chatStore.isSessionPinned;
+      return typeof fn === 'function' ? !!fn.call(this.chatStore, id) : false;
     },
     // Pin/unpin toggle. Closes the menu first so the row's animated
     // reorder isn't visually obscured by the open kebab.
     onTogglePin(g) {
       this.groupMenu = { open: false, groupId: null };
       if (!g || !g.id) return;
-      try { this.chatStore && this.chatStore.togglePin && this.chatStore.togglePin(g.id); } catch (_) {}
+      const fn = this.chatStore && this.chatStore.togglePin;
+      if (typeof fn === 'function') fn.call(this.chatStore, g.id);
     },
     // "Remove from list" — soft-archive only. Server marks
     // is_archived=1 in yeaft_sessions; the agent's on-disk session is
@@ -423,11 +421,8 @@ export default {
     onRemoveFromList(g) {
       this.groupMenu = { open: false, groupId: null };
       if (!g || !g.id) return;
-      try {
-        if (this.chatStore && typeof this.chatStore.sessionCrudRequest === 'function') {
-          this.chatStore.sessionCrudRequest('archive', { groupId: g.id });
-        }
-      } catch (_) {}
+      const fn = this.chatStore && this.chatStore.sessionCrudRequest;
+      if (typeof fn === 'function') fn.call(this.chatStore, 'archive', { groupId: g.id });
     },
     groupDisplayName(g) {
       if (!g) return '';

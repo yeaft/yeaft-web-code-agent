@@ -31,10 +31,28 @@ globalThis.window = globalThis.window || globalThis;
 globalThis.window.Pinia = globalThis.Pinia;
 // Provide a fake useChatStore so sessions.js's sort and pin-mirror
 // paths both have something to read/write.
+// applyServerPinSnapshot mirrors web/stores/chat.js's real action —
+// the test owns localStorage persistence (via the localStorage shim
+// below) so this duplicates the production add/remove/persist logic.
 globalThis.Pinia.useChatStore = () => ({
   get pinnedSessions() { return pinnedSessions; },
   set pinnedSessions(v) { pinnedSessions = v; },
   isSessionPinned(id) { return pinnedSessions.includes(id); },
+  applyServerPinSnapshot(agentId, pinnedInSnapshot, isOwnedByAgent) {
+    const existing = new Set(pinnedSessions);
+    const toAdd = [];
+    for (const id of pinnedInSnapshot) {
+      if (!existing.has(id)) toAdd.push(id);
+    }
+    if (toAdd.length > 0) pinnedSessions = [...toAdd, ...pinnedSessions];
+    if (agentId) {
+      pinnedSessions = pinnedSessions.filter(id => {
+        if (!isOwnedByAgent(id)) return true;
+        return pinnedInSnapshot.has(id);
+      });
+    }
+    globalThis.localStorage.setItem('pinned-sessions', JSON.stringify(pinnedSessions));
+  },
 });
 globalThis.localStorage = {
   getItem: (k) => {

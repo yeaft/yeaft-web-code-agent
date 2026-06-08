@@ -56,14 +56,42 @@ describe('YeaftSidebar — kebab menu method behavior', () => {
   // Tiny shim: extract the three methods from the source as standalone
   // functions and bind them to a mock `this`. Avoids the full Vue
   // mount/Pinia harness while still exercising the real method bodies
-  // line-for-line. The bodies are small, single-statement-ish closures
-  // — eval is the simplest way to keep this test honest to the source.
+  // line-for-line.
+  //
+  // Robust to reformatting: instead of a regex that bakes in the exact
+  // indentation of the closing brace, we find the method's opening
+  // `name(...) {` and then walk forward counting `{`/`}` to find the
+  // matching close. That survives any reasonable reformat (tabs, more
+  // indent, blank lines) as long as the method body's braces balance.
   function extractMethod(name) {
-    const re = new RegExp(`(?:^|\\s)${name}\\(([^)]*)\\)\\s*\\{([\\s\\S]*?)\\n    \\}`, 'm');
-    const m = sidebarSrc.match(re);
-    if (!m) throw new Error(`method ${name} not found in YeaftSidebar.js`);
+    const sigRe = new RegExp(`(?:^|[\\s,])${name}\\(([^)]*)\\)\\s*\\{`, 'm');
+    const sigMatch = sidebarSrc.match(sigRe);
+    if (!sigMatch) throw new Error(`method ${name} not found in YeaftSidebar.js`);
+    const params = sigMatch[1];
+    const bodyStart = sigMatch.index + sigMatch[0].length; // just past the opening `{`
+    let depth = 1;
+    let i = bodyStart;
+    while (i < sidebarSrc.length && depth > 0) {
+      const ch = sidebarSrc[i];
+      // Skip over strings + template literals so a `}` inside doesn't fool the counter.
+      if (ch === '"' || ch === "'" || ch === '`') {
+        const quote = ch;
+        i++;
+        while (i < sidebarSrc.length && sidebarSrc[i] !== quote) {
+          if (sidebarSrc[i] === '\\') i += 2;
+          else i++;
+        }
+        i++;
+        continue;
+      }
+      if (ch === '{') depth++;
+      else if (ch === '}') depth--;
+      i++;
+    }
+    if (depth !== 0) throw new Error(`method ${name}: unbalanced braces in YeaftSidebar.js`);
+    const body = sidebarSrc.slice(bodyStart, i - 1);
     // eslint-disable-next-line no-new-func
-    return new Function(m[1], m[2]);
+    return new Function(params, body);
   }
 
   it('onTogglePin closes the menu, then calls chatStore.togglePin(id)', () => {

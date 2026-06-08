@@ -2977,6 +2977,52 @@ export const useChatStore = defineStore('chat', {
     isSessionPinned(sessionId) {
       return this.pinnedSessions.includes(sessionId);
     },
+    /**
+     * fix-yeaft-session-list-and-menu: single owner for `pinnedSessions`
+     * + its localStorage cache. Called by the yeaft sessions store when a
+     * server-decorated snapshot arrives so the in-memory + cached pin
+     * state stays consistent with what the server says.
+     *
+     * Scoping rule — `pinnedSessions` is shared across chat + every
+     * yeaft agent, so this call must only touch ids that belong to
+     * `agentId`. Callers pass `isOwnedByAgent(id)` to identify which of
+     * the currently-pinned ids are this agent's, so unpins coming from
+     * agent A don't accidentally drop a pin owned by agent B (whose
+     * snapshot will reconcile on its own pass) or by a chat session.
+     *
+     * @param {string|null} agentId
+     * @param {Set<string>} pinnedInSnapshot  ids the snapshot says are pinned
+     * @param {(id:string) => boolean} isOwnedByAgent  predicate for "this id is owned by `agentId`"
+     */
+    applyServerPinSnapshot(agentId, pinnedInSnapshot, isOwnedByAgent) {
+      if (!Array.isArray(this.pinnedSessions)) return;
+      // Add: snapshot pins the chat store doesn't know yet. unshift to
+      // match togglePin's "newest at the front" ordering.
+      const existing = new Set(this.pinnedSessions);
+      const toAdd = [];
+      for (const id of pinnedInSnapshot) {
+        if (!existing.has(id)) toAdd.push(id);
+      }
+      if (toAdd.length > 0) {
+        this.pinnedSessions = [...toAdd, ...this.pinnedSessions];
+      }
+      // Remove: pins this agent owns but the snapshot no longer marks
+      // as pinned. Cross-agent / chat-owned ids are untouched.
+      if (agentId) {
+        const next = this.pinnedSessions.filter(id => {
+          if (!isOwnedByAgent(id)) return true;       // foreign / chat / other agent
+          return pinnedInSnapshot.has(id);             // this agent: obey snapshot
+        });
+        if (next.length !== this.pinnedSessions.length) {
+          this.pinnedSessions = next;
+        }
+      }
+      try {
+        localStorage.setItem('pinned-sessions', JSON.stringify(this.pinnedSessions));
+      } catch (e) {
+        console.warn('[chat] failed to persist pinnedSessions:', e?.message || e);
+      }
+    },
     sendMessage(text, attachments = [], options = {}) { convHelpers.sendMessage(this, text, attachments, options); },
     cancelExecution() { convHelpers.cancelExecution(this); },
     /**

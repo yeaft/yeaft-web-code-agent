@@ -16,6 +16,26 @@
 
 const { defineStore } = Pinia;
 
+/**
+ * Resolve the shared chat store iff Pinia is wired up. Returns null in
+ * test/SSR environments that don't bootstrap window.Pinia, so every
+ * call site can degrade to a no-op without a try/catch of its own.
+ *
+ * The chat store owns `pinnedSessions` + the `pinned-sessions`
+ * localStorage cache; this store treats it as read/write through the
+ * `applyServerPinSnapshot` action it exposes.
+ */
+function _getChatStoreSafe() {
+  try {
+    if (typeof window !== 'undefined'
+        && window.Pinia
+        && typeof window.Pinia.useChatStore === 'function') {
+      return window.Pinia.useChatStore();
+    }
+  } catch (_) { /* no-pinia env (tests / SSR) */ }
+  return null;
+}
+
 export const useSessionsStore = defineStore('sessions', {
   state: () => ({
     /** @type {Record<string, object>} */
@@ -42,16 +62,10 @@ export const useSessionsStore = defineStore('sessions', {
       // semantics. Pinned ids live on the shared chatStore so chat /
       // yeaft can share one pin registry; if it's missing (test env
       // without window.Pinia) we degrade to no-pin gracefully.
-      let pinnedIds = null;
-      try {
-        if (typeof window !== 'undefined' && window.Pinia && typeof window.Pinia.useChatStore === 'function') {
-          const chat = window.Pinia.useChatStore();
-          if (chat && Array.isArray(chat.pinnedSessions)) {
-            pinnedIds = new Set(chat.pinnedSessions);
-          }
-        }
-      } catch (_) { /* no-pinia env */ }
-      if (!pinnedIds) pinnedIds = new Set();
+      const chat = _getChatStoreSafe();
+      const pinnedIds = (chat && Array.isArray(chat.pinnedSessions))
+        ? new Set(chat.pinnedSessions)
+        : new Set();
       const pinned = [];
       const unpinned = [];
       for (const s of all) {
@@ -191,16 +205,16 @@ export const useSessionsStore = defineStore('sessions', {
       // Sanitize the chat store's parallel filter so a persisted
       // yeaftActiveSessionFilter pointing at a now-deleted session does not
       // render the main pane as empty until the user clicks.
-      try {
-        const chat = window.Pinia?.useChatStore?.();
-        if (chat && chat.yeaftActiveSessionFilter && !this.sessions[chat.yeaftActiveSessionFilter]) {
+      const chat = _getChatStoreSafe();
+      if (chat) {
+        if (chat.yeaftActiveSessionFilter && !this.sessions[chat.yeaftActiveSessionFilter]) {
           chat.yeaftActiveSessionFilter = lastViewedMatchesAgent
             ? lastViewed
             : (this.sessionOrder[0] || null);
-        } else if (chat && !chat.yeaftActiveSessionFilter && lastViewedMatchesAgent) {
+        } else if (!chat.yeaftActiveSessionFilter && lastViewedMatchesAgent) {
           chat.yeaftActiveSessionFilter = lastViewed;
         }
-      } catch (_) {}
+      }
       // fix-yeaft-session-list-and-menu: mirror server-decorated pin
       // state from this snapshot into chatStore.pinnedSessions so the
       // shared pinnedSessions array is the single source of truth for
@@ -208,35 +222,29 @@ export const useSessionsStore = defineStore('sessions', {
       // to a *different* agent are left alone (their owning agent's
       // snapshot will reconcile them on its own pass), so concurrent
       // pin state across agents stays correct.
-      try {
-        const chat = window.Pinia?.useChatStore?.();
-        if (chat && Array.isArray(chat.pinnedSessions)) {
-          const snapshotPinned = new Set();
-          for (const s of arr) {
-            if (s && s.id && s.pinned) snapshotPinned.add(s.id);
-          }
-          // Add: ids this snapshot says are pinned that the chat store
-          // hasn't recorded yet. Newest at the front (matches
-          // togglePin's unshift behavior).
-          const existingSet = new Set(chat.pinnedSessions);
-          for (const id of snapshotPinned) {
-            if (!existingSet.has(id)) chat.pinnedSessions.unshift(id);
-          }
-          // Remove: ids in chatStore.pinnedSessions that belong to
-          // *this* agent's snapshot but are NOT marked pinned in it
-          // anymore — server-side unpin should propagate. Ids owned by
-          // other agents (or by chat sessions) stay untouched.
-          if (agentId) {
-            chat.pinnedSessions = chat.pinnedSessions.filter(id => {
-              const row = this.sessions[id];
-              if (!row) return true;                 // unknown / chat session
-              if (row.agentId !== agentId) return true; // other agent's pin
-              return snapshotPinned.has(id);        // this agent's pin: obey snapshot
-            });
-          }
-          try { localStorage.setItem('pinned-sessions', JSON.stringify(chat.pinnedSessions)); } catch (_) {}
+      //
+      // `pinnedSessions` + its localStorage cache are *chat-store-owned* —
+      // we delegate to `chat.applyServerPinSnapshot` so this store does
+      // NOT become a second writer of that state.
+      //
+      // NOTE: This relies on `this.sessions` already being the
+      // post-snapshot map (committed above by the per-agent / legacy
+      // branch). The ownership predicate consults `this.sessions[id]`
+      // to ask "is this pinned id one of *this agent's* rows?".
+      if (chat && typeof chat.applyServerPinSnapshot === 'function') {
+        const pinnedInSnapshot = new Set();
+        for (const s of arr) {
+          if (s && s.id && s.pinned) pinnedInSnapshot.add(s.id);
         }
-      } catch (_) {}
+        const isOwnedByAgent = (id) => {
+          const row = this.sessions[id];
+          // Unknown id (chat session or not in this store) → foreign.
+          if (!row) return false;
+          // Different agent's row → foreign, leave alone.
+          return row.agentId === agentId;
+        };
+        chat.applyServerPinSnapshot(agentId, pinnedInSnapshot, isOwnedByAgent);
+      }
     },
 
     /** Apply a `group_roster_changed` delta (in-place merge). */
