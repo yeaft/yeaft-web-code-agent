@@ -246,6 +246,25 @@ describe('agent-output.js — yeaft_output envelope passthrough', () => {
     });
   });
 
+  it('stamps agentId from the function parameter (not agent.id) on yeaft_output', async () => {
+    // Regression guard for v0.1.907 — `handleAgentOutput(agentId, agent, msg)`
+    // had been reading `agent.id` (undefined) for the relay's agentId stamp.
+    // The agent value object in server/ws-agent.js intentionally does NOT
+    // carry an `id` field; the id is the Map key. So this test mounts a
+    // baseAgent without `id` and asserts the outgoing envelope stamps the
+    // function-parameter agentId verbatim.
+    addClient('c1');
+    await handleAgentOutput('agent_param_xyz', baseAgent, {
+      type: 'yeaft_output',
+      conversationId: 'conv1',
+      vpId: 'vp_alice',
+      data: { type: 'assistant', message: { content: 'hi' } },
+    });
+    expect(_sent).toHaveLength(1);
+    expect(_sent[0].envelope.agentId).toBe('agent_param_xyz');
+    expect(_sent[0].envelope.agentId).not.toBeUndefined();
+  });
+
   it('broadcasts to every authenticated client of the agent owner', async () => {
     addClient('c1');
     addClient('c2');

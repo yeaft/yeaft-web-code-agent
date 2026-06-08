@@ -393,7 +393,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
             // Stamp the source agent so the web sessions store can keep
             // per-agent rosters (cross-agent listing in the unified
             // sidebar). Older web bundles ignore the extra field.
-            agentId: agent.id,
+            agentId: agentId,
             ...(msg.sessionId != null ? { sessionId: msg.sessionId } : {}),
             ...(msg.vpId != null ? { vpId: msg.vpId } : {}),
             ...(msg.turnId != null ? { turnId: msg.turnId } : {}),
@@ -493,10 +493,10 @@ export async function handleAgentOutput(agentId, agent, msg) {
       try {
         const rows = Array.isArray(msg.sessions) ? msg.sessions : [];
         if (agent.ownerId) {
-          yeaftSessionDb.reconcileFromSnapshot(agent.ownerId, agent.id, rows);
+          yeaftSessionDb.reconcileFromSnapshot(agent.ownerId, agentId, rows);
         }
       } catch (e) {
-        console.warn(`[Server] yeaft session persist failed for agent ${agent.id}:`, e?.message || e);
+        console.warn(`[Server] yeaft session persist failed for agent ${agentId}:`, e?.message || e);
       }
       // Relay verbatim to web (agentId stamped so the web sessions store
       // can merge per-agent rosters).
@@ -504,7 +504,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
           await sendToWebClient(c, {
             type: msg.type,
-            agentId: agent.id,
+            agentId: agentId,
             sessions: Array.isArray(msg.sessions) ? msg.sessions : [],
           });
         }
@@ -541,15 +541,15 @@ export async function handleAgentOutput(agentId, agent, msg) {
                 : (existing?.announcement || ''),
               createdAt: existing?.createdAt || Date.now(),
             };
-            yeaftSessionDb.upsertFromSnapshot(agent.ownerId, agent.id, merged);
+            yeaftSessionDb.upsertFromSnapshot(agent.ownerId, agentId, merged);
           }
         }
       } catch (e) {
-        console.warn(`[Server] yeaft roster persist failed for agent ${agent.id}:`, e?.message || e);
+        console.warn(`[Server] yeaft roster persist failed for agent ${agentId}:`, e?.message || e);
       }
       for (const [, c] of webClients) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
-          await sendToWebClient(c, { ...msg, agentId: agent.id });
+          await sendToWebClient(c, { ...msg, agentId: agentId });
         }
       }
       break;
@@ -571,7 +571,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
       }
       for (const [, c] of webClients) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
-          await sendToWebClient(c, { ...msg, agentId: agent.id });
+          await sendToWebClient(c, { ...msg, agentId: agentId });
         }
       }
       break;
