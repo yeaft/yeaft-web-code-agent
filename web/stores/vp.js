@@ -116,6 +116,18 @@ export const useVpStore = defineStore('vp', {
     emptyLibrary: false,
     lastSnapshotAt: 0,
     /**
+     * fix-session-restore-modal-unify: which agent the last snapshot came
+     * from. Multi-agent deployments need this so callers (e.g.
+     * SessionCreateModal's agent dropdown watcher) can detect when the
+     * cached roster belongs to a *different* agent than the one currently
+     * being targeted, and force a fresh subscribe.
+     *
+     * `null` means we haven't observed a stamped snapshot yet (legacy
+     * single-agent path, or no snapshot received at all).
+     * @type {string|null}
+     */
+    lastVpSnapshotAgentId: null,
+    /**
      * task-334h: last live-diff event observed. Shape:
      *   { vpId: string, kind: 'updated'|'removed', reason: string|null, at: number }
      * Consumers watch this for badge refresh / toast cues without
@@ -220,14 +232,23 @@ export const useVpStore = defineStore('vp', {
   },
 
   actions: {
-    /** Apply a full vp_snapshot payload. Replaces entire collection. */
-    applySnapshot(payload) {
+    /**
+     * Apply a full vp_snapshot payload. Replaces entire collection.
+     *
+     * @param {object} payload — the vp_snapshot event ({ vps[], emptyLibrary })
+     * @param {string|null} [agentId] — fix-session-restore-modal-unify:
+     *   which agent the snapshot came from. Stamped on `lastVpSnapshotAgentId`
+     *   so consumers can detect when their cached roster is from a
+     *   *different* agent than the one currently being targeted.
+     */
+    applySnapshot(payload, agentId = null) {
       this.vps = {};
       this.vpOrder = [];
       const arr = (payload && Array.isArray(payload.vps)) ? payload.vps : [];
       for (const vp of arr) this._upsertInternal(vp);
       this.emptyLibrary = !!(payload && payload.emptyLibrary);
       this.lastSnapshotAt = Date.now();
+      this.lastVpSnapshotAgentId = agentId || null;
     },
 
     /** Insert or merge a single VP record (live-diff — 334h). */

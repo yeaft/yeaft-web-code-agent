@@ -1285,7 +1285,18 @@ export const useChatStore = defineStore('chat', {
           // ★ task-334-ui-a: subscribe to VP library snapshot.
           // Snapshot-only this slice; live diff (vp_updated/vp_removed)
           // arrives via the same channel once 334h ships.
-          this.sendWsMessage({ type: 'yeaft_vp_subscribe' });
+          //
+          // fix-session-restore-modal-unify: stamp `agentId` explicitly so
+          // the server can route this subscribe to the right agent even
+          // before `client.currentAgent` has converged. `msg.agentId` is
+          // the envelope from the server (stamped at agent-output relay);
+          // `yeaftAgentId` is the agent we just entered; `currentAgent`
+          // is the chat-mode default. Falling through `||` covers single-
+          // agent and multi-agent deployments alike.
+          const subscribeAgentId = this.yeaftAgentId || msg.agentId || this.currentAgent || null;
+          this.sendWsMessage(subscribeAgentId
+            ? { type: 'yeaft_vp_subscribe', agentId: subscribeAgentId }
+            : { type: 'yeaft_vp_subscribe' });
           break;
         }
 
@@ -1664,7 +1675,12 @@ export const useChatStore = defineStore('chat', {
         case 'vp_snapshot': {
           // Lazy import to avoid circular dep at module load.
           const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
-          if (vp) vp.applySnapshot(event);
+          // fix-session-restore-modal-unify: thread `msg.agentId` (server
+          // stamps it on the yeaft_output envelope at agent-output relay)
+          // so the store can track which agent the cached roster belongs
+          // to and the modal can detect agent switches that need a
+          // fresh subscribe.
+          if (vp) vp.applySnapshot(event, msg.agentId || null);
           break;
         }
         case 'vp_updated': {

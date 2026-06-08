@@ -879,6 +879,16 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
             await sendToWebClient(client, emptyYeaftToolStats('No agent selected.'));
           } else if (relayType === 'yeaft_dream_trigger') {
             await sendToWebClient(client, skippedYeaftDreamResult(msg, 'no-agent-selected'));
+          } else {
+            // fix-session-restore-modal-unify: every prior swallow was
+            // invisible — the user-facing symptom (e.g. VP roster stuck
+            // on "加载中...") doesn't point back to "the server has no
+            // agent to route this to." A WARN log is one grep away
+            // from the root cause next time this happens.
+            console.warn(
+              `[Server] swallowed yeaft message ${relayType} (no agent resolved)`
+              + ` userId=${client.userId || '?'}`
+            );
           }
           return true; // swallow silently for legacy fire-and-forget messages
         }
