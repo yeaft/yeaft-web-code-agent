@@ -217,7 +217,7 @@ export default {
                  sidebar — the partition is computed client-side from
                  sessionsStore.sessionList, so the stale "已在 sidebar 中"
                  lie is physically impossible. -->
-            <div class="resume-panel-header" style="margin-top:12px">
+            <div class="resume-panel-header restore-panel-header">
               <div class="resume-panel-header-left">
                 <span>{{ $t('yeaft.restore.modal.sessionsLabel') }}</span>
               </div>
@@ -226,19 +226,19 @@ export default {
                 type="button"
                 @click="loadRestoreCandidates"
                 :disabled="restoreScanning"
-                :title="$t('yeaft.session.create.back')"
+                :title="$t('common.refresh')"
               >
                 <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0 0 12 4a8 8 0 1 0 7.74 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
               </button>
             </div>
             <div class="resume-panel-list">
-              <div class="git-loading" v-if="restoreScanning" style="padding:12px"><span class="spinner-mini"></span> {{ $t('common.loading') }}</div>
+              <div class="git-loading restore-loading" v-if="restoreScanning"><span class="spinner-mini"></span> {{ $t('common.loading') }}</div>
               <template v-else>
                 <div
                   v-for="session in restoreCandidates"
                   :key="'restore:' + session.id"
                   class="resume-list-item session-item-compact"
-                  :class="{ 'is-busy': restoring === session.id }"
+                  :class="{ 'is-busy': restoring === session.id, 'is-disabled': restoring && restoring !== session.id }"
                   @click="onRestoreClick(session)"
                 >
                   <div class="item-name">{{ session.name || session.id }}</div>
@@ -343,9 +343,13 @@ export default {
       // `restoreCandidates` computed filters out sessions already in the
       // sidebar (sessionsStore.sessionList) so the stale-flag bug from the
       // old modal ("已在 sidebar 中" on items that aren't) is impossible.
+      //
+      // We intentionally do NOT track `scannedWorkDir` / `scannedAgentId`
+      // separately — the workdir/agent watchers below clear `scannedSessions`
+      // on change, so the list is always for the current (form.workDir,
+      // form.agentId) pair by construction. An extra cached pair would just
+      // be a second source of truth waiting to drift.
       scannedSessions: [],
-      scannedWorkDir: '',
-      scannedAgentId: null,
       restoreScanning: false,
       restoring: null,
       restoreError: '',
@@ -501,8 +505,6 @@ export default {
       // Reset scanned-from-disk state; workDir + agent both contribute
       // to which sessions are visible.
       this.scannedSessions = [];
-      this.scannedWorkDir = '';
-      this.scannedAgentId = null;
       this.restoreError = '';
       if ((this.form.workDir || '').trim()) this.loadRestoreCandidates();
     },
@@ -515,8 +517,6 @@ export default {
       const trimmed = (next || '').trim();
       if (!trimmed) {
         this.scannedSessions = [];
-        this.scannedWorkDir = '';
-        this.scannedAgentId = null;
         return;
       }
       this.loadRestoreCandidates();
@@ -577,14 +577,19 @@ export default {
      * `restoreCandidates` computed filters out items already in the
      * sidebar before rendering, so a stale "alreadyRegistered" flag from
      * the agent never reaches the UI.
+     *
+     * Single-inflight guard: the agentId and workDir watchers both call
+     * this method, and a user typing into the workdir input can trigger
+     * a watcher cascade. Returning early when a scan is already in flight
+     * keeps the UI from firing duplicate `scan_workdir` requests at the
+     * agent. The watchers re-fire on the next change anyway, so we don't
+     * lose any input — we just don't bombard the wire.
      */
     async loadRestoreCandidates() {
+      if (this.restoreScanning) return;
       const workDir = (this.form.workDir || '').trim();
-      const agentId = this.form.agentId || null;
       if (!workDir) {
         this.scannedSessions = [];
-        this.scannedWorkDir = '';
-        this.scannedAgentId = null;
         return;
       }
       const chat = this.chat;
@@ -592,6 +597,7 @@ export default {
         this.restoreError = this.$t('yeaft.restore.modal.scanError', { message: 'store unavailable' });
         return;
       }
+      const agentId = this.form.agentId || null;
       this.restoreScanning = true;
       this.restoreError = '';
       try {
@@ -605,8 +611,6 @@ export default {
             : Array.isArray(res.groups) ? res.groups
             : [];
           this.scannedSessions = list;
-          this.scannedWorkDir = workDir;
-          this.scannedAgentId = agentId;
         } else {
           this.scannedSessions = [];
           const msg = res?.error?.message || res?.error?.code || 'unknown';

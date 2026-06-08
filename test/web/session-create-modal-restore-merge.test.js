@@ -113,8 +113,6 @@ describe('SessionCreateModal loadRestoreCandidates — wire envelope', () => {
         },
       },
       scannedSessions: [],
-      scannedWorkDir: '',
-      scannedAgentId: null,
       restoreScanning: false,
       restoreError: '',
       $t: (k) => k,
@@ -126,8 +124,6 @@ describe('SessionCreateModal loadRestoreCandidates — wire envelope', () => {
       envelope: { agentId: 'agt_alice' },
     }]);
     expect(ctx.scannedSessions.map(s => s.id)).toEqual(['s1']);
-    expect(ctx.scannedWorkDir).toBe('/repo/myproj');
-    expect(ctx.scannedAgentId).toBe('agt_alice');
     expect(ctx.restoreError).toBe('');
   });
 
@@ -136,8 +132,6 @@ describe('SessionCreateModal loadRestoreCandidates — wire envelope', () => {
       form: { workDir: '/r', agentId: null },
       chat: { sessionCrudRequest: async () => ({ ok: true, groups: [{ id: 'g1' }] }) },
       scannedSessions: [],
-      scannedWorkDir: '',
-      scannedAgentId: null,
       restoreScanning: false,
       restoreError: '',
       $t: (k) => k,
@@ -151,16 +145,12 @@ describe('SessionCreateModal loadRestoreCandidates — wire envelope', () => {
       form: { workDir: '   ', agentId: 'agt_alice' },
       chat: { sessionCrudRequest: async () => { throw new Error('should not be called'); } },
       scannedSessions: [{ id: 'stale' }],
-      scannedWorkDir: '/stale',
-      scannedAgentId: 'agt_zeta',
       restoreScanning: false,
       restoreError: '',
       $t: (k) => k,
     };
     await SessionCreateModal.methods.loadRestoreCandidates.call(ctx);
     expect(ctx.scannedSessions).toEqual([]);
-    expect(ctx.scannedWorkDir).toBe('');
-    expect(ctx.scannedAgentId).toBeNull();
   });
 
   it('sets restoreError when chat returns ok:false', async () => {
@@ -168,8 +158,6 @@ describe('SessionCreateModal loadRestoreCandidates — wire envelope', () => {
       form: { workDir: '/repo', agentId: null },
       chat: { sessionCrudRequest: async () => ({ ok: false, error: { code: 'ENOENT', message: 'no such dir' } }) },
       scannedSessions: [],
-      scannedWorkDir: '',
-      scannedAgentId: null,
       restoreScanning: false,
       restoreError: '',
       $t: (k, args) => `${k}:${args?.message || ''}`,
@@ -177,6 +165,23 @@ describe('SessionCreateModal loadRestoreCandidates — wire envelope', () => {
     await SessionCreateModal.methods.loadRestoreCandidates.call(ctx);
     expect(ctx.restoreError).toBe('yeaft.restore.modal.scanError:no such dir');
     expect(ctx.scannedSessions).toEqual([]);
+  });
+
+  it('skips re-firing when a scan is already inflight (single-inflight guard)', async () => {
+    // Fowler I1 + Torvalds M3: rapid agentId / workDir watcher fires
+    // would otherwise stack scan_workdir requests at the agent. The
+    // guard returns early when restoreScanning is already true.
+    let callCount = 0;
+    const ctx = {
+      form: { workDir: '/repo', agentId: null },
+      chat: { sessionCrudRequest: async () => { callCount++; return { ok: true, sessions: [] }; } },
+      scannedSessions: [],
+      restoreScanning: true, // already inflight
+      restoreError: '',
+      $t: (k) => k,
+    };
+    await SessionCreateModal.methods.loadRestoreCandidates.call(ctx);
+    expect(callCount).toBe(0);
   });
 });
 

@@ -167,3 +167,22 @@
   padding: 0 16px 8px;
   line-height: 1.4;
 }
+
+/* fix-session-restore-modal-unify: "Restore from disk" panel inside
+   SessionCreateModal. Replaces ad-hoc inline `style=` values that
+   would otherwise hard-code spacing (per CLAUDE.md — tokens only). */
+.restore-panel-header {
+  margin-top: 12px;
+}
+
+.restore-loading {
+  padding: 12px;
+}
+
+/* Single-inflight visual feedback: while one row is restoring,
+   sibling rows look dimmed/non-interactive so the user understands
+   why their click on a different row is being ignored. */
+.resume-list-item.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
