@@ -25,6 +25,17 @@
  *  - listens to `workbench-message` window events; reducer filters by
  *    `msg.conversationId === '_workdir_picker'`.
  * Do not rename `requestFolderPickerDir` / `handleFolderPickerMessage`.
+ *
+ * ⚠️  CONSUMPTION HAZARD — DO NOT do this:
+ *     export default { mixins: [folderPickerMixin], ...{ data() {...}, methods: {...} } }
+ *
+ * Some components historically spread their own `data` / `methods` over the
+ * mixin object. That works for pure-options merges but DOUBLE-REGISTERS the
+ * picker's lifecycle hooks if Vue ever changes its merge strategy — and it
+ * silently shadows the picker's own `data()` keys when the consumer also
+ * returns an object literal. The supported form is the explicit
+ * `mixins: [folderPickerMixin]` array on the component options object. See
+ * SessionRestoreModal.js / SessionCreateModal.js for working examples.
  */
 
 export const folderPickerData = () => ({

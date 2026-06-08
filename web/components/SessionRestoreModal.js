@@ -252,7 +252,16 @@ export default {
           { agentId: this.form.agentId || null },
         );
         if (res && res.ok) {
-          this.sessions = Array.isArray(res.sessions) ? res.sessions : [];
+          // chat.js's `sessionCrudRequest` wrapper renames the agent's
+          // `sessions` array to `groups` on the resolved promise (see
+          // chat.js:1759-1771 — the wrap is shared with the group-style
+          // ops and we must read its post-wrap shape, not the raw agent
+          // shape). The `??` keeps us tolerant if the envelope ever
+          // surfaces the raw name to make this less brittle.
+          const list = Array.isArray(res.groups) ? res.groups
+            : Array.isArray(res.sessions) ? res.sessions
+            : [];
+          this.sessions = list;
         } else {
           this.sessions = [];
           const msg = res?.error?.message || res?.error?.code || 'unknown';
@@ -281,7 +290,13 @@ export default {
           { agentId: this.form.agentId || null },
         );
         if (res && res.ok) {
-          this.$emit('restored', res.session || session);
+          // chat.js's wrap renames the agent's `session` payload to
+          // `group` on the resolved promise (see chat.js:1759-1771).
+          // Reading `res.group` first gets the agentId-stamped payload
+          // (server stamps msg.agentId, wrap forwards it) — falling
+          // through to `res.session` or the click arg is just defense
+          // against shape drift.
+          this.$emit('restored', res.group || res.session || session);
           this.$emit('close');
           return;
         }

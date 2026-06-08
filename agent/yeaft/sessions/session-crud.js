@@ -156,26 +156,27 @@ export function unregisterSessionWorkDir(defaultYeaftDir, sessionId) {
  * Scan the `.yeaft/sessions/` directory under `workDir` and return every
  * session meta we can read. Read-only: never touches the registry.
  *
- * Each returned record carries `workDir` (the normalized path we scanned)
- * and `alreadyRegistered` (whether the session id is already in
- * `defaultYeaftDir`'s workdir registry — UI uses this to disable
- * "restore" for sessions already visible in the sidebar).
+ * Each returned record carries `workDir` (the normalized path we scanned).
+ * This utility deliberately does NOT decorate `alreadyRegistered` — that
+ * cross-references the central workdir registry, which is a separate
+ * concern owned by the handler / caller (see
+ * `handleYeaftScanWorkdirSessions`). Keeping the utility layer-pure makes
+ * it usable from contexts that don't have / don't care about the registry
+ * (e.g. CLI tools, future per-workdir snapshots).
  *
  * Returns `[]` for missing dir / empty dir / unreadable dir — never throws.
  * Sort is `createdAt` descending (most-recent first) because the restore
  * UI typically cares about "the session I made yesterday".
  *
- * @param {string} defaultYeaftDir — the agent's default `~/.yeaft` (used to read the registry).
  * @param {string} workDir — the working directory to scan.
  * @returns {Array<object>}
  */
-export function scanWorkdirSessions(defaultYeaftDir, workDir) {
+export function scanWorkdirSessions(workDir) {
   const normalized = normalizeWorkDir(workDir);
   if (!normalized) return [];
   const groupYeaftDir = yeaftDirForWorkDir(normalized);
   const root = sessionsRoot(groupYeaftDir);
   if (!existsSync(root)) return [];
-  const registry = readWorkDirRegistry(defaultYeaftDir);
   const out = [];
   let entries;
   try {
@@ -192,7 +193,6 @@ export function scanWorkdirSessions(defaultYeaftDir, workDir) {
     out.push({
       ...meta,
       workDir: normalized,
-      alreadyRegistered: Object.prototype.hasOwnProperty.call(registry, meta.id),
     });
   }
   return out.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
@@ -203,7 +203,12 @@ export function scanWorkdirSessions(defaultYeaftDir, workDir) {
  * `snapshotSessions()` includes this session.
  *
  * Validates that `<workDir>/.yeaft/sessions/<sessionId>/group.json` exists
- * and is parseable; otherwise throws `SessionCrudError('not_found')`.
+ * and is parseable. Throws:
+ *  - `not_found`   — the session dir is not on disk at this workdir
+ *  - `corrupt_meta` — the dir exists but `group.json` is missing / unreadable
+ *                    / can't be parsed. Surfaced as a distinct code so the
+ *                    UI can tell the user "the file is broken" instead of
+ *                    "you picked the wrong workdir" (review finding I1).
  *
  * Idempotent: if the same `(sessionId, workDir)` is already registered,
  * we still rewrite the entry (with the normalized path) and return the
@@ -222,7 +227,7 @@ export function restoreSessionToRegistry(defaultYeaftDir, sessionId, workDir) {
   const dir = join(sessionsRoot(groupYeaftDir), sessionId);
   if (!existsSync(dir)) throw new SessionCrudError('not_found', sessionId);
   const meta = loadSessionMeta(dir);
-  if (!meta) throw new SessionCrudError('not_found', sessionId);
+  if (!meta) throw new SessionCrudError('corrupt_meta', sessionId, `group.json missing or unreadable at ${dir}`);
   registerSessionWorkDir(defaultYeaftDir, sessionId, normalized);
   return { ...meta, workDir: normalized };
 }

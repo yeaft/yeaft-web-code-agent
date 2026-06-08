@@ -129,6 +129,32 @@ describe('SessionRestoreModal.loadSessions', () => {
     expect(ctx.scanError).toContain('boom');
     expect(ctx.scanning).toBe(false);
   });
+
+  // Lock-in for C1 (review finding): chat.js:1740-1772's sessionCrudRequest
+  // wrap renames the agent's raw `sessions` array to `groups` on the resolved
+  // promise. The modal MUST read the post-wrap shape — earlier versions read
+  // raw `sessions` and silently lost every result. This test stubs the wrapped
+  // shape directly so regressions can't sneak past the existing raw-shape test.
+  it('Case 1b: reads the post-wrap `groups` envelope (chat.js renames sessions→groups)', async () => {
+    const chat = makeChat({
+      scanResult: {
+        ok: true,
+        groups: [
+          { id: 'grp_w1', name: 'W1', alreadyRegistered: false },
+          { id: 'grp_w2', name: 'W2', alreadyRegistered: true },
+        ],
+      },
+    });
+    const ctx = makeCtx({ chat });
+
+    await SessionRestoreModal.methods.loadSessions.call(ctx);
+
+    expect(ctx.sessions).toEqual([
+      { id: 'grp_w1', name: 'W1', alreadyRegistered: false },
+      { id: 'grp_w2', name: 'W2', alreadyRegistered: true },
+    ]);
+    expect(ctx.scanError).toBe('');
+  });
 });
 
 describe('SessionRestoreModal.onRestoreClick', () => {
@@ -156,6 +182,33 @@ describe('SessionRestoreModal.onRestoreClick', () => {
     expect(restoredPayload.id).toBe('grp_x');
     expect(ctx.restoring).toBeNull();
     expect(ctx.restoreError).toBe('');
+  });
+
+  // Lock-in for C1: chat.js renames the agent's `session` payload to `group`
+  // and stamps agentId. Earlier versions read raw `res.session` and would
+  // have lost the agentId-stamped payload entirely. Stub the wrapped shape
+  // so the post-wrap behavior is pinned end-to-end.
+  it('Case 4b: emits restored with the post-wrap `group` payload (chat.js renames session→group)', async () => {
+    const chat = makeChat({
+      restoreResult: {
+        ok: true,
+        group: { id: 'grp_w', name: 'W', workDir: '/repo', agentId: 'agent-1' },
+      },
+    });
+    const ctx = makeCtx({ chat });
+
+    await SessionRestoreModal.methods.onRestoreClick.call(ctx, {
+      id: 'grp_w',
+      name: 'W',
+      alreadyRegistered: false,
+    });
+
+    const restoredEvent = ctx.emits.find(e => e.name === 'restored');
+    expect(restoredEvent).toBeTruthy();
+    expect(restoredEvent.payload).toEqual({
+      id: 'grp_w', name: 'W', workDir: '/repo', agentId: 'agent-1',
+    });
+    expect(ctx.emits.map(e => e.name)).toContain('close');
   });
 
   it('Case 5: silent no-op when session.alreadyRegistered is true', async () => {

@@ -105,43 +105,32 @@ afterEach(() => {
 });
 
 describe('scanWorkdirSessions', () => {
-  it('Case A: returns every session in the workdir with alreadyRegistered=false when registry is empty', () => {
+  it('Case A: returns every session in the workdir (utility is layer-pure — no registry decoration)', () => {
     seedSession(workDir, { id: 'grp_a1', name: 'A1', createdAt: '2026-06-01T10:00:00Z' });
     seedSession(workDir, { id: 'grp_a2', name: 'A2', createdAt: '2026-06-02T10:00:00Z' });
     seedSession(workDir, { id: 'grp_a3', name: 'A3', createdAt: '2026-06-03T10:00:00Z' });
 
-    const out = scanWorkdirSessions(defaultYeaftDir, workDir);
+    const out = scanWorkdirSessions(workDir);
 
     expect(out).toHaveLength(3);
     // Sort: newest createdAt first.
     expect(out.map(s => s.id)).toEqual(['grp_a3', 'grp_a2', 'grp_a1']);
     for (const s of out) {
-      expect(s.alreadyRegistered).toBe(false);
+      // Utility is layer-pure: it does NOT touch the registry, so
+      // `alreadyRegistered` is the handler's job, NOT the utility's.
+      // See handleYeaftScanWorkdirSessions test below for the decorated shape.
+      expect(s).not.toHaveProperty('alreadyRegistered');
       expect(s.workDir).toBeTruthy();
     }
   });
 
-  it('Case B: flags already-registered sessions on a subsequent scan', () => {
-    seedSession(workDir, { id: 'grp_b1', name: 'B1', createdAt: '2026-06-01T10:00:00Z' });
-    seedSession(workDir, { id: 'grp_b2', name: 'B2', createdAt: '2026-06-02T10:00:00Z' });
-    seedSession(workDir, { id: 'grp_b3', name: 'B3', createdAt: '2026-06-03T10:00:00Z' });
-    registerSessionWorkDir(defaultYeaftDir, 'grp_b2', workDir);
-
-    const out = scanWorkdirSessions(defaultYeaftDir, workDir);
-    const byId = Object.fromEntries(out.map(s => [s.id, s]));
-
-    expect(byId.grp_b1.alreadyRegistered).toBe(false);
-    expect(byId.grp_b2.alreadyRegistered).toBe(true);
-    expect(byId.grp_b3.alreadyRegistered).toBe(false);
-  });
-
   it('Case C: returns [] for an empty .yeaft/sessions dir', () => {
     mkdirSync(join(workDir, '.yeaft', 'sessions'), { recursive: true });
-    expect(scanWorkdirSessions(defaultYeaftDir, workDir)).toEqual([]);
+    expect(scanWorkdirSessions(workDir)).toEqual([]);
   });
 
   it('Case D: returns [] when the workdir has no .yeaft dir at all', () => {
-    expect(scanWorkdirSessions(defaultYeaftDir, workDir)).toEqual([]);
+    expect(scanWorkdirSessions(workDir)).toEqual([]);
   });
 
   it('skips dotfile entries like legacy .archived-* dirs', () => {
@@ -153,12 +142,12 @@ describe('scanWorkdirSessions', () => {
       JSON.stringify({ id: 'grp_old', name: 'Old' }),
     );
 
-    const out = scanWorkdirSessions(defaultYeaftDir, workDir);
+    const out = scanWorkdirSessions(workDir);
     expect(out.map(s => s.id)).toEqual(['grp_live']);
   });
 
   it('returns [] when given an empty workDir string', () => {
-    expect(scanWorkdirSessions(defaultYeaftDir, '')).toEqual([]);
+    expect(scanWorkdirSessions('')).toEqual([]);
   });
 });
 
@@ -171,6 +160,27 @@ describe('restoreSessionToRegistry', () => {
     } catch (e) {
       expect(e.code).toBe('not_found');
       expect(e.sessionId).toBe('grp_ghost');
+    }
+  });
+
+  // I1 (review finding): "dir exists but group.json broken" is a
+  // distinct failure mode from "dir missing entirely". The UI uses
+  // this to tell the user "your file is corrupted" instead of "you
+  // picked the wrong workdir" — silently collapsing both into
+  // not_found would force the user to re-pick the same workdir
+  // before realizing the issue is the file itself.
+  it('Case E2: throws corrupt_meta when the dir exists but group.json is broken', () => {
+    // Seed a session dir without a parseable group.json.
+    const brokenDir = join(workDir, '.yeaft', 'sessions', 'grp_broken');
+    mkdirSync(brokenDir, { recursive: true });
+    writeFileSync(join(brokenDir, 'group.json'), 'not-json{');
+
+    try {
+      restoreSessionToRegistry(defaultYeaftDir, 'grp_broken', workDir);
+      throw new Error('should have thrown');
+    } catch (e) {
+      expect(e.code).toBe('corrupt_meta');
+      expect(e.sessionId).toBe('grp_broken');
     }
   });
 
@@ -243,6 +253,26 @@ describe('handleYeaftScanWorkdirSessions', () => {
     expect(ev.sessions.map(s => s.id).sort()).toEqual(['grp_h1', 'grp_h2']);
   });
 
+  // Lock in the layer split: utility scans the FS, handler folds in
+  // `alreadyRegistered` by reading the central registry. Old version
+  // did both in the utility (Fowler review finding — handler is the
+  // right layer because the flag couples the per-workdir scan to a
+  // specific agent's registry).
+  it('Case H2: decorates alreadyRegistered=true for sessions already in the registry', () => {
+    seedSession(workDir, { id: 'grp_h2a', name: 'H2a', createdAt: '2026-06-01T10:00:00Z' });
+    seedSession(workDir, { id: 'grp_h2b', name: 'H2b', createdAt: '2026-06-02T10:00:00Z' });
+    seedSession(workDir, { id: 'grp_h2c', name: 'H2c', createdAt: '2026-06-03T10:00:00Z' });
+    registerSessionWorkDir(defaultYeaftDir, 'grp_h2b', workDir);
+
+    handleYeaftScanWorkdirSessions({ requestId: 'r-h2', workDir });
+    const ev = lastCrud();
+    const byId = Object.fromEntries(ev.sessions.map(s => [s.id, s]));
+
+    expect(byId.grp_h2a.alreadyRegistered).toBe(false);
+    expect(byId.grp_h2b.alreadyRegistered).toBe(true);
+    expect(byId.grp_h2c.alreadyRegistered).toBe(false);
+  });
+
   it('emits ok=false with invalid_workdir code when workDir is missing', () => {
     handleYeaftScanWorkdirSessions({ requestId: 'r-scan-bad', workDir: '' });
 
@@ -299,17 +329,25 @@ describe('handleYeaftRestoreSession', () => {
 // caller restores it, second scan sees alreadyRegistered=true. Pins the
 // UX contract from the plan: "再次打开 Restore modal、选同一个 dir → 那个
 // 刚恢复的 session 旁边显示 '已在 sidebar 中'，无法再点".
+//
+// Uses the handler (not the utility) because `alreadyRegistered` decoration
+// now lives in the handler layer — `scanWorkdirSessions(workDir)` itself
+// is layer-pure and doesn't read the registry.
 describe('scan → restore → re-scan flow', () => {
-  it('flips alreadyRegistered to true on the second scan', () => {
+  it('flips alreadyRegistered to true on the second scan (via handler)', () => {
     seedSession(workDir, { id: 'grp_flow', name: 'Flow', createdAt: '2026-06-01T10:00:00Z' });
 
-    const first = scanWorkdirSessions(defaultYeaftDir, workDir);
-    expect(first[0].alreadyRegistered).toBe(false);
+    handleYeaftScanWorkdirSessions({ requestId: 'r-flow-1', workDir });
+    const first = lastCrud();
+    expect(first.ok).toBe(true);
+    expect(first.sessions[0].alreadyRegistered).toBe(false);
 
-    restoreSessionToRegistry(defaultYeaftDir, 'grp_flow', workDir);
+    handleYeaftRestoreSession({ requestId: 'r-flow-2', sessionId: 'grp_flow', workDir });
 
-    const second = scanWorkdirSessions(defaultYeaftDir, workDir);
-    expect(second[0].alreadyRegistered).toBe(true);
+    handleYeaftScanWorkdirSessions({ requestId: 'r-flow-3', workDir });
+    const second = lastCrud();
+    expect(second.ok).toBe(true);
+    expect(second.sessions[0].alreadyRegistered).toBe(true);
   });
 });
 

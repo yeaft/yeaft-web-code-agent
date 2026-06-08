@@ -45,6 +45,7 @@ import {
   sessionsRoot,
   scanWorkdirSessions,
   restoreSessionToRegistry,
+  readWorkDirRegistry,
 } from './sessions/session-crud.js';
 import { openSession, loadSessionMeta } from './sessions/session-store.js';
 import { loadSessionConfig, resolveSessionConfig, SessionConfigError } from './sessions/session-config.js';
@@ -1519,8 +1520,18 @@ export function handleYeaftScanWorkdirSessions(msg) {
     const workDir = String(msg && msg.workDir || '').trim();
     if (!workDir) throw new SessionCrudError('invalid_workdir', null, 'workDir required');
     const yeaftDir = ctx.CONFIG?.yeaftDir;
-    const sessions = scanWorkdirSessions(yeaftDir, workDir);
-    sendSessionCrudResult({ op: 'scan_workdir', requestId, ok: true, sessions });
+    // scanWorkdirSessions is a layer-pure utility — it doesn't read the
+    // central workdir registry. The handler is the right layer to fold in
+    // `alreadyRegistered` because that flag couples the per-workdir scan
+    // to a specific agent's registry (the same scan from a CLI tool or
+    // a different agent would compare against a different registry).
+    const sessions = scanWorkdirSessions(workDir);
+    const registry = readWorkDirRegistry(yeaftDir);
+    const decorated = sessions.map(s => ({
+      ...s,
+      alreadyRegistered: Object.prototype.hasOwnProperty.call(registry, s.id),
+    }));
+    sendSessionCrudResult({ op: 'scan_workdir', requestId, ok: true, sessions: decorated });
   } catch (err) {
     sendSessionCrudResult({ op: 'scan_workdir', requestId, ok: false, error: sessionErrorPayload(err) });
   }
