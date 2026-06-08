@@ -98,7 +98,7 @@ export default {
       this.error = '';
       try {
         const res = await this.chat.sessionCrudRequest('update', {
-          groupId: this.groupId,
+          sessionId: this.groupId,
           patch: { announcement: this.draft },
         });
         if (res && res.ok) {
@@ -114,7 +114,7 @@ export default {
       }
     },
     onOpenSettings() {
-      this.$emit('open-settings', { groupId: this.groupId, section: 'announcement' });
+      this.$emit('open-settings', { sessionId: this.groupId, groupId: this.groupId, section: 'announcement' });
     },
   },
   template: `

@@ -1513,9 +1513,12 @@ export default {
     // simpler path. YeaftPage listens for `@open-group-settings`.
     const onOpenGroupSettings = (payload) => {
       const norm = typeof payload === 'string'
-        ? { groupId: payload, section: 'announcement' }
+        ? { groupId: payload, sessionId: payload, section: 'announcement' }
         : (payload || {});
-      if (!norm.groupId) return;
+      if (!(norm.sessionId || norm.groupId)) return;
+      // Forward both fields so downstream listeners can transition.
+      if (!norm.sessionId && norm.groupId) norm.sessionId = norm.groupId;
+      if (!norm.groupId && norm.sessionId) norm.groupId = norm.sessionId;
       ctx.emit('open-group-settings', norm);
     };
 

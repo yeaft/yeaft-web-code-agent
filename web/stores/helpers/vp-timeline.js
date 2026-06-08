@@ -115,7 +115,7 @@ export function statusFor(vpId, ctx) {
  *
  * @param {object} args
  * @param {Array<{vpId:string, displayName?:string, displayNameZh?:string}>} args.vpList
- * @param {Object<string, {state: VpStatus, since?:number, turnId?:string|null, groupId?:string|null, runningThreadCount?:number, threads?:Array<object>}>} [args.vpStatuses]
+ * @param {Object<string, {state: VpStatus, since?:number, turnId?:string|null, sessionId?:string|null, runningThreadCount?:number, threads?:Array<object>}>} [args.vpStatuses]
  * @param {string} [args.connectionState]
  * @param {(vpId: string) => string} [args.vpLabelOf]   // optional locale-aware labeler
  * @returns {TimelineRow[]}

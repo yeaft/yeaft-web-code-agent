@@ -42,12 +42,12 @@ describe('chat store — vp_turn_end', () => {
 
     actions.handleYeaftOutput.call(store, {
       conversationId: 'yeaft-conv',
-      groupId: 'grp_fun',
+      sessionId: 'grp_fun',
       vpId: 'linus',
       turnId: 'turn_forward:linus',
       event: {
         type: 'vp_turn_start',
-        groupId: 'grp_fun',
+        sessionId: 'grp_fun',
         vpId: 'linus',
         threadId: 'thr_forward',
         turnId: 'turn_forward:linus',
@@ -64,12 +64,12 @@ describe('chat store — vp_turn_end', () => {
 
     actions.handleYeaftOutput.call(store, {
       conversationId: 'yeaft-conv',
-      groupId: 'grp_fun',
+      sessionId: 'grp_fun',
       vpId: 'linus',
       turnId: 'turn_forward:linus',
       event: {
         type: 'vp_turn_end',
-        groupId: 'grp_fun',
+        sessionId: 'grp_fun',
         vpId: 'linus',
         threadId: 'thr_forward',
         turnId: 'turn_forward:linus',

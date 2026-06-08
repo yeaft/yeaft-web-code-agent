@@ -510,13 +510,15 @@ export const useChatStore = defineStore('chat', {
     messages(state) {
       const convId = this.activeConversationId;
       const raw = convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
-      // task-fix (group-switch): group filter narrows the stream to one group.
-      // Every Yeaft message is stamped with a groupId at creation time
+      // task-fix (session-switch): session filter narrows the stream to one session.
+      // Every Yeaft message is stamped with a sessionId at creation time
       // (addMessageToConversation defaults to grp_default), so strict
       // equality is safe — no message can slip through "untagged".
+      // Falls back to legacy `groupId` so in-flight messages from older
+      // builds still match during a deploy window.
       if (state.currentView === 'yeaft' && state.yeaftActiveSessionFilter) {
         const target = state.yeaftActiveSessionFilter;
-        return raw.filter(m => m && m.groupId === target);
+        return raw.filter(m => m && (m.sessionId ?? m.groupId) === target);
       }
       return raw;
     },
@@ -648,7 +650,7 @@ export const useChatStore = defineStore('chat', {
         const turnId = order[i];
         const turn = byId[turnId];
         if (!turn) continue;
-        if (target && turn.groupId && turn.groupId !== target) continue;
+        if (target && turn.sessionId && turn.sessionId !== target) continue;
 
         const loops = loopsByTurn[turnId] || EMPTY_ARRAY;
         const refls = reflectionsByTurn[turnId] || EMPTY_ARRAY;
@@ -695,13 +697,13 @@ export const useChatStore = defineStore('chat', {
       }
       return out;
     },
-    // PR C: distinct groupIds present in the current debug history,
-    // for the toolbar group-filter dropdown.
+    // PR C: distinct sessionIds present in the current debug history,
+    // for the toolbar session-filter dropdown.
     yeaftDebugAvailableSessions: (state) => {
       const seen = new Set();
       for (const turnId of state.yeaftDebugTurnOrder || EMPTY_ARRAY) {
         const turn = state.yeaftDebugTurnsById[turnId];
-        if (turn && turn.groupId) seen.add(turn.groupId);
+        if (turn && turn.sessionId) seen.add(turn.sessionId);
       }
       return Array.from(seen).sort();
     },
@@ -716,7 +718,8 @@ export const useChatStore = defineStore('chat', {
       const raw = convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
       if (state.yeaftActiveSessionFilter) {
         const target = state.yeaftActiveSessionFilter;
-        return raw.filter(m => m && m.groupId === target);
+        // Legacy `groupId` fallback covers in-flight messages from older builds.
+        return raw.filter(m => m && (m.sessionId ?? m.groupId) === target);
       }
       return raw;
     },
@@ -1071,7 +1074,7 @@ export const useChatStore = defineStore('chat', {
           messageId: clientMessageId,
           type: 'user',
           content: effectiveText,
-          groupId,
+          sessionId: groupId,
           // The agent-side router will replace this with the classified
           // threadId as soon as the first frame for the VP thread arrives.
           // Until then, the input row still has a stable block id instead of
@@ -1181,7 +1184,7 @@ export const useChatStore = defineStore('chat', {
             for (let i = rows.length - 1; i >= 0; i--) {
               const row = rows[i];
               if (!row || row.type !== 'user') continue;
-              if (msgSessionId != null && row.groupId !== msgSessionId) continue;
+              if (msgSessionId != null && (row.sessionId ?? row.groupId) !== msgSessionId) continue;
               if (row.threadId && !String(row.threadId).startsWith('pending_')) break;
               row.threadId = msg.threadId;
               if (!row.turnId || String(row.turnId).startsWith('pending_')) row.turnId = msg.threadId;
@@ -1299,7 +1302,7 @@ export const useChatStore = defineStore('chat', {
             turnId: event.turnId,
             userPrompt: event.userPrompt || '',
             vpId: event.vpId || msg.vpId || null,
-            groupId: event.sessionId || msg.sessionId || event.groupId || msg.groupId || null,
+            sessionId: event.sessionId || msg.sessionId || event.groupId || msg.groupId || null,
             // fix-vp-multi-thread (bug 4): stamp threadId so a multi-
             // thread VP's debug rows can be filtered by thread in the
             // panel without re-deriving it from each loop body.
@@ -1410,11 +1413,9 @@ export const useChatStore = defineStore('chat', {
             // task-344: raw API request / response payload (redacted server-side).
             rawRequest: event.rawRequest || null,
             rawResponse: event.rawResponse || null,
-            // Bug 3 carry-over: stamp groupId so the panel filter narrows
-            // by session. Falls back to envelope sessionId/groupId if engine
-            // omitted it. (Field is named groupId for legacy compat with the
-            // debug-panel filter UI — slated for rename in a future cleanup.)
-            groupId: msg.sessionId || msg.groupId || null,
+            // Bug 3 carry-over: stamp sessionId so the panel filter narrows
+            // by session. Falls back to envelope groupId if engine omitted it.
+            sessionId: msg.sessionId || msg.groupId || null,
             // fix-vp-multi-thread (bug 4): stamp threadId / vpId so the
             // debug panel can show per-thread debug history for a VP
             // that runs N concurrent threads. Without these fields the
@@ -1508,7 +1509,7 @@ export const useChatStore = defineStore('chat', {
               content: event.content || '',
               durationMs: event.durationMs || 0,
               error: event.error || null,
-              groupId: msg.sessionId || msg.groupId || null,
+              sessionId: msg.sessionId || msg.groupId || null,
               anchorMsgId,
               anchorOrder,
               updatedAt: Date.now(),
@@ -1554,7 +1555,7 @@ export const useChatStore = defineStore('chat', {
             anchorMsgId,
             anchorOrder,
             updatedAt: Date.now(),
-            groupId: msg.sessionId || msg.groupId || null,
+            sessionId: msg.sessionId || msg.groupId || null,
             // (2026-05-13) featureId removed along with the Feature system.
           };
 
@@ -1760,12 +1761,19 @@ export const useChatStore = defineStore('chat', {
             const groupWithAgent = (rawGroup && msg.agentId && !rawGroup.agentId)
               ? { ...rawGroup, agentId: msg.agentId }
               : rawGroup;
+            const resolvedSessionId = event.sessionId || event.groupId || null;
             pending.resolve({
               ok: !!event.ok,
               op: event.op,
               group: groupWithAgent,
-              groupId: event.sessionId || event.groupId || null,
+              session: groupWithAgent,
+              sessionId: resolvedSessionId,
+              // wire-compat: legacy `groupId` field for callers that still
+              // read it; rename them to `sessionId` and drop this when
+              // safe.
+              groupId: resolvedSessionId,
               groups: event.sessions || event.groups || null,
+              sessions: event.sessions || event.groups || null,
               config: event.config || null,
               error: event.error || null,
             });
@@ -1838,7 +1846,8 @@ export const useChatStore = defineStore('chat', {
             for (let i = 0; i < rows.length; i++) {
               const m = rows[i];
               if (!m || m.type !== 'assistant') continue;
-              if (event.sessionId && m.groupId && m.groupId !== event.sessionId) continue;
+              const mSessionId = m.sessionId ?? m.groupId;
+              if (event.sessionId && mSessionId && mSessionId !== event.sessionId) continue;
               if (event.vpId && m.speakerVpId && m.speakerVpId !== event.vpId) continue;
               if (event.turnId && m.turnId && m.turnId !== event.turnId) continue;
               if (m.status && m.status !== 'pending') continue;
@@ -1916,7 +1925,7 @@ export const useChatStore = defineStore('chat', {
               title: event.title || '',
               runningThreadCount: event.runningThreadCount || 0,
               threads: Array.isArray(event.threads) ? event.threads : [],
-              groupId: sessionId,
+              sessionId,
               vpId: event.vpId,
             },
           };
@@ -1946,7 +1955,7 @@ export const useChatStore = defineStore('chat', {
                 title: row.title || '',
                 runningThreadCount: row.runningThreadCount || 0,
                 threads: Array.isArray(row.threads) ? row.threads : [],
-                groupId: rowSessionId,
+                sessionId: rowSessionId,
                 vpId: row.vpId,
               };
             }
@@ -1954,11 +1963,11 @@ export const useChatStore = defineStore('chat', {
           } else {
             const merged = { ...this.vpStatuses };
             // Drop every existing row for this sessionId, regardless of
-            // the map's internal key. Iterating by entry.groupId (not
+            // the map's internal key. Iterating by entry.sessionId (not
             // by key shape) means a stray null-session leak in the table
             // doesn't haunt subsequent scoped reconnects.
             for (const [k, v] of Object.entries(merged)) {
-              if (v && v.groupId === eventSessionId) delete merged[k];
+              if (v && v.sessionId === eventSessionId) delete merged[k];
             }
             for (const row of statuses) {
               if (!row || !row.vpId) continue;
@@ -1972,7 +1981,7 @@ export const useChatStore = defineStore('chat', {
                 title: row.title || '',
                 runningThreadCount: row.runningThreadCount || 0,
                 threads: Array.isArray(row.threads) ? row.threads : [],
-                groupId: rowSessionId,
+                sessionId: rowSessionId,
                 vpId: row.vpId,
               };
             }
@@ -2054,7 +2063,7 @@ export const useChatStore = defineStore('chat', {
             this._appendDreamEvent(scope, {
               type: 'dream_progress',
               phase: 'result',
-              groupId: event.sessionId,
+              sessionId: event.sessionId,
               status: event.skipped ? 'skipped' : (event.success ? 'success' : 'error'),
               success: !!event.success,
               entriesCreated: typeof event.entriesCreated === 'number'
@@ -2188,7 +2197,7 @@ export const useChatStore = defineStore('chat', {
     // ring buffer. Caps the buffer at MAX_YEAFT_DREAM_EVENTS_PER_SCOPE so a
     // long-running session can't grow the array unboundedly. Caller
     // resolves the scope ('group/<id>' for scoped events; '*' for top-level
-    // broadcast events that don't carry a groupId).
+    // broadcast events that don't carry a sessionId).
     //
     // The augmented record adds an `at` timestamp (receive time, used by
     // the active-group getter to merge scoped+broadcast buckets in order)
@@ -2201,7 +2210,13 @@ export const useChatStore = defineStore('chat', {
       const prev = Array.isArray(this.yeaftDreamEvents?.[scope])
         ? this.yeaftDreamEvents[scope]
         : [];
-      const keyOf = (e) => [e?.type || '', e?.phase || '', e?.groupId || '', e?.target || '', e?.ts || e?.at || ''].join('|');
+      const keyOf = (e) => [
+        e?.type || '',
+        e?.phase || '',
+        (e?.sessionId ?? e?.groupId) || '',
+        e?.target || '',
+        e?.ts || e?.at || '',
+      ].join('|');
       const recordKey = keyOf(record);
       if (prev.some(e => keyOf(e) === recordKey)) return;
       const next = [...prev, record];
@@ -2279,18 +2294,21 @@ export const useChatStore = defineStore('chat', {
         this.sendWsMessage(msg);
       });
     },
-    // ★ task-334m: Group CRUD request dispatcher. Mirrors vpCrudRequest.
+    // ★ task-334m: Session CRUD request dispatcher. Mirrors vpCrudRequest.
     // Supported ops: list / create / rename / archive / add_member /
     // remove_member / set_default_vp.
     //
     //   op                data shape
     //   list              (ignored)
     //   create            { name, roster?, defaultVpId?, workDir? }  → msg.payload
-    //   rename            { groupId, name }                → flat
-    //   archive           { groupId }                      → flat
-    //   add_member        { groupId, vpId }                → flat
-    //   remove_member     { groupId, vpId }                → flat
-    //   set_default_vp    { groupId, vpId }                → flat
+    //   rename            { sessionId, name }                → flat
+    //   archive           { sessionId }                      → flat
+    //   add_member        { sessionId, vpId }                → flat
+    //   remove_member     { sessionId, vpId }                → flat
+    //   set_default_vp    { sessionId, vpId }                → flat
+    //
+    // Legacy callers may still pass `groupId`; the agent web-bridge accepts
+    // both fields, so we pass the payload through as-is.
     sessionCrudRequest(op, data, opts = {}) {
       if (!this._sessionCrudPending || typeof this._sessionCrudPending.get !== 'function') {
         this._sessionCrudPending = new Map();
@@ -2449,10 +2467,10 @@ export const useChatStore = defineStore('chat', {
     // clearYeaftJumpTarget actions removed.
     async switchYeaftModel(modelId, groupId = null) {
       if (!modelId || !this.yeaftAgentId) return;
-      const targetGroupId = groupId || null;
-      if (targetGroupId) {
+      const targetSessionId = groupId || null;
+      if (targetSessionId) {
         const res = await this.sessionCrudRequest('update_config', {
-          groupId: targetGroupId,
+          sessionId: targetSessionId,
           config: { model: modelId },
         });
         if (res && res.ok) {
@@ -3114,21 +3132,21 @@ export const useChatStore = defineStore('chat', {
       if (this.yeaftLoadingMoreHistory || !this.yeaftHasMoreHistory) return;
       if (!this.yeaftAgentId || this.yeaftOldestLoadedSeq == null) return;
 
-      const groupId = resolveActiveYeaftSessionId(this);
+      const sessionId = resolveActiveYeaftSessionId(this);
 
       this.yeaftLoadingMoreHistory = true;
-      const groupKey = groupId || '__all__';
+      const sessionKey = sessionId || '__all__';
       this.yeaftSessionHistoryState = {
         ...this.yeaftSessionHistoryState,
-        [groupKey]: {
-          ...(this.yeaftSessionHistoryState[groupKey] || {}),
+        [sessionKey]: {
+          ...(this.yeaftSessionHistoryState[sessionKey] || {}),
           loading: true,
         },
       };
       this.sendWsMessage({
         type: 'yeaft_load_more_history',
         agentId: this.yeaftAgentId,
-        groupId,
+        sessionId,
         beforeSeq: this.yeaftOldestLoadedSeq,
         turns: 10,
       });

@@ -356,16 +356,17 @@ export const useVpStore = defineStore('vp', {
 
     /**
      * Apply yeaft_dream_status event (status='running' from agent).
-     * Routes by which id field the event carries (vpId vs groupId).
+     * Routes by which id field the event carries (vpId vs sessionId).
+     * Legacy `groupId` is still accepted for older agent builds.
      */
     applyDreamStatus(event) {
       if (!event) return;
-      if (event.groupId) {
-        const groupId = event.groupId;
+      const sessionId = event.sessionId || event.groupId;
+      if (sessionId) {
         this.groupDreamStatus = {
           ...this.groupDreamStatus,
-          [groupId]: {
-            ...(this.groupDreamStatus[groupId] || {}),
+          [sessionId]: {
+            ...(this.groupDreamStatus[sessionId] || {}),
             status: event.status === 'running' ? 'running' : (event.status || 'idle'),
           },
         };
@@ -417,11 +418,11 @@ export const useVpStore = defineStore('vp', {
       };
       const lastError = ok || skipped ? null : (event.error || null);
       const status = skipped ? 'skipped' : (ok ? 'success' : 'error');
-      if (event.groupId) {
-        const groupId = event.groupId;
+      const sessionId = event.sessionId || event.groupId;
+      if (sessionId) {
         this.groupDreamStatus = {
           ...this.groupDreamStatus,
-          [groupId]: {
+          [sessionId]: {
             status,
             lastRunAt: Date.now(),
             lastResult: result,
