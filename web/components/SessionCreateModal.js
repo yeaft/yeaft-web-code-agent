@@ -208,6 +208,50 @@ export default {
                 {{ $t('yeaft.session.create.noSessions') }}
               </div>
             </div>
+
+            <!-- fix-session-restore-modal-unify: "Restore from disk" group
+                 — folded in from the old standalone SessionRestoreModal so
+                 the user has ONE place to manage sessions for a workdir
+                 (matches the Chat new-conversation modal's UX). Only shows
+                 sessions that exist on disk but are NOT already in the
+                 sidebar — the partition is computed client-side from
+                 sessionsStore.sessionList, so the stale "已在 sidebar 中"
+                 lie is physically impossible. -->
+            <div class="resume-panel-header restore-panel-header">
+              <div class="resume-panel-header-left">
+                <span>{{ $t('yeaft.restore.modal.sessionsLabel') }}</span>
+              </div>
+              <button
+                class="refresh-btn-mini"
+                type="button"
+                @click="loadRestoreCandidates"
+                :disabled="restoreScanning"
+                :title="$t('common.refresh')"
+              >
+                <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0 0 12 4a8 8 0 1 0 7.74 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+              </button>
+            </div>
+            <div class="resume-panel-list">
+              <div class="git-loading restore-loading" v-if="restoreScanning"><span class="spinner-mini"></span> {{ $t('common.loading') }}</div>
+              <template v-else>
+                <div
+                  v-for="session in restoreCandidates"
+                  :key="'restore:' + session.id"
+                  class="resume-list-item session-item-compact"
+                  :class="{ 'is-busy': restoring === session.id, 'is-disabled': restoring && restoring !== session.id }"
+                  @click="onRestoreClick(session)"
+                >
+                  <div class="item-name">{{ session.name || session.id }}</div>
+                  <div class="item-time">{{ formatDate(session.createdAt) }}</div>
+                </div>
+                <div class="resume-panel-empty" v-if="restoreCandidates.length === 0 && !restoreError">
+                  {{ $t('yeaft.restore.modal.empty') }}
+                </div>
+                <div class="resume-panel-empty" v-if="restoreError">
+                  {{ restoreError }}
+                </div>
+              </template>
+            </div>
           </div>
         </div>
 
@@ -279,10 +323,12 @@ export default {
       },
       busy: false,
       submitError: '',
-      // Folder picker state — extracted to a shared mixin so the new
-      // SessionRestoreModal gets the same UX for free. Spreading the
-      // factory keeps field names + the WS conversationId contract
-      // exactly the same (see test/web/session-create-modal-workdir-picker.test.js).
+      // Folder picker state — extracted to a shared mixin (originally
+      // so SessionRestoreModal could reuse it; that modal has been
+      // folded back in, but the mixin shape is preserved for future
+      // consumers). Spreading the factory keeps field names + the WS
+      // conversationId contract exactly the same (see
+      // test/web/session-create-modal-workdir-picker.test.js).
       ...folderPickerData(),
       // Track whether the user has manually touched the picker; once true
       // we stop auto-mutating their selection from the hydration watcher.
@@ -291,6 +337,22 @@ export default {
       // hide the list behind a trigger and only open it when the user
       // wants to multi-select (mirrors the Copilot model picker pattern).
       vpRosterOpen: false,
+      // fix-session-restore-modal-unify: "Restore from disk" state — folded
+      // in from the deleted standalone SessionRestoreModal. `scannedSessions`
+      // is the raw list the agent returned for the current workDir; the
+      // `restoreCandidates` computed filters out sessions already in the
+      // sidebar (sessionsStore.sessionList) so the stale-flag bug from the
+      // old modal ("已在 sidebar 中" on items that aren't) is impossible.
+      //
+      // We intentionally do NOT track `scannedWorkDir` / `scannedAgentId`
+      // separately — the workdir/agent watchers below clear `scannedSessions`
+      // on change, so the list is always for the current (form.workDir,
+      // form.agentId) pair by construction. An extra cached pair would just
+      // be a second source of truth waiting to drift.
+      scannedSessions: [],
+      restoreScanning: false,
+      restoring: null,
+      restoreError: '',
     };
   },
   computed: {
@@ -376,6 +438,21 @@ export default {
       }
       return this.$t('yeaft.session.create.vpCount', { n: ids.length });
     },
+    // fix-session-restore-modal-unify: client-side "is this session
+    // already in the sidebar?" check. Uses sessionsStore.sessionList
+    // (the literal source the sidebar renders from) — not the agent's
+    // `alreadyRegistered` flag, which lied because it read a per-agent
+    // disk registry that lags behind the server's yeaft_sessions shadow.
+    //
+    // Partitions scannedSessions into two camps and shows only the ones
+    // genuinely missing from the sidebar; if every scanned session is
+    // already in the sidebar, the panel naturally reads "empty".
+    restoreCandidates() {
+      const inSidebar = new Set(
+        (this.sessionsStore?.sessionList || []).map(s => s && s.id).filter(Boolean)
+      );
+      return (this.scannedSessions || []).filter(s => s && s.id && !inSidebar.has(s.id));
+    },
   },
   mounted() {
     window.addEventListener('keydown', this.onEsc);
@@ -398,20 +475,52 @@ export default {
         if (onlinePick) this.form.agentId = onlinePick.id;
       }
     } catch (_) {}
-    // Subscribe to VP snapshot if not yet hydrated.
-    try {
-      if (this.vpStore && this.vpStore.lastSnapshotAt === 0) {
-        const chat = this.chat;
-        if (chat && typeof chat.sendWsMessage === 'function') {
-          chat.sendWsMessage({ type: 'yeaft_vp_subscribe' });
-        }
-      }
-    } catch (_) {}
+    // Subscribe to VP snapshot if not yet hydrated, OR if the cached
+    // snapshot is from a different agent than we're now targeting.
+    // fix-session-restore-modal-unify: pre-fix, this fired
+    // `yeaft_vp_subscribe` with no agentId — the server then dropped it
+    // silently when `client.currentAgent` was null (a fresh page load
+    // with no chat session entered yet), and the modal stuck on
+    // "VP 加载中..." indefinitely. `subscribeVpsFor` stamps the agentId
+    // explicitly and re-subscribes when the user picks a different agent.
+    this.subscribeVpsFor(this.form.agentId);
     this.applyDefaultSelection();
   },
   watch: {
     // Re-apply default selection once vpList hydrates after mount.
     'vpList.length'() { this.applyDefaultSelection(); },
+    // fix-session-restore-modal-unify: re-subscribe when the user picks
+    // a different agent from the dropdown, since the VP library is
+    // per-agent (one agent's VPs are not the other's). Also re-scan
+    // the disk panel because the workdir registry is per-agent too.
+    'form.agentId'(next, prev) {
+      if (next === prev) return;
+      this.subscribeVpsFor(next);
+      // VP list is per-agent — clear stale selection so the user
+      // doesn't accidentally create a session with a VP that doesn't
+      // exist on the newly-targeted agent.
+      this.form.vpIds = [];
+      this.form.defaultVpId = null;
+      this.vpPickerTouched = false;
+      // Reset scanned-from-disk state; workDir + agent both contribute
+      // to which sessions are visible.
+      this.scannedSessions = [];
+      this.restoreError = '';
+      if ((this.form.workDir || '').trim()) this.loadRestoreCandidates();
+    },
+    // fix-session-restore-modal-unify: auto-load the "Restore from disk"
+    // list whenever the user enters a workdir (matches the old standalone
+    // modal's behavior — picking a directory immediately scans it).
+    'form.workDir'(next, prev) {
+      if (next === prev) return;
+      this.restoreError = '';
+      const trimmed = (next || '').trim();
+      if (!trimmed) {
+        this.scannedSessions = [];
+        return;
+      }
+      this.loadRestoreCandidates();
+    },
   },
   beforeUnmount() {
     window.removeEventListener('keydown', this.onEsc);
@@ -420,6 +529,149 @@ export default {
     if (this._folderPickerTimer) clearTimeout(this._folderPickerTimer);
   },
   methods: {
+    /**
+     * fix-session-restore-modal-unify: agent-aware vp_subscribe.
+     *
+     * Reasons we cannot rely on the bare `{ type: 'yeaft_vp_subscribe' }`
+     * the old code shipped:
+     *   1. Server routes yeaft_* on `msg.agentId || client.currentAgent`.
+     *      A fresh page load with no Chat session entered yet has
+     *      `currentAgent === null`, so the server silently swallows the
+     *      message. The VP roster never hydrates and the Create button
+     *      stays disabled (the "VP 加载中..." BLOCKER).
+     *   2. The VP library is per-agent. Switching agents in the dropdown
+     *      MUST re-subscribe; otherwise the cached roster from agent A
+     *      lingers when targeting agent B.
+     *
+     * We compute the agent target with the same precedence the rest of
+     * this modal uses (form.agentId wins; falls back to yeaftAgentId for
+     * users who landed here from inside Yeaft; falls back to
+     * currentAgent for chat-mode users who haven't entered Yeaft yet).
+     * If nothing resolves, we WARN loudly — silent failure is what made
+     * the original bug a multi-file root-cause hunt.
+     */
+    subscribeVpsFor(agentId) {
+      const chat = this.chat;
+      if (!chat || typeof chat.sendWsMessage !== 'function') return;
+      const target = agentId || chat.yeaftAgentId || chat.currentAgent || null;
+      if (!target) {
+        console.warn(
+          '[SessionCreateModal] cannot subscribe to VP library — no agent resolved'
+          + ' (form.agentId / chat.yeaftAgentId / chat.currentAgent all null)'
+        );
+        return;
+      }
+      const vp = this.vpStore;
+      // Skip re-subscribing when we already have a fresh snapshot from the
+      // exact agent we're targeting. `lastVpSnapshotAgentId` is `null` on
+      // legacy single-agent paths, so we re-subscribe in that case too.
+      if (vp && vp.lastSnapshotAt > 0 && vp.lastVpSnapshotAgentId === target) {
+        return;
+      }
+      chat.sendWsMessage({ type: 'yeaft_vp_subscribe', agentId: target });
+    },
+    /**
+     * fix-session-restore-modal-unify: scan the workdir for on-disk
+     * yeaft sessions. Folded in from the old standalone
+     * SessionRestoreModal. The result lands in `scannedSessions`; the
+     * `restoreCandidates` computed filters out items already in the
+     * sidebar before rendering, so a stale "alreadyRegistered" flag from
+     * the agent never reaches the UI.
+     *
+     * Single-inflight guard: the agentId and workDir watchers both call
+     * this method, and a user typing into the workdir input can trigger
+     * a watcher cascade. Returning early when a scan is already in flight
+     * keeps the UI from firing duplicate `scan_workdir` requests at the
+     * agent. The watchers re-fire on the next change anyway, so we don't
+     * lose any input — we just don't bombard the wire.
+     */
+    async loadRestoreCandidates() {
+      if (this.restoreScanning) return;
+      const workDir = (this.form.workDir || '').trim();
+      if (!workDir) {
+        this.scannedSessions = [];
+        return;
+      }
+      const chat = this.chat;
+      if (!chat || typeof chat.sessionCrudRequest !== 'function') {
+        this.restoreError = this.$t('yeaft.restore.modal.scanError', { message: 'store unavailable' });
+        return;
+      }
+      const agentId = this.form.agentId || null;
+      this.restoreScanning = true;
+      this.restoreError = '';
+      try {
+        const res = await chat.sessionCrudRequest(
+          'scan_workdir',
+          { workDir },
+          { agentId },
+        );
+        if (res && res.ok) {
+          const list = Array.isArray(res.sessions) ? res.sessions
+            : Array.isArray(res.groups) ? res.groups
+            : [];
+          this.scannedSessions = list;
+        } else {
+          this.scannedSessions = [];
+          const msg = res?.error?.message || res?.error?.code || 'unknown';
+          this.restoreError = this.$t('yeaft.restore.modal.scanError', { message: msg });
+        }
+      } catch (err) {
+        this.scannedSessions = [];
+        this.restoreError = this.$t('yeaft.restore.modal.scanError', { message: err?.message || String(err) });
+      } finally {
+        this.restoreScanning = false;
+      }
+    },
+    /**
+     * fix-session-restore-modal-unify: restore (= register-to-sidebar)
+     * one of the scanned-from-disk sessions. On success the agent
+     * rebroadcasts session_list_updated, so the sidebar refreshes itself
+     * — we just emit `restored` (for parity with the old modal) and
+     * close. Pin the active session / agent so the user lands on it.
+     */
+    async onRestoreClick(session) {
+      if (!session || !session.id) return;
+      if (this.restoring) return; // single inflight at a time
+      const chat = this.chat;
+      if (!chat || typeof chat.sessionCrudRequest !== 'function') {
+        this.restoreError = this.$t('yeaft.restore.modal.restoreError', { message: 'store unavailable' });
+        return;
+      }
+      this.restoring = session.id;
+      this.restoreError = '';
+      try {
+        const res = await chat.sessionCrudRequest(
+          'restore',
+          { sessionId: session.id, workDir: (this.form.workDir || '').trim() },
+          { agentId: this.form.agentId || null },
+        );
+        if (res && res.ok) {
+          const restored = res.session || res.group || session;
+          // Mirror resumeExisting / onSubmit: pin currentAgent +
+          // sessionsStore.active + chat filter to the restored session so
+          // the user doesn't get bounced back to whatever was active.
+          const owner = restored && restored.agentId;
+          if (owner && chat.currentAgent !== owner
+              && typeof chat.selectAgent === 'function') {
+            chat.selectAgent(owner);
+          }
+          if (this.sessionsStore) this.sessionsStore.setActive(restored.id || session.id);
+          if (typeof chat.setActiveSessionFilter === 'function') {
+            chat.setActiveSessionFilter(restored.id || session.id, { force: true });
+          }
+          this.$emit('created', restored);
+          this.$emit('close');
+          return;
+        }
+        const msg = res?.error?.message || res?.error?.code || 'unknown';
+        this.restoreError = this.$t('yeaft.restore.modal.restoreError', { message: msg });
+      } catch (err) {
+        this.restoreError = this.$t('yeaft.restore.modal.restoreError', { message: err?.message || String(err) });
+      } finally {
+        this.restoring = null;
+      }
+    },
     applyDefaultSelection() {
       if (this.vpPickerTouched) return;
       if (this.form.vpIds.length > 0) return;
@@ -504,10 +756,10 @@ export default {
       this.form.workDir = path;
     },
     // Folder-picker behavior (open/close/navigate/confirm/incoming msg).
-    // Spread from the shared mixin so the new SessionRestoreModal can
-    // reuse the same picker without copy-paste. Method names
-    // (`requestFolderPickerDir`, `handleFolderPickerMessage`) are part
-    // of the wire contract pinned by
+    // Spread from the shared mixin so future modals (e.g. workbench
+    // workdir picker) can reuse the same picker without copy-paste.
+    // Method names (`requestFolderPickerDir`, `handleFolderPickerMessage`)
+    // are part of the wire contract pinned by
     // `test/web/session-create-modal-workdir-picker.test.js`.
     ...folderPickerMethods,
     async onSubmit() {

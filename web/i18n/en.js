@@ -593,15 +593,17 @@ export default {
   'yeaft.session.create.creating': 'Creating…',
   'yeaft.session.create.submit': 'Create',
   'yeaft.session.empty': 'No sessions yet. Click + to create one.',
-  // feat-yeaft-session-restore: "register an existing on-disk session
-  // back into the sidebar" — sibling flow to create.
-  'yeaft.sidebar.restore': 'Restore session',
-  'yeaft.sidebar.restoreHint': 'Restore a session from a working directory',
-  'yeaft.restore.modal.title': 'Restore Session',
-  'yeaft.restore.modal.workDirLabel': 'Working directory',
-  'yeaft.restore.modal.workDirHint': 'Pick a folder to scan for existing sessions',
+  // fix-session-restore-modal-unify: the standalone SessionRestoreModal
+  // is gone — its flow was folded into SessionCreateModal under a
+  // "Restore from disk" group. Only the strings that group still
+  // renders survive here (sessionsLabel / empty / scanError /
+  // restoreError). The discarded keys (sidebar.restore,
+  // sidebar.restoreHint, restore.modal.title / workDirLabel /
+  // workDirHint / alreadyAdded) belonged to widgets that no longer
+  // exist; the `alreadyAdded` "已在 sidebar 中" label specifically
+  // was the source of bug #2 (it lied), so removing the key prevents
+  // anyone from accidentally rendering it again.
   'yeaft.restore.modal.sessionsLabel': 'Sessions in this directory',
-  'yeaft.restore.modal.alreadyAdded': 'Already in sidebar',
   'yeaft.restore.modal.empty': 'No yeaft sessions found in this directory',
   'yeaft.restore.modal.scanError': 'Failed to scan: {message}',
   'yeaft.restore.modal.restoreError': 'Failed to restore: {message}',

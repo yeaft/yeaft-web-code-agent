@@ -1,9 +1,12 @@
 /**
  * folder-picker-mixin — shared "browse + pick a directory" workflow.
  *
- * Extracted from SessionCreateModal so both the create modal and the new
- * SessionRestoreModal can share the same folder-picker UX without copying
- * 90 lines of glue. The mixin owns:
+ * Originally extracted so SessionCreateModal and the standalone
+ * SessionRestoreModal could share the same folder-picker UX without
+ * copying 90 lines of glue. fix-session-restore-modal-unify folded the
+ * restore modal back into SessionCreateModal — only one consumer remains
+ * today, but the mixin shape is preserved so future modals (e.g. a
+ * future workbench "pick workdir" dialog) can opt in. The mixin owns:
  *
  *  - Data:   folderPickerOpen / folderPickerPath / folderPickerEntries /
  *            folderPickerLoading / folderPickerSelected / _folderPickerTimer
@@ -35,7 +38,7 @@
  * silently shadows the picker's own `data()` keys when the consumer also
  * returns an object literal. The supported form is the explicit
  * `mixins: [folderPickerMixin]` array on the component options object. See
- * SessionRestoreModal.js / SessionCreateModal.js for working examples.
+ * SessionCreateModal.js for the working example.
  */
 
 export const folderPickerData = () => ({
@@ -161,8 +164,8 @@ export const folderPickerMethods = {
  *   2. Add this object to their `mixins: []`.
  *
  * SessionCreateModal uses option 1 to keep its tightly-co-located workdir
- * picker logic obvious; SessionRestoreModal uses option 2 because it has
- * no other state to mix in.
+ * picker logic obvious. Future consumers with no other state to mix in
+ * may prefer option 2.
  */
 export const folderPickerMixin = {
   data() { return folderPickerData(); },

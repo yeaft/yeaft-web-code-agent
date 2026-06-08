@@ -593,13 +593,15 @@ export default {
   'yeaft.session.create.creating': '创建中…',
   'yeaft.session.create.submit': '创建',
   'yeaft.session.empty': '还没有会话，点击 + 新建一个。',
-  'yeaft.sidebar.restore': '恢复 session',
-  'yeaft.sidebar.restoreHint': '从一个工作目录恢复 session',
-  'yeaft.restore.modal.title': '恢复 Session',
-  'yeaft.restore.modal.workDirLabel': '工作目录',
-  'yeaft.restore.modal.workDirHint': '选择要扫描的工作目录',
+  // fix-session-restore-modal-unify: 独立的 SessionRestoreModal 已经
+  // 合并进 SessionCreateModal — "Restore from disk" 分组内复用 create
+  // 模态的 workdir 输入。这里只保留还在渲染的几个 key（sessionsLabel /
+  // empty / scanError / restoreError）。删除的 key（sidebar.restore /
+  // sidebar.restoreHint / restore.modal.title / workDirLabel /
+  // workDirHint / alreadyAdded）属于已经不存在的控件；尤其
+  // `alreadyAdded` 的 "已在 sidebar 中" 文案正是 bug #2 — 它会撒谎 —
+  // 把 key 删掉能防止别人不小心再渲染一遍。
   'yeaft.restore.modal.sessionsLabel': '此目录下的 session',
-  'yeaft.restore.modal.alreadyAdded': '已在 sidebar 中',
   'yeaft.restore.modal.empty': '此目录下没有 yeaft session',
   'yeaft.restore.modal.scanError': '扫描失败: {message}',
   'yeaft.restore.modal.restoreError': '恢复失败: {message}',
