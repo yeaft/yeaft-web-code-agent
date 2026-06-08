@@ -304,8 +304,25 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
     case 'unpin_session': {
       const pinConvId = msg.conversationId;
       if (!pinConvId) break;
-      if (!CONFIG.skipAuth && !verifyConversationOwnership(pinConvId, client.userId)) break;
       const isPinned = msg.type === 'pin_session';
+      // fix-yeaft-session-list-and-menu: yeaft sessions live in a
+      // separate `yeaft_sessions` table (with its own user_id column),
+      // not in `sessions`. Route first based on which table owns the
+      // id — yeaft has its own ownership semantics (the chat
+      // `verifyConversationOwnership` lookup would reject yeaft ids).
+      // Falls back to the original chat path if the id isn't in
+      // yeaft_sessions, so existing chat pin behavior is preserved.
+      const yeaftRow = yeaftSessionDb.get(pinConvId);
+      if (yeaftRow) {
+        if (!CONFIG.skipAuth && yeaftRow.userId && yeaftRow.userId !== client.userId) {
+          console.warn(`[Security] User ${client.userId} attempted to pin yeaft session ${pinConvId} they don't own`);
+          break;
+        }
+        try { yeaftSessionDb.setPinned(pinConvId, isPinned); } catch (_) {}
+        await sendToWebClient(client, { type: 'session_pinned', conversationId: pinConvId, pinned: isPinned });
+        break;
+      }
+      if (!CONFIG.skipAuth && !verifyConversationOwnership(pinConvId, client.userId)) break;
       try {
         sessionDb.setPinned(pinConvId, isPinned);
         // If pinning, also ensure session is active (reactivate if it was auto-deactivated)

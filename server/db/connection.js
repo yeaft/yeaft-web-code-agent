@@ -144,7 +144,8 @@ const yeaftSessionsTable = `
     announcement TEXT,
     created_at INTEGER,
     updated_at INTEGER NOT NULL,
-    is_archived INTEGER DEFAULT 0
+    is_archived INTEGER DEFAULT 0,
+    is_pinned INTEGER DEFAULT 0
   );
 
   CREATE INDEX IF NOT EXISTS idx_yeaft_sessions_user ON yeaft_sessions(user_id);
@@ -152,6 +153,21 @@ const yeaftSessionsTable = `
   CREATE INDEX IF NOT EXISTS idx_yeaft_sessions_updated ON yeaft_sessions(updated_at DESC);
 `;
 db.exec(yeaftSessionsTable);
+
+// Yeaft session schema additions (separate from `migrations` above so the
+// table existence in the CREATE block above is guaranteed before we try
+// to ALTER it). Same try/swallow pattern: ignores "column exists" on
+// fresh DBs that already got the column from CREATE TABLE.
+const yeaftMigrations = [
+  // fix-yeaft-session-list-and-menu: per-session pin state. Lives on the
+  // server so it survives reload / cross-device / agent restart; mirrored
+  // into chatStore.pinnedSessions on the web so sort logic stays unified
+  // between chat and yeaft.
+  `ALTER TABLE yeaft_sessions ADD COLUMN is_pinned INTEGER DEFAULT 0`,
+];
+for (const migration of yeaftMigrations) {
+  try { db.exec(migration); } catch (_) { /* column exists */ }
+}
 
 for (const migration of migrations) {
   try {
@@ -662,6 +678,10 @@ export const stmts = {
 
   setYeaftSessionArchived: db.prepare(`
     UPDATE yeaft_sessions SET is_archived = ?, updated_at = ? WHERE id = ?
+  `),
+
+  setYeaftSessionPinned: db.prepare(`
+    UPDATE yeaft_sessions SET is_pinned = ?, updated_at = ? WHERE id = ?
   `),
 
   // Dashboard 聚合

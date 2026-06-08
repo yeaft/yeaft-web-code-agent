@@ -123,17 +123,14 @@ export default {
                     <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
                   </button>
                   <div v-if="groupMenu.open && groupMenu.groupId === s.id" class="session-menu" role="menu" @click.stop>
-                    <button type="button" role="menuitem" class="session-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'members')">
-                      {{ $t('yeaft.session.manageMembers') }}
+                    <button type="button" role="menuitem" class="session-menu-item" @click="onTogglePin(s.raw)">
+                      {{ isSessionPinned(s.id) ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin') }}
                     </button>
                     <button type="button" role="menuitem" class="session-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'announcement')">
-                      {{ $t('yeaft.session.settings.nav.announcement') }}
+                      {{ $t('yeaft.session.openSettings') }}
                     </button>
-                    <button type="button" role="menuitem" class="session-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'rename')">
-                      {{ $t('yeaft.session.rename') }}
-                    </button>
-                    <button type="button" role="menuitem" class="session-menu-item danger" @click="openGroupSettingsFromMenu(s.raw, 'danger')">
-                      {{ $t('yeaft.session.delete') }}
+                    <button type="button" role="menuitem" class="session-menu-item danger" @click="onRemoveFromList(s.raw)">
+                      {{ $t('yeaft.session.removeFromList') }}
                     </button>
                   </div>
                 </div>
@@ -394,6 +391,43 @@ export default {
     openGroupSettingsFromMenu(g, section) {
       this.groupMenu = { open: false, groupId: null };
       this.openGroupSettings(g, section);
+    },
+    // fix-yeaft-session-list-and-menu: kebab-menu helpers for pin + remove.
+    // These mirror chat sidebar's row action menu (pin / settings / close)
+    // so yeaft users get the same "operate on the session row" shape
+    // instead of the previous 4-button modal-shortcut menu.
+    //
+    // isSessionPinned reads from chatStore.pinnedSessions — the same
+    // registry chat uses. The server-side pin handler routes by id, so
+    // both chat and yeaft live on one source of truth. Snapshot replay
+    // (sessions store applySnapshot) keeps this array in sync with the
+    // yeaft_sessions.is_pinned column.
+    isSessionPinned(id) {
+      try {
+        const fn = this.chatStore && this.chatStore.isSessionPinned;
+        if (typeof fn === 'function') return !!fn.call(this.chatStore, id);
+      } catch (_) {}
+      return false;
+    },
+    // Pin/unpin toggle. Closes the menu first so the row's animated
+    // reorder isn't visually obscured by the open kebab.
+    onTogglePin(g) {
+      this.groupMenu = { open: false, groupId: null };
+      if (!g || !g.id) return;
+      try { this.chatStore && this.chatStore.togglePin && this.chatStore.togglePin(g.id); } catch (_) {}
+    },
+    // "Remove from list" — soft-archive only. Server marks
+    // is_archived=1 in yeaft_sessions; the agent's on-disk session is
+    // untouched. Real delete (DELETE FROM yeaft_sessions + on-disk
+    // cleanup) lives in SessionSettingsModal's danger zone.
+    onRemoveFromList(g) {
+      this.groupMenu = { open: false, groupId: null };
+      if (!g || !g.id) return;
+      try {
+        if (this.chatStore && typeof this.chatStore.sessionCrudRequest === 'function') {
+          this.chatStore.sessionCrudRequest('archive', { groupId: g.id });
+        }
+      } catch (_) {}
     },
     groupDisplayName(g) {
       if (!g) return '';
