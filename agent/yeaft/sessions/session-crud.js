@@ -356,8 +356,13 @@ export function archiveSession(yeaftDir, sessionId) {
   const groupYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
   const root = sessionsRoot(groupYeaftDir);
   const srcDir = join(root, sessionId);
+  // Idempotent — if the session has no on-disk presence, treat archive as
+  // a no-op success. Still clear the workdir-registry entry in case it
+  // points to a stale row (a shadow on the server may still reference
+  // this id and a downstream `session_crud_result` will sweep it).
   if (!existsSync(srcDir) || !loadSessionMeta(srcDir)) {
-    throw new SessionCrudError('not_found', sessionId);
+    unregisterSessionWorkDir(yeaftDir, sessionId);
+    return { sessionId, archivedAs: null, alreadyGone: true };
   }
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   // Append 4 hex chars to disambiguate same-millisecond archives (nit #5).
@@ -365,7 +370,7 @@ export function archiveSession(yeaftDir, sessionId) {
   const dstDir = join(root, `.archived-${ts}-${suffix}-${sessionId}`);
   renameSync(srcDir, dstDir);
   unregisterSessionWorkDir(yeaftDir, sessionId);
-  return { sessionId, archivedAs: dstDir };
+  return { sessionId, archivedAs: dstDir, alreadyGone: false };
 }
 
 /**
@@ -402,7 +407,15 @@ export function deleteSession(yeaftDir, sessionId, options = {}) {
   }
 
   if (!liveExists && legacyDirs.length === 0) {
-    throw new SessionCrudError('not_found', sessionId);
+    // Idempotent — nothing to delete on disk. The server may still hold a
+    // shadow row pointing at this id (e.g. legacy pre-PR-#905 ids the
+    // agent no longer carries because the yeaftDir was wiped or moved).
+    // Returning ok lets the server-side `session_crud_result` handler
+    // clear that orphan shadow so the user's sidebar reflects reality.
+    // Still call `unregisterSessionWorkDir` defensively in case there's
+    // a stale registry entry pointing at a non-existent dir.
+    unregisterSessionWorkDir(yeaftDir, sessionId);
+    return { sessionId, deleted: false, legacyCleanedUp: 0, alreadyGone: true };
   }
 
   if (liveExists) {
@@ -421,7 +434,7 @@ export function deleteSession(yeaftDir, sessionId, options = {}) {
   }
 
   unregisterSessionWorkDir(yeaftDir, sessionId);
-  return { sessionId, deleted: true, legacyCleanedUp: legacyDirs.length };
+  return { sessionId, deleted: true, legacyCleanedUp: legacyDirs.length, alreadyGone: false };
 }
 
 /**
