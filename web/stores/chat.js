@@ -1739,10 +1739,24 @@ export const useChatStore = defineStore('chat', {
           const pending = this._sessionCrudPending && this._sessionCrudPending.get(event.requestId);
           if (pending) {
             this._sessionCrudPending.delete(event.requestId);
+            // fix-yeaft-create-not-opened: the agent's session meta payload
+            // does NOT carry an `agentId` field (the agent doesn't know its
+            // own server-assigned id). The server stamps `msg.agentId` on
+            // the envelope, but if we resolve the promise with the bare
+            // `event.session`, the modal's `created.agentId` is undefined
+            // and the cross-agent `selectAgent(owner)` short-circuits —
+            // leaving `currentAgent` on the wrong agent so the new session
+            // appears to "not open / not show up on the right side".
+            // Stamp the envelope's agentId onto the resolved group payload
+            // so callers see a wire-coherent shape.
+            const rawGroup = event.session || event.group || null;
+            const groupWithAgent = (rawGroup && msg.agentId && !rawGroup.agentId)
+              ? { ...rawGroup, agentId: msg.agentId }
+              : rawGroup;
             pending.resolve({
               ok: !!event.ok,
               op: event.op,
-              group: event.session || event.group || null,
+              group: groupWithAgent,
               groupId: event.sessionId || event.groupId || null,
               groups: event.sessions || event.groups || null,
               config: event.config || null,

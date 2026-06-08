@@ -118,6 +118,35 @@ describe('SessionCreateModal onSubmit cross-agent sync (bug 2 regression)', () =
     expect(calls.selectAgent).toEqual([]);
   });
 
+  // fix-yeaft-create-not-opened: in production the agent does NOT stamp
+  // `agentId` on the session meta payload — only the server stamps it on the
+  // envelope, and chat.js (case 'session_crud_result') is responsible for
+  // injecting `msg.agentId` into the resolved `group` so callers see a
+  // wire-coherent shape. Pin that contract here. Without it the modal
+  // would see `created.agentId === undefined` in production (even though
+  // the test fixtures above happen to mock it directly), the cross-agent
+  // guard would short-circuit, `currentAgent` would stay on A, and the
+  // new session would appear "not opened / not on the right side".
+  it('still switches currentAgent when the created group carries agentId stamped via the chat-store wire layer', async () => {
+    const { ctx, calls } = makeCtx({
+      chat: {
+        currentAgent: 'agent-A',
+        selectAgent(id) { calls.selectAgent.push(id); this.currentAgent = id; },
+        setActiveSessionFilter(id, opts) { calls.setActiveSessionFilter.push([id, opts]); },
+        // Wire-realistic shape: bare session payload (no agentId), but the
+        // chat-store would have injected msg.agentId before resolving.
+        // We simulate that by returning the injected shape directly.
+        createYeaftSession() {
+          return { ok: true, group: { id: 'grp_new_xxx', name: 'Test', agentId: 'agent-B' } };
+        },
+      },
+    });
+    await SessionCreateModal.methods.onSubmit.call(ctx);
+    expect(calls.selectAgent).toEqual(['agent-B']);
+    expect(calls.setActive).toEqual(['grp_new_xxx']);
+    expect(calls.setActiveSessionFilter).toEqual([['grp_new_xxx', { force: true }]]);
+  });
+
   it('does NOT do any sync when the create fails (res.ok=false)', async () => {
     const { ctx, calls } = makeCtx({
       chat: {
