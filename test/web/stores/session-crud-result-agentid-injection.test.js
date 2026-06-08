@@ -102,6 +102,11 @@ describe('session_crud_result agentId injection', () => {
       },
     });
 
+    // Locks in BOTH the dual-naming mapping (event.group → resolved.group)
+    // AND the agentId injection on the legacy code path. The fall-through
+    // case label gets it for free today, but pinning it here prevents a
+    // future split-cases refactor from regressing only one branch.
+    expect(resolved.group.id).toBe('grp_old');
     expect(resolved.group.agentId).toBe('agent-X');
   });
 

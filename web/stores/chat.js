@@ -1735,6 +1735,11 @@ export const useChatStore = defineStore('chat', {
         case 'group_crud_result':
         case 'session_crud_result': {
           const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
+          // applyCrudResult above receives agentId via the second argument
+          // (out-of-band). The promise path below carries agentId on the
+          // payload itself because callers await a single flattened object
+          // and have no envelope context. Keep these two channels in sync
+          // if you change the wire-stamping rule.
           if (gs) gs.applyCrudResult(event, msg.agentId || null);
           const pending = this._sessionCrudPending && this._sessionCrudPending.get(event.requestId);
           if (pending) {
@@ -1748,7 +1753,9 @@ export const useChatStore = defineStore('chat', {
             // leaving `currentAgent` on the wrong agent so the new session
             // appears to "not open / not show up on the right side".
             // Stamp the envelope's agentId onto the resolved group payload
-            // so callers see a wire-coherent shape.
+            // so callers see a wire-coherent shape. Agent payload wins if
+            // it ever does start stamping (non-empty values only — an
+            // empty-string agentId is treated as absent).
             const rawGroup = event.session || event.group || null;
             const groupWithAgent = (rawGroup && msg.agentId && !rawGroup.agentId)
               ? { ...rawGroup, agentId: msg.agentId }
