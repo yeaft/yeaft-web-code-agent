@@ -257,8 +257,18 @@ export function buildResidentEntries(args) {
   if (args.sessionId && summaries.group) {
     out.push({ scope: `group/${args.sessionId}`, summary: summaries.group });
   }
-  if (args.ownVpId && summaries.vp && !isVpSeedBackfillStub(summaries.vp)) {
-    out.push({ scope: `vp/${args.ownVpId}`, summary: summaries.vp });
+  // VP per-session isolation (2026-06-09): the VP summary scope MUST be
+  // session-qualified. The legacy bare `vp/<id>` scope was a structural
+  // bug — `summaries.vp` is actually loaded from `group/<sessionId>/vp/<id>/summary.md`
+  // (see #loadLayerASummaries, kind:'group-vp'), so labelling it `vp/<id>`
+  // in the Resident layer (a) collides with the ACL regex in store-v2
+  // (which only recognises `<root>/<sid>/vp/...`) and (b) makes the same
+  // VP persona leak across DIFFERENT sessions whenever the AMS rehydrates
+  // by id rather than by full scope path. The session-qualified form
+  // makes the per-session boundary explicit and matches the on-disk
+  // layout 1:1.
+  if (args.sessionId && args.ownVpId && summaries.vp && !isVpSeedBackfillStub(summaries.vp)) {
+    out.push({ scope: `group/${args.sessionId}/vp/${args.ownVpId}`, summary: summaries.vp });
   }
   return out;
 }
