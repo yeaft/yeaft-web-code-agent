@@ -50,6 +50,7 @@ import { join } from 'path';
 import { openSegmentIndex } from '../memory/index-db.js';
 
 const SENTINEL = '.yeaft-migration.done';
+const SENTINEL_VERSION = 2;
 
 /**
  * Run the sessions migration. No-op when sentinel exists.
@@ -69,7 +70,14 @@ export function migrateSessions(yeaftDir) {
   }
   const sentinel = join(yeaftDir, SENTINEL);
   if (existsSync(sentinel)) {
-    return { migrated: false, moved: 0, frontmatterRewrites: 0, warnings: [] };
+    // Version-aware: ignore a sentinel from an older schema. Future v3
+    // migrations can run on v2-completed trees because they read what
+    // we wrote and decide for themselves whether to re-execute.
+    let v = 0;
+    try { v = JSON.parse(readFileSync(sentinel, 'utf8'))?.version ?? 0; } catch { /* corrupt sentinel — treat as 0 */ }
+    if (v >= SENTINEL_VERSION) {
+      return { migrated: false, moved: 0, frontmatterRewrites: 0, warnings: [] };
+    }
   }
 
   // Step 0 — backup conversation dirs before any in-place rewrite.
@@ -212,7 +220,7 @@ export function migrateSessions(yeaftDir) {
   //    old `.session-migration-v1.done` sentinel covered plus the frontmatter
   //    rewrite).
   writeFileSync(sentinel, JSON.stringify({
-    version: 2,
+    version: SENTINEL_VERSION,
     migratedAt: new Date().toISOString(),
     moved,
     frontmatterRewrites,
@@ -242,6 +250,12 @@ function backupConversationTrees(yeaftDir, backupRoot, warnings) {
     join(yeaftDir, 'conversation'),
     join(yeaftDir, 'chat'),
     join(yeaftDir, 'sessions'),
+    // Step 1/2 move groups/<g>/ and chats/<c>/ into sessions/<x>/, and
+    // step 7 then rewrites *.md inside the moved trees. Without backing
+    // these up at step 0, a regex bug would silently destroy the only
+    // copy of pre-rename conversation messages.
+    join(yeaftDir, 'groups'),
+    join(yeaftDir, 'chats'),
   ];
   for (const src of sources) {
     if (!existsSync(src)) continue;
@@ -334,20 +348,32 @@ function rewriteFrontmatterInDir(dir, warnings) {
     const path = join(dir, name);
     try {
       const raw = readFileSync(path, 'utf8');
-      // Frontmatter must open with `---\n` for us to touch it. Skip the
-      // legacy human-readable conv-XXXX.md transcript files (no frontmatter)
-      // — they're informational dumps, not parser inputs.
-      if (!raw.startsWith('---\n')) continue;
-      const end = raw.indexOf('\n---', 4);
-      if (end === -1) continue;
-      const fmBody = raw.slice(4, end);
-      const after = raw.slice(end);
-      const lines = fmBody.split('\n');
-      const groupIdLineIdx = lines.findIndex((l) => /^groupId:\s+/.test(l));
+      // Frontmatter must open with `---` (LF or CRLF) for us to touch it.
+      // Skip the legacy human-readable conv-XXXX.md transcript files (no
+      // frontmatter) — they're informational dumps, not parser inputs.
+      const openMatch = raw.match(/^---\r?\n/);
+      if (!openMatch) continue;
+      const openLen = openMatch[0].length;
+      // Find the closing `\n---` (allow CRLF before the close too).
+      const endIdx = raw.search(/\r?\n---/);
+      if (endIdx === -1 || endIdx < openLen) continue;
+      const fmBody = raw.slice(openLen, endIdx);
+      const after = raw.slice(endIdx);
+      // Detect line ending used by the file so we round-trip it.
+      const eol = raw.slice(0, openLen).includes('\r\n') ? '\r\n' : '\n';
+      const lines = fmBody.split(/\r?\n/);
+      const groupIdLineIdx = lines.findIndex((l) => /^groupId:\s*/.test(l));
       if (groupIdLineIdx === -1) continue;
-      const hasSessionId = lines.some((l) => /^sessionId:\s+/.test(l));
-      const m = lines[groupIdLineIdx].match(/^groupId:\s+(.+?)\s*$/);
+      const hasSessionId = lines.some((l) => /^sessionId:\s*\S/.test(l));
+      const m = lines[groupIdLineIdx].match(/^groupId:\s*(.*?)\s*$/);
       const value = m ? m[1] : '';
+      if (!hasSessionId && !value) {
+        // Pathological: `groupId:` with no value AND no existing sessionId.
+        // Don't manufacture `sessionId: ` — that would silently mint a
+        // useless row. Leave the file alone and log it so we can audit.
+        warnings.push(`frontmatter rewrite skipped (empty groupId, no sessionId): ${path}`);
+        continue;
+      }
       let newLines;
       if (hasSessionId) {
         // Redundant — drop the groupId line.
@@ -357,8 +383,11 @@ function rewriteFrontmatterInDir(dir, warnings) {
         newLines = lines.slice();
         newLines[groupIdLineIdx] = `sessionId: ${value}`;
       }
-      const next = `---\n${newLines.join('\n')}${after}`;
-      const tmp = `${path}.tmp`;
+      const next = `---${eol}${newLines.join(eol)}${after}`;
+      // Collision-safe tmp name: pid + counter. Parallel migration runs
+      // shouldn't happen (sentinel gates everything) but the atomic-rename
+      // contract is cheap insurance.
+      const tmp = `${path}.tmp.${process.pid}`;
       writeFileSync(tmp, next, 'utf8');
       renameSync(tmp, path);
       mutated++;

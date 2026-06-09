@@ -287,4 +287,53 @@ describe('sessions migration', () => {
     expect(body).toContain('sessionId: grp_alpha');
     expect(body).not.toMatch(/^groupId:/m);
   });
+
+  // ─── Edge cases caught in review ───────────────────────────────────────
+
+  it('rewrites groupId: in CRLF-line-ending files (Windows-edited copies)', () => {
+    const dir = join(tmp, 'conversation', 'messages');
+    mkdirSync(dir, { recursive: true });
+    const crlf = '---\r\nid: m-crlf\r\ngroupId: grp_alpha\r\nrole: user\r\ntimestamp: 2026-05-01T00:00:00.000Z\r\n---\r\n\r\nhello\r\n';
+    writeFileSync(join(dir, 'm-crlf.md'), crlf, 'utf8');
+
+    const r = migrateSessions(tmp);
+    expect(r.frontmatterRewrites).toBeGreaterThanOrEqual(1);
+
+    const body = readFileSync(join(dir, 'm-crlf.md'), 'utf8');
+    expect(body).toContain('sessionId: grp_alpha');
+    expect(body).not.toMatch(/^groupId:/m);
+    // CRLF preserved (round-trip).
+    expect(body.includes('\r\n')).toBe(true);
+  });
+
+  it('skips (and warns) when groupId: is empty AND no sessionId exists', () => {
+    const dir = join(tmp, 'conversation', 'messages');
+    seedLegacyMessage(dir, 'm-empty.md', { id: 'm-empty' });
+    // The seed helper only writes `groupId:` when groupId is truthy, so
+    // hand-write the pathological row.
+    writeFileSync(join(dir, 'm-empty.md'), `---\nid: m-empty\ngroupId:\nrole: user\ntimestamp: 2026-05-01T00:00:00.000Z\n---\n\nhello\n`, 'utf8');
+
+    const r = migrateSessions(tmp);
+    // Pathological row left untouched — no silent `sessionId: ` write.
+    expect(r.frontmatterRewrites).toBe(0);
+    expect(r.warnings.some((w) => /empty groupId/.test(w))).toBe(true);
+
+    const body = readFileSync(join(dir, 'm-empty.md'), 'utf8');
+    expect(body).toContain('groupId:');
+    expect(body).not.toMatch(/sessionId:\s*$/m);
+  });
+
+  it('sentinel records SENTINEL_VERSION and is read on re-run (forward-compat)', () => {
+    migrateSessions(tmp);
+    // Manually rewrite the sentinel to a lower version, simulating an old
+    // schema that should be re-migrated. The current code treats lower
+    // versions as "needs to run again."
+    const sentPath = join(tmp, '.yeaft-migration.done');
+    writeFileSync(sentPath, JSON.stringify({ version: 1, migratedAt: '2026-01-01T00:00:00.000Z' }), 'utf8');
+    const r2 = migrateSessions(tmp);
+    expect(r2.migrated).toBe(true);
+    // Sentinel re-written at current version.
+    const sent = JSON.parse(readFileSync(sentPath, 'utf8'));
+    expect(sent.version).toBe(2);
+  });
 });
