@@ -9,7 +9,7 @@
  * entries-store extraction was retired in the H2-AMS rip.
  *
  * Dream V2 owns all background memory maintenance (scope summaries +
- * memory writes via dream-v2/session-wiring.js → createV2DreamScheduler).
+ * memory writes via dream/session-wiring.js → createV2DreamScheduler).
  *
  * Reference: yeaft-yeaft-core-systems.md §4.4
  */

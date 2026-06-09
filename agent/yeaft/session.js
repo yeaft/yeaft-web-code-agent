@@ -47,7 +47,7 @@ import { ensureDefaultSessionIfEmpty } from './sessions/session-crud.js';
 import { seedDefaultVps } from './vp/seed-defaults.js';
 import { topUpDefaultVps } from './vp/seed-topup.js';
 import { archiveLegacyScopes } from './memory/seed-backfill.js';
-import { createV2DreamScheduler, bootInitEmptyGroups, bootCatchUpStaleDream } from './dream-v2/session-wiring.js';
+import { createV2DreamScheduler, bootInitEmptyGroups, bootCatchUpStaleDream } from './dream/session-wiring.js';
 import { openSegmentIndex } from './memory/index-db.js';
 import { syncAll as syncSegmentIndex } from './memory/segment-sync.js';
 import { openAmsRegistry } from './memory/ams-registry.js';
@@ -204,7 +204,7 @@ export async function loadSession(options = {}) {
 
   // ─── 2.2 R6 → v2 auto-migration retired ───────────────
   //         The R6 shard layout is gone — memory writes go through
-  //         dream-v2 directly. Existing users have already migrated
+  //         dream directly. Existing users have already migrated
   //         (state file in ~/.yeaft/.memory-v2-migration.json).
 
   // ─── 2a. Permission pre-check ─────────────────────────
@@ -362,7 +362,7 @@ export async function loadSession(options = {}) {
     // — kind:'group-vp'). The backfill therefore generated orphan files
     // on every boot. See `memory/seed-backfill.js` for the historical
     // context. Real seeding happens at create time via
-    // `seedSummaryIfMissingSync` from `store-v2.js`, called by vp-crud /
+    // `seedSummaryIfMissingSync` from `store.js`, called by vp-crud /
     // group-crud / seed-default — those write to the correct scope dirs.
   }
 
@@ -468,7 +468,7 @@ export async function loadSession(options = {}) {
 
   // ─── 9a. Create dream scheduler ────────────
   // The legacy R6 dream-scheduler was retired alongside recall-r6;
-  // dream-v2 is the only active path (the `config.memoryV2` opt-out
+  // dream is the only active path (the `config.memoryV2` opt-out
   // flag was retired in task-710 — wiring is unconditional).
   // partialSession lets the v2 scheduler dereference adapter/config/
   // engine/trace lazily — safe because callers attach more fields

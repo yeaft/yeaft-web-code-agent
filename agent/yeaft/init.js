@@ -8,10 +8,11 @@
 import { existsSync, mkdirSync, writeFileSync, accessSync, constants } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-// NOTE: migrateSessionsV1 is called at the end of initYeaftDir() to collapse
-// any legacy groups/ + chats/ + memory/{group,chat}/ data into the unified
-// sessions/ layout. Idempotent via sentinel file.
-import { migrateSessionsV1 } from './migrate/sessions-v1.js';
+// NOTE: migrateSessions runs at the end of initYeaftDir(). It collapses
+// legacy groups/ + chats/ + memory/{group,chat}/ into the unified sessions/
+// layout AND rewrites pre-rename per-message frontmatter (groupId → sessionId).
+// Idempotent via the `.yeaft-migration.done` sentinel file.
+import { migrateSessions } from './migrate/sessions.js';
 
 /**
  * Check if an error is a permission error (EACCES or EPERM).
@@ -215,27 +216,20 @@ export function initYeaftDir(dir) {
     created.push(mcpExamplePath);
   }
 
-  // NOTE: sessions-v1 migration (collapse groups/ + chats/ → sessions/) is
-  // intentionally NOT wired here yet — Phase 1 ships the session-store +
-  // migration script + scope vocab as foundation only. Activating the
-  // migration before the runtime reads from sessions/ would move data out
-  // from under the live group/chat code paths. Phase 2 flips the runtime
-  // and then hooks `migrateSessionsV1(root)` here.
-
-  // NOTE: sessions-v1 migration runs at end. Fire-and-log: keep
-  // initYeaftDir() sync so existing callers don't break. The migration is
-  // idempotent (sentinel file) so a partial run on crash is safe.
-  Promise.resolve()
-    .then(() => migrateSessionsV1(root))
-    .then((res) => {
-      if (res && res.migrated) {
-        console.log(`[yeaft] session migration complete (${res.moved} dirs moved${res.warnings?.length ? `, ${res.warnings.length} warnings` : ''})`);
-        if (res.warnings?.length) for (const w of res.warnings) console.warn(`[yeaft] migration: ${w}`);
-      }
-    })
-    .catch((err) => {
-      console.warn(`[yeaft] session migration failed (continuing): ${err?.message || err}`);
-    });
+  // NOTE: sessions migration runs synchronously here. It MUST complete before
+  // any LLM request fires, because step 7 (per-message frontmatter rewrite)
+  // is what lets the persist.js parser drop the legacy `groupId:` row alias.
+  // Idempotent (sentinel file) so re-running on a fully-migrated dir is a
+  // no-op; on a partial-crash dir, each step is independently resumable.
+  try {
+    const res = migrateSessions(root);
+    if (res && res.migrated) {
+      console.log(`[yeaft] session migration complete (${res.moved} dirs moved, ${res.frontmatterRewrites} messages rewritten${res.warnings?.length ? `, ${res.warnings.length} warnings` : ''})`);
+      if (res.warnings?.length) for (const w of res.warnings) console.warn(`[yeaft] migration: ${w}`);
+    }
+  } catch (err) {
+    console.warn(`[yeaft] session migration failed (continuing): ${err?.message || err}`);
+  }
 
   return { dir: root, created, writable, warnings };
 }

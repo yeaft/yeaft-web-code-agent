@@ -14,7 +14,7 @@
  *      Crucially, neither leaks into the other slot.
  *
  * The test exercises the REAL writers (`ConversationStore.replaceCompactSummaryFor`
- * and `store-v2.writeMemory`/`writeSummary`) against an isolated tmp dir
+ * and `store.writeMemory`/`writeSummary`) against an isolated tmp dir
  * rather than booting the full Engine + LLM. The boundary the user named
  * ("compact 和 dream 是两个不一样的事情，不要混在一起") is a STORAGE +
  * PROMPT-SLOT invariant; that's exactly what these writers enforce, and
@@ -35,7 +35,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ConversationStore } from '../../../../agent/yeaft/conversation/persist.js';
-import { writeMemory, writeSummary } from '../../../../agent/yeaft/memory/store-v2.js';
+import { writeMemory, writeSummary } from '../../../../agent/yeaft/memory/store.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..', '..', '..', '..');
@@ -128,7 +128,7 @@ describe('Compact ↔ Dream boundary (storage)', () => {
 
     await bumpMtime();
 
-    // Dream's only writes — exactly what `dream-v2/apply.js` invokes when
+    // Dream's only writes — exactly what `dream/apply.js` invokes when
     // it commits a memory rewrite for a (group, vp) scope.
     const vpScope = { kind: 'group-vp', sessionId, id: vpId };
     await writeMemory(vpScope, '## DREAM produced memory\n- fact 1\n', { root: memoryRoot });

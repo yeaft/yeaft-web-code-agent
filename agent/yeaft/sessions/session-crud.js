@@ -52,7 +52,7 @@ import { addVp as rosterAdd, removeVp as rosterRemove, setDefaultVp } from './ro
 import { seedDefaultSession, DEFAULT_SESSION_ID } from './seed-default.js';
 import { nextSessionId, validateVpId, isReservedVpId } from './ids.js';
 import { scanVpLibrary, DEFAULT_VP_LIB_DIR } from '../vp/vp-store.js';
-import { seedSummaryIfMissingSync, removeScopeDirSync } from '../memory/store-v2.js';
+import { seedSummaryIfMissingSync, removeScopeDirSync } from '../memory/store.js';
 import { ensureSessionConfigFile, saveSessionConfig, loadSessionConfig } from './session-config.js';
 
 /**

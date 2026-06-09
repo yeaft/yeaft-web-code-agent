@@ -16,7 +16,7 @@ import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { openSession, createSession, loadSessionMeta } from './session-store.js';
-import { seedSummaryIfMissingSync } from '../memory/store-v2.js';
+import { seedSummaryIfMissingSync } from '../memory/store.js';
 
 export const DEFAULT_SESSION_ID = 'grp_default';
 

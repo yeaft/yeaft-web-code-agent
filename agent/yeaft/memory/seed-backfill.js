@@ -18,7 +18,7 @@
  *     of truth for own-VP identity; surfacing the stub in Section 6 would
  *     dup the same `# Name / Role` text. New seed paths (vp-crud.js,
  *     group-crud.js, seed-default.js) use `seedSummaryIfMissingSync` from
- *     store-v2.js to write directly to the correct scope dir.
+ *     store.js to write directly to the correct scope dir.
  *
  *   - `archiveLegacyScopes(root)`: one-shot migration that moves the truly
  *     dead top-level `vp/`, `feature/`, `topic/` dirs to `.legacy/`. Per
