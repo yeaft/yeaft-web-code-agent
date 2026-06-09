@@ -23,6 +23,7 @@ import { MCPManager } from './mcp.js';
 import { createFullRegistry } from './tools/index.js';
 import { Engine } from './engine.js';
 import { Compactor } from './compact/compactor.js';
+import { resolveContextWindow } from './models.js';
 import { ToolUsageStats } from './stats/tool-usage.js';
 // H2.f.5 removed the old user-facing thread pipeline/dispatcher. The base
 // session still exposes a single default Engine; PR #797 adds group VP thread
@@ -45,7 +46,7 @@ import { ToolUsageStats } from './stats/tool-usage.js';
 import { ensureDefaultSessionIfEmpty } from './sessions/session-crud.js';
 import { seedDefaultVps } from './vp/seed-defaults.js';
 import { topUpDefaultVps } from './vp/seed-topup.js';
-import { runSummaryBackfill, archiveLegacyScopes } from './memory/seed-backfill.js';
+import { archiveLegacyScopes } from './memory/seed-backfill.js';
 import { createV2DreamScheduler, bootInitEmptyGroups, bootCatchUpStaleDream } from './dream-v2/session-wiring.js';
 import { openSegmentIndex } from './memory/index-db.js';
 import { syncAll as syncSegmentIndex } from './memory/segment-sync.js';
@@ -342,20 +343,15 @@ export async function loadSession(options = {}) {
     // the sidebar shows the empty state + "create session" CTA, which
     // is the explicit behaviour the user asked for.
 
-    // task-fix-memory-load: backfill summary.md for VPs / groups created
-    // before the create-time seed was added. Without this, an existing
-    // user's `grp_claude` and `steve` VP have an empty Layer-A resident
-    // summary every turn (memory section in the system prompt is just
-    // the `active_scope` header). Idempotent — only writes when missing.
-    try {
-      runSummaryBackfill({
-        yeaftDir,
-        libDir: join(yeaftDir, 'virtual-persons'),
-        root: join(yeaftDir, 'memory'),
-      });
-    } catch (err) {
-      console.warn(`[Yeaft] runSummaryBackfill failed: ${err?.message || err}`);
-    }
+    // 2026-06-09 (VP per-session isolation): `runSummaryBackfill` was
+    // removed here. It walked `vp/<id>/` and `group/<id>/` at the memory
+    // root, writing `summary.md` files into bare paths the Engine never
+    // reads (`engine.#loadLayerASummaries` reads `group/<sid>/vp/<id>/...`
+    // — kind:'group-vp'). The backfill therefore generated orphan files
+    // on every boot. See `memory/seed-backfill.js` for the historical
+    // context. Real seeding happens at create time via
+    // `seedSummaryIfMissingSync` from `store-v2.js`, called by vp-crud /
+    // group-crud / seed-default — those write to the correct scope dirs.
   }
 
   // ─── 6. Load skills ────────────────────────────────────
@@ -430,8 +426,24 @@ export async function loadSession(options = {}) {
   const compactor = new Compactor({
     summarize: ({ system, prompt, maxTokens } = {}) =>
       engine.summarizeForCompact({ system, prompt, maxTokens }),
+    // Resolve the model's true context window (GPT-5 256K vs Claude 200K
+    // etc.) instead of pinning to a flat `config.maxContextTokens`.
+    // The 70% threshold then floats with the model in use — the
+    // user-stated requirement ("超过 model context 70% 这一个约束").
     getMaxContextTokens: () =>
-      typeof config.maxContextTokens === 'number' ? config.maxContextTokens : undefined,
+      resolveContextWindow(
+        typeof config.model === 'string' && config.model
+          ? config.model
+          : (config.primaryModel || ''),
+        config
+      ),
+    // Trigger ratio knob. Defaults to 0.7 per the user directive; a
+    // finite number in (0, 1) wins. Anything else (NaN, ≤0, ≥1, missing)
+    // falls back to 0.7 so a typo in config.json can't disable compact.
+    getTriggerRatio: () => {
+      const r = Number(config?.compactTriggerRatio);
+      return Number.isFinite(r) && r > 0 && r < 1 ? r : 0.7;
+    },
     // Live-read: `config.language` is mutated in place by
     // `engine.setLanguage()` (which broadcastLanguageChange fans out to
     // every per-VP engine). The compactor must see the post-broadcast

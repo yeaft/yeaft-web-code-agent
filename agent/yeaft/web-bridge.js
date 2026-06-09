@@ -2478,6 +2478,27 @@ export async function handleYeaftSessionSend(msg) {
   // Do not wait for every driver in the group: unrelated older threads may keep
   // running for minutes and must not hold this request lifecycle hostage.
   await waitForRoutePromises(report?.message?.id);
+
+  // Post-turn compaction. Fire-and-forget — does NOT block the response
+  // path. The Compactor's own precheck (`shouldCompactHistory`) decides
+  // whether to engage the LLM, using the trigger ratio wired in
+  // `session.js` (default 70% of model context, knob:
+  // `config.compactTriggerRatio`). The single-flight + anti-starvation
+  // logic inside Compactor handles concurrent turns; the entry-gate
+  // `awaitInFlight` at the top of `handleYeaftSessionSend` (~:2291)
+  // ensures a follow-up turn never reads a half-mutated history.
+  //
+  // Why a per-call historyHandle: Compactor must NEVER close over a
+  // frozen snapshot — the array reference can be swapped by
+  // `consolidate`, session reset, or `route_forward` bursts. The handle
+  // re-resolves on each `get` via the same sessionId-keyed helpers used
+  // everywhere else in the bridge.
+  if (session?.compactor && sessionId) {
+    session.compactor.scheduleAfterTurn(sessionId, {
+      get: () => getOrCreateSessionHistory(sessionId),
+      set: (next) => setGroupHistory(sessionId, next),
+    });
+  }
 }
 
 /**

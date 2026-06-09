@@ -62,6 +62,13 @@ export class Compactor {
    *        treats that as a soft failure).
    * @param {() => number|undefined} [opts.getMaxContextTokens]
    *        Returns `config.maxContextTokens` for `shouldCompactHistory`.
+   * @param {() => number|undefined} [opts.getTriggerRatio]
+   *        Returns the fraction-of-context threshold (e.g. `0.7` for the
+   *        user-stated "70% of model context"). Falls through to
+   *        `shouldCompactHistory`'s `DEFAULT_TOKEN_FRACTION` when missing
+   *        or out-of-range — that is, the compactor will still trigger,
+   *        just at the library default instead of the configured ratio.
+   *        Live-read so a config edit takes effect without reboot.
    * @param {() => string|undefined} [opts.getLanguage]
    *        Returns the live `config.language`. Threaded into
    *        `compactHistory` so the compactor's summary prompt + the
@@ -72,13 +79,16 @@ export class Compactor {
    *        `yeaft_history_compacted` WS event. Default: no-op. Can be
    *        replaced post-construction via `setOnCompacted`.
    */
-  constructor({ summarize, getMaxContextTokens, getLanguage, onCompacted } = {}) {
+  constructor({ summarize, getMaxContextTokens, getTriggerRatio, getLanguage, onCompacted } = {}) {
     if (typeof summarize !== 'function') {
       throw new TypeError('Compactor: summarize is required');
     }
     this._summarize = summarize;
     this._getMaxContextTokens = typeof getMaxContextTokens === 'function'
       ? getMaxContextTokens
+      : () => undefined;
+    this._getTriggerRatio = typeof getTriggerRatio === 'function'
+      ? getTriggerRatio
       : () => undefined;
     this._getLanguage = typeof getLanguage === 'function'
       ? getLanguage
@@ -183,12 +193,18 @@ export class Compactor {
       const snapshotLen = snapshot.length;
 
       const maxContextTokens = this._getMaxContextTokens();
+      const tokenFraction = this._getTriggerRatio();
 
       // Cheap O(n) precheck so we don't bother engaging the LLM at all
       // when the conversation is still small. `compactHistory` runs the
       // same check internally, but only after building the summarizer
       // input — this keeps small chats off the LLM altogether.
-      const triage = shouldCompactHistory(snapshot, { maxContextTokens });
+      //
+      // tokenFraction is the user-configurable ratio knob (default 0.7
+      // resolved upstream in session.js). When `undefined`, the helper
+      // uses its built-in DEFAULT_TOKEN_FRACTION (currently 0.5) — that
+      // is the back-compat path for callers that never wire a ratio.
+      const triage = shouldCompactHistory(snapshot, { maxContextTokens, tokenFraction });
       if (!triage.trigger) return;
 
       const summarize = ({ system, prompt }) =>
@@ -197,6 +213,7 @@ export class Compactor {
       const result = await compactHistory(snapshot, {
         summarize,
         maxContextTokens,
+        tokenFraction,
         language: this._getLanguage(),
       });
       if (!result || !result.compacted) {
