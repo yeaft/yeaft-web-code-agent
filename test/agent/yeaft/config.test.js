@@ -388,7 +388,7 @@ describe('loadMCPConfig', () => {
 
 // ═══════════════════════════════════════════════════════════════
 // memoryV2 — flag retired (task-710)
-// The H2-AMS / dream-v2 wiring is now unconditional. We assert the
+// The H2-AMS / dream wiring is now unconditional. We assert the
 // field is absent so a regression that re-introduces the dead switch
 // shows up in CI.
 // ═══════════════════════════════════════════════════════════════

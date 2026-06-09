@@ -3519,7 +3519,7 @@ export async function handleYeaftDreamTrigger(msg = {}) {
   // otherwise auto-run events can be persisted under the clicked group.
   // The scheduler also short-circuits the underlying run for same-group,
   // and a different group's filter would have been silently dropped
-  // anyway (see dream-v2/schedule.js inflight reuse), so the user-facing
+  // anyway (see dream/schedule.js inflight reuse), so the user-facing
   // semantics are unchanged ("you already asked").
   if (sessionId && (inflightScopedDreamGroups.size > 0 || session.dreamScheduler.isRunning)) {
     const skippedResult = {

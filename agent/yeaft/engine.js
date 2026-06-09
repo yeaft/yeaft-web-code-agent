@@ -28,7 +28,7 @@ import { runCompact as runCompactOrchestrator } from './compact/orchestrator.js'
 import { evaluateCompactTriggers } from './compact/triggers.js';
 import { archiveTurn } from './archive/turn-archive.js';
 import { archiveToolResults } from './archive/tool-results.js';
-import { readSummary as readScopeSummary } from './memory/store-v2.js';
+import { readSummary as readScopeSummary } from './memory/store.js';
 import { runAdjust } from './memory/adjust.js';
 import { isVpSeedBackfillStub } from './memory/seed-backfill.js';
 import { runStopHooks } from './stop-hooks.js';
@@ -261,7 +261,7 @@ export function buildResidentEntries(args) {
   // session-qualified. The legacy bare `vp/<id>` scope was a structural
   // bug — `summaries.vp` is actually loaded from `group/<sessionId>/vp/<id>/summary.md`
   // (see #loadLayerASummaries, kind:'group-vp'), so labelling it `vp/<id>`
-  // in the Resident layer (a) collides with the ACL regex in store-v2
+  // in the Resident layer (a) collides with the ACL regex in store
   // (which only recognises `<root>/<sid>/vp/...`) and (b) makes the same
   // VP persona leak across DIFFERENT sessions whenever the AMS rehydrates
   // by id rather than by full scope path. The session-qualified form
