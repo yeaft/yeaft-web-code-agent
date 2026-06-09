@@ -320,16 +320,17 @@ export function parseMessage(raw) {
       case 'threadId': msg.threadId = value; break;
       case 'sourceThreadId': msg.sourceThreadId = value; break;
       case 'sessionId': msg.sessionId = value; break;
-      // Legacy alias: pre-rename messages (written before the
-      // groups → sessions naming sweep) stamped `groupId:` in
-      // frontmatter. Without this case, `~/.yeaft/conversation/
-      // messages/*.md` files with `groupId: grp_x` parse with
-      // msg.sessionId undefined, and #loadSessionHotMessages'
-      // `.filter(m => m?.sessionId)` drops every legacy row — so
-      // a user with a 4k-message history sees nothing replayed
-      // into the LLM context. Setting only when sessionId isn't
-      // already present preserves new-key precedence in case a
-      // hand-edited file carries both.
+      // Legacy alias: pre-rename messages stamped `groupId:` (PR #881
+      // groups → sessions sweep). Without this case, files in
+      // ~/.yeaft/conversation/messages/*.md from before the rename
+      // parse with msg.sessionId undefined and #loadSessionHotMessages'
+      // `.filter(m => m?.sessionId)` drops every row — LLM replay sees
+      // an empty history. `if (!msg.sessionId)` keeps new-key precedence
+      // for hand-edited files that carry both keys. See
+      // migrate/sessions-v1.js — that pass moved directories but did
+      // NOT rewrite per-message frontmatter, which is why this alias
+      // has to live forever (or until a frontmatter-rewrite migration
+      // lands and the legacy dir is empty).
       case 'groupId': if (!msg.sessionId) msg.sessionId = value; break;
       case 'chatId': msg.chatId = value; break;
       case 'speakerVpId': msg.speakerVpId = value; break;

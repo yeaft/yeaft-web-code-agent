@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -60,6 +60,27 @@ describe('persist: legacy groupId frontmatter alias', () => {
       '---',
       '',
       'mixed-keys',
+    ].join('\n');
+
+    const parsed = parseMessage(raw);
+    expect(parsed.sessionId).toBe('grp_new');
+  });
+
+  it('sessionId precedence holds regardless of frontmatter ordering', () => {
+    // Pin against a future refactor that flips the precedence direction
+    // by mistake — e.g. turning the `sessionId:` case into `if (!msg.sessionId)`
+    // (mirroring the alias). With `groupId:` listed FIRST, msg.sessionId
+    // would already be 'grp_old' when the parser hits the sessionId line,
+    // and the refactor's guard would silently keep the legacy value.
+    const raw = [
+      '---',
+      'id: m1',
+      'role: user',
+      'groupId: grp_old',
+      'sessionId: grp_new',
+      '---',
+      '',
+      'inverted-order',
     ].join('\n');
 
     const parsed = parseMessage(raw);
