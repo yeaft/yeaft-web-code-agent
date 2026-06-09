@@ -2493,6 +2493,14 @@ export async function handleYeaftSessionSend(msg) {
   // `consolidate`, session reset, or `route_forward` bursts. The handle
   // re-resolves on each `get` via the same sessionId-keyed helpers used
   // everywhere else in the bridge.
+  //
+  // Naming asymmetry note: `getOrCreateSessionHistory` and
+  // `setGroupHistory` are intentionally NOT renamed to match. Both are
+  // session-keyed today (the `set` helper's name is a historical alias
+  // from the pre-VP-thread era), but per CLAUDE.md's "不要为了改名而批量
+  // 重命名" guardrail we leave the wire-compat names alone and rely on
+  // co-location to make the symmetry obvious. The source-pinning test
+  // `web-bridge-post-turn-compact-wiring.test.js` matches both names.
   if (session?.compactor && sessionId) {
     session.compactor.scheduleAfterTurn(sessionId, {
       get: () => getOrCreateSessionHistory(sessionId),

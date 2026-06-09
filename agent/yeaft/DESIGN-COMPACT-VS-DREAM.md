@@ -2,7 +2,7 @@
 
 > **Status**: 设计基线（v1，2026-06-09）
 > **Scope**: 锁住"history compact"和"memory dream"两条管道的**物理边界**——磁盘根、写入口、读出口、prompt 注入位置、scheduler 各自独立，互不替代、互不污染。
-> **关系**: 与 `DESIGN-PROMPT.md` §4.3、`engine.js:1494` HARD INVARIANT 注释、`memory/DESIGN-H2-AMS.md` 共同构成边界三件套。
+> **关系**: 与 `DESIGN-PROMPT.md` §4.3、`engine.js` 内 `HARD INVARIANT: Compact ≠ Dream` 注释、`memory/DESIGN-H2-AMS.md` 共同构成边界三件套。
 
 ---
 
@@ -27,10 +27,10 @@
 | **写入磁盘根**       | `<yeaftDir>/groups/<sessionId>/conversation/compact/`     | `<memoryRoot>/<scope>/`                                           |
 | **写入文件**         | `<vpId>.md`（per-(session, vp) 一份纯文本 summary）        | `memory.md` + `summary.md` 配对（per-scope 一对，原子 rename）    |
 | **谁写**             | `engine.js#runOrchestratorCompact` → `persist.replaceCompactSummaryFor(sessionId, vpId, summary)` <br/> 以及 `Compactor#_runOnce` → `compactHistory` | `dream-v2/apply.js` → `store-v2.writeMemory(...)` / `writeSummary(...)` |
-| **谁读 / 怎么进 LLM** | `engine.js:1532` `#getCompactSummary()` → 包装成 `<conversation_summary>` user/assistant 对 → **prepend 到 messages 数组头** | `engine.js#buildResidentEntries` (≈:253) → AMS Resident 层 → `prompts.js#buildSystemPrompt` §6 Memory section |
+| **谁读 / 怎么进 LLM** | `engine.js#getCompactSummary` → 包装成 `<conversation_summary>` user/assistant 对 → **prepend 到 messages 数组头** | `engine.js#buildResidentEntries` → AMS Resident 层 → `prompts.js#buildSystemPrompt` §6 Memory section |
 | **Prompt slot**     | `messages[0..1]`（user + 'OK' assistant）                  | `system prompt` 的 §6 Memory（**唯一**注入位置）                  |
 | **Scheduler**       | (a) 反应式：LLMContextError → `runOrchestratorCompact` <br/> (b) 主动式：`Compactor.scheduleAfterTurn(sessionId, historyHandle)` post-turn fire-and-forget，由 `web-bridge.js#handleYeaftSessionSend` 末尾接活 | (a) `engine.js#query()` 末尾的 consolidation 判断 → `triggerDream()` <br/> (b) `dream-v2/run.js` 后台 scheduler |
-| **触发归属（谁判断）** | `shouldCompactHistory(messages, { maxContextTokens, tokenFraction: 0.7 })` 纯函数 | `memory/consolidate.js`（**注**：与本文件已分离的 `compact/partition.js` 同名巧合无关）+ `dream-v2/triage.js` |
+| **触发归属（谁判断）** | `shouldCompactHistory(messages, { maxContextTokens, tokenFraction: 0.7 })` 纯函数 | `engine.js#maybeConsolidate`（LLMContextError 反应式路径）+ `dream-v2/triage.js`（后台 scheduler） |
 | **LLM 调用**        | `engine.summarizeForCompact({ system, prompt, maxTokens })`（一次性 summarize） | `dream-v2` 自己的 extract/triage/apply 三段 LLM pipeline           |
 
 ---
@@ -45,7 +45,7 @@
 - 概念错位：compact 是"老对话被压缩了"，本质属于 dialogue 时间线；
 - DESIGN-PROMPT.md §4.3 已明文禁止。
 
-**唯一注入点**：`engine.js:1532` 的 `compactMessages = [...]` 数组，被 prepend 到 `conversationMessages`。
+**唯一注入点**：`engine.js` 内 `HARD INVARIANT` 注释下方的 `compactMessages = [...]` 数组，被 prepend 到 `conversationMessages`。
 
 ### ❌ Rule 2 — Dream 产物**永远**不进 messages 数组
 
@@ -54,7 +54,7 @@
 - 它本质是"事实库"，不是对话；放进 messages 会被 LLM 当成"用户刚说的话"重复处理；
 - AMS Resident 层已经是 system prompt 的 §6 Memory section，**已经**进了 LLM 视野，再塞一份是重复。
 
-**唯一注入点**：`prompts.js#buildSystemPrompt`（参考 :380-390 附近），由 AMS Resident 层喂给它的 `summaries` 参数。
+**唯一注入点**：`prompts.js#buildSystemPrompt` 的 `§ 6. Memory Section` 块，由 AMS Resident 层喂给它的 `summaries` 参数。
 
 ### ❌ Rule 3 — Compact 和 Dream **不**共享 scheduler
 
@@ -147,7 +147,7 @@
 2. **我新加 / 改的 prompt 注入点在哪？** 必须是上面"Prompt slot"里列的位置，不是的话停下来重新设计。
 3. **我有没有共用 scheduler / store / trigger？** 任何一项是"是"，去看上面 ❌ 规则 3 / 4 / 5。
 
-如果有疑问，请 ping 当时设计这套架构的 reviewer（`engine.js:1494` HARD INVARIANT 注释里有 git history 入口），不要"我觉得合理"就动。
+如果有疑问，请 ping 当时设计这套架构的 reviewer（搜 `engine.js` 内的 `HARD INVARIANT: Compact ≠ Dream` 注释，里面有 git history 入口），不要"我觉得合理"就动。
 
 ---
 
@@ -155,10 +155,10 @@
 
 | 文档                              | 与本文档的关系                                                |
 | -------------------------------- | ------------------------------------------------------------ |
-| `engine.js:1494` 注释块          | 代码层面的 HARD INVARIANT 标记，引用本文件                    |
+| `engine.js` 内 `HARD INVARIANT: Compact ≠ Dream` 注释块 | 代码层面的 HARD INVARIANT 标记，引用本文件          |
 | `agent/yeaft/DESIGN-PROMPT.md` §4.3 | 历史 case 的根因复盘 + Memory section 唯一出口规则            |
 | `agent/yeaft/memory/DESIGN-H2-AMS.md` | Dream V2 / AMS 的内部架构（本文档不重述）                    |
 | `agent/yeaft/compact/orchestrator.js` | 反应式 compact 入口（LLMContextError 触发）                  |
 | `agent/yeaft/compact/compactor.js`    | 主动式 compact 入口（post-turn 70% 触发），由 `Compactor` 类管理 |
-| `agent/yeaft/compact/partition.js`    | Hot-window 切分纯函数（**注**：仅服务 compact，名字保留 `shouldConsolidate` 是历史 caller 别名） |
+| `agent/yeaft/compact/partition.js`    | Hot-window 切分纯函数（`shouldCompact` + `partitionMessages`，仅服务 compact） |
 | `agent/yeaft/dream-v2/run.js`        | Dream 后台 scheduler 入口                                    |

@@ -55,6 +55,18 @@ import { join } from 'path';
 import { existsSync as existsSyncSafe, readFileSync as readFileSyncSafe, mkdirSync as mkdirSyncSafe } from 'fs';
 
 /**
+ * Application-wide default for `Compactor`'s trigger ratio (the
+ * "fraction of model context" gate). The user-stated requirement is
+ * "model context 的 70%"; this is the canonical literal for it. Lives
+ * in session.js (not in compactor.js) because `Compactor` is also used
+ * by test fixtures that intentionally skip the ratio injector to
+ * exercise the library default (`history-compact.js#DEFAULT_TOKEN_FRACTION`).
+ * The two defaults are kept separate on purpose — see the Compactor
+ * constructor JSDoc for the boundary.
+ */
+const DEFAULT_COMPACT_TRIGGER_RATIO = 0.7;
+
+/**
  * @typedef {Object} SessionOptions
  * @property {string} [dir] — Yeaft data directory override (default: ~/.yeaft)
  * @property {string} [model] — Model override
@@ -437,12 +449,13 @@ export async function loadSession(options = {}) {
           : (config.primaryModel || ''),
         config
       ),
-    // Trigger ratio knob. Defaults to 0.7 per the user directive; a
-    // finite number in (0, 1) wins. Anything else (NaN, ≤0, ≥1, missing)
-    // falls back to 0.7 so a typo in config.json can't disable compact.
+    // Trigger ratio knob. Defaults to DEFAULT_COMPACT_TRIGGER_RATIO (0.7)
+    // per the user directive; a finite number in (0, 1) wins. Anything
+    // else (NaN, ≤0, ≥1, missing) falls back to the default so a typo in
+    // config.json can't disable compact.
     getTriggerRatio: () => {
       const r = Number(config?.compactTriggerRatio);
-      return Number.isFinite(r) && r > 0 && r < 1 ? r : 0.7;
+      return Number.isFinite(r) && r > 0 && r < 1 ? r : DEFAULT_COMPACT_TRIGGER_RATIO;
     },
     // Live-read: `config.language` is mutated in place by
     // `engine.setLanguage()` (which broadcastLanguageChange fans out to

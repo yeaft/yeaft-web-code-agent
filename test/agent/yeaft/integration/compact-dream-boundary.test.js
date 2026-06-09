@@ -172,7 +172,7 @@ describe('Compact ↔ Dream boundary (storage)', () => {
     //     prompt. The marker we pin is the literal wrapper tag near the
     //     compactMessages assignment.
     expect(engineSrc).toMatch(/const\s+compactMessages\s*=\s*compactSummary/);
-    expect(engineSrc).toMatch(/<conversation_summary>[\s\S]{0,40}compactSummary[\s\S]{0,40}<\/conversation_summary>/);
+    expect(engineSrc).toMatch(/<conversation_summary>[\s\S]{0,15}compactSummary[\s\S]{0,15}<\/conversation_summary>/);
 
     // (2) The compact summary string MUST NOT be referenced by
     //     `prompts.js` at all — that file builds the system prompt and is
@@ -184,9 +184,13 @@ describe('Compact ↔ Dream boundary (storage)', () => {
     // (3) Dream output flows through `buildResidentEntries` (engine.js)
     //     and lands in the §6 Memory section assembled by `prompts.js`.
     //     We pin both ends: engine.js produces resident entries,
-    //     prompts.js renders a Memory section header.
+    //     prompts.js renders the §6 section header. Pin the literal
+    //     section-header comment marker rather than any stray mention of
+    //     "memory" — `prompts.js` has multiple incidental matches today,
+    //     only one of which is the real §6 outlet (`prompts.js:380`:
+    //     `─── 6. Memory Section`).
     expect(engineSrc).toMatch(/buildResidentEntries\s*\(/);
-    expect(promptsSrc).toMatch(/Memory|memory/);
+    expect(promptsSrc).toMatch(/6\.\s*Memory Section/);
 
     // (4) The HARD INVARIANT comment is present near the compact slot.
     //     Removing it without replacement is a smell the next reviewer

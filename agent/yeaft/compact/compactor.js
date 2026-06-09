@@ -61,14 +61,25 @@ export class Compactor {
    *        the trimmed summary text (or '' on failure — `compactHistory`
    *        treats that as a soft failure).
    * @param {() => number|undefined} [opts.getMaxContextTokens]
-   *        Returns `config.maxContextTokens` for `shouldCompactHistory`.
+   *        Returns the model-aware context window (preferred — provided
+   *        by `session.js` via `resolveContextWindow(model, config)`) or
+   *        a flat `config.maxContextTokens` fallback. The number is
+   *        threaded into `shouldCompactHistory` as `maxContextTokens`.
    * @param {() => number|undefined} [opts.getTriggerRatio]
    *        Returns the fraction-of-context threshold (e.g. `0.7` for the
-   *        user-stated "70% of model context"). Falls through to
-   *        `shouldCompactHistory`'s `DEFAULT_TOKEN_FRACTION` when missing
-   *        or out-of-range — that is, the compactor will still trigger,
-   *        just at the library default instead of the configured ratio.
-   *        Live-read so a config edit takes effect without reboot.
+   *        user-stated "70% of model context"). The application-wide
+   *        default is 0.7, enforced by the injector in `session.js` — a
+   *        finite number in (0, 1) wins, anything else falls back to 0.7.
+   *
+   *        When NO injector is wired (typically test fixtures that omit
+   *        `getTriggerRatio` entirely), this falls through to
+   *        `shouldCompactHistory`'s library default (`DEFAULT_TOKEN_FRACTION`
+   *        = 0.5). That gap is intentional: the library default is the
+   *        documented unit-test contract, the application default is the
+   *        user-facing product contract, and the injector boundary is what
+   *        keeps them from drifting in production. Production callers MUST
+   *        wire `getTriggerRatio` (session.js does). Live-read so a config
+   *        edit takes effect without reboot.
    * @param {() => string|undefined} [opts.getLanguage]
    *        Returns the live `config.language`. Threaded into
    *        `compactHistory` so the compactor's summary prompt + the
@@ -200,10 +211,11 @@ export class Compactor {
       // same check internally, but only after building the summarizer
       // input — this keeps small chats off the LLM altogether.
       //
-      // tokenFraction is the user-configurable ratio knob (default 0.7
-      // resolved upstream in session.js). When `undefined`, the helper
-      // uses its built-in DEFAULT_TOKEN_FRACTION (currently 0.5) — that
-      // is the back-compat path for callers that never wire a ratio.
+      // `tokenFraction` is the user-configurable ratio knob — production
+      // wiring (session.js) ALWAYS returns a finite (0,1) number defaulting
+      // to 0.7. The `undefined` branch (helper falls back to its
+      // `DEFAULT_TOKEN_FRACTION = 0.5`) is reachable only when a caller
+      // skips `getTriggerRatio` entirely — see constructor JSDoc.
       const triage = shouldCompactHistory(snapshot, { maxContextTokens, tokenFraction });
       if (!triage.trigger) return;
 

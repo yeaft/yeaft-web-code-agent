@@ -23,7 +23,7 @@ import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes } from './sessions/pre-flow.js';
 import { readProjectDoc, pickProjectDocFile, DEFAULT_PROJECT_DOC_MAX_BYTES } from './sessions/project-doc.js';
-import { shouldConsolidate, partitionMessages } from './compact/partition.js';
+import { partitionMessages } from './compact/partition.js';
 import { runCompact as runCompactOrchestrator } from './compact/orchestrator.js';
 import { evaluateCompactTriggers } from './compact/triggers.js';
 import { archiveTurn } from './archive/turn-archive.js';
@@ -1498,8 +1498,8 @@ export class Engine {
     //
     // Inversely: Dream V2's output (per-scope `memory.md` / `summary.md`)
     // flows exclusively through `prompts.js#buildSystemPrompt`'s §6 Memory
-    // section via the AMS Resident layer (see `engine.js#buildResidentEntries`
-    // around :253). It MUST NEVER appear in the messages array.
+    // section via the AMS Resident layer (see `engine.js#buildResidentEntries`).
+    // It MUST NEVER appear in the messages array.
     //
     // Two write roots, two scheduler triggers, two prompt slots — never
     // mixed. Anyone touching this section must read

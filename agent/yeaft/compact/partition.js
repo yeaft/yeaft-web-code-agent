@@ -12,10 +12,10 @@
  *
  *   - Conversation history compaction (the thing this file ACTUALLY
  *     serves) is owned by `compact/orchestrator.js`. The two functions
- *     below — `shouldConsolidate` (kept as the export name only because
- *     callers already use it; the role is "should we trigger a compact
- *     pass") and `partitionMessages` (hot/cold split by token budget)
- *     are pure helpers for that orchestrator.
+ *     below — `shouldCompact` (the "hot window over budget?" predicate
+ *     that gates `compact/orchestrator.js`) and `partitionMessages`
+ *     (hot/cold split by token budget) are pure helpers for that
+ *     orchestrator.
  *
  * Why the move matters: keeping these under `memory/` invited the next
  * person to think "this is part of the memory subsystem" and reach for
@@ -39,15 +39,16 @@ const MIN_KEEP_MESSAGES = 3;
 /**
  * Check if a compact pass should be triggered.
  *
- * Name kept as `shouldConsolidate` for back-compat with the engine
- * caller; semantically this is the "is the hot window over budget?"
- * predicate that gates `compact/orchestrator.js`.
+ * Semantically: "is the hot window over budget?" — the predicate that
+ * gates `compact/orchestrator.js`. Renamed from `shouldConsolidate` on
+ * 2026-06-09; the old name leaked Dream V2's vocabulary into a file
+ * that exclusively serves Compact.
  *
  * @param {import('../conversation/persist.js').ConversationStore} conversationStore
  * @param {number} [budget] — MESSAGE_TOKEN_BUDGET
  * @returns {boolean}
  */
-export function shouldConsolidate(conversationStore, budget = DEFAULT_MESSAGE_TOKEN_BUDGET) {
+export function shouldCompact(conversationStore, budget = DEFAULT_MESSAGE_TOKEN_BUDGET) {
   const hotTokens = conversationStore.hotTokens();
   return hotTokens > budget;
 }
