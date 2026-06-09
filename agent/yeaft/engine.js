@@ -23,7 +23,7 @@ import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes } from './sessions/pre-flow.js';
 import { readProjectDoc, pickProjectDocFile, DEFAULT_PROJECT_DOC_MAX_BYTES } from './sessions/project-doc.js';
-import { shouldConsolidate, partitionMessages } from './memory/consolidate.js';
+import { partitionMessages } from './compact/partition.js';
 import { runCompact as runCompactOrchestrator } from './compact/orchestrator.js';
 import { evaluateCompactTriggers } from './compact/triggers.js';
 import { archiveTurn } from './archive/turn-archive.js';
@@ -257,8 +257,18 @@ export function buildResidentEntries(args) {
   if (args.sessionId && summaries.group) {
     out.push({ scope: `group/${args.sessionId}`, summary: summaries.group });
   }
-  if (args.ownVpId && summaries.vp && !isVpSeedBackfillStub(summaries.vp)) {
-    out.push({ scope: `vp/${args.ownVpId}`, summary: summaries.vp });
+  // VP per-session isolation (2026-06-09): the VP summary scope MUST be
+  // session-qualified. The legacy bare `vp/<id>` scope was a structural
+  // bug — `summaries.vp` is actually loaded from `group/<sessionId>/vp/<id>/summary.md`
+  // (see #loadLayerASummaries, kind:'group-vp'), so labelling it `vp/<id>`
+  // in the Resident layer (a) collides with the ACL regex in store-v2
+  // (which only recognises `<root>/<sid>/vp/...`) and (b) makes the same
+  // VP persona leak across DIFFERENT sessions whenever the AMS rehydrates
+  // by id rather than by full scope path. The session-qualified form
+  // makes the per-session boundary explicit and matches the on-disk
+  // layout 1:1.
+  if (args.sessionId && args.ownVpId && summaries.vp && !isVpSeedBackfillStub(summaries.vp)) {
+    out.push({ scope: `group/${args.sessionId}/vp/${args.ownVpId}`, summary: summaries.vp });
   }
   return out;
 }
@@ -1481,6 +1491,23 @@ export class Engine {
       projectDoc,
     });
 
+    // ─── HARD INVARIANT: Compact ≠ Dream (read DESIGN-COMPACT-VS-DREAM.md) ─
+    // Compact summary (this block) ONLY lands in the messages array head as
+    // a `<conversation_summary>` user/assistant pair. It MUST NEVER appear
+    // in the system prompt — that was the bug DESIGN-PROMPT §4.3 banned.
+    //
+    // Inversely: Dream V2's output (per-scope `memory.md` / `summary.md`)
+    // flows exclusively through `prompts.js#buildSystemPrompt`'s §6 Memory
+    // section via the AMS Resident layer (see `engine.js#buildResidentEntries`).
+    // It MUST NEVER appear in the messages array.
+    //
+    // Two write roots, two scheduler triggers, two prompt slots — never
+    // mixed. Anyone touching this section must read
+    // `agent/yeaft/DESIGN-COMPACT-VS-DREAM.md` before changing the wiring;
+    // the boundary has been violated twice in this codebase's history and
+    // each time it took an LLM cache-thrash + persona-dup follow-up PR to
+    // unwind.
+    //
     // ─── Compact summary as messages-array head (DESIGN-PROMPT §4.3) ─
     // The previous code placed the compact summary inside the system
     // prompt; that broke prompt-cache hit-rate (any compact update
