@@ -23,7 +23,7 @@ import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes } from './sessions/pre-flow.js';
 import { readProjectDoc, pickProjectDocFile, DEFAULT_PROJECT_DOC_MAX_BYTES } from './sessions/project-doc.js';
-import { shouldConsolidate, partitionMessages } from './memory/consolidate.js';
+import { shouldConsolidate, partitionMessages } from './compact/partition.js';
 import { runCompact as runCompactOrchestrator } from './compact/orchestrator.js';
 import { evaluateCompactTriggers } from './compact/triggers.js';
 import { archiveTurn } from './archive/turn-archive.js';
@@ -1491,6 +1491,23 @@ export class Engine {
       projectDoc,
     });
 
+    // ─── HARD INVARIANT: Compact ≠ Dream (read DESIGN-COMPACT-VS-DREAM.md) ─
+    // Compact summary (this block) ONLY lands in the messages array head as
+    // a `<conversation_summary>` user/assistant pair. It MUST NEVER appear
+    // in the system prompt — that was the bug DESIGN-PROMPT §4.3 banned.
+    //
+    // Inversely: Dream V2's output (per-scope `memory.md` / `summary.md`)
+    // flows exclusively through `prompts.js#buildSystemPrompt`'s §6 Memory
+    // section via the AMS Resident layer (see `engine.js#buildResidentEntries`
+    // around :253). It MUST NEVER appear in the messages array.
+    //
+    // Two write roots, two scheduler triggers, two prompt slots — never
+    // mixed. Anyone touching this section must read
+    // `agent/yeaft/DESIGN-COMPACT-VS-DREAM.md` before changing the wiring;
+    // the boundary has been violated twice in this codebase's history and
+    // each time it took an LLM cache-thrash + persona-dup follow-up PR to
+    // unwind.
+    //
     // ─── Compact summary as messages-array head (DESIGN-PROMPT §4.3) ─
     // The previous code placed the compact summary inside the system
     // prompt; that broke prompt-cache hit-rate (any compact update

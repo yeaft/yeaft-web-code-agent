@@ -1,17 +1,28 @@
 /**
- * consolidate.js — Hot-window budget partitioning utilities.
+ * compact/partition.js — Hot-window budget partitioning utilities.
  *
- * Reduced surface (PR-B rip): the legacy LLM-driven consolidate() pipeline
- * (compact summary + entries-store extraction) has been retired. The only
- * survivors are the pure functions used by the compact orchestrator:
+ * (Renamed from `agent/yeaft/memory/consolidate.js` on 2026-06-09.) The
+ * legacy "consolidate" name and the `memory/` location both pointed at
+ * a single concept — Layer-A memory consolidation — that has since been
+ * cleanly split:
  *
- *   - shouldConsolidate(store, budget) — decide when to compact
- *   - partitionMessages(messages, budget) — split hot messages into
- *     toArchive / toKeep based on token budget
+ *   - Memory consolidation / system-prompt maintenance is owned by
+ *     Dream V2 (per-group diff -> triage -> merge by target scope ->
+ *     apply via segment-store + summary-store). NONE of that lives here.
  *
- * Memory extraction is now owned by Dream V2 (per-group diff -> triage ->
- * merge by target scope -> apply via segment-store + summary-store).
- * Conversation summarisation lives in compact/orchestrator.js's hooks.
+ *   - Conversation history compaction (the thing this file ACTUALLY
+ *     serves) is owned by `compact/orchestrator.js`. The two functions
+ *     below — `shouldConsolidate` (kept as the export name only because
+ *     callers already use it; the role is "should we trigger a compact
+ *     pass") and `partitionMessages` (hot/cold split by token budget)
+ *     are pure helpers for that orchestrator.
+ *
+ * Why the move matters: keeping these under `memory/` invited the next
+ * person to think "this is part of the memory subsystem" and reach for
+ * it during a Dream-v2 patch — the exact category error
+ * `DESIGN-COMPACT-VS-DREAM.md` (sibling doc) warns against. Putting
+ * them next to `compact/orchestrator.js` makes the ownership obvious
+ * from the file tree.
  */
 
 // ─── Constants ──────────────────────────────────────────────────
@@ -26,7 +37,11 @@ export const COMPACT_KEEP_RATIO = 0.4;
 const MIN_KEEP_MESSAGES = 3;
 
 /**
- * Check if consolidation should be triggered.
+ * Check if a compact pass should be triggered.
+ *
+ * Name kept as `shouldConsolidate` for back-compat with the engine
+ * caller; semantically this is the "is the hot window over budget?"
+ * predicate that gates `compact/orchestrator.js`.
  *
  * @param {import('../conversation/persist.js').ConversationStore} conversationStore
  * @param {number} [budget] — MESSAGE_TOKEN_BUDGET
