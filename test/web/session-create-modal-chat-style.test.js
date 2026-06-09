@@ -62,19 +62,96 @@ describe('SessionCreateModal folderAggregates', () => {
   });
 });
 
-describe('SessionCreateModal sessionsForCurrentDir', () => {
-  it('filters by exact workDir and sorts newest first', () => {
-    const fn = SessionCreateModal.computed.sessionsForCurrentDir;
+describe('SessionCreateModal sessionsInDir — unified disk-scan list', () => {
+  // Merged-list semantics (2026-06-09): the modal no longer has a
+  // separate "registered sessions" panel. `sessionsInDir` is the single
+  // source of truth — every disk-scanned session for the current workDir,
+  // each tagged with `inSidebar` so the click handler can branch
+  // resume-vs-restore without UI fragmentation.
+  it('returns every scanned session tagged with inSidebar=true when present in sessionsStore', () => {
+    const fn = SessionCreateModal.computed.sessionsInDir;
     const result = fn.call({
-      form: { workDir: '/repo/a' },
-      allSessions: SESSIONS_FIXTURE,
+      scannedSessions: [
+        { id: 's-registered', name: 'reg', createdAt: '2026-06-02T10:00:00Z' },
+        { id: 's-disk-only', name: 'orphan', createdAt: '2026-06-01T10:00:00Z' },
+      ],
+      sessionsStore: { sessionList: [{ id: 's-registered' }, { id: 's-other' }] },
     });
-    expect(result.map(s => s.id)).toEqual(['s2', 's1']);
+    expect(result.map(s => ({ id: s.id, inSidebar: s.inSidebar }))).toEqual([
+      { id: 's-registered', inSidebar: true },
+      { id: 's-disk-only', inSidebar: false },
+    ]);
   });
 
-  it('returns empty when workDir is empty (folder panel handles that case)', () => {
-    const fn = SessionCreateModal.computed.sessionsForCurrentDir;
-    expect(fn.call({ form: { workDir: '' }, allSessions: SESSIONS_FIXTURE })).toEqual([]);
+  it('flags every row inSidebar=false when sidebar is empty', () => {
+    const fn = SessionCreateModal.computed.sessionsInDir;
+    const result = fn.call({
+      scannedSessions: [{ id: 's-a' }, { id: 's-b' }],
+      sessionsStore: { sessionList: [] },
+    });
+    expect(result.every(s => s.inSidebar === false)).toBe(true);
+  });
+
+  it('survives a null sessionsStore (Pinia teardown race)', () => {
+    const fn = SessionCreateModal.computed.sessionsInDir;
+    const result = fn.call({
+      scannedSessions: [{ id: 's-a' }],
+      sessionsStore: null,
+    });
+    expect(result).toEqual([{ id: 's-a', inSidebar: false }]);
+  });
+
+  it('drops entries with no id (defensive — agent could send malformed payload)', () => {
+    const fn = SessionCreateModal.computed.sessionsInDir;
+    const result = fn.call({
+      scannedSessions: [{ id: 's-good' }, { name: 'no-id' }, null],
+      sessionsStore: { sessionList: [] },
+    });
+    expect(result.map(s => s.id)).toEqual(['s-good']);
+  });
+
+  it('returns empty array when scannedSessions is empty', () => {
+    const fn = SessionCreateModal.computed.sessionsInDir;
+    expect(fn.call({ scannedSessions: [], sessionsStore: { sessionList: [{ id: 'x' }] } })).toEqual([]);
+  });
+});
+
+describe('SessionCreateModal selectSession — unified dispatch', () => {
+  it('routes inSidebar=true rows to resumeExisting (no restore call)', () => {
+    let resumed = null;
+    let restored = null;
+    const ctx = {
+      resumeExisting: (s) => { resumed = s; },
+      onRestoreClick: (s) => { restored = s; },
+    };
+    SessionCreateModal.methods.selectSession.call(ctx, { id: 's-reg', inSidebar: true });
+    expect(resumed).toEqual({ id: 's-reg', inSidebar: true });
+    expect(restored).toBeNull();
+  });
+
+  it('routes inSidebar=false rows to onRestoreClick (no resume call)', () => {
+    let resumed = null;
+    let restored = null;
+    const ctx = {
+      resumeExisting: (s) => { resumed = s; },
+      onRestoreClick: (s) => { restored = s; },
+    };
+    SessionCreateModal.methods.selectSession.call(ctx, { id: 's-orphan', inSidebar: false });
+    expect(restored).toEqual({ id: 's-orphan', inSidebar: false });
+    expect(resumed).toBeNull();
+  });
+
+  it('is a no-op for sessions without an id (defensive guard)', () => {
+    let resumed = null;
+    let restored = null;
+    const ctx = {
+      resumeExisting: (s) => { resumed = s; },
+      onRestoreClick: (s) => { restored = s; },
+    };
+    SessionCreateModal.methods.selectSession.call(ctx, { name: 'no-id' });
+    SessionCreateModal.methods.selectSession.call(ctx, null);
+    expect(resumed).toBeNull();
+    expect(restored).toBeNull();
   });
 });
 

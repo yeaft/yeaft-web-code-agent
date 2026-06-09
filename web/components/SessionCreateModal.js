@@ -13,9 +13,15 @@
  * Content area:
  *   - workDir empty → folderAggregates from the sessions store (distinct
  *     workDirs across all known sessions, sorted by path).
- *   - workDir set   → sessions whose workDir matches (resume list).
- *     Clicking a row sets that session active and closes the modal — no
- *     new session is created, matching chat's resumeSession semantics.
+ *   - workDir set   → `sessionsInDir`: one disk-scanned list of every
+ *     yeaft session physically present under `<workDir>/.yeaft/sessions/`.
+ *     Each row carries an `inSidebar` flag (true when sessionsStore already
+ *     holds it). Clicking dispatches through `selectSession`:
+ *       inSidebar=true  → resume only (just pin + fire history)
+ *       inSidebar=false → restore (register first, then pin)
+ *     Pre-fix this was two stacked panels ("registered" + "on disk"), which
+ *     looked like duplicate content to the user. Merged on 2026-06-09 per
+ *     user directive: "此目录下所有 yeaft session，用户可以选择恢复".
  *
  * Footer: Create button → `chat.createYeaftSession({...})`. We keep this
  * call path (rather than calling `sessionCrudRequest` directly) because
@@ -184,7 +190,16 @@ export default {
             </div>
           </div>
 
-          <!-- Sessions for the chosen workDir -->
+          <!-- Sessions for the chosen workDir — ONE list, sourced from a
+               disk scan of the chosen workDir's .yeaft/sessions/ folder.
+               Each row is tagged with inSidebar so the click handler can
+               branch:
+                 - inSidebar=true  -> resumeExisting (just pin + fire history)
+                 - inSidebar=false -> onRestoreClick (register first, then pin)
+               Pre-fix we showed TWO duplicate panels (the sidebar-filtered
+               list AND the disk-minus-sidebar list) which confused users
+               into thinking they were different things. The user's directive
+               (2026-06-09): "此目录下所有 yeaft session，用户可以选择恢复". -->
           <div class="resume-panel" v-else>
             <div class="resume-panel-header">
               <div class="resume-panel-header-left">
@@ -192,34 +207,6 @@ export default {
                   <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
                 </button>
                 <span>{{ $t('yeaft.session.create.sessionLabel') }} <span class="header-tag">{{ getLastPathSegment(form.workDir) }}</span></span>
-              </div>
-            </div>
-            <div class="resume-panel-list">
-              <div
-                v-for="session in sessionsForCurrentDir"
-                :key="session.id"
-                class="resume-list-item session-item-compact"
-                @click="resumeExisting(session)"
-              >
-                <div class="item-name">{{ session.name || session.id }}</div>
-                <div class="item-time">{{ formatDate(session.createdAt) }}</div>
-              </div>
-              <div class="resume-panel-empty" v-if="sessionsForCurrentDir.length === 0">
-                {{ $t('yeaft.session.create.noSessions') }}
-              </div>
-            </div>
-
-            <!-- fix-session-restore-modal-unify: "Restore from disk" group
-                 — folded in from the old standalone SessionRestoreModal so
-                 the user has ONE place to manage sessions for a workdir
-                 (matches the Chat new-conversation modal's UX). Only shows
-                 sessions that exist on disk but are NOT already in the
-                 sidebar — the partition is computed client-side from
-                 sessionsStore.sessionList, so the stale "已在 sidebar 中"
-                 lie is physically impossible. -->
-            <div class="resume-panel-header restore-panel-header">
-              <div class="resume-panel-header-left">
-                <span>{{ $t('yeaft.restore.modal.sessionsLabel') }}</span>
               </div>
               <button
                 class="refresh-btn-mini"
@@ -235,16 +222,16 @@ export default {
               <div class="git-loading restore-loading" v-if="restoreScanning"><span class="spinner-mini"></span> {{ $t('common.loading') }}</div>
               <template v-else>
                 <div
-                  v-for="session in restoreCandidates"
-                  :key="'restore:' + session.id"
+                  v-for="session in sessionsInDir"
+                  :key="session.id"
                   class="resume-list-item session-item-compact"
                   :class="{ 'is-busy': restoring === session.id, 'is-disabled': restoring && restoring !== session.id }"
-                  @click="onRestoreClick(session)"
+                  @click="selectSession(session)"
                 >
                   <div class="item-name">{{ session.name || session.id }}</div>
                   <div class="item-time">{{ formatDate(session.createdAt) }}</div>
                 </div>
-                <div class="resume-panel-empty" v-if="restoreCandidates.length === 0 && !restoreError">
+                <div class="resume-panel-empty" v-if="sessionsInDir.length === 0 && !restoreError">
                   {{ $t('yeaft.restore.modal.empty') }}
                 </div>
                 <div class="resume-panel-empty" v-if="restoreError">
@@ -337,22 +324,23 @@ export default {
       // hide the list behind a trigger and only open it when the user
       // wants to multi-select (mirrors the Copilot model picker pattern).
       vpRosterOpen: false,
-      // fix-session-restore-modal-unify: "Restore from disk" state — folded
-      // in from the deleted standalone SessionRestoreModal. `scannedSessions`
-      // is the raw list the agent returned for the current workDir; the
-      // `restoreCandidates` computed filters out sessions already in the
-      // sidebar (sessionsStore.sessionList) so the stale-flag bug from the
-      // old modal ("已在 sidebar 中" on items that aren't) is impossible.
-      //
-      // We intentionally do NOT track `scannedWorkDir` / `scannedAgentId`
-      // separately — the workdir/agent watchers below clear `scannedSessions`
-      // on change, so the list is always for the current (form.workDir,
-      // form.agentId) pair by construction. An extra cached pair would just
-      // be a second source of truth waiting to drift.
-      scannedSessions: [],
-      restoreScanning: false,
-      restoring: null,
-      restoreError: '',
+      // Disk-scanned session list for the currently chosen workDir.
+       // `scannedSessions` is the raw list the agent returns from
+       // scan_workdir; the `sessionsInDir` computed annotates each row
+       // with `inSidebar` (sourced from sessionsStore.sessionList, the
+       // literal source the sidebar reads from) so the stale-flag bug
+       // from the old standalone modal ("已在 sidebar 中" on items that
+       // aren't) is physically impossible.
+       //
+       // We intentionally do NOT track `scannedWorkDir` / `scannedAgentId`
+       // separately — the workdir/agent watchers below clear `scannedSessions`
+       // on change, so the list is always for the current (form.workDir,
+       // form.agentId) pair by construction. An extra cached pair would just
+       // be a second source of truth waiting to drift.
+       scannedSessions: [],
+       restoreScanning: false,
+       restoring: null,
+       restoreError: '',
     };
   },
   computed: {
@@ -413,13 +401,14 @@ export default {
       }
       return Array.from(map.values()).sort((a, b) => a.path.localeCompare(b.path));
     },
-    sessionsForCurrentDir() {
-      const wd = (this.form.workDir || '').trim();
-      if (!wd) return [];
-      return this.allSessions
-        .filter(s => (s && typeof s.workDir === 'string' ? s.workDir.trim() : '') === wd)
-        .slice()
-        .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    sessionsInDir() {
+      const inSidebar = new Set(
+        (this.sessionsStore?.sessionList || []).map(s => s && s.id).filter(Boolean)
+      );
+      const list = Array.isArray(this.scannedSessions) ? this.scannedSessions : [];
+      return list
+        .filter(s => s && s.id)
+        .map(s => ({ ...s, inSidebar: inSidebar.has(s.id) }));
     },
     canSubmit() {
       if (this.form.vpIds.length === 0) return false;
@@ -437,21 +426,6 @@ export default {
         return ids.map(id => this.vpLabelFor(id)).join(this.$t('common.comma'));
       }
       return this.$t('yeaft.session.create.vpCount', { n: ids.length });
-    },
-    // fix-session-restore-modal-unify: client-side "is this session
-    // already in the sidebar?" check. Uses sessionsStore.sessionList
-    // (the literal source the sidebar renders from) — not the agent's
-    // `alreadyRegistered` flag, which lied because it read a per-agent
-    // disk registry that lags behind the server's yeaft_sessions shadow.
-    //
-    // Partitions scannedSessions into two camps and shows only the ones
-    // genuinely missing from the sidebar; if every scanned session is
-    // already in the sidebar, the panel naturally reads "empty".
-    restoreCandidates() {
-      const inSidebar = new Set(
-        (this.sessionsStore?.sessionList || []).map(s => s && s.id).filter(Boolean)
-      );
-      return (this.scannedSessions || []).filter(s => s && s.id && !inSidebar.has(s.id));
     },
   },
   mounted() {
@@ -574,9 +548,9 @@ export default {
      * fix-session-restore-modal-unify: scan the workdir for on-disk
      * yeaft sessions. Folded in from the old standalone
      * SessionRestoreModal. The result lands in `scannedSessions`; the
-     * `restoreCandidates` computed filters out items already in the
-     * sidebar before rendering, so a stale "alreadyRegistered" flag from
-     * the agent never reaches the UI.
+     * `sessionsInDir` computed annotates each row with `inSidebar`
+     * (sourced from sessionsStore.sessionList) before rendering, so a
+     * stale "alreadyRegistered" flag from the agent never reaches the UI.
      *
      * Single-inflight guard: the agentId and workDir watchers both call
      * this method, and a user typing into the workdir input can trigger
@@ -703,6 +677,23 @@ export default {
       return typeof fn === 'function' ? fn(vpId) : 'var(--text-primary)';
     },
     selectFolder(path) { this.form.workDir = path; },
+    /**
+     * Single-list dispatch: branches on `inSidebar` so the unified panel
+     * works for both already-registered sessions (resume only) and
+     * disk-only ones (restore = register + resume).
+     *
+     * `inSidebar` is computed by `sessionsInDir` from sessionsStore.sessionList
+     * (the literal source the sidebar reads from) — not the agent's stale
+     * `alreadyRegistered` flag — so the branch decision is always correct.
+     */
+    selectSession(session) {
+      if (!session || !session.id) return;
+      if (session.inSidebar) {
+        this.resumeExisting(session);
+      } else {
+        this.onRestoreClick(session);
+      }
+    },
     resumeExisting(session) {
       if (!session || !session.id) return;
       const chat = this.chat;
