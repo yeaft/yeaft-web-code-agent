@@ -325,22 +325,22 @@ export default {
       // wants to multi-select (mirrors the Copilot model picker pattern).
       vpRosterOpen: false,
       // Disk-scanned session list for the currently chosen workDir.
-       // `scannedSessions` is the raw list the agent returns from
-       // scan_workdir; the `sessionsInDir` computed annotates each row
-       // with `inSidebar` (sourced from sessionsStore.sessionList, the
-       // literal source the sidebar reads from) so the stale-flag bug
-       // from the old standalone modal ("已在 sidebar 中" on items that
-       // aren't) is physically impossible.
-       //
-       // We intentionally do NOT track `scannedWorkDir` / `scannedAgentId`
-       // separately — the workdir/agent watchers below clear `scannedSessions`
-       // on change, so the list is always for the current (form.workDir,
-       // form.agentId) pair by construction. An extra cached pair would just
-       // be a second source of truth waiting to drift.
-       scannedSessions: [],
-       restoreScanning: false,
-       restoring: null,
-       restoreError: '',
+      // `scannedSessions` is the raw list the agent returns from
+      // scan_workdir; the `sessionsInDir` computed annotates each row
+      // with `inSidebar` (sourced from sessionsStore.sessionList, the
+      // literal source the sidebar reads from) so the stale-flag bug
+      // from the old standalone modal ("已在 sidebar 中" on items that
+      // aren't) is physically impossible.
+      //
+      // We intentionally do NOT track `scannedWorkDir` / `scannedAgentId`
+      // separately — the workdir/agent watchers below clear `scannedSessions`
+      // on change, so the list is always for the current (form.workDir,
+      // form.agentId) pair by construction. An extra cached pair would just
+      // be a second source of truth waiting to drift.
+      scannedSessions: [],
+      restoreScanning: false,
+      restoring: null,
+      restoreError: '',
     };
   },
   computed: {
