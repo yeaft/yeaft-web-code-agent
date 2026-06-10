@@ -393,7 +393,6 @@ export async function handleAgentOutput(agentId, agent, msg) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
           await sendToWebClient(c, {
             type: 'yeaft_output',
-            agentId,
             conversationId: msg.conversationId,
             // Stamp the source agent so the web sessions store can keep
             // per-agent rosters (cross-agent listing in the unified
