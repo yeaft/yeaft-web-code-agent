@@ -30,7 +30,7 @@
 
 Pick the shortest path that gets you the answer — don't always start at step 1.
 
-1. **If you already know the file path** → go straight to `file-read` (or `grep` for a pattern within it). **Skip `glob`.**
+1. **If you already know the file path** → go straight to `file-read` (or `grep` for a pattern within it). Skip `glob`.
 2. **If you know roughly which directory but not the file** → `grep` directly with a `glob` or `type` filter; that's one tool call, not two.
 3. **If you have nothing but a pattern of file names** → start with `glob`, then `grep` / `file-read`.
 4. Use `bash` only when no dedicated tool can do the job.
@@ -97,7 +97,7 @@ or pure conversational/question turns — the checklist becomes noise.
 
 挑能拿到答案的最短路径，不必每次都从第 1 步开始。
 
-1. **已经知道文件路径** → 直接 `file-read`（或在该文件里 `grep` 找模式）。**跳过 `glob`。**
+1. **已经知道文件路径** → 直接 `file-read`（或在该文件里 `grep` 找模式）。跳过 `glob`。
 2. **大致知道目录但不知道文件** → 直接 `grep` 配合 `glob` / `type` 过滤；这一步本身就够，不用先 `glob` 再 `grep`。
 3. **只有文件名模式** → 先 `glob`，再 `grep` / `file-read`。
 4. 只有当专用工具都做不到的时候才用 `bash`。

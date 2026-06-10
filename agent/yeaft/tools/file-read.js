@@ -2,7 +2,8 @@
  * file-read.js — Read file contents with line numbers.
  *
  * Reads text files with `cat -n` style line numbering, supports
- * offset/limit for large files, and handles binary file detection.
+ * `offset`/`limit` for >3000-line files, and handles binary file
+ * detection.
  *
  * Modeled after Claude Code's Read tool.
  */
@@ -26,8 +27,12 @@ const BINARY_EXTS = new Set([
 /** Max file size to read (10 MB). */
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
-/** Default number of lines to read. */
-const DEFAULT_LIMIT = 2000;
+/** Default number of lines to read. Aligned with the "large file = >3000
+ *  lines" rule in templates/{base,common-rules,tool-guidance}.md so a
+ *  ≤3000-line file is returned in one call (no silent truncation that
+ *  would trigger a follow-up `offset:3000` call — that's exactly the
+ *  round-trip this tool's prompt guidance promises to avoid). */
+const DEFAULT_LIMIT = 3000;
 
 export default defineTool({
   name: 'FileRead',
@@ -41,7 +46,7 @@ Guidelines:
 - A file is "large" only at >3000 lines. Read the whole file by default; only use offset/limit above that threshold or when you already know the exact line range you need.
 - Binary files are detected by extension and rejected
 - Maximum file size: 10MB
-- Default limit: 2000 lines`,
+- Default limit: 3000 lines (matches the "large file = >3000 lines" threshold)`,
   parameters: {
     type: 'object',
     properties: {
