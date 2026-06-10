@@ -86,6 +86,7 @@ describe('agent-output.js — yeaft_output envelope passthrough', () => {
       type: 'yeaft_output',
       conversationId: 'conv1',
       turnId: 'd123:vp_alice',
+      threadId: 'thread-main',
       data: { type: 'assistant', message: { content: 'hi' } },
     });
     expect(_sent[0].envelope.turnId).toBe('d123:vp_alice');
@@ -110,6 +111,7 @@ describe('agent-output.js — yeaft_output envelope passthrough', () => {
       sessionId: 'grp_team',
       vpId: 'vp_alice',
       turnId: 'd123:vp_alice',
+      threadId: 'thread-main',
       data: { type: 'assistant', message: { content: 'hi' } },
     });
     const env = _sent[0].envelope;
@@ -119,6 +121,7 @@ describe('agent-output.js — yeaft_output envelope passthrough', () => {
       sessionId: 'grp_team',
       vpId: 'vp_alice',
       turnId: 'd123:vp_alice',
+      threadId: 'thread-main',
     });
     expect(env.data).toEqual({ type: 'assistant', message: { content: 'hi' } });
   });

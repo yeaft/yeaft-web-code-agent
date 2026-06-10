@@ -23,6 +23,7 @@ import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { Engine } from './engine.js';
 import { loadSession } from './session.js';
+import { loadConfig } from './config.js';
 import { sendToServer } from '../connection/buffer.js';
 import ctx from '../context.js';
 import { hydrateYeaftStatusFromSession } from './status-cache.js';
@@ -68,6 +69,26 @@ import { classifyThread as defaultClassifyThread, fallbackTitle } from './vp/thr
 let session = null;
 
 let threadClassifier = defaultClassifyThread;
+
+function refreshLiveSessionConfig() {
+  if (!session) return;
+  try {
+    const freshConfig = loadConfig({ dir: session.yeaftDir || ctx.CONFIG?.yeaftDir });
+    const freshModels = Array.isArray(freshConfig.availableModels) ? freshConfig.availableModels : [];
+    session.config.availableModels = freshModels;
+    if (freshConfig.model && !freshModels.some(m => m?.id === session.config.model)) {
+      session.config.model = freshConfig.model;
+    }
+    if (freshConfig.providers) {
+      session.config.providers = freshConfig.providers;
+      if (typeof session.adapter?.refreshProviders === 'function') {
+        session.adapter.refreshProviders(freshConfig.providers);
+      }
+    }
+  } catch (err) {
+    console.warn('[Yeaft] refresh live session config failed:', err?.message || err);
+  }
+}
 
 /** Test-only: replace the lightweight VP thread classifier. */
 export function __testSetThreadClassifier(fn) {
@@ -3728,6 +3749,7 @@ export function handleYeaftModeSwitch(_msg) {
 /** Handle model switch from the web UI. */
 export function handleYeaftModelSwitch(msg) {
   if (!session || !msg.model) return;
+  refreshLiveSessionConfig();
 
   const available = session.config.availableModels || [];
   const found = available.some(m => m.id === msg.model);
@@ -3774,6 +3796,7 @@ export async function handleYeaftLoadHistory(msg) {
     installYeaftRuntimeBridge(session);
 
     yeaftConversationId = `yeaft-${Date.now()}`;
+    refreshLiveSessionConfig();
     hydrateYeaftStatusFromSession(session, { reason: 'history_load', emitEvent: true });
 
     // Per-group history hydrates lazily via getOrCreateSessionHistory.
@@ -3782,7 +3805,12 @@ export async function handleYeaftLoadHistory(msg) {
     // it doesn't (legacy callers), do nothing — the per-group lazy
     // hydration handles it.
     if (sessionId) setGroupHistory(sessionId, hydrateGroupHistory(sessionId));
-  } else if (sessionId) {
+  } else {
+    refreshLiveSessionConfig();
+    hydrateYeaftStatusFromSession(session, { reason: 'history_load', emitEvent: true });
+  }
+
+  if (sessionId) {
     // Re-entering an existing session with a (possibly new) group filter:
     // re-seed THIS group's history from disk so it doesn't carry stale
     // in-memory state into the next turn's context.
