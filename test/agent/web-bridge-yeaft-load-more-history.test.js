@@ -295,6 +295,7 @@ describe('handleYeaftLoadHistory — pagination cursor priming', () => {
     await handleYeaftLoadHistory({ sessionId: 'g_model_refresh', limit: 0 });
 
     const ready = [...outbound].reverse().find(m => m.type === 'yeaft_output' && m.event?.type === 'session_ready');
+    expect(ready.event.model).toBe('fresh-model');
     expect(ready.event.availableModels.map(m => m.id)).toContain('fresh-model');
     expect(ready.event.availableModels.map(m => m.id)).not.toContain('stale-model');
 

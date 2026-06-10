@@ -68,7 +68,11 @@ function refreshSessionConfigSnapshot() {
   if (!session) return;
   try {
     const freshConfig = loadConfig({ dir: session.yeaftDir || ctx.CONFIG?.yeaftDir });
-    session.config.availableModels = freshConfig.availableModels || [];
+    const freshModels = freshConfig.availableModels || [];
+    session.config.availableModels = freshModels;
+    if (freshConfig.model && !freshModels.some(m => m?.id === session.config.model)) {
+      session.config.model = freshConfig.model;
+    }
     if (freshConfig.providers) {
       session.config.providers = freshConfig.providers;
       if (typeof session.adapter?.refreshProviders === 'function') {
@@ -3593,25 +3597,15 @@ export async function handleYeaftLoadHistory(msg) {
   const pickRecent = (store, lim) =>
     sessionId ? store.loadRecentByGroup(sessionId, lim) : store.loadRecent(lim);
 
-  if (!session) {
-    const yeaftDir = ctx.CONFIG?.yeaftDir;
-    session = await loadSession({
-      ...(yeaftDir && { dir: yeaftDir }),
-      skipMCP: false,
-      skipSkills: false,
-      serverMode: true,
-    });
-    installYeaftRuntimeBridge(session);
+  const wasLoaded = !!session;
+  await ensureSessionLoaded();
 
-    yeaftConversationId = `yeaft-${Date.now()}`;
-
-    // Per-group history hydrates lazily via getOrCreateGroupHistory.
-    // When the load-history call carries a sessionId, force-refresh THAT
-    // group's tape so the next user message sees on-disk state. When
-    // it doesn't (legacy callers), do nothing — the per-group lazy
-    // hydration handles it.
-    if (sessionId) setGroupHistory(sessionId, hydrateGroupHistory(sessionId));
-  } else if (sessionId) {
+  // Per-group history hydrates lazily via getOrCreateGroupHistory.
+  // When the load-history call carries a sessionId, force-refresh THAT
+  // group's tape so the next user message sees on-disk state. When
+  // it doesn't (legacy callers), do nothing — the per-group lazy
+  // hydration handles it.
+  if (sessionId) {
     // Re-entering an existing session with a (possibly new) group filter:
     // re-seed THIS group's history from disk so it doesn't carry stale
     // in-memory state into the next turn's context.
@@ -3619,15 +3613,19 @@ export async function handleYeaftLoadHistory(msg) {
   }
 
   // Always replay session_ready so refresh / reconnect rebuilds UI state.
-  sendSessionReadySnapshot();
-  sendGroupSnapshotBroadcast();
-  // vp-status: replay the authoritative table on reconnect so a refreshed
-  // frontend doesn't have to wait for the next transition to learn each
-  // VP's current state.
-  try {
-    getVpStatusBroker().broadcastSnapshot();
-  } catch (err) {
-    console.warn('[Yeaft] vp-status snapshot broadcast (replay) failed:', err?.message || err);
+  // First boot is handled by ensureSessionLoaded(); re-entry gets a fresh
+  // metadata snapshot here.
+  if (wasLoaded) {
+    sendSessionReadySnapshot();
+    sendGroupSnapshotBroadcast();
+    // vp-status: replay the authoritative table on reconnect so a refreshed
+    // frontend doesn't have to wait for the next transition to learn each
+    // VP's current state.
+    try {
+      getVpStatusBroker().broadcastSnapshot();
+    } catch (err) {
+      console.warn('[Yeaft] vp-status snapshot broadcast (replay) failed:', err?.message || err);
+    }
   }
 
   // `msg.limit` is the replay-scrollback request from the frontend (UI
