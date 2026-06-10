@@ -10,6 +10,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -17,6 +18,20 @@ import path from 'node:path';
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
+
+function findVitestBin(startDir) {
+  let dir = startDir;
+  while (true) {
+    const candidate = path.join(dir, 'node_modules', '.bin', process.platform === 'win32' ? 'vitest.cmd' : 'vitest');
+    if (existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return path.join(ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'vitest.cmd' : 'vitest');
+}
+
+const VITEST_BIN = findVitestBin(ROOT);
 const REQUESTED_FILES = [
   'test/agent/yeaft/dream-trigger-routing.test.js',
   'test/agent/yeaft/dream-v2/runner.test.js',
@@ -34,7 +49,7 @@ const FOCUSED_ARGS = [
 ];
 
 async function vitestListFocusedFiles() {
-  const { stdout } = await execFileAsync('./node_modules/.bin/vitest', FOCUSED_ARGS, {
+  const { stdout } = await execFileAsync(VITEST_BIN, FOCUSED_ARGS, {
     cwd: ROOT,
     timeout: 30000,
     maxBuffer: 1024 * 1024,

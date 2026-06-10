@@ -51,8 +51,19 @@ let sharedStore;
 beforeAll(async () => {
   TEST_DIR = mkdtempSync(join(tmpdir(), 'yeaft-loadmore-'));
   sharedStore = new ConversationStore(TEST_DIR);
+  writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({
+    providers: [{
+      name: 'local',
+      baseUrl: 'http://localhost/v1',
+      apiKey: 'test',
+      protocol: 'openai-responses',
+      models: ['m'],
+    }],
+    primaryModel: 'local/m',
+  }, null, 2));
   stubSession = {
     conversationStore: sharedStore,
+    yeaftDir: TEST_DIR,
     config: { model: 'm', availableModels: [] },
     status: { skills: [], mcpServers: [], tools: [] },
     _dreamProgressSink: null,
@@ -121,6 +132,7 @@ describe('handleYeaftLoadMoreHistory — chunk emission', () => {
     expect(chunk).toBeDefined();
     expect(chunk.type).toBe('yeaft_history_chunk');
     expect(chunk.sessionId).toBe(gid);
+    expect(chunk.groupId).toBe(gid);
     // 2 newest turns: q4/aq4, q5/aq5.
     expect(chunk.messages.map(m => m.content))
       .toEqual(['q4', 'aq4', 'q5', 'aq5']);
@@ -139,6 +151,19 @@ describe('handleYeaftLoadMoreHistory — chunk emission', () => {
     expect(chunk.hasMore).toBe(true);
   });
 
+
+
+  it('accepts groupId as the pagination key and echoes it for the frontend cursor', async () => {
+    const gid = 'g_chunk_group_alias';
+    seedTurns(gid, 3);
+
+    await handleYeaftLoadMoreHistory({ groupId: gid, beforeSeq: null, turns: 1 });
+
+    const chunk = lastChunk();
+    expect(chunk.sessionId).toBe(gid);
+    expect(chunk.groupId).toBe(gid);
+    expect(chunk.messages.map(m => m.content)).toEqual(['q3', 'aq3']);
+  });
 
   it('filters internal reflection rows and preserves ids + speaker attribution in older history', async () => {
     const gid = 'g_chunk_visible_projection';
@@ -253,6 +278,38 @@ describe('handleYeaftLoadMoreHistory — chunk emission', () => {
 
 describe('handleYeaftLoadHistory — pagination cursor priming', () => {
 
+
+  it('refreshes the session_ready model list from config on every history load', async () => {
+    stubSession.config.availableModels = [{ id: 'stale-model' }];
+    writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({
+      providers: [{
+        name: 'local',
+        baseUrl: 'http://localhost/v1',
+        apiKey: 'test',
+        protocol: 'openai-responses',
+        models: ['fresh-model'],
+      }],
+      primaryModel: 'local/fresh-model',
+    }, null, 2));
+
+    await handleYeaftLoadHistory({ sessionId: 'g_model_refresh', limit: 0 });
+
+    const ready = [...outbound].reverse().find(m => m.type === 'yeaft_output' && m.event?.type === 'session_ready');
+    expect(ready.event.availableModels.map(m => m.id)).toContain('fresh-model');
+    expect(ready.event.availableModels.map(m => m.id)).not.toContain('stale-model');
+
+    writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({
+      providers: [{
+        name: 'local',
+        baseUrl: 'http://localhost/v1',
+        apiKey: 'test',
+        protocol: 'openai-responses',
+        models: ['m'],
+      }],
+      primaryModel: 'local/m',
+    }, null, 2));
+  });
+
   it('initial group replay emits only the latest window in chronological order', async () => {
     const gid = 'g_initial_latest_window';
     seedTurns(gid, 5, 'latest');
@@ -272,7 +329,7 @@ describe('handleYeaftLoadHistory — pagination cursor priming', () => {
     expect(replay.some(m => m.sessionId === gid && JSON.stringify(m.data).includes('latest1'))).toBe(false);
 
     const evt = lastHistoryLoadedEvent();
-    expect(evt).toEqual(expect.objectContaining({ sessionId: gid, count: 4, hasMore: true }));
+    expect(evt).toEqual(expect.objectContaining({ sessionId: gid, groupId: gid, count: 4, hasMore: true }));
     expect(typeof evt.oldestSeq).toBe('number');
   });
 
@@ -286,6 +343,7 @@ describe('handleYeaftLoadHistory — pagination cursor priming', () => {
     expect(evt).toBeDefined();
     expect(evt.type).toBe('history_loaded');
     expect(evt.sessionId).toBe(gid);
+    expect(evt.groupId).toBe(gid);
     expect(evt.count).toBe(4); // 2 turns × (user + assistant) = 4 messages
     expect(evt.hasMore).toBe(true);
     expect(typeof evt.oldestSeq).toBe('number');

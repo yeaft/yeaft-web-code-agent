@@ -23,6 +23,7 @@ import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { Engine } from './engine.js';
 import { loadSession } from './session.js';
+import { loadConfig } from './config.js';
 import { sendToServer } from '../connection/buffer.js';
 import ctx from '../context.js';
 import { handleVpSubscribe } from './vp/vp-bridge.js';
@@ -62,6 +63,37 @@ import { classifyThread as defaultClassifyThread, fallbackTitle } from './vp/thr
 let session = null;
 
 let threadClassifier = defaultClassifyThread;
+
+function refreshSessionConfigSnapshot() {
+  if (!session) return;
+  try {
+    const freshConfig = loadConfig({ dir: session.yeaftDir || ctx.CONFIG?.yeaftDir });
+    session.config.availableModels = freshConfig.availableModels || [];
+    if (freshConfig.providers) {
+      session.config.providers = freshConfig.providers;
+      if (typeof session.adapter?.refreshProviders === 'function') {
+        session.adapter.refreshProviders(freshConfig.providers);
+      }
+    }
+  } catch (err) {
+    console.warn('[Yeaft] refresh config snapshot failed:', err?.message || err);
+  }
+}
+
+function sendSessionReadySnapshot() {
+  if (!session) return;
+  refreshSessionConfigSnapshot();
+  sendYeaftEvent({
+    type: 'session_ready',
+    conversationId: yeaftConversationId,
+    model: session.config.model,
+    availableModels: session.config.availableModels || [],
+    skills: session.status.skills,
+    mcpServers: session.status.mcpServers,
+    tools: session.status.tools,
+    yeaftDir: ctx.CONFIG?.yeaftDir || session.yeaftDir || null,
+  });
+}
 
 /** Test-only: replace the lightweight VP thread classifier. */
 export function __testSetThreadClassifier(fn) {
@@ -1259,7 +1291,7 @@ function sendYeaftOutput(data, { sessionId, chatId, vpId, turnId, threadId } = {
   sendToServer({
     type: 'yeaft_output',
     conversationId: yeaftConversationId,
-    ...(sessionId ? { sessionId } : {}),
+    ...(sessionId ? { sessionId, groupId: sessionId } : {}),
     ...(chatId ? { chatId } : {}),
     ...(resolvedVpId ? { vpId: resolvedVpId } : {}),
     ...(turnId ? { turnId } : {}),
@@ -1273,7 +1305,7 @@ function sendYeaftEvent(event, { sessionId, chatId, vpId, turnId, threadId } = {
   sendToServer({
     type: 'yeaft_output',
     conversationId: yeaftConversationId,
-    ...(sessionId ? { sessionId } : {}),
+    ...(sessionId ? { sessionId, groupId: sessionId } : {}),
     ...(chatId ? { chatId } : {}),
     ...(vpId ? { vpId } : {}),
     ...(turnId ? { turnId } : {}),
@@ -2560,16 +2592,7 @@ async function ensureSessionLoaded() {
   // Per-group history is hydrated lazily on first `getOrCreateGroupHistory`
   // — there's no global "all conversations" tape any more.
 
-  sendYeaftEvent({
-    type: 'session_ready',
-    conversationId: yeaftConversationId,
-    model: session.config.model,
-    availableModels: session.config.availableModels || [],
-    skills: session.status.skills,
-    mcpServers: session.status.mcpServers,
-    tools: session.status.tools,
-    yeaftDir: ctx.CONFIG?.yeaftDir || null,
-  });
+  sendSessionReadySnapshot();
   sendGroupSnapshotBroadcast();
   // vp-status: rebuild frontend status table from authoritative agent
   // memory. Sent unconditionally so reconnect/refresh paths get the same
@@ -3560,7 +3583,9 @@ export function handleYeaftModelSwitch(msg) {
  * group) never bleeds into the active group's pane.
  */
 export async function handleYeaftLoadHistory(msg) {
-  const sessionId = (msg && typeof msg.sessionId === 'string' && msg.sessionId) || null;
+  const sessionId = (msg && typeof msg.sessionId === 'string' && msg.sessionId)
+    || (msg && typeof msg.groupId === 'string' && msg.groupId)
+    || null;
   // `lim` is now expressed in TURNS, not raw messages. `loadRecent` and
   // `loadRecentByGroup` use turn-based slicing so the cut never lands
   // mid-tool-arc. Pass `undefined` to use the persistence-layer default
@@ -3594,16 +3619,7 @@ export async function handleYeaftLoadHistory(msg) {
   }
 
   // Always replay session_ready so refresh / reconnect rebuilds UI state.
-  sendYeaftEvent({
-    type: 'session_ready',
-    conversationId: yeaftConversationId,
-    model: session.config.model,
-    availableModels: session.config.availableModels || [],
-    skills: session.status.skills,
-    mcpServers: session.status.mcpServers,
-    tools: session.status.tools,
-    yeaftDir: ctx.CONFIG?.yeaftDir || null,
-  });
+  sendSessionReadySnapshot();
   sendGroupSnapshotBroadcast();
   // vp-status: replay the authoritative table on reconnect so a refreshed
   // frontend doesn't have to wait for the next transition to learn each
@@ -3691,9 +3707,10 @@ export async function handleYeaftLoadHistory(msg) {
     totalHot: session.conversationStore.countHot(),
     totalCold: session.conversationStore.countCold(),
     sessionId,
+    groupId: sessionId,
     hasMore,
     oldestSeq,
-  });
+  }, sessionId ? { sessionId } : {});
 }
 
 /**
@@ -3710,11 +3727,14 @@ export async function handleYeaftLoadHistory(msg) {
  * @param {object} msg — { sessionId, beforeSeq, turns }
  */
 export async function handleYeaftLoadMoreHistory(msg) {
-  const sessionId = (msg && typeof msg.sessionId === 'string' && msg.sessionId) || null;
+  const sessionId = (msg && typeof msg.sessionId === 'string' && msg.sessionId)
+    || (msg && typeof msg.groupId === 'string' && msg.groupId)
+    || null;
   const emit = (payload) => sendToServer({
     type: 'yeaft_history_chunk',
     conversationId: yeaftConversationId,
     sessionId,
+    ...(sessionId ? { groupId: sessionId } : {}),
     ...payload,
   });
 
@@ -3828,16 +3848,7 @@ export async function resetYeaftSession() {
     // Per-group history hydrates lazily via getOrCreateGroupHistory on
     // first read. Nothing to seed here.
 
-    sendYeaftEvent({
-      type: 'session_ready',
-      conversationId: yeaftConversationId,
-      model: session.config.model,
-      availableModels: session.config.availableModels || [],
-      skills: session.status.skills,
-      mcpServers: session.status.mcpServers,
-      tools: session.status.tools,
-      yeaftDir: ctx.CONFIG?.yeaftDir || null,
-    });
+    sendSessionReadySnapshot();
     // vp-status: after a forced reset the broker table is still live in
     // memory; broadcast so the frontend can rebuild its mirror without
     // waiting for the first per-VP transition.

@@ -374,9 +374,11 @@ export async function handleAgentOutput(agentId, agent, msg) {
           await sendToWebClient(c, {
             type: 'yeaft_output',
             conversationId: msg.conversationId,
+            ...(msg.sessionId != null ? { sessionId: msg.sessionId } : {}),
             ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
             ...(msg.vpId != null ? { vpId: msg.vpId } : {}),
             ...(msg.turnId != null ? { turnId: msg.turnId } : {}),
+            ...(msg.threadId != null ? { threadId: msg.threadId } : {}),
             data,
             event: msg.event,
           });
@@ -398,6 +400,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
           await sendToWebClient(c, {
             type: 'yeaft_history_chunk',
             conversationId: msg.conversationId,
+            ...(msg.sessionId != null ? { sessionId: msg.sessionId } : {}),
             ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
             messages,
             oldestSeq: msg.oldestSeq ?? null,

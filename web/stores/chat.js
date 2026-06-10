@@ -1519,7 +1519,7 @@ export const useChatStore = defineStore('chat', {
           // `loadMoreYeaftHistory` action knows where to start the next
           // page.
           {
-            const groupKey = event.groupId || '__all__';
+            const groupKey = event.groupId || event.sessionId || msg.groupId || msg.sessionId || '__all__';
             const nextState = {
               loaded: true,
               loading: false,

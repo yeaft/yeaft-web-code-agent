@@ -397,9 +397,10 @@ export function handleYeaftHistoryChunk(store, msg) {
   // The chunk's groupId is authoritative — it's stamped by the agent
   // from the request groupId, not from messagesMap state.
   const activeFilter = store.yeaftActiveSessionFilter ?? null;
-  const hasChunkGroup = msg.groupId != null;
-  if (hasChunkGroup && activeFilter && msg.groupId !== activeFilter) {
-    const staleKey = msg.groupId ?? '__all__';
+  const chunkGroupId = msg.groupId ?? msg.sessionId ?? null;
+  const hasChunkGroup = chunkGroupId != null;
+  if (hasChunkGroup && activeFilter && chunkGroupId !== activeFilter) {
+    const staleKey = chunkGroupId ?? '__all__';
     if (store.yeaftSessionHistoryState) {
       store.yeaftSessionHistoryState = {
         ...store.yeaftSessionHistoryState,
@@ -466,7 +467,7 @@ export function handleYeaftHistoryChunk(store, msg) {
     store.messagesMap[convId].splice(0, 0, ...formatted);
   }
 
-  const groupKey = msg.groupId ?? '__all__';
+  const groupKey = msg.groupId ?? msg.sessionId ?? '__all__';
   const nextState = {
     loaded: true,
     loading: false,

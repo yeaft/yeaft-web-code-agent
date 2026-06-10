@@ -107,18 +107,22 @@ describe('agent-output.js — yeaft_output envelope passthrough', () => {
     await handleAgentOutput('a1', baseAgent, {
       type: 'yeaft_output',
       conversationId: 'conv1',
+      sessionId: 'grp_team',
       groupId: 'grp_team',
       vpId: 'vp_alice',
       turnId: 'd123:vp_alice',
+      threadId: 'thread-main',
       data: { type: 'assistant', message: { content: 'hi' } },
     });
     const env = _sent[0].envelope;
     expect(env).toMatchObject({
       type: 'yeaft_output',
       conversationId: 'conv1',
+      sessionId: 'grp_team',
       groupId: 'grp_team',
       vpId: 'vp_alice',
       turnId: 'd123:vp_alice',
+      threadId: 'thread-main',
     });
     expect(env.data).toEqual({ type: 'assistant', message: { content: 'hi' } });
   });
