@@ -2829,18 +2829,27 @@
   border-radius: 4px;
   color: var(--text-muted, var(--text-secondary, #888));
   cursor: pointer;
-  /* Hover-revealed (Crew parity). Idle = opacity 0; row-hover or
-     focus-within bumps to 0.7; direct hover bumps to 1 + accent /
-     danger color — see the row-scoped rules below. */
+  /* Hover-revealed (Crew parity). Info button is hidden at rest; the
+     abort sibling overrides this below because it MUST be visible the
+     moment the v-if turns true (a stop button you can't see isn't a
+     stop button). */
   opacity: 0;
   transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+/* Abort visibility: the abort button only renders (`v-if`) when a VP
+   is in an active state. Once rendered it stays full-opacity + danger-
+   tinted regardless of hover — per Rams, hiding the only "stop" the
+   user has behind hover is a discoverability failure. */
+.yeaft-vp-timeline-row .yeaft-vp-timeline-abort {
+  opacity: 1;
+  color: var(--error);
 }
 /* Keyboard-focus styling mirrors hover styling so a keyboard user can
    tell destructive (abort = red) from informational (info = accent)
    without having to read the aria-label. */
 .yeaft-vp-timeline-abort:focus-visible {
-  background: rgba(231, 76, 60, 0.15);
-  color: var(--error-color, #e74c3c);
+  background: var(--error-bg);
+  color: var(--error);
   outline: none;
   opacity: 1;
 }
@@ -2850,16 +2859,18 @@
   outline: none;
   opacity: 1;
 }
-.yeaft-vp-timeline-row:hover .yeaft-vp-timeline-abort,
+/* Row-hover bumps the INFO button from 0 → 0.7. Abort is excluded —
+   it's already at opacity 1 and a lower opacity on hover would dim
+   the most important affordance the moment the user moves toward it
+   (the bug Torvalds caught: 0,0,2,0 specificity overriding 0,0,1,0). */
 .yeaft-vp-timeline-row:hover .yeaft-vp-timeline-info,
-.yeaft-vp-timeline-row:focus-within .yeaft-vp-timeline-abort,
 .yeaft-vp-timeline-row:focus-within .yeaft-vp-timeline-info {
   opacity: 0.7;
 }
 .yeaft-vp-timeline-row .yeaft-vp-timeline-abort:hover {
   opacity: 1;
-  color: var(--error-color, #e74c3c);
-  background: rgba(231, 76, 60, 0.15);
+  color: var(--error);
+  background: var(--error-bg);
 }
 .yeaft-vp-timeline-row .yeaft-vp-timeline-info:hover {
   opacity: 1;

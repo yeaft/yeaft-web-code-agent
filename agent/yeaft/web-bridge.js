@@ -1053,12 +1053,14 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
       vpAborts.set(key, vpAbort);
       turnAbortCtrls.set(turnId, vpAbort);
       turnAbortMeta.set(turnId, { sessionId, vpId, threadId: thread.threadId, key });
+      // History snapshot covers EVERY prior thread of the session.
+      // Threads represent intra-VP concurrent tasks, not isolated
+      // conversations, so the LLM needs cross-thread continuity.
+      // VP isolation lives in `filterSnapshotForVp`; tool_use/result
+      // pairing lives in `pairSanitize`. Mirrors disk-side
+      // `loadSessionHistoryForVp`, which applies no threadId filter.
       const baseSnapshot = pairSanitize(
-        filterSnapshotForVp(
-          getOrCreateSessionHistory(sessionId)
-            .filter((m) => !m.threadId || m.threadId === 'main' || m.threadId === thread.threadId),
-          vpId,
-        ),
+        filterSnapshotForVp(getOrCreateSessionHistory(sessionId), vpId),
       );
       const trigger = envelope?.trigger || 'fallback';
       const { text, prompt, promptParts } = buildVpPromptPayload(vpId, envelope);

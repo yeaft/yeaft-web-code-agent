@@ -16,9 +16,9 @@
  *
  * Why this exists separately from the disk replay path:
  *   `web-bridge.js` builds an in-memory `baseSnapshot` for every running
- *   VP turn. Before this filter the snapshot was only `threadId`-scoped
- *   and leaked other VPs' tool calls + thinking blocks into the next
- *   turn's messages, producing orphan `tool_use` ids and Anthropic 422s.
+ *   VP turn. Before this filter the snapshot was unfiltered and leaked
+ *   other VPs' tool calls + thinking blocks into the next turn's
+ *   messages, producing orphan `tool_use` ids and Anthropic 422s.
  *   The disk path uses `ConversationStore.loadSessionHistoryForVp` —
  *   the same rules implemented here, but reading from `messages/*.md`
  *   instead of the in-memory tape. We intentionally duplicate the rule
@@ -27,8 +27,16 @@
  *
  * Pure function; does not mutate inputs.
  *
- * @param {object[]} snapshot — entries from getOrCreateSessionHistory(sessionId)
- *                              (already threadId-filtered by the caller)
+ * @param {object[]} snapshot — entries from getOrCreateSessionHistory(sessionId).
+ *                              The caller MUST NOT pre-filter by `threadId`:
+ *                              threads represent intra-VP concurrent tasks,
+ *                              not isolated conversations, and the LLM needs
+ *                              every prior thread's text for continuity.
+ *                              (See the rationale block in
+ *                              `web-bridge.js#ensureDriverRunning`; pre-fix,
+ *                              a `m.threadId === current` filter dropped
+ *                              every prior thread and the LLM saw a 1-message
+ *                              context for every turn after the first.)
  * @param {string} vpId — the VP we're about to send a turn for
  * @returns {object[]}
  */
