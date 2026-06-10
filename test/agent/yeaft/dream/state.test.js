@@ -34,9 +34,16 @@ describe('group .dream-state', () => {
       lastDreamMessageId: 'm-1024', lastDreamAt: '2026-04-28T03:07:00Z', messageCount: 491,
     });
   });
+  it('reads legacy group .dream-state as fallback', async () => {
+    mkdirSync(join(root, 'group', 'g-legacy'), { recursive: true });
+    writeFileSync(join(root, 'group', 'g-legacy', '.dream-state'), 'lastDreamMessageId: m-1\nlastDreamAt: 2026-01-01T00:00:00Z\nmessageCount: 7\n');
+    expect(await readGroupState(root, 'g-legacy')).toEqual({
+      lastDreamMessageId: 'm-1', lastDreamAt: '2026-01-01T00:00:00Z', messageCount: 7,
+    });
+  });
   it('null fields persist as empty strings, parsed back as null', async () => {
     await writeGroupState(root, 'g-x', { lastDreamMessageId: null, lastDreamAt: null, messageCount: 0 });
-    const raw = readFileSync(join(root, 'group', 'g-x', '.dream-state'), 'utf8');
+    const raw = readFileSync(join(root, 'session', 'g-x', '.dream-state'), 'utf8');
     expect(raw).toContain('lastDreamMessageId: ');
     expect(raw).toContain('lastDreamAt: ');
     expect(raw).toContain('messageCount: 0');

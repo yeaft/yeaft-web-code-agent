@@ -40,13 +40,13 @@ export function nextMsgId() {
 export function nextSessionId(slug = 'default') {
   // Slug-tolerant: lowercase a-z0-9_- only, capped at 24 chars so the
   // total id stays compact after the suffix is appended.
-  const safe = String(slug).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').slice(0, 24) || 'group';
+  const safe = String(slug).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').slice(0, 24) || 'session';
   // Append 8 crockford-base32 chars (~40 bits) so re-creating a session
   // with the same display name yields a fresh id instead of throwing
   // `duplicate` on the existsSync check in session-crud.js. The
   // `duplicate` branch is now a true defensive guard rather than the
   // first-collision footgun it used to be.
-  return `grp_${safe}_${randEncoded(8)}`;
+  return `session_${safe}_${randEncoded(8)}`;
 }
 
 /**

@@ -43,6 +43,7 @@ import {
   readFileSync,
   renameSync,
   statSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
 } from 'fs';
@@ -50,7 +51,7 @@ import { join } from 'path';
 import { openSegmentIndex } from '../memory/index-db.js';
 
 const SENTINEL = '.yeaft-migration.done';
-const SENTINEL_VERSION = 2;
+const SENTINEL_VERSION = 3;
 
 /**
  * Run the sessions migration. No-op when sentinel exists.
@@ -216,9 +217,13 @@ export function migrateSessions(yeaftDir) {
   //    so that any pre-rename row still on disk gets the new key shape.
   const frontmatterRewrites = rewriteAllMessageFrontmatter(yeaftDir, warnings);
 
-  // 8. Sentinel — version 2 = this consolidated migration (covers what the
-  //    old `.session-migration-v1.done` sentinel covered plus the frontmatter
-  //    rewrite).
+  // 8. Cleanup: if this is rerunning after a v2 sentinel, legacy groups/ or
+  //    chats/ directories may have been recreated. Merge non-duplicate files
+  //    into sessions/<id>, then remove empty legacy directories.
+  const cleanup = cleanupLegacySessionDirs(yeaftDir, warnings);
+  moved += cleanup.moved;
+
+  // 9. Sentinel — version 3 = consolidated migration plus legacy cleanup.
   writeFileSync(sentinel, JSON.stringify({
     version: SENTINEL_VERSION,
     migratedAt: new Date().toISOString(),
@@ -408,6 +413,58 @@ function listDirs(root) {
     } catch { /* ignore */ }
   }
   return out;
+}
+
+function cleanupLegacySessionDirs(yeaftDir, warnings) {
+  const sessionsRoot = join(yeaftDir, 'sessions');
+  let moved = 0;
+  for (const legacyName of ['groups', 'chats']) {
+    const legacyRoot = join(yeaftDir, legacyName);
+    if (!existsSync(legacyRoot)) continue;
+    for (const id of listDirs(legacyRoot)) {
+      const src = join(legacyRoot, id);
+      const dst = join(sessionsRoot, id);
+      if (!existsSync(dst)) continue;
+      mergeLegacyDirIntoSession(src, dst, warnings, `${legacyName}/${id}`);
+      removeDirIfEmpty(src, warnings, `${legacyName}/${id}`);
+      if (!existsSync(src)) moved++;
+    }
+    removeDirIfEmpty(legacyRoot, warnings, legacyName);
+  }
+  return { moved };
+}
+
+function mergeLegacyDirIntoSession(src, dst, warnings, label) {
+  if (!existsSync(src) || !existsSync(dst)) return;
+  let entries = [];
+  try { entries = readdirSync(src, { withFileTypes: true }); }
+  catch (err) { warnings.push(`${label}: failed to scan legacy dir: ${err.message}`); return; }
+
+  for (const ent of entries) {
+    const from = join(src, ent.name);
+    const to = join(dst, ent.name);
+    if (!existsSync(to)) {
+      try { renameSync(from, to); }
+      catch (err) { warnings.push(`${label}: failed to move ${ent.name}: ${err.message}`); }
+      continue;
+    }
+    if (ent.isDirectory()) {
+      mergeLegacyDirIntoSession(from, to, warnings, `${label}/${ent.name}`);
+      removeDirIfEmpty(from, warnings, `${label}/${ent.name}`);
+    } else {
+      warnings.push(`${label}: kept duplicate legacy file ${ent.name}`);
+    }
+  }
+}
+
+function removeDirIfEmpty(dir, warnings, label) {
+  if (!existsSync(dir)) return;
+  try {
+    const entries = readdirSync(dir);
+    if (entries.length === 0) rmSync(dir, { recursive: true, force: true });
+  } catch (err) {
+    warnings.push(`${label}: failed to remove empty legacy dir: ${err.message}`);
+  }
 }
 
 function rewriteGroupMetaToSessionMeta(sessionDir, warnings) {

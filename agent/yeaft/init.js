@@ -82,7 +82,6 @@ const SUBDIRS = [
   'chat/messages',
   'chat/cold',
   'chat/blobs',
-  'groups',
   'sessions',
   'memory/entries',
   'tasks',
