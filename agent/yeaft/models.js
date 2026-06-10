@@ -215,7 +215,7 @@ export const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
  * Resolve the live context window for a model.
  *
  * Fallback ladder (first match wins):
- *   1. `config.providerModelOverride.contextWindow` — per-provider override
+ *   1. `config.modelInfo.contextWindow` — per-provider override originating
  *      from `~/.yeaft/config.json: providers[].models[].contextWindow`. The
  *      caller is responsible for passing the relevant entry; loadConfig
  *      threads it through `config.modelInfo` already.

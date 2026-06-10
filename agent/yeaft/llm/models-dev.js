@@ -247,10 +247,20 @@ export function _resetMemCache() {
  * fetch/disk path. Test seam: callers that want to exercise
  * `lookupModelLimitSync` deterministically can seed any shape they need.
  *
- * @param {object} snapshot models.dev-shaped data
+ * Pass a falsy snapshot to fully reset (equivalent to {@link _resetMemCache}).
+ * This avoids the foot-gun where `_setMemCacheForTest(null)` would leave
+ * `_memCachePath` and `_memCacheTime` stamped to a fake `__test__` value,
+ * confusing any subsequent `fetchModelsDev` call about whether the cache
+ * was ever populated.
+ *
+ * @param {object|null} snapshot models.dev-shaped data, or null/undefined to reset.
  */
 export function _setMemCacheForTest(snapshot) {
-  _memCache = snapshot && typeof snapshot === 'object' ? snapshot : null;
+  if (!snapshot || typeof snapshot !== 'object') {
+    _resetMemCache();
+    return;
+  }
+  _memCache = snapshot;
   _memCachePath = '__test__';
   _memCacheTime = Date.now();
 }
