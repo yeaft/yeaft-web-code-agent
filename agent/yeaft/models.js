@@ -1,24 +1,34 @@
 /**
- * models.js — Model ID registry for Yeaft Yeaft
+ * models.js — Model ID registry for Yeaft
  *
- * Maps model IDs (e.g. "gpt-5", "claude-sonnet-4-20250514") to their
- * adapter type, API base URL, and capabilities.
+ * Maps model IDs (e.g. "gpt-5", "claude-sonnet-4-20250514") to the *adapter*
+ * metadata Yeaft needs to dispatch requests: which protocol (anthropic vs
+ * openai-responses), which base URL, which thinking/reasoning capabilities.
  *
  * Yeaft does not provide its own models. The "model" field is always a
  * model ID from an external provider. This registry lets Yeaft auto-detect
  * the correct adapter and endpoint from just the model ID, so users only
  * need to set YEAFT_MODEL=gpt-5 without configuring adapter/baseUrl separately.
  *
+ * **Token limits (contextWindow / maxOutput) are NOT stored here.** They are
+ * resolved at runtime from the models.dev community catalog
+ * (`agent/yeaft/llm/models-dev.js`), with a per-provider config override
+ * (`~/.yeaft/config.json: providers[].models[].contextWindow`) and a
+ * conservative DEFAULT as the final rung. See {@link resolveContextWindow}
+ * and {@link resolveMaxOutputTokens} for the full ladder.
+ *
  * Unknown model IDs return null — caller falls back to env-based detection.
  */
 
+import { lookupModelLimitSync } from './llm/models-dev.js';
+
 /**
  * @typedef {Object} ModelInfo
- * @property {'anthropic' | 'openai' | 'deepseek' | 'google'} provider — Which provider this model belongs to
+ * @property {'anthropic' | 'openai' | 'deepseek' | 'google'} provider — Which provider this model belongs to.
+ *   These ids are intentionally aligned with the top-level keys in the models.dev
+ *   catalog so they can be used as a `providerHint` to {@link lookupModelLimitSync}.
  * @property {'anthropic' | 'chat-completions'} adapter — Which wire protocol to use
  * @property {string} baseUrl — Official API endpoint base URL
- * @property {number} contextWindow — Max context tokens
- * @property {number} maxOutputTokens — Max output tokens
  * @property {string} displayName — Human-readable model name
  * @property {boolean} [supportsThinking] — task-327a: model supports thinking/reasoning effort.
  * @property {'anthropic' | 'openai-reasoning' | 'none'} [thinkingProtocol] — task-327a:
@@ -39,8 +49,6 @@ export const MODEL_REGISTRY = new Map([
     provider: 'anthropic',
     adapter: 'anthropic',
     baseUrl: 'https://api.anthropic.com',
-    contextWindow: 200000,
-    maxOutputTokens: 16384,
     displayName: 'Claude Sonnet 4',
     // task-327a: extended thinking supported; budget caps at 32K on Sonnet.
     supportsThinking: true,
@@ -52,8 +60,6 @@ export const MODEL_REGISTRY = new Map([
     provider: 'anthropic',
     adapter: 'anthropic',
     baseUrl: 'https://api.anthropic.com',
-    contextWindow: 200000,
-    maxOutputTokens: 16384,
     displayName: 'Claude Opus 4',
     // task-327a: PM decision — Opus max budget = 64K.
     supportsThinking: true,
@@ -65,8 +71,6 @@ export const MODEL_REGISTRY = new Map([
     provider: 'anthropic',
     adapter: 'anthropic',
     baseUrl: 'https://api.anthropic.com',
-    contextWindow: 200000,
-    maxOutputTokens: 8192,
     displayName: 'Claude Haiku 3',
     // task-327a: Haiku 3 does not support extended thinking — effort is dropped.
     supportsThinking: false,
@@ -78,17 +82,12 @@ export const MODEL_REGISTRY = new Map([
     provider: 'openai',
     adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
-    contextWindow: 256000,
-    maxOutputTokens: 16384,
     displayName: 'GPT-5',
     // task-327a: GPT-5 supports reasoning.effort (low/medium/high). No 'max'.
     supportsThinking: true,
     thinkingProtocol: 'openai-reasoning',
     defaultEffort: null,
   }],
-  // gpt-5-mini/-nano/-pro: keep id + family/protocol metadata so they appear
-  // as known models, but do NOT hardcode context/maxOutput — the real limits
-  // should come from provider config (user-supplied) instead of guesses.
   ['gpt-5-mini', {
     provider: 'openai',
     adapter: 'openai-responses',
@@ -111,40 +110,30 @@ export const MODEL_REGISTRY = new Map([
     provider: 'openai',
     adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
-    contextWindow: 272000,
-    maxOutputTokens: 16384,
     displayName: 'GPT-5.4',
   }],
   ['gpt-4.1', {
     provider: 'openai',
     adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
-    contextWindow: 1047576,
-    maxOutputTokens: 32768,
     displayName: 'GPT-4.1',
   }],
   ['gpt-4.1-mini', {
     provider: 'openai',
     adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
-    contextWindow: 1047576,
-    maxOutputTokens: 16384,
     displayName: 'GPT-4.1 Mini',
   }],
   ['gpt-4.1-nano', {
     provider: 'openai',
     adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
-    contextWindow: 1047576,
-    maxOutputTokens: 16384,
     displayName: 'GPT-4.1 Nano',
   }],
   ['o3', {
     provider: 'openai',
     adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
-    contextWindow: 200000,
-    maxOutputTokens: 100000,
     displayName: 'o3',
     // task-327a: o-series reasoning models use reasoning.effort.
     supportsThinking: true,
@@ -155,8 +144,6 @@ export const MODEL_REGISTRY = new Map([
     provider: 'openai',
     adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
-    contextWindow: 200000,
-    maxOutputTokens: 100000,
     displayName: 'o4-mini',
     supportsThinking: true,
     thinkingProtocol: 'openai-reasoning',
@@ -168,16 +155,12 @@ export const MODEL_REGISTRY = new Map([
     provider: 'deepseek',
     adapter: 'openai-responses',
     baseUrl: 'https://api.deepseek.com',
-    contextWindow: 131072,
-    maxOutputTokens: 8192,
     displayName: 'DeepSeek Chat',
   }],
   ['deepseek-reasoner', {
     provider: 'deepseek',
     adapter: 'openai-responses',
     baseUrl: 'https://api.deepseek.com',
-    contextWindow: 131072,
-    maxOutputTokens: 8192,
     displayName: 'DeepSeek Reasoner',
   }],
 
@@ -186,16 +169,12 @@ export const MODEL_REGISTRY = new Map([
     provider: 'google',
     adapter: 'openai-responses',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    contextWindow: 1048576,
-    maxOutputTokens: 65536,
     displayName: 'Gemini 2.5 Pro',
   }],
   ['gemini-2.5-flash', {
     provider: 'google',
     adapter: 'openai-responses',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    contextWindow: 1048576,
-    maxOutputTokens: 65536,
     displayName: 'Gemini 2.5 Flash',
   }],
 ]);
@@ -214,9 +193,9 @@ export function resolveModel(modelName) {
 }
 
 /**
- * Default context window when neither the model registry nor the engine
- * config has a value. 200K is a conservative middle-ground — most modern
- * production models (Claude, GPT-5, Gemini) have ≥ 128K.
+ * Default context window when no upstream source has a value. 200K is a
+ * conservative middle-ground — most modern production models (Claude,
+ * GPT-5, Gemini) have ≥ 128K.
  *
  * Single source of truth: callers (engine.js pre-flight guard,
  * tools/registry.js per-result cap) MUST use this constant or
@@ -225,40 +204,106 @@ export function resolveModel(modelName) {
 export const DEFAULT_CONTEXT_WINDOW = 200_000;
 
 /**
- * Resolve the live context window for a model, with an explicit fallback
- * ladder:
- *   1. MODEL_REGISTRY entry's `contextWindow` (most accurate)
- *   2. caller-supplied config override (e.g. `config.maxContextTokens`)
- *   3. {@link DEFAULT_CONTEXT_WINDOW}
+ * Default per-call output cap when no upstream source has a value. This is
+ * the floor the adapters use to size `max_tokens`; production models give us
+ * more, but 16K is enough to make progress on any single turn without
+ * tripping a provider-side reject.
+ */
+export const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
+
+/**
+ * Resolve the live context window for a model.
+ *
+ * Fallback ladder (first match wins):
+ *   1. `config.providerModelOverride.contextWindow` — per-provider override
+ *      from `~/.yeaft/config.json: providers[].models[].contextWindow`. The
+ *      caller is responsible for passing the relevant entry; loadConfig
+ *      threads it through `config.modelInfo` already.
+ *   2. {@link lookupModelLimitSync} against the warmed models.dev snapshot,
+ *      hinted by the MODEL_REGISTRY provider when available so collisions
+ *      across providers resolve to the right entry.
+ *   3. `config.maxContextTokens` — global ceiling from config / CLI.
+ *   4. {@link DEFAULT_CONTEXT_WINDOW}.
  *
  * Used by the per-tool-result cap and the pre-flight token guard so the
  * defense layers always see the same number, regardless of which seam
  * resolves it first.
  *
  * @param {string} modelName
- * @param {{ maxContextTokens?: number }} [config]
+ * @param {{ maxContextTokens?: number, modelInfo?: { contextWindow?: number } } | null} [config]
  * @returns {number}
  */
 export function resolveContextWindow(modelName, config) {
-  const info = resolveModel(modelName);
-  if (info && Number.isFinite(info.contextWindow) && info.contextWindow > 0) {
-    return info.contextWindow;
+  // Rung 1: per-provider config override threaded via config.modelInfo.
+  const overrideCtx = config?.modelInfo?.contextWindow;
+  if (Number.isFinite(overrideCtx) && overrideCtx > 0) return overrideCtx;
+
+  // Rung 2: models.dev snapshot (warmed at agent boot).
+  const reg = MODEL_REGISTRY.get(modelName);
+  const limit = lookupModelLimitSync(modelName, reg?.provider || null);
+  if (limit && Number.isFinite(limit.context) && limit.context > 0) {
+    return limit.context;
   }
+
+  // Rung 3: global config ceiling.
   const cfg = config && Number.isFinite(config.maxContextTokens) && config.maxContextTokens > 0
     ? config.maxContextTokens : null;
   if (cfg !== null) return cfg;
+
+  // Rung 4: default.
   return DEFAULT_CONTEXT_WINDOW;
 }
 
 /**
- * List all known models.
+ * Resolve the live per-call output cap for a model. Same ladder as
+ * {@link resolveContextWindow} but for the `output` axis:
+ *   1. `config.modelInfo.maxOutput` override
+ *   2. models.dev `limit.output`
+ *   3. `config.maxOutputTokens`
+ *   4. {@link DEFAULT_MAX_OUTPUT_TOKENS}
+ *
+ * @param {string} modelName
+ * @param {{ maxOutputTokens?: number, modelInfo?: { maxOutput?: number, maxOutputTokens?: number } } | null} [config]
+ * @returns {number}
+ */
+export function resolveMaxOutputTokens(modelName, config) {
+  const overrideOut = config?.modelInfo?.maxOutput
+    ?? config?.modelInfo?.maxOutputTokens;
+  if (Number.isFinite(overrideOut) && overrideOut > 0) return overrideOut;
+
+  const reg = MODEL_REGISTRY.get(modelName);
+  const limit = lookupModelLimitSync(modelName, reg?.provider || null);
+  if (limit && Number.isFinite(limit.output) && limit.output > 0) {
+    return limit.output;
+  }
+
+  const cfg = config && Number.isFinite(config.maxOutputTokens) && config.maxOutputTokens > 0
+    ? config.maxOutputTokens : null;
+  if (cfg !== null) return cfg;
+
+  return DEFAULT_MAX_OUTPUT_TOKENS;
+}
+
+/**
+ * List all known models with their resolved token limits.
+ *
+ * Token limits are resolved at call time — they reflect whatever models.dev
+ * snapshot is currently warmed, plus the DEFAULT fallback for models the
+ * snapshot doesn't cover. The returned objects therefore mirror what
+ * `resolveContextWindow` / `resolveMaxOutputTokens` would return for the
+ * same model id.
  *
  * @returns {{ name: string, adapter: string, baseUrl: string, contextWindow: number, maxOutputTokens: number, displayName: string }[]}
  */
 export function listModels() {
   const result = [];
   for (const [name, info] of MODEL_REGISTRY) {
-    result.push({ name, ...info });
+    result.push({
+      name,
+      ...info,
+      contextWindow: resolveContextWindow(name, null),
+      maxOutputTokens: resolveMaxOutputTokens(name, null),
+    });
   }
   return result;
 }
@@ -484,10 +529,15 @@ export function serializeModelForPersistence(entry) {
  *
  * Lookup order:
  *   1. provider-config fields (contextWindow / maxOutput) — highest priority
- *   2. MODEL_REGISTRY entry (contextWindow / maxOutputTokens)
+ *   2. models.dev snapshot (`limit.{context,output}`) via the synchronous
+ *      reader, hinted by the MODEL_REGISTRY provider when known so cross-
+ *      provider id collisions resolve to the right entry.
  *   3. undefined if neither has any info
  *
  * Returns a normalized shape: `{ id, contextWindow?, maxOutput?, provider?, adapter?, baseUrl?, displayName? }`.
+ *
+ * Note: token limits are intentionally NOT read from MODEL_REGISTRY — those
+ * fields were removed when models.dev became the source of truth.
  *
  * @param {string} model
  * @param {{ id?: string, contextWindow?: number, maxOutput?: number } | null} [providerConfig]
@@ -499,8 +549,12 @@ export function getModelInfo(model, providerConfig) {
   const overrideCtx = coercePositiveInt(providerConfig?.contextWindow);
   const overrideMax = coercePositiveInt(providerConfig?.maxOutput);
 
-  const ctx = overrideCtx ?? reg?.contextWindow;
-  const max = overrideMax ?? reg?.maxOutputTokens;
+  // Pull the models.dev numbers as the second rung. Hint with the registry's
+  // provider id when available — same alignment trick the resolveContext-
+  // Window ladder uses.
+  const limit = lookupModelLimitSync(model, reg?.provider || null);
+  const ctx = overrideCtx ?? (limit && Number.isFinite(limit.context) && limit.context > 0 ? limit.context : undefined);
+  const max = overrideMax ?? (limit && Number.isFinite(limit.output) && limit.output > 0 ? limit.output : undefined);
 
   // If we have literally no information, return undefined
   if (!reg && ctx === undefined && max === undefined) return undefined;

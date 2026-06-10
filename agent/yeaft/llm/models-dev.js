@@ -164,10 +164,93 @@ export async function listProviderModels(providerId, { yeaftDir = null } = {}) {
 }
 
 /**
+ * Synchronously look up a model's `{context, output}` limits from whatever
+ * models.dev snapshot is currently warmed in memory.
+ *
+ * The yeaft engine query loop is synchronous (engine.js, config.js, cli.js
+ * all read the context window inline). To avoid bubbling async up through
+ * every gate, the agent boot script primes `fetchModelsDev()` once so this
+ * function can read straight from `_memCache` afterwards.
+ *
+ * If the cache is empty (boot prime failed or test never warmed it), or the
+ * model isn't present in any provider entry, returns `null` — callers fall
+ * back to the next rung of their resolver ladder.
+ *
+ * Collision policy: a given model id can appear under multiple providers
+ * (e.g. `qwen3-32b` lives under 7 providers in the live models.dev snapshot
+ * with context limits ranging 32K–131K). Behavior:
+ *
+ *   • If `providerHint` is given AND that provider lists the model, we use
+ *     that provider's numbers verbatim — the caller knew which gateway it
+ *     was talking to.
+ *   • Otherwise we take the MIN of every provider's `context` and `output`.
+ *     Context is a ceiling: under-shooting risks an early compact (bad);
+ *     over-shooting risks an LLMContextError mid-query (worse). Min picks
+ *     the safer side. Users who know better can pin numbers explicitly via
+ *     `providers[].models[].contextWindow` in `~/.yeaft/config.json`.
+ *
+ * @param {string} modelId
+ * @param {string|null} [providerHint] Provider id matching the models.dev
+ *   top-level key (e.g. 'anthropic', 'openai', 'google', 'deepseek'). The
+ *   MODEL_REGISTRY's `provider` field is aligned to these ids deliberately.
+ * @returns {{ context?: number, output?: number } | null}
+ */
+export function lookupModelLimitSync(modelId, providerHint = null) {
+  if (!modelId || !_memCache || typeof _memCache !== 'object') return null;
+
+  // Hit the hint first if it actually lists this model.
+  if (providerHint && typeof providerHint === 'string') {
+    const provEntry = _memCache[providerHint];
+    const m = provEntry?.models?.[modelId];
+    if (m && m.limit && typeof m.limit === 'object') {
+      const out = {};
+      if (Number.isFinite(m.limit.context) && m.limit.context > 0) out.context = m.limit.context;
+      if (Number.isFinite(m.limit.output) && m.limit.output > 0) out.output = m.limit.output;
+      if (out.context !== undefined || out.output !== undefined) return out;
+    }
+    // Hint missed — fall through to the scan rather than returning null,
+    // because the model genuinely might live under another provider id
+    // (e.g. a deepseek model surfaced via a relay).
+  }
+
+  // Scan every provider; collect context/output values, return MIN.
+  let minCtx = null;
+  let minOut = null;
+  for (const provId of Object.keys(_memCache)) {
+    const m = _memCache[provId]?.models?.[modelId];
+    if (!m || !m.limit || typeof m.limit !== 'object') continue;
+    if (Number.isFinite(m.limit.context) && m.limit.context > 0) {
+      minCtx = minCtx === null ? m.limit.context : Math.min(minCtx, m.limit.context);
+    }
+    if (Number.isFinite(m.limit.output) && m.limit.output > 0) {
+      minOut = minOut === null ? m.limit.output : Math.min(minOut, m.limit.output);
+    }
+  }
+  if (minCtx === null && minOut === null) return null;
+  const result = {};
+  if (minCtx !== null) result.context = minCtx;
+  if (minOut !== null) result.output = minOut;
+  return result;
+}
+
+/**
  * Reset the in-memory cache. Test seam.
  */
 export function _resetMemCache() {
   _memCache = null;
   _memCachePath = null;
   _memCacheTime = 0;
+}
+
+/**
+ * Inject a snapshot into the in-memory cache without going through the
+ * fetch/disk path. Test seam: callers that want to exercise
+ * `lookupModelLimitSync` deterministically can seed any shape they need.
+ *
+ * @param {object} snapshot models.dev-shaped data
+ */
+export function _setMemCacheForTest(snapshot) {
+  _memCache = snapshot && typeof snapshot === 'object' ? snapshot : null;
+  _memCachePath = '__test__';
+  _memCacheTime = Date.now();
 }

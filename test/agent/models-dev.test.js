@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync, writeFileSync, statSync, utimesSync, existsSync, r
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-import { fetchModelsDev, listProviders, listProviderModels, _resetMemCache } from '../../agent/yeaft/llm/models-dev.js';
+import { fetchModelsDev, listProviders, listProviderModels, _resetMemCache, _setMemCacheForTest, lookupModelLimitSync } from '../../agent/yeaft/llm/models-dev.js';
 
 const SAMPLE = {
   anthropic: { name: 'Anthropic', api: 'https://api.anthropic.com', models: { 'claude-sonnet': {}, 'claude-haiku': {} } },
@@ -89,5 +89,77 @@ describe('fetchModelsDev', () => {
     expect(await listProviderModels('anthropic', { yeaftDir: tmpDir })).toEqual(['claude-sonnet', 'claude-haiku']);
     expect(await listProviderModels('missing', { yeaftDir: tmpDir })).toEqual([]);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+// Snapshot with collisions: `qwen3-32b` appears under three providers with
+// different context windows. This mirrors the real models.dev behavior (520+
+// collisions in the live data) and exercises the MIN policy in
+// `lookupModelLimitSync`.
+const COLLISION_SNAPSHOT = {
+  anthropic: {
+    models: {
+      'claude-sonnet': { limit: { context: 200_000, output: 64_000 } },
+    },
+  },
+  openai: {
+    models: {
+      'gpt-5': { limit: { context: 400_000, output: 128_000 } },
+    },
+  },
+  cerebras: {
+    models: {
+      'qwen3-32b': { limit: { context: 32_000, output: 16_000 } },
+    },
+  },
+  groq: {
+    models: {
+      'qwen3-32b': { limit: { context: 64_000, output: 8_000 } },
+    },
+  },
+  fireworks: {
+    models: {
+      'qwen3-32b': { limit: { context: 131_072, output: 4_096 } },
+    },
+  },
+};
+
+describe('lookupModelLimitSync', () => {
+  beforeEach(() => {
+    _setMemCacheForTest(COLLISION_SNAPSHOT);
+  });
+
+  it('returns the exact provider entry when a matching hint is given', () => {
+    const limit = lookupModelLimitSync('claude-sonnet', 'anthropic');
+    expect(limit).toEqual({ context: 200_000, output: 64_000 });
+  });
+
+  it('returns the MIN across all providers when no hint is given', () => {
+    // 32K / 64K / 131K → MIN = 32K; 16K / 8K / 4K → MIN = 4K. The two axes
+    // are computed independently and the MIN winner can differ between them.
+    const limit = lookupModelLimitSync('qwen3-32b');
+    expect(limit).toEqual({ context: 32_000, output: 4_096 });
+  });
+
+  it('falls through to MIN scan when the hint misses but the model lives elsewhere', () => {
+    // Hint says 'anthropic' which doesn't list qwen3-32b. We do NOT return
+    // null — we scan every provider and use MIN like the no-hint case.
+    const limit = lookupModelLimitSync('qwen3-32b', 'anthropic');
+    expect(limit).toEqual({ context: 32_000, output: 4_096 });
+  });
+
+  it('returns null when the model is absent from every provider', () => {
+    expect(lookupModelLimitSync('totally-unknown-model')).toBeNull();
+    expect(lookupModelLimitSync('totally-unknown-model', 'openai')).toBeNull();
+  });
+
+  it('returns null when the cache is empty', () => {
+    _resetMemCache();
+    expect(lookupModelLimitSync('gpt-5', 'openai')).toBeNull();
+  });
+
+  it('returns null for falsy model id even with a populated cache', () => {
+    expect(lookupModelLimitSync('', 'openai')).toBeNull();
+    expect(lookupModelLimitSync(null, 'openai')).toBeNull();
   });
 });

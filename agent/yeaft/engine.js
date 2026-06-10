@@ -37,6 +37,7 @@ import { runStopHooks } from './stop-hooks.js';
 const MAIN_THREAD_ID = 'main';
 import { pickEffort, parseEffortPrefix } from './effort.js';
 import { DEFAULT_CONTEXT_WINDOW, normalizeEffort, resolveContextWindow, resolveModel } from './models.js';
+import { lookupModelLimitSync } from './llm/models-dev.js';
 import { countTurns } from './turn-utils.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
@@ -186,7 +187,11 @@ export function shouldAllowGroupReflection({
     };
   }
   const contextWindow = resolveContextWindow(model, config);
-  const hasRegistryContext = !!resolveModel(model)?.contextWindow;
+  // Telemetry: did the resolver hit either of its top non-default rungs?
+  // Used by `usedFallbackContextWindow` below — if neither models.dev nor
+  // the global config provided a number, we fell through to DEFAULT and
+  // callers may want to surface that to the user.
+  const hasModelsDevContext = !!lookupModelLimitSync(model, resolveModel(model)?.provider || null)?.context;
   const hasConfigContext = Number.isFinite(config?.maxContextTokens) && config.maxContextTokens > 0;
   const threshold = Math.floor(contextWindow * GROUP_CONTEXT_PRESSURE_RATIO);
   const tokenEstimate = estimateMessagesTokens(system, messages);
@@ -204,7 +209,7 @@ export function shouldAllowGroupReflection({
     contextWindow,
     ratio: GROUP_CONTEXT_PRESSURE_RATIO,
     turnCount,
-    usedFallbackContextWindow: !hasRegistryContext && !hasConfigContext && contextWindow === DEFAULT_CONTEXT_WINDOW,
+    usedFallbackContextWindow: !hasModelsDevContext && !hasConfigContext && contextWindow === DEFAULT_CONTEXT_WINDOW,
   };
 }
 
