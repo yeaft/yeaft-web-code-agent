@@ -2,12 +2,12 @@
 layout: home
 
 hero:
-  name: Claude Web Chat
-  text: 远程访问 Claude Code CLI
-  tagline: 多机器管理、端到端加密、多角色协作
+  name: Yeaft
+  text: 多 provider AI 协作平台
+  tagline: 一份 Web 界面，三种后端 — Claude Code · GitHub Copilot · Yeaft Group Mode
   image:
     src: /images/zh-CN/hero.jpg
-    alt: Claude Web Chat
+    alt: Yeaft
   actions:
     - theme: brand
       text: 在线体验
@@ -21,31 +21,35 @@ hero:
 
 features:
   - icon: 💬
-    title: Chat 聊天
-    details: ChatGPT 风格对话界面，实时工具追踪，会话管理和文件上传。
-    link: /zh-CN/guide/features-chat
+    title: Chat（Claude Code）
+    details: ChatGPT 风格 1:1 对话，跑 Claude Code CLI 全套工具 — 流式输出、斜杠命令、文件附件、Sub-Agent 监控。
+    link: /zh-CN/guide/user/chat-mode
+  - icon: 🪄
+    title: Copilot 模式
+    details: 用 GitHub Copilot CLI 当后端（ACP 协议）— 同一界面，可挑 Claude / GPT 系任意 model。
+    link: /zh-CN/guide/user/copilot-mode
+  - icon: 👥
+    title: Yeaft Group Mode
+    details: 多 VP 群组协作 — @mention 决定 fan-out，跨 session 持久记忆，VP→VP 显式 handoff。
+    link: /zh-CN/guide/user/yeaft-group
   - icon: 🖥️
     title: 分屏模式
-    details: 并排打开多个对话 — 最多同时显示 3 个面板，独立视图和活跃面板焦点追踪。
-    link: /zh-CN/guide/features-split-screen
+    details: 最多 3 个面板并排打开 — 跨后端混搭（一个 Claude + 一个 Copilot + 一个 Yeaft Group）。
+    link: /zh-CN/guide/user/split-screen
   - icon: 🧠
-    title: 帮帮团
-    details: AI 专家团队辅助对话 — 选择一个团队，在侧边面板获取多视角建议。
-    link: /zh-CN/guide/features-expert-panel
-  - icon: 👥
+    title: 帮帮团（Expert Panel）
+    details: AI 专家团队侧边面板辅助主对话 — 选团队，获取多视角建议，不打断主线。
+    link: /zh-CN/guide/user/expert-panel
+  - icon: 👷
     title: Crew 多角色协作
-    details: 多角色 AI 团队协作，PM、开发者、审查者、测试者等角色协同完成 Feature 开发。
-    link: /zh-CN/guide/features-crew
-  - icon: 📊
-    title: 仪表板
-    details: 管理员使用统计与系统监控，按用户维度使用量明细和 Agent 状态追踪。
-    link: /zh-CN/guide/features-dashboard
+    details: PM / 开发 / 审查 / 测试并行跑 feature — ROUTE 协议路由、kanban 看板、跨 worktree 并行。
+    link: /zh-CN/guide/user/crew
   - icon: 🛠️
     title: Workbench 工作台
-    details: 集成开发环境：终端、Git 操作、文件浏览器和端口代理。
-    link: /zh-CN/guide/features-workbench
+    details: 终端 / Git / 文件 / 端口代理一站式 — Agent 机器上的开发环境直接接到浏览器。
+    link: /zh-CN/guide/user/workbench
   - icon: 🔒
     title: 安全
-    details: TweetNaCl 端到端加密，多层认证（密码 + TOTP + 邮箱），用户级 Agent 密钥。
+    details: TweetNaCl 端到端加密，多层认证（密码 + TOTP + 邮箱），用户级 Agent 密钥 + Yeaft credential 双因素。
     link: /zh-CN/guide/security
 ---

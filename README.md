@@ -1,4 +1,4 @@
-# Claude Web Chat
+# Yeaft
 
 ![CI](https://github.com/yeaft/claude-web-chat/actions/workflows/ci.yml/badge.svg)
 [![npm](https://img.shields.io/npm/v/@yeaft/webchat-agent)](https://www.npmjs.com/package/@yeaft/webchat-agent)
@@ -8,7 +8,7 @@
 
 [English](README.md) | [中文](README.zh-CN.md) | [Documentation](https://yeaft.github.io/claude-web-chat/)
 
-> A web interface for remotely accessing Claude Code CLI — multi-machine management, end-to-end encryption, multi-role collaboration
+> Multi-provider AI collaboration platform — one web interface, three backends: Claude Code CLI · GitHub Copilot CLI · Yeaft's own multi-VP engine. Multi-machine management, end-to-end encryption, multi-role collaboration.
 
 **🌐 Try it now: [cc.yeaft.com](https://cc.yeaft.com)** — open registration, no invite code required.
 
@@ -16,7 +16,17 @@
 
 ## Features
 
-### Chat
+### Pick Your Backend
+
+Yeaft is not bound to a single AI vendor. When starting a new session, choose:
+
+| Backend | Best for |
+| --- | --- |
+| **Claude Code** | 1:1 chat with Claude Code CLI — full Claude toolset |
+| **Copilot** | 1:1 chat via GitHub Copilot CLI (ACP protocol) — pick any Claude / GPT model |
+| **Yeaft Group** | Multi-VP group collaboration, parallel fan-out, cross-session persistent memory |
+
+### Chat (Claude Code)
 
 ChatGPT-style conversational interface with real-time tool tracking, session management, and file uploads.
 
@@ -31,6 +41,26 @@ ChatGPT-style conversational interface with real-time tool tracking, session man
 - Dark / light theme with one-click toggle
 - Bilingual interface (English / 中文) with runtime language switching
 - Mobile-responsive layout
+
+### Copilot CLI Backend
+
+The same chat surface but powered by `copilot --acp` instead of `claude`. Speaks ACP (Agent Client Protocol); the agent translates every ACP event into the same `claude_output` envelope, so the rendering pipeline is shared.
+
+- Pick any Claude / GPT model from Copilot's catalog
+- Per-session permission dialog (allow once / always / deny)
+- Session resume + history
+- Uses your existing GitHub Copilot OAuth — no separate API key
+
+### Yeaft Group Mode
+
+Multi-VP (Virtual Person) parallel collaboration, powered by Yeaft's own engine (no CLI subprocess required).
+
+- Create a group, drop multiple VPs (independently configured persona / model / tools)
+- `@mention` decides which VPs handle each message — parallel fan-out
+- Cross-session persistent memory (H2-AMS) — VPs remember what you said last session
+- Multi-provider LLM router (Anthropic, OpenAI Responses, GitHub Copilot, any OpenAI-compatible proxy)
+- 40+ built-in tools (file, bash, web, agent orchestration)
+- VP→VP explicit handoff via `route_forward` tool
 
 ![Chat](docs/images/chat.jpg)
 
@@ -93,7 +123,10 @@ Integrated development environment with terminal, Git operations, file browser, 
 ## Prerequisites
 
 - **Server**: Node.js >= 18, Docker (recommended for production)
-- **Agent**: Node.js >= 18, [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
+- **Agent**: Node.js >= 18, plus at least one of:
+  - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — required for Claude Chat mode
+  - [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) — required for Copilot mode (optional)
+  - **Yeaft engine is bundled** in the npm package; no extra CLI required for Yeaft Group Mode
 - **Web Client**: Modern browser (Chrome, Firefox, Safari, Edge)
 
 ## Architecture
@@ -320,8 +353,19 @@ claude-web-chat/
 │   ├── cli.js           # CLI entry point (yeaft-agent command)
 │   ├── index.js         # Agent startup & capability detection
 │   ├── connection/      # WebSocket connection, auth & message routing
-│   ├── claude.js        # Claude CLI process management
-│   ├── conversation.js  # Session lifecycle & slash commands
+│   ├── providers/       # ChatProvider abstraction
+│   │   ├── base.js      # ChatProvider interface + capabilities
+│   │   ├── claude-code.js # Claude CLI driver
+│   │   ├── copilot.js   # GitHub Copilot CLI driver (ACP)
+│   │   └── acp-client.js# ACP JSON-RPC client
+│   ├── yeaft/           # Yeaft's own AI engine (no external CLI)
+│   │   ├── engine.js    # Main query loop
+│   │   ├── memory/      # H2-AMS memory subsystem
+│   │   ├── llm/         # Multi-provider LLM adapters
+│   │   ├── groups/      # Group Mode orchestration
+│   │   └── tools/       # 40+ built-in tools
+│   ├── claude.js        # Legacy Claude CLI process management
+│   ├── conversation.js  # Chat session lifecycle & slash commands
 │   ├── crew/            # Multi-agent Crew coordination (13 modules)
 │   ├── sdk/             # Claude CLI stream-json SDK
 │   ├── terminal.js      # PTY terminal (node-pty)
