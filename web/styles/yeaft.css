@@ -214,6 +214,11 @@
   white-space: nowrap;
 }
 
+.yeaft-model-refreshing {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .yeaft-model-chevron {
   flex-shrink: 0;
   transition: transform 0.15s;

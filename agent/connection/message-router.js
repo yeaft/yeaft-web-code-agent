@@ -38,6 +38,7 @@ import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getYeaftSettings, updateYeaftSettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../yeaft/config-api.js';
 import { fetchModelsDev } from '../yeaft/llm/models-dev.js';
 import { handleYeaftSessionSend, handleYeaftModeSwitch, handleYeaftModelSwitch, resetYeaftSession, handleYeaftLoadHistory, handleYeaftLoadMoreHistory, handleYeaftAbortThread, handleYeaftAbortAll, handleYeaftAbortTurn, handleYeaftVpSubscribe, handleYeaftVpCreate, handleYeaftVpUpdate, handleYeaftVpDelete, handleYeaftVpRead, handleYeaftListSessions, handleYeaftCreateSession, handleYeaftRenameSession, handleYeaftUpdateSession, handleYeaftUpdateSessionConfig, handleYeaftArchiveSession, handleYeaftDeleteSession, handleYeaftSessionAddMember, handleYeaftSessionRemoveMember, handleYeaftSessionSetDefaultVp, handleYeaftScanWorkdirSessions, handleYeaftRestoreSession, handleYeaftDreamTrigger, handleYeaftFetchToolStats, handleYeaftFetchDebugHistory, broadcastLanguageChange, broadcastYeaftSessionSnapshotEager } from '../yeaft/web-bridge.js';
+import { startYeaftStatusRefresh, stopYeaftStatusRefresh, refreshYeaftStatus } from '../yeaft/status-cache.js';
 
 export async function handleMessage(msg) {
   switch (msg.type) {
@@ -64,6 +65,7 @@ export async function handleMessage(msg) {
       }
 
       sendConversationList();
+      startYeaftStatusRefresh();
 
       // fix-yeaft-session-per-agent: eagerly broadcast this agent's
       // yeaft session snapshot on register so the unified sidebar can
@@ -357,6 +359,9 @@ export async function handleMessage(msg) {
       // user reloading the session.
       if (!result.error && incomingLanguage) {
         broadcastLanguageChange(result.language);
+      }
+      if (!result.error) {
+        refreshYeaftStatus({ reason: 'llm_config_updated' }).catch(() => {});
       }
       sendToServer({ type: 'llm_config_updated', ...result });
       break;

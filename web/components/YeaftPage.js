@@ -89,6 +89,7 @@ export default {
           <!-- Model selector (compact dropdown in topbar) -->
           <div class="yeaft-topbar-model" @click="toggleModelDropdown" :title="$t('yeaft.switchModel')">
             <span class="yeaft-topbar-model-name">{{ topbarModel || $t('settings.llm.selectModel') }}</span>
+            <span v-if="store.yeaftModelsRefreshing" class="yeaft-model-refreshing">{{ $t('common.loading') || 'Loading' }}</span>
             <svg v-if="store.yeaftAvailableModels.length > 1" class="yeaft-model-chevron" :class="{ open: modelDropdownOpen }" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
             <!-- Dropdown -->
             <div class="yeaft-model-dropdown yeaft-topbar-model-dropdown" v-if="modelDropdownOpen && store.yeaftAvailableModels.length > 1" @click.stop>

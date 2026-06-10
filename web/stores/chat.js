@@ -330,6 +330,9 @@ export const useChatStore = defineStore('chat', {
     yeaftSessionReady: false,     // Session 是否已初始化
     yeaftStatus: null,            // { skills, mcpServers, tools } 从 session_ready 获取
     yeaftAvailableModels: [],     // 可用模型列表 [{ id, provider, label }]
+    yeaftStatusByAgent: {},       // { [agentId]: cached yeaft_status/session_ready payload }
+    yeaftModelsRefreshing: false, // 当前 agent 的 model/status 后台刷新状态
+    yeaftModelRefreshError: null, // 当前 agent 最近一次 refresh 错误（保留旧模型列表）
     yeaftYeaftDir: null,          // agent 的 ~/.yeaft 绝对路径（session_ready 携带）— Yeaft workbench 的默认 workDir
     // 2026-05-13: tool-call usage stats for the Yeaft debug drawer.
     // Populated by `fetchYeaftToolStats()` → backend → `yeaft_tool_stats`
@@ -863,7 +866,40 @@ export const useChatStore = defineStore('chat', {
     // =====================
     // Yeaft 页面
     // =====================
+    cacheYeaftAgentStatus(agentId, status) {
+      if (!agentId || !status) return;
+      const previous = this.yeaftStatusByAgent[agentId] || {};
+      const availableModels = Array.isArray(status.availableModels)
+        ? status.availableModels
+        : (previous.availableModels || []);
+      const next = {
+        ...previous,
+        ...status,
+        availableModels,
+      };
+      this.yeaftStatusByAgent = { ...this.yeaftStatusByAgent, [agentId]: next };
+      if (this.yeaftAgentId === agentId || this.currentAgent === agentId) {
+        this.applyCachedYeaftStatus(agentId);
+      }
+    },
+    applyCachedYeaftStatus(agentId = this.yeaftAgentId) {
+      const cached = agentId ? this.yeaftStatusByAgent[agentId] : null;
+      if (!cached) return false;
+      if (cached.model) this.yeaftModel = cached.model;
+      if (Array.isArray(cached.availableModels)) this.yeaftAvailableModels = cached.availableModels;
+      this.yeaftModelsRefreshing = !!cached.refreshing;
+      this.yeaftModelRefreshError = cached.refreshError || null;
+      if (cached.yeaftDir) this.yeaftYeaftDir = cached.yeaftDir;
+      this.yeaftStatus = {
+        skills: cached.skills,
+        mcpServers: cached.mcpServers,
+        tools: cached.tools,
+        multiVp: !!cached.multiVp,
+      };
+      return true;
+    },
     enterYeaft(agentId = null) {
+      const previousYeaftAgentId = this.yeaftAgentId;
       // Capture the chat-side activeConversations snapshot BEFORE flipping
       // currentView. The transition helper is idempotent: if we're
       // already in Yeaft (e.g. switching agents, programmatic re-entry,
@@ -885,6 +921,13 @@ export const useChatStore = defineStore('chat', {
       // browsed the first agent's folder.
       if (this.yeaftAgentId && this.currentAgent !== this.yeaftAgentId) {
         this.selectAgent(this.yeaftAgentId);
+      }
+      const appliedCachedStatus = this.applyCachedYeaftStatus(this.yeaftAgentId);
+      if (!appliedCachedStatus && previousYeaftAgentId && previousYeaftAgentId !== this.yeaftAgentId) {
+        this.yeaftAvailableModels = [];
+        this.yeaftStatus = null;
+        this.yeaftModelsRefreshing = true;
+        this.yeaftModelRefreshError = null;
       }
       // Create a local conversationId immediately so MessageList has something to render
       if (!this.yeaftConversationId) {
@@ -1259,6 +1302,11 @@ export const useChatStore = defineStore('chat', {
           }
 
           this.yeaftConversationId = agentConvId;
+          const statusAgentId = msg.agentId || this.yeaftAgentId || this.currentAgent;
+          if (statusAgentId) {
+            this.yeaftAgentId = statusAgentId;
+            this.cacheYeaftAgentStatus(statusAgentId, event);
+          }
           this.yeaftModel = event.model;
           this.yeaftSessionReady = true;
           this.yeaftAvailableModels = event.availableModels || [];
@@ -1297,6 +1345,12 @@ export const useChatStore = defineStore('chat', {
           this.sendWsMessage(subscribeAgentId
             ? { type: 'yeaft_vp_subscribe', agentId: subscribeAgentId }
             : { type: 'yeaft_vp_subscribe' });
+          break;
+        }
+
+        case 'yeaft_status': {
+          const statusAgentId = msg.agentId || this.yeaftAgentId || this.currentAgent;
+          if (statusAgentId) this.cacheYeaftAgentStatus(statusAgentId, event);
           break;
         }
 
