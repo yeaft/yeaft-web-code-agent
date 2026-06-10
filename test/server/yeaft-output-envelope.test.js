@@ -90,6 +90,7 @@ describe('agent-output.js — yeaft_output envelope passthrough', () => {
       data: { type: 'assistant', message: { content: 'hi' } },
     });
     expect(_sent[0].envelope.turnId).toBe('d123:vp_alice');
+    expect(_sent[0].envelope.threadId).toBe('thread-main');
   });
 
   it('forwards sessionId on data envelopes (already worked, regression guard)', async () => {
