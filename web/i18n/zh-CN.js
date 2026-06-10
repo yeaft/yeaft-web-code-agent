@@ -586,22 +586,25 @@ export default {
   'yeaft.session.create.rosterLoading': 'VP 加载中…',
   'yeaft.session.create.defaultVpHint': '当没有 @ 提及时默认回答的 VP。',
   'yeaft.session.create.folderLabel': '📁 工作目录',
-  'yeaft.session.create.sessionLabel': '💬 已有会话',
+  'yeaft.session.create.sessionLabel': '💬 此目录下的 session',
   'yeaft.session.create.noWorkDirs': '还没有任何会话 — 在上方选择或输入工作目录开始。',
-  'yeaft.session.create.noSessions': '该目录下还没有会话 — 填好信息并创建一个。',
+  // 'yeaft.session.create.noSessions' 已删除 — 单列表合并后由
+  // 'yeaft.restore.modal.empty' 承担"空目录"提示（"此目录下没有 yeaft session"）。
   'yeaft.session.create.back': '返回',
   'yeaft.session.create.creating': '创建中…',
   'yeaft.session.create.submit': '创建',
   'yeaft.session.empty': '还没有会话，点击 + 新建一个。',
   // fix-session-restore-modal-unify: 独立的 SessionRestoreModal 已经
   // 合并进 SessionCreateModal — "Restore from disk" 分组内复用 create
-  // 模态的 workdir 输入。这里只保留还在渲染的几个 key（sessionsLabel /
-  // empty / scanError / restoreError）。删除的 key（sidebar.restore /
+  // 模态的 workdir 输入。2026-06-09 单列表合并后，sessionsLabel 也被
+  // 删除（panel header 改用 'yeaft.session.create.sessionLabel'，因为
+  // 现在两种 panel 合并成一个 "此目录下的 session" 列表）。剩下的 key:
+  // empty / scanError / restoreError 仍由 loadRestoreCandidates +
+  // onRestoreClick 渲染。删除的 key（sidebar.restore /
   // sidebar.restoreHint / restore.modal.title / workDirLabel /
-  // workDirHint / alreadyAdded）属于已经不存在的控件；尤其
-  // `alreadyAdded` 的 "已在 sidebar 中" 文案正是 bug #2 — 它会撒谎 —
+  // workDirHint / alreadyAdded / sessionsLabel）都属于已经不存在的控件；
+  // 尤其 `alreadyAdded` 的 "已在 sidebar 中" 文案正是 bug #2 — 它会撒谎 —
   // 把 key 删掉能防止别人不小心再渲染一遍。
-  'yeaft.restore.modal.sessionsLabel': '此目录下的 session',
   'yeaft.restore.modal.empty': '此目录下没有 yeaft session',
   'yeaft.restore.modal.scanError': '扫描失败: {message}',
   'yeaft.restore.modal.restoreError': '恢复失败: {message}',

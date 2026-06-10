@@ -1,21 +1,14 @@
 /**
  * fix-session-restore-modal-unify — pin the merged "Restore from disk" flow.
  *
- * Why this test exists:
- *   1. The old standalone SessionRestoreModal computed `alreadyRegistered`
- *      from the agent's per-agent disk registry, which lagged behind the
- *      actual sidebar source. Result: rows showed a "已在 sidebar 中"
- *      badge even when the sidebar was demonstrably empty.
- *   2. The user wanted ONE modal for create + restore (matches the Chat
- *      new-conversation modal's UX).
- *
- * This file pins:
- *   - `restoreCandidates` computed: filters `scannedSessions` against
- *     `sessionsStore.sessionList` (the literal source the sidebar reads
- *     from). No agent-side flag is trusted; the lie is physically
- *     impossible.
- *   - `loadRestoreCandidates`: forwards a `scan_workdir` CRUD request
- *     with the correct workDir + agentId envelope, stores the result.
+ * Originally this test pinned the standalone "restore" panel and its
+ * `restoreCandidates` computed (disk-scan minus sidebar). The duplicate-list
+ * merge on 2026-06-09 collapsed the two stacked panels into one
+ * `sessionsInDir` list with a per-row `inSidebar` flag — the partition
+ * coverage moved to `session-create-modal-chat-style.test.js`. This file
+ * now only pins the wire contracts that still matter:
+ *   - `loadRestoreCandidates`: forwards a `scan_workdir` CRUD request with
+ *     the correct workDir + agentId envelope, stores the result.
  *   - `onRestoreClick`: forwards a `restore` CRUD request and emits
  *     `created` + `close` on success.
  *
@@ -31,74 +24,6 @@ globalThis.window.Pinia = globalThis.Pinia;
 let SessionCreateModal;
 beforeAll(async () => {
   SessionCreateModal = (await import('../../web/components/SessionCreateModal.js')).default;
-});
-
-describe('SessionCreateModal restoreCandidates — client-side sidebar partition', () => {
-  it('returns scanned sessions NOT in sessionsStore.sessionList', () => {
-    const fn = SessionCreateModal.computed.restoreCandidates;
-    const ctx = {
-      scannedSessions: [
-        { id: 's-in-sidebar-1', name: 'kept' },
-        { id: 's-on-disk-only', name: 'orphan' },
-        { id: 's-in-sidebar-2', name: 'kept-2' },
-      ],
-      sessionsStore: {
-        sessionList: [
-          { id: 's-in-sidebar-1' },
-          { id: 's-in-sidebar-2' },
-          { id: 's-unrelated' },
-        ],
-      },
-    };
-    expect(fn.call(ctx).map(s => s.id)).toEqual(['s-on-disk-only']);
-  });
-
-  it('returns the FULL scanned list when the sidebar is empty (the user\'s repro case)', () => {
-    // This is the exact "sidebar明明没有，为什么还说已在sidebar中" case.
-    // Pre-fix, the agent's stale `alreadyRegistered` flag falsely
-    // marked rows as already-in-sidebar even though the sidebar was
-    // empty. With the client-side filter, an empty sidebar means
-    // every scanned session is a candidate.
-    const fn = SessionCreateModal.computed.restoreCandidates;
-    const ctx = {
-      scannedSessions: [
-        { id: 's-a', name: 'a' },
-        { id: 's-b', name: 'b' },
-      ],
-      sessionsStore: { sessionList: [] },
-    };
-    expect(fn.call(ctx).map(s => s.id)).toEqual(['s-a', 's-b']);
-  });
-
-  it('returns empty list when scannedSessions is empty', () => {
-    const fn = SessionCreateModal.computed.restoreCandidates;
-    expect(fn.call({ scannedSessions: [], sessionsStore: { sessionList: [{ id: 'x' }] } })).toEqual([]);
-  });
-
-  it('survives a null sessionsStore (defensive guard)', () => {
-    // Pinia store can be null during mount/unmount races; the
-    // partition should still return *something coherent* — falling
-    // back to "treat the sidebar as empty" is the safe choice.
-    const fn = SessionCreateModal.computed.restoreCandidates;
-    const ctx = {
-      scannedSessions: [{ id: 's-a' }],
-      sessionsStore: null,
-    };
-    expect(fn.call(ctx).map(s => s.id)).toEqual(['s-a']);
-  });
-
-  it('drops entries with no id (defensive — agent could send malformed payload)', () => {
-    const fn = SessionCreateModal.computed.restoreCandidates;
-    const ctx = {
-      scannedSessions: [
-        { id: 's-good', name: 'good' },
-        { name: 'no-id' },
-        null,
-      ],
-      sessionsStore: { sessionList: [] },
-    };
-    expect(fn.call(ctx).map(s => s.id)).toEqual(['s-good']);
-  });
 });
 
 describe('SessionCreateModal loadRestoreCandidates — wire envelope', () => {

@@ -586,24 +586,27 @@ export default {
   'yeaft.session.create.rosterLoading': 'Loading VPs…',
   'yeaft.session.create.defaultVpHint': 'The VP that answers when no one is @-mentioned.',
   'yeaft.session.create.folderLabel': '📁 Work directories',
-  'yeaft.session.create.sessionLabel': '💬 Existing sessions',
+  'yeaft.session.create.sessionLabel': '💬 Sessions in this directory',
   'yeaft.session.create.noWorkDirs': 'No prior sessions yet — pick or type a work directory above.',
-  'yeaft.session.create.noSessions': 'No sessions in this directory yet — fill in the form and create one.',
+  // 'yeaft.session.create.noSessions' removed — the unified single-list UI
+  // shows 'yeaft.restore.modal.empty' as the empty-state instead ("No yeaft
+  // sessions found in this directory").
   'yeaft.session.create.back': 'Back',
   'yeaft.session.create.creating': 'Creating…',
   'yeaft.session.create.submit': 'Create',
   'yeaft.session.empty': 'No sessions yet. Click + to create one.',
   // fix-session-restore-modal-unify: the standalone SessionRestoreModal
-  // is gone — its flow was folded into SessionCreateModal under a
-  // "Restore from disk" group. Only the strings that group still
-  // renders survive here (sessionsLabel / empty / scanError /
-  // restoreError). The discarded keys (sidebar.restore,
-  // sidebar.restoreHint, restore.modal.title / workDirLabel /
-  // workDirHint / alreadyAdded) belonged to widgets that no longer
-  // exist; the `alreadyAdded` "已在 sidebar 中" label specifically
-  // was the source of bug #2 (it lied), so removing the key prevents
-  // anyone from accidentally rendering it again.
-  'yeaft.restore.modal.sessionsLabel': 'Sessions in this directory',
+  // is gone — its flow was folded into SessionCreateModal. The 2026-06-09
+  // single-list merge also dropped `sessionsLabel` (panel header now reuses
+  // 'yeaft.session.create.sessionLabel' since the two stacked panels became
+  // one "Sessions in this directory" list). Remaining keys (empty /
+  // scanError / restoreError) are still rendered by
+  // loadRestoreCandidates + onRestoreClick. Discarded keys (sidebar.restore,
+  // sidebar.restoreHint, restore.modal.title / workDirLabel / workDirHint /
+  // alreadyAdded / sessionsLabel) belonged to widgets that no longer exist;
+  // the `alreadyAdded` "已在 sidebar 中" label specifically was the source
+  // of bug #2 (it lied), so removing the key prevents anyone from
+  // accidentally rendering it again.
   'yeaft.restore.modal.empty': 'No yeaft sessions found in this directory',
   'yeaft.restore.modal.scanError': 'Failed to scan: {message}',
   'yeaft.restore.modal.restoreError': 'Failed to restore: {message}',
