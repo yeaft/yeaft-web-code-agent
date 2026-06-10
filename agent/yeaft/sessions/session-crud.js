@@ -1,17 +1,17 @@
 /**
- * group-crud.js — High-level Group CRUD API (task-334m).
+ * session-crud.js — High-level Session CRUD API (task-334m).
  *
- * Wraps the primitives from group-store.js + roster.js into the 5 operations
+ * Wraps the primitives from session-store.js + roster.js into the 5 operations
  * wired to WS events (§Δ10 334m + R6 §Δ31.2):
- *   createSessionFromSpec  — wizard "create new group" (empty or user-picked roster)
+ *   createSessionFromSpec  — wizard "create new session" (empty or user-picked roster)
  *   renameSession          — update meta.name; preserves roster / defaultVpId
  *   archiveSession         — rename dir to `.archived-<ts>-<id>` (soft delete)
  *   addMember            — roster.addVp + save; sets defaultVpId if first
  *   removeMember         — roster.removeVp + save; clears/rotates defaultVpId
  *
  * Plus the D1 bootstrap helper:
- *   ensureDefaultSessionIfEmpty(yeaftDir, {libDir}) — if NO group exists on
- *   disk, seed `grp_default` with roster = every VP in the library, and
+ *   ensureDefaultSessionIfEmpty(yeaftDir, {libDir}) — if NO session exists on
+ *   disk, seed `session_default` with roster = every VP in the library, and
  *   defaultVpId = alphabetically first vpId. No-op when ≥1 group present.
  *
  * Hard constraints (PM):
@@ -250,21 +250,21 @@ export function resolveSessionYeaftDir(defaultYeaftDir, sessionId) {
 
 /** Build a safe group id from a display name (slug + ulid-lite suffix). */
 export function makeSessionId(name) {
-  const slug = String(name || 'group')
+  const slug = String(name || 'session')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 24) || 'group';
+    .slice(0, 24) || 'session';
   return nextSessionId(slug);
 }
 
 /**
  * (B) D1 seed — called at boot (or when multi-VP is first enabled). Idempotent:
- * returns `{seeded:false}` if any group already exists on disk (including
- * `grp_default`). When empty, seeds with roster = full VP library, sorted
+ * returns `{seeded:false}` if any session already exists on disk (including
+ * `session_default`). When empty, seeds with roster = full VP library, sorted
  * alphabetically; defaultVpId = roster[0].
  *
- * When the VP library is also empty, we still seed an empty-roster group so
+ * When the VP library is also empty, we still seed an empty-roster session so
  * the UI has somewhere to land — but defaultVpId is null and downstream
  * message send will return `no_default_vp` until the user adds a VP.
  */
@@ -355,7 +355,7 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
       saveSessionConfig(yeaftDir, id, spec.config);
     }
   } catch (err) {
-    console.warn(`[group-crud] failed to seed config.json for ${id}:`, err?.message || err);
+    console.warn(`[session-crud] failed to seed config.json for ${id}:`, err?.message || err);
   }
 
   // Seed Layer-A resident summary so the first session has memory content
@@ -363,12 +363,12 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
   // Best-effort: a memory-root permission failure must NOT break group create.
   try {
     seedSummaryIfMissingSync(
-      { kind: 'group', id },
+      { kind: 'session', id },
       buildSessionSeedSummary({ name, roster, defaultVpId }),
       { root: memoryRoot },
     );
   } catch (err) {
-    console.warn(`[group-crud] failed to seed summary.md for ${id}:`, err?.message || err);
+    console.warn(`[session-crud] failed to seed summary.md for ${id}:`, err?.message || err);
   }
 
   return meta;
@@ -501,9 +501,12 @@ export function deleteSession(yeaftDir, sessionId, options = {}) {
   // starts clean. Best-effort — never let memory cleanup fail the CRUD op.
   // Runs unconditionally so the idempotent path also clears stale memory.
   try {
+    removeScopeDirSync({ kind: 'session', id: sessionId }, { root: memoryRoot });
+    // Legacy pre-session memory scopes used memory/group/<id>. Delete both so
+    // idempotent removal clears stale summaries for old grp_* sessions too.
     removeScopeDirSync({ kind: 'group', id: sessionId }, { root: memoryRoot });
   } catch (err) {
-    console.warn(`[group-crud] failed to remove memory dir for ${sessionId}:`, err?.message || err);
+    console.warn(`[session-crud] failed to remove memory dir for ${sessionId}:`, err?.message || err);
   }
 
   unregisterSessionWorkDir(yeaftDir, sessionId);
@@ -516,9 +519,9 @@ export function deleteSession(yeaftDir, sessionId, options = {}) {
 }
 
 /**
- * Sweep any leftover `.archived-*` directories under groups/ that are
+ * Sweep any leftover `.archived-*` directories under sessions/ that are
  * orphans of the old soft-archive flow. Used at boot so users don't see
- * ghost groups in subsequent loads. Returns the list of removed paths.
+ * ghost sessions in subsequent loads. Returns the list of removed paths.
  */
 export function purgeArchivedSessions(yeaftDir) {
   const root = sessionsRoot(yeaftDir);

@@ -231,6 +231,16 @@ export default {
     }
   },
   methods: {
+    debugSessionId(turn) {
+      return this.formatDebugSessionId((turn && (turn.sessionId || turn.groupId)) || '');
+    },
+    debugDreamSessionId(evt) {
+      return this.formatDebugSessionId((evt && (evt.sessionId || evt.groupId)) || '');
+    },
+    formatDebugSessionId(id) {
+      const raw = String(id || '');
+      return raw.startsWith('grp_') ? raw.slice(4) : raw;
+    },
     toggleTurn(turnId) {
       this.expandedTurns = { ...this.expandedTurns, [turnId]: !this.expandedTurns[turnId] };
     },
@@ -251,8 +261,7 @@ export default {
       if (phase === 'start') {
         parts.push(evt.manual ? 'manual trigger' : 'auto trigger');
       } else if (phase === 'load-diff') {
-        const sid = evt.sessionId || evt.groupId;
-        if (sid) parts.push(`session ${sid}`);
+        if (this.debugDreamSessionId(evt)) parts.push(`session ${this.debugDreamSessionId(evt)}`);
       } else if (phase === 'triage') {
         if (typeof evt.segments === 'number') parts.push(`${evt.segments} segs`);
         if (typeof evt.actions === 'number') parts.push(`${evt.actions} actions`);
@@ -329,8 +338,7 @@ export default {
       if (!evt) return '-';
       if (evt.target) return evt.target;
       if (evt.scope) return evt.scope;
-      const sid = evt.sessionId || evt.groupId;
-      if (sid) return `session/${sid}`;
+      if (this.debugDreamSessionId(evt)) return `session/${this.debugDreamSessionId(evt)}`;
       if (evt.vpId) return `vp/${evt.vpId}`;
       return '-';
     },
@@ -430,8 +438,7 @@ export default {
       const lines = [`# Dream event · ${kind} · ${evt.phase || evt.type || '?'}`];
       lines.push(`- at: ${this.formatTimestamp(evt.at)}`);
       if (evt.turnId) lines.push(`- turnId: ${evt.turnId}`);
-      const eSid = evt.sessionId || evt.groupId;
-      if (eSid) lines.push(`- sessionId: ${eSid}`);
+      if (this.debugDreamSessionId(evt)) lines.push(`- sessionId: ${this.debugDreamSessionId(evt)}`);
       if (evt.target) lines.push(`- target: ${evt.target}`);
       if (kind === 'loop') {
         lines.push(`- pass: ${evt.pass || '-'}`);
@@ -636,7 +643,7 @@ export default {
       lines.push(`# Turn ${turn.turnId}`);
       lines.push('');
       lines.push(`- VP: ${turn.vpId || '-'}`);
-      lines.push(`- Session: ${turn.sessionId || turn.groupId || '-'}`);
+      lines.push(`- Session: ${this.debugSessionId(turn) || '-'}`);
       lines.push(`- Loops: ${turn.loopCount || (turn.loops && turn.loops.length) || 0}`);
       lines.push(`- Total: ${this.formatMs(turn.totalMs)} / ${this.formatTokens(turn.totalTokens)} tok`);
       lines.push('');
@@ -1010,7 +1017,7 @@ export default {
             <span class="yeaft-debug-turn-prompt">{{ truncate(turn.userPrompt, 80) || '(no prompt)' }}</span>
             <span class="yeaft-debug-turn-stats">
               <span v-if="turn.vpId" class="yeaft-debug-turn-vp">{{ turn.vpId }}</span>
-              <span v-if="turn.sessionId || turn.groupId" class="yeaft-debug-turn-group">{{ turn.sessionId || turn.groupId }}</span>
+              <span v-if="debugSessionId(turn)" class="yeaft-debug-turn-group">{{ debugSessionId(turn) }}</span>
               <span class="yeaft-debug-turn-loopcount">{{ turn.loopCount || (turn.loops && turn.loops.length) || 0 }}L</span>
               <span class="yeaft-debug-turn-time">{{ formatMs(turn.totalMs) }}</span>
               <span class="yeaft-debug-turn-tokens">{{ formatTokens(turn.totalTokens) }} tok</span>

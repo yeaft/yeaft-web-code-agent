@@ -13,6 +13,7 @@ function mkTurn(over = {}) {
     userPrompt: 'hello world',
     vpId: 'vp-steve',
     groupId: 'grp_claude',
+    sessionId: 'session_claude',
     ...over,
   };
 }

@@ -116,12 +116,28 @@ describe('sessions migration', () => {
     migrateSessions(tmp);
     expect(existsSync(join(tmp, '.yeaft-migration.done'))).toBe(true);
     const sentinel = JSON.parse(readFileSync(join(tmp, '.yeaft-migration.done'), 'utf8'));
-    expect(sentinel.version).toBe(2);
+    expect(sentinel.version).toBe(3);
 
     const r2 = migrateSessions(tmp);
     expect(r2.migrated).toBe(false);
     expect(r2.moved).toBe(0);
     expect(r2.frontmatterRewrites).toBe(0);
+  });
+
+  it('cleans recreated legacy group dirs when upgrading an already-migrated tree', () => {
+    mkdirSync(join(tmp, 'sessions', 'grp_alpha'), { recursive: true });
+    writeFileSync(join(tmp, 'sessions', 'grp_alpha', 'meta.json'), JSON.stringify({ id: 'grp_alpha', vpIds: ['omni'] }));
+    mkdirSync(join(tmp, 'groups', 'grp_alpha', 'messages'), { recursive: true });
+    writeFileSync(join(tmp, 'groups', 'grp_alpha', 'messages', '000001.jsonl'), '{"type":"legacy"}\n');
+    writeFileSync(join(tmp, '.yeaft-migration.done'), JSON.stringify({ version: 2 }));
+
+    const res = migrateSessions(tmp);
+
+    expect(res.migrated).toBe(true);
+    expect(existsSync(join(tmp, 'sessions', 'grp_alpha', 'messages', '000001.jsonl'))).toBe(true);
+    expect(existsSync(join(tmp, 'groups', 'grp_alpha'))).toBe(false);
+    const sentinel = JSON.parse(readFileSync(join(tmp, '.yeaft-migration.done'), 'utf8'));
+    expect(sentinel.version).toBe(3);
   });
 
   it('preserves defaultVpId from group.json into session meta', () => {
@@ -334,6 +350,6 @@ describe('sessions migration', () => {
     expect(r2.migrated).toBe(true);
     // Sentinel re-written at current version.
     const sent = JSON.parse(readFileSync(sentPath, 'utf8'));
-    expect(sent.version).toBe(2);
+    expect(sent.version).toBe(3);
   });
 });

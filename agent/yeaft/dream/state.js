@@ -6,7 +6,7 @@
  *   1. Per-group control state (used to decide whether a group enters
  *      triage and how far to advance the cursor):
  *
- *        ~/.yeaft/memory/group/<id>/.dream-state
+ *        ~/.yeaft/memory/session/<id>/.dream-state
  *
  *      A 3-line text file:
  *
@@ -18,7 +18,7 @@
  *      empty / null / 0. The file is rewritten atomically every dream.
  *
  *      The virtual `_no-group/` group lives at the same path layout
- *      (`group/_no-group/.dream-state`) and uses the same accessor.
+ *      (`session/_no-group/.dream-state`) and uses the same accessor.
  *
  *   2. Per-scope observability marker, embedded inside the scope's
  *      `memory.md` between two HTML comments at the file's tail:
@@ -63,11 +63,19 @@ const DREAM_BLOCK_CLOSE = '<!-- /dream-state -->';
  * @returns {Promise<{ lastDreamMessageId: string|null, lastDreamAt: string|null, messageCount: number }>}
  */
 export async function readGroupState(root, sessionId) {
-  const abs = join(root, 'group', sessionId, STATE_FILE);
+  const abs = join(root, 'session', sessionId, STATE_FILE);
+  const legacyAbs = join(root, 'group', sessionId, STATE_FILE);
   const empty = { lastDreamMessageId: null, lastDreamAt: null, messageCount: 0 };
   let raw;
   try { raw = await fsp.readFile(abs, 'utf8'); }
-  catch (err) { if (err && err.code === 'ENOENT') return empty; throw err; }
+  catch (err) {
+    if (!err || err.code !== 'ENOENT') throw err;
+    try { raw = await fsp.readFile(legacyAbs, 'utf8'); }
+    catch (legacyErr) {
+      if (legacyErr && legacyErr.code === 'ENOENT') return empty;
+      throw legacyErr;
+    }
+  }
   return parseGroupState(raw);
 }
 
@@ -80,7 +88,7 @@ export async function readGroupState(root, sessionId) {
  * @param {{ lastDreamMessageId?: string|null, lastDreamAt?: string|null, messageCount?: number }} state
  */
 export async function writeGroupState(root, sessionId, state) {
-  const dir = join(root, 'group', sessionId);
+  const dir = join(root, 'session', sessionId);
   await fsp.mkdir(dir, { recursive: true });
   const abs = join(dir, STATE_FILE);
   const body =

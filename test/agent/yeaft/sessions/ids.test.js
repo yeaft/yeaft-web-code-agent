@@ -3,7 +3,7 @@
  *
  * Background: an earlier refactor dropped the random suffix from
  * `nextSessionId`, so re-creating a session with the same display name
- * always produced the same id (`grp_<slug>`) and tripped the
+ * always produced the same id (`session_<slug>`) and tripped the
  * `duplicate` guard in `session-crud.js`. Users hit this when
  * re-creating a session named "Test" after deleting the first one.
  *
@@ -14,21 +14,21 @@ import { describe, it, expect } from 'vitest';
 import { nextSessionId } from '../../../../agent/yeaft/sessions/ids.js';
 
 describe('nextSessionId', () => {
-  it('embeds the slug and prefixes with grp_', () => {
+  it('embeds the slug and prefixes with session_', () => {
     const id = nextSessionId('Hello World');
-    expect(id.startsWith('grp_hello-world_')).toBe(true);
+    expect(id.startsWith('session_hello-world_')).toBe(true);
   });
 
-  it('falls back to the "group" slug when the input is empty', () => {
+  it('falls back to the "session" slug when the input is empty', () => {
     const id = nextSessionId('');
-    expect(id.startsWith('grp_group_')).toBe(true);
+    expect(id.startsWith('session_session_')).toBe(true);
   });
 
   it('caps the slug at 24 chars to keep the total id compact', () => {
     const long = 'a'.repeat(100);
     const id = nextSessionId(long);
-    // `grp_<24 chars>_<8 chars>` = 4 + 24 + 1 + 8 = 37
-    expect(id.length).toBe(37);
+    // `session_<24 chars>_<8 chars>` = 8 + 24 + 1 + 8 = 41
+    expect(id.length).toBe(41);
   });
 
   it('produces a unique id on every call even with the same slug', () => {
