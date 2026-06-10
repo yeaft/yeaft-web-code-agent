@@ -168,13 +168,7 @@
   line-height: 1.4;
 }
 
-/* fix-session-restore-modal-unify: "Restore from disk" panel inside
-   SessionCreateModal. Replaces ad-hoc inline `style=` values that
-   would otherwise hard-code spacing (per CLAUDE.md — tokens only). */
-.restore-panel-header {
-  margin-top: 12px;
-}
-
+/* Inline spinner row in the unified session list (matches token spacing). */
 .restore-loading {
   padding: 12px;
 }

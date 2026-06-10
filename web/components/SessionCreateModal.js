@@ -485,14 +485,15 @@ export default {
     // fix-session-restore-modal-unify: auto-load the "Restore from disk"
     // list whenever the user enters a workdir (matches the old standalone
     // modal's behavior — picking a directory immediately scans it).
+    // Always zero scannedSessions before deciding what to do next so the
+    // unified list never flashes the *previous* workdir's rows while the
+    // new scan is in flight (matches the agentId watcher above).
     'form.workDir'(next, prev) {
       if (next === prev) return;
       this.restoreError = '';
+      this.scannedSessions = [];
       const trimmed = (next || '').trim();
-      if (!trimmed) {
-        this.scannedSessions = [];
-        return;
-      }
+      if (!trimmed) return;
       this.loadRestoreCandidates();
     },
   },
