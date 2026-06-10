@@ -51,8 +51,19 @@ let sharedStore;
 beforeAll(async () => {
   TEST_DIR = mkdtempSync(join(tmpdir(), 'yeaft-loadmore-'));
   sharedStore = new ConversationStore(TEST_DIR);
+  writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({
+    providers: [{
+      name: 'local',
+      baseUrl: 'http://localhost/v1',
+      apiKey: 'test',
+      protocol: 'openai-responses',
+      models: ['m'],
+    }],
+    primaryModel: 'local/m',
+  }, null, 2));
   stubSession = {
     conversationStore: sharedStore,
+    yeaftDir: TEST_DIR,
     config: { model: 'm', availableModels: [] },
     status: { skills: [], mcpServers: [], tools: [] },
     _dreamProgressSink: null,
@@ -252,6 +263,40 @@ describe('handleYeaftLoadMoreHistory — chunk emission', () => {
 });
 
 describe('handleYeaftLoadHistory — pagination cursor priming', () => {
+
+
+  it('refreshes the session_ready model list from config on every history load', async () => {
+    stubSession.config.model = 'stale-model';
+    stubSession.config.availableModels = [{ id: 'stale-model' }];
+    writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({
+      providers: [{
+        name: 'local',
+        baseUrl: 'http://localhost/v1',
+        apiKey: 'test',
+        protocol: 'openai-responses',
+        models: ['fresh-model'],
+      }],
+      primaryModel: 'local/fresh-model',
+    }, null, 2));
+
+    await handleYeaftLoadHistory({ sessionId: 's_model_refresh', limit: 0 });
+
+    const ready = [...outbound].reverse().find(m => m.type === 'yeaft_output' && m.event?.type === 'session_ready');
+    expect(ready.event.model).toBe('fresh-model');
+    expect(ready.event.availableModels.map(m => m.id)).toContain('fresh-model');
+    expect(ready.event.availableModels.map(m => m.id)).not.toContain('stale-model');
+
+    writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({
+      providers: [{
+        name: 'local',
+        baseUrl: 'http://localhost/v1',
+        apiKey: 'test',
+        protocol: 'openai-responses',
+        models: ['m'],
+      }],
+      primaryModel: 'local/m',
+    }, null, 2));
+  });
 
   it('initial group replay emits only the latest window in chronological order', async () => {
     const gid = 'g_initial_latest_window';
