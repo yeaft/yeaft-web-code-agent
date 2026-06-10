@@ -44,6 +44,7 @@ import { createDreamScheduler } from './schedule.js';
 import { listSessions, openSession } from '../sessions/session-store.js';
 import { readGroupState } from './state.js';
 import { DREAM_NUDGE_AFTER_MESSAGES, DREAM_INTERVAL_HOURS } from './limits.js';
+import { syncScope as syncSegmentScope } from '../memory/segment-sync.js';
 
 /**
  * Build the per-call options for runDream. Pure: takes a session and returns
@@ -62,6 +63,9 @@ export function buildRunDreamOpts(session, onProgress) {
     root: memoryRoot,
     language: session.config?.language || 'en',
     llm: makeLlm(session),
+    syncScope: session.memoryIndex && !session.config?._readOnly
+      ? (scope) => syncSegmentScope(memoryRoot, session.memoryIndex, scope)
+      : undefined,
     listSessions: async () => {
       try { return listSessions(sessionsRoot).map(g => g.id); }
       catch { return []; }

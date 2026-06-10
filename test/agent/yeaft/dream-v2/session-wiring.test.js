@@ -11,6 +11,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { buildRunDreamOpts, createV2DreamScheduler } from '../../../../agent/yeaft/dream-v2/session-wiring.js';
+import { writeMemory } from '../../../../agent/yeaft/memory/store-v2.js';
+import { openSegmentIndex } from '../../../../agent/yeaft/memory/index-db.js';
 
 let yeaftDir;
 beforeEach(() => { yeaftDir = mkdtempSync(join(tmpdir(), 'session-wiring-')); });
@@ -38,6 +40,39 @@ describe('buildRunDreamOpts', () => {
     expect(typeof opts.loadOverlapPreamble).toBe('function');
     expect(typeof opts.llm).toBe('function');
     expect(opts.root).toBe(join(yeaftDir, 'memory'));
+  });
+
+  it('wires scoped segment-index sync when a live memory index is available', async () => {
+    const memoryIndex = openSegmentIndex(join(yeaftDir, 'memory', 'index.db'));
+    try {
+      const opts = buildRunDreamOpts({ yeaftDir, adapter: {}, config: {}, memoryIndex });
+      await writeMemory({ kind: 'group', id: 'g1' }, [
+        '---',
+        'id: seg-1',
+        'scope: group/g1',
+        'kind: fact',
+        'tags: [test]',
+        'updatedAt: 2026-04-28T00:00:00Z',
+        'sourceMessages: []',
+        '---',
+        'Fresh dream memory.',
+      ].join('\n'), { root: opts.root });
+
+      opts.syncScope('group/g1');
+      expect(memoryIndex.listByScope('group/g1').map(s => s.id)).toEqual(['seg-1']);
+    } finally {
+      memoryIndex.close();
+    }
+  });
+
+  it('omits scoped segment-index sync in read-only mode', () => {
+    const memoryIndex = openSegmentIndex(join(yeaftDir, 'memory', 'index.db'));
+    try {
+      const opts = buildRunDreamOpts({ yeaftDir, adapter: {}, config: { _readOnly: true }, memoryIndex });
+      expect(opts.syncScope).toBeUndefined();
+    } finally {
+      memoryIndex.close();
+    }
   });
 
   it('listSessions returns empty when no groups dir', async () => {

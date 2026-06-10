@@ -441,6 +441,7 @@ export async function loadSession(options = {}) {
     config,
     engine,
     trace,
+    memoryIndex,
   };
   const dreamScheduler = createV2DreamScheduler(partialSession);
 
@@ -536,6 +537,7 @@ export async function loadSession(options = {}) {
     trace,
     yeaftDir,
     status,
+    memoryIndex,
     amsRegistry,
     toolStats,
     shutdown,

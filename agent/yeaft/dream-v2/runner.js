@@ -65,6 +65,7 @@ import { tsForBackup, pruneOldSnapshots } from './snapshot.js';
  * @property {() => Promise<Array<{path:string, summary:string}>>} [listTopicSummaries]
  * @property {(target: string) => Promise<Array<{path:string, summary:string}>>} [siblingTopicsFor]
  * @property {(event: object) => void} [onProgress]
+ * @property {(scope: string) => void|Promise<void>} [syncScope] — best-effort derived FTS index refresh after a successful target write
  * @property {object} [limits]                — override DEFAULT_LIMITS
  * @property {() => string} [nowIso]
  */
@@ -210,7 +211,8 @@ export async function runDream(opts) {
         siblingTopicsFor: opts.siblingTopicsFor,
         language: opts.language,
       });
-      targetsReport.push({ ...r, sources: merged.sources.length, status: 'done' });
+      const syncWarning = await syncAppliedScope(r.scope || merged.target, opts.syncScope, onProgress);
+      targetsReport.push({ ...r, sources: merged.sources.length, status: 'done', ...(syncWarning ? { syncWarning } : {}) });
     } catch (err) {
       targetsReport.push({
         target: merged.target,
@@ -298,6 +300,19 @@ function deriveGroupFilter(filter) {
 function sourceGroupId(mergedTarget) {
   const src = Array.isArray(mergedTarget?.sources) ? mergedTarget.sources[0] : null;
   return src && typeof src.sessionId === 'string' ? src.sessionId : '';
+}
+
+async function syncAppliedScope(scope, syncScope, onProgress) {
+  if (!scope || typeof syncScope !== 'function') return null;
+  try {
+    await syncScope(scope);
+    onProgress({ phase: 'apply', target: scope, status: 'synced' });
+    return null;
+  } catch (err) {
+    const message = err?.message || String(err);
+    onProgress({ phase: 'apply', target: scope, status: 'sync-warning', error: message });
+    return message;
+  }
 }
 
 async function safeCall(fn, fallback) {

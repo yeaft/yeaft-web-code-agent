@@ -81,13 +81,15 @@ describe('runDream — happy path', () => {
     const diffMessages = Array.from({ length: 25 }, (_, i) => ({
       id: `m${i + 1}`, role: i % 2 ? 'assistant' : 'user', vpId: 'zhang-san', body: `msg ${i + 1}`,
     }));
-    await runDream({
+    const synced = [];
+    const r = await runDream({
       root,
       llm: makeLlm(),
       listSessions: async () => ['g-eng'],
       countMessages: async () => diffMessages.length,
       loadGroupDiff: async () => diffMessages,
       loadOverlapPreamble: async () => [],
+      syncScope: async (scope) => { synced.push(scope); },
       nowIso: () => '2026-04-28T03:07:00Z',
     });
     // user/memory.md was created by Apply.
@@ -98,11 +100,42 @@ describe('runDream — happy path', () => {
     expect(existsSync(join(root, 'group', 'g-eng', 'memory.md'))).toBe(true);
     // group/g-eng/vp/zhang-san was written via the assistant-vp hard rule.
     expect(existsSync(join(root, 'group', 'g-eng', 'vp', 'zhang-san', 'memory.md'))).toBe(true);
+    expect(synced.sort()).toEqual(r.targets.map(t => t.scope).sort());
+    expect(synced).toContain('user');
+    expect(synced).toContain('group/g-eng');
+    expect(synced).toContain('group/g-eng/vp/zhang-san');
     // Bookkeeping: g-eng's lastDreamMessageId advanced to the tail.
     const state = await readGroupState(root, 'g-eng');
     expect(state.lastDreamMessageId).toBe('m25');
     expect(state.messageCount).toBe(25);
     expect(state.lastDreamAt).toBe('2026-04-28T03:07:00Z');
+  });
+
+  it('keeps dream successful when post-apply scope sync fails', async () => {
+    const diffMessages = Array.from({ length: 25 }, (_, i) => ({
+      id: `s${i + 1}`, role: 'user', body: `sync msg ${i + 1}`,
+    }));
+    const events = [];
+    const r = await runDream({
+      root,
+      llm: makeLlm(),
+      listSessions: async () => ['g-sync'],
+      countMessages: async () => diffMessages.length,
+      loadGroupDiff: async () => diffMessages,
+      loadOverlapPreamble: async () => [],
+      syncScope: async (scope) => {
+        if (scope === 'user') throw new Error('index locked');
+      },
+      onProgress: (event) => events.push(event),
+      nowIso: () => '2026-04-28T03:07:00Z',
+    });
+
+    const userTarget = r.targets.find(t => t.target === 'user');
+    expect(userTarget.status).toBe('done');
+    expect(userTarget.syncWarning).toBe('index locked');
+    expect(events).toContainEqual({ phase: 'apply', target: 'user', status: 'sync-warning', error: 'index locked' });
+    const state = await readGroupState(root, 'g-sync');
+    expect(state.lastDreamMessageId).toBe('s25');
   });
 
   it('uses overlap preamble when prior dream cursor exists', async () => {

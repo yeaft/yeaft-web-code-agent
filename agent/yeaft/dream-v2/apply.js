@@ -267,7 +267,7 @@ export async function applyMergedTarget(merged, opts) {
       summaryMdLength: (summaryMd || '').length,
     });
   }
-  return { target: merged.target, kind: merged.kind, batches: batchesUsed };
+  return { target: merged.target, scope: scopeDirRel, kind: merged.kind, batches: batchesUsed };
 }
 
 // ─── helpers ──────────────────────────────────────────────────
