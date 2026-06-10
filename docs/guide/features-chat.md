@@ -4,6 +4,6 @@
 >
 > See also:
 > - [Copilot Mode](./user/copilot-mode.md) — same chat surface, GitHub Copilot CLI backend
-> - [Yeaft Group Mode](./user/yeaft-group.md) — multi-VP collaboration mode
+> - [Yeaft Sessions](./user/yeaft-group.md) — multi-VP collaboration mode
 >
 > The old URL is preserved for external links; future edits go to the new location.

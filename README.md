@@ -24,7 +24,7 @@ Yeaft is not bound to a single AI vendor. When starting a new session, choose:
 | --- | --- |
 | **Claude Code** | 1:1 chat with Claude Code CLI — full Claude toolset |
 | **Copilot** | 1:1 chat via GitHub Copilot CLI (ACP protocol) — pick any Claude / GPT model |
-| **Yeaft Group** | Multi-VP group collaboration, parallel fan-out, cross-session persistent memory |
+| **Yeaft Sessions** | Multi-VP group collaboration, parallel fan-out, cross-session persistent memory |
 
 ### Chat (Claude Code)
 
@@ -51,7 +51,7 @@ The same chat surface but powered by `copilot --acp` instead of `claude`. Speaks
 - Session resume + history
 - Uses your existing GitHub Copilot OAuth — no separate API key
 
-### Yeaft Group Mode
+### Yeaft Sessions
 
 Multi-VP (Virtual Person) parallel collaboration, powered by Yeaft's own engine (no CLI subprocess required).
 
@@ -122,11 +122,11 @@ Integrated development environment with terminal, Git operations, file browser, 
 
 ## Prerequisites
 
-- **Server**: Node.js >= 18, Docker (recommended for production)
-- **Agent**: Node.js >= 18, plus at least one of:
+- **Server**: Node.js >= 22.5, Docker (recommended for production)
+- **Agent**: Node.js >= 22.5, plus at least one of:
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — required for Claude Chat mode
   - [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) — required for Copilot mode (optional)
-  - **Yeaft engine is bundled** in the npm package; no extra CLI required for Yeaft Group Mode
+  - **Yeaft engine is bundled** in the npm package; no extra CLI required for Yeaft Sessions
 - **Web Client**: Modern browser (Chrome, Firefox, Safari, Edge)
 
 ## Architecture
@@ -400,7 +400,7 @@ claude-web-chat/
 
 GitHub Actions workflows included:
 
-- **CI** (`ci.yml`): Tests on Node 18/20/22 + frontend build (manual trigger via `workflow_dispatch`)
+- **CI** (`ci.yml`): Tests on Node 24 + frontend build (manual trigger via `workflow_dispatch`)
 - **Release** (`release.yml`): On tag `release-*` — runs tests, publishes `@yeaft/webchat-agent` to npm, builds Docker image to GHCR, creates GitHub Release
 
 ### Publishing a release

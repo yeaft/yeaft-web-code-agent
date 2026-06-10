@@ -218,11 +218,9 @@ Per-VP / per-group / per-user totals live in `web/stores/chat.js` store state, v
 
 ## Hot Config Reload
 
-Edit `~/.yeaft/config.json` without restarting the Agent:
-- Settings → Yeaft / LLM tab → **Reload config**
-- Or call Agent API: `POST /api/yeaft/reload-config`
+The Agent re-reads `~/.yeaft/config.json` at the start of every turn, so **model and provider changes typically take effect without a restart** — just edit the file and start a new turn. The next `engine.query()` will pick up the new config and lazy-rebuild the adapter for any new (provider, model) pair.
 
-Reload will: re-parse config → rebuild AdapterRouter → new turns use the new config (in-flight turns finish on the old one).
+Changes that **do** require restarting the Agent (read at startup, not per-turn): `language`, `debug`, global `maxContextTokens` / `messageTokenBudget`.
 
 ## Debugging
 

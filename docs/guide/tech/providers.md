@@ -156,14 +156,15 @@ If the new provider needs special config (like Copilot's model picker / Allow al
 
 ## Not in This Layer
 
-- **Yeaft engine** — not a ChatProvider. It uses dedicated wire types `yeaft_output` / `yeaft_group_chat` because its event model (parallel VP turns, group fan-out, cross-session memory) differs from 1:1 chat
+- **Yeaft engine** — not a ChatProvider. It uses dedicated wire types `yeaft_output` / `yeaft_session_chat` because its event model (parallel VP turns, group fan-out, cross-session memory) differs from 1:1 chat
 - **WebSocket transport** — base.js doesn't care about WebSocket; the driver pushes messages via `ctx.sendToServer`, with transport provided by message-router
 - **Auth** — driver doesn't verify tokens; server has already done the handshake when agent boots
 
 ## Tests
 
-- Unit: `test/agent/providers-*.test.js`
-- Integration: `test/agent/copilot-acp-flow.test.js` covers the full spawn → session/new → session/prompt → events flow
+- Unit: `test/agent/providers/*.test.js`
+- Copilot driver: `test/agent/providers/copilot.test.js`, `copilot-history.test.js`, `copilot-models.test.js`
+- ACP client: `test/agent/providers/acp-client.test.js`
 
 ## Reference Implementations
 

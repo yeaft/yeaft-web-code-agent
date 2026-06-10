@@ -41,17 +41,17 @@ The Agent capability-detects each backend at startup. A backend doesn't appear i
 
 - **Claude Code missing** → run `claude --version` on the agent machine; if it fails, install `@anthropic-ai/claude-code` and run `claude login`
 - **Copilot missing** → run `copilot --version`; if it fails, install GitHub Copilot CLI and run `copilot auth login`
-- **Yeaft Group missing** → very unusual; the engine is bundled. Update the agent with `yeaft-agent upgrade`.
+- **Yeaft Sessions missing** → very unusual; the engine is bundled. Update the agent with `yeaft-agent upgrade`.
 
 Restart the agent after installing/authing a new CLI — capability detection only runs at startup.
 
-### Claude Code vs Copilot vs Yeaft Group — which should I use?
+### Claude Code vs Copilot vs Yeaft Sessions — which should I use?
 
 See [Choose a Session Backend](./user/choose-backend.md). Short version:
 
 - **Claude Code** for 1:1 chat with the full Claude tool set
 - **Copilot** for 1:1 chat where you want to compare Claude vs GPT models or you already pay for Copilot
-- **Yeaft Group** for multi-VP parallel collaboration with cross-session memory
+- **Yeaft Sessions** for multi-VP parallel collaboration with cross-session memory
 
 ## Copilot Mode
 
@@ -61,13 +61,13 @@ Copilot CLI runs in `--acp` mode and asks for permission per session before it c
 
 ### Can I pick a non-Claude/non-GPT model in Copilot Mode?
 
-Only what Copilot CLI exposes — that's currently Claude family (Sonnet 4 / 4.5) and GPT family (4.1 / 5 etc.). If you need a different vendor, use Yeaft Group Mode and add the provider to `~/.yeaft/config.json`.
+Only what Copilot CLI exposes — that's currently Claude family (Sonnet 4 / 4.5) and GPT family (4.1 / 5 etc.). If you need a different vendor, use Yeaft Sessions and add the provider to `~/.yeaft/config.json`.
 
 ### Copilot says "not authenticated" but I'm logged into VS Code Copilot
 
 The CLI uses a separate OAuth token from the IDE plugin. Run `copilot auth login` on the agent machine to authenticate the CLI specifically.
 
-## Yeaft Group Mode
+## Yeaft Sessions
 
 ### "No LLM provider configured" when sending a message
 
@@ -85,7 +85,7 @@ Mention each VP explicitly: `@designer @dev please review this layout`. Mentions
 
 ### How do I check what's in a VP's memory?
 
-The memory segments live in `~/.yeaft/scopes/vp/<vpId>/segments/*.md` on the agent machine. Each segment is a plain markdown file you can read directly.
+The memory segments live in `~/.yeaft/memory/<scope>/memory.md` on the agent machine (one `memory.md` per scope, containing multiple segments). Each file is plain markdown you can read directly.
 
 ## Yeaft Engine Config
 
@@ -110,7 +110,7 @@ Yes — use per-model `protocol` overrides:
 }
 ```
 
-See [Yeaft Engine Config → Per-Model Protocol](./yeaft-config.md#protocol-resolution).
+See [Yeaft Engine Config → Per-Model Protocol](./yeaft-config.md#protocol-resolution-order).
 
 ### Hot reload — do I need to restart the agent after editing `config.json`?
 

@@ -1,12 +1,12 @@
 # Choose a Session Backend
 
-Yeaft puts three AI backends side-by-side in the same Web UI — you pick one per task. They're **not mutually exclusive**: a single Agent can run Claude Code sessions, Copilot sessions and Yeaft Groups in parallel without interfering with each other.
+Yeaft puts three AI backends side-by-side in the same Web UI — you pick one per task. They're **not mutually exclusive**: a single Agent can run Claude Code sessions, Copilot sessions and Yeaft sessions in parallel without interfering with each other.
 
 | Backend | Good for | Not ideal for |
 | --- | --- | --- |
 | **Claude Code Chat** | Long project collaboration, deep code understanding, requires `/skills` and MCP tools | No Claude Code CLI installed; budget-tight workflows |
 | **Copilot Mode** | Existing GitHub Copilot subscription, want to swap between GPT-5 / Gemini / Claude on demand, standardized ACP protocol | Need `/compact`; depend on Claude-only skill system |
-| **Yeaft Group Mode** | Multi-role parallel discussion, cross-task persistent memory, custom VPs (persona + model + tools) | Single-thread 1:1 chat (Group Mode is for groups, not 1:1) |
+| **Yeaft Sessions** | Multi-VP parallel discussion, cross-session persistent memory, custom VPs (persona + model + tools) | Single-thread 1:1 chat (Yeaft sessions are multi-VP today) |
 
 ## Core differences
 
@@ -24,12 +24,12 @@ Yeaft puts three AI backends side-by-side in the same Web UI — you pick one pe
 - Tool permissions confirmed **per call via ask-user popup** (you can toggle "Allow all tools" to skip)
 - Session history lives in `~/.copilot/session-store.db` and can be resumed
 
-### Yeaft Group Mode (multi-VP group collaboration on the in-house engine)
+### Yeaft Sessions (multi-VP collaboration on the in-house engine)
 
 - No external CLI dependency — Yeaft ships its own query loop, memory and tools
-- A group hosts multiple **VPs (Virtual Persons)** — each VP has its own persona, model and toolset
+- A session hosts multiple **VPs (Virtual Persons)** — each VP has its own persona, model and toolset
 - A single user message **fan-outs in parallel** to multiple VPs, each replies independently
-- **H2-AMS persistent memory** — keeps VP / group / user / feature scope across sessions
+- **H2-AMS persistent memory** — keeps vp / group / user / feature / global scopes across sessions
 - Multi-provider LLM: configure OpenAI / Anthropic / GitHub Copilot in any combination via `~/.yeaft/config.json`
 
 ## How to pick in the UI
@@ -43,23 +43,23 @@ Sidebar `+` opens the session config modal:
 3. Pick **Working directory**
 4. If Copilot, a **model picker** and **Allow all tools** checkbox appear
 
-### Yeaft Group Mode
+### Yeaft Sessions
 
-Sidebar tab bar at the top → switch to **Yeaft**, then use `+` to create a group:
+Sidebar tab bar at the top → switch to **Yeaft**, then use `+` to create a session:
 
-1. Enter group name
-2. Add VPs (each picks model, optional persona, optional tool whitelist)
-3. Send a user message to the group; the VPs reply **in parallel**
+1. Enter session name
+2. Pick the VPs you want in this session (VPs are reusable; build them in the VP Library)
+3. Send a user message; the VPs reply **in parallel** (use `@VPname` to address a subset)
 
 ## Which one should I use?
 
 - **Write code daily + already using Claude Code** → Claude Code Chat
 - **Want it cheaper / want GPT-5 / company has Copilot Enterprise** → Copilot Mode
 - **Want "PM + Dev + Reviewer" to discuss a feature with you simultaneously** → Crew Mode (on top of Claude Code)
-- **Want multiple VPs to remember you long-term / continue memory across tasks / mix OpenAI + Anthropic freely** → Yeaft Group Mode
+- **Want multiple VPs to remember you long-term / continue memory across tasks / mix OpenAI + Anthropic freely** → Yeaft Sessions
 
 Next:
 
 - [Claude Code Chat](./chat-mode.md)
 - [Copilot Mode](./copilot-mode.md)
-- [Yeaft Group Mode](./yeaft-group.md)
+- [Yeaft Sessions](./yeaft-group.md)

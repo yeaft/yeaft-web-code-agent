@@ -12,7 +12,7 @@ Yeaft 不绑定单一 AI 后端。打开一个新会话时你能选：
 | --- | --- | --- |
 | **Claude Code** | 单 1:1 chat，配 Claude 全套工具 | [Chat 模式](./user/chat-mode.md) |
 | **Copilot** | 同样 1:1，但走 GitHub Copilot CLI（ACP 协议），可挑 Claude / GPT 系 model | [Copilot 模式](./user/copilot-mode.md) |
-| **Yeaft Group** | 多 VP 群组协作，并行 fan-out，跨 session 持久记忆 | [Yeaft Group Mode](./user/yeaft-group.md) |
+| **Yeaft 会话** | 多 VP 群组协作，并行 fan-out，跨 session 持久记忆 | [Yeaft 会话](./user/yeaft-group.md) |
 
 不确定选哪个？看 [选择会话后端](./user/choose-backend.md)。
 
@@ -27,7 +27,7 @@ Yeaft 不绑定单一 AI 后端。打开一个新会话时你能选：
 
 ![Chat](/images/zh-CN/chat.jpg)
 
-### 👥 Yeaft Group Mode
+### 👥 Yeaft 会话
 - 拉一个 group，里面塞多个 VP（Virtual Person，可独立配人格 / 模型 / 工具）
 - `@mention` 决定哪些 VP 接管这条消息，并行 fan-out
 - 跨 session 持久记忆（H2-AMS）— 新 session 也记得你上次说的事
@@ -61,8 +61,8 @@ PM / 开发 / 审查 / 测试 / 架构师 / 设计师并行跑 feature。
 
 ## 前置要求
 
-- **Server**：Node.js >= 18，推荐 Docker 部署
-- **Agent**：Node.js >= 18，外加：
+- **Server**：Node.js >= 22.5，推荐 Docker 部署
+- **Agent**：Node.js >= 22.5，外加：
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)（用 Claude Chat 模式必装）
   - [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)（可选，用 Copilot 模式时装）
   - Yeaft 引擎内置在 npm 包里，**不需要额外 CLI**

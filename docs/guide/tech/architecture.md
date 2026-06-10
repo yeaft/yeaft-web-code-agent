@@ -80,7 +80,7 @@ claude-web-chat/
 │   │   ├── engine.js        # Main query loop
 │   │   ├── memory/          # H2-AMS memory
 │   │   ├── llm/             # LLM adapters (anthropic / openai-responses)
-│   │   ├── groups/          # Group Mode orchestration
+│   │   ├── sessions/        # Session orchestration (multi-VP fan-out)
 │   │   ├── tools/           # 40+ built-in tools
 │   │   └── ...
 │   ├── claude.js            # Legacy Claude Chat path (kept)
@@ -115,9 +115,9 @@ Web → ws "send_message" → Server → ws agent
   → ws "claude_output" → Server → ws Web → MessageList render
 ```
 
-### Yeaft Group Mode
+### Yeaft Sessions
 ```
-Web → ws "yeaft_group_chat" → Server → ws agent
+Web → ws "yeaft_session_chat" → Server → ws agent
   → coordinator.ingest() → Promise.all(runVpTurn × VPs)
   → Engine.query() → tool exec → LLM stream → events
   → web-bridge.js translates to claude_output envelope
@@ -127,7 +127,7 @@ Web → ws "yeaft_group_chat" → Server → ws agent
 ## CI/CD
 
 Built-in GitHub Actions:
-- **CI** (`ci.yml`): Node 18/20/22 tests + frontend build (`workflow_dispatch` manual)
+- **CI** (`ci.yml`): Node 24 tests + frontend build (`workflow_dispatch` manual)
 - **Release** (`release.yml`): push `release-*` tag → auto-publish npm package + Docker image + GitHub Release
 
 ## What's Next

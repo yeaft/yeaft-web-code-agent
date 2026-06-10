@@ -17,7 +17,7 @@ Yeaft Web 端的键盘快捷键速查。
 | **Enter** | 发送消息 |
 | **Shift+Enter** | 换行 |
 | **/** | 打开斜杠命令自动补全（仅 Claude Code） |
-| **@** | 打开 mention 自动补全（Crew 选角色 / Yeaft Group 选 VP） |
+| **@** | 打开 mention 自动补全（Crew 选角色 / Yeaft 会话 选 VP） |
 | **Ctrl+V** （Cmd+V） | 粘贴文本或图片（图片自动成附件） |
 | **↑** | 调出上一条已发送消息（草稿恢复） |
 
@@ -77,7 +77,7 @@ Yeaft Web 端的键盘快捷键速查。
 | **Ctrl+点击 sidebar session** | 在新面板打开（开启分屏） |
 | 面板头部 **×** | 关闭面板 |
 
-## Yeaft Group Mode
+## Yeaft 会话
 
 | 快捷键 | 作用 |
 | --- | --- |

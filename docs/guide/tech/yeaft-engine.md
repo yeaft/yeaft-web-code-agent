@@ -2,7 +2,7 @@
 
 Yeaft's own AI engine runs in `agent/yeaft/` and depends on **no external CLI** (neither Claude nor Copilot is required). It has its own query loop, memory system, tool registry, and LLM router. This chapter covers its **core architecture** and **turn lifecycle**.
 
-> Audience: developers who want to **read or modify the Yeaft engine**. For the end-user view see [Yeaft Group Mode](../user/yeaft-group.md).
+> Audience: developers who want to **read or modify the Yeaft engine**. For the end-user view see [Yeaft Sessions](../user/yeaft-group.md).
 
 ## Module Layout
 
@@ -14,7 +14,7 @@ agent/yeaft/
   prompts.js       — bilingual system prompt builder
   models.js        — Model registry (context window, output limit, provider inference)
 
-  groups/          — Group Mode orchestration (coordinator, roster, group-store, pre-flow)
+  sessions/        — Session orchestration (coordinator, roster, store, pre-flow)
   routing/         — turn-level routing + loop guard
   router/          — continuity / thinking routing strategies
   memory/          — H2-AMS memory subsystem (see yeaft-memory.md)
@@ -22,7 +22,7 @@ agent/yeaft/
   tools/           — built-in tool registry
   templates/       — system prompt templates
   conversation/    — message persistence + search
-  dream-v2/        — background memory maintenance
+  dream/        — background memory maintenance
   compact/         — context compaction strategy
   eval/            — evaluation scripts
 
@@ -120,7 +120,7 @@ A session contains:
 - shared `memory` / `tools` / `llm` subsystems
 
 ### Group Mode
-`groups/coordinator.js` on receiving `yeaft_group_chat`:
+`sessions/coordinator.js` on receiving `yeaft_session_chat`:
 
 ```js
 async ingest({ groupId, text, mentions, attachments }) {
@@ -181,7 +181,7 @@ const result = await registry.execute(toolName, input, ctx);
 
 Tools are filtered by mode: `unified` mode gets the full 40+ tool set; `dream` mode only gets memory-maintenance-related tools.
 
-Tool implementations are split by category — see [Yeaft Group Mode](../user/yeaft-group.md) for the full list.
+Tool implementations are split by category — see [Yeaft Sessions](../user/yeaft-group.md) for the full list.
 
 ## Memory / LLM / Group Subsystems
 
@@ -202,7 +202,7 @@ Each has its own chapter:
 
 - `agent/yeaft/engine.js` — main query loop
 - `agent/yeaft/session.js` — Session orchestrator
-- `agent/yeaft/groups/coordinator.js` — Group fan-out
+- `agent/yeaft/sessions/coordinator.js` — Multi-VP fan-out within a session
 - `agent/yeaft/prompts.js` — System prompt builder
 - `agent/yeaft/web-bridge.js` — Event → wire translator
 - `agent/yeaft/tools/registry.js` — Tool registry

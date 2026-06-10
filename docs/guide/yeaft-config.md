@@ -89,7 +89,6 @@ That's enough — the engine will run.
 | `credentialProvider` | `string` | △ | dynamic credential provider name (or use `apiKey`) |
 | `protocol` | `'anthropic' \| 'openai-responses'` | — | provider default wire protocol |
 | `models` | `(string \| ModelEntry)[]` | ✓ | supported model list |
-| `defaultHeaders` | `Record<string, string>` | — | extra headers per request |
 
 ### Model Entry
 
@@ -106,9 +105,10 @@ Both shapes can be mixed:
 | --- | --- | :---: | --- |
 | `id` | `string` | ✓ | model id the vendor recognizes |
 | `protocol` | `'anthropic' \| 'openai-responses'` | — | overrides provider protocol |
-| `displayName` | `string` | — | UI model picker label |
 | `contextWindow` | `number` | — | overrides `models.js` default |
-| `maxOutputTokens` | `number` | — | overrides default output cap |
+| `maxOutput` | `number` | — | overrides default output cap |
+
+> Other keys on a model entry are silently dropped. Display names / pricing live in the bundled registry, not in user config.
 
 ### Protocol Resolution Order
 (See [Yeaft LLM Layer § Protocol Resolution](./tech/yeaft-llm.md#protocol-resolution-key) for details.)
@@ -171,17 +171,18 @@ Examples:
 }
 ```
 
-### Azure OpenAI (baseUrl includes deployment path)
+### Azure OpenAI (baseUrl includes deployment path + api-version)
 ```json
 {
   "name": "azure-openai",
-  "baseUrl": "https://<resource>.openai.azure.com/openai/deployments/<deployment>",
+  "baseUrl": "https://<resource>.openai.azure.com/openai/deployments/<deployment>?api-version=2024-12-01-preview",
   "apiKey": "<azure-key>",
   "protocol": "openai-responses",
-  "defaultHeaders": { "api-version": "2024-12-01-preview" },
   "models": ["gpt-5"]
 }
 ```
+
+> The engine has no per-provider header-injection knob — pass Azure's `api-version` as a query string on `baseUrl` instead.
 
 ### Self-Hosted OpenAI-Compatible Proxy
 ```json
@@ -217,11 +218,12 @@ Examples:
 
 ## Hot Reload
 
-Edit `config.json` without restarting the Agent:
-- **Settings → Yeaft / LLM → Reload config**
-- Or `POST /api/yeaft/reload-config`
+The Agent re-reads `~/.yeaft/config.json` at the start of every turn, so **model and provider changes typically take effect without a restart** — just edit the file and start a new turn.
 
-Reload: re-parse config → rebuild AdapterRouter → new turns use the new config (in-flight turns finish on the old one).
+Changes that **do** require restarting the Agent:
+- `language` / `debug`
+- Global `maxContextTokens` / `messageTokenBudget`
+- Anything else read at startup rather than per-turn
 
 ## Verify Configuration
 

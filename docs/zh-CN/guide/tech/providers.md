@@ -156,14 +156,15 @@ driver 内部用任何 SDK / CLI / API，但**输出**必须翻译成 `claude_ou
 
 ## 不在这一层的东西
 
-- **Yeaft 引擎** — 不是 ChatProvider。它是独立的 wire type `yeaft_output` / `yeaft_group_chat`，因为它的事件模型（VP 并行 turn、group fan-out、跨 session 记忆）和单 1:1 chat 不一样
+- **Yeaft 引擎** — 不是 ChatProvider。它是独立的 wire type `yeaft_output` / `yeaft_session_chat`，因为它的事件模型（VP 并行 turn、group fan-out、跨 session 记忆）和单 1:1 chat 不一样
 - **WebSocket transport** — base.js 不管 WebSocket，driver 通过 `ctx.sendToServer` 推消息，transport 由 message-router 提供
 - **鉴权** — driver 不管 token 验证，agent 启动时 server 已经握过手
 
 ## 测试
 
-- 单元测试：`test/agent/providers-*.test.js`
-- 集成测试：`test/agent/copilot-acp-flow.test.js` 跑完整的 spawn → session/new → session/prompt → 收事件流程
+- 单元测试：`test/agent/providers/*.test.js`
+- Copilot driver 测试：`test/agent/providers/copilot.test.js` / `copilot-history.test.js` / `copilot-models.test.js`
+- ACP 协议层：`test/agent/providers/acp-client.test.js`
 
 ## 参考实现
 

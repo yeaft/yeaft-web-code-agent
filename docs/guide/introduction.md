@@ -12,7 +12,7 @@ Yeaft doesn't lock you to a single AI backend. When you start a new session you 
 | --- | --- | --- |
 | **Claude Code** | 1:1 chat with the full Claude toolset | [Chat Mode](./user/chat-mode.md) |
 | **Copilot** | Same 1:1 shape but via GitHub Copilot CLI (ACP), pick any Claude / GPT model | [Copilot Mode](./user/copilot-mode.md) |
-| **Yeaft Group** | Multi-VP group collaboration, parallel fan-out, cross-session persistent memory | [Yeaft Group Mode](./user/yeaft-group.md) |
+| **Yeaft Sessions** | Multi-VP group collaboration, parallel fan-out, cross-session persistent memory | [Yeaft Sessions](./user/yeaft-group.md) |
 
 Not sure which? See [Choose a Session Backend](./user/choose-backend.md).
 
@@ -27,7 +27,7 @@ Not sure which? See [Choose a Session Backend](./user/choose-backend.md).
 
 ![Chat](/images/chat.jpg)
 
-### 👥 Yeaft Group Mode
+### 👥 Yeaft Sessions
 - Create a group, drop multiple VPs (Virtual Persons, independently configurable persona / model / tools)
 - `@mention` decides which VPs handle the message — parallel fan-out
 - Cross-session persistent memory (H2-AMS) — VPs remember what you said last time
@@ -61,8 +61,8 @@ User activity / agent status / traffic stats.
 
 ## Prerequisites
 
-- **Server**: Node.js >= 18, Docker recommended for production
-- **Agent**: Node.js >= 18, plus:
+- **Server**: Node.js >= 22.5, Docker recommended for production
+- **Agent**: Node.js >= 22.5, plus:
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (required for Claude Chat mode)
   - [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) (optional, required for Copilot mode)
   - Yeaft engine is bundled in the npm package — **no extra CLI needed**

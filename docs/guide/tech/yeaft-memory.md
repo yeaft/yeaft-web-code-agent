@@ -1,8 +1,8 @@
 # Yeaft Memory System (H2-AMS)
 
-H2-AMS (Hierarchical 2-layer Active Memory Set) is the **cross-session persistent memory** of the Yeaft engine. Before each turn the engine actively recalls relevant memory and injects it into the system prompt; after each turn it uses an LLM to amend memory. This chapter covers the **architecture**, **scope model**, and **read/write paths**.
+H2-AMS is the **cross-session persistent memory** subsystem of the Yeaft engine. It combines an in-memory Active Memory Set with a SQLite FTS pre-flow recall layer (see `agent/yeaft/memory/DESIGN-H2-AMS.md` for the long-form rationale). Before each turn the engine actively recalls relevant memory and injects it into the system prompt; after each turn it uses an LLM to amend memory. This chapter covers the **architecture**, **scope model**, and **read/write paths**.
 
-> Audience: developers who want to understand / debug / extend Yeaft memory. End-user blurb in [Yeaft Group Mode](../user/yeaft-group.md#what-can-the-memory-system-do).
+> Audience: developers who want to understand / debug / extend Yeaft memory. End-user blurb in [Yeaft Sessions](../user/yeaft-group.md#what-the-memory-system-does).
 
 ## Design Goals
 
@@ -21,15 +21,15 @@ H2-AMS (Hierarchical 2-layer Active Memory Set) is the **cross-session persisten
                   ↓
 ┌─────────────────────────────────────────────────────┐
 │ AMS (Active Memory Set) — in-memory 3-layer cache    │
-│   • Resident summary  — <scope>/summary.md          │
+│   • Resident summary  — Layer-A summary              │
 │   • Recent            — recent high-priority segs    │
 │   • OnDemand          — FTS-recalled relevant segs   │
 └─────────────────┬───────────────────────────────────┘
                   │
                   ↓
 ┌─────────────────────────────────────────────────────┐
-│ Segment Store — <scope>/segments/*.md atomic segs    │
-│ Summary Store — <scope>/summary.md  Layer-A summary  │
+│ Segment Store — <scope>/memory.md (multiple segs)    │
+│ Summary Store — Layer-A summary blob                 │
 │ FTS5 Index    — SQLite FTS5 (one row per segment)    │
 └─────────────────────────────────────────────────────┘
                   ↑
@@ -37,7 +37,7 @@ H2-AMS (Hierarchical 2-layer Active Memory Set) is the **cross-session persisten
 ┌─────────────────────────────────────────────────────┐
 │ Dream Loop — background                              │
 │   • Slice conversation into atomic segments          │
-│   • LLM updates summary.md                           │
+│   • LLM updates Layer-A summary                      │
 │   • Mirror to FTS index                              │
 └─────────────────────────────────────────────────────┘
 ```
@@ -48,19 +48,19 @@ H2-AMS (Hierarchical 2-layer Active Memory Set) is the **cross-session persisten
 
 | Scope | Meaning | Who reads / writes |
 | --- | --- | --- |
-| `user/<userId>` | User-level profile / preference | All VPs / groups of this user |
+| `user/<userId>` | User-level profile / preference | All VPs / sessions of this user |
 | `vp/<vpId>` | Persona memory of a single VP | That VP (private) |
 | `vp/<vpId>/sub/<subId>` | Nested scope for VP sub-agent | That sub-agent |
-| `group/<groupId>` | Group-shared | All VPs in this group |
+| `group/<groupId>` | Session-shared (the on-disk name is still `group/`) | All VPs in this session |
 | `feature/<featureId>` | Feature-level collaborative memory | VPs working on this feature |
 | `global` | Global (product-level common knowledge) | Everyone |
 
 ### VP and Sub-Agent
 VP is a scope owner at the same level as user. A VP's sub-agent is a nested scope (`vp/X/sub/Y`) with its own private memory.
 
-### Group Fan-out Visibility
-When multiple VPs run in parallel in a group:
-- Each VP sees its own `vp/<vpId>` memory + the `group/<groupId>` memory + the `user/<userId>` memory
+### Session Fan-out Visibility
+When multiple VPs run in parallel in a session:
+- Each VP sees its own `vp/<vpId>` memory + the session-level (`group/<groupId>`) memory + the `user/<userId>` memory
 - They **don't** share transcripts (each VP's conversation history is its own)
 - VP→VP cross-visibility = via scope-aware pre-flow recall, **not** via a shared shard
 
@@ -70,31 +70,33 @@ Use the `route_forward` tool to pass task context explicitly.
 ## Storage Primitives
 
 ### Segment Store (`segment-store.js`)
-Atomic memory segment, stored as markdown:
+On disk each scope owns **one** `memory.md` file that bundles multiple atomic segments:
 
 ```
-~/.yeaft/<scope>/segments/<segment-id>.md
+~/.yeaft/memory/user/memory.md
+~/.yeaft/memory/vp/<vpId>/memory.md
+~/.yeaft/memory/group/<groupId>/memory.md
+~/.yeaft/memory/feature/<featureId>/memory.md
+~/.yeaft/memory/topic/<l1>/memory.md
+~/.yeaft/memory/topic/<l1>/<l2>/memory.md
 ```
 
-Each segment has:
-- frontmatter: metadata (creation time, source turn id, keywords, priority)
-- body: natural-language paragraph
-
-Example (`~/.yeaft/user/uid-123/segments/2026-06-10-prefer-ts.md`):
+A single `memory.md` looks like:
 
 ```markdown
----
-created: 2026-06-10T08:32:11Z
-source_turn: turn-abc
-keywords: [typescript, prefer, type-system]
-priority: 0.7
----
+<!-- segment: 2026-06-10-prefer-ts -->
+<!-- created: 2026-06-10T08:32:11Z, source_turn: turn-abc, keywords: [typescript], priority: 0.7 -->
 
 User prefers TypeScript over JavaScript. Rationale: "type safety has the highest ROI at team scale".
+
+<!-- segment: 2026-06-09-dark-mode -->
+...
 ```
 
-### Summary Store / Layer A (`store-v2.js`)
-Each scope has a `<scope>/summary.md` — the **condensed** view of all segments in that scope. The LLM incrementally updates it during dream maintenance.
+Read/write is atomic at the scope level — the whole `memory.md` is rewritten when segments change.
+
+### Summary Store / Layer A (`summary-store.js` / `store.js`)
+Each scope has a Layer-A summary — the **condensed** view of all segments in that scope. The LLM incrementally updates it during dream maintenance.
 
 ### Index DB / FTS (`index-db.js`)
 SQLite FTS5 table, one row per segment:
@@ -113,7 +115,7 @@ Sharded by scope; recall unions across the scope list as needed.
 
 ### AMS (Active Memory Set, `ams.js`)
 In-memory 3-layer cache:
-- **Resident summary** — `summary.md` of the current-group-related scopes, fixed length
+- **Resident summary** — Layer-A summary of the current-session-related scopes, fixed length
 - **Recent** — recent high-priority segments, sorted by priority, capped by token budget
 - **OnDemand** — segments recalled by this preflow, capped by token budget
 
@@ -151,7 +153,7 @@ Recall results are injected into the `### Memory` section of the system prompt.
 ### Adjust (lightweight, at most once per turn)
 `adjust.js`: a lightweight LLM call **amends** AMS with new info from the current turn (e.g. user changed a preference — deactivate the old one, bump priority on the new).
 
-Runs at most once per session per group to avoid hot looping on short turns.
+Runs at most once per session to avoid hot looping on short turns.
 
 ```js
 const adjustment = await llm.call({
@@ -163,11 +165,11 @@ await applyAdjustment(ams, adjustment);
 ```
 
 ### Dream (heavyweight, background)
-`dream-v2/` is a background daemon loop:
+`dream/` is a background daemon loop:
 1. Detect which scopes have undigested conversation history
 2. Use an LLM to **slice** the conversation into atomic segments
-3. Write new segments to `<scope>/segments/`
-4. Update `<scope>/summary.md`
+3. Append the new segments to the scope's `memory.md`
+4. Update the Layer-A summary
 5. Mirror to the FTS index
 
 Dream does **not** block user turns. It runs when idle or when the user manually triggers `/yeaft compact`.
@@ -186,7 +188,7 @@ When the condition is met → mark scope `needs_dream: true` → dream loop pick
 ## Debugging
 
 ### Read memory directly
-Open `~/.yeaft/<scope>/segments/*.md` and `~/.yeaft/<scope>/summary.md`. Plain markdown.
+Open `~/.yeaft/memory/<scope>/memory.md`. Plain markdown.
 
 ### Inspect the recall process
 The Yeaft Web **Debug panel** shows per-turn preflow recall details:
@@ -197,39 +199,39 @@ The Yeaft Web **Debug panel** shows per-turn preflow recall details:
 
 ### Inspect the FTS index
 ```bash
-sqlite3 ~/.yeaft/<scope>/index.db
+sqlite3 ~/.yeaft/memory/index.db
 > SELECT segment_id, keywords FROM segments WHERE body MATCH 'typescript';
 ```
 
 ## Backup / Migration
 
-Memory is all files — `tar` `~/.yeaft/` and you have a backup. To migrate: extract back to `~/.yeaft/` on the new machine and start the Agent. Use `seed-backfill.js` to rebuild the FTS index.
+Memory is all files — `tar` `~/.yeaft/memory/` and you have a backup. To migrate: extract back to `~/.yeaft/memory/` on the new machine and start the Agent. Use `seed-backfill.js` to rebuild the FTS index.
 
 ## Key Files
 
 ```
 agent/yeaft/memory/
-  segment-store.js   — segment storage primitive
+  segment-store.js   — segment storage primitive (writes memory.md)
   segment-sync.js    — sync FTS on segment write/delete
   segment.js         — segment record helpers
   index-db.js        — SQLite FTS5 index
-  store-v2.js        — Layer-A summary read/write
+  store.js           — Layer-A summary read/write
+  summary-store.js   — summary persistence
   ams.js             — Active Memory Set cache
-  ams-registry.js    — group-level AMS hydrate/persist
+  ams-registry.js    — session-level AMS hydrate/persist
   budget.js          — token budget calculator
   keywords.js        — FTS keyword extractor
   preflow.js         — pre-turn recall
   adjust.js          — post-turn adjustment
-  consolidate.js     — dream-trigger decision
   seed-backfill.js   — historical data migration
 ```
 
-> The dream loop itself lives in `agent/yeaft/dream-v2/`, not in `memory/`.
+> The dream loop itself lives in `agent/yeaft/dream/`, not in `memory/`. Consolidation triggers live in `agent/yeaft/dream/consolidate.js`.
 
 ## Design Trade-offs
 
 **Why not vector search?** FTS5 + keywords + segment-level markdown is precise enough (recall ≥80% for our use cases), and it's **explainable / debuggable / backupable**. Vector search needs an embedding service + index rebuild + binary blobs — high maintenance, not much precision gain for short memory segments.
 
-**Why is Layer-A summary stored separately as markdown?** `summary.md` is the LLM-maintained "current state of long-term memory" — more stable than raw segments. At recall time it's **read directly**, skipping the FTS query for latency savings.
+**Why is the Layer-A summary stored separately?** It's the LLM-maintained "current state of long-term memory" — more stable than raw segments. At recall time it's **read directly**, skipping the FTS query for latency savings.
 
 **Why is dream backgrounded?** Dream involves LLM calls (expensive + slow); it can't block user turns. It's eventual consistency — what you said today may not be digested into segments until tomorrow.

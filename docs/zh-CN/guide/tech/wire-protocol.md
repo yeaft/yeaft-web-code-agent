@@ -42,7 +42,7 @@ Yeaft 的 server / agent / web client 之间通过 **WebSocket** 通信，所有
 | Type | 字段 | 含义 |
 | --- | --- | --- |
 | `send_message` | `conversationId, text, attachments?` | 用户在 Chat 模式发消息 |
-| `yeaft_group_chat` | `groupId, text, mentions?, attachments?` | 在 Yeaft Group Mode 发消息（可 @mention VP） |
+| `yeaft_session_chat` | `groupId, text, mentions?, attachments?` | 在 Yeaft 会话 发消息（可 @mention VP） |
 | `cancel_execution` | `conversationId` | 中断当前 turn |
 | `ask_user_answer` | `requestId, answer` | 用户回答 ask-user 提示 |
 | `create_conversation` | `provider, workDir, options?` | 启动新 session |
@@ -149,11 +149,11 @@ Yeaft engine 吐自己的事件（`text_delta` / `thinking_delta` / `tool_call` 
 
 Yeaft 走 `yeaft_output` type（payload 同 claude_output `data`），前端 store 收到后调 `handleYeaftOutput()` → 内部转给 `handleClaudeOutput()`。多套一层 type 是为了按 VP / group 分流。
 
-## yeaft_group_chat（Group Mode 唯一发送通道）
+## yeaft_session_chat（Group Mode 唯一发送通道）
 
 ```js
 {
-  type: 'yeaft_group_chat',
+  type: 'yeaft_session_chat',
   conversationId: 'yeaft-virtual-xxx',
   groupId: 'group-abc',
   text: '@alice 帮我看下 bug',
@@ -170,7 +170,7 @@ Agent 收到后：
 5. 每个 VP 的 Engine 事件经 `web-bridge` 翻译成 `yeaft_output` 推回
 6. 前端按 VP id 分流到对应 thread
 
-历史别名：`unify_group_chat` 是 `yeaft_group_chat` 的同义词（早期 wire type），server / agent 都接受两个名字，**不要在新代码里使用 `unify_*`**。
+历史别名：`unify_group_chat` 是 `yeaft_session_chat` 的同义词（早期 wire type），server / agent 都接受两个名字，**不要在新代码里使用 `unify_*`**。
 
 ## ask-user 双向通信
 
@@ -238,7 +238,7 @@ Server 是哑中继：
 ### 看 raw wire
 浏览器 DevTools → Network → WS → 选 WebSocket 连接 → Messages 标签可看每条 envelope。
 
-Agent 侧：`yeaft-agent --debug` 把每条出入消息打到 stdout。
+Agent 侧：在 `~/.yeaft/config.json` 里设 `"debug": true` 让 Yeaft 引擎事件 verbose-log 到 Agent stdout。连接层 WebSocket 流量由 Agent connection 层独立 log。
 
 ### 看 envelope 翻译
 Web 端 Debug 面板的每个 turn 可看「raw envelope log」 — 包括 provider 翻译前的原事件 + 翻译后的 envelope。

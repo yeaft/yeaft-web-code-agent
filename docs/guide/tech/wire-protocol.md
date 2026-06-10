@@ -42,7 +42,7 @@ Yeaft's server / agent / web client talk over **WebSocket**. Every message is a 
 | Type | Fields | Meaning |
 | --- | --- | --- |
 | `send_message` | `conversationId, text, attachments?` | User sends a message in Chat mode |
-| `yeaft_group_chat` | `groupId, text, mentions?, attachments?` | Send in Yeaft Group Mode (with @mention) |
+| `yeaft_session_chat` | `groupId, text, mentions?, attachments?` | Send in Yeaft Sessions (with @mention) |
 | `cancel_execution` | `conversationId` | Abort current turn |
 | `ask_user_answer` | `requestId, answer` | User responds to an ask-user prompt |
 | `create_conversation` | `provider, workDir, options?` | Start a new session |
@@ -149,11 +149,11 @@ The Yeaft engine emits its own events (`text_delta` / `thinking_delta` / `tool_c
 
 Yeaft uses the `yeaft_output` type (payload same as claude_output `data`); frontend store handles it with `handleYeaftOutput()` → internally routes to `handleClaudeOutput()`. The extra type layer is purely for per-VP / per-group fan-out.
 
-## yeaft_group_chat (Group Mode's only send channel)
+## yeaft_session_chat (Group Mode's only send channel)
 
 ```js
 {
-  type: 'yeaft_group_chat',
+  type: 'yeaft_session_chat',
   conversationId: 'yeaft-virtual-xxx',
   groupId: 'group-abc',
   text: '@alice take a look at this bug',
@@ -238,7 +238,7 @@ A user may have multiple agents online. Server uses `session-pin-router.js` to b
 ### Inspect raw wire
 Browser DevTools → Network → WS → select WebSocket connection → Messages tab to see every envelope.
 
-Agent side: `yeaft-agent --debug` prints every inbound/outbound message to stdout.
+Agent side: set `"debug": true` in `~/.yeaft/config.json` to verbose-log Yeaft engine events to the Agent stdout. Connection-level WebSocket traffic is logged by the Agent's connection layer regardless.
 
 ### Inspect envelope translation
 The Web Debug panel for each turn has a "raw envelope log" — including provider's original events before translation + translated envelopes.

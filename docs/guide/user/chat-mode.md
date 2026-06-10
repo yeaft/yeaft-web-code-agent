@@ -2,7 +2,7 @@
 
 Claude Code Chat is the original Yeaft session backend — it wraps a local Claude Code CLI process in a Web chat surface, giving you the full Claude Code feature set (skills, MCP, subagents, `/compact`, `/clear`) without losing the underlying stream-json protocol.
 
-> This is the **1:1 chat mode powered by Claude Code CLI**. To swap Claude for GitHub Copilot CLI, see [Copilot Mode](./copilot-mode.md). For multi-VP parallel + cross-task memory, see [Yeaft Group Mode](./yeaft-group.md).
+> This is the **1:1 chat mode powered by Claude Code CLI**. To swap Claude for GitHub Copilot CLI, see [Copilot Mode](./copilot-mode.md). For multi-VP parallel + cross-task memory, see [Yeaft Sessions](./yeaft-group.md).
 
 ## Prerequisites
 
@@ -102,9 +102,9 @@ Each reply renders as a **Turn** card:
 - **AskUserQuestion** — Claude-initiated questions become interactive cards (single/multi-select / freeform / submit)
 - **Sub-Agent nesting** — Agent tool's sub-agents are inspectable
 
-## Differences vs Copilot / Yeaft Group
+## Differences vs Copilot / Yeaft Sessions
 
-| Capability | Claude Code | Copilot | Yeaft Group |
+| Capability | Claude Code | Copilot | Yeaft Sessions |
 | --- | :---: | :---: | :---: |
 | `/compact` auto-compress | ✓ | — | ✓ (H2-AMS) |
 | `/clear` reset | ✓ | ✓ | ✓ |

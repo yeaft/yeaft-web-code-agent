@@ -22,7 +22,7 @@
 | --- | --- |
 | Chat 模式（Claude Code） | [Chat（Claude Code）](./guide/user/chat-mode.md) |
 | Copilot 模式 | [Copilot 模式](./guide/user/copilot-mode.md)（新增） |
-| Yeaft Group 模式 | [Yeaft Group 模式](./guide/user/yeaft-group.md)（新增） |
+| Yeaft 会话 模式 | [Yeaft 会话 模式](./guide/user/yeaft-group.md)（新增） |
 | Crew 模式 | [Crew（多角色协作）](./guide/user/crew.md) |
 | 帮帮团 | [帮帮团](./guide/user/expert-panel.md) |
 | 分屏模式 | [分屏模式](./guide/user/split-screen.md) |
@@ -52,7 +52,7 @@
 旧版单页 USER_GUIDE 已经变得难以维护，并且漏掉了整片重要功能：
 
 1. **Copilot CLI 后端**（通过 ACP 协议）已经做了几个月的一等公民 Chat Provider — 旧文档完全没提
-2. **Yeaft Group Mode**（多 VP 并行协作）是当前的主开发方向 — 旧文档完全没写
+2. **Yeaft 会话**（多 VP 并行协作）是当前的主开发方向 — 旧文档完全没写
 3. 按功能拆开后，每个页面可以直接对应单个组件，新读者不至于被巨长的页面吓退
 
 如果你之前书签了本页的某个锚点，对应内容就在上面表格的目标章节里 — 新 URL 自此稳定。

@@ -2,7 +2,7 @@
 
 Expert Panel (in zh-CN UI: **帮帮团**) is a **side helper panel** in Claude Code Chat mode — while you're talking to Claude in the main chat, you can open one or more "expert teams" simultaneously to get perspectives from a different angle, without breaking your main conversation.
 
-> Only available in **Claude Code Chat** mode. Copilot and Yeaft Group Mode don't have Expert Panel yet — for Yeaft Group, multi-VP parallel is the (stronger) equivalent.
+> Only available in **Claude Code Chat** mode. Copilot and Yeaft Sessions don't have Expert Panel yet — for Yeaft Sessions, multi-VP parallel is the (stronger) equivalent.
 
 ## Open the Expert Panel
 
@@ -46,13 +46,13 @@ Each team is a set of personas + an independent conversation context, all callin
 - **Clear** — each team has a "🗑 Clear" button to reset
 - **Close panel** — click the 💡 button in the header again, or the panel's ×
 
-## Comparison with Yeaft Group Mode
+## Comparison with Yeaft Sessions
 
 - **Expert Panel** is a helper panel for Claude Code Chat; all roles call the same Claude API; the session lasts only this window
-- **Yeaft Group Mode** elevates multi-role to the main interaction model; each VP picks its own provider/model and has persistent cross-task memory
+- **Yeaft Sessions** elevates multi-role to the main interaction model; each VP picks its own provider/model and has persistent cross-task memory
 
 For "quick multi-perspective sanity check on a single question" — use Expert Panel.
-For "long-term multi-role group with persistent memory across tasks" — use Yeaft Group Mode.
+For "long-term multi-role group with persistent memory across tasks" — use Yeaft Sessions.
 
 ## Troubleshooting
 

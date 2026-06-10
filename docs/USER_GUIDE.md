@@ -22,7 +22,7 @@ The previous monolithic USER_GUIDE has been broken up into smaller, dedicated ch
 | --- | --- |
 | Chat Mode (Claude Code) | [Chat (Claude Code)](./guide/user/chat-mode.md) |
 | Copilot Mode | [Copilot Mode](./guide/user/copilot-mode.md) (NEW) |
-| Yeaft Group Mode | [Yeaft Group Mode](./guide/user/yeaft-group.md) (NEW) |
+| Yeaft Sessions | [Yeaft Sessions](./guide/user/yeaft-group.md) (NEW) |
 | Crew Mode | [Crew (Multi-Role)](./guide/user/crew.md) |
 | Expert Panel | [Expert Panel](./guide/user/expert-panel.md) |
 | Split Screen | [Split Screen](./guide/user/split-screen.md) |
@@ -52,7 +52,7 @@ For the technical implementation (provider system, Yeaft engine, wire protocol, 
 The old single-page guide was getting too long to maintain and was missing entire features:
 
 1. **Copilot CLI backend** (via ACP) has been a first-class chat provider for months — it wasn't in the guide
-2. **Yeaft Group Mode** (multi-VP parallel collaboration) is the current main dev direction — wasn't documented
+2. **Yeaft Sessions** (multi-VP parallel collaboration) is the current main dev direction — wasn't documented
 3. Splitting per feature lets each page link straight to the relevant component without overwhelming a new reader
 
 If you bookmarked a section anchor on this page, the equivalent content lives on the linked chapter — the URLs above are stable going forward.

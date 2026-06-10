@@ -39,9 +39,9 @@ npm run dev
 
 ## 下一步
 
-- [选择会话后端](./user/choose-backend.md) —— Claude Code vs Copilot vs Yeaft Group
+- [选择会话后端](./user/choose-backend.md) —— Claude Code vs Copilot vs Yeaft 会话
 - [部署服务器 (Docker)](./deploy-server.md) —— 生产环境部署指南
 - [安装 Agent](./deploy-agent.md) —— 连接工作机器
 - [Yeaft 引擎配置](./yeaft-config.md) —— `~/.yeaft/config.json` 字段说明
 - [Chat（Claude Code）](./user/chat-mode.md) —— 开始使用聊天界面
-- [Yeaft Group 模式](./user/yeaft-group.md) —— 多 VP 协作
+- [Yeaft 会话 模式](./user/yeaft-group.md) —— 多 VP 协作

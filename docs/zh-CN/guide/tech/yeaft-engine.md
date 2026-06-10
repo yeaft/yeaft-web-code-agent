@@ -2,7 +2,7 @@
 
 Yeaft 自有的 AI 引擎跑在 `agent/yeaft/`，**不依赖**任何外部 CLI（Claude / Copilot 都不需要）。它有自己的 query loop、记忆系统、工具集、LLM 路由。本章讲它的**核心架构**和 **turn lifecycle**。
 
-> 本章面向**想读 Yeaft 引擎代码 / 改它**的开发者。普通用户视角看 [Yeaft Group Mode](../user/yeaft-group.md)。
+> 本章面向**想读 Yeaft 引擎代码 / 改它**的开发者。普通用户视角看 [Yeaft 会话](../user/yeaft-group.md)。
 
 ## 模块布局
 
@@ -14,7 +14,7 @@ agent/yeaft/
   prompts.js       — 双语 system prompt builder
   models.js        — Model registry（上下文窗口、output limit、provider 推断）
 
-  groups/          — Group Mode 编排（coordinator、roster、group-store、pre-flow）
+  sessions/        — Session 编排（coordinator、roster、store、pre-flow）
   routing/         — Turn 内路由 + loop guard
   router/          — Continuity / thinking 相关路由策略
   memory/          — H2-AMS 记忆子系统（见 yeaft-memory.md）
@@ -22,7 +22,7 @@ agent/yeaft/
   tools/           — 内置工具表
   templates/       — System prompt 模板
   conversation/    — Message 持久化 + 搜索
-  dream-v2/        — 后台记忆维护
+  dream/        — 后台记忆维护
   compact/         — 上下文 compact 策略
   eval/            — 评估脚本
 
@@ -120,7 +120,7 @@ const session = await loadSession({ conversationId, userId, agentId });
 - 共享的 `memory` / `tools` / `llm` 子系统
 
 ### Group Mode
-`groups/coordinator.js` 接到 `yeaft_group_chat` 消息后：
+`sessions/coordinator.js` 接到 `yeaft_session_chat` 消息后：
 
 ```js
 async ingest({ groupId, text, mentions, attachments }) {
@@ -181,7 +181,7 @@ const result = await registry.execute(toolName, input, ctx);
 
 工具按 mode 过滤：`unified` 模式给完整 40+ 工具，`dream` 模式只给记忆维护相关工具。
 
-工具实现按类别分文件，见 [Yeaft Group Mode](../user/yeaft-group.md) 的工具清单。
+工具实现按类别分文件，见 [Yeaft 会话](../user/yeaft-group.md) 的工具清单。
 
 ## 记忆 / LLM / Group 子系统
 
@@ -202,7 +202,7 @@ const result = await registry.execute(toolName, input, ctx);
 
 - `agent/yeaft/engine.js` — 主 query loop
 - `agent/yeaft/session.js` — Session orchestrator
-- `agent/yeaft/groups/coordinator.js` — Group fan-out
+- `agent/yeaft/sessions/coordinator.js` — Session 内多 VP fan-out
 - `agent/yeaft/prompts.js` — System prompt builder
 - `agent/yeaft/web-bridge.js` — Event → wire 翻译
 - `agent/yeaft/tools/registry.js` — 工具注册表

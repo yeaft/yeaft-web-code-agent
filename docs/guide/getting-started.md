@@ -39,9 +39,9 @@ Then open `http://localhost:3456` in your browser.
 
 ## Next Steps
 
-- [Choose a Session Backend](./user/choose-backend.md) — Claude Code vs Copilot vs Yeaft Group
+- [Choose a Session Backend](./user/choose-backend.md) — Claude Code vs Copilot vs Yeaft Sessions
 - [Deploy the Server (Docker)](./deploy-server.md) — Production deployment guide
 - [Set up an Agent](./deploy-agent.md) — Connect a worker machine
 - [Yeaft Engine Config](./yeaft-config.md) — `~/.yeaft/config.json` schema
 - [Chat (Claude Code)](./user/chat-mode.md) — Start using the chat interface
-- [Yeaft Group Mode](./user/yeaft-group.md) — Multi-VP collaboration
+- [Yeaft Sessions](./user/yeaft-group.md) — Multi-VP collaboration

@@ -32,7 +32,7 @@ If no users are configured, the server starts with a warning — create the firs
 
 ## Yeaft Engine Credentials
 
-When the agent runs Yeaft Group Mode it talks directly to the LLM providers you list in `~/.yeaft/config.json`. Each provider entry has **one of two** credential modes:
+When the agent runs Yeaft Sessions it talks directly to the LLM providers you list in `~/.yeaft/config.json`. Each provider entry has **one of two** credential modes:
 
 | Mode | Field | What happens |
 | --- | --- | --- |
@@ -72,6 +72,6 @@ All registered users are **Pro** by default. The first user created via CLI is *
 
 ## Threat Model — What Yeaft Does Not Protect Against
 
-- **Compromised agent machine**: an attacker with root on the agent box can read `~/.yeaft/config.json`, intercept Yeaft credentials, exfiltrate `~/.yeaft/scopes/**` memory segments, and tail running CLI processes. Run agents on machines you trust.
+- **Compromised agent machine**: an attacker with root on the agent box can read `~/.yeaft/config.json`, intercept Yeaft credentials, exfiltrate `~/.yeaft/memory/**` memory files, and tail running CLI processes. Run agents on machines you trust.
 - **Malicious server operator**: encryption protects message body confidentiality through routing, but the server still sees metadata (who connects to which agent, timing, message sizes). A hostile server can also serve modified web JS to clients.
 - **Browser-side XSS**: the web client renders agent output as HTML/markdown. The renderer sanitizes, but if you connect to an agent you don't trust, that agent can craft messages that try to abuse the sanitizer. Don't connect to agents you don't trust.

@@ -24,7 +24,7 @@ Yeaft 不绑定单一 AI 厂商。建新会话时挑：
 | --- | --- |
 | **Claude Code** | 1:1 chat 配 Claude Code CLI — 全套 Claude 工具 |
 | **Copilot** | 1:1 chat 走 GitHub Copilot CLI（ACP 协议）— 任挑 Claude / GPT 系 model |
-| **Yeaft Group** | 多 VP 群组协作，并行 fan-out，跨 session 持久记忆 |
+| **Yeaft 会话** | 多 VP 群组协作，并行 fan-out，跨 session 持久记忆 |
 
 ### Chat（Claude Code）
 
@@ -51,7 +51,7 @@ ChatGPT 风格对话界面，实时工具追踪，会话管理和文件上传。
 - Session 恢复 + 历史
 - 复用你的 GitHub Copilot OAuth，不需要额外 API key
 
-### Yeaft Group Mode
+### Yeaft 会话
 
 多 VP（Virtual Person）并行协作，由 Yeaft 自有引擎驱动（不需要任何外部 CLI）。
 
@@ -122,11 +122,11 @@ AI 专家团队辅助对话 — 选择一个团队（如写作、交易），在
 
 ## 前置要求
 
-- **Server**: Node.js >= 18, Docker（推荐用于生产环境部署）
-- **Agent**: Node.js >= 18，按需安装下列至少一项：
+- **Server**: Node.js >= 22.5, Docker（推荐用于生产环境部署）
+- **Agent**: Node.js >= 22.5，按需安装下列至少一项：
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — Claude Chat 模式必需
   - [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) — Copilot 模式必需（可选）
-  - **Yeaft 引擎已内置**于 npm 包，Yeaft Group Mode **无需任何额外 CLI**
+  - **Yeaft 引擎已内置**于 npm 包，Yeaft 会话 **无需任何额外 CLI**
 - **Web 客户端**: 现代浏览器（Chrome, Firefox, Safari, Edge）
 
 ## 架构
@@ -467,7 +467,7 @@ claude-web-chat/
 
 内置 GitHub Actions 工作流：
 
-- **CI** (`ci.yml`): 在 Node 18/20/22 上运行测试 + 构建前端（手动触发 `workflow_dispatch`）
+- **CI** (`ci.yml`): 在 Node 24 上运行测试 + 构建前端（手动触发 `workflow_dispatch`）
 - **Release** (`release.yml`): 推送 `release-*` tag 时自动发布 npm 包 + Docker 镜像 + GitHub Release
 
 ### 发布新版本

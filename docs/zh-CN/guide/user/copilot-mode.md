@@ -103,6 +103,6 @@ Copilot 把会话存在 `~/.copilot/session-store.db`（SQLite）。Yeaft 会：
 注意区分两个不同的"Copilot"：
 
 - **本章讲的 Copilot 模式** — Agent 启动一个 `copilot --acp` 子进程，**进程**充当 AI 后端，模型由 Copilot CLI 自己决定
-- **Yeaft 引擎的 `github-copilot` credential provider** — 这是 Yeaft Group Mode 用的 — 由 Yeaft 自己拿 GitHub OAuth token 直接调 Copilot API，**不**启动 `copilot --acp` 子进程
+- **Yeaft 引擎的 `github-copilot` credential provider** — 这是 Yeaft 会话 用的 — 由 Yeaft 自己拿 GitHub OAuth token 直接调 Copilot API，**不**启动 `copilot --acp` 子进程
 
-两者用同一个 GitHub 账号鉴权，但走不同的代码路径。前者面向 "我想用 Copilot CLI 替代 Claude CLI"，后者面向 "我想让 Yeaft Group 里的某个 VP 用 Copilot 拿到的模型"。
+两者用同一个 GitHub 账号鉴权，但走不同的代码路径。前者面向 "我想用 Copilot CLI 替代 Claude CLI"，后者面向 "我想让 Yeaft 会话 里的某个 VP 用 Copilot 拿到的模型"。

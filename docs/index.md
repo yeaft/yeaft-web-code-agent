@@ -4,7 +4,7 @@ layout: home
 hero:
   name: Yeaft
   text: Multi-Provider AI Collaboration
-  tagline: One web interface, three backends — Claude Code · GitHub Copilot · Yeaft Group Mode
+  tagline: One web interface, three backends — Claude Code · GitHub Copilot · Yeaft Sessions
   image:
     src: /images/hero.jpg
     alt: Yeaft
@@ -29,12 +29,12 @@ features:
     details: GitHub Copilot CLI as the backend (ACP protocol) — same interface, pick any Claude / GPT model.
     link: /guide/user/copilot-mode
   - icon: 👥
-    title: Yeaft Group Mode
+    title: Yeaft Sessions
     details: Multi-VP group collaboration — @mention drives fan-out, cross-session persistent memory, explicit VP→VP handoff.
     link: /guide/user/yeaft-group
   - icon: 🖥️
     title: Split Screen
-    details: Up to 3 panels side by side — mix backends (one Claude + one Copilot + one Yeaft Group).
+    details: Up to 3 panels side by side — mix backends (one Claude + one Copilot + one Yeaft Sessions).
     link: /guide/user/split-screen
   - icon: 🧠
     title: Expert Panel

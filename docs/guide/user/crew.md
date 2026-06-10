@@ -139,9 +139,9 @@ Collapsed by default — click the header to expand; shows finished features wit
 - Add / remove roles
 - **Apply changes** — take effect immediately
 
-## Difference vs Yeaft Group Mode
+## Difference vs Yeaft Sessions
 
-|  | Crew | Yeaft Group |
+|  | Crew | Yeaft Sessions |
 | --- | --- | --- |
 | Engine | Claude Code CLI (one process per role) | Yeaft in-house engine |
 | Model | Claude only (CLI decides) | Each VP picks provider/model |
@@ -151,6 +151,6 @@ Collapsed by default — click the header to expand; shows finished features wit
 | Resources | Process per role, multiple worktrees | Shared engine, VPs are logical entities |
 
 **Pick Crew**: you're already in the Claude Code ecosystem and want the full pipeline for one concrete feature (decompose → write → review → test)
-**Pick Yeaft Group**: you want long-term memory + freely mixed providers + multi-VP parallel discussion
+**Pick Yeaft Sessions**: you want long-term memory + freely mixed providers + multi-VP parallel discussion
 
 Detailed comparison: [Choose a Backend](./choose-backend.md).

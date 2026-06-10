@@ -80,7 +80,7 @@ claude-web-chat/
 │   │   ├── engine.js        # 主 query loop
 │   │   ├── memory/          # H2-AMS 记忆
 │   │   ├── llm/             # LLM adapter（anthropic / openai-responses）
-│   │   ├── groups/          # Group Mode 编排
+│   │   ├── sessions/        # Session 编排（多 VP fan-out）
 │   │   ├── tools/           # 40+ 内置工具
 │   │   └── ...
 │   ├── claude.js            # Claude Chat 旧路径（仍保留）
@@ -115,9 +115,9 @@ Web → ws "send_message" → Server → ws agent
   → ws "claude_output" → Server → ws Web → MessageList 渲染
 ```
 
-### Yeaft Group Mode
+### Yeaft 会话
 ```
-Web → ws "yeaft_group_chat" → Server → ws agent
+Web → ws "yeaft_session_chat" → Server → ws agent
   → coordinator.ingest() → Promise.all(runVpTurn × VPs)
   → Engine.query() → tool exec → LLM stream → 事件
   → web-bridge.js 翻译为 claude_output envelope
@@ -127,7 +127,7 @@ Web → ws "yeaft_group_chat" → Server → ws agent
 ## CI/CD
 
 内置 GitHub Actions：
-- **CI** (`ci.yml`)：Node 18/20/22 跑测试 + 构建前端（`workflow_dispatch` 手动触发）
+- **CI** (`ci.yml`)：Node 24 跑测试 + 构建前端（`workflow_dispatch` 手动触发）
 - **Release** (`release.yml`)：推 `release-*` tag → 自动发 npm 包 + Docker 镜像 + GitHub Release
 
 ## 接下来

@@ -2,7 +2,7 @@
 
 Claude Code Chat 是 Yeaft 最早支持的会话后端 — 把本地的 Claude Code CLI 进程包成一个 Web 端的对话界面，给你完整的 Claude Code 能力（skills、MCP、subagents、`/compact`、`/clear`），同时不丢 CLI 那套底层协议（stream-json）。
 
-> 这是基于 **Claude Code CLI** 的 1:1 对话模式。如果想用 GitHub Copilot CLI 替代 Claude，看 [Copilot 模式](./copilot-mode.md)；如果想要多 VP 并行 + 跨任务记忆，看 [Yeaft Group Mode](./yeaft-group.md)。
+> 这是基于 **Claude Code CLI** 的 1:1 对话模式。如果想用 GitHub Copilot CLI 替代 Claude，看 [Copilot 模式](./copilot-mode.md)；如果想要多 VP 并行 + 跨任务记忆，看 [Yeaft 会话](./yeaft-group.md)。
 
 ## 前置要求
 
@@ -102,9 +102,9 @@ Claude 的每条回复以一个 **Turn** 卡片渲染：
 - **AskUserQuestion** — Claude 主动提问会渲染成交互卡片（单选 / 多选 / 自由文本 / 提交）
 - **Sub-Agent 嵌套** — Agent 工具调起的 sub-agent，输出可展开查看完整流程
 
-## 与 Copilot 模式 / Yeaft Group Mode 的差异
+## 与 Copilot 模式 / Yeaft 会话 的差异
 
-| 能力 | Claude Code | Copilot | Yeaft Group |
+| 能力 | Claude Code | Copilot | Yeaft 会话 |
 | --- | :---: | :---: | :---: |
 | `/compact` 自动压缩 | ✓ | — | ✓（H2-AMS） |
 | `/clear` 重置 | ✓ | ✓ | ✓ |
