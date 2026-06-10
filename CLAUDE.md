@@ -1,8 +1,10 @@
 # Claude Web Chat (Yeaft)
 
-一个 Web 端的 AI 聊天应用。产品名是 **Yeaft**。当前对外提供两类模式：**Claude Chat**（基于 Claude CLI 的 1:1 对话，旧模式）、**Crew**（多 Agent 团队协作）；以及 Yeaft 自有引擎下的 **Session**（多 VP 协作，**当前主开发方向**）。一个 Session 默认 1 个 VP（即 1:1 对话）；多 VP 是特殊情况而不是另一种 mode。
+一个 Web 端的 AI 聊天应用。产品名是 **Yeaft**。当前对外提供两类模式：**Claude Chat**（基于 Claude CLI 的 1:1 对话，旧模式）、**Crew**（多 Agent 团队协作）；以及 Yeaft 自有引擎下的 **Session**。
 
-> 名词说明：项目里早期叫 **Group**（多 VP 群组），现在统一叫 **Session** — 不再区分"chat / group"。代码 / wire / 磁盘路径已全部改用 `session`；前端字段名保留 `yeaft` 前缀作为引擎内部别名（**不要**为了去掉 `yeaft` 前缀做批量重命名 — 会炸 wire compatibility）。
+**Yeaft 只有 Session 一种编排单元** — 不再有 "chat mode" / "group mode" 的划分。一个 Session 默认 1 个 VP（就是 1:1 对话），可以加更多 VP 实现多人协作；区别只是 VP 数量，不是 mode。
+
+> 名词与代码兼容：旧版本里这个东西叫 "Group"，引擎本身叫过 "Unify"。现在统一是 **Session** + **Yeaft**。代码里很多 wire type / scope 前缀 / payload 字段名（`yeaft_group_chat` / `group/<id>` / `groupId` / `yeaft*`）仍保留旧名做 wire 与磁盘兼容 — **新代码必须用 session / yeaft 术语，但不要为了去旧名做批量重命名**，会炸协议和持久化数据。详见下面的 "命名约束" 段。
 
 ## 项目结构
 
@@ -39,9 +41,9 @@ test/            — Vitest 测试
 - 角色间通过 `---ROUTE---` 协议路由消息
 - 通过 `.crew/context/features/` 和 `.crew/context/kanban.md` 跟踪 feature
 
-### Yeaft Session（当前主开发方向）
-- **多 VP 协作** — 用户开一个 session，里面有若干个 VP（Virtual Person，可配置人格 / 模型 / 工具），同一个 user turn 可以并行 fan-out 到多个 VP
-- **默认 1 VP** — 普通 session 就 1 个 VP（即 1:1 对话）；多 VP 是特殊情况
+### Yeaft Session
+- **唯一编排单元** — Yeaft 引擎里所有对话都是 Session；没有 "chat mode" / "group mode" 之分
+- **1..N 个 VP** — 一个 Session 包含 1 到 N 个 VP（Virtual Person，可配置人格 / 模型 / 工具）。默认 1 个 VP（1:1 对话），加更多 VP 就变成多人协作；同一个 user turn 可以并行 fan-out 到选中的 VP
 - **自有引擎** — 不依赖 Claude CLI，自己跑 query loop（`agent/yeaft/engine.js`）
 - **记忆系统** — H2-AMS 持久化记忆，支持 scope 级 recall、consolidation、dream 维护
 - **多 provider LLM** — 通过 `AdapterRouter` 路由到不同 provider，支持 per-model protocol
@@ -58,8 +60,7 @@ session.js       — Session orchestrator（loadSession 把所有子系统串起
 config.js        — 从 ~/.yeaft/config.json 读配置（providers、models、limits）
 prompts.js       — 双语 system prompt builder（en/zh）
 models.js        — Model 注册表（上下文窗口、output limit、provider 推断）
-groups/          — Session 编排（coordinator、roster、session-store、pre-flow 等）
-                   注：目录名保留 "groups" 为历史别名
+sessions/        — Session 编排（coordinator、roster、session-store、pre-flow 等）
 routing/         — Turn 内路由 + loop guard
 router/          — Continuity / thinking 相关路由策略
 memory/          — H2-AMS 记忆子系统
@@ -182,7 +183,7 @@ mcp.js     — MCPManager：连接 MCP server，桥接其工具
 
 - **框架**：Vue 3（CDN，无构建步骤）+ Pinia
 - **API 风格**：Vue Options API，`template` 用字符串字面量（不用 SFC / `.vue` 文件）
-- **组件**：`web/components/*.js` — `ChatPage`、`YeaftPage`（= Yeaft 页，文件名是历史别名）、`YeaftSidebar`、`YeaftSettings`、`MessageList`、`ChatInput`、`SessionCreateModal`、`SessionSettingsModal` 等
+- **组件**：`web/components/*.js` — `ChatPage`、`YeaftPage`（= Yeaft 页，文件名是历史别名）、`YeaftSidebar`、`YeaftSettings`、`MessageList`、`ChatInput`、`SessionCreateModal`、`SessionSettingsModal`、`SessionInviteModal`、`VpDetailView`、`VpTurnBlock` 等
 - **状态**：`web/stores/chat.js` 是唯一的 Pinia store
 - **渲染**：Claude Chat 和 Yeaft 复用同一套 MessageList / AssistantTurn 管线
 - **侧栏**：tab bar（session-tab-bar）含 Chat / Crew / Yeaft 入口
@@ -205,11 +206,13 @@ yeaftActiveSessionFilter: null       // 当前选中的 session
 ```js
 enterYeaft(agentId?)     // 进入 Yeaft 页，创建虚拟 conversationId
 leaveYeaft()             // 回 Claude Chat 页
-sendYeaftSessionChat({sessionId, text, mentions, attachments})
+sendYeaftSessionMessage({sessionId, text, mentions, attachments})
                          // 唯一发送通道（wire type: 'yeaft_session_chat'）
 handleYeaftOutput(msg)   // 把 Engine 事件丢给标准 claude_output 管线
 clearYeaftMessages()     // 重置 session
 ```
+
+> 注：`sendYeaftSessionMessage` 的入参对象内仍出现 `groupId` 字段名 — 这是早期 wire payload 残留，**新代码读它时把它当 sessionId 用**；不要主动批量重命名 payload 字段，会炸 agent ↔ server ↔ web 的 wire 兼容。
 
 ## 服务端架构
 
@@ -276,6 +279,36 @@ Web 客户端 -> ws "yeaft_session_chat" -> Server -> ws agent
 - **Tag 格式**：`v0.1.X`（用 `git tag --sort=-creatordate | head -1` 查最新）
 - **Release tag**：`release-v0.1.X` 触发生产部署（仅在用户明确要求时打）
 - **文档语言**：项目内 CLAUDE.md / 文档说明一律用中文；代码注释允许英文以便国际协作
+
+## 命名约束（每次起新名字必读）
+
+代码里的名字是和未来读这段代码的人签的合同。下面这几条是**硬约束** — 新代码违反就在 review 里打回去。
+
+### 1. 禁止 version-suffix 文件名
+
+- ❌ `file-read-v1.js`、`file-read-v2.js`、`store-v2.js`、`recall-v2.js`、`engine-new.js`
+- ✅ 新版本就**取代**旧版本：删旧文件、写新文件、走 PR、留好 git history。`git log` 是版本，文件名不是。
+- 例外：迁移脚本一次性带 `vX-to-vY` 是合理的（典型如 `bin/yeaft-migrate.js` 调用 `migration/v0-to-v1.js`），因为这种文件本身就是 "把数据从 vX 形态搬到 vY 形态" 的一次性产物，不属于功能模块的并行版本。
+
+### 2. 禁止旧术语进入新代码
+
+旧术语 → 现行术语：
+
+| 旧（禁止用于新代码） | 现行 |
+| --- | --- |
+| `unify` / `Unify` / `unified` | `yeaft` / `Yeaft`（引擎名） |
+| `group` / `Group` / `groupId` | `session` / `Session` / `sessionId`（Session 是唯一编排单元） |
+| `chat mode` / `group mode` | 没有 mode 划分了；只有 Session（默认 1 VP，可加更多 VP） |
+
+- **新代码**：写函数名、变量名、类名、目录名、新文件、新 wire 类型 — **只用现行术语**。`unifyXxx` / `groupXxx` 在新代码里 = code smell，必须改名。
+- **现有代码**：现存的 `yeaft_group_chat` wire type、`groupId` payload 字段、`group/<id>` scope 前缀、`yeaft` 引擎别名等**保留**为 wire / 存储兼容 — **不**主动批量重命名，否则会炸 agent↔server↔web 协议、磁盘上的旧数据路径、以及任何已经持久化的 scope key。
+- **碰到旧名字时**：JSDoc 里说明 "legacy alias for X"，给读代码的人解释清楚；不要默默改、也不要默默接受。
+
+### 3. 怎么判断 "新代码还是旧代码"
+
+- **新文件**：只能用现行术语。
+- **新加到旧文件里的函数 / 变量**：只能用现行术语。
+- **改旧代码里已存在的 identifier**：默认不动。要改就**整条链一起改**（agent / server / web / 测试 / 存储 schema 全改），不要只改一半留下半残的名字。
 
 ---
 
