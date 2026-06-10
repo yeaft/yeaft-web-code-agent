@@ -38,7 +38,7 @@ Supports offset and limit for reading specific portions of large files.
 
 Guidelines:
 - Use absolute paths when possible
-- For large files, use offset and limit to read specific sections
+- A file is "large" only at >3000 lines. Read the whole file by default; only use offset/limit above that threshold or when you already know the exact line range you need.
 - Binary files are detected by extension and rejected
 - Maximum file size: 10MB
 - Default limit: 2000 lines`,

@@ -9,12 +9,14 @@
 - Prefer editing existing files over creating new ones
 - Use `bash` for shell commands; avoid interactive commands (no `vim`, no `less`, no `git rebase -i`)
 - When output is too large, extract the relevant portion rather than dumping everything
+- **Batch independent tool calls in a single turn.** When the next few steps don't depend on each other's output (e.g. reading three sibling files, or running `grep` + `glob` to triangulate), emit them as parallel tool calls in one assistant turn instead of one-per-turn.
 
 ## File Operations
 
 - For file edits, ensure `old_string` is unique in the file or provide enough surrounding context
 - When writing code: follow existing patterns, match project style, don't add unnecessary dependencies
 - Prefer small, targeted edits over full file rewrites
+- **A file is "large" only at >3000 lines.** Below that, read it whole. Don't pre-emptively split a 500-line file into three `offset`/`limit` reads — that's three round-trips for the same content.
 
 ## Shell Commands
 
@@ -26,10 +28,14 @@
 
 ## Search Strategy
 
-1. Start with `glob` to find relevant files by name/pattern
-2. Use `grep` to search content within those files
-3. Use `file-read` to examine specific sections in detail
-4. Only use `bash` + shell commands when dedicated tools cannot do the job
+Pick the shortest path that gets you the answer — don't always start at step 1.
+
+1. **If you already know the file path** → go straight to `file-read` (or `grep` for a pattern within it). **Skip `glob`.**
+2. **If you know roughly which directory but not the file** → `grep` directly with a `glob` or `type` filter; that's one tool call, not two.
+3. **If you have nothing but a pattern of file names** → start with `glob`, then `grep` / `file-read`.
+4. Use `bash` only when no dedicated tool can do the job.
+
+When several of these steps are independent (e.g. reading three files you already know the paths of), issue them as **parallel tool calls in one turn**, not three sequential turns.
 
 ## Error Handling
 
@@ -70,12 +76,14 @@ or pure conversational/question turns — the checklist becomes noise.
 - 优先编辑现有文件而非创建新文件
 - 使用 `bash` 执行 shell 命令；避免交互式命令（不用 `vim`、不用 `less`、不用 `git rebase -i`）
 - 当输出过大时，提取相关部分而非倾倒所有内容
+- **同一个 turn 内并行调用互不依赖的工具。** 接下来几步如果彼此输出不依赖（比如读三个并列文件，或者 `grep` + `glob` 一起定位），就在一个 assistant turn 里并行发出多个 tool call，不要一次一个回合地串行。
 
 ## 文件操作
 
 - 文件编辑时，确保 `old_string` 在文件中唯一，或提供足够的上下文
 - 编写代码时：遵循现有模式，匹配项目风格，不添加不必要的依赖
 - 优先使用小的、有针对性的编辑而非完整文件重写
+- **"大文件" 的标准是 > 3000 行。** 没超过就整文件读完，不要把一个 500 行的文件预先拆成三段 `offset`/`limit` 读 —— 那是三次回合读同一份内容。
 
 ## Shell 命令
 
@@ -87,10 +95,14 @@ or pure conversational/question turns — the checklist becomes noise.
 
 ## 搜索策略
 
-1. 先用 `glob` 通过名称/模式找到相关文件
-2. 用 `grep` 在这些文件中搜索内容
-3. 用 `file-read` 详细查看特定部分
-4. 只有当专用工具无法完成时才使用 `bash` + shell 命令
+挑能拿到答案的最短路径，不必每次都从第 1 步开始。
+
+1. **已经知道文件路径** → 直接 `file-read`（或在该文件里 `grep` 找模式）。**跳过 `glob`。**
+2. **大致知道目录但不知道文件** → 直接 `grep` 配合 `glob` / `type` 过滤；这一步本身就够，不用先 `glob` 再 `grep`。
+3. **只有文件名模式** → 先 `glob`，再 `grep` / `file-read`。
+4. 只有当专用工具都做不到的时候才用 `bash`。
+
+如果上面这些步骤里有几个互不依赖（比如要读三个你已经知道路径的文件），**在同一个 turn 里并行调用**，不要串成三个回合。
 
 ## 错误处理
 
