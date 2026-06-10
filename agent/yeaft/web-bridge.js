@@ -1053,19 +1053,12 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
       vpAborts.set(key, vpAbort);
       turnAbortCtrls.set(turnId, vpAbort);
       turnAbortMeta.set(turnId, { sessionId, vpId, threadId: thread.threadId, key });
-      // History snapshot must include every prior thread's messages —
-      // threads represent intra-VP CONCURRENT tasks, not isolated
-      // conversations. A previous version filtered to keep only `'main'` +
-      // the current thread, but every new user prompt receives a fresh
-      // `thr_*` id from createThreadId(), so the filter dropped every
-      // completed prior thread. Result: the LLM saw a 1-message context
-      // (just the new prompt) for every turn after the first, and the user
-      // reported "history messages aren't being loaded".
-      // VP-level concerns (other VPs' tool arcs, thinking blocks) belong
-      // to filterSnapshotForVp; pairSanitize then enforces tool_use /
-      // tool_result pairing. Disk-side loadSessionHistoryForVp likewise
-      // applies no threadId filter — this in-memory path now mirrors that
-      // contract.
+      // History snapshot covers EVERY prior thread of the session.
+      // Threads represent intra-VP concurrent tasks, not isolated
+      // conversations, so the LLM needs cross-thread continuity.
+      // VP isolation lives in `filterSnapshotForVp`; tool_use/result
+      // pairing lives in `pairSanitize`. Mirrors disk-side
+      // `loadSessionHistoryForVp`, which applies no threadId filter.
       const baseSnapshot = pairSanitize(
         filterSnapshotForVp(getOrCreateSessionHistory(sessionId), vpId),
       );

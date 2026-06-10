@@ -58,7 +58,35 @@ describe('VpTimelinePane — per-VP abort button visibility (Bug #2)', () => {
     // The button is for stopping a running task — a Rams-style visual
     // cue (red) is non-negotiable so the user knows it's the dangerous
     // affordance even when they're not hovering.
-    const abortRule = /\.yeaft-vp-timeline-abort\s*\{[^}]*color:\s*var\(--error-color[^}]*\}/m;
+    // Token is `--error` from web/styles/variables.css (NOT a fake
+    // `--error-color`; that earlier draft cited a token that didn't
+    // exist, see Torvalds I2 on PR #925). `\b` after `error` rejects
+    // both `--error-bg` and any future `--error-color` re-introduction.
+    const abortRule = /\.yeaft-vp-timeline-abort\s*\{[^}]*color:\s*var\(--error\b[^}]*\}/m;
     expect(CSS_SRC).toMatch(abortRule);
+  });
+
+  it('no later rule dims the abort button on row hover', () => {
+    // Locks down Torvalds I1: an earlier draft put the abort opacity
+    // override at specificity (0,0,1,0), which lost to the existing
+    // `.yeaft-vp-timeline-row:hover .yeaft-vp-timeline-abort`
+    // selector (0,0,2,0) — so the button dimmed to 0.7 the instant
+    // the cursor approached. Fix was to drop abort from the shared
+    // row-hover rule and bump the abort opacity rule to
+    // `.yeaft-vp-timeline-row .yeaft-vp-timeline-abort`.
+    //
+    // Scan every CSS rule that targets `.yeaft-vp-timeline-abort`
+    // under a row-hover selector. If any such rule exists and sets
+    // opacity to anything other than 1, fail — that's the regression.
+    const rowHoverAbort =
+      /\.yeaft-vp-timeline-row:hover[^{}]*\.yeaft-vp-timeline-abort[^{}]*\{([^}]*)\}/gm;
+    let match;
+    while ((match = rowHoverAbort.exec(CSS_SRC)) !== null) {
+      const body = match[1];
+      const opacityMatch = /opacity:\s*([0-9.]+)/.exec(body);
+      if (opacityMatch) {
+        expect(Number(opacityMatch[1])).toBe(1);
+      }
+    }
   });
 });

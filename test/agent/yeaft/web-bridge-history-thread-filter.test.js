@@ -114,9 +114,11 @@ describe('web-bridge history snapshot — Bug #1 regression', () => {
 
       // The pre-fix filter would have returned ONLY messages whose
       // threadId matched the in-flight thread (here `thr_t3_cccccccc`)
-      // — i.e. a 1-message context. Assert that we have many more
-      // than that, locking in the regression boundary.
-      expect(snapshot.length).toBeGreaterThanOrEqual(5);
+      // — i.e. a 1-message context (just the third prompt). Exact-
+      // count assertion (5 = 3 user prompts + 2 vp replies) catches
+      // both directions of regression: under-count (filter creeps
+      // back) AND over-count (engine-private rows leaking in).
+      expect(snapshot.length).toBe(5);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
