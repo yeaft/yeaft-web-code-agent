@@ -22,7 +22,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
-import { resolveModel, parseModelRef, normalizeProviderModels } from './models.js';
+import { resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
 
 /** Default configuration values. */
 const DEFAULTS = {
@@ -250,8 +250,15 @@ function loadLegacyConfig(dir, overrides) {
     if (modelInfo) {
       config.adapter = modelInfo.adapter === 'anthropic' ? 'anthropic' : 'openai';
       if (!config.baseUrl) config.baseUrl = modelInfo.baseUrl;
-      if (config.maxContextTokens === DEFAULTS.maxContextTokens) config.maxContextTokens = modelInfo.contextWindow;
-      if (config.maxOutputTokens === DEFAULTS.maxOutputTokens) config.maxOutputTokens = modelInfo.maxOutputTokens;
+      // Resolve token limits via the resolver ladder (models.dev → config →
+      // DEFAULT). Only fill in when the caller left the slot at the default
+      // — explicit env / CLI overrides win.
+      if (config.maxContextTokens === DEFAULTS.maxContextTokens) {
+        config.maxContextTokens = resolveContextWindow(config.model, config);
+      }
+      if (config.maxOutputTokens === DEFAULTS.maxOutputTokens) {
+        config.maxOutputTokens = resolveMaxOutputTokens(config.model, config);
+      }
     } else {
       if (config.apiKey) config.adapter = 'anthropic';
       else if (config.openaiApiKey) config.adapter = 'openai';
@@ -305,8 +312,18 @@ export function loadConfig(overrides = {}) {
     fastModelId = parsed.modelId;
   }
 
-  // Resolve model info for context window / output limits
+  // Resolve model info for adapter/baseUrl/thinking metadata. Token limits
+  // (contextWindow / maxOutputTokens) are NOT read from here — they live in
+  // models.dev and are resolved via resolveContextWindow / resolveMaxOutputTokens
+  // a few lines below so the live models.dev snapshot is the source of truth.
   const modelInfo = resolveModel(model);
+
+  // Pre-resolve token limits once so we can both write them onto config and
+  // pass `config` to the resolver chain consistently below.
+  const resolvedMaxContext = overrides.maxContextTokens ?? jsonConfig.maxContextTokens
+    ?? resolveContextWindow(model, { modelInfo });
+  const resolvedMaxOutput = overrides.maxOutputTokens ?? jsonConfig.maxOutputTokens
+    ?? resolveMaxOutputTokens(model, { modelInfo });
 
   const config = {
     // Model
@@ -325,9 +342,16 @@ export function loadConfig(overrides = {}) {
     debug: overrides.debug !== undefined ? overrides.debug : (jsonConfig.debug ?? DEFAULTS.debug),
     dir,
 
-    // Token limits
-    maxContextTokens: overrides.maxContextTokens ?? jsonConfig.maxContextTokens ?? modelInfo?.contextWindow ?? DEFAULTS.maxContextTokens,
-    maxOutputTokens: overrides.maxOutputTokens ?? jsonConfig.maxOutputTokens ?? modelInfo?.maxOutputTokens ?? DEFAULTS.maxOutputTokens,
+    // Token limits. Resolution order:
+    //   1. CLI override (overrides.*)
+    //   2. ~/.yeaft/config.json explicit value
+    //   3. resolveContextWindow / resolveMaxOutputTokens — which themselves
+    //      walk: per-provider override → models.dev snapshot → DEFAULT.
+    // Anything that needs the *live* number for a model the user picks at
+    // runtime (mid-session model switch, e.g.) should call the resolvers
+    // directly rather than read these fields.
+    maxContextTokens: resolvedMaxContext,
+    maxOutputTokens: resolvedMaxOutput,
     messageTokenBudget: overrides.messageTokenBudget ?? jsonConfig.messageTokenBudget ?? DEFAULTS.messageTokenBudget,
     maxContinueTurns: overrides.maxContinueTurns ?? jsonConfig.maxContinueTurns ?? DEFAULTS.maxContinueTurns,
 
