@@ -2835,6 +2835,18 @@
   opacity: 0;
   transition: opacity 0.15s, background 0.15s, color 0.15s;
 }
+/* Abort visibility: the abort button only renders (`v-if`) when a VP
+   is in an active state. When it's there, it MUST be discoverable —
+   hiding it behind hover is a Rams "用户需要 hover 才能找到" failure:
+   the user can't find a stop button they don't know is there. So we
+   keep the hover-reveal pattern for `.yeaft-vp-timeline-info`, but the
+   abort button is full-opacity + danger-tinted the moment it appears.
+   (The user explicitly reported "我没法终止某个一VP turn，以前UI还
+   有这个能力，现在没有了" — meaning they couldn't see it.) */
+.yeaft-vp-timeline-abort {
+  opacity: 1;
+  color: var(--error-color, #e74c3c);
+}
 /* Keyboard-focus styling mirrors hover styling so a keyboard user can
    tell destructive (abort = red) from informational (info = accent)
    without having to read the aria-label. */
