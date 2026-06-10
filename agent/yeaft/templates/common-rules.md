@@ -32,8 +32,9 @@
 ## Search and Navigation
 
 - Prefer `rg` (ripgrep) over `grep` for speed and regex support
-- Use `glob` patterns for file discovery
-- Read files with offset/limit for large files instead of loading everything
+- A file is "large" only at **>3000 lines**. Read the whole file by default; reach for `offset`/`limit` only above that threshold or when you already know the exact line range you need.
+- If you already know the file path, **skip `glob`** and go straight to `file-read` or `grep`. Reserve `glob` for actual file discovery.
+- When you need multiple independent reads/searches, issue them in **one assistant turn as parallel tool calls** instead of serializing one round-trip per file.
 
 ## Frontend Design (when applicable)
 
@@ -76,8 +77,9 @@
 ## 搜索与导航
 
 - 优先使用 `rg`（ripgrep）而非 `grep`，速度更快且支持正则
-- 使用 `glob` 模式发现文件
-- 对大文件使用 offset/limit 读取，而非加载全部内容
+- "大文件" 的标准是 **> 3000 行**。默认读整文件，只在超过这个阈值、或你已经知道具体行段的时候才用 `offset` / `limit`。
+- 如果你已经知道文件路径，**不要 `glob`**，直接 `file-read` 或 `grep`。`glob` 留给真的需要发现文件名的场景。
+- 同一个 turn 里有多个互不依赖的读取/搜索时，**在同一个 assistant turn 内并行发起多个 tool call**，不要一次一个回合地串行。
 
 ## 前端设计（适用时）
 
