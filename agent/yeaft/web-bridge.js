@@ -25,6 +25,7 @@ import { Engine } from './engine.js';
 import { loadSession } from './session.js';
 import { sendToServer } from '../connection/buffer.js';
 import ctx from '../context.js';
+import { hydrateYeaftStatusFromSession } from './status-cache.js';
 import { handleVpSubscribe } from './vp/vp-bridge.js';
 import { createVp, updateVp, deleteVp, readVp, VpCrudError } from './vp/vp-crud.js';
 import { scanVpLibrary } from './vp/vp-store.js';
@@ -2678,6 +2679,7 @@ async function ensureSessionLoaded() {
   }
 
   yeaftConversationId = `yeaft-${Date.now()}`;
+  hydrateYeaftStatusFromSession(session, { reason: 'session_ready', emitEvent: true });
 
   // Per-group history is hydrated lazily on first `getOrCreateSessionHistory`
   // — there's no global "all conversations" tape any more.
@@ -3772,6 +3774,7 @@ export async function handleYeaftLoadHistory(msg) {
     installYeaftRuntimeBridge(session);
 
     yeaftConversationId = `yeaft-${Date.now()}`;
+    hydrateYeaftStatusFromSession(session, { reason: 'history_load', emitEvent: true });
 
     // Per-group history hydrates lazily via getOrCreateSessionHistory.
     // When the load-history call carries a sessionId, force-refresh THAT
@@ -4077,6 +4080,7 @@ export async function resetYeaftSession() {
     installYeaftRuntimeBridge(session);
 
     yeaftConversationId = `yeaft-${Date.now()}`;
+    hydrateYeaftStatusFromSession(session, { reason: 'reset', emitEvent: true });
 
     // Per-group history hydrates lazily via getOrCreateSessionHistory on
     // first read. Nothing to seed here.

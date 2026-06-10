@@ -365,6 +365,10 @@ export async function handleAgentOutput(agentId, agent, msg) {
 
     case 'yeaft_output': {
       const data = hydrateInlinePreviewData(msg.data);
+      if (msg.event?.type === 'yeaft_status') {
+        agent.yeaftStatus = msg.event;
+        await broadcastAgentList();
+      }
       // Forward Yeaft output to all authenticated clients of this agent's owner.
       // Payload carries { conversationId, data } (claude_output format) or { event } (metadata).
       //

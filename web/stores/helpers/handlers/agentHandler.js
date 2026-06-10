@@ -61,6 +61,9 @@ export function handleAgentList(store, msg) {
     const agentIds = new Set(msg.agents.map(a => a.id));
     for (const agent of msg.agents) {
       store.proxyPorts[agent.id] = agent.proxyPorts || [];
+      if (agent.yeaftStatus && typeof store.cacheYeaftAgentStatus === 'function') {
+        store.cacheYeaftAgentStatus(agent.id, agent.yeaftStatus);
+      }
     }
     for (const id of Object.keys(store.proxyPorts)) {
       if (!agentIds.has(id)) {
