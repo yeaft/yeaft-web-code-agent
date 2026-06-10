@@ -37,6 +37,7 @@ import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getYeaftSettings, updateYeaftSettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../yeaft/config-api.js';
 import { fetchModelsDev } from '../yeaft/llm/models-dev.js';
+import { refreshYeaftStatus, startYeaftStatusRefresh } from '../yeaft/status-cache.js';
 import { handleYeaftSessionSend, handleYeaftModeSwitch, handleYeaftModelSwitch, resetYeaftSession, handleYeaftLoadHistory, handleYeaftLoadMoreHistory, handleYeaftAbortThread, handleYeaftAbortAll, handleYeaftAbortTurn, handleYeaftVpSubscribe, handleYeaftVpCreate, handleYeaftVpUpdate, handleYeaftVpDelete, handleYeaftVpRead, handleYeaftListSessions, handleYeaftCreateSession, handleYeaftRenameSession, handleYeaftUpdateSession, handleYeaftUpdateSessionConfig, handleYeaftArchiveSession, handleYeaftDeleteSession, handleYeaftSessionAddMember, handleYeaftSessionRemoveMember, handleYeaftSessionSetDefaultVp, handleYeaftDreamTrigger, handleYeaftFetchToolStats, handleYeaftFetchDebugHistory, broadcastLanguageChange } from '../yeaft/web-bridge.js';
 
 export async function handleMessage(msg) {
@@ -71,6 +72,7 @@ export async function handleMessage(msg) {
       }
 
       sendConversationList();
+      startYeaftStatusRefresh();
 
       // ★ Flush 断连期间缓冲的消息
       await flushMessageBuffer();
@@ -354,6 +356,9 @@ export async function handleMessage(msg) {
       // user reloading the session.
       if (!result.error && incomingLanguage) {
         broadcastLanguageChange(result.language);
+      }
+      if (!result.error) {
+        refreshYeaftStatus({ reason: 'llm_config_updated' }).catch(() => {});
       }
       sendToServer({ type: 'llm_config_updated', ...result });
       break;

@@ -349,6 +349,10 @@ export async function handleAgentOutput(agentId, agent, msg) {
 
     case 'yeaft_output': {
       const data = hydrateInlinePreviewData(msg.data);
+      if (msg.event?.type === 'yeaft_status') {
+        agent.yeaftStatus = msg.event;
+        await broadcastAgentList();
+      }
       // Forward Yeaft output to all authenticated clients of this agent's owner.
       // Payload carries { conversationId, data } (claude_output format) or { event } (metadata).
       //
@@ -373,6 +377,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
           await sendToWebClient(c, {
             type: 'yeaft_output',
+            agentId,
             conversationId: msg.conversationId,
             ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
             ...(msg.vpId != null ? { vpId: msg.vpId } : {}),

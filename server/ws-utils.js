@@ -87,6 +87,7 @@ export async function broadcastAgentList() {
           latency: agent.latency || null,
           capabilities: agent.capabilities || ['terminal', 'file_editor', 'background_tasks'],
           version: agent.version || null,
+          yeaftStatus: agent.yeaftStatus || null,
           proxyPorts: agent.proxyPorts || [],
           conversations: Array.from(agent.conversations.values()).filter(c =>
             CONFIG.skipAuth || !c.userId || c.userId === client.userId
