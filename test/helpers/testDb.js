@@ -92,12 +92,18 @@ const MIGRATIONS_NEW = [
   // fix-usermsg-dup: messages now carry an opaque JSON metadata blob
   // that holds the `clientMessageId` round-trip key (and experts /
   // askRequestId for other features).
-  'ALTER TABLE messages ADD COLUMN metadata TEXT'
+  'ALTER TABLE messages ADD COLUMN metadata TEXT',
+  // feat-chat-load-perf: one-shot sentinel for the bulkAddHistory
+  // timestamp-rebuild repair path. See server/db/connection.js for the
+  // full rationale.
+  'ALTER TABLE sessions ADD COLUMN ts_rebuilt_at INTEGER DEFAULT 0'
 ];
 
 const POST_INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)',
-  'CREATE INDEX IF NOT EXISTS idx_users_agent_secret ON users(agent_secret)'
+  'CREATE INDEX IF NOT EXISTS idx_users_agent_secret ON users(agent_secret)',
+  // feat-chat-load-perf: composite covering index for role='user' filters.
+  'CREATE INDEX IF NOT EXISTS idx_messages_session_role_id ON messages(session_id, role, id DESC)'
 ];
 
 export function createTestDb() {
@@ -197,7 +203,11 @@ export function createDbOperations(db) {
     getUserMessageIdsBeforeId: db.prepare('SELECT id FROM messages WHERE session_id = ? AND role = \'user\' AND id < ? ORDER BY id DESC LIMIT ?'),
     getMessagesBetweenIds: db.prepare('SELECT * FROM messages WHERE session_id = ? AND id >= ? AND id < ? ORDER BY id ASC'),
     getTimestampRange: db.prepare('SELECT MIN(created_at) as min_ts, MAX(created_at) as max_ts, COUNT(*) as count FROM messages WHERE session_id = ?'),
-    getLastUserMessage: db.prepare('SELECT * FROM messages WHERE session_id = ? AND role = \'user\' ORDER BY id DESC LIMIT 1')
+    getLastUserMessage: db.prepare('SELECT * FROM messages WHERE session_id = ? AND role = \'user\' ORDER BY id DESC LIMIT 1'),
+    // feat-chat-load-perf: one-shot sentinel statements. See
+    // server/db/connection.js for full rationale.
+    getSessionTsRebuiltAt: db.prepare('SELECT ts_rebuilt_at FROM sessions WHERE id = ?'),
+    markSessionTsRebuilt: db.prepare('UPDATE sessions SET ts_rebuilt_at = ? WHERE id = ?')
   };
 
   function generateUserId() {
@@ -379,8 +389,16 @@ export function createDbOperations(db) {
       if (lastUserMsg) {
         const tsRange = stmts.getTimestampRange.get(sessionId);
         if (tsRange && tsRange.count > 5 && (tsRange.max_ts - tsRange.min_ts) < 1000) {
-          needsRebuild = true;
-        } else {
+          // feat-chat-load-perf: mirror production one-shot guard. Repair
+          // runs at most once per session lifetime; subsequent triggers
+          // skip the destructive DELETE + re-INSERT.
+          const sentinel = stmts.getSessionTsRebuiltAt.get(sessionId);
+          const alreadyRebuilt = sentinel && sentinel.ts_rebuilt_at > 0;
+          if (!alreadyRebuilt) {
+            needsRebuild = true;
+          }
+        }
+        if (!needsRebuild) {
           const anchor = lastUserMsg.content;
           let anchorIndex = -1;
           for (let i = historyMessages.length - 1; i >= 0; i--) {
@@ -408,6 +426,7 @@ export function createDbOperations(db) {
         try {
           if (needsRebuild) {
             stmts.deleteMessagesBySession.run(sessionId);
+            stmts.markSessionTsRebuilt.run(Date.now(), sessionId);
           }
           let count = 0;
           let lastTs = 0;

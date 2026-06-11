@@ -1,5 +1,5 @@
 import { homedir } from 'os';
-import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync, openSync, readSync, closeSync, fstatSync } from 'fs';
 import { join } from 'path';
 import ctx from './context.js';
 import { getProvider, DEFAULT_PROVIDER } from './providers/index.js';
@@ -146,6 +146,79 @@ export async function getHistorySessions(workDir) {
   return sessions;
 }
 
+// feat-chat-load-perf: tail-read helper used by loadSessionHistory.
+// Reads the last `limit` user/assistant rows from a JSONL without slurping
+// the whole file. Strategy: open the file, fstat to get size, then read
+// fixed-size chunks from the end backwards into a buffer. After each chunk
+// we split on '\n', parse complete lines, push valid user/assistant rows
+// into a stack, and stop once the stack has `limit` rows or we've read past
+// the head of the file. A 42 MB / 100k-message JSONL with limit=500 reads
+// roughly 1–4 MB instead of the entire file.
+//
+// Tradeoffs:
+// - Falls back to full readFileSync if anything throws (defensive — a 200ms
+//   slow path beats a broken history load).
+// - JSONL lines are bounded in practice (Claude CLI writes one message per
+//   line, typically a few KB). The chunk size (256 KB) is sized so a single
+//   chunk almost always contains many complete lines.
+// - We keep a "carry" prefix between chunks for the first partial line, so a
+//   line that straddles a chunk boundary is parsed correctly on the next
+//   iteration.
+const TAIL_CHUNK_SIZE = 256 * 1024; // 256 KB
+function readTailMessages(filePath, limit) {
+  const fd = openSync(filePath, 'r');
+  try {
+    const { size } = fstatSync(fd);
+    if (size === 0) return [];
+
+    const collected = []; // newest-first while we build it; reverse before return
+    let carry = ''; // partial-line tail from the previous (further-into-file) chunk
+    let position = size;
+    const chunk = Buffer.alloc(TAIL_CHUNK_SIZE);
+
+    while (position > 0 && collected.length < limit) {
+      const readSize = Math.min(TAIL_CHUNK_SIZE, position);
+      const offset = position - readSize;
+      readSync(fd, chunk, 0, readSize, offset);
+      position = offset;
+
+      const text = chunk.slice(0, readSize).toString('utf-8') + carry;
+      const lines = text.split('\n');
+      // If we're not yet at the head of the file, the first segment is a
+      // potentially partial line — stash it for the next iteration.
+      carry = position > 0 ? lines.shift() : '';
+
+      // Walk lines newest-first (end to start).
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i];
+        if (!line || !line.trim()) continue;
+        try {
+          const data = JSON.parse(line);
+          if (data.type === 'user' || data.type === 'assistant') {
+            collected.push(data);
+            if (collected.length >= limit) break;
+          }
+        } catch {}
+      }
+    }
+
+    // If we ran out of file with leftover carry, try it as the head line.
+    if (collected.length < limit && carry && carry.trim()) {
+      try {
+        const data = JSON.parse(carry);
+        if (data.type === 'user' || data.type === 'assistant') {
+          collected.push(data);
+        }
+      } catch {}
+    }
+
+    // collected is newest-first; flip to chronological order for callers.
+    return collected.reverse();
+  } finally {
+    closeSync(fd);
+  }
+}
+
 // 读取 session 文件中的历史消息
 export function loadSessionHistory(workDir, claudeSessionId, limit = 500) {
   const projectsDir = getClaudeProjectsDir();
@@ -157,6 +230,17 @@ export function loadSessionHistory(workDir, claudeSessionId, limit = 500) {
   if (!existsSync(sessionFile)) {
     console.log(`Session file not found: ${sessionFile}`);
     return [];
+  }
+
+  // Fast path: tail-read only the last `limit` user/assistant rows. Avoids
+  // slurping ~42 MB into memory + ~100k JSON.parse calls when we only need
+  // the last 500 entries on every chat resume.
+  if (limit && limit > 0) {
+    try {
+      return readTailMessages(sessionFile, limit);
+    } catch (e) {
+      console.error(`Tail-read failed (${e.message}), falling back to full read for: ${sessionFile}`);
+    }
   }
 
   const messages = [];
