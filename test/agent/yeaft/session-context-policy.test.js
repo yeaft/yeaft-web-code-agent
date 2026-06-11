@@ -1,9 +1,33 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
   GROUP_CONTEXT_PRESSURE_RATIO,
   shouldAllowGroupReflection,
 } from '../../../agent/yeaft/engine.js';
 import { resolveSessionConfig } from '../../../agent/yeaft/sessions/session-config.js';
+import { _setMemCacheForTest, _resetMemCache } from '../../../agent/yeaft/llm/models-dev.js';
+
+// Prime a deterministic models.dev snapshot so the resolver returns the
+// numbers the tests below expect — without this, every lookup falls through
+// to DEFAULT_CONTEXT_WINDOW (200K) and the gpt-4.1 assertions fail.
+const SNAPSHOT = {
+  anthropic: {
+    models: {
+      'claude-sonnet-4-20250514': { limit: { context: 200_000, output: 64_000 } },
+    },
+  },
+  openai: {
+    models: {
+      'gpt-4.1': { limit: { context: 1_047_576, output: 32_768 } },
+    },
+  },
+};
+
+beforeAll(() => {
+  _setMemCacheForTest(SNAPSHOT);
+});
+afterAll(() => {
+  _resetMemCache();
+});
 
 function messagesWithTokens(approxTokenCount, turns = 1) {
   const charsPerTurn = Math.max(4, Math.ceil((approxTokenCount * 4) / turns));

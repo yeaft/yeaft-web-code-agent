@@ -1,17 +1,30 @@
 // Message CRUD and streaming helpers
 
-// Default group identifier used by the Yeaft "Default" group seed
+// Default session identifier used by the Yeaft "Default" session seed
 // (mirrors agent/yeaft/groups/seed-default.js DEFAULT_GROUP_ID).
-// Every Yeaft message is tagged with a groupId — either the currently
-// active group filter or this default — so the group filter getters
+// The `grp_` prefix is a persistence contract — disk paths, AMS scope
+// regex and migration code all key off it, so the string value stays.
+// What changed is the JS identifier and the message field it stamps:
+// every Yeaft message is tagged with `sessionId` — either the currently
+// active session filter or this default — so the session filter getters
 // can use strict equality without hiding "untagged" messages.
-const DEFAULT_GROUP_ID = 'grp_default';
+const DEFAULT_SESSION_ID = 'grp_default';
 
 // Are we currently writing into the *active* Yeaft conversation? Both
-// the speaker-attribution stamper and the groupId stamper key off this
+// the speaker-attribution stamper and the sessionId stamper key off this
 // same predicate; centralising it keeps the rules in one place.
+//
+// IMPORTANT: this does NOT gate on `store.currentView === 'yeaft'`.
+// Yeaft turns keep running on the agent regardless of which view the
+// user is looking at; messages can arrive while the user is browsing
+// Chat. If we gated on view, those messages would land in messagesMap
+// without a `sessionId` and the `messages` getter would silently filter
+// them out (it does a strict `m.sessionId === activeSessionFilter` match).
+// The user would see the UI frozen on switch-back until something forced
+// a re-fetch. Keying purely off "is this the yeaft conversation id"
+// keeps stamping consistent regardless of view.
 function inActiveYeaftConv(store, conversationId) {
-  return store.currentView === 'yeaft'
+  return !!store.yeaftConversationId
     && conversationId === store.yeaftConversationId;
 }
 
@@ -76,16 +89,16 @@ export function addMessageToConversation(store, conversationId, msg) {
   };
 
   // Yeaft uniformity: stamp every message that lands in the active Yeaft
-  // conversation with a groupId. Never overwrite an explicit groupId set
-  // by the caller (e.g. sendYeaftSessionMessage or task_message handler).
-  // Bug 1: prefer `_currentYeaftSessionId` (the SEND-context group set by
-  // handleYeaftOutput before dispatching streaming chunks) over the user's
-  // current filter — otherwise messages arriving while the user has
-  // switched groups get stamped with the wrong group.
-  if (inActiveYeaftConv(store, conversationId) && !newMsg.groupId) {
-    newMsg.groupId = store._currentYeaftSessionId
+  // conversation with a sessionId. Never overwrite an explicit sessionId
+  // set by the caller (e.g. sendYeaftSessionMessage or task_message
+  // handler). Bug 1: prefer `_currentYeaftSessionId` (the SEND-context
+  // session set by handleYeaftOutput before dispatching streaming
+  // chunks) over the user's current filter — otherwise messages arriving
+  // while the user has switched sessions get stamped with the wrong one.
+  if (inActiveYeaftConv(store, conversationId) && !newMsg.sessionId) {
+    newMsg.sessionId = store._currentYeaftSessionId
       || store.yeaftActiveSessionFilter
-      || DEFAULT_GROUP_ID;
+      || DEFAULT_SESSION_ID;
   }
 
   // Yeaft per-VP turn: stamp vpId + turnId on the message for turn-level
@@ -116,7 +129,7 @@ export function addMessageToConversation(store, conversationId, msg) {
   }
   store.messagesMap[conversationId].push(newMsg);
   // Bug 1: keep messages sorted by timestamp so history loaded out-of-order
-  // (e.g. from different groups) still displays chronologically.
+  // (e.g. from different sessions) still displays chronologically.
   // Only sort Yeaft conversations; crew conversations need insertion order.
   if (conversationId === store.yeaftConversationId) {
     store.messagesMap[conversationId].sort((a, b) => a.timestamp - b.timestamp);
@@ -157,7 +170,9 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
       ...(opts.timestamp ? { timestamp: opts.timestamp } : {}),
       type: 'assistant',
       content: text,
-      isStreaming: true
+      isStreaming: true,
+      status: 'pending',
+      turnStartAt: opts.timestamp || Date.now(),
     });
     return;
   }
@@ -178,7 +193,9 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
       ...(opts.timestamp ? { timestamp: opts.timestamp } : {}),
       type: 'assistant',
       content: text,
-      isStreaming: true
+      isStreaming: true,
+      status: 'pending',
+      turnStartAt: opts.timestamp || Date.now(),
     });
   }
 }
@@ -232,6 +249,18 @@ export function finishStreamingForConversation(store, conversationId) {
     }
     if (m.isStreaming) {
       m.isStreaming = false;
+      // Per-message lifecycle: promote pending → completed at finalize
+      // time. The vp_turn_end reducer in the store is the live source
+      // of truth and runs FIRST when the turn really ends; this branch
+      // catches history-replay paths (no vp_turn_end fires) and any
+      // edge where finishStreaming runs without the broker event. We
+      // guard on status === 'pending' so live 'aborted' / 'errored'
+      // stamps from the store are never silently overwritten back to
+      // 'completed'.
+      if (m.status === 'pending') {
+        m.status = 'completed';
+        m.turnEndAt = Date.now();
+      }
     }
     // Defensive speaker-attribution stamp at finalize time. The avatar
     // header in AssistantTurn relies on `speakerVpId` to render after
@@ -341,6 +370,40 @@ export function loadHistoryMessages(store, historyMessages) {
   console.log('Messages after loading:', msgs);
 }
 
+/**
+ * Largest `dbMessageId` across `msgs`, or null if none of them carry one.
+ *
+ * Used as the `afterMessageId` cursor for incremental `sync_messages`
+ * requests (cache-hit branch in `selectConversation`, plus the cached
+ * `chatSessionState[convId].lastSeenDbId` stamp).
+ *
+ * Three contracts the call sites rely on:
+ *   1. **Tail-safe** — streaming assistant partials sit at the tail
+ *      without a `dbMessageId`; the naïve `msgs.at(-1)?.dbMessageId`
+ *      would yield `undefined` and force a wasteful cold-load.
+ *   2. **Order-safe** — older-history prepends can land smaller ids
+ *      after larger ones; we walk the whole array and take the max.
+ *   3. **Zero-safe** — `dbMessageId === 0` is **excluded** even though
+ *      it'd type-check as `number`. SQLite AUTOINCREMENT starts at 1,
+ *      so 0 cannot legitimately occur today. But the server uses
+ *      `if (msg.afterMessageId)` to discriminate the delta branch
+ *      (`client-conversation.js:341`); a literal 0 is falsy and would
+ *      silently fall through to `getRecent(limit)`, returning the last
+ *      100 rows instead of "everything strictly newer". Treat 0 as
+ *      "no cursor" so the cold-load fallback fires instead.
+ */
+export function maxDbMessageId(msgs) {
+  if (!Array.isArray(msgs)) return null;
+  let max = null;
+  for (const m of msgs) {
+    if (typeof m?.dbMessageId === 'number' && m.dbMessageId > 0
+        && (max === null || m.dbMessageId > max)) {
+      max = m.dbMessageId;
+    }
+  }
+  return max;
+}
+
 export function formatDbMessage(dbMsg) {
   if (!dbMsg) return null;
 
@@ -400,10 +463,27 @@ export function formatDbMessage(dbMsg) {
   };
 
   if (dbMsg.role === 'user') {
+    // fix-usermsg-dup: surface the persisted clientMessageId so the
+    // sync-replay merge (conversationHandler.handleSyncMessagesResult)
+    // and the live echo merge (claudeOutput.js user branch) can both
+    // match by id. Without this, a session that was viewed AFTER page
+    // refresh — i.e. messages come from sync rather than the live echo
+    // path — has no dedup key and the next optimistic add produces the
+    // duplicate this fix targets.
+    let clientMessageId = null;
+    if (dbMsg.metadata) {
+      try {
+        const meta = JSON.parse(dbMsg.metadata);
+        if (meta && typeof meta.clientMessageId === 'string') {
+          clientMessageId = meta.clientMessageId;
+        }
+      } catch { /* invalid metadata JSON, ignore */ }
+    }
     return {
       ...base,
       type: 'user',
-      content: typeof dbMsg.content === 'string' ? dbMsg.content : String(dbMsg.content || '')
+      content: typeof dbMsg.content === 'string' ? dbMsg.content : String(dbMsg.content || ''),
+      ...(clientMessageId ? { clientMessageId } : {})
     };
   } else if (dbMsg.role === 'assistant') {
     const text = extractTextContent(dbMsg.content);

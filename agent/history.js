@@ -1,5 +1,5 @@
 import { homedir } from 'os';
-import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync, openSync, readSync, closeSync, fstatSync } from 'fs';
 import { join } from 'path';
 import ctx from './context.js';
 import { getProvider, DEFAULT_PROVIDER } from './providers/index.js';
@@ -146,6 +146,116 @@ export async function getHistorySessions(workDir) {
   return sessions;
 }
 
+// feat-chat-load-perf: tail-read helper used by loadSessionHistory.
+// Reads the last `limit` user/assistant rows from a JSONL without slurping
+// the whole file. Strategy: open the file, fstat to get size, then read
+// fixed-size chunks from the end backwards into a Buffer. We split on the
+// `\n` *byte* (0x0A) — NOT on a decoded string — because Buffer→string
+// substitutes U+FFFD for any partial multi-byte sequence at chunk
+// boundaries, and that corruption is undetectable downstream (JSON.parse
+// happily accepts U+FFFD as valid string content). Splitting on the
+// newline byte and carrying raw bytes between iterations means every
+// complete line is decoded as a whole and the agent never feeds the LLM
+// mangled history. A 42 MB / 100k-message JSONL with limit=500 reads
+// roughly 1–4 MB instead of the entire file.
+//
+// Tradeoffs:
+// - Falls back to full readFileSync if anything throws (defensive — a 200ms
+//   slow path beats a broken history load).
+// - The TAIL_CHUNK_SIZE constant (256 KB) is sized so a single chunk almost
+//   always contains many complete lines from Claude CLI's per-message
+//   write pattern.
+// - The carry Buffer is capped at TAIL_MAX_CARRY_BYTES — a pathological
+//   JSONL line longer than that triggers the fallback path rather than
+//   letting the agent OOM.
+const TAIL_CHUNK_SIZE = 256 * 1024; // 256 KB
+const TAIL_MAX_CARRY_BYTES = 4 * 1024 * 1024; // 4 MB — safety valve, see above
+const NEWLINE_BYTE = 0x0a;
+
+// Exported for tests so the UTF-8-boundary regression can splice a
+// multi-byte character exactly at the chunk seam.
+export const _TAIL_CHUNK_SIZE_FOR_TESTS = TAIL_CHUNK_SIZE;
+
+function readTailMessages(filePath, limit) {
+  const fd = openSync(filePath, 'r');
+  try {
+    const { size } = fstatSync(fd);
+    if (size === 0) return [];
+
+    const collected = []; // newest-first while we build it; reverse before return
+    let carry = Buffer.alloc(0); // raw-byte tail from the previous (deeper-into-file) chunk
+    let position = size;
+    const chunkBuf = Buffer.alloc(TAIL_CHUNK_SIZE);
+
+    while (position > 0 && collected.length < limit) {
+      const readSize = Math.min(TAIL_CHUNK_SIZE, position);
+      const offset = position - readSize;
+      readSync(fd, chunkBuf, 0, readSize, offset);
+      position = offset;
+      const atHead = position === 0;
+
+      // Concatenate raw bytes — never decode partials, never split UTF-8.
+      const buf = Buffer.concat([chunkBuf.slice(0, readSize), carry]);
+
+      // If we're not yet at the head of the file, the first segment up to
+      // (but not including) the first newline is a potentially-partial
+      // line — stash its bytes for the next iteration. If there's no
+      // newline at all, the whole chunk is one partial line and we carry
+      // it forward.
+      let tailStart = 0;
+      if (!atHead) {
+        const firstNl = buf.indexOf(NEWLINE_BYTE);
+        if (firstNl === -1) {
+          if (buf.length > TAIL_MAX_CARRY_BYTES) {
+            // Refuse to grow the carry unbounded — propagate to fallback.
+            throw new Error(`tail-read carry exceeded ${TAIL_MAX_CARRY_BYTES} bytes`);
+          }
+          carry = buf;
+          continue;
+        }
+        carry = buf.slice(0, firstNl);
+        tailStart = firstNl + 1;
+      }
+
+      // Everything from tailStart to end is complete UTF-8 lines — decode
+      // safely as one block.
+      const text = buf.slice(tailStart).toString('utf-8');
+      const lines = text.split('\n');
+
+      // Walk lines newest-first (end to start).
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i];
+        if (!line || !line.trim()) continue;
+        try {
+          const data = JSON.parse(line);
+          if (data.type === 'user' || data.type === 'assistant') {
+            collected.push(data);
+            if (collected.length >= limit) break;
+          }
+        } catch {}
+      }
+    }
+
+    // If we ran out of file with leftover carry, try it as the head line.
+    if (collected.length < limit && carry.length > 0) {
+      const headLine = carry.toString('utf-8').trim();
+      if (headLine) {
+        try {
+          const data = JSON.parse(headLine);
+          if (data.type === 'user' || data.type === 'assistant') {
+            collected.push(data);
+          }
+        } catch {}
+      }
+    }
+
+    // collected is newest-first; flip to chronological order for callers.
+    return collected.reverse();
+  } finally {
+    closeSync(fd);
+  }
+}
+
 // 读取 session 文件中的历史消息
 export function loadSessionHistory(workDir, claudeSessionId, limit = 500) {
   const projectsDir = getClaudeProjectsDir();
@@ -157,6 +267,17 @@ export function loadSessionHistory(workDir, claudeSessionId, limit = 500) {
   if (!existsSync(sessionFile)) {
     console.log(`Session file not found: ${sessionFile}`);
     return [];
+  }
+
+  // Fast path: tail-read only the last `limit` user/assistant rows. Avoids
+  // slurping ~42 MB into memory + ~100k JSON.parse calls when we only need
+  // the last 500 entries on every chat resume.
+  if (limit && limit > 0) {
+    try {
+      return readTailMessages(sessionFile, limit);
+    } catch (e) {
+      console.error(`Tail-read failed (${e.message}), falling back to full read for: ${sessionFile}`);
+    }
   }
 
   const messages = [];

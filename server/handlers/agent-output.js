@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { messageDb } from '../database.js';
+import { messageDb, yeaftSessionDb } from '../database.js';
 import { broadcastAgentList, forwardToClients, sendToWebClient } from '../ws-utils.js';
 import { trackMessage, webClients, previewFiles } from '../context.js';
 import { CONFIG } from '../config.js';
@@ -60,13 +60,29 @@ export async function handleAgentOutput(agentId, agent, msg) {
             if (content) {
               // 检查 convInfo 上暂存的 expertSelections，保存为 metadata
               const conv = agent.conversations.get(msg.conversationId);
-              let metadata = null;
-              if (conv?._pendingExperts) {
-                metadata = JSON.stringify({ experts: conv._pendingExperts });
+              // fix-usermsg-dup: pull the client-stamped id stashed by the
+              // `chat` handler so the echo carries it back to the web for
+              // optimistic-dedup, AND so the DB row preserves it for
+              // post-refresh `sync_messages_result` replay. Without the DB
+              // half, refresh → resend would lose the dedup key and fall
+              // back to the unreliable content-equality path.
+              const clientMessageId = conv?._pendingClientMessageId || null;
+              // Review M2 (Torvalds): build the payload first, then
+              // clear the stash. Mixing mutation with build made the
+              // delete look conditional on the JSON construction.
+              const metaParts = {};
+              if (conv?._pendingExperts) metaParts.experts = conv._pendingExperts;
+              if (clientMessageId) metaParts.clientMessageId = clientMessageId;
+              if (conv) {
                 delete conv._pendingExperts;
+                delete conv._pendingClientMessageId;
               }
+              const metadata = Object.keys(metaParts).length > 0 ? JSON.stringify(metaParts) : null;
               const dbId = messageDb.add(msg.conversationId, 'user', content, 'user', null, null, metadata);
               msg.data.dbMessageId = dbId;
+              if (clientMessageId) {
+                msg.data.clientMessageId = clientMessageId;
+              }
               // Track user message count for stats
               trackMessage(conv?.userId || agent?.ownerId);
             }
@@ -349,6 +365,10 @@ export async function handleAgentOutput(agentId, agent, msg) {
 
     case 'yeaft_output': {
       const data = hydrateInlinePreviewData(msg.data);
+      if (msg.event?.type === 'yeaft_status') {
+        agent.yeaftStatus = msg.event;
+        await broadcastAgentList();
+      }
       // Forward Yeaft output to all authenticated clients of this agent's owner.
       // Payload carries { conversationId, data } (claude_output format) or { event } (metadata).
       //
@@ -377,10 +397,11 @@ export async function handleAgentOutput(agentId, agent, msg) {
             // Stamp the source agent so the web sessions store can keep
             // per-agent rosters (cross-agent listing in the unified
             // sidebar). Older web bundles ignore the extra field.
-            agentId: agent.id,
-            ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
+            agentId: agentId,
+            ...(msg.sessionId != null ? { sessionId: msg.sessionId } : {}),
             ...(msg.vpId != null ? { vpId: msg.vpId } : {}),
             ...(msg.turnId != null ? { turnId: msg.turnId } : {}),
+            ...(msg.threadId != null ? { threadId: msg.threadId } : {}),
             data,
             event: msg.event,
           });
@@ -402,7 +423,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
           await sendToWebClient(c, {
             type: 'yeaft_history_chunk',
             conversationId: msg.conversationId,
-            ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
+            ...(msg.sessionId != null ? { sessionId: msg.sessionId } : {}),
             messages,
             oldestSeq: msg.oldestSeq ?? null,
             hasMore: !!msg.hasMore,
@@ -433,7 +454,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
           await sendToWebClient(c, {
             type: msg.type,
-            ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
+            ...(msg.sessionId != null ? { sessionId: msg.sessionId } : {}),
             ...(msg.vpId != null ? { vpId: msg.vpId } : {}),
             ...(msg.status != null ? { status: msg.status } : {}),
             ...(typeof msg.success === 'boolean' ? { success: msg.success } : {}),
@@ -467,13 +488,128 @@ export async function handleAgentOutput(agentId, agent, msg) {
       }
       break;
 
+    case 'session_list_updated': {
+      // Server-side persistence for yeaft sessions. Mirror the agent's
+      // authoritative snapshot into the `yeaft_sessions` table so the
+      // unified sidebar can show this user's yeaft sessions across all
+      // their agents (online or not) and survive reload. Pure shadow
+      // store — agent's on-disk `~/.yeaft/sessions/` remains canonical.
+      // Forwarding to the web continues unchanged below.
+      try {
+        const rows = Array.isArray(msg.sessions) ? msg.sessions : [];
+        if (agent.ownerId) {
+          yeaftSessionDb.reconcileFromSnapshot(agent.ownerId, agentId, rows);
+        }
+      } catch (e) {
+        console.warn(`[Server] yeaft session persist failed for agent ${agentId}:`, e?.message || e);
+      }
+      // fix-yeaft-session-list-and-menu: decorate the outgoing snapshot
+      // with the server-side pin state. The agent has no notion of
+      // pinning (pin is UI metadata that lives in the `yeaft_sessions`
+      // table); the web sessions store reads `pinned: true` off each
+      // row in applySnapshot and mirrors it into chatStore.pinnedSessions
+      // so chat + yeaft share a single pin registry for sort logic.
+      //
+      // Use one batch read (`getByAgent`) and a Set lookup instead of an
+      // N+1 `get(id)` per row — relays this size hot path on every
+      // snapshot per connected client.
+      const rawRows = Array.isArray(msg.sessions) ? msg.sessions : [];
+      const pinnedIds = new Set();
+      try {
+        for (const row of yeaftSessionDb.getByAgent(agentId)) {
+          if (row && row.isPinned) pinnedIds.add(row.id);
+        }
+      } catch (e) {
+        console.warn(`[Server] yeaft pin decorate read failed for agent ${agentId}:`, e?.message || e);
+      }
+      const decoratedSessions = rawRows.map(s => {
+        if (!s || !s.id) return s;
+        return pinnedIds.has(s.id) ? { ...s, pinned: true } : s;
+      });
+      // Relay verbatim to web (agentId stamped so the web sessions store
+      // can merge per-agent rosters).
+      for (const [, c] of webClients) {
+        if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
+          await sendToWebClient(c, {
+            type: msg.type,
+            agentId: agentId,
+            sessions: decoratedSessions,
+          });
+        }
+      }
+      break;
+    }
+
+    case 'session_roster_changed': {
+      // Delta event — update only the affected session row. Same as
+      // above: keep the DB shadow + forward to web.
+      try {
+        if (agent.ownerId && msg) {
+          const sessionId = msg.sessionId;
+          if (sessionId) {
+            const existing = yeaftSessionDb.get(sessionId);
+            // Roster-delta path is a cache update, not authoritative
+            // creation. If we've never seen this row before, skip and
+            // wait for the next full snapshot (which carries truthful
+            // createdAt / workDir / config).
+            if (!existing) break;
+            const merged = {
+              id: sessionId,
+              name: msg.name != null ? msg.name : (existing?.name || sessionId),
+              roster: Array.isArray(msg.roster)
+                ? msg.roster
+                : (existing?.roster || []),
+              defaultVpId: msg.defaultVpId != null
+                ? msg.defaultVpId
+                : (existing?.defaultVpId || null),
+              workDir: existing?.workDir || '',
+              config: existing?.config || {},
+              announcement: typeof msg.announcement === 'string'
+                ? msg.announcement
+                : (existing?.announcement || ''),
+              createdAt: existing?.createdAt || Date.now(),
+            };
+            yeaftSessionDb.upsertFromSnapshot(agent.ownerId, agentId, merged);
+          }
+        }
+      } catch (e) {
+        console.warn(`[Server] yeaft roster persist failed for agent ${agentId}:`, e?.message || e);
+      }
+      for (const [, c] of webClients) {
+        if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
+          await sendToWebClient(c, { ...msg, agentId: agentId });
+        }
+      }
+      break;
+    }
+
+    case 'session_crud_result': {
+      // Surface op result to the web (the only client that cares about
+      // requestId routing). Also keep the DB shadow consistent for
+      // delete/archive — create/update are covered by the snapshot
+      // that follows from the agent.
+      try {
+        const op = msg.op;
+        const sessionId = msg.sessionId;
+        if (msg.ok && sessionId && (op === 'delete' || op === 'archive')) {
+          yeaftSessionDb.delete(sessionId);
+        }
+      } catch (e) {
+        console.warn(`[Server] yeaft crud-result persist failed:`, e?.message || e);
+      }
+      for (const [, c] of webClients) {
+        if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
+          await sendToWebClient(c, { ...msg, agentId: agentId });
+        }
+      }
+      break;
+    }
+
     case 'yeaft_debug_history':
       // fix-vp-multi-thread (bug 4): relay the persistent SQLite trace
       // snapshot from the agent to the web client that requested it via
       // `yeaft_fetch_debug_history`. Without this case the agent's
       // bare-message reply is dropped here and the UI never hydrates.
-      // Whitelist `loops`/`turns`/`groupId`/`threadId`/`error` to fence
-      // off accidental leakage of new fields in future schema bumps.
       for (const [, c] of webClients) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
           await sendToWebClient(c, {
@@ -481,7 +617,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
             loops: Array.isArray(msg.loops) ? msg.loops : [],
             turns: Array.isArray(msg.turns) ? msg.turns : [],
             dreamEvents: Array.isArray(msg.dreamEvents) ? msg.dreamEvents : [],
-            ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
+            ...(msg.sessionId != null ? { sessionId: msg.sessionId } : {}),
             ...(msg.threadId != null ? { threadId: msg.threadId } : {}),
             ...(msg.error != null ? { error: msg.error } : {}),
           });

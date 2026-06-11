@@ -17,7 +17,7 @@
 
 import { extractKeywords } from './keywords.js';
 import { approxTokens } from './budget.js';
-import { isVpForeign } from './store-v2.js';
+import { isVpForeign } from './store.js';
 
 /**
  * @typedef {object} PreflowOptions

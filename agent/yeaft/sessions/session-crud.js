@@ -1,17 +1,17 @@
 /**
- * group-crud.js — High-level Group CRUD API (task-334m).
+ * session-crud.js — High-level Session CRUD API (task-334m).
  *
- * Wraps the primitives from group-store.js + roster.js into the 5 operations
+ * Wraps the primitives from session-store.js + roster.js into the 5 operations
  * wired to WS events (§Δ10 334m + R6 §Δ31.2):
- *   createSessionFromSpec  — wizard "create new group" (empty or user-picked roster)
+ *   createSessionFromSpec  — wizard "create new session" (empty or user-picked roster)
  *   renameSession          — update meta.name; preserves roster / defaultVpId
  *   archiveSession         — rename dir to `.archived-<ts>-<id>` (soft delete)
  *   addMember            — roster.addVp + save; sets defaultVpId if first
  *   removeMember         — roster.removeVp + save; clears/rotates defaultVpId
  *
  * Plus the D1 bootstrap helper:
- *   ensureDefaultSessionIfEmpty(yeaftDir, {libDir}) — if NO group exists on
- *   disk, seed `grp_default` with roster = every VP in the library, and
+ *   ensureDefaultSessionIfEmpty(yeaftDir, {libDir}) — if NO session exists on
+ *   disk, seed `session_default` with roster = every VP in the library, and
  *   defaultVpId = alphabetically first vpId. No-op when ≥1 group present.
  *
  * Hard constraints (PM):
@@ -52,7 +52,7 @@ import { addVp as rosterAdd, removeVp as rosterRemove, setDefaultVp } from './ro
 import { seedDefaultSession, DEFAULT_SESSION_ID } from './seed-default.js';
 import { nextSessionId, validateVpId, isReservedVpId } from './ids.js';
 import { scanVpLibrary, DEFAULT_VP_LIB_DIR } from '../vp/vp-store.js';
-import { seedSummaryIfMissingSync, removeScopeDirSync } from '../memory/store-v2.js';
+import { seedSummaryIfMissingSync, removeScopeDirSync } from '../memory/store.js';
 import { ensureSessionConfigFile, saveSessionConfig, loadSessionConfig } from './session-config.js';
 
 /**
@@ -152,6 +152,86 @@ export function unregisterSessionWorkDir(defaultYeaftDir, sessionId) {
   writeWorkDirRegistry(defaultYeaftDir, registry);
 }
 
+/**
+ * Scan the `.yeaft/sessions/` directory under `workDir` and return every
+ * session meta we can read. Read-only: never touches the registry.
+ *
+ * Each returned record carries `workDir` (the normalized path we scanned).
+ * This utility deliberately does NOT decorate `alreadyRegistered` — that
+ * cross-references the central workdir registry, which is a separate
+ * concern owned by the handler / caller (see
+ * `handleYeaftScanWorkdirSessions`). Keeping the utility layer-pure makes
+ * it usable from contexts that don't have / don't care about the registry
+ * (e.g. CLI tools, future per-workdir snapshots).
+ *
+ * Returns `[]` for missing dir / empty dir / unreadable dir — never throws.
+ * Sort is `createdAt` descending (most-recent first) because the restore
+ * UI typically cares about "the session I made yesterday".
+ *
+ * @param {string} workDir — the working directory to scan.
+ * @returns {Array<object>}
+ */
+export function scanWorkdirSessions(workDir) {
+  const normalized = normalizeWorkDir(workDir);
+  if (!normalized) return [];
+  const groupYeaftDir = yeaftDirForWorkDir(normalized);
+  const root = sessionsRoot(groupYeaftDir);
+  if (!existsSync(root)) return [];
+  const out = [];
+  let entries;
+  try {
+    entries = readdirSync(root);
+  } catch {
+    return [];
+  }
+  for (const name of entries) {
+    if (name.startsWith('.')) continue; // skip .archived-* and dotfiles
+    const dir = join(root, name);
+    try { if (!statSync(dir).isDirectory()) continue; } catch { continue; }
+    const meta = loadSessionMeta(dir);
+    if (!meta) continue;
+    out.push({
+      ...meta,
+      workDir: normalized,
+    });
+  }
+  return out.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+}
+
+/**
+ * Register `(sessionId, workDir)` in the central registry so the next
+ * `snapshotSessions()` includes this session.
+ *
+ * Validates that `<workDir>/.yeaft/sessions/<sessionId>/group.json` exists
+ * and is parseable. Throws:
+ *  - `not_found`   — the session dir is not on disk at this workdir
+ *  - `corrupt_meta` — the dir exists but `group.json` is missing / unreadable
+ *                    / can't be parsed. Surfaced as a distinct code so the
+ *                    UI can tell the user "the file is broken" instead of
+ *                    "you picked the wrong workdir" (review finding I1).
+ *
+ * Idempotent: if the same `(sessionId, workDir)` is already registered,
+ * we still rewrite the entry (with the normalized path) and return the
+ * fresh meta — no error.
+ *
+ * @param {string} defaultYeaftDir
+ * @param {string} sessionId
+ * @param {string} workDir
+ * @returns {object} the session meta, with `workDir` set to the normalized path.
+ */
+export function restoreSessionToRegistry(defaultYeaftDir, sessionId, workDir) {
+  if (!sessionId) throw new SessionCrudError('invalid_session_id', null);
+  const normalized = normalizeWorkDir(workDir);
+  if (!normalized) throw new SessionCrudError('invalid_workdir', sessionId);
+  const groupYeaftDir = yeaftDirForWorkDir(normalized);
+  const dir = join(sessionsRoot(groupYeaftDir), sessionId);
+  if (!existsSync(dir)) throw new SessionCrudError('not_found', sessionId);
+  const meta = loadSessionMeta(dir);
+  if (!meta) throw new SessionCrudError('corrupt_meta', sessionId, `group.json missing or unreadable at ${dir}`);
+  registerSessionWorkDir(defaultYeaftDir, sessionId, normalized);
+  return { ...meta, workDir: normalized };
+}
+
 export function resolveSessionYeaftDir(defaultYeaftDir, sessionId) {
   if (!defaultYeaftDir || !sessionId) return defaultYeaftDir;
   const defaultGroupDir = join(sessionsRoot(defaultYeaftDir), sessionId);
@@ -170,21 +250,21 @@ export function resolveSessionYeaftDir(defaultYeaftDir, sessionId) {
 
 /** Build a safe group id from a display name (slug + ulid-lite suffix). */
 export function makeSessionId(name) {
-  const slug = String(name || 'group')
+  const slug = String(name || 'session')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 24) || 'group';
+    .slice(0, 24) || 'session';
   return nextSessionId(slug);
 }
 
 /**
  * (B) D1 seed — called at boot (or when multi-VP is first enabled). Idempotent:
- * returns `{seeded:false}` if any group already exists on disk (including
- * `grp_default`). When empty, seeds with roster = full VP library, sorted
+ * returns `{seeded:false}` if any session already exists on disk (including
+ * `session_default`). When empty, seeds with roster = full VP library, sorted
  * alphabetically; defaultVpId = roster[0].
  *
- * When the VP library is also empty, we still seed an empty-roster group so
+ * When the VP library is also empty, we still seed an empty-roster session so
  * the UI has somewhere to land — but defaultVpId is null and downstream
  * message send will return `no_default_vp` until the user adds a VP.
  */
@@ -275,7 +355,7 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
       saveSessionConfig(yeaftDir, id, spec.config);
     }
   } catch (err) {
-    console.warn(`[group-crud] failed to seed config.json for ${id}:`, err?.message || err);
+    console.warn(`[session-crud] failed to seed config.json for ${id}:`, err?.message || err);
   }
 
   // Seed Layer-A resident summary so the first session has memory content
@@ -283,12 +363,12 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
   // Best-effort: a memory-root permission failure must NOT break group create.
   try {
     seedSummaryIfMissingSync(
-      { kind: 'group', id },
+      { kind: 'session', id },
       buildSessionSeedSummary({ name, roster, defaultVpId }),
       { root: memoryRoot },
     );
   } catch (err) {
-    console.warn(`[group-crud] failed to seed summary.md for ${id}:`, err?.message || err);
+    console.warn(`[session-crud] failed to seed summary.md for ${id}:`, err?.message || err);
   }
 
   return meta;
@@ -356,8 +436,11 @@ export function archiveSession(yeaftDir, sessionId) {
   const groupYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
   const root = sessionsRoot(groupYeaftDir);
   const srcDir = join(root, sessionId);
+  // Idempotent — nothing on disk, nothing to archive. Workdir-registry is
+  // still cleared in case it points at a stale row.
   if (!existsSync(srcDir) || !loadSessionMeta(srcDir)) {
-    throw new SessionCrudError('not_found', sessionId);
+    unregisterSessionWorkDir(yeaftDir, sessionId);
+    return { sessionId, archivedAs: null, alreadyGone: true };
   }
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   // Append 4 hex chars to disambiguate same-millisecond archives (nit #5).
@@ -365,7 +448,7 @@ export function archiveSession(yeaftDir, sessionId) {
   const dstDir = join(root, `.archived-${ts}-${suffix}-${sessionId}`);
   renameSync(srcDir, dstDir);
   unregisterSessionWorkDir(yeaftDir, sessionId);
-  return { sessionId, archivedAs: dstDir };
+  return { sessionId, archivedAs: dstDir, alreadyGone: false };
 }
 
 /**
@@ -401,10 +484,12 @@ export function deleteSession(yeaftDir, sessionId, options = {}) {
     }
   }
 
-  if (!liveExists && legacyDirs.length === 0) {
-    throw new SessionCrudError('not_found', sessionId);
-  }
-
+  // Idempotent — POSIX `rm -f` / HTTP DELETE semantics. If nothing is on
+  // disk, treat as a successful no-op so callers (and any shadow / cache
+  // they maintain) can converge to "gone". We still cascade the memory
+  // scope and workdir-registry teardown below: a stale `summary.md` left
+  // over from a previous incarnation would otherwise contaminate a future
+  // recreate of the same id.
   if (liveExists) {
     rmSync(srcDir, { recursive: true, force: true });
   }
@@ -414,20 +499,29 @@ export function deleteSession(yeaftDir, sessionId, options = {}) {
 
   // Cascade: drop the group's memory scope so a recreate with the same id
   // starts clean. Best-effort — never let memory cleanup fail the CRUD op.
+  // Runs unconditionally so the idempotent path also clears stale memory.
   try {
+    removeScopeDirSync({ kind: 'session', id: sessionId }, { root: memoryRoot });
+    // Legacy pre-session memory scopes used memory/group/<id>. Delete both so
+    // idempotent removal clears stale summaries for old grp_* sessions too.
     removeScopeDirSync({ kind: 'group', id: sessionId }, { root: memoryRoot });
   } catch (err) {
-    console.warn(`[group-crud] failed to remove memory dir for ${sessionId}:`, err?.message || err);
+    console.warn(`[session-crud] failed to remove memory dir for ${sessionId}:`, err?.message || err);
   }
 
   unregisterSessionWorkDir(yeaftDir, sessionId);
-  return { sessionId, deleted: true, legacyCleanedUp: legacyDirs.length };
+  return {
+    sessionId,
+    deleted: liveExists,
+    legacyCleanedUp: legacyDirs.length,
+    alreadyGone: !liveExists && legacyDirs.length === 0,
+  };
 }
 
 /**
- * Sweep any leftover `.archived-*` directories under groups/ that are
+ * Sweep any leftover `.archived-*` directories under sessions/ that are
  * orphans of the old soft-archive flow. Used at boot so users don't see
- * ghost groups in subsequent loads. Returns the list of removed paths.
+ * ghost sessions in subsequent loads. Returns the list of removed paths.
  */
 export function purgeArchivedSessions(yeaftDir) {
   const root = sessionsRoot(yeaftDir);

@@ -50,8 +50,37 @@ describe('Yeaft session restore hydration', () => {
       type: 'yeaft_load_history',
       agentId: 'agent-1',
       limit: 0,
-      groupId: null,
+      sessionId: null,
     });
+  });
+
+  it('lets reconnect retry a lost metadata bootstrap without spamming after hydration', () => {
+    const store = makeStore();
+
+    store.currentView = 'yeaft';
+    store.yeaftAgentId = 'agent-1';
+    store.currentAgent = 'agent-1';
+    store.currentAgentInfo = { id: 'agent-1', online: true };
+    store.yeaftBootstrapMetaLoadingKey = 'agent-1:__none__';
+
+    expect(store.requestYeaftSessionBootstrap({ forceSessionReady: true })).toBe(true);
+    expect(store.sent).toContainEqual({
+      type: 'yeaft_load_history',
+      agentId: 'agent-1',
+      limit: 0,
+      sessionId: null,
+    });
+
+    store.sent = [];
+    store.yeaftSessionReady = true;
+    store.yeaftModel = 'model-a';
+    store.yeaftStatus = { tools: [], skills: [], mcpServers: [] };
+
+    handleAgentList(store, {
+      agents: [{ id: 'agent-1', online: true, conversations: [] }],
+    });
+
+    expect(store.sent.filter(m => m.type === 'yeaft_load_history')).toEqual([]);
   });
 
   it('hydrates active group history even when restored group id is unchanged by snapshot', () => {
@@ -85,8 +114,47 @@ describe('Yeaft session restore hydration', () => {
     expect(store.sent).toContainEqual({
       type: 'yeaft_load_history',
       agentId: 'agent-1',
-      limit: 10,
-      groupId: 'grp-1',
+      limit: 5,
+      sessionId: 'grp-1',
     });
+  });
+
+  it('does not duplicate forced unchanged-group hydration while history is loading', () => {
+    const store = makeStore();
+    const sessionsStore = {
+      activeSessionId: 'grp-1',
+      applySnapshot(groups) {
+        expect(groups).toEqual([{ id: 'grp-1', name: 'Restored' }]);
+        this.activeSessionId = 'grp-1';
+      },
+    };
+    window.Pinia.useSessionsStore = () => sessionsStore;
+
+    store.currentView = 'yeaft';
+    store.yeaftAgentId = 'agent-1';
+    store.yeaftConversationId = 'yeaft-conv';
+    store.yeaftSessionReady = true;
+    store.yeaftModel = 'model-a';
+    store.yeaftStatus = { tools: [], skills: [], mcpServers: [] };
+
+    store.handleYeaftOutput({
+      agentId: 'agent-1',
+      event: {
+        type: 'group_list_updated',
+        groups: [{ id: 'grp-1', name: 'Restored' }],
+      },
+    });
+    expect(store.sent.filter(m => m.type === 'yeaft_load_history')).toHaveLength(1);
+
+    store.sent = [];
+    store.handleYeaftOutput({
+      agentId: 'agent-1',
+      event: {
+        type: 'group_list_updated',
+        groups: [{ id: 'grp-1', name: 'Restored' }],
+      },
+    });
+
+    expect(store.sent.filter(m => m.type === 'yeaft_load_history')).toEqual([]);
   });
 });

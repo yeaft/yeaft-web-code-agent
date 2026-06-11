@@ -61,6 +61,9 @@ export function handleAgentList(store, msg) {
     const agentIds = new Set(msg.agents.map(a => a.id));
     for (const agent of msg.agents) {
       store.proxyPorts[agent.id] = agent.proxyPorts || [];
+      if (agent.yeaftStatus && typeof store.cacheYeaftAgentStatus === 'function') {
+        store.cacheYeaftAgentStatus(agent.id, agent.yeaftStatus);
+      }
     }
     for (const id of Object.keys(store.proxyPorts)) {
       if (!agentIds.has(id)) {
@@ -218,7 +221,8 @@ export function handleAgentList(store, msg) {
       store.currentAgentInfo = agent;
       store.sendWsMessage({ type: 'select_agent', agentId: store.currentAgent, silent: true });
       if (store.currentView === 'yeaft' && typeof store.requestYeaftSessionBootstrap === 'function') {
-        store.requestYeaftSessionBootstrap({ forceSessionReady: true });
+        const needsYeaftSessionReady = !store.yeaftSessionReady || !store.yeaftModel || !store.yeaftStatus;
+        store.requestYeaftSessionBootstrap({ forceSessionReady: needsYeaftSessionReady });
       }
       if (store.currentConversation) {
         const conv = store.conversations.find(c => c.id === store.currentConversation);
@@ -266,7 +270,23 @@ export function handleAgentList(store, msg) {
       }
       return;
     } else {
-      console.log('[Reconnect] Agent not online yet:', store.currentAgent);
+      // fix-chat-reconnect-race — even when the agent hasn't reconnected
+      // yet (agent is an independent process; on a server restart the web
+      // WS comes back in ~1s but the agent typically needs a few more
+      // seconds), we still need to restore `client.currentConversation`
+      // on the server. The server's `select_conversation` handler only
+      // does an ownership check + writes that field — it does NOT touch
+      // any agent. Without this, a user sending a message in the
+      // intervening window hits `chat handler -> No conversation
+      // selected -> error`, and (because that error is classified
+      // system-transient) the typing indicator spins forever while the
+      // chat is silently dropped. The full resume path (sync_messages,
+      // refresh_conversation) still waits for the agent to come online
+      // via the `if (agent)` branch above on the next `agent_list`.
+      console.log('[Reconnect] Agent not online yet, restoring conversation context only:', store.currentAgent);
+      if (store.currentConversation) {
+        store.sendWsMessage({ type: 'select_conversation', conversationId: store.currentConversation });
+      }
       return;
     }
   }
@@ -347,7 +367,23 @@ export function handleAgentSelected(store, msg) {
     }
   }
 
-  const otherAgentConvs = store.conversations.filter(c => c.agentId !== msg.agentId);
+  // fix-session-dup: dedupe by `id`, not by `agentId`. Previously this
+  // partitioned `store.conversations` on `c.agentId !== msg.agentId` and
+  // spread the new agent's list on top — so a conv that was already in the
+  // store under a different agentId (because the server has it in two
+  // agents' in-memory Maps; see server/handlers/agent-conversation.js's
+  // resume path which doesn't transfer agent ownership) survived the
+  // filter AND got a second copy from `activeConvs`. Net effect: the same
+  // conversationId rendered twice in the sidebar with two different
+  // agent badges.
+  //
+  // Now: anything in `activeConvs` wins outright (it carries the freshest
+  // agentId/agentName for the selected agent); anything else in the store
+  // is preserved only if its id is NOT in the incoming set. `otherAgentConvs`
+  // is rebuilt below from this same filter so the stale-processing sweep
+  // (line ~367) still works.
+  const incomingIds = new Set(activeConvs.map(c => c.id));
+  const otherAgentConvs = store.conversations.filter(c => !incomingIds.has(c.id));
   store.conversations = [...otherAgentConvs, ...activeConvs];
 
   for (const conv of serverConvs) {

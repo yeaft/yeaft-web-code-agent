@@ -112,7 +112,7 @@ describe('GroupContext.history — per-group isolation', () => {
   it('lazy hydrate runs even if a partial entry was seeded earlier', async () => {
     // Reproduces the I-1 regression: a partial GroupContext entry
     // existed (from `getCompactState`-style path) BEFORE any history
-    // was hydrated. Pre-fix, `getOrCreateGroupHistory` saw an empty
+    // was hydrated. Pre-fix, `getOrCreateSessionHistory` saw an empty
     // `history: []` and short-circuited on truthy-array check, never
     // hitting disk. Post-fix, the `historyHydrated:false` flag gates
     // hydration so the first read still loads from disk.

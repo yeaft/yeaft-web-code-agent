@@ -258,10 +258,23 @@ export default {
                     </div>
                   </div>
                 </div>
+                <label class="sp-toggle-row">
+                  <span class="sp-toggle-info">
+                    <span class="sp-toggle-name">{{ $t('settings.general.crewMode') }}</span>
+                    <span class="sp-toggle-desc">{{ $t('settings.general.crewModeDesc') }}</span>
+                  </span>
+                  <button
+                    class="sp-toggle"
+                    :class="{ active: chatStore.crewModeEnabled }"
+                    @click="chatStore.setCrewModeEnabled(!chatStore.crewModeEnabled)"
+                    role="switch"
+                    :aria-checked="chatStore.crewModeEnabled"
+                  >
+                    <span class="sp-toggle-knob"></span>
+                  </button>
+                </label>
               </div>
             </div>
-
-            <!-- Invitations (admin only) -->
             <div v-show="activeTab === 'invitations'" class="settings-pane" v-if="authStore.role === 'admin'">
               <div class="sp-group">
                 <div class="sp-row">

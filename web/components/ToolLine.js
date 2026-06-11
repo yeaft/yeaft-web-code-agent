@@ -46,6 +46,12 @@ export default {
             <pre class="bash-output-content"><code>{{ bashOutput }}</code></pre>
           </div>
         </div>
+        <div v-else-if="toolName === '__SubagentResult'" class="tool-expand-code">
+          <pre><code>{{ toolInput?.result || toolInput?.summary || formatInput(toolInput) }}</code></pre>
+        </div>
+        <div v-else-if="toolName === '__CompactSummary'" class="tool-expand-code">
+          <pre><code>{{ toolInput?.summary || formatInput(toolInput) }}</code></pre>
+        </div>
         <div v-else class="tool-expand-code">
           <pre><code>{{ formatInput(toolInput) }}</code></pre>
         </div>
@@ -109,7 +115,15 @@ export default {
     };
 
     const getToolIcon = (name) => {
-      const icons = { Read: '\u{1F4D6}', Edit: '\u270F\uFE0F', Write: '\u{1F4DD}', Bash: '\u26A1', Glob: '\u{1F50D}', Grep: '\u{1F50E}', Task: '\u{1F4CB}', WebFetch: '\u{1F310}', WebSearch: '\u{1F50D}', TodoWrite: '\u2705', RouteForward: '@' };
+      const icons = { Read: '\u{1F4D6}', Edit: '\u270F\uFE0F', Write: '\u{1F4DD}', Bash: '\u26A1', Glob: '\u{1F50D}', Grep: '\u{1F50E}', Task: '\u{1F4CB}', WebFetch: '\u{1F310}', WebSearch: '\u{1F50D}', TodoWrite: '\u2705', RouteForward: '@',
+        // Synthetic tools \u2014 the agent (agent/claude.js) rewrites Claude
+        // Code's "fake user messages" (<task-notification> sub-agent results
+        // and post-compaction summaries) into tool_use blocks using these
+        // names. Keep in sync with SYNTHETIC_TOOL_NAMES in
+        // agent/synthetic-tools.js \u2014 that file is the source of truth.
+        __SubagentResult: '\u{1F916}',  // robot
+        __CompactSummary: '\u{1F4DA}',  // books
+      };
       return icons[name] || '\u2699\uFE0F';
     };
 
@@ -155,6 +169,16 @@ export default {
       }
       if (toolName === 'RouteForward') {
         return formatRouteForwardToolLine(input, middleTruncate);
+      }
+      // Synthetic tools — agent rewrites Claude Code's fake-user messages
+      // into these blocks (see agent/claude.js).
+      if (toolName === '__SubagentResult') {
+        const label = input.summary || input.status || 'completed';
+        return `Sub-agent: ${middleTruncate(label, 80)}`;
+      }
+      if (toolName === '__CompactSummary') {
+        const len = typeof input.summary === 'string' ? input.summary.length : 0;
+        return `Context summarized (${len} chars)`;
       }
       return toolName;
     };

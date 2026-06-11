@@ -2,8 +2,8 @@
  * Server relay envelope passthrough for `yeaft_output`.
  *
  * The bug this guards against (fixed in v0.1.756):
- *   Agent sends `{type:'yeaft_output', conversationId, groupId, vpId, turnId, data}`
- *   Server forwarded only `{conversationId, groupId, data, event}` to web clients,
+ *   Agent sends `{type:'yeaft_output', conversationId, sessionId, vpId, turnId, data}`
+ *   Server forwarded only `{conversationId, sessionId, data, event}` to web clients,
  *   silently DROPPING `vpId` and `turnId`. The frontend reads
  *   `msg.vpId / msg.turnId` in `handleYeaftOutput` to stamp routing context
  *   that drives `speakerVpId` on streaming assistant deltas. Missing fields
@@ -86,20 +86,22 @@ describe('agent-output.js — yeaft_output envelope passthrough', () => {
       type: 'yeaft_output',
       conversationId: 'conv1',
       turnId: 'd123:vp_alice',
+      threadId: 'thread-main',
       data: { type: 'assistant', message: { content: 'hi' } },
     });
     expect(_sent[0].envelope.turnId).toBe('d123:vp_alice');
+    expect(_sent[0].envelope.threadId).toBe('thread-main');
   });
 
-  it('forwards groupId on data envelopes (already worked, regression guard)', async () => {
+  it('forwards sessionId on data envelopes (already worked, regression guard)', async () => {
     addClient('c1');
     await handleAgentOutput('a1', baseAgent, {
       type: 'yeaft_output',
       conversationId: 'conv1',
-      groupId: 'grp_team',
+      sessionId: 'grp_team',
       data: { type: 'assistant', message: { content: 'hi' } },
     });
-    expect(_sent[0].envelope.groupId).toBe('grp_team');
+    expect(_sent[0].envelope.sessionId).toBe('grp_team');
   });
 
   it('forwards ALL envelope fields together on a typical streaming delta', async () => {
@@ -107,18 +109,20 @@ describe('agent-output.js — yeaft_output envelope passthrough', () => {
     await handleAgentOutput('a1', baseAgent, {
       type: 'yeaft_output',
       conversationId: 'conv1',
-      groupId: 'grp_team',
+      sessionId: 'grp_team',
       vpId: 'vp_alice',
       turnId: 'd123:vp_alice',
+      threadId: 'thread-main',
       data: { type: 'assistant', message: { content: 'hi' } },
     });
     const env = _sent[0].envelope;
     expect(env).toMatchObject({
       type: 'yeaft_output',
       conversationId: 'conv1',
-      groupId: 'grp_team',
+      sessionId: 'grp_team',
       vpId: 'vp_alice',
       turnId: 'd123:vp_alice',
+      threadId: 'thread-main',
     });
     expect(env.data).toEqual({ type: 'assistant', message: { content: 'hi' } });
   });
@@ -143,10 +147,10 @@ describe('agent-output.js — yeaft_output envelope passthrough', () => {
       type: 'yeaft_output',
       conversationId: 'conv1',
       data: { type: 'assistant', message: { content: 'hi' } },
-      // No groupId / vpId / turnId
+      // No sessionId / vpId / turnId
     });
     const env = _sent[0].envelope;
-    expect('groupId' in env).toBe(false);
+    expect('sessionId' in env).toBe(false);
     expect('vpId' in env).toBe(false);
     expect('turnId' in env).toBe(false);
   });
@@ -160,13 +164,13 @@ describe('agent-output.js — yeaft_output envelope passthrough', () => {
     await handleAgentOutput('a1', baseAgent, {
       type: 'yeaft_output',
       conversationId: 'conv1',
-      groupId: '',
+      sessionId: '',
       vpId: '',
       turnId: '',
       data: { type: 'assistant', message: { content: 'hi' } },
     });
     const env = _sent[0].envelope;
-    expect(env.groupId).toBe('');
+    expect(env.sessionId).toBe('');
     expect(env.vpId).toBe('');
     expect(env.turnId).toBe('');
   });
@@ -177,7 +181,7 @@ describe('agent-output.js — yeaft_output envelope passthrough', () => {
     await handleAgentOutput('a1', baseAgent, {
       type: 'yeaft_output',
       conversationId: 'conv1',
-      groupId: 'grp_img',
+      sessionId: 'grp_img',
       data: {
         type: 'user',
         message: {
@@ -209,7 +213,7 @@ describe('agent-output.js — yeaft_output envelope passthrough', () => {
     await handleAgentOutput('a1', baseAgent, {
       type: 'yeaft_history_chunk',
       conversationId: 'conv1',
-      groupId: 'grp_img',
+      sessionId: 'grp_img',
       messages: [{
         role: 'user',
         content: 'old image',
@@ -225,12 +229,12 @@ describe('agent-output.js — yeaft_output envelope passthrough', () => {
     expect(_previewFiles.size).toBe(1);
   });
 
-  it('forwards groupId on history chunks using the same `!= null` semantics', async () => {
+  it('forwards sessionId on history chunks using the same `!= null` semantics', async () => {
     addClient('c1');
     await handleAgentOutput('a1', baseAgent, {
       type: 'yeaft_history_chunk',
       conversationId: 'conv1',
-      groupId: '',
+      sessionId: '',
       messages: [],
       oldestSeq: 5,
       hasMore: false,
@@ -239,11 +243,30 @@ describe('agent-output.js — yeaft_output envelope passthrough', () => {
     expect(_sent[0].envelope).toMatchObject({
       type: 'yeaft_history_chunk',
       conversationId: 'conv1',
-      groupId: '',
+      sessionId: '',
       messages: [],
       oldestSeq: 5,
       hasMore: false,
     });
+  });
+
+  it('stamps agentId from the function parameter (not agent.id) on yeaft_output', async () => {
+    // Regression guard for v0.1.907 — `handleAgentOutput(agentId, agent, msg)`
+    // had been reading `agent.id` (undefined) for the relay's agentId stamp.
+    // The agent value object in server/ws-agent.js intentionally does NOT
+    // carry an `id` field; the id is the Map key. So this test mounts a
+    // baseAgent without `id` and asserts the outgoing envelope stamps the
+    // function-parameter agentId verbatim.
+    addClient('c1');
+    await handleAgentOutput('agent_param_xyz', baseAgent, {
+      type: 'yeaft_output',
+      conversationId: 'conv1',
+      vpId: 'vp_alice',
+      data: { type: 'assistant', message: { content: 'hi' } },
+    });
+    expect(_sent).toHaveLength(1);
+    expect(_sent[0].envelope.agentId).toBe('agent_param_xyz');
+    expect(_sent[0].envelope.agentId).not.toBeUndefined();
   });
 
   it('broadcasts to every authenticated client of the agent owner', async () => {

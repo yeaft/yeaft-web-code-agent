@@ -1,5 +1,31 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import SessionCreateModal from '../../web/components/SessionCreateModal.js';
+/**
+ * SessionCreateModal — workdir folder-picker WS protocol contract.
+ *
+ * Pins the wire shape that the folder-browser button sends and accepts.
+ * Doesn't mount the component — just calls the methods directly with a
+ * stub `this` so we can assert the WS payload + the directory_listing
+ * reducer without dragging Vue, VpAvatar, or the real Pinia store into
+ * the test environment.
+ *
+ * The `requestFolderPickerDir` / `handleFolderPickerMessage` method
+ * names are part of the contract — the rewrite to chat-style layout
+ * (task-session-create-chat-style) must preserve them so the agent's
+ * `_workdir_picker` conversation id stays the same on both ends.
+ */
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+
+// Stub Pinia BEFORE dynamic-importing the component, otherwise
+// `import VpAvatar -> import { useVpStore } from '../stores/vp.js'`
+// throws at module-load with `Pinia is not defined`.
+globalThis.Pinia = globalThis.Pinia || {};
+globalThis.Pinia.defineStore = (_id, options) => () => options;
+globalThis.window = globalThis.window || globalThis;
+globalThis.window.Pinia = globalThis.Pinia;
+
+let SessionCreateModal;
+beforeAll(async () => {
+  SessionCreateModal = (await import('../../web/components/SessionCreateModal.js')).default;
+});
 
 describe('SessionCreateModal workdir picker protocol', () => {
   afterEach(() => {

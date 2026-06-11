@@ -3,7 +3,7 @@
  * slice so it can be safely fed to the LLM adapter.
  *
  * Why this exists:
- *   `agent/yeaft/conversation/persist.js#loadRecentByGroup` and
+ *   `agent/yeaft/conversation/persist.js#loadRecentBySession` and
  *   `agent/yeaft/history-compact.js#compactHistory` both produce
  *   sub-slices of a longer message stream. Both paths can — depending on
  *   where the cut lands — produce one of two illegal shapes:

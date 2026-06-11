@@ -18,16 +18,17 @@
  */
 
 import { randomUUID } from 'crypto';
+import { resolve as resolvePath } from 'path';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes } from './sessions/pre-flow.js';
 import { readProjectDoc, pickProjectDocFile, DEFAULT_PROJECT_DOC_MAX_BYTES } from './sessions/project-doc.js';
-import { shouldConsolidate, partitionMessages } from './memory/consolidate.js';
+import { partitionMessages } from './compact/partition.js';
 import { runCompact as runCompactOrchestrator } from './compact/orchestrator.js';
 import { evaluateCompactTriggers } from './compact/triggers.js';
 import { archiveTurn } from './archive/turn-archive.js';
 import { archiveToolResults } from './archive/tool-results.js';
-import { readSummary as readScopeSummary } from './memory/store-v2.js';
+import { readSummary as readScopeSummary } from './memory/store.js';
 import { runAdjust } from './memory/adjust.js';
 import { isVpSeedBackfillStub } from './memory/seed-backfill.js';
 import { runStopHooks } from './stop-hooks.js';
@@ -36,6 +37,7 @@ import { runStopHooks } from './stop-hooks.js';
 const MAIN_THREAD_ID = 'main';
 import { pickEffort, parseEffortPrefix } from './effort.js';
 import { DEFAULT_CONTEXT_WINDOW, normalizeEffort, resolveContextWindow, resolveModel } from './models.js';
+import { lookupModelLimitSync } from './llm/models-dev.js';
 import { countTurns } from './turn-utils.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
@@ -185,7 +187,11 @@ export function shouldAllowGroupReflection({
     };
   }
   const contextWindow = resolveContextWindow(model, config);
-  const hasRegistryContext = !!resolveModel(model)?.contextWindow;
+  // Telemetry: did the resolver hit either of its top non-default rungs?
+  // Used by `usedFallbackContextWindow` below — if neither models.dev nor
+  // the global config provided a number, we fell through to DEFAULT and
+  // callers may want to surface that to the user.
+  const hasModelsDevContext = !!lookupModelLimitSync(model, resolveModel(model)?.provider || null)?.context;
   const hasConfigContext = Number.isFinite(config?.maxContextTokens) && config.maxContextTokens > 0;
   const threshold = Math.floor(contextWindow * GROUP_CONTEXT_PRESSURE_RATIO);
   const tokenEstimate = estimateMessagesTokens(system, messages);
@@ -203,7 +209,7 @@ export function shouldAllowGroupReflection({
     contextWindow,
     ratio: GROUP_CONTEXT_PRESSURE_RATIO,
     turnCount,
-    usedFallbackContextWindow: !hasRegistryContext && !hasConfigContext && contextWindow === DEFAULT_CONTEXT_WINDOW,
+    usedFallbackContextWindow: !hasModelsDevContext && !hasConfigContext && contextWindow === DEFAULT_CONTEXT_WINDOW,
   };
 }
 
@@ -256,8 +262,18 @@ export function buildResidentEntries(args) {
   if (args.sessionId && summaries.group) {
     out.push({ scope: `group/${args.sessionId}`, summary: summaries.group });
   }
-  if (args.ownVpId && summaries.vp && !isVpSeedBackfillStub(summaries.vp)) {
-    out.push({ scope: `vp/${args.ownVpId}`, summary: summaries.vp });
+  // VP per-session isolation (2026-06-09): the VP summary scope MUST be
+  // session-qualified. The legacy bare `vp/<id>` scope was a structural
+  // bug — `summaries.vp` is actually loaded from `group/<sessionId>/vp/<id>/summary.md`
+  // (see #loadLayerASummaries, kind:'group-vp'), so labelling it `vp/<id>`
+  // in the Resident layer (a) collides with the ACL regex in store
+  // (which only recognises `<root>/<sid>/vp/...`) and (b) makes the same
+  // VP persona leak across DIFFERENT sessions whenever the AMS rehydrates
+  // by id rather than by full scope path. The session-qualified form
+  // makes the per-session boundary explicit and matches the on-disk
+  // layout 1:1.
+  if (args.sessionId && args.ownVpId && summaries.vp && !isVpSeedBackfillStub(summaries.vp)) {
+    out.push({ scope: `group/${args.sessionId}/vp/${args.ownVpId}`, summary: summaries.vp });
   }
   return out;
 }
@@ -877,7 +893,17 @@ export class Engine {
     return {
       signal,
       yeaftDir: this.#yeaftDir,
-      cwd: process.cwd(),
+      // Group-scoped working directory. Threaded from #runQuery({ workDir })
+      // → set by web-bridge runVpTurn from sessionMeta.workDir. Tools read
+      // `ctx.cwd` and resolve relative paths against it. Always absolute
+      // (path.resolve normalizes relative inputs + trailing slashes) so
+      // tools that string-concatenate don't accidentally walk from
+      // process.cwd(). Falls back to process.cwd() in non-group / test
+      // contexts.
+      cwd: (() => {
+        const raw = typeof vpCtx?.workDir === 'string' ? vpCtx.workDir.trim() : '';
+        return raw ? resolvePath(raw) : process.cwd();
+      })(),
       mcpManager: this.#mcpManager,
       skillManager: this.#skillManager,
       conversationStore: this.#conversationStore,
@@ -1096,7 +1122,7 @@ export class Engine {
     // Per-(group, vp) scoping: when this engine is bound to a fan-out VP
     // (the common case in group mode), load only the rows THIS VP saw in
     // its context — user prompts + every VP's assistant text, with other
-    // VPs' tool calls/results stripped (see persist.loadGroupHistoryForVp).
+    // VPs' tool calls/results stripped (see persist.loadSessionHistoryForVp).
     //
     // Legacy / sub-agent callers (no sessionId/vpId pair) keep the global
     // loadAll() behaviour so we don't break those flows.
@@ -1104,12 +1130,12 @@ export class Engine {
     const scopedChat = !!(this.#chatId && this.#vpId
       && typeof conversationStore.loadChatHistoryForVp === 'function');
     const scoped = !scopedChat && !!(this.#sessionId && this.#vpId
-      && typeof conversationStore.loadGroupHistoryForVp === 'function');
+      && typeof conversationStore.loadSessionHistoryForVp === 'function');
     try {
       messages = scopedChat
         ? conversationStore.loadChatHistoryForVp(this.#chatId, this.#vpId)
         : scoped
-          ? conversationStore.loadGroupHistoryForVp(this.#sessionId, this.#vpId)
+          ? conversationStore.loadSessionHistoryForVp(this.#sessionId, this.#vpId)
           : conversationStore.loadAll();
     } catch { return null; }
     if (!Array.isArray(messages) || messages.length === 0) return null;
@@ -1470,6 +1496,23 @@ export class Engine {
       projectDoc,
     });
 
+    // ─── HARD INVARIANT: Compact ≠ Dream (read DESIGN-COMPACT-VS-DREAM.md) ─
+    // Compact summary (this block) ONLY lands in the messages array head as
+    // a `<conversation_summary>` user/assistant pair. It MUST NEVER appear
+    // in the system prompt — that was the bug DESIGN-PROMPT §4.3 banned.
+    //
+    // Inversely: Dream V2's output (per-scope `memory.md` / `summary.md`)
+    // flows exclusively through `prompts.js#buildSystemPrompt`'s §6 Memory
+    // section via the AMS Resident layer (see `engine.js#buildResidentEntries`).
+    // It MUST NEVER appear in the messages array.
+    //
+    // Two write roots, two scheduler triggers, two prompt slots — never
+    // mixed. Anyone touching this section must read
+    // `agent/yeaft/DESIGN-COMPACT-VS-DREAM.md` before changing the wiring;
+    // the boundary has been violated twice in this codebase's history and
+    // each time it took an LLM cache-thrash + persona-dup follow-up PR to
+    // unwind.
+    //
     // ─── Compact summary as messages-array head (DESIGN-PROMPT §4.3) ─
     // The previous code placed the compact summary inside the system
     // prompt; that broke prompt-cache hit-rate (any compact update
@@ -2266,6 +2309,7 @@ export class Engine {
         contextWindow: currentContextWindow,
         getCurrentTodos,
         setCurrentTodos,
+        workDir,
         requestEndTurn: (reason) => {
           // First call wins — preserve the kind/reason of the first tool
           // that asked to end the turn. Late callers (a second
@@ -2344,7 +2388,14 @@ export class Engine {
               output = await this.#toolRegistry.execute(tc.name, tc.input, toolCtx);
             } else {
               const tool = this.#tools.get(tc.name);
-              const rawOutput = await tool.execute(tc.input, { signal });
+              // Pass the full toolCtx (cwd, workDir, signal, …) — not just
+              // `{ signal }`. Legacy registerTool() callers historically got
+              // a 1-field ctx, but that means tools like bash/file-read run
+              // in the agent process cwd instead of the group's workDir.
+              // Real production goes through #toolRegistry; the legacy path
+              // is exercised by tests and a few standalone tools. Aligning
+              // both paths keeps `ctx.cwd` semantics consistent.
+              const rawOutput = await tool.execute(tc.input, toolCtx);
               // Legacy #tools branch must apply the same per-tool cap as
               // ToolRegistry.execute. Otherwise a deployment using the legacy
               // registration path bypasses the defense entirely.

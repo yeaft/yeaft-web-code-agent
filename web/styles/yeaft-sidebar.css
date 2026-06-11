@@ -27,6 +27,7 @@
   flex-direction: column;
   min-height: 0;
 }
+
 .yeaft-sidebar .session-empty-hint {
   padding: 24px 8px;
   text-align: center;
@@ -34,129 +35,54 @@
   font-size: 13px;
 }
 
-/* ===========================================================================
-   msg-flash — brief highlight on a message row when the sidebar search
-   jump-to-message targets it. Kept here so the sidebar feature is
-   self-contained.
-   =========================================================================== */
-.msg-row { transition: background-color 0.3s ease; border-radius: 6px; }
-.msg-row.msg-flash {
-  background-color: rgba(255, 235, 59, 0.18);
-  animation: us-flash 1.6s ease-out;
-}
-@keyframes us-flash {
-  0%   { background-color: rgba(255, 235, 59, 0.38); }
-  60%  { background-color: rgba(255, 235, 59, 0.22); }
-  100% { background-color: transparent; }
+/* Keep Yeaft session row actions visible like chat rows, but only in Yeaft. */
+.yeaft-sidebar .session-dots-btn {
+  opacity: 1;
 }
 
-/* ===========================================================================
-   Sidebar header row — agent brand, collapse, back, workbench.
-   =========================================================================== */
-.us-header-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  padding: 10px 12px 4px 12px;
-  flex: 0 0 auto;
-}
-.us-brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  overflow: hidden;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary, #1d1d1f);
-}
-.us-status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-muted, #86868b);
-  flex: 0 0 auto;
-}
-.us-status-dot.online {
-  background: var(--status-online);
-}
-.us-brand-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.us-latency {
-  font-size: 10px;
-  font-weight: 500;
-  padding: 1px 6px;
-  border-radius: 8px;
-  color: var(--text-muted, #86868b);
-  background: var(--sidebar-hover, rgba(0,0,0,0.05));
-}
-.us-latency.latency-good { color: var(--status-online); }
-.us-latency.latency-warn { color: var(--status-busy); }
-.us-latency.latency-bad  { color: var(--status-error); }
-
-.us-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex: 0 0 auto;
-}
-.us-icon-btn {
-  width: 30px;
-  height: 30px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-secondary, #515154);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-.us-icon-btn:hover {
-  background: var(--sidebar-hover, rgba(0,0,0,0.06));
-  color: var(--text-primary, #1d1d1f);
-}
-.us-icon-btn.active {
-  background: var(--session-active, rgba(0,122,255,0.14));
-  color: var(--accent-blue, var(--accent));
+.yeaft-sidebar .agent-dropdown-item {
+  position: relative;
 }
 
-/* ===========================================================================
-   Sidebar bottom — Settings entry + version badge. Shared
-   .sidebar-nav-item / .sidebar-bottom / .sidebar-version live in sidebar.css;
-   we only scope a few overrides so the flex-column layout pushes this row to
-   the bottom. HARD RULE: no border-top / border-bottom.
-   =========================================================================== */
+/* Bottom settings row ------------------------------------------------------ */
 .yeaft-sidebar .sidebar-bottom {
-  margin-top: auto;
-  padding: 4px 12px 8px;
-  flex: 0 0 auto;
-}
-.yeaft-sidebar .sidebar-bottom .sidebar-nav-item {
-  justify-content: flex-start;
-}
-.yeaft-sidebar .sidebar-version {
-  font-size: 11px;
-  color: var(--text-secondary, #515154);
-  opacity: 0.5;
-  margin-left: auto;
+  padding: 8px;
+  border-top: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
+  background: var(--sidebar-bg, transparent);
 }
 
-/* Mobile ------------------------------------------------------------------- */
+.yeaft-sidebar .sidebar-bottom .sidebar-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary, #6e6e73);
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.yeaft-sidebar .sidebar-bottom .sidebar-nav-item:hover {
+  background: var(--sidebar-hover, rgba(0, 0, 0, 0.05));
+  color: var(--text-primary, #1d1d1f);
+}
+
+.yeaft-sidebar .sidebar-version-badge {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-tertiary, #86868b);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Mobile: support collapsed slide-away. Desktop width remains owned by shared
+   .sidebar / layout rules. */
 @media (max-width: 768px) {
   .yeaft-sidebar {
-    position: fixed;
-    top: 0;
-    left: 0;
-    z-index: 100;
-    height: 100vh;
-    height: 100dvh;
     width: 85vw;
+    max-width: 320px;
     min-width: 240px;
     box-shadow: 4px 0 16px rgba(0, 0, 0, 0.2);
     transition: transform 0.2s ease, width 0.2s ease;

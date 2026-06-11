@@ -22,7 +22,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
-import { resolveModel, parseModelRef, normalizeProviderModels } from './models.js';
+import { resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
 
 /** Default configuration values. */
 const DEFAULTS = {
@@ -42,6 +42,12 @@ const DEFAULTS = {
   // plumb the knob through so the UI can set it).
   yeaftMaxConcurrentThreads: 6,
   yeaftAutoArchiveIdleDays: 30,
+  // Cold-start replay window: how many of the most recent turns
+  // ConversationStore.loadRecentBySession / loadSessionHistoryForVp
+  // bring back when no compact summary exists for the session. Raise
+  // this if your sessions routinely outgrow the 20-turn window
+  // before compaction fires. Range: 1–500.
+  yeaftRecentTurnsLimit: 20,
   // CLAUDE.md / AGENTS.md project-doc cap, in bytes. Mirrors Codex's
   // `project_doc_max_bytes`. 0 disables the feature (no project-doc
   // block is injected). Hand-edited values are NOT clamped — we let
@@ -167,12 +173,15 @@ export function normaliseYeaftSection(raw) {
   const out = {
     maxConcurrentThreads: DEFAULTS.yeaftMaxConcurrentThreads,
     autoArchiveIdleDays: DEFAULTS.yeaftAutoArchiveIdleDays,
+    recentTurnsLimit: DEFAULTS.yeaftRecentTurnsLimit,
   };
   if (!raw || typeof raw !== 'object') return out;
   const mc = clampYeaftField(raw.maxConcurrentThreads, 'maxConcurrentThreads');
   if (mc !== null) out.maxConcurrentThreads = mc;
   const ad = clampYeaftField(raw.autoArchiveIdleDays, 'autoArchiveIdleDays');
   if (ad !== null) out.autoArchiveIdleDays = ad;
+  const rt = clampYeaftField(raw.recentTurnsLimit, 'recentTurnsLimit');
+  if (rt !== null) out.recentTurnsLimit = rt;
   return out;
 }
 
@@ -183,14 +192,18 @@ export function normaliseYeaftSection(raw) {
  * (`normaliseYeaftSection`) and write (`updateYeaftSettings` validation).
  *
  * @param {unknown} v
- * @param {'maxConcurrentThreads'|'autoArchiveIdleDays'} field
+ * @param {'maxConcurrentThreads'|'autoArchiveIdleDays'|'recentTurnsLimit'} field
  * @returns {number | null}
  */
 export function clampYeaftField(v, field) {
   if (v === null || v === undefined) return null;
   const n = Number(v);
   if (!Number.isFinite(n)) return null;
-  const [lo, hi] = field === 'maxConcurrentThreads' ? [1, 50] : [1, 3650];
+  let lo;
+  let hi;
+  if (field === 'maxConcurrentThreads') { lo = 1; hi = 50; }
+  else if (field === 'recentTurnsLimit') { lo = 1; hi = 500; }
+  else { lo = 1; hi = 3650; } // autoArchiveIdleDays
   return Math.min(hi, Math.max(lo, Math.floor(n)));
 }
 
@@ -237,8 +250,15 @@ function loadLegacyConfig(dir, overrides) {
     if (modelInfo) {
       config.adapter = modelInfo.adapter === 'anthropic' ? 'anthropic' : 'openai';
       if (!config.baseUrl) config.baseUrl = modelInfo.baseUrl;
-      if (config.maxContextTokens === DEFAULTS.maxContextTokens) config.maxContextTokens = modelInfo.contextWindow;
-      if (config.maxOutputTokens === DEFAULTS.maxOutputTokens) config.maxOutputTokens = modelInfo.maxOutputTokens;
+      // Resolve token limits via the resolver ladder (models.dev → config →
+      // DEFAULT). Only fill in when the caller left the slot at the default
+      // — explicit env / CLI overrides win.
+      if (config.maxContextTokens === DEFAULTS.maxContextTokens) {
+        config.maxContextTokens = resolveContextWindow(config.model, config);
+      }
+      if (config.maxOutputTokens === DEFAULTS.maxOutputTokens) {
+        config.maxOutputTokens = resolveMaxOutputTokens(config.model, config);
+      }
     } else {
       if (config.apiKey) config.adapter = 'anthropic';
       else if (config.openaiApiKey) config.adapter = 'openai';
@@ -292,8 +312,18 @@ export function loadConfig(overrides = {}) {
     fastModelId = parsed.modelId;
   }
 
-  // Resolve model info for context window / output limits
+  // Resolve model info for adapter/baseUrl/thinking metadata. Token limits
+  // (contextWindow / maxOutputTokens) are NOT read from here — they live in
+  // models.dev and are resolved via resolveContextWindow / resolveMaxOutputTokens
+  // a few lines below so the live models.dev snapshot is the source of truth.
   const modelInfo = resolveModel(model);
+
+  // Pre-resolve token limits once so we can both write them onto config and
+  // pass `config` to the resolver chain consistently below.
+  const resolvedMaxContext = overrides.maxContextTokens ?? jsonConfig.maxContextTokens
+    ?? resolveContextWindow(model, { modelInfo });
+  const resolvedMaxOutput = overrides.maxOutputTokens ?? jsonConfig.maxOutputTokens
+    ?? resolveMaxOutputTokens(model, { modelInfo });
 
   const config = {
     // Model
@@ -312,9 +342,16 @@ export function loadConfig(overrides = {}) {
     debug: overrides.debug !== undefined ? overrides.debug : (jsonConfig.debug ?? DEFAULTS.debug),
     dir,
 
-    // Token limits
-    maxContextTokens: overrides.maxContextTokens ?? jsonConfig.maxContextTokens ?? modelInfo?.contextWindow ?? DEFAULTS.maxContextTokens,
-    maxOutputTokens: overrides.maxOutputTokens ?? jsonConfig.maxOutputTokens ?? modelInfo?.maxOutputTokens ?? DEFAULTS.maxOutputTokens,
+    // Token limits. Resolution order:
+    //   1. CLI override (overrides.*)
+    //   2. ~/.yeaft/config.json explicit value
+    //   3. resolveContextWindow / resolveMaxOutputTokens — which themselves
+    //      walk: per-provider override → models.dev snapshot → DEFAULT.
+    // Anything that needs the *live* number for a model the user picks at
+    // runtime (mid-session model switch, e.g.) should call the resolvers
+    // directly rather than read these fields.
+    maxContextTokens: resolvedMaxContext,
+    maxOutputTokens: resolvedMaxOutput,
     messageTokenBudget: overrides.messageTokenBudget ?? jsonConfig.messageTokenBudget ?? DEFAULTS.messageTokenBudget,
     maxContinueTurns: overrides.maxContinueTurns ?? jsonConfig.maxContinueTurns ?? DEFAULTS.maxContinueTurns,
 

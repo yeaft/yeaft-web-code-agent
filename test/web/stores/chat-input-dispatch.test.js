@@ -11,7 +11,7 @@
  *
  * What this file pins:
  *   1. `sendYeaftSessionMessage` forwards `attachments[].fileId` onto the
- *      outbound `yeaft_group_chat` WS frame.
+ *      outbound `yeaft_session_chat` WS frame.
  *   2. The same call accepts an image-only send (empty text) — it
  *      synthesizes a placeholder text and still ships the frame.
  *
@@ -64,7 +64,7 @@ function mkStore() {
 }
 
 describe('sendYeaftSessionMessage — attachment passthrough', () => {
-  it('forwards attachments[].fileId onto the yeaft_group_chat WS frame', () => {
+  it('forwards attachments[].fileId onto the yeaft_session_chat WS frame', () => {
     const store = mkStore();
     actions.sendYeaftSessionMessage.call(store, {
       groupId: 'grp_1',

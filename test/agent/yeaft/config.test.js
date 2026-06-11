@@ -313,10 +313,14 @@ model: gpt-5
     expect(config.baseUrl).toBe('https://api.openai.com/v1');
   });
 
-  it('should set contextWindow and maxOutputTokens from model registry', () => {
+  it('should set contextWindow and maxOutputTokens via the resolver ladder', () => {
+    // Without a warmed models.dev cache, the resolver falls through to
+    // DEFAULT_CONTEXT_WINDOW (200K) and DEFAULT_MAX_OUTPUT_TOKENS (16384).
+    // The exact numbers depend on what (if anything) is primed; in this
+    // test env nothing is primed, so we assert the DEFAULTS.
     const config = loadConfig({ dir: TEST_DIR, model: 'gpt-4.1' });
-    expect(config.maxContextTokens).toBe(1047576);
-    expect(config.maxOutputTokens).toBe(32768);
+    expect(config.maxContextTokens).toBe(200_000);
+    expect(config.maxOutputTokens).toBe(16_384);
   });
 
   it('should include modelInfo for known models', () => {
@@ -388,7 +392,7 @@ describe('loadMCPConfig', () => {
 
 // ═══════════════════════════════════════════════════════════════
 // memoryV2 — flag retired (task-710)
-// The H2-AMS / dream-v2 wiring is now unconditional. We assert the
+// The H2-AMS / dream wiring is now unconditional. We assert the
 // field is absent so a regression that re-introduces the dead switch
 // shows up in CI.
 // ═══════════════════════════════════════════════════════════════

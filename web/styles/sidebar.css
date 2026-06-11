@@ -460,13 +460,50 @@
   opacity: 1;
 }
 
-/* Single-tab variant (used by Yeaft sidebar). Don't stretch to full
-   width — match the natural width chat's "Chat" tab has when it
-   shares the bar with Crew, so the two sidebars feel identical. */
+/* Single-tab variant (used by Yeaft sidebar, and by Chat sidebar when
+   Crew mode is disabled in Settings). The bar spans full width and
+   drops the active underline + bottom divider — there's nothing to
+   pick between, so the selection affordance only adds noise. */
+.session-tab-bar:has(> .session-tab-solo) {
+  border-bottom: none;
+}
 .session-tab.session-tab-solo {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   justify-content: flex-start;
-  padding: 9px 12px;
+  gap: 12px;
+  padding: 16px 16px 14px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.session-tab.session-tab-solo.active {
+  border-bottom-color: transparent;
+}
+.session-tab.session-tab-solo .session-tab-icon {
+  width: 16px;
+  height: 16px;
+  opacity: 0.85;
+}
+.session-tab.session-tab-solo .session-tab-count {
+  margin-left: 2px;
+  font-size: 12px;
+  padding: 2px 8px;
+}
+.session-tab.session-tab-solo .session-tab-add-btn {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  opacity: 1;
+}
+.session-tab.session-tab-solo .session-tab-add-btn svg {
+  width: 16px;
+  height: 16px;
+}
+/* feat-yeaft-session-restore: when both Create + Restore action buttons
+   sit in the same tab header, only the first (Create) grabs the auto
+   margin — subsequent buttons sit flush next to it with a small gap. */
+.session-tab.session-tab-solo .session-tab-add-btn + .session-tab-add-btn {
+  margin-left: 4px;
 }
 
 .session-tab-count {

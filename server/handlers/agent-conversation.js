@@ -2,6 +2,8 @@ import { sessionDb, messageDb } from '../database.js';
 import {
   broadcastAgentList, notifyConversationUpdate, forwardToClients
 } from '../ws-utils.js';
+import { agents } from '../context.js';
+import { CONFIG } from '../config.js';
 
 /**
  * Handle conversation lifecycle messages from agent.
@@ -22,6 +24,20 @@ export async function handleAgentConversation(agentId, agent, msg) {
         }
       }
       for (const conv of msg.conversations) {
+        // fix-session-dup: if the DB says this conv now belongs to a
+        // DIFFERENT agent (the user resumed it elsewhere), drop the
+        // agent's stale local copy. Without this guard, an agent
+        // restart can re-broadcast a transferred conv under its own
+        // banner, undoing the resume-time transfer and recreating
+        // the "same conv on two agents" condition.
+        const dbForConv = sessionDb.get(conv.id);
+        if (dbForConv && dbForConv.agent_id && dbForConv.agent_id !== agentId) {
+          if (CONFIG.debug) {
+            console.log(`[conversation_list] dropping conv ${conv.id} from agent ${agentId} — DB owner is ${dbForConv.agent_id}`);
+          }
+          agent.conversations.delete(conv.id);
+          continue;
+        }
         const existing = agent.conversations.get(conv.id);
         if (existing) {
           // 原地更新属性而非替换对象，避免其他持有旧引用的代码失效
@@ -80,6 +96,30 @@ export async function handleAgentConversation(agentId, agent, msg) {
           }
         }
       }
+
+      // fix-session-dup: if this conv is currently held in another
+      // agent's in-memory Map (e.g. user resumed it against a
+      // different machine after the original agent went offline),
+      // remove the stale copy AND re-point the DB row at the new
+      // owner. Without this:
+      //   1) the next get_agents restore would re-seat the conv
+      //      under the OLD agent's Map again from DB.agent_id,
+      //   2) the next broadcastAgentList would expose the conv
+      //      via two different agent entries, producing the
+      //      "one conversation, two sidebar rows with different
+      //      badges" symptom this fix targets.
+      // We only run the transfer when the OWNER actually changes —
+      // resuming a conv on its own agent is a no-op for ownership.
+      for (const [otherAgentId, otherAgent] of agents) {
+        if (otherAgentId === agentId) continue;
+        if (otherAgent.conversations.has(msg.conversationId)) {
+          if (CONFIG.debug) {
+            console.log(`[conversation_resumed] transferring conv ${msg.conversationId} from agent ${otherAgentId} → ${agentId}`);
+          }
+          otherAgent.conversations.delete(msg.conversationId);
+        }
+      }
+
       // Security: 使用 server 端可信来源的 userId，不信任 agent 回传
       const existingConvData = agent.conversations.get(msg.conversationId);
       const dbSessionData = sessionDb.get(msg.conversationId);
@@ -116,6 +156,17 @@ export async function handleAgentConversation(agentId, agent, msg) {
         } else {
           if (sessionDb.exists(msg.conversationId)) {
             sessionDb.update(msg.conversationId, { claudeSessionId: msg.claudeSessionId });
+            // fix-session-dup: also re-point the persisted agent_id
+            // to the resuming agent when ownership actually changed.
+            // The DB row is the source of truth that the `get_agents`
+            // restore path consults, so failing to update it would
+            // re-summon the duplicate on the next reload.
+            if (dbSessionData && dbSessionData.agent_id !== agentId) {
+              if (CONFIG.debug) {
+                console.log(`[conversation_resumed] DB.agent_id ${dbSessionData.agent_id} → ${agentId} for ${msg.conversationId}`);
+              }
+              sessionDb.setAgent(msg.conversationId, agentId, agent.name);
+            }
           } else {
             sessionDb.create(msg.conversationId, agentId, agent.name, msg.workDir, msg.claudeSessionId, null, trustedUserId);
           }
