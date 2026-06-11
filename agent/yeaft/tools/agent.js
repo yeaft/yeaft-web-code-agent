@@ -191,7 +191,19 @@ Guidelines:
 - Give a clear, focused mission — what "done" looks like
 - Use expected_output when the return shape matters
 - Add a budget only when you need an explicit safety cutoff
-- Use PromptAgent to communicate, WaitAgent to collect results, CloseAgent to finalize`,
+
+Orchestration loop you MUST follow:
+  1. SpawnAgent     — fire-and-forget; the sub-agent is now running.
+  2. WaitAgent      — blocks until the sub-agent goes idle / completes /
+                      fails / closes (or times out). Returns the reply.
+  3. PromptAgent    — optional: queue a follow-up; then WaitAgent again.
+  4. CloseAgent     — finalize when done.
+  5. Reply to user  — relay what the sub-agent found in your own words.
+
+CRITICAL — SpawnAgent only KICKS OFF the sub-agent. It has NOT produced any
+result yet. You MUST call WaitAgent next to collect the reply. Do NOT end your
+turn right after SpawnAgent without calling WaitAgent or telling the user what
+you just kicked off.`,
   parameters: {
     type: 'object',
     properties: {
@@ -305,6 +317,10 @@ Guidelines:
       budget: spec.budget || null,
       status: agent.status,
       message: `Sub-agent "${name}" spawned (${agentId}). Use WaitAgent to collect its first turn output, PromptAgent to give it more work, CloseAgent to finish.`,
+      next_steps:
+        'Sub-agent is now running — no reply yet. Call WaitAgent next to ' +
+        'collect its first turn. Do NOT end your turn here without either ' +
+        'waiting for the reply or telling the user what you just spawned.',
     });
   },
 });

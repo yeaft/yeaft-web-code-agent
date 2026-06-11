@@ -10,7 +10,12 @@ export default defineTool({
   description: `Close a sub-agent and release its resources.
 
 Use when a sub-agent's task is complete or no longer needed.
-The agent's result (if any) is returned before closing.`,
+The agent's final \`result\` (if any) is returned in the envelope before closing.
+
+CRITICAL — closing the sub-agent is NOT the end of YOUR turn. After CloseAgent
+you MUST relay the \`result\` to the user in your own reply (or summarize what
+was accomplished). The user has not seen the sub-agent's reply — only you have.
+Do NOT end your turn silently right after CloseAgent.`,
   parameters: {
     type: 'object',
     properties: {
@@ -61,6 +66,10 @@ The agent's result (if any) is returned before closing.`,
       messages: agent.messages.length,
       turns: agent.usage?.turns || 0,
       message: `Agent "${agent.name}" closed`,
+      next_steps:
+        'Sub-agent is closed. Now reply to the user — summarize what was ' +
+        'accomplished and surface the `result` text. Do NOT end your turn ' +
+        'without telling the user what happened.',
     });
   },
 });

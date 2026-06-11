@@ -14,7 +14,14 @@ export default defineTool({
   description: `Send a follow-up prompt to a sub-agent you previously spawned.
 
 Use this to give the sub-agent more work, additional instructions, or relay
-information. The prompt is queued for the agent to process on its next turn.`,
+information. The prompt is queued for the agent to process on its next turn.
+
+IMPORTANT — PromptAgent only QUEUES the message; it does NOT block. After this
+returns you almost always want to call WaitAgent next to collect the reply.
+Do NOT end your turn after PromptAgent without either (a) calling WaitAgent,
+(b) explaining to the user what you just asked the sub-agent, or (c) calling
+CloseAgent. The orchestration loop is
+SpawnAgent → (PromptAgent ↔ WaitAgent)+ → CloseAgent → final reply to user.`,
   parameters: {
     type: 'object',
     properties: {
@@ -71,6 +78,11 @@ information. The prompt is queued for the agent to process on its next turn.`,
       messageCount: agent.messages.length,
       pending: agent.pendingPrompts.length,
       message: `Message sent to agent "${agent.name}". Use WaitAgent to collect its reply.`,
+      next_steps:
+        'Message is queued — the sub-agent has NOT replied yet. Call WaitAgent ' +
+        'next to collect the reply, then relay it to the user. Do NOT end your ' +
+        'turn here without either waiting for the reply or telling the user ' +
+        'what you just asked.',
     });
   },
 });

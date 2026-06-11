@@ -1,16 +1,99 @@
 /**
  * wait-agent.js — Wait for a sub-agent to complete and get its result.
+ *
+ * Loop-stall fix (2026-06-11):
+ *
+ * Symptom — when the LLM called WaitAgent inside a sub-agent orchestration,
+ * the assistant turn ended silently right after the tool returned. The user
+ * saw a stuck "tool ran" panel and no follow-up text or further tool calls.
+ *
+ * Cause — the engine loop is correct (it appends the tool result and re-enters
+ * `adapter.stream()`), but the LLM was reading the bare JSON envelope (status +
+ * result + turns…) as a "complete answer" and emitting `end_turn` with no
+ * text. The previous description ("Returns the agent's final result or current
+ * status") gave it zero guidance about what to do next.
+ *
+ * Fix — every WaitAgent response now carries an explicit, status-dependent
+ * `next_steps` field that names the exact tool to call next, and the tool
+ * description spells out the full SpawnAgent → PromptAgent → WaitAgent →
+ * CloseAgent loop. The same nudge pattern lives on the companion tools.
  */
 
 import { defineTool } from './types.js';
 import { getAgentRegistry } from './agent.js';
 
+/**
+ * Build the status-specific next-step guidance the LLM reads after a wait.
+ *
+ * The wording is imperative and names actual tools so the model has a clear
+ * action to take — leaving it implicit was the bug.
+ *
+ * @param {string} status
+ * @param {boolean} [timedOut]
+ */
+function nextStepsFor(status, timedOut = false) {
+  if (timedOut) {
+    return (
+      'Sub-agent is still running. Either (a) call WaitAgent again with a ' +
+      'larger timeout_ms to keep waiting, (b) call CloseAgent if you want to ' +
+      'cut it short and use partial output, or (c) explain to the user that ' +
+      'the agent is still working and ask whether to keep waiting. Do NOT ' +
+      'end your turn silently.'
+    );
+  }
+  switch (status) {
+    case 'idle':
+      return (
+        'Sub-agent finished one turn and is idle. The `result` above is its ' +
+        'reply — relay it to the user in your own words, or send a follow-up ' +
+        'via PromptAgent, or finalize via CloseAgent. Do NOT end your turn ' +
+        'silently without telling the user what the sub-agent said.'
+      );
+    case 'completed':
+      return (
+        'Sub-agent finished successfully (terminal). Summarize the `result` ' +
+        'for the user in your own reply. Do NOT end your turn with no text.'
+      );
+    case 'closed':
+      return (
+        'Sub-agent was closed (terminal). Report the final `result` to the ' +
+        'user in your reply. Do NOT end your turn silently.'
+      );
+    case 'failed':
+      return (
+        'Sub-agent failed — see `error`. Decide whether to retry with a fresh ' +
+        'SpawnAgent, adjust the mission, or report the failure to the user. ' +
+        'Do NOT end your turn silently.'
+      );
+    default:
+      return (
+        'Decide what to do next: PromptAgent to send follow-up work, ' +
+        'CloseAgent to finalize, or WaitAgent again. Always tell the user ' +
+        'what just happened — do NOT end your turn silently.'
+      );
+  }
+}
+
 export default defineTool({
   name: 'WaitAgent',
-  description: `Wait for a sub-agent to complete its task and retrieve the result.
+  description: `Wait for a sub-agent to complete its current turn and retrieve its reply.
 
-Returns the agent's final result or current status if still running.
-Use after sending a task to an agent via PromptAgent.
+Returns a JSON envelope with the sub-agent's status, latest \`result\` text, and
+an explicit \`next_steps\` field telling you what to do next. Read \`next_steps\`
+every time — the wait is part of an orchestration loop, not a terminal answer.
+
+CRITICAL — after WaitAgent returns you MUST take one of these actions:
+  • status='idle' / 'completed' / 'closed': RELAY the \`result\` to the user
+    in your own words (or send follow-up work via PromptAgent, or finalize
+    via CloseAgent).
+  • status='failed': report the failure to the user OR retry with a fresh
+    SpawnAgent.
+  • timedOut=true: call WaitAgent again with a larger timeout, OR CloseAgent
+    to cut it short, OR tell the user the agent is still working.
+
+NEVER end your turn silently right after WaitAgent — the user has not seen the
+sub-agent's reply yet; only you have. The orchestration loop is
+SpawnAgent → (PromptAgent ↔ WaitAgent)+ → CloseAgent → final reply to user.
 
 The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
   parameters: {
@@ -46,7 +129,7 @@ The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
       return JSON.stringify({ error: `Agent not found: ${agent_id}` });
     }
 
-    // PR-M1: terminal states return immediately.
+    // Terminal states return immediately.
     if (agent.status === 'completed' || agent.status === 'closed' || agent.status === 'failed') {
       return JSON.stringify({
         agentId: agent_id,
@@ -56,12 +139,13 @@ The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
         error: agent.error || null,
         messages: agent.messages.length,
         turns: agent.usage?.turns || 0,
+        next_steps: nextStepsFor(agent.status),
       });
     }
 
-    // PR-M1: 'idle' means the sub-agent finished its current turn and is
-    // waiting for the next SendMessage. That IS a useful return point for
-    // the parent — surface lastResult and let parent decide what's next.
+    // 'idle' means the sub-agent finished its current turn and is waiting
+    // for the next SendMessage. That IS a useful return point for the
+    // parent — surface lastResult and let parent decide what's next.
     const deadline = Date.now() + timeout_ms;
     while (Date.now() < deadline) {
       if (agent.status === 'idle' || agent.status === 'completed' || agent.status === 'closed' || agent.status === 'failed') {
@@ -73,6 +157,7 @@ The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
           error: agent.error || null,
           messages: agent.messages.length,
           turns: agent.usage?.turns || 0,
+          next_steps: nextStepsFor(agent.status),
         });
       }
 
@@ -92,6 +177,7 @@ The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
       result: agent.lastResult || '',
       messages: agent.messages.length,
       turns: agent.usage?.turns || 0,
+      next_steps: nextStepsFor(agent.status, true),
     });
   },
 });
