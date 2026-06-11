@@ -184,6 +184,10 @@ export const useChatStore = defineStore('chat', {
     // compatibility; this map is the source of truth across group switches.
     // Shape: { [groupId || '__all__']: { loaded, hasMore, loading, oldestSeq, count } }
     yeaftSessionHistoryState: {},
+    // De-dupe metadata-only Yeaft bootstrap requests while waiting for the
+    // session_ready replay. Group history requests are de-duped separately by
+    // yeaftSessionHistoryState[groupId].loading.
+    yeaftBootstrapMetaLoadingKey: null,
     // 可用的 slash commands 列表（按 conversationId 隔离，从 Claude SDK init 消息获取）
     slashCommandsMap: {},  // { [conversationId]: string[] }
     // Slash command 描述映射（从 agent 端传递，所有 conversation 共用）
@@ -857,45 +861,45 @@ export const useChatStore = defineStore('chat', {
       this.yeaftLoadingMoreHistory = false;
       this.yeaftOldestLoadedSeq = null;
 
-      // Always request a session_ready replay so model + status + groups
-      // snapshot are repopulated on every Yeaft entry. Backend's
-      // handleYeaftLoadHistory is idempotent: the session_ready handler
-      // either migrates the local convId (first time) or refreshes model /
-      // status fields (re-entry). For the active group, also replay the
-      // visible history unless that group has already completed a history
-      // load in this UI lifecycle. A non-empty shared messagesMap is not
-      // enough evidence: it may hold stale rows for `grp_fun` while newer
-      // persisted rows were written during a previous page/session.
-      //
-      // Group-history-isolation (Bug 7): pass `groupId` so the agent only
-      // replays messages stamped with the active group. The visible Yeaft
-      // filter is authoritative; sessionsStore.activeSessionId is only a lazy
-      // fallback so quick group switches don't request another group's
-      // history into the active pane.
-      if (this.yeaftAgentId) {
-        const groupId = resolveActiveYeaftSessionId(this);
-        const groupKey = groupId || '__all__';
-        const savedState = this.yeaftSessionHistoryState[groupKey] || null;
-        // If the group snapshot has not arrived yet, do not replay the
-        // unfiltered "all" history. That causes the visible pane to paint
-        // legacy/default rows and then repaint after group_list_updated picks
-        // the real active group. Ask only for session metadata now; the
-        // group_list_updated path below will hydrate exactly one group.
-        const needMessages = !!groupId && !savedState?.loaded && !savedState?.loading;
-        if (groupId && needMessages) {
-          this.yeaftSessionHistoryState = {
-            ...this.yeaftSessionHistoryState,
-            [groupKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
-          };
-          this.yeaftLoadingMoreHistory = true;
-        }
-        this.sendWsMessage({
-          type: 'yeaft_load_history',
-          agentId: this.yeaftAgentId,
-          limit: needMessages ? 10 : 0,
-          groupId,
-        });
+      this.requestYeaftSessionBootstrap({ forceSessionReady: true });
+    },
+    requestYeaftSessionBootstrap({ forceSessionReady = false } = {}) {
+      // Yeaft session restore has two independently async prerequisites:
+      // the page can enter Yeaft before agent_list chooses an online agent,
+      // and the group snapshot can arrive after the metadata replay. Keep the
+      // bootstrap logic in one idempotent action so both paths can call it.
+      if (this.currentView !== 'yeaft' || !this.yeaftAgentId) return false;
+
+      const groupId = resolveActiveYeaftSessionId(this);
+      const groupKey = groupId || '__all__';
+      const savedState = this.yeaftSessionHistoryState[groupKey] || null;
+      // If the group snapshot has not arrived yet, do not replay legacy /
+      // default rows. Ask for metadata only; group_list_updated will hydrate
+      // the concrete active group once it is known.
+      const needMessages = !!groupId && !savedState?.loaded && !savedState?.loading;
+      const needSessionReady = forceSessionReady || !this.yeaftSessionReady || !this.yeaftModel || !this.yeaftStatus;
+      if (!needSessionReady && !needMessages) return false;
+
+      const metaKey = `${this.yeaftAgentId}:${groupId || '__none__'}`;
+      if (!needMessages && this.yeaftBootstrapMetaLoadingKey === metaKey) return false;
+
+      if (groupId && needMessages) {
+        this.yeaftSessionHistoryState = {
+          ...this.yeaftSessionHistoryState,
+          [groupKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
+        };
+        this.yeaftLoadingMoreHistory = true;
+      } else {
+        this.yeaftBootstrapMetaLoadingKey = metaKey;
       }
+
+      this.sendWsMessage({
+        type: 'yeaft_load_history',
+        agentId: this.yeaftAgentId,
+        limit: needMessages ? 10 : 0,
+        groupId,
+      });
+      return true;
     },
     leaveYeaft() {
       this.currentView = 'chat';
@@ -1160,6 +1164,7 @@ export const useChatStore = defineStore('chat', {
           this.yeaftConversationId = agentConvId;
           this.yeaftModel = event.model;
           this.yeaftSessionReady = true;
+          this.yeaftBootstrapMetaLoadingKey = null;
           this.yeaftAvailableModels = event.availableModels || [];
           // Surface agent's yeaft home dir so Yeaft workbench (Files/Git tabs)
           // can default to a sensible folder instead of leaking through
@@ -1595,8 +1600,8 @@ export const useChatStore = defineStore('chat', {
           // Bug 1: after enterYeaft the group snapshot may arrive *after*
           // initial history load (which happened with groupId:null), so
           // reload history for the correct group when activeGroupId changes.
-          if (this.currentView === 'yeaft' && newGroupId && newGroupId !== prevGroupId) {
-            this.setActiveSessionFilter(newGroupId);
+          if (this.currentView === 'yeaft' && newGroupId) {
+            this.setActiveSessionFilter(newGroupId, { force: newGroupId === prevGroupId });
           }
           break;
         }

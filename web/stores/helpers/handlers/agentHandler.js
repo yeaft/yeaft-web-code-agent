@@ -74,6 +74,20 @@ export function handleAgentList(store, msg) {
       store.currentAgentInfo = agent;
     }
   }
+  // Yeaft can be entered before the first agent_list arrives during page
+  // restore. In that case enterYeaft() could not choose an agent and did not
+  // send the yeaft_load_history bootstrap, so session_ready/model/history
+  // stayed empty until the user clicked another session. When an online agent
+  // appears while the Yeaft page is active, pick it here; the existing
+  // reconnect branch below sends select_agent and runs the bootstrap in order.
+  if (store.currentView === 'yeaft' && !store.yeaftAgentId) {
+    const online = msg.agents.find(a => a.online);
+    if (online) {
+      store.yeaftAgentId = online.id;
+      store.currentAgent = online.id;
+      store.currentAgentInfo = online;
+    }
+  }
   // ★ 同步所有 agent 的 conversations 到 store.conversations
   {
     const allServerConvs = [];
@@ -203,6 +217,9 @@ export function handleAgentList(store, msg) {
       console.log('[Reconnect] Agent online, restoring selection:', store.currentAgent);
       store.currentAgentInfo = agent;
       store.sendWsMessage({ type: 'select_agent', agentId: store.currentAgent, silent: true });
+      if (store.currentView === 'yeaft' && typeof store.requestYeaftSessionBootstrap === 'function') {
+        store.requestYeaftSessionBootstrap({ forceSessionReady: true });
+      }
       if (store.currentConversation) {
         const conv = store.conversations.find(c => c.id === store.currentConversation);
         store.sendWsMessage({ type: 'select_conversation', conversationId: store.currentConversation });
