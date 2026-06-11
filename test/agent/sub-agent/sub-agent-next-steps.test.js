@@ -30,6 +30,7 @@ import closeAgent from '../../../agent/yeaft/tools/close-agent.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
+import { truncateToolResultIfNeeded, TOOL_RESULT_MAX_BYTES } from '../../../agent/yeaft/tools/registry.js';
 
 /** Scripted adapter — emits a reply and end_turn for every stream() call. */
 class TextAdapter {
@@ -92,7 +93,6 @@ describe('WaitAgent: every envelope carries next_steps so the LLM does not end t
     expect(out.next_steps.length).toBeGreaterThan(0);
     // Names a real action, not just generic "ok".
     expect(out.next_steps.toLowerCase()).toContain('user');
-    expect(out.next_steps).not.toMatch(/^\s*$/);
   });
 
   it('terminal (closed) envelope carries next_steps', async () => {
@@ -107,7 +107,7 @@ describe('WaitAgent: every envelope carries next_steps so the LLM does not end t
     expect(out.next_steps.length).toBeGreaterThan(0);
   });
 
-  it('terminal (failed) envelope carries next_steps that names retry / SpawnAgent', async () => {
+  it('terminal (failed) envelope carries next_steps that names SpawnAgent and tells the LLM to surface to the user', async () => {
     const agents = getAgentRegistry();
     agents.set('agent-f', {
       id: 'agent-f', name: 'f', status: 'failed', result: '',
@@ -117,7 +117,10 @@ describe('WaitAgent: every envelope carries next_steps so the LLM does not end t
     expect(out.status).toBe('failed');
     expect(out.error).toBe('boom');
     expect(typeof out.next_steps).toBe('string');
-    expect(out.next_steps).toMatch(/SpawnAgent|retry|user/);
+    // Both required — alternation lets a regression that drops both slide
+    // through if any token happens to appear in the wording.
+    expect(out.next_steps).toMatch(/SpawnAgent/);
+    expect(out.next_steps.toLowerCase()).toContain('user');
   });
 
   it('idle envelope (post-first-turn) carries next_steps that names PromptAgent / CloseAgent', async () => {
@@ -242,5 +245,90 @@ describe('Tool descriptions name the full orchestration loop', () => {
     const d = closeAgent.description;
     expect(d.toLowerCase()).toContain('user');
     expect(d.toLowerCase()).toContain('silently');
+  });
+});
+
+describe('Error envelopes also carry next_steps — same bug-shape vulnerability', () => {
+  // The fix premise is "naked terminal-looking envelopes cause silent end_turn".
+  // An {error: '...'} blob is the MOST terminal-looking envelope possible —
+  // and the most likely error in production is a fat-fingered agent_id. Make
+  // sure every error path nudges the LLM out of silent end_turn.
+  beforeEach(() => _resetAgentRegistry());
+
+  it('WaitAgent: unknown agent_id error envelope carries next_steps', async () => {
+    const out = JSON.parse(await waitAgent.execute({ agent_id: 'no-such-agent' }, {}));
+    expect(out.error).toMatch(/not found/i);
+    expect(typeof out.next_steps).toBe('string');
+    expect(out.next_steps.length).toBeGreaterThan(0);
+    expect(out.next_steps.toLowerCase()).toContain('user');
+  });
+
+  it('WaitAgent: missing agent_id error envelope carries next_steps', async () => {
+    const out = JSON.parse(await waitAgent.execute({}, {}));
+    expect(out.error).toMatch(/agent_id/);
+    expect(typeof out.next_steps).toBe('string');
+    expect(out.next_steps.length).toBeGreaterThan(0);
+  });
+
+  it('PromptAgent: unknown agent_id error envelope carries next_steps', async () => {
+    const out = JSON.parse(await sendMessage.execute(
+      { agent_id: 'no-such-agent', message: 'hi' },
+      {},
+    ));
+    expect(out.error).toMatch(/not found/i);
+    expect(typeof out.next_steps).toBe('string');
+    expect(out.next_steps.length).toBeGreaterThan(0);
+  });
+
+  it('CloseAgent: unknown agent_id error envelope carries next_steps', async () => {
+    const out = JSON.parse(await closeAgent.execute({ agent_id: 'no-such-agent' }, {}));
+    expect(out.error).toMatch(/not found/i);
+    expect(typeof out.next_steps).toBe('string');
+    expect(out.next_steps.length).toBeGreaterThan(0);
+  });
+
+  it('SpawnAgent: validation-failure error envelope carries next_steps', async () => {
+    const out = JSON.parse(await agentTool.execute({ /* no name */ }, {}));
+    expect(out.error).toBeTruthy();
+    expect(typeof out.next_steps).toBe('string');
+    expect(out.next_steps.length).toBeGreaterThan(0);
+  });
+});
+
+describe('Envelope field ordering survives the 1 KiB tool-result cap', () => {
+  // registry.js caps every tool result at TOOL_RESULT_MAX_BYTES (1024) by
+  // truncating the tail. If next_steps lived at the END of the envelope, a
+  // long `result` would push the directive off the end and the LLM would
+  // never see it — re-introducing the exact bug this PR fixes. Pin field
+  // order by asserting the directive survives the cap when result is large.
+  beforeEach(() => _resetAgentRegistry());
+
+  it('WaitAgent: next_steps survives truncation when result is long', async () => {
+    const agents = getAgentRegistry();
+    agents.set('agent-long', {
+      id: 'agent-long', name: 'long', status: 'completed',
+      // Stuff `result` larger than the cap so naive (last-position)
+      // field ordering would chop next_steps off the end.
+      result: 'x'.repeat(TOOL_RESULT_MAX_BYTES * 2),
+      error: null, messages: [], usage: { turns: 1 },
+    });
+    const raw = await waitAgent.execute({ agent_id: 'agent-long' }, {});
+    const capped = truncateToolResultIfNeeded(raw, { toolName: 'WaitAgent' });
+    expect(capped.length).toBeGreaterThan(0);
+    // The directive body must show up BEFORE the truncation marker — i.e.
+    // inside the first TOOL_RESULT_MAX_BYTES bytes of the JSON envelope.
+    expect(capped).toMatch(/next_steps/);
+    expect(capped.toLowerCase()).toContain('user');
+  });
+
+  it('SpawnAgent: next_steps survives truncation when envelope is padded', async () => {
+    // SpawnAgent envelope is naturally small; pad agent name to force size.
+    const out = await agentTool.execute(
+      { name: 'a'.repeat(900), mission: 'm' },
+      {},
+    );
+    const capped = truncateToolResultIfNeeded(out, { toolName: 'SpawnAgent' });
+    expect(capped).toMatch(/next_steps/);
+    expect(capped).toMatch(/WaitAgent/);
   });
 });

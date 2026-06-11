@@ -33,14 +33,21 @@ Do NOT end your turn silently right after CloseAgent.`,
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
   async execute(input, ctx) {
+    // NB: next_steps is the FIRST envelope field — the registry's 1 KiB
+    // tail-truncation would eat it if it lived at the end.
+    const ERROR_NEXT_STEPS =
+      'That call failed — see `error`. Either correct the arguments and ' +
+      'retry, or tell the user what went wrong. Do NOT end your turn ' +
+      'silently after an error envelope.';
+
     const { agent_id, result } = input;
-    if (!agent_id) return JSON.stringify({ error: 'agent_id is required' });
+    if (!agent_id) return JSON.stringify({ next_steps: ERROR_NEXT_STEPS, error: 'agent_id is required' });
 
     const agents = getAgentRegistry();
     const agent = agents.get(agent_id);
 
     if (!agent) {
-      return JSON.stringify({ error: `Agent not found: ${agent_id}` });
+      return JSON.stringify({ next_steps: ERROR_NEXT_STEPS, error: `Agent not found: ${agent_id}` });
     }
 
     if (result) {
@@ -59,6 +66,10 @@ Do NOT end your turn silently right after CloseAgent.`,
     agent.status = 'closed';
 
     return JSON.stringify({
+      next_steps:
+        'Sub-agent is closed. Now reply to the user — summarize what was ' +
+        'accomplished and surface the `result` text. Do NOT end your turn ' +
+        'without telling the user what happened.',
       success: true,
       agentId: agent_id,
       name: agent.name,
@@ -66,10 +77,6 @@ Do NOT end your turn silently right after CloseAgent.`,
       messages: agent.messages.length,
       turns: agent.usage?.turns || 0,
       message: `Agent "${agent.name}" closed`,
-      next_steps:
-        'Sub-agent is closed. Now reply to the user — summarize what was ' +
-        'accomplished and surface the `result` text. Do NOT end your turn ' +
-        'without telling the user what happened.',
     });
   },
 });

@@ -74,6 +74,21 @@ function nextStepsFor(status, timedOut = false) {
   }
 }
 
+/**
+ * Nudge for the `{error: ...}` error envelopes. The error path used to ship a
+ * naked `{error}` blob — same shape that caused the silent-end_turn bug on the
+ * happy path. Tell the LLM what to do about an error (correct the call, or
+ * report the failure to the user) so it does not end its turn silently after a
+ * fat-finger like a wrong agent_id.
+ */
+function errorNextSteps() {
+  return (
+    'That call failed — see `error`. Either correct the arguments and retry, ' +
+    'or tell the user what went wrong. Do NOT end your turn silently after an ' +
+    'error envelope; the user has not seen the error, only you have.'
+  );
+}
+
 export default defineTool({
   name: 'WaitAgent',
   description: `Wait for a sub-agent to complete its current turn and retrieve its reply.
@@ -117,21 +132,29 @@ The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
   isReadOnly: () => true,
   async execute(input, ctx) {
     const { agent_id, timeout_ms = 30000 } = input;
-    if (!agent_id) return JSON.stringify({ error: 'agent_id is required' });
+    // NB: `next_steps` is intentionally the FIRST field in every envelope
+    // below. `agent/yeaft/tools/registry.js` caps each tool result at
+    // TOOL_RESULT_MAX_BYTES (1 KiB) by truncating the tail — if `next_steps`
+    // were last, a long `result` would push the directive off the end and the
+    // LLM would never see the very nudge this PR delivers.
+    if (!agent_id) {
+      return JSON.stringify({ next_steps: errorNextSteps(), error: 'agent_id is required' });
+    }
     if (typeof timeout_ms !== 'number' || !Number.isFinite(timeout_ms) || timeout_ms < 0 || timeout_ms > 300000) {
-      return JSON.stringify({ error: 'timeout_ms must be a number between 0 and 300000' });
+      return JSON.stringify({ next_steps: errorNextSteps(), error: 'timeout_ms must be a number between 0 and 300000' });
     }
 
     const agents = getAgentRegistry();
     const agent = agents.get(agent_id);
 
     if (!agent) {
-      return JSON.stringify({ error: `Agent not found: ${agent_id}` });
+      return JSON.stringify({ next_steps: errorNextSteps(), error: `Agent not found: ${agent_id}` });
     }
 
     // Terminal states return immediately.
     if (agent.status === 'completed' || agent.status === 'closed' || agent.status === 'failed') {
       return JSON.stringify({
+        next_steps: nextStepsFor(agent.status),
         agentId: agent_id,
         name: agent.name,
         status: agent.status,
@@ -139,7 +162,6 @@ The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
         error: agent.error || null,
         messages: agent.messages.length,
         turns: agent.usage?.turns || 0,
-        next_steps: nextStepsFor(agent.status),
       });
     }
 
@@ -150,6 +172,7 @@ The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
     while (Date.now() < deadline) {
       if (agent.status === 'idle' || agent.status === 'completed' || agent.status === 'closed' || agent.status === 'failed') {
         return JSON.stringify({
+          next_steps: nextStepsFor(agent.status),
           agentId: agent_id,
           name: agent.name,
           status: agent.status,
@@ -157,18 +180,18 @@ The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
           error: agent.error || null,
           messages: agent.messages.length,
           turns: agent.usage?.turns || 0,
-          next_steps: nextStepsFor(agent.status),
         });
       }
 
       if (ctx?.signal?.aborted) {
-        return JSON.stringify({ error: 'Wait cancelled', agentId: agent_id });
+        return JSON.stringify({ next_steps: errorNextSteps(), error: 'Wait cancelled', agentId: agent_id });
       }
 
       await new Promise(r => setTimeout(r, 200));
     }
 
     return JSON.stringify({
+      next_steps: nextStepsFor(agent.status, true),
       agentId: agent_id,
       name: agent.name,
       status: agent.status,
@@ -177,7 +200,6 @@ The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
       result: agent.lastResult || '',
       messages: agent.messages.length,
       turns: agent.usage?.turns || 0,
-      next_steps: nextStepsFor(agent.status, true),
     });
   },
 });
