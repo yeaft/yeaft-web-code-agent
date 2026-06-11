@@ -179,7 +179,8 @@ export default defineTool({
   description: `Create a sub-agent to work on an independent task in parallel.
 
 Sub-agents run in their own context and can be given a concrete mission
-with an expected_output schema and a budget (max_tokens/max_turns/wall_time_ms).
+with an optional expected_output schema. Optional budget limits
+(max_tokens/max_turns/wall_time_ms) act as safety cutoffs only when supplied.
 Pick a preset persona to pre-wire a tool subset and model tier:
   - explorer   : fast, read-only scout (Read/Grep/Glob/ListDir)
   - implementer: builder with full work tools (primary model)
@@ -188,8 +189,8 @@ Pick a preset persona to pre-wire a tool subset and model tier:
 
 Guidelines:
 - Give a clear, focused mission — what "done" looks like
-- Use expected_output to pin the structure you want back
-- Always set a budget for unbounded missions
+- Use expected_output when the return shape matters
+- Add a budget only when you need an explicit safety cutoff
 - Use PromptAgent to communicate, WaitAgent to collect results, CloseAgent to finalize`,
   parameters: {
     type: 'object',
@@ -218,11 +219,11 @@ Guidelines:
       budget: {
         type: 'object',
         properties: {
-          max_tokens: { type: 'number' },
-          max_turns: { type: 'number' },
-          wall_time_ms: { type: 'number' },
+          max_tokens: { type: 'number', description: 'Optional token ceiling; no default limit is applied' },
+          max_turns: { type: 'number', description: 'Optional turn ceiling; no default limit is applied' },
+          wall_time_ms: { type: 'number', description: 'Optional elapsed-time ceiling in milliseconds; no default limit is applied' },
         },
-        description: 'Budget limits; exceeding any returns { status: "budget_exceeded", partial_output, reason }',
+        description: 'Optional safety limits; no max_tokens/max_turns/wall_time_ms defaults are applied. Exceeding an explicit limit returns { status: "budget_exceeded", partial_output, reason }',
       },
       cwd: {
         type: 'string',

@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { _resetAgentRegistry, getAgentRegistry } from '../../../agent/yeaft/tools/agent.js';
+import { _resetAgentRegistry, checkBudget, getAgentRegistry, validateSpec } from '../../../agent/yeaft/tools/agent.js';
 import agentTool from '../../../agent/yeaft/tools/agent.js';
 import sendMessage from '../../../agent/yeaft/tools/send-message.js';
 import waitAgent from '../../../agent/yeaft/tools/wait-agent.js';
@@ -104,6 +104,36 @@ describe('sub-agent: tool subset', () => {
   });
 });
 
+describe('sub-agent: tool timeout metadata', () => {
+  it('gives WaitAgent enough registry-level time for a 5 minute wait', () => {
+    expect(waitAgent.timeoutMs).toBeGreaterThanOrEqual(300000);
+  });
+});
+
+describe('sub-agent: spec budget validation', () => {
+  it('does not apply default max_tokens or max_turns limits', () => {
+    const validation = validateSpec({ name: 'open-ended', mission: 'Investigate thoroughly.' });
+
+    expect(validation.ok).toBe(true);
+    expect(validation.spec.budget).toBeNull();
+    expect(checkBudget({ budget: validation.spec.budget, usage: { tokens: 1_000_000, turns: 1_000, startedAt: 0 } }, 60_000)).toEqual({ exceeded: false });
+  });
+
+  it('keeps explicit budget limits as safety cutoffs', () => {
+    const validation = validateSpec({
+      name: 'bounded',
+      mission: 'Stop after one turn.',
+      budget: { max_turns: 1, max_tokens: 10, wall_time_ms: 5000 },
+    });
+
+    expect(validation.ok).toBe(true);
+    expect(validation.spec.budget).toEqual({ max_turns: 1, max_tokens: 10, wall_time_ms: 5000 });
+    expect(checkBudget({ budget: validation.spec.budget, usage: { tokens: 9, turns: 1, startedAt: 0 } }, 1000)).toMatchObject({ exceeded: true, limit: 'max_turns' });
+    expect(checkBudget({ budget: validation.spec.budget, usage: { tokens: 10, turns: 0, startedAt: 0 } }, 1000)).toMatchObject({ exceeded: true, limit: 'max_tokens' });
+    expect(checkBudget({ budget: validation.spec.budget, usage: { tokens: 0, turns: 0, startedAt: 0 } }, 5000)).toMatchObject({ exceeded: true, limit: 'wall_time_ms' });
+  });
+});
+
 describe('sub-agent: spawn + first turn', () => {
   beforeEach(() => _resetAgentRegistry());
 
@@ -167,6 +197,42 @@ describe('sub-agent: spawn + first turn', () => {
 
 describe('sub-agent: SendMessage / WaitAgent / CloseAgent round-trip', () => {
   beforeEach(() => _resetAgentRegistry());
+
+  it('WaitAgent schema allows waits up to 5 minutes', () => {
+    expect(waitAgent.parameters.properties.timeout_ms.maximum).toBe(300000);
+    expect(waitAgent.parameters.properties.timeout_ms.description).toContain('300000');
+  });
+
+  it('WaitAgent accepts an explicit 300000ms timeout for terminal agents', async () => {
+    const agents = getAgentRegistry();
+    agents.set('agent-done', {
+      id: 'agent-done',
+      name: 'done',
+      status: 'completed',
+      result: 'finished',
+      error: null,
+      messages: [],
+      usage: { turns: 0 },
+    });
+
+    const wait = JSON.parse(await waitAgent.execute({ agent_id: 'agent-done', timeout_ms: 300000 }, {}));
+    expect(wait.status).toBe('completed');
+    expect(wait.result).toBe('finished');
+  });
+
+  it('WaitAgent rejects waits above 5 minutes', async () => {
+    const agents = getAgentRegistry();
+    agents.set('agent-running', {
+      id: 'agent-running',
+      name: 'running',
+      status: 'running',
+      messages: [],
+      usage: { turns: 0 },
+    });
+
+    const wait = JSON.parse(await waitAgent.execute({ agent_id: 'agent-running', timeout_ms: 300001 }, {}));
+    expect(wait.error).toContain('300000');
+  });
 
   it('SendMessage queues a follow-up the driver consumes; WaitAgent collects each result', async () => {
     const adapter = new TextAdapter('first reply');

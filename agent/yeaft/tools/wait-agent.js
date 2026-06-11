@@ -10,7 +10,9 @@ export default defineTool({
   description: `Wait for a sub-agent to complete its task and retrieve the result.
 
 Returns the agent's final result or current status if still running.
-Use after sending a task to an agent via PromptAgent.`,
+Use after sending a task to an agent via PromptAgent.
+
+The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
   parameters: {
     type: 'object',
     properties: {
@@ -20,16 +22,22 @@ Use after sending a task to an agent via PromptAgent.`,
       },
       timeout_ms: {
         type: 'number',
-        description: 'Maximum time to wait in milliseconds (default: 30000)',
+        minimum: 0,
+        maximum: 300000,
+        description: 'Maximum time to wait in milliseconds (default: 30000, max: 300000 / 5 minutes)',
       },
     },
     required: ['agent_id'],
   },
+  timeoutMs: 305000,
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
   async execute(input, ctx) {
     const { agent_id, timeout_ms = 30000 } = input;
     if (!agent_id) return JSON.stringify({ error: 'agent_id is required' });
+    if (typeof timeout_ms !== 'number' || !Number.isFinite(timeout_ms) || timeout_ms < 0 || timeout_ms > 300000) {
+      return JSON.stringify({ error: 'timeout_ms must be a number between 0 and 300000' });
+    }
 
     const agents = getAgentRegistry();
     const agent = agents.get(agent_id);
