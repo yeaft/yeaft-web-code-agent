@@ -16,14 +16,68 @@
 
 const { defineStore } = Pinia;
 
+const PINNED_STORAGE_KEY = 'yeaft-pinned-sessions';
+
+function loadPinnedSessionIds() {
+  try {
+    const raw = localStorage.getItem(PINNED_STORAGE_KEY) || '[]';
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter(id => typeof id === 'string') : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function savePinnedSessionIds(ids) {
+  try {
+    localStorage.setItem(PINNED_STORAGE_KEY, JSON.stringify(ids));
+  } catch (_) {}
+}
+
+function moveIdToFront(order, sessionId) {
+  if (!sessionId) return Array.isArray(order) ? order.slice() : [];
+  const out = [];
+  let found = false;
+  for (const id of Array.isArray(order) ? order : []) {
+    if (id === sessionId) {
+      found = true;
+      continue;
+    }
+    out.push(id);
+  }
+  return found ? [sessionId, ...out] : out;
+}
+
+function orderWithPins(order, pinnedIds, activeSessionId) {
+  const existing = new Set(Array.isArray(order) ? order : []);
+  const pinned = [];
+  const seen = new Set();
+  for (const id of Array.isArray(pinnedIds) ? pinnedIds : []) {
+    if (!existing.has(id) || seen.has(id)) continue;
+    pinned.push(id);
+    seen.add(id);
+  }
+  const rest = [];
+  for (const id of Array.isArray(order) ? order : []) {
+    if (seen.has(id)) continue;
+    rest.push(id);
+  }
+  const merged = [...pinned, ...rest];
+  return activeSessionId ? moveIdToFront(merged, activeSessionId) : merged;
+}
+
 export const useSessionsStore = defineStore('sessions', {
   state: () => ({
     /** @type {Record<string, object>} */
     sessions: {},       // keyed by session id
     /** @type {string[]} */
-    sessionOrder: [],   // render order (matches snapshot order)
+    sessionOrder: [],   // render order (snapshot order + pinned/current promotions)
+    /** @type {string[]} */
+    pinnedSessionIds: loadPinnedSessionIds(),
     /** @type {string|null} */
     activeSessionId: null,
+    /** True after the user explicitly clicked/created a session. */
+    activeSessionPromoted: false,
     lastSnapshotAt: 0,
     /**
      * Most recent CRUD result for the UI to surface as toast/modal error.
@@ -45,6 +99,7 @@ export const useSessionsStore = defineStore('sessions', {
     activeSession(state) {
       return state.activeSessionId ? (state.sessions[state.activeSessionId] || null) : null;
     },
+    isSessionPinned: (state) => (sessionId) => state.pinnedSessionIds.includes(sessionId),
     isEmpty(state) {
       return state.sessionOrder.length === 0;
     },
@@ -71,13 +126,21 @@ export const useSessionsStore = defineStore('sessions', {
         nextOrder.push(s.id);
       }
       this.sessions = nextMap;
-      this.sessionOrder = nextOrder;
-      this.lastSnapshotAt = Date.now();
+      this.pinnedSessionIds = this.pinnedSessionIds.filter(id => !!nextMap[id]);
+      savePinnedSessionIds(this.pinnedSessionIds);
       if (this.activeSessionId && !nextMap[this.activeSessionId]) {
         this.activeSessionId = nextOrder[0] || null;
+        this.activeSessionPromoted = false;
       } else if (!this.activeSessionId && nextOrder.length > 0) {
         this.activeSessionId = nextOrder[0];
+        this.activeSessionPromoted = false;
       }
+      // Render order is layered: server snapshot order as the base, user-pinned
+      // sessions inserted at the top in pin order, and the explicitly clicked
+      // session inserted as the first visible row. This is never a swap: all
+      // remaining sessions preserve their relative order and shift down.
+      this.sessionOrder = orderWithPins(nextOrder, this.pinnedSessionIds, this.activeSessionPromoted ? this.activeSessionId : null);
+      this.lastSnapshotAt = Date.now();
       // Sanitize the chat store's parallel filter so a persisted
       // yeaftActiveSessionFilter pointing at a now-deleted session does not
       // render the main pane as empty until the user clicks.
@@ -126,14 +189,20 @@ export const useSessionsStore = defineStore('sessions', {
       if (result.ok && result.op === 'create' && session && session.id) {
         this.applySnapshotUpsert(session);
         this.activeSessionId = session.id;
+        this.activeSessionPromoted = true;
+        this.sessionOrder = orderWithPins(this.sessionOrder, this.pinnedSessionIds, this.activeSessionId);
       }
       const opSessionId = result.sessionId || result.groupId;
       if (result.ok && (result.op === 'archive' || result.op === 'delete') && opSessionId) {
         delete this.sessions[opSessionId];
-        this.sessionOrder = this.sessionOrder.filter(id => id !== opSessionId);
+        this.pinnedSessionIds = this.pinnedSessionIds.filter(id => id !== opSessionId);
+        savePinnedSessionIds(this.pinnedSessionIds);
+        const baseOrder = this.sessionOrder.filter(id => id !== opSessionId);
         if (this.activeSessionId === opSessionId) {
-          this.activeSessionId = this.sessionOrder[0] || null;
+          this.activeSessionId = baseOrder[0] || null;
+          this.activeSessionPromoted = false;
         }
+        this.sessionOrder = orderWithPins(baseOrder, this.pinnedSessionIds, this.activeSessionPromoted ? this.activeSessionId : null);
       }
       if (result.ok && result.op === 'update_config' && opSessionId) {
         const prev = this.sessions[opSessionId];
@@ -154,15 +223,34 @@ export const useSessionsStore = defineStore('sessions', {
         ...(this.sessions[session.id] || {}),
         ...this._normalize(session),
       };
-      if (!existed) this.sessionOrder.push(session.id);
+      if (!existed) this.sessionOrder.unshift(session.id);
+      this.sessionOrder = orderWithPins(this.sessionOrder, this.pinnedSessionIds, this.activeSessionPromoted ? this.activeSessionId : null);
     },
 
     setActive(sessionId) {
       if (sessionId && this.sessions[sessionId]) {
         this.activeSessionId = sessionId;
+        this.activeSessionPromoted = true;
+        this.sessionOrder = orderWithPins(this.sessionOrder, this.pinnedSessionIds, sessionId);
       } else {
         this.activeSessionId = null;
+        this.activeSessionPromoted = false;
+        this.sessionOrder = orderWithPins(this.sessionOrder, this.pinnedSessionIds, null);
       }
+    },
+
+    togglePin(sessionId) {
+      if (!sessionId || !this.sessions[sessionId]) return;
+      const idx = this.pinnedSessionIds.indexOf(sessionId);
+      if (idx >= 0) {
+        this.pinnedSessionIds.splice(idx, 1);
+      } else {
+        // Insertion-style pin: newly pinned session becomes the first pinned
+        // item, and previously pinned sessions shift down in their old order.
+        this.pinnedSessionIds.unshift(sessionId);
+      }
+      savePinnedSessionIds(this.pinnedSessionIds);
+      this.sessionOrder = orderWithPins(this.sessionOrder, this.pinnedSessionIds, this.activeSessionPromoted ? this.activeSessionId : null);
     },
 
     /** Register a request-id so components can await ok/error. */

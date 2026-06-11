@@ -113,6 +113,10 @@ export default {
                     <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
                   </button>
                   <div v-if="groupMenu.open && groupMenu.groupId === s.id" class="session-menu" role="menu" @click.stop>
+                    <button type="button" role="menuitem" class="session-menu-item" @click="toggleGroupPinFromMenu(s.raw)">
+                      <svg viewBox="0 0 24 24"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+                      {{ isGroupPinned(s.id) ? $t('yeaft.session.unpin') : $t('yeaft.session.pin') }}
+                    </button>
                     <button type="button" role="menuitem" class="session-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'members')">
                       {{ $t('yeaft.session.manageMembers') }}
                     </button>
@@ -322,6 +326,14 @@ export default {
       if (!g || !g.id) return;
       if (this.sessionsStore) this.sessionsStore.setActive(g.id);
       this.$emit('select-group', g);
+    },
+    isGroupPinned(groupId) {
+      return !!(groupId && this.sessionsStore?.isSessionPinned?.(groupId));
+    },
+    toggleGroupPinFromMenu(g) {
+      if (!g || !g.id || !this.sessionsStore) return;
+      this.sessionsStore.togglePin(g.id);
+      this.groupMenu = { open: false, groupId: null };
     },
     // task-yeaft-group-editor: ⚙ button on each group row opens the
     // unified SessionSettingsModal (announcement / members / rename /

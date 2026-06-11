@@ -1136,6 +1136,8 @@ export default {
   'yeaft.session.oneMember': '1 member',
   'yeaft.session.noMembers': 'Empty — invite a VP',
   'yeaft.session.defaultBadge': 'default',
+  'yeaft.session.pin': 'Pin to top',
+  'yeaft.session.unpin': 'Unpin',
   'yeaft.session.archive': 'Archive',
   'yeaft.session.archiveConfirm': 'Archive "{name}"? You can recover it from disk later.',
   'yeaft.session.delete': 'Delete',

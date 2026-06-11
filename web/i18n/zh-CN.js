@@ -1131,6 +1131,8 @@ export default {
   'yeaft.session.oneMember': '1 位成员',
   'yeaft.session.noMembers': '空群组 — 请邀请 VP',
   'yeaft.session.defaultBadge': '默认',
+  'yeaft.session.pin': '置顶',
+  'yeaft.session.unpin': '取消置顶',
   'yeaft.session.defaultName': '默认群组',
   'yeaft.session.moreActions': '更多操作',
   'yeaft.session.archive': '归档',
