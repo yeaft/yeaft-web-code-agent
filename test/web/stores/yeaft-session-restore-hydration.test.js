@@ -54,7 +54,7 @@ describe('Yeaft session restore hydration', () => {
     });
   });
 
-  it('lets reconnect retry a lost metadata bootstrap without spamming after hydration', () => {
+  it('lets forced metadata bootstrap retry only when no identical request is in flight', () => {
     const store = makeStore();
 
     store.currentView = 'yeaft';
@@ -63,6 +63,10 @@ describe('Yeaft session restore hydration', () => {
     store.currentAgentInfo = { id: 'agent-1', online: true };
     store.yeaftBootstrapMetaLoadingKey = 'agent-1:__none__';
 
+    expect(store.requestYeaftSessionBootstrap({ forceSessionReady: true })).toBe(false);
+    expect(store.sent.filter(m => m.type === 'yeaft_load_history')).toEqual([]);
+
+    store.yeaftBootstrapMetaLoadingKey = null;
     expect(store.requestYeaftSessionBootstrap({ forceSessionReady: true })).toBe(true);
     expect(store.sent).toContainEqual({
       type: 'yeaft_load_history',

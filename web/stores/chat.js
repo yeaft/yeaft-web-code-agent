@@ -977,7 +977,7 @@ export const useChatStore = defineStore('chat', {
       if (!needSessionReady && !needMessages) return false;
 
       const metaKey = `${this.yeaftAgentId}:${groupId || '__none__'}`;
-      if (!forceSessionReady && !needMessages && this.yeaftBootstrapMetaLoadingKey === metaKey) return false;
+      if (!needMessages && this.yeaftBootstrapMetaLoadingKey === metaKey) return false;
 
       if (groupId && needMessages) {
         this.yeaftSessionHistoryState = {
