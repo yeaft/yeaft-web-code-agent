@@ -89,7 +89,12 @@ export const messageDb = {
         const sentinelRow = stmts.getSessionTsRebuiltAt.get(sessionId);
         const alreadyRebuilt = sentinelRow && sentinelRow.ts_rebuilt_at > 0;
         if (alreadyRebuilt) {
-          console.log(`[bulkAddHistory] Skipping rebuild for ${sessionId}: ts_rebuilt_at=${sentinelRow.ts_rebuilt_at} (one-shot guard)`);
+          // Quiet by default — every once-repaired session would otherwise log
+          // this line on every future chat-resume forever, exactly inverting
+          // the perf goal. Flip DEBUG_BULK_HISTORY to see it.
+          if (process.env.DEBUG_BULK_HISTORY) {
+            console.log(`[bulkAddHistory] Skipping rebuild for ${sessionId} (one-shot guard, ts_rebuilt_at=${sentinelRow.ts_rebuilt_at})`);
+          }
         } else {
           console.log(`[bulkAddHistory] Detected bad timestamps (range: ${tsRange.max_ts - tsRange.min_ts}ms for ${tsRange.count} msgs), rebuilding for ${sessionId} (will delete ${tsRange.count} rows)`);
           needsRebuild = true;
@@ -133,9 +138,11 @@ export const messageDb = {
     const insertMany = transaction((msgs) => {
       if (needsRebuild) {
         stmts.deleteMessagesBySession.run(sessionId);
-        // Stamp the sentinel inside the same transaction so a crash mid-rebuild
-        // leaves the session in a "never repaired" state and we can retry on
-        // the next resume rather than leaving it half-stamped.
+        // Stamp the sentinel inside the same transaction as DELETE + re-INSERT.
+        // SQLite is atomic, so either everything (rows + stamp) lands or
+        // nothing does — preventing the "rows rebuilt but stamp lost ⇒
+        // rebuild loops forever on every future resume" failure mode that
+        // motivated this entire change.
         stmts.markSessionTsRebuilt.run(Date.now(), sessionId);
       }
 

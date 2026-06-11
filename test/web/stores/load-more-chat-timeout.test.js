@@ -34,6 +34,9 @@ function loadMoreMessages() {
   if (this.currentView === 'yeaft') return;
   if (this.loadingMoreMessages || !this.hasMoreMessages || !this.currentConversation) return;
   this.loadingMoreMessages = true;
+  // Bump a per-call generation so a later setTimeout can recognise itself
+  // as stale (a newer call has taken the flag back up since).
+  const generation = (this._loadMoreGeneration = (this._loadMoreGeneration || 0) + 1);
 
   const msgs = this.messagesMap[this.currentConversation] || [];
   const firstMsgWithId = msgs.find(m => m.dbMessageId);
@@ -46,6 +49,7 @@ function loadMoreMessages() {
   });
 
   setTimeout(() => {
+    if (this._loadMoreGeneration !== generation) return; // a newer call superseded us
     if (this.loadingMoreMessages && this.currentConversation === targetConvId) {
       this.loadingMoreMessages = false;
     }
@@ -100,26 +104,38 @@ describe('feat-chat-load-perf: chat loadMoreMessages timeout', () => {
     expect(store.loadingMoreMessages).toBe(false);
   });
 
-  it('does not clear spinner if the reply arrived first', () => {
+  it('does not clear spinner if a fresh request superseded the stale timer', () => {
     const store = makeStore();
     loadMoreMessages.call(store);
     expect(store.loadingMoreMessages).toBe(true);
+    const firstGeneration = store._loadMoreGeneration;
 
-    // Simulate the WS handler clearing then re-using the field.
+    // First WS reply lands quickly — handler clears the spinner.
+    // (Simulated by jumping 200ms forward and flipping the flag.)
+    vi.advanceTimersByTime(200);
     store.loadingMoreMessages = false;
-    // Then a brand-new request takes the flag back up (mimics a fast
-    // user scroll triggering load-more again).
-    store.loadingMoreMessages = true;
 
-    // Old timer fires — must NOT clobber the new in-flight request,
-    // because (a) currentConversation still matches, and the action
-    // body only guards on currentConversation match, not on a timer
-    // generation. We accept this behavior: it's the desired "stale
-    // timer can clear a still-loading state" because the new flip
-    // didn't restart the 10s window — so a stuck-after-resume case
-    // would also be unstuck after 10s. Net: timer always clears IF
-    // the conversation matches.
-    vi.advanceTimersByTime(11_000);
+    // User scrolls again — second call bumps the generation and re-arms
+    // a brand-new 10s timer (T2) starting from now (200ms in). The old
+    // timer T1 from the first call is still scheduled at t=10s; it must
+    // NOT clobber T2's spinner when it fires at t=10s while T2's reply
+    // is still in flight (T2's own deadline is t=10.2s).
+    loadMoreMessages.call(store);
+    expect(store.loadingMoreMessages).toBe(true);
+    expect(store._loadMoreGeneration).toBe(firstGeneration + 1);
+
+    // Advance to just past T1's 10s deadline (now at t = 200 + 9801 = 10001ms,
+    // which is past 10s mark relative to start). T1's closure captured
+    // generation=1; current generation is 2, so it short-circuits before
+    // touching loadingMoreMessages — the bug under test would clear it here.
+    vi.advanceTimersByTime(9_801);
+    expect(store.loadingMoreMessages).toBe(true); // ← MUST stay true
+
+    // T2's own 10s deadline (armed at t=200ms) fires at t=10200ms. We're
+    // currently at t=10001ms; advance another 200ms to cross T2's deadline.
+    // At that point no fresher call has superseded T2, so it correctly
+    // clears the still-stuck spinner.
+    vi.advanceTimersByTime(200);
     expect(store.loadingMoreMessages).toBe(false);
   });
 

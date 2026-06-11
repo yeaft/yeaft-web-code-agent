@@ -3177,6 +3177,12 @@ export const useChatStore = defineStore('chat', {
       if (this.currentView === 'yeaft') return;
       if (this.loadingMoreMessages || !this.hasMoreMessages || !this.currentConversation) return;
       this.loadingMoreMessages = true;
+      // feat-chat-load-perf: per-call generation so a stale timer from an
+      // earlier load-more can't clobber an in-flight second request's
+      // spinner. Incremented before the WS dispatch; the setTimeout
+      // closure compares against its captured value and bails if a newer
+      // call has taken over.
+      const generation = (this._loadMoreGeneration = (this._loadMoreGeneration || 0) + 1);
 
       const msgs = this.messagesMap[this.currentConversation] || [];
       const firstMsgWithId = msgs.find(m => m.dbMessageId);
@@ -3195,9 +3201,14 @@ export const useChatStore = defineStore('chat', {
       // indefinite spinner and "history load doesn't work" UX. The 10s
       // budget is generous (a healthy sync round-trip is < 200ms); after
       // it expires we just clear the spinner so the user can scroll and
-      // retry. We capture `targetConvId` so a session switch mid-flight
-      // doesn't wipe an unrelated conversation's UI state.
+      // retry. The generation guard above prevents a stale timer from
+      // clearing a fresh in-flight request, and the targetConvId match
+      // prevents touching an unrelated conversation's UI state if the
+      // user switches mid-flight. No clearTimeout by design — guards make
+      // stale timers harmless and avoid plumbing a handle through the WS
+      // reply path.
       setTimeout(() => {
+        if (this._loadMoreGeneration !== generation) return;
         if (this.loadingMoreMessages && this.currentConversation === targetConvId) {
           console.warn('[loadMoreMessages] WS response timeout (10s); clearing spinner');
           this.loadingMoreMessages = false;
