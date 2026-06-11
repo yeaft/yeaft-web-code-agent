@@ -100,6 +100,18 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
   CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
   CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
+  -- feat-chat-load-perf: composite covering index for the role='user' filter
+  -- used by getRecentUserMessageIds / getLastUserMessage / getUserMessageIdsBeforeId.
+  -- Pre-fix: SQLite seeks by (session_id) then post-filters every row by role,
+  -- which is hundreds of ms on sessions with thousands of messages. Post-fix:
+  -- direct index seek + reverse scan limited to N user rows. Built in the
+  -- base block (not postMigrationIndexes) because session_id / role / id all
+  -- live in the base CREATE TABLE — there's no migration-column dependency.
+  -- IF NOT EXISTS makes this a one-shot cost on first startup post-deploy; on
+  -- a messages table with hundreds of thousands of rows the build can take
+  -- several seconds, so we time it just below. WAL mode (line 22) lets
+  -- concurrent reads continue during the build; writers will block briefly.
+  CREATE INDEX IF NOT EXISTS idx_messages_session_role_id ON messages(session_id, role, id DESC);
   CREATE INDEX IF NOT EXISTS idx_daily_stats_date ON daily_stats(date);
 `);
 
@@ -122,7 +134,19 @@ const migrations = [
   // (agent-conversation handlers, agent-sync, get_agents) wiped it —
   // letting the per-message auto-title write at
   // `client-conversation.js:351` clobber the user's renamed title.
-  `ALTER TABLE sessions ADD COLUMN is_custom_title INTEGER DEFAULT 0`
+  `ALTER TABLE sessions ADD COLUMN is_custom_title INTEGER DEFAULT 0`,
+  // feat-chat-load-perf: one-shot rebuild sentinel for the `bulkAddHistory`
+  // timestamp-range heuristic in server/db/message-db.js. The heuristic
+  // (when count > 5 and (max_ts - min_ts) < 1000ms) was designed to repair
+  // sessions whose timestamps got bunched by an old anchor-detection bug,
+  // by deleting all rows for the session and re-inserting from the agent's
+  // historyMessages payload. Without a sentinel, every subsequent resume
+  // re-triggers the rebuild (because the rebuild itself produces tightly
+  // spaced `ts = lastTs + 1` values that re-pass the < 1000ms test), so the
+  // user pays a full delete+rebuild on EVERY session open. The sentinel
+  // (Unix-ms stamp at the time of the one and only repair) lets the
+  // heuristic fire exactly once per session for the lifetime of the row.
+  `ALTER TABLE sessions ADD COLUMN ts_rebuilt_at INTEGER DEFAULT 0`
 ];
 
 // Yeaft sessions table — server-side persistence so the unified sidebar
@@ -265,9 +289,16 @@ const postMigrationIndexes = [
   `CREATE INDEX IF NOT EXISTS idx_users_agent_secret ON users(agent_secret)`,
   `CREATE INDEX IF NOT EXISTS idx_users_aad_oid ON users(aad_oid)`
 ];
+// Time the post-migration index pass so the operational signal lands in the
+// deploy log on first startup after composite-index addition — a multi-second
+// index build over the messages table should not look like "the server hung".
+// (The composite idx_messages_session_role_id itself was moved into the base
+// CREATE INDEX block above; its first-time cost shows up in the engine init.)
+console.time('[db] postMigrationIndexes');
 for (const idx of postMigrationIndexes) {
   try { db.exec(idx); } catch (e) { /* 索引已存在 */ }
 }
+console.timeEnd('[db] postMigrationIndexes');
 
 // 生成用户级 Agent 密钥
 export function generateAgentSecret() {
@@ -417,6 +448,21 @@ export const stmts = {
     UPDATE sessions SET is_pinned = ?, updated_at = ? WHERE id = ?
   `),
 
+  // feat-chat-load-perf: one-shot sentinel for the bulkAddHistory timestamp-
+  // rebuild repair path. ts_rebuilt_at = 0 means "never repaired"; non-zero
+  // means "repair already ran at this Unix-ms". The repair is destructive
+  // (DELETE + re-INSERT all rows for the session) so it must run at most once
+  // per session over its lifetime. Statements live in the Session block
+  // because they SELECT/UPDATE the `sessions` table — the bulkAddHistory
+  // call site in server/db/message-db.js is the only consumer today.
+  getSessionTsRebuiltAt: db.prepare(`
+    SELECT ts_rebuilt_at FROM sessions WHERE id = ?
+  `),
+
+  markSessionTsRebuilt: db.prepare(`
+    UPDATE sessions SET ts_rebuilt_at = ? WHERE id = ?
+  `),
+
   getSession: db.prepare(`
     SELECT * FROM sessions WHERE id = ?
   `),
@@ -499,6 +545,19 @@ export const stmts = {
   getTimestampRange: db.prepare(`
     SELECT MIN(created_at) as min_ts, MAX(created_at) as max_ts, COUNT(*) as count
     FROM messages WHERE session_id = ?
+  `),
+
+  // feat-chat-load-perf: one-shot sentinel for the bulkAddHistory timestamp-
+  // rebuild repair path. ts_rebuilt_at = 0 means "never repaired"; non-zero
+  // means "repair already ran at this Unix-ms". The repair is destructive
+  // (DELETE + re-INSERT all rows for the session) so it must run at most once
+  // per session over its lifetime.
+  getSessionTsRebuiltAt: db.prepare(`
+    SELECT ts_rebuilt_at FROM sessions WHERE id = ?
+  `),
+
+  markSessionTsRebuilt: db.prepare(`
+    UPDATE sessions SET ts_rebuilt_at = ? WHERE id = ?
   `),
 
   getLastUserMessage: db.prepare(`
