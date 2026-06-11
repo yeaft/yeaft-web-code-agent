@@ -94,6 +94,60 @@ describe('YeaftSidebar — kebab menu method behavior', () => {
     return new Function(params, body);
   }
 
+  function extractComputedGetter(name) {
+    const marker = `    ${name}() {`;
+    const start = sidebarSrc.indexOf(marker);
+    if (start < 0) throw new Error(`computed ${name} not found`);
+    const bodyStart = sidebarSrc.indexOf('{', start) + 1;
+    let depth = 1;
+    let i = bodyStart;
+    while (i < sidebarSrc.length && depth > 0) {
+      const ch = sidebarSrc[i];
+      if (ch === "'" || ch === '"' || ch === '`') {
+        const quote = ch;
+        i++;
+        while (i < sidebarSrc.length) {
+          if (sidebarSrc[i] === '\\') i += 2;
+          else if (sidebarSrc[i] === quote) { i++; break; }
+          else i++;
+        }
+        continue;
+      }
+      if (ch === '{') depth++;
+      else if (ch === '}') depth--;
+      i++;
+    }
+    if (depth !== 0) throw new Error(`computed ${name}: unbalanced braces in YeaftSidebar.js`);
+    const body = sidebarSrc.slice(bodyStart, i - 1);
+    // eslint-disable-next-line no-new-func
+    return new Function(body);
+  }
+
+  it('chatStore computed reuses the already-resolved store before window fallback', () => {
+    const primary = { name: 'primary-store' };
+    const fallback = { name: 'window-fallback-store' };
+    const previousWindow = globalThis.window;
+    globalThis.window = { Pinia: { useChatStore: () => fallback } };
+    try {
+      const chatStore = extractComputedGetter('chatStore').bind({ store: primary });
+      expect(chatStore()).toBe(primary);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it('chatStore computed falls back to window.Pinia when no resolved store exists', () => {
+    const fallback = { name: 'window-fallback-store' };
+    const previousWindow = globalThis.window;
+    globalThis.window = { Pinia: { useChatStore: () => fallback } };
+    try {
+      const chatStore = extractComputedGetter('chatStore').bind({ store: null });
+      expect(chatStore()).toBe(fallback);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
   it('onTogglePin closes the menu, then calls chatStore.togglePin(id)', () => {
     const calls = [];
     const ctx = {

@@ -245,9 +245,12 @@ export default {
       return out;
     },
     chatStore() {
-      // Needed for `sessionCrudRequest`. Reuses the same guarded lookup
-      // as `store` above but via window.Pinia for consistency with the
-      // groups-store lookup.
+      // Needed for `sessionCrudRequest` and the Yeaft session pin menu.
+      // Prefer the same global-Pinia path as `store()` so deployments that
+      // expose `Pinia.useChatStore` but do not mirror it onto `window.Pinia`
+      // still wire the menu actions. Keep the window fallback for tests /
+      // older bootstraps that only provide the namespaced object.
+      if (this.store) return this.store;
       try {
         if (typeof window !== 'undefined' && window.Pinia?.useChatStore) {
           return window.Pinia.useChatStore();
