@@ -1,13 +1,14 @@
 import { existsSync, writeFileSync, mkdirSync } from 'fs';
 import { join, basename, extname } from 'path';
 import ctx from '../context.js';
+import { getProvider, DEFAULT_PROVIDER } from '../providers/index.js';
+import { sendOutput, sendConversationList } from '../conversation.js';
 
 // 临时文件目录名 (不易冲突)
 const TEMP_UPLOAD_DIR = '.claude-tmp-attachments';
 
 export async function handleTransferFiles(msg) {
   const { conversationId, files, prompt, workDir, claudeSessionId } = msg;
-  const { startClaudeQuery } = await import('../claude.js');
 
   let state = ctx.conversations.get(conversationId);
   const effectiveWorkDir = workDir || state?.workDir || ctx.CONFIG.workDir;
@@ -53,6 +54,75 @@ export async function handleTransferFiles(msg) {
       console.error(`Error saving file ${file.name}:`, e.message);
     }
   }
+
+  // ★ Non-Claude providers (e.g. Copilot): route attachment sends through the
+  //   driver, mirroring conversation.js `handleUserInput`. Before this branch
+  //   existed, handleTransferFiles unconditionally spawned the Claude CLI via
+  //   startClaudeQuery — so a copilot conversation that sent an attachment was
+  //   misrouted to `claude --resume <stale-id>` and returned
+  //   error_during_execution instantly ("一发送就挂了"). Copilot accepts inline
+  //   image bytes over ACP, so images are handed to the driver as attachments
+  //   instead of being inlined as disk paths the way the Claude path does.
+  const providerName = state?.providerName || DEFAULT_PROVIDER;
+  if (providerName !== 'claude-code') {
+    const driver = getProvider(providerName);
+    if (!state) {
+      state = await driver.start({
+        conversationId,
+        workDir: effectiveWorkDir,
+        resumeSessionId: claudeSessionId || null,
+        userId: msg.userId,
+        username: msg.username,
+      });
+    }
+    if (workDir) state.workDir = workDir;
+
+    // Images go inline as provider attachments ([{type,data,mimeType}] — the
+    // shape copilot.sendInput understands). Non-image files can't be inlined,
+    // so reference their saved paths in the text and let the provider read
+    // them with its own file tools (it runs in effectiveWorkDir).
+    const attachments = imageFiles.map(img => ({
+      type: 'image',
+      data: img.data,
+      mimeType: img.mimeType,
+    }));
+    const nonImageFiles = savedFiles.filter(f => !f.isImage);
+    let effectivePrompt = prompt || '';
+    if (nonImageFiles.length > 0) {
+      const fileListText = nonImageFiles.map(f => `- ${f.path} (${f.mimeType})`).join('\n');
+      effectivePrompt = `${effectivePrompt}\n\n用户上传了以下文件（已保存到工作目录）：\n${fileListText}`.trim();
+    }
+
+    // Echo the raw user text so it matches the message the frontend already
+    // added locally (content-equality dedup) and gets persisted as the user
+    // turn. The augmented `effectivePrompt` (with any non-image paths) goes to
+    // the model, not the echo.
+    sendOutput(conversationId, { type: 'user', message: { role: 'user', content: prompt } });
+    state.turnActive = true;
+    sendConversationList();
+    try {
+      await driver.sendInput(state, effectivePrompt, { conversationId, raw: msg, attachments });
+    } catch (err) {
+      sendOutput(conversationId, {
+        type: 'result',
+        subtype: 'error',
+        session_id: state.sessionId || null,
+        is_error: true,
+        error: `${providerName} error: ${err?.message || err}`,
+      });
+    } finally {
+      state.turnActive = false;
+      if (state._abortKillTimer) {
+        clearTimeout(state._abortKillTimer);
+        state._abortKillTimer = null;
+      }
+      sendConversationList();
+    }
+    return;
+  }
+
+  // ---- Claude-code path ----
+  const { startClaudeQuery } = await import('../claude.js');
 
   // 如果没有活跃的查询，启动新的
   if (!state || !state.query || !state.inputStream) {
