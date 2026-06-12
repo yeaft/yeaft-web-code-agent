@@ -2186,6 +2186,7 @@ export class Engine {
             // history replay can re-stamp them on reload.
             sessionId,
             threadId,
+            vpId: this.#vpId,
             // Multi-VP fan-out (history-dedup): skip the user-row append
             // in stop-hooks when the orchestrator already wrote it once
             // for this turn. The hook still persists assistant + tool

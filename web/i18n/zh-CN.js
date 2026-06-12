@@ -221,6 +221,7 @@ export default {
   'yeaft.showDebug': '显示调试面板',
   'yeaft.hideDebug': '隐藏调试面板',
   'yeaft.reloadPage': '刷新页面',
+  'yeaft.reloadMessages': '重新加载消息',
   'yeaft.switchModel': '切换模型',
   // fix/dream-cadence-and-ui-trigger: manual dream trigger button.
   'yeaft.dream.runNow': '立即整理记忆',

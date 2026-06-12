@@ -243,4 +243,36 @@ describe('Yeaft session history re-entry', () => {
       { type: 'select_agent', agentId: 'agent-2' },
     ]));
   });
+
+  it('reloads the active session messages with a full recent history request', () => {
+    const store = makeStore();
+    store.currentView = 'yeaft';
+    store.yeaftAgentId = 'agent-1';
+    store.yeaftConversationId = 'yeaft-conv';
+    store.yeaftActiveSessionFilter = 'grp_reload';
+    store.messagesMap['yeaft-conv'] = [
+      { type: 'user', content: 'keep other', sessionId: 'grp_other' },
+      { type: 'user', content: 'stale user', sessionId: 'grp_reload' },
+      { type: 'assistant', content: 'stale answer', sessionId: 'grp_reload' },
+    ];
+    store.yeaftSessionHistoryState.grp_reload = { loaded: true, latestSeq: 42, hasMore: true, oldestSeq: 3 };
+
+    store.reloadYeaftMessages();
+
+    expect(store.messagesMap['yeaft-conv']).toEqual([
+      expect.objectContaining({ content: 'keep other', sessionId: 'grp_other' }),
+    ]);
+    expect(store.yeaftSessionHistoryState.grp_reload).toEqual(expect.objectContaining({
+      loaded: false,
+      loading: true,
+      latestSeq: null,
+      oldestSeq: null,
+    }));
+    expect(store.sent.at(-1)).toEqual({
+      type: 'yeaft_load_history',
+      agentId: 'agent-1',
+      sessionId: 'grp_reload',
+    });
+  });
+
 });

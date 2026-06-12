@@ -560,9 +560,14 @@
   color: var(--error);
 }
 
-.yeaft-reload-btn:hover {
+.yeaft-reload-btn:hover:not(:disabled) {
   background: var(--sidebar-hover);
   color: var(--text-primary);
+}
+
+.yeaft-reload-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 /* ── Right Detail Panel ── */
