@@ -176,6 +176,14 @@ export class DebugTrace {
   constructor(dbPath) {
     this.#dbPath = dbPath;
     this.#db = new DatabaseSync(dbPath);
+    // INCREMENTAL auto-vacuum lets cleanup() return freed pages to the OS via
+    // `PRAGMA incremental_vacuum` instead of leaving the file at its historical
+    // peak. SQLite only honours an auto_vacuum *change* before the first table
+    // is created (a fresh DB) — on a pre-existing store it is a silent no-op, so
+    // existing databases keep their default `auto_vacuum=NONE` and are
+    // unaffected (they only shrink under a manual compact()/VACUUM). Databases
+    // created from this version on are self-trimming. Must precede SCHEMA.
+    this.#db.exec('PRAGMA auto_vacuum = INCREMENTAL');
     this.#db.exec('PRAGMA journal_mode = WAL');
     this.#db.exec('PRAGMA foreign_keys = ON');
     this.#db.exec(SCHEMA);
@@ -608,11 +616,21 @@ export class DebugTrace {
   // ─── Maintenance ─────────────────────────────────────────────
 
   /**
-   * Delete data older than retentionDays.
-   * @param {number} [retentionDays=30]
+   * Delete trajectory data older than retentionDays, then return the freed
+   * pages to the OS.
+   *
+   * The always-on trace stamps every turn with the cumulative request/response
+   * snapshot, so each long-session row is MB-scale and the file grows fast
+   * (a real deployment hit 5GB in 15 days). A plain DELETE marks pages free but
+   * leaves the file at its peak size; `PRAGMA incremental_vacuum` hands those
+   * pages back — but only when the DB was created with `auto_vacuum=INCREMENTAL`
+   * (see constructor). On a legacy `auto_vacuum=NONE` store the vacuum is a
+   * harmless no-op, so this is safe to call unconditionally.
+   *
+   * @param {number} [retentionDays=10]
    * @returns {{ deletedTurns: number, deletedTools: number, deletedEvents: number }}
    */
-  cleanup(retentionDays = 30) {
+  cleanup(retentionDays = 10) {
     const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
     const deletedTools = Number(this.#db.prepare(`
       DELETE FROM trace_tools WHERE turn_id IN (
@@ -625,7 +643,37 @@ export class DebugTrace {
     const deletedEvents = Number(this.#db.prepare(`
       DELETE FROM trace_events WHERE created_at < ?
     `).run(cutoff).changes);
+    // Reclaim freed pages (no-op on legacy auto_vacuum=NONE DBs). Wrapped so a
+    // vacuum failure can never mask a successful delete.
+    if (deletedTurns || deletedTools || deletedEvents) {
+      try { this.#db.exec('PRAGMA incremental_vacuum'); } catch { /* best-effort */ }
+    }
     return { deletedTurns, deletedTools, deletedEvents };
+  }
+
+  /**
+   * One-shot full compaction (VACUUM). Rebuilds the entire database file,
+   * reclaiming all free space AND converting a legacy `auto_vacuum=NONE` store
+   * to INCREMENTAL going forward. This is a HEAVY operation: it locks the DB
+   * and needs temporary scratch space up to the current file size, so it is
+   * NOT called automatically on session load — invoke it deliberately (e.g.
+   * from the `yeaft --trace` CLI) when an oversized legacy debug.db needs to be
+   * shrunk in place.
+   * @returns {{ before: number, after: number }} file size in bytes
+   */
+  compact() {
+    let before = 0;
+    try { before = statSync(this.#dbPath).size; } catch { /* ignore */ }
+    this.#db.exec('PRAGMA auto_vacuum = INCREMENTAL');
+    this.#db.exec('VACUUM');
+    // In WAL mode VACUUM writes the rebuilt (smaller) DB into the -wal file;
+    // the main .db file does not shrink until a checkpoint folds the WAL back
+    // in. TRUNCATE checkpoints and resets the WAL so the on-disk size we report
+    // (and the user sees) reflects the reclaimed space immediately.
+    try { this.#db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch { /* best-effort */ }
+    let after = 0;
+    try { after = statSync(this.#dbPath).size; } catch { /* ignore */ }
+    return { before, after };
   }
 
   /** Delete all trace data. */
@@ -695,6 +743,7 @@ export class NullTrace {
   search() { return []; }
   stats() { return { turnCount: 0, toolCount: 0, eventCount: 0, dbSizeBytes: 0 }; }
   cleanup() { return { deletedTurns: 0, deletedTools: 0, deletedEvents: 0 }; }
+  compact() { return { before: 0, after: 0 }; }
   purge() {}
   close() {}
   fetchRecentDebugHistory() { return { loops: [], turns: [], dreamEvents: [] }; }
