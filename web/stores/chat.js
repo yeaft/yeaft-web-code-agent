@@ -253,6 +253,7 @@ export const useChatStore = defineStore('chat', {
 
     // LLM config: agentId -> { providers, primaryModel, fastModel, language, loaded }
     llmConfig: {},
+    llmGithubDevice: null,
 
     // models.dev community registry snapshot (shared across agents — same
     // public catalog). Shape: { registry, fetchedAt, error, loaded }.
@@ -275,6 +276,16 @@ export const useChatStore = defineStore('chat', {
     //   { plan, used, limit, paygoUsed, paygoLimit } | { error }
     tavilyUsage: null,
     tavilyUsageLoading: false,
+
+    // Yeaft MCP servers UI state — populated from `yeaft_mcp_list_result`
+    // (initial load) and refreshed on every `yeaft_mcp_updated` broadcast
+    // (after add/remove/reload on any client). Shape:
+    //   yeaftMcpServers: [{ name, command, args, env }, ...]
+    //   yeaftMcpRuntime: { connected, toolCount, perServer: [{ name, ready, toolCount }] }
+    yeaftMcpServers: [],
+    yeaftMcpRuntime: { connected: false, toolCount: 0, perServer: [] },
+    yeaftMcpLoading: false,
+    yeaftMcpError: null,
 
     // /btw mode state (multi-turn side question)
     btwMode: false,              // whether in btw mode
@@ -390,6 +401,14 @@ export const useChatStore = defineStore('chat', {
     // render a single row showing the most recent pass for the active
     // group's scope.
     yeaftDreamLatest: {},
+    // Loadable dream output snapshots keyed by scope. Unlike
+    // `yeaftDreamLatest` (run status) this holds the current contents of
+    // the dream-produced memory files so switching sessions can restore
+    // what the session has learned.
+    yeaftDreamSnapshots: {},
+    // Last per-turn Dream resident summaries that were actually injected into
+    // the system prompt Memory section, keyed by scope (e.g. group/<id>).
+    yeaftDreamPromptLoads: {},
     // PR feat-dream-debug-panel-full: per-scope ring buffer of dream
     // events. Each entry is the raw event payload augmented with `at`
     // (receive timestamp). Buffer is capped at YEAFT_DREAM_EVENT_LIMIT
@@ -577,6 +596,24 @@ export const useChatStore = defineStore('chat', {
       if (!targetGroupId) return null;
       const scope = `group/${targetGroupId}`;
       return state.yeaftDreamLatest?.[scope] || null;
+    },
+    yeaftDreamSnapshotForActiveSession(state) {
+      const targetGroupId = resolveActiveDreamDebugSessionId(state);
+      if (!targetGroupId) return null;
+      // Product-facing Dream output scopes are `sessions/<id>`. Legacy
+      // Dream run/timeline events still use historical `group/<id>` buckets
+      // below for wire compatibility; do not conflate the two stores.
+      const scope = `sessions/${targetGroupId}`;
+      return state.yeaftDreamSnapshots?.[scope] || null;
+    },
+    yeaftDreamPromptLoadForActiveSession(state) {
+      const targetGroupId = resolveActiveDreamDebugSessionId(state);
+      if (!targetGroupId) return null;
+      // Prompt-load records describe what the LLM sees in system prompt
+      // memory, so they use product terminology (`sessions/<id>`), even
+      // when the underlying disk store still has historical group paths.
+      const scope = `sessions/${targetGroupId}`;
+      return state.yeaftDreamPromptLoads?.[scope] || null;
     },
     // PR feat-dream-debug-panel-full: per-group event log for the
     // expanded debug-panel view. Same filter precedence as
@@ -1429,6 +1466,48 @@ export const useChatStore = defineStore('chat', {
           break;
         }
 
+        case 'dream_memory_loaded': {
+          const resident = Array.isArray(event.resident) ? event.resident : [];
+          if (event.turnId) {
+            const prev = this.yeaftDebugTurnsById[event.turnId];
+            if (prev) {
+              this.yeaftDebugTurnsById = {
+                ...this.yeaftDebugTurnsById,
+                [event.turnId]: {
+                  ...prev,
+                  dreamMemoryLoaded: resident,
+                  dreamMemoryLoadedInto: event.loadedInto || 'system_prompt.memory',
+                },
+              };
+            }
+          }
+          const updates = {};
+          for (const item of resident) {
+            const rawScope = item && typeof item.scope === 'string' ? item.scope : null;
+            const sessionScope = rawScope && /^sessions\/[^/]+$/.test(rawScope)
+              ? rawScope
+              : (rawScope && /^group\/[^/]+$/.test(rawScope)
+                ? `sessions/${rawScope.slice('group/'.length)}`
+                : null);
+            if (!sessionScope) continue;
+            updates[sessionScope] = {
+              scope: sessionScope,
+              sourceScope: rawScope,
+              sessionId: sessionScope.slice('sessions/'.length),
+              turnId: event.turnId || null,
+              vpId: event.vpId || null,
+              loadedInto: event.loadedInto || 'system_prompt.memory',
+              summary: item.summary || '',
+              truncated: !!item.truncated,
+              receivedAt: Date.now(),
+            };
+          }
+          if (Object.keys(updates).length > 0) {
+            this.yeaftDreamPromptLoads = { ...this.yeaftDreamPromptLoads, ...updates };
+          }
+          break;
+        }
+
         case 'memory_adjust': {
           if (!event.turnId) break;
           const prev = this.yeaftDebugTurnsById[event.turnId];
@@ -2073,6 +2152,18 @@ export const useChatStore = defineStore('chat', {
           break;
         }
 
+        case 'yeaft_dream_snapshot': {
+          const snapshot = event && event.snapshot;
+          const scope = snapshot && typeof snapshot.scope === 'string' ? snapshot.scope : null;
+          if (scope) {
+            this.yeaftDreamSnapshots = {
+              ...this.yeaftDreamSnapshots,
+              [scope]: { ...snapshot, receivedAt: Date.now() },
+            };
+          }
+          break;
+        }
+
         // ★ R6 G3: dream activity events. Forwarded from
         // agent/yeaft/web-bridge.js handleYeaftDreamTrigger.
         // yeaft_dream_status carries { vpId, status: 'running' } during the
@@ -2087,15 +2178,17 @@ export const useChatStore = defineStore('chat', {
         case 'yeaft_dream_result': {
           const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
           if (vp) vp.applyDreamResult(event);
+          if (event?.snapshot?.scope) {
+            this.yeaftDreamSnapshots = {
+              ...this.yeaftDreamSnapshots,
+              [event.snapshot.scope]: { ...event.snapshot, receivedAt: Date.now() },
+            };
+          }
           // PR feat-dream-debug-panel-full: `yeaft_dream_result` is the
-          // SOLE terminal projection for a scoped dream pass. We write
-          // both:
-          //   1. `yeaftDreamLatest[group/<id>]` — the most-recent-pass
-          //      row the Dream UI reads.
-          //   2. `yeaftDreamEvents[group/<id>]` — append a synthetic
-          //      terminal record into the timeline ring buffer so the
-          //      debug panel doesn't end on the last `phase:'apply'`
-          //      event with no outcome.
+          // SOLE terminal projection for a scoped dream pass. We write the
+          // most-recent-pass row and append a terminal record into the
+          // timeline ring buffer so the debug panel doesn't end on the last
+          // `phase:'apply'` event with no outcome.
           //
           // The bridge used to mirror an extra `phase:'result'`
           // dream_progress event for #2, but that mirror raced through
@@ -2103,8 +2196,11 @@ export const useChatStore = defineStore('chat', {
           // `phase:'result'` as terminal) and clobbered the
           // `yeaftDreamLatest` success row back to 'running'. The fix
           // is to consolidate both writes here.
-          if (typeof event?.sessionId === 'string' && event.sessionId) {
-            const scope = `group/${event.sessionId}`;
+          {
+            const scope = typeof event?.snapshot?.scope === 'string' && event.snapshot.scope
+              ? event.snapshot.scope
+              : (typeof event?.sessionId === 'string' && event.sessionId ? `group/${event.sessionId}` : null);
+            if (!scope) break;
             const prev = this.yeaftDreamLatest[scope] || null;
             // Defaults when no prior running entry exists (network
             // reorder, fresh-tab reconnect): leave nullable fields
@@ -2664,6 +2760,93 @@ export const useChatStore = defineStore('chat', {
         if (!this._searchPending) this._searchPending = {};
         this._searchPending.usage = resolve;
         this.sendWsMessage({ type: 'get_tavily_usage', agentId: this.yeaftAgentId });
+      });
+    },
+
+    // ─── Yeaft MCP CRUD ─────────────────────────────────────
+    //
+    // Each action sends a wire op (`yeaft_mcp_list/add/remove/reload`)
+    // and registers a one-shot resolver keyed by `requestId` so concurrent
+    // calls don't clobber each other. The agent always responds with the
+    // result type `yeaft_mcp_*_result`; broadcast `yeaft_mcp_updated`
+    // updates the cached list/runtime without a separate fetch.
+    //
+    // No agent? Resolve with an empty list — the Settings tab opens
+    // before any agent is registered and we don't want to throw.
+
+    loadYeaftMcpServers() {
+      if (!this.yeaftAgentId) {
+        this.yeaftMcpServers = [];
+        this.yeaftMcpRuntime = { connected: false, toolCount: 0, perServer: [] };
+        return Promise.resolve({ servers: [], runtime: this.yeaftMcpRuntime });
+      }
+      this.yeaftMcpLoading = true;
+      const requestId = `mcp-list-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      return new Promise((resolve) => {
+        if (!this._mcpPending) this._mcpPending = {};
+        this._mcpPending[requestId] = resolve;
+        this.sendWsMessage({
+          type: 'yeaft_mcp_list',
+          agentId: this.yeaftAgentId,
+          requestId,
+        });
+      });
+    },
+
+    /**
+     * Add or update an MCP server. `server` must contain
+     * `{ name, command, args?, env? }`. Returns the agent's full response
+     * so the caller can surface connectError to the UI.
+     */
+    addYeaftMcpServer(server) {
+      if (!this.yeaftAgentId) return Promise.resolve({ error: 'no agent' });
+      this.yeaftMcpLoading = true;
+      const requestId = `mcp-add-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      return new Promise((resolve) => {
+        if (!this._mcpPending) this._mcpPending = {};
+        this._mcpPending[requestId] = resolve;
+        this.sendWsMessage({
+          type: 'yeaft_mcp_add',
+          agentId: this.yeaftAgentId,
+          requestId,
+          server: server || {},
+        });
+      });
+    },
+
+    removeYeaftMcpServer(name) {
+      if (!this.yeaftAgentId) return Promise.resolve({ error: 'no agent' });
+      this.yeaftMcpLoading = true;
+      const requestId = `mcp-rem-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      return new Promise((resolve) => {
+        if (!this._mcpPending) this._mcpPending = {};
+        this._mcpPending[requestId] = resolve;
+        this.sendWsMessage({
+          type: 'yeaft_mcp_remove',
+          agentId: this.yeaftAgentId,
+          requestId,
+          name,
+        });
+      });
+    },
+
+    /**
+     * Reload a single MCP server (`name`) or every server (no name).
+     * Performs disconnect+reconnect on the agent and re-flattens tools.
+     */
+    reloadYeaftMcpServer(name) {
+      if (!this.yeaftAgentId) return Promise.resolve({ error: 'no agent' });
+      this.yeaftMcpLoading = true;
+      const requestId = `mcp-rel-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      return new Promise((resolve) => {
+        if (!this._mcpPending) this._mcpPending = {};
+        this._mcpPending[requestId] = resolve;
+        this.sendWsMessage({
+          type: 'yeaft_mcp_reload',
+          agentId: this.yeaftAgentId,
+          requestId,
+          name: name || null,
+        });
       });
     },
 
@@ -3243,6 +3426,41 @@ export const useChatStore = defineStore('chat', {
      * (`yeaftLoadingMoreHistory` gates), and we don't fire if the agent
      * already told us there's nothing more to load.
      */
+
+    reloadYeaftMessages() {
+      if (this.currentView !== 'yeaft') return;
+      if (!this.yeaftAgentId) return;
+      const sessionId = resolveActiveYeaftSessionId(this);
+      const sessionKey = sessionId || '__all__';
+      const convId = this.yeaftConversationId;
+
+      // Manual reload means "show me the persisted pane again", not a delta.
+      // Drop only the active Yeaft session rows from the shared conversation
+      // map; other sessions stay cached so switching remains instant.
+      if (convId && Array.isArray(this.messagesMap[convId])) {
+        if (sessionId) {
+          this.messagesMap[convId] = this.messagesMap[convId].filter(m => (m?.sessionId ?? m?.groupId) !== sessionId);
+        } else {
+          this.messagesMap[convId] = [];
+        }
+      }
+
+      const { [sessionKey]: _oldState, ...rest } = this.yeaftSessionHistoryState || {};
+      this.yeaftSessionHistoryState = {
+        ...rest,
+        [sessionKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, latestSeq: null, count: 0 },
+      };
+      this.yeaftHasMoreHistory = false;
+      this.yeaftOldestLoadedSeq = null;
+      this.yeaftLoadingMoreHistory = true;
+
+      this.sendWsMessage({
+        type: 'yeaft_load_history',
+        agentId: this.yeaftAgentId,
+        sessionId,
+      });
+    },
+
     loadMoreYeaftHistory() {
       if (this.currentView !== 'yeaft') return;
       if (this.yeaftLoadingMoreHistory || !this.yeaftHasMoreHistory) return;

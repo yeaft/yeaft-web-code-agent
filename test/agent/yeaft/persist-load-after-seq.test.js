@@ -57,3 +57,31 @@ describe('ConversationStore.loadAfterSeqByGroup', () => {
     expect(store.getMessageSeqById('not-a-seq-id')).toBe(null);
   });
 });
+
+describe('ConversationStore.loadVisibleBySession', () => {
+  let dir;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'yeaft-visible-history-')); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it('keeps VP assistant text when visible replay excludes tool-result rows', () => {
+    const store = new ConversationStore(dir);
+    store.append({ role: 'user', content: 'question', sessionId: 'grp_tools' });
+    store.append({
+      role: 'assistant',
+      content: 'answer after using a tool',
+      sessionId: 'grp_tools',
+      speakerVpId: 'vp_linus',
+      toolCalls: [{ id: 'tc1', name: 'Read', input: { file: 'x' } }],
+    });
+    store.append({ role: 'tool', content: 'tool output', sessionId: 'grp_tools', speakerVpId: 'vp_linus', toolCallId: 'tc1' });
+
+    const page = store.loadVisibleBySession('grp_tools', null, 5);
+
+    expect(page.messages.map(m => m.role)).toEqual(['user', 'assistant']);
+    expect(page.messages[1]).toEqual(expect.objectContaining({
+      content: 'answer after using a tool',
+      speakerVpId: 'vp_linus',
+    }));
+    expect(page.messages[1]).not.toHaveProperty('toolCalls');
+  });
+});

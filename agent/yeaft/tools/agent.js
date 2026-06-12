@@ -191,7 +191,19 @@ Guidelines:
 - Give a clear, focused mission — what "done" looks like
 - Use expected_output when the return shape matters
 - Add a budget only when you need an explicit safety cutoff
-- Use PromptAgent to communicate, WaitAgent to collect results, CloseAgent to finalize`,
+
+Orchestration loop you MUST follow:
+  1. SpawnAgent     — fire-and-forget; the sub-agent is now running.
+  2. WaitAgent      — blocks until the sub-agent goes idle / completes /
+                      fails / closes (or times out). Returns the reply.
+  3. PromptAgent    — optional: queue a follow-up; then WaitAgent again.
+  4. CloseAgent     — finalize when done.
+  5. Reply to user  — relay what the sub-agent found in your own words.
+
+CRITICAL — SpawnAgent only KICKS OFF the sub-agent. It has NOT produced any
+result yet. You MUST call WaitAgent next to collect the reply. Do NOT end your
+turn right after SpawnAgent without calling WaitAgent or telling the user what
+you just kicked off.`,
   parameters: {
     type: 'object',
     properties: {
@@ -235,8 +247,19 @@ Guidelines:
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
   async execute(input, ctx) {
+    // NB: every envelope below puts `next_steps` (or `error_next_steps`) at
+    // the FIRST position because `agent/yeaft/tools/registry.js` caps tool
+    // output at 1 KiB by chopping the tail. Tail-positioned nudges get
+    // truncated when the rest of the envelope is large.
+    const ERROR_NEXT_STEPS =
+      'That call failed — see `error`. Either correct the arguments and ' +
+      'retry, or tell the user what went wrong. Do NOT end your turn ' +
+      'silently after an error envelope.';
+
     const validation = validateSpec(input);
-    if (!validation.ok) return JSON.stringify({ error: validation.error });
+    if (!validation.ok) {
+      return JSON.stringify({ next_steps: ERROR_NEXT_STEPS, error: validation.error });
+    }
     const spec = validation.spec;
     const { name, cwd } = input;
 
@@ -244,6 +267,7 @@ Guidelines:
     for (const [, agent] of agents) {
       if (agent.name === name && agent.status !== 'closed') {
         return JSON.stringify({
+          next_steps: ERROR_NEXT_STEPS,
           error: `Agent "${name}" already exists. Close it first or use a different name.`,
           agentId: agent.id,
         });
@@ -288,6 +312,7 @@ Guidelines:
         agent.error = err && err.message ? err.message : String(err);
         agent.diagnostics.push({ type: 'spawn_error', error: agent.error, at: Date.now() });
         return JSON.stringify({
+          next_steps: ERROR_NEXT_STEPS,
           error: `Failed to start sub-agent: ${agent.error}`,
           agentId,
         });
@@ -298,6 +323,10 @@ Guidelines:
     }
 
     return JSON.stringify({
+      next_steps:
+        'Sub-agent is now running — no reply yet. Call WaitAgent next to ' +
+        'collect its first turn. Do NOT end your turn here without either ' +
+        'waiting for the reply or telling the user what you just spawned.',
       success: true,
       agentId,
       name,

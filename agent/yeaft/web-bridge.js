@@ -19,8 +19,10 @@
  */
 
 import { join } from 'node:path';
+import { COLLAB_TOOL_POLICY } from './tools/registry.js';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { buildDreamOutputSnapshot } from './dream/output-snapshot.js';
 import { Engine } from './engine.js';
 import { loadSession } from './session.js';
 import { loadConfig } from './config.js';
@@ -64,6 +66,8 @@ import { pairSanitize } from './pair-sanitize.js';
 import { filterSnapshotForVp } from './snapshot-filter.js';
 import { createVpStatusBroker } from './vp-status-broker.js';
 import { classifyThread as defaultClassifyThread, fallbackTitle } from './vp/thread-classifier.js';
+import { listMcpServers, upsertMcpServer, removeMcpServer } from './config-api.js';
+import { buildMcpFlattenedTools } from './tools/mcp-tools.js';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -111,6 +115,14 @@ export function __testSetThreadClassifier(fn) {
  * @type {Set<string>}
  */
 const inflightScopedDreamGroups = new Set();
+
+async function sendDreamSnapshotForSession(sessionId, extra = {}) {
+  const snapshot = await buildDreamOutputSnapshot(session, sessionId);
+  if (!snapshot) return null;
+  sendYeaftEvent({ type: 'yeaft_dream_snapshot', ...extra, snapshot }, { sessionId });
+  return snapshot;
+}
+
 
 /**
  * Single in-flight AbortController for legacy 1:1 chat. A new 1:1 user message
@@ -1865,6 +1877,30 @@ export function installYeaftRuntimeBridge(s) {
     } catch { /* never let event delivery throw */ }
   };
 
+  // Auto dream runs are triggered by the scheduler / nudges, not by the
+  // manual `handleYeaftDreamTrigger` path. Without this terminal sink the UI
+  // only saw progress debug events and could not restore the final dream
+  // output after switching sessions. Manual runs keep using their explicit
+  // handler below to avoid duplicate terminal events.
+  s._dreamResultSink = async (result = {}) => {
+    if (result?.trigger !== 'auto') return;
+    const normalized = normalizeDreamResult(result);
+    const processed = Array.isArray(result.groups)
+      ? result.groups.filter(g => g && g.status === 'processed' && g.sessionId)
+      : [];
+    for (const group of processed) {
+      const sessionId = group.sessionId;
+      const snapshot = await buildDreamOutputSnapshot(session, sessionId).catch(() => null);
+      sendToServer({
+        type: 'yeaft_dream_result',
+        sessionId,
+        ...result,
+        ...normalized,
+        snapshot,
+      });
+    }
+  };
+
   // Wire the post-compact WS sink. Compactor is constructed in
   // session.js with a no-op sink; bridge owns `sendYeaftEvent` /
   // `yeaftConversationId`, so the sink is wired here once a session is
@@ -2176,6 +2212,17 @@ function handleEngineEvent(event, hctx) {
         type: 'memory_used',
         turnId: event.turnId,
         loaded: event.loaded || [],
+      }, envelope);
+      break;
+
+    case 'dream_memory_loaded':
+      sendYeaftEvent({
+        type: 'dream_memory_loaded',
+        turnId: event.turnId,
+        vpId: event.vpId || null,
+        sessionId: event.sessionId || null,
+        loadedInto: event.loadedInto || 'system_prompt.memory',
+        resident: Array.isArray(event.resident) ? event.resident : [],
       }, envelope);
       break;
 
@@ -2570,6 +2617,14 @@ async function waitForVpDrivers(_groupId, driverKeys = []) {
  *   `route_forward` can extend `causedBy` chains correctly. Optional only
  *   for pre-707 callers that no longer exist in production.
  */
+function resolveCollabToolPolicy(sessionMeta) {
+  if (!sessionMeta || typeof sessionMeta !== 'object' || !Array.isArray(sessionMeta.roster)) {
+    return null;
+  }
+  const vpCount = new Set(sessionMeta.roster.filter(v => typeof v === 'string' && v.trim())).size;
+  return vpCount > 1 ? COLLAB_TOOL_POLICY.MULTI_VP : COLLAB_TOOL_POLICY.SINGLE_VP;
+}
+
 export function buildVpQueryOpts({ vpId, sessionCoordinator, sessionId, envelope, threadId = 'main' }) {
   // Read the group meta once and reuse for both defaultVpId fallback and
   // announcement injection. Each .getMeta() reload reads + parses the
@@ -2610,6 +2665,8 @@ export function buildVpQueryOpts({ vpId, sessionCoordinator, sessionId, envelope
   if (typeof sessionId === 'string' && sessionId.trim()) {
     out.sessionId = sessionId.trim();
   }
+  const collabToolPolicy = resolveCollabToolPolicy(sessionMeta);
+  if (collabToolPolicy) out.collabToolPolicy = collabToolPolicy;
   // task-334-group-editor: surface the group announcement to the engine so
   // buildWorkerPrompt can inject it as a CLAUDE.md-style shared prefix.
   // Empty/missing reads as '' and prompts.js skips the section.
@@ -2668,6 +2725,7 @@ async function ensureSessionLoaded() {
   const yeaftDir = ctx.CONFIG?.yeaftDir;
   session = await loadSession({
     ...(yeaftDir && { dir: yeaftDir }),
+    configOverrides: { globalLlmConfig: ctx.globalLlmConfig || { providers: [] } },
     skipMCP: false,
     skipSkills: false,
     serverMode: true,
@@ -3594,6 +3652,9 @@ export async function handleYeaftDreamTrigger(msg = {}) {
       : await session.dreamScheduler.triggerDreamNow();
 
     const normalized = normalizeDreamResult(result);
+    const snapshot = sessionId
+      ? await buildDreamOutputSnapshot(session, sessionId).catch(() => null)
+      : null;
 
     // Spread `result` FIRST so normalized fields (success, skipped,
     // skippedReason, groupsProcessed, groupsSkipped, targetsApplied,
@@ -3616,6 +3677,7 @@ export async function handleYeaftDreamTrigger(msg = {}) {
       ...tag,
       ...result,
       ...normalized,
+      ...(snapshot ? { snapshot } : {}),
     });
   } catch (err) {
     const error = err?.message || String(err);
@@ -3789,6 +3851,7 @@ export async function handleYeaftLoadHistory(msg) {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     session = await loadSession({
       ...(yeaftDir && { dir: yeaftDir }),
+      configOverrides: { globalLlmConfig: ctx.globalLlmConfig || { providers: [] } },
       skipMCP: false,
       skipSkills: false,
       serverMode: true,
@@ -3829,6 +3892,9 @@ export async function handleYeaftLoadHistory(msg) {
     yeaftDir: ctx.CONFIG?.yeaftDir || null,
   });
   sendSessionSnapshotBroadcast();
+  if (sessionId) {
+    await sendDreamSnapshotForSession(sessionId, { trigger: 'load_history' }).catch(() => null);
+  }
   // vp-status: replay the authoritative table on reconnect so a refreshed
   // frontend doesn't have to wait for the next transition to learn each
   // VP's current state.
@@ -4101,6 +4167,7 @@ export async function resetYeaftSession() {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     session = await loadSession({
       ...(yeaftDir && { dir: yeaftDir }),
+      configOverrides: { globalLlmConfig: ctx.globalLlmConfig || { providers: [] } },
       skipMCP: false,
       skipSkills: false,
       serverMode: true,
@@ -4134,4 +4201,234 @@ export async function resetYeaftSession() {
   } catch (err) {
     console.error('[Yeaft] Failed to re-initialize session after reset:', err.message);
   }
+}
+
+// ────────────────────────────────────────────────────────────
+// MCP CRUD wire handlers (Claude-Code-style Settings → MCP tab)
+//
+// Wire types: `yeaft_mcp_list` / `yeaft_mcp_add` / `yeaft_mcp_remove` /
+// `yeaft_mcp_reload`. Each:
+//   1. Reads / writes ~/.yeaft/config.json `mcpServers` via config-api.
+//   2. Calls `session.mcpManager.connect|disconnect` to apply at runtime.
+//   3. Hot-swaps the live `toolRegistry` via `replaceMcpTools(...)` so the
+//      next LLM turn sees the new tool catalogue WITHOUT a session restart.
+//   4. Broadcasts `yeaft_mcp_updated` so any subscribed web client (the
+//      Settings panel + any open Yeaft view) refreshes its badge without
+//      a manual reload.
+//
+// The handlers do NOT block on `ensureSessionLoaded()` — the session may
+// not yet be initialised when the user opens Settings before sending the
+// first message. In that case `session` is null and we operate ONLY on
+// the on-disk config; the live runtime takes effect on the next session
+// boot. When `session` IS available, we apply the runtime change too.
+//
+// Wire shape per response: always `{ type: 'yeaft_mcp_*', servers, runtime?, error? }`.
+// Frontend reducer should treat `error` as a non-empty string failure.
+// ────────────────────────────────────────────────────────────
+
+/**
+ * Snapshot the live MCP runtime so the UI can render per-server
+ * connection state next to the configured servers. Safe to call when
+ * the session hasn't been initialised yet — returns an empty runtime.
+ */
+function mcpRuntimeSnapshot() {
+  if (!session?.mcpManager) {
+    return { connected: false, toolCount: 0, perServer: [] };
+  }
+  const status = session.mcpManager.status() || [];
+  const toolCount = typeof session.mcpManager.toolCount === 'number'
+    ? session.mcpManager.toolCount
+    : status.reduce((sum, s) => sum + (s.toolCount || 0), 0);
+  return {
+    connected: !!session.mcpManager.hasServers,
+    toolCount,
+    perServer: status.map(s => ({
+      name: s.name,
+      ready: !!s.ready,
+      toolCount: s.toolCount || 0,
+    })),
+  };
+}
+
+/**
+ * Re-flatten MCP tools into the live ToolRegistry. No-op when the session
+ * (or its registry) hasn't been created yet — the next session boot will
+ * pick up the change.
+ */
+function hotSwapMcpTools() {
+  if (!session?.toolRegistry || typeof session.toolRegistry.replaceMcpTools !== 'function') {
+    return { removed: 0, added: 0, skipped: true };
+  }
+  try {
+    const result = session.toolRegistry.replaceMcpTools(session.mcpManager, buildMcpFlattenedTools);
+    return { ...result, skipped: false };
+  } catch (err) {
+    console.warn('[Yeaft] hot-swap MCP tools failed:', err?.message || err);
+    return { removed: 0, added: 0, skipped: true, error: err?.message || String(err) };
+  }
+}
+
+/**
+ * Broadcast a `yeaft_mcp_updated` event so any client subscribed to the
+ * Yeaft view (Settings panel, status badge) refreshes without needing
+ * to re-open the panel. The current list+runtime are included so the UI
+ * is single-source (no separate fetch round-trip needed).
+ */
+function broadcastMcpUpdated(extra = {}) {
+  const yeaftDir = ctx.CONFIG?.yeaftDir;
+  const listed = listMcpServers(yeaftDir);
+  sendToServer({
+    type: 'yeaft_mcp_updated',
+    servers: listed.servers || [],
+    runtime: mcpRuntimeSnapshot(),
+    ...extra,
+  });
+}
+
+export function handleYeaftMcpList(msg = {}) {
+  const yeaftDir = ctx.CONFIG?.yeaftDir;
+  const listed = listMcpServers(yeaftDir);
+  sendToServer({
+    type: 'yeaft_mcp_list_result',
+    requestId: msg.requestId || null,
+    servers: listed.servers || [],
+    runtime: mcpRuntimeSnapshot(),
+    error: listed.error || null,
+  });
+}
+
+export async function handleYeaftMcpAdd(msg = {}) {
+  const yeaftDir = ctx.CONFIG?.yeaftDir;
+  const result = upsertMcpServer(msg.server || {}, yeaftDir);
+  if (result.error) {
+    sendToServer({
+      type: 'yeaft_mcp_add_result',
+      requestId: msg.requestId || null,
+      servers: [],
+      runtime: mcpRuntimeSnapshot(),
+      error: result.error,
+    });
+    return;
+  }
+
+  // Apply at runtime when the session is live. The MCPManager's
+  // `connect(serverConfig)` already disconnects-and-reconnects if a
+  // server with the same name was already registered.
+  let connectError = null;
+  if (session?.mcpManager) {
+    try {
+      await session.mcpManager.connect(result.server);
+    } catch (err) {
+      connectError = err?.message || String(err);
+      console.warn(`[Yeaft] MCP connect "${result.server.name}" failed:`, connectError);
+    }
+  }
+
+  const swap = hotSwapMcpTools();
+
+  sendToServer({
+    type: 'yeaft_mcp_add_result',
+    requestId: msg.requestId || null,
+    servers: result.servers,
+    runtime: mcpRuntimeSnapshot(),
+    swap,
+    connectError,
+    error: null,
+  });
+  broadcastMcpUpdated({ reason: 'add', name: result.server.name, connectError });
+}
+
+export async function handleYeaftMcpRemove(msg = {}) {
+  const yeaftDir = ctx.CONFIG?.yeaftDir;
+  const name = typeof msg.name === 'string' ? msg.name : '';
+  const result = removeMcpServer(name, yeaftDir);
+  if (result.error) {
+    sendToServer({
+      type: 'yeaft_mcp_remove_result',
+      requestId: msg.requestId || null,
+      servers: [],
+      runtime: mcpRuntimeSnapshot(),
+      error: result.error,
+    });
+    return;
+  }
+
+  if (session?.mcpManager) {
+    try {
+      await session.mcpManager.disconnect(name);
+    } catch (err) {
+      console.warn(`[Yeaft] MCP disconnect "${name}" failed:`, err?.message || err);
+    }
+  }
+
+  const swap = hotSwapMcpTools();
+
+  sendToServer({
+    type: 'yeaft_mcp_remove_result',
+    requestId: msg.requestId || null,
+    servers: result.servers,
+    runtime: mcpRuntimeSnapshot(),
+    removed: !!result.removed,
+    swap,
+    error: null,
+  });
+  broadcastMcpUpdated({ reason: 'remove', name });
+}
+
+export async function handleYeaftMcpReload(msg = {}) {
+  const yeaftDir = ctx.CONFIG?.yeaftDir;
+  const targetName = typeof msg.name === 'string' && msg.name ? msg.name : null;
+
+  if (!session?.mcpManager) {
+    // Session not yet alive — just echo the current config + an empty
+    // runtime so the UI knows to wait for session boot.
+    const listed = listMcpServers(yeaftDir);
+    sendToServer({
+      type: 'yeaft_mcp_reload_result',
+      requestId: msg.requestId || null,
+      servers: listed.servers || [],
+      runtime: mcpRuntimeSnapshot(),
+      error: null,
+    });
+    return;
+  }
+
+  const listed = listMcpServers(yeaftDir);
+  const configured = listed.servers || [];
+
+  // Per-server reload: disconnect + reconnect the named server only.
+  // Whole-set reload: disconnect everything, then reconnect from current
+  // config.json. The latter is what the user clicks "Reload all" for.
+  const failures = [];
+  try {
+    if (targetName) {
+      const cfg = configured.find(s => s.name === targetName);
+      try { await session.mcpManager.disconnect(targetName); } catch { /* ignore */ }
+      if (cfg) {
+        try { await session.mcpManager.connect(cfg); }
+        catch (err) { failures.push({ name: targetName, error: err?.message || String(err) }); }
+      }
+    } else {
+      try { await session.mcpManager.disconnectAll(); } catch { /* ignore */ }
+      for (const cfg of configured) {
+        try { await session.mcpManager.connect(cfg); }
+        catch (err) { failures.push({ name: cfg.name, error: err?.message || String(err) }); }
+      }
+    }
+  } catch (err) {
+    console.warn('[Yeaft] MCP reload failed:', err?.message || err);
+  }
+
+  const swap = hotSwapMcpTools();
+
+  sendToServer({
+    type: 'yeaft_mcp_reload_result',
+    requestId: msg.requestId || null,
+    servers: configured,
+    runtime: mcpRuntimeSnapshot(),
+    failures,
+    swap,
+    error: null,
+  });
+  broadcastMcpUpdated({ reason: 'reload', name: targetName, failures });
 }

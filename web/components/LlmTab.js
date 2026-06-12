@@ -49,11 +49,19 @@ export default {
         <div class="sp-group">
           <div class="sp-group-title">{{ $t('settings.llm.providersTitle') }}</div>
           <p class="sp-desc">{{ $t('settings.llm.providersDesc') }}</p>
+          <div class="llm-scope-tabs">
+            <button class="sp-btn" :class="{ 'sp-btn-primary': providerScope === 'global' }" @click="setProviderScope('global')">{{ $t('settings.llm.globalProviders') }}</button>
+            <button class="sp-btn" :class="{ 'sp-btn-primary': providerScope === 'agent' }" @click="setProviderScope('agent')">{{ $t('settings.llm.agentProviders') }}</button>
+          </div>
+          <div v-if="providerScope === 'global'" class="llm-github-device-row">
+            <button class="sp-btn" @click="startGithubDeviceFlow">{{ $t('settings.llm.githubDeviceStart') }}</button>
+            <span v-if="githubDeviceStatus" class="sp-desc">{{ githubDeviceStatus }}</span>
+          </div>
 
           <!-- Provider cards -->
-          <div class="llm-provider-card" v-for="(provider, idx) in localProviders" :key="idx">
+          <div class="llm-provider-card" v-for="(provider, idx) in editableProviders" :key="idx">
             <div class="llm-provider-header">
-              <span class="llm-provider-index">#{{ idx + 1 }}</span>
+              <span class="llm-provider-index">{{ providerScope === 'global' ? $t('settings.llm.globalBadge') : $t('settings.llm.agentBadge') }} #{{ idx + 1 }}</span>
               <button class="sp-icon-btn llm-remove-btn" @click="removeProvider(idx)" :title="$t('settings.llm.removeProvider')">
                 <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
               </button>
@@ -228,7 +236,9 @@ export default {
     return {
       loading: false,
       loadError: null,
+      providerScope: 'agent',
       localProviders: [],
+      globalProviders: [],
       providerModelsText: [],
       localPrimaryModel: null,
       localFastModel: null,
@@ -237,6 +247,7 @@ export default {
       openDropdown: null,
       showApiKey: {},
       showPresetPicker: false,
+      githubDeviceStatus: '',
     };
   },
   computed: {
@@ -265,14 +276,16 @@ export default {
       if (!agentId) return null;
       return this.chatStore.llmConfig[agentId] || null;
     },
+    editableProviders() {
+      return this.providerScope === 'global' ? this.globalProviders : this.localProviders;
+    },
     allModelRefs() {
+      const providers = this.currentConfig?.effectiveConfig?.providers || [...this.globalProviders, ...this.localProviders];
       const refs = [];
-      for (const p of this.localProviders) {
+      for (const p of providers) {
         if (!p.name) continue;
         const models = this.parseModelsFromProvider(p);
-        for (const m of models) {
-          refs.push(`${p.name}/${m}`);
-        }
+        for (const m of models) refs.push(`${p.name}/${m}`);
       }
       return refs;
     }
@@ -297,9 +310,48 @@ export default {
         }
       },
       deep: true
+    },
+    'chatStore.llmGithubDevice': {
+      handler(msg) {
+        if (!msg) return;
+        this.handleGithubDeviceMessage(msg);
+      },
+      deep: true
     }
   },
   methods: {
+    startGithubDeviceFlow() {
+      this.githubDeviceStatus = this.$t('settings.llm.githubDeviceStarting');
+      this.chatStore.sendWsMessage({ type: 'llm_github_device_start', agentId: this.effectiveAgentId });
+    },
+
+    handleGithubDeviceMessage(msg) {
+      if (msg.type === 'started') {
+        if (msg.error) {
+          this.githubDeviceStatus = msg.error;
+          return;
+        }
+        this.githubDeviceStatus = `${this.$t('settings.llm.githubDeviceVerify')} ${msg.verificationUri} — ${msg.userCode}`;
+        if (typeof window !== 'undefined' && window.open) window.open(msg.verificationUri, '_blank', 'noopener');
+        this._githubDeviceCode = msg.deviceCode;
+        setTimeout(() => this.pollGithubDeviceFlow(), Math.max(1, msg.interval || 5) * 1000);
+      } else if (msg.type === 'poll') {
+        if (msg.ok) {
+          this.githubDeviceStatus = this.$t('settings.llm.githubDeviceConnected');
+          this.requestConfig();
+        } else if (msg.pending && this._githubDeviceCode) {
+          setTimeout(() => this.pollGithubDeviceFlow(), Math.max(1, msg.interval || 5) * 1000);
+        } else if (msg.error) {
+          this.githubDeviceStatus = msg.error;
+        }
+      }
+    },
+
+    pollGithubDeviceFlow() {
+      if (!this._githubDeviceCode) return;
+      this.chatStore.sendWsMessage({ type: 'llm_github_device_poll', agentId: this.effectiveAgentId, deviceCode: this._githubDeviceCode });
+    },
+
     requestConfig() {
       const agentId = this.effectiveAgentId;
       if (!agentId) return;
@@ -342,29 +394,50 @@ export default {
       // bare string ids OR { id, protocol? } objects — preserve whichever
       // shape the agent persisted so per-model protocol metadata from the
       // preset picker survives load → edit → save round trips.
-      this.localProviders = (config.providers || []).map(p => ({
-        name: p.name || '',
+      this.localProviders = (config.agentConfig?.providers || config.providers || []).map(p => this.cloneProvider(p));
+      this.globalProviders = (config.globalConfig?.providers || []).map(p => this.cloneProvider(p));
+      this.refreshProviderModelsText();
+
+      this.localPrimaryModel = config.agentConfig?.primaryModel || config.primaryModel || null;
+      this.localFastModel = config.agentConfig?.fastModel || config.fastModel || null;
+      this.isDirty = false;
+      this.showApiKey = {};
+    },
+
+    cloneProvider(p) {
+      return {
+        type: p.type || 'api-key',
+        scope: p.scope || this.providerScope,
+        name: p.originalName || p.name || '',
         baseUrl: p.baseUrl || '',
         apiKey: p.apiKey || '',
-        protocol: p.protocol || 'openai',
-        // Per-provider opt-in to dynamic credential resolution (e.g. gh CLI
-        // or GitHub device-flow token). Absent/null = static apiKey path.
+        githubToken: p.githubToken || '',
+        protocol: p.protocol || 'openai-responses',
         credentialProvider: p.credentialProvider || null,
         models: Array.isArray(p.models)
           ? p.models.map(m => (m && typeof m === 'object') ? { ...m } : m)
           : []
-      }));
+      };
+    },
 
-      // Textareas only show ids — the protocol metadata is invisible to the
-      // user but preserved in the underlying objects (see onModelsTextChange).
-      this.providerModelsText = this.localProviders.map(p =>
+    refreshProviderModelsText() {
+      this.providerModelsText = this.editableProviders.map(p =>
         (p.models || []).map(m => this._modelId(m)).join(', ')
       );
+    },
 
-      this.localPrimaryModel = config.primaryModel || null;
-      this.localFastModel = config.fastModel || null;
-      this.isDirty = false;
+    setProviderScope(scope) {
+      if (this.providerScope === scope) return;
+      this.providerScope = scope;
       this.showApiKey = {};
+      this.refreshProviderModelsText();
+    },
+
+    modelSourceLabel(ref) {
+      const providerName = String(ref || '').split('/')[0];
+      const providers = this.currentConfig?.effectiveConfig?.providers || [...this.globalProviders, ...this.localProviders];
+      const provider = providers.find(p => p.name === providerName);
+      return provider?.scope === 'global' ? this.$t('settings.llm.globalBadge') : this.$t('settings.llm.agentBadge');
     },
 
     parseModelsFromProvider(provider) {
@@ -380,7 +453,7 @@ export default {
     },
 
     addProvider() {
-      this.localProviders.push({
+      this.editableProviders.push({
         name: '',
         baseUrl: '',
         apiKey: '',
@@ -398,14 +471,14 @@ export default {
       this.showPresetPicker = false;
       if (!payload || !payload.name) return;
       // Avoid duplicate provider names — append numeric suffix if needed.
-      const existing = new Set(this.localProviders.map(p => (p.name || '').trim()));
+      const existing = new Set(this.editableProviders.map(p => (p.name || '').trim()));
       let name = payload.name;
       let n = 2;
       while (existing.has(name)) {
         name = `${payload.name}-${n++}`;
       }
       const models = Array.isArray(payload.models) ? payload.models.filter(Boolean) : [];
-      this.localProviders.push({
+      this.editableProviders.push({
         name,
         baseUrl: payload.baseUrl || '',
         apiKey: '',
@@ -418,11 +491,11 @@ export default {
     },
 
     removeProvider(idx) {
-      this.localProviders.splice(idx, 1);
+      this.editableProviders.splice(idx, 1);
       this.providerModelsText.splice(idx, 1);
       // Reindex showApiKey
       const newShow = {};
-      for (let i = 0; i < this.localProviders.length; i++) {
+      for (let i = 0; i < this.editableProviders.length; i++) {
         if (i < idx) newShow[i] = this.showApiKey[i];
         else newShow[i] = this.showApiKey[i + 1];
       }
@@ -436,15 +509,15 @@ export default {
       // Parse text → model ids (support both newline and comma separators).
       // For each id, look up the prior entry by id so per-model `protocol`
       // metadata (e.g. attached by ProviderPresetPicker) survives the edit.
-      const prev = Array.isArray(this.localProviders[idx].models)
-        ? this.localProviders[idx].models
+      const prev = Array.isArray(this.editableProviders[idx].models)
+        ? this.editableProviders[idx].models
         : [];
       const prevById = new Map();
       for (const m of prev) {
         const id = this._modelId(m);
         if (id) prevById.set(id, m);
       }
-      this.localProviders[idx].models = text
+      this.editableProviders[idx].models = text
         .split(/[\n,]+/)
         .map(l => l.trim())
         .filter(l => l)
@@ -453,16 +526,16 @@ export default {
     },
 
     setProtocol(idx, protocol) {
-      const prev = this.localProviders[idx].protocol;
-      this.localProviders[idx].protocol = protocol;
+      const prev = this.editableProviders[idx].protocol;
+      this.editableProviders[idx].protocol = protocol;
       this.markDirty();
 
       // Auto-fill model presets if the models field is empty
-      const currentModels = (this.localProviders[idx].models || []).filter(m => m);
+      const currentModels = (this.editableProviders[idx].models || []).filter(m => m);
       if (currentModels.length === 0 && protocol !== prev) {
         const presets = this._getModelPresets(protocol);
         if (presets.length > 0) {
-          this.localProviders[idx].models = [...presets];
+          this.editableProviders[idx].models = [...presets];
           this.providerModelsText[idx] = presets.join(', ');
         }
       }
@@ -493,7 +566,7 @@ export default {
     // token at request time from env / gh CLI / persisted device-flow token.
     toggleAutoAuth(idx, event) {
       const on = !!event.target.checked;
-      const row = this.localProviders[idx];
+      const row = this.editableProviders[idx];
       row.credentialProvider = on ? 'github-copilot' : null;
       if (on) {
         // Stash the previously-typed apiKey on the local row so a user who
@@ -528,13 +601,15 @@ export default {
       this.saving = true;
 
       // Build providers for saving (clean up empty entries)
-      const providers = this.localProviders
+      const providers = this.editableProviders
         .filter(p => p.name && p.baseUrl)
         .map(p => {
           const clean = {
+            type: p.type || 'api-key',
             name: p.name.trim(),
             baseUrl: p.baseUrl.trim(),
             apiKey: p.apiKey || '',
+            githubToken: p.githubToken || '',
             // Preserve mixed string/object entries — agent-side normalize
             // collapses to plain string when no metadata is attached.
             models: (p.models || []).filter(m => this._modelId(m))
@@ -557,11 +632,14 @@ export default {
       this.chatStore.sendWsMessage({
         type: 'update_llm_config',
         agentId,
-        config: {
-          providers,
-          primaryModel: this.localPrimaryModel || null,
-          fastModel: this.localFastModel || null
-        }
+        scope: this.providerScope,
+        config: this.providerScope === 'global'
+          ? { providers }
+          : {
+              providers,
+              primaryModel: this.localPrimaryModel || null,
+              fastModel: this.localFastModel || null
+            }
       });
 
       // Wait for llm_config_updated response (handled by watcher on currentConfig)

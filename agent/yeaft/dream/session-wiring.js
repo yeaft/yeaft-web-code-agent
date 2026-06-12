@@ -338,7 +338,7 @@ export function createV2DreamScheduler(session) {
       ...buildRunDreamOpts(session, onProgress),
       manual: !!opts.manual,
       scopeFilter: Array.isArray(opts.scopeFilter) ? opts.scopeFilter : undefined,
-    }).then((result) => {
+    }).then(async (result) => {
       // Bug 2: emit turn_close when the dream pass completes.
       result.trigger = opts.manual ? 'manual' : 'auto';
       if (session._dreamActiveGroupId && !result.sessionId) result.sessionId = session._dreamActiveGroupId;
@@ -369,6 +369,11 @@ export function createV2DreamScheduler(session) {
       }));
       if (typeof session._dreamProgressSink === 'function') {
         session._dreamProgressSink(turnClose);
+      }
+      if (typeof session._dreamResultSink === 'function') {
+        try {
+          await session._dreamResultSink(result);
+        } catch { /* dream result visibility must never fail the scheduler */ }
       }
       return result;
     });

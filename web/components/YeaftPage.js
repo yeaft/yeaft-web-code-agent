@@ -114,6 +114,7 @@ export default {
             <button
               class="yeaft-reload-btn"
               @click="reloadMessages"
+              :disabled="store.yeaftLoadingMoreHistory"
               :title="$t('yeaft.reloadMessages')"
               :aria-label="$t('yeaft.reloadMessages')"
             >

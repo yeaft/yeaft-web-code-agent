@@ -48,7 +48,11 @@ beforeAll(async () => {
 function mkStore() {
   return {
     yeaftDreamLatest: {},
+    yeaftDreamSnapshots: {},
+    yeaftDreamPromptLoads: {},
     yeaftDreamEvents: {},
+    yeaftDebugTurnsById: {},
+    yeaftDebugTurnOrder: [],
     yeaftConversationId: null,
     yeaftDebugSessionFilter: null,
     yeaftActiveSessionFilter: null,
@@ -67,6 +71,117 @@ const send = (store, event) => {
 };
 
 describe('handleYeaftOutput — dream event ring buffer', () => {
+
+  it('stores Dream resident summaries that were loaded into the system prompt', () => {
+    const store = mkStore();
+    globalThis.window.Pinia.useSessionsStore = () => ({ activeSessionId: 'g1' });
+
+    send(store, { type: 'turn_open', turnId: 't1', sessionId: 'g1', userPrompt: 'hello' });
+    send(store, {
+      type: 'dream_memory_loaded',
+      turnId: 't1',
+      sessionId: 'g1',
+      vpId: 'vp-a',
+      loadedInto: 'system_prompt.memory',
+      resident: [{
+        scope: 'sessions/g1',
+        source: 'resident-summary',
+        summary: 'Loaded Dream summary',
+      }],
+    });
+
+    expect(store.yeaftDebugTurnsById.t1.dreamMemoryLoaded[0].summary).toBe('Loaded Dream summary');
+    expect(store.yeaftDreamPromptLoads['sessions/g1']).toEqual(expect.objectContaining({
+      scope: 'sessions/g1',
+      sessionId: 'g1',
+      vpId: 'vp-a',
+      loadedInto: 'system_prompt.memory',
+      summary: 'Loaded Dream summary',
+    }));
+    expect(getters.yeaftDreamPromptLoadForActiveSession(store).summary).toBe('Loaded Dream summary');
+  });
+
+  it('stores loadable dream snapshots and exposes the active session snapshot', () => {
+    const store = mkStore();
+    globalThis.window.Pinia.useSessionsStore = () => ({ activeSessionId: 'g1' });
+
+    send(store, {
+      type: 'yeaft_dream_snapshot',
+      snapshot: {
+        scope: 'sessions/g1',
+        sessionId: 'g1',
+        summaryText: 'User prefers concise Chinese summaries.',
+        memoryText: 'Longer memory body',
+        hasOutput: true,
+      },
+    });
+
+    expect(store.yeaftDreamSnapshots['sessions/g1'].summaryText)
+      .toBe('User prefers concise Chinese summaries.');
+    const active = getters.yeaftDreamSnapshotForActiveSession(store);
+    expect(active.sessionId).toBe('g1');
+    expect(active.hasOutput).toBe(true);
+  });
+
+  it('stores embedded dream snapshots from terminal dream results', () => {
+    const store = mkStore();
+    send(store, {
+      type: 'yeaft_dream_result',
+      sessionId: 'g2',
+      success: true,
+      snapshot: {
+        scope: 'sessions/g2',
+        sessionId: 'g2',
+        summaryText: 'Persisted dream output',
+        hasOutput: true,
+      },
+    });
+
+    expect(store.yeaftDreamSnapshots['sessions/g2'].summaryText).toBe('Persisted dream output');
+  });
+
+
+  it('normalizes legacy group prompt-load scopes to sessions scopes', () => {
+    const store = mkStore();
+    globalThis.window.Pinia.useSessionsStore = () => ({ activeSessionId: 'legacy' });
+    send(store, {
+      type: 'dream_memory_loaded',
+      turnId: 't-legacy',
+      sessionId: 'legacy',
+      resident: [{
+        scope: 'group/legacy',
+        source: 'resident-summary',
+        summary: 'Legacy group scope payload',
+      }],
+    });
+
+    expect(store.yeaftDreamPromptLoads['sessions/legacy']).toEqual(expect.objectContaining({
+      scope: 'sessions/legacy',
+      sourceScope: 'group/legacy',
+      sessionId: 'legacy',
+      summary: 'Legacy group scope payload',
+    }));
+    expect(getters.yeaftDreamPromptLoadForActiveSession(store).scope).toBe('sessions/legacy');
+  });
+
+  it('ignores nested group resident scopes for the per-session Dream prompt-load cache', () => {
+    const store = mkStore();
+    send(store, { type: 'turn_open', turnId: 't-nested', sessionId: 'g1', userPrompt: 'hello' });
+    send(store, {
+      type: 'dream_memory_loaded',
+      turnId: 't-nested',
+      sessionId: 'g1',
+      resident: [{
+        scope: 'sessions/g1/vp/vp-a',
+        source: 'resident-summary',
+        summary: 'Nested VP summary',
+      }],
+    });
+
+    expect(store.yeaftDreamPromptLoads).toEqual({});
+    expect(store.yeaftDebugTurnsById['t-nested'].dreamMemoryLoaded[0].scope).toBe('sessions/g1/vp/vp-a');
+  });
+
   it('active-group getters fall back to sessionsStore.activeSessionId when the main pane is not filtered', () => {
     const store = mkStore();
     globalThis.window.Pinia.useSessionsStore = () => ({

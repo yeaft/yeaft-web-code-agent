@@ -208,6 +208,27 @@ export default {
       if (!d) return '';
       return d.manual ? 'manual' : 'auto';
     },
+    dreamSnapshot() {
+      return (this.store && this.store.yeaftDreamSnapshotForActiveSession) || null;
+    },
+    dreamPromptLoad() {
+      return (this.store && this.store.yeaftDreamPromptLoadForActiveSession) || null;
+    },
+    dreamPromptLoadSummary() {
+      const d = this.dreamPromptLoad;
+      const text = d && typeof d.summary === 'string' ? d.summary.trim() : '';
+      return text && d.truncated ? `${text}\n... truncated` : text;
+    },
+    dreamSnapshotSummary() {
+      const s = this.dreamSnapshot;
+      const text = s && typeof s.summaryText === 'string' ? s.summaryText.trim() : '';
+      return text && s.summaryTruncated ? `${text}\n... truncated` : text;
+    },
+    dreamSnapshotMemory() {
+      const s = this.dreamSnapshot;
+      const text = s && typeof s.memoryText === 'string' ? s.memoryText.trim() : '';
+      return text && s.memoryTruncated ? `${text}\n... truncated` : text;
+    },
     // PR feat-dream-debug-panel-full: full per-event timeline for the
     // active session. Empty array when no events have been recorded yet.
     // Sorted oldest-first (matches the store getter's merge order).
@@ -830,6 +851,43 @@ export default {
             <strong v-if="dreamLatest.error" class="status-error">{{ dreamLatest.error }}</strong>
           </div>
           <div v-else class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noLatest') }}</div>
+        </div>
+
+        <div class="yeaft-debug-dream-summary" v-if="dreamSnapshot">
+          <div class="yeaft-debug-dream-summary-title">{{ $t('yeaft.dreamDebug.outputTitle') }}</div>
+          <div class="yeaft-debug-dream-summary-grid">
+            <span>{{ $t('yeaft.dreamDebug.scope') }}</span>
+            <strong>{{ dreamSnapshot.scope }}</strong>
+            <span>{{ $t('yeaft.dreamDebug.lastDream') }}</span>
+            <strong>{{ formatTimestamp(dreamSnapshot.lastDreamAt) || '-' }}</strong>
+            <span>{{ $t('yeaft.dreamDebug.messagesCovered') }}</span>
+            <strong>{{ dreamSnapshot.messageCount || 0 }}</strong>
+          </div>
+          <div v-if="dreamSnapshotSummary" class="yeaft-debug-dream-event-body">
+            <div class="yeaft-debug-section-label">summary.md</div>
+            <pre>{{ dreamSnapshotSummary }}</pre>
+          </div>
+          <div v-if="dreamSnapshotMemory && !dreamSnapshotSummary" class="yeaft-debug-dream-event-body">
+            <div class="yeaft-debug-section-label">memory.md</div>
+            <pre>{{ dreamSnapshotMemory }}</pre>
+          </div>
+          <div v-if="!dreamSnapshot.hasOutput" class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noOutput') }}</div>
+        </div>
+
+        <div class="yeaft-debug-dream-summary" v-if="dreamPromptLoad">
+          <div class="yeaft-debug-dream-summary-title">{{ $t('yeaft.dreamDebug.promptLoadTitle') }}</div>
+          <div class="yeaft-debug-dream-summary-grid">
+            <span>{{ $t('yeaft.dreamDebug.scope') }}</span>
+            <strong>{{ dreamPromptLoad.scope }}</strong>
+            <span>{{ $t('yeaft.dreamDebug.loadedInto') }}</span>
+            <strong>{{ dreamPromptLoad.loadedInto }}</strong>
+            <span>{{ $t('yeaft.dreamDebug.vp') }}</span>
+            <strong>{{ dreamPromptLoad.vpId || '-' }}</strong>
+          </div>
+          <div v-if="dreamPromptLoadSummary" class="yeaft-debug-dream-event-body">
+            <div class="yeaft-debug-section-label">{{ $t('yeaft.dreamDebug.summaryToPrompt') }}</div>
+            <pre>{{ dreamPromptLoadSummary }}</pre>
+          </div>
         </div>
 
         <div class="yeaft-debug-dream-events" v-if="dreamEvents.length > 0">

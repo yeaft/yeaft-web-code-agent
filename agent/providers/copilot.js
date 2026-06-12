@@ -38,12 +38,7 @@ export async function start(opts) {
   const conversationId = opts.conversationId;
   // Tear down any prior entry so we don't leak children.
   const prior = ctx.conversations.get(conversationId);
-  if (prior?.copilotChild) {
-    try { prior.copilotChild.kill('SIGTERM'); } catch { /* noop */ }
-  }
-  if (prior?.acpClient) {
-    try { prior.acpClient.close('replaced'); } catch { /* noop */ }
-  }
+  dispose(prior, 'replaced');
 
   const providerOptions = opts.providerOptions || prior?.providerOptions || {};
   const model = providerOptions.model || DEFAULT_COPILOT_MODEL;
@@ -116,31 +111,16 @@ async function _bootAcp(state, resumeSessionId, model) {
     }
   });
   child.on('error', (err) => {
-    sendOutput(state.conversationId, {
-      type: 'result',
-      subtype: 'error',
-      session_id: state.sessionId,
-      is_error: true,
-      error: `copilot process error: ${err?.message || err}`,
-    });
+    _sendTurnError(state, `copilot process error: ${err?.message || err}`);
   });
   child.on('close', (code) => {
     if (state.turnActive) {
       const tail = stderrBuf.trim().slice(-2000);
-      sendOutput(state.conversationId, {
-        type: 'result',
-        subtype: 'error',
-        session_id: state.sessionId,
-        is_error: true,
-        error: tail || `copilot exited mid-turn (code ${code})`,
-      });
-      ctx.sendToServer({
-        type: 'turn_completed',
-        conversationId: state.conversationId,
-        claudeSessionId: state.sessionId,
-        workDir: state.workDir,
-      });
-      state.turnActive = false;
+      _sendTurnError(state, tail || `copilot exited mid-turn (code ${code})`);
+      _completeTurn(state);
+    }
+    if (state.acpClient) {
+      try { state.acpClient.close(`copilot exited (code ${code})`); } catch { /* noop */ }
     }
     // Drain any in-flight permission prompts so the frontend dialog unwedges
     // and the Promise GC roots release.
@@ -180,6 +160,7 @@ async function _bootAcp(state, resumeSessionId, model) {
     state.claudeSessionId = resumeSessionId;
     if (Array.isArray(r?.modes?.availableModes)) state.acpModes = r.modes.availableModes;
     if (Array.isArray(r?.models?.availableModels)) cacheCopilotModelsFromAcp(r.models.availableModels);
+    _sendSessionIdUpdate(state);
   } else {
     if (resumeSessionId && !state.acpCapabilities.loadSession) {
       // Surface the downgrade — silently handing back a fresh session would
@@ -198,6 +179,7 @@ async function _bootAcp(state, resumeSessionId, model) {
     state.claudeSessionId = state.sessionId;
     if (Array.isArray(r?.modes?.availableModes)) state.acpModes = r.modes.availableModes;
     if (Array.isArray(r?.models?.availableModels)) cacheCopilotModelsFromAcp(r.models.availableModels);
+    _sendSessionIdUpdate(state);
   }
 
   // 3) Emit a system_init envelope so the UI populates tools / model panels.
@@ -224,14 +206,8 @@ export async function sendInput(state, prompt, opts = {}) {
     try {
       await _bootAcp(state, state.sessionId || null, state.model);
     } catch (err) {
-      sendOutput(conversationId, {
-        type: 'result',
-        subtype: 'error',
-        session_id: state.sessionId,
-        is_error: true,
-        error: `copilot ACP reinit failed: ${err?.message || err}`,
-      });
-      ctx.sendToServer({ type: 'turn_completed', conversationId, claudeSessionId: state.sessionId, workDir: state.workDir });
+      _sendTurnError(state, `copilot ACP reinit failed: ${err?.message || err}`);
+      _completeTurn(state, conversationId);
       return;
     }
   }
@@ -247,6 +223,8 @@ export async function sendInput(state, prompt, opts = {}) {
   const abortController = new AbortController();
   state.abortController = abortController;
   state.turnActive = true;
+  state.turnCompletedEmitted = false;
+  state.turnErrorEmitted = false;
   state.turnResultReceived = false;
 
   // Build prompt content blocks. ACP ContentBlock variants: text, image,
@@ -289,21 +267,9 @@ export async function sendInput(state, prompt, opts = {}) {
       error: isErr ? `copilot stop_reason=${stopReason}` : undefined,
     });
   } catch (err) {
-    sendOutput(conversationId, {
-      type: 'result',
-      subtype: 'error',
-      session_id: state.sessionId,
-      is_error: true,
-      error: err?.message || String(err),
-    });
+    _sendTurnError(state, err?.message || String(err));
   } finally {
-    state.turnActive = false;
-    ctx.sendToServer({
-      type: 'turn_completed',
-      conversationId,
-      claudeSessionId: state.sessionId,
-      workDir: state.workDir,
-    });
+    _completeTurn(state, conversationId);
   }
 }
 
@@ -330,12 +296,44 @@ export function abort(state) {
   }
 }
 
+export function dispose(state, reason = 'disposed') {
+  if (!state) return;
+  if (state.abortController) {
+    try { state.abortController.abort(); } catch { /* noop */ }
+    state.abortController = null;
+  }
+  if (state._abortKillTimer) {
+    clearTimeout(state._abortKillTimer);
+    state._abortKillTimer = null;
+  }
+  _drainPendingPermissions(state, reason);
+  if (state.acpClient) {
+    try { state.acpClient.close(reason); } catch { /* noop */ }
+    state.acpClient = null;
+  }
+  if (state.copilotChild) {
+    try { state.copilotChild.kill('SIGTERM'); } catch { /* noop */ }
+    state.copilotChild = null;
+  }
+  state.initialized = false;
+  state.turnActive = false;
+}
+
 /**
  * /clear support: ask ACP for a brand-new session under the same
  * conversationId. Keeps the child alive — no spawn cost.
  */
 export async function clear(state) {
-  if (!state?.acpClient) return;
+  if (!state) return;
+  if (!state.initialized || !state.acpClient) {
+    try {
+      await _bootAcp(state, null, state.model);
+      return;
+    } catch (err) {
+      _sendTurnError(state, `copilot ACP reinit failed during clear: ${err?.message || err}`);
+      return;
+    }
+  }
   // A fresh session invalidates any in-flight permission prompts.
   _drainPendingPermissions(state, 'session cleared');
   try {
@@ -345,6 +343,7 @@ export async function clear(state) {
     });
     state.sessionId = r?.sessionId || randomUUID();
     state.claudeSessionId = state.sessionId;
+    _sendSessionIdUpdate(state);
     sendOutput(state.conversationId, {
       type: 'system',
       subtype: 'init',
@@ -355,6 +354,7 @@ export async function clear(state) {
       permissionMode: state.allowAllTools ? 'bypassPermissions' : 'default',
     });
   } catch (err) {
+    _sendTurnError(state, `copilot clear failed: ${err?.message || err}`);
     if (ctx?.CONFIG?.debug) console.warn('[copilot] clear failed:', err?.message || err);
   }
 }
@@ -363,6 +363,40 @@ export async function clear(state) {
 
 function sendOutput(conversationId, data) {
   ctx.sendToServer({ type: 'claude_output', conversationId, data });
+}
+
+function _sendSessionIdUpdate(state) {
+  if (!state?.conversationId || !state.sessionId) return;
+  ctx.sendToServer({
+    type: 'session_id_update',
+    conversationId: state.conversationId,
+    claudeSessionId: state.sessionId,
+    workDir: state.workDir,
+  });
+}
+
+function _sendTurnError(state, error) {
+  if (!state || state.turnErrorEmitted) return;
+  state.turnErrorEmitted = true;
+  sendOutput(state.conversationId, {
+    type: 'result',
+    subtype: 'error',
+    session_id: state.sessionId,
+    is_error: true,
+    error,
+  });
+}
+
+function _completeTurn(state, conversationId = state?.conversationId) {
+  if (!state || state.turnCompletedEmitted) return;
+  state.turnCompletedEmitted = true;
+  state.turnActive = false;
+  ctx.sendToServer({
+    type: 'turn_completed',
+    conversationId,
+    claudeSessionId: state.sessionId,
+    workDir: state.workDir,
+  });
 }
 
 function _handleAcpNotification(state, method, params) {
@@ -474,19 +508,36 @@ async function _handlePermissionRequest(state, params) {
     const allow = opt.find(o => o.kind === 'allow_always' || o.kind === 'allow_once') || opt[0];
     return { outcome: { outcome: 'selected', optionId: allow.optionId } };
   }
-  // Otherwise route through the existing ask-user wire path. We do it inline
-  // here using a per-state Promise; the frontend responds via the standard
-  // `ask_user_response` message which conversation.js routes back into the
-  // driver via `respondToPermissionRequest(state, requestId, optionId)`.
+  // Otherwise route through the existing AskUserQuestion UI. Emit the same
+  // Claude-style tool_use first, then link it with ask_user_question so the
+  // regular card renders and answer routing can stay provider-agnostic.
   const requestId = `copilot-perm-${randomUUID()}`;
+  const question = _formatPermissionPrompt(params);
+  const questions = [{
+    header: 'Copilot permission',
+    question,
+    options: opt.map(o => ({ label: o.name || o.optionId })),
+    multiSelect: false,
+  }];
+  sendOutput(state.conversationId, {
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [{
+        type: 'tool_use',
+        id: requestId,
+        name: 'AskUserQuestion',
+        input: { questions },
+      }],
+    },
+  });
   return new Promise((resolve) => {
     state.pendingPermissions.set(requestId, { resolve, options: opt });
     ctx.sendToServer({
       type: 'ask_user_question',
       conversationId: state.conversationId,
       requestId,
-      question: _formatPermissionPrompt(params),
-      options: opt.map(o => ({ id: o.optionId, label: o.name || o.optionId, kind: o.kind })),
+      questions,
     });
   });
 }
@@ -518,7 +569,7 @@ export function respondToPermissionRequest(state, requestId, optionId) {
     return false;
   }
   state.pendingPermissions.delete(requestId);
-  const opt = slot.options.find(o => o.optionId === optionId) || slot.options[0];
+  const opt = slot.options.find(o => o.optionId === optionId || o.name === optionId) || slot.options[0];
   slot.resolve({ outcome: { outcome: 'selected', optionId: opt?.optionId || optionId } });
   return true;
 }

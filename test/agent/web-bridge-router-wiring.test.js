@@ -91,4 +91,18 @@ describe('buildVpQueryOpts — router wiring invariant', () => {
     expect(out).toBeDefined();
     expect(out.router).toBeUndefined();
   });
+  it('sets collaboration tool policy from group roster size', () => {
+    const singleCoord = {
+      ingest: vi.fn(() => ({ dispatched: [], fallback: null })),
+      group: {
+        getMeta: () => ({ id: 'grp_solo', defaultVpId: 'linus', roster: ['linus'] }),
+      },
+    };
+    const single = buildVpQueryOpts({ vpId: 'linus', sessionCoordinator: singleCoord, sessionId: 'grp_solo' });
+    expect(single.collabToolPolicy).toBe('single-vp');
+
+    const multi = buildVpQueryOpts({ vpId: 'linus', sessionCoordinator: makeCoordinator(), sessionId: 'grp_default' });
+    expect(multi.collabToolPolicy).toBe('multi-vp');
+  });
+
 });

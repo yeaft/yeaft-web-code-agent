@@ -13,6 +13,7 @@ import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
 import { normalizeProviderModels, serializeModelForPersistence } from './models.js';
 import { normaliseYeaftSection } from './config.js';
+import { mergeLlmConfigs } from './llm/provider-merge.js';
 
 /**
  * Read the LLM-relevant portion of config.json.
@@ -20,7 +21,7 @@ import { normaliseYeaftSection } from './config.js';
  * @param {string} [dir] — Yeaft data directory
  * @returns {{ providers, primaryModel, fastModel, language } | { error: string }}
  */
-export function getLlmConfig(dir) {
+function readLocalLlmConfig(dir) {
   const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
   const configPath = join(root, 'config.json');
 
@@ -28,22 +29,27 @@ export function getLlmConfig(dir) {
     return { providers: [], primaryModel: null, fastModel: null, language: 'en', needsSetup: true };
   }
 
+  const raw = readFileSync(configPath, 'utf8');
+  const json = JSON.parse(raw);
+  const providers = Array.isArray(json.providers) ? json.providers : [];
+  return {
+    providers,
+    primaryModel: json.primaryModel || null,
+    fastModel: json.fastModel || null,
+    language: json.language || 'en',
+    needsSetup: providers.length === 0 || providers.every(p => p.apiKey === 'proxy' || p.apiKey === '' || (!p.apiKey && !p.credentialProvider)),
+  };
+}
+
+export function getLlmConfig(dir, globalConfig = {}) {
   try {
-    const raw = readFileSync(configPath, 'utf8');
-    const json = JSON.parse(raw);
-    const providers = Array.isArray(json.providers) ? json.providers : [];
-
-    // Detect if config still has default/placeholder values (first-time setup needed)
-    const needsSetup = providers.length === 0 || providers.every(p =>
-      p.apiKey === 'proxy' || p.apiKey === '' || !p.apiKey
-    );
-
+    const agentConfig = readLocalLlmConfig(dir);
+    const effectiveConfig = mergeLlmConfigs(globalConfig, agentConfig);
     return {
-      providers,
-      primaryModel: json.primaryModel || null,
-      fastModel: json.fastModel || null,
-      language: json.language || 'en',
-      needsSetup,
+      ...effectiveConfig,
+      agentConfig,
+      effectiveConfig,
+      globalConfig: { providers: Array.isArray(globalConfig.providers) ? globalConfig.providers : [] },
     };
   } catch (e) {
     return { error: `Failed to read config.json: ${e.message}` };
@@ -58,7 +64,7 @@ export function getLlmConfig(dir) {
  * @param {string} [dir] — Yeaft data directory
  * @returns {{ providers, primaryModel, fastModel, language } | { error: string }}
  */
-export function updateLlmConfig(update, dir) {
+export function updateLlmConfig(update, dir, globalConfig = {}) {
   const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
   const configPath = join(root, 'config.json');
 
@@ -120,11 +126,18 @@ export function updateLlmConfig(update, dir) {
     return { error: `Failed to write config.json: ${e.message}` };
   }
 
-  return {
+  const agentConfig = {
     providers: Array.isArray(existing.providers) ? existing.providers : [],
     primaryModel: existing.primaryModel || null,
     fastModel: existing.fastModel || null,
     language: existing.language || 'en',
+  };
+  const effectiveConfig = mergeLlmConfigs(globalConfig, agentConfig);
+  return {
+    ...effectiveConfig,
+    agentConfig,
+    effectiveConfig,
+    globalConfig: { providers: Array.isArray(globalConfig.providers) ? globalConfig.providers : [] },
   };
 }
 
@@ -374,5 +387,197 @@ export async function fetchTavilyUsage(dir) {
   } catch (e) {
     return { error: e.message || String(e) };
   }
+}
+
+// ─── MCP server config (mcpServers array in config.json) ──
+
+/**
+ * Server-name regex: lowercase letters, digits, underscore, dash. Matches
+ * what Claude Code accepts so config files are portable. Single source of
+ * truth for both add/update/remove validation.
+ */
+const MCP_NAME_RE = /^[a-z0-9_-]+$/;
+
+/**
+ * Normalise one MCP server entry on read. The on-disk shape that the
+ * MCPManager understands is `{ name, command, args?, env? }`. This pass
+ * strips unknown / non-string keys, coerces args to an array of strings,
+ * and forces env to a plain {string→string} object so the UI doesn't
+ * crash on a malformed handwritten config.
+ *
+ * @param {unknown} entry
+ * @returns {{ name: string, command: string, args: string[], env: Record<string,string> } | null}
+ */
+function normaliseMcpServer(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const e = /** @type {any} */ (entry);
+  const name = typeof e.name === 'string' ? e.name.trim() : '';
+  const command = typeof e.command === 'string' ? e.command.trim() : '';
+  if (!name || !command) return null;
+  const args = Array.isArray(e.args)
+    ? e.args.filter(a => typeof a === 'string')
+    : [];
+  /** @type {Record<string,string>} */
+  // Use a null-prototype object so a malicious config entry can't poison
+  // future lookups via `__proto__` / `constructor` / `prototype` keys. Even
+  // with the explicit skip list below, the null-prototype is the right
+  // baseline: env maps are plain key/value bags, they have no business
+  // owning prototype methods.
+  const env = Object.create(null);
+  if (e.env && typeof e.env === 'object' && !Array.isArray(e.env)) {
+    for (const [k, v] of Object.entries(e.env)) {
+      // Skip dangerous keys that would let attacker-controlled config
+      // pollute Object.prototype if env were ever spread / merged
+      // somewhere that doesn't expect a null-proto map.
+      if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+      if (typeof k === 'string' && typeof v === 'string') env[k] = v;
+    }
+  }
+  return { name, command, args, env };
+}
+
+/**
+ * Validate a server config for add/update. Returns null on success or a
+ * string error suitable for forwarding to the UI.
+ *
+ * @param {unknown} entry
+ * @returns {string|null}
+ */
+function validateMcpServer(entry) {
+  if (!entry || typeof entry !== 'object') return 'server payload required';
+  const e = /** @type {any} */ (entry);
+  if (typeof e.name !== 'string' || !MCP_NAME_RE.test(e.name)) {
+    return 'server name must match /^[a-z0-9_-]+$/';
+  }
+  if (typeof e.command !== 'string' || !e.command.trim()) {
+    return 'server command is required';
+  }
+  if (e.args !== undefined && (!Array.isArray(e.args) || !e.args.every(a => typeof a === 'string'))) {
+    return 'server args must be an array of strings';
+  }
+  if (e.env !== undefined && (typeof e.env !== 'object' || e.env === null || Array.isArray(e.env))) {
+    return 'server env must be an object of string→string';
+  }
+  if (e.env && typeof e.env === 'object') {
+    for (const [k, v] of Object.entries(e.env)) {
+      if (typeof k !== 'string' || typeof v !== 'string') {
+        return 'server env entries must all be strings';
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Read existing config.json (silently start fresh on missing / corrupt).
+ * Internal helper used by the MCP CRUD trio to share one parse path.
+ *
+ * @param {string} configPath
+ * @returns {object}
+ */
+function readConfigJson(configPath) {
+  if (!existsSync(configPath)) return {};
+  try {
+    const raw = readFileSync(configPath, 'utf8');
+    const json = JSON.parse(raw);
+    return (json && typeof json === 'object') ? json : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * List MCP servers currently saved in config.json. Returns an array — empty
+ * when none configured. Each entry is the normalised on-disk shape, NOT
+ * the runtime status (which lives on `mcpManager.status()`).
+ *
+ * @param {string} [dir]
+ * @returns {{ servers: Array<{ name: string, command: string, args: string[], env: Record<string,string> }> } | { error: string }}
+ */
+export function listMcpServers(dir) {
+  const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
+  const configPath = join(root, 'config.json');
+  try {
+    const json = readConfigJson(configPath);
+    const raw = Array.isArray(json.mcpServers) ? json.mcpServers : [];
+    const servers = raw.map(normaliseMcpServer).filter(Boolean);
+    return { servers };
+  } catch (e) {
+    return { error: `Failed to read config.json: ${e.message}` };
+  }
+}
+
+/**
+ * Add or update an MCP server config entry. Match is by `name`. Returns
+ * the post-update list of servers (same shape as `listMcpServers`) plus
+ * the entry that was just written, so callers can pass it directly into
+ * `mcpManager.connect()` without re-reading the file.
+ *
+ * @param {{ name: string, command: string, args?: string[], env?: Record<string,string> }} server
+ * @param {string} [dir]
+ * @returns {{ servers: Array<object>, server: object } | { error: string }}
+ */
+export function upsertMcpServer(server, dir) {
+  const err = validateMcpServer(server);
+  if (err) return { error: err };
+
+  const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
+  const configPath = join(root, 'config.json');
+  const existing = readConfigJson(configPath);
+  const list = Array.isArray(existing.mcpServers) ? existing.mcpServers.slice() : [];
+
+  const normalised = normaliseMcpServer(server);
+  if (!normalised) return { error: 'invalid server payload' };
+
+  const idx = list.findIndex(s => s && typeof s === 'object' && s.name === normalised.name);
+  if (idx >= 0) {
+    list[idx] = normalised;
+  } else {
+    list.push(normalised);
+  }
+  existing.mcpServers = list;
+
+  try {
+    writeFileSync(configPath, JSON.stringify(existing, null, 2) + '\n', 'utf8');
+  } catch (e) {
+    return { error: `Failed to write config.json: ${e.message}` };
+  }
+
+  return { servers: list.map(normaliseMcpServer).filter(Boolean), server: normalised };
+}
+
+/**
+ * Remove the MCP server config entry with the given name. Idempotent —
+ * removing a non-existent name returns the unchanged list with
+ * `removed: false`. This lets the UI safely call delete after a
+ * concurrent change without surfacing a spurious error.
+ *
+ * @param {string} name
+ * @param {string} [dir]
+ * @returns {{ servers: Array<object>, removed: boolean } | { error: string }}
+ */
+export function removeMcpServer(name, dir) {
+  if (typeof name !== 'string' || !name.trim()) {
+    return { error: 'name required' };
+  }
+  // Trim once for the comparison too — without this, "  github  " from the
+  // wire would silently fail to delete "github" on disk because we'd be
+  // matching against the padded string.
+  const target = name.trim();
+  const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
+  const configPath = join(root, 'config.json');
+  const existing = readConfigJson(configPath);
+  const list = Array.isArray(existing.mcpServers) ? existing.mcpServers.slice() : [];
+  const next = list.filter(s => !(s && typeof s === 'object' && s.name === target));
+  const removed = next.length !== list.length;
+  existing.mcpServers = next;
+
+  try {
+    writeFileSync(configPath, JSON.stringify(existing, null, 2) + '\n', 'utf8');
+  } catch (e) {
+    return { error: `Failed to write config.json: ${e.message}` };
+  }
+
+  return { servers: next.map(normaliseMcpServer).filter(Boolean), removed };
 }
 

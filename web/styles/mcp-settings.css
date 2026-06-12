@@ -1,0 +1,207 @@
+/* mcp-settings.css — Styles for the MCP tab in Yeaft Settings.
+ *
+ * Mirrors search-settings.css naming so the two tabs feel like siblings.
+ * Reuses .search-btn-primary / .search-btn-secondary from search-settings
+ * (declared globally there) so the button family stays consistent.
+ *
+ * Per CLAUDE.md UI rules:
+ *   - colors only via REAL tokens in variables.css. Never invent fallback
+ *     literals — a missing token means the token name is wrong, not that
+ *     light-mode hex should leak into dark mode (the previous version of
+ *     this file used `var(--surface-muted, #f9fafb)` etc., which silently
+ *     hardcoded light-mode colors when the token wasn't defined).
+ *   - no horizontal dividers — separation via spacing only
+ *   - inputs match the global border-radius + focus ring style
+ *   - avoid `!important` — rely on parent-selector specificity instead.
+ *     The original draft sprinkled `!important` on `.mcp-btn-sm` to override
+ *     `.search-btn-secondary`; the fix is to qualify the selector with its
+ *     parent (.mcp-server-row .mcp-btn-sm), which beats the base specificity.
+ */
+
+.mcp-settings-tab {
+  padding: 4px 0;
+}
+
+.mcp-settings-tab .settings-section {
+  padding: 16px 0;
+}
+
+.mcp-settings-tab .settings-section + .settings-section {
+  margin-top: 8px;
+}
+
+.mcp-settings-tab .settings-section-title {
+  margin: 0 0 6px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mcp-settings-tab .settings-section-desc {
+  margin: 0 0 14px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.mcp-settings-tab .settings-section-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 16px;
+}
+
+/* Empty-state hint when no servers are configured. */
+.mcp-empty {
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 12px 14px;
+  background: var(--bg-subtle);
+  border-radius: 8px;
+}
+
+/* Server list */
+.mcp-server-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mcp-server-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--bg-subtle);
+  border-radius: 8px;
+}
+
+.mcp-server-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-server-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.mcp-server-cmd {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  word-break: break-all;
+}
+
+.mcp-server-cmd code {
+  font-family: var(--font-mono, ui-monospace, "SF Mono", Monaco, monospace);
+  background: transparent;
+  padding: 0;
+}
+
+.mcp-server-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.mcp-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.mcp-status-on {
+  background: var(--success);
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.18);
+}
+
+.mcp-status-off {
+  background: var(--text-muted);
+}
+
+.mcp-server-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Small action buttons used in each row. Reuses .search-btn-secondary
+   for the base look + a tighter footprint. Parent-selector specificity
+   (`.mcp-server-row .mcp-btn-sm`) is enough to override the base class
+   without `!important`. */
+.mcp-server-row .mcp-btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+  min-height: 26px;
+}
+
+.mcp-server-row .mcp-btn-danger {
+  color: var(--error);
+  border-color: var(--border-color);
+}
+.mcp-server-row .mcp-btn-danger:hover:not(:disabled) {
+  background: var(--error-bg);
+}
+
+/* Add-server form. Same field stack used by other Yeaft tabs (LLM,
+   VP, Search) — single column, label above input. */
+.mcp-form-row {
+  margin-bottom: 12px;
+}
+
+.mcp-form-label {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.mcp-form-input {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: var(--font-mono, ui-monospace, "SF Mono", Monaco, monospace);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  box-sizing: border-box;
+}
+
+.mcp-form-input:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+}
+
+.mcp-form-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.mcp-form-textarea {
+  resize: vertical;
+  min-height: 64px;
+  line-height: 1.4;
+}
+
+.mcp-form-error {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--error);
+  background: var(--error-bg);
+  padding: 8px 10px;
+  border-radius: 6px;
+}

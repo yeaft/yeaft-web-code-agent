@@ -11,7 +11,14 @@
 import { ToolRegistry } from './registry.js';
 
 // --- Existing tools ---
-import mcpTools from './mcp-tools.js';
+// NOTE: MCP tools are no longer auto-registered here. The mcp_list_tools /
+// mcp_call_tool meta-tools from `./mcp-tools.js` are kept exported for
+// back-compat, but the default registry now ships only flattened MCP tools
+// (mcp__<server>__<tool>), registered in session.js after the MCPManager
+// has connected to its configured servers. See agent/yeaft/session.js for
+// the flatten-and-register step, and agent/yeaft/tools/mcp-tools.js for
+// the `buildMcpFlattenedTools(mcpManager)` builder used to construct them
+// on first connect and on hot-reload.
 import skillTool from './skill.js';
 import enterWorktree from './enter-worktree.js';
 import exitWorktree from './exit-worktree.js';
@@ -73,7 +80,6 @@ import viewImage from './view-image.js';
  */
 export const allTools = [
   // Existing tools
-  ...mcpTools,
   skillTool,
   enterWorktree,
   exitWorktree,

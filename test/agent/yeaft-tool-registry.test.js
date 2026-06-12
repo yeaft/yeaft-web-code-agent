@@ -26,20 +26,33 @@ describe('tools/index.js createFullRegistry', () => {
     expect(allTools.length).toBeGreaterThanOrEqual(28);
 
     const names = allTools.map(t => t.name);
-    expect(names).toContain('mcp_list_tools');
-    expect(names).toContain('mcp_call_tool');
+    // MCP meta-tools (`mcp_list_tools` / `mcp_call_tool`) were removed from
+    // the default tool set in the Claude-Code-style MCP rework — they're
+    // replaced by flattened `mcp__<server>__<tool>` tools registered at
+    // session start (see session.js + tools/mcp-tools.js). The meta-tool
+    // exports still live in tools/mcp-tools.js for back-compat callers,
+    // they're just no longer part of the default registry.
+    expect(names).not.toContain('mcp_list_tools');
+    expect(names).not.toContain('mcp_call_tool');
     expect(names).toContain('Skill');
     expect(names).toContain('EnterWorktree');
     expect(names).toContain('ExitWorktree');
     expect(names).toContain('TodoWrite');
   });
 
-  it('createFullRegistry includes mcp tools', async () => {
+  it('createFullRegistry no longer includes mcp meta-tools (replaced by flatten)', async () => {
+    // The legacy `mcp_list_tools` / `mcp_call_tool` meta-tools forced a
+    // two-call LLM dance per MCP tool invocation. They've been replaced by
+    // flattened `mcp__<server>__<tool>` tools that the engine registers
+    // at session bootstrap (after MCPManager.connectAll). The default
+    // registry no longer carries them; session.js calls
+    // ToolRegistry.replaceMcpTools(mcpManager, buildMcpFlattenedTools) to
+    // populate them dynamically.
     const { createFullRegistry } = await import('../../agent/yeaft/tools/index.js');
     const registry = createFullRegistry();
 
-    expect(registry.has('mcp_list_tools')).toBe(true);
-    expect(registry.has('mcp_call_tool')).toBe(true);
+    expect(registry.has('mcp_list_tools')).toBe(false);
+    expect(registry.has('mcp_call_tool')).toBe(false);
   });
 
   it('createFullRegistry includes skill tool', async () => {
