@@ -2581,6 +2581,9 @@ export class Engine {
       // multi-iteration tool loops) and BEFORE the abortedDuringTools
       // check (so a clean handoff doesn't get reported as 'aborted').
       if (endTurnRequested) {
+        if (pendingSubAgentNotifs.length > 0) {
+          acknowledgePendingNotifications(notifScope, pendingSubAgentNotifs.map(n => n.id));
+        }
         const handoffDetail = typeof endTurnRequested === 'object'
           ? endTurnRequested
           : { kind: 'tool_handoff', reason: String(endTurnRequested) };

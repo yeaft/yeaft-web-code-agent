@@ -46,7 +46,7 @@ export function getCallerAgentScope(ctx = {}) {
   return {
     sessionId: cleanString(deps.parentSessionId ?? ctx?.sessionId),
     parentVpId: cleanString(deps.parentVpId ?? ctx?.senderVpId),
-    parentThreadId: cleanString(deps.parentThreadId ?? ctx?.threadId) || MAIN_THREAD_ID,
+    parentThreadId: cleanString(deps.parentThreadId ?? ctx?.threadId),
   };
 }
 
@@ -60,14 +60,17 @@ export function agentBelongsToScope(agent, scope = {}) {
   if (!agent) return false;
   const agentSessionId = cleanString(agent.parentSessionId);
   const scopeSessionId = cleanString(scope.sessionId);
-  if (!agentSessionId && !scopeSessionId) return true;
-  if (agentSessionId !== scopeSessionId) return false;
   const agentVpId = cleanString(agent.parentVpId);
   const scopeVpId = cleanString(scope.parentVpId);
-  if (agentVpId !== scopeVpId) return false;
-  const agentThreadId = cleanString(agent.parentThreadId) || MAIN_THREAD_ID;
-  const scopeThreadId = cleanString(scope.parentThreadId) || MAIN_THREAD_ID;
-  return agentThreadId === scopeThreadId;
+  const agentThreadId = cleanString(agent.parentThreadId);
+  const scopeThreadId = cleanString(scope.parentThreadId);
+  if (!scopeSessionId && !scopeVpId && !scopeThreadId) {
+    return !agentSessionId;
+  }
+  if ((agentSessionId || scopeSessionId) && agentSessionId !== scopeSessionId) return false;
+  if ((agentVpId || scopeVpId) && agentVpId !== scopeVpId) return false;
+  if (!agentThreadId && !scopeThreadId) return true;
+  return (agentThreadId || MAIN_THREAD_ID) === (scopeThreadId || MAIN_THREAD_ID);
 }
 
 /** Reset registry (for tests). */

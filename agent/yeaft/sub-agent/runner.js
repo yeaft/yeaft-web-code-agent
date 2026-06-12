@@ -283,6 +283,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
       let endedNormally = false;
       let streamError = null;
       const turnTokenStart = agent.liveness?.tokenCount || 0;
+      let turnUsageTokens = 0;
       try {
         const stream = subEngine.query({
           prompt,
@@ -311,6 +312,9 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
             // child is currently saying, not stale text from the prior
             // turn.
             agent.lastResult = capTail(assistantText, LAST_RESULT_MAX_CHARS);
+          }
+          if (evt && evt.type === 'usage') {
+            turnUsageTokens += (evt.inputTokens || 0) + (evt.outputTokens || 0);
           }
           if (evt && evt.type === 'error' && evt.error) {
             streamError = evt.error.message || String(evt.error);
@@ -368,10 +372,11 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
       try {
         const tickAgent = await loadTickAgent();
         if (typeof tickAgent === 'function') {
-          const turnTokenDelta = Math.max(0, (agent.liveness?.tokenCount || 0) - turnTokenStart);
+          const textTokenDelta = Math.max(0, (agent.liveness?.tokenCount || 0) - turnTokenStart);
+          const tokenDelta = turnUsageTokens > 0 ? turnUsageTokens : textTokenDelta;
           tickResult = tickAgent(agent.id, {
             turns: 1,
-            tokens: turnTokenDelta,
+            tokens: tokenDelta,
             partial_output: assistantText,
           });
         }

@@ -233,6 +233,12 @@ The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
       consumeNotificationForAgent(agent.id);
       return JSON.stringify(buildEnvelope(agent));
     }
+    if (agent.status === STATUS.IDLE) {
+      return JSON.stringify(buildEnvelope(agent));
+    }
+    if (ctx?.signal?.aborted) {
+      return JSON.stringify({ next_steps: errorNextSteps(), error: 'Wait cancelled', agentId: agent_id });
+    }
 
     // Block until next interesting state change, capped at timeout_ms.
     const deadline = Date.now() + timeout_ms;

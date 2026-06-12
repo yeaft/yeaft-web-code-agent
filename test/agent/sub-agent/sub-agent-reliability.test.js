@@ -136,11 +136,50 @@ class ThrowingAdapter {
   async call() { return { text: 'ok', usage: {} }; }
 }
 
+class UsageAdapter {
+  constructor({ text = 'ok', inputTokens = 0, outputTokens = 0 } = {}) {
+    this.text = text;
+    this.inputTokens = inputTokens;
+    this.outputTokens = outputTokens;
+    this.streamCalls = [];
+  }
+  async *stream(params) {
+    this.streamCalls.push({ system: params.system, messages: params.messages });
+    if (this.text) yield { type: 'text_delta', text: this.text };
+    yield { type: 'usage', inputTokens: this.inputTokens, outputTokens: this.outputTokens };
+    yield { type: 'stop', stopReason: 'end_turn' };
+  }
+  async call() { return { text: 'ok', usage: {} }; }
+}
+
+class ToolUseAdapter {
+  constructor(toolName) {
+    this.toolName = toolName;
+    this.streamCalls = [];
+  }
+  async *stream(params) {
+    this.streamCalls.push({ system: params.system, messages: params.messages });
+    yield { type: 'tool_call', id: 'tc-1', name: this.toolName, input: {} };
+    yield { type: 'stop', stopReason: 'tool_use' };
+  }
+  async call() { return { text: 'ok', usage: {} }; }
+}
+
 const echoTool = defineTool({
   name: 'echo',
   description: 'echo input',
   parameters: { type: 'object', properties: {} },
   async execute(input) { return JSON.stringify({ echo: input }); },
+});
+
+const handoffTool = defineTool({
+  name: 'handoff',
+  description: 'request end turn',
+  parameters: { type: 'object', properties: {} },
+  async execute(_input, ctx) {
+    ctx.requestEndTurn?.({ kind: 'test_handoff' });
+    return 'handoff ok';
+  },
 });
 
 function mkParentRegistry() {
@@ -161,6 +200,8 @@ function mkDeps(adapter, overrides = {}) {
     ...overrides,
   };
 }
+
+const vpTestCtx = { parentEngineDeps: { parentVpId: 'vp-test', parentThreadId: 'main' } };
 
 async function settle(agent, ms = 2000) {
   const deadline = Date.now() + ms;
@@ -554,6 +595,46 @@ describe('wait-agent envelope shape', () => {
     expect(ownWait.result).toBe('visible result');
   });
 
+  it('sessionless scoped tools still isolate different parent VPs', async () => {
+    const agents = getAgentRegistry();
+    agents.set('agent-vp-a', {
+      id: 'agent-vp-a', name: 'vp-a-agent', status: STATUS.IDLE,
+      result: 'vp-a result', lastResult: '', error: null, messages: [],
+      usage: { turns: 1 }, outputFile: '/tmp/vp-a.log', liveness: makeLiveness(),
+      parentSessionId: null, parentVpId: 'vp-a', parentThreadId: 'main',
+      pendingPrompts: [],
+    });
+    agents.set('agent-vp-b', {
+      id: 'agent-vp-b', name: 'vp-b-agent', status: STATUS.IDLE,
+      result: 'vp-b result', lastResult: '', error: null, messages: [],
+      usage: { turns: 1 }, outputFile: '/tmp/vp-b.log', liveness: makeLiveness(),
+      parentSessionId: null, parentVpId: 'vp-b', parentThreadId: 'main',
+      pendingPrompts: [],
+    });
+    const ctxB = { parentEngineDeps: { parentVpId: 'vp-b', parentThreadId: 'main' } };
+
+    const denied = JSON.parse(await waitAgent.execute({ agent_id: 'agent-vp-a' }, ctxB));
+    expect(denied.error).toMatch(/not found/i);
+    const listed = JSON.parse(await listAgents.execute({}, ctxB));
+    expect(listed.agents.map(a => a.id)).toEqual(['agent-vp-b']);
+  });
+
+  it('timeout_ms zero still returns an idle snapshot instead of background timeout', async () => {
+    const agents = getAgentRegistry();
+    agents.set('agent-idle-zero', {
+      id: 'agent-idle-zero', name: 'idle-zero', status: STATUS.IDLE,
+      result: 'ready now', lastResult: '', error: null, messages: [],
+      usage: { turns: 1 }, outputFile: null, liveness: makeLiveness(),
+      pendingPrompts: [],
+    });
+
+    const env = JSON.parse(await waitAgent.execute({ agent_id: 'agent-idle-zero', timeout_ms: 0 }, {}));
+    expect(env.status).toBe(STATUS.IDLE);
+    expect(env.result).toBe('ready now');
+    expect(env.timedOut).toBeUndefined();
+    expect(env.runningInBackground).toBeUndefined();
+  });
+
   it('name collisions are scoped to the caller owner', async () => {
     const ctxA = { parentEngineDeps: { parentSessionId: 'session-a', parentVpId: 'vp-a', parentThreadId: 'main' } };
     const ctxB = { parentEngineDeps: { parentSessionId: 'session-b', parentVpId: 'vp-b', parentThreadId: 'main' } };
@@ -681,10 +762,29 @@ describe('tickAgent budget enforcement', () => {
     expect(agent.usage.tokens).toBe(4);
 
     adapter.reply = 'ef';
-    await sendMessage.execute({ agent_id: id, message: 'second' }, {});
+    await sendMessage.execute({ agent_id: id, message: 'second' }, vpTestCtx);
     await settle(agent, 2000);
     expect(agent.status).toBe(STATUS.IDLE);
     expect(agent.usage.tokens).toBe(6);
+  });
+
+  it('max_tokens budget uses provider usage events when available', async () => {
+    const adapter = new UsageAdapter({ text: 'ok', inputTokens: 100, outputTokens: 25 });
+    const deps = mkDeps(adapter);
+    const out = JSON.parse(await agentTool.execute(
+      { name: 'usage-budget', mission: 'count exact usage', budget: { max_tokens: 50 } },
+      { parentEngineDeps: deps },
+    ));
+    const agent = getAgentRegistry().get(out.agentId);
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline && !isTerminalAgentStatus(agent.status)) {
+      await new Promise(r => setTimeout(r, 20));
+    }
+
+    expect(agent.status).toBe(STATUS.COMPLETED);
+    expect(agent.usage.tokens).toBe(125);
+    expect(agent.result.status).toBe('budget_exceeded');
+    expect(agent.result.reason).toMatch(/max_tokens/);
   });
 
   it('budget cutoff notifications include the budget reason', async () => {
@@ -760,7 +860,7 @@ describe('idle watchdog', () => {
     expect(agent.status).toBe(STATUS.IDLE);
 
     adapter.reply = 'second';
-    await sendMessage.execute({ agent_id: id, message: 'keep going' }, {});
+    await sendMessage.execute({ agent_id: id, message: 'keep going' }, vpTestCtx);
     // Give the driver time to process the follow-up.
     await new Promise(r => setTimeout(r, 200));
     await settle(agent, 2000);
@@ -791,7 +891,7 @@ describe('driver finally cleanup', () => {
 
     // Wait for first turn → idle, then close.
     await settle(agent, 2000);
-    await closeAgent.execute({ agent_id: id, result: 'wrap' }, {});
+    await closeAgent.execute({ agent_id: id, result: 'wrap' }, vpTestCtx);
 
     // Allow the driver loop to exit through finally.
     const deadline = Date.now() + 1000;
@@ -984,6 +1084,38 @@ describe('engine prepends sub-agent notifications to the next user turn', () => 
     expect(stillQueued.map(n => n.agentId)).toEqual(['ack-agent']);
   });
 
+  it('acknowledges delivered notifications when a tool requests handoff', async () => {
+    const { Engine } = await import('../../../agent/yeaft/engine.js');
+    const reg = new ToolRegistry();
+    reg.registerAll([handoffTool]);
+    const engine = new Engine({
+      adapter: new ToolUseAdapter('handoff'),
+      trace: new NullTrace(),
+      config: { model: 'test-model', maxOutputTokens: 256, _readOnly: true, language: 'en' },
+      toolRegistry: reg,
+      sessionId: 'session-handoff',
+      vpId: 'vp-parent',
+    });
+
+    enqueueTerminalNotification({
+      agentId: 'handoff-agent', agentName: 'handoff-agent', status: 'completed',
+      result: 'handoff delivered', parentVpId: 'vp-parent',
+      parentSessionId: 'session-handoff', parentThreadId: 'main',
+    });
+
+    for await (const _ of engine.query({
+      prompt: 'handoff turn',
+      messages: [],
+      vpPersona: { vpId: 'vp-parent', persona: 'You are Parent.' },
+      sessionId: 'session-handoff',
+      threadId: 'main',
+    })) { /* drain */ }
+
+    expect(consumePendingNotifications({
+      parentVpId: 'vp-parent', sessionId: 'session-handoff', threadId: 'main',
+    })).toEqual([]);
+  });
+
   it('sub-agent engines do not drain parent notifications', async () => {
     const { Engine } = await import('../../../agent/yeaft/engine.js');
     const childAdapter = new TextAdapter('child');
@@ -1104,7 +1236,7 @@ describe('list-agents envelope', () => {
     const agent = getAgentRegistry().get(id);
     await settle(agent, 2000);
 
-    const env = JSON.parse(await listAgents.execute({}, {}));
+    const env = JSON.parse(await listAgents.execute({}, vpTestCtx));
     expect(Array.isArray(env.agents)).toBe(true);
     const a = env.agents.find(x => x.id === id);
     expect(a).toBeTruthy();
