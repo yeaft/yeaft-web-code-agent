@@ -328,8 +328,6 @@ export default {
   'modal.newConv.folderLabel': '📁 工作目录',
   'modal.newConv.provider': '提供方',
   'modal.newConv.model': '模型',
-  'modal.newConv.skipPermissions': '跳过权限确认',
-  'modal.newConv.skipPermissionsHint': '传 --allow-all-tools（Copilot 执行工具前不再询问）。',
   'provider.claudeCode': 'Claude Code',
   'provider.copilot': 'Copilot',
 

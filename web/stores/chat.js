@@ -3487,7 +3487,7 @@ export const useChatStore = defineStore('chat', {
     listFolders() { return sessionHelpers.listFolders(this); },
     listFoldersForAgent(agentId, provider) { return sessionHelpers.listFoldersForAgent(this, agentId, provider); },
     listModelsForAgent(agentId, provider) { return sessionHelpers.listModelsForAgent(this, agentId, provider); },
-    listHistorySessionsForAgent(agentId, workDir) { sessionHelpers.listHistorySessionsForAgent(this, agentId, workDir); },
+    listHistorySessionsForAgent(agentId, workDir, provider) { sessionHelpers.listHistorySessionsForAgent(this, agentId, workDir, provider); },
     async loadGlobalSessions(limit = 20) { return sessionHelpers.loadGlobalSessions(this, limit); },
     async deleteGlobalSession(sessionId) { return sessionHelpers.deleteGlobalSession(this, sessionId); },
     findAgentForSession(session) { return sessionHelpers.findAgentForSession(this, session); },

@@ -543,13 +543,6 @@ export default {
                 </div>
               </div>
             </div>
-            <div class="resume-control-row" v-if="convModalAgent && convModalProvider === 'copilot'">
-              <label class="resume-control-label">{{ $t('modal.newConv.skipPermissions') }}</label>
-              <label class="resume-checkbox-wrapper">
-                <input type="checkbox" v-model="convModalCopilotAllowAll">
-                <span class="resume-checkbox-hint">{{ $t('modal.newConv.skipPermissionsHint') }}</span>
-              </label>
-            </div>
             <div class="resume-control-row" v-if="convModalAgent">
               <label class="resume-control-label">{{ $t('modal.newConv.workDir') }}</label>
               <div class="workdir-input-group">
@@ -705,7 +698,6 @@ export default {
       convModalWorkDir: '',
       convModalProvider: 'claude-code',
       convModalCopilotModel: DEFAULT_COPILOT_MODEL,
-      convModalCopilotAllowAll: false,
       copilotModelOpen: false,
       copilotModelSearch: '',
       selectedResumeSession: null,
@@ -949,7 +941,6 @@ export default {
       this.selectedResumeSession = null;
       this.historyLoaded = false;
       this.convModalCopilotModel = DEFAULT_COPILOT_MODEL;
-      this.convModalCopilotAllowAll = false;
     },
     onConvModalAgentChange() {
       if (this.convModalAgent) {
@@ -1028,21 +1019,31 @@ export default {
       if (!this.convModalAgent) return;
       this.store.selectAgent(this.convModalAgent);
       const workDir = this.convModalWorkDir.trim() || this.selectedConvModalAgentWorkDir;
-      const opts = { provider: this.convModalProvider };
-      if (this.convModalProvider === 'copilot') {
-        opts.providerOptions = {};
-        if (this.convModalCopilotModel) opts.providerOptions.model = String(this.convModalCopilotModel).trim();
-        if (this.convModalCopilotAllowAll) opts.providerOptions.allowAllTools = true;
-      }
+      const opts = this.buildConvOpts({ includeModel: true });
       this.store.createConversation(workDir, this.convModalAgent, null, opts);
       this.closeConversationModal();
+    },
+    // Build the { provider, providerOptions } payload shared by the create
+    // and resume paths. Copilot conversations always enable all tools
+    // (no per-conversation opt-in) so Copilot won't prompt before running
+    // tools. includeModel is only meaningful on create — a resumed session
+    // keeps the model it was started with.
+    buildConvOpts({ includeModel } = {}) {
+      const opts = { provider: this.convModalProvider };
+      if (this.convModalProvider === 'copilot') {
+        opts.providerOptions = { allowAllTools: true };
+        if (includeModel && this.convModalCopilotModel) {
+          opts.providerOptions.model = String(this.convModalCopilotModel).trim();
+        }
+      }
+      return opts;
     },
     resumeSession(session) {
       if (!this.convModalAgent) return;
       this.store.selectAgent(this.convModalAgent);
       this.store._pendingSessionTitle = session.title;
       const workDir = session.workDir || this.convModalWorkDir.trim() || this.selectedConvModalAgentWorkDir;
-      this.store.resumeConversation(session.sessionId, workDir, this.convModalAgent, { provider: this.convModalProvider });
+      this.store.resumeConversation(session.sessionId, workDir, this.convModalAgent, this.buildConvOpts());
       this.closeConversationModal();
     },
     resumeSelectedSession() {
@@ -1050,7 +1051,7 @@ export default {
       this.store.selectAgent(this.convModalAgent);
       this.store._pendingSessionTitle = this.selectedResumeSession.title;
       const workDir = this.selectedResumeSession.workDir || this.convModalWorkDir.trim() || this.selectedConvModalAgentWorkDir;
-      this.store.resumeConversation(this.selectedResumeSession.sessionId, workDir, this.convModalAgent, { provider: this.convModalProvider });
+      this.store.resumeConversation(this.selectedResumeSession.sessionId, workDir, this.convModalAgent, this.buildConvOpts());
       this.closeConversationModal();
     },
     formatDate(timestamp) {
