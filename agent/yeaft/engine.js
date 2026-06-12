@@ -1339,7 +1339,7 @@ export class Engine {
    *   string-prompt shape (no regression for existing callers).
    * @yields {EngineEvent}
    */
-  async *query({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null, collabToolPolicy = null } = {}) {
+  async *query({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null, collabToolPolicy = null } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       yield {
         type: 'error',
@@ -1402,7 +1402,7 @@ export class Engine {
 
     try {
       this.#currentThreadId = threadId || MAIN_THREAD_ID;
-      yield* this.#runQuery({ prompt: effectivePrompt, promptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted, getCurrentTodos, setCurrentTodos, threadId: this.#currentThreadId, drainPendingUserMessages, collabToolPolicy: effectiveCollabToolPolicy });
+      yield* this.#runQuery({ prompt: effectivePrompt, promptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted, getCurrentTodos, setCurrentTodos, threadId: this.#currentThreadId, drainPendingUserMessages, collabToolPolicy: effectiveCollabToolPolicy });
     } finally {
       if (signal) {
         try { signal.removeEventListener('abort', onExternalAbort); } catch { /* ignore */ }
@@ -1422,7 +1422,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null, collabToolPolicy = null }) {
+  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null, collabToolPolicy = null }) {
 
     const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
       ? collabToolPolicy
@@ -1511,12 +1511,13 @@ export class Engine {
       : [];
 
     // ─── Active Scope (DESIGN-PROMPT §3 ④) ──────────────────────
-    // Structured per-turn scope summary: group + vp + envelope routing
+    // Structured per-turn scope summary: session + vp + members + envelope routing
     // info. Long-form scope content lives in AMS — this block carries
     // only IDs + tiny labels. (Feature scope retired 2026-05-13.)
     const activeScope = {
       sessionId: sessionId || '',
       vpId: ownVpIdForAms || '',
+      members: Array.isArray(sessionMembers) ? sessionMembers : [],
       envelope: inboundEnvelope || null,
     };
 

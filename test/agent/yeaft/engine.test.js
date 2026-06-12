@@ -880,6 +880,37 @@ describe('Engine', () => {
     });
   });
 
+  describe('active scope in system prompt', () => {
+    it('should render session id, VP id, and session members without group label', async () => {
+      mockAdapter.pushResponse([
+        { type: 'text_delta', text: 'ok' },
+        { type: 'stop', stopReason: 'end_turn' },
+      ]);
+
+      const engine = new Engine({
+        adapter: mockAdapter,
+        trace,
+        config: { model: 'test-model', maxOutputTokens: 1024, language: 'en' },
+      });
+
+      for await (const _event of engine.query({
+        prompt: 'test',
+        sessionId: 'session_active',
+        sessionMembers: ['vp-omni', 'vp-martin', 'vp-linus'],
+        vpPersona: { vpId: 'vp-linus', displayName: 'Linus' },
+      })) {
+        // consume
+      }
+
+      const call = mockAdapter.callLog[0];
+      expect(call.system).toContain('## active_scope');
+      expect(call.system).toContain('session: session_active');
+      expect(call.system).toContain('vp: vp-linus');
+      expect(call.system).toContain('members: vp-omni, vp-martin, vp-linus');
+      expect(call.system).not.toContain('group: session_active');
+    });
+  });
+
   describe('language in system prompt', () => {
     it('should use English system prompt by default', async () => {
       mockAdapter.pushResponse([

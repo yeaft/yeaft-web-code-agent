@@ -12,7 +12,7 @@
  * Plus the D1 bootstrap helper:
  *   ensureDefaultSessionIfEmpty(yeaftDir, {libDir}) — if NO session exists on
  *   disk, seed `session_default` with roster = every VP in the library, and
- *   defaultVpId = alphabetically first vpId. No-op when ≥1 group present.
+ *   defaultVpId = alphabetically first vpId. No-op when ≥1 session present.
  *
  * Hard constraints (PM):
  *   (a) We don't touch 334o storage primitives (storage/index.js) — we call
