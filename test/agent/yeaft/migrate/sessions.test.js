@@ -37,7 +37,7 @@ function seedDir(tmp) {
   // Seed memory dirs with segment files
   const memG = join(tmp, 'memory', 'group', 'grp_alpha', 'segments');
   mkdirSync(memG, { recursive: true });
-  writeFileSync(join(memG, 'seg1.md'), `---\nid: seg_aaaaaaaa\nscope: group/grp_alpha\nkind: fact\n---\nBody A\n`);
+  writeFileSync(join(memG, 'seg1.md'), `---\nid: seg_aaaaaaaa\nscope: session/grp_alpha\nkind: fact\n---\nBody A\n`);
   const memC = join(tmp, 'memory', 'chat', 'chat_beta', 'segments');
   mkdirSync(memC, { recursive: true });
   writeFileSync(join(memC, 'seg1.md'), `---\nid: seg_bbbbbbbb\nscope: chat/chat_beta\nkind: fact\n---\nBody B\n`);

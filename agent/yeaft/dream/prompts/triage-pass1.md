@@ -2,7 +2,7 @@ You are deciding whether a recent group conversation carries:
   - signals that should update the USER profile, and/or
   - signals that should update one or more TOPIC scopes.
 
-Do NOT mention vp/, group/, or feature/ scopes — those are handled by hard rules.
+Do NOT mention vp/, session/, or feature/ scopes — those are handled by hard rules.
 
 Session: {{sessionId}}
 

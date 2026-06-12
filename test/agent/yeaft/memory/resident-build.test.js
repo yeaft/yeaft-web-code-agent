@@ -24,13 +24,13 @@ describe('buildResidentEntries', () => {
     expect(buildResidentEntries({ summaries: {} })).toEqual([]);
   });
 
-  it('emits user + group + vp when all three are real summaries', () => {
+  it('emits user + session + vp when all three are real summaries', () => {
     const out = buildResidentEntries({
       sessionId: 'grp_claude',
       ownVpId: 'steve',
       summaries: {
         user: '# Operator notes',
-        group: '# Claude — 4 members',
+        session: '# Claude — 4 members',
         vp: REAL_VP_SUMMARY,
       },
     });
@@ -50,7 +50,7 @@ describe('buildResidentEntries', () => {
       ownVpId: 'steve',
       summaries: {
         user: '# Operator notes',
-        group: '# Claude — 4 members',
+        session: '# Claude — 4 members',
         vp: STUB_VP_SUMMARY,
       },
     });
@@ -59,23 +59,23 @@ describe('buildResidentEntries', () => {
     expect(out.map(e => e.scope)).toEqual(['user', 'sessions/grp_claude']);
   });
 
-  it('still emits user + group resident entries when the vp summary is a stub', () => {
+  it('still emits user + session resident entries when the vp summary is a stub', () => {
     // Regression guard: skipping vp must NOT short-circuit the other scopes.
     const out = buildResidentEntries({
       sessionId: 'grp_claude',
       ownVpId: 'steve',
       summaries: {
         user: 'u',
-        group: 'g',
+        session: 'g',
         vp: STUB_VP_SUMMARY,
       },
     });
     expect(out.length).toBe(2);
   });
 
-  it('omits group when sessionId is missing even if a group summary is present', () => {
+  it('omits session when sessionId is missing even if a session summary is present', () => {
     const out = buildResidentEntries({
-      summaries: { group: '# orphan' },
+      summaries: { session: '# orphan' },
     });
     expect(out).toEqual([]);
   });
@@ -112,12 +112,12 @@ describe('buildResidentEntries', () => {
     expect(out).toEqual([]);
   });
 
-  it('carries a real Dream group summary into the next system prompt memory block', () => {
+  it('carries a real Dream session summary into the next system prompt memory block', () => {
     const entries = buildResidentEntries({
       sessionId: 'grp_demo',
       ownVpId: 'linus',
       summaries: {
-        group: 'summary for sessions/grp_demo',
+        session: 'summary for sessions/grp_demo',
       },
     });
     const ams = new ActiveMemorySet({

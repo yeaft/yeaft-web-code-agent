@@ -719,7 +719,7 @@ export default {
     // silently let dream rot.
     const dreamStale = Vue.computed(() => {
       const groupId = dreamButtonGroupId.value;
-      const scope = groupId ? `group/${groupId}` : '*';
+      const scope = groupId ? `sessions/${groupId}` : '*';
       const debugLatest = store.yeaftDreamLatest?.[scope] || store.yeaftDreamLatest?.['*'] || null;
       const debugFinishedAt = debugLatest?.finishedAt || null;
       const t = dreamLastRunAt.value || debugFinishedAt;

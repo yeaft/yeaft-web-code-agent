@@ -525,12 +525,12 @@ export class DebugTrace {
       `).all(Math.max(dreamLim * 5, dreamLim));
       for (const er of eventRows) {
         const data = parseJsonSafe(er.event_data) || {};
-        const evtGroupId = typeof data.sessionId === 'string' && data.sessionId ? data.sessionId : null;
+        const evtSessionId = typeof data.sessionId === 'string' && data.sessionId ? data.sessionId : null;
         const target = typeof data.target === 'string' ? data.target : '';
         if (sessionId) {
-          const isBroadcast = !evtGroupId && !target;
-          const isThisGroup = evtGroupId === sessionId || target === `group/${sessionId}` || target === `session/${sessionId}`;
-          if (!isBroadcast && !isThisGroup) continue;
+          const isBroadcast = !evtSessionId && !target;
+          const isThisSession = evtSessionId === sessionId || target === `session/${sessionId}` || target === `sessions/${sessionId}`;
+          if (!isBroadcast && !isThisSession) continue;
         }
         dreamEvents.push({
           type: data.type || (er.event_type === 'dream_progress' ? 'dream_progress' : er.event_type),

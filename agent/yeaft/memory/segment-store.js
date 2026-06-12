@@ -8,8 +8,7 @@
  * Path conventions:
  *   ~/.yeaft/memory/user/memory.md
  *   ~/.yeaft/memory/vp/<id>/memory.md
- *   ~/.yeaft/memory/group/<id>/memory.md
- *   ~/.yeaft/memory/feature/<id>/memory.md
+ *  *   ~/.yeaft/memory/feature/<id>/memory.md
  *   ~/.yeaft/memory/topic/<l1>/memory.md
  *   ~/.yeaft/memory/topic/<l1>/<l2>/memory.md
  */

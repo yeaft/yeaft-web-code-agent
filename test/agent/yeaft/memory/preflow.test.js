@@ -51,16 +51,16 @@ describe('buildFtsQuery', () => {
 
 describe('filterScopes', () => {
   it('keeps non-vp scopes unchanged', () => {
-    const r = filterScopes(['user', 'group/g1', 'topic/lang'], 'alice');
-    expect(r).toEqual(['user', 'group/g1', 'topic/lang']);
+    const r = filterScopes(['user', 'session/g1', 'topic/lang'], 'alice');
+    expect(r).toEqual(['user', 'session/g1', 'topic/lang']);
   });
   it('keeps own vp', () => {
-    const r = filterScopes(['group/g1/vp/alice', 'group/g1/vp/bob'], 'alice');
-    expect(r).toEqual(['group/g1/vp/alice']);
+    const r = filterScopes(['session/g1/vp/alice', 'session/g1/vp/bob'], 'alice');
+    expect(r).toEqual(['session/g1/vp/alice']);
   });
   it('keeps all vp scopes when no ownVpId', () => {
-    const r = filterScopes(['group/g1/vp/alice', 'group/g1/vp/bob'], null);
-    expect(r).toEqual(['group/g1/vp/alice', 'group/g1/vp/bob']);
+    const r = filterScopes(['session/g1/vp/alice', 'session/g1/vp/bob'], null);
+    expect(r).toEqual(['session/g1/vp/alice', 'session/g1/vp/bob']);
   });
 });
 
@@ -121,14 +121,14 @@ describe('runPreflow end-to-end', () => {
   });
 
   it('filters foreign VP scopes', () => {
-    idx.upsert(makeSegment({ scope: 'group/g1/vp/alice', kind: 'fact', body: 'JWT alice' }));
-    idx.upsert(makeSegment({ scope: 'group/g1/vp/bob',   kind: 'fact', body: 'JWT bob' }));
+    idx.upsert(makeSegment({ scope: 'session/g1/vp/alice', kind: 'fact', body: 'JWT alice' }));
+    idx.upsert(makeSegment({ scope: 'session/g1/vp/bob',   kind: 'fact', body: 'JWT bob' }));
     const r = runPreflow(idx, {
       userMsg: 'jwt',
-      relevantScopes: ['group/g1/vp/alice', 'group/g1/vp/bob'],
+      relevantScopes: ['session/g1/vp/alice', 'session/g1/vp/bob'],
       ownVpId: 'alice',
     });
-    expect(r.picked.every(s => s.scope === 'group/g1/vp/alice')).toBe(true);
+    expect(r.picked.every(s => s.scope === 'session/g1/vp/alice')).toBe(true);
   });
 
   it('tag overlap reranks results', () => {

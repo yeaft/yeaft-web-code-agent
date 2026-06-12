@@ -285,7 +285,7 @@ describe('fix-vp-multi-thread bugfix guards', () => {
     try {
       const trace = new DebugTrace(dbPath);
       trace.logEvent({ traceId: 'dream-1', eventType: 'dream_progress', eventData: { phase: 'triage', sessionId: 'g1', ts: 100 } });
-      trace.logEvent({ traceId: 'dream-2', eventType: 'dream_progress', eventData: { phase: 'apply', target: 'group/g2', ts: 200 } });
+      trace.logEvent({ traceId: 'dream-2', eventType: 'dream_progress', eventData: { phase: 'apply', target: 'session/g2', ts: 200 } });
       trace.logEvent({ traceId: 'dream-3', eventType: 'dream_progress', eventData: { phase: 'done', ts: 300 } });
 
       const out = trace.fetchRecentDebugHistory({ sessionId: 'g1', dreamLimit: 5 });

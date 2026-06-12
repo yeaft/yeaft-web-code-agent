@@ -7,7 +7,7 @@
  * The flow per target:
  *   1. snapshot existing files into .dream-bak/<ts>/<scope>/
  *   2. if total content fits, run UPDATE (or CREATE) once
- *   3. if it doesn't, batch the sources by group (segment.batchSourcesForApply)
+ *   3. if it doesn't, batch the sources by session (segment.batchSourcesForApply)
  *      and chain the LLM calls — each batch's output becomes the next
  *      batch's `current memory.md`. The prompt threads "this is batch K
  *      of N" so the LLM doesn't think previous content was lost.
@@ -31,7 +31,7 @@ import { render } from './prompts/index.js';
 function applySystem(language) {
   return String(language || '').toLowerCase().startsWith('zh')
     ? '你是梦境流水线的 Apply 阶段。你会根据最近的群组对话重写单个 scope 的 memory.md 和 summary.md。请只回复严格 JSON，不要输出说明文字或 markdown fence。memory_md 和 summary_md 的自然语言内容必须使用中文；JSON key、scope、schema 字段和代码标识符保持英文。'
-    : 'You are the Apply stage of a dream pipeline. You rewrite a single scope\'s memory.md and summary.md based on recent group conversations. Reply with strict JSON only — no prose, no fences.';
+    : 'You are the Apply stage of a dream pipeline. You rewrite a single scope\'s memory.md and summary.md based on recent session conversations. Reply with strict JSON only — no prose, no fences.';
 }
 
 /**
@@ -99,7 +99,7 @@ function renderSourceBlocks(sources, language) {
   const out = [];
   for (const src of (sources || [])) {
     out.push('');
-    out.push(`[group/${src.sessionId}]`);
+    out.push(`[session/${src.sessionId}]`);
     for (const m of (src.diff || [])) {
       const head = `[${m.role || 'message'}${m.kind === 'overlap' ? (String(language || '').toLowerCase().startsWith('zh') ? '（已处理）' : ' (already processed)') : ''}]`;
       out.push(head);
@@ -110,37 +110,31 @@ function renderSourceBlocks(sources, language) {
 }
 
 /**
- * Translate `target` like 'group/g-eng' or 'topic/sci/phys' to a Scope
- * understood by store. Throws if the path is malformed.
+ * Translate `target` like 'session/s-eng' or 'session/s-eng/topic/sci/phys'
+ * to a Scope understood by store. Throws if the path is malformed.
  *
  * @param {string} target
- * @returns {{ kind: string, id?: string, path?: string[] }}
+ * @returns {{ kind: string, id?: string, sessionId?: string, path?: string[] }}
  */
 export function targetToScope(target) {
   if (!target || typeof target !== 'string') throw new Error('apply.targetToScope: target required');
   if (target === 'user') return { kind: 'user' };
   const segs = target.split('/').filter(Boolean);
-  // Legacy scopes — explicitly rejected. Old data lives under .legacy/.
-  if (segs[0] === 'vp' || segs[0] === 'feature' || segs[0] === 'topic') {
-    throw new Error(`apply.targetToScope: legacy root scope ${JSON.stringify(target)} rejected — use group/<g>/${segs[0]}/...`);
+  // Root VP / feature / topic scopes are intentionally not accepted. Dream
+  // updates for session conversations must be session-scoped.
+  if (segs[0] === 'vp' || segs[0] === 'feature' || segs[0] === 'topic' || segs[0] === 'group') {
+    throw new Error(`apply.targetToScope: deprecated scope ${JSON.stringify(target)} rejected — use session/<sessionId>/...`);
   }
-  if (segs[0] === 'group') {
-    if (segs.length === 2) return { kind: 'group', id: segs[1] };
-    // group/<g>/user
+  if (segs[0] === 'session') {
+    if (segs.length === 2) return { kind: 'session', id: segs[1] };
     if (segs.length === 3 && segs[2] === 'user') {
-      return { kind: 'group-user', sessionId: segs[1] };
+      return { kind: 'session-user', sessionId: segs[1] };
     }
-    // group/<g>/vp/<v>
     if (segs.length === 4 && segs[2] === 'vp') {
-      return { kind: 'group-vp', sessionId: segs[1], id: segs[3] };
+      return { kind: 'session-vp', sessionId: segs[1], id: segs[3] };
     }
-    // group/<g>/feature/<f>
-    if (segs.length === 4 && segs[2] === 'feature') {
-      return { kind: 'group-feature', sessionId: segs[1], id: segs[3] };
-    }
-    // group/<g>/topic/<l1>[/<l2>]
     if (segs[2] === 'topic' && (segs.length === 4 || segs.length === 5)) {
-      return { kind: 'group-topic', sessionId: segs[1], path: segs.slice(3) };
+      return { kind: 'session-topic', sessionId: segs[1], path: segs.slice(3) };
     }
   }
   if (segs[0] === 'chat') {
@@ -152,26 +146,6 @@ export function targetToScope(target) {
   throw new Error(`apply.targetToScope: malformed target ${JSON.stringify(target)}`);
 }
 
-/**
- * Run a single merged-target apply. Returns a record of what happened
- * for the runner's debug-panel feed.
- *
- * @param {{
- *   target: string,
- *   kind: 'update'|'create',
- *   sources: Array<{ sessionId: string, diff: any }>,
- * }} merged
- * @param {{
- *   root: string,
- *   ts: string,                    // shared timestamp folder
- *   llm: (req: { pass: string, prompt: string, system: string }) => Promise<string>,
- *   limits?: { MAX_APPLY_TOKENS?: number },
- *   snapshot?: typeof snapshotScope,
- *   nowIso?: () => string,
- *   onProgress?: (event: object) => void,
- *   siblingTopicsFor?: (target: string) => Promise<Array<{path:string, summary:string}>>,
- * }} opts
- */
 export async function applyMergedTarget(merged, opts) {
   if (!opts || !opts.root) throw new Error('apply.applyMergedTarget: opts.root required');
   if (!opts.llm) throw new Error('apply.applyMergedTarget: opts.llm required');
@@ -275,11 +249,10 @@ export async function applyMergedTarget(merged, opts) {
 function scopeRelDir(scope) {
   switch (scope.kind) {
     case 'user':          return 'user';
-    case 'group':         return `group/${scope.id}`;
-    case 'group-user':    return `group/${scope.sessionId}/user`;
-    case 'group-vp':      return `group/${scope.sessionId}/vp/${scope.id}`;
-    case 'group-feature': return `group/${scope.sessionId}/feature/${scope.id}`;
-    case 'group-topic':   return `group/${scope.sessionId}/topic/${scope.path.join('/')}`;
+    case 'session':       return `session/${scope.id}`;
+    case 'session-user':  return `session/${scope.sessionId}/user`;
+    case 'session-vp':    return `session/${scope.sessionId}/vp/${scope.id}`;
+    case 'session-topic': return `session/${scope.sessionId}/topic/${scope.path.join('/')}`;
     case 'chat':          return `chat/${scope.id}`;
     case 'chat-vp':       return `chat/${scope.chatId}/vp/${scope.id}`;
     default: throw new Error(`apply.scopeRelDir: unknown kind ${scope.kind}`);

@@ -42,12 +42,12 @@ import { join } from 'path';
 import { runDream } from './runner.js';
 import { createDreamScheduler } from './schedule.js';
 import { listSessions, openSession } from '../sessions/session-store.js';
-import { readGroupState } from './state.js';
+import { readSessionState } from './state.js';
 import { DREAM_NUDGE_AFTER_MESSAGES, DREAM_INTERVAL_HOURS } from './limits.js';
 
 /**
  * Build the per-call options for runDream. Pure: takes a session and returns
- * the closures runDream needs (listSessions, countMessages, loadGroupDiff, etc.).
+ * the closures runDream needs (listSessions, countMessages, loadSessionDiff, etc.).
  *
  * @param {Object} session  — the live Session object from loadSession()
  * @param {(event: object) => void} [onProgress]
@@ -63,7 +63,7 @@ export function buildRunDreamOpts(session, onProgress) {
     language: session.config?.language || 'en',
     llm: makeLlm(session),
     listSessions: async () => {
-      try { return listSessions(sessionsRoot).map(g => g.id); }
+      try { return listSessions(sessionsRoot).map(s => s.id); }
       catch { return []; }
     },
     countMessages: async (gid) => {
@@ -74,7 +74,7 @@ export function buildRunDreamOpts(session, onProgress) {
         return n;
       } catch { return 0; }
     },
-    loadGroupDiff: async (gid, sinceId) => {
+    loadSessionDiff: async (gid, sinceId) => {
       try {
         const h = openSession(sessionsRoot, gid);
         const out = [];
@@ -439,9 +439,9 @@ export function createV2DreamScheduler(session) {
 }
 
 /**
- * task-710: walk every group on disk, find the ones that have user messages
+ * task-710: walk every session on disk, find the ones that have user messages
  * but zero memory segments in the FTS index, and trigger an immediate dream
- * pass scoped to those groups. Used at session boot so a freshly opened
+ * pass scoped to those sessions. Used at session boot so a freshly opened
  * agent doesn't have to wait an hour (or for traffic to cross the nudge
  * threshold) before its first memory write.
  *
@@ -456,12 +456,12 @@ export async function bootInitEmptyGroups(args) {
   if (!args || !args.memoryIndex || !args.dreamScheduler) return out;
   const sessionsRoot = join(args.yeaftDir, 'sessions');
   let ids;
-  try { ids = listSessions(sessionsRoot).map(g => g.id); }
+  try { ids = listSessions(sessionsRoot).map(s => s.id); }
   catch { return out; }
   const empty = [];
   for (const gid of ids) {
     let segCount;
-    try { segCount = args.memoryIndex.listByScope(`group/${gid}`).length; }
+    try { segCount = args.memoryIndex.listByScope(`session/${gid}`).length; }
     catch { continue; }
     if (segCount > 0) continue;
     let hasMessages = false;
@@ -473,7 +473,7 @@ export async function bootInitEmptyGroups(args) {
       hasMessages = !first.done;
     } catch { continue; }
     if (!hasMessages) continue;
-    empty.push(`group/${gid}`);
+    empty.push(`session/${gid}`);
   }
   if (empty.length === 0) return out;
   if (args.config?.debug) {
@@ -489,7 +489,7 @@ export async function bootInitEmptyGroups(args) {
 /**
  * fix/dream-cadence-and-ui-trigger: stale-cadence catch-up.
  *
- * Walks every group on disk and reads the per-group `.dream-state`
+ * Walks every session on disk and reads the per-session `.dream-state`
  * `lastDreamAt`. The newest of those is the effective "session was last
  * cleanly Dream-processed at" timestamp. If that's older than
  * `DREAM_INTERVAL_HOURS` (or there's no record at all and at least one
@@ -526,7 +526,7 @@ export async function bootCatchUpStaleDream(args) {
   const now = args.now ?? Date.now();
 
   let sessionIds;
-  try { sessionIds = listSessions(sessionsRoot).map(g => g.id); }
+  try { sessionIds = listSessions(sessionsRoot).map(s => s.id); }
   catch { return out; }
 
   // Find the newest lastDreamAt across all groups.
@@ -534,7 +534,7 @@ export async function bootCatchUpStaleDream(args) {
   let anyTraffic = false;
   for (const gid of sessionIds) {
     let st;
-    try { st = await readGroupState(memoryRoot, gid); }
+    try { st = await readSessionState(memoryRoot, gid); }
     catch { continue; }
     if (st.lastDreamAt) {
       const t = Date.parse(st.lastDreamAt);

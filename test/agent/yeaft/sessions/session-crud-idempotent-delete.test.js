@@ -77,7 +77,7 @@ describe('deleteSession idempotency (orphan session fix)', () => {
     // createSessionFromSpec that picks the same id (legacy deterministic
     // ids like `grp_yeaft` are exactly this cohort) would inherit a stale
     // `summary.md` via `seedSummaryIfMissingSync`.
-    const memScope = join(yeaftDir, 'memory', 'group', 'grp_ghost');
+    const memScope = join(yeaftDir, 'memory', 'session', 'grp_ghost');
     mkdirSync(memScope, { recursive: true });
     writeFileSync(join(memScope, 'summary.md'), '# stale ghost summary\n');
 

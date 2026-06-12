@@ -46,7 +46,7 @@ function makeSession(dreamSchedulerOverrides = {}) {
     dreamScheduler: {
       triggerDreamForScopes: vi.fn(async () => ({
         startedAt: '2026-05-15T08:00:00.000Z',
-        targets: [{ target: 'group/g1', status: 'done' }],
+        targets: [{ target: 'session/g1', status: 'done' }],
       })),
       triggerDreamNow: vi.fn(async () => ({
         startedAt: '2026-05-15T08:00:00.000Z',
@@ -89,7 +89,7 @@ describe('dream_progress event routing', () => {
         session._dreamProgressSink({ phase: 'done', groups: 1, targets: 1, duration: 42 });
         return {
           startedAt: '2026-05-15T08:00:00.000Z',
-          targets: [{ target: 'group/g1', status: 'done' }],
+          targets: [{ target: 'session/g1', status: 'done' }],
         };
       }),
     });

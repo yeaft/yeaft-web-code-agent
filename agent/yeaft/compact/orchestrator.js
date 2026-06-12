@@ -106,7 +106,7 @@ export async function runCompact({ messages, keepHot = 10, hooks }) {
   // Track 2 — task summary refresh: removed. The legacy `feature/<id>` root
   // scope was dropped along with the Feature system (2026-05-13); under the
   // group-isolated layout feature summaries would live at
-  // `group/<g>/feature/<id>/` and are written by dream, not by post-turn
+  // `session/<id>/topic/...` and are written by dream, not by post-turn
   // compact. Engine no longer passes `taskId`/`root` to this orchestrator.
   const taskSummaryRefreshed = false;
 

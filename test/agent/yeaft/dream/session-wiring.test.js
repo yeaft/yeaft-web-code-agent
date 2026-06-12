@@ -34,7 +34,7 @@ describe('buildRunDreamOpts', () => {
     const opts = buildRunDreamOpts({ yeaftDir, adapter: {}, config: {} });
     expect(typeof opts.listSessions).toBe('function');
     expect(typeof opts.countMessages).toBe('function');
-    expect(typeof opts.loadGroupDiff).toBe('function');
+    expect(typeof opts.loadSessionDiff).toBe('function');
     expect(typeof opts.loadOverlapPreamble).toBe('function');
     expect(typeof opts.llm).toBe('function');
     expect(opts.root).toBe(join(yeaftDir, 'memory'));
@@ -50,9 +50,9 @@ describe('buildRunDreamOpts', () => {
     expect(await opts.countMessages('nope')).toBe(0);
   });
 
-  it('loadGroupDiff tolerates missing groups', async () => {
+  it('loadSessionDiff tolerates missing groups', async () => {
     const opts = buildRunDreamOpts({ yeaftDir, adapter: {}, config: {} });
-    expect(await opts.loadGroupDiff('missing', null)).toEqual([]);
+    expect(await opts.loadSessionDiff('missing', null)).toEqual([]);
   });
 });
 

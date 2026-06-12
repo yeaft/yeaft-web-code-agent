@@ -4,8 +4,8 @@
  * The handler accepts two call shapes:
  *
  *   { type: 'yeaft_dream_trigger', sessionId } — new in v0.1.754. Routes
- *     to `session.dreamScheduler.triggerDreamForScopes(['group/<id>'])`
- *     so unrelated groups aren't reprocessed. Status + result events
+ *     to `session.dreamScheduler.triggerDreamForScopes(['session/<id>'])`
+ *     so unrelated sessions aren't reprocessed. Status + result events
  *     are tagged with `sessionId`.
  *
  *   { type: 'yeaft_dream_trigger', vpId }    — legacy per-VP trigger.
@@ -43,14 +43,14 @@ function makeSession(overrides = {}) {
       triggerDreamForScopes: vi.fn(async () => ({
         startedAt: '2026-05-11T08:00:00.000Z',
         groups: [{ sessionId: 'g1', status: 'triaged', new: 1 }],
-        targets: [{ target: 'group/g1', status: 'done' }],
+        targets: [{ target: 'session/g1', status: 'done' }],
       })),
       triggerDreamNow: vi.fn(async () => ({
         startedAt: '2026-05-11T08:00:00.000Z',
         groups: [{ sessionId: 'g', status: 'triaged', new: 1 }],
         targets: [
           { target: 'user', status: 'done' },
-          { target: 'group/g', status: 'done' },
+          { target: 'session/g', status: 'done' },
         ],
       })),
       ...(overrides.dreamScheduler || {}),
@@ -69,14 +69,14 @@ beforeEach(() => {
 });
 
 describe('handleYeaftDreamTrigger — routing', () => {
-  it('sessionId path → triggerDreamForScopes(["group/<id>"]) + envelopes tagged with sessionId', async () => {
+  it('sessionId path → triggerDreamForScopes(["session/<id>"]) + envelopes tagged with sessionId', async () => {
     const session = makeSession();
     __testSetSession(session);
 
     await handleYeaftDreamTrigger({ type: 'yeaft_dream_trigger', sessionId: 'g1' });
 
     expect(session.dreamScheduler.triggerDreamForScopes).toHaveBeenCalledTimes(1);
-    expect(session.dreamScheduler.triggerDreamForScopes).toHaveBeenCalledWith(['group/g1']);
+    expect(session.dreamScheduler.triggerDreamForScopes).toHaveBeenCalledWith(['session/g1']);
     expect(session.dreamScheduler.triggerDreamNow).not.toHaveBeenCalled();
 
     const status = find('yeaft_dream_status');
@@ -144,13 +144,13 @@ describe('handleYeaftDreamTrigger — routing', () => {
     const normalized = normalizeDreamResult({
       startedAt: '2026-05-11T08:00:00.000Z',
       groups: [{ sessionId: 'g1', status: 'triaged' }],
-      targets: [{ target: 'group/g1', status: 'error', error: 'bad json' }],
+      targets: [{ target: 'session/g1', status: 'error', error: 'bad json' }],
     });
     expect(normalized.success).toBe(false);
     expect(normalized.skipped).toBe(false);
     expect(normalized.groupsProcessed).toBe(1);
     expect(normalized.targetsApplied).toBe(0);
-    expect(normalized.targetErrors).toEqual([{ target: 'group/g1', error: 'bad json' }]);
+    expect(normalized.targetErrors).toEqual([{ target: 'session/g1', error: 'bad json' }]);
     expect(normalized.error).toBe('bad json');
   });
 
@@ -186,7 +186,7 @@ describe('handleYeaftDreamTrigger — routing', () => {
 
     await handleYeaftDreamTrigger({ sessionId: 'g1', vpId: 'steve' });
 
-    expect(session.dreamScheduler.triggerDreamForScopes).toHaveBeenCalledWith(['group/g1']);
+    expect(session.dreamScheduler.triggerDreamForScopes).toHaveBeenCalledWith(['session/g1']);
     expect(session.dreamScheduler.triggerDreamNow).not.toHaveBeenCalled();
 
     const result = find('yeaft_dream_result');

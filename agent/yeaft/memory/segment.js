@@ -51,7 +51,7 @@ export const KIND_VALUES = new Set([
   'fact', 'preference', 'decision', 'lesson', 'relation', 'goal', 'context',
 ]);
 
-const SCOPE_RE = /^(user|group\/[\w-]+(?:\/(?:user|vp\/[\w-]+|feature\/[\w-]+|topic\/[\w-]+(?:\/[\w-]+)?))?|chat\/[\w-]+(?:\/vp\/[\w-]+)?|session\/[\w-]+(?:\/vp\/[\w-]+)?)$/;
+const SCOPE_RE = /^(user|chat\/[\w-]+(?:\/vp\/[\w-]+)?|session\/[\w-]+(?:\/(?:user|vp\/[\w-]+|topic\/[\w-]+(?:\/[\w-]+)?))?)$/;
 
 /**
  * Compute a stable id from segment content. Same body + scope + kind →

@@ -47,17 +47,14 @@ describe('buildRelevantScopes', () => {
   it('always includes user scope', () => {
     expect(buildRelevantScopes({})).toEqual(['user']);
   });
-  it('orders user → group → group-user → group-vp', () => {
+  it('orders user → session → session-user → session-vp', () => {
     expect(
       buildRelevantScopes({ sessionId: 'g1', vpId: 'alice' }),
     ).toEqual([
       'user',
       'session/g1',
       'session/g1/user',
-      'group/g1',
-      'group/g1/user',
       'session/g1/vp/alice',
-      'group/g1/vp/alice',
     ]);
   });
   it('appends extra scopes once', () => {
@@ -67,8 +64,6 @@ describe('buildRelevantScopes', () => {
       'user',
       'session/g1',
       'session/g1/user',
-      'group/g1',
-      'group/g1/user',
       'session/g1/topic/x',
     ]);
   });

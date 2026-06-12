@@ -111,7 +111,7 @@ export function __testSetThreadClassifier(fn) {
  * result is the honest answer; the user can re-click after A settles.
  * @type {Set<string>}
  */
-const inflightScopedDreamGroups = new Set();
+const inflightScopedDreamSessions = new Set();
 
 async function sendDreamSnapshotForSession(sessionId, extra = {}) {
   const snapshot = await buildDreamOutputSnapshot(session, sessionId);
@@ -3506,12 +3506,12 @@ export function __testAppendTurnToSessionHistory(...args) {
  *     VP-detail page button). Fires an unscoped dream pass; the result
  *     event is tagged with `vpId` so the per-VP store row updates.
  *
- *   { type: 'yeaft_dream_trigger', sessionId }  — per-GROUP trigger (new
- *     in v0.1.754 — added so users can manually kick dream for a group
+ *   { type: 'yeaft_dream_trigger', sessionId }  — per-session trigger (new
+ *     in v0.1.754 — added so users can manually kick dream for a session
  *     after seeing the Resident layer stuck on the bootstrap seed).
- *     Fires a scope-filtered pass via `triggerDreamForScopes(['group/X'])`
- *     so unrelated groups don't get processed; the result event is
- *     tagged with `sessionId` for the per-group UI row.
+ *     Fires a scope-filtered pass via `triggerDreamForScopes(['session/X'])`
+ *     so unrelated sessions don't get processed; the result event is
+ *     tagged with `sessionId` for the per-session UI row.
  *
  * Backwards-compat: when neither field is set, defaults to `vpId='default'`
  * which matches the pre-v0.1.754 behavior.
@@ -3561,7 +3561,7 @@ export async function handleYeaftDreamTrigger(msg = {}) {
   // Resolve tag up-front so EVERY outbound envelope (including the
   // scheduler-uninitialised early-return below) carries `sessionId` /
   // `vpId`. Without this the frontend's `applyDreamResult` couldn't
-  // route the error event back to the right row and the per-group
+  // route the error event back to the right row and the per-session
   // "Run dream now" button would stay stuck on "Running…" forever
   // (review feedback from PR #757).
   const sessionId = typeof msg.sessionId === 'string' && msg.sessionId ? msg.sessionId : null;
@@ -3579,18 +3579,18 @@ export async function handleYeaftDreamTrigger(msg = {}) {
   }
 
   // Concurrent-trigger guard for scoped runs. Two scoped clicks (same
-  // group or different) overlapping the same inflight pass used to set
+  // session or different) overlapping the same inflight pass used to set
   // the module-level sessionId slot, race the sink wrapping, and let the
   // second `finally` restore the original sink while the first run was
   // still emitting events. We now refuse scoped triggers while ANY dream
   // pass is already running: a scoped manual click during an unscoped
-  // auto run must not install `_dreamActiveGroupId` or wrap the sink,
+  // auto run must not install `_dreamActiveSessionId` or wrap the sink,
   // otherwise auto-run events can be persisted under the clicked group.
   // The scheduler also short-circuits the underlying run for same-group,
   // and a different group's filter would have been silently dropped
   // anyway (see dream/schedule.js inflight reuse), so the user-facing
   // semantics are unchanged ("you already asked").
-  if (sessionId && (inflightScopedDreamGroups.size > 0 || session.dreamScheduler.isRunning)) {
+  if (sessionId && (inflightScopedDreamSessions.size > 0 || session.dreamScheduler.isRunning)) {
     const skippedResult = {
       skipped: true,
       skippedReason: 'already-running',
@@ -3613,9 +3613,9 @@ export async function handleYeaftDreamTrigger(msg = {}) {
   // OTHER sessionIds chain (last-installed wins) but each restoration
   // unwinds back to its predecessor.
   const originalSink = session?._dreamProgressSink;
-  if (sessionId) session._dreamActiveGroupId = sessionId;
+  if (sessionId) session._dreamActiveSessionId = sessionId;
   if (sessionId && typeof originalSink === 'function') {
-    inflightScopedDreamGroups.add(sessionId);
+    inflightScopedDreamSessions.add(sessionId);
     session._dreamProgressSink = (evt) => {
       try {
         const stamped = evt && evt.sessionId
@@ -3634,7 +3634,7 @@ export async function handleYeaftDreamTrigger(msg = {}) {
     });
 
     const result = sessionId
-      ? await session.dreamScheduler.triggerDreamForScopes([`group/${sessionId}`])
+      ? await session.dreamScheduler.triggerDreamForScopes([`session/${sessionId}`])
       : await session.dreamScheduler.triggerDreamNow();
 
     const normalized = normalizeDreamResult(result);
@@ -3673,11 +3673,11 @@ export async function handleYeaftDreamTrigger(msg = {}) {
       ...normalizeDreamResult({ error }),
     });
   } finally {
-    // Restore the original sink and release the per-group inflight lock.
-    if (sessionId && session?._dreamActiveGroupId === sessionId) session._dreamActiveGroupId = null;
+    // Restore the original sink and release the per-session inflight lock.
+    if (sessionId && session?._dreamActiveSessionId === sessionId) session._dreamActiveSessionId = null;
     if (sessionId && typeof originalSink === 'function') {
       session._dreamProgressSink = originalSink;
-      inflightScopedDreamGroups.delete(sessionId);
+      inflightScopedDreamSessions.delete(sessionId);
     }
   }
 }

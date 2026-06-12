@@ -2,7 +2,7 @@
  * dream-progress-handler.test.js — v0.1.755 Issue A regression.
  *
  * YeaftDebugPanel needs a single most-recent dream-pass row for the
- * active group's scope ("dream只需要看最新的一次就行"). The chat-store
+ * active session's scope ("dream只需要看最新的一次就行"). The chat-store
  * `handleYeaftOutput` switch case `'dream_progress'` is the projection
  * point: each inbound progress event is reduced into
  * `state.yeaftDreamLatest[scope]` as a single record with
@@ -10,8 +10,8 @@
  *    manual, durationMs, isRunning }`.
  *
  * What this file pins:
- *   1. Per-target events (`target: 'group/...'`) route to that scope.
- *   2. Per-session events (only `sessionId`) route to `group/<id>`.
+ *   1. Per-target events (`target: 'session/...'`) route to that scope.
+ *   2. Per-session events (only `sessionId`) route to `sessions/<id>`.
  *   3. Top-level events (no target / no sessionId) land in the '*'
  *      broadcast bucket AND are mirrored onto every existing scope.
  *   4. Phase transitions:
@@ -81,12 +81,12 @@ describe('handleYeaftOutput — dream_progress projection', () => {
     send(store, {
       type: 'dream_progress',
       phase: 'merge',
-      target: 'group/grp_demo',
+      target: 'session/grp_demo',
       ts: 1000,
     });
-    expect(Object.keys(store.yeaftDreamLatest)).toEqual(['group/grp_demo']);
-    const entry = store.yeaftDreamLatest['group/grp_demo'];
-    expect(entry.scope).toBe('group/grp_demo');
+    expect(Object.keys(store.yeaftDreamLatest)).toEqual(['sessions/grp_demo']);
+    const entry = store.yeaftDreamLatest['sessions/grp_demo'];
+    expect(entry.scope).toBe('sessions/grp_demo');
     expect(entry.status).toBe('running');
     expect(entry.phase).toBe('merge');
     expect(entry.startedAt).toBe(1000);
@@ -94,7 +94,7 @@ describe('handleYeaftOutput — dream_progress projection', () => {
     expect(entry.isRunning).toBe(true);
   });
 
-  it('routes per-session events (sessionId only) into group/<id>', () => {
+  it('routes per-session events (sessionId only) into sessions/<id>', () => {
     const store = mkStore();
     send(store, {
       type: 'dream_progress',
@@ -102,9 +102,9 @@ describe('handleYeaftOutput — dream_progress projection', () => {
       sessionId: 'grp_x',
       ts: 2000,
     });
-    expect(store.yeaftDreamLatest['group/grp_x']).toBeDefined();
-    expect(store.yeaftDreamLatest['group/grp_x'].scope).toBe('group/grp_x');
-    expect(store.yeaftDreamLatest['group/grp_x'].status).toBe('running');
+    expect(store.yeaftDreamLatest['sessions/grp_x']).toBeDefined();
+    expect(store.yeaftDreamLatest['sessions/grp_x'].scope).toBe('sessions/grp_x');
+    expect(store.yeaftDreamLatest['sessions/grp_x'].status).toBe('running');
   });
 
   it('top-level events (no target/sessionId) land in "*" bucket', () => {
@@ -122,15 +122,15 @@ describe('handleYeaftOutput — dream_progress projection', () => {
   it('top-level events mirror onto every existing scope', () => {
     const store = mkStore();
     // Prime two scopes with running entries.
-    send(store, { type: 'dream_progress', phase: 'triage', target: 'group/g1', ts: 100 });
-    send(store, { type: 'dream_progress', phase: 'triage', target: 'vp/v1', ts: 110 });
+    send(store, { type: 'dream_progress', phase: 'triage', target: 'session/g1', ts: 100 });
+    send(store, { type: 'dream_progress', phase: 'triage', target: 'session/g2', ts: 110 });
     // Now a top-level "done" event arrives.
     send(store, { type: 'dream_progress', phase: 'done', ts: 200 });
     // Both prior scopes plus '*' bucket all reflect done.
     expect(store.yeaftDreamLatest['*'].status).toBe('success');
-    expect(store.yeaftDreamLatest['group/g1'].status).toBe('success');
-    expect(store.yeaftDreamLatest['vp/v1'].status).toBe('success');
-    expect(store.yeaftDreamLatest['group/g1'].finishedAt).toBe(200);
+    expect(store.yeaftDreamLatest['sessions/g1'].status).toBe('success');
+    expect(store.yeaftDreamLatest['sessions/g2'].status).toBe('success');
+    expect(store.yeaftDreamLatest['sessions/g1'].finishedAt).toBe(200);
   });
 
   it('phase=done flips status to success and stamps finishedAt', () => {
@@ -138,17 +138,17 @@ describe('handleYeaftOutput — dream_progress projection', () => {
     send(store, {
       type: 'dream_progress',
       phase: 'merge',
-      target: 'group/grp_demo',
+      target: 'session/grp_demo',
       ts: 1000,
     });
     send(store, {
       type: 'dream_progress',
       phase: 'done',
-      target: 'group/grp_demo',
+      target: 'session/grp_demo',
       ts: 1500,
       mergedCount: 3,
     });
-    const entry = store.yeaftDreamLatest['group/grp_demo'];
+    const entry = store.yeaftDreamLatest['sessions/grp_demo'];
     expect(entry.status).toBe('success');
     expect(entry.phase).toBe('done');
     expect(entry.finishedAt).toBe(1500);
@@ -161,17 +161,17 @@ describe('handleYeaftOutput — dream_progress projection', () => {
     send(store, {
       type: 'dream_progress',
       phase: 'triage',
-      target: 'group/grp_demo',
+      target: 'session/grp_demo',
       ts: 500,
     });
     send(store, {
       type: 'dream_progress',
       phase: 'merge',
-      target: 'group/grp_demo',
+      target: 'session/grp_demo',
       ts: 700,
     });
-    expect(store.yeaftDreamLatest['group/grp_demo'].startedAt).toBe(500);
-    expect(store.yeaftDreamLatest['group/grp_demo'].phase).toBe('merge');
+    expect(store.yeaftDreamLatest['sessions/grp_demo'].startedAt).toBe(500);
+    expect(store.yeaftDreamLatest['sessions/grp_demo'].phase).toBe('merge');
   });
 
   it('phase=error sets status=error + carries error message', () => {
@@ -179,11 +179,11 @@ describe('handleYeaftOutput — dream_progress projection', () => {
     send(store, {
       type: 'dream_progress',
       phase: 'error',
-      target: 'group/grp_demo',
+      target: 'session/grp_demo',
       ts: 800,
       error: 'fts segment write failed',
     });
-    const entry = store.yeaftDreamLatest['group/grp_demo'];
+    const entry = store.yeaftDreamLatest['sessions/grp_demo'];
     expect(entry.status).toBe('error');
     expect(entry.error).toBe('fts segment write failed');
     expect(entry.finishedAt).toBe(800);
@@ -196,12 +196,12 @@ describe('handleYeaftOutput — dream_progress projection', () => {
       type: 'dream_progress',
       phase: 'merge',
       status: 'error',
-      target: 'group/grp_demo',
+      target: 'session/grp_demo',
       ts: 900,
       error: 'boom',
     });
-    expect(store.yeaftDreamLatest['group/grp_demo'].status).toBe('error');
-    expect(store.yeaftDreamLatest['group/grp_demo'].error).toBe('boom');
+    expect(store.yeaftDreamLatest['sessions/grp_demo'].status).toBe('error');
+    expect(store.yeaftDreamLatest['sessions/grp_demo'].error).toBe('boom');
   });
 
   it('manual flag from a running event survives to the done event', () => {
@@ -209,7 +209,7 @@ describe('handleYeaftOutput — dream_progress projection', () => {
     send(store, {
       type: 'dream_progress',
       phase: 'triage',
-      target: 'group/grp_demo',
+      target: 'session/grp_demo',
       manual: true,
       ts: 100,
     });
@@ -218,10 +218,10 @@ describe('handleYeaftOutput — dream_progress projection', () => {
     send(store, {
       type: 'dream_progress',
       phase: 'done',
-      target: 'group/grp_demo',
+      target: 'session/grp_demo',
       ts: 200,
     });
-    expect(store.yeaftDreamLatest['group/grp_demo'].manual).toBe(true);
+    expect(store.yeaftDreamLatest['sessions/grp_demo'].manual).toBe(true);
   });
 
   it('manual=false is preserved when later events omit the flag', () => {
@@ -229,17 +229,17 @@ describe('handleYeaftOutput — dream_progress projection', () => {
     send(store, {
       type: 'dream_progress',
       phase: 'triage',
-      target: 'group/grp_demo',
+      target: 'session/grp_demo',
       manual: false,
       ts: 100,
     });
     send(store, {
       type: 'dream_progress',
       phase: 'done',
-      target: 'group/grp_demo',
+      target: 'session/grp_demo',
       ts: 200,
     });
-    expect(store.yeaftDreamLatest['group/grp_demo'].manual).toBe(false);
+    expect(store.yeaftDreamLatest['sessions/grp_demo'].manual).toBe(false);
   });
 
   it('durationMs from event.duration is captured on done', () => {
@@ -247,11 +247,11 @@ describe('handleYeaftOutput — dream_progress projection', () => {
     send(store, {
       type: 'dream_progress',
       phase: 'done',
-      target: 'group/grp_demo',
+      target: 'session/grp_demo',
       duration: 1234,
       ts: 1000,
     });
-    expect(store.yeaftDreamLatest['group/grp_demo'].durationMs).toBe(1234);
+    expect(store.yeaftDreamLatest['sessions/grp_demo'].durationMs).toBe(1234);
   });
 
   it('mergedCount falls back to event.targets when mergedCount absent', () => {
@@ -259,10 +259,10 @@ describe('handleYeaftOutput — dream_progress projection', () => {
     send(store, {
       type: 'dream_progress',
       phase: 'merge',
-      target: 'group/grp_demo',
+      target: 'session/grp_demo',
       targets: 5,
       ts: 100,
     });
-    expect(store.yeaftDreamLatest['group/grp_demo'].mergedCount).toBe(5);
+    expect(store.yeaftDreamLatest['sessions/grp_demo'].mergedCount).toBe(5);
   });
 });

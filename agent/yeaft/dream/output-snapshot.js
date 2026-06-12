@@ -10,7 +10,7 @@
 import { join } from 'node:path';
 
 import { readMemory, readSummary } from '../memory/store.js';
-import { readGroupState } from './state.js';
+import { readSessionState } from './state.js';
 
 export const DREAM_SNAPSHOT_TEXT_LIMIT = 6000;
 
@@ -30,15 +30,14 @@ export function truncateDreamText(value, limit = DREAM_SNAPSHOT_TEXT_LIMIT) {
 export async function buildDreamOutputSnapshot(sessionLike, sessionId) {
   if (!sessionId || !sessionLike?.yeaftDir) return null;
   const scope = `sessions/${sessionId}`;
-  // Disk compatibility: Dream currently writes session summaries through
-  // the historical kind:'group' store path. The snapshot's public scope label
-  // is still sessions/<id>.
-  const memoryScope = { kind: 'group', id: sessionId };
+  // Dream session summaries live under memory/session/<id>; the UI-facing
+  // label is the plural product scope `sessions/<id>`.
+  const memoryScope = { kind: 'session', id: sessionId };
   const root = join(sessionLike.yeaftDir, 'memory');
   const [memoryRaw, summaryRaw, state] = await Promise.all([
     readMemory(memoryScope, { root }).catch(() => ''),
     readSummary(memoryScope, { root }).catch(() => ''),
-    readGroupState(root, sessionId).catch(() => ({
+    readSessionState(root, sessionId).catch(() => ({
       lastDreamMessageId: null,
       lastDreamAt: null,
       messageCount: 0,

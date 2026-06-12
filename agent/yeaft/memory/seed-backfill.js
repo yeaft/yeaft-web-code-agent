@@ -4,9 +4,9 @@
  * Earlier versions of this module shipped `backfillVpSummaries` /
  * `migrateLegacyVpSummaries` / `backfillGroupSummaries` / `runSummaryBackfill`
  * that wrote files into BARE `<root>/vp/<id>/summary.md` and
- * `<root>/group/<id>/summary.md` paths. Those paths are not the layout the
+ * `<root>/session/<id>/summary.md` paths. Those paths are not the layout the
  * Engine actually reads: `engine.#loadLayerASummaries` looks under
- * `group/<sessionId>/vp/<id>/summary.md` (kind: 'group-vp'). The backfill
+ * `session/<sessionId>/vp/<id>/summary.md` (kind: 'session-vp'). The backfill
  * helpers were therefore writing **orphan files** that nothing ever read.
  *
  * Per user directive (2026-06-09 — "VP per-session isolation + clean up the
@@ -51,7 +51,7 @@ export const VP_STUB_MARKER = '<!-- seed-backfill:vp-stub v1 -->';
  * (i.e. carries the marker comment). Whitespace-tolerant.
  *
  * Used by `engine.#prepareAms` (via `buildResidentEntries`) to decide
- * whether to surface the `group/<sessionId>/vp/<ownVpId>` summary as a
+ * whether to surface the `session/<sessionId>/vp/<ownVpId>` summary as a
  * Resident AMS entry. Stubs are skipped so Section 1 (`renderVpPersona`)
  * is the sole rendering of own-VP identity; Dream-v2's eventual real
  * summary will lack the marker and be surfaced normally.
@@ -68,7 +68,7 @@ export function isVpSeedBackfillStub(text) {
  * archiveLegacyScopes(root) — one-shot migration for the group-isolated
  * memory refactor. The legacy flat layout had `vp/<id>/`, `feature/<id>/`,
  * and `topic/<l1>[/<l2>]/` directories at the memory root; the current
- * layout tucks each into `group/<g>/{vp,feature,topic}/...`. Per user
+ * layout tucks each into `session/<id>/{vp,topic}/...`. Per user
  * directive "硬切，老的就不要了" — we do NOT migrate per-record, we just
  * move the top-level dirs to `<root>/.legacy/<kind>/` once. They are never
  * read again; this is forensics-only.

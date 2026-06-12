@@ -4,10 +4,10 @@
  * Boundary regression for Compact (history) vs Dream (memory). Locks the
  * 3-case minimum from `agent/yeaft/DESIGN-COMPACT-VS-DREAM.md`:
  *
- *   A. Compact writes ONLY to `<yeaftDir>/groups/<sid>/conversation/compact/`
+ *   A. Compact writes ONLY to `<yeaftDir>/sessions/<sid>/conversation/compact/`
  *      — `<yeaftDir>/memory/...` MUST be untouched.
  *   B. Dream writes ONLY to `<memoryRoot>/<scope>/{memory,summary}.md`
- *      — `<yeaftDir>/groups/<sid>/conversation/compact/...` MUST be untouched.
+ *      — `<yeaftDir>/sessions/<sid>/conversation/compact/...` MUST be untouched.
  *   C. With both produced, the engine surfaces:
  *        - dream output → system prompt §6 (via AMS Resident)
  *        - compact output → messages[] head as <conversation_summary>
@@ -73,16 +73,16 @@ describe('Compact ↔ Dream boundary (storage)', () => {
   });
 
   // ─── Case A ─────────────────────────────────────────────────────
-  it('A — compact write lands ONLY under groups/<sid>/conversation/compact/, not under memory/', async () => {
+  it('A — compact write lands ONLY under sessions/<sid>/conversation/compact/, not under memory/', async () => {
     // Pre-seed a dream-style memory.md so we can detect any accidental
     // overwrite by the compact path.
-    const groupScope = { kind: 'group', id: sessionId };
-    const vpScope = { kind: 'group-vp', sessionId, id: vpId };
-    await writeMemory(groupScope, '## dream baseline\n', { root: memoryRoot });
+    const sessionScope = { kind: 'session', id: sessionId };
+    const vpScope = { kind: 'session-vp', sessionId, id: vpId };
+    await writeMemory(sessionScope, '## dream baseline\n', { root: memoryRoot });
     await writeSummary(vpScope, 'baseline summary', { root: memoryRoot });
 
-    const memoryFile = join(memoryRoot, 'group', sessionId, 'memory.md');
-    const summaryFile = join(memoryRoot, 'group', sessionId, 'vp', vpId, 'summary.md');
+    const memoryFile = join(memoryRoot, 'session', sessionId, 'memory.md');
+    const summaryFile = join(memoryRoot, 'session', sessionId, 'vp', vpId, 'summary.md');
     const memBefore = mtimeOrNull(memoryFile);
     const sumBefore = mtimeOrNull(summaryFile);
     expect(memBefore).not.toBeNull();
@@ -117,7 +117,7 @@ describe('Compact ↔ Dream boundary (storage)', () => {
   });
 
   // ─── Case B ─────────────────────────────────────────────────────
-  it('B — dream write lands ONLY under memory/<scope>/, not under groups/<sid>/conversation/', async () => {
+  it('B — dream write lands ONLY under memory/<scope>/, not under sessions/<sid>/conversation/', async () => {
     // Pre-seed a compact summary so we can detect any accidental overwrite
     // by the dream path.
     store.replaceCompactSummaryFor(sessionId, vpId, 'COMPACT baseline\n');
@@ -130,13 +130,13 @@ describe('Compact ↔ Dream boundary (storage)', () => {
 
     // Dream's only writes — exactly what `dream/apply.js` invokes when
     // it commits a memory rewrite for a (group, vp) scope.
-    const vpScope = { kind: 'group-vp', sessionId, id: vpId };
+    const vpScope = { kind: 'session-vp', sessionId, id: vpId };
     await writeMemory(vpScope, '## DREAM produced memory\n- fact 1\n', { root: memoryRoot });
     await writeSummary(vpScope, 'dream produced summary', { root: memoryRoot });
 
     // 1) Dream landed in the right place.
-    const memFile = join(memoryRoot, 'group', sessionId, 'vp', vpId, 'memory.md');
-    const sumFile = join(memoryRoot, 'group', sessionId, 'vp', vpId, 'summary.md');
+    const memFile = join(memoryRoot, 'session', sessionId, 'vp', vpId, 'memory.md');
+    const sumFile = join(memoryRoot, 'session', sessionId, 'vp', vpId, 'summary.md');
     expect(readFileSync(memFile, 'utf8')).toContain('DREAM produced memory');
     expect(readFileSync(sumFile, 'utf8')).toContain('dream produced summary');
 

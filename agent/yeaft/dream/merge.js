@@ -3,9 +3,9 @@
  *
  * Pure-code stage between Triage and Apply.
  *
- * Triage emits per-group action lists; the runner needs to flip that
+ * Triage emits per-session action lists; the runner needs to flip that
  * into a per-target source list so Apply runs once per target rather
- * than once per (group × target) pair. (User scope in particular would
+ * than once per (session × target) pair. (User scope in particular would
  * be rewritten dozens of times if we didn't merge.)
  *
  * Input shape (one entry per group that crossed the newCount threshold):
@@ -13,10 +13,10 @@
  *   [
  *     {
  *       sessionId: 'g-eng',
- *       diff: [<message>, ...],            // the per-group source diff
+ *       diff: [<message>, ...],            // the per-session source diff
  *                                          // (already truncated/segmented if needed)
  *       actions: [
- *         { kind: 'update', scope: 'group/g-eng' },
+ *         { kind: 'update', scope: 'session/s-eng' },
  *         { kind: 'update', scope: 'vp/zhang-san' },
  *         { kind: 'update', scope: 'user' },
  *         { kind: 'create', scope: 'topic/life/parenting' },
@@ -73,7 +73,7 @@ export function mergeByTarget(groupTriages) {
       // 'update' wins: any contributing group that already considers
       // the scope existing means we treat the apply as an update.
       if (k === 'update') entry.kind = 'update';
-      // Avoid duplicate (target, group) pairs — should never happen
+      // Avoid duplicate (target, session) pairs — should never happen
       // in normal triage but be defensive.
       if (!entry.sources.some(s => s.sessionId === sessionId)) {
         entry.sources.push({ sessionId, diff });

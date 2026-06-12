@@ -41,13 +41,14 @@ const FILES = {
 export function extractTemplateForScope(scope) {
   if (!scope || typeof scope !== 'string') return 'extractTopic';
   if (scope === 'user') return 'extractUser';
-  // Nested group-isolated scopes must be matched BEFORE the bare `group/<g>`
-  // branch so VPs/topics/features under a group don't get the group template.
-  if (/^group\/[^/]+\/vp\//.test(scope)) return 'extractVp';
-  if (/^group\/[^/]+\/topic\//.test(scope)) return 'extractTopic';
-  if (/^group\/[^/]+\/user(?:\/|$)/.test(scope)) return 'extractUser';
-  if (scope.startsWith('group/')) return 'extractSession';
-  // Chat-isolated scopes: same template family as groups.
+  // Nested session-isolated scopes must be matched BEFORE the bare
+  // `session/<id>` branch so VPs/topics under a session don't get the
+  // session template.
+  if (/^session\/[^/]+\/vp\//.test(scope)) return 'extractVp';
+  if (/^session\/[^/]+\/topic\//.test(scope)) return 'extractTopic';
+  if (/^session\/[^/]+\/user(?:\/|$)/.test(scope)) return 'extractUser';
+  if (scope.startsWith('session/')) return 'extractSession';
+  // Chat-isolated scopes: same template family as sessions.
   if (/^chat\/[^/]+\/vp\//.test(scope)) return 'extractVp';
   if (scope.startsWith('chat/')) return 'extractSession';
   // Legacy top-level vp/topic scopes (archived to .legacy/ on boot — kept

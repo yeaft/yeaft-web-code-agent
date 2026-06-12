@@ -1,11 +1,11 @@
 /**
  * dream/triage.js.
  *
- * Decide, for one group's diff, which scopes should be touched by Apply.
+ * Decide, for one session's diff, which scopes should be touched by Apply.
  * The decision is two-staged on purpose:
  *
  *   1. **Hard rules** (this module, no LLM): everything we can determine
- *      from message metadata. Always include the active group, every VP
+ *      from message metadata. Always include the active session, every VP
  *      that spoke as an assistant in the diff, and `user` (so painted-over
  *      user-profile signals can't be missed). (Feature scope was dropped
  *      2026-05-13 along with the rest of the Feature system.)
@@ -17,7 +17,7 @@
  *                              it to an exact existing path or propose
  *                              a new ≤2-level path.
  *
- *      VP / group are deliberately NOT asked of the LLM — Hard Rules
+ *      VP / session are deliberately NOT asked of the LLM — Hard Rules
  *      already cover them, and giving the LLM a chance to drop a
  *      structurally-required scope would weaken the contract.
  *
@@ -42,7 +42,7 @@ import { render } from './prompts/index.js';
 function triageSystem(language) {
   return String(language || '').toLowerCase().startsWith('zh')
     ? '你是梦境流水线的 Triage 阶段，负责判断最近的群组对话会影响哪些 scope。请只回复严格 JSON，不要输出说明文字或 markdown fence。自然语言内容使用中文；JSON key、scope 和枚举值保持英文。'
-    : 'You are the Triage stage of a dream pipeline that decides which scopes a recent group conversation should affect. Reply with strict JSON only — no prose, no markdown fences.';
+    : 'You are the Triage stage of a dream pipeline that decides which scopes a recent session conversation should affect. Reply with strict JSON only — no prose, no markdown fences.';
 }
 
 /**
@@ -50,8 +50,8 @@ function triageSystem(language) {
  * structure of the diff.
  *
  * Inputs:
- *   - sessionId: the active group ('_no-session' is allowed and skips the
- *     `group/<id>` entry — by convention the virtual group has no scope
+ *   - sessionId: the active session ('_no-session' is allowed and skips the
+ *     `session/<id>` entry — by convention the virtual session has no scope
  *     of its own).
  *   - messages: the diff (already overlap-prefixed if applicable).
  *
@@ -80,19 +80,19 @@ export function applyHardRules({ sessionId, chatId, messages }) {
     return Array.from(out.values());
   }
 
-  // active group + its per-group user layer, except the virtual _no-group bucket.
+  // active session + its per-session user layer, except the virtual _no-session bucket.
   if (sessionId && sessionId !== '_no-session') {
-    add(`group/${sessionId}`);
-    add(`group/${sessionId}/user`);
+    add(`session/${sessionId}`);
+    add(`session/${sessionId}/user`);
   }
 
   for (const m of (messages || [])) {
     if (!m || typeof m !== 'object') continue;
-    // Active VP: any assistant message's vpId — now group-internal.
+    // Active VP: any assistant message's vpId — now session-internal.
     if (m.role === 'assistant') {
       const vp = m.vpId || (m.author && /^vp:(.+)$/.exec(m.author)?.[1]);
       if (vp && /^[A-Za-z0-9_\-.一-鿿]+$/.test(vp) && sessionId && sessionId !== '_no-session') {
-        add(`group/${sessionId}/vp/${vp}`);
+        add(`session/${sessionId}/vp/${vp}`);
       }
     }
   }
@@ -181,8 +181,8 @@ export async function classifySoft({ sessionId, messages, topicSummaries, llm, l
     if (!path) continue;
     const segs = path.split('/').filter(Boolean);
     if (!sessionId || sessionId === '_no-session') continue;
-    if (!isValidTopic({ kind: 'group-topic', sessionId, path: segs })) continue;
-    const scope = `group/${sessionId}/topic/${segs.join('/')}`;
+    if (!isValidTopic({ kind: 'session-topic', sessionId, path: segs })) continue;
+    const scope = `session/${sessionId}/topic/${segs.join('/')}`;
     if (pass2.decision === 'match') {
       out.push({ kind: 'update', scope });
     } else if (pass2.decision === 'new') {

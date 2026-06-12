@@ -32,7 +32,7 @@ describe('dream prompts loader', () => {
       batchHeader: '',
       memoryMd: 'old',
       summaryMd: 'sum',
-      sources: '[group/g-eng]',
+      sources: '[session/g-eng]',
     });
     expect(out).toContain('Scope: user');
     expect(out).not.toContain('This is batch');
@@ -42,7 +42,7 @@ describe('dream prompts loader', () => {
   it('renders create with optional siblingsBlock', () => {
     const out = render('create', {
       target: 'topic/sci/phys',
-      sources: '[group/g]',
+      sources: '[session/g]',
       siblingsBlock: '',
     });
     expect(out).toContain('topic/sci/phys');
@@ -55,7 +55,7 @@ describe('dream prompts loader', () => {
       batchHeader: '',
       memoryMd: 'old',
       summaryMd: 'sum',
-      sources: '[group/g-eng]',
+      sources: '[session/g-eng]',
     }, { language: 'zh' });
     expect(out).toContain('语言要求：请用中文生成所有自然语言内容');
     expect(out).toContain('JSON key');
@@ -69,7 +69,7 @@ describe('dream prompts loader', () => {
       batchHeader: '',
       memoryMd: 'old',
       summaryMd: 'sum',
-      sources: '[group/g-eng]',
+      sources: '[session/g-eng]',
     }, { language: 'en' });
     expect(out).toContain('Language requirement: write all natural-language memory content in English');
     expect(out).toContain('memory_md');
@@ -162,20 +162,20 @@ describe('extractTemplateForScope', () => {
   it('routes user scope', () => {
     expect(extractTemplateForScope('user')).toBe('extractUser');
   });
-  it('routes group/<g>/vp/<v> to extractVp (nested before bare group)', () => {
-    expect(extractTemplateForScope('group/eng/vp/alice')).toBe('extractVp');
+  it('routes session/<id>/vp/<v> to extractVp (nested before bare session)', () => {
+    expect(extractTemplateForScope('session/eng/vp/alice')).toBe('extractVp');
   });
-  it('routes bare group/<g> to extractSession', () => {
-    expect(extractTemplateForScope('group/eng')).toBe('extractSession');
+  it('routes bare session/<id> to extractSession', () => {
+    expect(extractTemplateForScope('session/eng')).toBe('extractSession');
   });
-  it('routes group/<g>/user to extractUser', () => {
-    expect(extractTemplateForScope('group/eng/user')).toBe('extractUser');
+  it('routes session/<id>/user to extractUser', () => {
+    expect(extractTemplateForScope('session/eng/user')).toBe('extractUser');
   });
-  it('routes group/<g>/topic/* to extractTopic', () => {
-    expect(extractTemplateForScope('group/eng/topic/auth/jwt')).toBe('extractTopic');
+  it('routes session/<id>/topic/* to extractTopic', () => {
+    expect(extractTemplateForScope('session/eng/topic/auth/jwt')).toBe('extractTopic');
   });
-  it('routes group/<g>/feature/* to extractSession (no dedicated feature template)', () => {
-    expect(extractTemplateForScope('group/eng/feature/memory-h2')).toBe('extractSession');
+  it('routes session/<id>/topic/* to extractTopic', () => {
+    expect(extractTemplateForScope('session/eng/feature/memory-h2')).toBe('extractSession');
   });
   it('still routes legacy bare vp/* and topic/* (defensive)', () => {
     expect(extractTemplateForScope('vp/alice')).toBe('extractVp');

@@ -5,23 +5,23 @@
  *
  *   trigger
  *     ↓
- *   enumerateGroups()                  via opts.listSessions()
+ *   enumerateSessions()                  via opts.listSessions()
  *     ↓
- *   for each group with newCount ≥ MIN_NEW_PER_GROUP (auto)
+ *   for each session with newCount ≥ MIN_NEW_PER_GROUP (auto)
  *                    or > 0 (manual)
- *                    or prior messages in a scoped manual group rerun:
- *       loadDiff()                     via opts.loadGroupDiff(sessionId, sinceId)
+ *                    or prior messages in a scoped manual session rerun:
+ *       loadDiff()                     via opts.loadSessionDiff(sessionId, sinceId)
  *       applyOverlap()                 via opts.loadOverlapPreamble(...)
  *       segment()                      segmentDiff(...)
- *       triageGroupSegments()          → group-local actions[]
+ *       triageSessionSegments()          → group-local actions[]
  *
  *   mergeByTarget()                    → per-target actions
  *   for each merged target:
  *       applyMergedTarget()            (snapshot + UPDATE/CREATE + atomic write)
  *
  *   bookkeep:
- *     for each processed group:
- *       group .dream-state ←
+ *     for each processed session:
+ *       session .dream-state ←
  *         { lastDreamMessageId: tail of real diff,
  *           lastDreamAt: nowIso,
  *           messageCount: <after> }
@@ -45,7 +45,7 @@ import { listScopes, readSummary } from '../memory/store.js';
 import {
   DEFAULT_LIMITS,
 } from './limits.js';
-import { readGroupState, writeGroupState, writeDreamError } from './state.js';
+import { readSessionState, writeSessionState, writeDreamError } from './state.js';
 import { segmentDiff, truncateMessage, estimateMessagesTokens } from './segment.js';
 import { triageGroupSegments } from './triage.js';
 import { mergeByTarget } from './merge.js';
@@ -56,11 +56,11 @@ import { tsForBackup, pruneOldSnapshots } from './snapshot.js';
  * @typedef {Object} RunDreamOpts
  * @property {string} root                    — memory root, e.g. ~/.yeaft/memory
  * @property {boolean} [manual=false]         — manual trigger overrides newCount<20 skip
- * @property {string[]} [scopeFilter]         — optional: only dream these targets; scoped manual group triggers rerun the current group when there are prior messages but no new cursor delta ('*' allowed)
+ * @property {string[]} [scopeFilter]         — optional: only dream these targets; scoped manual session triggers rerun the current group when there are prior messages but no new cursor delta ('*' allowed)
  * @property {(req: {pass:string, prompt:string, system:string}) => Promise<string>} llm
  * @property {() => Promise<Array<string>>} listSessions   — return all group ids (incl. '_no-group')
  * @property {(sessionId: string) => Promise<number>} countMessages   — total message count for a group
- * @property {(sessionId: string, sinceMessageId: string|null) => Promise<Array<object>>} loadGroupDiff
+ * @property {(sessionId: string, sinceMessageId: string|null) => Promise<Array<object>>} loadSessionDiff
  * @property {(sessionId: string, beforeMessageId: string|null, count: number) => Promise<Array<object>>} loadOverlapPreamble
  * @property {() => Promise<Array<{path:string, summary:string}>>} [listTopicSummaries]
  * @property {(target: string) => Promise<Array<{path:string, summary:string}>>} [siblingTopicsFor]
@@ -89,13 +89,13 @@ export async function runDream(opts) {
   // 1. enumerate groups
   const sessionIds = await safeCall(opts.listSessions, []);
   const filter = Array.isArray(opts.scopeFilter) ? new Set(opts.scopeFilter) : null;
-  const groupFilter = deriveGroupFilter(filter);
+  const sessionFilter = deriveSessionFilter(filter);
   const groupsReport = [];
   const groupTriages = [];
   const processedGroups = [];
 
   // 2. per-group: skip / segment / triage
-  // Topic summaries are now per-group (group/<g>/topic/...), so resolve
+  // Topic summaries are now per-session (session/<id>/topic/...), so resolve
   // them inside the per-group loop instead of once up front.
   const resolveTopicSummaries = async (sessionId) => {
     if (opts.listTopicSummaries) {
@@ -105,22 +105,22 @@ export async function runDream(opts) {
   };
 
   for (const sessionId of sessionIds) {
-    // Current-group manual dream passes are the one case where scopeFilter
+    // Current-session manual dream passes are the one case where scopeFilter
     // must constrain enumeration too: clicking the conversation header means
     // "dream this group now", not "triage every group and then only apply
-    // group/<id>". Pure target filters such as ['user'] still triage every
-    // group so their hard-rule actions can contribute to the requested scope.
-    if (groupFilter && !groupFilter.has(sessionId)) {
+    // session/<id>". Pure target filters such as ['user'] still triage every
+    // session so their hard-rule actions can contribute to the requested scope.
+    if (sessionFilter && !sessionFilter.has(sessionId)) {
       groupsReport.push({ sessionId, new: 0, status: 'skipped', reason: 'scope-filtered' });
       continue;
     }
-    const state = await readGroupState(opts.root, sessionId);
+    const state = await readSessionState(opts.root, sessionId);
     const beforeCount = await safeCall(() => opts.countMessages(sessionId), 0);
     const newCount = Math.max(0, beforeCount - (state.messageCount || 0));
 
     const rerunScopedManual = !!opts.manual
-      && groupFilter
-      && groupFilter.has(sessionId)
+      && sessionFilter
+      && sessionFilter.has(sessionId)
       && newCount === 0
       && beforeCount > 0;
 
@@ -135,7 +135,7 @@ export async function runDream(opts) {
 
     onProgress({ phase: 'load-diff', sessionId });
     const diffCursor = rerunScopedManual ? null : state.lastDreamMessageId;
-    const diffNew = await safeCall(() => opts.loadGroupDiff(sessionId, diffCursor), []);
+    const diffNew = await safeCall(() => opts.loadSessionDiff(sessionId, diffCursor), []);
     if (!diffNew || diffNew.length === 0) {
       groupsReport.push({ sessionId, new: newCount, status: 'skipped', reason: 'empty-diff' });
       continue;
@@ -172,7 +172,7 @@ export async function runDream(opts) {
       // Journal the failure on disk so operators can see WHY dream is
       // not advancing without having to enable `config.debug`. Best-
       // effort — `writeDreamError` swallows its own I/O errors.
-      await writeDreamError(opts.root, `group/${sessionId}`, {
+      await writeDreamError(opts.root, `session/${sessionId}`, {
         phase: 'triage',
         message: err.message,
         stack: err.stack,
@@ -191,7 +191,7 @@ export async function runDream(opts) {
   // 3. merge
   const mergedTargets = mergeByTarget(groupTriages);
   const targetsToApply = filter && filter.size > 0 && !filter.has('*')
-    ? mergedTargets.filter(t => filter.has(t.target) || filter.has(`group/${sourceGroupId(t)}`))
+    ? mergedTargets.filter(t => filter.has(t.target) || filter.has(`session/${sourceSessionId(t)}`))
     : mergedTargets;
 
   onProgress({ phase: 'merge', targets: targetsToApply.length });
@@ -243,7 +243,7 @@ export async function runDream(opts) {
     const anySuccess = contributed.some(t => successfulTargets.has(t));
     if (!anySuccess) continue;
     if (pg.tailId) {
-      await writeGroupState(opts.root, pg.sessionId, {
+      await writeSessionState(opts.root, pg.sessionId, {
         lastDreamMessageId: pg.tailId,
         lastDreamAt: nowIso,
         messageCount: pg.beforeCount,
@@ -284,18 +284,18 @@ function lastMessageId(messages) {
   return null;
 }
 
-function deriveGroupFilter(filter) {
+function deriveSessionFilter(filter) {
   if (!filter || filter.size === 0 || filter.has('*')) return null;
-  const groups = [];
+  const sessions = [];
   for (const scope of filter) {
     if (typeof scope !== 'string') continue;
-    const m = /^group\/([^/]+)$/.exec(scope);
-    if (m && m[1]) groups.push(m[1]);
+    const m = /^session\/([^/]+)$/.exec(scope);
+    if (m && m[1]) sessions.push(m[1]);
   }
-  return groups.length > 0 ? new Set(groups) : null;
+  return sessions.length > 0 ? new Set(sessions) : null;
 }
 
-function sourceGroupId(mergedTarget) {
+function sourceSessionId(mergedTarget) {
   const src = Array.isArray(mergedTarget?.sources) ? mergedTarget.sources[0] : null;
   return src && typeof src.sessionId === 'string' ? src.sessionId : '';
 }
@@ -314,7 +314,7 @@ async function defaultListTopicSummaries(root, sessionId, language) {
   const all = await listScopes({ root });
   const out = [];
   for (const sc of all) {
-    if (sc.kind !== 'group-topic') continue;
+    if (sc.kind !== 'session-topic') continue;
     if (sc.sessionId !== sessionId) continue;
     const summary = await readSummary(sc, { root, language });
     out.push({ path: sc.path.join('/'), summary });

@@ -251,7 +251,7 @@ export function shouldAllowGroupReflection({
  * @param {{
  *   sessionId?: string|null,
  *   ownVpId?: string|null,
- *   summaries: { user?: string, group?: string, vp?: string }
+ *   summaries: { user?: string, session?: string, vp?: string }
  * }} args
  * @returns {Array<{scope: string, summary: string}>}
  */
@@ -259,21 +259,14 @@ export function buildResidentEntries(args) {
   const summaries = (args && args.summaries) || {};
   const out = [];
   if (summaries.user) out.push({ scope: 'user', summary: summaries.user });
-  if (args.sessionId && summaries.group) {
-    // Presentation label: product-facing prompt scopes are sessions, even
-    // though the current disk compatibility path still reads kind:'group'.
-    out.push({ scope: `sessions/${args.sessionId}`, summary: summaries.group });
+  if (args.sessionId && summaries.session) {
+    out.push({ scope: `sessions/${args.sessionId}`, summary: summaries.session });
   }
   // VP per-session isolation (2026-06-09): the VP summary scope MUST be
-  // session-qualified. The legacy bare `vp/<id>` scope was a structural
-  // bug — `summaries.vp` is actually loaded from `group/<sessionId>/vp/<id>/summary.md`
-  // (see #loadLayerASummaries, kind:'group-vp'), so labelling it `vp/<id>`
-  // in the Resident layer (a) collides with the ACL regex in store
-  // (which only recognises `<root>/<sid>/vp/...`) and (b) makes the same
-  // VP persona leak across DIFFERENT sessions whenever the AMS rehydrates
-  // by id rather than by full scope path. The session-qualified form
-  // makes the per-session boundary explicit and matches the on-disk
-  // layout 1:1.
+  // session-qualified. The bare `vp/<id>` scope was a structural bug: it
+  // makes the same VP persona leak across unrelated sessions in the prompt
+  // label. The session-qualified form makes the per-session boundary
+  // explicit and matches the on-disk layout 1:1.
   if (args.sessionId && args.ownVpId && summaries.vp && !isVpSeedBackfillStub(summaries.vp)) {
     out.push({ scope: `sessions/${args.sessionId}/vp/${args.ownVpId}`, summary: summaries.vp });
   }
@@ -583,19 +576,19 @@ export class Engine {
    * @returns {Promise<{user:string, group:string, vp:string}>}
    */
   async #loadLayerASummaries({ sessionId, vpId, language } = {}) {
-    if (!this.#yeaftDir) return { user: '', group: '', vp: '' };
+    if (!this.#yeaftDir) return { user: '', session: '', vp: '' };
     const memoryRoot = `${this.#yeaftDir}/memory`;
     const tasks = [
       readScopeSummary({ kind: 'user' }, { root: memoryRoot, language }).catch(() => ''),
       sessionId
-        ? readScopeSummary({ kind: 'group', id: sessionId }, { root: memoryRoot, language }).catch(() => '')
+        ? readScopeSummary({ kind: 'session', id: sessionId }, { root: memoryRoot, language }).catch(() => '')
         : Promise.resolve(''),
       vpId && sessionId
-        ? readScopeSummary({ kind: 'group-vp', sessionId, id: vpId }, { root: memoryRoot, language }).catch(() => '')
+        ? readScopeSummary({ kind: 'session-vp', sessionId, id: vpId }, { root: memoryRoot, language }).catch(() => '')
         : Promise.resolve(''),
     ];
-    const [user, group, vp] = await Promise.all(tasks);
-    return { user: user || '', group: group || '', vp: vp || '' };
+    const [user, session, vp] = await Promise.all(tasks);
+    return { user: user || '', session: session || '', vp: vp || '' };
   }
 
   /**
@@ -605,7 +598,7 @@ export class Engine {
    * @param {{
    *   sessionId?: string,
    *   ownVpId?: string|null,
-   *   summaries: { user?: string, group?: string, vp?: string },
+   *   summaries: { user?: string, session?: string, vp?: string },
    *   recallEntries: object[],
    * }} args
    * @returns {{

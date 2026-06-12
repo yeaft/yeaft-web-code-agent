@@ -74,6 +74,17 @@ function resolveActiveDreamDebugSessionId(state) {
   return null;
 }
 
+function dreamScopeForSession(sessionId) {
+  return sessionId ? `sessions/${sessionId}` : null;
+}
+
+function dreamScopeFromEventTarget(target) {
+  if (typeof target !== 'string' || !target.includes('/')) return null;
+  if (target.startsWith('session/')) return `sessions/${target.slice('session/'.length)}`;
+  if (target.startsWith('sessions/')) return target;
+  return null;
+}
+
 // feat-6af5f9f1 PR C: turnMatchesSearch lives in helpers/debug-search.js
 // so it can be unit-tested without the Pinia browser globals.
 
@@ -571,47 +582,37 @@ export const useChatStore = defineStore('chat', {
         return (inner[vpId] || 0) > 0;
       };
     },
-    // v0.1.755: latest dream pass for the currently-focused group (or null).
-    // Reads from `yeaftDreamLatest` keyed by scope. The active group's
-    // scope is `group/<id>` — we resolve that from `yeaftActiveSessionFilter`
-    // (or fall back to the debug-side filter). Returns null when nothing
-    // has been recorded yet for this scope.
+    // v0.1.755: latest dream pass for the currently-focused session (or null).
     yeaftDreamLatestForActiveSession(state) {
-      const targetGroupId = resolveActiveDreamDebugSessionId(state);
-      if (!targetGroupId) return null;
-      const scope = `group/${targetGroupId}`;
+      const targetSessionId = resolveActiveDreamDebugSessionId(state);
+      const scope = dreamScopeForSession(targetSessionId);
+      if (!scope) return null;
       return state.yeaftDreamLatest?.[scope] || null;
     },
     yeaftDreamSnapshotForActiveSession(state) {
-      const targetGroupId = resolveActiveDreamDebugSessionId(state);
-      if (!targetGroupId) return null;
-      // Product-facing Dream output scopes are `sessions/<id>`. Legacy
-      // Dream run/timeline events still use historical `group/<id>` buckets
-      // below for wire compatibility; do not conflate the two stores.
-      const scope = `sessions/${targetGroupId}`;
+      const targetSessionId = resolveActiveDreamDebugSessionId(state);
+      const scope = dreamScopeForSession(targetSessionId);
+      if (!scope) return null;
       return state.yeaftDreamSnapshots?.[scope] || null;
     },
     yeaftDreamPromptLoadForActiveSession(state) {
-      const targetGroupId = resolveActiveDreamDebugSessionId(state);
-      if (!targetGroupId) return null;
-      // Prompt-load records describe what the LLM sees in system prompt
-      // memory, so they use product terminology (`sessions/<id>`), even
-      // when the underlying disk store still has historical group paths.
-      const scope = `sessions/${targetGroupId}`;
+      const targetSessionId = resolveActiveDreamDebugSessionId(state);
+      const scope = dreamScopeForSession(targetSessionId);
+      if (!scope) return null;
       return state.yeaftDreamPromptLoads?.[scope] || null;
     },
     // PR feat-dream-debug-panel-full: per-group event log for the
     // expanded debug-panel view. Same filter precedence as
     // `yeaftDreamLatestForActiveSession`. Returns the full ring-buffer
-    // array for the active group's scope (oldest first), or an empty
-    // array. Includes `'*'`-scoped events broadcast to all groups
-    // (start/done) merged in chronological order so the user sees a
-    // single coherent timeline regardless of whether a given event
-    // landed in the scoped bucket or the broadcast bucket.
+    // array for the active session's `sessions/<sessionId>` bucket (oldest
+    // first), or an empty array. Includes `'*'`-scoped events broadcast to all
+    // sessions (start/done) merged in chronological order so the user sees a
+    // single coherent timeline regardless of whether a given event landed in
+    // the scoped bucket or the broadcast bucket.
     yeaftDreamEventsForActiveSession(state) {
-      const targetGroupId = resolveActiveDreamDebugSessionId(state);
-      if (!targetGroupId) return [];
-      const scope = `group/${targetGroupId}`;
+      const targetSessionId = resolveActiveDreamDebugSessionId(state);
+      const scope = dreamScopeForSession(targetSessionId);
+      if (!scope) return [];
       const scoped = Array.isArray(state.yeaftDreamEvents?.[scope])
         ? state.yeaftDreamEvents[scope] : [];
       const broadcast = Array.isArray(state.yeaftDreamEvents?.['*'])
@@ -1465,9 +1466,7 @@ export const useChatStore = defineStore('chat', {
             const rawScope = item && typeof item.scope === 'string' ? item.scope : null;
             const sessionScope = rawScope && /^sessions\/[^/]+$/.test(rawScope)
               ? rawScope
-              : (rawScope && /^group\/[^/]+$/.test(rawScope)
-                ? `sessions/${rawScope.slice('group/'.length)}`
-                : null);
+              : null;
             if (!sessionScope) continue;
             updates[sessionScope] = {
               scope: sessionScope,
@@ -2178,7 +2177,7 @@ export const useChatStore = defineStore('chat', {
           {
             const scope = typeof event?.snapshot?.scope === 'string' && event.snapshot.scope
               ? event.snapshot.scope
-              : (typeof event?.sessionId === 'string' && event.sessionId ? `group/${event.sessionId}` : null);
+              : dreamScopeForSession(typeof event?.sessionId === 'string' ? event.sessionId : null);
             if (!scope) break;
             const prev = this.yeaftDreamLatest[scope] || null;
             // Defaults when no prior running entry exists (network
@@ -2251,10 +2250,10 @@ export const useChatStore = defineStore('chat', {
         // confusion about which switch owns this protocol.
         // v0.1.755: dream_progress events emitted by both manual + auto
         // dream runs (see agent/yeaft/web-bridge.js _dreamProgressSink).
-        // Per-group events carry `groupId`; per-target merge/apply events
-        // carry `target` (already a scope string like 'group/...' / 'vp/...').
+        // Per-session events carry `sessionId`; per-target merge/apply events
+        // carry `target` (already a session scope string like 'session/...').
         // Top-level start/done/merge events carry neither — those we attach
-        // to a magic '*' bucket so they show up for every focused group.
+        // to a magic '*' bucket so they show up for every focused session.
         // Schema per entry (the projection — NOT identical to the raw
         // event):
         //   { scope, status: 'running'|'success'|'error', startedAt,
@@ -2262,20 +2261,21 @@ export const useChatStore = defineStore('chat', {
         //     durationMs? }.
         // YeaftDebugPanel reads `yeaftDreamLatestForActiveSession` (getter)
         // to render a single row showing the most recent pass for the
-        // active group's scope ("dream只需要看最新的一次就行").
+        // active session's scope ("dream只需要看最新的一次就行").
         case 'dream_progress': {
           const phase = event?.phase || 'unknown';
           // Resolve the scope this event belongs to.
           let scope = null;
           if (typeof event?.target === 'string' && event.target.includes('/')) {
-            scope = event.target;
+            scope = dreamScopeFromEventTarget(event.target);
+            if (!scope) break;
           } else if (typeof event?.sessionId === 'string' && event.sessionId) {
-            scope = `group/${event.sessionId}`;
+            scope = dreamScopeForSession(event.sessionId);
           } else {
-            // Top-level event (start/merge/done/error without group context).
+            // Top-level event (start/merge/done/error without session context).
             // Apply to all known scopes — easiest to spread across whatever
             // scopes are already tracked, OR fall back to a singleton '*'
-            // bucket so the active-group getter can find it on first run.
+            // bucket so the active-session getter can find it on first run.
             scope = '*';
           }
           const isDone = phase === 'done';

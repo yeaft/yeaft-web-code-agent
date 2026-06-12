@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { runDream } from '../../../../agent/yeaft/dream/runner.js';
-import { readGroupState, writeGroupState } from '../../../../agent/yeaft/dream/state.js';
+import { readSessionState, writeSessionState } from '../../../../agent/yeaft/dream/state.js';
 
 let root;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'dream-run-')); });
@@ -38,14 +38,14 @@ function extractScope(prompt) {
 }
 
 describe('runDream — happy path', () => {
-  it('skips groups below the new-message threshold', async () => {
+  it('skips sessions below the new-message threshold', async () => {
     const events = [];
     const r = await runDream({
       root,
       llm: makeLlm(),
       listSessions: async () => ['g-eng', 'g-quiet'],
       countMessages: async (g) => g === 'g-eng' ? 50 : 5,
-      loadGroupDiff: async (g) => g === 'g-eng'
+      loadSessionDiff: async (g) => g === 'g-eng'
         ? Array.from({ length: 50 }, (_, i) => ({ id: `e${i + 1}`, role: 'user', body: 'hi' }))
         : [],
       loadOverlapPreamble: async () => [],
@@ -67,7 +67,7 @@ describe('runDream — happy path', () => {
       llm: makeLlm(),
       listSessions: async () => ['g-eng', 'g-empty'],
       countMessages: async (g) => g === 'g-eng' ? 5 : 0,
-      loadGroupDiff: async (g) => g === 'g-eng'
+      loadSessionDiff: async (g) => g === 'g-eng'
         ? [{ id: 'e1', role: 'user', body: 'hi' }]
         : [],
       loadOverlapPreamble: async () => [],
@@ -86,7 +86,7 @@ describe('runDream — happy path', () => {
       llm: makeLlm(),
       listSessions: async () => ['g-eng'],
       countMessages: async () => diffMessages.length,
-      loadGroupDiff: async () => diffMessages,
+      loadSessionDiff: async () => diffMessages,
       loadOverlapPreamble: async () => [],
       nowIso: () => '2026-04-28T03:07:00Z',
     });
@@ -94,19 +94,19 @@ describe('runDream — happy path', () => {
     const userMem = readFileSync(join(root, 'user', 'memory.md'), 'utf8');
     expect(userMem).toContain('written by update');
     expect(userMem).toContain('lastDreamAt: 2026-04-28T03:07:00Z');
-    // group/g-eng was also written.
-    expect(existsSync(join(root, 'group', 'g-eng', 'memory.md'))).toBe(true);
-    // group/g-eng/vp/zhang-san was written via the assistant-vp hard rule.
-    expect(existsSync(join(root, 'group', 'g-eng', 'vp', 'zhang-san', 'memory.md'))).toBe(true);
+    // session/g-eng was also written.
+    expect(existsSync(join(root, 'session', 'g-eng', 'memory.md'))).toBe(true);
+    // session/g-eng/vp/zhang-san was written via the assistant-vp hard rule.
+    expect(existsSync(join(root, 'session', 'g-eng', 'vp', 'zhang-san', 'memory.md'))).toBe(true);
     // Bookkeeping: g-eng's lastDreamMessageId advanced to the tail.
-    const state = await readGroupState(root, 'g-eng');
+    const state = await readSessionState(root, 'g-eng');
     expect(state.lastDreamMessageId).toBe('m25');
     expect(state.messageCount).toBe(25);
     expect(state.lastDreamAt).toBe('2026-04-28T03:07:00Z');
   });
 
   it('uses overlap preamble when prior dream cursor exists', async () => {
-    await writeGroupState(root, 'g', { lastDreamMessageId: 'old-tail', lastDreamAt: '2026-01-01', messageCount: 100 });
+    await writeSessionState(root, 'g', { lastDreamMessageId: 'old-tail', lastDreamAt: '2026-01-01', messageCount: 100 });
     const newMessages = Array.from({ length: 25 }, (_, i) => ({ id: `n${i + 1}`, role: 'user', body: 'hi' }));
     const overlap = [
       { id: 'o1', role: 'user', body: 'overlap-1' },
@@ -126,7 +126,7 @@ describe('runDream — happy path', () => {
       llm,
       listSessions: async () => ['g'],
       countMessages: async () => 125,
-      loadGroupDiff: async () => newMessages,
+      loadSessionDiff: async () => newMessages,
       loadOverlapPreamble: async (gid, before, n) => {
         preambleCalls += 1;
         expect(before).toBe('old-tail');
@@ -148,7 +148,7 @@ describe('runDream — happy path', () => {
       }
       throw new Error('llm exploded');
     };
-    const before = await readGroupState(root, 'g-fail');
+    const before = await readSessionState(root, 'g-fail');
     expect(before.lastDreamMessageId).toBe(null);
 
     const r = await runDream({
@@ -156,13 +156,13 @@ describe('runDream — happy path', () => {
       llm,
       listSessions: async () => ['g-fail'],
       countMessages: async () => 25,
-      loadGroupDiff: async () => Array.from({ length: 25 }, (_, i) => ({ id: `f${i + 1}`, role: 'user', body: 'x' })),
+      loadSessionDiff: async () => Array.from({ length: 25 }, (_, i) => ({ id: `f${i + 1}`, role: 'user', body: 'x' })),
       loadOverlapPreamble: async () => [],
     });
     // Every apply errored.
     expect(r.targets.every(t => t.status === 'error')).toBe(true);
     // Cursor not advanced.
-    const after = await readGroupState(root, 'g-fail');
+    const after = await readSessionState(root, 'g-fail');
     expect(after.lastDreamMessageId).toBe(null);
   });
 
@@ -174,7 +174,7 @@ describe('runDream — happy path', () => {
       llm: makeLlm(),
       listSessions: async () => ['g'],
       countMessages: async () => 1,
-      loadGroupDiff: async () => [{ id: 'm1', role: 'user', body: 'hi' }],
+      loadSessionDiff: async () => [{ id: 'm1', role: 'user', body: 'hi' }],
       loadOverlapPreamble: async () => [],
     });
     // Only the 'user' target should appear in targets[].
@@ -182,19 +182,19 @@ describe('runDream — happy path', () => {
     expect(targets).toEqual(['user']);
   });
 
-  it('uses group scopeFilter to process only the selected group while bypassing the manual threshold', async () => {
+  it('uses session scopeFilter to process only the selected session while bypassing the manual threshold', async () => {
     const calls = [];
     const r = await runDream({
       root,
       manual: true,
-      scopeFilter: ['group/g-current'],
+      scopeFilter: ['session/g-current'],
       llm: makeLlm(),
       listSessions: async () => ['g-current', 'g-other'],
       countMessages: async (g) => {
         calls.push(`count:${g}`);
         return 1;
       },
-      loadGroupDiff: async (g) => {
+      loadSessionDiff: async (g) => {
         calls.push(`diff:${g}`);
         return [{ id: `${g}-m1`, role: 'user', body: 'hi' }];
       },
@@ -208,7 +208,7 @@ describe('runDream — happy path', () => {
       reason: 'scope-filtered',
     });
     const targets = r.targets.map(t => t.target).sort();
-    expect(targets).toEqual(['group/g-current', 'group/g-current/user', 'user']);
+    expect(targets).toEqual(['session/g-current', 'session/g-current/user', 'user']);
   });
 
   it('reruns scoped manual group dreams over prior messages and persists memory summaries', async () => {
@@ -217,7 +217,7 @@ describe('runDream — happy path', () => {
       { id: 'm2', role: 'assistant', vpId: 'linus', body: 'We should keep the fix small and tested.' },
     ];
     const calls = [];
-    await writeGroupState(root, 'g-current', {
+    await writeSessionState(root, 'g-current', {
       lastDreamMessageId: 'm2',
       lastDreamAt: '2026-05-17T00:00:00Z',
       messageCount: priorMessages.length,
@@ -226,14 +226,14 @@ describe('runDream — happy path', () => {
     const r = await runDream({
       root,
       manual: true,
-      scopeFilter: ['group/g-current'],
+      scopeFilter: ['session/g-current'],
       llm: makeLlm(),
       listSessions: async () => ['g-current', 'g-other'],
       countMessages: async (g) => {
         calls.push(`count:${g}`);
         return g === 'g-current' ? priorMessages.length : 99;
       },
-      loadGroupDiff: async (g, sinceId) => {
+      loadSessionDiff: async (g, sinceId) => {
         calls.push(`diff:${g}:${sinceId ?? '<all>'}`);
         return g === 'g-current' ? priorMessages : [];
       },
@@ -254,15 +254,15 @@ describe('runDream — happy path', () => {
       status: 'skipped',
       reason: 'scope-filtered',
     });
-    expect(r.targets.map(t => t.target).sort()).toEqual(['group/g-current', 'group/g-current/user', 'group/g-current/vp/linus', 'user']);
+    expect(r.targets.map(t => t.target).sort()).toEqual(['session/g-current', 'session/g-current/user', 'session/g-current/vp/linus', 'user']);
 
-    const groupMem = readFileSync(join(root, 'group', 'g-current', 'memory.md'), 'utf8');
-    const groupSummary = readFileSync(join(root, 'group', 'g-current', 'summary.md'), 'utf8');
+    const groupMem = readFileSync(join(root, 'session', 'g-current', 'memory.md'), 'utf8');
+    const groupSummary = readFileSync(join(root, 'session', 'g-current', 'summary.md'), 'utf8');
     expect(groupMem).toContain('written by update');
     expect(groupMem).toContain('lastDreamAt: 2026-05-18T06:00:00Z');
-    expect(groupSummary.trimEnd()).toBe('summary for group/g-current');
+    expect(groupSummary.trimEnd()).toBe('summary for session/g-current');
 
-    const state = await readGroupState(root, 'g-current');
+    const state = await readSessionState(root, 'g-current');
     expect(state.lastDreamMessageId).toBe('m2');
     expect(state.messageCount).toBe(priorMessages.length);
     expect(state.lastDreamAt).toBe('2026-05-18T06:00:00Z');
@@ -272,11 +272,11 @@ describe('runDream — happy path', () => {
     const r = await runDream({
       root,
       manual: true,
-      scopeFilter: ['group/g-current'],
+      scopeFilter: ['session/g-current'],
       llm: makeLlm(),
       listSessions: async () => ['g-current', 'g-other'],
       countMessages: async () => 1,
-      loadGroupDiff: async () => [],
+      loadSessionDiff: async () => [],
       loadOverlapPreamble: async () => [],
     });
 
@@ -294,7 +294,7 @@ describe('runDream — happy path', () => {
       llm: makeLlm(),
       listSessions: async () => ['g'],
       countMessages: async () => 25,
-      loadGroupDiff: async () => Array.from({ length: 25 }, (_, i) => ({ id: `m${i + 1}`, role: 'user', body: 'x' })),
+      loadSessionDiff: async () => Array.from({ length: 25 }, (_, i) => ({ id: `m${i + 1}`, role: 'user', body: 'x' })),
       loadOverlapPreamble: async () => [],
       onProgress: e => events.push(e),
     });

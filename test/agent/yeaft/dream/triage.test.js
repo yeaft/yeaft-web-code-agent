@@ -20,13 +20,13 @@ describe('applyHardRules', () => {
     const out = applyHardRules({ sessionId: 'g-eng', messages: [] });
     expect(out.find(a => a.scope === 'user')).toBeTruthy();
   });
-  it('includes the active group except _no-group', () => {
+  it('includes the active session except _no-session', () => {
     expect(applyHardRules({ sessionId: 'g-eng', messages: [] }).map(a => a.scope))
-      .toContain('group/g-eng');
+      .toContain('session/g-eng');
     expect(applyHardRules({ sessionId: '_no-session', messages: [] }).map(a => a.scope))
-      .not.toContain('group/_no-group');
+      .not.toContain('session/_no-session');
   });
-  it('adds group/<g>/vp/<id> for each assistant message vpId', () => {
+  it('adds session/<id>/vp/<id> for each assistant message vpId', () => {
     const out = applyHardRules({
       sessionId: 'g-eng',
       messages: [
@@ -36,16 +36,16 @@ describe('applyHardRules', () => {
       ],
     });
     const scopes = out.map(a => a.scope);
-    expect(scopes).toContain('group/g-eng/vp/zhang-san');
-    expect(scopes).toContain('group/g-eng/vp/li-si');
-    expect(scopes).toContain('group/g-eng/user');
+    expect(scopes).toContain('session/g-eng/vp/zhang-san');
+    expect(scopes).toContain('session/g-eng/vp/li-si');
+    expect(scopes).toContain('session/g-eng/user');
   });
   it('extracts vp from author "vp:<id>" format', () => {
     const out = applyHardRules({
       sessionId: 'g',
       messages: [{ role: 'assistant', author: 'vp:wang-wu' }],
     });
-    expect(out.map(a => a.scope)).toContain('group/g/vp/wang-wu');
+    expect(out.map(a => a.scope)).toContain('session/g/vp/wang-wu');
   });
   it('does NOT create feature scopes from messages (Feature system removed)', () => {
     const out = applyHardRules({
@@ -114,9 +114,9 @@ describe('classifySoft', () => {
     expect(calls.filter(c => c === 'triage-pass2').length).toBe(2);
     const scopes = out.map(a => a.scope);
     expect(scopes).toContain('user');
-    expect(scopes).toContain('group/g/topic/science/physics');
-    expect(scopes).toContain('group/g/topic/life/parenting');
-    const created = out.find(a => a.scope === 'group/g/topic/life/parenting');
+    expect(scopes).toContain('session/g/topic/science/physics');
+    expect(scopes).toContain('session/g/topic/life/parenting');
+    const created = out.find(a => a.scope === 'session/g/topic/life/parenting');
     expect(created.kind).toBe('create');
   });
   it('rejects topic paths exceeding 2 levels', async () => {
@@ -161,9 +161,9 @@ describe('triageOneSegment + triageGroupSegments', () => {
     });
     const scopes = out.map(a => a.scope);
     expect(scopes).toContain('user');
-    expect(scopes).toContain('group/g-eng');
-    expect(scopes).toContain('group/g-eng/vp/zhang-san');
-    expect(scopes).toContain('group/g-eng/topic/science/physics');
+    expect(scopes).toContain('session/g-eng');
+    expect(scopes).toContain('session/g-eng/vp/zhang-san');
+    expect(scopes).toContain('session/g-eng/topic/science/physics');
   });
   it('dedupes across multiple segments', async () => {
     let calls = 0;
@@ -183,7 +183,7 @@ describe('triageOneSegment + triageGroupSegments', () => {
       llm,
     });
     // vp/zhang-san should appear once.
-    expect(out.filter(a => a.scope === 'group/g/vp/zhang-san').length).toBe(1);
+    expect(out.filter(a => a.scope === 'session/g/vp/zhang-san').length).toBe(1);
     expect(calls).toBe(2); // Pass-1 ran for each segment, no Pass-2 (no topics)
   });
 });
@@ -193,7 +193,7 @@ describe('prompt builders contain expected scaffolding', () => {
     const p = buildPass1Prompt({ sessionId: 'g', messages: [{ role: 'user', body: 'hi' }], topicSummaries: [] });
     expect(p).toContain('user_profile_signals');
     expect(p).toContain('topics');
-    expect(p).toMatch(/Do NOT mention vp\/, group\/, or feature\//);
+    expect(p).toMatch(/Do NOT mention vp\/, session\/, or feature\//);
   });
   it('Pass-2 prompt enforces ≤2 levels and shows existing topics', () => {
     const p = buildPass2Prompt({ description: 'physics', existingTopics: [{ path: 'science/physics', summary: 'x' }] });

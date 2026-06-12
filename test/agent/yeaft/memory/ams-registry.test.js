@@ -60,7 +60,7 @@ describe('AmsRegistry — basic lifecycle', () => {
 
 describe('AmsRegistry — persist + hydrate round-trip', () => {
   it('persist writes ams.json with the expected shape', () => {
-    const seg = seedSegment('group/g1', 'segment body about coffee');
+    const seg = seedSegment('session/g1', 'segment body about coffee');
 
     const reg = openAmsRegistry({
       yeaftDir: YEAFT_DIR, memoryIndex,
@@ -92,8 +92,8 @@ describe('AmsRegistry — persist + hydrate round-trip', () => {
   });
 
   it('hydrate restores onDemand + recent from ams.json via SegmentIndex', () => {
-    const seg1 = seedSegment('group/g2', 'first body');
-    const seg2 = seedSegment('group/g2', 'second body');
+    const seg1 = seedSegment('session/g2', 'first body');
+    const seg2 = seedSegment('session/g2', 'second body');
 
     // First registry — populate + persist.
     {
@@ -113,7 +113,7 @@ describe('AmsRegistry — persist + hydrate round-trip', () => {
   });
 
   it('hydrate restores adjustRanThisSession across registry reloads', () => {
-    const seg = seedSegment('group/g7', 'still here');
+    const seg = seedSegment('session/g7', 'still here');
 
     {
       const reg = openAmsRegistry({ yeaftDir: YEAFT_DIR, memoryIndex, config: {} });
@@ -134,12 +134,12 @@ describe('AmsRegistry — persist + hydrate round-trip', () => {
   });
 
   it('hydrate skips ids that no longer exist in the index', () => {
-    const seg = seedSegment('group/g3', 'still here');
+    const seg = seedSegment('session/g3', 'still here');
 
     {
       const reg = openAmsRegistry({ yeaftDir: YEAFT_DIR, memoryIndex, config: {} });
       const ams = reg.getOrCreate('g3');
-      ams.setOnDemand([seg, { id: 'seg_gone', scope: 'group/g3', body: '', kind: 'context', tags: [] }]);
+      ams.setOnDemand([seg, { id: 'seg_gone', scope: 'session/g3', body: '', kind: 'context', tags: [] }]);
       reg.markDirty('g3');
       reg.persist('g3');
     }

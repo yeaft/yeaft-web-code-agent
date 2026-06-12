@@ -356,13 +356,10 @@ export async function loadSession(options = {}) {
     // is the explicit behaviour the user asked for.
 
     // 2026-06-09 (VP per-session isolation): `runSummaryBackfill` was
-    // removed here. It walked `vp/<id>/` and `group/<id>/` at the memory
-    // root, writing `summary.md` files into bare paths the Engine never
-    // reads (`engine.#loadLayerASummaries` reads `group/<sid>/vp/<id>/...`
-    // — kind:'group-vp'). The backfill therefore generated orphan files
-    // on every boot. See `memory/seed-backfill.js` for the historical
-    // context. Real seeding happens at create time via
-    // `seedSummaryIfMissingSync` from `store.js`, called by vp-crud /
+    // removed here. It walked obsolete memory root paths and wrote
+    // `summary.md` files into locations the Engine never reads. Session
+    // memory now lives under `session/<sid>/...`; real seeding happens at
+    // create time via `seedSummaryIfMissingSync` from `store.js`, called by vp-crud /
     // group-crud / seed-default — those write to the correct scope dirs.
   }
 

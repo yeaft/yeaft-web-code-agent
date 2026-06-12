@@ -103,10 +103,10 @@ describe('ActiveMemorySet', () => {
     const ams = mkAms({ ownVpId: 'alice' });
     ams.setResident([
       { scope: 'user', summary: 'u' },
-      { scope: 'group/g1/vp/alice', summary: 'a' },
-      { scope: 'group/g1/vp/bob', summary: 'b' },
+      { scope: 'session/g1/vp/alice', summary: 'a' },
+      { scope: 'session/g1/vp/bob', summary: 'b' },
     ]);
-    expect(ams.residentScopes().sort()).toEqual(['group/g1/vp/alice', 'user']);
+    expect(ams.residentScopes().sort()).toEqual(['session/g1/vp/alice', 'user']);
   });
 
   it('touchRecent maintains LRU order', () => {
@@ -124,8 +124,8 @@ describe('ActiveMemorySet', () => {
 
   it('setOnDemand drops foreign vp segs', () => {
     const ams = mkAms({ ownVpId: 'alice' });
-    const own = makeSegment({ scope: 'group/g1/vp/alice', kind: 'fact', body: 'a' });
-    const foreign = makeSegment({ scope: 'group/g1/vp/bob', kind: 'fact', body: 'b' });
+    const own = makeSegment({ scope: 'session/g1/vp/alice', kind: 'fact', body: 'a' });
+    const foreign = makeSegment({ scope: 'session/g1/vp/bob', kind: 'fact', body: 'b' });
     ams.setOnDemand([own, foreign]);
     expect(ams.onDemandIds()).toEqual([own.id]);
   });
@@ -148,7 +148,7 @@ describe('ActiveMemorySet', () => {
     // resident: 3 items, each 20 tokens → fits 2
     ams.setResident([
       { scope: 'user', summary: 'x'.repeat(80) },              // 20 tok
-      { scope: 'group/g1', summary: 'y'.repeat(80) },           // 20 tok
+      { scope: 'session/g1', summary: 'y'.repeat(80) },           // 20 tok
       { scope: 'feature/f1', summary: 'z'.repeat(80) },         // 20 tok → drop
     ]);
     const snap = ams.snapshot();

@@ -90,14 +90,14 @@ describe('buildVisibleSegments', () => {
   });
 
   it('drops foreign vp scopes', () => {
-    idx.upsert(makeSegment({ scope: 'group/g1/vp/alice', kind: 'fact', body: 'a' }));
-    idx.upsert(makeSegment({ scope: 'group/g1/vp/bob',   kind: 'fact', body: 'b' }));
+    idx.upsert(makeSegment({ scope: 'session/g1/vp/alice', kind: 'fact', body: 'a' }));
+    idx.upsert(makeSegment({ scope: 'session/g1/vp/bob',   kind: 'fact', body: 'b' }));
     const out = buildVisibleSegments({
-      index: idx, scopes: ['group/g1/vp/alice', 'group/g1/vp/bob'], ownVpId: 'alice',
+      index: idx, scopes: ['session/g1/vp/alice', 'session/g1/vp/bob'], ownVpId: 'alice',
       currentAmsIds: new Set(),
     });
     expect(out).toHaveLength(1);
-    expect(out[0].scope).toBe('group/g1/vp/alice');
+    expect(out[0].scope).toBe('session/g1/vp/alice');
   });
 
   it('summarises when scope exceeds bodyCap', () => {

@@ -6,9 +6,9 @@
  * Why this file shrank (2026-06-09 — VP per-session isolation):
  *   The previous `backfillVpSummaries` / `backfillGroupSummaries` /
  *   `migrateLegacyVpSummaries` / `runSummaryBackfill` helpers wrote
- *   `summary.md` into BARE paths (`vp/<id>/`, `group/<sid>/`) at the
+ *   `summary.md` into BARE paths (`vp/<id>/`, `session/<sid>/`) at the
  *   memory root. The Engine actually reads
- *   `group/<sessionId>/vp/<id>/summary.md` (kind:'group-vp'), so the
+ *   `session/<sessionId>/vp/<id>/summary.md` (kind:'session-vp'), so the
  *   backfill produced orphan files no consumer ever loaded.
  *
  *   Per user directive ("VP per-session isolation + clean up dead

@@ -2,14 +2,13 @@
  * memory/store.js — per-scope memory.md + summary.md (Layer-A storage).
  *
  * One pair of files per scope. No shards, no entries/, no index.md, no
- * index.json. The five scope kinds — user, vp, group, feature, topic — share
+ * index.json. The session-memory scope kinds — user, session, session-vp, session-user, session-topic, chat, and chat-vp — share
  * a single shape:
  *
  *   ~/.yeaft/memory/
  *     user/                    memory.md  summary.md
  *     vp/<vpId>/               memory.md  summary.md
- *     group/<sessionId>/         memory.md  summary.md
- *     feature/<featureId>/     memory.md  summary.md
+ *  *     feature/<featureId>/     memory.md  summary.md
  *     topic/<l1>[/<l2>]/       memory.md  summary.md     (≤ 2 levels)
  *
  * Atomicity contract:
@@ -57,25 +56,22 @@ export const DEFAULT_MEMORY_ROOT = join(homedir(), '.yeaft', 'memory');
 /** Scope kinds recognised by v2 (group-isolated layout). */
 export const SCOPE_KINDS = Object.freeze([
   'user',
-  'group',
-  'group-user',
-  'group-vp',
-  'group-feature',
-  'group-topic',
   'chat',
   'chat-vp',
   'session',
+  'session-user',
   'session-vp',
+  'session-topic',
 ]);
 
-/** @typedef {'user'|'group'|'group-user'|'group-vp'|'group-feature'|'group-topic'|'chat'|'chat-vp'|'session'|'session-vp'} ScopeKind */
+/** @typedef {'user'|'chat'|'chat-vp'|'session'|'session-user'|'session-vp'|'session-topic'} ScopeKind */
 
 /**
  * @typedef {Object} Scope
  * @property {ScopeKind} kind
- * @property {string} [id]        — required for group; for group-vp / group-feature the per-kind id
- * @property {string} [sessionId]   — required for every group-* kind
- * @property {string[]} [path]    — required for group-topic; 1–2 segments
+ * @property {string} [id]        — required for session/chat roots and VP ids
+ * @property {string} [sessionId] — required for session-* kinds
+ * @property {string[]} [path]    — required for *-topic; 1–2 segments
  */
 
 /**
@@ -93,39 +89,6 @@ export function scopeDir(scope) {
   switch (scope.kind) {
     case 'user':
       return 'user';
-    case 'group':
-      if (!scope.id) throw new Error('scopeDir: group scope requires id');
-      assertSafeSegment(scope.id, 'group.id');
-      return `group/${scope.id}`;
-    case 'group-user': {
-      if (!scope.sessionId) throw new Error('scopeDir: group-user scope requires sessionId');
-      assertSafeSegment(scope.sessionId, 'group-user.sessionId');
-      return `group/${scope.sessionId}/user`;
-    }
-    case 'group-vp': {
-      if (!scope.sessionId) throw new Error('scopeDir: group-vp scope requires sessionId');
-      if (!scope.id) throw new Error('scopeDir: group-vp scope requires id');
-      assertSafeSegment(scope.sessionId, 'group-vp.sessionId');
-      assertSafeSegment(scope.id, 'group-vp.id');
-      return `group/${scope.sessionId}/vp/${scope.id}`;
-    }
-    case 'group-feature': {
-      if (!scope.sessionId) throw new Error('scopeDir: group-feature scope requires sessionId');
-      if (!scope.id) throw new Error('scopeDir: group-feature scope requires id');
-      assertSafeSegment(scope.sessionId, 'group-feature.sessionId');
-      assertSafeSegment(scope.id, 'group-feature.id');
-      return `group/${scope.sessionId}/feature/${scope.id}`;
-    }
-    case 'group-topic': {
-      if (!scope.sessionId) throw new Error('scopeDir: group-topic scope requires sessionId');
-      assertSafeSegment(scope.sessionId, 'group-topic.sessionId');
-      const segs = Array.isArray(scope.path) ? scope.path : [];
-      if (segs.length === 0 || segs.length > 2) {
-        throw new Error('scopeDir: group-topic.path must have 1 or 2 segments');
-      }
-      for (const s of segs) assertSafeSegment(s, 'group-topic.path');
-      return `group/${scope.sessionId}/topic/${segs.join('/')}`;
-    }
     case 'chat': {
       if (!scope.id) throw new Error('scopeDir: chat scope requires id');
       assertSafeSegment(scope.id, 'chat.id');
@@ -143,12 +106,27 @@ export function scopeDir(scope) {
       assertSafeSegment(scope.id, 'session.id');
       return `session/${scope.id}`;
     }
+    case 'session-user': {
+      if (!scope.sessionId) throw new Error('scopeDir: session-user scope requires sessionId');
+      assertSafeSegment(scope.sessionId, 'session-user.sessionId');
+      return `session/${scope.sessionId}/user`;
+    }
     case 'session-vp': {
       if (!scope.sessionId) throw new Error('scopeDir: session-vp scope requires sessionId');
       if (!scope.id) throw new Error('scopeDir: session-vp scope requires id');
       assertSafeSegment(scope.sessionId, 'session-vp.sessionId');
       assertSafeSegment(scope.id, 'session-vp.id');
       return `session/${scope.sessionId}/vp/${scope.id}`;
+    }
+    case 'session-topic': {
+      if (!scope.sessionId) throw new Error('scopeDir: session-topic scope requires sessionId');
+      assertSafeSegment(scope.sessionId, 'session-topic.sessionId');
+      const segs = Array.isArray(scope.path) ? scope.path : [];
+      if (segs.length === 0 || segs.length > 2) {
+        throw new Error('scopeDir: session-topic.path must have 1 or 2 segments');
+      }
+      for (const s of segs) assertSafeSegment(s, 'session-topic.path');
+      return `session/${scope.sessionId}/topic/${segs.join('/')}`;
     }
     default:
       throw new Error(`scopeDir: unknown kind ${JSON.stringify(scope.kind)}`);
@@ -189,7 +167,7 @@ function assertSafeSegment(s, ctx) {
  * @returns {boolean}
  */
 export function isValidTopic(scope) {
-  if (!scope || scope.kind !== 'group-topic') return false;
+  if (!scope || scope.kind !== 'session-topic') return false;
   if (!scope.sessionId || typeof scope.sessionId !== 'string') return false;
   if (!Array.isArray(scope.path)) return false;
   if (scope.path.length < 1 || scope.path.length > 2) return false;
@@ -205,8 +183,8 @@ export function isValidTopic(scope) {
 // ─── ACL ───────────────────────────────────────────────────────
 
 /**
- * The single ACL: `group/<g>/vp/<other>` is foreign when `currentVpId` is given.
- * Across groups, every `group/<g>/vp/...` path is foreign by construction
+ * The single ACL: `session/<id>/vp/<other>` is foreign when `currentVpId` is given.
+ * Across sessions, every `session/<id>/vp/...` path is foreign by construction
  * (the calling VP only runs inside its own group dir).
  *
  * @param {string} relPath
@@ -215,7 +193,7 @@ export function isValidTopic(scope) {
  */
 export function isVpForeign(relPath, currentVpId) {
   if (!relPath || !currentVpId) return false;
-  const m = /^(?:group|chat|session)\/[^/]+\/vp\/([^/]+)(?:\/|$)/.exec(relPath);
+  const m = /^(?:chat|session)\/[^/]+\/vp\/([^/]+)(?:\/|$)/.exec(relPath);
   if (!m) return false;
   return m[1] !== currentVpId;
 }
@@ -459,12 +437,7 @@ export async function ensureScope(scope, opts = {}) {
  *
  * Walks shallowly:
  *   user/                                  → { kind: 'user' }
- *   group/<g>/                             → { kind: 'group', id: g }
- *   group/<g>/user/                        → { kind: 'group-user', sessionId: g }
- *   group/<g>/vp/<v>/                      → { kind: 'group-vp', sessionId: g, id: v }
- *   group/<g>/feature/<f>/                 → { kind: 'group-feature', sessionId: g, id: f }
- *   group/<g>/topic/<l1>[/<l2>]/           → { kind: 'group-topic', sessionId: g, path: [...] }
- *
+ *   session/<id>/                             → { kind: 'session', id }
  * Skips `.legacy/` and any dotfile / unsafe segment.
  *
  * @param {{ root?: string }} [opts]
@@ -477,81 +450,6 @@ export async function listScopes(opts = {}) {
 
   // user/
   if (existsSync(join(root, 'user'))) out.push({ kind: 'user' });
-
-  // group/<g>/...  (LEGACY scope tree; kept for un-migrated data)
-  const groupRoot = join(root, 'group');
-  let groups;
-  try { groups = await fsp.readdir(groupRoot, { withFileTypes: true }); }
-  catch (err) {
-    if (err && err.code === 'ENOENT') groups = [];
-    else throw err;
-  }
-
-  for (const gent of groups) {
-    if (!gent.isDirectory()) continue;
-    if (gent.name.startsWith('.')) continue;
-    if (!isSafeId(gent.name)) continue;
-    const g = gent.name;
-    out.push({ kind: 'group', id: g });
-    const gAbs = join(groupRoot, g);
-
-    // group/<g>/user/
-    if (existsSync(join(gAbs, 'user'))) {
-      out.push({ kind: 'group-user', sessionId: g });
-    }
-
-    // group/<g>/vp/<v>/  and  group/<g>/feature/<f>/
-    for (const kind of ['vp', 'feature']) {
-      const dir = join(gAbs, kind);
-      let names;
-      try { names = await fsp.readdir(dir, { withFileTypes: true }); }
-      catch (err) {
-        if (err && err.code === 'ENOENT') continue;
-        throw err;
-      }
-      for (const ent of names) {
-        if (!ent.isDirectory()) continue;
-        if (!isSafeId(ent.name)) continue;
-        out.push({
-          kind: kind === 'vp' ? 'group-vp' : 'group-feature',
-          sessionId: g,
-          id: ent.name,
-        });
-      }
-    }
-
-    // group/<g>/topic/<l1>/[<l2>/]
-    const topicDir = join(gAbs, 'topic');
-    let l1s;
-    try { l1s = await fsp.readdir(topicDir, { withFileTypes: true }); }
-    catch (err) {
-      if (err && err.code === 'ENOENT') l1s = [];
-      else throw err;
-    }
-    for (const l1ent of l1s) {
-      if (!l1ent.isDirectory()) continue;
-      if (!isSafeId(l1ent.name)) continue;
-      const l1 = l1ent.name;
-      const l1abs = join(topicDir, l1);
-      let l2s;
-      try { l2s = await fsp.readdir(l1abs, { withFileTypes: true }); }
-      catch { l2s = []; }
-      let hasL2 = false;
-      for (const l2ent of l2s) {
-        if (!l2ent.isDirectory()) continue;
-        if (!isSafeId(l2ent.name)) continue;
-        out.push({ kind: 'group-topic', sessionId: g, path: [l1, l2ent.name] });
-        hasL2 = true;
-      }
-      if (!hasL2) {
-        const hasMemory = existsSync(join(l1abs, 'memory.md'));
-        const hasSummary = existsSync(join(l1abs, 'summary.md'));
-        if (hasMemory || hasSummary) {
-          out.push({ kind: 'group-topic', sessionId: g, path: [l1] });
-        }
-      }
-    }
-  }
 
   // chat/<c>/  and  chat/<c>/vp/<v>/
   const chatRoot = join(root, 'chat');
@@ -592,6 +490,10 @@ export async function listScopes(opts = {}) {
     if (!isSafeId(sent.name)) continue;
     const s = sent.name;
     out.push({ kind: 'session', id: s });
+    if (existsSync(join(sessionRoot, s, 'user'))) {
+      out.push({ kind: 'session-user', sessionId: s });
+    }
+
     const vpDir = join(sessionRoot, s, 'vp');
     let vps;
     try { vps = await fsp.readdir(vpDir, { withFileTypes: true }); }
@@ -600,6 +502,28 @@ export async function listScopes(opts = {}) {
       if (!vent.isDirectory()) continue;
       if (!isSafeId(vent.name)) continue;
       out.push({ kind: 'session-vp', sessionId: s, id: vent.name });
+    }
+
+    const topicDir = join(sessionRoot, s, 'topic');
+    let l1s;
+    try { l1s = await fsp.readdir(topicDir, { withFileTypes: true }); }
+    catch (err) {
+      if (err && err.code === 'ENOENT') l1s = [];
+      else throw err;
+    }
+    for (const l1ent of l1s) {
+      if (!l1ent.isDirectory()) continue;
+      if (!isSafeId(l1ent.name)) continue;
+      out.push({ kind: 'session-topic', sessionId: s, path: [l1ent.name] });
+      const l2dir = join(topicDir, l1ent.name);
+      let l2s;
+      try { l2s = await fsp.readdir(l2dir, { withFileTypes: true }); }
+      catch { l2s = []; }
+      for (const l2ent of l2s) {
+        if (!l2ent.isDirectory()) continue;
+        if (!isSafeId(l2ent.name)) continue;
+        out.push({ kind: 'session-topic', sessionId: s, path: [l1ent.name, l2ent.name] });
+      }
     }
   }
 
