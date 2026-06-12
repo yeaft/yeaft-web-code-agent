@@ -49,7 +49,10 @@ function mkStore() {
   return {
     yeaftDreamLatest: {},
     yeaftDreamSnapshots: {},
+    yeaftDreamPromptLoads: {},
     yeaftDreamEvents: {},
+    yeaftDebugTurnsById: {},
+    yeaftDebugTurnOrder: [],
     yeaftConversationId: null,
     yeaftDebugSessionFilter: null,
     yeaftActiveSessionFilter: null,
@@ -68,6 +71,35 @@ const send = (store, event) => {
 };
 
 describe('handleYeaftOutput — dream event ring buffer', () => {
+
+  it('stores Dream resident summaries that were loaded into the system prompt', () => {
+    const store = mkStore();
+    globalThis.window.Pinia.useSessionsStore = () => ({ activeSessionId: 'g1' });
+
+    send(store, { type: 'turn_open', turnId: 't1', sessionId: 'g1', userPrompt: 'hello' });
+    send(store, {
+      type: 'dream_memory_loaded',
+      turnId: 't1',
+      sessionId: 'g1',
+      vpId: 'vp-a',
+      loadedInto: 'system_prompt.memory',
+      resident: [{
+        scope: 'group/g1',
+        source: 'resident-summary',
+        summary: 'Loaded Dream summary',
+      }],
+    });
+
+    expect(store.yeaftDebugTurnsById.t1.dreamMemoryLoaded[0].summary).toBe('Loaded Dream summary');
+    expect(store.yeaftDreamPromptLoads['group/g1']).toEqual(expect.objectContaining({
+      scope: 'group/g1',
+      sessionId: 'g1',
+      vpId: 'vp-a',
+      loadedInto: 'system_prompt.memory',
+      summary: 'Loaded Dream summary',
+    }));
+    expect(getters.yeaftDreamPromptLoadForActiveSession(store).summary).toBe('Loaded Dream summary');
+  });
 
   it('stores loadable dream snapshots and exposes the active session snapshot', () => {
     const store = mkStore();
@@ -106,6 +138,25 @@ describe('handleYeaftOutput — dream event ring buffer', () => {
     });
 
     expect(store.yeaftDreamSnapshots['group/g2'].summaryText).toBe('Persisted dream output');
+  });
+
+
+  it('ignores nested group resident scopes for the per-session Dream prompt-load cache', () => {
+    const store = mkStore();
+    send(store, { type: 'turn_open', turnId: 't-nested', sessionId: 'g1', userPrompt: 'hello' });
+    send(store, {
+      type: 'dream_memory_loaded',
+      turnId: 't-nested',
+      sessionId: 'g1',
+      resident: [{
+        scope: 'group/g1/vp/vp-a',
+        source: 'resident-summary',
+        summary: 'Nested VP summary',
+      }],
+    });
+
+    expect(store.yeaftDreamPromptLoads).toEqual({});
+    expect(store.yeaftDebugTurnsById['t-nested'].dreamMemoryLoaded[0].scope).toBe('group/g1/vp/vp-a');
   });
 
   it('active-group getters fall back to sessionsStore.activeSessionId when the main pane is not filtered', () => {
