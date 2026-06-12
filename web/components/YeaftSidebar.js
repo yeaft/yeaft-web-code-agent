@@ -22,6 +22,7 @@ import SessionCreateModal from './SessionCreateModal.js';
 import SidebarModeToggle from './SidebarModeToggle.js';
 import SidebarAgentHeader from './SidebarAgentHeader.js';
 import { shortenPath } from '../utils/path-display.js';
+import { buildYeaftSidebarSessionList } from '../stores/helpers/yeaft-sidebar-sessions.js';
 
 export default {
   name: 'YeaftSidebar',
@@ -101,12 +102,13 @@ export default {
                 v-for="s in sessionList"
                 :key="s.kind + ':' + s.id"
                 class="session-item"
-                :class="{ active: s.id === activeSessionId, processing: s.id === activeSessionId && store && store.isConversationProcessing(store.yeaftConversationId) }"
+                :class="{ active: s.active, pinned: s.pinned, processing: s.active && store && store.isConversationProcessing(store.yeaftConversationId) }"
                 @click="onSelectGroup(s.raw)"
                 @contextmenu.prevent="openGroupMenu(s.raw, $event)"
               >
                 <div class="session-item-header">
-                  <span v-if="s.id === activeSessionId && store && store.isConversationProcessing(store.yeaftConversationId)" class="processing-dot"></span>
+                  <span v-if="s.pinned" class="session-pin-icon"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg></span>
+                  <span v-if="s.active && store && store.isConversationProcessing(store.yeaftConversationId)" class="processing-dot"></span>
                   <div class="title" :title="groupDisplayName(s.raw)">
                     <span>{{ groupDisplayName(s.raw) }}</span>
                   </div>
@@ -235,15 +237,16 @@ export default {
       } catch (_) { /* no-pinia test env */ }
       return null;
     },
-    activeSessionId() { return this.sessionsStore?.activeSessionId || null; },
-    // Phase 4: chat container removed. Session list is just groups now.
+    activeSessionId() {
+      return this.chatStore?.yeaftActiveSessionFilter || this.sessionsStore?.activeSessionId || null;
+    },
+    // Phase 4: chat container removed. Session list is just sessions now.
     sessionList() {
-      const out = [];
-      const raw = this.sessionsStore?.sessionList || [];
-      for (const g of raw) {
-        if (g && g.id) out.push({ kind: 'group', id: g.id, raw: g });
-      }
-      return out;
+      return buildYeaftSidebarSessionList({
+        sessions: this.sessionsStore?.sessionList || [],
+        activeSessionId: this.activeSessionId,
+        pinnedSessionIds: this.chatStore?.pinnedSessions || [],
+      });
     },
     chatStore() {
       // Needed for `sessionCrudRequest` and the Yeaft session pin menu.
