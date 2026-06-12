@@ -178,7 +178,7 @@ function handleTraceQuery(args, config) {
         console.log(`Compacting debug database (${(s.dbSizeBytes / 1048576).toFixed(1)} MB, ${s.turnCount} turns)...`);
         console.log('This rebuilds the file and may take a while on a large DB. Do not interrupt.');
         const { before, after } = trace.compact();
-        const saved = before - after;
+        const saved = Math.max(0, before - after);
         console.log(`Done. ${(before / 1048576).toFixed(1)} MB → ${(after / 1048576).toFixed(1)} MB (reclaimed ${(saved / 1048576).toFixed(1)} MB).`);
         break;
       }

@@ -616,16 +616,19 @@ export class DebugTrace {
   // ─── Maintenance ─────────────────────────────────────────────
 
   /**
-   * Delete trajectory data older than retentionDays, then return the freed
-   * pages to the OS.
+   * Delete trajectory data older than retentionDays, then mark the freed pages
+   * reclaimable.
    *
    * The always-on trace stamps every turn with the cumulative request/response
    * snapshot, so each long-session row is MB-scale and the file grows fast
    * (a real deployment hit 5GB in 15 days). A plain DELETE marks pages free but
-   * leaves the file at its peak size; `PRAGMA incremental_vacuum` hands those
-   * pages back — but only when the DB was created with `auto_vacuum=INCREMENTAL`
-   * (see constructor). On a legacy `auto_vacuum=NONE` store the vacuum is a
-   * harmless no-op, so this is safe to call unconditionally.
+   * leaves the file at its peak size; `PRAGMA incremental_vacuum` moves those
+   * pages onto the freelist for return to the OS — but only when the DB was
+   * created with `auto_vacuum=INCREMENTAL` (see constructor). On a legacy
+   * `auto_vacuum=NONE` store the vacuum is a harmless no-op, so this is safe to
+   * call unconditionally. Note: in WAL mode the on-disk file truncates at the
+   * next checkpoint (the running agent's automatic checkpoints handle this), so
+   * the page_count drops here but the file size catches up shortly after.
    *
    * @param {number} [retentionDays=10]
    * @returns {{ deletedTurns: number, deletedTools: number, deletedEvents: number }}
@@ -644,9 +647,12 @@ export class DebugTrace {
       DELETE FROM trace_events WHERE created_at < ?
     `).run(cutoff).changes);
     // Reclaim freed pages (no-op on legacy auto_vacuum=NONE DBs). Wrapped so a
-    // vacuum failure can never mask a successful delete.
+    // vacuum failure can never mask a successful delete, but surfaced as a warn
+    // because this is the one operation the whole disk-growth fix relies on — a
+    // silent persistent failure would look exactly like "the fix works".
     if (deletedTurns || deletedTools || deletedEvents) {
-      try { this.#db.exec('PRAGMA incremental_vacuum'); } catch { /* best-effort */ }
+      try { this.#db.exec('PRAGMA incremental_vacuum'); }
+      catch (err) { console.warn('[Yeaft] trace incremental_vacuum failed:', err?.message || err); }
     }
     return { deletedTurns, deletedTools, deletedEvents };
   }
