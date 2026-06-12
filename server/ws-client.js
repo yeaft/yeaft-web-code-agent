@@ -61,7 +61,12 @@ export function handleWebConnection(ws, url) {
     currentAgent: null,
     currentConversation: null,
     sessionKey,
-    isAlive: true
+    isAlive: true,
+    // feat-ws-plaintext-negotiation: per-client flag. Defaults `true`
+    // (= old client, encrypt outbound for back-compat). Flipped to
+    // `false` when the client sends `client_hello { plaintextOk: true }`
+    // — see early dispatch in handleWebMessage.
+    encryptOutbound: true
   });
 
   // 心跳响应处理
@@ -75,12 +80,18 @@ export function handleWebConnection(ws, url) {
   const client = webClients.get(clientId);
 
   if (authenticated) {
-    // Send auth result unencrypted (client doesn't have key yet)
+    // Send auth result unencrypted (client doesn't have key yet).
+    // `acceptPlaintext: true` advertises that this server will accept
+    // plaintext from a new client. Old clients ignore the unknown field.
+    // The corresponding flip on the server side (stop encrypting outbound
+    // to this client) happens when the new client confirms it can speak
+    // plaintext via the `client_hello` frame — see handleWebMessage.
     ws.send(JSON.stringify({
       type: 'auth_result',
       success: true,
       sessionKey: sessionKey ? encodeKey(sessionKey) : null,
-      role
+      role,
+      acceptPlaintext: true
     }));
     setTimeout(() => broadcastAgentList(), 100);
   } else {
@@ -145,6 +156,18 @@ const WORKBENCH_TYPES = new Set([
 async function handleWebMessage(clientId, msg) {
   const client = webClients.get(clientId);
   if (!client || !client.authenticated) return;
+
+  // feat-ws-plaintext-negotiation: early capability frame from new web
+  // clients. Tells the server "you may stop encrypting outbound to me".
+  // Old clients never send this; their per-client `encryptOutbound` flag
+  // stays `true` and we keep the ciphertext path.
+  if (msg.type === 'client_hello') {
+    if (msg.plaintextOk === true) {
+      client.encryptOutbound = false;
+      console.log(`[WS] Client ${clientId} negotiated plaintext mode (version=${msg.version || 'unknown'})`);
+    }
+    return;
+  }
 
   // Workbench 权限检查：仅 admin 和 pro 可用（当前所有用户都是 pro 或 admin）
   if (!CONFIG.skipAuth && WORKBENCH_TYPES.has(msg.type) && client.role !== 'admin' && client.role !== 'pro') {

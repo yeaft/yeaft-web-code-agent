@@ -49,7 +49,13 @@ export function sendWsMessage(store, msg) {
   }
 
   try {
-    if (store.sessionKey) {
+    // feat-ws-plaintext-negotiation: plaintext path is the default for
+    // new servers that announced acceptPlaintext in auth_result. Falls
+    // back to encrypted for old servers — store.serverEncryptionRequired
+    // stays `true` until the server tells us otherwise. The receive path
+    // (parseWsMessage) is unconditional and continues to decrypt
+    // ciphertext from an old server.
+    if (store.serverEncryptionRequired && store.sessionKey) {
       const encrypted = encrypt(msg, store.sessionKey);
       store.ws.send(JSON.stringify(encrypted));
     } else {
@@ -140,6 +146,22 @@ export function connect(store) {
     store.connectionState = 'connected';
     store.reconnectAttempts = 0;
     store.startHeartbeat();
+    // feat-ws-plaintext-negotiation: capability handshake. Tell the
+    // server we're a new client that can accept plaintext outbound.
+    // New server flips per-client `encryptOutbound = false` so future
+    // frames to us are plain JSON (visible in DevTools, no per-frame
+    // CPU cost). Old server doesn't recognise the `client_hello` type
+    // and ignores it harmlessly. Sent in plaintext, before key arrives
+    // — server handles this before auth_result is processed by client.
+    try {
+      store.ws.send(JSON.stringify({
+        type: 'client_hello',
+        plaintextOk: true,
+        version: store.clientVersion || 'unknown'
+      }));
+    } catch (e) {
+      console.warn('[WS] Failed to send client_hello:', e);
+    }
     _settleConnectResolvers(true);
   };
 

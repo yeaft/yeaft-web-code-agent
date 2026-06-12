@@ -178,6 +178,12 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
     ? capabilities
     : ['terminal', 'file_editor', 'background_tasks'];
 
+  // feat-ws-plaintext-negotiation: new agents advertise `plaintext-ok` in
+  // their capability list (either via the URL query string in skipAuth
+  // path or in the `auth` frame in prod path). When absent, treat as old
+  // agent and keep encrypting outbound (back-compat).
+  const encryptOutbound = !effectiveCapabilities.includes('plaintext-ok');
+
   agents.set(agentId, {
     ws,
     name: agentName,
@@ -192,7 +198,8 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
     status: 'syncing',
     ownerId,
     ownerUsername,
-    version: agentVersion
+    version: agentVersion,
+    encryptOutbound
   });
 
   // 同步超时保护：30 秒后强制 ready
@@ -229,10 +236,15 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
     type: 'registered',
     agentId,
     sessionKey: sessionKey ? encodeKey(sessionKey) : null,
+    // feat-ws-plaintext-negotiation: tell new agents that this server
+    // will accept plaintext outbound from them. Old agents ignore the
+    // unknown field. New agents flip `serverEncryptionRequired = false`
+    // and stop calling encrypt() on the send path.
+    acceptPlaintext: true,
     ...(upgradeAvailable && { upgradeAvailable })
   }));
 
-  console.log(`Agent connected: ${agentName} (${agentId})`);
+  console.log(`Agent connected: ${agentName} (${agentId})${encryptOutbound ? '' : ' [plaintext mode]'}`);
   broadcastAgentList();
 }
 

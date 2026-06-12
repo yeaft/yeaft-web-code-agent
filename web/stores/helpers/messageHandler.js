@@ -90,6 +90,14 @@ export function handleMessage(store, msg) {
           authStore.setSessionKey(msg.sessionKey);
         }
 
+        // feat-ws-plaintext-negotiation: new server tells us it accepts
+        // plaintext outbound from us. Stop encrypting on send. Receive
+        // path stays unconditional so any in-flight ciphertext still
+        // decrypts cleanly.
+        if (msg.acceptPlaintext === true) {
+          store.serverEncryptionRequired = false;
+        }
+
         if (msg.role) {
           authStore.role = msg.role;
         }

@@ -41,7 +41,11 @@ export async function sendToServer(msg) {
   }
 
   try {
-    if (ctx.sessionKey) {
+    // feat-ws-plaintext-negotiation: encrypt only when the server has
+    // NOT advertised plaintext acceptance. Defaults to encrypted for
+    // back-compat with old servers; flipped to plaintext when the
+    // `registered` frame includes `acceptPlaintext: true`.
+    if (ctx.serverEncryptionRequired && ctx.sessionKey) {
       const encrypted = await encrypt(msg, ctx.sessionKey);
       ctx.ws.send(JSON.stringify(encrypted));
     } else {

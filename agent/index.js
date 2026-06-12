@@ -111,7 +111,11 @@ loadMcpServers();
 
 // Agent capabilities（启动时自动检测）
 async function detectCapabilities() {
-  const capabilities = ['background_tasks', 'file_editor', 'ping_session'];
+  // feat-ws-plaintext-negotiation: `plaintext-ok` advertises that this
+  // agent build can speak plaintext WS frames. New servers see this and
+  // flip `agent.encryptOutbound = false`, stopping outbound encryption
+  // to this peer. Old servers ignore the unknown capability token.
+  const capabilities = ['background_tasks', 'file_editor', 'ping_session', 'plaintext-ok'];
   const pty = await loadNodePty();
   if (pty) capabilities.push('terminal');
 
