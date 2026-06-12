@@ -1,3 +1,4 @@
+import { isValidTopic } from '../memory/store.js';
 /**
  * dream/triage.js.
  *
@@ -5,7 +6,7 @@
  * The decision is two-staged on purpose:
  *
  *   1. **Hard rules** (this module, no LLM): everything we can determine
- *      from message metadata. Always include the active group, every VP
+ *      from message metadata. Always include the active session, every VP
  *      that spoke as an assistant in the diff, and `user` (so painted-over
  *      user-profile signals can't be missed). (Feature scope was dropped
  *      2026-05-13 along with the rest of the Feature system.)
@@ -35,7 +36,6 @@
  * below.)
  */
 
-import { isValidTopic } from '../memory/store.js';
 import { truncateMessage } from './segment.js';
 import { render } from './prompts/index.js';
 
@@ -50,8 +50,8 @@ function triageSystem(language) {
  * structure of the diff.
  *
  * Inputs:
- *   - sessionId: the active group ('_no-session' is allowed and skips the
- *     `group/<id>` entry — by convention the virtual group has no scope
+ *   - sessionId: the active session ('_no-session' is allowed and skips the
+ *     `sessions/<id>` entry — by convention the virtual session has no scope
  *     of its own).
  *   - messages: the diff (already overlap-prefixed if applicable).
  *
@@ -65,7 +65,7 @@ export function applyHardRules({ sessionId, chatId, messages }) {
   // global user is always in.
   add('user');
 
-  // chat path takes precedence: chat sessions have no group context.
+  // chat path takes precedence: chat sessions have no collaborative session context.
   if (chatId) {
     add(`chat/${chatId}`);
     for (const m of (messages || [])) {
@@ -80,19 +80,19 @@ export function applyHardRules({ sessionId, chatId, messages }) {
     return Array.from(out.values());
   }
 
-  // active group + its per-group user layer, except the virtual _no-group bucket.
+  // active collaborative session, except the virtual _no-session bucket.
   if (sessionId && sessionId !== '_no-session') {
-    add(`group/${sessionId}`);
-    add(`group/${sessionId}/user`);
+    add(`sessions/${sessionId}`);
+    add(`sessions/${sessionId}/user`);
   }
 
   for (const m of (messages || [])) {
     if (!m || typeof m !== 'object') continue;
-    // Active VP: any assistant message's vpId — now group-internal.
+    // Active VP: any assistant message's vpId, isolated inside this session.
     if (m.role === 'assistant') {
       const vp = m.vpId || (m.author && /^vp:(.+)$/.exec(m.author)?.[1]);
       if (vp && /^[A-Za-z0-9_\-.一-鿿]+$/.test(vp) && sessionId && sessionId !== '_no-session') {
-        add(`group/${sessionId}/vp/${vp}`);
+        add(`sessions/${sessionId}/vp/${vp}`);
       }
     }
   }
@@ -181,8 +181,8 @@ export async function classifySoft({ sessionId, messages, topicSummaries, llm, l
     if (!path) continue;
     const segs = path.split('/').filter(Boolean);
     if (!sessionId || sessionId === '_no-session') continue;
-    if (!isValidTopic({ kind: 'group-topic', sessionId, path: segs })) continue;
-    const scope = `group/${sessionId}/topic/${segs.join('/')}`;
+    if (!isValidTopic({ kind: 'session-topic', sessionId, path: segs })) continue;
+    const scope = `sessions/${sessionId}/topic/${segs.join('/')}`;
     if (pass2.decision === 'match') {
       out.push({ kind: 'update', scope });
     } else if (pass2.decision === 'new') {

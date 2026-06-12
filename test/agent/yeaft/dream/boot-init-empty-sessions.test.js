@@ -61,7 +61,7 @@ describe('bootInitEmptyGroups', () => {
     expect(sched._calls).toEqual([]);
   });
 
-  it('skips groups with zero messages', async () => {
+  it('skips sessions with zero messages', async () => {
     const sessionsRoot = join(yeaftDir, 'sessions');
     createSession(sessionsRoot, { id: 'empty-grp', roster: [], defaultVpId: null });
     const sched = fakeScheduler();
@@ -74,21 +74,21 @@ describe('bootInitEmptyGroups', () => {
     expect(sched._calls).toEqual([]);
   });
 
-  it('skips groups whose AMS already has segments', async () => {
+  it('skips sessions whose AMS already has segments', async () => {
     const sessionsRoot = join(yeaftDir, 'sessions');
     const h = createSession(sessionsRoot, { id: 'rich-grp', roster: [], defaultVpId: null });
     h.appendMessage({ from: 'user', text: 'hello' });
     const sched = fakeScheduler();
     const r = await bootInitEmptyGroups({
       yeaftDir,
-      memoryIndex: fakeIndex({ 'group/rich-grp': [{ id: 'seg_1' }] }),
+      memoryIndex: fakeIndex({ 'sessions/rich-grp': [{ id: 'seg_1' }] }),
       dreamScheduler: sched,
     });
     expect(r.triggered).toEqual([]);
     expect(sched._calls).toEqual([]);
   });
 
-  it('triggers a scoped dream pass for groups with messages but no segments', async () => {
+  it('triggers a scoped dream pass for sessions with messages but no segments', async () => {
     const sessionsRoot = join(yeaftDir, 'sessions');
     const a = createSession(sessionsRoot, { id: 'a', roster: [], defaultVpId: null });
     const b = createSession(sessionsRoot, { id: 'b', roster: [], defaultVpId: null });
@@ -100,18 +100,18 @@ describe('bootInitEmptyGroups', () => {
     const r = await bootInitEmptyGroups({
       yeaftDir,
       memoryIndex: fakeIndex({
-        'group/a': [],
-        'group/b': [],
-        'group/c': [],
+        'sessions/a': [],
+        'sessions/b': [],
+        'sessions/c': [],
       }),
       dreamScheduler: sched,
     });
     // sort to keep assertion order-independent
-    expect(r.triggered.sort()).toEqual(['group/a', 'group/b']);
+    expect(r.triggered.sort()).toEqual(['sessions/a', 'sessions/b']);
     // Wait for the fire-and-forget Promise to resolve.
     await new Promise(resolve => setImmediate(resolve));
     expect(sched._calls).toHaveLength(1);
-    expect(sched._calls[0].sort()).toEqual(['group/a', 'group/b']);
+    expect(sched._calls[0].sort()).toEqual(['sessions/a', 'sessions/b']);
   });
 
   it('survives a memoryIndex that throws (per-group skip)', async () => {

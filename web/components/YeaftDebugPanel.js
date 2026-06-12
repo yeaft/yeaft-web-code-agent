@@ -370,8 +370,8 @@ export default {
       if (evt.reason) parts.push(`reason: ${evt.reason}`);
       if (typeof evt.entriesCreated === 'number') parts.push(`entries ${evt.entriesCreated}`);
       if (typeof evt.targetsApplied === 'number') parts.push(`applied ${evt.targetsApplied}`);
-      if (typeof evt.groupsProcessed === 'number') parts.push(`sessions ${evt.groupsProcessed}`);
-      if (typeof evt.groupsSkipped === 'number') parts.push(`skipped sessions ${evt.groupsSkipped}`);
+      if (typeof evt.sessionsProcessed === 'number') parts.push(`sessions ${evt.sessionsProcessed}`);
+      if (typeof evt.sessionsSkipped === 'number') parts.push(`skipped sessions ${evt.sessionsSkipped}`);
       if (typeof evt.segments === 'number') parts.push(`segments ${evt.segments}`);
       if (typeof evt.actions === 'number') parts.push(`actions ${evt.actions}`);
       if (typeof evt.targets === 'number') parts.push(`targets ${evt.targets}`);

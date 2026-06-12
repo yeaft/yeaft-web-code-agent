@@ -42,7 +42,7 @@ import { join } from 'path';
 import { runDream } from './runner.js';
 import { createDreamScheduler } from './schedule.js';
 import { listSessions, openSession } from '../sessions/session-store.js';
-import { readGroupState } from './state.js';
+import { readSessionState } from './state.js';
 import { DREAM_NUDGE_AFTER_MESSAGES, DREAM_INTERVAL_HOURS } from './limits.js';
 
 /**
@@ -262,7 +262,7 @@ function finalizeDreamMetrics(metrics, durationMs) {
 
 function summarizeDreamResult(result = {}) {
   return {
-    groups: Array.isArray(result.groups) ? result.groups.length : 0,
+    sessions: Array.isArray(result.sessions) ? result.sessions.length : 0,
     targets: Array.isArray(result.targets) ? result.targets.length : 0,
     error: result.error || null,
     skipped: !!result.skipped,
@@ -461,7 +461,7 @@ export async function bootInitEmptyGroups(args) {
   const empty = [];
   for (const gid of ids) {
     let segCount;
-    try { segCount = args.memoryIndex.listByScope(`group/${gid}`).length; }
+    try { segCount = args.memoryIndex.listByScope(`sessions/${gid}`).length; }
     catch { continue; }
     if (segCount > 0) continue;
     let hasMessages = false;
@@ -473,7 +473,7 @@ export async function bootInitEmptyGroups(args) {
       hasMessages = !first.done;
     } catch { continue; }
     if (!hasMessages) continue;
-    empty.push(`group/${gid}`);
+    empty.push(`sessions/${gid}`);
   }
   if (empty.length === 0) return out;
   if (args.config?.debug) {
@@ -534,7 +534,7 @@ export async function bootCatchUpStaleDream(args) {
   let anyTraffic = false;
   for (const gid of sessionIds) {
     let st;
-    try { st = await readGroupState(memoryRoot, gid); }
+    try { st = await readSessionState(memoryRoot, gid); }
     catch { continue; }
     if (st.lastDreamAt) {
       const t = Date.parse(st.lastDreamAt);

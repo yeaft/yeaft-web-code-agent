@@ -24,12 +24,12 @@ afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 describe('targetToScope', () => {
   it('maps scope strings', () => {
     expect(targetToScope('user')).toEqual({ kind: 'user' });
-    expect(targetToScope('group/g1')).toEqual({ kind: 'group', id: 'g1' });
-    expect(targetToScope('group/g1/user')).toEqual({ kind: 'group-user', sessionId: 'g1' });
-    expect(targetToScope('group/g1/vp/zhang')).toEqual({ kind: 'group-vp', sessionId: 'g1', id: 'zhang' });
-    expect(targetToScope('group/g1/feature/f1')).toEqual({ kind: 'group-feature', sessionId: 'g1', id: 'f1' });
-    expect(targetToScope('group/g1/topic/sci/phys'))
-      .toEqual({ kind: 'group-topic', sessionId: 'g1', path: ['sci', 'phys'] });
+    expect(targetToScope('sessions/g1')).toEqual({ kind: 'session', id: 'g1' });
+    expect(targetToScope('sessions/g1/user')).toEqual({ kind: 'session-user', sessionId: 'g1' });
+    expect(targetToScope('sessions/g1/vp/zhang')).toEqual({ kind: 'session-vp', sessionId: 'g1', id: 'zhang' });
+    expect(targetToScope('sessions/g1/feature/f1')).toEqual({ kind: 'session-feature', sessionId: 'g1', id: 'f1' });
+    expect(targetToScope('sessions/g1/topic/sci/phys'))
+      .toEqual({ kind: 'session-topic', sessionId: 'g1', path: ['sci', 'phys'] });
   });
   it('rejects legacy root scopes', () => {
     expect(() => targetToScope('vp/zhang')).toThrow(/legacy/);
@@ -101,9 +101,9 @@ describe('UPDATE path', () => {
   });
 
   it('batches when sources exceed cap, threading memory between batches', async () => {
-    mkdirSync(join(root, 'group', 'g'), { recursive: true });
-    writeFileSync(join(root, 'group', 'g', 'memory.md'), 'M0\n');
-    writeFileSync(join(root, 'group', 'g', 'summary.md'), 'S0\n');
+    mkdirSync(join(root, 'sessions', 'g'), { recursive: true });
+    writeFileSync(join(root, 'sessions', 'g', 'memory.md'), 'M0\n');
+    writeFileSync(join(root, 'sessions', 'g', 'summary.md'), 'S0\n');
 
     let calls = 0;
     const llm = async ({ prompt }) => {
@@ -117,7 +117,7 @@ describe('UPDATE path', () => {
     };
     const big = (id) => ({ sessionId: id, diff: [{ role: 'user', body: 'x'.repeat(2000) }] });
     const merged = {
-      target: 'group/g',
+      target: 'sessions/g',
       kind: 'update',
       sources: [big('g1'), big('g2'), big('g3')],
     };
@@ -127,7 +127,7 @@ describe('UPDATE path', () => {
     });
     expect(r.batches).toBeGreaterThan(1);
     // Final memory.md is the last batch's output.
-    const mem = readFileSync(join(root, 'group', 'g', 'memory.md'), 'utf8');
+    const mem = readFileSync(join(root, 'sessions', 'g', 'memory.md'), 'utf8');
     expect(mem).toContain(`M${calls}`);
   });
 
@@ -154,31 +154,31 @@ describe('CREATE path', () => {
     };
     const r = await applyMergedTarget(
       {
-        target: 'group/g-eng/topic/science/physics',
+        target: 'sessions/g-eng/topic/science/physics',
         kind: 'create',
         sources: [{ sessionId: 'g-eng', diff: [{ role: 'user', body: 'hi' }] }],
       },
       { root, ts: 'TS-4', llm, nowIso: () => '2026-04-28T03:07:00Z' },
     );
     expect(r.kind).toBe('create');
-    const mem = readFileSync(join(root, 'group', 'g-eng', 'topic', 'science', 'physics', 'memory.md'), 'utf8');
+    const mem = readFileSync(join(root, 'sessions', 'g-eng', 'topic', 'science', 'physics', 'memory.md'), 'utf8');
     expect(mem).toContain('# physics');
     expect(mem).toContain('lastDreamAt: 2026-04-28T03:07:00Z');
   });
 
   it('downgrades CREATE to UPDATE when files already exist', async () => {
-    mkdirSync(join(root, 'group', 'g', 'topic', 'science', 'physics'), { recursive: true });
-    writeFileSync(join(root, 'group', 'g', 'topic', 'science', 'physics', 'memory.md'), 'PRESERVED\n');
-    writeFileSync(join(root, 'group', 'g', 'topic', 'science', 'physics', 'summary.md'), 'old\n');
+    mkdirSync(join(root, 'sessions', 'g', 'topic', 'science', 'physics'), { recursive: true });
+    writeFileSync(join(root, 'sessions', 'g', 'topic', 'science', 'physics', 'memory.md'), 'PRESERVED\n');
+    writeFileSync(join(root, 'sessions', 'g', 'topic', 'science', 'physics', 'summary.md'), 'old\n');
     const llm = async ({ pass }) => {
       expect(pass).toBe('update');
       return JSON.stringify({ memory_md: 'NEW\n', summary_md: 'new' });
     };
     await applyMergedTarget(
-      { target: 'group/g/topic/science/physics', kind: 'create', sources: [{ sessionId: 'g', diff: [] }] },
+      { target: 'sessions/g/topic/science/physics', kind: 'create', sources: [{ sessionId: 'g', diff: [] }] },
       { root, ts: 'TS-5', llm },
     );
-    expect(readFileSync(join(root, 'group', 'g', 'topic', 'science', 'physics', 'memory.md'), 'utf8'))
+    expect(readFileSync(join(root, 'sessions', 'g', 'topic', 'science', 'physics', 'memory.md'), 'utf8'))
       .toContain('NEW');
   });
 });
@@ -194,7 +194,7 @@ describe('prompt builders', () => {
     expect(p).toContain('Scope: user');
     expect(p).toContain('OLD MEM');
     expect(p).toContain('OLD SUM');
-    expect(p).toContain('[group/g-eng]');
+    expect(p).toContain('[sessions/g-eng]');
     expect(p).toContain('HELLO');
     expect(p).toMatch(/Reply with strict JSON/);
   });
@@ -212,7 +212,7 @@ describe('prompt builders', () => {
       siblingTopics: [{ path: 'x/z', summary: 'sib' }],
     });
     expect(p).toContain('topic/x/y');
-    expect(p).toContain('[group/g]');
+    expect(p).toContain('[sessions/g]');
     expect(p).toContain('HI');
     expect(p).toContain('x/z');
   });

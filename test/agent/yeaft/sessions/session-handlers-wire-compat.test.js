@@ -1,17 +1,9 @@
 /**
- * session-handlers-wire-compat.test.js
+ * session-handlers-session-id-wire.test.js
  *
- * Regression guard for the fix-yeaft-delete-and-agent-revert bug.
- *
- * The web sends `{ groupId }` on the wire while the agent's per-id
- * handlers had been reading `msg.sessionId`. Result: every per-id
- * op (delete, rename, archive, update, update_config, add_member,
- * remove_member, set_default_vp) silently 404'd with `not_found`
- * because `sessionId` resolved to `undefined`.
- *
- * The documented wire contract (see `web/stores/sessions.js` header)
- * is "both accepted, prefer sessionId". This file drives each
- * handler with the legacy `{ groupId }` shape and asserts `ok: true`.
+ * Regression guard for the session-id-only wire contract. Per-id session
+ * handlers must read `msg.sessionId`; legacy `groupId` payloads are no
+ * longer accepted.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -47,7 +39,7 @@ function lastCrud() {
   return null;
 }
 
-describe('per-id session handlers accept legacy { groupId } wire shape', () => {
+describe('per-id session handlers accept { sessionId } wire shape', () => {
   let yeaftDir;
 
   beforeEach(() => {
@@ -62,8 +54,8 @@ describe('per-id session handlers accept legacy { groupId } wire shape', () => {
     }).close();
   });
 
-  it('handleYeaftRenameSession accepts { groupId }', () => {
-    handleYeaftRenameSession({ requestId: 'r-rename', groupId: 'g1', name: 'Renamed' });
+  it('handleYeaftRenameSession accepts { sessionId }', () => {
+    handleYeaftRenameSession({ requestId: 'r-rename', sessionId: 'g1', name: 'Renamed' });
     const ev = lastCrud();
     expect(ev).toBeTruthy();
     expect(ev.ok).toBe(true);
@@ -71,9 +63,9 @@ describe('per-id session handlers accept legacy { groupId } wire shape', () => {
     expect(ev.session.name).toBe('Renamed');
   });
 
-  it('handleYeaftUpdateSession accepts { groupId }', () => {
+  it('handleYeaftUpdateSession accepts { sessionId }', () => {
     handleYeaftUpdateSession({
-      requestId: 'r-upd', groupId: 'g1',
+      requestId: 'r-upd', sessionId: 'g1',
       patch: { announcement: 'hello' },
     });
     const ev = lastCrud();
@@ -82,9 +74,9 @@ describe('per-id session handlers accept legacy { groupId } wire shape', () => {
     expect(ev.session.announcement).toBe('hello');
   });
 
-  it('handleYeaftUpdateSessionConfig accepts { groupId }', () => {
+  it('handleYeaftUpdateSessionConfig accepts { sessionId }', () => {
     handleYeaftUpdateSessionConfig({
-      requestId: 'r-cfg', groupId: 'g1',
+      requestId: 'r-cfg', sessionId: 'g1',
       config: { model: 'test-model-xyz' },
     });
     const ev = lastCrud();
@@ -92,55 +84,45 @@ describe('per-id session handlers accept legacy { groupId } wire shape', () => {
     expect(ev.op).toBe('update_config');
   });
 
-  it('handleYeaftSessionAddMember accepts { groupId }', () => {
+  it('handleYeaftSessionAddMember accepts { sessionId }', () => {
     // Drop vp2 first so we have something to add back.
-    handleYeaftSessionRemoveMember({ requestId: 'pre', groupId: 'g1', vpId: 'vp2' });
+    handleYeaftSessionRemoveMember({ requestId: 'pre', sessionId: 'g1', vpId: 'vp2' });
     outbound.length = 0;
-    handleYeaftSessionAddMember({ requestId: 'r-add', groupId: 'g1', vpId: 'vp2' });
+    handleYeaftSessionAddMember({ requestId: 'r-add', sessionId: 'g1', vpId: 'vp2' });
     const ev = lastCrud();
     expect(ev.ok).toBe(true);
     expect(ev.op).toBe('add_member');
     expect(ev.session.roster).toContain('vp2');
   });
 
-  it('handleYeaftSessionRemoveMember accepts { groupId }', () => {
-    handleYeaftSessionRemoveMember({ requestId: 'r-rm', groupId: 'g1', vpId: 'vp2' });
+  it('handleYeaftSessionRemoveMember accepts { sessionId }', () => {
+    handleYeaftSessionRemoveMember({ requestId: 'r-rm', sessionId: 'g1', vpId: 'vp2' });
     const ev = lastCrud();
     expect(ev.ok).toBe(true);
     expect(ev.op).toBe('remove_member');
     expect(ev.session.roster).not.toContain('vp2');
   });
 
-  it('handleYeaftSessionSetDefaultVp accepts { groupId }', () => {
-    handleYeaftSessionSetDefaultVp({ requestId: 'r-def', groupId: 'g1', vpId: 'vp2' });
+  it('handleYeaftSessionSetDefaultVp accepts { sessionId }', () => {
+    handleYeaftSessionSetDefaultVp({ requestId: 'r-def', sessionId: 'g1', vpId: 'vp2' });
     const ev = lastCrud();
     expect(ev.ok).toBe(true);
     expect(ev.op).toBe('set_default_vp');
     expect(ev.session.defaultVpId).toBe('vp2');
   });
 
-  it('handleYeaftArchiveSession accepts { groupId }', () => {
-    handleYeaftArchiveSession({ requestId: 'r-arc', groupId: 'g1' });
+  it('handleYeaftArchiveSession accepts { sessionId }', () => {
+    handleYeaftArchiveSession({ requestId: 'r-arc', sessionId: 'g1' });
     const ev = lastCrud();
     expect(ev.ok).toBe(true);
     expect(ev.op).toBe('archive');
   });
 
-  it('handleYeaftDeleteSession accepts { groupId } (was the user-reported bug)', () => {
-    handleYeaftDeleteSession({ requestId: 'r-del', groupId: 'g1' });
+  it('handleYeaftDeleteSession accepts { sessionId } (was the user-reported bug)', () => {
+    handleYeaftDeleteSession({ requestId: 'r-del', sessionId: 'g1' });
     const ev = lastCrud();
     expect(ev.ok).toBe(true);
     expect(ev.op).toBe('delete');
   });
 
-  it('sessionId still wins when both are present', () => {
-    // Sanity check: the contract is "both accepted, prefer sessionId".
-    handleYeaftRenameSession({
-      requestId: 'r-both', sessionId: 'g1', groupId: 'ghost', name: 'Winner',
-    });
-    const ev = lastCrud();
-    expect(ev.ok).toBe(true);
-    expect(ev.session.id).toBe('g1');
-    expect(ev.session.name).toBe('Winner');
-  });
 });

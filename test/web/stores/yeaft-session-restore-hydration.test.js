@@ -108,8 +108,8 @@ describe('Yeaft session restore hydration', () => {
     store.handleYeaftOutput({
       agentId: 'agent-1',
       event: {
-        type: 'group_list_updated',
-        groups: [{ id: 'grp-1', name: 'Restored' }],
+        type: 'session_list_updated',
+        sessions: [{ id: 'grp-1', name: 'Restored' }],
       },
     });
 
@@ -144,8 +144,8 @@ describe('Yeaft session restore hydration', () => {
     store.handleYeaftOutput({
       agentId: 'agent-1',
       event: {
-        type: 'group_list_updated',
-        groups: [{ id: 'grp-1', name: 'Restored' }],
+        type: 'session_list_updated',
+        sessions: [{ id: 'grp-1', name: 'Restored' }],
       },
     });
     expect(store.sent.filter(m => m.type === 'yeaft_load_history')).toHaveLength(1);
@@ -154,8 +154,8 @@ describe('Yeaft session restore hydration', () => {
     store.handleYeaftOutput({
       agentId: 'agent-1',
       event: {
-        type: 'group_list_updated',
-        groups: [{ id: 'grp-1', name: 'Restored' }],
+        type: 'session_list_updated',
+        sessions: [{ id: 'grp-1', name: 'Restored' }],
       },
     });
 

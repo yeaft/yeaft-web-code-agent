@@ -382,7 +382,7 @@ export const useVpStore = defineStore('vp', {
      */
     applyDreamStatus(event) {
       if (!event) return;
-      const sessionId = event.sessionId || event.groupId;
+      const sessionId = event.sessionId;
       if (sessionId) {
         this.groupDreamStatus = {
           ...this.groupDreamStatus,
@@ -425,8 +425,8 @@ export const useVpStore = defineStore('vp', {
           : (event.mergedCount ?? event.extractedCount ?? 0),
         skipped,
         skippedReason: event.skippedReason || null,
-        groupsProcessed: typeof event.groupsProcessed === 'number' ? event.groupsProcessed : null,
-        groupsSkipped: typeof event.groupsSkipped === 'number' ? event.groupsSkipped : null,
+        sessionsProcessed: typeof event.sessionsProcessed === 'number' ? event.sessionsProcessed : null,
+        sessionsSkipped: typeof event.sessionsSkipped === 'number' ? event.sessionsSkipped : null,
         targetsApplied: typeof event.targetsApplied === 'number' ? event.targetsApplied : null,
         durationMs: typeof event.durationMs === 'number' ? event.durationMs : null,
         llmCallCount: typeof event.llmCallCount === 'number' ? event.llmCallCount : 0,
@@ -439,7 +439,7 @@ export const useVpStore = defineStore('vp', {
       };
       const lastError = ok || skipped ? null : (event.error || null);
       const status = skipped ? 'skipped' : (ok ? 'success' : 'error');
-      const sessionId = event.sessionId || event.groupId;
+      const sessionId = event.sessionId;
       if (sessionId) {
         this.groupDreamStatus = {
           ...this.groupDreamStatus,

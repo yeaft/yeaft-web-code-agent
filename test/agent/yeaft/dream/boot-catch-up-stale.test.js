@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { bootCatchUpStaleDream } from '../../../../agent/yeaft/dream/session-wiring.js';
-import { writeGroupState } from '../../../../agent/yeaft/dream/state.js';
+import { writeSessionState } from '../../../../agent/yeaft/dream/state.js';
 import { createSession } from '../../../../agent/yeaft/sessions/session-store.js';
 import { DREAM_INTERVAL_HOURS } from '../../../../agent/yeaft/dream/limits.js';
 
@@ -87,7 +87,7 @@ describe('bootCatchUpStaleDream', () => {
     seedGroupWithMessage('grp_fun');
     // Stamped 30 minutes ago — well under the 1-hour interval.
     const halfHourAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-    await writeGroupState(join(yeaftDir, 'memory'), 'grp_fun', { lastDreamAt: halfHourAgo });
+    await writeSessionState(join(yeaftDir, 'memory'), 'grp_fun', { lastDreamAt: halfHourAgo });
     const sched = fakeScheduler();
     const r = await bootCatchUpStaleDream({ yeaftDir, dreamScheduler: sched });
     expect(r.stale).toBe(false);
@@ -100,7 +100,7 @@ describe('bootCatchUpStaleDream', () => {
     seedGroupWithMessage('grp_fun');
     // 12 days ago — exactly the production scenario.
     const longAgo = new Date(Date.now() - 12 * 24 * 60 * 60 * 1000).toISOString();
-    await writeGroupState(join(yeaftDir, 'memory'), 'grp_fun', { lastDreamAt: longAgo });
+    await writeSessionState(join(yeaftDir, 'memory'), 'grp_fun', { lastDreamAt: longAgo });
     const sched = fakeScheduler();
     const r = await bootCatchUpStaleDream({ yeaftDir, dreamScheduler: sched });
     expect(r.stale).toBe(true);
@@ -114,11 +114,11 @@ describe('bootCatchUpStaleDream', () => {
     seedGroupWithMessage('b');
     seedGroupWithMessage('c');
     const memRoot = join(yeaftDir, 'memory');
-    await writeGroupState(memRoot, 'a', { lastDreamAt: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString() });
+    await writeSessionState(memRoot, 'a', { lastDreamAt: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString() });
     // Fresh — still under threshold.
     const fresh = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-    await writeGroupState(memRoot, 'b', { lastDreamAt: fresh });
-    await writeGroupState(memRoot, 'c', { lastDreamAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString() });
+    await writeSessionState(memRoot, 'b', { lastDreamAt: fresh });
+    await writeSessionState(memRoot, 'c', { lastDreamAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString() });
     const sched = fakeScheduler();
     const r = await bootCatchUpStaleDream({ yeaftDir, dreamScheduler: sched });
     expect(r.lastDreamAt).toBe(fresh);
@@ -130,7 +130,7 @@ describe('bootCatchUpStaleDream', () => {
     seedGroupWithMessage('grp_fun');
     const t0 = Date.parse('2026-05-09T00:00:00.000Z');
     const stamp = new Date(t0 - 12 * 24 * 60 * 60 * 1000).toISOString();
-    await writeGroupState(join(yeaftDir, 'memory'), 'grp_fun', { lastDreamAt: stamp });
+    await writeSessionState(join(yeaftDir, 'memory'), 'grp_fun', { lastDreamAt: stamp });
     const sched = fakeScheduler();
     const r = await bootCatchUpStaleDream({ yeaftDir, dreamScheduler: sched, now: t0 });
     expect(r.stale).toBe(true);
@@ -142,7 +142,7 @@ describe('bootCatchUpStaleDream', () => {
     const intervalMs = DREAM_INTERVAL_HOURS * 60 * 60 * 1000;
     const t0 = Date.parse('2026-05-09T00:00:00.000Z');
     const exactlyOnInterval = new Date(t0 - intervalMs).toISOString();
-    await writeGroupState(join(yeaftDir, 'memory'), 'grp_fun', { lastDreamAt: exactlyOnInterval });
+    await writeSessionState(join(yeaftDir, 'memory'), 'grp_fun', { lastDreamAt: exactlyOnInterval });
     const sched = fakeScheduler();
     const r = await bootCatchUpStaleDream({ yeaftDir, dreamScheduler: sched, now: t0 });
     // age === interval → NOT stale (we want >, not >=, otherwise we
@@ -157,7 +157,7 @@ describe('bootCatchUpStaleDream', () => {
     const intervalMs = DREAM_INTERVAL_HOURS * 60 * 60 * 1000;
     const t0 = Date.parse('2026-05-09T00:00:00.000Z');
     const justPast = new Date(t0 - intervalMs - 1).toISOString();
-    await writeGroupState(join(yeaftDir, 'memory'), 'grp_fun', { lastDreamAt: justPast });
+    await writeSessionState(join(yeaftDir, 'memory'), 'grp_fun', { lastDreamAt: justPast });
     const sched = fakeScheduler();
     const r = await bootCatchUpStaleDream({ yeaftDir, dreamScheduler: sched, now: t0 });
     expect(r.stale).toBe(true);
@@ -171,7 +171,7 @@ describe('bootCatchUpStaleDream', () => {
     const sessionsRoot = join(yeaftDir, 'sessions');
     createSession(sessionsRoot, { id: 'silent', roster: [], defaultVpId: null });
     const longAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    await writeGroupState(join(yeaftDir, 'memory'), 'silent', { lastDreamAt: longAgo });
+    await writeSessionState(join(yeaftDir, 'memory'), 'silent', { lastDreamAt: longAgo });
     const sched = fakeScheduler();
     const r = await bootCatchUpStaleDream({ yeaftDir, dreamScheduler: sched });
     expect(r.fired).toBe(false);
@@ -204,7 +204,7 @@ describe('bootCatchUpStaleDream', () => {
 
   it('survives a corrupt .dream-state (per-group skip, no throw)', async () => {
     seedGroupWithMessage('grp_fun');
-    // Write garbage instead of using writeGroupState.
+    // Write garbage instead of using writeSessionState.
     mkdirSync(join(yeaftDir, 'memory', 'group', 'grp_fun'), { recursive: true });
     writeFileSync(join(yeaftDir, 'memory', 'group', 'grp_fun', '.dream-state'), 'garbage\nlastDreamAt: not-a-date\n');
     const sched = fakeScheduler();

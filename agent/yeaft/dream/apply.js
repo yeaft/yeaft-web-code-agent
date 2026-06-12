@@ -99,7 +99,7 @@ function renderSourceBlocks(sources, language) {
   const out = [];
   for (const src of (sources || [])) {
     out.push('');
-    out.push(`[group/${src.sessionId}]`);
+    out.push(`[sessions/${src.sessionId}]`);
     for (const m of (src.diff || [])) {
       const head = `[${m.role || 'message'}${m.kind === 'overlap' ? (String(language || '').toLowerCase().startsWith('zh') ? '（已处理）' : ' (already processed)') : ''}]`;
       out.push(head);
@@ -110,7 +110,7 @@ function renderSourceBlocks(sources, language) {
 }
 
 /**
- * Translate `target` like 'group/g-eng' or 'topic/sci/phys' to a Scope
+ * Translate `target` like 'sessions/g-eng' to a Scope
  * understood by store. Throws if the path is malformed.
  *
  * @param {string} target
@@ -121,26 +121,22 @@ export function targetToScope(target) {
   if (target === 'user') return { kind: 'user' };
   const segs = target.split('/').filter(Boolean);
   // Legacy scopes — explicitly rejected. Old data lives under .legacy/.
-  if (segs[0] === 'vp' || segs[0] === 'feature' || segs[0] === 'topic') {
-    throw new Error(`apply.targetToScope: legacy root scope ${JSON.stringify(target)} rejected — use group/<g>/${segs[0]}/...`);
+  if (segs[0] === 'group' || segs[0] === 'vp' || segs[0] === 'feature' || segs[0] === 'topic') {
+    throw new Error(`apply.targetToScope: legacy root scope ${JSON.stringify(target)} rejected — use sessions/<sessionId>`);
   }
-  if (segs[0] === 'group') {
-    if (segs.length === 2) return { kind: 'group', id: segs[1] };
-    // group/<g>/user
+  if (segs[0] === 'sessions') {
+    if (segs.length === 2) return { kind: 'session', id: segs[1] };
     if (segs.length === 3 && segs[2] === 'user') {
-      return { kind: 'group-user', sessionId: segs[1] };
+      return { kind: 'session-user', sessionId: segs[1] };
     }
-    // group/<g>/vp/<v>
     if (segs.length === 4 && segs[2] === 'vp') {
-      return { kind: 'group-vp', sessionId: segs[1], id: segs[3] };
+      return { kind: 'session-vp', sessionId: segs[1], id: segs[3] };
     }
-    // group/<g>/feature/<f>
     if (segs.length === 4 && segs[2] === 'feature') {
-      return { kind: 'group-feature', sessionId: segs[1], id: segs[3] };
+      return { kind: 'session-feature', sessionId: segs[1], id: segs[3] };
     }
-    // group/<g>/topic/<l1>[/<l2>]
     if (segs[2] === 'topic' && (segs.length === 4 || segs.length === 5)) {
-      return { kind: 'group-topic', sessionId: segs[1], path: segs.slice(3) };
+      return { kind: 'session-topic', sessionId: segs[1], path: segs.slice(3) };
     }
   }
   if (segs[0] === 'chat') {
@@ -275,11 +271,11 @@ export async function applyMergedTarget(merged, opts) {
 function scopeRelDir(scope) {
   switch (scope.kind) {
     case 'user':          return 'user';
-    case 'group':         return `group/${scope.id}`;
-    case 'group-user':    return `group/${scope.sessionId}/user`;
-    case 'group-vp':      return `group/${scope.sessionId}/vp/${scope.id}`;
-    case 'group-feature': return `group/${scope.sessionId}/feature/${scope.id}`;
-    case 'group-topic':   return `group/${scope.sessionId}/topic/${scope.path.join('/')}`;
+    case 'session':         return `sessions/${scope.id}`;
+    case 'session-user':    return `sessions/${scope.sessionId}/user`;
+    case 'session-vp':      return `sessions/${scope.sessionId}/vp/${scope.id}`;
+    case 'session-feature': return `sessions/${scope.sessionId}/feature/${scope.id}`;
+    case 'session-topic':   return `sessions/${scope.sessionId}/topic/${scope.path.join('/')}`;
     case 'chat':          return `chat/${scope.id}`;
     case 'chat-vp':       return `chat/${scope.chatId}/vp/${scope.id}`;
     default: throw new Error(`apply.scopeRelDir: unknown kind ${scope.kind}`);

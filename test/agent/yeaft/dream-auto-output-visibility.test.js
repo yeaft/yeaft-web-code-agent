@@ -12,7 +12,7 @@ vi.mock('../../../agent/connection/buffer.js', () => ({
 
 import { installYeaftRuntimeBridge, __testSetSession } from '../../../agent/yeaft/web-bridge.js';
 import { writeMemory, writeSummary } from '../../../agent/yeaft/memory/store.js';
-import { writeGroupState } from '../../../agent/yeaft/dream/state.js';
+import { writeSessionState } from '../../../agent/yeaft/dream/state.js';
 
 function makeSession(yeaftDir) {
   return {
@@ -35,9 +35,9 @@ describe('auto dream output visibility', () => {
     const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-dream-visible-'));
     const session = makeSession(yeaftDir);
     const root = join(yeaftDir, 'memory');
-    await writeMemory({ kind: 'group', id: 'g1' }, 'memory body for g1', { root });
-    await writeSummary({ kind: 'group', id: 'g1' }, 'summary body for g1', { root });
-    await writeGroupState(root, 'g1', {
+    await writeMemory({ kind: 'session', id: 'g1' }, 'memory body for g1', { root });
+    await writeSummary({ kind: 'session', id: 'g1' }, 'summary body for g1', { root });
+    await writeSessionState(root, 'g1', {
       lastDreamMessageId: 'm-9',
       lastDreamAt: '2026-06-12T01:02:03.000Z',
       messageCount: 9,
@@ -48,8 +48,8 @@ describe('auto dream output visibility', () => {
 
     await session._dreamResultSink({
       trigger: 'auto',
-      groups: [{ sessionId: 'g1', status: 'processed', new: 3 }],
-      targets: [{ target: 'group/g1', status: 'done' }],
+      sessions: [{ sessionId: 'g1', status: 'triaged', new: 3 }],
+      targets: [{ target: 'sessions/g1', status: 'done' }],
       startedAt: '2026-06-12T01:00:00.000Z',
     });
 
@@ -75,7 +75,7 @@ describe('auto dream output visibility', () => {
     await session._dreamResultSink({
       trigger: 'manual',
       groups: [{ sessionId: 'g1', status: 'processed' }],
-      targets: [{ target: 'group/g1', status: 'done' }],
+      targets: [{ target: 'sessions/g1', status: 'done' }],
     });
 
     expect(outbound.filter(m => m.type === 'yeaft_dream_result')).toHaveLength(0);

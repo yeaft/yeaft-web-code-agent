@@ -132,7 +132,7 @@ describe('Yeaft session history re-entry', () => {
 
     const sessionsStore = {
       activeSessionId: null,
-      groups: {},
+      sessions: {},
       groupOrder: [],
       applySnapshot(groups) {
         const arr = Array.isArray(groups) ? groups : [];
@@ -153,8 +153,8 @@ describe('Yeaft session history re-entry', () => {
     try {
       store.handleYeaftOutput({
         event: {
-          type: 'group_list_updated',
-          groups: [{ id: 'grp_fun', name: 'Fun', roster: ['linus'], defaultVpId: 'linus' }],
+          type: 'session_list_updated',
+          sessions: [{ id: 'grp_fun', name: 'Fun', roster: ['linus'], defaultVpId: 'linus' }],
         },
       });
     } finally {
