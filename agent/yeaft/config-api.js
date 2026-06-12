@@ -376,3 +376,182 @@ export async function fetchTavilyUsage(dir) {
   }
 }
 
+// ─── MCP server config (mcpServers array in config.json) ──
+
+/**
+ * Server-name regex: lowercase letters, digits, underscore, dash. Matches
+ * what Claude Code accepts so config files are portable. Single source of
+ * truth for both add/update/remove validation.
+ */
+const MCP_NAME_RE = /^[a-z0-9_-]+$/;
+
+/**
+ * Normalise one MCP server entry on read. The on-disk shape that the
+ * MCPManager understands is `{ name, command, args?, env? }`. This pass
+ * strips unknown / non-string keys, coerces args to an array of strings,
+ * and forces env to a plain {string→string} object so the UI doesn't
+ * crash on a malformed handwritten config.
+ *
+ * @param {unknown} entry
+ * @returns {{ name: string, command: string, args: string[], env: Record<string,string> } | null}
+ */
+function normaliseMcpServer(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const e = /** @type {any} */ (entry);
+  const name = typeof e.name === 'string' ? e.name.trim() : '';
+  const command = typeof e.command === 'string' ? e.command.trim() : '';
+  if (!name || !command) return null;
+  const args = Array.isArray(e.args)
+    ? e.args.filter(a => typeof a === 'string')
+    : [];
+  /** @type {Record<string,string>} */
+  const env = {};
+  if (e.env && typeof e.env === 'object') {
+    for (const [k, v] of Object.entries(e.env)) {
+      if (typeof k === 'string' && typeof v === 'string') env[k] = v;
+    }
+  }
+  return { name, command, args, env };
+}
+
+/**
+ * Validate a server config for add/update. Returns null on success or a
+ * string error suitable for forwarding to the UI.
+ *
+ * @param {unknown} entry
+ * @returns {string|null}
+ */
+function validateMcpServer(entry) {
+  if (!entry || typeof entry !== 'object') return 'server payload required';
+  const e = /** @type {any} */ (entry);
+  if (typeof e.name !== 'string' || !MCP_NAME_RE.test(e.name)) {
+    return 'server name must match /^[a-z0-9_-]+$/';
+  }
+  if (typeof e.command !== 'string' || !e.command.trim()) {
+    return 'server command is required';
+  }
+  if (e.args !== undefined && (!Array.isArray(e.args) || !e.args.every(a => typeof a === 'string'))) {
+    return 'server args must be an array of strings';
+  }
+  if (e.env !== undefined && (typeof e.env !== 'object' || e.env === null || Array.isArray(e.env))) {
+    return 'server env must be an object of string→string';
+  }
+  if (e.env && typeof e.env === 'object') {
+    for (const [k, v] of Object.entries(e.env)) {
+      if (typeof k !== 'string' || typeof v !== 'string') {
+        return 'server env entries must all be strings';
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Read existing config.json (silently start fresh on missing / corrupt).
+ * Internal helper used by the MCP CRUD trio to share one parse path.
+ *
+ * @param {string} configPath
+ * @returns {object}
+ */
+function readConfigJson(configPath) {
+  if (!existsSync(configPath)) return {};
+  try {
+    const raw = readFileSync(configPath, 'utf8');
+    const json = JSON.parse(raw);
+    return (json && typeof json === 'object') ? json : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * List MCP servers currently saved in config.json. Returns an array — empty
+ * when none configured. Each entry is the normalised on-disk shape, NOT
+ * the runtime status (which lives on `mcpManager.status()`).
+ *
+ * @param {string} [dir]
+ * @returns {{ servers: Array<{ name: string, command: string, args: string[], env: Record<string,string> }> } | { error: string }}
+ */
+export function listMcpServers(dir) {
+  const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
+  const configPath = join(root, 'config.json');
+  try {
+    const json = readConfigJson(configPath);
+    const raw = Array.isArray(json.mcpServers) ? json.mcpServers : [];
+    const servers = raw.map(normaliseMcpServer).filter(Boolean);
+    return { servers };
+  } catch (e) {
+    return { error: `Failed to read config.json: ${e.message}` };
+  }
+}
+
+/**
+ * Add or update an MCP server config entry. Match is by `name`. Returns
+ * the post-update list of servers (same shape as `listMcpServers`) plus
+ * the entry that was just written, so callers can pass it directly into
+ * `mcpManager.connect()` without re-reading the file.
+ *
+ * @param {{ name: string, command: string, args?: string[], env?: Record<string,string> }} server
+ * @param {string} [dir]
+ * @returns {{ servers: Array<object>, server: object } | { error: string }}
+ */
+export function upsertMcpServer(server, dir) {
+  const err = validateMcpServer(server);
+  if (err) return { error: err };
+
+  const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
+  const configPath = join(root, 'config.json');
+  const existing = readConfigJson(configPath);
+  const list = Array.isArray(existing.mcpServers) ? existing.mcpServers.slice() : [];
+
+  const normalised = normaliseMcpServer(server);
+  if (!normalised) return { error: 'invalid server payload' };
+
+  const idx = list.findIndex(s => s && typeof s === 'object' && s.name === normalised.name);
+  if (idx >= 0) {
+    list[idx] = normalised;
+  } else {
+    list.push(normalised);
+  }
+  existing.mcpServers = list;
+
+  try {
+    writeFileSync(configPath, JSON.stringify(existing, null, 2) + '\n', 'utf8');
+  } catch (e) {
+    return { error: `Failed to write config.json: ${e.message}` };
+  }
+
+  return { servers: list.map(normaliseMcpServer).filter(Boolean), server: normalised };
+}
+
+/**
+ * Remove the MCP server config entry with the given name. Idempotent —
+ * removing a non-existent name returns the unchanged list with
+ * `removed: false`. This lets the UI safely call delete after a
+ * concurrent change without surfacing a spurious error.
+ *
+ * @param {string} name
+ * @param {string} [dir]
+ * @returns {{ servers: Array<object>, removed: boolean } | { error: string }}
+ */
+export function removeMcpServer(name, dir) {
+  if (typeof name !== 'string' || !name.trim()) {
+    return { error: 'name required' };
+  }
+  const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
+  const configPath = join(root, 'config.json');
+  const existing = readConfigJson(configPath);
+  const list = Array.isArray(existing.mcpServers) ? existing.mcpServers.slice() : [];
+  const next = list.filter(s => !(s && typeof s === 'object' && s.name === name));
+  const removed = next.length !== list.length;
+  existing.mcpServers = next;
+
+  try {
+    writeFileSync(configPath, JSON.stringify(existing, null, 2) + '\n', 'utf8');
+  } catch (e) {
+    return { error: `Failed to write config.json: ${e.message}` };
+  }
+
+  return { servers: next.map(normaliseMcpServer).filter(Boolean), removed };
+}
+

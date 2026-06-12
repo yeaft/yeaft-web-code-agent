@@ -21,6 +21,7 @@ import { ConversationStore, setDefaultRecentTurnsLimit } from './conversation/pe
 import { SkillManager, createSkillManager } from './skills.js';
 import { MCPManager } from './mcp.js';
 import { createFullRegistry } from './tools/index.js';
+import { buildMcpFlattenedTools } from './tools/mcp-tools.js';
 import { Engine } from './engine.js';
 import { Compactor } from './compact/compactor.js';
 import { resolveContextWindow } from './models.js';
@@ -372,7 +373,13 @@ export async function loadSession(options = {}) {
     skillManager = new SkillManager(yeaftDir);
     // Don't call .load() — empty skill manager
   } else {
-    skillManager = createSkillManager(yeaftDir);
+    // Pass the agent's current working directory as the project tier root.
+    // Per-session/per-group workdirs override at tool-execution time via
+    // ToolContext.cwd; for the SYSTEM-PROMPT skill set we just use the
+    // agent process cwd, which is the common case when an agent is
+    // launched inside a project the user wants project-tier skills for.
+    const projectTierRoot = process.cwd();
+    skillManager = createSkillManager(yeaftDir, projectTierRoot);
   }
 
   // ─── 7. Connect MCP servers ────────────────────────────
@@ -390,6 +397,20 @@ export async function loadSession(options = {}) {
   // Register any extra tools from caller
   for (const tool of extraTools) {
     toolRegistry.register(tool);
+  }
+
+  // Register flattened MCP tools (one ToolDef per MCP tool, named
+  // `mcp__<server>__<tool>` per Claude Code's convention). This replaces
+  // the legacy mcp_list_tools / mcp_call_tool meta-tools — the LLM now
+  // calls MCP tools directly in a single turn, no discovery dance.
+  // Re-built and re-registered on every connect/disconnect via
+  // `toolRegistry.replaceMcpTools(mcpManager, buildMcpFlattenedTools)`
+  // which is invoked from the MCP web-bridge handlers.
+  if (mcpManager.hasServers) {
+    const flattened = buildMcpFlattenedTools(mcpManager);
+    for (const tool of flattened) {
+      toolRegistry.register(tool);
+    }
   }
 
   // ─── 9. Create engine (wires everything) ───────────────

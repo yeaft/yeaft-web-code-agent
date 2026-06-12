@@ -65,6 +65,8 @@ import { pairSanitize } from './pair-sanitize.js';
 import { filterSnapshotForVp } from './snapshot-filter.js';
 import { createVpStatusBroker } from './vp-status-broker.js';
 import { classifyThread as defaultClassifyThread, fallbackTitle } from './vp/thread-classifier.js';
+import { listMcpServers, upsertMcpServer, removeMcpServer } from './config-api.js';
+import { buildMcpFlattenedTools } from './tools/mcp-tools.js';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -4174,4 +4176,234 @@ export async function resetYeaftSession() {
   } catch (err) {
     console.error('[Yeaft] Failed to re-initialize session after reset:', err.message);
   }
+}
+
+// ────────────────────────────────────────────────────────────
+// MCP CRUD wire handlers (Claude-Code-style Settings → MCP tab)
+//
+// Wire types: `yeaft_mcp_list` / `yeaft_mcp_add` / `yeaft_mcp_remove` /
+// `yeaft_mcp_reload`. Each:
+//   1. Reads / writes ~/.yeaft/config.json `mcpServers` via config-api.
+//   2. Calls `session.mcpManager.connect|disconnect` to apply at runtime.
+//   3. Hot-swaps the live `toolRegistry` via `replaceMcpTools(...)` so the
+//      next LLM turn sees the new tool catalogue WITHOUT a session restart.
+//   4. Broadcasts `yeaft_mcp_updated` so any subscribed web client (the
+//      Settings panel + any open Yeaft view) refreshes its badge without
+//      a manual reload.
+//
+// The handlers do NOT block on `ensureSessionLoaded()` — the session may
+// not yet be initialised when the user opens Settings before sending the
+// first message. In that case `session` is null and we operate ONLY on
+// the on-disk config; the live runtime takes effect on the next session
+// boot. When `session` IS available, we apply the runtime change too.
+//
+// Wire shape per response: always `{ type: 'yeaft_mcp_*', servers, runtime?, error? }`.
+// Frontend reducer should treat `error` as a non-empty string failure.
+// ────────────────────────────────────────────────────────────
+
+/**
+ * Snapshot the live MCP runtime so the UI can render per-server
+ * connection state next to the configured servers. Safe to call when
+ * the session hasn't been initialised yet — returns an empty runtime.
+ */
+function mcpRuntimeSnapshot() {
+  if (!session?.mcpManager) {
+    return { connected: false, toolCount: 0, perServer: [] };
+  }
+  const status = session.mcpManager.status() || [];
+  const toolCount = typeof session.mcpManager.toolCount === 'number'
+    ? session.mcpManager.toolCount
+    : status.reduce((sum, s) => sum + (s.toolCount || 0), 0);
+  return {
+    connected: !!session.mcpManager.hasServers,
+    toolCount,
+    perServer: status.map(s => ({
+      name: s.name,
+      ready: !!s.ready,
+      toolCount: s.toolCount || 0,
+    })),
+  };
+}
+
+/**
+ * Re-flatten MCP tools into the live ToolRegistry. No-op when the session
+ * (or its registry) hasn't been created yet — the next session boot will
+ * pick up the change.
+ */
+function hotSwapMcpTools() {
+  if (!session?.toolRegistry || typeof session.toolRegistry.replaceMcpTools !== 'function') {
+    return { removed: 0, added: 0, skipped: true };
+  }
+  try {
+    const result = session.toolRegistry.replaceMcpTools(session.mcpManager, buildMcpFlattenedTools);
+    return { ...result, skipped: false };
+  } catch (err) {
+    console.warn('[Yeaft] hot-swap MCP tools failed:', err?.message || err);
+    return { removed: 0, added: 0, skipped: true, error: err?.message || String(err) };
+  }
+}
+
+/**
+ * Broadcast a `yeaft_mcp_updated` event so any client subscribed to the
+ * Yeaft view (Settings panel, status badge) refreshes without needing
+ * to re-open the panel. The current list+runtime are included so the UI
+ * is single-source (no separate fetch round-trip needed).
+ */
+function broadcastMcpUpdated(extra = {}) {
+  const yeaftDir = ctx.CONFIG?.yeaftDir;
+  const listed = listMcpServers(yeaftDir);
+  sendToServer({
+    type: 'yeaft_mcp_updated',
+    servers: listed.servers || [],
+    runtime: mcpRuntimeSnapshot(),
+    ...extra,
+  });
+}
+
+export function handleYeaftMcpList(msg = {}) {
+  const yeaftDir = ctx.CONFIG?.yeaftDir;
+  const listed = listMcpServers(yeaftDir);
+  sendToServer({
+    type: 'yeaft_mcp_list_result',
+    requestId: msg.requestId || null,
+    servers: listed.servers || [],
+    runtime: mcpRuntimeSnapshot(),
+    error: listed.error || null,
+  });
+}
+
+export async function handleYeaftMcpAdd(msg = {}) {
+  const yeaftDir = ctx.CONFIG?.yeaftDir;
+  const result = upsertMcpServer(msg.server || {}, yeaftDir);
+  if (result.error) {
+    sendToServer({
+      type: 'yeaft_mcp_add_result',
+      requestId: msg.requestId || null,
+      servers: [],
+      runtime: mcpRuntimeSnapshot(),
+      error: result.error,
+    });
+    return;
+  }
+
+  // Apply at runtime when the session is live. The MCPManager's
+  // `connect(serverConfig)` already disconnects-and-reconnects if a
+  // server with the same name was already registered.
+  let connectError = null;
+  if (session?.mcpManager) {
+    try {
+      await session.mcpManager.connect(result.server);
+    } catch (err) {
+      connectError = err?.message || String(err);
+      console.warn(`[Yeaft] MCP connect "${result.server.name}" failed:`, connectError);
+    }
+  }
+
+  const swap = hotSwapMcpTools();
+
+  sendToServer({
+    type: 'yeaft_mcp_add_result',
+    requestId: msg.requestId || null,
+    servers: result.servers,
+    runtime: mcpRuntimeSnapshot(),
+    swap,
+    connectError,
+    error: null,
+  });
+  broadcastMcpUpdated({ reason: 'add', name: result.server.name, connectError });
+}
+
+export async function handleYeaftMcpRemove(msg = {}) {
+  const yeaftDir = ctx.CONFIG?.yeaftDir;
+  const name = typeof msg.name === 'string' ? msg.name : '';
+  const result = removeMcpServer(name, yeaftDir);
+  if (result.error) {
+    sendToServer({
+      type: 'yeaft_mcp_remove_result',
+      requestId: msg.requestId || null,
+      servers: [],
+      runtime: mcpRuntimeSnapshot(),
+      error: result.error,
+    });
+    return;
+  }
+
+  if (session?.mcpManager) {
+    try {
+      await session.mcpManager.disconnect(name);
+    } catch (err) {
+      console.warn(`[Yeaft] MCP disconnect "${name}" failed:`, err?.message || err);
+    }
+  }
+
+  const swap = hotSwapMcpTools();
+
+  sendToServer({
+    type: 'yeaft_mcp_remove_result',
+    requestId: msg.requestId || null,
+    servers: result.servers,
+    runtime: mcpRuntimeSnapshot(),
+    removed: !!result.removed,
+    swap,
+    error: null,
+  });
+  broadcastMcpUpdated({ reason: 'remove', name });
+}
+
+export async function handleYeaftMcpReload(msg = {}) {
+  const yeaftDir = ctx.CONFIG?.yeaftDir;
+  const targetName = typeof msg.name === 'string' && msg.name ? msg.name : null;
+
+  if (!session?.mcpManager) {
+    // Session not yet alive — just echo the current config + an empty
+    // runtime so the UI knows to wait for session boot.
+    const listed = listMcpServers(yeaftDir);
+    sendToServer({
+      type: 'yeaft_mcp_reload_result',
+      requestId: msg.requestId || null,
+      servers: listed.servers || [],
+      runtime: mcpRuntimeSnapshot(),
+      error: null,
+    });
+    return;
+  }
+
+  const listed = listMcpServers(yeaftDir);
+  const configured = listed.servers || [];
+
+  // Per-server reload: disconnect + reconnect the named server only.
+  // Whole-set reload: disconnect everything, then reconnect from current
+  // config.json. The latter is what the user clicks "Reload all" for.
+  const failures = [];
+  try {
+    if (targetName) {
+      const cfg = configured.find(s => s.name === targetName);
+      try { await session.mcpManager.disconnect(targetName); } catch { /* ignore */ }
+      if (cfg) {
+        try { await session.mcpManager.connect(cfg); }
+        catch (err) { failures.push({ name: targetName, error: err?.message || String(err) }); }
+      }
+    } else {
+      try { await session.mcpManager.disconnectAll(); } catch { /* ignore */ }
+      for (const cfg of configured) {
+        try { await session.mcpManager.connect(cfg); }
+        catch (err) { failures.push({ name: cfg.name, error: err?.message || String(err) }); }
+      }
+    }
+  } catch (err) {
+    console.warn('[Yeaft] MCP reload failed:', err?.message || err);
+  }
+
+  const swap = hotSwapMcpTools();
+
+  sendToServer({
+    type: 'yeaft_mcp_reload_result',
+    requestId: msg.requestId || null,
+    servers: configured,
+    runtime: mcpRuntimeSnapshot(),
+    failures,
+    swap,
+    error: null,
+  });
+  broadcastMcpUpdated({ reason: 'reload', name: targetName, failures });
 }

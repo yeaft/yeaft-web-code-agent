@@ -272,6 +272,16 @@ export const useChatStore = defineStore('chat', {
     tavilyUsage: null,
     tavilyUsageLoading: false,
 
+    // Yeaft MCP servers UI state — populated from `yeaft_mcp_list_result`
+    // (initial load) and refreshed on every `yeaft_mcp_updated` broadcast
+    // (after add/remove/reload on any client). Shape:
+    //   yeaftMcpServers: [{ name, command, args, env }, ...]
+    //   yeaftMcpRuntime: { connected, toolCount, perServer: [{ name, ready, toolCount }] }
+    yeaftMcpServers: [],
+    yeaftMcpRuntime: { connected: false, toolCount: 0, perServer: [] },
+    yeaftMcpLoading: false,
+    yeaftMcpError: null,
+
     // /btw mode state (multi-turn side question)
     btwMode: false,              // whether in btw mode
     btwMessages: [],             // [{ role: 'user'|'assistant', content }]
@@ -2677,6 +2687,93 @@ export const useChatStore = defineStore('chat', {
         if (!this._searchPending) this._searchPending = {};
         this._searchPending.usage = resolve;
         this.sendWsMessage({ type: 'get_tavily_usage', agentId: this.yeaftAgentId });
+      });
+    },
+
+    // ─── Yeaft MCP CRUD ─────────────────────────────────────
+    //
+    // Each action sends a wire op (`yeaft_mcp_list/add/remove/reload`)
+    // and registers a one-shot resolver keyed by `requestId` so concurrent
+    // calls don't clobber each other. The agent always responds with the
+    // result type `yeaft_mcp_*_result`; broadcast `yeaft_mcp_updated`
+    // updates the cached list/runtime without a separate fetch.
+    //
+    // No agent? Resolve with an empty list — the Settings tab opens
+    // before any agent is registered and we don't want to throw.
+
+    loadYeaftMcpServers() {
+      if (!this.yeaftAgentId) {
+        this.yeaftMcpServers = [];
+        this.yeaftMcpRuntime = { connected: false, toolCount: 0, perServer: [] };
+        return Promise.resolve({ servers: [], runtime: this.yeaftMcpRuntime });
+      }
+      this.yeaftMcpLoading = true;
+      const requestId = `mcp-list-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      return new Promise((resolve) => {
+        if (!this._mcpPending) this._mcpPending = {};
+        this._mcpPending[requestId] = resolve;
+        this.sendWsMessage({
+          type: 'yeaft_mcp_list',
+          agentId: this.yeaftAgentId,
+          requestId,
+        });
+      });
+    },
+
+    /**
+     * Add or update an MCP server. `server` must contain
+     * `{ name, command, args?, env? }`. Returns the agent's full response
+     * so the caller can surface connectError to the UI.
+     */
+    addYeaftMcpServer(server) {
+      if (!this.yeaftAgentId) return Promise.resolve({ error: 'no agent' });
+      this.yeaftMcpLoading = true;
+      const requestId = `mcp-add-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      return new Promise((resolve) => {
+        if (!this._mcpPending) this._mcpPending = {};
+        this._mcpPending[requestId] = resolve;
+        this.sendWsMessage({
+          type: 'yeaft_mcp_add',
+          agentId: this.yeaftAgentId,
+          requestId,
+          server: server || {},
+        });
+      });
+    },
+
+    removeYeaftMcpServer(name) {
+      if (!this.yeaftAgentId) return Promise.resolve({ error: 'no agent' });
+      this.yeaftMcpLoading = true;
+      const requestId = `mcp-rem-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      return new Promise((resolve) => {
+        if (!this._mcpPending) this._mcpPending = {};
+        this._mcpPending[requestId] = resolve;
+        this.sendWsMessage({
+          type: 'yeaft_mcp_remove',
+          agentId: this.yeaftAgentId,
+          requestId,
+          name,
+        });
+      });
+    },
+
+    /**
+     * Reload a single MCP server (`name`) or every server (no name).
+     * Performs disconnect+reconnect on the agent and re-flattens tools.
+     */
+    reloadYeaftMcpServer(name) {
+      if (!this.yeaftAgentId) return Promise.resolve({ error: 'no agent' });
+      this.yeaftMcpLoading = true;
+      const requestId = `mcp-rel-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      return new Promise((resolve) => {
+        if (!this._mcpPending) this._mcpPending = {};
+        this._mcpPending[requestId] = resolve;
+        this.sendWsMessage({
+          type: 'yeaft_mcp_reload',
+          agentId: this.yeaftAgentId,
+          requestId,
+          name: name || null,
+        });
       });
     },
 
