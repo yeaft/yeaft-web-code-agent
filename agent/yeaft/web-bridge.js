@@ -19,6 +19,7 @@
  */
 
 import { join } from 'node:path';
+import { COLLAB_TOOL_POLICY } from './tools/registry.js';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { Engine } from './engine.js';
@@ -2426,6 +2427,14 @@ async function waitForVpDrivers(_groupId, driverKeys = []) {
  *   `route_forward` can extend `causedBy` chains correctly. Optional only
  *   for pre-707 callers that no longer exist in production.
  */
+function resolveCollabToolPolicy(sessionMeta) {
+  if (!sessionMeta || typeof sessionMeta !== 'object' || !Array.isArray(sessionMeta.roster)) {
+    return null;
+  }
+  const vpCount = new Set(sessionMeta.roster.filter(v => typeof v === 'string' && v.trim())).size;
+  return vpCount > 1 ? COLLAB_TOOL_POLICY.MULTI_VP : COLLAB_TOOL_POLICY.SINGLE_VP;
+}
+
 export function buildVpQueryOpts({ vpId, sessionCoordinator, sessionId, envelope, threadId = 'main' }) {
   // Read the group meta once and reuse for both defaultVpId fallback and
   // announcement injection. Each .getMeta() reload reads + parses the
@@ -2466,6 +2475,8 @@ export function buildVpQueryOpts({ vpId, sessionCoordinator, sessionId, envelope
   if (typeof sessionId === 'string' && sessionId.trim()) {
     out.sessionId = sessionId.trim();
   }
+  const collabToolPolicy = resolveCollabToolPolicy(sessionMeta);
+  if (collabToolPolicy) out.collabToolPolicy = collabToolPolicy;
   // task-334-group-editor: surface the group announcement to the engine so
   // buildWorkerPrompt can inject it as a CLAUDE.md-style shared prefix.
   // Empty/missing reads as '' and prompts.js skips the section.

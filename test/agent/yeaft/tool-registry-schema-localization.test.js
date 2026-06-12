@@ -161,4 +161,75 @@ describe('ToolRegistry.getToolDefs language localization', () => {
         `lang=${lang}: serialized defs unexpectedly contains "[object Object]"`).toBe(false);
     }
   });
+  it('filters mutually-exclusive collaboration tool families by group policy', () => {
+    const reg = new ToolRegistry();
+    reg.register(defineTool({
+      name: 'SpawnAgent',
+      aliases: ['Agent'],
+      description: 'Spawn a sub-agent.',
+      parameters: { type: 'object', properties: {} },
+      execute: async () => 'ok',
+    }));
+    reg.register(defineTool({
+      name: 'PromptAgent',
+      aliases: ['SendMessage'],
+      description: 'Prompt a sub-agent.',
+      parameters: { type: 'object', properties: {} },
+      execute: async () => 'ok',
+    }));
+    reg.register(defineTool({
+      name: 'WaitAgent',
+      description: 'Wait for a sub-agent.',
+      parameters: { type: 'object', properties: {} },
+      execute: async () => 'ok',
+    }));
+    reg.register(defineTool({
+      name: 'CloseAgent',
+      description: 'Close a sub-agent.',
+      parameters: { type: 'object', properties: {} },
+      execute: async () => 'ok',
+    }));
+    reg.register(defineTool({
+      name: 'ListAgents',
+      description: 'List sub-agents.',
+      parameters: { type: 'object', properties: {} },
+      execute: async () => 'ok',
+    }));
+    reg.register(defineTool({
+      name: 'RouteForward',
+      description: 'Forward to another VP.',
+      parameters: { type: 'object', properties: {} },
+      execute: async () => 'ok',
+    }));
+    reg.register(defineTool({
+      name: 'Bash',
+      description: 'Run a command.',
+      parameters: { type: 'object', properties: {} },
+      execute: async () => 'ok',
+    }));
+
+    const singleVpNames = reg.getToolDefs('en', { collabToolPolicy: 'single-vp' }).map(d => d.name);
+    expect(singleVpNames).toContain('SpawnAgent');
+    expect(singleVpNames).toContain('PromptAgent');
+    expect(singleVpNames).toContain('WaitAgent');
+    expect(singleVpNames).toContain('CloseAgent');
+    expect(singleVpNames).toContain('ListAgents');
+    expect(singleVpNames).toContain('Bash');
+    expect(singleVpNames).not.toContain('RouteForward');
+    expect(reg.isAllowed('Agent', { collabToolPolicy: 'single-vp' })).toBe(true);
+    expect(reg.isAllowed('RouteForward', { collabToolPolicy: 'single-vp' })).toBe(false);
+
+    const multiVpNames = reg.getToolDefs('en', { collabToolPolicy: 'multi-vp' }).map(d => d.name);
+    expect(multiVpNames).toContain('RouteForward');
+    expect(multiVpNames).toContain('Bash');
+    expect(multiVpNames).not.toContain('SpawnAgent');
+    expect(multiVpNames).not.toContain('PromptAgent');
+    expect(multiVpNames).not.toContain('WaitAgent');
+    expect(multiVpNames).not.toContain('CloseAgent');
+    expect(multiVpNames).not.toContain('ListAgents');
+    expect(reg.isAllowed('Agent', { collabToolPolicy: 'multi-vp' })).toBe(false);
+    expect(reg.isAllowed('SendMessage', { collabToolPolicy: 'multi-vp' })).toBe(false);
+    expect(reg.isAllowed('RouteForward', { collabToolPolicy: 'multi-vp' })).toBe(true);
+  });
+
 });
