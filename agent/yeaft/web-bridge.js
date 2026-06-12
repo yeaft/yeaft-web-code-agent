@@ -1105,11 +1105,18 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
           const meta = envelope?.msg?.meta || {};
           const isForward = meta.injectedBy === 'route_forward';
           const senderVpId = isForward ? (meta.senderVpId || envelope?.msg?.from || null) : null;
+          // A route_forward row is authored by the sender VP, so its visible
+          // text belongs to the sender's originating thread block. The target
+          // VP still runs in `thread.threadId`; only the persisted/display row
+          // uses `sourceThreadId` to keep UI grouping and audit provenance sane.
+          const visibleThreadId = isForward && typeof meta.sourceThreadId === 'string' && meta.sourceThreadId.trim()
+            ? meta.sourceThreadId.trim()
+            : thread.threadId;
           persistInboundMessageOnceByMsgId({
             msgId: envMsgId,
             text,
             sessionId,
-            threadId: thread.threadId,
+            threadId: visibleThreadId,
             role: isForward ? 'assistant' : 'user',
             speakerVpId: senderVpId,
             attachments: Array.isArray(meta.attachments) ? meta.attachments : [],
