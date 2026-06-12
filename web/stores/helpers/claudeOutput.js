@@ -85,7 +85,15 @@ export function handleClaudeOutput(store, conversationId, data) {
 
     // content 可能是字符串或数组
     if (typeof content === 'string') {
-      store.appendToAssistantMessageForConversation(conversationId, content, { id: data.message?.id || data.message?.messageId || null, ts: data.ts || data.message?.ts || data.message?.time || null });
+      store.appendToAssistantMessageForConversation(conversationId, content, {
+        id: data.message?.id || data.message?.messageId || null,
+        ts: data.ts || data.message?.ts || data.message?.time || null,
+        sessionId: store._currentYeaftSessionId || null,
+        vpId: store._currentYeaftVpId || null,
+        turnId: store._currentYeaftTurnId || null,
+        threadId: store._currentYeaftThreadId || null,
+        threadTitle: store._currentYeaftThreadTitle || null,
+      });
       return;
     }
     if (!Array.isArray(content)) return;
@@ -98,7 +106,15 @@ export function handleClaudeOutput(store, conversationId, data) {
 
     for (const block of content) {
       if (block.type === 'text') {
-        store.appendToAssistantMessageForConversation(conversationId, block.text, { id: data.message?.id || data.message?.messageId || null, ts: data.ts || data.message?.ts || data.message?.time || null });
+        store.appendToAssistantMessageForConversation(conversationId, block.text, {
+          id: data.message?.id || data.message?.messageId || null,
+          ts: data.ts || data.message?.ts || data.message?.time || null,
+          sessionId: store._currentYeaftSessionId || null,
+          vpId: store._currentYeaftVpId || null,
+          turnId: store._currentYeaftTurnId || null,
+          threadId: store._currentYeaftThreadId || null,
+          threadTitle: store._currentYeaftThreadTitle || null,
+        });
       } else if (block.type === 'tool_use') {
         // Finish any in-progress streaming so typing dots reappear during tool execution.
         // Without this, isStreaming stays true on the assistant message, which suppresses

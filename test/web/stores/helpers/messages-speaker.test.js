@@ -280,3 +280,32 @@ describe('addMessageToConversation: speakerVpId on creation', () => {
     expect(msgs[0].turnId).toBe('turn-A');
   });
 });
+
+describe('appendToAssistantMessageForConversation: history replay metadata', () => {
+  it('preserves explicit replay routing metadata when creating an assistant history row', () => {
+    const store = mkStore({
+      _currentYeaftSessionId: 'wrong-session',
+      _currentYeaftVpId: 'wrong-vp',
+      _currentYeaftTurnId: 'wrong-turn',
+    });
+
+    appendToAssistantMessageForConversation(store, 'conv-1', 'restored reply', {
+      id: '000002-assistant',
+      sessionId: 'grp-restored',
+      vpId: 'vp-restored',
+      turnId: 'turn-restored',
+      threadId: 'thread-restored',
+    });
+
+    expect(store.messagesMap['conv-1'][0]).toMatchObject({
+      id: '000002-assistant',
+      sessionId: 'grp-restored',
+      vpId: 'vp-restored',
+      speakerVpId: 'vp-restored',
+      turnId: 'turn-restored',
+      threadId: 'thread-restored',
+      type: 'assistant',
+      content: 'restored reply',
+    });
+  });
+});
