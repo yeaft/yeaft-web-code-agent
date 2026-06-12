@@ -613,6 +613,8 @@ describe('wait-agent envelope shape', () => {
     });
     const ctxB = { parentEngineDeps: { parentVpId: 'vp-b', parentThreadId: 'main' } };
 
+    const emptyScopeDenied = JSON.parse(await waitAgent.execute({ agent_id: 'agent-vp-a' }, {}));
+    expect(emptyScopeDenied.error).toMatch(/not found/i);
     const denied = JSON.parse(await waitAgent.execute({ agent_id: 'agent-vp-a' }, ctxB));
     expect(denied.error).toMatch(/not found/i);
     const listed = JSON.parse(await listAgents.execute({}, ctxB));
@@ -924,6 +926,36 @@ describe('driver finally cleanup', () => {
     expect(agent.liveness.tokenCount).toBeGreaterThan(0);
     expect(agent.status).toBe(STATUS.IDLE);
     expect(events).toContain('text_delta');
+  });
+
+  it('closing a running agent preserves the explicit close result', async () => {
+    const adapter = new SlowAdapter(['part1 ', 'part2 ', 'part3'], 100);
+    const deps = mkDeps(adapter);
+    const out = JSON.parse(await agentTool.execute(
+      { name: 'close-running', mission: 'stream slowly' },
+      { parentEngineDeps: deps },
+    ));
+    const id = out.agentId;
+    const agent = getAgentRegistry().get(id);
+
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline && !agent.lastResult) {
+      await new Promise(r => setTimeout(r, 10));
+    }
+    const closed = JSON.parse(await closeAgent.execute(
+      { agent_id: id, result: 'WRAP' },
+      vpTestCtx,
+    ));
+    expect(closed.success).toBe(true);
+    expect(closed.result).toBe('WRAP');
+
+    const done = Date.now() + 1000;
+    while (Date.now() < done && agent.__driverStarted) {
+      await new Promise(r => setTimeout(r, 20));
+    }
+    expect(agent.status).toBe(STATUS.CLOSED);
+    expect(agent.result).toBe('WRAP');
+    expect(agent.subEngine).toBeNull();
   });
 });
 

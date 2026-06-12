@@ -65,7 +65,7 @@ export function agentBelongsToScope(agent, scope = {}) {
   const agentThreadId = cleanString(agent.parentThreadId);
   const scopeThreadId = cleanString(scope.parentThreadId);
   if (!scopeSessionId && !scopeVpId && !scopeThreadId) {
-    return !agentSessionId;
+    return !agentSessionId && !agentVpId;
   }
   if ((agentSessionId || scopeSessionId) && agentSessionId !== scopeSessionId) return false;
   if ((agentVpId || scopeVpId) && agentVpId !== scopeVpId) return false;

@@ -69,6 +69,8 @@ function mkDeps(adapter, overrides = {}) {
   };
 }
 
+const vpTestCtx = { parentEngineDeps: { parentVpId: 'vp-test', parentThreadId: 'main' } };
+
 /** Polls until agent leaves 'running'/'created' or the deadline fires. */
 async function settleAgent(agent, ms = 2000) {
   const deadline = Date.now() + ms;
@@ -134,7 +136,7 @@ describe('WaitAgent: every envelope carries next_steps so the LLM does not end t
     await settleAgent(agent, 2000);
     expect(agent.status).toBe('idle');
 
-    const out = JSON.parse(await waitAgent.execute({ agent_id: spawn.agentId }, {}));
+    const out = JSON.parse(await waitAgent.execute({ agent_id: spawn.agentId }, vpTestCtx));
     expect(out.status).toBe('idle');
     expect(out.result).toBe('first reply');
     expect(typeof out.next_steps).toBe('string');
@@ -189,7 +191,7 @@ describe('SpawnAgent / PromptAgent / CloseAgent envelopes carry next_steps', () 
 
     const out = JSON.parse(await sendMessage.execute(
       { agent_id: spawn.agentId, message: 'follow up' },
-      {},
+      vpTestCtx,
     ));
     expect(out.success).toBe(true);
     expect(typeof out.next_steps).toBe('string');
@@ -208,7 +210,7 @@ describe('SpawnAgent / PromptAgent / CloseAgent envelopes carry next_steps', () 
 
     const out = JSON.parse(await closeAgent.execute(
       { agent_id: spawn.agentId, result: 'final' },
-      {},
+      vpTestCtx,
     ));
     expect(out.success).toBe(true);
     expect(typeof out.next_steps).toBe('string');

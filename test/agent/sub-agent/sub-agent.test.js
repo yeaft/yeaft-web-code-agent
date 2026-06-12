@@ -78,6 +78,8 @@ function mkDeps(adapter, overrides = {}) {
   };
 }
 
+const vpTestCtx = { parentEngineDeps: { parentVpId: 'vp-test', parentThreadId: 'main' } };
+
 describe('sub-agent: tool subset', () => {
   it('child registry strips SpawnAgent/PromptAgent/WaitAgent/CloseAgent/RouteForward/AskUser', () => {
     const parent = new ToolRegistry();
@@ -246,7 +248,7 @@ describe('sub-agent: SendMessage / WaitAgent / CloseAgent round-trip', () => {
     const id = spawn.agentId;
 
     // Wait #1 — first mission turn.
-    const w1 = JSON.parse(await waitAgent.execute({ agent_id: id, timeout_ms: 2000 }, {}));
+    const w1 = JSON.parse(await waitAgent.execute({ agent_id: id, timeout_ms: 2000 }, vpTestCtx));
     expect(w1.status).toBe('idle');
     expect(w1.result).toBe('first reply');
 
@@ -254,11 +256,11 @@ describe('sub-agent: SendMessage / WaitAgent / CloseAgent round-trip', () => {
     adapter.reply = 'second reply';
     const sm = JSON.parse(await sendMessage.execute(
       { agent_id: id, message: 'follow up please' },
-      {},
+      vpTestCtx,
     ));
     expect(sm.success).toBe(true);
 
-    const w2 = JSON.parse(await waitAgent.execute({ agent_id: id, timeout_ms: 2000 }, {}));
+    const w2 = JSON.parse(await waitAgent.execute({ agent_id: id, timeout_ms: 2000 }, vpTestCtx));
     expect(w2.status).toBe('idle');
     expect(w2.result).toBe('second reply');
     expect(w2.turns).toBe(2);
@@ -282,9 +284,9 @@ describe('sub-agent: SendMessage / WaitAgent / CloseAgent round-trip', () => {
     const id = spawn.agentId;
 
     // Wait for first turn to land.
-    await waitAgent.execute({ agent_id: id, timeout_ms: 2000 }, {});
+    await waitAgent.execute({ agent_id: id, timeout_ms: 2000 }, vpTestCtx);
 
-    const cls = JSON.parse(await closeAgent.execute({ agent_id: id, result: 'wrap' }, {}));
+    const cls = JSON.parse(await closeAgent.execute({ agent_id: id, result: 'wrap' }, vpTestCtx));
     expect(cls.success).toBe(true);
     expect(cls.result).toBe('wrap');
 
@@ -313,7 +315,7 @@ describe('sub-agent: failure surfacing (option A)', () => {
     ));
     const id = spawn.agentId;
 
-    const wait = JSON.parse(await waitAgent.execute({ agent_id: id, timeout_ms: 2000 }, {}));
+    const wait = JSON.parse(await waitAgent.execute({ agent_id: id, timeout_ms: 2000 }, vpTestCtx));
     expect(wait.status).toBe('failed');
     expect(wait.error).toContain('adapter exploded');
   });

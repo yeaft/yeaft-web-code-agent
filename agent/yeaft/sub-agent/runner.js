@@ -343,6 +343,10 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
         return;
       }
 
+      if (isTerminalAgentStatus(agent.status)) {
+        return;
+      }
+
       // Persist the turn into the local message buffer so subsequent
       // PromptAgent continuations see context.
       agent.engineMessages.push({ role: 'user', content: prompt });
