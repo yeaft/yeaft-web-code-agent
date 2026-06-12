@@ -234,6 +234,10 @@ export const useChatStore = defineStore('chat', {
     // compatibility; this map is the source of truth across group switches.
     // Shape: { [groupId || '__all__']: { loaded, hasMore, loading, oldestSeq, count } }
     yeaftSessionHistoryState: {},
+    // De-dupe metadata-only Yeaft bootstrap requests while waiting for the
+    // session_ready replay. Group history requests are de-duped separately by
+    // yeaftSessionHistoryState[groupId].loading.
+    yeaftBootstrapMetaLoadingKey: null,
     // 可用的 slash commands 列表（按 conversationId 隔离，从 Claude SDK init 消息获取）
     slashCommandsMap: {},  // { [conversationId]: string[] }
     // Slash command 描述映射（从 agent 端传递，所有 conversation 共用）
@@ -987,66 +991,45 @@ export const useChatStore = defineStore('chat', {
       this.yeaftLoadingMoreHistory = false;
       this.yeaftOldestLoadedSeq = null;
 
-      // Always request a session_ready replay so model + status + groups
+      // Always request a session_ready replay so model + status + session
       // snapshot are repopulated on every Yeaft entry. Backend's
       // handleYeaftLoadHistory is idempotent: the session_ready handler
       // either migrates the local convId (first time) or refreshes model /
-      // status fields (re-entry). For the active group, also replay the
-      // visible history unless that group has already completed a history
+      // status fields (re-entry). For the active session, also replay the
+      // visible history unless that session has already completed a history
       // load in this UI lifecycle. A non-empty shared messagesMap is not
       // enough evidence: it may hold stale rows for `grp_fun` while newer
       // persisted rows were written during a previous page/session.
-      //
-      // Group-history-isolation (Bug 7): pass `groupId` so the agent only
-      // replays messages stamped with the active group. The visible Yeaft
-      // filter is authoritative; sessionsStore.activeSessionId is only a lazy
-      // fallback so quick group switches don't request another group's
-      // history into the active pane.
-      if (this.yeaftAgentId) {
-        const groupId = resolveActiveYeaftSessionId(this);
-        const sessionKey = groupId || '__all__';
-        const savedState = this.yeaftSessionHistoryState[sessionKey] || null;
-        // Always ask the agent for a delta (or initial window). The old
-        // `!savedState?.loaded` short-circuit meant any session visited
-        // earlier in this UI lifecycle could not see messages that
-        // arrived while the user was elsewhere — they had to refresh.
-        // Cost: one cheap WS round-trip per session entry; for a session
-        // with a known cursor the agent replies with zero rows.
-        if (groupId) {
-          const latestSeq = Number.isFinite(savedState?.latestSeq) ? savedState.latestSeq : null;
-          const payload = {
-            type: 'yeaft_load_history',
-            agentId: this.yeaftAgentId,
-            sessionId: groupId,
-          };
-          if (latestSeq !== null) {
-            payload.afterSeq = latestSeq;
-          } else {
-            payload.limit = YEAFT_RECENT_TURNS;
-          }
-          this.yeaftSessionHistoryState = {
-            ...this.yeaftSessionHistoryState,
-            [sessionKey]: {
-              ...(savedState || { hasMore: false, oldestSeq: null, count: 0 }),
-              loaded: false,
-              loading: true,
-              latestSeq,
-            },
-          };
-          this.yeaftLoadingMoreHistory = true;
-          this.sendWsMessage(payload);
-        } else {
-          // No session yet — ask for metadata only (limit:0) so the session
-          // snapshot lands and the session_list_updated path can hydrate
-          // the chosen session.
-          this.sendWsMessage({
-            type: 'yeaft_load_history',
-            agentId: this.yeaftAgentId,
-            limit: 0,
-            sessionId: null,
-          });
-        }
+      this.requestYeaftSessionBootstrap({ forceSessionReady: true });
+    },
+
+    requestYeaftSessionBootstrap({ forceSessionReady = false } = {}) {
+      if (!this.yeaftAgentId) return;
+      const activeSessionId = resolveActiveYeaftSessionId(this);
+      const sessionState = activeSessionId
+        ? this.yeaftSessionHistoryState[activeSessionId]
+        : null;
+      const needSessionReady = forceSessionReady || !this.yeaftSessionReady || !this.yeaftModel || !this.yeaftStatus;
+      const needHistoryReplay = !!activeSessionId && !sessionState?.loaded && !sessionState?.loading;
+      if (!needSessionReady && !needHistoryReplay) return false;
+      const metaKey = `${this.yeaftAgentId}:${activeSessionId || '__none__'}`;
+      const metadataOnly = needSessionReady && !needHistoryReplay;
+      if (metadataOnly && this.yeaftBootstrapMetaLoadingKey === metaKey) return false;
+      if (metadataOnly) this.yeaftBootstrapMetaLoadingKey = metaKey;
+      if (activeSessionId && needHistoryReplay) {
+        this.yeaftSessionHistoryState = {
+          ...this.yeaftSessionHistoryState,
+          [activeSessionId]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
+        };
+        this.yeaftLoadingMoreHistory = true;
       }
+      this.sendWsMessage({
+        type: 'yeaft_load_history',
+        agentId: this.yeaftAgentId,
+        limit: needHistoryReplay ? YEAFT_RECENT_TURNS : 0,
+        sessionId: activeSessionId,
+      });
+      return true;
     },
     leaveYeaft() {
       this.currentView = 'chat';
@@ -1343,6 +1326,7 @@ export const useChatStore = defineStore('chat', {
           }
           this.yeaftModel = event.model;
           this.yeaftSessionReady = true;
+          this.yeaftBootstrapMetaLoadingKey = null;
           this.yeaftAvailableModels = event.availableModels || [];
           // Surface agent's yeaft home dir so Yeaft workbench (Files/Git tabs)
           // can default to a sensible folder instead of leaking through
@@ -1868,8 +1852,8 @@ export const useChatStore = defineStore('chat', {
           // Bug 1: after enterYeaft the group snapshot may arrive *after*
           // initial history load (which happened with groupId:null), so
           // reload history for the correct group when activeGroupId changes.
-          if (this.currentView === 'yeaft' && newGroupId && newGroupId !== prevGroupId) {
-            this.setActiveSessionFilter(newGroupId);
+          if (this.currentView === 'yeaft' && newGroupId) {
+            this.setActiveSessionFilter(newGroupId, { force: newGroupId === prevGroupId });
           }
           break;
         }
@@ -2556,6 +2540,11 @@ export const useChatStore = defineStore('chat', {
       this.yeaftHasMoreHistory = !!savedState?.hasMore;
       this.yeaftLoadingMoreHistory = !!savedState?.loading;
       this.yeaftOldestLoadedSeq = (typeof savedState?.oldestSeq === 'number') ? savedState.oldestSeq : null;
+
+      // If a restore/snapshot path forces the current session while an initial
+      // history request is already in flight, keep the UI flags in sync but do
+      // not enqueue a duplicate `yeaft_load_history` for the same session.
+      if (savedState?.loading) return;
 
       // Always ask the agent — same rationale as enterYeaft. If we have a
       // cursor for this session, request only what's new since; otherwise
@@ -3402,8 +3391,8 @@ export const useChatStore = defineStore('chat', {
      */
 
     reloadYeaftMessages() {
-      if (this.currentView !== 'yeaft') return;
-      if (!this.yeaftAgentId) return;
+      if (this.currentView !== 'yeaft') return false;
+      if (!this.yeaftAgentId) return false;
       const sessionId = resolveActiveYeaftSessionId(this);
       const sessionKey = sessionId || '__all__';
       const convId = this.yeaftConversationId;
@@ -3431,8 +3420,10 @@ export const useChatStore = defineStore('chat', {
       this.sendWsMessage({
         type: 'yeaft_load_history',
         agentId: this.yeaftAgentId,
+        limit: YEAFT_RECENT_TURNS,
         sessionId,
       });
+      return true;
     },
 
     loadMoreYeaftHistory() {

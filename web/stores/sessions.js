@@ -57,11 +57,12 @@ export const useSessionsStore = defineStore('sessions', {
   getters: {
     sessionList(state) {
       const all = state.sessionOrder.map(id => state.sessions[id]).filter(Boolean);
-      // fix-yeaft-session-list-and-menu: mirror chat sidebar's "pinned
-      // first, then active floats to the top of the unpinned tail"
-      // semantics. Pinned ids live on the shared chatStore so chat /
-      // yeaft can share one pin registry; if it's missing (test env
-      // without window.Pinia) we degrade to no-pin gracefully.
+      // fix-yeaft-session-list-and-menu: mirror chat sidebar's pinned-first
+      // grouping while keeping the persisted sessionOrder as the source of
+      // truth for click ordering. Selecting a session mutates sessionOrder in
+      // setActive(); the getter must not temporarily float active rows, or the
+      // previous active row snaps back to its old slot and makes selection look
+      // like a swap instead of an insertion.
       const chat = _getChatStoreSafe();
       const pinnedIds = (chat && Array.isArray(chat.pinnedSessions))
         ? new Set(chat.pinnedSessions)
@@ -71,14 +72,6 @@ export const useSessionsStore = defineStore('sessions', {
       for (const s of all) {
         if (pinnedIds.has(s.id)) pinned.push(s);
         else unpinned.push(s);
-      }
-      // Active floats to the top of unpinned (only if not already pinned).
-      if (state.activeSessionId && !pinnedIds.has(state.activeSessionId)) {
-        const idx = unpinned.findIndex(s => s.id === state.activeSessionId);
-        if (idx > 0) {
-          const [active] = unpinned.splice(idx, 1);
-          unpinned.unshift(active);
-        }
       }
       return [...pinned, ...unpinned];
     },
@@ -283,7 +276,7 @@ export const useSessionsStore = defineStore('sessions', {
       const session = result.session || result.group || null;
       if (result.ok && result.op === 'create' && session && session.id) {
         this.applySnapshotUpsert(session, agentId);
-        this.activeSessionId = session.id;
+        this.setActive(session.id);
       }
       const opSessionId = result.sessionId || result.groupId;
       if (result.ok && (result.op === 'archive' || result.op === 'delete') && opSessionId) {
@@ -319,9 +312,37 @@ export const useSessionsStore = defineStore('sessions', {
     setActive(sessionId) {
       if (sessionId && this.sessions[sessionId]) {
         this.activeSessionId = sessionId;
+        this.moveSessionToFront(sessionId);
       } else {
         this.activeSessionId = null;
       }
+    },
+
+    /**
+     * Move the selected session to the top of its visual group while preserving
+     * the relative order of every other row. This matches Chat session list
+     * activation: selecting C in [A, B, C, D] yields [C, A, B, D], not a swap.
+     *
+     * Pinned rows stay in the pinned block; unpinned rows stay below pinned.
+     */
+    moveSessionToFront(sessionId) {
+      if (!sessionId || !this.sessions[sessionId]) return;
+      const currentIndex = this.sessionOrder.indexOf(sessionId);
+      if (currentIndex <= 0) return;
+
+      const chat = _getChatStoreSafe();
+      const pinnedIds = (chat && Array.isArray(chat.pinnedSessions))
+        ? new Set(chat.pinnedSessions)
+        : new Set();
+      const targetPinned = pinnedIds.has(sessionId);
+
+      const nextOrder = this.sessionOrder.filter(id => id !== sessionId);
+      const insertAt = targetPinned
+        ? 0
+        : nextOrder.findIndex(id => !pinnedIds.has(id));
+      if (insertAt === -1) nextOrder.push(sessionId);
+      else nextOrder.splice(insertAt, 0, sessionId);
+      this.sessionOrder = nextOrder;
     },
 
     /** Register a request-id so components can await ok/error. */
