@@ -34,8 +34,9 @@ beforeEach(() => {
 
 afterAll(() => cleanupTestDb());
 
-// Verbatim copy of the send-site decision from server/ws-utils.js. If the
-// production code drifts, this test will start failing — that's the point.
+// Mirrors the send-site decision in server/ws-utils.js. This is an
+// independent copy of the branching logic, not the production function —
+// keep it in sync by hand if ws-utils.js changes.
 async function sendToWebClientUnderTest(client, msg, { skipAuth = false } = {}) {
   if (client.ws.readyState !== WS_OPEN) return;
   if (skipAuth || client.encryptOutbound === false) {
@@ -97,7 +98,7 @@ describe('server → web : encryptOutbound default + client_hello flip', () => {
     client.encryptOutbound = true;
 
     // Mirror the early-dispatch branch in handleWebMessage
-    const incoming = { type: 'client_hello', plaintextOk: true, version: '0.1.999' };
+    const incoming = { type: 'client_hello', plaintextOk: true };
     if (incoming.type === 'client_hello') {
       if (incoming.plaintextOk === true) {
         client.encryptOutbound = false;
@@ -111,7 +112,7 @@ describe('server → web : encryptOutbound default + client_hello flip', () => {
     const client = createMockWebClient();
     client.encryptOutbound = true;
 
-    const incoming = { type: 'client_hello', version: '0.1.999' }; // no plaintextOk
+    const incoming = { type: 'client_hello' }; // no plaintextOk
     if (incoming.type === 'client_hello') {
       if (incoming.plaintextOk === true) client.encryptOutbound = false;
     }

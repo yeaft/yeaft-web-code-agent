@@ -164,7 +164,7 @@ async function handleWebMessage(clientId, msg) {
   if (msg.type === 'client_hello') {
     if (msg.plaintextOk === true) {
       client.encryptOutbound = false;
-      console.log(`[WS] Client ${clientId} negotiated plaintext mode (version=${msg.version || 'unknown'})`);
+      console.log(`[WS] Client ${clientId} negotiated plaintext mode`);
     }
     return;
   }

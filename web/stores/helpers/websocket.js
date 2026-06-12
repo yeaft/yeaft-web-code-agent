@@ -151,13 +151,13 @@ export function connect(store) {
     // New server flips per-client `encryptOutbound = false` so future
     // frames to us are plain JSON (visible in DevTools, no per-frame
     // CPU cost). Old server doesn't recognise the `client_hello` type
-    // and ignores it harmlessly. Sent in plaintext, before key arrives
-    // — server handles this before auth_result is processed by client.
+    // and ignores it harmlessly. Sent in plaintext before the session
+    // key arrives — the receive path stays unconditional (decrypt iff
+    // the frame looks encrypted), so the handshake ordering is benign.
     try {
       store.ws.send(JSON.stringify({
         type: 'client_hello',
-        plaintextOk: true,
-        version: store.clientVersion || 'unknown'
+        plaintextOk: true
       }));
     } catch (e) {
       console.warn('[WS] Failed to send client_hello:', e);

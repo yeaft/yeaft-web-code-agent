@@ -111,32 +111,29 @@ describe('web auth_result handler flips serverEncryptionRequired', () => {
 describe('web sends client_hello on connect', () => {
   it('emits a client_hello frame with plaintextOk: true after WS opens', () => {
     const ws = makeFakeBrowserWs();
-    const store = { ws, clientVersion: '0.1.999' };
+    const store = { ws };
 
     // Mirror the onopen branch from websocket.js exactly.
     store.ws.send(JSON.stringify({
       type: 'client_hello',
-      plaintextOk: true,
-      version: store.clientVersion || 'unknown'
+      plaintextOk: true
     }));
 
     const sent = ws.getLastMessage();
     expect(sent.type).toBe('client_hello');
     expect(sent.plaintextOk).toBe(true);
-    expect(sent.version).toBe('0.1.999');
   });
 
-  it('falls back to version="unknown" when clientVersion is missing', () => {
+  it('omits any version field (no client version source wired)', () => {
     const ws = makeFakeBrowserWs();
     const store = { ws };
 
     store.ws.send(JSON.stringify({
       type: 'client_hello',
-      plaintextOk: true,
-      version: store.clientVersion || 'unknown'
+      plaintextOk: true
     }));
 
-    expect(ws.getLastMessage().version).toBe('unknown');
+    expect(ws.getLastMessage()).not.toHaveProperty('version');
   });
 });
 

@@ -18,8 +18,9 @@ import { MockWebSocket, WS_OPEN } from '../helpers/mockWs.js';
  *   - agent/context.js (default serverEncryptionRequired: true)
  */
 
-// Verbatim copy of the send-site decision from agent/connection/buffer.js.
-// If buffer.js drifts, this test starts failing — that's the point.
+// Mirrors the send-site decision in agent/connection/buffer.js. This is an
+// independent copy of the branching logic, not the production function —
+// keep it in sync by hand if buffer.js changes.
 async function sendToServerUnderTest(ctxLike, msg) {
   const ws = ctxLike.ws;
   if (ws.readyState !== WS_OPEN) return;
