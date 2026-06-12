@@ -1,9 +1,17 @@
 /**
  * close-agent.js — Close a sub-agent and clean up.
+ *
+ * Marks status='closed' (terminal), aborts the abort controller so any
+ * in-flight engine.query stops promptly, and drains any pending re-entry
+ * notification for the agent so the engine doesn't redeliver it on the
+ * next user turn.
  */
 
 import { defineTool } from './types.js';
-import { getAgentRegistry } from './agent.js';
+import { agentBelongsToCaller, getAgentRegistry } from './agent.js';
+import { isTerminalAgentStatus, STATUS } from '../sub-agent/status.js';
+import { consumeNotificationForAgent, enqueueTerminalNotification } from '../sub-agent/notifications.js';
+import { snapshotLiveness } from '../sub-agent/liveness.js';
 
 export default defineTool({
   name: 'CloseAgent',
@@ -33,8 +41,6 @@ Do NOT end your turn silently right after CloseAgent.`,
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
   async execute(input, ctx) {
-    // NB: next_steps is the FIRST envelope field — the registry's 1 KiB
-    // tail-truncation would eat it if it lived at the end.
     const ERROR_NEXT_STEPS =
       'That call failed — see `error`. Either correct the arguments and ' +
       'retry, or tell the user what went wrong. Do NOT end your turn ' +
@@ -49,21 +55,58 @@ Do NOT end your turn silently right after CloseAgent.`,
     if (!agent) {
       return JSON.stringify({ next_steps: ERROR_NEXT_STEPS, error: `Agent not found: ${agent_id}` });
     }
+    if (!agentBelongsToCaller(agent, ctx)) {
+      return JSON.stringify({ next_steps: ERROR_NEXT_STEPS, error: `Agent not found: ${agent_id}` });
+    }
 
     if (result) {
       agent.result = result;
     }
 
-    // PR-M1: abort any in-flight engine.query so the driver loop exits
-    // promptly. This is cooperative — if the driver is mid-stream the
-    // adapter receives the signal; if it's idle, status flip ends the
-    // wait loop on the next 50ms tick.
+    // Abort any in-flight engine.query so the driver loop exits promptly.
+    // Cooperative — if the driver is mid-stream the adapter receives the
+    // signal; if it's idle, status flip ends the wait loop on the next tick.
     if (agent.abortController && !agent.abortController.signal.aborted) {
       try { agent.abortController.abort('closed'); } catch { /* ignore */ }
     }
 
-    const finalResult = agent.result || agent.lastResult || '';
-    agent.status = 'closed';
+    const finalResult = (typeof agent.result === 'string' && agent.result)
+      ? agent.result
+      : (agent.lastResult || '');
+
+    // If the agent had already gone terminal (e.g. failed) before we got
+    // here, preserve that status; otherwise mark closed. Either way drain
+    // any pending re-entry notification — the parent is explicitly
+    // wrapping up so it doesn't need another nudge.
+    const wasTerminal = isTerminalAgentStatus(agent.status);
+    if (!wasTerminal) {
+      agent.status = STATUS.CLOSED;
+      // The driver may not yet have observed the abort / status flip; push
+      // a notification so the queue stays consistent (idempotent inside
+      // the notifications module). The driver's own finalizeTerminal()
+      // would also try to enqueue but the __terminalNotified guard makes
+      // that a no-op.
+      try {
+        enqueueTerminalNotification({
+          agentId: agent.id,
+          agentName: agent.name,
+          status: STATUS.CLOSED,
+          result: finalResult,
+          error: agent.error || null,
+          outputFile: agent.outputFile || null,
+          turns: agent.usage?.turns || 0,
+          parentVpId: agent.parentVpId || null,
+          parentSessionId: agent.parentSessionId || null,
+          parentThreadId: agent.parentThreadId || 'main',
+        });
+      } catch { /* never block close on notification queue */ }
+      agent.__terminalNotified = true;
+    }
+
+    // The parent is acknowledging the agent right now via this tool
+    // call; drop the queued notification so the engine doesn't
+    // double-deliver on its next user turn.
+    consumeNotificationForAgent(agent.id);
 
     return JSON.stringify({
       next_steps:
@@ -73,7 +116,10 @@ Do NOT end your turn silently right after CloseAgent.`,
       success: true,
       agentId: agent_id,
       name: agent.name,
+      status: agent.status,
       result: finalResult,
+      outputFile: agent.outputFile || null,
+      liveness: snapshotLiveness(agent.liveness),
       messages: agent.messages.length,
       turns: agent.usage?.turns || 0,
       message: `Agent "${agent.name}" closed`,

@@ -1,69 +1,103 @@
 /**
- * wait-agent.js — Wait for a sub-agent to complete and get its result.
+ * wait-agent.js — Wait for a sub-agent's next state change.
  *
- * Loop-stall fix (2026-06-11):
+ * Returns a JSON envelope shaped for the model to make an explicit
+ * decision. The shape is stable across statuses; the `next_steps` field
+ * always names the exact tool the model should call next.
  *
- * Symptom — when the LLM called WaitAgent inside a sub-agent orchestration,
- * the assistant turn ended silently right after the tool returned. The user
- * saw a stuck "tool ran" panel and no follow-up text or further tool calls.
+ * Status semantics returned:
+ *   - completed / closed / failed / abandoned (terminal): include
+ *     `error` (when applicable), final `result`, and outputFile path
+ *     for re-reading. We also drain the agent's queued re-entry
+ *     notification so the engine doesn't redeliver it on the next user
+ *     turn.
+ *   - idle:    sub-agent finished a turn and is parked, waiting for a
+ *              PromptAgent or CloseAgent. `result` carries the last
+ *              assistant text. Distinct from terminal — the parent can
+ *              still send more work.
+ *   - running with timedOut=true: we waited and the agent is still
+ *              processing. The envelope flags `runningInBackground:
+ *              true` (the sub-agent IS continuing — it does NOT need
+ *              another PromptAgent to keep going) and recommends either
+ *              another WaitAgent or CloseAgent. `result` carries the
+ *              mid-stream preview (the driver keeps lastResult fresh
+ *              from every text_delta).
  *
- * Cause — the engine loop is correct (it appends the tool result and re-enters
- * `adapter.stream()`), but the LLM was reading the bare JSON envelope (status +
- * result + turns…) as a "complete answer" and emitting `end_turn` with no
- * text. The previous description ("Returns the agent's final result or current
- * status") gave it zero guidance about what to do next.
- *
- * Fix — every WaitAgent response now carries an explicit, status-dependent
- * `next_steps` field that names the exact tool to call next, and the tool
- * description spells out the full SpawnAgent → PromptAgent → WaitAgent →
- * CloseAgent loop. The same nudge pattern lives on the companion tools.
+ * Every envelope includes `outputFile` (durable per-agent JSONL log) and
+ * `liveness` (toolUseCount, tokenCount, msSinceLastEvent, recentTools,
+ * lastEventType) so the model can distinguish "stuck" from "still
+ * working" and can Read the log directly when it needs the full
+ * timeline.
  */
 
 import { defineTool } from './types.js';
-import { getAgentRegistry } from './agent.js';
+import { agentBelongsToCaller, getAgentRegistry } from './agent.js';
+import { isTerminalAgentStatus, STATUS } from '../sub-agent/status.js';
+import { snapshotLiveness } from '../sub-agent/liveness.js';
+import { consumeNotificationForAgent } from '../sub-agent/notifications.js';
 
 /**
  * Build the status-specific next-step guidance the LLM reads after a wait.
- *
- * The wording is imperative and names actual tools so the model has a clear
- * action to take — leaving it implicit was the bug.
+ * Imperative + names actual tools. Always appears as the FIRST field on
+ * the envelope (the registry's 1 KiB tail-truncation would otherwise eat
+ * tail-positioned nudges when `result` is long).
  *
  * @param {string} status
- * @param {boolean} [timedOut]
+ * @param {{ timedOut?: boolean, runningInBackground?: boolean, budgetExceeded?: boolean }} [opts]
  */
-function nextStepsFor(status, timedOut = false) {
-  if (timedOut) {
+function nextStepsFor(status, opts = {}) {
+  if (opts.budgetExceeded) {
     return (
-      'Sub-agent is still running. Either (a) call WaitAgent again with a ' +
-      'larger timeout_ms to keep waiting, (b) call CloseAgent if you want to ' +
-      'cut it short and use partial output, or (c) explain to the user that ' +
-      'the agent is still working and ask whether to keep waiting. Do NOT ' +
-      'end your turn silently.'
+      'Sub-agent stopped because an explicit budget limit was reached. ' +
+      'Use `partial_output`, `budget_reason`, and `budget_usage` to decide ' +
+      'whether to relay the partial result, spawn a fresh agent with a ' +
+      'larger budget, or report the cutoff to the user. Do NOT present this ' +
+      'as an ordinary successful completion.'
+    );
+  }
+  if (opts.timedOut) {
+    return (
+      'Sub-agent is STILL RUNNING in the background — it does NOT need ' +
+      'another PromptAgent to keep going. Decide: (a) call WaitAgent again ' +
+      'with a larger timeout_ms to keep waiting, (b) call CloseAgent if ' +
+      'you want to cut it short and use partial output, or (c) tell the ' +
+      'user the agent is still working and ask whether to keep waiting. ' +
+      'Read `outputFile` for the full event timeline. Do NOT end your turn ' +
+      'silently.'
     );
   }
   switch (status) {
-    case 'idle':
+    case STATUS.IDLE:
       return (
-        'Sub-agent finished one turn and is idle. The `result` above is its ' +
-        'reply — relay it to the user in your own words, or send a follow-up ' +
-        'via PromptAgent, or finalize via CloseAgent. Do NOT end your turn ' +
-        'silently without telling the user what the sub-agent said.'
+        'Sub-agent finished one turn and is idle (queue empty). The ' +
+        '`result` above is its reply — relay it to the user in your own ' +
+        'words, or send a follow-up via PromptAgent, or finalize via ' +
+        'CloseAgent. Do NOT end your turn silently without telling the ' +
+        'user what the sub-agent said.'
       );
-    case 'completed':
+    case STATUS.COMPLETED:
       return (
-        'Sub-agent finished successfully (terminal). Summarize the `result` ' +
-        'for the user in your own reply. Do NOT end your turn with no text.'
+        'Sub-agent finished successfully (terminal). Summarize the ' +
+        '`result` for the user in your own reply. Do NOT end your turn ' +
+        'with no text.'
       );
-    case 'closed':
+    case STATUS.CLOSED:
       return (
-        'Sub-agent was closed (terminal). Report the final `result` to the ' +
-        'user in your reply. Do NOT end your turn silently.'
+        'Sub-agent was closed (terminal). Report the final `result` to ' +
+        'the user in your reply. Do NOT end your turn silently.'
       );
-    case 'failed':
+    case STATUS.FAILED:
       return (
-        'Sub-agent failed — see `error`. Decide whether to retry with a fresh ' +
-        'SpawnAgent, adjust the mission, or report the failure to the user. ' +
-        'Do NOT end your turn silently.'
+        'Sub-agent failed — see `error`. Decide whether to retry with a ' +
+        'fresh SpawnAgent, adjust the mission, or report the failure to ' +
+        'the user. Do NOT end your turn silently.'
+      );
+    case STATUS.ABANDONED:
+      return (
+        'Sub-agent was abandoned by the idle watchdog — it sat idle too ' +
+        'long without a follow-up. The last `result` is its final reply. ' +
+        'Either relay it to the user or SpawnAgent fresh with a new ' +
+        'mission. Do NOT end your turn silently.'
       );
     default:
       return (
@@ -74,40 +108,84 @@ function nextStepsFor(status, timedOut = false) {
   }
 }
 
-/**
- * Nudge for the `{error: ...}` error envelopes. The error path used to ship a
- * naked `{error}` blob — same shape that caused the silent-end_turn bug on the
- * happy path. Tell the LLM what to do about an error (correct the call, or
- * report the failure to the user) so it does not end its turn silently after a
- * fat-finger like a wrong agent_id.
- */
 function errorNextSteps() {
   return (
-    'That call failed — see `error`. Either correct the arguments and retry, ' +
-    'or tell the user what went wrong. Do NOT end your turn silently after an ' +
-    'error envelope; the user has not seen the error, only you have.'
+    'That call failed — see `error`. Either correct the arguments and ' +
+    'retry, or tell the user what went wrong. Do NOT end your turn ' +
+    'silently after an error envelope; the user has not seen the error, ' +
+    'only you have.'
   );
+}
+
+/**
+ * Build the envelope for a single status snapshot. `result` is taken
+ * from `agent.result` (final) if present, else from `agent.lastResult`
+ * (mid-stream preview).
+ */
+function buildEnvelope(agent, { timedOut = false } = {}) {
+  const status = agent.status;
+  const budgetResult = agent.result && typeof agent.result === 'object'
+    && agent.result.status === 'budget_exceeded'
+    ? agent.result
+    : null;
+  const resultText = budgetResult
+    ? (budgetResult.partial_output || '')
+    : ((typeof agent.result === 'string' && agent.result)
+        ? agent.result
+        : (agent.lastResult || ''));
+  const env = {
+    next_steps: nextStepsFor(status, { timedOut, budgetExceeded: !!budgetResult }),
+    agentId: agent.id,
+    name: agent.name,
+    status,
+    error: agent.error || null,
+    outputFile: agent.outputFile || null,
+    liveness: snapshotLiveness(agent.liveness),
+    messages: Array.isArray(agent.messages) ? agent.messages.length : 0,
+    turns: agent.usage?.turns || 0,
+  };
+  if (timedOut) {
+    env.timedOut = true;
+    env.runningInBackground = true;
+    env.message = `Agent "${agent.name}" is still running in the background.`;
+  }
+  if (budgetResult) {
+    env.budgetExceeded = true;
+    env.budget_status = budgetResult.status;
+    env.budget_reason = budgetResult.reason || null;
+    env.partial_output = budgetResult.partial_output || '';
+    env.budget_usage = budgetResult.usage || null;
+  }
+  env.result = resultText;
+  return env;
 }
 
 export default defineTool({
   name: 'WaitAgent',
-  description: `Wait for a sub-agent to complete its current turn and retrieve its reply.
+  description: `Wait for a sub-agent's next state change (turn end, terminal, or wait-timeout) and retrieve a status envelope.
 
-Returns a JSON envelope with the sub-agent's status, latest \`result\` text, and
-an explicit \`next_steps\` field telling you what to do next. Read \`next_steps\`
-every time — the wait is part of an orchestration loop, not a terminal answer.
+Returns JSON with explicit \`status\`, latest \`result\` text, \`liveness\`
+counters (toolUseCount, tokenCount, msSinceLastEvent, recentTools), the
+durable \`outputFile\` path you can Read at any time, and a status-specific
+\`next_steps\` directive telling you what to call next.
+
+Status semantics:
+  • completed / closed / failed / abandoned  → terminal. The sub-agent will
+    do nothing more. Relay the result to the user (or retry / report the
+    failure).
+  • idle  → the sub-agent finished a turn and is parked with an empty
+    queue. You can PromptAgent for follow-up or CloseAgent to finalize.
+  • timedOut=true (with status='running' and runningInBackground=true) →
+    the wait elapsed but the sub-agent is STILL working. It does NOT need
+    another PromptAgent. Either WaitAgent again with a larger timeout,
+    CloseAgent to cut it short, or tell the user it's still working.
 
 CRITICAL — after WaitAgent returns you MUST take one of these actions:
-  • status='idle' / 'completed' / 'closed': RELAY the \`result\` to the user
-    in your own words (or send follow-up work via PromptAgent, or finalize
-    via CloseAgent).
-  • status='failed': report the failure to the user OR retry with a fresh
-    SpawnAgent.
-  • timedOut=true: call WaitAgent again with a larger timeout, OR CloseAgent
-    to cut it short, OR tell the user the agent is still working.
-
-NEVER end your turn silently right after WaitAgent — the user has not seen the
-sub-agent's reply yet; only you have. The orchestration loop is
+  • status terminal: relay/retry/report.
+  • status idle:     reply to user OR PromptAgent OR CloseAgent.
+  • timedOut:        re-wait, cut short, or report progress.
+NEVER end your turn silently right after WaitAgent — the user has not seen
+the sub-agent's reply yet; only you have. The orchestration loop is
 SpawnAgent → (PromptAgent ↔ WaitAgent)+ → CloseAgent → final reply to user.
 
 The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
@@ -132,11 +210,6 @@ The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
   isReadOnly: () => true,
   async execute(input, ctx) {
     const { agent_id, timeout_ms = 30000 } = input;
-    // NB: `next_steps` is intentionally the FIRST field in every envelope
-    // below. `agent/yeaft/tools/registry.js` caps each tool result at
-    // TOOL_RESULT_MAX_BYTES (1 KiB) by truncating the tail — if `next_steps`
-    // were last, a long `result` would push the directive off the end and the
-    // LLM would never see the very nudge this PR delivers.
     if (!agent_id) {
       return JSON.stringify({ next_steps: errorNextSteps(), error: 'agent_id is required' });
     }
@@ -150,56 +223,41 @@ The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
     if (!agent) {
       return JSON.stringify({ next_steps: errorNextSteps(), error: `Agent not found: ${agent_id}` });
     }
-
-    // Terminal states return immediately.
-    if (agent.status === 'completed' || agent.status === 'closed' || agent.status === 'failed') {
-      return JSON.stringify({
-        next_steps: nextStepsFor(agent.status),
-        agentId: agent_id,
-        name: agent.name,
-        status: agent.status,
-        result: agent.result || agent.lastResult || '',
-        error: agent.error || null,
-        messages: agent.messages.length,
-        turns: agent.usage?.turns || 0,
-      });
+    if (!agentBelongsToCaller(agent, ctx)) {
+      return JSON.stringify({ next_steps: errorNextSteps(), error: `Agent not found: ${agent_id}` });
     }
 
-    // 'idle' means the sub-agent finished its current turn and is waiting
-    // for the next SendMessage. That IS a useful return point for the
-    // parent — surface lastResult and let parent decide what's next.
+    // Terminal already — return immediately and drain the notification
+    // so the engine doesn't redeliver it on the next user turn.
+    if (isTerminalAgentStatus(agent.status)) {
+      consumeNotificationForAgent(agent.id);
+      return JSON.stringify(buildEnvelope(agent));
+    }
+    if (agent.status === STATUS.IDLE) {
+      return JSON.stringify(buildEnvelope(agent));
+    }
+    if (ctx?.signal?.aborted) {
+      return JSON.stringify({ next_steps: errorNextSteps(), error: 'Wait cancelled', agentId: agent_id });
+    }
+
+    // Block until next interesting state change, capped at timeout_ms.
     const deadline = Date.now() + timeout_ms;
     while (Date.now() < deadline) {
-      if (agent.status === 'idle' || agent.status === 'completed' || agent.status === 'closed' || agent.status === 'failed') {
-        return JSON.stringify({
-          next_steps: nextStepsFor(agent.status),
-          agentId: agent_id,
-          name: agent.name,
-          status: agent.status,
-          result: agent.result || agent.lastResult || '',
-          error: agent.error || null,
-          messages: agent.messages.length,
-          turns: agent.usage?.turns || 0,
-        });
+      if (isTerminalAgentStatus(agent.status)) {
+        consumeNotificationForAgent(agent.id);
+        return JSON.stringify(buildEnvelope(agent));
       }
-
+      if (agent.status === STATUS.IDLE) {
+        return JSON.stringify(buildEnvelope(agent));
+      }
       if (ctx?.signal?.aborted) {
         return JSON.stringify({ next_steps: errorNextSteps(), error: 'Wait cancelled', agentId: agent_id });
       }
-
       await new Promise(r => setTimeout(r, 200));
     }
 
-    return JSON.stringify({
-      next_steps: nextStepsFor(agent.status, true),
-      agentId: agent_id,
-      name: agent.name,
-      status: agent.status,
-      timedOut: true,
-      message: `Agent "${agent.name}" is still running after ${timeout_ms}ms`,
-      result: agent.lastResult || '',
-      messages: agent.messages.length,
-      turns: agent.usage?.turns || 0,
-    });
+    // Wait elapsed; the sub-agent is still running. Surface mid-stream
+    // preview + liveness so the parent has actionable signal.
+    return JSON.stringify(buildEnvelope(agent, { timedOut: true }));
   },
 });

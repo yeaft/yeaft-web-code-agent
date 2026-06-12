@@ -6,7 +6,8 @@
  */
 
 import { defineTool } from './types.js';
-import { getAgentRegistry } from './agent.js';
+import { agentBelongsToCaller, getAgentRegistry } from './agent.js';
+import { isTerminalAgentStatus, isPromptableAgentStatus, STATUS, describeAgentStatus } from '../sub-agent/status.js';
 
 export default defineTool({
   name: 'PromptAgent',
@@ -21,7 +22,10 @@ returns you almost always want to call WaitAgent next to collect the reply.
 Do NOT end your turn after PromptAgent without either (a) calling WaitAgent,
 (b) explaining to the user what you just asked the sub-agent, or (c) calling
 CloseAgent. The orchestration loop is
-SpawnAgent → (PromptAgent ↔ WaitAgent)+ → CloseAgent → final reply to user.`,
+SpawnAgent → (PromptAgent ↔ WaitAgent)+ → CloseAgent → final reply to user.
+
+PromptAgent is rejected if the sub-agent is in a terminal state
+(completed/failed/closed/abandoned). Use SpawnAgent to start a fresh one.`,
   parameters: {
     type: 'object',
     properties: {
@@ -56,17 +60,38 @@ SpawnAgent → (PromptAgent ↔ WaitAgent)+ → CloseAgent → final reply to us
     if (!agent) {
       return JSON.stringify({ next_steps: ERROR_NEXT_STEPS, error: `Agent not found: ${agent_id}` });
     }
-
-    if (agent.status === 'closed') {
-      return JSON.stringify({ next_steps: ERROR_NEXT_STEPS, error: `Agent "${agent.name}" is closed` });
-    }
-    if (agent.status === 'failed') {
-      return JSON.stringify({ next_steps: ERROR_NEXT_STEPS, error: `Agent "${agent.name}" has failed: ${agent.error || 'unknown error'}` });
+    if (!agentBelongsToCaller(agent, ctx)) {
+      return JSON.stringify({ next_steps: ERROR_NEXT_STEPS, error: `Agent not found: ${agent_id}` });
     }
 
-    // PR-M1: queue as a pending prompt the driver will pull. This wakes
-    // the driver out of its idle wait and starts a new turn. The 'active'
-    // status alias kept for backward-compat with code that polls for it.
+    if (isTerminalAgentStatus(agent.status)) {
+      // Build a specific error message per status. Telling the model
+      // "agent is closed" vs "agent failed: <error>" vs "agent was
+      // abandoned (idle too long)" gives it a clear next action.
+      const desc = describeAgentStatus(agent.status);
+      const detail = agent.status === STATUS.FAILED && agent.error
+        ? `: ${agent.error}`
+        : '';
+      return JSON.stringify({
+        next_steps: ERROR_NEXT_STEPS,
+        error: `Agent "${agent.name}" is ${desc}${detail}. Spawn a new agent if you need more work.`,
+        agentId: agent_id,
+        status: agent.status,
+      });
+    }
+
+    if (!isPromptableAgentStatus(agent.status)) {
+      // Defensive — covers any future status that isn't terminal but
+      // also isn't ready for prompts.
+      return JSON.stringify({
+        next_steps: ERROR_NEXT_STEPS,
+        error: `Agent "${agent.name}" is in status "${agent.status}", which does not accept new prompts.`,
+        agentId: agent_id,
+      });
+    }
+
+    // Queue as a pending prompt the driver will pull. This wakes the
+    // driver out of its idle wait and starts a new turn.
     if (!Array.isArray(agent.pendingPrompts)) agent.pendingPrompts = [];
     agent.pendingPrompts.push(message);
     agent.messages.push({
@@ -74,8 +99,8 @@ SpawnAgent → (PromptAgent ↔ WaitAgent)+ → CloseAgent → final reply to us
       content: message,
       timestamp: Date.now(),
     });
-    if (agent.status === 'idle' || agent.status === 'created') {
-      agent.status = 'running';
+    if (agent.status === STATUS.IDLE || agent.status === STATUS.CREATED) {
+      agent.status = STATUS.RUNNING;
     }
 
     return JSON.stringify({

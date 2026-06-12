@@ -43,6 +43,7 @@ import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/c
 import { resolveThinking } from './router/thinking.js';
 import { approxTokens } from './memory/budget.js';
 import { COLLAB_TOOL_POLICY, truncateToolResultIfNeeded } from './tools/registry.js';
+import { acknowledgePendingNotifications, formatNotificationsForPrompt, peekPendingNotifications } from './sub-agent/notifications.js';
 import {
   TOOL_BATCH_SIZE,
   TURN_SUMMARY_THRESHOLD,
@@ -958,6 +959,8 @@ export class Engine {
         parentName: vpCtx?.senderVpId || 'parent',
         parentVpId: vpCtx?.senderVpId || null,
         parentVpPersona: vpCtx?.vpPersona || null,
+        parentSessionId: vpCtx?.sessionId || null,
+        parentThreadId: vpCtx?.threadId || MAIN_THREAD_ID,
         onEvent: this.#subAgentEventSink || null,
         language: this.#config?.language || 'en',
         // Forward the session-shared ToolUsageStats so sub-agent
@@ -1424,6 +1427,12 @@ export class Engine {
     const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
       ? collabToolPolicy
       : null;
+    const runtimeSessionId = (typeof sessionId === 'string' && sessionId.trim())
+      ? sessionId.trim()
+      : this.#sessionId;
+    const runtimeThreadId = (typeof threadId === 'string' && threadId.trim())
+      ? threadId.trim()
+      : MAIN_THREAD_ID;
 
     // ─── Pre-query: FTS5 Memory Recall + AMS snapshot ─────
     // Memory has a SINGLE render outlet now (DESIGN-PROMPT §3 ③):
@@ -1574,9 +1583,37 @@ export class Engine {
     // If `promptParts` was supplied (image/file attachments), use the array form
     // so the adapter sees image content blocks alongside the text. Otherwise the
     // legacy string form keeps prompt-cache behavior identical.
-    const finalUserContent = (Array.isArray(promptParts) && promptParts.length > 0)
-      ? promptParts
-      : prompt;
+    //
+    // Sub-agent re-entry: before constructing the user message, drain any
+    // terminal sub-agent notifications that landed for this parent VP
+    // while it was idle. If any are present we prepend an XML-tagged
+    // block to the user prompt so the parent model sees the sub-agent
+    // result(s) even if it forgot to call WaitAgent. See
+    // sub-agent/notifications.js for the bucketing + format.
+    const parentVpIdForNotif = (vpPersona && typeof vpPersona === 'object' && typeof vpPersona.vpId === 'string')
+      ? vpPersona.vpId
+      : (typeof senderVpId === 'string' ? senderVpId : null);
+    const isSubAgentTurn = !!(vpPersona && typeof vpPersona === 'object' && vpPersona.subAgent);
+    const notifScope = {
+      sessionId: runtimeSessionId,
+      parentVpId: parentVpIdForNotif,
+      threadId: runtimeThreadId,
+    };
+    const pendingSubAgentNotifs = isSubAgentTurn ? [] : peekPendingNotifications(notifScope);
+    const subAgentNotifBlock = formatNotificationsForPrompt(pendingSubAgentNotifs);
+
+    let finalUserContent;
+    if (Array.isArray(promptParts) && promptParts.length > 0) {
+      // Multimodal prompt — prepend the notification block as a leading
+      // text part so the adapter still sees image content blocks intact.
+      finalUserContent = subAgentNotifBlock
+        ? [{ type: 'text', text: subAgentNotifBlock + '\n\n' }, ...promptParts]
+        : promptParts;
+    } else {
+      finalUserContent = subAgentNotifBlock
+        ? `${subAgentNotifBlock}\n\n${prompt || ''}`
+        : prompt;
+    }
     const conversationMessages = [
       ...compactMessages,
       ...messages,
@@ -2191,6 +2228,9 @@ export class Engine {
 
       // If no tool calls, we're done
       if (stopReason !== 'tool_use' || toolCalls.length === 0) {
+        if (pendingSubAgentNotifs.length > 0) {
+          acknowledgePendingNotifications(notifScope, pendingSubAgentNotifs.map(n => n.id));
+        }
         yield { type: 'turn_end', turnNumber, stopReason, threadId };
 
         // ─── Post-query: StopHooks or Legacy ─────────────
@@ -2340,6 +2380,8 @@ export class Engine {
       const toolCtx = this.#buildToolContext(signal, {
         router,
         senderVpId,
+        sessionId: runtimeSessionId,
+        threadId: runtimeThreadId,
         inboundEnvelope,
         taskId,
         taskMembers,
@@ -2536,6 +2578,9 @@ export class Engine {
       // multi-iteration tool loops) and BEFORE the abortedDuringTools
       // check (so a clean handoff doesn't get reported as 'aborted').
       if (endTurnRequested) {
+        if (pendingSubAgentNotifs.length > 0) {
+          acknowledgePendingNotifications(notifScope, pendingSubAgentNotifs.map(n => n.id));
+        }
         const handoffDetail = typeof endTurnRequested === 'object'
           ? endTurnRequested
           : { kind: 'tool_handoff', reason: String(endTurnRequested) };
