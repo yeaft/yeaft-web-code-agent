@@ -1,17 +1,19 @@
 /**
- * group-store.js — Per-group persistent store for task-334b.
+ * session-store.js — Per-session persistent store for task-334b.
  *
  * Layout (see architecture §2):
- *   ~/.yeaft/sessions/<group-id>/
- *     group.json          # { id, name, roster: [vpId...], defaultVpId, createdAt }
+ *   ~/.yeaft/sessions/<session-id>/
+ *     session.json        # { id, name, roster: [vpId...], defaultVpId, createdAt }
  *     messages/           # JSONL size-rotation log (334o openLog)
  *       000001.jsonl
  *       index.json
  *     tasks/              # populated by 334n — reserved here
  *     vps/                # populated by 334c RoleInstance runtime — reserved here
  *
- * This module owns only the group.json + messages/ log. Roster mutation
- * logic lives in roster.js so coordinator and group-store both compose it.
+ * This module owns only the session.json + messages/ log. Roster mutation
+ * logic lives in roster.js so coordinator and session-store both compose it.
+ * Legacy `group.json` is read as a compatibility alias for sessions created
+ * before the storage terminology was fixed; new writes are always session.json.
  *
  * Hard constraint: the store does not parse @-mentions, does not dispatch,
  * and has no knowledge of VP/RoleInstance. It is pure persistence over 334o.
@@ -28,15 +30,16 @@ import { join } from 'path';
 import { writeAtomic, openLog } from '../storage/index.js';
 import { nextMsgId, isReservedVpId, ReservedVpIdError, validateVpId, InvalidVpIdError } from './ids.js';
 
-const GROUP_FILE = 'group.json';
+export const SESSION_META_FILE = 'session.json';
+export const LEGACY_GROUP_META_FILE = 'group.json';
 const MESSAGES_DIR = 'messages';
 
 /**
- * Load (or create) the directory for a single group.
+ * Load (or create) the directory for a single session.
  *
- * @param {string} sessionsRoot  e.g. `${yeaftDir}/groups`
+ * @param {string} sessionsRoot  e.g. `${yeaftDir}/sessions`
  * @param {string} sessionId
- * @returns {GroupHandle}
+ * @returns {SessionHandle}
  */
 export function openSession(sessionsRoot, sessionId) {
   if (!sessionId || typeof sessionId !== 'string') {
@@ -47,7 +50,7 @@ export function openSession(sessionsRoot, sessionId) {
 
   let meta = loadSessionMeta(dir);
   if (!meta) {
-    // Fresh group — caller must call initGroup() next; we return a handle
+    // Fresh session — caller must call createSession() next; we return a handle
     // with meta=null so createSession() can write the initial file.
   }
 
@@ -60,14 +63,14 @@ export function openSession(sessionsRoot, sessionId) {
     id: sessionId,
     /** Return current meta (reads fresh from memory after last save). */
     getMeta() { return meta ? structuredClone(meta) : null; },
-    /** Overwrite group.json atomically. */
+    /** Overwrite session.json atomically. */
     saveMeta(next) {
       validateMeta(next);
       meta = next;
-      writeAtomic(join(dir, GROUP_FILE), JSON.stringify(meta, null, 2));
+      writeAtomic(join(dir, SESSION_META_FILE), JSON.stringify(meta, null, 2));
     },
     /**
-     * Append a message to the group log. Assigns an id if absent.
+     * Append a message to the session log. Assigns an id if absent.
      * Returns the stored record (with id + ts).
      *
      * Structural invariant: NO field on `record` may start with `_`.
@@ -113,14 +116,14 @@ export function openSession(sessionsRoot, sessionId) {
 }
 
 /**
- * Create a fresh group on disk. Fails if group.json already exists.
- * @returns {GroupHandle}
+ * Create a fresh session on disk. Fails if session metadata already exists.
+ * @returns {SessionHandle}
  */
 export function createSession(sessionsRoot, spec) {
   if (!spec || !spec.id) throw new Error('createSession: spec.id required');
   const h = openSession(sessionsRoot, spec.id);
   if (h.getMeta()) {
-    throw new Error(`group ${spec.id} already exists`);
+    throw new Error(`session ${spec.id} already exists`);
   }
   const roster = Array.isArray(spec.roster) ? spec.roster.slice() : [];
   for (const v of roster) {
@@ -146,15 +149,19 @@ export function createSession(sessionsRoot, spec) {
   return h;
 }
 
-/** Non-destructive load — returns null if group.json is missing/corrupt. */
+/**
+ * Non-destructive load — returns null if session metadata is missing/corrupt.
+ * Reads canonical session.json first, then legacy group.json for disk
+ * compatibility. Callers that later save the handle will write session.json.
+ */
 export function loadSessionMeta(dir) {
-  const path = join(dir, GROUP_FILE);
-  if (!existsSync(path)) return null;
+  const path = resolveSessionMetaPath(dir);
+  if (!path) return null;
   try {
     const raw = readFileSync(path, 'utf8');
     const parsed = JSON.parse(raw);
     validateMeta(parsed);
-    // Legacy groups created before optional fields were added are
+    // Legacy sessions created before optional fields were added are
     // forward-compat: missing fields read back as safe empty strings.
     if (typeof parsed.announcement !== 'string') parsed.announcement = '';
     if (typeof parsed.workDir !== 'string') parsed.workDir = '';
@@ -164,7 +171,7 @@ export function loadSessionMeta(dir) {
   }
 }
 
-/** List every group directory under `sessionsRoot`. */
+/** List every session directory under `sessionsRoot`. */
 export function listSessions(sessionsRoot) {
   if (!existsSync(sessionsRoot)) return [];
   const out = [];
@@ -182,25 +189,25 @@ export function listSessions(sessionsRoot) {
 }
 
 function validateMeta(meta) {
-  if (!meta || typeof meta !== 'object') throw new Error('group.json must be object');
-  if (!meta.id || typeof meta.id !== 'string') throw new Error('group.id required');
-  if (!Array.isArray(meta.roster)) throw new Error('group.roster must be array');
+  if (!meta || typeof meta !== 'object') throw new Error('session.json must be object');
+  if (!meta.id || typeof meta.id !== 'string') throw new Error('session.id required');
+  if (!Array.isArray(meta.roster)) throw new Error('session.roster must be array');
   for (const v of meta.roster) {
-    if (typeof v !== 'string') throw new Error('group.roster must be string[]');
+    if (typeof v !== 'string') throw new Error('session.roster must be string[]');
   }
   if (meta.defaultVpId != null && typeof meta.defaultVpId !== 'string') {
-    throw new Error('group.defaultVpId must be string|null');
+    throw new Error('session.defaultVpId must be string|null');
   }
   if (meta.announcement != null && typeof meta.announcement !== 'string') {
-    throw new Error('group.announcement must be string');
+    throw new Error('session.announcement must be string');
   }
   if (meta.workDir != null && typeof meta.workDir !== 'string') {
-    throw new Error('group.workDir must be string');
+    throw new Error('session.workDir must be string');
   }
 }
 
 /**
- * @typedef {Object} GroupHandle
+ * @typedef {Object} SessionHandle
  * @property {string} dir
  * @property {string} id
  * @property {() => any} getMeta
@@ -210,3 +217,11 @@ function validateMeta(meta) {
  * @property {(first:string,last:string)=>Generator<any>} readMessageRange
  * @property {() => void} close
  */
+
+function resolveSessionMetaPath(dir) {
+  const canonical = join(dir, SESSION_META_FILE);
+  if (existsSync(canonical)) return canonical;
+  const legacy = join(dir, LEGACY_GROUP_META_FILE);
+  if (existsSync(legacy)) return legacy;
+  return null;
+}

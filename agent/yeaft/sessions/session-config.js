@@ -1,7 +1,7 @@
 /**
- * group-config.js — Per-group selected model state.
+ * session-config.js — Per-session selected model override state.
  *
- * Each group may carry its header-selected model in `config.json` at
+ * Each session may carry its header-selected model override in `config.json` at
  *   ~/.yeaft/sessions/<sessionId>/config.json
  *
  * v1 schema (intentionally tiny — extend via additive keys only):
@@ -9,7 +9,7 @@
  *     "model": "my-proxy/claude-sonnet-4-20250514"   // optional
  *   }
  *
- * Missing file → empty object. Missing field → fall back to user-level
+ * Missing file or `{}` → no session-level override. Missing field → fall back to user-level
  * config (`~/.yeaft/config.json` via loadConfig()). Resolution is a
  * shallow overlay for send-time effective config.
  *
@@ -25,7 +25,7 @@ import { sessionsRoot, resolveSessionYeaftDir } from './session-crud.js';
 
 const CONFIG_FILE = 'config.json';
 
-/** Whitelist of persisted group model-state fields. Reject everything else. */
+/** Whitelist of persisted session model-override fields. Reject everything else. */
 const ALLOWED_KEYS = new Set(['model']);
 
 export class SessionConfigError extends Error {
@@ -37,18 +37,18 @@ export class SessionConfigError extends Error {
 }
 
 /**
- * Resolve the on-disk path for a group's config.json. Honours the
- * per-group workDir registry so groups bound to a project directory
- * keep their config alongside the group meta.
+ * Resolve the on-disk path for a session's config.json. Honours the
+ * per-session workDir registry so sessions bound to a project directory
+ * keep their config alongside the session metadata.
  */
 export function sessionConfigPath(yeaftDir, sessionId) {
   if (!yeaftDir) return null;
-  const groupYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
-  return join(sessionsRoot(groupYeaftDir), sessionId, CONFIG_FILE);
+  const sessionYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
+  return join(sessionsRoot(sessionYeaftDir), sessionId, CONFIG_FILE);
 }
 
 /**
- * Read a group's config.json. Returns `{}` when the file is missing or
+ * Read a session's config.json. Returns `{}` when the file is missing or
  * corrupt — callers fall back to user-level defaults via
  * `resolveSessionConfig`. We never auto-write on read.
  *

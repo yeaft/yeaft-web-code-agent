@@ -2619,10 +2619,10 @@ function resolveCollabToolPolicy(sessionMeta) {
 }
 
 export function buildVpQueryOpts({ vpId, sessionCoordinator, sessionId, envelope, threadId = 'main' }) {
-  // Read the group meta once and reuse for both defaultVpId fallback and
-  // announcement injection. Each .getMeta() reload reads + parses the
-  // group.json file, so calling it twice per turn is wasteful — and
-  // (more importantly) opens a window where a concurrent group edit
+  // Read the session meta once and reuse for defaultVpId fallback,
+  // announcement injection, and roster prompt context. Calling getMeta()
+  // twice per turn is wasteful — and (more importantly) opens a window
+  // where a concurrent session edit
   // could land between the two reads, giving the engine a defaultVpId
   // from one snapshot and an announcement from a newer one.
   let sessionMeta = null;
@@ -2660,13 +2660,18 @@ export function buildVpQueryOpts({ vpId, sessionCoordinator, sessionId, envelope
   }
   const collabToolPolicy = resolveCollabToolPolicy(sessionMeta);
   if (collabToolPolicy) out.collabToolPolicy = collabToolPolicy;
-  // task-334-group-editor: surface the group announcement to the engine so
+  if (sessionMeta && Array.isArray(sessionMeta.roster)) {
+    out.sessionMembers = sessionMeta.roster
+      .filter(v => typeof v === 'string' && v.trim())
+      .map(v => v.trim());
+  }
+  // task-334-session-editor: surface the session announcement to the engine so
   // buildWorkerPrompt can inject it as a CLAUDE.md-style shared prefix.
   // Empty/missing reads as '' and prompts.js skips the section.
   if (sessionMeta && typeof sessionMeta.announcement === 'string') {
     out.sessionAnnouncement = sessionMeta.announcement;
   }
-  // Surface the group's configured working directory so the engine can
+  // Surface the session's configured working directory so the engine can
   // resolve CLAUDE.md / AGENTS.md at that path and inject it as a
   // [Project Doc] block above the announcement. Groups with no workDir
   // skip the block silently (matches the announcement contract).

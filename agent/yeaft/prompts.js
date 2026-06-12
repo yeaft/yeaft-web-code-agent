@@ -9,12 +9,12 @@
  *
  * Concept layering (DESIGN-PROMPT §3):
  *   ① Identity      — VP persona body (or Yeaft fallback)
- *   ② Rules         — group announcement, date, mode template, tools,
+ *   ② Rules         — session announcement, date, mode template, tools,
  *                     tool-guidance, skills, common rules
  *   ③ Memory        — single block produced upstream by the AMS render
  *                     outlet and threaded through here as `memoryInjection`
  *   ④ Active Scope  — structured per-turn scope summary
- *                     (group / vp / envelope IDs)
+ *                     (session / vp / members / envelope IDs)
  *
  * The compact summary, user_profile, and core_memory blocks that used to
  * live inside the system prompt are GONE. Compact summary is now part of
@@ -256,11 +256,11 @@ export function normalizePromptLanguage(language) {
  *
  * Prompt structure (DESIGN-PROMPT §3):
  *   ① Identity      — Core identity (persona or Yeaft fallback)
- *   ② Rules         — Group announcement, date, mode, tools, guidance, skills
+ *   ② Rules         — Session announcement, date, mode, tools, guidance, skills
  *   ③ Memory        — Single block produced by the AMS render outlet
  *                     (callers pass it as `memoryInjection`).
  *   ④ Active Scope  — Structured per-turn scope summary
- *                     (group / vp / envelope IDs).
+ *                     (session / vp / members / envelope IDs).
  *   (The previous standalone user_profile / core_memory blocks are
  *    gone — those signals now arrive through AMS Resident. Task
  *    context (`taskCtx`) was wired into Active Scope by task-334e
@@ -270,6 +270,7 @@ export function normalizePromptLanguage(language) {
  *   @param {object} [activeScope] — structured scope summary for this turn
  *   @param {string} [activeScope.sessionId]
  *   @param {string} [activeScope.vpId]
+ *   @param {string[]} [activeScope.members]          current session roster
  *   @param {object} [activeScope.envelope]          inbound routing info (sender, intent)
  *
  * @param {{
@@ -337,8 +338,8 @@ export function buildSystemPrompt({
     parts.push(`${docHeader}\n${introLine}${docText}`);
   }
 
-  // ─── 1.5  Group Announcement (CLAUDE.md-style shared prefix) ───
-  // When a group has set an announcement, every VP in the group sees it
+  // ─── 1.5  Session Announcement (CLAUDE.md-style shared prefix) ───
+  // When a session has set an announcement, every VP in the session sees it
   // near the top of the system prompt — before tools, memory, mode-specific
   // instructions. Empty/whitespace = no block emitted.
   const annText = (typeof sessionAnnouncement === 'string') ? sessionAnnouncement.trim() : '';
@@ -482,9 +483,10 @@ function hasCjk(text) {
  *
  * Schema:
  *   ## active_scope
- *   group:   <sessionId>               (omitted when missing)
- *   vp:      <vpId>                  (omitted when missing)
- *   envelope: from=<sender> intent=<intent>   (omitted when no envelope)
+ *   session: <sessionId>                    (omitted when missing)
+ *   vp:      <vpId>                         (omitted when missing)
+ *   members: <vpId>, <vpId>                 (omitted when missing)
+ *   envelope: from=<sender> intent=<intent> (omitted when no envelope)
  *
  * Returns '' when the input has no useful field — we don't emit an empty
  * header. (`featureId`/`featureTitle` fields were removed 2026-05-13 along
@@ -493,6 +495,7 @@ function hasCjk(text) {
  * @param {object} [activeScope]
  * @param {string} [activeScope.sessionId]
  * @param {string} [activeScope.vpId]
+ * @param {string[]} [activeScope.members]  current session roster
  * @param {object} [activeScope.envelope]   inbound routing summary
  * @param {object} lang
  * @returns {string}
@@ -501,15 +504,18 @@ function renderActiveScope(activeScope, lang) {
   if (!activeScope || typeof activeScope !== 'object') return '';
 
   const lines = [];
-  const group = typeof activeScope.sessionId === 'string' && activeScope.sessionId.trim()
+  const session = typeof activeScope.sessionId === 'string' && activeScope.sessionId.trim()
     ? activeScope.sessionId.trim()
     : '';
-  if (group) lines.push(`group: ${group}`);
+  if (session) lines.push(`session: ${session}`);
 
   const vp = typeof activeScope.vpId === 'string' && activeScope.vpId.trim()
     ? activeScope.vpId.trim()
     : '';
   if (vp) lines.push(`vp: ${vp}`);
+
+  const membersLine = renderSessionMembersLine(activeScope.members);
+  if (membersLine) lines.push(`members: ${membersLine}`);
 
   const envLine = renderEnvelopeLine(activeScope.envelope);
   if (envLine) lines.push(`envelope: ${envLine}`);
@@ -517,6 +523,21 @@ function renderActiveScope(activeScope, lang) {
   if (lines.length === 0) return '';
 
   return `${lang.activeScopeHeader}\n${lines.join('\n')}`;
+}
+
+
+function renderSessionMembersLine(members) {
+  if (!Array.isArray(members)) return '';
+  const clean = [];
+  const seen = new Set();
+  for (const member of members) {
+    if (typeof member !== 'string') continue;
+    const id = member.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    clean.push(id);
+  }
+  return clean.join(', ');
 }
 
 /**
