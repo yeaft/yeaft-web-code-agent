@@ -3049,9 +3049,9 @@ export const useChatStore = defineStore('chat', {
     handleMessage(msg) { handlerHelpers.handleMessage(this, msg); },
 
     // =====================
-    // Claude output processing
+    // Assistant output processing
     // =====================
-    getOrCreateExecutionStatus(conversationId) { return claudeHelpers.getOrCreateExecutionStatus(this, conversationId); },
+    getOrCreateExecutionStatus(conversationId) { return assistantOutputHelpers.getOrCreateExecutionStatus(this, conversationId); },
     handleAssistantOutputFrame(conversationId, data) { assistantOutputHelpers.handleAssistantOutputFrame(this, conversationId, data); },
     handleClaudeOutput(conversationId, data) { this.handleAssistantOutputFrame(conversationId, data); },
 
