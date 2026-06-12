@@ -118,7 +118,7 @@ export default {
              onClickLoadMore branches by currentView so a single visual
              affordance can drive either mode without leaking state. -->
         <div v-if="(store.loadingMoreMessages && store.currentView !== 'yeaft') || store.yeaftLoadingMoreHistory" class="loading-more">{{ $t('message.loadingMore') }}</div>
-        <div v-else-if="(store.hasMoreMessages && store.currentView !== 'yeaft') || store.yeaftHasMoreHistory" class="load-more-hint" @click="onClickLoadMore">{{ $t('message.loadMore') }}</div>
+        <div v-else-if="(store.hasMoreMessages && store.currentView !== 'yeaft') || store.yeaftHasMoreHistory || store.hasHiddenYeaftMessages" class="load-more-hint" @click="onClickLoadMore">{{ $t('message.loadMore') }}</div>
         <template v-for="block in threadBlocks" :key="block.id">
           <section
             v-if="block.type === 'thread-block'"
@@ -1428,6 +1428,7 @@ export default {
 
     const onScroll = () => {
       isAtBottom.value = checkIfAtBottom();
+      if (isAtBottom.value) pruneYeaftWindowNearBottom();
 
       if (containerRef.value) {
         const { scrollTop } = containerRef.value;
@@ -1438,21 +1439,33 @@ export default {
         // that the wrong store-flag pair never wins.
         const isYeaft = store.currentView === 'yeaft';
         const eligible = isYeaft
-          ? (store.yeaftHasMoreHistory && !store.yeaftLoadingMoreHistory && store.yeaftOldestLoadedSeq != null)
+          ? (store.hasHiddenYeaftMessages || (store.yeaftHasMoreHistory && !store.yeaftLoadingMoreHistory && store.yeaftOldestLoadedSeq != null))
           : (store.hasMoreMessages && !store.loadingMoreMessages);
         if (!eligible) return;
 
+        const loadYeaft = () => {
+          if (store.hasHiddenYeaftMessages) {
+            store.expandYeaftMessageWindow();
+            return;
+          }
+          store.loadMoreYeaftHistory();
+        };
         preserveScrollAnchorDuringLoad(
-          isYeaft ? () => store.loadMoreYeaftHistory() : () => store.loadMoreMessages(),
+          isYeaft ? loadYeaft : () => store.loadMoreMessages(),
           isYeaft ? () => store.yeaftLoadingMoreHistory : () => store.loadingMoreMessages
         );
       }
+    };
+
+    const pruneYeaftWindowNearBottom = () => {
+      if (store.currentView === 'yeaft') store.pruneYeaftMessageWindow();
     };
 
     const scrollToBottom = () => {
       if (containerRef.value) {
         containerRef.value.scrollTop = containerRef.value.scrollHeight;
         isAtBottom.value = true;
+        pruneYeaftWindowNearBottom();
       }
     };
 
@@ -1467,6 +1480,7 @@ export default {
 
     const smartScrollToBottom = () => {
       if (isAtBottom.value) {
+        pruneYeaftWindowNearBottom();
         Vue.nextTick(scrollToBottom);
       }
     };
@@ -1529,8 +1543,15 @@ export default {
     // wire verbs, different cursor semantics).
     const onClickLoadMore = () => {
       const isYeaft = store.currentView === 'yeaft';
+      const loadYeaft = () => {
+        if (store.hasHiddenYeaftMessages) {
+          store.expandYeaftMessageWindow();
+          return;
+        }
+        store.loadMoreYeaftHistory();
+      };
       preserveScrollAnchorDuringLoad(
-        isYeaft ? () => store.loadMoreYeaftHistory() : () => store.loadMoreMessages(),
+        isYeaft ? loadYeaft : () => store.loadMoreMessages(),
         isYeaft ? () => store.yeaftLoadingMoreHistory : () => store.loadingMoreMessages
       );
     };
