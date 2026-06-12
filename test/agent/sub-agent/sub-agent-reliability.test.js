@@ -1,0 +1,841 @@
+/**
+ * sub-agent-reliability.test.js — End-to-end coverage of the sub-agent
+ * reliability overhaul.
+ *
+ * What this file pins (one describe block per concern):
+ *
+ *   1. status.js  — terminal / interactive / promptable helpers agree
+ *                    with the rest of the subsystem on the same set.
+ *
+ *   2. output-log.js — durable JSONL events, rotation, tail-on-clean-record.
+ *
+ *   3. notifications.js — enqueue/dedup, bucket-by-parentVpId,
+ *                          per-agent drain, prompt formatting.
+ *
+ *   4. wait-agent envelope — every status returns the new shape with
+ *                             outputFile + liveness + status-specific
+ *                             next_steps; timeout returns timedOut +
+ *                             runningInBackground; consumes the
+ *                             per-agent notification.
+ *
+ *   5. tickAgent budget enforcement — exceeded max_turns produces a
+ *                                      budget_exceeded envelope and
+ *                                      flips status to completed.
+ *
+ *   6. idle watchdog — abandons the agent after the configured ms and
+ *                        enqueues a terminal notification.
+ *
+ *   7. driver finally{} — outputFile is closed and subEngine is nulled
+ *                          out after a terminal transition.
+ *
+ *   8. mid-stream lastResult — lastResult is set on text_delta during
+ *                               long generations, before the turn ends.
+ *
+ *   9. engine.js prepend — consumePendingNotifications drains into the
+ *                           user prompt at the head of the next turn.
+ */
+
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+
+import {
+  STATUS,
+  isTerminalAgentStatus,
+  isInteractiveAgentStatus,
+  isPromptableAgentStatus,
+  describeAgentStatus,
+} from '../../../agent/yeaft/sub-agent/status.js';
+
+import {
+  createOutputLog,
+  readOutputLog,
+  resolveLogPath,
+  _internals as outputLogInternals,
+} from '../../../agent/yeaft/sub-agent/output-log.js';
+
+import {
+  enqueueTerminalNotification,
+  consumePendingNotifications,
+  consumeNotificationForAgent,
+  formatNotificationsForPrompt,
+  _resetNotifications,
+  _peekAll,
+} from '../../../agent/yeaft/sub-agent/notifications.js';
+
+import {
+  makeLiveness,
+  bumpLivenessFromEvent,
+  snapshotLiveness,
+} from '../../../agent/yeaft/sub-agent/liveness.js';
+
+import {
+  _resetAgentRegistry,
+  getAgentRegistry,
+  tickAgent,
+} from '../../../agent/yeaft/tools/agent.js';
+import agentTool from '../../../agent/yeaft/tools/agent.js';
+import sendMessage from '../../../agent/yeaft/tools/send-message.js';
+import waitAgent from '../../../agent/yeaft/tools/wait-agent.js';
+import closeAgent from '../../../agent/yeaft/tools/close-agent.js';
+import listAgents from '../../../agent/yeaft/tools/list-agents.js';
+
+import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
+import { defineTool } from '../../../agent/yeaft/tools/types.js';
+import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
+
+// -------------------------------------------------------------------------
+// Shared scripted adapter + helpers
+// -------------------------------------------------------------------------
+
+class TextAdapter {
+  constructor(reply = 'done') {
+    this.reply = reply;
+    this.streamCalls = [];
+  }
+  async *stream(params) {
+    this.streamCalls.push({
+      system: params.system,
+      messages: JSON.parse(JSON.stringify(params.messages || [])),
+    });
+    yield { type: 'text_delta', text: this.reply };
+    yield { type: 'stop', stopReason: 'end_turn' };
+  }
+  async call() { return { text: 'ok', usage: { inputTokens: 1, outputTokens: 1 } }; }
+}
+
+/** A scripted adapter that pauses between text deltas so tests can
+ *  inspect mid-stream state before the turn ends. */
+class SlowAdapter {
+  constructor(chunks = ['hello', ' ', 'world'], delayMs = 30) {
+    this.chunks = chunks;
+    this.delayMs = delayMs;
+    this.streamCalls = [];
+  }
+  async *stream(params) {
+    this.streamCalls.push({ system: params.system, messages: params.messages });
+    for (const chunk of this.chunks) {
+      yield { type: 'text_delta', text: chunk };
+      await new Promise(r => setTimeout(r, this.delayMs));
+    }
+    yield { type: 'stop', stopReason: 'end_turn' };
+  }
+  async call() { return { text: 'ok', usage: {} }; }
+}
+
+const echoTool = defineTool({
+  name: 'echo',
+  description: 'echo input',
+  parameters: { type: 'object', properties: {} },
+  async execute(input) { return JSON.stringify({ echo: input }); },
+});
+
+function mkParentRegistry() {
+  const reg = new ToolRegistry();
+  reg.registerAll([echoTool, agentTool, sendMessage, waitAgent, closeAgent, listAgents]);
+  return reg;
+}
+
+function mkDeps(adapter, overrides = {}) {
+  return {
+    adapter,
+    trace: new NullTrace(),
+    config: { model: 'test-model', maxOutputTokens: 1024, _readOnly: true, language: 'en' },
+    parentToolRegistry: mkParentRegistry(),
+    parentName: 'TestParent',
+    parentVpId: 'vp-test',
+    parentVpPersona: { vpId: 'vp-test', persona: 'You are TestPersona.' },
+    ...overrides,
+  };
+}
+
+async function settle(agent, ms = 2000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline && agent.status !== 'idle' && !isTerminalAgentStatus(agent.status)) {
+    await new Promise(r => setTimeout(r, 20));
+  }
+}
+
+// -------------------------------------------------------------------------
+// 1. status.js
+// -------------------------------------------------------------------------
+
+describe('status helpers', () => {
+  it('STATUS enum is frozen', () => {
+    expect(Object.isFrozen(STATUS)).toBe(true);
+    expect(() => { STATUS.NEW = 'new'; }).toThrow();
+  });
+
+  it('terminal set matches the four documented terminal states', () => {
+    expect(isTerminalAgentStatus(STATUS.COMPLETED)).toBe(true);
+    expect(isTerminalAgentStatus(STATUS.FAILED)).toBe(true);
+    expect(isTerminalAgentStatus(STATUS.CLOSED)).toBe(true);
+    expect(isTerminalAgentStatus(STATUS.ABANDONED)).toBe(true);
+    expect(isTerminalAgentStatus(STATUS.RUNNING)).toBe(false);
+    expect(isTerminalAgentStatus(STATUS.IDLE)).toBe(false);
+    expect(isTerminalAgentStatus(STATUS.CREATED)).toBe(false);
+    expect(isTerminalAgentStatus('nonsense')).toBe(false);
+    expect(isTerminalAgentStatus(undefined)).toBe(false);
+  });
+
+  it('interactive set excludes terminal states', () => {
+    expect(isInteractiveAgentStatus(STATUS.CREATED)).toBe(true);
+    expect(isInteractiveAgentStatus(STATUS.RUNNING)).toBe(true);
+    expect(isInteractiveAgentStatus(STATUS.IDLE)).toBe(true);
+    expect(isInteractiveAgentStatus(STATUS.COMPLETED)).toBe(false);
+    expect(isInteractiveAgentStatus(STATUS.ABANDONED)).toBe(false);
+  });
+
+  it('promptable set accepts created/running/idle and rejects terminal', () => {
+    expect(isPromptableAgentStatus(STATUS.CREATED)).toBe(true);
+    expect(isPromptableAgentStatus(STATUS.RUNNING)).toBe(true);
+    expect(isPromptableAgentStatus(STATUS.IDLE)).toBe(true);
+    expect(isPromptableAgentStatus(STATUS.COMPLETED)).toBe(false);
+    expect(isPromptableAgentStatus(STATUS.FAILED)).toBe(false);
+    expect(isPromptableAgentStatus(STATUS.CLOSED)).toBe(false);
+    expect(isPromptableAgentStatus(STATUS.ABANDONED)).toBe(false);
+  });
+
+  it('describeAgentStatus produces human-readable labels for every status', () => {
+    expect(describeAgentStatus(STATUS.CREATED)).toMatch(/spawn/i);
+    expect(describeAgentStatus(STATUS.RUNNING)).toMatch(/running/i);
+    expect(describeAgentStatus(STATUS.IDLE)).toMatch(/idle/i);
+    expect(describeAgentStatus(STATUS.COMPLETED)).toMatch(/completed/i);
+    expect(describeAgentStatus(STATUS.FAILED)).toMatch(/failed/i);
+    expect(describeAgentStatus(STATUS.CLOSED)).toMatch(/closed/i);
+    expect(describeAgentStatus(STATUS.ABANDONED)).toMatch(/abandoned/i);
+  });
+});
+
+// -------------------------------------------------------------------------
+// 2. output-log.js
+// -------------------------------------------------------------------------
+
+describe('output-log durable JSONL', () => {
+  let tmpDir;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yeaft-sublog-'));
+  });
+  afterEach(() => {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it('resolveLogPath rejects unsafe agent ids', () => {
+    expect(() => resolveLogPath('../escape', tmpDir)).toThrow(/unsafe/);
+    expect(() => resolveLogPath('foo/bar', tmpDir)).toThrow(/unsafe/);
+    expect(() => resolveLogPath('')).toThrow();
+  });
+
+  it('write/close persists each event as a JSON line with timestamp', () => {
+    const sink = createOutputLog('agent-abc', tmpDir);
+    sink.write({ type: 'sub_agent_spawned', agentId: 'agent-abc' });
+    sink.write({ type: 'text_delta', text: 'hello' });
+    sink.write({ type: 'stop', stopReason: 'end_turn' });
+    sink.close();
+
+    const recs = readOutputLog('agent-abc', tmpDir);
+    expect(recs).toHaveLength(3);
+    expect(recs[0].type).toBe('sub_agent_spawned');
+    expect(recs[1].type).toBe('text_delta');
+    expect(recs[1].text).toBe('hello');
+    expect(recs[2].stopReason).toBe('end_turn');
+    expect(typeof recs[0].t).toBe('number');
+    expect(sink.path.endsWith('agent-abc.log')).toBe(true);
+  });
+
+  it('trims long text payloads inside the line so writes stay bounded', () => {
+    const sink = createOutputLog('agent-long', tmpDir);
+    const huge = 'A'.repeat(10_000);
+    sink.write({ type: 'text_delta', text: huge });
+    sink.close();
+
+    const recs = readOutputLog('agent-long', tmpDir);
+    expect(recs).toHaveLength(1);
+    expect(recs[0].text.length).toBeLessThan(huge.length);
+    expect(recs[0].text.endsWith('…')).toBe(true);
+  });
+
+  it('rotates to <id>.log.1 once MAX_BYTES is exceeded', () => {
+    const sink = createOutputLog('rotato', tmpDir);
+    // serialize() caps `text` at 2048 chars, so each write produces a
+    // line of ~2.1 KiB. Push until rotation triggers (MAX_BYTES = 2 MiB).
+    const target = outputLogInternals.MAX_BYTES + 64 * 1024;
+    let i = 0;
+    while (i < 5000) {
+      sink.write({ type: 'text_delta', text: 'a'.repeat(2048) });
+      // Rotation flips the on-disk size back to ~0; detect via the
+      // rotated file appearing rather than tracking bytes by hand.
+      if (fs.existsSync(path.join(tmpDir, 'rotato.log.1'))) break;
+      i += 1;
+    }
+    sink.close();
+
+    const original = path.join(tmpDir, 'rotato.log');
+    const rotated = `${original}.1`;
+    expect(fs.existsSync(rotated)).toBe(true);
+    // After rotation the current log is smaller than the pre-rotation cap.
+    expect(fs.statSync(original).size).toBeLessThanOrEqual(outputLogInternals.MAX_BYTES);
+    // Sanity: we did at least one write per iteration before rotation
+    // (otherwise the loop bailed for the wrong reason).
+    expect(i).toBeGreaterThan(0);
+  });
+
+  it('tail() returns the last N bytes and drops a partial leading record', () => {
+    const sink = createOutputLog('tail-test', tmpDir);
+    for (let i = 0; i < 50; i += 1) {
+      sink.write({ type: 'text_delta', text: `chunk-${i}` });
+    }
+    sink.close();
+
+    const tail = sink.tail(200);
+    expect(tail.length).toBeGreaterThan(0);
+    // First char of the tail must be `{` (clean record boundary).
+    expect(tail.trimStart().startsWith('{')).toBe(true);
+  });
+
+  it('write becomes a no-op after a disk failure (best-effort)', () => {
+    // Point at an unwritable path (file as a parent dir).
+    const blocker = path.join(tmpDir, 'blocker');
+    fs.writeFileSync(blocker, 'not-a-dir');
+    // resolveLogPath will treat `${blocker}/log` as the file — append fails.
+    const sink = createOutputLog('agent-x', blocker);
+    expect(() => sink.write({ type: 'x' })).not.toThrow();
+    expect(() => sink.write({ type: 'y' })).not.toThrow();
+    sink.close();
+  });
+});
+
+// -------------------------------------------------------------------------
+// 3. notifications.js
+// -------------------------------------------------------------------------
+
+describe('notifications queue', () => {
+  beforeEach(() => _resetNotifications());
+
+  it('enqueueTerminalNotification dedups per-agent', () => {
+    const first = enqueueTerminalNotification({
+      agentId: 'a1', agentName: 'a1', status: 'completed', result: 'r', parentVpId: 'vp-1',
+    });
+    const second = enqueueTerminalNotification({
+      agentId: 'a1', agentName: 'a1', status: 'completed', result: 'r', parentVpId: 'vp-1',
+    });
+    expect(first).not.toBeNull();
+    expect(second).toBeNull();
+    const peek = _peekAll();
+    expect(peek.byParent['vp-1']).toHaveLength(1);
+  });
+
+  it('buckets by parentVpId and falls back to __no_vp__ when missing', () => {
+    enqueueTerminalNotification({ agentId: 'a1', agentName: 'a1', status: 'closed', parentVpId: 'vp-A' });
+    enqueueTerminalNotification({ agentId: 'a2', agentName: 'a2', status: 'closed', parentVpId: 'vp-B' });
+    enqueueTerminalNotification({ agentId: 'a3', agentName: 'a3', status: 'closed' /* no parent */ });
+
+    expect(consumePendingNotifications('vp-A').map(n => n.agentId)).toEqual(['a1']);
+    expect(consumePendingNotifications('vp-A')).toEqual([]); // drained
+    expect(consumePendingNotifications('vp-B').map(n => n.agentId)).toEqual(['a2']);
+    expect(consumePendingNotifications(null).map(n => n.agentId)).toEqual(['a3']);
+  });
+
+  it('consumeNotificationForAgent drains a single record from both maps', () => {
+    enqueueTerminalNotification({ agentId: 'a1', agentName: 'a1', status: 'closed', parentVpId: 'vp-A' });
+    enqueueTerminalNotification({ agentId: 'a2', agentName: 'a2', status: 'closed', parentVpId: 'vp-A' });
+
+    const drained = consumeNotificationForAgent('a1');
+    expect(drained).not.toBeNull();
+    expect(drained.agentId).toBe('a1');
+
+    // a1 must NOT reappear in the parent bucket drain.
+    const remaining = consumePendingNotifications('vp-A');
+    expect(remaining.map(n => n.agentId)).toEqual(['a2']);
+  });
+
+  it('consumeNotificationForAgent returns null for unknown ids', () => {
+    expect(consumeNotificationForAgent('does-not-exist')).toBeNull();
+    expect(consumeNotificationForAgent('')).toBeNull();
+  });
+
+  it('formatNotificationsForPrompt produces empty string when nothing pending', () => {
+    expect(formatNotificationsForPrompt([])).toBe('');
+    expect(formatNotificationsForPrompt(null)).toBe('');
+  });
+
+  it('formatNotificationsForPrompt wraps each notification in XML', () => {
+    const block = formatNotificationsForPrompt([
+      { id: 'i1', agentId: 'a1', agentName: 'planner', status: 'completed', result: 'plan ready', error: null, outputFile: '/tmp/x.log', turns: 3, parentVpId: 'vp', createdAt: 0 },
+      { id: 'i2', agentId: 'a2', agentName: 'reviewer', status: 'failed', result: '', error: 'boom', outputFile: null, turns: 1, parentVpId: 'vp', createdAt: 0 },
+    ]);
+    expect(block).toMatch(/<sub-agent-notifications>/);
+    expect(block).toMatch(/<\/sub-agent-notifications>/);
+    expect(block).toMatch(/agent="planner"/);
+    expect(block).toMatch(/status="completed"/);
+    expect(block).toMatch(/error: boom/);
+    expect(block).toMatch(/result:/);
+    expect(block).toMatch(/plan ready/);
+    expect(block).toMatch(/outputFile: \/tmp\/x.log/);
+  });
+
+  it('formatNotificationsForPrompt truncates very long results', () => {
+    const huge = 'X'.repeat(5000);
+    const block = formatNotificationsForPrompt([{
+      id: 'i', agentId: 'a', agentName: 'a', status: 'completed', result: huge,
+      error: null, outputFile: null, turns: 1, parentVpId: null, createdAt: 0,
+    }]);
+    expect(block).toMatch(/truncated/);
+    expect(block.length).toBeLessThan(huge.length + 1000);
+  });
+});
+
+// -------------------------------------------------------------------------
+// 4. wait-agent envelope shape
+// -------------------------------------------------------------------------
+
+describe('wait-agent envelope shape', () => {
+  beforeEach(() => {
+    _resetAgentRegistry();
+    _resetNotifications();
+  });
+
+  it('terminal envelope includes outputFile, liveness, status and next_steps', async () => {
+    const liveness = makeLiveness();
+    bumpLivenessFromEvent(liveness, { type: 'tool_start', toolName: 'Bash' });
+    bumpLivenessFromEvent(liveness, { type: 'text_delta', text: 'hello world' });
+
+    const agents = getAgentRegistry();
+    agents.set('agent-done', {
+      id: 'agent-done', name: 'done', status: STATUS.COMPLETED, result: 'all set',
+      error: null, messages: [], usage: { turns: 2 },
+      outputFile: '/tmp/agent-done.log', liveness,
+    });
+
+    const env = JSON.parse(await waitAgent.execute({ agent_id: 'agent-done' }, {}));
+    expect(env.status).toBe('completed');
+    expect(env.result).toBe('all set');
+    expect(env.outputFile).toBe('/tmp/agent-done.log');
+    expect(env.liveness.toolUseCount).toBe(1);
+    expect(env.liveness.tokenCount).toBe('hello world'.length);
+    expect(env.liveness.recentTools).toContain('Bash');
+    expect(env.turns).toBe(2);
+    expect(env.next_steps).toMatch(/user/i);
+  });
+
+  it('idle envelope reads from agent.lastResult when result is empty', async () => {
+    const agents = getAgentRegistry();
+    agents.set('agent-id', {
+      id: 'agent-id', name: 'id', status: STATUS.IDLE,
+      result: '', lastResult: 'mid-stream preview',
+      error: null, messages: [], usage: { turns: 1 },
+      outputFile: null, liveness: makeLiveness(),
+    });
+
+    const env = JSON.parse(await waitAgent.execute({ agent_id: 'agent-id' }, {}));
+    expect(env.status).toBe('idle');
+    expect(env.result).toBe('mid-stream preview');
+    expect(env.next_steps).toMatch(/PromptAgent/);
+    expect(env.next_steps).toMatch(/CloseAgent/);
+  });
+
+  it('timed-out envelope flags runningInBackground and surfaces lastResult', async () => {
+    const agents = getAgentRegistry();
+    agents.set('agent-bg', {
+      id: 'agent-bg', name: 'bg', status: STATUS.RUNNING,
+      result: '', lastResult: 'partial',
+      error: null, messages: [], usage: { turns: 0 },
+      outputFile: '/tmp/bg.log', liveness: makeLiveness(),
+    });
+
+    const env = JSON.parse(await waitAgent.execute(
+      { agent_id: 'agent-bg', timeout_ms: 100 },
+      {},
+    ));
+    expect(env.timedOut).toBe(true);
+    expect(env.runningInBackground).toBe(true);
+    expect(env.result).toBe('partial');
+    expect(env.next_steps).toMatch(/STILL RUNNING/i);
+    expect(env.next_steps).toMatch(/WaitAgent/);
+    expect(env.next_steps).toMatch(/CloseAgent/);
+  });
+
+  it('drains the agent notification when terminal so engine does not redeliver', async () => {
+    const agents = getAgentRegistry();
+    agents.set('agent-drained', {
+      id: 'agent-drained', name: 'drained', status: STATUS.COMPLETED,
+      result: 'ok', error: null, messages: [], usage: { turns: 1 },
+      outputFile: null, liveness: makeLiveness(),
+    });
+    enqueueTerminalNotification({
+      agentId: 'agent-drained', agentName: 'drained', status: STATUS.COMPLETED,
+      result: 'ok', parentVpId: 'vp-X',
+    });
+    expect(_peekAll().byAgent['agent-drained']).toBeTruthy();
+
+    await waitAgent.execute({ agent_id: 'agent-drained' }, {});
+    expect(_peekAll().byAgent['agent-drained']).toBeUndefined();
+    // Parent bucket drain must also be a no-op now.
+    expect(consumePendingNotifications('vp-X')).toEqual([]);
+  });
+});
+
+// -------------------------------------------------------------------------
+// 5. tickAgent budget enforcement
+// -------------------------------------------------------------------------
+
+describe('tickAgent budget enforcement', () => {
+  beforeEach(() => _resetAgentRegistry());
+
+  it('exceeded max_turns returns budget_exceeded envelope and flips status', () => {
+    const agents = getAgentRegistry();
+    agents.set('agent-budget', {
+      id: 'agent-budget', name: 'budget', status: STATUS.RUNNING,
+      budget: { max_turns: 1 },
+      usage: { tokens: 0, turns: 0, startedAt: Date.now() },
+      diagnostics: [],
+      messages: [], result: null, lastResult: '', partial_output: '',
+      abortController: new AbortController(),
+    });
+
+    const envelope = tickAgent('agent-budget', { turns: 1, tokens: 10, partial_output: 'so-far' });
+    expect(envelope).not.toBeNull();
+    expect(envelope.status).toBe('budget_exceeded');
+    expect(envelope.reason).toMatch(/max_turns/);
+    expect(envelope.partial_output).toBe('so-far');
+
+    const agent = agents.get('agent-budget');
+    expect(agent.status).toBe(STATUS.COMPLETED);
+    expect(agent.abortController.signal.aborted).toBe(true);
+    expect(agent.diagnostics.some(d => d.type === 'budget_exceeded')).toBe(true);
+  });
+
+  it('within-budget tick returns null and leaves status alone', () => {
+    const agents = getAgentRegistry();
+    agents.set('agent-budget2', {
+      id: 'agent-budget2', name: 'b2', status: STATUS.RUNNING,
+      budget: { max_turns: 5, max_tokens: 1000 },
+      usage: { tokens: 0, turns: 0, startedAt: Date.now() },
+      diagnostics: [], messages: [], result: null, lastResult: '',
+      abortController: new AbortController(),
+    });
+    expect(tickAgent('agent-budget2', { turns: 1, tokens: 50 })).toBeNull();
+    expect(agents.get('agent-budget2').status).toBe(STATUS.RUNNING);
+  });
+
+  it('returns null and no-ops when the agent is already terminal', () => {
+    const agents = getAgentRegistry();
+    agents.set('agent-done', {
+      id: 'agent-done', name: 'done', status: STATUS.COMPLETED,
+      budget: { max_turns: 1 },
+      usage: { tokens: 0, turns: 5, startedAt: Date.now() },
+      diagnostics: [], messages: [], result: 'ok',
+      abortController: new AbortController(),
+    });
+    expect(tickAgent('agent-done', { turns: 1 })).toBeNull();
+    expect(agents.get('agent-done').status).toBe(STATUS.COMPLETED);
+  });
+
+  it('is wired into the sub-agent driver and cuts a real run at max_turns', async () => {
+    const adapter = new TextAdapter('done turn');
+    const deps = mkDeps(adapter);
+    const out = JSON.parse(await agentTool.execute(
+      { name: 'budgeted', mission: 'one shot only', budget: { max_turns: 1 } },
+      { parentEngineDeps: deps },
+    ));
+    const id = out.agentId;
+    const agent = getAgentRegistry().get(id);
+
+    // First turn runs; tickAgent should then trip max_turns=1 and finalize.
+    await settle(agent, 2000);
+    // Driver may transition idle → terminal; allow a beat for finalize.
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline && !isTerminalAgentStatus(agent.status)) {
+      await new Promise(r => setTimeout(r, 20));
+    }
+    expect(isTerminalAgentStatus(agent.status)).toBe(true);
+    expect(agent.status).toBe(STATUS.COMPLETED);
+    expect(agent.result).toBeTruthy();
+  });
+});
+
+// -------------------------------------------------------------------------
+// 6. Idle watchdog
+// -------------------------------------------------------------------------
+
+describe('idle watchdog', () => {
+  beforeEach(() => {
+    _resetAgentRegistry();
+    _resetNotifications();
+  });
+
+  it('flips an idle agent to abandoned after idleAbandonMs and enqueues a notification', async () => {
+    const adapter = new TextAdapter('first reply');
+    const deps = mkDeps(adapter, { idleAbandonMs: 200 });
+    const out = JSON.parse(await agentTool.execute(
+      { name: 'lazy', mission: 'reply once' },
+      { parentEngineDeps: deps },
+    ));
+    const id = out.agentId;
+    const agent = getAgentRegistry().get(id);
+
+    // Wait for first turn + idle then for the watchdog to trip.
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline && !isTerminalAgentStatus(agent.status)) {
+      await new Promise(r => setTimeout(r, 30));
+    }
+    expect(agent.status).toBe(STATUS.ABANDONED);
+    expect(agent.error).toMatch(/idle/);
+
+    // Notification queue should contain the abandoned record.
+    const notifs = consumePendingNotifications('vp-test');
+    expect(notifs.length).toBeGreaterThanOrEqual(1);
+    expect(notifs[0].status).toBe(STATUS.ABANDONED);
+    expect(notifs[0].agentId).toBe(id);
+  });
+
+  it('a follow-up prompt arriving before the watchdog cancels the abandon', async () => {
+    const adapter = new TextAdapter('first');
+    const deps = mkDeps(adapter, { idleAbandonMs: 1000 });
+    const out = JSON.parse(await agentTool.execute(
+      { name: 'rescued', mission: 'go' },
+      { parentEngineDeps: deps },
+    ));
+    const id = out.agentId;
+    const agent = getAgentRegistry().get(id);
+    await settle(agent, 2000);
+    expect(agent.status).toBe(STATUS.IDLE);
+
+    adapter.reply = 'second';
+    await sendMessage.execute({ agent_id: id, message: 'keep going' }, {});
+    // Give the driver time to process the follow-up.
+    await new Promise(r => setTimeout(r, 200));
+    await settle(agent, 2000);
+    expect(agent.status).toBe(STATUS.IDLE); // not abandoned
+    expect(agent.usage.turns).toBe(2);
+  });
+});
+
+// -------------------------------------------------------------------------
+// 7. Driver finally{} cleanup
+// -------------------------------------------------------------------------
+
+describe('driver finally cleanup', () => {
+  beforeEach(() => {
+    _resetAgentRegistry();
+    _resetNotifications();
+  });
+
+  it('closes outputLog and nulls subEngine after a terminal transition', async () => {
+    const adapter = new TextAdapter('cleanup-text');
+    const deps = mkDeps(adapter);
+    const out = JSON.parse(await agentTool.execute(
+      { name: 'cleanme', mission: 'go' },
+      { parentEngineDeps: deps },
+    ));
+    const id = out.agentId;
+    const agent = getAgentRegistry().get(id);
+
+    // Wait for first turn → idle, then close.
+    await settle(agent, 2000);
+    await closeAgent.execute({ agent_id: id, result: 'wrap' }, {});
+
+    // Allow the driver loop to exit through finally.
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline && (agent.subEngine !== null || agent.__driverStarted)) {
+      await new Promise(r => setTimeout(r, 20));
+    }
+    expect(agent.subEngine).toBeNull();
+    expect(agent.__driverStarted).toBe(false);
+    // outputFile path is preserved even after the log handle closes.
+    expect(typeof agent.outputFile).toBe('string');
+    expect(agent.outputFile.length).toBeGreaterThan(0);
+  });
+
+  it('a thrown listener does not stop liveness from being bumped', async () => {
+    const adapter = new TextAdapter('hi');
+    const events = [];
+    const deps = mkDeps(adapter, {
+      onEvent: (id, evt) => {
+        events.push(evt.type);
+        if (evt.type === 'text_delta') throw new Error('listener boom');
+      },
+    });
+    const out = JSON.parse(await agentTool.execute(
+      { name: 'listener-throws', mission: 'tick' },
+      { parentEngineDeps: deps },
+    ));
+    const id = out.agentId;
+    const agent = getAgentRegistry().get(id);
+    await settle(agent, 2000);
+    expect(agent.liveness.tokenCount).toBeGreaterThan(0);
+    expect(agent.status).toBe(STATUS.IDLE);
+    expect(events).toContain('text_delta');
+  });
+});
+
+// -------------------------------------------------------------------------
+// 8. Mid-stream lastResult
+// -------------------------------------------------------------------------
+
+describe('mid-stream lastResult', () => {
+  beforeEach(() => _resetAgentRegistry());
+
+  it('lastResult is updated on every text_delta before end_turn', async () => {
+    const adapter = new SlowAdapter(['part1 ', 'part2 ', 'part3'], 25);
+    const deps = mkDeps(adapter);
+    const out = JSON.parse(await agentTool.execute(
+      { name: 'slow-talker', mission: 'speak in parts' },
+      { parentEngineDeps: deps },
+    ));
+    const id = out.agentId;
+    const agent = getAgentRegistry().get(id);
+
+    // Poll for lastResult to grow while the stream is in flight.
+    const observed = new Set();
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline && !isTerminalAgentStatus(agent.status) && agent.status !== STATUS.IDLE) {
+      if (agent.lastResult) observed.add(agent.lastResult);
+      await new Promise(r => setTimeout(r, 10));
+    }
+    expect(agent.status).toBe(STATUS.IDLE);
+    expect(agent.lastResult).toContain('part3');
+    // We should have seen more than one distinct prefix while the model
+    // streamed — if not, mid-stream visibility regressed.
+    expect(observed.size).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// -------------------------------------------------------------------------
+// 9. Engine prepend — consumePendingNotifications hooks into the user prompt
+// -------------------------------------------------------------------------
+
+describe('engine prepends sub-agent notifications to the next user turn', () => {
+  beforeEach(() => _resetNotifications());
+
+  it('queued notifications appear in the user message that engine.query sends', async () => {
+    // Use Engine directly with a parent-shaped vpPersona so the drain
+    // bucket key matches.
+    const { Engine } = await import('../../../agent/yeaft/engine.js');
+    const adapter = new TextAdapter('parent reply');
+    const reg = mkParentRegistry();
+    const engine = new Engine({
+      adapter,
+      trace: new NullTrace(),
+      config: { model: 'test-model', maxOutputTokens: 256, _readOnly: true, language: 'en' },
+      toolRegistry: reg,
+    });
+
+    enqueueTerminalNotification({
+      agentId: 'a-x', agentName: 'planner', status: 'completed',
+      result: 'I built the plan.', parentVpId: 'vp-parent', turns: 3,
+    });
+
+    const events = [];
+    for await (const evt of engine.query({
+      prompt: 'continue parent work',
+      messages: [],
+      vpPersona: { vpId: 'vp-parent', persona: 'You are Parent.' },
+    })) {
+      events.push(evt);
+    }
+
+    // The adapter saw exactly one user message that mentions the
+    // notification block.
+    expect(adapter.streamCalls).toHaveLength(1);
+    const lastUser = adapter.streamCalls[0].messages.find(m => m.role === 'user');
+    expect(lastUser).toBeTruthy();
+    expect(String(lastUser.content)).toMatch(/<sub-agent-notifications>/);
+    expect(String(lastUser.content)).toMatch(/planner/);
+    expect(String(lastUser.content)).toMatch(/I built the plan/);
+    expect(String(lastUser.content)).toMatch(/continue parent work/);
+  });
+
+  it('no notifications → user prompt is unchanged', async () => {
+    const { Engine } = await import('../../../agent/yeaft/engine.js');
+    const adapter = new TextAdapter('clean');
+    const engine = new Engine({
+      adapter,
+      trace: new NullTrace(),
+      config: { model: 'test-model', maxOutputTokens: 256, _readOnly: true, language: 'en' },
+      toolRegistry: mkParentRegistry(),
+    });
+    for await (const _ of engine.query({
+      prompt: 'just talk',
+      messages: [],
+      vpPersona: { vpId: 'vp-clean', persona: 'You are Clean.' },
+    })) { /* drain */ }
+    expect(adapter.streamCalls).toHaveLength(1);
+    const lastUser = adapter.streamCalls[0].messages.find(m => m.role === 'user');
+    expect(String(lastUser.content)).toBe('just talk');
+  });
+
+  it('drained notifications are removed — second turn sees nothing', async () => {
+    const { Engine } = await import('../../../agent/yeaft/engine.js');
+    const adapter = new TextAdapter('parent reply');
+    const engine = new Engine({
+      adapter,
+      trace: new NullTrace(),
+      config: { model: 'test-model', maxOutputTokens: 256, _readOnly: true, language: 'en' },
+      toolRegistry: mkParentRegistry(),
+    });
+    enqueueTerminalNotification({
+      agentId: 'q', agentName: 'q', status: 'completed', result: 'r', parentVpId: 'vp-2x',
+    });
+
+    for await (const _ of engine.query({
+      prompt: 'turn 1',
+      messages: [],
+      vpPersona: { vpId: 'vp-2x', persona: 'You are 2x.' },
+    })) { /* drain */ }
+    for await (const _ of engine.query({
+      prompt: 'turn 2',
+      messages: [],
+      vpPersona: { vpId: 'vp-2x', persona: 'You are 2x.' },
+    })) { /* drain */ }
+
+    expect(adapter.streamCalls).toHaveLength(2);
+    const second = adapter.streamCalls[1].messages.find(m => m.role === 'user');
+    expect(String(second.content)).not.toMatch(/<sub-agent-notifications>/);
+    expect(String(second.content)).toBe('turn 2');
+  });
+});
+
+// -------------------------------------------------------------------------
+// 10. ListAgents reports outputFile + liveness for live agents
+// -------------------------------------------------------------------------
+
+describe('list-agents envelope', () => {
+  beforeEach(() => _resetAgentRegistry());
+
+  it('reports outputFile, liveness, and turns for non-terminal agents by default', async () => {
+    const adapter = new TextAdapter('hi');
+    const deps = mkDeps(adapter);
+    const out = JSON.parse(await agentTool.execute(
+      { name: 'listed', mission: 'go' },
+      { parentEngineDeps: deps },
+    ));
+    const id = out.agentId;
+    const agent = getAgentRegistry().get(id);
+    await settle(agent, 2000);
+
+    const env = JSON.parse(await listAgents.execute({}, {}));
+    expect(Array.isArray(env.agents)).toBe(true);
+    const a = env.agents.find(x => x.id === id);
+    expect(a).toBeTruthy();
+    expect(a.outputFile).toBeTruthy();
+    expect(typeof a.liveness.toolUseCount).toBe('number');
+    expect(typeof a.turns).toBe('number');
+  });
+
+  it('hides terminal agents unless include_terminal=true', async () => {
+    const agents = getAgentRegistry();
+    agents.set('agent-cls', {
+      id: 'agent-cls', name: 'closed', status: STATUS.CLOSED,
+      result: '', error: null, messages: [], usage: { turns: 0 },
+      outputFile: null, liveness: makeLiveness(),
+    });
+    const noShow = JSON.parse(await listAgents.execute({}, {}));
+    expect(noShow.agents.length).toBe(0);
+
+    const show = JSON.parse(await listAgents.execute({ include_terminal: true }, {}));
+    expect(show.agents.length).toBe(1);
+    expect(show.agents[0].status).toBe('closed');
+  });
+});

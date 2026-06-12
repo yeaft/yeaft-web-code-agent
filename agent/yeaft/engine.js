@@ -43,6 +43,7 @@ import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/c
 import { resolveThinking } from './router/thinking.js';
 import { approxTokens } from './memory/budget.js';
 import { COLLAB_TOOL_POLICY, truncateToolResultIfNeeded } from './tools/registry.js';
+import { consumePendingNotifications, formatNotificationsForPrompt } from './sub-agent/notifications.js';
 import {
   TOOL_BATCH_SIZE,
   TURN_SUMMARY_THRESHOLD,
@@ -1577,9 +1578,31 @@ export class Engine {
     // If `promptParts` was supplied (image/file attachments), use the array form
     // so the adapter sees image content blocks alongside the text. Otherwise the
     // legacy string form keeps prompt-cache behavior identical.
-    const finalUserContent = (Array.isArray(promptParts) && promptParts.length > 0)
-      ? promptParts
-      : prompt;
+    //
+    // Sub-agent re-entry: before constructing the user message, drain any
+    // terminal sub-agent notifications that landed for this parent VP
+    // while it was idle. If any are present we prepend an XML-tagged
+    // block to the user prompt so the parent model sees the sub-agent
+    // result(s) even if it forgot to call WaitAgent. See
+    // sub-agent/notifications.js for the bucketing + format.
+    const parentVpIdForNotif = (vpPersona && typeof vpPersona === 'object' && typeof vpPersona.vpId === 'string')
+      ? vpPersona.vpId
+      : (typeof senderVpId === 'string' ? senderVpId : null);
+    const pendingSubAgentNotifs = consumePendingNotifications(parentVpIdForNotif);
+    const subAgentNotifBlock = formatNotificationsForPrompt(pendingSubAgentNotifs);
+
+    let finalUserContent;
+    if (Array.isArray(promptParts) && promptParts.length > 0) {
+      // Multimodal prompt — prepend the notification block as a leading
+      // text part so the adapter still sees image content blocks intact.
+      finalUserContent = subAgentNotifBlock
+        ? [{ type: 'text', text: subAgentNotifBlock + '\n\n' }, ...promptParts]
+        : promptParts;
+    } else {
+      finalUserContent = subAgentNotifBlock
+        ? `${subAgentNotifBlock}\n\n${prompt || ''}`
+        : prompt;
+    }
     const conversationMessages = [
       ...compactMessages,
       ...messages,

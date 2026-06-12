@@ -24,6 +24,8 @@ import { defineTool } from './types.js';
 import { randomUUID } from 'crypto';
 import { getPersona, listPersonaIds } from '../personas.js';
 import { startSubAgent } from '../sub-agent/runner.js';
+import { STATUS, isTerminalAgentStatus } from '../sub-agent/status.js';
+import { makeLiveness } from '../sub-agent/liveness.js';
 
 /** In-memory sub-agent registry. */
 const agents = new Map();
@@ -138,7 +140,7 @@ export function budgetExceededResult(agent, reason) {
 export function tickAgent(agentId, delta = {}, now = Date.now()) {
   const agent = agents.get(agentId);
   if (!agent) return null;
-  if (agent.status === 'completed' || agent.status === 'closed') return null;
+  if (isTerminalAgentStatus(agent.status)) return null;
 
   if (typeof delta.tokens === 'number' && delta.tokens > 0) {
     agent.usage.tokens += delta.tokens;
@@ -155,7 +157,7 @@ export function tickAgent(agentId, delta = {}, now = Date.now()) {
 
   const envelope = budgetExceededResult(agent, check.reason);
   agent.result = envelope;
-  agent.status = 'completed';
+  agent.status = STATUS.COMPLETED;
   agent.diagnostics.push({
     type: 'budget_exceeded',
     limit: check.limit,
@@ -263,9 +265,11 @@ you just kicked off.`,
     const spec = validation.spec;
     const { name, cwd } = input;
 
-    // Check for name collision
+    // Check for name collision — any non-terminal agent with the same
+    // name blocks the new spawn. Terminal agents (closed/failed/abandoned/
+    // completed) free the name up for reuse.
     for (const [, agent] of agents) {
-      if (agent.name === name && agent.status !== 'closed') {
+      if (agent.name === name && !isTerminalAgentStatus(agent.status)) {
         return JSON.stringify({
           next_steps: ERROR_NEXT_STEPS,
           error: `Agent "${name}" already exists. Close it first or use a different name.`,
@@ -287,28 +291,40 @@ you just kicked off.`,
       personaData: persona || null,
       budget: spec.budget,
       cwd: cwd || ctx?.cwd || process.cwd(),
-      status: 'created',
+      status: STATUS.CREATED,
       messages: [],
       result: null,
+      lastResult: '',
       partial_output: '',
       diagnostics: [],
       usage: { tokens: 0, turns: 0, startedAt: now },
       createdAt: now,
       trace: [],
+      // Liveness counters — kept fresh by the runner from each sub-engine
+      // event so WaitAgent/ListAgents can show real-time progress.
+      liveness: makeLiveness(),
+      // Path to the durable JSONL event log. Populated by the runner
+      // when startSubAgent attaches createOutputLog(); we initialize to
+      // null so the field always exists on the record shape.
+      outputFile: null,
+      // ParentVpId is mirrored from deps when the driver starts so the
+      // notification queue can bucket by parent VP.
+      parentVpId: null,
       abortController: new AbortController(),
     };
 
     agents.set(agentId, agent);
 
-    // PR-M1: actually spawn the sub-agent driver. This is fire-and-forget;
-    // it returns immediately. The parent observes via WaitAgent (poll) or
-    // via the engine's sub-agent event sink (live UI streaming).
+    // Actually spawn the sub-agent driver. This is fire-and-forget;
+    // it returns immediately. The parent observes via WaitAgent (which
+    // surfaces status + liveness + outputFile) or via the engine's
+    // sub-agent event sink (live UI streaming).
     const deps = ctx?.parentEngineDeps;
     if (deps && deps.adapter) {
       try {
         startSubAgent(agent, deps);
       } catch (err) {
-        agent.status = 'failed';
+        agent.status = STATUS.FAILED;
         agent.error = err && err.message ? err.message : String(err);
         agent.diagnostics.push({ type: 'spawn_error', error: agent.error, at: Date.now() });
         return JSON.stringify({
@@ -333,7 +349,8 @@ you just kicked off.`,
       persona: spec.persona || null,
       budget: spec.budget || null,
       status: agent.status,
-      message: `Sub-agent "${name}" spawned (${agentId}). Use WaitAgent to collect its first turn output, PromptAgent to give it more work, CloseAgent to finish.`,
+      outputFile: agent.outputFile || null,
+      message: `Sub-agent "${name}" spawned (${agentId}). Use WaitAgent to collect its first turn output, PromptAgent to give it more work, CloseAgent to finish. Read \`outputFile\` for the durable event log at any time.`,
     });
   },
 });
