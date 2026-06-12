@@ -162,3 +162,29 @@ describe('Yeaft session restore hydration', () => {
     expect(store.sent.filter(m => m.type === 'yeaft_load_history')).toEqual([]);
   });
 });
+
+describe('Yeaft message reload', () => {
+  it('reloads the active Yeaft session messages without reloading the page', () => {
+    const store = makeStore();
+    window.Pinia.useSessionsStore = () => ({ activeSessionId: 'grp-1' });
+
+    store.currentView = 'yeaft';
+    store.yeaftAgentId = 'agent-1';
+    store.yeaftConversationId = 'yeaft-conv';
+    store.messagesMap['yeaft-conv'] = [
+      { id: 'old-user', type: 'user', content: 'old', sessionId: 'grp-1' },
+      { id: 'old-assistant', type: 'assistant', content: 'old reply', sessionId: 'grp-1' },
+    ];
+
+    expect(store.reloadYeaftMessages()).toBe(true);
+
+    expect(store.messagesMap['yeaft-conv']).toEqual([]);
+    expect(store.yeaftSessionHistoryState['grp-1']).toMatchObject({ loading: true, loaded: false });
+    expect(store.sent.at(-1)).toEqual({
+      type: 'yeaft_load_history',
+      agentId: 'agent-1',
+      limit: 5,
+      sessionId: 'grp-1',
+    });
+  });
+});

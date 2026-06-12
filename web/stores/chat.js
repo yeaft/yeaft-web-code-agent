@@ -998,6 +998,31 @@ export const useChatStore = defineStore('chat', {
       return true;
 
     },
+    reloadYeaftMessages() {
+      if (this.currentView !== 'yeaft' || !this.yeaftAgentId) return false;
+      const sessionId = resolveActiveYeaftSessionId(this);
+      if (!sessionId) {
+        return this.requestYeaftSessionBootstrap({ forceSessionReady: true });
+      }
+      if (this.yeaftConversationId) {
+        this.messagesMap[this.yeaftConversationId] = [];
+      }
+      this.yeaftSessionHistoryState = {
+        ...this.yeaftSessionHistoryState,
+        [sessionId]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
+      };
+      this.yeaftHasMoreHistory = false;
+      this.yeaftOldestLoadedSeq = null;
+      this.yeaftLoadingMoreHistory = true;
+      this.sendWsMessage({
+        type: 'yeaft_load_history',
+        agentId: this.yeaftAgentId,
+        limit: YEAFT_RECENT_TURNS,
+        sessionId,
+      });
+      return true;
+
+    },
     leaveYeaft() {
       this.currentView = 'chat';
       // VP-block redesign (2026-05-08): the per-turn detail drawer was

@@ -216,6 +216,7 @@ export default {
   'yeaft.showDebug': 'Show debug panel',
   'yeaft.hideDebug': 'Hide debug panel',
   'yeaft.reloadPage': 'Reload page',
+  'yeaft.reloadMessages': 'Reload messages',
   'yeaft.switchModel': 'Switch model',
   // fix/dream-cadence-and-ui-trigger: manual dream trigger button.
   'yeaft.dream.runNow': 'Run dream now',

@@ -110,6 +110,17 @@ export default {
           </div>
 
           <div class="yeaft-topbar-right">
+            <!-- Message reload — replays current Yeaft session history without a full page refresh. -->
+            <button
+              class="yeaft-reload-btn"
+              @click="reloadMessages"
+              :title="$t('yeaft.reloadMessages')"
+              :aria-label="$t('yeaft.reloadMessages')"
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 15a4 4 0 0 1-4 4H7l-4 4V7a4 4 0 0 1 4-4h5"/><path d="M17 1v6h6"/><path d="M23 7a6 6 0 0 0-6-6"/>
+              </svg>
+            </button>
             <!-- Page reload — always visible, full window.location.reload() -->
             <button
               class="yeaft-reload-btn"
@@ -595,6 +606,10 @@ export default {
       debugMode.value = !debugMode.value;
     };
 
+    const reloadMessages = () => {
+      store.reloadYeaftMessages();
+    };
+
     const reloadPage = () => {
       window.location.reload();
     };
@@ -1048,6 +1063,7 @@ export default {
       cancelYeaft,
       toggleSidebar,
       toggleDebug,
+      reloadMessages,
       reloadPage,
       toggleModelDropdown,
       selectModel,
