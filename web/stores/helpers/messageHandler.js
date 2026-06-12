@@ -491,7 +491,22 @@ export function handleMessage(store, msg) {
       break;
 
     case 'session_pinned':
-      // Server confirms pin state — already applied optimistically
+      // Server confirms pin state. Chat applies this optimistically in
+      // togglePin(), but Yeaft Session rows also need their own metadata
+      // updated so later session-list refreshes and active-session sorting
+      // cannot drop the persisted pin.
+      if (msg.conversationId) {
+        if (typeof store.setSessionPinned === 'function') {
+          store.setSessionPinned(msg.conversationId, !!msg.pinned);
+        } else {
+          try {
+            const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
+            if (gs && typeof gs.applyPinState === 'function') {
+              gs.applyPinState(msg.conversationId, !!msg.pinned);
+            }
+          } catch (_) { /* no sessions store in tests */ }
+        }
+      }
       break;
 
     case 'execution_cancelled':

@@ -3311,19 +3311,37 @@ export const useChatStore = defineStore('chat', {
       return this.panels.some(p => p.conversationId === conversationId);
     },
     // ★ Session Pin
-    togglePin(sessionId) {
+    setSessionPinned(sessionId, pinned) {
+      if (!sessionId) return;
       const isPinned = this.pinnedSessions.includes(sessionId);
-      if (isPinned) {
+      if (pinned && !isPinned) {
+        this.pinnedSessions.unshift(sessionId);
+      } else if (!pinned && isPinned) {
         const idx = this.pinnedSessions.indexOf(sessionId);
         if (idx >= 0) this.pinnedSessions.splice(idx, 1);
-      } else {
-        this.pinnedSessions.unshift(sessionId);
       }
-      // Persist to localStorage as fallback
-      localStorage.setItem('pinned-sessions', JSON.stringify(this.pinnedSessions));
+      try {
+        localStorage.setItem('pinned-sessions', JSON.stringify(this.pinnedSessions));
+      } catch (e) {
+        console.warn('[chat] failed to persist pinnedSessions:', e?.message || e);
+      }
+      // If this id is a Yeaft Session row, keep its metadata in sync too.
+      // Chat conversations are ignored by the sessions store because they
+      // don't exist in that map.
+      try {
+        const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
+        if (gs && typeof gs.applyPinState === 'function') gs.applyPinState(sessionId, !!pinned);
+      } catch (_) { /* no sessions store in some tests */ }
+    },
+    togglePin(sessionId) {
+      const isPinned = this.pinnedSessions.includes(sessionId);
+      const nextPinned = !isPinned;
+      // Optimistic local update; the server `session_pinned` ack reapplies
+      // the authoritative state and updates Yeaft session row metadata.
+      this.setSessionPinned(sessionId, nextPinned);
       // Persist to server
       this.sendWsMessage({
-        type: isPinned ? 'unpin_session' : 'pin_session',
+        type: nextPinned ? 'pin_session' : 'unpin_session',
         conversationId: sessionId
       });
     },
