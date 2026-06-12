@@ -386,6 +386,11 @@ export const useChatStore = defineStore('chat', {
     // render a single row showing the most recent pass for the active
     // group's scope.
     yeaftDreamLatest: {},
+    // Loadable dream output snapshots keyed by scope. Unlike
+    // `yeaftDreamLatest` (run status) this holds the current contents of
+    // the dream-produced memory files so switching sessions can restore
+    // what the session has learned.
+    yeaftDreamSnapshots: {},
     // PR feat-dream-debug-panel-full: per-scope ring buffer of dream
     // events. Each entry is the raw event payload augmented with `at`
     // (receive timestamp). Buffer is capped at YEAFT_DREAM_EVENT_LIMIT
@@ -573,6 +578,12 @@ export const useChatStore = defineStore('chat', {
       if (!targetGroupId) return null;
       const scope = `group/${targetGroupId}`;
       return state.yeaftDreamLatest?.[scope] || null;
+    },
+    yeaftDreamSnapshotForActiveSession(state) {
+      const targetGroupId = resolveActiveDreamDebugSessionId(state);
+      if (!targetGroupId) return null;
+      const scope = `group/${targetGroupId}`;
+      return state.yeaftDreamSnapshots?.[scope] || null;
     },
     // PR feat-dream-debug-panel-full: per-group event log for the
     // expanded debug-panel view. Same filter precedence as
@@ -2063,6 +2074,18 @@ export const useChatStore = defineStore('chat', {
           break;
         }
 
+        case 'yeaft_dream_snapshot': {
+          const snapshot = event && event.snapshot;
+          const scope = snapshot && typeof snapshot.scope === 'string' ? snapshot.scope : null;
+          if (scope) {
+            this.yeaftDreamSnapshots = {
+              ...this.yeaftDreamSnapshots,
+              [scope]: { ...snapshot, receivedAt: Date.now() },
+            };
+          }
+          break;
+        }
+
         // ★ R6 G3: dream activity events. Forwarded from
         // agent/yeaft/web-bridge.js handleYeaftDreamTrigger.
         // yeaft_dream_status carries { vpId, status: 'running' } during the
@@ -2077,15 +2100,17 @@ export const useChatStore = defineStore('chat', {
         case 'yeaft_dream_result': {
           const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
           if (vp) vp.applyDreamResult(event);
+          if (event?.snapshot?.scope) {
+            this.yeaftDreamSnapshots = {
+              ...this.yeaftDreamSnapshots,
+              [event.snapshot.scope]: { ...event.snapshot, receivedAt: Date.now() },
+            };
+          }
           // PR feat-dream-debug-panel-full: `yeaft_dream_result` is the
-          // SOLE terminal projection for a scoped dream pass. We write
-          // both:
-          //   1. `yeaftDreamLatest[group/<id>]` — the most-recent-pass
-          //      row the Dream UI reads.
-          //   2. `yeaftDreamEvents[group/<id>]` — append a synthetic
-          //      terminal record into the timeline ring buffer so the
-          //      debug panel doesn't end on the last `phase:'apply'`
-          //      event with no outcome.
+          // SOLE terminal projection for a scoped dream pass. We write the
+          // most-recent-pass row and append a terminal record into the
+          // timeline ring buffer so the debug panel doesn't end on the last
+          // `phase:'apply'` event with no outcome.
           //
           // The bridge used to mirror an extra `phase:'result'`
           // dream_progress event for #2, but that mirror raced through
@@ -2093,8 +2118,11 @@ export const useChatStore = defineStore('chat', {
           // `phase:'result'` as terminal) and clobbered the
           // `yeaftDreamLatest` success row back to 'running'. The fix
           // is to consolidate both writes here.
-          if (typeof event?.sessionId === 'string' && event.sessionId) {
-            const scope = `group/${event.sessionId}`;
+          {
+            const scope = typeof event?.snapshot?.scope === 'string' && event.snapshot.scope
+              ? event.snapshot.scope
+              : (typeof event?.sessionId === 'string' && event.sessionId ? `group/${event.sessionId}` : null);
+            if (!scope) break;
             const prev = this.yeaftDreamLatest[scope] || null;
             // Defaults when no prior running entry exists (network
             // reorder, fresh-tab reconnect): leave nullable fields

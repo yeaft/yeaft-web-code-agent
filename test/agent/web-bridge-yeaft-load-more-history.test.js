@@ -44,6 +44,8 @@ import {
   handleYeaftLoadMoreHistory,
 } from '../../agent/yeaft/web-bridge.js';
 import { ConversationStore } from '../../agent/yeaft/conversation/persist.js';
+import { writeSummary } from '../../agent/yeaft/memory/store.js';
+import { writeGroupState } from '../../agent/yeaft/dream/state.js';
 
 let TEST_DIR;
 let sharedStore;
@@ -94,6 +96,16 @@ function lastHistoryLoadedEvent() {
   for (let i = outbound.length - 1; i >= 0; i--) {
     const m = outbound[i];
     if (m && m.type === 'yeaft_output' && m.event && m.event.type === 'history_loaded') {
+      return m.event;
+    }
+  }
+  return null;
+}
+
+function lastDreamSnapshotEvent() {
+  for (let i = outbound.length - 1; i >= 0; i--) {
+    const m = outbound[i];
+    if (m && m.type === 'yeaft_output' && m.event && m.event.type === 'yeaft_dream_snapshot') {
       return m.event;
     }
   }
@@ -319,6 +331,28 @@ describe('handleYeaftLoadHistory — pagination cursor priming', () => {
     const evt = lastHistoryLoadedEvent();
     expect(evt).toEqual(expect.objectContaining({ sessionId: gid, count: 4, hasMore: true }));
     expect(typeof evt.oldestSeq).toBe('number');
+  });
+
+  it('replays the loadable dream output snapshot for the selected session', async () => {
+    const gid = 's_dream_snapshot';
+    const root = join(TEST_DIR, 'memory');
+    await writeSummary({ kind: 'group', id: gid }, 'dream summary for selected session', { root });
+    await writeGroupState(root, gid, {
+      lastDreamMessageId: 'm-12',
+      lastDreamAt: '2026-06-12T02:03:04.000Z',
+      messageCount: 12,
+    });
+
+    outbound.length = 0;
+    await handleYeaftLoadHistory({ sessionId: gid, limit: 0 });
+
+    const evt = lastDreamSnapshotEvent();
+    expect(evt).toBeTruthy();
+    expect(evt.trigger).toBe('load_history');
+    expect(evt.snapshot.sessionId).toBe(gid);
+    expect(evt.snapshot.scope).toBe(`group/${gid}`);
+    expect(evt.snapshot.summaryText).toBe('dream summary for selected session');
+    expect(evt.snapshot.lastDreamAt).toBe('2026-06-12T02:03:04.000Z');
   });
 
   it('history_loaded carries hasMore + oldestSeq when older messages remain', async () => {
