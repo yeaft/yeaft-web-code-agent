@@ -2,14 +2,13 @@ import { useAuthStore } from '../stores/auth.js';
 import { isMobile, isInAlipay, isInWeChat } from '../utils/device.js';
 import ProxyTab from './ProxyTab.js';
 import DashboardTab from './DashboardTab.js';
-import LlmTab from './LlmTab.js';
 import VpCrudPanel from './VpCrudPanel.js';
 import SearchSettingsTab from './SearchSettingsTab.js';
 import McpTab from './McpTab.js';
 
 export default {
   name: 'SettingsPanel',
-  components: { ProxyTab, DashboardTab, LlmTab, VpCrudPanel, SearchSettingsTab, McpTab },
+  components: { ProxyTab, DashboardTab, VpCrudPanel, SearchSettingsTab, McpTab },
   props: {
     visible: Boolean,
     initialTab: { type: String, default: '' },
@@ -392,9 +391,6 @@ export default {
                   {{ st.label }}
                 </button>
               </div>
-              <div v-show="yeaftSubTab === 'llm'" class="sp-subpane">
-                <LlmTab context="yeaft" @message="onLlmMessage" @saved="onYeaftLlmSaved" />
-              </div>
               <div v-show="yeaftSubTab === 'vp'" class="sp-subpane">
                 <VpCrudPanel />
               </div>
@@ -472,7 +468,7 @@ export default {
     const chatStore = Pinia.useChatStore();
     return {
       activeTab: 'general',
-      yeaftSubTab: 'llm',
+      yeaftSubTab: 'vp',
       profile: null,
       agentSecret: null,
       showSecret: false,
@@ -571,7 +567,6 @@ export default {
     },
     yeaftSubTabs() {
       return [
-        { key: 'llm', label: this.$t('settings.yeaft.tabs.llm') },
         { key: 'vp', label: this.$t('settings.yeaft.tabs.vp') },
         { key: 'search', label: this.$t('settings.yeaft.tabs.search') },
         { key: 'mcp', label: this.$t('settings.yeaft.tabs.mcp') },
@@ -650,7 +645,11 @@ export default {
         if (this.initialTab && this.visibleTabs.some(t => t.key === this.initialTab)) {
           this.activeTab = this.initialTab;
         }
-        if (this.initialSubTab && this.activeTab === 'yeaft') this.yeaftSubTab = this.initialSubTab;
+        if (this.initialSubTab && this.activeTab === 'yeaft') {
+          this.yeaftSubTab = this.yeaftSubTabs.some(st => st.key === this.initialSubTab)
+            ? this.initialSubTab
+            : 'vp';
+        }
         this.loadData();
       } else {
         // Closing settings while a bind QR is up should tear it down too.

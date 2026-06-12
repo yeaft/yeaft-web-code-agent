@@ -8,6 +8,7 @@ import SessionSettingsModal from './SessionSettingsModal.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
 import YeaftDebugPanel from './YeaftDebugPanel.js';
 import VpTimelinePane from './VpTimelinePane.js';
+import LlmTab from './LlmTab.js';
 import { parseMentions } from '../utils/parseMentions.js';
 import { buildTimelineRows, selectGroupRosterVpList } from '../stores/helpers/vp-timeline.js';
 import {
@@ -18,7 +19,7 @@ import {
 
 export default {
   name: 'YeaftPage',
-  components: { ChatInput, MessageList, SettingsPanel, YeaftSidebar, VpDetailView, SessionInviteModal, SessionSettingsModal, WorkbenchPanel, YeaftDebugPanel, VpTimelinePane },
+  components: { ChatInput, MessageList, SettingsPanel, YeaftSidebar, VpDetailView, SessionInviteModal, SessionSettingsModal, WorkbenchPanel, YeaftDebugPanel, VpTimelinePane, LlmTab },
   template: `
     <div class="yeaft-page">
       <!-- Mobile sidebar overlay -->
@@ -108,6 +109,14 @@ export default {
               </div>
             </div>
           </div>
+          <button
+            class="yeaft-topbar-llm-config"
+            @click="openLlmConfig"
+            :title="$t('settings.llm.configureAgent')"
+            :aria-label="$t('settings.llm.configureAgent')"
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M19.43 12.98c.04-.32.07-.65.07-.98s-.02-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.37-.31-.6-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98L14.5 2.42C14.47 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.5.42L9.12 5.07c-.61.25-1.18.59-1.69.98l-2.49-1c-.23-.08-.48 0-.6.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.08.65-.08.98s.03.66.08.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.37.31.6.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.04.24.25.42.5.42h4c.25 0 .47-.18.5-.42l.38-2.65c.61-.25 1.18-.58 1.69-.98l2.49 1c.23.08.48 0 .6-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65zM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5z"/></svg>
+          </button>
 
           <div class="yeaft-topbar-right">
             <!-- Message reload — replays current Yeaft session history without a full page refresh. -->
@@ -278,6 +287,18 @@ export default {
         <!-- Settings Panel -->
         <SettingsPanel v-if="showSettings" :visible="showSettings" :initial-tab="'yeaft'" :initial-sub-tab="settingsInitialTab" @close="showSettings = false" />
 
+        <div v-if="showLlmConfig" class="modal-overlay" @click.self="showLlmConfig = false">
+          <div class="modal-card yeaft-llm-config-modal" role="dialog" aria-modal="true" :aria-label="$t('settings.llm.configureAgent')">
+            <div class="modal-header">
+              <h3>{{ $t('settings.llm.configureAgent') }}</h3>
+              <button class="modal-close" @click="showLlmConfig = false" :aria-label="$t('common.close')">×</button>
+            </div>
+            <div class="yeaft-llm-config-body">
+              <LlmTab context="yeaft" @message="onLlmConfigMessage" @saved="onLlmConfigSaved" />
+            </div>
+          </div>
+        </div>
+
         <!-- Input Area -->
         <ChatInput
           v-if="!showSettings"
@@ -358,7 +379,8 @@ export default {
     const debugMode = Vue.ref(false);
     const modelDropdownOpen = Vue.ref(false);
     const showSettings = Vue.ref(false);
-    const settingsInitialTab = Vue.ref('llm'); // task-343: 'llm' | 'vp'
+    const showLlmConfig = Vue.ref(false);
+    const settingsInitialTab = Vue.ref('vp');
     // feat-vp-list-ui-polish: template ref to the embedded ChatInput so we
     // can call its imperative `appendMention(vpId)` when the VP list pane
     // emits a mention request. Keeps the Yeaft-specific @-syntax out of
@@ -794,15 +816,30 @@ export default {
     };
 
     const toggleSettings = () => {
-      if (!showSettings.value) settingsInitialTab.value = 'llm';
+      if (!showSettings.value) settingsInitialTab.value = 'vp';
       showSettings.value = !showSettings.value;
     };
 
     // task-343: VP library lives inside Settings as a tab. Helper to open
     // Settings at a specific tab (used by SessionInviteModal CTA).
-    const openSettings = ({ initialTab = 'llm' } = {}) => {
-      settingsInitialTab.value = initialTab === 'vp' ? 'vp' : 'llm';
+    const openSettings = ({ initialTab = 'vp' } = {}) => {
+      settingsInitialTab.value = ['vp', 'search', 'mcp'].includes(initialTab) ? initialTab : 'vp';
       showSettings.value = true;
+    };
+
+    const openLlmConfig = () => {
+      showLlmConfig.value = true;
+    };
+
+    const onLlmConfigMessage = (msg, isError) => {
+      if (isError) console.error('[Yeaft] LLM config:', msg);
+      else console.log('[Yeaft] LLM config:', msg);
+    };
+
+    const onLlmConfigSaved = () => {
+      showLlmConfig.value = false;
+      const agentId = store.yeaftAgentId;
+      if (agentId) store.sendWsMessage({ type: 'yeaft_reset', agentId });
     };
 
     // task-334m: Group invite modal wiring. The modal is shown whenever
@@ -1049,6 +1086,7 @@ export default {
       modelDropdownOpen,
       topbarModel,
       showSettings,
+      showLlmConfig,
       settingsInitialTab,
       chatInputRef,
       openSettings,
@@ -1068,6 +1106,9 @@ export default {
       reloadPage,
       toggleModelDropdown,
       selectModel,
+      openLlmConfig,
+      onLlmConfigMessage,
+      onLlmConfigSaved,
       formatTokens,
       formatModelCtx,
       toggleSettings,

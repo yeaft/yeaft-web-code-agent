@@ -23,7 +23,6 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
 import { resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
-import { mergeLlmConfigs } from './llm/provider-merge.js';
 
 /** Default configuration values. */
 const DEFAULTS = {
@@ -295,39 +294,36 @@ export function loadConfig(overrides = {}) {
   }
 
   // ─── Build config from config.json ────────────────────────
-  const agentProviders = Array.isArray(jsonConfig.providers) ? jsonConfig.providers : [];
-  const mergedLlmConfig = mergeLlmConfigs(overrides.globalLlmConfig || {}, {
-    providers: agentProviders,
-    primaryModel: jsonConfig.primaryModel || null,
-    fastModel: jsonConfig.fastModel || null,
-    language: jsonConfig.language || DEFAULTS.language,
-  });
-  const providers = mergedLlmConfig.providers;
+  const providers = Array.isArray(jsonConfig.providers) ? jsonConfig.providers : [];
 
   // Resolve primary model
   let model = 'claude-sonnet-4-20250514';
   let modelIdForInfo = model;
-  let primaryModel = mergedLlmConfig.primaryModel || null;
+  let primaryModel = jsonConfig.primaryModel || null;
   if (primaryModel) {
     const parsed = parseModelRef(primaryModel);
-    model = parsed.providerName?.startsWith('global:') ? primaryModel : parsed.modelId;
+    // Global provider refs were removed. Old local config may still contain
+    // `global:<provider>/<model>` from previous UI versions; strip the dead
+    // namespace so runtime routing can match agent-local providers by model id.
+    const isRemovedGlobalRef = parsed.providerName?.startsWith('global:');
+    model = parsed.modelId;
+    if (isRemovedGlobalRef) primaryModel = parsed.modelId;
     modelIdForInfo = parsed.modelId;
   }
 
   // Resolve fast model
-  let fastModel = mergedLlmConfig.fastModel || primaryModel || null;
+  let fastModel = jsonConfig.fastModel || primaryModel || null;
   let fastModelId = null;
   if (fastModel) {
     const parsed = parseModelRef(fastModel);
-    fastModelId = parsed.providerName?.startsWith('global:') ? fastModel : parsed.modelId;
+    fastModel = parsed.providerName?.startsWith('global:') ? parsed.modelId : fastModel;
+    fastModelId = parsed.modelId;
   }
 
   // Resolve model info for adapter/baseUrl/thinking metadata. Token limits
   // (contextWindow / maxOutputTokens) are NOT read from here — they live in
   // models.dev and are resolved via resolveContextWindow / resolveMaxOutputTokens
   // a few lines below so the live models.dev snapshot is the source of truth.
-  // For disambiguated global provider refs (`global:<provider>/<model>`), keep
-  // the runtime model ref intact above but resolve metadata by the raw model id.
   const modelInfo = resolveModel(modelIdForInfo);
 
   // Pre-resolve token limits once so we can both write them onto config and

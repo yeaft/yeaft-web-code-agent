@@ -12,7 +12,6 @@ import { handleAgentOutput } from './handlers/agent-output.js';
 import { handleAgentCrew } from './handlers/agent-crew.js';
 import { handleAgentFileTerminal } from './handlers/agent-file-terminal.js';
 import { handleAgentSync } from './handlers/agent-sync.js';
-import { sendGlobalLlmConfigToAgent } from './llm-global-config.js';
 
 /**
  * Build the internal Map key for an agent.
@@ -205,9 +204,6 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
     }
   }, 30000);
   agents.get(agentId)._syncTimeout = syncTimeout;
-  sendGlobalLlmConfigToAgent(agentId).catch(err => {
-    console.error(`[LLM] Failed to send global config to ${agentId}:`, err.message);
-  });
 
   // 心跳响应处理 + latency 测量
   ws.on('pong', () => {

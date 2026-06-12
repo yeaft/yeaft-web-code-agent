@@ -11,6 +11,15 @@ import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { platform, homedir } from 'os';
+import {
+  addOrUpdateProvider,
+  formatLlmConfig,
+  getDefaultYeaftConfigPath,
+  readLocalLlmConfig,
+  removeProvider,
+  setLocalModels,
+  writeLocalLlmConfig,
+} from './llm-config-cli.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf-8'));
@@ -24,6 +33,8 @@ const SERVICE_COMMANDS = ['install', 'uninstall', 'start', 'stop', 'restart', 's
 
 if (command === 'doctor') {
   handleDoctorCommand();
+} else if (command === 'llm') {
+  handleLlmCommand(subArgs);
 } else if (command === 'upgrade') {
   upgrade();
 } else if (command === '--version' || command === '-v') {
@@ -51,6 +62,7 @@ function printHelp() {
     yeaft-agent status                 Show service status
     yeaft-agent logs                   View service logs (follow mode)
     yeaft-agent doctor                 Diagnose service configuration
+    yeaft-agent llm <command>          Configure local Yeaft LLM providers/models
     yeaft-agent upgrade                Upgrade to latest version
     yeaft-agent --version              Show version
 
@@ -73,6 +85,104 @@ function printHelp() {
     yeaft-agent status
     yeaft-agent logs
 `);
+}
+
+function printLlmHelp() {
+  console.log(`
+  Configure local Yeaft LLM providers/models in ~/.yeaft/config.json.
+
+  Usage:
+    yeaft-agent llm show [--reveal]
+    yeaft-agent llm add-provider --name <name> --base-url <url> --models <m1,m2> \
+      [--api-key <key>|--api-key-env <ENV>|--credential-provider github-copilot] \
+      [--protocol anthropic|openai-responses] [--set-primary <model>] [--set-fast <model>]
+    yeaft-agent llm set-model [--primary <provider/model>] [--fast <provider/model>]
+    yeaft-agent llm remove-provider --name <name>
+
+  Behavior:
+    add-provider updates/replaces an existing provider with the same --name.
+    --api-key-env reads the environment variable value and writes it as apiKey.
+    set-model requires full provider/model references.
+    --config <path> can target a config file for tests or scripted setup.
+
+  Examples:
+    OPENAI_KEY=sk-... yeaft-agent llm add-provider --name openai --base-url https://api.openai.com/v1 --models gpt-5,gpt-4.1 --api-key-env OPENAI_KEY --protocol openai-responses --set-primary gpt-5
+    yeaft-agent llm add-provider --name copilot --base-url https://api.githubcopilot.com --models claude-sonnet-4.5,gpt-5 --credential-provider github-copilot
+    yeaft-agent llm set-model --primary openai/gpt-5 --fast openai/gpt-4.1
+    yeaft-agent llm show --reveal
+`);
+}
+
+function handleLlmCommand(args) {
+  const subcommand = args[0];
+
+  try {
+    const options = parseLlmArgs(args.slice(1));
+    const configPath = options.config || getDefaultYeaftConfigPath();
+    if (!subcommand || subcommand === '--help' || subcommand === '-h' || subcommand === 'help') {
+      printLlmHelp();
+      return;
+    }
+
+    if (subcommand === 'show') {
+      const config = readLocalLlmConfig(configPath);
+      console.log(formatLlmConfig({ ...config, __configPath: configPath }, { reveal: Boolean(options.reveal) }));
+      return;
+    }
+
+    const current = readLocalLlmConfig(configPath);
+    let result;
+    if (subcommand === 'add-provider') {
+      result = addOrUpdateProvider(current, options, process.env);
+      writeLocalLlmConfig(result.config, configPath);
+      console.log(`${result.replaced ? 'Updated' : 'Added'} provider: ${result.provider.name}`);
+      if (result.config.primaryModel) console.log(`Primary model: ${result.config.primaryModel}`);
+      if (result.config.fastModel) console.log(`Fast model: ${result.config.fastModel}`);
+      return;
+    }
+
+    if (subcommand === 'set-model') {
+      result = setLocalModels(current, options);
+      writeLocalLlmConfig(result.config, configPath);
+      if (result.config.primaryModel) console.log(`Primary model: ${result.config.primaryModel}`);
+      if (result.config.fastModel) console.log(`Fast model: ${result.config.fastModel}`);
+      return;
+    }
+
+    if (subcommand === 'remove-provider') {
+      result = removeProvider(current, options);
+      writeLocalLlmConfig(result.config, configPath);
+      console.log(result.removed ? `Removed provider: ${options.name}` : `Provider not found: ${options.name}`);
+      if (result.cleared.length) {
+        console.log(`Cleared ${result.cleared.join(', ')} because it referenced ${options.name}`);
+      }
+      return;
+    }
+
+    throw new Error(`Unknown llm command: ${subcommand}`);
+  } catch (err) {
+    console.error(`Error: ${err.message}`);
+    console.error('Run `yeaft-agent llm --help` for usage.');
+    process.exit(1);
+  }
+}
+
+function parseLlmArgs(args) {
+  const options = {};
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--reveal') {
+      options.reveal = true;
+      continue;
+    }
+    const key = arg.startsWith('--') ? arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase()) : null;
+    if (!key) throw new Error(`Unexpected argument: ${arg}`);
+    const value = args[i + 1];
+    if (!value || value.startsWith('--')) throw new Error(`${arg} requires a value`);
+    options[key] = value;
+    i += 1;
+  }
+  return options;
 }
 
 async function handleServiceCommand(command, args) {

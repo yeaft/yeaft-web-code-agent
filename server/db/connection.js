@@ -72,14 +72,6 @@ db.exec(`
     FOREIGN KEY (used_by) REFERENCES users(id)
   );
 
-  -- 用户全局 LLM 配置（secret 字段在 JSON 内加密保存）
-  CREATE TABLE IF NOT EXISTS user_llm_configs (
-    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-    config_json TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
-  );
-
   -- 用户统计表
   CREATE TABLE IF NOT EXISTS user_stats (
     user_id TEXT PRIMARY KEY REFERENCES users(id),
@@ -389,18 +381,6 @@ export const stmts = {
 
   updateUserAadOid: db.prepare(`
     UPDATE users SET aad_oid = ? WHERE id = ?
-  `),
-
-  getUserLlmConfig: db.prepare(`
-    SELECT config_json FROM user_llm_configs WHERE user_id = ?
-  `),
-
-  upsertUserLlmConfig: db.prepare(`
-    INSERT INTO user_llm_configs (user_id, config_json, created_at, updated_at)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(user_id) DO UPDATE SET
-      config_json = excluded.config_json,
-      updated_at = excluded.updated_at
   `),
 
   // Invitation 操作
