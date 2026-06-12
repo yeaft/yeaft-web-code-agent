@@ -494,6 +494,7 @@ export default {
   'settings.security.agentKeyDesc': 'Shared secret for Agent connection authentication',
   'settings.security.agentCmdInstall': 'Install Agent',
   'settings.security.agentCmdService': 'Run as Service',
+  'settings.security.agentCmdNeedsSecret': 'Reset the Agent Secret first to generate the command with --server, --secret, and --name.',
   'settings.security.none': 'None',
   'settings.security.show': 'Show',
   'settings.security.hide': 'Hide',

@@ -491,6 +491,7 @@ export default {
   'settings.security.agentKeyDesc': '用于 Agent 连接认证的共享密钥',
   'settings.security.agentCmdInstall': '安装 Agent',
   'settings.security.agentCmdService': '以服务方式运行',
+  'settings.security.agentCmdNeedsSecret': '请先重置 Agent 密钥，生成包含 --server、--secret 和 --name 的命令。',
   'settings.security.none': '无',
   'settings.security.show': '显示',
   'settings.security.hide': '隐藏',
