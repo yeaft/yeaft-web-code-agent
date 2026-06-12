@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, rmSync } from 'fs';
+import { existsSync, rmSync, mkdtempSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { Engine } from '../../../agent/yeaft/engine.js';
+import { AmsRegistry } from '../../../agent/yeaft/memory/ams-registry.js';
+import { writeSummary } from '../../../agent/yeaft/memory/store.js';
 import { NullTrace, DebugTrace } from '../../../agent/yeaft/debug-trace.js';
 
 // ─── Mock Adapter ─────────────────────────────────────────────
@@ -201,6 +203,65 @@ describe('Engine', () => {
       const turnEnd = events.find(e => e.type === 'turn_end');
       expect(turnEnd.stopReason).toBe('end_turn');
       expect(turnEnd.turnNumber).toBe(1);
+    });
+
+    it('loads Dream group summary into the system prompt Memory section and debug event', async () => {
+      const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-dream-load-'));
+      await writeSummary(
+        { kind: 'group', id: 'g1' },
+        'The user prefers concrete execution notes and wants Dream memory loaded into the prompt.',
+        { root: join(yeaftDir, 'memory') },
+      );
+      await writeSummary(
+        { kind: 'user' },
+        'User-level Dream summary should enter the prompt but not the dream_memory_loaded browser payload.',
+        { root: join(yeaftDir, 'memory') },
+      );
+      await writeSummary(
+        { kind: 'group-vp', sessionId: 'g1', id: 'vp1' },
+        'VP Dream summary should enter the prompt but not the group prompt-load payload.',
+        { root: join(yeaftDir, 'memory') },
+      );
+      mockAdapter.pushResponse([
+        { type: 'text_delta', text: 'ok' },
+        { type: 'stop', stopReason: 'end_turn' },
+      ]);
+
+      const engine = new Engine({
+        adapter: mockAdapter,
+        trace,
+        yeaftDir,
+        sessionId: 'g1',
+        config: { model: 'claude-test', maxOutputTokens: 2048, language: 'en' },
+        amsRegistry: new AmsRegistry({ yeaftDir, config: {} }),
+      });
+
+      const events = [];
+      for await (const event of engine.query({
+        prompt: 'test',
+        sessionId: 'g1',
+        vpPersona: { vpId: 'vp1', name: 'VP One' },
+      })) {
+        events.push(event);
+      }
+
+      expect(mockAdapter.callLog).toHaveLength(1);
+      const system = mockAdapter.callLog[0].system;
+      expect(system).toContain('## Active Memory Set');
+      expect(system).toContain('### Resident');
+      expect(system).toContain('group/g1');
+      expect(system).toContain('Dream memory loaded into the prompt');
+      expect(system).toContain('User-level Dream summary should enter the prompt');
+      expect(system).toContain('VP Dream summary should enter the prompt');
+
+      const loaded = events.find(e => e.type === 'dream_memory_loaded');
+      expect(loaded).toBeTruthy();
+      expect(loaded.loadedInto).toBe('system_prompt.memory');
+      expect(loaded.resident).toHaveLength(1);
+      expect(loaded.resident).toEqual([expect.objectContaining({
+        scope: 'group/g1',
+        source: 'resident-summary',
+      })]);
     });
 
     it('should pass model and system prompt to adapter', async () => {
