@@ -8,7 +8,7 @@
  */
 
 import { defineTool } from './types.js';
-import { getAgentRegistry } from './agent.js';
+import { agentBelongsToCaller, getAgentRegistry } from './agent.js';
 import { isTerminalAgentStatus, STATUS } from '../sub-agent/status.js';
 import { consumeNotificationForAgent, enqueueTerminalNotification } from '../sub-agent/notifications.js';
 import { snapshotLiveness } from '../sub-agent/liveness.js';
@@ -53,6 +53,9 @@ Do NOT end your turn silently right after CloseAgent.`,
     const agent = agents.get(agent_id);
 
     if (!agent) {
+      return JSON.stringify({ next_steps: ERROR_NEXT_STEPS, error: `Agent not found: ${agent_id}` });
+    }
+    if (!agentBelongsToCaller(agent, ctx)) {
       return JSON.stringify({ next_steps: ERROR_NEXT_STEPS, error: `Agent not found: ${agent_id}` });
     }
 

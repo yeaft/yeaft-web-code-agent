@@ -43,7 +43,7 @@ import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/c
 import { resolveThinking } from './router/thinking.js';
 import { approxTokens } from './memory/budget.js';
 import { COLLAB_TOOL_POLICY, truncateToolResultIfNeeded } from './tools/registry.js';
-import { consumePendingNotifications, formatNotificationsForPrompt } from './sub-agent/notifications.js';
+import { acknowledgePendingNotifications, formatNotificationsForPrompt, peekPendingNotifications } from './sub-agent/notifications.js';
 import {
   TOOL_BATCH_SIZE,
   TURN_SUMMARY_THRESHOLD,
@@ -1597,11 +1597,12 @@ export class Engine {
       ? vpPersona.vpId
       : (typeof senderVpId === 'string' ? senderVpId : null);
     const isSubAgentTurn = !!(vpPersona && typeof vpPersona === 'object' && vpPersona.subAgent);
-    const pendingSubAgentNotifs = isSubAgentTurn ? [] : consumePendingNotifications({
+    const notifScope = {
       sessionId: runtimeSessionId,
       parentVpId: parentVpIdForNotif,
       threadId: runtimeThreadId,
-    });
+    };
+    const pendingSubAgentNotifs = isSubAgentTurn ? [] : peekPendingNotifications(notifScope);
     const subAgentNotifBlock = formatNotificationsForPrompt(pendingSubAgentNotifs);
 
     let finalUserContent;
@@ -2230,6 +2231,9 @@ export class Engine {
 
       // If no tool calls, we're done
       if (stopReason !== 'tool_use' || toolCalls.length === 0) {
+        if (pendingSubAgentNotifs.length > 0) {
+          acknowledgePendingNotifications(notifScope, pendingSubAgentNotifs.map(n => n.id));
+        }
         yield { type: 'turn_end', turnNumber, stopReason, threadId };
 
         // ─── Post-query: StopHooks or Legacy ─────────────

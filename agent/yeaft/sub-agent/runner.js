@@ -282,6 +282,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
       let assistantText = '';
       let endedNormally = false;
       let streamError = null;
+      const turnTokenStart = agent.liveness?.tokenCount || 0;
       try {
         const stream = subEngine.query({
           prompt,
@@ -367,9 +368,10 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
       try {
         const tickAgent = await loadTickAgent();
         if (typeof tickAgent === 'function') {
+          const turnTokenDelta = Math.max(0, (agent.liveness?.tokenCount || 0) - turnTokenStart);
           tickResult = tickAgent(agent.id, {
             turns: 1,
-            tokens: agent.liveness?.tokenCount || 0,
+            tokens: turnTokenDelta,
             partial_output: assistantText,
           });
         }
@@ -442,17 +444,26 @@ function finalizeTerminal(agent, status, { error, deps } = {}) {
   // Push the re-entry notification so the parent learns about this
   // even if it forgot to call WaitAgent.
   try {
+    const budgetResult = agent.result && typeof agent.result === 'object'
+      && agent.result.status === 'budget_exceeded'
+      ? agent.result
+      : null;
     enqueueTerminalNotification({
       agentId: agent.id,
       agentName: agent.name,
       status,
-      result: typeof agent.result === 'string' ? agent.result : (agent.lastResult || ''),
+      result: budgetResult
+        ? (budgetResult.partial_output || '')
+        : (typeof agent.result === 'string' ? agent.result : (agent.lastResult || '')),
       error: error || agent.error || null,
       outputFile: agent.outputFile || null,
       turns: agent.usage?.turns || 0,
       parentVpId: agent.parentVpId || null,
       parentSessionId: agent.parentSessionId || null,
       parentThreadId: agent.parentThreadId || 'main',
+      budgetExceeded: !!budgetResult,
+      budgetReason: budgetResult?.reason || null,
+      budgetUsage: budgetResult?.usage || null,
     });
   } catch { /* never let the notification queue throw kill the driver */ }
 }

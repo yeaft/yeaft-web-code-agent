@@ -124,6 +124,18 @@ class SlowAdapter {
   async call() { return { text: 'ok', usage: {} }; }
 }
 
+class ThrowingAdapter {
+  constructor(message = 'adapter boom') {
+    this.message = message;
+    this.streamCalls = [];
+  }
+  async *stream(params) {
+    this.streamCalls.push({ system: params.system, messages: params.messages });
+    throw new Error(this.message);
+  }
+  async call() { return { text: 'ok', usage: {} }; }
+}
+
 const echoTool = defineTool({
   name: 'echo',
   description: 'echo input',
@@ -511,6 +523,49 @@ describe('wait-agent envelope shape', () => {
     expect(env.next_steps).not.toMatch(/finished successfully/i);
   });
 
+  it('scoped tools reject agents owned by another session', async () => {
+    const agents = getAgentRegistry();
+    agents.set('agent-owned-a', {
+      id: 'agent-owned-a', name: 'owned-a', status: STATUS.IDLE,
+      result: 'secret result', lastResult: '', error: null, messages: [],
+      usage: { turns: 1 }, outputFile: '/tmp/secret.log', liveness: makeLiveness(),
+      parentSessionId: 'session-a', parentVpId: 'vp-a', parentThreadId: 'main',
+      pendingPrompts: [],
+    });
+    agents.set('agent-owned-b', {
+      id: 'agent-owned-b', name: 'owned-b', status: STATUS.IDLE,
+      result: 'visible result', lastResult: '', error: null, messages: [],
+      usage: { turns: 1 }, outputFile: '/tmp/visible.log', liveness: makeLiveness(),
+      parentSessionId: 'session-b', parentVpId: 'vp-b', parentThreadId: 'main',
+      pendingPrompts: [],
+    });
+    const ctxB = { parentEngineDeps: { parentSessionId: 'session-b', parentVpId: 'vp-b', parentThreadId: 'main' } };
+
+    const deniedWait = JSON.parse(await waitAgent.execute({ agent_id: 'agent-owned-a' }, ctxB));
+    expect(deniedWait.error).toMatch(/not found/i);
+    const deniedPrompt = JSON.parse(await sendMessage.execute({ agent_id: 'agent-owned-a', message: 'steal' }, ctxB));
+    expect(deniedPrompt.error).toMatch(/not found/i);
+    const deniedClose = JSON.parse(await closeAgent.execute({ agent_id: 'agent-owned-a' }, ctxB));
+    expect(deniedClose.error).toMatch(/not found/i);
+
+    const listed = JSON.parse(await listAgents.execute({}, ctxB));
+    expect(listed.agents.map(a => a.id)).toEqual(['agent-owned-b']);
+    const ownWait = JSON.parse(await waitAgent.execute({ agent_id: 'agent-owned-b' }, ctxB));
+    expect(ownWait.result).toBe('visible result');
+  });
+
+  it('name collisions are scoped to the caller owner', async () => {
+    const ctxA = { parentEngineDeps: { parentSessionId: 'session-a', parentVpId: 'vp-a', parentThreadId: 'main' } };
+    const ctxB = { parentEngineDeps: { parentSessionId: 'session-b', parentVpId: 'vp-b', parentThreadId: 'main' } };
+
+    const first = JSON.parse(await agentTool.execute({ name: 'same-name', mission: 'a' }, ctxA));
+    expect(first.success).toBe(true);
+    const sameOwner = JSON.parse(await agentTool.execute({ name: 'same-name', mission: 'a2' }, ctxA));
+    expect(sameOwner.error).toMatch(/already exists/);
+    const otherOwner = JSON.parse(await agentTool.execute({ name: 'same-name', mission: 'b' }, ctxB));
+    expect(otherOwner.success).toBe(true);
+  });
+
   it('drains the agent notification when terminal so engine does not redeliver', async () => {
     const agents = getAgentRegistry();
     agents.set('agent-drained', {
@@ -536,7 +591,10 @@ describe('wait-agent envelope shape', () => {
 // -------------------------------------------------------------------------
 
 describe('tickAgent budget enforcement', () => {
-  beforeEach(() => _resetAgentRegistry());
+  beforeEach(() => {
+    _resetAgentRegistry();
+    _resetNotifications();
+  });
 
   it('exceeded max_turns returns budget_exceeded envelope and flips status', () => {
     const agents = getAgentRegistry();
@@ -607,6 +665,50 @@ describe('tickAgent budget enforcement', () => {
     expect(isTerminalAgentStatus(agent.status)).toBe(true);
     expect(agent.status).toBe(STATUS.COMPLETED);
     expect(agent.result).toBeTruthy();
+  });
+
+  it('max_tokens uses per-turn deltas instead of cumulative liveness', async () => {
+    const adapter = new TextAdapter('abcd');
+    const deps = mkDeps(adapter);
+    const out = JSON.parse(await agentTool.execute(
+      { name: 'token-delta', mission: 'first', budget: { max_tokens: 7 } },
+      { parentEngineDeps: deps },
+    ));
+    const id = out.agentId;
+    const agent = getAgentRegistry().get(id);
+    await settle(agent, 2000);
+    expect(agent.status).toBe(STATUS.IDLE);
+    expect(agent.usage.tokens).toBe(4);
+
+    adapter.reply = 'ef';
+    await sendMessage.execute({ agent_id: id, message: 'second' }, {});
+    await settle(agent, 2000);
+    expect(agent.status).toBe(STATUS.IDLE);
+    expect(agent.usage.tokens).toBe(6);
+  });
+
+  it('budget cutoff notifications include the budget reason', async () => {
+    const adapter = new TextAdapter('budget partial');
+    const deps = mkDeps(adapter);
+    const out = JSON.parse(await agentTool.execute(
+      { name: 'budget-notify', mission: 'one shot', budget: { max_turns: 1 } },
+      { parentEngineDeps: deps },
+    ));
+    const agent = getAgentRegistry().get(out.agentId);
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline && !isTerminalAgentStatus(agent.status)) {
+      await new Promise(r => setTimeout(r, 20));
+    }
+
+    const notifs = consumePendingNotifications('vp-test');
+    const notif = notifs.find(n => n.agentId === out.agentId);
+    expect(notif).toBeTruthy();
+    expect(notif.status).toBe(STATUS.COMPLETED);
+    expect(notif.budgetExceeded).toBe(true);
+    expect(notif.budgetReason).toMatch(/max_turns/);
+    const block = formatNotificationsForPrompt([notif]);
+    expect(block).toMatch(/budgetExceeded: true/);
+    expect(block).toMatch(/budgetReason: max_turns/);
   });
 });
 
@@ -849,6 +951,37 @@ describe('engine prepends sub-agent notifications to the next user turn', () => 
     const rightUser = rightAdapter.streamCalls[0].messages.find(m => m.role === 'user');
     expect(String(rightUser.content)).toMatch(/<sub-agent-notifications>/);
     expect(String(rightUser.content)).toMatch(/session-right result/);
+  });
+
+  it('keeps notifications queued when the parent turn fails before delivery', async () => {
+    const { Engine } = await import('../../../agent/yeaft/engine.js');
+    const failingEngine = new Engine({
+      adapter: new ThrowingAdapter('parent failed'),
+      trace: new NullTrace(),
+      config: { model: 'test-model', maxOutputTokens: 256, _readOnly: true, language: 'en' },
+      toolRegistry: mkParentRegistry(),
+      sessionId: 'session-ack',
+      vpId: 'vp-parent',
+    });
+
+    enqueueTerminalNotification({
+      agentId: 'ack-agent', agentName: 'ack-agent', status: 'completed',
+      result: 'do not lose me', parentVpId: 'vp-parent',
+      parentSessionId: 'session-ack', parentThreadId: 'main',
+    });
+
+    for await (const _ of failingEngine.query({
+      prompt: 'this will fail',
+      messages: [],
+      vpPersona: { vpId: 'vp-parent', persona: 'You are Parent.' },
+      sessionId: 'session-ack',
+      threadId: 'main',
+    })) { /* drain */ }
+
+    const stillQueued = consumePendingNotifications({
+      parentVpId: 'vp-parent', sessionId: 'session-ack', threadId: 'main',
+    });
+    expect(stillQueued.map(n => n.agentId)).toEqual(['ack-agent']);
   });
 
   it('sub-agent engines do not drain parent notifications', async () => {

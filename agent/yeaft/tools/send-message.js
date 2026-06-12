@@ -6,7 +6,7 @@
  */
 
 import { defineTool } from './types.js';
-import { getAgentRegistry } from './agent.js';
+import { agentBelongsToCaller, getAgentRegistry } from './agent.js';
 import { isTerminalAgentStatus, isPromptableAgentStatus, STATUS, describeAgentStatus } from '../sub-agent/status.js';
 
 export default defineTool({
@@ -58,6 +58,9 @@ PromptAgent is rejected if the sub-agent is in a terminal state
     const agent = agents.get(agent_id);
 
     if (!agent) {
+      return JSON.stringify({ next_steps: ERROR_NEXT_STEPS, error: `Agent not found: ${agent_id}` });
+    }
+    if (!agentBelongsToCaller(agent, ctx)) {
       return JSON.stringify({ next_steps: ERROR_NEXT_STEPS, error: `Agent not found: ${agent_id}` });
     }
 

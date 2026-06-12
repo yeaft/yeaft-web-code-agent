@@ -41,7 +41,7 @@
  *   us from emitting more than one terminal notification per agent.
  */
 
-/** @typedef {{ id: string, agentId: string, agentName: string, status: string, result: string, error: string|null, outputFile: string|null, turns: number, parentVpId: string|null, parentSessionId: string|null, parentThreadId: string|null, createdAt: number }} SubAgentNotification */
+/** @typedef {{ id: string, agentId: string, agentName: string, status: string, result: string, error: string|null, outputFile: string|null, turns: number, parentVpId: string|null, parentSessionId: string|null, parentThreadId: string|null, budgetExceeded: boolean, budgetReason: string|null, budgetUsage: object|null, createdAt: number }} SubAgentNotification */
 
 /** Map<bucketKey, SubAgentNotification[]> */
 const byParent = new Map();
@@ -82,7 +82,7 @@ function bucketKey(scope, sessionId, threadId) {
  * a second call with the same agentId is a no-op (we only emit one
  * terminal notice per child).
  *
- * @param {{ agentId: string, agentName: string, status: string, result?: string, error?: string|null, outputFile?: string|null, turns?: number, parentVpId?: string|null, parentSessionId?: string|null, sessionId?: string|null, parentThreadId?: string|null, threadId?: string|null }} input
+ * @param {{ agentId: string, agentName: string, status: string, result?: string, error?: string|null, outputFile?: string|null, turns?: number, parentVpId?: string|null, parentSessionId?: string|null, sessionId?: string|null, parentThreadId?: string|null, threadId?: string|null, budgetExceeded?: boolean, budgetReason?: string|null, budgetUsage?: object|null }} input
  * @returns {SubAgentNotification|null} the queued record (null if a dup)
  */
 export function enqueueTerminalNotification(input) {
@@ -105,6 +105,9 @@ export function enqueueTerminalNotification(input) {
     parentVpId: scope.parentVpId,
     parentSessionId: scope.sessionId,
     parentThreadId: scope.threadId,
+    budgetExceeded: Boolean(input.budgetExceeded),
+    budgetReason: input.budgetReason || null,
+    budgetUsage: input.budgetUsage || null,
     createdAt: Date.now(),
   };
   const key = bucketKey(scope);
@@ -132,6 +135,43 @@ export function consumePendingNotifications(scope) {
   // and we want it to be a no-op on already-drained records (the
   // `notified` flag on the agent itself is the real dedup gate).
   return list.slice();
+}
+
+/**
+ * Return pending notifications without acknowledging them. Engine uses this
+ * while constructing a prompt; it acknowledges only after the parent turn
+ * completes successfully so abort/error paths don't lose the notification.
+ *
+ * @param {string|{parentVpId?: string|null, sessionId?: string|null, parentSessionId?: string|null, threadId?: string|null, parentThreadId?: string|null}|null} scope
+ * @returns {SubAgentNotification[]}
+ */
+export function peekPendingNotifications(scope) {
+  const key = bucketKey(scope);
+  const list = byParent.get(key) || [];
+  return list.slice();
+}
+
+/**
+ * Acknowledge notifications previously returned by peekPendingNotifications.
+ * Removes them from both parent and per-agent maps.
+ *
+ * @param {string|{parentVpId?: string|null, sessionId?: string|null, parentSessionId?: string|null, threadId?: string|null, parentThreadId?: string|null}|null} scope
+ * @param {string[]} ids
+ */
+export function acknowledgePendingNotifications(scope, ids = []) {
+  const idSet = new Set(Array.isArray(ids) ? ids.filter(Boolean) : []);
+  if (idSet.size === 0) return;
+  const key = bucketKey(scope);
+  const list = byParent.get(key) || [];
+  const kept = [];
+  for (const rec of list) {
+    if (idSet.has(rec.id)) {
+      byAgent.delete(rec.agentId);
+    } else {
+      kept.push(rec);
+    }
+  }
+  byParent.set(key, kept);
 }
 
 /**
@@ -185,6 +225,11 @@ export function formatNotificationsForPrompt(notifs) {
     parts.push('');
     parts.push(`<notification agent="${n.agentName}" id="${n.agentId}" status="${n.status}" turns="${n.turns}">`);
     if (n.error) parts.push(`  error: ${n.error}`);
+    if (n.budgetExceeded) {
+      parts.push('  budgetExceeded: true');
+      if (n.budgetReason) parts.push(`  budgetReason: ${n.budgetReason}`);
+      if (n.budgetUsage) parts.push(`  budgetUsage: ${JSON.stringify(n.budgetUsage)}`);
+    }
     if (n.outputFile) parts.push(`  outputFile: ${n.outputFile}`);
     if (n.result) {
       const r = n.result.length > 1500 ? n.result.slice(0, 1500) + '…(truncated)' : n.result;

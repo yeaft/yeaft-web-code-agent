@@ -35,6 +35,41 @@ export function getAgentRegistry() {
   return agents;
 }
 
+const MAIN_THREAD_ID = 'main';
+
+function cleanString(value) {
+  return (typeof value === 'string' && value.trim()) ? value.trim() : null;
+}
+
+export function getCallerAgentScope(ctx = {}) {
+  const deps = ctx?.parentEngineDeps || {};
+  return {
+    sessionId: cleanString(deps.parentSessionId ?? ctx?.sessionId),
+    parentVpId: cleanString(deps.parentVpId ?? ctx?.senderVpId),
+    parentThreadId: cleanString(deps.parentThreadId ?? ctx?.threadId) || MAIN_THREAD_ID,
+  };
+}
+
+export function agentBelongsToCaller(agent, ctx = {}) {
+  if (!agent) return false;
+  const scope = getCallerAgentScope(ctx);
+  return agentBelongsToScope(agent, scope);
+}
+
+export function agentBelongsToScope(agent, scope = {}) {
+  if (!agent) return false;
+  const agentSessionId = cleanString(agent.parentSessionId);
+  const scopeSessionId = cleanString(scope.sessionId);
+  if (!agentSessionId && !scopeSessionId) return true;
+  if (agentSessionId !== scopeSessionId) return false;
+  const agentVpId = cleanString(agent.parentVpId);
+  const scopeVpId = cleanString(scope.parentVpId);
+  if (agentVpId !== scopeVpId) return false;
+  const agentThreadId = cleanString(agent.parentThreadId) || MAIN_THREAD_ID;
+  const scopeThreadId = cleanString(scope.parentThreadId) || MAIN_THREAD_ID;
+  return agentThreadId === scopeThreadId;
+}
+
 /** Reset registry (for tests). */
 export function _resetAgentRegistry() {
   agents.clear();
@@ -264,12 +299,15 @@ you just kicked off.`,
     }
     const spec = validation.spec;
     const { name, cwd } = input;
+    const callerScope = getCallerAgentScope(ctx);
 
     // Check for name collision — any non-terminal agent with the same
     // name blocks the new spawn. Terminal agents (closed/failed/abandoned/
-    // completed) free the name up for reuse.
+    // completed) free the name up for reuse. Scope this to the caller's
+    // Session/VP/thread so independent sessions can reuse natural names.
     for (const [, agent] of agents) {
-      if (agent.name === name && !isTerminalAgentStatus(agent.status)) {
+      if (agent.name === name && !isTerminalAgentStatus(agent.status)
+        && agentBelongsToScope(agent, callerScope)) {
         return JSON.stringify({
           next_steps: ERROR_NEXT_STEPS,
           error: `Agent "${name}" already exists. Close it first or use a different name.`,
@@ -309,9 +347,9 @@ you just kicked off.`,
       outputFile: null,
       // ParentVpId is mirrored from deps when the driver starts so the
       // notification queue can bucket by parent Session/VP/thread.
-      parentVpId: null,
-      parentSessionId: null,
-      parentThreadId: null,
+      parentVpId: callerScope.parentVpId,
+      parentSessionId: callerScope.sessionId,
+      parentThreadId: callerScope.parentThreadId,
       abortController: new AbortController(),
     };
 

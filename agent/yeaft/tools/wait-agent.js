@@ -31,7 +31,7 @@
  */
 
 import { defineTool } from './types.js';
-import { getAgentRegistry } from './agent.js';
+import { agentBelongsToCaller, getAgentRegistry } from './agent.js';
 import { isTerminalAgentStatus, STATUS } from '../sub-agent/status.js';
 import { snapshotLiveness } from '../sub-agent/liveness.js';
 import { consumeNotificationForAgent } from '../sub-agent/notifications.js';
@@ -138,7 +138,6 @@ function buildEnvelope(agent, { timedOut = false } = {}) {
     agentId: agent.id,
     name: agent.name,
     status,
-    result: resultText,
     error: agent.error || null,
     outputFile: agent.outputFile || null,
     liveness: snapshotLiveness(agent.liveness),
@@ -157,6 +156,7 @@ function buildEnvelope(agent, { timedOut = false } = {}) {
     env.partial_output = budgetResult.partial_output || '';
     env.budget_usage = budgetResult.usage || null;
   }
+  env.result = resultText;
   return env;
 }
 
@@ -221,6 +221,9 @@ The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
     const agent = agents.get(agent_id);
 
     if (!agent) {
+      return JSON.stringify({ next_steps: errorNextSteps(), error: `Agent not found: ${agent_id}` });
+    }
+    if (!agentBelongsToCaller(agent, ctx)) {
       return JSON.stringify({ next_steps: errorNextSteps(), error: `Agent not found: ${agent_id}` });
     }
 

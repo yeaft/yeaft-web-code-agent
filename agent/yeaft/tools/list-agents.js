@@ -10,7 +10,7 @@
  */
 
 import { defineTool } from './types.js';
-import { getAgentRegistry } from './agent.js';
+import { agentBelongsToCaller, getAgentRegistry } from './agent.js';
 import { isTerminalAgentStatus } from '../sub-agent/status.js';
 import { snapshotLiveness } from '../sub-agent/liveness.js';
 
@@ -47,6 +47,7 @@ to also list closed/failed/abandoned/completed agents.`,
 
     const agentList = [];
     for (const [id, agent] of agents) {
+      if (!agentBelongsToCaller(agent, ctx)) continue;
       if (!includeTerminal && isTerminalAgentStatus(agent.status)) continue;
       const liveness = snapshotLiveness(agent.liveness, now);
       agentList.push({
