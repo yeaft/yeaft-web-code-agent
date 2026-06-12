@@ -110,6 +110,12 @@ export const useChatStore = defineStore('chat', {
     ws: null,
     authenticated: false,
     sessionKey: null, // Uint8Array for encryption
+    // feat-ws-plaintext-negotiation: defaults `true` (= assume old
+    // server, keep encrypting outbound for back-compat). Cleared to
+    // `false` in the auth_result handler when the server advertises
+    // `acceptPlaintext: true`. Receive path (parseWsMessage) stays
+    // unconditional so old encrypted frames still decrypt.
+    serverEncryptionRequired: true,
     // 连接状态
     connectionState: 'disconnected', // 'disconnected' | 'connecting' | 'connected' | 'reconnecting'
     reconnectAttempts: 0,

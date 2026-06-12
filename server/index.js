@@ -38,7 +38,23 @@ const envOverride = Number(process.env.WS_MAX_PAYLOAD_BYTES);
 const WS_MAX_PAYLOAD_BYTES = Number.isFinite(envOverride) && envOverride > 0
   ? envOverride
   : DEFAULT_WS_MAX_PAYLOAD_BYTES;
-const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD_BYTES });
+const wss = new WebSocketServer({
+  noServer: true,
+  maxPayload: WS_MAX_PAYLOAD_BYTES,
+  // RFC 7692 permessage-deflate. Browsers advertise this natively; the
+  // `ws` library handles compression streaming for the agent. Replaces
+  // the hand-rolled gzip-before-encrypt that ran only on the (now
+  // back-compat) encrypted send path. With plaintext outbound enabled,
+  // this is the only compression layer — payloads in DevTools still show
+  // the uncompressed JSON (browser inflates before exposing the frame).
+  perMessageDeflate: {
+    zlibDeflateOptions: { level: 6, memLevel: 7 },
+    zlibInflateOptions: { chunkSize: 10 * 1024 },
+    clientNoContextTakeover: true,  // bound per-connection memory
+    serverNoContextTakeover: true,
+    threshold: 1024                 // skip compression for tiny frames
+  }
+});
 
 // =====================
 // WebSocket 心跳机制

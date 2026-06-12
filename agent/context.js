@@ -4,6 +4,11 @@
 export default {
   ws: null,
   sessionKey: null,
+  // feat-ws-plaintext-negotiation: defaults `true` (= assume old server,
+  // keep encrypting outbound for back-compat). Cleared to `false` when
+  // the agent receives `registered { acceptPlaintext: true }` from a
+  // new server — see message-router.js `case 'registered'`.
+  serverEncryptionRequired: true,
   conversations: new Map(),
   terminals: new Map(),
   proxyPorts: [],

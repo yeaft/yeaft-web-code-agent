@@ -48,6 +48,15 @@ export async function handleMessage(msg) {
         console.log('Encryption enabled');
       }
 
+      // feat-ws-plaintext-negotiation: new server advertises that it
+      // will accept plaintext frames from us. Stop encrypting outbound.
+      // The receive path (parseMessage) stays unconditional so the old
+      // ciphertext that may already be in flight still decrypts.
+      if (msg.acceptPlaintext === true) {
+        ctx.serverEncryptionRequired = false;
+        console.log('[WS] Server accepts plaintext, disabling outbound encryption');
+      }
+
       // 只保存基本配置（不再保存 agentId，因为现在用 agentName 作为 ID）
       ctx.saveConfig({
         serverUrl: ctx.CONFIG.serverUrl,

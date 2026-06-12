@@ -21,7 +21,17 @@ export function connect() {
     console.log(`Disallowed tools: ${ctx.CONFIG.disallowedTools.join(', ')}`);
   }
 
-  ctx.ws = new WebSocket(url);
+  ctx.ws = new WebSocket(url, {
+    // Match server's permessage-deflate config (bounded memory,
+    // skip compression for small frames). The `ws` library handles
+    // streaming compression so we no longer need the synchronous
+    // gzip-before-encrypt on the hot path.
+    perMessageDeflate: {
+      clientNoContextTakeover: true,
+      serverNoContextTakeover: true,
+      threshold: 1024
+    }
+  });
 
   ctx.ws.on('open', () => {
     console.log('Connected to server, waiting for auth challenge...');
