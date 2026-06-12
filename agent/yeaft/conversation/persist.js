@@ -1064,7 +1064,18 @@ export class ConversationStore {
 
     const startIdx = indexOfNthTurnFromEnd(visible, turnsLimit);
     const start = startIdx === -1 ? 0 : startIdx;
-    const messages = pairSanitize(visible.slice(start));
+    // Visible history is for UI replay, not LLM context. The visible loader
+    // already excludes tool-result rows, so running pairSanitize here can
+    // incorrectly treat tool-using assistant replies as orphaned tool arcs and
+    // drop/trim VP messages. Strip tool-call metadata instead and keep the
+    // user-visible assistant text for the conversation pane.
+    const messages = visible.slice(start).map(m => {
+      if (m && m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
+        const { toolCalls, ...rest } = m;
+        return rest;
+      }
+      return m;
+    });
     const oldestSeq = messages.length ? parseSeqFromId(messages[0].id) : null;
     const firstVisibleSeq = parseSeqFromId(visible[0].id);
     const hasMore = messages.length > 0

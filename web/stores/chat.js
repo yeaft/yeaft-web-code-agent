@@ -3313,6 +3313,41 @@ export const useChatStore = defineStore('chat', {
      * (`yeaftLoadingMoreHistory` gates), and we don't fire if the agent
      * already told us there's nothing more to load.
      */
+
+    reloadYeaftMessages() {
+      if (this.currentView !== 'yeaft') return;
+      if (!this.yeaftAgentId) return;
+      const sessionId = resolveActiveYeaftSessionId(this);
+      const sessionKey = sessionId || '__all__';
+      const convId = this.yeaftConversationId;
+
+      // Manual reload means "show me the persisted pane again", not a delta.
+      // Drop only the active Yeaft session rows from the shared conversation
+      // map; other sessions stay cached so switching remains instant.
+      if (convId && Array.isArray(this.messagesMap[convId])) {
+        if (sessionId) {
+          this.messagesMap[convId] = this.messagesMap[convId].filter(m => (m?.sessionId ?? m?.groupId) !== sessionId);
+        } else {
+          this.messagesMap[convId] = [];
+        }
+      }
+
+      const { [sessionKey]: _oldState, ...rest } = this.yeaftSessionHistoryState || {};
+      this.yeaftSessionHistoryState = {
+        ...rest,
+        [sessionKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, latestSeq: null, count: 0 },
+      };
+      this.yeaftHasMoreHistory = false;
+      this.yeaftOldestLoadedSeq = null;
+      this.yeaftLoadingMoreHistory = true;
+
+      this.sendWsMessage({
+        type: 'yeaft_load_history',
+        agentId: this.yeaftAgentId,
+        sessionId,
+      });
+    },
+
     loadMoreYeaftHistory() {
       if (this.currentView !== 'yeaft') return;
       if (this.yeaftLoadingMoreHistory || !this.yeaftHasMoreHistory) return;
