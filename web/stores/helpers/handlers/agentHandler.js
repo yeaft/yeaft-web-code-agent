@@ -222,7 +222,16 @@ export function handleAgentList(store, msg) {
       store.sendWsMessage({ type: 'select_agent', agentId: store.currentAgent, silent: true });
       if (store.currentView === 'yeaft' && typeof store.requestYeaftSessionBootstrap === 'function') {
         const needsYeaftSessionReady = !store.yeaftSessionReady || !store.yeaftModel || !store.yeaftStatus;
-        store.requestYeaftSessionBootstrap({ forceSessionReady: needsYeaftSessionReady, catchUpHistory: true });
+        // Only catch up history on a GENUINE reconnect. agent_list arrives
+        // frequently (status flips, turn_completed, latency pings); running
+        // the afterSeq catch-up on each one re-fires yeaft_load_history +
+        // yeaft_vp_subscribe in an unbounded loop, because history_loaded
+        // resets the session's `loading` flag and re-arms
+        // shouldCatchUpLoadedYeaftSession. The websocket onclose handler sets
+        // this one-shot flag only when the socket actually dropped.
+        const catchUpHistory = !!store._yeaftReconnectCatchUpPending;
+        store._yeaftReconnectCatchUpPending = false;
+        store.requestYeaftSessionBootstrap({ forceSessionReady: needsYeaftSessionReady, catchUpHistory });
       }
       if (store.currentConversation) {
         const conv = store.conversations.find(c => c.id === store.currentConversation);
