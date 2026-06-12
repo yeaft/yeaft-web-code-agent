@@ -14,9 +14,10 @@
  * genuinely new (this is the first snapshot they appear in) get
  * appended at the end, in the order the snapshot delivers them.
  *
- * Also covers the new `sessionList` getter sort:
- *   pinned (in pinnedSessions order) → active (if unpinned, floats
- *   to top of unpinned) → other unpinned (in sessionOrder).
+ * Also covers sidebar activation order:
+ *   pinned rows render first, while selecting an unpinned row mutates
+ *   sessionOrder by insertion-at-front instead of swapping with the
+ *   previously active row.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 
@@ -164,22 +165,26 @@ describe('sessions store — sessionList getter sort', () => {
     expect(ids).toEqual(['s1', 's2', 's3']);
   });
 
-  it('active session floats to the top of unpinned', () => {
+  it('selecting an unpinned session inserts it at the top instead of swapping', () => {
     const s = makeStore();
     s.applySnapshot([{ id: 's1' }, { id: 's2' }, { id: 's3' }], 'agent_A');
-    s.activeSessionId = 's3';
+    s.setActive('s3');
+    expect(s.sessionOrder).toEqual(['s3', 's1', 's2']);
+    s.setActive('s2');
+    expect(s.sessionOrder).toEqual(['s2', 's3', 's1']);
     const ids = s.runGetter('sessionList').map(x => x.id);
-    expect(ids).toEqual(['s3', 's1', 's2']);
+    expect(ids).toEqual(['s2', 's3', 's1']);
   });
 
-  it('pinned sessions come first; active among unpinned floats to top of unpinned', () => {
+  it('pinned sessions come first; selecting unpinned inserts below pinned', () => {
     const s = makeStore();
     s.applySnapshot([{ id: 's1' }, { id: 's2' }, { id: 's3' }, { id: 's4' }], 'agent_A');
     pinnedSessions = ['s4'];
-    s.activeSessionId = 's3';
+    s.setActive('s3');
     const ids = s.runGetter('sessionList').map(x => x.id);
-    // pinned first (s4), then active unpinned (s3), then the rest in sessionOrder (s1, s2).
+    // pinned first (s4), then selected unpinned (s3), then the rest in preserved order.
     expect(ids).toEqual(['s4', 's3', 's1', 's2']);
+    expect(s.sessionOrder).toEqual(['s3', 's1', 's2', 's4']);
   });
 
   it('active that is itself pinned does NOT double-shuffle', () => {
