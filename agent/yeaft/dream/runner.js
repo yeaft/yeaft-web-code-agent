@@ -176,6 +176,7 @@ export async function runDream(opts) {
         phase: 'triage',
         message: err.message,
         stack: err.stack,
+        rawSnippet: err.rawSnippet,
       });
       continue;
     }
@@ -227,6 +228,7 @@ export async function runDream(opts) {
         phase: 'apply',
         message: err.message,
         stack: err.stack,
+        rawSnippet: err.rawSnippet,
       });
     }
   }

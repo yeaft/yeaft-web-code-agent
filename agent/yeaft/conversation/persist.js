@@ -2,15 +2,12 @@
  * persist.js — Conversation message persistence
  *
  * Each message is stored as a .md file with YAML frontmatter in
- * ~/.yeaft/chat/messages/ or ~/.yeaft/groups/<sessionId>/conversation/messages/. Design: zero JSON, all Markdown.
+ * ~/.yeaft/chat/messages/ or ~/.yeaft/sessions/<sessionId>/conversation/messages/. Design: zero JSON, all Markdown.
  *
- * Vocabulary note: the on-disk layout literally uses `groups/<id>/` (and
- * the AMS registry uses `memory/sessions/<id>/`) — the asymmetry is
- * deliberate. The `groups/` path predates the rename and we keep it as a
- * literal string to avoid a destructive data migration; every API
- * surface above the disk layer (method names, params, comments) uses
- * "session" vocabulary. See `ConversationStore.#sessionsDir` for the
- * boundary annotation.
+ * Vocabulary note: the primary on-disk layout uses `sessions/<id>/`. Older
+ * installs may still have transcript files under `groups/<id>/`; those are
+ * read as a legacy fallback only. Every API surface above the disk layer
+ * uses "session" vocabulary.
  *
  * Message format:
  *   ---
@@ -199,12 +196,12 @@ function serializeMessage(msg) {
   // render a small "#source" pill next to each bubble.
   if (msg.sourceThreadId) fm.push(`sourceThreadId: ${msg.sourceThreadId}`);
   // Bug 6: persist sessionId so history replay can stamp messages with the
-  // group they originated in. Without this, every replayed message lands
-  // in the default group and switching back to the originating group
+  // session they originated in. Without this, every replayed message lands
+  // in the default session and switching back to the originating session
   // shows an empty pane.
   if (msg.sessionId) fm.push(`sessionId: ${msg.sessionId}`);
   if (msg.chatId) fm.push(`chatId: ${msg.chatId}`);
-  // Group-chat attribution: when a VP authors an assistant turn (either
+  // Session attribution: when a VP authors an assistant turn (either
   // its own reply or a route_forward injection from another VP), stamp
   // the speaker so the UI can render the message on the correct VP track.
   // For real user messages this is unset.
@@ -424,25 +421,22 @@ export function parseMessage(raw) {
  *     messages/
  *     cold/
  *     blobs/
- *   groups/<sessionId>/conversation/
+ *   sessions/<sessionId>/conversation/
  *     compact/
  *     messages/
  *     cold/
  *     blobs/
  *
- * Legacy compatibility: ~/.yeaft/conversation is read as an old mixed store.
- * New writes are split by mode: records with sessionId go to
- * groups/<sessionId>/conversation/, all others go to chat/.
+ * Legacy compatibility: ~/.yeaft/conversation is read as an old mixed store,
+ * and ~/.yeaft/groups/<sessionId>/conversation is read as an old session
+ * transcript store. New writes are split by mode: records with sessionId go to
+ * sessions/<sessionId>/conversation/, all others go to chat/.
  */
 export class ConversationStore {
   #dir;         // root dir (e.g. ~/.yeaft)
   #chatDir;     // ~/.yeaft/chat
-  // ~/.yeaft/groups — on-disk path literal kept for backward compat with
-  // existing user data; the live disk layout is still `groups/<id>/` even
-  // after the session-v1 meta migration (which only collapses the meta
-  // files, not the conversation tree). All API surfaces above the disk
-  // layer have been renamed to the "session" vocabulary.
-  #sessionsDir;
+  #sessionsDir; // ~/.yeaft/sessions — primary Session transcript store
+  #legacySessionsDir; // ~/.yeaft/groups — read-only legacy Session transcripts
   #legacyConvDir; // ~/.yeaft/conversation (read-only compatibility)
   #convDir;     // default thread dir root: ~/.yeaft/chat
   #msgDir;      // default hot messages dir: ~/.yeaft/chat/messages
@@ -464,7 +458,8 @@ export class ConversationStore {
   constructor(dir) {
     this.#dir = dir;
     this.#chatDir = join(dir, 'chat');
-    this.#sessionsDir = join(dir, 'groups');
+    this.#sessionsDir = join(dir, 'sessions');
+    this.#legacySessionsDir = join(dir, 'groups');
     this.#legacyConvDir = join(dir, 'conversation');
 
     this.#convDir = this.#chatDir;
@@ -479,17 +474,16 @@ export class ConversationStore {
     this.#legacyMsgDir = join(this.#legacyConvDir, 'messages');
     this.#legacyColdDir = join(this.#legacyConvDir, 'cold');
 
-    // Per-(sessionId, vpId) compact summary files live under that group's
+    // Per-(sessionId, vpId) compact summary files live under that session's
     // conversation directory. The legacy ~/.yeaft/conversation/compact directory
     // is read for compatibility.
     this.#legacyCompactScopedDir = join(this.#legacyConvDir, 'compact');
     this.#nextSeq = null;
     this.#nextSeqByThread = new Map();
 
-    // Ensure new chat and group-root directories exist (graceful on permission
-    // errors). Per-group conversation directories are created lazily once a
-    // sessionId is known. The legacy conversation directory is never created by
-    // new versions.
+    // Ensure new chat and session-root directories exist (graceful on permission
+    // errors). Per-session conversation directories are created lazily once a
+    // sessionId is known. Legacy directories are never created by new versions.
     for (const d of [
       this.#chatDir, join(this.#chatDir, 'blobs'), this.#chatMsgDir, this.#chatColdDir,
       this.#sessionsDir,
@@ -724,7 +718,7 @@ export class ConversationStore {
   }
 
   /**
-   * Check whether ANY per-(group, vp) compact summary exists for `sessionId`.
+   * Check whether ANY per-(session, vp) compact summary exists for `sessionId`.
    * Used by the history-replay path to decide whether to flag
    * `hasCompactSummary` for the UI without committing to one VP's view.
    *
@@ -1626,6 +1620,10 @@ export class ConversationStore {
     return dir;
   }
 
+  #legacySessionConversationDir(sessionId) {
+    return join(this.#legacySessionsDir, this.#safeDirComponent(sessionId), 'conversation');
+  }
+
   #ensureConversationDirs(dir) {
     for (const d of [dir, join(dir, 'blobs'), join(dir, 'messages'), join(dir, 'cold'), join(dir, 'compact')]) {
       if (!existsSync(d)) mkdirSync(d, { recursive: true, mode: 0o755 });
@@ -1633,26 +1631,34 @@ export class ConversationStore {
   }
 
   #sessionConversationDirs() {
-    if (!existsSync(this.#sessionsDir)) return [];
     const dirs = [];
-    for (const name of readdirSync(this.#sessionsDir)) {
-      const sessionDir = join(this.#sessionsDir, name);
-      try {
-        if (!statSync(sessionDir).isDirectory()) continue;
-      } catch (err) {
-        if (isPermissionError(err)) continue;
-        throw err;
+    const seen = new Set();
+    for (const root of [this.#sessionsDir, this.#legacySessionsDir]) {
+      if (!existsSync(root)) continue;
+      for (const name of readdirSync(root)) {
+        const sessionDir = join(root, name);
+        try {
+          if (!statSync(sessionDir).isDirectory()) continue;
+        } catch (err) {
+          if (isPermissionError(err)) continue;
+          throw err;
+        }
+        const conversationDir = join(sessionDir, 'conversation');
+        if (!existsSync(conversationDir) || seen.has(conversationDir)) continue;
+        seen.add(conversationDir);
+        dirs.push(conversationDir);
       }
-      const conversationDir = join(sessionDir, 'conversation');
-      if (existsSync(conversationDir)) dirs.push(conversationDir);
     }
     return dirs;
   }
 
   #sessionMessageDirs(kind, sessionId = null) {
     if (sessionId) {
-      const dir = join(this.#sessionConversationDir(sessionId), kind);
-      return existsSync(dir) ? [dir] : [];
+      const dirs = [
+        join(this.#sessionConversationDir(sessionId), kind),
+        join(this.#legacySessionConversationDir(sessionId), kind),
+      ];
+      return dirs.filter(dir => existsSync(dir));
     }
     return this.#sessionConversationDirs()
       .map(dir => join(dir, kind))

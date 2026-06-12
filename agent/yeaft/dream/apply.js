@@ -20,6 +20,7 @@
 
 import { promises as fsp } from 'fs';
 import { join, dirname } from 'path';
+import { inspect } from 'util';
 
 import { writeMemory, writeSummary, readMemory, readSummary } from '../memory/store.js';
 import { withDreamMarker } from './state.js';
@@ -27,6 +28,18 @@ import { batchSourcesForApply, needsBatchedApply, truncateMessage } from './segm
 import { snapshotScope } from './snapshot.js';
 import { parseJsonSafe } from './triage.js';
 import { render } from './prompts/index.js';
+
+function malformedJsonError(message, raw) {
+  const err = new Error(message);
+  err.rawSnippet = rawResponseSnippet(raw);
+  return err;
+}
+
+function rawResponseSnippet(raw) {
+  if (typeof raw === 'string') return raw.slice(0, 1000);
+  if (raw == null) return String(raw);
+  return inspect(raw, { depth: 2, maxArrayLength: 10, breakLength: 120 }).slice(0, 1000);
+}
 
 function applySystem(language) {
   return String(language || '').toLowerCase().startsWith('zh')
@@ -204,7 +217,7 @@ export async function applyMergedTarget(merged, opts) {
     const raw = await opts.llm({ pass: 'create', prompt, system: applySystem(opts.language) });
     const parsed = parseJsonSafe(raw);
     if (!parsed || typeof parsed.memory_md !== 'string') {
-      throw new Error(`apply: CREATE returned malformed JSON for ${merged.target}`);
+      throw malformedJsonError(`apply: CREATE returned malformed JSON for ${merged.target}`, raw);
     }
     memoryMd = parsed.memory_md;
     summaryMd = typeof parsed.summary_md === 'string' ? parsed.summary_md : '';
@@ -233,7 +246,7 @@ export async function applyMergedTarget(merged, opts) {
       const raw = await opts.llm({ pass: 'update', prompt, system: applySystem(opts.language) });
       const parsed = parseJsonSafe(raw);
       if (!parsed || typeof parsed.memory_md !== 'string') {
-        throw new Error(`apply: UPDATE batch ${i} returned malformed JSON for ${merged.target}`);
+        throw malformedJsonError(`apply: UPDATE batch ${i} returned malformed JSON for ${merged.target}`, raw);
       }
       memoryMd = parsed.memory_md;
       if (typeof parsed.summary_md === 'string') summaryMd = parsed.summary_md;

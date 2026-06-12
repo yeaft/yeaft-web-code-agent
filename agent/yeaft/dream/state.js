@@ -178,6 +178,7 @@ export async function writeDreamError(root, scope, info) {
       phase: String(info?.phase || 'unknown'),
       message: String(info?.message || ''),
       stack: stackLines.length > 0 ? stackLines.join('\n') : null,
+      rawSnippet: typeof info?.rawSnippet === 'string' ? info.rawSnippet.slice(0, 1000) : null,
     }, null, 2) + '\n';
     await atomicWrite(abs, body);
   } catch {
