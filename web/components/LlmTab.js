@@ -49,19 +49,10 @@ export default {
         <div class="sp-group">
           <div class="sp-group-title">{{ $t('settings.llm.providersTitle') }}</div>
           <p class="sp-desc">{{ $t('settings.llm.providersDesc') }}</p>
-          <div class="llm-scope-tabs">
-            <button class="sp-btn" :class="{ 'sp-btn-primary': providerScope === 'global' }" @click="setProviderScope('global')">{{ $t('settings.llm.globalProviders') }}</button>
-            <button class="sp-btn" :class="{ 'sp-btn-primary': providerScope === 'agent' }" @click="setProviderScope('agent')">{{ $t('settings.llm.agentProviders') }}</button>
-          </div>
-          <div v-if="providerScope === 'global'" class="llm-github-device-row">
-            <button class="sp-btn" @click="startGithubDeviceFlow">{{ $t('settings.llm.githubDeviceStart') }}</button>
-            <span v-if="githubDeviceStatus" class="sp-desc">{{ githubDeviceStatus }}</span>
-          </div>
-
           <!-- Provider cards -->
           <div class="llm-provider-card" v-for="(provider, idx) in editableProviders" :key="idx">
             <div class="llm-provider-header">
-              <span class="llm-provider-index">{{ providerScope === 'global' ? $t('settings.llm.globalBadge') : $t('settings.llm.agentBadge') }} #{{ idx + 1 }}</span>
+              <span class="llm-provider-index">{{ $t('settings.llm.agentBadge') }} #{{ idx + 1 }}</span>
               <button class="sp-icon-btn llm-remove-btn" @click="removeProvider(idx)" :title="$t('settings.llm.removeProvider')">
                 <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
               </button>
@@ -236,9 +227,7 @@ export default {
     return {
       loading: false,
       loadError: null,
-      providerScope: 'agent',
       localProviders: [],
-      globalProviders: [],
       providerModelsText: [],
       localPrimaryModel: null,
       localFastModel: null,
@@ -247,7 +236,6 @@ export default {
       openDropdown: null,
       showApiKey: {},
       showPresetPicker: false,
-      githubDeviceStatus: '',
     };
   },
   computed: {
@@ -277,10 +265,10 @@ export default {
       return this.chatStore.llmConfig[agentId] || null;
     },
     editableProviders() {
-      return this.providerScope === 'global' ? this.globalProviders : this.localProviders;
+      return this.localProviders;
     },
     allModelRefs() {
-      const providers = this.currentConfig?.effectiveConfig?.providers || [...this.globalProviders, ...this.localProviders];
+      const providers = this.currentConfig?.effectiveConfig?.providers || this.localProviders;
       const refs = [];
       for (const p of providers) {
         if (!p.name) continue;
@@ -311,47 +299,8 @@ export default {
       },
       deep: true
     },
-    'chatStore.llmGithubDevice': {
-      handler(msg) {
-        if (!msg) return;
-        this.handleGithubDeviceMessage(msg);
-      },
-      deep: true
-    }
   },
   methods: {
-    startGithubDeviceFlow() {
-      this.githubDeviceStatus = this.$t('settings.llm.githubDeviceStarting');
-      this.chatStore.sendWsMessage({ type: 'llm_github_device_start', agentId: this.effectiveAgentId });
-    },
-
-    handleGithubDeviceMessage(msg) {
-      if (msg.type === 'started') {
-        if (msg.error) {
-          this.githubDeviceStatus = msg.error;
-          return;
-        }
-        this.githubDeviceStatus = `${this.$t('settings.llm.githubDeviceVerify')} ${msg.verificationUri} — ${msg.userCode}`;
-        if (typeof window !== 'undefined' && window.open) window.open(msg.verificationUri, '_blank', 'noopener');
-        this._githubDeviceCode = msg.deviceCode;
-        setTimeout(() => this.pollGithubDeviceFlow(), Math.max(1, msg.interval || 5) * 1000);
-      } else if (msg.type === 'poll') {
-        if (msg.ok) {
-          this.githubDeviceStatus = this.$t('settings.llm.githubDeviceConnected');
-          this.requestConfig();
-        } else if (msg.pending && this._githubDeviceCode) {
-          setTimeout(() => this.pollGithubDeviceFlow(), Math.max(1, msg.interval || 5) * 1000);
-        } else if (msg.error) {
-          this.githubDeviceStatus = msg.error;
-        }
-      }
-    },
-
-    pollGithubDeviceFlow() {
-      if (!this._githubDeviceCode) return;
-      this.chatStore.sendWsMessage({ type: 'llm_github_device_poll', agentId: this.effectiveAgentId, deviceCode: this._githubDeviceCode });
-    },
-
     requestConfig() {
       const agentId = this.effectiveAgentId;
       if (!agentId) return;
@@ -395,7 +344,6 @@ export default {
       // shape the agent persisted so per-model protocol metadata from the
       // preset picker survives load → edit → save round trips.
       this.localProviders = (config.agentConfig?.providers || config.providers || []).map(p => this.cloneProvider(p));
-      this.globalProviders = (config.globalConfig?.providers || []).map(p => this.cloneProvider(p));
       this.refreshProviderModelsText();
 
       this.localPrimaryModel = config.agentConfig?.primaryModel || config.primaryModel || null;
@@ -407,7 +355,7 @@ export default {
     cloneProvider(p) {
       return {
         type: p.type || 'api-key',
-        scope: p.scope || this.providerScope,
+        scope: 'agent',
         name: p.originalName || p.name || '',
         baseUrl: p.baseUrl || '',
         apiKey: p.apiKey || '',
@@ -424,20 +372,6 @@ export default {
       this.providerModelsText = this.editableProviders.map(p =>
         (p.models || []).map(m => this._modelId(m)).join(', ')
       );
-    },
-
-    setProviderScope(scope) {
-      if (this.providerScope === scope) return;
-      this.providerScope = scope;
-      this.showApiKey = {};
-      this.refreshProviderModelsText();
-    },
-
-    modelSourceLabel(ref) {
-      const providerName = String(ref || '').split('/')[0];
-      const providers = this.currentConfig?.effectiveConfig?.providers || [...this.globalProviders, ...this.localProviders];
-      const provider = providers.find(p => p.name === providerName);
-      return provider?.scope === 'global' ? this.$t('settings.llm.globalBadge') : this.$t('settings.llm.agentBadge');
     },
 
     parseModelsFromProvider(provider) {
@@ -632,14 +566,11 @@ export default {
       this.chatStore.sendWsMessage({
         type: 'update_llm_config',
         agentId,
-        scope: this.providerScope,
-        config: this.providerScope === 'global'
-          ? { providers }
-          : {
-              providers,
-              primaryModel: this.localPrimaryModel || null,
-              fastModel: this.localFastModel || null
-            }
+        config: {
+          providers,
+          primaryModel: this.localPrimaryModel || null,
+          fastModel: this.localFastModel || null
+        }
       });
 
       // Wait for llm_config_updated response (handled by watcher on currentConfig)

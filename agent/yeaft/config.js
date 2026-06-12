@@ -23,7 +23,6 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
 import { resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
-import { mergeLlmConfigs } from './llm/provider-merge.js';
 
 /** Default configuration values. */
 const DEFAULTS = {
@@ -295,19 +294,12 @@ export function loadConfig(overrides = {}) {
   }
 
   // ─── Build config from config.json ────────────────────────
-  const agentProviders = Array.isArray(jsonConfig.providers) ? jsonConfig.providers : [];
-  const mergedLlmConfig = mergeLlmConfigs(overrides.globalLlmConfig || {}, {
-    providers: agentProviders,
-    primaryModel: jsonConfig.primaryModel || null,
-    fastModel: jsonConfig.fastModel || null,
-    language: jsonConfig.language || DEFAULTS.language,
-  });
-  const providers = mergedLlmConfig.providers;
+  const providers = Array.isArray(jsonConfig.providers) ? jsonConfig.providers : [];
 
   // Resolve primary model
   let model = 'claude-sonnet-4-20250514';
   let modelIdForInfo = model;
-  let primaryModel = mergedLlmConfig.primaryModel || null;
+  let primaryModel = jsonConfig.primaryModel || null;
   if (primaryModel) {
     const parsed = parseModelRef(primaryModel);
     model = parsed.providerName?.startsWith('global:') ? primaryModel : parsed.modelId;
@@ -315,7 +307,7 @@ export function loadConfig(overrides = {}) {
   }
 
   // Resolve fast model
-  let fastModel = mergedLlmConfig.fastModel || primaryModel || null;
+  let fastModel = jsonConfig.fastModel || primaryModel || null;
   let fastModelId = null;
   if (fastModel) {
     const parsed = parseModelRef(fastModel);

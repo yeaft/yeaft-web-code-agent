@@ -2725,7 +2725,6 @@ async function ensureSessionLoaded() {
   const yeaftDir = ctx.CONFIG?.yeaftDir;
   session = await loadSession({
     ...(yeaftDir && { dir: yeaftDir }),
-    configOverrides: { globalLlmConfig: ctx.globalLlmConfig || { providers: [] } },
     skipMCP: false,
     skipSkills: false,
     serverMode: true,
@@ -3851,7 +3850,6 @@ export async function handleYeaftLoadHistory(msg) {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     session = await loadSession({
       ...(yeaftDir && { dir: yeaftDir }),
-      configOverrides: { globalLlmConfig: ctx.globalLlmConfig || { providers: [] } },
       skipMCP: false,
       skipSkills: false,
       serverMode: true,
@@ -4167,7 +4165,6 @@ export async function resetYeaftSession() {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     session = await loadSession({
       ...(yeaftDir && { dir: yeaftDir }),
-      configOverrides: { globalLlmConfig: ctx.globalLlmConfig || { providers: [] } },
       skipMCP: false,
       skipSkills: false,
       serverMode: true,

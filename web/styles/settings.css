@@ -1083,24 +1083,6 @@
   max-width: 100%;
 }
 
-.llm-scope-tabs,
-.llm-github-device-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 10px 0;
-  flex-wrap: wrap;
-}
-
-.llm-source-badge {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--text-muted);
-  border: 1px solid var(--border-light);
-  border-radius: 999px;
-  padding: 1px 6px;
-}
-
 .llm-provider-card {
   background: var(--sidebar-hover);
   border: 1px solid var(--border-color);

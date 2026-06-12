@@ -204,6 +204,39 @@
   background: var(--sidebar-hover);
 }
 
+.yeaft-topbar-llm-config {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.yeaft-topbar-llm-config:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.yeaft-llm-config-modal {
+  width: min(960px, 92vw);
+  height: min(720px, 86vh);
+  display: flex;
+  flex-direction: column;
+}
+
+.yeaft-llm-config-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
 .yeaft-topbar-model-name {
   font-size: 13px;
   font-weight: 500;

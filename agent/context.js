@@ -18,8 +18,6 @@ export default {
   slashCommandDescriptions: {},
   // MCP servers 列表 (从 ~/.claude.json 读取): [{ name, enabled, source }]
   mcpServers: [],
-  // Server-owned user-global LLM providers. Runtime-only: never persisted to ~/.yeaft/config.json.
-  globalLlmConfig: { providers: [] },
   // 连接相关
   reconnectTimer: null,
   pendingAuthTempId: null,
