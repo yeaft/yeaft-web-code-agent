@@ -2,6 +2,15 @@ import { agents, userFileTabs } from '../context.js';
 import {
   sendToWebClient, forwardToAgent, broadcastAgentList
 } from '../ws-utils.js';
+import {
+  broadcastGlobalLlmConfigToWeb,
+  pollGithubDeviceFlow,
+  readGlobalLlmConfigForAgent,
+  readGlobalLlmConfigForWeb,
+  saveGlobalLlmConfigFromWeb,
+  sendGlobalLlmConfigToUserAgents,
+  startGithubDeviceFlow,
+} from '../llm-global-config.js';
 
 /**
  * Handle miscellaneous messages from web client.
@@ -110,12 +119,15 @@ export async function handleClientMisc(clientId, client, msg, checkAgentAccess) 
       break;
     }
 
-    // LLM configuration — relay to agent
+    // LLM configuration — global config is server-owned; agent config is node-local.
     case 'get_llm_config': {
       const llmAgentId = msg.agentId || client.currentAgent;
       if (!llmAgentId) break;
       if (!await checkAgentAccess(llmAgentId)) break;
-      await forwardToAgent(llmAgentId, { type: 'get_llm_config' });
+      await forwardToAgent(llmAgentId, {
+        type: 'get_llm_config',
+        globalConfig: readGlobalLlmConfigForAgent(client.userId)
+      });
       break;
     }
 
@@ -123,10 +135,57 @@ export async function handleClientMisc(clientId, client, msg, checkAgentAccess) 
       const llmUpdateAgentId = msg.agentId || client.currentAgent;
       if (!llmUpdateAgentId) break;
       if (!await checkAgentAccess(llmUpdateAgentId)) break;
+      if (msg.scope === 'global') {
+        try {
+          const globalConfig = saveGlobalLlmConfigFromWeb(client.userId, msg.config || {});
+          await sendGlobalLlmConfigToUserAgents(client.userId);
+          await broadcastGlobalLlmConfigToWeb(client.userId, llmUpdateAgentId);
+          await forwardToAgent(llmUpdateAgentId, {
+            type: 'get_llm_config',
+            globalConfig: readGlobalLlmConfigForAgent(client.userId)
+          });
+          await sendToWebClient(client, { type: 'llm_config_updated', agentId: llmUpdateAgentId, globalConfig });
+        } catch (e) {
+          await sendToWebClient(client, { type: 'llm_config_updated', agentId: llmUpdateAgentId, error: e.message });
+        }
+        break;
+      }
       await forwardToAgent(llmUpdateAgentId, {
         type: 'update_llm_config',
-        config: msg.config || {}
+        config: msg.config || {},
+        globalConfig: readGlobalLlmConfigForAgent(client.userId)
       });
+      break;
+    }
+
+    case 'llm_github_device_start': {
+      try {
+        const flow = await startGithubDeviceFlow();
+        await sendToWebClient(client, { type: 'llm_github_device_started', ...flow });
+      } catch (e) {
+        await sendToWebClient(client, { type: 'llm_github_device_started', error: e.message });
+      }
+      break;
+    }
+
+    case 'llm_github_device_poll': {
+      const llmAgentId = msg.agentId || client.currentAgent;
+      try {
+        const result = await pollGithubDeviceFlow({ deviceCode: msg.deviceCode });
+        if (!result.ok) {
+          await sendToWebClient(client, { type: 'llm_github_device_poll_result', ...result });
+          break;
+        }
+        const current = readGlobalLlmConfigForWeb(client.userId);
+        const providers = current.providers.filter(p => p.name !== result.provider.name);
+        providers.push(result.provider);
+        const globalConfig = saveGlobalLlmConfigFromWeb(client.userId, { providers });
+        await sendGlobalLlmConfigToUserAgents(client.userId);
+        await broadcastGlobalLlmConfigToWeb(client.userId, llmAgentId);
+        await sendToWebClient(client, { type: 'llm_github_device_poll_result', ok: true, globalConfig });
+      } catch (e) {
+        await sendToWebClient(client, { type: 'llm_github_device_poll_result', ok: false, error: e.message });
+      }
       break;
     }
 
