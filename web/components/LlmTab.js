@@ -45,6 +45,18 @@ export default {
             <p>{{ $t('settings.llm.setupDesc') }}</p>
           </div>
         </div>
+        <div v-if="context === 'yeaft'" class="llm-simple-setup">
+          <div>
+            <strong>{{ $t('settings.llm.simpleCopilotTitle') }}</strong>
+            <p class="sp-desc">{{ $t('settings.llm.simpleCopilotDesc') }}</p>
+            <p v-if="modelDiscoveryWarning" class="sp-desc">{{ modelDiscoveryWarning }}</p>
+            <p v-if="modelDiscoveryError" class="sp-desc sp-error-text">{{ modelDiscoveryError }}</p>
+          </div>
+          <button class="sp-btn sp-btn-primary" @click="useGitHubCopilotPreset" :disabled="discoveringModels">
+            {{ discoveringModels ? $t('settings.llm.refreshingModels') : $t('settings.llm.useGitHubCopilot') }}
+          </button>
+        </div>
+
         <!-- Providers Section -->
         <div class="sp-group">
           <div class="sp-group-title">{{ $t('settings.llm.providersTitle') }}</div>
@@ -236,6 +248,9 @@ export default {
       openDropdown: null,
       showApiKey: {},
       showPresetPicker: false,
+      discoveringModels: false,
+      modelDiscoveryWarning: null,
+      modelDiscoveryError: null,
     };
   },
   computed: {
@@ -268,7 +283,7 @@ export default {
       return this.localProviders;
     },
     allModelRefs() {
-      const providers = this.currentConfig?.effectiveConfig?.providers || this.localProviders;
+      const providers = this.localProviders;
       const refs = [];
       for (const p of providers) {
         if (!p.name) continue;
@@ -301,6 +316,70 @@ export default {
     },
   },
   methods: {
+
+
+    async useGitHubCopilotPreset() {
+      const agentId = this.effectiveAgentId;
+      if (!agentId || !this.agentOnline) return;
+      this.discoveringModels = true;
+      this.modelDiscoveryWarning = null;
+      this.modelDiscoveryError = null;
+      const requestId = `llm-discovery-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      this.chatStore.sendWsMessage({
+        type: 'discover_llm_models',
+        agentId,
+        requestId,
+        providerType: 'github-copilot'
+      });
+      const result = await this.waitForModelDiscovery(agentId, requestId);
+      this.discoveringModels = false;
+      if (result.error) {
+        this.modelDiscoveryError = result.error;
+        return;
+      }
+      this.applyDiscoveredProvider(result);
+      this.modelDiscoveryWarning = result.warning || null;
+    },
+
+    waitForModelDiscovery(agentId, requestId) {
+      return new Promise(resolve => {
+        const started = Date.now();
+        const timer = setInterval(() => {
+          const result = this.chatStore.llmModelDiscovery?.[agentId];
+          if (result?.requestId === requestId) {
+            clearInterval(timer);
+            resolve(result);
+            return;
+          }
+          if (Date.now() - started > 10000) {
+            clearInterval(timer);
+            resolve({ error: 'Timed out while refreshing provider models.' });
+          }
+        }, 100);
+      });
+    },
+
+    applyDiscoveredProvider(result) {
+      const provider = {
+        name: result.provider?.name || 'github-copilot',
+        baseUrl: result.provider?.baseUrl || 'https://api.githubcopilot.com',
+        credentialProvider: result.provider?.credentialProvider || 'github-copilot',
+        protocol: result.provider?.protocol || 'openai-responses',
+        models: Array.isArray(result.providerModels) && result.providerModels.length
+          ? result.providerModels
+          : (result.models || []),
+      };
+      const providers = [...this.localProviders];
+      const index = providers.findIndex(p => p?.name === provider.name);
+      if (index >= 0) providers[index] = provider;
+      else providers.push(provider);
+      this.localProviders = providers;
+      this.refreshProviderModelsText();
+      const firstModel = this.parseModelsFromProvider(provider)[0];
+      if (firstModel && !this.localPrimaryModel) this.localPrimaryModel = `${provider.name}/${firstModel}`;
+      this.markDirty();
+    },
+
     requestConfig() {
       const agentId = this.effectiveAgentId;
       if (!agentId) return;

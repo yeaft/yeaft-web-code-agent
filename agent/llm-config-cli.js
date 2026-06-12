@@ -1,6 +1,12 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { homedir } from 'os';
+import {
+  discoverGitHubCopilotModels,
+  discoverOpenAICompatibleModels,
+  GITHUB_COPILOT_PROVIDER,
+  modelIdsFromProviderModels,
+} from './llm-model-discovery.js';
 
 const VALID_PROTOCOLS = new Set(['anthropic', 'openai-responses']);
 const VALID_CREDENTIAL_PROVIDERS = new Set(['github-copilot']);
@@ -193,4 +199,87 @@ function validateCredentials(options, env) {
       throw new Error(`Environment variable ${envName} is not set`);
     }
   }
+}
+
+
+export async function useGitHubCopilot(config, options = {}) {
+  const primaryModel = requireNonEmpty(options.model, '--model');
+  const fastModel = options.fast ? String(options.fast).trim() : null;
+  const discovery = await discoverGitHubCopilotModels(options);
+  const discoveredIds = modelIdsFromProviderModels(discovery.providerModels);
+  const allowUnknown = Boolean(options.allowUnknownModel);
+
+  for (const model of [primaryModel, fastModel].filter(Boolean)) {
+    if (!allowUnknown && !discoveredIds.includes(model)) {
+      throw new Error(`Model "${model}" was not found in the GitHub Copilot model catalog. Use --allow-unknown-model to save it anyway.`);
+    }
+  }
+
+  const providerModels = [...discovery.providerModels];
+  if (allowUnknown) {
+    const known = new Set(discoveredIds);
+    for (const model of [primaryModel, fastModel].filter(Boolean)) {
+      if (!known.has(model)) {
+        providerModels.push(model);
+        known.add(model);
+      }
+    }
+  }
+
+  const next = { ...config };
+  const providers = Array.isArray(config.providers) ? [...config.providers] : [];
+  const provider = {
+    ...GITHUB_COPILOT_PROVIDER,
+    models: providerModels,
+  };
+  const index = providers.findIndex(p => p && p.name === provider.name);
+  if (index >= 0) providers[index] = provider;
+  else providers.push(provider);
+
+  next.providers = providers;
+  next.primaryModel = `${provider.name}/${primaryModel}`;
+  if (fastModel) next.fastModel = `${provider.name}/${fastModel}`;
+
+  return { config: next, provider, discovery };
+}
+
+
+export async function useOpenAICompatible(config, options = {}, env = process.env) {
+  const name = options.name ? String(options.name).trim() : 'openai';
+  const baseUrl = requireNonEmpty(options.baseUrl, '--base-url');
+  const primaryModel = requireNonEmpty(options.model, '--model');
+  const fastModel = options.fast ? String(options.fast).trim() : null;
+  validateCredentials(options, env);
+  const apiKey = options.apiKey || env[options.apiKeyEnv];
+  const discovery = await discoverOpenAICompatibleModels({ ...options, apiKey });
+  const discoveredIds = modelIdsFromProviderModels(discovery.providerModels);
+  const allowUnknown = Boolean(options.allowUnknownModel);
+
+  for (const model of [primaryModel, fastModel].filter(Boolean)) {
+    if (!allowUnknown && !discoveredIds.includes(model)) {
+      throw new Error(`Model "${model}" was not found in the provider model catalog. Use --allow-unknown-model to save it anyway.`);
+    }
+  }
+
+  const providerModels = [...discovery.providerModels];
+  if (allowUnknown) {
+    const known = new Set(discoveredIds);
+    for (const model of [primaryModel, fastModel].filter(Boolean)) {
+      if (!known.has(model)) {
+        providerModels.push(model);
+        known.add(model);
+      }
+    }
+  }
+
+  const next = { ...config };
+  const providers = Array.isArray(config.providers) ? [...config.providers] : [];
+  const provider = { name, baseUrl, apiKey, protocol: 'openai-responses', models: providerModels };
+  const index = providers.findIndex(p => p && p.name === provider.name);
+  if (index >= 0) providers[index] = provider;
+  else providers.push(provider);
+  next.providers = providers;
+  next.primaryModel = `${provider.name}/${primaryModel}`;
+  if (fastModel) next.fastModel = `${provider.name}/${fastModel}`;
+  return { config: next, provider, discovery };
 }

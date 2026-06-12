@@ -36,6 +36,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getYeaftSettings, updateYeaftSettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../yeaft/config-api.js';
+import { discoverLlmModels } from '../llm-model-discovery.js';
 import { fetchModelsDev } from '../yeaft/llm/models-dev.js';
 import { handleYeaftSessionSend, handleYeaftModeSwitch, handleYeaftModelSwitch, resetYeaftSession, handleYeaftLoadHistory, handleYeaftLoadMoreHistory, handleYeaftAbortThread, handleYeaftAbortAll, handleYeaftAbortTurn, handleYeaftVpSubscribe, handleYeaftVpCreate, handleYeaftVpUpdate, handleYeaftVpDelete, handleYeaftVpRead, handleYeaftListSessions, handleYeaftCreateSession, handleYeaftRenameSession, handleYeaftUpdateSession, handleYeaftUpdateSessionConfig, handleYeaftArchiveSession, handleYeaftDeleteSession, handleYeaftSessionAddMember, handleYeaftSessionRemoveMember, handleYeaftSessionSetDefaultVp, handleYeaftScanWorkdirSessions, handleYeaftRestoreSession, handleYeaftDreamTrigger, handleYeaftFetchToolStats, handleYeaftFetchDebugHistory, handleYeaftMcpList, handleYeaftMcpAdd, handleYeaftMcpRemove, handleYeaftMcpReload, broadcastLanguageChange, broadcastYeaftSessionSnapshotEager } from '../yeaft/web-bridge.js';
 import { startYeaftStatusRefresh, refreshYeaftStatus } from '../yeaft/status-cache.js';
@@ -348,6 +349,28 @@ export async function handleMessage(msg) {
     case 'get_llm_config': {
       const config = getLlmConfig(ctx.CONFIG?.yeaftDir);
       sendToServer({ type: 'llm_config', ...config });
+      break;
+    }
+
+    case 'discover_llm_models': {
+      try {
+        const result = await discoverLlmModels(msg || {});
+        sendToServer({
+          type: 'llm_models_discovered',
+          agentId: msg.agentId,
+          requestId: msg.requestId,
+          providerType: msg.providerType || msg.provider || msg.preset,
+          ...result,
+        });
+      } catch (e) {
+        sendToServer({
+          type: 'llm_models_discovered',
+          agentId: msg.agentId,
+          requestId: msg.requestId,
+          providerType: msg.providerType || msg.provider || msg.preset,
+          error: e.message || String(e),
+        });
+      }
       break;
     }
 

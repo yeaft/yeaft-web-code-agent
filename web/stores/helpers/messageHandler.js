@@ -696,6 +696,13 @@ export function handleMessage(store, msg) {
 
     // LLM configuration from agent. This is agent-local only; no server-global
     // provider layer is merged here.
+    case 'llm_models_discovered':
+      if (msg.agentId) {
+        store.llmModelDiscovery = store.llmModelDiscovery || {};
+        store.llmModelDiscovery[msg.agentId] = msg;
+      }
+      break;
+
     case 'llm_config':
     case 'llm_config_updated':
       if (msg.agentId) {

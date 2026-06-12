@@ -134,11 +134,27 @@ AI 专家团队辅助对话 — 选择一个团队（如写作、交易），在
 安装后的 agent 可以通过 `yeaft-agent llm` 配置本机 LLM。所有命令只写当前机器的 `~/.yeaft/config.json`；不会写 server global config，也不会改任何 UI 全局 provider 列表。
 
 ```bash
-yeaft-agent llm show
+yeaft-agent llm setup
 ```
 
 ```bash
+yeaft-agent llm use github-copilot --model claude-sonnet-4.5 --fast gpt-4.1
+```
+
+GitHub Copilot 会使用本机 device token / `gh auth` credential provider，从 Copilot API 刷新实时模型列表，并且不会把 token 写入配置。自定义 OpenAI-compatible endpoint 可以这样配置：
+
+```bash
+OPENAI_KEY=sk-... yeaft-agent llm use openai-compatible --name openai --base-url https://api.openai.com/v1 --api-key-env OPENAI_KEY --model gpt-5
+```
+
+高级手动配置仍然保留：
+
+```bash
 OPENAI_KEY=sk-... yeaft-agent llm add-provider --name openai --base-url https://api.openai.com/v1 --models gpt-5,gpt-4.1 --api-key-env OPENAI_KEY --protocol openai-responses --set-primary gpt-5
+```
+
+```bash
+yeaft-agent llm show
 ```
 
 ```bash
