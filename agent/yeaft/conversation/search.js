@@ -42,27 +42,34 @@ function compareNewest(a, b) {
   return String(b?.time || '').localeCompare(String(a?.time || ''));
 }
 
-function groupConversationMessageDirs(dir) {
-  const groupsDir = join(dir, 'groups');
-  if (!existsSync(groupsDir)) return [];
-
+function sessionConversationMessageDirs(dir) {
   const dirs = [];
-  for (const name of readdirSync(groupsDir)) {
-    const groupDir = join(groupsDir, name);
-    try {
-      if (!statSync(groupDir).isDirectory()) continue;
-    } catch {
-      continue;
-    }
+  const seen = new Set();
+  for (const rootName of ['sessions', 'groups']) {
+    const root = join(dir, rootName);
+    if (!existsSync(root)) continue;
+    for (const name of readdirSync(root)) {
+      const sessionDir = join(root, name);
+      try {
+        if (!statSync(sessionDir).isDirectory()) continue;
+      } catch {
+        continue;
+      }
 
-    const conversationDir = join(groupDir, 'conversation');
-    dirs.push(join(conversationDir, 'messages'), join(conversationDir, 'cold'));
+      const conversationDir = join(sessionDir, 'conversation');
+      for (const kind of ['messages', 'cold']) {
+        const messagesDir = join(conversationDir, kind);
+        if (seen.has(messagesDir)) continue;
+        seen.add(messagesDir);
+        dirs.push(messagesDir);
+      }
+    }
   }
   return dirs;
 }
 
 /**
- * Search Yeaft history (chat + per-group + legacy conversation) for a keyword.
+ * Search Yeaft history (chat + per-session + legacy conversation) for a keyword.
  *
  * @param {string} dir — Yeaft root directory (e.g. ~/.yeaft)
  * @param {string} keyword — search term
@@ -75,8 +82,8 @@ export function searchMessages(dir, keyword, limit = 20) {
   const dirs = [
     join(dir, 'chat', 'messages'),
     join(dir, 'chat', 'cold'),
-    ...groupConversationMessageDirs(dir),
-    // Compatibility for profiles created before chat/group split.
+    ...sessionConversationMessageDirs(dir),
+    // Compatibility for profiles created before chat/session split.
     join(dir, 'conversation', 'messages'),
     join(dir, 'conversation', 'cold'),
   ];

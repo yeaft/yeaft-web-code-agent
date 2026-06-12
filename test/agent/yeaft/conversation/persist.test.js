@@ -128,10 +128,11 @@ describe('ConversationStore', () => {
   });
 
   describe('constructor', () => {
-    it('should create chat and groups root but not the obsolete flat group history directory', () => {
+    it('should create chat and sessions root but not obsolete group history directories', () => {
       expect(existsSync(join(TEST_DIR, 'chat', 'messages'))).toBe(true);
       expect(existsSync(join(TEST_DIR, 'chat', 'cold'))).toBe(true);
-      expect(existsSync(join(TEST_DIR, 'groups'))).toBe(true);
+      expect(existsSync(join(TEST_DIR, 'sessions'))).toBe(true);
+      expect(existsSync(join(TEST_DIR, 'groups'))).toBe(false);
       expect(existsSync(join(TEST_DIR, 'group'))).toBe(false);
       expect(existsSync(join(TEST_DIR, 'conversation'))).toBe(false);
     });
@@ -166,34 +167,35 @@ describe('ConversationStore', () => {
   });
 
 
-    it("should write group messages under that group's conversation history", () => {
-      const msg = store.append({ role: 'user', content: 'Hello group', sessionId: 'grp_fun' });
+    it("should write session messages under that session's conversation history", () => {
+      const msg = store.append({ role: 'user', content: 'Hello session', sessionId: 's_fun' });
       expect(msg.id).toBe('m0001');
-      expect(existsSync(join(TEST_DIR, 'groups', 'grp_fun', 'conversation', 'messages', 'm0001.md'))).toBe(true);
+      expect(existsSync(join(TEST_DIR, 'sessions', 's_fun', 'conversation', 'messages', 'm0001.md'))).toBe(true);
+      expect(existsSync(join(TEST_DIR, 'groups', 's_fun', 'conversation', 'messages', 'm0001.md'))).toBe(false);
       expect(existsSync(join(TEST_DIR, 'chat', 'messages', 'm0001.md'))).toBe(false);
       expect(store.loadRecent(10)).toEqual([]);
-      expect(store.loadRecentBySession('grp_fun', 10)).toHaveLength(1);
+      expect(store.loadRecentBySession('s_fun', 10)).toHaveLength(1);
     });
 
-    it('should read legacy conversation paths without mixing chat and group modes', () => {
+    it('should read legacy conversation paths without mixing chat and session records', () => {
       const legacyMessages = join(TEST_DIR, 'conversation', 'messages');
       mkdirSync(legacyMessages, { recursive: true });
       const chatStore = new ConversationStore(TEST_DIR);
       const chatMsg = chatStore.append({ role: 'user', content: 'legacy chat' });
-      const groupMsg = chatStore.append({ role: 'user', content: 'legacy group', sessionId: 'grp_fun' });
+      const sessionMsg = chatStore.append({ role: 'user', content: 'legacy session', sessionId: 's_fun' });
       // Move freshly-written records into the legacy layout to simulate an
       // existing user profile from versions before ~/.yeaft/chat and
-      // per-group conversation directories were split.
+      // per-session conversation directories were split.
       const chatRaw = readFileSync(join(TEST_DIR, 'chat', 'messages', `${chatMsg.id}.md`), 'utf8');
-      const groupRaw = readFileSync(join(TEST_DIR, 'groups', 'grp_fun', 'conversation', 'messages', `${groupMsg.id}.md`), 'utf8');
+      const sessionRaw = readFileSync(join(TEST_DIR, 'sessions', 's_fun', 'conversation', 'messages', `${sessionMsg.id}.md`), 'utf8');
       rmSync(join(TEST_DIR, 'chat', 'messages', `${chatMsg.id}.md`));
-      rmSync(join(TEST_DIR, 'groups', 'grp_fun', 'conversation', 'messages', `${groupMsg.id}.md`));
+      rmSync(join(TEST_DIR, 'sessions', 's_fun', 'conversation', 'messages', `${sessionMsg.id}.md`));
       writeFileSync(join(legacyMessages, `${chatMsg.id}.md`), chatRaw);
-      writeFileSync(join(legacyMessages, `${groupMsg.id}.md`), groupRaw);
+      writeFileSync(join(legacyMessages, `${sessionMsg.id}.md`), sessionRaw);
 
       const compatStore = new ConversationStore(TEST_DIR);
       expect(compatStore.loadRecent(10).map(m => m.content)).toEqual(['legacy chat']);
-      expect(compatStore.loadRecentBySession('grp_fun', 10).map(m => m.content)).toEqual(['legacy group']);
+      expect(compatStore.loadRecentBySession('s_fun', 10).map(m => m.content)).toEqual(['legacy session']);
     });
 
   describe('appendBatch', () => {
@@ -340,7 +342,7 @@ describe('ConversationStore', () => {
       expect(store.loadAll().map(m => m.content).sort()).toEqual(['B1', 'untagged']);
       expect(existsSync(join(TEST_DIR, 'chat', 'messages', 'm0001.md'))).toBe(false);
       expect(existsSync(join(TEST_DIR, 'chat', 'messages', 'm0002.md'))).toBe(false);
-      expect(existsSync(join(TEST_DIR, 'groups', 'grp_b', 'conversation', 'messages', 'm0003.md'))).toBe(true);
+      expect(existsSync(join(TEST_DIR, 'sessions', 'grp_b', 'conversation', 'messages', 'm0003.md'))).toBe(true);
       expect(existsSync(join(TEST_DIR, 'chat', 'messages', 'm0004.md'))).toBe(true);
     });
 

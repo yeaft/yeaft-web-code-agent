@@ -42,7 +42,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { runDream } from './runner.js';
 import { createDreamScheduler } from './schedule.js';
-import { parseMessage } from '../conversation/persist.js';
+import { parseMessage, parseSeqFromId } from '../conversation/persist.js';
 import { readSessionState } from './state.js';
 import { DREAM_NUDGE_AFTER_MESSAGES, DREAM_INTERVAL_HOURS } from './limits.js';
 
@@ -57,26 +57,26 @@ import { DREAM_NUDGE_AFTER_MESSAGES, DREAM_INTERVAL_HOURS } from './limits.js';
 export function buildRunDreamOpts(session, onProgress) {
   const yeaftDir = session.yeaftDir;
   const memoryRoot = join(yeaftDir, 'memory');
-  // ConversationStore still persists Yeaft Session transcripts under the
-  // legacy `groups/<sessionId>/conversation` disk layout. Dream must read
-  // that live source, not the older `sessions/` session-store tree.
-  const sessionConversationsRoot = join(yeaftDir, 'groups');
+  const sessionConversationsRoot = join(yeaftDir, 'sessions');
+  // Legacy disk fallback for pre-session transcript directories. New writes and
+  // Dream's primary source use `sessions/<sessionId>/conversation`.
+  const legacySessionConversationsRoot = join(yeaftDir, 'groups');
 
   return {
     root: memoryRoot,
     language: session.config?.language || 'en',
     llm: makeLlm(session),
     listSessions: async () => {
-      try { return listConversationSessions(sessionConversationsRoot); }
+      try { return listConversationSessions([sessionConversationsRoot, legacySessionConversationsRoot]); }
       catch { return []; }
     },
     countMessages: async (sessionId) => {
-      try { return loadSessionConversationMessages(sessionConversationsRoot, sessionId).length; }
+      try { return loadSessionConversationMessages([sessionConversationsRoot, legacySessionConversationsRoot], sessionId).length; }
       catch { return 0; }
     },
     loadGroupDiff: async (sessionId, sinceId) => {
       try {
-        const messages = loadSessionConversationMessages(sessionConversationsRoot, sessionId);
+        const messages = loadSessionConversationMessages([sessionConversationsRoot, legacySessionConversationsRoot], sessionId);
         const out = [];
         let started = !sinceId;
         for (const m of messages) {
@@ -91,7 +91,7 @@ export function buildRunDreamOpts(session, onProgress) {
     },
     loadOverlapPreamble: async (sessionId, beforeId, n) => {
       try {
-        const messages = loadSessionConversationMessages(sessionConversationsRoot, sessionId);
+        const messages = loadSessionConversationMessages([sessionConversationsRoot, legacySessionConversationsRoot], sessionId);
         const buf = [];
         for (const m of messages) {
           if (m.id === beforeId) break;
@@ -128,49 +128,86 @@ function translateSessionConversationMessage(m) {
 }
 
 /**
- * Enumerate session ids that have persisted conversation messages. The on-disk
- * parent is still named `groups` for storage compatibility.
+ * Enumerate session ids that have persisted conversation messages. `sessions/`
+ * is the primary layout; `groups/` is read-only legacy fallback.
  *
- * @param {string} root legacy groups root (`~/.yeaft/groups`)
+ * @param {string[]} roots session transcript roots in priority order
  * @returns {string[]}
  */
-function listConversationSessions(root) {
-  if (!existsSync(root)) return [];
-  const out = [];
-  for (const name of readdirSync(root)) {
-    if (name.startsWith('.')) continue;
-    const messagesDir = join(root, name, 'conversation', 'messages');
-    try {
-      if (!statSync(messagesDir).isDirectory()) continue;
-      if (!readdirSync(messagesDir).some(f => f.endsWith('.md'))) continue;
-      out.push(name);
-    } catch {
-      // Ignore partial or old session directories. Dream only needs sessions
-      // with readable conversation messages.
+function listConversationSessions(roots) {
+  const out = new Set();
+  for (const root of roots) {
+    if (!existsSync(root)) continue;
+    for (const name of readdirSync(root)) {
+      if (name.startsWith('.')) continue;
+      try {
+        const dir = sessionConversationDir(root, name);
+        if (!hasReadableMessages(dir)) continue;
+        out.add(name);
+      } catch {
+        // Ignore partial or old session directories. Dream only needs sessions
+        // with readable conversation messages.
+      }
     }
   }
-  return out.sort();
+  return [...out].sort();
 }
 
 /**
- * Load hot conversation messages for one Yeaft Session from the legacy
- * `groups/<sessionId>/conversation/messages` layout.
+ * Load hot and cold conversation messages for one Yeaft Session. This mirrors
+ * ConversationStore's session history source: `conversation/cold` plus
+ * `conversation/messages`, deduped by id and sorted by message sequence.
  *
- * @param {string} root legacy groups root (`~/.yeaft/groups`)
+ * @param {string[]} roots session transcript roots in priority order
  * @param {string} sessionId
  * @returns {object[]}
  */
-function loadSessionConversationMessages(root, sessionId) {
-  const messagesDir = join(root, safeDirComponent(sessionId), 'conversation', 'messages');
-  if (!existsSync(messagesDir)) return [];
-  return readdirSync(messagesDir)
+function loadSessionConversationMessages(roots, sessionId) {
+  const byId = new Map();
+  for (const root of roots) {
+    const dir = sessionConversationDir(root, sessionId);
+    for (const m of loadConversationDirMessages(dir)) {
+      if (!byId.has(m.id)) byId.set(m.id, m);
+    }
+  }
+  return [...byId.values()].sort(compareMessagesBySeq);
+}
+
+function sessionConversationDir(root, sessionId) {
+  return join(root, safeDirComponent(sessionId), 'conversation');
+}
+
+function hasReadableMessages(conversationDir) {
+  return ['messages', 'cold'].some(kind => {
+    const dir = join(conversationDir, kind);
+    try {
+      return statSync(dir).isDirectory() && readdirSync(dir).some(f => f.endsWith('.md'));
+    } catch {
+      return false;
+    }
+  });
+}
+
+function loadConversationDirMessages(conversationDir) {
+  return ['cold', 'messages'].flatMap(kind => loadMessageDir(join(conversationDir, kind)));
+}
+
+function loadMessageDir(dir) {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
     .filter(f => f.endsWith('.md'))
-    .sort()
     .map(file => {
-      try { return parseMessage(readFileSync(join(messagesDir, file), 'utf8')); }
+      try { return parseMessage(readFileSync(join(dir, file), 'utf8')); }
       catch { return null; }
     })
     .filter(m => m && m.id);
+}
+
+function compareMessagesBySeq(a, b) {
+  const sa = parseSeqFromId(a?.id);
+  const sb = parseSeqFromId(b?.id);
+  if (Number.isFinite(sa) && Number.isFinite(sb) && sa !== sb) return sa - sb;
+  return String(a?.time || '').localeCompare(String(b?.time || ''));
 }
 
 function safeDirComponent(s) {

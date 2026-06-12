@@ -19,13 +19,13 @@ afterEach(() => {
 });
 
 describe('buildRunDreamOpts session conversation wiring', () => {
-  it('enumerates and reads the live legacy groups conversation layout', async () => {
+  it('enumerates and reads the live sessions conversation layout', async () => {
     writeSessionMessage(testDir, 's-live', 'm0001', 'user', 'remember that I prefer small patches');
     writeSessionMessage(testDir, 's-live', 'm0002', 'assistant', 'noted, I will keep patches small', { speakerVpId: 'vp-linus' });
     writeSessionMessage(testDir, 's-empty', 'm0001', 'user', 'this one is removed');
-    rmSync(join(testDir, 'groups', 's-empty', 'conversation', 'messages', 'm0001.md'));
-    mkdirSync(join(testDir, 'sessions', 's-old', 'messages'), { recursive: true });
-    writeFileSync(join(testDir, 'sessions', 's-old', 'session.json'), '{"id":"s-old"}\n');
+    rmSync(join(testDir, 'sessions', 's-empty', 'conversation', 'messages', 'm0001.md'));
+    mkdirSync(join(testDir, 'groups', 's-old', 'messages'), { recursive: true });
+    writeFileSync(join(testDir, 'groups', 's-old', 'group.json'), '{"id":"s-old"}\n');
 
     const opts = buildRunDreamOpts(fakeSession(testDir));
 
@@ -39,7 +39,36 @@ describe('buildRunDreamOpts session conversation wiring', () => {
     ]);
   });
 
-  it('lets runDream process sessions from groups conversation messages instead of empty-running', async () => {
+  it('reads cold and hot messages as one ordered transcript', async () => {
+    writeSessionMessage(testDir, 's-live', 'm0001', 'user', 'old cursor message', {}, 'cold');
+    writeSessionMessage(testDir, 's-live', 'm0002', 'assistant', 'old assistant response', { speakerVpId: 'vp-linus' }, 'cold');
+    writeSessionMessage(testDir, 's-live', 'm0003', 'user', 'new hot message');
+
+    const opts = buildRunDreamOpts(fakeSession(testDir));
+
+    await expect(opts.countMessages('s-live')).resolves.toBe(3);
+    await expect(opts.loadGroupDiff('s-live', 'm0002')).resolves.toEqual([
+      { id: 'm0003', role: 'user', body: 'new hot message' },
+    ]);
+    await expect(opts.loadOverlapPreamble('s-live', 'm0003', 2)).resolves.toEqual([
+      { id: 'm0001', role: 'user', body: 'old cursor message' },
+      { id: 'm0002', role: 'assistant', body: 'old assistant response', vpId: 'vp-linus' },
+    ]);
+  });
+
+  it('falls back to legacy groups conversation layout for old data', async () => {
+    writeSessionMessage(testDir, 's-legacy', 'm0001', 'user', 'legacy data', {}, 'messages', 'groups');
+
+    const opts = buildRunDreamOpts(fakeSession(testDir));
+
+    await expect(opts.listSessions()).resolves.toEqual(['s-legacy']);
+    await expect(opts.countMessages('s-legacy')).resolves.toBe(1);
+    await expect(opts.loadGroupDiff('s-legacy', null)).resolves.toEqual([
+      { id: 'm0001', role: 'user', body: 'legacy data' },
+    ]);
+  });
+
+  it('lets runDream process sessions from session conversation messages instead of empty-running', async () => {
     writeSessionMessage(testDir, 's-live', 'm0001', 'user', 'remember that I prefer concise answers');
     writeSessionMessage(testDir, 's-live', 'm0002', 'assistant', 'I will keep the answer concise', { speakerVpId: 'vp-linus' });
 
@@ -80,8 +109,8 @@ async function fakeDreamLlm(req) {
   });
 }
 
-function writeSessionMessage(root, sessionId, id, role, content, extra = {}) {
-  const dir = join(root, 'groups', sessionId, 'conversation', 'messages');
+function writeSessionMessage(root, sessionId, id, role, content, extra = {}, kind = 'messages', rootName = 'sessions') {
+  const dir = join(root, rootName, sessionId, 'conversation', kind);
   mkdirSync(dir, { recursive: true });
   const frontmatter = [
     '---',
