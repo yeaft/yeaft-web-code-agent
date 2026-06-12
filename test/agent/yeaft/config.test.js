@@ -128,6 +128,22 @@ describe('loadConfig — config.json', () => {
     expect(config.fastModelId).toBe('claude-haiku-3-20250414');
   });
 
+  it('should strip stale global refs from runtime model selections', () => {
+    writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({
+      providers: [
+        { name: 'local', baseUrl: 'http://localhost:6628/v1', apiKey: 'key', models: ['claude-sonnet-4-20250514', 'claude-haiku-3-20250414'] },
+      ],
+      primaryModel: 'global:old-proxy/claude-sonnet-4-20250514',
+      fastModel: 'global:old-proxy/claude-haiku-3-20250414',
+    }));
+
+    const config = loadConfig({ dir: TEST_DIR });
+    expect(config.model).toBe('claude-sonnet-4-20250514');
+    expect(config.primaryModel).toBe('claude-sonnet-4-20250514');
+    expect(config.fastModel).toBe('claude-haiku-3-20250414');
+    expect(config.fastModelId).toBe('claude-haiku-3-20250414');
+  });
+
   it('should use primaryModel as fastModel fallback', () => {
     writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({
       providers: [

@@ -23,48 +23,6 @@ import {
 } from './handlers/conversationHandler.js';
 
 
-function cloneLlmProvider(provider, scope) {
-  return {
-    ...provider,
-    scope,
-    source: scope,
-    originalName: provider.name,
-    models: Array.isArray(provider.models)
-      ? provider.models.map(model => (model && typeof model === 'object' ? { ...model } : model))
-      : []
-  };
-}
-
-function mergeLlmConfigsForUi(globalConfig = {}, agentConfig = {}) {
-  const agentProviders = Array.isArray(agentConfig.providers)
-    ? agentConfig.providers.map(provider => cloneLlmProvider(provider, 'agent'))
-    : [];
-  const usedNames = new Set(agentProviders.map(provider => provider.name).filter(Boolean));
-  const globalProviders = [];
-
-  for (const raw of Array.isArray(globalConfig.providers) ? globalConfig.providers : []) {
-    if (!raw?.name) continue;
-    const provider = cloneLlmProvider(raw, 'global');
-    if (usedNames.has(provider.name)) {
-      let candidate = `global:${provider.name}`;
-      let i = 2;
-      while (usedNames.has(candidate)) candidate = `global:${provider.name}:${i++}`;
-      provider.name = candidate;
-    }
-    usedNames.add(provider.name);
-    globalProviders.push(provider);
-  }
-
-  const providers = [...globalProviders, ...agentProviders];
-  return {
-    providers,
-    primaryModel: agentConfig.primaryModel || null,
-    fastModel: agentConfig.fastModel || null,
-    language: agentConfig.language || 'en',
-    needsSetup: providers.length === 0 || providers.every(provider => (!provider.apiKey || provider.apiKey === 'proxy') && !provider.credentialProvider && !provider.githubToken)
-  };
-}
-
 function defaultAgentLlmConfig(msg = {}) {
   return {
     providers: msg.providers || [],
@@ -728,21 +686,19 @@ export function handleMessage(store, msg) {
       }
       break;
 
-    // LLM configuration from agent
+    // LLM configuration from agent. This is agent-local only; no server-global
+    // provider layer is merged here.
     case 'llm_config':
     case 'llm_config_updated':
       if (msg.agentId) {
-        const previous = store.llmConfig[msg.agentId] || {};
-        const globalConfig = msg.globalConfig || previous.globalConfig || { providers: [] };
-        const agentConfig = msg.agentConfig || previous.agentConfig || defaultAgentLlmConfig(msg);
-        const effectiveConfig = msg.effectiveConfig || mergeLlmConfigsForUi(globalConfig, agentConfig);
+        const agentConfig = msg.agentConfig || defaultAgentLlmConfig(msg);
+        const effectiveConfig = msg.effectiveConfig || agentConfig;
         store.llmConfig[msg.agentId] = {
           providers: msg.providers || effectiveConfig.providers || [],
           primaryModel: msg.primaryModel || effectiveConfig.primaryModel || null,
           fastModel: msg.fastModel || effectiveConfig.fastModel || null,
           language: msg.language || agentConfig.language || effectiveConfig.language || 'en',
           needsSetup: msg.needsSetup ?? effectiveConfig.needsSetup ?? false,
-          globalConfig,
           agentConfig,
           effectiveConfig,
           error: msg.error || null,
@@ -751,56 +707,6 @@ export function handleMessage(store, msg) {
       }
       break;
 
-    case 'llm_global_config_updated': {
-      const globalConfig = msg.globalConfig || { providers: [] };
-      for (const agentId of Object.keys(store.llmConfig)) {
-        const previous = store.llmConfig[agentId] || {};
-        const agentConfig = previous.agentConfig || defaultAgentLlmConfig(previous);
-        const effectiveConfig = mergeLlmConfigsForUi(globalConfig, agentConfig);
-        store.llmConfig[agentId] = {
-          ...previous,
-          providers: effectiveConfig.providers,
-          primaryModel: effectiveConfig.primaryModel,
-          fastModel: effectiveConfig.fastModel,
-          language: agentConfig.language || effectiveConfig.language || 'en',
-          needsSetup: effectiveConfig.needsSetup,
-          globalConfig,
-          agentConfig,
-          effectiveConfig,
-        };
-      }
-      if (msg.agentId && !store.llmConfig[msg.agentId]) {
-        const agentConfig = defaultAgentLlmConfig();
-        const effectiveConfig = mergeLlmConfigsForUi(globalConfig, agentConfig);
-        store.llmConfig[msg.agentId] = {
-          providers: effectiveConfig.providers,
-          primaryModel: effectiveConfig.primaryModel,
-          fastModel: effectiveConfig.fastModel,
-          language: effectiveConfig.language || 'en',
-          needsSetup: effectiveConfig.needsSetup,
-          globalConfig,
-          agentConfig,
-          effectiveConfig,
-          loaded: true
-        };
-      }
-      break;
-    }
-
-    case 'llm_github_device_started':
-      store.llmGithubDevice = { type: 'started', ...msg };
-      break;
-
-    case 'llm_github_device_poll_result':
-      store.llmGithubDevice = { type: 'poll', ...msg };
-      if (msg.globalConfig) {
-        for (const agentId of Object.keys(store.llmConfig)) {
-          store.llmConfig[agentId] = { ...store.llmConfig[agentId], globalConfig: msg.globalConfig };
-        }
-      }
-      break;
-
-    // models.dev registry snapshot — populates the preset picker.
     case 'models_dev_registry':
       store.modelsDevRegistry = {
         registry: msg.registry || {},

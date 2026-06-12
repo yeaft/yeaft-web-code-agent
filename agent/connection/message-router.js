@@ -335,27 +335,9 @@ export async function handleMessage(msg) {
       break;
     }
 
-    // LLM configuration (read/write ~/.yeaft/config.json)
+    // LLM configuration (read/write this agent's ~/.yeaft/config.json)
     case 'get_llm_config': {
-      if (msg.globalConfig && typeof msg.globalConfig === 'object') {
-        ctx.globalLlmConfig = msg.globalConfig;
-      }
-      const config = getLlmConfig(ctx.CONFIG?.yeaftDir, ctx.globalLlmConfig);
-      sendToServer({ type: 'llm_config', ...config });
-      break;
-    }
-
-    case 'llm_global_config_updated': {
-      ctx.globalLlmConfig = msg.globalConfig && typeof msg.globalConfig === 'object'
-        ? msg.globalConfig
-        : { providers: [] };
-      // Existing sessions cache AdapterRouter instances. Drop them so the
-      // next Yeaft turn sees the new global providers, without writing them
-      // to the node-local config.json.
-      resetYeaftSession().catch(err => {
-        console.error('[LLM] Failed to reload Yeaft session after global config update:', err.message);
-      });
-      const config = getLlmConfig(ctx.CONFIG?.yeaftDir, ctx.globalLlmConfig);
+      const config = getLlmConfig(ctx.CONFIG?.yeaftDir);
       sendToServer({ type: 'llm_config', ...config });
       break;
     }
@@ -369,10 +351,7 @@ export async function handleMessage(msg) {
       const incomingLanguage = typeof msg.config?.language === 'string' && msg.config.language
         ? msg.config.language
         : null;
-      if (msg.globalConfig && typeof msg.globalConfig === 'object') {
-        ctx.globalLlmConfig = msg.globalConfig;
-      }
-      const result = updateLlmConfig(msg.config || {}, ctx.CONFIG?.yeaftDir, ctx.globalLlmConfig);
+      const result = updateLlmConfig(msg.config || {}, ctx.CONFIG?.yeaftDir);
       // task-708: live locale propagation. When the user flips the UI
       // language dropdown, push the new value into every cached Engine
       // (per-VP pool + 1:1 chat session.engine) so the very next turn
