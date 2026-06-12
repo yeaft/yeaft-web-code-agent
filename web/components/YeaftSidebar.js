@@ -91,11 +91,12 @@ export default {
                 v-for="s in sessionList"
                 :key="s.kind + ':' + s.id"
                 class="session-item"
-                :class="{ active: s.id === activeSessionId }"
+                :class="{ active: s.id === activeSessionId, processing: s.id === activeSessionId && store && store.isConversationProcessing(store.yeaftConversationId) }"
                 @click="onSelectGroup(s.raw)"
                 @contextmenu.prevent="openGroupMenu(s.raw, $event)"
               >
                 <div class="session-item-header">
+                  <span v-if="s.id === activeSessionId && store && store.isConversationProcessing(store.yeaftConversationId)" class="processing-dot"></span>
                   <div class="title" :title="groupDisplayName(s.raw)">
                     <span>{{ groupDisplayName(s.raw) }}</span>
                   </div>
