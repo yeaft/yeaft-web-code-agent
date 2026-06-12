@@ -152,10 +152,12 @@ export function handleMessage(store, msg) {
       break;
 
     case 'claude_output':
-      store.handleClaudeOutput(msg.conversationId, msg.data);
+      store.handleAssistantOutputFrame(msg.conversationId, msg.data);
       break;
 
     case 'yeaft_output':
+    case 'yeaft_session_output':
+    case 'session_output':
       store.handleYeaftOutput(msg);
       break;
 

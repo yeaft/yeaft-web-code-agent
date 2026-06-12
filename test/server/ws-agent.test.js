@@ -1076,7 +1076,7 @@ describe('CONV_EXEMPT_TYPES — workbench responses must bypass conversation-id 
     'agent_sync_complete', 'sync_sessions', 'proxy_response', 'proxy_response_chunk',
     'proxy_response_end', 'proxy_ports_update', 'proxy_ws_opened', 'proxy_ws_message',
     'proxy_ws_closed', 'proxy_ws_error', 'restart_agent_ack', 'upgrade_agent_ack',
-    'directory_listing', 'folders_list', 'yeaft_output',
+    'directory_listing', 'folders_list', 'yeaft_output', 'yeaft_session_output', 'session_output',
     'file_content', 'file_saved', 'file_op_result', 'file_search_result',
     'git_status_result', 'git_diff_result', 'git_op_result'
   ]);
@@ -1115,6 +1115,14 @@ describe('CONV_EXEMPT_TYPES — workbench responses must bypass conversation-id 
     const cid = 'yeaft-1762400000000';
     for (const type of ['git_status_result', 'git_diff_result', 'git_op_result']) {
       expect(isDropped(agent, { type, conversationId: cid, _requestUserId: 'u1' })).toBe(false);
+    }
+  });
+
+  it('passes Yeaft Session output aliases for unknown virtual conversationIds', () => {
+    const agent = createMockAgent();
+    const cid = 'yeaft-1762400000000';
+    for (const type of ['yeaft_output', 'yeaft_session_output', 'session_output']) {
+      expect(isDropped(agent, { type, conversationId: cid, data: { type: 'assistant' } })).toBe(false);
     }
   });
 
