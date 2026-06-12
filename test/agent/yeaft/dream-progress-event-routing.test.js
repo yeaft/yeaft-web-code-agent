@@ -46,7 +46,7 @@ function makeSession(dreamSchedulerOverrides = {}) {
     dreamScheduler: {
       triggerDreamForScopes: vi.fn(async () => ({
         startedAt: '2026-05-15T08:00:00.000Z',
-        targets: [{ target: 'group/g1', status: 'done' }],
+        targets: [{ target: 'sessions/g1', status: 'done' }],
       })),
       triggerDreamNow: vi.fn(async () => ({
         startedAt: '2026-05-15T08:00:00.000Z',
@@ -86,10 +86,10 @@ describe('dream_progress event routing', () => {
         session._dreamProgressSink({ phase: 'start', manual: true, ts: 1 });
         session._dreamProgressSink({ phase: 'load-diff', sessionId: 'g1' });
         session._dreamProgressSink({ phase: 'merge', targets: 1 });
-        session._dreamProgressSink({ phase: 'done', groups: 1, targets: 1, duration: 42 });
+        session._dreamProgressSink({ phase: 'done', sessions: 1, targets: 1, duration: 42 });
         return {
           startedAt: '2026-05-15T08:00:00.000Z',
-          targets: [{ target: 'group/g1', status: 'done' }],
+          targets: [{ target: 'sessions/g1', status: 'done' }],
         };
       }),
     });
@@ -181,7 +181,7 @@ describe('dream_progress event routing', () => {
     const session = makeSession({
       triggerDreamNow: vi.fn(async () => {
         session._dreamProgressSink({ phase: 'start', manual: true });
-        session._dreamProgressSink({ phase: 'done', groups: 0, targets: 0, duration: 1 });
+        session._dreamProgressSink({ phase: 'done', sessions: 0, targets: 0, duration: 1 });
         return {
           startedAt: '2026-05-15T08:00:00.000Z',
           targets: [],

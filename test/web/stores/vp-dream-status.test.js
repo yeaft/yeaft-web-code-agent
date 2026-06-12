@@ -69,7 +69,7 @@ function groupStatus(store, groupId) {
   return getters.groupDreamStatusFor(store)(groupId);
 }
 
-describe('vp store — group Dream status', () => {
+describe('vp store — session Dream status', () => {
   it('triggerGroupDream sends the group-scoped frame and marks the row running', () => {
     const store = mkStore();
 
@@ -143,7 +143,7 @@ describe('vp store — group Dream status', () => {
 
     actions.applyDreamResult.call(store, {
       type: 'yeaft_dream_result',
-      groupId: 'grp_demo',
+      sessionId: 'grp_demo',
       success: false,
       skipped: true,
       skippedReason: 'websocket-not-open',
@@ -166,11 +166,11 @@ describe('vp store — group Dream status', () => {
 
     actions.applyDreamResult.call(store, {
       type: 'yeaft_dream_result',
-      groupId: 'grp_demo',
+      sessionId: 'grp_demo',
       success: true,
       entriesCreated: 2,
       targetsApplied: 2,
-      groupsProcessed: 1,
+      sessionsProcessed: 1,
       durationMs: 12400,
       llmCallCount: 5,
       inputTokens: 12000,
@@ -185,7 +185,7 @@ describe('vp store — group Dream status', () => {
       lastResult: {
         entriesCreated: 2,
         targetsApplied: 2,
-        groupsProcessed: 1,
+        sessionsProcessed: 1,
         durationMs: 12400,
         llmCallCount: 5,
         totalTokens: 18200,
@@ -199,7 +199,7 @@ describe('vp store — group Dream status', () => {
 
     actions.applyDreamResult.call(store, {
       type: 'yeaft_dream_result',
-      groupId: 'grp_demo',
+      sessionId: 'grp_demo',
       success: false,
       error: 'Dream scheduler not initialized — session not loaded.',
     });

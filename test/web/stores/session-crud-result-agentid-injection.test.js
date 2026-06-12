@@ -12,7 +12,7 @@
  * `agentId` field — the agent doesn't know its own server-assigned
  * id. The server stamps `msg.agentId` on the envelope only. The web
  * chat-store's `case 'session_crud_result':` was resolving the
- * pending promise with `session: event.session || event.group || null`
+ * pending promise with `session: event.session || null`
  * — dropping the envelope's agentId. SessionCreateModal.onSubmit
  * then sees `created.agentId === undefined`, the cross-agent guard
  * short-circuits, `currentAgent` stays on A, and downstream behavior
@@ -84,104 +84,6 @@ describe('session_crud_result agentId injection', () => {
     // selectAgent('agent-B'), reverting currentAgent to A on the next
     // store touch and making the new session look like it "didn't open".
     expect(resolved.session.agentId).toBe('agent-B');
-    // Deploy-window compat: the legacy `group` alias is still surfaced
-    // as the same payload so any caller still on the old name keeps
-    // working through one release.
-    expect(resolved.group).toBe(resolved.session);
   });
 
-  it('also injects for the legacy group_crud_result wire type', () => {
-    const store = makeStore();
-    let resolved = null;
-    store._sessionCrudPending = new Map([
-      ['req-2', { resolve: (value) => { resolved = value; } }],
-    ]);
-
-    store.handleYeaftOutput({
-      agentId: 'agent-X',
-      event: {
-        type: 'group_crud_result',
-        requestId: 'req-2',
-        ok: true,
-        op: 'create',
-        group: { id: 'grp_old', name: 'Legacy' },
-      },
-    });
-
-    // Locks in BOTH the dual-naming mapping (event.group → resolved.session)
-    // AND the agentId injection on the legacy code path. The fall-through
-    // case label gets it for free today, but pinning it here prevents a
-    // future split-cases refactor from regressing only one branch.
-    expect(resolved.session.id).toBe('grp_old');
-    expect(resolved.session.agentId).toBe('agent-X');
-  });
-
-  it('does NOT overwrite an agentId already present on the agent payload', () => {
-    const store = makeStore();
-    let resolved = null;
-    store._sessionCrudPending = new Map([
-      ['req-3', { resolve: (value) => { resolved = value; } }],
-    ]);
-
-    // Belt-and-suspenders: if a future agent build starts stamping
-    // agentId itself, the agent's value wins (it's the source of truth
-    // for which agent owns the session, regardless of envelope routing).
-    store.handleYeaftOutput({
-      agentId: 'agent-envelope',
-      event: {
-        type: 'session_crud_result',
-        requestId: 'req-3',
-        ok: true,
-        op: 'create',
-        session: { id: 'grp_pre', agentId: 'agent-payload' },
-      },
-    });
-
-    expect(resolved.session.agentId).toBe('agent-payload');
-  });
-
-  it('leaves session as null when neither the agent nor the envelope provide one', () => {
-    const store = makeStore();
-    let resolved = null;
-    store._sessionCrudPending = new Map([
-      ['req-4', { resolve: (value) => { resolved = value; } }],
-    ]);
-
-    store.handleYeaftOutput({
-      agentId: 'agent-X',
-      event: {
-        type: 'session_crud_result',
-        requestId: 'req-4',
-        ok: false,
-        op: 'create',
-        error: { code: 'invalid_name', message: 'empty' },
-      },
-    });
-
-    expect(resolved.ok).toBe(false);
-    expect(resolved.session).toBeNull();
-    expect(resolved.error).toEqual({ code: 'invalid_name', message: 'empty' });
-  });
-
-  it('does not inject when msg.agentId is absent (back-compat with un-stamped envelopes)', () => {
-    const store = makeStore();
-    let resolved = null;
-    store._sessionCrudPending = new Map([
-      ['req-5', { resolve: (value) => { resolved = value; } }],
-    ]);
-
-    store.handleYeaftOutput({
-      // no agentId on the envelope
-      event: {
-        type: 'session_crud_result',
-        requestId: 'req-5',
-        ok: true,
-        op: 'create',
-        session: { id: 'grp_noenv', name: 'No envelope agent' },
-      },
-    });
-
-    expect(resolved.session.id).toBe('grp_noenv');
-    expect(resolved.session.agentId).toBeUndefined();
-  });
 });

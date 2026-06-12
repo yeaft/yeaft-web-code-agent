@@ -1,6 +1,6 @@
 /**
  * group-crud-seed-summary.test.js — Pin the contract that `createSessionFromSpec`
- * also seeds `<root>/memory/session/<id>/summary.md` so the FIRST session
+ * also seeds `<root>/memory/sessions/<id>/summary.md` so the FIRST session
  * has a non-empty memory section. Same Bug-2 reasoning as
  * `vp-crud-seed-summary.test.js`.
  */
@@ -34,13 +34,13 @@ afterEach(() => {
 });
 
 describe('createSessionFromSpec seeds summary.md', () => {
-  it('writes a non-empty summary.md for a newly created group', () => {
+  it('writes a non-empty summary.md for a newly created session', () => {
     const meta = createSessionFromSpec(yeaftDir, {
       name: `TestGrp_${Date.now()}`,
       roster: ['alice', 'bob'],
       defaultVpId: 'alice',
     });
-    const summaryPath = join(yeaftDir, 'memory', 'session', meta.id, 'summary.md');
+    const summaryPath = join(yeaftDir, 'memory', 'sessions', meta.id, 'summary.md');
     try {
       expect(existsSync(summaryPath)).toBe(true);
       const body = readFileSync(summaryPath, 'utf-8');
@@ -49,13 +49,13 @@ describe('createSessionFromSpec seeds summary.md', () => {
       expect(body).toContain('bob');
     } finally {
       if (existsSync(summaryPath)) {
-        rmSync(join(yeaftDir, 'memory', 'session', meta.id), { recursive: true, force: true });
+        rmSync(join(yeaftDir, 'memory', 'sessions', meta.id), { recursive: true, force: true });
       }
     }
   });
 
 
-  it('creates workDir-backed group state under <workDir>/.yeaft and keeps it discoverable', () => {
+  it('creates workDir-backed session state under <workDir>/.yeaft and keeps it discoverable', () => {
     const workDir = mkdtempSync(join(tmpdir(), 'group-workdir-'));
     const meta = createSessionFromSpec(yeaftDir, {
       name: `WorkdirGrp_${Date.now()}`,
@@ -85,12 +85,12 @@ describe('createSessionFromSpec seeds summary.md', () => {
     expect(updated.announcement).toBe('Stored in project workdir');
     expect(loadSessionMeta(sessionDir).announcement).toBe('Stored in project workdir');
 
-    const summaryPath = join(groupYeaftDir, 'memory', 'session', meta.id, 'summary.md');
+    const summaryPath = join(groupYeaftDir, 'memory', 'sessions', meta.id, 'summary.md');
     expect(existsSync(summaryPath)).toBe(true);
     expect(readFileSync(summaryPath, 'utf8').trim().length).toBeGreaterThan(0);
   });
 
-  it('keeps legacy groups without workDir under the default yeaftDir', () => {
+  it('keeps legacy sessions without workDir under the default yeaftDir', () => {
     const meta = createSessionFromSpec(yeaftDir, {
       name: `LegacyGrp_${Date.now()}`,
       roster: ['alice'],

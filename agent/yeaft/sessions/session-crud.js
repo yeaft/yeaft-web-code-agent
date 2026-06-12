@@ -497,14 +497,10 @@ export function deleteSession(yeaftDir, sessionId, options = {}) {
     rmSync(dir, { recursive: true, force: true });
   }
 
-  // Cascade: drop the group's memory scope so a recreate with the same id
+  // Cascade: drop the session memory scope so a recreate with the same id
   // starts clean. Best-effort — never let memory cleanup fail the CRUD op.
-  // Runs unconditionally so the idempotent path also clears stale memory.
   try {
     removeScopeDirSync({ kind: 'session', id: sessionId }, { root: memoryRoot });
-    // Legacy pre-session memory scopes used memory/group/<id>. Delete both so
-    // idempotent removal clears stale summaries for old grp_* sessions too.
-    removeScopeDirSync({ kind: 'group', id: sessionId }, { root: memoryRoot });
   } catch (err) {
     console.warn(`[session-crud] failed to remove memory dir for ${sessionId}:`, err?.message || err);
   }

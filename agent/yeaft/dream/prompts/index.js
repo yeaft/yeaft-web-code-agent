@@ -41,12 +41,10 @@ const FILES = {
 export function extractTemplateForScope(scope) {
   if (!scope || typeof scope !== 'string') return 'extractTopic';
   if (scope === 'user') return 'extractUser';
-  // Nested group-isolated scopes must be matched BEFORE the bare `group/<g>`
-  // branch so VPs/topics/features under a group don't get the group template.
-  if (/^group\/[^/]+\/vp\//.test(scope)) return 'extractVp';
-  if (/^group\/[^/]+\/topic\//.test(scope)) return 'extractTopic';
-  if (/^group\/[^/]+\/user(?:\/|$)/.test(scope)) return 'extractUser';
-  if (scope.startsWith('group/')) return 'extractSession';
+  if (/^sessions\/[^/]+\/vp\//.test(scope)) return 'extractVp';
+  if (/^sessions\/[^/]+\/topic\//.test(scope)) return 'extractTopic';
+  if (/^sessions\/[^/]+\/user(?:\/|$)/.test(scope)) return 'extractUser';
+  if (scope.startsWith('sessions/')) return 'extractSession';
   // Chat-isolated scopes: same template family as groups.
   if (/^chat\/[^/]+\/vp\//.test(scope)) return 'extractVp';
   if (scope.startsWith('chat/')) return 'extractSession';

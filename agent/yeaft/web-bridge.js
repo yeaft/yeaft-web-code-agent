@@ -205,11 +205,11 @@ function getVpStatusBroker() {
  *      the target VP's driver instead of being dropped.
  *   2. Each VP thread gets its own Engine (via `vpEngines`) so private state
  *      (`#currentAbortCtrl`, `#__queryCounter`, `#pendingT2`,
- *      `#abortReason`, `#adjustRanByGroup`, `#execLog`, `#currentThreadId`)
+ *      `#abortReason`, `#adjustRanBySession`, `#execLog`, `#currentThreadId`)
  *      does not collide across concurrent VP turns. Engines are keyed by
  *      `${sessionId}::${vpId}::${threadId}` rather than vpId alone because
  *      Engine cannot serve two concurrent queries safely — even if AMS state
- *      partitions correctly by groupKey, the non-group-keyed private state
+ *      partitions correctly by sessionKey, the non-session-keyed private state
  *      would collide if the same VP ran turns in two groups or two threads
  *      in parallel.
  */
@@ -859,7 +859,7 @@ function isPermissionErrorMsg(msg) {
 /**
  * Get-or-create the per-VP Engine. Each VP owns its own Engine instance
  * so private state (`#currentAbortCtrl`, `#__queryCounter`, `#pendingT2`,
- * `#abortReason`, `#adjustRanByGroup`, `#execLog`) doesn't collide when
+ * `#abortReason`, `#adjustRanBySession`, `#execLog`) doesn't collide when
  * VP-A and VP-B run concurrent turns. All engines share the session's
  * adapter / trace / config / stores so memory recall, conversation
  * persistence, and tool registry remain consistent.
@@ -1599,16 +1599,7 @@ export function handleYeaftRestoreSession(msg) {
 
 export function handleYeaftRenameSession(msg) {
   const requestId = msg && msg.requestId;
-  // fix-yeaft-delete-and-agent-revert: accept legacy `groupId` in
-  // addition to `sessionId`. The contract documented in
-  // `web/stores/sessions.js` header ("Inbound payloads may carry
-  // either sessionId (new) or groupId (legacy); both are accepted,
-  // prefer sessionId") was only honored on web-side reads; the agent
-  // handlers were silently rejecting the older wire shape that today's
-  // SessionSettingsModal still sends. That's what made delete/rename/
-  // archive/update_config/add_member/remove_member/set_default_vp
-  // all throw `not_found` on undefined ids.
-  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
+  const sessionId = (msg && msg.sessionId) || null;
   const name = msg && msg.name;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
@@ -1638,7 +1629,7 @@ export function handleYeaftRenameSession(msg) {
 export function handleYeaftUpdateSession(msg) {
   const requestId = msg && msg.requestId;
   // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
-  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
+  const sessionId = (msg && msg.sessionId) || null;
   const patch = (msg && msg.patch && typeof msg.patch === 'object') ? msg.patch : null;
   try {
     const hasName = patch && typeof patch.name === 'string' && patch.name.trim().length > 0;
@@ -1673,7 +1664,7 @@ export function handleYeaftUpdateSession(msg) {
 export function handleYeaftUpdateSessionConfig(msg) {
   const requestId = msg && msg.requestId;
   // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
-  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
+  const sessionId = (msg && msg.sessionId) || null;
   const partial = (msg && msg.config && typeof msg.config === 'object') ? msg.config : null;
   try {
     if (!sessionId) throw new SessionConfigError('missing_group_id', 'sessionId required');
@@ -1696,7 +1687,7 @@ export function handleYeaftUpdateSessionConfig(msg) {
 export function handleYeaftArchiveSession(msg) {
   const requestId = msg && msg.requestId;
   // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
-  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
+  const sessionId = (msg && msg.sessionId) || null;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const result = archiveSession(yeaftDir, sessionId);
@@ -1717,7 +1708,7 @@ export function handleYeaftArchiveSession(msg) {
 export function handleYeaftDeleteSession(msg) {
   const requestId = msg && msg.requestId;
   // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
-  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
+  const sessionId = (msg && msg.sessionId) || null;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const result = deleteSession(yeaftDir, sessionId);
@@ -1759,7 +1750,7 @@ export function handleYeaftDeleteSession(msg) {
 export function handleYeaftSessionAddMember(msg) {
   const requestId = msg && msg.requestId;
   // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
-  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
+  const sessionId = (msg && msg.sessionId) || null;
   const vpId = msg && msg.vpId;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
@@ -1775,7 +1766,7 @@ export function handleYeaftSessionAddMember(msg) {
 export function handleYeaftSessionRemoveMember(msg) {
   const requestId = msg && msg.requestId;
   // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
-  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
+  const sessionId = (msg && msg.sessionId) || null;
   const vpId = msg && msg.vpId;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
@@ -1797,7 +1788,7 @@ export function handleYeaftSessionRemoveMember(msg) {
 export function handleYeaftSessionSetDefaultVp(msg) {
   const requestId = msg && msg.requestId;
   // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
-  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
+  const sessionId = (msg && msg.sessionId) || null;
   const vpId = msg && msg.vpId;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
@@ -1885,11 +1876,11 @@ export function installYeaftRuntimeBridge(s) {
   s._dreamResultSink = async (result = {}) => {
     if (result?.trigger !== 'auto') return;
     const normalized = normalizeDreamResult(result);
-    const processed = Array.isArray(result.groups)
-      ? result.groups.filter(g => g && g.status === 'processed' && g.sessionId)
+    const processed = Array.isArray(result.sessions)
+      ? result.sessions.filter(row => row && row.status === 'triaged' && row.sessionId)
       : [];
-    for (const group of processed) {
-      const sessionId = group.sessionId;
+    for (const sessionRow of processed) {
+      const sessionId = sessionRow.sessionId;
       const snapshot = await buildDreamOutputSnapshot(session, sessionId).catch(() => null);
       sendToServer({
         type: 'yeaft_dream_result',
@@ -2230,7 +2221,7 @@ function handleEngineEvent(event, hctx) {
       sendYeaftEvent({
         type: 'memory_adjust',
         turnId: event.turnId,
-        groupKey: event.groupKey,
+        sessionKey: event.sessionKey,
         added: event.added,
         evicted: event.evicted,
         skipped: event.skipped,
@@ -2902,7 +2893,7 @@ async function raceWithEscalation(inner, { deadlineMs, onEscalate }) {
  * itself; the persistent coord lives in `sessionContexts[sessionId]`. Uses
  * `getOrCreateVpEngine(sessionId, vpId)` so each VP runs against its own
  * Engine instance — private state (`#currentAbortCtrl`, `#__queryCounter`,
- * `#pendingT2`, `#abortReason`, `#adjustRanByGroup`, `#execLog`) does not
+ * `#pendingT2`, `#abortReason`, `#adjustRanBySession`, `#execLog`) does not
  * collide when VP-A and VP-B run concurrent turns.
  *
  * @param {{ prompt: string, sessionId: string, vpId: string, turnId: string, envelope: object, vpAbort: AbortController, baseSnapshot: Array }} args
@@ -3523,28 +3514,28 @@ export function __testAppendTurnToSessionHistory(...args) {
  *   { type: 'yeaft_dream_trigger', sessionId }  — per-GROUP trigger (new
  *     in v0.1.754 — added so users can manually kick dream for a group
  *     after seeing the Resident layer stuck on the bootstrap seed).
- *     Fires a scope-filtered pass via `triggerDreamForScopes(['group/X'])`
+ *     Fires a scope-filtered pass via `triggerDreamForScopes(['sessions/X'])`
  *     so unrelated groups don't get processed; the result event is
- *     tagged with `sessionId` for the per-group UI row.
+ *     tagged with `sessionId` for the per-session UI row.
  *
  * Backwards-compat: when neither field is set, defaults to `vpId='default'`
  * which matches the pre-v0.1.754 behavior.
  */
 export function normalizeDreamResult(result) {
-  const groups = Array.isArray(result?.groups) ? result.groups : [];
+  const sessions = Array.isArray(result?.sessions) ? result.sessions : [];
   const targets = Array.isArray(result?.targets) ? result.targets : [];
-  const groupsProcessed = groups.filter(g => g && g.status === 'triaged').length;
-  const skippedGroups = groups.filter(g => g && g.status === 'skipped');
-  const groupsSkipped = skippedGroups.length;
+  const sessionsProcessed = sessions.filter(g => g && g.status === 'triaged').length;
+  const skippedSessions = sessions.filter(g => g && g.status === 'skipped');
+  const sessionsSkipped = skippedSessions.length;
   const targetsApplied = targets.filter(t => t && t.status === 'done').length;
   const targetErrors = targets
     .filter(t => t && t.status === 'error')
     .map(t => ({ target: t.target || null, error: t.error || 'unknown' }));
   const hardError = result?.error || null;
   const explicitSkipped = result?.skipped === true;
-  const skipped = !hardError && (explicitSkipped || (groupsProcessed === 0 && targetsApplied === 0));
+  const skipped = !hardError && (explicitSkipped || (sessionsProcessed === 0 && targetsApplied === 0));
   const skippedReason = skipped
-    ? (result?.skippedReason || skippedGroups[0]?.reason || 'no-targets-applied')
+    ? (result?.skippedReason || skippedSessions[0]?.reason || 'no-targets-applied')
     : null;
   const trigger = result?.trigger || null;
   const success = !hardError && targetErrors.length === 0 && !skipped && targetsApplied > 0;
@@ -3560,8 +3551,8 @@ export function normalizeDreamResult(result) {
     passBreakdown: result?.passBreakdown || result?.metrics?.passBreakdown || null,
     skipped,
     skippedReason,
-    groupsProcessed,
-    groupsSkipped,
+    sessionsProcessed,
+    sessionsSkipped,
     targetsApplied,
     targetErrors,
     entriesCreated: targetsApplied,
@@ -3648,7 +3639,7 @@ export async function handleYeaftDreamTrigger(msg = {}) {
     });
 
     const result = sessionId
-      ? await session.dreamScheduler.triggerDreamForScopes([`group/${sessionId}`])
+      ? await session.dreamScheduler.triggerDreamForScopes([`sessions/${sessionId}`])
       : await session.dreamScheduler.triggerDreamNow();
 
     const normalized = normalizeDreamResult(result);
@@ -3657,7 +3648,7 @@ export async function handleYeaftDreamTrigger(msg = {}) {
       : null;
 
     // Spread `result` FIRST so normalized fields (success, skipped,
-    // skippedReason, groupsProcessed, groupsSkipped, targetsApplied,
+    // skippedReason, sessionsProcessed, sessionsSkipped, targetsApplied,
     // targetErrors, entriesCreated, lastDreamAt) authoritatively shadow
     // anything the runner might grow
     // with the same name. Today there is no collision (runner.js returns

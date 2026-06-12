@@ -9,7 +9,7 @@
  * Two failure modes are exercised:
  *
  *   1. Triage failure — `llm({pass:'triage-pass1'})` throws. The
- *      sink lands at `<root>/group/<id>/.dream-last-error.json` with
+ *      sink lands at `<root>/sessions/<id>/.dream-last-error.json` with
  *      `phase === 'triage'`.
  *
  *   2. Apply failure — triage succeeds but `llm({pass:'update'})`
@@ -17,11 +17,11 @@
  *      The sink lands at `<root>/user/.dream-last-error.json` with
  *      `phase === 'apply'`. Critically, this is the NON-group scope
  *      case — it pins that the sink works for `user/`, `vp/<id>`,
- *      `feature/<id>` too, not just `group/<id>`.
+ *      `feature/<id>` too, not just `sessions/<id>`.
  *
  * Also asserts that the runner does NOT throw on either failure
  * mode — the report is returned with status='error' on the affected
- * group/target. The error sink is observability, not control flow.
+ * session/target. The error sink is observability, not control flow.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -36,7 +36,7 @@ beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'dream-runerr-')); });
 afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
 describe('runDream — error sink wiring', () => {
-  it('writes group/<id>/.dream-last-error.json when triage throws', async () => {
+  it('writes sessions/<id>/.dream-last-error.json when triage throws', async () => {
     const llm = async ({ pass }) => {
       if (pass === 'triage-pass1') throw new Error('LLM returned malformed JSON');
       // Unreachable under this scenario, but keep deterministic.
@@ -56,15 +56,15 @@ describe('runDream — error sink wiring', () => {
     });
 
     // Runner did not throw, and surfaced the failure in the report.
-    const g = r.groups.find(x => x.sessionId === 'grp_fun');
+    const g = r.sessions.find(x => x.sessionId === 'grp_fun');
     expect(g.status).toBe('error');
     expect(g.error).toContain('LLM returned malformed JSON');
 
     // On-disk sink exists with the expected shape.
-    const sink = join(root, 'group', 'grp_fun', '.dream-last-error.json');
+    const sink = join(root, 'sessions', 'grp_fun', '.dream-last-error.json');
     expect(existsSync(sink)).toBe(true);
     const body = JSON.parse(readFileSync(sink, 'utf8'));
-    expect(body.scope).toBe('group/grp_fun');
+    expect(body.scope).toBe('sessions/grp_fun');
     expect(body.phase).toBe('triage');
     expect(body.message).toContain('LLM returned malformed JSON');
     expect(typeof body.at).toBe('string');
@@ -74,14 +74,14 @@ describe('runDream — error sink wiring', () => {
   });
 
   it('writes user/.dream-last-error.json when an apply throws (non-group scope)', async () => {
-    // Triage succeeds with default hard-rule actions (user + group/g +
+    // Triage succeeds with default hard-rule actions (user + sessions/g +
     // possibly vp/...); the failing update is targeted at `user` only.
     const llm = async ({ pass, prompt }) => {
       if (pass === 'triage-pass1') return JSON.stringify({ user_profile_signals: false, topics: [], trivial_only: true });
       if (pass === 'triage-pass2') return JSON.stringify({ decision: 'none' });
       if (pass === 'update' || pass === 'create') {
         // Only blow up on the `user` target. Other targets (e.g.
-        // group/g, vp/zhang-san) succeed so the runner reaches apply
+        // sessions/g, vp/zhang-san) succeed so the runner reaches apply
         // for `user`.
         if (/Scope(?: path)?:\s*user\b/.test(prompt)) {
           throw new Error('apply explosion on user');
@@ -145,7 +145,7 @@ describe('runDream — error sink wiring', () => {
       });
     }
     const body = JSON.parse(
-      readFileSync(join(root, 'group', 'g', '.dream-last-error.json'), 'utf8'),
+      readFileSync(join(root, 'sessions', 'g', '.dream-last-error.json'), 'utf8'),
     );
     // Most-recent-wins: we should see 'second', not 'first'.
     expect(body.message).toContain('triage-second-blew-up');

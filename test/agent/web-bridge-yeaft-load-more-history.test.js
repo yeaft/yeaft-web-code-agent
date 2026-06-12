@@ -45,7 +45,7 @@ import {
 } from '../../agent/yeaft/web-bridge.js';
 import { ConversationStore } from '../../agent/yeaft/conversation/persist.js';
 import { writeSummary } from '../../agent/yeaft/memory/store.js';
-import { writeGroupState } from '../../agent/yeaft/dream/state.js';
+import { writeSessionState } from '../../agent/yeaft/dream/state.js';
 
 let TEST_DIR;
 let sharedStore;
@@ -336,8 +336,8 @@ describe('handleYeaftLoadHistory — pagination cursor priming', () => {
   it('replays the loadable dream output snapshot for the selected session', async () => {
     const gid = 's_dream_snapshot';
     const root = join(TEST_DIR, 'memory');
-    await writeSummary({ kind: 'group', id: gid }, 'dream summary for selected session', { root });
-    await writeGroupState(root, gid, {
+    await writeSummary({ kind: 'session', id: gid }, 'dream summary for selected session', { root });
+    await writeSessionState(root, gid, {
       lastDreamMessageId: 'm-12',
       lastDreamAt: '2026-06-12T02:03:04.000Z',
       messageCount: 12,

@@ -529,7 +529,7 @@ export class DebugTrace {
         const target = typeof data.target === 'string' ? data.target : '';
         if (sessionId) {
           const isBroadcast = !evtGroupId && !target;
-          const isThisGroup = evtGroupId === sessionId || target === `group/${sessionId}` || target === `session/${sessionId}`;
+          const isThisGroup = evtGroupId === sessionId || target === `sessions/${sessionId}`;
           if (!isBroadcast && !isThisGroup) continue;
         }
         dreamEvents.push({

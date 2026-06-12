@@ -19,7 +19,7 @@ describe('mergeByTarget', () => {
         diff: [{ id: 'L1' }],
         actions: [
           { kind: 'update', scope: 'user' },
-          { kind: 'update', scope: 'group/g-life' },
+          { kind: 'update', scope: 'sessions/g-life' },
         ],
       },
       {
@@ -27,13 +27,13 @@ describe('mergeByTarget', () => {
         diff: [{ id: 'E1' }],
         actions: [
           { kind: 'update', scope: 'user' },
-          { kind: 'update', scope: 'group/g-eng' },
-          { kind: 'update', scope: 'group/g-eng/vp/zhang-san' },
+          { kind: 'update', scope: 'sessions/g-eng' },
+          { kind: 'update', scope: 'sessions/g-eng/vp/zhang-san' },
         ],
       },
     ]);
     const targets = merged.map(m => m.target);
-    expect(targets).toEqual(['group/g-eng', 'group/g-eng/vp/zhang-san', 'group/g-life', 'user']);
+    expect(targets).toEqual(['sessions/g-eng', 'sessions/g-eng/vp/zhang-san', 'sessions/g-life', 'user']);
     const userEntry = merged.find(m => m.target === 'user');
     expect(userEntry.sources.map(s => s.sessionId)).toEqual(['g-eng', 'g-life']);
     expect(userEntry.kind).toBe('update');

@@ -1,7 +1,7 @@
 /**
  * dream/state.test.js — §11
  *
- * Per-group .dream-state read/write round-trip + per-scope memory.md
+ * Per-session .dream-state read/write round-trip + per-scope memory.md
  * marker block insertion/replacement.
  */
 
@@ -11,8 +11,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  readGroupState,
-  writeGroupState,
+  readSessionState,
+  writeSessionState,
   readScopeDreamMarker,
   withDreamMarker,
 } from '../../../../agent/yeaft/dream/state.js';
@@ -21,41 +21,34 @@ let root;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'dream-state-')); });
 afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
-describe('group .dream-state', () => {
+describe('session .dream-state', () => {
   it('missing → defaults', async () => {
-    const s = await readGroupState(root, 'g-eng');
+    const s = await readSessionState(root, 'g-eng');
     expect(s).toEqual({ lastDreamMessageId: null, lastDreamAt: null, messageCount: 0 });
   });
   it('write then read round-trip', async () => {
-    await writeGroupState(root, 'g-eng', {
+    await writeSessionState(root, 'g-eng', {
       lastDreamMessageId: 'm-1024', lastDreamAt: '2026-04-28T03:07:00Z', messageCount: 491,
     });
-    expect(await readGroupState(root, 'g-eng')).toEqual({
+    expect(await readSessionState(root, 'g-eng')).toEqual({
       lastDreamMessageId: 'm-1024', lastDreamAt: '2026-04-28T03:07:00Z', messageCount: 491,
-    });
-  });
-  it('reads legacy group .dream-state as fallback', async () => {
-    mkdirSync(join(root, 'group', 'g-legacy'), { recursive: true });
-    writeFileSync(join(root, 'group', 'g-legacy', '.dream-state'), 'lastDreamMessageId: m-1\nlastDreamAt: 2026-01-01T00:00:00Z\nmessageCount: 7\n');
-    expect(await readGroupState(root, 'g-legacy')).toEqual({
-      lastDreamMessageId: 'm-1', lastDreamAt: '2026-01-01T00:00:00Z', messageCount: 7,
     });
   });
   it('null fields persist as empty strings, parsed back as null', async () => {
-    await writeGroupState(root, 'g-x', { lastDreamMessageId: null, lastDreamAt: null, messageCount: 0 });
-    const raw = readFileSync(join(root, 'session', 'g-x', '.dream-state'), 'utf8');
+    await writeSessionState(root, 'g-x', { lastDreamMessageId: null, lastDreamAt: null, messageCount: 0 });
+    const raw = readFileSync(join(root, 'sessions', 'g-x', '.dream-state'), 'utf8');
     expect(raw).toContain('lastDreamMessageId: ');
     expect(raw).toContain('lastDreamAt: ');
     expect(raw).toContain('messageCount: 0');
-    expect(await readGroupState(root, 'g-x')).toEqual({
+    expect(await readSessionState(root, 'g-x')).toEqual({
       lastDreamMessageId: null, lastDreamAt: null, messageCount: 0,
     });
   });
   it('tolerates malformed messageCount', async () => {
-    mkdirSync(join(root, 'group', 'g-bad'), { recursive: true });
-    writeFileSync(join(root, 'group', 'g-bad', '.dream-state'),
+    mkdirSync(join(root, 'sessions', 'g-bad'), { recursive: true });
+    writeFileSync(join(root, 'sessions', 'g-bad', '.dream-state'),
       'lastDreamMessageId: x\nlastDreamAt: 2026-01-01\nmessageCount: not-a-number\n');
-    const s = await readGroupState(root, 'g-bad');
+    const s = await readSessionState(root, 'g-bad');
     expect(s.messageCount).toBe(0);
     expect(s.lastDreamMessageId).toBe('x');
   });

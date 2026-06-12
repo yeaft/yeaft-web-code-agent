@@ -83,7 +83,7 @@ describe('createV2DreamScheduler', () => {
       const r = await sched.triggerDreamNow();
       expect(r).toBeTruthy();
       // No groups → no targets → done event still emitted.
-      expect(r.groups).toEqual([]);
+      expect(r.sessions).toEqual([]);
     } finally {
       sched.shutdown();
     }

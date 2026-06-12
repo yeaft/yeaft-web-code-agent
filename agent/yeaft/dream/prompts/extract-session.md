@@ -2,12 +2,12 @@
 
 You are extracting **memory segments** from a conversation between the
 user and a Yeaft AI companion. This pass focuses on a specific
-**`session/<id>` scope**: long-lived facts about one collaboration session
+**`sessions/<id>` scope**: long-lived facts about one collaboration session
 (a project team, a study cohort, a working set of people/agents).
 
 The target session id is provided as `{{sessionId}}`.
 
-## What to extract for `session/<id>` scope
+## What to extract for `sessions/<id>` scope
 
 - **purpose** — what this session exists to do, its charter / mission
 - **members** — people, VPs, and roles in the session, and what each is

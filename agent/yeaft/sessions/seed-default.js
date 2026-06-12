@@ -83,7 +83,7 @@ export function seedDefaultSession(yeaftDir, spec = {}) {
   // root permission failure must NOT break the bootstrap flow.
   try {
     seedSummaryIfMissingSync(
-      { kind: 'group', id: DEFAULT_SESSION_ID },
+      { kind: 'session', id: DEFAULT_SESSION_ID },
       buildDefaultSessionSeedSummary({ name, roster, defaultVpId }),
       { root: memoryRoot },
     );

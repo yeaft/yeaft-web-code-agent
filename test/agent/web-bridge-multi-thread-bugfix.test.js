@@ -279,20 +279,20 @@ describe('fix-vp-multi-thread bugfix guards', () => {
     }
   });
 
-  it('fetchRecentDebugHistory returns recent persisted dream events scoped to group', async () => {
+  it('fetchRecentDebugHistory returns recent persisted dream events scoped to session', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'debug-trace-test-'));
     const dbPath = join(dir, 'trace.sqlite');
     try {
       const trace = new DebugTrace(dbPath);
       trace.logEvent({ traceId: 'dream-1', eventType: 'dream_progress', eventData: { phase: 'triage', sessionId: 'g1', ts: 100 } });
-      trace.logEvent({ traceId: 'dream-2', eventType: 'dream_progress', eventData: { phase: 'apply', target: 'group/g2', ts: 200 } });
+      trace.logEvent({ traceId: 'dream-2', eventType: 'dream_progress', eventData: { phase: 'apply', target: 'sessions/g2', ts: 200 } });
       trace.logEvent({ traceId: 'dream-3', eventType: 'dream_progress', eventData: { phase: 'done', ts: 300 } });
 
       const out = trace.fetchRecentDebugHistory({ sessionId: 'g1', dreamLimit: 5 });
       expect(out.dreamEvents.map(e => e.phase)).toEqual(['triage', 'done']);
       expect(out.dreamEvents[0]).toEqual(expect.objectContaining({ type: 'dream_progress', sessionId: 'g1' }));
 
-      trace.logEvent({ traceId: 'dream-4', eventType: 'dream_progress', eventData: { phase: 'merge', target: 'session/g1', ts: 400 } });
+      trace.logEvent({ traceId: 'dream-4', eventType: 'dream_progress', eventData: { phase: 'merge', target: 'sessions/g1', ts: 400 } });
       const withSessionTarget = trace.fetchRecentDebugHistory({ sessionId: 'g1', dreamLimit: 5 });
       expect(withSessionTarget.dreamEvents.map(e => e.phase)).toEqual(['triage', 'done', 'merge']);
     } finally {
