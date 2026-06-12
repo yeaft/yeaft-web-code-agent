@@ -72,6 +72,14 @@ db.exec(`
     FOREIGN KEY (used_by) REFERENCES users(id)
   );
 
+  -- 用户全局 LLM 配置（secret 字段在 JSON 内加密保存）
+  CREATE TABLE IF NOT EXISTS user_llm_configs (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    config_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
   -- 用户统计表
   CREATE TABLE IF NOT EXISTS user_stats (
     user_id TEXT PRIMARY KEY REFERENCES users(id),
@@ -100,6 +108,18 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
   CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
   CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
+  -- feat-chat-load-perf: composite covering index for the role='user' filter
+  -- used by getRecentUserMessageIds / getLastUserMessage / getUserMessageIdsBeforeId.
+  -- Pre-fix: SQLite seeks by (session_id) then post-filters every row by role,
+  -- which is hundreds of ms on sessions with thousands of messages. Post-fix:
+  -- direct index seek + reverse scan limited to N user rows. Built in the
+  -- base block (not postMigrationIndexes) because session_id / role / id all
+  -- live in the base CREATE TABLE — there's no migration-column dependency.
+  -- IF NOT EXISTS makes this a one-shot cost on first startup post-deploy; on
+  -- a messages table with hundreds of thousands of rows the build can take
+  -- several seconds, so we time it just below. WAL mode (line 22) lets
+  -- concurrent reads continue during the build; writers will block briefly.
+  CREATE INDEX IF NOT EXISTS idx_messages_session_role_id ON messages(session_id, role, id DESC);
   CREATE INDEX IF NOT EXISTS idx_daily_stats_date ON daily_stats(date);
 `);
 
@@ -122,8 +142,64 @@ const migrations = [
   // (agent-conversation handlers, agent-sync, get_agents) wiped it —
   // letting the per-message auto-title write at
   // `client-conversation.js:351` clobber the user's renamed title.
-  `ALTER TABLE sessions ADD COLUMN is_custom_title INTEGER DEFAULT 0`
+  `ALTER TABLE sessions ADD COLUMN is_custom_title INTEGER DEFAULT 0`,
+  // feat-chat-load-perf: one-shot rebuild sentinel for the `bulkAddHistory`
+  // timestamp-range heuristic in server/db/message-db.js. The heuristic
+  // (when count > 5 and (max_ts - min_ts) < 1000ms) was designed to repair
+  // sessions whose timestamps got bunched by an old anchor-detection bug,
+  // by deleting all rows for the session and re-inserting from the agent's
+  // historyMessages payload. Without a sentinel, every subsequent resume
+  // re-triggers the rebuild (because the rebuild itself produces tightly
+  // spaced `ts = lastTs + 1` values that re-pass the < 1000ms test), so the
+  // user pays a full delete+rebuild on EVERY session open. The sentinel
+  // (Unix-ms stamp at the time of the one and only repair) lets the
+  // heuristic fire exactly once per session for the lifetime of the row.
+  `ALTER TABLE sessions ADD COLUMN ts_rebuilt_at INTEGER DEFAULT 0`
 ];
+
+// Yeaft sessions table — server-side persistence so the unified sidebar
+// can list yeaft sessions across all the user's agents (online or not)
+// and survive reload, mirroring how chat conversations work via the
+// `sessions` table. Schema is deliberately separate because the
+// lifecycle and metadata diverge (roster, defaultVpId, per-session
+// config overrides — none of which are chat concerns).
+const yeaftSessionsTable = `
+  CREATE TABLE IF NOT EXISTS yeaft_sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT REFERENCES users(id),
+    agent_id TEXT NOT NULL,
+    name TEXT,
+    roster_json TEXT,
+    default_vp_id TEXT,
+    work_dir TEXT,
+    config_json TEXT,
+    announcement TEXT,
+    created_at INTEGER,
+    updated_at INTEGER NOT NULL,
+    is_archived INTEGER DEFAULT 0,
+    is_pinned INTEGER DEFAULT 0
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_yeaft_sessions_user ON yeaft_sessions(user_id);
+  CREATE INDEX IF NOT EXISTS idx_yeaft_sessions_agent ON yeaft_sessions(agent_id);
+  CREATE INDEX IF NOT EXISTS idx_yeaft_sessions_updated ON yeaft_sessions(updated_at DESC);
+`;
+db.exec(yeaftSessionsTable);
+
+// Yeaft session schema additions (separate from `migrations` above so the
+// table existence in the CREATE block above is guaranteed before we try
+// to ALTER it). Same try/swallow pattern: ignores "column exists" on
+// fresh DBs that already got the column from CREATE TABLE.
+const yeaftMigrations = [
+  // fix-yeaft-session-list-and-menu: per-session pin state. Lives on the
+  // server so it survives reload / cross-device / agent restart; mirrored
+  // into chatStore.pinnedSessions on the web so sort logic stays unified
+  // between chat and yeaft.
+  `ALTER TABLE yeaft_sessions ADD COLUMN is_pinned INTEGER DEFAULT 0`,
+];
+for (const migration of yeaftMigrations) {
+  try { db.exec(migration); } catch (_) { /* column exists */ }
+}
 
 for (const migration of migrations) {
   try {
@@ -221,9 +297,16 @@ const postMigrationIndexes = [
   `CREATE INDEX IF NOT EXISTS idx_users_agent_secret ON users(agent_secret)`,
   `CREATE INDEX IF NOT EXISTS idx_users_aad_oid ON users(aad_oid)`
 ];
+// Time the post-migration index pass so the operational signal lands in the
+// deploy log on first startup after composite-index addition — a multi-second
+// index build over the messages table should not look like "the server hung".
+// (The composite idx_messages_session_role_id itself was moved into the base
+// CREATE INDEX block above; its first-time cost shows up in the engine init.)
+console.time('[db] postMigrationIndexes');
 for (const idx of postMigrationIndexes) {
   try { db.exec(idx); } catch (e) { /* 索引已存在 */ }
 }
+console.timeEnd('[db] postMigrationIndexes');
 
 // 生成用户级 Agent 密钥
 export function generateAgentSecret() {
@@ -308,6 +391,18 @@ export const stmts = {
     UPDATE users SET aad_oid = ? WHERE id = ?
   `),
 
+  getUserLlmConfig: db.prepare(`
+    SELECT config_json FROM user_llm_configs WHERE user_id = ?
+  `),
+
+  upsertUserLlmConfig: db.prepare(`
+    INSERT INTO user_llm_configs (user_id, config_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET
+      config_json = excluded.config_json,
+      updated_at = excluded.updated_at
+  `),
+
   // Invitation 操作
   insertInvitation: db.prepare(`
     INSERT INTO invitations (id, created_by, created_at, expires_at, role)
@@ -357,8 +452,35 @@ export const stmts = {
     UPDATE sessions SET is_active = ?, updated_at = ? WHERE id = ?
   `),
 
+  // fix-session-dup: transfer a session row to a new owning agent.
+  // Needed when the user resumes a conversation against a different
+  // agent than the one that originally created it — without this,
+  // DB.agent_id keeps pointing at the old agent and on the next
+  // `get_agents` restore (client-conversation.js:`get_agents`) the
+  // conv gets reseated into the OLD agent's in-memory Map alongside
+  // the new owner, which is the server-side root of Bug 2 (one conv
+  // rendered as two sidebar rows with different agent badges).
+  updateSessionAgent: db.prepare(`
+    UPDATE sessions SET agent_id = ?, agent_name = ?, updated_at = ? WHERE id = ?
+  `),
+
   updateSessionPinned: db.prepare(`
     UPDATE sessions SET is_pinned = ?, updated_at = ? WHERE id = ?
+  `),
+
+  // feat-chat-load-perf: one-shot sentinel for the bulkAddHistory timestamp-
+  // rebuild repair path. ts_rebuilt_at = 0 means "never repaired"; non-zero
+  // means "repair already ran at this Unix-ms". The repair is destructive
+  // (DELETE + re-INSERT all rows for the session) so it must run at most once
+  // per session over its lifetime. Statements live in the Session block
+  // because they SELECT/UPDATE the `sessions` table — the bulkAddHistory
+  // call site in server/db/message-db.js is the only consumer today.
+  getSessionTsRebuiltAt: db.prepare(`
+    SELECT ts_rebuilt_at FROM sessions WHERE id = ?
+  `),
+
+  markSessionTsRebuilt: db.prepare(`
+    UPDATE sessions SET ts_rebuilt_at = ? WHERE id = ?
   `),
 
   getSession: db.prepare(`
@@ -443,6 +565,19 @@ export const stmts = {
   getTimestampRange: db.prepare(`
     SELECT MIN(created_at) as min_ts, MAX(created_at) as max_ts, COUNT(*) as count
     FROM messages WHERE session_id = ?
+  `),
+
+  // feat-chat-load-perf: one-shot sentinel for the bulkAddHistory timestamp-
+  // rebuild repair path. ts_rebuilt_at = 0 means "never repaired"; non-zero
+  // means "repair already ran at this Unix-ms". The repair is destructive
+  // (DELETE + re-INSERT all rows for the session) so it must run at most once
+  // per session over its lifetime.
+  getSessionTsRebuiltAt: db.prepare(`
+    SELECT ts_rebuilt_at FROM sessions WHERE id = ?
+  `),
+
+  markSessionTsRebuilt: db.prepare(`
+    UPDATE sessions SET ts_rebuilt_at = ? WHERE id = ?
   `),
 
   getLastUserMessage: db.prepare(`
@@ -549,6 +684,9 @@ export const stmts = {
   deleteUserSessionsByUser: db.prepare(`
     DELETE FROM sessions WHERE user_id = ?
   `),
+  deleteYeaftSessionsByUserCascade: db.prepare(`
+    DELETE FROM yeaft_sessions WHERE user_id = ?
+  `),
   deleteIdentitiesForUser: db.prepare(`
     DELETE FROM user_identities WHERE user_id = ?
   `),
@@ -571,6 +709,58 @@ export const stmts = {
   `),
   deleteUserById: db.prepare(`
     DELETE FROM users WHERE id = ?
+  `),
+
+  // Yeaft session 操作
+  upsertYeaftSession: db.prepare(`
+    INSERT INTO yeaft_sessions
+      (id, user_id, agent_id, name, roster_json, default_vp_id, work_dir,
+       config_json, announcement, created_at, updated_at, is_archived)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      user_id = COALESCE(excluded.user_id, user_id),
+      agent_id = excluded.agent_id,
+      name = excluded.name,
+      roster_json = excluded.roster_json,
+      default_vp_id = excluded.default_vp_id,
+      work_dir = excluded.work_dir,
+      config_json = excluded.config_json,
+      announcement = excluded.announcement,
+      created_at = COALESCE(yeaft_sessions.created_at, excluded.created_at),
+      updated_at = excluded.updated_at,
+      is_archived = excluded.is_archived
+  `),
+
+  getYeaftSession: db.prepare(`
+    SELECT * FROM yeaft_sessions WHERE id = ?
+  `),
+
+  getYeaftSessionsByUser: db.prepare(`
+    SELECT * FROM yeaft_sessions
+    WHERE user_id = ? AND is_archived = 0
+    ORDER BY updated_at DESC
+  `),
+
+  getYeaftSessionsByAgent: db.prepare(`
+    SELECT * FROM yeaft_sessions
+    WHERE agent_id = ? AND is_archived = 0
+    ORDER BY updated_at DESC
+  `),
+
+  deleteYeaftSession: db.prepare(`
+    DELETE FROM yeaft_sessions WHERE id = ?
+  `),
+
+  deleteYeaftSessionsByUser: db.prepare(`
+    DELETE FROM yeaft_sessions WHERE user_id = ?
+  `),
+
+  setYeaftSessionArchived: db.prepare(`
+    UPDATE yeaft_sessions SET is_archived = ?, updated_at = ? WHERE id = ?
+  `),
+
+  setYeaftSessionPinned: db.prepare(`
+    UPDATE yeaft_sessions SET is_pinned = ?, updated_at = ? WHERE id = ?
   `),
 
   // Dashboard 聚合

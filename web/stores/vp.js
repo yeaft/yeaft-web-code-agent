@@ -116,6 +116,18 @@ export const useVpStore = defineStore('vp', {
     emptyLibrary: false,
     lastSnapshotAt: 0,
     /**
+     * fix-session-restore-modal-unify: which agent the last snapshot came
+     * from. Multi-agent deployments need this so callers (e.g.
+     * SessionCreateModal's agent dropdown watcher) can detect when the
+     * cached roster belongs to a *different* agent than the one currently
+     * being targeted, and force a fresh subscribe.
+     *
+     * `null` means we haven't observed a stamped snapshot yet (legacy
+     * single-agent path, or no snapshot received at all).
+     * @type {string|null}
+     */
+    lastVpSnapshotAgentId: null,
+    /**
      * task-334h: last live-diff event observed. Shape:
      *   { vpId: string, kind: 'updated'|'removed', reason: string|null, at: number }
      * Consumers watch this for badge refresh / toast cues without
@@ -220,14 +232,23 @@ export const useVpStore = defineStore('vp', {
   },
 
   actions: {
-    /** Apply a full vp_snapshot payload. Replaces entire collection. */
-    applySnapshot(payload) {
+    /**
+     * Apply a full vp_snapshot payload. Replaces entire collection.
+     *
+     * @param {object} payload — the vp_snapshot event ({ vps[], emptyLibrary })
+     * @param {string|null} [agentId] — fix-session-restore-modal-unify:
+     *   which agent the snapshot came from. Stamped on `lastVpSnapshotAgentId`
+     *   so consumers can detect when their cached roster is from a
+     *   *different* agent than the one currently being targeted.
+     */
+    applySnapshot(payload, agentId = null) {
       this.vps = {};
       this.vpOrder = [];
       const arr = (payload && Array.isArray(payload.vps)) ? payload.vps : [];
       for (const vp of arr) this._upsertInternal(vp);
       this.emptyLibrary = !!(payload && payload.emptyLibrary);
       this.lastSnapshotAt = Date.now();
+      this.lastVpSnapshotAgentId = agentId || null;
     },
 
     /** Insert or merge a single VP record (live-diff — 334h). */
@@ -356,16 +377,17 @@ export const useVpStore = defineStore('vp', {
 
     /**
      * Apply yeaft_dream_status event (status='running' from agent).
-     * Routes by which id field the event carries (vpId vs groupId).
+     * Routes by which id field the event carries (vpId vs sessionId).
+     * Legacy `groupId` is still accepted for older agent builds.
      */
     applyDreamStatus(event) {
       if (!event) return;
-      if (event.groupId) {
-        const groupId = event.groupId;
+      const sessionId = event.sessionId;
+      if (sessionId) {
         this.groupDreamStatus = {
           ...this.groupDreamStatus,
-          [groupId]: {
-            ...(this.groupDreamStatus[groupId] || {}),
+          [sessionId]: {
+            ...(this.groupDreamStatus[sessionId] || {}),
             status: event.status === 'running' ? 'running' : (event.status || 'idle'),
           },
         };
@@ -403,8 +425,8 @@ export const useVpStore = defineStore('vp', {
           : (event.mergedCount ?? event.extractedCount ?? 0),
         skipped,
         skippedReason: event.skippedReason || null,
-        groupsProcessed: typeof event.groupsProcessed === 'number' ? event.groupsProcessed : null,
-        groupsSkipped: typeof event.groupsSkipped === 'number' ? event.groupsSkipped : null,
+        sessionsProcessed: typeof event.sessionsProcessed === 'number' ? event.sessionsProcessed : null,
+        sessionsSkipped: typeof event.sessionsSkipped === 'number' ? event.sessionsSkipped : null,
         targetsApplied: typeof event.targetsApplied === 'number' ? event.targetsApplied : null,
         durationMs: typeof event.durationMs === 'number' ? event.durationMs : null,
         llmCallCount: typeof event.llmCallCount === 'number' ? event.llmCallCount : 0,
@@ -417,11 +439,11 @@ export const useVpStore = defineStore('vp', {
       };
       const lastError = ok || skipped ? null : (event.error || null);
       const status = skipped ? 'skipped' : (ok ? 'success' : 'error');
-      if (event.groupId) {
-        const groupId = event.groupId;
+      const sessionId = event.sessionId;
+      if (sessionId) {
         this.groupDreamStatus = {
           ...this.groupDreamStatus,
-          [groupId]: {
+          [sessionId]: {
             status,
             lastRunAt: Date.now(),
             lastResult: result,

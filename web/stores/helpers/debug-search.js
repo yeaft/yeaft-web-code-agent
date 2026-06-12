@@ -8,7 +8,7 @@
  * Searched fields:
  *   - turn.userPrompt
  *   - turn.vpId
- *   - turn.groupId
+ *   - turn.sessionId (legacy groupId still searched as fallback)
  *   - loops[0].systemPrompt   (constant within a turn — checked once)
  *   - per-loop loop.response  (assistant text)
  *   - per-loop loop.rawRequest.url
@@ -38,6 +38,7 @@ export function turnMatchesSearch(turn, loops, reflections, qLower) {
   };
   if (hit(turn && turn.userPrompt)) return true;
   if (hit(turn && turn.vpId)) return true;
+  if (hit(turn && turn.sessionId)) return true;
   if (hit(turn && turn.groupId)) return true;
   // System prompt is identical across loops within a turn — check once.
   if (loops && loops.length > 0 && hit(loops[0].systemPrompt)) return true;

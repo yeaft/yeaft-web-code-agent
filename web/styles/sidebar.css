@@ -163,6 +163,62 @@
   flex-shrink: 0;
 }
 
+/* Plain iOS-style switch for the Chat ↔ Yeaft sidebar mode flip.
+   Off = neutral track + thumb on the left. On = accent-filled track +
+   thumb slid to the right. No internal icons or labels — the title
+   attribute carries the meaning. */
+.mode-toggle {
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  border-radius: 999px;
+}
+.mode-toggle:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+.mode-toggle.disabled,
+.mode-toggle[disabled] {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.mode-toggle-track {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--bg-input-wrapper);
+  border: 1px solid var(--border-color);
+  transition: background 0.15s, border-color 0.15s;
+}
+.mode-toggle-thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transition: transform 0.18s ease, background 0.15s;
+}
+/* On state: track adopts accent color; thumb turns white and slides.
+   Slide distance = track width (36) − thumb width (16) − 2× 1px border − 2× 1px inset = 16px. */
+.mode-toggle.is-yeaft .mode-toggle-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.mode-toggle.is-yeaft .mode-toggle-thumb {
+  background: var(--accent-fg);
+  transform: translateX(16px);
+}
+.mode-toggle:not(.disabled):not(.is-yeaft):hover .mode-toggle-track {
+  background: var(--sidebar-hover);
+}
+
 /* Sidebar Nav Menu — Copilot style menu items */
 .sidebar-nav {
   display: flex;
@@ -402,6 +458,52 @@
 
 .session-tab.active .session-tab-icon {
   opacity: 1;
+}
+
+/* Single-tab variant (used by Yeaft sidebar, and by Chat sidebar when
+   Crew mode is disabled in Settings). The bar spans full width and
+   drops the active underline + bottom divider — there's nothing to
+   pick between, so the selection affordance only adds noise. */
+.session-tab-bar:has(> .session-tab-solo) {
+  border-bottom: none;
+}
+.session-tab.session-tab-solo {
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 16px 16px 14px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.session-tab.session-tab-solo.active {
+  border-bottom-color: transparent;
+}
+.session-tab.session-tab-solo .session-tab-icon {
+  width: 16px;
+  height: 16px;
+  opacity: 0.85;
+}
+.session-tab.session-tab-solo .session-tab-count {
+  margin-left: 2px;
+  font-size: 12px;
+  padding: 2px 8px;
+}
+.session-tab.session-tab-solo .session-tab-add-btn {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  opacity: 1;
+}
+.session-tab.session-tab-solo .session-tab-add-btn svg {
+  width: 16px;
+  height: 16px;
+}
+/* feat-yeaft-session-restore: when both Create + Restore action buttons
+   sit in the same tab header, only the first (Create) grabs the auto
+   margin — subsequent buttons sit flush next to it with a small gap. */
+.session-tab.session-tab-solo .session-tab-add-btn + .session-tab-add-btn {
+  margin-left: 4px;
 }
 
 .session-tab-count {

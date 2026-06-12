@@ -36,7 +36,7 @@
   "files": [
     "**/*.js",
     "yeaft/templates/**/*.md",
-    "yeaft/dream-v2/prompts/**/*.md"
+    "yeaft/dream/prompts/**/*.md"
   ],
   "license": "MIT",
   "author": "Yeaft",

@@ -50,6 +50,21 @@ export const sessionDb = {
     stmts.updateSessionActive.run(active ? 1 : 0, Date.now(), id);
   },
 
+  /**
+   * fix-session-dup: re-point a session at a different owning agent.
+   * The caller MUST have already removed the conv from the old
+   * agent's in-memory `agent.conversations` Map; this updates the
+   * persisted owner so a future `get_agents` restore re-seats the
+   * conv only on the new agent.
+   *
+   * `agentName` is denormalized in the row (legacy schema), so we
+   * write both columns together to keep them in sync — otherwise
+   * the next `agent_list` broadcast would surface a stale name.
+   */
+  setAgent(id, agentId, agentName) {
+    stmts.updateSessionAgent.run(agentId, agentName ?? null, Date.now(), id);
+  },
+
   setPinned(id, pinned) {
     stmts.updateSessionPinned.run(pinned ? 1 : 0, Date.now(), id);
   },

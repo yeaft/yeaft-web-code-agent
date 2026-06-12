@@ -17,7 +17,7 @@
  */
 
 import { approxTokens, packWithinBudget } from './budget.js';
-import { isVpForeign } from './store-v2.js';
+import { isVpForeign } from './store.js';
 
 const RECENT_DEFAULT_CAPACITY = 64;
 

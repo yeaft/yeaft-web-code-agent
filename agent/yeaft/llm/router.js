@@ -22,7 +22,7 @@
  */
 
 import { LLMAdapter } from './adapter.js';
-import { getThinkingCapability, normalizeEffort } from '../models.js';
+import { getThinkingCapability, normalizeEffort, parseModelRef } from '../models.js';
 import { pairSanitize } from '../pair-sanitize.js';
 
 /**
@@ -106,7 +106,7 @@ export function filterEffortForModel(params) {
     const { effort: _drop, ...rest } = params;
     return rest;
   }
-  const cap = getThinkingCapability(params.model);
+  const cap = getThinkingCapability(parseModelRef(params.model).modelId);
   if (!cap.supportsThinking || cap.thinkingProtocol === 'none') {
     const { effort: _drop, ...rest } = params;
     return rest;
@@ -118,7 +118,7 @@ export function filterEffortForModel(params) {
  * task-715: last-line-of-defense pair sanitize at the wire.
  *
  * `pairSanitize` already runs in two upstream paths
- * (`conversation/persist.js#loadRecentByGroup` and
+ * (`conversation/persist.js#loadRecentBySession` and
  * `history-compact.js#compactHistory`), but the engine's main loop
  * mutates `conversationMessages` AFTER those — appending tool results
  * mid-loop, archiving bulky tool results into stubs, and (in failure
@@ -193,7 +193,21 @@ export class AdapterRouter extends LLMAdapter {
    */
   constructor({ providers }) {
     super();
-    this.#providers = providers;
+    this.#providers = [];
+    this.#modelToProvider = new Map();
+    this.#adapterCache = new Map();
+    this.refreshProviders(providers);
+  }
+
+  /**
+   * Replace the provider/model index after config.json changes. Existing
+   * provider adapters are dropped because credentials, baseUrl, protocol,
+   * or model ownership may have changed along with the list.
+   *
+   * @param {object[]} providers
+   */
+  refreshProviders(providers) {
+    this.#providers = Array.isArray(providers) ? providers : [];
     this.#modelToProvider = new Map();
     this.#adapterCache = new Map();
 
@@ -201,11 +215,15 @@ export class AdapterRouter extends LLMAdapter {
     // model id appears in multiple providers. Each model entry may declare
     // its own `protocol`; we keep the normalized entry so #effectiveProtocol
     // can consult it later without re-parsing.
-    for (const provider of providers) {
+    for (const provider of this.#providers) {
       if (!Array.isArray(provider.models)) continue;
       for (const raw of provider.models) {
         const entry = normalizeModelEntry(raw);
         if (!entry) continue;
+        const ref = provider.name ? `${provider.name}/${entry.id}` : entry.id;
+        if (!this.#modelToProvider.has(ref)) {
+          this.#modelToProvider.set(ref, { provider, entry });
+        }
         if (!this.#modelToProvider.has(entry.id)) {
           this.#modelToProvider.set(entry.id, { provider, entry });
         }
@@ -262,13 +280,13 @@ export class AdapterRouter extends LLMAdapter {
    * Resolve a model ID to its provider's adapter (lazy-created, cached).
    *
    * @param {string} modelId
-   * @returns {Promise<LLMAdapter>}
+   * @returns {Promise<{adapter: LLMAdapter, modelId: string}>}
    */
-  async #resolveAdapter(modelId) {
-    const hit = this.#modelToProvider.get(modelId);
+  async #resolveAdapter(modelRef) {
+    const hit = this.#modelToProvider.get(modelRef);
     if (!hit) {
       throw new Error(
-        `Model "${modelId}" not found in any provider. ` +
+        `Model "${modelRef}" not found in any provider. ` +
         `Available models: ${[...this.#modelToProvider.keys()].join(', ') || '(none)'}. ` +
         `Check your config.json providers[].models arrays.`
       );
@@ -294,7 +312,7 @@ export class AdapterRouter extends LLMAdapter {
     const apiKeyFp = apiKey ? this.#shortFingerprint(apiKey) : 'none';
     const cacheKey = `${provider.name}::${protocol}::${apiKeyFp}`;
     const cached = this.#adapterCache.get(cacheKey);
-    if (cached) return cached;
+    if (cached) return { adapter: cached, modelId: entry.id };
 
     // Token rotation eviction: when a credential provider hands us a NEW
     // fingerprint for the same (provider, protocol) pair, drop the stale
@@ -331,7 +349,7 @@ export class AdapterRouter extends LLMAdapter {
     }
 
     this.#adapterCache.set(cacheKey, adapter);
-    return adapter;
+    return { adapter, modelId: entry.id };
   }
 
   /**
@@ -348,6 +366,11 @@ export class AdapterRouter extends LLMAdapter {
    */
   async #resolveApiKey(provider) {
     const name = provider && provider.credentialProvider;
+    if (name === 'github-copilot' && provider?.githubToken) {
+      const { exchangeToken } = await import('./credentials/github-copilot.js');
+      const exchanged = await exchangeToken(provider.githubToken);
+      return exchanged.token;
+    }
     if (!name) return provider?.apiKey || '';
     const { getCredentialProvider, CREDENTIAL_PROVIDER_NAMES } = await import('./credentials/index.js');
     const cp = getCredentialProvider(name);
@@ -388,8 +411,8 @@ export class AdapterRouter extends LLMAdapter {
   async *stream(params) {
     const filtered = filterEffortForModel(params);
     const sanitized = sanitizeMessagesForWire(filtered);
-    const adapter = await this.#resolveAdapter(sanitized.model);
-    yield* adapter.stream(sanitized);
+    const { adapter, modelId } = await this.#resolveAdapter(sanitized.model);
+    yield* adapter.stream({ ...sanitized, model: modelId });
   }
 
   /**
@@ -401,8 +424,8 @@ export class AdapterRouter extends LLMAdapter {
   async call(params) {
     const filtered = filterEffortForModel(params);
     const sanitized = sanitizeMessagesForWire(filtered);
-    const adapter = await this.#resolveAdapter(sanitized.model);
-    return adapter.call(sanitized);
+    const { adapter, modelId } = await this.#resolveAdapter(sanitized.model);
+    return adapter.call({ ...sanitized, model: modelId });
   }
 
   /**
@@ -423,8 +446,17 @@ export class AdapterRouter extends LLMAdapter {
    */
   listAvailableModels() {
     const result = [];
-    for (const [modelId, hit] of this.#modelToProvider) {
-      result.push({ modelId, providerName: hit.provider.name });
+    const seen = new Set();
+    for (const provider of this.#providers) {
+      if (!Array.isArray(provider.models)) continue;
+      for (const raw of provider.models) {
+        const entry = normalizeModelEntry(raw);
+        if (!entry) continue;
+        const key = `${provider.name}/${entry.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        result.push({ modelId: entry.id, providerName: provider.name });
+      }
     }
     return result;
   }

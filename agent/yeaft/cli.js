@@ -28,7 +28,7 @@ import { join } from 'path';
 import { loadConfig } from './config.js';
 import { DebugTrace } from './debug-trace.js';
 import { loadSession } from './session.js';
-import { listModels, resolveModel, parseModelRef } from './models.js';
+import { listModels, resolveModel, parseModelRef, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
 import { buildSystemPrompt } from './prompts.js';
 import { searchMessages } from './conversation/search.js';
 import { ConversationStore } from './conversation/persist.js';
@@ -488,13 +488,15 @@ async function runREPL(config, args) {
                 session.config.model = modelRef;
               }
 
-              // Re-resolve model info from registry
+              // Re-resolve model info from registry (adapter / baseUrl /
+              // thinking metadata). Token limits come from the resolver
+              // ladder — models.dev snapshot first, config fallback.
               const newModelInfo = resolveModel(session.config.model);
               if (newModelInfo) {
-                session.config.maxContextTokens = newModelInfo.contextWindow;
-                session.config.maxOutputTokens = newModelInfo.maxOutputTokens;
                 session.config.modelInfo = newModelInfo;
               }
+              session.config.maxContextTokens = resolveContextWindow(session.config.model, session.config);
+              session.config.maxOutputTokens = resolveMaxOutputTokens(session.config.model, session.config);
               const providerStr = providerName ? ` (provider: ${providerName})` : '';
               console.log(`Model switched to: ${session.config.model}${providerStr}`);
               console.log('Note: Model change takes effect on next query.');
@@ -765,6 +767,19 @@ async function runOnce(config, args) {
 
 async function main() {
   const args = parseArgs(process.argv);
+
+  // Prime the models.dev community catalog so resolveContextWindow /
+  // resolveMaxOutputTokens — called synchronously from loadConfig and the
+  // engine hot path — can return real per-model limits instead of falling
+  // through to DEFAULT. Failure is non-fatal: stale disk cache or DEFAULT
+  // keeps the CLI usable offline. Mirrors the prime in agent/index.js.
+  try {
+    const { fetchModelsDev } = await import('./llm/models-dev.js');
+    const dir = args.dir || process.env.YEAFT_DIR || null;
+    await fetchModelsDev({ yeaftDir: dir });
+  } catch {
+    // best-effort; resolver falls back to config / DEFAULT.
+  }
 
   // Load config with CLI overrides (for --trace queries and dry-run, no session needed)
   const config = loadConfig({

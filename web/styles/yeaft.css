@@ -35,7 +35,7 @@
 /* When collapsed, hide the full sidebar contents and only show the icon bar.
    Mirrors Chat sidebar behavior so the user can re-expand instead of having
    the sidebar disappear entirely. */
-.yeaft-sidebar.collapsed .us-header-row,
+.yeaft-sidebar.collapsed .sidebar-top,
 .yeaft-sidebar.collapsed .us-scroll,
 .yeaft-sidebar.collapsed .sidebar-bottom {
   display: none;
@@ -212,6 +212,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.yeaft-model-refreshing {
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 .yeaft-model-chevron {
@@ -510,154 +515,8 @@
   to { transform: rotate(360deg); }
 }
 
-/* N1: SessionEditModal — VpCrudModal-aligned overlay + card */
-.group-edit-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.35);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-
-.group-edit-modal {
-  background: var(--bg-main);
-  border: 1px solid var(--border-color);
-  border-radius: 14px;
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
-  width: min(440px, calc(100vw - 32px));
-  display: flex;
-  flex-direction: column;
-  max-height: calc(100vh - 40px);
-  overflow: hidden;
-}
-
-.group-edit-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px 8px;
-  /* Yeaft UI rule: no horizontal dividers — use spacing instead. */
-}
-
-.group-edit-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-  letter-spacing: 0.01em;
-}
-
-.group-edit-close {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 18px;
-  line-height: 1;
-  padding: 4px 8px;
-  border-radius: 6px;
-  transition: background 0.15s, color 0.15s;
-}
-
-.group-edit-close:hover {
-  background: var(--sidebar-hover);
-  color: var(--text-primary);
-}
-
-.group-edit-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 14px;
-}
-
-.group-edit-message {
-  font-size: 13px;
-  color: var(--text-secondary);
-  line-height: 1.5;
-  margin: 0;
-}
-
-.group-edit-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.group-edit-field-label {
-  font-size: 11px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.group-edit-input {
-  font-family: inherit;
-  font-size: 13px;
-  color: var(--text-primary);
-  background: var(--bg-input);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 8px 10px;
-  outline: none;
-}
-
-.group-edit-input:focus {
-  border-color: var(--accent-blue);
-  box-shadow: 0 0 0 2px var(--focus-ring);
-}
-
-.group-edit-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-.group-edit-btn {
-  font-family: inherit;
-  font-size: 12px;
-  color: var(--text-secondary);
-  background: var(--bg-input);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 6px 12px;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-
-.group-edit-btn:hover:not(:disabled) {
-  background: var(--sidebar-hover);
-  color: var(--text-primary);
-}
-
-.group-edit-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.group-edit-btn.is-primary {
-  background: var(--accent);
-  color: var(--bg-main);
-  border-color: var(--accent);
-}
-
-.group-edit-btn.is-primary:hover:not(:disabled) {
-  background: var(--accent-hover);
-  color: var(--bg-main);
-}
-
-.group-edit-btn.is-primary.is-danger {
-  background: var(--error);
-  border-color: var(--error);
-  color: var(--bg-main);
-}
-
-.group-edit-btn.is-primary.is-danger:hover:not(:disabled) {
-  background: var(--error);
-  filter: brightness(1.08);
-}
+/* N1: SessionEditModal CSS removed alongside the standalone modal
+   (replaced by SessionSettingsModal in 2026-05). */
 
 .yeaft-topbar-group-sep {
   height: 1px;
@@ -701,9 +560,14 @@
   color: var(--error);
 }
 
-.yeaft-reload-btn:hover {
+.yeaft-reload-btn:hover:not(:disabled) {
   background: var(--sidebar-hover);
   color: var(--text-primary);
+}
+
+.yeaft-reload-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 /* ── Right Detail Panel ── */
@@ -2259,8 +2123,22 @@
 }
 
 .group-settings-modal {
-  width: min(720px, 100%);
-  max-height: min(640px, 100vh - 48px);
+  /* fix-yeaft-group-settings-fixed-shell — pinned shell.
+   *
+   * Bug: this used `max-height: min(640px, 100vh - 48px)` so the modal
+   * collapsed to its content height. Switching from Members (a long
+   * roster) to 群记忆 (one button + two help lines) snapped the shell
+   * from ~640px down to ~280px, kicking the dialog around the viewport
+   * and burying muscle memory for where the nav items sit.
+   *
+   * Per CLAUDE.md UI rule 3 (设置类弹窗必须给外壳一个固定的宽高比例),
+   * the shell stays at a single fixed size and the pane scrolls inside.
+   * Dimensions match `.settings-dialog` (web/styles/settings.css) so the
+   * group-settings modal has the same visual mass as the global settings
+   * modal — user asked for "和整体的全局设置一样".
+   */
+  width: min(900px, 92vw);
+  height: min(680px, 90vh);
   background: var(--bg-main);
   border: 1px solid var(--border-color);
   border-radius: 12px;
@@ -2306,7 +2184,13 @@
 }
 
 .group-settings-nav {
-  width: 168px;
+  /* fix-yeaft-group-settings-fixed-shell — width bumped from 168px to
+   * 200px to match `.settings-nav` in the global settings modal (the
+   * group-settings shell is now 900px wide, so 168px nav looked
+   * cramped against the wider right pane). The Yeaft rule of "no
+   * sidebar border" (CLAUDE.md UI rule 5) still applies — no
+   * border-right here, unlike global settings. */
+  width: 200px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -2486,14 +2370,17 @@
 }
 
 .group-settings-roster {
+  /* fix-yeaft-group-settings-fixed-shell — drop the inner max-height
+   * cap. With a fixed shell, the pane (`group-settings-pane`) is the
+   * scrolling layer; an inner scroller produced a nested scrollbar
+   * inside the Members tab and wasted the empty vertical space the
+   * fixed shell now reserves. */
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: 320px;
-  overflow-y: auto;
 }
 
 .group-settings-roster-item {
@@ -2952,18 +2839,27 @@
   border-radius: 4px;
   color: var(--text-muted, var(--text-secondary, #888));
   cursor: pointer;
-  /* Hover-revealed (Crew parity). Idle = opacity 0; row-hover or
-     focus-within bumps to 0.7; direct hover bumps to 1 + accent /
-     danger color — see the row-scoped rules below. */
+  /* Hover-revealed (Crew parity). Info button is hidden at rest; the
+     abort sibling overrides this below because it MUST be visible the
+     moment the v-if turns true (a stop button you can't see isn't a
+     stop button). */
   opacity: 0;
   transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+/* Abort visibility: the abort button only renders (`v-if`) when a VP
+   is in an active state. Once rendered it stays full-opacity + danger-
+   tinted regardless of hover — per Rams, hiding the only "stop" the
+   user has behind hover is a discoverability failure. */
+.yeaft-vp-timeline-row .yeaft-vp-timeline-abort {
+  opacity: 1;
+  color: var(--error);
 }
 /* Keyboard-focus styling mirrors hover styling so a keyboard user can
    tell destructive (abort = red) from informational (info = accent)
    without having to read the aria-label. */
 .yeaft-vp-timeline-abort:focus-visible {
-  background: rgba(231, 76, 60, 0.15);
-  color: var(--error-color, #e74c3c);
+  background: var(--error-bg);
+  color: var(--error);
   outline: none;
   opacity: 1;
 }
@@ -2973,16 +2869,18 @@
   outline: none;
   opacity: 1;
 }
-.yeaft-vp-timeline-row:hover .yeaft-vp-timeline-abort,
+/* Row-hover bumps the INFO button from 0 → 0.7. Abort is excluded —
+   it's already at opacity 1 and a lower opacity on hover would dim
+   the most important affordance the moment the user moves toward it
+   (the bug Torvalds caught: 0,0,2,0 specificity overriding 0,0,1,0). */
 .yeaft-vp-timeline-row:hover .yeaft-vp-timeline-info,
-.yeaft-vp-timeline-row:focus-within .yeaft-vp-timeline-abort,
 .yeaft-vp-timeline-row:focus-within .yeaft-vp-timeline-info {
   opacity: 0.7;
 }
 .yeaft-vp-timeline-row .yeaft-vp-timeline-abort:hover {
   opacity: 1;
-  color: var(--error-color, #e74c3c);
-  background: rgba(231, 76, 60, 0.15);
+  color: var(--error);
+  background: var(--error-bg);
 }
 .yeaft-vp-timeline-row .yeaft-vp-timeline-info:hover {
   opacity: 1;
@@ -3384,15 +3282,15 @@
 }
 
 
-/* VP multi-thread summary inside a VP turn block. */
+/* VP multi-thread summary inside the VP message-block header. */
 .vp-thread-summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 24px;
-  margin: 0 0 4px;
-  color: var(--text-secondary, #64748b);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-secondary);
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .vp-thread-summary-collapsed {
@@ -3400,12 +3298,14 @@
 }
 
 .vp-thread-title {
-  color: var(--text-primary, #0f172a);
+  color: var(--text-primary);
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .vp-thread-meta {
-  color: var(--text-tertiary, #94a3b8);
+  color: var(--text-muted);
 }
 
 

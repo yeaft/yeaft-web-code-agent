@@ -89,6 +89,7 @@ export default {
           <!-- Model selector (compact dropdown in topbar) -->
           <div class="yeaft-topbar-model" @click="toggleModelDropdown" :title="$t('yeaft.switchModel')">
             <span class="yeaft-topbar-model-name">{{ topbarModel || $t('settings.llm.selectModel') }}</span>
+            <span v-if="store.yeaftModelsRefreshing" class="yeaft-model-refreshing">{{ $t('common.loading') || 'Loading' }}</span>
             <svg v-if="store.yeaftAvailableModels.length > 1" class="yeaft-model-chevron" :class="{ open: modelDropdownOpen }" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
             <!-- Dropdown -->
             <div class="yeaft-model-dropdown yeaft-topbar-model-dropdown" v-if="modelDropdownOpen && store.yeaftAvailableModels.length > 1" @click.stop>
@@ -109,6 +110,18 @@ export default {
           </div>
 
           <div class="yeaft-topbar-right">
+            <!-- Message reload — replays current Yeaft session history without a full page refresh. -->
+            <button
+              class="yeaft-reload-btn"
+              @click="reloadMessages"
+              :disabled="store.yeaftLoadingMoreHistory"
+              :title="$t('yeaft.reloadMessages')"
+              :aria-label="$t('yeaft.reloadMessages')"
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 15a4 4 0 0 1-4 4H7l-4 4V7a4 4 0 0 1 4-4h5"/><path d="M17 1v6h6"/><path d="M23 7a6 6 0 0 0-6-6"/>
+              </svg>
+            </button>
             <!-- Page reload — always visible, full window.location.reload() -->
             <button
               class="yeaft-reload-btn"
@@ -594,6 +607,10 @@ export default {
       debugMode.value = !debugMode.value;
     };
 
+    const reloadMessages = () => {
+      store.reloadYeaftMessages();
+    };
+
     const reloadPage = () => {
       window.location.reload();
     };
@@ -852,9 +869,15 @@ export default {
     const groupSettingsOpen = Vue.ref(false);
     const groupSettingsId = Vue.ref(null);
     const groupSettingsSection = Vue.ref('announcement');
-    const openGroupSettings = ({ groupId, section = 'announcement' } = {}) => {
-      if (!groupId) return;
-      groupSettingsId.value = groupId;
+    const openGroupSettings = (payload = {}) => {
+      // Accept both { sessionId } (new) and { groupId } (legacy) — child
+      // components were renamed in the msg.groupId→msg.sessionId sweep but
+      // a few legacy callers may still pass either shape during the
+      // deploy window.
+      const sessionId = (payload && (payload.sessionId || payload.groupId)) || null;
+      const section = (payload && payload.section) || 'announcement';
+      if (!sessionId) return;
+      groupSettingsId.value = sessionId;
       groupSettingsSection.value = section;
       groupSettingsOpen.value = true;
     };
@@ -872,9 +895,9 @@ export default {
     // Backwards-compat shim — the empty-group hero, the sidebar kebab,
     // and the invite-modal "open library" CTA still call this. Maps to
     // the Members section of the unified settings modal.
-    const openMemberEditor = (groupId) => {
-      if (!groupId) return;
-      openGroupSettings({ groupId, section: 'members' });
+    const openMemberEditor = (sessionId) => {
+      if (!sessionId) return;
+      openGroupSettings({ sessionId, section: 'members' });
     };
     const topbarGroupName = Vue.computed(
       () => resolveGroupDisplayName(topbarGroup.value),
@@ -882,7 +905,7 @@ export default {
     const openTopbarGroupSettings = () => {
       const g = topbarGroup.value;
       if (!g) return;
-      openGroupSettings({ groupId: g.id, section: 'announcement' });
+      openGroupSettings({ sessionId: g.id, section: 'announcement' });
     };
     // I6: closeMemberEditor shim was unused — dropped. openMemberEditor
     // remains because SessionInviteModal's "open library" CTA still calls
@@ -941,7 +964,7 @@ export default {
       const filter = store.yeaftActiveSessionFilter || gs?.activeSessionId || null;
       if (!filter) return [];
 
-      const group = gs?.groups?.[filter] ?? null;
+      const group = gs?.sessions?.[filter] ?? null;
       const roster = (group && Array.isArray(group.roster)) ? group.roster : [];
       if (roster.length === 0) return [];
       const rosterSet = new Set(roster);
@@ -955,15 +978,16 @@ export default {
       const vpList = selectGroupRosterVpList(roster, vpStore.vpList || []);
 
       // Cross-group leak defense: only include status rows whose
-      // groupId matches the active filter, and whose vpId is in the
-      // active roster. The store keys vpStatuses by `${groupId}::${vpId}`
+      // sessionId matches the active filter, and whose vpId is in the
+      // active roster. The store keys vpStatuses by `${sessionId}::${vpId}`
       // (see chat.js `vpStatusKey`) — iterate values, not keys, since
       // the composite key isn't a usable VP id by itself.
       const rawStatuses = store.vpStatuses || {};
       const scopedStatuses = {};
       for (const entry of Object.values(rawStatuses)) {
         if (!entry || !entry.vpId) continue;
-        if (entry.groupId && entry.groupId !== filter) continue;
+        const entrySessionId = entry.sessionId ?? entry.groupId;
+        if (entrySessionId && entrySessionId !== filter) continue;
         if (!rosterSet.has(entry.vpId)) continue;
         scopedStatuses[entry.vpId] = entry;
       }
@@ -1040,6 +1064,7 @@ export default {
       cancelYeaft,
       toggleSidebar,
       toggleDebug,
+      reloadMessages,
       reloadPage,
       toggleModelDropdown,
       selectModel,

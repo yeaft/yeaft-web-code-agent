@@ -18,16 +18,17 @@
  */
 
 import { randomUUID } from 'crypto';
+import { resolve as resolvePath } from 'path';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes } from './sessions/pre-flow.js';
 import { readProjectDoc, pickProjectDocFile, DEFAULT_PROJECT_DOC_MAX_BYTES } from './sessions/project-doc.js';
-import { shouldConsolidate, partitionMessages } from './memory/consolidate.js';
+import { partitionMessages } from './compact/partition.js';
 import { runCompact as runCompactOrchestrator } from './compact/orchestrator.js';
 import { evaluateCompactTriggers } from './compact/triggers.js';
 import { archiveTurn } from './archive/turn-archive.js';
 import { archiveToolResults } from './archive/tool-results.js';
-import { readSummary as readScopeSummary } from './memory/store-v2.js';
+import { readSummary as readScopeSummary } from './memory/store.js';
 import { runAdjust } from './memory/adjust.js';
 import { isVpSeedBackfillStub } from './memory/seed-backfill.js';
 import { runStopHooks } from './stop-hooks.js';
@@ -36,11 +37,12 @@ import { runStopHooks } from './stop-hooks.js';
 const MAIN_THREAD_ID = 'main';
 import { pickEffort, parseEffortPrefix } from './effort.js';
 import { DEFAULT_CONTEXT_WINDOW, normalizeEffort, resolveContextWindow, resolveModel } from './models.js';
+import { lookupModelLimitSync } from './llm/models-dev.js';
 import { countTurns } from './turn-utils.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
 import { approxTokens } from './memory/budget.js';
-import { truncateToolResultIfNeeded } from './tools/registry.js';
+import { COLLAB_TOOL_POLICY, truncateToolResultIfNeeded } from './tools/registry.js';
 import {
   TOOL_BATCH_SIZE,
   TURN_SUMMARY_THRESHOLD,
@@ -185,7 +187,11 @@ export function shouldAllowGroupReflection({
     };
   }
   const contextWindow = resolveContextWindow(model, config);
-  const hasRegistryContext = !!resolveModel(model)?.contextWindow;
+  // Telemetry: did the resolver hit either of its top non-default rungs?
+  // Used by `usedFallbackContextWindow` below — if neither models.dev nor
+  // the global config provided a number, we fell through to DEFAULT and
+  // callers may want to surface that to the user.
+  const hasModelsDevContext = !!lookupModelLimitSync(model, resolveModel(model)?.provider || null)?.context;
   const hasConfigContext = Number.isFinite(config?.maxContextTokens) && config.maxContextTokens > 0;
   const threshold = Math.floor(contextWindow * GROUP_CONTEXT_PRESSURE_RATIO);
   const tokenEstimate = estimateMessagesTokens(system, messages);
@@ -203,7 +209,7 @@ export function shouldAllowGroupReflection({
     contextWindow,
     ratio: GROUP_CONTEXT_PRESSURE_RATIO,
     turnCount,
-    usedFallbackContextWindow: !hasRegistryContext && !hasConfigContext && contextWindow === DEFAULT_CONTEXT_WINDOW,
+    usedFallbackContextWindow: !hasModelsDevContext && !hasConfigContext && contextWindow === DEFAULT_CONTEXT_WINDOW,
   };
 }
 
@@ -245,7 +251,7 @@ export function shouldAllowGroupReflection({
  * @param {{
  *   sessionId?: string|null,
  *   ownVpId?: string|null,
- *   summaries: { user?: string, group?: string, vp?: string }
+ *   summaries: { user?: string, session?: string, vp?: string }
  * }} args
  * @returns {Array<{scope: string, summary: string}>}
  */
@@ -253,11 +259,20 @@ export function buildResidentEntries(args) {
   const summaries = (args && args.summaries) || {};
   const out = [];
   if (summaries.user) out.push({ scope: 'user', summary: summaries.user });
-  if (args.sessionId && summaries.group) {
-    out.push({ scope: `group/${args.sessionId}`, summary: summaries.group });
+  if (args.sessionId && summaries.session) {
+    out.push({ scope: `sessions/${args.sessionId}`, summary: summaries.session });
   }
-  if (args.ownVpId && summaries.vp && !isVpSeedBackfillStub(summaries.vp)) {
-    out.push({ scope: `vp/${args.ownVpId}`, summary: summaries.vp });
+  // VP per-session isolation (2026-06-09): the VP summary scope MUST be
+  // session-qualified. The legacy bare `vp/<id>` scope was a structural
+    // (see #loadLayerASummaries, kind:'group-vp'), so labelling it `vp/<id>`
+  // in the Resident layer (a) collides with the ACL regex in store
+  // (which only recognises `<root>/<sid>/vp/...`) and (b) makes the same
+  // VP persona leak across DIFFERENT sessions whenever the AMS rehydrates
+  // by id rather than by full scope path. The session-qualified form
+  // makes the per-session boundary explicit and matches the on-disk
+  // layout 1:1.
+  if (args.sessionId && args.ownVpId && summaries.vp && !isVpSeedBackfillStub(summaries.vp)) {
+    out.push({ scope: `sessions/${args.sessionId}/vp/${args.ownVpId}`, summary: summaries.vp });
   }
   return out;
 }
@@ -376,7 +391,7 @@ export class Engine {
    * subsequent turns only run on budget pressure or new memory.
    * @type {Map<string, boolean>}
    */
-  #adjustRanByGroup = new Map();
+  #adjustRanBySession = new Map();
 
   /** @type {string|null} */
   #abortReason = null;
@@ -533,9 +548,9 @@ export class Engine {
    *
    * @returns {import('./llm/adapter.js').UnifiedToolDef[]}
    */
-  #getToolDefs() {
+  #getToolDefs(collabToolPolicy = null) {
     if (this.#toolRegistry) {
-      return this.#toolRegistry.getToolDefs(this.#config?.language || 'en');
+      return this.#toolRegistry.getToolDefs(this.#config?.language || 'en', { collabToolPolicy });
     }
     // Legacy path: no mode filtering
     const defs = [];
@@ -554,30 +569,30 @@ export class Engine {
    *
    * Scopes:
    *   - user           → `user/summary.md`            (always attempted)
-   *   - group <gid>    → `groups/<gid>/summary.md`    (if sessionId)
-   *   - vp <vpId>      → `vp/<vpId>/summary.md`       (if vpId)
+   *   - session <sid>  → `sessions/<sid>/summary.md`   (if sessionId)
+   *   - session-vp     → `sessions/<sid>/vp/<vpId>/summary.md` (if vpId)
    *
    * Each fetch is best-effort — missing files / read errors return ''. The
    * dream tick (Phase 6) is what populates these; on a fresh install they
    * all return ''.
    *
    * @param {{sessionId?: string, vpId?: string, language?: string}} ctx
-   * @returns {Promise<{user:string, group:string, vp:string}>}
+   * @returns {Promise<{user:string, session:string, vp:string}>}
    */
   async #loadLayerASummaries({ sessionId, vpId, language } = {}) {
-    if (!this.#yeaftDir) return { user: '', group: '', vp: '' };
+    if (!this.#yeaftDir) return { user: '', session: '', vp: '' };
     const memoryRoot = `${this.#yeaftDir}/memory`;
     const tasks = [
       readScopeSummary({ kind: 'user' }, { root: memoryRoot, language }).catch(() => ''),
       sessionId
-        ? readScopeSummary({ kind: 'group', id: sessionId }, { root: memoryRoot, language }).catch(() => '')
+        ? readScopeSummary({ kind: 'session', id: sessionId }, { root: memoryRoot, language }).catch(() => '')
         : Promise.resolve(''),
       vpId && sessionId
-        ? readScopeSummary({ kind: 'group-vp', sessionId, id: vpId }, { root: memoryRoot, language }).catch(() => '')
+        ? readScopeSummary({ kind: 'session-vp', sessionId, id: vpId }, { root: memoryRoot, language }).catch(() => '')
         : Promise.resolve(''),
     ];
-    const [user, group, vp] = await Promise.all(tasks);
-    return { user: user || '', group: group || '', vp: vp || '' };
+    const [user, session, vp] = await Promise.all(tasks);
+    return { user: user || '', session: session || '', vp: vp || '' };
   }
 
   /**
@@ -587,30 +602,31 @@ export class Engine {
    * @param {{
    *   sessionId?: string,
    *   ownVpId?: string|null,
-   *   summaries: { user?: string, group?: string, vp?: string },
+   *   summaries: { user?: string, session?: string, vp?: string },
    *   recallEntries: object[],
    * }} args
    * @returns {{
    *   ams: import('./memory/ams.js').ActiveMemorySet,
-   *   groupKey: string,
+   *   sessionKey: string,
    *   ownVpId: string|null,
    *   scopes: string[],
    *   snapshotBlock: string,
+ *   residentEntries: Array<{scope:string, summary:string}>,
    * } | null}
    */
   #prepareAms(args) {
     if (!this.#amsRegistry) return null;
-    const groupKey = args.sessionId || 'default';
+    const sessionKey = args.sessionId || 'default';
     const ownVpId = args.ownVpId || null;
-    const ams = this.#amsRegistry.getOrCreate(groupKey, { ownVpId });
+    const ams = this.#amsRegistry.getOrCreate(sessionKey, { ownVpId });
 
-    // Prime #adjustRanByGroup from disk-hydrated state on first access:
+    // Prime #adjustRanBySession from disk-hydrated state on first access:
     // a reactivated group resumes with whatever adjustRanThisSession bit
     // it had on disconnect, so we don't burn a fresh adjust on every
     // reload. Once set true in this session we never clear it.
-    if (!this.#adjustRanByGroup.has(groupKey)
-        && this.#amsRegistry.adjustRanThisSession(groupKey)) {
-      this.#adjustRanByGroup.set(groupKey, true);
+    if (!this.#adjustRanBySession.has(sessionKey)
+        && this.#amsRegistry.adjustRanThisSession(sessionKey)) {
+      this.#adjustRanBySession.set(sessionKey, true);
     }
 
     // (a) Resident: rebuild from the same scope summaries the worker
@@ -634,7 +650,7 @@ export class Engine {
       vpId: ownVpId,
     });
 
-    return { ams, groupKey, ownVpId, scopes, snapshotBlock };
+    return { ams, sessionKey, ownVpId, scopes, snapshotBlock, residentEntries };
   }
 
   /**
@@ -689,7 +705,7 @@ export class Engine {
    * surface as a turn failure.
    *
    * @param {{
-   *   amsContext: { ams: import('./memory/ams.js').ActiveMemorySet, groupKey: string, ownVpId: string|null, scopes: string[] }|null,
+   *   amsContext: { ams: import('./memory/ams.js').ActiveMemorySet, sessionKey: string, ownVpId: string|null, scopes: string[] }|null,
    *   userMsg: string,
    *   assistantReply: string,
    *   turnTokenUsage: number,
@@ -702,7 +718,7 @@ export class Engine {
     const totalBudget = ctx.ams.budget?.total || 0;
     if (!totalBudget) return null;
 
-    const adjustRanThisSession = this.#adjustRanByGroup.get(ctx.groupKey) === true;
+    const adjustRanThisSession = this.#adjustRanBySession.get(ctx.sessionKey) === true;
     try {
       const result = await runAdjust({
         trigger: {
@@ -729,12 +745,12 @@ export class Engine {
         },
       });
       if (result?.ran) {
-        this.#adjustRanByGroup.set(ctx.groupKey, true);
+        this.#adjustRanBySession.set(ctx.sessionKey, true);
         // Always persist when we ran — even with no membership change,
         // the adjustRanThisSession bit is part of the on-disk state we
         // want to preserve.
-        this.#amsRegistry.markDirty(ctx.groupKey);
-        this.#amsRegistry.persist(ctx.groupKey, {
+        this.#amsRegistry.markDirty(ctx.sessionKey);
+        this.#amsRegistry.persist(ctx.sessionKey, {
           adjustRanThisSession: true,
         });
       }
@@ -877,7 +893,17 @@ export class Engine {
     return {
       signal,
       yeaftDir: this.#yeaftDir,
-      cwd: process.cwd(),
+      // Group-scoped working directory. Threaded from #runQuery({ workDir })
+      // → set by web-bridge runVpTurn from sessionMeta.workDir. Tools read
+      // `ctx.cwd` and resolve relative paths against it. Always absolute
+      // (path.resolve normalizes relative inputs + trailing slashes) so
+      // tools that string-concatenate don't accidentally walk from
+      // process.cwd(). Falls back to process.cwd() in non-group / test
+      // contexts.
+      cwd: (() => {
+        const raw = typeof vpCtx?.workDir === 'string' ? vpCtx.workDir.trim() : '';
+        return raw ? resolvePath(raw) : process.cwd();
+      })(),
       mcpManager: this.#mcpManager,
       skillManager: this.#skillManager,
       conversationStore: this.#conversationStore,
@@ -1096,7 +1122,7 @@ export class Engine {
     // Per-(group, vp) scoping: when this engine is bound to a fan-out VP
     // (the common case in group mode), load only the rows THIS VP saw in
     // its context — user prompts + every VP's assistant text, with other
-    // VPs' tool calls/results stripped (see persist.loadGroupHistoryForVp).
+    // VPs' tool calls/results stripped (see persist.loadSessionHistoryForVp).
     //
     // Legacy / sub-agent callers (no sessionId/vpId pair) keep the global
     // loadAll() behaviour so we don't break those flows.
@@ -1104,12 +1130,12 @@ export class Engine {
     const scopedChat = !!(this.#chatId && this.#vpId
       && typeof conversationStore.loadChatHistoryForVp === 'function');
     const scoped = !scopedChat && !!(this.#sessionId && this.#vpId
-      && typeof conversationStore.loadGroupHistoryForVp === 'function');
+      && typeof conversationStore.loadSessionHistoryForVp === 'function');
     try {
       messages = scopedChat
         ? conversationStore.loadChatHistoryForVp(this.#chatId, this.#vpId)
         : scoped
-          ? conversationStore.loadGroupHistoryForVp(this.#sessionId, this.#vpId)
+          ? conversationStore.loadSessionHistoryForVp(this.#sessionId, this.#vpId)
           : conversationStore.loadAll();
     } catch { return null; }
     if (!Array.isArray(messages) || messages.length === 0) return null;
@@ -1310,7 +1336,7 @@ export class Engine {
    *   string-prompt shape (no regression for existing callers).
    * @yields {EngineEvent}
    */
-  async *query({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null } = {}) {
+  async *query({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null, collabToolPolicy = null } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       yield {
         type: 'error',
@@ -1336,6 +1362,9 @@ export class Engine {
     const parsed = parseEffortPrefix(prompt);
     const effectivePrompt = parsed.cleanedPrompt;
     const effectiveUserEffort = normalizeEffort(userEffort) || parsed.effort || null;
+    const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
+      ? collabToolPolicy
+      : null;
 
     // ─── task-325a: engine-owned AbortController ─────────────
     // We create our own controller for this query run so `engine.abort()`
@@ -1370,7 +1399,7 @@ export class Engine {
 
     try {
       this.#currentThreadId = threadId || MAIN_THREAD_ID;
-      yield* this.#runQuery({ prompt: effectivePrompt, promptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted, getCurrentTodos, setCurrentTodos, threadId: this.#currentThreadId, drainPendingUserMessages });
+      yield* this.#runQuery({ prompt: effectivePrompt, promptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted, getCurrentTodos, setCurrentTodos, threadId: this.#currentThreadId, drainPendingUserMessages, collabToolPolicy: effectiveCollabToolPolicy });
     } finally {
       if (signal) {
         try { signal.removeEventListener('abort', onExternalAbort); } catch { /* ignore */ }
@@ -1390,7 +1419,11 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null }) {
+  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null, collabToolPolicy = null }) {
+
+    const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
+      ? collabToolPolicy
+      : null;
 
     // ─── Pre-query: FTS5 Memory Recall + AMS snapshot ─────
     // Memory has a SINGLE render outlet now (DESIGN-PROMPT §3 ③):
@@ -1449,6 +1482,25 @@ export class Engine {
       memoryInjection = amsContext.snapshotBlock;
     }
 
+    // Diagnostic payload for the Dream debug panel. The full AMS Resident
+    // layer can include user and per-VP summaries, but the browser-facing
+    // Dream prompt-load view only needs to prove the active session Dream
+    // summary entered `system_prompt.memory`. Keep the payload scoped to the
+    // exact session resident to avoid leaking unrelated resident summaries into
+    // frontend state. The full system prompt remains visible in the existing
+    // debug-only system-prompt panel.
+    const activeGroupDreamScope = sessionId ? `sessions/${sessionId}` : null;
+    const dreamResidentLoaded = amsContext && Array.isArray(amsContext.residentEntries)
+      ? amsContext.residentEntries
+        .filter(e => e && e.scope === activeGroupDreamScope && e.summary)
+        .map(e => ({
+          scope: e.scope,
+          summary: String(e.summary).slice(0, 4000),
+          truncated: String(e.summary).length > 4000,
+          source: 'resident-summary',
+        }))
+      : [];
+
     // ─── Active Scope (DESIGN-PROMPT §3 ④) ──────────────────────
     // Structured per-turn scope summary: group + vp + envelope routing
     // info. Long-form scope content lives in AMS — this block carries
@@ -1470,6 +1522,23 @@ export class Engine {
       projectDoc,
     });
 
+    // ─── HARD INVARIANT: Compact ≠ Dream (read DESIGN-COMPACT-VS-DREAM.md) ─
+    // Compact summary (this block) ONLY lands in the messages array head as
+    // a `<conversation_summary>` user/assistant pair. It MUST NEVER appear
+    // in the system prompt — that was the bug DESIGN-PROMPT §4.3 banned.
+    //
+    // Inversely: Dream V2's output (per-scope `memory.md` / `summary.md`)
+    // flows exclusively through `prompts.js#buildSystemPrompt`'s §6 Memory
+    // section via the AMS Resident layer (see `engine.js#buildResidentEntries`).
+    // It MUST NEVER appear in the messages array.
+    //
+    // Two write roots, two scheduler triggers, two prompt slots — never
+    // mixed. Anyone touching this section must read
+    // `agent/yeaft/DESIGN-COMPACT-VS-DREAM.md` before changing the wiring;
+    // the boundary has been violated twice in this codebase's history and
+    // each time it took an LLM cache-thrash + persona-dup follow-up PR to
+    // unwind.
+    //
     // ─── Compact summary as messages-array head (DESIGN-PROMPT §4.3) ─
     // The previous code placed the compact summary inside the system
     // prompt; that broke prompt-cache hit-rate (any compact update
@@ -1609,7 +1678,18 @@ export class Engine {
       };
     }
 
-    const toolDefs = this.#getToolDefs();
+    if (dreamResidentLoaded.length > 0) {
+      yield {
+        type: 'dream_memory_loaded',
+        turnId: queryTurnId,
+        vpId: queryVpId,
+        sessionId: sessionId || null,
+        loadedInto: 'system_prompt.memory',
+        resident: dreamResidentLoaded,
+      };
+    }
+
+    const toolDefs = this.#getToolDefs(effectiveCollabToolPolicy);
     let turnNumber = 0;
     let continueTurns = 0; // auto-continue counter
     let toolLoopTurns = 0; // task-327b: tool-use turns for long-loop auto-bump
@@ -2143,6 +2223,7 @@ export class Engine {
             // history replay can re-stamp them on reload.
             sessionId,
             threadId,
+            vpId: this.#vpId,
             // Multi-VP fan-out (history-dedup): skip the user-row append
             // in stop-hooks when the orchestrator already wrote it once
             // for this turn. The hook still persists assistant + tool
@@ -2178,7 +2259,7 @@ export class Engine {
               type: 'memory_adjust',
               turnId: queryTurnId,
               threadId,
-              groupKey: amsContext.groupKey,
+              sessionKey: amsContext.sessionKey,
               added: adjustResult.added,
               evicted: adjustResult.evicted,
               skipped: adjustResult.skipped || 0,
@@ -2266,6 +2347,7 @@ export class Engine {
         contextWindow: currentContextWindow,
         getCurrentTodos,
         setCurrentTodos,
+        workDir,
         requestEndTurn: (reason) => {
           // First call wins — preserve the kind/reason of the first tool
           // that asked to end the turn. Late callers (a second
@@ -2330,7 +2412,7 @@ export class Engine {
 
         // Resolve tool: prefer ToolRegistry, fallback to legacy #tools Map
         const hasTool = this.#toolRegistry
-          ? this.#toolRegistry.has(tc.name)
+          ? this.#toolRegistry.isAllowed(tc.name, { collabToolPolicy: effectiveCollabToolPolicy })
           : this.#tools.has(tc.name);
 
         if (!hasTool) {
@@ -2344,7 +2426,14 @@ export class Engine {
               output = await this.#toolRegistry.execute(tc.name, tc.input, toolCtx);
             } else {
               const tool = this.#tools.get(tc.name);
-              const rawOutput = await tool.execute(tc.input, { signal });
+              // Pass the full toolCtx (cwd, workDir, signal, …) — not just
+              // `{ signal }`. Legacy registerTool() callers historically got
+              // a 1-field ctx, but that means tools like bash/file-read run
+              // in the agent process cwd instead of the group's workDir.
+              // Real production goes through #toolRegistry; the legacy path
+              // is exercised by tests and a few standalone tools. Aligning
+              // both paths keeps `ctx.cwd` semantics consistent.
+              const rawOutput = await tool.execute(tc.input, toolCtx);
               // Legacy #tools branch must apply the same per-tool cap as
               // ToolRegistry.execute. Otherwise a deployment using the legacy
               // registration path bypasses the defense entirely.

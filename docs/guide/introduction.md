@@ -1,98 +1,86 @@
-# What is Claude Web Chat?
+# What is Yeaft?
 
-Claude Web Chat is a web interface for remotely accessing [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — providing multi-machine management, end-to-end encryption, and multi-role collaboration.
+**Yeaft** is a **multi-provider AI collaboration platform** — a web UI on the front, with Claude Code CLI, GitHub Copilot CLI, or Yeaft's own multi-VP engine behind it. One interface, three backends, switch as your task demands.
 
 ![Screenshot](/images/hero.jpg)
 
-## Key Features
+## Three Backends, Each Has Its Strengths
 
-### Chat
+Yeaft doesn't lock you to a single AI backend. When you start a new session you pick:
 
-ChatGPT-style conversational interface with real-time tool tracking, session management, and file uploads.
+| Backend | Best for | Details |
+| --- | --- | --- |
+| **Claude Code** | 1:1 chat with the full Claude toolset | [Chat Mode](./user/chat-mode.md) |
+| **Copilot** | Same 1:1 shape but via GitHub Copilot CLI (ACP), pick any Claude / GPT model | [Copilot Mode](./user/copilot-mode.md) |
+| **Yeaft Sessions** | Multi-VP group collaboration, parallel fan-out, cross-session persistent memory | [Yeaft Sessions](./user/yeaft-group.md) |
 
-- Real-time streaming of Claude responses
-- Visual display of Read, Edit, Bash, and other tool executions
-- Slash commands (`/model`, `/memory`, `/skills`, etc.) with autocomplete
-- `/btw` side questions — ask Claude a quick follow-up without interrupting the current task
-- Sub-agent panel — monitor and inspect nested agent tool calls in real time
-- Session persistence with SQLite-backed history
-- Session pinning — pin important conversations to the top of the sidebar
-- Drag-and-drop file/image attachments
-- Dark / light theme with one-click toggle
-- Bilingual interface (English / Chinese) with runtime language switching
-- Mobile-responsive layout
+Not sure which? See [Choose a Session Backend](./user/choose-backend.md).
+
+## Core Capabilities
+
+### 💬 Multi-mode chat
+- ChatGPT-style UI, streaming output
+- Live tool execution visualization (Read / Edit / Bash / WebFetch, etc.)
+- Slash commands + autocomplete
+- Drag-drop file / image attachments
+- Bilingual UI (English / 中文) + dark / light theme
 
 ![Chat](/images/chat.jpg)
 
-### Split Screen
+### 👥 Yeaft Sessions
+- Create a group, drop multiple VPs (Virtual Persons, independently configurable persona / model / tools)
+- `@mention` decides which VPs handle the message — parallel fan-out
+- Cross-session persistent memory (H2-AMS) — VPs remember what you said last time
+- Explicit VP→VP handoff (`route_forward` tool)
 
-Open multiple conversations side by side — up to 3 panels at once.
+### 🧠 Expert Panel
+AI expert teams in a side panel that assist your main conversation.
+- Multiple pre-built expert teams
+- Chip-style team switcher
+- Runs alongside main chat without interrupting
 
-- Split any session into a new panel from the sidebar
-- Each panel is a fully independent conversation view
-- Active-panel focus indicator for keyboard and sidebar interaction
-- Panels can be closed individually; closing all returns to single-panel mode
-
-### Expert Panel
-
-AI expert teams that assist your conversations — select a team (e.g. Writing, Trading) and get multi-perspective advice in a side panel.
-
-- Multiple pre-built expert teams with specialized roles
-- Expert responses appear in a collapsible side panel
-- Team selection via chip-style tabs
-- Works alongside normal chat without interrupting the flow
-
-### Crew (Multi-Agent Collaboration)
-
-Multi-role AI team collaboration with PM, Developer, Reviewer, and Tester roles working together on features.
-
-- Automated task routing between roles via ROUTE protocol
-- Feature progress tracking panel with real-time status (streaming pulse animation)
-- Role-based message grouping with decision-maker messages in main stream
-- Parallel multi-agent execution across multiple worktrees
-- Feature completion detection with auto-reactivation on new activity
-- AskUserQuestion interactive cards — agents can prompt the user for decisions mid-task
-- Typing indicator with event-driven health monitoring (agent offline / session lost / compacting)
+### 👷 Crew Multi-Role
+PM / dev / reviewer / tester / architect / designer running features in parallel.
+- ROUTE protocol routes between roles
+- Feature board + kanban status
+- Parallel execution across worktrees
+- ask-user cards interrupt for decisions
 
 ![Crew Features](/images/crew-features.jpg)
 
-![Crew Feature Detail](/images/crew-feature-detail.jpg)
-
-### Workbench
-
-Integrated development environment with terminal, Git operations, file browser, and port proxy.
-
-- Full terminal emulator (xterm.js) with PTY support
-- Git status, diff viewer, and branch management
-- File browser with CodeMirror editor
-- Port proxy: forward agent local ports to your browser
+### 🖥️ Split Screen + Workbench
+- **Split screen**: up to 3 panels showing different sessions at once
+- **Workbench**: terminal / Git / files / port proxy, all in one
 
 ![Workbench](/images/workbench.jpg)
 
-### Admin Dashboard
-
-Usage statistics and system monitoring for administrators.
-
-- User activity metrics with time-based filtering (today/week/month)
-- Per-user usage breakdown (messages, sessions, requests, traffic)
-- Connected agent status and latency monitoring
-- Mobile-responsive card layout
+### 📊 Admin Dashboard
+User activity / agent status / traffic stats.
 
 ![Dashboard](/images/dashboard.jpg)
 
 ## Prerequisites
 
-- **Server**: Node.js >= 18, Docker (recommended for production)
-- **Agent**: Node.js >= 18, [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
-- **Web Client**: Modern browser (Chrome, Firefox, Safari, Edge)
+- **Server**: Node.js >= 22.5, Docker recommended for production
+- **Agent**: Node.js >= 22.5, plus:
+  - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (required for Claude Chat mode)
+  - [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) (optional, required for Copilot mode)
+  - Yeaft engine is bundled in the npm package — **no extra CLI needed**
+- **Web Client**: Modern browser (Chrome / Firefox / Safari / Edge)
 
 ## Tech Stack
 
 - **Server**: Node.js, Express, ws, node:sqlite, compression
 - **Frontend**: Vue 3, Pinia, xterm.js, CodeMirror 5, marked, highlight.js
-- **Build**: esbuild (frontend bundling)
+- **Build**: esbuild
 - **Testing**: Vitest (2,700+ unit/integration tests), Playwright (E2E)
 - **Encryption**: TweetNaCl (XSalsa20-Poly1305)
 - **Auth**: JWT, bcrypt, speakeasy (TOTP), nodemailer
 - **Docs**: VitePress
 - **Deploy**: Docker multi-stage build
+
+## What's Next
+
+- Never installed → [Getting Started](./getting-started.md)
+- Picking a backend → [Choose a Session Backend](./user/choose-backend.md)
+- Understanding the architecture → [Architecture Overview](./tech/architecture.md)

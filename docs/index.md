@@ -2,12 +2,12 @@
 layout: home
 
 hero:
-  name: Claude Web Chat
-  text: Remote Access to Claude Code CLI
-  tagline: Multi-machine management, end-to-end encryption, multi-role collaboration
+  name: Yeaft
+  text: Multi-Provider AI Collaboration
+  tagline: One web interface, three backends — Claude Code · GitHub Copilot · Yeaft Sessions
   image:
     src: /images/hero.jpg
-    alt: Claude Web Chat
+    alt: Yeaft
   actions:
     - theme: brand
       text: Try it Online
@@ -21,31 +21,35 @@ hero:
 
 features:
   - icon: 💬
-    title: Chat
-    details: ChatGPT-style conversational interface with real-time tool tracking, session management, and file uploads.
-    link: /guide/features-chat
+    title: Chat (Claude Code)
+    details: ChatGPT-style 1:1 conversation backed by Claude Code CLI — streaming, slash commands, file attachments, sub-agent monitoring.
+    link: /guide/user/chat-mode
+  - icon: 🪄
+    title: Copilot Mode
+    details: GitHub Copilot CLI as the backend (ACP protocol) — same interface, pick any Claude / GPT model.
+    link: /guide/user/copilot-mode
+  - icon: 👥
+    title: Yeaft Sessions
+    details: Multi-VP group collaboration — @mention drives fan-out, cross-session persistent memory, explicit VP→VP handoff.
+    link: /guide/user/yeaft-group
   - icon: 🖥️
     title: Split Screen
-    details: Open multiple conversations side by side — up to 3 panels at once with independent views and active-panel focus.
-    link: /guide/features-split-screen
+    details: Up to 3 panels side by side — mix backends (one Claude + one Copilot + one Yeaft Sessions).
+    link: /guide/user/split-screen
   - icon: 🧠
     title: Expert Panel
-    details: AI expert teams assist your conversations — select a team and get multi-perspective advice in a side panel.
-    link: /guide/features-expert-panel
-  - icon: 👥
-    title: Crew
-    details: Multi-role AI team collaboration with PM, Developer, Reviewer, and Tester roles working together on features.
-    link: /guide/features-crew
-  - icon: 📊
-    title: Dashboard
-    details: Admin usage statistics and system monitoring with per-user breakdown and agent status tracking.
-    link: /guide/features-dashboard
+    details: AI expert team in a side panel — pick a team, get multi-perspective advice without interrupting the main chat.
+    link: /guide/user/expert-panel
+  - icon: 👷
+    title: Crew Multi-Role
+    details: PM / dev / reviewer / tester running features in parallel — ROUTE protocol, kanban board, cross-worktree execution.
+    link: /guide/user/crew
   - icon: 🛠️
     title: Workbench
-    details: Integrated development environment with terminal, Git operations, file browser, and port proxy.
-    link: /guide/features-workbench
+    details: Terminal / Git / files / port proxy — the agent machine's dev environment piped right into the browser.
+    link: /guide/user/workbench
   - icon: 🔒
     title: Security
-    details: End-to-end encryption with TweetNaCl, multi-layer authentication (password + TOTP + email), per-user agent secrets.
+    details: TweetNaCl end-to-end encryption, multi-layer auth (password + TOTP + email), per-user agent secret + Yeaft credential 2FA.
     link: /guide/security
 ---

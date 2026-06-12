@@ -12,6 +12,27 @@
 import { formatSize } from '../archive/tool-results.js';
 
 /**
+ * Collaboration tools are mutually exclusive per Yeaft group shape:
+ * single-VP groups use sub-agents; multi-VP groups use VP-to-VP forwarding.
+ * Keep the policy names close to the tool registry so LLM exposure and
+ * execution gating use the same source of truth.
+ */
+export const COLLAB_TOOL_POLICY = Object.freeze({
+  SINGLE_VP: 'single-vp',
+  MULTI_VP: 'multi-vp',
+});
+
+export const SUB_AGENT_TOOL_NAMES = Object.freeze([
+  'SpawnAgent',
+  'PromptAgent',
+  'WaitAgent',
+  'CloseAgent',
+  'ListAgents',
+]);
+
+export const FORWARD_TOOL_NAMES = Object.freeze(['RouteForward']);
+
+/**
  * Per-tool-result hard cap.
  *
  * A single tool can return megabytes (a grep over a large repo, a large file
@@ -208,6 +229,20 @@ function runWithTimeout(promise, timeoutMs, toolName) {
   });
 }
 
+export function normalizeCollabToolPolicy(policy) {
+  if (policy === COLLAB_TOOL_POLICY.SINGLE_VP || policy === COLLAB_TOOL_POLICY.MULTI_VP) {
+    return policy;
+  }
+  return null;
+}
+
+export function isToolHiddenByCollabPolicy(toolName, policy) {
+  const normalized = normalizeCollabToolPolicy(policy);
+  if (!normalized) return false;
+  if (normalized === COLLAB_TOOL_POLICY.SINGLE_VP) return FORWARD_TOOL_NAMES.includes(toolName);
+  return SUB_AGENT_TOOL_NAMES.includes(toolName);
+}
+
 export class ToolRegistry {
   /** @type {Map<string, import('./types.js').ToolDef>} */
   #tools = new Map();
@@ -293,17 +328,36 @@ export class ToolRegistry {
 
   /**
    * Get tool definitions for the LLM adapter.
-   * Returns all registered tools — mode filtering was removed in task-297.
+   * Returns all registered tools unless a collaboration policy hides one of
+   * the mutually-exclusive orchestration tool families.
    * @param {string} [language='en']
+   * @param {{ collabToolPolicy?: string }} [opts]
    * @returns {{ name: string, description: string, parameters: object }[]}
    */
-  getToolDefs(language = 'en') {
+  getToolDefs(language = 'en', opts = {}) {
     const lang = normalizeLanguage(language);
-    return this.getAllTools().map(t => ({
-      name: t.name,
-      description: localizeVisibleText(t.description, lang, t.name),
-      parameters: localizeParameters(t.parameters, lang, t.name),
-    }));
+    const collabToolPolicy = normalizeCollabToolPolicy(opts?.collabToolPolicy);
+    return this.getAllTools()
+      .filter(t => !isToolHiddenByCollabPolicy(t.name, collabToolPolicy))
+      .map(t => ({
+        name: t.name,
+        description: localizeVisibleText(t.description, lang, t.name),
+        parameters: localizeParameters(t.parameters, lang, t.name),
+      }));
+  }
+
+  /**
+   * Check whether a tool may be called under the current collaboration policy.
+   * Unknown / absent policy keeps the historical behavior: all registered
+   * tools remain callable.
+   * @param {string} name
+   * @param {{ collabToolPolicy?: string }} [opts]
+   * @returns {boolean}
+   */
+  isAllowed(name, opts = {}) {
+    const tool = this.#tools.get(name);
+    if (!tool) return false;
+    return !isToolHiddenByCollabPolicy(tool.name, opts?.collabToolPolicy);
   }
 
   /**
@@ -358,6 +412,48 @@ export class ToolRegistry {
   /** All registered tool names (canonical only; aliases excluded). */
   get names() {
     return this.getAllTools().map(t => t.name);
+  }
+
+  /**
+   * Hot-swap the flattened MCP tool set.
+   *
+   * Removes every currently registered tool whose canonical name starts
+   * with `mcp__` (the flattened MCP tool naming convention used by
+   * `buildMcpFlattenedTools()`), then re-registers a fresh set built from
+   * the live MCPManager. Called by the MCP web-bridge after a successful
+   * connect/disconnect/reload so the running engine's next turn sees the
+   * new tool catalogue without needing a full session restart.
+   *
+   * Why "starts with `mcp__`": that prefix is the canonical Claude Code
+   * naming for flattened MCP tools. It cleanly distinguishes them from
+   * built-in tools (Bash, FileRead, etc.) and from the legacy meta-tools
+   * (`mcp_list_tools`, `mcp_call_tool` — single underscore, NOT removed
+   * here) which a caller may still opt into.
+   *
+   * @param {import('../mcp.js').MCPManager} mcpManager
+   * @param {(mgr: import('../mcp.js').MCPManager) => import('./types.js').ToolDef[]} buildFlattened
+   *   — the builder from `./mcp-tools.js`. Injected so this registry file
+   *   stays free of circular `import` to mcp-tools.js (mcp-tools imports
+   *   `defineTool` from types.js, which lives alongside this file).
+   * @returns {{ removed: number, added: number }}
+   */
+  replaceMcpTools(mcpManager, buildFlattened) {
+    let removed = 0;
+    for (const name of [...this.#tools.keys()]) {
+      if (name.startsWith('mcp__')) {
+        this.#tools.delete(name);
+        removed += 1;
+      }
+    }
+    let added = 0;
+    if (typeof buildFlattened === 'function' && mcpManager) {
+      const fresh = buildFlattened(mcpManager) || [];
+      for (const tool of fresh) {
+        this.register(tool);
+        added += 1;
+      }
+    }
+    return { removed, added };
   }
 }
 

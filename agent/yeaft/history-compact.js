@@ -150,7 +150,7 @@ export const DEFAULT_MESSAGE_TOKEN_BUDGET = 32768;
 
 /**
  * Estimate the token weight of a single message including role overhead
- * and any tool-call structure. Mirrors `dream-v2/segment.js` approach: a
+ * and any tool-call structure. Mirrors `dream/segment.js` approach: a
  * couple of tokens per message for role/wrapping plus the body.
  *
  * @param {{role:string, content?:string, toolCalls?:Array, toolCallId?:string}} m

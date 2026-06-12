@@ -2,6 +2,7 @@
 
 import { resetProcessingWatchdog, stopProcessingWatchdog } from './watchdog.js';
 import { markAllToolsCompleted } from './handlers/conversationHandler.js';
+import { sameUserMessage } from './dedup.js';
 
 function normalizeUserVisibleContent(content) {
   let value = content;
@@ -84,7 +85,15 @@ export function handleClaudeOutput(store, conversationId, data) {
 
     // content 可能是字符串或数组
     if (typeof content === 'string') {
-      store.appendToAssistantMessageForConversation(conversationId, content, { id: data.message?.id || data.message?.messageId || null, ts: data.ts || data.message?.ts || data.message?.time || null });
+      store.appendToAssistantMessageForConversation(conversationId, content, {
+        id: data.message?.id || data.message?.messageId || null,
+        ts: data.ts || data.message?.ts || data.message?.time || null,
+        sessionId: store._currentYeaftSessionId || null,
+        vpId: store._currentYeaftVpId || null,
+        turnId: store._currentYeaftTurnId || null,
+        threadId: store._currentYeaftThreadId || null,
+        threadTitle: store._currentYeaftThreadTitle || null,
+      });
       return;
     }
     if (!Array.isArray(content)) return;
@@ -97,7 +106,15 @@ export function handleClaudeOutput(store, conversationId, data) {
 
     for (const block of content) {
       if (block.type === 'text') {
-        store.appendToAssistantMessageForConversation(conversationId, block.text, { id: data.message?.id || data.message?.messageId || null, ts: data.ts || data.message?.ts || data.message?.time || null });
+        store.appendToAssistantMessageForConversation(conversationId, block.text, {
+          id: data.message?.id || data.message?.messageId || null,
+          ts: data.ts || data.message?.ts || data.message?.time || null,
+          sessionId: store._currentYeaftSessionId || null,
+          vpId: store._currentYeaftVpId || null,
+          turnId: store._currentYeaftTurnId || null,
+          threadId: store._currentYeaftThreadId || null,
+          threadTitle: store._currentYeaftThreadTitle || null,
+        });
       } else if (block.type === 'tool_use') {
         // Finish any in-progress streaming so typing dots reappear during tool execution.
         // Without this, isStreaming stays true on the assistant message, which suppresses
@@ -133,26 +150,18 @@ export function handleClaudeOutput(store, conversationId, data) {
     const rawUserContent = data.message?.content;
     const userContent = normalizeUserVisibleContent(rawUserContent);
 
-    // 过滤 compact summary 消息（compact 后的上下文摘要，不应显示在 UI 中）
-    // Claude Code compact summary 特征检测 — 兜底防线，即使 agent 端没过滤也不会泄漏到 UI
-    if (typeof userContent === 'string' && userContent.length > 200) {
-      if (userContent.includes('This session is being continued from a previous conversation')
-          || userContent.includes('The summary below covers the earlier portion of the conversation')
-          || /Summary:[\s\S]*\d+\.\s*(Primary Request|Key Technical|Current Work)/m.test(userContent)) {
-        return;
-      }
-    }
-    // content 可能是数组形式（每个 block 是 { type: 'text', text: '...' }）
-    if (Array.isArray(userContent)) {
-      const fullText = userContent.map(b => (typeof b === 'string' ? b : b?.text || '')).join('');
-      if (fullText.length > 200 && (
-        fullText.includes('This session is being continued from a previous conversation')
-        || fullText.includes('The summary below covers the earlier portion of the conversation')
-        || /Summary:[\s\S]*\d+\.\s*(Primary Request|Key Technical|Current Work)/m.test(fullText)
-      )) {
-        return;
-      }
-    }
+    // NOTE: Compact-summary and <task-notification> filtering used to live
+    // here as a defensive web-side guard. As of feat-claude-chat-subagent-
+    // compact-toolline (agent/claude.js parseTaskNotification +
+    // isCompactSummary), the agent rewrites both classes of "fake user
+    // messages" into synthetic assistant.tool_use blocks (__SubagentResult,
+    // __CompactSummary) BEFORE they ever reach this code path. Keeping a
+    // second copy of the detection regex here would mean two places to keep
+    // in sync — and worse, would silently drop the message when we want to
+    // surface it as a ToolLine. If the agent ever fails to recognise a new
+    // variant, the message will fall through and render as a user bubble;
+    // that's a visible regression we can fix at the source, not a silent
+    // data loss.
 
     // 过滤 Claude CLI 内部消息（不应显示在 UI 中）
     // - <local-command-caveat> — CLI 内部 caveat 标记
@@ -207,8 +216,21 @@ export function handleClaudeOutput(store, conversationId, data) {
     } else if ((typeof userContent === 'string' && userContent.trim()) || (Array.isArray(data.message?.attachments) && data.message.attachments.length > 0)) {
       // 普通用户消息（agent 广播回来的）
       // 发送端已通过 addMessage 本地添加，检查是否已存在以避免重复
+      //
+      // fix-usermsg-dup: prefer the server-stamped `clientMessageId` for
+      // dedup. The shared `sameUserMessage` helper (web/stores/helpers/
+      // dedup.js) encodes the canonical rule — id-equality when both
+      // sides have an id, content-equality only as a legacy fallback.
+      // See review I2 (Fowler) for why this lives in a single helper
+      // rather than being reimplemented at each gate.
+      const echoClientMsgId = data.message?.clientMessageId || data.clientMessageId || null;
+      const echoCandidate = {
+        type: 'user',
+        content: userContent,
+        clientMessageId: echoClientMsgId
+      };
       const msgs = store.messagesMap[conversationId] || [];
-      const duplicate = msgs.some(m => m.type === 'user' && m.content === userContent);
+      const duplicate = msgs.some(m => sameUserMessage(m, echoCandidate));
       if (!duplicate) {
         store.addMessageToConversation(conversationId, {
           ...(data.message?.id ? { id: data.message.id, messageId: data.message.id } : {}),
@@ -217,9 +239,34 @@ export function handleClaudeOutput(store, conversationId, data) {
           content: userContent,
           // Preserve attachment metadata from agent history replay
           ...(data.message?.attachments ? { attachments: data.message.attachments } : {}),
+          // Stamp the echo id on the freshly-added message so any future
+          // dedup pass (e.g. sync_messages_result merge) still matches.
+          ...(echoClientMsgId ? { clientMessageId: echoClientMsgId } : {}),
           // Bug 1: forward original ts so history messages keep their real
           // timestamp instead of using arrival time.
         });
+      } else if (echoClientMsgId) {
+        // Common live-send path (NOT a rare race): the dedup gate above
+        // already collapsed the echo's row onto the optimistic row by
+        // clientMessageId. The optimistic row never has a `dbMessageId`
+        // or server-side `ts`/`id` — those only exist after the server
+        // persists the message. Stamp them now so subsequent
+        // `sync_messages_result` merges can match by `dbMessageId` in
+        // addition to `clientMessageId`, and so any sort-by-server-ts
+        // surfaces the correct ordering. Review T-I2 (Torvalds):
+        // previous comment made this look like a rare race-loser
+        // branch — it isn't, every successful send hits it.
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].type === 'user' && msgs[i].clientMessageId === echoClientMsgId) {
+            if (data.dbMessageId && !msgs[i].dbMessageId) msgs[i].dbMessageId = data.dbMessageId;
+            if (data.message?.id && !msgs[i].messageId) {
+              msgs[i].id = data.message.id;
+              msgs[i].messageId = data.message.id;
+            }
+            if (data.ts && !msgs[i].ts) msgs[i].ts = data.ts;
+            break;
+          }
+        }
       }
     }
   } else if (data.type === 'result') {
