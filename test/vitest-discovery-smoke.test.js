@@ -11,19 +11,19 @@
 import { describe, it, expect } from 'vitest';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const execFileAsync = promisify(execFile);
+const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const REQUESTED_FILES = [
-  'test/agent/yeaft/dream-trigger-routing.test.js',
-  'test/agent/yeaft/dream-v2/runner.test.js',
-  'test/agent/yeaft/dream-v2/prompts.test.js',
-  'test/agent/yeaft/store-v2.test.js',
+  'test/agent/yeaft/engine.test.js',
+  'test/server/ws-agent.test.js',
+  'test/web/template-compile.test.js',
   'test/vitest-discovery-smoke.test.js',
-  'test/web/yeaft-page-setup-tdz.test.js',
 ];
 const FOCUSED_ARGS = [
   '--config',
@@ -34,7 +34,9 @@ const FOCUSED_ARGS = [
 ];
 
 async function vitestListFocusedFiles() {
-  const { stdout } = await execFileAsync('./node_modules/.bin/vitest', FOCUSED_ARGS, {
+  const vitestPackagePath = require.resolve('vitest/package.json');
+  const vitestBin = path.join(path.dirname(vitestPackagePath), 'vitest.mjs');
+  const { stdout } = await execFileAsync(process.execPath, [vitestBin, ...FOCUSED_ARGS], {
     cwd: ROOT,
     timeout: 30000,
     maxBuffer: 1024 * 1024,
@@ -57,7 +59,7 @@ describe('vitest discovery smoke', () => {
     expect(leaked, `vitest positional discovery leaked worktree test files:\n${leaked.slice(0, 20).join('\n')}`).toHaveLength(0);
   });
 
-  it('focused positional runs stay on the requested six files', async () => {
+  it('focused positional runs stay on the requested files', async () => {
     const files = await vitestListFocusedFiles();
     expect(files.sort()).toEqual(REQUESTED_FILES.sort());
   });

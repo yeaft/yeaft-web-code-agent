@@ -244,24 +244,25 @@ describe('Vue template compile — every component compiles cleanly', () => {
     expect(out[0].raw).toBe("<span>${foo || '}'}-suffix</span>");
   });
 
-  for (const file of listComponentFiles()) {
-    const rel = `web/components/${file.split('/').pop()}`;
-    it(`${rel} — all templates compile`, () => {
+  it('all component templates compile', () => {
+    const failures = [];
+
+    for (const file of listComponentFiles()) {
+      const rel = `web/components/${file.split('/').pop()}`;
       const src = readFileSync(file, 'utf8');
       const templates = extractTemplates(src);
-      if (templates.length === 0) return; // not every file is a component
-      templates.forEach(({ raw, startOffset }, idx) => {
+      for (const { raw, startOffset } of templates) {
         const linesBefore = src.slice(0, startOffset).split('\n').length;
         const evaluated = evalTemplate(raw);
         try {
           Vue.compile(evaluated);
         } catch (e) {
           const head = (e && (e.message || String(e))).split('\n')[0];
-          throw new Error(
-            `${rel}: template #${idx + 1} (starts at line ~${linesBefore}) failed Vue.compile: ${head}`
-          );
+          failures.push(`${rel}: template around line ${linesBefore} failed Vue.compile: ${head}`);
         }
-      });
-    });
-  }
+      }
+    }
+
+    expect(failures).toEqual([]);
+  });
 });
