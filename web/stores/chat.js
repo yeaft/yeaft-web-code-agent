@@ -1006,20 +1006,23 @@ export const useChatStore = defineStore('chat', {
       // load in this UI lifecycle. A non-empty shared messagesMap is not
       // enough evidence: it may hold stale rows for `grp_fun` while newer
       // persisted rows were written during a previous page/session.
-      this.requestYeaftSessionBootstrap({ forceSessionReady: true });
+      this.requestYeaftSessionBootstrap({ forceSessionReady: true, catchUpHistory: true });
     },
 
-    requestYeaftSessionBootstrap({ forceSessionReady = false } = {}) {
+    requestYeaftSessionBootstrap({ forceSessionReady = false, catchUpHistory = false } = {}) {
       if (!this.yeaftAgentId) return;
       const activeSessionId = resolveActiveYeaftSessionId(this);
       const sessionState = activeSessionId
         ? this.yeaftSessionHistoryState[activeSessionId]
         : null;
       const needSessionReady = forceSessionReady || !this.yeaftSessionReady || !this.yeaftModel || !this.yeaftStatus;
+      const latestSeq = Number.isFinite(sessionState?.latestSeq) ? sessionState.latestSeq : null;
       const needHistoryReplay = !!activeSessionId && !sessionState?.loaded && !sessionState?.loading;
-      if (!needSessionReady && !needHistoryReplay) return false;
+      const needHistoryCatchUp = !!activeSessionId
+        && msgHelpers.shouldCatchUpLoadedYeaftSession(sessionState, catchUpHistory);
+      if (!needSessionReady && !needHistoryReplay && !needHistoryCatchUp) return false;
       const metaKey = `${this.yeaftAgentId}:${activeSessionId || '__none__'}`;
-      const metadataOnly = needSessionReady && !needHistoryReplay;
+      const metadataOnly = needSessionReady && !needHistoryReplay && !needHistoryCatchUp;
       if (metadataOnly && this.yeaftBootstrapMetaLoadingKey === metaKey) return false;
       if (metadataOnly) this.yeaftBootstrapMetaLoadingKey = metaKey;
       if (activeSessionId && needHistoryReplay) {
@@ -1028,13 +1031,21 @@ export const useChatStore = defineStore('chat', {
           [activeSessionId]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
         };
         this.yeaftLoadingMoreHistory = true;
+      } else if (activeSessionId && needHistoryCatchUp) {
+        this.yeaftSessionHistoryState = {
+          ...this.yeaftSessionHistoryState,
+          [activeSessionId]: { ...sessionState, loaded: true, loading: true, latestSeq },
+        };
+        this.yeaftLoadingMoreHistory = true;
       }
-      this.sendWsMessage({
+      const payload = {
         type: 'yeaft_load_history',
         agentId: this.yeaftAgentId,
-        limit: needHistoryReplay ? YEAFT_RECENT_TURNS : 0,
         sessionId: activeSessionId,
-      });
+      };
+      if (needHistoryCatchUp) payload.afterSeq = latestSeq;
+      else payload.limit = needHistoryReplay ? YEAFT_RECENT_TURNS : 0;
+      this.sendWsMessage(payload);
       return true;
     },
     leaveYeaft() {

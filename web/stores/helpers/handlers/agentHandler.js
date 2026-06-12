@@ -222,7 +222,7 @@ export function handleAgentList(store, msg) {
       store.sendWsMessage({ type: 'select_agent', agentId: store.currentAgent, silent: true });
       if (store.currentView === 'yeaft' && typeof store.requestYeaftSessionBootstrap === 'function') {
         const needsYeaftSessionReady = !store.yeaftSessionReady || !store.yeaftModel || !store.yeaftStatus;
-        store.requestYeaftSessionBootstrap({ forceSessionReady: needsYeaftSessionReady });
+        store.requestYeaftSessionBootstrap({ forceSessionReady: needsYeaftSessionReady, catchUpHistory: true });
       }
       if (store.currentConversation) {
         const conv = store.conversations.find(c => c.id === store.currentConversation);

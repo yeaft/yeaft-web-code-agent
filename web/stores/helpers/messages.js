@@ -128,6 +128,35 @@ export function shouldForceHydrateActiveYeaftSession(nextSessionId, prevSessionI
   return !sessionState?.loaded && !sessionState?.loading;
 }
 
+export function shouldCatchUpLoadedYeaftSession(sessionState, catchUpHistory) {
+  return !!catchUpHistory
+    && !!sessionState?.loaded
+    && !sessionState?.loading
+    && Number.isFinite(sessionState?.latestSeq);
+}
+
+function mergeAssistantTextByStableId(store, conversationId, opts, text) {
+  const stableId = opts?.id ? String(opts.id) : null;
+  if (!stableId) return false;
+  const msgs = store.messagesMap[conversationId] || [];
+  const existing = msgs.find(m => m?.type === 'assistant' && explicitMessageId(m) === stableId);
+  if (!existing) return false;
+  if (!existing.id) existing.id = stableId;
+  if (!existing.messageId) existing.messageId = stableId;
+  if (opts.ts && !existing.ts) existing.ts = opts.ts;
+  if (opts.timestamp && !existing.timestamp) existing.timestamp = opts.timestamp;
+  if (opts.sessionId && !existing.sessionId) existing.sessionId = opts.sessionId;
+  if (opts.vpId && !existing.vpId) existing.vpId = opts.vpId;
+  if (opts.turnId && !existing.turnId) existing.turnId = opts.turnId;
+  if (opts.threadId && !existing.threadId) existing.threadId = opts.threadId;
+  if (opts.threadTitle && !existing.threadTitle) existing.threadTitle = opts.threadTitle;
+  if (!existing.content || (typeof existing.content === 'string' && text.length > existing.content.length)) {
+    existing.content = text;
+  }
+  stampSpeakerOnVpMessage(store, conversationId, existing);
+  return true;
+}
+
 export function addMessageToConversation(store, conversationId, msg) {
   if (!conversationId) return;
 
@@ -208,6 +237,7 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
     store.messagesMap[conversationId] = [];
   }
   const msgs = store.messagesMap[conversationId];
+  if (mergeAssistantTextByStableId(store, conversationId, opts, text)) return;
 
   // Per-VP turn routing: when a turnId is active, find the streaming
   // message for THAT turn (not just the last message). This prevents
