@@ -115,18 +115,17 @@ export function buildMcpFlattenedTools(mcpManager) {
         // Look up the manager fresh on each call. We deliberately don't
         // close over a server reference — hot-reload may have replaced
         // the connection since registration.
+        //
+        // Errors are THROWN, not stringified into the result. The engine's
+        // tool-execution catch (engine.js: `catch (err) { output = 'Error: …';
+        // isError = true; }`) turns thrown errors into a `tool_result` with
+        // `is_error: true` so the LLM sees an error signal rather than a
+        // plausible-looking JSON blob it might mistake for normal output.
         if (!mcpManager || typeof mcpManager.callTool !== 'function') {
-          return JSON.stringify({ error: 'MCP manager not available', tool: flattenedName });
+          throw new Error(`MCP manager not available for ${flattenedName}`);
         }
-        try {
-          const result = await mcpManager.callTool(fullName, input || {});
-          return formatMcpResult(result);
-        } catch (err) {
-          return JSON.stringify({
-            error: err?.message || String(err),
-            tool: flattenedName,
-          });
-        }
+        const result = await mcpManager.callTool(fullName, input || {});
+        return formatMcpResult(result);
       },
     });
   });
@@ -213,6 +212,10 @@ Usage guidelines:
     const mcpManager = ctx?.mcpManager;
 
     if (!mcpManager || !mcpManager.hasServers) {
+      // Same shape used by the meta tools historically — kept as a JSON
+      // payload (NOT throw) because callers of `mcp_call_tool` already pattern-
+      // match on the `error` field. Flattened tools (the preferred surface)
+      // throw instead; see buildMcpFlattenedTools above.
       return JSON.stringify({
         error: 'No MCP servers are connected. Configure MCP servers in ~/.yeaft/config.json',
       });

@@ -405,9 +405,18 @@ function normaliseMcpServer(entry) {
     ? e.args.filter(a => typeof a === 'string')
     : [];
   /** @type {Record<string,string>} */
-  const env = {};
-  if (e.env && typeof e.env === 'object') {
+  // Use a null-prototype object so a malicious config entry can't poison
+  // future lookups via `__proto__` / `constructor` / `prototype` keys. Even
+  // with the explicit skip list below, the null-prototype is the right
+  // baseline: env maps are plain key/value bags, they have no business
+  // owning prototype methods.
+  const env = Object.create(null);
+  if (e.env && typeof e.env === 'object' && !Array.isArray(e.env)) {
     for (const [k, v] of Object.entries(e.env)) {
+      // Skip dangerous keys that would let attacker-controlled config
+      // pollute Object.prototype if env were ever spread / merged
+      // somewhere that doesn't expect a null-proto map.
+      if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
       if (typeof k === 'string' && typeof v === 'string') env[k] = v;
     }
   }
@@ -538,11 +547,15 @@ export function removeMcpServer(name, dir) {
   if (typeof name !== 'string' || !name.trim()) {
     return { error: 'name required' };
   }
+  // Trim once for the comparison too — without this, "  github  " from the
+  // wire would silently fail to delete "github" on disk because we'd be
+  // matching against the padded string.
+  const target = name.trim();
   const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
   const configPath = join(root, 'config.json');
   const existing = readConfigJson(configPath);
   const list = Array.isArray(existing.mcpServers) ? existing.mcpServers.slice() : [];
-  const next = list.filter(s => !(s && typeof s === 'object' && s.name === name));
+  const next = list.filter(s => !(s && typeof s === 'object' && s.name === target));
   const removed = next.length !== list.length;
   existing.mcpServers = next;
 

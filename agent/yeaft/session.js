@@ -370,7 +370,10 @@ export async function loadSession(options = {}) {
   // ─── 6. Load skills ────────────────────────────────────
   let skillManager;
   if (skipSkills) {
-    skillManager = new SkillManager(yeaftDir);
+    // Pass the literal user-tier dir (matches the normal branch's tier 2)
+    // so any save/remove calls land in the same place users expect. New
+    // `SkillManager` API takes literal scan dirs — no auto-suffix of /skills.
+    skillManager = new SkillManager(join(yeaftDir, 'skills'));
     // Don't call .load() — empty skill manager
   } else {
     // Pass the agent's current working directory as the project tier root.

@@ -116,28 +116,27 @@ describe('buildMcpFlattenedTools — execute() routing', () => {
     expect(result).toBe('ok:github__list_prs');
   });
 
-  it('surfaces upstream errors as a JSON string instead of throwing', async () => {
+  it('throws so the engine can flag is_error=true on the tool_result', async () => {
+    // Per Fowler review of PR #946: returning a JSON-stringified error
+    // makes the LLM see a plausible-looking `{error: ...}` object as if it
+    // were normal tool output. The engine catches throws (engine.js around
+    // the tool execute call) and sets isError on the tool_result, which is
+    // what the LLM actually pattern-matches on. So flattened tools throw.
     const mgr = makeMockManager([
       { server: 's', tool: 'boom', description: 'd', inputSchema: { type: 'object' }, shouldThrow: 'kaboom' },
     ]);
     const [tool] = buildMcpFlattenedTools(mgr);
-    const result = await tool.execute({});
-    const parsed = JSON.parse(result);
-    expect(parsed.error).toBe('kaboom');
-    expect(parsed.tool).toBe('mcp__s__boom');
+    await expect(tool.execute({})).rejects.toThrow('kaboom');
   });
 
-  it('returns the manager-not-available error if the manager loses callTool', async () => {
+  it('throws the manager-not-available error if the manager loses callTool', async () => {
     // Build with a valid manager, then null out callTool after registration.
     const mgr = makeMockManager([
       { server: 's', tool: 'x', description: 'd', inputSchema: { type: 'object' } },
     ]);
     const [tool] = buildMcpFlattenedTools(mgr);
     mgr.callTool = null;
-    const result = await tool.execute({});
-    const parsed = JSON.parse(result);
-    expect(parsed.error).toBe('MCP manager not available');
-    expect(parsed.tool).toBe('mcp__s__x');
+    await expect(tool.execute({})).rejects.toThrow(/MCP manager not available for mcp__s__x/);
   });
 });
 

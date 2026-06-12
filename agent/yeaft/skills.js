@@ -42,7 +42,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync, writeFileSync, unlinkSync, mkdirSync, statSync } from 'fs';
-import { join, basename, sep, dirname } from 'path';
+import { join, basename, sep, dirname, resolve } from 'path';
 import { platform, homedir } from 'os';
 import { fileURLToPath } from 'url';
 
@@ -505,10 +505,13 @@ export class SkillManager {
 
     // Read a specific linked file if requested
     if (filePath && skill._source === 'directory') {
-      const fullPath = join(skill._path, filePath);
-      // Security: ensure path doesn't escape skill directory
-      const resolved = join(skill._path, filePath);
-      if (!resolved.startsWith(skill._path)) {
+      // Security: resolve both ends to absolute paths and require fullPath to
+      // sit under the skill root (separator-anchored so /foo-evil isn't seen
+      // as a child of /foo). `path.join` alone collapses `..` but does not
+      // detect symlink-escapes or absolute-path overrides.
+      const fullPath = resolve(skill._path, filePath);
+      const root = resolve(skill._path) + sep;
+      if (fullPath !== resolve(skill._path) && !fullPath.startsWith(root)) {
         result.linkedContent = 'Error: path traversal not allowed';
       } else if (existsSync(fullPath)) {
         try {
