@@ -356,6 +356,18 @@ function buildVpPromptPayload(vpId, envelope) {
   return { text, prompt, promptParts };
 }
 
+export function visibleInboundThreadId(envelope, fallbackThreadId = 'main') {
+  const meta = envelope?.msg?.meta || {};
+  if (
+    meta.injectedBy === 'route_forward'
+    && typeof meta.sourceThreadId === 'string'
+    && meta.sourceThreadId.trim()
+  ) {
+    return meta.sourceThreadId.trim();
+  }
+  return fallbackThreadId || 'main';
+}
+
 function threadSnapshotForClassifier(thread) {
   return {
     threadId: thread.threadId,
@@ -833,6 +845,13 @@ export function __testGetVpThreads(sessionId, vpId) {
   }));
 }
 
+/** Test-only: seed a VP thread without starting its engine driver. */
+export function __testSeedVpThread({ sessionId, vpId, threadId, title = 'test thread', status = 'queued' }) {
+  const thread = getOrCreateVpThread({ sessionId, vpId, threadId, title });
+  thread.status = status;
+  return thread.threadId;
+}
+
 /** Test-only: wait for thread classification/routing spawned by a msg id. */
 export async function __testWaitForRoutePromises(msgId) {
   await waitForRoutePromises(msgId);
@@ -1016,7 +1035,7 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
       msgId: envelope?.msg?.id,
       text,
       sessionId,
-      threadId: thread.threadId,
+      threadId: visibleInboundThreadId(envelope, thread.threadId),
       role: envelope?.msg?.meta?.injectedBy === 'route_forward' ? 'assistant' : 'user',
       speakerVpId: envelope?.msg?.meta?.senderVpId || envelope?.msg?.from || null,
       attachments: Array.isArray(envelope?.msg?.meta?.attachments) ? envelope.msg.meta.attachments : [],
@@ -1109,7 +1128,7 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
             msgId: envMsgId,
             text,
             sessionId,
-            threadId: thread.threadId,
+            threadId: visibleInboundThreadId(envelope, thread.threadId),
             role: isForward ? 'assistant' : 'user',
             speakerVpId: senderVpId,
             attachments: Array.isArray(meta.attachments) ? meta.attachments : [],

@@ -95,6 +95,7 @@ Returns JSON: { ok, dispatched?, error?, detail? }.`,
         reason: reason || null,
         taskId: ctx.taskId ?? null,
         inboundEnvelope: ctx.inboundEnvelope ?? null,
+        sourceThreadId: ctx.threadId ?? null,
       },
       { taskMembers: ctx.taskMembers },
     );
