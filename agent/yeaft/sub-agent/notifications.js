@@ -15,7 +15,7 @@
  *     1. WaitAgent (drains anything queued for this agent on terminal,
  *        before returning).
  *     2. Engine.query() — when started with a user prompt, it asks
- *        `consumePendingNotifications({ sessionId, parentVpId, threadId })` for any queued
+ *        `consumePendingNotifications({ sessionId, parentVpId })` for any queued
  *        terminal events from sub-agents that the parent hasn't yet
  *        acknowledged, and prepends a short XML block to the user
  *        message. The XML block is human-readable for the model and
@@ -28,7 +28,7 @@
  *   long-term record.
  *
  * Keying:
- *   Notifications are bucketed by `(sessionId, parentVpId, threadId)` when
+ *   Notifications are bucketed by `(sessionId, parentVpId)` when
  *   the parent runs inside a Yeaft Session. Legacy / test callers that
  *   don't provide a sessionId still bucket by `parentVpId` (or
  *   `'__no_vp__'`) so older in-process callers keep working. WaitAgent
@@ -41,7 +41,7 @@
  *   us from emitting more than one terminal notification per agent.
  */
 
-/** @typedef {{ id: string, agentId: string, agentName: string, status: string, result: string, error: string|null, outputFile: string|null, turns: number, parentVpId: string|null, parentSessionId: string|null, parentThreadId: string|null, budgetExceeded: boolean, budgetReason: string|null, budgetUsage: object|null, createdAt: number }} SubAgentNotification */
+/** @typedef {{ id: string, agentId: string, agentName: string, status: string, result: string, error: string|null, outputFile: string|null, turns: number, parentVpId: string|null, parentSessionId: string|null, budgetExceeded: boolean, budgetReason: string|null, budgetUsage: object|null, createdAt: number }} SubAgentNotification */
 
 /** Map<bucketKey, SubAgentNotification[]> */
 const byParent = new Map();
@@ -49,32 +49,29 @@ const byParent = new Map();
 const byAgent = new Map();
 
 const FALLBACK_BUCKET = '__no_vp__';
-const MAIN_THREAD_ID = 'main';
 
 function cleanString(value) {
   return (typeof value === 'string' && value.trim()) ? value.trim() : null;
 }
 
-function normalizeScope(input, sessionId, threadId) {
+function normalizeScope(input, sessionId) {
   if (input && typeof input === 'object') {
     return {
       parentVpId: cleanString(input.parentVpId),
       sessionId: cleanString(input.sessionId ?? input.parentSessionId),
-      threadId: cleanString(input.threadId ?? input.parentThreadId) || MAIN_THREAD_ID,
     };
   }
   return {
     parentVpId: cleanString(input),
     sessionId: cleanString(sessionId),
-    threadId: cleanString(threadId) || MAIN_THREAD_ID,
   };
 }
 
-function bucketKey(scope, sessionId, threadId) {
-  const s = normalizeScope(scope, sessionId, threadId);
+function bucketKey(scope, sessionId) {
+  const s = normalizeScope(scope, sessionId);
   const vp = s.parentVpId || FALLBACK_BUCKET;
   if (!s.sessionId) return vp;
-  return `${s.sessionId}::${vp}::${s.threadId || MAIN_THREAD_ID}`;
+  return `${s.sessionId}::${vp}`;
 }
 
 /**
@@ -82,7 +79,7 @@ function bucketKey(scope, sessionId, threadId) {
  * a second call with the same agentId is a no-op (we only emit one
  * terminal notice per child).
  *
- * @param {{ agentId: string, agentName: string, status: string, result?: string, error?: string|null, outputFile?: string|null, turns?: number, parentVpId?: string|null, parentSessionId?: string|null, sessionId?: string|null, parentThreadId?: string|null, threadId?: string|null, budgetExceeded?: boolean, budgetReason?: string|null, budgetUsage?: object|null }} input
+ * @param {{ agentId: string, agentName: string, status: string, result?: string, error?: string|null, outputFile?: string|null, turns?: number, parentVpId?: string|null, parentSessionId?: string|null, sessionId?: string|null, budgetExceeded?: boolean, budgetReason?: string|null, budgetUsage?: object|null }} input
  * @returns {SubAgentNotification|null} the queued record (null if a dup)
  */
 export function enqueueTerminalNotification(input) {
@@ -91,7 +88,6 @@ export function enqueueTerminalNotification(input) {
   const scope = normalizeScope({
     parentVpId: input.parentVpId,
     parentSessionId: input.parentSessionId ?? input.sessionId,
-    parentThreadId: input.parentThreadId ?? input.threadId,
   });
   const rec = {
     id: `${input.agentId}:${input.status}:${Date.now()}`,
@@ -104,7 +100,6 @@ export function enqueueTerminalNotification(input) {
     turns: typeof input.turns === 'number' ? input.turns : 0,
     parentVpId: scope.parentVpId,
     parentSessionId: scope.sessionId,
-    parentThreadId: scope.threadId,
     budgetExceeded: Boolean(input.budgetExceeded),
     budgetReason: input.budgetReason || null,
     budgetUsage: input.budgetUsage || null,
@@ -124,7 +119,7 @@ export function enqueueTerminalNotification(input) {
  * Engine calls this at the start of every user-driven turn so the
  * parent model sees terminal events that arrived while it was idle.
  *
- * @param {string|{parentVpId?: string|null, sessionId?: string|null, parentSessionId?: string|null, threadId?: string|null, parentThreadId?: string|null}|null} scope
+ * @param {string|{parentVpId?: string|null, sessionId?: string|null, parentSessionId?: string|null}|null} scope
  * @returns {SubAgentNotification[]}
  */
 export function consumePendingNotifications(scope) {
@@ -142,7 +137,7 @@ export function consumePendingNotifications(scope) {
  * while constructing a prompt; it acknowledges only after the parent turn
  * completes successfully so abort/error paths don't lose the notification.
  *
- * @param {string|{parentVpId?: string|null, sessionId?: string|null, parentSessionId?: string|null, threadId?: string|null, parentThreadId?: string|null}|null} scope
+ * @param {string|{parentVpId?: string|null, sessionId?: string|null, parentSessionId?: string|null}|null} scope
  * @returns {SubAgentNotification[]}
  */
 export function peekPendingNotifications(scope) {
@@ -155,7 +150,7 @@ export function peekPendingNotifications(scope) {
  * Acknowledge notifications previously returned by peekPendingNotifications.
  * Removes them from both parent and per-agent maps.
  *
- * @param {string|{parentVpId?: string|null, sessionId?: string|null, parentSessionId?: string|null, threadId?: string|null, parentThreadId?: string|null}|null} scope
+ * @param {string|{parentVpId?: string|null, sessionId?: string|null, parentSessionId?: string|null}|null} scope
  * @param {string[]} ids
  */
 export function acknowledgePendingNotifications(scope, ids = []) {
@@ -192,7 +187,6 @@ export function consumeNotificationForAgent(agentId) {
   const key = bucketKey({
     parentVpId: rec.parentVpId,
     sessionId: rec.parentSessionId,
-    threadId: rec.parentThreadId,
   });
   const list = byParent.get(key);
   if (Array.isArray(list)) {

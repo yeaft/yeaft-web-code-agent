@@ -277,7 +277,7 @@ describe('handleYeaftHistoryChunk', () => {
   });
 
 
-  it('preserves stable ids, thread ids, and assistant speaker attribution from older history rows', () => {
+  it('preserves stable ids and assistant speaker attribution from older history rows', () => {
     const store = mkStore({
       yeaftActiveSessionFilter: 'g1',
       messagesMap: { 'yeaft-1': [] },
@@ -286,16 +286,16 @@ describe('handleYeaftHistoryChunk', () => {
       conversationId: 'yeaft-1',
       sessionId: 'g1',
       messages: [
-        { id: 'u-1', role: 'user', content: 'older-q', sessionId: 'g1', threadId: 'thr-a' },
-        { id: 'a-1', role: 'assistant', content: 'older-a', sessionId: 'g1', threadId: 'thr-a', speakerVpId: 'vp-linus' },
+        { id: 'u-1', role: 'user', content: 'older-q', sessionId: 'g1' },
+        { id: 'a-1', role: 'assistant', content: 'older-a', sessionId: 'g1', speakerVpId: 'vp-linus' },
       ],
       oldestSeq: 10,
       hasMore: false,
     });
 
     expect(store.messagesMap['yeaft-1']).toEqual([
-      expect.objectContaining({ id: 'u-1', messageId: 'u-1', type: 'user', sessionId: 'g1', threadId: 'thr-a', turnId: 'thr-a' }),
-      expect.objectContaining({ id: 'a-1', messageId: 'a-1', type: 'assistant', sessionId: 'g1', threadId: 'thr-a', turnId: 'thr-a', vpId: 'vp-linus', speakerVpId: 'vp-linus' }),
+      expect.objectContaining({ id: 'u-1', messageId: 'u-1', type: 'user', sessionId: 'g1', turnId: 'u-1' }),
+      expect.objectContaining({ id: 'a-1', messageId: 'a-1', type: 'assistant', sessionId: 'g1', turnId: 'a-1', vpId: 'vp-linus', speakerVpId: 'vp-linus' }),
     ]);
   });
 

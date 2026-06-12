@@ -1640,7 +1640,7 @@
 }
 
 /* Messages */
-.thread-block {
+.message-block {
   display: flex;
   flex-direction: column;
   gap: 18px;

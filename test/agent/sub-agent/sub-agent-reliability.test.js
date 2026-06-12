@@ -201,7 +201,7 @@ function mkDeps(adapter, overrides = {}) {
   };
 }
 
-const vpTestCtx = { parentEngineDeps: { parentVpId: 'vp-test', parentThreadId: 'main' } };
+const vpTestCtx = { parentEngineDeps: { parentVpId: 'vp-test' } };
 
 async function settle(agent, ms = 2000) {
   const deadline = Date.now() + ms;
@@ -390,32 +390,29 @@ describe('notifications queue', () => {
     expect(consumePendingNotifications(null).map(n => n.agentId)).toEqual(['a3']);
   });
 
-  it('scopes parent drains by session and thread when provided', () => {
+  it('scopes parent drains by session and VP', () => {
     enqueueTerminalNotification({
       agentId: 'a-session-1', agentName: 'a1', status: 'completed',
-      parentVpId: 'vp-same', parentSessionId: 'session-1', parentThreadId: 'main',
+      parentVpId: 'vp-same', parentSessionId: 'session-1',
     });
     enqueueTerminalNotification({
       agentId: 'a-session-2', agentName: 'a2', status: 'completed',
-      parentVpId: 'vp-same', parentSessionId: 'session-2', parentThreadId: 'main',
+      parentVpId: 'vp-same', parentSessionId: 'session-2',
     });
     enqueueTerminalNotification({
-      agentId: 'a-thread-2', agentName: 'a3', status: 'completed',
-      parentVpId: 'vp-same', parentSessionId: 'session-1', parentThreadId: 'thread-2',
+      agentId: 'a-session-1-second', agentName: 'a3', status: 'completed',
+      parentVpId: 'vp-same', parentSessionId: 'session-1',
     });
 
     expect(consumePendingNotifications({
-      parentVpId: 'vp-same', sessionId: 'session-1', threadId: 'main',
-    }).map(n => n.agentId)).toEqual(['a-session-1']);
+      parentVpId: 'vp-same', sessionId: 'session-1',
+    }).map(n => n.agentId)).toEqual(['a-session-1', 'a-session-1-second']);
     expect(consumePendingNotifications({
-      parentVpId: 'vp-same', sessionId: 'session-1', threadId: 'main',
+      parentVpId: 'vp-same', sessionId: 'session-1',
     })).toEqual([]);
     expect(consumePendingNotifications({
-      parentVpId: 'vp-same', sessionId: 'session-2', threadId: 'main',
+      parentVpId: 'vp-same', sessionId: 'session-2',
     }).map(n => n.agentId)).toEqual(['a-session-2']);
-    expect(consumePendingNotifications({
-      parentVpId: 'vp-same', sessionId: 'session-1', threadId: 'thread-2',
-    }).map(n => n.agentId)).toEqual(['a-thread-2']);
   });
 
   it('consumeNotificationForAgent drains a single record from both maps', () => {
@@ -570,17 +567,17 @@ describe('wait-agent envelope shape', () => {
       id: 'agent-owned-a', name: 'owned-a', status: STATUS.IDLE,
       result: 'secret result', lastResult: '', error: null, messages: [],
       usage: { turns: 1 }, outputFile: '/tmp/secret.log', liveness: makeLiveness(),
-      parentSessionId: 'session-a', parentVpId: 'vp-a', parentThreadId: 'main',
+      parentSessionId: 'session-a', parentVpId: 'vp-a',
       pendingPrompts: [],
     });
     agents.set('agent-owned-b', {
       id: 'agent-owned-b', name: 'owned-b', status: STATUS.IDLE,
       result: 'visible result', lastResult: '', error: null, messages: [],
       usage: { turns: 1 }, outputFile: '/tmp/visible.log', liveness: makeLiveness(),
-      parentSessionId: 'session-b', parentVpId: 'vp-b', parentThreadId: 'main',
+      parentSessionId: 'session-b', parentVpId: 'vp-b',
       pendingPrompts: [],
     });
-    const ctxB = { parentEngineDeps: { parentSessionId: 'session-b', parentVpId: 'vp-b', parentThreadId: 'main' } };
+    const ctxB = { parentEngineDeps: { parentSessionId: 'session-b', parentVpId: 'vp-b' } };
 
     const deniedWait = JSON.parse(await waitAgent.execute({ agent_id: 'agent-owned-a' }, ctxB));
     expect(deniedWait.error).toMatch(/not found/i);
@@ -601,17 +598,17 @@ describe('wait-agent envelope shape', () => {
       id: 'agent-vp-a', name: 'vp-a-agent', status: STATUS.IDLE,
       result: 'vp-a result', lastResult: '', error: null, messages: [],
       usage: { turns: 1 }, outputFile: '/tmp/vp-a.log', liveness: makeLiveness(),
-      parentSessionId: null, parentVpId: 'vp-a', parentThreadId: 'main',
+      parentSessionId: null, parentVpId: 'vp-a',
       pendingPrompts: [],
     });
     agents.set('agent-vp-b', {
       id: 'agent-vp-b', name: 'vp-b-agent', status: STATUS.IDLE,
       result: 'vp-b result', lastResult: '', error: null, messages: [],
       usage: { turns: 1 }, outputFile: '/tmp/vp-b.log', liveness: makeLiveness(),
-      parentSessionId: null, parentVpId: 'vp-b', parentThreadId: 'main',
+      parentSessionId: null, parentVpId: 'vp-b',
       pendingPrompts: [],
     });
-    const ctxB = { parentEngineDeps: { parentVpId: 'vp-b', parentThreadId: 'main' } };
+    const ctxB = { parentEngineDeps: { parentVpId: 'vp-b' } };
 
     const emptyScopeDenied = JSON.parse(await waitAgent.execute({ agent_id: 'agent-vp-a' }, {}));
     expect(emptyScopeDenied.error).toMatch(/not found/i);
@@ -638,8 +635,8 @@ describe('wait-agent envelope shape', () => {
   });
 
   it('name collisions are scoped to the caller owner', async () => {
-    const ctxA = { parentEngineDeps: { parentSessionId: 'session-a', parentVpId: 'vp-a', parentThreadId: 'main' } };
-    const ctxB = { parentEngineDeps: { parentSessionId: 'session-b', parentVpId: 'vp-b', parentThreadId: 'main' } };
+    const ctxA = { parentEngineDeps: { parentSessionId: 'session-a', parentVpId: 'vp-a' } };
+    const ctxB = { parentEngineDeps: { parentSessionId: 'session-b', parentVpId: 'vp-b' } };
 
     const first = JSON.parse(await agentTool.execute({ name: 'same-name', mission: 'a' }, ctxA));
     expect(first.success).toBe(true);
@@ -1060,7 +1057,7 @@ describe('engine prepends sub-agent notifications to the next user turn', () => 
     enqueueTerminalNotification({
       agentId: 'scoped-agent', agentName: 'scoped', status: 'completed',
       result: 'session-right result', parentVpId: 'vp-parent',
-      parentSessionId: 'session-right', parentThreadId: 'main',
+      parentSessionId: 'session-right',
     });
 
     for await (const _ of wrongEngine.query({
@@ -1068,7 +1065,6 @@ describe('engine prepends sub-agent notifications to the next user turn', () => 
       messages: [],
       vpPersona: { vpId: 'vp-parent', persona: 'You are Parent.' },
       sessionId: 'session-wrong',
-      threadId: 'main',
     })) { /* drain */ }
     const wrongUser = wrongAdapter.streamCalls[0].messages.find(m => m.role === 'user');
     expect(String(wrongUser.content)).not.toMatch(/sub-agent-notifications/);
@@ -1078,7 +1074,6 @@ describe('engine prepends sub-agent notifications to the next user turn', () => 
       messages: [],
       vpPersona: { vpId: 'vp-parent', persona: 'You are Parent.' },
       sessionId: 'session-right',
-      threadId: 'main',
     })) { /* drain */ }
     const rightUser = rightAdapter.streamCalls[0].messages.find(m => m.role === 'user');
     expect(String(rightUser.content)).toMatch(/<sub-agent-notifications>/);
@@ -1099,7 +1094,7 @@ describe('engine prepends sub-agent notifications to the next user turn', () => 
     enqueueTerminalNotification({
       agentId: 'ack-agent', agentName: 'ack-agent', status: 'completed',
       result: 'do not lose me', parentVpId: 'vp-parent',
-      parentSessionId: 'session-ack', parentThreadId: 'main',
+      parentSessionId: 'session-ack',
     });
 
     for await (const _ of failingEngine.query({
@@ -1107,11 +1102,10 @@ describe('engine prepends sub-agent notifications to the next user turn', () => 
       messages: [],
       vpPersona: { vpId: 'vp-parent', persona: 'You are Parent.' },
       sessionId: 'session-ack',
-      threadId: 'main',
     })) { /* drain */ }
 
     const stillQueued = consumePendingNotifications({
-      parentVpId: 'vp-parent', sessionId: 'session-ack', threadId: 'main',
+      parentVpId: 'vp-parent', sessionId: 'session-ack',
     });
     expect(stillQueued.map(n => n.agentId)).toEqual(['ack-agent']);
   });
@@ -1132,7 +1126,7 @@ describe('engine prepends sub-agent notifications to the next user turn', () => 
     enqueueTerminalNotification({
       agentId: 'handoff-agent', agentName: 'handoff-agent', status: 'completed',
       result: 'handoff delivered', parentVpId: 'vp-parent',
-      parentSessionId: 'session-handoff', parentThreadId: 'main',
+      parentSessionId: 'session-handoff',
     });
 
     for await (const _ of engine.query({
@@ -1140,11 +1134,10 @@ describe('engine prepends sub-agent notifications to the next user turn', () => 
       messages: [],
       vpPersona: { vpId: 'vp-parent', persona: 'You are Parent.' },
       sessionId: 'session-handoff',
-      threadId: 'main',
     })) { /* drain */ }
 
     expect(consumePendingNotifications({
-      parentVpId: 'vp-parent', sessionId: 'session-handoff', threadId: 'main',
+      parentVpId: 'vp-parent', sessionId: 'session-handoff',
     })).toEqual([]);
   });
 
@@ -1172,7 +1165,7 @@ describe('engine prepends sub-agent notifications to the next user turn', () => 
     enqueueTerminalNotification({
       agentId: 'parent-only', agentName: 'parent-only', status: 'completed',
       result: 'for parent only', parentVpId: 'vp-parent',
-      parentSessionId: 'session-sub', parentThreadId: 'main',
+      parentSessionId: 'session-sub',
     });
 
     for await (const _ of childEngine.query({
@@ -1184,7 +1177,6 @@ describe('engine prepends sub-agent notifications to the next user turn', () => 
         subAgent: { parentVpId: 'vp-parent', agentId: 'child-agent', agentName: 'child' },
       },
       sessionId: 'session-sub',
-      threadId: 'main',
     })) { /* drain */ }
     const childUser = childAdapter.streamCalls[0].messages.find(m => m.role === 'user');
     expect(String(childUser.content)).not.toMatch(/sub-agent-notifications/);
@@ -1194,7 +1186,6 @@ describe('engine prepends sub-agent notifications to the next user turn', () => 
       messages: [],
       vpPersona: { vpId: 'vp-parent', persona: 'You are Parent.' },
       sessionId: 'session-sub',
-      threadId: 'main',
     })) { /* drain */ }
     const parentUser = parentAdapter.streamCalls[0].messages.find(m => m.role === 'user');
     expect(String(parentUser.content)).toMatch(/for parent only/);

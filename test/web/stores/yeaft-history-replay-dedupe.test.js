@@ -16,8 +16,7 @@ function mkStore() {
     messagesMap: {},
     _currentYeaftSessionId: 'sess-1',
     _currentYeaftVpId: 'vp-1',
-    _currentYeaftTurnId: 'thread-1',
-    _currentYeaftThreadId: 'thread-1',
+    _currentYeaftTurnId: 'msg-1',
   };
 }
 
@@ -31,8 +30,7 @@ describe('Yeaft history replay message dedupe', () => {
       ts: '2026-06-12T07:00:00.000Z',
       sessionId: 'sess-1',
       vpId: 'vp-1',
-      turnId: 'thread-1',
-      threadId: 'thread-1',
+      turnId: 'msg-1',
     });
     finishStreamingForConversation(store, convId);
 
@@ -41,8 +39,7 @@ describe('Yeaft history replay message dedupe', () => {
       ts: '2026-06-12T07:00:00.000Z',
       sessionId: 'sess-1',
       vpId: 'vp-1',
-      turnId: 'thread-1',
-      threadId: 'thread-1',
+      turnId: 'msg-1',
     });
 
     expect(store.messagesMap[convId]).toHaveLength(1);
@@ -54,7 +51,6 @@ describe('Yeaft history replay message dedupe', () => {
       sessionId: 'sess-1',
       vpId: 'vp-1',
       speakerVpId: 'vp-1',
-      threadId: 'thread-1',
       isStreaming: false,
     });
   });
@@ -67,16 +63,14 @@ describe('Yeaft history replay message dedupe', () => {
       id: '000001-assistant',
       sessionId: 'sess-1',
       vpId: 'vp-1',
-      turnId: 'thread-1',
-      threadId: 'thread-1',
+      turnId: 'msg-1',
     });
 
     appendToAssistantMessageForConversation(store, convId, 'hello from history', {
       id: '000001-assistant',
       sessionId: 'sess-1',
       vpId: 'vp-1',
-      turnId: 'thread-1',
-      threadId: 'thread-1',
+      turnId: 'msg-1',
     });
 
     expect(store.messagesMap[convId]).toHaveLength(1);
