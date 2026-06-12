@@ -252,6 +252,14 @@ export function handleAgentList(store, msg) {
             });
           }
         } else {
+          // Unlike the Yeaft catch-up above (gated behind
+          // _yeaftReconnectCatchUpPending), this Chat-mode sync runs on
+          // every agent_list by design: sync_messages{afterMessageId} is a
+          // client-idempotent edge-triggered request (server returns only
+          // rows after a stable id, deduped on arrival), so repeating it on
+          // routine broadcasts is harmless. The Yeaft history catch-up is
+          // level-triggered (shouldCatchUpLoadedYeaftSession re-arms after
+          // each history_loaded), which is why only it needs the latch.
           const currentMsgs = store.messagesMap[store.currentConversation] || [];
           if (currentMsgs.length > 0) {
             const lastMessageId = currentMsgs[currentMsgs.length - 1]?.id;
