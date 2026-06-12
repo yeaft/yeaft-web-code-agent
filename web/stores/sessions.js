@@ -17,6 +17,16 @@
 const { defineStore } = Pinia;
 
 /**
+ * Yeaft session pin state may arrive from two server paths:
+ * - live agent snapshot decoration: `pinned`
+ * - server DB hydration rows: `isPinned` (legacy mapped DB field)
+ * Accept both so a reload cannot silently drop persisted pins.
+ */
+function isPinnedRow(s) {
+  return !!(s && (s.pinned === true || s.isPinned === true));
+}
+
+/**
  * Resolve the shared chat store iff Pinia is wired up. Returns null in
  * test/SSR environments that don't bootstrap window.Pinia, so every
  * call site can degrade to a no-op without a try/catch of its own.
@@ -67,10 +77,16 @@ export const useSessionsStore = defineStore('sessions', {
       const pinnedIds = (chat && Array.isArray(chat.pinnedSessions))
         ? new Set(chat.pinnedSessions)
         : new Set();
+      for (const s of all) {
+        if (s && s.id && s.pinned) pinnedIds.add(s.id);
+      }
       const pinned = [];
       const unpinned = [];
       for (const s of all) {
-        if (pinnedIds.has(s.id)) pinned.push(s);
+        // Consult the row metadata too. This keeps pinned-first sorting
+        // correct immediately after server hydration, before chatStore's
+        // shared `pinnedSessions` cache has been reconciled.
+        if (pinnedIds.has(s.id) || s.pinned) pinned.push(s);
         else unpinned.push(s);
       }
       return [...pinned, ...unpinned];
@@ -227,7 +243,7 @@ export const useSessionsStore = defineStore('sessions', {
       if (chat && typeof chat.applyServerPinSnapshot === 'function') {
         const pinnedInSnapshot = new Set();
         for (const s of arr) {
-          if (s && s.id && s.pinned) pinnedInSnapshot.add(s.id);
+          if (s && s.id && isPinnedRow(s)) pinnedInSnapshot.add(s.id);
         }
         const isOwnedByAgent = (id) => {
           const row = this.sessions[id];
@@ -334,6 +350,10 @@ export const useSessionsStore = defineStore('sessions', {
       const pinnedIds = (chat && Array.isArray(chat.pinnedSessions))
         ? new Set(chat.pinnedSessions)
         : new Set();
+      for (const id of this.sessionOrder) {
+        const row = this.sessions[id];
+        if (row && row.pinned) pinnedIds.add(id);
+      }
       const targetPinned = pinnedIds.has(sessionId);
 
       const nextOrder = this.sessionOrder.filter(id => id !== sessionId);
@@ -343,6 +363,25 @@ export const useSessionsStore = defineStore('sessions', {
       if (insertAt === -1) nextOrder.push(sessionId);
       else nextOrder.splice(insertAt, 0, sessionId);
       this.sessionOrder = nextOrder;
+    },
+
+    /**
+     * Apply the server-confirmed pin state for one Yeaft session row.
+     * The chat store still owns the cross-provider `pinnedSessions` cache;
+     * this metadata is the session-list source needed for DB hydration,
+     * snapshot reconciliation, and stable pinned-first movement.
+     */
+    applyPinState(sessionId, pinned) {
+      if (!sessionId || !this.sessions[sessionId]) return;
+      this.sessions[sessionId] = {
+        ...this.sessions[sessionId],
+        pinned: !!pinned,
+      };
+      // If the row just became pinned and raw order currently has unpinned
+      // rows above it, keep the backing order consistent with the visual
+      // pinned block. Unpin does not force a reorder; the getter/helper will
+      // naturally place it in the non-pinned block by existing activity order.
+      if (pinned) this.moveSessionToFront(sessionId);
     },
 
     /** Register a request-id so components can await ok/error. */
@@ -375,7 +414,7 @@ export const useSessionsStore = defineStore('sessions', {
         // stamps `pinned:true` from the yeaft_sessions DB row). Mirror
         // it onto the normalized row so applySnapshot can sync into
         // chatStore.pinnedSessions in one pass.
-        pinned: !!s.pinned,
+        pinned: isPinnedRow(s),
       };
     },
   },

@@ -51,7 +51,11 @@ function mapRow(row) {
     // fix-yeaft-session-list-and-menu: persisted pin state. Decorated
     // onto outgoing snapshots in server/handlers/agent-output.js so the
     // web sees `pinned: true/false` on each session row.
+    // Keep `isPinned` for existing server-side callers, and expose `pinned`
+    // because the web session store consumes neutral session metadata using
+    // that field name during DB hydration.
     isPinned: row.is_pinned === 1,
+    pinned: row.is_pinned === 1,
   };
 }
 

@@ -36,4 +36,36 @@ describe('assistant/session output aliases', () => {
       expect(store.handleAssistantOutputFrame).not.toHaveBeenCalled();
     }
   });
+
+  it('applies session_pinned acknowledgements through the chat pin cache owner', () => {
+    const applyPinState = vi.fn();
+    globalThis.window = {
+      Pinia: {
+        useSessionsStore: () => ({ applyPinState }),
+      },
+    };
+    const store = {
+      ...mkStore(),
+      setSessionPinned: vi.fn(),
+    };
+
+    handleMessage(store, { type: 'session_pinned', conversationId: 'session-1', pinned: true });
+
+    expect(store.setSessionPinned).toHaveBeenCalledWith('session-1', true);
+    expect(applyPinState).not.toHaveBeenCalled();
+  });
+
+  it('falls back to Yeaft session row metadata when the chat pin cache owner is unavailable', () => {
+    const applyPinState = vi.fn();
+    globalThis.window = {
+      Pinia: {
+        useSessionsStore: () => ({ applyPinState }),
+      },
+    };
+    const store = mkStore();
+
+    handleMessage(store, { type: 'session_pinned', conversationId: 'session-1', pinned: false });
+
+    expect(applyPinState).toHaveBeenCalledWith('session-1', false);
+  });
 });
