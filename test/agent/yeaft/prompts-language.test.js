@@ -58,4 +58,36 @@ describe('worker prompt language selection', () => {
     expect(zhPrompt).toContain('完成后只汇报：改了什么、验证了什么、风险或下一步');
     expect(enPrompt).toContain('After completing work, report only: what changed, what was verified, and any risk or next step');
   });
+
+  it('does not fall back to an English-only marked persona for Chinese prompts', () => {
+    const prompt = buildWorkerPrompt({
+      language: 'zh-CN',
+      includeShape: false,
+      vpPersona: {
+        vpId: 'security',
+        displayNameZh: '安全专家',
+        roleZh: '专家',
+        persona: '<!-- lang:en -->\nYou are a security expert.\n',
+      },
+    });
+
+    expect(prompt).toContain('# 安全专家 — 专家');
+    expect(prompt).not.toContain('You are a security expert.');
+  });
+
+  it('does not fall back to a Chinese-only marked persona for English prompts', () => {
+    const prompt = buildWorkerPrompt({
+      language: 'en',
+      includeShape: false,
+      vpPersona: {
+        vpId: 'security',
+        displayName: 'Security Expert',
+        role: 'Expert',
+        persona: '<!-- lang:zh -->\n你是安全专家。\n',
+      },
+    });
+
+    expect(prompt).toContain('# Security Expert — Expert');
+    expect(prompt).not.toContain('你是安全专家。');
+  });
 });

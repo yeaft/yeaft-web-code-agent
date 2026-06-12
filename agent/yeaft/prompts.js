@@ -97,24 +97,27 @@ function readTemplate(name, { required = true } = {}) {
 function extractLangSection(content, language) {
   if (!content) return '';
 
+  const selected = extractExactLangSection(content, language);
+  if (selected !== null) return selected;
+
+  // No marker for this language — if language is 'zh', try 'en' fallback
+  if (language === 'zh') {
+    const fallback = extractExactLangSection(content, 'en');
+    if (fallback !== null) return fallback;
+  }
+
+  // No markers at all — return full content
+  if (!content.includes('<!-- lang:')) return content;
+  // Has markers but not for this language — fallback to en
+  return extractExactLangSection(content, 'en') || '';
+}
+
+function extractExactLangSection(content, language) {
+  if (!content) return null;
+
   const marker = `<!-- lang:${language} -->`;
   const markerIdx = content.indexOf(marker);
-
-  if (markerIdx === -1) {
-    // No marker for this language — if language is 'zh', try 'en' fallback
-    if (language === 'zh') {
-      const enMarker = '<!-- lang:en -->';
-      const enIdx = content.indexOf(enMarker);
-      if (enIdx !== -1) {
-        // Has en marker but no zh — return en section as fallback
-        return extractLangSection(content, 'en');
-      }
-    }
-    // No markers at all — return full content
-    if (!content.includes('<!-- lang:')) return content;
-    // Has markers but not for this language — fallback to en
-    return extractLangSection(content, 'en');
-  }
+  if (markerIdx === -1) return null;
 
   // Extract from after the marker to the next <!-- lang: marker or EOF
   const sectionStart = markerIdx + marker.length;
@@ -462,7 +465,9 @@ function selectVpPersonaBody(vpPersona, effectiveLang) {
   if (!body) return '';
 
   if (body.includes('<!-- lang:')) {
-    return extractLangSection(body, effectiveLang);
+    const selected = extractExactLangSection(body, effectiveLang);
+    if (selected !== null) return selected;
+    return localizedDefaultPersonaBody(vpPersona, effectiveLang);
   }
 
   if (effectiveLang === 'zh') {
