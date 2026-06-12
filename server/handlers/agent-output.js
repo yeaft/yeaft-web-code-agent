@@ -37,8 +37,10 @@ function hydrateInlinePreviewData(data) {
 }
 
 /**
- * Handle Claude output and interaction messages from agent.
- * Types: claude_output, chat_image, context_usage, execution_cancelled,
+ * Handle CLI/Yeaft output and interaction messages from agent.
+ * Types: claude_output (legacy Claude/Copilot CLI output frame),
+ *        yeaft_output / yeaft_session_output / session_output,
+ *        chat_image, context_usage, execution_cancelled,
  *        background_task_started, background_task_output,
  *        slash_commands_update, compact_status, ask_user_question,
  *        conversation_mcp_update, error,
@@ -363,14 +365,20 @@ export async function handleAgentOutput(agentId, agent, msg) {
       break;
     }
 
-    case 'yeaft_output': {
+    case 'yeaft_output':
+    case 'yeaft_session_output':
+    case 'session_output': {
       const data = hydrateInlinePreviewData(msg.data);
       if (msg.event?.type === 'yeaft_status') {
         agent.yeaftStatus = msg.event;
         await broadcastAgentList();
       }
-      // Forward Yeaft output to all authenticated clients of this agent's owner.
-      // Payload carries { conversationId, data } (claude_output format) or { event } (metadata).
+      // Forward Yeaft Session output to all authenticated clients of this agent's owner.
+      // Payload carries { conversationId, data } (assistant output frame) or { event } (metadata).
+      //
+      // Compatibility: accept neutral aliases from newer agents, but always
+      // relay the legacy `yeaft_output` envelope so older web bundles continue
+      // to render during rolling upgrades.
       //
       // Envelope passthrough — every field the agent stamped on the envelope
       // (groupId, vpId, turnId) MUST be forwarded verbatim. The
@@ -380,7 +388,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
       // `speakerVpId`. Without that, MessageList falls through from
       // VpTurnBlock (with avatar) to a plain AssistantTurn (no avatar) —
       // the bug v0.1.756 fixed. Keep this spread in sync with the agent
-      // side `sendYeaftOutput` / `sendYeaftEvent` in agent/yeaft/web-bridge.js.
+      // side `sendSessionOutputFrame` / `sendSessionEvent` in agent/yeaft/web-bridge.js.
       //
       // (2026-05-13: `featureId` field dropped from the envelope along
       // with the rest of the Feature system.)

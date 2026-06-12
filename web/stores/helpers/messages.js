@@ -564,7 +564,7 @@ export function formatDbMessage(dbMsg) {
   if (dbMsg.role === 'user') {
     // fix-usermsg-dup: surface the persisted clientMessageId so the
     // sync-replay merge (conversationHandler.handleSyncMessagesResult)
-    // and the live echo merge (claudeOutput.js user branch) can both
+    // and the live echo merge (assistantOutput.js user branch) can both
     // match by id. Without this, a session that was viewed AFTER page
     // refresh — i.e. messages come from sync rather than the live echo
     // path — has no dedup key and the next optimistic add produces the

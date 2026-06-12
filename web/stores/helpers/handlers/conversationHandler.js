@@ -376,7 +376,7 @@ export function handleSyncMessagesResult(store, msg) {
           // rule lives in `sameUserMessage` (web/stores/helpers/dedup.js)
           // — id-equality when both sides have a `clientMessageId`,
           // content-equality only when neither side has one. The same
-          // helper backs the live-echo dedup in claudeOutput.js so the
+          // helper backs the live-echo dedup in assistantOutput.js so the
           // two gates can't drift apart. Assistant rows never carry
           // `clientMessageId`, so they keep the historical type+content
           // match path inline.

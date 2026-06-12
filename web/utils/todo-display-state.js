@@ -24,7 +24,7 @@
  * — (1) the `status || 'pending'` fallback when the agent omits it,
  * (2) the `activeForm || content` fallback for in_progress, and
  * (3) the spread-then-overlay that produces a fresh display object
- * so the raw reactive todo from claudeOutput.js stays immutable.
+ * so the raw reactive todo from assistantOutput.js stays immutable.
  *
  * The underlying TodoWrite lifecycle concerns from PR #780 (todos
  * disappearing mid-turn / todos lingering after turn-end) are still

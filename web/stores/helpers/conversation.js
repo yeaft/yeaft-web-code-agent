@@ -11,8 +11,8 @@ import { EXPERT_ROLES, buildClientExpertMessage } from '../../utils/expert-roles
 /**
  * fix-usermsg-dup: opaque client-side id stamped on optimistic user
  * messages and forwarded to the server in the `chat` payload. The
- * server echoes it back on the `claude_output` user message so the
- * frontend dedup gate (claudeOutput.js) can match precisely instead of
+ * server echoes it back on the assistant output frame so the
+ * frontend dedup gate (assistantOutput.js) can match precisely instead of
  * falling back to string-equality on normalized content.
  *
  * Review C2 (Fowler): use `crypto.randomUUID()` rather than a homemade
@@ -424,8 +424,8 @@ export function sendMessage(store, text, attachments = [], options = {}) {
 
   // fix-usermsg-dup: stamp a stable id on the optimistic message AND on
   // the outgoing `chat` payload so the server can round-trip it back on
-  // the `claude_output` user echo. Without this, dedup in
-  // claudeOutput.js falls back to a fragile `content === content`
+  // the assistant output user echo. Without this, dedup in
+  // assistantOutput.js falls back to a fragile `content === content`
   // string match which breaks the moment normalization differs
   // (whitespace, `[Uploaded files]` marker, attachment-only sends, etc.),
   // producing the "user message rendered twice" symptom that only

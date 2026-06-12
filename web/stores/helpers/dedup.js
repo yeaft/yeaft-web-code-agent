@@ -2,7 +2,7 @@
 //
 // fix-usermsg-dup / Review I2 (Fowler): the rule "prefer clientMessageId
 // equality; fall back to content-equality only when neither side has an
-// id" was previously implemented in 4 places (claudeOutput live-echo
+// id" was previously implemented in 4 places (assistantOutput live-echo
 // dedup, conversationHandler sync-replay orphan merge, plus the test
 // mirror). Extracting the contract makes the dedup gates impossible to
 // drift apart silently — a regression in one gate breaks every gate.

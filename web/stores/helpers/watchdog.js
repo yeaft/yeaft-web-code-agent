@@ -55,7 +55,7 @@ export function startProcessingWatchdog(store, conversationId) {
 }
 
 /**
- * Reset the watchdog when claude_output is received.
+ * Reset the watchdog when an assistant output frame is received.
  * Clears health warnings and restarts the appropriate watchdog type.
  */
 export function resetProcessingWatchdog(store, conversationId) {
@@ -140,7 +140,7 @@ export function startLegacyWatchdog(store, conversationId) {
  * first under normal conditions. This is a last-resort safety net.
  *
  * Reuses the same _processingWatchdogs slot so resetProcessingWatchdog
- * (called from handleClaudeOutput on every event) keeps resetting it.
+ * (called from handleAssistantOutputFrame on every event) keeps resetting it.
  */
 export function startYeaftWatchdog(store, conversationId) {
   stopProcessingWatchdog(store, conversationId);

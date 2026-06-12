@@ -4,7 +4,7 @@ import { setLocale, getLocale } from '../utils/i18n.js';
 // Helper modules
 import * as wsHelpers from './helpers/websocket.js';
 import * as msgHelpers from './helpers/messages.js';
-import * as claudeHelpers from './helpers/claudeOutput.js';
+import * as assistantOutputHelpers from './helpers/assistantOutput.js';
 import * as handlerHelpers from './helpers/messageHandler.js';
 import * as convHelpers from './helpers/conversation.js';
 import * as sessionHelpers from './helpers/session.js';
@@ -1229,7 +1229,7 @@ export const useChatStore = defineStore('chat', {
     handleYeaftOutput(msg) {
       if (!msg) return;
 
-      // ── claude_output-format data: dispatch through standard pipeline ──
+      // ── Assistant output frame data: dispatch through the shared pipeline ──
       if (msg.data) {
         const conversationId = msg.conversationId || this.yeaftConversationId;
         if (conversationId) {
@@ -1271,7 +1271,7 @@ export const useChatStore = defineStore('chat', {
           }
           // (2026-05-13) featureId stamping removed along with the Feature system.
           try {
-            this.handleClaudeOutput(conversationId, msg.data);
+            this.handleAssistantOutputFrame(conversationId, msg.data);
             // Advance the delta cursor on every live user/assistant
             // message arrival so the next re-entry of this session can
             // request afterSeq instead of replaying the recent window.
@@ -1758,7 +1758,7 @@ export const useChatStore = defineStore('chat', {
         }
 
         case 'history_loaded':
-          // History messages already rendered via sendYeaftOutput (data path).
+          // History messages already rendered via assistant output frame data path.
           // This event just signals completion + carries cursors:
           //   mode:'recent' (default) — full pane replay; stamp oldestSeq /
           //     hasMore for the "Load older" hint AND latestSeq so the next
@@ -3049,10 +3049,11 @@ export const useChatStore = defineStore('chat', {
     handleMessage(msg) { handlerHelpers.handleMessage(this, msg); },
 
     // =====================
-    // Claude output processing
+    // Assistant output processing
     // =====================
-    getOrCreateExecutionStatus(conversationId) { return claudeHelpers.getOrCreateExecutionStatus(this, conversationId); },
-    handleClaudeOutput(conversationId, data) { claudeHelpers.handleClaudeOutput(this, conversationId, data); },
+    getOrCreateExecutionStatus(conversationId) { return assistantOutputHelpers.getOrCreateExecutionStatus(this, conversationId); },
+    handleAssistantOutputFrame(conversationId, data) { assistantOutputHelpers.handleAssistantOutputFrame(this, conversationId, data); },
+    handleClaudeOutput(conversationId, data) { this.handleAssistantOutputFrame(conversationId, data); },
 
     // =====================
     // Message CRUD
