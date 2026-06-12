@@ -350,7 +350,7 @@ describe('handleYeaftLoadHistory — pagination cursor priming', () => {
     expect(evt).toBeTruthy();
     expect(evt.trigger).toBe('load_history');
     expect(evt.snapshot.sessionId).toBe(gid);
-    expect(evt.snapshot.scope).toBe(`group/${gid}`);
+    expect(evt.snapshot.scope).toBe(`sessions/${gid}`);
     expect(evt.snapshot.summaryText).toBe('dream summary for selected session');
     expect(evt.snapshot.lastDreamAt).toBe('2026-06-12T02:03:04.000Z');
   });

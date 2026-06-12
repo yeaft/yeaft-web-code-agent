@@ -36,11 +36,11 @@ describe('buildResidentEntries', () => {
     });
     expect(out).toEqual([
       { scope: 'user', summary: '# Operator notes' },
-      { scope: 'group/grp_claude', summary: '# Claude — 4 members' },
+      { scope: 'sessions/grp_claude', summary: '# Claude — 4 members' },
       // VP per-session isolation (2026-06-09): scope MUST be session-qualified
       // — bare `vp/<id>` was a structural bug that let the same persona leak
       // across different sessions via AMS rehydration. See engine.js:253.
-      { scope: 'group/grp_claude/vp/steve', summary: REAL_VP_SUMMARY },
+      { scope: 'sessions/grp_claude/vp/steve', summary: REAL_VP_SUMMARY },
     ]);
   });
 
@@ -56,7 +56,7 @@ describe('buildResidentEntries', () => {
     });
     expect(out.find(e => e.scope.includes('/vp/'))).toBeUndefined();
     expect(out.find(e => e.scope.startsWith('vp/'))).toBeUndefined();
-    expect(out.map(e => e.scope)).toEqual(['user', 'group/grp_claude']);
+    expect(out.map(e => e.scope)).toEqual(['user', 'sessions/grp_claude']);
   });
 
   it('still emits user + group resident entries when the vp summary is a stub', () => {
@@ -117,7 +117,7 @@ describe('buildResidentEntries', () => {
       sessionId: 'grp_demo',
       ownVpId: 'linus',
       summaries: {
-        group: 'summary for group/grp_demo',
+        group: 'summary for sessions/grp_demo',
       },
     });
     const ams = new ActiveMemorySet({
@@ -139,6 +139,6 @@ describe('buildResidentEntries', () => {
     });
 
     expect(prompt).toContain('## Active Memory Set');
-    expect(prompt).toContain('- **group/grp_demo**: summary for group/grp_demo');
+    expect(prompt).toContain('- **sessions/grp_demo**: summary for sessions/grp_demo');
   });
 });
