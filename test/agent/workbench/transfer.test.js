@@ -141,13 +141,60 @@ describe('handleTransferFiles — provider routing', () => {
     expect(prompt).toContain('text/plain');
   });
 
-  it('lazy-starts the driver when no conversation state exists yet (copilot)', async () => {
+  it('image-only send (no text) — the exact original repro', async () => {
+    // The reported bug: an image with NO text caption crashed instantly.
+    // This is the scenario that must not regress.
+    const { handleTransferFiles, fakeDriver, sendInputCalls, startClaudeQuery, outputs } =
+      await loadTransferWith({ providerName: 'copilot' });
+
+    await handleTransferFiles({
+      conversationId: 'conv-1',
+      files: [IMAGE_FILE],
+      prompt: '',
+      workDir: tmpWork,
+    });
+
+    expect(startClaudeQuery).not.toHaveBeenCalled();
+    expect(fakeDriver.sendInput).toHaveBeenCalledTimes(1);
+    // Empty text is preserved verbatim to the model — copilot accepts an
+    // empty text block alongside an image attachment.
+    expect(sendInputCalls[0].prompt).toBe('');
+    expect(sendInputCalls[0].opts.attachments).toEqual([
+      { type: 'image', data: IMAGE_FILE.data, mimeType: 'image/png' },
+    ]);
+    // No error result emitted (it must not "挂了").
+    expect(outputs.find(o => o.data?.type === 'result' && o.data?.is_error)).toBeFalsy();
+    // The echoed user turn must carry a non-empty placeholder so it persists
+    // (the server drops empty-content user messages) and survives refresh.
+    const userEcho = outputs.find(o => o.data?.type === 'user');
+    expect(userEcho).toBeTruthy();
+    expect(userEcho.data.message.content).toBe('(attached files)');
+  });
+
+  it('echoes the raw user text (not the path-augmented prompt) when text is present', async () => {
+    const { handleTransferFiles, outputs, sendInputCalls } =
+      await loadTransferWith({ providerName: 'copilot' });
+
+    await handleTransferFiles({
+      conversationId: 'conv-1',
+      files: [TEXT_FILE],
+      prompt: '总结这个文件',
+      workDir: tmpWork,
+    });
+
+    // Model sees the augmented prompt (with the saved path)...
+    expect(sendInputCalls[0].prompt).toContain('.claude-tmp-attachments/notes_');
+    // ...but the persisted/echoed user turn is the clean original text.
+    const userEcho = outputs.find(o => o.data?.type === 'user');
+    expect(userEcho.data.message.content).toBe('总结这个文件');
+  });
+
+  it('falls back to claude-code when no conversation state exists', async () => {
+    // With no state in ctx, providerName resolves to DEFAULT_PROVIDER
+    // ('claude-code') — the correct behavior when the provider is unknown.
     const { handleTransferFiles, fakeDriver, startClaudeQuery } =
       await loadTransferWith({ providerName: 'copilot', hasExistingState: false });
-    // No state in ctx → falls back to DEFAULT_PROVIDER 'claude-code', which is
-    // the correct behavior when we genuinely don't know the provider.
     await handleTransferFiles({ conversationId: 'conv-unknown', files: [IMAGE_FILE], prompt: 'x', workDir: tmpWork });
-    // With no state, providerName resolves to claude-code → claude path.
     expect(startClaudeQuery).toHaveBeenCalledTimes(1);
     expect(fakeDriver.sendInput).not.toHaveBeenCalled();
   });

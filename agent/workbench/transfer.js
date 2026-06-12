@@ -63,18 +63,13 @@ export async function handleTransferFiles(msg) {
   //   error_during_execution instantly ("一发送就挂了"). Copilot accepts inline
   //   image bytes over ACP, so images are handed to the driver as attachments
   //   instead of being inlined as disk paths the way the Claude path does.
+  //
+  // Note: when state is null here, providerName resolves to DEFAULT_PROVIDER
+  // ('claude-code'), so this branch only runs for an already-created
+  // non-claude conversation — state is guaranteed non-null inside it.
   const providerName = state?.providerName || DEFAULT_PROVIDER;
   if (providerName !== 'claude-code') {
     const driver = getProvider(providerName);
-    if (!state) {
-      state = await driver.start({
-        conversationId,
-        workDir: effectiveWorkDir,
-        resumeSessionId: claudeSessionId || null,
-        userId: msg.userId,
-        username: msg.username,
-      });
-    }
     if (workDir) state.workDir = workDir;
 
     // Images go inline as provider attachments ([{type,data,mimeType}] — the
@@ -93,11 +88,19 @@ export async function handleTransferFiles(msg) {
       effectivePrompt = `${effectivePrompt}\n\n用户上传了以下文件（已保存到工作目录）：\n${fileListText}`.trim();
     }
 
-    // Echo the raw user text so it matches the message the frontend already
-    // added locally (content-equality dedup) and gets persisted as the user
-    // turn. The augmented `effectivePrompt` (with any non-image paths) goes to
-    // the model, not the echo.
-    sendOutput(conversationId, { type: 'user', message: { role: 'user', content: prompt } });
+    // Echo the user turn so it persists and renders. We echo the RAW user text
+    // (not the path-augmented effectivePrompt) so the DB stores a clean user
+    // turn. Dedup against the frontend's optimistic copy is by clientMessageId
+    // (the server backfills it onto this echo) — see agent-output.js + dedup.js.
+    //
+    // Attachment-only send (no text): the server persistence gate drops a
+    // user message with empty content (agent-output.js), and copilot mirrors
+    // our own prompt back as a dropped user_message_chunk — so this echo is the
+    // ONLY source of the user turn. Use a non-empty placeholder so the turn
+    // survives a page refresh instead of vanishing. Matches the frontend's
+    // own attachment-only placeholder (web/stores/chat.js).
+    const echoContent = prompt && prompt.trim() ? prompt : '(attached files)';
+    sendOutput(conversationId, { type: 'user', message: { role: 'user', content: echoContent } });
     state.turnActive = true;
     sendConversationList();
     try {
