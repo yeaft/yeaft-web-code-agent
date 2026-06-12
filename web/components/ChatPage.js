@@ -1019,20 +1019,21 @@ export default {
       if (!this.convModalAgent) return;
       this.store.selectAgent(this.convModalAgent);
       const workDir = this.convModalWorkDir.trim() || this.selectedConvModalAgentWorkDir;
-      const opts = this.buildConvOpts({ includeModel: true });
-      this.store.createConversation(workDir, this.convModalAgent, null, opts);
+      this.store.createConversation(workDir, this.convModalAgent, null, this.buildConvOpts());
       this.closeConversationModal();
     },
     // Build the { provider, providerOptions } payload shared by the create
     // and resume paths. Copilot conversations always enable all tools
     // (no per-conversation opt-in) so Copilot won't prompt before running
-    // tools. includeModel is only meaningful on create — a resumed session
-    // keeps the model it was started with.
-    buildConvOpts({ includeModel } = {}) {
+    // tools, and always carry the picked model — the agent merges
+    // providerOptions as a whole object (msg.providerOptions ||
+    // priorProviderOptions), so omitting the model on resume would drop it
+    // back to the Copilot default instead of preserving the picker choice.
+    buildConvOpts() {
       const opts = { provider: this.convModalProvider };
       if (this.convModalProvider === 'copilot') {
         opts.providerOptions = { allowAllTools: true };
-        if (includeModel && this.convModalCopilotModel) {
+        if (this.convModalCopilotModel) {
           opts.providerOptions.model = String(this.convModalCopilotModel).trim();
         }
       }
