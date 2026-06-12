@@ -13,6 +13,7 @@ import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
 import { normalizeProviderModels, serializeModelForPersistence } from './models.js';
 import { normaliseYeaftSection } from './config.js';
+import { mergeLlmConfigs } from './llm/provider-merge.js';
 
 /**
  * Read the LLM-relevant portion of config.json.
@@ -20,7 +21,7 @@ import { normaliseYeaftSection } from './config.js';
  * @param {string} [dir] — Yeaft data directory
  * @returns {{ providers, primaryModel, fastModel, language } | { error: string }}
  */
-export function getLlmConfig(dir) {
+function readLocalLlmConfig(dir) {
   const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
   const configPath = join(root, 'config.json');
 
@@ -28,22 +29,27 @@ export function getLlmConfig(dir) {
     return { providers: [], primaryModel: null, fastModel: null, language: 'en', needsSetup: true };
   }
 
+  const raw = readFileSync(configPath, 'utf8');
+  const json = JSON.parse(raw);
+  const providers = Array.isArray(json.providers) ? json.providers : [];
+  return {
+    providers,
+    primaryModel: json.primaryModel || null,
+    fastModel: json.fastModel || null,
+    language: json.language || 'en',
+    needsSetup: providers.length === 0 || providers.every(p => p.apiKey === 'proxy' || p.apiKey === '' || (!p.apiKey && !p.credentialProvider)),
+  };
+}
+
+export function getLlmConfig(dir, globalConfig = {}) {
   try {
-    const raw = readFileSync(configPath, 'utf8');
-    const json = JSON.parse(raw);
-    const providers = Array.isArray(json.providers) ? json.providers : [];
-
-    // Detect if config still has default/placeholder values (first-time setup needed)
-    const needsSetup = providers.length === 0 || providers.every(p =>
-      p.apiKey === 'proxy' || p.apiKey === '' || !p.apiKey
-    );
-
+    const agentConfig = readLocalLlmConfig(dir);
+    const effectiveConfig = mergeLlmConfigs(globalConfig, agentConfig);
     return {
-      providers,
-      primaryModel: json.primaryModel || null,
-      fastModel: json.fastModel || null,
-      language: json.language || 'en',
-      needsSetup,
+      ...effectiveConfig,
+      agentConfig,
+      effectiveConfig,
+      globalConfig: { providers: Array.isArray(globalConfig.providers) ? globalConfig.providers : [] },
     };
   } catch (e) {
     return { error: `Failed to read config.json: ${e.message}` };
@@ -58,7 +64,7 @@ export function getLlmConfig(dir) {
  * @param {string} [dir] — Yeaft data directory
  * @returns {{ providers, primaryModel, fastModel, language } | { error: string }}
  */
-export function updateLlmConfig(update, dir) {
+export function updateLlmConfig(update, dir, globalConfig = {}) {
   const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
   const configPath = join(root, 'config.json');
 
@@ -120,11 +126,18 @@ export function updateLlmConfig(update, dir) {
     return { error: `Failed to write config.json: ${e.message}` };
   }
 
-  return {
+  const agentConfig = {
     providers: Array.isArray(existing.providers) ? existing.providers : [],
     primaryModel: existing.primaryModel || null,
     fastModel: existing.fastModel || null,
     language: existing.language || 'en',
+  };
+  const effectiveConfig = mergeLlmConfigs(globalConfig, agentConfig);
+  return {
+    ...effectiveConfig,
+    agentConfig,
+    effectiveConfig,
+    globalConfig: { providers: Array.isArray(globalConfig.providers) ? globalConfig.providers : [] },
   };
 }
 

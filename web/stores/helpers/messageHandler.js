@@ -643,15 +643,63 @@ export function handleMessage(store, msg) {
     case 'llm_config':
     case 'llm_config_updated':
       if (msg.agentId) {
+        const previous = store.llmConfig[msg.agentId] || {};
         store.llmConfig[msg.agentId] = {
-          providers: msg.providers || [],
-          primaryModel: msg.primaryModel || null,
-          fastModel: msg.fastModel || null,
-          language: msg.language || 'en',
-          needsSetup: msg.needsSetup || false,
+          providers: msg.providers || msg.effectiveConfig?.providers || [],
+          primaryModel: msg.primaryModel || msg.effectiveConfig?.primaryModel || null,
+          fastModel: msg.fastModel || msg.effectiveConfig?.fastModel || null,
+          language: msg.language || msg.agentConfig?.language || 'en',
+          needsSetup: msg.needsSetup || msg.effectiveConfig?.needsSetup || false,
+          globalConfig: msg.globalConfig || previous.globalConfig || { providers: [] },
+          agentConfig: msg.agentConfig || previous.agentConfig || {
+            providers: msg.providers || [],
+            primaryModel: msg.primaryModel || null,
+            fastModel: msg.fastModel || null,
+            language: msg.language || 'en'
+          },
+          effectiveConfig: msg.effectiveConfig || previous.effectiveConfig || {
+            providers: msg.providers || [],
+            primaryModel: msg.primaryModel || null,
+            fastModel: msg.fastModel || null,
+            language: msg.language || 'en'
+          },
           error: msg.error || null,
           loaded: true
         };
+      }
+      break;
+
+    case 'llm_global_config_updated':
+      for (const agentId of Object.keys(store.llmConfig)) {
+        store.llmConfig[agentId] = {
+          ...store.llmConfig[agentId],
+          globalConfig: msg.globalConfig || { providers: [] },
+        };
+      }
+      if (msg.agentId && !store.llmConfig[msg.agentId]) {
+        store.llmConfig[msg.agentId] = {
+          providers: [],
+          primaryModel: null,
+          fastModel: null,
+          language: 'en',
+          globalConfig: msg.globalConfig || { providers: [] },
+          agentConfig: { providers: [], primaryModel: null, fastModel: null, language: 'en' },
+          effectiveConfig: { providers: [], primaryModel: null, fastModel: null, language: 'en' },
+          loaded: true
+        };
+      }
+      break;
+
+    case 'llm_github_device_started':
+      store.llmGithubDevice = { type: 'started', ...msg };
+      break;
+
+    case 'llm_github_device_poll_result':
+      store.llmGithubDevice = { type: 'poll', ...msg };
+      if (msg.globalConfig) {
+        for (const agentId of Object.keys(store.llmConfig)) {
+          store.llmConfig[agentId] = { ...store.llmConfig[agentId], globalConfig: msg.globalConfig };
+        }
       }
       break;
 

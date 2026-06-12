@@ -332,7 +332,25 @@ export async function handleMessage(msg) {
 
     // LLM configuration (read/write ~/.yeaft/config.json)
     case 'get_llm_config': {
-      const config = getLlmConfig(ctx.CONFIG?.yeaftDir);
+      if (msg.globalConfig && typeof msg.globalConfig === 'object') {
+        ctx.globalLlmConfig = msg.globalConfig;
+      }
+      const config = getLlmConfig(ctx.CONFIG?.yeaftDir, ctx.globalLlmConfig);
+      sendToServer({ type: 'llm_config', ...config });
+      break;
+    }
+
+    case 'llm_global_config_updated': {
+      ctx.globalLlmConfig = msg.globalConfig && typeof msg.globalConfig === 'object'
+        ? msg.globalConfig
+        : { providers: [] };
+      // Existing sessions cache AdapterRouter instances. Drop them so the
+      // next Yeaft turn sees the new global providers, without writing them
+      // to the node-local config.json.
+      resetYeaftSession().catch(err => {
+        console.error('[LLM] Failed to reload Yeaft session after global config update:', err.message);
+      });
+      const config = getLlmConfig(ctx.CONFIG?.yeaftDir, ctx.globalLlmConfig);
       sendToServer({ type: 'llm_config', ...config });
       break;
     }
@@ -346,7 +364,10 @@ export async function handleMessage(msg) {
       const incomingLanguage = typeof msg.config?.language === 'string' && msg.config.language
         ? msg.config.language
         : null;
-      const result = updateLlmConfig(msg.config || {}, ctx.CONFIG?.yeaftDir);
+      if (msg.globalConfig && typeof msg.globalConfig === 'object') {
+        ctx.globalLlmConfig = msg.globalConfig;
+      }
+      const result = updateLlmConfig(msg.config || {}, ctx.CONFIG?.yeaftDir, ctx.globalLlmConfig);
       // task-708: live locale propagation. When the user flips the UI
       // language dropdown, push the new value into every cached Engine
       // (per-VP pool + 1:1 chat session.engine) so the very next turn
@@ -354,6 +375,11 @@ export async function handleMessage(msg) {
       // user reloading the session.
       if (!result.error && incomingLanguage) {
         broadcastLanguageChange(result.language);
+      }
+      if (!result.error && !incomingLanguage) {
+        resetYeaftSession().catch(err => {
+          console.error('[LLM] Failed to reload Yeaft session after local config update:', err.message);
+        });
       }
       sendToServer({ type: 'llm_config_updated', ...result });
       break;

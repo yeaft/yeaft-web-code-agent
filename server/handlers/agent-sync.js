@@ -6,6 +6,7 @@ import {
   handleProxyResponse, handleProxyResponseChunk, handleProxyResponseEnd,
   handleProxyWsAgentMessage
 } from '../proxy.js';
+import { readGlobalLlmConfigForWeb } from '../llm-global-config.js';
 
 /**
  * Handle sync, proxy, and agent control messages from agent.
@@ -195,6 +196,9 @@ export async function handleAgentSync(agentId, agent, msg) {
             fastModel: msg.fastModel,
             language: msg.language,
             needsSetup: msg.needsSetup,
+            agentConfig: msg.agentConfig,
+            effectiveConfig: msg.effectiveConfig,
+            globalConfig: readGlobalLlmConfigForWeb(agent.ownerId || client.userId),
             error: msg.error
           });
         }
@@ -216,6 +220,9 @@ export async function handleAgentSync(agentId, agent, msg) {
             primaryModel: msg.primaryModel,
             fastModel: msg.fastModel,
             language: msg.language,
+            agentConfig: msg.agentConfig,
+            effectiveConfig: msg.effectiveConfig,
+            globalConfig: readGlobalLlmConfigForWeb(agent.ownerId || client.userId),
             error: msg.error
           });
         }

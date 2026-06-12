@@ -23,6 +23,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
 import { resolveModel, parseModelRef, normalizeProviderModels } from './models.js';
+import { mergeLlmConfigs } from './llm/provider-merge.js';
 
 /** Default configuration values. */
 const DEFAULTS = {
@@ -274,26 +275,35 @@ export function loadConfig(overrides = {}) {
   }
 
   // ─── Build config from config.json ────────────────────────
-  const providers = Array.isArray(jsonConfig.providers) ? jsonConfig.providers : null;
+  const agentProviders = Array.isArray(jsonConfig.providers) ? jsonConfig.providers : [];
+  const mergedLlmConfig = mergeLlmConfigs(overrides.globalLlmConfig || {}, {
+    providers: agentProviders,
+    primaryModel: jsonConfig.primaryModel || null,
+    fastModel: jsonConfig.fastModel || null,
+    language: jsonConfig.language || DEFAULTS.language,
+  });
+  const providers = mergedLlmConfig.providers;
 
   // Resolve primary model
   let model = 'claude-sonnet-4-20250514';
-  let primaryModel = jsonConfig.primaryModel || null;
+  let modelIdForInfo = model;
+  let primaryModel = mergedLlmConfig.primaryModel || null;
   if (primaryModel) {
     const parsed = parseModelRef(primaryModel);
-    model = parsed.modelId;
+    model = parsed.providerName?.startsWith('global:') ? primaryModel : parsed.modelId;
+    modelIdForInfo = parsed.modelId;
   }
 
   // Resolve fast model
-  let fastModel = jsonConfig.fastModel || primaryModel || null;
+  let fastModel = mergedLlmConfig.fastModel || primaryModel || null;
   let fastModelId = null;
   if (fastModel) {
     const parsed = parseModelRef(fastModel);
-    fastModelId = parsed.modelId;
+    fastModelId = parsed.providerName?.startsWith('global:') ? fastModel : parsed.modelId;
   }
 
   // Resolve model info for context window / output limits
-  const modelInfo = resolveModel(model);
+  const modelInfo = resolveModel(modelIdForInfo);
 
   const config = {
     // Model
@@ -305,7 +315,7 @@ export function loadConfig(overrides = {}) {
     modelInfo: modelInfo || null,
 
     // Providers
-    providers: providers,
+    providers: providers.length > 0 ? providers : null,
 
     // General settings
     language: overrides.language || jsonConfig.language || DEFAULTS.language,

@@ -199,6 +199,7 @@ export const useChatStore = defineStore('chat', {
 
     // LLM config: agentId -> { providers, primaryModel, fastModel, language, loaded }
     llmConfig: {},
+    llmGithubDevice: null,
 
     // models.dev community registry snapshot (shared across agents — same
     // public catalog). Shape: { registry, fetchedAt, error, loaded }.
