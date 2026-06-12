@@ -93,6 +93,8 @@ Do NOT end your turn silently right after CloseAgent.`,
           outputFile: agent.outputFile || null,
           turns: agent.usage?.turns || 0,
           parentVpId: agent.parentVpId || null,
+          parentSessionId: agent.parentSessionId || null,
+          parentThreadId: agent.parentThreadId || 'main',
         });
       } catch { /* never block close on notification queue */ }
       agent.__terminalNotified = true;

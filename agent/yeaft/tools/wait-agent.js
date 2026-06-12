@@ -43,9 +43,18 @@ import { consumeNotificationForAgent } from '../sub-agent/notifications.js';
  * tail-positioned nudges when `result` is long).
  *
  * @param {string} status
- * @param {{ timedOut?: boolean, runningInBackground?: boolean }} [opts]
+ * @param {{ timedOut?: boolean, runningInBackground?: boolean, budgetExceeded?: boolean }} [opts]
  */
 function nextStepsFor(status, opts = {}) {
+  if (opts.budgetExceeded) {
+    return (
+      'Sub-agent stopped because an explicit budget limit was reached. ' +
+      'Use `partial_output`, `budget_reason`, and `budget_usage` to decide ' +
+      'whether to relay the partial result, spawn a fresh agent with a ' +
+      'larger budget, or report the cutoff to the user. Do NOT present this ' +
+      'as an ordinary successful completion.'
+    );
+  }
   if (opts.timedOut) {
     return (
       'Sub-agent is STILL RUNNING in the background — it does NOT need ' +
@@ -115,14 +124,21 @@ function errorNextSteps() {
  */
 function buildEnvelope(agent, { timedOut = false } = {}) {
   const status = agent.status;
+  const budgetResult = agent.result && typeof agent.result === 'object'
+    && agent.result.status === 'budget_exceeded'
+    ? agent.result
+    : null;
+  const resultText = budgetResult
+    ? (budgetResult.partial_output || '')
+    : ((typeof agent.result === 'string' && agent.result)
+        ? agent.result
+        : (agent.lastResult || ''));
   const env = {
-    next_steps: nextStepsFor(status, { timedOut }),
+    next_steps: nextStepsFor(status, { timedOut, budgetExceeded: !!budgetResult }),
     agentId: agent.id,
     name: agent.name,
     status,
-    result: (typeof agent.result === 'string' && agent.result)
-      ? agent.result
-      : (agent.lastResult || ''),
+    result: resultText,
     error: agent.error || null,
     outputFile: agent.outputFile || null,
     liveness: snapshotLiveness(agent.liveness),
@@ -133,6 +149,13 @@ function buildEnvelope(agent, { timedOut = false } = {}) {
     env.timedOut = true;
     env.runningInBackground = true;
     env.message = `Agent "${agent.name}" is still running in the background.`;
+  }
+  if (budgetResult) {
+    env.budgetExceeded = true;
+    env.budget_status = budgetResult.status;
+    env.budget_reason = budgetResult.reason || null;
+    env.partial_output = budgetResult.partial_output || '';
+    env.budget_usage = budgetResult.usage || null;
   }
   return env;
 }

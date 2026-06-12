@@ -308,8 +308,10 @@ you just kicked off.`,
       // null so the field always exists on the record shape.
       outputFile: null,
       // ParentVpId is mirrored from deps when the driver starts so the
-      // notification queue can bucket by parent VP.
+      // notification queue can bucket by parent Session/VP/thread.
       parentVpId: null,
+      parentSessionId: null,
+      parentThreadId: null,
       abortController: new AbortController(),
     };
 

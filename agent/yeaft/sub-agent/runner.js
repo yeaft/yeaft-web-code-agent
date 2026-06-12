@@ -121,6 +121,8 @@ export function isRestrictedToolName(name) {
  *   yeaftDir?: string,
  *   parentName?: string,
  *   parentVpId?: string,
+ *   parentSessionId?: string|null,
+ *   parentThreadId?: string|null,
  *   parentVpPersona?: object,
  *   toolStats?: object,
  *   onEvent?: (agentId: string, evt: object) => void,
@@ -158,6 +160,8 @@ export function startSubAgent(agent, deps = {}) {
   agent.engineMessages = agent.engineMessages || [];
   agent.liveness = agent.liveness || makeLiveness();
   agent.parentVpId = deps.parentVpId || null;
+  agent.parentSessionId = deps.parentSessionId || null;
+  agent.parentThreadId = deps.parentThreadId || 'main';
   agent.outputLog = createOutputLog(agent.id, deps.subAgentLogDir);
   agent.outputFile = agent.outputLog.path;
   agent.outputLog.write({ type: 'sub_agent_spawned', agentId: agent.id, agentName: agent.name, mission: agent.mission || agent.task || '' });
@@ -447,6 +451,8 @@ function finalizeTerminal(agent, status, { error, deps } = {}) {
       outputFile: agent.outputFile || null,
       turns: agent.usage?.turns || 0,
       parentVpId: agent.parentVpId || null,
+      parentSessionId: agent.parentSessionId || null,
+      parentThreadId: agent.parentThreadId || 'main',
     });
   } catch { /* never let the notification queue throw kill the driver */ }
 }

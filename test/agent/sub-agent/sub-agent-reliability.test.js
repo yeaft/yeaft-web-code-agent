@@ -337,6 +337,34 @@ describe('notifications queue', () => {
     expect(consumePendingNotifications(null).map(n => n.agentId)).toEqual(['a3']);
   });
 
+  it('scopes parent drains by session and thread when provided', () => {
+    enqueueTerminalNotification({
+      agentId: 'a-session-1', agentName: 'a1', status: 'completed',
+      parentVpId: 'vp-same', parentSessionId: 'session-1', parentThreadId: 'main',
+    });
+    enqueueTerminalNotification({
+      agentId: 'a-session-2', agentName: 'a2', status: 'completed',
+      parentVpId: 'vp-same', parentSessionId: 'session-2', parentThreadId: 'main',
+    });
+    enqueueTerminalNotification({
+      agentId: 'a-thread-2', agentName: 'a3', status: 'completed',
+      parentVpId: 'vp-same', parentSessionId: 'session-1', parentThreadId: 'thread-2',
+    });
+
+    expect(consumePendingNotifications({
+      parentVpId: 'vp-same', sessionId: 'session-1', threadId: 'main',
+    }).map(n => n.agentId)).toEqual(['a-session-1']);
+    expect(consumePendingNotifications({
+      parentVpId: 'vp-same', sessionId: 'session-1', threadId: 'main',
+    })).toEqual([]);
+    expect(consumePendingNotifications({
+      parentVpId: 'vp-same', sessionId: 'session-2', threadId: 'main',
+    }).map(n => n.agentId)).toEqual(['a-session-2']);
+    expect(consumePendingNotifications({
+      parentVpId: 'vp-same', sessionId: 'session-1', threadId: 'thread-2',
+    }).map(n => n.agentId)).toEqual(['a-thread-2']);
+  });
+
   it('consumeNotificationForAgent drains a single record from both maps', () => {
     enqueueTerminalNotification({ agentId: 'a1', agentName: 'a1', status: 'closed', parentVpId: 'vp-A' });
     enqueueTerminalNotification({ agentId: 'a2', agentName: 'a2', status: 'closed', parentVpId: 'vp-A' });
@@ -454,6 +482,33 @@ describe('wait-agent envelope shape', () => {
     expect(env.next_steps).toMatch(/STILL RUNNING/i);
     expect(env.next_steps).toMatch(/WaitAgent/);
     expect(env.next_steps).toMatch(/CloseAgent/);
+  });
+
+  it('terminal envelope preserves budget_exceeded details', async () => {
+    const agents = getAgentRegistry();
+    agents.set('agent-budget-wait', {
+      id: 'agent-budget-wait', name: 'budget-wait', status: STATUS.COMPLETED,
+      result: {
+        status: 'budget_exceeded',
+        partial_output: 'partial work',
+        reason: 'max_turns (1) reached',
+        usage: { turns: 1, tokens: 42 },
+      },
+      lastResult: 'stale preview',
+      error: null, messages: [], usage: { turns: 1 },
+      outputFile: null, liveness: makeLiveness(),
+    });
+
+    const env = JSON.parse(await waitAgent.execute({ agent_id: 'agent-budget-wait' }, {}));
+    expect(env.status).toBe(STATUS.COMPLETED);
+    expect(env.result).toBe('partial work');
+    expect(env.budgetExceeded).toBe(true);
+    expect(env.budget_status).toBe('budget_exceeded');
+    expect(env.budget_reason).toMatch(/max_turns/);
+    expect(env.partial_output).toBe('partial work');
+    expect(env.budget_usage).toEqual({ turns: 1, tokens: 42 });
+    expect(env.next_steps).toMatch(/budget/i);
+    expect(env.next_steps).not.toMatch(/finished successfully/i);
   });
 
   it('drains the agent notification when terminal so engine does not redeliver', async () => {
@@ -745,6 +800,107 @@ describe('engine prepends sub-agent notifications to the next user turn', () => 
     expect(String(lastUser.content)).toMatch(/planner/);
     expect(String(lastUser.content)).toMatch(/I built the plan/);
     expect(String(lastUser.content)).toMatch(/continue parent work/);
+  });
+
+  it('does not let another session with the same VP drain the notification', async () => {
+    const { Engine } = await import('../../../agent/yeaft/engine.js');
+    const wrongAdapter = new TextAdapter('wrong');
+    const rightAdapter = new TextAdapter('right');
+    const wrongEngine = new Engine({
+      adapter: wrongAdapter,
+      trace: new NullTrace(),
+      config: { model: 'test-model', maxOutputTokens: 256, _readOnly: true, language: 'en' },
+      toolRegistry: mkParentRegistry(),
+      sessionId: 'session-wrong',
+      vpId: 'vp-parent',
+    });
+    const rightEngine = new Engine({
+      adapter: rightAdapter,
+      trace: new NullTrace(),
+      config: { model: 'test-model', maxOutputTokens: 256, _readOnly: true, language: 'en' },
+      toolRegistry: mkParentRegistry(),
+      sessionId: 'session-right',
+      vpId: 'vp-parent',
+    });
+
+    enqueueTerminalNotification({
+      agentId: 'scoped-agent', agentName: 'scoped', status: 'completed',
+      result: 'session-right result', parentVpId: 'vp-parent',
+      parentSessionId: 'session-right', parentThreadId: 'main',
+    });
+
+    for await (const _ of wrongEngine.query({
+      prompt: 'wrong session',
+      messages: [],
+      vpPersona: { vpId: 'vp-parent', persona: 'You are Parent.' },
+      sessionId: 'session-wrong',
+      threadId: 'main',
+    })) { /* drain */ }
+    const wrongUser = wrongAdapter.streamCalls[0].messages.find(m => m.role === 'user');
+    expect(String(wrongUser.content)).not.toMatch(/sub-agent-notifications/);
+
+    for await (const _ of rightEngine.query({
+      prompt: 'right session',
+      messages: [],
+      vpPersona: { vpId: 'vp-parent', persona: 'You are Parent.' },
+      sessionId: 'session-right',
+      threadId: 'main',
+    })) { /* drain */ }
+    const rightUser = rightAdapter.streamCalls[0].messages.find(m => m.role === 'user');
+    expect(String(rightUser.content)).toMatch(/<sub-agent-notifications>/);
+    expect(String(rightUser.content)).toMatch(/session-right result/);
+  });
+
+  it('sub-agent engines do not drain parent notifications', async () => {
+    const { Engine } = await import('../../../agent/yeaft/engine.js');
+    const childAdapter = new TextAdapter('child');
+    const parentAdapter = new TextAdapter('parent');
+    const childEngine = new Engine({
+      adapter: childAdapter,
+      trace: new NullTrace(),
+      config: { model: 'test-model', maxOutputTokens: 256, _readOnly: true, language: 'en' },
+      toolRegistry: mkParentRegistry(),
+      sessionId: 'session-sub',
+      vpId: 'vp-parent',
+    });
+    const parentEngine = new Engine({
+      adapter: parentAdapter,
+      trace: new NullTrace(),
+      config: { model: 'test-model', maxOutputTokens: 256, _readOnly: true, language: 'en' },
+      toolRegistry: mkParentRegistry(),
+      sessionId: 'session-sub',
+      vpId: 'vp-parent',
+    });
+
+    enqueueTerminalNotification({
+      agentId: 'parent-only', agentName: 'parent-only', status: 'completed',
+      result: 'for parent only', parentVpId: 'vp-parent',
+      parentSessionId: 'session-sub', parentThreadId: 'main',
+    });
+
+    for await (const _ of childEngine.query({
+      prompt: 'child turn',
+      messages: [],
+      vpPersona: {
+        vpId: 'vp-parent',
+        persona: 'You are a child.',
+        subAgent: { parentVpId: 'vp-parent', agentId: 'child-agent', agentName: 'child' },
+      },
+      sessionId: 'session-sub',
+      threadId: 'main',
+    })) { /* drain */ }
+    const childUser = childAdapter.streamCalls[0].messages.find(m => m.role === 'user');
+    expect(String(childUser.content)).not.toMatch(/sub-agent-notifications/);
+
+    for await (const _ of parentEngine.query({
+      prompt: 'parent turn',
+      messages: [],
+      vpPersona: { vpId: 'vp-parent', persona: 'You are Parent.' },
+      sessionId: 'session-sub',
+      threadId: 'main',
+    })) { /* drain */ }
+    const parentUser = parentAdapter.streamCalls[0].messages.find(m => m.role === 'user');
+    expect(String(parentUser.content)).toMatch(/for parent only/);
   });
 
   it('no notifications → user prompt is unchanged', async () => {

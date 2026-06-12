@@ -15,7 +15,7 @@
  *     1. WaitAgent (drains anything queued for this agent on terminal,
  *        before returning).
  *     2. Engine.query() — when started with a user prompt, it asks
- *        `consumePendingNotifications(parentVpId)` for any queued
+ *        `consumePendingNotifications({ sessionId, parentVpId, threadId })` for any queued
  *        terminal events from sub-agents that the parent hasn't yet
  *        acknowledged, and prepends a short XML block to the user
  *        message. The XML block is human-readable for the model and
@@ -28,11 +28,12 @@
  *   long-term record.
  *
  * Keying:
- *   Notifications are bucketed by `parentVpId`. If a sub-agent was spawned
- *   without a parentVpId (e.g. legacy / test path), we fall back to the
- *   bucket key `'__no_vp__'`. WaitAgent always drains via agentId
- *   regardless of bucket, so the bucket only matters for the engine
- *   pre-prompt drain.
+ *   Notifications are bucketed by `(sessionId, parentVpId, threadId)` when
+ *   the parent runs inside a Yeaft Session. Legacy / test callers that
+ *   don't provide a sessionId still bucket by `parentVpId` (or
+ *   `'__no_vp__'`) so older in-process callers keep working. WaitAgent
+ *   always drains via agentId regardless of bucket, so the bucket only
+ *   matters for the engine pre-prompt drain.
  *
  * Dedup:
  *   Each notification carries a unique id (agentId + status + ts). The
@@ -40,17 +41,40 @@
  *   us from emitting more than one terminal notification per agent.
  */
 
-/** @typedef {{ id: string, agentId: string, agentName: string, status: string, result: string, error: string|null, outputFile: string|null, turns: number, parentVpId: string|null, createdAt: number }} SubAgentNotification */
+/** @typedef {{ id: string, agentId: string, agentName: string, status: string, result: string, error: string|null, outputFile: string|null, turns: number, parentVpId: string|null, parentSessionId: string|null, parentThreadId: string|null, createdAt: number }} SubAgentNotification */
 
-/** Map<parentVpId, SubAgentNotification[]> */
+/** Map<bucketKey, SubAgentNotification[]> */
 const byParent = new Map();
 /** Map<agentId, SubAgentNotification> — for WaitAgent agentId drains. */
 const byAgent = new Map();
 
 const FALLBACK_BUCKET = '__no_vp__';
+const MAIN_THREAD_ID = 'main';
 
-function bucketKey(parentVpId) {
-  return (parentVpId && typeof parentVpId === 'string') ? parentVpId : FALLBACK_BUCKET;
+function cleanString(value) {
+  return (typeof value === 'string' && value.trim()) ? value.trim() : null;
+}
+
+function normalizeScope(input, sessionId, threadId) {
+  if (input && typeof input === 'object') {
+    return {
+      parentVpId: cleanString(input.parentVpId),
+      sessionId: cleanString(input.sessionId ?? input.parentSessionId),
+      threadId: cleanString(input.threadId ?? input.parentThreadId) || MAIN_THREAD_ID,
+    };
+  }
+  return {
+    parentVpId: cleanString(input),
+    sessionId: cleanString(sessionId),
+    threadId: cleanString(threadId) || MAIN_THREAD_ID,
+  };
+}
+
+function bucketKey(scope, sessionId, threadId) {
+  const s = normalizeScope(scope, sessionId, threadId);
+  const vp = s.parentVpId || FALLBACK_BUCKET;
+  if (!s.sessionId) return vp;
+  return `${s.sessionId}::${vp}::${s.threadId || MAIN_THREAD_ID}`;
 }
 
 /**
@@ -58,12 +82,17 @@ function bucketKey(parentVpId) {
  * a second call with the same agentId is a no-op (we only emit one
  * terminal notice per child).
  *
- * @param {{ agentId: string, agentName: string, status: string, result?: string, error?: string|null, outputFile?: string|null, turns?: number, parentVpId?: string|null }} input
+ * @param {{ agentId: string, agentName: string, status: string, result?: string, error?: string|null, outputFile?: string|null, turns?: number, parentVpId?: string|null, parentSessionId?: string|null, sessionId?: string|null, parentThreadId?: string|null, threadId?: string|null }} input
  * @returns {SubAgentNotification|null} the queued record (null if a dup)
  */
 export function enqueueTerminalNotification(input) {
   if (!input || !input.agentId || !input.status) return null;
   if (byAgent.has(input.agentId)) return null; // already queued
+  const scope = normalizeScope({
+    parentVpId: input.parentVpId,
+    parentSessionId: input.parentSessionId ?? input.sessionId,
+    parentThreadId: input.parentThreadId ?? input.threadId,
+  });
   const rec = {
     id: `${input.agentId}:${input.status}:${Date.now()}`,
     agentId: input.agentId,
@@ -73,10 +102,12 @@ export function enqueueTerminalNotification(input) {
     error: input.error || null,
     outputFile: input.outputFile || null,
     turns: typeof input.turns === 'number' ? input.turns : 0,
-    parentVpId: input.parentVpId || null,
+    parentVpId: scope.parentVpId,
+    parentSessionId: scope.sessionId,
+    parentThreadId: scope.threadId,
     createdAt: Date.now(),
   };
-  const key = bucketKey(input.parentVpId);
+  const key = bucketKey(scope);
   if (!byParent.has(key)) byParent.set(key, []);
   byParent.get(key).push(rec);
   byAgent.set(rec.agentId, rec);
@@ -90,11 +121,11 @@ export function enqueueTerminalNotification(input) {
  * Engine calls this at the start of every user-driven turn so the
  * parent model sees terminal events that arrived while it was idle.
  *
- * @param {string|null} parentVpId
+ * @param {string|{parentVpId?: string|null, sessionId?: string|null, parentSessionId?: string|null, threadId?: string|null, parentThreadId?: string|null}|null} scope
  * @returns {SubAgentNotification[]}
  */
-export function consumePendingNotifications(parentVpId) {
-  const key = bucketKey(parentVpId);
+export function consumePendingNotifications(scope) {
+  const key = bucketKey(scope);
   const list = byParent.get(key) || [];
   byParent.set(key, []);
   // Don't drop from byAgent yet — WaitAgent may still query by agentId
@@ -118,7 +149,11 @@ export function consumeNotificationForAgent(agentId) {
   byAgent.delete(agentId);
   // Also remove from the parent bucket so the engine drain doesn't
   // re-emit it.
-  const key = bucketKey(rec.parentVpId);
+  const key = bucketKey({
+    parentVpId: rec.parentVpId,
+    sessionId: rec.parentSessionId,
+    threadId: rec.parentThreadId,
+  });
   const list = byParent.get(key);
   if (Array.isArray(list)) {
     const idx = list.findIndex(r => r.id === rec.id);

@@ -962,6 +962,8 @@ export class Engine {
         parentName: vpCtx?.senderVpId || 'parent',
         parentVpId: vpCtx?.senderVpId || null,
         parentVpPersona: vpCtx?.vpPersona || null,
+        parentSessionId: vpCtx?.sessionId || null,
+        parentThreadId: vpCtx?.threadId || MAIN_THREAD_ID,
         onEvent: this.#subAgentEventSink || null,
         language: this.#config?.language || 'en',
         // Forward the session-shared ToolUsageStats so sub-agent
@@ -1428,6 +1430,12 @@ export class Engine {
     const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
       ? collabToolPolicy
       : null;
+    const runtimeSessionId = (typeof sessionId === 'string' && sessionId.trim())
+      ? sessionId.trim()
+      : this.#sessionId;
+    const runtimeThreadId = (typeof threadId === 'string' && threadId.trim())
+      ? threadId.trim()
+      : MAIN_THREAD_ID;
 
     // ─── Pre-query: FTS5 Memory Recall + AMS snapshot ─────
     // Memory has a SINGLE render outlet now (DESIGN-PROMPT §3 ③):
@@ -1588,7 +1596,12 @@ export class Engine {
     const parentVpIdForNotif = (vpPersona && typeof vpPersona === 'object' && typeof vpPersona.vpId === 'string')
       ? vpPersona.vpId
       : (typeof senderVpId === 'string' ? senderVpId : null);
-    const pendingSubAgentNotifs = consumePendingNotifications(parentVpIdForNotif);
+    const isSubAgentTurn = !!(vpPersona && typeof vpPersona === 'object' && vpPersona.subAgent);
+    const pendingSubAgentNotifs = isSubAgentTurn ? [] : consumePendingNotifications({
+      sessionId: runtimeSessionId,
+      parentVpId: parentVpIdForNotif,
+      threadId: runtimeThreadId,
+    });
     const subAgentNotifBlock = formatNotificationsForPrompt(pendingSubAgentNotifs);
 
     let finalUserContent;
@@ -2366,6 +2379,8 @@ export class Engine {
       const toolCtx = this.#buildToolContext(signal, {
         router,
         senderVpId,
+        sessionId: runtimeSessionId,
+        threadId: runtimeThreadId,
         inboundEnvelope,
         taskId,
         taskMembers,
