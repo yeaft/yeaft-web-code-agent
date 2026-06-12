@@ -202,13 +202,15 @@ export function scanWorkdirSessions(workDir) {
  * Register `(sessionId, workDir)` in the central registry so the next
  * `snapshotSessions()` includes this session.
  *
- * Validates that `<workDir>/.yeaft/sessions/<sessionId>/group.json` exists
- * and is parseable. Throws:
+ * Validates that `<workDir>/.yeaft/sessions/<sessionId>/session.json`
+ * exists and is parseable, with legacy `group.json` as a read fallback.
+ * Throws:
  *  - `not_found`   — the session dir is not on disk at this workdir
- *  - `corrupt_meta` — the dir exists but `group.json` is missing / unreadable
- *                    / can't be parsed. Surfaced as a distinct code so the
- *                    UI can tell the user "the file is broken" instead of
- *                    "you picked the wrong workdir" (review finding I1).
+ *  - `corrupt_meta` — the dir exists but session metadata is missing /
+ *                    unreadable / can't be parsed. Surfaced as a distinct
+ *                    code so the UI can tell the user "the file is broken"
+ *                    instead of "you picked the wrong workdir" (review
+ *                    finding I1).
  *
  * Idempotent: if the same `(sessionId, workDir)` is already registered,
  * we still rewrite the entry (with the normalized path) and return the
@@ -227,7 +229,7 @@ export function restoreSessionToRegistry(defaultYeaftDir, sessionId, workDir) {
   const dir = join(sessionsRoot(groupYeaftDir), sessionId);
   if (!existsSync(dir)) throw new SessionCrudError('not_found', sessionId);
   const meta = loadSessionMeta(dir);
-  if (!meta) throw new SessionCrudError('corrupt_meta', sessionId, `group.json missing or unreadable at ${dir}`);
+  if (!meta) throw new SessionCrudError('corrupt_meta', sessionId, `session metadata missing or unreadable at ${dir} (expected session.json or legacy group.json)`);
   registerSessionWorkDir(defaultYeaftDir, sessionId, normalized);
   return { ...meta, workDir: normalized };
 }
@@ -344,11 +346,12 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
   handle.close();
   if (normalizedWorkDir) registerSessionWorkDir(yeaftDir, id, normalizedWorkDir);
 
-  // Per-group config (v1: model only). We always create an empty
-  // config.json so the file's presence signals "owned by this group" and
-  // hand-editing tools can find a stub. Initial overrides from the
-  // wizard spec (currently just `config.model`) are persisted here so
-  // the engine cache picks them up on the very first turn.
+  // Per-session config (v1: model only). We always create an empty
+  // config.json so hand-editing tools can find a session-level override
+  // stub. An empty object means "no session override; use global config".
+  // Initial overrides from the wizard spec (currently just `config.model`)
+  // are persisted here so the engine cache picks them up on the very first
+  // turn.
   try {
     ensureSessionConfigFile(yeaftDir, id);
     if (spec && spec.config && typeof spec.config === 'object') {
