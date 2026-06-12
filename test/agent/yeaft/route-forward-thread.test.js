@@ -1,10 +1,24 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { createCoordinator } from '../../../agent/yeaft/sessions/coordinator.js';
 import { createRouter } from '../../../agent/yeaft/routing/router.js';
 import routeForwardTool from '../../../agent/yeaft/tools/route-forward.js';
-import { buildVpQueryOpts } from '../../../agent/yeaft/web-bridge.js';
+import {
+  __testEnqueueForVp,
+  __testGetVpThreads,
+  __testSeedVpThread,
+  __testSetSession,
+  __testSetThreadClassifier,
+  __testWaitForRoutePromises,
+  buildVpQueryOpts,
+  visibleInboundThreadId,
+} from '../../../agent/yeaft/web-bridge.js';
 
 describe('route_forward thread ownership', () => {
+  afterEach(() => {
+    __testSetSession(null);
+    __testSetThreadClassifier(null);
+  });
+
   function makeCoordinator() {
     const stored = [];
     const delivered = [];
@@ -61,6 +75,78 @@ describe('route_forward thread ownership', () => {
       sourceThreadId: 'thr-source',
     });
     expect(delivered[0].envelope.msg.meta.sourceThreadId).toBe('thr-source');
+  });
+
+  it('uses sourceThreadId for visible route_forward rows', () => {
+    const envelope = {
+      msg: {
+        meta: {
+          injectedBy: 'route_forward',
+          sourceThreadId: '  thr-source  ',
+        },
+      },
+    };
+
+    expect(visibleInboundThreadId(envelope, 'thr-target')).toBe('thr-source');
+    expect(visibleInboundThreadId({ msg: { meta: {} } }, 'thr-target')).toBe('thr-target');
+  });
+
+  it('persists related route_forward rows under the source thread while queuing target work', async () => {
+    const persisted = [];
+    const sessionId = 'session-route-thread-related';
+    const targetVpId = 'vp-martin';
+    __testSetSession({
+      config: {},
+      conversationStore: {
+        append(record) {
+          persisted.push(record);
+          return { id: `persisted-${persisted.length}`, ...record };
+        },
+      },
+    });
+    __testSeedVpThread({
+      sessionId,
+      vpId: targetVpId,
+      threadId: 'thr-target',
+      status: 'typing',
+    });
+    __testSetThreadClassifier(async () => ({
+      decision: 'related',
+      targetThreadId: 'thr-target',
+      title: 'target work',
+    }));
+
+    const envelope = {
+      sessionId,
+      vpId: targetVpId,
+      threadId: 'thr-target',
+      trigger: 'mention',
+      msg: {
+        id: 'msg-forward-related',
+        from: 'vp-linus',
+        role: 'assistant',
+        text: '@vp-martin please review this PR',
+        meta: {
+          injectedBy: 'route_forward',
+          senderVpId: 'vp-linus',
+          sourceThreadId: 'thr-source',
+        },
+      },
+    };
+
+    __testEnqueueForVp(sessionId, targetVpId, envelope);
+    await __testWaitForRoutePromises('msg-forward-related');
+
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]).toMatchObject({
+      role: 'assistant',
+      speakerVpId: 'vp-linus',
+      threadId: 'thr-source',
+      sessionId,
+    });
+    const targetThread = __testGetVpThreads(sessionId, targetVpId)
+      .find(thread => thread.threadId === 'thr-target');
+    expect(targetThread?.pendingQueries).toHaveLength(1);
   });
 
   it('passes the active engine thread id into the route_forward tool context', async () => {
