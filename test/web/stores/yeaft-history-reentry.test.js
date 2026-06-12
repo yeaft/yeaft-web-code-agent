@@ -27,8 +27,8 @@ function makeStore() {
   return store;
 }
 
-describe('Yeaft group history re-entry', () => {
-  it('hydrates the active Fun group on Yeaft entry even when stale rows are cached for that group', () => {
+describe('Yeaft session history re-entry', () => {
+  it('hydrates the active Fun session on Yeaft entry even when stale rows are cached for that session', () => {
     const store = makeStore();
     store.yeaftConversationId = 'yeaft-1';
     store.yeaftAgentId = 'agent-1';
@@ -36,7 +36,7 @@ describe('Yeaft group history re-entry', () => {
     store.yeaftActiveSessionFilter = 'grp_fun';
     store.messagesMap = {
       'yeaft-1': [
-        { type: 'user', content: 'old cached Fun message', groupId: 'grp_fun' },
+        { type: 'user', content: 'old cached Fun message', sessionId: 'grp_fun' },
       ],
     };
 
@@ -45,8 +45,8 @@ describe('Yeaft group history re-entry', () => {
     expect(store.sent).toEqual([{
       type: 'yeaft_load_history',
       agentId: 'agent-1',
-      limit: 10,
-      groupId: 'grp_fun',
+      limit: 5,
+      sessionId: 'grp_fun',
     }]);
     expect(store.yeaftSessionHistoryState.grp_fun).toEqual(expect.objectContaining({
       loaded: false,
@@ -54,14 +54,14 @@ describe('Yeaft group history re-entry', () => {
     }));
   });
 
-  it('hydrates Fun group on group switch even when stale rows are cached for that group', () => {
+  it('hydrates Fun session on session switch even when stale rows are cached for that session', () => {
     const store = makeStore();
     store.yeaftConversationId = 'yeaft-1';
     store.yeaftAgentId = 'agent-1';
     store.yeaftActiveSessionFilter = 'grp_other';
     store.messagesMap = {
       'yeaft-1': [
-        { type: 'user', content: 'old cached Fun message', groupId: 'grp_fun' },
+        { type: 'user', content: 'old cached Fun message', sessionId: 'grp_fun' },
       ],
     };
 
@@ -70,13 +70,13 @@ describe('Yeaft group history re-entry', () => {
     expect(store.sent).toEqual([{
       type: 'yeaft_load_history',
       agentId: 'agent-1',
-      limit: 10,
-      groupId: 'grp_fun',
+      limit: 5,
+      sessionId: 'grp_fun',
     }]);
   });
 
 
-  it('requests metadata only on Yeaft entry until the group snapshot selects an active group', () => {
+  it('requests metadata only on Yeaft entry until the session snapshot selects an active session', () => {
     const store = makeStore();
     store.yeaftConversationId = 'yeaft-1';
     store.yeaftAgentId = 'agent-1';
@@ -89,7 +89,7 @@ describe('Yeaft group history re-entry', () => {
       type: 'yeaft_load_history',
       agentId: 'agent-1',
       limit: 0,
-      groupId: null,
+      sessionId: null,
     }]);
     expect(store.yeaftSessionHistoryState).toEqual({});
     expect(store.yeaftLoadingMoreHistory).toBe(false);
@@ -100,10 +100,10 @@ describe('Yeaft group history re-entry', () => {
     store.yeaftConversationId = 'yeaft-local-1';
     store.messagesMap = {
       'yeaft-agent-1': [
-        { id: 'old', type: 'user', content: 'cached row', timestamp: 10, groupId: 'grp_fun' },
+        { id: 'old', type: 'user', content: 'cached row', timestamp: 10, sessionId: 'grp_fun' },
       ],
       'yeaft-local-1': [
-        { id: 'new', type: 'user', content: 'local row', timestamp: 20, groupId: 'grp_fun' },
+        { id: 'new', type: 'user', content: 'local row', timestamp: 20, sessionId: 'grp_fun' },
       ],
     };
 
@@ -123,7 +123,7 @@ describe('Yeaft group history re-entry', () => {
     expect(store.messagesMap['yeaft-local-1']).toBeUndefined();
   });
 
-  it('hydrates the active group after session_ready replays the group snapshot', () => {
+  it('hydrates the active session after session_ready replays the session snapshot', () => {
     const store = makeStore();
     store.currentView = 'yeaft';
     store.yeaftConversationId = 'yeaft-local-1';
@@ -170,28 +170,35 @@ describe('Yeaft group history re-entry', () => {
     expect(store.sent).toEqual([{
       type: 'yeaft_load_history',
       agentId: 'agent-1',
-      limit: 10,
-      groupId: 'grp_fun',
+      limit: 5,
+      sessionId: 'grp_fun',
     }]);
   });
 
-  it('does not rehydrate a group that already completed history loading in this UI lifecycle', () => {
+  it('sends an afterSeq delta request when a session already has a cursor in this UI lifecycle', () => {
     const store = makeStore();
     store.yeaftConversationId = 'yeaft-1';
     store.yeaftAgentId = 'agent-1';
     store.yeaftActiveSessionFilter = 'grp_other';
     store.yeaftSessionHistoryState = {
-      grp_fun: { loaded: true, loading: false, hasMore: false, oldestSeq: 1, count: 2 },
+      grp_fun: { loaded: true, loading: false, hasMore: false, oldestSeq: 1, count: 2, latestSeq: 42 },
     };
     store.messagesMap = {
       'yeaft-1': [
-        { type: 'user', content: 'already loaded Fun message', groupId: 'grp_fun' },
+        { type: 'user', content: 'already loaded Fun message', sessionId: 'grp_fun' },
       ],
     };
 
     store.setActiveSessionFilter('grp_fun');
 
-    expect(store.sent).toEqual([]);
+    // Always-ask delta: when a cursor exists, send afterSeq instead of
+    // limit. The agent will reply with zero rows if nothing's new.
+    expect(store.sent).toEqual([{
+      type: 'yeaft_load_history',
+      agentId: 'agent-1',
+      sessionId: 'grp_fun',
+      afterSeq: 42,
+    }]);
   });
 
   it('merges loaded Fun history with cached rows instead of replacing the pane with old content', () => {
@@ -200,15 +207,15 @@ describe('Yeaft group history re-entry', () => {
     store.yeaftActiveSessionFilter = 'grp_fun';
     store.messagesMap = {
       'yeaft-1': [
-        { type: 'user', content: 'new Fun message typed before re-entry', groupId: 'grp_fun' },
+        { type: 'user', content: 'new Fun message typed before re-entry', sessionId: 'grp_fun' },
       ],
     };
 
     handleYeaftHistoryChunk(store, {
       conversationId: 'yeaft-1',
-      groupId: 'grp_fun',
+      sessionId: 'grp_fun',
       messages: [
-        { id: 'm0001', role: 'user', content: 'old Fun message', groupId: 'grp_fun' },
+        { id: 'm0001', role: 'user', content: 'old Fun message', sessionId: 'grp_fun' },
       ],
       oldestSeq: 1,
       hasMore: false,
@@ -236,4 +243,36 @@ describe('Yeaft group history re-entry', () => {
       { type: 'select_agent', agentId: 'agent-2' },
     ]));
   });
+
+  it('reloads the active session messages with a full recent history request', () => {
+    const store = makeStore();
+    store.currentView = 'yeaft';
+    store.yeaftAgentId = 'agent-1';
+    store.yeaftConversationId = 'yeaft-conv';
+    store.yeaftActiveSessionFilter = 'grp_reload';
+    store.messagesMap['yeaft-conv'] = [
+      { type: 'user', content: 'keep other', sessionId: 'grp_other' },
+      { type: 'user', content: 'stale user', sessionId: 'grp_reload' },
+      { type: 'assistant', content: 'stale answer', sessionId: 'grp_reload' },
+    ];
+    store.yeaftSessionHistoryState.grp_reload = { loaded: true, latestSeq: 42, hasMore: true, oldestSeq: 3 };
+
+    store.reloadYeaftMessages();
+
+    expect(store.messagesMap['yeaft-conv']).toEqual([
+      expect.objectContaining({ content: 'keep other', sessionId: 'grp_other' }),
+    ]);
+    expect(store.yeaftSessionHistoryState.grp_reload).toEqual(expect.objectContaining({
+      loaded: false,
+      loading: true,
+      latestSeq: null,
+      oldestSeq: null,
+    }));
+    expect(store.sent.at(-1)).toEqual({
+      type: 'yeaft_load_history',
+      agentId: 'agent-1',
+      sessionId: 'grp_reload',
+    });
+  });
+
 });

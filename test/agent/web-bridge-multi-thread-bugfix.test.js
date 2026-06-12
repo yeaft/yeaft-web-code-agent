@@ -267,6 +267,7 @@ describe('fix-vp-multi-thread bugfix guards', () => {
 
       const filteredByGroup = trace.fetchRecentDebugHistory({ sessionId: 'g1' });
       expect(filteredByGroup.loops.map((l) => l.turnId).sort()).toEqual(['t1', 't2']);
+      expect(filteredByGroup.turns.every((t) => t.sessionId === 'g1' && !t.groupId)).toBe(true);
 
       const filteredByThread = trace.fetchRecentDebugHistory({ threadId: 'thr_a' });
       expect(filteredByThread.loops.map((l) => l.turnId).sort()).toEqual(['t1', 't3']);
@@ -290,6 +291,10 @@ describe('fix-vp-multi-thread bugfix guards', () => {
       const out = trace.fetchRecentDebugHistory({ sessionId: 'g1', dreamLimit: 5 });
       expect(out.dreamEvents.map(e => e.phase)).toEqual(['triage', 'done']);
       expect(out.dreamEvents[0]).toEqual(expect.objectContaining({ type: 'dream_progress', sessionId: 'g1' }));
+
+      trace.logEvent({ traceId: 'dream-4', eventType: 'dream_progress', eventData: { phase: 'merge', target: 'session/g1', ts: 400 } });
+      const withSessionTarget = trace.fetchRecentDebugHistory({ sessionId: 'g1', dreamLimit: 5 });
+      expect(withSessionTarget.dreamEvents.map(e => e.phase)).toEqual(['triage', 'done', 'merge']);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

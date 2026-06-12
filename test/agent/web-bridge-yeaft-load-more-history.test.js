@@ -4,10 +4,10 @@
  * Validates `handleYeaftLoadMoreHistory`:
  *   - emits a `yeaft_history_chunk` envelope with the projected
  *     user/assistant rows, oldestSeq, hasMore from
- *     ConversationStore.loadVisibleByGroup
+ *     ConversationStore.loadVisibleBySession
  *   - empty branch (no session yet, or no sessionId) still emits a chunk so
  *     the frontend spinner clears
- *   - error branch (loadVisibleByGroup throws) still emits an empty chunk
+ *   - error branch (loadVisibleBySession throws) still emits an empty chunk
  *
  * Also covers the `handleYeaftLoadHistory` extension that primes the
  * pagination cursor: after bootstrap replay, the `history_loaded` event
@@ -44,6 +44,8 @@ import {
   handleYeaftLoadMoreHistory,
 } from '../../agent/yeaft/web-bridge.js';
 import { ConversationStore } from '../../agent/yeaft/conversation/persist.js';
+import { writeSummary } from '../../agent/yeaft/memory/store.js';
+import { writeGroupState } from '../../agent/yeaft/dream/state.js';
 
 let TEST_DIR;
 let sharedStore;
@@ -51,8 +53,19 @@ let sharedStore;
 beforeAll(async () => {
   TEST_DIR = mkdtempSync(join(tmpdir(), 'yeaft-loadmore-'));
   sharedStore = new ConversationStore(TEST_DIR);
+  writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({
+    providers: [{
+      name: 'local',
+      baseUrl: 'http://localhost/v1',
+      apiKey: 'test',
+      protocol: 'openai-responses',
+      models: ['m'],
+    }],
+    primaryModel: 'local/m',
+  }, null, 2));
   stubSession = {
     conversationStore: sharedStore,
+    yeaftDir: TEST_DIR,
     config: { model: 'm', availableModels: [] },
     status: { skills: [], mcpServers: [], tools: [] },
     _dreamProgressSink: null,
@@ -83,6 +96,16 @@ function lastHistoryLoadedEvent() {
   for (let i = outbound.length - 1; i >= 0; i--) {
     const m = outbound[i];
     if (m && m.type === 'yeaft_output' && m.event && m.event.type === 'history_loaded') {
+      return m.event;
+    }
+  }
+  return null;
+}
+
+function lastDreamSnapshotEvent() {
+  for (let i = outbound.length - 1; i >= 0; i--) {
+    const m = outbound[i];
+    if (m && m.type === 'yeaft_output' && m.event && m.event.type === 'yeaft_dream_snapshot') {
       return m.event;
     }
   }
@@ -212,8 +235,8 @@ describe('handleYeaftLoadMoreHistory — chunk emission', () => {
     const gid = 'g_throw';
     seedTurns(gid, 3);
 
-    const original = sharedStore.loadVisibleByGroup.bind(sharedStore);
-    sharedStore.loadVisibleByGroup = () => { throw new Error('disk gone'); };
+    const original = sharedStore.loadVisibleBySession.bind(sharedStore);
+    sharedStore.loadVisibleBySession = () => { throw new Error('disk gone'); };
     try {
       await handleYeaftLoadMoreHistory({ sessionId: gid, beforeSeq: null, turns: 2 });
       const chunk = lastChunk();
@@ -222,7 +245,7 @@ describe('handleYeaftLoadMoreHistory — chunk emission', () => {
       expect(chunk.oldestSeq).toBeNull();
       expect(chunk.hasMore).toBe(false);
     } finally {
-      sharedStore.loadVisibleByGroup = original;
+      sharedStore.loadVisibleBySession = original;
     }
   });
 
@@ -253,6 +276,40 @@ describe('handleYeaftLoadMoreHistory — chunk emission', () => {
 
 describe('handleYeaftLoadHistory — pagination cursor priming', () => {
 
+
+  it('refreshes the session_ready model list from config on every history load', async () => {
+    stubSession.config.model = 'stale-model';
+    stubSession.config.availableModels = [{ id: 'stale-model' }];
+    writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({
+      providers: [{
+        name: 'local',
+        baseUrl: 'http://localhost/v1',
+        apiKey: 'test',
+        protocol: 'openai-responses',
+        models: ['fresh-model'],
+      }],
+      primaryModel: 'local/fresh-model',
+    }, null, 2));
+
+    await handleYeaftLoadHistory({ sessionId: 's_model_refresh', limit: 0 });
+
+    const ready = [...outbound].reverse().find(m => m.type === 'yeaft_output' && m.event?.type === 'session_ready');
+    expect(ready.event.model).toBe('fresh-model');
+    expect(ready.event.availableModels.map(m => m.id)).toContain('fresh-model');
+    expect(ready.event.availableModels.map(m => m.id)).not.toContain('stale-model');
+
+    writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({
+      providers: [{
+        name: 'local',
+        baseUrl: 'http://localhost/v1',
+        apiKey: 'test',
+        protocol: 'openai-responses',
+        models: ['m'],
+      }],
+      primaryModel: 'local/m',
+    }, null, 2));
+  });
+
   it('initial group replay emits only the latest window in chronological order', async () => {
     const gid = 'g_initial_latest_window';
     seedTurns(gid, 5, 'latest');
@@ -274,6 +331,28 @@ describe('handleYeaftLoadHistory — pagination cursor priming', () => {
     const evt = lastHistoryLoadedEvent();
     expect(evt).toEqual(expect.objectContaining({ sessionId: gid, count: 4, hasMore: true }));
     expect(typeof evt.oldestSeq).toBe('number');
+  });
+
+  it('replays the loadable dream output snapshot for the selected session', async () => {
+    const gid = 's_dream_snapshot';
+    const root = join(TEST_DIR, 'memory');
+    await writeSummary({ kind: 'group', id: gid }, 'dream summary for selected session', { root });
+    await writeGroupState(root, gid, {
+      lastDreamMessageId: 'm-12',
+      lastDreamAt: '2026-06-12T02:03:04.000Z',
+      messageCount: 12,
+    });
+
+    outbound.length = 0;
+    await handleYeaftLoadHistory({ sessionId: gid, limit: 0 });
+
+    const evt = lastDreamSnapshotEvent();
+    expect(evt).toBeTruthy();
+    expect(evt.trigger).toBe('load_history');
+    expect(evt.snapshot.sessionId).toBe(gid);
+    expect(evt.snapshot.scope).toBe(`sessions/${gid}`);
+    expect(evt.snapshot.summaryText).toBe('dream summary for selected session');
+    expect(evt.snapshot.lastDreamAt).toBe('2026-06-12T02:03:04.000Z');
   });
 
   it('history_loaded carries hasMore + oldestSeq when older messages remain', async () => {

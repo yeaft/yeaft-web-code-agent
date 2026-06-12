@@ -413,6 +413,48 @@ export class ToolRegistry {
   get names() {
     return this.getAllTools().map(t => t.name);
   }
+
+  /**
+   * Hot-swap the flattened MCP tool set.
+   *
+   * Removes every currently registered tool whose canonical name starts
+   * with `mcp__` (the flattened MCP tool naming convention used by
+   * `buildMcpFlattenedTools()`), then re-registers a fresh set built from
+   * the live MCPManager. Called by the MCP web-bridge after a successful
+   * connect/disconnect/reload so the running engine's next turn sees the
+   * new tool catalogue without needing a full session restart.
+   *
+   * Why "starts with `mcp__`": that prefix is the canonical Claude Code
+   * naming for flattened MCP tools. It cleanly distinguishes them from
+   * built-in tools (Bash, FileRead, etc.) and from the legacy meta-tools
+   * (`mcp_list_tools`, `mcp_call_tool` — single underscore, NOT removed
+   * here) which a caller may still opt into.
+   *
+   * @param {import('../mcp.js').MCPManager} mcpManager
+   * @param {(mgr: import('../mcp.js').MCPManager) => import('./types.js').ToolDef[]} buildFlattened
+   *   — the builder from `./mcp-tools.js`. Injected so this registry file
+   *   stays free of circular `import` to mcp-tools.js (mcp-tools imports
+   *   `defineTool` from types.js, which lives alongside this file).
+   * @returns {{ removed: number, added: number }}
+   */
+  replaceMcpTools(mcpManager, buildFlattened) {
+    let removed = 0;
+    for (const name of [...this.#tools.keys()]) {
+      if (name.startsWith('mcp__')) {
+        this.#tools.delete(name);
+        removed += 1;
+      }
+    }
+    let added = 0;
+    if (typeof buildFlattened === 'function' && mcpManager) {
+      const fresh = buildFlattened(mcpManager) || [];
+      for (const tool of fresh) {
+        this.register(tool);
+        added += 1;
+      }
+    }
+    return { removed, added };
+  }
 }
 
 /**

@@ -4,6 +4,8 @@
 
 import { isRecentlyClosed, stopProcessingWatchdog } from '../watchdog.js';
 import { clearSessionLoading } from '../session.js';
+import { sameUserMessage } from '../dedup.js';
+import { maxDbMessageId } from '../messages.js';
 import { t } from '../../../utils/i18n.js';
 
 /** Filter out empty user messages — tool_result artifacts stored as empty user records in DB */
@@ -178,12 +180,24 @@ export function handleConversationResumed(store, msg) {
     }
   }
   store.hasMoreMessages = !!msg.hasMoreMessages;
+  // perf-chat-session-switch-cache: stamp chatSessionState on cold-open so
+  // a switch-away → switch-back re-enters via the cache path with the
+  // correct lastSeenDbId and the preserved hasMoreOlder flag. Without this,
+  // the very first cache-hit after a conversation_resumed loses Load-Older.
+  store.chatSessionState[msg.conversationId] = {
+    lastSeenDbId: maxDbMessageId(store.messagesMap[msg.conversationId]),
+    hasMoreOlder: !!msg.hasMoreMessages,
+  };
   store.saveOpenSessions();
 }
 
 export function handleConversationDeleted(store, msg) {
   store.conversations = store.conversations.filter(c => c.id !== msg.conversationId);
   delete store.messagesMap[msg.conversationId];
+  // perf-chat-session-switch-cache: mirror messagesMap cleanup — see
+  // closeSession in conversation.js for the same reason (stale state
+  // poisons a same-id rebirth).
+  delete store.chatSessionState[msg.conversationId];
   delete store.conversationTitles[msg.conversationId];
   delete store.customConversationTitles[msg.conversationId];
   delete store.processingConversations[msg.conversationId];
@@ -314,6 +328,20 @@ export function handleSyncMessagesResult(store, msg) {
     store.messagesMap[msg.conversationId] = [];
   }
   const msgs = store.messagesMap[msg.conversationId];
+  // perf-chat-session-switch-cache: tell the cold-load and the delta
+  // paths apart so we don't lie about hasMoreOlder.
+  //
+  // The server's `msg.hasMore` is computed via getBeforeId(oldestId, 1).
+  // For a cold-load (turns / no anchor), `oldestId` is the oldest row of
+  // the page returned → hasMore correctly means "older rows exist."
+  // For a delta (afterMessageId), `oldestId` is the row just after our
+  // cursor → hasMore answers "is anything older than (cursor+1)" which
+  // is essentially constant-true, OR false on an empty delta — neither
+  // of which says anything about the older-history button. So:
+  // delta responses MUST NOT overwrite hasMoreOlder. Only cold-load and
+  // older-pagination responses get to.
+  const isDeltaSync =
+    typeof msg.afterMessageId === 'number' && msg.afterMessageId > 0;
   if (msg.conversationId && store.activeConversations.includes(msg.conversationId)) {
     const formatted = filterEmptyUserMessages(
       (msg.messages || []).map(m => store.formatDbMessage(m)).flat().filter(Boolean)
@@ -325,10 +353,10 @@ export function handleSyncMessagesResult(store, msg) {
           formatted[0].dbMessageId &&
           formatted[formatted.length - 1].dbMessageId < firstDbMsg.dbMessageId) {
         const insertIdx = msgs.indexOf(firstDbMsg);
-        console.log(`[Sync] Prepending ${formatted.length} older messages at index ${insertIdx}`);
+        if (store.debug) console.log(`[Sync] Prepending ${formatted.length} older messages at index ${insertIdx}`);
         msgs.splice(insertIdx, 0, ...formatted);
       } else {
-        console.log(`[Sync] Received ${formatted.length} messages`);
+        if (store.debug) console.log(`[Sync] Received ${formatted.length} messages`);
         for (const m of formatted) {
           if (m.dbMessageId && msgs.some(existing => existing.dbMessageId === m.dbMessageId)) {
             continue;
@@ -343,17 +371,36 @@ export function handleSyncMessagesResult(store, msg) {
           // appending a duplicate. We only collapse FINALIZED orphans —
           // an actively streaming partial (isStreaming: true) is left
           // alone so its content can keep growing.
+          //
+          // fix-usermsg-dup / Review I2 (Fowler): the user-row identity
+          // rule lives in `sameUserMessage` (web/stores/helpers/dedup.js)
+          // — id-equality when both sides have a `clientMessageId`,
+          // content-equality only when neither side has one. The same
+          // helper backs the live-echo dedup in claudeOutput.js so the
+          // two gates can't drift apart. Assistant rows never carry
+          // `clientMessageId`, so they keep the historical type+content
+          // match path inline.
           if (m.dbMessageId && (m.type === 'assistant' || m.type === 'user')) {
-            const orphan = msgs.find(existing =>
-              !existing.dbMessageId &&
-              !existing.isStreaming &&
-              existing.type === m.type &&
-              existing.content === m.content
-            );
+            let orphan = null;
+            if (m.type === 'user') {
+              orphan = msgs.find(existing =>
+                !existing.dbMessageId &&
+                !existing.isStreaming &&
+                sameUserMessage(existing, m)
+              );
+            } else {
+              orphan = msgs.find(existing =>
+                !existing.dbMessageId &&
+                !existing.isStreaming &&
+                existing.type === 'assistant' &&
+                existing.content === m.content
+              );
+            }
             if (orphan) {
               orphan.dbMessageId = m.dbMessageId;
               orphan.id = m.id;
               if (m.timestamp) orphan.timestamp = m.timestamp;
+              if (m.clientMessageId && !orphan.clientMessageId) orphan.clientMessageId = m.clientMessageId;
               continue;
             }
           }
@@ -362,8 +409,26 @@ export function handleSyncMessagesResult(store, msg) {
       }
     }
 
-    store.hasMoreMessages = msg.hasMore ?? false;
+    // Global mirror — same delta-safety rule as the per-conv field below.
+    // Delta syncs preserve the prior value; cold/older replies overwrite.
+    if (!isDeltaSync) {
+      store.hasMoreMessages = msg.hasMore ?? false;
+    }
     clearSessionLoading(store);
+
+    // perf-chat-session-switch-cache: stamp per-conv state ONLY when we
+    // actually merged this response (i.e. the conv is still active).
+    // Stamping outside the guard would record a `lastSeenDbId` consistent
+    // with a discarded merge — fine today (the field is re-derived from
+    // messagesMap on read), but a trap for any future consumer.
+    const priorHasMoreOlder = store.chatSessionState[msg.conversationId]?.hasMoreOlder;
+    store.chatSessionState[msg.conversationId] = {
+      lastSeenDbId: maxDbMessageId(store.messagesMap[msg.conversationId]),
+      // Delta responses: keep whatever pagination state the cold-load /
+      // older-pagination path established. First-ever sync on a brand-new
+      // conv: fall back to false.
+      hasMoreOlder: isDeltaSync ? !!priorHasMoreOlder : !!msg.hasMore,
+    };
   }
   store.loadingMoreMessages = false;
   store.setRefreshingSession(msg.conversationId, false);
@@ -390,16 +455,17 @@ export function handleYeaftHistoryChunk(store, msg) {
     return;
   }
   // Stale-chunk guard: between the request fly-out and this chunk landing,
-  // the user may have switched groups (or a group lifecycle event —
-  // create / archive / delete — may have flipped `activeGroupId` under
-  // us). Drop on the floor; the active group's spinner/cursor is keyed
-  // separately so accepting this chunk would cross-pollute group history.
-  // The chunk's groupId is authoritative — it's stamped by the agent
-  // from the request groupId, not from messagesMap state.
+  // the user may have switched sessions (or a session lifecycle event —
+  // create / archive / delete — may have flipped `activeSessionId` under
+  // us). Drop on the floor; the active session's spinner/cursor is keyed
+  // separately so accepting this chunk would cross-pollute session history.
+  // The chunk's sessionId is authoritative — it's stamped by the agent
+  // from the request sessionId, not from messagesMap state.
   const activeFilter = store.yeaftActiveSessionFilter ?? null;
-  const hasChunkGroup = msg.groupId != null;
-  if (hasChunkGroup && activeFilter && msg.groupId !== activeFilter) {
-    const staleKey = msg.groupId ?? '__all__';
+  const msgSessionId = msg.sessionId != null ? msg.sessionId : msg.groupId;
+  const hasChunkGroup = msgSessionId != null;
+  if (hasChunkGroup && activeFilter && msgSessionId !== activeFilter) {
+    const staleKey = msgSessionId ?? '__all__';
     if (store.yeaftSessionHistoryState) {
       store.yeaftSessionHistoryState = {
         ...store.yeaftSessionHistoryState,
@@ -433,12 +499,13 @@ export function handleYeaftHistoryChunk(store, msg) {
     if (stableId) seenIds.add(stableId);
     if (m.role === 'user') {
       const threadId = m.threadId || m.turnId || 'main';
+      const rowSessionId = m.sessionId ?? m.groupId ?? msgSessionId ?? null;
       formatted.push({
         ...(stableId ? { id: stableId, messageId: stableId } : {}),
         type: 'user',
         content: m.content,
         timestamp: normalizeHistoryTimestamp(m),
-        groupId: m.groupId ?? null,
+        sessionId: rowSessionId,
         threadId,
         turnId: m.turnId || threadId,
         ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: m.attachments } : {}),
@@ -446,13 +513,14 @@ export function handleYeaftHistoryChunk(store, msg) {
       });
     } else if (m.role === 'assistant') {
       const threadId = m.threadId || m.turnId || 'main';
-      const speakerVpId = resolveHistorySpeakerVpId(m, m.groupId ?? msg.groupId ?? null);
+      const rowSessionId = m.sessionId ?? m.groupId ?? msgSessionId ?? null;
+      const speakerVpId = resolveHistorySpeakerVpId(m, rowSessionId);
       formatted.push({
         ...(stableId ? { id: stableId, messageId: stableId } : {}),
         type: 'assistant',
         content: m.content,
         timestamp: normalizeHistoryTimestamp(m),
-        groupId: m.groupId ?? null,
+        sessionId: rowSessionId,
         threadId,
         turnId: m.turnId || threadId,
         ...(speakerVpId ? { vpId: speakerVpId, speakerVpId } : {}),
@@ -466,7 +534,7 @@ export function handleYeaftHistoryChunk(store, msg) {
     store.messagesMap[convId].splice(0, 0, ...formatted);
   }
 
-  const groupKey = msg.groupId ?? '__all__';
+  const groupKey = msgSessionId ?? '__all__';
   const nextState = {
     loaded: true,
     loading: false,

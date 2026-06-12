@@ -1,0 +1,182 @@
+/* ===========================================================================
+   yeaft-session-create.css — Yeaft-specific additions on top of the chat
+   new-conversation modal shell (chat-modals.css `.resume-modal*`).
+
+   SessionCreateModal reuses the full chat shell verbatim. The only
+   yeaft-unique pieces are:
+     - A VP roster row (chat picks a provider/model; yeaft picks VPs).
+     - A per-row default-star button (which VP answers when no @-mention).
+     - An inline error band above the footer.
+
+   These selectors are scoped to `.resume-control-row-vp` / `.yeaft-roster-*`
+   so they don't leak into the chat new-conv modal or back into any other
+   resume-modal consumer.
+
+   No border-top / border-bottom anywhere (Yeaft UI rule). All colours
+   pulled from design tokens in variables.css.
+   =========================================================================== */
+
+.resume-control-row-vp { align-items: flex-start; }
+
+.yeaft-roster {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.yeaft-roster-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 6px 4px;
+}
+
+.yeaft-roster-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 168px;
+  overflow-y: auto;
+}
+
+.yeaft-roster-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 0;
+  border-radius: 6px;
+}
+
+.yeaft-roster-item.is-selected { background: var(--accent-bg); }
+
+.yeaft-roster-row {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.yeaft-roster-row:hover { background: var(--sidebar-hover); }
+
+.yeaft-roster-row input[type="checkbox"] {
+  flex: 0 0 auto;
+  accent-color: var(--accent-blue, #4a9eff);
+  width: 14px;
+  height: 14px;
+}
+
+.yeaft-roster-name {
+  flex: 1 1 auto;
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.yeaft-roster-default-star {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.yeaft-roster-default-star:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.yeaft-roster-default-star.is-on { color: var(--warn-text); }
+
+/* Collapsed-by-default roster trigger.
+   Mirrors .resume-input visually so the picker line lines up with the
+   Name / Work Directory / Agent rows above it. Click toggles the popup.
+   Mirrors the Copilot model picker pattern from ChatPage. */
+.yeaft-roster-trigger {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.yeaft-roster-trigger:hover { border-color: var(--accent-blue); }
+
+.yeaft-roster-trigger.is-open {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.12);
+}
+
+.yeaft-roster-trigger-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 14px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.yeaft-roster-caret {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+}
+
+.yeaft-roster-trigger.is-open .yeaft-roster-caret { transform: rotate(180deg); }
+
+/* Popup overlay below the trigger. Stays inside the controls section so
+   it doesn't extend past the modal frame. */
+.yeaft-roster-popup {
+  margin-top: 4px;
+  padding: 4px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.resume-modal .resume-modal-error {
+  font-size: 12px;
+  color: var(--error);
+  padding: 0 16px 8px;
+  line-height: 1.4;
+}
+
+/* Inline spinner row in the unified session list (matches token spacing). */
+.restore-loading {
+  padding: 12px;
+}
+
+/* Single-inflight visual feedback: while one row is restoring,
+   sibling rows look dimmed/non-interactive so the user understands
+   why their click on a different row is being ignored. */
+.resume-list-item.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}

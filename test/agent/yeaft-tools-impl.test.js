@@ -17,12 +17,12 @@ const TOOLS_DIR = join(import.meta.dirname, '..', '..', 'agent', 'yeaft', 'tools
 // ──────────────────────────────────────────────
 
 describe('index.js tool registration', () => {
-  it('allTools has 30 tools (RequestPermissions + open_source_message removed 2026-05-27)', async () => {
+  it('allTools has 28 tools (mcp meta-tools removed 2026-06-12, flattened mcp__ tools registered at session start instead)', async () => {
     const { allTools } = await import(`${TOOLS_DIR}/index.js`);
-    expect(allTools.length).toBe(30);
+    expect(allTools.length).toBe(28);
   });
 
-  it('all 30 tools have valid name, description, parameters, and execute', async () => {
+  it('all tools have valid name, description, parameters, and execute', async () => {
     const { allTools } = await import(`${TOOLS_DIR}/index.js`);
     for (const tool of allTools) {
       expect(tool.name).toBeTruthy();

@@ -9,7 +9,7 @@
  * entries-store extraction was retired in the H2-AMS rip.
  *
  * Dream V2 owns all background memory maintenance (scope summaries +
- * memory writes via dream-v2/session-wiring.js → createV2DreamScheduler).
+ * memory writes via dream/session-wiring.js → createV2DreamScheduler).
  *
  * Reference: yeaft-yeaft-core-systems.md §4.4
  */
@@ -65,6 +65,9 @@ export async function runStopHooks(context) {
     // history replay can route messages back into the originating group.
     sessionId,
     threadId,
+    // Group VP attribution: persist the engine-bound VP id on assistant/tool
+    // rows so history replay can route replies back to the same visible VP.
+    vpId,
     // Multi-VP fan-out (history-dedup): when several engines run the
     // same user prompt in parallel, the orchestrator persists the user
     // row exactly once before fan-out. Each VP's stop-hook then skips
@@ -164,6 +167,9 @@ export async function runStopHooks(context) {
         // Bug 6: stamp sessionId / threadId so replay can re-route by group.
         if (sessionId) record.sessionId = sessionId;
         if (threadId) record.threadId = threadId;
+        if (vpId && (msg.role === 'assistant' || msg.role === 'tool')) {
+          record.speakerVpId = vpId;
+        }
         conversationStore.append(record);
         result.messagesPersisted++;
       }

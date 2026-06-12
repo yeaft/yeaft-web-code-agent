@@ -37,16 +37,10 @@ import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getYeaftSettings, updateYeaftSettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../yeaft/config-api.js';
 import { fetchModelsDev } from '../yeaft/llm/models-dev.js';
-import { handleYeaftSessionSend, handleYeaftModeSwitch, handleYeaftModelSwitch, resetYeaftSession, handleYeaftLoadHistory, handleYeaftLoadMoreHistory, handleYeaftAbortThread, handleYeaftAbortAll, handleYeaftAbortTurn, handleYeaftVpSubscribe, handleYeaftVpCreate, handleYeaftVpUpdate, handleYeaftVpDelete, handleYeaftVpRead, handleYeaftListSessions, handleYeaftCreateSession, handleYeaftRenameSession, handleYeaftUpdateSession, handleYeaftUpdateSessionConfig, handleYeaftArchiveSession, handleYeaftDeleteSession, handleYeaftSessionAddMember, handleYeaftSessionRemoveMember, handleYeaftSessionSetDefaultVp, handleYeaftDreamTrigger, handleYeaftFetchToolStats, handleYeaftFetchDebugHistory, broadcastLanguageChange } from '../yeaft/web-bridge.js';
+import { handleYeaftSessionSend, handleYeaftModeSwitch, handleYeaftModelSwitch, resetYeaftSession, handleYeaftLoadHistory, handleYeaftLoadMoreHistory, handleYeaftAbortThread, handleYeaftAbortAll, handleYeaftAbortTurn, handleYeaftVpSubscribe, handleYeaftVpCreate, handleYeaftVpUpdate, handleYeaftVpDelete, handleYeaftVpRead, handleYeaftListSessions, handleYeaftCreateSession, handleYeaftRenameSession, handleYeaftUpdateSession, handleYeaftUpdateSessionConfig, handleYeaftArchiveSession, handleYeaftDeleteSession, handleYeaftSessionAddMember, handleYeaftSessionRemoveMember, handleYeaftSessionSetDefaultVp, handleYeaftScanWorkdirSessions, handleYeaftRestoreSession, handleYeaftDreamTrigger, handleYeaftFetchToolStats, handleYeaftFetchDebugHistory, handleYeaftMcpList, handleYeaftMcpAdd, handleYeaftMcpRemove, handleYeaftMcpReload, broadcastLanguageChange, broadcastYeaftSessionSnapshotEager } from '../yeaft/web-bridge.js';
+import { startYeaftStatusRefresh, refreshYeaftStatus } from '../yeaft/status-cache.js';
 
 export async function handleMessage(msg) {
-  // Wire-compat: old web bundles send `groupId` on Yeaft messages;
-  // the agent runtime has switched to `sessionId`. Coerce here so
-  // handlers don't each have to do it. Keep both fields populated.
-  if (msg && typeof msg === 'object') {
-    if (msg.sessionId == null && typeof msg.groupId === 'string') msg.sessionId = msg.groupId;
-    if (msg.groupId == null && typeof msg.sessionId === 'string') msg.groupId = msg.sessionId;
-  }
   switch (msg.type) {
     case 'registered':
       if (msg.sessionKey) {
@@ -71,6 +65,17 @@ export async function handleMessage(msg) {
       }
 
       sendConversationList();
+      startYeaftStatusRefresh();
+
+      // fix-yeaft-session-per-agent: eagerly broadcast this agent's
+      // yeaft session snapshot on register so the unified sidebar can
+      // populate ALL online agents' rows without waiting for the user
+      // to send a first yeaft message (which is what historically
+      // triggered ensureSessionLoaded → snapshot emit). This fixes the
+      // "switch to Agent B and B's sessions are invisible" symptom.
+      // The callee already wraps its FS scan + emit in try/catch and
+      // logs via console.warn — no second guard needed here.
+      broadcastYeaftSessionSnapshotEager();
 
       // ★ Flush 断连期间缓冲的消息
       await flushMessageBuffer();
@@ -355,6 +360,9 @@ export async function handleMessage(msg) {
       if (!result.error && incomingLanguage) {
         broadcastLanguageChange(result.language);
       }
+      if (!result.error) {
+        refreshYeaftStatus({ reason: 'llm_config_updated' }).catch(() => {});
+      }
       sendToServer({ type: 'llm_config_updated', ...result });
       break;
     }
@@ -433,8 +441,37 @@ export async function handleMessage(msg) {
       break;
     }
 
-    // Yeaft — single conversation backed by the default group.
-    case 'yeaft_group_chat':
+    // Yeaft MCP CRUD (Claude-Code-style Settings → MCP tab).
+    // Each wire op mutates ~/.yeaft/config.json `mcpServers` AND, when
+    // the session is alive, mirrors the change into `mcpManager` + hot-
+    // swaps the live `toolRegistry`. See handlers in web-bridge.js for
+    // the broadcast contract (`yeaft_mcp_updated`).
+    case 'yeaft_mcp_list':
+      handleYeaftMcpList(msg);
+      break;
+
+    case 'yeaft_mcp_add':
+      await handleYeaftMcpAdd(msg);
+      break;
+
+    case 'yeaft_mcp_remove':
+      await handleYeaftMcpRemove(msg);
+      break;
+
+    case 'yeaft_mcp_reload':
+      await handleYeaftMcpReload(msg);
+      break;
+
+    // Yeaft — single conversation backed by the default session.
+    //
+    // Wire-alias scope: the `yeaft_group_chat` op (and its envelope
+    // dual-emit) was REMOVED in this rename. The `unify_*` aliases (and
+    // the `yeaft_*_group` CRUD aliases below) are PRE-EXISTING wire-
+    // compat hooks from earlier renames (Unify→Yeaft, Phase 2
+    // group→session); they remain so older agent / web bundles in the
+    // wild keep working. Deleting them is a separate, future PR with
+    // its own deployment plan.
+    case 'yeaft_session_chat':
     case 'unify_group_chat':
       await handleYeaftSessionSend(msg);
       break;
@@ -566,6 +603,16 @@ export async function handleMessage(msg) {
     case 'unify_set_default_vp':
     case 'yeaft_session_set_default_vp':
       handleYeaftSessionSetDefaultVp(msg);
+      break;
+    // feat-yeaft-session-restore: probe + register a session by workdir.
+    // `scan_workdir` is read-only (lists what's on disk + flags whether it's
+    // already in the central registry); `restore` writes the registry entry
+    // and triggers a snapshot rebroadcast so the sidebar updates.
+    case 'yeaft_scan_workdir_sessions':
+      handleYeaftScanWorkdirSessions(msg);
+      break;
+    case 'yeaft_restore_session':
+      handleYeaftRestoreSession(msg);
       break;
     // Phase 2: session_send is just group_chat (N≥1 fan-out already works).
     case 'yeaft_session_send':

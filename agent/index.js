@@ -324,10 +324,22 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
-// 启动 - 先确保依赖，再检测能力，再连接
+// 启动 - 先确保依赖，再检测能力，预热 models.dev 缓存，再连接
 (async () => {
   await ensureDependencies();
   await ensureYeaftSkills();
   ctx.agentCapabilities = await detectCapabilities();
+  // Prime the models.dev community catalog so the Yeaft engine's *synchronous*
+  // hot path (engine.js / config.js / cli.js all read context-window inline)
+  // can resolve real per-model limits without bubbling async up through every
+  // call site. Failure here is non-fatal: stale disk cache → DEFAULT 200K
+  // fall-through keeps the agent boot-able offline.
+  try {
+    const { fetchModelsDev } = await import('./yeaft/llm/models-dev.js');
+    await fetchModelsDev({ yeaftDir: YEAFT_DIR });
+    console.log('[Agent] models.dev cache primed');
+  } catch (err) {
+    console.warn(`[Agent] models.dev prime failed (will use config/defaults): ${err?.message || err}`);
+  }
   connect();
 })();

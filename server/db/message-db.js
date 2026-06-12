@@ -77,10 +77,30 @@ export const messageDb = {
 
     if (lastUserMsg) {
       const tsRange = stmts.getTimestampRange.get(sessionId);
+      // feat-chat-load-perf: the timestamp-range heuristic is a one-shot repair,
+      // not a per-resume hot path. The repair itself produces densely packed
+      // `ts = lastTs + 1` rows, which re-pass the (< 1000ms) test on every
+      // future resume — so without a sentinel the user pays a full DELETE +
+      // re-INSERT of the entire session on EVERY chat open. The sentinel
+      // `sessions.ts_rebuilt_at` is set to Date.now() the first (and only)
+      // time the repair fires; subsequent resumes see non-zero and skip it,
+      // falling through to the cheap anchor-based delta append below.
       if (tsRange && tsRange.count > 5 && (tsRange.max_ts - tsRange.min_ts) < 1000) {
-        console.log(`[bulkAddHistory] Detected bad timestamps (range: ${tsRange.max_ts - tsRange.min_ts}ms for ${tsRange.count} msgs), rebuilding for ${sessionId}`);
-        needsRebuild = true;
-      } else {
+        const sentinelRow = stmts.getSessionTsRebuiltAt.get(sessionId);
+        const alreadyRebuilt = sentinelRow && sentinelRow.ts_rebuilt_at > 0;
+        if (alreadyRebuilt) {
+          // Quiet by default — every once-repaired session would otherwise log
+          // this line on every future chat-resume forever, exactly inverting
+          // the perf goal. Flip DEBUG_BULK_HISTORY to see it.
+          if (process.env.DEBUG_BULK_HISTORY) {
+            console.log(`[bulkAddHistory] Skipping rebuild for ${sessionId} (one-shot guard, ts_rebuilt_at=${sentinelRow.ts_rebuilt_at})`);
+          }
+        } else {
+          console.log(`[bulkAddHistory] Detected bad timestamps (range: ${tsRange.max_ts - tsRange.min_ts}ms for ${tsRange.count} msgs), rebuilding for ${sessionId} (will delete ${tsRange.count} rows)`);
+          needsRebuild = true;
+        }
+      }
+      if (!needsRebuild) {
         const anchor = lastUserMsg.content;
         let anchorIndex = -1;
 
@@ -118,6 +138,12 @@ export const messageDb = {
     const insertMany = transaction((msgs) => {
       if (needsRebuild) {
         stmts.deleteMessagesBySession.run(sessionId);
+        // Stamp the sentinel inside the same transaction as DELETE + re-INSERT.
+        // SQLite is atomic, so either everything (rows + stamp) lands or
+        // nothing does — preventing the "rows rebuilt but stamp lost ⇒
+        // rebuild loops forever on every future resume" failure mode that
+        // motivated this entire change.
+        stmts.markSessionTsRebuilt.run(Date.now(), sessionId);
       }
 
       let count = 0;

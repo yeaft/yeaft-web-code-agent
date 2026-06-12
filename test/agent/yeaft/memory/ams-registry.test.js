@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { openAmsRegistry, AMS_FILE_VERSION, DEFAULT_GROUP_KEY }
+import { openAmsRegistry, AMS_FILE_VERSION, DEFAULT_SESSION_KEY }
   from '../../../../agent/yeaft/memory/ams-registry.js';
 import { openSegmentIndex } from '../../../../agent/yeaft/memory/index-db.js';
 import { makeSegment } from '../../../../agent/yeaft/memory/segment.js';
@@ -49,12 +49,12 @@ describe('AmsRegistry — basic lifecycle', () => {
     expect(a).toBe(b);
   });
 
-  it('uses DEFAULT_GROUP_KEY when sessionId is missing', () => {
+  it('uses DEFAULT_SESSION_KEY when sessionId is missing', () => {
     const reg = openAmsRegistry({ yeaftDir: YEAFT_DIR, memoryIndex, config: {} });
     const a = reg.getOrCreate(null);
     const b = reg.getOrCreate(undefined);
     expect(a).toBe(b);
-    expect(reg.amsPath(null)).toContain(`/${DEFAULT_GROUP_KEY}/ams.json`);
+    expect(reg.amsPath(null)).toContain(`/${DEFAULT_SESSION_KEY}/ams.json`);
   });
 });
 

@@ -4,7 +4,7 @@
  * supplied. Bug history (visible as `router_unavailable` in the UI):
  *
  *   1. v0.1.598 wired `createRouter` into buildVpQueryOpts when a
- *      coordinator is supplied — but only the `yeaft_group_chat` path
+ *      coordinator is supplied — but only the `yeaft_session_chat` path
  *      supplied one. The legacy `yeaft_chat` path (no group) silently
  *      dropped ctx.router, and any `route_forward` call from a VP
  *      exploded with `router_unavailable`.
@@ -12,7 +12,7 @@
  *   2. The product semantics are "Yeaft is a single conversation backed
  *      by grp_default" — there is no legitimate path where the user is
  *      in Yeaft but no group exists. v0.1.671 ensured the frontend
- *      ALWAYS sends `yeaft_group_chat` with `grp_default`; v0.1.672 then
+ *      ALWAYS sends `yeaft_session_chat` with `grp_default`; v0.1.672 then
  *      deleted the `yeaft_chat` / `handleYeaftChat` legacy path entirely.
  *      So `route_forward` ALWAYS has a router to call into.
  *

@@ -1,5 +1,5 @@
 /**
- * group-update-op.test.js — handleYeaftUpdateSession WS handler.
+ * session-update-op.test.js — handleYeaftUpdateSession WS handler.
  *
  * Mocks the connection buffer to capture outbound `yeaft_output` envelopes
  * and asserts on the wrapped `event` payload.
@@ -34,16 +34,16 @@ describe('handleYeaftUpdateSession WS op', () => {
     createSession(join(yeaftDir, 'sessions'), { id: 'g1', name: 'G1', roster: [] }).close();
   });
 
-  it('updates announcement and emits group_crud_result + snapshot broadcast', () => {
+  it('updates announcement and emits session_crud_result + snapshot broadcast', () => {
     handleYeaftUpdateSession({ requestId: 'r1', sessionId: 'g1', patch: { announcement: 'Hi' } });
-    const result = findEvent('group_crud_result');
+    const result = findEvent('session_crud_result');
     expect(result).toBeDefined();
     expect(result.op).toBe('update');
     expect(result.requestId).toBe('r1');
     expect(result.ok).toBe(true);
-    expect(result.group.id).toBe('g1');
-    expect(result.group.announcement).toBe('Hi');
-    expect(findEvent('group_list_updated')).toBeDefined();
+    expect(result.session.id).toBe('g1');
+    expect(result.session.announcement).toBe('Hi');
+    expect(findEvent('session_list_updated')).toBeDefined();
   });
 
   it('updates name and announcement together', () => {
@@ -51,10 +51,10 @@ describe('handleYeaftUpdateSession WS op', () => {
       requestId: 'r2', sessionId: 'g1',
       patch: { name: 'New', announcement: 'Hello' },
     });
-    const result = findEvent('group_crud_result');
+    const result = findEvent('session_crud_result');
     expect(result.ok).toBe(true);
-    expect(result.group.name).toBe('New');
-    expect(result.group.announcement).toBe('Hello');
+    expect(result.session.name).toBe('New');
+    expect(result.session.announcement).toBe('Hello');
   });
 
   it('returns not_found for unknown sessionId', () => {
@@ -62,21 +62,21 @@ describe('handleYeaftUpdateSession WS op', () => {
       requestId: 'r3', sessionId: 'ghost',
       patch: { announcement: 'x' },
     });
-    const result = findEvent('group_crud_result');
+    const result = findEvent('session_crud_result');
     expect(result.ok).toBe(false);
     expect(result.error.code).toBe('not_found');
   });
 
   it('rejects empty patch with invalid_patch', () => {
     handleYeaftUpdateSession({ requestId: 'r4', sessionId: 'g1', patch: {} });
-    const result = findEvent('group_crud_result');
+    const result = findEvent('session_crud_result');
     expect(result.ok).toBe(false);
     expect(result.error.code).toBe('invalid_patch');
   });
 
   it('rejects missing patch with invalid_patch', () => {
     handleYeaftUpdateSession({ requestId: 'r5', sessionId: 'g1' });
-    const result = findEvent('group_crud_result');
+    const result = findEvent('session_crud_result');
     expect(result.ok).toBe(false);
     expect(result.error.code).toBe('invalid_patch');
   });

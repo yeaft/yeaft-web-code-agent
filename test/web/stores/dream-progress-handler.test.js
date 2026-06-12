@@ -11,8 +11,8 @@
  *
  * What this file pins:
  *   1. Per-target events (`target: 'group/...'`) route to that scope.
- *   2. Per-group events (only `groupId`) route to `group/<id>`.
- *   3. Top-level events (no target / no groupId) land in the '*'
+ *   2. Per-session events (only `sessionId`) route to `group/<id>`.
+ *   3. Top-level events (no target / no sessionId) land in the '*'
  *      broadcast bucket AND are mirrored onto every existing scope.
  *   4. Phase transitions:
  *      - running phases (`triage`, `merge`, …) → status='running',
@@ -94,12 +94,12 @@ describe('handleYeaftOutput — dream_progress projection', () => {
     expect(entry.isRunning).toBe(true);
   });
 
-  it('routes per-group events (groupId only) into group/<id>', () => {
+  it('routes per-session events (sessionId only) into group/<id>', () => {
     const store = mkStore();
     send(store, {
       type: 'dream_progress',
       phase: 'triage',
-      groupId: 'grp_x',
+      sessionId: 'grp_x',
       ts: 2000,
     });
     expect(store.yeaftDreamLatest['group/grp_x']).toBeDefined();
@@ -107,7 +107,7 @@ describe('handleYeaftOutput — dream_progress projection', () => {
     expect(store.yeaftDreamLatest['group/grp_x'].status).toBe('running');
   });
 
-  it('top-level events (no target/groupId) land in "*" bucket', () => {
+  it('top-level events (no target/sessionId) land in "*" bucket', () => {
     const store = mkStore();
     send(store, {
       type: 'dream_progress',

@@ -43,7 +43,11 @@ function mkStore() {
     handleYeaftOutput(msg) {
       const event = msg?.event;
       if (!event || event.type !== 'dream_progress') return;
-      const scope = event.groupId ? `group/${event.groupId}` : (event.target || '*');
+      // Mirror messageHandler.js#yeaft_debug_history: accept either the
+      // canonical `sessionId` (post-rename sweep 2026-06-08) or legacy
+      // `groupId` for deploy-window compat.
+      const sid = event.sessionId || event.groupId;
+      const scope = sid ? `group/${sid}` : (event.target || '*');
       this.yeaftDreamLatest = { ...this.yeaftDreamLatest, [scope]: { phase: event.phase, status: event.phase === 'done' ? 'success' : 'running', finishedAt: event.phase === 'done' ? event.ts : null } };
     },
     addMessage() {},
@@ -63,7 +67,7 @@ describe('messageHandler — yeaft_debug_history routing', () => {
         { turnId: 't1', loopNumber: 1, model: 'm', latencyMs: 10, usage: { totalTokens: 5 } },
       ],
       turns: [
-        { turnId: 't1', userPrompt: 'hello', groupId: 'g1', vpId: 'vp1', threadId: 'thr_a', openedAt: 1, closedAt: 2, totalMs: 10, totalTokens: 5, loopCount: 1, tools: [] },
+        { turnId: 't1', userPrompt: 'hello', sessionId: 'g1', vpId: 'vp1', threadId: 'thr_a', openedAt: 1, closedAt: 2, totalMs: 10, totalTokens: 5, loopCount: 1, tools: [] },
       ],
     });
     // C1 regression: the dispatcher MUST key off `turnId`. Keying off
@@ -176,7 +180,11 @@ describe('messageHandler — yeaft_debug_history routing', () => {
       loops: [],
       turns: [],
       dreamEvents: [
-        { type: 'dream_progress', phase: 'triage', groupId: 'g1', ts: 100, at: 100 },
+        // Two persisted dream events scoped to a session — one carries
+        // the canonical `sessionId` (post-rename), the other carries the
+        // legacy `groupId` (still accepted on read for deploy-window
+        // safety). Both must route to the same `group/g1` scope.
+        { type: 'dream_progress', phase: 'triage', sessionId: 'g1', ts: 100, at: 100 },
         { type: 'dream_progress', phase: 'done', ts: 200, at: 200 },
       ],
     });
@@ -184,6 +192,19 @@ describe('messageHandler — yeaft_debug_history routing', () => {
     expect(store.yeaftDreamEvents['*']).toHaveLength(1);
     expect(store.yeaftDreamLatest['group/g1']).toEqual(expect.objectContaining({ phase: 'triage' }));
     expect(store.yeaftDreamLatest['*']).toEqual(expect.objectContaining({ phase: 'done', status: 'success' }));
+  });
+
+  it('also accepts legacy groupId on a persisted dream event (deploy-window compat)', () => {
+    handleMessage(store, {
+      type: 'yeaft_debug_history',
+      loops: [],
+      turns: [],
+      dreamEvents: [
+        { type: 'dream_progress', phase: 'triage', groupId: 'g1', ts: 100, at: 100 },
+      ],
+    });
+    expect(store.yeaftDreamEvents['group/g1']).toHaveLength(1);
+    expect(store.yeaftDreamLatest['group/g1']).toEqual(expect.objectContaining({ phase: 'triage' }));
   });
 
   it('surfaces error string from agent into yeaftDebugHistoryError', () => {

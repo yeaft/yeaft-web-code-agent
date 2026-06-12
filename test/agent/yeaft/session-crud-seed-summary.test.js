@@ -1,6 +1,6 @@
 /**
  * group-crud-seed-summary.test.js — Pin the contract that `createSessionFromSpec`
- * also seeds `<root>/memory/group/<id>/summary.md` so the FIRST session
+ * also seeds `<root>/memory/session/<id>/summary.md` so the FIRST session
  * has a non-empty memory section. Same Bug-2 reasoning as
  * `vp-crud-seed-summary.test.js`.
  */
@@ -40,7 +40,7 @@ describe('createSessionFromSpec seeds summary.md', () => {
       roster: ['alice', 'bob'],
       defaultVpId: 'alice',
     });
-    const summaryPath = join(yeaftDir, 'memory', 'group', meta.id, 'summary.md');
+    const summaryPath = join(yeaftDir, 'memory', 'session', meta.id, 'summary.md');
     try {
       expect(existsSync(summaryPath)).toBe(true);
       const body = readFileSync(summaryPath, 'utf-8');
@@ -49,7 +49,7 @@ describe('createSessionFromSpec seeds summary.md', () => {
       expect(body).toContain('bob');
     } finally {
       if (existsSync(summaryPath)) {
-        rmSync(join(yeaftDir, 'memory', 'group', meta.id), { recursive: true, force: true });
+        rmSync(join(yeaftDir, 'memory', 'session', meta.id), { recursive: true, force: true });
       }
     }
   });
@@ -85,7 +85,7 @@ describe('createSessionFromSpec seeds summary.md', () => {
     expect(updated.announcement).toBe('Stored in project workdir');
     expect(loadSessionMeta(sessionDir).announcement).toBe('Stored in project workdir');
 
-    const summaryPath = join(groupYeaftDir, 'memory', 'group', meta.id, 'summary.md');
+    const summaryPath = join(groupYeaftDir, 'memory', 'session', meta.id, 'summary.md');
     expect(existsSync(summaryPath)).toBe(true);
     expect(readFileSync(summaryPath, 'utf8').trim().length).toBeGreaterThan(0);
   });

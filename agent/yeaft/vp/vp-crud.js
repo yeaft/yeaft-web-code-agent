@@ -29,7 +29,7 @@ import { STOCK_VP_IDS } from './stock-ids.js';
 /**
  * Default memory root used when callers don't pass `options.memoryRoot`.
  * Memory lives at `<root>/vp/<id>/{summary.md,memory.md,segments/…}` —
- * see `store-v2.scopeDir`. Production sites should thread the configured
+ * see `store.scopeDir`. Production sites should thread the configured
  * `<yeaftDir>/memory` through `options.memoryRoot` so a non-default yeaft
  * directory (e.g. tests, sandboxed CI) doesn't write under `~/.yeaft/`.
  */

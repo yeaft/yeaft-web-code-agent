@@ -118,7 +118,7 @@ export function filterEffortForModel(params) {
  * task-715: last-line-of-defense pair sanitize at the wire.
  *
  * `pairSanitize` already runs in two upstream paths
- * (`conversation/persist.js#loadRecentByGroup` and
+ * (`conversation/persist.js#loadRecentBySession` and
  * `history-compact.js#compactHistory`), but the engine's main loop
  * mutates `conversationMessages` AFTER those — appending tool results
  * mid-loop, archiving bulky tool results into stubs, and (in failure
@@ -193,7 +193,21 @@ export class AdapterRouter extends LLMAdapter {
    */
   constructor({ providers }) {
     super();
-    this.#providers = providers;
+    this.#providers = [];
+    this.#modelToProvider = new Map();
+    this.#adapterCache = new Map();
+    this.refreshProviders(providers);
+  }
+
+  /**
+   * Replace the provider/model index after config.json changes. Existing
+   * provider adapters are dropped because credentials, baseUrl, protocol,
+   * or model ownership may have changed along with the list.
+   *
+   * @param {object[]} providers
+   */
+  refreshProviders(providers) {
+    this.#providers = Array.isArray(providers) ? providers : [];
     this.#modelToProvider = new Map();
     this.#adapterCache = new Map();
 
@@ -201,7 +215,7 @@ export class AdapterRouter extends LLMAdapter {
     // model id appears in multiple providers. Each model entry may declare
     // its own `protocol`; we keep the normalized entry so #effectiveProtocol
     // can consult it later without re-parsing.
-    for (const provider of providers) {
+    for (const provider of this.#providers) {
       if (!Array.isArray(provider.models)) continue;
       for (const raw of provider.models) {
         const entry = normalizeModelEntry(raw);
