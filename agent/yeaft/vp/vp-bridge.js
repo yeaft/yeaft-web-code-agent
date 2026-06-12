@@ -12,7 +12,7 @@
  *   • color / avatar → web-derived, NOT emitted here
  *
  * task-334h — live diff:
- *   • subscribers (Set of sendYeaftEvent fns) receive per-vp `vp_updated`
+ *   • subscribers (Set of sendSessionEvent fns) receive per-vp `vp_updated`
  *     and `vp_removed` events as VpLoader's debounced rescan commits
  *     added / updated / removed vpIds.
  *   • Event shape: `{ type, vpId, vp?, reason? }` where `reason` ∈
@@ -232,19 +232,19 @@ export function buildVpSnapshot(registry = defaultRegistry) {
 /**
  * Handle an `yeaft_vp_subscribe` request from the web client.
  *
- * Registers `sendYeaftEvent` as a live-diff subscriber, emits an initial
+ * Registers `sendSessionEvent` as a live-diff subscriber, emits an initial
  * `vp_snapshot`, and (on first call process-wide) starts the VpLoader
  * whose debounced rescan fans out `vp_updated` / `vp_removed` events.
  *
  * Returns an unsubscribe fn the caller MAY invoke on WS close to prevent
  * sending to a dead socket. Web-bridge is expected to manage this.
  *
- * @param {(event: object) => void} sendYeaftEvent
+ * @param {(event: object) => void} sendSessionEvent
  * @param {import('./registry.js').Registry} [registry]
  * @param {{dir?: string}} [options]
  * @returns {() => void} unsubscribe fn
  */
-export function handleVpSubscribe(sendYeaftEvent, registry = defaultRegistry, options = {}) {
+export function handleVpSubscribe(sendSessionEvent, registry = defaultRegistry, options = {}) {
   const { loader, fresh } = ensureLoader(registry, options);
   // task-338-F2 + task-339-followup: replay semantics.
   //
@@ -273,13 +273,13 @@ export function handleVpSubscribe(sendYeaftEvent, registry = defaultRegistry, op
   if (shouldRescan && loader && typeof loader.rescanNow === 'function') {
     try { loader.rescanNow(); } catch { /* never crash subscribe on rescan */ }
   }
-  _subscribers.add(sendYeaftEvent);
+  _subscribers.add(sendSessionEvent);
   try {
-    sendYeaftEvent(buildVpSnapshot(registry));
+    sendSessionEvent(buildVpSnapshot(registry));
   } catch {
     // Never crash the WS pipeline from snapshot serialisation.
   }
-  return () => { _subscribers.delete(sendYeaftEvent); };
+  return () => { _subscribers.delete(sendSessionEvent); };
 }
 
 /**

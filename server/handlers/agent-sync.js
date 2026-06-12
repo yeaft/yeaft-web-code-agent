@@ -6,7 +6,6 @@ import {
   handleProxyResponse, handleProxyResponseChunk, handleProxyResponseEnd,
   handleProxyWsAgentMessage
 } from '../proxy.js';
-import { readGlobalLlmConfigForWeb } from '../llm-global-config.js';
 
 /**
  * Handle sync, proxy, and agent control messages from agent.
@@ -198,7 +197,6 @@ export async function handleAgentSync(agentId, agent, msg) {
             needsSetup: msg.needsSetup,
             agentConfig: msg.agentConfig,
             effectiveConfig: msg.effectiveConfig,
-            globalConfig: readGlobalLlmConfigForWeb(agent.ownerId || client.userId),
             error: msg.error
           });
         }
@@ -206,7 +204,30 @@ export async function handleAgentSync(agentId, agent, msg) {
       break;
     }
 
-    // LLM config updated acknowledgement from agent
+    // LLM model discovery response from agent — relay to owner clients
+    case 'llm_models_discovered': {
+      for (const [, client] of webClients) {
+        if (client.authenticated && (CONFIG.skipAuth ||
+          (agent.ownerId && client.userId === agent.ownerId) ||
+          (!agent.ownerId && client.role === 'admin')
+        )) {
+          await sendToWebClient(client, {
+            type: 'llm_models_discovered',
+            agentId,
+            requestId: msg.requestId,
+            providerType: msg.providerType,
+            provider: msg.provider,
+            models: msg.models || [],
+            providerModels: msg.providerModels || [],
+            source: msg.source,
+            warning: msg.warning,
+            error: msg.error,
+          });
+        }
+      }
+      break;
+    }
+
     case 'llm_config_updated': {
       for (const [, client] of webClients) {
         if (client.authenticated && (CONFIG.skipAuth ||
@@ -222,7 +243,6 @@ export async function handleAgentSync(agentId, agent, msg) {
             language: msg.language,
             agentConfig: msg.agentConfig,
             effectiveConfig: msg.effectiveConfig,
-            globalConfig: readGlobalLlmConfigForWeb(agent.ownerId || client.userId),
             error: msg.error
           });
         }

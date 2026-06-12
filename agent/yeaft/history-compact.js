@@ -442,7 +442,7 @@ export function findCutIndex(messages, keepRecent) {
 /**
  * Wrap a summary string into the canonical "session continued" recovery
  * message. The wording is deliberately close to Claude Code's compact
- * marker so frontend filters (already in `web/stores/helpers/claudeOutput.js`,
+ * marker so frontend filters (already in `web/stores/helpers/assistantOutput.js`,
  * `server/db/message-db.js`) recognise it.
  *
  * @param {string} summary

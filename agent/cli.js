@@ -7,10 +7,23 @@ import { assertNodeVersion } from './check-node-version.js';
 assertNodeVersion({ component: '@yeaft/webchat-agent' });
 
 import { execSync, spawn } from 'child_process';
+import { createInterface } from 'readline/promises';
+import { stdin as input, stdout as output } from 'process';
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { platform, homedir } from 'os';
+import {
+  addOrUpdateProvider,
+  formatLlmConfig,
+  getDefaultYeaftConfigPath,
+  readLocalLlmConfig,
+  removeProvider,
+  setLocalModels,
+  useGitHubCopilot,
+  useOpenAICompatible,
+  writeLocalLlmConfig,
+} from './llm-config-cli.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf-8'));
@@ -24,6 +37,8 @@ const SERVICE_COMMANDS = ['install', 'uninstall', 'start', 'stop', 'restart', 's
 
 if (command === 'doctor') {
   handleDoctorCommand();
+} else if (command === 'llm') {
+  await handleLlmCommand(subArgs);
 } else if (command === 'upgrade') {
   upgrade();
 } else if (command === '--version' || command === '-v') {
@@ -51,6 +66,7 @@ function printHelp() {
     yeaft-agent status                 Show service status
     yeaft-agent logs                   View service logs (follow mode)
     yeaft-agent doctor                 Diagnose service configuration
+    yeaft-agent llm <command>          Configure local Yeaft LLM providers/models
     yeaft-agent upgrade                Upgrade to latest version
     yeaft-agent --version              Show version
 
@@ -73,6 +89,175 @@ function printHelp() {
     yeaft-agent status
     yeaft-agent logs
 `);
+}
+
+function printLlmHelp() {
+  console.log(`
+  Configure local Yeaft LLM providers/models in ~/.yeaft/config.json.
+
+  Usage:
+    yeaft-agent llm show [--reveal]
+    yeaft-agent llm setup
+    yeaft-agent llm use github-copilot --model <modelId> [--fast <modelId>] [--allow-unknown-model]
+    yeaft-agent llm use openai-compatible --name <name> --base-url <url> --api-key-env <ENV> --model <modelId> [--fast <modelId>]
+    yeaft-agent llm add-provider --name <name> --base-url <url> --models <m1,m2> \
+      [--api-key <key>|--api-key-env <ENV>|--credential-provider github-copilot] \
+      [--protocol anthropic|openai-responses] [--set-primary <model>] [--set-fast <model>]
+    yeaft-agent llm set-model [--primary <provider/model>] [--fast <provider/model>]
+    yeaft-agent llm remove-provider --name <name>
+
+  Behavior:
+    setup/use are the recommended low-config path; add-provider is the advanced manual path.
+    GitHub Copilot uses the local credential provider and never writes a token to config.
+    add-provider updates/replaces an existing provider with the same --name.
+    --api-key-env reads the environment variable value and writes it as apiKey.
+    set-model requires full provider/model references.
+    --config <path> can target a config file for tests or scripted setup.
+
+  Examples:
+    yeaft-agent llm setup
+    yeaft-agent llm use github-copilot --model claude-sonnet-4.5 --fast gpt-4.1
+    OPENAI_KEY=sk-... yeaft-agent llm add-provider --name openai --base-url https://api.openai.com/v1 --models gpt-5,gpt-4.1 --api-key-env OPENAI_KEY --protocol openai-responses --set-primary gpt-5
+    yeaft-agent llm set-model --primary openai/gpt-5 --fast openai/gpt-4.1
+    yeaft-agent llm show --reveal
+`);
+}
+
+async function handleLlmCommand(args) {
+  const subcommand = args[0];
+
+  try {
+    const options = parseLlmArgs(args.slice(subcommand === 'use' ? 2 : 1));
+    const configPath = options.config || getDefaultYeaftConfigPath();
+    if (!subcommand || subcommand === '--help' || subcommand === '-h' || subcommand === 'help') {
+      printLlmHelp();
+      return;
+    }
+
+    if (subcommand === 'show') {
+      const config = readLocalLlmConfig(configPath);
+      console.log(formatLlmConfig({ ...config, __configPath: configPath }, { reveal: Boolean(options.reveal) }));
+      return;
+    }
+
+    const current = readLocalLlmConfig(configPath);
+    let result;
+    if (subcommand === 'setup') {
+      await runLlmSetup(current, configPath);
+      return;
+    }
+
+    if (subcommand === 'use') {
+      const preset = args[1];
+      if (preset === 'github-copilot') {
+        result = await useGitHubCopilot(current, options);
+        writeLocalLlmConfig(result.config, configPath);
+        console.log(`Configured GitHub Copilot provider with ${result.discovery.models.length} ${result.discovery.source} models.`);
+        if (result.discovery.warning) console.log(`Warning: ${result.discovery.warning}`);
+        console.log(`Primary model: ${result.config.primaryModel}`);
+        if (result.config.fastModel) console.log(`Fast model: ${result.config.fastModel}`);
+        return;
+      }
+      if (preset === 'openai-compatible') {
+        result = await useOpenAICompatible(current, options, process.env);
+        writeLocalLlmConfig(result.config, configPath);
+        console.log(`Configured ${result.provider.name} with ${result.discovery.models.length} live models.`);
+        console.log(`Primary model: ${result.config.primaryModel}`);
+        if (result.config.fastModel) console.log(`Fast model: ${result.config.fastModel}`);
+        return;
+      }
+      throw new Error(`Unsupported llm use preset: ${preset || '(missing)'}`);
+    }
+
+    if (subcommand === 'add-provider') {
+      result = addOrUpdateProvider(current, options, process.env);
+      writeLocalLlmConfig(result.config, configPath);
+      console.log(`${result.replaced ? 'Updated' : 'Added'} provider: ${result.provider.name}`);
+      if (result.config.primaryModel) console.log(`Primary model: ${result.config.primaryModel}`);
+      if (result.config.fastModel) console.log(`Fast model: ${result.config.fastModel}`);
+      return;
+    }
+
+    if (subcommand === 'set-model') {
+      result = setLocalModels(current, options);
+      writeLocalLlmConfig(result.config, configPath);
+      if (result.config.primaryModel) console.log(`Primary model: ${result.config.primaryModel}`);
+      if (result.config.fastModel) console.log(`Fast model: ${result.config.fastModel}`);
+      return;
+    }
+
+    if (subcommand === 'remove-provider') {
+      result = removeProvider(current, options);
+      writeLocalLlmConfig(result.config, configPath);
+      console.log(result.removed ? `Removed provider: ${options.name}` : `Provider not found: ${options.name}`);
+      if (result.cleared.length) {
+        console.log(`Cleared ${result.cleared.join(', ')} because it referenced ${options.name}`);
+      }
+      return;
+    }
+
+    throw new Error(`Unknown llm command: ${subcommand}`);
+  } catch (err) {
+    console.error(`Error: ${err.message}`);
+    console.error('Run `yeaft-agent llm --help` for usage.');
+    process.exit(1);
+  }
+}
+
+
+async function runLlmSetup(current, configPath) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error('Interactive setup requires a TTY. Use `yeaft-agent llm use github-copilot --model <modelId>` in scripts.');
+  }
+
+  const rl = createInterface({ input, output });
+  try {
+    console.log('Yeaft LLM setup');
+    console.log('1) GitHub Copilot (uses local device token / gh auth, no API key in config)');
+    console.log('2) Advanced manual provider (use add-provider command)');
+    const choice = (await rl.question('Choose provider [1]: ')).trim() || '1';
+    if (choice !== '1') {
+      console.log('Use `yeaft-agent llm add-provider --help` for advanced endpoints.');
+      return;
+    }
+
+    const discovery = await useGitHubCopilot(current, { model: '__placeholder__', allowUnknownModel: true });
+    const ids = discovery.discovery.models;
+    console.log('\nAvailable GitHub Copilot models:');
+    ids.forEach((id, idx) => console.log(`  ${idx + 1}) ${id}`));
+    const answer = (await rl.question('Primary model number or id: ')).trim();
+    const primary = ids[Number(answer) - 1] || answer;
+    if (!primary) throw new Error('A primary model is required.');
+    const fastAnswer = (await rl.question('Fast model number or id (optional): ')).trim();
+    const fast = fastAnswer ? (ids[Number(fastAnswer) - 1] || fastAnswer) : null;
+    const result = await useGitHubCopilot(current, { model: primary, fast, allowUnknownModel: false });
+    writeLocalLlmConfig(result.config, configPath);
+    console.log(`Configured GitHub Copilot with ${result.discovery.models.length} ${result.discovery.source} models.`);
+    if (result.discovery.warning) console.log(`Warning: ${result.discovery.warning}`);
+    console.log(`Primary model: ${result.config.primaryModel}`);
+    if (result.config.fastModel) console.log(`Fast model: ${result.config.fastModel}`);
+  } finally {
+    rl.close();
+  }
+}
+
+function parseLlmArgs(args) {
+  const options = {};
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--reveal' || arg === '--allow-unknown-model') {
+      const key = arg === '--reveal' ? 'reveal' : 'allowUnknownModel';
+      options[key] = true;
+      continue;
+    }
+    const key = arg.startsWith('--') ? arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase()) : null;
+    if (!key) throw new Error(`Unexpected argument: ${arg}`);
+    const value = args[i + 1];
+    if (!value || value.startsWith('--')) throw new Error(`${arg} requires a value`);
+    options[key] = value;
+    i += 1;
+  }
+  return options;
 }
 
 async function handleServiceCommand(command, args) {

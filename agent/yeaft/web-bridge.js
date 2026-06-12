@@ -6,8 +6,8 @@
  * inbox, abort, todo, persistence, and frontend timeline boundaries. Legacy
  * 1:1 chat paths still use the default `main` thread.
  *
- * Translates Engine events into claude_output-format messages so the
- * frontend can fully reuse the standard Chat rendering pipeline
+ * Translates Engine events into provider-neutral assistant output frames so
+ * the frontend can fully reuse the standard Chat rendering pipeline
  * (MessageList, AssistantTurn, ToolLine, AskCard, waiting cat, etc.).
  *
  * task-330c lint guard:
@@ -119,7 +119,7 @@ const inflightScopedDreamGroups = new Set();
 async function sendDreamSnapshotForSession(sessionId, extra = {}) {
   const snapshot = await buildDreamOutputSnapshot(session, sessionId);
   if (!snapshot) return null;
-  sendYeaftEvent({ type: 'yeaft_dream_snapshot', ...extra, snapshot }, { sessionId });
+  sendSessionEvent({ type: 'yeaft_dream_snapshot', ...extra, snapshot }, { sessionId });
   return snapshot;
 }
 
@@ -157,7 +157,7 @@ const turnAbortMeta = new Map();
 
 /**
  * Per-VP status broker — the agent-side authority for VP timeline
- * status. Lazy-initialized on first use because `sendYeaftEvent` is
+ * status. Lazy-initialized on first use because `sendSessionEvent` is
  * declared below; trying to call it at module top-level would crash
  * with a TDZ error during agent boot.
  *
@@ -173,7 +173,7 @@ function getVpStatusBroker() {
     vpStatusBroker = createVpStatusBroker({
       send: (event) => {
         // The broker emits both `vp_status_changed` and
-        // `vp_status_snapshot`. Both ride the standard sendYeaftEvent
+        // `vp_status_snapshot`. Both ride the standard sendSessionEvent
         // envelope so the frontend's existing yeaft_output dispatcher
         // sees them. We stamp sessionId/vpId on the envelope for
         // events that target a specific VP so the server's per-client
@@ -185,7 +185,7 @@ function getVpStatusBroker() {
           if (event.vpId) env.vpId = event.vpId;
           if (event.turnId) env.turnId = event.turnId;
         }
-        sendYeaftEvent(event, env);
+        sendSessionEvent(event, env);
       },
     });
   }
@@ -205,11 +205,11 @@ function getVpStatusBroker() {
  *      the target VP's driver instead of being dropped.
  *   2. Each VP thread gets its own Engine (via `vpEngines`) so private state
  *      (`#currentAbortCtrl`, `#__queryCounter`, `#pendingT2`,
- *      `#abortReason`, `#adjustRanByGroup`, `#execLog`, `#currentThreadId`)
+ *      `#abortReason`, `#adjustRanBySession`, `#execLog`, `#currentThreadId`)
  *      does not collide across concurrent VP turns. Engines are keyed by
  *      `${sessionId}::${vpId}::${threadId}` rather than vpId alone because
  *      Engine cannot serve two concurrent queries safely — even if AMS state
- *      partitions correctly by groupKey, the non-group-keyed private state
+ *      partitions correctly by sessionKey, the non-session-keyed private state
  *      would collide if the same VP ran turns in two groups or two threads
  *      in parallel.
  */
@@ -859,7 +859,7 @@ function isPermissionErrorMsg(msg) {
 /**
  * Get-or-create the per-VP Engine. Each VP owns its own Engine instance
  * so private state (`#currentAbortCtrl`, `#__queryCounter`, `#pendingT2`,
- * `#abortReason`, `#adjustRanByGroup`, `#execLog`) doesn't collide when
+ * `#abortReason`, `#adjustRanBySession`, `#execLog`) doesn't collide when
  * VP-A and VP-B run concurrent turns. All engines share the session's
  * adapter / trace / config / stores so memory recall, conversation
  * persistence, and tool registry remain consistent.
@@ -1023,7 +1023,7 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
     });
     thread.updatedAt = Date.now();
     try {
-      sendYeaftEvent({
+      sendSessionEvent({
         type: 'vp_thread_user_appended',
         sessionId,
         vpId,
@@ -1045,7 +1045,7 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
   inbox.push({ envelope, turnId, thread });
 
   try {
-    sendYeaftEvent({
+    sendSessionEvent({
       type: 'vp_typing_start',
       sessionId,
       vpId,
@@ -1137,7 +1137,7 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
         turnAbortMeta.delete(turnId);
         if (vpAborts.get(key) === vpAbort) vpAborts.delete(key);
         try {
-          sendYeaftEvent({
+          sendSessionEvent({
             type: 'vp_typing_end',
             sessionId,
             vpId,
@@ -1149,7 +1149,7 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
       }
       try {
         if (text && envelope?.msg) {
-          sendYeaftEvent({
+          sendSessionEvent({
             type: 'session_message',
             sessionId,
             vpId,
@@ -1217,7 +1217,7 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
             console.warn('[Yeaft] vp-status typing transition (rescue) failed:', err?.message || err);
           }
           try {
-            sendYeaftEvent({
+            sendSessionEvent({
               type: 'vp_typing_start',
               sessionId,
               vpId,
@@ -1285,9 +1285,11 @@ export async function __testResetVpState() {
 
 
 /**
- * Send a yeaft_output message carrying claude_output-format data.
- * Envelope fields: conversationId, sessionId, vpId, turnId, threadId let the
- * frontend route incremental deltas to the correct per-VP/thread block.
+ * Send a provider-neutral assistant output frame for a Yeaft Session.
+ *
+ * Wire compatibility: this still emits the legacy `yeaft_output` envelope so
+ * upgraded agents continue to work with older servers. The frame in `data` is
+ * intentionally generic and is consumed by the web's assistant-output handler.
  */
 function resolveGroupDefaultVpId(sessionId) {
   if (!sessionId) return null;
@@ -1300,7 +1302,7 @@ function resolveGroupDefaultVpId(sessionId) {
   }
 }
 
-function sendYeaftOutput(data, { sessionId, chatId, vpId, turnId, threadId } = {}) {
+function sendSessionOutputFrame(data, { sessionId, chatId, vpId, turnId, threadId } = {}) {
   const resolvedVpId = vpId || (sessionId ? resolveGroupDefaultVpId(sessionId) : null);
   sendToServer({
     type: 'yeaft_output',
@@ -1314,8 +1316,8 @@ function sendYeaftOutput(data, { sessionId, chatId, vpId, turnId, threadId } = {
   });
 }
 
-/** Send a yeaft_output event (non-claude_output metadata). */
-function sendYeaftEvent(event, { sessionId, chatId, vpId, turnId, threadId } = {}) {
+/** Send a Yeaft Session metadata event over the legacy-compatible envelope. */
+function sendSessionEvent(event, { sessionId, chatId, vpId, turnId, threadId } = {}) {
   sendToServer({
     type: 'yeaft_output',
     conversationId: yeaftConversationId,
@@ -1345,7 +1347,7 @@ export function handleYeaftVpSubscribe(_msg) {
   }
   const { libDir } = configuredVpPaths();
   _vpUnsubscribe = handleVpSubscribe(
-    sendYeaftEvent,
+    sendSessionEvent,
     undefined,
     libDir ? { dir: libDir } : {},
   );
@@ -1355,7 +1357,7 @@ export function handleYeaftVpSubscribe(_msg) {
  * VP CRUD from the web client. See historic doc for full message shapes.
  */
 function sendVpCrudResult(payload) {
-  sendYeaftEvent({ type: 'vp_crud_result', ...payload });
+  sendSessionEvent({ type: 'vp_crud_result', ...payload });
 }
 
 export function handleYeaftVpCreate(msg) {
@@ -1462,7 +1464,7 @@ export function handleYeaftVpRead(msg) {
  * Session CRUD wired to WS events.
  */
 function sendSessionCrudResult(payload) {
-  sendYeaftEvent({ type: 'session_crud_result', ...payload });
+  sendSessionEvent({ type: 'session_crud_result', ...payload });
 }
 
 function sendSessionSnapshotBroadcast() {
@@ -1470,7 +1472,7 @@ function sendSessionSnapshotBroadcast() {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     if (!yeaftDir) return;
     const sessions = snapshotSessions(yeaftDir);
-    sendYeaftEvent({ type: 'session_list_updated', sessions });
+    sendSessionEvent({ type: 'session_list_updated', sessions });
   } catch (err) {
     console.warn('[Yeaft] sendSessionSnapshotBroadcast failed:', err?.message || err);
   }
@@ -1502,7 +1504,7 @@ function sendSessionRosterChanged(session) {
     defaultVpId: session.defaultVpId,
     workDir: session.workDir || '',
   };
-  sendYeaftEvent({ type: 'session_roster_changed', ...payload });
+  sendSessionEvent({ type: 'session_roster_changed', ...payload });
 }
 
 function sessionErrorPayload(err) {
@@ -1599,16 +1601,7 @@ export function handleYeaftRestoreSession(msg) {
 
 export function handleYeaftRenameSession(msg) {
   const requestId = msg && msg.requestId;
-  // fix-yeaft-delete-and-agent-revert: accept legacy `groupId` in
-  // addition to `sessionId`. The contract documented in
-  // `web/stores/sessions.js` header ("Inbound payloads may carry
-  // either sessionId (new) or groupId (legacy); both are accepted,
-  // prefer sessionId") was only honored on web-side reads; the agent
-  // handlers were silently rejecting the older wire shape that today's
-  // SessionSettingsModal still sends. That's what made delete/rename/
-  // archive/update_config/add_member/remove_member/set_default_vp
-  // all throw `not_found` on undefined ids.
-  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
+  const sessionId = (msg && msg.sessionId) || null;
   const name = msg && msg.name;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
@@ -1638,7 +1631,7 @@ export function handleYeaftRenameSession(msg) {
 export function handleYeaftUpdateSession(msg) {
   const requestId = msg && msg.requestId;
   // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
-  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
+  const sessionId = (msg && msg.sessionId) || null;
   const patch = (msg && msg.patch && typeof msg.patch === 'object') ? msg.patch : null;
   try {
     const hasName = patch && typeof patch.name === 'string' && patch.name.trim().length > 0;
@@ -1673,7 +1666,7 @@ export function handleYeaftUpdateSession(msg) {
 export function handleYeaftUpdateSessionConfig(msg) {
   const requestId = msg && msg.requestId;
   // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
-  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
+  const sessionId = (msg && msg.sessionId) || null;
   const partial = (msg && msg.config && typeof msg.config === 'object') ? msg.config : null;
   try {
     if (!sessionId) throw new SessionConfigError('missing_group_id', 'sessionId required');
@@ -1696,7 +1689,7 @@ export function handleYeaftUpdateSessionConfig(msg) {
 export function handleYeaftArchiveSession(msg) {
   const requestId = msg && msg.requestId;
   // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
-  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
+  const sessionId = (msg && msg.sessionId) || null;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const result = archiveSession(yeaftDir, sessionId);
@@ -1717,7 +1710,7 @@ export function handleYeaftArchiveSession(msg) {
 export function handleYeaftDeleteSession(msg) {
   const requestId = msg && msg.requestId;
   // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
-  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
+  const sessionId = (msg && msg.sessionId) || null;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const result = deleteSession(yeaftDir, sessionId);
@@ -1759,7 +1752,7 @@ export function handleYeaftDeleteSession(msg) {
 export function handleYeaftSessionAddMember(msg) {
   const requestId = msg && msg.requestId;
   // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
-  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
+  const sessionId = (msg && msg.sessionId) || null;
   const vpId = msg && msg.vpId;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
@@ -1775,7 +1768,7 @@ export function handleYeaftSessionAddMember(msg) {
 export function handleYeaftSessionRemoveMember(msg) {
   const requestId = msg && msg.requestId;
   // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
-  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
+  const sessionId = (msg && msg.sessionId) || null;
   const vpId = msg && msg.vpId;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
@@ -1797,7 +1790,7 @@ export function handleYeaftSessionRemoveMember(msg) {
 export function handleYeaftSessionSetDefaultVp(msg) {
   const requestId = msg && msg.requestId;
   // wire-compat: accept legacy `groupId` (see handleYeaftRenameSession).
-  const sessionId = (msg && (msg.sessionId || msg.groupId)) || null;
+  const sessionId = (msg && msg.sessionId) || null;
   const vpId = msg && msg.vpId;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
@@ -1868,11 +1861,11 @@ export function installYeaftRuntimeBridge(s) {
     try {
       if (evt.type === 'turn_open' || evt.type === 'turn_close' || evt.type === 'loop') {
         const tag = evt && evt.sessionId ? { sessionId: evt.sessionId } : {};
-        sendYeaftEvent(evt, tag);
+        sendSessionEvent(evt, tag);
       } else {
         const out = { type: 'dream_progress', ...evt };
         const tag = evt && evt.sessionId ? { sessionId: evt.sessionId } : {};
-        sendYeaftEvent(out, tag);
+        sendSessionEvent(out, tag);
       }
     } catch { /* never let event delivery throw */ }
   };
@@ -1885,11 +1878,11 @@ export function installYeaftRuntimeBridge(s) {
   s._dreamResultSink = async (result = {}) => {
     if (result?.trigger !== 'auto') return;
     const normalized = normalizeDreamResult(result);
-    const processed = Array.isArray(result.groups)
-      ? result.groups.filter(g => g && g.status === 'processed' && g.sessionId)
+    const processed = Array.isArray(result.sessions)
+      ? result.sessions.filter(row => row && row.status === 'triaged' && row.sessionId)
       : [];
-    for (const group of processed) {
-      const sessionId = group.sessionId;
+    for (const sessionRow of processed) {
+      const sessionId = sessionRow.sessionId;
       const snapshot = await buildDreamOutputSnapshot(session, sessionId).catch(() => null);
       sendToServer({
         type: 'yeaft_dream_result',
@@ -1902,14 +1895,14 @@ export function installYeaftRuntimeBridge(s) {
   };
 
   // Wire the post-compact WS sink. Compactor is constructed in
-  // session.js with a no-op sink; bridge owns `sendYeaftEvent` /
+  // session.js with a no-op sink; bridge owns `sendSessionEvent` /
   // `yeaftConversationId`, so the sink is wired here once a session is
   // present. Per-group `yeaft_history_compacted` events fire after a
   // successful summarize+swap.
   if (s.compactor && typeof s.compactor.setOnCompacted === 'function') {
     s.compactor.setOnCompacted((sessionId, result) => {
       try {
-        sendYeaftEvent({
+        sendSessionEvent({
           type: 'yeaft_history_compacted',
           reason: result?.reason ?? null,
           beforeTurns: result?.beforeTurns,
@@ -1988,7 +1981,7 @@ function handleEngineEvent(event, hctx) {
   switch (event.type) {
     case 'text_delta':
       hctx.assistantTextParts.push(event.text);
-      sendYeaftOutput({
+      sendSessionOutputFrame({
         type: 'assistant',
         message: { content: [{ type: 'text', text: event.text }] },
       }, envelope);
@@ -1999,7 +1992,7 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'thinking_delta':
-      sendYeaftEvent({ type: 'thinking_delta', text: event.text }, envelope);
+      sendSessionEvent({ type: 'thinking_delta', text: event.text }, envelope);
       break;
 
     case 'thinking_block_end':
@@ -2008,7 +2001,7 @@ function handleEngineEvent(event, hctx) {
       // turns / VPs includes it. Without this echo Anthropic 400s the
       // next request with "content[].thinking in the thinking mode must
       // be passed back to the API". The signature stays server-side
-      // only — wire serializers (stripMetaForWire / sendYeaftOutput)
+      // only — wire serializers (stripMetaForWire / sendSessionOutputFrame)
       // never reference thinkingBlocks, so it cannot leak to the UI.
       if (hctx.thinkingBlocksAccum && event.signature) {
         if (event.redacted) {
@@ -2038,11 +2031,11 @@ function handleEngineEvent(event, hctx) {
         });
       }
       // Finish any in-progress text streaming so UI shows typing dots
-      sendYeaftOutput({
+      sendSessionOutputFrame({
         type: 'assistant',
         message: { content: [] },
       }, envelope);
-      sendYeaftOutput({
+      sendSessionOutputFrame({
         type: 'assistant',
         message: {
           content: [{
@@ -2057,7 +2050,7 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'tool_start':
-      sendYeaftEvent({
+      sendSessionEvent({
         type: 'tool_start',
         id: event.id,
         name: event.name,
@@ -2073,7 +2066,7 @@ function handleEngineEvent(event, hctx) {
           isError: !!event.isError,
         });
       }
-      sendYeaftOutput({
+      sendSessionOutputFrame({
         type: 'user',
         tool_use_result: [{
           type: 'tool_result',
@@ -2118,7 +2111,7 @@ function handleEngineEvent(event, hctx) {
         } catch (err) {
           console.warn('[Yeaft] vp-status settleIdle (route_forward) failed:', err?.message || err);
         }
-        sendYeaftEvent({
+        sendSessionEvent({
           type: 'vp_turn_end',
           sessionId: hctx.sessionId,
           vpId: hctx.vpId,
@@ -2134,7 +2127,7 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'usage':
-      sendYeaftEvent({
+      sendSessionEvent({
         type: 'context_usage',
         inputTokens: event.inputTokens,
         outputTokens: event.outputTokens,
@@ -2142,7 +2135,7 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'recall':
-      sendYeaftEvent({
+      sendSessionEvent({
         type: 'recall',
         entryCount: event.entryCount,
         cached: event.cached,
@@ -2153,7 +2146,7 @@ function handleEngineEvent(event, hctx) {
       // Engine compressed the context — clear THIS group's accumulated
       // history. Other groups' histories stay intact.
       if (hctx.sessionId) setGroupHistory(hctx.sessionId, []);
-      sendYeaftEvent({
+      sendSessionEvent({
         type: 'consolidate',
         archivedCount: event.archivedCount,
         extractedCount: event.extractedCount,
@@ -2161,7 +2154,7 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'fallback':
-      sendYeaftEvent({
+      sendSessionEvent({
         type: 'fallback',
         from: event.from,
         to: event.to,
@@ -2170,7 +2163,7 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'reflection':
-      sendYeaftEvent({
+      sendSessionEvent({
         type: 'reflection',
         // feat-6af5f9f1 PR B: stamp turnId/loopNumber so the debug panel
         // can attach reflection cards to the matching loop.
@@ -2187,7 +2180,7 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'turn_open':
-      sendYeaftEvent({
+      sendSessionEvent({
         type: 'turn_open',
         turnId: event.turnId,
         userPrompt: event.userPrompt,
@@ -2198,7 +2191,7 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'turn_close':
-      sendYeaftEvent({
+      sendSessionEvent({
         type: 'turn_close',
         turnId: event.turnId,
         totalMs: event.totalMs,
@@ -2208,7 +2201,7 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'memory_used':
-      sendYeaftEvent({
+      sendSessionEvent({
         type: 'memory_used',
         turnId: event.turnId,
         loaded: event.loaded || [],
@@ -2216,7 +2209,7 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'dream_memory_loaded':
-      sendYeaftEvent({
+      sendSessionEvent({
         type: 'dream_memory_loaded',
         turnId: event.turnId,
         vpId: event.vpId || null,
@@ -2227,10 +2220,10 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'memory_adjust':
-      sendYeaftEvent({
+      sendSessionEvent({
         type: 'memory_adjust',
         turnId: event.turnId,
-        groupKey: event.groupKey,
+        sessionKey: event.sessionKey,
         added: event.added,
         evicted: event.evicted,
         skipped: event.skipped,
@@ -2242,7 +2235,7 @@ function handleEngineEvent(event, hctx) {
       if (hctx && Array.isArray(hctx.appendedUserPrompts) && event.preview) {
         hctx.appendedUserPrompts.push(String(event.preview));
       }
-      sendYeaftEvent({
+      sendSessionEvent({
         type: 'vp_thread_user_append_consumed',
         turnId: event.turnId,
         threadId: event.threadId,
@@ -2253,7 +2246,7 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'tool_exec':
-      sendYeaftEvent({
+      sendSessionEvent({
         type: 'tool_exec',
         turnId: event.turnId,
         loopNumber: event.loopNumber,
@@ -2267,7 +2260,7 @@ function handleEngineEvent(event, hctx) {
     case 'loop':
       // feat-6af5f9f1 PR B: replaces the old `debug_turn` event. Same
       // payload shape plus turnId + loopNumber + usage.totalTokens.
-      sendYeaftEvent({
+      sendSessionEvent({
         type: 'loop',
         turnId: event.turnId,
         loopNumber: event.loopNumber,
@@ -2290,7 +2283,7 @@ function handleEngineEvent(event, hctx) {
       if (isPermissionErrorMsg(errMsg)) {
         if (!_permissionDiagnosticSent) {
           _permissionDiagnosticSent = true;
-          sendYeaftOutput({
+          sendSessionOutputFrame({
             type: 'assistant',
             message: {
               content: [{
@@ -2301,7 +2294,7 @@ function handleEngineEvent(event, hctx) {
           }, envelope);
         }
       } else {
-        sendYeaftOutput({
+        sendSessionOutputFrame({
           type: 'assistant',
           message: {
             content: [{ type: 'text', text: `⚠️ Error: ${errMsg}` }],
@@ -2367,11 +2360,11 @@ export async function handleYeaftSessionSend(msg) {
   // session lying around.
   const yeaftDir = ctx.CONFIG?.yeaftDir;
   if (!yeaftDir) {
-    sendYeaftOutput({
+    sendSessionOutputFrame({
       type: 'assistant',
       message: { content: [{ type: 'text', text: '⚠️ Yeaft session error: no yeaft directory configured.' }] },
     }, { sessionId });
-    sendYeaftOutput({ type: 'result', result_text: '' }, { sessionId });
+    sendSessionOutputFrame({ type: 'result', result_text: '' }, { sessionId });
     return;
   }
 
@@ -2402,11 +2395,11 @@ export async function handleYeaftSessionSend(msg) {
   }
 
   if (!sessionHandle) {
-    sendYeaftOutput({
+    sendSessionOutputFrame({
       type: 'assistant',
       message: { content: [{ type: 'text', text: `⚠️ Session ${sessionId} not found.` }] },
     }, { sessionId });
-    sendYeaftOutput({ type: 'result', result_text: '' }, { sessionId });
+    sendSessionOutputFrame({ type: 'result', result_text: '' }, { sessionId });
     return;
   }
 
@@ -2486,7 +2479,7 @@ export async function handleYeaftSessionSend(msg) {
     const detail = attachmentBundle.failed
       .map((f) => `  - ${f.name}: ${f.error}`)
       .join('\n');
-    sendYeaftOutput({
+    sendSessionOutputFrame({
       type: 'assistant',
       message: { content: [{ type: 'text', text: `⚠️ ${attachmentBundle.failed.length} file(s) could not be attached:\n${detail}` }] },
     }, { sessionId });
@@ -2516,11 +2509,11 @@ export async function handleYeaftSessionSend(msg) {
     });
   } catch (err) {
     console.warn('[Yeaft] yeaft_session_chat: coord.ingest failed', err?.message || err);
-    sendYeaftOutput({
+    sendSessionOutputFrame({
       type: 'assistant',
       message: { content: [{ type: 'text', text: `⚠️ Session dispatch error: ${err?.message || err}` }] },
     }, { sessionId });
-    sendYeaftOutput({ type: 'result', result_text: '' }, { sessionId });
+    sendSessionOutputFrame({ type: 'result', result_text: '' }, { sessionId });
     return;
   }
 
@@ -2537,11 +2530,11 @@ export async function handleYeaftSessionSend(msg) {
     // with a healthy roster. Surface the failure explicitly rather than
     // silently retrying as a single-VP turn (the legacy fallback masked
     // group-roster bugs).
-    sendYeaftOutput({
+    sendSessionOutputFrame({
       type: 'assistant',
       message: { content: [{ type: 'text', text: '⚠️ No VP available to respond — check the group roster.' }] },
     }, { sessionId });
-    sendYeaftOutput({ type: 'result', result_text: '' }, { sessionId });
+    sendSessionOutputFrame({ type: 'result', result_text: '' }, { sessionId });
     return;
   }
 
@@ -2725,7 +2718,6 @@ async function ensureSessionLoaded() {
   const yeaftDir = ctx.CONFIG?.yeaftDir;
   session = await loadSession({
     ...(yeaftDir && { dir: yeaftDir }),
-    configOverrides: { globalLlmConfig: ctx.globalLlmConfig || { providers: [] } },
     skipMCP: false,
     skipSkills: false,
     serverMode: true,
@@ -2737,7 +2729,7 @@ async function ensureSessionLoaded() {
     if (session.engine && typeof session.engine.setSubAgentEventSink === 'function') {
       session.engine.setSubAgentEventSink((agentId, evt) => {
         try {
-          sendYeaftEvent({ type: 'sub_agent_event', agentId, payload: evt });
+          sendSessionEvent({ type: 'sub_agent_event', agentId, payload: evt });
         } catch { /* ignore */ }
       });
     }
@@ -2763,7 +2755,7 @@ async function ensureSessionLoaded() {
   // Per-group history is hydrated lazily on first `getOrCreateSessionHistory`
   // — there's no global "all conversations" tape any more.
 
-  sendYeaftEvent({
+  sendSessionEvent({
     type: 'session_ready',
     conversationId: yeaftConversationId,
     model: session.config.model,
@@ -2822,7 +2814,7 @@ async function runVpTurnWithEscalation(args) {
         `[Yeaft] runVpTurn watchdog escalation: VP ${vpId} did not return ${deadlineMs}ms after enqueue — emitting synthetic stop and unblocking driver`,
       );
       try {
-        sendYeaftOutput(
+        sendSessionOutputFrame(
           { type: 'result', result_text: '', stopped: true },
           { sessionId, vpId, turnId, threadId },
         );
@@ -2902,7 +2894,7 @@ async function raceWithEscalation(inner, { deadlineMs, onEscalate }) {
  * itself; the persistent coord lives in `sessionContexts[sessionId]`. Uses
  * `getOrCreateVpEngine(sessionId, vpId)` so each VP runs against its own
  * Engine instance — private state (`#currentAbortCtrl`, `#__queryCounter`,
- * `#pendingT2`, `#abortReason`, `#adjustRanByGroup`, `#execLog`) does not
+ * `#pendingT2`, `#abortReason`, `#adjustRanBySession`, `#execLog`) does not
  * collide when VP-A and VP-B run concurrent turns.
  *
  * @param {{ prompt: string, sessionId: string, vpId: string, turnId: string, envelope: object, vpAbort: AbortController, baseSnapshot: Array }} args
@@ -2928,7 +2920,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
     if (turnEndEmitted) return;
     turnEndEmitted = true;
     try {
-      sendYeaftEvent({
+      sendSessionEvent({
         type: 'vp_turn_end',
         sessionId,
         vpId,
@@ -2962,7 +2954,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
     resetQueryTimer();
 
     // Emit turn_start so frontend can create the message block.
-    sendYeaftEvent({ type: 'vp_turn_start', vpId, threadId, turnId, sessionId, title: thread?.title || '' }, envelope);
+    sendSessionEvent({ type: 'vp_turn_start', vpId, threadId, turnId, sessionId, title: thread?.title || '' }, envelope);
     // vp-status: LLM call about to start, no text/tool yet → 'thinking'.
     try {
       getVpStatusBroker().transition({ sessionId, vpId, threadId, title: thread?.title || '', state: 'thinking', turnId, messageCount: thread?.messageIds?.length || 0 });
@@ -3044,11 +3036,11 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       // Turn completed — atomically append this VP's output to shared history.
       appendTurnToSessionHistory(sessionId, threadId, vpId, [prompt, ...appendedUserPrompts], assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum);
 
-      sendYeaftOutput({
+      sendSessionOutputFrame({
         type: 'assistant',
         message: { content: [] },
       }, envelope);
-      sendYeaftOutput({
+      sendSessionOutputFrame({
         type: 'result',
         result_text: '',
       }, envelope);
@@ -3062,7 +3054,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
   } catch (err) {
     const isAbort = err && (err.name === 'AbortError' || err.name === 'LLMAbortError');
     if (isAbort) {
-      sendYeaftOutput({
+      sendSessionOutputFrame({
         type: 'result',
         result_text: '',
         stopped: true,
@@ -3089,7 +3081,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
     if (isPermissionErrorMsg(err.message)) {
       if (!_permissionDiagnosticSent) {
         _permissionDiagnosticSent = true;
-        sendYeaftOutput({
+        sendSessionOutputFrame({
           type: 'assistant',
           message: {
             content: [{
@@ -3100,7 +3092,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         }, envelope);
       }
     } else {
-      sendYeaftOutput({
+      sendSessionOutputFrame({
         type: 'assistant',
         message: {
           content: [{
@@ -3110,7 +3102,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         },
       }, envelope);
     }
-    sendYeaftOutput({
+    sendSessionOutputFrame({
       type: 'result',
       result_text: '',
     }, envelope);
@@ -3384,7 +3376,7 @@ export function handleYeaftAbortThread(_msg = {}) {
       const thread = vpMap.get(targetThreadId);
       if (thread) thread.status = 'aborted';
     }
-    sendYeaftEvent({ type: 'yeaft_aborted', aborted, all: false, threadId: targetThreadId });
+    sendSessionEvent({ type: 'yeaft_aborted', aborted, all: false, threadId: targetThreadId });
     return { aborted, all: false };
   }
 
@@ -3398,7 +3390,7 @@ export function handleYeaftAbortThread(_msg = {}) {
   turnAbortCtrls.clear();
   turnAbortMeta.clear();
   abortAllVpRuntime(aborted);
-  sendYeaftEvent({ type: 'yeaft_aborted', aborted, all: false });
+  sendSessionEvent({ type: 'yeaft_aborted', aborted, all: false });
   return { aborted, all: false };
 }
 
@@ -3419,7 +3411,7 @@ export function handleYeaftAbortAll() {
   turnAbortCtrls.clear();
   turnAbortMeta.clear();
   abortAllVpRuntime(aborted);
-  sendYeaftEvent({ type: 'yeaft_aborted', aborted, all: true });
+  sendSessionEvent({ type: 'yeaft_aborted', aborted, all: true });
   return { aborted, all: true };
 }
 
@@ -3431,7 +3423,7 @@ export function handleYeaftAbortAll() {
 export function handleYeaftAbortTurn(msg = {}) {
   const { turnId } = msg;
   if (!turnId) {
-    sendYeaftEvent({ type: 'yeaft_turn_aborted', turnId: null, success: false });
+    sendSessionEvent({ type: 'yeaft_turn_aborted', turnId: null, success: false });
     return;
   }
   const ctrl = turnAbortCtrls.get(turnId);
@@ -3439,11 +3431,11 @@ export function handleYeaftAbortTurn(msg = {}) {
     try { ctrl.abort(); } catch { /* best-effort */ }
     turnAbortCtrls.delete(turnId);
     turnAbortMeta.delete(turnId);
-    sendYeaftEvent({ type: 'yeaft_turn_aborted', turnId, success: true });
+    sendSessionEvent({ type: 'yeaft_turn_aborted', turnId, success: true });
   } else {
     turnAbortCtrls.delete(turnId);
     turnAbortMeta.delete(turnId);
-    sendYeaftEvent({ type: 'yeaft_turn_aborted', turnId, success: false });
+    sendSessionEvent({ type: 'yeaft_turn_aborted', turnId, success: false });
   }
 }
 
@@ -3455,7 +3447,7 @@ export function abortYeaftSession(opts = {}) {
   if (opts && opts.all) return handleYeaftAbortAll();
   if (opts && opts.threadId) return handleYeaftAbortThread({ threadId: opts.threadId });
   // No payload — conservative no-op ack.
-  sendYeaftEvent({ type: 'yeaft_aborted', aborted: [], all: false });
+  sendSessionEvent({ type: 'yeaft_aborted', aborted: [], all: false });
   return { aborted: [], all: false };
 }
 
@@ -3523,28 +3515,28 @@ export function __testAppendTurnToSessionHistory(...args) {
  *   { type: 'yeaft_dream_trigger', sessionId }  — per-GROUP trigger (new
  *     in v0.1.754 — added so users can manually kick dream for a group
  *     after seeing the Resident layer stuck on the bootstrap seed).
- *     Fires a scope-filtered pass via `triggerDreamForScopes(['group/X'])`
+ *     Fires a scope-filtered pass via `triggerDreamForScopes(['sessions/X'])`
  *     so unrelated groups don't get processed; the result event is
- *     tagged with `sessionId` for the per-group UI row.
+ *     tagged with `sessionId` for the per-session UI row.
  *
  * Backwards-compat: when neither field is set, defaults to `vpId='default'`
  * which matches the pre-v0.1.754 behavior.
  */
 export function normalizeDreamResult(result) {
-  const groups = Array.isArray(result?.groups) ? result.groups : [];
+  const sessions = Array.isArray(result?.sessions) ? result.sessions : [];
   const targets = Array.isArray(result?.targets) ? result.targets : [];
-  const groupsProcessed = groups.filter(g => g && g.status === 'triaged').length;
-  const skippedGroups = groups.filter(g => g && g.status === 'skipped');
-  const groupsSkipped = skippedGroups.length;
+  const sessionsProcessed = sessions.filter(g => g && g.status === 'triaged').length;
+  const skippedSessions = sessions.filter(g => g && g.status === 'skipped');
+  const sessionsSkipped = skippedSessions.length;
   const targetsApplied = targets.filter(t => t && t.status === 'done').length;
   const targetErrors = targets
     .filter(t => t && t.status === 'error')
     .map(t => ({ target: t.target || null, error: t.error || 'unknown' }));
   const hardError = result?.error || null;
   const explicitSkipped = result?.skipped === true;
-  const skipped = !hardError && (explicitSkipped || (groupsProcessed === 0 && targetsApplied === 0));
+  const skipped = !hardError && (explicitSkipped || (sessionsProcessed === 0 && targetsApplied === 0));
   const skippedReason = skipped
-    ? (result?.skippedReason || skippedGroups[0]?.reason || 'no-targets-applied')
+    ? (result?.skippedReason || skippedSessions[0]?.reason || 'no-targets-applied')
     : null;
   const trigger = result?.trigger || null;
   const success = !hardError && targetErrors.length === 0 && !skipped && targetsApplied > 0;
@@ -3560,8 +3552,8 @@ export function normalizeDreamResult(result) {
     passBreakdown: result?.passBreakdown || result?.metrics?.passBreakdown || null,
     skipped,
     skippedReason,
-    groupsProcessed,
-    groupsSkipped,
+    sessionsProcessed,
+    sessionsSkipped,
     targetsApplied,
     targetErrors,
     entriesCreated: targetsApplied,
@@ -3648,7 +3640,7 @@ export async function handleYeaftDreamTrigger(msg = {}) {
     });
 
     const result = sessionId
-      ? await session.dreamScheduler.triggerDreamForScopes([`group/${sessionId}`])
+      ? await session.dreamScheduler.triggerDreamForScopes([`sessions/${sessionId}`])
       : await session.dreamScheduler.triggerDreamNow();
 
     const normalized = normalizeDreamResult(result);
@@ -3657,7 +3649,7 @@ export async function handleYeaftDreamTrigger(msg = {}) {
       : null;
 
     // Spread `result` FIRST so normalized fields (success, skipped,
-    // skippedReason, groupsProcessed, groupsSkipped, targetsApplied,
+    // skippedReason, sessionsProcessed, sessionsSkipped, targetsApplied,
     // targetErrors, entriesCreated, lastDreamAt) authoritatively shadow
     // anything the runner might grow
     // with the same name. Today there is no collision (runner.js returns
@@ -3822,7 +3814,7 @@ export function handleYeaftModelSwitch(msg) {
 
   session.config.model = msg.model;
 
-  sendYeaftEvent({
+  sendSessionEvent({
     type: 'model_switched',
     model: msg.model,
   });
@@ -3851,7 +3843,6 @@ export async function handleYeaftLoadHistory(msg) {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     session = await loadSession({
       ...(yeaftDir && { dir: yeaftDir }),
-      configOverrides: { globalLlmConfig: ctx.globalLlmConfig || { providers: [] } },
       skipMCP: false,
       skipSkills: false,
       serverMode: true,
@@ -3881,7 +3872,7 @@ export async function handleYeaftLoadHistory(msg) {
   }
 
   // Always replay session_ready so refresh / reconnect rebuilds UI state.
-  sendYeaftEvent({
+  sendSessionEvent({
     type: 'session_ready',
     conversationId: yeaftConversationId,
     model: session.config.model,
@@ -3918,7 +3909,7 @@ export async function handleYeaftLoadHistory(msg) {
     const delta = session.conversationStore.loadAfterSeqByGroup(sessionId, afterSeq);
     for (const entry of delta.messages) {
       if (entry.role === 'user') {
-        sendYeaftOutput({
+        sendSessionOutputFrame({
           type: 'user',
           message: {
             content: entry.content,
@@ -3934,15 +3925,15 @@ export async function handleYeaftLoadHistory(msg) {
           turnId: entry.turnId || entry.threadId || 'main',
         };
         if (entry.speakerVpId) envelopeOpts.vpId = entry.speakerVpId;
-        sendYeaftOutput({
+        sendSessionOutputFrame({
           type: 'assistant',
           message: { id: entry.id || null, content: [{ type: 'text', text: entry.content }] },
           ts: entry.ts || null,
         }, envelopeOpts);
-        sendYeaftOutput({ type: 'result', result_text: '' }, envelopeOpts);
+        sendSessionOutputFrame({ type: 'result', result_text: '' }, envelopeOpts);
       }
     }
-    sendYeaftEvent({
+    sendSessionEvent({
       type: 'history_loaded',
       mode: 'delta',
       count: delta.messages.length,
@@ -3973,7 +3964,7 @@ export async function handleYeaftLoadHistory(msg) {
 
   for (const entry of replayEntries) {
     if (entry.role === 'user') {
-      sendYeaftOutput({
+      sendSessionOutputFrame({
         type: 'user',
         message: {
           content: entry.content,
@@ -3993,12 +3984,12 @@ export async function handleYeaftLoadHistory(msg) {
         turnId: entry.turnId || entry.threadId || 'main',
       };
       if (entry.speakerVpId) envelopeOpts.vpId = entry.speakerVpId;
-      sendYeaftOutput({
+      sendSessionOutputFrame({
         type: 'assistant',
         message: { id: entry.id || null, content: [{ type: 'text', text: entry.content }] },
         ts: entry.ts || null,
       }, envelopeOpts);
-      sendYeaftOutput({ type: 'result', result_text: '' }, envelopeOpts);
+      sendSessionOutputFrame({ type: 'result', result_text: '' }, envelopeOpts);
     }
   }
 
@@ -4032,7 +4023,7 @@ export async function handleYeaftLoadHistory(msg) {
     if (last && last.id) latestSeq = session.conversationStore.getMessageSeqById(last.id);
   }
 
-  sendYeaftEvent({
+  sendSessionEvent({
     type: 'history_loaded',
     mode: 'recent',
     count: replayEntries.length,
@@ -4167,7 +4158,6 @@ export async function resetYeaftSession() {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     session = await loadSession({
       ...(yeaftDir && { dir: yeaftDir }),
-      configOverrides: { globalLlmConfig: ctx.globalLlmConfig || { providers: [] } },
       skipMCP: false,
       skipSkills: false,
       serverMode: true,
@@ -4180,7 +4170,7 @@ export async function resetYeaftSession() {
     // Per-group history hydrates lazily via getOrCreateSessionHistory on
     // first read. Nothing to seed here.
 
-    sendYeaftEvent({
+    sendSessionEvent({
       type: 'session_ready',
       conversationId: yeaftConversationId,
       model: session.config.model,

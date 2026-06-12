@@ -3,10 +3,10 @@
  *
  * Three pieces of state, tracked separately:
  *
- *   1. Per-group control state (used to decide whether a group enters
+ *   1. Per-session control state (used to decide whether a session enters
  *      triage and how far to advance the cursor):
  *
- *        ~/.yeaft/memory/session/<id>/.dream-state
+ *        ~/.yeaft/memory/sessions/<id>/.dream-state
  *
  *      A 3-line text file:
  *
@@ -17,8 +17,8 @@
  *      Fields are independent of each other; missing fields default to
  *      empty / null / 0. The file is rewritten atomically every dream.
  *
- *      The virtual `_no-group/` group lives at the same path layout
- *      (`session/_no-group/.dream-state`) and uses the same accessor.
+ *      The virtual `_no-session/` session lives at the same path layout
+ *      (`sessions/_no-session/.dream-state`) and uses the same accessor.
  *
  *   2. Per-scope observability marker, embedded inside the scope's
  *      `memory.md` between two HTML comments at the file's tail:
@@ -53,42 +53,37 @@ const ERROR_FILE = '.dream-last-error.json';
 const DREAM_BLOCK_OPEN = '<!-- dream-state -->';
 const DREAM_BLOCK_CLOSE = '<!-- /dream-state -->';
 
-// ─── per-group ────────────────────────────────────────────────
+// ─── per-session ────────────────────────────────────────────────
 
 /**
- * Read a group's .dream-state. Missing file → defaults.
+ * Read a session's .dream-state. Missing file → defaults.
  *
  * @param {string} root — memory root, e.g. ~/.yeaft/memory
  * @param {string} sessionId
  * @returns {Promise<{ lastDreamMessageId: string|null, lastDreamAt: string|null, messageCount: number }>}
  */
-export async function readGroupState(root, sessionId) {
-  const abs = join(root, 'session', sessionId, STATE_FILE);
-  const legacyAbs = join(root, 'group', sessionId, STATE_FILE);
+export async function readSessionState(root, sessionId) {
+  const abs = join(root, 'sessions', sessionId, STATE_FILE);
   const empty = { lastDreamMessageId: null, lastDreamAt: null, messageCount: 0 };
   let raw;
   try { raw = await fsp.readFile(abs, 'utf8'); }
   catch (err) {
-    if (!err || err.code !== 'ENOENT') throw err;
-    try { raw = await fsp.readFile(legacyAbs, 'utf8'); }
-    catch (legacyErr) {
-      if (legacyErr && legacyErr.code === 'ENOENT') return empty;
-      throw legacyErr;
-    }
+    if (err && err.code === 'ENOENT') return empty;
+    throw err;
   }
-  return parseGroupState(raw);
+  return parseSessionState(raw);
 }
 
 /**
- * Atomically rewrite a group's .dream-state. Creates the group dir if
+ * Atomically rewrite a session's .dream-state. Creates the session dir if
  * absent. Unknown fields are ignored.
  *
  * @param {string} root
  * @param {string} sessionId
  * @param {{ lastDreamMessageId?: string|null, lastDreamAt?: string|null, messageCount?: number }} state
  */
-export async function writeGroupState(root, sessionId, state) {
-  const dir = join(root, 'session', sessionId);
+export async function writeSessionState(root, sessionId, state) {
+  const dir = join(root, 'sessions', sessionId);
   await fsp.mkdir(dir, { recursive: true });
   const abs = join(dir, STATE_FILE);
   const body =
@@ -103,7 +98,7 @@ export async function writeGroupState(root, sessionId, state) {
  * empty values.
  * @param {string} raw
  */
-function parseGroupState(raw) {
+function parseSessionState(raw) {
   const out = { lastDreamMessageId: null, lastDreamAt: null, messageCount: 0 };
   const lines = String(raw || '').split(/\r?\n/);
   for (const ln of lines) {
@@ -134,12 +129,12 @@ function parseGroupState(raw) {
 // `writeDreamError` writes `<memoryRoot>/<scope>/.dream-last-error.json`
 // unconditionally on every catch (best-effort — write failures must not
 // shadow the original error). Operators can then `ls ~/.yeaft/memory/
-// group/<id>/` and see what blew up, without having to re-enable debug.
+// sessions/<id>/` and see what blew up, without having to re-enable debug.
 
 /**
  * Resolve a memoryRoot + scope-string to the scope directory.
  * The scope string is the same shape dream already uses internally:
- * `'user'`, `'vp/<vpId>'`, `'group/<sessionId>'`, `'feature/<id>'`, etc.
+ * `'user'`, `'sessions/<sessionId>'`, `'sessions/<sessionId>/vp/<vpId>'`, etc.
  *
  * Pure path-join; does NOT create the directory. The writer creates it.
  *
@@ -149,7 +144,7 @@ function parseGroupState(raw) {
  */
 export function scopeDirFor(root, scope) {
   // Defensive: trim leading/trailing slashes so callers can pass either
-  // `'group/grp_fun'` or `/group/grp_fun/` — both land on the same dir.
+  // `'sessions/grp_fun'` or `/sessions/grp_fun/` — both land on the same dir.
   const clean = String(scope || '').replace(/^\/+|\/+$/g, '');
   return join(root, clean);
 }
@@ -160,7 +155,7 @@ export function scopeDirFor(root, scope) {
  * error-handling path and we must not mask the original failure.
  *
  * @param {string} root         — memory root, e.g. ~/.yeaft/memory
- * @param {string} scope        — `'group/<id>'` for triage failures,
+ * @param {string} scope        — `'sessions/<id>'` for triage failures,
  *                                `merged.target` for apply failures.
  * @param {{ phase: string, message: string, stack?: string|null, at?: string }} info
  * @returns {Promise<void>}
@@ -283,4 +278,4 @@ async function atomicWrite(absPath, content) {
 }
 
 // re-exported for tests
-export const _internals = { parseGroupState, extractDreamBlock };
+export const _internals = { parseSessionState, extractDreamBlock };

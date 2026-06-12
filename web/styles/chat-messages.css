@@ -14,6 +14,13 @@
   border-bottom-right-radius: 0;
 }
 
+/* Turn: message block (text + actions belong to the same appendable unit). */
+.turn-message-block {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 /* Turn: text content */
 .turn-content {
   padding: 0;

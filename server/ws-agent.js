@@ -12,7 +12,6 @@ import { handleAgentOutput } from './handlers/agent-output.js';
 import { handleAgentCrew } from './handlers/agent-crew.js';
 import { handleAgentFileTerminal } from './handlers/agent-file-terminal.js';
 import { handleAgentSync } from './handlers/agent-sync.js';
-import { sendGlobalLlmConfigToAgent } from './llm-global-config.js';
 
 /**
  * Build the internal Map key for an agent.
@@ -178,6 +177,12 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
     ? capabilities
     : ['terminal', 'file_editor', 'background_tasks'];
 
+  // feat-ws-plaintext-negotiation: new agents advertise `plaintext-ok` in
+  // their capability list (either via the URL query string in skipAuth
+  // path or in the `auth` frame in prod path). When absent, treat as old
+  // agent and keep encrypting outbound (back-compat).
+  const encryptOutbound = !effectiveCapabilities.includes('plaintext-ok');
+
   agents.set(agentId, {
     ws,
     name: agentName,
@@ -192,7 +197,8 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
     status: 'syncing',
     ownerId,
     ownerUsername,
-    version: agentVersion
+    version: agentVersion,
+    encryptOutbound
   });
 
   // 同步超时保护：30 秒后强制 ready
@@ -205,9 +211,6 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
     }
   }, 30000);
   agents.get(agentId)._syncTimeout = syncTimeout;
-  sendGlobalLlmConfigToAgent(agentId).catch(err => {
-    console.error(`[LLM] Failed to send global config to ${agentId}:`, err.message);
-  });
 
   // 心跳响应处理 + latency 测量
   ws.on('pong', () => {
@@ -229,10 +232,15 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
     type: 'registered',
     agentId,
     sessionKey: sessionKey ? encodeKey(sessionKey) : null,
+    // feat-ws-plaintext-negotiation: tell new agents that this server
+    // will accept plaintext outbound from them. Old agents ignore the
+    // unknown field. New agents flip `serverEncryptionRequired = false`
+    // and stop calling encrypt() on the send path.
+    acceptPlaintext: true,
     ...(upgradeAvailable && { upgradeAvailable })
   }));
 
-  console.log(`Agent connected: ${agentName} (${agentId})`);
+  console.log(`Agent connected: ${agentName} (${agentId})${encryptOutbound ? '' : ' [plaintext mode]'}`);
   broadcastAgentList();
 }
 
@@ -250,7 +258,7 @@ async function handleAgentMessage(agentId, msg) {
     'agent_sync_complete', 'sync_sessions', 'proxy_response', 'proxy_response_chunk',
     'proxy_response_end', 'proxy_ports_update', 'proxy_ws_opened', 'proxy_ws_message',
     'proxy_ws_closed', 'proxy_ws_error', 'restart_agent_ack', 'upgrade_agent_ack',
-    'directory_listing', 'folders_list', 'models_list', 'yeaft_output',
+    'directory_listing', 'folders_list', 'models_list', 'yeaft_output', 'yeaft_session_output', 'session_output',
     'file_content', 'file_saved', 'file_op_result', 'file_search_result',
     'git_status_result', 'git_diff_result', 'git_op_result'
   ]);

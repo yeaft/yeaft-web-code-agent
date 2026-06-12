@@ -26,7 +26,7 @@ The target topic id is provided as `{{topicId}}`.
 
 - Facts about the user as a person — `user` scope.
 - Facts specific to one feature implementation — `feature/<id>`.
-- Group conventions — `group/<id>`.
+- Group conventions — `sessions/<id>`.
 - Generic encyclopedia facts the assistant already knows — only the
   user's *durable views and confirmed knowledge* about the topic.
 

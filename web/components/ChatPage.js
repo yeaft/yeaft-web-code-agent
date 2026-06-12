@@ -543,13 +543,6 @@ export default {
                 </div>
               </div>
             </div>
-            <div class="resume-control-row" v-if="convModalAgent && convModalProvider === 'copilot'">
-              <label class="resume-control-label">{{ $t('modal.newConv.skipPermissions') }}</label>
-              <label class="resume-checkbox-wrapper">
-                <input type="checkbox" v-model="convModalCopilotAllowAll">
-                <span class="resume-checkbox-hint">{{ $t('modal.newConv.skipPermissionsHint') }}</span>
-              </label>
-            </div>
             <div class="resume-control-row" v-if="convModalAgent">
               <label class="resume-control-label">{{ $t('modal.newConv.workDir') }}</label>
               <div class="workdir-input-group">
@@ -705,7 +698,6 @@ export default {
       convModalWorkDir: '',
       convModalProvider: 'claude-code',
       convModalCopilotModel: DEFAULT_COPILOT_MODEL,
-      convModalCopilotAllowAll: false,
       copilotModelOpen: false,
       copilotModelSearch: '',
       selectedResumeSession: null,
@@ -949,7 +941,6 @@ export default {
       this.selectedResumeSession = null;
       this.historyLoaded = false;
       this.convModalCopilotModel = DEFAULT_COPILOT_MODEL;
-      this.convModalCopilotAllowAll = false;
     },
     onConvModalAgentChange() {
       if (this.convModalAgent) {
@@ -1028,21 +1019,32 @@ export default {
       if (!this.convModalAgent) return;
       this.store.selectAgent(this.convModalAgent);
       const workDir = this.convModalWorkDir.trim() || this.selectedConvModalAgentWorkDir;
+      this.store.createConversation(workDir, this.convModalAgent, null, this.buildConvOpts());
+      this.closeConversationModal();
+    },
+    // Build the { provider, providerOptions } payload shared by the create
+    // and resume paths. Copilot conversations always enable all tools
+    // (no per-conversation opt-in) so Copilot won't prompt before running
+    // tools, and always carry the picked model — the agent merges
+    // providerOptions as a whole object (msg.providerOptions ||
+    // priorProviderOptions), so omitting the model on resume would drop it
+    // back to the Copilot default instead of preserving the picker choice.
+    buildConvOpts() {
       const opts = { provider: this.convModalProvider };
       if (this.convModalProvider === 'copilot') {
-        opts.providerOptions = {};
-        if (this.convModalCopilotModel) opts.providerOptions.model = String(this.convModalCopilotModel).trim();
-        if (this.convModalCopilotAllowAll) opts.providerOptions.allowAllTools = true;
+        opts.providerOptions = { allowAllTools: true };
+        if (this.convModalCopilotModel) {
+          opts.providerOptions.model = String(this.convModalCopilotModel).trim();
+        }
       }
-      this.store.createConversation(workDir, this.convModalAgent, null, opts);
-      this.closeConversationModal();
+      return opts;
     },
     resumeSession(session) {
       if (!this.convModalAgent) return;
       this.store.selectAgent(this.convModalAgent);
       this.store._pendingSessionTitle = session.title;
       const workDir = session.workDir || this.convModalWorkDir.trim() || this.selectedConvModalAgentWorkDir;
-      this.store.resumeConversation(session.sessionId, workDir, this.convModalAgent, { provider: this.convModalProvider });
+      this.store.resumeConversation(session.sessionId, workDir, this.convModalAgent, this.buildConvOpts());
       this.closeConversationModal();
     },
     resumeSelectedSession() {
@@ -1050,7 +1052,7 @@ export default {
       this.store.selectAgent(this.convModalAgent);
       this.store._pendingSessionTitle = this.selectedResumeSession.title;
       const workDir = this.selectedResumeSession.workDir || this.convModalWorkDir.trim() || this.selectedConvModalAgentWorkDir;
-      this.store.resumeConversation(this.selectedResumeSession.sessionId, workDir, this.convModalAgent, { provider: this.convModalProvider });
+      this.store.resumeConversation(this.selectedResumeSession.sessionId, workDir, this.convModalAgent, this.buildConvOpts());
       this.closeConversationModal();
     },
     formatDate(timestamp) {

@@ -76,6 +76,87 @@ function normalizeMessageTimestamp(msg) {
   return Date.now();
 }
 
+function explicitMessageId(msg) {
+  const id = msg?.messageId ?? msg?.dbMessageId ?? msg?.id;
+  if (id === null || id === undefined || id === '') return null;
+  return String(id);
+}
+
+function mergeMessageFields(existing, incoming) {
+  if (!existing || !incoming) return existing;
+  for (const [key, value] of Object.entries(incoming)) {
+    if (value === undefined || value === null) continue;
+    if (key === 'isStreaming') {
+      if (existing.isStreaming && value === false) existing.isStreaming = false;
+      continue;
+    }
+    if (key === 'content' && typeof value === 'string') {
+      if (!existing.content) existing.content = value;
+      continue;
+    }
+    if (key === 'attachments' && Array.isArray(value)) {
+      if (!Array.isArray(existing.attachments) || existing.attachments.length === 0) {
+        existing.attachments = value;
+      }
+      continue;
+    }
+    if (existing[key] === undefined || existing[key] === null || existing[key] === '') {
+      existing[key] = value;
+    }
+  }
+  return existing;
+}
+
+export function mergeMessagesByStableId(baseMessages = [], incomingMessages = []) {
+  const merged = [];
+  const byId = new Map();
+  for (const msg of [...baseMessages, ...incomingMessages]) {
+    if (!msg) continue;
+    const stableId = explicitMessageId(msg);
+    if (stableId && byId.has(stableId)) {
+      mergeMessageFields(byId.get(stableId), msg);
+      continue;
+    }
+    merged.push(msg);
+    if (stableId) byId.set(stableId, msg);
+  }
+  return merged;
+}
+
+export function shouldForceHydrateActiveYeaftSession(nextSessionId, prevSessionId, sessionState) {
+  if (!nextSessionId || nextSessionId !== prevSessionId) return false;
+  return !sessionState?.loaded && !sessionState?.loading;
+}
+
+export function shouldCatchUpLoadedYeaftSession(sessionState, catchUpHistory) {
+  return !!catchUpHistory
+    && !!sessionState?.loaded
+    && !sessionState?.loading
+    && Number.isFinite(sessionState?.latestSeq);
+}
+
+function mergeAssistantTextByStableId(store, conversationId, opts, text) {
+  const stableId = opts?.id ? String(opts.id) : null;
+  if (!stableId) return false;
+  const msgs = store.messagesMap[conversationId] || [];
+  const existing = msgs.find(m => m?.type === 'assistant' && explicitMessageId(m) === stableId);
+  if (!existing) return false;
+  if (!existing.id) existing.id = stableId;
+  if (!existing.messageId) existing.messageId = stableId;
+  if (opts.ts && !existing.ts) existing.ts = opts.ts;
+  if (opts.timestamp && !existing.timestamp) existing.timestamp = opts.timestamp;
+  if (opts.sessionId && !existing.sessionId) existing.sessionId = opts.sessionId;
+  if (opts.vpId && !existing.vpId) existing.vpId = opts.vpId;
+  if (opts.turnId && !existing.turnId) existing.turnId = opts.turnId;
+  if (opts.threadId && !existing.threadId) existing.threadId = opts.threadId;
+  if (opts.threadTitle && !existing.threadTitle) existing.threadTitle = opts.threadTitle;
+  if (!existing.content || (typeof existing.content === 'string' && text.length > existing.content.length)) {
+    existing.content = text;
+  }
+  stampSpeakerOnVpMessage(store, conversationId, existing);
+  return true;
+}
+
 export function addMessageToConversation(store, conversationId, msg) {
   if (!conversationId) return;
 
@@ -127,6 +208,17 @@ export function addMessageToConversation(store, conversationId, msg) {
   if (!store.messagesMap[conversationId]) {
     store.messagesMap[conversationId] = [];
   }
+  const stableId = explicitMessageId(msg);
+  if (stableId) {
+    const existing = store.messagesMap[conversationId].find(m => explicitMessageId(m) === stableId);
+    if (existing) {
+      mergeMessageFields(existing, newMsg);
+      if (conversationId === store.yeaftConversationId) {
+        store.messagesMap[conversationId].sort((a, b) => a.timestamp - b.timestamp);
+      }
+      return existing;
+    }
+  }
   store.messagesMap[conversationId].push(newMsg);
   // Bug 1: keep messages sorted by timestamp so history loaded out-of-order
   // (e.g. from different sessions) still displays chronologically.
@@ -134,6 +226,7 @@ export function addMessageToConversation(store, conversationId, msg) {
   if (conversationId === store.yeaftConversationId) {
     store.messagesMap[conversationId].sort((a, b) => a.timestamp - b.timestamp);
   }
+  return newMsg;
 }
 
 export function appendToAssistantMessageForConversation(store, conversationId, text, opts = {}) {
@@ -144,6 +237,7 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
     store.messagesMap[conversationId] = [];
   }
   const msgs = store.messagesMap[conversationId];
+  if (mergeAssistantTextByStableId(store, conversationId, opts, text)) return;
 
   // Per-VP turn routing: when a turnId is active, find the streaming
   // message for THAT turn (not just the last message). This prevents
@@ -470,7 +564,7 @@ export function formatDbMessage(dbMsg) {
   if (dbMsg.role === 'user') {
     // fix-usermsg-dup: surface the persisted clientMessageId so the
     // sync-replay merge (conversationHandler.handleSyncMessagesResult)
-    // and the live echo merge (claudeOutput.js user branch) can both
+    // and the live echo merge (assistantOutput.js user branch) can both
     // match by id. Without this, a session that was viewed AFTER page
     // refresh — i.e. messages come from sync rather than the live echo
     // path — has no dedup key and the next optimistic add produces the

@@ -45,23 +45,26 @@ export default {
             <p>{{ $t('settings.llm.setupDesc') }}</p>
           </div>
         </div>
+        <div v-if="context === 'yeaft'" class="llm-simple-setup">
+          <div>
+            <strong>{{ $t('settings.llm.simpleCopilotTitle') }}</strong>
+            <p class="sp-desc">{{ $t('settings.llm.simpleCopilotDesc') }}</p>
+            <p v-if="modelDiscoveryWarning" class="sp-desc">{{ modelDiscoveryWarning }}</p>
+            <p v-if="modelDiscoveryError" class="sp-desc sp-error-text">{{ modelDiscoveryError }}</p>
+          </div>
+          <button class="sp-btn sp-btn-primary" @click="useGitHubCopilotPreset" :disabled="discoveringModels">
+            {{ discoveringModels ? $t('settings.llm.refreshingModels') : $t('settings.llm.useGitHubCopilot') }}
+          </button>
+        </div>
+
         <!-- Providers Section -->
         <div class="sp-group">
           <div class="sp-group-title">{{ $t('settings.llm.providersTitle') }}</div>
           <p class="sp-desc">{{ $t('settings.llm.providersDesc') }}</p>
-          <div class="llm-scope-tabs">
-            <button class="sp-btn" :class="{ 'sp-btn-primary': providerScope === 'global' }" @click="setProviderScope('global')">{{ $t('settings.llm.globalProviders') }}</button>
-            <button class="sp-btn" :class="{ 'sp-btn-primary': providerScope === 'agent' }" @click="setProviderScope('agent')">{{ $t('settings.llm.agentProviders') }}</button>
-          </div>
-          <div v-if="providerScope === 'global'" class="llm-github-device-row">
-            <button class="sp-btn" @click="startGithubDeviceFlow">{{ $t('settings.llm.githubDeviceStart') }}</button>
-            <span v-if="githubDeviceStatus" class="sp-desc">{{ githubDeviceStatus }}</span>
-          </div>
-
           <!-- Provider cards -->
           <div class="llm-provider-card" v-for="(provider, idx) in editableProviders" :key="idx">
             <div class="llm-provider-header">
-              <span class="llm-provider-index">{{ providerScope === 'global' ? $t('settings.llm.globalBadge') : $t('settings.llm.agentBadge') }} #{{ idx + 1 }}</span>
+              <span class="llm-provider-index">{{ $t('settings.llm.agentBadge') }} #{{ idx + 1 }}</span>
               <button class="sp-icon-btn llm-remove-btn" @click="removeProvider(idx)" :title="$t('settings.llm.removeProvider')">
                 <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
               </button>
@@ -236,9 +239,7 @@ export default {
     return {
       loading: false,
       loadError: null,
-      providerScope: 'agent',
       localProviders: [],
-      globalProviders: [],
       providerModelsText: [],
       localPrimaryModel: null,
       localFastModel: null,
@@ -247,7 +248,9 @@ export default {
       openDropdown: null,
       showApiKey: {},
       showPresetPicker: false,
-      githubDeviceStatus: '',
+      discoveringModels: false,
+      modelDiscoveryWarning: null,
+      modelDiscoveryError: null,
     };
   },
   computed: {
@@ -277,10 +280,10 @@ export default {
       return this.chatStore.llmConfig[agentId] || null;
     },
     editableProviders() {
-      return this.providerScope === 'global' ? this.globalProviders : this.localProviders;
+      return this.localProviders;
     },
     allModelRefs() {
-      const providers = this.currentConfig?.effectiveConfig?.providers || [...this.globalProviders, ...this.localProviders];
+      const providers = this.localProviders;
       const refs = [];
       for (const p of providers) {
         if (!p.name) continue;
@@ -311,45 +314,70 @@ export default {
       },
       deep: true
     },
-    'chatStore.llmGithubDevice': {
-      handler(msg) {
-        if (!msg) return;
-        this.handleGithubDeviceMessage(msg);
-      },
-      deep: true
-    }
   },
   methods: {
-    startGithubDeviceFlow() {
-      this.githubDeviceStatus = this.$t('settings.llm.githubDeviceStarting');
-      this.chatStore.sendWsMessage({ type: 'llm_github_device_start', agentId: this.effectiveAgentId });
-    },
 
-    handleGithubDeviceMessage(msg) {
-      if (msg.type === 'started') {
-        if (msg.error) {
-          this.githubDeviceStatus = msg.error;
-          return;
-        }
-        this.githubDeviceStatus = `${this.$t('settings.llm.githubDeviceVerify')} ${msg.verificationUri} — ${msg.userCode}`;
-        if (typeof window !== 'undefined' && window.open) window.open(msg.verificationUri, '_blank', 'noopener');
-        this._githubDeviceCode = msg.deviceCode;
-        setTimeout(() => this.pollGithubDeviceFlow(), Math.max(1, msg.interval || 5) * 1000);
-      } else if (msg.type === 'poll') {
-        if (msg.ok) {
-          this.githubDeviceStatus = this.$t('settings.llm.githubDeviceConnected');
-          this.requestConfig();
-        } else if (msg.pending && this._githubDeviceCode) {
-          setTimeout(() => this.pollGithubDeviceFlow(), Math.max(1, msg.interval || 5) * 1000);
-        } else if (msg.error) {
-          this.githubDeviceStatus = msg.error;
-        }
+
+    async useGitHubCopilotPreset() {
+      const agentId = this.effectiveAgentId;
+      if (!agentId || !this.agentOnline) return;
+      this.discoveringModels = true;
+      this.modelDiscoveryWarning = null;
+      this.modelDiscoveryError = null;
+      const requestId = `llm-discovery-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      this.chatStore.sendWsMessage({
+        type: 'discover_llm_models',
+        agentId,
+        requestId,
+        providerType: 'github-copilot'
+      });
+      const result = await this.waitForModelDiscovery(agentId, requestId);
+      this.discoveringModels = false;
+      if (result.error) {
+        this.modelDiscoveryError = result.error;
+        return;
       }
+      this.applyDiscoveredProvider(result);
+      this.modelDiscoveryWarning = result.warning || null;
     },
 
-    pollGithubDeviceFlow() {
-      if (!this._githubDeviceCode) return;
-      this.chatStore.sendWsMessage({ type: 'llm_github_device_poll', agentId: this.effectiveAgentId, deviceCode: this._githubDeviceCode });
+    waitForModelDiscovery(agentId, requestId) {
+      return new Promise(resolve => {
+        const started = Date.now();
+        const timer = setInterval(() => {
+          const result = this.chatStore.llmModelDiscovery?.[agentId];
+          if (result?.requestId === requestId) {
+            clearInterval(timer);
+            resolve(result);
+            return;
+          }
+          if (Date.now() - started > 10000) {
+            clearInterval(timer);
+            resolve({ error: 'Timed out while refreshing provider models.' });
+          }
+        }, 100);
+      });
+    },
+
+    applyDiscoveredProvider(result) {
+      const provider = {
+        name: result.provider?.name || 'github-copilot',
+        baseUrl: result.provider?.baseUrl || 'https://api.githubcopilot.com',
+        credentialProvider: result.provider?.credentialProvider || 'github-copilot',
+        protocol: result.provider?.protocol || 'openai-responses',
+        models: Array.isArray(result.providerModels) && result.providerModels.length
+          ? result.providerModels
+          : (result.models || []),
+      };
+      const providers = [...this.localProviders];
+      const index = providers.findIndex(p => p?.name === provider.name);
+      if (index >= 0) providers[index] = provider;
+      else providers.push(provider);
+      this.localProviders = providers;
+      this.refreshProviderModelsText();
+      const firstModel = this.parseModelsFromProvider(provider)[0];
+      if (firstModel && !this.localPrimaryModel) this.localPrimaryModel = `${provider.name}/${firstModel}`;
+      this.markDirty();
     },
 
     requestConfig() {
@@ -395,7 +423,6 @@ export default {
       // shape the agent persisted so per-model protocol metadata from the
       // preset picker survives load → edit → save round trips.
       this.localProviders = (config.agentConfig?.providers || config.providers || []).map(p => this.cloneProvider(p));
-      this.globalProviders = (config.globalConfig?.providers || []).map(p => this.cloneProvider(p));
       this.refreshProviderModelsText();
 
       this.localPrimaryModel = config.agentConfig?.primaryModel || config.primaryModel || null;
@@ -407,7 +434,7 @@ export default {
     cloneProvider(p) {
       return {
         type: p.type || 'api-key',
-        scope: p.scope || this.providerScope,
+        scope: 'agent',
         name: p.originalName || p.name || '',
         baseUrl: p.baseUrl || '',
         apiKey: p.apiKey || '',
@@ -424,20 +451,6 @@ export default {
       this.providerModelsText = this.editableProviders.map(p =>
         (p.models || []).map(m => this._modelId(m)).join(', ')
       );
-    },
-
-    setProviderScope(scope) {
-      if (this.providerScope === scope) return;
-      this.providerScope = scope;
-      this.showApiKey = {};
-      this.refreshProviderModelsText();
-    },
-
-    modelSourceLabel(ref) {
-      const providerName = String(ref || '').split('/')[0];
-      const providers = this.currentConfig?.effectiveConfig?.providers || [...this.globalProviders, ...this.localProviders];
-      const provider = providers.find(p => p.name === providerName);
-      return provider?.scope === 'global' ? this.$t('settings.llm.globalBadge') : this.$t('settings.llm.agentBadge');
     },
 
     parseModelsFromProvider(provider) {
@@ -632,14 +645,11 @@ export default {
       this.chatStore.sendWsMessage({
         type: 'update_llm_config',
         agentId,
-        scope: this.providerScope,
-        config: this.providerScope === 'global'
-          ? { providers }
-          : {
-              providers,
-              primaryModel: this.localPrimaryModel || null,
-              fastModel: this.localFastModel || null
-            }
+        config: {
+          providers,
+          primaryModel: this.localPrimaryModel || null,
+          fastModel: this.localFastModel || null
+        }
       });
 
       // Wait for llm_config_updated response (handled by watcher on currentConfig)

@@ -205,10 +205,10 @@ describe('Engine', () => {
       expect(turnEnd.turnNumber).toBe(1);
     });
 
-    it('loads Dream group summary into the system prompt Memory section and debug event', async () => {
+    it('loads Dream session summary into the system prompt Memory section and debug event', async () => {
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-dream-load-'));
       await writeSummary(
-        { kind: 'group', id: 'g1' },
+        { kind: 'session', id: 'g1' },
         'The user prefers concrete execution notes and wants Dream memory loaded into the prompt.',
         { root: join(yeaftDir, 'memory') },
       );
@@ -218,8 +218,8 @@ describe('Engine', () => {
         { root: join(yeaftDir, 'memory') },
       );
       await writeSummary(
-        { kind: 'group-vp', sessionId: 'g1', id: 'vp1' },
-        'VP Dream summary should enter the prompt but not the group prompt-load payload.',
+        { kind: 'session-vp', sessionId: 'g1', id: 'vp1' },
+        'VP Dream summary should enter the prompt but not the session prompt-load payload.',
         { root: join(yeaftDir, 'memory') },
       );
       mockAdapter.pushResponse([

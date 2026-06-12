@@ -129,6 +129,44 @@ Integrated development environment with terminal, Git operations, file browser, 
   - **Yeaft engine is bundled** in the npm package; no extra CLI required for Yeaft Sessions
 - **Web Client**: Modern browser (Chrome, Firefox, Safari, Edge)
 
+### Configure Yeaft LLM providers from the agent CLI
+
+Installed agents expose local LLM configuration through `yeaft-agent llm`. These commands write only this machine's `~/.yeaft/config.json`; they do not update any server-global or UI-global provider list.
+
+```bash
+yeaft-agent llm setup
+```
+
+```bash
+yeaft-agent llm use github-copilot --model claude-sonnet-4.5 --fast gpt-4.1
+```
+
+GitHub Copilot uses the local device token / `gh auth` credential provider, refreshes the live model catalog from the Copilot API, and never writes a token to config. For custom OpenAI-compatible endpoints:
+
+```bash
+OPENAI_KEY=sk-... yeaft-agent llm use openai-compatible --name openai --base-url https://api.openai.com/v1 --api-key-env OPENAI_KEY --model gpt-5
+```
+
+Advanced manual setup is still available:
+
+```bash
+OPENAI_KEY=sk-... yeaft-agent llm add-provider --name openai --base-url https://api.openai.com/v1 --models gpt-5,gpt-4.1 --api-key-env OPENAI_KEY --protocol openai-responses --set-primary gpt-5
+```
+
+```bash
+yeaft-agent llm show
+```
+
+```bash
+yeaft-agent llm set-model --primary openai/gpt-5 --fast openai/gpt-4.1
+```
+
+```bash
+yeaft-agent llm remove-provider --name openai
+```
+
+Run `yeaft-agent llm --help` for the full command list and examples. The Yeaft session header's LLM config button edits the same local agent config.
+
 ## Architecture
 
 ```

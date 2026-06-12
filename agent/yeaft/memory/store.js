@@ -65,10 +65,13 @@ export const SCOPE_KINDS = Object.freeze([
   'chat',
   'chat-vp',
   'session',
+  'session-user',
   'session-vp',
+  'session-feature',
+  'session-topic',
 ]);
 
-/** @typedef {'user'|'group'|'group-user'|'group-vp'|'group-feature'|'group-topic'|'chat'|'chat-vp'|'session'|'session-vp'} ScopeKind */
+/** @typedef {'user'|'group'|'group-user'|'group-vp'|'group-feature'|'group-topic'|'chat'|'chat-vp'|'session'|'session-user'|'session-vp'|'session-feature'|'session-topic'} ScopeKind */
 
 /**
  * @typedef {Object} Scope
@@ -141,14 +144,36 @@ export function scopeDir(scope) {
     case 'session': {
       if (!scope.id) throw new Error('scopeDir: session scope requires id');
       assertSafeSegment(scope.id, 'session.id');
-      return `session/${scope.id}`;
+      return `sessions/${scope.id}`;
+    }
+    case 'session-user': {
+      if (!scope.sessionId) throw new Error('scopeDir: session-user scope requires sessionId');
+      assertSafeSegment(scope.sessionId, 'session-user.sessionId');
+      return `sessions/${scope.sessionId}/user`;
     }
     case 'session-vp': {
       if (!scope.sessionId) throw new Error('scopeDir: session-vp scope requires sessionId');
       if (!scope.id) throw new Error('scopeDir: session-vp scope requires id');
       assertSafeSegment(scope.sessionId, 'session-vp.sessionId');
       assertSafeSegment(scope.id, 'session-vp.id');
-      return `session/${scope.sessionId}/vp/${scope.id}`;
+      return `sessions/${scope.sessionId}/vp/${scope.id}`;
+    }
+    case 'session-feature': {
+      if (!scope.sessionId) throw new Error('scopeDir: session-feature scope requires sessionId');
+      if (!scope.id) throw new Error('scopeDir: session-feature scope requires id');
+      assertSafeSegment(scope.sessionId, 'session-feature.sessionId');
+      assertSafeSegment(scope.id, 'session-feature.id');
+      return `sessions/${scope.sessionId}/feature/${scope.id}`;
+    }
+    case 'session-topic': {
+      if (!scope.sessionId) throw new Error('scopeDir: session-topic scope requires sessionId');
+      assertSafeSegment(scope.sessionId, 'session-topic.sessionId');
+      const segs = Array.isArray(scope.path) ? scope.path : [];
+      if (segs.length === 0 || segs.length > 2) {
+        throw new Error('scopeDir: session-topic.path must have 1 or 2 segments');
+      }
+      for (const seg of segs) assertSafeSegment(seg, 'session-topic.path');
+      return `sessions/${scope.sessionId}/topic/${segs.join('/')}`;
     }
     default:
       throw new Error(`scopeDir: unknown kind ${JSON.stringify(scope.kind)}`);
@@ -189,7 +214,7 @@ function assertSafeSegment(s, ctx) {
  * @returns {boolean}
  */
 export function isValidTopic(scope) {
-  if (!scope || scope.kind !== 'group-topic') return false;
+  if (!scope || (scope.kind !== 'group-topic' && scope.kind !== 'session-topic')) return false;
   if (!scope.sessionId || typeof scope.sessionId !== 'string') return false;
   if (!Array.isArray(scope.path)) return false;
   if (scope.path.length < 1 || scope.path.length > 2) return false;
@@ -578,8 +603,8 @@ export async function listScopes(opts = {}) {
     }
   }
 
-  // session/<s>/  and  session/<s>/vp/<v>/
-  const sessionRoot = join(root, 'session');
+  // sessions/<s>/  and  sessions/<s>/vp/<v>/
+  const sessionRoot = join(root, 'sessions');
   let sessions;
   try { sessions = await fsp.readdir(sessionRoot, { withFileTypes: true }); }
   catch (err) {
@@ -592,6 +617,8 @@ export async function listScopes(opts = {}) {
     if (!isSafeId(sent.name)) continue;
     const s = sent.name;
     out.push({ kind: 'session', id: s });
+    if (existsSync(join(sessionRoot, s, 'user'))) out.push({ kind: 'session-user', sessionId: s });
+
     const vpDir = join(sessionRoot, s, 'vp');
     let vps;
     try { vps = await fsp.readdir(vpDir, { withFileTypes: true }); }
@@ -600,6 +627,34 @@ export async function listScopes(opts = {}) {
       if (!vent.isDirectory()) continue;
       if (!isSafeId(vent.name)) continue;
       out.push({ kind: 'session-vp', sessionId: s, id: vent.name });
+    }
+
+    const featureDir = join(sessionRoot, s, 'feature');
+    let features;
+    try { features = await fsp.readdir(featureDir, { withFileTypes: true }); }
+    catch { features = []; }
+    for (const fent of features) {
+      if (!fent.isDirectory()) continue;
+      if (!isSafeId(fent.name)) continue;
+      out.push({ kind: 'session-feature', sessionId: s, id: fent.name });
+    }
+
+    const topicDir = join(sessionRoot, s, 'topic');
+    let topics;
+    try { topics = await fsp.readdir(topicDir, { withFileTypes: true }); }
+    catch { topics = []; }
+    for (const tent of topics) {
+      if (!tent.isDirectory()) continue;
+      if (!isSafeId(tent.name)) continue;
+      out.push({ kind: 'session-topic', sessionId: s, path: [tent.name] });
+      let subTopics;
+      try { subTopics = await fsp.readdir(join(topicDir, tent.name), { withFileTypes: true }); }
+      catch { subTopics = []; }
+      for (const sub of subTopics) {
+        if (!sub.isDirectory()) continue;
+        if (!isSafeId(sub.name)) continue;
+        out.push({ kind: 'session-topic', sessionId: s, path: [tent.name, sub.name] });
+      }
     }
   }
 

@@ -356,7 +356,7 @@
 /* When the speaker header is rendered, tighten the bubble's top padding
  * just a touch so the name→content vertical rhythm feels intentional
  * instead of accidentally doubled. */
-.assistant-turn.has-vp-speaker > .turn-content {
+.assistant-turn.has-vp-speaker > .turn-message-block > .turn-content {
   margin-top: 2px;
 }
 
@@ -1025,6 +1025,18 @@
 .vp-turn-block-body-expanded,
 .vp-turn-block-compact {
   margin-top: 2px;
+}
+
+.vp-turn-block-body-expanded .turn-message-block {
+  gap: 6px;
+}
+
+.vp-turn-block-body-expanded .turn-todos,
+.vp-turn-block-body-expanded .turn-actions,
+.vp-turn-block-body-expanded .turn-images,
+.vp-turn-block-body-expanded .turn-ask {
+  border-top: 0;
+  padding: 0;
 }
 
 .vp-turn-block-compact {

@@ -36,6 +36,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getYeaftSettings, updateYeaftSettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../yeaft/config-api.js';
+import { discoverLlmModels } from '../llm-model-discovery.js';
 import { fetchModelsDev } from '../yeaft/llm/models-dev.js';
 import { handleYeaftSessionSend, handleYeaftModeSwitch, handleYeaftModelSwitch, resetYeaftSession, handleYeaftLoadHistory, handleYeaftLoadMoreHistory, handleYeaftAbortThread, handleYeaftAbortAll, handleYeaftAbortTurn, handleYeaftVpSubscribe, handleYeaftVpCreate, handleYeaftVpUpdate, handleYeaftVpDelete, handleYeaftVpRead, handleYeaftListSessions, handleYeaftCreateSession, handleYeaftRenameSession, handleYeaftUpdateSession, handleYeaftUpdateSessionConfig, handleYeaftArchiveSession, handleYeaftDeleteSession, handleYeaftSessionAddMember, handleYeaftSessionRemoveMember, handleYeaftSessionSetDefaultVp, handleYeaftScanWorkdirSessions, handleYeaftRestoreSession, handleYeaftDreamTrigger, handleYeaftFetchToolStats, handleYeaftFetchDebugHistory, handleYeaftMcpList, handleYeaftMcpAdd, handleYeaftMcpRemove, handleYeaftMcpReload, broadcastLanguageChange, broadcastYeaftSessionSnapshotEager } from '../yeaft/web-bridge.js';
 import { startYeaftStatusRefresh, refreshYeaftStatus } from '../yeaft/status-cache.js';
@@ -46,6 +47,15 @@ export async function handleMessage(msg) {
       if (msg.sessionKey) {
         ctx.sessionKey = decodeKey(msg.sessionKey);
         console.log('Encryption enabled');
+      }
+
+      // feat-ws-plaintext-negotiation: new server advertises that it
+      // will accept plaintext frames from us. Stop encrypting outbound.
+      // The receive path (parseMessage) stays unconditional so the old
+      // ciphertext that may already be in flight still decrypts.
+      if (msg.acceptPlaintext === true) {
+        ctx.serverEncryptionRequired = false;
+        console.log('[WS] Server accepts plaintext, disabling outbound encryption');
       }
 
       // 只保存基本配置（不再保存 agentId，因为现在用 agentName 作为 ID）
@@ -335,28 +345,32 @@ export async function handleMessage(msg) {
       break;
     }
 
-    // LLM configuration (read/write ~/.yeaft/config.json)
+    // LLM configuration (read/write this agent's ~/.yeaft/config.json)
     case 'get_llm_config': {
-      if (msg.globalConfig && typeof msg.globalConfig === 'object') {
-        ctx.globalLlmConfig = msg.globalConfig;
-      }
-      const config = getLlmConfig(ctx.CONFIG?.yeaftDir, ctx.globalLlmConfig);
+      const config = getLlmConfig(ctx.CONFIG?.yeaftDir);
       sendToServer({ type: 'llm_config', ...config });
       break;
     }
 
-    case 'llm_global_config_updated': {
-      ctx.globalLlmConfig = msg.globalConfig && typeof msg.globalConfig === 'object'
-        ? msg.globalConfig
-        : { providers: [] };
-      // Existing sessions cache AdapterRouter instances. Drop them so the
-      // next Yeaft turn sees the new global providers, without writing them
-      // to the node-local config.json.
-      resetYeaftSession().catch(err => {
-        console.error('[LLM] Failed to reload Yeaft session after global config update:', err.message);
-      });
-      const config = getLlmConfig(ctx.CONFIG?.yeaftDir, ctx.globalLlmConfig);
-      sendToServer({ type: 'llm_config', ...config });
+    case 'discover_llm_models': {
+      try {
+        const result = await discoverLlmModels(msg || {});
+        sendToServer({
+          type: 'llm_models_discovered',
+          agentId: msg.agentId,
+          requestId: msg.requestId,
+          providerType: msg.providerType || msg.provider || msg.preset,
+          ...result,
+        });
+      } catch (e) {
+        sendToServer({
+          type: 'llm_models_discovered',
+          agentId: msg.agentId,
+          requestId: msg.requestId,
+          providerType: msg.providerType || msg.provider || msg.preset,
+          error: e.message || String(e),
+        });
+      }
       break;
     }
 
@@ -369,10 +383,7 @@ export async function handleMessage(msg) {
       const incomingLanguage = typeof msg.config?.language === 'string' && msg.config.language
         ? msg.config.language
         : null;
-      if (msg.globalConfig && typeof msg.globalConfig === 'object') {
-        ctx.globalLlmConfig = msg.globalConfig;
-      }
-      const result = updateLlmConfig(msg.config || {}, ctx.CONFIG?.yeaftDir, ctx.globalLlmConfig);
+      const result = updateLlmConfig(msg.config || {}, ctx.CONFIG?.yeaftDir);
       // task-708: live locale propagation. When the user flips the UI
       // language dropdown, push the new value into every cached Engine
       // (per-VP pool + 1:1 chat session.engine) so the very next turn

@@ -4,51 +4,59 @@ import { encrypt, decrypt, isEncrypted, encodeKey } from './encryption.js';
 import { sessionDb } from './database.js';
 import { agents, webClients, directoryCache, DIR_CACHE_TTL, DIR_CACHE_MAX_SIZE, trackBytesSent } from './context.js';
 
-// Send message to web client (with mandatory encryption in production)
+// Send message to web client.
+// feat-ws-plaintext-negotiation: defaults to plaintext when the client
+// advertised plaintext-ok capability via client_hello (encryptOutbound
+// flipped to false). Falls back to ciphertext for old clients that
+// haven't sent client_hello — back-compat. skipAuth still forces
+// plaintext for local dev visibility.
 export async function sendToWebClient(client, msg) {
   if (client.ws.readyState !== WebSocket.OPEN) return;
 
-  if (CONFIG.skipAuth) {
-    // Development mode - plain text for debugging
+  // Plaintext path: dev mode OR new client that announced plaintext-ok.
+  if (CONFIG.skipAuth || client.encryptOutbound === false) {
     const payload = JSON.stringify(msg);
     trackBytesSent(client.userId, payload.length);
     client.ws.send(payload);
-  } else {
-    // Production mode - encryption required
-    if (!client.sessionKey) {
-      console.error('Cannot send to client: missing session key in production mode');
-      client.ws.close(1008, 'Encryption required');
-      return;
-    }
-    try {
-      const encrypted = await encrypt(msg, client.sessionKey);
-      const payload = JSON.stringify(encrypted);
-      trackBytesSent(client.userId, payload.length);
-      if (msg.type === 'file_content') console.log(`[sendToWebClient] file_content encrypted, payload size=${payload.length}, compressed=${encrypted.z}`);
-      client.ws.send(payload);
-    } catch (e) {
-      console.error(`[sendToWebClient] Error encrypting/sending ${msg.type}:`, e.message, e.stack);
-    }
+    return;
+  }
+
+  // Encrypted fallback for old clients that never sent client_hello.
+  if (!client.sessionKey) {
+    console.error('Cannot send to client: missing session key in production mode');
+    client.ws.close(1008, 'Encryption required');
+    return;
+  }
+  try {
+    const encrypted = await encrypt(msg, client.sessionKey);
+    const payload = JSON.stringify(encrypted);
+    trackBytesSent(client.userId, payload.length);
+    if (msg.type === 'file_content') console.log(`[sendToWebClient] file_content encrypted, payload size=${payload.length}, compressed=${encrypted.z}`);
+    client.ws.send(payload);
+  } catch (e) {
+    console.error(`[sendToWebClient] Error encrypting/sending ${msg.type}:`, e.message, e.stack);
   }
 }
 
-// Send message to agent (with mandatory encryption in production)
+// Send message to agent.
+// feat-ws-plaintext-negotiation: same shape as sendToWebClient — defaults
+// to plaintext when the agent advertised the `plaintext-ok` capability.
+// Falls back to ciphertext for old agents that haven't.
 export async function sendToAgent(agent, msg) {
   if (agent.ws.readyState !== WebSocket.OPEN) return;
 
-  if (CONFIG.skipAuth) {
-    // Development mode - plain text for debugging
+  if (CONFIG.skipAuth || agent.encryptOutbound === false) {
     agent.ws.send(JSON.stringify(msg));
-  } else {
-    // Production mode - encryption required
-    if (!agent.sessionKey) {
-      console.error('Cannot send to agent: missing session key in production mode');
-      agent.ws.close(1008, 'Encryption required');
-      return;
-    }
-    const encrypted = await encrypt(msg, agent.sessionKey);
-    agent.ws.send(JSON.stringify(encrypted));
+    return;
   }
+
+  if (!agent.sessionKey) {
+    console.error('Cannot send to agent: missing session key in production mode');
+    agent.ws.close(1008, 'Encryption required');
+    return;
+  }
+  const encrypted = await encrypt(msg, agent.sessionKey);
+  agent.ws.send(JSON.stringify(encrypted));
 }
 
 // Parse incoming message (decrypt if needed)

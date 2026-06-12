@@ -252,7 +252,7 @@ export function shouldAllowGroupReflection({
  * @param {{
  *   sessionId?: string|null,
  *   ownVpId?: string|null,
- *   summaries: { user?: string, group?: string, vp?: string }
+ *   summaries: { user?: string, session?: string, vp?: string }
  * }} args
  * @returns {Array<{scope: string, summary: string}>}
  */
@@ -260,15 +260,12 @@ export function buildResidentEntries(args) {
   const summaries = (args && args.summaries) || {};
   const out = [];
   if (summaries.user) out.push({ scope: 'user', summary: summaries.user });
-  if (args.sessionId && summaries.group) {
-    // Presentation label: product-facing prompt scopes are sessions, even
-    // though the current disk compatibility path still reads kind:'group'.
-    out.push({ scope: `sessions/${args.sessionId}`, summary: summaries.group });
+  if (args.sessionId && summaries.session) {
+    out.push({ scope: `sessions/${args.sessionId}`, summary: summaries.session });
   }
   // VP per-session isolation (2026-06-09): the VP summary scope MUST be
   // session-qualified. The legacy bare `vp/<id>` scope was a structural
-  // bug — `summaries.vp` is actually loaded from `group/<sessionId>/vp/<id>/summary.md`
-  // (see #loadLayerASummaries, kind:'group-vp'), so labelling it `vp/<id>`
+    // (see #loadLayerASummaries, kind:'group-vp'), so labelling it `vp/<id>`
   // in the Resident layer (a) collides with the ACL regex in store
   // (which only recognises `<root>/<sid>/vp/...`) and (b) makes the same
   // VP persona leak across DIFFERENT sessions whenever the AMS rehydrates
@@ -395,7 +392,7 @@ export class Engine {
    * subsequent turns only run on budget pressure or new memory.
    * @type {Map<string, boolean>}
    */
-  #adjustRanByGroup = new Map();
+  #adjustRanBySession = new Map();
 
   /** @type {string|null} */
   #abortReason = null;
@@ -573,30 +570,30 @@ export class Engine {
    *
    * Scopes:
    *   - user           → `user/summary.md`            (always attempted)
-   *   - group <gid>    → `groups/<gid>/summary.md`    (if sessionId)
-   *   - vp <vpId>      → `vp/<vpId>/summary.md`       (if vpId)
+   *   - session <sid>  → `sessions/<sid>/summary.md`   (if sessionId)
+   *   - session-vp     → `sessions/<sid>/vp/<vpId>/summary.md` (if vpId)
    *
    * Each fetch is best-effort — missing files / read errors return ''. The
    * dream tick (Phase 6) is what populates these; on a fresh install they
    * all return ''.
    *
    * @param {{sessionId?: string, vpId?: string, language?: string}} ctx
-   * @returns {Promise<{user:string, group:string, vp:string}>}
+   * @returns {Promise<{user:string, session:string, vp:string}>}
    */
   async #loadLayerASummaries({ sessionId, vpId, language } = {}) {
-    if (!this.#yeaftDir) return { user: '', group: '', vp: '' };
+    if (!this.#yeaftDir) return { user: '', session: '', vp: '' };
     const memoryRoot = `${this.#yeaftDir}/memory`;
     const tasks = [
       readScopeSummary({ kind: 'user' }, { root: memoryRoot, language }).catch(() => ''),
       sessionId
-        ? readScopeSummary({ kind: 'group', id: sessionId }, { root: memoryRoot, language }).catch(() => '')
+        ? readScopeSummary({ kind: 'session', id: sessionId }, { root: memoryRoot, language }).catch(() => '')
         : Promise.resolve(''),
       vpId && sessionId
-        ? readScopeSummary({ kind: 'group-vp', sessionId, id: vpId }, { root: memoryRoot, language }).catch(() => '')
+        ? readScopeSummary({ kind: 'session-vp', sessionId, id: vpId }, { root: memoryRoot, language }).catch(() => '')
         : Promise.resolve(''),
     ];
-    const [user, group, vp] = await Promise.all(tasks);
-    return { user: user || '', group: group || '', vp: vp || '' };
+    const [user, session, vp] = await Promise.all(tasks);
+    return { user: user || '', session: session || '', vp: vp || '' };
   }
 
   /**
@@ -606,12 +603,12 @@ export class Engine {
    * @param {{
    *   sessionId?: string,
    *   ownVpId?: string|null,
-   *   summaries: { user?: string, group?: string, vp?: string },
+   *   summaries: { user?: string, session?: string, vp?: string },
    *   recallEntries: object[],
    * }} args
    * @returns {{
    *   ams: import('./memory/ams.js').ActiveMemorySet,
-   *   groupKey: string,
+   *   sessionKey: string,
    *   ownVpId: string|null,
    *   scopes: string[],
    *   snapshotBlock: string,
@@ -620,17 +617,17 @@ export class Engine {
    */
   #prepareAms(args) {
     if (!this.#amsRegistry) return null;
-    const groupKey = args.sessionId || 'default';
+    const sessionKey = args.sessionId || 'default';
     const ownVpId = args.ownVpId || null;
-    const ams = this.#amsRegistry.getOrCreate(groupKey, { ownVpId });
+    const ams = this.#amsRegistry.getOrCreate(sessionKey, { ownVpId });
 
-    // Prime #adjustRanByGroup from disk-hydrated state on first access:
+    // Prime #adjustRanBySession from disk-hydrated state on first access:
     // a reactivated group resumes with whatever adjustRanThisSession bit
     // it had on disconnect, so we don't burn a fresh adjust on every
     // reload. Once set true in this session we never clear it.
-    if (!this.#adjustRanByGroup.has(groupKey)
-        && this.#amsRegistry.adjustRanThisSession(groupKey)) {
-      this.#adjustRanByGroup.set(groupKey, true);
+    if (!this.#adjustRanBySession.has(sessionKey)
+        && this.#amsRegistry.adjustRanThisSession(sessionKey)) {
+      this.#adjustRanBySession.set(sessionKey, true);
     }
 
     // (a) Resident: rebuild from the same scope summaries the worker
@@ -654,7 +651,7 @@ export class Engine {
       vpId: ownVpId,
     });
 
-    return { ams, groupKey, ownVpId, scopes, snapshotBlock, residentEntries };
+    return { ams, sessionKey, ownVpId, scopes, snapshotBlock, residentEntries };
   }
 
   /**
@@ -709,7 +706,7 @@ export class Engine {
    * surface as a turn failure.
    *
    * @param {{
-   *   amsContext: { ams: import('./memory/ams.js').ActiveMemorySet, groupKey: string, ownVpId: string|null, scopes: string[] }|null,
+   *   amsContext: { ams: import('./memory/ams.js').ActiveMemorySet, sessionKey: string, ownVpId: string|null, scopes: string[] }|null,
    *   userMsg: string,
    *   assistantReply: string,
    *   turnTokenUsage: number,
@@ -722,7 +719,7 @@ export class Engine {
     const totalBudget = ctx.ams.budget?.total || 0;
     if (!totalBudget) return null;
 
-    const adjustRanThisSession = this.#adjustRanByGroup.get(ctx.groupKey) === true;
+    const adjustRanThisSession = this.#adjustRanBySession.get(ctx.sessionKey) === true;
     try {
       const result = await runAdjust({
         trigger: {
@@ -749,12 +746,12 @@ export class Engine {
         },
       });
       if (result?.ran) {
-        this.#adjustRanByGroup.set(ctx.groupKey, true);
+        this.#adjustRanBySession.set(ctx.sessionKey, true);
         // Always persist when we ran — even with no membership change,
         // the adjustRanThisSession bit is part of the on-disk state we
         // want to preserve.
-        this.#amsRegistry.markDirty(ctx.groupKey);
-        this.#amsRegistry.persist(ctx.groupKey, {
+        this.#amsRegistry.markDirty(ctx.sessionKey);
+        this.#amsRegistry.persist(ctx.sessionKey, {
           adjustRanThisSession: true,
         });
       }
@@ -2302,7 +2299,7 @@ export class Engine {
               type: 'memory_adjust',
               turnId: queryTurnId,
               threadId,
-              groupKey: amsContext.groupKey,
+              sessionKey: amsContext.sessionKey,
               added: adjustResult.added,
               evicted: adjustResult.evicted,
               skipped: adjustResult.skipped || 0,
