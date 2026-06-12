@@ -48,6 +48,7 @@ beforeAll(async () => {
 function mkStore() {
   return {
     yeaftDreamLatest: {},
+    yeaftDreamSnapshots: {},
     yeaftDreamEvents: {},
     yeaftConversationId: null,
     yeaftDebugSessionFilter: null,
@@ -67,6 +68,46 @@ const send = (store, event) => {
 };
 
 describe('handleYeaftOutput — dream event ring buffer', () => {
+
+  it('stores loadable dream snapshots and exposes the active session snapshot', () => {
+    const store = mkStore();
+    globalThis.window.Pinia.useSessionsStore = () => ({ activeSessionId: 'g1' });
+
+    send(store, {
+      type: 'yeaft_dream_snapshot',
+      snapshot: {
+        scope: 'group/g1',
+        sessionId: 'g1',
+        summaryText: 'User prefers concise Chinese summaries.',
+        memoryText: 'Longer memory body',
+        hasOutput: true,
+      },
+    });
+
+    expect(store.yeaftDreamSnapshots['group/g1'].summaryText)
+      .toBe('User prefers concise Chinese summaries.');
+    const active = getters.yeaftDreamSnapshotForActiveSession(store);
+    expect(active.sessionId).toBe('g1');
+    expect(active.hasOutput).toBe(true);
+  });
+
+  it('stores embedded dream snapshots from terminal dream results', () => {
+    const store = mkStore();
+    send(store, {
+      type: 'yeaft_dream_result',
+      sessionId: 'g2',
+      success: true,
+      snapshot: {
+        scope: 'group/g2',
+        sessionId: 'g2',
+        summaryText: 'Persisted dream output',
+        hasOutput: true,
+      },
+    });
+
+    expect(store.yeaftDreamSnapshots['group/g2'].summaryText).toBe('Persisted dream output');
+  });
+
   it('active-group getters fall back to sessionsStore.activeSessionId when the main pane is not filtered', () => {
     const store = mkStore();
     globalThis.window.Pinia.useSessionsStore = () => ({

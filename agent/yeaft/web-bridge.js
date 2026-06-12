@@ -21,6 +21,7 @@
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { buildDreamOutputSnapshot } from './dream/output-snapshot.js';
 import { Engine } from './engine.js';
 import { loadSession } from './session.js';
 import { loadConfig } from './config.js';
@@ -111,6 +112,14 @@ export function __testSetThreadClassifier(fn) {
  * @type {Set<string>}
  */
 const inflightScopedDreamGroups = new Set();
+
+async function sendDreamSnapshotForSession(sessionId, extra = {}) {
+  const snapshot = await buildDreamOutputSnapshot(session, sessionId);
+  if (!snapshot) return null;
+  sendYeaftEvent({ type: 'yeaft_dream_snapshot', ...extra, snapshot }, { sessionId });
+  return snapshot;
+}
+
 
 /**
  * Single in-flight AbortController for legacy 1:1 chat. A new 1:1 user message
@@ -1865,6 +1874,30 @@ export function installYeaftRuntimeBridge(s) {
     } catch { /* never let event delivery throw */ }
   };
 
+  // Auto dream runs are triggered by the scheduler / nudges, not by the
+  // manual `handleYeaftDreamTrigger` path. Without this terminal sink the UI
+  // only saw progress debug events and could not restore the final dream
+  // output after switching sessions. Manual runs keep using their explicit
+  // handler below to avoid duplicate terminal events.
+  s._dreamResultSink = async (result = {}) => {
+    if (result?.trigger !== 'auto') return;
+    const normalized = normalizeDreamResult(result);
+    const processed = Array.isArray(result.groups)
+      ? result.groups.filter(g => g && g.status === 'processed' && g.sessionId)
+      : [];
+    for (const group of processed) {
+      const sessionId = group.sessionId;
+      const snapshot = await buildDreamOutputSnapshot(session, sessionId).catch(() => null);
+      sendToServer({
+        type: 'yeaft_dream_result',
+        sessionId,
+        ...result,
+        ...normalized,
+        snapshot,
+      });
+    }
+  };
+
   // Wire the post-compact WS sink. Compactor is constructed in
   // session.js with a no-op sink; bridge owns `sendYeaftEvent` /
   // `yeaftConversationId`, so the sink is wired here once a session is
@@ -3594,6 +3627,9 @@ export async function handleYeaftDreamTrigger(msg = {}) {
       : await session.dreamScheduler.triggerDreamNow();
 
     const normalized = normalizeDreamResult(result);
+    const snapshot = sessionId
+      ? await buildDreamOutputSnapshot(session, sessionId).catch(() => null)
+      : null;
 
     // Spread `result` FIRST so normalized fields (success, skipped,
     // skippedReason, groupsProcessed, groupsSkipped, targetsApplied,
@@ -3616,6 +3652,7 @@ export async function handleYeaftDreamTrigger(msg = {}) {
       ...tag,
       ...result,
       ...normalized,
+      ...(snapshot ? { snapshot } : {}),
     });
   } catch (err) {
     const error = err?.message || String(err);
@@ -3829,6 +3866,9 @@ export async function handleYeaftLoadHistory(msg) {
     yeaftDir: ctx.CONFIG?.yeaftDir || null,
   });
   sendSessionSnapshotBroadcast();
+  if (sessionId) {
+    await sendDreamSnapshotForSession(sessionId, { trigger: 'load_history' }).catch(() => null);
+  }
   // vp-status: replay the authoritative table on reconnect so a refreshed
   // frontend doesn't have to wait for the next transition to learn each
   // VP's current state.
