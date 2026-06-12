@@ -457,11 +457,19 @@ export async function resumeConversation(msg) {
     if (id === conversationId || (claudeSessionId && conv.claudeSessionId === claudeSessionId)) {
       console.log(`[Resume] Cleaning up old conversation: ${id} (claudeSessionId: ${conv.claudeSessionId})`);
       if (conv.providerOptions && !priorProviderOptions) priorProviderOptions = conv.providerOptions;
-      if (conv.abortController) {
-        conv.abortController.abort();
-      }
-      if (conv.inputStream) {
-        try { conv.inputStream.done(); } catch {}
+      let cleanupDriver = null;
+      try {
+        cleanupDriver = getProvider(conv.providerName || provider || DEFAULT_PROVIDER);
+      } catch { /* fallback to legacy cleanup below */ }
+      if (typeof cleanupDriver?.dispose === 'function') {
+        cleanupDriver.dispose(conv, 'resume cleanup');
+      } else {
+        if (conv.abortController) {
+          conv.abortController.abort();
+        }
+        if (conv.inputStream) {
+          try { conv.inputStream.done(); } catch {}
+        }
       }
       ctx.conversations.delete(id);
     }

@@ -81,9 +81,106 @@ describe('copilot provider — sendInput surfaces ACP boot errors', () => {
     expect(state.providerName).toBe('copilot');
     vi.doUnmock('child_process');
   });
+
+  it('uses the Copilot turn-completion guard when ACP reinit fails', async () => {
+    vi.resetModules();
+    const ctxMod = await import('../../../agent/context.js');
+    const sent = [];
+    ctxMod.default.sendToServer = (m) => sent.push(m);
+    ctxMod.default.CONFIG = { debug: false };
+    ctxMod.default.conversations = new Map();
+
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = { write: () => { throw new Error('reinit boom'); } };
+    child.kill = () => {};
+
+    vi.doMock('child_process', () => ({ spawn: () => child, execFile: () => {}, exec: () => {} }));
+    const copilot = await import('../../../agent/providers/copilot.js?fresh=reinit');
+    const state = {
+      providerName: 'copilot',
+      conversationId: 'c-reinit',
+      workDir: '/tmp',
+      sessionId: 'old-session',
+      claudeSessionId: 'old-session',
+      initialized: false,
+      acpClient: null,
+      pendingPermissions: new Map(),
+      providerOptions: {},
+      model: 'gpt-5',
+    };
+
+    await copilot.sendInput(state, 'hello', { conversationId: 'c-reinit' });
+
+    expect(sent.filter(m => m.type === 'turn_completed')).toHaveLength(1);
+    expect(state.turnCompletedEmitted).toBe(true);
+    expect(state.turnActive).toBe(false);
+    expect(sent.some(m => m.type === 'claude_output' && m.data?.type === 'result' && m.data?.is_error)).toBe(true);
+    vi.doUnmock('child_process');
+  });
 });
 
 describe('copilot provider — session parity', () => {
+  it('disposes the previous Copilot child and ACP client before resume starts a replacement', async () => {
+    vi.resetModules();
+    const ctxMod = await import('../../../agent/context.js');
+    const sent = [];
+    ctxMod.default.sendToServer = (m) => sent.push(m);
+    ctxMod.default.CONFIG = { workDir: '/tmp/project', debug: false };
+    ctxMod.default.mcpServers = [];
+
+    let killed = false;
+    let closedReason = null;
+    let drainedPermission = null;
+    const pendingPermissions = new Map([
+      ['perm-1', { resolve: (value) => { drainedPermission = value; } }],
+    ]);
+    const oldState = {
+      providerName: 'copilot',
+      conversationId: 'conv-resume',
+      claudeSessionId: 'sess-resume',
+      sessionId: 'sess-resume',
+      workDir: '/tmp/project',
+      providerOptions: { model: 'gpt-5' },
+      pendingPermissions,
+      acpClient: { close: (reason) => { closedReason = reason; } },
+      copilotChild: { kill: () => { killed = true; } },
+      abortController: { abort: () => {} },
+      turnActive: true,
+    };
+    ctxMod.default.conversations = new Map([['conv-resume', oldState]]);
+
+    const newChild = makeAcpChild(({ method, params }) => {
+      if (method === 'initialize') return { agentCapabilities: { loadSession: true } };
+      if (method === 'session/load') {
+        expect(params.sessionId).toBe('sess-resume');
+        return { modes: {}, models: {} };
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+
+    vi.doMock('child_process', () => ({ spawn: () => newChild, execFile: () => {}, exec: () => {} }));
+    const conversation = await import('../../../agent/conversation.js?fresh=resume-cleanup');
+
+    await conversation.resumeConversation({
+      conversationId: 'conv-resume',
+      claudeSessionId: 'sess-resume',
+      workDir: '/tmp/project',
+      provider: 'copilot',
+      providerOptions: { model: 'gpt-5' },
+    });
+
+    expect(killed).toBe(true);
+    expect(closedReason).toBe('resume cleanup');
+    expect(drainedPermission).toEqual({ outcome: { outcome: 'cancelled' } });
+    const replacement = ctxMod.default.conversations.get('conv-resume');
+    expect(replacement).toBeTruthy();
+    expect(replacement).not.toBe(oldState);
+    expect(replacement.providerName).toBe('copilot');
+    vi.doUnmock('child_process');
+  });
+
   it('emits session_id_update for new sessions and clear sessions', async () => {
     vi.resetModules();
     const ctxMod = await import('../../../agent/context.js');

@@ -38,12 +38,7 @@ export async function start(opts) {
   const conversationId = opts.conversationId;
   // Tear down any prior entry so we don't leak children.
   const prior = ctx.conversations.get(conversationId);
-  if (prior?.copilotChild) {
-    try { prior.copilotChild.kill('SIGTERM'); } catch { /* noop */ }
-  }
-  if (prior?.acpClient) {
-    try { prior.acpClient.close('replaced'); } catch { /* noop */ }
-  }
+  dispose(prior, 'replaced');
 
   const providerOptions = opts.providerOptions || prior?.providerOptions || {};
   const model = providerOptions.model || DEFAULT_COPILOT_MODEL;
@@ -211,14 +206,8 @@ export async function sendInput(state, prompt, opts = {}) {
     try {
       await _bootAcp(state, state.sessionId || null, state.model);
     } catch (err) {
-      sendOutput(conversationId, {
-        type: 'result',
-        subtype: 'error',
-        session_id: state.sessionId,
-        is_error: true,
-        error: `copilot ACP reinit failed: ${err?.message || err}`,
-      });
-      ctx.sendToServer({ type: 'turn_completed', conversationId, claudeSessionId: state.sessionId, workDir: state.workDir });
+      _sendTurnError(state, `copilot ACP reinit failed: ${err?.message || err}`);
+      _completeTurn(state, conversationId);
       return;
     }
   }
@@ -305,6 +294,29 @@ export function abort(state) {
     }, 10000);
     state._abortKillTimer.unref?.();
   }
+}
+
+export function dispose(state, reason = 'disposed') {
+  if (!state) return;
+  if (state.abortController) {
+    try { state.abortController.abort(); } catch { /* noop */ }
+    state.abortController = null;
+  }
+  if (state._abortKillTimer) {
+    clearTimeout(state._abortKillTimer);
+    state._abortKillTimer = null;
+  }
+  _drainPendingPermissions(state, reason);
+  if (state.acpClient) {
+    try { state.acpClient.close(reason); } catch { /* noop */ }
+    state.acpClient = null;
+  }
+  if (state.copilotChild) {
+    try { state.copilotChild.kill('SIGTERM'); } catch { /* noop */ }
+    state.copilotChild = null;
+  }
+  state.initialized = false;
+  state.turnActive = false;
 }
 
 /**
