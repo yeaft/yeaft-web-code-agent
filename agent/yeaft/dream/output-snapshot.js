@@ -29,7 +29,10 @@ export function truncateDreamText(value, limit = DREAM_SNAPSHOT_TEXT_LIMIT) {
  */
 export async function buildDreamOutputSnapshot(sessionLike, sessionId) {
   if (!sessionId || !sessionLike?.yeaftDir) return null;
-  const scope = `group/${sessionId}`;
+  const scope = `sessions/${sessionId}`;
+  // Disk compatibility: Dream currently writes session summaries through
+  // the historical kind:'group' store path. The snapshot's public scope label
+  // is still sessions/<id>.
   const memoryScope = { kind: 'group', id: sessionId };
   const root = join(sessionLike.yeaftDir, 'memory');
   const [memoryRaw, summaryRaw, state] = await Promise.all([

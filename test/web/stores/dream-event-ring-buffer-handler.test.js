@@ -84,15 +84,15 @@ describe('handleYeaftOutput — dream event ring buffer', () => {
       vpId: 'vp-a',
       loadedInto: 'system_prompt.memory',
       resident: [{
-        scope: 'group/g1',
+        scope: 'sessions/g1',
         source: 'resident-summary',
         summary: 'Loaded Dream summary',
       }],
     });
 
     expect(store.yeaftDebugTurnsById.t1.dreamMemoryLoaded[0].summary).toBe('Loaded Dream summary');
-    expect(store.yeaftDreamPromptLoads['group/g1']).toEqual(expect.objectContaining({
-      scope: 'group/g1',
+    expect(store.yeaftDreamPromptLoads['sessions/g1']).toEqual(expect.objectContaining({
+      scope: 'sessions/g1',
       sessionId: 'g1',
       vpId: 'vp-a',
       loadedInto: 'system_prompt.memory',
@@ -108,7 +108,7 @@ describe('handleYeaftOutput — dream event ring buffer', () => {
     send(store, {
       type: 'yeaft_dream_snapshot',
       snapshot: {
-        scope: 'group/g1',
+        scope: 'sessions/g1',
         sessionId: 'g1',
         summaryText: 'User prefers concise Chinese summaries.',
         memoryText: 'Longer memory body',
@@ -116,7 +116,7 @@ describe('handleYeaftOutput — dream event ring buffer', () => {
       },
     });
 
-    expect(store.yeaftDreamSnapshots['group/g1'].summaryText)
+    expect(store.yeaftDreamSnapshots['sessions/g1'].summaryText)
       .toBe('User prefers concise Chinese summaries.');
     const active = getters.yeaftDreamSnapshotForActiveSession(store);
     expect(active.sessionId).toBe('g1');
@@ -130,16 +130,39 @@ describe('handleYeaftOutput — dream event ring buffer', () => {
       sessionId: 'g2',
       success: true,
       snapshot: {
-        scope: 'group/g2',
+        scope: 'sessions/g2',
         sessionId: 'g2',
         summaryText: 'Persisted dream output',
         hasOutput: true,
       },
     });
 
-    expect(store.yeaftDreamSnapshots['group/g2'].summaryText).toBe('Persisted dream output');
+    expect(store.yeaftDreamSnapshots['sessions/g2'].summaryText).toBe('Persisted dream output');
   });
 
+
+  it('normalizes legacy group prompt-load scopes to sessions scopes', () => {
+    const store = mkStore();
+    globalThis.window.Pinia.useSessionsStore = () => ({ activeSessionId: 'legacy' });
+    send(store, {
+      type: 'dream_memory_loaded',
+      turnId: 't-legacy',
+      sessionId: 'legacy',
+      resident: [{
+        scope: 'group/legacy',
+        source: 'resident-summary',
+        summary: 'Legacy group scope payload',
+      }],
+    });
+
+    expect(store.yeaftDreamPromptLoads['sessions/legacy']).toEqual(expect.objectContaining({
+      scope: 'sessions/legacy',
+      sourceScope: 'group/legacy',
+      sessionId: 'legacy',
+      summary: 'Legacy group scope payload',
+    }));
+    expect(getters.yeaftDreamPromptLoadForActiveSession(store).scope).toBe('sessions/legacy');
+  });
 
   it('ignores nested group resident scopes for the per-session Dream prompt-load cache', () => {
     const store = mkStore();
@@ -149,14 +172,14 @@ describe('handleYeaftOutput — dream event ring buffer', () => {
       turnId: 't-nested',
       sessionId: 'g1',
       resident: [{
-        scope: 'group/g1/vp/vp-a',
+        scope: 'sessions/g1/vp/vp-a',
         source: 'resident-summary',
         summary: 'Nested VP summary',
       }],
     });
 
     expect(store.yeaftDreamPromptLoads).toEqual({});
-    expect(store.yeaftDebugTurnsById['t-nested'].dreamMemoryLoaded[0].scope).toBe('group/g1/vp/vp-a');
+    expect(store.yeaftDebugTurnsById['t-nested'].dreamMemoryLoaded[0].scope).toBe('sessions/g1/vp/vp-a');
   });
 
   it('active-group getters fall back to sessionsStore.activeSessionId when the main pane is not filtered', () => {

@@ -260,7 +260,9 @@ export function buildResidentEntries(args) {
   const out = [];
   if (summaries.user) out.push({ scope: 'user', summary: summaries.user });
   if (args.sessionId && summaries.group) {
-    out.push({ scope: `group/${args.sessionId}`, summary: summaries.group });
+    // Presentation label: product-facing prompt scopes are sessions, even
+    // though the current disk compatibility path still reads kind:'group'.
+    out.push({ scope: `sessions/${args.sessionId}`, summary: summaries.group });
   }
   // VP per-session isolation (2026-06-09): the VP summary scope MUST be
   // session-qualified. The legacy bare `vp/<id>` scope was a structural
@@ -273,7 +275,7 @@ export function buildResidentEntries(args) {
   // makes the per-session boundary explicit and matches the on-disk
   // layout 1:1.
   if (args.sessionId && args.ownVpId && summaries.vp && !isVpSeedBackfillStub(summaries.vp)) {
-    out.push({ scope: `group/${args.sessionId}/vp/${args.ownVpId}`, summary: summaries.vp });
+    out.push({ scope: `sessions/${args.sessionId}/vp/${args.ownVpId}`, summary: summaries.vp });
   }
   return out;
 }
@@ -1478,12 +1480,12 @@ export class Engine {
 
     // Diagnostic payload for the Dream debug panel. The full AMS Resident
     // layer can include user and per-VP summaries, but the browser-facing
-    // Dream prompt-load view only needs to prove the active group Dream
+    // Dream prompt-load view only needs to prove the active session Dream
     // summary entered `system_prompt.memory`. Keep the payload scoped to the
-    // exact group resident to avoid leaking unrelated resident summaries into
+    // exact session resident to avoid leaking unrelated resident summaries into
     // frontend state. The full system prompt remains visible in the existing
     // debug-only system-prompt panel.
-    const activeGroupDreamScope = sessionId ? `group/${sessionId}` : null;
+    const activeGroupDreamScope = sessionId ? `sessions/${sessionId}` : null;
     const dreamResidentLoaded = amsContext && Array.isArray(amsContext.residentEntries)
       ? amsContext.residentEntries
         .filter(e => e && e.scope === activeGroupDreamScope && e.summary)

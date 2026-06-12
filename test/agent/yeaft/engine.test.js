@@ -249,7 +249,7 @@ describe('Engine', () => {
       const system = mockAdapter.callLog[0].system;
       expect(system).toContain('## Active Memory Set');
       expect(system).toContain('### Resident');
-      expect(system).toContain('group/g1');
+      expect(system).toContain('sessions/g1');
       expect(system).toContain('Dream memory loaded into the prompt');
       expect(system).toContain('User-level Dream summary should enter the prompt');
       expect(system).toContain('VP Dream summary should enter the prompt');
@@ -259,7 +259,7 @@ describe('Engine', () => {
       expect(loaded.loadedInto).toBe('system_prompt.memory');
       expect(loaded.resident).toHaveLength(1);
       expect(loaded.resident).toEqual([expect.objectContaining({
-        scope: 'group/g1',
+        scope: 'sessions/g1',
         source: 'resident-summary',
       })]);
     });

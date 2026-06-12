@@ -585,13 +585,19 @@ export const useChatStore = defineStore('chat', {
     yeaftDreamSnapshotForActiveSession(state) {
       const targetGroupId = resolveActiveDreamDebugSessionId(state);
       if (!targetGroupId) return null;
-      const scope = `group/${targetGroupId}`;
+      // Product-facing Dream output scopes are `sessions/<id>`. Legacy
+      // Dream run/timeline events still use historical `group/<id>` buckets
+      // below for wire compatibility; do not conflate the two stores.
+      const scope = `sessions/${targetGroupId}`;
       return state.yeaftDreamSnapshots?.[scope] || null;
     },
     yeaftDreamPromptLoadForActiveSession(state) {
       const targetGroupId = resolveActiveDreamDebugSessionId(state);
       if (!targetGroupId) return null;
-      const scope = `group/${targetGroupId}`;
+      // Prompt-load records describe what the LLM sees in system prompt
+      // memory, so they use product terminology (`sessions/<id>`), even
+      // when the underlying disk store still has historical group paths.
+      const scope = `sessions/${targetGroupId}`;
       return state.yeaftDreamPromptLoads?.[scope] || null;
     },
     // PR feat-dream-debug-panel-full: per-group event log for the
@@ -1456,12 +1462,17 @@ export const useChatStore = defineStore('chat', {
           }
           const updates = {};
           for (const item of resident) {
-            const scope = item && typeof item.scope === 'string' ? item.scope : null;
-            const match = scope && /^group\/[^/]+$/.exec(scope);
-            if (!match) continue;
-            updates[scope] = {
-              scope,
-              sessionId: scope.slice('group/'.length),
+            const rawScope = item && typeof item.scope === 'string' ? item.scope : null;
+            const sessionScope = rawScope && /^sessions\/[^/]+$/.test(rawScope)
+              ? rawScope
+              : (rawScope && /^group\/[^/]+$/.test(rawScope)
+                ? `sessions/${rawScope.slice('group/'.length)}`
+                : null);
+            if (!sessionScope) continue;
+            updates[sessionScope] = {
+              scope: sessionScope,
+              sourceScope: rawScope,
+              sessionId: sessionScope.slice('sessions/'.length),
               turnId: event.turnId || null,
               vpId: event.vpId || null,
               loadedInto: event.loadedInto || 'system_prompt.memory',
