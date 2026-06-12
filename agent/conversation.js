@@ -783,17 +783,23 @@ export async function handleUserInput(msg) {
 
     // /clear for capable providers — reset session in-place without spawning new turn
     if (slashCommand.type === 'slash' && slashCommand.command === '/clear') {
+      state.turnActive = true;
+      state.turnCompletedEmitted = false;
+      state.turnErrorEmitted = false;
       if (typeof driver.clear === 'function' && driver.capabilities?.clear) {
         try { await driver.clear(state); } catch (err) {
           console.warn(`[${conversationId}] driver.clear failed:`, err?.message || err);
         }
       }
-      ctx.sendToServer({
-        type: 'turn_completed',
-        conversationId,
-        claudeSessionId: state.sessionId || state.claudeSessionId,
-        workDir: state.workDir
-      });
+      if (!state.turnCompletedEmitted) {
+        ctx.sendToServer({
+          type: 'turn_completed',
+          conversationId,
+          claudeSessionId: state.sessionId || state.claudeSessionId,
+          workDir: state.workDir
+        });
+      }
+      state.turnActive = false;
       return;
     }
 
@@ -812,6 +818,10 @@ export async function handleUserInput(msg) {
       });
     } finally {
       state.turnActive = false;
+      if (state._abortKillTimer) {
+        clearTimeout(state._abortKillTimer);
+        state._abortKillTimer = null;
+      }
       sendConversationList();
     }
     return;
@@ -976,7 +986,7 @@ export function handleAskUserAnswer(msg) {
         if (typeof driver.respondToPermissionRequest === 'function') {
           const ans = msg.answers || {};
           const optionId = typeof ans === 'string' ? ans
-            : ans.optionId || ans.option || Object.values(ans)[0];
+            : ans.optionId || ans.option || ans['Copilot permission'] || Object.values(ans)[0];
           driver.respondToPermissionRequest(state, msg.requestId, optionId);
           return;
         }

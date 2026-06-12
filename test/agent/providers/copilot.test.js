@@ -1,5 +1,12 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'events';
+
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.resetModules();
+  vi.doUnmock('child_process');
+});
 
 /**
  * Post-ACP rewrite tests. The old NDJSON/-p driver shipped two pure helpers
@@ -75,3 +82,133 @@ describe('copilot provider — sendInput surfaces ACP boot errors', () => {
     vi.doUnmock('child_process');
   });
 });
+
+describe('copilot provider — session parity', () => {
+  it('emits session_id_update for new sessions and clear sessions', async () => {
+    vi.resetModules();
+    const ctxMod = await import('../../../agent/context.js');
+    const sent = [];
+    ctxMod.default.sendToServer = (m) => sent.push(m);
+    ctxMod.default.CONFIG = { debug: false };
+    ctxMod.default.conversations = new Map();
+
+    const child = makeAcpChild(({ method }) => {
+      if (method === 'initialize') return { agentCapabilities: { loadSession: true } };
+      if (method === 'session/new') return { sessionId: `sess-${sent.filter(m => m.type === 'session_id_update').length + 1}` };
+      throw new Error(`unexpected ${method}`);
+    });
+
+    vi.doMock('child_process', () => ({ spawn: () => child }));
+    const copilot = await import('../../../agent/providers/copilot.js');
+    const state = await copilot.start({ conversationId: 'conv-session', workDir: '/tmp/project', providerOptions: {} });
+
+    expect(sent.some(m => m.type === 'session_id_update' && m.claudeSessionId === 'sess-1')).toBe(true);
+    await copilot.clear(state);
+    expect(sent.some(m => m.type === 'session_id_update' && m.claudeSessionId === 'sess-2')).toBe(true);
+    expect(state.sessionId).toBe('sess-2');
+  });
+
+  it('resumes with session/load when ACP advertises loadSession', async () => {
+    vi.resetModules();
+    const ctxMod = await import('../../../agent/context.js');
+    const sent = [];
+    const calls = [];
+    ctxMod.default.sendToServer = (m) => sent.push(m);
+    ctxMod.default.CONFIG = { debug: false };
+    ctxMod.default.conversations = new Map();
+
+    const child = makeAcpChild(({ method, params }) => {
+      calls.push({ method, params });
+      if (method === 'initialize') return { agentCapabilities: { loadSession: true } };
+      if (method === 'session/load') return { modes: {}, models: {} };
+      throw new Error(`unexpected ${method}`);
+    });
+
+    vi.doMock('child_process', () => ({ spawn: () => child }));
+    const copilot = await import('../../../agent/providers/copilot.js');
+    const state = await copilot.start({ conversationId: 'conv-resume', workDir: '/tmp/project', resumeSessionId: 'resume-1', providerOptions: {} });
+
+    expect(calls.some(c => c.method === 'session/load' && c.params.sessionId === 'resume-1')).toBe(true);
+    expect(calls.some(c => c.method === 'session/new')).toBe(false);
+    expect(state.sessionId).toBe('resume-1');
+    expect(sent.some(m => m.type === 'session_id_update' && m.claudeSessionId === 'resume-1')).toBe(true);
+  });
+
+  it('renders permission requests through AskUserQuestion and maps selected labels back to optionId', async () => {
+    vi.resetModules();
+    const ctxMod = await import('../../../agent/context.js');
+    const sent = [];
+    ctxMod.default.sendToServer = (m) => sent.push(m);
+    ctxMod.default.CONFIG = { debug: false };
+    ctxMod.default.conversations = new Map();
+
+    const child = makeAcpChild(({ method, params }, serverRequest) => {
+      if (method === 'initialize') return { agentCapabilities: { loadSession: true } };
+      if (method === 'session/new') return { sessionId: 'sess-perm' };
+      if (method === 'session/prompt') {
+        serverRequest('session/request_permission', {
+          toolCall: { title: 'Run command', rawInput: { command: 'npm test' } },
+          options: [
+            { optionId: 'deny', kind: 'reject', name: 'Deny' },
+            { optionId: 'allow_once', kind: 'allow_once', name: 'Allow once' },
+          ],
+        });
+        return { stopReason: 'end_turn' };
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+
+    vi.doMock('child_process', () => ({ spawn: () => child }));
+    const copilot = await import('../../../agent/providers/copilot.js');
+    const state = await copilot.start({ conversationId: 'conv-perm', workDir: '/tmp/project', providerOptions: {} });
+    const input = copilot.sendInput(state, 'hello', { conversationId: 'conv-perm' });
+
+    await waitUntil(() => sent.some(m => m.type === 'ask_user_question'));
+    const ask = sent.find(m => m.type === 'ask_user_question');
+    expect(ask.questions[0].question).toContain('Run command');
+    expect(ask.questions[0].options.map(o => o.label)).toEqual(['Deny', 'Allow once']);
+    expect(sent.some(m => m.type === 'claude_output' && m.data?.message?.content?.[0]?.name === 'AskUserQuestion')).toBe(true);
+
+    expect(copilot.respondToPermissionRequest(state, ask.requestId, 'Allow once')).toBe(true);
+    await input;
+    await waitUntil(() => child._writes.some(w => w.result?.outcome?.optionId === 'allow_once'));
+    expect(sent.filter(m => m.type === 'turn_completed')).toHaveLength(1);
+  });
+});
+
+function makeAcpChild(handler) {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child._writes = [];
+  child.stdin = {
+    write(data) {
+      const msg = JSON.parse(String(data).trim());
+      child._writes.push(msg);
+      if (msg.id && msg.method) {
+        queueMicrotask(async () => {
+          try {
+            const result = await handler(msg, (method, params) => {
+              const id = 1000 + child._writes.length;
+              child.stdout.emit('data', JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+              return id;
+            });
+            child.stdout.emit('data', JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }) + '\n');
+          } catch (err) {
+            child.stdout.emit('data', JSON.stringify({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: err.message } }) + '\n');
+          }
+        });
+      }
+    },
+  };
+  child.kill = () => { child.emit('close', 0); };
+  return child;
+}
+
+async function waitUntil(predicate, timeoutMs = 1000) {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) throw new Error('timed out waiting for condition');
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+}
