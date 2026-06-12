@@ -7,7 +7,7 @@
  *
  * Features:
  *   --dry-run "prompt"   — Assemble system prompt + messages, don't call LLM
- *   --trace stats|recent|search <keyword>  — Query debug.db
+ *   --trace stats|recent|search <keyword>|tools|compact  — Query/maintain debug.db
  *   -i / --interactive   — REPL mode with / commands
  *   <prompt>             — One-shot query (Phase 1: engine.query)
  *   --skip-mcp           — Skip MCP server connections (faster startup)
@@ -173,8 +173,17 @@ function handleTraceQuery(args, config) {
         }
         break;
       }
+      case 'compact': {
+        const s = trace.stats();
+        console.log(`Compacting debug database (${(s.dbSizeBytes / 1048576).toFixed(1)} MB, ${s.turnCount} turns)...`);
+        console.log('This rebuilds the file and may take a while on a large DB. Do not interrupt.');
+        const { before, after } = trace.compact();
+        const saved = Math.max(0, before - after);
+        console.log(`Done. ${(before / 1048576).toFixed(1)} MB → ${(after / 1048576).toFixed(1)} MB (reclaimed ${(saved / 1048576).toFixed(1)} MB).`);
+        break;
+      }
       default:
-        throw new Error(`Unknown trace command: ${args.trace}. Available: stats, recent, search <keyword>, tools [name]`);
+        throw new Error(`Unknown trace command: ${args.trace}. Available: stats, recent, search <keyword>, tools [name], compact`);
     }
   } finally {
     trace.close();
