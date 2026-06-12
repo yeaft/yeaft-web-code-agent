@@ -110,7 +110,7 @@ export default {
           </div>
 
           <div class="yeaft-topbar-right">
-            <!-- Message reload — refreshes the active Yeaft session history without reloading the page. -->
+            <!-- Message reload — replays current Yeaft session history without a full page refresh. -->
             <button
               class="yeaft-reload-btn"
               @click="reloadMessages"
@@ -119,11 +119,9 @@ export default {
               :aria-label="$t('yeaft.reloadMessages')"
             >
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
-                <polyline points="21 3 21 9 15 9"/>
+                <path d="M21 15a4 4 0 0 1-4 4H7l-4 4V7a4 4 0 0 1 4-4h5"/><path d="M17 1v6h6"/><path d="M23 7a6 6 0 0 0-6-6"/>
               </svg>
             </button>
-
             <!-- Page reload — always visible, full window.location.reload() -->
             <button
               class="yeaft-reload-btn"
