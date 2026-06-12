@@ -252,6 +252,59 @@ export async function handleClientMisc(clientId, client, msg, checkAgentAccess) 
       break;
     }
 
+    // Yeaft MCP CRUD (Claude-Code-style Settings → MCP tab).
+    // Server is a pure relay: agent owns the config file at
+    // `~/.yeaft/config.json` and the live MCPManager + ToolRegistry. We
+    // forward `yeaft_mcp_list/add/remove/reload` to the selected agent
+    // and the response (`yeaft_mcp_*_result` + broadcast
+    // `yeaft_mcp_updated`) flows back via agent-output.
+    case 'yeaft_mcp_list': {
+      const a = msg.agentId || client.currentAgent;
+      if (!a) break;
+      if (!await checkAgentAccess(a)) break;
+      await forwardToAgent(a, {
+        type: 'yeaft_mcp_list',
+        requestId: msg.requestId || null,
+      });
+      break;
+    }
+
+    case 'yeaft_mcp_add': {
+      const a = msg.agentId || client.currentAgent;
+      if (!a) break;
+      if (!await checkAgentAccess(a)) break;
+      await forwardToAgent(a, {
+        type: 'yeaft_mcp_add',
+        requestId: msg.requestId || null,
+        server: msg.server || {},
+      });
+      break;
+    }
+
+    case 'yeaft_mcp_remove': {
+      const a = msg.agentId || client.currentAgent;
+      if (!a) break;
+      if (!await checkAgentAccess(a)) break;
+      await forwardToAgent(a, {
+        type: 'yeaft_mcp_remove',
+        requestId: msg.requestId || null,
+        name: msg.name || '',
+      });
+      break;
+    }
+
+    case 'yeaft_mcp_reload': {
+      const a = msg.agentId || client.currentAgent;
+      if (!a) break;
+      if (!await checkAgentAccess(a)) break;
+      await forwardToAgent(a, {
+        type: 'yeaft_mcp_reload',
+        requestId: msg.requestId || null,
+        name: msg.name || null,
+      });
+      break;
+    }
+
     default:
       return false; // Not handled
   }

@@ -29,24 +29,27 @@ function makeStore() {
 }
 
 describe('chat store model switching', () => {
-  it('persists header model selection to the active group config when groupId is provided', async () => {
+  it('persists header model selection to the active session config when sessionId is provided', async () => {
+    // Field rename note (refactor sweep 2026-06-08): switchYeaftModel
+    // forwards `sessionId` (not legacy `groupId`) on the update_config
+    // CRUD payload. Server reads `msg.sessionId`.
     const store = makeStore();
     store.yeaftAgentId = 'agent-1';
-    store.sessionCrudRequest = async (op, data) => ({ ok: true, op, groupId: data.groupId, config: data.config });
+    store.sessionCrudRequest = async (op, data) => ({ ok: true, op, sessionId: data.sessionId, config: data.config });
 
     const res = await store.switchYeaftModel('provider/model-a', 'grp-a');
 
     expect(res).toEqual({
       ok: true,
       op: 'update_config',
-      groupId: 'grp-a',
+      sessionId: 'grp-a',
       config: { model: 'provider/model-a' },
     });
     expect(store.yeaftModel).toBe('provider/model-a');
     expect(store.sent).toEqual([]);
   });
 
-  it('keeps the legacy session-level switch only when no groupId is available', async () => {
+  it('keeps the legacy session-level switch only when no sessionId is available', async () => {
     const store = makeStore();
     store.yeaftAgentId = 'agent-1';
 
@@ -55,7 +58,9 @@ describe('chat store model switching', () => {
     expect(store.sent).toEqual([{ type: 'yeaft_model_switch', model: 'provider/model-b', agentId: 'agent-1' }]);
   });
 
-  it('resolves group_crud_result with config so callers can observe persisted group model', () => {
+  it('resolves session_crud_result with config so callers can observe persisted session model', () => {
+    // Read side still accepts `groupId` from the wire for deploy-window
+    // compat — the resolved value preserves whatever the server sent.
     const store = makeStore();
     let resolved = null;
     store._sessionCrudPending = new Map([
@@ -68,11 +73,11 @@ describe('chat store model switching', () => {
 
     store.handleYeaftOutput({
       event: {
-        type: 'group_crud_result',
+        type: 'session_crud_result',
         requestId: 'req-1',
         ok: true,
         op: 'update_config',
-        groupId: 'grp-a',
+        sessionId: 'grp-a',
         config: { model: 'provider/model-c' },
       },
     });
@@ -80,7 +85,7 @@ describe('chat store model switching', () => {
     expect(resolved).toEqual(expect.objectContaining({
       ok: true,
       op: 'update_config',
-      groupId: 'grp-a',
+      sessionId: 'grp-a',
       config: { model: 'provider/model-c' },
     }));
   });

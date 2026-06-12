@@ -4,8 +4,31 @@ import { startProcessingWatchdog, stopProcessingWatchdog } from './watchdog.js';
 import { setSessionLoading, saveOpenSessions } from './session.js';
 import { ensureConnected } from './websocket.js';
 import { markAllToolsCompleted } from './handlers/conversationHandler.js';
+import { maxDbMessageId } from './messages.js';
 import { t } from '../../utils/i18n.js';
 import { EXPERT_ROLES, buildClientExpertMessage } from '../../utils/expert-roles.js';
+
+/**
+ * fix-usermsg-dup: opaque client-side id stamped on optimistic user
+ * messages and forwarded to the server in the `chat` payload. The
+ * server echoes it back on the `claude_output` user message so the
+ * frontend dedup gate (claudeOutput.js) can match precisely instead of
+ * falling back to string-equality on normalized content.
+ *
+ * Review C2 (Fowler): use `crypto.randomUUID()` rather than a homemade
+ * `Date.now() + Math.random()` recipe. Two tabs hitting Send at the
+ * same millisecond would share the timestamp half, dropping the
+ * effective entropy to ~40 bits — birthday-bound that's a real
+ * collision risk for power users. `crypto.randomUUID()` is in every
+ * browser this app supports (Chrome 92+, Firefox 95+, Safari 15.4+)
+ * and in Node 14.17+, so there's no dependency cost.
+ *
+ * The `cm_` prefix is preserved for the server-side validator
+ * (C1) and to keep the id self-describing in logs / DB rows.
+ */
+function makeClientMessageId() {
+  return `cm_${crypto.randomUUID()}`;
+}
 
 export function selectAgent(store, agentId) {
   if (agentId === store.currentAgent) {
@@ -149,13 +172,31 @@ export function selectConversation(store, conversationId, agentId) {
       });
     }
   } else {
+    // perf-chat-session-switch-cache: when this conv was loaded before,
+    // reuse messagesMap as-is and ask the server only for the delta
+    // since max(dbMessageId). Old code unconditionally blew the cache
+    // away and refetched 5 turns on every sidebar click (a dead-code
+    // `currentView !== 'chat'` gate made the cache-reuse predicate
+    // always false in chat view — the only view we run in daily).
+    //
+    // `maxDbMessageId` (web/stores/helpers/messages.js) is the
+    // single source of truth for the cursor selection rule
+    // (tail-safe, order-safe, zero-safe).
     const cachedMessages = store.messagesMap[conversationId];
-    const hasUsableChatCache = store.currentView !== 'chat' && cachedMessages && cachedMessages.length > 0;
-    if (hasUsableChatCache) {
-      // Messages already in messagesMap, nothing to do
+    const lastSeenDbId = maxDbMessageId(cachedMessages);
+
+    if (lastSeenDbId !== null) {
+      // Cache hit + at least one persisted row → silent incremental sync.
+      // Don't touch messagesMap — the cache is what the user sees the
+      // instant the sidebar click resolves.
+      store.sendWsMessage({
+        type: 'sync_messages',
+        conversationId,
+        afterMessageId: lastSeenDbId
+      });
     } else {
+      // No cache, or cache is all unflushed partials → cold-load 5 turns.
       store.messagesMap[conversationId] = [];
-      // ★ Phase 6.1: 使用 turns 加载最近 5 个 turn
       store.sendWsMessage({
         type: 'sync_messages',
         conversationId,
@@ -163,9 +204,19 @@ export function selectConversation(store, conversationId, agentId) {
       });
     }
   }
-  // ★ Bug #4: 重置分页状态
-  store.hasMoreMessages = false;
+  // ★ Bug #4 / perf-chat-session-switch-cache: pagination state.
+  //
+  // Reset loadingMoreMessages unconditionally — any in-flight load-more
+  // belonged to the previous conv and should not bleed across.
+  //
+  // hasMoreMessages now comes from per-conv chatSessionState so
+  // switching away and back doesn't kill the "Load older" button on
+  // a conv with pending older history. On a brand-new conv with no
+  // recorded state, fall back to false (matches pre-PR behavior — the
+  // cold-load that's about to fire will overwrite it).
   store.loadingMoreMessages = false;
+  const persisted = store.chatSessionState[conversationId];
+  store.hasMoreMessages = !!persisted?.hasMoreOlder;
 
   // 保存 lastViewedConversation 到 localStorage
   saveOpenSessions(store);
@@ -252,6 +303,10 @@ export function closeSession(store, conversationId, agentId) {
 
   // Clean up caches
   delete store.messagesMap[conversationId];
+  // perf-chat-session-switch-cache: per-conv cache metadata follows the
+  // messages — without this, reopening a closed-then-recreated session
+  // would inherit the stale lastSeenDbId / hasMoreOlder of the old one.
+  delete store.chatSessionState[conversationId];
   delete store.processingConversations[conversationId];
   stopProcessingWatchdog(store, conversationId);
   delete store.executionStatusMap[conversationId];
@@ -367,9 +422,20 @@ export function sendMessage(store, text, attachments = [], options = {}) {
   const hasExpertSelections = options.expertSelections && options.expertSelections.length > 0;
   if ((!text.trim() && attachments.length === 0 && !hasExpertSelections) || !store.currentAgent || !store.currentConversation) return;
 
+  // fix-usermsg-dup: stamp a stable id on the optimistic message AND on
+  // the outgoing `chat` payload so the server can round-trip it back on
+  // the `claude_output` user echo. Without this, dedup in
+  // claudeOutput.js falls back to a fragile `content === content`
+  // string match which breaks the moment normalization differs
+  // (whitespace, `[Uploaded files]` marker, attachment-only sends, etc.),
+  // producing the "user message rendered twice" symptom that only
+  // reproduces after page refresh.
+  const clientMessageId = makeClientMessageId();
+
   store.addMessage({
     type: 'user',
     content: text,
+    clientMessageId,
     attachments: attachments.length > 0 ? attachments : undefined,
     expertSelections: hasExpertSelections ? options.expertSelections : undefined
   });
@@ -404,9 +470,25 @@ export function sendMessage(store, text, attachments = [], options = {}) {
   const fileIds = attachments.map(a => a.fileId);
   const wsMsg = {
     type: 'chat',
+    // fix-chat-reconnect-race — always pin the conversationId on chat
+    // wsMsg, even on the legacy single-panel send path. Two reasons:
+    //  1) Defense in depth on top of Fix A: if `client.currentConversation`
+    //     on the server is somehow stale (e.g. a redeploy raced ahead of
+    //     the next agent_list), the server's chat handler still resolves
+    //     via `msg.conversationId || client.currentConversation`.
+    //  2) Unlocks the server's "search all agents for conv owner"
+    //     fallback (client-conversation.js around line 342) — that
+    //     branch is gated on `msg.conversationId` being present, so
+    //     without this we silently lose cross-agent routing.
+    // sendMessageToConversation (the multi-panel variant) already sets
+    // this; we're catching the legacy single-panel path up to it.
+    conversationId: store.currentConversation,
     prompt: text,
     fileIds,
-    workDir: store.currentWorkDir
+    workDir: store.currentWorkDir,
+    // fix-usermsg-dup: round-trips back on the user echo so the dedup
+    // gate matches by id, not by normalized-content string equality.
+    clientMessageId
   };
   // Pass targetRole for @mention routing
   if (options.targetRole) {
@@ -549,9 +631,13 @@ export function sendMessageToConversation(store, conversationId, text, attachmen
   const hasExpertSelections = options.expertSelections && options.expertSelections.length > 0;
   if ((!text.trim() && attachments.length === 0 && !hasExpertSelections) || !store.currentAgent || !conversationId) return;
 
+  // fix-usermsg-dup: see sendMessage above — same rationale, multi-column path.
+  const clientMessageId = makeClientMessageId();
+
   store.addMessageToConversation(conversationId, {
     type: 'user',
     content: text,
+    clientMessageId,
     attachments: attachments.length > 0 ? attachments : undefined,
     expertSelections: hasExpertSelections ? options.expertSelections : undefined
   });
@@ -586,7 +672,9 @@ export function sendMessageToConversation(store, conversationId, text, attachmen
     conversationId,
     prompt: text,
     fileIds,
-    workDir: conv?.workDir || store.currentWorkDir
+    workDir: conv?.workDir || store.currentWorkDir,
+    // fix-usermsg-dup: see sendMessage above — same rationale.
+    clientMessageId
   };
   if (options.targetRole) {
     wsMsg.targetRole = options.targetRole;

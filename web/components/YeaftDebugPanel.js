@@ -4,7 +4,7 @@
  * Replaces the previous inline debug block in YeaftPage.js. Renders the
  * Yeaft engine's per-Turn debug records as:
  *
- *   Turn header  (user prompt + vp + group + totals + [copy turn])
+ *   Turn header  (user prompt + vp + session + totals + [copy turn])
  *     System prompt        [show] [copy]                turn-level
  *     Memory loaded   [show] [copy]                     turn-level
  *     Memory adjust   [show] [copy]                     turn-level
@@ -115,7 +115,7 @@ export default {
       get() { return this.store ? (this.store.yeaftDebugSearch || '') : ''; },
       set(v) { this.store && this.store.setYeaftDebugSearch(v); },
     },
-    groupFilter: {
+    sessionFilter: {
       get() {
         if (!this.store) return '';
         const g = this.store.yeaftDebugSessionFilter;
@@ -125,11 +125,11 @@ export default {
       },
       set(v) {
         if (!this.store) return;
-        if (!v) this.store.setYeaftDebugGroupFilter(null);
-        else this.store.setYeaftDebugGroupFilter(v);
+        if (!v) this.store.setYeaftDebugSessionFilter(null);
+        else this.store.setYeaftDebugSessionFilter(v);
       },
     },
-    availableGroups() {
+    availableSessions() {
       return (this.store && this.store.yeaftDebugAvailableSessions) || [];
     },
     turnTotal() {
@@ -180,7 +180,7 @@ export default {
       if (!t) return '';
       try { return new Date(t).toLocaleTimeString(); } catch { return ''; }
     },
-    // v0.1.755: latest dream pass for the active group (auto + manual share
+    // v0.1.755: latest dream pass for the active session (auto + manual share
     // this surface; user only cares about the most recent run).
     dreamLatest() {
       return (this.store && this.store.yeaftDreamLatestForActiveSession) || null;
@@ -208,8 +208,29 @@ export default {
       if (!d) return '';
       return d.manual ? 'manual' : 'auto';
     },
+    dreamSnapshot() {
+      return (this.store && this.store.yeaftDreamSnapshotForActiveSession) || null;
+    },
+    dreamPromptLoad() {
+      return (this.store && this.store.yeaftDreamPromptLoadForActiveSession) || null;
+    },
+    dreamPromptLoadSummary() {
+      const d = this.dreamPromptLoad;
+      const text = d && typeof d.summary === 'string' ? d.summary.trim() : '';
+      return text && d.truncated ? `${text}\n... truncated` : text;
+    },
+    dreamSnapshotSummary() {
+      const s = this.dreamSnapshot;
+      const text = s && typeof s.summaryText === 'string' ? s.summaryText.trim() : '';
+      return text && s.summaryTruncated ? `${text}\n... truncated` : text;
+    },
+    dreamSnapshotMemory() {
+      const s = this.dreamSnapshot;
+      const text = s && typeof s.memoryText === 'string' ? s.memoryText.trim() : '';
+      return text && s.memoryTruncated ? `${text}\n... truncated` : text;
+    },
     // PR feat-dream-debug-panel-full: full per-event timeline for the
-    // active group. Empty array when no events have been recorded yet.
+    // active session. Empty array when no events have been recorded yet.
     // Sorted oldest-first (matches the store getter's merge order).
     dreamEvents() {
       const list = (this.store && this.store.yeaftDreamEventsForActiveSession) || [];
@@ -231,6 +252,16 @@ export default {
     }
   },
   methods: {
+    debugSessionId(turn) {
+      return this.formatDebugSessionId((turn && (turn.sessionId || turn.groupId)) || '');
+    },
+    debugDreamSessionId(evt) {
+      return this.formatDebugSessionId((evt && (evt.sessionId || evt.groupId)) || '');
+    },
+    formatDebugSessionId(id) {
+      const raw = String(id || '');
+      return raw.startsWith('grp_') ? raw.slice(4) : raw;
+    },
     toggleTurn(turnId) {
       this.expandedTurns = { ...this.expandedTurns, [turnId]: !this.expandedTurns[turnId] };
     },
@@ -251,7 +282,7 @@ export default {
       if (phase === 'start') {
         parts.push(evt.manual ? 'manual trigger' : 'auto trigger');
       } else if (phase === 'load-diff') {
-        if (evt.groupId) parts.push(`group ${evt.groupId}`);
+        if (this.debugDreamSessionId(evt)) parts.push(`session ${this.debugDreamSessionId(evt)}`);
       } else if (phase === 'triage') {
         if (typeof evt.segments === 'number') parts.push(`${evt.segments} segs`);
         if (typeof evt.actions === 'number') parts.push(`${evt.actions} actions`);
@@ -263,7 +294,8 @@ export default {
         if (evt.status) parts.push(evt.status);
         if (typeof evt.mergedCount === 'number') parts.push(`merged ${evt.mergedCount}`);
       } else if (phase === 'done') {
-        if (typeof evt.groups === 'number') parts.push(`${evt.groups} groups`);
+        const sessions = typeof evt.sessions === 'number' ? evt.sessions : evt.groups;
+        if (typeof sessions === 'number') parts.push(`${sessions} sessions`);
         if (typeof evt.targets === 'number') parts.push(`${evt.targets} targets`);
         if (typeof evt.duration === 'number') parts.push(this.formatMs(evt.duration));
       } else if (phase === 'result') {
@@ -281,7 +313,7 @@ export default {
       // makes new runner phases visible as soon as they ship instead of
       // requiring a UI update lockstep.
       if (!matched || parts.length === 0) {
-        const skip = new Set(['type', 'phase', 'groupId', 'target', 'ts', 'at']);
+        const skip = new Set(['type', 'phase', 'sessionId', 'groupId', 'target', 'ts', 'at']);
         for (const [k, v] of Object.entries(evt)) {
           if (skip.has(k)) continue;
           if (v === null || v === undefined) continue;
@@ -315,8 +347,8 @@ export default {
       const phase = evt.phase || 'unknown';
       const status = evt.status || '';
       if (phase === 'start') return 'scheduler -> runDream';
-      if (phase === 'load-diff') return 'runDream -> loadGroupDiff';
-      if (phase === 'triage') return status ? `triageGroupSegments · ${status}` : 'triageGroupSegments';
+      if (phase === 'load-diff') return 'runDream -> loadSessionDiff';
+      if (phase === 'triage') return status ? `triageSessionSegments · ${status}` : 'triageSessionSegments';
       if (phase === 'merge') return 'mergeByTarget';
       if (phase === 'apply') return status ? `applyMergedTarget · ${status}` : 'applyMergedTarget';
       if (phase === 'done') return 'runDream completed';
@@ -327,7 +359,7 @@ export default {
       if (!evt) return '-';
       if (evt.target) return evt.target;
       if (evt.scope) return evt.scope;
-      if (evt.groupId) return `group/${evt.groupId}`;
+      if (this.debugDreamSessionId(evt)) return `session/${this.debugDreamSessionId(evt)}`;
       if (evt.vpId) return `vp/${evt.vpId}`;
       return '-';
     },
@@ -338,8 +370,8 @@ export default {
       if (evt.reason) parts.push(`reason: ${evt.reason}`);
       if (typeof evt.entriesCreated === 'number') parts.push(`entries ${evt.entriesCreated}`);
       if (typeof evt.targetsApplied === 'number') parts.push(`applied ${evt.targetsApplied}`);
-      if (typeof evt.groupsProcessed === 'number') parts.push(`groups ${evt.groupsProcessed}`);
-      if (typeof evt.groupsSkipped === 'number') parts.push(`skipped groups ${evt.groupsSkipped}`);
+      if (typeof evt.groupsProcessed === 'number') parts.push(`sessions ${evt.groupsProcessed}`);
+      if (typeof evt.groupsSkipped === 'number') parts.push(`skipped sessions ${evt.groupsSkipped}`);
       if (typeof evt.segments === 'number') parts.push(`segments ${evt.segments}`);
       if (typeof evt.actions === 'number') parts.push(`actions ${evt.actions}`);
       if (typeof evt.targets === 'number') parts.push(`targets ${evt.targets}`);
@@ -427,7 +459,7 @@ export default {
       const lines = [`# Dream event · ${kind} · ${evt.phase || evt.type || '?'}`];
       lines.push(`- at: ${this.formatTimestamp(evt.at)}`);
       if (evt.turnId) lines.push(`- turnId: ${evt.turnId}`);
-      if (evt.groupId) lines.push(`- groupId: ${evt.groupId}`);
+      if (this.debugDreamSessionId(evt)) lines.push(`- sessionId: ${this.debugDreamSessionId(evt)}`);
       if (evt.target) lines.push(`- target: ${evt.target}`);
       if (kind === 'loop') {
         lines.push(`- pass: ${evt.pass || '-'}`);
@@ -632,7 +664,7 @@ export default {
       lines.push(`# Turn ${turn.turnId}`);
       lines.push('');
       lines.push(`- VP: ${turn.vpId || '-'}`);
-      lines.push(`- Group: ${turn.groupId || '-'}`);
+      lines.push(`- Session: ${this.debugSessionId(turn) || '-'}`);
       lines.push(`- Loops: ${turn.loopCount || (turn.loops && turn.loops.length) || 0}`);
       lines.push(`- Total: ${this.formatMs(turn.totalMs)} / ${this.formatTokens(turn.totalTokens)} tok`);
       lines.push('');
@@ -788,13 +820,13 @@ export default {
       <div v-else-if="activeTab === 'dream'" class="yeaft-debug-dream-panel" role="tabpanel">
         <div class="yeaft-debug-toolbar">
           <select
-            v-if="availableGroups.length > 1"
+            v-if="availableSessions.length > 1"
             class="yeaft-debug-group-select"
-            v-model="groupFilter"
+            v-model="sessionFilter"
           >
             <option value="">{{ $t('yeaft.debugGroupFollowMain') }}</option>
             <option value="__all__">{{ $t('yeaft.debugGroupAll') }}</option>
-            <option v-for="g in availableGroups" :key="g" :value="g">{{ g }}</option>
+            <option v-for="g in availableSessions" :key="g" :value="g">{{ g }}</option>
           </select>
         </div>
 
@@ -819,6 +851,43 @@ export default {
             <strong v-if="dreamLatest.error" class="status-error">{{ dreamLatest.error }}</strong>
           </div>
           <div v-else class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noLatest') }}</div>
+        </div>
+
+        <div class="yeaft-debug-dream-summary" v-if="dreamSnapshot">
+          <div class="yeaft-debug-dream-summary-title">{{ $t('yeaft.dreamDebug.outputTitle') }}</div>
+          <div class="yeaft-debug-dream-summary-grid">
+            <span>{{ $t('yeaft.dreamDebug.scope') }}</span>
+            <strong>{{ dreamSnapshot.scope }}</strong>
+            <span>{{ $t('yeaft.dreamDebug.lastDream') }}</span>
+            <strong>{{ formatTimestamp(dreamSnapshot.lastDreamAt) || '-' }}</strong>
+            <span>{{ $t('yeaft.dreamDebug.messagesCovered') }}</span>
+            <strong>{{ dreamSnapshot.messageCount || 0 }}</strong>
+          </div>
+          <div v-if="dreamSnapshotSummary" class="yeaft-debug-dream-event-body">
+            <div class="yeaft-debug-section-label">summary.md</div>
+            <pre>{{ dreamSnapshotSummary }}</pre>
+          </div>
+          <div v-if="dreamSnapshotMemory && !dreamSnapshotSummary" class="yeaft-debug-dream-event-body">
+            <div class="yeaft-debug-section-label">memory.md</div>
+            <pre>{{ dreamSnapshotMemory }}</pre>
+          </div>
+          <div v-if="!dreamSnapshot.hasOutput" class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noOutput') }}</div>
+        </div>
+
+        <div class="yeaft-debug-dream-summary" v-if="dreamPromptLoad">
+          <div class="yeaft-debug-dream-summary-title">{{ $t('yeaft.dreamDebug.promptLoadTitle') }}</div>
+          <div class="yeaft-debug-dream-summary-grid">
+            <span>{{ $t('yeaft.dreamDebug.scope') }}</span>
+            <strong>{{ dreamPromptLoad.scope }}</strong>
+            <span>{{ $t('yeaft.dreamDebug.loadedInto') }}</span>
+            <strong>{{ dreamPromptLoad.loadedInto }}</strong>
+            <span>{{ $t('yeaft.dreamDebug.vp') }}</span>
+            <strong>{{ dreamPromptLoad.vpId || '-' }}</strong>
+          </div>
+          <div v-if="dreamPromptLoadSummary" class="yeaft-debug-dream-event-body">
+            <div class="yeaft-debug-section-label">{{ $t('yeaft.dreamDebug.summaryToPrompt') }}</div>
+            <pre>{{ dreamPromptLoadSummary }}</pre>
+          </div>
         </div>
 
         <div class="yeaft-debug-dream-events" v-if="dreamEvents.length > 0">
@@ -941,7 +1010,7 @@ export default {
       </div>
 
       <template v-else>
-        <!-- feat-6af5f9f1 PR C: search + independent group filter toolbar -->
+        <!-- feat-6af5f9f1 PR C: search + independent session filter toolbar -->
         <div class="yeaft-debug-toolbar">
           <input
             type="search"
@@ -950,18 +1019,18 @@ export default {
             :placeholder="$t('yeaft.debugSearchPlaceholder')"
           />
           <select
-            v-if="availableGroups.length > 1"
+            v-if="availableSessions.length > 1"
             class="yeaft-debug-group-select"
-            v-model="groupFilter"
+            v-model="sessionFilter"
           >
             <option value="">{{ $t('yeaft.debugGroupFollowMain') }}</option>
             <option value="__all__">{{ $t('yeaft.debugGroupAll') }}</option>
-            <option v-for="g in availableGroups" :key="g" :value="g">{{ g }}</option>
+            <option v-for="g in availableSessions" :key="g" :value="g">{{ g }}</option>
           </select>
         </div>
 
         <!-- v0.1.755 + PR feat-dream-debug-panel-full: Dream pass status
-             for the focused group. The header row shows the most recent
+             for the focused session. The header row shows the most recent
              pass (auto or manual); clicking it expands a timeline of every
              dream_progress event observed for this scope so users can see
              per-phase progress + the final result with errors. -->
@@ -993,7 +1062,7 @@ export default {
         </div>
       </div>
       <div class="yeaft-debug-dream-events" v-else-if="dreamExpanded && dreamEvents.length === 0">
-        <div class="yeaft-debug-dream-event-empty">No dream events yet for this group.</div>
+        <div class="yeaft-debug-dream-event-empty">No dream events yet for this session.</div>
       </div>
 
       <div class="yeaft-debug-turns" v-if="turns.length > 0">
@@ -1006,7 +1075,7 @@ export default {
             <span class="yeaft-debug-turn-prompt">{{ truncate(turn.userPrompt, 80) || '(no prompt)' }}</span>
             <span class="yeaft-debug-turn-stats">
               <span v-if="turn.vpId" class="yeaft-debug-turn-vp">{{ turn.vpId }}</span>
-              <span v-if="turn.groupId" class="yeaft-debug-turn-group">{{ turn.groupId }}</span>
+              <span v-if="debugSessionId(turn)" class="yeaft-debug-turn-group">{{ debugSessionId(turn) }}</span>
               <span class="yeaft-debug-turn-loopcount">{{ turn.loopCount || (turn.loops && turn.loops.length) || 0 }}L</span>
               <span class="yeaft-debug-turn-time">{{ formatMs(turn.totalMs) }}</span>
               <span class="yeaft-debug-turn-tokens">{{ formatTokens(turn.totalTokens) }} tok</span>

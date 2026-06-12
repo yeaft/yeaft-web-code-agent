@@ -117,7 +117,14 @@ describe('appendToAssistantMessageForConversation: speakerVpId stamping', () => 
     expect(msgs[0].vpId).toBe('vp-original');
   });
 
-  it('does NOT stamp when not in yeaft view', () => {
+  it('STAMPS even when currentView is chat, as long as conversationId is the yeaft conv', () => {
+    // Regression: previously the stamper gated on `currentView === "yeaft"`,
+    // so messages that arrived while the user was on the Chat view (Yeaft
+    // VP turn still running in the background) landed without vpId /
+    // speakerVpId. AssistantTurn then rendered without an avatar, and the
+    // groupId stamper (same predicate) left them filterable-out. UI froze
+    // on switch-back. The contract is "is this the yeaft conversation
+    // id?" — view is presentation, not data.
     const store = mkStore({
       currentView: 'chat',
       _currentYeaftVpId: 'vp-jobs',
@@ -128,8 +135,27 @@ describe('appendToAssistantMessageForConversation: speakerVpId stamping', () => 
       },
     });
     appendToAssistantMessageForConversation(store, 'conv-1', 'y');
-    expect(store.messagesMap['conv-1'][0].speakerVpId).toBeUndefined();
-    expect(store.messagesMap['conv-1'][0].vpId).toBeUndefined();
+    expect(store.messagesMap['conv-1'][0].speakerVpId).toBe('vp-jobs');
+    expect(store.messagesMap['conv-1'][0].vpId).toBe('vp-jobs');
+  });
+
+  it('does NOT stamp when conversationId is a different (non-yeaft) conversation', () => {
+    // Cross-conversation isolation. yeaftConversationId is conv-1, but the
+    // append is targeting a chat conversation chat-A — the routing context
+    // should not leak across.
+    const store = mkStore({
+      currentView: 'chat',
+      yeaftConversationId: 'conv-1',
+      _currentYeaftVpId: 'vp-jobs',
+      messagesMap: {
+        'chat-A': [
+          { id: 'm1', type: 'assistant', content: 'x', isStreaming: true },
+        ],
+      },
+    });
+    appendToAssistantMessageForConversation(store, 'chat-A', 'y');
+    expect(store.messagesMap['chat-A'][0].speakerVpId).toBeUndefined();
+    expect(store.messagesMap['chat-A'][0].vpId).toBeUndefined();
   });
 });
 
@@ -173,7 +199,11 @@ describe('finishStreamingForConversation: defensive speaker stamp', () => {
     expect(msgs[0].speakerVpId).toBeUndefined();
   });
 
-  it('is a no-op when not in yeaft view', () => {
+  it('STAMPS even when currentView is chat, as long as conversationId is the yeaft conv', () => {
+    // Same view-vs-conversation contract as appendToAssistantMessageForConversation.
+    // A VP turn that finishes streaming while the user is on Chat must still
+    // get speakerVpId stamped — otherwise switching back shows an
+    // unattributed assistant message.
     const store = mkStore({
       currentView: 'chat',
       _currentYeaftVpId: 'vp-jobs',
@@ -185,6 +215,23 @@ describe('finishStreamingForConversation: defensive speaker stamp', () => {
     });
     finishStreamingForConversation(store, 'conv-1');
     const msgs = store.messagesMap['conv-1'];
+    expect(msgs[0].isStreaming).toBe(false);
+    expect(msgs[0].speakerVpId).toBe('vp-jobs');
+  });
+
+  it('does NOT stamp when conversationId is a different (non-yeaft) conversation', () => {
+    const store = mkStore({
+      currentView: 'chat',
+      yeaftConversationId: 'conv-1',
+      _currentYeaftVpId: 'vp-jobs',
+      messagesMap: {
+        'chat-A': [
+          { id: 'm1', type: 'assistant', content: 'reply', isStreaming: true },
+        ],
+      },
+    });
+    finishStreamingForConversation(store, 'chat-A');
+    const msgs = store.messagesMap['chat-A'];
     expect(msgs[0].isStreaming).toBe(false); // streaming flag still cleared
     expect(msgs[0].speakerVpId).toBeUndefined(); // but speaker not stamped
   });

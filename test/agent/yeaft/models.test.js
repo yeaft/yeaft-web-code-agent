@@ -1,12 +1,53 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   MODEL_REGISTRY,
   resolveModel,
+  resolveContextWindow,
+  resolveMaxOutputTokens,
+  DEFAULT_CONTEXT_WINDOW,
+  DEFAULT_MAX_OUTPUT_TOKENS,
   listModels,
   isKnownModel,
   getProviderForModel,
   parseModelRef,
+  getModelInfo,
 } from '../../../agent/yeaft/models.js';
+import { _setMemCacheForTest, _resetMemCache } from '../../../agent/yeaft/llm/models-dev.js';
+
+// Seed the models.dev cache with a deterministic snapshot so the resolver
+// ladder lights up rung 2 (models.dev). The shape mirrors the real
+// `https://models.dev/api.json` payload: `{providerId: {models: {modelId:
+// {limit: {context, output}}}}}`. We override `beforeEach` per-suite so
+// unrelated tests don't leak state.
+const SNAPSHOT = {
+  anthropic: {
+    models: {
+      'claude-sonnet-4-20250514': { limit: { context: 200_000, output: 64_000 } },
+      'claude-opus-4-20250514': { limit: { context: 200_000, output: 32_000 } },
+    },
+  },
+  openai: {
+    models: {
+      'gpt-5': { limit: { context: 400_000, output: 128_000 } },
+      'o3': { limit: { context: 200_000, output: 100_000 } },
+    },
+  },
+  deepseek: {
+    models: {
+      'deepseek-chat': { limit: { context: 131_072, output: 8_192 } },
+    },
+  },
+  google: {
+    models: {
+      'gemini-2.5-pro': { limit: { context: 1_048_576, output: 65_536 } },
+    },
+  },
+  // Cross-provider collision: same id under three providers with different
+  // context windows. The MIN policy should pick the smallest.
+  cerebras: { models: { 'shared-collision': { limit: { context: 32_000, output: 8_000 } } } },
+  groq: { models: { 'shared-collision': { limit: { context: 64_000, output: 8_000 } } } },
+  fireworks: { models: { 'shared-collision': { limit: { context: 128_000, output: 16_000 } } } },
+};
 
 describe('MODEL_REGISTRY', () => {
   it('should contain Anthropic models', () => {
@@ -34,17 +75,17 @@ describe('MODEL_REGISTRY', () => {
     expect(MODEL_REGISTRY.has('gemini-2.5-flash')).toBe(true);
   });
 
-  it('should have correct adapter types', () => {
-    for (const [name, info] of MODEL_REGISTRY) {
+  it('should have correct adapter/baseUrl/displayName + NO hardcoded token fields', () => {
+    for (const [, info] of MODEL_REGISTRY) {
       expect(['anthropic', 'openai-responses']).toContain(info.adapter);
       expect(info.baseUrl).toBeTruthy();
-      // gpt-5-{mini,nano,pro} intentionally omit context/output — their real limits
-      // should come from provider config rather than unverified hardcoded values (task-284).
-      if (!['gpt-5-mini', 'gpt-5-nano', 'gpt-5-pro'].includes(name)) {
-        expect(info.contextWindow).toBeGreaterThan(0);
-        expect(info.maxOutputTokens).toBeGreaterThan(0);
-      }
       expect(info.displayName).toBeTruthy();
+      // Token limits MUST NOT live on the registry anymore — they come from
+      // models.dev at runtime (see resolveContextWindow / resolveMaxOutputTokens).
+      // Hardcoded numbers go stale; the registry is meant to carry only
+      // routing + capability metadata.
+      expect(info.contextWindow).toBeUndefined();
+      expect(info.maxOutputTokens).toBeUndefined();
     }
   });
 
@@ -67,13 +108,14 @@ describe('MODEL_REGISTRY', () => {
 });
 
 describe('resolveModel', () => {
-  it('should return ModelInfo for known models', () => {
+  it('should return ModelInfo (no token fields) for known models', () => {
     const info = resolveModel('gpt-5');
     expect(info).not.toBeNull();
     expect(info.adapter).toBe('openai-responses');
     expect(info.baseUrl).toBe('https://api.openai.com/v1');
-    expect(info.contextWindow).toBe(256000);
     expect(info.displayName).toBe('GPT-5');
+    // Token limits intentionally not on the registry entry.
+    expect(info.contextWindow).toBeUndefined();
   });
 
   it('should return null for unknown models', () => {
@@ -91,54 +133,122 @@ describe('resolveModel', () => {
     const info = resolveModel('claude-sonnet-4-20250514');
     expect(info.adapter).toBe('anthropic');
     expect(info.baseUrl).toBe('https://api.anthropic.com');
-    expect(info.contextWindow).toBe(200000);
+    expect(info.provider).toBe('anthropic');
   });
 
   it('should resolve DeepSeek models correctly', () => {
     const info = resolveModel('deepseek-chat');
     expect(info.adapter).toBe('openai-responses');
     expect(info.baseUrl).toBe('https://api.deepseek.com');
-    expect(info.contextWindow).toBe(131072);
+    expect(info.provider).toBe('deepseek');
   });
 
   it('should resolve Gemini models correctly', () => {
     const info = resolveModel('gemini-2.5-pro');
     expect(info.adapter).toBe('openai-responses');
     expect(info.baseUrl).toContain('googleapis.com');
-    expect(info.contextWindow).toBe(1048576);
+    expect(info.provider).toBe('google');
   });
 
   it('should return a copy, not a reference to the registry entry', () => {
     const info1 = resolveModel('gpt-5');
     const info2 = resolveModel('gpt-5');
-
-    // Should be equal in value
     expect(info1).toEqual(info2);
-
-    // But not the same object
     expect(info1).not.toBe(info2);
-
-    // Mutating the copy should NOT affect the registry
-    info1.contextWindow = 999;
+    // Mutating the copy must not leak back through resolveModel calls.
+    info1.displayName = 'mutated';
     const info3 = resolveModel('gpt-5');
-    expect(info3.contextWindow).toBe(256000); // original value unchanged
+    expect(info3.displayName).toBe('GPT-5');
+  });
+});
+
+describe('resolveContextWindow + resolveMaxOutputTokens', () => {
+  beforeEach(() => {
+    _setMemCacheForTest(SNAPSHOT);
+  });
+  afterEach(() => {
+    _resetMemCache();
+  });
+
+  it('returns models.dev value when the snapshot has the model under the hinted provider', () => {
+    // gpt-5 lives under `openai` in the snapshot at 400K. MODEL_REGISTRY's
+    // `provider: 'openai'` field is used as the hint.
+    expect(resolveContextWindow('gpt-5', null)).toBe(400_000);
+    expect(resolveMaxOutputTokens('gpt-5', null)).toBe(128_000);
+  });
+
+  it('returns models.dev value for Claude / DeepSeek / Gemini via hint match', () => {
+    expect(resolveContextWindow('claude-sonnet-4-20250514', null)).toBe(200_000);
+    expect(resolveContextWindow('deepseek-chat', null)).toBe(131_072);
+    expect(resolveContextWindow('gemini-2.5-pro', null)).toBe(1_048_576);
+  });
+
+  it('falls back to MIN-of-all providers when no hint is provided', () => {
+    // shared-collision lives under 3 providers with 32K / 64K / 128K
+    // context. Without a hint, MIN = 32K (the safest ceiling).
+    expect(resolveContextWindow('shared-collision', null)).toBe(32_000);
+    expect(resolveMaxOutputTokens('shared-collision', null)).toBe(8_000);
+  });
+
+  it('uses config.modelInfo override when present (rung 1)', () => {
+    const ctx = resolveContextWindow('gpt-5', {
+      modelInfo: { contextWindow: 9_999 },
+    });
+    expect(ctx).toBe(9_999);
+  });
+
+  it('falls through to config.maxContextTokens when models.dev misses (rung 3)', () => {
+    const ctx = resolveContextWindow('totally-unknown-model', {
+      maxContextTokens: 50_000,
+    });
+    expect(ctx).toBe(50_000);
+    const out = resolveMaxOutputTokens('totally-unknown-model', {
+      maxOutputTokens: 4_096,
+    });
+    expect(out).toBe(4_096);
+  });
+
+  it('falls through to DEFAULT_CONTEXT_WINDOW when every rung misses (rung 4)', () => {
+    expect(resolveContextWindow('totally-unknown-model', null)).toBe(DEFAULT_CONTEXT_WINDOW);
+    expect(resolveMaxOutputTokens('totally-unknown-model', null)).toBe(DEFAULT_MAX_OUTPUT_TOKENS);
+  });
+
+  it('returns DEFAULT when cache is empty even for a known model', () => {
+    // Wipe the snapshot — registry hint exists but no data behind it.
+    _resetMemCache();
+    expect(resolveContextWindow('gpt-5', null)).toBe(DEFAULT_CONTEXT_WINDOW);
+    expect(resolveMaxOutputTokens('gpt-5', null)).toBe(DEFAULT_MAX_OUTPUT_TOKENS);
   });
 });
 
 describe('listModels', () => {
-  it('should return all models with name property', () => {
+  beforeEach(() => {
+    _setMemCacheForTest(SNAPSHOT);
+  });
+  afterEach(() => {
+    _resetMemCache();
+  });
+
+  it('should return all models with name property + resolved limits', () => {
     const models = listModels();
     expect(models.length).toBe(MODEL_REGISTRY.size);
     for (const m of models) {
       expect(m.name).toBeTruthy();
       expect(m.adapter).toBeTruthy();
       expect(m.baseUrl).toBeTruthy();
-      // See note above — gpt-5-{mini,nano,pro} omit hardcoded ctx/max.
-      if (!['gpt-5-mini', 'gpt-5-nano', 'gpt-5-pro'].includes(m.name)) {
-        expect(m.contextWindow).toBeGreaterThan(0);
-      }
+      // contextWindow / maxOutputTokens are now always present because
+      // listModels() runs the resolver — worst case it returns DEFAULT.
+      expect(m.contextWindow).toBeGreaterThan(0);
+      expect(m.maxOutputTokens).toBeGreaterThan(0);
       expect(m.displayName).toBeTruthy();
     }
+  });
+
+  it('should reflect live models.dev values for models in the snapshot', () => {
+    const models = listModels();
+    const gpt5 = models.find(m => m.name === 'gpt-5');
+    expect(gpt5.contextWindow).toBe(400_000);
+    expect(gpt5.maxOutputTokens).toBe(128_000);
   });
 
   it('should include both Anthropic and OpenAI models', () => {
@@ -164,7 +274,7 @@ describe('isKnownModel', () => {
 
 describe('MODEL_REGISTRY provider field', () => {
   it('should have provider field on all models', () => {
-    for (const [name, info] of MODEL_REGISTRY) {
+    for (const [, info] of MODEL_REGISTRY) {
       expect(info.provider).toBeTruthy();
       expect(['anthropic', 'openai', 'deepseek', 'google']).toContain(info.provider);
     }
@@ -229,5 +339,44 @@ describe('parseModelRef', () => {
     const result = parseModelRef('org/models/v1');
     expect(result.providerName).toBe('org');
     expect(result.modelId).toBe('models/v1');
+  });
+});
+
+describe('getModelInfo', () => {
+  beforeEach(() => {
+    _setMemCacheForTest(SNAPSHOT);
+  });
+  afterEach(() => {
+    _resetMemCache();
+  });
+
+  it('should merge registry metadata with models.dev token limits', () => {
+    const info = getModelInfo('gpt-5');
+    expect(info).toBeDefined();
+    expect(info.id).toBe('gpt-5');
+    expect(info.provider).toBe('openai');
+    expect(info.adapter).toBe('openai-responses');
+    expect(info.contextWindow).toBe(400_000);
+    expect(info.maxOutput).toBe(128_000);
+  });
+
+  it('should let providerConfig override beat models.dev', () => {
+    const info = getModelInfo('gpt-5', { contextWindow: 50_000, maxOutput: 8_000 });
+    expect(info.contextWindow).toBe(50_000);
+    expect(info.maxOutput).toBe(8_000);
+  });
+
+  it('should return undefined for unknown model with no override + no snapshot data', () => {
+    expect(getModelInfo('totally-unknown-model')).toBeUndefined();
+  });
+
+  it('should return registry-only info when the model is not in models.dev', () => {
+    // gpt-5-mini is in MODEL_REGISTRY but not in our test snapshot.
+    const info = getModelInfo('gpt-5-mini');
+    expect(info).toBeDefined();
+    expect(info.id).toBe('gpt-5-mini');
+    expect(info.provider).toBe('openai');
+    expect(info.contextWindow).toBeUndefined();
+    expect(info.maxOutput).toBeUndefined();
   });
 });

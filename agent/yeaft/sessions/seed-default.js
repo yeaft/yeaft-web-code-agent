@@ -1,14 +1,14 @@
 /**
- * seed-default.js — First-boot default group (architecture §10 D1).
+ * seed-default.js — First-boot default session (architecture §10 D1).
  *
- * When multi-VP mode is first enabled for a user, seed a default group with
- * the provided roster (typically `[defaultVpId]`). Idempotent: if the group
+ * When multi-VP mode is first enabled for a user, seed a default session with
+ * the provided roster (typically `[defaultVpId]`). Idempotent: if the session
  * already exists on disk, returns the existing handle without overwriting.
  *
  * Separation from group-store.createSession:
  *   - createSession throws on duplicate; seed returns the existing handle.
- *   - seed picks a stable id `grp_default` so UI can deep-link to it.
- *   - seed is the only place that writes the "default group exists" side
+ *   - seed picks a stable id `session_default` so UI can deep-link to it.
+ *   - seed is the only place that writes the "default session exists" side
  *     effect during the bootstrap flow.
  */
 
@@ -16,22 +16,22 @@ import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { openSession, createSession, loadSessionMeta } from './session-store.js';
-import { seedSummaryIfMissingSync } from '../memory/store-v2.js';
+import { seedSummaryIfMissingSync } from '../memory/store.js';
 
-export const DEFAULT_SESSION_ID = 'grp_default';
+export const DEFAULT_SESSION_ID = 'session_default';
 
 /**
  * Default memory root used when callers don't pass `options.memoryRoot`.
- * See `groups/group-crud.js` and `vp/vp-crud.js` for the same default;
+ * See `sessions/session-crud.js` and `vp/vp-crud.js` for the same default;
  * production code threads `<yeaftDir>/memory` through to keep test/prod
  * isolation honest.
  */
 const DEFAULT_MEMORY_ROOT = join(homedir(), '.yeaft', 'memory');
 
 /**
- * Build the default-group seed summary body. Pulled into a helper so
+ * Build the default-session seed summary body. Pulled into a helper so
  * tests can pin the exact format. Mirrors `buildSessionSeedSummary` in
- * `group-crud.js` shape, with the "Default group" wording reserved for
+ * `session-crud.js` shape, with the "Default session" wording reserved for
  * the bootstrap path.
  *
  * @param {{ name?: string, roster?: string[], defaultVpId?: string|null }} spec
@@ -42,7 +42,7 @@ export function buildDefaultSessionSeedSummary(spec) {
   const roster = Array.isArray(spec?.roster) ? spec.roster : [];
   const defaultVpId = spec?.defaultVpId || null;
   const lines = [`# ${name}`, ''];
-  lines.push(`Default group with ${roster.length} member${roster.length === 1 ? '' : 's'}.`);
+  lines.push(`Default session with ${roster.length} member${roster.length === 1 ? '' : 's'}.`);
   if (roster.length > 0) lines.push('', `**Members:** ${roster.join(', ')}`);
   if (defaultVpId) lines.push('', `**Default VP:** ${defaultVpId}`);
   return lines.join('\n').trim();
@@ -77,7 +77,7 @@ export function seedDefaultSession(yeaftDir, spec = {}) {
   });
 
   // Seed Layer-A resident summary so the very first session — even on a
-  // brand-new install where only `grp_default` exists — renders a non-
+  // brand-new install where only `session_default` exists — renders a non-
   // empty memory section in the system prompt. No-op once Dream-v2 (or
   // createSessionFromSpec) has already written one. Best-effort: a memory-
   // root permission failure must NOT break the bootstrap flow.

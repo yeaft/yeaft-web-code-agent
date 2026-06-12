@@ -4,7 +4,7 @@
  * supplied. Bug history (visible as `router_unavailable` in the UI):
  *
  *   1. v0.1.598 wired `createRouter` into buildVpQueryOpts when a
- *      coordinator is supplied — but only the `yeaft_group_chat` path
+ *      coordinator is supplied — but only the `yeaft_session_chat` path
  *      supplied one. The legacy `yeaft_chat` path (no group) silently
  *      dropped ctx.router, and any `route_forward` call from a VP
  *      exploded with `router_unavailable`.
@@ -12,7 +12,7 @@
  *   2. The product semantics are "Yeaft is a single conversation backed
  *      by grp_default" — there is no legitimate path where the user is
  *      in Yeaft but no group exists. v0.1.671 ensured the frontend
- *      ALWAYS sends `yeaft_group_chat` with `grp_default`; v0.1.672 then
+ *      ALWAYS sends `yeaft_session_chat` with `grp_default`; v0.1.672 then
  *      deleted the `yeaft_chat` / `handleYeaftChat` legacy path entirely.
  *      So `route_forward` ALWAYS has a router to call into.
  *
@@ -91,4 +91,18 @@ describe('buildVpQueryOpts — router wiring invariant', () => {
     expect(out).toBeDefined();
     expect(out.router).toBeUndefined();
   });
+  it('sets collaboration tool policy from group roster size', () => {
+    const singleCoord = {
+      ingest: vi.fn(() => ({ dispatched: [], fallback: null })),
+      group: {
+        getMeta: () => ({ id: 'grp_solo', defaultVpId: 'linus', roster: ['linus'] }),
+      },
+    };
+    const single = buildVpQueryOpts({ vpId: 'linus', sessionCoordinator: singleCoord, sessionId: 'grp_solo' });
+    expect(single.collabToolPolicy).toBe('single-vp');
+
+    const multi = buildVpQueryOpts({ vpId: 'linus', sessionCoordinator: makeCoordinator(), sessionId: 'grp_default' });
+    expect(multi.collabToolPolicy).toBe('multi-vp');
+  });
+
 });

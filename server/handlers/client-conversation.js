@@ -1,11 +1,12 @@
 import { randomUUID } from 'crypto';
 import { CONFIG } from '../config.js';
-import { sessionDb, messageDb, userDb } from '../database.js';
+import { sessionDb, messageDb, userDb, yeaftSessionDb } from '../database.js';
 import { agents, pendingFiles } from '../context.js';
 import {
   sendToWebClient, forwardToAgent,
   broadcastAgentList, verifyConversationOwnership, verifyAgentOwnership
 } from '../ws-utils.js';
+import { routeSessionPin } from './session-pin-router.js';
 
 function emptyYeaftToolStats(reason = '') {
   const payload = {
@@ -18,6 +19,26 @@ function emptyYeaftToolStats(reason = '') {
   return payload;
 }
 
+/**
+ * Review C1 (Fowler): the frontend stamps a `clientMessageId` on
+ * every `chat` payload (see web/stores/helpers/conversation.js#
+ * makeClientMessageId). The server is REQUIRED to round-trip the
+ * id unchanged, but must NOT trust its shape — a hostile client
+ * could otherwise stash a 10 MB string on `convInfo`, persist it
+ * to the messages.metadata column, broadcast it to every web
+ * subscriber, and replay it on every history hydrate.
+ *
+ * Format constraint matches `crypto.randomUUID()` output prefixed
+ * with `cm_`: `cm_<8>-<4>-<4>-<4>-<12>` (36 hex chars + 4 dashes
+ * + 3 fixed bytes = 39 chars total inside the prefix → 42 total).
+ * Allow a tolerant superset for forward-compat (any id-safe
+ * character, capped at 80 chars) so a future format bump doesn't
+ * have to ship in lockstep.
+ */
+function isValidClientMessageId(s) {
+  return typeof s === 'string' && /^cm_[a-zA-Z0-9_-]{1,80}$/.test(s);
+}
+
 function skippedYeaftDreamResult(msg, reason) {
   const payload = {
     type: 'yeaft_dream_result',
@@ -27,7 +48,7 @@ function skippedYeaftDreamResult(msg, reason) {
     trigger: msg?.trigger || 'manual',
     error: null,
   };
-  if (msg?.groupId) payload.groupId = msg.groupId;
+  if (msg?.sessionId) payload.sessionId = msg.sessionId;
   if (msg?.vpId) payload.vpId = msg.vpId;
   return payload;
 }
@@ -104,6 +125,31 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         }
       }
       await broadcastAgentList();
+      // Yeaft sessions hydrate — send the user's full cross-agent
+      // yeaft session list before any agent comes online so the
+      // unified sidebar can render the list immediately on reload.
+      // Grouped by agentId so the web sessions store can apply each
+      // slice via its existing per-agent applySnapshot path.
+      if (client.userId) {
+        try {
+          const allRows = yeaftSessionDb.getByUser(client.userId);
+          const byAgent = {};
+          for (const row of allRows) {
+            if (!row.agentId) continue;
+            (byAgent[row.agentId] ||= []).push(row);
+          }
+          for (const [agentId, sessions] of Object.entries(byAgent)) {
+            await sendToWebClient(client, {
+              type: 'yeaft_session_hydrate',
+              agentId,
+              sessions,
+              fromDb: true,
+            });
+          }
+        } catch (e) {
+          console.warn('[Server] yeaft session hydrate failed:', e?.message || e);
+        }
+      }
       break;
 
     case 'select_agent': {
@@ -257,16 +303,41 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
 
     case 'pin_session':
     case 'unpin_session': {
-      const pinConvId = msg.conversationId;
-      if (!pinConvId) break;
-      if (!CONFIG.skipAuth && !verifyConversationOwnership(pinConvId, client.userId)) break;
-      const isPinned = msg.type === 'pin_session';
+      // fix-yeaft-session-list-and-menu: yeaft sessions live in a
+      // separate `yeaft_sessions` table (with its own user_id column),
+      // not in `sessions`. The pure router decides which table owns
+      // the id and whether the caller is authorized; this handler is
+      // only responsible for executing the chosen DB write + replying.
+      // Tests cover the router directly (see session-pin-router.js).
+      const route = routeSessionPin(
+        {
+          getYeaftRow: (id) => yeaftSessionDb.get(id),
+          verifyChatOwnership: (id, userId) => verifyConversationOwnership(id, userId),
+          skipAuth: CONFIG.skipAuth,
+        },
+        client,
+        msg,
+      );
+      if (route.kind === 'noop') break;
+      if (route.kind === 'denied') {
+        if (route.reason === 'yeaft-foreign') {
+          console.warn(`[Security] User ${client.userId} attempted to pin yeaft session ${route.id} they don't own`);
+        }
+        break;
+      }
+      if (route.kind === 'yeaft') {
+        try { yeaftSessionDb.setPinned(route.id, route.isPinned); }
+        catch (e) { console.warn(`[Server] yeaftSessionDb.setPinned failed for ${route.id}:`, e?.message || e); }
+        await sendToWebClient(client, { type: 'session_pinned', conversationId: route.id, pinned: route.isPinned });
+        break;
+      }
+      // route.kind === 'chat'
       try {
-        sessionDb.setPinned(pinConvId, isPinned);
+        sessionDb.setPinned(route.id, route.isPinned);
         // If pinning, also ensure session is active (reactivate if it was auto-deactivated)
-        if (isPinned) sessionDb.setActive(pinConvId, true);
+        if (route.isPinned) sessionDb.setActive(route.id, true);
       } catch (e) { /* ignore */ }
-      await sendToWebClient(client, { type: 'session_pinned', conversationId: pinConvId, pinned: isPinned });
+      await sendToWebClient(client, { type: 'session_pinned', conversationId: route.id, pinned: route.isPinned });
       break;
     }
 
@@ -293,7 +364,11 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
             const limit = msg.limit || 100;
             if (msg.beforeId) {
               messages = messageDb.getBeforeId(msg.conversationId, msg.beforeId, limit);
-            } else if (msg.afterMessageId) {
+            } else if (msg.afterMessageId !== undefined && msg.afterMessageId !== null) {
+              // perf-chat-session-switch-cache: explicit nullish check so a
+              // legitimate cursor of 0 (unlikely with AUTOINCREMENT but no
+              // reason to encode the assumption here) doesn't fall through
+              // to the cold-load branch and re-send the entire window.
               messages = messageDb.getAfterId(msg.conversationId, msg.afterMessageId);
             } else {
               messages = messageDb.getRecent(msg.conversationId, limit);
@@ -386,6 +461,24 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       // 暂存 expertSelections 供 agent-output 保存 user 消息时使用
       if (msg.expertSelections?.length > 0 && convInfo) {
         convInfo._pendingExperts = msg.expertSelections;
+      }
+
+      // fix-usermsg-dup: stash the client-stamped id so agent-output can
+      // round-trip it on the `claude_output` user echo (it's persisted in
+      // the DB row's metadata too so the post-refresh `sync_messages_result`
+      // payload carries the same dedup key). Without this, the echo path
+      // falls back to content-equality dedup, which loses races after page
+      // refresh (the optimistic add competes with the DB-sourced row, both
+      // sharing the same text but neither sharing a stable id).
+      //
+      // Review C1 (Fowler): validate at the trust boundary. The id is
+      // opaque to the server but it lands in the DB, the WS broadcast,
+      // and the agent's history rebuild — a hostile client must not be
+      // able to inject 10 MB strings or SQL-looking payloads. The
+      // dedup gate falls back to content-equality cleanly if we drop
+      // an invalid id, so failed validation degrades gracefully.
+      if (msg.clientMessageId && convInfo && isValidClientMessageId(msg.clientMessageId)) {
+        convInfo._pendingClientMessageId = msg.clientMessageId;
       }
 
       // 用用户输入的 prompt 更新会话标题（跳过用户自定义标题的会话）
@@ -664,7 +757,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       await forwardToAgent(histAgentId, {
         type: 'yeaft_load_history',
         limit: msg.limit,
-        groupId: msg.groupId || null,
+        sessionId: msg.sessionId || null,
       });
       break;
     }
@@ -676,7 +769,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       if (!await checkAgentAccess(moreAgentId)) return;
       await forwardToAgent(moreAgentId, {
         type: 'yeaft_load_more_history',
-        groupId: msg.groupId || null,
+        sessionId: msg.sessionId || null,
         beforeSeq: typeof msg.beforeSeq === 'number' ? msg.beforeSeq : null,
         turns: typeof msg.turns === 'number' ? msg.turns : 20,
       });
@@ -786,6 +879,16 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
             await sendToWebClient(client, emptyYeaftToolStats('No agent selected.'));
           } else if (relayType === 'yeaft_dream_trigger') {
             await sendToWebClient(client, skippedYeaftDreamResult(msg, 'no-agent-selected'));
+          } else {
+            // fix-session-restore-modal-unify: every prior swallow was
+            // invisible — the user-facing symptom (e.g. VP roster stuck
+            // on "加载中...") doesn't point back to "the server has no
+            // agent to route this to." A WARN log is one grep away
+            // from the root cause next time this happens.
+            console.warn(
+              `[Server] swallowed yeaft message ${relayType} (no agent resolved)`
+              + ` userId=${client.userId || '?'}`
+            );
           }
           return true; // swallow silently for legacy fire-and-forget messages
         }
@@ -813,7 +916,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         const { agentId: _discard, ...rest } = msg;
         rest.type = relayType;
 
-        if (rest.type === 'yeaft_group_chat' && !rest.id) {
+        if (rest.type === 'yeaft_session_chat' && !rest.id) {
           rest.id = `u_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
         }
 

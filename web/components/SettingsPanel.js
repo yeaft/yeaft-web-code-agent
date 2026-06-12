@@ -5,10 +5,11 @@ import DashboardTab from './DashboardTab.js';
 import LlmTab from './LlmTab.js';
 import VpCrudPanel from './VpCrudPanel.js';
 import SearchSettingsTab from './SearchSettingsTab.js';
+import McpTab from './McpTab.js';
 
 export default {
   name: 'SettingsPanel',
-  components: { ProxyTab, DashboardTab, LlmTab, VpCrudPanel, SearchSettingsTab },
+  components: { ProxyTab, DashboardTab, LlmTab, VpCrudPanel, SearchSettingsTab, McpTab },
   props: {
     visible: Boolean,
     initialTab: { type: String, default: '' },
@@ -258,10 +259,23 @@ export default {
                     </div>
                   </div>
                 </div>
+                <label class="sp-toggle-row">
+                  <span class="sp-toggle-info">
+                    <span class="sp-toggle-name">{{ $t('settings.general.crewMode') }}</span>
+                    <span class="sp-toggle-desc">{{ $t('settings.general.crewModeDesc') }}</span>
+                  </span>
+                  <button
+                    class="sp-toggle"
+                    :class="{ active: chatStore.crewModeEnabled }"
+                    @click="chatStore.setCrewModeEnabled(!chatStore.crewModeEnabled)"
+                    role="switch"
+                    :aria-checked="chatStore.crewModeEnabled"
+                  >
+                    <span class="sp-toggle-knob"></span>
+                  </button>
+                </label>
               </div>
             </div>
-
-            <!-- Invitations (admin only) -->
             <div v-show="activeTab === 'invitations'" class="settings-pane" v-if="authStore.role === 'admin'">
               <div class="sp-group">
                 <div class="sp-row">
@@ -383,6 +397,9 @@ export default {
               </div>
               <div v-show="yeaftSubTab === 'search'" class="sp-subpane">
                 <SearchSettingsTab @message="onLlmMessage" />
+              </div>
+              <div v-show="yeaftSubTab === 'mcp'" class="sp-subpane">
+                <McpTab @message="onLlmMessage" />
               </div>
             </div>
 
@@ -554,6 +571,7 @@ export default {
         { key: 'llm', label: this.$t('settings.yeaft.tabs.llm') },
         { key: 'vp', label: this.$t('settings.yeaft.tabs.vp') },
         { key: 'search', label: this.$t('settings.yeaft.tabs.search') },
+        { key: 'mcp', label: this.$t('settings.yeaft.tabs.mcp') },
       ];
     },
     languageOptions() {

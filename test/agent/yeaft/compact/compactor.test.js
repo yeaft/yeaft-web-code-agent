@@ -401,4 +401,127 @@ describe('Compactor', () => {
       expect(c._states.size).toBe(0);
     });
   });
+
+  // ─── getTriggerRatio (2026-06-09: post-turn 70 % compact knob) ───────
+  //
+  // The user-stated requirement: "Post turn compact 的逻辑必须要有，不过
+  // 是按照是否超过 model context 70% 这一个约束来处理的". Compactor's
+  // `getTriggerRatio` injector is the in-process knob that enforces that.
+  // The thresholds below combine `getMaxContextTokens` (the model's true
+  // context window — GPT-5 256K vs Claude 200K) with the ratio. Defaults
+  // to 0.7; values outside (0, 1) fall back to the library default.
+  //
+  // Sizing strategy for these tests:
+  //   - `makeRatioHistory(targetTokens)` spreads `targetTokens` worth of
+  //     content across 10 user/assistant turn pairs (so `findCutIndex`
+  //     can fold while preserving the recent-3 tail — fewer than 4 turns
+  //     would short-circuit `compactHistory` to compacted:false regardless
+  //     of the trigger).
+  //   - estimateTokens = ceil(chars / 4), so each turn-pair body is
+  //     `'x' × (targetTokens / 20 × 4)` chars to hit roughly `targetTokens`
+  //     total across 20 messages.
+  //   - MAX_CTX = 100_000 for round-number thresholds.
+  describe('getTriggerRatio (post-turn 70 % knob)', () => {
+    function makeRatioHistory(targetTokens) {
+      // 10 turn-pairs = 20 messages. Per-message char budget keeps total
+      // tokens close to `targetTokens`. Round up so the trigger boundary
+      // is unambiguous (off-by-one against the threshold would make the
+      // test flaky against the > comparison in shouldCompactHistory).
+      //
+      // Each user message must have DISTINCT canonical content — turn-utils'
+      // countTurns collapses repeated user content into one turn, and
+      // findCutIndex needs at least `keepRecent` (=3) distinct turns to
+      // produce a foldable cut. Prefixing with `i` makes each turn unique.
+      const PAIRS = 10;
+      const MSG_PER_PAIR = 2;
+      const charsPerMsg = Math.ceil((targetTokens * 4) / (PAIRS * MSG_PER_PAIR));
+      const out = [];
+      for (let i = 0; i < PAIRS; i += 1) {
+        const prefix = `turn-${i}: `;
+        const pad = Math.max(0, charsPerMsg - prefix.length);
+        out.push({ role: 'user',      content: prefix + 'u'.repeat(pad) });
+        out.push({ role: 'assistant', content: `ack-${i}: ` + 'a'.repeat(pad) });
+      }
+      return out;
+    }
+    const MAX_CTX = 100_000;
+
+    it('triggers at 75 % of model context when ratio is 0.7', async () => {
+      const summarize = vi.fn(async () => 'OK');
+      const c = new Compactor({
+        summarize,
+        getMaxContextTokens: () => MAX_CTX,
+        getTriggerRatio: () => 0.7,
+      });
+      // 75 % → ~75K tokens → above 70K threshold.
+      const { handle, cell } = makeHandle(makeRatioHistory(75_000));
+      const before = cell.value;
+
+      c.scheduleAfterTurn('grp', handle);
+      await c.awaitInFlight('grp');
+
+      expect(summarize).toHaveBeenCalledTimes(1);
+      expect(cell.value).not.toBe(before);
+    });
+
+    it('does NOT trigger at 65 % of model context when ratio is 0.7', async () => {
+      const summarize = vi.fn(async () => 'NEVER');
+      const c = new Compactor({
+        summarize,
+        getMaxContextTokens: () => MAX_CTX,
+        getTriggerRatio: () => 0.7,
+      });
+      // 65 % → ~65K tokens → below 70K threshold.
+      const { handle, cell } = makeHandle(makeRatioHistory(65_000));
+      const before = cell.value;
+
+      c.scheduleAfterTurn('grp', handle);
+      await c.awaitInFlight('grp');
+
+      // Precheck triaged out — no LLM call, no swap.
+      expect(summarize).not.toHaveBeenCalled();
+      expect(cell.value).toBe(before);
+    });
+
+    it('honours a configurable ratio (0.5 → trigger at 55 %)', async () => {
+      const summarize = vi.fn(async () => 'OK');
+      const c = new Compactor({
+        summarize,
+        getMaxContextTokens: () => MAX_CTX,
+        getTriggerRatio: () => 0.5,
+      });
+      // 55 % → ~55K tokens. At 0.7 this would NOT trigger; at 0.5 it does.
+      const { handle, cell } = makeHandle(makeRatioHistory(55_000));
+      const before = cell.value;
+
+      c.scheduleAfterTurn('grp', handle);
+      await c.awaitInFlight('grp');
+
+      expect(summarize).toHaveBeenCalledTimes(1);
+      expect(cell.value).not.toBe(before);
+    });
+
+    it('live-reads the ratio so a config change takes effect without rebuild', async () => {
+      const summarize = vi.fn(async () => 'OK');
+      let ratio = 0.7;
+      const c = new Compactor({
+        summarize,
+        getMaxContextTokens: () => MAX_CTX,
+        getTriggerRatio: () => ratio,
+      });
+
+      // First pass at 0.7 with a 60 % history → no trigger.
+      const a = makeHandle(makeRatioHistory(60_000));
+      c.scheduleAfterTurn('grp-a', a.handle);
+      await c.awaitInFlight('grp-a');
+      expect(summarize).not.toHaveBeenCalled();
+
+      // Live-flip ratio to 0.5. Same history shape → now triggers.
+      ratio = 0.5;
+      const b = makeHandle(makeRatioHistory(60_000));
+      c.scheduleAfterTurn('grp-b', b.handle);
+      await c.awaitInFlight('grp-b');
+      expect(summarize).toHaveBeenCalledTimes(1);
+    });
+  });
 });

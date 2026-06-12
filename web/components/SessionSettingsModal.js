@@ -196,7 +196,7 @@ export default {
       this.announcementError = '';
       try {
         const res = await this.chat.sessionCrudRequest('update', {
-          groupId: this.groupId,
+          sessionId: this.groupId,
           patch: { announcement: this.announcementDraft },
         });
         if (!res || !res.ok) {
@@ -216,7 +216,7 @@ export default {
       this.renameError = '';
       try {
         const res = await this.chat.sessionCrudRequest('rename', {
-          groupId: this.groupId,
+          sessionId: this.groupId,
           name: next,
         });
         if (!res || !res.ok) {
@@ -244,7 +244,7 @@ export default {
       this.membersError = '';
       try {
         const op = checked ? 'add_member' : 'remove_member';
-        const res = await this.chat.sessionCrudRequest(op, { groupId: this.groupId, vpId });
+        const res = await this.chat.sessionCrudRequest(op, { sessionId: this.groupId, vpId });
         if (!res || !res.ok) {
           const code = (res && res.error && res.error.code) || 'unknown';
           const message = (res && res.error && res.error.message) || code;
@@ -254,7 +254,7 @@ export default {
           // Surface failures inline like the primary toggle — silent
           // retries hide bugs in the agent's roster mutator.
           const defRes = await this.chat.sessionCrudRequest('set_default_vp', {
-            groupId: this.groupId, vpId,
+            sessionId: this.groupId, vpId,
           });
           if (defRes && !defRes.ok) {
             const code2 = (defRes.error && defRes.error.code) || 'unknown';
@@ -272,7 +272,7 @@ export default {
       this.membersError = '';
       try {
         const res = await this.chat.sessionCrudRequest('set_default_vp', {
-          groupId: this.groupId, vpId,
+          sessionId: this.groupId, vpId,
         });
         if (!res || !res.ok) {
           const code = (res && res.error && res.error.code) || 'unknown';
@@ -302,7 +302,7 @@ export default {
       this.deleteBusy = true;
       this.deleteError = '';
       try {
-        const res = await this.chat.sessionCrudRequest('delete', { groupId: this.groupId });
+        const res = await this.chat.sessionCrudRequest('delete', { sessionId: this.groupId });
         if (!res || !res.ok) {
           const code = (res && res.error && res.error.code) || 'unknown';
           const message = (res && res.error && res.error.message) || code;
@@ -419,7 +419,7 @@ export default {
                     type="button"
                     class="group-settings-default-star"
                     :class="{ 'is-on': defaultVpId === vp.vpId }"
-                    :title="$t('yeaft.session.wizard.defaultVpHint')"
+                    :title="$t('yeaft.session.create.defaultVpHint')"
                     :aria-pressed="defaultVpId === vp.vpId"
                     :disabled="membersBusy || defaultVpId === vp.vpId"
                     @click.stop="setDefault(vp.vpId)"

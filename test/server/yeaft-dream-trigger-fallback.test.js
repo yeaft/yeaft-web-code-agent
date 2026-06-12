@@ -59,7 +59,7 @@ describe('client-conversation.js — yeaft_dream_trigger fallback', () => {
   it('returns a scoped skipped result when no agent is selected', async () => {
     const handled = await handleClientConversation('client-1', client, {
       type: 'yeaft_dream_trigger',
-      groupId: 'grp_demo',
+      sessionId: 'grp_demo',
     }, vi.fn(async () => true));
 
     expect(handled).toBe(true);
@@ -68,7 +68,7 @@ describe('client-conversation.js — yeaft_dream_trigger fallback', () => {
       clientId: 'client-1',
       envelope: {
         type: 'yeaft_dream_result',
-        groupId: 'grp_demo',
+        sessionId: 'grp_demo',
         success: false,
         skipped: true,
         skippedReason: 'no-agent-selected',
@@ -81,7 +81,7 @@ describe('client-conversation.js — yeaft_dream_trigger fallback', () => {
   it('returns a skipped result when the requested agent is not accessible', async () => {
     const handled = await handleClientConversation('client-1', client, {
       type: 'yeaft_dream_trigger',
-      groupId: 'grp_demo',
+      sessionId: 'grp_demo',
       agentId: 'agent-1',
     }, vi.fn(async () => false));
 
@@ -89,7 +89,7 @@ describe('client-conversation.js — yeaft_dream_trigger fallback', () => {
     expect(_forwarded).toHaveLength(0);
     expect(_sent[0].envelope).toMatchObject({
       type: 'yeaft_dream_result',
-      groupId: 'grp_demo',
+      sessionId: 'grp_demo',
       success: false,
       skipped: true,
       skippedReason: 'agent-not-available',
@@ -103,7 +103,7 @@ describe('client-conversation.js — yeaft_dream_trigger fallback', () => {
 
     const handled = await handleClientConversation('client-1', client, {
       type: 'yeaft_dream_trigger',
-      groupId: 'grp_demo',
+      sessionId: 'grp_demo',
       agentId: 'agent-1',
     }, vi.fn(async () => true));
 
@@ -111,7 +111,7 @@ describe('client-conversation.js — yeaft_dream_trigger fallback', () => {
     expect(_forwarded).toHaveLength(0);
     expect(_sent[0].envelope).toMatchObject({
       type: 'yeaft_dream_result',
-      groupId: 'grp_demo',
+      sessionId: 'grp_demo',
       success: false,
       skipped: true,
       skippedReason: 'agent-offline',
@@ -125,7 +125,7 @@ describe('client-conversation.js — yeaft_dream_trigger fallback', () => {
 
     const handled = await handleClientConversation('client-1', client, {
       type: 'yeaft_dream_trigger',
-      groupId: 'grp_demo',
+      sessionId: 'grp_demo',
       agentId: 'agent-1',
     }, vi.fn(async () => true));
 
@@ -135,7 +135,7 @@ describe('client-conversation.js — yeaft_dream_trigger fallback', () => {
       agentId: 'agent-1',
       msg: {
         type: 'yeaft_dream_trigger',
-        groupId: 'grp_demo',
+        sessionId: 'grp_demo',
       },
     }]);
   });
@@ -146,7 +146,7 @@ describe('client-conversation.js — yeaft_dream_trigger fallback', () => {
 
     const handled = await handleClientConversation('client-1', client, {
       type: 'yeaft_dream_trigger',
-      groupId: 'grp_demo',
+      sessionId: 'grp_demo',
     }, vi.fn(async () => true));
 
     expect(handled).toBe(true);
@@ -155,7 +155,7 @@ describe('client-conversation.js — yeaft_dream_trigger fallback', () => {
       agentId: 'agent-current',
       msg: {
         type: 'yeaft_dream_trigger',
-        groupId: 'grp_demo',
+        sessionId: 'grp_demo',
       },
     }]);
   });

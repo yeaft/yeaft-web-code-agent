@@ -289,6 +289,25 @@ export async function handleAgentSync(agentId, agent, msg) {
       break;
     }
 
+    // Yeaft MCP CRUD result + live-update broadcast. Same generic pass-
+    // through as the search-settings branch above — the payload shape
+    // is documented in web-bridge.js handlers (`handleYeaftMcp*`).
+    case 'yeaft_mcp_list_result':
+    case 'yeaft_mcp_add_result':
+    case 'yeaft_mcp_remove_result':
+    case 'yeaft_mcp_reload_result':
+    case 'yeaft_mcp_updated': {
+      for (const [, client] of webClients) {
+        if (client.authenticated && (CONFIG.skipAuth ||
+          (agent.ownerId && client.userId === agent.ownerId) ||
+          (!agent.ownerId && client.role === 'admin')
+        )) {
+          await sendToWebClient(client, { ...msg, agentId });
+        }
+      }
+      break;
+    }
+
     default:
       return false; // Not handled
   }

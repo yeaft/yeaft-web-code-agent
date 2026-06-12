@@ -111,8 +111,7 @@
 }
 
 .agent-dropdown-restart-btn,
-.agent-dropdown-upgrade-btn,
-.agent-dropdown-yeaft-btn {
+.agent-dropdown-upgrade-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -133,14 +132,8 @@
   color: var(--accent-color, #3b82f6);
 }
 
-.agent-dropdown-yeaft-btn:hover:not(:disabled) {
-  background: rgba(217, 119, 6, 0.1);
-  color: #d97706;
-}
-
 .agent-dropdown-restart-btn:disabled,
-.agent-dropdown-upgrade-btn:disabled,
-.agent-dropdown-yeaft-btn:disabled {
+.agent-dropdown-upgrade-btn:disabled {
   opacity: 0.3;
   cursor: not-allowed;
 }
@@ -1010,6 +1003,13 @@
   font-size: 14px;
   color: var(--text-primary);
   font-weight: 500;
+}
+
+.sp-toggle-desc {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
 }
 
 .sp-toggle-badge {
