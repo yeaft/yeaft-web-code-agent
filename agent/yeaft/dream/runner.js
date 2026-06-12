@@ -10,17 +10,17 @@
  *   for each session with newCount ≥ MIN_NEW_PER_GROUP (auto)
  *                    or > 0 (manual)
  *                    or prior messages in a scoped manual session rerun:
- *       loadDiff()                     via opts.loadGroupDiff(sessionId, sinceId)
+ *       loadDiff()                     via opts.loadSessionDiff(sessionId, sinceId)
  *       applyOverlap()                 via opts.loadOverlapPreamble(...)
  *       segment()                      segmentDiff(...)
- *       triageGroupSegments()          → group-local actions[]
+ *       triageSessionSegments()          → session-local actions[]
  *
  *   mergeByTarget()                    → per-target actions
  *   for each merged target:
  *       applyMergedTarget()            (snapshot + UPDATE/CREATE + atomic write)
  *
  *   bookkeep:
- *     for each processed group:
+ *     for each processed session:
  *       session .dream-state ←
  *         { lastDreamMessageId: tail of real diff,
  *           lastDreamAt: nowIso,
@@ -47,7 +47,7 @@ import {
 } from './limits.js';
 import { readSessionState, writeSessionState, writeDreamError } from './state.js';
 import { segmentDiff, truncateMessage, estimateMessagesTokens } from './segment.js';
-import { triageGroupSegments } from './triage.js';
+import { triageGroupSegments as triageSessionSegments } from './triage.js';
 import { mergeByTarget } from './merge.js';
 import { applyMergedTarget } from './apply.js';
 import { tsForBackup, pruneOldSnapshots } from './snapshot.js';
@@ -55,12 +55,13 @@ import { tsForBackup, pruneOldSnapshots } from './snapshot.js';
 /**
  * @typedef {Object} RunDreamOpts
  * @property {string} root                    — memory root, e.g. ~/.yeaft/memory
- * @property {boolean} [manual=false]         — manual trigger overrides newCount<20 skip
+ * @property {boolean} [manual=false]         — manual trigger overrides newCount threshold skip
  * @property {string[]} [scopeFilter]         — optional: only dream these targets; scoped manual session triggers rerun the current session when there are prior messages but no new cursor delta ('*' allowed)
  * @property {(req: {pass:string, prompt:string, system:string}) => Promise<string>} llm
- * @property {() => Promise<Array<string>>} listSessions   — return all session ids (incl. '_no-group')
- * @property {(sessionId: string) => Promise<number>} countMessages   — total message count for a group
- * @property {(sessionId: string, sinceMessageId: string|null) => Promise<Array<object>>} loadGroupDiff
+ * @property {() => Promise<Array<string>>} listSessions   — return all session ids
+ * @property {(sessionId: string) => Promise<number>} countMessages   — total message count for a session
+ * @property {(sessionId: string, sinceMessageId: string|null) => Promise<Array<object>>} loadSessionDiff
+ * @property {(sessionId: string, sinceMessageId: string|null) => Promise<Array<object>>} [loadGroupDiff] legacy alias for loadSessionDiff
  * @property {(sessionId: string, beforeMessageId: string|null, count: number) => Promise<Array<object>>} loadOverlapPreamble
  * @property {() => Promise<Array<{path:string, summary:string}>>} [listTopicSummaries]
  * @property {(target: string) => Promise<Array<{path:string, summary:string}>>} [siblingTopicsFor]
@@ -80,13 +81,14 @@ export async function runDream(opts) {
   if (!opts.llm) throw new Error('runDream: opts.llm required');
   const limits = { ...DEFAULT_LIMITS, ...(opts.limits || {}) };
   const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : () => {};
+  const loadSessionDiff = opts.loadSessionDiff || opts.loadGroupDiff;
   const nowIso = (opts.nowIso ? opts.nowIso() : new Date().toISOString());
   const ts = tsForBackup(new Date(nowIso));
   const startedAt = Date.now();
 
   onProgress({ phase: 'start', manual: !!opts.manual, ts });
 
-  // 1. enumerate groups
+  // 1. enumerate sessions
   const sessionIds = await safeCall(opts.listSessions, []);
   const filter = Array.isArray(opts.scopeFilter) ? new Set(opts.scopeFilter) : null;
   const sessionFilter = deriveSessionFilter(filter);
@@ -135,7 +137,7 @@ export async function runDream(opts) {
 
     onProgress({ phase: 'load-diff', sessionId });
     const diffCursor = rerunScopedManual ? null : state.lastDreamMessageId;
-    const diffNew = await safeCall(() => opts.loadGroupDiff(sessionId, diffCursor), []);
+    const diffNew = await safeCall(() => loadSessionDiff ? loadSessionDiff(sessionId, diffCursor) : [], []);
     if (!diffNew || diffNew.length === 0) {
       sessionsReport.push({ sessionId, new: newCount, status: 'skipped', reason: 'empty-diff' });
       continue;
@@ -158,7 +160,7 @@ export async function runDream(opts) {
     let actions;
     try {
       const topicSummaries = await resolveTopicSummaries(sessionId);
-      actions = await triageGroupSegments({
+      actions = await triageSessionSegments({
         sessionId,
         segments,
         topicSummaries,

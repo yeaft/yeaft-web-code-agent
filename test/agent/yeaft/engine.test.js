@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, rmSync, mkdtempSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { Engine } from '../../../agent/yeaft/engine.js';
+import { Engine, extractSessionTopicsFromAmsEntries } from '../../../agent/yeaft/engine.js';
 import { AmsRegistry } from '../../../agent/yeaft/memory/ams-registry.js';
 import { writeSummary } from '../../../agent/yeaft/memory/store.js';
 import { NullTrace, DebugTrace } from '../../../agent/yeaft/debug-trace.js';
@@ -881,7 +881,7 @@ describe('Engine', () => {
   });
 
   describe('active scope in system prompt', () => {
-    it('should render session id, VP id, and session members without group label', async () => {
+    it('should render session id, session member, session members, and session topics without legacy labels', async () => {
       mockAdapter.pushResponse([
         { type: 'text_delta', text: 'ok' },
         { type: 'stop', stopReason: 'end_turn' },
@@ -897,6 +897,7 @@ describe('Engine', () => {
         prompt: 'test',
         sessionId: 'session_active',
         sessionMembers: ['vp-omni', 'vp-martin', 'vp-linus'],
+        sessionTopics: ['dream-trigger', 'active-scope'],
         vpPersona: { vpId: 'vp-linus', displayName: 'Linus' },
       })) {
         // consume
@@ -904,11 +905,24 @@ describe('Engine', () => {
 
       const call = mockAdapter.callLog[0];
       expect(call.system).toContain('## active_scope');
-      expect(call.system).toContain('session: session_active');
-      expect(call.system).toContain('vp: vp-linus');
-      expect(call.system).toContain('members: vp-omni, vp-martin, vp-linus');
-      expect(call.system).not.toContain('group: session_active');
+      expect(call.system).toContain('session_id: session_active');
+      expect(call.system).toContain('session_member: vp-linus');
+      expect(call.system).toContain('session_members: vp-omni, vp-martin, vp-linus');
+      expect(call.system).toContain('session_topics: dream-trigger, active-scope');
+      expect(call.system).not.toMatch(/^group:/m);
+      expect(call.system).not.toMatch(/^vp:/m);
+      expect(call.system).not.toMatch(/^members:/m);
     });
+
+    it('should derive session topics from AMS/recall topic scopes', () => {
+      expect(extractSessionTopicsFromAmsEntries('session_active', [
+        { scope: 'sessions/session_active/topic/dream/trigger', content: 'Dream trigger notes' },
+        { scope: 'sessions/other/topic/ignored', content: 'Wrong session' },
+        { scope: 'sessions/session_active/vp/vp-linus', content: 'Not a topic' },
+        { scope: 'sessions/session_active/topic/dream/trigger', content: 'Duplicate' },
+      ])).toEqual(['dream/trigger']);
+    });
+
   });
 
   describe('language in system prompt', () => {

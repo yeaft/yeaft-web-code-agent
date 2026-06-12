@@ -3,20 +3,20 @@
  *
  * Pure-code stage between Triage and Apply.
  *
- * Triage emits per-group action lists; the runner needs to flip that
+ * Triage emits per-session action lists; the runner needs to flip that
  * into a per-target source list so Apply runs once per target rather
- * than once per (group × target) pair. (User scope in particular would
+ * than once per (session × target) pair. (User scope in particular would
  * be rewritten dozens of times if we didn't merge.)
  *
- * Input shape (one entry per group that crossed the newCount threshold):
+ * Input shape (one entry per session that crossed the newCount threshold):
  *
  *   [
  *     {
  *       sessionId: 'g-eng',
- *       diff: [<message>, ...],            // the per-group source diff
+ *       diff: [<message>, ...],            // the per-session source diff
  *                                          // (already truncated/segmented if needed)
  *       actions: [
- *         { kind: 'update', scope: 'group/g-eng' },
+ *         { kind: 'update', scope: 'sessions/s-eng' },
  *         { kind: 'update', scope: 'vp/zhang-san' },
  *         { kind: 'update', scope: 'user' },
  *         { kind: 'create', scope: 'topic/life/parenting' },
@@ -50,7 +50,7 @@
  */
 
 /**
- * Merge per-group triage outputs into per-target apply units.
+ * Merge per-session triage outputs into per-target apply units.
  *
  * @param {Array<{ sessionId: string, diff: any, actions: Array<{ kind: 'update'|'create', scope: string }> }>} groupTriages
  * @returns {Array<{ target: string, kind: 'update'|'create', sources: Array<{ sessionId: string, diff: any }> }>}

@@ -31,7 +31,7 @@ describe('buildRunDreamOpts session conversation wiring', () => {
 
     await expect(opts.listSessions()).resolves.toEqual(['s-live']);
     await expect(opts.countMessages('s-live')).resolves.toBe(2);
-    await expect(opts.loadGroupDiff('s-live', 'm0001')).resolves.toEqual([
+    await expect(opts.loadSessionDiff('s-live', 'm0001')).resolves.toEqual([
       { id: 'm0002', role: 'assistant', body: 'noted, I will keep patches small', vpId: 'vp-linus' },
     ]);
     await expect(opts.loadOverlapPreamble('s-live', 'm0002', 1)).resolves.toEqual([
@@ -47,7 +47,7 @@ describe('buildRunDreamOpts session conversation wiring', () => {
     const opts = buildRunDreamOpts(fakeSession(testDir));
 
     await expect(opts.countMessages('s-live')).resolves.toBe(3);
-    await expect(opts.loadGroupDiff('s-live', 'm0002')).resolves.toEqual([
+    await expect(opts.loadSessionDiff('s-live', 'm0002')).resolves.toEqual([
       { id: 'm0003', role: 'user', body: 'new hot message' },
     ]);
     await expect(opts.loadOverlapPreamble('s-live', 'm0003', 2)).resolves.toEqual([
@@ -63,7 +63,7 @@ describe('buildRunDreamOpts session conversation wiring', () => {
 
     await expect(opts.listSessions()).resolves.toEqual(['s-legacy']);
     await expect(opts.countMessages('s-legacy')).resolves.toBe(1);
-    await expect(opts.loadGroupDiff('s-legacy', null)).resolves.toEqual([
+    await expect(opts.loadSessionDiff('s-legacy', null)).resolves.toEqual([
       { id: 'm0001', role: 'user', body: 'legacy data' },
     ]);
   });
@@ -89,6 +89,27 @@ describe('buildRunDreamOpts session conversation wiring', () => {
     expect(result.targets.every(t => t.status === 'done')).toBe(true);
     expect(events).toContainEqual(expect.objectContaining({ phase: 'done', sessions: 1 }));
   });
+
+
+  it('keeps the legacy loadGroupDiff alias working for old callers', async () => {
+    writeSessionMessage(testDir, 's-live', 'm0001', 'user', 'legacy alias still works');
+
+    await runDream({
+      root: join(testDir, 'memory'),
+      manual: true,
+      listSessions: async () => ['s-live'],
+      countMessages: async () => 1,
+      loadGroupDiff: async () => [{ id: 'm0001', role: 'user', body: 'legacy alias still works' }],
+      loadOverlapPreamble: async () => [],
+      llm: async req => {
+        if (String(req.pass).startsWith('triage')) return JSON.stringify([{ kind: 'update', scope: 'sessions/s-live', evidence: ['m0001'] }]);
+        return JSON.stringify({ memory_md: '# Memory\nlegacy alias still works', summary_md: 'legacy alias still works' });
+      },
+      limits: { MIN_NEW_PER_GROUP: 1 },
+      nowIso: () => '2026-06-12T00:00:00.000Z',
+    });
+  });
+
 });
 
 function fakeSession(yeaftDir) {

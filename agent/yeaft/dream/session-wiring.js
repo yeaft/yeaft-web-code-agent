@@ -48,7 +48,7 @@ import { DREAM_NUDGE_AFTER_MESSAGES, DREAM_INTERVAL_HOURS } from './limits.js';
 
 /**
  * Build the per-call options for runDream. Pure: takes a session and returns
- * the closures runDream needs (listSessions, countMessages, loadGroupDiff, etc.).
+ * the closures runDream needs (listSessions, countMessages, loadSessionDiff, etc.).
  *
  * @param {Object} session  — the live Session object from loadSession()
  * @param {(event: object) => void} [onProgress]
@@ -74,7 +74,7 @@ export function buildRunDreamOpts(session, onProgress) {
       try { return loadSessionConversationMessages([sessionConversationsRoot, legacySessionConversationsRoot], sessionId).length; }
       catch { return 0; }
     },
-    loadGroupDiff: async (sessionId, sinceId) => {
+    loadSessionDiff: async (sessionId, sinceId) => {
       try {
         const messages = loadSessionConversationMessages([sessionConversationsRoot, legacySessionConversationsRoot], sessionId);
         const out = [];

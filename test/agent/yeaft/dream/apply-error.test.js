@@ -24,7 +24,8 @@ describe('Dream apply diagnostics', () => {
       manual: true,
       listSessions: async () => ['s-live'],
       countMessages: async () => 1,
-      loadGroupDiff: async () => [{ id: 'm0001', role: 'user', body: 'remember malformed output diagnostics' }],
+      loadSessionDiff: async () => [{ id: 'm0001', role: 'user', body: 'remember malformed output diagnostics' }],
+      loadOverlapPreamble: async () => [],
       llm: async req => {
         if (String(req.pass).startsWith('triage')) return '{}';
         return 'not json: provider returned prose instead of the requested object';

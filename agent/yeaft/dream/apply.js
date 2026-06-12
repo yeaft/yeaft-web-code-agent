@@ -7,7 +7,7 @@
  * The flow per target:
  *   1. snapshot existing files into .dream-bak/<ts>/<scope>/
  *   2. if total content fits, run UPDATE (or CREATE) once
- *   3. if it doesn't, batch the sources by group (segment.batchSourcesForApply)
+ *   3. if it doesn't, batch the sources by session (segment.batchSourcesForApply)
  *      and chain the LLM calls — each batch's output becomes the next
  *      batch's `current memory.md`. The prompt threads "this is batch K
  *      of N" so the LLM doesn't think previous content was lost.
@@ -43,8 +43,8 @@ function rawResponseSnippet(raw) {
 
 function applySystem(language) {
   return String(language || '').toLowerCase().startsWith('zh')
-    ? '你是梦境流水线的 Apply 阶段。你会根据最近的群组对话重写单个 scope 的 memory.md 和 summary.md。请只回复严格 JSON，不要输出说明文字或 markdown fence。memory_md 和 summary_md 的自然语言内容必须使用中文；JSON key、scope、schema 字段和代码标识符保持英文。'
-    : 'You are the Apply stage of a dream pipeline. You rewrite a single scope\'s memory.md and summary.md based on recent group conversations. Reply with strict JSON only — no prose, no fences.';
+    ? '你是梦境流水线的 Apply 阶段。你会根据最近的 Session 对话重写单个 scope 的 memory.md 和 summary.md。请只回复严格 JSON，不要输出说明文字或 markdown fence。memory_md 和 summary_md 的自然语言内容必须使用中文；JSON key、scope、schema 字段和代码标识符保持英文。'
+    : 'You are the Apply stage of a dream pipeline. You rewrite a single scope\'s memory.md and summary.md based on recent session conversations. Reply with strict JSON only — no prose, no fences.';
 }
 
 /**

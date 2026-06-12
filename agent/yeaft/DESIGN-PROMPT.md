@@ -90,7 +90,7 @@ memoryBudget = min(maxContextTokens × 0.20, 100_000 tokens)
 ```
 ③ Memory
    ├─ Resident   常驻知识（永远在 prompt 里）
-   │   └─ Layer-A summaries：user/group/vp 的 summary.md
+   │   └─ Layer-A summaries：user/session/session-member 的 summary.md
    ├─ Recent     最近 N 轮触碰过的 segments（LRU 容量上限）
    └─ OnDemand   本轮 FTS 召回的 segments
 ```
@@ -119,11 +119,11 @@ memoryBudget = min(maxContextTokens × 0.20, 100_000 tokens)
 ```js
 // engine.js#runQuery — 真实落地形态
 ams.setResident([
-  { scope:'user',          summary: layerASummaries.user  },
-  { scope:`group/${gid}`,  summary: layerASummaries.group },
-  { scope:`vp/${vpId}`,    summary: layerASummaries.vp    },
+  { scope:'user',                         summary: layerASummaries.user    },
+  { scope:`sessions/${sessionId}`,        summary: layerASummaries.session },
+  { scope:`sessions/${sessionId}/sessions/${sessionId}/vp/${vpId}`, summary: layerASummaries.vp  },
 ]);
-ams.setOnDemand(ftsRecallEntries);          // FTS 命中
+ams.setOnDemand(ftsRecallEntries);          // FTS 命中，包括 sessions/<id>/topic/...
 // recent 由各轮自然 LRU
 const memoryBlock = ams.renderForPrompt();  // 唯一渲染出口
 ```
@@ -151,7 +151,7 @@ envelope: <inbound routing info>   ← 谁 @ 我了 / 上一跳是谁
 ```
 
 **关键约束**：
-- Feature 是 scope，**不是块**。`feature/<id>` 是 memory 的一个 scope，长期内容（决策、状态、历史）走 AMS 召回；Active Scope 只标记"我现在处在哪个 feature 里"
+- Session topic 是 scope，**不是块**。`sessions/<sessionId>/topic/<topic>` 是 memory 的一个 scope，长期内容（决策、状态、历史）走 AMS 召回；Active Scope 只暴露当前 session 的小型 topic 标签
 - 大多数轮次 Active Scope 就 1-2 行
 - 预算：~1-3K tokens（基本不会触发 cap）
 
@@ -159,9 +159,10 @@ envelope: <inbound routing info>   ← 谁 @ 我了 / 上一跳是谁
 
 | Active Scope 字段 | 当前代码字段来源 |
 |---|---|
-| `feature` | `inboundEnvelope.featureId` |
-| `group` | `groupId` |
-| `vp` | `vpPersona.vpId` 或 `senderVpId` |
+| `session_id` | `sessionId` |
+| `session_member` | `vpPersona.vpId` 或 `senderVpId` |
+| `session_members` | 当前 session roster (`sessionMembers`) |
+| `session_topics` | `sessionTopics` 参数；缺省时从 AMS/recall 的 `sessions/<sessionId>/topic/...` scope 提取小标签 |
 | `envelope` | `inboundEnvelope` 的简化摘要（routing info） |
 
 ---

@@ -245,7 +245,7 @@ export function shouldAllowGroupReflection({
  *   PR #722. Once Dream-v2 writes a real summary for this scope it
  *   lacks the marker and is surfaced normally.
  *
- * Other-VP entries (group collaborators) are NOT considered here — only
+ * Other-VP entries (session collaborators) are NOT considered here — only
  * the local VP's summary is loaded into `summaries.vp` upstream by
  * `#loadLayerASummaries`. Cross-VP context flows through onDemand recall.
  *
@@ -256,6 +256,36 @@ export function shouldAllowGroupReflection({
  * }} args
  * @returns {Array<{scope: string, summary: string}>}
  */
+
+export function normalizeSessionTopics(topics) {
+  if (!Array.isArray(topics)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const topic of topics) {
+    const value = typeof topic === 'string' ? topic.trim() : '';
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
+}
+
+export function extractSessionTopicsFromAmsEntries(sessionId, entries) {
+  if (!sessionId || !Array.isArray(entries)) return [];
+  const prefix = `sessions/${sessionId}/topic/`;
+  const out = [];
+  const seen = new Set();
+  for (const entry of entries) {
+    if (!entry || typeof entry.scope !== 'string') continue;
+    if (!entry.scope.startsWith(prefix)) continue;
+    const topicPath = entry.scope.slice(prefix.length).split('/').filter(Boolean).join('/');
+    if (!topicPath || seen.has(topicPath)) continue;
+    seen.add(topicPath);
+    out.push(topicPath);
+  }
+  return out;
+}
+
 export function buildResidentEntries(args) {
   const summaries = (args && args.summaries) || {};
   const out = [];
@@ -597,7 +627,7 @@ export class Engine {
   }
 
   /**
-   * Prepare the per-turn AMS for the active group. Idempotent and safe
+   * Prepare the per-turn AMS for the active session. Idempotent and safe
    * to call when the AMS registry isn't wired (returns null).
    *
    * @param {{
@@ -622,7 +652,7 @@ export class Engine {
     const ams = this.#amsRegistry.getOrCreate(sessionKey, { ownVpId });
 
     // Prime #adjustRanBySession from disk-hydrated state on first access:
-    // a reactivated group resumes with whatever adjustRanThisSession bit
+    // a reactivated session resumes with whatever adjustRanThisSession bit
     // it had on disconnect, so we don't burn a fresh adjust on every
     // reload. Once set true in this session we never clear it.
     if (!this.#adjustRanBySession.has(sessionKey)
@@ -1339,7 +1369,7 @@ export class Engine {
    *   string-prompt shape (no regression for existing callers).
    * @yields {EngineEvent}
    */
-  async *query({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null, collabToolPolicy = null } = {}) {
+  async *query({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, sessionTopics = null, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null, collabToolPolicy = null } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       yield {
         type: 'error',
@@ -1402,7 +1432,7 @@ export class Engine {
 
     try {
       this.#currentThreadId = threadId || MAIN_THREAD_ID;
-      yield* this.#runQuery({ prompt: effectivePrompt, promptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted, getCurrentTodos, setCurrentTodos, threadId: this.#currentThreadId, drainPendingUserMessages, collabToolPolicy: effectiveCollabToolPolicy });
+      yield* this.#runQuery({ prompt: effectivePrompt, promptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, sessionTopics, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted, getCurrentTodos, setCurrentTodos, threadId: this.#currentThreadId, drainPendingUserMessages, collabToolPolicy: effectiveCollabToolPolicy });
     } finally {
       if (signal) {
         try { signal.removeEventListener('abort', onExternalAbort); } catch { /* ignore */ }
@@ -1422,7 +1452,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null, collabToolPolicy = null }) {
+  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, sessionTopics = null, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null, collabToolPolicy = null }) {
 
     const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
       ? collabToolPolicy
@@ -1498,10 +1528,10 @@ export class Engine {
     // exact session resident to avoid leaking unrelated resident summaries into
     // frontend state. The full system prompt remains visible in the existing
     // debug-only system-prompt panel.
-    const activeGroupDreamScope = sessionId ? `sessions/${sessionId}` : null;
+    const activeSessionDreamScope = sessionId ? `sessions/${sessionId}` : null;
     const dreamResidentLoaded = amsContext && Array.isArray(amsContext.residentEntries)
       ? amsContext.residentEntries
-        .filter(e => e && e.scope === activeGroupDreamScope && e.summary)
+        .filter(e => e && e.scope === activeSessionDreamScope && e.summary)
         .map(e => ({
           scope: e.scope,
           summary: String(e.summary).slice(0, 4000),
@@ -1511,13 +1541,20 @@ export class Engine {
       : [];
 
     // ─── Active Scope (DESIGN-PROMPT §3 ④) ──────────────────────
-    // Structured per-turn scope summary: session + vp + members + envelope routing
-    // info. Long-form scope content lives in AMS — this block carries
-    // only IDs + tiny labels. (Feature scope retired 2026-05-13.)
+    // Structured per-turn scope summary: session + current session member +
+    // session roster + tiny topic labels + envelope routing info. Long-form
+    // scope content lives in AMS — this block carries IDs and tiny labels only.
+    // (Feature scope retired 2026-05-13.)
     const activeScope = {
       sessionId: sessionId || '',
-      vpId: ownVpIdForAms || '',
-      members: Array.isArray(sessionMembers) ? sessionMembers : [],
+      sessionMember: ownVpIdForAms || '',
+      sessionMembers: Array.isArray(sessionMembers) ? sessionMembers : [],
+      sessionTopics: normalizeSessionTopics(sessionTopics).length > 0
+        ? normalizeSessionTopics(sessionTopics)
+        : extractSessionTopicsFromAmsEntries(sessionId, [
+          ...(amsContext && Array.isArray(amsContext.residentEntries) ? amsContext.residentEntries : []),
+          ...(recallResult && Array.isArray(recallResult.entries) ? recallResult.entries : []),
+        ]),
       envelope: inboundEnvelope || null,
     };
 

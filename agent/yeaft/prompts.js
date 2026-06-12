@@ -263,7 +263,7 @@ export function normalizePromptLanguage(language) {
  *   ③ Memory        — Single block produced by the AMS render outlet
  *                     (callers pass it as `memoryInjection`).
  *   ④ Active Scope  — Structured per-turn scope summary
- *                     (session / vp / members / envelope IDs).
+ *                     (session / session member / session members / session topics / envelope IDs).
  *   (The previous standalone user_profile / core_memory blocks are
  *    gone — those signals now arrive through AMS Resident. Task
  *    context (`taskCtx`) was wired into Active Scope by task-334e
@@ -272,8 +272,9 @@ export function normalizePromptLanguage(language) {
  *   Active Scope params (DESIGN-PROMPT §3 ④):
  *   @param {object} [activeScope] — structured scope summary for this turn
  *   @param {string} [activeScope.sessionId]
- *   @param {string} [activeScope.vpId]
- *   @param {string[]} [activeScope.members]          current session roster
+ *   @param {string} [activeScope.sessionMember]
+ *   @param {string[]} [activeScope.sessionMembers]  current session roster
+ *   @param {string[]} [activeScope.sessionTopics]   current session topic labels
  *   @param {object} [activeScope.envelope]          inbound routing info (sender, intent)
  *
  * @param {{
@@ -571,9 +572,10 @@ const OMNI_PERSONA_ZH = `你是全能助手，一个跨领域、偏执行的通�
  *
  * Schema:
  *   ## active_scope
- *   session: <sessionId>                    (omitted when missing)
- *   vp:      <vpId>                         (omitted when missing)
- *   members: <vpId>, <vpId>                 (omitted when missing)
+ *   session_id: <sessionId>                 (omitted when missing)
+ *   session_member: <currentVpId>           (omitted when missing)
+ *   session_members: <vpId>, <vpId>         (omitted when missing)
+ *   session_topics: <topic>, <topic>        (omitted when missing)
  *   envelope: from=<sender> intent=<intent> (omitted when no envelope)
  *
  * Returns '' when the input has no useful field — we don't emit an empty
@@ -582,9 +584,10 @@ const OMNI_PERSONA_ZH = `你是全能助手，一个跨领域、偏执行的通�
  *
  * @param {object} [activeScope]
  * @param {string} [activeScope.sessionId]
- * @param {string} [activeScope.vpId]
- * @param {string[]} [activeScope.members]  current session roster
- * @param {object} [activeScope.envelope]   inbound routing summary
+ * @param {string} [activeScope.sessionMember]
+ * @param {string[]} [activeScope.sessionMembers] current session roster
+ * @param {string[]} [activeScope.sessionTopics] current session topic labels
+ * @param {object} [activeScope.envelope] inbound routing summary
  * @param {object} lang
  * @returns {string}
  */
@@ -595,15 +598,18 @@ function renderActiveScope(activeScope, lang) {
   const session = typeof activeScope.sessionId === 'string' && activeScope.sessionId.trim()
     ? activeScope.sessionId.trim()
     : '';
-  if (session) lines.push(`session: ${session}`);
+  if (session) lines.push(`session_id: ${session}`);
 
-  const vp = typeof activeScope.vpId === 'string' && activeScope.vpId.trim()
-    ? activeScope.vpId.trim()
+  const sessionMember = typeof activeScope.sessionMember === 'string' && activeScope.sessionMember.trim()
+    ? activeScope.sessionMember.trim()
     : '';
-  if (vp) lines.push(`vp: ${vp}`);
+  if (sessionMember) lines.push(`session_member: ${sessionMember}`);
 
-  const membersLine = renderSessionMembersLine(activeScope.members);
-  if (membersLine) lines.push(`members: ${membersLine}`);
+  const membersLine = renderSessionListLine(activeScope.sessionMembers);
+  if (membersLine) lines.push(`session_members: ${membersLine}`);
+
+  const topicsLine = renderSessionListLine(activeScope.sessionTopics);
+  if (topicsLine) lines.push(`session_topics: ${topicsLine}`);
 
   const envLine = renderEnvelopeLine(activeScope.envelope);
   if (envLine) lines.push(`envelope: ${envLine}`);
@@ -614,7 +620,7 @@ function renderActiveScope(activeScope, lang) {
 }
 
 
-function renderSessionMembersLine(members) {
+function renderSessionListLine(members) {
   if (!Array.isArray(members)) return '';
   const clean = [];
   const seen = new Set();

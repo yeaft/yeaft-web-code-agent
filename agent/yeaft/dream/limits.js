@@ -18,7 +18,7 @@ export const MAX_DIFF_TOKENS_PER_TRIAGE = 60000;
 export const MAX_APPLY_TOKENS = 80000;
 export const DREAM_BACKUP_KEEP = 7;
 
-// task-710: nudge dream off the 1h timer when a group has accumulated
+// task-710: nudge dream off the 1h timer when a session has accumulated
 // this many user messages since the last successful pass. Keeps memory
 // fresh during heavy chat windows without rivalling user latency.
 export const DREAM_NUDGE_AFTER_MESSAGES = 50;
