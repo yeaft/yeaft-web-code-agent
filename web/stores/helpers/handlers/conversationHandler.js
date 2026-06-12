@@ -532,6 +532,12 @@ export function handleYeaftHistoryChunk(store, msg) {
 
   if (formatted.length > 0) {
     store.messagesMap[convId].splice(0, 0, ...formatted);
+    if (typeof store.expandYeaftMessageWindow === 'function') {
+      // These rows were explicitly requested by scrolling upward. Keep them in
+      // the render window; the near-bottom path will prune again later.
+      const windowSessionId = store.yeaftActiveSessionFilter ? (msgSessionId ?? null) : null;
+      store.expandYeaftMessageWindow(windowSessionId, msg.turns || 10);
+    }
   }
 
   const groupKey = msgSessionId ?? '__all__';

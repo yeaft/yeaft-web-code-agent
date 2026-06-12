@@ -32,6 +32,12 @@ globalThis.Pinia = globalThis.Pinia || {
 };
 
 const { handleYeaftHistoryChunk } = await import('../../../web/stores/helpers/handlers/conversationHandler.js');
+const {
+  getDefaultYeaftVisibleTurns,
+  getYeaftWindowLoadStepTurns,
+  hasHiddenYeaftMessageTurns,
+  sliceYeaftMessagesByRecentTurns,
+} = await import('../../../web/stores/helpers/yeaft-message-window.js');
 
 // Re-implement the action body 1:1 here so we can drive it without booting
 // Pinia. Keeping it in lock-step with the production version is what the
@@ -80,6 +86,7 @@ function mkStore(overrides = {}) {
     yeaftLoadingMoreHistory: false,
     yeaftOldestLoadedSeq: 100,
     yeaftSessionHistoryState: {},
+    yeaftMessageWindowState: {},
     messagesMap: {},
     sendWsMessage(msg) { sent.push(msg); },
     _sent: sent,
@@ -87,15 +94,50 @@ function mkStore(overrides = {}) {
   };
 }
 
+function scopedYeaftMessages(state) {
+  const convId = state.yeaftConversationId || null;
+  const raw = convId ? (state.messagesMap[convId] || []) : [];
+  if (state.yeaftActiveSessionFilter) {
+    return raw.filter(m => m && m.sessionId === state.yeaftActiveSessionFilter);
+  }
+  return raw;
+}
+
 function visibleMessages(state) {
   const convId = state.currentView === 'yeaft'
     ? (state.yeaftConversationId || null)
     : (state.activeConversations?.[0] || null);
   const raw = convId ? (state.messagesMap[convId] || []) : [];
-  if (state.currentView === 'yeaft' && state.yeaftActiveSessionFilter) {
-    return raw.filter(m => m && m.sessionId === state.yeaftActiveSessionFilter);
-  }
-  return raw;
+  if (state.currentView !== 'yeaft') return raw;
+  const scoped = scopedYeaftMessages(state);
+  const sessionKey = state.yeaftActiveSessionFilter || '__all__';
+  const visibleTurns = state.yeaftMessageWindowState[sessionKey]?.visibleTurns
+    || getDefaultYeaftVisibleTurns();
+  return sliceYeaftMessagesByRecentTurns(scoped, visibleTurns);
+}
+
+function hasHiddenYeaftMessages(state) {
+  const sessionKey = state.yeaftActiveSessionFilter || '__all__';
+  const visibleTurns = state.yeaftMessageWindowState[sessionKey]?.visibleTurns
+    || getDefaultYeaftVisibleTurns();
+  return hasHiddenYeaftMessageTurns(scopedYeaftMessages(state), visibleTurns);
+}
+
+function pruneYeaftMessageWindow(sessionId = null) {
+  const sessionKey = sessionId || this.yeaftActiveSessionFilter || '__all__';
+  this.yeaftMessageWindowState = {
+    ...this.yeaftMessageWindowState,
+    [sessionKey]: { visibleTurns: getDefaultYeaftVisibleTurns() },
+  };
+}
+
+function expandYeaftMessageWindow(sessionId = null, turns = getYeaftWindowLoadStepTurns()) {
+  const sessionKey = sessionId || this.yeaftActiveSessionFilter || '__all__';
+  const current = this.yeaftMessageWindowState[sessionKey]?.visibleTurns || getDefaultYeaftVisibleTurns();
+  this.yeaftMessageWindowState = {
+    ...this.yeaftMessageWindowState,
+    [sessionKey]: { visibleTurns: current + turns },
+  };
 }
 
 function setActiveSessionFilter(sessionId) {
@@ -109,6 +151,7 @@ function setActiveSessionFilter(sessionId) {
   this.yeaftHasMoreHistory = !!savedState?.hasMore;
   this.yeaftLoadingMoreHistory = !!savedState?.loading;
   this.yeaftOldestLoadedSeq = (typeof savedState?.oldestSeq === 'number') ? savedState.oldestSeq : null;
+  pruneYeaftMessageWindow.call(this, next);
 
   const needsHydrate = !savedState?.loaded && !savedState?.loading;
   if (this.yeaftAgentId && next && needsHydrate) {
@@ -730,5 +773,88 @@ describe('setActiveSessionFilter — session-scoped conversation cache', () => {
     expect(store.yeaftLoadingMoreHistory).toBe(false);
     expect(store.yeaftHasMoreHistory).toBe(true);
     expect(store.yeaftOldestLoadedSeq).toBe(101);
+  });
+});
+
+describe('Yeaft message render window', () => {
+  function makeTurns(count, sessionId = 'session-A') {
+    const rows = [];
+    for (let i = 1; i <= count; i++) {
+      rows.push({
+        id: `u-${i}`,
+        type: 'user',
+        content: `user ${i}`,
+        sessionId,
+        timestamp: i * 10,
+      });
+      rows.push({
+        id: `a-${i}`,
+        type: 'assistant',
+        content: `assistant ${i}`,
+        sessionId,
+        vpId: 'vp-1',
+        speakerVpId: 'vp-1',
+        turnId: `turn-${i}`,
+        timestamp: i * 10 + 1,
+      });
+      rows.push({
+        id: `tool-${i}`,
+        type: 'tool_use',
+        content: '',
+        sessionId,
+        vpId: 'vp-1',
+        speakerVpId: 'vp-1',
+        turnId: `turn-${i}`,
+        timestamp: i * 10 + 2,
+      });
+    }
+    return rows;
+  }
+
+  it('renders only the latest five Yeaft turns while keeping full history cached', () => {
+    const store = mkStore({
+      yeaftActiveSessionFilter: 'session-A',
+      messagesMap: { 'yeaft-1': makeTurns(8) },
+    });
+
+    const visible = visibleMessages(store);
+
+    expect(store.messagesMap['yeaft-1']).toHaveLength(24);
+    expect(visible.map(m => m.id)).toEqual([
+      'u-4', 'a-4', 'tool-4',
+      'u-5', 'a-5', 'tool-5',
+      'u-6', 'a-6', 'tool-6',
+      'u-7', 'a-7', 'tool-7',
+      'u-8', 'a-8', 'tool-8',
+    ]);
+    expect(hasHiddenYeaftMessages(store)).toBe(true);
+  });
+
+  it('loads older cached turns into the render window without truncating assistant chunks', () => {
+    const store = mkStore({
+      yeaftActiveSessionFilter: 'session-A',
+      messagesMap: { 'yeaft-1': makeTurns(8) },
+    });
+
+    expandYeaftMessageWindow.call(store);
+    const visible = visibleMessages(store);
+
+    expect(visible.map(m => m.id)).toEqual(makeTurns(8).map(m => m.id));
+    expect(hasHiddenYeaftMessages(store)).toBe(false);
+  });
+
+  it('prunes back to the recent five turns when returning to the bottom', () => {
+    const store = mkStore({
+      yeaftActiveSessionFilter: 'session-A',
+      messagesMap: { 'yeaft-1': makeTurns(8) },
+    });
+
+    expandYeaftMessageWindow.call(store);
+    expect(visibleMessages(store)[0].id).toBe('u-1');
+
+    pruneYeaftMessageWindow.call(store);
+
+    expect(visibleMessages(store)[0].id).toBe('u-4');
+    expect(store.messagesMap['yeaft-1'][0].id).toBe('u-1');
   });
 });

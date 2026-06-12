@@ -15,6 +15,12 @@ import { incVpTyping, decVpTyping } from './helpers/vp-typing.js';
 import { selectActiveConversationId } from './helpers/active-conv.js';
 import { turnMatchesSearch } from './helpers/debug-search.js';
 import { trimDebugRetention } from './helpers/debug-retention.js';
+import {
+  getDefaultYeaftVisibleTurns,
+  getYeaftWindowLoadStepTurns,
+  hasHiddenYeaftMessageTurns,
+  sliceYeaftMessagesByRecentTurns,
+} from './helpers/yeaft-message-window.js';
 
 const { defineStore } = Pinia;
 
@@ -240,6 +246,11 @@ export const useChatStore = defineStore('chat', {
     // compatibility; this map is the source of truth across group switches.
     // Shape: { [groupId || '__all__']: { loaded, hasMore, loading, oldestSeq, count } }
     yeaftSessionHistoryState: {},
+    // Yeaft render window: keep full history in messagesMap, but expose only
+    // the newest N turn groups to MessageList until the user scrolls up. Keyed
+    // by sessionId (or '__all__' when no filter is active) so switching sessions
+    // does not leak another session's expanded window.
+    yeaftMessageWindowState: {},
     // De-dupe metadata-only Yeaft bootstrap requests while waiting for the
     // session_ready replay. Group history requests are de-duped separately by
     // yeaftSessionHistoryState[groupId].loading.
@@ -556,9 +567,14 @@ export const useChatStore = defineStore('chat', {
       // equality is safe — no message can slip through "untagged".
       // Falls back to legacy `groupId` so in-flight messages from older
       // builds still match during a deploy window.
-      if (state.currentView === 'yeaft' && state.yeaftActiveSessionFilter) {
-        const target = state.yeaftActiveSessionFilter;
-        return raw.filter(m => m && (m.sessionId ?? m.groupId) === target);
+      if (state.currentView === 'yeaft') {
+        const scoped = state.yeaftActiveSessionFilter
+          ? raw.filter(m => m && (m.sessionId ?? m.groupId) === state.yeaftActiveSessionFilter)
+          : raw;
+        const sessionKey = state.yeaftActiveSessionFilter || '__all__';
+        const visibleTurns = state.yeaftMessageWindowState[sessionKey]?.visibleTurns
+          || getDefaultYeaftVisibleTurns();
+        return sliceYeaftMessagesByRecentTurns(scoped, visibleTurns);
       }
       return raw;
     },
@@ -566,6 +582,29 @@ export const useChatStore = defineStore('chat', {
     yeaftAllMessages: (state) => {
       const convId = state.yeaftConversationId;
       return convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
+    },
+    yeaftVisibleMessages(state) {
+      const convId = state.yeaftConversationId;
+      const raw = convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
+      const scoped = state.yeaftActiveSessionFilter
+        ? raw.filter(m => m && (m.sessionId ?? m.groupId) === state.yeaftActiveSessionFilter)
+        : raw;
+      const sessionKey = state.yeaftActiveSessionFilter || '__all__';
+      const visibleTurns = state.yeaftMessageWindowState[sessionKey]?.visibleTurns
+        || getDefaultYeaftVisibleTurns();
+      return sliceYeaftMessagesByRecentTurns(scoped, visibleTurns);
+    },
+    hasHiddenYeaftMessages(state) {
+      if (state.currentView !== 'yeaft') return false;
+      const convId = state.yeaftConversationId;
+      const raw = convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
+      const scoped = state.yeaftActiveSessionFilter
+        ? raw.filter(m => m && (m.sessionId ?? m.groupId) === state.yeaftActiveSessionFilter)
+        : raw;
+      const sessionKey = state.yeaftActiveSessionFilter || '__all__';
+      const visibleTurns = state.yeaftMessageWindowState[sessionKey]?.visibleTurns
+        || getDefaultYeaftVisibleTurns();
+      return hasHiddenYeaftMessageTurns(scoped, visibleTurns);
     },
     // task-fix: per-VP typing-indicator getters scoped to the CURRENT
     // conversation. Components read these instead of the underlying
@@ -766,17 +805,6 @@ export const useChatStore = defineStore('chat', {
     // in the toolbar so the user knows when they have unsearched data.
     yeaftDebugTurnTotal: (state) => {
       return (state.yeaftDebugTurnOrder || EMPTY_ARRAY).length;
-    },
-    // ★ Yeaft: the currently visible messages (H2.f.3: thread filter dropped).
-    yeaftVisibleMessages: (state) => {
-      const convId = state.yeaftConversationId;
-      const raw = convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
-      if (state.yeaftActiveSessionFilter) {
-        const target = state.yeaftActiveSessionFilter;
-        // Legacy `groupId` fallback covers in-flight messages from older builds.
-        return raw.filter(m => m && (m.sessionId ?? m.groupId) === target);
-      }
-      return raw;
     },
     // ★ Multi-column: compatibility shim — alias for messagesMap
     messagesCache: (state) => state.messagesMap,
@@ -1216,6 +1244,31 @@ export const useChatStore = defineStore('chat', {
       this.sendWsMessage(wsMsg);
     },
 
+    getYeaftMessageWindowKey(sessionId = null) {
+      return sessionId || this.yeaftActiveSessionFilter || '__all__';
+    },
+
+    pruneYeaftMessageWindow(sessionId = null) {
+      if (this.currentView !== 'yeaft') return;
+      const sessionKey = this.getYeaftMessageWindowKey(sessionId);
+      this.yeaftMessageWindowState = {
+        ...this.yeaftMessageWindowState,
+        [sessionKey]: { visibleTurns: getDefaultYeaftVisibleTurns() },
+      };
+    },
+
+    expandYeaftMessageWindow(sessionId = null, turns = getYeaftWindowLoadStepTurns()) {
+      if (this.currentView !== 'yeaft') return;
+      const sessionKey = this.getYeaftMessageWindowKey(sessionId);
+      const current = this.yeaftMessageWindowState[sessionKey]?.visibleTurns
+        || getDefaultYeaftVisibleTurns();
+      const next = current + Math.max(1, Number.isFinite(turns) ? Math.floor(turns) : getYeaftWindowLoadStepTurns());
+      this.yeaftMessageWindowState = {
+        ...this.yeaftMessageWindowState,
+        [sessionKey]: { visibleTurns: next },
+      };
+    },
+
     // ─── Yeaft Session creation ────────────────────────────────
     // Phase 3: unified Session creation. A session is operationally a
     // group with N≥1 VPs. Phase 2 router accepts `yeaft_create_session`
@@ -1248,6 +1301,9 @@ export const useChatStore = defineStore('chat', {
           // Ensure messagesMap exists for this conversation
           if (!this.messagesMap[conversationId]) {
             this.messagesMap[conversationId] = [];
+          }
+          if (this.currentView === 'yeaft' && (msg.data?.type === 'user' || msg.data?.type === 'text_delta')) {
+            this.pruneYeaftMessageWindow(this.yeaftActiveSessionFilter ? (msg.sessionId || null) : null);
           }
           // Store the conversationId if we didn't have it yet
           if (!this.yeaftConversationId) {
@@ -1283,6 +1339,10 @@ export const useChatStore = defineStore('chat', {
           }
           // (2026-05-13) featureId stamping removed along with the Feature system.
           try {
+            const shouldPruneWindow = this.currentView === 'yeaft'
+              && msgSessionId
+              && (!this.yeaftActiveSessionFilter || msgSessionId === this.yeaftActiveSessionFilter);
+            if (shouldPruneWindow) this.pruneYeaftMessageWindow(this.yeaftActiveSessionFilter ? msgSessionId : null);
             this.handleAssistantOutputFrame(conversationId, msg.data);
             // Advance the delta cursor on every live user/assistant
             // message arrival so the next re-entry of this session can
@@ -2573,6 +2633,7 @@ export const useChatStore = defineStore('chat', {
       this.yeaftHasMoreHistory = !!savedState?.hasMore;
       this.yeaftLoadingMoreHistory = !!savedState?.loading;
       this.yeaftOldestLoadedSeq = (typeof savedState?.oldestSeq === 'number') ? savedState.oldestSeq : null;
+      this.pruneYeaftMessageWindow(next);
 
       // If a restore/snapshot path forces the current session while an initial
       // history request is already in flight, keep the UI flags in sync but do
