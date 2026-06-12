@@ -38,10 +38,11 @@
  * `sessionId` may be inherited via `stampDreamScope()` when a scope is active.
  */
 
+import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { runDream } from './runner.js';
 import { createDreamScheduler } from './schedule.js';
-import { listSessions, openSession } from '../sessions/session-store.js';
+import { parseMessage } from '../conversation/persist.js';
 import { readSessionState } from './state.js';
 import { DREAM_NUDGE_AFTER_MESSAGES, DREAM_INTERVAL_HOURS } from './limits.js';
 
@@ -56,48 +57,47 @@ import { DREAM_NUDGE_AFTER_MESSAGES, DREAM_INTERVAL_HOURS } from './limits.js';
 export function buildRunDreamOpts(session, onProgress) {
   const yeaftDir = session.yeaftDir;
   const memoryRoot = join(yeaftDir, 'memory');
-  const sessionsRoot = join(yeaftDir, 'sessions');
+  // ConversationStore still persists Yeaft Session transcripts under the
+  // legacy `groups/<sessionId>/conversation` disk layout. Dream must read
+  // that live source, not the older `sessions/` session-store tree.
+  const sessionConversationsRoot = join(yeaftDir, 'groups');
 
   return {
     root: memoryRoot,
     language: session.config?.language || 'en',
     llm: makeLlm(session),
     listSessions: async () => {
-      try { return listSessions(sessionsRoot).map(g => g.id); }
+      try { return listConversationSessions(sessionConversationsRoot); }
       catch { return []; }
     },
-    countMessages: async (gid) => {
-      try {
-        const h = openSession(sessionsRoot, gid);
-        let n = 0;
-        for (const _m of h.streamMessages()) n += 1;
-        return n;
-      } catch { return 0; }
+    countMessages: async (sessionId) => {
+      try { return loadSessionConversationMessages(sessionConversationsRoot, sessionId).length; }
+      catch { return 0; }
     },
-    loadGroupDiff: async (gid, sinceId) => {
+    loadGroupDiff: async (sessionId, sinceId) => {
       try {
-        const h = openSession(sessionsRoot, gid);
+        const messages = loadSessionConversationMessages(sessionConversationsRoot, sessionId);
         const out = [];
         let started = !sinceId;
-        for (const m of h.streamMessages()) {
+        for (const m of messages) {
           if (!started) {
             if (m.id === sinceId) started = true;
             continue;
           }
-          out.push(translateGroupMessage(m));
+          out.push(translateSessionConversationMessage(m));
         }
         return out;
       } catch { return []; }
     },
-    loadOverlapPreamble: async (gid, beforeId, n) => {
+    loadOverlapPreamble: async (sessionId, beforeId, n) => {
       try {
-        const h = openSession(sessionsRoot, gid);
+        const messages = loadSessionConversationMessages(sessionConversationsRoot, sessionId);
         const buf = [];
-        for (const m of h.streamMessages()) {
+        for (const m of messages) {
           if (m.id === beforeId) break;
           buf.push(m);
         }
-        return buf.slice(-n).map(translateGroupMessage);
+        return buf.slice(-n).map(translateSessionConversationMessage);
       } catch { return []; }
     },
     onProgress,
@@ -105,8 +105,8 @@ export function buildRunDreamOpts(session, onProgress) {
 }
 
 /**
- * Translate a group-store message record (id, from, role, text, ...) into
- * the shape runDream expects (id, role, body, vpId, author).
+ * Translate a persisted session conversation message into the shape runDream
+ * expects (id, role, body, vpId, author).
  *
  * (2026-05-13: legacy `m.meta.featureId` propagation was dropped along
  * with the Feature system. Historical messages on disk may still carry
@@ -114,17 +114,68 @@ export function buildRunDreamOpts(session, onProgress) {
  *
  * @param {Object} m
  */
-function translateGroupMessage(m) {
-  const role = m.role || (m.from === 'user' ? 'user' : 'assistant');
+function translateSessionConversationMessage(m) {
+  const role = m.role || 'assistant';
   const out = {
     id: m.id,
     role,
-    body: m.text || '',
+    body: m.content || m.text || '',
   };
-  if (role === 'assistant' && m.from && m.from !== 'user') {
-    out.vpId = m.from;
+  if (role === 'assistant' && m.speakerVpId) {
+    out.vpId = m.speakerVpId;
   }
   return out;
+}
+
+/**
+ * Enumerate session ids that have persisted conversation messages. The on-disk
+ * parent is still named `groups` for storage compatibility.
+ *
+ * @param {string} root legacy groups root (`~/.yeaft/groups`)
+ * @returns {string[]}
+ */
+function listConversationSessions(root) {
+  if (!existsSync(root)) return [];
+  const out = [];
+  for (const name of readdirSync(root)) {
+    if (name.startsWith('.')) continue;
+    const messagesDir = join(root, name, 'conversation', 'messages');
+    try {
+      if (!statSync(messagesDir).isDirectory()) continue;
+      if (!readdirSync(messagesDir).some(f => f.endsWith('.md'))) continue;
+      out.push(name);
+    } catch {
+      // Ignore partial or old session directories. Dream only needs sessions
+      // with readable conversation messages.
+    }
+  }
+  return out.sort();
+}
+
+/**
+ * Load hot conversation messages for one Yeaft Session from the legacy
+ * `groups/<sessionId>/conversation/messages` layout.
+ *
+ * @param {string} root legacy groups root (`~/.yeaft/groups`)
+ * @param {string} sessionId
+ * @returns {object[]}
+ */
+function loadSessionConversationMessages(root, sessionId) {
+  const messagesDir = join(root, safeDirComponent(sessionId), 'conversation', 'messages');
+  if (!existsSync(messagesDir)) return [];
+  return readdirSync(messagesDir)
+    .filter(f => f.endsWith('.md'))
+    .sort()
+    .map(file => {
+      try { return parseMessage(readFileSync(join(messagesDir, file), 'utf8')); }
+      catch { return null; }
+    })
+    .filter(m => m && m.id);
+}
+
+function safeDirComponent(s) {
+  const safe = String(s).replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120).replace(/^\.+$/, '_');
+  return safe || '_';
 }
 
 /**
