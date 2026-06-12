@@ -211,6 +211,14 @@ export default {
     dreamSnapshot() {
       return (this.store && this.store.yeaftDreamSnapshotForActiveSession) || null;
     },
+    dreamPromptLoad() {
+      return (this.store && this.store.yeaftDreamPromptLoadForActiveSession) || null;
+    },
+    dreamPromptLoadSummary() {
+      const d = this.dreamPromptLoad;
+      const text = d && typeof d.summary === 'string' ? d.summary.trim() : '';
+      return text && d.truncated ? `${text}\n... truncated` : text;
+    },
     dreamSnapshotSummary() {
       const s = this.dreamSnapshot;
       const text = s && typeof s.summaryText === 'string' ? s.summaryText.trim() : '';
@@ -864,6 +872,22 @@ export default {
             <pre>{{ dreamSnapshotMemory }}</pre>
           </div>
           <div v-if="!dreamSnapshot.hasOutput" class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noOutput') }}</div>
+        </div>
+
+        <div class="yeaft-debug-dream-summary" v-if="dreamPromptLoad">
+          <div class="yeaft-debug-dream-summary-title">{{ $t('yeaft.dreamDebug.promptLoadTitle') }}</div>
+          <div class="yeaft-debug-dream-summary-grid">
+            <span>{{ $t('yeaft.dreamDebug.scope') }}</span>
+            <strong>{{ dreamPromptLoad.scope }}</strong>
+            <span>{{ $t('yeaft.dreamDebug.loadedInto') }}</span>
+            <strong>{{ dreamPromptLoad.loadedInto }}</strong>
+            <span>{{ $t('yeaft.dreamDebug.vp') }}</span>
+            <strong>{{ dreamPromptLoad.vpId || '-' }}</strong>
+          </div>
+          <div v-if="dreamPromptLoadSummary" class="yeaft-debug-dream-event-body">
+            <div class="yeaft-debug-section-label">{{ $t('yeaft.dreamDebug.summaryToPrompt') }}</div>
+            <pre>{{ dreamPromptLoadSummary }}</pre>
+          </div>
         </div>
 
         <div class="yeaft-debug-dream-events" v-if="dreamEvents.length > 0">

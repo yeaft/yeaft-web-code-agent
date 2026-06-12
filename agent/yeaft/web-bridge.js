@@ -2212,6 +2212,17 @@ function handleEngineEvent(event, hctx) {
       }, envelope);
       break;
 
+    case 'dream_memory_loaded':
+      sendYeaftEvent({
+        type: 'dream_memory_loaded',
+        turnId: event.turnId,
+        vpId: event.vpId || null,
+        sessionId: event.sessionId || null,
+        loadedInto: event.loadedInto || 'system_prompt.memory',
+        resident: Array.isArray(event.resident) ? event.resident : [],
+      }, envelope);
+      break;
+
     case 'memory_adjust':
       sendYeaftEvent({
         type: 'memory_adjust',

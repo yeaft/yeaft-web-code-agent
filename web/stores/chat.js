@@ -391,6 +391,9 @@ export const useChatStore = defineStore('chat', {
     // the dream-produced memory files so switching sessions can restore
     // what the session has learned.
     yeaftDreamSnapshots: {},
+    // Last per-turn Dream resident summaries that were actually injected into
+    // the system prompt Memory section, keyed by scope (e.g. group/<id>).
+    yeaftDreamPromptLoads: {},
     // PR feat-dream-debug-panel-full: per-scope ring buffer of dream
     // events. Each entry is the raw event payload augmented with `at`
     // (receive timestamp). Buffer is capped at YEAFT_DREAM_EVENT_LIMIT
@@ -584,6 +587,12 @@ export const useChatStore = defineStore('chat', {
       if (!targetGroupId) return null;
       const scope = `group/${targetGroupId}`;
       return state.yeaftDreamSnapshots?.[scope] || null;
+    },
+    yeaftDreamPromptLoadForActiveSession(state) {
+      const targetGroupId = resolveActiveDreamDebugSessionId(state);
+      if (!targetGroupId) return null;
+      const scope = `group/${targetGroupId}`;
+      return state.yeaftDreamPromptLoads?.[scope] || null;
     },
     // PR feat-dream-debug-panel-full: per-group event log for the
     // expanded debug-panel view. Same filter precedence as
@@ -1427,6 +1436,43 @@ export const useChatStore = defineStore('chat', {
               memoryLoaded: Array.isArray(event.loaded) ? event.loaded : [],
             },
           };
+          break;
+        }
+
+        case 'dream_memory_loaded': {
+          const resident = Array.isArray(event.resident) ? event.resident : [];
+          if (event.turnId) {
+            const prev = this.yeaftDebugTurnsById[event.turnId];
+            if (prev) {
+              this.yeaftDebugTurnsById = {
+                ...this.yeaftDebugTurnsById,
+                [event.turnId]: {
+                  ...prev,
+                  dreamMemoryLoaded: resident,
+                  dreamMemoryLoadedInto: event.loadedInto || 'system_prompt.memory',
+                },
+              };
+            }
+          }
+          const updates = {};
+          for (const item of resident) {
+            const scope = item && typeof item.scope === 'string' ? item.scope : null;
+            const match = scope && /^group\/[^/]+$/.exec(scope);
+            if (!match) continue;
+            updates[scope] = {
+              scope,
+              sessionId: scope.slice('group/'.length),
+              turnId: event.turnId || null,
+              vpId: event.vpId || null,
+              loadedInto: event.loadedInto || 'system_prompt.memory',
+              summary: item.summary || '',
+              truncated: !!item.truncated,
+              receivedAt: Date.now(),
+            };
+          }
+          if (Object.keys(updates).length > 0) {
+            this.yeaftDreamPromptLoads = { ...this.yeaftDreamPromptLoads, ...updates };
+          }
           break;
         }
 

@@ -612,6 +612,7 @@ export class Engine {
    *   ownVpId: string|null,
    *   scopes: string[],
    *   snapshotBlock: string,
+ *   residentEntries: Array<{scope:string, summary:string}>,
    * } | null}
    */
   #prepareAms(args) {
@@ -650,7 +651,7 @@ export class Engine {
       vpId: ownVpId,
     });
 
-    return { ams, groupKey, ownVpId, scopes, snapshotBlock };
+    return { ams, groupKey, ownVpId, scopes, snapshotBlock, residentEntries };
   }
 
   /**
@@ -1475,6 +1476,25 @@ export class Engine {
       memoryInjection = amsContext.snapshotBlock;
     }
 
+    // Diagnostic payload for the Dream debug panel. The full AMS Resident
+    // layer can include user and per-VP summaries, but the browser-facing
+    // Dream prompt-load view only needs to prove the active group Dream
+    // summary entered `system_prompt.memory`. Keep the payload scoped to the
+    // exact group resident to avoid leaking unrelated resident summaries into
+    // frontend state. The full system prompt remains visible in the existing
+    // debug-only system-prompt panel.
+    const activeGroupDreamScope = sessionId ? `group/${sessionId}` : null;
+    const dreamResidentLoaded = amsContext && Array.isArray(amsContext.residentEntries)
+      ? amsContext.residentEntries
+        .filter(e => e && e.scope === activeGroupDreamScope && e.summary)
+        .map(e => ({
+          scope: e.scope,
+          summary: String(e.summary).slice(0, 4000),
+          truncated: String(e.summary).length > 4000,
+          source: 'resident-summary',
+        }))
+      : [];
+
     // ─── Active Scope (DESIGN-PROMPT §3 ④) ──────────────────────
     // Structured per-turn scope summary: group + vp + envelope routing
     // info. Long-form scope content lives in AMS — this block carries
@@ -1649,6 +1669,17 @@ export class Engine {
           score: e && typeof e.score === 'number' ? e.score : null,
           kind: e && e.kind || null,
         })),
+      };
+    }
+
+    if (dreamResidentLoaded.length > 0) {
+      yield {
+        type: 'dream_memory_loaded',
+        turnId: queryTurnId,
+        vpId: queryVpId,
+        sessionId: sessionId || null,
+        loadedInto: 'system_prompt.memory',
+        resident: dreamResidentLoaded,
       };
     }
 
