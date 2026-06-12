@@ -48,4 +48,72 @@ describe('web LLM config scope state', () => {
     expect(store.llmConfig['agent-a'].globalConfig.providers.map(p => p.name)).toEqual(['new-global']);
     expect(store.llmConfig['agent-a'].agentConfig.providers.map(p => p.name)).toEqual(['local']);
   });
+
+  it('recomputes effective providers for every loaded agent when global providers change', () => {
+    const store = makeStore();
+    handleMessage(store, {
+      type: 'llm_config',
+      agentId: 'agent-a',
+      globalConfig: { providers: [{ name: 'old-global', models: ['old'] }] },
+      agentConfig: { providers: [{ name: 'local-a', models: ['a'] }], primaryModel: 'local-a/a', language: 'zh' },
+    });
+    handleMessage(store, {
+      type: 'llm_config',
+      agentId: 'agent-b',
+      globalConfig: { providers: [{ name: 'old-global', models: ['old'] }] },
+      agentConfig: { providers: [{ name: 'local-b', models: ['b'] }], primaryModel: 'local-b/b' },
+    });
+
+    handleMessage(store, {
+      type: 'llm_global_config_updated',
+      globalConfig: { providers: [{ name: 'new-global', models: ['new'], credentialProvider: 'github-copilot' }] },
+    });
+
+    expect(store.llmConfig['agent-a'].effectiveConfig.providers.map(p => p.name)).toEqual(['new-global', 'local-a']);
+    expect(store.llmConfig['agent-b'].effectiveConfig.providers.map(p => p.name)).toEqual(['new-global', 'local-b']);
+    expect(store.llmConfig['agent-a'].providers.map(p => p.name)).toEqual(['new-global', 'local-a']);
+    expect(store.llmConfig['agent-a'].agentConfig.providers.map(p => p.name)).toEqual(['local-a']);
+    expect(store.llmConfig['agent-a'].primaryModel).toBe('local-a/a');
+    expect(store.llmConfig['agent-a'].language).toBe('zh');
+  });
+
+  it('uses agent-merge conflict naming when global updates collide with local providers', () => {
+    const store = makeStore();
+    handleMessage(store, {
+      type: 'llm_config',
+      agentId: 'agent-a',
+      globalConfig: { providers: [{ name: 'shared', models: ['global-old'] }] },
+      agentConfig: { providers: [{ name: 'shared', models: ['local'] }] },
+    });
+
+    handleMessage(store, {
+      type: 'llm_global_config_updated',
+      globalConfig: { providers: [{ name: 'shared', models: ['global-new'] }] },
+    });
+
+    const providers = store.llmConfig['agent-a'].effectiveConfig.providers;
+    expect(providers.map(p => p.name)).toEqual(['global:shared', 'shared']);
+    expect(providers[0].scope).toBe('global');
+    expect(providers[0].originalName).toBe('shared');
+    expect(providers[1].scope).toBe('agent');
+  });
+
+  it('removes deleted global providers from effective config immediately', () => {
+    const store = makeStore();
+    handleMessage(store, {
+      type: 'llm_config',
+      agentId: 'agent-a',
+      globalConfig: { providers: [{ name: 'global', models: ['g'] }] },
+      agentConfig: { providers: [{ name: 'local', models: ['l'] }] },
+    });
+
+    handleMessage(store, {
+      type: 'llm_global_config_updated',
+      globalConfig: { providers: [] },
+    });
+
+    expect(store.llmConfig['agent-a'].effectiveConfig.providers.map(p => p.name)).toEqual(['local']);
+    expect(store.llmConfig['agent-a'].providers.map(p => p.name)).toEqual(['local']);
+  });
+
 });

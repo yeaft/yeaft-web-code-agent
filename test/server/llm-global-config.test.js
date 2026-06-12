@@ -76,4 +76,43 @@ describe('server global LLM config', () => {
     expect(result.ok).toBe(false);
     expect(result.pending).toBe(true);
   });
+
+
+  it('routes skipAuth dev global config to ownerless agents without widening production owner boundary', async () => {
+    const { CONFIG } = await import('../../server/config.js');
+    const { agents } = await import('../../server/context.js');
+    const devUser = userDb.getOrCreate('dev-user');
+    const prodUser = userDb.getOrCreate('prod-user');
+    const sent = [];
+    const ws = { readyState: 1, send: payload => sent.push(JSON.parse(payload)) };
+
+    agents.clear();
+    agents.set('dev-agent', { ownerId: null, ws });
+
+    mod.saveGlobalLlmConfigFromWeb(devUser.id, {
+      providers: [{ name: 'dev-global', baseUrl: 'http://dev/v1', apiKey: 'dev-secret', models: ['gpt-5'] }]
+    });
+    mod.saveGlobalLlmConfigFromWeb(prodUser.id, {
+      providers: [{ name: 'prod-global', baseUrl: 'http://prod/v1', apiKey: 'prod-secret', models: ['gpt-5'] }]
+    });
+
+    CONFIG.skipAuth = false;
+    await mod.sendGlobalLlmConfigToUserAgents(prodUser.id);
+    await mod.sendGlobalLlmConfigToAgent('dev-agent');
+    expect(sent).toEqual([]);
+
+    CONFIG.skipAuth = true;
+    await mod.sendGlobalLlmConfigToUserAgents(devUser.id);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].type).toBe('llm_global_config_updated');
+    expect(sent[0].globalConfig.providers.map(p => p.name)).toEqual(['dev-global']);
+    expect(sent[0].globalConfig.providers[0].apiKey).toBe('dev-secret');
+
+    sent.length = 0;
+    await mod.sendGlobalLlmConfigToUserAgents(prodUser.id);
+    expect(sent).toEqual([]);
+
+    CONFIG.skipAuth = false;
+    agents.clear();
+  });
 });

@@ -3,6 +3,7 @@ import { CONFIG } from './config.js';
 import { agents, webClients } from './context.js';
 import { sendToAgent, sendToWebClient } from './ws-utils.js';
 import { llmConfigDb } from './db/llm-config-db.js';
+import { userDb } from './database.js';
 
 const COPILOT_OAUTH_CLIENT_ID = 'Ov23li8tweQw6odWQebz';
 const DEVICE_CODE_URL = 'https://github.com/login/device/code';
@@ -19,6 +20,17 @@ const DEFAULT_GITHUB_PROVIDER = {
 };
 
 const MASK = '********';
+
+function getSkipAuthUserId() {
+  return userDb.getOrCreate('dev-user').id;
+}
+
+function userIdForAgentGlobalConfig(agent) {
+  if (!agent) return null;
+  if (agent.ownerId) return agent.ownerId;
+  if (CONFIG.skipAuth) return getSkipAuthUserId();
+  return null;
+}
 
 function secretKey() {
   return createHash('sha256')
@@ -143,17 +155,18 @@ export function saveGlobalLlmConfigFromWeb(userId, update = {}) {
 
 export async function sendGlobalLlmConfigToAgent(agentId) {
   const agent = agents.get(agentId);
-  if (!agent?.ownerId) return;
-  await sendToAgent(agentId, {
+  const userId = userIdForAgentGlobalConfig(agent);
+  if (!userId) return;
+  await sendToAgent(agent, {
     type: 'llm_global_config_updated',
-    globalConfig: readGlobalLlmConfigForAgent(agent.ownerId),
+    globalConfig: readGlobalLlmConfigForAgent(userId),
   });
 }
 
 export async function sendGlobalLlmConfigToUserAgents(userId) {
   const tasks = [];
   for (const [agentId, agent] of agents) {
-    if (agent.ownerId === userId) tasks.push(sendGlobalLlmConfigToAgent(agentId));
+    if (userIdForAgentGlobalConfig(agent) === userId) tasks.push(sendGlobalLlmConfigToAgent(agentId));
   }
   await Promise.all(tasks);
 }
