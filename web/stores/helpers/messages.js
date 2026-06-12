@@ -28,7 +28,7 @@ function inActiveYeaftConv(store, conversationId) {
     && conversationId === store.yeaftConversationId;
 }
 
-// Idempotently mirror the routing context (vpId / turnId / threadId / speakerVpId)
+// Idempotently mirror the routing context (vpId / turnId / speakerVpId)
 // onto a Yeaft message that carries VP attribution (assistant or
 // tool-use). Used at three points:
 //   1. on creation in addMessageToConversation
@@ -51,8 +51,6 @@ function stampSpeakerOnVpMessage(store, conversationId, m) {
   if (!inActiveYeaftConv(store, conversationId)) return;
   if (!m.vpId && store._currentYeaftVpId) m.vpId = store._currentYeaftVpId;
   if (!m.turnId && store._currentYeaftTurnId) m.turnId = store._currentYeaftTurnId;
-  if (!m.threadId && store._currentYeaftThreadId) m.threadId = store._currentYeaftThreadId;
-  if (!m.threadTitle && store._currentYeaftThreadTitle) m.threadTitle = store._currentYeaftThreadTitle;
   if (!m.speakerVpId && m.vpId) m.speakerVpId = m.vpId;
 }
 
@@ -148,8 +146,6 @@ function mergeAssistantTextByStableId(store, conversationId, opts, text) {
   if (opts.sessionId && !existing.sessionId) existing.sessionId = opts.sessionId;
   if (opts.vpId && !existing.vpId) existing.vpId = opts.vpId;
   if (opts.turnId && !existing.turnId) existing.turnId = opts.turnId;
-  if (opts.threadId && !existing.threadId) existing.threadId = opts.threadId;
-  if (opts.threadTitle && !existing.threadTitle) existing.threadTitle = opts.threadTitle;
   if (!existing.content || (typeof existing.content === 'string' && text.length > existing.content.length)) {
     existing.content = text;
   }
@@ -194,12 +190,6 @@ export function addMessageToConversation(store, conversationId, msg) {
     if (!newMsg.turnId && store._currentYeaftTurnId) {
       newMsg.turnId = store._currentYeaftTurnId;
     }
-    if (!newMsg.threadId && store._currentYeaftThreadId) {
-      newMsg.threadId = store._currentYeaftThreadId;
-    }
-    if (!newMsg.threadTitle && store._currentYeaftThreadTitle) {
-      newMsg.threadTitle = store._currentYeaftThreadTitle;
-    }
     // Speaker derivation is gated by message type (assistant / tool-use)
     // inside the helper itself.
     stampSpeakerOnVpMessage(store, conversationId, newMsg);
@@ -243,12 +233,10 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
   // message for THAT turn (not just the last message). This prevents
   // concurrent VP streams from interleaving into the same message.
   const turnId = store._currentYeaftTurnId;
-  const threadId = store._currentYeaftThreadId || null;
-  if (turnId || threadId) {
+  if (turnId) {
     for (let i = msgs.length - 1; i >= 0; i--) {
-      const turnMatches = !turnId || msgs[i].turnId === turnId;
-      const threadMatches = !threadId || !msgs[i].threadId || msgs[i].threadId === threadId;
-      if (turnMatches && threadMatches && msgs[i].type === 'assistant' && msgs[i].isStreaming) {
+      const turnMatches = msgs[i].turnId === turnId;
+      if (turnMatches && msgs[i].type === 'assistant' && msgs[i].isStreaming) {
         stampSpeakerOnVpMessage(store, conversationId, msgs[i]);
         if (opts.id && !msgs[i].id) msgs[i].id = opts.id;
         if (opts.id && !msgs[i].messageId) msgs[i].messageId = opts.id;
@@ -265,8 +253,6 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
       ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
       ...(opts.vpId ? { vpId: opts.vpId } : {}),
       ...(opts.turnId ? { turnId: opts.turnId } : {}),
-      ...(opts.threadId ? { threadId: opts.threadId } : {}),
-      ...(opts.threadTitle ? { threadTitle: opts.threadTitle } : {}),
       type: 'assistant',
       content: text,
       isStreaming: true,
@@ -322,15 +308,14 @@ export function finishStreamingForConversation(store, conversationId) {
   // cascade. Legacy single-turn path (no _currentYeaftTurnId) keeps the
   // original blanket-clear so non-Yeaft chats are unaffected.
   const targetTurnId = store._currentYeaftTurnId || null;
-  const targetThreadId = store._currentYeaftThreadId || null;
 
   // ★ Finish ALL streaming messages in the current turn, not just the last one.
   // Non-streaming messages (chat-image, tool-use) can be appended after
   // a streaming assistant message, leaving it stuck with isStreaming: true.
   for (let i = msgs.length - 1; i >= 0; i--) {
     const m = msgs[i];
-    if (targetTurnId || targetThreadId) {
-      // Per-turn/thread mode: only touch messages tagged with this turnId, OR
+    if (targetTurnId) {
+      // Per-turn mode: only touch messages tagged with this turnId, OR
       // messages that have NO turnId yet (they were minted before the
       // routing context was set and the defensive stamper below will
       // adopt them into the active turn). Anything tagged with a
@@ -338,10 +323,6 @@ export function finishStreamingForConversation(store, conversationId) {
       if (m.turnId && m.turnId !== targetTurnId) {
         // Stop at the user message that opened this fan-out so we don't
         // wander into older history.
-        if (m.type === 'user') break;
-        continue;
-      }
-      if (targetThreadId && m.threadId && m.threadId !== targetThreadId) {
         if (m.type === 'user') break;
         continue;
       }

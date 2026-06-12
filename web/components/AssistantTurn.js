@@ -43,11 +43,11 @@ export default {
         @stop-turn="onStopTurn"
       />
 
-      <div class="turn-message-block" :data-turn-id="turn.turnId || ''" :data-thread-id="turn.threadId || ''">
+      <div class="turn-message-block" :data-turn-id="turn.turnId || ''">
         <!-- 1. Text content -->
         <div v-if="turn.textContent" class="turn-content">
           <div class="turn-header">
-            <!-- H2.f.4: ThreadPill removed (multi-thread retired). -->
+            <!-- Session message blocks are keyed by turn/message identity; no thread pill is rendered. -->
             <button class="copy-btn" @click="copyContent" :title="copied ? $t('message.copied') : $t('message.copy')">
             <svg v-if="!copied" viewBox="0 0 24 24" width="16" height="16">
               <path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
@@ -398,8 +398,6 @@ export default {
     const openImagePreview = (url) => {
       window.open(url, '_blank');
     };
-
-    // H2.f.6: canFork / forkFromHere removed alongside the multi-thread engine.
 
     // task-334-ui-c: forward VP speaker click → parent (MessageList →
     // YeaftPage → chatStore.enterVpDetailView). Kept opt-in via the

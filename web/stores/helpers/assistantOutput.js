@@ -91,8 +91,6 @@ export function handleAssistantOutputFrame(store, conversationId, data) {
         sessionId: store._currentYeaftSessionId || null,
         vpId: store._currentYeaftVpId || null,
         turnId: store._currentYeaftTurnId || null,
-        threadId: store._currentYeaftThreadId || null,
-        threadTitle: store._currentYeaftThreadTitle || null,
       });
       return;
     }
@@ -112,8 +110,6 @@ export function handleAssistantOutputFrame(store, conversationId, data) {
           sessionId: store._currentYeaftSessionId || null,
           vpId: store._currentYeaftVpId || null,
           turnId: store._currentYeaftTurnId || null,
-          threadId: store._currentYeaftThreadId || null,
-          threadTitle: store._currentYeaftThreadTitle || null,
         });
       } else if (block.type === 'tool_use') {
         // Finish any in-progress streaming so typing dots reappear during tool execution.

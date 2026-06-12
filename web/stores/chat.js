@@ -482,10 +482,8 @@ export const useChatStore = defineStore('chat', {
     // addMessageToConversation / appendToAssistant can route by turnId.
     _currentYeaftVpId: null,
     _currentYeaftTurnId: null,
-    _currentYeaftThreadId: null,
-    _currentYeaftThreadTitle: null,
     // Feature system fully removed 2026-05-13; per-VP turns are folded
-    // by VpTurnBlock keyed off vpId + turnId + threadId.
+    // by VpTurnBlock keyed off vpId + message id.
 
     // Active VP turns — keyed by turnId. Cleared on result or abort ack.
     activeVpTurns: {},
@@ -507,9 +505,8 @@ export const useChatStore = defineStore('chat', {
     // data is there.
     vpStatuses: {},
 
-    // VP runtime threads: the conversation is still a single message stream,
-    // but group VP messages are explicitly tagged by threadId so MessageList
-    // can keep tools/todos/progress inside the correct VP thread block.
+    // VP runtime turns: the conversation is a single message stream, and
+    // Yeaft message blocks are keyed by VP + message id.
 
     // task-fix: per-VP typing indicator for Yeaft group chat.
     //   Shape: { [conversationId]: { [vpId]: refCount } }
@@ -1138,7 +1135,7 @@ export const useChatStore = defineStore('chat', {
      * web (`yeaft_debug_history` case in messageHandler merges into
      * `yeaftDebugLoops` / `yeaftDebugTurnsById` / `yeaftDebugTurnOrder`).
      */
-    loadYeaftDebugHistory({ groupId, threadId, limit, dreamLimit } = {}) {
+    loadYeaftDebugHistory({ groupId, limit, dreamLimit } = {}) {
       if (!this.yeaftAgentId) return;
       this.yeaftDebugHistoryLoading = true;
       this.yeaftDebugHistoryError = null;
@@ -1149,7 +1146,6 @@ export const useChatStore = defineStore('chat', {
         dreamLimit: Number.isFinite(dreamLimit) && dreamLimit > 0 ? dreamLimit : 5,
       };
       if (typeof groupId === 'string' && groupId) payload.sessionId = groupId;
-      if (typeof threadId === 'string' && threadId) payload.threadId = threadId;
       this.sendWsMessage(payload);
       if (this._fetchYeaftDebugHistoryTimer) clearTimeout(this._fetchYeaftDebugHistoryTimer);
       this._fetchYeaftDebugHistoryTimer = setTimeout(() => {
@@ -1185,7 +1181,6 @@ export const useChatStore = defineStore('chat', {
       if (!text?.trim() && !hasAttachments) return;
       const effectiveText = text?.trim() ? text : '(attached files)';
       const clientMessageId = `u_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-      const clientThreadId = `pending_${clientMessageId}`;
       if (this.yeaftConversationId) {
         const localMsg = {
           id: clientMessageId,
@@ -1193,12 +1188,9 @@ export const useChatStore = defineStore('chat', {
           type: 'user',
           content: effectiveText,
           sessionId: groupId,
-          // The agent-side router will replace this with the classified
-          // threadId as soon as the first frame for the VP thread arrives.
-          // Until then, the input row still has a stable block id instead of
-          // an empty/random-per-render boundary.
-          threadId: clientThreadId,
-          turnId: clientThreadId,
+          // Use the client message id as the optimistic local turn id so
+          // the row has a stable message-block key until server frames arrive.
+          turnId: clientMessageId,
         };
         if (safeAttachments.length > 0) {
           // Local-render shape mirrors what `MessageItem` already
@@ -1318,25 +1310,9 @@ export const useChatStore = defineStore('chat', {
           const prevGroup = this._currentYeaftSessionId;
           const prevVpId = this._currentYeaftVpId;
           const prevTurnId = this._currentYeaftTurnId;
-          const prevThreadId = this._currentYeaftThreadId;
-          const prevThreadTitle = this._currentYeaftThreadTitle;
           if (msgSessionId != null) this._currentYeaftSessionId = msgSessionId;
           if (msg.vpId && msg.data.type !== 'result') this._currentYeaftVpId = msg.vpId;
           if (msg.turnId && msg.data.type !== 'result') this._currentYeaftTurnId = msg.turnId;
-          if (msg.threadId) this._currentYeaftThreadId = msg.threadId;
-          if (msg.threadTitle || msg.title) this._currentYeaftThreadTitle = msg.threadTitle || msg.title;
-          if (msg.threadId) {
-            const rows = this.messagesMap[conversationId] || [];
-            for (let i = rows.length - 1; i >= 0; i--) {
-              const row = rows[i];
-              if (!row || row.type !== 'user') continue;
-              if (msgSessionId != null && (row.sessionId ?? row.groupId) !== msgSessionId) continue;
-              if (row.threadId && !String(row.threadId).startsWith('pending_')) break;
-              row.threadId = msg.threadId;
-              if (!row.turnId || String(row.turnId).startsWith('pending_')) row.turnId = msg.threadId;
-              break;
-            }
-          }
           // (2026-05-13) featureId stamping removed along with the Feature system.
           try {
             const shouldPruneWindow = this.currentView === 'yeaft'
@@ -1366,8 +1342,6 @@ export const useChatStore = defineStore('chat', {
             this._currentYeaftSessionId = prevGroup;
             this._currentYeaftVpId = prevVpId;
             this._currentYeaftTurnId = prevTurnId;
-            this._currentYeaftThreadId = prevThreadId;
-            this._currentYeaftThreadTitle = prevThreadTitle;
           }
         }
         return;
@@ -1476,10 +1450,6 @@ export const useChatStore = defineStore('chat', {
             userPrompt: event.userPrompt || '',
             vpId: event.vpId || msg.vpId || null,
             sessionId: event.sessionId || msg.sessionId || null,
-            // fix-vp-multi-thread (bug 4): stamp threadId so a multi-
-            // thread VP's debug rows can be filtered by thread in the
-            // panel without re-deriving it from each loop body.
-            threadId: msg.threadId || event.threadId || null,
             openedAt: event.at || Date.now(),
             closedAt: null,
             totalMs: 0,
@@ -1631,12 +1601,6 @@ export const useChatStore = defineStore('chat', {
             // Bug 3 carry-over: stamp sessionId so the panel filter narrows
             // by session. Falls back to envelope groupId if engine omitted it.
             sessionId: msg.sessionId || null,
-            // fix-vp-multi-thread (bug 4): stamp threadId / vpId so the
-            // debug panel can show per-thread debug history for a VP
-            // that runs N concurrent threads. Without these fields the
-            // panel can only filter by group, collapsing every thread
-            // into one timeline.
-            threadId: msg.threadId || event.threadId || null,
             vpId: msg.vpId || event.vpId || null,
           });
           // fix-debug-copy-no-truncate: bound retention by count.
@@ -2023,8 +1987,6 @@ export const useChatStore = defineStore('chat', {
             ...this.activeVpTurns,
             [event.turnId]: {
               vpId: event.vpId,
-              threadId: event.threadId || null,
-              threadTitle: event.title || event.threadTitle || '',
               isStreaming: true,
               startedAt: event.ts || Date.now(),
             },
@@ -2139,10 +2101,7 @@ export const useChatStore = defineStore('chat', {
               state: event.state,
               since: event.since || Date.now(),
               turnId: event.turnId || null,
-              threadId: event.threadId || null,
               title: event.title || '',
-              runningThreadCount: event.runningThreadCount || 0,
-              threads: Array.isArray(event.threads) ? event.threads : [],
               sessionId,
               vpId: event.vpId,
             },
@@ -2169,10 +2128,7 @@ export const useChatStore = defineStore('chat', {
                 state: row.state,
                 since: row.since || Date.now(),
                 turnId: row.turnId || null,
-                threadId: row.threadId || null,
                 title: row.title || '',
-                runningThreadCount: row.runningThreadCount || 0,
-                threads: Array.isArray(row.threads) ? row.threads : [],
                 sessionId: rowSessionId,
                 vpId: row.vpId,
               };
@@ -2195,10 +2151,7 @@ export const useChatStore = defineStore('chat', {
                 state: row.state,
                 since: row.since || Date.now(),
                 turnId: row.turnId || null,
-                threadId: row.threadId || null,
                 title: row.title || '',
-                runningThreadCount: row.runningThreadCount || 0,
-                threads: Array.isArray(row.threads) ? row.threads : [],
                 sessionId: rowSessionId,
                 vpId: row.vpId,
               };

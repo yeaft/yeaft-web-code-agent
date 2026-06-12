@@ -960,7 +960,6 @@ export class Engine {
         parentVpId: vpCtx?.senderVpId || null,
         parentVpPersona: vpCtx?.vpPersona || null,
         parentSessionId: vpCtx?.sessionId || null,
-        parentThreadId: vpCtx?.threadId || MAIN_THREAD_ID,
         onEvent: this.#subAgentEventSink || null,
         language: this.#config?.language || 'en',
         // Forward the session-shared ToolUsageStats so sub-agent

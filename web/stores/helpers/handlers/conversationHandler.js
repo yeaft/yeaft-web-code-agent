@@ -498,7 +498,7 @@ export function handleYeaftHistoryChunk(store, msg) {
     if (stableId && (existingIds.has(stableId) || seenIds.has(stableId))) continue;
     if (stableId) seenIds.add(stableId);
     if (m.role === 'user') {
-      const threadId = m.threadId || m.turnId || 'main';
+      const messageId = stableId || m.messageId || m.turnId || null;
       const rowSessionId = m.sessionId ?? m.groupId ?? msgSessionId ?? null;
       formatted.push({
         ...(stableId ? { id: stableId, messageId: stableId } : {}),
@@ -506,13 +506,12 @@ export function handleYeaftHistoryChunk(store, msg) {
         content: m.content,
         timestamp: normalizeHistoryTimestamp(m),
         sessionId: rowSessionId,
-        threadId,
-        turnId: m.turnId || threadId,
+        turnId: m.turnId || messageId,
         ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: m.attachments } : {}),
         isStreaming: false,
       });
     } else if (m.role === 'assistant') {
-      const threadId = m.threadId || m.turnId || 'main';
+      const messageId = stableId || m.messageId || m.turnId || null;
       const rowSessionId = m.sessionId ?? m.groupId ?? msgSessionId ?? null;
       const speakerVpId = resolveHistorySpeakerVpId(m, rowSessionId);
       formatted.push({
@@ -521,8 +520,7 @@ export function handleYeaftHistoryChunk(store, msg) {
         content: m.content,
         timestamp: normalizeHistoryTimestamp(m),
         sessionId: rowSessionId,
-        threadId,
-        turnId: m.turnId || threadId,
+        turnId: m.turnId || messageId,
         ...(speakerVpId ? { vpId: speakerVpId, speakerVpId } : {}),
         isStreaming: false,
         isHistory: true,

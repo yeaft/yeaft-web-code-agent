@@ -119,11 +119,12 @@ export default {
              affordance can drive either mode without leaking state. -->
         <div v-if="(store.loadingMoreMessages && store.currentView !== 'yeaft') || store.yeaftLoadingMoreHistory" class="loading-more">{{ $t('message.loadingMore') }}</div>
         <div v-else-if="(store.hasMoreMessages && store.currentView !== 'yeaft') || store.yeaftHasMoreHistory || store.hasHiddenYeaftMessages" class="load-more-hint" @click="onClickLoadMore">{{ $t('message.loadMore') }}</div>
-        <template v-for="block in threadBlocks" :key="block.id">
+        <template v-for="block in messageBlocks" :key="block.id">
           <section
-            v-if="block.type === 'thread-block'"
-            class="thread-block"
-            :data-thread-id="block.threadId"
+            v-if="block.type === 'message-block'"
+            class="message-block"
+            :data-vp-id="block.vpId || ''"
+            :data-message-id="block.messageId || ''"
           >
             <template v-for="item in block.items" :key="item.id">
               <!-- task-312: wrapper carries data-msg-id so the Yeaft sidebar
@@ -557,14 +558,23 @@ export default {
       return store.agents.filter(a => a.online);
     });
 
-    const threadBlockIdForItem = (item, index) => {
-      if (!item) return `unknown_${index}`;
-      const msg = item.message || null;
-      return item.threadId
-        || item.turnId
-        || msg?.threadId
-        || msg?.turnId
-        || (msg?.id ? `legacy_${msg.id}` : `legacy_${index}`);
+    const messageBlockMetaForItem = (item, index) => {
+      const msg = item?.message || null;
+      const messageId = item?.id
+        || item?.atMessageId
+        || msg?.id
+        || msg?.messageId
+        || `legacy_${index}`;
+      const vpId = item?.speakerVpId
+        || item?.vpId
+        || msg?.speakerVpId
+        || msg?.vpId
+        || '';
+      return {
+        id: `message_${vpId || 'user'}_${messageId}_${index}`,
+        vpId,
+        messageId,
+      };
     };
 
     // Turn aggregation: group flat messages into turn groups
@@ -654,12 +664,6 @@ export default {
         if (!currentTurn.turnId && msg.turnId) {
           currentTurn.turnId = msg.turnId;
         }
-        if (!currentTurn.threadId && msg.threadId) {
-          currentTurn.threadId = msg.threadId;
-        }
-        if (!currentTurn.threadTitle && msg.threadTitle) {
-          currentTurn.threadTitle = msg.threadTitle;
-        }
       };
 
       const startTurn = () => {
@@ -674,12 +678,6 @@ export default {
           imageMsgs: [],
           askMsg: null,
           messages: [],
-          threadId: null,
-          threadTitle: '',
-          threadStatus: '',
-          threadMessageCount: 0,
-          isLatestThreadForVp: false,
-          threadCollapsed: false,
           // task-314: persisted message id (`m{NNNN}`) for the last
           // assistant chunk in this turn — used as the fork cursor when
           // the user clicks "Fork from here".
@@ -700,7 +698,7 @@ export default {
 
       // task-group-vp-block-split (v0.1.776): close the current turn
       // when an incoming VP-attributed message belongs to a DIFFERENT
-      // VP-turn/thread than the one currently being assembled. Without this,
+      // VP turn than the one currently being assembled. Without this,
       // a `route_forward` from VP_A to VP_B leaves VP_A's turn open
       // and VP_B's first chunks get appended into VP_A's block —
       // visually the user sees Linus's text inside Jobs's bubble.
@@ -719,16 +717,6 @@ export default {
       // unstamped legacy Chat rows still keep the old single-open-turn path.
       const closeTurnIfTurnIdChanged = (msg) => {
         if (!currentTurn) return;
-        const curThreadId = currentTurn.threadId;
-        const msgThreadId = msg.threadId;
-        if (curThreadId && msgThreadId) {
-          if (typeof curThreadId !== 'string' || typeof msgThreadId !== 'string') return;
-          if (curThreadId !== msgThreadId) {
-            finishTurn();
-            return;
-          }
-        }
-
         const curTurnId = currentTurn.turnId;
         const msgTurnId = msg.turnId;
         if (curTurnId && msgTurnId) {
@@ -836,26 +824,6 @@ export default {
 
       finishTurn();
 
-      const latestThreadByVp = new Map();
-      for (const item of result) {
-        if (!item || item.type !== 'assistant-turn' || !item.speakerVpId || !item.threadId) continue;
-        latestThreadByVp.set(item.speakerVpId, item.threadId);
-      }
-      const threadCounts = new Map();
-      for (const item of result) {
-        if (!item || item.type !== 'assistant-turn' || !item.threadId) continue;
-        const key = `${item.speakerVpId || ''}::${item.threadId}`;
-        const count = (item.messages && item.messages.length) || 0;
-        threadCounts.set(key, (threadCounts.get(key) || 0) + count);
-      }
-      for (const item of result) {
-        if (!item || item.type !== 'assistant-turn' || !item.threadId) continue;
-        const key = `${item.speakerVpId || ''}::${item.threadId}`;
-        item.threadMessageCount = threadCounts.get(key) || ((item.messages && item.messages.length) || 0);
-        item.isLatestThreadForVp = latestThreadByVp.get(item.speakerVpId) === item.threadId;
-        item.threadCollapsed = !!(item.threadId && !item.isLatestThreadForVp && !item.isStreaming);
-      }
-
       // task-757: removed the call to the typing-placeholder helper
       // [appendTypingPlaceholders, kept in web/stores/helpers/ for its
       // unit tests] which used to be invoked here. That call appended a
@@ -886,39 +854,21 @@ export default {
       return result;
     });
 
-    const threadBlocks = Vue.computed(() => {
-      // Thread-block wrappers are a group-conversation layout primitive.
-      // Chat mode needs the flat turn list so normal user/assistant rows keep
-      // rendering after the thread-block refactor.
+    const messageBlocks = Vue.computed(() => {
+      // Yeaft Session message blocks are keyed by VP + message id. Thread is no
+      // longer a UI grouping primitive; Chat mode keeps the flat legacy list.
       if (store.currentView !== 'yeaft' || !activeGroupIdForBar.value) return turnGroups.value;
-      const blocks = [];
-      let current = null;
-      const flush = () => {
-        if (current && current.items.length > 0) blocks.push(current);
-        current = null;
-      };
-      for (let i = 0; i < turnGroups.value.length; i++) {
-        const item = turnGroups.value[i];
-        if (!item) continue;
-        if (item.type === 'system' || item.type === 'error') {
-          flush();
-          blocks.push(item);
-          continue;
-        }
-        const threadId = threadBlockIdForItem(item, i);
-        if (!current || current.threadId !== threadId) {
-          flush();
-          current = {
-            type: 'thread-block',
-            id: `thread_${threadId}_${i}`,
-            threadId,
-            items: [],
-          };
-        }
-        current.items.push(item);
-      }
-      flush();
-      return blocks;
+      return turnGroups.value.map((item, i) => {
+        if (!item || item.type === 'system' || item.type === 'error') return item;
+        const meta = messageBlockMetaForItem(item, i);
+        return {
+          type: 'message-block',
+          id: meta.id,
+          vpId: meta.vpId,
+          messageId: meta.messageId,
+          items: [item],
+        };
+      });
     });
 
     // PR-L: reflection cards grouped by anchor (the message id present at the
@@ -1497,7 +1447,7 @@ export default {
     );
 
     // H2.f.6: yeaftJumpTarget watcher removed (sidebar no longer emits
-    // jump-to-message events; multi-thread navigation is gone). The
+    // jump-to-message events; message block navigation uses message ids). The
     // flashMsgId ref is kept (currently unused) so any v-bind referencing
     // it stays valid.
     const flashMsgId = Vue.ref(null);
@@ -1581,7 +1531,7 @@ export default {
       refreshSession,
       onlineAgents,
       turnGroups,
-      threadBlocks,
+      messageBlocks,
       cardsForRow,
       orphanCards,
       subAgentCardsForRow,

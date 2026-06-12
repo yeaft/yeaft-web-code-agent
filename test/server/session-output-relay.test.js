@@ -46,7 +46,6 @@ describe('Yeaft Session output relay aliases', () => {
       conversationId: 'yeaft-1',
       sessionId: 'sess-1',
       vpId: 'vp-1',
-      threadId: 'thread-1',
       data,
     })).resolves.toBe(true);
 
@@ -56,7 +55,6 @@ describe('Yeaft Session output relay aliases', () => {
       agentId: 'agent-1',
       sessionId: 'sess-1',
       vpId: 'vp-1',
-      threadId: 'thread-1',
       data,
       event: undefined,
     }]);
