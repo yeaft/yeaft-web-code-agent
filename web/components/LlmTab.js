@@ -283,7 +283,7 @@ export default {
       return this.localProviders;
     },
     allModelRefs() {
-      const providers = this.currentConfig?.effectiveConfig?.providers || this.localProviders;
+      const providers = this.localProviders;
       const refs = [];
       for (const p of providers) {
         if (!p.name) continue;

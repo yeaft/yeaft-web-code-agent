@@ -204,12 +204,14 @@ export async function handleAgentSync(agentId, agent, msg) {
       break;
     }
 
-    // LLM config updated acknowledgement from agent
+    // LLM model discovery response from agent — relay to owner clients
     case 'llm_models_discovered': {
-      const webClients = getUserWebClients(ownerId);
-      for (const webClient of webClients) {
-        if (webClient.readyState === 1) {
-          webClient.send(JSON.stringify({
+      for (const [, client] of webClients) {
+        if (client.authenticated && (CONFIG.skipAuth ||
+          (agent.ownerId && client.userId === agent.ownerId) ||
+          (!agent.ownerId && client.role === 'admin')
+        )) {
+          await sendToWebClient(client, {
             type: 'llm_models_discovered',
             agentId,
             requestId: msg.requestId,
@@ -220,7 +222,7 @@ export async function handleAgentSync(agentId, agent, msg) {
             source: msg.source,
             warning: msg.warning,
             error: msg.error,
-          }));
+          });
         }
       }
       break;

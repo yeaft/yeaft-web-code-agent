@@ -101,6 +101,11 @@ export async function discoverGitHubCopilotModels({ fetchFn = fetch, getTokenFn 
         ...copilotRequestHeaders({ isAgentTurn: true }),
       },
     });
+    if (res.status === 401 || res.status === 403) {
+      const err = new Error('GitHub Copilot credential is invalid or lacks Copilot access. Re-authenticate with `gh auth login` or complete the Copilot device login again.');
+      err.code = 'COPILOT_AUTH_INVALID';
+      throw err;
+    }
     if (!res.ok) return fallbackResult(GITHUB_COPILOT_PROVIDER, `HTTP ${res.status}`);
     const payload = await readJson(res);
     const models = parseModelPayload(payload);
@@ -113,6 +118,7 @@ export async function discoverGitHubCopilotModels({ fetchFn = fetch, getTokenFn 
       warning: null,
     };
   } catch (e) {
+    if (e?.code === 'COPILOT_AUTH_INVALID') throw e;
     return fallbackResult(GITHUB_COPILOT_PROVIDER, e.message || String(e));
   }
 }

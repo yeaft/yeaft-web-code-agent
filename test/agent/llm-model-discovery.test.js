@@ -32,6 +32,18 @@ describe('LLM model discovery', () => {
     expect(result.providerModels).toEqual([{ id: 'claude-sonnet-4.5', protocol: 'anthropic' }, 'gpt-5']);
   });
 
+  it('does not fall back when Copilot credentials are invalid or unauthorized', async () => {
+    await expect(discoverGitHubCopilotModels({
+      getTokenFn: async () => ({ token: 'bad-copilot-token' }),
+      fetchFn: async () => jsonResponse({ error: 'forbidden' }, { ok: false, status: 403 }),
+    })).rejects.toMatchObject({ code: 'COPILOT_AUTH_INVALID' });
+
+    await expect(discoverGitHubCopilotModels({
+      getTokenFn: async () => ({ token: 'bad-copilot-token' }),
+      fetchFn: async () => jsonResponse({ error: 'unauthorized' }, { ok: false, status: 401 }),
+    })).rejects.toMatchObject({ code: 'COPILOT_AUTH_INVALID' });
+  });
+
   it('falls back to the built-in Copilot list when live catalog is unavailable', async () => {
     const result = await discoverGitHubCopilotModels({
       getTokenFn: async () => ({ token: 'copilot-token' }),
