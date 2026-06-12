@@ -56,6 +56,7 @@ export function createRouter(deps = {}) {
    *   taskId?: string|null,
    *   inboundEnvelope?: any,   // the envelope the sender is currently handling
    *                             // (drives causedBy chain & loop guard)
+   *   sourceThreadId?: string|null, // sender-side thread that should own the visible forward row
    * }} args
    * @param {{ taskMembers?: string[] }} [opts]  — forwarded to coordinator.ingest
    * @returns {{
@@ -148,6 +149,9 @@ export function createRouter(deps = {}) {
           senderVpId: from,
           reason: args.reason || null,
           causedBy: chain,
+          sourceThreadId: typeof args.sourceThreadId === 'string' && args.sourceThreadId.trim()
+            ? args.sourceThreadId.trim()
+            : null,
         },
       },
       opts,
