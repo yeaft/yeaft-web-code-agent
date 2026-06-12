@@ -205,6 +205,27 @@ export async function handleAgentSync(agentId, agent, msg) {
     }
 
     // LLM config updated acknowledgement from agent
+    case 'llm_models_discovered': {
+      const webClients = getUserWebClients(ownerId);
+      for (const webClient of webClients) {
+        if (webClient.readyState === 1) {
+          webClient.send(JSON.stringify({
+            type: 'llm_models_discovered',
+            agentId,
+            requestId: msg.requestId,
+            providerType: msg.providerType,
+            provider: msg.provider,
+            models: msg.models || [],
+            providerModels: msg.providerModels || [],
+            source: msg.source,
+            warning: msg.warning,
+            error: msg.error,
+          }));
+        }
+      }
+      break;
+    }
+
     case 'llm_config_updated': {
       for (const [, client] of webClients) {
         if (client.authenticated && (CONFIG.skipAuth ||

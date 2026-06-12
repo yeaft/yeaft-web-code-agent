@@ -12,10 +12,32 @@ function makeStore() {
   return {
     _lastPongAt: 0,
     llmConfig: {},
+    llmModelDiscovery: {},
   };
 }
 
 describe('web local LLM config state', () => {
+
+  it('stores discovered model catalogs for the local agent config modal', () => {
+    const store = makeStore();
+    handleMessage(store, {
+      type: 'llm_models_discovered',
+      agentId: 'agent-a',
+      requestId: 'req-1',
+      providerType: 'github-copilot',
+      provider: { name: 'github-copilot', credentialProvider: 'github-copilot' },
+      models: ['claude-sonnet-4.5', 'gpt-5'],
+      providerModels: [{ id: 'claude-sonnet-4.5', protocol: 'anthropic' }, 'gpt-5'],
+      source: 'live',
+    });
+
+    expect(store.llmModelDiscovery['agent-a']).toMatchObject({
+      requestId: 'req-1',
+      source: 'live',
+      models: ['claude-sonnet-4.5', 'gpt-5'],
+    });
+  });
+
   it('stores agent-local config as the effective config without global merge state', () => {
     const store = makeStore();
     handleMessage(store, {

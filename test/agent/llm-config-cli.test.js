@@ -8,6 +8,8 @@ import {
   readLocalLlmConfig,
   removeProvider,
   setLocalModels,
+  useGitHubCopilot,
+  useOpenAICompatible,
   writeLocalLlmConfig,
 } from '../../agent/llm-config-cli.js';
 
@@ -23,6 +25,73 @@ afterEach(() => {
 });
 
 describe('yeaft-agent local LLM config helpers', () => {
+
+  it('uses GitHub Copilot preset with discovered models without writing an API key', async () => {
+    const result = await useGitHubCopilot({ debug: true }, {
+      model: 'claude-sonnet-4.5',
+      fast: 'gpt-5',
+      getTokenFn: async () => ({ token: 'copilot-token' }),
+      fetchFn: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ data: [{ id: 'claude-sonnet-4.5' }, { id: 'gpt-5' }] }),
+      }),
+    });
+
+    expect(result.config.debug).toBe(true);
+    expect(result.config.primaryModel).toBe('github-copilot/claude-sonnet-4.5');
+    expect(result.config.fastModel).toBe('github-copilot/gpt-5');
+    expect(result.provider).toMatchObject({
+      name: 'github-copilot',
+      baseUrl: 'https://api.githubcopilot.com',
+      credentialProvider: 'github-copilot',
+      protocol: 'openai-responses',
+    });
+    expect(result.provider.apiKey).toBeUndefined();
+    expect(result.provider.models).toEqual([{ id: 'claude-sonnet-4.5', protocol: 'anthropic' }, 'gpt-5']);
+  });
+
+  it('rejects unknown GitHub Copilot model unless explicitly allowed', async () => {
+    const discovery = {
+      getTokenFn: async () => ({ token: 'copilot-token' }),
+      fetchFn: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ data: [{ id: 'gpt-5' }] }),
+      }),
+    };
+
+    await expect(useGitHubCopilot({}, { model: 'missing-model', ...discovery })).rejects.toThrow('was not found');
+    const allowed = await useGitHubCopilot({}, { model: 'missing-model', allowUnknownModel: true, ...discovery });
+    expect(allowed.config.primaryModel).toBe('github-copilot/missing-model');
+    expect(allowed.provider.models).toContain('missing-model');
+  });
+
+
+
+  it('uses OpenAI-compatible preset by discovering /models', async () => {
+    const result = await useOpenAICompatible({}, {
+      name: 'proxy',
+      baseUrl: 'https://proxy.example/v1',
+      apiKeyEnv: 'PROXY_KEY',
+      model: 'gpt-5',
+      fetchFn: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ data: [{ id: 'gpt-5' }] }),
+      }),
+    }, { PROXY_KEY: 'sk-proxy' });
+
+    expect(result.config.primaryModel).toBe('proxy/gpt-5');
+    expect(result.provider).toMatchObject({
+      name: 'proxy',
+      baseUrl: 'https://proxy.example/v1',
+      apiKey: 'sk-proxy',
+      protocol: 'openai-responses',
+      models: ['gpt-5'],
+    });
+  });
+
   it('adds a provider and sets primary/fast model refs with implicit provider prefix', () => {
     const result = addOrUpdateProvider({}, {
       name: 'openai',

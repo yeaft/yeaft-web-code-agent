@@ -119,6 +119,21 @@ export async function handleClientMisc(clientId, client, msg, checkAgentAccess) 
       break;
     }
 
+    case 'discover_llm_models': {
+      const llmDiscoverAgentId = msg.agentId || client.currentAgent;
+      if (!llmDiscoverAgentId) break;
+      if (!await checkAgentAccess(llmDiscoverAgentId)) break;
+      await forwardToAgent(llmDiscoverAgentId, {
+        type: 'discover_llm_models',
+        agentId: llmDiscoverAgentId,
+        requestId: msg.requestId,
+        providerType: msg.providerType || msg.provider || msg.preset,
+        baseUrl: msg.baseUrl,
+        apiKey: msg.apiKey,
+      });
+      break;
+    }
+
     case 'update_llm_config': {
       const llmUpdateAgentId = msg.agentId || client.currentAgent;
       if (!llmUpdateAgentId) break;
