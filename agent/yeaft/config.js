@@ -302,7 +302,12 @@ export function loadConfig(overrides = {}) {
   let primaryModel = jsonConfig.primaryModel || null;
   if (primaryModel) {
     const parsed = parseModelRef(primaryModel);
-    model = parsed.providerName?.startsWith('global:') ? primaryModel : parsed.modelId;
+    // Global provider refs were removed. Old local config may still contain
+    // `global:<provider>/<model>` from previous UI versions; strip the dead
+    // namespace so runtime routing can match agent-local providers by model id.
+    const isRemovedGlobalRef = parsed.providerName?.startsWith('global:');
+    model = parsed.modelId;
+    if (isRemovedGlobalRef) primaryModel = parsed.modelId;
     modelIdForInfo = parsed.modelId;
   }
 
@@ -311,15 +316,14 @@ export function loadConfig(overrides = {}) {
   let fastModelId = null;
   if (fastModel) {
     const parsed = parseModelRef(fastModel);
-    fastModelId = parsed.providerName?.startsWith('global:') ? fastModel : parsed.modelId;
+    fastModel = parsed.providerName?.startsWith('global:') ? parsed.modelId : fastModel;
+    fastModelId = parsed.modelId;
   }
 
   // Resolve model info for adapter/baseUrl/thinking metadata. Token limits
   // (contextWindow / maxOutputTokens) are NOT read from here — they live in
   // models.dev and are resolved via resolveContextWindow / resolveMaxOutputTokens
   // a few lines below so the live models.dev snapshot is the source of truth.
-  // For disambiguated global provider refs (`global:<provider>/<model>`), keep
-  // the runtime model ref intact above but resolve metadata by the raw model id.
   const modelInfo = resolveModel(modelIdForInfo);
 
   // Pre-resolve token limits once so we can both write them onto config and

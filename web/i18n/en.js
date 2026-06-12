@@ -234,8 +234,6 @@ export default {
   'yeaft.dream.entriesCreated': '{n} entries',
   'yeaft.settings.title': 'Settings',
   // task-343: tab labels for the two-column Settings dialog
-  'yeaft.settings.tabs.llm': 'LLM',
-  'settings.yeaft.tabs.llm': 'LLM',
   'settings.yeaft.tabs.vp': 'VP Library',
   'settings.yeaft.tabs.search': 'Search',
   'settings.yeaft.tabs.mcp': 'MCP',

@@ -234,7 +234,6 @@ export default {
   'yeaft.dream.entriesCreated': '{n} 条',
   'yeaft.settings.title': '设置',
   // task-343: tab labels for the two-column Settings dialog
-  'yeaft.settings.tabs.llm': 'LLM',
   'yeaft.settings.tabs.vp': 'VP 库',
   'yeaft.settings.tabs.search': '搜索',
   // Search settings (web-search 后端 + Tavily key + 配额)
@@ -576,7 +575,6 @@ export default {
   // Settings - LLM 配置
   'settings.tabs.llm': 'LLM',
   'settings.tabs.yeaft': 'Yeaft',
-  'settings.yeaft.tabs.llm': 'LLM',
   'settings.yeaft.tabs.vp': 'VP 库',
   'settings.yeaft.tabs.search': '搜索',
   'settings.yeaft.tabs.mcp': 'MCP',
