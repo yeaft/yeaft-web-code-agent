@@ -3282,15 +3282,15 @@
 }
 
 
-/* VP multi-thread summary inside a VP turn block. */
+/* VP multi-thread summary inside the VP message-block header. */
 .vp-thread-summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 24px;
-  margin: 0 0 4px;
-  color: var(--text-secondary, #64748b);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-secondary);
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .vp-thread-summary-collapsed {
@@ -3298,12 +3298,14 @@
 }
 
 .vp-thread-title {
-  color: var(--text-primary, #0f172a);
+  color: var(--text-primary);
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .vp-thread-meta {
-  color: var(--text-tertiary, #94a3b8);
+  color: var(--text-muted);
 }
 
 
