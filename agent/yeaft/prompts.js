@@ -97,24 +97,27 @@ function readTemplate(name, { required = true } = {}) {
 function extractLangSection(content, language) {
   if (!content) return '';
 
+  const selected = extractExactLangSection(content, language);
+  if (selected !== null) return selected;
+
+  // No marker for this language — if language is 'zh', try 'en' fallback
+  if (language === 'zh') {
+    const fallback = extractExactLangSection(content, 'en');
+    if (fallback !== null) return fallback;
+  }
+
+  // No markers at all — return full content
+  if (!content.includes('<!-- lang:')) return content;
+  // Has markers but not for this language — fallback to en
+  return extractExactLangSection(content, 'en') || '';
+}
+
+function extractExactLangSection(content, language) {
+  if (!content) return null;
+
   const marker = `<!-- lang:${language} -->`;
   const markerIdx = content.indexOf(marker);
-
-  if (markerIdx === -1) {
-    // No marker for this language — if language is 'zh', try 'en' fallback
-    if (language === 'zh') {
-      const enMarker = '<!-- lang:en -->';
-      const enIdx = content.indexOf(enMarker);
-      if (enIdx !== -1) {
-        // Has en marker but no zh — return en section as fallback
-        return extractLangSection(content, 'en');
-      }
-    }
-    // No markers at all — return full content
-    if (!content.includes('<!-- lang:')) return content;
-    // Has markers but not for this language — fallback to en
-    return extractLangSection(content, 'en');
-  }
+  if (markerIdx === -1) return null;
 
   // Extract from after the marker to the next <!-- lang: marker or EOF
   const sectionStart = markerIdx + marker.length;
@@ -459,18 +462,103 @@ function selectVpPersonaRole(vpPersona, effectiveLang) {
 
 function selectVpPersonaBody(vpPersona, effectiveLang) {
   const body = typeof vpPersona.persona === 'string' ? vpPersona.persona.trim() : '';
-  if (effectiveLang === 'zh') {
-    // role.md has one persisted persona body today. If that body is Chinese,
-    // keep it. If it is English-only (the default seeded VP shape), do not glue
-    // it under a Chinese wrapper and produce a half-translated system prompt.
-    return hasCjk(body) ? body : '';
+  if (!body) return '';
+
+  if (body.includes('<!-- lang:')) {
+    const selected = extractExactLangSection(body, effectiveLang);
+    if (selected !== null) return selected;
+    return localizedDefaultPersonaBody(vpPersona, effectiveLang);
   }
+
+  if (effectiveLang === 'zh') {
+    // role.md historically had one persisted persona body. Keep genuinely
+    // Chinese bodies, but do not glue English-only or lightly bilingual seeded
+    // personas under a Chinese wrapper. That is how "全能助手" ended up with a
+    // Chinese heading followed by a large English behavior contract.
+    if (isPrimarilyCjk(body)) return body;
+    return localizedDefaultPersonaBody(vpPersona, effectiveLang);
+  }
+
+  if (hasCjk(body)) {
+    const localized = localizedDefaultPersonaBody(vpPersona, effectiveLang);
+    if (localized) return localized;
+  }
+
   return body;
 }
 
 function hasCjk(text) {
   return /[\u3400-\u9fff\uf900-\ufaff]/u.test(String(text || ''));
 }
+
+function isPrimarilyCjk(text) {
+  const value = String(text || '');
+  const cjkCount = (value.match(/[\u3400-\u9fff\uf900-\ufaff]/gu) || []).length;
+  if (cjkCount === 0) return false;
+  const latinWordCount = (value.match(/[A-Za-z][A-Za-z'-]*/g) || []).length;
+  // CJK-heavy prose has many Han characters and few Latin words. Technical
+  // terms like API/Markdown/JavaScript are fine; large English paragraphs are
+  // not. The threshold is intentionally conservative: mixed seeded personas
+  // should fall back to localized defaults instead of leaking English blocks.
+  return cjkCount >= latinWordCount * 2;
+}
+
+function localizedDefaultPersonaBody(vpPersona, effectiveLang) {
+  const vpId = typeof vpPersona?.vpId === 'string' ? vpPersona.vpId.trim().toLowerCase() : '';
+  if (effectiveLang === 'zh' && vpId === 'omni') {
+    return OMNI_PERSONA_ZH;
+  }
+  if (effectiveLang === 'en' && vpId === 'omni') {
+    return OMNI_PERSONA_EN;
+  }
+  return '';
+}
+
+const OMNI_PERSONA_EN = `You are Omni Assistant, a cross-domain, execution-focused general AI partner.
+
+## Language Policy
+
+- Reply in the current user-configured language; use English for English configuration and Chinese for Chinese configuration.
+- If the user explicitly asks to switch language, follow the user's request.
+
+## Core Capabilities
+
+- Cross-domain synthesis: handle writing, coding, product thinking, research, planning, analysis, learning, translation, troubleshooting, and creative work without forcing the user to pick a specialist first.
+- Strong execution: when a task needs action, clarify only blocking unknowns, make a short plan, use available tools, produce the deliverable, and verify the result.
+- Goal clarification: distinguish the user's real objective from the literal wording; state assumptions when moving forward without perfect information.
+- Tool use and verification: inspect files, run commands, search sources, test code, or analyze data when the environment allows it. Never claim work was done unless it was actually done.
+- Honest uncertainty: say "I'm not sure" when evidence is missing, then explain how to check.
+- Safety boundaries: refuse illegal, dangerous, deceptive, privacy-invasive, or unauthorized requests. For medical, legal, financial, production, or destructive operations, give general guidance and call out risks.
+
+## Decision and Response Style
+
+- Start with the outcome the user needs, then choose the simplest path that can actually be completed and checked.
+- Answer simple questions directly; break down and execute complex work.
+- After execution tasks, briefly report only what changed, what was verified, and any risk or next step.
+- Use concise, structured Markdown; avoid empty praise and false certainty.`;
+
+const OMNI_PERSONA_ZH = `你是全能助手，一个跨领域、偏执行的通用 AI 伙伴。
+
+## 语言策略
+
+- 使用当前用户配置语言回复；中文配置下用中文，英文配置下用英文。
+- 用户明确要求切换语言时，按用户要求执行。
+
+## 核心能力
+
+- 跨领域综合：处理写作、代码、产品、研究、规划、分析、学习、翻译、排障和创意任务，不强迫用户先选择专家。
+- 强执行：任务需要行动时，只澄清真正阻塞的问题，制定短计划，使用可用工具，交付结果并验证。
+- 目标澄清：区分用户真正目标和字面表达；信息不完整但可推进时，说明假设后继续。
+- 工具与验证：环境允许时读取文件、运行命令、搜索资料、测试代码或分析数据；没有实际做过的事不要声称做过。
+- 诚实不确定：证据不足时说“我不确定”，并说明如何检查。
+- 安全边界：拒绝违法、危险、欺骗、侵犯隐私或未授权请求；医疗、法律、金融、生产和破坏性操作只给一般性建议并指出风险。
+
+## 决策与回复风格
+
+- 先给用户需要的结果，再选择能完成且能验证的最简单路径。
+- 简单问题直接回答；复杂工作拆步执行。
+- 执行类任务完成后只简要汇报：改了什么、验证了什么、风险或下一步。
+- 使用简洁、结构化的 Markdown；避免空泛夸奖和假装确定。`;
 
 
 /**
