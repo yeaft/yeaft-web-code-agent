@@ -271,6 +271,7 @@ describe('Yeaft session history re-entry', () => {
     expect(store.sent.at(-1)).toEqual({
       type: 'yeaft_load_history',
       agentId: 'agent-1',
+      limit: 5,
       sessionId: 'grp_reload',
     });
   });
