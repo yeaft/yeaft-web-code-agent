@@ -1306,9 +1306,9 @@ export const useChatStore = defineStore('chat', {
           if (localConvId && localConvId !== agentConvId) {
             const existingMsgs = this.messagesMap[localConvId] || [];
             const targetMsgs = this.messagesMap[agentConvId] || [];
-            this.messagesMap[agentConvId] = targetMsgs.length > 0
-              ? [...targetMsgs, ...existingMsgs].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
-              : existingMsgs;
+            this.messagesMap[agentConvId] = msgHelpers
+              .mergeMessagesByStableId(targetMsgs, existingMsgs)
+              .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
             delete this.messagesMap[localConvId];
             // Migrate processing state
             if (this.processingConversations[localConvId]) {
@@ -1859,7 +1859,10 @@ export const useChatStore = defineStore('chat', {
           // initial history load (which happened with groupId:null), so
           // reload history for the correct group when activeGroupId changes.
           if (this.currentView === 'yeaft' && newGroupId) {
-            this.setActiveSessionFilter(newGroupId, { force: newGroupId === prevGroupId });
+            const sessionState = this.yeaftSessionHistoryState[newGroupId] || null;
+            this.setActiveSessionFilter(newGroupId, {
+              force: msgHelpers.shouldForceHydrateActiveYeaftSession(newGroupId, prevGroupId, sessionState),
+            });
           }
           break;
         }

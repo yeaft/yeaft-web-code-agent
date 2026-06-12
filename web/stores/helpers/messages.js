@@ -76,6 +76,58 @@ function normalizeMessageTimestamp(msg) {
   return Date.now();
 }
 
+function explicitMessageId(msg) {
+  const id = msg?.messageId ?? msg?.dbMessageId ?? msg?.id;
+  if (id === null || id === undefined || id === '') return null;
+  return String(id);
+}
+
+function mergeMessageFields(existing, incoming) {
+  if (!existing || !incoming) return existing;
+  for (const [key, value] of Object.entries(incoming)) {
+    if (value === undefined || value === null) continue;
+    if (key === 'isStreaming') {
+      if (existing.isStreaming && value === false) existing.isStreaming = false;
+      continue;
+    }
+    if (key === 'content' && typeof value === 'string') {
+      if (!existing.content) existing.content = value;
+      continue;
+    }
+    if (key === 'attachments' && Array.isArray(value)) {
+      if (!Array.isArray(existing.attachments) || existing.attachments.length === 0) {
+        existing.attachments = value;
+      }
+      continue;
+    }
+    if (existing[key] === undefined || existing[key] === null || existing[key] === '') {
+      existing[key] = value;
+    }
+  }
+  return existing;
+}
+
+export function mergeMessagesByStableId(baseMessages = [], incomingMessages = []) {
+  const merged = [];
+  const byId = new Map();
+  for (const msg of [...baseMessages, ...incomingMessages]) {
+    if (!msg) continue;
+    const stableId = explicitMessageId(msg);
+    if (stableId && byId.has(stableId)) {
+      mergeMessageFields(byId.get(stableId), msg);
+      continue;
+    }
+    merged.push(msg);
+    if (stableId) byId.set(stableId, msg);
+  }
+  return merged;
+}
+
+export function shouldForceHydrateActiveYeaftSession(nextSessionId, prevSessionId, sessionState) {
+  if (!nextSessionId || nextSessionId !== prevSessionId) return false;
+  return !sessionState?.loaded && !sessionState?.loading;
+}
+
 export function addMessageToConversation(store, conversationId, msg) {
   if (!conversationId) return;
 
@@ -127,6 +179,17 @@ export function addMessageToConversation(store, conversationId, msg) {
   if (!store.messagesMap[conversationId]) {
     store.messagesMap[conversationId] = [];
   }
+  const stableId = explicitMessageId(msg);
+  if (stableId) {
+    const existing = store.messagesMap[conversationId].find(m => explicitMessageId(m) === stableId);
+    if (existing) {
+      mergeMessageFields(existing, newMsg);
+      if (conversationId === store.yeaftConversationId) {
+        store.messagesMap[conversationId].sort((a, b) => a.timestamp - b.timestamp);
+      }
+      return existing;
+    }
+  }
   store.messagesMap[conversationId].push(newMsg);
   // Bug 1: keep messages sorted by timestamp so history loaded out-of-order
   // (e.g. from different sessions) still displays chronologically.
@@ -134,6 +197,7 @@ export function addMessageToConversation(store, conversationId, msg) {
   if (conversationId === store.yeaftConversationId) {
     store.messagesMap[conversationId].sort((a, b) => a.timestamp - b.timestamp);
   }
+  return newMsg;
 }
 
 export function appendToAssistantMessageForConversation(store, conversationId, text, opts = {}) {
