@@ -754,10 +754,16 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       const histAgentId = msg.agentId || client.currentAgent;
       if (!histAgentId) return;
       if (!await checkAgentAccess(histAgentId)) return;
+      // Forward the catch-up cursor (afterSeq / afterMessageId) verbatim when
+      // present. Without it the agent never takes the cheap delta path and
+      // falls back to a full recent-history replay on every reconnect
+      // catch-up — re-sending the whole pane instead of an empty delta.
       await forwardToAgent(histAgentId, {
         type: 'yeaft_load_history',
         limit: msg.limit,
         sessionId: msg.sessionId || null,
+        ...(Number.isFinite(msg.afterSeq) ? { afterSeq: msg.afterSeq } : {}),
+        ...(typeof msg.afterMessageId === 'string' ? { afterMessageId: msg.afterMessageId } : {}),
       });
       break;
     }

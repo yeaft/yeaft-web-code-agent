@@ -244,6 +244,13 @@ export const useChatStore = defineStore('chat', {
     // session_ready replay. Group history requests are de-duped separately by
     // yeaftSessionHistoryState[groupId].loading.
     yeaftBootstrapMetaLoadingKey: null,
+    // One-shot marker: set true by the websocket onclose handler on a real
+    // disconnect, consumed by handleAgentList to run a single Yeaft history
+    // catch-up after the socket comes back. Without this gate the catch-up
+    // would re-fire on every routine agent_list broadcast (status flips,
+    // turn_completed, latency pings) and spin yeaft_load_history /
+    // yeaft_vp_subscribe into an unbounded loop.
+    _yeaftReconnectCatchUpPending: false,
     // 可用的 slash commands 列表（按 conversationId 隔离，从 Claude SDK init 消息获取）
     slashCommandsMap: {},  // { [conversationId]: string[] }
     // Slash command 描述映射（从 agent 端传递，所有 conversation 共用）
@@ -1007,6 +1014,11 @@ export const useChatStore = defineStore('chat', {
       // load in this UI lifecycle. A non-empty shared messagesMap is not
       // enough evidence: it may hold stale rows for `grp_fun` while newer
       // persisted rows were written during a previous page/session.
+      // Entering Yeaft runs its own catch-up bootstrap below, so any pending
+      // reconnect catch-up flag (possibly set while the user was in Chat view
+      // during a drop) is subsumed — clear it so handleAgentList doesn't fire
+      // a redundant second catch-up on the next routine agent_list.
+      this._yeaftReconnectCatchUpPending = false;
       this.requestYeaftSessionBootstrap({ forceSessionReady: true, catchUpHistory: true });
     },
 

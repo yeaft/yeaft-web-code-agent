@@ -222,7 +222,16 @@ export function handleAgentList(store, msg) {
       store.sendWsMessage({ type: 'select_agent', agentId: store.currentAgent, silent: true });
       if (store.currentView === 'yeaft' && typeof store.requestYeaftSessionBootstrap === 'function') {
         const needsYeaftSessionReady = !store.yeaftSessionReady || !store.yeaftModel || !store.yeaftStatus;
-        store.requestYeaftSessionBootstrap({ forceSessionReady: needsYeaftSessionReady, catchUpHistory: true });
+        // Only catch up history on a GENUINE reconnect. agent_list arrives
+        // frequently (status flips, turn_completed, latency pings); running
+        // the afterSeq catch-up on each one re-fires yeaft_load_history +
+        // yeaft_vp_subscribe in an unbounded loop, because history_loaded
+        // resets the session's `loading` flag and re-arms
+        // shouldCatchUpLoadedYeaftSession. The websocket onclose handler sets
+        // this one-shot flag only when the socket actually dropped.
+        const catchUpHistory = !!store._yeaftReconnectCatchUpPending;
+        store._yeaftReconnectCatchUpPending = false;
+        store.requestYeaftSessionBootstrap({ forceSessionReady: needsYeaftSessionReady, catchUpHistory });
       }
       if (store.currentConversation) {
         const conv = store.conversations.find(c => c.id === store.currentConversation);
@@ -243,6 +252,14 @@ export function handleAgentList(store, msg) {
             });
           }
         } else {
+          // Unlike the Yeaft catch-up above (gated behind
+          // _yeaftReconnectCatchUpPending), this Chat-mode sync runs on
+          // every agent_list by design: sync_messages{afterMessageId} is a
+          // client-idempotent edge-triggered request (server returns only
+          // rows after a stable id, deduped on arrival), so repeating it on
+          // routine broadcasts is harmless. The Yeaft history catch-up is
+          // level-triggered (shouldCatchUpLoadedYeaftSession re-arms after
+          // each history_loaded), which is why only it needs the latch.
           const currentMsgs = store.messagesMap[store.currentConversation] || [];
           if (currentMsgs.length > 0) {
             const lastMessageId = currentMsgs[currentMsgs.length - 1]?.id;
