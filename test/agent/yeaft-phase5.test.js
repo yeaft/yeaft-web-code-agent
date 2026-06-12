@@ -101,6 +101,12 @@ Content`;
   });
 
   describe('SkillManager', () => {
+    // After the Claude-Code-style rework, `SkillManager` accepts an explicit
+    // scan-directory path (or list of paths in priority order). The legacy
+    // single-arg form is still honoured; we pass `join(tmpDir, 'skills')`
+    // directly so the save/remove user-tier target lines up with the test
+    // fixture layout (instead of relying on the old auto-suffix behaviour
+    // that joined `/skills` onto the yeaftDir).
     it('should load skills from directory', () => {
       writeFileSync(join(tmpDir, 'skills', 'sk1.md'), `---
 name: skill-one
@@ -118,7 +124,7 @@ mode: work
 ---
 Skill two content`);
 
-      const manager = new skillsModule.SkillManager(tmpDir);
+      const manager = new skillsModule.SkillManager(join(tmpDir, 'skills'));
       const { loaded } = manager.load();
       expect(loaded).toBe(2);
       expect(manager.size).toBe(2);
@@ -137,7 +143,7 @@ mode: work
 ---
 Work content`);
 
-      const manager = new skillsModule.SkillManager(tmpDir);
+      const manager = new skillsModule.SkillManager(join(tmpDir, 'skills'));
       manager.load();
 
       expect(manager.list('chat')).toHaveLength(2);
@@ -153,7 +159,7 @@ mode: both
 ---
 Testing instructions`);
 
-      const manager = new skillsModule.SkillManager(tmpDir);
+      const manager = new skillsModule.SkillManager(join(tmpDir, 'skills'));
       manager.load();
 
       const results = manager.findRelevant('How do I write tests?');
@@ -168,7 +174,7 @@ name: my-skill
 # My Skill Instructions
 Step 1. Do this.`);
 
-      const manager = new skillsModule.SkillManager(tmpDir);
+      const manager = new skillsModule.SkillManager(join(tmpDir, 'skills'));
       manager.load();
 
       const content = manager.getPromptContent('my-skill');
@@ -177,7 +183,7 @@ Step 1. Do this.`);
     });
 
     it('should save and retrieve skills', () => {
-      const manager = new skillsModule.SkillManager(tmpDir);
+      const manager = new skillsModule.SkillManager(join(tmpDir, 'skills'));
       manager.load();
 
       manager.save({
@@ -192,7 +198,7 @@ Step 1. Do this.`);
     });
 
     it('should handle empty skills directory', () => {
-      const manager = new skillsModule.SkillManager(tmpDir);
+      const manager = new skillsModule.SkillManager(join(tmpDir, 'skills'));
       const { loaded } = manager.load();
       expect(loaded).toBe(0);
     });

@@ -768,6 +768,38 @@ export function handleMessage(store, msg) {
       break;
     }
 
+    // Yeaft MCP CRUD results + live broadcast. All four request types
+    // (`list/add/remove/reload`) get the same shape back so we cache
+    // the lists into the same store fields and resolve the pending
+    // promise via `requestId`. `yeaft_mcp_updated` is a broadcast
+    // (no requestId) — same cache update, no resolver.
+    case 'yeaft_mcp_list_result':
+    case 'yeaft_mcp_add_result':
+    case 'yeaft_mcp_remove_result':
+    case 'yeaft_mcp_reload_result':
+    case 'yeaft_mcp_updated': {
+      if (Array.isArray(msg.servers)) {
+        store.yeaftMcpServers = msg.servers;
+      }
+      if (msg.runtime && typeof msg.runtime === 'object') {
+        store.yeaftMcpRuntime = {
+          connected: !!msg.runtime.connected,
+          toolCount: msg.runtime.toolCount || 0,
+          perServer: Array.isArray(msg.runtime.perServer) ? msg.runtime.perServer : [],
+        };
+      }
+      store.yeaftMcpLoading = false;
+      store.yeaftMcpError = msg.error || null;
+      if (msg.requestId) {
+        const pending = store._mcpPending;
+        if (pending && pending[msg.requestId]) {
+          pending[msg.requestId](msg);
+          delete pending[msg.requestId];
+        }
+      }
+      break;
+    }
+
     // Per-conversation MCP servers (from Claude CLI init)
     case 'conversation_mcp_update':
       if (msg.conversationId && msg.servers) {

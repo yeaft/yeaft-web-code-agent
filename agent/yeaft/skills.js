@@ -19,12 +19,32 @@
  * - keywords: array of match keywords (alternative to trigger)
  * - platforms: array of ["macos", "linux", "windows"]
  *
+ * ─── Layered loading (Claude-Code-style) ─────────────────
+ *
+ * A `SkillManager` can scan multiple directories in priority order — later
+ * directories OVERRIDE earlier ones for skills with the same `name`. This
+ * mirrors Claude Code's plugin → user → project layering and lets a user
+ * customise a bundled skill without touching the bundled file.
+ *
+ * The standard tier order set up by `createSkillManager` is:
+ *
+ *   tier 1 (bundled): wherever yeaft-skills is installed on disk — typically
+ *           ~/.claude/skills/yeaft-skills/skills/. Read-only — `save()` and
+ *           `remove()` never target this tier.
+ *   tier 2 (user):    <yeaftDir>/skills (e.g. ~/.yeaft/skills). User edits
+ *           land here. `save()` writes here. `init.js` seeds it from tier 1
+ *           on first boot so users start with the full bundled set.
+ *   tier 3 (project): <workDir>/.yeaft/skills (if provided). Highest
+ *           priority — a project can pin a skill version without affecting
+ *           the user's other projects.
+ *
  * Reference: yeaft-yeaft-design.md §8, yeaft-yeaft-core-systems.md
  */
 
 import { existsSync, readFileSync, readdirSync, writeFileSync, unlinkSync, mkdirSync, statSync } from 'fs';
-import { join, basename, relative, dirname, sep } from 'path';
-import { platform } from 'os';
+import { join, basename, sep, dirname, resolve } from 'path';
+import { platform, homedir } from 'os';
+import { fileURLToPath } from 'url';
 
 // ─── Platform Matching ────────────────────────────────────
 
@@ -61,6 +81,7 @@ export function matchesPlatform(platforms) {
  * @property {string} content — full skill instructions (markdown body)
  * @property {string} _source — 'file' | 'directory'
  * @property {string} _path — full path to skill file or directory
+ * @property {string} [_tier] — 'bundled' | 'user' | 'project' — origin tier this skill was loaded from
  * @property {string[]} [_references] — filenames in references/ dir
  * @property {string[]} [_templates] — filenames in templates/ dir
  */
@@ -316,48 +337,103 @@ function matchKeywords(keywords, prompt) {
 /**
  * SkillManager — loads, indexes, and queries skills.
  * Supports both single-file and directory-based skills.
+ *
+ * Layered loading: pass an array of directories (lowest priority → highest).
+ * Skills with the same `name` in a later directory OVERRIDE earlier entries.
+ * The user-writable tier (where `save()` / `remove()` operate) is configured
+ * via the `userDir` option and must match one of the entries in `dirs` —
+ * if it isn't given, the last entry in `dirs` is used as the user tier.
  */
 export class SkillManager {
   /** @type {Map<string, Skill>} */
   #skills = new Map();
 
+  /** @type {string[]} */
+  #skillsDirs;
+
   /** @type {string} */
-  #skillsDir;
+  #userDir;
+
+  /** @type {Map<string, string>} — dir path → tier label */
+  #tierByDir;
 
   /**
-   * @param {string} yeaftDir — Yeaft root directory (e.g. ~/.yeaft)
+   * @param {string | string[]} dirs — single directory (back-compat) or array of
+   *   directories in priority order (lowest → highest). Falsy entries are
+   *   filtered out so callers can write `[bundled, user, projectOrNull]`.
+   * @param {{ userDir?: string, tierByDir?: Record<string, string> }} [opts]
+   *   userDir: directory where `save()` and `remove()` write. Defaults to the
+   *     last entry in `dirs` (typical case: user dir is highest priority that
+   *     isn't a per-project layer).
+   *   tierByDir: optional label map — dir path → 'bundled' | 'user' | 'project'.
+   *     Decorates each discovered Skill with `_tier` for diagnostics (Settings
+   *     UI uses this to show "where this skill came from").
    */
-  constructor(yeaftDir) {
-    this.#skillsDir = join(yeaftDir, 'skills');
+  constructor(dirs, opts = {}) {
+    const list = Array.isArray(dirs)
+      ? dirs.filter(d => typeof d === 'string' && d.length > 0)
+      : (typeof dirs === 'string' && dirs.length > 0 ? [dirs] : []);
+    this.#skillsDirs = list;
+    // Default user-writable tier: explicit opt → last array entry → first
+    // entry → empty string. Empty string disables write attempts but the
+    // manager still loads.
+    this.#userDir = (opts && typeof opts.userDir === 'string' && opts.userDir.length > 0)
+      ? opts.userDir
+      : (list.length > 0 ? list[list.length - 1] : '');
+    this.#tierByDir = new Map();
+    if (opts && opts.tierByDir && typeof opts.tierByDir === 'object') {
+      for (const [d, tier] of Object.entries(opts.tierByDir)) {
+        if (typeof d === 'string' && typeof tier === 'string') {
+          this.#tierByDir.set(d, tier);
+        }
+      }
+    }
   }
 
-  /** The skills root directory path. */
+  /** The user-writable skills directory (save/remove target). */
   get skillsDir() {
-    return this.#skillsDir;
+    return this.#userDir;
+  }
+
+  /** All directories scanned, in priority order (lowest → highest). */
+  get skillsDirs() {
+    return [...this.#skillsDirs];
   }
 
   /**
-   * Load all skills from the skills directory (recursive).
+   * Load all skills from all configured directories.
+   *
+   * Lower-priority directories load first; later (higher-priority) entries
+   * with the same skill `name` overwrite earlier ones. Each loaded skill is
+   * tagged with `_tier` (from the constructor's `tierByDir` map, or the dir
+   * basename as fallback) so consumers can show provenance.
    *
    * @returns {{ loaded: number, errors: string[] }}
    */
   load() {
     this.#skills.clear();
+    const allErrors = [];
 
-    if (!existsSync(this.#skillsDir)) {
+    if (this.#skillsDirs.length === 0) {
       return { loaded: 0, errors: [] };
     }
 
-    const { skills, errors } = discoverSkills(this.#skillsDir);
-
-    for (const skill of skills) {
-      // Platform filtering at load time
-      if (matchesPlatform(skill.platforms)) {
+    for (const dir of this.#skillsDirs) {
+      if (!existsSync(dir)) continue;
+      const { skills, errors } = discoverSkills(dir);
+      const tier = this.#tierByDir.get(dir) || basename(dir);
+      for (const skill of skills) {
+        // Platform filtering at load time
+        if (!matchesPlatform(skill.platforms)) continue;
+        skill._tier = tier;
+        // Later (higher-priority) tier overrides earlier entries with the
+        // same name — this is the layered-load contract.
         this.#skills.set(skill.name, skill);
       }
+      allErrors.push(...errors);
     }
 
-    return { loaded: this.#skills.size, errors };
+    return { loaded: this.#skills.size, errors: allErrors };
   }
 
   /**
@@ -390,7 +466,7 @@ export class SkillManager {
    * surfaced for historic YAML compatibility.
    *
    * @param {string} [_mode] — deprecated, ignored
-   * @returns {Array<{ name: string, description: string, trigger: string, mode: string, category?: string, platforms?: string[], keywords?: string[], source: string, hasReferences: boolean, hasTemplates: boolean }>}
+   * @returns {Array<{ name: string, description: string, trigger: string, mode: string, category?: string, platforms?: string[], keywords?: string[], source: string, tier?: string, hasReferences: boolean, hasTemplates: boolean }>}
    */
   list(_mode) {
     const skills = [...this.#skills.values()];
@@ -404,6 +480,7 @@ export class SkillManager {
       platforms: s.platforms || undefined,
       keywords: s.keywords || undefined,
       source: s._source,
+      tier: s._tier || undefined,
       hasReferences: (s._references && s._references.length > 0) || false,
       hasTemplates: (s._templates && s._templates.length > 0) || false,
     }));
@@ -428,10 +505,13 @@ export class SkillManager {
 
     // Read a specific linked file if requested
     if (filePath && skill._source === 'directory') {
-      const fullPath = join(skill._path, filePath);
-      // Security: ensure path doesn't escape skill directory
-      const resolved = join(skill._path, filePath);
-      if (!resolved.startsWith(skill._path)) {
+      // Security: resolve both ends to absolute paths and require fullPath to
+      // sit under the skill root (separator-anchored so /foo-evil isn't seen
+      // as a child of /foo). `path.join` alone collapses `..` but does not
+      // detect symlink-escapes or absolute-path overrides.
+      const fullPath = resolve(skill._path, filePath);
+      const root = resolve(skill._path) + sep;
+      if (fullPath !== resolve(skill._path) && !fullPath.startsWith(root)) {
         result.linkedContent = 'Error: path traversal not allowed';
       } else if (existsSync(fullPath)) {
         try {
@@ -494,27 +574,47 @@ export class SkillManager {
   /**
    * Add or update a skill (single-file format).
    *
+   * Always writes to the USER tier (`#userDir`) regardless of where the
+   * existing skill (if any) came from. This matches Claude Code: editing a
+   * bundled skill produces a user-tier override, leaving the bundled file
+   * untouched. Calling `load()` after a `save()` will then surface the
+   * user version (higher priority).
+   *
    * @param {Skill} skill
    * @returns {string} — filename
    */
   save(skill) {
     if (!skill.name) throw new Error('Skill must have a name');
+    if (!this.#userDir) {
+      throw new Error('SkillManager has no writable user directory configured');
+    }
 
     const filename = `${skill.name}.md`;
-    const filePath = join(this.#skillsDir, filename);
+    const filePath = join(this.#userDir, filename);
 
-    if (!existsSync(this.#skillsDir)) {
-      mkdirSync(this.#skillsDir, { recursive: true });
+    if (!existsSync(this.#userDir)) {
+      mkdirSync(this.#userDir, { recursive: true });
     }
 
     writeFileSync(filePath, serializeSkill(skill), 'utf8');
-    this.#skills.set(skill.name, { ...skill, _source: 'file', _path: filePath });
+    const userTier = this.#tierByDir.get(this.#userDir) || basename(this.#userDir);
+    this.#skills.set(skill.name, {
+      ...skill,
+      _source: 'file',
+      _path: filePath,
+      _tier: userTier,
+    });
 
     return filename;
   }
 
   /**
    * Remove a skill (supports both file and directory skills).
+   *
+   * Only removes user-tier files. Bundled / project-tier skills are
+   * read-only — attempting to remove one returns `false` and leaves the
+   * file alone (the in-memory entry is also kept so a subsequent `load()`
+   * still picks it up).
    *
    * @param {string} name
    * @returns {boolean}
@@ -523,13 +623,20 @@ export class SkillManager {
     const skill = this.#skills.get(name);
     if (!skill) return false;
 
+    // Only allow removing files inside the user-writable directory. A
+    // bundled or project-tier file would silently come back on the next
+    // load() anyway; refusing here makes the failure obvious.
+    if (!this.#userDir || !skill._path || !skill._path.startsWith(this.#userDir)) {
+      return false;
+    }
+
     if (skill._source === 'directory' && skill._path) {
       // For directory skills, we only delete the SKILL.md to "deactivate"
       // Full directory removal is left to the user (too dangerous to rm -rf)
       const skillMd = join(skill._path, 'SKILL.md');
       try { unlinkSync(skillMd); } catch { /* noop */ }
     } else {
-      const filePath = skill._path || join(this.#skillsDir, `${name}.md`);
+      const filePath = skill._path || join(this.#userDir, `${name}.md`);
       try { unlinkSync(filePath); } catch { /* noop */ }
     }
 
@@ -584,13 +691,89 @@ export class SkillManager {
 }
 
 /**
- * Create a SkillManager and load skills.
+ * Create a SkillManager wired with the standard layered tier list and load it.
  *
- * @param {string} yeaftDir
+ * Tier order (lowest → highest priority):
+ *   1. bundled — the yeaft-skills package on disk, located via
+ *      `bundledYeaftSkillsDir()` (typically ~/.claude/skills/yeaft-skills/skills/).
+ *   2. user    — `<yeaftDir>/skills` (e.g. ~/.yeaft/skills). User edits + saves.
+ *   3. project — `<workDir>/.yeaft/skills` when a workDir is provided.
+ *
+ * `save()` / `remove()` always target the USER tier, matching Claude Code.
+ *
+ * @param {string} yeaftDir — Yeaft data dir (user tier root)
+ * @param {string} [workDir] — optional project working directory (project tier root)
  * @returns {SkillManager}
  */
-export function createSkillManager(yeaftDir) {
-  const manager = new SkillManager(yeaftDir);
+export function createSkillManager(yeaftDir, workDir) {
+  const bundled = bundledYeaftSkillsDir();
+  const userDir = join(yeaftDir, 'skills');
+  const projectDir = workDir ? join(workDir, '.yeaft', 'skills') : null;
+
+  const dirs = [bundled, userDir, projectDir].filter(Boolean);
+  const tierByDir = {};
+  if (bundled) tierByDir[bundled] = 'bundled';
+  tierByDir[userDir] = 'user';
+  if (projectDir) tierByDir[projectDir] = 'project';
+
+  const manager = new SkillManager(dirs, { userDir, tierByDir });
   manager.load();
   return manager;
+}
+
+// ─── Bundled-skills resolver ──────────────────────────────
+
+/**
+ * Locate the bundled `yeaft-skills` package on disk.
+ *
+ * Resolution order (first existing directory wins):
+ *   1. $YEAFT_SKILLS_BUNDLED_DIR — explicit env override (testing / packaging)
+ *   2. ~/.claude/skills/yeaft-skills/skills/    — standard Claude Code plugin layout
+ *   3. ~/.claude/plugins/yeaft-skills/skills/   — alternate plugin layout
+ *   4. <agent-pkg>/skills/                       — bundled-with-agent fallback so
+ *      a future npm release can ship its own skills directory
+ *
+ * Returns `null` when none exist — callers must tolerate this (Yeaft still
+ * runs; the user just sees no pre-installed bundled skills). Co-located here
+ * (rather than in init.js) so both `createSkillManager()` and init.js's seed
+ * step can call it without a module cycle.
+ *
+ * @returns {string|null}
+ */
+export function bundledYeaftSkillsDir() {
+  const candidates = [];
+
+  const envOverride = process.env.YEAFT_SKILLS_BUNDLED_DIR;
+  if (envOverride && typeof envOverride === 'string' && envOverride.length > 0) {
+    candidates.push(envOverride);
+  }
+
+  const home = homedir();
+  if (home) {
+    candidates.push(join(home, '.claude', 'skills', 'yeaft-skills', 'skills'));
+    candidates.push(join(home, '.claude', 'plugins', 'yeaft-skills', 'skills'));
+  }
+
+  // Bundled-with-agent fallback: <agent-pkg-root>/skills. The package root is
+  // the directory containing agent/, so we walk up from this file.
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    // here = .../agent/yeaft
+    const agentRoot = join(here, '..', '..');
+    candidates.push(join(agentRoot, 'skills'));
+  } catch {
+    // fileURLToPath can throw on exotic loaders — non-fatal.
+  }
+
+  for (const c of candidates) {
+    try {
+      if (c && existsSync(c) && statSync(c).isDirectory()) {
+        return c;
+      }
+    } catch {
+      // permission errors etc. — try the next candidate.
+    }
+  }
+
+  return null;
 }
