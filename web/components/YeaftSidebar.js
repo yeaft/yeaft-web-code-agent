@@ -127,7 +127,7 @@ export default {
                   </button>
                   <div v-if="groupMenu.open && groupMenu.groupId === s.id" class="session-menu" role="menu" @click.stop>
                     <button type="button" role="menuitem" class="session-menu-item" @click="onTogglePin(s.raw)">
-                      {{ isSessionPinned(s.id) ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin') }}
+                      {{ isSessionPinned(s) ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin') }}
                     </button>
                     <button type="button" role="menuitem" class="session-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'announcement')">
                       {{ $t('yeaft.session.openSettings') }}
@@ -416,14 +416,15 @@ export default {
     // so yeaft users get the same "operate on the session row" shape
     // instead of the previous 4-button modal-shortcut menu.
     //
-    // isSessionPinned reads from chatStore.pinnedSessions — the same
-    // registry chat uses. The server-side pin handler routes by id, so
-    // both chat and yeaft live on one source of truth. Snapshot replay
-    // (sessions store applySnapshot) keeps this array in sync with the
-    // yeaft_sessions.is_pinned column.
-    isSessionPinned(id) {
+    // isSessionPinned primarily reads the row metadata used by this sidebar,
+    // then falls back to chatStore.pinnedSessions — the same registry chat uses.
+    // Server snapshots keep both sources in sync, but row metadata must remain
+    // enough for the menu label if a partial refresh races the shared cache.
+    isSessionPinned(sessionOrId) {
+      const id = sessionOrId && typeof sessionOrId === 'object' ? sessionOrId.id : sessionOrId;
+      const rowPinned = !!(sessionOrId && typeof sessionOrId === 'object' && sessionOrId.pinned);
       const fn = this.chatStore && this.chatStore.isSessionPinned;
-      return typeof fn === 'function' ? !!fn.call(this.chatStore, id) : false;
+      return rowPinned || (typeof fn === 'function' ? !!fn.call(this.chatStore, id) : false);
     },
     // Pin/unpin toggle. Closes the menu first so the row's animated
     // reorder isn't visually obscured by the open kebab.
