@@ -10,17 +10,17 @@
  *   for each session with newCount ≥ MIN_NEW_PER_GROUP (auto)
  *                    or > 0 (manual)
  *                    or prior messages in a scoped manual session rerun:
- *       loadDiff()                     via opts.loadGroupDiff(sessionId, sinceId)
+ *       loadDiff()                     via opts.loadSessionDiff(sessionId, sinceId)
  *       applyOverlap()                 via opts.loadOverlapPreamble(...)
  *       segment()                      segmentDiff(...)
- *       triageGroupSegments()          → group-local actions[]
+ *       triage segments                → session-local actions[]
  *
  *   mergeByTarget()                    → per-target actions
  *   for each merged target:
  *       applyMergedTarget()            (snapshot + UPDATE/CREATE + atomic write)
  *
  *   bookkeep:
- *     for each processed group:
+ *     for each processed session:
  *       session .dream-state ←
  *         { lastDreamMessageId: tail of real diff,
  *           lastDreamAt: nowIso,
@@ -50,6 +50,7 @@ import { segmentDiff, truncateMessage, estimateMessagesTokens } from './segment.
 import { triageGroupSegments } from './triage.js';
 import { mergeByTarget } from './merge.js';
 import { applyMergedTarget } from './apply.js';
+import { extractAndWriteMemorySegments } from './segment-extract.js';
 import { tsForBackup, pruneOldSnapshots } from './snapshot.js';
 
 /**
@@ -58,12 +59,14 @@ import { tsForBackup, pruneOldSnapshots } from './snapshot.js';
  * @property {boolean} [manual=false]         — manual trigger overrides newCount<20 skip
  * @property {string[]} [scopeFilter]         — optional: only dream these targets; scoped manual session triggers rerun the current session when there are prior messages but no new cursor delta ('*' allowed)
  * @property {(req: {pass:string, prompt:string, system:string}) => Promise<string>} llm
- * @property {() => Promise<Array<string>>} listSessions   — return all session ids (incl. '_no-group')
- * @property {(sessionId: string) => Promise<number>} countMessages   — total message count for a group
- * @property {(sessionId: string, sinceMessageId: string|null) => Promise<Array<object>>} loadGroupDiff
+ * @property {() => Promise<Array<string>>} listSessions   — return all session ids (incl. '_no-session')
+ * @property {(sessionId: string) => Promise<number>} countMessages   — total message count for a session
+ * @property {(sessionId: string, sinceMessageId: string|null) => Promise<Array<object>>} [loadSessionDiff]
+ * @property {(sessionId: string, sinceMessageId: string|null) => Promise<Array<object>>} [loadGroupDiff] — legacy alias for loadSessionDiff
  * @property {(sessionId: string, beforeMessageId: string|null, count: number) => Promise<Array<object>>} loadOverlapPreamble
  * @property {() => Promise<Array<{path:string, summary:string}>>} [listTopicSummaries]
  * @property {(target: string) => Promise<Array<{path:string, summary:string}>>} [siblingTopicsFor]
+ * @property {import('../memory/index-db.js').SegmentIndex|null} [segmentIndex] — optional derived FTS segment index to sync after segment writes
  * @property {(event: object) => void} [onProgress]
  * @property {object} [limits]                — override DEFAULT_LIMITS
  * @property {() => string} [nowIso]
@@ -86,7 +89,7 @@ export async function runDream(opts) {
 
   onProgress({ phase: 'start', manual: !!opts.manual, ts });
 
-  // 1. enumerate groups
+  // 1. enumerate sessions
   const sessionIds = await safeCall(opts.listSessions, []);
   const filter = Array.isArray(opts.scopeFilter) ? new Set(opts.scopeFilter) : null;
   const sessionFilter = deriveSessionFilter(filter);
@@ -135,7 +138,8 @@ export async function runDream(opts) {
 
     onProgress({ phase: 'load-diff', sessionId });
     const diffCursor = rerunScopedManual ? null : state.lastDreamMessageId;
-    const diffNew = await safeCall(() => opts.loadGroupDiff(sessionId, diffCursor), []);
+    const loadDiff = opts.loadSessionDiff || opts.loadGroupDiff;
+    const diffNew = await safeCall(() => loadDiff(sessionId, diffCursor), []);
     if (!diffNew || diffNew.length === 0) {
       sessionsReport.push({ sessionId, new: newCount, status: 'skipped', reason: 'empty-diff' });
       continue;
@@ -233,9 +237,42 @@ export async function runDream(opts) {
     }
   }
 
-  // 5. bookkeep — only when at least one apply for this group's actions
+  // 5. extract atomic H2 memory segments. The apply step above keeps the
+  // coarse summary layer (`summary.md`); this step keeps bounded, evidence-
+  // backed current details in segment-formatted `memory.md`.
+  const segmentReports = [];
+  for (const triage of sessionTriages) {
+    const appliedTargets = new Set(targetsReport.filter(r => r.status === 'done').map(r => r.target));
+    const targets = triage.actions.map(a => a.scope).filter(scope => appliedTargets.has(scope));
+    if (targets.length === 0) continue;
+    try {
+      onProgress({ phase: 'extract-segments', sessionId: triage.sessionId, status: 'running', targets: targets.length });
+      const r = await extractAndWriteMemorySegments({
+        root: opts.root,
+        sessionId: triage.sessionId,
+        messages: triage.diff,
+        targets,
+        llm: opts.llm,
+        language: opts.language,
+        nowIso: opts.nowIso || (() => nowIso),
+        segmentIndex: opts.segmentIndex || null,
+      });
+      segmentReports.push({ sessionId: triage.sessionId, status: 'done', ...r });
+      onProgress({ phase: 'extract-segments', sessionId: triage.sessionId, status: 'done', ...r });
+    } catch (err) {
+      segmentReports.push({ sessionId: triage.sessionId, status: 'error', error: err.message });
+      onProgress({ phase: 'extract-segments', sessionId: triage.sessionId, status: 'error', error: err.message });
+      await writeDreamError(opts.root, `sessions/${triage.sessionId}`, {
+        phase: 'extract-segments',
+        message: err.message,
+        stack: err.stack,
+      });
+    }
+  }
+
+  // 6. bookkeep — only when at least one apply for this session's actions
   // succeeded. We use a permissive policy: if ANY merged-target apply
-  // succeeded for a group's contributed actions, advance that group's
+  // succeeded for a session's contributed actions, advance that session's
   // cursor. (If everything errored, we keep the cursor so next run
   // retries.)
   const successfulTargets = new Set(targetsReport.filter(r => r.status === 'done').map(r => r.target));
@@ -271,6 +308,7 @@ export async function runDream(opts) {
     durationMs: duration,
     sessions: sessionsReport,
     targets: targetsReport,
+    memorySegments: segmentReports,
     backups: pruned,
     ts,
   };

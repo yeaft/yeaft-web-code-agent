@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { buildRunDreamOpts } from '../../../../agent/yeaft/dream/session-wiring.js';
@@ -31,7 +31,7 @@ describe('buildRunDreamOpts session conversation wiring', () => {
 
     await expect(opts.listSessions()).resolves.toEqual(['s-live']);
     await expect(opts.countMessages('s-live')).resolves.toBe(2);
-    await expect(opts.loadGroupDiff('s-live', 'm0001')).resolves.toEqual([
+    await expect(opts.loadSessionDiff('s-live', 'm0001')).resolves.toEqual([
       { id: 'm0002', role: 'assistant', body: 'noted, I will keep patches small', vpId: 'vp-linus' },
     ]);
     await expect(opts.loadOverlapPreamble('s-live', 'm0002', 1)).resolves.toEqual([
@@ -87,7 +87,36 @@ describe('buildRunDreamOpts session conversation wiring', () => {
     ]);
     expect(result.targets.length).toBeGreaterThan(0);
     expect(result.targets.every(t => t.status === 'done')).toBe(true);
+    expect(result.memorySegments).toEqual([
+      expect.objectContaining({ sessionId: 's-live', status: 'done', segments: expect.any(Number) }),
+    ]);
+    const sessionMemory = readFileSync(join(testDir, 'memory', 'sessions', 's-live', 'memory.md'), 'utf8');
+    expect(sessionMemory).toContain('kind: decision');
+    expect(sessionMemory).toContain('Dream processed the session conversation');
+    expect(sessionMemory).toContain('tags: [recent, current]');
     expect(events).toContainEqual(expect.objectContaining({ phase: 'done', sessions: 1 }));
+  });
+
+  it('writes session-vp and topic segment memory for multiple VPs', async () => {
+    writeSessionMessage(testDir, 's-vps', 'm0001', 'user', 'Omni should coordinate and Martin should review the Dream segment PR. Topic is active_scope rendering.');
+    writeSessionMessage(testDir, 's-vps', 'm0002', 'assistant', 'Omni will coordinate the PR and keep session terminology.', { speakerVpId: 'omni' });
+    writeSessionMessage(testDir, 's-vps', 'm0003', 'assistant', 'Martin will review active_scope and Dream segment behavior.', { speakerVpId: 'martin' });
+
+    const result = await runDream({
+      ...buildRunDreamOpts(fakeSession(testDir)),
+      manual: true,
+      llm: fakeDreamLlm,
+      limits: { MIN_NEW_PER_GROUP: 1 },
+      nowIso: () => '2026-06-12T00:00:00.000Z',
+    });
+
+    expect(result.memorySegments[0]).toEqual(expect.objectContaining({ status: 'done' }));
+    const omniMemory = readFileSync(join(testDir, 'memory', 'sessions', 's-vps', 'vp', 'omni', 'memory.md'), 'utf8');
+    const martinMemory = readFileSync(join(testDir, 'memory', 'sessions', 's-vps', 'vp', 'martin', 'memory.md'), 'utf8');
+    const topicMemory = readFileSync(join(testDir, 'memory', 'sessions', 's-vps', 'topic', 'active_scope', 'rendering', 'memory.md'), 'utf8');
+    expect(omniMemory).toContain('Dream processed the session conversation');
+    expect(martinMemory).toContain('Dream processed the session conversation');
+    expect(topicMemory).toContain('Dream processed the session conversation');
   });
 });
 
@@ -102,7 +131,18 @@ function fakeSession(yeaftDir) {
 }
 
 async function fakeDreamLlm(req) {
-  if (String(req.pass).startsWith('triage')) return '{}';
+  if (req.pass === 'triage-pass1') return JSON.stringify({ topics: ['active_scope rendering'], user_profile_signals: false });
+  if (req.pass === 'triage-pass2') return JSON.stringify({ decision: 'new', path: 'active_scope/rendering' });
+  if (req.pass === 'extract-segments') {
+    return JSON.stringify([
+      {
+        kind: 'decision',
+        tags: ['dream'],
+        sourceMessages: ['m0002'],
+        body: 'Dream processed the session conversation and preserved the current implementation detail.',
+      },
+    ]);
+  }
   return JSON.stringify({
     memory_md: '# Memory\n\n- Dream processed the session conversation.\n',
     summary_md: 'Dream processed the session conversation.',

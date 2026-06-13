@@ -61,10 +61,26 @@ export function buildRunDreamOpts(session, onProgress) {
   // Legacy disk fallback for pre-session transcript directories. New writes and
   // Dream's primary source use `sessions/<sessionId>/conversation`.
   const legacySessionConversationsRoot = join(yeaftDir, 'groups');
+  const loadSessionDiff = async (sessionId, sinceId) => {
+    try {
+      const messages = loadSessionConversationMessages([sessionConversationsRoot, legacySessionConversationsRoot], sessionId);
+      const out = [];
+      let started = !sinceId;
+      for (const m of messages) {
+        if (!started) {
+          if (m.id === sinceId) started = true;
+          continue;
+        }
+        out.push(translateSessionConversationMessage(m));
+      }
+      return out;
+    } catch { return []; }
+  };
 
   return {
     root: memoryRoot,
     language: session.config?.language || 'en',
+    segmentIndex: session.memoryIndex || null,
     llm: makeLlm(session),
     listSessions: async () => {
       try { return listConversationSessions([sessionConversationsRoot, legacySessionConversationsRoot]); }
@@ -74,21 +90,9 @@ export function buildRunDreamOpts(session, onProgress) {
       try { return loadSessionConversationMessages([sessionConversationsRoot, legacySessionConversationsRoot], sessionId).length; }
       catch { return 0; }
     },
-    loadGroupDiff: async (sessionId, sinceId) => {
-      try {
-        const messages = loadSessionConversationMessages([sessionConversationsRoot, legacySessionConversationsRoot], sessionId);
-        const out = [];
-        let started = !sinceId;
-        for (const m of messages) {
-          if (!started) {
-            if (m.id === sinceId) started = true;
-            continue;
-          }
-          out.push(translateSessionConversationMessage(m));
-        }
-        return out;
-      } catch { return []; }
-    },
+    loadSessionDiff,
+    /** Legacy alias for older Dream runner callers; primary name is loadSessionDiff. */
+    loadGroupDiff: loadSessionDiff,
     loadOverlapPreamble: async (sessionId, beforeId, n) => {
       try {
         const messages = loadSessionConversationMessages([sessionConversationsRoot, legacySessionConversationsRoot], sessionId);
