@@ -82,6 +82,10 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
             // per-message auto-title write at line 351 can't clobber a
             // user-renamed title after a server-restart restore.
             customTitle: !!dbSession.customTitle,
+            // fix-copilot-provider-persist: restore the code-agent provider
+            // so the UI marker reappears and sends route to the right backend
+            // after an agent process restart.
+            ...(dbSession.provider ? { provider: dbSession.provider } : {}),
             createdAt: dbSession.created_at,
             userId: dbSession.user_id || client.userId,
             username: client.username,
@@ -117,6 +121,8 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
             // fix-chat-title-sticky: same hydration as the
             // conversationIds branch above.
             customTitle: !!dbSession.customTitle,
+            // fix-copilot-provider-persist: same provider restore as above.
+            ...(dbSession.provider ? { provider: dbSession.provider } : {}),
             createdAt: dbSession.created_at,
             userId: dbSession.user_id || client.userId,
             username: client.username,
@@ -437,6 +443,14 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         return;
       }
 
+      // fix-copilot-provider-persist: tell the agent which provider this
+      // conversation uses. After an agent process restart the agent's
+      // in-memory ctx.conversations is empty, so handleUserInput can't know
+      // the conv was copilot — without this it falls back to the default
+      // (claude-code), skips the ACP self-heal branch, and the send dies.
+      // Prefer the live in-memory value; fall back to the persisted column.
+      const resolvedProvider = convInfo?.provider || sessionDb.get(convId)?.provider || undefined;
+
       // 处理附件
       const fileIds = msg.fileIds || [];
       let resolvedFiles = [];
@@ -496,6 +510,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           prompt: msg.prompt,
           workDir: msg.workDir || convInfo?.workDir,
           claudeSessionId: convInfo?.claudeSessionId,
+          ...(resolvedProvider ? { provider: resolvedProvider } : {}),
           targetRole: msg.targetRole || null,
           expertSelections: msg.expertSelections || null,
           expertMessage: msg.expertMessage || null
@@ -507,6 +522,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           prompt: msg.prompt,
           workDir: msg.workDir || convInfo?.workDir,
           claudeSessionId: convInfo?.claudeSessionId,
+          ...(resolvedProvider ? { provider: resolvedProvider } : {}),
           targetRole: msg.targetRole || null,
           expertSelections: msg.expertSelections || null,
           expertMessage: msg.expertMessage || null

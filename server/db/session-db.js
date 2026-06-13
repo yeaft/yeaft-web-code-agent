@@ -21,11 +21,11 @@ function mapRow(row) {
 }
 
 export const sessionDb = {
-  create(id, agentId, agentName, workDir, claudeSessionId = null, title = null, userId = null) {
+  create(id, agentId, agentName, workDir, claudeSessionId = null, title = null, userId = null, provider = null) {
     const now = Date.now();
-    stmts.insertSession.run(id, userId, agentId, agentName, claudeSessionId, workDir, title, now, now);
+    stmts.insertSession.run(id, userId, agentId, agentName, claudeSessionId, workDir, title, provider, now, now);
     trackSession(userId);
-    return { id, userId, agentId, agentName, workDir, claudeSessionId, title, customTitle: false, createdAt: now, updatedAt: now };
+    return { id, userId, agentId, agentName, workDir, claudeSessionId, title, provider, customTitle: false, createdAt: now, updatedAt: now };
   },
 
   /**
@@ -67,6 +67,17 @@ export const sessionDb = {
 
   setPinned(id, pinned) {
     stmts.updateSessionPinned.run(pinned ? 1 : 0, Date.now(), id);
+  },
+
+  /**
+   * fix-copilot-provider-persist: persist the conversation's code-agent
+   * provider (e.g. 'copilot') so it survives an agent process restart.
+   * Only meaningful for non-default providers; a null/'claude-code' value
+   * is the implicit default and need not be stored, but we still accept it
+   * so callers can clear the column if a provider ever changes.
+   */
+  setProvider(id, provider) {
+    stmts.updateSessionProvider.run(provider ?? null, Date.now(), id);
   },
 
   get(id) {

@@ -146,7 +146,16 @@ const migrations = [
   // user pays a full delete+rebuild on EVERY session open. The sentinel
   // (Unix-ms stamp at the time of the one and only repair) lets the
   // heuristic fire exactly once per session for the lifetime of the row.
-  `ALTER TABLE sessions ADD COLUMN ts_rebuilt_at INTEGER DEFAULT 0`
+  `ALTER TABLE sessions ADD COLUMN ts_rebuilt_at INTEGER DEFAULT 0`,
+  // fix-copilot-provider-persist: persist the conversation's PROVIDER
+  // (claude-code / copilot / ...) so it survives an agent process restart.
+  // Before this column the provider lived ONLY in the agent's in-memory
+  // ctx.conversations Map (state.providerName). On restart that Map is empty,
+  // so the agent reported no provider, the server rebuilt convs from DB
+  // without one → the UI lost the "copilot" marker AND sends mis-routed to
+  // Claude (handleUserInput resolved providerName to the default). The send
+  // forward now reads this column so the agent can self-heal its ACP child.
+  `ALTER TABLE sessions ADD COLUMN provider TEXT`
 ];
 
 // Yeaft sessions table — server-side persistence so the unified sidebar
@@ -415,8 +424,8 @@ export const stmts = {
 
   // Session 操作
   insertSession: db.prepare(`
-    INSERT INTO sessions (id, user_id, agent_id, agent_name, claude_session_id, work_dir, title, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, user_id, agent_id, agent_name, claude_session_id, work_dir, title, provider, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
 
   updateSession: db.prepare(`
@@ -446,6 +455,14 @@ export const stmts = {
 
   updateSessionPinned: db.prepare(`
     UPDATE sessions SET is_pinned = ?, updated_at = ? WHERE id = ?
+  `),
+
+  // fix-copilot-provider-persist: persist the conversation's code-agent
+  // provider so it survives an agent process restart. Mirrors the pinned/
+  // agent update shape. Only written when a non-default provider is known
+  // (the create/resume handlers pass msg.provider through).
+  updateSessionProvider: db.prepare(`
+    UPDATE sessions SET provider = ?, updated_at = ? WHERE id = ?
   `),
 
   // feat-chat-load-perf: one-shot sentinel for the bulkAddHistory timestamp-
