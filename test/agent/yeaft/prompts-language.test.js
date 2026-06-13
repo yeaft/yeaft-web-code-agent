@@ -90,4 +90,22 @@ describe('worker prompt language selection', () => {
     expect(prompt).toContain('# Security Expert — Expert');
     expect(prompt).not.toContain('你是安全专家。');
   });
+
+  it('adds response display rules that reserve fenced code blocks for real code', () => {
+    const zhPrompt = buildWorkerPrompt({ language: 'zh', includeShape: false });
+    const enPrompt = buildWorkerPrompt({ language: 'en', includeShape: false });
+
+    expect(zhPrompt).toContain('普通说明写成紧凑的自然段');
+    expect(zhPrompt).toContain('不要为了展示格式再套一层 fenced code block');
+    expect(zhPrompt).toContain('fenced code block 只用于真正的代码、命令、配置、diff、日志');
+    expect(zhPrompt).toContain('移动端优先：代码块要少、短、必要');
+    expect(zhPrompt).toContain('不要把粗体、inline code 和普通文字拆成多行交替混排');
+
+    expect(enPrompt).toContain('Write normal explanations as compact natural paragraphs');
+    expect(enPrompt).toContain('do not wrap Markdown examples in fenced code blocks just to show formatting');
+    expect(enPrompt).toContain('Use fenced code blocks only for real code, commands, config, diffs, logs');
+    expect(enPrompt).toContain('Keep code blocks short and necessary, especially for mobile readers');
+    expect(enPrompt).toContain('Do not alternate bold text, inline code, and plain text across many short lines');
+  });
+
 });
