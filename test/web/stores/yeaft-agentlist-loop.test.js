@@ -119,3 +119,75 @@ describe('Yeaft agent_list does not loop history catch-up', () => {
     expect(loads[0].limit).toBe(0);
   });
 });
+
+// Bug 1 (v0.1.96x): an AGENT PROCESS restart (deploy/update) keeps the
+// web↔server websocket alive, so the onclose latch never fires and the Yeaft
+// session is left un-reloaded. handleAgentList must detect the restart edge
+// (offline→online of a KNOWN agent, or a version bump) and arm the same
+// one-shot catch-up — WITHOUT re-introducing the per-broadcast loop.
+function agentRecord({ online = true, version = 'v1' } = {}) {
+  return { id: AGENT_ID, name: 'C1', online, version, conversations: [] };
+}
+function agentListWith(rec) {
+  return { type: 'agent_list', agents: [rec] };
+}
+
+describe('Yeaft reloads the session when the agent process restarts', () => {
+  it('triggers exactly ONE catch-up on an offline→online transition of the known agent', () => {
+    const store = makeStore();
+    // Seed a prior list where the agent is KNOWN but offline (the restart blip).
+    store.agents = [agentRecord({ online: false, version: 'v1' })];
+
+    handleAgentList(store, agentListWith(agentRecord({ online: true, version: 'v1' })));
+
+    const catchUps = store.sent.filter(m => m.type === 'yeaft_load_history');
+    expect(catchUps).toHaveLength(1);
+    expect(catchUps[0]).toMatchObject({ type: 'yeaft_load_history', sessionId: SESSION_ID, afterSeq: 42 });
+    expect(store._yeaftReconnectCatchUpPending).toBe(false);
+
+    // Steady online afterwards → no further catch-up.
+    for (let i = 0; i < 3; i++) handleAgentList(store, agentListWith(agentRecord({ online: true, version: 'v1' })));
+    expect(loadHistoryCount(store)).toBe(1);
+  });
+
+  it('triggers a catch-up on a version bump even if the agent never appeared offline', () => {
+    const store = makeStore();
+    // Agent was online at v1; a deploy bumps it to v2 with no observed offline frame.
+    store.agents = [agentRecord({ online: true, version: 'v1' })];
+
+    handleAgentList(store, agentListWith(agentRecord({ online: true, version: 'v2' })));
+
+    const catchUps = store.sent.filter(m => m.type === 'yeaft_load_history');
+    expect(catchUps).toHaveLength(1);
+    expect(catchUps[0]).toMatchObject({ type: 'yeaft_load_history', sessionId: SESSION_ID, afterSeq: 42 });
+  });
+
+  it('does NOT treat the first-ever agent_list (cold start) as a restart', () => {
+    const store = makeStore();
+    // No prior agents list at all (page just loaded). The agent appearing
+    // online for the first time is enterYeaft's job, not a restart catch-up.
+    store.agents = [];
+
+    handleAgentList(store, agentListWith(agentRecord({ online: true, version: 'v1' })));
+
+    // Session already loaded + ready → nothing should be sent.
+    expect(loadHistoryCount(store)).toBe(0);
+  });
+
+  it('does NOT trigger when the agent stays online at the same version', () => {
+    const store = makeStore();
+    store.agents = [agentRecord({ online: true, version: 'v1' })];
+    for (let i = 0; i < 4; i++) handleAgentList(store, agentListWith(agentRecord({ online: true, version: 'v1' })));
+    expect(loadHistoryCount(store)).toBe(0);
+  });
+
+  it('does NOT trigger a restart catch-up when NOT in Yeaft view', () => {
+    const store = makeStore();
+    store.currentView = 'chat';
+    store.agents = [agentRecord({ online: false, version: 'v1' })];
+    handleAgentList(store, agentListWith(agentRecord({ online: true, version: 'v2' })));
+    // Not in yeaft view → no yeaft bootstrap. (Chat reconnect uses sync_messages.)
+    expect(loadHistoryCount(store)).toBe(0);
+    expect(store._yeaftReconnectCatchUpPending).toBeFalsy();
+  });
+});

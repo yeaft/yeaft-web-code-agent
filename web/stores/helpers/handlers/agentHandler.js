@@ -56,7 +56,39 @@ export function restoreLastViewedConversation(store, agentSetup) {
  * Handle agent_list message: sync conversations, proxy ports, reconnection.
  */
 export function handleAgentList(store, msg) {
+  // Agent-restart detection (must read the PREVIOUS list before the
+  // overwrite below). When the agent PROCESS restarts (deploy/update), the
+  // web↔server websocket never drops — so the onclose-based
+  // _yeaftReconnectCatchUpPending latch never fires and the Yeaft session
+  // is left un-reloaded. Detect the restart edge here and arm the same
+  // one-shot latch the reconnect-restore branch already consumes.
+  //
+  // Edge-triggered on purpose (NOT every agent_list): the v0.1.954 loop
+  // came from firing the catch-up on every routine broadcast. We only arm
+  // on an observed RESTART transition of the CURRENT Yeaft agent. The agent
+  // must have been KNOWN before (prevYeaftAgent present) so the very first
+  // agent_list after page load / enterYeaft is NOT mistaken for a restart
+  // (enterYeaft already bootstraps that case):
+  //   - wentOfflineOnline: known & online → offline/absent → online again
+  //   - versionChanged:    known & online both samples, agent version bumped
+  //     (a deploy restart where the offline frame coalesced away)
+  const yeaftAgentIdForRestart = store.yeaftAgentId || store.currentAgent || null;
+  const prevYeaftAgent = yeaftAgentIdForRestart
+    ? (store.agents || []).find(a => a.id === yeaftAgentIdForRestart)
+    : null;
+
   store.agents = msg.agents;
+
+  if (store.currentView === 'yeaft' && yeaftAgentIdForRestart && prevYeaftAgent) {
+    const nextYeaftAgent = msg.agents.find(a => a.id === yeaftAgentIdForRestart);
+    const wentOfflineOnline = !!nextYeaftAgent?.online && !prevYeaftAgent.online;
+    const versionChanged = !!nextYeaftAgent?.online && !!prevYeaftAgent.online
+      && prevYeaftAgent.version != null && nextYeaftAgent.version != null
+      && prevYeaftAgent.version !== nextYeaftAgent.version;
+    if (wentOfflineOnline || versionChanged) {
+      store._yeaftReconnectCatchUpPending = true;
+    }
+  }
   {
     const agentIds = new Set(msg.agents.map(a => a.id));
     for (const agent of msg.agents) {
@@ -221,17 +253,27 @@ export function handleAgentList(store, msg) {
       store.currentAgentInfo = agent;
       store.sendWsMessage({ type: 'select_agent', agentId: store.currentAgent, silent: true });
       if (store.currentView === 'yeaft' && typeof store.requestYeaftSessionBootstrap === 'function') {
-        const needsYeaftSessionReady = !store.yeaftSessionReady || !store.yeaftModel || !store.yeaftStatus;
-        // Only catch up history on a GENUINE reconnect. agent_list arrives
-        // frequently (status flips, turn_completed, latency pings); running
-        // the afterSeq catch-up on each one re-fires yeaft_load_history +
-        // yeaft_vp_subscribe in an unbounded loop, because history_loaded
-        // resets the session's `loading` flag and re-arms
-        // shouldCatchUpLoadedYeaftSession. The websocket onclose handler sets
-        // this one-shot flag only when the socket actually dropped.
-        const catchUpHistory = !!store._yeaftReconnectCatchUpPending;
+        // Only catch up history on a GENUINE reconnect/restart. agent_list
+        // arrives frequently (status flips, turn_completed, latency pings);
+        // running the afterSeq catch-up on each one re-fires
+        // yeaft_load_history + yeaft_vp_subscribe in an unbounded loop,
+        // because history_loaded resets the session's `loading` flag and
+        // re-arms shouldCatchUpLoadedYeaftSession. The one-shot
+        // _yeaftReconnectCatchUpPending latch is armed only on a real edge:
+        // the websocket onclose handler (server/network drop) OR the
+        // agent-restart detection at the top of this function (agent process
+        // updated/restarted — the socket stays up, so onclose never fires).
+        const reconnectEdge = !!store._yeaftReconnectCatchUpPending;
         store._yeaftReconnectCatchUpPending = false;
-        store.requestYeaftSessionBootstrap({ forceSessionReady: needsYeaftSessionReady, catchUpHistory });
+        // A real reconnect/restart edge needs a fresh session_ready too: the
+        // restarted agent has a new engine + conversationId, so the cached
+        // yeaftSessionReady/model/status are stale even though they're still
+        // truthy. Force the replay on the edge (in addition to the usual
+        // "state missing" trigger) so the conversationId re-migrates and VP
+        // subscription re-primes — not just the history delta.
+        const needsYeaftSessionReady = reconnectEdge
+          || !store.yeaftSessionReady || !store.yeaftModel || !store.yeaftStatus;
+        store.requestYeaftSessionBootstrap({ forceSessionReady: needsYeaftSessionReady, catchUpHistory: reconnectEdge });
       }
       if (store.currentConversation) {
         const conv = store.conversations.find(c => c.id === store.currentConversation);
