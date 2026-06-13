@@ -66,6 +66,7 @@ async function loadTransferWith({ providerName, hasExistingState = true }) {
   };
   vi.doMock('../../../agent/providers/index.js', () => ({
     DEFAULT_PROVIDER: 'claude-code',
+    isValidProvider: (name) => name === 'claude-code' || name === 'copilot',
     getProvider: (name) => {
       if (name === 'claude-code') throw new Error('getProvider(claude-code) should not be called for non-claude routing');
       return fakeDriver;
@@ -189,14 +190,35 @@ describe('handleTransferFiles — provider routing', () => {
     expect(userEcho.data.message.content).toBe('总结这个文件');
   });
 
-  it('falls back to claude-code when no conversation state exists', async () => {
-    // With no state in ctx, providerName resolves to DEFAULT_PROVIDER
-    // ('claude-code') — the correct behavior when the provider is unknown.
+  it('falls back to claude-code when no conversation state AND no provider hint exists', async () => {
+    // No state in ctx AND no msg.provider → providerName resolves to
+    // DEFAULT_PROVIDER ('claude-code'). This is the correct default when the
+    // server gives us no provider hint to recover from.
     const { handleTransferFiles, fakeDriver, startClaudeQuery } =
       await loadTransferWith({ providerName: 'copilot', hasExistingState: false });
     await handleTransferFiles({ conversationId: 'conv-unknown', files: [IMAGE_FILE], prompt: 'x', workDir: tmpWork });
     expect(startClaudeQuery).toHaveBeenCalledTimes(1);
     expect(fakeDriver.sendInput).not.toHaveBeenCalled();
+  });
+
+  it('self-heals a copilot conversation after agent restart via msg.provider (no state)', async () => {
+    // fix-copilot-provider-persist: after an agent restart ctx.conversations
+    // is empty, but the server forwards the persisted provider on the
+    // transfer_files payload. With msg.provider:'copilot' we must re-spawn
+    // the ACP child (driver.start) and route through it, NOT mis-route to
+    // Claude — this is the "发送都没有反应了" repro for attachment sends.
+    const { handleTransferFiles, fakeDriver, startClaudeQuery } =
+      await loadTransferWith({ providerName: 'copilot', hasExistingState: false });
+    await handleTransferFiles({
+      conversationId: 'conv-restarted',
+      files: [IMAGE_FILE],
+      prompt: '看图',
+      workDir: tmpWork,
+      provider: 'copilot',
+    });
+    expect(startClaudeQuery).not.toHaveBeenCalled();
+    expect(fakeDriver.start).toHaveBeenCalledTimes(1); // ACP child re-spawned
+    expect(fakeDriver.sendInput).toHaveBeenCalledTimes(1);
   });
 
   it('still routes claude-code attachment sends through startClaudeQuery (regression guard)', async () => {

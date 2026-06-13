@@ -774,18 +774,39 @@ export async function handleUserInput(msg) {
   let state = ctx.conversations.get(conversationId);
 
   // ★ Non-Claude providers: dispatch to driver and return
-  const providerName = state?.providerName || DEFAULT_PROVIDER;
+  // fix-copilot-provider-persist: after an agent process restart `state` is
+  // gone (ctx.conversations is in-memory only). The server now forwards the
+  // persisted `provider` on the execute/transfer_files payload so we can
+  // re-resolve it here — otherwise this falls back to claude-code, skips the
+  // self-heal `driver.start()` below, and a copilot conversation mis-routes
+  // to Claude (the dead-send bug). `isValidProvider` guards a bad value.
+  const providerName = state?.providerName
+    || (isValidProvider(msg.provider) ? msg.provider : DEFAULT_PROVIDER);
   if (providerName !== 'claude-code') {
     const driver = getProvider(providerName);
     const effectiveWorkDir = workDir || state?.workDir || ctx.CONFIG.workDir;
     if (!state) {
-      state = await driver.start({
-        conversationId,
-        workDir: effectiveWorkDir,
-        resumeSessionId: claudeSessionId || null,
-        userId: msg.userId,
-        username: msg.username,
-      });
+      // Re-spawn the provider's session (e.g. the Copilot ACP child) that
+      // died with the previous agent process. If the CLI is unavailable on
+      // the restarted machine, surface a visible error frame instead of an
+      // unhandled rejection (the send was dispatched un-awaited upstream).
+      try {
+        state = await driver.start({
+          conversationId,
+          workDir: effectiveWorkDir,
+          resumeSessionId: claudeSessionId || null,
+          userId: msg.userId,
+          username: msg.username,
+        });
+      } catch (err) {
+        sendOutput(conversationId, {
+          type: 'result',
+          subtype: 'error',
+          is_error: true,
+          error: `${providerName} provider failed to start: ${err?.message || err}`,
+        });
+        return;
+      }
     }
     if (workDir) state.workDir = workDir;
 

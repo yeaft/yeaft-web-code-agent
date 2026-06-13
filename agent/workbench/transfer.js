@@ -1,7 +1,7 @@
 import { existsSync, writeFileSync, mkdirSync } from 'fs';
 import { join, basename, extname } from 'path';
 import ctx from '../context.js';
-import { getProvider, DEFAULT_PROVIDER } from '../providers/index.js';
+import { getProvider, DEFAULT_PROVIDER, isValidProvider } from '../providers/index.js';
 import { sendOutput, sendConversationList } from '../conversation.js';
 
 // 临时文件目录名 (不易冲突)
@@ -64,12 +64,35 @@ export async function handleTransferFiles(msg) {
   //   image bytes over ACP, so images are handed to the driver as attachments
   //   instead of being inlined as disk paths the way the Claude path does.
   //
-  // Note: when state is null here, providerName resolves to DEFAULT_PROVIDER
-  // ('claude-code'), so this branch only runs for an already-created
-  // non-claude conversation — state is guaranteed non-null inside it.
-  const providerName = state?.providerName || DEFAULT_PROVIDER;
+  // Note: after an agent process restart `state` is null even for a copilot
+  // conversation (ctx.conversations is in-memory). The server now forwards
+  // the persisted `provider` on the transfer_files payload, so we re-resolve
+  // it here and re-spawn the driver — without this an attachment send on a
+  // restarted copilot conversation would fall through to the Claude path and
+  // mis-route. `isValidProvider` guards a bad value.
+  const providerName = state?.providerName
+    || (isValidProvider(msg.provider) ? msg.provider : DEFAULT_PROVIDER);
   if (providerName !== 'claude-code') {
     const driver = getProvider(providerName);
+    if (!state) {
+      try {
+        state = await driver.start({
+          conversationId,
+          workDir: effectiveWorkDir,
+          resumeSessionId: claudeSessionId || null,
+          userId: msg.userId,
+          username: msg.username,
+        });
+      } catch (err) {
+        sendOutput(conversationId, {
+          type: 'result',
+          subtype: 'error',
+          is_error: true,
+          error: `${providerName} provider failed to start: ${err?.message || err}`,
+        });
+        return;
+      }
+    }
     if (workDir) state.workDir = workDir;
 
     // Images go inline as provider attachments ([{type,data,mimeType}] — the

@@ -125,6 +125,22 @@ export async function handleAgentConversation(agentId, agent, msg) {
       const dbSessionData = sessionDb.get(msg.conversationId);
       const trustedUserId = existingConvData?.userId || dbSessionData?.user_id || agent.ownerId || msg.userId || null;
       const trustedUsername = existingConvData?.username || dbSessionData?.username || agent.ownerUsername || msg.username || null;
+      // fix-copilot-provider-persist: the agent stamps `provider` on
+      // create/resume (claude-code / copilot / ...). Carry it on the
+      // in-memory conv AND persist it (below) so an agent process restart
+      // doesn't lose the binding — without this the conv reverts to the
+      // default provider and copilot sends mis-route to Claude.
+      //
+      // Defense-in-depth against CLOBBER: the agent's resume handler
+      // DEFAULTS an absent provider to 'claude-code', so a provider-less
+      // resume (web auto-restore / recovery) reports provider:'claude-code'
+      // even for a copilot conv. Treat 'claude-code' as "no explicit
+      // provider" here: never let it overwrite a stored non-default. The
+      // server resume forward also injects the persisted provider as a
+      // belt-and-braces fix, but this guard makes the persist layer
+      // independently safe.
+      const reportedProvider = (msg.provider && msg.provider !== 'claude-code') ? msg.provider : null;
+      const resolvedProvider = reportedProvider || existingConvData?.provider || dbSessionData?.provider || null;
 
       agent.conversations.set(msg.conversationId, {
         id: msg.conversationId,
@@ -132,6 +148,7 @@ export async function handleAgentConversation(agentId, agent, msg) {
         claudeSessionId: msg.claudeSessionId,
         userId: trustedUserId,
         username: trustedUsername,
+        ...(resolvedProvider ? { provider: resolvedProvider } : {}),
         // fix-chat-title-sticky: hydrate the persisted title + sticky-bit
         // from the DB on resume/recreate. Without this, a user-renamed
         // session that's been resumed has `customTitle = undefined`,
@@ -151,11 +168,19 @@ export async function handleAgentConversation(agentId, agent, msg) {
       try {
         if (msg.type === 'conversation_created') {
           if (!sessionDb.exists(msg.conversationId)) {
-            sessionDb.create(msg.conversationId, agentId, agent.name, msg.workDir, msg.claudeSessionId, null, trustedUserId);
+            sessionDb.create(msg.conversationId, agentId, agent.name, msg.workDir, msg.claudeSessionId, null, trustedUserId, resolvedProvider);
+          } else if (resolvedProvider) {
+            sessionDb.setProvider(msg.conversationId, resolvedProvider);
           }
         } else {
           if (sessionDb.exists(msg.conversationId)) {
             sessionDb.update(msg.conversationId, { claudeSessionId: msg.claudeSessionId });
+            // fix-copilot-provider-persist: keep the persisted provider in
+            // sync on resume (e.g. first resume after this column shipped, or
+            // a provider change). Null msg.provider leaves it untouched.
+            if (resolvedProvider && dbSessionData?.provider !== resolvedProvider) {
+              sessionDb.setProvider(msg.conversationId, resolvedProvider);
+            }
             // fix-session-dup: also re-point the persisted agent_id
             // to the resuming agent when ownership actually changed.
             // The DB row is the source of truth that the `get_agents`
@@ -168,7 +193,7 @@ export async function handleAgentConversation(agentId, agent, msg) {
               sessionDb.setAgent(msg.conversationId, agentId, agent.name);
             }
           } else {
-            sessionDb.create(msg.conversationId, agentId, agent.name, msg.workDir, msg.claudeSessionId, null, trustedUserId);
+            sessionDb.create(msg.conversationId, agentId, agent.name, msg.workDir, msg.claudeSessionId, null, trustedUserId, resolvedProvider);
           }
         }
         sessionDb.setActive(msg.conversationId, true);

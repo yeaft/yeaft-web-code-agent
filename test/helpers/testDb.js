@@ -96,7 +96,10 @@ const MIGRATIONS_NEW = [
   // feat-chat-load-perf: one-shot sentinel for the bulkAddHistory
   // timestamp-rebuild repair path. See server/db/connection.js for the
   // full rationale.
-  'ALTER TABLE sessions ADD COLUMN ts_rebuilt_at INTEGER DEFAULT 0'
+  'ALTER TABLE sessions ADD COLUMN ts_rebuilt_at INTEGER DEFAULT 0',
+  // fix-copilot-provider-persist: mirror the production provider column so
+  // the round-trip is testable. Keep in sync with server/db/connection.js.
+  'ALTER TABLE sessions ADD COLUMN provider TEXT'
 ];
 
 const POST_INDEXES = [
@@ -175,13 +178,15 @@ export function createDbOperations(db) {
     getInvitationsByUser: db.prepare('SELECT * FROM invitations WHERE created_by = ? ORDER BY created_at DESC'),
     deleteInvitation: db.prepare('DELETE FROM invitations WHERE id = ? AND created_by = ? AND used_by IS NULL'),
     cleanupExpiredInvitations: db.prepare('DELETE FROM invitations WHERE expires_at < ? AND used_by IS NULL'),
-    insertSession: db.prepare('INSERT INTO sessions (id, user_id, agent_id, agent_name, claude_session_id, work_dir, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'),
+    insertSession: db.prepare('INSERT INTO sessions (id, user_id, agent_id, agent_name, claude_session_id, work_dir, title, provider, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'),
     updateSession: db.prepare('UPDATE sessions SET claude_session_id = COALESCE(?, claude_session_id), title = COALESCE(?, title), is_custom_title = COALESCE(?, is_custom_title), updated_at = ? WHERE id = ?'),
     updateSessionActive: db.prepare('UPDATE sessions SET is_active = ?, updated_at = ? WHERE id = ?'),
     // fix-session-dup: re-point a session's owning agent. Production
     // statement at server/db/connection.js#updateSessionAgent.
     updateSessionAgent: db.prepare('UPDATE sessions SET agent_id = ?, agent_name = ?, updated_at = ? WHERE id = ?'),
     updateSessionPinned: db.prepare('UPDATE sessions SET is_pinned = ?, updated_at = ? WHERE id = ?'),
+    // fix-copilot-provider-persist: mirror server/db/connection.js#updateSessionProvider.
+    updateSessionProvider: db.prepare('UPDATE sessions SET provider = ?, updated_at = ? WHERE id = ?'),
     getSession: db.prepare('SELECT * FROM sessions WHERE id = ?'),
     getSessionsByAgent: db.prepare('SELECT * FROM sessions WHERE agent_id = ? ORDER BY updated_at DESC LIMIT ?'),
     getSessionsByUser: db.prepare('SELECT * FROM sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?'),
@@ -294,10 +299,10 @@ export function createDbOperations(db) {
   }
 
   const sessionDb = {
-    create(id, agentId, agentName, workDir, claudeSessionId = null, title = null, userId = null) {
+    create(id, agentId, agentName, workDir, claudeSessionId = null, title = null, userId = null, provider = null) {
       const now = Date.now();
-      stmts.insertSession.run(id, userId, agentId, agentName, claudeSessionId, workDir, title, now, now);
-      return { id, userId, agentId, agentName, workDir, claudeSessionId, title, customTitle: false, createdAt: now, updatedAt: now };
+      stmts.insertSession.run(id, userId, agentId, agentName, claudeSessionId, workDir, title, provider, now, now);
+      return { id, userId, agentId, agentName, workDir, claudeSessionId, title, provider, customTitle: false, createdAt: now, updatedAt: now };
     },
     update(id, updates = {}) {
       stmts.updateSession.run(
@@ -316,6 +321,10 @@ export function createDbOperations(db) {
     },
     setPinned(id, pinned) {
       stmts.updateSessionPinned.run(pinned ? 1 : 0, Date.now(), id);
+    },
+    // fix-copilot-provider-persist: mirror server/db/session-db.js#setProvider.
+    setProvider(id, provider) {
+      stmts.updateSessionProvider.run(provider ?? null, Date.now(), id);
     },
     get(id) { return mapSessionRow(stmts.getSession.get(id)); },
     exists(id) { return !!stmts.getSession.get(id); },
