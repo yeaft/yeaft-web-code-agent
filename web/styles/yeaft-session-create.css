@@ -180,3 +180,35 @@
   opacity: 0.5;
   pointer-events: none;
 }
+
+/* Mobile: the chat modal shell already becomes full-screen; keep Yeaft-specific
+   roster rows and footer controls usable at 360-430px widths. */
+@media (max-width: 640px) {
+  .resume-control-row-vp {
+    align-items: stretch;
+  }
+
+  .yeaft-roster-item {
+    align-items: stretch;
+  }
+
+  .yeaft-roster-row {
+    min-width: 0;
+    padding: 7px 8px;
+  }
+
+  .yeaft-roster-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .yeaft-roster-default-star {
+    align-self: center;
+    flex: 0 0 auto;
+  }
+
+  .yeaft-create-error {
+    margin: 8px 12px 0;
+  }
+}

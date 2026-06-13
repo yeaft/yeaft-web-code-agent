@@ -3354,3 +3354,113 @@
   font-size: 11px;
   line-height: 16px;
 }
+
+/* Mobile Yeaft session settings -------------------------------------------------
+   Keep the settings shell fixed on small screens, but switch the left nav to a
+   compact horizontal strip so the content pane keeps usable width. */
+@media (max-width: 640px) {
+  .group-settings-overlay {
+    padding: 8px;
+    align-items: stretch;
+  }
+
+  .group-settings-modal {
+    width: 100%;
+    height: calc(100dvh - 16px);
+    max-height: calc(100dvh - 16px);
+    border-radius: 12px;
+  }
+
+  .group-settings-header {
+    padding: 12px 14px;
+  }
+
+  .group-settings-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .group-settings-body {
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .group-settings-nav {
+    width: 100%;
+    flex: 0 0 auto;
+    flex-direction: row;
+    gap: 6px;
+    overflow-x: auto;
+    padding: 8px 10px 0;
+    scrollbar-width: thin;
+  }
+
+  .group-settings-nav-item {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding: 8px 10px;
+  }
+
+  .group-settings-pane {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 12px;
+  }
+
+  .group-settings-section-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .group-settings-link-btn {
+    width: 100%;
+  }
+
+  .group-settings-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .group-settings-primary,
+  .group-settings-actions .btn-primary,
+  .group-settings-actions .btn-secondary,
+  .group-settings-actions .btn-ghost {
+    width: 100%;
+  }
+
+  .group-settings-roster-item {
+    align-items: flex-start;
+  }
+
+  .group-settings-roster-row {
+    min-width: 0;
+  }
+
+  .group-settings-roster-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .group-settings-default-star {
+    flex: 0 0 auto;
+  }
+
+  .yeaft-topbar {
+    gap: 4px;
+    padding: 4px 8px;
+  }
+
+  .yeaft-topbar-model,
+  .yeaft-topbar-group {
+    min-width: 0;
+  }
+
+  .yeaft-clear-btn,
+  .yeaft-reload-btn,
+  .yeaft-topbar-group-settings {
+    flex: 0 0 auto;
+  }
+}

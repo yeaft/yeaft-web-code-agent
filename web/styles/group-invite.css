@@ -195,3 +195,37 @@
   border-color: var(--accent, #4f8cff);
   border-style: dashed;
 }
+
+/* Mobile: keep the invite prompt inside the viewport and make CTAs tappable. */
+@media (max-width: 480px) {
+  .group-invite-overlay {
+    padding: 8px;
+  }
+
+  .group-invite-modal {
+    width: 100%;
+    max-height: calc(100dvh - 16px);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .group-invite-header {
+    padding: 16px 16px 6px;
+  }
+
+  .group-invite-body {
+    padding: 4px 16px 14px;
+    overflow-y: auto;
+  }
+
+  .group-invite-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+    padding: 10px 16px 16px;
+  }
+
+  .group-invite-dismiss,
+  .group-invite-primary {
+    width: 100%;
+  }
+}
