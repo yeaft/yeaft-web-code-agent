@@ -18,7 +18,8 @@
  */
 
 import { randomUUID } from 'crypto';
-import { resolve as resolvePath } from 'path';
+import { promises as fsp } from 'fs';
+import { join, resolve as resolvePath } from 'path';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes } from './sessions/pre-flow.js';
@@ -594,6 +595,14 @@ export class Engine {
     ];
     const [user, session, vp] = await Promise.all(tasks);
     return { user: user || '', session: session || '', vp: vp || '' };
+  }
+
+  async #loadSessionTopicLabels(sessionId, limit = 8) {
+    if (!this.#yeaftDir || !sessionId) return [];
+    const topicRoot = join(this.#yeaftDir, 'memory', 'sessions', sessionId, 'topic');
+    const labels = [];
+    await collectTopicLabels(topicRoot, '', labels, limit).catch(() => {});
+    return labels;
   }
 
   /**
@@ -1338,7 +1347,7 @@ export class Engine {
    *   string-prompt shape (no regression for existing callers).
    * @yields {EngineEvent}
    */
-  async *query({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null, collabToolPolicy = null } = {}) {
+  async *query({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, sessionTopics = null, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null, collabToolPolicy = null } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       yield {
         type: 'error',
@@ -1401,7 +1410,7 @@ export class Engine {
 
     try {
       this.#currentThreadId = threadId || MAIN_THREAD_ID;
-      yield* this.#runQuery({ prompt: effectivePrompt, promptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted, getCurrentTodos, setCurrentTodos, threadId: this.#currentThreadId, drainPendingUserMessages, collabToolPolicy: effectiveCollabToolPolicy });
+      yield* this.#runQuery({ prompt: effectivePrompt, promptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, sessionTopics, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted, getCurrentTodos, setCurrentTodos, threadId: this.#currentThreadId, drainPendingUserMessages, collabToolPolicy: effectiveCollabToolPolicy });
     } finally {
       if (signal) {
         try { signal.removeEventListener('abort', onExternalAbort); } catch { /* ignore */ }
@@ -1421,7 +1430,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null, collabToolPolicy = null }) {
+  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, sessionTopics = null, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null, collabToolPolicy = null }) {
 
     const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
       ? collabToolPolicy
@@ -1513,10 +1522,14 @@ export class Engine {
     // Structured per-turn scope summary: session + vp + members + envelope routing
     // info. Long-form scope content lives in AMS — this block carries
     // only IDs + tiny labels. (Feature scope retired 2026-05-13.)
+    const activeSessionTopics = Array.isArray(sessionTopics)
+      ? sessionTopics
+      : await this.#loadSessionTopicLabels(sessionId);
     const activeScope = {
       sessionId: sessionId || '',
-      vpId: ownVpIdForAms || '',
-      members: Array.isArray(sessionMembers) ? sessionMembers : [],
+      sessionMember: ownVpIdForAms || '',
+      sessionMembers: Array.isArray(sessionMembers) ? sessionMembers : [],
+      sessionTopics: activeSessionTopics,
       envelope: inboundEnvelope || null,
     };
 
@@ -2905,5 +2918,24 @@ export class Engine {
       console.warn('[Engine] summarizeForCompact failed:', err?.message || err);
       return '';
     }
+  }
+}
+
+async function collectTopicLabels(dir, prefix, labels, limit) {
+  if (labels.length >= limit) return;
+  let entries;
+  try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
+  const hasMemory = entries.some(entry => entry.isFile() && entry.name === 'memory.md');
+  const hasSummary = entries.some(entry => entry.isFile() && entry.name === 'summary.md');
+  if (prefix && (hasMemory || hasSummary)) labels.push(prefix);
+  if (labels.length >= limit) return;
+  const dirs = entries
+    .filter(entry => entry.isDirectory() && !entry.name.startsWith('.'))
+    .map(entry => entry.name)
+    .sort();
+  for (const name of dirs) {
+    const nextPrefix = prefix ? `${prefix}/${name}` : name;
+    await collectTopicLabels(join(dir, name), nextPrefix, labels, limit);
+    if (labels.length >= limit) return;
   }
 }

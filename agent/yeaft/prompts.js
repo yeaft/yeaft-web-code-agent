@@ -272,8 +272,9 @@ export function normalizePromptLanguage(language) {
  *   Active Scope params (DESIGN-PROMPT §3 ④):
  *   @param {object} [activeScope] — structured scope summary for this turn
  *   @param {string} [activeScope.sessionId]
- *   @param {string} [activeScope.vpId]
- *   @param {string[]} [activeScope.members]          current session roster
+ *   @param {string} [activeScope.sessionMember]
+ *   @param {string[]} [activeScope.sessionMembers]  current session roster
+ *   @param {string[]} [activeScope.sessionTopics]   bounded topic labels for this session
  *   @param {object} [activeScope.envelope]          inbound routing info (sender, intent)
  *
  * @param {{
@@ -571,10 +572,11 @@ const OMNI_PERSONA_ZH = `你是全能助手，一个跨领域、偏执行的通�
  *
  * Schema:
  *   ## active_scope
- *   session: <sessionId>                    (omitted when missing)
- *   vp:      <vpId>                         (omitted when missing)
- *   members: <vpId>, <vpId>                 (omitted when missing)
- *   envelope: from=<sender> intent=<intent> (omitted when no envelope)
+ *   session_id:      <sessionId>                    (omitted when missing)
+ *   session_member:  <vpId>                         (omitted when missing)
+ *   session_members: <vpId>, <vpId>                 (omitted when missing)
+ *   session_topics:  <topic>, <topic>               (omitted when missing)
+ *   envelope: from=<sender> intent=<intent>         (omitted when no envelope)
  *
  * Returns '' when the input has no useful field — we don't emit an empty
  * header. (`featureId`/`featureTitle` fields were removed 2026-05-13 along
@@ -582,8 +584,9 @@ const OMNI_PERSONA_ZH = `你是全能助手，一个跨领域、偏执行的通�
  *
  * @param {object} [activeScope]
  * @param {string} [activeScope.sessionId]
- * @param {string} [activeScope.vpId]
- * @param {string[]} [activeScope.members]  current session roster
+ * @param {string} [activeScope.sessionMember]
+ * @param {string[]} [activeScope.sessionMembers]  current session roster
+ * @param {string[]} [activeScope.sessionTopics]   bounded topic labels
  * @param {object} [activeScope.envelope]   inbound routing summary
  * @param {object} lang
  * @returns {string}
@@ -595,15 +598,16 @@ function renderActiveScope(activeScope, lang) {
   const session = typeof activeScope.sessionId === 'string' && activeScope.sessionId.trim()
     ? activeScope.sessionId.trim()
     : '';
-  if (session) lines.push(`session: ${session}`);
+  if (session) lines.push(`session_id: ${session}`);
 
-  const vp = typeof activeScope.vpId === 'string' && activeScope.vpId.trim()
-    ? activeScope.vpId.trim()
-    : '';
-  if (vp) lines.push(`vp: ${vp}`);
+  const sessionMember = firstNonEmptyString(activeScope.sessionMember, activeScope.vpId);
+  if (sessionMember) lines.push(`session_member: ${sessionMember}`);
 
-  const membersLine = renderSessionMembersLine(activeScope.members);
-  if (membersLine) lines.push(`members: ${membersLine}`);
+  const membersLine = renderSessionMembersLine(activeScope.sessionMembers || activeScope.members);
+  if (membersLine) lines.push(`session_members: ${membersLine}`);
+
+  const topicsLine = renderSessionMembersLine(activeScope.sessionTopics);
+  if (topicsLine) lines.push(`session_topics: ${topicsLine}`);
 
   const envLine = renderEnvelopeLine(activeScope.envelope);
   if (envLine) lines.push(`envelope: ${envLine}`);
@@ -613,6 +617,13 @@ function renderActiveScope(activeScope, lang) {
   return `${lang.activeScopeHeader}\n${lines.join('\n')}`;
 }
 
+
+function firstNonEmptyString(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
 
 function renderSessionMembersLine(members) {
   if (!Array.isArray(members)) return '';

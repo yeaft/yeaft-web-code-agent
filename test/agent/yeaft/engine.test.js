@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, rmSync, mkdtempSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, mkdtempSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { Engine } from '../../../agent/yeaft/engine.js';
@@ -897,6 +897,7 @@ describe('Engine', () => {
         prompt: 'test',
         sessionId: 'session_active',
         sessionMembers: ['vp-omni', 'vp-martin', 'vp-linus'],
+        sessionTopics: ['dream/segments', 'active_scope/rendering'],
         vpPersona: { vpId: 'vp-linus', displayName: 'Linus' },
       })) {
         // consume
@@ -904,10 +905,47 @@ describe('Engine', () => {
 
       const call = mockAdapter.callLog[0];
       expect(call.system).toContain('## active_scope');
-      expect(call.system).toContain('session: session_active');
-      expect(call.system).toContain('vp: vp-linus');
-      expect(call.system).toContain('members: vp-omni, vp-martin, vp-linus');
+      expect(call.system).toContain('session_id: session_active');
+      expect(call.system).toContain('session_member: vp-linus');
+      expect(call.system).toContain('session_members: vp-omni, vp-martin, vp-linus');
+      expect(call.system).toContain('session_topics: dream/segments, active_scope/rendering');
       expect(call.system).not.toContain('group: session_active');
+      expect(call.system).not.toContain('\nvp: vp-linus');
+      expect(call.system).not.toContain('\nmembers: vp-omni');
+    });
+
+    it('loads session topics from memory topic scopes when not passed explicitly', async () => {
+      const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-topics-'));
+      try {
+        mkdirSync(join(yeaftDir, 'memory', 'sessions', 'session_active', 'topic', 'dream', 'segments'), { recursive: true });
+        writeFileSync(join(yeaftDir, 'memory', 'sessions', 'session_active', 'topic', 'dream', 'segments', 'memory.md'), 'segment memory');
+
+        mockAdapter.pushResponse([
+          { type: 'text_delta', text: 'ok' },
+          { type: 'stop', stopReason: 'end_turn' },
+        ]);
+
+        const engine = new Engine({
+          adapter: mockAdapter,
+          trace,
+          yeaftDir,
+          config: { model: 'test-model', maxOutputTokens: 1024, language: 'en' },
+        });
+
+        for await (const _event of engine.query({
+          prompt: 'test',
+          sessionId: 'session_active',
+          sessionMembers: ['vp-linus'],
+          vpPersona: { vpId: 'vp-linus', displayName: 'Linus' },
+        })) {
+          // consume
+        }
+
+        const call = mockAdapter.callLog[0];
+        expect(call.system).toContain('session_topics: dream/segments');
+      } finally {
+        rmSync(yeaftDir, { recursive: true, force: true });
+      }
     });
   });
 
