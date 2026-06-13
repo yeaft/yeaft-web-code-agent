@@ -129,9 +129,18 @@ export async function handleAgentConversation(agentId, agent, msg) {
       // create/resume (claude-code / copilot / ...). Carry it on the
       // in-memory conv AND persist it (below) so an agent process restart
       // doesn't lose the binding — without this the conv reverts to the
-      // default provider and copilot sends mis-route to Claude. Prefer the
-      // fresh agent value; fall back to whatever was already known.
-      const resolvedProvider = msg.provider || existingConvData?.provider || dbSessionData?.provider || null;
+      // default provider and copilot sends mis-route to Claude.
+      //
+      // Defense-in-depth against CLOBBER: the agent's resume handler
+      // DEFAULTS an absent provider to 'claude-code', so a provider-less
+      // resume (web auto-restore / recovery) reports provider:'claude-code'
+      // even for a copilot conv. Treat 'claude-code' as "no explicit
+      // provider" here: never let it overwrite a stored non-default. The
+      // server resume forward also injects the persisted provider as a
+      // belt-and-braces fix, but this guard makes the persist layer
+      // independently safe.
+      const reportedProvider = (msg.provider && msg.provider !== 'claude-code') ? msg.provider : null;
+      const resolvedProvider = reportedProvider || existingConvData?.provider || dbSessionData?.provider || null;
 
       agent.conversations.set(msg.conversationId, {
         id: msg.conversationId,

@@ -243,6 +243,15 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         return;
       }
       client.currentAgent = resumeAgentId;
+      // fix-copilot-provider-persist: the web's auto-restore / recovery
+      // resume paths (web/stores/helpers/session.js) send no provider, and
+      // the agent's resume handler defaults an absent provider to
+      // 'claude-code'. Without the persisted fallback here, resuming a
+      // copilot conversation would emit conversation_resumed{provider:
+      // 'claude-code'} and the persist path would CLOBBER the stored
+      // 'copilot' binding — reintroducing the bug, permanently. Inject the
+      // persisted provider so a provider-less resume keeps the real one.
+      const resumeProvider = msg.provider || sessionDb.get(msg.conversationId)?.provider || undefined;
       await forwardToAgent(resumeAgentId, {
         type: 'resume_conversation',
         conversationId: msg.conversationId || randomUUID(),
@@ -250,7 +259,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         workDir: msg.workDir,
         userId: client.userId,
         username: client.username,
-        provider: msg.provider,
+        provider: resumeProvider,
         providerOptions: msg.providerOptions,
         disallowedTools: msg.disallowedTools
       });

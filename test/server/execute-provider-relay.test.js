@@ -96,3 +96,33 @@ describe('execute relay forwards the conversation provider', () => {
     expect('provider' in payload).toBe(false);
   });
 });
+
+describe('resume_conversation relay carries the persisted provider', () => {
+  it('injects the DB provider when the web resume omits it (auto-restore / recovery)', async () => {
+    // The web auto-restore / recovery paths send resume with NO provider.
+    // Without the DB fallback, the agent would default to claude-code and
+    // the persist path would clobber the stored copilot binding.
+    CONFIG.skipAuth = true;
+    seedAgent(null); // resume doesn't need the conv in the agent map
+    dbProvider = 'copilot';
+    const client = { userId: 'owner-1', username: 'u', currentAgent: 'agent-1' };
+
+    await handleClientConversation('c1', client, { type: 'resume_conversation', conversationId: 'conv-1' }, allow);
+
+    expect(forwardToAgent).toHaveBeenCalledTimes(1);
+    const [, payload] = forwardToAgent.mock.calls[0];
+    expect(payload).toMatchObject({ type: 'resume_conversation', conversationId: 'conv-1', provider: 'copilot' });
+  });
+
+  it('prefers an explicit provider on the resume message over the DB', async () => {
+    CONFIG.skipAuth = true;
+    seedAgent(null);
+    dbProvider = 'copilot';
+    const client = { userId: 'owner-1', username: 'u', currentAgent: 'agent-1' };
+
+    await handleClientConversation('c1', client, { type: 'resume_conversation', conversationId: 'conv-1', provider: 'claude-code' }, allow);
+
+    const [, payload] = forwardToAgent.mock.calls[0];
+    expect(payload.provider).toBe('claude-code');
+  });
+});
