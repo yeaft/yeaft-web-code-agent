@@ -262,6 +262,17 @@ export const useChatStore = defineStore('chat', {
     // turn_completed, latency pings) and spin yeaft_load_history /
     // yeaft_vp_subscribe into an unbounded loop.
     _yeaftReconnectCatchUpPending: false,
+    // Last-known {online, version} of the Yeaft agent, persisted ACROSS
+    // agent_list frames. Needed because the server DELETES an agent from its
+    // map on disconnect (server/ws-agent.js handleAgentDisconnect), so a
+    // process restart appears as present(v1) → ABSENT → present(v2) — the
+    // agent is never broadcast as present-but-offline. Diffing only against
+    // the immediately-previous store.agents misses the restart because the
+    // intermediate absent frame already erased the agent. This snapshot
+    // survives the absent frame so handleAgentList can detect "came back
+    // online" / "version changed" across the gap. Keyed by agent id so a
+    // cross-agent switch doesn't compare against a stale agent.
+    _yeaftAgentSeen: null, // { id, online, version } | null
     // 可用的 slash commands 列表（按 conversationId 隔离，从 Claude SDK init 消息获取）
     slashCommandsMap: {},  // { [conversationId]: string[] }
     // Slash command 描述映射（从 agent 端传递，所有 conversation 共用）

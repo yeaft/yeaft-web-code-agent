@@ -7,6 +7,43 @@ import { isRecentlyClosed, stopProcessingWatchdog } from '../watchdog.js';
 import { clearSessionLoading, restorePanels } from '../session.js';
 
 /**
+ * Decide whether the current Yeaft agent just RESTARTED (a fresh process),
+ * given a persisted last-known snapshot and the incoming agent_list.
+ *
+ * The server DELETES an agent from its map on disconnect
+ * (server/ws-agent.js handleAgentDisconnect → agents.delete), so a process
+ * restart broadcasts as present(v1) → ABSENT → present(v2): the agent is
+ * never reported present-but-`online:false`. We therefore compare against a
+ * `seen` snapshot that survives the absent frame, NOT the one-frame-old
+ * agent list.
+ *
+ * Returns true on a restart edge:
+ *   - cameBackOnline: we previously saw this agent online, then it went
+ *     offline/absent, and now it is online again (covers a plain restart
+ *     even with no version change — crash, PM2 bounce, identical redeploy).
+ *   - versionChanged: it is online now, was online when last seen, and the
+ *     reported version differs (covers a deploy where the absent frame was
+ *     coalesced away so we never observed the gap).
+ *
+ * `seen` is null on cold start (page just loaded / agent never seen) → no
+ * edge, since enterYeaft already bootstraps that case.
+ *
+ * @param {{id:string,online:boolean,version:(string|null)}|null} seen
+ * @param {{id:string,online?:boolean,version?:(string|null)}|undefined} next  current agent record (undefined = absent from this frame)
+ * @returns {boolean}
+ */
+export function detectYeaftAgentRestart(seen, next) {
+  if (!seen) return false;
+  const nextOnline = !!next?.online;
+  if (!nextOnline) return false; // absent or offline now → wait for it to come back
+  const cameBackOnline = !seen.online;
+  const versionChanged = seen.online
+    && seen.version != null && next.version != null
+    && seen.version !== next.version;
+  return cameBackOnline || versionChanged;
+}
+
+/**
  * 恢复上次查看的 conversation（公共逻辑）。
  */
 export function restoreLastViewedConversation(store, agentSetup) {
@@ -57,6 +94,51 @@ export function restoreLastViewedConversation(store, agentSetup) {
  */
 export function handleAgentList(store, msg) {
   store.agents = msg.agents;
+
+  // Agent-restart detection. When the agent PROCESS restarts (deploy/update
+  // or crash), the web↔server websocket never drops, so the onclose-based
+  // _yeaftReconnectCatchUpPending latch never fires and the Yeaft session is
+  // left un-reloaded. Detect the restart edge here and arm the SAME one-shot
+  // latch the reconnect-restore branch below already consumes.
+  //
+  // We diff against a PERSISTED snapshot (`_yeaftAgentSeen`), not the
+  // one-frame-old store.agents, because the server deletes an agent on
+  // disconnect: a restart is present(v1) → ABSENT → present(v2), and the
+  // absent frame would otherwise erase our only prior record. See
+  // detectYeaftAgentRestart() for the exact edge semantics.
+  //
+  // Edge-triggered on purpose (NOT every agent_list): the v0.1.954 loop came
+  // from firing the catch-up on every routine broadcast. Steady state (same
+  // agent, online, same version, repeated frames) arms nothing.
+  const yeaftAgentId = store.yeaftAgentId || store.currentAgent || null;
+  if (yeaftAgentId) {
+    const seen = (store._yeaftAgentSeen && store._yeaftAgentSeen.id === yeaftAgentId)
+      ? store._yeaftAgentSeen
+      : null;
+    const nextRec = msg.agents.find(a => a.id === yeaftAgentId) || null;
+    if (store.currentView === 'yeaft' && detectYeaftAgentRestart(seen, nextRec)) {
+      store._yeaftReconnectCatchUpPending = true;
+    }
+    // Update the snapshot every frame so the absent→present gap is bridged.
+    // While absent (nextRec null) KEEP the last-known online/version so the
+    // reappear frame can still see "was online before". Only overwrite when
+    // the agent is present in this frame.
+    if (nextRec) {
+      store._yeaftAgentSeen = {
+        id: yeaftAgentId,
+        online: !!nextRec.online,
+        version: nextRec.version != null ? nextRec.version : null,
+      };
+    } else if (!seen) {
+      // First time we're tracking this agent and it's absent — record the
+      // id so a later reappear is recognized as a restart, not a cold start.
+      store._yeaftAgentSeen = { id: yeaftAgentId, online: false, version: null };
+    } else if (seen.online) {
+      // Agent dropped out of the list → mark offline but retain the version
+      // so a same-version restart is still a cameBackOnline edge next frame.
+      store._yeaftAgentSeen = { id: yeaftAgentId, online: false, version: seen.version };
+    }
+  }
   {
     const agentIds = new Set(msg.agents.map(a => a.id));
     for (const agent of msg.agents) {
@@ -221,17 +303,27 @@ export function handleAgentList(store, msg) {
       store.currentAgentInfo = agent;
       store.sendWsMessage({ type: 'select_agent', agentId: store.currentAgent, silent: true });
       if (store.currentView === 'yeaft' && typeof store.requestYeaftSessionBootstrap === 'function') {
-        const needsYeaftSessionReady = !store.yeaftSessionReady || !store.yeaftModel || !store.yeaftStatus;
-        // Only catch up history on a GENUINE reconnect. agent_list arrives
-        // frequently (status flips, turn_completed, latency pings); running
-        // the afterSeq catch-up on each one re-fires yeaft_load_history +
-        // yeaft_vp_subscribe in an unbounded loop, because history_loaded
-        // resets the session's `loading` flag and re-arms
-        // shouldCatchUpLoadedYeaftSession. The websocket onclose handler sets
-        // this one-shot flag only when the socket actually dropped.
-        const catchUpHistory = !!store._yeaftReconnectCatchUpPending;
+        // Only catch up history on a GENUINE reconnect/restart. agent_list
+        // arrives frequently (status flips, turn_completed, latency pings);
+        // running the afterSeq catch-up on each one re-fires
+        // yeaft_load_history + yeaft_vp_subscribe in an unbounded loop,
+        // because history_loaded resets the session's `loading` flag and
+        // re-arms shouldCatchUpLoadedYeaftSession. The one-shot
+        // _yeaftReconnectCatchUpPending latch is armed only on a real edge:
+        // the websocket onclose handler (server/network drop) OR the
+        // agent-restart detection at the top of this function (agent process
+        // updated/restarted — the socket stays up, so onclose never fires).
+        const reconnectEdge = !!store._yeaftReconnectCatchUpPending;
         store._yeaftReconnectCatchUpPending = false;
-        store.requestYeaftSessionBootstrap({ forceSessionReady: needsYeaftSessionReady, catchUpHistory });
+        // A real reconnect/restart edge needs a fresh session_ready too: the
+        // restarted agent has a new engine + conversationId, so the cached
+        // yeaftSessionReady/model/status are stale even though they're still
+        // truthy. Force the replay on the edge (in addition to the usual
+        // "state missing" trigger) so the conversationId re-migrates and VP
+        // subscription re-primes — not just the history delta.
+        const needsYeaftSessionReady = reconnectEdge
+          || !store.yeaftSessionReady || !store.yeaftModel || !store.yeaftStatus;
+        store.requestYeaftSessionBootstrap({ forceSessionReady: needsYeaftSessionReady, catchUpHistory: reconnectEdge });
       }
       if (store.currentConversation) {
         const conv = store.conversations.find(c => c.id === store.currentConversation);
