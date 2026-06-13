@@ -1173,3 +1173,20 @@
   background: linear-gradient(135deg, var(--accent, #818cf8) 0%, var(--accent-blue, #60a5fa) 100%);
   color: #fff;
 }
+
+/* Mobile: tighten VP turn/action chrome without changing desktop layout. */
+@media (max-width: 640px) {
+  .vp-turn-block {
+    gap: 8px;
+  }
+
+  .vp-turn-block-main-header,
+  .vp-detail-dream-row {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .vp-detail-dream-btn {
+    flex: 1 1 auto;
+  }
+}
