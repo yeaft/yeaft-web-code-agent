@@ -4,6 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { buildRunDreamOpts } from '../../../../agent/yeaft/dream/session-wiring.js';
 import { runDream } from '../../../../agent/yeaft/dream/runner.js';
+import { extractAndWriteMemorySegments } from '../../../../agent/yeaft/dream/segment-extract.js';
 
 let testDir;
 
@@ -117,6 +118,61 @@ describe('buildRunDreamOpts session conversation wiring', () => {
     expect(omniMemory).toContain('Dream processed the session conversation');
     expect(martinMemory).toContain('Dream processed the session conversation');
     expect(topicMemory).toContain('Dream processed the session conversation');
+  });
+
+  it('isolates malformed segment extraction to one scope and continues others', async () => {
+    const calls = [];
+    const llm = async (req) => {
+      if (req.pass === 'extract-segments') {
+        calls.push(req.prompt.match(/Target scope: ([^\n]+)/)?.[1] || '');
+        if (req.prompt.includes('Target scope: user\n')) return '{ malformed';
+        return JSON.stringify([{ kind: 'decision', tags: ['review'], sourceMessages: ['m1'], body: 'Other scopes still write memory after one scope fails.' }]);
+      }
+      if (req.pass === 'extract-segments-retry') return 'still malformed';
+      return '[]';
+    };
+
+    const result = await extractAndWriteMemorySegments({
+      root: join(testDir, 'memory'),
+      sessionId: 's-isolate',
+      messages: [{ id: 'm1', role: 'user', body: 'Keep session and VP memory even if user extraction fails.' }],
+      targets: ['user', 'sessions/s-isolate', 'sessions/s-isolate/user', 'sessions/s-isolate/topic/review'],
+      llm,
+      nowIso: () => '2026-06-12T00:00:00.000Z',
+    });
+
+    expect(result.errors).toEqual([expect.objectContaining({ scope: 'user', rawSnippet: expect.any(String) })]);
+    expect(calls).toContain('user');
+    expect(readFileSync(join(testDir, 'memory', 'sessions', 's-isolate', 'memory.md'), 'utf8')).toContain('Other scopes still write memory');
+    expect(readFileSync(join(testDir, 'memory', 'sessions', 's-isolate', 'user', 'memory.md'), 'utf8')).toContain('Other scopes still write memory');
+    expect(readFileSync(join(testDir, 'memory', 'sessions', 's-isolate', 'topic', 'review', 'memory.md'), 'utf8')).toContain('Other scopes still write memory');
+  });
+
+  it('bounds repeated current details and keeps only the latest recent segment', async () => {
+    let body = 'PR #978 review todo is current.';
+    const llm = async (req) => {
+      if (req.pass === 'extract-segments') {
+        return JSON.stringify([{ kind: 'decision', tags: ['pr'], sourceMessages: ['m1'], body }]);
+      }
+      return '[]';
+    };
+    const base = {
+      root: join(testDir, 'memory'),
+      sessionId: 's-repeat',
+      messages: [{ id: 'm1', role: 'user', body: 'PR #978 review todo remains current.' }],
+      targets: ['sessions/s-repeat'],
+      llm,
+    };
+
+    await extractAndWriteMemorySegments({ ...base, nowIso: () => '2026-06-12T00:00:00.000Z' });
+    body = 'PR #978 review todo is still current, reworded by the extractor.';
+    await extractAndWriteMemorySegments({ ...base, nowIso: () => '2026-06-12T00:01:00.000Z' });
+
+    const memory = readFileSync(join(testDir, 'memory', 'sessions', 's-repeat', 'memory.md'), 'utf8');
+    expect(memory).not.toContain('PR #978 review todo is current.');
+    expect(memory).toContain('PR #978 review todo is still current, reworded by the extractor.');
+    expect(memory.match(/tags: \[pr\]/g)).toHaveLength(1);
+    expect(memory.match(/tags: \[recent, current\]/g)).toHaveLength(1);
   });
 });
 

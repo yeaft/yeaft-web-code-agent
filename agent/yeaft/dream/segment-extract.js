@@ -15,6 +15,7 @@ import { parseJsonSafe } from './triage.js';
 const MAX_TARGETS = 24;
 const MAX_MESSAGES = 80;
 const MAX_BODY_CHARS = 1200;
+const MAX_SEGMENTS_PER_SCOPE = 64;
 const RECENT_MESSAGE_COUNT = 8;
 const VALID_KINDS = new Set(['fact', 'preference', 'decision', 'lesson', 'relation', 'goal', 'context']);
 
@@ -36,25 +37,34 @@ export async function extractAndWriteMemorySegments(opts) {
   if (typeof opts.llm !== 'function') throw new Error('extractAndWriteMemorySegments: llm required');
 
   const messages = normalizeMessages(opts.messages || []);
-  if (messages.length === 0) return { scopes: 0, segments: 0 };
+  if (messages.length === 0) return { scopes: 0, segments: 0, errors: [] };
 
   const targetScopes = normalizeTargetScopes(opts.sessionId, opts.targets || []);
   const now = opts.nowIso ? opts.nowIso() : new Date().toISOString();
   let segmentCount = 0;
   let scopeCount = 0;
+  const errors = [];
 
   for (const scope of targetScopes.slice(0, MAX_TARGETS)) {
-    const extracted = await extractScopeSegments({
-      scope,
-      sessionId: opts.sessionId,
-      messages,
-      llm: opts.llm,
-      language: opts.language,
-      now,
-    });
+    let extracted = [];
+    try {
+      extracted = await extractScopeSegments({
+        scope,
+        sessionId: opts.sessionId,
+        messages,
+        llm: opts.llm,
+        language: opts.language,
+        now,
+      });
+    } catch (err) {
+      errors.push({ scope, error: err.message, rawSnippet: err.rawSnippet || '' });
+    }
+
     const recent = scope === `sessions/${opts.sessionId}`
       ? [buildRecentSegment({ scope, messages, now })]
       : [];
+    if (extracted.length === 0 && recent.length === 0) continue;
+
     const nextSegments = mergeSegments(readScope(opts.root, scope), [...extracted, ...recent]);
     writeScope(opts.root, scope, nextSegments);
     if (opts.segmentIndex) syncScope(opts.root, opts.segmentIndex, scope);
@@ -62,27 +72,38 @@ export async function extractAndWriteMemorySegments(opts) {
     scopeCount += 1;
   }
 
-  return { scopes: scopeCount, segments: segmentCount };
+  return { scopes: scopeCount, segments: segmentCount, errors };
 }
 
 async function extractScopeSegments({ scope, sessionId, messages, llm, language, now }) {
   const template = extractTemplateForScope(scope);
   const base = render(template, templateVarsForScope(scope, sessionId), { language });
   const prompt = `${base}\n\nTarget scope: ${scope}\n\nConversation diff, oldest first:\n${renderMessages(messages)}\n\nReturn only the JSON array. Do not wrap it in Markdown.`;
-  const raw = await llm({ pass: 'extract-segments', prompt, system: extractSystem(language) });
-  const parsed = parseJsonSafe(raw);
-  if (!Array.isArray(parsed)) {
-    throw new Error(`extract-segments: malformed JSON for ${scope}`);
+  const firstRaw = await llm({ pass: 'extract-segments', prompt, system: extractSystem(language) });
+  const firstParsed = parseJsonSafe(firstRaw);
+  if (Array.isArray(firstParsed)) {
+    return firstParsed
+      .map(item => normalizeExtractedSegment({ item, scope, now }))
+      .filter(Boolean);
   }
 
-  return parsed
+  const retryPrompt = `${prompt}\n\nYour previous output was malformed JSON. Previous output snippet:\n${rawSnippet(firstRaw)}\n\nRetry now. Return only a strict JSON array.`;
+  const retryRaw = await llm({ pass: 'extract-segments-retry', prompt: retryPrompt, system: extractSystem(language) });
+  const retryParsed = parseJsonSafe(retryRaw);
+  if (!Array.isArray(retryParsed)) {
+    const err = new Error(`extract-segments: malformed JSON for ${scope}`);
+    err.rawSnippet = rawSnippet(retryRaw || firstRaw);
+    throw err;
+  }
+
+  return retryParsed
     .map(item => normalizeExtractedSegment({ item, scope, now }))
     .filter(Boolean);
 }
 
 function templateVarsForScope(scope, sessionId) {
   const vars = { sessionId, vpId: '', topicId: '' };
-  const vpMatch = /^sessions\/[^/]+\/vp\/([^/]+)$/.exec(scope);
+  const vpMatch = /^sessions\/[^/]+\/vp\/(.+)$/.exec(scope);
   if (vpMatch) vars.vpId = vpMatch[1];
   const topicMatch = /^sessions\/[^/]+\/topic\/(.+)$/.exec(scope);
   if (topicMatch) vars.topicId = topicMatch[1];
@@ -164,10 +185,47 @@ function buildRecentSegment({ scope, messages, now }) {
 }
 
 function mergeSegments(existing, incoming) {
-  const preserved = existing.filter(seg => !Array.isArray(seg.tags) || !seg.tags.includes('recent'));
-  const byId = new Map();
-  for (const seg of [...preserved, ...incoming]) byId.set(seg.id, seg);
-  return [...byId.values()].sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+  const incomingRecent = incoming.filter(isRecentSegment).slice(-1);
+  const incomingPermanent = incoming.filter(seg => !isRecentSegment(seg));
+  const byKey = new Map();
+
+  for (const seg of existing) {
+    if (isRecentSegment(seg)) continue;
+    byKey.set(segmentMergeKey(seg), seg);
+  }
+  for (const seg of incomingPermanent) {
+    byKey.set(segmentMergeKey(seg), seg);
+  }
+
+  const permanent = [...byKey.values()]
+    .sort((a, b) => segmentTime(b).localeCompare(segmentTime(a)))
+    .slice(0, MAX_SEGMENTS_PER_SCOPE)
+    .sort((a, b) => segmentTime(a).localeCompare(segmentTime(b)) || String(a.id).localeCompare(String(b.id)));
+
+  return [...permanent, ...incomingRecent];
+}
+
+function segmentMergeKey(seg) {
+  const sources = Array.isArray(seg.sourceMessages)
+    ? seg.sourceMessages.map(String).filter(Boolean).sort().join(',')
+    : '';
+  const tagFamily = Array.isArray(seg.tags)
+    ? seg.tags.map(String).filter(t => t && t !== 'recent' && t !== 'current').sort().join(',')
+    : '';
+  if (sources) return `src:${seg.kind || 'context'}:${tagFamily}:${sources}`;
+  return `id:${seg.id}`;
+}
+
+function isRecentSegment(seg) {
+  return Array.isArray(seg.tags) && seg.tags.includes('recent');
+}
+
+function segmentTime(seg) {
+  return String(seg.updatedAt || seg.createdAt || '');
+}
+
+function rawSnippet(raw) {
+  return String(raw || '').replace(/\s+/g, ' ').trim().slice(0, 500);
 }
 
 function oneLine(text) {
