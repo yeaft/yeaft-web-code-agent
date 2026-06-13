@@ -22,8 +22,11 @@ const { defineStore } = Pinia;
  * - server DB hydration rows: `isPinned` (legacy mapped DB field)
  * Accept both so a reload cannot silently drop persisted pins.
  */
-function isPinnedRow(s) {
-  return !!(s && (s.pinned === true || s.isPinned === true));
+function isPinnedRow(s, fallback = false) {
+  if (!s || typeof s !== 'object') return !!fallback;
+  if (Object.prototype.hasOwnProperty.call(s, 'pinned')) return s.pinned === true;
+  if (Object.prototype.hasOwnProperty.call(s, 'isPinned')) return s.isPinned === true;
+  return !!fallback;
 }
 
 /**
@@ -138,7 +141,7 @@ export const useSessionsStore = defineStore('sessions', {
         const nextOrder = [];
         for (const s of arr) {
           if (!s || !s.id) continue;
-          nextMap[s.id] = this._normalize(s, null);
+          nextMap[s.id] = this._normalize(s, null, isPinnedRow(this.sessions[s.id]));
           nextOrder.push(s.id);
         }
         this.sessions = nextMap;
@@ -151,7 +154,7 @@ export const useSessionsStore = defineStore('sessions', {
         for (const s of arr) {
           if (!s || !s.id) continue;
           incomingIds.add(s.id);
-          nextMap[s.id] = this._normalize(s, agentId);
+          nextMap[s.id] = this._normalize(s, agentId, isPinnedRow(this.sessions[s.id]));
         }
         // Remove this agent's previously-known sessions that aren't in
         // the new snapshot (handles delete / archive).
@@ -243,7 +246,9 @@ export const useSessionsStore = defineStore('sessions', {
       if (chat && typeof chat.applyServerPinSnapshot === 'function') {
         const pinnedInSnapshot = new Set();
         for (const s of arr) {
-          if (s && s.id && isPinnedRow(s)) pinnedInSnapshot.add(s.id);
+          if (!s || !s.id) continue;
+          const row = this.sessions[s.id];
+          if (row && row.pinned) pinnedInSnapshot.add(s.id);
         }
         const isOwnedByAgent = (id) => {
           const row = this.sessions[id];
@@ -318,9 +323,10 @@ export const useSessionsStore = defineStore('sessions', {
       if (!session || !session.id) return;
       const existed = !!this.sessions[session.id];
       const effectiveAgentId = agentId || (this.sessions[session.id] && this.sessions[session.id].agentId) || null;
+      const prev = this.sessions[session.id] || {};
       this.sessions[session.id] = {
-        ...(this.sessions[session.id] || {}),
-        ...this._normalize(session, effectiveAgentId),
+        ...prev,
+        ...this._normalize(session, effectiveAgentId, isPinnedRow(prev)),
       };
       if (!existed) this.sessionOrder.push(session.id);
     },
@@ -394,7 +400,7 @@ export const useSessionsStore = defineStore('sessions', {
       this.lastCrudResult = null;
     },
 
-    _normalize(s, agentId = null) {
+    _normalize(s, agentId = null, fallbackPinned = false) {
       return {
         id: s.id,
         name: s.name || s.id,
@@ -414,7 +420,7 @@ export const useSessionsStore = defineStore('sessions', {
         // stamps `pinned:true` from the yeaft_sessions DB row). Mirror
         // it onto the normalized row so applySnapshot can sync into
         // chatStore.pinnedSessions in one pass.
-        pinned: isPinnedRow(s),
+        pinned: isPinnedRow(s, fallbackPinned),
       };
     },
   },
