@@ -516,6 +516,11 @@ export const useChatStore = defineStore('chat', {
     // data is there.
     vpStatuses: {},
 
+    // Per-turn stop requests awaiting the agent ack / terminal event. Used to
+    // keep VP-list stop buttons from firing duplicate aborts while the agent
+    // tears down a running or queued VP turn.
+    stoppingVpTurnIds: {},
+
     // VP runtime turns: the conversation is a single message stream, and
     // Yeaft message blocks are keyed by VP + message id.
 
@@ -1998,6 +2003,8 @@ export const useChatStore = defineStore('chat', {
             ...this.activeVpTurns,
             [event.turnId]: {
               vpId: event.vpId,
+              sessionId: event.sessionId || null,
+              threadId: event.threadId || null,
               isStreaming: true,
               startedAt: event.ts || Date.now(),
             },
@@ -2008,6 +2015,8 @@ export const useChatStore = defineStore('chat', {
           if (!event.turnId) break;
           const { [event.turnId]: _removed, ...rest } = this.activeVpTurns;
           this.activeVpTurns = rest;
+          const { [event.turnId]: _stopped, ...stoppingRest } = this.stoppingVpTurnIds;
+          this.stoppingVpTurnIds = stoppingRest;
           // Per-message lifecycle: flip every in-flight assistant message
           // owned by this VP/turn from 'pending' to the terminal status
           // carried on `event.reason` (end_turn → completed; route_forward
@@ -2057,6 +2066,8 @@ export const useChatStore = defineStore('chat', {
           if (!event.turnId) break;
           const { [event.turnId]: _removed, ...rest } = this.activeVpTurns;
           this.activeVpTurns = rest;
+          const { [event.turnId]: _stopped, ...stoppingRest } = this.stoppingVpTurnIds;
+          this.stoppingVpTurnIds = stoppingRest;
           break;
         }
         // vp_typing_* coexists with vp_status_changed on purpose. They serve
@@ -3384,20 +3395,47 @@ export const useChatStore = defineStore('chat', {
         this.processingConversations[this.yeaftConversationId] = false;
       }
       this.activeVpTurns = {};
+      this.stoppingVpTurnIds = {};
     },
     /**
      * Per-VP stop: abort a single VP turn by turnId without affecting siblings.
      */
     cancelVpTurn(turnId) {
       if (!this.yeaftAgentId || !turnId) return;
+      this.stoppingVpTurnIds = {
+        ...this.stoppingVpTurnIds,
+        [turnId]: Date.now(),
+      };
       this.sendWsMessage({
         type: 'yeaft_abort_turn',
         agentId: this.yeaftAgentId,
         turnId,
       });
-      // Optimistic: remove from activeVpTurns immediately.
-      const { [turnId]: _removed, ...rest } = this.activeVpTurns;
-      this.activeVpTurns = rest;
+    },
+    cancelVpTurnForSession(vpId, sessionId = null) {
+      if (!vpId) return false;
+      const targetSessionId = sessionId || this.yeaftActiveSessionFilter || null;
+      const map = this.activeVpTurns || {};
+      let bestTurnId = null;
+      let bestStartedAt = -Infinity;
+      for (const [turnId, info] of Object.entries(map)) {
+        if (!info || info.vpId !== vpId) continue;
+        if (targetSessionId && info.sessionId && info.sessionId !== targetSessionId) continue;
+        const ts = (typeof info.startedAt === 'number') ? info.startedAt : 0;
+        if (ts >= bestStartedAt) {
+          bestStartedAt = ts;
+          bestTurnId = turnId;
+        }
+      }
+      if (!bestTurnId) {
+        const status = this.vpStatuses?.[vpStatusKey(targetSessionId, vpId)] || null;
+        if (status?.turnId && !['idle', 'offline'].includes(status.state)) {
+          bestTurnId = status.turnId;
+        }
+      }
+      if (!bestTurnId) return false;
+      this.cancelVpTurn(bestTurnId);
+      return true;
     },
     answerUserQuestion(requestId, answers, conversationId) { convHelpers.answerUserQuestion(this, requestId, answers, conversationId); },
     refreshAgents() { convHelpers.refreshAgents(this); },

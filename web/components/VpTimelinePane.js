@@ -62,7 +62,7 @@ export default {
           v-for="row in rows"
           :key="row.vpId"
           class="yeaft-vp-timeline-row"
-          :class="['is-status-' + row.status]"
+          :class="['is-status-' + row.status, { 'is-stopping': row.isStopping }]"
           tabindex="0"
           role="button"
           :aria-label="row.displayName + ' — ' + statusLabel(row)"
@@ -91,13 +91,15 @@ export default {
             <span
               v-if="isActiveStatus(row.status)"
               class="yeaft-vp-timeline-abort"
+              :class="{ 'is-stopping': row.isStopping }"
               role="button"
               tabindex="0"
               :aria-label="$t('yeaft.vpTimeline.abort')"
+              :aria-disabled="row.isStopping ? 'true' : 'false'"
               :title="$t('yeaft.vpTimeline.abort')"
-              @click.stop="$emit('cancel-vp-turn', row.vpId)"
-              @keydown.enter.stop.prevent="$emit('cancel-vp-turn', row.vpId)"
-              @keydown.space.stop.prevent="$emit('cancel-vp-turn', row.vpId)"
+              @click.stop="!row.isStopping && $emit('cancel-vp-turn', row.vpId)"
+              @keydown.enter.stop.prevent="!row.isStopping && $emit('cancel-vp-turn', row.vpId)"
+              @keydown.space.stop.prevent="!row.isStopping && $emit('cancel-vp-turn', row.vpId)"
             >
               <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true">
                 <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>

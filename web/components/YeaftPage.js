@@ -1032,6 +1032,7 @@ export default {
       return buildTimelineRows({
         vpList,
         vpStatuses: scopedStatuses,
+        stoppingVpTurnIds: store.stoppingVpTurnIds || {},
         connectionState: store.connectionState,
         vpLabelOf: (id) => vpStore.vpLabel(id),
       });
@@ -1057,26 +1058,14 @@ export default {
       }
     };
 
-    // Per-VP abort from the timeline. A VP may now have multiple running
-    // threads, so we cancel the most recently started active turn for that
-    // VP. `cancelVpTurn` remains turnId-based because abort controllers are
-    // keyed by turn, not by the aggregate VP row.
+    // Per-VP abort from the timeline. The row can be active before the
+    // engine has emitted vp_turn_start, so use the store helper that falls
+    // back to the agent status table's current turnId.
     const onCancelVpFromTimeline = (vpId) => {
       if (!vpId) return;
-      const map = store.activeVpTurns || {};
-      let bestTurnId = null;
-      let bestStartedAt = -Infinity;
-      for (const [turnId, info] of Object.entries(map)) {
-        if (!info || info.vpId !== vpId) continue;
-        if (info.endedAt) continue;
-        const ts = (typeof info.startedAt === 'number') ? info.startedAt : 0;
-        if (ts >= bestStartedAt) {
-          bestStartedAt = ts;
-          bestTurnId = turnId;
-        }
+      if (typeof store.cancelVpTurnForSession === 'function') {
+        store.cancelVpTurnForSession(vpId, store.yeaftActiveSessionFilter || null);
       }
-      if (!bestTurnId) return;
-      store.cancelVpTurn(bestTurnId);
     };
 
     return {
