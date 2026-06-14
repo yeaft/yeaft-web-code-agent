@@ -21,8 +21,8 @@
  *   5. ~/.yeaft/memory/groups/<g>/ams.json → ~/.yeaft/memory/sessions/<g>/ams.json
  *   6. SQLite FTS index `memory_segments.scope` rows: rewrite group/* / chat/*
  *      → session/*.
- *   7. Per-message frontmatter: rewrite `groupId: X` → `sessionId: X` in every
- *      `*.md` under `conversation/messages|cold/` and
+ *   7. Per-message frontmatter: rewrite `groupId: X` / `chatId: X` →
+ *      `sessionId: X` in every `*.md` under `conversation/messages|cold/` and
  *      `sessions/<id>/conversation/messages|cold/`. This is what closes the
  *      loop on PR #881's rename — without it, the parser would have to carry
  *      a permanent `groupId` alias.
@@ -302,8 +302,9 @@ function rewriteFtsScopes(memoryRoot, warnings) {
 }
 
 /**
- * Rewrite `groupId: X` → `sessionId: X` in every message frontmatter under
- * the known conversation directories. Returns the number of files mutated.
+ * Rewrite legacy conversation ids (`groupId` / `chatId`) to `sessionId` in
+ * every message frontmatter under the known conversation directories. Returns
+ * the number of files mutated.
  *
  * Idempotent: a second run finds nothing to rewrite and returns 0.
  */
@@ -338,8 +339,9 @@ function rewriteAllMessageFrontmatter(yeaftDir, warnings) {
 
 /**
  * Walk a single directory and rewrite any `.md` file whose YAML frontmatter
- * carries `groupId:` but not `sessionId:`. If both keys are already present
- * the redundant `groupId:` line is dropped. Atomic via tmp-then-rename.
+ * carries `groupId:` / `chatId:` but not `sessionId:`. If both keys are
+ * already present the redundant legacy id line is dropped. Atomic via
+ * tmp-then-rename.
  *
  * Returns the number of files mutated.
  */
@@ -366,26 +368,30 @@ function rewriteFrontmatterInDir(dir, warnings) {
       // Detect line ending used by the file so we round-trip it.
       const eol = raw.slice(0, openLen).includes('\r\n') ? '\r\n' : '\n';
       const lines = fmBody.split(/\r?\n/);
-      const groupIdLineIdx = lines.findIndex((l) => /^groupId:\s*/.test(l));
-      if (groupIdLineIdx === -1) continue;
+      const legacyIdLineIndexes = lines
+        .map((line, index) => (/^(groupId|chatId):\s*/.test(line) ? index : -1))
+        .filter((index) => index !== -1);
+      if (legacyIdLineIndexes.length === 0) continue;
       const hasSessionId = lines.some((l) => /^sessionId:\s*\S/.test(l));
-      const m = lines[groupIdLineIdx].match(/^groupId:\s*(.*?)\s*$/);
+      const legacyIdLineIdx = legacyIdLineIndexes[0];
+      const m = lines[legacyIdLineIdx].match(/^(?:groupId|chatId):\s*(.*?)\s*$/);
       const value = m ? m[1] : '';
       if (!hasSessionId && !value) {
-        // Pathological: `groupId:` with no value AND no existing sessionId.
+        // Pathological: legacy id with no value AND no existing sessionId.
         // Don't manufacture `sessionId: ` — that would silently mint a
         // useless row. Leave the file alone and log it so we can audit.
-        warnings.push(`frontmatter rewrite skipped (empty groupId, no sessionId): ${path}`);
+        warnings.push(`frontmatter rewrite skipped (empty legacy session id, no sessionId): ${path}`);
         continue;
       }
       let newLines;
       if (hasSessionId) {
-        // Redundant — drop the groupId line.
-        newLines = lines.filter((_, i) => i !== groupIdLineIdx);
+        // Redundant — drop legacy id lines.
+        newLines = lines.filter((_, i) => !legacyIdLineIndexes.includes(i));
       } else {
         // Replace in place to preserve frontmatter ordering.
-        newLines = lines.slice();
-        newLines[groupIdLineIdx] = `sessionId: ${value}`;
+        newLines = lines
+          .map((line, i) => (i === legacyIdLineIdx ? `sessionId: ${value}` : line))
+          .filter((_, i) => i === legacyIdLineIdx || !legacyIdLineIndexes.includes(i));
       }
       const next = `---${eol}${newLines.join(eol)}${after}`;
       // Collision-safe tmp name: pid + counter. Parallel migration runs
@@ -601,8 +607,7 @@ function isValidSessionMeta(meta) {
   return !!meta
     && typeof meta.id === 'string'
     && typeof meta.name === 'string'
-    && Array.isArray(meta.roster)
-    && meta.roster.length > 0;
+    && Array.isArray(meta.roster);
 }
 
 function writeJsonFileAtomic(path, value) {

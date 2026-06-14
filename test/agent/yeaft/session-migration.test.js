@@ -106,6 +106,40 @@ describe('session storage migration', () => {
     });
   });
 
+  it('keeps valid empty-roster canonical metadata instead of overwriting from stale rescue files', () => {
+    const root = tempRoot();
+    writeFileSync(join(root, '.yeaft-migration.done'), JSON.stringify({ version: 3 }, null, 2));
+    const sessionDir = join(root, 'sessions', 'session_empty');
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(sessionDir, 'session.json'), JSON.stringify({
+      id: 'session_empty',
+      name: 'Empty Session',
+      roster: [],
+      defaultVpId: null,
+      announcement: '',
+      workDir: '/tmp/project',
+      createdAt: '2026-06-12T00:00:00.000Z',
+    }, null, 2));
+    writeFileSync(join(sessionDir, 'meta.json'), JSON.stringify({
+      id: 'session_empty',
+      displayName: 'Stale Rescue',
+      vpIds: ['omni'],
+      createdAt: '2026-06-11T00:00:00.000Z',
+    }, null, 2));
+
+    const result = migrateSessions(root);
+
+    expect(result.migrated).toBe(true);
+    expect(existsSync(join(sessionDir, 'meta.json'))).toBe(false);
+    expect(readJson(join(sessionDir, 'session.json'))).toMatchObject({
+      id: 'session_empty',
+      name: 'Empty Session',
+      roster: [],
+      defaultVpId: null,
+      workDir: '/tmp/project',
+    });
+  });
+
   it('converts legacy chat metadata merged during cleanup into session.json', () => {
     const root = tempRoot();
     writeFileSync(join(root, '.yeaft-migration.done'), JSON.stringify({ version: 3 }, null, 2));
@@ -177,7 +211,7 @@ describe('session storage migration', () => {
     writeFileSync(join(legacyMessagesDir, 'turn.md'), [
       '---',
       'id: msg_1',
-      'groupId: chat_history',
+      'chatId: chat_history',
       'role: user',
       '---',
       'hello',
@@ -193,6 +227,6 @@ describe('session storage migration', () => {
     expect(result.migrated).toBe(true);
     expect(result.frontmatterRewrites).toBe(1);
     expect(migratedMessage).toContain('sessionId: chat_history');
-    expect(migratedMessage).not.toContain('groupId: chat_history');
+    expect(migratedMessage).not.toContain('chatId: chat_history');
   });
 });
