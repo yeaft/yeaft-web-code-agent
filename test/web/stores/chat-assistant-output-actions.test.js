@@ -28,4 +28,13 @@ describe('chat store assistant output actions', () => {
     });
     expect(store.executionStatusMap['conv-1']).toBe(status);
   });
+
+  it('does not clear processing state for history replay result frames', () => {
+    const store = useChatStore();
+    store.processingConversations = { 'conv-1': true };
+
+    store.handleAssistantOutputFrame('conv-1', { type: 'result', isHistoryReplay: true });
+
+    expect(store.processingConversations['conv-1']).toBe(true);
+  });
 });

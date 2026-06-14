@@ -3954,7 +3954,7 @@ export async function handleYeaftLoadHistory(msg) {
           message: { id: entry.id || null, content: [{ type: 'text', text: entry.content }] },
           ts: entry.ts || null,
         }, envelopeOpts);
-        sendSessionOutputFrame({ type: 'result', result_text: '' }, envelopeOpts);
+        sendSessionOutputFrame({ type: 'result', result_text: '', isHistoryReplay: true }, envelopeOpts);
       }
     }
     sendSessionEvent({
@@ -4013,7 +4013,7 @@ export async function handleYeaftLoadHistory(msg) {
         message: { id: entry.id || null, content: [{ type: 'text', text: entry.content }] },
         ts: entry.ts || null,
       }, envelopeOpts);
-      sendSessionOutputFrame({ type: 'result', result_text: '' }, envelopeOpts);
+      sendSessionOutputFrame({ type: 'result', result_text: '', isHistoryReplay: true }, envelopeOpts);
     }
   }
 
