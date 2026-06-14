@@ -718,14 +718,22 @@ function removeWrongMetaJson(sessionDir, warnings) {
 }
 
 function rewriteSegmentScopes(sessionMemoryDir, oldFamily, id, warnings) {
-  const segDir = join(sessionMemoryDir, 'segments');
-  if (!existsSync(segDir)) return;
+  if (!existsSync(sessionMemoryDir)) return;
+  rewriteSegmentScopeFiles(sessionMemoryDir, oldFamily, id, warnings, false);
+}
+
+function rewriteSegmentScopeFiles(dir, oldFamily, id, warnings, inSegmentsDir) {
   let entries;
-  try { entries = readdirSync(segDir); } catch { return; }
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
   const re = new RegExp(`^(\\s*scope:\\s*)${oldFamily}/${escapeRe(id)}\\b`, 'gm');
-  for (const name of entries) {
-    if (!name.endsWith('.md')) continue;
-    const path = join(segDir, name);
+  for (const ent of entries) {
+    const path = join(dir, ent.name);
+    if (ent.isDirectory()) {
+      rewriteSegmentScopeFiles(path, oldFamily, id, warnings, ent.name === 'segments');
+      continue;
+    }
+    if (!ent.isFile()) continue;
+    if (ent.name !== 'memory.md' && !(inSegmentsDir && ent.name.endsWith('.md'))) continue;
     try {
       const src = readFileSync(path, 'utf8');
       const next = src.replace(re, `$1session/${id}`);

@@ -444,7 +444,14 @@ describe('session storage migration', () => {
     ].join('\n'));
     writeFileSync(join(root, 'memory', 'group', 'session_merge', 'summary.md'), 'summary');
     writeFileSync(join(root, 'memory', 'group', 'session_merge', 'summary.zh.md'), '摘要');
-    writeFileSync(join(root, 'memory', 'group', 'session_merge', 'memory.md'), 'resident');
+    writeFileSync(join(root, 'memory', 'group', 'session_merge', 'memory.md'), [
+      '---',
+      'id: resident',
+      'scope: group/session_merge',
+      '---',
+      'resident',
+      '',
+    ].join('\n'));
     writeFileSync(join(root, 'memory', 'group', 'session_merge', 'vp', 'omni', 'summary.md'), 'vp summary');
     writeFileSync(join(root, 'memory', 'groups', 'session_merge', 'ams.json'), '{"layers":[]}');
 
@@ -456,7 +463,8 @@ describe('session storage migration', () => {
       .toContain('scope: session/session_merge');
     expect(readFileSync(join(root, 'memory', 'sessions', 'session_merge', 'summary.md'), 'utf8')).toBe('summary');
     expect(readFileSync(join(root, 'memory', 'sessions', 'session_merge', 'summary.zh.md'), 'utf8')).toBe('摘要');
-    expect(readFileSync(join(root, 'memory', 'session', 'session_merge', 'memory.md'), 'utf8')).toBe('resident');
+    expect(readFileSync(join(root, 'memory', 'session', 'session_merge', 'memory.md'), 'utf8'))
+      .toContain('scope: session/session_merge');
     expect(readFileSync(join(root, 'memory', 'sessions', 'session_merge', 'vp', 'omni', 'summary.md'), 'utf8')).toBe('vp summary');
     expect(readFileSync(join(root, 'memory', 'sessions', 'session_merge', 'ams.json'), 'utf8')).toBe('{"layers":[]}');
   });
