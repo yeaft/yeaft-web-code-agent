@@ -6,6 +6,7 @@ import { isRecentlyClosed, stopProcessingWatchdog } from '../watchdog.js';
 import { clearSessionLoading } from '../session.js';
 import { sameUserMessage } from '../dedup.js';
 import { maxDbMessageId } from '../messages.js';
+import { summarizeHistoricalToolMessages } from '../tool-window.js';
 import { t } from '../../../utils/i18n.js';
 
 /** Filter out empty user messages — tool_result artifacts stored as empty user records in DB */
@@ -172,7 +173,9 @@ export function handleConversationResumed(store, msg) {
   });
   console.log('dbMessages received:', msg.dbMessages?.length || 0, 'dbMessageCount:', msg.dbMessageCount || 0);
   if (msg.dbMessages && msg.dbMessages.length > 0) {
-    const formatted = msg.dbMessages.map(m => store.formatDbMessage(m)).flat().filter(Boolean);
+    const formatted = summarizeHistoricalToolMessages(
+      msg.dbMessages.map(m => store.formatDbMessage(m)).flat().filter(Boolean)
+    );
     const cleaned = filterEmptyUserMessages(formatted);
     const msgs = store.messagesMap[msg.conversationId] || [];
     for (const m of cleaned) {
@@ -343,9 +346,9 @@ export function handleSyncMessagesResult(store, msg) {
   const isDeltaSync =
     typeof msg.afterMessageId === 'number' && msg.afterMessageId > 0;
   if (msg.conversationId && store.activeConversations.includes(msg.conversationId)) {
-    const formatted = filterEmptyUserMessages(
+    const formatted = summarizeHistoricalToolMessages(filterEmptyUserMessages(
       (msg.messages || []).map(m => store.formatDbMessage(m)).flat().filter(Boolean)
-    );
+    ));
 
     if (formatted.length > 0) {
       const firstDbMsg = msgs.find(m => m.dbMessageId);

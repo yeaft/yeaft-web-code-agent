@@ -1,5 +1,7 @@
 // Message CRUD and streaming helpers
 
+import { applyLiveToolWindow } from './tool-window.js';
+
 // Default session identifier used by the Yeaft "Default" session seed
 // (mirrors agent/yeaft/groups/seed-default.js DEFAULT_GROUP_ID).
 // The `grp_` prefix is a persistence contract — disk paths, AMS scope
@@ -210,6 +212,7 @@ export function addMessageToConversation(store, conversationId, msg) {
     }
   }
   store.messagesMap[conversationId].push(newMsg);
+  applyLiveToolWindow(store.messagesMap[conversationId]);
   // Bug 1: keep messages sorted by timestamp so history loaded out-of-order
   // (e.g. from different sessions) still displays chronologically.
   // Only sort Yeaft conversations; crew conversations need insertion order.

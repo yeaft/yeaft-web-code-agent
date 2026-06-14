@@ -111,6 +111,17 @@ export function handleAssistantOutputFrame(store, conversationId, data) {
           vpId: store._currentYeaftVpId || null,
           turnId: store._currentYeaftTurnId || null,
         });
+      } else if (block.type === 'tool_summary') {
+        store.addMessageToConversation(conversationId, {
+          type: 'tool-summary',
+          count: Number(block.count || block.omittedCount || 0) || 0,
+          omittedCount: Number(block.omittedCount || block.count || 0) || 0,
+          source: block.source || 'history',
+          isHistory: block.source !== 'live',
+          sessionId: store._currentYeaftSessionId || null,
+          vpId: store._currentYeaftVpId || null,
+          turnId: store._currentYeaftTurnId || null,
+        });
       } else if (block.type === 'tool_use') {
         // Finish any in-progress streaming so typing dots reappear during tool execution.
         // Without this, isStreaming stays true on the assistant message, which suppresses

@@ -629,7 +629,7 @@ function projectPersistedToHistoryEntry(m) {
   if (m.ts) entry.ts = m.ts;
   else if (m.time) entry.ts = m.time;
   if (Array.isArray(m.attachments) && m.attachments.length > 0) entry.attachments = m.attachments;
-  if ((entry.role === 'user' || entry.role === 'assistant') && !entry.content && !entry.attachments) return null;
+  if ((entry.role === 'user' || entry.role === 'assistant') && !entry.content && !entry.attachments && !entry.toolCalls) return null;
   return entry;
 }
 
@@ -4013,6 +4013,20 @@ export async function handleYeaftLoadHistory(msg) {
         message: { id: entry.id || null, content: [{ type: 'text', text: entry.content }] },
         ts: entry.ts || null,
       }, envelopeOpts);
+      if (Array.isArray(entry.toolCalls) && entry.toolCalls.length > 0) {
+        sendSessionOutputFrame({
+          type: 'assistant',
+          message: {
+            content: [{
+              type: 'tool_summary',
+              count: entry.toolCalls.length,
+              omittedCount: entry.toolCalls.length,
+              source: 'history',
+            }],
+          },
+          ts: entry.ts || null,
+        }, envelopeOpts);
+      }
       sendSessionOutputFrame({ type: 'result', result_text: '' }, envelopeOpts);
     }
   }
