@@ -374,6 +374,16 @@ export default {
       if (!s || !Array.isArray(s.agents)) return [];
       return s.agents.map(a => ({ id: a.id, name: a.name, online: !!a.online, workDir: a.workDir || '' }));
     },
+    // Identity+online signature of the agent roster. We watch THIS (not
+    // agentOptions.length) to re-seed form.agentId: the UI keeps offline
+    // agents in the list (rendered with "(offline)"), so an agent going
+    // offline — or a simultaneous up/down swap — leaves the count
+    // unchanged. A length watcher would miss those and strand form.agentId
+    // on a dead agent (canSubmit blocks, scan hits a dead ws). The
+    // signature changes whenever any agent's id or online flag changes.
+    agentSignature() {
+      return this.agentOptions.map(a => `${a.id}:${a.online ? 1 : 0}`).join(',');
+    },
     folderPickerAgentId() {
       return this.form.agentId || this.chat?.yeaftAgentId || this.chat?.currentAgent || '';
     },
@@ -387,12 +397,35 @@ export default {
     allSessions() {
       return this.sessionsStore?.sessionList || [];
     },
-    // Distinct workDirs aggregated across all known sessions, with a count.
-    // Sessions without a workDir are skipped — they don't anchor to a folder
-    // so "resume here" is meaningless for them.
+    // Sessions owned by the agent the user picked IN THIS MODAL
+    // (form.agentId) — NOT the globally-active agent (chat.currentAgent /
+    // the top-left agent list). The folder list and the on-disk session
+    // scan must both follow the modal's own agent selection: a yeaft
+    // session lives on one specific agent's disk, so showing folders from
+    // other agents would list directories the chosen agent can't scan
+    // (the scan then comes back empty — the "选了目录却没有 session" bug).
+    // Rows without an agentId (legacy snapshots from un-upgraded agents)
+    // are kept so single-agent setups still work.
+    agentSessions() {
+      const target = this.form.agentId || null;
+      // No agent resolved yet (roster still loading) — fall back to the
+      // un-scoped list so the folder panel isn't blank during that brief
+      // window. This does NOT reintroduce the wrong-agent bug: the actual
+      // disk scan refuses to run without an agentId (loadRestoreCandidates),
+      // so the worst case here is a momentary cross-agent folder list, not
+      // a scan against the wrong agent.
+      if (!target) return this.allSessions;
+      return this.allSessions.filter(s => {
+        const owner = s && s.agentId;
+        return !owner || owner === target;
+      });
+    },
+    // Distinct workDirs aggregated across the selected agent's sessions,
+    // with a count. Sessions without a workDir are skipped — they don't
+    // anchor to a folder so "resume here" is meaningless for them.
     folderAggregates() {
       const map = new Map();
-      for (const s of this.allSessions) {
+      for (const s of this.agentSessions) {
         const wd = (s && typeof s.workDir === 'string') ? s.workDir.trim() : '';
         if (!wd) continue;
         const existing = map.get(wd) || { path: wd, count: 0 };
@@ -435,20 +468,7 @@ export default {
     // Name input is optional — do NOT auto-focus it. Focusing an
     // optional field signals to users that it's required.
     // Seed agent default: prefer current Yeaft agent, else first online.
-    // Never seed an offline agent — sending create to a dead ws is silent
-    // failure. If nothing is online, leave agentId null and let canSubmit
-    // gate the form.
-    try {
-      const chat = this.chat;
-      if (chat) {
-        const preferred = chat.yeaftAgentId || chat.currentAgent || null;
-        const agents = this.agentOptions;
-        const onlinePick = agents.find(a => a.id === preferred && a.online)
-          || agents.find(a => a.online)
-          || null;
-        if (onlinePick) this.form.agentId = onlinePick.id;
-      }
-    } catch (_) {}
+    this.seedAgentDefault();
     // Subscribe to VP snapshot if not yet hydrated, OR if the cached
     // snapshot is from a different agent than we're now targeting.
     // fix-session-restore-modal-unify: pre-fix, this fired
@@ -463,6 +483,18 @@ export default {
   watch: {
     // Re-apply default selection once vpList hydrates after mount.
     'vpList.length'() { this.applyDefaultSelection(); },
+    // The agent list arrives over the WebSocket, so on a cold page load it
+    // can be empty at mount() — leaving form.agentId null. A <select>
+    // bound to a null model still *visually* shows its first <option>
+    // ("server"), so the user sees an agent picked while the model is
+    // actually empty; the scan then goes out with no agentId and the
+    // server silently falls back to client.currentAgent (the top-left
+    // agent list) — scanning the wrong agent's disk and returning an
+    // empty session list. Re-seed whenever the roster's identity/online
+    // signature changes (NOT just its length — offline agents stay in the
+    // list, so length alone misses an agent going offline) so the bound
+    // value always matches a real, online option the user can see.
+    agentSignature() { this.seedAgentDefault(); },
     // fix-session-restore-modal-unify: re-subscribe when the user picks
     // a different agent from the dropdown, since the VP library is
     // per-agent (one agent's VPs are not the other's). Also re-scan
@@ -504,6 +536,33 @@ export default {
     if (this._folderPickerTimer) clearTimeout(this._folderPickerTimer);
   },
   methods: {
+    /**
+     * Seed (or re-seed) form.agentId to a real, online agent.
+     *
+     * Called from mounted() AND from the agentOptions.length watcher,
+     * because the agent roster arrives asynchronously over the WebSocket
+     * and may be empty at mount on a cold page load. Idempotent and
+     * non-destructive: if form.agentId already points at an online agent
+     * we leave the user's choice alone; we only (re)seed when it's unset
+     * or has gone stale (agent went offline / disappeared). Never seeds an
+     * offline agent — sending create/scan to a dead ws is silent failure.
+     * If nothing is online we leave it null and let canSubmit gate the form.
+     */
+    seedAgentDefault() {
+      try {
+        const agents = this.agentOptions;
+        if (!Array.isArray(agents) || agents.length === 0) return;
+        // Keep an already-valid online selection — don't clobber the user.
+        const current = agents.find(a => a.id === this.form.agentId && a.online);
+        if (current) return;
+        const chat = this.chat;
+        const preferred = chat ? (chat.yeaftAgentId || chat.currentAgent || null) : null;
+        const onlinePick = agents.find(a => a.id === preferred && a.online)
+          || agents.find(a => a.online)
+          || null;
+        if (onlinePick) this.form.agentId = onlinePick.id;
+      } catch (_) {}
+    },
     /**
      * fix-session-restore-modal-unify: agent-aware vp_subscribe.
      *
@@ -572,7 +631,23 @@ export default {
         this.restoreError = this.$t('yeaft.restore.modal.scanError', { message: 'store unavailable' });
         return;
       }
+      // Scan MUST be pinned to the agent the user picked in this modal,
+      // with NO coupling to client.currentAgent / the top-left agent list.
+      // We deliberately do NOT fall back to currentAgent: an empty agentId
+      // makes the server guess (it routes on `msg.agentId ||
+      // client.currentAgent`), which scans the wrong agent's disk and
+      // returns an empty list — the root cause of the "选了目录却刷不出
+      // session" bug. form.agentId is seeded/re-seeded by seedAgentDefault
+      // whenever the roster changes, and the form.agentId watcher re-runs
+      // this scan once seeding fills it in, so a null here only means "no
+      // agent is online yet" — in which case we surface an error rather
+      // than scanning some other agent.
       const agentId = this.form.agentId || null;
+      if (!agentId) {
+        this.scannedSessions = [];
+        this.restoreError = this.$t('yeaft.restore.modal.scanError', { message: 'no agent selected' });
+        return;
+      }
       this.restoreScanning = true;
       this.restoreError = '';
       try {
@@ -613,13 +688,24 @@ export default {
         this.restoreError = this.$t('yeaft.restore.modal.restoreError', { message: 'store unavailable' });
         return;
       }
+      // Same rule as loadRestoreCandidates: restore must target the
+      // modal's selected agent, never let the server fall back to
+      // client.currentAgent on a null agentId (it would register the
+      // session into the wrong agent's registry). onRestoreClick is NOT
+      // gated by canSubmit — a row is clickable as soon as it renders — so
+      // guard here explicitly.
+      const agentId = this.form.agentId || null;
+      if (!agentId) {
+        this.restoreError = this.$t('yeaft.restore.modal.restoreError', { message: 'no agent selected' });
+        return;
+      }
       this.restoring = session.id;
       this.restoreError = '';
       try {
         const res = await chat.sessionCrudRequest(
           'restore',
           { sessionId: session.id, workDir: (this.form.workDir || '').trim() },
-          { agentId: this.form.agentId || null },
+          { agentId },
         );
         if (res && res.ok) {
           const restored = res.session || res.group || session;
