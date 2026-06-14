@@ -556,13 +556,22 @@ function mergeLegacyDirIntoSession(src, dst, warnings, label) {
 
 function moveLayerAFilesToSessionRoot(src, dst, warnings, label) {
   if (!existsSync(src)) return;
+  moveLayerAFilesRecursive(src, dst, warnings, label);
+}
+
+function moveLayerAFilesRecursive(src, dst, warnings, label) {
   let entries = [];
   try { entries = readdirSync(src, { withFileTypes: true }); } catch { return; }
   for (const ent of entries) {
-    if (!ent.isFile()) continue;
-    if (!isLayerAFileName(ent.name)) continue;
     const from = join(src, ent.name);
     const to = join(dst, ent.name);
+    if (ent.isDirectory()) {
+      moveLayerAFilesRecursive(from, to, warnings, `${label}/${ent.name}`);
+      removeDirIfEmpty(from, warnings, `${label}/${ent.name}`);
+      continue;
+    }
+    if (!ent.isFile()) continue;
+    if (!isLayerAFileName(ent.name)) continue;
     try {
       mkdirSync(dst, { recursive: true });
       if (!existsSync(to)) renameSync(from, to);
@@ -574,8 +583,7 @@ function moveLayerAFilesToSessionRoot(src, dst, warnings, label) {
 }
 
 function isLayerAFileName(name) {
-  return name === 'memory.md'
-    || name === 'summary.md'
+  return name === 'summary.md'
     || /^summary\.[^.]+\.md$/.test(name);
 }
 

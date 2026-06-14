@@ -377,9 +377,11 @@ describe('session storage migration', () => {
     writeFileSync(join(root, '.yeaft-migration.done'), JSON.stringify({ version: 3 }, null, 2));
     const segDir = join(root, 'memory', 'session', 'session_memory', 'segments');
     mkdirSync(segDir, { recursive: true });
+    mkdirSync(join(root, 'memory', 'session', 'session_memory', 'vp', 'omni'), { recursive: true });
     writeFileSync(join(root, 'memory', 'session', 'session_memory', 'summary.md'), 'summary');
     writeFileSync(join(root, 'memory', 'session', 'session_memory', 'summary.zh.md'), '摘要');
     writeFileSync(join(root, 'memory', 'session', 'session_memory', 'memory.md'), 'resident');
+    writeFileSync(join(root, 'memory', 'session', 'session_memory', 'vp', 'omni', 'summary.zh.md'), 'vp 摘要');
     writeFileSync(join(segDir, 'seg.md'), [
       '---',
       'id: seg',
@@ -409,7 +411,8 @@ describe('session storage migration', () => {
       .toContain('scope: session/session_memory');
     expect(readFileSync(join(root, 'memory', 'sessions', 'session_memory', 'summary.md'), 'utf8')).toBe('summary');
     expect(readFileSync(join(root, 'memory', 'sessions', 'session_memory', 'summary.zh.md'), 'utf8')).toBe('摘要');
-    expect(readFileSync(join(root, 'memory', 'sessions', 'session_memory', 'memory.md'), 'utf8')).toBe('resident');
+    expect(readFileSync(join(root, 'memory', 'session', 'session_memory', 'memory.md'), 'utf8')).toBe('resident');
+    expect(readFileSync(join(root, 'memory', 'sessions', 'session_memory', 'vp', 'omni', 'summary.zh.md'), 'utf8')).toBe('vp 摘要');
     expect(after.get('seg').scope).toBe('session/session_memory');
     after.close();
   });
@@ -421,6 +424,7 @@ describe('session storage migration', () => {
     const legacySegDir = join(root, 'memory', 'group', 'session_merge', 'segments');
     mkdirSync(existingSegDir, { recursive: true });
     mkdirSync(legacySegDir, { recursive: true });
+    mkdirSync(join(root, 'memory', 'group', 'session_merge', 'vp', 'omni'), { recursive: true });
     mkdirSync(join(root, 'memory', 'groups', 'session_merge'), { recursive: true });
     writeFileSync(join(existingSegDir, 'existing.md'), [
       '---',
@@ -441,6 +445,7 @@ describe('session storage migration', () => {
     writeFileSync(join(root, 'memory', 'group', 'session_merge', 'summary.md'), 'summary');
     writeFileSync(join(root, 'memory', 'group', 'session_merge', 'summary.zh.md'), '摘要');
     writeFileSync(join(root, 'memory', 'group', 'session_merge', 'memory.md'), 'resident');
+    writeFileSync(join(root, 'memory', 'group', 'session_merge', 'vp', 'omni', 'summary.md'), 'vp summary');
     writeFileSync(join(root, 'memory', 'groups', 'session_merge', 'ams.json'), '{"layers":[]}');
 
     const result = migrateSessions(root);
@@ -451,7 +456,8 @@ describe('session storage migration', () => {
       .toContain('scope: session/session_merge');
     expect(readFileSync(join(root, 'memory', 'sessions', 'session_merge', 'summary.md'), 'utf8')).toBe('summary');
     expect(readFileSync(join(root, 'memory', 'sessions', 'session_merge', 'summary.zh.md'), 'utf8')).toBe('摘要');
-    expect(readFileSync(join(root, 'memory', 'sessions', 'session_merge', 'memory.md'), 'utf8')).toBe('resident');
+    expect(readFileSync(join(root, 'memory', 'session', 'session_merge', 'memory.md'), 'utf8')).toBe('resident');
+    expect(readFileSync(join(root, 'memory', 'sessions', 'session_merge', 'vp', 'omni', 'summary.md'), 'utf8')).toBe('vp summary');
     expect(readFileSync(join(root, 'memory', 'sessions', 'session_merge', 'ams.json'), 'utf8')).toBe('{"layers":[]}');
   });
 
