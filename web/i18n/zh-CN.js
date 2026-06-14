@@ -1254,6 +1254,7 @@ export default {
   'yeaft.session.error.default_not_in_roster': '默认 VP 必须在成员列表中。',
   'yeaft.session.error.no_default_vp': '该会话没有成员，请从角色库添加 VP 以开始对话。',
   'yeaft.session.error.reserved': '所选 id 中包含保留名（all / user / system / everyone）。',
+  'yeaft.session.error.workdir_not_writable': '无法在该工作目录创建 Yeaft session：{message}',
   'yeaft.session.error.unknown': '会话操作失败：{message}',
   'yeaft.session.error.timeout': '会话操作超时，请重试。',
   'yeaft.session.invite.title': '邀请 VP',

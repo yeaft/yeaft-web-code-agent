@@ -14,6 +14,8 @@
  * logic lives in roster.js so coordinator and session-store both compose it.
  * Legacy `group.json` is read as a compatibility alias for sessions created
  * before the storage terminology was fixed; new writes are always session.json.
+ * `meta.json` is a read-only rescue alias for the short-lived broken
+ * migration that wrote the wrong schema/file name.
  *
  * Hard constraint: the store does not parse @-mentions, does not dispatch,
  * and has no knowledge of VP/RoleInstance. It is pure persistence over 334o.
@@ -32,6 +34,7 @@ import { nextMsgId, isReservedVpId, ReservedVpIdError, validateVpId, InvalidVpId
 
 export const SESSION_META_FILE = 'session.json';
 export const LEGACY_GROUP_META_FILE = 'group.json';
+const LEGACY_MIGRATION_META_FILE = 'meta.json';
 const MESSAGES_DIR = 'messages';
 
 /**
@@ -151,15 +154,16 @@ export function createSession(sessionsRoot, spec) {
 
 /**
  * Non-destructive load — returns null if session metadata is missing/corrupt.
- * Reads canonical session.json first, then legacy group.json for disk
- * compatibility. Callers that later save the handle will write session.json.
+ * Reads canonical session.json first, then legacy group.json / meta.json for
+ * disk compatibility. Callers that later save the handle will write
+ * session.json.
  */
 export function loadSessionMeta(dir) {
   const path = resolveSessionMetaPath(dir);
   if (!path) return null;
   try {
     const raw = readFileSync(path, 'utf8');
-    const parsed = JSON.parse(raw);
+    const parsed = normalizeLoadedMeta(JSON.parse(raw));
     validateMeta(parsed);
     // Legacy sessions created before optional fields were added are
     // forward-compat: missing fields read back as safe empty strings.
@@ -206,6 +210,23 @@ function validateMeta(meta) {
   }
 }
 
+function normalizeLoadedMeta(meta) {
+  if (!meta || typeof meta !== 'object') return meta;
+  if (Array.isArray(meta.roster)) return meta;
+  if (Array.isArray(meta.vpIds)) {
+    return {
+      id: meta.id,
+      name: meta.name || meta.displayName || meta.id,
+      roster: meta.vpIds.slice(),
+      defaultVpId: meta.defaultVpId || meta.vpIds[0] || null,
+      announcement: typeof meta.announcement === 'string' ? meta.announcement : '',
+      workDir: typeof meta.workDir === 'string' ? meta.workDir : '',
+      createdAt: meta.createdAt || new Date().toISOString(),
+    };
+  }
+  return meta;
+}
+
 /**
  * @typedef {Object} SessionHandle
  * @property {string} dir
@@ -223,5 +244,7 @@ function resolveSessionMetaPath(dir) {
   if (existsSync(canonical)) return canonical;
   const legacy = join(dir, LEGACY_GROUP_META_FILE);
   if (existsSync(legacy)) return legacy;
+  const legacyMigration = join(dir, LEGACY_MIGRATION_META_FILE);
+  if (existsSync(legacyMigration)) return legacyMigration;
   return null;
 }

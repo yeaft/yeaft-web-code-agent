@@ -11,11 +11,9 @@
  *      `<yeaftDir>/.legacy-backup-<YYYYMMDD>/` so the in-place rewrites
  *      below have a recovery point. Skipped if today's backup exists.
  *   1. ~/.yeaft/groups/<g>/         → ~/.yeaft/sessions/<g>/
- *      group.json → meta.json with shape:
- *        { id, vpIds: roster, displayName: name, workDir, createdAt,
- *          lastTurnAt: null, archivedAt? }
+ *      group.json → session.json
  *   2. ~/.yeaft/chats/<c>/          → ~/.yeaft/sessions/<c>/
- *      chat.json → meta.json with vpIds: [vpId]
+ *      chat.json → session.json
  *   3. ~/.yeaft/memory/group/<g>/   → ~/.yeaft/memory/session/<g>/
  *   4. ~/.yeaft/memory/chat/<c>/    → ~/.yeaft/memory/session/<c>/
  *      Rewrites front-matter `scope:` fields from group/<id> / chat/<id>
@@ -51,7 +49,7 @@ import { join } from 'path';
 import { openSegmentIndex } from '../memory/index-db.js';
 
 const SENTINEL = '.yeaft-migration.done';
-const SENTINEL_VERSION = 3;
+const SENTINEL_VERSION = 4;
 
 /**
  * Run the sessions migration. No-op when sentinel exists.
@@ -109,18 +107,23 @@ export function migrateSessions(yeaftDir) {
 
   let moved = 0;
 
-  // Reconcile any half-migrated sessions/<id>/ from a prior crash:
-  // a leftover group.json/chat.json with no meta.json means the rename
-  // succeeded but the rewrite didn't. Repair before moving on so the
-  // session is usable post-migration.
+  // Reconcile any half-migrated sessions/<id>/ from a prior crash, including
+  // v3's wrong `meta.json` target. Repair before moving on so the session is
+  // usable post-migration.
   for (const id of listDirs(sessionsRoot)) {
     const dst = join(sessionsRoot, id);
-    if (existsSync(join(dst, 'meta.json'))) continue;
-    if (existsSync(join(dst, 'group.json'))) {
-      rewriteGroupMetaToSessionMeta(dst, warnings);
+    if (existsSync(join(dst, 'session.json'))) {
+      removeWrongMetaJson(dst, warnings);
+      continue;
+    }
+    if (existsSync(join(dst, 'meta.json'))) {
+      rewriteWrongMetaToSessionJson(dst, warnings);
+      warnings.push(`reconciled wrong meta.json at sessions/${id}`);
+    } else if (existsSync(join(dst, 'group.json'))) {
+      rewriteGroupMetaToSessionJson(dst, warnings);
       warnings.push(`reconciled partial migration at sessions/${id}`);
     } else if (existsSync(join(dst, 'chat.json'))) {
-      rewriteChatMetaToSessionMeta(dst, warnings);
+      rewriteChatMetaToSessionJson(dst, warnings);
       warnings.push(`reconciled partial migration at sessions/${id}`);
     }
   }
@@ -130,12 +133,17 @@ export function migrateSessions(yeaftDir) {
     const src = join(groupsRoot, id);
     const dst = join(sessionsRoot, id);
     if (existsSync(dst)) {
-      // Partial-run reconcile: if meta.json wasn't written yet, retry the
-      // rewrite from the leftover group.json at the destination. Avoids
+      // Partial-run reconcile: if session.json wasn't written yet, retry the
+      // rewrite from legacy files at the destination. Avoids
       // permanently broken sessions when the prior run crashed between
-      // renameSync and rewriteGroupMetaToSessionMeta.
-      if (!existsSync(join(dst, 'meta.json')) && existsSync(join(dst, 'group.json'))) {
-        rewriteGroupMetaToSessionMeta(dst, warnings);
+      // renameSync and rewriteGroupMetaToSessionJson.
+      if (existsSync(join(dst, 'session.json'))) {
+        removeWrongMetaJson(dst, warnings);
+      } else if (existsSync(join(dst, 'meta.json'))) {
+        rewriteWrongMetaToSessionJson(dst, warnings);
+        warnings.push(`reconciled wrong meta.json at sessions/${id}`);
+      } else if (existsSync(join(dst, 'group.json'))) {
+        rewriteGroupMetaToSessionJson(dst, warnings);
         warnings.push(`reconciled partial migration at sessions/${id}`);
       } else {
         warnings.push(`sessions/${id} already exists; skipping groups/${id}`);
@@ -143,7 +151,7 @@ export function migrateSessions(yeaftDir) {
       continue;
     }
     renameSync(src, dst);
-    rewriteGroupMetaToSessionMeta(dst, warnings);
+    rewriteGroupMetaToSessionJson(dst, warnings);
     moved++;
   }
 
@@ -152,8 +160,13 @@ export function migrateSessions(yeaftDir) {
     const src = join(chatsRoot, id);
     const dst = join(sessionsRoot, id);
     if (existsSync(dst)) {
-      if (!existsSync(join(dst, 'meta.json')) && existsSync(join(dst, 'chat.json'))) {
-        rewriteChatMetaToSessionMeta(dst, warnings);
+      if (existsSync(join(dst, 'session.json'))) {
+        removeWrongMetaJson(dst, warnings);
+      } else if (existsSync(join(dst, 'meta.json'))) {
+        rewriteWrongMetaToSessionJson(dst, warnings);
+        warnings.push(`reconciled wrong meta.json at sessions/${id}`);
+      } else if (existsSync(join(dst, 'chat.json'))) {
+        rewriteChatMetaToSessionJson(dst, warnings);
         warnings.push(`reconciled partial migration at sessions/${id}`);
       } else {
         warnings.push(`sessions/${id} already exists; skipping chats/${id}`);
@@ -161,7 +174,7 @@ export function migrateSessions(yeaftDir) {
       continue;
     }
     renameSync(src, dst);
-    rewriteChatMetaToSessionMeta(dst, warnings);
+    rewriteChatMetaToSessionJson(dst, warnings);
     moved++;
   }
 
@@ -222,8 +235,9 @@ export function migrateSessions(yeaftDir) {
   //    into sessions/<id>, then remove empty legacy directories.
   const cleanup = cleanupLegacySessionDirs(yeaftDir, warnings);
   moved += cleanup.moved;
+  reconcileSessionMetadataDirs(sessionsRoot, warnings);
 
-  // 9. Sentinel — version 3 = consolidated migration plus legacy cleanup.
+  // 9. Sentinel — version 4 = current session.json schema plus legacy cleanup.
   writeFileSync(sentinel, JSON.stringify({
     version: SENTINEL_VERSION,
     migratedAt: new Date().toISOString(),
@@ -434,6 +448,24 @@ function cleanupLegacySessionDirs(yeaftDir, warnings) {
   return { moved };
 }
 
+function reconcileSessionMetadataDirs(sessionsRoot, warnings) {
+  for (const id of listDirs(sessionsRoot)) {
+    const dst = join(sessionsRoot, id);
+    if (existsSync(join(dst, 'session.json'))) {
+      removeWrongMetaJson(dst, warnings);
+    } else if (existsSync(join(dst, 'meta.json'))) {
+      rewriteWrongMetaToSessionJson(dst, warnings);
+      warnings.push(`reconciled wrong meta.json at sessions/${id}`);
+    } else if (existsSync(join(dst, 'group.json'))) {
+      rewriteGroupMetaToSessionJson(dst, warnings);
+      warnings.push(`reconciled legacy group.json at sessions/${id}`);
+    } else if (existsSync(join(dst, 'chat.json'))) {
+      rewriteChatMetaToSessionJson(dst, warnings);
+      warnings.push(`reconciled legacy chat.json at sessions/${id}`);
+    }
+  }
+}
+
 function mergeLegacyDirIntoSession(src, dst, warnings, label) {
   if (!existsSync(src) || !existsSync(dst)) return;
   let entries = [];
@@ -467,25 +499,24 @@ function removeDirIfEmpty(dir, warnings, label) {
   }
 }
 
-function rewriteGroupMetaToSessionMeta(sessionDir, warnings) {
+function rewriteGroupMetaToSessionJson(sessionDir, warnings) {
   const oldPath = join(sessionDir, 'group.json');
-  const newPath = join(sessionDir, 'meta.json');
+  const newPath = join(sessionDir, 'session.json');
   if (!existsSync(oldPath)) {
     if (!existsSync(newPath)) warnings.push(`no group.json in ${sessionDir}`);
     return;
   }
   try {
     const raw = JSON.parse(readFileSync(oldPath, 'utf8'));
+    const roster = Array.isArray(raw.roster) && raw.roster.length > 0 ? raw.roster.slice() : ['omni'];
     const meta = {
       id: raw.id,
-      displayName: raw.name || raw.id,
-      vpIds: Array.isArray(raw.roster) && raw.roster.length > 0 ? raw.roster.slice() : ['omni'],
-      // Preserve defaultVpId so Phase 2 coordinator can resolve "which VP
-      // answers when no @-mention". Easy to keep now, hard to backfill later.
-      ...(raw.defaultVpId ? { defaultVpId: raw.defaultVpId } : {}),
+      name: raw.name || raw.id,
+      roster,
+      defaultVpId: raw.defaultVpId || roster[0] || null,
+      announcement: typeof raw.announcement === 'string' ? raw.announcement : '',
       workDir: typeof raw.workDir === 'string' ? raw.workDir : '',
       createdAt: raw.createdAt || new Date().toISOString(),
-      lastTurnAt: null,
     };
     writeFileSync(newPath, JSON.stringify(meta, null, 2), 'utf8');
     try { unlinkSync(oldPath); } catch { /* keep both if cannot delete */ }
@@ -494,27 +525,66 @@ function rewriteGroupMetaToSessionMeta(sessionDir, warnings) {
   }
 }
 
-function rewriteChatMetaToSessionMeta(sessionDir, warnings) {
+function rewriteChatMetaToSessionJson(sessionDir, warnings) {
   const oldPath = join(sessionDir, 'chat.json');
-  const newPath = join(sessionDir, 'meta.json');
+  const newPath = join(sessionDir, 'session.json');
   if (!existsSync(oldPath)) {
     if (!existsSync(newPath)) warnings.push(`no chat.json in ${sessionDir}`);
     return;
   }
   try {
     const raw = JSON.parse(readFileSync(oldPath, 'utf8'));
+    const roster = [raw.vpId || 'omni'];
     const meta = {
       id: raw.id,
-      displayName: raw.displayName || raw.id,
-      vpIds: [raw.vpId || 'omni'],
+      name: raw.displayName || raw.name || raw.id,
+      roster,
+      defaultVpId: raw.defaultVpId || roster[0] || null,
+      announcement: typeof raw.announcement === 'string' ? raw.announcement : '',
       workDir: typeof raw.workDir === 'string' ? raw.workDir : '',
       createdAt: raw.createdAt || new Date().toISOString(),
-      lastTurnAt: raw.lastTurnAt || null,
     };
     writeFileSync(newPath, JSON.stringify(meta, null, 2), 'utf8');
     try { unlinkSync(oldPath); } catch { /* */ }
   } catch (err) {
     warnings.push(`failed to rewrite ${oldPath}: ${err.message}`);
+  }
+}
+
+function rewriteWrongMetaToSessionJson(sessionDir, warnings) {
+  const oldPath = join(sessionDir, 'meta.json');
+  const newPath = join(sessionDir, 'session.json');
+  if (!existsSync(oldPath) || existsSync(newPath)) return;
+  try {
+    const raw = JSON.parse(readFileSync(oldPath, 'utf8'));
+    const roster = Array.isArray(raw.roster) && raw.roster.length > 0
+      ? raw.roster.slice()
+      : Array.isArray(raw.vpIds) && raw.vpIds.length > 0
+        ? raw.vpIds.slice()
+        : (raw.vpId ? [raw.vpId] : ['omni']);
+    const meta = {
+      id: raw.id,
+      name: raw.name || raw.displayName || raw.id,
+      roster,
+      defaultVpId: raw.defaultVpId || roster[0] || null,
+      announcement: typeof raw.announcement === 'string' ? raw.announcement : '',
+      workDir: typeof raw.workDir === 'string' ? raw.workDir : '',
+      createdAt: raw.createdAt || new Date().toISOString(),
+    };
+    writeFileSync(newPath, JSON.stringify(meta, null, 2), 'utf8');
+    try { unlinkSync(oldPath); } catch { /* keep both if cannot delete */ }
+  } catch (err) {
+    warnings.push(`failed to rewrite ${oldPath}: ${err.message}`);
+  }
+}
+
+function removeWrongMetaJson(sessionDir, warnings) {
+  const oldPath = join(sessionDir, 'meta.json');
+  if (!existsSync(oldPath)) return;
+  try {
+    unlinkSync(oldPath);
+  } catch (err) {
+    warnings.push(`failed to remove obsolete ${oldPath}: ${err.message}`);
   }
 }
 

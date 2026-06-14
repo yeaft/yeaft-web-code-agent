@@ -21,6 +21,13 @@ import {
   hasHiddenYeaftMessageTurns,
   sliceYeaftMessagesByRecentTurns,
 } from './helpers/yeaft-message-window.js';
+import {
+  addOpenedYeaftSessionId,
+  persistOpenedYeaftSessionIds,
+  readOpenedYeaftSessionIds,
+  removeOpenedYeaftSessionId,
+  resolveOpenedYeaftSessionIds,
+} from './helpers/yeaft-opened-sessions.js';
 
 const { defineStore } = Pinia;
 
@@ -255,6 +262,10 @@ export const useChatStore = defineStore('chat', {
     // session_ready replay. Group history requests are de-duped separately by
     // yeaftSessionHistoryState[groupId].loading.
     yeaftBootstrapMetaLoadingKey: null,
+    // Browser-local set of Yeaft sessions the user has opened before.
+    // On refresh/re-entry we hydrate these sessions in the background once
+    // the agent snapshot confirms they still exist for the current agent.
+    openedYeaftSessionIds: readOpenedYeaftSessionIds(),
     // One-shot marker: set true by the websocket onclose handler on a real
     // disconnect, consumed by handleAgentList to run a single Yeaft history
     // catch-up after the socket comes back. Without this gate the catch-up
@@ -1048,6 +1059,19 @@ export const useChatStore = defineStore('chat', {
       // a redundant second catch-up on the next routine agent_list.
       this._yeaftReconnectCatchUpPending = false;
       this.requestYeaftSessionBootstrap({ forceSessionReady: true, catchUpHistory: true });
+      this.requestOpenedYeaftSessionsBootstrap({ catchUpHistory: true });
+    },
+
+    markYeaftSessionOpened(sessionId) {
+      const next = addOpenedYeaftSessionId(this.openedYeaftSessionIds, sessionId);
+      this.openedYeaftSessionIds = persistOpenedYeaftSessionIds(next);
+      return this.openedYeaftSessionIds;
+    },
+
+    forgetYeaftSessionOpened(sessionId) {
+      const next = removeOpenedYeaftSessionId(this.openedYeaftSessionIds, sessionId);
+      this.openedYeaftSessionIds = persistOpenedYeaftSessionIds(next);
+      return this.openedYeaftSessionIds;
     },
 
     requestYeaftSessionBootstrap({ forceSessionReady = false, catchUpHistory = false } = {}) {
@@ -1088,6 +1112,51 @@ export const useChatStore = defineStore('chat', {
       else payload.limit = needHistoryReplay ? YEAFT_RECENT_TURNS : 0;
       this.sendWsMessage(payload);
       return true;
+    },
+
+    requestOpenedYeaftSessionsBootstrap({ catchUpHistory = false } = {}) {
+      if (!this.yeaftAgentId) return 0;
+      const gs = getSessionsStore();
+      if (!gs || typeof gs.sessionById !== 'function') return 0;
+      const ids = resolveOpenedYeaftSessionIds({
+        openedSessionIds: this.openedYeaftSessionIds,
+        activeSessionId: this.yeaftActiveSessionFilter || gs.activeSessionId || null,
+        sessionById: gs.sessionById,
+        agentId: this.yeaftAgentId,
+      });
+      let requested = 0;
+      for (const sessionId of ids) {
+        const sessionState = this.yeaftSessionHistoryState[sessionId] || null;
+        const latestSeq = Number.isFinite(sessionState?.latestSeq) ? sessionState.latestSeq : null;
+        const needHistoryReplay = !sessionState?.loaded && !sessionState?.loading;
+        const needHistoryCatchUp = !!sessionState?.loaded
+          && !sessionState?.loading
+          && !!catchUpHistory
+          && latestSeq !== null;
+        if (!needHistoryReplay && !needHistoryCatchUp) continue;
+        this.yeaftSessionHistoryState = {
+          ...this.yeaftSessionHistoryState,
+          [sessionId]: {
+            ...(sessionState || { hasMore: false, oldestSeq: null, count: 0 }),
+            loaded: !!needHistoryCatchUp,
+            loading: true,
+            latestSeq,
+          },
+        };
+        if (sessionId === this.yeaftActiveSessionFilter) {
+          this.yeaftLoadingMoreHistory = true;
+        }
+        const payload = {
+          type: 'yeaft_load_history',
+          agentId: this.yeaftAgentId,
+          sessionId,
+        };
+        if (needHistoryCatchUp) payload.afterSeq = latestSeq;
+        else payload.limit = YEAFT_RECENT_TURNS;
+        this.sendWsMessage(payload);
+        requested += 1;
+      }
+      return requested;
     },
     leaveYeaft() {
       this.currentView = 'chat';
@@ -1947,6 +2016,7 @@ export const useChatStore = defineStore('chat', {
             this.setActiveSessionFilter(newGroupId, {
               force: msgHelpers.shouldForceHydrateActiveYeaftSession(newGroupId, prevGroupId, sessionState),
             });
+            this.requestOpenedYeaftSessionsBootstrap({ catchUpHistory: false });
           }
           break;
         }
@@ -1965,6 +2035,9 @@ export const useChatStore = defineStore('chat', {
           // and have no envelope context. Keep these two channels in sync
           // if you change the wire-stamping rule.
           if (gs) gs.applyCrudResult(event, msg.agentId || null);
+          if (event.ok && (event.op === 'archive' || event.op === 'delete') && event.sessionId) {
+            this.forgetYeaftSessionOpened(event.sessionId);
+          }
           const pending = this._sessionCrudPending && this._sessionCrudPending.get(event.requestId);
           if (pending) {
             this._sessionCrudPending.delete(event.requestId);
@@ -2616,6 +2689,7 @@ export const useChatStore = defineStore('chat', {
       const next = groupId || null;
       const force = !!opts.force;
       this.yeaftActiveSessionFilter = next;
+      if (next) this.markYeaftSessionOpened(next);
       // fix-yeaft-session-server-persistence: remember the
       // last-viewed yeaft session so reload + cross-agent switch
       // restore it instead of arbitrarily landing on sessionOrder[0]

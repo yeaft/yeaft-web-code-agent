@@ -41,6 +41,8 @@ import {
   mkdirSync,
   readFileSync,
   writeFileSync,
+  accessSync,
+  constants,
 } from 'fs';
 import { randomBytes } from 'crypto';
 import { homedir } from 'os';
@@ -116,6 +118,20 @@ export function yeaftDirForWorkDir(workDir) {
 
 function registryPath(yeaftDir) {
   return join(yeaftDir, GROUP_WORKDIR_REGISTRY);
+}
+
+function assertWritableSessionsRoot(root) {
+  try {
+    mkdirSync(root, { recursive: true });
+    accessSync(root, constants.W_OK);
+  } catch (err) {
+    const code = err?.code || 'unknown';
+    throw new SessionCrudError(
+      'workdir_not_writable',
+      null,
+      `Cannot create Yeaft session under ${root}: ${code}. Check that the agent user can write this work directory's .yeaft folder.`
+    );
+  }
 }
 
 export function readWorkDirRegistry(yeaftDir) {
@@ -336,6 +352,7 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
 
   const id = makeSessionId(name);
   const root = sessionsRoot(groupYeaftDir);
+  assertWritableSessionsRoot(root);
   if (existsSync(join(root, id))) {
     // Extremely unlikely (ulid suffix), but surface deterministically.
     throw new SessionCrudError('duplicate', id);

@@ -79,4 +79,33 @@ describe('session-store metadata files', () => {
       roster: ['vp-omni', 'vp-linus'],
     });
   });
+
+  it('reads broken migration meta.json as a rescue alias', () => {
+    const root = tempRoot();
+    const dir = join(root, 'session_meta');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'meta.json'), JSON.stringify({
+      id: 'session_meta',
+      displayName: 'Migrated with wrong schema',
+      vpIds: ['omni', 'linus'],
+      defaultVpId: 'linus',
+      workDir: '/tmp/project',
+      createdAt: '2026-06-12T00:00:00.000Z',
+    }, null, 2), { flag: 'wx' });
+
+    expect(loadSessionMeta(dir)).toMatchObject({
+      id: 'session_meta',
+      name: 'Migrated with wrong schema',
+      roster: ['omni', 'linus'],
+      defaultVpId: 'linus',
+      workDir: '/tmp/project',
+    });
+    expect(listSessions(root).map(s => s.id)).toEqual(['session_meta']);
+
+    const handle = openSession(root, 'session_meta');
+    handle.saveMeta(handle.getMeta());
+    handle.close();
+
+    expect(existsSync(join(dir, SESSION_META_FILE))).toBe(true);
+  });
 });

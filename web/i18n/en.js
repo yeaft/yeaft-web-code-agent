@@ -1258,6 +1258,7 @@ export default {
   'yeaft.session.error.default_not_in_roster': 'The default VP must be in the roster.',
   'yeaft.session.error.no_default_vp': 'This session has no members. Add a VP from the library to start chatting.',
   'yeaft.session.error.reserved': 'One of the selected ids is reserved (all, user, system, everyone).',
+  'yeaft.session.error.workdir_not_writable': 'Cannot create a Yeaft session in that work directory: {message}',
   'yeaft.session.error.unknown': 'Session operation failed: {message}',
   'yeaft.session.error.timeout': 'Session operation timed out — try again.',
   'yeaft.session.invite.title': 'Invite a VP',
