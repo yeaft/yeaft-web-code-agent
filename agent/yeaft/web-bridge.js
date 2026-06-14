@@ -59,6 +59,7 @@ import { seedDefaultSession } from './sessions/seed-default.js';
 import { openSegmentIndex } from './memory/index-db.js';
 import { syncAll as syncSegmentIndex } from './memory/segment-sync.js';
 import { openAmsRegistry } from './memory/ams-registry.js';
+import { createV2DreamScheduler } from './dream/session-wiring.js';
 import {
   trimSnapshotForBudget,
 } from './history-compact.js';
@@ -127,6 +128,8 @@ function baseRuntime() {
     memoryIndex: session.memoryIndex || null,
     amsRegistry: session.amsRegistry || null,
     toolStats: session.toolStats || null,
+    dreamSession: session,
+    dreamScheduler: session.dreamScheduler || null,
   };
 }
 
@@ -147,6 +150,8 @@ function getRuntimeForSession(sessionId = null) {
   const conversationStore = new ConversationStore(targetYeaftDir);
   let memoryIndex = null;
   let amsRegistry = null;
+  let dreamSession = null;
+  let dreamScheduler = null;
   if (!session.config?._readOnly) {
     try {
       memoryIndex = openSegmentIndex(join(targetYeaftDir, 'memory', 'index.db'));
@@ -164,6 +169,27 @@ function getRuntimeForSession(sessionId = null) {
       }
     }
   }
+  try {
+    dreamSession = {
+      ...session,
+      yeaftDir: targetYeaftDir,
+      conversationStore,
+      memoryIndex,
+      amsRegistry,
+      _dreamProgressSink: (evt) => {
+        if (typeof session._dreamProgressSink === 'function') session._dreamProgressSink(evt);
+      },
+      _dreamResultSink: async (result) => {
+        if (typeof session._dreamResultSink === 'function') return session._dreamResultSink(result);
+        return undefined;
+      },
+    };
+    dreamScheduler = createV2DreamScheduler(dreamSession);
+  } catch (err) {
+    console.warn(`[Yeaft] workdir dream scheduler unavailable for ${targetYeaftDir}:`, err?.message || err);
+    dreamSession = null;
+    dreamScheduler = null;
+  }
 
   runtime = {
     yeaftDir: targetYeaftDir,
@@ -171,6 +197,8 @@ function getRuntimeForSession(sessionId = null) {
     memoryIndex,
     amsRegistry,
     toolStats: null,
+    dreamSession,
+    dreamScheduler,
   };
   runtimeByYeaftDir.set(targetYeaftDir, runtime);
   return runtime;
@@ -178,6 +206,7 @@ function getRuntimeForSession(sessionId = null) {
 
 function clearRootRuntimes() {
   for (const runtime of runtimeByYeaftDir.values()) {
+    try { runtime.dreamScheduler?.shutdown?.(); } catch { /* ignore */ }
     try { runtime.amsRegistry?.persistAll?.(); } catch { /* ignore */ }
     try { runtime.memoryIndex?.close?.(); } catch { /* ignore */ }
   }
@@ -227,7 +256,9 @@ export function __testSetThreadClassifier(fn) {
 const inflightScopedDreamGroups = new Set();
 
 async function sendDreamSnapshotForSession(sessionId, extra = {}) {
-  const snapshot = await buildDreamOutputSnapshot(session, sessionId);
+  const runtime = getRuntimeForSession(sessionId);
+  const snapshotSession = runtime?.dreamSession || session;
+  const snapshot = await buildDreamOutputSnapshot(snapshotSession, sessionId);
   if (!snapshot) return null;
   sendSessionEvent({ type: 'yeaft_dream_snapshot', ...extra, snapshot }, { sessionId });
   return snapshot;
@@ -3071,8 +3102,9 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
   };
 
   try {
-    if (session?.dreamScheduler) {
-      session.dreamScheduler.noteUserMessage();
+    const runtime = getRuntimeForSession(sessionId);
+    if (runtime?.dreamScheduler) {
+      runtime.dreamScheduler.noteUserMessage();
     }
 
     let queryTimer = null;
@@ -3708,8 +3740,11 @@ export async function handleYeaftDreamTrigger(msg = {}) {
   const sessionId = typeof msg.sessionId === 'string' && msg.sessionId ? msg.sessionId : null;
   const vpId = !sessionId ? (msg.vpId || 'default') : null;
   const tag = sessionId ? { sessionId } : { vpId };
+  const dreamRuntime = sessionId ? getRuntimeForSession(sessionId) : baseRuntime();
+  const dreamScheduler = dreamRuntime?.dreamScheduler || null;
+  const dreamSession = dreamRuntime?.dreamSession || session;
 
-  if (!session?.dreamScheduler) {
+  if (!dreamScheduler) {
     const error = 'Dream scheduler not initialized — session not loaded.';
     sendToServer({
       type: 'yeaft_dream_result',
@@ -3731,7 +3766,7 @@ export async function handleYeaftDreamTrigger(msg = {}) {
   // and a different group's filter would have been silently dropped
   // anyway (see dream/schedule.js inflight reuse), so the user-facing
   // semantics are unchanged ("you already asked").
-  if (sessionId && (inflightScopedDreamGroups.size > 0 || session.dreamScheduler.isRunning)) {
+  if (sessionId && (inflightScopedDreamGroups.size > 0 || dreamScheduler.isRunning)) {
     const skippedResult = {
       skipped: true,
       skippedReason: 'already-running',
@@ -3753,11 +3788,11 @@ export async function handleYeaftDreamTrigger(msg = {}) {
   // of this trigger and is restored in `finally`; concurrent calls for
   // OTHER sessionIds chain (last-installed wins) but each restoration
   // unwinds back to its predecessor.
-  const originalSink = session?._dreamProgressSink;
-  if (sessionId) session._dreamActiveGroupId = sessionId;
+  const originalSink = dreamSession?._dreamProgressSink;
+  if (sessionId) dreamSession._dreamActiveGroupId = sessionId;
   if (sessionId && typeof originalSink === 'function') {
     inflightScopedDreamGroups.add(sessionId);
-    session._dreamProgressSink = (evt) => {
+    dreamSession._dreamProgressSink = (evt) => {
       try {
         const stamped = evt && evt.sessionId
           ? evt
@@ -3775,12 +3810,12 @@ export async function handleYeaftDreamTrigger(msg = {}) {
     });
 
     const result = sessionId
-      ? await session.dreamScheduler.triggerDreamForScopes([`sessions/${sessionId}`])
-      : await session.dreamScheduler.triggerDreamNow();
+      ? await dreamScheduler.triggerDreamForScopes([`sessions/${sessionId}`])
+      : await dreamScheduler.triggerDreamNow();
 
     const normalized = normalizeDreamResult(result);
     const snapshot = sessionId
-      ? await buildDreamOutputSnapshot(session, sessionId).catch(() => null)
+      ? await buildDreamOutputSnapshot(dreamSession, sessionId).catch(() => null)
       : null;
 
     // Spread `result` FIRST so normalized fields (success, skipped,
@@ -3815,9 +3850,9 @@ export async function handleYeaftDreamTrigger(msg = {}) {
     });
   } finally {
     // Restore the original sink and release the per-group inflight lock.
-    if (sessionId && session?._dreamActiveGroupId === sessionId) session._dreamActiveGroupId = null;
+    if (sessionId && dreamSession?._dreamActiveGroupId === sessionId) dreamSession._dreamActiveGroupId = null;
     if (sessionId && typeof originalSink === 'function') {
-      session._dreamProgressSink = originalSink;
+      dreamSession._dreamProgressSink = originalSink;
       inflightScopedDreamGroups.delete(sessionId);
     }
   }

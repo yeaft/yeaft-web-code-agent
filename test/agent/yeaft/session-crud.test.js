@@ -3,7 +3,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-import { createSessionFromSpec, SessionCrudError, snapshotSessions, updateSessionConfig } from '../../../agent/yeaft/sessions/session-crud.js';
+import { createSessionFromSpec, SessionCrudError, resolveSessionYeaftDir, snapshotSessions, updateSessionConfig } from '../../../agent/yeaft/sessions/session-crud.js';
+import { createSession } from '../../../agent/yeaft/sessions/session-store.js';
 
 const roots = [];
 
@@ -70,5 +71,32 @@ describe('session CRUD storage errors', () => {
     expect(JSON.parse(readFileSync(workConfigPath, 'utf8'))).toEqual({ model: 'provider/model-b' });
     expect(existsSync(defaultConfigPath)).toBe(false);
     expect(snapshotSessions(yeaftDir).find(session => session.id === meta.id)?.config).toEqual({ model: 'provider/model-b' });
+  });
+
+  it('resolves duplicate registered workdir ids the same way snapshots display them', () => {
+    const yeaftDir = tempRoot('yeaft-session-crud-default-');
+    const workDir = tempRoot('yeaft-session-crud-workdir-');
+    const defaultHandle = createSession(join(yeaftDir, 'sessions'), {
+      id: 'session_default',
+      name: 'Default Root',
+      roster: ['omni'],
+      defaultVpId: 'omni',
+    });
+    defaultHandle.close();
+
+    const workHandle = createSession(join(workDir, '.yeaft', 'sessions'), {
+      id: 'session_default',
+      name: 'Workdir Root',
+      roster: ['omni'],
+      defaultVpId: 'omni',
+      workDir,
+    });
+    workHandle.close();
+    writeFileSync(join(yeaftDir, 'group-workdirs.json'), JSON.stringify({
+      session_default: workDir,
+    }, null, 2));
+
+    expect(snapshotSessions(yeaftDir).find(session => session.id === 'session_default')?.name).toBe('Workdir Root');
+    expect(resolveSessionYeaftDir(yeaftDir, 'session_default')).toBe(join(workDir, '.yeaft'));
   });
 });
