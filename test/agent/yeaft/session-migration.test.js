@@ -323,6 +323,7 @@ describe('session storage migration', () => {
       createdAt: '2026-06-12T00:00:00.000Z',
     }, null, 2));
     mkdirSync(join(root, 'memory', 'chat', 'chat_live_memory', 'segments'), { recursive: true });
+    mkdirSync(join(root, 'memory', 'chat', 'chatXlegacy_memory', 'segments'), { recursive: true });
     mkdirSync(join(root, 'memory', 'chat', 'chat_legacy_memory', 'segments'), { recursive: true });
 
     const idx = openSegmentIndex(join(root, 'memory', 'index.db'));
@@ -332,6 +333,16 @@ describe('session storage migration', () => {
       kind: 'note',
       tags: [],
       body: 'live',
+      sourceMessages: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    idx.upsert({
+      id: 'live-wildcard-neighbor',
+      scope: 'chat/chatXlegacy_memory',
+      kind: 'note',
+      tags: [],
+      body: 'live wildcard neighbor',
       sourceMessages: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -353,9 +364,48 @@ describe('session storage migration', () => {
 
     expect(result.migrated).toBe(true);
     expect(existsSync(join(root, 'memory', 'chat', 'chat_live_memory'))).toBe(true);
-    expect(existsSync(join(root, 'memory', 'session', 'chat_legacy_memory'))).toBe(true);
+    expect(existsSync(join(root, 'memory', 'chat', 'chatXlegacy_memory'))).toBe(true);
+    expect(existsSync(join(root, 'memory', 'sessions', 'chat_legacy_memory'))).toBe(true);
     expect(after.get('live').scope).toBe('chat/chat_live_memory');
-    expect(after.get('legacy').scope).toBe('session/chat_legacy_memory');
+    expect(after.get('live-wildcard-neighbor').scope).toBe('chat/chatXlegacy_memory');
+    expect(after.get('legacy').scope).toBe('sessions/chat_legacy_memory');
+    after.close();
+  });
+
+  it('repairs singular v3 session memory into runtime plural sessions scope', () => {
+    const root = tempRoot();
+    writeFileSync(join(root, '.yeaft-migration.done'), JSON.stringify({ version: 3 }, null, 2));
+    const segDir = join(root, 'memory', 'session', 'session_memory', 'segments');
+    mkdirSync(segDir, { recursive: true });
+    writeFileSync(join(segDir, 'seg.md'), [
+      '---',
+      'id: seg',
+      'scope: session/session_memory',
+      '---',
+      'memory',
+      '',
+    ].join('\n'));
+    const idx = openSegmentIndex(join(root, 'memory', 'index.db'));
+    idx.upsert({
+      id: 'seg',
+      scope: 'session/session_memory',
+      kind: 'note',
+      tags: [],
+      body: 'memory',
+      sourceMessages: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    idx.close();
+
+    const result = migrateSessions(root);
+    const after = openSegmentIndex(join(root, 'memory', 'index.db'));
+
+    expect(result.migrated).toBe(true);
+    expect(existsSync(join(root, 'memory', 'session', 'session_memory'))).toBe(false);
+    expect(readFileSync(join(root, 'memory', 'sessions', 'session_memory', 'segments', 'seg.md'), 'utf8'))
+      .toContain('scope: sessions/session_memory');
+    expect(after.get('seg').scope).toBe('sessions/session_memory');
     after.close();
   });
 });

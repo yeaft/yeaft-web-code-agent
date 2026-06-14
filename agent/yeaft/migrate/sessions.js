@@ -14,13 +14,13 @@
  *      group.json → session.json
  *   2. Legacy ~/.yeaft/chats/<c>/ with chat.json → ~/.yeaft/sessions/<c>/
  *      chat.json → session.json
- *   3. ~/.yeaft/memory/group/<g>/   → ~/.yeaft/memory/session/<g>/
- *   4. ~/.yeaft/memory/chat/<c>/    → ~/.yeaft/memory/session/<c>/
+ *   3. ~/.yeaft/memory/group/<g>/   → ~/.yeaft/memory/sessions/<g>/
+ *   4. Legacy ~/.yeaft/memory/chat/<c>/ → ~/.yeaft/memory/sessions/<c>/
  *      Rewrites front-matter `scope:` fields from group/<id> / chat/<id>
- *      → session/<id>.
+ *      → sessions/<id>.
  *   5. ~/.yeaft/memory/groups/<g>/ams.json → ~/.yeaft/memory/sessions/<g>/ams.json
- *   6. SQLite FTS index `memory_segments.scope` rows: rewrite group/* / chat/*
- *      → session/*.
+ *   6. SQLite FTS index `memory_segments.scope` rows: rewrite group/* /
+ *      legacy chat/* → sessions/*.
  *   7. Per-message frontmatter: rewrite `groupId: X` / `chatId: X` →
  *      `sessionId: X` in every `*.md` under `conversation/messages|cold/` and
  *      `sessions/<id>/conversation/messages|cold/`. This is what closes the
@@ -90,12 +90,11 @@ export function migrateSessions(yeaftDir) {
   const groupsRoot = join(yeaftDir, 'groups');
   const chatsRoot = join(yeaftDir, 'chats');
   const memoryRoot = join(yeaftDir, 'memory');
-  const memSessionRoot = join(memoryRoot, 'session');
-  const memSessionsAmsRoot = join(memoryRoot, 'sessions');
+  const legacyMemSessionRoot = join(memoryRoot, 'session');
+  const memSessionsRoot = join(memoryRoot, 'sessions');
 
   if (!existsSync(sessionsRoot)) mkdirSync(sessionsRoot, { recursive: true });
-  if (!existsSync(memSessionRoot)) mkdirSync(memSessionRoot, { recursive: true });
-  if (!existsSync(memSessionsAmsRoot)) mkdirSync(memSessionsAmsRoot, { recursive: true });
+  if (!existsSync(memSessionsRoot)) mkdirSync(memSessionsRoot, { recursive: true });
 
   // ID collision check
   const groupIds = listDirs(groupsRoot);
@@ -162,16 +161,31 @@ export function migrateSessions(yeaftDir) {
     moved++;
   }
 
-  // 3+4. memory/{group,chat}/<id>/ → memory/session/<id>/
+  // Repair v3's singular memory/session output into the runtime's canonical
+  // memory/sessions layout before moving any additional legacy scopes.
+  if (existsSync(legacyMemSessionRoot)) {
+    for (const id of listDirs(legacyMemSessionRoot)) {
+      const src = join(legacyMemSessionRoot, id);
+      const dst = join(memSessionsRoot, id);
+      if (existsSync(dst)) mergeLegacyDirIntoSession(src, dst, warnings, `memory/session/${id}`);
+      else renameSync(src, dst);
+      rewriteSegmentScopes(dst, 'session', id, warnings);
+      removeDirIfEmpty(src, warnings, `memory/session/${id}`);
+      if (!existsSync(src)) moved++;
+    }
+    removeDirIfEmpty(legacyMemSessionRoot, warnings, 'memory/session');
+  }
+
+  // 3+4. memory/{group,chat}/<id>/ → memory/sessions/<id>/
   for (const family of ['group', 'chat']) {
     const root = join(memoryRoot, family);
     if (!existsSync(root)) continue;
     const ids = family === 'chat' ? chatIds.filter((id) => existsSync(join(root, id))) : listDirs(root);
     for (const id of ids) {
       const src = join(root, id);
-      const dst = join(memSessionRoot, id);
+      const dst = join(memSessionsRoot, id);
       if (existsSync(dst)) {
-        warnings.push(`memory/session/${id} already exists; skipping memory/${family}/${id}`);
+        warnings.push(`memory/sessions/${id} already exists; skipping memory/${family}/${id}`);
         continue;
       }
       renameSync(src, dst);
@@ -184,7 +198,7 @@ export function migrateSessions(yeaftDir) {
   if (existsSync(amsGroupRoot)) {
     for (const id of listDirs(amsGroupRoot)) {
       const srcDir = join(amsGroupRoot, id);
-      const dstDir = join(memSessionsAmsRoot, id);
+      const dstDir = join(memSessionsRoot, id);
       if (existsSync(dstDir)) {
         warnings.push(`memory/sessions/${id} already exists; skipping memory/groups/${id}`);
         continue;
@@ -196,7 +210,7 @@ export function migrateSessions(yeaftDir) {
   if (existsSync(amsChatRoot)) {
     for (const id of chatIds.filter((chatId) => existsSync(join(amsChatRoot, chatId)))) {
       const srcDir = join(amsChatRoot, id);
-      const dstDir = join(memSessionsAmsRoot, id);
+      const dstDir = join(memSessionsRoot, id);
       if (existsSync(dstDir)) {
         warnings.push(`memory/sessions/${id} already exists; skipping memory/chats/${id}`);
         continue;
@@ -291,16 +305,12 @@ function rewriteFtsScopes(memoryRoot, warnings, { legacyChatIds = [] } = {}) {
   try {
     const db = idx._db;
     db.exec('BEGIN');
-    db.exec("UPDATE memory_segments SET scope = REPLACE(scope, 'group/', 'session/') WHERE scope LIKE 'group/%'");
-    const stmt = db.prepare(`
-      UPDATE memory_segments
-      SET scope = ? || substr(scope, ?)
-      WHERE scope = ? OR scope LIKE ?
-    `);
+    db.exec("UPDATE memory_segments SET scope = REPLACE(scope, 'group/', 'sessions/') WHERE scope LIKE 'group/%'");
+    db.exec("UPDATE memory_segments SET scope = REPLACE(scope, 'session/', 'sessions/') WHERE scope LIKE 'session/%'");
     for (const id of legacyChatIds) {
       const from = `chat/${id}`;
-      const to = `session/${id}`;
-      stmt.run(to, from.length + 1, from, `${from}/%`);
+      const to = `sessions/${id}`;
+      rewriteFtsScopePrefix(db, from, to);
     }
     db.exec('COMMIT');
   } catch (err) {
@@ -308,6 +318,15 @@ function rewriteFtsScopes(memoryRoot, warnings, { legacyChatIds = [] } = {}) {
     warnings.push(`FTS scope rewrite failed: ${err.message}`);
   } finally {
     try { idx.close(); } catch { /* ignore */ }
+  }
+
+  function rewriteFtsScopePrefix(db, from, to) {
+    const childPrefix = `${from}/`;
+    db.prepare(`
+      UPDATE memory_segments
+      SET scope = ? || substr(scope, ?)
+      WHERE scope = ? OR substr(scope, 1, ?) = ?
+    `).run(to, from.length + 1, from, childPrefix.length, childPrefix);
   }
 }
 
@@ -656,7 +675,7 @@ function rewriteSegmentScopes(sessionMemoryDir, oldFamily, id, warnings) {
     const path = join(segDir, name);
     try {
       const src = readFileSync(path, 'utf8');
-      const next = src.replace(re, `$1session/${id}`);
+      const next = src.replace(re, `$1sessions/${id}`);
       if (next !== src) writeFileSync(path, next, 'utf8');
     } catch (err) {
       warnings.push(`segment rewrite failed ${path}: ${err.message}`);
