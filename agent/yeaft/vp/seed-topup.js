@@ -13,7 +13,7 @@
  *
  *   1. **Top-up missing stock VPs**. If a vpId from `DEFAULT_VPS` is not
  *      on disk, `createVp()` it. This keeps product-owned defaults such as
- *      Omni and the expanded role roster visible in group/member pickers.
+ *      Omni and the expanded role roster visible in session/member pickers.
  *
  *   2. **Backfill the `area` frontmatter line** on existing seeded VPs whose
  *      role.md predates the area field. The body is left BYTE-IDENTICAL —
@@ -25,7 +25,7 @@
  *   - **Never** overwrite a VP that is on disk. The user might have edited
  *     persona/role/traits; that is their truth, not ours.
  *   - **Keep stock defaults available.** If a shipped stock VP is missing,
- *     recreate it, but never overwrite an on-disk VP. The group/member picker
+ *     recreate it, but never overwrite an on-disk VP. The session/member picker
  *     depends on these product-owned defaults being present.
  *   - Best-effort: any failure is logged, never thrown.
  *
@@ -210,6 +210,37 @@ export function insertNameZhLine(source, nameZh) {
 }
 
 /**
+ * Backfill `roleZh:` into role.md frontmatter.
+ *
+ * @param {string} source
+ * @param {string} roleZh
+ * @returns {string|null}
+ */
+export function insertRoleZhLine(source, roleZh) {
+  return insertFrontmatterLine(source, 'roleZh', roleZh);
+}
+
+function roleBodyOf(source) {
+  const match = String(source || '').match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)$/);
+  return match ? match[1] : '';
+}
+
+function replaceRoleBody(source, body) {
+  const match = String(source || '').match(/^(---\r?\n[\s\S]*?\r?\n---\r?\n?)([\s\S]*)$/);
+  if (!match) return null;
+  return `${match[1]}${String(body || '').trim()}\n`;
+}
+
+function backfillLocalizedPersonaBody(source, vp) {
+  const body = roleBodyOf(source).trim();
+  const nextBody = typeof vp.persona === 'string' ? vp.persona.trim() : '';
+  const oldBody = typeof vp.personaEn === 'string' ? vp.personaEn.trim() : '';
+  if (!body || !nextBody || body.includes('<!-- lang:')) return null;
+  if (!oldBody || body !== oldBody) return null;
+  return replaceRoleBody(source, nextBody);
+}
+
+/**
  * Top-up the default VPs into an existing `libDir`.
  *
  * @param {string} [libDir=DEFAULT_VP_LIB_DIR]
@@ -217,6 +248,8 @@ export function insertNameZhLine(source, nameZh) {
  *   added: string[],
  *   areaBackfilled: string[],
  *   nameZhBackfilled: string[],
+ *   roleZhBackfilled: string[],
+ *   personaBackfilled: string[],
  *   respectedDeletes: string[],
  *   skippedExisting: string[],
  *   errors: Array<{vpId:string, code:string, message:string}>,
@@ -226,6 +259,8 @@ export function topUpDefaultVps(libDir = DEFAULT_VP_LIB_DIR) {
   const added = [];
   const areaBackfilled = [];
   const nameZhBackfilled = [];
+  const roleZhBackfilled = [];
+  const personaBackfilled = [];
   const respectedDeletes = [];
   const skippedExisting = [];
   /** @type {Array<{vpId:string,code:string,message:string}>} */
@@ -235,7 +270,7 @@ export function topUpDefaultVps(libDir = DEFAULT_VP_LIB_DIR) {
   // that case there's nothing to top up — seedDefaultVps will populate
   // everything. We still return cleanly.
   if (!existsSync(libDir)) {
-    return { added, areaBackfilled, nameZhBackfilled, respectedDeletes, skippedExisting, errors };
+    return { added, areaBackfilled, nameZhBackfilled, roleZhBackfilled, personaBackfilled, respectedDeletes, skippedExisting, errors };
   }
 
   let versions = readSeedVersions(libDir);
@@ -314,6 +349,47 @@ export function topUpDefaultVps(libDir = DEFAULT_VP_LIB_DIR) {
           });
         }
       }
+      if (vp.roleZh) {
+        try {
+          const src = readRole();
+          if (src != null) {
+            const patched = insertRoleZhLine(src, vp.roleZh);
+            if (patched != null && patched !== src) {
+              writeFileSync(rolePath, patched, 'utf-8');
+              currentSrc = patched;
+              roleZhBackfilled.push(vpId);
+            }
+          }
+        } catch (err) {
+          errors.push({
+            vpId,
+            code: 'role_zh_backfill_failed',
+            message: String(err?.message || err),
+          });
+        }
+      }
+      // v0.1.967 — stock VP soul localization. Existing first-run stock VPs
+      // have an English-only body. Replace only the exact old stock body;
+      // any user-edited body is respected byte-for-byte.
+      if (vp.personaZh && vp.personaEn) {
+        try {
+          const src = readRole();
+          if (src != null) {
+            const patched = backfillLocalizedPersonaBody(src, vp);
+            if (patched != null && patched !== src) {
+              writeFileSync(rolePath, patched, 'utf-8');
+              currentSrc = patched;
+              personaBackfilled.push(vpId);
+            }
+          }
+        } catch (err) {
+          errors.push({
+            vpId,
+            code: 'persona_localization_backfill_failed',
+            message: String(err?.message || err),
+          });
+        }
+      }
       // Make sure the ledger records it (e.g. user-authored VP whose id
       // collides with a default — we still want to skip future creates).
       if (!inLedger) versions.seeded[vpId] = 'legacy';
@@ -323,7 +399,7 @@ export function topUpDefaultVps(libDir = DEFAULT_VP_LIB_DIR) {
     if (inLedger && !STOCK_VP_IDS.has(vpId)) {
       // We seeded this custom/default VP before, user has since deleted it — respect that.
       // Stock/default personas are product-owned roster entries and must remain
-      // available in group creation/member pickers after migrations. Recreate
+      // available in session creation/member pickers after migrations. Recreate
       // them below without overwriting anything that exists on disk.
       respectedDeletes.push(vpId);
       continue;
@@ -351,5 +427,5 @@ export function topUpDefaultVps(libDir = DEFAULT_VP_LIB_DIR) {
   }
 
   writeSeedVersions(libDir, versions);
-  return { added, areaBackfilled, nameZhBackfilled, respectedDeletes, skippedExisting, errors };
+  return { added, areaBackfilled, nameZhBackfilled, roleZhBackfilled, personaBackfilled, respectedDeletes, skippedExisting, errors };
 }

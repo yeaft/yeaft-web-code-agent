@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildRouterPrompt, buildWorkerPrompt, renderLayerASummaries } from '../../../agent/yeaft/prompts.js';
+import { DEFAULT_VPS } from '../../../agent/yeaft/vp/seed-defaults.js';
 
 const SEEDED_OMNI_PERSONA = `You are Omni Assistant / 全能助手, a cross-domain, execution-focused general AI partner.
 
@@ -35,7 +36,8 @@ describe('worker prompt language selection', () => {
   it('uses localized Chinese soul instead of the seeded English Omni block', () => {
     const prompt = workerPrompt('zh-CN');
 
-    expect(prompt).toContain('# 全能助手 — 全能助手');
+    expect(prompt).toContain('# 全能助手');
+    expect(prompt).not.toContain('# 全能助手 — 全能助手');
     expect(prompt).toContain('## Soul');
     expect(prompt).toContain('### 人物特点');
     expect(prompt).toContain('你是 Omni，一个负责需求分析、目标澄清、流程推进和团队协调的 VP。');
@@ -50,10 +52,11 @@ describe('worker prompt language selection', () => {
   it('keeps English prompts English for English configuration', () => {
     const prompt = workerPrompt('en');
 
-    expect(prompt).toContain('# Omni Assistant — All-Purpose Assistant');
+    expect(prompt).toContain('# Omni Assistant');
+    expect(prompt).not.toContain('# Omni Assistant — All-Purpose Assistant');
     expect(prompt).toContain('## Soul');
-    expect(prompt).toContain('### Traits');
-    expect(prompt).toContain('You are Omni, a VP focused on requirement analysis');
+    expect(prompt).toContain('You are Omni Assistant / 全能助手');
+    expect(prompt).not.toContain('### Traits');
     expect(prompt).toContain('## Task Replies');
     expect(prompt).toContain('after completing work, report only what changed, what was verified, and any risk or next step.');
     expect(prompt).not.toContain('你是 Omni，一个负责需求分析');
@@ -64,15 +67,16 @@ describe('worker prompt language selection', () => {
     const zhPrompt = buildWorkerPrompt({ language: 'zh', includeShape: false });
     const enPrompt = buildWorkerPrompt({ language: 'en', includeShape: false });
 
-    expect(zhPrompt).toContain('完成后只汇报：改了什么、验证了什么、风险或下一步');
-    expect(enPrompt).toContain('after completing work, report only: what changed, what was verified, and any risk or next step');
+    expect(zhPrompt).toContain('完成后只汇报改了什么、验证了什么、风险或下一步');
+    expect(enPrompt).toContain('after completing work, report only what changed, what was verified, and any risk or next step');
   });
 
-  it('renders minimal Linus persona as a full Chinese soul without Yeaft fallback identity', () => {
+  it('renders minimal Linus persona as a full Chinese soul without Yeaft fallback identity or role intro', () => {
     const prompt = promptFor({ vpId: 'linus', displayName: 'Linus', role: 'developer' }, 'zh-CN');
 
-    expect(prompt).toContain('# Linus — developer');
-    expect(prompt).toContain('你是 Linus，developer。请以 Linus 的思考方式理解问题');
+    expect(prompt).toContain('# Linus');
+    expect(prompt).not.toContain('# Linus — developer');
+    expect(prompt).not.toContain('你是 Linus，developer。请以 Linus 的思考方式理解问题');
     expect(prompt).toContain('## Soul');
     expect(prompt).toContain('### 人物特点');
     expect(prompt).toContain('### 擅长的事情');
@@ -81,20 +85,27 @@ describe('worker prompt language selection', () => {
     expect(prompt).toContain('### 回答风格');
     expect(prompt).not.toContain('# Yeaft');
     expect(prompt).not.toContain('你是 Yeaft');
+    expect(prompt).not.toContain('Yeaft — AI');
   });
 
-  it('renders built-in Omni, Linus, and Martin fallback souls in both languages', () => {
-    for (const vpId of ['omni', 'linus', 'martin']) {
-      const zhPrompt = promptFor({ vpId, displayName: vpId }, 'zh-CN');
-      const enPrompt = promptFor({ vpId, displayName: vpId }, 'en');
+  it('renders all stock VP souls from bilingual role.md persona sections', () => {
+    expect(DEFAULT_VPS.length).toBeGreaterThan(20);
+    for (const vp of DEFAULT_VPS) {
+      expect(vp.persona).toContain('<!-- lang:en -->');
+      expect(vp.persona).toContain('<!-- lang:zh -->');
+      expect(vp.personaEn).toContain('You are');
+      expect(vp.personaZh).toContain('你是');
+      expect(vp.roleZh).toBeTruthy();
+
+      const zhPrompt = promptFor(vp, 'zh-CN');
+      const enPrompt = promptFor(vp, 'en');
 
       expect(zhPrompt).toContain('## Soul');
-      expect(zhPrompt).toContain('### 人物特点');
-      expect(zhPrompt).toContain('### 用户通常期待你完成');
-      expect(zhPrompt).not.toContain('### Traits');
+      expect(zhPrompt).toContain(vp.personaZh.split('\n')[0]);
+      expect(zhPrompt).not.toContain(vp.personaEn.split('\n')[0]);
       expect(enPrompt).toContain('## Soul');
-      expect(enPrompt).toContain('### Traits');
-      expect(enPrompt).toContain('### What Users Expect You To Do');
+      expect(enPrompt).toContain(vp.personaEn.split('\n')[0]);
+      expect(enPrompt).not.toContain(vp.personaZh.split('\n')[0]);
     }
   });
 
@@ -128,7 +139,8 @@ describe('worker prompt language selection', () => {
       },
     });
 
-    expect(prompt).toContain('# 安全专家 — 专家');
+    expect(prompt).toContain('# 安全专家');
+    expect(prompt).not.toContain('# 安全专家 — 专家');
     expect(prompt).not.toContain('You are a security expert.');
   });
 
@@ -144,7 +156,8 @@ describe('worker prompt language selection', () => {
       },
     });
 
-    expect(prompt).toContain('# Security Expert — Expert');
+    expect(prompt).toContain('# Security Expert');
+    expect(prompt).not.toContain('# Security Expert — Expert');
     expect(prompt).not.toContain('你是安全专家。');
   });
 

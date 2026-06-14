@@ -327,8 +327,8 @@ export function buildSystemPrompt({
     }
   }
 
-  // ─── 1.4  Project Doc (CLAUDE.md / AGENTS.md from group workDir) ───
-  // The group's working-directory may contain a project-level
+  // ─── 1.4  Project Doc (CLAUDE.md / AGENTS.md from session workDir) ───
+  // The session working directory may contain a project-level
   // instructions file. The engine resolves "newest of CLAUDE.md vs
   // AGENTS.md by mtime" and threads the resulting text through here.
   // Empty/whitespace = no block emitted. Sits ABOVE the announcement
@@ -426,11 +426,11 @@ function renderVpPersona(vpPersona, lang, effectiveLang = 'en') {
   const role = selectVpPersonaRole(vpPersona, effectiveLang);
   const body = selectVpPersonaBody(vpPersona, effectiveLang);
 
-  // Persona is the IDENTITY layer (not an overlay). The Soul section gives the
-  // VP an executable operating model: traits, strengths, problem-solving style,
-  // expected tasks, answer style, and boundaries.
-  const heading = role ? `# ${name} — ${role}` : `# ${name}`;
-  const lines = [heading, '', lang.vpPersonaIntro(name, role), '', '## Soul'];
+  // Persona is the IDENTITY layer (not an overlay). Do not prepend a
+  // generic assistant identity here: the VP soul body is the source of truth.
+  // `role` is intentionally not rendered as a second identity line; stock VPs
+  // carry bilingual, role-aware soul text in role.md.
+  const lines = [`# ${name}`, '', '## Soul'];
   if (body) lines.push('', body);
   return lines.join('\n');
 }
@@ -456,88 +456,77 @@ function selectVpPersonaRole(vpPersona, effectiveLang) {
 }
 
 function selectVpPersonaBody(vpPersona, effectiveLang) {
+  const body = typeof vpPersona.persona === 'string' ? vpPersona.persona.trim() : '';
+
+  // role.md persona is the canonical VP soul. If it is localized, select the
+  // requested language directly instead of generating a generic structured
+  // fallback from frontmatter traits.
+  if (body) {
+    if (body.includes('<!-- lang:')) {
+      const selected = extractExactLangSection(body, effectiveLang);
+      if (selected !== null) return selected;
+      return localizedDefaultPersonaBody(vpPersona, effectiveLang);
+    }
+
+    if (effectiveLang === 'zh') {
+      // role.md historically had one persisted persona body. Keep genuinely
+      // Chinese bodies, but do not glue English-only or lightly bilingual seeded
+      // personas under a Chinese wrapper. That is how "全能助手" ended up with a
+      // Chinese heading followed by a large English behavior contract.
+      if (isPrimarilyCjk(body)) return body;
+      return localizedDefaultPersonaBody(vpPersona, effectiveLang);
+    }
+
+    if (isPrimarilyCjk(body) && !isPrimarilyLatin(body)) return localizedDefaultPersonaBody(vpPersona, effectiveLang);
+    return body;
+  }
+
   const structured = renderStructuredSoulFields(vpPersona, effectiveLang);
   if (structured) return structured;
-
-  const body = typeof vpPersona.persona === 'string' ? vpPersona.persona.trim() : '';
-  if (!body) return localizedDefaultPersonaBody(vpPersona, effectiveLang);
-
-  if (body.includes('<!-- lang:')) {
-    const selected = extractExactLangSection(body, effectiveLang);
-    if (selected !== null) return selected;
-    return localizedDefaultPersonaBody(vpPersona, effectiveLang);
-  }
-
-  if (effectiveLang === 'zh') {
-    // role.md historically had one persisted persona body. Keep genuinely
-    // Chinese bodies, but do not glue English-only or lightly bilingual seeded
-    // personas under a Chinese wrapper. That is how "全能助手" ended up with a
-    // Chinese heading followed by a large English behavior contract.
-    if (isPrimarilyCjk(body)) return body;
-    return localizedDefaultPersonaBody(vpPersona, effectiveLang);
-  }
-
-  if (hasCjk(body)) {
-    const localized = localizedDefaultPersonaBody(vpPersona, effectiveLang);
-    if (localized) return localized;
-  }
-
-  return body;
+  return localizedDefaultPersonaBody(vpPersona, effectiveLang);
 }
 
-function hasCjk(text) {
-  return /[\u3400-\u9fff\uf900-\ufaff]/u.test(String(text || ''));
-}
 
 function renderStructuredSoulFields(vpPersona, effectiveLang) {
-  const sections = effectiveLang === 'zh'
+  const specs = effectiveLang === 'zh'
     ? [
-        ['人物特点', selectLocalizedSoulValue(vpPersona, 'traits', effectiveLang)],
-        ['擅长的事情', selectLocalizedSoulValue(vpPersona, 'strengths', effectiveLang)],
-        ['解决问题的方式', selectLocalizedSoulValue(vpPersona, 'problemSolving', effectiveLang)],
-        ['用户通常期待你完成', selectLocalizedSoulValue(vpPersona, 'expectedTasks', effectiveLang)],
-        ['回答风格', selectLocalizedSoulValue(vpPersona, 'answerStyle', effectiveLang)],
-        ['避免', selectLocalizedSoulValue(vpPersona, 'avoid', effectiveLang)],
-      ]
+      ['### 人物特点', vpPersona.traitsZh || vpPersona.traits],
+      ['### 擅长的事情', vpPersona.strengthsZh || vpPersona.strengths],
+      ['### 解决问题的方式', vpPersona.problemSolvingZh || vpPersona.problemSolving],
+      ['### 用户通常期待你完成', vpPersona.expectedTasksZh || vpPersona.expectedTasks],
+      ['### 回答风格', vpPersona.answerStyleZh || vpPersona.answerStyle],
+      ['### 避免', vpPersona.avoidZh || vpPersona.avoid],
+    ]
     : [
-        ['Traits', selectLocalizedSoulValue(vpPersona, 'traits', effectiveLang)],
-        ['Strengths', selectLocalizedSoulValue(vpPersona, 'strengths', effectiveLang)],
-        ['Problem-Solving Style', selectLocalizedSoulValue(vpPersona, 'problemSolving', effectiveLang)],
-        ['What Users Expect You To Do', selectLocalizedSoulValue(vpPersona, 'expectedTasks', effectiveLang)],
-        ['Answer Style', selectLocalizedSoulValue(vpPersona, 'answerStyle', effectiveLang)],
-        ['Avoid', selectLocalizedSoulValue(vpPersona, 'avoid', effectiveLang)],
-      ];
-
+      ['### Traits', vpPersona.traits],
+      ['### Strengths', vpPersona.strengths],
+      ['### Problem-Solving Style', vpPersona.problemSolving],
+      ['### What Users Expect You To Do', vpPersona.expectedTasks],
+      ['### Answer Style', vpPersona.answerStyle],
+      ['### Avoid', vpPersona.avoid],
+    ];
   const lines = [];
-  for (const [title, value] of sections) {
+  for (const [heading, value] of specs) {
     const rendered = renderSoulValue(value);
     if (!rendered) continue;
-    lines.push(`### ${title}`, '', rendered);
+    lines.push(heading, '', rendered);
   }
-  return lines.join('\n\n');
-}
-
-function selectLocalizedSoulValue(vpPersona, key, effectiveLang) {
-  if (!vpPersona || typeof vpPersona !== 'object') return null;
-  if (effectiveLang === 'zh') {
-    const zhValue = vpPersona[`${key}Zh`];
-    if (hasSoulValue(zhValue)) return zhValue;
-  }
-  return vpPersona[key];
-}
-
-function hasSoulValue(value) {
-  if (Array.isArray(value)) return value.some((item) => typeof item === 'string' && item.trim());
-  return typeof value === 'string' && value.trim().length > 0;
+  return lines.length ? lines.join('\n\n') : '';
 }
 
 function renderSoulValue(value) {
   if (Array.isArray(value)) {
-    const items = value.map((item) => typeof item === 'string' ? item.trim() : '').filter(Boolean);
-    if (items.length === 0) return '';
-    return items.map((item) => `- ${item}`).join('\n');
+    const items = value.map(v => String(v || '').trim()).filter(Boolean);
+    return items.length ? items.map(v => `- ${v}`).join('\n') : '';
   }
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function isPrimarilyLatin(text) {
+  const value = String(text || '');
+  const latinWordCount = (value.match(/[A-Za-z][A-Za-z'-]*/g) || []).length;
+  const cjkCount = (value.match(/[\u3400-\u9fff\uf900-\ufaff]/gu) || []).length;
+  return latinWordCount > 0 && latinWordCount >= cjkCount;
 }
 
 function isPrimarilyCjk(text) {
