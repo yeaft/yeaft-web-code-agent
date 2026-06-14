@@ -3,6 +3,7 @@ import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 import { buildRouterPrompt, buildWorkerPrompt, getDefaultPlanInstruction, renderLayerASummaries } from '../../../agent/yeaft/prompts.js';
 import { loadPersonas } from '../../../agent/yeaft/personas.js';
+import { render as renderDreamPrompt } from '../../../agent/yeaft/dream/prompts/index.js';
 import { DEFAULT_VPS } from '../../../agent/yeaft/vp/seed-defaults.js';
 
 const SEEDED_OMNI_PERSONA = `You are Omni Assistant / 全能助手, a cross-domain, execution-focused general AI partner.
@@ -286,8 +287,11 @@ describe('worker prompt language selection', () => {
   });
 
   it('keeps every prompt template explicitly bilingual', () => {
-    const templatesDir = join(process.cwd(), 'agent/yeaft/templates');
-    const files = listMarkdownFiles(templatesDir);
+    const roots = [
+      join(process.cwd(), 'agent/yeaft/templates'),
+      join(process.cwd(), 'agent/yeaft/dream/prompts'),
+    ];
+    const files = roots.flatMap(root => listMarkdownFiles(root));
     expect(files.length).toBeGreaterThan(0);
 
     for (const file of files) {
@@ -295,6 +299,24 @@ describe('worker prompt language selection', () => {
       expect(source, file).toContain('<!-- lang:en -->');
       expect(source, file).toContain('<!-- lang:zh -->');
     }
+  });
+
+  it('renders Dream prompts in the requested language without generic Yeaft AI identity', () => {
+    const vars = {
+      sessionId: 'session_test',
+      topicSummaries: '- active_scope/rendering — prompt labels',
+      conversation: '[]',
+    };
+    const zh = renderDreamPrompt('triagePass1', vars, { language: 'zh-CN' });
+    const en = renderDreamPrompt('triagePass1', vars, { language: 'en' });
+
+    expect(zh).toContain('语言要求');
+    expect(zh).toContain('最近一段 session 对话');
+    expect(zh).not.toContain('recent session conversation');
+    expect(zh).not.toContain('Yeaft AI companion');
+    expect(en).toContain('Language requirement');
+    expect(en).toContain('recent session conversation');
+    expect(en).not.toContain('Yeaft AI companion');
   });
 
   it('loads built-in sub-agent personas with bilingual prompt bodies', () => {

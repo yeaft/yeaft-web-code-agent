@@ -77,6 +77,24 @@ function load(name) {
   return txt;
 }
 
+function extractExactLangSection(content, language) {
+  const marker = `<!-- lang:${language} -->`;
+  const start = content.indexOf(marker);
+  if (start === -1) return null;
+  const bodyStart = start + marker.length;
+  const nextMarker = content.indexOf('<!-- lang:', bodyStart);
+  return content.slice(bodyStart, nextMarker === -1 ? undefined : nextMarker).trim();
+}
+
+function selectTemplateLanguage(content, language) {
+  const effectiveLang = normalizePromptLanguage(language);
+  const selected = extractExactLangSection(content, effectiveLang);
+  if (selected !== null) return selected;
+  const fallback = extractExactLangSection(content, 'en');
+  if (fallback !== null) return fallback;
+  return content.trim();
+}
+
 /**
  * Render a template with `{{name}}` substitution. Missing keys throw —
  * silent rendering of half-built prompts has bitten us before.
@@ -86,7 +104,7 @@ function load(name) {
  * @param {{ language?: string, includeLanguageDirective?: boolean }} [opts]
  */
 export function render(name, vars, opts = {}) {
-  const tpl = load(name);
+  const tpl = selectTemplateLanguage(load(name), opts.language || 'en');
   const body = tpl.replace(/\{\{(\w+)\}\}/g, (_m, key) => {
     if (!(key in vars)) throw new Error(`prompts.${name}: missing var ${key}`);
     return vars[key];
