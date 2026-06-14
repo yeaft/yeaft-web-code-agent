@@ -12,7 +12,7 @@
  *      below have a recovery point. Skipped if today's backup exists.
  *   1. ~/.yeaft/groups/<g>/         → ~/.yeaft/sessions/<g>/
  *      group.json → session.json
- *   2. ~/.yeaft/chats/<c>/          → ~/.yeaft/sessions/<c>/
+ *   2. Legacy ~/.yeaft/chats/<c>/ with chat.json → ~/.yeaft/sessions/<c>/
  *      chat.json → session.json
  *   3. ~/.yeaft/memory/group/<g>/   → ~/.yeaft/memory/session/<g>/
  *   4. ~/.yeaft/memory/chat/<c>/    → ~/.yeaft/memory/session/<c>/
@@ -99,7 +99,7 @@ export function migrateSessions(yeaftDir) {
 
   // ID collision check
   const groupIds = listDirs(groupsRoot);
-  const chatIds = listDirs(chatsRoot);
+  const chatIds = listLegacyChatDirs(chatsRoot);
   const overlap = groupIds.filter((id) => chatIds.includes(id));
   if (overlap.length > 0) {
     throw new Error(`sessions migration: id collision between groups/ and chats/: ${overlap.join(',')}`);
@@ -420,13 +420,18 @@ function listDirs(root) {
   return out;
 }
 
+function listLegacyChatDirs(root) {
+  return listDirs(root).filter((id) => existsSync(join(root, id, 'chat.json')));
+}
+
 function cleanupLegacySessionDirs(yeaftDir, warnings) {
   const sessionsRoot = join(yeaftDir, 'sessions');
   let moved = 0;
   for (const legacyName of ['groups', 'chats']) {
     const legacyRoot = join(yeaftDir, legacyName);
     if (!existsSync(legacyRoot)) continue;
-    for (const id of listDirs(legacyRoot)) {
+    const ids = legacyName === 'chats' ? listLegacyChatDirs(legacyRoot) : listDirs(legacyRoot);
+    for (const id of ids) {
       const src = join(legacyRoot, id);
       const dst = join(sessionsRoot, id);
       if (!existsSync(dst)) continue;
@@ -519,7 +524,7 @@ function rewriteGroupMetaToSessionJson(sessionDir, warnings) {
   }
   try {
     const raw = JSON.parse(readFileSync(oldPath, 'utf8'));
-    const roster = Array.isArray(raw.roster) && raw.roster.length > 0 ? raw.roster.slice() : ['omni'];
+    const roster = Array.isArray(raw.roster) ? raw.roster.slice() : ['omni'];
     const meta = {
       id: raw.id,
       name: raw.name || raw.id,

@@ -52,6 +52,31 @@ describe('session storage migration', () => {
     });
   });
 
+  it('preserves empty legacy group rosters', () => {
+    const root = tempRoot();
+    const legacyDir = join(root, 'groups', 'session_empty_legacy');
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, 'group.json'), JSON.stringify({
+      id: 'session_empty_legacy',
+      name: 'Empty Legacy Session',
+      roster: [],
+      workDir: '/tmp/project',
+      createdAt: '2026-06-12T00:00:00.000Z',
+    }, null, 2));
+
+    const result = migrateSessions(root);
+    const sessionDir = join(root, 'sessions', 'session_empty_legacy');
+
+    expect(result.migrated).toBe(true);
+    expect(readJson(join(sessionDir, 'session.json'))).toMatchObject({
+      id: 'session_empty_legacy',
+      name: 'Empty Legacy Session',
+      roster: [],
+      defaultVpId: null,
+      workDir: '/tmp/project',
+    });
+  });
+
   it('repairs v3 meta.json output into canonical session.json', () => {
     const root = tempRoot();
     writeFileSync(join(root, '.yeaft-migration.done'), JSON.stringify({ version: 3 }, null, 2));
@@ -260,5 +285,28 @@ describe('session storage migration', () => {
     expect(result.frontmatterRewrites).toBe(1);
     expect(migratedMessage).toContain('sessionId: chat_history');
     expect(migratedMessage).not.toContain('chatId: chat_history');
+  });
+
+  it('does not migrate current chat-mode history dirs without legacy chat.json metadata', () => {
+    const root = tempRoot();
+    writeFileSync(join(root, '.yeaft-migration.done'), JSON.stringify({ version: 3 }, null, 2));
+    const chatMessagesDir = join(root, 'chats', 'chat_live', 'conversation', 'messages');
+    mkdirSync(chatMessagesDir, { recursive: true });
+    writeFileSync(join(chatMessagesDir, 'turn.md'), [
+      '---',
+      'id: msg_1',
+      'chatId: chat_live',
+      'role: user',
+      '---',
+      'hello',
+      '',
+    ].join('\n'));
+
+    const result = migrateSessions(root);
+
+    expect(result.migrated).toBe(true);
+    expect(existsSync(join(root, 'chats', 'chat_live', 'conversation', 'messages', 'turn.md'))).toBe(true);
+    expect(existsSync(join(root, 'sessions', 'chat_live'))).toBe(false);
+    expect(readFileSync(join(chatMessagesDir, 'turn.md'), 'utf8')).toContain('chatId: chat_live');
   });
 });
