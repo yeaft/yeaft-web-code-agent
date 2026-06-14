@@ -165,12 +165,15 @@ export function migrateSessions(yeaftDir) {
   const legacyChatIds = resolveLegacyChatMemoryIds({ chatIds, chatsRoot, sessionsRoot, memoryRoot });
 
   for (const id of listDirs(memSessionRoot)) {
-    moveLayerSummaryToSessionRoot(
+    moveLayerAFilesToSessionRoot(
       join(memSessionRoot, id),
       join(memSessionsRoot, id),
       warnings,
       `memory/session/${id}`
     );
+    if (legacyChatIds.includes(id)) {
+      rewriteSegmentScopes(join(memSessionRoot, id), 'chat', id, warnings);
+    }
   }
 
   // 3+4. memory/{group,chat}/<id>/ → memory/session/<id>/
@@ -181,7 +184,7 @@ export function migrateSessions(yeaftDir) {
     for (const id of ids) {
       const src = join(root, id);
       const dst = join(memSessionRoot, id);
-      moveLayerSummaryToSessionRoot(src, join(memSessionsRoot, id), warnings, `memory/${family}/${id}`);
+      moveLayerAFilesToSessionRoot(src, join(memSessionsRoot, id), warnings, `memory/${family}/${id}`);
       if (existsSync(dst)) {
         mergeLegacyDirIntoSession(src, dst, warnings, `memory/${family}/${id}`);
       } else {
@@ -450,6 +453,11 @@ function listLegacyChatDirs(root) {
 
 function resolveLegacyChatMemoryIds({ chatIds, chatsRoot, sessionsRoot, memoryRoot }) {
   const out = new Set(chatIds);
+  for (const id of listDirs(sessionsRoot)) {
+    if (!id.startsWith('chat_')) continue;
+    if (existsSync(join(chatsRoot, id))) continue;
+    if (existsSync(join(sessionsRoot, id, 'session.json'))) out.add(id);
+  }
   for (const id of listDirs(join(memoryRoot, 'chat'))) {
     if (out.has(id)) continue;
     if (!id.startsWith('chat_')) continue;
@@ -546,17 +554,29 @@ function mergeLegacyDirIntoSession(src, dst, warnings, label) {
   }
 }
 
-function moveLayerSummaryToSessionRoot(src, dst, warnings, label) {
-  const from = join(src, 'summary.md');
-  if (!existsSync(from)) return;
-  const to = join(dst, 'summary.md');
-  try {
-    mkdirSync(dst, { recursive: true });
-    if (!existsSync(to)) renameSync(from, to);
-    else warnings.push(`${label}: kept duplicate legacy file summary.md`);
-  } catch (err) {
-    warnings.push(`${label}: failed to move summary.md: ${err.message}`);
+function moveLayerAFilesToSessionRoot(src, dst, warnings, label) {
+  if (!existsSync(src)) return;
+  let entries = [];
+  try { entries = readdirSync(src, { withFileTypes: true }); } catch { return; }
+  for (const ent of entries) {
+    if (!ent.isFile()) continue;
+    if (!isLayerAFileName(ent.name)) continue;
+    const from = join(src, ent.name);
+    const to = join(dst, ent.name);
+    try {
+      mkdirSync(dst, { recursive: true });
+      if (!existsSync(to)) renameSync(from, to);
+      else warnings.push(`${label}: kept duplicate legacy file ${ent.name}`);
+    } catch (err) {
+      warnings.push(`${label}: failed to move ${ent.name}: ${err.message}`);
+    }
   }
+}
+
+function isLayerAFileName(name) {
+  return name === 'memory.md'
+    || name === 'summary.md'
+    || /^summary\.[^.]+\.md$/.test(name);
 }
 
 function removeDirIfEmpty(dir, warnings, label) {
