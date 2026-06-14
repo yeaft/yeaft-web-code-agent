@@ -365,18 +365,19 @@ describe('session storage migration', () => {
     expect(result.migrated).toBe(true);
     expect(existsSync(join(root, 'memory', 'chat', 'chat_live_memory'))).toBe(true);
     expect(existsSync(join(root, 'memory', 'chat', 'chatXlegacy_memory'))).toBe(true);
-    expect(existsSync(join(root, 'memory', 'sessions', 'chat_legacy_memory'))).toBe(true);
+    expect(existsSync(join(root, 'memory', 'session', 'chat_legacy_memory'))).toBe(true);
     expect(after.get('live').scope).toBe('chat/chat_live_memory');
     expect(after.get('live-wildcard-neighbor').scope).toBe('chat/chatXlegacy_memory');
-    expect(after.get('legacy').scope).toBe('sessions/chat_legacy_memory');
+    expect(after.get('legacy').scope).toBe('session/chat_legacy_memory');
     after.close();
   });
 
-  it('repairs singular v3 session memory into runtime plural sessions scope', () => {
+  it('keeps singular v3 segment memory while moving Layer-A summary to plural sessions scope', () => {
     const root = tempRoot();
     writeFileSync(join(root, '.yeaft-migration.done'), JSON.stringify({ version: 3 }, null, 2));
     const segDir = join(root, 'memory', 'session', 'session_memory', 'segments');
     mkdirSync(segDir, { recursive: true });
+    writeFileSync(join(root, 'memory', 'session', 'session_memory', 'summary.md'), 'summary');
     writeFileSync(join(segDir, 'seg.md'), [
       '---',
       'id: seg',
@@ -402,10 +403,47 @@ describe('session storage migration', () => {
     const after = openSegmentIndex(join(root, 'memory', 'index.db'));
 
     expect(result.migrated).toBe(true);
-    expect(existsSync(join(root, 'memory', 'session', 'session_memory'))).toBe(false);
-    expect(readFileSync(join(root, 'memory', 'sessions', 'session_memory', 'segments', 'seg.md'), 'utf8'))
-      .toContain('scope: sessions/session_memory');
-    expect(after.get('seg').scope).toBe('sessions/session_memory');
+    expect(readFileSync(join(root, 'memory', 'session', 'session_memory', 'segments', 'seg.md'), 'utf8'))
+      .toContain('scope: session/session_memory');
+    expect(readFileSync(join(root, 'memory', 'sessions', 'session_memory', 'summary.md'), 'utf8')).toBe('summary');
+    expect(after.get('seg').scope).toBe('session/session_memory');
     after.close();
+  });
+
+  it('merges legacy group memory into existing session memory without orphaning summary or AMS', () => {
+    const root = tempRoot();
+    writeFileSync(join(root, '.yeaft-migration.done'), JSON.stringify({ version: 3 }, null, 2));
+    const existingSegDir = join(root, 'memory', 'session', 'session_merge', 'segments');
+    const legacySegDir = join(root, 'memory', 'group', 'session_merge', 'segments');
+    mkdirSync(existingSegDir, { recursive: true });
+    mkdirSync(legacySegDir, { recursive: true });
+    mkdirSync(join(root, 'memory', 'groups', 'session_merge'), { recursive: true });
+    writeFileSync(join(existingSegDir, 'existing.md'), [
+      '---',
+      'id: existing',
+      'scope: session/session_merge',
+      '---',
+      'existing',
+      '',
+    ].join('\n'));
+    writeFileSync(join(legacySegDir, 'legacy.md'), [
+      '---',
+      'id: legacy',
+      'scope: group/session_merge',
+      '---',
+      'legacy',
+      '',
+    ].join('\n'));
+    writeFileSync(join(root, 'memory', 'group', 'session_merge', 'summary.md'), 'summary');
+    writeFileSync(join(root, 'memory', 'groups', 'session_merge', 'ams.json'), '{"layers":[]}');
+
+    const result = migrateSessions(root);
+
+    expect(result.migrated).toBe(true);
+    expect(existsSync(join(root, 'memory', 'session', 'session_merge', 'segments', 'existing.md'))).toBe(true);
+    expect(readFileSync(join(root, 'memory', 'session', 'session_merge', 'segments', 'legacy.md'), 'utf8'))
+      .toContain('scope: session/session_merge');
+    expect(readFileSync(join(root, 'memory', 'sessions', 'session_merge', 'summary.md'), 'utf8')).toBe('summary');
+    expect(readFileSync(join(root, 'memory', 'sessions', 'session_merge', 'ams.json'), 'utf8')).toBe('{"layers":[]}');
   });
 });

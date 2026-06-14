@@ -14,13 +14,13 @@
  *      group.json → session.json
  *   2. Legacy ~/.yeaft/chats/<c>/ with chat.json → ~/.yeaft/sessions/<c>/
  *      chat.json → session.json
- *   3. ~/.yeaft/memory/group/<g>/   → ~/.yeaft/memory/sessions/<g>/
- *   4. Legacy ~/.yeaft/memory/chat/<c>/ → ~/.yeaft/memory/sessions/<c>/
+ *   3. ~/.yeaft/memory/group/<g>/   → ~/.yeaft/memory/session/<g>/
+ *   4. Legacy ~/.yeaft/memory/chat/<c>/ → ~/.yeaft/memory/session/<c>/
  *      Rewrites front-matter `scope:` fields from group/<id> / chat/<id>
- *      → sessions/<id>.
+ *      → session/<id>. Layer-A summaries and AMS move to memory/sessions/<id>.
  *   5. ~/.yeaft/memory/groups/<g>/ams.json → ~/.yeaft/memory/sessions/<g>/ams.json
  *   6. SQLite FTS index `memory_segments.scope` rows: rewrite group/* /
- *      legacy chat/* → sessions/*.
+ *      legacy chat/* → session/*.
  *   7. Per-message frontmatter: rewrite `groupId: X` / `chatId: X` →
  *      `sessionId: X` in every `*.md` under `conversation/messages|cold/` and
  *      `sessions/<id>/conversation/messages|cold/`. This is what closes the
@@ -90,10 +90,11 @@ export function migrateSessions(yeaftDir) {
   const groupsRoot = join(yeaftDir, 'groups');
   const chatsRoot = join(yeaftDir, 'chats');
   const memoryRoot = join(yeaftDir, 'memory');
-  const legacyMemSessionRoot = join(memoryRoot, 'session');
+  const memSessionRoot = join(memoryRoot, 'session');
   const memSessionsRoot = join(memoryRoot, 'sessions');
 
   if (!existsSync(sessionsRoot)) mkdirSync(sessionsRoot, { recursive: true });
+  if (!existsSync(memSessionRoot)) mkdirSync(memSessionRoot, { recursive: true });
   if (!existsSync(memSessionsRoot)) mkdirSync(memSessionsRoot, { recursive: true });
 
   // ID collision check
@@ -161,35 +162,34 @@ export function migrateSessions(yeaftDir) {
     moved++;
   }
 
-  // Repair v3's singular memory/session output into the runtime's canonical
-  // memory/sessions layout before moving any additional legacy scopes.
-  if (existsSync(legacyMemSessionRoot)) {
-    for (const id of listDirs(legacyMemSessionRoot)) {
-      const src = join(legacyMemSessionRoot, id);
-      const dst = join(memSessionsRoot, id);
-      if (existsSync(dst)) mergeLegacyDirIntoSession(src, dst, warnings, `memory/session/${id}`);
-      else renameSync(src, dst);
-      rewriteSegmentScopes(dst, 'session', id, warnings);
-      removeDirIfEmpty(src, warnings, `memory/session/${id}`);
-      if (!existsSync(src)) moved++;
-    }
-    removeDirIfEmpty(legacyMemSessionRoot, warnings, 'memory/session');
+  const legacyChatIds = resolveLegacyChatMemoryIds({ chatIds, chatsRoot, sessionsRoot, memoryRoot });
+
+  for (const id of listDirs(memSessionRoot)) {
+    moveLayerSummaryToSessionRoot(
+      join(memSessionRoot, id),
+      join(memSessionsRoot, id),
+      warnings,
+      `memory/session/${id}`
+    );
   }
 
-  // 3+4. memory/{group,chat}/<id>/ → memory/sessions/<id>/
+  // 3+4. memory/{group,chat}/<id>/ → memory/session/<id>/
   for (const family of ['group', 'chat']) {
     const root = join(memoryRoot, family);
     if (!existsSync(root)) continue;
-    const ids = family === 'chat' ? chatIds.filter((id) => existsSync(join(root, id))) : listDirs(root);
+    const ids = family === 'chat' ? legacyChatIds.filter((id) => existsSync(join(root, id))) : listDirs(root);
     for (const id of ids) {
       const src = join(root, id);
-      const dst = join(memSessionsRoot, id);
+      const dst = join(memSessionRoot, id);
+      moveLayerSummaryToSessionRoot(src, join(memSessionsRoot, id), warnings, `memory/${family}/${id}`);
       if (existsSync(dst)) {
-        warnings.push(`memory/sessions/${id} already exists; skipping memory/${family}/${id}`);
-        continue;
+        mergeLegacyDirIntoSession(src, dst, warnings, `memory/${family}/${id}`);
+      } else {
+        renameSync(src, dst);
       }
-      renameSync(src, dst);
       rewriteSegmentScopes(dst, family, id, warnings);
+      removeDirIfEmpty(src, warnings, `memory/${family}/${id}`);
+      if (!existsSync(src)) moved++;
     }
   }
 
@@ -199,30 +199,26 @@ export function migrateSessions(yeaftDir) {
     for (const id of listDirs(amsGroupRoot)) {
       const srcDir = join(amsGroupRoot, id);
       const dstDir = join(memSessionsRoot, id);
-      if (existsSync(dstDir)) {
-        warnings.push(`memory/sessions/${id} already exists; skipping memory/groups/${id}`);
-        continue;
-      }
-      renameSync(srcDir, dstDir);
+      if (existsSync(dstDir)) mergeLegacyDirIntoSession(srcDir, dstDir, warnings, `memory/groups/${id}`);
+      else renameSync(srcDir, dstDir);
+      removeDirIfEmpty(srcDir, warnings, `memory/groups/${id}`);
     }
   }
   const amsChatRoot = join(memoryRoot, 'chats');
   if (existsSync(amsChatRoot)) {
-    for (const id of chatIds.filter((chatId) => existsSync(join(amsChatRoot, chatId)))) {
+    for (const id of legacyChatIds.filter((chatId) => existsSync(join(amsChatRoot, chatId)))) {
       const srcDir = join(amsChatRoot, id);
       const dstDir = join(memSessionsRoot, id);
-      if (existsSync(dstDir)) {
-        warnings.push(`memory/sessions/${id} already exists; skipping memory/chats/${id}`);
-        continue;
-      }
-      renameSync(srcDir, dstDir);
+      if (existsSync(dstDir)) mergeLegacyDirIntoSession(srcDir, dstDir, warnings, `memory/chats/${id}`);
+      else renameSync(srcDir, dstDir);
+      removeDirIfEmpty(srcDir, warnings, `memory/chats/${id}`);
     }
   }
 
   // 6. Rewrite SQLite FTS index scope strings via the shared index-db module
   //    (which already handles ABI loading). Idempotent: WHERE clause skips
   //    already-rewritten rows. Synchronous: better-sqlite3 has no async API.
-  rewriteFtsScopes(memoryRoot, warnings, { legacyChatIds: chatIds });
+  rewriteFtsScopes(memoryRoot, warnings, { legacyChatIds });
 
   // 7. Per-message frontmatter rewrite. Walks both the legacy flat
   //    conversation directory and every per-session conversation directory
@@ -305,11 +301,10 @@ function rewriteFtsScopes(memoryRoot, warnings, { legacyChatIds = [] } = {}) {
   try {
     const db = idx._db;
     db.exec('BEGIN');
-    db.exec("UPDATE memory_segments SET scope = REPLACE(scope, 'group/', 'sessions/') WHERE scope LIKE 'group/%'");
-    db.exec("UPDATE memory_segments SET scope = REPLACE(scope, 'session/', 'sessions/') WHERE scope LIKE 'session/%'");
+    db.exec("UPDATE memory_segments SET scope = REPLACE(scope, 'group/', 'session/') WHERE scope LIKE 'group/%'");
     for (const id of legacyChatIds) {
       const from = `chat/${id}`;
-      const to = `sessions/${id}`;
+      const to = `session/${id}`;
       rewriteFtsScopePrefix(db, from, to);
     }
     db.exec('COMMIT');
@@ -453,6 +448,23 @@ function listLegacyChatDirs(root) {
   return listDirs(root).filter((id) => existsSync(join(root, id, 'chat.json')));
 }
 
+function resolveLegacyChatMemoryIds({ chatIds, chatsRoot, sessionsRoot, memoryRoot }) {
+  const out = new Set(chatIds);
+  for (const id of listDirs(join(memoryRoot, 'chat'))) {
+    if (out.has(id)) continue;
+    if (!id.startsWith('chat_')) continue;
+    if (existsSync(join(chatsRoot, id))) continue;
+    if (existsSync(join(sessionsRoot, id, 'session.json'))) out.add(id);
+  }
+  for (const id of listDirs(join(memoryRoot, 'chats'))) {
+    if (out.has(id)) continue;
+    if (!id.startsWith('chat_')) continue;
+    if (existsSync(join(chatsRoot, id))) continue;
+    if (existsSync(join(sessionsRoot, id, 'session.json'))) out.add(id);
+  }
+  return [...out];
+}
+
 function cleanupLegacySessionDirs(yeaftDir, warnings) {
   const sessionsRoot = join(yeaftDir, 'sessions');
   let moved = 0;
@@ -531,6 +543,19 @@ function mergeLegacyDirIntoSession(src, dst, warnings, label) {
     } else {
       warnings.push(`${label}: kept duplicate legacy file ${ent.name}`);
     }
+  }
+}
+
+function moveLayerSummaryToSessionRoot(src, dst, warnings, label) {
+  const from = join(src, 'summary.md');
+  if (!existsSync(from)) return;
+  const to = join(dst, 'summary.md');
+  try {
+    mkdirSync(dst, { recursive: true });
+    if (!existsSync(to)) renameSync(from, to);
+    else warnings.push(`${label}: kept duplicate legacy file summary.md`);
+  } catch (err) {
+    warnings.push(`${label}: failed to move summary.md: ${err.message}`);
   }
 }
 
@@ -675,7 +700,7 @@ function rewriteSegmentScopes(sessionMemoryDir, oldFamily, id, warnings) {
     const path = join(segDir, name);
     try {
       const src = readFileSync(path, 'utf8');
-      const next = src.replace(re, `$1sessions/${id}`);
+      const next = src.replace(re, `$1session/${id}`);
       if (next !== src) writeFileSync(path, next, 'utf8');
     } catch (err) {
       warnings.push(`segment rewrite failed ${path}: ${err.message}`);
