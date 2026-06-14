@@ -134,4 +134,65 @@ describe('session storage migration', () => {
       workDir: '/tmp/project',
     });
   });
+
+  it('falls back to chat.json when meta.json is corrupt', () => {
+    const root = tempRoot();
+    writeFileSync(join(root, '.yeaft-migration.done'), JSON.stringify({ version: 3 }, null, 2));
+    const sessionDir = join(root, 'sessions', 'chat_corrupt_meta');
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(sessionDir, 'meta.json'), '{"id":');
+    writeFileSync(join(sessionDir, 'chat.json'), JSON.stringify({
+      id: 'chat_corrupt_meta',
+      displayName: 'Fallback Chat',
+      vpId: 'omni',
+      workDir: '/tmp/project',
+      createdAt: '2026-06-12T00:00:00.000Z',
+    }, null, 2));
+
+    const result = migrateSessions(root);
+
+    expect(result.migrated).toBe(true);
+    expect(readJson(join(sessionDir, 'session.json'))).toMatchObject({
+      id: 'chat_corrupt_meta',
+      name: 'Fallback Chat',
+      roster: ['omni'],
+      defaultVpId: 'omni',
+      workDir: '/tmp/project',
+    });
+  });
+
+  it('rewrites frontmatter for legacy conversation files merged during cleanup', () => {
+    const root = tempRoot();
+    writeFileSync(join(root, '.yeaft-migration.done'), JSON.stringify({ version: 3 }, null, 2));
+    const sessionDir = join(root, 'sessions', 'chat_history');
+    const legacyMessagesDir = join(root, 'chats', 'chat_history', 'conversation', 'messages');
+    mkdirSync(sessionDir, { recursive: true });
+    mkdirSync(legacyMessagesDir, { recursive: true });
+    writeFileSync(join(root, 'chats', 'chat_history', 'chat.json'), JSON.stringify({
+      id: 'chat_history',
+      displayName: 'History Chat',
+      vpId: 'omni',
+      createdAt: '2026-06-12T00:00:00.000Z',
+    }, null, 2));
+    writeFileSync(join(legacyMessagesDir, 'turn.md'), [
+      '---',
+      'id: msg_1',
+      'groupId: chat_history',
+      'role: user',
+      '---',
+      'hello',
+      '',
+    ].join('\n'));
+
+    const result = migrateSessions(root);
+    const migratedMessage = readFileSync(
+      join(sessionDir, 'conversation', 'messages', 'turn.md'),
+      'utf8'
+    );
+
+    expect(result.migrated).toBe(true);
+    expect(result.frontmatterRewrites).toBe(1);
+    expect(migratedMessage).toContain('sessionId: chat_history');
+    expect(migratedMessage).not.toContain('groupId: chat_history');
+  });
 });

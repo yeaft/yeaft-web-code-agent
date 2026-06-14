@@ -212,7 +212,7 @@ export function migrateSessions(yeaftDir) {
   // 7. Per-message frontmatter rewrite. Walks both the legacy flat
   //    conversation directory and every per-session conversation directory
   //    so that any pre-rename row still on disk gets the new key shape.
-  const frontmatterRewrites = rewriteAllMessageFrontmatter(yeaftDir, warnings);
+  let frontmatterRewrites = rewriteAllMessageFrontmatter(yeaftDir, warnings);
 
   // 8. Cleanup: if this is rerunning after a v2 sentinel, legacy groups/ or
   //    chats/ directories may have been recreated. Merge non-duplicate files
@@ -220,6 +220,7 @@ export function migrateSessions(yeaftDir) {
   const cleanup = cleanupLegacySessionDirs(yeaftDir, warnings);
   moved += cleanup.moved;
   reconcileSessionMetadataDirs(sessionsRoot, warnings);
+  frontmatterRewrites += rewriteAllMessageFrontmatter(yeaftDir, warnings);
 
   // 9. Sentinel — version 4 = current session.json schema plus legacy cleanup.
   writeFileSync(sentinel, JSON.stringify({
@@ -455,17 +456,17 @@ function reconcileSessionMetadataDir(sessionDir, warnings, label, messages = {})
   if (existsSync(join(sessionDir, 'meta.json'))) {
     const ok = rewriteWrongMetaToSessionJson(sessionDir, warnings);
     if (ok && messages.meta) warnings.push(messages.meta);
-    return ok;
+    if (ok) return true;
   }
   if (existsSync(join(sessionDir, 'group.json'))) {
     const ok = rewriteGroupMetaToSessionJson(sessionDir, warnings);
     if (ok && messages.group) warnings.push(messages.group);
-    return ok;
+    if (ok) return true;
   }
   if (existsSync(join(sessionDir, 'chat.json'))) {
     const ok = rewriteChatMetaToSessionJson(sessionDir, warnings);
     if (ok && messages.chat) warnings.push(messages.chat);
-    return ok;
+    if (ok) return true;
   }
   return existsSync(canonicalPath) && isValidSessionJson(canonicalPath);
 }
