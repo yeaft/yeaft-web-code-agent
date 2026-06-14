@@ -20,6 +20,9 @@ export default {
   'common.comma': ', ',
   'common.select': 'Select',
 
+  // ============ Chat messages ============
+  'chat.toolActionsOmitted': '{count} older tool actions omitted',
+
   // ============ Login ============
   'login.subtitle': 'Remote Claude Code CLI Access',
   'login.username': 'Username',

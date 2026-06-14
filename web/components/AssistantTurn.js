@@ -75,13 +75,16 @@ export default {
 
       <!-- 3. Tool actions -->
       <div v-if="showToolActions" class="turn-actions">
+        <div v-if="turn.toolSummaryCount > 0" class="turn-actions-summary">
+          {{ toolSummaryLabel }}
+        </div>
         <div v-if="expanded" class="turn-actions-history">
           <template v-for="(tool, i) in historyTools" :key="i">
             <ToolLine :tool-name="tool.toolName" :tool-input="tool.toolInput"
                       :tool-result="tool.toolResult" :has-result="!!tool.hasResult" :start-time="tool.startTime" />
           </template>
         </div>
-        <div class="turn-actions-latest">
+        <div v-if="latestTool" class="turn-actions-latest">
           <button v-if="turn.toolMsgs.length > 1" class="turn-expand-btn" @click="toggleExpand">
             <svg viewBox="0 0 24 24" width="12" height="12">
               <path v-if="expanded" fill="currentColor" d="M7 14l5-5 5 5z"/>
@@ -161,7 +164,7 @@ export default {
     };
 
     const showToolActions = Vue.computed(() => {
-      return props.turn.toolMsgs.length > 0;
+      return props.turn.toolMsgs.length > 0 || Number(props.turn.toolSummaryCount || 0) > 0;
     });
 
     const latestTool = Vue.computed(() => {
@@ -171,6 +174,13 @@ export default {
 
     const historyTools = Vue.computed(() => {
       return props.turn.toolMsgs.slice(0, -1);
+    });
+
+    const toolSummaryLabel = Vue.computed(() => {
+      const count = Number(props.turn.toolSummaryCount || 0);
+      if (!count) return '';
+      if (typeof t === 'function') return t('chat.toolActionsOmitted', { count });
+      return `${count} older tool actions omitted`;
     });
 
     const displayedTodos = Vue.computed(() => {
@@ -463,6 +473,7 @@ export default {
       showToolActions,
       latestTool,
       historyTools,
+      toolSummaryLabel,
       toggleExpand,
       renderedContent,
       copyContent,

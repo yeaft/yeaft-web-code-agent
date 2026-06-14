@@ -61,6 +61,13 @@
   margin-bottom: 2px;
 }
 
+.turn-actions-summary {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 3px 4px 5px;
+}
+
 .turn-actions-latest {
   display: flex;
   flex-direction: column;

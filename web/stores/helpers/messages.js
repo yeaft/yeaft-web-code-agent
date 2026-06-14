@@ -1,5 +1,7 @@
 // Message CRUD and streaming helpers
 
+import { applyLiveToolWindow } from './tool-window.js';
+
 // Default session identifier used by the Yeaft "Default" session seed
 // (mirrors agent/yeaft/groups/seed-default.js DEFAULT_GROUP_ID).
 // The `grp_` prefix is a persistence contract — disk paths, AMS scope
@@ -210,6 +212,7 @@ export function addMessageToConversation(store, conversationId, msg) {
     }
   }
   store.messagesMap[conversationId].push(newMsg);
+  applyLiveToolWindow(store.messagesMap[conversationId]);
   // Bug 1: keep messages sorted by timestamp so history loaded out-of-order
   // (e.g. from different sessions) still displays chronologically.
   // Only sort Yeaft conversations; crew conversations need insertion order.
@@ -484,14 +487,35 @@ export function maxDbMessageId(msgs) {
   return max;
 }
 
-export function formatDbMessage(dbMsg) {
-  if (!dbMsg) return null;
+const DETAILED_HISTORY_TOOL_NAMES = new Set(['TodoWrite', 'AskUserQuestion']);
 
-  const base = {
+function dbMessageBase(dbMsg) {
+  return {
     id: dbMsg.id,
     dbMessageId: dbMsg.id,  // ★ Bug #3: 保留 DB id 用于分页锚点
     timestamp: dbMsg.created_at
   };
+}
+
+export function formatDbMessageForHistoryHydration(dbMsg) {
+  if (!dbMsg) return null;
+  if (dbMsg.message_type === 'tool_use' && !DETAILED_HISTORY_TOOL_NAMES.has(dbMsg.tool_name)) {
+    return {
+      ...dbMessageBase(dbMsg),
+      type: 'tool-use',
+      toolName: dbMsg.tool_name || 'unknown',
+      hasResult: true,
+      isHistory: true,
+      startTime: dbMsg.created_at || 0,
+    };
+  }
+  return formatDbMessage(dbMsg);
+}
+
+export function formatDbMessage(dbMsg) {
+  if (!dbMsg) return null;
+
+  const base = dbMessageBase(dbMsg);
 
   if (dbMsg.message_type === 'tool_use') {
     const result = {

@@ -605,7 +605,7 @@ export default {
             || currentTurn.askMsg
             || currentTurn.imageMsgs.length > 0
           );
-          const hasTools = currentTurn.toolMsgs.length > 0;
+          const hasTools = currentTurn.toolMsgs.length > 0 || currentTurn.toolSummaryCount > 0;
 
           // Push the turn if it produced ANY surface (visible content
           // or tools). Empty turns (nothing at all) are still skipped —
@@ -675,6 +675,7 @@ export default {
           isStreaming: false,
           todoMsg: null,
           toolMsgs: [],
+          toolSummaryCount: 0,
           imageMsgs: [],
           askMsg: null,
           messages: [],
@@ -754,6 +755,15 @@ export default {
 
         // tool-result: skip (merged into tool-use)
         if (msg.type === 'tool-result' || msg.type === 'tool_result') {
+          continue;
+        }
+
+        if (msg.type === 'tool-summary') {
+          closeTurnIfTurnIdChanged(msg);
+          if (!currentTurn) startTurn();
+          latchSpeakerFromMsg(msg);
+          currentTurn.toolSummaryCount += Number(msg.count || msg.omittedCount || 0) || 0;
+          currentTurn.messages.push(msg);
           continue;
         }
 
