@@ -79,6 +79,33 @@ describe('session storage migration', () => {
     });
   });
 
+  it('rebuilds corrupt canonical metadata from v3 meta.json instead of deleting the rescue file', () => {
+    const root = tempRoot();
+    writeFileSync(join(root, '.yeaft-migration.done'), JSON.stringify({ version: 3 }, null, 2));
+    const sessionDir = join(root, 'sessions', 'session_partial');
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(sessionDir, 'session.json'), '{"id":');
+    writeFileSync(join(sessionDir, 'meta.json'), JSON.stringify({
+      id: 'session_partial',
+      displayName: 'Partial Rewrite',
+      vpIds: ['omni'],
+      workDir: '/tmp/project',
+      createdAt: '2026-06-12T00:00:00.000Z',
+    }, null, 2));
+
+    const result = migrateSessions(root);
+
+    expect(result.migrated).toBe(true);
+    expect(existsSync(join(sessionDir, 'meta.json'))).toBe(false);
+    expect(readJson(join(sessionDir, 'session.json'))).toMatchObject({
+      id: 'session_partial',
+      name: 'Partial Rewrite',
+      roster: ['omni'],
+      defaultVpId: 'omni',
+      workDir: '/tmp/project',
+    });
+  });
+
   it('converts legacy chat metadata merged during cleanup into session.json', () => {
     const root = tempRoot();
     writeFileSync(join(root, '.yeaft-migration.done'), JSON.stringify({ version: 3 }, null, 2));

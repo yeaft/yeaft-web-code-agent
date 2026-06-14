@@ -112,20 +112,11 @@ export function migrateSessions(yeaftDir) {
   // usable post-migration.
   for (const id of listDirs(sessionsRoot)) {
     const dst = join(sessionsRoot, id);
-    if (existsSync(join(dst, 'session.json'))) {
-      removeWrongMetaJson(dst, warnings);
-      continue;
-    }
-    if (existsSync(join(dst, 'meta.json'))) {
-      rewriteWrongMetaToSessionJson(dst, warnings);
-      warnings.push(`reconciled wrong meta.json at sessions/${id}`);
-    } else if (existsSync(join(dst, 'group.json'))) {
-      rewriteGroupMetaToSessionJson(dst, warnings);
-      warnings.push(`reconciled partial migration at sessions/${id}`);
-    } else if (existsSync(join(dst, 'chat.json'))) {
-      rewriteChatMetaToSessionJson(dst, warnings);
-      warnings.push(`reconciled partial migration at sessions/${id}`);
-    }
+    reconcileSessionMetadataDir(dst, warnings, `sessions/${id}`, {
+      meta: `reconciled wrong meta.json at sessions/${id}`,
+      group: `reconciled partial migration at sessions/${id}`,
+      chat: `reconciled partial migration at sessions/${id}`,
+    });
   }
 
   // 1. groups/<g>/ → sessions/<g>/
@@ -133,19 +124,15 @@ export function migrateSessions(yeaftDir) {
     const src = join(groupsRoot, id);
     const dst = join(sessionsRoot, id);
     if (existsSync(dst)) {
-      // Partial-run reconcile: if session.json wasn't written yet, retry the
-      // rewrite from legacy files at the destination. Avoids
-      // permanently broken sessions when the prior run crashed between
-      // renameSync and rewriteGroupMetaToSessionJson.
-      if (existsSync(join(dst, 'session.json'))) {
-        removeWrongMetaJson(dst, warnings);
-      } else if (existsSync(join(dst, 'meta.json'))) {
-        rewriteWrongMetaToSessionJson(dst, warnings);
-        warnings.push(`reconciled wrong meta.json at sessions/${id}`);
-      } else if (existsSync(join(dst, 'group.json'))) {
-        rewriteGroupMetaToSessionJson(dst, warnings);
-        warnings.push(`reconciled partial migration at sessions/${id}`);
-      } else {
+      // Partial-run reconcile: if session.json is missing or invalid, retry
+      // the rewrite from legacy files at the destination. Avoids permanently
+      // broken sessions when a prior run crashed mid-rewrite.
+      const reconciled = reconcileSessionMetadataDir(dst, warnings, `sessions/${id}`, {
+        meta: `reconciled wrong meta.json at sessions/${id}`,
+        group: `reconciled partial migration at sessions/${id}`,
+        chat: `reconciled partial migration at sessions/${id}`,
+      });
+      if (!reconciled) {
         warnings.push(`sessions/${id} already exists; skipping groups/${id}`);
       }
       continue;
@@ -160,15 +147,12 @@ export function migrateSessions(yeaftDir) {
     const src = join(chatsRoot, id);
     const dst = join(sessionsRoot, id);
     if (existsSync(dst)) {
-      if (existsSync(join(dst, 'session.json'))) {
-        removeWrongMetaJson(dst, warnings);
-      } else if (existsSync(join(dst, 'meta.json'))) {
-        rewriteWrongMetaToSessionJson(dst, warnings);
-        warnings.push(`reconciled wrong meta.json at sessions/${id}`);
-      } else if (existsSync(join(dst, 'chat.json'))) {
-        rewriteChatMetaToSessionJson(dst, warnings);
-        warnings.push(`reconciled partial migration at sessions/${id}`);
-      } else {
+      const reconciled = reconcileSessionMetadataDir(dst, warnings, `sessions/${id}`, {
+        meta: `reconciled wrong meta.json at sessions/${id}`,
+        group: `reconciled partial migration at sessions/${id}`,
+        chat: `reconciled partial migration at sessions/${id}`,
+      });
+      if (!reconciled) {
         warnings.push(`sessions/${id} already exists; skipping chats/${id}`);
       }
       continue;
@@ -451,19 +435,39 @@ function cleanupLegacySessionDirs(yeaftDir, warnings) {
 function reconcileSessionMetadataDirs(sessionsRoot, warnings) {
   for (const id of listDirs(sessionsRoot)) {
     const dst = join(sessionsRoot, id);
-    if (existsSync(join(dst, 'session.json'))) {
-      removeWrongMetaJson(dst, warnings);
-    } else if (existsSync(join(dst, 'meta.json'))) {
-      rewriteWrongMetaToSessionJson(dst, warnings);
-      warnings.push(`reconciled wrong meta.json at sessions/${id}`);
-    } else if (existsSync(join(dst, 'group.json'))) {
-      rewriteGroupMetaToSessionJson(dst, warnings);
-      warnings.push(`reconciled legacy group.json at sessions/${id}`);
-    } else if (existsSync(join(dst, 'chat.json'))) {
-      rewriteChatMetaToSessionJson(dst, warnings);
-      warnings.push(`reconciled legacy chat.json at sessions/${id}`);
-    }
+    reconcileSessionMetadataDir(dst, warnings, `sessions/${id}`, {
+      meta: `reconciled wrong meta.json at sessions/${id}`,
+      group: `reconciled legacy group.json at sessions/${id}`,
+      chat: `reconciled legacy chat.json at sessions/${id}`,
+    });
   }
+}
+
+function reconcileSessionMetadataDir(sessionDir, warnings, label, messages = {}) {
+  const canonicalPath = join(sessionDir, 'session.json');
+  if (existsSync(canonicalPath) && isValidSessionJson(canonicalPath)) {
+    removeWrongMetaJson(sessionDir, warnings);
+    return true;
+  }
+  if (existsSync(canonicalPath)) {
+    warnings.push(`${label}: invalid session.json; trying legacy metadata`);
+  }
+  if (existsSync(join(sessionDir, 'meta.json'))) {
+    const ok = rewriteWrongMetaToSessionJson(sessionDir, warnings);
+    if (ok && messages.meta) warnings.push(messages.meta);
+    return ok;
+  }
+  if (existsSync(join(sessionDir, 'group.json'))) {
+    const ok = rewriteGroupMetaToSessionJson(sessionDir, warnings);
+    if (ok && messages.group) warnings.push(messages.group);
+    return ok;
+  }
+  if (existsSync(join(sessionDir, 'chat.json'))) {
+    const ok = rewriteChatMetaToSessionJson(sessionDir, warnings);
+    if (ok && messages.chat) warnings.push(messages.chat);
+    return ok;
+  }
+  return existsSync(canonicalPath) && isValidSessionJson(canonicalPath);
 }
 
 function mergeLegacyDirIntoSession(src, dst, warnings, label) {
@@ -504,7 +508,7 @@ function rewriteGroupMetaToSessionJson(sessionDir, warnings) {
   const newPath = join(sessionDir, 'session.json');
   if (!existsSync(oldPath)) {
     if (!existsSync(newPath)) warnings.push(`no group.json in ${sessionDir}`);
-    return;
+    return false;
   }
   try {
     const raw = JSON.parse(readFileSync(oldPath, 'utf8'));
@@ -518,10 +522,12 @@ function rewriteGroupMetaToSessionJson(sessionDir, warnings) {
       workDir: typeof raw.workDir === 'string' ? raw.workDir : '',
       createdAt: raw.createdAt || new Date().toISOString(),
     };
-    writeFileSync(newPath, JSON.stringify(meta, null, 2), 'utf8');
+    writeJsonFileAtomic(newPath, meta);
     try { unlinkSync(oldPath); } catch { /* keep both if cannot delete */ }
+    return true;
   } catch (err) {
     warnings.push(`failed to rewrite ${oldPath}: ${err.message}`);
+    return false;
   }
 }
 
@@ -530,7 +536,7 @@ function rewriteChatMetaToSessionJson(sessionDir, warnings) {
   const newPath = join(sessionDir, 'session.json');
   if (!existsSync(oldPath)) {
     if (!existsSync(newPath)) warnings.push(`no chat.json in ${sessionDir}`);
-    return;
+    return false;
   }
   try {
     const raw = JSON.parse(readFileSync(oldPath, 'utf8'));
@@ -544,17 +550,19 @@ function rewriteChatMetaToSessionJson(sessionDir, warnings) {
       workDir: typeof raw.workDir === 'string' ? raw.workDir : '',
       createdAt: raw.createdAt || new Date().toISOString(),
     };
-    writeFileSync(newPath, JSON.stringify(meta, null, 2), 'utf8');
+    writeJsonFileAtomic(newPath, meta);
     try { unlinkSync(oldPath); } catch { /* */ }
+    return true;
   } catch (err) {
     warnings.push(`failed to rewrite ${oldPath}: ${err.message}`);
+    return false;
   }
 }
 
 function rewriteWrongMetaToSessionJson(sessionDir, warnings) {
   const oldPath = join(sessionDir, 'meta.json');
   const newPath = join(sessionDir, 'session.json');
-  if (!existsSync(oldPath) || existsSync(newPath)) return;
+  if (!existsSync(oldPath)) return false;
   try {
     const raw = JSON.parse(readFileSync(oldPath, 'utf8'));
     const roster = Array.isArray(raw.roster) && raw.roster.length > 0
@@ -571,11 +579,35 @@ function rewriteWrongMetaToSessionJson(sessionDir, warnings) {
       workDir: typeof raw.workDir === 'string' ? raw.workDir : '',
       createdAt: raw.createdAt || new Date().toISOString(),
     };
-    writeFileSync(newPath, JSON.stringify(meta, null, 2), 'utf8');
+    writeJsonFileAtomic(newPath, meta);
     try { unlinkSync(oldPath); } catch { /* keep both if cannot delete */ }
+    return true;
   } catch (err) {
     warnings.push(`failed to rewrite ${oldPath}: ${err.message}`);
+    return false;
   }
+}
+
+function isValidSessionJson(path) {
+  try {
+    return isValidSessionMeta(JSON.parse(readFileSync(path, 'utf8')));
+  } catch {
+    return false;
+  }
+}
+
+function isValidSessionMeta(meta) {
+  return !!meta
+    && typeof meta.id === 'string'
+    && typeof meta.name === 'string'
+    && Array.isArray(meta.roster)
+    && meta.roster.length > 0;
+}
+
+function writeJsonFileAtomic(path, value) {
+  const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf8');
+  renameSync(tmp, path);
 }
 
 function removeWrongMetaJson(sessionDir, warnings) {
