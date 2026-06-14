@@ -272,7 +272,10 @@ export function handleAssistantOutputFrame(store, conversationId, data) {
       }
     }
   } else if (data.type === 'result') {
-    if (data.isHistoryReplay) return;
+    if (data.isHistoryReplay) {
+      store.finishStreamingForConversation(conversationId);
+      return;
+    }
     // ★ result 表示当前 turn 已完成，立即清除 processing 状态
     delete store.processingConversations[conversationId];
     stopProcessingWatchdog(store, conversationId);

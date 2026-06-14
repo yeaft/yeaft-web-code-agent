@@ -34,6 +34,12 @@ describe('session storage migration', () => {
       'session/session_scope/feature/auth',
       'session/session_scope/topic/api',
       'session/session_scope/topic/api/routes',
+      'sessions/session_scope',
+      'sessions/session_scope/user',
+      'sessions/session_scope/vp/omni',
+      'sessions/session_scope/feature/auth',
+      'sessions/session_scope/topic/api',
+      'sessions/session_scope/topic/api/routes',
     ]) {
       const parsed = parseSegments([
         '---',

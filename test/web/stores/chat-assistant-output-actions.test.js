@@ -32,9 +32,13 @@ describe('chat store assistant output actions', () => {
   it('does not clear processing state for history replay result frames', () => {
     const store = useChatStore();
     store.processingConversations = { 'conv-1': true };
+    store.messagesMap = {
+      'conv-1': [{ id: 'a1', type: 'assistant', content: 'old', isStreaming: true, status: 'pending' }],
+    };
 
     store.handleAssistantOutputFrame('conv-1', { type: 'result', isHistoryReplay: true });
 
     expect(store.processingConversations['conv-1']).toBe(true);
+    expect(store.messagesMap['conv-1'][0].isStreaming).toBe(false);
   });
 });
