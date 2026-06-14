@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 
 import { migrateSessions } from '../../../agent/yeaft/migrate/sessions.js';
 import { openSegmentIndex } from '../../../agent/yeaft/memory/index-db.js';
+import { parseSegments } from '../../../agent/yeaft/memory/segment.js';
 
 const roots = [];
 
@@ -25,6 +26,29 @@ afterEach(() => {
 });
 
 describe('session storage migration', () => {
+  it('accepts migrated singular session memory subscopes', () => {
+    for (const scope of [
+      'session/session_scope',
+      'session/session_scope/user',
+      'session/session_scope/vp/omni',
+      'session/session_scope/feature/auth',
+      'session/session_scope/topic/api',
+      'session/session_scope/topic/api/routes',
+    ]) {
+      const parsed = parseSegments([
+        '---',
+        'id: seg',
+        `scope: ${scope}`,
+        'kind: fact',
+        '---',
+        'memory',
+        '',
+      ].join('\n'));
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0].scope).toBe(scope);
+    }
+  });
+
   it('migrates legacy group.json metadata to canonical session.json', () => {
     const root = tempRoot();
     const legacyDir = join(root, 'groups', 'session_legacy');
