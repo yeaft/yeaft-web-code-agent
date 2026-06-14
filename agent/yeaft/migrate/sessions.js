@@ -106,7 +106,8 @@ export function migrateSessions(yeaftDir) {
   }
 
   let moved = 0;
-  moved += repairV3MovedLiveChatDirs(sessionsRoot, chatsRoot, warnings);
+  const liveChatRepair = repairV3MovedLiveChatDirs(sessionsRoot, chatsRoot, warnings);
+  moved += liveChatRepair.moved;
 
   // Reconcile any half-migrated sessions/<id>/ from a prior crash, including
   // v3's wrong `meta.json` target. Repair before moving on so the session is
@@ -164,6 +165,7 @@ export function migrateSessions(yeaftDir) {
   }
 
   const legacyChatIds = resolveLegacyChatMemoryIds({ chatIds, chatsRoot, sessionsRoot, memoryRoot });
+  restoreLiveChatMemoryScopes(liveChatRepair.restoredChatIds, memoryRoot, warnings);
 
   for (const id of listDirs(memSessionRoot)) {
     moveLayerAFilesToSessionRoot(
@@ -223,7 +225,10 @@ export function migrateSessions(yeaftDir) {
   // 6. Rewrite SQLite FTS index scope strings via the shared index-db module
   //    (which already handles ABI loading). Idempotent: WHERE clause skips
   //    already-rewritten rows. Synchronous: better-sqlite3 has no async API.
-  rewriteFtsScopes(memoryRoot, warnings, { legacyChatIds });
+  rewriteFtsScopes(memoryRoot, warnings, {
+    legacyChatIds,
+    restoredLiveChatIds: liveChatRepair.restoredChatIds,
+  });
 
   // 7. Per-message frontmatter rewrite. Walks both the legacy flat
   //    conversation directory and every per-session conversation directory
@@ -291,7 +296,7 @@ function backupConversationTrees(yeaftDir, backupRoot, warnings) {
   }
 }
 
-function rewriteFtsScopes(memoryRoot, warnings, { legacyChatIds = [] } = {}) {
+function rewriteFtsScopes(memoryRoot, warnings, { legacyChatIds = [], restoredLiveChatIds = [] } = {}) {
   const dbPath = join(memoryRoot, 'index.db');
   if (!existsSync(dbPath)) return;
   // Best-effort: index-db.js is the single ABI-load site, so we route through
@@ -310,6 +315,11 @@ function rewriteFtsScopes(memoryRoot, warnings, { legacyChatIds = [] } = {}) {
     for (const id of legacyChatIds) {
       const from = `chat/${id}`;
       const to = `session/${id}`;
+      rewriteFtsScopePrefix(db, from, to);
+    }
+    for (const id of restoredLiveChatIds) {
+      const from = `session/${id}`;
+      const to = `chat/${id}`;
       rewriteFtsScopePrefix(db, from, to);
     }
     db.exec('COMMIT');
@@ -455,6 +465,7 @@ function listLegacyChatDirs(root) {
 
 function repairV3MovedLiveChatDirs(sessionsRoot, chatsRoot, warnings) {
   let moved = 0;
+  const restoredChatIds = [];
   for (const id of listDirs(sessionsRoot)) {
     const src = join(sessionsRoot, id);
     if (hasAnySessionMetadataFile(src)) continue;
@@ -466,12 +477,13 @@ function repairV3MovedLiveChatDirs(sessionsRoot, chatsRoot, warnings) {
       else renameSync(src, dst);
       removeDirIfEmpty(src, warnings, `sessions/${id}`);
       if (!existsSync(src)) moved++;
+      restoredChatIds.push(id);
       warnings.push(`restored live chat history from sessions/${id} to chats/${id}`);
     } catch (err) {
       warnings.push(`failed to restore live chat history sessions/${id}: ${err.message}`);
     }
   }
-  return moved;
+  return { moved, restoredChatIds };
 }
 
 function hasAnySessionMetadataFile(dir) {
@@ -530,6 +542,30 @@ function resolveLegacyChatMemoryIds({ chatIds, chatsRoot, sessionsRoot, memoryRo
     if (existsSync(join(sessionsRoot, id, 'session.json'))) out.add(id);
   }
   return [...out];
+}
+
+function restoreLiveChatMemoryScopes(chatIds, memoryRoot, warnings) {
+  if (!Array.isArray(chatIds) || chatIds.length === 0) return;
+  const memSessionRoot = join(memoryRoot, 'session');
+  const memSessionsRoot = join(memoryRoot, 'sessions');
+  const memChatRoot = join(memoryRoot, 'chat');
+  for (const id of chatIds) {
+    const sessionSrc = join(memSessionRoot, id);
+    const chatDst = join(memChatRoot, id);
+    if (existsSync(sessionSrc)) {
+      try {
+        mkdirSync(memChatRoot, { recursive: true });
+        if (existsSync(chatDst)) mergeLegacyDirIntoSession(sessionSrc, chatDst, warnings, `memory/session/${id}`);
+        else renameSync(sessionSrc, chatDst);
+        rewriteSegmentScopes(chatDst, 'session', id, warnings, 'chat');
+        removeDirIfEmpty(sessionSrc, warnings, `memory/session/${id}`);
+      } catch (err) {
+        warnings.push(`failed to restore live chat memory memory/session/${id}: ${err.message}`);
+      }
+    }
+    moveLayerAFilesToSessionRoot(join(memSessionsRoot, id), chatDst, warnings, `memory/sessions/${id}`);
+    removeDirIfEmpty(join(memSessionsRoot, id), warnings, `memory/sessions/${id}`);
+  }
 }
 
 function cleanupLegacySessionDirs(yeaftDir, warnings) {
@@ -776,26 +812,26 @@ function removeWrongMetaJson(sessionDir, warnings) {
   }
 }
 
-function rewriteSegmentScopes(sessionMemoryDir, oldFamily, id, warnings) {
+function rewriteSegmentScopes(sessionMemoryDir, oldFamily, id, warnings, newFamily = 'session') {
   if (!existsSync(sessionMemoryDir)) return;
-  rewriteSegmentScopeFiles(sessionMemoryDir, oldFamily, id, warnings, false);
+  rewriteSegmentScopeFiles(sessionMemoryDir, oldFamily, id, warnings, false, newFamily);
 }
 
-function rewriteSegmentScopeFiles(dir, oldFamily, id, warnings, inSegmentsDir) {
+function rewriteSegmentScopeFiles(dir, oldFamily, id, warnings, inSegmentsDir, newFamily) {
   let entries;
   try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
   const re = new RegExp(`^(\\s*scope:\\s*)${oldFamily}/${escapeRe(id)}\\b`, 'gm');
   for (const ent of entries) {
     const path = join(dir, ent.name);
     if (ent.isDirectory()) {
-      rewriteSegmentScopeFiles(path, oldFamily, id, warnings, ent.name === 'segments');
+      rewriteSegmentScopeFiles(path, oldFamily, id, warnings, ent.name === 'segments', newFamily);
       continue;
     }
     if (!ent.isFile()) continue;
     if (ent.name !== 'memory.md' && !(inSegmentsDir && ent.name.endsWith('.md'))) continue;
     try {
       const src = readFileSync(path, 'utf8');
-      const next = src.replace(re, `$1session/${id}`);
+      const next = src.replace(re, `$1${newFamily}/${id}`);
       if (next !== src) writeFileSync(path, next, 'utf8');
     } catch (err) {
       warnings.push(`segment rewrite failed ${path}: ${err.message}`);

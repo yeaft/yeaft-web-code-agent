@@ -340,6 +340,8 @@ describe('session storage migration', () => {
     writeFileSync(join(root, '.yeaft-migration.done'), JSON.stringify({ version: 3 }, null, 2));
     const movedMessagesDir = join(root, 'sessions', 'chat_v3_live', 'conversation', 'messages');
     mkdirSync(movedMessagesDir, { recursive: true });
+    mkdirSync(join(root, 'memory', 'session', 'chat_v3_live'), { recursive: true });
+    mkdirSync(join(root, 'memory', 'sessions', 'chat_v3_live'), { recursive: true });
     writeFileSync(join(movedMessagesDir, 'turn.md'), [
       '---',
       'id: msg_1',
@@ -349,13 +351,40 @@ describe('session storage migration', () => {
       'hello',
       '',
     ].join('\n'));
+    writeFileSync(join(root, 'memory', 'session', 'chat_v3_live', 'memory.md'), [
+      '---',
+      'id: mem_1',
+      'scope: session/chat_v3_live',
+      '---',
+      'memory',
+      '',
+    ].join('\n'));
+    writeFileSync(join(root, 'memory', 'sessions', 'chat_v3_live', 'summary.md'), 'chat summary');
+    const idx = openSegmentIndex(join(root, 'memory', 'index.db'));
+    idx.upsert({
+      id: 'mem_1',
+      scope: 'session/chat_v3_live',
+      kind: 'fact',
+      tags: [],
+      body: 'memory',
+      sourceMessages: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    idx.close();
 
     const result = migrateSessions(root);
+    const after = openSegmentIndex(join(root, 'memory', 'index.db'));
 
     expect(result.migrated).toBe(true);
     expect(existsSync(join(root, 'sessions', 'chat_v3_live'))).toBe(false);
     expect(readFileSync(join(root, 'chats', 'chat_v3_live', 'conversation', 'messages', 'turn.md'), 'utf8'))
       .toContain('chatId: chat_v3_live');
+    expect(readFileSync(join(root, 'memory', 'chat', 'chat_v3_live', 'memory.md'), 'utf8'))
+      .toContain('scope: chat/chat_v3_live');
+    expect(readFileSync(join(root, 'memory', 'chat', 'chat_v3_live', 'summary.md'), 'utf8')).toBe('chat summary');
+    expect(after.get('mem_1').scope).toBe('chat/chat_v3_live');
+    after.close();
   });
 
   it('does not migrate current chat-mode memory scopes without legacy chat.json metadata', () => {
