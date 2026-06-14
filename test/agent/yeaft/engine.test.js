@@ -284,7 +284,8 @@ describe('Engine', () => {
       expect(mockAdapter.callLog).toHaveLength(1);
       const call = mockAdapter.callLog[0];
       expect(call.model).toBe('claude-test');
-      expect(call.system).toContain('Yeaft');
+      expect(call.system).toContain('Session Participant');
+      expect(call.system).not.toContain('Yeaft — AI');
       expect(call.system).toContain('work');
       expect(call.maxTokens).toBe(2048);
       expect(call.messages).toHaveLength(1);
@@ -967,7 +968,8 @@ describe('Engine', () => {
       }
 
       const call = mockAdapter.callLog[0];
-      expect(call.system).toContain('Yeaft');
+      expect(call.system).toContain('Session Participant');
+      expect(call.system).not.toContain('Yeaft — AI');
       expect(call.system).not.toContain('核心原则');
     });
 
@@ -988,9 +990,11 @@ describe('Engine', () => {
       }
 
       const call = mockAdapter.callLog[0];
-      expect(call.system).toContain('Yeaft');
+      expect(call.system).toContain('Session Participant');
+      expect(call.system).not.toContain('Yeaft — AI');
       expect(call.system).toContain('核心原则');
-      expect(call.system).toContain('统一模式');
+      expect(call.system).not.toContain('统一模式');
+      expect(call.system).not.toContain('你是一个持续伴随的 AI 伙伴');
     });
 
     it('should include tool names in system prompt for configured language', async () => {

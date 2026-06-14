@@ -1,5 +1,10 @@
+import { readdirSync, readFileSync, statSync } from 'fs';
+import { join } from 'path';
 import { describe, expect, it } from 'vitest';
-import { buildWorkerPrompt } from '../../../agent/yeaft/prompts.js';
+import { buildRouterPrompt, buildWorkerPrompt, getDefaultPlanInstruction, renderLayerASummaries } from '../../../agent/yeaft/prompts.js';
+import { loadPersonas } from '../../../agent/yeaft/personas.js';
+import { render as renderDreamPrompt } from '../../../agent/yeaft/dream/prompts/index.js';
+import { DEFAULT_VPS } from '../../../agent/yeaft/vp/seed-defaults.js';
 
 const SEEDED_OMNI_PERSONA = `You are Omni Assistant / 全能助手, a cross-domain, execution-focused general AI partner.
 
@@ -10,6 +15,18 @@ Language policy / 语言策略:
 Core capabilities / 核心能力:
 - Cross-domain synthesis: handle writing, coding, product thinking, research, planning, analysis, learning, translation, troubleshooting, and creative work without forcing the user to pick a specialist first.
 - Strong execution: when a task needs action, clarify only the blocking unknowns, make a short plan, use available tools, produce the deliverable, and verify the result.`;
+
+
+function listMarkdownFiles(dir) {
+  const out = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    const st = statSync(full);
+    if (st.isDirectory()) out.push(...listMarkdownFiles(full));
+    else if (entry.endsWith('.md')) out.push(full);
+  }
+  return out;
+}
 
 function workerPrompt(language) {
   return buildWorkerPrompt({
@@ -27,14 +44,22 @@ function workerPrompt(language) {
   });
 }
 
+function promptFor(vpPersona, language = 'zh-CN', extra = {}) {
+  return buildWorkerPrompt({ language, includeShape: false, toolNames: ['FileRead'], vpPersona, ...extra });
+}
+
 describe('worker prompt language selection', () => {
-  it('uses localized Chinese persona text instead of the seeded English Omni block', () => {
+  it('uses localized Chinese soul instead of the seeded English Omni block', () => {
     const prompt = workerPrompt('zh-CN');
 
-    expect(prompt).toContain('# 全能助手 — 全能助手');
-    expect(prompt).toContain('你是全能助手，一个跨领域、偏执行的通用 AI 伙伴。');
+    expect(prompt).toContain('# 全能助手');
+    expect(prompt).not.toContain('# 全能助手 — 全能助手');
+    expect(prompt).toContain('## Soul');
+    expect(prompt).toContain('### 人物特点');
+    expect(prompt).toContain('你是 Omni，一个负责需求分析、目标澄清、流程推进和团队协调的 VP。');
+    expect(prompt).toContain('### 用户通常期待你完成');
     expect(prompt).toContain('## 任务回复');
-    expect(prompt).toContain('执行类任务完成后只简要汇报：改了什么、验证了什么、风险或下一步。');
+    expect(prompt).toContain('完成后只汇报改了什么、验证了什么、风险或下一步');
     expect(prompt).not.toContain('You are Omni Assistant / 全能助手');
     expect(prompt).not.toContain('Cross-domain synthesis: handle writing, coding');
     expect(prompt).not.toContain('## Core Principles');
@@ -43,11 +68,14 @@ describe('worker prompt language selection', () => {
   it('keeps English prompts English for English configuration', () => {
     const prompt = workerPrompt('en');
 
-    expect(prompt).toContain('# Omni Assistant — All-Purpose Assistant');
-    expect(prompt).toContain('You are Omni Assistant, a cross-domain, execution-focused general AI partner.');
+    expect(prompt).toContain('# Omni Assistant');
+    expect(prompt).not.toContain('# Omni Assistant — All-Purpose Assistant');
+    expect(prompt).toContain('## Soul');
+    expect(prompt).toContain('You are Omni Assistant / 全能助手');
+    expect(prompt).not.toContain('### Traits');
     expect(prompt).toContain('## Task Replies');
-    expect(prompt).toContain('After execution tasks, briefly report only what changed, what was verified, and any risk or next step.');
-    expect(prompt).not.toContain('你是全能助手，一个跨领域、偏执行的通用 AI 伙伴。');
+    expect(prompt).toContain('after completing work, report only what changed, what was verified, and any risk or next step.');
+    expect(prompt).not.toContain('你是 Omni，一个负责需求分析');
     expect(prompt).not.toContain('## 任务回复');
   });
 
@@ -55,8 +83,64 @@ describe('worker prompt language selection', () => {
     const zhPrompt = buildWorkerPrompt({ language: 'zh', includeShape: false });
     const enPrompt = buildWorkerPrompt({ language: 'en', includeShape: false });
 
-    expect(zhPrompt).toContain('完成后只汇报：改了什么、验证了什么、风险或下一步');
-    expect(enPrompt).toContain('After completing work, report only: what changed, what was verified, and any risk or next step');
+    expect(zhPrompt).toContain('完成后只汇报改了什么、验证了什么、风险或下一步');
+    expect(enPrompt).toContain('after completing work, report only what changed, what was verified, and any risk or next step');
+  });
+
+  it('renders minimal Linus persona as a full Chinese soul without Yeaft fallback identity or role intro', () => {
+    const prompt = promptFor({ vpId: 'linus', displayName: 'Linus', role: 'developer' }, 'zh-CN');
+
+    expect(prompt).toContain('# Linus');
+    expect(prompt).not.toContain('# Linus — developer');
+    expect(prompt).not.toContain('你是 Linus，developer。请以 Linus 的思考方式理解问题');
+    expect(prompt).toContain('## Soul');
+    expect(prompt).toContain('### 人物特点');
+    expect(prompt).toContain('### 擅长的事情');
+    expect(prompt).toContain('### 解决问题的方式');
+    expect(prompt).toContain('### 用户通常期待你完成');
+    expect(prompt).toContain('### 回答风格');
+    expect(prompt).not.toContain('# Yeaft');
+    expect(prompt).not.toContain('你是 Yeaft');
+    expect(prompt).not.toContain('Yeaft — AI');
+  });
+
+  it('renders all stock VP souls from bilingual role.md persona sections', () => {
+    expect(DEFAULT_VPS.length).toBeGreaterThan(20);
+    for (const vp of DEFAULT_VPS) {
+      expect(vp.persona).toContain('<!-- lang:en -->');
+      expect(vp.persona).toContain('<!-- lang:zh -->');
+      expect(vp.personaEn).toContain('You are');
+      expect(vp.personaZh).toContain('你是');
+      expect(vp.roleZh).toBeTruthy();
+
+      const zhPrompt = promptFor(vp, 'zh-CN');
+      const enPrompt = promptFor(vp, 'en');
+
+      expect(zhPrompt).toContain('## Soul');
+      expect(zhPrompt).toContain(vp.personaZh.split('\n')[0]);
+      expect(zhPrompt).not.toContain(vp.personaEn.split('\n')[0]);
+      expect(enPrompt).toContain('## Soul');
+      expect(enPrompt).toContain(vp.personaEn.split('\n')[0]);
+      expect(enPrompt).not.toContain(vp.personaZh.split('\n')[0]);
+    }
+  });
+
+  it('renders structured soul fields when configured', () => {
+    const prompt = promptFor({
+      vpId: 'designer',
+      displayName: 'Designer',
+      traitsZh: ['重视用户路径'],
+      strengthsZh: ['界面信息架构'],
+      problemSolvingZh: '先澄清主任务，再做布局取舍。',
+      expectedTasksZh: ['输出设计建议'],
+      answerStyleZh: '简洁、具体。',
+      avoidZh: ['不要引入新组件库'],
+    }, 'zh-CN');
+
+    expect(prompt).toContain('### 人物特点');
+    expect(prompt).toContain('- 重视用户路径');
+    expect(prompt).toContain('### 避免');
+    expect(prompt).toContain('- 不要引入新组件库');
   });
 
   it('does not fall back to an English-only marked persona for Chinese prompts', () => {
@@ -71,7 +155,8 @@ describe('worker prompt language selection', () => {
       },
     });
 
-    expect(prompt).toContain('# 安全专家 — 专家');
+    expect(prompt).toContain('# 安全专家');
+    expect(prompt).not.toContain('# 安全专家 — 专家');
     expect(prompt).not.toContain('You are a security expert.');
   });
 
@@ -87,25 +172,161 @@ describe('worker prompt language selection', () => {
       },
     });
 
-    expect(prompt).toContain('# Security Expert — Expert');
+    expect(prompt).toContain('# Security Expert');
+    expect(prompt).not.toContain('# Security Expert — Expert');
     expect(prompt).not.toContain('你是安全专家。');
   });
 
-  it('adds response display rules that reserve fenced code blocks for real code', () => {
-    const zhPrompt = buildWorkerPrompt({ language: 'zh', includeShape: false });
-    const enPrompt = buildWorkerPrompt({ language: 'en', includeShape: false });
+  it('keeps genuinely Chinese unmarked persona bodies in Chinese prompts', () => {
+    const prompt = buildWorkerPrompt({
+      language: 'zh-CN',
+      includeShape: false,
+      vpPersona: {
+        vpId: 'architect',
+        displayNameZh: '架构师',
+        persona: '你是架构师，擅长边界划分和长期维护。',
+      },
+    });
 
-    expect(zhPrompt).toContain('普通说明写成紧凑的自然段');
-    expect(zhPrompt).toContain('不要为了展示格式再套一层 fenced code block');
-    expect(zhPrompt).toContain('fenced code block 只用于真正的代码、命令、配置、diff、日志');
-    expect(zhPrompt).toContain('移动端优先：代码块要少、短、必要');
-    expect(zhPrompt).toContain('不要把粗体、inline code 和普通文字拆成多行交替混排');
+    expect(prompt).toContain('你是架构师，擅长边界划分和长期维护。');
+  });
 
-    expect(enPrompt).toContain('Write normal explanations as compact natural paragraphs');
-    expect(enPrompt).toContain('do not wrap Markdown examples in fenced code blocks just to show formatting');
-    expect(enPrompt).toContain('Use fenced code blocks only for real code, commands, config, diffs, logs');
-    expect(enPrompt).toContain('Keep code blocks short and necessary, especially for mobile readers');
-    expect(enPrompt).toContain('Do not alternate bold text, inline code, and plain text across many short lines');
+  it('keeps English unmarked persona bodies in English prompts', () => {
+    const prompt = buildWorkerPrompt({
+      language: 'en',
+      includeShape: false,
+      vpPersona: {
+        vpId: 'architect',
+        displayName: 'Architect',
+        persona: 'You are an architect focused on boundaries and maintainability.',
+      },
+    });
+
+    expect(prompt).toContain('You are an architect focused on boundaries and maintainability.');
+  });
+
+  it('keeps search guidance in tool guidance instead of common rules', () => {
+    const prompt = workerPrompt('en');
+    const coreStart = prompt.indexOf('## Core Principles');
+    const toolStart = prompt.indexOf('# Tool Usage Guidance');
+    const commonRules = prompt.slice(coreStart, toolStart);
+    const toolGuidance = prompt.slice(toolStart);
+
+    expect(commonRules).not.toContain('## Search and Navigation');
+    expect(commonRules).not.toContain('## Search Strategy');
+    expect(toolGuidance).toContain('## Search Strategy');
+    expect(toolGuidance).toContain('If you already know the file path');
+  });
+
+  it('does not inject unified mode while keeping tool guidance', () => {
+    const prompt = workerPrompt('zh-CN');
+
+    expect(prompt).not.toContain('统一模式');
+    expect(prompt).not.toContain('Unified Mode');
+    expect(prompt).not.toContain('你是一个持续伴随的 AI 伙伴');
+    expect(prompt).toContain('# 工具使用指引');
+  });
+
+  it('does not repeat VP identity in core principles', () => {
+    const prompt = promptFor({ vpId: 'linus', displayName: 'Linus', role: 'developer' }, 'zh-CN');
+    const coreStart = prompt.indexOf('## 核心原则');
+    const taskStart = prompt.indexOf('## 任务回复');
+    const corePrinciples = prompt.slice(coreStart, taskStart);
+
+    expect(corePrinciples).not.toContain('你是 Linus');
+    expect(corePrinciples).not.toContain('你是 Yeaft');
+  });
+
+  it('renders session announcement labels without legacy group terminology', () => {
+    const zhPrompt = promptFor({ vpId: 'linus', displayName: 'Linus' }, 'zh-CN', {
+      sessionAnnouncement: '请保持 PR 流程。',
+    });
+    const enPrompt = promptFor({ vpId: 'linus', displayName: 'Linus' }, 'en', {
+      sessionAnnouncement: 'Keep the PR workflow.',
+    });
+
+    expect(zhPrompt).toContain('[会话公告]');
+    expect(zhPrompt).not.toContain('[群组公告]');
+    expect(enPrompt).toContain('[Session Announcement]');
+    expect(enPrompt).not.toContain('[Group Announcement]');
+  });
+
+  it('renders Layer-A session summaries without legacy group labels', () => {
+    const zhBlock = renderLayerASummaries({ user: '用户', group: '旧 key 内容', vp: 'VP' }, 'zh-CN');
+    const enBlock = renderLayerASummaries({ user: 'user', group: 'legacy key body', vp: 'vp' }, 'en');
+
+    expect(zhBlock).toContain('## 会话总结\n旧 key 内容');
+    expect(zhBlock).not.toContain('## 群组总结');
+    expect(enBlock).toContain('## summary_session\nlegacy key body');
+    expect(enBlock).not.toContain('## summary_group');
+  });
+
+  it('renders router prompt session summaries without legacy group labels', () => {
+    const prompt = buildRouterPrompt({
+      language: 'zh-CN',
+      includeShape: false,
+      summaries: { group: '旧 key 内容' },
+    });
+
+    expect(prompt).toContain('## 会话总结');
+    expect(prompt).not.toContain('## 群组总结');
+    expect(prompt).not.toContain('summary_group');
+  });
+
+  it('returns localized planning instructions for StartPlan', () => {
+    const zh = getDefaultPlanInstruction('zh-CN');
+    const en = getDefaultPlanInstruction('en');
+
+    expect(zh).toContain('# 规划模式');
+    expect(zh).toContain('你刚进入下面主题的**规划模式**');
+    expect(zh).not.toContain('# Planning Mode');
+    expect(zh).not.toContain('You have just entered **planning mode**');
+    expect(en).toContain('# Planning Mode');
+    expect(en).toContain('You have just entered **planning mode**');
+    expect(en).not.toContain('# 规划模式');
+  });
+
+  it('keeps every prompt template explicitly bilingual', () => {
+    const roots = [
+      join(process.cwd(), 'agent/yeaft/templates'),
+      join(process.cwd(), 'agent/yeaft/dream/prompts'),
+    ];
+    const files = roots.flatMap(root => listMarkdownFiles(root));
+    expect(files.length).toBeGreaterThan(0);
+
+    for (const file of files) {
+      const source = readFileSync(file, 'utf-8');
+      expect(source, file).toContain('<!-- lang:en -->');
+      expect(source, file).toContain('<!-- lang:zh -->');
+    }
+  });
+
+  it('renders Dream prompts in the requested language without generic Yeaft AI identity', () => {
+    const vars = {
+      sessionId: 'session_test',
+      topicSummaries: '- active_scope/rendering — prompt labels',
+      conversation: '[]',
+    };
+    const zh = renderDreamPrompt('triagePass1', vars, { language: 'zh-CN' });
+    const en = renderDreamPrompt('triagePass1', vars, { language: 'en' });
+
+    expect(zh).toContain('语言要求');
+    expect(zh).toContain('最近一段 session 对话');
+    expect(zh).not.toContain('recent session conversation');
+    expect(zh).not.toContain('Yeaft AI companion');
+    expect(en).toContain('Language requirement');
+    expect(en).toContain('recent session conversation');
+    expect(en).not.toContain('Yeaft AI companion');
+  });
+
+  it('loads built-in sub-agent personas with bilingual prompt bodies', () => {
+    const personas = loadPersonas({ fresh: true });
+    for (const id of ['explorer', 'implementer', 'researcher', 'reviewer']) {
+      const persona = personas.get(id);
+      expect(persona, id).toBeTruthy();
+      expect(persona.systemPrompt, id).toContain('<!-- lang:en -->');
+      expect(persona.systemPrompt, id).toContain('<!-- lang:zh -->');
+    }
   });
 
 });

@@ -43,8 +43,8 @@ function rawResponseSnippet(raw) {
 
 function applySystem(language) {
   return String(language || '').toLowerCase().startsWith('zh')
-    ? '你是梦境流水线的 Apply 阶段。你会根据最近的群组对话重写单个 scope 的 memory.md 和 summary.md。请只回复严格 JSON，不要输出说明文字或 markdown fence。memory_md 和 summary_md 的自然语言内容必须使用中文；JSON key、scope、schema 字段和代码标识符保持英文。'
-    : 'You are the Apply stage of a dream pipeline. You rewrite a single scope\'s memory.md and summary.md based on recent group conversations. Reply with strict JSON only — no prose, no fences.';
+    ? '你是梦境流水线的 Apply 阶段。你会根据最近的 session 对话重写单个 scope 的 memory.md 和 summary.md。请只回复严格 JSON，不要输出说明文字或 markdown fence。memory_md 和 summary_md 的自然语言内容必须使用中文；JSON key、scope、schema 字段和代码标识符保持英文。'
+    : 'You are the Apply stage of a dream pipeline. You rewrite a single scope\'s memory.md and summary.md based on recent session conversations. Reply with strict JSON only — no prose, no fences.';
 }
 
 /**

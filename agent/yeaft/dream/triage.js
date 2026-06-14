@@ -41,8 +41,8 @@ import { render } from './prompts/index.js';
 
 function triageSystem(language) {
   return String(language || '').toLowerCase().startsWith('zh')
-    ? '你是梦境流水线的 Triage 阶段，负责判断最近的群组对话会影响哪些 scope。请只回复严格 JSON，不要输出说明文字或 markdown fence。自然语言内容使用中文；JSON key、scope 和枚举值保持英文。'
-    : 'You are the Triage stage of a dream pipeline that decides which scopes a recent group conversation should affect. Reply with strict JSON only — no prose, no markdown fences.';
+    ? '你是梦境流水线的 Triage 阶段，负责判断最近的 session 对话会影响哪些 scope。请只回复严格 JSON，不要输出说明文字或 markdown fence。自然语言内容使用中文；JSON key、scope 和枚举值保持英文。'
+    : 'You are the Triage stage of a dream pipeline that decides which scopes a recent session conversation should affect. Reply with strict JSON only — no prose, no markdown fences.';
 }
 
 /**

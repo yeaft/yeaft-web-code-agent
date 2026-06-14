@@ -1,40 +1,49 @@
+<!-- lang:en -->
 # Dream Summarize — Per-Scope Compression
 
-You are summarizing the **memory segments** of a single scope into a
-short, dense prose summary. This is NOT extraction — the segments
-already exist. Your job is to compress them into a paragraph the
-session can keep resident in working memory.
+You are summarizing the **memory segments** of a single scope into a short, dense prose summary. This is NOT extraction — the segments already exist. Your job is to compress them into a paragraph the session can keep resident in working memory.
 
-The target scope is `{{scope}}` and contains `{{segmentCount}}`
-segments listed below.
+The target scope is `{{scope}}` and contains `{{segmentCount}}` segments listed below.
 
 ## Goals
 
-- A reader (the assistant in a future turn) should grasp **the gist of
-  this scope** from your summary alone, without reading the segments.
-- Detail is OK — but compress. Drop redundancy, keep specifics that
-  matter (names, numbers, decisions, durable views).
-- Stay faithful: do not invent facts that are not in the segments. Do
-  not "soften" decisions or opinions.
-- Bilingual: write in the same language the segments are mostly in.
+- A future session member should grasp the gist of this scope from your summary alone, without reading all segments.
+- Keep specifics that matter: names, numbers, decisions, durable views, current blockers, and next steps.
+- Stay faithful: do not invent facts not present in the segments. Do not soften decisions or opinions.
+- Write in the same language the segments are mostly in, unless the surrounding language directive says otherwise.
 
 ## Length
 
-- Target **≤ {{tokenBudget}} tokens**.
-- One paragraph for small scopes; two or three short paragraphs grouped
-  by theme for larger scopes. No bullet lists, no headings.
+- Target ≤ `{{tokenBudget}}` tokens.
+- One paragraph for small scopes; two or three compact paragraphs for larger scopes.
+- Prefer dense prose over bullet lists unless bullets are clearly more compact.
 
-## What NOT to do
-
-- Don't list every segment one by one — that defeats compression.
-- Don't quote verbatim chunks of segment bodies.
-- Don't add meta-commentary ("the segments show that..."). Speak
-  directly about the subject.
-
-## Segments
-
+Segments:
 {{segments}}
 
-## Output
+Return only the summary text.
 
-Reply with the prose summary only. No preamble, no JSON, no fences.
+<!-- lang:zh -->
+# Dream Summarize — Per-Scope Compression
+
+你正在把单个 scope 的 **memory segments** 压缩成一段简短、密集的 prose summary。这不是抽取 —— segments 已经存在。你的任务是把它们压缩成 session 可以常驻在工作记忆里的摘要。
+
+目标 scope 是 `{{scope}}`，包含下面列出的 `{{segmentCount}}` 个 segments。
+
+## 目标
+
+- 未来的 session member 只读 summary，也应能理解这个 scope 的核心意思。
+- 保留重要具体信息：名字、数字、决策、稳定观点、当前阻塞和下一步。
+- 忠于事实：不要编造 segments 中没有的事实。不要弱化已经明确的决策或观点。
+- 使用 segments 主要使用的语言；如果外层语言指令另有要求，以外层语言指令为准。
+
+## 长度
+
+- 目标 ≤ `{{tokenBudget}}` tokens。
+- 小 scope 用一段；较大 scope 用两到三个紧凑段落。
+- 除非 bullet 明显更紧凑，否则优先使用密集自然段。
+
+Segments:
+{{segments}}
+
+只返回 summary 文本。
