@@ -14,6 +14,7 @@ import { createHash } from 'crypto';
 // layout AND rewrites pre-rename per-message frontmatter (groupId → sessionId).
 // Idempotent via the `.yeaft-migration.done` sentinel file.
 import { migrateSessions } from './migrate/sessions.js';
+import { readWorkDirRegistry, yeaftDirForWorkDir } from './sessions/session-crud.js';
 import { bundledYeaftSkillsDir } from './skills.js';
 
 /**
@@ -244,11 +245,41 @@ export function initYeaftDir(dir) {
       console.log(`[yeaft] session migration complete (${res.moved} dirs moved, ${res.frontmatterRewrites} messages rewritten${res.warnings?.length ? `, ${res.warnings.length} warnings` : ''})`);
       if (res.warnings?.length) for (const w of res.warnings) console.warn(`[yeaft] migration: ${w}`);
     }
+    migrateRegisteredWorkDirs(root);
   } catch (err) {
     console.warn(`[yeaft] session migration failed (continuing): ${err?.message || err}`);
   }
 
   return { dir: root, created, writable, warnings, seededSkills };
+}
+
+function migrateRegisteredWorkDirs(root) {
+  let registry;
+  try {
+    registry = readWorkDirRegistry(root);
+  } catch (err) {
+    console.warn(`[yeaft] workdir registry migration skipped: ${err?.message || err}`);
+    return;
+  }
+
+  const workDirs = new Set();
+  for (const entry of Object.values(registry || {})) {
+    if (typeof entry === 'string' && entry) workDirs.add(entry);
+  }
+
+  for (const workDir of workDirs) {
+    const workYeaftDir = yeaftDirForWorkDir(workDir);
+    if (!existsSync(workYeaftDir)) continue;
+    try {
+      const res = migrateSessions(workYeaftDir);
+      if (res && res.migrated) {
+        console.log(`[yeaft] workdir session migration complete for ${workYeaftDir} (${res.moved} dirs moved, ${res.frontmatterRewrites} messages rewritten${res.warnings?.length ? `, ${res.warnings.length} warnings` : ''})`);
+        if (res.warnings?.length) for (const w of res.warnings) console.warn(`[yeaft] workdir migration: ${w}`);
+      }
+    } catch (err) {
+      console.warn(`[yeaft] workdir session migration failed for ${workYeaftDir} (continuing): ${err?.message || err}`);
+    }
+  }
 }
 
 // ─── Bundled skills seeding ───────────────────────────────

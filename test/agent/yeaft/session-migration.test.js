@@ -4,6 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 import { migrateSessions } from '../../../agent/yeaft/migrate/sessions.js';
+import { initYeaftDir } from '../../../agent/yeaft/init.js';
 import { openSegmentIndex } from '../../../agent/yeaft/memory/index-db.js';
 import { parseSegments } from '../../../agent/yeaft/memory/segment.js';
 import { buildRelevantScopes } from '../../../agent/yeaft/sessions/pre-flow.js';
@@ -95,6 +96,37 @@ describe('session storage migration', () => {
       roster: ['omni', 'linus'],
       defaultVpId: 'linus',
       workDir: '/tmp/project',
+    });
+  });
+
+  it('migrates registered workdir session roots during init', () => {
+    const root = tempRoot();
+    const workDir = tempRoot();
+    const workYeaftDir = join(workDir, '.yeaft');
+    const legacyDir = join(workYeaftDir, 'groups', 'session_workdir');
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(root, 'group-workdirs.json'), JSON.stringify({
+      session_workdir: workDir,
+    }, null, 2));
+    writeFileSync(join(legacyDir, 'group.json'), JSON.stringify({
+      id: 'session_workdir',
+      name: 'Workdir Session',
+      roster: ['omni'],
+      defaultVpId: 'omni',
+      workDir,
+      createdAt: '2026-06-12T00:00:00.000Z',
+    }, null, 2));
+
+    initYeaftDir(root);
+
+    expect(existsSync(join(workYeaftDir, 'sessions', 'session_workdir', 'session.json'))).toBe(true);
+    expect(existsSync(join(workYeaftDir, 'groups', 'session_workdir'))).toBe(false);
+    expect(readJson(join(workYeaftDir, 'sessions', 'session_workdir', 'session.json'))).toMatchObject({
+      id: 'session_workdir',
+      name: 'Workdir Session',
+      roster: ['omni'],
+      defaultVpId: 'omni',
+      workDir,
     });
   });
 

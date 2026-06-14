@@ -71,8 +71,42 @@ import { buildMcpFlattenedTools } from './tools/mcp-tools.js';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
+let sessionLoadPromise = null;
+let sessionReadyPromise = null;
 
 let threadClassifier = defaultClassifyThread;
+
+async function loadRuntimeSession() {
+  if (session) return session;
+  if (!sessionLoadPromise) {
+    sessionLoadPromise = (async () => {
+      const yeaftDir = ctx.CONFIG?.yeaftDir;
+      const loaded = await loadSession({
+        ...(yeaftDir && { dir: yeaftDir }),
+        skipMCP: false,
+        skipSkills: false,
+        serverMode: true,
+      });
+      session = loaded;
+      installYeaftRuntimeBridge(session);
+      try {
+        if (session.engine && typeof session.engine.setSubAgentEventSink === 'function') {
+          session.engine.setSubAgentEventSink((agentId, evt) => {
+            try {
+              sendSessionEvent({ type: 'sub_agent_event', agentId, payload: evt });
+            } catch { /* ignore */ }
+          });
+        }
+      } catch (err) {
+        console.warn('[Yeaft] setSubAgentEventSink wiring failed:', err?.message || err);
+      }
+      return session;
+    })().finally(() => {
+      sessionLoadPromise = null;
+    });
+  }
+  return sessionLoadPromise;
+}
 
 function refreshLiveSessionConfig() {
   if (!session) return;
@@ -2738,31 +2772,20 @@ export function buildVpQueryOpts({ vpId, sessionCoordinator, sessionId, envelope
  */
 async function ensureSessionLoaded() {
   if (session) return;
-
-  const yeaftDir = ctx.CONFIG?.yeaftDir;
-  session = await loadSession({
-    ...(yeaftDir && { dir: yeaftDir }),
-    skipMCP: false,
-    skipSkills: false,
-    serverMode: true,
-  });
-
-  installYeaftRuntimeBridge(session);
-
-  try {
-    if (session.engine && typeof session.engine.setSubAgentEventSink === 'function') {
-      session.engine.setSubAgentEventSink((agentId, evt) => {
-        try {
-          sendSessionEvent({ type: 'sub_agent_event', agentId, payload: evt });
-        } catch { /* ignore */ }
-      });
-    }
-  } catch (err) {
-    console.warn('[Yeaft] setSubAgentEventSink wiring failed:', err?.message || err);
+  if (!sessionReadyPromise) {
+    sessionReadyPromise = finishSessionReady().finally(() => {
+      sessionReadyPromise = null;
+    });
   }
+  return sessionReadyPromise;
+}
+
+async function finishSessionReady() {
+  await loadRuntimeSession();
 
   // Bug 8: clean up legacy `.archived-*` group dirs at boot.
   try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
     if (yeaftDir) {
       const removed = purgeArchivedSessions(yeaftDir);
       if (removed && removed.length > 0) {
@@ -3864,15 +3887,7 @@ export async function handleYeaftLoadHistory(msg) {
     sessionId ? store.loadRecentBySession(sessionId, lim) : store.loadRecent(lim);
 
   if (!session) {
-    const yeaftDir = ctx.CONFIG?.yeaftDir;
-    session = await loadSession({
-      ...(yeaftDir && { dir: yeaftDir }),
-      skipMCP: false,
-      skipSkills: false,
-      serverMode: true,
-    });
-    installYeaftRuntimeBridge(session);
-
+    await loadRuntimeSession();
     yeaftConversationId = `yeaft-${Date.now()}`;
     refreshLiveSessionConfig();
     hydrateYeaftStatusFromSession(session, { reason: 'history_load', emitEvent: true });
@@ -4179,14 +4194,8 @@ export async function resetYeaftSession() {
   }
 
   try {
-    const yeaftDir = ctx.CONFIG?.yeaftDir;
-    session = await loadSession({
-      ...(yeaftDir && { dir: yeaftDir }),
-      skipMCP: false,
-      skipSkills: false,
-      serverMode: true,
-    });
-    installYeaftRuntimeBridge(session);
+    sessionLoadPromise = null;
+    await loadRuntimeSession();
 
     yeaftConversationId = `yeaft-${Date.now()}`;
     hydrateYeaftStatusFromSession(session, { reason: 'reset', emitEvent: true });
