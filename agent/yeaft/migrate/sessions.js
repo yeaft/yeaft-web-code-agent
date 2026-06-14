@@ -106,6 +106,7 @@ export function migrateSessions(yeaftDir) {
   }
 
   let moved = 0;
+  moved += repairV3MovedLiveChatDirs(sessionsRoot, chatsRoot, warnings);
 
   // Reconcile any half-migrated sessions/<id>/ from a prior crash, including
   // v3's wrong `meta.json` target. Repair before moving on so the session is
@@ -171,6 +172,7 @@ export function migrateSessions(yeaftDir) {
       warnings,
       `memory/session/${id}`
     );
+    rewriteSegmentScopes(join(memSessionRoot, id), 'group', id, warnings);
     if (legacyChatIds.includes(id)) {
       rewriteSegmentScopes(join(memSessionRoot, id), 'chat', id, warnings);
     }
@@ -449,6 +451,63 @@ function listDirs(root) {
 
 function listLegacyChatDirs(root) {
   return listDirs(root).filter((id) => existsSync(join(root, id, 'chat.json')));
+}
+
+function repairV3MovedLiveChatDirs(sessionsRoot, chatsRoot, warnings) {
+  let moved = 0;
+  for (const id of listDirs(sessionsRoot)) {
+    const src = join(sessionsRoot, id);
+    if (hasAnySessionMetadataFile(src)) continue;
+    if (!hasChatModeConversationData(src, id)) continue;
+    const dst = join(chatsRoot, id);
+    try {
+      mkdirSync(chatsRoot, { recursive: true });
+      if (existsSync(dst)) mergeLegacyDirIntoSession(src, dst, warnings, `sessions/${id}`);
+      else renameSync(src, dst);
+      removeDirIfEmpty(src, warnings, `sessions/${id}`);
+      if (!existsSync(src)) moved++;
+      warnings.push(`restored live chat history from sessions/${id} to chats/${id}`);
+    } catch (err) {
+      warnings.push(`failed to restore live chat history sessions/${id}: ${err.message}`);
+    }
+  }
+  return moved;
+}
+
+function hasAnySessionMetadataFile(dir) {
+  return existsSync(join(dir, 'session.json'))
+    || existsSync(join(dir, 'group.json'))
+    || existsSync(join(dir, 'chat.json'))
+    || existsSync(join(dir, 'meta.json'));
+}
+
+function hasChatModeConversationData(dir, id) {
+  const roots = [
+    join(dir, 'conversation', 'messages'),
+    join(dir, 'conversation', 'cold'),
+  ];
+  for (const root of roots) {
+    if (hasChatIdMarkdown(root, id)) return true;
+  }
+  return false;
+}
+
+function hasChatIdMarkdown(dir, id) {
+  if (!existsSync(dir)) return false;
+  let entries = [];
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return false; }
+  const re = new RegExp(`^chatId:\\s*${escapeRe(id)}\\s*$`, 'm');
+  for (const ent of entries) {
+    const path = join(dir, ent.name);
+    if (ent.isDirectory()) {
+      if (hasChatIdMarkdown(path, id)) return true;
+    } else if (ent.isFile() && ent.name.endsWith('.md')) {
+      try {
+        if (re.test(readFileSync(path, 'utf8'))) return true;
+      } catch { /* ignore unreadable candidate */ }
+    }
+  }
+  return false;
 }
 
 function resolveLegacyChatMemoryIds({ chatIds, chatsRoot, sessionsRoot, memoryRoot }) {

@@ -335,6 +335,29 @@ describe('session storage migration', () => {
     expect(readFileSync(join(chatMessagesDir, 'turn.md'), 'utf8')).toContain('chatId: chat_live');
   });
 
+  it('restores live chat-mode history dirs that v3 moved under sessions', () => {
+    const root = tempRoot();
+    writeFileSync(join(root, '.yeaft-migration.done'), JSON.stringify({ version: 3 }, null, 2));
+    const movedMessagesDir = join(root, 'sessions', 'chat_v3_live', 'conversation', 'messages');
+    mkdirSync(movedMessagesDir, { recursive: true });
+    writeFileSync(join(movedMessagesDir, 'turn.md'), [
+      '---',
+      'id: msg_1',
+      'chatId: chat_v3_live',
+      'role: user',
+      '---',
+      'hello',
+      '',
+    ].join('\n'));
+
+    const result = migrateSessions(root);
+
+    expect(result.migrated).toBe(true);
+    expect(existsSync(join(root, 'sessions', 'chat_v3_live'))).toBe(false);
+    expect(readFileSync(join(root, 'chats', 'chat_v3_live', 'conversation', 'messages', 'turn.md'), 'utf8'))
+      .toContain('chatId: chat_v3_live');
+  });
+
   it('does not migrate current chat-mode memory scopes without legacy chat.json metadata', () => {
     const root = tempRoot();
     writeFileSync(join(root, '.yeaft-migration.done'), JSON.stringify({ version: 3 }, null, 2));
@@ -404,7 +427,14 @@ describe('session storage migration', () => {
     mkdirSync(join(root, 'memory', 'session', 'session_memory', 'vp', 'omni'), { recursive: true });
     writeFileSync(join(root, 'memory', 'session', 'session_memory', 'summary.md'), 'summary');
     writeFileSync(join(root, 'memory', 'session', 'session_memory', 'summary.zh.md'), '摘要');
-    writeFileSync(join(root, 'memory', 'session', 'session_memory', 'memory.md'), 'resident');
+    writeFileSync(join(root, 'memory', 'session', 'session_memory', 'memory.md'), [
+      '---',
+      'id: resident',
+      'scope: group/session_memory',
+      '---',
+      'resident',
+      '',
+    ].join('\n'));
     writeFileSync(join(root, 'memory', 'session', 'session_memory', 'vp', 'omni', 'summary.zh.md'), 'vp 摘要');
     writeFileSync(join(segDir, 'seg.md'), [
       '---',
@@ -435,7 +465,8 @@ describe('session storage migration', () => {
       .toContain('scope: session/session_memory');
     expect(readFileSync(join(root, 'memory', 'sessions', 'session_memory', 'summary.md'), 'utf8')).toBe('summary');
     expect(readFileSync(join(root, 'memory', 'sessions', 'session_memory', 'summary.zh.md'), 'utf8')).toBe('摘要');
-    expect(readFileSync(join(root, 'memory', 'session', 'session_memory', 'memory.md'), 'utf8')).toBe('resident');
+    expect(readFileSync(join(root, 'memory', 'session', 'session_memory', 'memory.md'), 'utf8'))
+      .toContain('scope: session/session_memory');
     expect(readFileSync(join(root, 'memory', 'sessions', 'session_memory', 'vp', 'omni', 'summary.zh.md'), 'utf8')).toBe('vp 摘要');
     expect(after.get('seg').scope).toBe('session/session_memory');
     after.close();
