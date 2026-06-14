@@ -166,7 +166,8 @@ export function migrateSessions(yeaftDir) {
   for (const family of ['group', 'chat']) {
     const root = join(memoryRoot, family);
     if (!existsSync(root)) continue;
-    for (const id of listDirs(root)) {
+    const ids = family === 'chat' ? chatIds.filter((id) => existsSync(join(root, id))) : listDirs(root);
+    for (const id of ids) {
       const src = join(root, id);
       const dst = join(memSessionRoot, id);
       if (existsSync(dst)) {
@@ -193,7 +194,7 @@ export function migrateSessions(yeaftDir) {
   }
   const amsChatRoot = join(memoryRoot, 'chats');
   if (existsSync(amsChatRoot)) {
-    for (const id of listDirs(amsChatRoot)) {
+    for (const id of chatIds.filter((chatId) => existsSync(join(amsChatRoot, chatId)))) {
       const srcDir = join(amsChatRoot, id);
       const dstDir = join(memSessionsAmsRoot, id);
       if (existsSync(dstDir)) {
@@ -207,7 +208,7 @@ export function migrateSessions(yeaftDir) {
   // 6. Rewrite SQLite FTS index scope strings via the shared index-db module
   //    (which already handles ABI loading). Idempotent: WHERE clause skips
   //    already-rewritten rows. Synchronous: better-sqlite3 has no async API.
-  rewriteFtsScopes(memoryRoot, warnings);
+  rewriteFtsScopes(memoryRoot, warnings, { legacyChatIds: chatIds });
 
   // 7. Per-message frontmatter rewrite. Walks both the legacy flat
   //    conversation directory and every per-session conversation directory
@@ -275,7 +276,7 @@ function backupConversationTrees(yeaftDir, backupRoot, warnings) {
   }
 }
 
-function rewriteFtsScopes(memoryRoot, warnings) {
+function rewriteFtsScopes(memoryRoot, warnings, { legacyChatIds = [] } = {}) {
   const dbPath = join(memoryRoot, 'index.db');
   if (!existsSync(dbPath)) return;
   // Best-effort: index-db.js is the single ABI-load site, so we route through
@@ -291,7 +292,16 @@ function rewriteFtsScopes(memoryRoot, warnings) {
     const db = idx._db;
     db.exec('BEGIN');
     db.exec("UPDATE memory_segments SET scope = REPLACE(scope, 'group/', 'session/') WHERE scope LIKE 'group/%'");
-    db.exec("UPDATE memory_segments SET scope = REPLACE(scope, 'chat/', 'session/') WHERE scope LIKE 'chat/%'");
+    const stmt = db.prepare(`
+      UPDATE memory_segments
+      SET scope = ? || substr(scope, ?)
+      WHERE scope = ? OR scope LIKE ?
+    `);
+    for (const id of legacyChatIds) {
+      const from = `chat/${id}`;
+      const to = `session/${id}`;
+      stmt.run(to, from.length + 1, from, `${from}/%`);
+    }
     db.exec('COMMIT');
   } catch (err) {
     try { idx._db.exec('ROLLBACK'); } catch { /* ignore */ }

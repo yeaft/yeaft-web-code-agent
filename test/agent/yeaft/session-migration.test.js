@@ -4,6 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 import { migrateSessions } from '../../../agent/yeaft/migrate/sessions.js';
+import { openSegmentIndex } from '../../../agent/yeaft/memory/index-db.js';
 
 const roots = [];
 
@@ -308,5 +309,53 @@ describe('session storage migration', () => {
     expect(existsSync(join(root, 'chats', 'chat_live', 'conversation', 'messages', 'turn.md'))).toBe(true);
     expect(existsSync(join(root, 'sessions', 'chat_live'))).toBe(false);
     expect(readFileSync(join(chatMessagesDir, 'turn.md'), 'utf8')).toContain('chatId: chat_live');
+  });
+
+  it('does not migrate current chat-mode memory scopes without legacy chat.json metadata', () => {
+    const root = tempRoot();
+    writeFileSync(join(root, '.yeaft-migration.done'), JSON.stringify({ version: 3 }, null, 2));
+    const legacyChatDir = join(root, 'chats', 'chat_legacy_memory');
+    mkdirSync(legacyChatDir, { recursive: true });
+    writeFileSync(join(legacyChatDir, 'chat.json'), JSON.stringify({
+      id: 'chat_legacy_memory',
+      displayName: 'Legacy Memory Chat',
+      vpId: 'omni',
+      createdAt: '2026-06-12T00:00:00.000Z',
+    }, null, 2));
+    mkdirSync(join(root, 'memory', 'chat', 'chat_live_memory', 'segments'), { recursive: true });
+    mkdirSync(join(root, 'memory', 'chat', 'chat_legacy_memory', 'segments'), { recursive: true });
+
+    const idx = openSegmentIndex(join(root, 'memory', 'index.db'));
+    idx.upsert({
+      id: 'live',
+      scope: 'chat/chat_live_memory',
+      kind: 'note',
+      tags: [],
+      body: 'live',
+      sourceMessages: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    idx.upsert({
+      id: 'legacy',
+      scope: 'chat/chat_legacy_memory',
+      kind: 'note',
+      tags: [],
+      body: 'legacy',
+      sourceMessages: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    idx.close();
+
+    const result = migrateSessions(root);
+    const after = openSegmentIndex(join(root, 'memory', 'index.db'));
+
+    expect(result.migrated).toBe(true);
+    expect(existsSync(join(root, 'memory', 'chat', 'chat_live_memory'))).toBe(true);
+    expect(existsSync(join(root, 'memory', 'session', 'chat_legacy_memory'))).toBe(true);
+    expect(after.get('live').scope).toBe('chat/chat_live_memory');
+    expect(after.get('legacy').scope).toBe('session/chat_legacy_memory');
+    after.close();
   });
 });
