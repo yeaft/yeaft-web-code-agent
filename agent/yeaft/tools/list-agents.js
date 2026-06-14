@@ -12,16 +12,17 @@
 import { defineTool } from './types.js';
 import { agentBelongsToCaller, getAgentRegistry } from './agent.js';
 import { isTerminalAgentStatus } from '../sub-agent/status.js';
-import { snapshotLiveness } from '../sub-agent/liveness.js';
+import { diagnoseAgentLiveness } from '../sub-agent/liveness.js';
 
 export default defineTool({
   name: 'ListAgents',
   description: `List all sub-agents and their current status.
 
 Returns id, name, status, mission/task summary, durable outputFile path,
-liveness counters (toolUseCount, tokenCount, msSinceLastEvent, recentTools)
-and message count for each agent. Use to monitor parallel work in flight,
-and Read \`outputFile\` for any single agent if you need its full timeline.
+liveness counters (toolUseCount, tokenCount, msSinceLastEvent, recentTools),
+stale/stalled diagnostics, result tail, and message count for each agent. Use
+this as the primary non-blocking monitor for async sub-agent work, and Read
+\`outputFile\` for any single agent if you need its full timeline.
 
 By default only non-closed agents are returned. Pass include_closed=true
 to also list closed/failed/abandoned/completed agents.`,
@@ -49,7 +50,10 @@ to also list closed/failed/abandoned/completed agents.`,
     for (const [id, agent] of agents) {
       if (!agentBelongsToCaller(agent, ctx)) continue;
       if (!includeTerminal && isTerminalAgentStatus(agent.status)) continue;
-      const liveness = snapshotLiveness(agent.liveness, now);
+      const liveness = diagnoseAgentLiveness(agent, { now });
+      const resultText = (typeof agent.result === 'string' && agent.result)
+        ? agent.result
+        : (agent.lastResult || '');
       agentList.push({
         id,
         name: agent.name,
@@ -59,8 +63,13 @@ to also list closed/failed/abandoned/completed agents.`,
         liveness,
         lastEventAt: liveness.lastEventAt,
         msSinceLastEvent: liveness.msSinceLastEvent,
+        lastEventType: liveness.lastEventType,
+        stale: liveness.stale,
+        stalled: liveness.stalled,
+        diagnostic: liveness.diagnostic,
         error: agent.error || null,
         hasResult: Boolean(agent.result || agent.lastResult),
+        resultTail: resultText ? resultText.slice(-1000) : '',
         messages: Array.isArray(agent.messages) ? agent.messages.length : 0,
         turns: agent.usage?.turns || 0,
         createdAt: agent.createdAt,

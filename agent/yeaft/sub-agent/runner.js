@@ -41,7 +41,7 @@ import { buildSpawnedPreamble } from './spawned-prompt.js';
 import { STATUS, isTerminalAgentStatus } from './status.js';
 import { createOutputLog } from './output-log.js';
 import { makeLiveness, bumpLivenessFromEvent } from './liveness.js';
-import { enqueueTerminalNotification } from './notifications.js';
+import { consumeNotificationForAgent, enqueueTerminalNotification } from './notifications.js';
 // NOTE: tickAgent lives in `../tools/agent.js`, which itself imports this
 // module (startSubAgent). To avoid the ES-module circular-import gotcha
 // where one side sees an undefined export at module-init time, we import
@@ -223,8 +223,43 @@ export function startSubAgent(agent, deps = {}) {
  *      CloseAgent (status=='closed') OR the idle watchdog firing
  *      (status=='abandoned').
  */
+function buildWallTimeBudgetResult(agent, reason) {
+  return {
+    status: 'budget_exceeded',
+    partial_output: agent.partial_output || agent.lastResult || agent.result || '',
+    reason,
+    usage: { ...(agent.usage || {}) },
+  };
+}
+
+function armWallTimeWatchdog(agent, deps) {
+  const wallTimeMs = agent?.budget?.wall_time_ms;
+  if (typeof wallTimeMs !== 'number' || !Number.isFinite(wallTimeMs) || wallTimeMs <= 0) {
+    return null;
+  }
+  const startedAt = agent.usage?.startedAt || Date.now();
+  const remainingMs = Math.max(0, startedAt + wallTimeMs - Date.now());
+  const timer = setTimeout(() => {
+    if (isTerminalAgentStatus(agent.status)) return;
+    const reason = `wall_time_ms (${wallTimeMs}) exceeded`;
+    agent.result = buildWallTimeBudgetResult(agent, reason);
+    agent.partial_output = agent.result.partial_output || '';
+    if (agent.abortController && !agent.abortController.signal.aborted) {
+      try { agent.abortController.abort(reason); } catch { /* ignore */ }
+    }
+    transitionTerminal(agent, STATUS.COMPLETED, {
+      error: reason,
+      diagnostic: 'wall_time_watchdog',
+      deps,
+    });
+  }, remainingMs);
+  timer.unref?.();
+  return timer;
+}
+
 async function driveSubAgent(agent, subEngine, vpPersona, deps) {
   const onEvent = typeof deps.onEvent === 'function' ? deps.onEvent : null;
+  const wallTimeWatchdog = armWallTimeWatchdog(agent, deps);
   const idleAbandonMs = typeof deps.idleAbandonMs === 'number' && deps.idleAbandonMs > 0
     ? deps.idleAbandonMs : IDLE_ABANDON_MS;
 
@@ -262,6 +297,21 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
         agent.status = STATUS.IDLE;
         agent.idleSince = Date.now();
         emit({ type: 'sub_agent_status', status: STATUS.IDLE });
+        if (agent.result || agent.lastResult) {
+          try {
+            enqueueTerminalNotification({
+              agentId: agent.id,
+              agentName: agent.name,
+              status: STATUS.IDLE,
+              result: typeof agent.result === 'string' ? agent.result : (agent.lastResult || ''),
+              error: null,
+              outputFile: agent.outputFile || null,
+              turns: agent.usage?.turns || 0,
+              parentVpId: agent.parentVpId || deps.parentVpId || null,
+              parentSessionId: agent.parentSessionId || deps.parentSessionId || null,
+            });
+          } catch { /* best-effort notification */ }
+        }
 
         const reason = await waitUntilResumed(agent, idleAbandonMs);
         if (reason === 'abandoned') {
@@ -398,6 +448,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
       emit({ type: 'sub_agent_turn_end', content: assistantText });
     }
   } finally {
+    if (wallTimeWatchdog) clearTimeout(wallTimeWatchdog);
     // Always clean up driver-owned resources. We intentionally do NOT
     // unset agent.result / agent.lastResult / agent.liveness / agent.
     // outputFile — those are observable by the parent after termination.
@@ -451,7 +502,10 @@ function finalizeTerminal(agent, status, { error, deps } = {}) {
   }
 
   // Push the re-entry notification so the parent learns about this
-  // even if it forgot to call WaitAgent.
+  // even if it forgot to call WaitAgent. A prior idle notification may
+  // still be indexed by agentId after the parent consumed the queue; remove
+  // it so terminal state can replace that non-terminal progress notice.
+  try { consumeNotificationForAgent(agent.id); } catch { /* ignore */ }
   try {
     const budgetResult = agent.result && typeof agent.result === 'object'
       && agent.result.status === 'budget_exceeded'

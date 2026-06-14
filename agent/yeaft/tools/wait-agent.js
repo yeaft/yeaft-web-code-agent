@@ -33,7 +33,7 @@
 import { defineTool } from './types.js';
 import { agentBelongsToCaller, getAgentRegistry } from './agent.js';
 import { isTerminalAgentStatus, STATUS } from '../sub-agent/status.js';
-import { snapshotLiveness } from '../sub-agent/liveness.js';
+import { diagnoseAgentLiveness } from '../sub-agent/liveness.js';
 import { consumeNotificationForAgent } from '../sub-agent/notifications.js';
 
 /**
@@ -43,7 +43,7 @@ import { consumeNotificationForAgent } from '../sub-agent/notifications.js';
  * tail-positioned nudges when `result` is long).
  *
  * @param {string} status
- * @param {{ timedOut?: boolean, runningInBackground?: boolean, budgetExceeded?: boolean }} [opts]
+ * @param {{ timedOut?: boolean, runningInBackground?: boolean, budgetExceeded?: boolean, stale?: boolean }} [opts]
  */
 function nextStepsFor(status, opts = {}) {
   if (opts.budgetExceeded) {
@@ -55,15 +55,20 @@ function nextStepsFor(status, opts = {}) {
       'as an ordinary successful completion.'
     );
   }
+  if (opts.timedOut && opts.stale) {
+    return (
+      'Sub-agent still has a running record but appears stalled. Do NOT keep ' +
+      'calling WaitAgent in a loop. Use ListAgents/outputFile to inspect it, ' +
+      'CloseAgent if you want to stop it, or report the stalled background ' +
+      'task and start a fresh agent if needed.'
+    );
+  }
   if (opts.timedOut) {
     return (
-      'Sub-agent is STILL RUNNING in the background — it does NOT need ' +
-      'another PromptAgent to keep going. Decide: (a) call WaitAgent again ' +
-      'with a larger timeout_ms to keep waiting, (b) call CloseAgent if ' +
-      'you want to cut it short and use partial output, or (c) tell the ' +
-      'user the agent is still working and ask whether to keep waiting. ' +
-      'Read `outputFile` for the full event timeline. Do NOT end your turn ' +
-      'silently.'
+      'Sub-agent is running in the background; it does not need another ' +
+      'PromptAgent to keep going. Continue the main task or tell the user it ' +
+      'is still running. Use ListAgents later for a non-blocking status check; ' +
+      'only call WaitAgent again if the user explicitly wants to wait.'
     );
   }
   switch (status) {
@@ -124,6 +129,7 @@ function errorNextSteps() {
  */
 function buildEnvelope(agent, { timedOut = false } = {}) {
   const status = agent.status;
+  const liveness = diagnoseAgentLiveness(agent);
   const budgetResult = agent.result && typeof agent.result === 'object'
     && agent.result.status === 'budget_exceeded'
     ? agent.result
@@ -134,13 +140,18 @@ function buildEnvelope(agent, { timedOut = false } = {}) {
         ? agent.result
         : (agent.lastResult || ''));
   const env = {
-    next_steps: nextStepsFor(status, { timedOut, budgetExceeded: !!budgetResult }),
+    next_steps: nextStepsFor(status, { timedOut, budgetExceeded: !!budgetResult, stale: liveness.stale }),
     agentId: agent.id,
     name: agent.name,
     status,
     error: agent.error || null,
     outputFile: agent.outputFile || null,
-    liveness: snapshotLiveness(agent.liveness),
+    liveness,
+    stale: liveness.stale,
+    stalled: liveness.stalled,
+    msSinceLastEvent: liveness.msSinceLastEvent,
+    lastEventType: liveness.lastEventType,
+    diagnostic: liveness.diagnostic,
     messages: Array.isArray(agent.messages) ? agent.messages.length : 0,
     turns: agent.usage?.turns || 0,
   };
@@ -188,7 +199,7 @@ NEVER end your turn silently right after WaitAgent — the user has not seen
 the sub-agent's reply yet; only you have. The orchestration loop is
 SpawnAgent → (PromptAgent ↔ WaitAgent)+ → CloseAgent → final reply to user.
 
-The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
+Compatibility tool. The default wait is a short 5000ms poll. Callers may request up to 300000ms (5 minutes), but this is no longer the primary sub-agent workflow; prefer SpawnAgent + ListAgents + completion notifications for async background work.`,
   parameters: {
     type: 'object',
     properties: {
@@ -200,7 +211,7 @@ The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
         type: 'number',
         minimum: 0,
         maximum: 300000,
-        description: 'Maximum time to wait in milliseconds (default: 30000, max: 300000 / 5 minutes)',
+        description: 'Maximum time to wait in milliseconds (default: 5000 short poll, max: 300000 / 5 minutes)',
       },
     },
     required: ['agent_id'],
@@ -209,7 +220,7 @@ The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
   async execute(input, ctx) {
-    const { agent_id, timeout_ms = 30000 } = input;
+    const { agent_id, timeout_ms = 5000 } = input;
     if (!agent_id) {
       return JSON.stringify({ next_steps: errorNextSteps(), error: 'agent_id is required' });
     }
@@ -234,6 +245,7 @@ The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
       return JSON.stringify(buildEnvelope(agent));
     }
     if (agent.status === STATUS.IDLE) {
+      consumeNotificationForAgent(agent.id);
       return JSON.stringify(buildEnvelope(agent));
     }
     if (ctx?.signal?.aborted) {
@@ -248,6 +260,7 @@ The default wait is 30000ms. Callers may request up to 300000ms (5 minutes).`,
         return JSON.stringify(buildEnvelope(agent));
       }
       if (agent.status === STATUS.IDLE) {
+        consumeNotificationForAgent(agent.id);
         return JSON.stringify(buildEnvelope(agent));
       }
       if (ctx?.signal?.aborted) {
