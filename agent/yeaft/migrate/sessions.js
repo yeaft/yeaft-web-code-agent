@@ -353,12 +353,12 @@ function rewriteAllMessageFrontmatter(yeaftDir, warnings) {
   // Legacy flat layout.
   for (const sub of ['messages', 'cold']) {
     const d = join(yeaftDir, 'conversation', sub);
-    if (existsSync(d)) dirs.push(d);
+    if (existsSync(d)) dirs.push({ dir: d, rewriteChatId: false });
   }
   // Defensive: chat mode dir (empty in production today, but cheap to scan).
   for (const sub of ['messages', 'cold']) {
     const d = join(yeaftDir, 'chat', sub);
-    if (existsSync(d)) dirs.push(d);
+    if (existsSync(d)) dirs.push({ dir: d, rewriteChatId: false });
   }
   // Per-session layout.
   const sessionsRoot = join(yeaftDir, 'sessions');
@@ -366,12 +366,12 @@ function rewriteAllMessageFrontmatter(yeaftDir, warnings) {
     for (const id of listDirs(sessionsRoot)) {
       for (const sub of ['messages', 'cold']) {
         const d = join(sessionsRoot, id, 'conversation', sub);
-        if (existsSync(d)) dirs.push(d);
+        if (existsSync(d)) dirs.push({ dir: d, rewriteChatId: true });
       }
     }
   }
-  for (const dir of dirs) {
-    count += rewriteFrontmatterInDir(dir, warnings);
+  for (const { dir, rewriteChatId } of dirs) {
+    count += rewriteFrontmatterInDir(dir, warnings, { rewriteChatId });
   }
   return count;
 }
@@ -384,7 +384,7 @@ function rewriteAllMessageFrontmatter(yeaftDir, warnings) {
  *
  * Returns the number of files mutated.
  */
-function rewriteFrontmatterInDir(dir, warnings) {
+function rewriteFrontmatterInDir(dir, warnings, { rewriteChatId = false } = {}) {
   let mutated = 0;
   let entries;
   try { entries = readdirSync(dir); } catch { return 0; }
@@ -408,7 +408,11 @@ function rewriteFrontmatterInDir(dir, warnings) {
       const eol = raw.slice(0, openLen).includes('\r\n') ? '\r\n' : '\n';
       const lines = fmBody.split(/\r?\n/);
       const legacyIdLineIndexes = lines
-        .map((line, index) => (/^(groupId|chatId):\s*/.test(line) ? index : -1))
+        .map((line, index) => {
+          if (/^groupId:\s*/.test(line)) return index;
+          if (rewriteChatId && /^chatId:\s*/.test(line)) return index;
+          return -1;
+        })
         .filter((index) => index !== -1);
       if (legacyIdLineIndexes.length === 0) continue;
       const hasSessionId = lines.some((l) => /^sessionId:\s*\S/.test(l));

@@ -312,6 +312,29 @@ describe('session storage migration', () => {
     expect(migratedMessage).not.toContain('chatId: chat_history');
   });
 
+  it('does not rewrite flat live chatId frontmatter to sessionId', () => {
+    const root = tempRoot();
+    writeFileSync(join(root, '.yeaft-migration.done'), JSON.stringify({ version: 3 }, null, 2));
+    const flatChatDir = join(root, 'chat', 'messages');
+    mkdirSync(flatChatDir, { recursive: true });
+    writeFileSync(join(flatChatDir, 'turn.md'), [
+      '---',
+      'id: msg_1',
+      'chatId: chat_flat',
+      'role: user',
+      '---',
+      'hello',
+      '',
+    ].join('\n'));
+
+    const result = migrateSessions(root);
+    const message = readFileSync(join(flatChatDir, 'turn.md'), 'utf8');
+
+    expect(result.migrated).toBe(true);
+    expect(message).toContain('chatId: chat_flat');
+    expect(message).not.toContain('sessionId: chat_flat');
+  });
+
   it('does not migrate current chat-mode history dirs without legacy chat.json metadata', () => {
     const root = tempRoot();
     writeFileSync(join(root, '.yeaft-migration.done'), JSON.stringify({ version: 3 }, null, 2));
