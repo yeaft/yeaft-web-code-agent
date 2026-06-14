@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildWorkerPrompt } from '../../../agent/yeaft/prompts.js';
+import { buildRouterPrompt, buildWorkerPrompt, renderLayerASummaries } from '../../../agent/yeaft/prompts.js';
 
 const SEEDED_OMNI_PERSONA = `You are Omni Assistant / 全能助手, a cross-domain, execution-focused general AI partner.
 
@@ -27,8 +27,8 @@ function workerPrompt(language) {
   });
 }
 
-function promptFor(vpPersona, language = 'zh-CN') {
-  return buildWorkerPrompt({ language, includeShape: false, toolNames: ['FileRead'], vpPersona });
+function promptFor(vpPersona, language = 'zh-CN', extra = {}) {
+  return buildWorkerPrompt({ language, includeShape: false, toolNames: ['FileRead'], vpPersona, ...extra });
 }
 
 describe('worker prompt language selection', () => {
@@ -206,5 +206,41 @@ describe('worker prompt language selection', () => {
 
     expect(corePrinciples).not.toContain('你是 Linus');
     expect(corePrinciples).not.toContain('你是 Yeaft');
+  });
+
+  it('renders session announcement labels without legacy group terminology', () => {
+    const zhPrompt = promptFor({ vpId: 'linus', displayName: 'Linus' }, 'zh-CN', {
+      sessionAnnouncement: '请保持 PR 流程。',
+    });
+    const enPrompt = promptFor({ vpId: 'linus', displayName: 'Linus' }, 'en', {
+      sessionAnnouncement: 'Keep the PR workflow.',
+    });
+
+    expect(zhPrompt).toContain('[会话公告]');
+    expect(zhPrompt).not.toContain('[群组公告]');
+    expect(enPrompt).toContain('[Session Announcement]');
+    expect(enPrompt).not.toContain('[Group Announcement]');
+  });
+
+  it('renders Layer-A session summaries without legacy group labels', () => {
+    const zhBlock = renderLayerASummaries({ user: '用户', group: '旧 key 内容', vp: 'VP' }, 'zh-CN');
+    const enBlock = renderLayerASummaries({ user: 'user', group: 'legacy key body', vp: 'vp' }, 'en');
+
+    expect(zhBlock).toContain('## 会话总结\n旧 key 内容');
+    expect(zhBlock).not.toContain('## 群组总结');
+    expect(enBlock).toContain('## summary_session\nlegacy key body');
+    expect(enBlock).not.toContain('## summary_group');
+  });
+
+  it('renders router prompt session summaries without legacy group labels', () => {
+    const prompt = buildRouterPrompt({
+      language: 'zh-CN',
+      includeShape: false,
+      summaries: { group: '旧 key 内容' },
+    });
+
+    expect(prompt).toContain('## 会话总结');
+    expect(prompt).not.toContain('## 群组总结');
+    expect(prompt).not.toContain('summary_group');
   });
 });

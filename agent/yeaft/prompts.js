@@ -197,7 +197,7 @@ const PROMPTS = {
     tools: (names) => `Available tools: ${names}`,
     // DESIGN-PROMPT §3 ④ — Active Scope header
     activeScopeHeader: '## active_scope',
-    groupAnnouncementHeader: '[Group Announcement]',
+    sessionAnnouncementHeader: '[Session Announcement]',
     // Project-doc (CLAUDE.md / AGENTS.md) header + one-liner intro. Both
     // filenames are recognized: CLAUDE.md is this project's convention,
     // AGENTS.md is the cross-tool convention (Codex / OpenAI Codex CLI).
@@ -214,7 +214,7 @@ const PROMPTS = {
     tools: (names) => `可用工具：${names}`,
     // DESIGN-PROMPT §3 ④ — Active Scope header
     activeScopeHeader: '## active_scope',
-    groupAnnouncementHeader: '[群组公告]',
+    sessionAnnouncementHeader: '[会话公告]',
     // 项目文档块：CLAUDE.md / AGENTS.md（与 Codex 通用命名兼容）。
     projectDocHeader: '[项目文档]',
     projectDocIntro:
@@ -348,7 +348,7 @@ export function buildSystemPrompt({
   // instructions. Empty/whitespace = no block emitted.
   const annText = (typeof sessionAnnouncement === 'string') ? sessionAnnouncement.trim() : '';
   if (annText) {
-    parts.push(`${lang.groupAnnouncementHeader || '[Group Announcement]'}\n${annText}`);
+    parts.push(`${lang.sessionAnnouncementHeader || '[Session Announcement]'}\n${annText}`);
   }
 
   // ─── 2. Date Metadata ──────────────────────────────────
@@ -831,25 +831,25 @@ function renderEnvelopeLine(envelope) {
 const LAYER_A_HEADERS = {
   en: {
     user: '## summary_user',
-    group: '## summary_group',
+    session: '## summary_session',
     vp: '## summary_vp',
   },
   zh: {
     user: '## 用户总结',
-    group: '## 群组总结',
+    session: '## 会话总结',
     vp: '## VP 总结',
   },
 };
 
 /**
- * Render Layer A's three rolling summaries (user / group / vp). Each is
+ * Render Layer A's three rolling summaries (user / session / vp). Each is
  * optional; missing or empty strings are skipped.
  *
  * Used by the Router prompt path only — the Worker prompt path receives
  * the same summaries through AMS Resident (see DESIGN-PROMPT §3 ③) and
  * MUST NOT call this in addition.
  *
- * @param {{user?: string, group?: string, vp?: string}} summaries
+ * @param {{user?: string, session?: string, group?: string, vp?: string}} summaries — `group` is a legacy alias for `session`.
  * @param {'en'|'zh'} language
  * @returns {string} concatenated block ('' when nothing to render)
  */
@@ -858,8 +858,15 @@ export function renderLayerASummaries(summaries, language = 'en') {
   const effectiveLang = normalizePromptLanguage(language);
   const headers = LAYER_A_HEADERS[effectiveLang] || LAYER_A_HEADERS.en;
   const out = [];
-  for (const key of ['user', 'group', 'vp']) {
-    const body = typeof summaries[key] === 'string' ? summaries[key].trim() : '';
+  const sessionSummary = typeof summaries.session === 'string'
+    ? summaries.session.trim()
+    : (typeof summaries.group === 'string' ? summaries.group.trim() : '');
+  const entries = [
+    ['user', typeof summaries.user === 'string' ? summaries.user.trim() : ''],
+    ['session', sessionSummary],
+    ['vp', typeof summaries.vp === 'string' ? summaries.vp.trim() : ''],
+  ];
+  for (const [key, body] of entries) {
     if (!body) continue;
     out.push(`${headers[key]}\n${body}`);
   }
@@ -955,7 +962,7 @@ export function renderPriorPlan(priorPlan, language = 'en') {
  *
  * @param {{
  *   language?: 'en'|'zh',
- *   summaries?: {user?: string, group?: string, vp?: string},
+ *   summaries?: {user?: string, session?: string, group?: string, vp?: string},
  *   routerContext?: string,
  *   priorPlan?: object|null,
  *   includeShape?: boolean,
