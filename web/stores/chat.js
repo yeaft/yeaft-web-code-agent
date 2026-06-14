@@ -1393,8 +1393,9 @@ export const useChatStore = defineStore('chat', {
           const prevThreadId = this._currentYeaftThreadId;
           const prevThreadTitle = this._currentYeaftThreadTitle;
           if (msgSessionId != null) this._currentYeaftSessionId = msgSessionId;
-          if (msg.vpId && msg.data.type !== 'result') this._currentYeaftVpId = msg.vpId;
-          if (msg.turnId && msg.data.type !== 'result') this._currentYeaftTurnId = msg.turnId;
+          const shouldStampResultContext = msg.data.type !== 'result' || msg.data.isHistoryReplay;
+          if (msg.vpId && shouldStampResultContext) this._currentYeaftVpId = msg.vpId;
+          if (msg.turnId && shouldStampResultContext) this._currentYeaftTurnId = msg.turnId;
           if (msg.threadId) this._currentYeaftThreadId = msg.threadId;
           if (msg.threadTitle || msg.title) this._currentYeaftThreadTitle = msg.threadTitle || msg.title;
           if (msg.threadId) {
