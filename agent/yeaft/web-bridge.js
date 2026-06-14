@@ -20,6 +20,7 @@
 
 import { join } from 'node:path';
 import { COLLAB_TOOL_POLICY } from './tools/registry.js';
+import { formatSize } from './archive/tool-results.js';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { buildDreamOutputSnapshot } from './dream/output-snapshot.js';
@@ -593,6 +594,27 @@ export function __testNormalizePersistedVisibleContent(content) {
     : '';
 }
 
+
+const HISTORY_TOOL_RESULT_MAX_BYTES = 1024;
+
+function truncateToolResultForHistoryDisplay(content) {
+  if (typeof content !== 'string') return content;
+  const originalBytes = Buffer.byteLength(content, 'utf8');
+  if (originalBytes <= HISTORY_TOOL_RESULT_MAX_BYTES) return content;
+
+  const chunks = [];
+  let used = 0;
+  for (const ch of content) {
+    const n = Buffer.byteLength(ch, 'utf8');
+    if (used + n > HISTORY_TOOL_RESULT_MAX_BYTES) break;
+    chunks.push(ch);
+    used += n;
+  }
+  return `${chunks.join('')}
+
+[history display truncated: tool result returned ${formatSize(originalBytes)}, capped at ${formatSize(HISTORY_TOOL_RESULT_MAX_BYTES)}; live LLM context, debug trace, and persisted storage keep the full result]`;
+}
+
 function isPersistedInternalMessage(m) {
   if (!m) return true;
   if (m._reflection || m.internal || m.systemOnly || m.systemOnlyMessage) return true;
@@ -637,7 +659,14 @@ function projectPersistedToHistoryEntry(m) {
 
 function projectPersistedToVisibleHistoryEntry(m) {
   const entry = projectPersistedToHistoryEntry(m);
-  return entry && (entry.role === 'user' || entry.role === 'assistant') ? entry : null;
+  if (!entry || (entry.role !== 'user' && entry.role !== 'assistant' && entry.role !== 'tool')) return null;
+  if (entry.role === 'tool') {
+    return {
+      ...entry,
+      content: truncateToolResultForHistoryDisplay(entry.content),
+    };
+  }
+  return entry;
 }
 
 function hydrateHistoryAttachmentPreviews(attachments) {
@@ -4526,6 +4555,9 @@ export async function handleYeaftMcpReload(msg = {}) {
 }
 
 export const __testHooks = {
+  projectPersistedToHistoryEntry,
+  projectPersistedToVisibleHistoryEntry,
+  truncateToolResultForHistoryDisplay,
   resetAbortState() {
     turnAbortCtrls.clear();
     turnAbortMeta.clear();

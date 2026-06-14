@@ -101,14 +101,12 @@ function migrateAddColumn(db, table, column, type) {
   }
 }
 
-/** Max tool_output size stored (10KB). Longer outputs are truncated. */
-const MAX_TOOL_OUTPUT = 10240;
-
 /**
  * Max per-loop payload (system prompt, messages JSON, raw request /
- * response, response text) stored per row. Larger than MAX_TOOL_OUTPUT
- * because real-world LLM exchanges (system prompt + 30K-token message
- * trail + raw response) routinely cross 10KB. 256KB lets us replay the
+ * response, response text) stored per row. Tool output is intentionally
+ * stored in full; this cap only applies to loop-level debug payloads.
+ * Real-world LLM exchanges (system prompt + 30K-token message trail + raw
+ * response) routinely cross 10KB. 256KB lets us replay the
  * panel verbatim for the most recent traces without bloating the DB.
  */
 const MAX_LOOP_PAYLOAD = 256 * 1024;
@@ -325,8 +323,8 @@ export class DebugTrace {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, turnId, toolName,
-      truncate(toolInput, MAX_TOOL_OUTPUT),
-      truncate(toolOutput, MAX_TOOL_OUTPUT),
+      truncate(toolInput, MAX_LOOP_PAYLOAD),
+      toolOutput == null ? null : String(toolOutput),
       durationMs, isError ? 1 : 0, now,
     );
     return id;

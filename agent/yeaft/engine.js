@@ -43,7 +43,7 @@ import { countTurns } from './turn-utils.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
 import { approxTokens } from './memory/budget.js';
-import { COLLAB_TOOL_POLICY, truncateToolResultIfNeeded } from './tools/registry.js';
+import { COLLAB_TOOL_POLICY, stringifyToolOutput } from './tools/registry.js';
 import { acknowledgePendingNotifications, formatNotificationsForPrompt, peekPendingNotifications } from './sub-agent/notifications.js';
 import {
   TOOL_BATCH_SIZE,
@@ -2489,13 +2489,10 @@ export class Engine {
               // is exercised by tests and a few standalone tools. Aligning
               // both paths keeps `ctx.cwd` semantics consistent.
               const rawOutput = await tool.execute(tc.input, toolCtx);
-              // Legacy #tools branch must apply the same per-tool cap as
-              // ToolRegistry.execute. Otherwise a deployment using the legacy
-              // registration path bypasses the defense entirely.
-              output = truncateToolResultIfNeeded(rawOutput, {
-                toolName: tc.name,
-                language: this.#config?.language,
-              });
+              // Legacy #tools branch should match ToolRegistry.execute():
+              // preserve the full output for the next LLM request, debug
+              // display, and persisted conversation rows.
+              output = stringifyToolOutput(rawOutput);
             }
             yield { type: 'tool_end', id: tc.id, name: tc.name, output, isError: false, threadId: this.currentThreadId };
           } catch (err) {

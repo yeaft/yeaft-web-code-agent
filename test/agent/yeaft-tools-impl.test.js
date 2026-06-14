@@ -89,6 +89,22 @@ describe('index.js tool registration', () => {
     expect(full.names).not.toContain('SendMessage');
   });
 
+  it('returns full tool results from registry execution', async () => {
+    const { ToolRegistry } = await import(`${TOOLS_DIR}/registry.js`);
+    const { defineTool } = await import(`${TOOLS_DIR}/types.js`);
+    const largeOutput = 'registry-output-'.repeat(200);
+
+    const reg = new ToolRegistry();
+    reg.register(defineTool({
+      name: 'LargeResult',
+      description: 'large result',
+      parameters: { type: 'object', properties: {} },
+      execute: async () => largeOutput,
+    }));
+
+    await expect(reg.execute('LargeResult', {})).resolves.toBe(largeOutput);
+  });
+
   it('task-297: all tools are exposed regardless of mode (no filtering)', async () => {
     const { createFullRegistry, allTools } = await import(`${TOOLS_DIR}/index.js`);
     const registry = createFullRegistry();

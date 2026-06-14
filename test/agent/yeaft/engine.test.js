@@ -355,6 +355,40 @@ describe('Engine', () => {
       expect(secondCall.messages[2].toolCallId).toBe('call_1');
     });
 
+    it('should pass full large tool results to the next LLM request', async () => {
+      const largeOutput = 'x'.repeat(2048);
+
+      mockAdapter.pushResponse([
+        { type: 'tool_call', id: 'call_large', name: 'large_tool', input: {} },
+        { type: 'stop', stopReason: 'tool_use' },
+      ]);
+      mockAdapter.pushResponse([
+        { type: 'text_delta', text: 'Done.' },
+        { type: 'stop', stopReason: 'end_turn' },
+      ]);
+
+      const engine = new Engine({
+        adapter: mockAdapter,
+        trace,
+        config: { model: 'test-model', maxOutputTokens: 1024 },
+      });
+
+      engine.registerTool({
+        name: 'large_tool',
+        description: 'Returns a large result',
+        parameters: {},
+        execute: async () => largeOutput,
+      });
+
+      for await (const _event of engine.query({ prompt: 'use large tool' })) {
+        // drain
+      }
+
+      const secondCall = mockAdapter.callLog[1];
+      const toolMessage = secondCall.messages.find(m => m.role === 'tool');
+      expect(toolMessage.content).toBe(largeOutput);
+    });
+
     it('should handle tool execution errors gracefully', async () => {
       mockAdapter.pushResponse([
         { type: 'tool_call', id: 'call_1', name: 'failing_tool', input: {} },
@@ -764,11 +798,12 @@ describe('Engine', () => {
         config: { model: 'test-model', maxOutputTokens: 1024 },
       });
 
+      const largeOutput = 'debug-output-'.repeat(1024);
       engine.registerTool({
         name: 'search',
         description: 'Search',
         parameters: {},
-        execute: async () => 'results',
+        execute: async () => largeOutput,
       });
 
       for await (const _event of engine.query({ prompt: 'search test' })) {
@@ -788,7 +823,7 @@ describe('Engine', () => {
       const tools = dbTrace.queryTools({ name: 'search' });
       expect(tools).toHaveLength(1);
       expect(tools[0].tool_name).toBe('search');
-      expect(tools[0].tool_output).toBe('results');
+      expect(tools[0].tool_output).toBe(largeOutput);
 
       dbTrace.close();
     });
