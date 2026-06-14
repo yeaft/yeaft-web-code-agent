@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-import { createSessionFromSpec, SessionCrudError } from '../../../agent/yeaft/sessions/session-crud.js';
+import { createSessionFromSpec, SessionCrudError, snapshotSessions, updateSessionConfig } from '../../../agent/yeaft/sessions/session-crud.js';
 
 const roots = [];
 
@@ -46,5 +46,29 @@ describe('session CRUD storage errors', () => {
       return;
     }
     throw new Error('expected createSessionFromSpec to fail');
+  });
+
+  it('writes workdir session config under the registered workdir root', () => {
+    const yeaftDir = tempRoot('yeaft-session-crud-default-');
+    const workDir = tempRoot('yeaft-session-crud-workdir-');
+    const meta = createSessionFromSpec(yeaftDir, {
+      name: 'Workdir Config',
+      roster: ['omni'],
+      defaultVpId: 'omni',
+      workDir,
+      config: { model: 'provider/model-a' },
+    });
+
+    const workConfigPath = join(workDir, '.yeaft', 'sessions', meta.id, 'config.json');
+    const defaultConfigPath = join(yeaftDir, 'sessions', meta.id, 'config.json');
+    expect(existsSync(workConfigPath)).toBe(true);
+    expect(existsSync(defaultConfigPath)).toBe(false);
+    expect(JSON.parse(readFileSync(workConfigPath, 'utf8'))).toEqual({ model: 'provider/model-a' });
+
+    updateSessionConfig(yeaftDir, meta.id, { model: 'provider/model-b' });
+
+    expect(JSON.parse(readFileSync(workConfigPath, 'utf8'))).toEqual({ model: 'provider/model-b' });
+    expect(existsSync(defaultConfigPath)).toBe(false);
+    expect(snapshotSessions(yeaftDir).find(session => session.id === meta.id)?.config).toEqual({ model: 'provider/model-b' });
   });
 });

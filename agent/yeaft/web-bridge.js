@@ -56,11 +56,14 @@ import { loadSessionConfig, resolveSessionConfig, SessionConfigError } from './s
 import { updateSessionConfig } from './sessions/session-crud.js';
 import { createCoordinator } from './sessions/coordinator.js';
 import { seedDefaultSession } from './sessions/seed-default.js';
+import { openSegmentIndex } from './memory/index-db.js';
+import { syncAll as syncSegmentIndex } from './memory/segment-sync.js';
+import { openAmsRegistry } from './memory/ams-registry.js';
 import {
   trimSnapshotForBudget,
 } from './history-compact.js';
 import { persistYeaftAttachments, attachmentsForPersistence, persistedAttachmentPreviewPayload } from './attachments.js';
-import { parseSeqFromId } from './conversation/persist.js';
+import { ConversationStore, parseSeqFromId } from './conversation/persist.js';
 import { sliceLastNTurns } from './turn-utils.js';
 import { pairSanitize } from './pair-sanitize.js';
 import { filterSnapshotForVp } from './snapshot-filter.js';
@@ -73,13 +76,15 @@ import { buildMcpFlattenedTools } from './tools/mcp-tools.js';
 let session = null;
 let sessionLoadPromise = null;
 let sessionReadyPromise = null;
+let sessionReadyInitialized = false;
+const runtimeByYeaftDir = new Map();
 
 let threadClassifier = defaultClassifyThread;
 
 async function loadRuntimeSession() {
   if (session) return session;
   if (!sessionLoadPromise) {
-    sessionLoadPromise = (async () => {
+    const promise = (async () => {
       const yeaftDir = ctx.CONFIG?.yeaftDir;
       const loaded = await loadSession({
         ...(yeaftDir && { dir: yeaftDir }),
@@ -101,11 +106,82 @@ async function loadRuntimeSession() {
         console.warn('[Yeaft] setSubAgentEventSink wiring failed:', err?.message || err);
       }
       return session;
-    })().finally(() => {
-      sessionLoadPromise = null;
     });
+    const tracked = promise.finally(() => {
+      if (sessionLoadPromise === tracked) sessionLoadPromise = null;
+    });
+    sessionLoadPromise = tracked;
   }
   return sessionLoadPromise;
+}
+
+function normalizeYeaftDirForCompare(dir) {
+  return typeof dir === 'string' ? dir.replace(/\/+$/, '') : '';
+}
+
+function baseRuntime() {
+  if (!session) return null;
+  return {
+    yeaftDir: session.yeaftDir,
+    conversationStore: session.conversationStore,
+    memoryIndex: session.memoryIndex || null,
+    amsRegistry: session.amsRegistry || null,
+    toolStats: session.toolStats || null,
+  };
+}
+
+function getRuntimeForSession(sessionId = null) {
+  const base = baseRuntime();
+  if (!base || !sessionId) return base;
+
+  const defaultYeaftDir = ctx.CONFIG?.yeaftDir || session?.yeaftDir;
+  const targetYeaftDir = resolveSessionYeaftDir(defaultYeaftDir, sessionId);
+  if (!targetYeaftDir) return base;
+  if (normalizeYeaftDirForCompare(targetYeaftDir) === normalizeYeaftDirForCompare(base.yeaftDir)) {
+    return base;
+  }
+
+  let runtime = runtimeByYeaftDir.get(targetYeaftDir);
+  if (runtime) return runtime;
+
+  const conversationStore = new ConversationStore(targetYeaftDir);
+  let memoryIndex = null;
+  let amsRegistry = null;
+  if (!session.config?._readOnly) {
+    try {
+      memoryIndex = openSegmentIndex(join(targetYeaftDir, 'memory', 'index.db'));
+      syncSegmentIndex(join(targetYeaftDir, 'memory'), memoryIndex);
+    } catch (err) {
+      console.warn(`[Yeaft] workdir memory index unavailable for ${targetYeaftDir}:`, err?.message || err);
+      memoryIndex = null;
+    }
+    if (memoryIndex) {
+      try {
+        amsRegistry = openAmsRegistry({ yeaftDir: targetYeaftDir, memoryIndex, config: session.config });
+      } catch (err) {
+        console.warn(`[Yeaft] workdir AMS registry unavailable for ${targetYeaftDir}:`, err?.message || err);
+        amsRegistry = null;
+      }
+    }
+  }
+
+  runtime = {
+    yeaftDir: targetYeaftDir,
+    conversationStore,
+    memoryIndex,
+    amsRegistry,
+    toolStats: null,
+  };
+  runtimeByYeaftDir.set(targetYeaftDir, runtime);
+  return runtime;
+}
+
+function clearRootRuntimes() {
+  for (const runtime of runtimeByYeaftDir.values()) {
+    try { runtime.amsRegistry?.persistAll?.(); } catch { /* ignore */ }
+    try { runtime.memoryIndex?.close?.(); } catch { /* ignore */ }
+  }
+  runtimeByYeaftDir.clear();
 }
 
 function refreshLiveSessionConfig() {
@@ -740,10 +816,11 @@ function loadVisibleGroupHistoryPage(store, sessionId, limit, beforeSeq = null) 
  * @returns {GroupHistory}
  */
 function hydrateGroupHistory(sessionId) {
-  if (!session?.conversationStore || !sessionId) return [];
+  const runtime = getRuntimeForSession(sessionId);
+  if (!runtime?.conversationStore || !sessionId) return [];
   let recent;
   try {
-    recent = session.conversationStore.loadRecentBySession(sessionId);
+    recent = runtime.conversationStore.loadRecentBySession(sessionId);
   } catch (err) {
     console.warn('[Yeaft] hydrateGroupHistory failed (sessionId=%s):', sessionId, err?.message || err);
     return [];
@@ -837,6 +914,11 @@ export function __testGroupHistory(sessionId) {
  * @param {{ conversationStore: object } | null} sessionLike
  */
 export function __testSetSession(sessionLike) {
+  clearRootRuntimes();
+  if (!sessionLike) {
+    sessionReadyPromise = null;
+    sessionReadyInitialized = false;
+  }
   session = sessionLike;
 }
 
@@ -926,29 +1008,30 @@ function getOrCreateVpEngine(sessionId, vpId, threadId = 'main') {
   let eng = vpEngines.get(key);
   if (eng) return eng;
   if (!session) throw new Error('getOrCreateVpEngine: session not loaded');
+  const runtime = getRuntimeForSession(sessionId) || baseRuntime();
   // Per-group config overlay (v1: model only). Falls back to the
   // session's user-level config when no override is set. The resolver
   // never mutates session.config — it returns a new object.
-  const yeaftDir = ctx.CONFIG?.yeaftDir || session.yeaftDir;
+  const yeaftDir = runtime?.yeaftDir || ctx.CONFIG?.yeaftDir || session.yeaftDir;
   const groupCfg = loadSessionConfig(yeaftDir, sessionId);
   const effectiveConfig = resolveSessionConfig(session.config, groupCfg);
   eng = new Engine({
     adapter: session.adapter,
     trace: session.trace,
     config: effectiveConfig,
-    conversationStore: session.conversationStore,
-    memoryIndex: session.memoryIndex || null,
-    amsRegistry: session.amsRegistry,
+    conversationStore: runtime?.conversationStore || session.conversationStore,
+    memoryIndex: runtime?.memoryIndex || null,
+    amsRegistry: runtime?.amsRegistry || null,
     toolRegistry: session.toolRegistry,
     skillManager: session.skillManager,
     mcpManager: session.mcpManager,
-    yeaftDir: session.yeaftDir,
+    yeaftDir,
     // Share the session-shared ToolUsageStats so per-VP tool calls land
     // in the same on-disk snapshot the `yeaft_fetch_tool_stats` handler
     // reads. Without this, engine's record-on-tool-exec guard
     // (`if (this.#toolStats && ...)`) is false and group VP tool calls
     // are silently dropped.
-    toolStats: session.toolStats || null,
+    toolStats: runtime?.toolStats || null,
     // Per-VP fan-out: bind the engine to its (sessionId, vpId) so post-turn
     // compact reads/writes a scoped summary instead of the legacy global
     // compact.md (which every VP would otherwise share, producing
@@ -1766,6 +1849,7 @@ export function handleYeaftDeleteSession(msg) {
   const sessionId = (msg && msg.sessionId) || null;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const deleteRuntime = getRuntimeForSession(sessionId);
     const result = deleteSession(yeaftDir, sessionId);
     // Cascade: remove every persisted message stamped with this group id.
     // Hard delete (per user spec): no soft-archive, the bytes are gone.
@@ -1773,8 +1857,8 @@ export function handleYeaftDeleteSession(msg) {
     // CLI `--compact-orphans` run will sweep them as orphans.
     let messagesRemoved = 0;
     try {
-      if (session && session.conversationStore) {
-        messagesRemoved = session.conversationStore.deleteByGroup(sessionId);
+      if (deleteRuntime?.conversationStore) {
+        messagesRemoved = deleteRuntime.conversationStore.deleteByGroup(sessionId);
       }
     } catch (cascadeErr) {
       console.warn(`[Yeaft] cascade delete for group ${sessionId} failed: ${cascadeErr.message}`);
@@ -2771,11 +2855,13 @@ export function buildVpQueryOpts({ vpId, sessionCoordinator, sessionId, envelope
  * its handshake.
  */
 async function ensureSessionLoaded() {
-  if (session) return;
+  if (session && sessionReadyInitialized) return;
   if (!sessionReadyPromise) {
-    sessionReadyPromise = finishSessionReady().finally(() => {
-      sessionReadyPromise = null;
+    const promise = finishSessionReady();
+    const tracked = promise.finally(() => {
+      if (sessionReadyPromise === tracked) sessionReadyPromise = null;
     });
+    sessionReadyPromise = tracked;
   }
   return sessionReadyPromise;
 }
@@ -2812,6 +2898,7 @@ async function finishSessionReady() {
     tools: session.status.tools,
     yeaftDir: ctx.CONFIG?.yeaftDir || null,
   });
+  sessionReadyInitialized = true;
   sendSessionSnapshotBroadcast();
   // vp-status: rebuild frontend status table from authoritative agent
   // memory. Sent unconditionally so reconnect/refresh paths get the same
@@ -3291,7 +3378,8 @@ function appendTurnToSessionHistory(sessionId, threadId, vpId, prompts, assistan
  *   call already wrote it (dedup hit).
  */
 function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = 'main', role, speakerVpId, attachments }) {
-  if (!session?.conversationStore) return false;
+  const runtime = getRuntimeForSession(sessionId);
+  if (!runtime?.conversationStore) return false;
   // No msgId means no dedup key — caller is responsible for guarding.
   // Both call sites already do (`if (envMsgId && text)` and
   // `if (persistedMsgId)`); refusing here keeps the helper's contract
@@ -3344,7 +3432,7 @@ function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = '
     if (persistRole === 'user' && Array.isArray(attachments) && attachments.length > 0) {
       record.attachments = attachments;
     }
-    session.conversationStore.append(record);
+    runtime.conversationStore.append(record);
     return true;
   } catch (err) {
     console.warn(
@@ -3887,8 +3975,7 @@ export async function handleYeaftLoadHistory(msg) {
     sessionId ? store.loadRecentBySession(sessionId, lim) : store.loadRecent(lim);
 
   if (!session) {
-    await loadRuntimeSession();
-    yeaftConversationId = `yeaft-${Date.now()}`;
+    await ensureSessionLoaded();
     refreshLiveSessionConfig();
     hydrateYeaftStatusFromSession(session, { reason: 'history_load', emitEvent: true });
 
@@ -3909,6 +3996,8 @@ export async function handleYeaftLoadHistory(msg) {
     // in-memory state into the next turn's context.
     setGroupHistory(sessionId, hydrateGroupHistory(sessionId));
   }
+  const runtime = getRuntimeForSession(sessionId);
+  const conversationStore = runtime?.conversationStore || session.conversationStore;
 
   // Always replay session_ready so refresh / reconnect rebuilds UI state.
   sendSessionEvent({
@@ -3941,11 +4030,11 @@ export async function handleYeaftLoadHistory(msg) {
   const afterSeqRaw = (msg && Number.isFinite(msg.afterSeq)) ? msg.afterSeq : null;
   const afterMessageId = (msg && typeof msg.afterMessageId === 'string') ? msg.afterMessageId : null;
   let afterSeq = afterSeqRaw;
-  if (afterSeq === null && afterMessageId && typeof session.conversationStore.getMessageSeqById === 'function') {
-    afterSeq = session.conversationStore.getMessageSeqById(afterMessageId);
+  if (afterSeq === null && afterMessageId && typeof conversationStore.getMessageSeqById === 'function') {
+    afterSeq = conversationStore.getMessageSeqById(afterMessageId);
   }
-  if (sessionId && afterSeq !== null && typeof session.conversationStore.loadAfterSeqByGroup === 'function') {
-    const delta = session.conversationStore.loadAfterSeqByGroup(sessionId, afterSeq);
+  if (sessionId && afterSeq !== null && typeof conversationStore.loadAfterSeqByGroup === 'function') {
+    const delta = conversationStore.loadAfterSeqByGroup(sessionId, afterSeq);
     for (const entry of delta.messages) {
       if (entry.role === 'user') {
         sendSessionOutputFrame({
@@ -3989,12 +4078,12 @@ export async function handleYeaftLoadHistory(msg) {
   // paged via `yeaft_load_more_history` when the user scrolls upward.
   const limit = (typeof msg.limit === 'number') ? msg.limit : 10;
   const visiblePage = sessionId
-    ? loadVisibleGroupHistoryPage(session.conversationStore, sessionId, limit)
-    : { messages: limit > 0 ? pickRecent(session.conversationStore, limit) : [], oldestSeq: null, hasMore: false };
+    ? loadVisibleGroupHistoryPage(conversationStore, sessionId, limit)
+    : { messages: limit > 0 ? pickRecent(conversationStore, limit) : [], oldestSeq: null, hasMore: false };
   // Legacy compact.md is a non-group fallback only. For group replay, reading
   // it makes every group show "has compact" once any legacy/non-scoped compact
   // exists, even when this group has no scoped summary.
-  const compactSummary = sessionId ? '' : session.conversationStore.readCompactSummary();
+  const compactSummary = sessionId ? '' : conversationStore.readCompactSummary();
   const replayEntries = sessionId
     ? visiblePage.messages
     : visiblePage.messages
@@ -4049,17 +4138,17 @@ export async function handleYeaftLoadHistory(msg) {
   // replay, only scoped per-(group, vp) summaries count; legacy compact.md is
   // reserved for non-group / pre-scoped 1:1 callers.
   let hasCompactSummaryFlag = !!compactSummary;
-  if (sessionId && typeof session.conversationStore.hasAnyCompactSummaryForSession === 'function') {
-    hasCompactSummaryFlag = session.conversationStore.hasAnyCompactSummaryForSession(sessionId);
+  if (sessionId && typeof conversationStore.hasAnyCompactSummaryForSession === 'function') {
+    hasCompactSummaryFlag = conversationStore.hasAnyCompactSummaryForSession(sessionId);
   }
 
   // Latest seq cursor in the recent-mode reply lets the frontend stamp its
   // delta cursor on first paint, so the next session-switch can ask for
   // afterSeq instead of a full recent-N replay.
   let latestSeq = null;
-  if (replayEntries.length > 0 && typeof session.conversationStore.getMessageSeqById === 'function') {
+  if (replayEntries.length > 0 && typeof conversationStore.getMessageSeqById === 'function') {
     const last = replayEntries[replayEntries.length - 1];
-    if (last && last.id) latestSeq = session.conversationStore.getMessageSeqById(last.id);
+    if (last && last.id) latestSeq = conversationStore.getMessageSeqById(last.id);
   }
 
   sendSessionEvent({
@@ -4067,8 +4156,8 @@ export async function handleYeaftLoadHistory(msg) {
     mode: 'recent',
     count: replayEntries.length,
     hasCompactSummary: hasCompactSummaryFlag,
-    totalHot: session.conversationStore.countHot(),
-    totalCold: session.conversationStore.countCold(),
+    totalHot: conversationStore.countHot(),
+    totalCold: conversationStore.countCold(),
     sessionId,
     hasMore,
     oldestSeq,
@@ -4108,7 +4197,9 @@ export async function handleYeaftLoadMoreHistory(msg) {
 
   let result;
   try {
-    result = loadVisibleGroupHistoryPage(session.conversationStore, sessionId, turns, beforeSeq);
+    const runtime = getRuntimeForSession(sessionId);
+    const conversationStore = runtime?.conversationStore || session.conversationStore;
+    result = loadVisibleGroupHistoryPage(conversationStore, sessionId, turns, beforeSeq);
   } catch (err) {
     console.error('[Yeaft] loadOlderBySession failed:', err.message);
     result = { messages: [], oldestSeq: null, hasMore: false };
@@ -4147,6 +4238,9 @@ export async function resetYeaftSession() {
     try { currentAbortCtrl.abort(); } catch { /* ignore */ }
   }
   currentAbortCtrl = null;
+  if (sessionLoadPromise) {
+    try { await sessionLoadPromise; } catch { /* reload below will surface persistent failures */ }
+  }
   if (_vpUnsubscribe) {
     try { _vpUnsubscribe(); } catch { /* ignore */ }
     _vpUnsubscribe = null;
@@ -4155,6 +4249,9 @@ export async function resetYeaftSession() {
     await session.shutdown();
     session = null;
   }
+  clearRootRuntimes();
+  sessionReadyPromise = null;
+  sessionReadyInitialized = false;
   yeaftConversationId = null;
   // Per-group histories live on sessionContexts entries — clearing the
   // map (a few lines below) drops every group's history with it. No
@@ -4194,7 +4291,6 @@ export async function resetYeaftSession() {
   }
 
   try {
-    sessionLoadPromise = null;
     await loadRuntimeSession();
 
     yeaftConversationId = `yeaft-${Date.now()}`;
@@ -4213,6 +4309,7 @@ export async function resetYeaftSession() {
       tools: session.status.tools,
       yeaftDir: ctx.CONFIG?.yeaftDir || null,
     });
+    sessionReadyInitialized = true;
     // vp-status: after a forced reset the broker table is still live in
     // memory; broadcast so the frontend can rebuild its mirror without
     // waiting for the first per-VP transition.

@@ -370,9 +370,9 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
   // are persisted here so the engine cache picks them up on the very first
   // turn.
   try {
-    ensureSessionConfigFile(yeaftDir, id);
+    ensureSessionConfigFile(groupYeaftDir, id);
     if (spec && spec.config && typeof spec.config === 'object') {
-      saveSessionConfig(yeaftDir, id, spec.config);
+      saveSessionConfig(groupYeaftDir, id, spec.config);
     }
   } catch (err) {
     console.warn(`[session-crud] failed to seed config.json for ${id}:`, err?.message || err);
@@ -436,9 +436,10 @@ export function updateSessionAnnouncement(yeaftDir, sessionId, text) {
  * Group must exist (we call requireSession to assert).
  */
 export function updateSessionConfig(yeaftDir, sessionId, partial) {
+  const groupYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
   const handle = requireSession(yeaftDir, sessionId);
   try {
-    return saveSessionConfig(yeaftDir, sessionId, partial || {});
+    return saveSessionConfig(groupYeaftDir, sessionId, partial || {});
   } finally {
     handle.close();
   }
@@ -619,20 +620,25 @@ export function requireSession(yeaftDir, sessionId) {
 /** Convenience: snapshot all non-archived groups for WS broadcast. */
 export function snapshotSessions(yeaftDir) {
   const byId = new Map();
+  const rootById = new Map();
   for (const group of listSessions(sessionsRoot(yeaftDir))) {
     byId.set(group.id, group);
+    rootById.set(group.id, yeaftDir);
   }
   const registry = readWorkDirRegistry(yeaftDir);
   for (const [sessionId, workDir] of Object.entries(registry)) {
     const groupYeaftDir = yeaftDirForWorkDir(workDir);
     const dir = join(sessionsRoot(groupYeaftDir), sessionId);
     const meta = existsSync(dir) ? loadSessionMeta(dir) : null;
-    if (meta) byId.set(meta.id, meta);
+    if (meta) {
+      byId.set(meta.id, meta);
+      rootById.set(meta.id, groupYeaftDir);
+    }
   }
   // Attach per-group config overrides (v1: just `model`). Frontend can
   // render the effective model without re-querying.
   for (const meta of byId.values()) {
-    meta.config = loadSessionConfig(yeaftDir, meta.id);
+    meta.config = loadSessionConfig(rootById.get(meta.id) || yeaftDir, meta.id);
   }
   return Array.from(byId.values()).sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
 }
