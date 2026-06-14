@@ -4,11 +4,12 @@
  * Problem this solves:
  *   The original sub-agent protocol was purely pull-based — the parent had
  *   to keep calling WaitAgent to discover that its child had finished. If
- *   the parent forgot, the child's terminal state was never surfaced and
- *   the orchestration "hung" from the user's perspective. Modeled on
- *   claude-code's `<task-notification>` XML re-entry pattern: when a
- *   child reaches a terminal state we *push* a notification onto a queue
- *   that the parent will see the next time it talks to its engine.
+ *   the parent forgot, the child's progress or terminal state was never
+ *   surfaced and the orchestration "hung" from the user's perspective.
+ *   Modeled on claude-code's `<task-notification>` XML re-entry pattern:
+ *   when a child finishes a turn or reaches a terminal state we *push* a
+ *   notification onto a queue that the parent will see the next time it
+ *   talks to its engine.
  *
  *   This module is the queue. Two entry points consume it:
  *
@@ -16,11 +17,11 @@
  *        before returning).
  *     2. Engine.query() — when started with a user prompt, it asks
  *        `consumePendingNotifications({ sessionId, parentVpId })` for any queued
- *        terminal events from sub-agents that the parent hasn't yet
+ *        idle/terminal events from sub-agents that the parent hasn't yet
  *        acknowledged, and prepends a short XML block to the user
  *        message. The XML block is human-readable for the model and
- *        explicitly tells it "your sub-agent X finished while you were
- *        away; here's the result and what to do next".
+ *        explicitly tells it "your sub-agent X produced progress while you
+ *        were away; here's the result and what to do next".
  *
  *   The queue is in-memory only. We do NOT persist across process
  *   restarts because (a) sub-agents themselves don't survive restart,
@@ -75,9 +76,9 @@ function bucketKey(scope, sessionId) {
 }
 
 /**
- * Enqueue a terminal notification for an agent. Idempotent per agent —
- * a second call with the same agentId is a no-op (we only emit one
- * terminal notice per child).
+ * Enqueue a progress/terminal notification for an agent. Idempotent per
+ * agent while queued — a second call with the same agentId is a no-op
+ * until the previous notice is replaced or consumed.
  *
  * @param {{ agentId: string, agentName: string, status: string, result?: string, error?: string|null, outputFile?: string|null, turns?: number, parentVpId?: string|null, parentSessionId?: string|null, sessionId?: string|null, budgetExceeded?: boolean, budgetReason?: string|null, budgetUsage?: object|null }} input
  * @returns {SubAgentNotification|null} the queued record (null if a dup)
@@ -210,10 +211,10 @@ export function formatNotificationsForPrompt(notifs) {
   const parts = [];
   parts.push('<sub-agent-notifications>');
   parts.push(
-    'The following sub-agent(s) reached a terminal state while you were ' +
-    'away. The user has NOT seen any of this — only you have. You MUST ' +
-    'either (a) relay the result(s) to the user in your reply, or (b) act ' +
-    'on the result(s) before replying. Do NOT ignore these.',
+    'The following sub-agent(s) produced progress or reached a terminal ' +
+    'state while you were away. The user has NOT seen any of this — only ' +
+    'you have. You MUST either (a) relay the result(s) to the user in your ' +
+    'reply, or (b) act on the result(s) before replying. Do NOT ignore these.',
   );
   for (const n of notifs) {
     parts.push('');

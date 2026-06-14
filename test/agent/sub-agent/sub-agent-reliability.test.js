@@ -152,6 +152,22 @@ class UsageAdapter {
   async call() { return { text: 'ok', usage: {} }; }
 }
 
+class StuckAdapter {
+  constructor() {
+    this.streamCalls = [];
+    this.aborted = false;
+  }
+  async *stream(params) {
+    this.streamCalls.push(params);
+    while (!params.signal?.aborted) {
+      await new Promise(r => setTimeout(r, 10));
+    }
+    this.aborted = true;
+    throw new Error(params.signal.reason || 'aborted');
+  }
+  async call() { return { text: 'ok', usage: {} }; }
+}
+
 class ToolUseAdapter {
   constructor(toolName) {
     this.toolName = toolName;
@@ -529,9 +545,30 @@ describe('wait-agent envelope shape', () => {
     expect(env.timedOut).toBe(true);
     expect(env.runningInBackground).toBe(true);
     expect(env.result).toBe('partial');
-    expect(env.next_steps).toMatch(/STILL RUNNING/i);
-    expect(env.next_steps).toMatch(/WaitAgent/);
-    expect(env.next_steps).toMatch(/CloseAgent/);
+    expect(env.next_steps).toMatch(/background/i);
+    expect(env.next_steps).toMatch(/ListAgents/);
+    expect(env.next_steps).not.toMatch(/larger timeout_ms|keep waiting/i);
+  });
+
+  it('timed-out stale envelope warns not to wait in a loop', async () => {
+    const liveness = makeLiveness();
+    liveness.lastEventAt = Date.now() - 180000;
+    liveness.lastEventType = 'tool_call';
+    const agents = getAgentRegistry();
+    agents.set('agent-stale', {
+      id: 'agent-stale', name: 'stale', status: STATUS.RUNNING,
+      result: '', lastResult: '', error: null, messages: [], usage: { turns: 0 },
+      outputFile: '/tmp/stale.log', liveness, createdAt: Date.now() - 180000,
+    });
+
+    const env = JSON.parse(await waitAgent.execute({ agent_id: 'agent-stale', timeout_ms: 0 }, {}));
+    expect(env.timedOut).toBe(true);
+    expect(env.stale).toBe(true);
+    expect(env.stalled).toBe(true);
+    expect(env.msSinceLastEvent).toBeGreaterThanOrEqual(120000);
+    expect(env.lastEventType).toBe('tool_call');
+    expect(env.diagnostic).toMatch(/stalled/i);
+    expect(env.next_steps).toMatch(/Do NOT keep/i);
   });
 
   it('terminal envelope preserves budget_exceeded details', async () => {
@@ -634,6 +671,21 @@ describe('wait-agent envelope shape', () => {
     expect(env.runningInBackground).toBeUndefined();
   });
 
+  it('SpawnAgent returns async background guidance without forcing WaitAgent', async () => {
+    const out = JSON.parse(await agentTool.execute(
+      { name: 'async-task', mission: 'do async work' },
+      { parentEngineDeps: mkDeps(new TextAdapter('done')) },
+    ));
+    expect(out.success).toBe(true);
+    expect(out.status).toBe(STATUS.RUNNING);
+    expect(out.outputFile).toBeTruthy();
+    expect(out.liveness).toBeTruthy();
+    expect(agentTool.description).not.toMatch(/MUST call WaitAgent next/);
+    expect(out.next_steps).toMatch(/background/i);
+    expect(out.next_steps).toMatch(/ListAgents/);
+    expect(out.next_steps).not.toMatch(/Call WaitAgent next/i);
+  });
+
   it('name collisions are scoped to the caller owner', async () => {
     const ctxA = { parentEngineDeps: { parentSessionId: 'session-a', parentVpId: 'vp-a' } };
     const ctxB = { parentEngineDeps: { parentSessionId: 'session-b', parentVpId: 'vp-b' } };
@@ -644,6 +696,24 @@ describe('wait-agent envelope shape', () => {
     expect(sameOwner.error).toMatch(/already exists/);
     const otherOwner = JSON.parse(await agentTool.execute({ name: 'same-name', mission: 'b' }, ctxB));
     expect(otherOwner.success).toBe(true);
+  });
+
+  it('drains the agent notification when idle so engine does not redeliver', async () => {
+    const agents = getAgentRegistry();
+    agents.set('agent-idle-drained', {
+      id: 'agent-idle-drained', name: 'idle-drained', status: STATUS.IDLE,
+      result: 'ok', error: null, messages: [], usage: { turns: 1 },
+      outputFile: null, liveness: makeLiveness(),
+    });
+    enqueueTerminalNotification({
+      agentId: 'agent-idle-drained', agentName: 'idle-drained', status: STATUS.IDLE,
+      result: 'ok', parentVpId: 'vp-X',
+    });
+    expect(_peekAll().byAgent['agent-idle-drained']).toBeTruthy();
+
+    const env = JSON.parse(await waitAgent.execute({ agent_id: 'agent-idle-drained' }, {}));
+    expect(env.status).toBe(STATUS.IDLE);
+    expect(_peekAll().byAgent['agent-idle-drained']).toBeUndefined();
   });
 
   it('drains the agent notification when terminal so engine does not redeliver', async () => {
@@ -831,7 +901,11 @@ describe('idle watchdog', () => {
     const id = out.agentId;
     const agent = getAgentRegistry().get(id);
 
-    // Wait for first turn + idle then for the watchdog to trip.
+    // Wait for first turn + idle notification, drain it, then wait for the
+    // idle watchdog's terminal notification.
+    await settle(agent, 1000);
+    expect(agent.status).toBe(STATUS.IDLE);
+    consumePendingNotifications('vp-test');
     const deadline = Date.now() + 3000;
     while (Date.now() < deadline && !isTerminalAgentStatus(agent.status)) {
       await new Promise(r => setTimeout(r, 30));
@@ -1246,7 +1320,10 @@ describe('engine prepends sub-agent notifications to the next user turn', () => 
 // -------------------------------------------------------------------------
 
 describe('list-agents envelope', () => {
-  beforeEach(() => _resetAgentRegistry());
+  beforeEach(() => {
+    _resetAgentRegistry();
+    _resetNotifications();
+  });
 
   it('reports outputFile, liveness, and turns for non-terminal agents by default', async () => {
     const adapter = new TextAdapter('hi');
@@ -1281,5 +1358,76 @@ describe('list-agents envelope', () => {
     const show = JSON.parse(await listAgents.execute({ include_terminal: true }, {}));
     expect(show.agents.length).toBe(1);
     expect(show.agents[0].status).toBe('closed');
+  });
+
+  it('surfaces stale diagnostics and result tail without blocking', async () => {
+    const liveness = makeLiveness();
+    liveness.lastEventAt = Date.now() - 180000;
+    liveness.lastEventType = 'tool_call';
+    const agents = getAgentRegistry();
+    agents.set('agent-stale-list', {
+      id: 'agent-stale-list', name: 'stale-list', status: STATUS.RUNNING,
+      result: '', lastResult: 'partial output tail', error: null, messages: [],
+      usage: { turns: 0, startedAt: Date.now() - 180000 },
+      outputFile: '/tmp/stale-list.log', liveness, createdAt: Date.now() - 180000,
+    });
+
+    const env = JSON.parse(await listAgents.execute({}, {}));
+    expect(env.agents).toHaveLength(1);
+    expect(env.agents[0].stale).toBe(true);
+    expect(env.agents[0].stalled).toBe(true);
+    expect(env.agents[0].lastEventType).toBe('tool_call');
+    expect(env.agents[0].diagnostic).toMatch(/stalled/i);
+    expect(env.agents[0].resultTail).toBe('partial output tail');
+  });
+
+  it('background sub-agent completes and notifies parent without WaitAgent', async () => {
+    const deps = mkDeps(new TextAdapter('background done'), { parentSessionId: 'session-bg' });
+    const out = JSON.parse(await agentTool.execute(
+      { name: 'background-finish', mission: 'finish async' },
+      { parentEngineDeps: deps },
+    ));
+    const agent = getAgentRegistry().get(out.agentId);
+    await settle(agent, 2000);
+    expect(agent.status).toBe(STATUS.IDLE);
+
+    const notifications = consumePendingNotifications({ sessionId: 'session-bg', parentVpId: 'vp-test' });
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].agentId).toBe(out.agentId);
+    expect(notifications[0].status).toBe(STATUS.IDLE);
+    expect(notifications[0].result).toMatch(/background done/);
+  });
+
+  it('wall_time_ms watchdog aborts stuck turns and leaves a terminal record', async () => {
+    const adapter = new StuckAdapter();
+    const deps = mkDeps(adapter, { parentSessionId: 'session-timeout' });
+    const out = JSON.parse(await agentTool.execute(
+      { name: 'stuck', mission: 'never finish', budget: { wall_time_ms: 40 } },
+      { parentEngineDeps: deps },
+    ));
+    const agent = getAgentRegistry().get(out.agentId);
+    await settle(agent, 1000);
+    const abortDeadline = Date.now() + 500;
+    while (!adapter.aborted && Date.now() < abortDeadline) {
+      await new Promise(r => setTimeout(r, 10));
+    }
+
+    expect(adapter.aborted).toBe(true);
+    expect(isTerminalAgentStatus(agent.status)).toBe(true);
+    expect(agent.status).toBe(STATUS.COMPLETED);
+    expect(agent.result.status).toBe('budget_exceeded');
+    expect(agent.result.reason).toMatch(/wall_time_ms/);
+
+    const listed = JSON.parse(await listAgents.execute(
+      { include_terminal: true },
+      { parentEngineDeps: deps },
+    ));
+    const row = listed.agents.find(a => a.id === out.agentId);
+    expect(row.status).toBe(STATUS.COMPLETED);
+    expect(row.hasResult).toBe(true);
+
+    const notifications = consumePendingNotifications({ sessionId: 'session-timeout', parentVpId: 'vp-test' });
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].status).toBe(STATUS.COMPLETED);
   });
 });

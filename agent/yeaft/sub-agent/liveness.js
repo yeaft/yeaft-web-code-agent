@@ -99,3 +99,37 @@ export function snapshotLiveness(liveness, now = Date.now()) {
     recentTools: liveness.recentTools.slice(),
   };
 }
+
+export const DEFAULT_STALL_THRESHOLD_MS = 120000;
+
+/**
+ * Add a stable "is this likely stuck?" diagnostic to a liveness snapshot.
+ * If no event has ever arrived, fall back to createdAt / usage.startedAt so
+ * a silent running child can still become stale.
+ *
+ * @param {object} agent
+ * @param {{ now?: number, thresholdMs?: number }} [opts]
+ */
+export function diagnoseAgentLiveness(agent, opts = {}) {
+  const now = typeof opts.now === 'number' ? opts.now : Date.now();
+  const thresholdMs = typeof opts.thresholdMs === 'number' && opts.thresholdMs > 0
+    ? opts.thresholdMs
+    : DEFAULT_STALL_THRESHOLD_MS;
+  const liveness = snapshotLiveness(agent?.liveness, now);
+  const fallbackAt = agent?.createdAt || agent?.usage?.startedAt || null;
+  const activityAt = liveness.lastEventAt || fallbackAt;
+  const msSinceActivity = activityAt ? Math.max(0, now - activityAt) : null;
+  const stale = agent?.status === 'running'
+    && msSinceActivity !== null
+    && msSinceActivity >= thresholdMs;
+  return {
+    ...liveness,
+    msSinceLastEvent: liveness.msSinceLastEvent ?? msSinceActivity,
+    stale,
+    stalled: stale,
+    stallThresholdMs: thresholdMs,
+    diagnostic: stale
+      ? `No sub-agent activity for ${msSinceActivity}ms; treat it as stalled instead of waiting in a loop.`
+      : null,
+  };
+}

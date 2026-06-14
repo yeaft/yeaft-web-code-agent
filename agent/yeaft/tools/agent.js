@@ -25,7 +25,7 @@ import { randomUUID } from 'crypto';
 import { getPersona, listPersonaIds } from '../personas.js';
 import { startSubAgent } from '../sub-agent/runner.js';
 import { STATUS, isTerminalAgentStatus } from '../sub-agent/status.js';
-import { makeLiveness } from '../sub-agent/liveness.js';
+import { diagnoseAgentLiveness, makeLiveness } from '../sub-agent/liveness.js';
 
 /** In-memory sub-agent registry. */
 const agents = new Map();
@@ -232,18 +232,16 @@ Guidelines:
 - Use expected_output when the return shape matters
 - Add a budget only when you need an explicit safety cutoff
 
-Orchestration loop you MUST follow:
-  1. SpawnAgent     — fire-and-forget; the sub-agent is now running.
-  2. WaitAgent      — blocks until the sub-agent goes idle / completes /
-                      fails / closes (or times out). Returns the reply.
-  3. PromptAgent    — optional: queue a follow-up; then WaitAgent again.
-  4. CloseAgent     — finalize when done.
-  5. Reply to user  — relay what the sub-agent found in your own words.
+Async orchestration:
+  1. SpawnAgent  — starts the sub-agent as a background task and returns immediately.
+  2. Continue    — keep working in the parent VP; do not block just to poll.
+  3. ListAgents  — non-blocking status check when you need progress/liveness.
+  4. PromptAgent — optional follow-up if the sub-agent is idle and needs guidance.
+  5. CloseAgent  — stop or finalize a sub-agent when it is no longer needed.
 
-CRITICAL — SpawnAgent only KICKS OFF the sub-agent. It has NOT produced any
-result yet. You MUST call WaitAgent next to collect the reply. Do NOT end your
-turn right after SpawnAgent without calling WaitAgent or telling the user what
-you just kicked off.`,
+Completion/failure is delivered through sub-agent notifications on later parent
+turns. WaitAgent remains available only as a short compatibility poll; do not
+use it as the default workflow or call it repeatedly in a loop.`,
   parameters: {
     type: 'object',
     properties: {
@@ -381,11 +379,13 @@ you just kicked off.`,
       // tests). Leave the record in 'created' so existing tests still work.
     }
 
+    const liveness = diagnoseAgentLiveness(agent);
     return JSON.stringify({
       next_steps:
-        'Sub-agent is now running — no reply yet. Call WaitAgent next to ' +
-        'collect its first turn. Do NOT end your turn here without either ' +
-        'waiting for the reply or telling the user what you just spawned.',
+        'Sub-agent is running in the background. Continue the parent task; ' +
+        'use ListAgents for a non-blocking status check, PromptAgent only ' +
+        'when the sub-agent is idle and needs more input, and rely on ' +
+        'completion notifications on later turns. Do not call WaitAgent in a loop.',
       success: true,
       agentId,
       name,
@@ -393,7 +393,10 @@ you just kicked off.`,
       budget: spec.budget || null,
       status: agent.status,
       outputFile: agent.outputFile || null,
-      message: `Sub-agent "${name}" spawned (${agentId}). Use WaitAgent to collect its first turn output, PromptAgent to give it more work, CloseAgent to finish. Read \`outputFile\` for the durable event log at any time.`,
+      liveness,
+      stale: liveness.stale,
+      stalled: liveness.stalled,
+      message: `Sub-agent "${name}" spawned (${agentId}) as an async background task. Use ListAgents to monitor it without blocking. Read \`outputFile\` for the durable event log at any time.`,
     });
   },
 });
