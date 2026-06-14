@@ -2887,6 +2887,10 @@
   opacity: 1;
   color: var(--error);
 }
+.yeaft-vp-timeline-row .yeaft-vp-timeline-abort.is-stopping {
+  cursor: wait;
+  opacity: 0.6;
+}
 /* Keyboard-focus styling mirrors hover styling so a keyboard user can
    tell destructive (abort = red) from informational (info = accent)
    without having to read the aria-label. */

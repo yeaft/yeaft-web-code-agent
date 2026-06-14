@@ -150,7 +150,9 @@ const turnAbortCtrls = new Map();
 
 /**
  * Per-turn runtime ownership. Targeted thread aborts use this instead of
- * blindly aborting every turn controller in the process.
+ * blindly aborting every turn controller in the process. Queued VP turns are
+ * registered here before their AbortController exists so the VP-list Stop
+ * button can remove them from the inbox instead of becoming a no-op.
  * @type {Map<string, { sessionId: string, vpId: string, threadId: string, key: string }>}
  */
 const turnAbortMeta = new Map();
@@ -1062,6 +1064,7 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
     vpInboxes.set(key, inbox);
   }
   inbox.push({ envelope, turnId, thread });
+  turnAbortMeta.set(turnId, { sessionId, vpId, threadId: thread.threadId, key });
 
   try {
     sendSessionEvent({
@@ -3354,6 +3357,63 @@ const _persistedUserMsgIds = new Set();
  *
  * @param {string[]} aborted — output array, mutated in place
  */
+function removeQueuedVpTurn(turnId) {
+  const meta = turnAbortMeta.get(turnId);
+  const keys = meta?.key ? [meta.key] : Array.from(vpInboxes.keys());
+  let removed = false;
+  for (const key of keys) {
+    const inbox = vpInboxes.get(key);
+    if (!Array.isArray(inbox) || inbox.length === 0) continue;
+    const before = inbox.length;
+    const kept = inbox.filter((entry) => entry?.turnId !== turnId);
+    if (kept.length === before) continue;
+    removed = true;
+    inbox.length = 0;
+    inbox.push(...kept);
+  }
+  return removed;
+}
+
+function emitQueuedTurnAbort(meta, turnId) {
+  if (!meta?.vpId) return;
+  const sessionId = meta.sessionId || null;
+  const vpId = meta.vpId;
+  const threadId = meta.threadId || 'main';
+  try {
+    getVpStatusBroker().transition({
+      sessionId,
+      vpId,
+      threadId,
+      state: 'idle',
+      turnId,
+      messageCount: 0,
+    });
+  } catch (err) {
+    console.warn('[Yeaft] queued VP abort status transition failed:', err?.message || err);
+  }
+  try {
+    sendSessionEvent({
+      type: 'vp_typing_end',
+      sessionId,
+      vpId,
+      threadId,
+      turnId,
+      ts: Date.now(),
+    }, { sessionId, vpId, threadId, turnId });
+  } catch { /* never crash WS pipeline */ }
+  try {
+    sendSessionEvent({
+      type: 'vp_turn_end',
+      sessionId,
+      vpId,
+      threadId,
+      turnId,
+      reason: 'aborted',
+      ts: Date.now(),
+    }, { sessionId, vpId, threadId, turnId });
+  } catch { /* never crash WS pipeline */ }
+}
+
 function abortAllVpRuntime(aborted) {
   for (const [key, ctrl] of vpAborts) {
     try {
@@ -3450,17 +3510,21 @@ export function handleYeaftAbortTurn(msg = {}) {
     sendSessionEvent({ type: 'yeaft_turn_aborted', turnId: null, success: false });
     return;
   }
+
+  const meta = turnAbortMeta.get(turnId);
   const ctrl = turnAbortCtrls.get(turnId);
+  let success = false;
+
   if (ctrl && !ctrl.signal.aborted) {
-    try { ctrl.abort(); } catch { /* best-effort */ }
-    turnAbortCtrls.delete(turnId);
-    turnAbortMeta.delete(turnId);
-    sendSessionEvent({ type: 'yeaft_turn_aborted', turnId, success: true });
-  } else {
-    turnAbortCtrls.delete(turnId);
-    turnAbortMeta.delete(turnId);
-    sendSessionEvent({ type: 'yeaft_turn_aborted', turnId, success: false });
+    try { ctrl.abort(); success = true; } catch { /* best-effort */ }
+  } else if (removeQueuedVpTurn(turnId)) {
+    success = true;
+    emitQueuedTurnAbort(meta, turnId);
   }
+
+  turnAbortCtrls.delete(turnId);
+  turnAbortMeta.delete(turnId);
+  sendSessionEvent({ type: 'yeaft_turn_aborted', turnId, success });
 }
 
 /**
@@ -4460,3 +4524,31 @@ export async function handleYeaftMcpReload(msg = {}) {
   });
   broadcastMcpUpdated({ reason: 'reload', name: targetName, failures });
 }
+
+export const __testHooks = {
+  resetAbortState() {
+    turnAbortCtrls.clear();
+    turnAbortMeta.clear();
+    vpAborts.clear();
+    vpInboxes.clear();
+  },
+  seedQueuedVpTurn({ sessionId = 'session-test', vpId = 'vp-test', threadId = 'main', turnId = 'turn-test' } = {}) {
+    const key = threadKey(sessionId, vpId, threadId);
+    const inbox = vpInboxes.get(key) || [];
+    inbox.push({ envelope: { msg: { id: `${turnId}-msg` } }, turnId, thread: { threadId, title: '', messageIds: [] } });
+    vpInboxes.set(key, inbox);
+    turnAbortMeta.set(turnId, { sessionId, vpId, threadId, key });
+    return { key, turnId };
+  },
+  seedRunningVpTurn({ sessionId = 'session-test', vpId = 'vp-test', threadId = 'main', turnId = 'turn-test' } = {}) {
+    const key = threadKey(sessionId, vpId, threadId);
+    const ctrl = new AbortController();
+    vpAborts.set(key, ctrl);
+    turnAbortCtrls.set(turnId, ctrl);
+    turnAbortMeta.set(turnId, { sessionId, vpId, threadId, key });
+    return { key, turnId, ctrl };
+  },
+  queuedTurnIds() {
+    return Array.from(vpInboxes.values()).flatMap((inbox) => Array.isArray(inbox) ? inbox.map((entry) => entry.turnId) : []);
+  },
+};

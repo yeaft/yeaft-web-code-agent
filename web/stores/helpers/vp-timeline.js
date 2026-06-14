@@ -124,12 +124,14 @@ export function buildTimelineRows(args) {
   const {
     vpList,
     vpStatuses,
+    stoppingVpTurnIds,
     connectionState,
     vpLabelOf,
   } = args || {};
 
   const ctx = {
     vpStatuses: vpStatuses || {},
+    stoppingVpTurnIds: stoppingVpTurnIds || {},
     connectionState: connectionState || null,
   };
 
@@ -187,6 +189,8 @@ function makeRow(vpId, displayName, ctx) {
     vpId,
     displayName: displayName || vpId,
     status: statusFor(vpId, ctx),
+    turnId: entry?.turnId || null,
+    isStopping: !!(entry?.turnId && ctx?.stoppingVpTurnIds?.[entry.turnId]),
     runningThreadCount: entry && Number.isFinite(entry.runningThreadCount)
       ? entry.runningThreadCount
       : 0,
