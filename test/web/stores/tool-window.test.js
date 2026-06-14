@@ -31,12 +31,23 @@ function toolMsg(i, extra = {}) {
   };
 }
 
-function dbTool(i) {
+function dbTool(i, extra = {}) {
   return {
     id: i + 1,
     message_type: 'tool_use',
     tool_name: 'Bash',
     tool_input: JSON.stringify({ command: `echo ${i}` }),
+    created_at: i + 1,
+    ...extra,
+  };
+}
+
+function dbEmptyUser(i) {
+  return {
+    id: i + 1,
+    role: 'user',
+    message_type: 'message',
+    content: '',
     created_at: i + 1,
   };
 }
@@ -76,6 +87,70 @@ describe('tool action windowing', () => {
     const summary = rows.find((m) => m.type === 'tool-summary');
     expect(summary?.count).toBe(5000);
     expect(summary?.dbMessageId).toBe(5000);
+  });
+
+  it('compresses chat resume tools across interleaved empty user artifacts', () => {
+    const store = useChatStore();
+    store.agents = [{ id: 'agent-1', name: 'Agent One' }];
+    store.sendWsMessage = () => {};
+    const dbMessages = [];
+    for (let i = 0; i < 5000; i += 1) {
+      dbMessages.push(dbTool(i, { id: i * 2 + 1, created_at: i * 2 + 1 }));
+      dbMessages.push(dbEmptyUser(i * 2 + 1));
+    }
+
+    handleConversationResumed(store, {
+      conversationId: 'conv-interleaved-chat',
+      agentId: 'agent-1',
+      workDir: '/tmp/project',
+      claudeSessionId: 'claude-session',
+      dbMessages,
+      hasMoreMessages: false,
+    });
+
+    const rows = store.messagesMap['conv-interleaved-chat'];
+    const summaries = rows.filter((m) => m.type === 'tool-summary');
+    expect(rows.filter((m) => m.type === 'tool-use')).toHaveLength(0);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({ count: 5000, dbMessageId: 9999 });
+  });
+
+  it('does not parse ordinary historical tool inputs before summarizing but keeps special tools detailed', () => {
+    const store = useChatStore();
+    store.agents = [{ id: 'agent-1', name: 'Agent One' }];
+    store.sendWsMessage = () => {};
+    const originalParse = JSON.parse;
+    let ordinaryParses = 0;
+    let specialParses = 0;
+    JSON.parse = (value, ...args) => {
+      if (typeof value === 'string' && value.startsWith('{"marker":"ordinary"')) ordinaryParses += 1;
+      if (typeof value === 'string' && value.startsWith('{"todos"')) specialParses += 1;
+      return originalParse(value, ...args);
+    };
+
+    try {
+      handleConversationResumed(store, {
+        conversationId: 'conv-unparsed-chat',
+        agentId: 'agent-1',
+        workDir: '/tmp/project',
+        claudeSessionId: 'claude-session',
+        dbMessages: Array.from({ length: 5000 }, (_, i) => dbTool(i, {
+          tool_input: `{"marker":"ordinary","payload":"${'x'.repeat(1024)}"}`,
+        })),
+        hasMoreMessages: false,
+      });
+      const special = store.formatDbMessageForHistoryHydration(dbTool(9000, {
+        tool_name: 'TodoWrite',
+        tool_input: '{"todos":[]}',
+      }));
+
+      expect(ordinaryParses).toBe(0);
+      expect(specialParses).toBe(1);
+      expect(special.toolInput).toEqual({ todos: [] });
+      expect(store.messagesMap['conv-unparsed-chat'].filter((m) => m.type === 'tool-summary')).toHaveLength(1);
+    } finally {
+      JSON.parse = originalParse;
+    }
   });
 
   it('hydrates Yeaft recovered tool summaries without tool detail rows', () => {

@@ -173,12 +173,12 @@ export function handleConversationResumed(store, msg) {
   });
   console.log('dbMessages received:', msg.dbMessages?.length || 0, 'dbMessageCount:', msg.dbMessageCount || 0);
   if (msg.dbMessages && msg.dbMessages.length > 0) {
-    const formatted = summarizeHistoricalToolMessages(
-      msg.dbMessages.map(m => store.formatDbMessage(m)).flat().filter(Boolean)
+    const formatted = filterEmptyUserMessages(
+      msg.dbMessages.map(m => store.formatDbMessageForHistoryHydration(m)).flat().filter(Boolean)
     );
-    const cleaned = filterEmptyUserMessages(formatted);
+    const summarized = summarizeHistoricalToolMessages(formatted);
     const msgs = store.messagesMap[msg.conversationId] || [];
-    for (const m of cleaned) {
+    for (const m of summarized) {
       msgs.push(m);
     }
   }
@@ -347,7 +347,7 @@ export function handleSyncMessagesResult(store, msg) {
     typeof msg.afterMessageId === 'number' && msg.afterMessageId > 0;
   if (msg.conversationId && store.activeConversations.includes(msg.conversationId)) {
     const formatted = summarizeHistoricalToolMessages(filterEmptyUserMessages(
-      (msg.messages || []).map(m => store.formatDbMessage(m)).flat().filter(Boolean)
+      (msg.messages || []).map(m => store.formatDbMessageForHistoryHydration(m)).flat().filter(Boolean)
     ));
 
     if (formatted.length > 0) {
