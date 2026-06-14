@@ -990,7 +990,8 @@ describe('Engine', () => {
       const call = mockAdapter.callLog[0];
       expect(call.system).toContain('Yeaft');
       expect(call.system).toContain('核心原则');
-      expect(call.system).toContain('统一模式');
+      expect(call.system).not.toContain('统一模式');
+      expect(call.system).not.toContain('你是一个持续伴随的 AI 伙伴');
     });
 
     it('should include tool names in system prompt for configured language', async () => {
