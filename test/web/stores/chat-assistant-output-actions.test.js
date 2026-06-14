@@ -48,8 +48,9 @@ describe('chat store assistant output actions', () => {
     store.processingConversations = { 'conv-1': true };
     store.messagesMap = {
       'conv-1': [
-        { id: 'live', type: 'assistant', content: 'live', turnId: 'turn-live', isStreaming: true, status: 'pending' },
         { id: 'hist', type: 'assistant', content: 'history', turnId: 'turn-history', isStreaming: true, status: 'pending' },
+        { id: 'new-user', type: 'user', content: 'newer', turnId: 'turn-live' },
+        { id: 'live', type: 'assistant', content: 'live', turnId: 'turn-live', isStreaming: true, status: 'pending' },
       ],
     };
 
@@ -61,7 +62,7 @@ describe('chat store assistant output actions', () => {
     });
 
     expect(store.processingConversations['conv-1']).toBe(true);
-    expect(store.messagesMap['conv-1'][0].isStreaming).toBe(true);
-    expect(store.messagesMap['conv-1'][1].isStreaming).toBe(false);
+    expect(store.messagesMap['conv-1'][0].isStreaming).toBe(false);
+    expect(store.messagesMap['conv-1'][2].isStreaming).toBe(true);
   });
 });

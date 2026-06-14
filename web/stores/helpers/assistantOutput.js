@@ -273,7 +273,7 @@ export function handleAssistantOutputFrame(store, conversationId, data) {
     }
   } else if (data.type === 'result') {
     if (data.isHistoryReplay) {
-      store.finishStreamingForConversation(conversationId);
+      finishHistoryReplayForConversation(store, conversationId);
       return;
     }
     // ★ result 表示当前 turn 已完成，立即清除 processing 状态
@@ -284,6 +284,23 @@ export function handleAssistantOutputFrame(store, conversationId, data) {
     if (store._currentYeaftTurnId && store.activeVpTurns[store._currentYeaftTurnId]) {
       const { [store._currentYeaftTurnId]: _removed, ...rest } = store.activeVpTurns;
       store.activeVpTurns = rest;
+    }
+
+    function finishHistoryReplayForConversation(store, conversationId) {
+      const msgs = store.messagesMap[conversationId] || [];
+      const targetTurnId = store._currentYeaftTurnId || null;
+      const targetThreadId = store._currentYeaftThreadId || null;
+      if (!targetTurnId && !targetThreadId) {
+        store.finishStreamingForConversation(conversationId);
+        return;
+      }
+      for (const m of msgs) {
+        if (!m || !m.isStreaming) continue;
+        if (targetTurnId && m.turnId !== targetTurnId) continue;
+        if (targetThreadId && m.threadId && m.threadId !== targetThreadId) continue;
+        m.isStreaming = false;
+        if (m.status === 'pending') m.status = 'completed';
+      }
     }
     // ★ 设置防护窗口，防止后续 agent_list 中的 stale processing:true 重新设回
     if (!store._closedAt) store._closedAt = {};

@@ -266,16 +266,18 @@ export function buildRelevantScopes({ sessionId, chatId, vpId, extra } = {}) {
     scopes.push(`chat/${chatId}`);
     if (vpId) scopes.push(`chat/${chatId}/vp/${vpId}`);
   } else if (sessionId) {
-    // Read both legacy `group/<id>` and new `session/<id>` scopes so recall
-    // works regardless of which path the writers used for a given session.
-    // (Writers still emit `group/<id>` for back-compat; migration may have
-    // rewritten on-disk data to `session/<id>`.)
+    // Read legacy `group/<id>`, migrated `session/<id>`, and plural
+    // runtime `sessions/<id>` scopes so recall works regardless of which
+    // path produced a given segment.
     scopes.push(`session/${sessionId}`);
     scopes.push(`session/${sessionId}/user`);
+    scopes.push(`sessions/${sessionId}`);
+    scopes.push(`sessions/${sessionId}/user`);
     scopes.push(`group/${sessionId}`);
     scopes.push(`group/${sessionId}/user`);
     if (vpId) {
       scopes.push(`session/${sessionId}/vp/${vpId}`);
+      scopes.push(`sessions/${sessionId}/vp/${vpId}`);
       scopes.push(`group/${sessionId}/vp/${vpId}`);
     }
   }

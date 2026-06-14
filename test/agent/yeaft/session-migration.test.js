@@ -6,6 +6,7 @@ import { tmpdir } from 'os';
 import { migrateSessions } from '../../../agent/yeaft/migrate/sessions.js';
 import { openSegmentIndex } from '../../../agent/yeaft/memory/index-db.js';
 import { parseSegments } from '../../../agent/yeaft/memory/segment.js';
+import { buildRelevantScopes } from '../../../agent/yeaft/sessions/pre-flow.js';
 
 const roots = [];
 
@@ -26,6 +27,20 @@ afterEach(() => {
 });
 
 describe('session storage migration', () => {
+  it('recalls migrated and runtime session memory scope spellings', () => {
+    expect(buildRelevantScopes({ sessionId: 'session_scope', vpId: 'omni' })).toEqual(expect.arrayContaining([
+      'session/session_scope',
+      'session/session_scope/user',
+      'session/session_scope/vp/omni',
+      'sessions/session_scope',
+      'sessions/session_scope/user',
+      'sessions/session_scope/vp/omni',
+      'group/session_scope',
+      'group/session_scope/user',
+      'group/session_scope/vp/omni',
+    ]));
+  });
+
   it('accepts migrated singular session memory subscopes', () => {
     for (const scope of [
       'session/session_scope',
