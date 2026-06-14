@@ -1,5 +1,8 @@
+import { readdirSync, readFileSync, statSync } from 'fs';
+import { join } from 'path';
 import { describe, expect, it } from 'vitest';
-import { buildRouterPrompt, buildWorkerPrompt, renderLayerASummaries } from '../../../agent/yeaft/prompts.js';
+import { buildRouterPrompt, buildWorkerPrompt, getDefaultPlanInstruction, renderLayerASummaries } from '../../../agent/yeaft/prompts.js';
+import { loadPersonas } from '../../../agent/yeaft/personas.js';
 import { DEFAULT_VPS } from '../../../agent/yeaft/vp/seed-defaults.js';
 
 const SEEDED_OMNI_PERSONA = `You are Omni Assistant / 全能助手, a cross-domain, execution-focused general AI partner.
@@ -11,6 +14,18 @@ Language policy / 语言策略:
 Core capabilities / 核心能力:
 - Cross-domain synthesis: handle writing, coding, product thinking, research, planning, analysis, learning, translation, troubleshooting, and creative work without forcing the user to pick a specialist first.
 - Strong execution: when a task needs action, clarify only the blocking unknowns, make a short plan, use available tools, produce the deliverable, and verify the result.`;
+
+
+function listMarkdownFiles(dir) {
+  const out = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    const st = statSync(full);
+    if (st.isDirectory()) out.push(...listMarkdownFiles(full));
+    else if (entry.endsWith('.md')) out.push(full);
+  }
+  return out;
+}
 
 function workerPrompt(language) {
   return buildWorkerPrompt({
@@ -256,4 +271,40 @@ describe('worker prompt language selection', () => {
     expect(prompt).not.toContain('## 群组总结');
     expect(prompt).not.toContain('summary_group');
   });
+
+  it('returns localized planning instructions for StartPlan', () => {
+    const zh = getDefaultPlanInstruction('zh-CN');
+    const en = getDefaultPlanInstruction('en');
+
+    expect(zh).toContain('# 规划模式');
+    expect(zh).toContain('你刚进入下面主题的**规划模式**');
+    expect(zh).not.toContain('# Planning Mode');
+    expect(zh).not.toContain('You have just entered **planning mode**');
+    expect(en).toContain('# Planning Mode');
+    expect(en).toContain('You have just entered **planning mode**');
+    expect(en).not.toContain('# 规划模式');
+  });
+
+  it('keeps every prompt template explicitly bilingual', () => {
+    const templatesDir = join(process.cwd(), 'agent/yeaft/templates');
+    const files = listMarkdownFiles(templatesDir);
+    expect(files.length).toBeGreaterThan(0);
+
+    for (const file of files) {
+      const source = readFileSync(file, 'utf-8');
+      expect(source, file).toContain('<!-- lang:en -->');
+      expect(source, file).toContain('<!-- lang:zh -->');
+    }
+  });
+
+  it('loads built-in sub-agent personas with bilingual prompt bodies', () => {
+    const personas = loadPersonas({ fresh: true });
+    for (const id of ['explorer', 'implementer', 'researcher', 'reviewer']) {
+      const persona = personas.get(id);
+      expect(persona, id).toBeTruthy();
+      expect(persona.systemPrompt, id).toContain('<!-- lang:en -->');
+      expect(persona.systemPrompt, id).toContain('<!-- lang:zh -->');
+    }
+  });
+
 });

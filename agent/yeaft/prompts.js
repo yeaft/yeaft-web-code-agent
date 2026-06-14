@@ -184,7 +184,7 @@ function getTemplate(key, language) {
  * @returns {string}
  */
 export function getDefaultPlanInstruction(language = 'en') {
-  return getTemplate('planInstruction', language);
+  return getTemplate('planInstruction', normalizePromptLanguage(language));
 }
 
 // ─── Prompt Templates (hardcoded fallbacks) ──────────────────────
