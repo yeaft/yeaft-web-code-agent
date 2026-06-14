@@ -41,7 +41,7 @@ if (typeof globalThis.Pinia.defineStore !== 'function') {
 const { default: SessionCreateModal } = await import('../../web/components/SessionCreateModal.js');
 
 const { seedAgentDefault, loadRestoreCandidates } = SessionCreateModal.methods;
-const { folderAggregates, agentSessions } = SessionCreateModal.computed;
+const { folderAggregates, agentSessions, agentSignature } = SessionCreateModal.computed;
 
 describe('SessionCreateModal — seedAgentDefault', () => {
   it('seeds form.agentId once agents hydrate (cold-load: empty at mount)', () => {
@@ -118,6 +118,47 @@ describe('SessionCreateModal — seedAgentDefault', () => {
   });
 });
 
+describe('SessionCreateModal — agentSignature watcher key (offline detection)', () => {
+  // Review (both personas, Important): the re-seed watcher must key on
+  // agent identity+online, NOT agentOptions.length — the UI keeps offline
+  // agents in the list, so an agent going offline leaves the length
+  // unchanged. agentSignature is the watched value; these pin that it
+  // actually changes when online flips (so the watcher fires) and that a
+  // re-seed then moves form.agentId off the dead agent.
+  it('signature changes when an agent flips online→offline (length unchanged)', () => {
+    const before = agentSignature.call({
+      agentOptions: [{ id: 'server', online: true }, { id: 'laptop', online: true }],
+    });
+    const after = agentSignature.call({
+      agentOptions: [{ id: 'server', online: false }, { id: 'laptop', online: true }],
+    });
+    expect(before).not.toBe(after); // a length watcher would see no change
+  });
+
+  it('signature changes on a simultaneous up/down swap (length unchanged)', () => {
+    const before = agentSignature.call({
+      agentOptions: [{ id: 'server', online: true }, { id: 'laptop', online: false }],
+    });
+    const after = agentSignature.call({
+      agentOptions: [{ id: 'server', online: false }, { id: 'laptop', online: true }],
+    });
+    expect(before).not.toBe(after);
+  });
+
+  it('re-seeds form.agentId off an agent that just went offline', () => {
+    // Simulate the orchestration: form.agentId was seeded to "server",
+    // which then goes offline. The agentSignature watcher fires
+    // seedAgentDefault, which must move the selection to an online agent.
+    const ctx = {
+      form: { agentId: 'server' },
+      chat: { yeaftAgentId: null, currentAgent: null },
+      agentOptions: [{ id: 'server', online: false }, { id: 'laptop', online: true }],
+    };
+    seedAgentDefault.call(ctx); // what the watcher calls
+    expect(ctx.form.agentId).toBe('laptop');
+  });
+});
+
 describe('SessionCreateModal — folder list scoped to selected agent', () => {
   const sessions = [
     { id: 's1', agentId: 'server', workDir: '/home/hyi/Projects/cwc' },
@@ -191,6 +232,47 @@ describe('SessionCreateModal — scan sends the selected agentId, never null', (
   it('refuses to scan (no request) when no agent resolves — never sends null', async () => {
     const ctx = mkCtx(null, '');
     await loadRestoreCandidates.call(ctx);
+    expect(ctx.calls).toHaveLength(0);
+    expect(ctx.restoreError).toBeTruthy();
+  });
+});
+
+describe('SessionCreateModal — restore guards null agentId too', () => {
+  const { onRestoreClick } = SessionCreateModal.methods;
+
+  function mkCtx(formAgentId) {
+    const calls = [];
+    return {
+      calls,
+      restoring: null,
+      form: { agentId: formAgentId, workDir: '/home/hyi/Projects/cwc' },
+      restoreError: '',
+      sessionsStore: { setActive() {} },
+      $emit() {},
+      $t: (_k, vars) => (vars && vars.message) || _k,
+      chat: {
+        currentAgent: 'server',
+        selectAgent() {},
+        setActiveSessionFilter() {},
+        async sessionCrudRequest(op, data, opts) {
+          calls.push({ op, data, opts });
+          return { ok: true, session: { id: data.sessionId, agentId: opts.agentId } };
+        },
+      },
+    };
+  }
+
+  it('restores with the selected agentId', async () => {
+    const ctx = mkCtx('server');
+    await onRestoreClick.call(ctx, { id: 'sess-1' });
+    expect(ctx.calls).toHaveLength(1);
+    expect(ctx.calls[0].op).toBe('restore');
+    expect(ctx.calls[0].opts).toEqual({ agentId: 'server' });
+  });
+
+  it('refuses to restore (no request) when form.agentId is empty — never sends null', async () => {
+    const ctx = mkCtx(null);
+    await onRestoreClick.call(ctx, { id: 'sess-1' });
     expect(ctx.calls).toHaveLength(0);
     expect(ctx.restoreError).toBeTruthy();
   });
