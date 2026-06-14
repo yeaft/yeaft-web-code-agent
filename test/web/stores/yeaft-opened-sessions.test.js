@@ -139,4 +139,37 @@ describe('opened Yeaft sessions persistence', () => {
       { type: 'yeaft_load_history', agentId: 'agent-1', sessionId: 'session-b', limit: 5 },
     ]);
   });
+
+  it('marks inactive opened session replay complete by session key', () => {
+    const store = makeStore({
+      'session-a': { id: 'session-a', agentId: 'agent-1' },
+      'session-b': { id: 'session-b', agentId: 'agent-1' },
+    });
+    store.yeaftAgentId = 'agent-1';
+    store.yeaftActiveSessionFilter = 'session-a';
+    store.yeaftSessionHistoryState = {
+      'session-b': { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
+    };
+
+    store.handleYeaftOutput({
+      event: {
+        type: 'history_loaded',
+        mode: 'recent',
+        sessionId: 'session-b',
+        count: 2,
+        hasMore: true,
+        oldestSeq: 7,
+        latestSeq: 12,
+      },
+    });
+
+    expect(store.yeaftSessionHistoryState['session-b']).toMatchObject({
+      loaded: true,
+      loading: false,
+      hasMore: true,
+      oldestSeq: 7,
+      count: 2,
+      latestSeq: 12,
+    });
+  });
 });

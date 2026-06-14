@@ -606,8 +606,12 @@ function isValidSessionJson(path) {
 function isValidSessionMeta(meta) {
   return !!meta
     && typeof meta.id === 'string'
-    && typeof meta.name === 'string'
-    && Array.isArray(meta.roster);
+    && meta.id.length > 0
+    && Array.isArray(meta.roster)
+    && meta.roster.every((vpId) => typeof vpId === 'string')
+    && (meta.defaultVpId == null || typeof meta.defaultVpId === 'string')
+    && (meta.announcement == null || typeof meta.announcement === 'string')
+    && (meta.workDir == null || typeof meta.workDir === 'string');
 }
 
 function writeJsonFileAtomic(path, value) {

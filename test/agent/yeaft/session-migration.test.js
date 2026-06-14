@@ -140,6 +140,38 @@ describe('session storage migration', () => {
     });
   });
 
+  it('rebuilds canonical metadata that runtime validation would reject', () => {
+    const root = tempRoot();
+    writeFileSync(join(root, '.yeaft-migration.done'), JSON.stringify({ version: 3 }, null, 2));
+    const sessionDir = join(root, 'sessions', 'session_invalid_roster');
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(sessionDir, 'session.json'), JSON.stringify({
+      id: 'session_invalid_roster',
+      name: 'Invalid Canonical',
+      roster: ['omni', 42],
+      createdAt: '2026-06-12T00:00:00.000Z',
+    }, null, 2));
+    writeFileSync(join(sessionDir, 'meta.json'), JSON.stringify({
+      id: 'session_invalid_roster',
+      displayName: 'Valid Rescue',
+      vpIds: ['omni'],
+      workDir: '/tmp/project',
+      createdAt: '2026-06-12T00:00:00.000Z',
+    }, null, 2));
+
+    const result = migrateSessions(root);
+
+    expect(result.migrated).toBe(true);
+    expect(existsSync(join(sessionDir, 'meta.json'))).toBe(false);
+    expect(readJson(join(sessionDir, 'session.json'))).toMatchObject({
+      id: 'session_invalid_roster',
+      name: 'Valid Rescue',
+      roster: ['omni'],
+      defaultVpId: 'omni',
+      workDir: '/tmp/project',
+    });
+  });
+
   it('converts legacy chat metadata merged during cleanup into session.json', () => {
     const root = tempRoot();
     writeFileSync(join(root, '.yeaft-migration.done'), JSON.stringify({ version: 3 }, null, 2));

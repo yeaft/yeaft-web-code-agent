@@ -1118,6 +1118,9 @@ export const useChatStore = defineStore('chat', {
       if (!this.yeaftAgentId) return 0;
       const gs = getSessionsStore();
       if (!gs || typeof gs.sessionById !== 'function') return 0;
+      // Uses yeaft_load_history replay/delta frames, not yeaft_load_more_history
+      // chunks. Inactive sessions are safe here: replayed rows carry sessionId
+      // and history_loaded updates yeaftSessionHistoryState by that key.
       const ids = resolveOpenedYeaftSessionIds({
         openedSessionIds: this.openedYeaftSessionIds,
         activeSessionId: this.yeaftActiveSessionFilter || gs.activeSessionId || null,
