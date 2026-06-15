@@ -25,6 +25,27 @@ function mediaBlock(css, query, selector) {
   throw new Error(`Missing media block: ${query} ${selector || ''}`.trim());
 }
 
+function ruleBlock(css, selector, contains = '') {
+  let searchFrom = 0;
+  while (searchFrom < css.length) {
+    const start = css.indexOf(`${selector} {`, searchFrom);
+    if (start < 0) break;
+    const open = css.indexOf('{', start);
+    let depth = 0;
+    for (let i = open; i < css.length; i += 1) {
+      if (css[i] === '{') depth += 1;
+      if (css[i] === '}') depth -= 1;
+      if (depth === 0) {
+        const block = css.slice(open + 1, i);
+        if (!contains || block.includes(contains)) return block;
+        searchFrom = i + 1;
+        break;
+      }
+    }
+  }
+  throw new Error(`Missing rule: ${selector} ${contains}`.trim());
+}
+
 describe('Yeaft mobile layout CSS', () => {
   it('keeps session settings modal usable on phone widths', () => {
     const css = read('styles/yeaft.css');
@@ -41,6 +62,24 @@ describe('Yeaft mobile layout CSS', () => {
     expect(mobile).toContain('.group-settings-link-btn');
     expect(mobile).toContain('.group-settings-actions');
     expect(mobile).toContain('column-reverse');
+  });
+
+  it('keeps Dream debug content scrollable in both axes', () => {
+    const css = read('styles/yeaft.css');
+    const panel = ruleBlock(css, '.yeaft-debug-dream-panel', 'overflow: auto');
+    const shell = ruleBlock(css, '.yeaft-debug-dream-shell', 'width: max-content');
+    const detailBody = ruleBlock(css, '.yeaft-debug-dream-detail-body', 'overflow: auto');
+    const mobile = mediaBlock(css, '(max-width: 640px)', '.yeaft-debug-dream-panel');
+
+    expect(panel).toContain('min-width: 0');
+    expect(panel).toContain('min-height: 0');
+    expect(panel).toContain('overflow: auto');
+    expect(shell).toContain('grid-template-columns: minmax(220px, 30%) minmax(520px, 1fr)');
+    expect(shell).toContain('width: max-content');
+    expect(shell).toContain('min-width: 100%');
+    expect(detailBody).toContain('overflow: auto');
+    expect(mobile).toContain('grid-template-columns: minmax(0, 1fr)');
+    expect(mobile).toContain('width: 100%');
   });
 
   it('stacks Yeaft invite CTAs on narrow phones', () => {
