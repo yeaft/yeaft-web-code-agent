@@ -3035,6 +3035,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       // array). See `trimSnapshotForBudget` doc-block for policy.
       const trimmedMessages = trimSnapshotForBudget(baseSnapshot, {
         messageTokenBudget: session?.config?.messageTokenBudget,
+        language: session?.config?.language,
       });
       for await (const event of vpEngine.query({
         prompt,
