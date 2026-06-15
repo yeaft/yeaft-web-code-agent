@@ -43,6 +43,7 @@ function freshStore() {
   store.activeVpTurns = {};
   store.stoppingVpTurnIds = {};
   store.vpStatuses = {};
+  store.yeaftProcessingSessions = {};
   store.messagesMap = {};
   store.sendWsMessage = vi.fn();
   return store;
@@ -110,5 +111,50 @@ describe('Yeaft VP stop', () => {
 
     expect(store.stoppingVpTurnIds['turn-a']).toBeUndefined();
     expect(store.activeVpTurns['turn-a']).toBeUndefined();
+  });
+});
+
+describe('Yeaft session active indicator state', () => {
+  beforeEach(() => {
+    localStorageData.clear();
+  });
+
+  it('tracks processing per Yeaft session instead of only the active row', () => {
+    const store = freshStore();
+
+    store.yeaftProcessingSessions = { 'session-a': true };
+    expect(store.isYeaftSessionProcessing('session-a')).toBe(true);
+    expect(store.isYeaftSessionProcessing('session-b')).toBe(false);
+
+    store.activeVpTurns = {
+      'turn-b': { sessionId: 'session-b', vpId: 'vp-b', startedAt: 10 },
+    };
+    expect(store.isYeaftSessionProcessing('session-b')).toBe(true);
+
+    store.clearYeaftSessionProcessingIfIdle('session-a');
+    expect(store.isYeaftSessionProcessing('session-a')).toBe(false);
+    expect(store.isYeaftSessionProcessing('session-b')).toBe(true);
+  });
+
+  it('lights and clears the session active dot from VP turn lifecycle events', () => {
+    const store = freshStore();
+
+    store.handleYeaftOutput({ event: {
+      type: 'vp_turn_start',
+      sessionId: 'session-a',
+      vpId: 'vp-a',
+      turnId: 'turn-a',
+      ts: 100,
+    } });
+    expect(store.isYeaftSessionProcessing('session-a')).toBe(true);
+
+    store.handleYeaftOutput({ event: {
+      type: 'vp_turn_end',
+      sessionId: 'session-a',
+      vpId: 'vp-a',
+      turnId: 'turn-a',
+      reason: 'end_turn',
+    } });
+    expect(store.isYeaftSessionProcessing('session-a')).toBe(false);
   });
 });

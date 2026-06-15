@@ -87,6 +87,8 @@ select option:checked {
   --tool-result-border: #bbf7d0;
   --sidebar-hover: #e8e6e1;
   --session-active: #e2e0db;
+  --modal-overlay-bg: rgba(28, 28, 28, 0.62);
+  --modal-shadow: 0 18px 72px rgba(28, 28, 28, 0.28);
   --inline-code-bg: rgba(0, 0, 0, 0.05);
   --crew-tool-bg: #f0efec;
   --crew-tool-border: #e0ddd8;
@@ -260,6 +262,8 @@ select option:checked {
   --tool-result-border: rgba(180, 180, 170, 0.12);
   --sidebar-hover: #252523;
   --session-active: #302e2c;
+  --modal-overlay-bg: rgba(8, 8, 8, 0.72);
+  --modal-shadow: 0 18px 72px rgba(0, 0, 0, 0.48);
   --inline-code-bg: rgba(255, 255, 255, 0.07);
   --crew-tool-bg: #1e1e1e;
   --crew-tool-border: #363330;

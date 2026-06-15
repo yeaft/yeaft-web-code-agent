@@ -246,6 +246,9 @@ export default {
   'yeaft.reloadPage': '刷新页面',
   'yeaft.reloadMessages': '重新加载消息',
   'yeaft.switchModel': '切换模型',
+  'yeaft.modelMenu.title': '模型和 LLM 设置',
+  'yeaft.modelMenu.label': '模型',
+  'yeaft.modelMenu.configureHint': 'Provider、密钥、模型列表',
   // fix/dream-cadence-and-ui-trigger: manual dream trigger button.
   'yeaft.dream.runNow': '立即整理记忆',
   'yeaft.dream.lastRun': '上次：{ago}前',
@@ -1307,6 +1310,7 @@ export default {
 
   // 统一会话设置弹窗.
   'yeaft.session.settings.title': '{name} — 会话设置',
+  'yeaft.session.settings.short': '会话',
   'yeaft.session.settings.close': '关闭',
   'yeaft.session.settings.nav.announcement': '会话公告',
   'yeaft.session.settings.nav.members': '成员',

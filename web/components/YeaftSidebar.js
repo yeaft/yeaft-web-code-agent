@@ -102,13 +102,13 @@ export default {
                 v-for="s in sessionList"
                 :key="s.kind + ':' + s.id"
                 class="session-item"
-                :class="{ active: s.active, pinned: s.pinned, processing: s.active && store && store.isConversationProcessing(store.yeaftConversationId) }"
+                :class="{ active: s.active, pinned: s.pinned, processing: isSessionProcessing(s.id) }"
                 @click="onSelectGroup(s.raw)"
                 @contextmenu.prevent="openGroupMenu(s.raw, $event)"
               >
                 <div class="session-item-header">
                   <span v-if="s.pinned" class="session-pin-icon"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg></span>
-                  <span v-if="s.active && store && store.isConversationProcessing(store.yeaftConversationId)" class="processing-dot"></span>
+                  <span v-if="isSessionProcessing(s.id)" class="processing-dot"></span>
                   <div class="title" :title="groupDisplayName(s.raw)">
                     <span>{{ groupDisplayName(s.raw) }}</span>
                   </div>
@@ -324,6 +324,12 @@ export default {
         if (v && v !== fullKey) return v;
       }
       return fallback;
+    },
+    isSessionProcessing(sessionId) {
+      const s = this.chatStore || this.store;
+      if (!s || !sessionId) return false;
+      if (typeof s.isYeaftSessionProcessing === 'function') return s.isYeaftSessionProcessing(sessionId);
+      return !!s.yeaftProcessingSessions?.[sessionId];
     },
     // task-341: latency indicator colour mirrors ChatPage.
     getLatencyClass(latency) {

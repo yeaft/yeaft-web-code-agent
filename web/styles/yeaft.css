@@ -192,36 +192,19 @@
 .yeaft-topbar-model {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   cursor: pointer;
-  padding: 4px 10px;
-  border-radius: 8px;
+  padding: 5px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
   position: relative;
-  transition: background 0.15s;
+  background: var(--bg-input-wrapper);
+  transition: background 0.15s, border-color 0.15s;
 }
 
 .yeaft-topbar-model:hover {
   background: var(--sidebar-hover);
-}
-
-.yeaft-topbar-llm-config {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-
-.yeaft-topbar-llm-config:hover {
-  background: var(--sidebar-hover);
-  color: var(--text-primary);
+  border-color: var(--border-color);
 }
 
 .yeaft-llm-config-modal {
@@ -229,6 +212,16 @@
   height: min(720px, 86vh);
   display: flex;
   flex-direction: column;
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: var(--modal-shadow);
+}
+
+.yeaft-llm-config-overlay {
+  background: var(--modal-overlay-bg);
+  z-index: 1200;
 }
 
 .yeaft-llm-config-body {
@@ -240,14 +233,19 @@
 .yeaft-topbar-model-name {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.yeaft-model-refreshing {
+.yeaft-topbar-model-kicker {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
   font-size: 11px;
   color: var(--text-muted);
 }
@@ -262,12 +260,46 @@
   transform: rotate(180deg);
 }
 
-.yeaft-topbar-model-dropdown {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  margin-top: 4px;
-  z-index: 50;
+  top: calc(100% + 6px);
+  min-width: 260px;
+}
+
+.yeaft-model-dropdown-separator {
+  height: 1px;
+  background: var(--border-light);
+  margin: 4px 0;
+}
+
+.yeaft-model-config-option {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.yeaft-model-config-option:hover {
+  background: var(--sidebar-hover);
+}
+
+.yeaft-model-config-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.yeaft-model-config-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
   min-width: 220px;
 }
 
@@ -1348,7 +1380,7 @@
   justify-content: center;
   border: none;
   background: transparent;
-  color: var(--text-secondary, #555);
+  color: var(--text-secondary);
   border-radius: 6px;
   cursor: pointer;
   flex-shrink: 0;
@@ -1360,20 +1392,22 @@
   color: var(--text-primary);
 }
 
-/* task-fix-mobile-group-settings: topbar group ⚙ — opens the unified
-   SessionSettingsModal for the active group. Visible on every viewport
+/* task-fix-mobile-group-settings: topbar session button — opens the unified
+   SessionSettingsModal for the active session. Visible on every viewport
    (no hover-reveal) so touch users always have a settings entry-point.
    Sits inside `.yeaft-topbar-right` next to clear/debug/detail. */
 .yeaft-topbar-group-settings {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
+  gap: 5px;
+  min-width: 32px;
   height: 32px;
+  padding: 0 9px;
   border: none;
   background: transparent;
-  color: var(--text-secondary, #555);
-  border-radius: 6px;
+  color: var(--text-secondary);
+  border-radius: 8px;
   cursor: pointer;
   flex-shrink: 0;
   transition: color 0.15s ease, background 0.15s ease;
@@ -1383,6 +1417,10 @@
   color: var(--text-primary);
 }
 
+.yeaft-topbar-group-settings-label {
+  font-size: 12px;
+  font-weight: 600;
+}
 @media (max-width: 768px) {
   /* Yeaft conversation: narrower padding on mobile */
   .yeaft-page .messages {

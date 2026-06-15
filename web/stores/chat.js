@@ -176,6 +176,10 @@ export const useChatStore = defineStore('chat', {
     customConversationTitles: {},
     // Per-conversation 处理状态：conversationId -> true (使用对象而非 Set 以确保响应式)
     processingConversations: {},
+    // Per-Yeaft-session processing state: sessionId -> true. Chat uses the
+    // virtual conversation id for active dots; Yeaft needs session scope so a
+    // running turn in session A does not light up every session row.
+    yeaftProcessingSessions: {},
     theme: localStorage.getItem('theme') || (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'),
     themeFollowSystem: !localStorage.getItem('theme'),
     locale: localStorage.getItem('locale') || 'zh-CN',
@@ -890,6 +894,18 @@ export const useChatStore = defineStore('chat', {
     isConversationProcessing: (state) => (conversationId) => {
       return !!state.processingConversations[conversationId];
     },
+    isYeaftSessionProcessing: (state) => (sessionId) => {
+      if (!sessionId) return false;
+      if (state.yeaftProcessingSessions?.[sessionId]) return true;
+      for (const info of Object.values(state.activeVpTurns || {})) {
+        if (info?.sessionId === sessionId) return true;
+      }
+      for (const [key, status] of Object.entries(state.vpStatuses || {})) {
+        if (!key.startsWith(`${sessionId}::`)) continue;
+        if (status && !['idle', 'offline', 'completed', 'failed', 'aborted'].includes(status.state)) return true;
+      }
+      return false;
+    },
     // 是否显示恢复提示
     showRecoveryBanner: (state) => {
       return state.pendingRecovery && !state.recoveryDismissed && !state.currentConversation;
@@ -1224,6 +1240,12 @@ export const useChatStore = defineStore('chat', {
         }
         this.addMessageToConversation(this.yeaftConversationId, localMsg);
         this.processingConversations[this.yeaftConversationId] = true;
+        if (groupId) {
+          this.yeaftProcessingSessions = {
+            ...this.yeaftProcessingSessions,
+            [groupId]: true,
+          };
+        }
         this._turnCompletedConvs?.delete(this.yeaftConversationId);
         if (this._closedAt?.[this.yeaftConversationId]) {
           delete this._closedAt[this.yeaftConversationId];
@@ -2010,6 +2032,12 @@ export const useChatStore = defineStore('chat', {
               startedAt: event.ts || Date.now(),
             },
           };
+          if (event.sessionId) {
+            this.yeaftProcessingSessions = {
+              ...this.yeaftProcessingSessions,
+              [event.sessionId]: true,
+            };
+          }
           break;
         }
         case 'vp_turn_end': {
@@ -2018,6 +2046,7 @@ export const useChatStore = defineStore('chat', {
           this.activeVpTurns = rest;
           const { [event.turnId]: _stopped, ...stoppingRest } = this.stoppingVpTurnIds;
           this.stoppingVpTurnIds = stoppingRest;
+          this.clearYeaftSessionProcessingIfIdle(event.sessionId || _removed?.sessionId || null);
           // Per-message lifecycle: flip every in-flight assistant message
           // owned by this VP/turn from 'pending' to the terminal status
           // carried on `event.reason` (end_turn → completed; route_forward
@@ -2069,6 +2098,7 @@ export const useChatStore = defineStore('chat', {
           this.activeVpTurns = rest;
           const { [event.turnId]: _stopped, ...stoppingRest } = this.stoppingVpTurnIds;
           this.stoppingVpTurnIds = stoppingRest;
+          this.clearYeaftSessionProcessingIfIdle(event.sessionId || _removed?.sessionId || null);
           break;
         }
         // vp_typing_* coexists with vp_status_changed on purpose. They serve
@@ -3371,6 +3401,13 @@ export const useChatStore = defineStore('chat', {
         console.warn('[chat] failed to persist pinnedSessions:', e?.message || e);
       }
     },
+    clearYeaftSessionProcessingIfIdle(sessionId) {
+      if (!sessionId) return;
+      const hasActiveTurn = Object.values(this.activeVpTurns || {}).some((info) => info?.sessionId === sessionId);
+      if (hasActiveTurn) return;
+      const { [sessionId]: _removed, ...rest } = this.yeaftProcessingSessions || {};
+      this.yeaftProcessingSessions = rest;
+    },
     sendMessage(text, attachments = [], options = {}) { convHelpers.sendMessage(this, text, attachments, options); },
     cancelExecution() { convHelpers.cancelExecution(this); },
     /**
@@ -3397,6 +3434,7 @@ export const useChatStore = defineStore('chat', {
       }
       this.activeVpTurns = {};
       this.stoppingVpTurnIds = {};
+      this.yeaftProcessingSessions = {};
     },
     /**
      * Per-VP stop: abort a single VP turn by turnId without affecting siblings.
