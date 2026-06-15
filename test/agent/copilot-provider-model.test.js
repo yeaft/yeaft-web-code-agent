@@ -15,7 +15,7 @@ class FakeWritable extends EventEmitter {
 
 function respond(msg) {
   const child = spawns[spawns.length - 1];
-  if (!child || msg.id == null) return;
+  if (!child || msg.id == null || process.env.TEST_COPILOT_SPAWN_ERROR) return;
   let result = null;
   if (msg.method === 'initialize') {
     result = { agentCapabilities: { loadSession: true } };
@@ -38,6 +38,9 @@ vi.mock('child_process', () => ({
     child.args = args;
     child.opts = opts;
     spawns.push(child);
+    if (process.env.TEST_COPILOT_SPAWN_ERROR) {
+      queueMicrotask(() => child.emit('error', new Error(process.env.TEST_COPILOT_SPAWN_ERROR)));
+    }
     return child;
   }),
 }));
@@ -51,6 +54,7 @@ afterEach(() => {
   writes.length = 0;
   spawns.length = 0;
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe('Copilot chat provider model handling', () => {
@@ -58,6 +62,33 @@ describe('Copilot chat provider model handling', () => {
     expect(copilot.capabilities.modelPicker).toBe(false);
     expect(copilot.listModels).toBeUndefined();
     expect(copilot.default.listModels).toBeUndefined();
+  });
+
+  it('uses a shell on Windows so PATH shims like copilot.cmd can start', () => {
+    const winLaunch = copilot.resolveCopilotLaunchOptions({
+      cwd: 'Q:\\M365\\Sydney',
+      env: { PATH: 'C:\\Tools' },
+      platform: 'win32',
+      bin: 'copilot',
+    });
+    expect(winLaunch).toMatchObject({
+      command: 'copilot',
+      options: {
+        cwd: 'Q:\\M365\\Sydney',
+        shell: true,
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    });
+
+    const linuxLaunch = copilot.resolveCopilotLaunchOptions({
+      cwd: '/tmp/project',
+      env: {},
+      platform: 'linux',
+      bin: 'copilot',
+    });
+    expect(linuxLaunch.options.shell).toBeUndefined();
+    expect(linuxLaunch.options.windowsHide).toBeUndefined();
   });
 
   it('does not pass UI model overrides to copilot --acp', async () => {
@@ -89,6 +120,35 @@ describe('Copilot chat provider model handling', () => {
       type: 'claude_output',
       conversationId: 'conv-1',
       data: expect.objectContaining({ type: 'result', subtype: 'success' }),
+    }));
+  });
+
+  it('surfaces copilot spawn errors instead of hanging the turn', async () => {
+    vi.stubEnv('TEST_COPILOT_SPAWN_ERROR', 'spawn ENOENT');
+    ctx.CONFIG = { debug: false };
+    ctx.sendToServer = vi.fn();
+
+    const state = await copilot.start({
+      conversationId: 'conv-err',
+      workDir: 'Q:\\M365\\Sydney',
+      providerOptions: { allowAllTools: true },
+    });
+
+    await copilot.sendInput(state, 'hi', {});
+
+    expect(ctx.sendToServer).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'claude_output',
+      conversationId: 'conv-err',
+      data: expect.objectContaining({
+        type: 'result',
+        subtype: 'error',
+        is_error: true,
+        error: expect.stringContaining('copilot process error: spawn ENOENT'),
+      }),
+    }));
+    expect(ctx.sendToServer).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'turn_completed',
+      conversationId: 'conv-err',
     }));
   });
 });
