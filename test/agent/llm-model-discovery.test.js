@@ -77,5 +77,6 @@ describe('LLM model discovery', () => {
 
     expect(result.models).toEqual(['gpt-5', 'claude-sonnet-4.5']);
     expect(modelEntryForProvider('claude-sonnet-4.5')).toEqual({ id: 'claude-sonnet-4.5', protocol: 'anthropic' });
+    expect(modelEntryForProvider('claude-opus-4.8')).toEqual({ id: 'claude-opus-4.8', protocol: 'anthropic' });
   });
 });

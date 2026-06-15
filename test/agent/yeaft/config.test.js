@@ -3,6 +3,8 @@ import { existsSync, writeFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { loadConfig, parseFrontmatter, loadMCPConfig } from '../../../agent/yeaft/config.js';
+import { resolveContextWindow, resolveMaxOutputTokens } from '../../../agent/yeaft/models.js';
+import { _resetMemCache, _setMemCacheForTest } from '../../../agent/yeaft/llm/models-dev.js';
 
 const TEST_DIR = join(tmpdir(), `yeaft-test-config-${Date.now()}`);
 
@@ -23,6 +25,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  _resetMemCache();
   if (existsSync(TEST_DIR)) {
     rmSync(TEST_DIR, { recursive: true, force: true });
   }
@@ -343,6 +346,35 @@ model: gpt-5
     const config = loadConfig({ dir: TEST_DIR, model: 'gpt-5' });
     expect(config.modelInfo).not.toBeNull();
     expect(config.modelInfo.displayName).toBe('GPT-5');
+  });
+
+  it('should include Anthropic metadata and limits for Claude Opus 4.8 ids', () => {
+    _setMemCacheForTest({
+      anthropic: {
+        models: {
+          'claude-opus-4-8': { limit: { context: 1_000_000, output: 128_000 } },
+        },
+      },
+      'github-copilot': {
+        models: {
+          'claude-opus-4.8': { limit: { context: 200_000, output: 64_000 } },
+        },
+      },
+    });
+
+    const nativeConfig = loadConfig({ dir: TEST_DIR, model: 'claude-opus-4-8' });
+    expect(nativeConfig.adapter).toBe('anthropic');
+    expect(nativeConfig.baseUrl).toBe('https://api.anthropic.com');
+    expect(nativeConfig.modelInfo.displayName).toBe('Claude Opus 4.8');
+    expect(resolveContextWindow('claude-opus-4-8', nativeConfig)).toBe(1_000_000);
+    expect(resolveMaxOutputTokens('claude-opus-4-8', nativeConfig)).toBe(128_000);
+
+    const copilotAliasConfig = loadConfig({ dir: TEST_DIR, model: 'claude-opus-4.8' });
+    expect(copilotAliasConfig.adapter).toBe('anthropic');
+    expect(copilotAliasConfig.baseUrl).toBe('https://api.anthropic.com');
+    expect(copilotAliasConfig.modelInfo.displayName).toBe('Claude Opus 4.8');
+    expect(resolveContextWindow('claude-opus-4.8', copilotAliasConfig)).toBe(200_000);
+    expect(resolveMaxOutputTokens('claude-opus-4.8', copilotAliasConfig)).toBe(64_000);
   });
 
   it('should default language to en', () => {
