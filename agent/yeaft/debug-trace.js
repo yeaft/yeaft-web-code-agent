@@ -48,6 +48,7 @@ const SCHEMA = `
     tool_name TEXT NOT NULL,
     tool_input TEXT,
     tool_output TEXT,
+    tool_call_id TEXT,
     duration_ms INTEGER,
     is_error INTEGER DEFAULT 0,
     created_at INTEGER NOT NULL,
@@ -101,12 +102,12 @@ function migrateAddColumn(db, table, column, type) {
   }
 }
 
-/** Max tool_output size stored (10KB). Longer outputs are truncated. */
-const MAX_TOOL_OUTPUT = 10240;
+/** Max tool input size stored inline. Tool output is persisted raw. */
+const MAX_TOOL_INPUT = 10240;
 
 /**
  * Max per-loop payload (system prompt, messages JSON, raw request /
- * response, response text) stored per row. Larger than MAX_TOOL_OUTPUT
+ * response, response text) stored per row. Larger than MAX_TOOL_INPUT
  * because real-world LLM exchanges (system prompt + 30K-token message
  * trail + raw response) routinely cross 10KB. 256KB lets us replay the
  * panel verbatim for the most recent traces without bloating the DB.
@@ -207,6 +208,7 @@ export class DebugTrace {
     // snapshot — `messages.find(role==='user')` would return turn 1's
     // text for every subsequent turn, mislabeling every Turn header.
     migrateAddColumn(this.#db, 'trace_turns', 'user_prompt', 'TEXT');
+    migrateAddColumn(this.#db, 'trace_tools', 'tool_call_id', 'TEXT');
     // Indexes on the just-added columns. Must run AFTER the ALTER TABLEs
     // — running them inside SCHEMA's CREATE INDEX IF NOT EXISTS block
     // would fail with "no such column: group_id" on a pre-bugfix DB.
@@ -308,11 +310,12 @@ export class DebugTrace {
   /**
    * Log a tool call within a turn.
    * @param {string} turnId
-   * @param {{ toolName: string, toolInput?: string, toolOutput?: string, durationMs?: number, isError?: boolean }} info
+   * @param {{ toolName: string, toolCallId?: string|null, toolInput?: string, toolOutput?: string, durationMs?: number, isError?: boolean }} info
    * @returns {string} — tool record id
    */
   logTool(turnId, {
     toolName,
+    toolCallId = null,
     toolInput = null,
     toolOutput = null,
     durationMs = null,
@@ -321,12 +324,13 @@ export class DebugTrace {
     const id = randomUUID();
     const now = Date.now();
     this.#prepare('insertTool', `
-      INSERT INTO trace_tools (id, turn_id, tool_name, tool_input, tool_output, duration_ms, is_error, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO trace_tools (id, turn_id, tool_name, tool_input, tool_output, tool_call_id, duration_ms, is_error, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, turnId, toolName,
-      truncate(toolInput, MAX_TOOL_OUTPUT),
-      truncate(toolOutput, MAX_TOOL_OUTPUT),
+      truncate(toolInput, MAX_TOOL_INPUT),
+      toolOutput == null ? null : String(toolOutput),
+      toolCallId,
       durationMs, isError ? 1 : 0, now,
     );
     return id;
@@ -518,8 +522,10 @@ export class DebugTrace {
       if (!t) continue;
       t.tools.push({
         loopNumber: owner.turn_number || 0,
-        callId: tool.id,
+        callId: tool.tool_call_id || tool.id,
+        traceToolId: tool.id,
         name: tool.tool_name,
+        toolOutput: tool.tool_output == null ? null : String(tool.tool_output),
         durationMs: tool.duration_ms || 0,
         isError: !!tool.is_error,
       });

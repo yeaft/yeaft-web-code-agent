@@ -2276,6 +2276,7 @@ function handleEngineEvent(event, hctx) {
         name: event.name,
         durationMs: event.durationMs,
         isError: event.isError,
+        toolOutput: event.toolOutput,
       }, envelope);
       break;
 

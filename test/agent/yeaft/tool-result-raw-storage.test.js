@@ -1,10 +1,14 @@
 import { describe, it, expect } from 'vitest';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { unlinkSync } from 'node:fs';
 import { Engine } from '../../../agent/yeaft/engine.js';
-import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
+import { DebugTrace, NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { trimSnapshotForBudget } from '../../../agent/yeaft/history-compact.js';
 import { __testAppendTurnToSessionHistory, __testGroupHistory } from '../../../agent/yeaft/web-bridge.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
+import YeaftDebugPanel from '../../../web/components/YeaftDebugPanel.js';
 
 class MockAdapter {
   constructor() {
@@ -69,7 +73,10 @@ describe('tool result raw storage boundaries', () => {
 
     const toolEnd = events.find(e => e.type === 'tool_end');
     expect(toolEnd.output).toBe(raw);
+    const toolExec = events.find(e => e.type === 'tool_exec');
+    expect(toolExec.toolOutput).toBe(raw);
     expect(trace.tools[0].toolOutput).toBe(raw);
+    expect(trace.tools[0].toolCallId).toBe('call_1');
 
     const secondCallToolMessage = adapter.callLog[1].messages.find(m => m.role === 'tool');
     expect(secondCallToolMessage.content).not.toBe(raw);
@@ -88,6 +95,56 @@ describe('tool result raw storage boundaries', () => {
     }));
 
     await expect(registry.execute('BigRegistryTool', {}, { config: { language: 'zh-CN' } })).resolves.toBe(raw);
+  });
+
+
+  it('persists debug trace tool output raw beyond 10KiB', () => {
+    const dbPath = join(tmpdir(), `yeaft-tool-raw-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.db`);
+    const raw = 'r'.repeat(12 * 1024);
+    const trace = new DebugTrace(dbPath);
+    try {
+      const turnId = trace.startTurn({ traceId: 'trace_raw_tool', turnNumber: 1, userPrompt: 'run tool' });
+      const toolTraceId = trace.logTool(turnId, {
+        toolName: 'LargeTool',
+        toolCallId: 'call_raw',
+        toolInput: '{}',
+        toolOutput: raw,
+        durationMs: 3,
+        isError: false,
+      });
+
+      const { tools } = trace.queryByTrace('trace_raw_tool');
+      const row = tools.find(t => t.id === toolTraceId);
+      expect(row.tool_output).toBe(raw);
+      expect(row.tool_output).not.toContain('[truncated]');
+      expect(row.tool_call_id).toBe('call_raw');
+    } finally {
+      trace.close();
+      for (const suffix of ['', '-wal', '-shm']) {
+        try { unlinkSync(dbPath + suffix); } catch { /* ignore */ }
+      }
+    }
+  });
+
+  it('copies raw debug tool output before falling back to truncated model messages', () => {
+    const copied = [];
+    const ctx = {
+      copyText(text, label) {
+        copied.push({ text, label });
+      },
+    };
+    const turn = {
+      loops: [{ messages: [{ role: 'tool', toolCallId: 'call_1', content: 'truncated output' }] }],
+    };
+
+    YeaftDebugPanel.methods.copyToolOutput.call(ctx, turn, {
+      callId: 'call_1',
+      toolOutput: 'raw output',
+    });
+    expect(copied.at(-1)).toEqual({ text: 'raw output', label: 'tool output' });
+
+    YeaftDebugPanel.methods.copyToolOutput.call(ctx, turn, { callId: 'call_1' });
+    expect(copied.at(-1)).toEqual({ text: 'truncated output', label: 'tool output' });
   });
 
   it('keeps in-memory session history raw but truncates replay snapshot for the model', () => {

@@ -2502,9 +2502,8 @@ export class Engine {
         const toolDurationMs = Date.now() - toolStartTime;
 
         // feat-6af5f9f1 PR B: emit a structured `tool_exec` event for the
-        // debug panel. Args/output are already in `conversationMessages`
-        // and will be visible in the next loop's snapshot, so we don't
-        // duplicate them here — only the per-tool timing + status.
+        // debug panel. Keep raw output here; the model-facing tool
+        // message below is deliberately truncated for context budget.
         yield {
           type: 'tool_exec',
           turnId: queryTurnId,
@@ -2514,6 +2513,7 @@ export class Engine {
           name: tc.name,
           durationMs: toolDurationMs,
           isError,
+          toolOutput: output,
         };
 
         // 2026-05-13: feed the per-tool counters. Stays best-effort — a
@@ -2533,10 +2533,12 @@ export class Engine {
         // Log tool to debug trace
         this.#trace.logTool(turnId, {
           toolName: tc.name,
+          toolCallId: tc.id,
           toolInput: JSON.stringify(tc.input),
           toolOutput: output,
           durationMs: toolDurationMs,
           isError,
+          toolOutput: output,
         });
 
         // Append only the bounded copy to the model message history. Raw
