@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
-import { homedir } from 'os';
+import { homedir, platform as osPlatform } from 'os';
 import { join } from 'path';
 import { DatabaseSync } from 'node:sqlite';
 import ctx from '../context.js';
@@ -25,6 +25,19 @@ const COPILOT_BIN = process.env.COPILOT_BIN || 'copilot';
 // YOLO is now opt-in only; per-conv allowAllTools is the normal channel.
 const YOLO = process.env.COPILOT_YOLO === '1';
 const ACP_PROTOCOL_VERSION = 1;
+
+export function resolveCopilotLaunchOptions({ cwd, env = process.env, platform = osPlatform(), bin = COPILOT_BIN } = {}) {
+  const isWindows = platform === 'win32';
+  return {
+    command: bin || 'copilot',
+    options: {
+      cwd,
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      ...(isWindows ? { shell: true, windowsHide: true } : {}),
+    },
+  };
+}
 
 /**
  * Start (or resume) a Copilot ACP session.
@@ -92,22 +105,24 @@ async function _bootAcp(state, resumeSessionId) {
     for (const d of state.providerOptions.addDirs) args.push('--add-dir', String(d));
   }
 
-  const child = spawn(COPILOT_BIN, args, {
-    cwd: state.workDir,
-    env: process.env,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  const launch = resolveCopilotLaunchOptions({ cwd: state.workDir });
+  const child = spawn(launch.command, args, launch.options);
   state.copilotChild = child;
 
   let stderrBuf = '';
   const STDERR_CAP = 64 * 1024;
+  let client = null;
+  let childError = null;
   child.stderr.on('data', (chunk) => {
     if (stderrBuf.length < STDERR_CAP) {
       stderrBuf += chunk.toString('utf8').slice(0, STDERR_CAP - stderrBuf.length);
     }
   });
   child.on('error', (err) => {
-    _sendTurnError(state, `copilot process error: ${err?.message || err}`);
+    const message = `copilot process error: ${err?.message || err}`;
+    childError = new Error(message);
+    if (state.turnActive) _sendTurnError(state, message);
+    if (client) client.close(message);
   });
   child.on('close', (code) => {
     if (state.turnActive) {
@@ -126,7 +141,7 @@ async function _bootAcp(state, resumeSessionId) {
     state.initialized = false;
   });
 
-  const client = new AcpClient({
+  client = new AcpClient({
     stdin: child.stdin,
     stdout: child.stdout,
     onNotification: (method, params) => _handleAcpNotification(state, method, params),
@@ -136,6 +151,10 @@ async function _bootAcp(state, resumeSessionId) {
     },
   });
   state.acpClient = client;
+  if (childError) {
+    client.close(childError.message);
+    throw childError;
+  }
 
   // 1) initialize
   const initResp = await client.request('initialize', {
