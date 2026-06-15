@@ -8,6 +8,11 @@
 
 import { describe, it, expect, vi } from 'vitest';
 
+vi.mock('../../agent/yeaft/llm/credentials/index.js', () => ({
+  CREDENTIAL_PROVIDER_NAMES: { GITHUB_COPILOT: 'github-copilot' },
+  getCredentialProvider: () => ({ getApiKey: async () => 'copilot-token' }),
+}));
+
 import {
   AdapterRouter,
   normalizeModelEntry,
@@ -63,6 +68,53 @@ describe('AdapterRouter resolution', () => {
     });
 
     expect(r.getProviderForModel('copilot/claude-opus-4.8')?.protocol).toBe('anthropic');
+  });
+
+  it('routes managed GitHub Copilot Claude and GPT refs through their catalog protocols', async () => {
+    const fetchFn = vi.fn(async () => ({ ok: true, body: { getReader: () => ({ read: async () => ({ done: true }), releaseLock: () => {} }) } }));
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchFn;
+    try {
+      const r = new AdapterRouter({
+        providers: [{ name: 'github-copilot', credentialProvider: 'github-copilot' }],
+      });
+
+      const claude = r.stream({ model: 'github-copilot/claude-opus-4.8', messages: [] });
+      for await (const _ of claude) {}
+      expect(fetchFn.mock.calls[0][0]).toBe('https://api.githubcopilot.com/v1/messages');
+      expect(JSON.parse(fetchFn.mock.calls[0][1].body).model).toBe('claude-opus-4.8');
+
+      fetchFn.mockClear();
+      const gpt = r.stream({ model: 'github-copilot/gpt-5', messages: [] });
+      for await (const _ of gpt) {}
+      expect(fetchFn.mock.calls[0][0]).toBe('https://api.githubcopilot.com/responses');
+      expect(JSON.parse(fetchFn.mock.calls[0][1].body).model).toBe('gpt-5');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('routes a bare Claude entry from existing Copilot config through Anthropic despite provider-level Responses', async () => {
+    const fetchFn = vi.fn(async () => ({ ok: true, body: { getReader: () => ({ read: async () => ({ done: true }), releaseLock: () => {} }) } }));
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchFn;
+    try {
+      const r = new AdapterRouter({
+        providers: [{
+          name: 'github-copilot',
+          baseUrl: 'https://api.githubcopilot.com',
+          credentialProvider: 'github-copilot',
+          protocol: 'openai-responses',
+          models: ['claude-opus-4.8', 'gpt-5'],
+        }],
+      });
+      const gen = r.stream({ model: 'github-copilot/claude-opus-4.8', messages: [] });
+      for await (const _ of gen) {}
+      expect(fetchFn.mock.calls[0][0]).toBe('https://api.githubcopilot.com/v1/messages');
+      expect(JSON.parse(fetchFn.mock.calls[0][1].body).model).toBe('claude-opus-4.8');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('resolves a stale Claude ref from a single mixed-protocol provider row', async () => {

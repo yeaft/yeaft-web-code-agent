@@ -45,10 +45,11 @@ describe('yeaft-agent local LLM config helpers', () => {
       name: 'github-copilot',
       baseUrl: 'https://api.githubcopilot.com',
       credentialProvider: 'github-copilot',
-      protocol: 'openai-responses',
+      managed: 'github-copilot',
     });
+    expect(result.provider.protocol).toBeUndefined();
     expect(result.provider.apiKey).toBeUndefined();
-    expect(result.provider.models).toEqual([{ id: 'claude-sonnet-4.5', protocol: 'anthropic' }, 'gpt-5']);
+    expect(result.provider.models).toBeUndefined();
   });
 
   it('rejects unknown GitHub Copilot model unless explicitly allowed', async () => {
@@ -64,7 +65,7 @@ describe('yeaft-agent local LLM config helpers', () => {
     await expect(useGitHubCopilot({}, { model: 'missing-model', ...discovery })).rejects.toThrow('was not found');
     const allowed = await useGitHubCopilot({}, { model: 'missing-model', allowUnknownModel: true, ...discovery });
     expect(allowed.config.primaryModel).toBe('github-copilot/missing-model');
-    expect(allowed.provider.models).toContain('missing-model');
+    expect(allowed.provider.models).toBeUndefined();
   });
 
 

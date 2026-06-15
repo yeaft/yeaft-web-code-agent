@@ -23,6 +23,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
 import { resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
+import { normalizeKnownProviderForRuntime } from './llm/known-providers.js';
 
 /** Default configuration values. */
 const DEFAULTS = {
@@ -385,7 +386,8 @@ export function loadConfig(overrides = {}) {
   // so consumers never have to deal with raw string / object ambiguity.
   config.availableModels = [];
   if (providers) {
-    for (const p of providers) {
+    for (const rawProvider of providers) {
+      const p = normalizeKnownProviderForRuntime(rawProvider);
       const normalized = normalizeProviderModels(p);
       for (const m of normalized) {
         // Avoid duplicates (first provider wins)

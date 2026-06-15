@@ -76,7 +76,7 @@ export default {
                 <input type="text" class="sp-input" v-model="provider.name"
                   :placeholder="$t('settings.llm.providerNamePlaceholder')" @input="markDirty" />
               </div>
-              <div class="llm-field llm-field-protocol">
+              <div v-if="!isManagedProvider(provider)" class="llm-field llm-field-protocol">
                 <label class="llm-field-label">{{ $t('settings.llm.protocol') }}</label>
                 <div class="sp-custom-select" :class="{ open: openDropdown === 'protocol-' + idx }" v-click-outside="() => closeDropdown('protocol-' + idx)">
                   <button class="sp-custom-select-trigger" @click="toggleDropdown('protocol-' + idx)">
@@ -105,13 +105,18 @@ export default {
               </div>
             </div>
 
-            <div class="llm-field">
+            <div v-if="isManagedProvider(provider)" class="llm-managed-provider-note">
+              <strong>{{ $t('settings.llm.managedCopilotTitle') }}</strong>
+              <p class="sp-desc">{{ $t('settings.llm.managedCopilotDesc') }}</p>
+            </div>
+
+            <div v-if="!isManagedProvider(provider)" class="llm-field">
               <label class="llm-field-label">{{ $t('settings.llm.baseUrl') }}</label>
               <input type="text" class="sp-input" v-model="provider.baseUrl"
                 :placeholder="$t('settings.llm.baseUrlPlaceholder')" @input="markDirty" />
             </div>
 
-            <div class="llm-field">
+            <div v-if="!isManagedProvider(provider)" class="llm-field">
               <label class="llm-field-label">{{ $t('settings.llm.apiKey') }}</label>
               <label class="llm-auto-auth-toggle">
                 <input type="checkbox"
@@ -132,7 +137,7 @@ export default {
               </div>
             </div>
 
-            <div class="llm-field">
+            <div v-if="!isManagedProvider(provider)" class="llm-field">
               <label class="llm-field-label">{{ $t('settings.llm.models') }}</label>
               <p class="llm-models-hint">{{ $t('settings.llm.modelsHint') }}</p>
               <textarea class="sp-input llm-models-textarea" v-model="providerModelsText[idx]"
@@ -362,9 +367,8 @@ export default {
     applyDiscoveredProvider(result) {
       const provider = {
         name: result.provider?.name || 'github-copilot',
-        baseUrl: result.provider?.baseUrl || 'https://api.githubcopilot.com',
         credentialProvider: result.provider?.credentialProvider || 'github-copilot',
-        protocol: result.provider?.protocol || 'openai-responses',
+        managed: result.provider?.managed || 'github-copilot',
         models: Array.isArray(result.providerModels) && result.providerModels.length
           ? result.providerModels
           : (result.models || []),
@@ -454,6 +458,9 @@ export default {
     },
 
     parseModelsFromProvider(provider) {
+      if (this.isManagedProvider(provider) && (!Array.isArray(provider.models) || provider.models.length === 0)) {
+        return this.fallbackCopilotModels();
+      }
       if (!Array.isArray(provider.models)) return [];
       return provider.models.map(m => this._modelId(m)).filter(m => m);
     },
@@ -463,6 +470,22 @@ export default {
       if (typeof entry === 'string') return entry;
       if (entry && typeof entry === 'object' && typeof entry.id === 'string') return entry.id;
       return '';
+    },
+
+    isManagedProvider(provider) {
+      return provider?.managed === 'github-copilot'
+        || provider?.credentialProvider === 'github-copilot'
+        || provider?.name === 'github-copilot';
+    },
+
+    fallbackCopilotModels() {
+      return [
+        'gpt-5.4', 'gpt-5.4-mini', 'gpt-5-mini', 'gpt-5.3-codex', 'gpt-5.2-codex',
+        'gpt-4.1', 'gpt-4o', 'gpt-4o-mini',
+        'claude-opus-4.8', 'claude-opus-4.7', 'claude-opus-4.6',
+        'claude-sonnet-4.6', 'claude-sonnet-4.5', 'claude-haiku-4.5',
+        'gemini-2.5-pro',
+      ];
     },
 
     addProvider() {
@@ -615,8 +638,15 @@ export default {
 
       // Build providers for saving (clean up empty entries)
       const providers = this.editableProviders
-        .filter(p => p.name && p.baseUrl)
+        .filter(p => p.name && (this.isManagedProvider(p) || p.baseUrl))
         .map(p => {
+          if (this.isManagedProvider(p)) {
+            return {
+              name: p.name.trim() || 'github-copilot',
+              credentialProvider: 'github-copilot',
+              managed: p.managed || 'github-copilot',
+            };
+          }
           const clean = {
             type: p.type || 'api-key',
             name: p.name.trim(),

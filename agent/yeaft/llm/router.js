@@ -23,6 +23,7 @@
 
 import { LLMAdapter } from './adapter.js';
 import { getThinkingCapability, normalizeEffort, parseModelRef } from '../models.js';
+import { normalizeKnownProviderForRuntime } from './known-providers.js';
 import { pairSanitize } from '../pair-sanitize.js';
 
 /**
@@ -207,7 +208,8 @@ export class AdapterRouter extends LLMAdapter {
    * @param {object[]} providers
    */
   refreshProviders(providers) {
-    this.#providers = Array.isArray(providers) ? providers : [];
+    this.#providers = (Array.isArray(providers) ? providers : [])
+      .map(provider => normalizeKnownProviderForRuntime(provider));
     this.#modelToProvider = new Map();
     this.#adapterCache = new Map();
 

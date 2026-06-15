@@ -13,6 +13,7 @@ import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
 import { normalizeProviderModels, serializeModelForPersistence } from './models.js';
 import { normaliseYeaftSection } from './config.js';
+import { isGitHubCopilotProvider, serializeKnownProviderForPersistence } from './llm/known-providers.js';
 
 /**
  * Read the LLM-relevant portion of config.json.
@@ -85,6 +86,7 @@ export function updateLlmConfig(update, dir) {
       if (!p.name || typeof p.name !== 'string') {
         return { error: 'Each provider must have a name' };
       }
+      if (isGitHubCopilotProvider(p)) continue;
       if (!p.baseUrl || typeof p.baseUrl !== 'string') {
         return { error: `Provider "${p.name}" must have a baseUrl` };
       }
@@ -97,6 +99,8 @@ export function updateLlmConfig(update, dir) {
     //   - entries with ctx / maxOutput are persisted as objects
     //   - empty / 0 / NaN values get stripped
     existing.providers = update.providers.map(p => {
+      const managed = serializeKnownProviderForPersistence(p);
+      if (managed) return managed;
       const normalized = normalizeProviderModels(p);
       return {
         ...p,

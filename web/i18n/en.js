@@ -683,6 +683,8 @@ export default {
   'settings.llm.simpleCopilotDesc': 'Use the local GitHub Copilot device token or gh auth, refresh available models automatically, then choose a model. No API key is written to config.',
   'settings.llm.useGitHubCopilot': 'Use GitHub Copilot',
   'settings.llm.refreshingModels': 'Refreshing models...',
+  'settings.llm.managedCopilotTitle': 'Managed GitHub Copilot',
+  'settings.llm.managedCopilotDesc': 'Base URL, authentication, model catalog, and per-model API protocol are managed automatically. Claude models use Anthropic Messages; GPT/o models use OpenAI Responses.',
   'settings.llm.providersTitle': 'Providers',
   'settings.llm.providersDesc': 'Configure providers saved locally on this agent. This writes the same ~/.yeaft/config.json used by the yeaft-agent llm CLI.',
   'settings.llm.agentProviders': 'This agent providers',

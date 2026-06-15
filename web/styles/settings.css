@@ -1149,6 +1149,18 @@
   margin-bottom: 4px;
 }
 
+.llm-managed-provider-note {
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border-radius: 10px;
+  background: var(--bg-input-wrapper);
+  color: var(--text-primary);
+}
+
+.llm-managed-provider-note .sp-desc {
+  margin: 4px 0 0;
+}
+
 .llm-secret-input {
   position: relative;
   display: flex;

@@ -1,29 +1,11 @@
 import { getApiToken, copilotRequestHeaders } from './yeaft/llm/credentials/github-copilot.js';
+import {
+  FALLBACK_GITHUB_COPILOT_MODELS,
+  GITHUB_COPILOT_PROVIDER,
+  modelEntryForGitHubCopilot,
+} from './yeaft/llm/known-providers.js';
 
-export const GITHUB_COPILOT_PROVIDER = {
-  name: 'github-copilot',
-  baseUrl: 'https://api.githubcopilot.com',
-  credentialProvider: 'github-copilot',
-  protocol: 'openai-responses',
-};
-
-export const FALLBACK_GITHUB_COPILOT_MODELS = [
-  'gpt-5.4',
-  'gpt-5.4-mini',
-  'gpt-5-mini',
-  'gpt-5.3-codex',
-  'gpt-5.2-codex',
-  'gpt-4.1',
-  'gpt-4o',
-  'gpt-4o-mini',
-  'claude-opus-4.8',
-  'claude-opus-4.7',
-  'claude-opus-4.6',
-  'claude-sonnet-4.6',
-  'claude-sonnet-4.5',
-  'claude-haiku-4.5',
-  'gemini-2.5-pro',
-];
+export { FALLBACK_GITHUB_COPILOT_MODELS, GITHUB_COPILOT_PROVIDER };
 
 function modelId(item) {
   if (typeof item === 'string') return item.trim();
@@ -51,12 +33,17 @@ export function modelEntryForProvider(id) {
     : value;
 }
 
+export function modelEntryForGitHubCopilotProvider(id) {
+  return modelEntryForGitHubCopilot(id);
+}
+
 export function modelIdsFromProviderModels(models) {
   return uniqueIds(models);
 }
 
-export function providerModelsFromIds(ids) {
-  return uniqueIds(ids).map(modelEntryForProvider).filter(Boolean);
+export function providerModelsFromIds(ids, { githubCopilot = false } = {}) {
+  const mapper = githubCopilot ? modelEntryForGitHubCopilotProvider : modelEntryForProvider;
+  return uniqueIds(ids).map(mapper).filter(Boolean);
 }
 
 function parseModelPayload(payload) {
@@ -80,7 +67,7 @@ function fallbackResult(provider, reason) {
   return {
     provider,
     models: [...FALLBACK_GITHUB_COPILOT_MODELS],
-    providerModels: providerModelsFromIds(FALLBACK_GITHUB_COPILOT_MODELS),
+    providerModels: providerModelsFromIds(FALLBACK_GITHUB_COPILOT_MODELS, { githubCopilot: true }),
     source: 'fallback',
     warning: `Live model catalog unavailable (${reason}); using fallback Copilot model list.`,
   };
@@ -115,7 +102,7 @@ export async function discoverGitHubCopilotModels({ fetchFn = fetch, getTokenFn 
     return {
       provider: GITHUB_COPILOT_PROVIDER,
       models,
-      providerModels: providerModelsFromIds(models),
+      providerModels: providerModelsFromIds(models, { githubCopilot: true }),
       source: 'live',
       warning: null,
     };
