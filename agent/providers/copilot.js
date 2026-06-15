@@ -6,7 +6,7 @@ import { join } from 'path';
 import { DatabaseSync } from 'node:sqlite';
 import ctx from '../context.js';
 import { AcpClient } from './acp-client.js';
-import { listCopilotModels, DEFAULT_COPILOT_MODEL, cacheCopilotModelsFromAcp } from './copilot-models.js';
+import { cacheCopilotModelsFromAcp } from './copilot-models.js';
 
 export const name = 'copilot';
 
@@ -18,7 +18,7 @@ export const capabilities = Object.freeze({
   subagents: false,
   attachments: true,      // ACP promptCapabilities.image + embeddedContext
   askUser: true,          // session/request_permission round-trip
-  modelPicker: true,
+  modelPicker: false,
 });
 
 const COPILOT_BIN = process.env.COPILOT_BIN || 'copilot';
@@ -41,7 +41,6 @@ export async function start(opts) {
   dispose(prior, 'replaced');
 
   const providerOptions = opts.providerOptions || prior?.providerOptions || {};
-  const model = providerOptions.model || DEFAULT_COPILOT_MODEL;
   const allowAllTools = YOLO || !!providerOptions.allowAllTools;
 
   const state = {
@@ -56,7 +55,7 @@ export async function start(opts) {
     abortController: null,
     tools: [],
     slashCommands: [],
-    model,
+    model: null,
     userId: opts.userId,
     username: opts.username,
     disallowedTools: prior?.disallowedTools || null,
@@ -74,7 +73,7 @@ export async function start(opts) {
   // Best-effort start; failures emit a result envelope and leave state in place
   // so the next sendInput retries.
   try {
-    await _bootAcp(state, opts.resumeSessionId || null, model);
+    await _bootAcp(state, opts.resumeSessionId || null);
   } catch (err) {
     sendOutput(conversationId, {
       type: 'result',
@@ -87,11 +86,8 @@ export async function start(opts) {
   return state;
 }
 
-async function _bootAcp(state, resumeSessionId, model) {
+async function _bootAcp(state, resumeSessionId) {
   const args = ['--acp'];
-  // ACP doesn't yet expose a per-session model param in its public schema, so
-  // pass --model at spawn for the lifetime of this child.
-  if (model) args.push('--model', String(model));
   if (Array.isArray(state.providerOptions?.addDirs)) {
     for (const d of state.providerOptions.addDirs) args.push('--add-dir', String(d));
   }
@@ -204,20 +200,12 @@ export async function sendInput(state, prompt, opts = {}) {
   // Ensure ACP child + session are up; reboot if a prior crash dropped them.
   if (!state.initialized || !state.acpClient) {
     try {
-      await _bootAcp(state, state.sessionId || null, state.model);
+      await _bootAcp(state, state.sessionId || null);
     } catch (err) {
       _sendTurnError(state, `copilot ACP reinit failed: ${err?.message || err}`);
       _completeTurn(state, conversationId);
       return;
     }
-  }
-
-  // Per-turn provider option overrides (e.g. updated model). If the model
-  // changed we don't restart the child; ACP doesn't expose model switch yet,
-  // so we leave a warning rather than silently drop the request.
-  const po = { ...(state.providerOptions || {}), ...(opts.providerOptions || {}) };
-  if (po.model && po.model !== state.model) {
-    if (ctx?.CONFIG?.debug) console.warn('[copilot] mid-conversation model switch not supported; ignoring');
   }
 
   const abortController = new AbortController();
@@ -327,7 +315,7 @@ export async function clear(state) {
   if (!state) return;
   if (!state.initialized || !state.acpClient) {
     try {
-      await _bootAcp(state, null, state.model);
+      await _bootAcp(state, null);
       return;
     } catch (err) {
       _sendTurnError(state, `copilot ACP reinit failed during clear: ${err?.message || err}`);
@@ -635,15 +623,7 @@ function _knownCopilotTools() {
   ];
 }
 
-/**
- * Exported for the model picker UI. Async — hits Copilot's /models endpoint
- * (cached) and falls back to a static list if auth/network fails.
- */
-export async function listModels() {
-  return await listCopilotModels();
-}
-
-export default { name, capabilities, start, sendInput, abort, clear, listFolders, listSessions, loadHistory, listModels, respondToPermissionRequest };
+export default { name, capabilities, start, sendInput, abort, clear, listFolders, listSessions, loadHistory, respondToPermissionRequest };
 
 
 // ---------- history surface (reads ~/.copilot/session-store.db) ----------

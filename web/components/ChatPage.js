@@ -16,29 +16,6 @@ import { shortenPath as shortenPathUtil } from '../utils/path-display.js';
 import { getLastPathSegment as _getLastPathSegment, formatResumeDate } from '../utils/path-segments.js';
 import { useAuthStore } from '../stores/auth.js';
 
-// Static fallback for the Copilot model picker — mirrors the CLI's own
-// hardcoded default list (jF in @github/copilot/app.js@1.0.59). Used until
-// the dynamic /models response lands, or when org policy hides the picker
-// list from /models. Keep in sync with agent/providers/copilot-models.js.
-const FALLBACK_COPILOT_MODELS = Object.freeze([
-  { id: 'claude-sonnet-4.6',  label: 'Claude Sonnet 4.6', vendor: 'Anthropic' },
-  { id: 'claude-sonnet-4.5',  label: 'Claude Sonnet 4.5', vendor: 'Anthropic' },
-  { id: 'claude-haiku-4.5',   label: 'Claude Haiku 4.5',  vendor: 'Anthropic' },
-  { id: 'claude-opus-4.8',    label: 'Claude Opus 4.8',   vendor: 'Anthropic' },
-  { id: 'claude-opus-4.7',    label: 'Claude Opus 4.7',   vendor: 'Anthropic' },
-  { id: 'claude-opus-4.6',    label: 'Claude Opus 4.6',   vendor: 'Anthropic' },
-  { id: 'claude-opus-4.5',    label: 'Claude Opus 4.5',   vendor: 'Anthropic' },
-  { id: 'gpt-5.5',            label: 'GPT-5.5',           vendor: 'OpenAI'    },
-  { id: 'gpt-5.4',            label: 'GPT-5.4',           vendor: 'OpenAI'    },
-  { id: 'gpt-5.3-codex',      label: 'GPT-5.3 Codex',     vendor: 'OpenAI'    },
-  { id: 'gpt-5.2-codex',      label: 'GPT-5.2 Codex',     vendor: 'OpenAI'    },
-  { id: 'gpt-5.2',            label: 'GPT-5.2',           vendor: 'OpenAI'    },
-  { id: 'gpt-5.4-mini',       label: 'GPT-5.4 Mini',      vendor: 'OpenAI'    },
-  { id: 'gpt-5-mini',         label: 'GPT-5 Mini',        vendor: 'OpenAI'    },
-  { id: 'gemini-2.5-pro',     label: 'Gemini 2.5 Pro',    vendor: 'Google'    },
-]);
-const DEFAULT_COPILOT_MODEL = 'claude-sonnet-4.5';
-
 export default {
   name: 'ChatPage',
   components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarModeToggle, SidebarAgentHeader },
@@ -501,48 +478,6 @@ export default {
                 <svg class="select-arrow" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
               </div>
             </div>
-            <div class="resume-control-row" v-if="convModalAgent && convModalProvider === 'copilot'">
-              <label class="resume-control-label">{{ $t('modal.newConv.model') }}</label>
-              <div class="copilot-model-picker">
-                <button
-                  type="button"
-                  class="copilot-model-trigger"
-                  @click="copilotModelOpen = !copilotModelOpen"
-                  :class="{ 'is-open': copilotModelOpen }"
-                >
-                  <span class="copilot-model-trigger-main">
-                    <span class="copilot-model-trigger-vendor" v-if="selectedCopilotModel?.vendor">{{ selectedCopilotModel.vendor }}</span>
-                    <span class="copilot-model-trigger-name">{{ selectedCopilotModel?.label || convModalCopilotModel || '—' }}</span>
-                  </span>
-                  <span class="copilot-model-trigger-meta" v-if="selectedCopilotModel?.usage">{{ selectedCopilotModel.usage }}</span>
-                  <svg class="copilot-model-caret" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
-                </button>
-                <div class="copilot-model-panel" v-if="copilotModelOpen" @click.stop>
-                  <div class="copilot-model-search" v-if="copilotModelOptions.length > 5">
-                    <input type="text" v-model="copilotModelSearch" :placeholder="$t('common.search') || 'Search…'" ref="copilotModelSearchInput" @keydown.esc="copilotModelOpen = false">
-                  </div>
-                  <div class="copilot-model-group" v-for="group in copilotModelGroups" :key="group.vendor">
-                    <div class="copilot-model-group-label">{{ group.vendor || $t('modal.newConv.other') || 'Other' }}</div>
-                    <button
-                      type="button"
-                      v-for="m in group.models"
-                      :key="m.id"
-                      class="copilot-model-card"
-                      :class="{ 'is-selected': m.id === convModalCopilotModel }"
-                      @click="pickCopilotModel(m)"
-                    >
-                      <span class="copilot-model-card-name">{{ m.label }}</span>
-                      <span class="copilot-model-card-tags">
-                        <span v-if="m.usage" class="copilot-model-tag" :class="'tag-' + (m.priceCategory || 'medium')">{{ m.usage }}</span>
-                        <span v-if="m.preview" class="copilot-model-tag tag-preview">preview</span>
-                      </span>
-                      <svg v-if="m.id === convModalCopilotModel" class="copilot-model-check" viewBox="0 0 20 20" width="14" height="14"><path fill="currentColor" d="M7.629 13.514L3.886 9.77 2.471 11.186l5.158 5.158L17.385 6.586l-1.414-1.414z"/></svg>
-                    </button>
-                  </div>
-                  <div v-if="!copilotModelGroups.length" class="copilot-model-empty">{{ $t('modal.newConv.modelEmpty') || 'No models' }}</div>
-                </div>
-              </div>
-            </div>
             <div class="resume-control-row" v-if="convModalAgent">
               <label class="resume-control-label">{{ $t('modal.newConv.workDir') }}</label>
               <div class="workdir-input-group">
@@ -697,9 +632,6 @@ export default {
       convModalAgent: '',
       convModalWorkDir: '',
       convModalProvider: 'claude-code',
-      convModalCopilotModel: DEFAULT_COPILOT_MODEL,
-      copilotModelOpen: false,
-      copilotModelSearch: '',
       selectedResumeSession: null,
       historyLoaded: false,
       windowWidth: window.innerWidth,
@@ -725,46 +657,6 @@ export default {
   computed: {
     store() {
       return Pinia.useChatStore();
-    },
-    copilotModels() {
-      // Live list from agent (Copilot /models endpoint), with fallback.
-      const live = Array.isArray(this.store.providerModels) ? this.store.providerModels : [];
-      const src = live.length ? live : FALLBACK_COPILOT_MODELS;
-      return src;
-    },
-    copilotModelOptions() {
-      return this.copilotModels.map(m => ({
-        value: m.id,
-        label: m.label || m.id,
-        sublabel: m.vendor ? (m.preview ? `${m.vendor} · Preview` : m.vendor) : (m.preview ? 'Preview' : ''),
-        badge: m.preview ? 'preview' : null,
-      }));
-    },
-    selectedCopilotModel() {
-      const id = this.convModalCopilotModel;
-      return this.copilotModels.find(m => m.id === id) || null;
-    },
-    copilotModelGroups() {
-      const q = (this.copilotModelSearch || '').trim().toLowerCase();
-      const filtered = this.copilotModels.filter(m => {
-        if (!q) return true;
-        return (m.label || '').toLowerCase().includes(q)
-          || (m.id || '').toLowerCase().includes(q)
-          || (m.vendor || '').toLowerCase().includes(q);
-      });
-      const order = ['Anthropic', 'OpenAI', 'Google', ''];
-      const byVendor = new Map();
-      for (const m of filtered) {
-        const v = m.vendor || '';
-        if (!byVendor.has(v)) byVendor.set(v, []);
-        byVendor.get(v).push(m);
-      }
-      const groups = [];
-      for (const v of order) {
-        if (byVendor.has(v)) { groups.push({ vendor: v, models: byVendor.get(v) }); byVendor.delete(v); }
-      }
-      for (const [v, models] of byVendor) groups.push({ vendor: v, models });
-      return groups;
     },
     providerOptions() {
       return [
@@ -835,9 +727,6 @@ export default {
     }
   },
   watch: {
-    copilotModelOpen(v) {
-      if (v) this.$nextTick(() => { this.$refs.copilotModelSearchInput?.focus(); });
-    },
     'store.crewModeEnabled'(enabled) {
       // If crew was just turned off while user was viewing it, snap back
       // to the Chat tab so the panel body stays in sync with the tab strip.
@@ -851,11 +740,6 @@ export default {
       } else {
         this.store.leaveYeaft();
       }
-    },
-    pickCopilotModel(m) {
-      this.convModalCopilotModel = m.id;
-      this.copilotModelOpen = false;
-      this.copilotModelSearch = '';
     },
     sortByActivity(conversations) {
       return [...conversations].sort((a, b) => {
@@ -928,7 +812,6 @@ export default {
             }, 1500);
           }
         });
-        if (this.convModalProvider === 'copilot') this._maybeFetchCopilotModels();
       }
     },
     openConversationModalResume() {
@@ -940,7 +823,6 @@ export default {
       this.convModalWorkDir = '';
       this.selectedResumeSession = null;
       this.historyLoaded = false;
-      this.convModalCopilotModel = DEFAULT_COPILOT_MODEL;
     },
     onConvModalAgentChange() {
       if (this.convModalAgent) {
@@ -957,20 +839,7 @@ export default {
       this.historyLoaded = false;
       if (this.convModalAgent) {
         this.store.listFoldersForAgent(this.convModalAgent, this.convModalProvider);
-        if (this.convModalProvider === 'copilot') this._maybeFetchCopilotModels();
       }
-    },
-    _maybeFetchCopilotModels() {
-      if (!this.convModalAgent) return;
-      // Always re-fetch on open — cached on agent side for 10 min.
-      this.store.listModelsForAgent(this.convModalAgent, 'copilot').then((models) => {
-        if (!this.showConversationModal) return;
-        // If current selection isn't in returned list, pin to first.
-        const ids = (models || []).map(m => m.id);
-        if (ids.length && !ids.includes(this.convModalCopilotModel)) {
-          this.convModalCopilotModel = ids.includes(DEFAULT_COPILOT_MODEL) ? DEFAULT_COPILOT_MODEL : ids[0];
-        }
-      });
     },
     onConvModalWorkDirInput() {
       this.historyLoaded = false;
@@ -1023,19 +892,12 @@ export default {
       this.closeConversationModal();
     },
     // Build the { provider, providerOptions } payload shared by the create
-    // and resume paths. Copilot conversations always enable all tools
-    // (no per-conversation opt-in) so Copilot won't prompt before running
-    // tools, and always carry the picked model — the agent merges
-    // providerOptions as a whole object (msg.providerOptions ||
-    // priorProviderOptions), so omitting the model on resume would drop it
-    // back to the Copilot default instead of preserving the picker choice.
+    // and resume paths. Copilot CLI owns model selection, so the web UI must
+    // not send a model override that can make ACP startup fail or hang.
     buildConvOpts() {
       const opts = { provider: this.convModalProvider };
       if (this.convModalProvider === 'copilot') {
         opts.providerOptions = { allowAllTools: true };
-        if (this.convModalCopilotModel) {
-          opts.providerOptions.model = String(this.convModalCopilotModel).trim();
-        }
       }
       return opts;
     },
@@ -1399,9 +1261,6 @@ export default {
       }
       if (!e.target.closest('.session-dots-btn') && !e.target.closest('.session-menu')) {
         this.activeSessionMenu = null;
-      }
-      if (!e.target.closest('.copilot-model-picker')) {
-        this.copilotModelOpen = false;
       }
     };
     document.addEventListener('click', this._clickOutsideHandler);
