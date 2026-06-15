@@ -1312,15 +1312,125 @@ const DEFAULT_VP_PERSONA_ZH = Object.freeze({
   }
 });
 
+
+function cleanDefaultPersonaFragment(value) {
+  let text = String(value || '').trim();
+  text = text.replace(/cross-VP/g, 'cross-member').replace(/Cross-VP/g, 'Cross-member');
+  text = text.replace(/\bdevelopment VP\b/g, 'developer');
+  text = text.replace(/\bVP\b/g, '');
+  text = text.replace(/generic assistant/gi, 'generic helper');
+  text = text.replace(/generic helper/g, 'generic coordinator');
+  text = text.replace(/\s+,/g, ',').replace(/\s+\./g, '.').replace(/ {2,}/g, ' ');
+  return text.trim();
+}
+
+function sentenceFromFragment(value) {
+  const text = cleanDefaultPersonaFragment(value);
+  if (!text) return '';
+  const first = text[0].toUpperCase() + text.slice(1);
+  return /[.!?"”]$/.test(first) ? first : `${first}.`;
+}
+
+function firstSection(value) {
+  return String(value || '').split(/\n\n(?:Core capabilities|Traits|Strengths|Problem-solving style|Decision style|Catchphrases|Good for|Bad for|Expected from you|Answer style):/)[0].trim();
+}
+
+function extractLabel(value, label) {
+  const text = String(value || '');
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = text.match(new RegExp(`\\n\\n${escaped}: ([\\s\\S]*?)(?=\\n\\n[A-Z][A-Za-z -]+:|\\nBad for:|$)`));
+  return match ? match[1].trim() : '';
+}
+
+function extractBulletDetails(value) {
+  const details = [];
+  for (const match of String(value || '').matchAll(/^- [^:\n]+: ([^\n]+)$/gm)) {
+    details.push(sentenceFromFragment(match[1]));
+  }
+  return details;
+}
+
+function cleanDefaultPersonaIdentityEn(value) {
+  let text = String(value || '').trim();
+  text = text.replace(/cross-VP/g, 'cross-member').replace(/Cross-VP/g, 'Cross-member');
+  text = text.replace(/\bdevelopment VP\b/g, 'developer');
+  text = text.replace(/You are Omni, a VP responsible for ([^\.]+)\./g, 'You are Omni. You are responsible for $1.');
+  text = text.replace(/You are ([^\.\n]+?), a ([^\.\n]*?) VP\. /g, 'You are $1. You bring $2 judgment. ');
+  text = text.replace(/\bVP\b/g, '');
+  text = text.replace(/generic assistant/gi, 'generic helper');
+  text = text.replace(/generic helper/g, 'generic coordinator');
+  text = text.replace(/\s+,/g, ',').replace(/\s+\./g, '.').replace(/ {2,}/g, ' ');
+  return text.trim();
+}
+
+function naturalizeDefaultPersonaEn(value) {
+  const raw = String(value || '').trim();
+  const identity = cleanDefaultPersonaIdentityEn(firstSection(raw));
+  const core = extractBulletDetails(raw);
+  const traits = extractLabel(raw, 'Traits');
+  const strengths = extractLabel(raw, 'Strengths');
+  const problemSolving = extractLabel(raw, 'Problem-solving style');
+  const decision = extractLabel(raw, 'Decision style');
+  const catchphrases = extractLabel(raw, 'Catchphrases');
+  const goodFor = extractLabel(raw, 'Good for');
+  const badFor = extractLabel(raw, 'Bad for');
+  const expected = extractLabel(raw, 'Expected from you');
+  const answerStyle = extractLabel(raw, 'Answer style');
+
+  const craft = [];
+  if (core.length) craft.push(`You look for the work that matters first: ${core.join(' ')}`);
+  if (traits) craft.push(sentenceFromFragment(`You are ${traits}`));
+  if (strengths) craft.push(sentenceFromFragment(`You are at your best in ${strengths}`));
+
+  const conduct = [];
+  if (decision) conduct.push(sentenceFromFragment(decision));
+  if (problemSolving) conduct.push(sentenceFromFragment(`You work by ${problemSolving}`));
+  if (catchphrases) conduct.push(sentenceFromFragment(`Your familiar lines still matter: ${catchphrases}`));
+  if (goodFor) conduct.push(sentenceFromFragment(`People come to you for ${goodFor}`));
+  if (expected) conduct.push(sentenceFromFragment(`People come to you when they need ${expected}`));
+  if (badFor) conduct.push(sentenceFromFragment(`You are the wrong voice for ${badFor}`));
+  if (answerStyle) conduct.push(sentenceFromFragment(`You answer ${answerStyle}`));
+
+  return [identity, craft.join(' '), conduct.join(' ')].filter(Boolean).join('\n\n').trim();
+}
+
+function naturalizeDefaultPersonaZh(value) {
+  let text = String(value || '').trim();
+  text = text.replace(/跨\s*VP\s*协作/g, '跨成员协作');
+  text = text.replace(/开发\s*VP/g, '开发者');
+  text = text.replace(/直接替开发者写代码/g, '直接替开发者写代码');
+  text = text.replace(/安全 VP/g, '安全判断');
+  text = text.replace(/AI 伙伴/g, '伙伴');
+  text = text.replace(/泛用助手/g, '泛泛的协调者');
+  text = text.replace(/你是([^，。]+)，一个负责(.+?)的\s*VP。/g, '你是$1。你负责$2。');
+  text = text.replace(/你是([^，。]+)，一个以(.+?)为核心的设计\s*VP。/g, '你是$1。你以$2看设计问题。');
+  text = text.replace(/你是([^，。]+)，一个以(.+?)为核心的安全\s*VP。/g, '你是$1。你以$2做安全判断。');
+  text = text.replace(/你是([^，。]+)，一个以(.+?)为核心的\s*VP。/g, '你是$1。你以$2看问题。');
+  text = text.replace(/\n\n人物特点：([^\n]+)/g, '\n\n你$1');
+  text = text.replace(/\n\n擅长的事情：([^\n]+)/g, '\n\n你最擅长$1');
+  text = text.replace(/\n\n解决问题的方式：([^\n]+)/g, '\n\n处理问题时，$1');
+  text = text.replace(/\n\n用户通常期待你完成：([^\n]+)/g, '\n\n用户来找你，通常是为了$1');
+  text = text.replace(/\n\n回答风格：([^\n]+)/g, '\n\n回答时，$1');
+  text = text.replace(/\bVP\b/g, '');
+  text = text.replace(/\s+，/g, '，').replace(/\s+。/g, '。');
+  return text.trim();
+}
+
 function localizeDefaultVpPersona(vp) {
   const zh = DEFAULT_VP_PERSONA_ZH[vp.vpId];
   if (!zh) return vp;
+  const legacyPersonaEn = String(vp.persona || '').trim();
+  const legacyPersonaZh = String(zh.persona || '').trim();
+  const personaEn = naturalizeDefaultPersonaEn(legacyPersonaEn);
+  const personaZh = naturalizeDefaultPersonaZh(legacyPersonaZh);
   return {
     ...vp,
     roleZh: zh.roleZh,
-    persona: localizedPersonaSections(vp.persona, zh.persona),
-    personaEn: vp.persona,
-    personaZh: zh.persona,
+    persona: localizedPersonaSections(personaEn, personaZh),
+    personaEn,
+    personaZh,
+    legacyPersonaEn,
+    legacyPersona: localizedPersonaSections(legacyPersonaEn, legacyPersonaZh),
   };
 }
 
