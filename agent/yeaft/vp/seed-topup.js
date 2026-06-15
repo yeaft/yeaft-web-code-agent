@@ -234,9 +234,17 @@ function replaceRoleBody(source, body) {
 function backfillLocalizedPersonaBody(source, vp) {
   const body = roleBodyOf(source).trim();
   const nextBody = typeof vp.persona === 'string' ? vp.persona.trim() : '';
-  const oldBody = typeof vp.personaEn === 'string' ? vp.personaEn.trim() : '';
-  if (!body || !nextBody || body.includes('<!-- lang:')) return null;
-  if (!oldBody || body !== oldBody) return null;
+  if (!body || !nextBody || body === nextBody) return null;
+
+  const acceptedOldBodies = [
+    vp.legacyPersonaEn,
+    vp.legacyPersona,
+    vp.personaEn,
+  ]
+    .filter(value => typeof value === 'string' && value.trim())
+    .map(value => value.trim());
+
+  if (!acceptedOldBodies.includes(body)) return null;
   return replaceRoleBody(source, nextBody);
 }
 

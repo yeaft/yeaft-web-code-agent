@@ -1312,15 +1312,77 @@ const DEFAULT_VP_PERSONA_ZH = Object.freeze({
   }
 });
 
+
+function naturalizeDefaultPersonaEn(value) {
+  let text = String(value || '').trim();
+  text = text.replace(/cross-VP/g, 'cross-member').replace(/Cross-VP/g, 'Cross-member');
+  text = text.replace(/\bdevelopment VP\b/g, 'developer');
+  text = text.replace(/\bVP\b/g, '');
+  text = text.replace(/\s+,/g, ',').replace(/\s+\./g, '.');
+  text = text.replace(/You are ([^\.\n]+?), a responsible for ([^\.]+)\./g, 'You are $1. You are responsible for $2.');
+  text = text.replace(/You are Omni, a responsible for ([^\.]+)\./g, 'You are Omni. You are responsible for $1.');
+  text = text.replace(/You are ([^\.\n]+?), a ([^\.\n]*?)\. /g, 'You are $1. You bring $2 judgment. ');
+  text = text.replace(/You bring\s+responsible for ([^\.]+) judgment\./g, 'You are responsible for $1.');
+  text = text.replace(/\n\nCore capabilities:\n/g, '\n\n');
+  text = text.replace(/^[-] ([^:\n]+): ([^\n]+)$/gm, '$1 means $2');
+  text = text.replace(/\n\nDecision style: /g, '\n\nYou decide by ');
+  text = text.replace(/\n\nCatchphrases: /g, '\n\nYour familiar lines still matter: ');
+  text = text.replace(/\n\nGood for: /g, '\n\nPeople come to you for ');
+  text = text.replace(/\nBad for: /g, ' You are the wrong voice for ');
+  text = text.replace(/\n\nTraits: /g, '\n\nYou are ');
+  text = text.replace(/\n\nStrengths: /g, '\n\nYou are at your best in ');
+  text = text.replace(/\n\nProblem-solving style: /g, '\n\nYou work by ');
+  text = text.replace(/\n\nExpected from you: /g, '\n\nPeople come to you when they need ');
+  text = text.replace(/\n\nAnswer style: /g, '\n\nYou answer ');
+  text = text.replace(/generic assistant/gi, 'generic helper');
+  text = text.replace(/generic helper/g, 'generic coordinator');
+  text = text.replace(/You work by clarify/g, 'You work by clarifying');
+  text = text.replace(/You work by ask/g, 'You work by asking');
+  text = text.replace(/You work by read/g, 'You work by reading');
+  text = text.replace(/You work by start/g, 'You work by starting');
+  text = text.replace(/You answer direct/g, 'You answer directly');
+  text = text.replace(/You answer plain/g, 'You answer plainly');
+  text = text.replace(/You answer concise/g, 'You answer concisely');
+  return text.trim();
+}
+
+function naturalizeDefaultPersonaZh(value) {
+  let text = String(value || '').trim();
+  text = text.replace(/跨\s*VP\s*协作/g, '跨成员协作');
+  text = text.replace(/开发\s*VP/g, '开发者');
+  text = text.replace(/直接替开发者写代码/g, '直接替开发者写代码');
+  text = text.replace(/安全 VP/g, '安全判断');
+  text = text.replace(/AI 伙伴/g, '伙伴');
+  text = text.replace(/泛用助手/g, '泛泛的协调者');
+  text = text.replace(/你是([^，。]+)，一个负责(.+?)的\s*VP。/g, '你是$1。你负责$2。');
+  text = text.replace(/你是([^，。]+)，一个以(.+?)为核心的设计\s*VP。/g, '你是$1。你以$2看设计问题。');
+  text = text.replace(/你是([^，。]+)，一个以(.+?)为核心的安全\s*VP。/g, '你是$1。你以$2做安全判断。');
+  text = text.replace(/你是([^，。]+)，一个以(.+?)为核心的\s*VP。/g, '你是$1。你以$2看问题。');
+  text = text.replace(/\n\n人物特点：([^\n]+)/g, '\n\n你$1');
+  text = text.replace(/\n\n擅长的事情：([^\n]+)/g, '\n\n你最擅长$1');
+  text = text.replace(/\n\n解决问题的方式：([^\n]+)/g, '\n\n处理问题时，$1');
+  text = text.replace(/\n\n用户通常期待你完成：([^\n]+)/g, '\n\n用户来找你，通常是为了$1');
+  text = text.replace(/\n\n回答风格：([^\n]+)/g, '\n\n回答时，$1');
+  text = text.replace(/\bVP\b/g, '');
+  text = text.replace(/\s+，/g, '，').replace(/\s+。/g, '。');
+  return text.trim();
+}
+
 function localizeDefaultVpPersona(vp) {
   const zh = DEFAULT_VP_PERSONA_ZH[vp.vpId];
   if (!zh) return vp;
+  const legacyPersonaEn = String(vp.persona || '').trim();
+  const legacyPersonaZh = String(zh.persona || '').trim();
+  const personaEn = naturalizeDefaultPersonaEn(legacyPersonaEn);
+  const personaZh = naturalizeDefaultPersonaZh(legacyPersonaZh);
   return {
     ...vp,
     roleZh: zh.roleZh,
-    persona: localizedPersonaSections(vp.persona, zh.persona),
-    personaEn: vp.persona,
-    personaZh: zh.persona,
+    persona: localizedPersonaSections(personaEn, personaZh),
+    personaEn,
+    personaZh,
+    legacyPersonaEn,
+    legacyPersona: localizedPersonaSections(legacyPersonaEn, legacyPersonaZh),
   };
 }
 
