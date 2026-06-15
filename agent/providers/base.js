@@ -41,7 +41,7 @@
  * @property {boolean} [subagents]    provider drives subagent watcher events
  * @property {boolean} [attachments]  provider accepts file / image attachments in prompts
  * @property {boolean} [askUser]      provider supports the round-trip ask-user permission prompt
- * @property {boolean} [modelPicker]  provider supports switching model from the UI
+ * @property {boolean} [modelPicker]  provider supports selecting a model from the web UI
  *
  * @typedef {Object} StartOpts
  * @property {string} conversationId
