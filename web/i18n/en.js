@@ -246,6 +246,9 @@ export default {
   'yeaft.reloadPage': 'Reload page',
   'yeaft.reloadMessages': 'Reload messages',
   'yeaft.switchModel': 'Switch model',
+  'yeaft.modelMenu.title': 'Model and LLM settings',
+  'yeaft.modelMenu.label': 'Model',
+  'yeaft.modelMenu.configureHint': 'Providers, keys, model list',
   // fix/dream-cadence-and-ui-trigger: manual dream trigger button.
   'yeaft.dream.runNow': 'Run dream now',
   'yeaft.dream.lastRun': 'Last run: {ago} ago',
@@ -1311,6 +1314,7 @@ export default {
 
   // Unified session settings modal (announcement + members + rename + danger).
   'yeaft.session.settings.title': '{name} — session settings',
+  'yeaft.session.settings.short': 'Session',
   'yeaft.session.settings.close': 'Close',
   'yeaft.session.settings.nav.announcement': 'Announcement',
   'yeaft.session.settings.nav.members': 'Members',

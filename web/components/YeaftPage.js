@@ -87,14 +87,16 @@ export default {
 
         <!-- task-339-F1: SessionSelector removed from topbar — groups now surface via sidebar section. -->
 
-          <!-- Model selector (compact dropdown in topbar) -->
-          <div class="yeaft-topbar-model" @click="toggleModelDropdown" :title="$t('yeaft.switchModel')">
+          <!-- Model selector doubles as the LLM settings entry; no extra gear. -->
+          <div class="yeaft-topbar-model" @click="toggleModelDropdown" :title="$t('yeaft.modelMenu.title')">
+            <span class="yeaft-topbar-model-kicker">{{ $t('yeaft.modelMenu.label') }}</span>
             <span class="yeaft-topbar-model-name">{{ topbarModel || $t('settings.llm.selectModel') }}</span>
             <span v-if="store.yeaftModelsRefreshing" class="yeaft-model-refreshing">{{ $t('common.loading') || 'Loading' }}</span>
-            <svg v-if="store.yeaftAvailableModels.length > 1" class="yeaft-model-chevron" :class="{ open: modelDropdownOpen }" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
+            <svg class="yeaft-model-chevron" :class="{ open: modelDropdownOpen }" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
             <!-- Dropdown -->
-            <div class="yeaft-model-dropdown yeaft-topbar-model-dropdown" v-if="modelDropdownOpen && store.yeaftAvailableModels.length > 1" @click.stop>
+            <div class="yeaft-model-dropdown yeaft-topbar-model-dropdown" v-if="modelDropdownOpen" @click.stop>
               <div
+                v-if="store.yeaftAvailableModels.length > 1"
                 class="yeaft-model-option"
                 :class="{ active: m.id === topbarModel }"
                 v-for="m in store.yeaftAvailableModels"
@@ -102,21 +104,17 @@ export default {
                 @click="selectModel(m.id)"
               >
                 <span class="yeaft-model-check" v-if="m.id === topbarModel">&#10003;</span>
-                <span class="yeaft-model-check" v-else></span>
                 <span class="yeaft-model-option-label">{{ m.label || m.id }}</span>
                 <span class="yeaft-model-option-provider" v-if="m.provider">{{ m.provider }}</span>
                 <span class="yeaft-model-option-ctx" v-if="m.contextWindow">{{ formatModelCtx(m) }}</span>
               </div>
+              <div v-if="store.yeaftAvailableModels.length > 1" class="yeaft-model-dropdown-separator"></div>
+              <button type="button" class="yeaft-model-config-option" @click="openLlmConfig">
+                <span class="yeaft-model-config-label">{{ $t('settings.llm.configureAgent') }}</span>
+                <span class="yeaft-model-config-hint">{{ $t('yeaft.modelMenu.configureHint') }}</span>
+              </button>
             </div>
           </div>
-          <button
-            class="yeaft-topbar-llm-config"
-            @click="openLlmConfig"
-            :title="$t('settings.llm.configureAgent')"
-            :aria-label="$t('settings.llm.configureAgent')"
-          >
-            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M19.43 12.98c.04-.32.07-.65.07-.98s-.02-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.37-.31-.6-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98L14.5 2.42C14.47 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.5.42L9.12 5.07c-.61.25-1.18.59-1.69.98l-2.49-1c-.23-.08-.48 0-.6.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.08.65-.08.98s.03.66.08.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.37.31.6.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.04.24.25.42.5.42h4c.25 0 .47-.18.5-.42l.38-2.65c.61-.25 1.18-.58 1.69-.98l2.49 1c.23.08.48 0 .6-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65zM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5z"/></svg>
-          </button>
 
           <div class="yeaft-topbar-right">
             <!-- Message reload — replays current Yeaft session history without a full page refresh. -->
@@ -154,7 +152,8 @@ export default {
               :title="$t('yeaft.session.settings.title', { name: topbarGroupName })"
               :aria-label="$t('yeaft.session.settings.title', { name: topbarGroupName })"
             >
-              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 5h16v2H4V5zm0 6h16v2H4v-2zm0 6h10v2H4v-2z"/></svg>
+              <span class="yeaft-topbar-group-settings-label">{{ $t('yeaft.session.settings.short') }}</span>
             </button>
             <button
               class="yeaft-debug-btn"
@@ -287,7 +286,7 @@ export default {
         <!-- Settings Panel -->
         <SettingsPanel v-if="showSettings" :visible="showSettings" :initial-tab="'yeaft'" :initial-sub-tab="settingsInitialTab" @close="showSettings = false" />
 
-        <div v-if="showLlmConfig" class="modal-overlay" @click.self="showLlmConfig = false">
+        <div v-if="showLlmConfig" class="modal-overlay yeaft-llm-config-overlay" @click.self="showLlmConfig = false">
           <div class="modal-card yeaft-llm-config-modal" role="dialog" aria-modal="true" :aria-label="$t('settings.llm.configureAgent')">
             <div class="modal-header">
               <h3>{{ $t('settings.llm.configureAgent') }}</h3>
@@ -828,6 +827,7 @@ export default {
     };
 
     const openLlmConfig = () => {
+      modelDropdownOpen.value = false;
       showLlmConfig.value = true;
     };
 

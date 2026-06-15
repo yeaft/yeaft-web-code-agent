@@ -76,3 +76,19 @@ describe('Yeaft sidebar session list', () => {
     expect(YEAFT_SIDEBAR_SOURCE).toContain(':class="{ active: s.active, pinned: s.pinned');
   });
 });
+
+describe('Yeaft settings entry markup', () => {
+  it('uses session-scoped processing dots and no standalone LLM gear button', async () => {
+    expect(YEAFT_SIDEBAR_SOURCE).toContain('isSessionProcessing(s.id)');
+
+    const pageSource = await import('node:fs').then(fs => fs.readFileSync(
+      new URL('../../../web/components/YeaftPage.js', import.meta.url),
+      'utf8',
+    ));
+    expect(pageSource).toContain('yeaft.modelMenu.label');
+    expect(pageSource).toContain('yeaft-model-config-option');
+    expect(pageSource).not.toContain('class="yeaft-topbar-llm-config"');
+    expect(pageSource).toContain('yeaft-llm-config-overlay');
+    expect(pageSource).toContain('yeaft.session.settings.short');
+  });
+});
