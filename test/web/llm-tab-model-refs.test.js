@@ -17,12 +17,65 @@ describe('LlmTab editable model refs', () => {
       }],
       parseModelsFromProvider: LlmTab.methods.parseModelsFromProvider,
       _modelId: LlmTab.methods._modelId,
+      isManagedProvider: LlmTab.methods.isManagedProvider,
+      fallbackCopilotModels: LlmTab.methods.fallbackCopilotModels,
     };
 
     expect(computed.call(ctx)).toEqual([
       'github-copilot/claude-sonnet-4.5',
       'github-copilot/gpt-5',
     ]);
+  });
+
+  it('uses fallback catalog refs for minimal managed Copilot providers', () => {
+    const computed = LlmTab.computed.allModelRefs;
+    const ctx = {
+      currentConfig: { effectiveConfig: { providers: [] } },
+      localProviders: [{ name: 'github-copilot', credentialProvider: 'github-copilot' }],
+      parseModelsFromProvider: LlmTab.methods.parseModelsFromProvider,
+      _modelId: LlmTab.methods._modelId,
+      isManagedProvider: LlmTab.methods.isManagedProvider,
+      fallbackCopilotModels: LlmTab.methods.fallbackCopilotModels,
+    };
+
+    expect(computed.call(ctx)).toContain('github-copilot/claude-opus-4.8');
+    expect(computed.call(ctx)).toContain('github-copilot/gpt-5-mini');
+  });
+
+  it('hides custom provider protocol, base URL, key, and model fields for managed Copilot', () => {
+    expect(LlmTab.template).toContain('v-if="!isManagedProvider(provider)" class="llm-field llm-field-protocol"');
+    expect(LlmTab.template).toContain('v-if="!isManagedProvider(provider)" class="llm-field"');
+    expect(LlmTab.template).toContain('settings.llm.managedCopilotDesc');
+  });
+
+  it('saves managed Copilot as minimal config without protocol, baseUrl, or models', () => {
+    const sent = [];
+    const ctx = {
+      effectiveAgentId: 'agent-1',
+      saving: false,
+      editableProviders: [{
+        name: 'github-copilot',
+        baseUrl: 'https://api.githubcopilot.com',
+        credentialProvider: 'github-copilot',
+        protocol: 'openai-responses',
+        models: [{ id: 'claude-opus-4.8', protocol: 'anthropic' }, { id: 'gpt-5', protocol: 'openai-responses' }],
+      }],
+      localPrimaryModel: 'github-copilot/claude-opus-4.8',
+      localFastModel: 'github-copilot/gpt-5',
+      currentConfig: { effectiveConfig: { language: 'en' } },
+      chatStore: { sendWsMessage: msg => sent.push(msg) },
+      $watch: () => () => {},
+      $emit: () => {},
+      isManagedProvider: LlmTab.methods.isManagedProvider,
+      _modelId: LlmTab.methods._modelId,
+    };
+
+    LlmTab.methods.saveConfig.call(ctx);
+    expect(sent[0].config.providers).toEqual([{
+      name: 'github-copilot',
+      credentialProvider: 'github-copilot',
+      managed: 'github-copilot',
+    }]);
   });
 
   it('offers Claude Opus 4.8 in Anthropic presets', () => {

@@ -3,6 +3,7 @@ import {
   discoverGitHubCopilotModels,
   discoverOpenAICompatibleModels,
   modelEntryForProvider,
+  modelEntryForGitHubCopilotProvider,
   openAIModelsUrl,
 } from '../../agent/llm-model-discovery.js';
 
@@ -29,7 +30,16 @@ describe('LLM model discovery', () => {
     expect(calls[0].init.headers.Authorization).toBe('Bearer copilot-token');
     expect(result.source).toBe('live');
     expect(result.models).toEqual(['claude-sonnet-4.5', 'gpt-5']);
-    expect(result.providerModels).toEqual([{ id: 'claude-sonnet-4.5', protocol: 'anthropic' }, 'gpt-5']);
+    expect(result.provider).toEqual({
+      name: 'github-copilot',
+      baseUrl: 'https://api.githubcopilot.com',
+      credentialProvider: 'github-copilot',
+      managed: 'github-copilot',
+    });
+    expect(result.providerModels).toEqual([
+      { id: 'claude-sonnet-4.5', protocol: 'anthropic' },
+      { id: 'gpt-5', protocol: 'openai-responses' },
+    ]);
   });
 
   it('does not fall back when Copilot credentials are invalid or unauthorized', async () => {
@@ -77,6 +87,8 @@ describe('LLM model discovery', () => {
 
     expect(result.models).toEqual(['gpt-5', 'claude-sonnet-4.5']);
     expect(modelEntryForProvider('claude-sonnet-4.5')).toEqual({ id: 'claude-sonnet-4.5', protocol: 'anthropic' });
-    expect(modelEntryForProvider('claude-opus-4.8')).toEqual({ id: 'claude-opus-4.8', protocol: 'anthropic' });
+    expect(modelEntryForProvider('gpt-5')).toBe('gpt-5');
+    expect(modelEntryForGitHubCopilotProvider('claude-opus-4.8')).toEqual({ id: 'claude-opus-4.8', protocol: 'anthropic' });
+    expect(modelEntryForGitHubCopilotProvider('gpt-5')).toEqual({ id: 'gpt-5', protocol: 'openai-responses' });
   });
 });

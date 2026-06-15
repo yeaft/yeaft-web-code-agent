@@ -465,3 +465,19 @@ describe('loadConfig — memoryV2 flag retired', () => {
     expect(config).not.toHaveProperty('memoryV2');
   });
 });
+
+describe('managed GitHub Copilot provider config', () => {
+  it('hydrates a minimal managed provider with fallback model catalog', () => {
+    writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({
+      providers: [{ name: 'github-copilot', credentialProvider: 'github-copilot', managed: 'github-copilot' }],
+      primaryModel: 'github-copilot/claude-opus-4.8',
+    }));
+
+    const config = loadConfig({ dir: TEST_DIR });
+    expect(config.providers[0].models).toBeUndefined();
+    expect(config.availableModels).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'claude-opus-4.8', provider: 'github-copilot' }),
+      expect.objectContaining({ id: 'gpt-5-mini', provider: 'github-copilot' }),
+    ]));
+  });
+});

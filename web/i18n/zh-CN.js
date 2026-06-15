@@ -680,6 +680,8 @@ export default {
   'settings.llm.simpleCopilotDesc': '使用本机 GitHub Copilot device token 或 gh auth 自动刷新可用模型，然后选择模型。不会把 API key 写入配置。',
   'settings.llm.useGitHubCopilot': '使用 GitHub Copilot',
   'settings.llm.refreshingModels': '正在刷新模型...',
+  'settings.llm.managedCopilotTitle': '托管的 GitHub Copilot',
+  'settings.llm.managedCopilotDesc': 'Base URL、认证、模型目录和每个模型的 API 协议都自动管理。Claude 模型走 Anthropic Messages；GPT/o 模型走 OpenAI Responses。',
   'settings.llm.providersTitle': '服务商',
   'settings.llm.providersDesc': '配置当前 agent 本机保存的 provider。这里的配置和 yeaft-agent llm CLI 写入同一份 ~/.yeaft/config.json。',
   'settings.llm.agentProviders': '当前 agent providers',
