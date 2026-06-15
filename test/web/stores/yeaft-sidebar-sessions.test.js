@@ -85,10 +85,30 @@ describe('Yeaft settings entry markup', () => {
       new URL('../../../web/components/YeaftPage.js', import.meta.url),
       'utf8',
     ));
-    expect(pageSource).toContain('yeaft.modelMenu.label');
+    expect(pageSource).not.toContain('yeaft.modelMenu.label');
     expect(pageSource).toContain('yeaft-model-config-option');
+    expect(pageSource).toContain('settings.llm.configureMenu');
     expect(pageSource).not.toContain('class="yeaft-topbar-llm-config"');
     expect(pageSource).toContain('yeaft-llm-config-overlay');
     expect(pageSource).toContain('yeaft.session.settings.short');
+
+    const cssSource = await import('node:fs').then(fs => fs.readFileSync(
+      new URL('../../../web/styles/yeaft.css', import.meta.url),
+      'utf8',
+    ));
+    expect(cssSource).toContain('.yeaft-topbar-model-dropdown');
+    expect(cssSource).toContain('top: calc(100% + 8px);');
+    expect(cssSource).toContain('max-height: min(420px, calc(100vh - 120px));');
+
+    const enSource = await import('node:fs').then(fs => fs.readFileSync(
+      new URL('../../../web/i18n/en.js', import.meta.url),
+      'utf8',
+    ));
+    const zhSource = await import('node:fs').then(fs => fs.readFileSync(
+      new URL('../../../web/i18n/zh-CN.js', import.meta.url),
+      'utf8',
+    ));
+    expect(enSource).toContain("'settings.llm.configureMenu': 'LLM Settings'");
+    expect(zhSource).toContain("'settings.llm.configureMenu': '设置 LLM'");
   });
 });

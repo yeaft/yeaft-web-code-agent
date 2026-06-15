@@ -678,6 +678,7 @@ export default {
   'settings.llm.loading': 'Loading configuration...',
   'settings.llm.loadError': 'Failed to load configuration',
   'settings.llm.configureAgent': 'Configure this agent LLM',
+  'settings.llm.configureMenu': 'LLM Settings',
   'settings.llm.simpleCopilotTitle': 'Recommended: GitHub Copilot',
   'settings.llm.simpleCopilotDesc': 'Use the local GitHub Copilot device token or gh auth, refresh available models automatically, then choose a model. No API key is written to config.',
   'settings.llm.useGitHubCopilot': 'Use GitHub Copilot',
