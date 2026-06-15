@@ -54,11 +54,27 @@
 
 import { estimateTokens } from './conversation/persist.js';
 import { pairSanitize } from './pair-sanitize.js';
+import { truncateToolResultIfNeeded } from './tools/registry.js';
 import {
   countTurns as countTurnsImpl,
   indexOfNthTurnFromEnd,
   sliceLastNTurns,
 } from './turn-utils.js';
+
+
+function truncateToolResultsForModel(messages, opts = {}) {
+  if (!Array.isArray(messages) || messages.length === 0) return [];
+  return messages.map((m) => {
+    if (!m || m.role !== 'tool' || typeof m.content !== 'string') return { ...m };
+    return {
+      ...m,
+      content: truncateToolResultIfNeeded(m.content, {
+        toolName: m.name || m.toolName || 'tool_result',
+        language: opts.language,
+      }),
+    };
+  });
+}
 
 /**
  * Re-export `countTurns` so existing callers / tests that import it
@@ -706,7 +722,7 @@ export async function compactHistory(messages, options) {
  * between trim (per-call) and compact (global) explicit.
  *
  * @param {Array<object>} snapshot
- * @param {{ messageTokenBudget?: number, recentTurnCap?: number, keepToolTurns?: number }} [opts]
+ * @param {{ messageTokenBudget?: number, recentTurnCap?: number, keepToolTurns?: number, language?: string }} [opts]
  * @returns {Array<object>}
  */
 export function trimSnapshotForBudget(snapshot, opts = {}) {
@@ -738,6 +754,11 @@ export function trimSnapshotForBudget(snapshot, opts = {}) {
     keepToolTurns: opts.keepToolTurns,
   });
 
-  // Stage 4: pair-sanitize to drop orphan tool_use/tool_result.
+  // Stage 4: bound the raw tool result copy that is fed back into the model.
+  // The in-memory/persisted transcript keeps the full content; this transform
+  // only affects the per-query snapshot passed to engine.query().
+  trimmed = truncateToolResultsForModel(trimmed, { language: opts.language });
+
+  // Stage 5: pair-sanitize to drop orphan tool_use/tool_result.
   return pairSanitize(trimmed);
 }

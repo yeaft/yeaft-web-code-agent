@@ -43,7 +43,7 @@ import { countTurns } from './turn-utils.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
 import { approxTokens } from './memory/budget.js';
-import { COLLAB_TOOL_POLICY, truncateToolResultIfNeeded } from './tools/registry.js';
+import { COLLAB_TOOL_POLICY, normalizeToolOutput, truncateToolResultIfNeeded } from './tools/registry.js';
 import { acknowledgePendingNotifications, formatNotificationsForPrompt, peekPendingNotifications } from './sub-agent/notifications.js';
 import {
   TOOL_BATCH_SIZE,
@@ -2489,13 +2489,7 @@ export class Engine {
               // is exercised by tests and a few standalone tools. Aligning
               // both paths keeps `ctx.cwd` semantics consistent.
               const rawOutput = await tool.execute(tc.input, toolCtx);
-              // Legacy #tools branch must apply the same per-tool cap as
-              // ToolRegistry.execute. Otherwise a deployment using the legacy
-              // registration path bypasses the defense entirely.
-              output = truncateToolResultIfNeeded(rawOutput, {
-                toolName: tc.name,
-                language: this.#config?.language,
-              });
+              output = normalizeToolOutput(rawOutput);
             }
             yield { type: 'tool_end', id: tc.id, name: tc.name, output, isError: false, threadId: this.currentThreadId };
           } catch (err) {
@@ -2508,9 +2502,8 @@ export class Engine {
         const toolDurationMs = Date.now() - toolStartTime;
 
         // feat-6af5f9f1 PR B: emit a structured `tool_exec` event for the
-        // debug panel. Args/output are already in `conversationMessages`
-        // and will be visible in the next loop's snapshot, so we don't
-        // duplicate them here — only the per-tool timing + status.
+        // debug panel. Keep raw output here; the model-facing tool
+        // message below is deliberately truncated for context budget.
         yield {
           type: 'tool_exec',
           turnId: queryTurnId,
@@ -2520,6 +2513,7 @@ export class Engine {
           name: tc.name,
           durationMs: toolDurationMs,
           isError,
+          toolOutput: output,
         };
 
         // 2026-05-13: feed the per-tool counters. Stays best-effort — a
@@ -2539,17 +2533,25 @@ export class Engine {
         // Log tool to debug trace
         this.#trace.logTool(turnId, {
           toolName: tc.name,
+          toolCallId: tc.id,
           toolInput: JSON.stringify(tc.input),
           toolOutput: output,
           durationMs: toolDurationMs,
           isError,
+          toolOutput: output,
         });
 
-        // Append tool result to conversation
+        // Append only the bounded copy to the model message history. Raw
+        // `output` is still used for debug traces, UI events, exec-log, and
+        // persistence so large tool results are not lost outside context.
+        const contextOutput = truncateToolResultIfNeeded(output, {
+          toolName: tc.name,
+          language: this.#config?.language,
+        });
         conversationMessages.push({
           role: 'tool',
           toolCallId: tc.id,
-          content: output,
+          content: contextOutput,
           isError,
         });
 

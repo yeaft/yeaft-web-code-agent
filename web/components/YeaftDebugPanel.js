@@ -693,8 +693,14 @@ export default {
       this.copyText(JSON.stringify(tool, null, 2), 'tool record');
     },
     copyToolOutput(turn, tool) {
-      // Tool output lives on the NEXT loop's messages[] as a `tool` role
-      // entry with toolCallId. Search loops in order.
+      // Prefer the raw debug tool record. `loop.messages[]` contains the
+      // model-context copy, which may be intentionally truncated.
+      if (tool && tool.toolOutput != null) {
+        this.copyText(tool.toolOutput, 'tool output');
+        return;
+      }
+      // Legacy traces do not have raw toolOutput; fall back to the model
+      // snapshot so older debug rows remain copyable.
       for (const loop of turn.loops || []) {
         for (const m of loop.messages || []) {
           if (m && m.role === 'tool' && m.toolCallId === tool.callId) {

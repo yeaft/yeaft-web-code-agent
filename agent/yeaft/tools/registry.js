@@ -33,19 +33,17 @@ export const SUB_AGENT_TOOL_NAMES = Object.freeze([
 export const FORWARD_TOOL_NAMES = Object.freeze(['RouteForward']);
 
 /**
- * Per-tool-result hard cap.
+ * Per-tool-result model-context cap.
  *
  * A single tool can return megabytes (a grep over a large repo, a large file
  * read, a paginated web fetch). If we forward that verbatim into the next LLM
- * request, persistence, or UI event, it bloats context and makes every replay
- * expensive. Keep the hard boundary small and deterministic: one tool result
+ * request, it bloats context and makes every replay expensive. Keep the
+ * boundary small and deterministic for LLM message history: one tool result
  * gets at most 1 KiB before a visible truncation marker is appended.
  *
- * The truncation lands HERE (not in engine.js when pushing tool results
- * into messages) so the UI's `tool_end` event, the exec log, AND the
- * model all see the same truncated content. Truncating later would mean
- * the user sees the full 2 MB output but the model gets a stub —
- * confusing.
+ * Do NOT apply this at tool execution time. Debug events, exec logs, and
+ * persisted transcripts need the raw result. The engine/history replay path
+ * applies this only when building messages for the model.
  */
 export const TOOL_RESULT_MAX_BYTES = 1024;
 
@@ -170,7 +168,7 @@ export class ToolExecutionTimeoutError extends Error {
  * @param {{ toolName: string, language?: string }} opts
  * @returns {string}
  */
-export function truncateToolResultIfNeeded(output, { toolName, language } = {}) {
+export function normalizeToolOutput(output) {
   let text;
   if (typeof output === 'string') {
     text = output;
@@ -182,6 +180,11 @@ export function truncateToolResultIfNeeded(output, { toolName, language } = {}) 
       text = String(output);
     }
   }
+  return text;
+}
+
+export function truncateToolResultIfNeeded(output, { toolName, language } = {}) {
+  const text = normalizeToolOutput(output);
   const originalBytes = Buffer.byteLength(text, 'utf8');
   if (originalBytes <= TOOL_RESULT_MAX_BYTES) return text;
 
@@ -195,8 +198,8 @@ export function truncateToolResultIfNeeded(output, { toolName, language } = {}) 
   }
   const head = chunks.join('');
   const marker = normalizeLanguage(language) === 'zh'
-    ? `\n\n[已截断：${toolName} 返回 ${formatSize(originalBytes)}，上限为 ${formatSize(TOOL_RESULT_MAX_BYTES)}；原因：单个 tool result 超过 1KB，模型和持久化展示不会看到剩余内容]`
-    : `\n\n[truncated: ${toolName} returned ${formatSize(originalBytes)}, capped at ${formatSize(TOOL_RESULT_MAX_BYTES)}; reason: single tool result exceeded 1KB, the model and persisted display will not see the rest]`;
+    ? `\n\n[已截断：${toolName} 返回 ${formatSize(originalBytes)}，上限为 ${formatSize(TOOL_RESULT_MAX_BYTES)}；原因：单个 tool result 超过 1KB，模型消息历史不会看到剩余内容]`
+    : `\n\n[truncated: ${toolName} returned ${formatSize(originalBytes)}, capped at ${formatSize(TOOL_RESULT_MAX_BYTES)}; reason: single tool result exceeded 1KB, the model message history will not see the rest]`;
   return head + marker;
 }
 
@@ -372,9 +375,9 @@ export class ToolRegistry {
   /**
    * Execute a tool by name.
    *
-   * The result is passed through {@link truncateToolResultIfNeeded} so that
-   * a single tool result never injects more than 1KB before the visible
-   * truncation marker.
+   * Returns the raw tool result as text. Do not truncate here: debug display,
+   * exec logs, and persistence must retain the full result. The engine/history
+   * replay path truncates only the copy inserted into model message history.
    *
    * @param {string} name
    * @param {object} input
@@ -398,10 +401,7 @@ export class ToolRegistry {
       ? await runWithTimeout(tool.execute(input, ctx), rawTimeout, name)
       : await tool.execute(input, ctx);
 
-    return truncateToolResultIfNeeded(output, {
-      toolName: name,
-      language: ctx.config?.language,
-    });
+    return normalizeToolOutput(output);
   }
 
   /** Number of registered tools. */

@@ -1587,6 +1587,7 @@ export const useChatStore = defineStore('chat', {
             name: event.name || '?',
             durationMs: event.durationMs || 0,
             isError: !!event.isError,
+            toolOutput: event.toolOutput == null ? null : String(event.toolOutput),
           }];
           this.yeaftDebugTurnsById = {
             ...this.yeaftDebugTurnsById,
