@@ -232,6 +232,84 @@ export class AdapterRouter extends LLMAdapter {
   }
 
   /**
+   * Resolve an explicit provider/model ref against a provider row even when
+   * the local model catalog is stale. The provider name still must exist; the
+   * fallback only skips the per-provider models[] membership check.
+   *
+   * @param {string} modelRef
+   * @returns {{provider: object, entry: {id: string, protocol?: string}} | null}
+   */
+  #resolveProviderQualifiedFallback(modelRef) {
+    const parsed = parseModelRef(modelRef);
+    if (!parsed.providerName || !parsed.modelId) return null;
+
+    const candidates = this.#providers.filter(p => p && p.name === parsed.providerName);
+    if (candidates.length === 0) return null;
+
+    const inferred = inferProtocolFromModelId(parsed.modelId);
+    if (!inferred) return null;
+    const entry = { id: parsed.modelId, protocol: inferred };
+
+    // Provider-qualified refs are explicit enough to tolerate a stale
+    // providers[].models catalog. Prefer a provider row that already serves
+    // this protocol through at least one model entry. That covers the common
+    // Copilot shape: provider.protocol=openai-responses plus per-model
+    // protocol='anthropic' for Claude entries.
+    for (const provider of candidates) {
+      const models = Array.isArray(provider.models) ? provider.models : [];
+      for (const raw of models) {
+        const existing = normalizeModelEntry(raw);
+        if (!existing) continue;
+        try {
+          if (this.#effectiveProtocol(provider, existing) === inferred) {
+            return { provider, entry };
+          }
+        } catch {
+          // Ignore invalid existing entries while looking for a compatible row.
+        }
+      }
+    }
+
+    // If no existing entry proves mixed-protocol support, fall back to rows
+    // whose provider-level protocol is absent or directly compatible.
+    for (const provider of candidates) {
+      if (!provider.protocol || provider.protocol === inferred) {
+        return { provider, entry };
+      }
+    }
+
+    return null;
+  }
+
+  #unknownModelError(modelRef) {
+    const parsed = parseModelRef(modelRef);
+    if (parsed.providerName) {
+      const providerModels = [];
+      let sawProvider = false;
+      for (const provider of this.#providers) {
+        if (!provider || provider.name !== parsed.providerName) continue;
+        sawProvider = true;
+        for (const raw of Array.isArray(provider.models) ? provider.models : []) {
+          const entry = normalizeModelEntry(raw);
+          if (entry) providerModels.push(entry.id);
+        }
+      }
+      if (sawProvider) {
+        return new Error(
+          `Model "${modelRef}" is not listed under provider "${parsed.providerName}" and no compatible protocol row could be inferred. ` +
+          `Available models for this provider: ${providerModels.join(', ') || '(none)'}. ` +
+          `Add "${parsed.modelId}" to config.json providers[].models or refresh the model catalog.`
+        );
+      }
+    }
+    return new Error(
+      `Model "${modelRef}" not found in any provider. ` +
+      `Available models: ${[...this.#modelToProvider.keys()].join(', ') || '(none)'}. ` +
+      `Check your config.json providers[].models arrays.`
+    );
+  }
+
+  /**
    * Resolve the effective wire protocol for a (provider, model) pair.
    *
    * Resolution order:
@@ -283,13 +361,9 @@ export class AdapterRouter extends LLMAdapter {
    * @returns {Promise<{adapter: LLMAdapter, modelId: string}>}
    */
   async #resolveAdapter(modelRef) {
-    const hit = this.#modelToProvider.get(modelRef);
+    const hit = this.#modelToProvider.get(modelRef) || this.#resolveProviderQualifiedFallback(modelRef);
     if (!hit) {
-      throw new Error(
-        `Model "${modelRef}" not found in any provider. ` +
-        `Available models: ${[...this.#modelToProvider.keys()].join(', ') || '(none)'}. ` +
-        `Check your config.json providers[].models arrays.`
-      );
+      throw this.#unknownModelError(modelRef);
     }
     const { provider, entry } = hit;
 
@@ -435,7 +509,7 @@ export class AdapterRouter extends LLMAdapter {
    * @returns {object|null} — Provider config or null
    */
   getProviderForModel(modelId) {
-    const hit = this.#modelToProvider.get(modelId);
+    const hit = this.#modelToProvider.get(modelId) || this.#resolveProviderQualifiedFallback(modelId);
     return hit ? hit.provider : null;
   }
 

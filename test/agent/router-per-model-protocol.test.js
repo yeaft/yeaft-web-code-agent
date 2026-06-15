@@ -6,7 +6,7 @@
  * a single provider serve both Anthropic and OpenAI families.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import {
   AdapterRouter,
@@ -34,6 +34,8 @@ describe('inferProtocolFromModelId', () => {
   it('matches the Anthropic family', () => {
     expect(inferProtocolFromModelId('claude-sonnet-4-20250514')).toBe('anthropic');
     expect(inferProtocolFromModelId('claude-opus-4')).toBe('anthropic');
+    expect(inferProtocolFromModelId('claude-opus-4-8')).toBe('anthropic');
+    expect(inferProtocolFromModelId('claude-opus-4.8')).toBe('anthropic');
     expect(inferProtocolFromModelId('anthropic.claude-3-haiku')).toBe('anthropic');
   });
   it('matches the OpenAI Responses family', () => {
@@ -52,6 +54,47 @@ describe('inferProtocolFromModelId', () => {
 });
 
 describe('AdapterRouter resolution', () => {
+  it('resolves a provider-qualified Claude ref even when split provider catalogs are stale', () => {
+    const r = new AdapterRouter({
+      providers: [
+        { name: 'copilot', baseUrl: 'https://x/', apiKey: 'k', protocol: 'anthropic', models: ['claude-opus-4.7'] },
+        { name: 'copilot', baseUrl: 'https://x/', apiKey: 'k', protocol: 'openai-responses', models: ['gpt-5.5'] },
+      ],
+    });
+
+    expect(r.getProviderForModel('copilot/claude-opus-4.8')?.protocol).toBe('anthropic');
+  });
+
+  it('resolves a stale Claude ref from a single mixed-protocol provider row', async () => {
+    const fetchFn = vi.fn(async () => ({ ok: true, body: { getReader: () => ({ read: async () => ({ done: true }), releaseLock: () => {} }) } }));
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchFn;
+    try {
+      const r = new AdapterRouter({
+        providers: [
+          {
+            name: 'copilot',
+            baseUrl: 'https://x',
+            apiKey: 'k',
+            protocol: 'openai-responses',
+            models: [{ id: 'claude-opus-4.7', protocol: 'anthropic' }, 'gpt-5'],
+          },
+        ],
+      });
+
+      const provider = r.getProviderForModel('copilot/claude-opus-4.8');
+      expect(provider?.name).toBe('copilot');
+      expect(provider?.protocol).toBe('openai-responses');
+
+      const gen = r.stream({ model: 'copilot/claude-opus-4.8', messages: [] });
+      await gen.next();
+      expect(fetchFn.mock.calls[0][0]).toBe('https://x/v1/messages');
+      expect(JSON.parse(fetchFn.mock.calls[0][1].body).model).toBe('claude-opus-4.8');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('routes legacy string[] models without breaking', () => {
     const r = new AdapterRouter({
       providers: [

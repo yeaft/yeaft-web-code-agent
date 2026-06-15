@@ -12,6 +12,8 @@
 
 export const PROTOCOL_PRESET_MODELS = {
   anthropic: [
+    'claude-opus-4-8',
+    'claude-opus-4.8',
     'claude-sonnet-4-20250514',
     'claude-opus-4-20250514',
     'claude-haiku-3-20250414',
