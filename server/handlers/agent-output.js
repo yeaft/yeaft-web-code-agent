@@ -5,7 +5,7 @@ import { trackMessage, webClients, previewFiles } from '../context.js';
 import { CONFIG } from '../config.js';
 
 
-function decorateYeaftSessionsWithPinned(agentId, sessions) {
+export function decorateYeaftSessionsWithPinned(agentId, sessions) {
   const rawRows = Array.isArray(sessions) ? sessions : [];
   const pinnedIds = new Set();
   try {

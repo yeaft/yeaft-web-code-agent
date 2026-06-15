@@ -169,7 +169,14 @@ export const yeaftSessionDb = {
     const id = typeof session === 'string' ? session : session?.id;
     if (!id || !agentId) return false;
     const existing = this.get(id);
-    if (existing && existing.userId && userId && existing.userId !== userId) return false;
+    if (existing) {
+      if (existing.userId && userId && existing.userId !== userId) return false;
+      // The current schema keys yeaft_sessions by session id for wire/disk
+      // compatibility. Do not let an agent-scoped pin request mutate another
+      // connected agent's row when both agents report the same session id
+      // (for example the common legacy/default session id).
+      if (existing.agentId && existing.agentId !== agentId) return false;
+    }
     if (!existing) {
       this.upsertFromSnapshot(userId, agentId, {
         ...(session && typeof session === 'object' ? session : {}),
