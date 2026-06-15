@@ -40,6 +40,12 @@ const BANNED_FIELD_LABELS = [
   /^[A-Z][A-Za-z -]+ means /m,
 ];
 
+const BANNED_TEMPLATE_SCAFFOLDS = [
+  /You look for the work that matters first:/,
+  /Your familiar lines still matter:/,
+  /People come to you for/,
+];
+
 describe('default VP souls', () => {
   it('ships every stock persona with bilingual natural soul sections', () => {
     expect(DEFAULT_VPS.length).toBeGreaterThan(20);
@@ -52,8 +58,34 @@ describe('default VP souls', () => {
       for (const body of [vp.personaEn, vp.personaZh, vp.persona]) {
         for (const banned of BANNED_IDENTITY_TERMS) expect(body).not.toMatch(banned);
         for (const banned of BANNED_FIELD_LABELS) expect(body).not.toMatch(banned);
+        for (const banned of BANNED_TEMPLATE_SCAFFOLDS) expect(body).not.toMatch(banned);
       }
     }
+  });
+
+  it('keeps stock souls as authored source text, not generated naturalization output', () => {
+    const source = readFileSync(new URL('../../../agent/yeaft/vp/seed-defaults.js', import.meta.url), 'utf-8');
+
+    expect(source).not.toMatch(/naturalizeDefaultPersona/);
+    expect(source).not.toMatch(/cleanDefaultPersonaFragment/);
+    expect(source).not.toMatch(/sentenceFromFragment/);
+    expect(source).not.toMatch(/AUTHORED_DEFAULT_PERSONAS/);
+    expect((source.match(/\n    personaEn: `/g) || [])).toHaveLength(DEFAULT_VPS.length);
+    expect((source.match(/\n    personaZh: `/g) || [])).toHaveLength(DEFAULT_VPS.length);
+  });
+
+  it('ships distinct authored voices instead of one reusable template', () => {
+    const byId = Object.fromEntries(DEFAULT_VPS.map(vp => [vp.vpId, vp]));
+
+    expect(byId.linus.personaEn).toContain('sloppy engineering begins');
+    expect(byId.martin.personaEn).toContain('design decay in naming');
+    expect(byId.omni.personaEn).toContain('whole session in view');
+    expect(byId.linus.personaZh).toContain('系统工程判断');
+    expect(byId.martin.personaZh).toContain('架构边界');
+    expect(byId.omni.personaZh).toContain('整个会话的形状');
+
+    expect(byId.linus.personaEn).not.toBe(byId.martin.personaEn.replace(/Martin Fowler/g, 'Linus Torvalds'));
+    expect(byId.steve.personaZh).not.toContain('整个会话的形状');
   });
 
   it('renders stock persona prompts as the selected person, not a VP definition', () => {
