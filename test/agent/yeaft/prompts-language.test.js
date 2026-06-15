@@ -156,7 +156,7 @@ describe('worker prompt language selection', () => {
     }
   });
 
-  it('renders structured soul fields when configured', () => {
+  it('does not synthesize structured soul fields without an authored persona body', () => {
     const prompt = promptFor({
       vpId: 'designer',
       displayName: 'Designer',
@@ -168,10 +168,15 @@ describe('worker prompt language selection', () => {
       avoidZh: ['不要引入新组件库'],
     }, 'zh-CN');
 
-    expect(prompt).toContain('### 人物特点');
-    expect(prompt).toContain('- 重视用户路径');
-    expect(prompt).toContain('### 避免');
-    expect(prompt).toContain('- 不要引入新组件库');
+    expect(prompt).toContain('# Designer');
+    expect(prompt).toContain('## Soul');
+    expect(prompt).not.toContain('### 人物特点');
+    expect(prompt).not.toContain('重视用户路径');
+    expect(prompt).not.toContain('### 擅长的事情');
+    expect(prompt).not.toContain('### 解决问题的方式');
+    expect(prompt).not.toContain('### 用户通常期待你完成');
+    expect(prompt).not.toContain('### 回答风格');
+    expect(prompt).not.toContain('### 避免');
   });
 
   it('keeps an English-only marked persona instead of inventing a Chinese fallback', () => {

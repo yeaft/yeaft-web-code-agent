@@ -403,12 +403,10 @@ export function buildSystemPrompt({
 // ─── helpers ─────────────────────────────────────────────────────
 
 /**
- * Render the `## active_persona` block when the engine is running on
- * behalf of an addressed VP. Accepts `{ displayName, role?, persona }` —
- * `persona` is the body text from the VP's role.md (loaded by the engine
- * via readVp). When `persona` is empty we still emit the intro line so
- * the LLM at least knows whose voice to adopt; if even displayName is
- * missing we omit the whole block (no useful signal).
+ * Render the VP identity block when the engine is running on behalf of an
+ * addressed VP. The `persona` body from role.md is the only soul source;
+ * frontmatter fields such as role/traits are metadata and must not synthesize
+ * a second identity layer. If `persona` is empty, render only the heading.
  *
  * @param {object} vpPersona
  * @param {string} vpPersona.displayName
@@ -423,7 +421,6 @@ function renderVpPersona(vpPersona, lang, effectiveLang = 'en') {
   if (!vpPersona || typeof vpPersona !== 'object') return '';
   const name = selectVpPersonaName(vpPersona, effectiveLang);
   if (!name) return '';
-  const role = selectVpPersonaRole(vpPersona, effectiveLang);
   const body = selectVpPersonaBody(vpPersona, effectiveLang);
 
   // Persona is the IDENTITY layer (not an overlay). Do not prepend a
@@ -444,16 +441,6 @@ function selectVpPersonaName(vpPersona, effectiveLang) {
   return typeof vpPersona.displayName === 'string' ? vpPersona.displayName.trim() : '';
 }
 
-function selectVpPersonaRole(vpPersona, effectiveLang) {
-  if (effectiveLang === 'zh') {
-    const zhRole = typeof vpPersona.roleZh === 'string' ? vpPersona.roleZh.trim() : '';
-    if (zhRole) return zhRole;
-
-    const role = typeof vpPersona.role === 'string' ? vpPersona.role.trim() : '';
-    return role;
-  }
-  return typeof vpPersona.role === 'string' ? vpPersona.role.trim() : '';
-}
 
 function selectVpPersonaBody(vpPersona, effectiveLang) {
   const body = typeof vpPersona.persona === 'string' ? vpPersona.persona.trim() : '';
@@ -469,45 +456,9 @@ function selectVpPersonaBody(vpPersona, effectiveLang) {
     return body;
   }
 
-  const structured = renderStructuredSoulFields(vpPersona, effectiveLang);
-  return structured || '';
+  return '';
 }
 
-
-function renderStructuredSoulFields(vpPersona, effectiveLang) {
-  const specs = effectiveLang === 'zh'
-    ? [
-      ['### 人物特点', vpPersona.traitsZh || vpPersona.traits],
-      ['### 擅长的事情', vpPersona.strengthsZh || vpPersona.strengths],
-      ['### 解决问题的方式', vpPersona.problemSolvingZh || vpPersona.problemSolving],
-      ['### 用户通常期待你完成', vpPersona.expectedTasksZh || vpPersona.expectedTasks],
-      ['### 回答风格', vpPersona.answerStyleZh || vpPersona.answerStyle],
-      ['### 避免', vpPersona.avoidZh || vpPersona.avoid],
-    ]
-    : [
-      ['### Traits', vpPersona.traits],
-      ['### Strengths', vpPersona.strengths],
-      ['### Problem-Solving Style', vpPersona.problemSolving],
-      ['### What Users Expect You To Do', vpPersona.expectedTasks],
-      ['### Answer Style', vpPersona.answerStyle],
-      ['### Avoid', vpPersona.avoid],
-    ];
-  const lines = [];
-  for (const [heading, value] of specs) {
-    const rendered = renderSoulValue(value);
-    if (!rendered) continue;
-    lines.push(heading, '', rendered);
-  }
-  return lines.length ? lines.join('\n\n') : '';
-}
-
-function renderSoulValue(value) {
-  if (Array.isArray(value)) {
-    const items = value.map(v => String(v || '').trim()).filter(Boolean);
-    return items.length ? items.map(v => `- ${v}`).join('\n') : '';
-  }
-  return typeof value === 'string' ? value.trim() : '';
-}
 
 
 function renderActiveScope(activeScope, lang) {
