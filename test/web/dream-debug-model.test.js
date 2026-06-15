@@ -77,12 +77,13 @@ describe('Dream debug model', () => {
     expect(items[0].segments[0].id).toBe('memory-1');
   });
 
-  it('defines a fixed Dream shell with internal scroll containers', () => {
+  it('defines a scrollable Dream shell with nested scroll containers', () => {
     const css = readFileSync(resolve(repoRoot, 'web/styles/yeaft.css'), 'utf8');
 
     expect(css).toContain('.yeaft-debug-dream-shell');
-    expect(css).toMatch(/\.yeaft-debug-dream-panel\s*\{[\s\S]*?overflow:\s*hidden;/);
-    expect(css).toMatch(/\.yeaft-debug-dream-list,[\s\S]*?\.yeaft-debug-dream-segments\s*\{[\s\S]*?overflow-y:\s*auto;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-panel\s*\{[\s\S]*?overflow:\s*auto;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-shell\s*\{[\s\S]*?width:\s*max-content;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-list,[\s\S]*?\.yeaft-debug-dream-segments\s*\{[\s\S]*?overflow:\s*auto;/);
     expect(css).toMatch(/\.yeaft-debug-scroll-pre\s*\{[\s\S]*?overflow:\s*auto;/);
   });
 });
