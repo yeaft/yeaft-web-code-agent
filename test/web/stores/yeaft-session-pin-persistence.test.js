@@ -200,3 +200,103 @@ describe('Yeaft session pin persistence flow', () => {
   });
 
 });
+
+it('applies connected-agent list results as session snapshots with persisted pin metadata', () => {
+  const store = useSessionsStore();
+
+  store.applyCrudResult({
+    ok: true,
+    op: 'list',
+    sessions: [
+      { id: 'session-a', name: 'A', updatedAt: 10, pinned: true },
+      { id: 'session-b', name: 'B', updatedAt: 20 },
+    ],
+  }, 'agent-a');
+  store.applyCrudResult({
+    ok: true,
+    op: 'list',
+    sessions: [
+      { id: 'session-c', name: 'C', updatedAt: 30, isPinned: true },
+    ],
+  }, 'agent-b');
+
+  expect(store.sessions['session-a']).toMatchObject({ agentId: 'agent-a', pinned: true });
+  expect(store.sessions['session-c']).toMatchObject({ agentId: 'agent-b', pinned: true });
+  expect(ids(store.sessionList).slice(0, 2).sort()).toEqual(['session-a', 'session-c']);
+  expect(ids(store.sessionList)[2]).toBe('session-b');
+});
+
+it('sends Yeaft pin metadata so the server can persist before DB hydration', () => {
+  const calls = [];
+  const component = {
+    groupMenu: { open: true, groupId: 'session-a' },
+    store: { yeaftAgentId: 'agent-a', currentAgent: 'agent-current' },
+    chatStore: {
+      togglePin(...args) { calls.push(args); },
+    },
+  };
+
+  YeaftSidebar.methods.onTogglePin.call(component, {
+    id: 'session-a',
+    agentId: 'agent-a',
+    name: 'Pinned Session',
+    workDir: '/repo',
+  });
+
+  expect(component.groupMenu).toEqual({ open: false, groupId: null });
+  expect(calls).toEqual([[ 'session-a', {
+    sessionKind: 'yeaft',
+    agentId: 'agent-a',
+    sessionName: 'Pinned Session',
+    workDir: '/repo',
+  } ]]);
+});
+
+const { useChatStore } = await import('../../../web/stores/chat.js');
+
+it('loads opened Yeaft sessions from every connected agent on entry', () => {
+  const store = useChatStore();
+  const requests = [];
+  store.agents = [
+    { id: 'agent-a', online: true },
+    { id: 'agent-b', online: true },
+    { id: 'agent-offline', online: false },
+    { id: 'agent-a', online: true },
+  ];
+  store.sessionCrudRequest = (op, data, opts) => {
+    requests.push({ op, data, opts });
+    return Promise.resolve({ ok: true });
+  };
+
+  const loaded = store.loadOpenedYeaftSessionsForConnectedAgents();
+
+  expect(loaded).toEqual(['agent-a', 'agent-b']);
+  expect(requests).toEqual([
+    { op: 'list', data: {}, opts: { agentId: 'agent-a' } },
+    { op: 'list', data: {}, opts: { agentId: 'agent-b' } },
+  ]);
+});
+
+it('persists Yeaft pin actions with agent-scoped metadata', () => {
+  const store = useChatStore();
+  const sent = [];
+  store.pinnedSessions = [];
+  store.sendWsMessage = (msg) => sent.push(msg);
+
+  store.togglePin('session-a', {
+    sessionKind: 'yeaft',
+    agentId: 'agent-a',
+    sessionName: 'Session A',
+    workDir: '/repo',
+  });
+
+  expect(store.pinnedSessions).toContain('session-a');
+  expect(sent).toEqual([{
+    type: 'pin_session',
+    conversationId: 'session-a',
+    sessionKind: 'yeaft',
+    agentId: 'agent-a',
+    sessionName: 'Session A',
+    workDir: '/repo',
+  }]);
+});

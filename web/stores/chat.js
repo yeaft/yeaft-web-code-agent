@@ -1076,7 +1076,21 @@ export const useChatStore = defineStore('chat', {
       // during a drop) is subsumed — clear it so handleAgentList doesn't fire
       // a redundant second catch-up on the next routine agent_list.
       this._yeaftReconnectCatchUpPending = false;
+      this.loadOpenedYeaftSessionsForConnectedAgents();
       this.requestYeaftSessionBootstrap({ forceSessionReady: true, catchUpHistory: true });
+    },
+
+    loadOpenedYeaftSessionsForConnectedAgents(agentIds = null) {
+      const ids = Array.isArray(agentIds)
+        ? agentIds.filter(Boolean)
+        : (Array.isArray(this.agents) ? this.agents.filter(a => a && a.online && a.id).map(a => a.id) : []);
+      const uniqueIds = [...new Set(ids)];
+      for (const agentId of uniqueIds) {
+        this.sessionCrudRequest('list', {}, { agentId }).catch((err) => {
+          console.warn(`[Yeaft] failed to load opened sessions for agent ${agentId}:`, err?.message || err);
+        });
+      }
+      return uniqueIds;
     },
 
     requestYeaftSessionBootstrap({ forceSessionReady = false, catchUpHistory = false } = {}) {
@@ -3340,17 +3354,24 @@ export const useChatStore = defineStore('chat', {
         if (gs && typeof gs.applyPinState === 'function') gs.applyPinState(sessionId, !!pinned);
       } catch (_) { /* no sessions store in some tests */ }
     },
-    togglePin(sessionId) {
+    togglePin(sessionId, meta = {}) {
       const isPinned = this.pinnedSessions.includes(sessionId);
       const nextPinned = !isPinned;
       // Optimistic local update; the server `session_pinned` ack reapplies
       // the authoritative state and updates Yeaft session row metadata.
       this.setSessionPinned(sessionId, nextPinned);
-      // Persist to server
-      this.sendWsMessage({
+      const payload = {
         type: nextPinned ? 'pin_session' : 'unpin_session',
-        conversationId: sessionId
-      });
+        conversationId: sessionId,
+      };
+      if (meta && meta.sessionKind === 'yeaft') {
+        payload.sessionKind = 'yeaft';
+        if (meta.agentId) payload.agentId = meta.agentId;
+        if (meta.sessionName) payload.sessionName = meta.sessionName;
+        if (meta.workDir) payload.workDir = meta.workDir;
+      }
+      // Persist to server.
+      this.sendWsMessage(payload);
     },
     isSessionPinned(sessionId) {
       return this.pinnedSessions.includes(sessionId);

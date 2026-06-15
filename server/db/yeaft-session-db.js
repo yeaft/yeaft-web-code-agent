@@ -158,4 +158,26 @@ export const yeaftSessionDb = {
   setPinned(id, pinned) {
     stmts.setYeaftSessionPinned.run(pinned ? 1 : 0, Date.now(), id);
   },
+
+  /**
+   * Persist pin state for a Yeaft Session even if the agent snapshot has not
+   * reached the server-side shadow table yet. This keeps the UI pin action
+   * durable across reloads in the bootstrap race where the user pins a row
+   * that exists in the web/agent session list but not in `yeaft_sessions`.
+   */
+  setPinnedForAgent(userId, agentId, session, pinned) {
+    const id = typeof session === 'string' ? session : session?.id;
+    if (!id || !agentId) return false;
+    const existing = this.get(id);
+    if (existing && existing.userId && userId && existing.userId !== userId) return false;
+    if (!existing) {
+      this.upsertFromSnapshot(userId, agentId, {
+        ...(session && typeof session === 'object' ? session : {}),
+        id,
+        name: (session && typeof session === 'object' && session.name) ? session.name : id,
+      });
+    }
+    this.setPinned(id, pinned);
+    return true;
+  },
 };

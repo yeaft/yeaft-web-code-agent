@@ -4,6 +4,23 @@ import { broadcastAgentList, forwardToClients, sendToWebClient } from '../ws-uti
 import { trackMessage, webClients, previewFiles } from '../context.js';
 import { CONFIG } from '../config.js';
 
+
+function decorateYeaftSessionsWithPinned(agentId, sessions) {
+  const rawRows = Array.isArray(sessions) ? sessions : [];
+  const pinnedIds = new Set();
+  try {
+    for (const row of yeaftSessionDb.getByAgent(agentId)) {
+      if (row && row.isPinned) pinnedIds.add(row.id);
+    }
+  } catch (e) {
+    console.warn(`[Server] yeaft pin decorate read failed for agent ${agentId}:`, e?.message || e);
+  }
+  return rawRows.map(s => {
+    if (!s || !s.id) return s;
+    return pinnedIds.has(s.id) ? { ...s, pinned: true } : s;
+  });
+}
+
 function hydrateMessagePreviewData(message) {
   const attachments = message?.attachments;
   if (!Array.isArray(attachments) || attachments.length === 0) return message;
@@ -521,19 +538,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
       // Use one batch read (`getByAgent`) and a Set lookup instead of an
       // N+1 `get(id)` per row — relays this size hot path on every
       // snapshot per connected client.
-      const rawRows = Array.isArray(msg.sessions) ? msg.sessions : [];
-      const pinnedIds = new Set();
-      try {
-        for (const row of yeaftSessionDb.getByAgent(agentId)) {
-          if (row && row.isPinned) pinnedIds.add(row.id);
-        }
-      } catch (e) {
-        console.warn(`[Server] yeaft pin decorate read failed for agent ${agentId}:`, e?.message || e);
-      }
-      const decoratedSessions = rawRows.map(s => {
-        if (!s || !s.id) return s;
-        return pinnedIds.has(s.id) ? { ...s, pinned: true } : s;
-      });
+      const decoratedSessions = decorateYeaftSessionsWithPinned(agentId, msg.sessions);
       // Relay verbatim to web (agentId stamped so the web sessions store
       // can merge per-agent rosters).
       for (const [, c] of webClients) {
@@ -593,13 +598,18 @@ export async function handleAgentOutput(agentId, agent, msg) {
 
     case 'session_crud_result': {
       // Surface op result to the web (the only client that cares about
-      // requestId routing). Also keep the DB shadow consistent for
-      // delete/archive — create/update are covered by the snapshot
-      // that follows from the agent.
+      // requestId routing). Keep the server shadow table in sync for list
+      // probes too: entering Yeaft asks each connected agent for its opened
+      // sessions, and that response must carry persisted server-side pin
+      // state before it hits the web store.
+      let outboundMsg = msg;
       try {
         const op = msg.op;
         const sessionId = msg.sessionId;
-        if (msg.ok && sessionId && (op === 'delete' || op === 'archive')) {
+        if (msg.ok && op === 'list' && Array.isArray(msg.sessions)) {
+          if (agent.ownerId) yeaftSessionDb.reconcileFromSnapshot(agent.ownerId, agentId, msg.sessions);
+          outboundMsg = { ...msg, sessions: decorateYeaftSessionsWithPinned(agentId, msg.sessions) };
+        } else if (msg.ok && sessionId && (op === 'delete' || op === 'archive')) {
           yeaftSessionDb.delete(sessionId);
         }
       } catch (e) {
@@ -607,7 +617,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
       }
       for (const [, c] of webClients) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
-          await sendToWebClient(c, { ...msg, agentId: agentId });
+          await sendToWebClient(c, { ...outboundMsg, agentId: agentId });
         }
       }
       break;
