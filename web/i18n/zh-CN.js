@@ -675,6 +675,7 @@ export default {
   'settings.llm.loading': '正在加载配置...',
   'settings.llm.loadError': '加载配置失败',
   'settings.llm.configureAgent': '配置当前 Agent 的 LLM',
+  'settings.llm.configureMenu': '设置 LLM',
   'settings.llm.simpleCopilotTitle': '推荐：GitHub Copilot',
   'settings.llm.simpleCopilotDesc': '使用本机 GitHub Copilot device token 或 gh auth 自动刷新可用模型，然后选择模型。不会把 API key 写入配置。',
   'settings.llm.useGitHubCopilot': '使用 GitHub Copilot',

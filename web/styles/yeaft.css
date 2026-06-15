@@ -234,18 +234,13 @@
   font-size: 13px;
   font-weight: 500;
   color: var(--text-primary);
-  max-width: 200px;
+  max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.yeaft-topbar-model-kicker {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-muted);
-  letter-spacing: 0.02em;
-}
+.yeaft-model-refreshing {
   font-size: 11px;
   color: var(--text-muted);
 }
@@ -260,8 +255,16 @@
   transform: rotate(180deg);
 }
 
-  top: calc(100% + 6px);
-  min-width: 260px;
+.yeaft-topbar-model-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: auto;
+  min-width: 280px;
+  width: max-content;
+  max-width: min(420px, calc(100vw - 32px));
+  max-height: min(420px, calc(100vh - 120px));
+  z-index: 1300;
 }
 
 .yeaft-model-dropdown-separator {
@@ -300,18 +303,14 @@
   color: var(--text-muted);
 }
 
-  min-width: 220px;
-}
-
 /* Model dropdown (shared) */
 
 .yeaft-model-dropdown {
   background: var(--bg-main);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 4px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
-  max-height: 240px;
+  box-shadow: var(--modal-shadow);
   overflow-y: auto;
 }
 

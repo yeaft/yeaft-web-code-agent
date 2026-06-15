@@ -89,7 +89,6 @@ export default {
 
           <!-- Model selector doubles as the LLM settings entry; no extra gear. -->
           <div class="yeaft-topbar-model" @click="toggleModelDropdown" :title="$t('yeaft.modelMenu.title')">
-            <span class="yeaft-topbar-model-kicker">{{ $t('yeaft.modelMenu.label') }}</span>
             <span class="yeaft-topbar-model-name">{{ topbarModel || $t('settings.llm.selectModel') }}</span>
             <span v-if="store.yeaftModelsRefreshing" class="yeaft-model-refreshing">{{ $t('common.loading') || 'Loading' }}</span>
             <svg class="yeaft-model-chevron" :class="{ open: modelDropdownOpen }" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
@@ -110,7 +109,7 @@ export default {
               </div>
               <div v-if="store.yeaftAvailableModels.length > 1" class="yeaft-model-dropdown-separator"></div>
               <button type="button" class="yeaft-model-config-option" @click="openLlmConfig">
-                <span class="yeaft-model-config-label">{{ $t('settings.llm.configureAgent') }}</span>
+                <span class="yeaft-model-config-label">{{ $t('settings.llm.configureMenu') }}</span>
                 <span class="yeaft-model-config-hint">{{ $t('yeaft.modelMenu.configureHint') }}</span>
               </button>
             </div>
