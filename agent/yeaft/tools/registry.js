@@ -33,21 +33,13 @@ export const SUB_AGENT_TOOL_NAMES = Object.freeze([
 export const FORWARD_TOOL_NAMES = Object.freeze(['RouteForward']);
 
 /**
- * Per-tool-result hard cap.
+ * Display-only cap for persisted tool results replayed from history.
  *
- * A single tool can return megabytes (a grep over a large repo, a large file
- * read, a paginated web fetch). If we forward that verbatim into the next LLM
- * request, persistence, or UI event, it bloats context and makes every replay
- * expensive. Keep the hard boundary small and deterministic: one tool result
- * gets at most 1 KiB before a visible truncation marker is appended.
- *
- * The truncation lands HERE (not in engine.js when pushing tool results
- * into messages) so the UI's `tool_end` event, the exec log, AND the
- * model all see the same truncated content. Truncating later would mean
- * the user sees the full 2 MB output but the model gets a stub —
- * confusing.
+ * Live tool results can be large, but they must remain complete for the
+ * immediate LLM request, debug display, and on-disk persistence. Only history
+ * display uses this small deterministic cap to keep old transcripts readable.
  */
-export const TOOL_RESULT_MAX_BYTES = 1024;
+export const HISTORY_TOOL_RESULT_DISPLAY_MAX_BYTES = 1024;
 
 function normalizeLanguage(language) {
   return String(language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
@@ -157,9 +149,8 @@ export class ToolExecutionTimeoutError extends Error {
 }
 
 /**
- * Truncate a tool result if it exceeds the per-result cap. Non-string
- * outputs are JSON-stringified first (matching what engine.js eventually
- * pushes into `content`), then capped by UTF-8 byte length.
+ * Truncate a persisted tool result for history display only. Non-string
+ * outputs are JSON-stringified first, then capped by UTF-8 byte length.
  *
  * Edge cases handled:
  *   - `undefined` → `JSON.stringify(undefined)` returns `undefined`, not
@@ -170,7 +161,7 @@ export class ToolExecutionTimeoutError extends Error {
  * @param {{ toolName: string, language?: string }} opts
  * @returns {string}
  */
-export function truncateToolResultIfNeeded(output, { toolName, language } = {}) {
+export function truncateToolResultForHistoryDisplay(output, { toolName, language } = {}) {
   let text;
   if (typeof output === 'string') {
     text = output;
@@ -183,20 +174,20 @@ export function truncateToolResultIfNeeded(output, { toolName, language } = {}) 
     }
   }
   const originalBytes = Buffer.byteLength(text, 'utf8');
-  if (originalBytes <= TOOL_RESULT_MAX_BYTES) return text;
+  if (originalBytes <= HISTORY_TOOL_RESULT_DISPLAY_MAX_BYTES) return text;
 
   const chunks = [];
   let used = 0;
   for (const ch of text) {
     const n = Buffer.byteLength(ch, 'utf8');
-    if (used + n > TOOL_RESULT_MAX_BYTES) break;
+    if (used + n > HISTORY_TOOL_RESULT_DISPLAY_MAX_BYTES) break;
     chunks.push(ch);
     used += n;
   }
   const head = chunks.join('');
   const marker = normalizeLanguage(language) === 'zh'
-    ? `\n\n[已截断：${toolName} 返回 ${formatSize(originalBytes)}，上限为 ${formatSize(TOOL_RESULT_MAX_BYTES)}；原因：单个 tool result 超过 1KB，模型和持久化展示不会看到剩余内容]`
-    : `\n\n[truncated: ${toolName} returned ${formatSize(originalBytes)}, capped at ${formatSize(TOOL_RESULT_MAX_BYTES)}; reason: single tool result exceeded 1KB, the model and persisted display will not see the rest]`;
+    ? `\n\n[已截断：${toolName} 返回 ${formatSize(originalBytes)}，上限为 ${formatSize(HISTORY_TOOL_RESULT_DISPLAY_MAX_BYTES)}；原因：历史显示场景单个 tool result 超过 1KB；实时请求、debug 与持久化保留完整内容]`
+    : `\n\n[truncated: ${toolName} returned ${formatSize(originalBytes)}, capped at ${formatSize(HISTORY_TOOL_RESULT_DISPLAY_MAX_BYTES)}; reason: history display capped a tool result over 1KB; live requests, debug, and persistence keep the full content]`;
   return head + marker;
 }
 
@@ -217,6 +208,17 @@ export function truncateToolResultIfNeeded(output, { toolName, language } = {}) 
  * @param {string} toolName
  * @returns {Promise<unknown>}
  */
+
+function stringifyToolResult(output) {
+  if (typeof output === 'string') return output;
+  try {
+    const json = JSON.stringify(output);
+    return typeof json === 'string' ? json : String(output);
+  } catch {
+    return String(output);
+  }
+}
+
 function runWithTimeout(promise, timeoutMs, toolName) {
   let timer = null;
   const timeoutPromise = new Promise((_resolve, reject) => {
@@ -372,10 +374,6 @@ export class ToolRegistry {
   /**
    * Execute a tool by name.
    *
-   * The result is passed through {@link truncateToolResultIfNeeded} so that
-   * a single tool result never injects more than 1KB before the visible
-   * truncation marker.
-   *
    * @param {string} name
    * @param {object} input
    * @param {import('./types.js').ToolContext} [ctx={}]
@@ -398,10 +396,7 @@ export class ToolRegistry {
       ? await runWithTimeout(tool.execute(input, ctx), rawTimeout, name)
       : await tool.execute(input, ctx);
 
-    return truncateToolResultIfNeeded(output, {
-      toolName: name,
-      language: ctx.config?.language,
-    });
+    return stringifyToolResult(output);
   }
 
   /** Number of registered tools. */

@@ -19,7 +19,7 @@
  */
 
 import { join } from 'node:path';
-import { COLLAB_TOOL_POLICY } from './tools/registry.js';
+import { COLLAB_TOOL_POLICY, truncateToolResultForHistoryDisplay } from './tools/registry.js';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { buildDreamOutputSnapshot } from './dream/output-snapshot.js';
@@ -638,6 +638,10 @@ function projectPersistedToHistoryEntry(m) {
 function projectPersistedToVisibleHistoryEntry(m) {
   const entry = projectPersistedToHistoryEntry(m);
   return entry && (entry.role === 'user' || entry.role === 'assistant') ? entry : null;
+}
+
+export function historyDisplayToolResultContent(content, { toolName = 'tool', language } = {}) {
+  return truncateToolResultForHistoryDisplay(content, { toolName, language });
 }
 
 function hydrateHistoryAttachmentPreviews(attachments) {

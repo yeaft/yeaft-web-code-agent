@@ -101,60 +101,9 @@ function migrateAddColumn(db, table, column, type) {
   }
 }
 
-/** Max tool_output size stored (10KB). Longer outputs are truncated. */
-const MAX_TOOL_OUTPUT = 10240;
-
-/**
- * Max per-loop payload (system prompt, messages JSON, raw request /
- * response, response text) stored per row. Larger than MAX_TOOL_OUTPUT
- * because real-world LLM exchanges (system prompt + 30K-token message
- * trail + raw response) routinely cross 10KB. 256KB lets us replay the
- * panel verbatim for the most recent traces without bloating the DB.
- */
-const MAX_LOOP_PAYLOAD = 256 * 1024;
-
-/**
- * Truncate a string to a max length, appending "... [truncated]" if needed.
- * @param {string|null|undefined} str
- * @param {number} max
- * @returns {string|null}
- */
-function truncate(str, max) {
-  if (!str) return str ?? null;
-  if (str.length <= max) return str;
-  return str.slice(0, max) + '... [truncated]';
-}
-
-function truncatedJsonSentinel(originalBytes) {
-  return {
-    __truncated: true,
-    originalBytes,
-    maxBytes: MAX_LOOP_PAYLOAD,
-  };
-}
-
-function truncateJsonValue(value) {
-  if (value == null) return value;
-  if (typeof value === 'string') return truncate(value, MAX_LOOP_PAYLOAD);
-  try {
-    const s = JSON.stringify(value);
-    if (s.length <= MAX_LOOP_PAYLOAD) return value;
-    return truncatedJsonSentinel(s.length);
-  } catch {
-    return null;
-  }
-}
-
 function boundDreamEventData(eventType, eventData) {
   if (eventType !== 'dream_loop' || !eventData || typeof eventData !== 'object') return eventData;
-  return {
-    ...eventData,
-    systemPrompt: truncateJsonValue(eventData.systemPrompt),
-    messages: truncateJsonValue(eventData.messages),
-    response: truncateJsonValue(eventData.response),
-    rawRequest: truncateJsonValue(eventData.rawRequest),
-    rawResponse: truncateJsonValue(eventData.rawResponse),
-  };
+  return { ...eventData };
 }
 
 /**
@@ -226,7 +175,7 @@ export class DebugTrace {
     this.#prepare('insertTurn', `
       INSERT INTO trace_turns (id, trace_id, message_id, mode, turn_number, started_at, group_id, vp_id, thread_id, user_prompt)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, traceId, messageId, mode, turnNumber, now, sessionId, vpId, threadId, truncate(userPrompt, MAX_LOOP_PAYLOAD));
+    `).run(id, traceId, messageId, mode, turnNumber, now, sessionId, vpId, threadId, userPrompt ?? null);
     return id;
   }
 
@@ -257,30 +206,16 @@ export class DebugTrace {
     // SQLite as TEXT. JSON serialisation might fail (cyclic structure /
     // BigInt) — guard with try/catch and persist null on failure so a
     // single bad message can never tank the whole turn record.
-    //
-    // I2 fix: if the serialised JSON exceeds MAX_LOOP_PAYLOAD, the naïve
-    // `truncate(s, MAX)` would append `... [truncated]` mid-string and
-    // make the row's JSON unparseable. The reader's `parseJsonSafe` would
-    // then silently return null and the panel would render the loop with
-    // empty messages / toolCalls / usage. Persist a structured sentinel
-    // instead so the panel can render a "[truncated, N bytes]" notice.
     const safeStringify = (v) => {
       if (v == null) return null;
-      try {
-        const s = JSON.stringify(v);
-        if (s.length <= MAX_LOOP_PAYLOAD) return s;
-        return JSON.stringify(truncatedJsonSentinel(s.length));
-      } catch { return null; }
+      if (typeof v === 'string') return v;
+      try { return JSON.stringify(v); } catch { return null; }
     };
-    // For raw request/response, accept either a pre-stringified blob
-    // (treat as opaque text — truncation here is fine because
-    // parseJsonSafe is not used on raw_*) or a structured object (route
-    // through safeStringify which preserves JSON validity).
-    const stringifyRaw = (v) => {
+    const safeString = (v) => {
       if (v == null) return null;
-      if (typeof v === 'string') return truncate(v, MAX_LOOP_PAYLOAD);
-      return safeStringify(v);
+      return typeof v === 'string' ? v : String(v);
     };
+    const stringifyRaw = safeStringify;
     this.#prepare('endTurn', `
       UPDATE trace_turns SET
         model = ?, input_tokens = ?, output_tokens = ?,
@@ -292,9 +227,9 @@ export class DebugTrace {
     `).run(
       model, inputTokens, outputTokens,
       cacheReadTokens, cacheWriteTokens,
-      stopReason, latencyMs, truncate(responseText, MAX_LOOP_PAYLOAD),
+      stopReason, latencyMs, safeString(responseText),
       now,
-      truncate(systemPrompt, MAX_LOOP_PAYLOAD),
+      safeString(systemPrompt),
       safeStringify(messages),
       safeStringify(toolCalls),
       safeStringify(usage),
@@ -325,8 +260,8 @@ export class DebugTrace {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, turnId, toolName,
-      truncate(toolInput, MAX_TOOL_OUTPUT),
-      truncate(toolOutput, MAX_TOOL_OUTPUT),
+      toolInput ?? null,
+      toolOutput ?? null,
       durationMs, isError ? 1 : 0, now,
     );
     return id;
