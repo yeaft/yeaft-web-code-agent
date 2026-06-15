@@ -324,6 +324,36 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       // the id and whether the caller is authorized; this handler is
       // only responsible for executing the chosen DB write + replying.
       // Tests cover the router directly (see session-pin-router.js).
+      const explicitYeaftAgentId = msg.sessionKind === 'yeaft' && msg.agentId ? msg.agentId : null;
+      if (explicitYeaftAgentId && !msg.conversationId) break;
+      if (explicitYeaftAgentId) {
+        if (!verifyAgentOwnership(explicitYeaftAgentId, client.userId, client.role)) {
+          console.warn(`[Server] Unauthorized yeaft pin ${msg.conversationId} by ${client.userId}`);
+          break;
+        }
+        const isPinned = msg.type === 'pin_session';
+        try {
+          const ok = yeaftSessionDb.setPinnedForAgent(
+            client.userId,
+            explicitYeaftAgentId,
+            {
+              id: msg.conversationId,
+              name: msg.sessionName || msg.conversationId,
+              workDir: msg.workDir || '',
+            },
+            isPinned,
+          );
+          if (!ok) {
+            console.warn(`[Server] Unauthorized yeaft pin ${msg.conversationId} by ${client.userId}`);
+            break;
+          }
+        } catch (e) {
+          console.warn(`[Server] yeaftSessionDb.setPinnedForAgent failed for ${msg.conversationId}:`, e?.message || e);
+        }
+        await sendToWebClient(client, { type: 'session_pinned', conversationId: msg.conversationId, pinned: isPinned });
+        break;
+      }
+
       const route = routeSessionPin(
         {
           getYeaftRow: (id) => yeaftSessionDb.get(id),

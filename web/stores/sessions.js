@@ -294,6 +294,9 @@ export const useSessionsStore = defineStore('sessions', {
       if (result.requestId && this.pending[result.requestId]) {
         delete this.pending[result.requestId];
       }
+      if (result.ok && result.op === 'list' && Array.isArray(result.sessions)) {
+        this.applySnapshot(result.sessions, agentId);
+      }
       const session = result.session || result.group || null;
       if (result.ok && result.op === 'create' && session && session.id) {
         this.applySnapshotUpsert(session, agentId);

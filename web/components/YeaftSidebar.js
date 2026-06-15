@@ -438,7 +438,14 @@ export default {
       this.groupMenu = { open: false, groupId: null };
       if (!g || !g.id) return;
       const fn = this.chatStore && this.chatStore.togglePin;
-      if (typeof fn === 'function') fn.call(this.chatStore, g.id);
+      if (typeof fn === 'function') {
+        fn.call(this.chatStore, g.id, {
+          sessionKind: 'yeaft',
+          agentId: g.agentId || this.store?.yeaftAgentId || this.store?.currentAgent || null,
+          sessionName: g.name || g.title || g.id,
+          workDir: g.workDir || '',
+        });
+      }
     },
     // "Remove from list" — soft-archive only. Server marks
     // is_archived=1 in yeaft_sessions; the agent's on-disk session is
