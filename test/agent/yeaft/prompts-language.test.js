@@ -48,21 +48,53 @@ function promptFor(vpPersona, language = 'zh-CN', extra = {}) {
   return buildWorkerPrompt({ language, includeShape: false, toolNames: ['FileRead'], vpPersona, ...extra });
 }
 
+function extractSoul(prompt) {
+  const start = prompt.indexOf('## Soul');
+  if (start === -1) return '';
+  const bodyStart = start + '## Soul'.length;
+  const nextHeader = prompt.indexOf('\n\n## ', bodyStart + 2);
+  return prompt.slice(bodyStart, nextHeader === -1 ? undefined : nextHeader).trim();
+}
+
 describe('worker prompt language selection', () => {
-  it('uses localized Chinese soul instead of the seeded English Omni block', () => {
+  it('does not synthesize localized stock fallback souls for English-only Omni bodies', () => {
     const prompt = workerPrompt('zh-CN');
 
     expect(prompt).toContain('# 全能助手');
     expect(prompt).not.toContain('# 全能助手 — 全能助手');
     expect(prompt).toContain('## Soul');
-    expect(prompt).toContain('### 人物特点');
-    expect(prompt).toContain('你是 Omni，一个负责需求分析、目标澄清、流程推进和团队协调的 VP。');
-    expect(prompt).toContain('### 用户通常期待你完成');
+    expect(prompt).toContain('You are Omni Assistant / 全能助手');
+    expect(prompt).toContain('Cross-domain synthesis: handle writing, coding');
     expect(prompt).toContain('## 任务回复');
     expect(prompt).toContain('完成后只汇报改了什么、验证了什么、风险或下一步');
-    expect(prompt).not.toContain('You are Omni Assistant / 全能助手');
-    expect(prompt).not.toContain('Cross-domain synthesis: handle writing, coding');
+    expect(prompt).not.toContain('你是 Omni，一个负责需求分析、目标澄清、流程推进和团队协调的 VP。');
+    expect(prompt).not.toContain('### 人物特点');
+    expect(prompt).not.toContain('### 用户通常期待你完成');
     expect(prompt).not.toContain('## Core Principles');
+  });
+
+  it('does not render legacy stock fallback labels for English-only stock roles in Chinese', () => {
+    for (const vpId of ['linus', 'omni', 'martin']) {
+      const prompt = buildWorkerPrompt({
+        language: 'zh-CN',
+        includeShape: false,
+        vpPersona: {
+          vpId,
+          displayName: vpId,
+          persona: 'English only body',
+        },
+      });
+
+      const soul = extractSoul(prompt);
+
+      expect(soul).toBe('English only body');
+      expect(soul).not.toMatch(/\bVP\b/);
+      expect(soul).not.toContain('### 人物特点');
+      expect(soul).not.toContain('### 擅长的事情');
+      expect(soul).not.toContain('### 解决问题的方式');
+      expect(soul).not.toContain('### Traits');
+      expect(soul).not.toContain('### Strengths');
+    }
   });
 
   it('keeps English prompts English for English configuration', () => {
@@ -87,18 +119,17 @@ describe('worker prompt language selection', () => {
     expect(enPrompt).toContain('after completing work, report only what changed, what was verified, and any risk or next step');
   });
 
-  it('renders minimal Linus persona as a full Chinese soul without Yeaft fallback identity or role intro', () => {
+  it('does not invent a stock Linus soul from only vpId/frontmatter', () => {
     const prompt = promptFor({ vpId: 'linus', displayName: 'Linus', role: 'developer' }, 'zh-CN');
 
     expect(prompt).toContain('# Linus');
     expect(prompt).not.toContain('# Linus — developer');
     expect(prompt).not.toContain('你是 Linus，developer。请以 Linus 的思考方式理解问题');
-    expect(prompt).toContain('## Soul');
-    expect(prompt).toContain('### 人物特点');
-    expect(prompt).toContain('### 擅长的事情');
-    expect(prompt).toContain('### 解决问题的方式');
-    expect(prompt).toContain('### 用户通常期待你完成');
-    expect(prompt).toContain('### 回答风格');
+    expect(prompt).not.toContain('### 人物特点');
+    expect(prompt).not.toContain('### 擅长的事情');
+    expect(prompt).not.toContain('### 解决问题的方式');
+    expect(prompt).not.toContain('### 用户通常期待你完成');
+    expect(prompt).not.toContain('### 回答风格');
     expect(prompt).not.toContain('# Yeaft');
     expect(prompt).not.toContain('你是 Yeaft');
     expect(prompt).not.toContain('Yeaft — AI');
@@ -125,7 +156,7 @@ describe('worker prompt language selection', () => {
     }
   });
 
-  it('renders structured soul fields when configured', () => {
+  it('does not synthesize structured soul fields without an authored persona body', () => {
     const prompt = promptFor({
       vpId: 'designer',
       displayName: 'Designer',
@@ -137,13 +168,18 @@ describe('worker prompt language selection', () => {
       avoidZh: ['不要引入新组件库'],
     }, 'zh-CN');
 
-    expect(prompt).toContain('### 人物特点');
-    expect(prompt).toContain('- 重视用户路径');
-    expect(prompt).toContain('### 避免');
-    expect(prompt).toContain('- 不要引入新组件库');
+    expect(prompt).toContain('# Designer');
+    expect(prompt).toContain('## Soul');
+    expect(prompt).not.toContain('### 人物特点');
+    expect(prompt).not.toContain('重视用户路径');
+    expect(prompt).not.toContain('### 擅长的事情');
+    expect(prompt).not.toContain('### 解决问题的方式');
+    expect(prompt).not.toContain('### 用户通常期待你完成');
+    expect(prompt).not.toContain('### 回答风格');
+    expect(prompt).not.toContain('### 避免');
   });
 
-  it('does not fall back to an English-only marked persona for Chinese prompts', () => {
+  it('keeps an English-only marked persona instead of inventing a Chinese fallback', () => {
     const prompt = buildWorkerPrompt({
       language: 'zh-CN',
       includeShape: false,
@@ -157,10 +193,11 @@ describe('worker prompt language selection', () => {
 
     expect(prompt).toContain('# 安全专家');
     expect(prompt).not.toContain('# 安全专家 — 专家');
-    expect(prompt).not.toContain('You are a security expert.');
+    expect(prompt).toContain('You are a security expert.');
+    expect(prompt).not.toContain('### 人物特点');
   });
 
-  it('does not fall back to a Chinese-only marked persona for English prompts', () => {
+  it('keeps a Chinese-only marked persona instead of inventing an English fallback', () => {
     const prompt = buildWorkerPrompt({
       language: 'en',
       includeShape: false,
@@ -174,7 +211,8 @@ describe('worker prompt language selection', () => {
 
     expect(prompt).toContain('# Security Expert');
     expect(prompt).not.toContain('# Security Expert — Expert');
-    expect(prompt).not.toContain('你是安全专家。');
+    expect(prompt).toContain('你是安全专家。');
+    expect(prompt).not.toContain('### Traits');
   });
 
   it('keeps genuinely Chinese unmarked persona bodies in Chinese prompts', () => {
