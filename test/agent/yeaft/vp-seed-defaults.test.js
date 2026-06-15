@@ -37,6 +37,7 @@ const BANNED_FIELD_LABELS = [
   /Good for:/,
   /Bad for:/,
   /Catchphrases:/,
+  /^[A-Z][A-Za-z -]+ means /m,
 ];
 
 describe('default VP souls', () => {
