@@ -251,11 +251,29 @@ export class AdapterRouter extends LLMAdapter {
     const entry = { id: parsed.modelId, protocol: inferred };
 
     // Provider-qualified refs are explicit enough to tolerate a stale
-    // providers[].models catalog. Prefer a provider row whose declared
-    // protocol matches the model family; this matters when one logical
-    // provider name is split into Anthropic and OpenAI protocol rows.
+    // providers[].models catalog. Prefer a provider row that already serves
+    // this protocol through at least one model entry. That covers the common
+    // Copilot shape: provider.protocol=openai-responses plus per-model
+    // protocol='anthropic' for Claude entries.
     for (const provider of candidates) {
-      if (!inferred || !provider.protocol || provider.protocol === inferred) {
+      const models = Array.isArray(provider.models) ? provider.models : [];
+      for (const raw of models) {
+        const existing = normalizeModelEntry(raw);
+        if (!existing) continue;
+        try {
+          if (this.#effectiveProtocol(provider, existing) === inferred) {
+            return { provider, entry };
+          }
+        } catch {
+          // Ignore invalid existing entries while looking for a compatible row.
+        }
+      }
+    }
+
+    // If no existing entry proves mixed-protocol support, fall back to rows
+    // whose provider-level protocol is absent or directly compatible.
+    for (const provider of candidates) {
+      if (!provider.protocol || provider.protocol === inferred) {
         return { provider, entry };
       }
     }
