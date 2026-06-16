@@ -300,3 +300,62 @@ it('persists Yeaft pin actions with agent-scoped metadata', () => {
     workDir: '/repo',
   }]);
 });
+
+it('restores a running opened Yeaft session from the connected-agent list snapshot after reload', () => {
+  const store = useSessionsStore();
+
+  store.applySnapshot([
+    { id: 'idle-session', name: 'Idle', updatedAt: 20, pinned: false },
+    { id: 'running-session', name: 'Running', updatedAt: 10, running: true, runningVpCount: 1, latestActivityAt: 99, pinned: true },
+  ], 'agent-1');
+
+  expect(store.sessions['running-session']).toMatchObject({
+    agentId: 'agent-1',
+    running: true,
+    active: true,
+    runningVpCount: 1,
+    pinned: true,
+  });
+  expect(store.activeSessionId).toBe('running-session');
+  expect(chatStore.yeaftActiveSessionFilter).toBe('running-session');
+  expect(ids(store.sessionList)[0]).toBe('running-session');
+});
+
+it('treats explicit pinned false from the server as authoritative on reload', () => {
+  const store = useSessionsStore();
+  chatStore.pinnedSessions = ['session-a'];
+
+  store.applySnapshot([
+    { id: 'session-a', name: 'A', pinned: true },
+  ], 'agent-1');
+  expect(store.sessions['session-a'].pinned).toBe(true);
+  expect(chatStore.pinnedSessions).toContain('session-a');
+
+  store.applySnapshot([
+    { id: 'session-a', name: 'A', pinned: false },
+  ], 'agent-1');
+
+  expect(store.sessions['session-a'].pinned).toBe(false);
+  expect(chatStore.pinnedSessions).not.toContain('session-a');
+});
+
+it('restores active Yeaft session filter from a reconnect VP status snapshot when no user filter exists', () => {
+  const store = useChatStore();
+  store.yeaftActiveSessionFilter = null;
+  store.vpStatuses = {};
+  const sessions = useSessionsStore();
+  window.Pinia.useSessionsStore = useSessionsStore;
+  sessions.applySnapshot([
+    { id: 'active-session', name: 'Active' },
+  ], 'agent-1');
+  store.yeaftActiveSessionFilter = null;
+  sessions.activeSessionId = null;
+
+  const restored = store.restoreActiveYeaftSessionFromStatuses([
+    { sessionId: 'active-session', vpId: 'vp-a', state: 'streaming', since: 123 },
+  ]);
+
+  expect(restored).toBe('active-session');
+  expect(store.yeaftActiveSessionFilter).toBe('active-session');
+  expect(sessions.activeSessionId).toBe('active-session');
+});

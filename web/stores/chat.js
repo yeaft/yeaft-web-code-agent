@@ -2162,17 +2162,19 @@ export const useChatStore = defineStore('chat', {
           if (!event.vpId || !event.state) break;
           const sessionId = event.sessionId || null;
           const k = vpStatusKey(sessionId, event.vpId);
+          const nextStatus = {
+            state: event.state,
+            since: event.since || Date.now(),
+            turnId: event.turnId || null,
+            title: event.title || '',
+            sessionId,
+            vpId: event.vpId,
+          };
           this.vpStatuses = {
             ...this.vpStatuses,
-            [k]: {
-              state: event.state,
-              since: event.since || Date.now(),
-              turnId: event.turnId || null,
-              title: event.title || '',
-              sessionId,
-              vpId: event.vpId,
-            },
+            [k]: nextStatus,
           };
+          this.restoreActiveYeaftSessionFromStatuses([nextStatus]);
           break;
         }
         case 'vp_status_snapshot': {
@@ -2225,6 +2227,7 @@ export const useChatStore = defineStore('chat', {
             }
             this.vpStatuses = merged;
           }
+          this.restoreActiveYeaftSessionFromStatuses(statuses);
           break;
         }
 
@@ -2631,6 +2634,22 @@ export const useChatStore = defineStore('chat', {
     // on disk after a refresh/re-entry; switching back to that group must
     // still ask the agent for authoritative history unless this group has
     // already completed a history load in the current UI lifecycle.
+    restoreActiveYeaftSessionFromStatuses(statuses = []) {
+      if (this.yeaftActiveSessionFilter) return null;
+      const rows = Array.isArray(statuses) ? statuses : [];
+      const running = rows
+        .filter(row => row && (row.sessionId || row.groupId) && !['idle', 'offline', 'completed', 'failed', 'aborted'].includes(row.state))
+        .sort((a, b) => (b.updatedAt || b.since || 0) - (a.updatedAt || a.since || 0));
+      const sessionId = running[0]?.sessionId || running[0]?.groupId || null;
+      if (!sessionId) return null;
+      this.setActiveSessionFilter(sessionId, { force: true });
+      try {
+        const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
+        if (gs && typeof gs.setActive === 'function') gs.setActive(sessionId);
+      } catch (_) {}
+      return sessionId;
+    },
+
     setActiveSessionFilter(groupId, opts = {}) {
       const prev = this.yeaftActiveSessionFilter || null;
       const next = groupId || null;

@@ -112,3 +112,17 @@ describe('Yeaft settings entry markup', () => {
     expect(zhSource).toContain("'settings.llm.configureMenu': '设置 LLM'");
   });
 });
+
+it('marks server-restored running sessions as processing without requiring live turn memory', () => {
+  const rows = buildYeaftSidebarSessionList({
+    sessions: [
+      { id: 's-running', running: true, updatedAt: 1 },
+      { id: 's-idle', updatedAt: 2 },
+    ],
+    activeSessionId: null,
+    pinnedSessionIds: [],
+  });
+
+  expect(rows.find(row => row.id === 's-running')).toMatchObject({ processing: true });
+  expect(rows.find(row => row.id === 's-idle')).toMatchObject({ processing: false });
+});

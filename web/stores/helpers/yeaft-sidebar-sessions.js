@@ -59,6 +59,7 @@ export function buildYeaftSidebarSessionList({ sessions, activeSessionId, pinned
       raw: session,
       pinned: pinnedIndex.has(id) || !!session.pinned,
       active: id === activeId,
+      processing: !!session.running || !!session.active || !!session.isRunning || !!session.isActive,
       _activityTime: activityTime(session),
     });
   }

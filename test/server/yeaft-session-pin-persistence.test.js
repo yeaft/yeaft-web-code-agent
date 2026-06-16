@@ -124,8 +124,8 @@ describe('decorateYeaftSessionsWithPinned', () => {
 
     expect(yeaftSessionDb.getByAgent).toHaveBeenCalledWith('agent-1');
     expect(out).toEqual([
-      { id: 'session-1', name: 'One', pinned: true },
-      { id: 'session-2', name: 'Two' },
+      { id: 'session-1', name: 'One', pinned: true, isPinned: true },
+      { id: 'session-2', name: 'Two', pinned: false, isPinned: false },
     ]);
   });
 });
