@@ -8,6 +8,7 @@ import { getModelEffortOptions, getThinkingCapability } from '../../agent/yeaft/
 import { OpenAIResponsesAdapter } from '../../agent/yeaft/llm/openai-responses.js';
 import { AnthropicAdapter } from '../../agent/yeaft/llm/anthropic.js';
 import { filterEffortForModel } from '../../agent/yeaft/llm/router.js';
+import { modelRefMatchesAvailable } from '../../agent/yeaft/web-bridge.js';
 import {
   loadSessionConfig,
   resolveSessionConfig,
@@ -50,8 +51,16 @@ describe('Yeaft model effort metadata and config', () => {
     try {
       const config = loadConfig({ dir });
       const byId = Object.fromEntries(config.availableModels.map(m => [m.id, m]));
-      expect(byId['gpt-5.4'].effortOptions).toEqual(['low', 'medium', 'high']);
-      expect(byId['claude-opus-4.8'].effortOptions).toEqual(['low', 'medium', 'high']);
+      expect(byId['gpt-5.4']).toMatchObject({
+        ref: 'github-copilot/gpt-5.4',
+        effortOptions: ['low', 'medium', 'high'],
+      });
+      expect(byId['claude-opus-4.8']).toMatchObject({
+        ref: 'github-copilot/claude-opus-4.8',
+        effortOptions: ['low', 'medium', 'high'],
+      });
+      expect(modelRefMatchesAvailable(byId['gpt-5.4'], 'github-copilot/gpt-5.4')).toBe(true);
+      expect(modelRefMatchesAvailable(byId['claude-opus-4.8'], 'github-copilot/claude-opus-4.8')).toBe(true);
       expect(byId['gpt-4o'].effortOptions).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });

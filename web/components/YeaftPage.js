@@ -16,6 +16,7 @@ import {
   DREAM_REDDOT_THRESHOLD_MS,
   DREAM_RELATIVE_TIME_REFRESH_MS,
 } from './dream-ui-constants.js';
+import { modelOptionMatchesRef, modelOptionRef } from '../utils/modelRefs.js';
 
 export default {
   name: 'YeaftPage',
@@ -97,12 +98,12 @@ export default {
               <div
                 v-if="store.yeaftAvailableModels.length > 1"
                 class="yeaft-model-option"
-                :class="{ active: m.id === topbarModel }"
+                :class="{ active: modelOptionMatchesRef(m, topbarModel) }"
                 v-for="m in store.yeaftAvailableModels"
-                :key="m.id"
-                @click="selectModel(m.id)"
+                :key="modelOptionRef(m) || m.id"
+                @click="selectModel(modelOptionRef(m))"
               >
-                <span class="yeaft-model-check" v-if="m.id === topbarModel">&#10003;</span>
+                <span class="yeaft-model-check" v-if="modelOptionMatchesRef(m, topbarModel)">&#10003;</span>
                 <span class="yeaft-model-option-label">{{ m.label || m.id }}</span>
                 <span class="yeaft-model-option-provider" v-if="m.provider">{{ m.provider }}</span>
                 <span class="yeaft-model-option-ctx" v-if="m.contextWindow">{{ formatModelCtx(m) }}</span>
@@ -119,7 +120,7 @@ export default {
                     :class="{ active: effort === topbarEffort }"
                     @click="selectEffort(effort)"
                   >
-                    {{ $t(`yeaft.modelMenu.effort.${effort}`) }}
+                    {{ $t('yeaft.modelMenu.effort.' + effort) }}
                   </button>
                 </div>
               </div>
@@ -688,7 +689,7 @@ export default {
     const topbarModelMeta = Vue.computed(() => {
       const id = topbarModel.value;
       if (!id) return null;
-      return store.yeaftAvailableModels.find(m => m && m.id === id) || null;
+      return store.yeaftAvailableModels.find(m => modelOptionMatchesRef(m, id)) || null;
     });
 
     const topbarEffortOptions = Vue.computed(() => {
@@ -811,7 +812,7 @@ export default {
     };
 
     const selectModel = (modelId) => {
-      const nextMeta = store.yeaftAvailableModels.find(m => m && m.id === modelId) || null;
+      const nextMeta = store.yeaftAvailableModels.find(m => modelOptionMatchesRef(m, modelId)) || null;
       const nextOptions = Array.isArray(nextMeta?.effortOptions) ? nextMeta.effortOptions : [];
       const nextEffort = nextOptions.length && nextOptions.includes(topbarEffort.value)
         ? topbarEffort.value
@@ -1118,6 +1119,8 @@ export default {
       topbarModel,
       topbarEffort,
       topbarEffortOptions,
+      modelOptionRef,
+      modelOptionMatchesRef,
       showSettings,
       showLlmConfig,
       settingsInitialTab,

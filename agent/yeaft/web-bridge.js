@@ -3891,13 +3891,21 @@ export function handleYeaftModeSwitch(_msg) {
 }
 
 
+
+export function modelRefMatchesAvailable(model, requested) {
+  if (!model || !requested) return false;
+  return model.id === requested
+    || model.ref === requested
+    || (model.provider && model.id && `${model.provider}/${model.id}` === requested);
+}
+
 /** Handle model switch from the web UI. */
 export function handleYeaftModelSwitch(msg) {
   if (!session || !msg.model) return;
   refreshLiveSessionConfig();
 
   const available = session.config.availableModels || [];
-  const found = available.some(m => m.id === msg.model);
+  const found = available.some(m => modelRefMatchesAvailable(m, msg.model));
   if (!found) {
     console.warn(`[Yeaft] model switch rejected — "${msg.model}" not in availableModels`);
     return;

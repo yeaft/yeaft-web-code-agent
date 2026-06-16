@@ -394,6 +394,7 @@ export function loadConfig(overrides = {}) {
         if (!config.availableModels.some(am => am.id === m.id)) {
           const entry = {
             id: m.id,
+            ref: p.name ? `${p.name}/${m.id}` : m.id,
             provider: p.name,
             label: m.id,
           };
