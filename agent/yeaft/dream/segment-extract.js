@@ -303,6 +303,6 @@ function oneLine(text) {
 
 function extractSystem(language) {
   return String(language || '').toLowerCase().startsWith('zh')
-    ? '你是 Yeaft Dream 记忆抽取器。只输出严格 JSON 数组，不要 Markdown。保留具体事实、决策、偏好、当前状态和证据 message id。'
-    : 'You are the Yeaft Dream memory extractor. Return only a strict JSON array, no Markdown. Preserve concrete facts, decisions, preferences, current status, and evidence message ids.';
+    ? '你是梦境记忆抽取器。只输出严格 JSON 数组，不要 Markdown。保留具体事实、决策、偏好、当前状态和证据 message id。'
+    : 'You are the dream memory extractor. Return only a strict JSON array, no Markdown. Preserve concrete facts, decisions, preferences, current status, and evidence message ids.';
 }
