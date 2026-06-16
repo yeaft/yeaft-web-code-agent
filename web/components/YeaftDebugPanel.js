@@ -917,13 +917,13 @@ export default {
               @click="setActiveDreamItem(item.key)"
             >
               <span class="yeaft-debug-dream-item-main">
-                <strong :title="item.scope">{{ item.title }}</strong>
-                <span v-if="item.subtitle">{{ item.subtitle }}</span>
+                <span class="yeaft-debug-dream-item-title" :title="item.scope">{{ item.title }}</span>
+                <span class="yeaft-debug-dream-item-summary">{{ item.subtitle || $t('yeaft.dreamDebug.noSummary') }}</span>
               </span>
               <span class="yeaft-debug-dream-item-meta">
-                <span :class="'status-' + item.status">{{ item.status }}</span>
-                <span>{{ item.segmentCount }} {{ $t('yeaft.dreamDebug.segments') }}</span>
-                <span>{{ formatTimestamp(item.lastAt) || '-' }}</span>
+                <span class="yeaft-debug-dream-item-status" :class="'status-' + item.status">{{ item.status }}</span>
+                <span class="yeaft-debug-dream-item-segments">{{ item.segmentCount }} {{ $t('yeaft.dreamDebug.segments') }}</span>
+                <span class="yeaft-debug-dream-item-time">{{ formatTimestamp(item.lastAt) || '-' }}</span>
               </span>
               <span class="yeaft-debug-dream-item-toggle" aria-hidden="true">{{ activeDreamItem && activeDreamItem.key === item.key ? '−' : '+' }}</span>
             </button>
@@ -980,6 +980,7 @@ export default {
                   <div v-if="activeDreamItem.segments.length > 0" class="yeaft-debug-dream-segments">
                     <article v-for="segment in activeDreamItem.segments" :key="segment.id" class="yeaft-debug-dream-segment">
                       <button type="button" class="yeaft-debug-dream-segment-head" @click="toggleDreamSegment(segment)">
+                        <span class="yeaft-debug-dream-segment-toggle" aria-hidden="true">{{ isDreamSegmentExpanded(segment) ? '−' : '+' }}</span>
                         <span>
                           <strong>{{ segment.id }}</strong>
                           <em>{{ segment.kind }}</em>

@@ -93,9 +93,31 @@ describe('Dream debug model', () => {
 
     expect(component).toContain('yeaft-debug-dream-accordion-item');
     expect(component).toContain('activeDreamItem && activeDreamItem.key === item.key');
-    expect(component).toContain('v-if="item.subtitle"');
+    expect(component).toContain('yeaft-debug-dream-item-summary');
+    expect(component).toContain("item.subtitle || $t('yeaft.dreamDebug.noSummary')");
     expect(component).not.toContain("item.summaryPreview || item.scope");
     expect(component).toContain("allDreamItems.length ? $t('yeaft.dreamDebug.noSearchResults') : $t('yeaft.dreamDebug.empty')");
+  });
+
+  it('keeps the Dream list typography and metadata layout constrained', () => {
+    const css = readFileSync(resolve(repoRoot, 'web/styles/yeaft.css'), 'utf8');
+    const component = readFileSync(resolve(repoRoot, 'web/components/YeaftDebugPanel.js'), 'utf8');
+
+    expect(component).toContain('yeaft-debug-dream-item-title');
+    expect(component).toContain('yeaft-debug-dream-item-summary');
+    expect(component).toContain('yeaft-debug-dream-item-status');
+    expect(component).toContain('yeaft-debug-dream-item-segments');
+    expect(component).toContain('yeaft-debug-dream-item-time');
+    expect(component).toContain('yeaft-debug-dream-segment-toggle');
+    expect(css).toMatch(/\.yeaft-debug-dream-item\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) auto auto;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-item-title\s*\{[\s\S]*?font-size:\s*13px;[\s\S]*?font-weight:\s*500;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-item-summary\s*\{[\s\S]*?font-size:\s*12px;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-item-meta\s*\{[\s\S]*?max-width:\s*132px;[\s\S]*?text-align:\s*right;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-item-title,[\s\S]*?\.yeaft-debug-dream-item-time,[\s\S]*?\{[\s\S]*?text-overflow:\s*ellipsis;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-item-status\s*\{[\s\S]*?color:\s*var\(--accent-blue\);/);
+    expect(css).toMatch(/\.yeaft-debug-dream-item-status\.status-completed,[\s\S]*?\.yeaft-debug-dream-item-status\.status-success\s*\{[\s\S]*?color:\s*var\(--success\);/);
+    expect(css).toMatch(/\.yeaft-debug-dream-item-status\.status-error\s*\{[\s\S]*?color:\s*var\(--error\);/);
+    expect(css).toMatch(/\.yeaft-debug-dream-segment-toggle\s*\{[\s\S]*?display:\s*inline-flex;/);
   });
 
   it('uses readable session titles while keeping ids as metadata', () => {
