@@ -197,6 +197,7 @@ const PROMPTS = {
     tools: (names) => `Available tools: ${names}`,
     // DESIGN-PROMPT §3 ④ — Active Scope header
     activeScopeHeader: '## active_scope',
+    multiVpRoutingHeader: '## multi_vp_routing',
     sessionAnnouncementHeader: '[Session Announcement]',
     // Project-doc (CLAUDE.md / AGENTS.md) header + one-liner intro. Both
     // filenames are recognized: CLAUDE.md is this project's convention,
@@ -214,6 +215,7 @@ const PROMPTS = {
     tools: (names) => `可用工具：${names}`,
     // DESIGN-PROMPT §3 ④ — Active Scope header
     activeScopeHeader: '## active_scope',
+    multiVpRoutingHeader: '## multi_vp_routing',
     sessionAnnouncementHeader: '[会话公告]',
     // 项目文档块：CLAUDE.md / AGENTS.md（与 Codex 通用命名兼容）。
     projectDocHeader: '[项目文档]',
@@ -397,6 +399,9 @@ export function buildSystemPrompt({
   const activeScopeBlock = renderActiveScope(activeScope, lang);
   if (activeScopeBlock) parts.push(activeScopeBlock);
 
+  const multiVpRoutingBlock = renderMultiVpRouting(activeScope, lang);
+  if (multiVpRoutingBlock) parts.push(multiVpRoutingBlock);
+
   return parts.join('\n\n');
 }
 
@@ -496,7 +501,11 @@ function firstNonEmptyString(...values) {
 }
 
 function renderSessionMembersLine(members) {
-  if (!Array.isArray(members)) return '';
+  return normalizeSessionMemberIds(members).join(', ');
+}
+
+function normalizeSessionMemberIds(members) {
+  if (!Array.isArray(members)) return [];
   const clean = [];
   const seen = new Set();
   for (const member of members) {
@@ -506,7 +515,38 @@ function renderSessionMembersLine(members) {
     seen.add(id);
     clean.push(id);
   }
-  return clean.join(', ');
+  return clean;
+}
+
+function renderMultiVpRouting(activeScope, lang) {
+  if (!activeScope || typeof activeScope !== 'object') return '';
+  const ownId = firstNonEmptyString(activeScope.sessionMember, activeScope.vpId);
+  const members = normalizeSessionMemberIds(activeScope.sessionMembers || activeScope.members);
+  const peers = ownId ? members.filter((member) => member !== ownId) : members;
+  if (peers.length === 0) return '';
+
+  const header = lang.multiVpRoutingHeader || '## multi_vp_routing';
+  if (lang === PROMPTS.zh) {
+    return [
+      header,
+      `当前 VP: ${ownId || 'unknown'}`,
+      `可转发 VP: ${peers.join(', ')}`,
+      '- 多 VP session 中，先主动感知这些 VP 的职责；不要假装只有你一个人在场。',
+      '- 当用户点名其他 VP、任务明显属于其他 VP、需要并行协作，或你需要另一个 VP 继续处理时，必须调用 `route_forward`。',
+      '- VP 自己写 @mention 不会触发路由；只有 `route_forward` 工具会真正把任务交给目标 VP。',
+      '- 如果要多人一起处理，调用 `route_forward`，`to` 可填目标 vpId 或 `all`；`text` 要包含明确任务和必要上下文。',
+    ].join('\n');
+  }
+
+  return [
+    header,
+    `Current VP: ${ownId || 'unknown'}`,
+    `Forwardable VPs: ${peers.join(', ')}`,
+    '- In a multi-VP session, actively notice these peers and their likely responsibilities; do not behave as if you are alone.',
+    '- When the user names another VP, the task clearly belongs to another VP, parallel collaboration is needed, or another VP should continue the work, you MUST call `route_forward`.',
+    '- VP-written @mentions do not route anything; only the `route_forward` tool performs a real hand-off.',
+    '- For multi-person work, call `route_forward` with a target vpId or `all`; include the concrete task and required context in `text`.',
+  ].join('\n');
 }
 
 /**

@@ -367,4 +367,49 @@ describe('worker prompt language selection', () => {
     }
   });
 
+  it('renders explicit multi-VP routing guidance with peers and route_forward requirement', () => {
+    const zh = buildWorkerPrompt({
+      language: 'zh-CN',
+      includeShape: false,
+      activeScope: {
+        sessionId: 'session_1',
+        sessionMember: 'linus',
+        sessionMembers: ['omni', 'linus', 'martin'],
+      },
+    });
+    const en = buildWorkerPrompt({
+      language: 'en',
+      includeShape: false,
+      activeScope: {
+        sessionId: 'session_1',
+        sessionMember: 'linus',
+        sessionMembers: ['omni', 'linus', 'martin'],
+      },
+    });
+
+    expect(zh).toContain('## multi_vp_routing');
+    expect(zh).toContain('当前 VP: linus');
+    expect(zh).toContain('可转发 VP: omni, martin');
+    expect(zh).toContain('必须调用 `route_forward`');
+    expect(zh).toContain('VP 自己写 @mention 不会触发路由');
+    expect(en).toContain('## multi_vp_routing');
+    expect(en).toContain('Current VP: linus');
+    expect(en).toContain('Forwardable VPs: omni, martin');
+    expect(en).toContain('you MUST call `route_forward`');
+  });
+
+  it('omits multi-VP routing guidance when there are no peers', () => {
+    const prompt = buildWorkerPrompt({
+      language: 'en',
+      includeShape: false,
+      activeScope: {
+        sessionId: 'session_1',
+        sessionMember: 'linus',
+        sessionMembers: ['linus'],
+      },
+    });
+
+    expect(prompt).not.toContain('## multi_vp_routing');
+  });
+
 });
