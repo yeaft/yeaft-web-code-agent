@@ -170,6 +170,29 @@ describe('worker prompt language selection', () => {
     expect(enPrompt).toContain('after completing work, report only what changed, what was verified, and any risk or next step');
   });
 
+  it('adds readable output-format guidance to persona and fallback prompts', () => {
+    const personaZhPrompt = workerPrompt('zh-CN');
+    const personaEnPrompt = workerPrompt('en');
+    const fallbackZhPrompt = buildWorkerPrompt({ language: 'zh', includeShape: false });
+    const fallbackEnPrompt = buildWorkerPrompt({ language: 'en', includeShape: false });
+
+    for (const prompt of [personaEnPrompt, fallbackEnPrompt]) {
+      expect(prompt).toContain('## Communicating With the User');
+      expect(prompt).toContain('User-facing text is for a person, not a console log');
+      expect(prompt).toContain('group related sentences into short paragraphs, usually 2-4 sentences');
+      expect(prompt).toContain('Do not wrap ordinary prose, summaries, labels, headings, bullet lists, or single words in fenced code blocks');
+      expect(prompt).toContain('use inline code instead of a fenced block');
+    }
+
+    for (const prompt of [personaZhPrompt, fallbackZhPrompt]) {
+      expect(prompt).toContain('## 和用户沟通');
+      expect(prompt).toContain('面向用户的文字是给人读的，不是控制台日志');
+      expect(prompt).toContain('把相关句子合成短自然段，通常 2-4 句一段');
+      expect(prompt).toContain('不要把普通说明、摘要、标签、标题、列表或单个词包进 fenced code block');
+      expect(prompt).toContain('用 inline code，不要用 fenced code block');
+    }
+  });
+
   it('does not invent a stock Linus soul from only vpId/frontmatter', () => {
     const prompt = promptFor({ vpId: 'linus', displayName: 'Linus', role: 'developer' }, 'zh-CN');
 
