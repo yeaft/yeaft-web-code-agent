@@ -329,14 +329,52 @@
   max-width: 100%;
 }
 
-/* Proxy tab inside settings - remove max-height, hide redundant header */
-.settings-pane .proxy-tab {
-  max-height: none;
-  padding: 0;
+
+/* Yeaft settings segmented tabs */
+.sp-subtab-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  margin: 0 0 20px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
 }
 
-.settings-pane .proxy-header {
-  display: none;
+.sp-subtab {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 9px;
+  padding: 7px 12px;
+  min-height: 32px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.sp-subtab:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.sp-subtab:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+.sp-subtab.active {
+  background: var(--bg-main);
+  color: var(--text-primary);
+  box-shadow: 0 0 0 1px var(--border-color);
+}
+
+.sp-subpane {
+  min-width: 0;
 }
 
 /* Group = a visual section */
