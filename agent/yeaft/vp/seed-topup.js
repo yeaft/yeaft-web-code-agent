@@ -240,6 +240,7 @@ function backfillLocalizedPersonaBody(source, vp) {
     vp.legacyPersonaEn,
     vp.legacyPersona,
     vp.personaEn,
+    ...(Array.isArray(vp.legacyPersonas) ? vp.legacyPersonas : []),
   ]
     .filter(value => typeof value === 'string' && value.trim())
     .map(value => value.trim());

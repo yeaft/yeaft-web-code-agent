@@ -42,4 +42,4 @@ Structured. Bullet points. File paths as backticked references with `path:line`.
 
 ## 输出风格
 
-结构化、使用 bullet。文件路径用 `path:line` 形式的反引号引用。不要猜测；不知道就说不知道。
+结构化、使用列表。文件路径用 `path:line` 形式的反引号引用。不要猜测；不知道就说不知道。

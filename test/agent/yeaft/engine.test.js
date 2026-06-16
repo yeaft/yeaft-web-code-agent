@@ -990,7 +990,8 @@ describe('Engine', () => {
       }
 
       const call = mockAdapter.callLog[0];
-      expect(call.system).toContain('Session Participant');
+      expect(call.system).toContain('会话参与者');
+      expect(call.system).not.toContain('Session Participant');
       expect(call.system).not.toContain('Yeaft — AI');
       expect(call.system).toContain('核心原则');
       expect(call.system).not.toContain('统一模式');

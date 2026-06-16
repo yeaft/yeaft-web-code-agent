@@ -25,6 +25,7 @@
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { DEFAULT_VPS } from './vp/seed-defaults.js';
 
 // ─── Template Loading (one-time at startup) ──────────────────────
 
@@ -207,7 +208,7 @@ const PROMPTS = {
       'The user keeps project-level instructions and context in `CLAUDE.md` or `AGENTS.md` at the session working directory. Treat the content below as authoritative project context — coding conventions, task guidance, workflow rules, etc.',
   },
   zh: {
-    identity: '当前回合没有激活 VP soul。你在当前 session 中参与协作，回答要基于证据，并保持用户上下文。',
+    identity: '你正在当前会话中参与协作。保持用户上下文，回答要基于证据；需要工具时使用工具，但不要把自己没有实际执行过的事说成已经执行。',
     date: (d) => `日期：${d}`,
     dream: '你处于梦境模式。回顾过去的对话，整理和巩固记忆。',
     tools: (names) => `可用工具：${names}`,
@@ -443,14 +444,42 @@ function selectVpPersonaName(vpPersona, effectiveLang) {
   return typeof vpPersona.displayName === 'string' ? vpPersona.displayName.trim() : '';
 }
 
+function normalizePersonaBodyForMatch(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function selectMigratedStockPersonaBody(vpPersona, body, effectiveLang) {
+  const vpId = typeof vpPersona?.vpId === 'string' ? vpPersona.vpId.trim() : '';
+  const persistedBody = normalizePersonaBodyForMatch(body);
+  if (!vpId || !persistedBody) return null;
+
+  const stock = DEFAULT_VPS.find(vp => vp.vpId === vpId);
+  if (!stock) return null;
+
+  const acceptedBodies = [
+    stock.legacyPersonaEn,
+    stock.legacyPersona,
+    stock.personaEn,
+    ...(Array.isArray(stock.legacyPersonas) ? stock.legacyPersonas : []),
+  ]
+    .map(normalizePersonaBodyForMatch)
+    .filter(Boolean);
+
+  if (!acceptedBodies.includes(persistedBody)) return null;
+  const selected = effectiveLang === 'zh' ? stock.personaZh : stock.personaEn;
+  return normalizePersonaBodyForMatch(selected) || null;
+}
 
 function selectVpPersonaBody(vpPersona, effectiveLang) {
   const body = typeof vpPersona.persona === 'string' ? vpPersona.persona.trim() : '';
 
-  // role.md persona is the canonical soul. If localized sections exist, select
-  // the requested section; if that section is missing, keep the authored body as
-  // persisted instead of synthesizing a second stock identity here.
+  // role.md persona is the canonical soul. Exact stock legacy bodies are mapped
+  // to the current authored source so old seeded role.md files do not leak
+  // bilingual/English souls into localized system prompts before top-up runs.
   if (body) {
+    const migratedStockBody = selectMigratedStockPersonaBody(vpPersona, body, effectiveLang);
+    if (migratedStockBody) return migratedStockBody;
+
     if (body.includes('<!-- lang:')) {
       const selected = extractExactLangSection(body, effectiveLang);
       return selected !== null ? selected : body;
@@ -526,7 +555,7 @@ function renderMultiVpRouting(activeScope, lang) {
       `当前 VP: ${ownId || 'unknown'}`,
       `可转发 VP: ${peers.join(', ')}`,
       '- 多 VP session 中，先主动感知这些 VP 的职责；不要假装只有你一个人在场。',
-      '- 当用户点名其他 VP、任务明显属于其他 VP、需要并行协作，或你需要另一个 VP 继续处理时，必须调用 `route_forward`。',
+      '- 当用户点名其他会话成员、任务明显属于其他会话成员、需要并行协作，或你需要另一个会话成员继续处理时，必须调用 `route_forward`。',
       '- VP 自己写 @mention 不会触发路由；只有 `route_forward` 工具会真正把任务交给目标 VP。',
       '- 如果要多人一起处理，调用 `route_forward`，`to` 可填目标 vpId 或 `all`；`text` 要包含明确任务和必要上下文。',
     ].join('\n');

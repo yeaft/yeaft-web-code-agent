@@ -1,5 +1,5 @@
 <!-- lang:en -->
-# Dream Extract — User Scope
+# Dream Extraction — User Scope
 
 You are extracting **memory segments** from a session conversation. This pass focuses on the **`user` scope**: long-lived facts about the user themselves.
 
@@ -33,13 +33,13 @@ Return a JSON array only. Each item must have:
 Prefer fewer, higher-value segments. Do not invent facts.
 
 <!-- lang:zh -->
-# Dream Extract — User Scope
+# Dream 抽取 — 用户作用域
 
-你正在从一段 session 对话中抽取 **memory segments**。本轮只关注 **`user` scope**：关于用户本人的长期事实。
+你正在从一段会话对话中抽取 **记忆段**。本轮只关注 **`user` 作用域**：关于用户本人的长期事实。
 
-## `user` scope 应抽取什么
+## `user` 作用域应抽取什么
 
-抽取描述用户本人的 segment：
+抽取描述用户本人的记忆段：
 
 - **identity** — 姓名、角色、所在地、使用语言、时区
 - **preferences** — 使用的工具、代码风格、沟通风格、重视什么
@@ -56,7 +56,7 @@ Prefer fewer, higher-value segments. Do not invent facts.
 
 ## 输出
 
-只返回 JSON array。每一项必须包含：
+只返回 JSON 数组。每一项必须包含：
 
 - `kind`：短类别，例如 `preference`、`workflow`、`goal`、`identity`、`opinion`
 - `body`：一句简洁事实，必须基于对话证据

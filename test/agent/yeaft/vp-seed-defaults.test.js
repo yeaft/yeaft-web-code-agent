@@ -106,20 +106,25 @@ describe('default VP souls', () => {
     const linus = DEFAULT_VPS.find(vp => vp.vpId === 'linus');
     const martin = DEFAULT_VPS.find(vp => vp.vpId === 'martin');
     const ada = DEFAULT_VPS.find(vp => vp.vpId === 'ada');
+    const omni = DEFAULT_VPS.find(vp => vp.vpId === 'omni');
     mkdirSync(join(libDir, 'linus'), { recursive: true });
     mkdirSync(join(libDir, 'martin'), { recursive: true });
     mkdirSync(join(libDir, 'ada'), { recursive: true });
+    mkdirSync(join(libDir, 'omni'), { recursive: true });
     writeFileSync(join(libDir, 'linus', 'role.md'), buildRoleMd({ ...linus, persona: linus.legacyPersonaEn, roleZh: '' }), 'utf-8');
     writeFileSync(join(libDir, 'ada', 'role.md'), buildRoleMd({ ...ada, persona: ada.legacyPersona, roleZh: '' }), 'utf-8');
+    writeFileSync(join(libDir, 'omni', 'role.md'), buildRoleMd({ ...omni, persona: omni.legacyPersonas[0], roleZh: '' }), 'utf-8');
     writeFileSync(join(libDir, 'martin', 'role.md'), buildRoleMd({ ...martin, persona: `${martin.legacyPersonaEn}\n\nUser edit.`, roleZh: '' }), 'utf-8');
 
     const result = topUpDefaultVps(libDir);
     const linusRole = readFileSync(join(libDir, 'linus', 'role.md'), 'utf-8');
     const adaRole = readFileSync(join(libDir, 'ada', 'role.md'), 'utf-8');
+    const omniRole = readFileSync(join(libDir, 'omni', 'role.md'), 'utf-8');
     const martinRole = readFileSync(join(libDir, 'martin', 'role.md'), 'utf-8');
 
     expect(result.personaBackfilled).toContain('linus');
     expect(result.personaBackfilled).toContain('ada');
+    expect(result.personaBackfilled).toContain('omni');
     expect(result.roleZhBackfilled).toContain('linus');
     expect(linusRole).toContain('<!-- lang:zh -->');
     expect(linusRole).toContain('roleZh: "系统工程师"');
@@ -127,6 +132,10 @@ describe('default VP souls', () => {
     expect(linusRole).not.toContain('人物特点');
     expect(adaRole).toContain('你是阿达·洛芙莱斯');
     expect(adaRole).not.toContain('Core capabilities:');
+    expect(omniRole).toContain('你是 Omni。你始终看着整个会话的形状');
+    expect(omniRole).not.toContain('You are Omni Assistant / 全能助手');
+    expect(omniRole).not.toContain('Language policy / 语言策略');
+    expect(omniRole).not.toContain('Core capabilities / 核心能力');
     expect(martinRole).not.toContain('<!-- lang:zh -->');
     expect(martinRole).toContain('User edit.');
   });
