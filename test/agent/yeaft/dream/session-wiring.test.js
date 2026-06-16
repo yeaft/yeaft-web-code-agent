@@ -173,6 +173,52 @@ describe('buildRunDreamOpts session conversation wiring', () => {
     expect(memory).toContain('PR #978 review todo is still current, reworded by the extractor.');
     expect(memory.match(/tags: \[pr\]/g)).toHaveLength(1);
     expect(memory.match(/tags: \[recent, current\]/g)).toHaveLength(1);
+    expect(memory.match(/tags: \[recent, experience, workflow\]/g)).toHaveLength(1);
+  });
+
+  it('keeps reusable session experience separate from current detail', async () => {
+    const llm = async (req) => {
+      if (req.pass === 'extract-segments') {
+        return JSON.stringify([
+          {
+            kind: 'workflow',
+            tags: ['review-flow'],
+            sourceMessages: ['m2'],
+            body: 'After review, route findings back to Linus and only route to Omni for merge/tag after fixes are verified.',
+          },
+          {
+            kind: 'correction',
+            tags: ['prompt-metadata'],
+            sourceMessages: ['m1'],
+            body: 'Do not repeat the current session member in active_scope; the selected soul already establishes who is speaking.',
+          },
+        ]);
+      }
+      return '[]';
+    };
+
+    await extractAndWriteMemorySegments({
+      root: join(testDir, 'memory'),
+      sessionId: 's-lessons',
+      messages: [
+        { id: 'm1', role: 'user', body: 'Correction: active_scope should not include session_member; keep session_members only.' },
+        { id: 'm2', role: 'user', body: 'Workflow preference: after review, forward fixes to Linus, then route to Omni only for merge and tag.' },
+        { id: 'm3', role: 'assistant', body: 'PR #1001 was merged.' },
+      ],
+      targets: ['sessions/s-lessons'],
+      llm,
+      nowIso: () => '2026-06-16T00:00:00.000Z',
+    });
+
+    const memory = readFileSync(join(testDir, 'memory', 'sessions', 's-lessons', 'memory.md'), 'utf8');
+    expect(memory).toContain('kind: workflow');
+    expect(memory).toContain('kind: correction');
+    expect(memory).toContain('After review, route findings back to Linus');
+    expect(memory).toContain('Do not repeat the current session member in active_scope');
+    expect(memory).toContain('Reusable session experience from the latest Dream pass');
+    expect(memory).toContain('Correction: active_scope should not include session_member');
+    expect(memory.match(/tags: \[recent, current\]/g)).toHaveLength(1);
+    expect(memory.match(/tags: \[recent, experience, workflow\]/g)).toHaveLength(1);
   });
 });
 

@@ -17,7 +17,23 @@ const MAX_MESSAGES = 80;
 const MAX_BODY_CHARS = 1200;
 const MAX_SEGMENTS_PER_SCOPE = 64;
 const RECENT_MESSAGE_COUNT = 8;
-const VALID_KINDS = new Set(['fact', 'preference', 'decision', 'lesson', 'relation', 'goal', 'context']);
+const VALID_KINDS = new Set([
+  'fact',
+  'preference',
+  'decision',
+  'lesson',
+  'relation',
+  'goal',
+  'context',
+  'workflow',
+  'pitfall',
+  'correction',
+  'project-convention',
+]);
+const EXPERIENCE_PATTERNS = [
+  /\b(prefer|preference|workflow|process|rule|lesson|pitfall|avoid|always|never|must|should|correct|correction|mistake|review|merge|tag)\b/i,
+  /(偏好|流程|规则|经验|教训|纠正|错误|不要|必须|应该|总是|避免|review|merge|tag|合并|打 tag|标签)/i,
+];
 
 /**
  * @param {{
@@ -61,7 +77,10 @@ export async function extractAndWriteMemorySegments(opts) {
     }
 
     const recent = scope === `sessions/${opts.sessionId}`
-      ? [buildRecentSegment({ scope, messages, now })]
+      ? [
+        buildRecentSegment({ scope, messages, now }),
+        buildRecentExperienceSegment({ scope, messages, now }),
+      ].filter(Boolean)
       : [];
     if (extracted.length === 0 && recent.length === 0) continue;
 
@@ -184,8 +203,30 @@ function buildRecentSegment({ scope, messages, now }) {
   });
 }
 
+function buildRecentExperienceSegment({ scope, messages, now }) {
+  const experienceMessages = messages
+    .slice(-RECENT_MESSAGE_COUNT * 2)
+    .filter(m => EXPERIENCE_PATTERNS.some(pattern => pattern.test(m.body)))
+    .slice(-RECENT_MESSAGE_COUNT);
+  if (experienceMessages.length === 0) return null;
+
+  const body = [
+    'Reusable session experience from the latest Dream pass:',
+    ...experienceMessages.map(m => `- ${m.id} ${m.role}${m.vpId ? `/${m.vpId}` : ''}: ${oneLine(m.body)}`),
+  ].join('\n');
+  return makeSegment({
+    scope,
+    kind: 'lesson',
+    tags: ['recent', 'experience', 'workflow'],
+    sourceMessages: experienceMessages.map(m => m.id),
+    createdAt: now,
+    updatedAt: now,
+    body,
+  });
+}
+
 function mergeSegments(existing, incoming) {
-  const incomingRecent = incoming.filter(isRecentSegment).slice(-1);
+  const incomingRecent = latestRecentByFamily(incoming.filter(isRecentSegment));
   const incomingPermanent = incoming.filter(seg => !isRecentSegment(seg));
   const byKey = new Map();
 
@@ -214,6 +255,21 @@ function segmentMergeKey(seg) {
     : '';
   if (sources) return `src:${seg.kind || 'context'}:${tagFamily}:${sources}`;
   return `id:${seg.id}`;
+}
+
+function latestRecentByFamily(segments) {
+  const byFamily = new Map();
+  for (const seg of segments) {
+    byFamily.set(recentFamily(seg), seg);
+  }
+  return [...byFamily.values()];
+}
+
+function recentFamily(seg) {
+  const tags = Array.isArray(seg.tags) ? seg.tags.map(String) : [];
+  if (tags.includes('experience')) return 'experience';
+  if (tags.includes('current')) return 'current';
+  return 'recent';
 }
 
 function isRecentSegment(seg) {
