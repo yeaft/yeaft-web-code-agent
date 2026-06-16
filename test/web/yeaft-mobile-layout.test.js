@@ -66,17 +66,17 @@ describe('Yeaft mobile layout CSS', () => {
 
   it('keeps Dream debug content scrollable in both axes', () => {
     const css = read('styles/yeaft.css');
-    const panel = ruleBlock(css, '.yeaft-debug-dream-panel', 'overflow: auto');
-    const shell = ruleBlock(css, '.yeaft-debug-dream-shell', 'width: max-content');
+    const panel = ruleBlock(css, '.yeaft-debug-dream-panel', 'overflow: hidden');
+    const shell = ruleBlock(css, '.yeaft-debug-dream-shell', 'width: 100%');
     const detailBody = ruleBlock(css, '.yeaft-debug-dream-detail-body', 'overflow: auto');
     const mobile = mediaBlock(css, '(max-width: 640px)', '.yeaft-debug-dream-panel');
 
     expect(panel).toContain('min-width: 0');
     expect(panel).toContain('min-height: 0');
-    expect(panel).toContain('overflow: auto');
-    expect(shell).toContain('grid-template-columns: minmax(220px, 30%) minmax(520px, 1fr)');
-    expect(shell).toContain('width: max-content');
-    expect(shell).toContain('min-width: 100%');
+    expect(panel).toContain('overflow: hidden');
+    expect(shell).toContain('grid-template-columns: minmax(220px, 32%) minmax(0, 1fr)');
+    expect(shell).toContain('width: 100%');
+    expect(shell).toContain('overflow: hidden');
     expect(detailBody).toContain('overflow: auto');
     expect(mobile).toContain('grid-template-columns: minmax(0, 1fr)');
     expect(mobile).toContain('width: 100%');
