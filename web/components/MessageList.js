@@ -6,6 +6,7 @@ import ReflectionCard from './ReflectionCard.js';
 import SubAgentCard from './SubAgentCard.js';
 import SessionAnnouncementBar from './SessionAnnouncementBar.js';
 import UserTurnBlock from './UserTurnBlock.js';
+import { shouldCloseYeaftVpTurn } from '../stores/helpers/yeaft-turn-boundary.js';
 // task-757: appendTypingPlaceholders removed from the pipeline.
 // The standalone typing card it produced (at the bottom of the
 // conversation) showed "[VP] is typing…" in a separate row that
@@ -704,34 +705,12 @@ export default {
       // and VP_B's first chunks get appended into VP_A's block —
       // visually the user sees Linus's text inside Jobs's bubble.
       //
-      // Contract: turnId is any unique-per-VP-delivery string. The
-      // producer is the agent web-bridge (one fresh turnId per call
-      // to `enqueueForVp`); the exact mint format is an implementation
-      // detail and must not be relied on here. Two messages share a
-      // turnId iff they belong to the same VP delivery.
-      //
-      // Primary boundary: if BOTH sides carry a non-empty turnId, split on
-      // inequality. Refresh/load-more history can still contain older rows
-      // without turnId, so there is a second boundary: when turnId is
-      // missing on either side but both rows have explicit VP attribution,
-      // split on speaker changes. Same-speaker legacy chunks still merge;
-      // unstamped legacy Chat rows still keep the old single-open-turn path.
-      const closeTurnIfTurnIdChanged = (msg) => {
-        if (!currentTurn) return;
-        const curTurnId = currentTurn.turnId;
-        const msgTurnId = msg.turnId;
-        if (curTurnId && msgTurnId) {
-          if (typeof curTurnId !== 'string' || typeof msgTurnId !== 'string') return;
-          if (curTurnId === msgTurnId) return;
-          finishTurn();
-          return;
-        }
-
-        const curSpeaker = currentTurn.speakerVpId;
-        const msgSpeaker = msg.speakerVpId || msg.vpId;
-        if (!curSpeaker || !msgSpeaker) return;
-        if (curSpeaker === msgSpeaker) return;
-        finishTurn();
+      // Owner is the hard boundary. A refreshed history row may reuse a
+      // user-level turnId for several VP deliveries in the same user turn,
+      // so equal turnId alone must not merge different speakerVpId blocks.
+      // After owner is checked, turnId still splits same-speaker deliveries.
+      const closeTurnIfTurnBoundaryChanged = (msg) => {
+        if (shouldCloseYeaftVpTurn(currentTurn, msg)) finishTurn();
       };
 
       for (let i = 0; i < messages.length; i++) {
@@ -759,7 +738,7 @@ export default {
         }
 
         if (msg.type === 'tool-summary') {
-          closeTurnIfTurnIdChanged(msg);
+          closeTurnIfTurnBoundaryChanged(msg);
           if (!currentTurn) startTurn();
           latchSpeakerFromMsg(msg);
           currentTurn.toolSummaryCount += Number(msg.count || msg.omittedCount || 0) || 0;
@@ -768,7 +747,7 @@ export default {
         }
 
         if (msg.type === 'assistant') {
-          closeTurnIfTurnIdChanged(msg);
+          closeTurnIfTurnBoundaryChanged(msg);
           if (!currentTurn) startTurn();
           if (msg.content) {
             currentTurn.textContent += msg.content;
@@ -794,7 +773,7 @@ export default {
         }
 
         if (msg.type === 'tool-use') {
-          closeTurnIfTurnIdChanged(msg);
+          closeTurnIfTurnBoundaryChanged(msg);
           if (!currentTurn) startTurn();
           latchSpeakerFromMsg(msg);
 
@@ -819,7 +798,7 @@ export default {
         }
 
         if (msg.type === 'chat-image') {
-          closeTurnIfTurnIdChanged(msg);
+          closeTurnIfTurnBoundaryChanged(msg);
           if (!currentTurn) startTurn();
           latchSpeakerFromMsg(msg);
           currentTurn.imageMsgs.push(msg);
