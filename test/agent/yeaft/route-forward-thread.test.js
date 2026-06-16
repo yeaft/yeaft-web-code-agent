@@ -14,6 +14,13 @@ import {
 } from '../../../agent/yeaft/web-bridge.js';
 
 describe('route_forward thread ownership', () => {
+  it('describes route_forward as the required multi-VP hand-off tool', () => {
+    expect(routeForwardTool.description).toContain('required hand-off mechanism');
+    expect(routeForwardTool.description).toContain('VP-authored @mentions');
+    expect(routeForwardTool.description).toContain('call RouteForward');
+    expect(routeForwardTool.description).toContain('same session');
+  });
+
   afterEach(() => {
     __testSetSession(null);
     __testSetThreadClassifier(null);
