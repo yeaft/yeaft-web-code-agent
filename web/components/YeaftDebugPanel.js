@@ -914,7 +914,7 @@ export default {
             >
               <span class="yeaft-debug-dream-item-main">
                 <strong :title="item.scope">{{ item.title }}</strong>
-                <span>{{ item.summaryPreview || item.scope || $t('yeaft.dreamDebug.noSummary') }}</span>
+                <span>{{ item.subtitle || $t('yeaft.dreamDebug.noSummary') }}</span>
               </span>
               <span class="yeaft-debug-dream-item-meta">
                 <span :class="'status-' + item.status">{{ item.status }}</span>
@@ -1023,7 +1023,7 @@ export default {
             </div>
           </section>
         </div>
-        <div v-else class="yeaft-debug-empty">{{ $t('yeaft.dreamDebug.empty') }}</div>
+        <div v-else class="yeaft-debug-empty">{{ allDreamItems.length ? $t('yeaft.dreamDebug.noSearchResults') : $t('yeaft.dreamDebug.empty') }}</div>
       </div>
 
       <div v-else-if="activeTab === 'requests' && turns.length > 0" class="yeaft-debug-turns">
