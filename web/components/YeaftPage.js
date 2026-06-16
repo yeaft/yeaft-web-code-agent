@@ -149,9 +149,7 @@ export default {
               }"
               @click="onDreamTriggerClick"
               :disabled="dreamRunning"
-              :title="dreamLastRunRelative
-                ? ($t('yeaft.dream.runNow') + '\n' + $t('yeaft.dream.lastRun', { ago: dreamLastRunRelative }))
-                : ($t('yeaft.dream.runNow') + '\n' + $t('yeaft.dream.lastRunNever'))"
+              :title="dreamRunButtonTitle"
               :aria-label="$t('yeaft.dream.runNow')"
               :aria-busy="dreamRunning ? 'true' : 'false'"
             >
@@ -713,6 +711,14 @@ export default {
     /** Relative-time string for the tooltip's second line (or null = never run). */
     const dreamLastRunRelative = Vue.computed(() => formatRelativeFromNow(dreamLastRunAt.value));
 
+    const dreamRunButtonTitle = Vue.computed(() => {
+      const title = store.t?.('yeaft.dream.runNow') || 'Run Dream';
+      if (dreamLastRunRelative.value) {
+        return `${title}\n${store.t?.('yeaft.dream.lastRun', { ago: dreamLastRunRelative.value }) || `Last run ${dreamLastRunRelative.value} ago`}`;
+      }
+      return `${title}\n${store.t?.('yeaft.dream.lastRunNever') || 'Never run'}`;
+    });
+
     const onDreamTriggerClick = () => {
       if (dreamRunning.value || !dreamButtonGroupId.value) return;
       vpStore.triggerGroupDream(dreamButtonGroupId.value);
@@ -1083,6 +1089,7 @@ export default {
       dreamStale,
       dreamEntriesCreated,
       dreamLastRunRelative,
+      dreamRunButtonTitle,
       onDreamTriggerClick,
     };
   }
