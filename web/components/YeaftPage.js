@@ -108,6 +108,22 @@ export default {
                 <span class="yeaft-model-option-ctx" v-if="m.contextWindow">{{ formatModelCtx(m) }}</span>
               </div>
               <div v-if="store.yeaftAvailableModels.length > 1" class="yeaft-model-dropdown-separator"></div>
+              <div v-if="topbarEffortOptions.length" class="yeaft-model-effort-panel">
+                <div class="yeaft-model-effort-title">{{ $t('yeaft.modelMenu.effort') }}</div>
+                <div class="yeaft-model-effort-options" role="group" :aria-label="$t('yeaft.modelMenu.effort')">
+                  <button
+                    v-for="effort in topbarEffortOptions"
+                    :key="effort"
+                    type="button"
+                    class="yeaft-model-effort-option"
+                    :class="{ active: effort === topbarEffort }"
+                    @click="selectEffort(effort)"
+                  >
+                    {{ $t(`yeaft.modelMenu.effort.${effort}`) }}
+                  </button>
+                </div>
+              </div>
+              <div v-if="topbarEffortOptions.length" class="yeaft-model-dropdown-separator"></div>
               <button type="button" class="yeaft-model-config-option" @click="openLlmConfig">
                 <span class="yeaft-model-config-label">{{ $t('settings.llm.configureMenu') }}</span>
                 <span class="yeaft-model-config-hint">{{ $t('yeaft.modelMenu.configureHint') }}</span>
@@ -669,6 +685,22 @@ export default {
       return typeof groupModel === 'string' && groupModel ? groupModel : (store.yeaftModel || '');
     });
 
+    const topbarModelMeta = Vue.computed(() => {
+      const id = topbarModel.value;
+      if (!id) return null;
+      return store.yeaftAvailableModels.find(m => m && m.id === id) || null;
+    });
+
+    const topbarEffortOptions = Vue.computed(() => {
+      const options = topbarModelMeta.value?.effortOptions;
+      return Array.isArray(options) ? options.filter(Boolean) : [];
+    });
+
+    const topbarEffort = Vue.computed(() => {
+      const groupEffort = topbarGroup.value?.config?.modelEffort;
+      return typeof groupEffort === 'string' && groupEffort ? groupEffort : (store.yeaftModelEffort || 'medium');
+    });
+
     // ── manual dream trigger ──
     // Header dream acts on the conversation currently on screen. That is
     // a group-scoped manual pass, not a VP-scoped/global pass.
@@ -779,13 +811,24 @@ export default {
     };
 
     const selectModel = (modelId) => {
+      const nextMeta = store.yeaftAvailableModels.find(m => m && m.id === modelId) || null;
+      const nextOptions = Array.isArray(nextMeta?.effortOptions) ? nextMeta.effortOptions : [];
+      const nextEffort = nextOptions.length && nextOptions.includes(topbarEffort.value)
+        ? topbarEffort.value
+        : null;
       if (modelId === topbarModel.value) {
         modelDropdownOpen.value = false;
         return;
       }
       const groupId = topbarGroup.value?.id || null;
-      store.switchYeaftModel(modelId, groupId);
+      store.switchYeaftModel(modelId, groupId, nextEffort);
       modelDropdownOpen.value = false;
+    };
+
+    const selectEffort = (effort) => {
+      if (!topbarEffortOptions.value.includes(effort)) return;
+      const groupId = topbarGroup.value?.id || null;
+      store.switchYeaftModel(topbarModel.value, groupId, effort);
     };
 
     // Format a token count compactly: 400000 → "400k", 1048576 → "1m", <1000 → raw.
@@ -1073,6 +1116,8 @@ export default {
       debugMode,
       modelDropdownOpen,
       topbarModel,
+      topbarEffort,
+      topbarEffortOptions,
       showSettings,
       showLlmConfig,
       settingsInitialTab,
@@ -1094,6 +1139,7 @@ export default {
       reloadPage,
       toggleModelDropdown,
       selectModel,
+      selectEffort,
       openLlmConfig,
       onLlmConfigMessage,
       onLlmConfigSaved,

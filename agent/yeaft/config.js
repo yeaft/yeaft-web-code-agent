@@ -22,7 +22,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
-import { resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
+import { getModelEffortOptions, modelSupportsEffort, resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
 import { normalizeKnownProviderForRuntime } from './llm/known-providers.js';
 
 /** Default configuration values. */
@@ -399,6 +399,11 @@ export function loadConfig(overrides = {}) {
           };
           if (m.contextWindow !== undefined) entry.contextWindow = m.contextWindow;
           if (m.maxOutput !== undefined) entry.maxOutput = m.maxOutput;
+          const effortOptions = getModelEffortOptions(m.id);
+          if (effortOptions.length > 0) {
+            entry.supportsEffort = modelSupportsEffort(m.id);
+            entry.effortOptions = effortOptions;
+          }
           config.availableModels.push(entry);
         }
       }

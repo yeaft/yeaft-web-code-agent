@@ -2787,6 +2787,7 @@ async function ensureSessionLoaded() {
     type: 'session_ready',
     conversationId: yeaftConversationId,
     model: session.config.model,
+    modelEffort: session.config.modelEffort || null,
     availableModels: session.config.availableModels || [],
     skills: session.status.skills,
     mcpServers: session.status.mcpServers,
@@ -3903,10 +3904,13 @@ export function handleYeaftModelSwitch(msg) {
   }
 
   session.config.model = msg.model;
+  session.config.primaryModel = msg.model;
+  session.config.modelEffort = msg.modelEffort || null;
 
   sendSessionEvent({
     type: 'model_switched',
     model: msg.model,
+    modelEffort: session.config.modelEffort || null,
   });
 }
 
@@ -3966,6 +3970,7 @@ export async function handleYeaftLoadHistory(msg) {
     type: 'session_ready',
     conversationId: yeaftConversationId,
     model: session.config.model,
+    modelEffort: session.config.modelEffort || null,
     availableModels: session.config.availableModels || [],
     skills: session.status.skills,
     mcpServers: session.status.mcpServers,

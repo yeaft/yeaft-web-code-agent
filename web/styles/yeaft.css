@@ -365,6 +365,45 @@
   margin-left: 4px;
 }
 
+.yeaft-model-effort-panel {
+  padding: 7px 8px 8px;
+}
+
+.yeaft-model-effort-title {
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.yeaft-model-effort-options {
+  display: flex;
+  gap: 6px;
+}
+
+.yeaft-model-effort-option {
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 8px;
+  padding: 5px 9px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.yeaft-model-effort-option:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.yeaft-model-effort-option.active {
+  border-color: var(--accent-blue);
+  background: var(--session-active);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
 /* ── Provider edit — per-model row (id + ctx + max) ── */
 
 .yeaft-settings-model-rows {
