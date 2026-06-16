@@ -33,6 +33,9 @@ describe('Yeaft conversation header actions', () => {
 
     expect(block).toContain('@click="reloadMessages"');
     expect(block).toContain("$t('yeaft.reloadMessages')");
+    expect(block).toContain('<polyline points="23 4 23 10 17 10"/>');
+    expect(block).toContain('<path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>');
+    expect(block).not.toContain('<path d="M21 15a4 4 0 0 1-4 4H7l-4 4V7a4 4 0 0 1 4-4h5"/>');
     expect(pageSource).toContain('const reloadMessages = () => {\n      store.reloadYeaftMessages();\n    };');
   });
 
