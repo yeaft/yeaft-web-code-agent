@@ -318,7 +318,6 @@ export default {
 
   'chat.sidebar.expand': '展开菜单',
   'chat.sidebar.collapse': '收起侧边栏',
-  'chat.sidebar.portProxy': '端口映射',
   'chat.sidebar.workbench': '工具面板',
   'chat.sidebar.newConv': '会话',
   'chat.sidebar.newCrew': '新建 Crew',
@@ -501,7 +500,6 @@ export default {
   'settings.tabs.account': '账号',
   'settings.tabs.security': '安全',
   'settings.tabs.general': '通用',
-  'settings.tabs.proxy': '端口代理',
   'settings.tabs.invitations': '邀请',
 
   // Settings - Account

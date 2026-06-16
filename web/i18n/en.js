@@ -354,7 +354,6 @@ export default {
 
   'chat.sidebar.expand': 'Expand menu',
   'chat.sidebar.collapse': 'Collapse sidebar',
-  'chat.sidebar.portProxy': 'Port Proxy',
   'chat.sidebar.workbench': 'Workbench',
   'chat.sidebar.newConv': 'Conversation',
   'chat.sidebar.newCrew': 'New Crew Session',
@@ -537,7 +536,6 @@ export default {
   'settings.tabs.account': 'Account',
   'settings.tabs.security': 'Security',
   'settings.tabs.general': 'General',
-  'settings.tabs.proxy': 'Port Proxy',
   'settings.tabs.invitations': 'Invitations',
 
   // Settings - Account
