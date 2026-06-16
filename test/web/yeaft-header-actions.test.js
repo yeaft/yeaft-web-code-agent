@@ -71,13 +71,18 @@ describe('conversation header titles', () => {
     expect(pageSource).toContain('if (g.workDir && value === g.workDir) continue;');
   });
 
-  it('keeps the Yeaft header title single-line and shrinkable beside actions', () => {
+  it('centers the Yeaft header title while keeping it single-line and shrinkable beside actions', () => {
     expect(yeaftCss).toContain('.yeaft-topbar-title-group');
     expect(yeaftCss).toContain('flex: 1 1 auto;');
     expect(yeaftCss).toContain('min-width: 0;');
+    expect(yeaftCss).toContain('justify-content: center;');
+    expect(yeaftCss).toContain('text-align: center;');
     expect(yeaftCss).toContain('.yeaft-topbar-session-title');
+    expect(yeaftCss).toContain('max-width: 100%;');
     expect(yeaftCss).toContain('text-overflow: ellipsis;');
     expect(yeaftCss).toContain('white-space: nowrap;');
+    expect(yeaftCss).toContain('.yeaft-topbar-right');
+    expect(yeaftCss).toContain('flex: 0 0 auto;');
   });
 
   it('keeps Chat header to one visible title line and removes the workdir/path subtitle', () => {
