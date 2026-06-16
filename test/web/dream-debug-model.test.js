@@ -88,6 +88,25 @@ describe('Dream debug model', () => {
     expect(css).toMatch(/\.yeaft-debug-scroll-pre\s*\{[\s\S]*?overflow:\s*auto;/);
   });
 
+  it('keeps the Dream list typography and metadata layout constrained', () => {
+    const css = readFileSync(resolve(repoRoot, 'web/styles/yeaft.css'), 'utf8');
+    const component = readFileSync(resolve(repoRoot, 'web/components/YeaftDebugPanel.js'), 'utf8');
+
+    expect(component).toContain('yeaft-debug-dream-item-title');
+    expect(component).toContain('yeaft-debug-dream-item-summary');
+    expect(component).toContain('yeaft-debug-dream-item-status');
+    expect(component).toContain('yeaft-debug-dream-item-time');
+    expect(component).toContain('yeaft-debug-dream-segment-toggle');
+    expect(css).toMatch(/\.yeaft-debug-dream-item\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) auto;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-item-title\s*\{[\s\S]*?font-size:\s*13px;[\s\S]*?font-weight:\s*500;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-item-title,[\s\S]*?\.yeaft-debug-dream-item-meta span\s*\{[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?white-space:\s*nowrap;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-item-meta\s*\{[\s\S]*?align-items:\s*flex-end;[\s\S]*?max-width:\s*132px;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-item-status\.status-running\s*\{\s*color:\s*var\(--accent-blue\);\s*\}/);
+    expect(css).toMatch(/\.yeaft-debug-dream-item-status\.status-completed,[\s\S]*?\.status-success\s*\{\s*color:\s*var\(--success\);\s*\}/);
+    expect(css).toMatch(/\.yeaft-debug-dream-item-status\.status-error,[\s\S]*?\.status-failed\s*\{\s*color:\s*var\(--error\);\s*\}/);
+    expect(css).toMatch(/\.yeaft-debug-dream-segment-toggle\s*\{[\s\S]*?border-radius:\s*8px;[\s\S]*?background:\s*var\(--bg-user-msg-subtle\);/);
+  });
+
   it('keeps ids out of list subtitle and shows search no-results empty state in the component template', () => {
     const component = readFileSync(resolve(repoRoot, 'web/components/YeaftDebugPanel.js'), 'utf8');
 

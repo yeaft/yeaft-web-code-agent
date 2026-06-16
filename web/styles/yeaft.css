@@ -2581,7 +2581,7 @@
   user-select: none;
 }
 .yeaft-debug-dream-row:hover {
-  background: var(--bg-tertiary, rgba(0,0,0,0.04));
+  background: var(--sidebar-hover);
 }
 .yeaft-debug-dream-chevron {
   flex: 0 0 auto;
@@ -2603,16 +2603,14 @@
   border-radius: 3px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  background: var(--bg-tertiary, rgba(0,0,0,0.04));
+  background: var(--bg-user-msg-subtle);
   color: var(--text-secondary);
 }
 .yeaft-debug-dream-kind.kind-manual {
-  background: rgba(59,130,246,0.12);
-  color: #3b82f6;
+  color: var(--accent-blue);
 }
 .yeaft-debug-dream-kind.kind-auto {
-  background: rgba(34,197,94,0.12);
-  color: #22c55e;
+  color: var(--success);
 }
 .yeaft-debug-dream-status {
   flex: 1 1 auto;
@@ -2621,9 +2619,9 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.yeaft-debug-dream-status.status-running { color: #f59e0b; }
-.yeaft-debug-dream-status.status-success { color: #22c55e; }
-.yeaft-debug-dream-status.status-error   { color: #ef4444; }
+.yeaft-debug-dream-status.status-running { color: var(--accent-blue); }
+.yeaft-debug-dream-status.status-success { color: var(--success); }
+.yeaft-debug-dream-status.status-error   { color: var(--error); }
 .yeaft-debug-dream-time {
   flex: 0 0 auto;
   font-variant-numeric: tabular-nums;
@@ -3564,18 +3562,20 @@
 }
 
 .yeaft-debug-dream-item {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
   width: 100%;
   min-width: 0;
-  padding: 10px;
-  border: 1px solid var(--border-color);
+  padding: 9px 10px;
+  border: 1px solid var(--border-light);
   border-radius: 10px;
   background: var(--bg-main);
   color: var(--text-primary);
   text-align: left;
   cursor: pointer;
+  font: inherit;
 }
 
 .yeaft-debug-dream-item:hover,
@@ -3591,25 +3591,68 @@
 
 .yeaft-debug-dream-item-main {
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
 }
 
-.yeaft-debug-dream-item-main strong,
-.yeaft-debug-dream-item-main span {
+.yeaft-debug-dream-item-title,
+.yeaft-debug-dream-item-summary,
+.yeaft-debug-dream-item-meta span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.yeaft-debug-dream-item-main span,
+.yeaft-debug-dream-item-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.yeaft-debug-dream-item-summary,
 .yeaft-debug-dream-item-meta {
   color: var(--text-secondary);
   font-size: 12px;
+  line-height: 1.35;
+}
+
+.yeaft-debug-dream-item-summary {
+  max-width: 100%;
 }
 
 .yeaft-debug-dream-item-meta {
-  flex-wrap: wrap;
-  gap: 6px;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  max-width: 132px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.yeaft-debug-dream-item-status {
+  max-width: 100%;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.yeaft-debug-dream-item-status.status-running {
+  color: var(--accent-blue);
+}
+
+.yeaft-debug-dream-item-status.status-completed,
+.yeaft-debug-dream-item-status.status-success {
+  color: var(--success);
+}
+
+.yeaft-debug-dream-item-status.status-error,
+.yeaft-debug-dream-item-status.status-failed {
+  color: var(--error);
+}
+
+.yeaft-debug-dream-item-segments,
+.yeaft-debug-dream-item-time {
+  max-width: 100%;
 }
 
 .yeaft-debug-dream-detail {
@@ -3691,9 +3734,9 @@
 }
 
 .yeaft-debug-dream-segment-head {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   width: 100%;
   padding: 0;
@@ -3702,9 +3745,11 @@
   color: var(--text-primary);
   text-align: left;
   cursor: pointer;
+  font: inherit;
 }
 
-.yeaft-debug-dream-segment-head span {
+.yeaft-debug-dream-segment-title,
+.yeaft-debug-dream-segment-tags {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3716,6 +3761,21 @@
   color: var(--text-secondary);
   font-style: normal;
   font-weight: 400;
+}
+
+.yeaft-debug-dream-segment-tags {
+  color: var(--text-secondary);
+}
+
+.yeaft-debug-dream-segment-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background: var(--bg-user-msg-subtle);
 }
 
 .yeaft-debug-dream-segment-meta {
