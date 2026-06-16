@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import { buildRunDreamOpts } from '../../../../agent/yeaft/dream/session-wiring.js';
 import { runDream } from '../../../../agent/yeaft/dream/runner.js';
 import { extractAndWriteMemorySegments } from '../../../../agent/yeaft/dream/segment-extract.js';
+import { readScope } from '../../../../agent/yeaft/memory/segment-store.js';
 
 let testDir;
 
@@ -173,7 +174,7 @@ describe('buildRunDreamOpts session conversation wiring', () => {
     expect(memory).toContain('PR #978 review todo is still current, reworded by the extractor.');
     expect(memory.match(/tags: \[pr\]/g)).toHaveLength(1);
     expect(memory.match(/tags: \[recent, current\]/g)).toHaveLength(1);
-    expect(memory.match(/tags: \[recent, experience, workflow\]/g)).toHaveLength(1);
+    expect(memory).not.toContain('tags: [recent, experience, workflow]');
   });
 
   it('keeps reusable session experience separate from current detail', async () => {
@@ -216,9 +217,15 @@ describe('buildRunDreamOpts session conversation wiring', () => {
     expect(memory).toContain('After review, route findings back to Linus');
     expect(memory).toContain('Do not repeat the current session member in active_scope');
     expect(memory).toContain('Reusable session experience from the latest Dream pass');
-    expect(memory).toContain('Correction: active_scope should not include session_member');
     expect(memory.match(/tags: \[recent, current\]/g)).toHaveLength(1);
     expect(memory.match(/tags: \[recent, experience, workflow\]/g)).toHaveLength(1);
+
+    const segments = readScope(join(testDir, 'memory'), 'sessions/s-lessons');
+    const experience = segments.find(seg => seg.tags.includes('experience'));
+    expect(experience?.body).toContain('- After review, route findings back to Linus');
+    expect(experience?.body).toContain('- Do not repeat the current session member in active_scope');
+    expect(experience?.body).not.toContain('- m1 user:');
+    expect(experience?.body).not.toContain('Correction: active_scope should not include session_member');
   });
 });
 
