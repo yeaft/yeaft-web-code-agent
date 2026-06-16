@@ -14,6 +14,7 @@ import SidebarModeToggle from './SidebarModeToggle.js';
 import SidebarAgentHeader from './SidebarAgentHeader.js';
 import { shortenPath as shortenPathUtil } from '../utils/path-display.js';
 import { getLastPathSegment as _getLastPathSegment, formatResumeDate } from '../utils/path-segments.js';
+import { sortSessionsByActivity } from '../stores/helpers/session-order.js';
 import { useAuthStore } from '../stores/auth.js';
 
 export default {
@@ -707,14 +708,14 @@ export default {
     },
     pinnedChatConversations() {
       const pinned = this.store.conversations.filter(c => c.type !== 'crew' && c.agentOnline !== false && this.store.isSessionPinned(c.id));
-      return pinned.sort((a, b) => this.store.pinnedSessions.indexOf(a.id) - this.store.pinnedSessions.indexOf(b.id));
+      return this.sortByActivity(pinned);
     },
     unpinnedChatConversations() {
       return this.sortByActivity(this.store.conversations.filter(c => c.type !== 'crew' && c.agentOnline !== false && !this.store.isSessionPinned(c.id)));
     },
     pinnedCrewConversations() {
       const pinned = this.store.conversations.filter(c => c.type === 'crew' && c.agentOnline !== false && this.store.isSessionPinned(c.id));
-      return pinned.sort((a, b) => this.store.pinnedSessions.indexOf(a.id) - this.store.pinnedSessions.indexOf(b.id));
+      return this.sortByActivity(pinned);
     },
     unpinnedCrewConversations() {
       return this.sortByActivity(this.store.conversations.filter(c => c.type === 'crew' && c.agentOnline !== false && !this.store.isSessionPinned(c.id)));
@@ -742,12 +743,7 @@ export default {
       }
     },
     sortByActivity(conversations) {
-      return [...conversations].sort((a, b) => {
-        // Sort by lastMessageAt (set when user sends a message), fall back to createdAt, descending
-        const aTime = a.lastMessageAt || a.createdAt || 0;
-        const bTime = b.lastMessageAt || b.createdAt || 0;
-        return bTime - aTime;
-      });
+      return sortSessionsByActivity(conversations);
     },
     // Crew mode methods
     newCrewSession() {

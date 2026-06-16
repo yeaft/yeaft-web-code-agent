@@ -43,7 +43,7 @@ describe('Yeaft sidebar session list', () => {
   it('keeps pinned sessions above the active non-pinned session', () => {
     const rows = buildYeaftSidebarSessionList({
       sessions: [
-        { id: 's-active', lastMessageAt: 300 },
+        { id: 's-active', lastMessageAt: 25 },
         { id: 's-old', lastMessageAt: 100 },
         { id: 's-pin', lastMessageAt: 50 },
       ],
@@ -51,9 +51,9 @@ describe('Yeaft sidebar session list', () => {
       pinnedSessionIds: ['s-pin'],
     });
 
-    expect(ids(rows)).toEqual(['s-pin', 's-active', 's-old']);
+    expect(ids(rows)).toEqual(['s-pin', 's-old', 's-active']);
     expect(rows[0]).toMatchObject({ id: 's-pin', pinned: true, active: false });
-    expect(rows[1]).toMatchObject({ id: 's-active', pinned: false, active: true });
+    expect(rows[2]).toMatchObject({ id: 's-active', pinned: false, active: true });
   });
 
   it('keeps multiple pinned sessions stable above an active non-pinned session', () => {
@@ -70,6 +70,36 @@ describe('Yeaft sidebar session list', () => {
 
     expect(ids(rows)).toEqual(['s-pin-new', 's-pin-old', 's-active', 's-free']);
   });
+
+  it('sorts pinned and non-pinned groups by activity time descending', () => {
+    const rows = buildYeaftSidebarSessionList({
+      sessions: [
+        { id: 's-old-free', updatedAt: '2026-06-01T10:00:00Z' },
+        { id: 's-new-pin', updatedAt: '2026-06-01T13:00:00Z' },
+        { id: 's-new-free', updatedAt: '2026-06-01T12:00:00Z' },
+        { id: 's-old-pin', updatedAt: '2026-06-01T11:00:00Z' },
+      ],
+      activeSessionId: null,
+      pinnedSessionIds: ['s-old-pin', 's-new-pin'],
+    });
+
+    expect(ids(rows)).toEqual(['s-new-pin', 's-old-pin', 's-new-free', 's-old-free']);
+  });
+
+  it('does not reorder when the active session changes', () => {
+    const sessions = [
+      { id: 's-new', updatedAt: 300 },
+      { id: 's-middle', updatedAt: 200 },
+      { id: 's-old', updatedAt: 100 },
+    ];
+    const before = buildYeaftSidebarSessionList({ sessions, activeSessionId: 's-new', pinnedSessionIds: [] });
+    const after = buildYeaftSidebarSessionList({ sessions, activeSessionId: 's-old', pinnedSessionIds: [] });
+
+    expect(ids(before)).toEqual(['s-new', 's-middle', 's-old']);
+    expect(ids(after)).toEqual(['s-new', 's-middle', 's-old']);
+    expect(after.find(row => row.id === 's-old')).toMatchObject({ active: true });
+  });
+
 
   it('wires pinned and active metadata into YeaftSidebar visual classes', () => {
     expect(YEAFT_SIDEBAR_SOURCE).toContain('class="session-pin-icon"');
