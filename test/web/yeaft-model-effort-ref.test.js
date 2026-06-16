@@ -12,4 +12,14 @@ describe('Yeaft model effort provider-qualified refs', () => {
     expect(modelOptionMatchesRef(withProvider, 'github-copilot/claude-opus-4.8')).toBe(true);
     expect(modelOptionMatchesRef(withProvider, 'claude-opus-4.8')).toBe(true);
   });
+
+  it('preserves per-model effort option counts for UI selectors', () => {
+    const gpt = { id: 'gpt-5.5', provider: 'github-copilot', effortOptions: ['minimal', 'low', 'medium', 'high'] };
+    const claude = { id: 'claude-opus-4.8', provider: 'github-copilot', effortOptions: ['low', 'medium', 'high'] };
+
+    expect(modelOptionMatchesRef(gpt, 'github-copilot/gpt-5.5')).toBe(true);
+    expect(gpt.effortOptions).toEqual(['minimal', 'low', 'medium', 'high']);
+    expect(modelOptionMatchesRef(claude, 'github-copilot/claude-opus-4.8')).toBe(true);
+    expect(claude.effortOptions).toEqual(['low', 'medium', 'high']);
+  });
 });

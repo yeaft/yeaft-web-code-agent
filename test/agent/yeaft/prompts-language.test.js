@@ -212,6 +212,29 @@ describe('worker prompt language selection', () => {
     expect(enPrompt).toContain('after completing work, report only what changed, what was verified, and any risk or next step');
   });
 
+  it('adds readable output-format guidance to persona and fallback prompts', () => {
+    const personaZhPrompt = workerPrompt('zh-CN');
+    const personaEnPrompt = workerPrompt('en');
+    const fallbackZhPrompt = buildWorkerPrompt({ language: 'zh', includeShape: false });
+    const fallbackEnPrompt = buildWorkerPrompt({ language: 'en', includeShape: false });
+
+    for (const prompt of [personaEnPrompt, fallbackEnPrompt]) {
+      expect(prompt).toContain('## Communicating With the User');
+      expect(prompt).toContain('User-facing text is for a person, not a console log');
+      expect(prompt).toContain('group related sentences into short paragraphs, usually 2-4 sentences');
+      expect(prompt).toContain('Do not wrap ordinary prose, summaries, labels, headings, bullet lists, or single words in fenced code blocks');
+      expect(prompt).toContain('use inline code instead of a fenced block');
+    }
+
+    for (const prompt of [personaZhPrompt, fallbackZhPrompt]) {
+      expect(prompt).toContain('## 和用户沟通');
+      expect(prompt).toContain('面向用户的文字是给人读的，不是控制台日志');
+      expect(prompt).toContain('把相关句子合成短自然段，通常 2-4 句一段');
+      expect(prompt).toContain('不要把普通说明、摘要、标签、标题、列表或单个词包进 fenced code block');
+      expect(prompt).toContain('用 inline code，不要用 fenced code block');
+    }
+  });
+
   it('does not invent a stock Linus soul from only vpId/frontmatter', () => {
     const prompt = promptFor({ vpId: 'linus', displayName: 'Linus', role: 'developer' }, 'zh-CN');
 
@@ -536,6 +559,51 @@ describe('worker prompt language selection', () => {
       expect(persona.systemPrompt, id).toContain('<!-- lang:en -->');
       expect(persona.systemPrompt, id).toContain('<!-- lang:zh -->');
     }
+  });
+
+  it('renders explicit multi-VP routing guidance with peers and route_forward requirement', () => {
+    const zh = buildWorkerPrompt({
+      language: 'zh-CN',
+      includeShape: false,
+      activeScope: {
+        sessionId: 'session_1',
+        sessionMember: 'linus',
+        sessionMembers: ['omni', 'linus', 'martin'],
+      },
+    });
+    const en = buildWorkerPrompt({
+      language: 'en',
+      includeShape: false,
+      activeScope: {
+        sessionId: 'session_1',
+        sessionMember: 'linus',
+        sessionMembers: ['omni', 'linus', 'martin'],
+      },
+    });
+
+    expect(zh).toContain('## multi_vp_routing');
+    expect(zh).toContain('当前 VP: linus');
+    expect(zh).toContain('可转发 VP: omni, martin');
+    expect(zh).toContain('必须调用 `route_forward`');
+    expect(zh).toContain('VP 自己写 @mention 不会触发路由');
+    expect(en).toContain('## multi_vp_routing');
+    expect(en).toContain('Current VP: linus');
+    expect(en).toContain('Forwardable VPs: omni, martin');
+    expect(en).toContain('you MUST call `route_forward`');
+  });
+
+  it('omits multi-VP routing guidance when there are no peers', () => {
+    const prompt = buildWorkerPrompt({
+      language: 'en',
+      includeShape: false,
+      activeScope: {
+        sessionId: 'session_1',
+        sessionMember: 'linus',
+        sessionMembers: ['linus'],
+      },
+    });
+
+    expect(prompt).not.toContain('## multi_vp_routing');
   });
 
 });

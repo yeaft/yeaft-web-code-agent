@@ -1494,15 +1494,54 @@ export function handleYeaftVpRead(msg) {
 /**
  * Session CRUD wired to WS events.
  */
+function decorateSessionsWithRuntimeState(sessions) {
+  const rows = Array.isArray(sessions) ? sessions : [];
+  if (rows.length === 0) return rows;
+  let statuses = [];
+  try {
+    statuses = getVpStatusBroker().snapshot();
+  } catch {
+    statuses = [];
+  }
+  const bySession = new Map();
+  for (const status of statuses) {
+    const sessionId = status?.sessionId || status?.groupId || null;
+    if (!sessionId) continue;
+    const state = status.state || 'idle';
+    const running = !['idle', 'offline', 'completed', 'failed', 'aborted'].includes(state);
+    const updatedAt = status.updatedAt || status.since || Date.now();
+    const prev = bySession.get(sessionId) || { running: false, runningVpCount: 0, latestActivityAt: 0 };
+    if (running) prev.runningVpCount += 1;
+    prev.running = prev.running || running;
+    prev.latestActivityAt = Math.max(prev.latestActivityAt || 0, updatedAt || 0);
+    bySession.set(sessionId, prev);
+  }
+  return rows.map(session => {
+    if (!session || !session.id) return session;
+    const runtime = bySession.get(session.id);
+    if (!runtime) return { ...session, running: false, active: false };
+    return {
+      ...session,
+      running: !!runtime.running,
+      active: !!runtime.running,
+      runningVpCount: runtime.runningVpCount || 0,
+      latestActivityAt: runtime.latestActivityAt || null,
+    };
+  });
+}
+
 function sendSessionCrudResult(payload) {
-  sendSessionEvent({ type: 'session_crud_result', ...payload });
+  const next = payload && payload.ok && Array.isArray(payload.sessions)
+    ? { ...payload, sessions: decorateSessionsWithRuntimeState(payload.sessions) }
+    : payload;
+  sendSessionEvent({ type: 'session_crud_result', ...next });
 }
 
 function sendSessionSnapshotBroadcast() {
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     if (!yeaftDir) return;
-    const sessions = snapshotSessions(yeaftDir);
+    const sessions = decorateSessionsWithRuntimeState(snapshotSessions(yeaftDir));
     sendSessionEvent({ type: 'session_list_updated', sessions });
   } catch (err) {
     console.warn('[Yeaft] sendSessionSnapshotBroadcast failed:', err?.message || err);
@@ -3944,6 +3983,11 @@ export function handleYeaftModelSwitch(msg) {
   session.config.model = msg.model;
   session.config.primaryModel = msg.model;
   session.config.modelEffort = msg.modelEffort || null;
+  // Legacy non-session model switches mutate the shared root config instead
+  // of going through handleYeaftUpdateSessionConfig(), so cached per-VP
+  // Engines would otherwise keep the old effective config and drop newly
+  // selected effort values until process restart.
+  vpEngines.clear();
 
   sendSessionEvent({
     type: 'model_switched',

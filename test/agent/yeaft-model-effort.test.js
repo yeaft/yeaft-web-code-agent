@@ -7,7 +7,7 @@ import { loadConfig } from '../../agent/yeaft/config.js';
 import { getModelEffortOptions, getThinkingCapability } from '../../agent/yeaft/models.js';
 import { OpenAIResponsesAdapter } from '../../agent/yeaft/llm/openai-responses.js';
 import { AnthropicAdapter } from '../../agent/yeaft/llm/anthropic.js';
-import { filterEffortForModel } from '../../agent/yeaft/llm/router.js';
+import { AdapterRouter, filterEffortForModel } from '../../agent/yeaft/llm/router.js';
 import { modelRefMatchesAvailable } from '../../agent/yeaft/web-bridge.js';
 import {
   loadSessionConfig,
@@ -33,12 +33,15 @@ describe('Yeaft model effort metadata and config', () => {
   });
 
   it('exposes effort options for OpenAI and Anthropic reasoning-capable models', () => {
-    expect(getModelEffortOptions('gpt-5')).toEqual(['low', 'medium', 'high']);
-    expect(getModelEffortOptions('github-copilot/gpt-5.4')).toEqual(['low', 'medium', 'high']);
+    expect(getModelEffortOptions('gpt-5')).toEqual(['minimal', 'low', 'medium', 'high']);
+    expect(getModelEffortOptions('gpt-5.5')).toEqual(['minimal', 'low', 'medium', 'high']);
+    expect(getModelEffortOptions('github-copilot/gpt-5.4')).toEqual(['minimal', 'low', 'medium', 'high']);
+    expect(getModelEffortOptions('github-copilot/gpt-5.5')).toEqual(['minimal', 'low', 'medium', 'high']);
     expect(getModelEffortOptions('github-copilot/claude-opus-4.8')).toEqual(['low', 'medium', 'high']);
     expect(getModelEffortOptions('gpt-4o')).toEqual([]);
 
     expect(getThinkingCapability('github-copilot/gpt-5.4').thinkingProtocol).toBe('openai-reasoning');
+    expect(getThinkingCapability('github-copilot/gpt-5.5').thinkingProtocol).toBe('openai-reasoning');
     expect(getThinkingCapability('github-copilot/claude-opus-4.8').thinkingProtocol).toBe('anthropic');
   });
 
@@ -53,7 +56,7 @@ describe('Yeaft model effort metadata and config', () => {
       const byId = Object.fromEntries(config.availableModels.map(m => [m.id, m]));
       expect(byId['gpt-5.4']).toMatchObject({
         ref: 'github-copilot/gpt-5.4',
-        effortOptions: ['low', 'medium', 'high'],
+        effortOptions: ['minimal', 'low', 'medium', 'high'],
       });
       expect(byId['claude-opus-4.8']).toMatchObject({
         ref: 'github-copilot/claude-opus-4.8',
@@ -71,14 +74,14 @@ describe('Yeaft model effort metadata and config', () => {
     const dir = mkdtempSync(join(tmpdir(), 'yeaft-effort-'));
     try {
       mkdirSync(dirname(sessionConfigPath(dir, 'sess_effort')), { recursive: true });
-      const saved = saveSessionConfig(dir, 'sess_effort', { model: 'github-copilot/gpt-5.4', modelEffort: 'high' });
-      expect(saved).toEqual({ model: 'github-copilot/gpt-5.4', modelEffort: 'high' });
+      const saved = saveSessionConfig(dir, 'sess_effort', { model: 'github-copilot/gpt-5.4', modelEffort: 'minimal' });
+      expect(saved).toEqual({ model: 'github-copilot/gpt-5.4', modelEffort: 'minimal' });
       expect(loadSessionConfig(dir, 'sess_effort')).toEqual(saved);
 
       const resolved = resolveSessionConfig({ model: 'gpt-4o', primaryModel: 'gpt-4o' }, saved);
       expect(resolved.model).toBe('github-copilot/gpt-5.4');
       expect(resolved.primaryModel).toBe('github-copilot/gpt-5.4');
-      expect(resolved.modelEffort).toBe('high');
+      expect(resolved.modelEffort).toBe('minimal');
 
       expect(saveSessionConfig(dir, 'sess_effort', { modelEffort: null })).toEqual({ model: 'github-copilot/gpt-5.4' });
     } finally {
@@ -91,14 +94,17 @@ describe('Yeaft adapter effort request mapping', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     delete process.env.YEAFT_THINKING_V1;
+    delete process.env.COPILOT_GITHUB_TOKEN;
   });
 
   it('lets explicit user effort through the router even when auto thinking flag is off', () => {
     expect(filterEffortForModel({ model: 'github-copilot/gpt-5.4', effort: 'high', effortSource: 'user' }))
       .toMatchObject({ effort: 'high', effortSource: 'user' });
+    expect(filterEffortForModel({ model: 'github-copilot/gpt-5.5', effort: 'minimal', effortSource: 'user' }))
+      .toMatchObject({ effort: 'minimal', effortSource: 'user' });
     expect(filterEffortForModel({ model: 'github-copilot/gpt-5.4', effort: 'high', effortSource: 'auto' }).effort)
       .toBeUndefined();
-    expect(filterEffortForModel({ model: 'gpt-4o', effort: 'high', effortSource: 'user' }).effort)
+    expect(filterEffortForModel({ model: 'github-copilot/claude-opus-4.8', effort: 'minimal', effortSource: 'user' }).effort)
       .toBeUndefined();
   });
 
@@ -117,6 +123,40 @@ describe('Yeaft adapter effort request mapping', () => {
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body.reasoning).toEqual({ effort: 'high' });
   });
+
+  it('maps explicit gpt-5.5 effort through provider-qualified OpenAI Responses routing', async () => {
+    process.env.COPILOT_GITHUB_TOKEN = 'gho_test';
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const href = String(url);
+      if (href.includes('copilot_internal')) {
+        return jsonResponse({ token: 'copilot-api-token', expires_at: Math.floor(Date.now() / 1000) + 1800 });
+      }
+      return jsonResponse({ output_text: 'ok', usage: {} });
+    });
+    const router = new AdapterRouter({
+      providers: [{
+        name: 'github-copilot',
+        baseUrl: 'https://copilot.yeaft.com',
+        apiKey: 'test',
+        protocol: 'openai-responses',
+        models: ['gpt-5.5'],
+      }],
+    });
+
+    await router.call({
+      model: 'github-copilot/gpt-5.5',
+      system: 's',
+      messages: [{ role: 'user', content: 'hi' }],
+      effort: 'minimal',
+      effortSource: 'user',
+    });
+
+    const requestCall = fetchMock.mock.calls.find(([, init]) => init && init.body);
+    const body = JSON.parse(requestCall[1].body);
+    expect(body.model).toBe('gpt-5.5');
+    expect(body.reasoning).toEqual({ effort: 'minimal' });
+  });
+
 
   it('maps Anthropic effort to extended thinking budget', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({

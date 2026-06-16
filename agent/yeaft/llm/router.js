@@ -22,7 +22,7 @@
  */
 
 import { LLMAdapter } from './adapter.js';
-import { getThinkingCapability, normalizeEffort, parseModelRef } from '../models.js';
+import { getModelEffortOptions, getThinkingCapability, normalizeEffort, parseModelRef } from '../models.js';
 import { normalizeKnownProviderForRuntime } from './known-providers.js';
 import { pairSanitize } from '../pair-sanitize.js';
 
@@ -109,8 +109,13 @@ export function filterEffortForModel(params) {
     const { effort: _drop, effortSource: _source, ...rest } = params;
     return rest;
   }
-  const cap = getThinkingCapability(parseModelRef(params.model).modelId);
+  const modelId = parseModelRef(params.model).modelId;
+  const cap = getThinkingCapability(modelId);
   if (!cap.supportsThinking || cap.thinkingProtocol === 'none') {
+    const { effort: _drop, effortSource: _source, ...rest } = params;
+    return rest;
+  }
+  if (norm === 'minimal' && !getModelEffortOptions(modelId).includes('minimal')) {
     const { effort: _drop, effortSource: _source, ...rest } = params;
     return rest;
   }

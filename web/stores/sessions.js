@@ -31,6 +31,22 @@ function isPinnedRow(s, fallback = false) {
   return !!fallback;
 }
 
+function isRunningRow(s) {
+  if (!s || typeof s !== 'object') return false;
+  return s.running === true || s.active === true || s.isActive === true || s.isRunning === true;
+}
+
+function latestActivityValue(s) {
+  if (!s || typeof s !== 'object') return 0;
+  const value = s.latestActivityAt || s.lastActivityAt || s.lastMessageAt || s.updatedAt || 0;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value) {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
 /**
  * Resolve the shared chat store iff Pinia is wired up. Returns null in
  * test/SSR environments that don't bootstrap window.Pinia, so every
@@ -204,14 +220,14 @@ export const useSessionsStore = defineStore('sessions', {
       const lastViewedSession = lastViewed ? this.sessions[lastViewed] : null;
       const lastViewedMatchesAgent = lastViewedSession
         && (!agentId || lastViewedSession.agentId === agentId);
+      const runningSessionId = this.sessionOrder
+        .filter(id => this.sessions[id] && (!agentId || this.sessions[id].agentId === agentId) && this.sessions[id].running)
+        .sort((a, b) => latestActivityValue(this.sessions[b]) - latestActivityValue(this.sessions[a]))[0] || null;
+      const fallbackActiveId = runningSessionId || (lastViewedMatchesAgent ? lastViewed : null) || (this.sessionOrder[0] || null);
       if (this.activeSessionId && !this.sessions[this.activeSessionId]) {
-        this.activeSessionId = lastViewedMatchesAgent
-          ? lastViewed
-          : (this.sessionOrder[0] || null);
+        this.activeSessionId = fallbackActiveId;
       } else if (!this.activeSessionId && this.sessionOrder.length > 0) {
-        this.activeSessionId = lastViewedMatchesAgent
-          ? lastViewed
-          : this.sessionOrder[0];
+        this.activeSessionId = fallbackActiveId;
       }
       // Sanitize the chat store's parallel filter so a persisted
       // yeaftActiveSessionFilter pointing at a now-deleted session does not
@@ -219,11 +235,9 @@ export const useSessionsStore = defineStore('sessions', {
       const chat = _getChatStoreSafe();
       if (chat) {
         if (chat.yeaftActiveSessionFilter && !this.sessions[chat.yeaftActiveSessionFilter]) {
-          chat.yeaftActiveSessionFilter = lastViewedMatchesAgent
-            ? lastViewed
-            : (this.sessionOrder[0] || null);
-        } else if (!chat.yeaftActiveSessionFilter && lastViewedMatchesAgent) {
-          chat.yeaftActiveSessionFilter = lastViewed;
+          chat.yeaftActiveSessionFilter = fallbackActiveId;
+        } else if (!chat.yeaftActiveSessionFilter && fallbackActiveId) {
+          chat.yeaftActiveSessionFilter = fallbackActiveId;
         }
       }
       // fix-yeaft-session-list-and-menu: mirror server-decorated pin
@@ -377,6 +391,10 @@ export const useSessionsStore = defineStore('sessions', {
         createdAt: s.createdAt || null,
         updatedAt: s.updatedAt || null,
         lastMessageAt: s.lastMessageAt || null,
+        running: isRunningRow(s),
+        active: isRunningRow(s),
+        runningVpCount: Number.isFinite(Number(s.runningVpCount)) ? Number(s.runningVpCount) : 0,
+        latestActivityAt: s.latestActivityAt || s.lastActivityAt || s.lastMessageAt || null,
         // Cross-agent unified sidebar: each row stamped with the
         // owning agent so the UI can render the agent badge + route
         // CRUD ops to the right agent. May be null on the legacy
