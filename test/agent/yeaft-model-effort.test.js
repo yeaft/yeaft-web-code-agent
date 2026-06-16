@@ -39,12 +39,16 @@ describe('Yeaft model effort metadata and config', () => {
     expect(getModelEffortOptions('github-copilot/gpt-5.5')).toEqual(['minimal', 'low', 'medium', 'high']);
     expect(getModelEffortOptions('github-copilot/claude-opus-4.8')).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
     expect(getModelEffortOptions('claude-opus-4-7')).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(getModelEffortOptions('claude-opus-4-6')).toEqual(['low', 'medium', 'high', 'max']);
+    expect(getModelEffortOptions('claude-sonnet-4-6')).toEqual(['low', 'medium', 'high', 'max']);
     expect(getModelEffortOptions('claude-sonnet-4-20250514')).toEqual(['low', 'medium', 'high']);
     expect(getModelEffortOptions('gpt-4o')).toEqual([]);
 
     expect(getThinkingCapability('github-copilot/gpt-5.4').thinkingProtocol).toBe('openai-reasoning');
     expect(getThinkingCapability('github-copilot/gpt-5.5').thinkingProtocol).toBe('openai-reasoning');
     expect(getThinkingCapability('github-copilot/claude-opus-4.8').thinkingProtocol).toBe('anthropic-adaptive');
+    expect(getThinkingCapability('claude-opus-4-6').thinkingProtocol).toBe('anthropic-adaptive');
+    expect(getThinkingCapability('claude-sonnet-4-6').thinkingProtocol).toBe('anthropic-adaptive');
   });
 
   it('adds effort metadata to available models from configured providers', () => {
@@ -116,6 +120,12 @@ describe('Yeaft adapter effort request mapping', () => {
       .toBeUndefined();
     expect(filterEffortForModel({ model: 'github-copilot/claude-opus-4.8', effort: 'xhigh', effortSource: 'user' }))
       .toMatchObject({ effort: 'xhigh', effortSource: 'user' });
+    expect(filterEffortForModel({ model: 'claude-opus-4-6', effort: 'max', effortSource: 'user' }))
+      .toMatchObject({ effort: 'max', effortSource: 'user' });
+    expect(filterEffortForModel({ model: 'claude-opus-4-6', effort: 'xhigh', effortSource: 'user' }).effort)
+      .toBeUndefined();
+    expect(filterEffortForModel({ model: 'claude-sonnet-4-6', effort: 'xhigh', effortSource: 'user' }).effort)
+      .toBeUndefined();
   });
 
   it('maps OpenAI effort to Responses reasoning.effort', async () => {
@@ -175,20 +185,22 @@ describe('Yeaft adapter effort request mapping', () => {
     }));
     const adapter = new AnthropicAdapter({ apiKey: 'test', baseUrl: 'https://api.test' });
 
-    await adapter.call({
-      model: 'claude-opus-4.8',
-      system: 's',
-      messages: [{ role: 'user', content: 'hi' }],
-      maxTokens: 1000,
-      effort: 'max',
-      effortSource: 'user',
-    });
+    for (const model of ['claude-opus-4.8', 'claude-opus-4-6', 'claude-sonnet-4-6']) {
+      await adapter.call({
+        model,
+        system: 's',
+        messages: [{ role: 'user', content: 'hi' }],
+        maxTokens: 1000,
+        effort: 'max',
+        effortSource: 'user',
+      });
 
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body.thinking).toEqual({ type: 'adaptive' });
-    expect(body.output_config).toEqual({ effort: 'max' });
-    expect(body.thinking.budget_tokens).toBeUndefined();
-    expect(body.max_tokens).toBe(1000);
+      const body = JSON.parse(fetchMock.mock.calls.at(-1)[1].body);
+      expect(body.thinking).toEqual({ type: 'adaptive' });
+      expect(body.output_config).toEqual({ effort: 'max' });
+      expect(body.thinking.budget_tokens).toBeUndefined();
+      expect(body.max_tokens).toBe(1000);
+    }
   });
 
 

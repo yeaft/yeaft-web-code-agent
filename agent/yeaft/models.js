@@ -427,6 +427,7 @@ export function mapEffortToOpenAIReasoning(effort) {
 export const OPENAI_REASONING_EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'high'];
 export const ANTHROPIC_MANUAL_EFFORT_OPTIONS = ['low', 'medium', 'high'];
 export const ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh', 'max'];
+export const ANTHROPIC_ADAPTIVE_MAX_EFFORT_OPTIONS = ['low', 'medium', 'high', 'max'];
 
 function inferThinkingCapability(model) {
   const id = parseModelRef(model).modelId.toLowerCase();
@@ -436,20 +437,32 @@ function inferThinkingCapability(model) {
     return { supportsThinking: true, thinkingProtocol: 'openai-reasoning', defaultEffort: null, maxBudgetTokens: null };
   }
 
-  // Claude Opus 4.7/4.8 require adaptive thinking: no manual budget_tokens.
+  // Claude Opus 4.7/4.8 expose the full adaptive effort set, including xhigh.
   if (/^claude-opus-4[-.]?(7|8)($|-|\.)/.test(id)) {
     return {
       supportsThinking: true,
       thinkingProtocol: 'anthropic-adaptive',
       defaultEffort: 'high',
       maxBudgetTokens: null,
-      effortOptions: ['low', 'medium', 'high', 'xhigh', 'max'],
+      effortOptions: ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS,
+    };
+  }
+
+  // Claude Opus 4.6 and Sonnet 4.6 use adaptive effort too, but official
+  // Anthropic docs do not list xhigh for them. Keep max, reject xhigh.
+  if (/^claude-(opus|sonnet)-4[-.]?6($|-|\.)/.test(id)) {
+    return {
+      supportsThinking: true,
+      thinkingProtocol: 'anthropic-adaptive',
+      defaultEffort: 'high',
+      maxBudgetTokens: null,
+      effortOptions: ANTHROPIC_ADAPTIVE_MAX_EFFORT_OPTIONS,
     };
   }
 
   // Anthropic extended thinking is available on Claude 3.7+ and Claude 4.x.
   // Be conservative: older Claude 3/3.5/Haiku entries stay unsupported unless
-  // explicitly listed in the registry. Claude 4.6 can still use manual budgets.
+  // explicitly listed in the registry. Older Claude 4.x entries keep manual budgets.
   if (/^claude-/.test(id) && (/(^|-)3-7($|-|\.)/.test(id) || /(^|-)4($|-|\.)/.test(id))) {
     const maxBudgetTokens = id.includes('opus') ? 64000 : 32000;
     return { supportsThinking: true, thinkingProtocol: 'anthropic', defaultEffort: null, maxBudgetTokens };
