@@ -99,20 +99,22 @@ function thinkingV1Enabled() {
 export function filterEffortForModel(params) {
   if (!params || !('effort' in params)) return params;
   if (!thinkingV1Enabled()) {
-    const { effort: _drop, ...rest } = params;
-    return rest;
+    if (params.effortSource !== 'user') {
+      const { effort: _drop, effortSource: _source, ...rest } = params;
+      return rest;
+    }
   }
   const norm = normalizeEffort(params.effort);
   if (!norm) {
-    const { effort: _drop, ...rest } = params;
+    const { effort: _drop, effortSource: _source, ...rest } = params;
     return rest;
   }
   const cap = getThinkingCapability(parseModelRef(params.model).modelId);
   if (!cap.supportsThinking || cap.thinkingProtocol === 'none') {
-    const { effort: _drop, ...rest } = params;
+    const { effort: _drop, effortSource: _source, ...rest } = params;
     return rest;
   }
-  return { ...params, effort: norm };
+  return { ...params, effort: norm, effortSource: params.effortSource };
 }
 
 /**

@@ -191,7 +191,7 @@ export function getDefaultPlanInstruction(language = 'en') {
 
 const PROMPTS = {
   en: {
-    identity: 'You are Yeaft, a helpful AI assistant.',
+    identity: 'No VP soul is active for this turn. Participate in the current session with grounded, evidence-based answers and preserve the user\'s context.',
     date: (d) => `Date: ${d}`,
     dream: 'You are in dream mode. Reflect on past conversations and consolidate memories.',
     tools: (names) => `Available tools: ${names}`,
@@ -204,11 +204,9 @@ const PROMPTS = {
     projectDocHeader: '[Project Doc]',
     projectDocIntro:
       'The user keeps project-level instructions and context in `CLAUDE.md` or `AGENTS.md` at the session working directory. Treat the content below as authoritative project context — coding conventions, task guidance, workflow rules, etc.',
-    vpPersonaIntro: (name, role) =>
-      `You are ${name}${role ? `, ${role}` : ''}. Think, decide, and respond from ${name}'s perspective. Speak in the first person as ${name}; do not refer to yourself as "Yeaft" or as a generic AI assistant.`,
   },
   zh: {
-    identity: '你是 Yeaft，一个有用的 AI 助手。',
+    identity: '当前回合没有激活 VP soul。你在当前 session 中参与协作，回答要基于证据，并保持用户上下文。',
     date: (d) => `日期：${d}`,
     dream: '你处于梦境模式。回顾过去的对话，整理和巩固记忆。',
     tools: (names) => `可用工具：${names}`,
@@ -219,8 +217,6 @@ const PROMPTS = {
     projectDocHeader: '[项目文档]',
     projectDocIntro:
       '用户把项目级的说明和上下文记录在 session 工作目录下的 `CLAUDE.md` 或 `AGENTS.md` 中。下面的内容是权威的项目上下文 —— 编码规范、任务指导、工作流约定等，请遵循它来工作。',
-    vpPersonaIntro: (name, role) =>
-      `你是 ${name}${role ? `，${role}` : ''}。请以 ${name} 的思考方式理解问题、判断优先级并回答，并以 ${name} 的第一人称发言；不要自称 "Yeaft" 或泛指的 AI 助手。`,
   },
 };
 
@@ -427,7 +423,8 @@ function renderVpPersona(vpPersona, lang, effectiveLang = 'en') {
   // generic assistant identity here: the VP soul body is the source of truth.
   // `role` is intentionally not rendered as a second identity line; stock VPs
   // carry bilingual, role-aware soul text in role.md.
-  const lines = [`# ${name}`, '', '## Soul'];
+  const soulHeading = effectiveLang === 'zh' ? '## 灵魂' : '## Soul';
+  const lines = [`# ${name}`, '', soulHeading];
   if (body) lines.push('', body);
   return lines.join('\n');
 }
@@ -469,9 +466,6 @@ function renderActiveScope(activeScope, lang) {
     ? activeScope.sessionId.trim()
     : '';
   if (session) lines.push(`session_id: ${session}`);
-
-  const sessionMember = firstNonEmptyString(activeScope.sessionMember, activeScope.vpId);
-  if (sessionMember) lines.push(`session_member: ${sessionMember}`);
 
   const membersLine = renderSessionMembersLine(activeScope.sessionMembers || activeScope.members);
   if (membersLine) lines.push(`session_members: ${membersLine}`);

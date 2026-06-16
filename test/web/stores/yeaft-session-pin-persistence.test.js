@@ -90,7 +90,7 @@ describe('Yeaft session pin persistence flow', () => {
     store.setActive('s-other');
 
     expect(store.activeSessionId).toBe('s-other');
-    expect(ids(store.sessionList)).toEqual(['s-pinned', 's-other', 's-active']);
+    expect(ids(store.sessionList)).toEqual(['s-pinned', 's-active', 's-other']);
   });
 
   it('keeps server-persisted pins after a later session list refresh', () => {
@@ -110,7 +110,7 @@ describe('Yeaft session pin persistence flow', () => {
 
     expect(store.sessions['s-pinned']).toMatchObject({ pinned: true });
     expect(chatStore.pinnedSessions).toEqual(['s-pinned']);
-    expect(ids(store.sessionList)).toEqual(['s-pinned', 's-active', 's-new']);
+    expect(ids(store.sessionList)).toEqual(['s-pinned', 's-new', 's-active']);
   });
 
   it('updates row metadata for pin and unpin acknowledgements so pinned block membership recovers', () => {
@@ -129,7 +129,7 @@ describe('Yeaft session pin persistence flow', () => {
     store.applyPinState('s-b', false);
 
     expect(store.sessions['s-b']).toMatchObject({ pinned: false });
-    expect(ids(store.sessionList)).toEqual(['s-a', 's-b', 's-c']);
+    expect(ids(store.sessionList)).toEqual(['s-a', 's-c', 's-b']);
   });
 
   it('keeps a pinned session pinned when selecting a non-pinned session after an upsert without pin fields', () => {

@@ -882,7 +882,7 @@ describe('Engine', () => {
   });
 
   describe('active scope in system prompt', () => {
-    it('should render session id, VP id, and session members without group label', async () => {
+    it('should render session id and session members without current member or group label', async () => {
       mockAdapter.pushResponse([
         { type: 'text_delta', text: 'ok' },
         { type: 'stop', stopReason: 'end_turn' },
@@ -907,7 +907,7 @@ describe('Engine', () => {
       const call = mockAdapter.callLog[0];
       expect(call.system).toContain('## active_scope');
       expect(call.system).toContain('session_id: session_active');
-      expect(call.system).toContain('session_member: vp-linus');
+      expect(call.system).not.toContain('session_member:');
       expect(call.system).toContain('session_members: vp-omni, vp-martin, vp-linus');
       expect(call.system).toContain('session_topics: dream/segments, active_scope/rendering');
       expect(call.system).not.toContain('group: session_active');

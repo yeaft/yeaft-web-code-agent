@@ -230,7 +230,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
   // ─── Streaming ──────────────────────────────────────────
 
   /**
-   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'max', extraBody?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void }} params
+   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'max', effortSource?: 'user'|'auto', extraBody?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void }} params
    *
    * NOTE on `extraBody`: any keys you spread here are merged verbatim into
    * the wire body and — because the verbatim debug feature is intentionally
@@ -239,7 +239,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
    * `api-key` headers are auto-redacted (see `redactRawRequest` in
    * `adapter.js`); request-body fields are caller-controlled.
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, extraBody, signal, onRawExchange }) {
+  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, extraBody, signal, onRawExchange }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const body = {
@@ -257,7 +257,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     // registry entry must declare thinkingProtocol === 'openai-reasoning'.
     // Unknown / unsupported models silently drop the field.
     const normEffort = normalizeEffort(effort);
-    if (thinkingV1Enabled() && normEffort) {
+    if ((thinkingV1Enabled() || effortSource === 'user') && normEffort) {
       const cap = getThinkingCapability(model);
       if (cap.supportsThinking && cap.thinkingProtocol === 'openai-reasoning') {
         const wireEffort = effortForResponses(normEffort);
@@ -478,7 +478,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
    * expose them, mirror the stream() instrumentation. Parity with
    * anthropic.js's `call()`.
    */
-  async call({ model, system, messages, maxTokens = 4096, effort, extraBody, signal }) {
+  async call({ model, system, messages, maxTokens = 4096, effort, effortSource, extraBody, signal }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const body = {
@@ -490,7 +490,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
 
     // Mirror stream()'s thinking injection for non-streaming side queries.
     const normEffort = normalizeEffort(effort);
-    if (thinkingV1Enabled() && normEffort) {
+    if ((thinkingV1Enabled() || effortSource === 'user') && normEffort) {
       const cap = getThinkingCapability(model);
       if (cap.supportsThinking && cap.thinkingProtocol === 'openai-reasoning') {
         const wireEffort = effortForResponses(normEffort);

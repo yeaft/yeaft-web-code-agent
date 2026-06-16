@@ -17,7 +17,19 @@ const MAX_MESSAGES = 80;
 const MAX_BODY_CHARS = 1200;
 const MAX_SEGMENTS_PER_SCOPE = 64;
 const RECENT_MESSAGE_COUNT = 8;
-const VALID_KINDS = new Set(['fact', 'preference', 'decision', 'lesson', 'relation', 'goal', 'context']);
+const VALID_KINDS = new Set([
+  'fact',
+  'preference',
+  'decision',
+  'lesson',
+  'relation',
+  'goal',
+  'context',
+  'workflow',
+  'pitfall',
+  'correction',
+  'project-convention',
+]);
 
 /**
  * @param {{
@@ -61,7 +73,10 @@ export async function extractAndWriteMemorySegments(opts) {
     }
 
     const recent = scope === `sessions/${opts.sessionId}`
-      ? [buildRecentSegment({ scope, messages, now })]
+      ? [
+        buildRecentSegment({ scope, messages, now }),
+        buildRecentExperienceSegment({ scope, extracted, now }),
+      ].filter(Boolean)
       : [];
     if (extracted.length === 0 && recent.length === 0) continue;
 
@@ -184,8 +199,47 @@ function buildRecentSegment({ scope, messages, now }) {
   });
 }
 
+function buildRecentExperienceSegment({ scope, extracted, now }) {
+  const experienceSegments = extracted
+    .filter(isExperienceSegment)
+    .slice(-RECENT_MESSAGE_COUNT);
+  if (experienceSegments.length === 0) return null;
+
+  const lines = experienceSegments
+    .map(seg => oneLine(seg.body))
+    .filter(Boolean);
+  if (lines.length === 0) return null;
+
+  const sourceMessages = [...new Set(experienceSegments.flatMap(seg => (
+    Array.isArray(seg.sourceMessages) ? seg.sourceMessages.map(String).filter(Boolean) : []
+  )))];
+  const body = [
+    'Reusable session experience from the latest Dream pass:',
+    ...lines.map(line => `- ${line}`),
+  ].join('\n');
+
+  return makeSegment({
+    scope,
+    kind: 'lesson',
+    tags: ['recent', 'experience', 'workflow'],
+    sourceMessages,
+    createdAt: now,
+    updatedAt: now,
+    body,
+  });
+}
+
+function isExperienceSegment(seg) {
+  if (!seg) return false;
+  if (['workflow', 'preference', 'pitfall', 'correction', 'project-convention', 'lesson'].includes(seg.kind)) {
+    return true;
+  }
+  const tags = Array.isArray(seg.tags) ? seg.tags.map(tag => String(tag).toLowerCase()) : [];
+  return tags.some(tag => ['workflow', 'preference', 'pitfall', 'correction', 'project-convention', 'lesson', 'experience'].includes(tag));
+}
+
 function mergeSegments(existing, incoming) {
-  const incomingRecent = incoming.filter(isRecentSegment).slice(-1);
+  const incomingRecent = latestRecentByFamily(incoming.filter(isRecentSegment));
   const incomingPermanent = incoming.filter(seg => !isRecentSegment(seg));
   const byKey = new Map();
 
@@ -216,6 +270,21 @@ function segmentMergeKey(seg) {
   return `id:${seg.id}`;
 }
 
+function latestRecentByFamily(segments) {
+  const byFamily = new Map();
+  for (const seg of segments) {
+    byFamily.set(recentFamily(seg), seg);
+  }
+  return [...byFamily.values()];
+}
+
+function recentFamily(seg) {
+  const tags = Array.isArray(seg.tags) ? seg.tags.map(String) : [];
+  if (tags.includes('experience')) return 'experience';
+  if (tags.includes('current')) return 'current';
+  return 'recent';
+}
+
 function isRecentSegment(seg) {
   return Array.isArray(seg.tags) && seg.tags.includes('recent');
 }
@@ -234,6 +303,6 @@ function oneLine(text) {
 
 function extractSystem(language) {
   return String(language || '').toLowerCase().startsWith('zh')
-    ? '你是 Yeaft Dream 记忆抽取器。只输出严格 JSON 数组，不要 Markdown。保留具体事实、决策、偏好、当前状态和证据 message id。'
-    : 'You are the Yeaft Dream memory extractor. Return only a strict JSON array, no Markdown. Preserve concrete facts, decisions, preferences, current status, and evidence message ids.';
+    ? '你是梦境记忆抽取器。只输出严格 JSON 数组，不要 Markdown。保留具体事实、决策、偏好、当前状态和证据 message id。'
+    : 'You are the dream memory extractor. Return only a strict JSON array, no Markdown. Preserve concrete facts, decisions, preferences, current status, and evidence message ids.';
 }

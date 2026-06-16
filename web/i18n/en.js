@@ -251,6 +251,10 @@ export default {
   'yeaft.switchModel': 'Switch model',
   'yeaft.modelMenu.title': 'Model and LLM settings',
   'yeaft.modelMenu.label': 'Model',
+  'yeaft.modelMenu.effort': 'Effort',
+  'yeaft.modelMenu.effort.low': 'Low',
+  'yeaft.modelMenu.effort.medium': 'Medium',
+  'yeaft.modelMenu.effort.high': 'High',
   'yeaft.modelMenu.configureHint': 'Providers, keys, model list',
   // fix/dream-cadence-and-ui-trigger: manual dream trigger button.
   'yeaft.dream.runNow': 'Run dream now',

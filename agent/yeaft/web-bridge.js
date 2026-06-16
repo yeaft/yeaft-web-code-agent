@@ -1032,15 +1032,23 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
 
   if (related) {
     const content = promptParts || prompt;
-    thread.pendingQueries.push({ content, preview: prompt, originalText: text, originalParts: Array.isArray(envelope?._promptParts) ? envelope._promptParts : null });
+    const isForwardAppend = envelope?.msg?.meta?.injectedBy === 'route_forward';
+    thread.pendingQueries.push({
+      content,
+      preview: prompt,
+      originalText: text,
+      originalParts: Array.isArray(envelope?._promptParts) ? envelope._promptParts : null,
+      internal: isForwardAppend,
+    });
     persistInboundMessageOnceByMsgId({
       msgId: envelope?.msg?.id,
       text,
       sessionId,
       threadId: visibleInboundThreadId(envelope, thread.threadId),
-      role: envelope?.msg?.meta?.injectedBy === 'route_forward' ? 'assistant' : 'user',
+      role: isForwardAppend ? 'assistant' : 'user',
       speakerVpId: envelope?.msg?.meta?.senderVpId || envelope?.msg?.from || null,
       attachments: Array.isArray(envelope?.msg?.meta?.attachments) ? envelope.msg.meta.attachments : [],
+      internal: isForwardAppend,
     });
     thread.updatedAt = Date.now();
     try {
@@ -1135,6 +1143,7 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
             role: isForward ? 'assistant' : 'user',
             speakerVpId: senderVpId,
             attachments: Array.isArray(meta.attachments) ? meta.attachments : [],
+            internal: isForward,
           });
         }
       } catch { /* never crash WS pipeline */ }
@@ -2293,7 +2302,7 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'user_append':
-      if (hctx && Array.isArray(hctx.appendedUserPrompts) && event.preview) {
+      if (hctx && Array.isArray(hctx.appendedUserPrompts) && event.preview && !event.internal) {
         hctx.appendedUserPrompts.push(String(event.preview));
       }
       sendSessionEvent({
@@ -2826,6 +2835,7 @@ async function ensureSessionLoaded() {
     type: 'session_ready',
     conversationId: yeaftConversationId,
     model: session.config.model,
+    modelEffort: session.config.modelEffort || null,
     availableModels: session.config.availableModels || [],
     skills: session.status.skills,
     mcpServers: session.status.mcpServers,
@@ -3102,7 +3112,13 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       }
 
       // Turn completed — atomically append this VP's output to shared history.
-      appendTurnToSessionHistory(sessionId, threadId, vpId, [prompt, ...appendedUserPrompts], assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum);
+      // route_forward handoff text is an internal trigger, already visible as
+      // the source VP's tool action. Do not append it as a visible prompt for
+      // the target VP turn; otherwise UI replay can show a trailing handoff
+      // block after the target response.
+      const inboundIsRouteForward = inboundEnvelope?.msg?.meta?.injectedBy === 'route_forward';
+      const visiblePrompts = inboundIsRouteForward ? appendedUserPrompts : [prompt, ...appendedUserPrompts];
+      appendTurnToSessionHistory(sessionId, threadId, vpId, visiblePrompts, assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum);
 
       sendSessionOutputFrame({
         type: 'assistant',
@@ -3307,11 +3323,11 @@ function appendTurnToSessionHistory(sessionId, threadId, vpId, prompts, assistan
  * refresh replay can render chips without leaking image source data into
  * the message body.
  *
- * @param {{ msgId:string, text:string, sessionId:string, role?:string, speakerVpId?:string|null, attachments?:Array<object> }} args
+ * @param {{ msgId:string, text:string, sessionId:string, role?:string, speakerVpId?:string|null, attachments?:Array<object>, internal?:boolean }} args
  * @returns {boolean} true if this call wrote the row, false if a prior
  *   call already wrote it (dedup hit).
  */
-function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = 'main', role, speakerVpId, attachments }) {
+function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = 'main', role, speakerVpId, attachments, internal = false }) {
   if (!session?.conversationStore) return false;
   // No msgId means no dedup key — caller is responsible for guarding.
   // Both call sites already do (`if (envMsgId && text)` and
@@ -3362,6 +3378,7 @@ function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = '
     if (persistRole === 'assistant' && speakerVpId && typeof speakerVpId === 'string') {
       record.speakerVpId = speakerVpId;
     }
+    if (internal) record.internal = true;
     if (persistRole === 'user' && Array.isArray(attachments) && attachments.length > 0) {
       record.attachments = attachments;
     }
@@ -3455,16 +3472,20 @@ function emitQueuedTurnAbort(meta, turnId) {
   } catch { /* never crash WS pipeline */ }
 }
 
-function abortAllVpRuntime(aborted) {
+function abortAllVpRuntime(aborted, sessionId = null) {
   for (const [key, ctrl] of vpAborts) {
+    if (sessionId && !key.startsWith(`${sessionId}::`)) continue;
     try {
       if (!ctrl.signal.aborted) { ctrl.abort(); aborted.push(`vp:${key}`); }
     } catch { /* best-effort */ }
+    vpAborts.delete(key);
   }
-  vpAborts.clear();
-  for (const inbox of vpInboxes.values()) {
+  for (const [key, inbox] of vpInboxes) {
+    if (sessionId && !key.startsWith(`${sessionId}::`)) continue;
     if (Array.isArray(inbox)) inbox.length = 0;
+    if (sessionId) vpInboxes.delete(key);
   }
+  if (!sessionId) vpInboxes.clear();
 }
 
 /**
@@ -3521,22 +3542,32 @@ export function handleYeaftAbortThread(_msg = {}) {
 
 /**
  * Abort all in-flight Yeaft runtime work.
+ * With sessionId set, abort only work owned by that Yeaft Session.
+ *
+ * @param {{ sessionId?: string }} msg
  * @returns {{ aborted: string[], all: boolean }}
  */
-export function handleYeaftAbortAll() {
+export function handleYeaftAbortAll(msg = {}) {
+  const sessionId = typeof msg.sessionId === 'string' && msg.sessionId ? msg.sessionId : null;
   const aborted = [];
-  if (currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
+  if (!sessionId && currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
     try { currentAbortCtrl.abort(); aborted.push('main'); } catch { /* best-effort */ }
   }
-  currentAbortCtrl = null;
+  if (!sessionId) currentAbortCtrl = null;
   // Also abort all per-VP turn controllers.
   for (const [turnId, ctrl] of turnAbortCtrls) {
+    const meta = turnAbortMeta.get(turnId);
+    if (sessionId && meta?.sessionId !== sessionId) continue;
     try { if (!ctrl.signal.aborted) { ctrl.abort(); aborted.push(turnId); } } catch { /* best-effort */ }
+    turnAbortCtrls.delete(turnId);
+    turnAbortMeta.delete(turnId);
   }
-  turnAbortCtrls.clear();
-  turnAbortMeta.clear();
-  abortAllVpRuntime(aborted);
-  sendSessionEvent({ type: 'yeaft_aborted', aborted, all: true });
+  if (!sessionId) {
+    turnAbortCtrls.clear();
+    turnAbortMeta.clear();
+  }
+  abortAllVpRuntime(aborted, sessionId);
+  sendSessionEvent({ type: 'yeaft_aborted', aborted, all: true, sessionId }, sessionId ? { sessionId } : undefined);
   return { aborted, all: true };
 }
 
@@ -3565,7 +3596,7 @@ export function handleYeaftAbortTurn(msg = {}) {
 
   turnAbortCtrls.delete(turnId);
   turnAbortMeta.delete(turnId);
-  sendSessionEvent({ type: 'yeaft_turn_aborted', turnId, success });
+  sendSessionEvent({ type: 'yeaft_turn_aborted', turnId, success, sessionId: meta?.sessionId || null }, meta?.sessionId ? { sessionId: meta.sessionId } : undefined);
 }
 
 /**
@@ -3929,23 +3960,34 @@ export function handleYeaftModeSwitch(_msg) {
 }
 
 
+
+export function modelRefMatchesAvailable(model, requested) {
+  if (!model || !requested) return false;
+  return model.id === requested
+    || model.ref === requested
+    || (model.provider && model.id && `${model.provider}/${model.id}` === requested);
+}
+
 /** Handle model switch from the web UI. */
 export function handleYeaftModelSwitch(msg) {
   if (!session || !msg.model) return;
   refreshLiveSessionConfig();
 
   const available = session.config.availableModels || [];
-  const found = available.some(m => m.id === msg.model);
+  const found = available.some(m => modelRefMatchesAvailable(m, msg.model));
   if (!found) {
     console.warn(`[Yeaft] model switch rejected — "${msg.model}" not in availableModels`);
     return;
   }
 
   session.config.model = msg.model;
+  session.config.primaryModel = msg.model;
+  session.config.modelEffort = msg.modelEffort || null;
 
   sendSessionEvent({
     type: 'model_switched',
     model: msg.model,
+    modelEffort: session.config.modelEffort || null,
   });
 }
 
@@ -4005,6 +4047,7 @@ export async function handleYeaftLoadHistory(msg) {
     type: 'session_ready',
     conversationId: yeaftConversationId,
     model: session.config.model,
+    modelEffort: session.config.modelEffort || null,
     availableModels: session.config.availableModels || [],
     skills: session.status.skills,
     mcpServers: session.status.mcpServers,

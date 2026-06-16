@@ -143,6 +143,11 @@ export function createRouter(deps = {}) {
         role: 'assistant',     // VP-authored — persists as assistant turn
         text: injectText,
         taskId: args.taskId ?? null,
+        // route_forward is already visible as the source VP's tool action.
+        // Persist the synthetic handoff for audit/dispatch, but keep it out
+        // of UI replay and future visible history so it doesn't render as a
+        // second assistant/user block after the target VP answers.
+        internal: true,
         meta: {
           synthetic: true,
           injectedBy: 'route_forward',
