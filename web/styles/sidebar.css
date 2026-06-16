@@ -1230,8 +1230,11 @@
 }
 
 .chat-title-group {
+  flex: 1 1 auto;
+  min-width: 0;
   max-width: 50%;
   text-align: center;
+  overflow: hidden;
 }
 
 .chat-title {

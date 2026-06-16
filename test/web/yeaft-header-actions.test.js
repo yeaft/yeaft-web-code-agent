@@ -5,6 +5,9 @@ const read = (path) => readFileSync(new URL(`../../web/${path}`, import.meta.url
 
 const pageSource = read('components/YeaftPage.js');
 const sidebarSource = read('components/YeaftSidebar.js');
+const chatHeaderSource = read('components/ChatHeader.js');
+const yeaftCss = read('styles/yeaft.css');
+const sidebarCss = read('styles/sidebar.css');
 
 function topbarRightBlock() {
   const start = pageSource.indexOf('<div class="yeaft-topbar-right">');
@@ -56,5 +59,39 @@ describe('Yeaft conversation header actions', () => {
 
     expect(order.every((index) => index >= 0)).toBe(true);
     expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+});
+
+describe('conversation header titles', () => {
+  it('renders a readable Yeaft session title in the header with id/path fallback hidden from visible text', () => {
+    expect(pageSource).toContain('class="yeaft-topbar-title-group"');
+    expect(pageSource).toContain('{{ topbarSessionTitle || $t(\'yeaft.session.create.untitled\') }}');
+    expect(pageSource).toContain('if (id && value === id) continue;');
+    expect(pageSource).toContain('/^(sessions?|groups?)\\//i.test(value)');
+    expect(pageSource).toContain('if (g.workDir && value === g.workDir) continue;');
+  });
+
+  it('keeps the Yeaft header title single-line and shrinkable beside actions', () => {
+    expect(yeaftCss).toContain('.yeaft-topbar-title-group');
+    expect(yeaftCss).toContain('flex: 1 1 auto;');
+    expect(yeaftCss).toContain('min-width: 0;');
+    expect(yeaftCss).toContain('.yeaft-topbar-session-title');
+    expect(yeaftCss).toContain('text-overflow: ellipsis;');
+    expect(yeaftCss).toContain('white-space: nowrap;');
+  });
+
+  it('keeps Chat header to one visible title line and removes the workdir/path subtitle', () => {
+    expect(chatHeaderSource).toContain('<div class="chat-title">{{ headerTitle }}</div>');
+    expect(chatHeaderSource).not.toContain('class="chat-title-path"');
+    expect(chatHeaderSource).not.toContain('chat-title-path-text');
+    expect(chatHeaderSource).not.toContain('{{ folderPath }}');
+  });
+
+  it('keeps the Chat header title single-line and shrinkable', () => {
+    expect(sidebarCss).toContain('.chat-title-group');
+    expect(sidebarCss).toContain('min-width: 0;');
+    expect(sidebarCss).toContain('.chat-title');
+    expect(sidebarCss).toContain('text-overflow: ellipsis;');
+    expect(sidebarCss).toContain('white-space: nowrap;');
   });
 });
