@@ -72,6 +72,10 @@ const STATIC_ZH_PROMPT_FORBIDDEN = [
   'You are in dream mode',
   'Yeaft AI',
   'AI companion',
+  'Language policy',
+  'Core capabilities',
+  'Prefer Chinese',
+  'Answering style',
 ];
 
 const STATIC_EN_PROMPT_FORBIDDEN = [
@@ -107,21 +111,22 @@ const DREAM_PROMPT_CASES = [
 ];
 
 describe('worker prompt language selection', () => {
-  it('does not synthesize localized stock fallback souls for English-only Omni bodies', () => {
+  it('renders old seeded Omni bodies as the selected localized authored soul', () => {
     const prompt = workerPrompt('zh-CN');
 
     expect(prompt).toContain('# 全能助手');
     expect(prompt).not.toContain('# 全能助手 — 全能助手');
     expect(prompt).toContain('## 灵魂');
     expect(prompt).not.toContain('## Soul');
-    expect(prompt).toContain('You are Omni Assistant / 全能助手');
-    expect(prompt).toContain('Cross-domain synthesis: handle writing, coding');
+    expect(prompt).toContain('你是 Omni。你始终看着整个会话的形状');
     expect(prompt).toContain('## 任务回复');
     expect(prompt).toContain('完成后只汇报改了什么、验证了什么、风险或下一步');
-    expect(prompt).not.toContain('你是 Omni，一个负责需求分析、目标澄清、流程推进和团队协调的 VP。');
+    expect(prompt).not.toContain('You are Omni Assistant / 全能助手');
+    expect(prompt).not.toContain('Language policy');
+    expect(prompt).not.toContain('Core capabilities');
+    expect(prompt).not.toContain('Prefer Chinese');
     expect(prompt).not.toContain('### 人物特点');
-    expect(prompt).not.toContain('### 用户通常期待你完成');
-    expect(prompt).not.toContain('## Core Principles');
+    expect(prompt).not.toContain('### Traits');
   });
 
   it('does not render legacy stock fallback labels for English-only stock roles in Chinese', () => {
@@ -154,11 +159,14 @@ describe('worker prompt language selection', () => {
     expect(prompt).toContain('# Omni Assistant');
     expect(prompt).not.toContain('# Omni Assistant — All-Purpose Assistant');
     expect(prompt).toContain('## Soul');
-    expect(prompt).toContain('You are Omni Assistant / 全能助手');
+    expect(prompt).toContain('You are Omni. You keep the whole session in view');
+    expect(prompt).not.toContain('You are Omni Assistant / 全能助手');
+    expect(prompt).not.toContain('Language policy / 语言策略');
+    expect(prompt).not.toContain('Core capabilities / 核心能力');
     expect(prompt).not.toContain('### Traits');
     expect(prompt).toContain('## Task Replies');
     expect(prompt).toContain('after completing work, report only what changed, what was verified, and any risk or next step.');
-    expect(prompt).not.toContain('你是 Omni，一个负责需求分析');
+    expect(prompt).not.toContain('你是 Omni');
     expect(prompt).not.toContain('## 任务回复');
   });
 
@@ -202,10 +210,20 @@ describe('worker prompt language selection', () => {
       expect(zhPrompt).not.toContain('## Soul');
       expect(zhPrompt).toContain(vp.personaZh.split('\n')[0]);
       expect(zhPrompt).not.toContain(vp.personaEn.split('\n')[0]);
+      for (const phrase of ['You are ', 'Language policy', 'Core capabilities', 'Decision style', 'Good for', 'Bad for', 'Prefer Chinese']) {
+        expect(vp.personaZh, `${vp.vpId} zh source leaks ${phrase}`).not.toContain(phrase);
+        expect(zhPrompt, `${vp.vpId} zh prompt leaks ${phrase}`).not.toContain(phrase);
+      }
+      expect(vp.personaZh, `${vp.vpId} zh source has bilingual slash title`).not.toContain(' / ');
+
       expect(enPrompt).toContain('## Soul');
       expect(enPrompt).not.toContain('## 灵魂');
       expect(enPrompt).toContain(vp.personaEn.split('\n')[0]);
       expect(enPrompt).not.toContain(vp.personaZh.split('\n')[0]);
+      for (const phrase of ['你是', '人物特点', '擅长的事情', '解决问题的方式', '用户通常期待', '回答风格', '核心能力']) {
+        expect(vp.personaEn, `${vp.vpId} en source leaks ${phrase}`).not.toContain(phrase);
+        expect(enPrompt, `${vp.vpId} en prompt leaks ${phrase}`).not.toContain(phrase);
+      }
     }
   });
 
