@@ -37,6 +37,9 @@ const { buildTimelineRows } = await import('../../../web/stores/helpers/vp-timel
 
 function freshStore() {
   const store = useChatStore();
+  store.currentView = 'chat';
+  store.activeConversations = [];
+  store.processingConversations = {};
   store.yeaftAgentId = null;
   store.yeaftConversationId = null;
   store.yeaftActiveSessionFilter = null;
@@ -121,14 +124,21 @@ describe('Yeaft session active indicator state', () => {
 
   it('tracks processing per Yeaft session instead of only the active row', () => {
     const store = freshStore();
+    store.currentView = 'yeaft';
 
     store.yeaftProcessingSessions = { 'session-a': true };
+    store.yeaftActiveSessionFilter = 'session-a';
+    expect(store.isProcessing).toBe(true);
     expect(store.isYeaftSessionProcessing('session-a')).toBe(true);
     expect(store.isYeaftSessionProcessing('session-b')).toBe(false);
+
+    store.yeaftActiveSessionFilter = 'session-b';
+    expect(store.isProcessing).toBe(false);
 
     store.activeVpTurns = {
       'turn-b': { sessionId: 'session-b', vpId: 'vp-b', startedAt: 10 },
     };
+    expect(store.isProcessing).toBe(true);
     expect(store.isYeaftSessionProcessing('session-b')).toBe(true);
 
     store.clearYeaftSessionProcessingIfIdle('session-a');
@@ -136,7 +146,7 @@ describe('Yeaft session active indicator state', () => {
     expect(store.isYeaftSessionProcessing('session-b')).toBe(true);
   });
 
-  it('lights and clears the session active dot from VP turn lifecycle events', () => {
+  it('keeps a Yeaft session running until every VP turn in that session ends', () => {
     const store = freshStore();
 
     store.handleYeaftOutput({ event: {
@@ -145,6 +155,13 @@ describe('Yeaft session active indicator state', () => {
       vpId: 'vp-a',
       turnId: 'turn-a',
       ts: 100,
+    } });
+    store.handleYeaftOutput({ event: {
+      type: 'vp_turn_start',
+      sessionId: 'session-a',
+      vpId: 'vp-b',
+      turnId: 'turn-b',
+      ts: 101,
     } });
     expect(store.isYeaftSessionProcessing('session-a')).toBe(true);
 
@@ -155,6 +172,58 @@ describe('Yeaft session active indicator state', () => {
       turnId: 'turn-a',
       reason: 'end_turn',
     } });
+    expect(store.isYeaftSessionProcessing('session-a')).toBe(true);
+
+    store.handleYeaftOutput({ event: {
+      type: 'vp_turn_end',
+      sessionId: 'session-a',
+      vpId: 'vp-b',
+      turnId: 'turn-b',
+      reason: 'end_turn',
+    } });
     expect(store.isYeaftSessionProcessing('session-a')).toBe(false);
+  });
+
+  it('stops only the selected Yeaft session', () => {
+    const store = freshStore();
+    store.yeaftAgentId = 'agent-1';
+    store.yeaftProcessingSessions = { 'session-a': true, 'session-b': true };
+    store.activeVpTurns = {
+      'turn-a': { sessionId: 'session-a', vpId: 'vp-a', startedAt: 1 },
+      'turn-b': { sessionId: 'session-b', vpId: 'vp-b', startedAt: 2 },
+    };
+    store.stoppingVpTurnIds = { 'turn-a': 1, 'turn-b': 1 };
+
+    store.cancelYeaftSession('session-a');
+
+    expect(store.sendWsMessage).toHaveBeenCalledWith({
+      type: 'yeaft_abort_all',
+      agentId: 'agent-1',
+      sessionId: 'session-a',
+    });
+    expect(store.isYeaftSessionProcessing('session-a')).toBe(false);
+    expect(store.isYeaftSessionProcessing('session-b')).toBe(true);
+    expect(store.activeVpTurns['turn-a']).toBeUndefined();
+    expect(store.activeVpTurns['turn-b']).toEqual(expect.objectContaining({ sessionId: 'session-b' }));
+    expect(store.stoppingVpTurnIds).toEqual({ 'turn-b': 1 });
+  });
+
+  it('clears only the aborted Yeaft session on abort ack', () => {
+    const store = freshStore();
+    store.yeaftProcessingSessions = { 'session-a': true, 'session-b': true };
+    store.activeVpTurns = {
+      'turn-a': { sessionId: 'session-a', vpId: 'vp-a', startedAt: 1 },
+      'turn-b': { sessionId: 'session-b', vpId: 'vp-b', startedAt: 2 },
+    };
+    store.stoppingVpTurnIds = { 'turn-a': 1, 'turn-b': 1 };
+
+    store.handleYeaftOutput({ event: { type: 'yeaft_aborted', all: true, sessionId: 'session-a' } });
+
+    expect(store.isYeaftSessionProcessing('session-a')).toBe(false);
+    expect(store.isYeaftSessionProcessing('session-b')).toBe(true);
+    expect(store.activeVpTurns).toEqual({
+      'turn-b': { sessionId: 'session-b', vpId: 'vp-b', startedAt: 2 },
+    });
+    expect(store.stoppingVpTurnIds).toEqual({ 'turn-b': 1 });
   });
 });

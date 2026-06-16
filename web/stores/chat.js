@@ -829,8 +829,20 @@ export const useChatStore = defineStore('chat', {
     isMultiColumn: (state) => state.activeConversations.length > 1,
     // ★ Split-screen: whether in split-screen mode (2+ panels)
     isSplitMode: (state) => state.panels.length > 1,
-    // 当前会话是否在处理中
+    // 当前页面/session 是否在处理中。
+    // Chat/Crew use the active conversation id; Yeaft must be scoped to the
+    // selected Session because one virtual Yeaft conversation contains many
+    // Sessions and VP turns can overlap across them.
     isProcessing: (state) => {
+      if (state.currentView === 'yeaft') {
+        const sessionId = resolveActiveYeaftSessionId(state);
+        if (!sessionId) return false;
+        if (state.yeaftProcessingSessions?.[sessionId]) return true;
+        for (const info of Object.values(state.activeVpTurns || {})) {
+          if (info?.sessionId === sessionId) return true;
+        }
+        return false;
+      }
       return state.currentConversation ? !!state.processingConversations[state.currentConversation] : false;
     },
     canSend: (state) => {
@@ -899,10 +911,6 @@ export const useChatStore = defineStore('chat', {
       if (state.yeaftProcessingSessions?.[sessionId]) return true;
       for (const info of Object.values(state.activeVpTurns || {})) {
         if (info?.sessionId === sessionId) return true;
-      }
-      for (const [key, status] of Object.entries(state.vpStatuses || {})) {
-        if (!key.startsWith(`${sessionId}::`)) continue;
-        if (status && !['idle', 'offline', 'completed', 'failed', 'aborted'].includes(status.state)) return true;
       }
       return false;
     },
@@ -2113,6 +2121,23 @@ export const useChatStore = defineStore('chat', {
           const { [event.turnId]: _stopped, ...stoppingRest } = this.stoppingVpTurnIds;
           this.stoppingVpTurnIds = stoppingRest;
           this.clearYeaftSessionProcessingIfIdle(event.sessionId || _removed?.sessionId || null);
+          break;
+        }
+        case 'yeaft_aborted': {
+          const sessionId = event.sessionId || msg.sessionId || null;
+          if (sessionId) {
+            this.activeVpTurns = Object.fromEntries(
+              Object.entries(this.activeVpTurns || {}).filter(([, info]) => info?.sessionId !== sessionId)
+            );
+            this.stoppingVpTurnIds = Object.fromEntries(
+              Object.entries(this.stoppingVpTurnIds || {}).filter(([turnId]) => this.activeVpTurns?.[turnId])
+            );
+            this.clearYeaftSessionProcessingIfIdle(sessionId);
+          } else if (event.all) {
+            this.activeVpTurns = {};
+            this.stoppingVpTurnIds = {};
+            this.yeaftProcessingSessions = {};
+          }
           break;
         }
         // vp_typing_* coexists with vp_status_changed on purpose. They serve
@@ -3447,15 +3472,28 @@ export const useChatStore = defineStore('chat', {
         type: 'yeaft_abort_all',
         agentId: this.yeaftAgentId,
       });
-      // Optimistic UX: clear the local processing flag immediately so the
-      // stop button hides without waiting for the round-trip. The agent's
-      // yeaft_aborted event is idempotent.
+      // Legacy/global stop path: clear every local Yeaft running flag.
       if (this.yeaftConversationId) {
-        this.processingConversations[this.yeaftConversationId] = false;
+        delete this.processingConversations[this.yeaftConversationId];
       }
       this.activeVpTurns = {};
       this.stoppingVpTurnIds = {};
       this.yeaftProcessingSessions = {};
+    },
+    cancelYeaftSession(sessionId) {
+      if (!this.yeaftAgentId || !sessionId) return;
+      this.sendWsMessage({
+        type: 'yeaft_abort_all',
+        agentId: this.yeaftAgentId,
+        sessionId,
+      });
+      this.activeVpTurns = Object.fromEntries(
+        Object.entries(this.activeVpTurns || {}).filter(([, info]) => info?.sessionId !== sessionId)
+      );
+      this.stoppingVpTurnIds = Object.fromEntries(
+        Object.entries(this.stoppingVpTurnIds || {}).filter(([turnId]) => this.activeVpTurns?.[turnId])
+      );
+      this.clearYeaftSessionProcessingIfIdle(sessionId);
     },
     /**
      * Per-VP stop: abort a single VP turn by turnId without affecting siblings.
