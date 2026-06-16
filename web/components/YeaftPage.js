@@ -573,11 +573,6 @@ export default {
       }
     });
 
-    const isProcessing = Vue.computed(() => {
-      const convId = store.yeaftConversationId;
-      return convId ? !!store.processingConversations[convId] : false;
-    });
-
     const goBack = () => {
       store.leaveYeaft();
     };
@@ -608,11 +603,13 @@ export default {
       store.sendYeaftSessionMessage({ groupId, text, mentions, attachments });
     };
 
-    // Bug 5: ChatInput's default cancel triggers Chat-mode cancel_execution,
-    // which is a no-op for Yeaft (no Claude CLI conversation, abort lives
-    // in the agent's per-thread registry). Route stop -> yeaft_abort_all.
+    // Yeaft stop is session-scoped. The virtual Yeaft conversation can have
+    // multiple Sessions running at once; stopping the current input must not
+    // abort turns in a different selected Session.
     const cancelYeaft = () => {
-      store.cancelYeaft();
+      const gs = sessionsStore();
+      const sessionId = store.yeaftActiveSessionFilter || gs?.activeSessionId || null;
+      if (sessionId) store.cancelYeaftSession(sessionId);
     };
 
     const toggleSidebar = () => {
@@ -648,6 +645,11 @@ export default {
         return window.Pinia?.useSessionsStore?.() || null;
       } catch { return null; }
     };
+    const isProcessing = Vue.computed(() => {
+      const gs = sessionsStore();
+      const sessionId = store.yeaftActiveSessionFilter || gs?.activeSessionId || null;
+      return sessionId ? store.isYeaftSessionProcessing(sessionId) : false;
+    });
     // task-fix-mobile-group-settings: surface a group ⚙ in the topbar
     // so the conversation always has a settings entry-point — sidebar
     // collapses to a slide-over on mobile, hover-reveal affordances

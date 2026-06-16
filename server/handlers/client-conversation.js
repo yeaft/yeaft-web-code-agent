@@ -916,11 +916,13 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
 
     case 'yeaft_abort_all':
     case 'unify_abort_all': {
-      // task-325c: relay "abort everything" command. Empty payload.
+      // task-325c: relay abort command. With sessionId present this is scoped
+      // to that Yeaft Session; without it, older clients keep the legacy
+      // "abort everything" behavior.
       const abortAllAgentId = msg.agentId || client.currentAgent;
       if (!abortAllAgentId) return;
       if (!await checkAgentAccess(abortAllAgentId)) return;
-      await forwardToAgent(abortAllAgentId, { type: 'yeaft_abort_all' });
+      await forwardToAgent(abortAllAgentId, { type: 'yeaft_abort_all', sessionId: msg.sessionId || null });
       break;
     }
 

@@ -3416,16 +3416,20 @@ function emitQueuedTurnAbort(meta, turnId) {
   } catch { /* never crash WS pipeline */ }
 }
 
-function abortAllVpRuntime(aborted) {
+function abortAllVpRuntime(aborted, sessionId = null) {
   for (const [key, ctrl] of vpAborts) {
+    if (sessionId && !key.startsWith(`${sessionId}::`)) continue;
     try {
       if (!ctrl.signal.aborted) { ctrl.abort(); aborted.push(`vp:${key}`); }
     } catch { /* best-effort */ }
+    vpAborts.delete(key);
   }
-  vpAborts.clear();
-  for (const inbox of vpInboxes.values()) {
+  for (const [key, inbox] of vpInboxes) {
+    if (sessionId && !key.startsWith(`${sessionId}::`)) continue;
     if (Array.isArray(inbox)) inbox.length = 0;
+    if (sessionId) vpInboxes.delete(key);
   }
+  if (!sessionId) vpInboxes.clear();
 }
 
 /**
@@ -3482,22 +3486,32 @@ export function handleYeaftAbortThread(_msg = {}) {
 
 /**
  * Abort all in-flight Yeaft runtime work.
+ * With sessionId set, abort only work owned by that Yeaft Session.
+ *
+ * @param {{ sessionId?: string }} msg
  * @returns {{ aborted: string[], all: boolean }}
  */
-export function handleYeaftAbortAll() {
+export function handleYeaftAbortAll(msg = {}) {
+  const sessionId = typeof msg.sessionId === 'string' && msg.sessionId ? msg.sessionId : null;
   const aborted = [];
-  if (currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
+  if (!sessionId && currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
     try { currentAbortCtrl.abort(); aborted.push('main'); } catch { /* best-effort */ }
   }
-  currentAbortCtrl = null;
+  if (!sessionId) currentAbortCtrl = null;
   // Also abort all per-VP turn controllers.
   for (const [turnId, ctrl] of turnAbortCtrls) {
+    const meta = turnAbortMeta.get(turnId);
+    if (sessionId && meta?.sessionId !== sessionId) continue;
     try { if (!ctrl.signal.aborted) { ctrl.abort(); aborted.push(turnId); } } catch { /* best-effort */ }
+    turnAbortCtrls.delete(turnId);
+    turnAbortMeta.delete(turnId);
   }
-  turnAbortCtrls.clear();
-  turnAbortMeta.clear();
-  abortAllVpRuntime(aborted);
-  sendSessionEvent({ type: 'yeaft_aborted', aborted, all: true });
+  if (!sessionId) {
+    turnAbortCtrls.clear();
+    turnAbortMeta.clear();
+  }
+  abortAllVpRuntime(aborted, sessionId);
+  sendSessionEvent({ type: 'yeaft_aborted', aborted, all: true, sessionId }, sessionId ? { sessionId } : undefined);
   return { aborted, all: true };
 }
 
@@ -3526,7 +3540,7 @@ export function handleYeaftAbortTurn(msg = {}) {
 
   turnAbortCtrls.delete(turnId);
   turnAbortMeta.delete(turnId);
-  sendSessionEvent({ type: 'yeaft_turn_aborted', turnId, success });
+  sendSessionEvent({ type: 'yeaft_turn_aborted', turnId, success, sessionId: meta?.sessionId || null }, meta?.sessionId ? { sessionId: meta.sessionId } : undefined);
 }
 
 /**
