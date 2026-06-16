@@ -131,6 +131,18 @@ export const MODEL_REGISTRY = new Map([
     adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
     displayName: 'GPT-5.4',
+    supportsThinking: true,
+    thinkingProtocol: 'openai-reasoning',
+    defaultEffort: null,
+  }],
+  ['gpt-5.5', {
+    provider: 'openai',
+    adapter: 'openai-responses',
+    baseUrl: 'https://api.openai.com/v1',
+    displayName: 'GPT-5.5',
+    supportsThinking: true,
+    thinkingProtocol: 'openai-reasoning',
+    defaultEffort: null,
   }],
   ['gpt-4.1', {
     provider: 'openai',
