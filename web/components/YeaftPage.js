@@ -116,7 +116,19 @@ export default {
           </div>
 
           <div class="yeaft-topbar-right">
-            <!-- Message reload — replays current Yeaft session history without a full page refresh. -->
+            <!-- VP list show/hide toggle. Hidden under 1024 px because the pane itself is gated by the same breakpoint. -->
+            <button
+              v-if="!isNarrowDetail"
+              class="yeaft-topbar-vp-toggle"
+              :class="{ active: vpTimelineVisible }"
+              @click="toggleVpTimeline"
+              :title="vpTimelineVisible ? $t('yeaft.vpTimeline.hide') : $t('yeaft.vpTimeline.show')"
+              :aria-label="vpTimelineVisible ? $t('yeaft.vpTimeline.hide') : $t('yeaft.vpTimeline.show')"
+              :aria-expanded="vpTimelineVisible ? 'true' : 'false'"
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5s-3 1.34-3 3 1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C15 14.17 10.33 13 8 13zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5C23 14.17 18.33 13 16 13z"/></svg>
+            </button>
+            <!-- Message refresh — replays current Yeaft session history without a full page reload. -->
             <button
               class="yeaft-reload-btn"
               @click="reloadMessages"
@@ -128,31 +140,35 @@ export default {
                 <path d="M21 15a4 4 0 0 1-4 4H7l-4 4V7a4 4 0 0 1 4-4h5"/><path d="M17 1v6h6"/><path d="M23 7a6 6 0 0 0-6-6"/>
               </svg>
             </button>
-            <!-- Page reload — always visible, full window.location.reload() -->
             <button
-              class="yeaft-reload-btn"
-              @click="reloadPage"
-              :title="$t('yeaft.reloadPage')"
-              :aria-label="$t('yeaft.reloadPage')"
+              class="yeaft-topbar-dream-toggle"
+              :class="{
+                active: dreamRunning,
+                'just-finished': dreamJustFinished,
+                stale: dreamStale,
+              }"
+              @click="onDreamTriggerClick"
+              :disabled="dreamRunning"
+              :title="dreamLastRunRelative
+                ? ($t('yeaft.dream.runNow') + '\n' + $t('yeaft.dream.lastRun', { ago: dreamLastRunRelative }))
+                : ($t('yeaft.dream.runNow') + '\n' + $t('yeaft.dream.lastRunNever'))"
+              :aria-label="$t('yeaft.dream.runNow')"
+              :aria-busy="dreamRunning ? 'true' : 'false'"
             >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <polyline points="23 20 23 14 17 14"/><polyline points="1 4 1 10 7 10"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" class="yeaft-dream-icon">
+                <path class="yeaft-dream-moon" fill="currentColor" d="M21 14.6A8.5 8.5 0 0 1 9.4 3a7 7 0 1 0 11.6 11.6z"/>
+                <path class="yeaft-dream-arc" d="M17 4v4h4M20 8a7 7 0 0 0-12.1-3.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
-            </button>
-            <!-- task-fix-mobile-group-settings: gear button to open group
-                 settings from the conversation header. Visible on every
-                 viewport so users can edit announcement / members /
-                 rename / delete without hunting for hover-only sidebar
-                 affordances (which don't exist on touch). -->
-            <button
-              v-if="topbarGroup"
-              class="yeaft-topbar-group-settings"
-              @click="openTopbarGroupSettings"
-              :title="$t('yeaft.session.settings.title', { name: topbarGroupName })"
-              :aria-label="$t('yeaft.session.settings.title', { name: topbarGroupName })"
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 5h16v2H4V5zm0 6h16v2H4v-2zm0 6h10v2H4v-2z"/></svg>
-              <span class="yeaft-topbar-group-settings-label">{{ $t('yeaft.session.settings.short') }}</span>
+              <span
+                v-if="dreamJustFinished && dreamEntriesCreated !== null"
+                class="yeaft-topbar-dream-bubble"
+                aria-hidden="true"
+              >+{{ dreamEntriesCreated }}</span>
+              <span
+                v-if="dreamStale && !dreamRunning && !dreamJustFinished"
+                class="yeaft-topbar-dream-staledot"
+                aria-hidden="true"
+              ></span>
             </button>
             <button
               class="yeaft-debug-btn"
@@ -162,84 +178,18 @@ export default {
             >
               <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 8h-2.81c-.45-.78-1.07-1.45-1.82-1.96L17 4.41 15.59 3l-2.17 2.17C12.96 5.06 12.49 5 12 5s-.96.06-1.41.17L8.41 3 7 4.41l1.62 1.63C7.88 6.55 7.26 7.22 6.81 8H4v2h2.09c-.05.33-.09.66-.09 1v1H4v2h2v1c0 .34.04.67.09 1H4v2h2.81c1.04 1.79 2.97 3 5.19 3s4.15-1.21 5.19-3H20v-2h-2.09c.05-.33.09-.66.09-1v-1h2v-2h-2v-1c0-.34-.04-.67-.09-1H20V8zm-6 8h-4v-2h4v2zm0-4h-4v-2h4v2z"/></svg>
             </button>
-            <!-- task-yeaft-group-ui-cleanup: VP-list show/hide moved here
-                 (was at the left edge of the topbar). Mirrors Crew's
-                 right-side panel toggles. Hidden under 1024 px because
-                 the pane itself is gated by the same breakpoint.
-
-                 fix/dream-cadence-and-ui-trigger: manual dream trigger
-                 sits to the LEFT of the VP-list toggle. Three states —
-                 idle / running (spin) / just-finished (✓ + +N bubble).
-                 24h-stale red dot when the local cache shows no recent
-                 run. Backend wiring: ws yeaft_dream_trigger →
-                 handleYeaftDreamTrigger; updates flow back via
-                 yeaft_dream_status / yeaft_dream_result through
-                 vpStore.applyDreamStatus / applyDreamResult. -->
+            <!-- Page refresh is a mobile-only escape hatch; desktop keeps the header focused on session actions. -->
             <button
-              class="yeaft-topbar-dream-toggle"
-              :class="{
-                running: dreamRunning,
-                'just-finished': dreamJustFinished,
-                stale: dreamStale,
-              }"
-              @click="onDreamTriggerClick"
-              :disabled="dreamRunning"
-              :title="dreamLastRunRelative
-                ? ($t('yeaft.dream.runNow') + '\\n' + $t('yeaft.dream.lastRun', { ago: dreamLastRunRelative }))
-                : ($t('yeaft.dream.runNow') + '\\n' + $t('yeaft.dream.lastRunNever'))"
-              :aria-label="$t('yeaft.dream.runNow')"
-              :aria-busy="dreamRunning ? 'true' : 'false'"
+              v-if="isMobile"
+              class="yeaft-reload-btn yeaft-page-reload-btn"
+              @click="reloadPage"
+              :title="$t('yeaft.reloadPage')"
+              :aria-label="$t('yeaft.reloadPage')"
             >
-              <!-- Composite icon: moon (idle) overlaid with a small
-                   refresh arc — distinct from clock (debug) and gear
-                   (settings) so the affordance is unambiguous. The
-                   spinner state hides the moon body and rotates the
-                   arc only. -->
-              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" class="yeaft-topbar-dream-icon">
-                <path class="yeaft-topbar-dream-moon" fill="currentColor"
-                  d="M14.5 3.5c-.5 1-.8 2.2-.8 3.4 0 4 3.3 7.3 7.3 7.3.4 0 .8 0 1.2-.1-1.1 4.1-4.8 7.1-9.2 7.1-5.3 0-9.5-4.3-9.5-9.5 0-4.4 3-8.1 7-9.2-.1.4 0 .7 0 1z"/>
-                <path class="yeaft-topbar-dream-arc" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                  d="M19.5 8.5a4 4 0 1 0 1 3.5"/>
-                <polyline class="yeaft-topbar-dream-arc-tip" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-                  points="20.5 5.5 20.5 8.5 17.5 8.5"/>
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="23 20 23 14 17 14"/><polyline points="1 4 1 10 7 10"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
               </svg>
-              <!-- 3-second post-success bubble. Position absolute so it
-                   doesn't shift the topbar height. -->
-              <span
-                v-if="dreamJustFinished && dreamEntriesCreated !== null"
-                class="yeaft-topbar-dream-bubble"
-                aria-hidden="true"
-              >+{{ dreamEntriesCreated }}</span>
-              <!-- 24h-stale red dot. Pure visual nudge; click on the
-                   button still works the same. -->
-              <span
-                v-if="dreamStale && !dreamRunning && !dreamJustFinished"
-                class="yeaft-topbar-dream-staledot"
-                aria-hidden="true"
-              ></span>
             </button>
-            <!-- VP list show/hide toggle. Lives next to the debug
-                 toggle on the right side of the topbar, mirroring
-                 Crew's "hide roles / hide features" affordances.
-                 Hidden under 1024 px because the pane itself is gated
-                 by the same breakpoint. Restored in v0.1.767 after
-                 PR #767 inadvertently removed it. -->
-            <button
-              v-if="!isNarrowDetail"
-              class="yeaft-topbar-vp-toggle"
-              :class="{ active: vpTimelineVisible }"
-              @click="toggleVpTimeline"
-              :title="vpTimelineVisible ? $t('yeaft.vpTimeline.hide') : $t('yeaft.vpTimeline.show')"
-              :aria-label="vpTimelineVisible ? $t('yeaft.vpTimeline.hide') : $t('yeaft.vpTimeline.show')"
-              :aria-expanded="vpTimelineVisible ? 'true' : 'false'"
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-            </button>
-            <!-- task-yeaft-group-ui-cleanup: legacy ".yeaft-detail-toggle"
-                 (tasks/feature placeholder slide-in) removed — Yeaft only
-                 supports the debug panel today, and the placeholder
-                 button surfaced an unimplemented feature. Debug button
-                 above remains the sole right-pane affordance. -->
           </div>
         </div>
 
@@ -937,14 +887,6 @@ export default {
       if (!sessionId) return;
       openGroupSettings({ sessionId, section: 'members' });
     };
-    const topbarGroupName = Vue.computed(
-      () => resolveGroupDisplayName(topbarGroup.value),
-    );
-    const openTopbarGroupSettings = () => {
-      const g = topbarGroup.value;
-      if (!g) return;
-      openGroupSettings({ sessionId: g.id, section: 'announcement' });
-    };
     // I6: closeMemberEditor shim was unused — dropped. openMemberEditor
     // remains because SessionInviteModal's "open library" CTA still calls
     // it (see line 622, onInviteOpenLibrary).
@@ -1125,10 +1067,6 @@ export default {
       openVpLibraryFromGroupSettings,
       // Backwards-compat shim — onInviteOpenLibrary still calls this.
       openMemberEditor,
-      // task-fix-mobile-group-settings: topbar group ⚙ bindings.
-      topbarGroup,
-      topbarGroupName,
-      openTopbarGroupSettings,
       // VP timeline pane bindings — restored in v0.1.767.
       showVpTimeline,
       vpTimelineRows,

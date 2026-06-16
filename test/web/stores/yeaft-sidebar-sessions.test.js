@@ -120,7 +120,8 @@ describe('Yeaft settings entry markup', () => {
     expect(pageSource).toContain('settings.llm.configureMenu');
     expect(pageSource).not.toContain('class="yeaft-topbar-llm-config"');
     expect(pageSource).toContain('yeaft-llm-config-overlay');
-    expect(pageSource).toContain('yeaft.session.settings.short');
+    expect(pageSource).not.toContain('yeaft-topbar-group-settings');
+    expect(YEAFT_SIDEBAR_SOURCE).toContain('yeaft.session.openSettings');
 
     const cssSource = await import('node:fs').then(fs => fs.readFileSync(
       new URL('../../../web/styles/yeaft.css', import.meta.url),
