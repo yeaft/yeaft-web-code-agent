@@ -27,16 +27,21 @@ import { defineTool } from './types.js';
 
 export default defineTool({
   name: 'RouteForward',
-  description: `Hand this turn off to another VP in the same group.
+  description: `Hand this turn off to another VP in the same session.
 
 Use this tool — NOT free-text @mentions — to route a question or task to
 another VP. VP-authored @mentions in chat text are NOT automatically routed
-(the group coordinator only text-routes for user messages); you must call
-RouteForward for the hand-off to take effect.
+(the coordinator only text-routes user messages); you must call RouteForward
+for the hand-off to take effect.
+
+In a multi-VP session, treat RouteForward as the required hand-off mechanism:
+- If the user names another VP, call RouteForward to that vpId.
+- If another VP clearly owns the domain or should continue the work, call RouteForward instead of only mentioning them.
+- If the task needs parallel collaboration, call RouteForward with a target vpId or "all".
 
 Arguments:
   - to (string): target vpId, or the literal "all" to broadcast to every
-    other member of the group (subject to the per-group fan-out cap).
+    other member of the session (subject to the session fan-out cap).
   - text (string): the message body to send on your behalf.
   - reason (string, optional): short rationale for the forward, recorded on
     the message meta for audit / UI display.
@@ -47,7 +52,7 @@ Rules:
   - Forwards carry a causedBy chain; chains deeper than 10 hops are blocked
     (chain_depth_exceeded).
   - A single target may be forwarded to at most 8 times per 5-second window
-    per group (throttled).
+    per session (throttled).
 
 Returns JSON: { ok, dispatched?, error?, detail? }.`,
   parameters: {
