@@ -21,13 +21,13 @@ Reply with strict JSON of the shape:
 
 Scope path: {{target}}   (must be ≤2 levels)
 
-来源 session 对话：
+来源会话对话：
 {{sources}}
 
 {{siblingsBlock}}
 任务：
 1. 从零编写 memory.md，并使用合理的章节结构。
-2. 优先保留可复用经验：workflow、preference、pitfall、correction、project convention、review/merge/tag 教训，以及会改变后续执行方式的规则。
+2. 优先保留可复用经验：工作流、偏好、坑点、纠偏、项目约定、review/merge/tag 教训，以及会改变后续执行方式的规则。
 3. 当前 PR、review、阻塞细节只有仍可执行时才保留。
 4. 编写 summary.md（1–3 句），先写可复用经验，再写当前状态。
 

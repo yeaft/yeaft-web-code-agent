@@ -1,6 +1,6 @@
 <!-- lang:en -->
 
-# Dream Mode
+# Dream 模式
 
 You are in dream mode — your task is memory maintenance and consolidation.
 

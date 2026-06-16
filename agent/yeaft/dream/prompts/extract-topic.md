@@ -1,5 +1,5 @@
 <!-- lang:en -->
-# Dream Extract — Topic Scope
+# Dream 抽取 — 主题作用域
 
 You are extracting **memory segments** from a session conversation. This pass focuses on a specific **session topic scope**: durable facts, decisions, and viewpoints about one recurring topic.
 
@@ -27,13 +27,13 @@ Return a JSON array only. Each item must have `kind`, `body`, `tags`, `sourceMes
 Keep the topic memory sharp: enough background to orient the next turn, plus current details that should not be lost.
 
 <!-- lang:zh -->
-# Dream Extract — Topic Scope
+# Dream 抽取 — 主题作用域
 
-你正在从一段 session 对话中抽取 **memory segments**。本轮关注特定 **session topic scope**：关于某个反复出现主题的稳定事实、决策和观点。
+你正在从一段会话对话中抽取 **记忆段**。本轮关注特定 **会话主题作用域**：关于某个反复出现主题的稳定事实、决策和观点。
 
-目标 topic id 会以 `{{topicId}}` 提供。
+目标主题 id 会以 `{{topicId}}` 提供。
 
-## topic scope 应抽取什么
+## 主题作用域应抽取什么
 
 - **core facts** — 用户教过或确认过的、关于该主题的稳定知识
 - **viewpoints / opinions** — 用户或 session 对该主题形成的稳定观点
@@ -46,10 +46,10 @@ Keep the topic memory sharp: enough background to orient the next turn, plus cur
 
 - 与主题无关的用户履历或广泛偏好。
 - 与该主题无关的 session-wide charter 信息。
-- 除非影响该主题，否则不要抽取单个 VP 的细节。
+- 除非影响该主题，否则不要抽取单个会话成员 的细节。
 
 ## 输出
 
-只返回 JSON array。每一项必须包含 `kind`、`body`、`tags`、`sourceMessages` 和 `confidence`。
+只返回 JSON 数组。每一项必须包含 `kind`、`body`、`tags`、`sourceMessages` 和 `confidence`。
 
-保持 topic memory 精准：既要有下一轮需要的大背景，也要保留不该丢失的当前细节。
+保持主题记忆精准：既要有下一轮需要的大背景，也要保留不该丢失的当前细节。

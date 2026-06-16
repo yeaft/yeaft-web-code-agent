@@ -31,7 +31,7 @@ function listMarkdownFiles(dir) {
 function workerPrompt(language) {
   return buildWorkerPrompt({
     language,
-    includeShape: false,
+    includeShape: true,
     toolNames: ['FileRead'],
     vpPersona: {
       vpId: 'omni',
@@ -76,6 +76,18 @@ const STATIC_ZH_PROMPT_FORBIDDEN = [
   'Core capabilities',
   'Prefer Chinese',
   'Answering style',
+  'VP soul',
+  'VP 灵魂',
+  'VP 执行回合',
+  '其他 VP',
+  'session member',
+  'the current session',
+  'Task Scope',
+  'Turn Scope',
+  'tool traces',
+  'inbound envelope',
+  'Prompt Shape',
+  'Prompt 结构',
 ];
 
 const STATIC_EN_PROMPT_FORBIDDEN = [
@@ -127,6 +139,19 @@ describe('worker prompt language selection', () => {
     expect(prompt).not.toContain('Prefer Chinese');
     expect(prompt).not.toContain('### 人物特点');
     expect(prompt).not.toContain('### Traits');
+    expect(prompt).not.toContain('VP soul');
+    expect(prompt).not.toContain('VP 灵魂');
+    expect(prompt).not.toContain('session member');
+    expect(prompt).not.toContain('Task Scope');
+    expect(prompt).not.toContain('Turn Scope');
+    expect(prompt).not.toContain('tool traces');
+    expect(prompt).not.toContain('inbound envelope');
+    expect(prompt).not.toContain('Prompt 结构');
+    expect(prompt).toContain('# 提示词结构（执行者）');
+    expect(prompt).toContain('会话成员的灵魂，以及用户、当前会话、当前会话成员');
+    expect(prompt).toContain('当前任务的摘要');
+    expect(prompt).toContain('工具调用轨迹');
+    expect(prompt).toContain('入站转交消息');
   });
 
   it('does not render legacy stock fallback labels for English-only stock roles in Chinese', () => {
@@ -404,7 +429,7 @@ describe('worker prompt language selection', () => {
       persona: vp.persona,
     };
     const common = {
-      includeShape: false,
+      includeShape: true,
       toolNames: ['FileRead'],
       vpPersona,
       activeScope: {
@@ -471,7 +496,8 @@ describe('worker prompt language selection', () => {
     const en = renderDreamPrompt('triagePass1', vars, { language: 'en' });
 
     expect(zh).toContain('语言要求');
-    expect(zh).toContain('最近一段 session 对话');
+    expect(zh).toContain('最近一段会话对话');
+    expect(zh).not.toContain('最近一段 session 对话');
     expect(zh).not.toContain('recent session conversation');
     expect(zh).not.toContain('Yeaft AI companion');
     expect(en).toContain('Language requirement');

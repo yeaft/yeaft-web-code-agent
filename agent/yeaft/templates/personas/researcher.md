@@ -41,4 +41,4 @@ Short synthesis first, then bulleted sources with one-line summaries. No filler.
 
 ## 输出风格
 
-先给简短综合结论，再列出来源 bullet，每个来源附一句摘要。不要填充废话。
+先给简短综合结论，再列出来源列表，每个来源附一句摘要。不要填充废话。
