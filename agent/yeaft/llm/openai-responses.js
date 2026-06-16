@@ -38,6 +38,7 @@ import {
 import {
   normalizeEffort,
   getThinkingCapability,
+  mapEffortToOpenAIReasoning,
 } from '../models.js';
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
@@ -52,15 +53,13 @@ function thinkingV1Enabled() {
 }
 
 /**
- * Translate a normalised effort ('minimal'|'low'|'medium'|'high'|'max') into the value
+ * Translate a normalised effort ('minimal'|'low'|'medium'|'high'|'xhigh'|'max') into the value
  * accepted by the OpenAI Responses `reasoning.effort` field. Responses today
- * accepts 'minimal'|'low'|'medium'|'high' — 'max' degrades to 'high' to match the
- * registry's normaliseEffort downgrade rule.
+ * accepts 'minimal'|'low'|'medium'|'high'. Unsupported Anthropic-only
+ * adaptive efforts must be dropped, not downgraded.
  */
 function effortForResponses(effort) {
-  if (!effort) return null;
-  if (effort === 'max') return 'high';
-  return effort;
+  return mapEffortToOpenAIReasoning(effort);
 }
 
 export class OpenAIResponsesAdapter extends LLMAdapter {
@@ -230,7 +229,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
   // ─── Streaming ──────────────────────────────────────────
 
   /**
-   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'max', effortSource?: 'user'|'auto', extraBody?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void }} params
+   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'minimal'|'low'|'medium'|'high'|'xhigh'|'max', effortSource?: 'user'|'auto', extraBody?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void }} params
    *
    * NOTE on `extraBody`: any keys you spread here are merged verbatim into
    * the wire body and — because the verbatim debug feature is intentionally

@@ -37,12 +37,14 @@ describe('Yeaft model effort metadata and config', () => {
     expect(getModelEffortOptions('gpt-5.5')).toEqual(['minimal', 'low', 'medium', 'high']);
     expect(getModelEffortOptions('github-copilot/gpt-5.4')).toEqual(['minimal', 'low', 'medium', 'high']);
     expect(getModelEffortOptions('github-copilot/gpt-5.5')).toEqual(['minimal', 'low', 'medium', 'high']);
-    expect(getModelEffortOptions('github-copilot/claude-opus-4.8')).toEqual(['low', 'medium', 'high']);
+    expect(getModelEffortOptions('github-copilot/claude-opus-4.8')).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(getModelEffortOptions('claude-opus-4-7')).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(getModelEffortOptions('claude-sonnet-4-20250514')).toEqual(['low', 'medium', 'high']);
     expect(getModelEffortOptions('gpt-4o')).toEqual([]);
 
     expect(getThinkingCapability('github-copilot/gpt-5.4').thinkingProtocol).toBe('openai-reasoning');
     expect(getThinkingCapability('github-copilot/gpt-5.5').thinkingProtocol).toBe('openai-reasoning');
-    expect(getThinkingCapability('github-copilot/claude-opus-4.8').thinkingProtocol).toBe('anthropic');
+    expect(getThinkingCapability('github-copilot/claude-opus-4.8').thinkingProtocol).toBe('anthropic-adaptive');
   });
 
   it('adds effort metadata to available models from configured providers', () => {
@@ -60,7 +62,8 @@ describe('Yeaft model effort metadata and config', () => {
       });
       expect(byId['claude-opus-4.8']).toMatchObject({
         ref: 'github-copilot/claude-opus-4.8',
-        effortOptions: ['low', 'medium', 'high'],
+        effortOptions: ['low', 'medium', 'high', 'xhigh', 'max'],
+        effortProtocol: 'anthropic-adaptive',
       });
       expect(modelRefMatchesAvailable(byId['gpt-5.4'], 'github-copilot/gpt-5.4')).toBe(true);
       expect(modelRefMatchesAvailable(byId['claude-opus-4.8'], 'github-copilot/claude-opus-4.8')).toBe(true);
@@ -83,6 +86,7 @@ describe('Yeaft model effort metadata and config', () => {
       expect(resolved.primaryModel).toBe('github-copilot/gpt-5.4');
       expect(resolved.modelEffort).toBe('minimal');
 
+      expect(saveSessionConfig(dir, 'sess_effort', { modelEffort: 'xhigh' })).toEqual({ model: 'github-copilot/gpt-5.4', modelEffort: 'xhigh' });
       expect(saveSessionConfig(dir, 'sess_effort', { modelEffort: null })).toEqual({ model: 'github-copilot/gpt-5.4' });
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -106,6 +110,12 @@ describe('Yeaft adapter effort request mapping', () => {
       .toBeUndefined();
     expect(filterEffortForModel({ model: 'github-copilot/claude-opus-4.8', effort: 'minimal', effortSource: 'user' }).effort)
       .toBeUndefined();
+    expect(filterEffortForModel({ model: 'gpt-5', effort: 'max', effortSource: 'user' }).effort)
+      .toBeUndefined();
+    expect(filterEffortForModel({ model: 'gpt-5', effort: 'xhigh', effortSource: 'user' }).effort)
+      .toBeUndefined();
+    expect(filterEffortForModel({ model: 'github-copilot/claude-opus-4.8', effort: 'xhigh', effortSource: 'user' }))
+      .toMatchObject({ effort: 'xhigh', effortSource: 'user' });
   });
 
   it('maps OpenAI effort to Responses reasoning.effort', async () => {
@@ -158,7 +168,7 @@ describe('Yeaft adapter effort request mapping', () => {
   });
 
 
-  it('maps Anthropic effort to extended thinking budget', async () => {
+  it('maps Anthropic adaptive effort to output_config.effort', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
       content: [{ type: 'text', text: 'ok' }],
       usage: {},
@@ -170,12 +180,37 @@ describe('Yeaft adapter effort request mapping', () => {
       system: 's',
       messages: [{ role: 'user', content: 'hi' }],
       maxTokens: 1000,
+      effort: 'max',
+      effortSource: 'user',
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.thinking).toEqual({ type: 'adaptive' });
+    expect(body.output_config).toEqual({ effort: 'max' });
+    expect(body.thinking.budget_tokens).toBeUndefined();
+    expect(body.max_tokens).toBe(1000);
+  });
+
+
+  it('keeps manual Anthropic thinking budgets for older thinking models', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
+      content: [{ type: 'text', text: 'ok' }],
+      usage: {},
+    }));
+    const adapter = new AnthropicAdapter({ apiKey: 'test', baseUrl: 'https://api.test' });
+
+    await adapter.call({
+      model: 'claude-sonnet-4-20250514',
+      system: 's',
+      messages: [{ role: 'user', content: 'hi' }],
+      maxTokens: 1000,
       effort: 'medium',
       effortSource: 'user',
     });
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 8192 });
+    expect(body.output_config).toBeUndefined();
     expect(body.max_tokens).toBeGreaterThan(8192);
   });
 });

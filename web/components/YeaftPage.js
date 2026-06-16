@@ -110,8 +110,8 @@ export default {
               </div>
               <div v-if="store.yeaftAvailableModels.length > 1" class="yeaft-model-dropdown-separator"></div>
               <div v-if="topbarEffortOptions.length" class="yeaft-model-effort-panel">
-                <div class="yeaft-model-effort-title">{{ $t('yeaft.modelMenu.effort') }}</div>
-                <div class="yeaft-model-effort-options" role="group" :aria-label="$t('yeaft.modelMenu.effort')">
+                <div class="yeaft-model-effort-title">{{ topbarEffortTitle }}</div>
+                <div class="yeaft-model-effort-options" role="group" :aria-label="topbarEffortTitle">
                   <button
                     v-for="effort in topbarEffortOptions"
                     :key="effort"
@@ -670,6 +670,13 @@ export default {
       return Array.isArray(options) ? options.filter(Boolean) : [];
     });
 
+    const topbarEffortTitle = Vue.computed(() => {
+      const protocol = topbarModelMeta.value?.effortProtocol;
+      if (protocol === 'anthropic-adaptive') return $t('yeaft.modelMenu.effort.anthropicAdaptive');
+      if (protocol === 'openai-reasoning') return $t('yeaft.modelMenu.effort.openaiReasoning');
+      return $t('yeaft.modelMenu.effort');
+    });
+
     const topbarEffort = Vue.computed(() => {
       const groupEffort = topbarGroup.value?.config?.modelEffort;
       return typeof groupEffort === 'string' && groupEffort ? groupEffort : (store.yeaftModelEffort || 'medium');
@@ -1094,6 +1101,7 @@ export default {
       topbarModel,
       topbarEffort,
       topbarEffortOptions,
+      topbarEffortTitle,
       modelOptionRef,
       modelOptionMatchesRef,
       showSettings,
