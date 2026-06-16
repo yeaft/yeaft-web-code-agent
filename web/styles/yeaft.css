@@ -207,6 +207,21 @@
   border-color: var(--border-color);
 }
 
+.yeaft-topbar-title-group {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.yeaft-topbar-session-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .yeaft-llm-config-modal {
   width: min(960px, 92vw);
   height: min(720px, 86vh);

@@ -115,6 +115,10 @@ export default {
             </div>
           </div>
 
+          <div class="yeaft-topbar-title-group" :title="topbarSessionTitle || topbarGroup?.id || ''">
+            <div class="yeaft-topbar-session-title">{{ topbarSessionTitle || $t('yeaft.session.create.untitled') }}</div>
+          </div>
+
           <div class="yeaft-topbar-right">
             <!-- VP list show/hide toggle. Hidden under 1024 px because the pane itself is gated by the same breakpoint. -->
             <button
@@ -616,6 +620,22 @@ export default {
       return gs.sessions['grp_default'] || null;
     });
 
+    const topbarSessionTitle = Vue.computed(() => {
+      const g = topbarGroup.value || {};
+      const id = typeof g.id === 'string' ? g.id.trim() : '';
+      const candidates = [g.title, g.name, g.config?.title, g.config?.name];
+      for (const raw of candidates) {
+        const value = typeof raw === 'string' ? raw.trim() : '';
+        if (!value) continue;
+        if (id && value === id) continue;
+        if (/^(sessions?|groups?)\//i.test(value)) continue;
+        if (/^session_[A-Za-z0-9_-]+$/.test(value)) continue;
+        if (g.workDir && value === g.workDir) continue;
+        return value;
+      }
+      return '';
+    });
+
     const topbarModel = Vue.computed(() => {
       const groupModel = topbarGroup.value?.config?.model;
       return typeof groupModel === 'string' && groupModel ? groupModel : (store.yeaftModel || '');
@@ -1016,6 +1036,8 @@ export default {
       sidebarCollapsed,
       debugMode,
       modelDropdownOpen,
+      topbarGroup,
+      topbarSessionTitle,
       topbarModel,
       showSettings,
       showLlmConfig,
