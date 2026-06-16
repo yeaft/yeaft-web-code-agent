@@ -20,6 +20,7 @@ import {
   normalizeEffort,
   thinkingBudgetForEffort,
   getThinkingCapability,
+  getModelEffortOptions,
 } from '../models.js';
 
 /**
@@ -28,6 +29,28 @@ import {
  */
 function thinkingV1Enabled() {
   return process.env.YEAFT_THINKING_V1 === '1';
+}
+
+function applyAnthropicThinking(body, model, effort) {
+  const cap = getThinkingCapability(model);
+  if (!cap.supportsThinking) return;
+  if (!getModelEffortOptions(model).includes(effort)) return;
+
+  if (cap.thinkingProtocol === 'anthropic-adaptive') {
+    body.thinking = { type: 'adaptive' };
+    body.output_config = { ...(body.output_config || {}), effort };
+    return;
+  }
+
+  if (cap.thinkingProtocol === 'anthropic') {
+    const budget = thinkingBudgetForEffort(model, effort);
+    if (budget && budget > 0) {
+      // Anthropic manual thinking requires max_tokens > budget_tokens.
+      const minMax = budget + 1024;
+      if (body.max_tokens < minMax) body.max_tokens = minMax;
+      body.thinking = { type: 'enabled', budget_tokens: budget };
+    }
+  }
 }
 
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
@@ -156,7 +179,7 @@ export class AnthropicAdapter extends LLMAdapter {
   }
 
   /**
-   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'max', effortSource?: 'user'|'auto', signal?: AbortSignal }} params
+   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'xhigh'|'max', effortSource?: 'user'|'auto', signal?: AbortSignal }} params
    * @returns {AsyncGenerator<import('./adapter.js').StreamEvent>}
    */
   async *stream({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, signal, onRawExchange }) {
@@ -170,24 +193,12 @@ export class AnthropicAdapter extends LLMAdapter {
       stream: true,
     };
 
-    // task-327a: inject extended-thinking only when feature flag on, effort is
-    // a valid value, and the model's registry entry says it supports the
-    // 'anthropic' thinking protocol. Unknown models or non-thinking models
-    // silently drop the parameter — red line: never error on unsupported.
+    // Inject Anthropic thinking only for model-supported effort values.
+    // Adaptive Claude 4.7/4.8 uses output_config.effort; older manual-thinking
+    // models use budget_tokens. Unsupported combinations silently drop effort.
     const normEffort = normalizeEffort(effort);
     if ((thinkingV1Enabled() || effortSource === 'user') && normEffort) {
-      const cap = getThinkingCapability(model);
-      if (cap.supportsThinking && cap.thinkingProtocol === 'anthropic') {
-        const budget = thinkingBudgetForEffort(model, normEffort);
-        if (budget && budget > 0) {
-          // Anthropic requires max_tokens > budget_tokens. Widen max_tokens
-          // if the caller's value is too small to fit the thinking budget
-          // plus a sane reply margin (1024 tokens).
-          const minMax = budget + 1024;
-          if (body.max_tokens < minMax) body.max_tokens = minMax;
-          body.thinking = { type: 'enabled', budget_tokens: budget };
-        }
-      }
+      applyAnthropicThinking(body, model, normEffort);
     }
 
     const translatedTools = this.#translateTools(tools);
@@ -440,15 +451,7 @@ export class AnthropicAdapter extends LLMAdapter {
     // task-327c: mirror stream()'s thinking injection for side queries.
     const normEffort = normalizeEffort(effort);
     if ((thinkingV1Enabled() || effortSource === 'user') && normEffort) {
-      const cap = getThinkingCapability(model);
-      if (cap.supportsThinking && cap.thinkingProtocol === 'anthropic') {
-        const budget = thinkingBudgetForEffort(model, normEffort);
-        if (budget && budget > 0) {
-          const minMax = budget + 1024;
-          if (body.max_tokens < minMax) body.max_tokens = minMax;
-          body.thinking = { type: 'enabled', budget_tokens: budget };
-        }
-      }
+      applyAnthropicThinking(body, model, normEffort);
     }
 
     const response = await fetch(`${this.#baseUrl}/v1/messages`, {

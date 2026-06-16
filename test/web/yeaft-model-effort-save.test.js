@@ -40,14 +40,14 @@ function mkStore() {
 }
 
 describe('Yeaft model effort save flow', () => {
-  it('saves minimal effort for session-scoped model selection', async () => {
+  it('saves explicit effort for session-scoped model selection', async () => {
     const store = mkStore();
 
     const res = await actions.switchYeaftModel.call(
       store,
-      'github-copilot/gpt-5.5',
+      'github-copilot/claude-opus-4.8',
       'session-a',
-      'minimal'
+      'max'
     );
 
     expect(res).toEqual({ ok: true });
@@ -55,11 +55,11 @@ describe('Yeaft model effort save flow', () => {
       op: 'update_config',
       data: {
         sessionId: 'session-a',
-        config: { model: 'github-copilot/gpt-5.5', modelEffort: 'minimal' },
+        config: { model: 'github-copilot/claude-opus-4.8', modelEffort: 'max' },
       },
     }]);
-    expect(store.yeaftModel).toBe('github-copilot/gpt-5.5');
-    expect(store.yeaftModelEffort).toBe('minimal');
+    expect(store.yeaftModel).toBe('github-copilot/claude-opus-4.8');
+    expect(store.yeaftModelEffort).toBe('max');
   });
 
   it('sends minimal effort on the legacy non-session model switch path', async () => {

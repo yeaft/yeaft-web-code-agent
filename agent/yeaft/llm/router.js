@@ -115,7 +115,7 @@ export function filterEffortForModel(params) {
     const { effort: _drop, effortSource: _source, ...rest } = params;
     return rest;
   }
-  if (norm === 'minimal' && !getModelEffortOptions(modelId).includes('minimal')) {
+  if (!getModelEffortOptions(modelId).includes(norm)) {
     const { effort: _drop, effortSource: _source, ...rest } = params;
     return rest;
   }

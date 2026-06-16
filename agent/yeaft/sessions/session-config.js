@@ -28,7 +28,7 @@ const CONFIG_FILE = 'config.json';
 
 /** Whitelist of persisted session model-override fields. Reject everything else. */
 const ALLOWED_KEYS = new Set(['model', 'modelEffort']);
-const ALLOWED_EFFORTS = new Set(['minimal', 'low', 'medium', 'high']);
+const ALLOWED_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 
 export class SessionConfigError extends Error {
   constructor(code, message) {
@@ -101,7 +101,7 @@ export function validateSessionConfig(cfg) {
   }
   if ('modelEffort' in cfg && cfg.modelEffort !== null && cfg.modelEffort !== undefined && cfg.modelEffort !== '') {
     if (typeof cfg.modelEffort !== 'string' || !ALLOWED_EFFORTS.has(cfg.modelEffort.trim())) {
-      throw new SessionConfigError('invalid_model_effort', 'modelEffort must be minimal, low, medium, or high');
+      throw new SessionConfigError('invalid_model_effort', 'modelEffort must be minimal, low, medium, high, xhigh, or max');
     }
   }
 }

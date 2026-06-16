@@ -31,9 +31,10 @@ import { lookupModelLimitSync } from './llm/models-dev.js';
  * @property {string} baseUrl — Official API endpoint base URL
  * @property {string} displayName — Human-readable model name
  * @property {boolean} [supportsThinking] — task-327a: model supports thinking/reasoning effort.
- * @property {'anthropic' | 'openai-reasoning' | 'none'} [thinkingProtocol] — task-327a:
+ * @property {'anthropic' | 'anthropic-adaptive' | 'openai-reasoning' | 'none'} [thinkingProtocol] — task-327a:
  *   'anthropic' → thinking:{type:'enabled', budget_tokens:N}
- *   'openai-reasoning' → reasoning:{effort:'low'|'medium'|'high'}
+ *   'anthropic-adaptive' → thinking:{type:'adaptive'} + output_config:{effort}
+ *   'openai-reasoning' → reasoning:{effort:'minimal'|'low'|'medium'|'high'}
  *   'none' (default) → parameter silently dropped by router
  * @property {'low' | 'medium' | 'high' | 'max' | null} [defaultEffort] — task-327a: adapter-level default
  *   when caller doesn't specify effort (null = no default / decision-tree decides).
@@ -73,8 +74,9 @@ export const MODEL_REGISTRY = new Map([
     baseUrl: 'https://api.anthropic.com',
     displayName: 'Claude Opus 4.8',
     supportsThinking: true,
-    thinkingProtocol: 'anthropic',
-    defaultEffort: null,
+    thinkingProtocol: 'anthropic-adaptive',
+    defaultEffort: 'high',
+    effortOptions: ['low', 'medium', 'high', 'xhigh', 'max'],
     maxBudgetTokens: 64000,
   }],
   ['claude-opus-4.8', {
@@ -83,8 +85,9 @@ export const MODEL_REGISTRY = new Map([
     baseUrl: 'https://api.anthropic.com',
     displayName: 'Claude Opus 4.8',
     supportsThinking: true,
-    thinkingProtocol: 'anthropic',
-    defaultEffort: null,
+    thinkingProtocol: 'anthropic-adaptive',
+    defaultEffort: 'high',
+    effortOptions: ['low', 'medium', 'high', 'xhigh', 'max'],
     maxBudgetTokens: 64000,
   }],
   ['claude-haiku-3-20250414', {
@@ -383,7 +386,7 @@ export function parseModelRef(ref) {
 
 /**
  * Valid effort levels accepted by Yeaft adapters.
- * @typedef {'minimal' | 'low' | 'medium' | 'high' | 'max'} Effort
+ * @typedef {'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'} Effort
  */
 
 /**
@@ -417,15 +420,14 @@ export function mapEffortToOpenAIReasoning(effort) {
     case 'low': return 'low';
     case 'medium': return 'medium';
     case 'high': return 'high';
-    // OpenAI doesn't support 'max'; degrade to 'high'. Engine may emit a
-    // debug line noting the downgrade — adapter level stays silent.
-    case 'max': return 'high';
     default: return null;
   }
 }
 
 export const OPENAI_REASONING_EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'high'];
-export const ANTHROPIC_EFFORT_OPTIONS = ['low', 'medium', 'high'];
+export const ANTHROPIC_MANUAL_EFFORT_OPTIONS = ['low', 'medium', 'high'];
+export const ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh', 'max'];
+export const ANTHROPIC_ADAPTIVE_MAX_EFFORT_OPTIONS = ['low', 'medium', 'high', 'max'];
 
 function inferThinkingCapability(model) {
   const id = parseModelRef(model).modelId.toLowerCase();
@@ -435,9 +437,32 @@ function inferThinkingCapability(model) {
     return { supportsThinking: true, thinkingProtocol: 'openai-reasoning', defaultEffort: null, maxBudgetTokens: null };
   }
 
+  // Claude Opus 4.7/4.8 expose the full adaptive effort set, including xhigh.
+  if (/^claude-opus-4[-.]?(7|8)($|-|\.)/.test(id)) {
+    return {
+      supportsThinking: true,
+      thinkingProtocol: 'anthropic-adaptive',
+      defaultEffort: 'high',
+      maxBudgetTokens: null,
+      effortOptions: ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS,
+    };
+  }
+
+  // Claude Opus 4.6 and Sonnet 4.6 use adaptive effort too, but official
+  // Anthropic docs do not list xhigh for them. Keep max, reject xhigh.
+  if (/^claude-(opus|sonnet)-4[-.]?6($|-|\.)/.test(id)) {
+    return {
+      supportsThinking: true,
+      thinkingProtocol: 'anthropic-adaptive',
+      defaultEffort: 'high',
+      maxBudgetTokens: null,
+      effortOptions: ANTHROPIC_ADAPTIVE_MAX_EFFORT_OPTIONS,
+    };
+  }
+
   // Anthropic extended thinking is available on Claude 3.7+ and Claude 4.x.
   // Be conservative: older Claude 3/3.5/Haiku entries stay unsupported unless
-  // explicitly listed in the registry.
+  // explicitly listed in the registry. Older Claude 4.x entries keep manual budgets.
   if (/^claude-/.test(id) && (/(^|-)3-7($|-|\.)/.test(id) || /(^|-)4($|-|\.)/.test(id))) {
     const maxBudgetTokens = id.includes('opus') ? 64000 : 32000;
     return { supportsThinking: true, thinkingProtocol: 'anthropic', defaultEffort: null, maxBudgetTokens };
@@ -474,7 +499,7 @@ export function thinkingBudgetForEffort(model, effort) {
  * models (red line: never error on unsupported).
  *
  * @param {string} model
- * @returns {{ supportsThinking: boolean, thinkingProtocol: 'anthropic' | 'openai-reasoning' | 'none', defaultEffort: Effort | null, maxBudgetTokens: number | null }}
+ * @returns {{ supportsThinking: boolean, thinkingProtocol: 'anthropic' | 'anthropic-adaptive' | 'openai-reasoning' | 'none', defaultEffort: Effort | null, maxBudgetTokens: number | null, effortOptions: Effort[] }}
  */
 export function getThinkingCapability(model) {
   const info = MODEL_REGISTRY.get(model);
@@ -486,6 +511,7 @@ export function getThinkingCapability(model) {
       thinkingProtocol: 'none',
       defaultEffort: null,
       maxBudgetTokens: null,
+      effortOptions: [],
     };
   }
   return {
@@ -493,14 +519,17 @@ export function getThinkingCapability(model) {
     thinkingProtocol: info?.thinkingProtocol || inferred?.thinkingProtocol || 'none',
     defaultEffort: info?.defaultEffort ?? inferred?.defaultEffort ?? null,
     maxBudgetTokens: info?.maxBudgetTokens ?? inferred?.maxBudgetTokens ?? null,
+    effortOptions: (info?.effortOptions || inferred?.effortOptions || null),
   };
 }
 
 export function getModelEffortOptions(model) {
   const cap = getThinkingCapability(model);
   if (!cap.supportsThinking || cap.thinkingProtocol === 'none') return [];
+  if (Array.isArray(cap.effortOptions)) return cap.effortOptions.slice();
   if (cap.thinkingProtocol === 'openai-reasoning') return OPENAI_REASONING_EFFORT_OPTIONS.slice();
-  if (cap.thinkingProtocol === 'anthropic') return ANTHROPIC_EFFORT_OPTIONS.slice();
+  if (cap.thinkingProtocol === 'anthropic-adaptive') return ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS.slice();
+  if (cap.thinkingProtocol === 'anthropic') return ANTHROPIC_MANUAL_EFFORT_OPTIONS.slice();
   return [];
 }
 
@@ -515,7 +544,7 @@ export function modelSupportsEffort(model) {
  * @returns {Effort | null}
  */
 export function normalizeEffort(effort) {
-  if (effort === 'minimal' || effort === 'low' || effort === 'medium' || effort === 'high' || effort === 'max') {
+  if (effort === 'minimal' || effort === 'low' || effort === 'medium' || effort === 'high' || effort === 'xhigh' || effort === 'max') {
     return effort;
   }
   return null;
