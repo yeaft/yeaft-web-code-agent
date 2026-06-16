@@ -317,6 +317,9 @@ export default {
     // reaching into the chat store so the helper signature stays clean.
     const vpStore = Pinia.useVpStore();
 
+    const inst = Vue.getCurrentInstance();
+    const $t = (inst && inst.appContext.config.globalProperties.$t) || ((key) => key);
+
     const sidebarCollapsed = Vue.ref(false);
     // task-yeaft-group-ui-cleanup: debug mode now starts OFF (was always
     // visible as a "tasks memory / coming soon" placeholder). The right
@@ -712,11 +715,11 @@ export default {
     const dreamLastRunRelative = Vue.computed(() => formatRelativeFromNow(dreamLastRunAt.value));
 
     const dreamRunButtonTitle = Vue.computed(() => {
-      const title = store.t?.('yeaft.dream.runNow') || 'Run Dream';
+      const title = $t('yeaft.dream.runNow');
       if (dreamLastRunRelative.value) {
-        return `${title}\n${store.t?.('yeaft.dream.lastRun', { ago: dreamLastRunRelative.value }) || `Last run ${dreamLastRunRelative.value} ago`}`;
+        return `${title}\n${$t('yeaft.dream.lastRun', { ago: dreamLastRunRelative.value })}`;
       }
-      return `${title}\n${store.t?.('yeaft.dream.lastRunNever') || 'Never run'}`;
+      return `${title}\n${$t('yeaft.dream.lastRunNever')}`;
     });
 
     const onDreamTriggerClick = () => {
