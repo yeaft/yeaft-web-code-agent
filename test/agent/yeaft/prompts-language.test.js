@@ -28,6 +28,15 @@ function listMarkdownFiles(dir) {
   return out;
 }
 
+function langSection(source, lang) {
+  const marker = `<!-- lang:${lang} -->`;
+  const start = source.indexOf(marker);
+  if (start === -1) return '';
+  const bodyStart = start + marker.length;
+  const next = source.indexOf('<!-- lang:', bodyStart);
+  return source.slice(bodyStart, next === -1 ? undefined : next);
+}
+
 function workerPrompt(language) {
   return buildWorkerPrompt({
     language,
@@ -483,6 +492,20 @@ describe('worker prompt language selection', () => {
       const source = readFileSync(file, 'utf-8');
       expect(source, file).toContain('<!-- lang:en -->');
       expect(source, file).toContain('<!-- lang:zh -->');
+    }
+  });
+
+  it('keeps English prompt template sections free of Chinese prose', () => {
+    const roots = [
+      join(process.cwd(), 'agent/yeaft/templates'),
+      join(process.cwd(), 'agent/yeaft/dream/prompts'),
+    ];
+    const files = roots.flatMap(root => listMarkdownFiles(root));
+
+    for (const file of files) {
+      const source = readFileSync(file, 'utf-8');
+      const en = langSection(source, 'en');
+      expect(en, file).not.toMatch(/[\u4e00-\u9fff]/);
     }
   });
 

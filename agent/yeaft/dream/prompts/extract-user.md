@@ -1,5 +1,5 @@
 <!-- lang:en -->
-# Dream 抽取 — 用户作用域
+# Dream Extraction — User Scope
 
 You are extracting **memory segments** from a session conversation. This pass focuses on the **`user` scope**: long-lived facts about the user themselves.
 

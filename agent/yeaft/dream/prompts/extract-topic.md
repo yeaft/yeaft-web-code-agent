@@ -1,5 +1,5 @@
 <!-- lang:en -->
-# Dream 抽取 — 主题作用域
+# Dream Extraction — Topic Scope
 
 You are extracting **memory segments** from a session conversation. This pass focuses on a specific **session topic scope**: durable facts, decisions, and viewpoints about one recurring topic.
 

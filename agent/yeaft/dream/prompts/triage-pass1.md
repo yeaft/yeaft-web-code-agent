@@ -5,7 +5,7 @@ You are deciding whether a recent session conversation carries:
 
 Do NOT mention vp/, session/, feature/, or topic/ scopes — those are handled by hard rules.
 
-会话：{{sessionId}}
+Session: {{sessionId}}
 
 Existing topic scopes (path — summary):
 {{topicSummaries}}

@@ -7,7 +7,7 @@ Rules:
 
 Description: {{description}}
 
-已有主题：
+Existing topics:
 {{existingTopics}}
 
 Reply with strict JSON, exactly one of:

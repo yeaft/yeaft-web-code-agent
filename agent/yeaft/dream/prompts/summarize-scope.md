@@ -1,5 +1,5 @@
 <!-- lang:en -->
-# Dream 摘要 — 单作用域压缩
+# Dream Summary — Single-Scope Compression
 
 You are summarizing the **memory segments** of a single scope into a short, dense prose summary. This is NOT extraction — the segments already exist. Your job is to compress them into a paragraph the session can keep resident in working memory.
 
@@ -20,7 +20,7 @@ The target scope is `{{scope}}` and contains `{{segmentCount}}` segments listed 
 - One paragraph for small scopes; two or three compact paragraphs for larger scopes.
 - Prefer dense prose over bullet lists unless bullets are clearly more compact.
 
-记忆段：
+Memory segments:
 {{segments}}
 
 Return only the summary text.
@@ -47,7 +47,7 @@ Return only the summary text.
 - 小作用域用一段；较大作用域用两到三个紧凑段落。
 - 除非列表明显更紧凑，否则优先使用密集自然段。
 
-记忆段：
+Memory segments:
 {{segments}}
 
 只返回摘要文本。

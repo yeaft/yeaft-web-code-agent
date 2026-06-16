@@ -1,5 +1,5 @@
 <!-- lang:en -->
-# Dream 抽取 — 会话作用域
+# Dream Extraction — Session Scope
 
 You are extracting **memory segments** from a session conversation. This pass focuses on a specific **`sessions/<id>` scope**: durable facts about one collaboration session and its shared context.
 

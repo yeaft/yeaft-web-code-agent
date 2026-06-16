@@ -1,5 +1,5 @@
 <!-- lang:en -->
-# Dream 抽取 — VP 作用域
+# Dream Extraction — VP Scope
 
 You are extracting **memory segments** from a session conversation. This pass focuses on a specific **session VP scope**: durable facts about one Virtual Person in this session.
 

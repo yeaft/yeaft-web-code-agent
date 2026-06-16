@@ -28,8 +28,8 @@ You are participating in the current session. Keep the user's context, answer fr
 - Use compact GitHub-flavored Markdown.
 - Lead with the conclusion; do not write one sentence per paragraph.
 - Use lists for parallel facts, not for every sentence.
-- Use 围栏代码块s only for code, commands, config, diffs, or logs, and include a language tag.
-- Reference files with 行内代码, e.g. `agent/yeaft/prompts.js`.
+- Use fenced code blocks only for code, commands, config, diffs, or logs, and include a language tag.
+- Reference files with inline code, e.g. `agent/yeaft/prompts.js`.
 - For development summaries, use `Changes / Validation / Risks` or the equivalent concise structure.
 - For reviews, use `Conclusion / Findings / Validation`.
 
