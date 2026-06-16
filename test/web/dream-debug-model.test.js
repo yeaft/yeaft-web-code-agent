@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { buildDreamDebugItems, parseDreamMemorySegments } from '../../web/components/dream-debug-model.js';
+import { buildDreamDebugItems, filterDreamDebugItems, parseDreamMemorySegments, selectDreamDebugItem } from '../../web/components/dream-debug-model.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -81,9 +81,106 @@ describe('Dream debug model', () => {
     const css = readFileSync(resolve(repoRoot, 'web/styles/yeaft.css'), 'utf8');
 
     expect(css).toContain('.yeaft-debug-dream-shell');
-    expect(css).toMatch(/\.yeaft-debug-dream-panel\s*\{[\s\S]*?overflow:\s*auto;/);
-    expect(css).toMatch(/\.yeaft-debug-dream-shell\s*\{[\s\S]*?width:\s*max-content;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-panel\s*\{[\s\S]*?overflow:\s*hidden;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-shell\s*\{[\s\S]*?grid-template-columns:\s*minmax\(220px, 32%\) minmax\(0, 1fr\);/);
+    expect(css).toMatch(/\.yeaft-debug-dream-shell\s*\{[\s\S]*?width:\s*100%;/);
     expect(css).toMatch(/\.yeaft-debug-dream-list,[\s\S]*?\.yeaft-debug-dream-segments\s*\{[\s\S]*?overflow:\s*auto;/);
     expect(css).toMatch(/\.yeaft-debug-scroll-pre\s*\{[\s\S]*?overflow:\s*auto;/);
   });
+
+  it('keeps ids out of list subtitle and shows search no-results empty state in the component template', () => {
+    const component = readFileSync(resolve(repoRoot, 'web/components/YeaftDebugPanel.js'), 'utf8');
+
+    expect(component).toContain("item.subtitle || $t('yeaft.dreamDebug.noSummary')");
+    expect(component).not.toContain("item.summaryPreview || item.scope");
+    expect(component).toContain("allDreamItems.length ? $t('yeaft.dreamDebug.noSearchResults') : $t('yeaft.dreamDebug.empty')");
+  });
+
+  it('uses readable session titles while keeping ids as metadata', () => {
+    const items = buildDreamDebugItems({
+      snapshots: {
+        'sessions/session_internal_123': {
+          sessionId: 'session_internal_123',
+          hasOutput: true,
+          summaryText: '# Raw fallback title',
+          memoryText: 'memory',
+        },
+      },
+      sessionTitles: {
+        session_internal_123: 'Customer onboarding debug',
+      },
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0].title).toBe('Customer onboarding debug');
+    expect(items[0].sessionId).toBe('session_internal_123');
+    expect(items[0].scope).toBe('sessions/session_internal_123');
+    expect(items[0].title).not.toContain('session_internal_123');
+  });
+
+  it('does not use scope or session id as the visible list subtitle', () => {
+    const items = buildDreamDebugItems({
+      latest: {
+        'sessions/session_without_summary': { status: 'never-ran', startedAt: '2026-06-02T10:00:00Z' },
+      },
+      sessionTitles: {
+        session_without_summary: 'Readable session',
+      },
+    });
+
+    expect(items[0].title).toBe('Readable session');
+    expect(items[0].subtitle).toBe('');
+    expect(items[0].subtitle).not.toContain('session_without_summary');
+    expect(items[0].subtitle).not.toContain('sessions/session_without_summary');
+  });
+
+  it('falls back to a summary heading only when no session title is available', () => {
+    const items = buildDreamDebugItems({
+      snapshots: {
+        'sessions/session_missing_title': {
+          sessionId: 'session_missing_title',
+          hasOutput: true,
+          summaryText: '## Memory maintenance notes\nMore text',
+        },
+      },
+    });
+
+    expect(items[0].title).toBe('Memory maintenance notes');
+  });
+
+  it('filters dream items by title, id, and summary preview', () => {
+    const items = buildDreamDebugItems({
+      snapshots: {
+        'sessions/session_a': { sessionId: 'session_a', summaryText: 'Alpha summary' },
+        'sessions/session_b': { sessionId: 'session_b', summaryText: 'Dreams about tool reliability' },
+      },
+      sessionTitles: {
+        session_a: 'Roadmap planning',
+        session_b: 'Operations review',
+      },
+    });
+
+    expect(filterDreamDebugItems(items, 'roadmap').map((item) => item.sessionId)).toEqual(['session_a']);
+    expect(filterDreamDebugItems(items, 'session_b').map((item) => item.title)).toEqual(['Operations review']);
+    expect(filterDreamDebugItems(items, 'tool reliability').map((item) => item.sessionId)).toEqual(['session_b']);
+    expect(filterDreamDebugItems(items, 'nope')).toEqual([]);
+  });
+
+  it('selects an active Dream item for the detail pane and falls back to the first filtered item', () => {
+    const items = buildDreamDebugItems({
+      latest: {
+        'sessions/session_a': { status: 'success', finishedAt: '2026-06-02T10:00:00Z' },
+        'sessions/session_b': { status: 'success', finishedAt: '2026-06-02T11:00:00Z' },
+      },
+      sessionTitles: {
+        session_a: 'Alpha',
+        session_b: 'Beta',
+      },
+    });
+
+    expect(selectDreamDebugItem(items, 'sessions/session_a').sessionId).toBe('session_a');
+    expect(selectDreamDebugItem(items, 'missing').sessionId).toBe('session_b');
+    expect(selectDreamDebugItem([], 'sessions/session_a')).toBeNull();
+  });
+
 });

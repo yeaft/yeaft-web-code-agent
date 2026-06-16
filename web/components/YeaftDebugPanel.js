@@ -25,7 +25,7 @@
  *   - raw [copy req] / [copy res]     → JSON-stringified payload
  *   - turn   [copy turn]              → markdown summary
  */
-import { buildDreamDebugItems, previewText } from './dream-debug-model.js';
+import { buildDreamDebugItems, filterDreamDebugItems, previewText, selectDreamDebugItem } from './dream-debug-model.js';
 
 export default {
   name: 'YeaftDebugPanel',
@@ -52,6 +52,7 @@ export default {
       expandedDreamEvents: {},
       expandedDreamSegments: {},
       activeDreamItemKey: null,
+      dreamItemSearch: '',
       activeTab: 'requests', // 'toolStats' | 'dream' | 'requests'
     };
   },
@@ -110,6 +111,9 @@ export default {
   computed: {
     store() {
       return window.Pinia?.useChatStore?.() || null;
+    },
+    sessionsStore() {
+      return window.Pinia?.useSessionsStore?.() || null;
     },
     turns() {
       return (this.store && this.store.yeaftDebugTurnsForActiveSession) || [];
@@ -243,7 +247,23 @@ export default {
     dreamEventCount() {
       return this.dreamEvents.length;
     },
-    dreamItems() {
+    dreamSessionTitles() {
+      const titles = {};
+      const add = (id, value) => {
+        const title = String(value || '').trim();
+        if (id && title) titles[id] = title;
+      };
+      const sessions = this.sessionsStore?.sessions || {};
+      for (const session of Object.values(sessions)) {
+        if (!session || !session.id) continue;
+        add(session.id, session.name || session.title);
+        add(`sessions/${session.id}`, session.name || session.title);
+      }
+      const activeFilter = this.store?.yeaftActiveSessionFilter;
+      if (activeFilter) add(activeFilter, this.store?.yeaftActiveSessionName || this.store?.currentSessionTitle);
+      return titles;
+    },
+    allDreamItems() {
       const store = this.store || {};
       const eventsByScope = store.yeaftDreamEvents || {};
       const events = Object.values(eventsByScope).flatMap((list) => Array.isArray(list) ? list : []);
@@ -252,11 +272,14 @@ export default {
         snapshots: store.yeaftDreamSnapshots || {},
         promptLoads: store.yeaftDreamPromptLoads || {},
         events,
+        sessionTitles: this.dreamSessionTitles,
       });
     },
+    dreamItems() {
+      return filterDreamDebugItems(this.allDreamItems, this.dreamItemSearch);
+    },
     activeDreamItem() {
-      if (!this.dreamItems.length) return null;
-      return this.dreamItems.find((item) => item.key === this.activeDreamItemKey) || this.dreamItems[0];
+      return selectDreamDebugItem(this.dreamItems, this.activeDreamItemKey);
     },
     activeDreamRequestEvents() {
       const item = this.activeDreamItem;
@@ -870,6 +893,15 @@ export default {
       </div>
 
       <div v-else-if="activeTab === 'dream'" class="yeaft-debug-dream-panel" role="tabpanel">
+        <div class="yeaft-debug-dream-toolbar">
+          <input
+            v-model="dreamItemSearch"
+            type="search"
+            class="yeaft-debug-dream-search"
+            :placeholder="$t('yeaft.dreamDebug.searchPlaceholder')"
+          />
+          <span class="yeaft-debug-dream-count">{{ dreamItems.length }} / {{ allDreamItems.length }}</span>
+        </div>
         <div class="yeaft-debug-dream-shell" v-if="dreamItems.length > 0">
           <aside class="yeaft-debug-dream-list" :aria-label="$t('yeaft.dreamDebug.itemList')">
             <button
@@ -881,8 +913,8 @@ export default {
               @click="setActiveDreamItem(item.key)"
             >
               <span class="yeaft-debug-dream-item-main">
-                <strong>{{ item.scope }}</strong>
-                <span>{{ item.summaryPreview || $t('yeaft.dreamDebug.noSummary') }}</span>
+                <strong :title="item.scope">{{ item.title }}</strong>
+                <span>{{ item.subtitle || $t('yeaft.dreamDebug.noSummary') }}</span>
               </span>
               <span class="yeaft-debug-dream-item-meta">
                 <span :class="'status-' + item.status">{{ item.status }}</span>
@@ -895,7 +927,7 @@ export default {
           <section class="yeaft-debug-dream-detail" v-if="activeDreamItem">
             <div class="yeaft-debug-dream-detail-header">
               <div>
-                <div class="yeaft-debug-dream-detail-title">{{ activeDreamItem.scope }}</div>
+                <div class="yeaft-debug-dream-detail-title">{{ activeDreamItem.title }}</div>
                 <div class="yeaft-debug-dream-detail-subtitle">
                   {{ activeDreamItem.status }} · {{ formatTimestamp(activeDreamItem.lastAt) || '-' }}
                 </div>
@@ -908,6 +940,8 @@ export default {
                 <div class="yeaft-debug-dream-summary-grid">
                   <span>{{ $t('yeaft.dreamDebug.scope') }}</span>
                   <strong>{{ activeDreamItem.scope }}</strong>
+                  <span>{{ $t('yeaft.dreamDebug.sessionId') }}</span>
+                  <strong>{{ activeDreamItem.sessionId }}</strong>
                   <span>{{ $t('yeaft.dreamDebug.lastDream') }}</span>
                   <strong>{{ formatTimestamp(activeDreamItem.snapshot && activeDreamItem.snapshot.lastDreamAt) || formatTimestamp(activeDreamItem.lastAt) || '-' }}</strong>
                   <span>{{ $t('yeaft.dreamDebug.messagesCovered') }}</span>
@@ -989,7 +1023,7 @@ export default {
             </div>
           </section>
         </div>
-        <div v-else class="yeaft-debug-empty">{{ $t('yeaft.dreamDebug.empty') }}</div>
+        <div v-else class="yeaft-debug-empty">{{ allDreamItems.length ? $t('yeaft.dreamDebug.noSearchResults') : $t('yeaft.dreamDebug.empty') }}</div>
       </div>
 
       <div v-else-if="activeTab === 'requests' && turns.length > 0" class="yeaft-debug-turns">
