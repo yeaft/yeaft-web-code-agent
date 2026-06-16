@@ -383,7 +383,7 @@ export function parseModelRef(ref) {
 
 /**
  * Valid effort levels accepted by Yeaft adapters.
- * @typedef {'low' | 'medium' | 'high' | 'max'} Effort
+ * @typedef {'minimal' | 'low' | 'medium' | 'high' | 'max'} Effort
  */
 
 /**
@@ -408,11 +408,12 @@ export const ANTHROPIC_THINKING_BUDGETS = {
  * but the adapter MUST NOT error.
  *
  * @param {Effort} effort
- * @returns {'low' | 'medium' | 'high' | null}
+ * @returns {'minimal' | 'low' | 'medium' | 'high' | null}
  */
 export function mapEffortToOpenAIReasoning(effort) {
   if (!effort) return null;
   switch (effort) {
+    case 'minimal': return 'minimal';
     case 'low': return 'low';
     case 'medium': return 'medium';
     case 'high': return 'high';
@@ -423,7 +424,8 @@ export function mapEffortToOpenAIReasoning(effort) {
   }
 }
 
-export const MODEL_EFFORT_OPTIONS = ['low', 'medium', 'high'];
+export const OPENAI_REASONING_EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'high'];
+export const ANTHROPIC_EFFORT_OPTIONS = ['low', 'medium', 'high'];
 
 function inferThinkingCapability(model) {
   const id = parseModelRef(model).modelId.toLowerCase();
@@ -497,7 +499,9 @@ export function getThinkingCapability(model) {
 export function getModelEffortOptions(model) {
   const cap = getThinkingCapability(model);
   if (!cap.supportsThinking || cap.thinkingProtocol === 'none') return [];
-  return MODEL_EFFORT_OPTIONS.slice();
+  if (cap.thinkingProtocol === 'openai-reasoning') return OPENAI_REASONING_EFFORT_OPTIONS.slice();
+  if (cap.thinkingProtocol === 'anthropic') return ANTHROPIC_EFFORT_OPTIONS.slice();
+  return [];
 }
 
 export function modelSupportsEffort(model) {
@@ -511,7 +515,7 @@ export function modelSupportsEffort(model) {
  * @returns {Effort | null}
  */
 export function normalizeEffort(effort) {
-  if (effort === 'low' || effort === 'medium' || effort === 'high' || effort === 'max') {
+  if (effort === 'minimal' || effort === 'low' || effort === 'medium' || effort === 'high' || effort === 'max') {
     return effort;
   }
   return null;
