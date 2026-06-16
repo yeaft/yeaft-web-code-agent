@@ -15,12 +15,8 @@ export default {
           <path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/>
         </svg>
       </button>
-      <div class="chat-title-group" :title="folderPath">
+      <div class="chat-title-group" :title="headerTitle">
         <div class="chat-title">{{ headerTitle }}</div>
-        <div v-if="folderPath || (store.isSplitMode && agentName)" class="chat-title-path">
-          <span v-if="store.isSplitMode && agentName" class="chat-title-agent">{{ agentName }}</span>
-          <span class="chat-title-path-text">{{ folderPath }}</span>
-        </div>
       </div>
       <!-- Compact / Clear Status Banner -->
       <div v-if="showStatusBanner" class="compact-status-banner" :class="statusBannerClass">
@@ -444,6 +440,6 @@ export default {
       document.removeEventListener('click', closeMcpOnOutsideClick);
     });
 
-    return { store, effectiveConvId, effectiveRightPanel, isCrew, isClaudeCode, canCompact, canClear, canExpert, canMcp, headerTitle, agentName, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isRefreshing, crewInProgress, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleSubAgentPanel, runningSubagentCount };
+    return { store, effectiveConvId, effectiveRightPanel, isCrew, isClaudeCode, canCompact, canClear, canExpert, canMcp, headerTitle, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isRefreshing, crewInProgress, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleSubAgentPanel, runningSubagentCount };
   }
 };

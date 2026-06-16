@@ -1,0 +1,102 @@
+import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+
+const read = (path) => readFileSync(new URL(`../../web/${path}`, import.meta.url), 'utf8');
+
+const pageSource = read('components/YeaftPage.js');
+const sidebarSource = read('components/YeaftSidebar.js');
+const chatHeaderSource = read('components/ChatHeader.js');
+const yeaftCss = read('styles/yeaft.css');
+const sidebarCss = read('styles/sidebar.css');
+
+function topbarRightBlock() {
+  const start = pageSource.indexOf('<div class="yeaft-topbar-right">');
+  expect(start).toBeGreaterThan(-1);
+  const end = pageSource.indexOf('          </div>\n        </div>\n\n', start);
+  expect(end).toBeGreaterThan(start);
+  return pageSource.slice(start, end);
+}
+
+describe('Yeaft conversation header actions', () => {
+  it('removes the duplicate session settings action from the header', () => {
+    const block = topbarRightBlock();
+
+    expect(block).not.toContain('yeaft-topbar-group-settings');
+    expect(block).not.toContain('openTopbarGroupSettings');
+    expect(sidebarSource).toContain('class="session-dots-btn"');
+    expect(sidebarSource).toContain("openGroupSettingsFromMenu(s.raw, 'announcement')");
+    expect(sidebarSource).toContain("$t('yeaft.session.openSettings')");
+  });
+
+  it('keeps message refresh as a session-history refresh action', () => {
+    const block = topbarRightBlock();
+
+    expect(block).toContain('@click="reloadMessages"');
+    expect(block).toContain("$t('yeaft.reloadMessages')");
+    expect(pageSource).toContain('const reloadMessages = () => {\n      store.reloadYeaftMessages();\n    };');
+  });
+
+  it('renders page reload only behind the mobile condition and as the last header action', () => {
+    const block = topbarRightBlock();
+    const pageReloadStart = block.indexOf('v-if="isMobile"');
+
+    expect(pageReloadStart).toBeGreaterThan(-1);
+    expect(block.slice(pageReloadStart)).toContain('@click="reloadPage"');
+    expect(block.slice(0, pageReloadStart)).not.toContain('@click="reloadPage"');
+    expect(block.lastIndexOf('@click="reloadPage"')).toBeGreaterThan(block.lastIndexOf('@click="toggleDebug"'));
+    expect(block.indexOf('@click="reloadPage"', block.lastIndexOf('@click="reloadPage"') + 1)).toBe(-1);
+  });
+
+  it('orders header actions as VP list, message refresh, dream, debug, mobile page refresh', () => {
+    const block = topbarRightBlock();
+    const order = [
+      '@click="toggleVpTimeline"',
+      '@click="reloadMessages"',
+      '@click="onDreamTriggerClick"',
+      '@click="toggleDebug"',
+      '@click="reloadPage"',
+    ].map((needle) => block.indexOf(needle));
+
+    expect(order.every((index) => index >= 0)).toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+});
+
+describe('conversation header titles', () => {
+  it('renders a readable Yeaft session title in the header with id/path fallback hidden from visible text', () => {
+    expect(pageSource).toContain('class="yeaft-topbar-title-group"');
+    expect(pageSource).toContain('{{ topbarSessionTitle || $t(\'yeaft.session.create.untitled\') }}');
+    expect(pageSource).toContain('if (id && value === id) continue;');
+    expect(pageSource).toContain('/^(sessions?|groups?)\\//i.test(value)');
+    expect(pageSource).toContain('if (g.workDir && value === g.workDir) continue;');
+  });
+
+  it('centers the Yeaft header title while keeping it single-line and shrinkable beside actions', () => {
+    expect(yeaftCss).toContain('.yeaft-topbar-title-group');
+    expect(yeaftCss).toContain('flex: 1 1 auto;');
+    expect(yeaftCss).toContain('min-width: 0;');
+    expect(yeaftCss).toContain('justify-content: center;');
+    expect(yeaftCss).toContain('text-align: center;');
+    expect(yeaftCss).toContain('.yeaft-topbar-session-title');
+    expect(yeaftCss).toContain('max-width: 100%;');
+    expect(yeaftCss).toContain('text-overflow: ellipsis;');
+    expect(yeaftCss).toContain('white-space: nowrap;');
+    expect(yeaftCss).toContain('.yeaft-topbar-right');
+    expect(yeaftCss).toContain('flex: 0 0 auto;');
+  });
+
+  it('keeps Chat header to one visible title line and removes the workdir/path subtitle', () => {
+    expect(chatHeaderSource).toContain('<div class="chat-title">{{ headerTitle }}</div>');
+    expect(chatHeaderSource).not.toContain('class="chat-title-path"');
+    expect(chatHeaderSource).not.toContain('chat-title-path-text');
+    expect(chatHeaderSource).not.toContain('{{ folderPath }}');
+  });
+
+  it('keeps the Chat header title single-line and shrinkable', () => {
+    expect(sidebarCss).toContain('.chat-title-group');
+    expect(sidebarCss).toContain('min-width: 0;');
+    expect(sidebarCss).toContain('.chat-title');
+    expect(sidebarCss).toContain('text-overflow: ellipsis;');
+    expect(sidebarCss).toContain('white-space: nowrap;');
+  });
+});

@@ -69,6 +69,7 @@ describe('route_forward thread ownership', () => {
     expect(result.ok).toBe(true);
     expect(result.dispatched).toEqual(['vp-martin']);
     expect(stored).toHaveLength(1);
+    expect(stored[0].internal).toBe(true);
     expect(stored[0].meta).toMatchObject({
       injectedBy: 'route_forward',
       senderVpId: 'vp-linus',

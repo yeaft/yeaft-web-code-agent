@@ -11,7 +11,7 @@
  *   ---
  *   id: seg_<8hex>
  *   scope: feature/auth
- *   kind: decision        # fact|preference|decision|lesson|relation|goal|context
+ *   kind: decision        # fact|preference|decision|lesson|relation|goal|context|workflow|pitfall|correction|project-convention
  *   tags: [auth, jwt]
  *   sourceMessages: [m_142, m_143]
  *   createdAt: 2026-04-29T10:11:12Z
@@ -49,6 +49,7 @@ import { createHash } from 'node:crypto';
 
 export const KIND_VALUES = new Set([
   'fact', 'preference', 'decision', 'lesson', 'relation', 'goal', 'context',
+  'workflow', 'pitfall', 'correction', 'project-convention',
 ]);
 
 const SCOPE_RE = /^(user|group\/[\w-]+(?:\/(?:user|vp\/[\w-]+|feature\/[\w-]+|topic\/[\w-]+(?:\/[\w-]+)?))?|sessions\/[\w-]+(?:\/(?:user|vp\/[\w-]+|feature\/[\w-]+|topic\/[\w-]+(?:\/[\w-]+)?))?|chat\/[\w-]+(?:\/vp\/[\w-]+)?|session\/[\w-]+(?:\/vp\/[\w-]+)?)$/;
