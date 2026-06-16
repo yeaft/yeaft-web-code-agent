@@ -77,21 +77,23 @@ describe('Dream debug model', () => {
     expect(items[0].segments[0].id).toBe('memory-1');
   });
 
-  it('defines a scrollable Dream shell with nested scroll containers', () => {
+  it('defines a scrollable Dream accordion without the old two-pane shell', () => {
     const css = readFileSync(resolve(repoRoot, 'web/styles/yeaft.css'), 'utf8');
 
-    expect(css).toContain('.yeaft-debug-dream-shell');
+    expect(css).not.toContain('.yeaft-debug-dream-shell');
+    expect(css).not.toContain('grid-template-columns: minmax(220px, 32%) minmax(0, 1fr)');
     expect(css).toMatch(/\.yeaft-debug-dream-panel\s*\{[\s\S]*?overflow:\s*hidden;/);
-    expect(css).toMatch(/\.yeaft-debug-dream-shell\s*\{[\s\S]*?grid-template-columns:\s*minmax\(220px, 32%\) minmax\(0, 1fr\);/);
-    expect(css).toMatch(/\.yeaft-debug-dream-shell\s*\{[\s\S]*?width:\s*100%;/);
-    expect(css).toMatch(/\.yeaft-debug-dream-list,[\s\S]*?\.yeaft-debug-dream-segments\s*\{[\s\S]*?overflow:\s*auto;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-list\s*\{[\s\S]*?overflow-y:\s*auto;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-detail\s*\{[\s\S]*?max-height:\s*min\(560px, 62vh\);[\s\S]*?overflow:\s*hidden;/);
     expect(css).toMatch(/\.yeaft-debug-scroll-pre\s*\{[\s\S]*?overflow:\s*auto;/);
   });
 
-  it('keeps ids out of list subtitle and shows search no-results empty state in the component template', () => {
+  it('renders Dream items as an inline accordion and keeps ids out of collapsed subtitles', () => {
     const component = readFileSync(resolve(repoRoot, 'web/components/YeaftDebugPanel.js'), 'utf8');
 
-    expect(component).toContain("item.subtitle || $t('yeaft.dreamDebug.noSummary')");
+    expect(component).toContain('yeaft-debug-dream-accordion-item');
+    expect(component).toContain('activeDreamItem && activeDreamItem.key === item.key');
+    expect(component).toContain('v-if="item.subtitle"');
     expect(component).not.toContain("item.summaryPreview || item.scope");
     expect(component).toContain("allDreamItems.length ? $t('yeaft.dreamDebug.noSearchResults') : $t('yeaft.dreamDebug.empty')");
   });
