@@ -266,6 +266,11 @@ export const useChatStore = defineStore('chat', {
     // turn_completed, latency pings) and spin yeaft_load_history /
     // yeaft_vp_subscribe into an unbounded loop.
     _yeaftReconnectCatchUpPending: false,
+    // Agents whose opened Yeaft sessions have been listed during the current
+    // Yeaft page visit. Used by agent_list to catch agents that become online
+    // after enterYeaft(), without spamming yeaft_list_sessions on every
+    // routine status broadcast.
+    _yeaftOpenedSessionsLoadedAgents: {},
     // Last-known {online, version} of the Yeaft agent, persisted ACROSS
     // agent_list frames. Needed because the server DELETES an agent from its
     // map on disconnect (server/ws-agent.js handleAgentDisconnect), so a
@@ -1076,21 +1081,29 @@ export const useChatStore = defineStore('chat', {
       // during a drop) is subsumed — clear it so handleAgentList doesn't fire
       // a redundant second catch-up on the next routine agent_list.
       this._yeaftReconnectCatchUpPending = false;
-      this.loadOpenedYeaftSessionsForConnectedAgents();
+      this.loadOpenedYeaftSessionsForConnectedAgents(null, { force: true });
       this.requestYeaftSessionBootstrap({ forceSessionReady: true, catchUpHistory: true });
     },
 
-    loadOpenedYeaftSessionsForConnectedAgents(agentIds = null) {
+    loadOpenedYeaftSessionsForConnectedAgents(agentIds = null, { force = false } = {}) {
       const ids = Array.isArray(agentIds)
         ? agentIds.filter(Boolean)
         : (Array.isArray(this.agents) ? this.agents.filter(a => a && a.online && a.id).map(a => a.id) : []);
       const uniqueIds = [...new Set(ids)];
+      if (!this._yeaftOpenedSessionsLoadedAgents || typeof this._yeaftOpenedSessionsLoadedAgents !== 'object') {
+        this._yeaftOpenedSessionsLoadedAgents = {};
+      }
+      const requested = [];
       for (const agentId of uniqueIds) {
+        if (!force && this._yeaftOpenedSessionsLoadedAgents[agentId]) continue;
+        this._yeaftOpenedSessionsLoadedAgents[agentId] = Date.now();
+        requested.push(agentId);
         this.sessionCrudRequest('list', {}, { agentId }).catch((err) => {
+          delete this._yeaftOpenedSessionsLoadedAgents[agentId];
           console.warn(`[Yeaft] failed to load opened sessions for agent ${agentId}:`, err?.message || err);
         });
       }
-      return uniqueIds;
+      return requested;
     },
 
     requestYeaftSessionBootstrap({ forceSessionReady = false, catchUpHistory = false } = {}) {
