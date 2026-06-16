@@ -226,6 +226,10 @@ describe('worker prompt language selection', () => {
       expect(prompt).toContain('use inline code instead of a fenced block');
     }
 
+    expect(fallbackZhPrompt).toContain('你正在当前会话中参与协作');
+    expect(fallbackZhPrompt).not.toContain('当前回合没有激活 VP soul');
+    expect(fallbackZhPrompt).not.toContain('当前 session');
+
     for (const prompt of [personaZhPrompt, fallbackZhPrompt]) {
       expect(prompt).toContain('## 和用户沟通');
       expect(prompt).toContain('面向用户的文字是给人读的，不是控制台日志');

@@ -208,7 +208,7 @@ const PROMPTS = {
       'The user keeps project-level instructions and context in `CLAUDE.md` or `AGENTS.md` at the session working directory. Treat the content below as authoritative project context — coding conventions, task guidance, workflow rules, etc.',
   },
   zh: {
-    identity: '当前回合没有激活 VP soul。你在当前 session 中参与协作，回答要基于证据，并保持用户上下文。',
+    identity: '你正在当前会话中参与协作。保持用户上下文，回答要基于证据；需要工具时使用工具，但不要把自己没有实际执行过的事说成已经执行。',
     date: (d) => `日期：${d}`,
     dream: '你处于梦境模式。回顾过去的对话，整理和巩固记忆。',
     tools: (names) => `可用工具：${names}`,
