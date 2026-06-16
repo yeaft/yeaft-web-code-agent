@@ -252,6 +252,7 @@ export default {
   'yeaft.modelMenu.title': 'Model and LLM settings',
   'yeaft.modelMenu.label': 'Model',
   'yeaft.modelMenu.effort': 'Effort',
+  'yeaft.modelMenu.effort.minimal': 'Minimal',
   'yeaft.modelMenu.effort.low': 'Low',
   'yeaft.modelMenu.effort.medium': 'Medium',
   'yeaft.modelMenu.effort.high': 'High',

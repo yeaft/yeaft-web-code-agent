@@ -61,7 +61,7 @@ export const SCENARIO_EFFORT = Object.freeze({
  * Pick the effort level for a given query context.
  *
  * Decision order:
- *   1. If userEffort is a valid Effort ('low'|'medium'|'high'|'max'),
+ *   1. If userEffort is a valid Effort ('minimal'|'low'|'medium'|'high'|'max'),
  *      return it unchanged. This is the explicit override path —
  *      `/max` prefix, Settings slider, or API caller.
  *   2. If toolLoopTurns >= LONG_LOOP_TURN_THRESHOLD, upgrade the
@@ -74,7 +74,7 @@ export const SCENARIO_EFFORT = Object.freeze({
  *   already consumed in the current `query()` call.
  * @param {unknown} [ctx.userEffort=null] — User-supplied override.
  *   Invalid values are ignored (fall through to scenario path).
- * @returns {'low'|'medium'|'high'|'max'} Resolved effort. Never null —
+ * @returns {'minimal'|'low'|'medium'|'high'|'max'} Resolved effort. Never null —
  *   the adapter/router is responsible for dropping it when the
  *   feature flag is off or the model doesn't support thinking.
  */

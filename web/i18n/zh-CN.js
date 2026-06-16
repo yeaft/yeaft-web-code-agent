@@ -252,6 +252,7 @@ export default {
   'yeaft.modelMenu.title': '模型和 LLM 设置',
   'yeaft.modelMenu.label': '模型',
   'yeaft.modelMenu.effort': '推理强度',
+  'yeaft.modelMenu.effort.minimal': '最小',
   'yeaft.modelMenu.effort.low': '低',
   'yeaft.modelMenu.effort.medium': '中',
   'yeaft.modelMenu.effort.high': '高',

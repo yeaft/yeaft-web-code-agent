@@ -3983,6 +3983,11 @@ export function handleYeaftModelSwitch(msg) {
   session.config.model = msg.model;
   session.config.primaryModel = msg.model;
   session.config.modelEffort = msg.modelEffort || null;
+  // Legacy non-session model switches mutate the shared root config instead
+  // of going through handleYeaftUpdateSessionConfig(), so cached per-VP
+  // Engines would otherwise keep the old effective config and drop newly
+  // selected effort values until process restart.
+  vpEngines.clear();
 
   sendSessionEvent({
     type: 'model_switched',

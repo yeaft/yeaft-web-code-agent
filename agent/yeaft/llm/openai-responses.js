@@ -52,9 +52,9 @@ function thinkingV1Enabled() {
 }
 
 /**
- * Translate a normalised effort ('low'|'medium'|'high'|'max') into the value
+ * Translate a normalised effort ('minimal'|'low'|'medium'|'high'|'max') into the value
  * accepted by the OpenAI Responses `reasoning.effort` field. Responses today
- * accepts 'low'|'medium'|'high' — 'max' degrades to 'high' to match the
+ * accepts 'minimal'|'low'|'medium'|'high' — 'max' degrades to 'high' to match the
  * registry's normaliseEffort downgrade rule.
  */
 function effortForResponses(effort) {

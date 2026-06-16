@@ -3,6 +3,7 @@ export const GITHUB_COPILOT_BASE_URL = 'https://api.githubcopilot.com';
 export const GITHUB_COPILOT_CREDENTIAL_PROVIDER = 'github-copilot';
 
 export const FALLBACK_GITHUB_COPILOT_MODELS = [
+  'gpt-5.5',
   'gpt-5.4',
   'gpt-5.4-mini',
   'gpt-5-mini',
