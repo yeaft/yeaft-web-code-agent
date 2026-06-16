@@ -58,8 +58,8 @@ describe('Yeaft model effort save flow', () => {
         config: { model: 'github-copilot/claude-opus-4.8', modelEffort: 'max' },
       },
     }]);
-    expect(store.yeaftModel).toBe('github-copilot/claude-opus-4.8');
-    expect(store.yeaftModelEffort).toBe('max');
+    expect(store.yeaftModel).toBe(null);
+    expect(store.yeaftModelEffort).toBe(null);
   });
 
   it('sends minimal effort on the legacy non-session model switch path', async () => {

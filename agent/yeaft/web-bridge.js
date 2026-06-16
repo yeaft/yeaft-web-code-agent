@@ -80,8 +80,8 @@ function refreshLiveSessionConfig() {
     const freshConfig = loadConfig({ dir: session.yeaftDir || ctx.CONFIG?.yeaftDir });
     const freshModels = Array.isArray(freshConfig.availableModels) ? freshConfig.availableModels : [];
     session.config.availableModels = freshModels;
-    if (freshConfig.model && !freshModels.some(m => m?.id === session.config.model)) {
-      session.config.model = freshConfig.model;
+    if (freshConfig.model && !freshModels.some(m => modelRefMatchesAvailable(m, session.config.model))) {
+      session.config.model = freshConfig.primaryModel || freshConfig.model;
     }
     if (freshConfig.providers) {
       session.config.providers = freshConfig.providers;
@@ -92,6 +92,27 @@ function refreshLiveSessionConfig() {
   } catch (err) {
     console.warn('[Yeaft] refresh live session config failed:', err?.message || err);
   }
+}
+
+function defaultSessionModelConfig(baseConfig) {
+  const config = baseConfig || session?.config || {};
+  const out = {};
+  const model = typeof config.primaryModel === 'string' && config.primaryModel.trim()
+    ? config.primaryModel.trim()
+    : (typeof config.model === 'string' && config.model.trim() ? config.model.trim() : '');
+  if (model) out.model = model;
+  if (typeof config.modelEffort === 'string' && config.modelEffort.trim()) {
+    out.modelEffort = config.modelEffort.trim();
+  }
+  return out;
+}
+
+function withDefaultSessionConfig(payload) {
+  const next = payload && typeof payload === 'object' ? { ...payload } : {};
+  const existing = next.config && typeof next.config === 'object' ? next.config : {};
+  const seeded = { ...defaultSessionModelConfig(), ...existing };
+  if (Object.keys(seeded).length > 0) next.config = seeded;
+  return next;
 }
 
 /** Test-only: replace the lightweight VP thread classifier. */
@@ -1604,7 +1625,8 @@ export function handleYeaftCreateSession(msg) {
   const payload = (msg && msg.payload) || {};
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
-    const group = createSessionFromSpec(yeaftDir, payload);
+    const group = createSessionFromSpec(yeaftDir, withDefaultSessionConfig(payload));
+    group.config = loadSessionConfig(yeaftDir, group.id);
     sendSessionCrudResult({ op: 'create', requestId, ok: true, session: group });
     sendSessionSnapshotBroadcast();
   } catch (err) {
@@ -2834,7 +2856,7 @@ async function ensureSessionLoaded() {
   sendSessionEvent({
     type: 'session_ready',
     conversationId: yeaftConversationId,
-    model: session.config.model,
+    model: session.config.primaryModel || session.config.model,
     modelEffort: session.config.modelEffort || null,
     availableModels: session.config.availableModels || [],
     skills: session.status.skills,
@@ -4051,7 +4073,7 @@ export async function handleYeaftLoadHistory(msg) {
   sendSessionEvent({
     type: 'session_ready',
     conversationId: yeaftConversationId,
-    model: session.config.model,
+    model: session.config.primaryModel || session.config.model,
     modelEffort: session.config.modelEffort || null,
     availableModels: session.config.availableModels || [],
     skills: session.status.skills,

@@ -16,7 +16,7 @@ import {
   DREAM_REDDOT_THRESHOLD_MS,
   DREAM_RELATIVE_TIME_REFRESH_MS,
 } from './dream-ui-constants.js';
-import { modelOptionMatchesRef, modelOptionRef } from '../utils/modelRefs.js';
+import { modelOptionMatchesRef, modelOptionRef, resolveSessionModelEffort, resolveSessionModelRef } from '../utils/modelRefs.js';
 
 export default {
   name: 'YeaftPage',
@@ -654,10 +654,7 @@ export default {
       return '';
     });
 
-    const topbarModel = Vue.computed(() => {
-      const groupModel = topbarGroup.value?.config?.model;
-      return typeof groupModel === 'string' && groupModel ? groupModel : (store.yeaftModel || '');
-    });
+    const topbarModel = Vue.computed(() => resolveSessionModelRef(topbarGroup.value, store.yeaftModel || ''));
 
     const topbarModelMeta = Vue.computed(() => {
       const id = topbarModel.value;
@@ -677,10 +674,7 @@ export default {
       return $t('yeaft.modelMenu.effort');
     });
 
-    const topbarEffort = Vue.computed(() => {
-      const groupEffort = topbarGroup.value?.config?.modelEffort;
-      return typeof groupEffort === 'string' && groupEffort ? groupEffort : (store.yeaftModelEffort || 'medium');
-    });
+    const topbarEffort = Vue.computed(() => resolveSessionModelEffort(topbarGroup.value, store.yeaftModelEffort || 'medium'));
 
     // ── manual dream trigger ──
     // Header dream acts on the conversation currently on screen. That is
