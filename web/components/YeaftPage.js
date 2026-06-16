@@ -149,9 +149,7 @@ export default {
               }"
               @click="onDreamTriggerClick"
               :disabled="dreamRunning"
-              :title="dreamLastRunRelative
-                ? ($t('yeaft.dream.runNow') + '\n' + $t('yeaft.dream.lastRun', { ago: dreamLastRunRelative }))
-                : ($t('yeaft.dream.runNow') + '\n' + $t('yeaft.dream.lastRunNever'))"
+              :title="dreamRunButtonTitle"
               :aria-label="$t('yeaft.dream.runNow')"
               :aria-busy="dreamRunning ? 'true' : 'false'"
             >
@@ -318,6 +316,9 @@ export default {
     // locale-aware naming. Read from the dedicated vp store rather than
     // reaching into the chat store so the helper signature stays clean.
     const vpStore = Pinia.useVpStore();
+
+    const inst = Vue.getCurrentInstance();
+    const $t = (inst && inst.appContext.config.globalProperties.$t) || ((key) => key);
 
     const sidebarCollapsed = Vue.ref(false);
     // task-yeaft-group-ui-cleanup: debug mode now starts OFF (was always
@@ -713,6 +714,14 @@ export default {
     /** Relative-time string for the tooltip's second line (or null = never run). */
     const dreamLastRunRelative = Vue.computed(() => formatRelativeFromNow(dreamLastRunAt.value));
 
+    const dreamRunButtonTitle = Vue.computed(() => {
+      const title = $t('yeaft.dream.runNow');
+      if (dreamLastRunRelative.value) {
+        return `${title}\n${$t('yeaft.dream.lastRun', { ago: dreamLastRunRelative.value })}`;
+      }
+      return `${title}\n${$t('yeaft.dream.lastRunNever')}`;
+    });
+
     const onDreamTriggerClick = () => {
       if (dreamRunning.value || !dreamButtonGroupId.value) return;
       vpStore.triggerGroupDream(dreamButtonGroupId.value);
@@ -1083,6 +1092,7 @@ export default {
       dreamStale,
       dreamEntriesCreated,
       dreamLastRunRelative,
+      dreamRunButtonTitle,
       onDreamTriggerClick,
     };
   }
