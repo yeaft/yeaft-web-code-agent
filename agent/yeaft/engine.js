@@ -1827,6 +1827,7 @@ export class Engine {
             loopNumber: turnNumber,
             threadId,
             preview: String(item.preview || '').slice(0, 200),
+            internal: Boolean(item.internal),
           };
         }
       }
@@ -2233,6 +2234,7 @@ export class Engine {
             loopNumber: turnNumber,
             threadId,
             preview: String(item.preview || '').slice(0, 200),
+            internal: Boolean(item.internal),
           };
         }
         yield { type: 'turn_end', turnNumber, stopReason: 'user_append_continue', threadId };

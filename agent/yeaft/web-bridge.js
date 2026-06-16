@@ -1032,15 +1032,23 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
 
   if (related) {
     const content = promptParts || prompt;
-    thread.pendingQueries.push({ content, preview: prompt, originalText: text, originalParts: Array.isArray(envelope?._promptParts) ? envelope._promptParts : null });
+    const isForwardAppend = envelope?.msg?.meta?.injectedBy === 'route_forward';
+    thread.pendingQueries.push({
+      content,
+      preview: prompt,
+      originalText: text,
+      originalParts: Array.isArray(envelope?._promptParts) ? envelope._promptParts : null,
+      internal: isForwardAppend,
+    });
     persistInboundMessageOnceByMsgId({
       msgId: envelope?.msg?.id,
       text,
       sessionId,
       threadId: visibleInboundThreadId(envelope, thread.threadId),
-      role: envelope?.msg?.meta?.injectedBy === 'route_forward' ? 'assistant' : 'user',
+      role: isForwardAppend ? 'assistant' : 'user',
       speakerVpId: envelope?.msg?.meta?.senderVpId || envelope?.msg?.from || null,
       attachments: Array.isArray(envelope?.msg?.meta?.attachments) ? envelope.msg.meta.attachments : [],
+      internal: isForwardAppend,
     });
     thread.updatedAt = Date.now();
     try {
@@ -1135,6 +1143,7 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
             role: isForward ? 'assistant' : 'user',
             speakerVpId: senderVpId,
             attachments: Array.isArray(meta.attachments) ? meta.attachments : [],
+            internal: isForward,
           });
         }
       } catch { /* never crash WS pipeline */ }
@@ -2254,7 +2263,7 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'user_append':
-      if (hctx && Array.isArray(hctx.appendedUserPrompts) && event.preview) {
+      if (hctx && Array.isArray(hctx.appendedUserPrompts) && event.preview && !event.internal) {
         hctx.appendedUserPrompts.push(String(event.preview));
       }
       sendSessionEvent({
@@ -3063,7 +3072,13 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       }
 
       // Turn completed — atomically append this VP's output to shared history.
-      appendTurnToSessionHistory(sessionId, threadId, vpId, [prompt, ...appendedUserPrompts], assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum);
+      // route_forward handoff text is an internal trigger, already visible as
+      // the source VP's tool action. Do not append it as a visible prompt for
+      // the target VP turn; otherwise UI replay can show a trailing handoff
+      // block after the target response.
+      const inboundIsRouteForward = inboundEnvelope?.msg?.meta?.injectedBy === 'route_forward';
+      const visiblePrompts = inboundIsRouteForward ? appendedUserPrompts : [prompt, ...appendedUserPrompts];
+      appendTurnToSessionHistory(sessionId, threadId, vpId, visiblePrompts, assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum);
 
       sendSessionOutputFrame({
         type: 'assistant',
@@ -3268,11 +3283,11 @@ function appendTurnToSessionHistory(sessionId, threadId, vpId, prompts, assistan
  * refresh replay can render chips without leaking image source data into
  * the message body.
  *
- * @param {{ msgId:string, text:string, sessionId:string, role?:string, speakerVpId?:string|null, attachments?:Array<object> }} args
+ * @param {{ msgId:string, text:string, sessionId:string, role?:string, speakerVpId?:string|null, attachments?:Array<object>, internal?:boolean }} args
  * @returns {boolean} true if this call wrote the row, false if a prior
  *   call already wrote it (dedup hit).
  */
-function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = 'main', role, speakerVpId, attachments }) {
+function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = 'main', role, speakerVpId, attachments, internal = false }) {
   if (!session?.conversationStore) return false;
   // No msgId means no dedup key — caller is responsible for guarding.
   // Both call sites already do (`if (envMsgId && text)` and
@@ -3323,6 +3338,7 @@ function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = '
     if (persistRole === 'assistant' && speakerVpId && typeof speakerVpId === 'string') {
       record.speakerVpId = speakerVpId;
     }
+    if (internal) record.internal = true;
     if (persistRole === 'user' && Array.isArray(attachments) && attachments.length > 0) {
       record.attachments = attachments;
     }

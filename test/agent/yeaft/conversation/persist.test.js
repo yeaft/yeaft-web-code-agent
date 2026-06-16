@@ -309,6 +309,21 @@ describe('ConversationStore', () => {
       expect(store.loadRecentBySession('grp_a', 2).map(m => m.content)).toEqual(['A2', 'A3']);
     });
 
+    it('loadAfterSeqByGroup skips internal route_forward handoff rows', () => {
+      const first = store.append({ role: 'user', content: 'real user', sessionId: 'grp_a' });
+      store.append({
+        role: 'assistant',
+        content: '@vp-martin internal handoff',
+        sessionId: 'grp_a',
+        speakerVpId: 'vp-linus',
+        internal: true,
+      });
+      store.append({ role: 'assistant', content: 'target response', sessionId: 'grp_a', speakerVpId: 'vp-martin' });
+
+      const page = store.loadAfterSeqByGroup('grp_a', Number(first.id.replace(/^m/, '')));
+      expect(page.messages.map(m => m.content)).toEqual(['target response']);
+    });
+
     it('returns [] for empty/null sessionId without throwing', () => {
       store.append({ role: 'user', content: 'X', sessionId: 'grp_a' });
       expect(store.loadRecentBySession(null, 10)).toEqual([]);
