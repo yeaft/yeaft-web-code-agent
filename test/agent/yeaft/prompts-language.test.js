@@ -49,9 +49,10 @@ function promptFor(vpPersona, language = 'zh-CN', extra = {}) {
 }
 
 function extractSoul(prompt) {
-  const start = prompt.indexOf('## Soul');
+  const heading = prompt.includes('## 灵魂') ? '## 灵魂' : '## Soul';
+  const start = prompt.indexOf(heading);
   if (start === -1) return '';
-  const bodyStart = start + '## Soul'.length;
+  const bodyStart = start + heading.length;
   const nextHeader = prompt.indexOf('\n\n## ', bodyStart + 2);
   return prompt.slice(bodyStart, nextHeader === -1 ? undefined : nextHeader).trim();
 }
@@ -66,6 +67,7 @@ const STATIC_ZH_PROMPT_FORBIDDEN = [
   'General Rules',
   'File Operations',
   'Search and Navigation',
+  '## Soul',
   'You are a',
   'You are in dream mode',
   'Yeaft AI',
@@ -81,6 +83,7 @@ const STATIC_EN_PROMPT_FORBIDDEN = [
   '通用规则',
   '文件操作',
   '搜索与导航',
+  '## 灵魂',
   '你是',
   '你处于梦境模式',
 ];
@@ -109,7 +112,8 @@ describe('worker prompt language selection', () => {
 
     expect(prompt).toContain('# 全能助手');
     expect(prompt).not.toContain('# 全能助手 — 全能助手');
-    expect(prompt).toContain('## Soul');
+    expect(prompt).toContain('## 灵魂');
+    expect(prompt).not.toContain('## Soul');
     expect(prompt).toContain('You are Omni Assistant / 全能助手');
     expect(prompt).toContain('Cross-domain synthesis: handle writing, coding');
     expect(prompt).toContain('## 任务回复');
@@ -194,10 +198,12 @@ describe('worker prompt language selection', () => {
       const zhPrompt = promptFor(vp, 'zh-CN');
       const enPrompt = promptFor(vp, 'en');
 
-      expect(zhPrompt).toContain('## Soul');
+      expect(zhPrompt).toContain('## 灵魂');
+      expect(zhPrompt).not.toContain('## Soul');
       expect(zhPrompt).toContain(vp.personaZh.split('\n')[0]);
       expect(zhPrompt).not.toContain(vp.personaEn.split('\n')[0]);
       expect(enPrompt).toContain('## Soul');
+      expect(enPrompt).not.toContain('## 灵魂');
       expect(enPrompt).toContain(vp.personaEn.split('\n')[0]);
       expect(enPrompt).not.toContain(vp.personaZh.split('\n')[0]);
     }
@@ -216,7 +222,8 @@ describe('worker prompt language selection', () => {
     }, 'zh-CN');
 
     expect(prompt).toContain('# Designer');
-    expect(prompt).toContain('## Soul');
+    expect(prompt).toContain('## 灵魂');
+    expect(prompt).not.toContain('## Soul');
     expect(prompt).not.toContain('### 人物特点');
     expect(prompt).not.toContain('重视用户路径');
     expect(prompt).not.toContain('### 擅长的事情');
@@ -392,9 +399,11 @@ describe('worker prompt language selection', () => {
     const zh = buildWorkerPrompt({ ...common, language: 'zh-CN' });
     const en = buildWorkerPrompt({ ...common, language: 'en' });
 
+    expect(zh).toContain('## 灵魂');
     expect(zh).toContain('## 核心原则');
     expect(zh).toContain('# 工具使用指引');
     expectNotToContainAny(zh, STATIC_ZH_PROMPT_FORBIDDEN);
+    expect(en).toContain('## Soul');
     expect(en).toContain('## Core Principles');
     expect(en).toContain('# Tool Usage Guidance');
     expectNotToContainAny(en, STATIC_EN_PROMPT_FORBIDDEN);

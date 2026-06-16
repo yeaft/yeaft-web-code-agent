@@ -423,7 +423,8 @@ function renderVpPersona(vpPersona, lang, effectiveLang = 'en') {
   // generic assistant identity here: the VP soul body is the source of truth.
   // `role` is intentionally not rendered as a second identity line; stock VPs
   // carry bilingual, role-aware soul text in role.md.
-  const lines = [`# ${name}`, '', '## Soul'];
+  const soulHeading = effectiveLang === 'zh' ? '## 灵魂' : '## Soul';
+  const lines = [`# ${name}`, '', soulHeading];
   if (body) lines.push('', body);
   return lines.join('\n');
 }

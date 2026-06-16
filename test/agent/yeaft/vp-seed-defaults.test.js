@@ -93,9 +93,10 @@ describe('default VP souls', () => {
     const prompt = buildWorkerPrompt({ language: 'zh-CN', includeShape: false, vpPersona: linus });
 
     expect(prompt).toContain('# 林纳斯·托瓦兹');
-    expect(prompt).toContain('## Soul');
+    expect(prompt).toContain('## 灵魂');
+    expect(prompt).not.toContain('## Soul');
     expect(prompt).toContain('你是林纳斯·托瓦兹');
-    const soul = prompt.split('## Soul')[1].split('## 核心原则')[0];
+    const soul = prompt.split('## 灵魂')[1].split('## 核心原则')[0];
     expect(soul).not.toMatch(/\bVP\b/);
     expect(soul).not.toContain('人物特点');
   });
