@@ -381,6 +381,7 @@ export const useChatStore = defineStore('chat', {
     currentView: 'chat',           // 'chat' | 'yeaft' — 顶级页面切换
     yeaftConversationId: null,     // 虚拟 conversationId（从 agent session_ready 获取）
     yeaftModel: null,              // 当前 Yeaft 模型名
+    yeaftModelEffort: null,        // 当前 Session 选中的 reasoning/thinking effort
     yeaftAgentId: null,            // 绑定的 agent ID
     yeaftSessionReady: false,     // Session 是否已初始化
     yeaftStatus: null,            // { skills, mcpServers, tools } 从 session_ready 获取
@@ -1449,6 +1450,7 @@ export const useChatStore = defineStore('chat', {
             this.cacheYeaftAgentStatus(statusAgentId, event);
           }
           this.yeaftModel = event.model;
+          this.yeaftModelEffort = event.modelEffort || null;
           this.yeaftSessionReady = true;
           this.yeaftBootstrapMetaLoadingKey = null;
           this.yeaftAvailableModels = event.availableModels || [];
@@ -1760,6 +1762,7 @@ export const useChatStore = defineStore('chat', {
 
         case 'model_switched':
           this.yeaftModel = event.model;
+          this.yeaftModelEffort = event.modelEffort || null;
           break;
 
         case 'sub_agent_event': {
@@ -2751,22 +2754,26 @@ export const useChatStore = defineStore('chat', {
     },
     // H2.f.6: setYeaftFeatureReplyThreadId / setYeaftJumpTarget /
     // clearYeaftJumpTarget actions removed.
-    async switchYeaftModel(modelId, groupId = null) {
+    async switchYeaftModel(modelId, groupId = null, modelEffort = undefined) {
       if (!modelId || !this.yeaftAgentId) return;
       const targetSessionId = groupId || null;
       if (targetSessionId) {
+        const config = { model: modelId };
+        if (modelEffort !== undefined) config.modelEffort = modelEffort || null;
         const res = await this.sessionCrudRequest('update_config', {
           sessionId: targetSessionId,
-          config: { model: modelId },
+          config,
         });
         if (res && res.ok) {
           this.yeaftModel = modelId;
+          if (modelEffort !== undefined) this.yeaftModelEffort = modelEffort || null;
         }
         return res;
       }
       this.sendWsMessage({
         type: 'yeaft_model_switch',
         model: modelId,
+        modelEffort: modelEffort || null,
         agentId: this.yeaftAgentId,
       });
       return null;

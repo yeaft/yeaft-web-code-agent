@@ -2796,6 +2796,7 @@ async function ensureSessionLoaded() {
     type: 'session_ready',
     conversationId: yeaftConversationId,
     model: session.config.model,
+    modelEffort: session.config.modelEffort || null,
     availableModels: session.config.availableModels || [],
     skills: session.status.skills,
     mcpServers: session.status.mcpServers,
@@ -3920,23 +3921,34 @@ export function handleYeaftModeSwitch(_msg) {
 }
 
 
+
+export function modelRefMatchesAvailable(model, requested) {
+  if (!model || !requested) return false;
+  return model.id === requested
+    || model.ref === requested
+    || (model.provider && model.id && `${model.provider}/${model.id}` === requested);
+}
+
 /** Handle model switch from the web UI. */
 export function handleYeaftModelSwitch(msg) {
   if (!session || !msg.model) return;
   refreshLiveSessionConfig();
 
   const available = session.config.availableModels || [];
-  const found = available.some(m => m.id === msg.model);
+  const found = available.some(m => modelRefMatchesAvailable(m, msg.model));
   if (!found) {
     console.warn(`[Yeaft] model switch rejected — "${msg.model}" not in availableModels`);
     return;
   }
 
   session.config.model = msg.model;
+  session.config.primaryModel = msg.model;
+  session.config.modelEffort = msg.modelEffort || null;
 
   sendSessionEvent({
     type: 'model_switched',
     model: msg.model,
+    modelEffort: session.config.modelEffort || null,
   });
 }
 
@@ -3996,6 +4008,7 @@ export async function handleYeaftLoadHistory(msg) {
     type: 'session_ready',
     conversationId: yeaftConversationId,
     model: session.config.model,
+    modelEffort: session.config.modelEffort || null,
     availableModels: session.config.availableModels || [],
     skills: session.status.skills,
     mcpServers: session.status.mcpServers,

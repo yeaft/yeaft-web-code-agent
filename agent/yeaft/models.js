@@ -411,6 +411,27 @@ export function mapEffortToOpenAIReasoning(effort) {
   }
 }
 
+export const MODEL_EFFORT_OPTIONS = ['low', 'medium', 'high'];
+
+function inferThinkingCapability(model) {
+  const id = parseModelRef(model).modelId.toLowerCase();
+  if (!id) return null;
+
+  if (/^(gpt-5|o1|o3|o4|chatgpt-|codex-)/.test(id)) {
+    return { supportsThinking: true, thinkingProtocol: 'openai-reasoning', defaultEffort: null, maxBudgetTokens: null };
+  }
+
+  // Anthropic extended thinking is available on Claude 3.7+ and Claude 4.x.
+  // Be conservative: older Claude 3/3.5/Haiku entries stay unsupported unless
+  // explicitly listed in the registry.
+  if (/^claude-/.test(id) && (/(^|-)3-7($|-|\.)/.test(id) || /(^|-)4($|-|\.)/.test(id))) {
+    const maxBudgetTokens = id.includes('opus') ? 64000 : 32000;
+    return { supportsThinking: true, thinkingProtocol: 'anthropic', defaultEffort: null, maxBudgetTokens };
+  }
+
+  return null;
+}
+
 /**
  * Resolve the Anthropic thinking budget_tokens value for a given (model, effort).
  *
@@ -443,7 +464,9 @@ export function thinkingBudgetForEffort(model, effort) {
  */
 export function getThinkingCapability(model) {
   const info = MODEL_REGISTRY.get(model);
-  if (!info || !info.supportsThinking) {
+  const hasExplicitThinking = info && Object.prototype.hasOwnProperty.call(info, 'supportsThinking');
+  const inferred = hasExplicitThinking ? null : inferThinkingCapability(model);
+  if ((!info || !info.supportsThinking) && !inferred) {
     return {
       supportsThinking: false,
       thinkingProtocol: 'none',
@@ -452,11 +475,21 @@ export function getThinkingCapability(model) {
     };
   }
   return {
-    supportsThinking: true,
-    thinkingProtocol: info.thinkingProtocol || 'none',
-    defaultEffort: info.defaultEffort ?? null,
-    maxBudgetTokens: info.maxBudgetTokens ?? null,
+    supportsThinking: Boolean(info?.supportsThinking ?? inferred?.supportsThinking),
+    thinkingProtocol: info?.thinkingProtocol || inferred?.thinkingProtocol || 'none',
+    defaultEffort: info?.defaultEffort ?? inferred?.defaultEffort ?? null,
+    maxBudgetTokens: info?.maxBudgetTokens ?? inferred?.maxBudgetTokens ?? null,
   };
+}
+
+export function getModelEffortOptions(model) {
+  const cap = getThinkingCapability(model);
+  if (!cap.supportsThinking || cap.thinkingProtocol === 'none') return [];
+  return MODEL_EFFORT_OPTIONS.slice();
+}
+
+export function modelSupportsEffort(model) {
+  return getModelEffortOptions(model).length > 0;
 }
 
 /**

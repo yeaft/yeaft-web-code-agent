@@ -251,6 +251,10 @@ export default {
   'yeaft.switchModel': '切换模型',
   'yeaft.modelMenu.title': '模型和 LLM 设置',
   'yeaft.modelMenu.label': '模型',
+  'yeaft.modelMenu.effort': '推理强度',
+  'yeaft.modelMenu.effort.low': '低',
+  'yeaft.modelMenu.effort.medium': '中',
+  'yeaft.modelMenu.effort.high': '高',
   'yeaft.modelMenu.configureHint': 'Provider、密钥、模型列表',
   // fix/dream-cadence-and-ui-trigger: manual dream trigger button.
   'yeaft.dream.runNow': '立即整理记忆',

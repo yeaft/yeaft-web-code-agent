@@ -156,10 +156,10 @@ export class AnthropicAdapter extends LLMAdapter {
   }
 
   /**
-   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'max', signal?: AbortSignal }} params
+   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'max', effortSource?: 'user'|'auto', signal?: AbortSignal }} params
    * @returns {AsyncGenerator<import('./adapter.js').StreamEvent>}
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, signal, onRawExchange }) {
+  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, signal, onRawExchange }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const body = {
@@ -175,7 +175,7 @@ export class AnthropicAdapter extends LLMAdapter {
     // 'anthropic' thinking protocol. Unknown models or non-thinking models
     // silently drop the parameter — red line: never error on unsupported.
     const normEffort = normalizeEffort(effort);
-    if (thinkingV1Enabled() && normEffort) {
+    if ((thinkingV1Enabled() || effortSource === 'user') && normEffort) {
       const cap = getThinkingCapability(model);
       if (cap.supportsThinking && cap.thinkingProtocol === 'anthropic') {
         const budget = thinkingBudgetForEffort(model, normEffort);
@@ -427,7 +427,7 @@ export class AnthropicAdapter extends LLMAdapter {
    * models silently drop the param. max_tokens auto-widens to budget+1024
    * when needed.
    */
-  async call({ model, system, messages, maxTokens = 4096, effort, signal }) {
+  async call({ model, system, messages, maxTokens = 4096, effort, effortSource, signal }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const body = {
@@ -439,7 +439,7 @@ export class AnthropicAdapter extends LLMAdapter {
 
     // task-327c: mirror stream()'s thinking injection for side queries.
     const normEffort = normalizeEffort(effort);
-    if (thinkingV1Enabled() && normEffort) {
+    if ((thinkingV1Enabled() || effortSource === 'user') && normEffort) {
       const cap = getThinkingCapability(model);
       if (cap.supportsThinking && cap.thinkingProtocol === 'anthropic') {
         const budget = thinkingBudgetForEffort(model, normEffort);
