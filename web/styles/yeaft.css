@@ -3003,7 +3003,7 @@
 }
 
 /* ── Topbar VP-list toggle button ────────────────────────────────────
-   Sits next to .yeaft-debug-btn on the right side of the topbar.
+   First session action in the right side of the topbar.
    Inactive = muted icon; active = accent-tinted background. Same
    shape/size as the existing topbar buttons. */
 .yeaft-topbar-vp-toggle {
@@ -3031,7 +3031,7 @@
 
 
 /* ── fix/dream-cadence-and-ui-trigger: manual dream trigger button ──
-   Sits to the LEFT of .yeaft-topbar-vp-toggle. Mirrors the shape of
+   Sits after message refresh and before debug. Mirrors the shape of
    the other topbar buttons (16 px icon, ~28 px hit-target). Three
    visual states overlay on the same button so layout stays stable:
      - idle:           muted icon
