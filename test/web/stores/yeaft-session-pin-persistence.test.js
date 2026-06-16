@@ -253,6 +253,7 @@ it('sends Yeaft pin metadata so the server can persist before DB hydration', () 
 });
 
 const { useChatStore } = await import('../../../web/stores/chat.js');
+const { handleAgentList } = await import('../../../web/stores/helpers/handlers/agentHandler.js');
 
 it('loads opened Yeaft sessions from every connected agent on entry', () => {
   const store = useChatStore();
@@ -275,6 +276,50 @@ it('loads opened Yeaft sessions from every connected agent on entry', () => {
     { op: 'list', data: {}, opts: { agentId: 'agent-a' } },
     { op: 'list', data: {}, opts: { agentId: 'agent-b' } },
   ]);
+});
+
+it('loads opened Yeaft sessions when agents become ready after entering Yeaft', () => {
+  const store = useChatStore();
+  const requests = [];
+  store.currentView = 'yeaft';
+  store.agents = [];
+  store.currentAgent = null;
+  store.yeaftAgentId = null;
+  store._yeaftOpenedSessionsLoadedAgents = {};
+  store.sessionCrudRequest = (op, data, opts) => {
+    requests.push({ op, data, opts });
+    return Promise.resolve({ ok: true });
+  };
+  store.sendWsMessage = () => {};
+
+  const loadedBeforeAgents = store.loadOpenedYeaftSessionsForConnectedAgents();
+  expect(loadedBeforeAgents).toEqual([]);
+
+  handleAgentList(store, { agents: [{ id: 'agent-late', online: true, conversations: [] }] });
+  handleAgentList(store, { agents: [{ id: 'agent-late', online: true, conversations: [] }] });
+
+  expect(store.yeaftAgentId).toBe('agent-late');
+  expect(requests).toEqual([
+    { op: 'list', data: {}, opts: { agentId: 'agent-late' } },
+  ]);
+});
+
+it('force reloads opened Yeaft sessions when re-entering the Yeaft page', () => {
+  const store = useChatStore();
+  const requests = [];
+  store.agents = [{ id: 'agent-a', online: true }];
+  store._yeaftOpenedSessionsLoadedAgents = { 'agent-a': 123 };
+  store.sessionCrudRequest = (op, data, opts) => {
+    requests.push({ op, data, opts });
+    return Promise.resolve({ ok: true });
+  };
+
+  const skipped = store.loadOpenedYeaftSessionsForConnectedAgents();
+  const forced = store.loadOpenedYeaftSessionsForConnectedAgents(null, { force: true });
+
+  expect(skipped).toEqual([]);
+  expect(forced).toEqual(['agent-a']);
+  expect(requests).toEqual([{ op: 'list', data: {}, opts: { agentId: 'agent-a' } }]);
 });
 
 it('persists Yeaft pin actions with agent-scoped metadata', () => {
