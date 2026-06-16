@@ -470,9 +470,6 @@ function renderActiveScope(activeScope, lang) {
     : '';
   if (session) lines.push(`session_id: ${session}`);
 
-  const sessionMember = firstNonEmptyString(activeScope.sessionMember, activeScope.vpId);
-  if (sessionMember) lines.push(`session_member: ${sessionMember}`);
-
   const membersLine = renderSessionMembersLine(activeScope.sessionMembers || activeScope.members);
   if (membersLine) lines.push(`session_members: ${membersLine}`);
 
