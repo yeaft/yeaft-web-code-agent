@@ -401,7 +401,7 @@ export default {
                 @open-settings="showSettingsPanel = true"
               />
               <BtwOverlay />
-              <ChatInput />
+              <ChatInput :conversation-id="store.activeConversationId" />
             </div>
             <!-- Right Panel overlay (mobile only) -->
             <div class="expert-panel-overlay" v-if="store.activeRightPanel" @click="store.activeRightPanel = null"></div>

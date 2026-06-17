@@ -912,6 +912,11 @@ export const useChatStore = defineStore('chat', {
     isConversationProcessing: (state) => (conversationId) => {
       return !!state.processingConversations[conversationId];
     },
+    isConversationCompacting: (state) => (conversationId) => {
+      if (!conversationId) return false;
+      return state.compactStatus?.conversationId === conversationId
+        && state.compactStatus?.status === 'compacting';
+    },
     isYeaftSessionProcessing: (state) => (sessionId) => {
       if (!sessionId) return false;
       if (state.yeaftProcessingSessions?.[sessionId]) return true;
