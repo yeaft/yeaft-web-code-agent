@@ -568,6 +568,7 @@ export default {
   },
   mounted() {
     if (this.visible) {
+      this.applyInitialEntryPoint();
       return this.loadData();
     }
     return undefined;
@@ -575,20 +576,7 @@ export default {
   watch: {
     visible(val) {
       if (val) {
-        // Honour caller-requested entry point each time the panel opens,
-        // but only if the role-gated tab list actually contains it —
-        // otherwise free-tier users land on a blank pane.
-        if (this.initialTab && this.visibleTabs.some(t => t.key === this.initialTab)) {
-          this.activeTab = this.initialTab;
-        }
-        if (this.initialSubTab && this.activeTab === 'yeaft') {
-          this.yeaftSubTab = this.yeaftSubTabs.some(st => st.key === this.initialSubTab)
-            ? this.initialSubTab
-            : 'vp';
-        }
-        if (this.initialEditVpId && this.activeTab === 'yeaft') {
-          this.yeaftSubTab = 'vp';
-        }
+        this.applyInitialEntryPoint();
         this.loadData();
       } else {
         // Closing settings while a bind QR is up should tear it down too.
@@ -642,6 +630,23 @@ export default {
     setOfficePreviewMode(mode) {
       this.officePreviewMode = mode;
       localStorage.setItem('officePreviewMode', mode);
+    },
+
+    applyInitialEntryPoint() {
+      // Honour caller-requested entry point each time the panel opens,
+      // including first mount with v-if + visible=true. Vue does not fire
+      // the visible watcher for that initial prop value.
+      if (this.initialTab && this.visibleTabs.some(t => t.key === this.initialTab)) {
+        this.activeTab = this.initialTab;
+      }
+      if (this.initialSubTab && this.activeTab === 'yeaft') {
+        this.yeaftSubTab = this.yeaftSubTabs.some(st => st.key === this.initialSubTab)
+          ? this.initialSubTab
+          : 'vp';
+      }
+      if (this.initialEditVpId && this.activeTab === 'yeaft') {
+        this.yeaftSubTab = 'vp';
+      }
     },
 
     async loadData() {

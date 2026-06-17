@@ -35,6 +35,7 @@ describe('SettingsPanel Agent secret behavior', () => {
       visible: false,
       initialTab: '',
       initialSubTab: '',
+      initialEditVpId: '',
       visibleTabs: [{ key: 'security' }],
       yeaftSubTabs: [{ key: 'vp' }],
       authStore: { role: 'pro', loadIdentities: vi.fn() },
@@ -108,6 +109,27 @@ describe('SettingsPanel Agent secret behavior', () => {
 
     expect(fetch).toHaveBeenCalledWith('/api/user/agent-secret', expect.any(Object));
     expect(instance.agentSecret).toBe('fake-secret-reloaded');
+  });
+
+  it('applies Yeaft VP edit entry point when mounted already visible', async () => {
+    const component = await loadComponent();
+    const loadData = vi.fn(async () => {});
+    const instance = createInstance(component, {
+      visible: true,
+      initialTab: 'yeaft',
+      initialSubTab: 'vp',
+      initialEditVpId: 'vp_custom',
+      visibleTabs: [{ key: 'general' }, { key: 'yeaft' }],
+      yeaftSubTabs: [{ key: 'vp' }, { key: 'search' }, { key: 'mcp' }],
+      loadData,
+    });
+
+    await component.mounted.call(instance);
+
+    expect(instance.activeTab).toBe('yeaft');
+    expect(instance.yeaftSubTab).toBe('vp');
+    expect(loadData).toHaveBeenCalledOnce();
+    expect(component.template).toContain('<VpCrudPanel :initial-edit-vp-id="initialEditVpId" />');
   });
 
   it('updates secret and commands immediately after generation', async () => {
