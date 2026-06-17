@@ -158,3 +158,69 @@ describe('Yeaft session active indicator state', () => {
     expect(store.isYeaftSessionProcessing('session-a')).toBe(false);
   });
 });
+
+describe('Yeaft cancelVpTurnForSession resolution', () => {
+  beforeEach(() => {
+    localStorageData.clear();
+  });
+
+  it('prefers the most recent active turn for the VP+session pair', () => {
+    const store = freshStore();
+    store.yeaftAgentId = 'agent-1';
+    store.activeVpTurns = {
+      'turn-old': { vpId: 'vp-a', sessionId: 'session-1', startedAt: 100 },
+      'turn-new': { vpId: 'vp-a', sessionId: 'session-1', startedAt: 200 },
+      'turn-other': { vpId: 'vp-a', sessionId: 'session-2', startedAt: 300 },
+    };
+
+    expect(store.cancelVpTurnForSession('vp-a', 'session-1')).toBe(true);
+    expect(store.sendWsMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'yeaft_abort_turn',
+      turnId: 'turn-new',
+    }));
+  });
+
+  it('falls back to vpStatuses.turnId when activeVpTurns is empty for the VP', () => {
+    const store = freshStore();
+    store.yeaftAgentId = 'agent-1';
+    store.activeVpTurns = {};
+    store.vpStatuses = {
+      'session-1::vp-a': {
+        state: 'thinking',
+        turnId: 'queued-turn-a',
+        vpId: 'vp-a',
+        sessionId: 'session-1',
+      },
+    };
+
+    expect(store.cancelVpTurnForSession('vp-a', 'session-1')).toBe(true);
+    expect(store.sendWsMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'yeaft_abort_turn',
+      turnId: 'queued-turn-a',
+    }));
+  });
+
+  it('warns and returns false when no turnId can be resolved', () => {
+    const store = freshStore();
+    store.yeaftAgentId = 'agent-1';
+    store.activeVpTurns = {};
+    store.vpStatuses = {
+      // VP is idle — no in-flight turn to cancel.
+      'session-1::vp-a': {
+        state: 'idle',
+        turnId: 'stale-turn',
+        vpId: 'vp-a',
+        sessionId: 'session-1',
+      },
+    };
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(store.cancelVpTurnForSession('vp-a', 'session-1')).toBe(false);
+      expect(store.sendWsMessage).not.toHaveBeenCalled();
+      expect(warn.mock.calls.some(([msg]) => /no turnId found/i.test(String(msg)))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

@@ -3493,7 +3493,21 @@ export const useChatStore = defineStore('chat', {
           bestTurnId = status.turnId;
         }
       }
-      if (!bestTurnId) return false;
+      if (!bestTurnId) {
+        // Diagnostic: VP-list stop button reached the store but the
+        // store cannot resolve a turnId for this VP — neither
+        // `activeVpTurns` (kept in sync by `vp_turn_start` /
+        // `vp_turn_end` events) nor `vpStatuses` (vp-status broker
+        // snapshots) has one. Surface it in the dev console so the
+        // next missed-stop report has a starting point.
+        // Common causes:
+        //   - User clicked stop after the VP had already finished
+        //     (vp_turn_end already cleared activeVpTurns).
+        //   - WS reconnect lost the in-flight turn snapshot.
+        //   - vp-status broker state drifted out of sync.
+        console.warn('[Yeaft] cancelVpTurnForSession: no turnId found for', { vpId, sessionId: targetSessionId });
+        return false;
+      }
       this.cancelVpTurn(bestTurnId);
       return true;
     },

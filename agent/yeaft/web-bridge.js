@@ -3376,6 +3376,19 @@ function removeQueuedVpTurn(turnId) {
   return removed;
 }
 
+/**
+ * Sum every VP inbox length. Diagnostic-only helper used by abort log
+ * lines so an operator can tell at a glance how many turns were queued
+ * (but not yet driver-shifted) when a stop button missed.
+ */
+function countQueuedTurns() {
+  let n = 0;
+  for (const inbox of vpInboxes.values()) {
+    if (Array.isArray(inbox)) n += inbox.length;
+  }
+  return n;
+}
+
 function emitQueuedTurnAbort(meta, turnId) {
   if (!meta?.vpId) return;
   const sessionId = meta.sessionId || null;
@@ -3485,6 +3498,9 @@ export function handleYeaftAbortThread(_msg = {}) {
  * @returns {{ aborted: string[], all: boolean }}
  */
 export function handleYeaftAbortAll() {
+  const beforeRunning = turnAbortCtrls.size;
+  const beforeQueued = countQueuedTurns();
+  const beforeVps = vpAborts.size;
   const aborted = [];
   if (currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
     try { currentAbortCtrl.abort(); aborted.push('main'); } catch { /* best-effort */ }
@@ -3497,6 +3513,15 @@ export function handleYeaftAbortAll() {
   turnAbortCtrls.clear();
   turnAbortMeta.clear();
   abortAllVpRuntime(aborted);
+  // Diagnostic: stop-button audit trail. Pre-counts capture what was in
+  // flight; `aborted` is what actually got aborted (the per-turn entries
+  // are run controllers; `vp:<key>` entries are VP-level inbox/driver
+  // controllers). Helps triage user reports of "stop did nothing".
+  console.log('[Yeaft] yeaft_abort_all:',
+    'beforeRunning=', beforeRunning,
+    'beforeQueued=', beforeQueued,
+    'beforeVps=', beforeVps,
+    'aborted=', aborted);
   sendSessionEvent({ type: 'yeaft_aborted', aborted, all: true });
   return { aborted, all: true };
 }
@@ -3509,6 +3534,7 @@ export function handleYeaftAbortAll() {
 export function handleYeaftAbortTurn(msg = {}) {
   const { turnId } = msg;
   if (!turnId) {
+    console.warn('[Yeaft] yeaft_abort_turn rejected: no turnId on payload');
     sendSessionEvent({ type: 'yeaft_turn_aborted', turnId: null, success: false });
     return;
   }
@@ -3516,17 +3542,31 @@ export function handleYeaftAbortTurn(msg = {}) {
   const meta = turnAbortMeta.get(turnId);
   const ctrl = turnAbortCtrls.get(turnId);
   let success = false;
+  let path = 'miss';
 
   if (ctrl && !ctrl.signal.aborted) {
-    try { ctrl.abort(); success = true; } catch { /* best-effort */ }
+    try { ctrl.abort(); success = true; path = 'running'; } catch { /* best-effort */ }
   } else if (removeQueuedVpTurn(turnId)) {
     success = true;
+    path = 'queued';
     emitQueuedTurnAbort(meta, turnId);
+  }
+
+  if (!success) {
+    // Diagnostic: stop button miss. The frontend asked us to stop a
+    // turn the agent does not know about. Usually means the abort
+    // arrived after `vp_turn_end`, but it can also be a real bug
+    // (wire-payload mismatch, mid-driver registration race). Log
+    // enough state for the next user report to be triaged from the
+    // agent log alone.
+    console.warn('[Yeaft] yeaft_abort_turn: no matching turn for', turnId,
+      '— runningTurns:', Array.from(turnAbortCtrls.keys()),
+      '— queuedTurns:', countQueuedTurns());
   }
 
   turnAbortCtrls.delete(turnId);
   turnAbortMeta.delete(turnId);
-  sendSessionEvent({ type: 'yeaft_turn_aborted', turnId, success });
+  sendSessionEvent({ type: 'yeaft_turn_aborted', turnId, success, path });
 }
 
 /**
