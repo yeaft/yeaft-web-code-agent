@@ -12,11 +12,12 @@ import SplitPane from './SplitPane.js';
 import ModernSelect from './ModernSelect.js';
 import SidebarModeToggle from './SidebarModeToggle.js';
 import SidebarAgentHeader from './SidebarAgentHeader.js';
-import SidebarAgentHeader from './SidebarAgentHeader.js';
 import { shortenPath as shortenPathUtil } from '../utils/path-display.js';
 import { getLastPathSegment as _getLastPathSegment, formatResumeDate } from '../utils/path-segments.js';
-import { sortSessionsByActivity } from '../stores/helpers/session-order.js';
 import { useAuthStore } from '../stores/auth.js';
+
+export default {
+  name: 'ChatPage',
   components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarModeToggle, SidebarAgentHeader },
   template: `
     <div class="chat-page" :class="{ 'show-sidebar': showMobileSidebar }">
@@ -706,15 +707,17 @@ import { useAuthStore } from '../stores/auth.js';
     },
     pinnedChatConversations() {
       const pinned = this.store.conversations.filter(c => c.type !== 'crew' && c.agentOnline !== false && this.store.isSessionPinned(c.id));
-      return this.sortByActivity(pinned);
+      return pinned.sort((a, b) => this.store.pinnedSessions.indexOf(a.id) - this.store.pinnedSessions.indexOf(b.id));
     },
     unpinnedChatConversations() {
       return this.sortByActivity(this.store.conversations.filter(c => c.type !== 'crew' && c.agentOnline !== false && !this.store.isSessionPinned(c.id)));
     },
     pinnedCrewConversations() {
       const pinned = this.store.conversations.filter(c => c.type === 'crew' && c.agentOnline !== false && this.store.isSessionPinned(c.id));
-      return this.sortByActivity(pinned);
+      return pinned.sort((a, b) => this.store.pinnedSessions.indexOf(a.id) - this.store.pinnedSessions.indexOf(b.id));
     },
+    unpinnedCrewConversations() {
+      return this.sortByActivity(this.store.conversations.filter(c => c.type === 'crew' && c.agentOnline !== false && !this.store.isSessionPinned(c.id)));
     },
     chatSessionCount() {
       return this.store.conversations.filter(c => c.type !== 'crew' && c.agentOnline !== false).length;
@@ -739,9 +742,15 @@ import { useAuthStore } from '../stores/auth.js';
       }
     },
     sortByActivity(conversations) {
-      return sortSessionsByActivity(conversations);
+      return [...conversations].sort((a, b) => {
+        // Sort by lastMessageAt (set when user sends a message), fall back to createdAt, descending
+        const aTime = a.lastMessageAt || a.createdAt || 0;
+        const bTime = b.lastMessageAt || b.createdAt || 0;
+        return bTime - aTime;
+      });
     },
-
+    // Crew mode methods
+    newCrewSession() {
       this.sidebarTab = 'crew';
       this.store.enterCrewMode();
     },

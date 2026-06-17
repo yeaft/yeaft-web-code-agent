@@ -227,13 +227,17 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     return 'end_turn';
   }
 
+  // ─── Streaming ──────────────────────────────────────────
 
   /**
-   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'max', effortSource?: 'user'|'auto', extraBody?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void }} params
-  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, extraBody, signal, onRawExchange }) {
-    if ((thinkingV1Enabled() || effortSource === 'user') && normEffort) {
-  async call({ model, system, messages, maxTokens = 4096, effort, effortSource, extraBody, signal }) {
-    if ((thinkingV1Enabled() || effortSource === 'user') && normEffort) {
+   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'max', extraBody?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void }} params
+   *
+   * NOTE on `extraBody`: any keys you spread here are merged verbatim into
+   * the wire body and — because the verbatim debug feature is intentionally
+   * non-truncating — will surface in the debug panel via `rawRequest.body`.
+   * Do NOT put secrets in `extraBody`. Only `Authorization` / `x-api-key` /
+   * `api-key` headers are auto-redacted (see `redactRawRequest` in
+   * `adapter.js`); request-body fields are caller-controlled.
    */
   async *stream({ model, system, messages, tools, maxTokens = 16384, effort, extraBody, signal, onRawExchange }) {
     if (signal?.aborted) throw new LLMAbortError();

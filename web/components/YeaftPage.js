@@ -107,40 +107,12 @@ export default {
                 <span class="yeaft-model-option-provider" v-if="m.provider">{{ m.provider }}</span>
                 <span class="yeaft-model-option-ctx" v-if="m.contextWindow">{{ formatModelCtx(m) }}</span>
               </div>
-              </div>
               <div v-if="store.yeaftAvailableModels.length > 1" class="yeaft-model-dropdown-separator"></div>
-              <div v-if="topbarEffortOptions.length" class="yeaft-model-effort-panel">
-                <div class="yeaft-model-effort-title">{{ $t('yeaft.modelMenu.effort') }}</div>
-                <div class="yeaft-model-effort-options" role="group" :aria-label="$t('yeaft.modelMenu.effort')">
-                  <button
-                    v-for="effort in topbarEffortOptions"
-                    :key="effort"
-                    type="button"
-                    class="yeaft-model-effort-option"
-                    :class="{ active: effort === topbarEffort }"
-                    @click="selectEffort(effort)"
-                  >
-                    {{ $t(`yeaft.modelMenu.effort.${effort}`) }}
-                  </button>
-                </div>
-              </div>
-              <div v-if="topbarEffortOptions.length" class="yeaft-model-dropdown-separator"></div>
               <button type="button" class="yeaft-model-config-option" @click="openLlmConfig">
-                    v-for="effort in topbarEffortOptions"
-                    :key="effort"
-                    type="button"
-                    class="yeaft-model-effort-option"
-                    :class="{ active: effort === topbarEffort }"
-                    @click="selectEffort(effort)"
-                  >
-                    {{ $t(`yeaft.modelMenu.effort.${effort}`) }}
-                  </button>
-                </div>
-              </div>
-              <div v-if="topbarEffortOptions.length" class="yeaft-model-dropdown-separator"></div>
-              <button type="button" class="yeaft-model-config-option" @click="openLlmConfig">
-                <span class="yeaft-model-config-label">{{ $t('settings.llm.title') }}</span>
+                <span class="yeaft-model-config-label">{{ $t('settings.llm.configureMenu') }}</span>
                 <span class="yeaft-model-config-hint">{{ $t('yeaft.modelMenu.configureHint') }}</span>
+              </button>
+            </div>
           </div>
 
           <div class="yeaft-topbar-right">
@@ -678,24 +650,12 @@ export default {
     };
     // task-fix-mobile-group-settings: surface a group ⚙ in the topbar
     // so the conversation always has a settings entry-point — sidebar
-      return typeof groupModel === 'string' && groupModel ? groupModel : (store.yeaftModel || '');
-    });
-
-    const topbarModelMeta = Vue.computed(() => {
-      const id = topbarModel.value;
-      if (!id) return null;
-      return store.yeaftAvailableModels.find(m => m && m.id === id) || null;
-    });
-
-    const topbarEffortOptions = Vue.computed(() => {
-      const options = topbarModelMeta.value?.effortOptions;
-      return Array.isArray(options) ? options.filter(Boolean) : [];
-    });
-
-    const topbarEffort = Vue.computed(() => {
-      const groupEffort = topbarGroup.value?.config?.modelEffort;
-      return typeof groupEffort === 'string' && groupEffort ? groupEffort : (store.yeaftModelEffort || 'medium');
-    });
+    // collapses to a slide-over on mobile, hover-reveal affordances
+    // don't exist on touch, and the announcement bar may not be
+    // visible if the active group has none. Resolve the group from the
+    // groups store the same way `sendMessage` does (filter > activeSessionId
+    // > grp_default fallback) so the gear targets whatever is on screen.
+    const topbarGroup = Vue.computed(() => {
       const gs = sessionsStore();
       if (!gs || !gs.sessions) return null;
       const filterId = store.yeaftActiveSessionFilter || null;
@@ -705,24 +665,12 @@ export default {
     });
 
     const topbarModel = Vue.computed(() => {
+      const groupModel = topbarGroup.value?.config?.model;
       return typeof groupModel === 'string' && groupModel ? groupModel : (store.yeaftModel || '');
     });
 
-    const topbarModelMeta = Vue.computed(() => {
-      const id = topbarModel.value;
-      if (!id) return null;
-      return store.yeaftAvailableModels.find(m => m && m.id === id) || null;
-    });
-
-    const topbarEffortOptions = Vue.computed(() => {
-      const options = topbarModelMeta.value?.effortOptions;
-      return Array.isArray(options) ? options.filter(Boolean) : [];
-    });
-
-    const topbarEffort = Vue.computed(() => {
-      const groupEffort = topbarGroup.value?.config?.modelEffort;
-      return typeof groupEffort === 'string' && groupEffort ? groupEffort : (store.yeaftModelEffort || 'medium');
-    });
+    // ── manual dream trigger ──
+    // Header dream acts on the conversation currently on screen. That is
     // a group-scoped manual pass, not a VP-scoped/global pass.
     const dreamButtonGroupId = Vue.computed(() => {
       const g = topbarGroup.value;
@@ -803,26 +751,17 @@ export default {
       const dt = Math.max(0, dreamTickMs.value - whenMs);
       const min = Math.floor(dt / 60_000);
       if (min < 1) return null; // "just now" handled by the bubble already
-    const selectModel = (modelId) => {
-      const nextMeta = store.yeaftAvailableModels.find(m => m && m.id === modelId) || null;
-      const nextOptions = Array.isArray(nextMeta?.effortOptions) ? nextMeta.effortOptions : [];
-      const nextEffort = nextOptions.length && nextOptions.includes(topbarEffort.value)
-        ? topbarEffort.value
-        : null;
-      if (modelId === topbarModel.value) {
-        modelDropdownOpen.value = false;
-        return;
-      }
-      const groupId = topbarGroup.value?.id || null;
-      store.switchYeaftModel(modelId, groupId, nextEffort);
-      modelDropdownOpen.value = false;
+      if (min < 60) return `${min}m`;
+      const hr = Math.floor(min / 60);
+      if (hr < 24) return `${hr}h`;
+      const day = Math.floor(hr / 24);
+      return `${day}d`;
     };
 
-    const selectEffort = (effort) => {
-      if (!topbarEffortOptions.value.includes(effort)) return;
-      const groupId = topbarGroup.value?.id || null;
-      store.switchYeaftModel(topbarModel.value, groupId, effort);
-    };
+    /** Relative-time string for the tooltip's second line (or null = never run). */
+    const dreamLastRunRelative = Vue.computed(() => formatRelativeFromNow(dreamLastRunAt.value));
+
+    const onDreamTriggerClick = () => {
       if (dreamRunning.value || !dreamButtonGroupId.value) return;
       vpStore.triggerGroupDream(dreamButtonGroupId.value);
     };
@@ -840,25 +779,16 @@ export default {
     };
 
     const selectModel = (modelId) => {
-      const nextMeta = store.yeaftAvailableModels.find(m => m && m.id === modelId) || null;
-      const nextOptions = Array.isArray(nextMeta?.effortOptions) ? nextMeta.effortOptions : [];
-      const nextEffort = nextOptions.length && nextOptions.includes(topbarEffort.value)
-        ? topbarEffort.value
-        : null;
       if (modelId === topbarModel.value) {
         modelDropdownOpen.value = false;
         return;
       }
       const groupId = topbarGroup.value?.id || null;
-      store.switchYeaftModel(modelId, groupId, nextEffort);
+      store.switchYeaftModel(modelId, groupId);
       modelDropdownOpen.value = false;
     };
 
-    const selectEffort = (effort) => {
-      if (!topbarEffortOptions.value.includes(effort)) return;
-      const groupId = topbarGroup.value?.id || null;
-      store.switchYeaftModel(topbarModel.value, groupId, effort);
-    };
+    // Format a token count compactly: 400000 → "400k", 1048576 → "1m", <1000 → raw.
     const formatTokens = (n) => {
       if (!n || !Number.isFinite(n) || n <= 0) return '';
       if (n >= 1_000_000) return `${Math.round(n / 100_000) / 10}m`;
@@ -1105,10 +1035,12 @@ export default {
         connectionState: store.connectionState,
         vpLabelOf: (id) => vpStore.vpLabel(id),
       });
-      modelDropdownOpen,
-      topbarModel,
-      topbarEffort,
-      topbarEffortOptions,
+    });
+
+    const onOpenVpDetailFromTimeline = (vpId) => {
+      if (!vpId) return;
+      // Same path MessageList uses for VP-badge clicks:
+      // the store handles "leave any conflicting layer" cleanup internally.
       store.enterVpDetailView(vpId);
     };
 
@@ -1125,10 +1057,12 @@ export default {
       }
     };
 
-      toggleModelDropdown,
-      selectModel,
-      selectEffort,
-
+    // Per-VP abort from the timeline. The row can be active before the
+    // engine has emitted vp_turn_start, so use the store helper that falls
+    // back to the agent status table's current turnId.
+    const onCancelVpFromTimeline = (vpId) => {
+      if (!vpId) return;
+      if (typeof store.cancelVpTurnForSession === 'function') {
         store.cancelVpTurnForSession(vpId, store.yeaftActiveSessionFilter || null);
       }
     };
@@ -1139,9 +1073,10 @@ export default {
       debugMode,
       modelDropdownOpen,
       topbarModel,
-      topbarEffort,
-      topbarEffortOptions,
       showSettings,
+      showLlmConfig,
+      settingsInitialTab,
+      chatInputRef,
       openSettings,
       isMobile,
       isNarrowDetail,
@@ -1158,11 +1093,12 @@ export default {
       reloadMessages,
       reloadPage,
       toggleModelDropdown,
-      toggleModelDropdown,
       selectModel,
-      selectEffort,
       openLlmConfig,
-
+      onLlmConfigMessage,
+      onLlmConfigSaved,
+      formatTokens,
+      formatModelCtx,
       toggleSettings,
       onSettingsSaved,
       sidebarV2Enabled,

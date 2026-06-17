@@ -550,7 +550,7 @@ export async function handleMessage(msg) {
     case 'unify_abort_all':
       // task-325c: user-initiated abort of ALL in-flight queries across
       // every thread. Always emits `yeaft_aborted` ack.
-      handleYeaftAbortAll(msg);
+      handleYeaftAbortAll();
       break;
 
     case 'yeaft_abort_turn':

@@ -90,8 +90,10 @@ describe('Yeaft session pin persistence flow', () => {
     store.setActive('s-other');
 
     expect(store.activeSessionId).toBe('s-other');
-    expect(ids(store.sessionList)).toEqual(['s-pinned', 's-active', 's-other']);
+    expect(ids(store.sessionList)).toEqual(['s-pinned', 's-other', 's-active']);
   });
+
+  it('keeps server-persisted pins after a later session list refresh', () => {
     const store = useSessionsStore();
 
     store.applySnapshot([
@@ -122,39 +124,21 @@ describe('Yeaft session pin persistence flow', () => {
     store.applyPinState('s-b', true);
 
     expect(store.sessions['s-b']).toMatchObject({ pinned: true });
-    expect(ids(store.sessionList)).toEqual(['s-b', 's-c', 's-a']);
+    expect(ids(store.sessionList)).toEqual(['s-b', 's-a', 's-c']);
 
     store.applyPinState('s-b', false);
 
     expect(store.sessions['s-b']).toMatchObject({ pinned: false });
-    expect(ids(store.sessionList)).toEqual(['s-c', 's-b', 's-a']);
-  });
-
-    expect(ids(store.sessionList)).toEqual(['s-c', 's-b', 's-a']);
-  });
-
-  it('keeps list order stable when selecting an older Yeaft session', () => {
-    const store = useSessionsStore();
-    store.applySnapshot([
-      { id: 's-new', updatedAt: 300 },
-      { id: 's-middle', updatedAt: 200 },
-      { id: 's-old', updatedAt: 100 },
-    ], 'agent-1');
-
-    expect(ids(store.sessionList)).toEqual(['s-new', 's-middle', 's-old']);
-
-    store.setActive('s-old');
-
-    expect(store.activeSessionId).toBe('s-old');
-    expect(ids(store.sessionList)).toEqual(['s-new', 's-middle', 's-old']);
-
-    store.applyPinState('s-middle', true);
-
-    expect(ids(store.sessionList)).toEqual(['s-middle', 's-new', 's-old']);
+    expect(ids(store.sessionList)).toEqual(['s-a', 's-b', 's-c']);
   });
 
   it('keeps a pinned session pinned when selecting a non-pinned session after an upsert without pin fields', () => {
-
+    const store = useSessionsStore();
+    store.applySnapshot([
+      { id: 'yeaft-ui', name: 'Yeaft-UI', updatedAt: 30, isPinned: true },
+      { id: 'yeaft', name: 'Yeaft', updatedAt: 20 },
+      { id: 'other', name: 'Other', updatedAt: 10 },
+    ], 'agent-1');
 
     expect(ids(store.sessionList)).toEqual(['yeaft-ui', 'yeaft', 'other']);
     expect(store.sessions['yeaft-ui']).toMatchObject({ pinned: true });

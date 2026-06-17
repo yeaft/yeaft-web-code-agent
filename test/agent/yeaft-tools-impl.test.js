@@ -77,40 +77,12 @@ describe('index.js tool registration', () => {
     expect(reg.names).toEqual(['NewName']);
     expect(reg.has('NewName')).toBe(true);
     expect(reg.has('OldName')).toBe(true);
-    expect(reg.has('OldName')).toBe(true);
-  });
+    expect(await reg.execute('OldName', {})).toBe('ok');
+    expect(reg.getToolDefs().length).toBe(1);
 
-  it('ToolRegistry returns full tool output without live truncation', async () => {
-    const { ToolRegistry } = await import(`${TOOLS_DIR}/registry.js`);
-    const { defineTool } = await import(`${TOOLS_DIR}/types.js`);
-    const reg = new ToolRegistry();
-    const largeOutput = 'r'.repeat(1500);
-
-    reg.register(defineTool({
-      name: 'LargeOutput',
-      description: 'large output',
-      parameters: { type: 'object', properties: {} },
-      execute: async () => largeOutput,
-    }));
-
-    const output = await reg.execute('LargeOutput', {}, {});
-    expect(output).toBe(largeOutput);
-    expect(output).not.toContain('[truncated:');
-    expect(output).not.toContain('[已截断：');
-  });
-
-  it('history display truncation helper caps only display copies', async () => {
-    const { truncateToolResultForHistoryDisplay } = await import(`${TOOLS_DIR}/registry.js`);
-    const largeOutput = 'h'.repeat(1500);
-
-    const output = truncateToolResultForHistoryDisplay(largeOutput, { toolName: 'HistoryTool', language: 'en' });
-    expect(output.length).toBeGreaterThan(1024);
-    expect(output).not.toBe(largeOutput);
-    expect(output).toContain('[truncated: HistoryTool returned');
-    expect(output).toContain('live requests, debug, and persistence keep the full content');
-  });
-});
-
+    // Sanity check on the real registry: SpawnAgent/PromptAgent are
+    // resolvable under their legacy names too.
+    const full = createFullRegistry();
     expect(full.has('Agent')).toBe(true);
     expect(full.has('SendMessage')).toBe(true);
     expect(full.names).not.toContain('Agent');

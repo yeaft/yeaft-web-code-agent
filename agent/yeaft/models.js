@@ -407,33 +407,12 @@ export function mapEffortToOpenAIReasoning(effort) {
     // OpenAI doesn't support 'max'; degrade to 'high'. Engine may emit a
     // debug line noting the downgrade — adapter level stays silent.
     case 'max': return 'high';
+    default: return null;
   }
-}
-
-export const MODEL_EFFORT_OPTIONS = ['low', 'medium', 'high'];
-
-function inferThinkingCapability(model) {
-  const id = parseModelRef(model).modelId.toLowerCase();
-  if (!id) return null;
-
-  if (/^(gpt-5|o1|o3|o4|chatgpt-|codex-)/.test(id)) {
-    return { supportsThinking: true, thinkingProtocol: 'openai-reasoning', defaultEffort: null, maxBudgetTokens: null };
-  }
-
-  // Anthropic extended thinking is available on Claude 3.7+ and Claude 4.x.
-  // Be conservative: older Claude 3/3.5/Haiku entries stay unsupported unless
-  // explicitly listed in the registry.
-  if (/^claude-/.test(id) && (/(^|-)3-7($|-|\.)/.test(id) || /(^|-)4($|-|\.)/.test(id))) {
-    const maxBudgetTokens = id.includes('opus') ? 64000 : 32000;
-    return { supportsThinking: true, thinkingProtocol: 'anthropic', defaultEffort: null, maxBudgetTokens };
-  }
-
-  return null;
 }
 
 /**
- * Map a Yeaft effort level to the Anthropic extended thinking budget. The
- * 'max' level is model-specific because Anthropic models have different caps.
+ * Resolve the Anthropic thinking budget_tokens value for a given (model, effort).
  *
  * Priority:
  *   1. Registry ModelInfo.maxBudgetTokens when effort === 'max'
@@ -441,12 +420,14 @@ function inferThinkingCapability(model) {
  *
  * @param {string} model
  * @param {Effort} effort
+ * @returns {number | null} Null when effort is unknown/falsy.
  */
-export function getThinkingCapability(model) {
-  const info = MODEL_REGISTRY.get(model);
-  const hasExplicitThinking = info && Object.prototype.hasOwnProperty.call(info, 'supportsThinking');
-  const inferred = hasExplicitThinking ? null : inferThinkingCapability(model);
-  if ((!info || !info.supportsThinking) && !inferred) {
+export function thinkingBudgetForEffort(model, effort) {
+  if (!effort) return null;
+  if (effort === 'max') {
+    const info = MODEL_REGISTRY.get(model);
+    if (info?.maxBudgetTokens) return info.maxBudgetTokens;
+    return ANTHROPIC_THINKING_BUDGETS.max;
   }
   return ANTHROPIC_THINKING_BUDGETS[effort] ?? null;
 }
@@ -457,52 +438,30 @@ export function getThinkingCapability(model) {
  * router uses this to silently drop the `effort` parameter for unsupported
  * models (red line: never error on unsupported).
  *
-    maxBudgetTokens: info?.maxBudgetTokens ?? inferred?.maxBudgetTokens ?? null,
-  };
-}
-
-export function getModelEffortOptions(model) {
-  const cap = getThinkingCapability(model);
-  if (!cap.supportsThinking || cap.thinkingProtocol === 'none') return [];
-  return MODEL_EFFORT_OPTIONS.slice();
-}
-
-export function modelSupportsEffort(model) {
-  return getModelEffortOptions(model).length > 0;
-}
-
-/**
- * Coerce a possibly-stringy numeric value to a positive integer, or
-
-  if ((!info || !info.supportsThinking) && !inferred) {
+ * @param {string} model
+ * @returns {{ supportsThinking: boolean, thinkingProtocol: 'anthropic' | 'openai-reasoning' | 'none', defaultEffort: Effort | null, maxBudgetTokens: number | null }}
+ */
+export function getThinkingCapability(model) {
+  const info = MODEL_REGISTRY.get(model);
+  if (!info || !info.supportsThinking) {
     return {
       supportsThinking: false,
       thinkingProtocol: 'none',
       defaultEffort: null,
       maxBudgetTokens: null,
     };
-    };
   }
   return {
-    supportsThinking: Boolean(info?.supportsThinking ?? inferred?.supportsThinking),
-    thinkingProtocol: info?.thinkingProtocol || inferred?.thinkingProtocol || 'none',
-    defaultEffort: info?.defaultEffort ?? inferred?.defaultEffort ?? null,
-    maxBudgetTokens: info?.maxBudgetTokens ?? inferred?.maxBudgetTokens ?? null,
+    supportsThinking: true,
+    thinkingProtocol: info.thinkingProtocol || 'none',
+    defaultEffort: info.defaultEffort ?? null,
+    maxBudgetTokens: info.maxBudgetTokens ?? null,
   };
 }
 
-export function getModelEffortOptions(model) {
-  const cap = getThinkingCapability(model);
-  if (!cap.supportsThinking || cap.thinkingProtocol === 'none') return [];
-  return MODEL_EFFORT_OPTIONS.slice();
-}
-
-export function modelSupportsEffort(model) {
-  return getModelEffortOptions(model).length > 0;
-}
-
 /**
- * Coerce a possibly-stringy numeric value to a positive integer, or
+ * Valid-effort guard. Unknown values → null (caller should treat as "no effort").
+ *
  * @param {unknown} effort
  * @returns {Effort | null}
  */

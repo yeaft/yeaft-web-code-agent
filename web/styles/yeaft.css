@@ -363,126 +363,13 @@
   flex-shrink: 0;
   opacity: 0.75;
   margin-left: 4px;
-  margin-left: 4px;
-}
-
-.yeaft-model-effort-panel {
-  padding: 7px 8px 8px;
-}
-
-.yeaft-model-effort-title {
-  margin-bottom: 6px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-muted);
-}
-
-.yeaft-model-effort-options {
-  display: flex;
-  gap: 6px;
-}
-
-.yeaft-model-effort-option {
-  border: 1px solid var(--border-color);
-  background: transparent;
-  color: var(--text-secondary);
-  border-radius: 8px;
-  padding: 5px 9px;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.yeaft-model-effort-option:hover {
-  background: var(--sidebar-hover);
-  color: var(--text-primary);
-}
-
-.yeaft-model-effort-option.active {
-  border-color: var(--accent-blue);
-  background: var(--session-active);
-  color: var(--text-primary);
-  font-weight: 600;
 }
 
 /* ── Provider edit — per-model row (id + ctx + max) ── */
 
-}
-
-.yeaft-model-effort-title {
-  margin-bottom: 6px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-muted);
-}
-
-.yeaft-model-effort-options {
+.yeaft-settings-model-rows {
   display: flex;
-  gap: 6px;
-}
-
-.yeaft-model-effort-option {
-  border: 1px solid var(--border-color);
-  background: transparent;
-  color: var(--text-secondary);
-  border-radius: 8px;
-  padding: 5px 9px;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.yeaft-model-effort-option:hover {
-  background: var(--sidebar-hover);
-  color: var(--text-primary);
-}
-
-.yeaft-model-effort-option.active {
-  border-color: var(--accent-blue);
-  background: var(--session-active);
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-/* ─── Sidebar Sessions (task-339-F1) ───────────────────────────── */
-
-.yeaft-model-effort-title {
-  margin-bottom: 6px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-muted);
-}
-
-.yeaft-model-effort-options {
-  display: flex;
-  gap: 6px;
-}
-
-.yeaft-model-effort-option {
-  border: 1px solid var(--border-color);
-  background: transparent;
-  color: var(--text-secondary);
-  border-radius: 8px;
-  padding: 5px 9px;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.yeaft-model-effort-option:hover {
-  background: var(--sidebar-hover);
-  color: var(--text-primary);
-}
-
-.yeaft-model-effort-option.active {
-  border-color: var(--accent-blue);
-  background: var(--session-active);
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-/* ─── Sidebar Sessions (task-339-F1) ───────────────────────────── */
-
+  flex-direction: column;
   gap: 6px;
 }
 
@@ -3777,38 +3664,20 @@
   margin-top: 8px;
 }
 
-.yeaft-debug-dream-card {
-  flex: 0 0 auto;
-  padding: 10px;
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  background: var(--bg-sidebar);
-}
-
-.yeaft-debug-dream-card-title {
-  margin-bottom: 8px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.yeaft-debug-dream-layer {
-  margin-top: 8px;
-}
-
 .yeaft-debug-dream-layer summary {
+  cursor: pointer;
+  color: var(--text-primary);
+  font-weight: 500;
+}
 
-.yeaft-debug-dream-segment-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  display: flex;
-  display: flex;
-  flex-direction: column;
+.yeaft-debug-scroll-pre {
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.yeaft-debug-dream-segments {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -3822,37 +3691,24 @@
 }
 
 .yeaft-debug-dream-segment-head {
-.yeaft-debug-dream-segment-head {
-  white-space: nowrap;
-}
-
-.yeaft-debug-dream-segment-head em {
-  margin-left: 6px;
-  color: var(--text-secondary);
-  font-style: normal;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--text-primary);
   text-align: left;
   cursor: pointer;
 }
 
 .yeaft-debug-dream-segment-head span {
-.yeaft-debug-dream-segment-head span {
-  margin-top: 6px;
-}
-
-@media (max-width: 640px) {
-  .yeaft-debug-dream-panel {
-    padding: 0 8px 8px;
-  }
-
-  .yeaft-debug-dream-shell {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(120px, 34%) minmax(0, 1fr);
-    width: 100%;
-  }
-}
-
-  color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .yeaft-debug-dream-segment-head em {
@@ -3870,15 +3726,13 @@
 }
 
 @media (max-width: 640px) {
+  .yeaft-debug-dream-panel {
+    padding: 0 8px 8px;
+  }
 
-  overflow: auto;
+  .yeaft-debug-dream-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(120px, 34%) minmax(0, 1fr);
+    width: 100%;
+  }
 }
-
-@media (max-width: 640px) {
-
-
-@media (max-width: 640px) {
-
-}
-
-@media (max-width: 640px) {

@@ -95,28 +95,27 @@ function thinkingV1Enabled() {
  *
  * @param {object} params
  * @returns {object} new params object with effort possibly removed
+ */
 export function filterEffortForModel(params) {
   if (!params || !('effort' in params)) return params;
   if (!thinkingV1Enabled()) {
-    if (params.effortSource !== 'user') {
-      const { effort: _drop, effortSource: _source, ...rest } = params;
-      return rest;
-    }
+    const { effort: _drop, ...rest } = params;
+    return rest;
   }
   const norm = normalizeEffort(params.effort);
   if (!norm) {
-    const { effort: _drop, effortSource: _source, ...rest } = params;
+    const { effort: _drop, ...rest } = params;
     return rest;
   }
   const cap = getThinkingCapability(parseModelRef(params.model).modelId);
   if (!cap.supportsThinking || cap.thinkingProtocol === 'none') {
-    const { effort: _drop, effortSource: _source, ...rest } = params;
+    const { effort: _drop, ...rest } = params;
     return rest;
   }
-  return { ...params, effort: norm, effortSource: params.effortSource };
+  return { ...params, effort: norm };
 }
 
-}
+/**
  * task-715: last-line-of-defense pair sanitize at the wire.
  *
  * `pairSanitize` already runs in two upstream paths

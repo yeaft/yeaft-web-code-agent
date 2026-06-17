@@ -380,23 +380,13 @@ export const useChatStore = defineStore('chat', {
     // =====================
     currentView: 'chat',           // 'chat' | 'yeaft' — 顶级页面切换
     yeaftConversationId: null,     // 虚拟 conversationId（从 agent session_ready 获取）
-    yeaftConversationId: null,     // Agent session_ready 给出的虚拟 conversationId
     yeaftModel: null,              // 当前 Yeaft 模型名
-    yeaftModelEffort: null,        // 当前 Session 选中的 reasoning/thinking effort
-    yeaftSessionReady: false,
-      if (targetSessionId) {
-        const config = { model: modelId };
-        if (modelEffort !== undefined) config.modelEffort = modelEffort || null;
-        const res = await this.sessionCrudRequest('update_config', {
-          sessionId: targetSessionId,
-          config,
-        });
-        if (res && res.ok) {
-          this.yeaftModel = modelId;
-          if (modelEffort !== undefined) this.yeaftModelEffort = modelEffort || null;
-        }
-        return res;
-      }
+    yeaftAgentId: null,            // 绑定的 agent ID
+    yeaftSessionReady: false,     // Session 是否已初始化
+    yeaftStatus: null,            // { skills, mcpServers, tools } 从 session_ready 获取
+    yeaftAvailableModels: [],     // 可用模型列表 [{ id, provider, label }]
+    yeaftStatusByAgent: {},       // { [agentId]: cached yeaft_status/session_ready payload }
+    yeaftModelsRefreshing: false, // 当前 agent 的 model/status 后台刷新状态
     yeaftModelRefreshError: null, // 当前 agent 最近一次 refresh 错误（保留旧模型列表）
     yeaftYeaftDir: null,          // agent 的 ~/.yeaft 绝对路径（session_ready 携带）— Yeaft workbench 的默认 workDir
     // 2026-05-13: tool-call usage stats for the Yeaft debug drawer.
@@ -1435,10 +1425,15 @@ export const useChatStore = defineStore('chat', {
               this.processingConversations[agentConvId] = true;
               delete this.processingConversations[localConvId];
             }
+            // Migrate execution status
+            if (this.executionStatusMap[localConvId]) {
+              this.executionStatusMap[agentConvId] = this.executionStatusMap[localConvId];
+              delete this.executionStatusMap[localConvId];
+            }
+          } else if (!this.messagesMap[agentConvId]) {
+            this.messagesMap[agentConvId] = [];
           }
-          this.yeaftModel = event.model;
-          this.yeaftModelEffort = event.modelEffort || null;
-          this.yeaftSessionReady = true;
+
           this.yeaftConversationId = agentConvId;
           const statusAgentId = msg.agentId || this.yeaftAgentId || this.currentAgent;
           if (statusAgentId) {
@@ -1742,13 +1737,16 @@ export const useChatStore = defineStore('chat', {
               trigger: event.trigger,
               status: event.status,
               loopRange: range,
-
-        case 'model_switched':
-          this.yeaftModel = event.model;
-
-        case 'model_switched':
-          this.yeaftModel = event.model;
-          this.yeaftModelEffort = event.modelEffort || null;
+              toolCount: event.toolCount || 0,
+              content: event.content || '',
+              durationMs: event.durationMs || 0,
+              error: event.error || null,
+              sessionId: msg.sessionId || null,
+              anchorMsgId,
+              anchorOrder,
+              updatedAt: Date.now(),
+            },
+          };
           break;
         }
 
@@ -2718,35 +2716,35 @@ export const useChatStore = defineStore('chat', {
         this.sendWsMessage(payload);
       }
     },
+    // ★ task-334-ui-c: VP detail view entry / exit.
+    enterVpDetailView(vpId) {
+      if (!vpId) return;
+      this.yeaftActiveVpDetailId = String(vpId);
     },
-    async switchYeaftModel(modelId, groupId = null, modelEffort = undefined) {
+    leaveVpDetailView() {
+      this.yeaftActiveVpDetailId = null;
+    },
+    // H2.f.6: setYeaftFeatureReplyThreadId / setYeaftJumpTarget /
+    // clearYeaftJumpTarget actions removed.
+    async switchYeaftModel(modelId, groupId = null) {
       if (!modelId || !this.yeaftAgentId) return;
       const targetSessionId = groupId || null;
       if (targetSessionId) {
-        const config = { model: modelId };
-        if (modelEffort !== undefined) config.modelEffort = modelEffort || null;
         const res = await this.sessionCrudRequest('update_config', {
           sessionId: targetSessionId,
-          config,
+          config: { model: modelId },
         });
         if (res && res.ok) {
           this.yeaftModel = modelId;
-          if (modelEffort !== undefined) this.yeaftModelEffort = modelEffort || null;
         }
         return res;
       }
-        type: 'yeaft_model_switch',
-        model: modelId,
-        modelEffort: modelEffort || null,
-        agentId: this.yeaftAgentId,
-      });
-
       this.sendWsMessage({
         type: 'yeaft_model_switch',
         model: modelId,
-        modelEffort: modelEffort || null,
         agentId: this.yeaftAgentId,
       });
+      return null;
     },
     // feat-6af5f9f1 PR C: search query for the debug panel toolbar.
     // Substring filter (case-insensitive) applied to the per-turn fields

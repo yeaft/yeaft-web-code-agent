@@ -1372,8 +1372,13 @@ export class Engine {
     // valid prompt prefix.
     const parsed = parseEffortPrefix(prompt);
     const effectivePrompt = parsed.cleanedPrompt;
-    const configuredEffort = normalizeEffort(this.#config?.modelEffort);
-    const effectiveUserEffort = normalizeEffort(userEffort) || parsed.effort || configuredEffort || null;
+    const effectiveUserEffort = normalizeEffort(userEffort) || parsed.effort || null;
+    const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
+      ? collabToolPolicy
+      : null;
+
+    // ─── task-325a: engine-owned AbortController ─────────────
+    // We create our own controller for this query run so `engine.abort()`
     // can trigger cancellation without requiring the caller to hand in a
     // signal. If the caller DID provide a signal, we mirror its state onto
     // our controller (honouring both entry points). The linked signal
@@ -1950,14 +1955,11 @@ export class Engine {
           messages: wireMessages,
           tools: toolDefs.length > 0 ? toolDefs : undefined,
           maxTokens: this.#config.maxOutputTokens || 16384,
-          tools: toolDefs.length > 0 ? toolDefs : undefined,
-          maxTokens: this.#config.maxOutputTokens || 16384,
           effort: resolvedEffort,
-          effortSource: userEffort ? 'user' : 'auto',
           signal,
           onRawExchange: captureRawExchange,
         })) {
-
+          switch (event.type) {
             case 'text_delta':
               if (ttfbMs === null) ttfbMs = Date.now() - startTime;
               responseText += event.text;
