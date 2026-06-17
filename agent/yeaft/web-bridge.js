@@ -3481,6 +3481,17 @@ function removeQueuedVpTurn(turnId) {
   return removed;
 }
 
+function findTurnIdsForVp({ sessionId = null, vpId = null } = {}) {
+  if (!vpId) return [];
+  const ids = [];
+  for (const [turnId, meta] of turnAbortMeta.entries()) {
+    if (!meta || meta.vpId !== vpId) continue;
+    if (sessionId && meta.sessionId !== sessionId) continue;
+    ids.push(turnId);
+  }
+  return ids;
+}
+
 function emitQueuedTurnAbort(meta, turnId) {
   if (!meta?.vpId) return;
   const sessionId = meta.sessionId || null;
@@ -3621,31 +3632,55 @@ export function handleYeaftAbortAll(msg = {}) {
 }
 
 /**
- * Per-VP abort: stops a single VP turn by turnId without affecting siblings.
- * Frontend sends `{ type: 'yeaft_abort_turn', turnId }`.
- * @param {{ turnId?: string }} msg
+ * Per-VP abort: stops a single VP turn without affecting siblings.
+ * New clients send `{ sessionId, vpId }`; `turnId` is kept for legacy buttons.
+ * @param {{ turnId?: string, sessionId?: string, vpId?: string }} msg
  */
 export function handleYeaftAbortTurn(msg = {}) {
-  const { turnId } = msg;
-  if (!turnId) {
-    sendSessionEvent({ type: 'yeaft_turn_aborted', turnId: null, success: false });
+  const sessionId = msg.sessionId || null;
+  const vpId = msg.vpId || null;
+  const turnIds = msg.turnId ? [msg.turnId] : findTurnIdsForVp({ sessionId, vpId });
+
+  if (turnIds.length === 0) {
+    sendSessionEvent({ type: 'yeaft_turn_aborted', turnId: null, turnIds: [], success: false, sessionId, vpId }, sessionId ? { sessionId } : undefined);
     return;
   }
 
-  const meta = turnAbortMeta.get(turnId);
-  const ctrl = turnAbortCtrls.get(turnId);
   let success = false;
+  const abortedTurnIds = [];
+  let ackSessionId = sessionId;
+  let ackVpId = vpId;
 
-  if (ctrl && !ctrl.signal.aborted) {
-    try { ctrl.abort(); success = true; } catch { /* best-effort */ }
-  } else if (removeQueuedVpTurn(turnId)) {
-    success = true;
-    emitQueuedTurnAbort(meta, turnId);
+  for (const turnId of turnIds) {
+    const meta = turnAbortMeta.get(turnId);
+    const ctrl = turnAbortCtrls.get(turnId);
+    if (!ackSessionId && meta?.sessionId) ackSessionId = meta.sessionId;
+    if (!ackVpId && meta?.vpId) ackVpId = meta.vpId;
+
+    let turnAborted = false;
+    if (ctrl && !ctrl.signal.aborted) {
+      try { ctrl.abort(); turnAborted = true; } catch { /* best-effort */ }
+    } else if (removeQueuedVpTurn(turnId)) {
+      turnAborted = true;
+      emitQueuedTurnAbort(meta, turnId);
+    }
+
+    if (turnAborted) {
+      success = true;
+      abortedTurnIds.push(turnId);
+    }
+    turnAbortCtrls.delete(turnId);
+    turnAbortMeta.delete(turnId);
   }
 
-  turnAbortCtrls.delete(turnId);
-  turnAbortMeta.delete(turnId);
-  sendSessionEvent({ type: 'yeaft_turn_aborted', turnId, success, sessionId: meta?.sessionId || null }, meta?.sessionId ? { sessionId: meta.sessionId } : undefined);
+  sendSessionEvent({
+    type: 'yeaft_turn_aborted',
+    turnId: abortedTurnIds[0] || turnIds[0] || null,
+    turnIds: abortedTurnIds.length > 0 ? abortedTurnIds : turnIds,
+    success,
+    sessionId: ackSessionId || null,
+    vpId: ackVpId || null,
+  }, ackSessionId ? { sessionId: ackSessionId } : undefined);
 }
 
 /**

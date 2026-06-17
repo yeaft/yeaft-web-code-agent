@@ -1102,8 +1102,11 @@ export default {
     // back to the agent status table's current turnId.
     const onCancelVpFromTimeline = (vpId) => {
       if (!vpId) return;
+      const gs = sessionsStore();
+      const sessionId = store.yeaftActiveSessionFilter || gs?.activeSessionId || null;
+      if (!sessionId) return;
       if (typeof store.cancelVpTurnForSession === 'function') {
-        store.cancelVpTurnForSession(vpId, store.yeaftActiveSessionFilter || null);
+        store.cancelVpTurnForSession(vpId, sessionId);
       }
     };
 

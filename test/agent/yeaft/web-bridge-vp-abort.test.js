@@ -51,4 +51,38 @@ describe('Yeaft VP turn abort routing', () => {
       && msg.event.turnId === 'turn-a'
       && msg.event.success === true)).toBe(true);
   });
+
+  it('aborts a running VP turn by sessionId and vpId when turnId is unknown to the UI', () => {
+    const a = __testHooks.seedRunningVpTurn({ sessionId: 'session-1', turnId: 'turn-a', vpId: 'vp-a' });
+    const b = __testHooks.seedRunningVpTurn({ sessionId: 'session-1', turnId: 'turn-b', vpId: 'vp-b' });
+    const c = __testHooks.seedRunningVpTurn({ sessionId: 'session-2', turnId: 'turn-c', vpId: 'vp-a' });
+
+    handleYeaftAbortTurn({ sessionId: 'session-1', vpId: 'vp-a' });
+
+    expect(a.ctrl.signal.aborted).toBe(true);
+    expect(b.ctrl.signal.aborted).toBe(false);
+    expect(c.ctrl.signal.aborted).toBe(false);
+    expect(sent.some((msg) => msg.event?.type === 'yeaft_turn_aborted'
+      && msg.event.turnId === 'turn-a'
+      && msg.event.turnIds?.includes('turn-a')
+      && msg.event.sessionId === 'session-1'
+      && msg.event.vpId === 'vp-a'
+      && msg.event.success === true)).toBe(true);
+  });
+
+  it('removes a queued VP turn by sessionId and vpId before an AbortController exists', () => {
+    __testHooks.seedQueuedVpTurn({ sessionId: 'session-1', vpId: 'vp-a', turnId: 'turn-a' });
+    __testHooks.seedQueuedVpTurn({ sessionId: 'session-1', vpId: 'vp-b', turnId: 'turn-b' });
+    __testHooks.seedQueuedVpTurn({ sessionId: 'session-2', vpId: 'vp-a', turnId: 'turn-c' });
+
+    handleYeaftAbortTurn({ sessionId: 'session-1', vpId: 'vp-a' });
+
+    expect(__testHooks.queuedTurnIds().sort()).toEqual(['turn-b', 'turn-c']);
+    expect(sent.some((msg) => msg.event?.type === 'vp_turn_end'
+      && msg.event.turnId === 'turn-a'
+      && msg.event.reason === 'aborted')).toBe(true);
+    expect(sent.some((msg) => msg.event?.type === 'yeaft_turn_aborted'
+      && msg.event.turnIds?.includes('turn-a')
+      && msg.event.success === true)).toBe(true);
+  });
 });

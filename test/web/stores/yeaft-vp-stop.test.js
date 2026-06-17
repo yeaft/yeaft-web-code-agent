@@ -92,8 +92,34 @@ describe('Yeaft VP stop', () => {
     expect(store.sendWsMessage).toHaveBeenCalledWith(expect.objectContaining({
       type: 'yeaft_abort_turn',
       turnId: 'queued-turn-a',
+      sessionId: 'session-1',
+      vpId: 'vp-a',
     }));
     expect(store.stoppingVpTurnIds['queued-turn-a']).toEqual(expect.any(Number));
+  });
+
+  it('sends sessionId and vpId when no turn id is known yet', () => {
+    const store = freshStore();
+    store.yeaftAgentId = 'agent-1';
+    store.yeaftActiveSessionFilter = 'session-1';
+    store.sendWsMessage = vi.fn();
+    store.activeVpTurns = {};
+    store.vpStatuses = {
+      'session-1::vp-a': {
+        state: 'thinking',
+        vpId: 'vp-a',
+        sessionId: 'session-1',
+      },
+    };
+
+    expect(store.cancelVpTurnForSession('vp-a', 'session-1')).toBe(true);
+
+    expect(store.sendWsMessage).toHaveBeenCalledWith({
+      type: 'yeaft_abort_turn',
+      agentId: 'agent-1',
+      sessionId: 'session-1',
+      vpId: 'vp-a',
+    });
   });
 
   it('clears the stopping state on abort ack and marks timeline rows as stopping while pending', () => {
@@ -110,7 +136,7 @@ describe('Yeaft VP stop', () => {
     });
     expect(rowsBefore[0].isStopping).toBe(true);
 
-    store.handleYeaftOutput({ event: { type: 'yeaft_turn_aborted', turnId: 'turn-a', success: true } });
+    store.handleYeaftOutput({ event: { type: 'yeaft_turn_aborted', turnId: 'turn-a', turnIds: ['turn-a'], success: true, sessionId: 'session-1', vpId: 'vp-a' } });
 
     expect(store.stoppingVpTurnIds['turn-a']).toBeUndefined();
     expect(store.activeVpTurns['turn-a']).toBeUndefined();
