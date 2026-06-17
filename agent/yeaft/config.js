@@ -413,6 +413,27 @@ export function loadConfig(overrides = {}) {
     }
   }
 
+  // Agent-level primaryModel is optional. When absent, use the first provider
+  // model as the effective runtime/UI default without writing it back to
+  // ~/.yeaft/config.json. New Sessions may copy this value into their own
+  // config, but global config remains only a fallback source.
+  if (!primaryModel && !overrides.model && config.availableModels.length > 0) {
+    const first = config.availableModels[0];
+    const firstRef = first.ref || (first.provider && first.id ? `${first.provider}/${first.id}` : first.id);
+    if (firstRef) {
+      const parsed = parseModelRef(firstRef);
+      const fallbackModelInfo = resolveModel(parsed.modelId) || null;
+      config.model = firstRef;
+      config.modelInfo = fallbackModelInfo;
+      if (overrides.maxContextTokens === undefined && jsonConfig.maxContextTokens === undefined) {
+        config.maxContextTokens = resolveContextWindow(parsed.modelId, { modelInfo: fallbackModelInfo });
+      }
+      if (overrides.maxOutputTokens === undefined && jsonConfig.maxOutputTokens === undefined) {
+        config.maxOutputTokens = resolveMaxOutputTokens(parsed.modelId, { modelInfo: fallbackModelInfo });
+      }
+    }
+  }
+
   return config;
 }
 

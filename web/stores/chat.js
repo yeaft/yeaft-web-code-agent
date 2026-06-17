@@ -385,8 +385,8 @@ export const useChatStore = defineStore('chat', {
     // =====================
     currentView: 'chat',           // 'chat' | 'yeaft' — 顶级页面切换
     yeaftConversationId: null,     // 虚拟 conversationId（从 agent session_ready 获取）
-    yeaftModel: null,              // 当前 Yeaft 模型名
-    yeaftModelEffort: null,        // 当前 Session 选中的 reasoning/thinking effort
+    yeaftModel: null,              // agent/default Yeaft 模型名；Session override lives in sessions[].config.model
+    yeaftModelEffort: null,        // agent/default effort；Session override lives in sessions[].config.modelEffort
     yeaftAgentId: null,            // 绑定的 agent ID
     yeaftSessionReady: false,     // Session 是否已初始化
     yeaftStatus: null,            // { skills, mcpServers, tools } 从 session_ready 获取
@@ -2796,10 +2796,9 @@ export const useChatStore = defineStore('chat', {
           sessionId: targetSessionId,
           config,
         });
-        if (res && res.ok) {
-          this.yeaftModel = modelId;
-          if (modelEffort !== undefined) this.yeaftModelEffort = modelEffort || null;
-        }
+        // The sessions store applies the returned config. Do not mutate the
+        // agent/default model here; a Session-scoped switch must not leak into
+        // other Sessions that are still using the default fallback.
         return res;
       }
       this.sendWsMessage({

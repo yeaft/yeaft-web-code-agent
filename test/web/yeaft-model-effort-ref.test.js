@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { modelOptionMatchesRef, modelOptionRef } from '../../web/utils/modelRefs.js';
+import { modelOptionMatchesRef, modelOptionRef, resolveSessionModelEffort, resolveSessionModelRef } from '../../web/utils/modelRefs.js';
 
 describe('Yeaft model effort provider-qualified refs', () => {
   it('matches topbar model metadata by explicit ref or provider/id pair', () => {
@@ -22,5 +22,18 @@ describe('Yeaft model effort provider-qualified refs', () => {
     expect(modelOptionMatchesRef(claude, 'github-copilot/claude-opus-4.8')).toBe(true);
     expect(claude.effortOptions).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
     expect(gpt.effortOptions).not.toContain('max');
+  });
+
+  it('resolves topbar model and effort from the active Session before agent defaults', () => {
+    const sessionA = { id: 'session-a', config: { model: 'github-copilot/gpt-5.5', modelEffort: 'minimal' } };
+    const sessionB = { id: 'session-b', config: { model: 'github-copilot/claude-opus-4.8', modelEffort: 'max' } };
+    const unset = { id: 'session-c', config: {} };
+
+    expect(resolveSessionModelRef(sessionA, 'proxy/gpt-5')).toBe('github-copilot/gpt-5.5');
+    expect(resolveSessionModelEffort(sessionA, 'medium')).toBe('minimal');
+    expect(resolveSessionModelRef(sessionB, 'proxy/gpt-5')).toBe('github-copilot/claude-opus-4.8');
+    expect(resolveSessionModelEffort(sessionB, 'medium')).toBe('max');
+    expect(resolveSessionModelRef(unset, 'proxy/gpt-5')).toBe('proxy/gpt-5');
+    expect(resolveSessionModelEffort(unset, 'medium')).toBe('medium');
   });
 });
