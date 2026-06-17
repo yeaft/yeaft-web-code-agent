@@ -531,11 +531,13 @@ export default {
   'settings.security.agentKey': 'Agent 密钥',
   'settings.security.agentKeyDesc': '用于 Agent 连接认证的共享密钥',
   'settings.security.agentCmdInstall': '安装 Agent',
+  'settings.security.agentCmdRun': '运行 Agent',
   'settings.security.agentCmdService': '以服务方式运行',
-  'settings.security.agentCmdNeedsSecret': '请先重置 Agent 密钥，生成包含 --server、--secret 和 --name 的命令。',
+  'settings.security.agentCmdNeedsSecret': '请先生成 Agent 密钥，才能得到包含 --server、--secret 和 --name 的可用命令。',
   'settings.security.none': '无',
   'settings.security.show': '显示',
   'settings.security.hide': '隐藏',
+  'settings.security.generateKey': '生成密钥',
   'settings.security.resetKey': '重置密钥',
   'settings.security.resetting': '重置中...',
   'settings.security.resetWarning': '重置后所有 Agent 需重新配置',
@@ -598,10 +600,6 @@ export default {
   'settings.msg.deleteFailed': '删除失败',
 
   // Settings - Tools（默认配置）
-  'settings.tabs.tools': '工具',
-  'settings.tools.noAgent': '请先选择一个 Agent',
-  'settings.tools.noServers': '未检测到 MCP 服务器配置',
-  'settings.tools.hint': '新会话的默认 MCP 配置。在聊天标题栏的扳手图标中可配置当前会话的 MCP 服务器。',
 
   // Settings - LLM 配置
   'settings.tabs.llm': 'LLM',

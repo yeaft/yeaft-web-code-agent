@@ -567,11 +567,13 @@ export default {
   'settings.security.agentKey': 'Agent Secret',
   'settings.security.agentKeyDesc': 'Shared secret for Agent connection authentication',
   'settings.security.agentCmdInstall': 'Install Agent',
+  'settings.security.agentCmdRun': 'Run Agent',
   'settings.security.agentCmdService': 'Run as Service',
-  'settings.security.agentCmdNeedsSecret': 'Reset the Agent Secret first to generate the command with --server, --secret, and --name.',
+  'settings.security.agentCmdNeedsSecret': 'Generate an Agent Secret first to create a usable command with --server, --secret, and --name.',
   'settings.security.none': 'None',
   'settings.security.show': 'Show',
   'settings.security.hide': 'Hide',
+  'settings.security.generateKey': 'Generate Secret',
   'settings.security.resetKey': 'Reset Secret',
   'settings.security.resetting': 'Resetting...',
   'settings.security.resetWarning': 'All Agents need to be reconfigured after reset',
@@ -634,10 +636,6 @@ export default {
   'settings.msg.deleteFailed': 'Delete failed',
 
   // Settings - Tools (Default config)
-  'settings.tabs.tools': 'Tools',
-  'settings.tools.noAgent': 'Please select an Agent first',
-  'settings.tools.noServers': 'No MCP servers configured',
-  'settings.tools.hint': 'Default MCP configuration for new sessions. Use the wrench icon in the chat header to configure per-session MCP servers.',
 
   // Settings - LLM Configuration
   'settings.tabs.llm': 'LLM',

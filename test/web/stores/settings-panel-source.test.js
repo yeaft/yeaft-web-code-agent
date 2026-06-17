@@ -46,6 +46,36 @@ describe('Settings panel source', () => {
     expect(settingsCss).not.toContain('proxy-modal');
   });
 
+  it('does not expose the removed global Tools settings tab', () => {
+    expect(settingsPanelSource).not.toContain("activeTab === 'tools'");
+    expect(settingsPanelSource).not.toContain("key: 'tools'");
+    expect(settingsPanelSource).not.toContain('mcpServersList');
+    expect(settingsPanelSource).not.toContain('toggleMcpServer');
+    expect(enSource).not.toContain('settings.tabs.tools');
+    expect(zhSource).not.toContain('settings.tabs.tools');
+    expect(enSource).not.toContain('settings.tools.');
+    expect(zhSource).not.toContain('settings.tools.');
+    expect(settingsCss).not.toContain('sp-mcp-item');
+    expect(settingsCss).not.toContain('sp-tools-hint');
+
+    // Yeaft-owned MCP configuration remains in the Yeaft settings section.
+    expect(settingsPanelSource).toContain("{ key: 'mcp', label: this.$t('settings.yeaft.tabs.mcp') }");
+    expect(settingsPanelSource).toContain('<McpTab @message="onLlmMessage" />');
+  });
+
+  it('keeps Agent commands usable only when a secret is available', () => {
+    expect(settingsPanelSource).toContain('agentRunCommand()');
+    expect(settingsPanelSource).toContain('agentServiceCommand()');
+    expect(settingsPanelSource).toContain('yeaft-agent --server ${this.serverWsUrl} --secret ${this.agentSecret} --name ${this.agentName}');
+    expect(settingsPanelSource).toContain('yeaft-agent install --server ${this.serverWsUrl} --secret ${this.agentSecret} --name ${this.agentName}');
+    expect(settingsPanelSource).toContain("this.agentSecret && !this.resetConfirm");
+    expect(settingsPanelSource).toContain("settings.security.generateKey");
+    expect(enSource).toContain("'settings.security.agentCmdRun': 'Run Agent'");
+    expect(zhSource).toContain("'settings.security.agentCmdRun': '运行 Agent'");
+    expect(enSource).toContain('--server, --secret, and --name');
+    expect(zhSource).toContain('--server、--secret 和 --name');
+  });
+
   it('keeps shared sidebar agent dropdown styles after removing git.css', () => {
     for (const className of [
       'agent-dropdown-trigger',
