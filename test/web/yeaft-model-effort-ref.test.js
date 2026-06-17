@@ -37,3 +37,17 @@ describe('Yeaft model effort provider-qualified refs', () => {
     expect(resolveSessionModelEffort(unset, 'medium')).toBe('medium');
   });
 });
+
+describe('Yeaft model selector popover contract', () => {
+  it('keeps model choice pending until Apply and exposes Cancel', async () => {
+    const { readFileSync } = await import('fs');
+    const source = readFileSync(new URL('../../web/components/YeaftPage.js', import.meta.url), 'utf8');
+
+    expect(source).toContain('@click="selectPendingModel(modelOptionRef(m))"');
+    expect(source).toContain('@click="selectPendingEffort(effort)"');
+    expect(source).toContain('@click="applyModelSelection"');
+    expect(source).toContain('@click="cancelModelSelection"');
+    expect(source).not.toContain('@click="selectModel(modelOptionRef(m))"');
+    expect(source).not.toContain('@click="selectEffort(effort)"');
+  });
+});

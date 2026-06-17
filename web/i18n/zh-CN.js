@@ -5,6 +5,7 @@ export default {
   // ============ Common ============
   'common.loading': '加载中...',
   'common.confirm': '确定',
+  'common.apply': '应用',
   'common.cancel': '取消',
   'common.delete': '删除',
   'common.copy': '复制',
@@ -260,6 +261,7 @@ export default {
   'yeaft.modelMenu.label': '模型',
   'yeaft.modelMenu.effort': '推理强度',
   'yeaft.modelMenu.effort.openaiReasoning': '推理强度',
+  'yeaft.modelMenu.effort.anthropicBudget': '思考预算',
   'yeaft.modelMenu.effort.anthropicAdaptive': '自适应思考强度',
   'yeaft.modelMenu.effort.minimal': '最小',
   'yeaft.modelMenu.effort.low': '低',
@@ -267,6 +269,7 @@ export default {
   'yeaft.modelMenu.effort.high': '高',
   'yeaft.modelMenu.effort.xhigh': '超高',
   'yeaft.modelMenu.effort.max': '最高',
+  'yeaft.modelMenu.noEffort': '当前模型没有可兼容映射的推理强度控制。',
   'yeaft.modelMenu.configureHint': 'Provider、密钥、模型列表',
   // fix/dream-cadence-and-ui-trigger: manual dream trigger button.
   'yeaft.dream.runNow': '立即整理记忆',

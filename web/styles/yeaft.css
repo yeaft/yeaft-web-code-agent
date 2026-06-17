@@ -280,11 +280,23 @@
   top: calc(100% + 8px);
   left: 0;
   right: auto;
-  min-width: 280px;
-  width: max-content;
-  max-width: min(420px, calc(100vw - 32px));
+  min-width: 420px;
+  width: min(560px, calc(100vw - 32px));
+  max-width: min(560px, calc(100vw - 32px));
   max-height: min(420px, calc(100vh - 120px));
   z-index: 1300;
+}
+
+.yeaft-model-selector-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 180px;
+  gap: 8px;
+}
+
+.yeaft-model-list {
+  min-width: 0;
+  max-height: 300px;
+  overflow-y: auto;
 }
 
 .yeaft-model-dropdown-separator {
@@ -335,8 +347,12 @@
 }
 
 .yeaft-model-option {
+  width: 100%;
+  border: 0;
+  background: transparent;
   display: flex;
   align-items: center;
+  text-align: left;
   gap: 6px;
   padding: 6px 8px;
   border-radius: 6px;
@@ -353,6 +369,11 @@
 .yeaft-model-option.active {
   color: var(--text-primary);
   font-weight: 500;
+  background: var(--session-active);
+}
+
+.yeaft-model-option.current:not(.active) {
+  color: var(--text-primary);
 }
 
 .yeaft-model-check {

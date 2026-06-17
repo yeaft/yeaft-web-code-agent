@@ -23,6 +23,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
 import { getModelEffortOptions, getThinkingCapability, modelSupportsEffort, resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
+import { inferProtocolFromModelId } from './llm/router.js';
 import { normalizeKnownProviderForRuntime } from './llm/known-providers.js';
 
 /** Default configuration values. */
@@ -456,10 +457,18 @@ export function loadConfig(overrides = {}) {
           };
           if (m.contextWindow !== undefined) entry.contextWindow = m.contextWindow;
           if (m.maxOutput !== undefined) entry.maxOutput = m.maxOutput;
-          const effortOptions = getModelEffortOptions(m.id);
+          const protocol = m.protocol || p.protocol || inferProtocolFromModelId(m.id) || 'openai-responses';
+          const effortContext = {
+            protocol,
+            supportsEffort: m.supportsEffort,
+            effortOptions: m.effortOptions,
+            thinkingProtocol: m.thinkingProtocol,
+            maxBudgetTokens: m.maxBudgetTokens,
+          };
+          const effortOptions = getModelEffortOptions(m.id, effortContext);
           if (effortOptions.length > 0) {
-            const cap = getThinkingCapability(m.id);
-            entry.supportsEffort = modelSupportsEffort(m.id);
+            const cap = getThinkingCapability(m.id, effortContext);
+            entry.supportsEffort = modelSupportsEffort(m.id, effortContext);
             entry.effortOptions = effortOptions;
             entry.effortProtocol = cap.thinkingProtocol;
           }

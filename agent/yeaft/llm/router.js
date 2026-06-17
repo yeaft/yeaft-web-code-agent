@@ -22,7 +22,7 @@
  */
 
 import { LLMAdapter } from './adapter.js';
-import { getModelEffortOptions, getThinkingCapability, normalizeEffort, parseModelRef } from '../models.js';
+import { getModelEffortOptions, getThinkingCapability, normalizeEffort, normalizeEffortOptions, parseModelRef } from '../models.js';
 import {
   GITHUB_COPILOT_BASE_URL,
   GITHUB_COPILOT_CREDENTIAL_PROVIDER,
@@ -47,6 +47,15 @@ export function normalizeModelEntry(entry) {
     const out = { id: entry.id };
     if (typeof entry.protocol === 'string' && entry.protocol) {
       out.protocol = entry.protocol;
+    }
+    if (entry.supportsEffort === true) out.supportsEffort = true;
+    if (typeof entry.thinkingProtocol === 'string' && entry.thinkingProtocol) {
+      out.thinkingProtocol = entry.thinkingProtocol;
+    }
+    const effortOptions = normalizeEffortOptions(entry.effortOptions);
+    if (effortOptions) out.effortOptions = effortOptions;
+    if (Number.isFinite(entry.maxBudgetTokens) && entry.maxBudgetTokens > 0) {
+      out.maxBudgetTokens = entry.maxBudgetTokens;
     }
     return out;
   }
@@ -101,7 +110,7 @@ function thinkingV1Enabled() {
  * @param {object} params
  * @returns {object} new params object with effort possibly removed
  */
-export function filterEffortForModel(params) {
+export function filterEffortForModel(params, context = {}) {
   if (!params || !('effort' in params)) return params;
   if (!thinkingV1Enabled()) {
     if (params.effortSource !== 'user') {
@@ -115,12 +124,19 @@ export function filterEffortForModel(params) {
     return rest;
   }
   const modelId = parseModelRef(params.model).modelId;
-  const cap = getThinkingCapability(modelId);
+  const effortContext = {
+    protocol: context.protocol,
+    supportsEffort: context.entry?.supportsEffort,
+    effortOptions: context.entry?.effortOptions,
+    thinkingProtocol: context.entry?.thinkingProtocol,
+    maxBudgetTokens: context.entry?.maxBudgetTokens,
+  };
+  const cap = getThinkingCapability(modelId, effortContext);
   if (!cap.supportsThinking || cap.thinkingProtocol === 'none') {
     const { effort: _drop, effortSource: _source, ...rest } = params;
     return rest;
   }
-  if (!getModelEffortOptions(modelId).includes(norm)) {
+  if (!getModelEffortOptions(modelId, effortContext).includes(norm)) {
     const { effort: _drop, effortSource: _source, ...rest } = params;
     return rest;
   }
@@ -429,7 +445,7 @@ export class AdapterRouter extends LLMAdapter {
     const authModeKey = anthropicAuthHeaderMode || 'default';
     const cacheKey = `${provider.name}::${protocol}::${authModeKey}::${apiKeyFp}`;
     const cached = this.#adapterCache.get(cacheKey);
-    if (cached) return { adapter: cached, modelId: entry.id };
+    if (cached) return { adapter: cached, modelId: entry.id, protocol, entry };
 
     // Token rotation eviction: when a credential provider hands us a NEW
     // fingerprint for the same (provider, protocol) pair, drop the stale
@@ -467,7 +483,7 @@ export class AdapterRouter extends LLMAdapter {
     }
 
     this.#adapterCache.set(cacheKey, adapter);
-    return { adapter, modelId: entry.id };
+    return { adapter, modelId: entry.id, protocol, entry };
   }
 
   /**
@@ -527,10 +543,10 @@ export class AdapterRouter extends LLMAdapter {
    * @returns {AsyncGenerator<import('./adapter.js').StreamEvent>}
    */
   async *stream(params) {
-    const filtered = filterEffortForModel(params);
+    const resolved = await this.#resolveAdapter(params.model);
+    const filtered = filterEffortForModel({ ...params, model: resolved.modelId }, resolved);
     const sanitized = sanitizeMessagesForWire(filtered);
-    const { adapter, modelId } = await this.#resolveAdapter(sanitized.model);
-    yield* adapter.stream({ ...sanitized, model: modelId });
+    yield* resolved.adapter.stream({ ...sanitized, model: resolved.modelId });
   }
 
   /**
@@ -540,10 +556,10 @@ export class AdapterRouter extends LLMAdapter {
    * @returns {Promise<{ text: string, usage: { inputTokens: number, outputTokens: number } }>}
    */
   async call(params) {
-    const filtered = filterEffortForModel(params);
+    const resolved = await this.#resolveAdapter(params.model);
+    const filtered = filterEffortForModel({ ...params, model: resolved.modelId }, resolved);
     const sanitized = sanitizeMessagesForWire(filtered);
-    const { adapter, modelId } = await this.#resolveAdapter(sanitized.model);
-    return adapter.call({ ...sanitized, model: modelId });
+    return resolved.adapter.call({ ...sanitized, model: resolved.modelId });
   }
 
   /**
