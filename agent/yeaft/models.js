@@ -436,6 +436,20 @@ export const ANTHROPIC_ADAPTIVE_MAX_EFFORT_OPTIONS = ['low', 'medium', 'high', '
 // keep the user-facing scale to the three levels the user expects.
 export const DEEPSEEK_REASONING_EFFORT_OPTIONS = ['low', 'medium', 'high'];
 
+const VALID_EFFORT_OPTIONS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+
+export function normalizeEffortOptions(options) {
+  if (!Array.isArray(options)) return null;
+  const out = [];
+  for (const raw of options) {
+    const effort = normalizeEffort(raw);
+    if (effort && VALID_EFFORT_OPTIONS.has(effort) && !out.includes(effort)) {
+      out.push(effort);
+    }
+  }
+  return out.length ? out : null;
+}
+
 function inferThinkingCapability(model) {
   const id = parseModelRef(model).modelId.toLowerCase();
   if (!id) return null;
@@ -475,11 +489,10 @@ function inferThinkingCapability(model) {
     return { supportsThinking: true, thinkingProtocol: 'anthropic', defaultEffort: null, maxBudgetTokens };
   }
 
-  // DeepSeek reasoning models expose a thinking effort hint. Only the reasoner
-  // family (deepseek-reasoner / deepseek-r1*) is a reasoning model — plain
-  // deepseek-chat stays effort-less. Effort travels over the openai-reasoning
-  // `reasoning.effort` path; user-facing scale is low/medium/high.
-  if (/^deepseek-(reasoner|r1)/.test(id)) {
+  // DeepSeek providers/proxies commonly expose reasoning controls through an
+  // OpenAI-Responses-compatible surface. The router/config layer still gates
+  // this by effective protocol; direct adapter calls use this family fallback.
+  if (/^deepseek/.test(id)) {
     return {
       supportsThinking: true,
       thinkingProtocol: 'openai-reasoning',
@@ -522,10 +535,33 @@ export function thinkingBudgetForEffort(model, effort) {
  * @param {string} model
  * @returns {{ supportsThinking: boolean, thinkingProtocol: 'anthropic' | 'anthropic-adaptive' | 'openai-reasoning' | 'none', defaultEffort: Effort | null, maxBudgetTokens: number | null, effortOptions: Effort[] }}
  */
-export function getThinkingCapability(model) {
+export function getThinkingCapability(model, context = {}) {
   const info = MODEL_REGISTRY.get(model);
+  const overrideOptions = normalizeEffortOptions(context.effortOptions);
+  const overrideProtocol = context.thinkingProtocol || (context.protocol === 'anthropic' ? 'anthropic' : context.protocol === 'openai-responses' ? 'openai-reasoning' : null);
+  if (context.supportsEffort === true || overrideOptions) {
+    return {
+      supportsThinking: true,
+      thinkingProtocol: overrideProtocol || 'openai-reasoning',
+      defaultEffort: context.defaultEffort ?? null,
+      maxBudgetTokens: context.maxBudgetTokens ?? null,
+      effortOptions: overrideOptions,
+    };
+  }
   const hasExplicitThinking = info && Object.prototype.hasOwnProperty.call(info, 'supportsThinking');
-  const inferred = hasExplicitThinking ? null : inferThinkingCapability(model);
+  let inferred = hasExplicitThinking ? null : inferThinkingCapability(model);
+  if (context.protocol === 'openai-responses' && !inferred && /^deepseek/i.test(parseModelRef(model).modelId)) {
+    inferred = {
+      supportsThinking: true,
+      thinkingProtocol: 'openai-reasoning',
+      defaultEffort: null,
+      maxBudgetTokens: null,
+      effortOptions: DEEPSEEK_REASONING_EFFORT_OPTIONS,
+    };
+  }
+  if (context.protocol === 'anthropic' && inferred?.thinkingProtocol === 'openai-reasoning') {
+    inferred = null;
+  }
   if ((!info || !info.supportsThinking) && !inferred) {
     return {
       supportsThinking: false,
@@ -544,8 +580,8 @@ export function getThinkingCapability(model) {
   };
 }
 
-export function getModelEffortOptions(model) {
-  const cap = getThinkingCapability(model);
+export function getModelEffortOptions(model, context = {}) {
+  const cap = getThinkingCapability(model, context);
   if (!cap.supportsThinking || cap.thinkingProtocol === 'none') return [];
   if (Array.isArray(cap.effortOptions)) return cap.effortOptions.slice();
   if (cap.thinkingProtocol === 'openai-reasoning') return OPENAI_REASONING_EFFORT_OPTIONS.slice();
@@ -554,8 +590,8 @@ export function getModelEffortOptions(model) {
   return [];
 }
 
-export function modelSupportsEffort(model) {
-  return getModelEffortOptions(model).length > 0;
+export function modelSupportsEffort(model, context = {}) {
+  return getModelEffortOptions(model, context).length > 0;
 }
 
 /**
@@ -613,6 +649,14 @@ export function normalizeProviderModels(provider) {
       if (typeof entry.protocol === 'string' && entry.protocol.trim()) {
         norm.protocol = entry.protocol.trim();
       }
+      if (entry.supportsEffort === true) norm.supportsEffort = true;
+      if (typeof entry.thinkingProtocol === 'string' && entry.thinkingProtocol.trim()) {
+        norm.thinkingProtocol = entry.thinkingProtocol.trim();
+      }
+      const effortOptions = normalizeEffortOptions(entry.effortOptions);
+      if (effortOptions) norm.effortOptions = effortOptions;
+      const maxBudget = coercePositiveInt(entry.maxBudgetTokens);
+      if (maxBudget !== undefined) norm.maxBudgetTokens = maxBudget;
       out.push(norm);
     }
     // silently skip anything else (null / missing id / numbers)

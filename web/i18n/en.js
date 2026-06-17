@@ -5,6 +5,7 @@ export default {
   // ============ Common ============
   'common.loading': 'Loading...',
   'common.confirm': 'OK',
+  'common.apply': 'Apply',
   'common.cancel': 'Cancel',
   'common.delete': 'Delete',
   'common.copy': 'Copy',
@@ -260,6 +261,7 @@ export default {
   'yeaft.modelMenu.label': 'Model',
   'yeaft.modelMenu.effort': 'Effort',
   'yeaft.modelMenu.effort.openaiReasoning': 'Reasoning effort',
+  'yeaft.modelMenu.effort.anthropicBudget': 'Thinking budget',
   'yeaft.modelMenu.effort.anthropicAdaptive': 'Adaptive thinking effort',
   'yeaft.modelMenu.effort.minimal': 'Minimal',
   'yeaft.modelMenu.effort.low': 'Low',
@@ -267,6 +269,7 @@ export default {
   'yeaft.modelMenu.effort.high': 'High',
   'yeaft.modelMenu.effort.xhigh': 'X-High',
   'yeaft.modelMenu.effort.max': 'Max',
+  'yeaft.modelMenu.noEffort': 'This model does not expose a compatible effort control.',
   'yeaft.modelMenu.configureHint': 'Providers, keys, model list',
   // fix/dream-cadence-and-ui-trigger: manual dream trigger button.
   'yeaft.dream.runNow': 'Run dream now',

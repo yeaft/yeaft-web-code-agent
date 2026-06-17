@@ -93,45 +93,57 @@ export default {
             <span class="yeaft-topbar-model-name">{{ topbarModel || $t('settings.llm.selectModel') }}</span>
             <span v-if="store.yeaftModelsRefreshing" class="yeaft-model-refreshing">{{ $t('common.loading') || 'Loading' }}</span>
             <svg class="yeaft-model-chevron" :class="{ open: modelDropdownOpen }" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
-            <!-- Dropdown -->
             <div class="yeaft-model-dropdown yeaft-topbar-model-dropdown" v-if="modelDropdownOpen" @click.stop>
-              <div
-                v-if="store.yeaftAvailableModels.length > 1"
-                class="yeaft-model-option"
-                :class="{ active: modelOptionMatchesRef(m, topbarModel) }"
-                v-for="m in store.yeaftAvailableModels"
-                :key="modelOptionRef(m) || m.id"
-                @click="selectModel(modelOptionRef(m))"
-              >
-                <span class="yeaft-model-check" v-if="modelOptionMatchesRef(m, topbarModel)">&#10003;</span>
-                <span class="yeaft-model-option-label">{{ m.label || m.id }}</span>
-                <span class="yeaft-model-option-provider" v-if="m.provider">{{ m.provider }}</span>
-                <span class="yeaft-model-option-ctx" v-if="m.contextWindow">{{ formatModelCtx(m) }}</span>
-              </div>
-              <div v-if="store.yeaftAvailableModels.length > 1" class="yeaft-model-dropdown-separator"></div>
-              <div v-if="topbarEffortOptions.length" class="yeaft-model-effort-panel">
-                <div class="yeaft-model-effort-title">{{ topbarEffortTitle }}</div>
-                <div class="yeaft-model-effort-options" role="group" :aria-label="topbarEffortTitle">
+              <div class="yeaft-model-selector-body">
+                <div class="yeaft-model-list" role="listbox" :aria-label="$t('settings.llm.selectModel')">
                   <button
-                    v-for="effort in topbarEffortOptions"
-                    :key="effort"
+                    v-for="m in store.yeaftAvailableModels"
+                    :key="modelOptionRef(m) || m.id"
                     type="button"
-                    class="yeaft-model-effort-option"
-                    :class="{ active: effort === topbarEffort }"
-                    @click="selectEffort(effort)"
+                    class="yeaft-model-option"
+                    :class="{ active: modelOptionMatchesRef(m, pendingModelRef), current: modelOptionMatchesRef(m, topbarModel) }"
+                    role="option"
+                    :aria-selected="modelOptionMatchesRef(m, pendingModelRef) ? 'true' : 'false'"
+                    @click="selectPendingModel(modelOptionRef(m))"
                   >
-                    {{ $t('yeaft.modelMenu.effort.' + effort) }}
+                    <span class="yeaft-model-check" v-if="modelOptionMatchesRef(m, pendingModelRef)">&#10003;</span>
+                    <span class="yeaft-model-check" v-else></span>
+                    <span class="yeaft-model-option-label">{{ m.label || m.id }}</span>
+                    <span class="yeaft-model-option-provider" v-if="m.provider">{{ m.provider }}</span>
+                    <span class="yeaft-model-option-ctx" v-if="m.contextWindow">{{ formatModelCtx(m) }}</span>
                   </button>
                 </div>
+                <div class="yeaft-model-effort-panel">
+                  <div class="yeaft-model-effort-title">{{ pendingEffortTitle }}</div>
+                  <div v-if="pendingEffortOptions.length" class="yeaft-model-effort-options" role="radiogroup" :aria-label="pendingEffortTitle">
+                    <button
+                      v-for="effort in pendingEffortOptions"
+                      :key="effort"
+                      type="button"
+                      class="yeaft-model-effort-option"
+                      :class="{ active: effort === pendingEffort }"
+                      role="radio"
+                      :aria-checked="effort === pendingEffort ? 'true' : 'false'"
+                      @click="selectPendingEffort(effort)"
+                    >
+                      {{ $t('yeaft.modelMenu.effort.' + effort) }}
+                    </button>
+                  </div>
+                  <p v-else class="yeaft-model-effort-empty">{{ $t('yeaft.modelMenu.noEffort') }}</p>
+                </div>
               </div>
-              <div v-if="topbarEffortOptions.length" class="yeaft-model-dropdown-separator"></div>
+              <div class="yeaft-model-dropdown-separator"></div>
+              <div class="yeaft-model-actions">
+                <button type="button" class="btn-secondary" @click="cancelModelSelection">{{ $t('common.cancel') }}</button>
+                <button type="button" class="btn-primary" :disabled="!pendingModelChanged" @click="applyModelSelection">{{ $t('common.apply') || $t('settings.save') }}</button>
+              </div>
+              <div class="yeaft-model-dropdown-separator"></div>
               <button type="button" class="yeaft-model-config-option" @click="openLlmConfig">
                 <span class="yeaft-model-config-label">{{ $t('settings.llm.configureMenu') }}</span>
                 <span class="yeaft-model-config-hint">{{ $t('yeaft.modelMenu.configureHint') }}</span>
               </button>
             </div>
           </div>
-
           <div class="yeaft-topbar-title-group" :title="topbarSessionTitle || topbarGroup?.id || ''">
             <div class="yeaft-topbar-session-title">{{ topbarSessionTitle || $t('yeaft.session.create.untitled') }}</div>
           </div>
@@ -365,6 +377,8 @@ export default {
     // conversation column gets the full width by default.
     const debugMode = Vue.ref(false);
     const modelDropdownOpen = Vue.ref(false);
+    const pendingModelRef = Vue.ref('');
+    const pendingEffort = Vue.ref(null);
     const showSettings = Vue.ref(false);
     const showLlmConfig = Vue.ref(false);
     const settingsInitialTab = Vue.ref('vp');
@@ -540,6 +554,10 @@ export default {
     // vp-detail layer remains.)
     const onKeyDown = (e) => {
       if (e.key !== 'Escape') return;
+      if (modelDropdownOpen.value) {
+        cancelModelSelection();
+        return;
+      }
       if (store.yeaftActiveVpDetailId) {
         store.leaveVpDetailView();
       }
@@ -683,19 +701,35 @@ export default {
       return store.yeaftAvailableModels.find(m => modelOptionMatchesRef(m, id)) || null;
     });
 
-    const topbarEffortOptions = Vue.computed(() => {
-      const options = topbarModelMeta.value?.effortOptions;
+    const topbarEffort = Vue.computed(() => resolveSessionModelEffort(topbarGroup.value, store.yeaftModelEffort || 'medium'));
+
+    const pendingModelMeta = Vue.computed(() => {
+      const id = pendingModelRef.value || topbarModel.value;
+      if (!id) return null;
+      return store.yeaftAvailableModels.find(m => modelOptionMatchesRef(m, id)) || null;
+    });
+
+    const pendingEffortOptions = Vue.computed(() => {
+      const options = pendingModelMeta.value?.effortOptions;
       return Array.isArray(options) ? options.filter(Boolean) : [];
     });
 
-    const topbarEffortTitle = Vue.computed(() => {
-      const protocol = topbarModelMeta.value?.effortProtocol;
+    const effortTitleForMeta = (meta) => {
+      const protocol = meta?.effortProtocol;
       if (protocol === 'anthropic-adaptive') return $t('yeaft.modelMenu.effort.anthropicAdaptive');
+      if (protocol === 'anthropic') return $t('yeaft.modelMenu.effort.anthropicBudget');
       if (protocol === 'openai-reasoning') return $t('yeaft.modelMenu.effort.openaiReasoning');
       return $t('yeaft.modelMenu.effort');
-    });
+    };
 
-    const topbarEffort = Vue.computed(() => resolveSessionModelEffort(topbarGroup.value, store.yeaftModelEffort || 'medium'));
+    const pendingEffortTitle = Vue.computed(() => effortTitleForMeta(pendingModelMeta.value));
+
+    const pendingModelChanged = Vue.computed(() => {
+      const modelChanged = (pendingModelRef.value || '') !== (topbarModel.value || '');
+      const currentEffort = pendingEffortOptions.value.length ? (topbarEffort.value || null) : null;
+      const nextEffort = pendingEffortOptions.value.length ? (pendingEffort.value || null) : null;
+      return modelChanged || currentEffort !== nextEffort;
+    });
 
     // ── manual dream trigger ──
     // Header dream acts on the conversation currently on screen. That is
@@ -808,31 +842,49 @@ export default {
     // here for the old inline debug panel. PR B replaced that panel
     // with <YeaftDebugPanel>; PR C removes the now-orphaned helpers.
 
-    const toggleModelDropdown = (e) => {
-      e.stopPropagation();
-      if (store.yeaftAvailableModels.length <= 1) return;
-      modelDropdownOpen.value = !modelDropdownOpen.value;
+    const resetPendingModelSelection = () => {
+      pendingModelRef.value = topbarModel.value || '';
+      const options = pendingEffortOptions.value;
+      pendingEffort.value = options.includes(topbarEffort.value) ? topbarEffort.value : null;
     };
 
-    const selectModel = (modelId) => {
-      const nextMeta = store.yeaftAvailableModels.find(m => modelOptionMatchesRef(m, modelId)) || null;
-      const nextOptions = Array.isArray(nextMeta?.effortOptions) ? nextMeta.effortOptions : [];
-      const nextEffort = nextOptions.length && nextOptions.includes(topbarEffort.value)
-        ? topbarEffort.value
-        : null;
-      if (modelId === topbarModel.value) {
-        modelDropdownOpen.value = false;
-        return;
-      }
-      const groupId = topbarGroup.value?.id || null;
-      store.switchYeaftModel(modelId, groupId, nextEffort);
+    const openModelDropdown = () => {
+      resetPendingModelSelection();
+      modelDropdownOpen.value = true;
+    };
+
+    const cancelModelSelection = () => {
+      resetPendingModelSelection();
       modelDropdownOpen.value = false;
     };
 
-    const selectEffort = (effort) => {
-      if (!topbarEffortOptions.value.includes(effort)) return;
+    const toggleModelDropdown = (e) => {
+      e.stopPropagation();
+      if (!store.yeaftAvailableModels.length) return;
+      if (modelDropdownOpen.value) {
+        cancelModelSelection();
+      } else {
+        openModelDropdown();
+      }
+    };
+
+    const selectPendingModel = (modelId) => {
+      pendingModelRef.value = modelId || '';
+      const options = pendingEffortOptions.value;
+      pendingEffort.value = options.includes(topbarEffort.value) ? topbarEffort.value : null;
+    };
+
+    const selectPendingEffort = (effort) => {
+      if (!pendingEffortOptions.value.includes(effort)) return;
+      pendingEffort.value = effort;
+    };
+
+    const applyModelSelection = () => {
+      if (!pendingModelChanged.value || !pendingModelRef.value) return;
       const groupId = topbarGroup.value?.id || null;
-      store.switchYeaftModel(topbarModel.value, groupId, effort);
+      const effort = pendingEffortOptions.value.length ? pendingEffort.value : null;
+      store.switchYeaftModel(pendingModelRef.value, groupId, effort);
+      modelDropdownOpen.value = false;
     };
 
     // Format a token count compactly: 400000 → "400k", 1048576 → "1m", <1000 → raw.
@@ -857,7 +909,7 @@ export default {
     const closeModelDropdownOutside = (e) => {
       if (!modelDropdownOpen.value) return;
       const row = e.target.closest('.yeaft-topbar-model, .yeaft-topbar-model-dropdown');
-      if (!row) modelDropdownOpen.value = false;
+      if (!row) cancelModelSelection();
     };
 
     const toggleSettings = () => {
@@ -1131,8 +1183,11 @@ export default {
       topbarSessionTitle,
       topbarModel,
       topbarEffort,
-      topbarEffortOptions,
-      topbarEffortTitle,
+      pendingModelRef,
+      pendingEffort,
+      pendingEffortOptions,
+      pendingEffortTitle,
+      pendingModelChanged,
       modelOptionRef,
       modelOptionMatchesRef,
       showSettings,
@@ -1157,8 +1212,10 @@ export default {
       reloadMessages,
       reloadPage,
       toggleModelDropdown,
-      selectModel,
-      selectEffort,
+      selectPendingModel,
+      selectPendingEffort,
+      applyModelSelection,
+      cancelModelSelection,
       openLlmConfig,
       onLlmConfigMessage,
       onLlmConfigSaved,
