@@ -2136,12 +2136,31 @@ export const useChatStore = defineStore('chat', {
           break;
         }
         case 'yeaft_turn_aborted': {
-          if (!event.turnId) break;
-          const { [event.turnId]: _removed, ...rest } = this.activeVpTurns;
-          this.activeVpTurns = rest;
-          const { [event.turnId]: _stopped, ...stoppingRest } = this.stoppingVpTurnIds;
+          const explicitTurnIds = Array.isArray(event.turnIds) ? event.turnIds.filter(Boolean) : [];
+          if (event.turnId) explicitTurnIds.push(event.turnId);
+          const targetSessionId = event.sessionId || null;
+          const targetVpId = event.vpId || null;
+          const removeIds = new Set(explicitTurnIds);
+          if (targetVpId) {
+            for (const [turnId, info] of Object.entries(this.activeVpTurns || {})) {
+              if (!info || info.vpId !== targetVpId) continue;
+              if (targetSessionId && info.sessionId !== targetSessionId) continue;
+              removeIds.add(turnId);
+            }
+          }
+          if (removeIds.size === 0) break;
+          let removedSessionId = targetSessionId;
+          const activeRest = { ...(this.activeVpTurns || {}) };
+          const stoppingRest = { ...(this.stoppingVpTurnIds || {}) };
+          for (const turnId of removeIds) {
+            const removed = activeRest[turnId];
+            if (!removedSessionId && removed?.sessionId) removedSessionId = removed.sessionId;
+            delete activeRest[turnId];
+            delete stoppingRest[turnId];
+          }
+          this.activeVpTurns = activeRest;
           this.stoppingVpTurnIds = stoppingRest;
-          this.clearYeaftSessionProcessingIfIdle(event.sessionId || _removed?.sessionId || null);
+          this.clearYeaftSessionProcessingIfIdle(removedSessionId || null);
           break;
         }
         case 'yeaft_aborted': {
@@ -3540,22 +3559,28 @@ export const useChatStore = defineStore('chat', {
     },
     /**
      * Per-VP stop: abort a single VP turn by turnId without affecting siblings.
+     * `sessionId` / `vpId` are optional metadata for newer agents; old agents
+     * still use the turnId-only path.
      */
-    cancelVpTurn(turnId) {
+    cancelVpTurn(turnId, { sessionId = null, vpId = null } = {}) {
       if (!this.yeaftAgentId || !turnId) return;
       this.stoppingVpTurnIds = {
         ...this.stoppingVpTurnIds,
         [turnId]: Date.now(),
       };
-      this.sendWsMessage({
+      const msg = {
         type: 'yeaft_abort_turn',
         agentId: this.yeaftAgentId,
         turnId,
-      });
+      };
+      if (sessionId) msg.sessionId = sessionId;
+      if (vpId) msg.vpId = vpId;
+      this.sendWsMessage(msg);
     },
     cancelVpTurnForSession(vpId, sessionId = null) {
-      if (!vpId) return false;
+      if (!this.yeaftAgentId || !vpId) return false;
       const targetSessionId = sessionId || this.yeaftActiveSessionFilter || null;
+      if (!targetSessionId) return false;
       const map = this.activeVpTurns || {};
       let bestTurnId = null;
       let bestStartedAt = -Infinity;
@@ -3574,8 +3599,16 @@ export const useChatStore = defineStore('chat', {
           bestTurnId = status.turnId;
         }
       }
-      if (!bestTurnId) return false;
-      this.cancelVpTurn(bestTurnId);
+      if (bestTurnId) {
+        this.cancelVpTurn(bestTurnId, { sessionId: targetSessionId, vpId });
+        return true;
+      }
+      this.sendWsMessage({
+        type: 'yeaft_abort_turn',
+        agentId: this.yeaftAgentId,
+        sessionId: targetSessionId,
+        vpId,
+      });
       return true;
     },
     answerUserQuestion(requestId, answers, conversationId) { convHelpers.answerUserQuestion(this, requestId, answers, conversationId); },
