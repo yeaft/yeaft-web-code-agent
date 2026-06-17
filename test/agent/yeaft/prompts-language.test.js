@@ -535,6 +535,41 @@ describe('worker prompt language selection', () => {
     expect(prompt).not.toContain('yeaft/model-config-isolation');
   });
 
+  it('uses natural Chinese descriptions for known and unknown session topic slugs', () => {
+    const prompt = buildWorkerPrompt({
+      language: 'zh-CN',
+      includeShape: false,
+      toolNames: ['FileRead'],
+      vpPersona: null,
+      activeScope: {
+        sessionId: 'session_topics',
+        sessionMembers: ['omni', 'martin', 'linus'],
+        sessionTopics: [
+          'dream/segments',
+          'system-prompt-localization',
+          'default-character/prompt-soul',
+          'dream/session-extraction',
+          'unknown-feature/branch-name',
+        ],
+      },
+    });
+
+    expect(prompt).toContain('梦境记忆片段的抽取与整理');
+    expect(prompt).toContain('系统提示词的中英文一致性');
+    expect(prompt).toContain('默认角色灵魂提示词的表达方式');
+    expect(prompt).toContain('梦境会话记忆的抽取质量');
+    expect(prompt).toContain('近期的项目协作事项');
+    expect(prompt).not.toContain('dream/segments');
+    expect(prompt).not.toContain('system-prompt-localization');
+    expect(prompt).not.toContain('default-character/prompt-soul');
+    expect(prompt).not.toContain('dream/session-extraction');
+    expect(prompt).not.toContain('unknown-feature/branch-name');
+    expect(prompt).not.toContain('dreamsegments');
+    expect(prompt).not.toContain('systempromptlocalization');
+    expect(prompt).not.toContain('defaultcharacterpromptsoul');
+    expect(prompt).not.toContain('branchname');
+  });
+
   it('keeps Dream prompt templates localized for zh-CN and en', () => {
     for (const [name, vars] of DREAM_PROMPT_CASES) {
       const zh = renderDreamPrompt(name, vars, { language: 'zh-CN' });

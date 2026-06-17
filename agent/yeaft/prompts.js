@@ -566,6 +566,31 @@ function normalizeSessionTopicIds(topics) {
 function describeSessionTopic(topic, isZh = false) {
   const normalized = topic.toLowerCase().replace(/[_\s]+/g, '-');
 
+  if (normalized.includes('dream') && normalized.includes('segments')) {
+    return isZh
+      ? '梦境记忆片段的抽取与整理'
+      : 'Dream memory segment extraction and organization';
+  }
+  if (normalized.includes('dream') && normalized.includes('session') && normalized.includes('extraction')) {
+    return isZh
+      ? '梦境会话记忆的抽取质量'
+      : 'Dream session-memory extraction quality';
+  }
+  if (normalized.includes('system-prompt') && normalized.includes('localization')) {
+    return isZh
+      ? '系统提示词的中英文一致性'
+      : 'system prompt language localization';
+  }
+  if (normalized.includes('default-character') && normalized.includes('prompt-soul')) {
+    return isZh
+      ? '默认角色灵魂提示词的表达方式'
+      : 'default persona soul prompt wording';
+  }
+  if (normalized.includes('prompt') && normalized.includes('soul')) {
+    return isZh
+      ? '角色灵魂提示词的表达方式'
+      : 'persona soul prompt wording';
+  }
   if (normalized.includes('openai-responses')) {
     return isZh
       ? 'Yeaft 的 OpenAI Responses 适配与模型配置'
@@ -606,12 +631,28 @@ function describeSessionTopic(topic, isZh = false) {
       ? '当前会话上下文的提示词呈现'
       : 'current session context prompt rendering';
   }
+  if (normalized.includes('prompt') || normalized.includes('system')) {
+    return isZh
+      ? '近期的系统提示词调整'
+      : humanizeTopicSlug(topic, false) || 'recent system prompt work';
+  }
+  if (normalized.includes('dream')) {
+    return isZh
+      ? '近期的 Dream 记忆维护工作'
+      : humanizeTopicSlug(topic, false) || 'recent Dream memory work';
+  }
+  if (normalized.includes('session')) {
+    return isZh
+      ? '近期的会话上下文调整'
+      : humanizeTopicSlug(topic, false) || 'recent session context work';
+  }
 
-  const humanized = humanizeTopicSlug(topic, isZh);
-  return humanized || (isZh ? '近期会话协作事项' : 'recent session collaboration topics');
+  if (isZh) return '近期的项目协作事项';
+  return humanizeTopicSlug(topic, false) || 'recent session collaboration topics';
 }
 
 function humanizeTopicSlug(topic, isZh = false) {
+  if (isZh) return '';
   const words = topic
     .replace(/[\/_-]+/g, ' ')
     .replace(/\bv\d+(?:\.\d+)+\b/gi, '')
@@ -624,19 +665,17 @@ function humanizeTopicSlug(topic, isZh = false) {
   const normalizedWords = words.map(word => {
     const lower = word.toLowerCase();
     if (lower === 'yeaft') return 'Yeaft';
-    if (lower === 'project') return isZh ? '项目' : 'project';
-    if (lower === 'config') return isZh ? '配置' : 'configuration';
-    if (lower === 'isolation') return isZh ? '隔离' : 'isolation';
-    if (lower === 'rendering') return isZh ? '呈现' : 'rendering';
-    if (lower === 'workflow') return isZh ? '流程' : 'workflow';
-    if (lower === 'session') return isZh ? '会话' : 'session';
-    if (lower === 'context') return isZh ? '上下文' : 'context';
+    if (lower === 'project') return 'project';
+    if (lower === 'config') return 'configuration';
+    if (lower === 'isolation') return 'isolation';
+    if (lower === 'rendering') return 'rendering';
+    if (lower === 'workflow') return 'workflow';
+    if (lower === 'session') return 'session';
+    if (lower === 'context') return 'context';
     return word;
   });
 
-  return isZh
-    ? `围绕${normalizedWords.join('')}的协作`
-    : normalizedWords.join(' ');
+  return normalizedWords.join(' ');
 }
 
 function normalizeSessionMemberIds(members) {

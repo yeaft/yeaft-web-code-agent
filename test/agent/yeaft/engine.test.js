@@ -911,7 +911,7 @@ describe('Engine', () => {
       expect(call.system).not.toContain('session_members:');
       expect(call.system).not.toContain('session_topics:');
       expect(call.system).toContain('Session members: vp-omni, vp-martin, vp-linus');
-      expect(call.system).toContain('Current focus: dream segments; current session context prompt rendering');
+      expect(call.system).toContain('Current focus: Dream memory segment extraction and organization; current session context prompt rendering');
       expect(call.system).not.toContain('group: session_active');
       expect(call.system).not.toContain('\nvp: vp-linus');
       expect(call.system).not.toContain('\nmembers: vp-omni');
@@ -945,7 +945,7 @@ describe('Engine', () => {
         }
 
         const call = mockAdapter.callLog[0];
-        expect(call.system).toContain('Current focus: dream segments');
+        expect(call.system).toContain('Current focus: Dream memory segment extraction and organization');
         expect(call.system).not.toContain('session_topics: dream/segments');
       } finally {
         rmSync(yeaftDir, { recursive: true, force: true });
