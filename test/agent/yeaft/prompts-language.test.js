@@ -97,6 +97,10 @@ const STATIC_ZH_PROMPT_FORBIDDEN = [
   'inbound envelope',
   'Prompt Shape',
   'Prompt 结构',
+  '## active_scope',
+  'session_id:',
+  'session_members:',
+  'session_topics:',
 ];
 
 const STATIC_EN_PROMPT_FORBIDDEN = [
@@ -481,11 +485,54 @@ describe('worker prompt language selection', () => {
     expect(zh).toContain('## 灵魂');
     expect(zh).toContain('## 核心原则');
     expect(zh).toContain('# 工具使用指引');
+    expect(zh).toContain('## 当前会话上下文');
+    expect(zh).toContain('会话 ID：session_test');
+    expect(zh).toContain('会话成员：omni、linus');
+    expect(zh).toContain('当前讨论：当前会话上下文的提示词呈现');
     expectNotToContainAny(zh, STATIC_ZH_PROMPT_FORBIDDEN);
     expect(en).toContain('## Soul');
     expect(en).toContain('## Core Principles');
     expect(en).toContain('# Tool Usage Guidance');
+    expect(en).toContain('## Current session context');
+    expect(en).toContain('Session ID: session_test');
+    expect(en).toContain('Session members: omni, linus');
+    expect(en).toContain('Current focus: current session context prompt rendering');
+    expect(en).not.toContain('## active_scope');
     expectNotToContainAny(en, STATIC_EN_PROMPT_FORBIDDEN);
+  });
+
+  it('renders active scope topics as natural session context instead of slugs', () => {
+    const prompt = buildWorkerPrompt({
+      language: 'zh-CN',
+      includeShape: false,
+      toolNames: ['FileRead'],
+      vpPersona: null,
+      activeScope: {
+        sessionId: 'session_yeaft-llm_2CX9DGEB',
+        sessionMembers: ['omni', 'martin', 'linus'],
+        sessionTopics: [
+          'Yeaft/OpenAI-Responses',
+          'Yeaft/PR-1018-v0.1.999',
+          'project/pr-workflow',
+          'yeaft/model-config-isolation',
+        ],
+      },
+    });
+
+    expect(prompt).toContain('## 当前会话上下文');
+    expect(prompt).toContain('会话 ID：session_yeaft-llm_2CX9DGEB');
+    expect(prompt).toContain('会话成员：omni、martin、linus');
+    expect(prompt).toContain('当前讨论：Yeaft 的 OpenAI Responses 适配与模型配置');
+    expect(prompt).toContain('最近的 PR 修复、review、merge 和 tag 发布流程');
+    expect(prompt).toContain('项目的 PR review、merge 和 tag 发布流程');
+    expect(prompt).toContain('Yeaft 的模型配置隔离');
+    expect(prompt).not.toContain('## active_scope');
+    expect(prompt).not.toContain('session_id:');
+    expect(prompt).not.toContain('session_members:');
+    expect(prompt).not.toContain('session_topics:');
+    expect(prompt).not.toContain('Yeaft/PR-1018-v0.1.999');
+    expect(prompt).not.toContain('project/pr-workflow');
+    expect(prompt).not.toContain('yeaft/model-config-isolation');
   });
 
   it('keeps Dream prompt templates localized for zh-CN and en', () => {

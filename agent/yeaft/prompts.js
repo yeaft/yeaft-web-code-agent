@@ -196,8 +196,12 @@ const PROMPTS = {
     date: (d) => `Date: ${d}`,
     dream: 'You are in dream mode. Reflect on past conversations and consolidate memories.',
     tools: (names) => `Available tools: ${names}`,
-    // DESIGN-PROMPT §3 ④ — Active Scope header
-    activeScopeHeader: '## active_scope',
+    // DESIGN-PROMPT §3 ④ — current session context block.
+    activeScopeHeader: '## Current session context',
+    activeScopeSessionIdLabel: 'Session ID',
+    activeScopeMembersLabel: 'Session members',
+    activeScopeTopicsLabel: 'Current focus',
+    activeScopeEnvelopeLabel: 'Handoff',
     multiVpRoutingHeader: '## multi_vp_routing',
     sessionAnnouncementHeader: '[Session Announcement]',
     // Project-doc (CLAUDE.md / AGENTS.md) header + one-liner intro. Both
@@ -212,8 +216,12 @@ const PROMPTS = {
     date: (d) => `日期：${d}`,
     dream: '你处于梦境模式。回顾过去的对话，整理和巩固记忆。',
     tools: (names) => `可用工具：${names}`,
-    // DESIGN-PROMPT §3 ④ — Active Scope header
-    activeScopeHeader: '## active_scope',
+    // DESIGN-PROMPT §3 ④ — 当前会话上下文。
+    activeScopeHeader: '## 当前会话上下文',
+    activeScopeSessionIdLabel: '会话 ID',
+    activeScopeMembersLabel: '会话成员',
+    activeScopeTopicsLabel: '当前讨论',
+    activeScopeEnvelopeLabel: '转交消息',
     multiVpRoutingHeader: '## multi_vp_routing',
     sessionAnnouncementHeader: '[会话公告]',
     // 项目文档块：CLAUDE.md / AGENTS.md（与 Codex 通用命名兼容）。
@@ -495,20 +503,22 @@ function selectVpPersonaBody(vpPersona, effectiveLang) {
 function renderActiveScope(activeScope, lang) {
   if (!activeScope || typeof activeScope !== 'object') return '';
 
+  const isZh = lang === PROMPTS.zh;
+  const separator = isZh ? '：' : ': ';
   const lines = [];
   const session = typeof activeScope.sessionId === 'string' && activeScope.sessionId.trim()
     ? activeScope.sessionId.trim()
     : '';
-  if (session) lines.push(`session_id: ${session}`);
+  if (session) lines.push(`${lang.activeScopeSessionIdLabel}${separator}${session}`);
 
-  const membersLine = renderSessionMembersLine(activeScope.sessionMembers || activeScope.members);
-  if (membersLine) lines.push(`session_members: ${membersLine}`);
+  const membersLine = renderSessionMembersLine(activeScope.sessionMembers || activeScope.members, isZh);
+  if (membersLine) lines.push(`${lang.activeScopeMembersLabel}${separator}${membersLine}`);
 
-  const topicsLine = renderSessionMembersLine(activeScope.sessionTopics);
-  if (topicsLine) lines.push(`session_topics: ${topicsLine}`);
+  const topicsLine = renderSessionTopicsLine(activeScope.sessionTopics, isZh);
+  if (topicsLine) lines.push(`${lang.activeScopeTopicsLabel}${separator}${topicsLine}`);
 
-  const envLine = renderEnvelopeLine(activeScope.envelope);
-  if (envLine) lines.push(`envelope: ${envLine}`);
+  const envLine = renderEnvelopeLine(activeScope.envelope, isZh);
+  if (envLine) lines.push(`${lang.activeScopeEnvelopeLabel}${separator}${envLine}`);
 
   if (lines.length === 0) return '';
 
@@ -523,8 +533,110 @@ function firstNonEmptyString(...values) {
   return '';
 }
 
-function renderSessionMembersLine(members) {
-  return normalizeSessionMemberIds(members).join(', ');
+function renderSessionMembersLine(members, useChineseSeparator = false) {
+  return normalizeSessionMemberIds(members).join(useChineseSeparator ? '、' : ', ');
+}
+
+function renderSessionTopicsLine(topics, isZh = false) {
+  const descriptions = [];
+  const seen = new Set();
+  for (const topic of normalizeSessionTopicIds(topics)) {
+    const description = describeSessionTopic(topic, isZh);
+    if (!description || seen.has(description)) continue;
+    seen.add(description);
+    descriptions.push(description);
+  }
+  return descriptions.join(isZh ? '；' : '; ');
+}
+
+function normalizeSessionTopicIds(topics) {
+  if (!Array.isArray(topics)) return [];
+  const clean = [];
+  const seen = new Set();
+  for (const topic of topics) {
+    if (typeof topic !== 'string') continue;
+    const id = topic.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    clean.push(id);
+  }
+  return clean;
+}
+
+function describeSessionTopic(topic, isZh = false) {
+  const normalized = topic.toLowerCase().replace(/[_\s]+/g, '-');
+
+  if (normalized.includes('openai-responses')) {
+    return isZh
+      ? 'Yeaft 的 OpenAI Responses 适配与模型配置'
+      : 'Yeaft OpenAI Responses adapter and model configuration';
+  }
+  if (normalized.includes('model-config-isolation')) {
+    return isZh
+      ? 'Yeaft 的模型配置隔离'
+      : 'Yeaft model configuration isolation';
+  }
+  if (normalized.includes('route-forward') || normalized.includes('handoff')) {
+    return isZh
+      ? 'Yeaft 的会话路由交接与可见性'
+      : 'Yeaft session routing handoff and visibility';
+  }
+  if (normalized.includes('copilot-cli') || normalized.includes('chat-session')) {
+    return isZh
+      ? 'Copilot CLI 的聊天会话行为'
+      : 'Copilot CLI chat session behavior';
+  }
+  if (normalized.includes('claude-opus')) {
+    return isZh
+      ? 'Yeaft 的 Claude Opus 模型接入'
+      : 'Yeaft Claude Opus model integration';
+  }
+  if (normalized.includes('pr-workflow')) {
+    return isZh
+      ? '项目的 PR review、merge 和 tag 发布流程'
+      : 'project PR review, merge, and tag release workflow';
+  }
+  if (/\bpr[-/]?\d+\b/.test(normalized) || normalized.includes('release') || /v\d+\.\d+\.\d+/.test(normalized)) {
+    return isZh
+      ? '最近的 PR 修复、review、merge 和 tag 发布流程'
+      : 'recent PR fixes, review, merge, and tag release work';
+  }
+  if (normalized.includes('active-scope')) {
+    return isZh
+      ? '当前会话上下文的提示词呈现'
+      : 'current session context prompt rendering';
+  }
+
+  const humanized = humanizeTopicSlug(topic, isZh);
+  return humanized || (isZh ? '近期会话协作事项' : 'recent session collaboration topics');
+}
+
+function humanizeTopicSlug(topic, isZh = false) {
+  const words = topic
+    .replace(/[\/_-]+/g, ' ')
+    .replace(/\bv\d+(?:\.\d+)+\b/gi, '')
+    .replace(/\bpr\s*\d+\b/gi, '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0) return '';
+
+  const normalizedWords = words.map(word => {
+    const lower = word.toLowerCase();
+    if (lower === 'yeaft') return 'Yeaft';
+    if (lower === 'project') return isZh ? '项目' : 'project';
+    if (lower === 'config') return isZh ? '配置' : 'configuration';
+    if (lower === 'isolation') return isZh ? '隔离' : 'isolation';
+    if (lower === 'rendering') return isZh ? '呈现' : 'rendering';
+    if (lower === 'workflow') return isZh ? '流程' : 'workflow';
+    if (lower === 'session') return isZh ? '会话' : 'session';
+    if (lower === 'context') return isZh ? '上下文' : 'context';
+    return word;
+  });
+
+  return isZh
+    ? `围绕${normalizedWords.join('')}的协作`
+    : normalizedWords.join(' ');
 }
 
 function normalizeSessionMemberIds(members) {
@@ -581,21 +693,21 @@ function renderMultiVpRouting(activeScope, lang) {
  * @param {object|null|undefined} envelope
  * @returns {string}
  */
-function renderEnvelopeLine(envelope) {
+function renderEnvelopeLine(envelope, isZh = false) {
   if (!envelope || typeof envelope !== 'object') return '';
   const segments = [];
   const fromVp = typeof envelope.fromVpId === 'string' && envelope.fromVpId.trim()
     ? envelope.fromVpId.trim()
     : (typeof envelope.senderVpId === 'string' ? envelope.senderVpId.trim() : '');
-  if (fromVp) segments.push(`from=${fromVp}`);
+  if (fromVp) segments.push(`${isZh ? '来自' : 'from'}=${fromVp}`);
   const fromUser = typeof envelope.fromUserId === 'string' && envelope.fromUserId.trim()
     ? envelope.fromUserId.trim()
     : '';
-  if (fromUser) segments.push(`user=${fromUser}`);
+  if (fromUser) segments.push(`${isZh ? '用户' : 'user'}=${fromUser}`);
   const intent = typeof envelope.intent === 'string' && envelope.intent.trim()
     ? envelope.intent.trim()
     : '';
-  if (intent) segments.push(`intent=${intent}`);
+  if (intent) segments.push(`${isZh ? '意图' : 'intent'}=${intent}`);
   return segments.join(' ');
 }
 

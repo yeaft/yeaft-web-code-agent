@@ -905,11 +905,13 @@ describe('Engine', () => {
       }
 
       const call = mockAdapter.callLog[0];
-      expect(call.system).toContain('## active_scope');
-      expect(call.system).toContain('session_id: session_active');
+      expect(call.system).toContain('## Current session context');
+      expect(call.system).toContain('Session ID: session_active');
       expect(call.system).not.toContain('session_member:');
-      expect(call.system).toContain('session_members: vp-omni, vp-martin, vp-linus');
-      expect(call.system).toContain('session_topics: dream/segments, active_scope/rendering');
+      expect(call.system).not.toContain('session_members:');
+      expect(call.system).not.toContain('session_topics:');
+      expect(call.system).toContain('Session members: vp-omni, vp-martin, vp-linus');
+      expect(call.system).toContain('Current focus: dream segments; current session context prompt rendering');
       expect(call.system).not.toContain('group: session_active');
       expect(call.system).not.toContain('\nvp: vp-linus');
       expect(call.system).not.toContain('\nmembers: vp-omni');
@@ -943,7 +945,8 @@ describe('Engine', () => {
         }
 
         const call = mockAdapter.callLog[0];
-        expect(call.system).toContain('session_topics: dream/segments');
+        expect(call.system).toContain('Current focus: dream segments');
+        expect(call.system).not.toContain('session_topics: dream/segments');
       } finally {
         rmSync(yeaftDir, { recursive: true, force: true });
       }
