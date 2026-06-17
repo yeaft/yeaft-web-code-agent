@@ -10,6 +10,7 @@
  */
 
 import { formatSize } from '../archive/tool-results.js';
+import { getBuiltinToolLocalization } from './localized-descriptions.js';
 
 /**
  * Collaboration tools are mutually exclusive per Yeaft group shape:
@@ -93,7 +94,37 @@ function localizeVisibleText(value, language, toolName) {
  * is actually a string. Object/array values under a `description` key
  * are sub-schemas and must be recursed into normally.
  */
-function localizeParameters(parameters, language, toolName) {
+function cloneSchema(value) {
+  if (!value || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(cloneSchema);
+  const out = {};
+  for (const [key, child] of Object.entries(value)) out[key] = cloneSchema(child);
+  return out;
+}
+
+function schemaAtPath(schema, path) {
+  const parts = String(path || '').split('.').filter(Boolean);
+  let node = schema;
+  for (const rawPart of parts) {
+    const part = rawPart.endsWith('[]') ? rawPart.slice(0, -2) : rawPart;
+    node = node?.properties?.[part];
+    if (!node) return null;
+    if (rawPart.endsWith('[]')) node = node.items;
+  }
+  return node || null;
+}
+
+function applyParameterOverrides(parameters, overrides) {
+  if (!overrides || !parameters || typeof parameters !== 'object') return parameters;
+  const out = cloneSchema(parameters);
+  for (const [path, description] of Object.entries(overrides)) {
+    const schema = schemaAtPath(out, path);
+    if (schema && typeof description === 'string') schema.description = description;
+  }
+  return out;
+}
+
+function localizeParameters(parameters, language, toolName, parameterOverrides = null) {
   const lang = normalizeLanguage(language);
   if (lang !== 'zh' || !parameters || typeof parameters !== 'object') return parameters;
   if (Array.isArray(parameters)) return parameters.map(v => localizeParameters(v, lang, toolName));
@@ -102,12 +133,12 @@ function localizeParameters(parameters, language, toolName) {
     if (key === 'description' && typeof value === 'string') {
       out[key] = localizeVisibleText(value, lang, toolName);
     } else if (value && typeof value === 'object') {
-      out[key] = localizeParameters(value, lang, toolName);
+      out[key] = localizeParameters(value, lang, toolName, null);
     } else {
       out[key] = value;
     }
   }
-  return out;
+  return applyParameterOverrides(out, parameterOverrides);
 }
 
 /**
@@ -342,11 +373,14 @@ export class ToolRegistry {
     const collabToolPolicy = normalizeCollabToolPolicy(opts?.collabToolPolicy);
     return this.getAllTools()
       .filter(t => !isToolHiddenByCollabPolicy(t.name, collabToolPolicy))
-      .map(t => ({
-        name: t.name,
-        description: localizeVisibleText(t.description, lang, t.name),
-        parameters: localizeParameters(t.parameters, lang, t.name),
-      }));
+      .map(t => {
+        const localized = getBuiltinToolLocalization(t.name, lang);
+        return {
+          name: t.name,
+          description: localized?.description || localizeVisibleText(t.description, lang, t.name),
+          parameters: localizeParameters(t.parameters, lang, t.name, localized?.parameters),
+        };
+      });
   }
 
   /**
