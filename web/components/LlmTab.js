@@ -194,7 +194,7 @@ export default {
                 </div>
               </div>
 
-              <div class="llm-model-select-field">
+              <div class="llm-model-select-field" v-if="context !== 'yeaft'">
                 <label class="llm-field-label">{{ $t('settings.llm.fastModel') }}</label>
                 <p class="sp-desc llm-model-hint">{{ $t('settings.llm.fastModelDesc') }}</p>
                 <div class="sp-custom-select" :class="{ open: openDropdown === 'fastModel' }" v-click-outside="() => closeDropdown('fastModel')">
@@ -672,14 +672,29 @@ export default {
           return clean;
         });
 
+      // The Yeaft config UI hides fast/secondary model — Yeaft users only
+      // pick a primary, and the engine quietly falls back to primary when
+      // fastModel is unset (see engine.js: `config.fastModelId || config.model`).
+      // That fallback means recall/consolidation/dream still work, but they
+      // run on the expensive primary model. Hiding the field is a UX choice,
+      // not a claim that the engine has no fast-model concept.
+      //
+      // We omit fastModel from the payload (instead of writing null) so
+      // updateLlmConfig's `if (update.fastModel !== undefined)` guard leaves
+      // any existing fastModel value untouched — switching contexts in the
+      // UI never silently clears another context's saved fastModel.
+      const llmConfig = {
+        providers,
+        primaryModel: this.localPrimaryModel || null
+      };
+      if (this.context !== 'yeaft') {
+        llmConfig.fastModel = this.localFastModel || null;
+      }
+
       this.chatStore.sendWsMessage({
         type: 'update_llm_config',
         agentId,
-        config: {
-          providers,
-          primaryModel: this.localPrimaryModel || null,
-          fastModel: this.localFastModel || null
-        }
+        config: llmConfig
       });
 
       // Wait for llm_config_updated response (handled by watcher on currentConfig)

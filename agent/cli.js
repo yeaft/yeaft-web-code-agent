@@ -24,6 +24,11 @@ import {
   useOpenAICompatible,
   writeLocalLlmConfig,
 } from './llm-config-cli.js';
+import {
+  discoverGitHubCopilotModels,
+  discoverOpenAICompatibleModels,
+  GITHUB_COPILOT_PROVIDER,
+} from './llm-model-discovery.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf-8'));
@@ -97,6 +102,7 @@ function printLlmHelp() {
 
   Usage:
     yeaft-agent llm show [--reveal]
+    yeaft-agent llm list-models [<provider-name>]
     yeaft-agent llm setup
     yeaft-agent llm use github-copilot --model <modelId> [--fast <modelId>] [--allow-unknown-model]
     yeaft-agent llm use openai-compatible --name <name> --base-url <url> --api-key-env <ENV> --model <modelId> [--fast <modelId>]
@@ -112,6 +118,8 @@ function printLlmHelp() {
     add-provider updates/replaces an existing provider with the same --name.
     --api-key-env reads the environment variable value and writes it as apiKey.
     set-model requires full provider/model references.
+    list-models with no provider lists the local config offline; with 'github-copilot'
+      or a configured provider name, it queries the live '/models' catalog.
     --config <path> can target a config file for tests or scripted setup.
 
   Examples:
@@ -127,7 +135,14 @@ async function handleLlmCommand(args) {
   const subcommand = args[0];
 
   try {
-    const options = parseLlmArgs(args.slice(subcommand === 'use' ? 2 : 1));
+    // `use <preset>` and `list-models <provider-name>` both put a positional
+    // arg right after the subcommand; trim it off before flag parsing so
+    // parseLlmArgs sees only flags.
+    const positionalAfterSub =
+      subcommand === 'use' ? 2
+      : (subcommand === 'list-models' && args[1] && !args[1].startsWith('--')) ? 2
+      : 1;
+    const options = parseLlmArgs(args.slice(positionalAfterSub));
     const configPath = options.config || getDefaultYeaftConfigPath();
     if (!subcommand || subcommand === '--help' || subcommand === '-h' || subcommand === 'help') {
       printLlmHelp();
@@ -137,6 +152,19 @@ async function handleLlmCommand(args) {
     if (subcommand === 'show') {
       const config = readLocalLlmConfig(configPath);
       console.log(formatLlmConfig({ ...config, __configPath: configPath }, { reveal: Boolean(options.reveal) }));
+      return;
+    }
+
+    if (subcommand === 'list-models') {
+      // `yeaft-agent llm list-models` (no provider) — list models declared in
+      //   the local config (offline; no network call).
+      // `yeaft-agent llm list-models <provider-name>` — live-discover models:
+      //   - "github-copilot" uses the local Copilot credential
+      //   - any other name must already exist in config.json (uses its
+      //     baseUrl + apiKey for OpenAI-compatible /models discovery)
+      const providerName = (args[1] && !args[1].startsWith('--')) ? args[1] : null;
+      const config = readLocalLlmConfig(configPath);
+      await handleListModels(config, { providerName });
       return;
     }
 
@@ -204,6 +232,95 @@ async function handleLlmCommand(args) {
   }
 }
 
+/**
+ * `yeaft-agent llm list-models [<provider-name>]` handler.
+ *
+ * Three modes:
+ *  - No provider — list all models declared in the local config (offline,
+ *    no network call). Annotates `← primary` / `← fast` for clarity.
+ *  - "github-copilot" — live-discover Copilot's model catalog using the
+ *    local device credential. Missing/invalid credential prints an
+ *    actionable hint ("Run `gh auth login` ...") and exits non-zero so
+ *    scripts can detect the failure.
+ *  - Any other name — must already exist in config.json; uses its
+ *    baseUrl + apiKey for OpenAI-compatible `/models` discovery.
+ */
+export async function handleListModels(
+  config,
+  { providerName = null, deps = {} } = {}
+) {
+  const discoverCopilot = deps.discoverCopilot || discoverGitHubCopilotModels;
+  const discoverOpenAI = deps.discoverOpenAI || discoverOpenAICompatibleModels;
+
+  if (providerName === GITHUB_COPILOT_PROVIDER.name) {
+    try {
+      const result = await discoverCopilot();
+      console.log(`Available models from GitHub Copilot (source: ${result.source}):`);
+      for (const id of result.models) console.log(`  ${id}`);
+      if (result.warning) console.log(`\nNote: ${result.warning}`);
+      return;
+    } catch (err) {
+      console.error(`GitHub Copilot model discovery failed: ${err.message}`);
+      if (err.code === 'COPILOT_CREDENTIAL_MISSING' || err.code === 'COPILOT_AUTH_INVALID') {
+        console.error('Tip: run `gh auth login` (or complete the Copilot device login) and re-run this command.');
+      }
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  if (providerName) {
+    const providers = Array.isArray(config.providers) ? config.providers : [];
+    const target = providers.find(p => p && p.name === providerName);
+    if (!target) {
+      console.error(`Provider "${providerName}" not found in config.json.`);
+      if (providers.length === 0) {
+        console.error('No providers are configured. Run `yeaft-agent llm setup` or `yeaft-agent llm use github-copilot ...`.');
+      } else {
+        console.error('Configured providers:');
+        for (const p of providers) console.error(`  ${p.name}`);
+      }
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const result = await discoverOpenAI({
+        baseUrl: target.baseUrl,
+        apiKey: target.apiKey,
+      });
+      console.log(`Available models from "${providerName}" (${target.baseUrl}, source: ${result.source}):`);
+      for (const id of result.models) console.log(`  ${providerName}/${id}`);
+      return;
+    } catch (err) {
+      console.error(`Model discovery for "${providerName}" failed: ${err.message}`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  // Default: list configured providers' declared models (no network call).
+  const providers = Array.isArray(config.providers) ? config.providers : [];
+  if (providers.length === 0) {
+    console.log('No providers configured in config.json.');
+    console.log('Run `yeaft-agent llm setup`, or `yeaft-agent llm list-models github-copilot` to discover the Copilot catalog.');
+    return;
+  }
+  console.log('Configured models:');
+  for (const provider of providers) {
+    const tag = provider.managed || provider.credentialProvider ? ' (managed)' : '';
+    console.log(`  [${provider.name}]${tag} ${provider.baseUrl || ''}`.trimEnd());
+    if (!Array.isArray(provider.models)) continue;
+    for (const m of provider.models) {
+      const id = typeof m === 'string' ? m : m?.id;
+      if (!id) continue;
+      const ref = `${provider.name}/${id}`;
+      const annot = ref === config.primaryModel ? ' ← primary'
+        : ref === config.fastModel ? ' ← fast'
+        : '';
+      console.log(`    ${ref}${annot}`);
+    }
+  }
+}
 
 async function runLlmSetup(current, configPath) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {

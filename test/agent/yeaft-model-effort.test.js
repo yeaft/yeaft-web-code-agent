@@ -44,6 +44,14 @@ describe('Yeaft model effort metadata and config', () => {
     expect(getModelEffortOptions('claude-sonnet-4-20250514')).toEqual(['low', 'medium', 'high']);
     expect(getModelEffortOptions('gpt-4o')).toEqual([]);
 
+    // DeepSeek reasoning models expose a low/medium/high effort scale through
+    // the openai-reasoning path; plain deepseek-chat stays effort-less.
+    expect(getModelEffortOptions('deepseek-reasoner')).toEqual(['low', 'medium', 'high']);
+    expect(getModelEffortOptions('deepseek-r1')).toEqual(['low', 'medium', 'high']);
+    expect(getModelEffortOptions('my-proxy/deepseek-reasoner')).toEqual(['low', 'medium', 'high']);
+    expect(getModelEffortOptions('deepseek-chat')).toEqual([]);
+    expect(getThinkingCapability('deepseek-reasoner').thinkingProtocol).toBe('openai-reasoning');
+
     expect(getThinkingCapability('github-copilot/gpt-5.4').thinkingProtocol).toBe('openai-reasoning');
     expect(getThinkingCapability('github-copilot/gpt-5.5').thinkingProtocol).toBe('openai-reasoning');
     expect(getThinkingCapability('github-copilot/claude-opus-4.8').thinkingProtocol).toBe('anthropic-adaptive');
@@ -117,6 +125,19 @@ describe('Yeaft adapter effort request mapping', () => {
     expect(filterEffortForModel({ model: 'gpt-5', effort: 'max', effortSource: 'user' }).effort)
       .toBeUndefined();
     expect(filterEffortForModel({ model: 'gpt-5', effort: 'xhigh', effortSource: 'user' }).effort)
+      .toBeUndefined();
+
+    // DeepSeek reasoning models accept low/medium/high; minimal/max stay
+    // filtered out because they are not on the published DeepSeek scale.
+    expect(filterEffortForModel({ model: 'deepseek-reasoner', effort: 'high', effortSource: 'user' }))
+      .toMatchObject({ effort: 'high', effortSource: 'user' });
+    expect(filterEffortForModel({ model: 'my-proxy/deepseek-reasoner', effort: 'medium', effortSource: 'user' }))
+      .toMatchObject({ effort: 'medium', effortSource: 'user' });
+    expect(filterEffortForModel({ model: 'deepseek-reasoner', effort: 'minimal', effortSource: 'user' }).effort)
+      .toBeUndefined();
+    expect(filterEffortForModel({ model: 'deepseek-reasoner', effort: 'max', effortSource: 'user' }).effort)
+      .toBeUndefined();
+    expect(filterEffortForModel({ model: 'deepseek-chat', effort: 'high', effortSource: 'user' }).effort)
       .toBeUndefined();
     expect(filterEffortForModel({ model: 'github-copilot/claude-opus-4.8', effort: 'xhigh', effortSource: 'user' }))
       .toMatchObject({ effort: 'xhigh', effortSource: 'user' });
