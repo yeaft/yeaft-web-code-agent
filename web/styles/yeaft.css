@@ -280,22 +280,22 @@
   top: calc(100% + 8px);
   left: 0;
   right: auto;
-  min-width: 420px;
-  width: min(560px, calc(100vw - 32px));
-  max-width: min(560px, calc(100vw - 32px));
+  min-width: 360px;
+  width: min(420px, calc(100vw - 32px));
+  max-width: min(420px, calc(100vw - 32px));
   max-height: min(420px, calc(100vh - 120px));
   z-index: 1300;
 }
 
 .yeaft-model-selector-body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 180px;
-  gap: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .yeaft-model-list {
   min-width: 0;
-  max-height: 300px;
+  max-height: 260px;
   overflow-y: auto;
 }
 
@@ -351,10 +351,10 @@
   border: 0;
   background: transparent;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   text-align: left;
   gap: 6px;
-  padding: 6px 8px;
+  padding: 8px;
   border-radius: 6px;
   cursor: pointer;
   font-size: 12px;
@@ -382,6 +382,15 @@
   font-size: 11px;
   color: var(--accent);
   text-align: center;
+  line-height: 18px;
+}
+
+.yeaft-model-option-main {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .yeaft-model-option-label {
@@ -392,22 +401,32 @@
   white-space: nowrap;
 }
 
+.yeaft-model-option-meta {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .yeaft-model-option-provider {
   font-size: 10px;
   color: var(--text-muted);
-  flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .yeaft-model-option-ctx {
   font-size: 10px;
   color: var(--text-muted);
-  flex-shrink: 0;
   opacity: 0.75;
-  margin-left: 4px;
 }
 
 .yeaft-model-effort-panel {
-  padding: 7px 8px 8px;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--bg-input-wrapper);
 }
 
 .yeaft-model-effort-title {
@@ -419,6 +438,7 @@
 
 .yeaft-model-effort-options {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
@@ -443,6 +463,77 @@
   background: var(--session-active);
   color: var(--text-primary);
   font-weight: 600;
+}
+
+
+.yeaft-model-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+@media (max-width: 640px) {
+  .yeaft-topbar-model {
+    position: static;
+  }
+
+  .yeaft-topbar-model-dropdown {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    top: auto;
+    bottom: 12px;
+    min-width: 0;
+    width: auto;
+    max-width: none;
+    max-height: min(72dvh, 560px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .yeaft-model-selector-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .yeaft-model-list {
+    max-height: none;
+    overflow-y: visible;
+  }
+
+  .yeaft-model-option {
+    padding: 10px;
+  }
+
+  .yeaft-model-option-label {
+    white-space: normal;
+  }
+
+  .yeaft-model-option-meta {
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  .yeaft-model-option-provider,
+  .yeaft-model-option-ctx {
+    white-space: normal;
+  }
+
+  .yeaft-model-actions {
+    position: sticky;
+    bottom: 0;
+    background: var(--bg-main);
+    padding-top: 8px;
+  }
+
+  .yeaft-model-actions .btn-primary,
+  .yeaft-model-actions .btn-secondary {
+    flex: 1 1 0;
+    justify-content: center;
+  }
 }
 
 /* ── Provider edit — per-model row (id + ctx + max) ── */

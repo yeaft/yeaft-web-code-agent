@@ -108,9 +108,13 @@ export default {
                   >
                     <span class="yeaft-model-check" v-if="modelOptionMatchesRef(m, pendingModelRef)">&#10003;</span>
                     <span class="yeaft-model-check" v-else></span>
-                    <span class="yeaft-model-option-label">{{ m.label || m.id }}</span>
-                    <span class="yeaft-model-option-provider" v-if="m.provider">{{ m.provider }}</span>
-                    <span class="yeaft-model-option-ctx" v-if="m.contextWindow">{{ formatModelCtx(m) }}</span>
+                    <span class="yeaft-model-option-main">
+                      <span class="yeaft-model-option-label">{{ m.label || m.id }}</span>
+                      <span class="yeaft-model-option-meta">
+                        <span class="yeaft-model-option-provider" v-if="m.provider">{{ m.provider }}</span>
+                        <span class="yeaft-model-option-ctx" v-if="m.contextWindow">{{ formatModelCtx(m) }}</span>
+                      </span>
+                    </span>
                   </button>
                 </div>
                 <div class="yeaft-model-effort-panel">
