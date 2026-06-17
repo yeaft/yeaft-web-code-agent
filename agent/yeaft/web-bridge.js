@@ -2383,6 +2383,8 @@ function handleEngineEvent(event, hctx) {
     case 'loop':
       // feat-6af5f9f1 PR B: replaces the old `debug_turn` event. Same
       // payload shape plus turnId + loopNumber + usage.totalTokens.
+      // feat-debug-timestamp: also forward `at` (epoch ms) so the
+      // debug panel can render per-loop HH:MM:SS.
       sendSessionEvent({
         type: 'loop',
         turnId: event.turnId,
@@ -2396,6 +2398,7 @@ function handleEngineEvent(event, hctx) {
         latencyMs: event.latencyMs,
         ttfbMs: event.ttfbMs,
         stopReason: event.stopReason,
+        at: event.at,
         rawRequest: event.rawRequest,
         rawResponse: event.rawResponse,
       }, envelope);

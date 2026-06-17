@@ -26,6 +26,7 @@
  *   - turn   [copy turn]              → markdown summary
  */
 import { buildDreamDebugItems, filterDreamDebugItems, previewText } from './dream-debug-model.js';
+import { splitTokenBreakdown, apportionToBuckets, formatClockTime } from './yeaft-debug-helpers.js';
 
 export default {
   name: 'YeaftDebugPanel',
@@ -119,7 +120,8 @@ export default {
       return window.Pinia?.useSessionsStore?.() || null;
     },
     turns() {
-      return (this.store && this.store.yeaftDebugTurnsForActiveSession) || [];
+      const turns = (this.store && this.store.yeaftDebugTurnsForActiveSession) || [];
+      return turns.map((turn) => this.decorateTurnTokenBreakdowns(turn));
     },
     // feat-6af5f9f1 PR C: toolbar bindings.
     searchQuery: {
@@ -612,6 +614,84 @@ export default {
     formatTimestamp(ms) {
       if (!ms) return '';
       try { return new Date(ms).toLocaleTimeString(); } catch { return ''; }
+    },
+    // feat-debug-timestamp: HH:MM:SS form for per-request rows. Wraps
+    // the pure helper so the template only needs `formatClock(loop.at)`.
+    formatClock(value) {
+      return formatClockTime(value);
+    },
+    // feat-debug-timestamp: derive a clock time for a loop when the
+    // engine didn't stamp `at` (legacy / SQLite-hydrated loops). We
+    // synthesize it from the parent turn's openedAt + the cumulative
+    // latency of earlier loops in the same turn, so the column still
+    // makes sense in chronological terms even for old data.
+    loopClockTime(turn, loop) {
+      if (loop && typeof loop.at === 'number') return this.formatClock(loop.at);
+      if (!turn || typeof turn.openedAt !== 'number') return '';
+      const loops = turn.loops || [];
+      let cumulative = 0;
+      for (const lp of loops) {
+        if (!lp) continue;
+        if (lp === loop || lp.loopNumber === loop.loopNumber) break;
+        if (Number.isFinite(lp.latencyMs)) cumulative += lp.latencyMs;
+      }
+      if (Number.isFinite(loop.latencyMs)) cumulative += loop.latencyMs;
+      return this.formatClock(turn.openedAt + cumulative);
+    },
+    // feat-debug-token-breakdown: per-loop estimated split between
+    // message (user/assistant prose) and tool (tool_use + tool_result)
+    // traffic. The real provider totals come from loop.usage; we use
+    // the helper to compute a *ratio* and apportion the real totals
+    // into the two buckets so the sum still equals usage.totalTokens.
+    loopTokenBreakdown(loop) {
+      if (!loop) {
+        return {
+          inputMessage: 0, inputTool: 0,
+          outputMessage: 0, outputTool: 0,
+          inputTotal: 0, outputTotal: 0, total: 0,
+        };
+      }
+      const est = splitTokenBreakdown(loop);
+      const u = loop.usage || {};
+      const realIn = Math.max(0, this.usageTotalInputTokens(u));
+      const realOut = Math.max(0, Number(u.outputTokens) || 0);
+      const realTotal = Math.max(0, this.usageTotalTokens(u) || (realIn + realOut));
+      const inSplit = apportionToBuckets(realIn, est.inputMessageTokens, est.inputToolTokens);
+      const outSplit = apportionToBuckets(realOut, est.outputMessageTokens, est.outputToolTokens);
+      return {
+        inputMessage: inSplit.message,
+        inputTool: inSplit.tool,
+        outputMessage: outSplit.message,
+        outputTool: outSplit.tool,
+        inputTotal: realIn,
+        outputTotal: realOut,
+        total: realTotal,
+      };
+    },
+    // feat-debug-token-breakdown: attach per-loop and per-turn
+    // breakdowns once per computed-turn construction. The template reads
+    // `loop.tokenBreakdown` / `turn.tokenBreakdown` directly so Vue patching
+    // does not repeatedly walk large `loop.messages` arrays.
+    decorateTurnTokenBreakdowns(turn) {
+      if (!turn) return turn;
+      const acc = { inputMessage: 0, inputTool: 0, outputMessage: 0, outputTool: 0, inputTotal: 0, outputTotal: 0, total: 0 };
+      const loops = ((turn && turn.loops) || []).map((loop) => {
+        const b = this.loopTokenBreakdown(loop);
+        acc.inputMessage += b.inputMessage;
+        acc.inputTool += b.inputTool;
+        acc.outputMessage += b.outputMessage;
+        acc.outputTool += b.outputTool;
+        acc.inputTotal += b.inputTotal;
+        acc.outputTotal += b.outputTotal;
+        acc.total += b.total;
+        return { ...loop, tokenBreakdown: b };
+      });
+      const tokenBreakdown = {
+        ...acc,
+        messageTotal: acc.inputMessage + acc.outputMessage,
+        toolTotal: acc.inputTool + acc.outputTool,
+      };
+      return { ...turn, loops, tokenBreakdown };
     },
     truncate(text, max) {
       const s = String(text || '');
@@ -1177,7 +1257,16 @@ export default {
               <span v-if="debugSessionId(turn)" class="yeaft-debug-turn-group">{{ debugSessionId(turn) }}</span>
               <span class="yeaft-debug-turn-loopcount">{{ turn.loopCount || (turn.loops && turn.loops.length) || 0 }}L</span>
               <span class="yeaft-debug-turn-time">{{ formatMs(turn.totalMs) }}</span>
-              <span class="yeaft-debug-turn-tokens">{{ formatTokens(turn.totalTokens) }} tok</span>
+              <span
+                class="yeaft-debug-turn-tokens"
+                :title="'message ' + turn.tokenBreakdown.messageTotal + ' · tool ' + turn.tokenBreakdown.toolTotal + ' (estimated split)'"
+              >
+                {{ formatTokens(turn.totalTokens) }} tok
+                <span class="yeaft-debug-tokens-split">
+                  (msg {{ formatTokens(turn.tokenBreakdown.messageTotal) }} · tool {{ formatTokens(turn.tokenBreakdown.toolTotal) }})
+                </span>
+              </span>
+              <span v-if="turn.openedAt" class="yeaft-debug-turn-clock" :title="$t('yeaft.debugTurnStartedAt') || 'turn started at'">{{ formatClock(turn.openedAt) }}</span>
             </span>
             <button class="yeaft-debug-copy-btn" @click.stop="copyTurnAsMarkdown(turn)" title="Copy turn as markdown">copy</button>
           </div>
@@ -1237,11 +1326,20 @@ export default {
                 <span class="yeaft-debug-loop-num">Loop {{ loop.loopNumber }}</span>
                 <span class="yeaft-debug-loop-model">{{ loop.model }}</span>
                 <span class="yeaft-debug-loop-stats">
-                  <span :title="formatUsageBreakdown(loop.usage)">↑{{ usageTotalInputTokens(loop.usage) }}</span>
-                  <span title="output tokens">↓{{ loop.usage?.outputTokens || 0 }}</span>
+                  <span
+                    :title="'input total ' + loop.tokenBreakdown.inputTotal + ' = message ' + loop.tokenBreakdown.inputMessage + ' + tool ' + loop.tokenBreakdown.inputTool + ' (estimated split)'"
+                  >↑{{ usageTotalInputTokens(loop.usage) }}<span class="yeaft-debug-tokens-split">(m{{ loop.tokenBreakdown.inputMessage }}/t{{ loop.tokenBreakdown.inputTool }})</span></span>
+                  <span
+                    :title="'output total ' + loop.tokenBreakdown.outputTotal + ' = message ' + loop.tokenBreakdown.outputMessage + ' + tool ' + loop.tokenBreakdown.outputTool + ' (estimated split)'"
+                  >↓{{ loop.usage?.outputTokens || 0 }}<span class="yeaft-debug-tokens-split">(m{{ loop.tokenBreakdown.outputMessage }}/t{{ loop.tokenBreakdown.outputTool }})</span></span>
                   <span :title="formatUsageBreakdown(loop.usage)">⊕{{ usageTotalTokens(loop.usage) }}</span>
                   <span>{{ formatMs(loop.latencyMs) }}</span>
                   <span class="yeaft-debug-loop-meta">{{ loopMetaSummary(loop) }}</span>
+                  <span
+                    v-if="loopClockTime(turn, loop)"
+                    class="yeaft-debug-loop-clock"
+                    :title="loop.at ? ($t('yeaft.debugRequestAt') || 'request time') : ($t('yeaft.debugRequestAtDerived') || 'derived from turn start')"
+                  >{{ loopClockTime(turn, loop) }}</span>
                 </span>
                 <button
                   v-if="assistantResponseForLoop(loop)"

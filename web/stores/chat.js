@@ -1676,6 +1676,12 @@ export const useChatStore = defineStore('chat', {
             latencyMs: event.latencyMs,
             ttfbMs: event.ttfbMs,
             stopReason: event.stopReason,
+            // feat-debug-timestamp: epoch ms when this LLM call ended
+            // (stamped by the engine). Used by the panel to render
+            // per-loop HH:MM:SS in the loop header row. Falls back to
+            // null for legacy loops missing the field — the panel
+            // computes a derived time from turn.openedAt in that case.
+            at: typeof event.at === 'number' ? event.at : null,
             // task-344: raw API request / response payload (redacted server-side).
             rawRequest: event.rawRequest || null,
             rawResponse: event.rawResponse || null,
