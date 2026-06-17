@@ -2233,6 +2233,9 @@ function handleEngineEvent(event, hctx) {
         type: 'context_usage',
         inputTokens: event.inputTokens,
         outputTokens: event.outputTokens,
+        cacheReadTokens: event.cacheReadTokens || 0,
+        cacheWriteTokens: event.cacheWriteTokens || 0,
+        totalInputTokens: (event.inputTokens || 0) + (event.cacheReadTokens || 0) + (event.cacheWriteTokens || 0),
       }, envelope);
       break;
 

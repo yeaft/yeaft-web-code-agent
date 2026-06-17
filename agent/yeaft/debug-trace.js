@@ -449,6 +449,25 @@ export class DebugTrace {
       try { return JSON.parse(s); }
       catch { return null; }
     };
+    const normalizeUsage = (usage, row) => {
+      const inputTokens = Number.isFinite(Number(usage?.inputTokens)) ? Number(usage.inputTokens) : (row.input_tokens || 0);
+      const outputTokens = Number.isFinite(Number(usage?.outputTokens)) ? Number(usage.outputTokens) : (row.output_tokens || 0);
+      const cacheReadTokens = Number.isFinite(Number(usage?.cacheReadTokens)) ? Number(usage.cacheReadTokens) : (row.cache_read_tokens || 0);
+      const cacheWriteTokens = Number.isFinite(Number(usage?.cacheWriteTokens)) ? Number(usage.cacheWriteTokens) : (row.cache_write_tokens || 0);
+      const totalInputTokens = Number.isFinite(Number(usage?.totalInputTokens))
+        ? Number(usage.totalInputTokens)
+        : inputTokens + cacheReadTokens + cacheWriteTokens;
+      return {
+        inputTokens,
+        outputTokens,
+        cacheReadTokens,
+        cacheWriteTokens,
+        totalInputTokens,
+        totalTokens: Number.isFinite(Number(usage?.totalTokens))
+          ? Number(usage.totalTokens)
+          : totalInputTokens + outputTokens,
+      };
+    };
     // Group rows by (turnId, threadId, sessionId, vpId) → frontend Turn
     // record. Each row is also surfaced as a Loop.
     const turnsById = new Map();
@@ -463,11 +482,7 @@ export class DebugTrace {
         messages: parsedMessages,
         response: r.response_text || '',
         toolCalls: parseJsonSafe(r.tool_calls_json) || [],
-        usage: parsedUsage || {
-          inputTokens: r.input_tokens || 0,
-          outputTokens: r.output_tokens || 0,
-          totalTokens: (r.input_tokens || 0) + (r.output_tokens || 0),
-        },
+        usage: normalizeUsage(parsedUsage, r),
         latencyMs: r.latency_ms || 0,
         ttfbMs: r.ttfb_ms || null,
         stopReason: r.stop_reason || null,
@@ -504,10 +519,7 @@ export class DebugTrace {
       // Aggregate per-loop latency / tokens so the Turn header shows the
       // same totals the live `turn_close` event would have stamped.
       t.totalMs += r.latency_ms || 0;
-      const usageTokens = parsedUsage && Number.isFinite(parsedUsage.totalTokens)
-        ? parsedUsage.totalTokens
-        : (r.input_tokens || 0) + (r.output_tokens || 0);
-      t.totalTokens += usageTokens;
+      t.totalTokens += loop.usage.totalTokens || 0;
       if (r.ended_at && (!t.closedAt || r.ended_at > t.closedAt)) t.closedAt = r.ended_at;
       return loop;
     });
