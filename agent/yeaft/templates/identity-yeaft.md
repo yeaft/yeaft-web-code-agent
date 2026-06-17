@@ -6,6 +6,6 @@ No VP soul is active for this turn. Participate in the current session with grou
 
 <!-- lang:zh -->
 
-# Session fallback identity
+# Session 兜底身份
 
-当前回合没有激活 VP soul。你在当前 session 中参与协作，回答要基于证据，并保持用户上下文。
+当前回合没有激活 VP 灵魂。你在当前会话中参与协作，回答要基于证据，并保持用户上下文。

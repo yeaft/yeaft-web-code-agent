@@ -22,7 +22,7 @@
  */
 
 import { LLMAdapter } from './adapter.js';
-import { getThinkingCapability, normalizeEffort, parseModelRef } from '../models.js';
+import { getModelEffortOptions, getThinkingCapability, normalizeEffort, parseModelRef } from '../models.js';
 import {
   GITHUB_COPILOT_BASE_URL,
   GITHUB_COPILOT_CREDENTIAL_PROVIDER,
@@ -104,20 +104,27 @@ function thinkingV1Enabled() {
 export function filterEffortForModel(params) {
   if (!params || !('effort' in params)) return params;
   if (!thinkingV1Enabled()) {
-    const { effort: _drop, ...rest } = params;
-    return rest;
+    if (params.effortSource !== 'user') {
+      const { effort: _drop, effortSource: _source, ...rest } = params;
+      return rest;
+    }
   }
   const norm = normalizeEffort(params.effort);
   if (!norm) {
-    const { effort: _drop, ...rest } = params;
+    const { effort: _drop, effortSource: _source, ...rest } = params;
     return rest;
   }
-  const cap = getThinkingCapability(parseModelRef(params.model).modelId);
+  const modelId = parseModelRef(params.model).modelId;
+  const cap = getThinkingCapability(modelId);
   if (!cap.supportsThinking || cap.thinkingProtocol === 'none') {
-    const { effort: _drop, ...rest } = params;
+    const { effort: _drop, effortSource: _source, ...rest } = params;
     return rest;
   }
-  return { ...params, effort: norm };
+  if (!getModelEffortOptions(modelId).includes(norm)) {
+    const { effort: _drop, effortSource: _source, ...rest } = params;
+    return rest;
+  }
+  return { ...params, effort: norm, effortSource: params.effortSource };
 }
 
 /**

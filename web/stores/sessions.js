@@ -14,6 +14,8 @@
  * `activeSessionId` is a pure UI pointer (which session the main pane shows).
  */
 
+import { sortSessionsByActivity } from './helpers/session-order.js';
+
 const { defineStore } = Pinia;
 
 /**
@@ -27,6 +29,22 @@ function isPinnedRow(s, fallback = false) {
   if (Object.prototype.hasOwnProperty.call(s, 'pinned')) return s.pinned === true;
   if (Object.prototype.hasOwnProperty.call(s, 'isPinned')) return s.isPinned === true;
   return !!fallback;
+}
+
+function isRunningRow(s) {
+  if (!s || typeof s !== 'object') return false;
+  return s.running === true || s.active === true || s.isActive === true || s.isRunning === true;
+}
+
+function latestActivityValue(s) {
+  if (!s || typeof s !== 'object') return 0;
+  const value = s.latestActivityAt || s.lastActivityAt || s.lastMessageAt || s.updatedAt || 0;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value) {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
 }
 
 /**
@@ -70,12 +88,9 @@ export const useSessionsStore = defineStore('sessions', {
   getters: {
     sessionList(state) {
       const all = state.sessionOrder.map(id => state.sessions[id]).filter(Boolean);
-      // fix-yeaft-session-list-and-menu: mirror chat sidebar's pinned-first
-      // grouping while keeping the persisted sessionOrder as the source of
-      // truth for click ordering. Selecting a session mutates sessionOrder in
-      // setActive(); the getter must not temporarily float active rows, or the
-      // previous active row snaps back to its old slot and makes selection look
-      // like a swap instead of an insertion.
+      // Selection is a pure UI pointer. It must not change list order.
+      // Global pinned sessions are grouped first; both groups sort by real
+      // activity time descending on initial load/refresh and after true updates.
       const chat = _getChatStoreSafe();
       const pinnedIds = (chat && Array.isArray(chat.pinnedSessions))
         ? new Set(chat.pinnedSessions)
@@ -92,7 +107,7 @@ export const useSessionsStore = defineStore('sessions', {
         if (pinnedIds.has(s.id) || s.pinned) pinned.push(s);
         else unpinned.push(s);
       }
-      return [...pinned, ...unpinned];
+      return [...sortSessionsByActivity(pinned), ...sortSessionsByActivity(unpinned)];
     },
     sessionCount(state) {
       return state.sessionOrder.length;
@@ -205,14 +220,14 @@ export const useSessionsStore = defineStore('sessions', {
       const lastViewedSession = lastViewed ? this.sessions[lastViewed] : null;
       const lastViewedMatchesAgent = lastViewedSession
         && (!agentId || lastViewedSession.agentId === agentId);
+      const runningSessionId = this.sessionOrder
+        .filter(id => this.sessions[id] && (!agentId || this.sessions[id].agentId === agentId) && this.sessions[id].running)
+        .sort((a, b) => latestActivityValue(this.sessions[b]) - latestActivityValue(this.sessions[a]))[0] || null;
+      const fallbackActiveId = runningSessionId || (lastViewedMatchesAgent ? lastViewed : null) || (this.sessionOrder[0] || null);
       if (this.activeSessionId && !this.sessions[this.activeSessionId]) {
-        this.activeSessionId = lastViewedMatchesAgent
-          ? lastViewed
-          : (this.sessionOrder[0] || null);
+        this.activeSessionId = fallbackActiveId;
       } else if (!this.activeSessionId && this.sessionOrder.length > 0) {
-        this.activeSessionId = lastViewedMatchesAgent
-          ? lastViewed
-          : this.sessionOrder[0];
+        this.activeSessionId = fallbackActiveId;
       }
       // Sanitize the chat store's parallel filter so a persisted
       // yeaftActiveSessionFilter pointing at a now-deleted session does not
@@ -220,11 +235,9 @@ export const useSessionsStore = defineStore('sessions', {
       const chat = _getChatStoreSafe();
       if (chat) {
         if (chat.yeaftActiveSessionFilter && !this.sessions[chat.yeaftActiveSessionFilter]) {
-          chat.yeaftActiveSessionFilter = lastViewedMatchesAgent
-            ? lastViewed
-            : (this.sessionOrder[0] || null);
-        } else if (!chat.yeaftActiveSessionFilter && lastViewedMatchesAgent) {
-          chat.yeaftActiveSessionFilter = lastViewed;
+          chat.yeaftActiveSessionFilter = fallbackActiveId;
+        } else if (!chat.yeaftActiveSessionFilter && fallbackActiveId) {
+          chat.yeaftActiveSessionFilter = fallbackActiveId;
         }
       }
       // fix-yeaft-session-list-and-menu: mirror server-decorated pin
@@ -337,41 +350,9 @@ export const useSessionsStore = defineStore('sessions', {
     setActive(sessionId) {
       if (sessionId && this.sessions[sessionId]) {
         this.activeSessionId = sessionId;
-        this.moveSessionToFront(sessionId);
       } else {
         this.activeSessionId = null;
       }
-    },
-
-    /**
-     * Move the selected session to the top of its visual group while preserving
-     * the relative order of every other row. This matches Chat session list
-     * activation: selecting C in [A, B, C, D] yields [C, A, B, D], not a swap.
-     *
-     * Pinned rows stay in the pinned block; unpinned rows stay below pinned.
-     */
-    moveSessionToFront(sessionId) {
-      if (!sessionId || !this.sessions[sessionId]) return;
-      const currentIndex = this.sessionOrder.indexOf(sessionId);
-      if (currentIndex <= 0) return;
-
-      const chat = _getChatStoreSafe();
-      const pinnedIds = (chat && Array.isArray(chat.pinnedSessions))
-        ? new Set(chat.pinnedSessions)
-        : new Set();
-      for (const id of this.sessionOrder) {
-        const row = this.sessions[id];
-        if (row && row.pinned) pinnedIds.add(id);
-      }
-      const targetPinned = pinnedIds.has(sessionId);
-
-      const nextOrder = this.sessionOrder.filter(id => id !== sessionId);
-      const insertAt = targetPinned
-        ? 0
-        : nextOrder.findIndex(id => !pinnedIds.has(id));
-      if (insertAt === -1) nextOrder.push(sessionId);
-      else nextOrder.splice(insertAt, 0, sessionId);
-      this.sessionOrder = nextOrder;
     },
 
     /**
@@ -386,11 +367,6 @@ export const useSessionsStore = defineStore('sessions', {
         ...this.sessions[sessionId],
         pinned: !!pinned,
       };
-      // If the row just became pinned and raw order currently has unpinned
-      // rows above it, keep the backing order consistent with the visual
-      // pinned block. Unpin does not force a reorder; the getter/helper will
-      // naturally place it in the non-pinned block by existing activity order.
-      if (pinned) this.moveSessionToFront(sessionId);
     },
 
     /** Register a request-id so components can await ok/error. */
@@ -413,6 +389,12 @@ export const useSessionsStore = defineStore('sessions', {
         config: s.config && typeof s.config === 'object' ? { ...s.config } : {},
         workDir: typeof s.workDir === 'string' ? s.workDir : '',
         createdAt: s.createdAt || null,
+        updatedAt: s.updatedAt || null,
+        lastMessageAt: s.lastMessageAt || null,
+        running: isRunningRow(s),
+        active: isRunningRow(s),
+        runningVpCount: Number.isFinite(Number(s.runningVpCount)) ? Number(s.runningVpCount) : 0,
+        latestActivityAt: s.latestActivityAt || s.lastActivityAt || s.lastMessageAt || null,
         // Cross-agent unified sidebar: each row stamped with the
         // owning agent so the UI can render the agent badge + route
         // CRUD ops to the right agent. May be null on the legacy

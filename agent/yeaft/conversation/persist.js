@@ -1104,6 +1104,7 @@ export class ConversationStore {
     const all = [...cold, ...hot].sort(compareMessagesBySeq);
     const after = all.filter((m) => {
       if (!m || m.sessionId !== sessionId) return false;
+      if (m._reflection || m.internal || m.systemOnly || m.systemOnlyMessage) return false;
       const seq = parseSeqFromId(m.id);
       return Number.isFinite(seq) && seq > cutoff;
     });

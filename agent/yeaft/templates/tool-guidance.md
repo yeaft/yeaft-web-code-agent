@@ -76,7 +76,7 @@ or pure conversational/question turns — the checklist becomes noise.
 - 优先编辑现有文件而非创建新文件
 - 使用 `bash` 执行 shell 命令；避免交互式命令（不用 `vim`、不用 `less`、不用 `git rebase -i`）
 - 当输出过大时，提取相关部分而非倾倒所有内容
-- **同一个 turn 内并行调用互不依赖的工具。** 接下来几步如果彼此输出不依赖（比如读三个并列文件，或者 `grep` + `glob` 一起定位），就在一个 assistant turn 里并行发出多个 tool call，不要一次一个回合地串行。
+- **同一个回合内并行调用互不依赖的工具。** 接下来几步如果彼此输出不依赖（比如读三个并列文件，或者 `grep` + `glob` 一起定位），就在一个助手回合里并行发出多个工具调用，不要一次一个回合地串行。
 
 ## 文件操作
 

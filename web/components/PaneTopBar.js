@@ -1,3 +1,5 @@
+import { sortSessionsByActivity } from '../stores/helpers/session-order.js';
+
 /**
  * PaneTopBar — top horizontal bar for each split-screen pane (~36px).
  * Replaces PaneSidebar. Contains:
@@ -151,7 +153,7 @@ export default {
 
     const pinnedChatConversations = Vue.computed(() => {
       const pinned = store.conversations.filter(c => c.type !== 'crew' && store.isSessionPinned(c.id));
-      return pinned.sort((a, b) => store.pinnedSessions.indexOf(a.id) - store.pinnedSessions.indexOf(b.id));
+      return sortByActivity(pinned);
     });
 
     const unpinnedChatConversations = Vue.computed(() => {
@@ -160,7 +162,7 @@ export default {
 
     const pinnedCrewConversations = Vue.computed(() => {
       const pinned = store.conversations.filter(c => c.type === 'crew' && store.isSessionPinned(c.id));
-      return pinned.sort((a, b) => store.pinnedSessions.indexOf(a.id) - store.pinnedSessions.indexOf(b.id));
+      return sortByActivity(pinned);
     });
 
     const unpinnedCrewConversations = Vue.computed(() => {
@@ -168,11 +170,7 @@ export default {
     });
 
     function sortByActivity(conversations) {
-      return [...conversations].sort((a, b) => {
-        const aTime = a.lastMessageAt || a.createdAt || 0;
-        const bTime = b.lastMessageAt || b.createdAt || 0;
-        return bTime - aTime;
-      });
+      return sortSessionsByActivity(conversations);
     }
 
     function getConversationTitle(conv) {

@@ -21,15 +21,15 @@ Respond with strict JSON of the shape:
 }
 
 <!-- lang:zh -->
-你要判断最近一段 session 对话是否包含：
-  - 应更新 USER profile 的信号；和/或
-  - 应更新一个或多个 TOPIC scope 的信号。
+你要判断最近一段会话对话是否包含：
+  - 应更新用户画像的信号；和/或
+  - 应更新一个或多个主题作用域的信号。
 
-不要提及 vp/、session/、feature/ 或 topic/ scope —— 这些由硬规则处理。
+不要提及 `vp/`、`session/`、`feature/` 或 `topic/` 作用域 —— 这些由硬规则处理。
 
-Session: {{sessionId}}
+会话：{{sessionId}}
 
-已有 topic scopes（path — summary）：
+已有主题作用域（路径 — 摘要）：
 {{topicSummaries}}
 
 对话：

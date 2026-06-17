@@ -8,16 +8,20 @@ import { CONFIG } from '../config.js';
 export function decorateYeaftSessionsWithPinned(agentId, sessions) {
   const rawRows = Array.isArray(sessions) ? sessions : [];
   const pinnedIds = new Set();
+  let authoritative = true;
   try {
     for (const row of yeaftSessionDb.getByAgent(agentId)) {
       if (row && row.isPinned) pinnedIds.add(row.id);
     }
   } catch (e) {
+    authoritative = false;
     console.warn(`[Server] yeaft pin decorate read failed for agent ${agentId}:`, e?.message || e);
   }
+  if (!authoritative) return rawRows;
   return rawRows.map(s => {
     if (!s || !s.id) return s;
-    return pinnedIds.has(s.id) ? { ...s, pinned: true } : s;
+    const pinned = pinnedIds.has(s.id);
+    return { ...s, pinned, isPinned: pinned };
   });
 }
 

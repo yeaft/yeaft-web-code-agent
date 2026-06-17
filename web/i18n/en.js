@@ -251,6 +251,15 @@ export default {
   'yeaft.switchModel': 'Switch model',
   'yeaft.modelMenu.title': 'Model and LLM settings',
   'yeaft.modelMenu.label': 'Model',
+  'yeaft.modelMenu.effort': 'Effort',
+  'yeaft.modelMenu.effort.openaiReasoning': 'Reasoning effort',
+  'yeaft.modelMenu.effort.anthropicAdaptive': 'Adaptive thinking effort',
+  'yeaft.modelMenu.effort.minimal': 'Minimal',
+  'yeaft.modelMenu.effort.low': 'Low',
+  'yeaft.modelMenu.effort.medium': 'Medium',
+  'yeaft.modelMenu.effort.high': 'High',
+  'yeaft.modelMenu.effort.xhigh': 'X-High',
+  'yeaft.modelMenu.effort.max': 'Max',
   'yeaft.modelMenu.configureHint': 'Providers, keys, model list',
   // fix/dream-cadence-and-ui-trigger: manual dream trigger button.
   'yeaft.dream.runNow': 'Run dream now',
@@ -345,7 +354,6 @@ export default {
 
   'chat.sidebar.expand': 'Expand menu',
   'chat.sidebar.collapse': 'Collapse sidebar',
-  'chat.sidebar.portProxy': 'Port Proxy',
   'chat.sidebar.workbench': 'Workbench',
   'chat.sidebar.newConv': 'Conversation',
   'chat.sidebar.newCrew': 'New Crew Session',
@@ -528,7 +536,6 @@ export default {
   'settings.tabs.account': 'Account',
   'settings.tabs.security': 'Security',
   'settings.tabs.general': 'General',
-  'settings.tabs.proxy': 'Port Proxy',
   'settings.tabs.invitations': 'Invitations',
 
   // Settings - Account
@@ -560,11 +567,13 @@ export default {
   'settings.security.agentKey': 'Agent Secret',
   'settings.security.agentKeyDesc': 'Shared secret for Agent connection authentication',
   'settings.security.agentCmdInstall': 'Install Agent',
+  'settings.security.agentCmdRun': 'Run Agent',
   'settings.security.agentCmdService': 'Run as Service',
-  'settings.security.agentCmdNeedsSecret': 'Reset the Agent Secret first to generate the command with --server, --secret, and --name.',
+  'settings.security.agentCmdNeedsSecret': 'Generate an Agent Secret first to create a usable command with --server, --secret, and --name.',
   'settings.security.none': 'None',
   'settings.security.show': 'Show',
   'settings.security.hide': 'Hide',
+  'settings.security.generateKey': 'Generate Secret',
   'settings.security.resetKey': 'Reset Secret',
   'settings.security.resetting': 'Resetting...',
   'settings.security.resetWarning': 'All Agents need to be reconfigured after reset',
@@ -627,10 +636,6 @@ export default {
   'settings.msg.deleteFailed': 'Delete failed',
 
   // Settings - Tools (Default config)
-  'settings.tabs.tools': 'Tools',
-  'settings.tools.noAgent': 'Please select an Agent first',
-  'settings.tools.noServers': 'No MCP servers configured',
-  'settings.tools.hint': 'Default MCP configuration for new sessions. Use the wrench icon in the chat header to configure per-session MCP servers.',
 
   // Settings - LLM Configuration
   'settings.tabs.llm': 'LLM',

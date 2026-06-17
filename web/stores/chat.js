@@ -266,6 +266,11 @@ export const useChatStore = defineStore('chat', {
     // turn_completed, latency pings) and spin yeaft_load_history /
     // yeaft_vp_subscribe into an unbounded loop.
     _yeaftReconnectCatchUpPending: false,
+    // Agents whose opened Yeaft sessions have been listed during the current
+    // Yeaft page visit. Used by agent_list to catch agents that become online
+    // after enterYeaft(), without spamming yeaft_list_sessions on every
+    // routine status broadcast.
+    _yeaftOpenedSessionsLoadedAgents: {},
     // Last-known {online, version} of the Yeaft agent, persisted ACROSS
     // agent_list frames. Needed because the server DELETES an agent from its
     // map on disconnect (server/ws-agent.js handleAgentDisconnect), so a
@@ -380,7 +385,8 @@ export const useChatStore = defineStore('chat', {
     // =====================
     currentView: 'chat',           // 'chat' | 'yeaft' — 顶级页面切换
     yeaftConversationId: null,     // 虚拟 conversationId（从 agent session_ready 获取）
-    yeaftModel: null,              // 当前 Yeaft 模型名
+    yeaftModel: null,              // agent/default Yeaft 模型名；Session override lives in sessions[].config.model
+    yeaftModelEffort: null,        // agent/default effort；Session override lives in sessions[].config.modelEffort
     yeaftAgentId: null,            // 绑定的 agent ID
     yeaftSessionReady: false,     // Session 是否已初始化
     yeaftStatus: null,            // { skills, mcpServers, tools } 从 session_ready 获取
@@ -829,8 +835,20 @@ export const useChatStore = defineStore('chat', {
     isMultiColumn: (state) => state.activeConversations.length > 1,
     // ★ Split-screen: whether in split-screen mode (2+ panels)
     isSplitMode: (state) => state.panels.length > 1,
-    // 当前会话是否在处理中
+    // 当前页面/session 是否在处理中。
+    // Chat/Crew use the active conversation id; Yeaft must be scoped to the
+    // selected Session because one virtual Yeaft conversation contains many
+    // Sessions and VP turns can overlap across them.
     isProcessing: (state) => {
+      if (state.currentView === 'yeaft') {
+        const sessionId = resolveActiveYeaftSessionId(state);
+        if (!sessionId) return false;
+        if (state.yeaftProcessingSessions?.[sessionId]) return true;
+        for (const info of Object.values(state.activeVpTurns || {})) {
+          if (info?.sessionId === sessionId) return true;
+        }
+        return false;
+      }
       return state.currentConversation ? !!state.processingConversations[state.currentConversation] : false;
     },
     canSend: (state) => {
@@ -899,10 +917,6 @@ export const useChatStore = defineStore('chat', {
       if (state.yeaftProcessingSessions?.[sessionId]) return true;
       for (const info of Object.values(state.activeVpTurns || {})) {
         if (info?.sessionId === sessionId) return true;
-      }
-      for (const [key, status] of Object.entries(state.vpStatuses || {})) {
-        if (!key.startsWith(`${sessionId}::`)) continue;
-        if (status && !['idle', 'offline', 'completed', 'failed', 'aborted'].includes(status.state)) return true;
       }
       return false;
     },
@@ -1076,21 +1090,29 @@ export const useChatStore = defineStore('chat', {
       // during a drop) is subsumed — clear it so handleAgentList doesn't fire
       // a redundant second catch-up on the next routine agent_list.
       this._yeaftReconnectCatchUpPending = false;
-      this.loadOpenedYeaftSessionsForConnectedAgents();
+      this.loadOpenedYeaftSessionsForConnectedAgents(null, { force: true });
       this.requestYeaftSessionBootstrap({ forceSessionReady: true, catchUpHistory: true });
     },
 
-    loadOpenedYeaftSessionsForConnectedAgents(agentIds = null) {
+    loadOpenedYeaftSessionsForConnectedAgents(agentIds = null, { force = false } = {}) {
       const ids = Array.isArray(agentIds)
         ? agentIds.filter(Boolean)
         : (Array.isArray(this.agents) ? this.agents.filter(a => a && a.online && a.id).map(a => a.id) : []);
       const uniqueIds = [...new Set(ids)];
+      if (!this._yeaftOpenedSessionsLoadedAgents || typeof this._yeaftOpenedSessionsLoadedAgents !== 'object') {
+        this._yeaftOpenedSessionsLoadedAgents = {};
+      }
+      const requested = [];
       for (const agentId of uniqueIds) {
+        if (!force && this._yeaftOpenedSessionsLoadedAgents[agentId]) continue;
+        this._yeaftOpenedSessionsLoadedAgents[agentId] = Date.now();
+        requested.push(agentId);
         this.sessionCrudRequest('list', {}, { agentId }).catch((err) => {
+          delete this._yeaftOpenedSessionsLoadedAgents[agentId];
           console.warn(`[Yeaft] failed to load opened sessions for agent ${agentId}:`, err?.message || err);
         });
       }
-      return uniqueIds;
+      return requested;
     },
 
     requestYeaftSessionBootstrap({ forceSessionReady = false, catchUpHistory = false } = {}) {
@@ -1441,6 +1463,7 @@ export const useChatStore = defineStore('chat', {
             this.cacheYeaftAgentStatus(statusAgentId, event);
           }
           this.yeaftModel = event.model;
+          this.yeaftModelEffort = event.modelEffort || null;
           this.yeaftSessionReady = true;
           this.yeaftBootstrapMetaLoadingKey = null;
           this.yeaftAvailableModels = event.availableModels || [];
@@ -1752,6 +1775,7 @@ export const useChatStore = defineStore('chat', {
 
         case 'model_switched':
           this.yeaftModel = event.model;
+          this.yeaftModelEffort = event.modelEffort || null;
           break;
 
         case 'sub_agent_event': {
@@ -2115,6 +2139,23 @@ export const useChatStore = defineStore('chat', {
           this.clearYeaftSessionProcessingIfIdle(event.sessionId || _removed?.sessionId || null);
           break;
         }
+        case 'yeaft_aborted': {
+          const sessionId = event.sessionId || msg.sessionId || null;
+          if (sessionId) {
+            this.activeVpTurns = Object.fromEntries(
+              Object.entries(this.activeVpTurns || {}).filter(([, info]) => info?.sessionId !== sessionId)
+            );
+            this.stoppingVpTurnIds = Object.fromEntries(
+              Object.entries(this.stoppingVpTurnIds || {}).filter(([turnId]) => this.activeVpTurns?.[turnId])
+            );
+            this.clearYeaftSessionProcessingIfIdle(sessionId);
+          } else if (event.all) {
+            this.activeVpTurns = {};
+            this.stoppingVpTurnIds = {};
+            this.yeaftProcessingSessions = {};
+          }
+          break;
+        }
         // vp_typing_* coexists with vp_status_changed on purpose. They serve
         // two different display surfaces with different lifetimes:
         //   - `vp_typing_start` / `vp_typing_end` drive the three-dot
@@ -2162,17 +2203,19 @@ export const useChatStore = defineStore('chat', {
           if (!event.vpId || !event.state) break;
           const sessionId = event.sessionId || null;
           const k = vpStatusKey(sessionId, event.vpId);
+          const nextStatus = {
+            state: event.state,
+            since: event.since || Date.now(),
+            turnId: event.turnId || null,
+            title: event.title || '',
+            sessionId,
+            vpId: event.vpId,
+          };
           this.vpStatuses = {
             ...this.vpStatuses,
-            [k]: {
-              state: event.state,
-              since: event.since || Date.now(),
-              turnId: event.turnId || null,
-              title: event.title || '',
-              sessionId,
-              vpId: event.vpId,
-            },
+            [k]: nextStatus,
           };
+          this.restoreActiveYeaftSessionFromStatuses([nextStatus]);
           break;
         }
         case 'vp_status_snapshot': {
@@ -2225,6 +2268,7 @@ export const useChatStore = defineStore('chat', {
             }
             this.vpStatuses = merged;
           }
+          this.restoreActiveYeaftSessionFromStatuses(statuses);
           break;
         }
 
@@ -2631,6 +2675,22 @@ export const useChatStore = defineStore('chat', {
     // on disk after a refresh/re-entry; switching back to that group must
     // still ask the agent for authoritative history unless this group has
     // already completed a history load in the current UI lifecycle.
+    restoreActiveYeaftSessionFromStatuses(statuses = []) {
+      if (this.yeaftActiveSessionFilter) return null;
+      const rows = Array.isArray(statuses) ? statuses : [];
+      const running = rows
+        .filter(row => row && (row.sessionId || row.groupId) && !['idle', 'offline', 'completed', 'failed', 'aborted'].includes(row.state))
+        .sort((a, b) => (b.updatedAt || b.since || 0) - (a.updatedAt || a.since || 0));
+      const sessionId = running[0]?.sessionId || running[0]?.groupId || null;
+      if (!sessionId) return null;
+      this.setActiveSessionFilter(sessionId, { force: true });
+      try {
+        const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
+        if (gs && typeof gs.setActive === 'function') gs.setActive(sessionId);
+      } catch (_) {}
+      return sessionId;
+    },
+
     setActiveSessionFilter(groupId, opts = {}) {
       const prev = this.yeaftActiveSessionFilter || null;
       const next = groupId || null;
@@ -2726,22 +2786,25 @@ export const useChatStore = defineStore('chat', {
     },
     // H2.f.6: setYeaftFeatureReplyThreadId / setYeaftJumpTarget /
     // clearYeaftJumpTarget actions removed.
-    async switchYeaftModel(modelId, groupId = null) {
+    async switchYeaftModel(modelId, groupId = null, modelEffort = undefined) {
       if (!modelId || !this.yeaftAgentId) return;
       const targetSessionId = groupId || null;
       if (targetSessionId) {
+        const config = { model: modelId };
+        if (modelEffort !== undefined) config.modelEffort = modelEffort || null;
         const res = await this.sessionCrudRequest('update_config', {
           sessionId: targetSessionId,
-          config: { model: modelId },
+          config,
         });
-        if (res && res.ok) {
-          this.yeaftModel = modelId;
-        }
+        // The sessions store applies the returned config. Do not mutate the
+        // agent/default model here; a Session-scoped switch must not leak into
+        // other Sessions that are still using the default fallback.
         return res;
       }
       this.sendWsMessage({
         type: 'yeaft_model_switch',
         model: modelId,
+        modelEffort: modelEffort || null,
         agentId: this.yeaftAgentId,
       });
       return null;
@@ -3447,15 +3510,28 @@ export const useChatStore = defineStore('chat', {
         type: 'yeaft_abort_all',
         agentId: this.yeaftAgentId,
       });
-      // Optimistic UX: clear the local processing flag immediately so the
-      // stop button hides without waiting for the round-trip. The agent's
-      // yeaft_aborted event is idempotent.
+      // Legacy/global stop path: clear every local Yeaft running flag.
       if (this.yeaftConversationId) {
-        this.processingConversations[this.yeaftConversationId] = false;
+        delete this.processingConversations[this.yeaftConversationId];
       }
       this.activeVpTurns = {};
       this.stoppingVpTurnIds = {};
       this.yeaftProcessingSessions = {};
+    },
+    cancelYeaftSession(sessionId) {
+      if (!this.yeaftAgentId || !sessionId) return;
+      this.sendWsMessage({
+        type: 'yeaft_abort_all',
+        agentId: this.yeaftAgentId,
+        sessionId,
+      });
+      this.activeVpTurns = Object.fromEntries(
+        Object.entries(this.activeVpTurns || {}).filter(([, info]) => info?.sessionId !== sessionId)
+      );
+      this.stoppingVpTurnIds = Object.fromEntries(
+        Object.entries(this.stoppingVpTurnIds || {}).filter(([turnId]) => this.activeVpTurns?.[turnId])
+      );
+      this.clearYeaftSessionProcessingIfIdle(sessionId);
     },
     /**
      * Per-VP stop: abort a single VP turn by turnId without affecting siblings.

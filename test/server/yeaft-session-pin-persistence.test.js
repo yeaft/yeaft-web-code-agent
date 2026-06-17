@@ -23,7 +23,9 @@ async function loadYeaftSessionDb(existingRow) {
   vi.resetModules();
   const stmts = {
     getYeaftSession: { get: vi.fn(() => existingRow) },
+    getYeaftSessionsByAgent: { all: vi.fn(() => existingRow ? [existingRow] : []) },
     upsertYeaftSession: { run: vi.fn() },
+    deleteYeaftSession: { run: vi.fn() },
     setYeaftSessionPinned: { run: vi.fn() },
   };
   vi.doMock('../../server/db/connection.js', () => ({ stmts }));
@@ -108,6 +110,18 @@ describe('yeaftSessionDb.setPinnedForAgent', () => {
     );
     expect(stmts.setYeaftSessionPinned.run).toHaveBeenCalledWith(1, expect.any(Number), 'session-1');
   });
+
+  it('reconciles opened-session snapshots without clearing persisted pin state', async () => {
+    const { yeaftSessionDb, stmts } = await loadYeaftSessionDb(dbRow({ is_pinned: 1 }));
+
+    yeaftSessionDb.reconcileFromSnapshot('user-1', 'agent-1', [
+      { id: 'session_default', name: 'Default from agent', workDir: '/repo' },
+    ]);
+
+    expect(stmts.upsertYeaftSession.run).toHaveBeenCalled();
+    expect(stmts.setYeaftSessionPinned.run).not.toHaveBeenCalled();
+    expect(stmts.deleteYeaftSession.run).not.toHaveBeenCalled();
+  });
 });
 
 describe('decorateYeaftSessionsWithPinned', () => {
@@ -124,8 +138,8 @@ describe('decorateYeaftSessionsWithPinned', () => {
 
     expect(yeaftSessionDb.getByAgent).toHaveBeenCalledWith('agent-1');
     expect(out).toEqual([
-      { id: 'session-1', name: 'One', pinned: true },
-      { id: 'session-2', name: 'Two' },
+      { id: 'session-1', name: 'One', pinned: true, isPinned: true },
+      { id: 'session-2', name: 'Two', pinned: false, isPinned: false },
     ]);
   });
 });

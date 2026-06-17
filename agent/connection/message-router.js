@@ -548,9 +548,9 @@ export async function handleMessage(msg) {
 
     case 'yeaft_abort_all':
     case 'unify_abort_all':
-      // task-325c: user-initiated abort of ALL in-flight queries across
-      // every thread. Always emits `yeaft_aborted` ack.
-      handleYeaftAbortAll();
+      // task-325c: user-initiated abort. With sessionId present this is scoped
+      // to that Yeaft Session; older clients omit it and keep abort-all.
+      handleYeaftAbortAll(msg);
       break;
 
     case 'yeaft_abort_turn':

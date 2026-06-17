@@ -7,6 +7,12 @@ import { buildDreamDebugItems, filterDreamDebugItems, parseDreamMemorySegments, 
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
+function cssRuleBlock(css, selector) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = css.match(new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\n\\}`));
+  return match ? match[1] : '';
+}
+
 describe('Dream debug model', () => {
   it('parses memory.md frontmatter into structured segment cards', () => {
     const memory = `---\nid: seg_1234\nscope: sessions/s1\nkind: decision\ntags: [dream, debug]\nsourceMessages: [m1, m2]\ncreatedAt: 2026-06-01T10:00:00Z\nupdatedAt: 2026-06-01T11:00:00Z\n---\nKeep Dream debug inspectable.\n\n---\nid: seg_5678\nkind: lesson\ntags: ui\nsourceMessages: m3\n---\nLong raw memory belongs in a nested scroll container.`;
@@ -77,23 +83,78 @@ describe('Dream debug model', () => {
     expect(items[0].segments[0].id).toBe('memory-1');
   });
 
-  it('defines a scrollable Dream shell with nested scroll containers', () => {
+  it('defines a scrollable Dream accordion without the old two-pane shell', () => {
     const css = readFileSync(resolve(repoRoot, 'web/styles/yeaft.css'), 'utf8');
 
-    expect(css).toContain('.yeaft-debug-dream-shell');
+    expect(css).not.toContain('.yeaft-debug-dream-shell');
+    expect(css).not.toContain('grid-template-columns: minmax(220px, 32%) minmax(0, 1fr)');
     expect(css).toMatch(/\.yeaft-debug-dream-panel\s*\{[\s\S]*?overflow:\s*hidden;/);
-    expect(css).toMatch(/\.yeaft-debug-dream-shell\s*\{[\s\S]*?grid-template-columns:\s*minmax\(220px, 32%\) minmax\(0, 1fr\);/);
-    expect(css).toMatch(/\.yeaft-debug-dream-shell\s*\{[\s\S]*?width:\s*100%;/);
-    expect(css).toMatch(/\.yeaft-debug-dream-list,[\s\S]*?\.yeaft-debug-dream-segments\s*\{[\s\S]*?overflow:\s*auto;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-list\s*\{[\s\S]*?overflow-y:\s*auto;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-detail\s*\{[\s\S]*?max-height:\s*min\(560px, 62vh\);[\s\S]*?overflow:\s*hidden;/);
     expect(css).toMatch(/\.yeaft-debug-scroll-pre\s*\{[\s\S]*?overflow:\s*auto;/);
   });
 
-  it('keeps ids out of list subtitle and shows search no-results empty state in the component template', () => {
+  it('renders Dream items as an inline accordion and keeps ids out of collapsed subtitles', () => {
     const component = readFileSync(resolve(repoRoot, 'web/components/YeaftDebugPanel.js'), 'utf8');
 
+    expect(component).toContain('yeaft-debug-dream-accordion-item');
+    expect(component).toContain('activeDreamItem && activeDreamItem.key === item.key');
+    expect(component).toContain('yeaft-debug-dream-item-summary');
     expect(component).toContain("item.subtitle || $t('yeaft.dreamDebug.noSummary')");
     expect(component).not.toContain("item.summaryPreview || item.scope");
     expect(component).toContain("allDreamItems.length ? $t('yeaft.dreamDebug.noSearchResults') : $t('yeaft.dreamDebug.empty')");
+  });
+
+  it('keeps the Dream list typography and metadata layout constrained', () => {
+    const css = readFileSync(resolve(repoRoot, 'web/styles/yeaft.css'), 'utf8');
+    const component = readFileSync(resolve(repoRoot, 'web/components/YeaftDebugPanel.js'), 'utf8');
+
+    expect(component).toContain('yeaft-debug-dream-item-title');
+    expect(component).toContain('yeaft-debug-dream-item-summary');
+    expect(component).toContain('yeaft-debug-dream-item-status');
+    expect(component).toContain('yeaft-debug-dream-item-segments');
+    expect(component).toContain('yeaft-debug-dream-item-time');
+    expect(component).toContain('yeaft-debug-dream-segment-toggle');
+    expect(css).toMatch(/\.yeaft-debug-dream-item\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) auto auto;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-item-title\s*\{[\s\S]*?font-size:\s*13px;[\s\S]*?font-weight:\s*500;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-item-summary\s*\{[\s\S]*?font-size:\s*12px;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-item-meta\s*\{[\s\S]*?max-width:\s*132px;[\s\S]*?text-align:\s*right;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-item-title,[\s\S]*?\.yeaft-debug-dream-item-time,[\s\S]*?\{[\s\S]*?text-overflow:\s*ellipsis;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-item-status\s*\{[\s\S]*?color:\s*var\(--accent-blue\);/);
+    expect(css).toMatch(/\.yeaft-debug-dream-item-status\.status-completed,[\s\S]*?\.yeaft-debug-dream-item-status\.status-success\s*\{[\s\S]*?color:\s*var\(--success\);/);
+    expect(css).toMatch(/\.yeaft-debug-dream-item-status\.status-error\s*\{[\s\S]*?color:\s*var\(--error\);/);
+    expect(css).toMatch(/\.yeaft-debug-dream-segment-toggle\s*\{[\s\S]*?display:\s*inline-flex;/);
+  });
+
+  it('keeps expanded Dream segment content compact and prevents overlay layout', () => {
+    const css = readFileSync(resolve(repoRoot, 'web/styles/yeaft.css'), 'utf8');
+    const component = readFileSync(resolve(repoRoot, 'web/components/YeaftDebugPanel.js'), 'utf8');
+
+    expect(component).toContain('yeaft-debug-dream-segment-id');
+    expect(component).toContain('yeaft-debug-dream-segment-kind');
+    expect(component).toContain('yeaft-debug-dream-segment-tags');
+    expect(component).toContain('yeaft-debug-dream-segment-content');
+    expect(component).toContain('yeaft.dreamDebug.requestResponse');
+
+    expect(css).toMatch(/\.yeaft-debug-dream-card-title\s*\{[\s\S]*?font-size:\s*12px;[\s\S]*?line-height:\s*1\.35;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-segment\s*\{[\s\S]*?font-size:\s*12px;[\s\S]*?line-height:\s*1\.45;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-segment-meta\s*\{[\s\S]*?font-size:\s*11px;[\s\S]*?line-height:\s*1\.35;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-segment-preview,[\s\S]*?\.yeaft-debug-dream-segment-content\s*\{[\s\S]*?font-size:\s*12px;[\s\S]*?line-height:\s*1\.5;[\s\S]*?white-space:\s*pre-wrap;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-segment-content\s*\{[\s\S]*?background:\s*var\(--bg-input-wrapper\);[\s\S]*?max-height:\s*220px;[\s\S]*?overflow:\s*auto;/);
+    expect(css).toMatch(/\.yeaft-debug-dream-segments\s*\{[\s\S]*?overflow:\s*visible;/);
+    expect(css).not.toMatch(/\.yeaft-debug-dream-segments\s*\{[\s\S]*?max-height:\s*420px;/);
+
+    for (const selector of [
+      '.yeaft-debug-dream-detail-body',
+      '.yeaft-debug-dream-card',
+      '.yeaft-debug-dream-segments',
+      '.yeaft-debug-dream-events',
+      '.yeaft-debug-dream-layer',
+    ]) {
+      const block = cssRuleBlock(css, selector);
+      expect(block).not.toBe('');
+      expect(block).not.toMatch(/position:\s*(absolute|fixed|sticky)/);
+    }
   });
 
   it('uses readable session titles while keeping ids as metadata', () => {

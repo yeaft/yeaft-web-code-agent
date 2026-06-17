@@ -22,7 +22,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
-import { resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
+import { getModelEffortOptions, getThinkingCapability, modelSupportsEffort, resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
 import { normalizeKnownProviderForRuntime } from './llm/known-providers.js';
 
 /** Default configuration values. */
@@ -394,13 +394,42 @@ export function loadConfig(overrides = {}) {
         if (!config.availableModels.some(am => am.id === m.id)) {
           const entry = {
             id: m.id,
+            ref: p.name ? `${p.name}/${m.id}` : m.id,
             provider: p.name,
             label: m.id,
           };
           if (m.contextWindow !== undefined) entry.contextWindow = m.contextWindow;
           if (m.maxOutput !== undefined) entry.maxOutput = m.maxOutput;
+          const effortOptions = getModelEffortOptions(m.id);
+          if (effortOptions.length > 0) {
+            const cap = getThinkingCapability(m.id);
+            entry.supportsEffort = modelSupportsEffort(m.id);
+            entry.effortOptions = effortOptions;
+            entry.effortProtocol = cap.thinkingProtocol;
+          }
           config.availableModels.push(entry);
         }
+      }
+    }
+  }
+
+  // Agent-level primaryModel is optional. When absent, use the first provider
+  // model as the effective runtime/UI default without writing it back to
+  // ~/.yeaft/config.json. New Sessions may copy this value into their own
+  // config, but global config remains only a fallback source.
+  if (!primaryModel && !overrides.model && config.availableModels.length > 0) {
+    const first = config.availableModels[0];
+    const firstRef = first.ref || (first.provider && first.id ? `${first.provider}/${first.id}` : first.id);
+    if (firstRef) {
+      const parsed = parseModelRef(firstRef);
+      const fallbackModelInfo = resolveModel(parsed.modelId) || null;
+      config.model = firstRef;
+      config.modelInfo = fallbackModelInfo;
+      if (overrides.maxContextTokens === undefined && jsonConfig.maxContextTokens === undefined) {
+        config.maxContextTokens = resolveContextWindow(parsed.modelId, { modelInfo: fallbackModelInfo });
+      }
+      if (overrides.maxOutputTokens === undefined && jsonConfig.maxOutputTokens === undefined) {
+        config.maxOutputTokens = resolveMaxOutputTokens(parsed.modelId, { modelInfo: fallbackModelInfo });
       }
     }
   }

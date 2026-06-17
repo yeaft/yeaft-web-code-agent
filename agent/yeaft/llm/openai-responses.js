@@ -38,6 +38,7 @@ import {
 import {
   normalizeEffort,
   getThinkingCapability,
+  mapEffortToOpenAIReasoning,
 } from '../models.js';
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
@@ -52,15 +53,13 @@ function thinkingV1Enabled() {
 }
 
 /**
- * Translate a normalised effort ('low'|'medium'|'high'|'max') into the value
+ * Translate a normalised effort ('minimal'|'low'|'medium'|'high'|'xhigh'|'max') into the value
  * accepted by the OpenAI Responses `reasoning.effort` field. Responses today
- * accepts 'low'|'medium'|'high' — 'max' degrades to 'high' to match the
- * registry's normaliseEffort downgrade rule.
+ * accepts 'minimal'|'low'|'medium'|'high'. Unsupported Anthropic-only
+ * adaptive efforts must be dropped, not downgraded.
  */
 function effortForResponses(effort) {
-  if (!effort) return null;
-  if (effort === 'max') return 'high';
-  return effort;
+  return mapEffortToOpenAIReasoning(effort);
 }
 
 export class OpenAIResponsesAdapter extends LLMAdapter {
@@ -230,7 +229,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
   // ─── Streaming ──────────────────────────────────────────
 
   /**
-   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'max', extraBody?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void }} params
+   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'minimal'|'low'|'medium'|'high'|'xhigh'|'max', effortSource?: 'user'|'auto', extraBody?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void }} params
    *
    * NOTE on `extraBody`: any keys you spread here are merged verbatim into
    * the wire body and — because the verbatim debug feature is intentionally
@@ -239,7 +238,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
    * `api-key` headers are auto-redacted (see `redactRawRequest` in
    * `adapter.js`); request-body fields are caller-controlled.
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, extraBody, signal, onRawExchange }) {
+  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, extraBody, signal, onRawExchange }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const body = {
@@ -257,7 +256,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     // registry entry must declare thinkingProtocol === 'openai-reasoning'.
     // Unknown / unsupported models silently drop the field.
     const normEffort = normalizeEffort(effort);
-    if (thinkingV1Enabled() && normEffort) {
+    if ((thinkingV1Enabled() || effortSource === 'user') && normEffort) {
       const cap = getThinkingCapability(model);
       if (cap.supportsThinking && cap.thinkingProtocol === 'openai-reasoning') {
         const wireEffort = effortForResponses(normEffort);
@@ -478,7 +477,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
    * expose them, mirror the stream() instrumentation. Parity with
    * anthropic.js's `call()`.
    */
-  async call({ model, system, messages, maxTokens = 4096, effort, extraBody, signal }) {
+  async call({ model, system, messages, maxTokens = 4096, effort, effortSource, extraBody, signal }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const body = {
@@ -490,7 +489,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
 
     // Mirror stream()'s thinking injection for non-streaming side queries.
     const normEffort = normalizeEffort(effort);
-    if (thinkingV1Enabled() && normEffort) {
+    if ((thinkingV1Enabled() || effortSource === 'user') && normEffort) {
       const cap = getThinkingCapability(model);
       if (cap.supportsThinking && cap.thinkingProtocol === 'openai-reasoning') {
         const wireEffort = effortForResponses(normEffort);

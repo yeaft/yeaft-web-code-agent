@@ -173,6 +173,10 @@ export function handleAgentList(store, msg) {
       store.currentAgentInfo = online;
     }
   }
+  if (store.currentView === 'yeaft' && typeof store.loadOpenedYeaftSessionsForConnectedAgents === 'function') {
+    const onlineIds = msg.agents.filter(a => a && a.online && a.id).map(a => a.id);
+    store.loadOpenedYeaftSessionsForConnectedAgents(onlineIds);
+  }
   // ★ 同步所有 agent 的 conversations 到 store.conversations
   {
     const allServerConvs = [];

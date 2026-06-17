@@ -28,10 +28,19 @@ function listMarkdownFiles(dir) {
   return out;
 }
 
+function langSection(source, lang) {
+  const marker = `<!-- lang:${lang} -->`;
+  const start = source.indexOf(marker);
+  if (start === -1) return '';
+  const bodyStart = start + marker.length;
+  const next = source.indexOf('<!-- lang:', bodyStart);
+  return source.slice(bodyStart, next === -1 ? undefined : next);
+}
+
 function workerPrompt(language) {
   return buildWorkerPrompt({
     language,
-    includeShape: false,
+    includeShape: true,
     toolNames: ['FileRead'],
     vpPersona: {
       vpId: 'omni',
@@ -49,28 +58,109 @@ function promptFor(vpPersona, language = 'zh-CN', extra = {}) {
 }
 
 function extractSoul(prompt) {
-  const start = prompt.indexOf('## Soul');
+  const heading = prompt.includes('## 灵魂') ? '## 灵魂' : '## Soul';
+  const start = prompt.indexOf(heading);
   if (start === -1) return '';
-  const bodyStart = start + '## Soul'.length;
+  const bodyStart = start + heading.length;
   const nextHeader = prompt.indexOf('\n\n## ', bodyStart + 2);
   return prompt.slice(bodyStart, nextHeader === -1 ? undefined : nextHeader).trim();
 }
 
+const STATIC_ZH_PROMPT_FORBIDDEN = [
+  'Core Principles',
+  'Task Replies',
+  'Output Format',
+  'Planning Mode',
+  'Search Strategy',
+  'Tool Usage Guidance',
+  'General Rules',
+  'File Operations',
+  'Search and Navigation',
+  '## Soul',
+  'You are a',
+  'You are in dream mode',
+  'Yeaft AI',
+  'AI companion',
+  'Language policy',
+  'Core capabilities',
+  'Prefer Chinese',
+  'Answering style',
+  'VP soul',
+  'VP 灵魂',
+  'VP 执行回合',
+  '其他 VP',
+  'session member',
+  'the current session',
+  'Task Scope',
+  'Turn Scope',
+  'tool traces',
+  'inbound envelope',
+  'Prompt Shape',
+  'Prompt 结构',
+];
+
+const STATIC_EN_PROMPT_FORBIDDEN = [
+  '核心原则',
+  '任务回复',
+  '输出格式',
+  '规划模式',
+  '工具使用指南',
+  '通用规则',
+  '文件操作',
+  '搜索与导航',
+  '## 灵魂',
+  '你是',
+  '你处于梦境模式',
+];
+
+function expectNotToContainAny(text, forbidden) {
+  for (const phrase of forbidden) {
+    expect(text, phrase).not.toContain(phrase);
+  }
+}
+
+const DREAM_PROMPT_CASES = [
+  ['triagePass1', { sessionId: 'session_test', topicSummaries: '- active_scope/rendering', conversation: '[]' }],
+  ['triagePass2', { description: 'active scope rendering', existingTopics: '- active_scope/rendering' }],
+  ['update', { target: 'sessions/session_test', batchHeader: 'batch 1', memoryMd: '', summaryMd: '', sources: '[]' }],
+  ['create', { target: 'sessions/session_test', sources: '[]', siblingsBlock: '' }],
+  ['extractUser', {}],
+  ['extractVp', { vpId: 'linus' }],
+  ['extractSession', { sessionId: 'session_test' }],
+  ['extractTopic', { topicId: 'active_scope/rendering' }],
+  ['summarizeScope', { scope: 'sessions/session_test', segmentCount: 1, tokenBudget: 500, segments: '- test' }],
+];
+
 describe('worker prompt language selection', () => {
-  it('does not synthesize localized stock fallback souls for English-only Omni bodies', () => {
+  it('renders old seeded Omni bodies as the selected localized authored soul', () => {
     const prompt = workerPrompt('zh-CN');
 
     expect(prompt).toContain('# 全能助手');
     expect(prompt).not.toContain('# 全能助手 — 全能助手');
-    expect(prompt).toContain('## Soul');
-    expect(prompt).toContain('You are Omni Assistant / 全能助手');
-    expect(prompt).toContain('Cross-domain synthesis: handle writing, coding');
+    expect(prompt).toContain('## 灵魂');
+    expect(prompt).not.toContain('## Soul');
+    expect(prompt).toContain('你是 Omni。你始终看着整个会话的形状');
     expect(prompt).toContain('## 任务回复');
     expect(prompt).toContain('完成后只汇报改了什么、验证了什么、风险或下一步');
-    expect(prompt).not.toContain('你是 Omni，一个负责需求分析、目标澄清、流程推进和团队协调的 VP。');
+    expect(prompt).not.toContain('You are Omni Assistant / 全能助手');
+    expect(prompt).not.toContain('Language policy');
+    expect(prompt).not.toContain('Core capabilities');
+    expect(prompt).not.toContain('Prefer Chinese');
     expect(prompt).not.toContain('### 人物特点');
-    expect(prompt).not.toContain('### 用户通常期待你完成');
-    expect(prompt).not.toContain('## Core Principles');
+    expect(prompt).not.toContain('### Traits');
+    expect(prompt).not.toContain('VP soul');
+    expect(prompt).not.toContain('VP 灵魂');
+    expect(prompt).not.toContain('session member');
+    expect(prompt).not.toContain('Task Scope');
+    expect(prompt).not.toContain('Turn Scope');
+    expect(prompt).not.toContain('tool traces');
+    expect(prompt).not.toContain('inbound envelope');
+    expect(prompt).not.toContain('Prompt 结构');
+    expect(prompt).toContain('# 提示词结构（执行者）');
+    expect(prompt).toContain('会话成员的灵魂，以及用户、当前会话、当前会话成员');
+    expect(prompt).toContain('当前任务的摘要');
+    expect(prompt).toContain('工具调用轨迹');
+    expect(prompt).toContain('入站转交消息');
   });
 
   it('does not render legacy stock fallback labels for English-only stock roles in Chinese', () => {
@@ -103,11 +193,14 @@ describe('worker prompt language selection', () => {
     expect(prompt).toContain('# Omni Assistant');
     expect(prompt).not.toContain('# Omni Assistant — All-Purpose Assistant');
     expect(prompt).toContain('## Soul');
-    expect(prompt).toContain('You are Omni Assistant / 全能助手');
+    expect(prompt).toContain('You are Omni. You keep the whole session in view');
+    expect(prompt).not.toContain('You are Omni Assistant / 全能助手');
+    expect(prompt).not.toContain('Language policy / 语言策略');
+    expect(prompt).not.toContain('Core capabilities / 核心能力');
     expect(prompt).not.toContain('### Traits');
     expect(prompt).toContain('## Task Replies');
     expect(prompt).toContain('after completing work, report only what changed, what was verified, and any risk or next step.');
-    expect(prompt).not.toContain('你是 Omni，一个负责需求分析');
+    expect(prompt).not.toContain('你是 Omni');
     expect(prompt).not.toContain('## 任务回复');
   });
 
@@ -117,6 +210,33 @@ describe('worker prompt language selection', () => {
 
     expect(zhPrompt).toContain('完成后只汇报改了什么、验证了什么、风险或下一步');
     expect(enPrompt).toContain('after completing work, report only what changed, what was verified, and any risk or next step');
+  });
+
+  it('adds readable output-format guidance to persona and fallback prompts', () => {
+    const personaZhPrompt = workerPrompt('zh-CN');
+    const personaEnPrompt = workerPrompt('en');
+    const fallbackZhPrompt = buildWorkerPrompt({ language: 'zh', includeShape: false });
+    const fallbackEnPrompt = buildWorkerPrompt({ language: 'en', includeShape: false });
+
+    for (const prompt of [personaEnPrompt, fallbackEnPrompt]) {
+      expect(prompt).toContain('## Communicating With the User');
+      expect(prompt).toContain('User-facing text is for a person, not a console log');
+      expect(prompt).toContain('group related sentences into short paragraphs, usually 2-4 sentences');
+      expect(prompt).toContain('Do not wrap ordinary prose, summaries, labels, headings, bullet lists, or single words in fenced code blocks');
+      expect(prompt).toContain('use inline code instead of a fenced block');
+    }
+
+    expect(fallbackZhPrompt).toContain('你正在当前会话中参与协作');
+    expect(fallbackZhPrompt).not.toContain('当前回合没有激活 VP soul');
+    expect(fallbackZhPrompt).not.toContain('当前 session');
+
+    for (const prompt of [personaZhPrompt, fallbackZhPrompt]) {
+      expect(prompt).toContain('## 和用户沟通');
+      expect(prompt).toContain('面向用户的文字是给人读的，不是控制台日志');
+      expect(prompt).toContain('把相关句子合成短自然段，通常 2-4 句一段');
+      expect(prompt).toContain('不要把普通说明、摘要、标签、标题、列表或单个词包进 fenced code block');
+      expect(prompt).toContain('用 inline code，不要用 fenced code block');
+    }
   });
 
   it('does not invent a stock Linus soul from only vpId/frontmatter', () => {
@@ -147,12 +267,24 @@ describe('worker prompt language selection', () => {
       const zhPrompt = promptFor(vp, 'zh-CN');
       const enPrompt = promptFor(vp, 'en');
 
-      expect(zhPrompt).toContain('## Soul');
+      expect(zhPrompt).toContain('## 灵魂');
+      expect(zhPrompt).not.toContain('## Soul');
       expect(zhPrompt).toContain(vp.personaZh.split('\n')[0]);
       expect(zhPrompt).not.toContain(vp.personaEn.split('\n')[0]);
+      for (const phrase of ['You are ', 'Language policy', 'Core capabilities', 'Decision style', 'Good for', 'Bad for', 'Prefer Chinese']) {
+        expect(vp.personaZh, `${vp.vpId} zh source leaks ${phrase}`).not.toContain(phrase);
+        expect(zhPrompt, `${vp.vpId} zh prompt leaks ${phrase}`).not.toContain(phrase);
+      }
+      expect(vp.personaZh, `${vp.vpId} zh source has bilingual slash title`).not.toContain(' / ');
+
       expect(enPrompt).toContain('## Soul');
+      expect(enPrompt).not.toContain('## 灵魂');
       expect(enPrompt).toContain(vp.personaEn.split('\n')[0]);
       expect(enPrompt).not.toContain(vp.personaZh.split('\n')[0]);
+      for (const phrase of ['你是', '人物特点', '擅长的事情', '解决问题的方式', '用户通常期待', '回答风格', '核心能力']) {
+        expect(vp.personaEn, `${vp.vpId} en source leaks ${phrase}`).not.toContain(phrase);
+        expect(enPrompt, `${vp.vpId} en prompt leaks ${phrase}`).not.toContain(phrase);
+      }
     }
   });
 
@@ -169,7 +301,8 @@ describe('worker prompt language selection', () => {
     }, 'zh-CN');
 
     expect(prompt).toContain('# Designer');
-    expect(prompt).toContain('## Soul');
+    expect(prompt).toContain('## 灵魂');
+    expect(prompt).not.toContain('## Soul');
     expect(prompt).not.toContain('### 人物特点');
     expect(prompt).not.toContain('重视用户路径');
     expect(prompt).not.toContain('### 擅长的事情');
@@ -324,6 +457,56 @@ describe('worker prompt language selection', () => {
     expect(en).not.toContain('# 规划模式');
   });
 
+  it('keeps static worker prompts localized for zh-CN and en', () => {
+    const vp = DEFAULT_VPS.find(item => item.vpId === 'linus');
+    const vpPersona = {
+      vpId: vp.vpId,
+      displayName: vp.displayName,
+      persona: vp.persona,
+    };
+    const common = {
+      includeShape: true,
+      toolNames: ['FileRead'],
+      vpPersona,
+      activeScope: {
+        sessionId: 'session_test',
+        sessionMembers: ['omni', 'linus'],
+        sessionTopics: ['active_scope/rendering'],
+      },
+    };
+
+    const zh = buildWorkerPrompt({ ...common, language: 'zh-CN' });
+    const en = buildWorkerPrompt({ ...common, language: 'en' });
+
+    expect(zh).toContain('## 灵魂');
+    expect(zh).toContain('## 核心原则');
+    expect(zh).toContain('# 工具使用指引');
+    expectNotToContainAny(zh, STATIC_ZH_PROMPT_FORBIDDEN);
+    expect(en).toContain('## Soul');
+    expect(en).toContain('## Core Principles');
+    expect(en).toContain('# Tool Usage Guidance');
+    expectNotToContainAny(en, STATIC_EN_PROMPT_FORBIDDEN);
+  });
+
+  it('keeps Dream prompt templates localized for zh-CN and en', () => {
+    for (const [name, vars] of DREAM_PROMPT_CASES) {
+      const zh = renderDreamPrompt(name, vars, { language: 'zh-CN' });
+      const en = renderDreamPrompt(name, vars, { language: 'en' });
+
+      expect(zh, name).toContain('语言要求');
+      expectNotToContainAny(zh, STATIC_ZH_PROMPT_FORBIDDEN);
+      expect(en, name).toContain('Language requirement');
+      expectNotToContainAny(en, STATIC_EN_PROMPT_FORBIDDEN);
+    }
+  });
+
+  it('keeps stock VP souls localized at the authored source', () => {
+    for (const vp of DEFAULT_VPS) {
+      expect(vp.personaZh, vp.vpId).not.toMatch(/\b(You are|Core capabilities|Decision style|Good for|People come to you)\b/);
+      expect(vp.personaEn, vp.vpId).not.toMatch(/[\u4e00-\u9fff]/);
+    }
+  });
+
   it('keeps every prompt template explicitly bilingual', () => {
     const roots = [
       join(process.cwd(), 'agent/yeaft/templates'),
@@ -339,6 +522,20 @@ describe('worker prompt language selection', () => {
     }
   });
 
+  it('keeps English prompt template sections free of Chinese prose', () => {
+    const roots = [
+      join(process.cwd(), 'agent/yeaft/templates'),
+      join(process.cwd(), 'agent/yeaft/dream/prompts'),
+    ];
+    const files = roots.flatMap(root => listMarkdownFiles(root));
+
+    for (const file of files) {
+      const source = readFileSync(file, 'utf-8');
+      const en = langSection(source, 'en');
+      expect(en, file).not.toMatch(/[\u4e00-\u9fff]/);
+    }
+  });
+
   it('renders Dream prompts in the requested language without generic Yeaft AI identity', () => {
     const vars = {
       sessionId: 'session_test',
@@ -349,7 +546,8 @@ describe('worker prompt language selection', () => {
     const en = renderDreamPrompt('triagePass1', vars, { language: 'en' });
 
     expect(zh).toContain('语言要求');
-    expect(zh).toContain('最近一段 session 对话');
+    expect(zh).toContain('最近一段会话对话');
+    expect(zh).not.toContain('最近一段 session 对话');
     expect(zh).not.toContain('recent session conversation');
     expect(zh).not.toContain('Yeaft AI companion');
     expect(en).toContain('Language requirement');
@@ -365,6 +563,51 @@ describe('worker prompt language selection', () => {
       expect(persona.systemPrompt, id).toContain('<!-- lang:en -->');
       expect(persona.systemPrompt, id).toContain('<!-- lang:zh -->');
     }
+  });
+
+  it('renders explicit multi-VP routing guidance with peers and route_forward requirement', () => {
+    const zh = buildWorkerPrompt({
+      language: 'zh-CN',
+      includeShape: false,
+      activeScope: {
+        sessionId: 'session_1',
+        sessionMember: 'linus',
+        sessionMembers: ['omni', 'linus', 'martin'],
+      },
+    });
+    const en = buildWorkerPrompt({
+      language: 'en',
+      includeShape: false,
+      activeScope: {
+        sessionId: 'session_1',
+        sessionMember: 'linus',
+        sessionMembers: ['omni', 'linus', 'martin'],
+      },
+    });
+
+    expect(zh).toContain('## multi_vp_routing');
+    expect(zh).toContain('当前 VP: linus');
+    expect(zh).toContain('可转发 VP: omni, martin');
+    expect(zh).toContain('必须调用 `route_forward`');
+    expect(zh).toContain('VP 自己写 @mention 不会触发路由');
+    expect(en).toContain('## multi_vp_routing');
+    expect(en).toContain('Current VP: linus');
+    expect(en).toContain('Forwardable VPs: omni, martin');
+    expect(en).toContain('you MUST call `route_forward`');
+  });
+
+  it('omits multi-VP routing guidance when there are no peers', () => {
+    const prompt = buildWorkerPrompt({
+      language: 'en',
+      includeShape: false,
+      activeScope: {
+        sessionId: 'session_1',
+        sessionMember: 'linus',
+        sessionMembers: ['linus'],
+      },
+    });
+
+    expect(prompt).not.toContain('## multi_vp_routing');
   });
 
 });
