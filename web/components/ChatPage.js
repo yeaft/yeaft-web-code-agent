@@ -68,7 +68,6 @@ export default {
             <SidebarAgentHeader
               :online-agents="onlineAgents"
               :online-agent-count="onlineAgentCount"
-              :current-agent-latency="currentAgentLatency"
               :restarting-agents="restartingAgents"
               :upgrading-agents="upgradingAgents"
               :show-agent-actions="true"
@@ -185,10 +184,6 @@ export default {
                   <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
                   <span class="session-agent" v-if="conv.agentName">{{ conv.agentName }}</span>
                   <span class="session-agent" v-if="conv.provider && conv.provider !== 'claude-code'">· {{ providerLabel(conv.provider) }}</span>
-                  <span class="latency-indicator" v-if="getAgentLatency(conv.agentId)" :class="getLatencyClass(getAgentLatency(conv.agentId))" :title="getAgentLatency(conv.agentId) + 'ms'">
-                    <svg viewBox="0 0 24 24" width="10" height="10"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>
-                    {{ getAgentLatency(conv.agentId) }}ms
-                  </span>
                 </div>
               </div>
               <div
@@ -241,10 +236,6 @@ export default {
                   <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
                   <span class="session-agent" v-if="conv.agentName">{{ conv.agentName }}</span>
                   <span class="session-agent" v-if="conv.provider && conv.provider !== 'claude-code'">· {{ providerLabel(conv.provider) }}</span>
-                  <span class="latency-indicator" v-if="getAgentLatency(conv.agentId)" :class="getLatencyClass(getAgentLatency(conv.agentId))" :title="getAgentLatency(conv.agentId) + 'ms'">
-                    <svg viewBox="0 0 24 24" width="10" height="10"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>
-                    {{ getAgentLatency(conv.agentId) }}ms
-                  </span>
                 </div>
               </div>
             </div>
@@ -303,10 +294,6 @@ export default {
                   <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
                   <span class="session-agent" v-if="conv.agentName">{{ conv.agentName }}</span>
                   <span class="session-agent" v-if="conv.provider && conv.provider !== 'claude-code'">· {{ providerLabel(conv.provider) }}</span>
-                  <span class="latency-indicator" v-if="getAgentLatency(conv.agentId)" :class="getLatencyClass(getAgentLatency(conv.agentId))" :title="getAgentLatency(conv.agentId) + 'ms'">
-                    <svg viewBox="0 0 24 24" width="10" height="10"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>
-                    {{ getAgentLatency(conv.agentId) }}ms
-                  </span>
                 </div>
               </div>
               <div
@@ -360,10 +347,6 @@ export default {
                   <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
                   <span class="session-agent" v-if="conv.agentName">{{ conv.agentName }}</span>
                   <span class="session-agent" v-if="conv.provider && conv.provider !== 'claude-code'">· {{ providerLabel(conv.provider) }}</span>
-                  <span class="latency-indicator" v-if="getAgentLatency(conv.agentId)" :class="getLatencyClass(getAgentLatency(conv.agentId))" :title="getAgentLatency(conv.agentId) + 'ms'">
-                    <svg viewBox="0 0 24 24" width="10" height="10"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>
-                    {{ getAgentLatency(conv.agentId) }}ms
-                  </span>
                 </div>
               </div>
           </div>
@@ -691,11 +674,6 @@ export default {
     },
     isCurrentCrewConversation() {
       return this.store.currentConversationIsCrew;
-    },
-    currentAgentLatency() {
-      if (!this.store.currentAgent) return null;
-      const agent = this.store.agents.find(a => a.id === this.store.currentAgent);
-      return agent?.latency || null;
     },
     isMobileView() {
       return this.windowWidth < 640;
@@ -1084,17 +1062,6 @@ export default {
     },
     handleResize() {
       this.windowWidth = window.innerWidth;
-    },
-    getAgentLatency(agentId) {
-      if (!agentId) return null;
-      const agent = this.store.agents.find(a => a.id === agentId);
-      return agent?.latency || null;
-    },
-    getLatencyClass(latency) {
-      if (!latency) return '';
-      if (latency < 100) return 'latency-good';
-      if (latency < 300) return 'latency-warn';
-      return 'latency-bad';
     },
     restartAgent(agentId) {
       const agent = this.store.agents.find(a => a.id === agentId);
