@@ -9,12 +9,16 @@
  * Mount contract:
  *   Host provides its own dialog frame + close affordance. This panel
  *   only emits nothing and renders self-contained list/form toggle.
+ *   Host may pass initialEditVpId to jump directly into the edit form.
  */
 import { useVpStore } from '../stores/vp.js';
 import { validateVpId, i18nKeyForReason, isIdReasonCode } from '../utils/vp-id-validator.js';
 
 export default {
   name: 'VpCrudPanel',
+  props: {
+    initialEditVpId: { type: String, default: '' },
+  },
   template: `
     <div class="vp-crud-panel">
       <!-- LIST VIEW -->
@@ -312,9 +316,10 @@ export default {
     },
     async startEdit(vp) {
       if (this.busy) return;
+      if (!vp || !vp.vpId) return;
       // Defence-in-depth: even if the template's :disabled is bypassed,
       // refuse to enter edit form for a stock VP.
-      if (vp && vp.isStock) return;
+      if (vp.isStock) return;
       this.busy = true;
       this.formError = '';
       try {
@@ -348,6 +353,16 @@ export default {
      * user-authored). Pulls the persona body via `vpCrudRequest('read', id)`
      * which is the same path startEdit uses.
      */
+    openInitialEdit() {
+      const id = this.initialEditVpId;
+      if (!id) return;
+      const vp = (this.vpStore && this.vpStore.vps && this.vpStore.vps[id])
+        || (this.vpList || []).find(item => item && item.vpId === id)
+        || { vpId: id };
+      if (vp.isStock) return;
+      this.startEdit(vp);
+    },
+
     async startView(vp) {
       if (this.busy || !vp || !vp.vpId) return;
       this.busy = true;
@@ -507,7 +522,13 @@ export default {
    * record. The store handles `vp_removed` already — we only need to
    * react to its observable consequence (`vpStore.vps` losing the key).
    */
+  mounted() {
+    this.openInitialEdit();
+  },
   watch: {
+    initialEditVpId() {
+      this.openInitialEdit();
+    },
     'vpStore.vps': {
       deep: true,
       handler(vps) {

@@ -49,7 +49,7 @@ export default {
         <!-- Left VP List Pane (Crew-style alignment).
              Surfaces, for the active Yeaft conversation, one row per VP
              showing live status (typing / streaming / idle). Click →
-             @-mention; hover-revealed info button → drill into VP detail.
+             @-mention; hover-revealed edit button → open Settings VP editor.
              Hidden under 1024 px (CSS @media + Vue gate). The pane sits
              at the LEFT edge of yeaft-main so visual order is
              [VP list][conversation], matching Crew's members-left layout.
@@ -61,7 +61,7 @@ export default {
           :rows="vpTimelineRows"
           :style="timelineWidthStyle"
           @mention-vp="onMentionVpFromTimeline"
-          @open-vp-detail="onOpenVpDetailFromTimeline"
+          @edit-vp="onEditVpFromTimeline"
           @start-resize="startTimelineResize"
           @cancel-vp-turn="onCancelVpFromTimeline"
         />
@@ -191,8 +191,8 @@ export default {
               :aria-busy="dreamRunning ? 'true' : 'false'"
             >
               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" class="yeaft-dream-icon">
-                <path class="yeaft-dream-moon" fill="currentColor" d="M21 14.6A8.5 8.5 0 0 1 9.4 3a7 7 0 1 0 11.6 11.6z"/>
-                <path class="yeaft-dream-arc" d="M17 4v4h4M20 8a7 7 0 0 0-12.1-3.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                <path class="yeaft-dream-moon" fill="currentColor" d="M20.4 14.2A7.4 7.4 0 0 1 9.8 3.6 8.2 8.2 0 1 0 20.4 14.2z"/>
+                <path class="yeaft-dream-spark" fill="currentColor" d="M16.8 3.2l.46 1.22 1.22.46-1.22.46-.46 1.22-.46-1.22-1.22-.46 1.22-.46.46-1.22zm3.4 4.1l.32.86.86.32-.86.32-.32.86-.32-.86-.86-.32.86-.32.32-.86z"/>
               </svg>
               <span
                 v-if="dreamJustFinished && dreamEntriesCreated !== null"
@@ -268,7 +268,7 @@ export default {
         <MessageList v-if="!showSettings && !store.yeaftActiveVpDetailId && !isActiveGroupEmpty" @open-group-settings="openGroupSettings" />
 
         <!-- Settings Panel -->
-        <SettingsPanel v-if="showSettings" :visible="showSettings" :initial-tab="'yeaft'" :initial-sub-tab="settingsInitialTab" @close="showSettings = false" />
+        <SettingsPanel v-if="showSettings" :visible="showSettings" :initial-tab="'yeaft'" :initial-sub-tab="settingsInitialTab" :initial-edit-vp-id="settingsInitialEditVpId" @close="showSettings = false" />
 
         <div v-if="showLlmConfig" class="modal-overlay yeaft-llm-config-overlay" @click.self="showLlmConfig = false">
           <div class="modal-card yeaft-llm-config-modal" role="dialog" aria-modal="true" :aria-label="$t('settings.llm.configureAgent')">
@@ -319,7 +319,7 @@ export default {
         >
           <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
-        <YeaftDebugPanel />
+        <YeaftDebugPanel @close="closeDebug" />
       </aside>
 
       <!-- task-343: VP library is now an in-Settings tab (initial-tab='vp'). -->
@@ -368,6 +368,7 @@ export default {
     const showSettings = Vue.ref(false);
     const showLlmConfig = Vue.ref(false);
     const settingsInitialTab = Vue.ref('vp');
+    const settingsInitialEditVpId = Vue.ref(null);
     // feat-vp-list-ui-polish: template ref to the embedded ChatInput so we
     // can call its imperative `appendMention(vpId)` when the VP list pane
     // emits a mention request. Keeps the Yeaft-specific @-syntax out of
@@ -611,6 +612,9 @@ export default {
 
     const toggleDebug = () => {
       debugMode.value = !debugMode.value;
+    };
+    const closeDebug = () => {
+      debugMode.value = false;
     };
 
     const reloadMessages = () => {
@@ -857,14 +861,18 @@ export default {
     };
 
     const toggleSettings = () => {
-      if (!showSettings.value) settingsInitialTab.value = 'vp';
+      if (!showSettings.value) {
+        settingsInitialTab.value = 'vp';
+        settingsInitialEditVpId.value = null;
+      }
       showSettings.value = !showSettings.value;
     };
 
     // task-343: VP library lives inside Settings as a tab. Helper to open
     // Settings at a specific tab (used by SessionInviteModal CTA).
-    const openSettings = ({ initialTab = 'vp' } = {}) => {
+    const openSettings = ({ initialTab = 'vp', editVpId = null } = {}) => {
       settingsInitialTab.value = ['vp', 'search', 'mcp'].includes(initialTab) ? initialTab : 'vp';
+      settingsInitialEditVpId.value = settingsInitialTab.value === 'vp' ? (editVpId || null) : null;
       showSettings.value = true;
     };
 
@@ -1077,16 +1085,14 @@ export default {
       });
     });
 
-    const onOpenVpDetailFromTimeline = (vpId) => {
+    const onEditVpFromTimeline = (vpId) => {
       if (!vpId) return;
-      // Same path MessageList uses for VP-badge clicks:
-      // the store handles "leave any conflicting layer" cleanup internally.
-      store.enterVpDetailView(vpId);
+      if (store.yeaftActiveVpDetailId) store.leaveVpDetailView();
+      openSettings({ initialTab: 'vp', editVpId: vpId });
     };
 
     // Clicking a VP row @-mentions that VP in the chat input (default
-    // action), instead of jumping straight to the detail view. The
-    // detail view moved to a hover-revealed info button on the row.
+    // action), instead of jumping straight to a secondary panel.
     // YeaftPage owns the ChatInput template ref and calls its exposed
     // `appendMention()` method directly.
     const onMentionVpFromTimeline = (vpId) => {
@@ -1126,6 +1132,7 @@ export default {
       showSettings,
       showLlmConfig,
       settingsInitialTab,
+      settingsInitialEditVpId,
       chatInputRef,
       openSettings,
       isMobile,
@@ -1140,6 +1147,7 @@ export default {
       cancelYeaft,
       toggleSidebar,
       toggleDebug,
+      closeDebug,
       reloadMessages,
       reloadPage,
       toggleModelDropdown,
@@ -1182,7 +1190,7 @@ export default {
       toggleVpTimeline,
       timelineWidthStyle,
       startTimelineResize,
-      onOpenVpDetailFromTimeline,
+      onEditVpFromTimeline,
       onMentionVpFromTimeline,
       onCancelVpFromTimeline,
       // fix/dream-cadence-and-ui-trigger: manual dream trigger bindings.
