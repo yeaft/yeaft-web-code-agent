@@ -606,6 +606,12 @@ export default {
       return this.$t('login.qr.title');
     }
   },
+  mounted() {
+    if (this.visible) {
+      return this.loadData();
+    }
+    return undefined;
+  },
   watch: {
     visible(val) {
       if (val) {
@@ -689,7 +695,7 @@ export default {
         }
         if (secretRes.ok) {
           const data = await secretRes.json();
-          this.agentSecret = data.agentSecret;
+          this.applyAgentSecretResponse(data);
         }
         if (this.authStore.role === 'admin') {
           await this.loadInvitations();
@@ -832,6 +838,11 @@ export default {
       return h;
     },
 
+    applyAgentSecretResponse(data) {
+      const secret = data?.agentSecret || data?.agent_secret || null;
+      this.agentSecret = secret && String(secret).trim() ? String(secret) : null;
+    },
+
     async copySecret() {
       if (this.agentSecret) {
         await this.copyText(this.agentSecret);
@@ -860,7 +871,7 @@ export default {
         });
         if (res.ok) {
           const data = await res.json();
-          this.agentSecret = data.agentSecret;
+          this.applyAgentSecretResponse(data);
           this.showSecret = true;
           this.showMessage(this.$t('settings.msg.keyReset'));
         } else {
