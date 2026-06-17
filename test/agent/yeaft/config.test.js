@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { existsSync, writeFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { loadConfig, parseFrontmatter, loadMCPConfig } from '../../../agent/yeaft/config.js';
+import { loadConfig, parseFrontmatter, loadMCPConfig, loadProjectMCPServers } from '../../../agent/yeaft/config.js';
 import { resolveContextWindow, resolveMaxOutputTokens } from '../../../agent/yeaft/models.js';
 import { _resetMemCache, _setMemCacheForTest } from '../../../agent/yeaft/llm/models-dev.js';
 
@@ -435,6 +435,182 @@ describe('loadMCPConfig', () => {
     const result = loadMCPConfig(TEST_DIR, jsonConfig);
     expect(result.servers).toHaveLength(1);
     expect(result.servers[0].name).toBe('good');
+  });
+
+  it('always returns a skipped array (back-compat shape)', () => {
+    const result = loadMCPConfig(TEST_DIR);
+    expect(Array.isArray(result.skipped)).toBe(true);
+    expect(result.skipped).toEqual([]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Project Claude Code MCP assets — <workDir>/.mcp.json
+// ═══════════════════════════════════════════════════════════════
+
+describe('loadProjectMCPServers', () => {
+  const PROJECT_DIR = join(tmpdir(), `yeaft-test-mcp-project-${Date.now()}`);
+
+  beforeEach(() => {
+    mkdirSync(PROJECT_DIR, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(PROJECT_DIR, { recursive: true, force: true });
+  });
+
+  function writeMcp(obj) {
+    writeFileSync(join(PROJECT_DIR, '.mcp.json'), JSON.stringify(obj));
+  }
+
+  it('parses Claude Code mcpServers object into yeaft array shape', () => {
+    writeMcp({
+      mcpServers: {
+        github: { command: 'npx', args: ['-y', '@mcp/github'], env: { TOKEN: 'x' } },
+      },
+    });
+
+    const result = loadProjectMCPServers(PROJECT_DIR);
+    expect(result.servers).toHaveLength(1);
+    expect(result.servers[0]).toEqual({
+      name: 'github',
+      command: 'npx',
+      args: ['-y', '@mcp/github'],
+      env: { TOKEN: 'x' },
+    });
+    expect(result.skipped).toEqual([]);
+  });
+
+  it('includes stdio servers and skips SSE/HTTP (url/type) servers as unsupported', () => {
+    writeMcp({
+      mcpServers: {
+        local: { command: 'node', args: ['server.js'] },
+        remote: { url: 'https://example.com/sse' },
+        typed: { type: 'sse', url: 'https://example.com/x' },
+      },
+    });
+
+    const result = loadProjectMCPServers(PROJECT_DIR);
+    expect(result.servers.map(s => s.name)).toEqual(['local']);
+    const skippedNames = result.skipped.map(s => s.name).sort();
+    expect(skippedNames).toEqual(['remote', 'typed']);
+    for (const s of result.skipped) {
+      expect(s.reason).toBe('unsupported-transport');
+      expect(s.source).toBe('.mcp.json');
+    }
+  });
+
+  it('marks entries with neither command nor url/type as invalid-config', () => {
+    writeMcp({ mcpServers: { broken: { foo: 'bar' } } });
+
+    const result = loadProjectMCPServers(PROJECT_DIR);
+    expect(result.servers).toEqual([]);
+    expect(result.skipped).toEqual([
+      { name: 'broken', reason: 'invalid-config', source: '.mcp.json' },
+    ]);
+  });
+
+  it('omits optional args/env when absent', () => {
+    writeMcp({ mcpServers: { bare: { command: 'run-it' } } });
+
+    const result = loadProjectMCPServers(PROJECT_DIR);
+    expect(result.servers[0]).toEqual({ name: 'bare', command: 'run-it' });
+  });
+
+  it('returns gracefully when .mcp.json is absent', () => {
+    const result = loadProjectMCPServers(PROJECT_DIR);
+    expect(result).toEqual({ servers: [], skipped: [] });
+  });
+
+  it('returns gracefully on malformed JSON', () => {
+    writeFileSync(join(PROJECT_DIR, '.mcp.json'), '{ not valid json');
+    const result = loadProjectMCPServers(PROJECT_DIR);
+    expect(result).toEqual({ servers: [], skipped: [] });
+  });
+
+  it('returns gracefully when mcpServers is not an object', () => {
+    writeMcp({ mcpServers: ['array', 'not', 'object'] });
+    const result = loadProjectMCPServers(PROJECT_DIR);
+    expect(result).toEqual({ servers: [], skipped: [] });
+  });
+
+  it('returns gracefully when mcpServers field is missing', () => {
+    writeMcp({ somethingElse: true });
+    const result = loadProjectMCPServers(PROJECT_DIR);
+    expect(result).toEqual({ servers: [], skipped: [] });
+  });
+
+  it('returns gracefully on empty/invalid workDir', () => {
+    expect(loadProjectMCPServers('')).toEqual({ servers: [], skipped: [] });
+    expect(loadProjectMCPServers(undefined)).toEqual({ servers: [], skipped: [] });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// loadMCPConfig — global + project tier merge
+// ═══════════════════════════════════════════════════════════════
+
+describe('loadMCPConfig — global/project merge', () => {
+  const PROJECT_DIR = join(tmpdir(), `yeaft-test-mcp-merge-${Date.now()}`);
+
+  beforeEach(() => {
+    mkdirSync(PROJECT_DIR, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(PROJECT_DIR, { recursive: true, force: true });
+  });
+
+  function writeProjectMcp(obj) {
+    writeFileSync(join(PROJECT_DIR, '.mcp.json'), JSON.stringify(obj));
+  }
+
+  it('merges global config.json servers with project .mcp.json servers', () => {
+    const jsonConfig = { mcpServers: [{ name: 'global-srv', command: 'g' }] };
+    writeProjectMcp({ mcpServers: { 'project-srv': { command: 'p' } } });
+
+    const result = loadMCPConfig(TEST_DIR, jsonConfig, PROJECT_DIR);
+    expect(result.servers.map(s => s.name).sort()).toEqual(['global-srv', 'project-srv']);
+  });
+
+  it('global (~/.yeaft) server wins over a same-named project server', () => {
+    const jsonConfig = { mcpServers: [{ name: 'dup', command: 'global-cmd' }] };
+    writeProjectMcp({ mcpServers: { dup: { command: 'project-cmd' } } });
+
+    const result = loadMCPConfig(TEST_DIR, jsonConfig, PROJECT_DIR);
+    expect(result.servers).toHaveLength(1);
+    expect(result.servers[0].command).toBe('global-cmd');
+  });
+
+  it('surfaces project skipped servers through loadMCPConfig', () => {
+    writeProjectMcp({
+      mcpServers: {
+        ok: { command: 'node' },
+        remote: { url: 'https://example.com/sse' },
+      },
+    });
+
+    const result = loadMCPConfig(TEST_DIR, undefined, PROJECT_DIR);
+    expect(result.servers.map(s => s.name)).toEqual(['ok']);
+    expect(result.skipped).toEqual([
+      { name: 'remote', reason: 'unsupported-transport', source: '.mcp.json' },
+    ]);
+  });
+
+  it('works with no workDir (global only, empty skipped)', () => {
+    const jsonConfig = { mcpServers: [{ name: 'g', command: 'c' }] };
+    const result = loadMCPConfig(TEST_DIR, jsonConfig);
+    expect(result.servers.map(s => s.name)).toEqual(['g']);
+    expect(result.skipped).toEqual([]);
+  });
+
+  it('a broken project .mcp.json never breaks global loading', () => {
+    const jsonConfig = { mcpServers: [{ name: 'g', command: 'c' }] };
+    writeFileSync(join(PROJECT_DIR, '.mcp.json'), '{ broken');
+
+    const result = loadMCPConfig(TEST_DIR, jsonConfig, PROJECT_DIR);
+    expect(result.servers.map(s => s.name)).toEqual(['g']);
+    expect(result.skipped).toEqual([]);
   });
 });
 

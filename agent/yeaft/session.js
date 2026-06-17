@@ -370,6 +370,14 @@ export async function loadSession(options = {}) {
   }
 
   // ─── 6. Load skills ────────────────────────────────────
+  // Project tier root for skills + MCP project assets. Per-session/per-group
+  // workdirs override at tool-execution time via ToolContext.cwd; for the
+  // SYSTEM-PROMPT skill set and the project MCP servers we use the agent
+  // process cwd, the common case when an agent is launched inside a project
+  // the user wants project-tier assets for. Shared so skills (.claude/skills,
+  // .yeaft/skills) and MCP (.mcp.json) resolve from the same root.
+  const projectTierRoot = process.cwd();
+
   let skillManager;
   if (skipSkills) {
     // Pass the literal user-tier dir (matches the normal branch's tier 2)
@@ -378,17 +386,11 @@ export async function loadSession(options = {}) {
     skillManager = new SkillManager(join(yeaftDir, 'skills'));
     // Don't call .load() — empty skill manager
   } else {
-    // Pass the agent's current working directory as the project tier root.
-    // Per-session/per-group workdirs override at tool-execution time via
-    // ToolContext.cwd; for the SYSTEM-PROMPT skill set we just use the
-    // agent process cwd, which is the common case when an agent is
-    // launched inside a project the user wants project-tier skills for.
-    const projectTierRoot = process.cwd();
     skillManager = createSkillManager(yeaftDir, projectTierRoot);
   }
 
   // ─── 7. Connect MCP servers ────────────────────────────
-  const mcpConfig = loadMCPConfig(yeaftDir);
+  const mcpConfig = loadMCPConfig(yeaftDir, undefined, projectTierRoot);
   const mcpManager = new MCPManager();
   let mcpStatus = { connected: [], failed: [] };
 
@@ -548,6 +550,10 @@ export async function loadSession(options = {}) {
     skills: skillManager.size,
     mcpServers: mcpStatus.connected,
     mcpFailed: mcpStatus.failed,
+    // Project `.mcp.json` servers we couldn't spawn (e.g. SSE/HTTP transport).
+    // Surfaced (not silently dropped) so the UI can explain why a configured
+    // server isn't available.
+    mcpSkipped: mcpConfig.skipped || [],
     tools: toolRegistry.size,
   };
 
