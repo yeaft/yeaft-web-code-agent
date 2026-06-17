@@ -42,7 +42,7 @@
  * @typedef {{ type: 'thinking_delta', text: string }} ThinkingDeltaEvent
  * @typedef {{ type: 'thinking_block_end', thinking: string, signature: string }} ThinkingBlockEndEvent
  * @typedef {{ type: 'tool_call', id: string, name: string, input: object }} ToolCallEvent
- * @typedef {{ type: 'usage', inputTokens: number, outputTokens: number, cacheReadTokens?: number, cacheWriteTokens?: number }} UsageEvent
+ * @typedef {{ type: 'usage', inputTokens: number, outputTokens: number, cacheReadTokens?: number, cacheWriteTokens?: number, cacheTokensAreIncludedInInput?: boolean }} UsageEvent
  * @typedef {{ type: 'stop', stopReason: 'end_turn' | 'tool_use' | 'max_tokens' }} StopEvent
  * @typedef {{ type: 'error', error: Error, retryable: boolean }} ErrorEvent
  *

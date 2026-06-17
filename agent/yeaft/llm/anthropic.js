@@ -508,6 +508,8 @@ export class AnthropicAdapter extends LLMAdapter {
       usage: {
         inputTokens: result.usage?.input_tokens || 0,
         outputTokens: result.usage?.output_tokens || 0,
+        cacheReadTokens: result.usage?.cache_read_input_tokens || 0,
+        cacheWriteTokens: result.usage?.cache_creation_input_tokens || 0,
       },
     };
   }

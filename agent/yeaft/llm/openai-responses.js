@@ -435,6 +435,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
               outputTokens: usage.output_tokens || 0,
               cacheReadTokens: usage.input_tokens_details?.cached_tokens || 0,
               cacheWriteTokens: 0,
+              cacheTokensAreIncludedInInput: true,
             };
 
             yield {

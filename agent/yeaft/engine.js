@@ -1885,7 +1885,7 @@ export class Engine {
       const toolCalls = [];
       const thinkingBlocks = []; // task-327d: collected from adapter for round-trip
       let stopReason = 'end_turn';
-      const totalUsage = { inputTokens: 0, outputTokens: 0 };
+      const totalUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cacheInputDeltaTokens: 0 };
       // task-344: capture redacted raw request / raw response for debug panel.
       let rawRequest = null;
       let rawResponse = null;
@@ -2080,13 +2080,22 @@ export class Engine {
               toolCalls.push(event);
               yield event;
               break;
-            case 'usage':
-              totalUsage.inputTokens += event.inputTokens;
-              totalUsage.outputTokens += event.outputTokens;
-              cumulativeInputTokens += event.inputTokens || 0;
-              cumulativeOutputTokens += event.outputTokens || 0;
+            case 'usage': {
+              const inputTokens = event.inputTokens || 0;
+              const outputTokens = event.outputTokens || 0;
+              const cacheReadTokens = event.cacheReadTokens || 0;
+              const cacheWriteTokens = event.cacheWriteTokens || 0;
+              const cacheInputDeltaTokens = event.cacheTokensAreIncludedInInput ? 0 : cacheReadTokens + cacheWriteTokens;
+              totalUsage.inputTokens += inputTokens;
+              totalUsage.outputTokens += outputTokens;
+              totalUsage.cacheReadTokens += cacheReadTokens;
+              totalUsage.cacheWriteTokens += cacheWriteTokens;
+              totalUsage.cacheInputDeltaTokens += cacheInputDeltaTokens;
+              cumulativeInputTokens += inputTokens + cacheInputDeltaTokens;
+              cumulativeOutputTokens += outputTokens;
               yield event;
               break;
+            }
             case 'stop':
               stopReason = event.stopReason;
               yield event;
@@ -2107,6 +2116,8 @@ export class Engine {
           model: currentModel,
           inputTokens: totalUsage.inputTokens,
           outputTokens: totalUsage.outputTokens,
+          cacheReadTokens: totalUsage.cacheReadTokens,
+          cacheWriteTokens: totalUsage.cacheWriteTokens,
           stopReason: 'error',
           latencyMs,
           responseText,
@@ -2119,7 +2130,10 @@ export class Engine {
           usage: {
             inputTokens: totalUsage.inputTokens || 0,
             outputTokens: totalUsage.outputTokens || 0,
-            totalTokens: (totalUsage.inputTokens || 0) + (totalUsage.outputTokens || 0),
+            cacheReadTokens: totalUsage.cacheReadTokens || 0,
+            cacheWriteTokens: totalUsage.cacheWriteTokens || 0,
+            totalInputTokens: (totalUsage.inputTokens || 0) + (totalUsage.cacheInputDeltaTokens || 0),
+            totalTokens: (totalUsage.inputTokens || 0) + (totalUsage.cacheInputDeltaTokens || 0) + (totalUsage.outputTokens || 0),
           },
           ttfbMs,
           rawRequest,
@@ -2127,7 +2141,7 @@ export class Engine {
         });
 
         // Emit `loop` event for error path too (was `debug_turn`).
-        const errLoopInputTokens = totalUsage.inputTokens || 0;
+        const errLoopInputTokens = (totalUsage.inputTokens || 0) + (totalUsage.cacheInputDeltaTokens || 0);
         const errLoopOutputTokens = totalUsage.outputTokens || 0;
         yield {
           type: 'loop',
@@ -2140,8 +2154,11 @@ export class Engine {
           response: responseText || `Error: ${err.message}`,
           toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
           usage: {
-            inputTokens: errLoopInputTokens,
+            inputTokens: totalUsage.inputTokens || 0,
             outputTokens: errLoopOutputTokens,
+            cacheReadTokens: totalUsage.cacheReadTokens || 0,
+            cacheWriteTokens: totalUsage.cacheWriteTokens || 0,
+            totalInputTokens: errLoopInputTokens,
             totalTokens: errLoopInputTokens + errLoopOutputTokens,
           },
           latencyMs,
@@ -2250,11 +2267,16 @@ export class Engine {
 
       const latencyMs = Date.now() - startTime;
 
+      const turnInputTokens = (totalUsage.inputTokens || 0) + (totalUsage.cacheInputDeltaTokens || 0);
+      const turnOutputTokens = totalUsage.outputTokens || 0;
+
       // Record turn in debug trace
       this.#trace.endTurn(turnId, {
         model: currentModel,
         inputTokens: totalUsage.inputTokens,
         outputTokens: totalUsage.outputTokens,
+        cacheReadTokens: totalUsage.cacheReadTokens,
+        cacheWriteTokens: totalUsage.cacheWriteTokens,
         stopReason,
         latencyMs,
         responseText,
@@ -2268,7 +2290,10 @@ export class Engine {
         usage: {
           inputTokens: totalUsage.inputTokens || 0,
           outputTokens: totalUsage.outputTokens || 0,
-          totalTokens: (totalUsage.inputTokens || 0) + (totalUsage.outputTokens || 0),
+          cacheReadTokens: totalUsage.cacheReadTokens || 0,
+          cacheWriteTokens: totalUsage.cacheWriteTokens || 0,
+          totalInputTokens: turnInputTokens,
+          totalTokens: turnInputTokens + turnOutputTokens,
         },
         ttfbMs,
         rawRequest,
@@ -2284,7 +2309,7 @@ export class Engine {
       // task-331: preserve toolCalls / toolCallId / isError on each message
       // so the panel can render function_call requests and their paired
       // tool_result responses across loops.
-      const loopInputTokens = totalUsage.inputTokens || 0;
+      const loopInputTokens = (totalUsage.inputTokens || 0) + (totalUsage.cacheInputDeltaTokens || 0);
       const loopOutputTokens = totalUsage.outputTokens || 0;
       yield {
         type: 'loop',
@@ -2296,8 +2321,11 @@ export class Engine {
         response: responseText,
         toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
         usage: {
-          inputTokens: loopInputTokens,
+          inputTokens: totalUsage.inputTokens || 0,
           outputTokens: loopOutputTokens,
+          cacheReadTokens: totalUsage.cacheReadTokens || 0,
+          cacheWriteTokens: totalUsage.cacheWriteTokens || 0,
+          totalInputTokens: loopInputTokens,
           totalTokens: loopInputTokens + loopOutputTokens,
         },
         latencyMs,

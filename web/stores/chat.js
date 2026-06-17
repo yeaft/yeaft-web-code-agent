@@ -798,7 +798,7 @@ export const useChatStore = defineStore('chat', {
         for (const lp of loops) {
           const u = lp && lp.usage;
           if (u && Number.isFinite(u.totalTokens)) liveTokens += u.totalTokens;
-          else if (u) liveTokens += (u.inputTokens || 0) + (u.outputTokens || 0);
+          else if (u) liveTokens += (u.totalInputTokens || ((u.inputTokens || 0) + (u.cacheReadTokens || 0) + (u.cacheWriteTokens || 0))) + (u.outputTokens || 0);
           if (lp && Number.isFinite(lp.latencyMs)) liveMs += lp.latencyMs;
         }
         const isOpen = !turn.closedAt;

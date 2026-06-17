@@ -518,7 +518,7 @@ export default {
         lines.push(`- model: ${evt.model || '-'}`);
         lines.push(`- latency: ${this.formatMs(evt.latencyMs)}`);
         const u = evt.usage || {};
-        lines.push(`- tokens: ${u.inputTokens || 0} in / ${u.outputTokens || 0} out / ${u.totalTokens || 0} total`);
+        lines.push(`- tokens: ${this.formatUsageBreakdown(u)}`);
         lines.push('', '## System prompt', '```', evt.systemPrompt || '', '```');
         lines.push('', '## User message', '```', this.dreamLoopUserContent(evt), '```');
         lines.push('', '## Response', '```', evt.response || '', '```');
@@ -572,6 +572,33 @@ export default {
       const v = Number(n) || 0;
       if (v >= 1000) return `${(v / 1000).toFixed(1)}k`;
       return String(v);
+    },
+    usageTotalInputTokens(usage) {
+      const u = usage || {};
+      if (Number.isFinite(Number(u.totalInputTokens))) return Number(u.totalInputTokens);
+      return (Number(u.inputTokens) || 0) + (Number(u.cacheReadTokens) || 0) + (Number(u.cacheWriteTokens) || 0);
+    },
+    usageTotalTokens(usage) {
+      const u = usage || {};
+      if (Number.isFinite(Number(u.totalTokens))) return Number(u.totalTokens);
+      return this.usageTotalInputTokens(u) + (Number(u.outputTokens) || 0);
+    },
+    formatUsageBreakdown(usage) {
+      const u = usage || {};
+      const cacheRead = Number(u.cacheReadTokens) || 0;
+      const cacheWrite = Number(u.cacheWriteTokens) || 0;
+      const totalInput = this.usageTotalInputTokens(u);
+      const output = Number(u.outputTokens) || 0;
+      const total = this.usageTotalTokens(u);
+      let text = `${totalInput} in / ${output} out / ${total} total`;
+      if (cacheRead || cacheWrite) {
+        if (totalInput === (Number(u.inputTokens) || 0)) {
+          text += ` (input includes cache read ${cacheRead}, cache write ${cacheWrite})`;
+        } else {
+          text += ` (fresh ${Number(u.inputTokens) || 0}, cache read ${cacheRead}, cache write ${cacheWrite})`;
+        }
+      }
+      return text;
     },
     formatDreamMetrics(d) {
       if (!d) return '';
@@ -861,7 +888,7 @@ export default {
       for (const loop of loops) {
         lines.push(`## Loop ${loop.loopNumber}  ${loop.model}`);
         const u = loop.usage || {};
-        lines.push(`- in/out/total: ${u.inputTokens || 0} / ${u.outputTokens || 0} / ${u.totalTokens || 0}`);
+        lines.push(`- in/out/total: ${this.formatUsageBreakdown(u)}`);
         lines.push(`- latency: ${this.formatMs(loop.latencyMs)}  ttfb: ${this.formatMs(loop.ttfbMs)}`);
         lines.push(`- stopReason: ${loop.stopReason || '-'}`);
         const tools = this.toolsForLoop(turn, loop.loopNumber);
@@ -1197,9 +1224,9 @@ export default {
                 <span class="yeaft-debug-loop-num">Loop {{ loop.loopNumber }}</span>
                 <span class="yeaft-debug-loop-model">{{ loop.model }}</span>
                 <span class="yeaft-debug-loop-stats">
-                  <span title="input tokens">↑{{ loop.usage?.inputTokens || 0 }}</span>
+                  <span :title="formatUsageBreakdown(loop.usage)">↑{{ usageTotalInputTokens(loop.usage) }}</span>
                   <span title="output tokens">↓{{ loop.usage?.outputTokens || 0 }}</span>
-                  <span title="total tokens">⊕{{ loop.usage?.totalTokens || 0 }}</span>
+                  <span :title="formatUsageBreakdown(loop.usage)">⊕{{ usageTotalTokens(loop.usage) }}</span>
                   <span>{{ formatMs(loop.latencyMs) }}</span>
                   <span class="yeaft-debug-loop-meta">{{ loopMetaSummary(loop) }}</span>
                 </span>
