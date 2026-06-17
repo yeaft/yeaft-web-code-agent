@@ -273,37 +273,67 @@ use it as the default workflow or call it repeatedly in a loop.`,
     properties: {
       name: {
         type: 'string',
-        description: 'A descriptive name for the sub-agent (e.g. "test-writer", "refactor-auth")',
+        description: {
+          en: 'A descriptive name for the sub-agent (e.g. "test-writer", "refactor-auth")',
+          zh: '子 Agent 的描述性名称（如 "test-writer"、"refactor-auth"）',
+        },
       },
       task: {
         type: 'string',
-        description: 'Legacy one-line task description (used if `mission` is omitted)',
+        description: {
+          en: 'Legacy one-line task description (used if `mission` is omitted)',
+          zh: '旧式单行任务描述（当 `mission` 省略时使用）',
+        },
       },
       mission: {
         type: 'string',
-        description: 'Concrete mission statement — what this agent must accomplish',
+        description: {
+          en: 'Concrete mission statement — what this agent must accomplish',
+          zh: '具体任务陈述 — 该 Agent 必须完成什么',
+        },
       },
       expected_output: {
         type: 'object',
-        description: 'JSON schema describing the structure the agent should return',
+        description: {
+          en: 'JSON schema describing the structure the agent should return',
+          zh: '描述 Agent 应返回结构的 JSON schema',
+        },
       },
       persona: {
         type: 'string',
         enum: ['explorer', 'implementer', 'reviewer', 'researcher'],
-        description: 'Preset persona that pre-wires tool subset + model tier',
+        description: {
+          en: 'Preset persona that pre-wires tool subset + model tier',
+          zh: '预设 persona，预装工具子集和模型等级',
+        },
       },
       budget: {
         type: 'object',
         properties: {
-          max_tokens: { type: 'number', description: 'Optional token ceiling; no default limit is applied' },
-          max_turns: { type: 'number', description: 'Optional turn ceiling; no default limit is applied' },
-          wall_time_ms: { type: 'number', description: 'Optional elapsed-time ceiling in milliseconds; no default limit is applied' },
+          max_tokens: { type: 'number', description: {
+          en: 'Optional token ceiling; no default limit is applied',
+          zh: '可选 token 上限；默认不设限制',
+        } },
+          max_turns: { type: 'number', description: {
+          en: 'Optional turn ceiling; no default limit is applied',
+          zh: '可选 turn 上限；默认不设限制',
+        } },
+          wall_time_ms: { type: 'number', description: {
+          en: 'Optional elapsed-time ceiling in milliseconds; no default limit is applied',
+          zh: '可选耗时上限（毫秒）；默认不设限制',
+        } },
         },
-        description: 'Optional safety limits; no max_tokens/max_turns/wall_time_ms defaults are applied. Exceeding an explicit limit returns { status: "budget_exceeded", partial_output, reason }',
+        description: {
+          en: 'Optional safety limits; no max_tokens/max_turns/wall_time_ms defaults are applied. Exceeding an explicit limit returns { status: "budget_exceeded", partial_output, reason }',
+          zh: '可选安全限制；默认不限制 max_tokens/max_turns/wall_time_ms。超过显式限制会返回 { status: "budget_exceeded", partial_output, reason }',
+        },
       },
       cwd: {
         type: 'string',
-        description: 'Working directory for the sub-agent (optional, defaults to parent cwd)',
+        description: {
+          en: 'Working directory for the sub-agent (optional, defaults to parent cwd)',
+          zh: '子 Agent 的工作目录（可选，默认使用父级当前工作目录）',
+        },
       },
     },
     required: ['name'],

@@ -32,16 +32,25 @@ Guidelines:
     properties: {
       prompt: {
         type: 'string',
-        description: 'Text description of the image to generate',
+        description: {
+          en: 'Text description of the image to generate',
+          zh: '要生成图像的文本描述',
+        },
       },
       output_path: {
         type: 'string',
-        description: 'File path to save the generated image',
+        description: {
+          en: 'File path to save the generated image',
+          zh: '保存生成图像的文件路径',
+        },
       },
       size: {
         type: 'string',
         enum: ['256x256', '512x512', '1024x1024'],
-        description: 'Image size (default: "1024x1024")',
+        description: {
+          en: 'Image size (default: "1024x1024")',
+          zh: '图像大小（默认 "1024x1024"）',
+        },
       },
     },
     required: ['prompt'],

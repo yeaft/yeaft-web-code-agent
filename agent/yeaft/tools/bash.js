@@ -189,15 +189,24 @@ Guidelines:
     properties: {
       command: {
         type: 'string',
-        description: 'The shell command to execute using the Agent OS default shell',
+        description: {
+          en: 'The shell command to execute using the Agent OS default shell',
+          zh: '要使用 Agent 操作系统默认 shell 执行的命令',
+        },
       },
       cwd: {
         type: 'string',
-        description: 'Working directory for the command (default: engine cwd)',
+        description: {
+          en: 'Working directory for the command (default: engine cwd)',
+          zh: '命令的工作目录（默认为引擎当前目录）',
+        },
       },
       timeout_ms: {
         type: 'number',
-        description: `Timeout in milliseconds (default: ${DEFAULT_TIMEOUT_MS}, max: ${MAX_TIMEOUT_MS})`,
+        description: {
+          en: `Timeout in milliseconds (default: ${DEFAULT_TIMEOUT_MS}, max: ${MAX_TIMEOUT_MS})`,
+          zh: `超时时间，单位毫秒（默认 ${DEFAULT_TIMEOUT_MS}，最大 ${MAX_TIMEOUT_MS}）`,
+        },
       },
     },
     required: ['command'],

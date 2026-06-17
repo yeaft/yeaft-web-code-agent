@@ -158,7 +158,10 @@ Usage guidelines:
     properties: {
       server: {
         type: 'string',
-        description: 'Filter tools from a specific MCP server (optional)',
+        description: {
+          en: 'Filter tools from a specific MCP server (optional)',
+          zh: '按特定 MCP 服务器过滤工具（可选）',
+        },
       },
     },
   },
@@ -216,15 +219,24 @@ Usage guidelines:
     properties: {
       tool_name: {
         type: 'string',
-        description: 'Full tool name including server prefix (e.g. "github__list_prs")',
+        description: {
+          en: 'Full tool name including server prefix (e.g. "github__list_prs")',
+          zh: '完整工具名称，包括服务器前缀（如 "github__list_prs"）',
+        },
       },
       arguments: {
         type: 'object',
-        description: 'Arguments to pass to the MCP tool (must match its schema)',
+        description: {
+          en: 'Arguments to pass to the MCP tool (must match its schema)',
+          zh: '传递给 MCP 工具的参数（必须匹配其 schema）',
+        },
       },
       timeout_ms: {
         type: 'number',
-        description: 'Timeout in milliseconds (default: 30000)',
+        description: {
+          en: 'Timeout in milliseconds (default: 30000)',
+          zh: '超时时间，单位毫秒（默认 30000）',
+        },
       },
     },
     required: ['tool_name'],

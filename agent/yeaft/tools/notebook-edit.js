@@ -36,25 +36,40 @@ Cell types: "code" or "markdown"`,
     properties: {
       notebook_path: {
         type: 'string',
-        description: 'Path to the .ipynb file',
+        description: {
+          en: 'Path to the .ipynb file',
+          zh: '.ipynb 文件的路径',
+        },
       },
       action: {
         type: 'string',
         enum: ['replace', 'insert', 'delete', 'read'],
-        description: 'Operation to perform (default: "replace")',
+        description: {
+          en: 'Operation to perform (default: "replace")',
+          zh: '要执行的操作（默认 "replace"）',
+        },
       },
       cell_index: {
         type: 'number',
-        description: 'Cell index (0-based)',
+        description: {
+          en: 'Cell index (0-based)',
+          zh: '单元格索引（从 0 开始）',
+        },
       },
       cell_type: {
         type: 'string',
         enum: ['code', 'markdown'],
-        description: 'Cell type for insert/replace',
+        description: {
+          en: 'Cell type for insert/replace',
+          zh: '插入/替换的单元格类型',
+        },
       },
       source: {
         type: 'string',
-        description: 'New cell source content',
+        description: {
+          en: 'New cell source content',
+          zh: '新单元格的源码内容',
+        },
       },
     },
     required: ['notebook_path'],

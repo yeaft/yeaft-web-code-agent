@@ -86,23 +86,38 @@ The tool takes the topic plus optional guiding fields (stuckAt, userProblem, exp
     properties: {
       topic: {
         type: 'string',
-        description: 'One-sentence statement of what is being planned (e.g. "Add dark-mode toggle to YeaftPage settings").',
+        description: {
+          en: 'One-sentence statement of what is being planned (e.g. "Add dark-mode toggle to YeaftPage settings").',
+          zh: '用一句话说明要规划什么（如"为 YeaftPage 设置添加深色模式切换"）',
+        },
       },
       userProblem: {
         type: 'string',
-        description: 'Optional. The underlying problem the user is trying to solve (often broader than the immediate ask).',
+        description: {
+          en: 'Optional. The underlying problem the user is trying to solve (often broader than the immediate ask).',
+          zh: '可选。用户试图解决的根本问题（通常比即时请求更宽泛）',
+        },
       },
       stuckAt: {
         type: 'string',
-        description: 'Optional. If you are blocked or unsure, the specific decision or unknown that needs resolving first.',
+        description: {
+          en: 'Optional. If you are blocked or unsure, the specific decision or unknown that needs resolving first.',
+          zh: '可选。如果你被阻塞或不确定，需要首先解决的具体决策或未知点',
+        },
       },
       expectedScale: {
         type: 'string',
-        description: 'Optional. Rough scope estimate — number of files touched, lines of code, time horizon, etc.',
+        description: {
+          en: 'Optional. Rough scope estimate — number of files touched, lines of code, time horizon, etc.',
+          zh: '可选。粗略范围估计 — 涉及文件数、代码行数、时间预期等',
+        },
       },
       additionalContext: {
         type: 'string',
-        description: 'Optional. Any other facts that shape the plan (constraints, deadlines, related prior work).',
+        description: {
+          en: 'Optional. Any other facts that shape the plan (constraints, deadlines, related prior work).',
+          zh: '可选。影响计划的其他事实（约束、截止日期、相关先前工作）',
+        },
       },
     },
     required: ['topic'],

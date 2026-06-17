@@ -39,12 +39,18 @@ Guidelines:
     properties: {
       question: {
         type: 'string',
-        description: 'The question to ask the user',
+        description: {
+          en: 'The question to ask the user',
+          zh: '向用户提出的问题',
+        },
       },
       options: {
         type: 'array',
         items: { type: 'string' },
-        description: 'Optional list of choices for the user to pick from',
+        description: {
+          en: 'Optional list of choices for the user to pick from',
+          zh: '供用户选择的选项列表（可选）',
+        },
       },
     },
     required: ['question'],

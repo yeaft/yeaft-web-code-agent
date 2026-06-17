@@ -37,11 +37,17 @@ Do NOT end your turn silently right after CloseAgent.`,
     properties: {
       agent_id: {
         type: 'string',
-        description: 'The sub-agent ID to close',
+        description: {
+          en: 'The sub-agent ID to close',
+          zh: '要关闭的子 Agent ID',
+        },
       },
       result: {
         type: 'string',
-        description: 'Optional final result to set before closing',
+        description: {
+          en: 'Optional final result to set before closing',
+          zh: '关闭前设置的可选最终结果',
+        },
       },
     },
     required: ['agent_id'],

@@ -36,11 +36,17 @@ Guidelines:
     properties: {
       file_path: {
         type: 'string',
-        description: 'Path to the file to write (absolute or relative to cwd)',
+        description: {
+          en: 'Path to the file to write (absolute or relative to cwd)',
+          zh: '要写入的文件路径（绝对路径或相对于工作目录）',
+        },
       },
       content: {
         type: 'string',
-        description: 'The complete file content to write',
+        description: {
+          en: 'The complete file content to write',
+          zh: '要写入的完整文件内容',
+        },
       },
     },
     required: ['file_path', 'content'],

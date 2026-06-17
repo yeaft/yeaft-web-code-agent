@@ -64,15 +64,24 @@ Guidelines:
     properties: {
       file_path: {
         type: 'string',
-        description: 'Path to the file to read (absolute or relative to cwd)',
+        description: {
+          en: 'Path to the file to read (absolute or relative to cwd)',
+          zh: '要读取的文件路径（绝对路径或相对于当前工作目录）',
+        },
       },
       offset: {
         type: 'number',
-        description: 'Line number to start reading from (0-based, default: 0)',
+        description: {
+          en: 'Line number to start reading from (0-based, default: 0)',
+          zh: '起始行号（从 0 开始计数，默认 0）',
+        },
       },
       limit: {
         type: 'number',
-        description: `Maximum number of lines to read (default: ${DEFAULT_LIMIT})`,
+        description: {
+          en: `Maximum number of lines to read (default: ${DEFAULT_LIMIT})`,
+          zh: `最多读取行数（默认 ${DEFAULT_LIMIT} 行）`,
+        },
       },
     },
     required: ['file_path'],

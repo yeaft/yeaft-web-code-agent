@@ -84,11 +84,17 @@ REPL 上下文在多次调用间保持——一次调用中定义的变量和函
     properties: {
       code: {
         type: 'string',
-        description: 'JavaScript code to evaluate. Optional when reset=true and you only want to clear state.',
+        description: {
+          en: 'JavaScript code to evaluate. Optional when reset=true and you only want to clear state.',
+          zh: '要执行的 JavaScript 代码。当 reset=true 且只想清空状态时可省略。',
+        },
       },
       reset: {
         type: 'boolean',
-        description: 'When true, reset the REPL context BEFORE evaluating `code`. If `code` is omitted, just resets.',
+        description: {
+          en: 'When true, reset the REPL context BEFORE evaluating `code`. If `code` is omitted, just resets.',
+          zh: '为 true 时，在求值前先重置 REPL 上下文。若省略 code，则仅重置。',
+        },
       },
     },
   },

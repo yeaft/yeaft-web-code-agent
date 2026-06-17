@@ -44,11 +44,17 @@ SpawnAgent -> (PromptAgent <-> WaitAgent)+ -> CloseAgent -> 最终回复给用�
     properties: {
       agent_id: {
         type: 'string',
-        description: 'The sub-agent ID (returned by Agent tool)',
+        description: {
+          en: 'The sub-agent ID (returned by Agent tool)',
+          zh: '子 Agent ID（由 Agent 工具返回）',
+        },
       },
       message: {
         type: 'string',
-        description: 'The message to send to the agent',
+        description: {
+          en: 'The message to send to the agent',
+          zh: '要发送给 Agent 的消息',
+        },
       },
     },
     required: ['agent_id', 'message'],

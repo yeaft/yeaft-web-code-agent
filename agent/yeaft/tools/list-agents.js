@@ -41,11 +41,17 @@ stale/stalled 诊断、result 尾部和消息数量。将此作为异步子 Agen
     properties: {
       include_closed: {
         type: 'boolean',
-        description: 'Include closed/failed/abandoned/completed agents in the list (default: false)',
+        description: {
+          en: 'Include closed/failed/abandoned/completed agents in the list (default: false)',
+          zh: '在列表中包含已关闭/失败/放弃/完成的 Agent（默认 false）',
+        },
       },
       include_terminal: {
         type: 'boolean',
-        description: 'Alias for include_closed — include all terminal-status agents in the list',
+        description: {
+          en: 'Alias for include_closed — include all terminal-status agents in the list',
+          zh: 'include_closed 的别名 — 列出所有已终止状态的 Agent',
+        },
       },
     },
   },

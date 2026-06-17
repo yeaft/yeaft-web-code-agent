@@ -51,12 +51,18 @@ function normalizeLanguage(language) {
   return String(language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
 }
 
+function isLocalizedTextObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return ['en', 'zh', 'zh-CN', 'en-US', 'default'].some(key => typeof value[key] === 'string' || typeof value[key] === 'function');
+}
+
 function localizeVisibleText(value, language, toolName) {
   const lang = normalizeLanguage(language);
   if (typeof value === 'function') return localizeVisibleText(value(lang), lang, toolName);
-  if (value && typeof value === 'object') {
+  if (isLocalizedTextObject(value)) {
     const picked = value[lang] || value[lang === 'zh' ? 'zh-CN' : 'en-US'] || value.en || value.default;
     if (typeof picked === 'string') return picked;
+    if (typeof picked === 'function') return localizeVisibleText(picked(lang), lang, toolName);
   }
   // Legacy single-string descriptions are already authored text. Return them
   // unchanged; do not synthesize zh-prefixed wrappers around English strings.
@@ -64,30 +70,17 @@ function localizeVisibleText(value, language, toolName) {
 }
 
 /**
- * Walk a JSON Schema `parameters` object and localize the human-readable
- * `description` strings to the requested language. All other schema bits
+ * Walk a JSON Schema `parameters` object and localize human-readable
+ * `description` values to the requested language. All other schema bits
  * (`type`, `enum`, `required`, `items`, nested `properties`, etc.) are
  * preserved by value.
  *
  * Critical correctness rule: a JSON Schema can have a *property named*
  * `description` whose value is itself a sub-schema (e.g.
- * `properties: { description: { type: 'string', description: 'Detailed...' }}`).
+ * `properties: { description: { type: 'string', description: { en, zh } }}`).
  * In that case the OUTER `description` key holds the sub-schema and must
- * be recursed into; only the INNER `description: 'Detailed...'` value
- * (which is a string) should be localized.
- *
- * Previous bug: this walker localized ANY value under a `description`
- * key, including sub-schema objects. `localizeVisibleText` then ran
- * `String(value)` on the object, producing the literal string
- * `'[object Object]'`. GPT-5's strict schema validator rejected the
- * resulting `{ description: '[object Object]' }` with
- * `"'[object Object]' is not of type 'object', 'boolean'"`. This made
- * FeatureCreate (and any tool whose schema contains a property named
- * `description`) unusable in zh locale on strict providers.
- *
- * The fix: only treat a `description` value as localizable text when it
- * is actually a string. Object/array values under a `description` key
- * are sub-schemas and must be recursed into normally.
+ * be recursed into; only the INNER bilingual `description` value should
+ * be localized.
  */
 function cloneSchema(value) {
   if (!value || typeof value !== 'object') return value;
@@ -121,11 +114,11 @@ function applyParameterOverrides(parameters, overrides) {
 
 function localizeParameters(parameters, language, toolName, parameterOverrides = null) {
   const lang = normalizeLanguage(language);
-  if (lang !== 'zh' || !parameters || typeof parameters !== 'object') return parameters;
+  if (!parameters || typeof parameters !== 'object') return parameters;
   if (Array.isArray(parameters)) return parameters.map(v => localizeParameters(v, lang, toolName));
   const out = {};
   for (const [key, value] of Object.entries(parameters)) {
-    if (key === 'description' && typeof value === 'string') {
+    if (key === 'description' && (typeof value === 'string' || typeof value === 'function' || isLocalizedTextObject(value))) {
       out[key] = localizeVisibleText(value, lang, toolName);
     } else if (value && typeof value === 'object') {
       out[key] = localizeParameters(value, lang, toolName, null);

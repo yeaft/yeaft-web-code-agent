@@ -41,19 +41,31 @@ Guidelines:
     properties: {
       file_path: {
         type: 'string',
-        description: 'Path to the file to edit (absolute or relative to cwd)',
+        description: {
+          en: 'Path to the file to edit (absolute or relative to cwd)',
+          zh: '要编辑的文件路径（绝对路径或相对于工作目录）',
+        },
       },
       old_string: {
         type: 'string',
-        description: 'The exact text to find and replace',
+        description: {
+          en: 'The exact text to find and replace',
+          zh: '要查找并替换的精确文本',
+        },
       },
       new_string: {
         type: 'string',
-        description: 'The replacement text',
+        description: {
+          en: 'The replacement text',
+          zh: '替换后的文本',
+        },
       },
       replace_all: {
         type: 'boolean',
-        description: 'Replace all occurrences (default: false — fails if not unique)',
+        description: {
+          en: 'Replace all occurrences (default: false — fails if not unique)',
+          zh: '替换所有出现（默认 false — 不唯一时失败）',
+        },
       },
     },
     required: ['file_path', 'old_string', 'new_string'],

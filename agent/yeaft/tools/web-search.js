@@ -49,11 +49,17 @@ Guidelines:
     properties: {
       query: {
         type: 'string',
-        description: 'The search query',
+        description: {
+          en: 'The search query',
+          zh: '搜索查询词',
+        },
       },
       limit: {
         type: 'number',
-        description: 'Maximum number of results (default: 5)',
+        description: {
+          en: 'Maximum number of results (default: 5)',
+          zh: '最多返回结果数（默认 5）',
+        },
       },
     },
     required: ['query'],

@@ -41,11 +41,17 @@ Worktree 创建在 .yeaft/worktrees/ 中，基于 HEAD 创建新分支。返回 
     properties: {
       name: {
         type: 'string',
-        description: 'Name for the worktree (used in path and branch name). If omitted, a random name is generated.',
+        description: {
+          en: 'Name for the worktree (used in path and branch name). If omitted, a random name is generated.',
+          zh: 'worktree 名称（用于路径和分支名）。如省略，自动生成随机名。',
+        },
       },
       base_ref: {
         type: 'string',
-        description: 'Git ref to base the worktree on (default: HEAD)',
+        description: {
+          en: 'Git ref to base the worktree on (default: HEAD)',
+          zh: '基于哪个 Git 引用创建（默认 HEAD）',
+        },
       },
     },
   },

@@ -176,7 +176,10 @@ provider 特定的图片内容块。
     properties: {
       file_path: {
         type: 'string',
-        description: 'Path to the image file. Relative paths are resolved against the project cwd.',
+        description: {
+          en: 'Path to the image file. Relative paths are resolved against the project cwd.',
+          zh: '图片文件路径。相对路径相对于项目工作目录解析。',
+        },
       },
     },
     required: ['file_path'],

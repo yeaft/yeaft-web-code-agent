@@ -28,11 +28,17 @@ Results are returned newest-first with message role and content.`,
     properties: {
       keyword: {
         type: 'string',
-        description: 'Search keyword (case-insensitive)',
+        description: {
+          en: 'Search keyword (case-insensitive)',
+          zh: '搜索关键词（不区分大小写）',
+        },
       },
       limit: {
         type: 'number',
-        description: 'Maximum number of results (default: 20)',
+        description: {
+          en: 'Maximum number of results (default: 20)',
+          zh: '最多返回结果数（默认 20）',
+        },
       },
     },
     required: ['keyword'],

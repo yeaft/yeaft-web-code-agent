@@ -120,7 +120,10 @@ Guidelines:
     properties: {
       patch: {
         type: 'string',
-        description: 'The unified diff patch content',
+        description: {
+          en: 'The unified diff patch content',
+          zh: 'unified diff 补丁内容',
+        },
       },
     },
     required: ['patch'],

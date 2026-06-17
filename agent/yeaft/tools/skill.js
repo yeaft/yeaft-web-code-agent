@@ -48,23 +48,38 @@ Actions:
       action: {
         type: 'string',
         enum: ['list', 'view', 'load', 'search'],
-        description: '"list" lists all skills, "view"/"load" loads a specific skill, "search" finds relevant skills',
+        description: {
+          en: '"list" lists all skills, "view"/"load" loads a specific skill, "search" finds relevant skills',
+          zh: '"list" 列出所有 skill，"view"/"load" 加载特定 skill，"search" 查找相关 skill',
+        },
       },
       name: {
         type: 'string',
-        description: 'Skill name (for "view"/"load" action)',
+        description: {
+          en: 'Skill name (for "view"/"load" action)',
+          zh: 'Skill 名称（用于 "view"/"load" 动作）',
+        },
       },
       query: {
         type: 'string',
-        description: 'Search query (for "search" action)',
+        description: {
+          en: 'Search query (for "search" action)',
+          zh: '搜索查询（用于 "search" 动作）',
+        },
       },
       filePath: {
         type: 'string',
-        description: 'Read a linked file from a directory skill (e.g. "references/style-guide.md")',
+        description: {
+          en: 'Read a linked file from a directory skill (e.g. "references/style-guide.md")',
+          zh: '读取目录式 skill 的关联文件（如 "references/style-guide.md"）',
+        },
       },
       category: {
         type: 'string',
-        description: 'Filter by category (for "list" action)',
+        description: {
+          en: 'Filter by category (for "list" action)',
+          zh: '按分类过滤（用于 "list" 动作）',
+        },
       },
     },
     required: ['action'],

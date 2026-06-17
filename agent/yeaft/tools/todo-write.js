@@ -62,22 +62,34 @@ WHEN NOT TO USE:
     properties: {
       todos: {
         type: 'array',
-        description: 'The full current todo list. Always send the entire list, not a diff.',
+        description: {
+          en: 'The full current todo list. Always send the entire list, not a diff.',
+          zh: '当前完整的待办清单。始终发送整个列表，而非增量。',
+        },
         items: {
           type: 'object',
           properties: {
             content: {
               type: 'string',
-              description: 'Imperative description of the step (e.g. "Run tests").',
+              description: {
+          en: 'Imperative description of the step (e.g. "Run tests").',
+          zh: '步骤的命令式描述（如 "Run tests"）。',
+        },
             },
             status: {
               type: 'string',
               enum: ['pending', 'in_progress', 'completed'],
-              description: 'Current state. At most one item may be "in_progress".',
+              description: {
+          en: 'Current state. At most one item may be "in_progress".',
+          zh: '当前状态。最多只能有一项为 "in_progress"。',
+        },
             },
             activeForm: {
               type: 'string',
-              description: 'Present-continuous form shown while executing (e.g. "Running tests").',
+              description: {
+          en: 'Present-continuous form shown while executing (e.g. "Running tests").',
+          zh: '执行中展示的进行时描述（如 "Running tests"）。',
+        },
             },
           },
           required: ['content', 'status', 'activeForm'],

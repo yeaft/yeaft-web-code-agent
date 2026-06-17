@@ -79,15 +79,24 @@ Returns JSON: { ok, dispatched?, error?, detail? }.`,
     properties: {
       to: {
         type: 'string',
-        description: 'Target vpId, or "all" for broadcast',
+        description: {
+          en: 'Target vpId, or "all" for broadcast',
+          zh: '目标 vpId，或 "all" 广播给所有人',
+        },
       },
       text: {
         type: 'string',
-        description: 'The message body to forward',
+        description: {
+          en: 'The message body to forward',
+          zh: '要转发的消息正文',
+        },
       },
       reason: {
         type: 'string',
-        description: 'Optional: short rationale for the forward',
+        description: {
+          en: 'Optional: short rationale for the forward',
+          zh: '可选：转交的简短原因',
+        },
       },
     },
     required: ['to', 'text'],

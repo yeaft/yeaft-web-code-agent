@@ -36,11 +36,17 @@ This is better than using Bash with 'ls' because it provides structured output.`
     properties: {
       path: {
         type: 'string',
-        description: 'Directory path to list (default: cwd)',
+        description: {
+          en: 'Directory path to list (default: cwd)',
+          zh: '要列出的目录路径（默认当前工作目录）',
+        },
       },
       show_hidden: {
         type: 'boolean',
-        description: 'Include hidden files (starting with dot, default: true)',
+        description: {
+          en: 'Include hidden files (starting with dot, default: true)',
+          zh: '是否包含隐藏文件（以点开头的文件，默认 true）',
+        },
       },
     },
   },

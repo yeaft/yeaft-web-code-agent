@@ -60,15 +60,24 @@ Guidelines:
     properties: {
       url: {
         type: 'string',
-        description: 'The URL to fetch',
+        description: {
+          en: 'The URL to fetch',
+          zh: '要获取的 URL',
+        },
       },
       max_length: {
         type: 'number',
-        description: 'Maximum content length in characters (default: 50000)',
+        description: {
+          en: 'Maximum content length in characters (default: 50000)',
+          zh: '最大内容长度，单位字符（默认 50000）',
+        },
       },
       raw: {
         type: 'boolean',
-        description: 'If true, return raw response without HTML stripping (for APIs)',
+        description: {
+          en: 'If true, return raw response without HTML stripping (for APIs)',
+          zh: '如果为 true，返回原始响应不去除 HTML（用于 API）',
+        },
       },
     },
     required: ['url'],

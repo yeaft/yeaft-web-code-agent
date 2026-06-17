@@ -93,15 +93,24 @@ Guidelines:
     properties: {
       pattern: {
         type: 'string',
-        description: 'Glob pattern to match files (e.g. "**/*.js")',
+        description: {
+          en: 'Glob pattern to match files (e.g. "**/*.js")',
+          zh: '匹配文件的 glob 模式（如 "**/*.js"）',
+        },
       },
       path: {
         type: 'string',
-        description: 'Directory to search in (default: cwd)',
+        description: {
+          en: 'Directory to search in (default: cwd)',
+          zh: '搜索目录（默认当前工作目录）',
+        },
       },
       limit: {
         type: 'number',
-        description: 'Maximum number of results (default: 500)',
+        description: {
+          en: 'Maximum number of results (default: 500)',
+          zh: '最多返回结果数（默认 500）',
+        },
       },
     },
     required: ['pattern'],
