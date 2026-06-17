@@ -130,7 +130,7 @@ export default {
                 </div>
                 <div class="sp-actions-row">
                   <button class="sp-btn sp-btn-muted" @click="resetSecret" :disabled="resettingSecret">
-                    {{ resettingSecret ? $t('settings.security.resetting') : $t('settings.security.resetKey') }}
+                    {{ resettingSecret ? $t('settings.security.resetting') : agentSecretActionLabel }}
                   </button>
                   <span class="sp-warning" v-if="resetConfirm">{{ $t('settings.security.resetWarning') }}</span>
                 </div>
@@ -141,6 +141,16 @@ export default {
                     <button class="sp-icon-btn" @click="copyText(agentInstallCommand)" :title="$t('common.copy')">
                       <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
                     </button>
+                  </div>
+                  <div class="sp-cmd-row">
+                    <span class="sp-cmd-label">{{ $t('settings.security.agentCmdRun') }}</span>
+                    <template v-if="agentSecret">
+                      <code class="sp-cmd">{{ agentRunCommand }}</code>
+                      <button class="sp-icon-btn" @click="copyText(agentRunCommand)" :title="$t('common.copy')">
+                        <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                      </button>
+                    </template>
+                    <span v-else class="sp-cmd sp-cmd-placeholder">{{ $t('settings.security.agentCmdNeedsSecret') }}</span>
                   </div>
                   <div class="sp-cmd-row">
                     <span class="sp-cmd-label">{{ $t('settings.security.agentCmdService') }}</span>
@@ -339,39 +349,6 @@ export default {
               </div>
             </div>
 
-            <!-- Tools -->
-            <div v-show="activeTab === 'tools'" class="settings-pane">
-              <div class="sp-group">
-                <div class="sp-group-title">MCP Servers</div>
-                <div v-if="!chatStore.currentAgent" class="sp-desc">
-                  {{ $t('settings.tools.noAgent') }}
-                </div>
-                <div v-else-if="mcpServersList.length === 0" class="sp-desc">
-                  {{ $t('settings.tools.noServers') }}
-                </div>
-                <div v-else>
-                  <div class="sp-mcp-item" v-for="server in mcpServersList" :key="server.name">
-                    <label class="sp-toggle-row">
-                      <span class="sp-toggle-info">
-                        <span class="sp-toggle-name">{{ server.name }}</span>
-                        <span class="sp-toggle-badge" :class="server.source === 'Built-in' ? 'sp-badge-builtin' : 'sp-badge-mcp'">{{ server.source }}</span>
-                      </span>
-                      <button
-                        class="sp-toggle"
-                        :class="{ active: server.enabled }"
-                        @click="toggleMcpServer(server.name, !server.enabled)"
-                        role="switch"
-                        :aria-checked="server.enabled"
-                      >
-                        <span class="sp-toggle-knob"></span>
-                      </button>
-                    </label>
-                  </div>
-                </div>
-              </div>
-              <p class="sp-desc sp-tools-hint">{{ $t('settings.tools.hint') }}</p>
-            </div>
-
             <!-- Yeaft sub-section (LLM / VPs / Search). Replaces the old
                  standalone YeaftSettings modal — everything Yeaft-scoped
                  lives behind this single nav entry. -->
@@ -538,7 +515,6 @@ export default {
         { key: 'security', label: this.$t('settings.tabs.security') }
       ];
       if (this.authStore.role === 'admin' || this.authStore.role === 'pro') {
-        tabs.push({ key: 'tools', label: this.$t('settings.tabs.tools') });
         tabs.push({ key: 'yeaft', label: this.$t('settings.tabs.yeaft') });
       }
       if (this.authStore.role === 'admin') {
@@ -588,14 +564,16 @@ export default {
     agentInstallCommand() {
       return 'npm install -g @yeaft/webchat-agent';
     },
+    agentRunCommand() {
+      if (!this.agentSecret) return '';
+      return `yeaft-agent --server ${this.serverWsUrl} --secret ${this.agentSecret} --name ${this.agentName}`;
+    },
     agentServiceCommand() {
       if (!this.agentSecret) return '';
       return `yeaft-agent install --server ${this.serverWsUrl} --secret ${this.agentSecret} --name ${this.agentName}`;
     },
-    mcpServersList() {
-      const agentId = this.chatStore.currentAgent;
-      if (!agentId) return [];
-      return this.chatStore.mcpServers[agentId] || [];
+    agentSecretActionLabel() {
+      return this.agentSecret ? this.$t('settings.security.resetKey') : this.$t('settings.security.generateKey');
     },
     ssoProviderRows() {
       const auth = this.authStore;
@@ -646,14 +624,6 @@ export default {
       } else {
         // Closing settings while a bind QR is up should tear it down too.
         if (this.authStore.qrPanel) this.cancelQrBind();
-      }
-    },
-    activeTab(val) {
-      if (val === 'tools' && this.chatStore.currentAgent) {
-        this.chatStore.sendWsMessage({
-          type: 'get_mcp_servers',
-          agentId: this.chatStore.currentAgent
-        });
       }
     },
     // When the bind QR completes (server reports status='bound'), close the
@@ -878,7 +848,7 @@ export default {
     },
 
     async resetSecret() {
-      if (!this.resetConfirm) {
+      if (this.agentSecret && !this.resetConfirm) {
         this.resetConfirm = true;
         return;
       }
@@ -1062,22 +1032,6 @@ export default {
       setTimeout(() => { this.message = ''; }, 3000);
     },
 
-    toggleMcpServer(serverName, enabled) {
-      const agentId = this.chatStore.currentAgent;
-      if (!agentId) return;
-      // Optimistic update
-      const servers = this.chatStore.mcpServers[agentId];
-      if (servers) {
-        const server = servers.find(s => s.name === serverName);
-        if (server) server.enabled = enabled;
-      }
-      // Send to server
-      this.chatStore.sendWsMessage({
-        type: 'update_mcp_config',
-        agentId,
-        config: { [serverName]: enabled }
-      });
-    },
 
     onLlmMessage(msg, isError) {
       this.showMessage(msg, isError);
