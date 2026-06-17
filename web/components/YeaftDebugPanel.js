@@ -979,28 +979,24 @@ export default {
                     <button type="button" class="yeaft-debug-dream-segment-head" @click="toggleDreamSegment(segment)">
                       <span>
                         <strong>{{ segment.id }}</strong>
-                        <em>{{ segment.kind }}</em>
-                      </span>
-                      <span>{{ segment.tags.join(', ') || '-' }}</span>
-                    </button>
-                    <div class="yeaft-debug-dream-segment-meta">
-                      <span>{{ $t('yeaft.dreamDebug.sourceMessages') }}: {{ segment.sourceMessages.join(', ') || '-' }}</span>
-                      <span>{{ $t('yeaft.dreamDebug.createdAt') }}: {{ formatTimestamp(segment.createdAt) || '-' }}</span>
-                      <span>{{ $t('yeaft.dreamDebug.updatedAt') }}: {{ formatTimestamp(segment.updatedAt) || '-' }}</span>
-                    </div>
-                    <p v-if="!isDreamSegmentExpanded(segment)" class="yeaft-debug-dream-segment-preview">{{ dreamPreview(segment.content) }}</p>
-                    <pre v-else class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ segment.content }}</pre>
-                  </article>
-                </div>
-                <div v-else class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noSegments') }}</div>
-              </section>
-
-              <section class="yeaft-debug-dream-card">
-                <div class="yeaft-debug-dream-card-title">{{ $t('yeaft.dreamDebug.requestResponse') }}</div>
-                <div v-if="activeDreamRequestEvents.length > 0" class="yeaft-debug-dream-events">
-                  <details v-for="evt in activeDreamRequestEvents" :key="dreamEventKey(evt)" class="yeaft-debug-dream-layer">
-                    <summary>{{ dreamEventPhaseLabel(evt) }} · {{ formatTimestamp(evt.at || evt.ts) || '-' }}</summary>
-                    <div class="yeaft-debug-section" v-if="evt.systemPrompt">
+                      <button type="button" class="yeaft-debug-dream-segment-head" @click="toggleDreamSegment(segment)">
+                        <span class="yeaft-debug-dream-segment-toggle" aria-hidden="true">{{ isDreamSegmentExpanded(segment) ? '−' : '+' }}</span>
+                        <span>
+                          <strong>{{ segment.id }}</strong>
+                          <em>{{ segment.kind }}</em>
+                        </span>
+                        <span>{{ segment.tags.join(', ') || '-' }}</span>
+                      </button>
+                      <div class="yeaft-debug-dream-segment-meta">
+                        <span>{{ $t('yeaft.dreamDebug.sourceMessages') }}: {{ segment.sourceMessages.join(', ') || '-' }}</span>
+                        <span>{{ $t('yeaft.dreamDebug.createdAt') }}: {{ formatTimestamp(segment.createdAt) || '-' }}</span>
+                        <span>{{ $t('yeaft.dreamDebug.updatedAt') }}: {{ formatTimestamp(segment.updatedAt) || '-' }}</span>
+                      </div>
+                      <p v-if="!isDreamSegmentExpanded(segment)" class="yeaft-debug-dream-segment-preview">{{ dreamPreview(segment.content) }}</p>
+                      <pre v-else class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ segment.content }}</pre>
+                    </article>
+                  </div>
+                  <div v-else class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noSegments') }}</div>
                       <div class="yeaft-debug-section-row"><span class="yeaft-debug-section-title">System prompt</span></div>
                       <pre class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ evt.systemPrompt }}</pre>
                     </div>

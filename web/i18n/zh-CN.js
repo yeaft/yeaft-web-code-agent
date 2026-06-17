@@ -252,9 +252,13 @@ export default {
   'yeaft.modelMenu.title': '模型和 LLM 设置',
   'yeaft.modelMenu.label': '模型',
   'yeaft.modelMenu.configureHint': 'Provider、密钥、模型列表',
-  // fix/dream-cadence-and-ui-trigger: manual dream trigger button.
-  'yeaft.dream.runNow': '立即整理记忆',
-  'yeaft.dream.lastRun': '上次：{ago}前',
+  'yeaft.modelMenu.effort': '推理强度',
+  'yeaft.modelMenu.effort.low': '低',
+  'yeaft.modelMenu.effort.medium': '中',
+  'yeaft.modelMenu.effort.high': '高',
+
+  'yeaft.modelMenu.effort.high': '高',
+
   'yeaft.dream.lastRunNever': '尚未运行',
   'yeaft.dream.entriesCreated': '{n} 条',
   'yeaft.settings.title': '设置',

@@ -1,0 +1,13 @@
+{
+  "id": "session_yeaft-ui_Y34NEBGN",
+  "name": "Yeaft-UI",
+  "roster": [
+    "omni",
+    "martin",
+    "linus"
+  ],
+  "defaultVpId": "omni",
+  "announcement": "当前项目是claude-web-chat。当前session主要针对UI前端做修改。\n所有涉及到代码开发要按照人员分工来执行，Omni是Leader，用来分析需求和优化需求， Linus为实际开发人员，可以代码开发，编写测试和架构设计，Martin来做review，各自分工明确，Omni和martin不能直接开发，开发需要forward给linus，linus做完后需要提交PR，然后forward 给Martin去做review，Martin需要把结果再route回dev，没问题后，linus再forward给Leader，让Omni去merge，成功后在main branch打tag。 \n提交PR需要用source ~/.zshrc 因为gh的key在zshrc中定义，所有代码改动需要用worktree。最重要的是如果在工作中，切记流程不要停，比如开发或者review完了，就需要forward给下一个人继续，直到整个工作执行完成。",
+  "workDir": "/home/azureuser/projects/claude-web-chat",
+  "createdAt": "2026-06-12T11:37:17.272Z"
+}

@@ -1,0 +1,11 @@
+{
+  "id": "session_yeaft-design_FJYEB39A",
+  "name": "Yeaft-Design",
+  "roster": [
+    "omni"
+  ],
+  "defaultVpId": "omni",
+  "announcement": "你可以通过source ~/.zshrc 来获得gh权限，所以命令要在这个之后",
+  "workDir": "/home/azureuser/projects/claude-web-chat",
+  "createdAt": "2026-06-12T11:16:51.041Z"
+}

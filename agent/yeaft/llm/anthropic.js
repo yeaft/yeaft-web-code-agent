@@ -153,22 +153,13 @@ export class AnthropicAdapter extends LLMAdapter {
       return new LLMServerError(`Anthropic server error: ${body}`, status);
     }
     return new Error(`Anthropic API error ${status}: ${body}`);
-  }
 
   /**
-   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'max', signal?: AbortSignal }} params
-   * @returns {AsyncGenerator<import('./adapter.js').StreamEvent>}
-   */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, signal, onRawExchange }) {
-    if (signal?.aborted) throw new LLMAbortError();
-
-    const body = {
-      model,
-      max_tokens: maxTokens,
-      system,
-      messages: this.#translateMessages(messages),
-      stream: true,
-    };
+   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'max', effortSource?: 'user'|'auto', signal?: AbortSignal }} params
+  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, signal, onRawExchange }) {
+    if ((thinkingV1Enabled() || effortSource === 'user') && normEffort) {
+  async call({ model, system, messages, maxTokens = 4096, effort, effortSource, signal }) {
+    if ((thinkingV1Enabled() || effortSource === 'user') && normEffort) {
 
     // task-327a: inject extended-thinking only when feature flag on, effort is
     // a valid value, and the model's registry entry says it supports the

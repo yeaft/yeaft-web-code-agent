@@ -2783,16 +2783,13 @@ async function ensureSessionLoaded() {
   // Per-group history is hydrated lazily on first `getOrCreateSessionHistory`
   // — there's no global "all conversations" tape any more.
 
-  sendSessionEvent({
+    conversationId: yeaftConversationId,
+    model: session.config.model,
     type: 'session_ready',
     conversationId: yeaftConversationId,
     model: session.config.model,
+    modelEffort: session.config.modelEffort || null,
     availableModels: session.config.availableModels || [],
-    skills: session.status.skills,
-    mcpServers: session.status.mcpServers,
-    tools: session.status.tools,
-    yeaftDir: ctx.CONFIG?.yeaftDir || null,
-  });
   sendSessionSnapshotBroadcast();
   // vp-status: rebuild frontend status table from authoritative agent
   // memory. Sent unconditionally so reconnect/refresh paths get the same
@@ -3416,20 +3413,22 @@ function emitQueuedTurnAbort(meta, turnId) {
   } catch { /* never crash WS pipeline */ }
 }
 
-function abortAllVpRuntime(aborted) {
+function abortAllVpRuntime(aborted, sessionId = null) {
   for (const [key, ctrl] of vpAborts) {
+    if (sessionId && !key.startsWith(`${sessionId}::`)) continue;
     try {
       if (!ctrl.signal.aborted) { ctrl.abort(); aborted.push(`vp:${key}`); }
     } catch { /* best-effort */ }
+    vpAborts.delete(key);
   }
-  vpAborts.clear();
-  for (const inbox of vpInboxes.values()) {
+  for (const [key, inbox] of vpInboxes) {
+    if (sessionId && !key.startsWith(`${sessionId}::`)) continue;
     if (Array.isArray(inbox)) inbox.length = 0;
+    if (sessionId) vpInboxes.delete(key);
   }
+  if (!sessionId) vpInboxes.clear();
 }
-
-/**
- * User-initiated abort. If threadId is provided, abort that VP thread;
+}
  * otherwise abort every in-flight VP thread in the current runtime.
  *
  * @param {{ threadId?: string }} _msg
@@ -3478,26 +3477,50 @@ export function handleYeaftAbortThread(_msg = {}) {
   abortAllVpRuntime(aborted);
   sendSessionEvent({ type: 'yeaft_aborted', aborted, all: false });
   return { aborted, all: false };
-}
-
 /**
  * Abort all in-flight Yeaft runtime work.
+ * With sessionId set, abort only work owned by that Yeaft Session.
+ *
+ * @param {{ sessionId?: string }} msg
  * @returns {{ aborted: string[], all: boolean }}
  */
-export function handleYeaftAbortAll() {
+export function handleYeaftAbortAll(msg = {}) {
+  const sessionId = typeof msg.sessionId === 'string' && msg.sessionId ? msg.sessionId : null;
   const aborted = [];
-  if (currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
+  if (!sessionId && currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
     try { currentAbortCtrl.abort(); aborted.push('main'); } catch { /* best-effort */ }
   }
-  currentAbortCtrl = null;
+  if (!sessionId) currentAbortCtrl = null;
   // Also abort all per-VP turn controllers.
   for (const [turnId, ctrl] of turnAbortCtrls) {
+    const meta = turnAbortMeta.get(turnId);
+    if (sessionId && meta?.sessionId !== sessionId) continue;
     try { if (!ctrl.signal.aborted) { ctrl.abort(); aborted.push(turnId); } } catch { /* best-effort */ }
+    turnAbortCtrls.delete(turnId);
+    turnAbortMeta.delete(turnId);
   }
-  turnAbortCtrls.clear();
-  turnAbortMeta.clear();
-  abortAllVpRuntime(aborted);
-  sendSessionEvent({ type: 'yeaft_aborted', aborted, all: true });
+    turnAbortCtrls.delete(turnId);
+    turnAbortMeta.delete(turnId);
+  }
+  if (sessionId) {
+    for (const [turnId, meta] of turnAbortMeta) {
+      if (meta?.sessionId === sessionId) turnAbortMeta.delete(turnId);
+    }
+  }
+  if (!sessionId) {
+    turnAbortCtrls.clear();
+    turnAbortMeta.clear();
+
+  return { aborted, all: true };
+}
+
+  }
+  if (!sessionId) {
+    turnAbortCtrls.clear();
+    turnAbortMeta.clear();
+  }
+  abortAllVpRuntime(aborted, sessionId);
+  sendSessionEvent({ type: 'yeaft_aborted', aborted, all: true, sessionId }, sessionId ? { sessionId } : undefined);
   return { aborted, all: true };
 }
 
@@ -3867,24 +3890,27 @@ export async function handleYeaftFetchDebugHistory(msg = {}) {
   } catch (err) {
     sendToServer({
       type: 'yeaft_debug_history',
-      loops: [],
-      turns: [],
-      dreamEvents: [],
-      error: err && err.message ? err.message : String(err),
-    });
-    return;
+  if (!session) return;
+  if (!msg.model) return;
+  session.config.model = msg.model;
+  session.config.primaryModel = msg.model;
+  session.config.modelEffort = msg.modelEffort || null;
+  // Model changed: discard cached per-VP engines so future turns use the new
+  // effective config. Existing in-flight turns keep their Engine instance.
+  vpEngines.clear();
+  sendSessionEvent({
   }
-  sendToServer({
-    type: 'yeaft_debug_history',
-    loops,
-    turns,
-    dreamEvents,
-    sessionId,
-    threadId,
+
+  session.config.model = msg.model;
+  session.config.primaryModel = msg.model;
+  session.config.modelEffort = msg.modelEffort || null;
+
+  sendSessionEvent({
+    type: 'model_switched',
+    model: msg.model,
+    modelEffort: session.config.modelEffort || null,
   });
 }
-
-/** Deprecated mode switch — Yeaft is single-mode. */
 export function handleYeaftModeSwitch(_msg) {
   console.warn('[Yeaft] yeaft_mode_switch is deprecated and ignored — Yeaft now runs in a single unified mode.');
 }
@@ -3915,12 +3941,12 @@ export function handleYeaftModelSwitch(msg) {
  * and replays them through the standard claude_output pipeline.
  *
  * Group-history-isolation (Bug 7): when `msg.sessionId` is provided the
- * replay AND the engine's bootstrap context are filtered to that group.
- * Messages tagged with another sessionId — and legacy messages with no
- * sessionId at all — are excluded so a stale `grp_default` (or any other
- * group) never bleeds into the active group's pane.
- */
-export async function handleYeaftLoadHistory(msg) {
+  session.config.model = msg.model;
+  session.config.primaryModel = msg.model;
+  session.config.modelEffort = msg.modelEffort || null;
+
+  sendSessionEvent({
+    type: 'model_switched',
   const sessionId = (msg && typeof msg.sessionId === 'string' && msg.sessionId) || null;
   // `lim` is now expressed in TURNS, not raw messages. `loadRecent` and
   // `loadRecentBySession` use turn-based slicing so the cut never lands
@@ -3934,17 +3960,14 @@ export async function handleYeaftLoadHistory(msg) {
     session = await loadSession({
       ...(yeaftDir && { dir: yeaftDir }),
       skipMCP: false,
-      skipSkills: false,
-      serverMode: true,
-    });
-    installYeaftRuntimeBridge(session);
-
-    yeaftConversationId = `yeaft-${Date.now()}`;
-    refreshLiveSessionConfig();
-    hydrateYeaftStatusFromSession(session, { reason: 'history_load', emitEvent: true });
-
-    // Per-group history hydrates lazily via getOrCreateSessionHistory.
-    // When the load-history call carries a sessionId, force-refresh THAT
+    conversationId: yeaftConversationId,
+    model: session.config.model,
+    modelEffort: session.config.modelEffort || null,
+    type: 'session_ready',
+    conversationId: yeaftConversationId,
+    model: session.config.model,
+    modelEffort: session.config.modelEffort || null,
+    language: session.config.language,
     // group's tape so the next user message sees on-disk state. When
     // it doesn't (legacy callers), do nothing — the per-group lazy
     // hydration handles it.
@@ -4246,20 +4269,18 @@ export async function resetYeaftSession() {
   threadClassifier = defaultClassifyThread;
   // History-dedup cache is keyed by per-session coordinator msg ids;
   // a fresh session resets the id space, so clear the cache too.
-  _persistedUserMsgIds.clear();
-  // vp-status: nuke the broker table too. Drivers above have just
-  // been aborted, so any in-flight `settleIdle` from their outer
-  // `finally` blocks is racing this reset. Clearing here makes the
-  // post-reset `broadcastSnapshot` (further down) emit an empty
-  // table, and the frontend mirror clears in lockstep.
-  try {
-    getVpStatusBroker().reset();
-  } catch (err) {
-    console.warn('[Yeaft] vp-status broker reset failed:', err?.message || err);
-  }
+    ready: !!session,
+    model: session.config.model,
+    modelEffort: session.config.modelEffort || null,
+    language: session.config.language,
 
   try {
-    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    getVpStatusBroker().reset();
+    ready: !!session,
+    model: session.config.model,
+    modelEffort: session.config.modelEffort || null,
+    language: session.config.language,
+
     session = await loadSession({
       ...(yeaftDir && { dir: yeaftDir }),
       skipMCP: false,

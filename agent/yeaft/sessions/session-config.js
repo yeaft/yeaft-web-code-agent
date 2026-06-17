@@ -6,16 +6,29 @@
  *
  * v1 schema (intentionally tiny — extend via additive keys only):
  *   {
- *     "model": "my-proxy/claude-sonnet-4-20250514"   // optional
+ *     "model": "my-proxy/claude-sonnet-4-20250514",  // optional
+ *     "modelEffort": "high"                          // optional
  *   }
- *
- * Missing file or `{}` → no session-level override. Missing field → fall back to user-level
- * config (`~/.yeaft/config.json` via loadConfig()). Resolution is a
- * shallow overlay for send-time effective config.
- *
- * Storage layer only — no engine wiring, no validation of model strings
- * against the provider registry (that's done lazily at resolve time by
- * the engine when it tries to dispatch to AdapterRouter).
+const ALLOWED_KEYS = new Set(['model', 'modelEffort']);
+const ALLOWED_EFFORTS = new Set(['low', 'medium', 'high']);
+  if ('model' in cfg && cfg.model !== null && cfg.model !== undefined && cfg.model !== '') {
+  }
+  if ('modelEffort' in cfg && cfg.modelEffort !== null && cfg.modelEffort !== undefined && cfg.modelEffort !== '') {
+    if (typeof cfg.modelEffort !== 'string' || !ALLOWED_EFFORTS.has(cfg.modelEffort)) {
+      throw new SessionConfigError('invalid_model_effort', 'modelEffort must be low, medium, or high');
+    }
+  }
+  if (overrides.model && typeof overrides.model === 'string' && overrides.model.trim()) {
+    base.primaryModel = model;
+  }
+  if (overrides.modelEffort && typeof overrides.modelEffort === 'string' && ALLOWED_EFFORTS.has(overrides.modelEffort)) {
+    base.modelEffort = overrides.modelEffort;
+  } else {
+    delete base.modelEffort;
+  }
+  return base;
+}
+
  */
 
 import { existsSync, readFileSync } from 'fs';
@@ -83,13 +96,14 @@ export function loadSessionConfig(yeaftDir, sessionId) {
  * @param {object} cfg
  */
 export function validateSessionConfig(cfg) {
-  if (cfg === null || cfg === undefined) return;
-  if (typeof cfg !== 'object' || Array.isArray(cfg)) {
-    throw new SessionConfigError('invalid_shape', 'config must be an object');
+    }
   }
-  for (const k of Object.keys(cfg)) {
-    if (!ALLOWED_KEYS.has(k)) {
-      throw new SessionConfigError('unknown_key', `unknown config key: ${k}`);
+  if ('modelEffort' in cfg && cfg.modelEffort !== null && cfg.modelEffort !== undefined && cfg.modelEffort !== '') {
+    if (typeof cfg.modelEffort !== 'string' || !ALLOWED_EFFORTS.has(cfg.modelEffort.trim())) {
+      throw new SessionConfigError('invalid_model_effort', 'modelEffort must be low, medium, or high');
+    }
+  }
+
     }
   }
   if ('model' in cfg && cfg.model !== null && cfg.model !== undefined && cfg.model !== '') {

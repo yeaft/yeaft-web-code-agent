@@ -22,13 +22,10 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
-import { resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
+import { join } from 'path';
+import { DEFAULT_YEAFT_DIR } from './init.js';
+import { getModelEffortOptions, modelSupportsEffort, resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
 import { normalizeKnownProviderForRuntime } from './llm/known-providers.js';
-
-/** Default configuration values. */
-const DEFAULTS = {
-  language: 'en',
-  debug: false,
   dir: DEFAULT_YEAFT_DIR,
   maxContextTokens: 200000,
   maxOutputTokens: 16384,
@@ -397,12 +394,16 @@ export function loadConfig(overrides = {}) {
             provider: p.name,
             label: m.id,
           };
+          };
           if (m.contextWindow !== undefined) entry.contextWindow = m.contextWindow;
           if (m.maxOutput !== undefined) entry.maxOutput = m.maxOutput;
+          const effortOptions = getModelEffortOptions(m.id);
+          if (effortOptions.length > 0) {
+            entry.supportsEffort = modelSupportsEffort(m.id);
+            entry.effortOptions = effortOptions;
+          }
           config.availableModels.push(entry);
         }
-      }
-    }
   }
 
   return config;

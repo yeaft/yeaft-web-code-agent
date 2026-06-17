@@ -1,0 +1,7 @@
+# Yeaft-UI
+
+Group with 3 members.
+
+**Members:** omni, martin, linus
+
+**Default VP:** omni

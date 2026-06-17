@@ -355,12 +355,52 @@ describe('Engine', () => {
       expect(secondCall.messages[2].role).toBe('tool');
       expect(secondCall.messages[2].toolCallId).toBe('call_1');
     });
+      expect(toolEnds[0].output).toBe('Search results for: test query');
+    });
 
-    it('should handle tool execution errors gracefully', async () => {
+    it('sends full live tool results to the next LLM request', async () => {
+      const largeOutput = 'x'.repeat(1500);
+
       mockAdapter.pushResponse([
-        { type: 'tool_call', id: 'call_1', name: 'failing_tool', input: {} },
+        { type: 'tool_call', id: 'call_large', name: 'large_tool', input: {} },
+        { type: 'usage', inputTokens: 20, outputTokens: 10 },
         { type: 'stop', stopReason: 'tool_use' },
       ]);
+
+      mockAdapter.pushResponse([
+        { type: 'text_delta', text: 'Done.' },
+        { type: 'usage', inputTokens: 80, outputTokens: 10 },
+        { type: 'stop', stopReason: 'end_turn' },
+      ]);
+
+      const engine = new Engine({
+        adapter: mockAdapter,
+        trace,
+        config: { model: 'test-model', maxOutputTokens: 1024 },
+      });
+
+      engine.registerTool({
+        name: 'large_tool',
+        description: 'Return a large result',
+        parameters: {},
+        execute: async () => largeOutput,
+      });
+
+      const events = [];
+      for await (const event of engine.query({ prompt: 'use large tool' })) {
+        events.push(event);
+      }
+
+      expect(events.find(e => e.type === 'tool_end')?.output).toBe(largeOutput);
+      expect(mockAdapter.callLog).toHaveLength(2);
+      const secondRequestToolMessage = mockAdapter.callLog[1].messages.find(m => m.role === 'tool');
+      expect(secondRequestToolMessage?.content).toBe(largeOutput);
+      expect(secondRequestToolMessage?.content).not.toContain('[truncated:');
+      expect(secondRequestToolMessage?.content).not.toContain('[已截断：');
+    });
+
+    it('should handle multiple tool calls in sequence', async () => {
+      mockAdapter.pushResponse([
 
       mockAdapter.pushResponse([
         { type: 'text_delta', text: 'The tool failed, sorry.' },
@@ -762,13 +802,11 @@ describe('Engine', () => {
       const engine = new Engine({
         adapter: mockAdapter,
         trace: dbTrace,
-        config: { model: 'test-model', maxOutputTokens: 1024 },
-      });
-
-      engine.registerTool({
         name: 'search',
         description: 'Search',
         parameters: {},
+        execute: async () => 'results' + 'x'.repeat(1500),
+      });
         execute: async () => 'results',
       });
 
@@ -786,13 +824,15 @@ describe('Engine', () => {
       expect(recent).toHaveLength(2);
 
       // Check tool details
-      const tools = dbTrace.queryTools({ name: 'search' });
+      const tools = dbTrace.getTools(turns[0].id);
       expect(tools).toHaveLength(1);
       expect(tools[0].tool_name).toBe('search');
-      expect(tools[0].tool_output).toBe('results');
-
-      dbTrace.close();
+      expect(tools[0].tool_output).toBe('results' + 'x'.repeat(1500));
+      expect(tools[0].tool_output).not.toContain('[truncated]');
+      expect(tools[0].tool_output).not.toContain('[已截断：');
     });
+  });
+
   });
 
   describe('existing messages', () => {

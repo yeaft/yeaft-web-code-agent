@@ -1,39 +1,14 @@
+import { sessionActivityTime } from './session-order.js';
+
 /**
  * Helpers for the Yeaft Session sidebar list.
  *
- * The sessions store preserves click/activity order. This helper only adds
- * the visual grouping metadata the sidebar needs: pinned rows first, active
- * rows marked in-place, and non-pinned active rows never crossing above the
- * pinned block.
- */
-
-/**
- * @param {unknown} value
- * @returns {number}
- */
-function timeValue(value) {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value) {
-    const parsed = Date.parse(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return 0;
-}
-
-/**
- * @param {object} session
- * @returns {number}
- */
-function activityTime(session) {
-  if (!session || typeof session !== 'object') return 0;
-  return timeValue(session.lastMessageAt)
-    || timeValue(session.updatedAt)
-    || timeValue(session.createdAt)
-    || 0;
-}
-
-/**
- * Build the Yeaft sidebar rows with Chat-like pinned-first ordering.
+ * Selection is only marked as metadata. It never affects order, otherwise
+ * switching sessions makes the list jump. Pinned sessions stay above normal
+ * sessions; both groups are sorted by real session activity time descending.
+ *
+ * @param {object} params
+ * @param {Array<object>} params.sessions
  *
  * @param {object} params
  * @param {Array<object>} params.sessions
@@ -59,22 +34,22 @@ export function buildYeaftSidebarSessionList({ sessions, activeSessionId, pinned
       raw: session,
       pinned: pinnedIndex.has(id) || !!session.pinned,
       active: id === activeId,
-      _activityTime: activityTime(session),
+      _activityTime: sessionActivityTime(session),
     });
   }
 
   rows.sort((a, b) => {
     if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-    if (a.pinned && b.pinned) {
-      const aIndex = pinnedIndex.has(a.id) ? pinnedIndex.get(a.id) : Number.MAX_SAFE_INTEGER;
-      const bIndex = pinnedIndex.has(b.id) ? pinnedIndex.get(b.id) : Number.MAX_SAFE_INTEGER;
-      if (aIndex !== bIndex) return aIndex - bIndex;
-    }
-    if (!a.pinned && !b.pinned) {
-      if (a.active !== b.active) return a.active ? -1 : 1;
-      if (a._activityTime !== b._activityTime) return b._activityTime - a._activityTime;
-    }
-    return 0;
+    if (a._activityTime !== b._activityTime) return b._activityTime - a._activityTime;
+
+    const aIndex = pinnedIndex.has(a.id) ? pinnedIndex.get(a.id) : Number.MAX_SAFE_INTEGER;
+    const bIndex = pinnedIndex.has(b.id) ? pinnedIndex.get(b.id) : Number.MAX_SAFE_INTEGER;
+    if (aIndex !== bIndex) return aIndex - bIndex;
+    return a.id.localeCompare(b.id);
+  });
+
+  return rows.map(({ _activityTime, ...row }) => row);
+
   });
 
   return rows.map(({ _activityTime, ...row }) => row);

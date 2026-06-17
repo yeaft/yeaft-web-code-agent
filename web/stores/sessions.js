@@ -16,8 +16,7 @@
 
 const { defineStore } = Pinia;
 
-/**
- * Yeaft session pin state may arrive from two server paths:
+import { sortSessionsByActivity } from './helpers/session-order.js';
  * - live agent snapshot decoration: `pinned`
  * - server DB hydration rows: `isPinned` (legacy mapped DB field)
  * Accept both so a reload cannot silently drop persisted pins.
@@ -70,12 +69,9 @@ export const useSessionsStore = defineStore('sessions', {
   getters: {
     sessionList(state) {
       const all = state.sessionOrder.map(id => state.sessions[id]).filter(Boolean);
-      // fix-yeaft-session-list-and-menu: mirror chat sidebar's pinned-first
-      // grouping while keeping the persisted sessionOrder as the source of
-      // truth for click ordering. Selecting a session mutates sessionOrder in
-      // setActive(); the getter must not temporarily float active rows, or the
-      // previous active row snaps back to its old slot and makes selection look
-      // like a swap instead of an insertion.
+      // Selection is a pure UI pointer. It must not change list order.
+      // Global pinned sessions are grouped first; both groups sort by real
+      // activity time descending on initial load/refresh and after true updates.
       const chat = _getChatStoreSafe();
       const pinnedIds = (chat && Array.isArray(chat.pinnedSessions))
         ? new Set(chat.pinnedSessions)
@@ -92,8 +88,7 @@ export const useSessionsStore = defineStore('sessions', {
         if (pinnedIds.has(s.id) || s.pinned) pinned.push(s);
         else unpinned.push(s);
       }
-      return [...pinned, ...unpinned];
-    },
+      return [...sortSessionsByActivity(pinned), ...sortSessionsByActivity(unpinned)];
     sessionCount(state) {
       return state.sessionOrder.length;
     },
@@ -337,13 +332,9 @@ export const useSessionsStore = defineStore('sessions', {
     setActive(sessionId) {
       if (sessionId && this.sessions[sessionId]) {
         this.activeSessionId = sessionId;
-        this.moveSessionToFront(sessionId);
       } else {
         this.activeSessionId = null;
       }
-    },
-
-    /**
      * Move the selected session to the top of its visual group while preserving
      * the relative order of every other row. This matches Chat session list
      * activation: selecting C in [A, B, C, D] yields [C, A, B, D], not a swap.
@@ -386,15 +377,8 @@ export const useSessionsStore = defineStore('sessions', {
         ...this.sessions[sessionId],
         pinned: !!pinned,
       };
-      // If the row just became pinned and raw order currently has unpinned
-      // rows above it, keep the backing order consistent with the visual
-      // pinned block. Unpin does not force a reorder; the getter/helper will
-      // naturally place it in the non-pinned block by existing activity order.
-      if (pinned) this.moveSessionToFront(sessionId);
     },
 
-    /** Register a request-id so components can await ok/error. */
-    markPending(requestId, op) {
       if (!requestId) return;
       this.pending[requestId] = op;
     },
