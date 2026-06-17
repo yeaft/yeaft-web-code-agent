@@ -498,31 +498,128 @@ export function loadConfig(overrides = {}) {
 /**
  * Load MCP server configuration.
  *
- * Reads from config.json "mcpServers" field first, then falls back to
- * standalone ~/.yeaft/mcp.json for backward compatibility.
+ * Merges two tiers, in priority order (highest first):
+ *   1. global  — ~/.yeaft authoritative config: config.json "mcpServers"
+ *      array, else standalone ~/.yeaft/mcp.json ({ servers: [...] }).
+ *   2. project — `<workDir>/.mcp.json` (Claude Code standard location), so a
+ *      project that integrates Claude Code works out of the box. Supplementary:
+ *      a project server whose name collides with a global one is dropped (the
+ *      explicit ~/.yeaft config wins).
  *
  * @param {string} yeaftDir
  * @param {object} [jsonConfig] — Already-parsed config.json (optional, avoids re-read)
- * @returns {{ servers: object[] }}
+ * @param {string} [workDir] — optional project working directory (project tier root)
+ * @returns {{ servers: object[], skipped: { name: string, reason: string, source: string }[] }}
  */
-export function loadMCPConfig(yeaftDir, jsonConfig) {
+export function loadMCPConfig(yeaftDir, jsonConfig, workDir) {
+  // ── Global tier: ~/.yeaft authoritative config ──
+  const globalServers = loadGlobalMCPServers(yeaftDir, jsonConfig);
+
+  // ── Project tier: <workDir>/.mcp.json (Claude Code standard) ──
+  const project = workDir
+    ? loadProjectMCPServers(workDir)
+    : { servers: [], skipped: [] };
+
+  // Dedup: global (~/.yeaft explicit config) wins over project supplements.
+  const seen = new Set(globalServers.map(s => s.name));
+  const servers = [...globalServers];
+  for (const s of project.servers) {
+    if (seen.has(s.name)) continue;
+    seen.add(s.name);
+    servers.push(s);
+  }
+
+  return { servers, skipped: project.skipped };
+}
+
+/**
+ * Load the global (~/.yeaft) MCP server list.
+ *
+ * Reads from config.json "mcpServers" field first, then falls back to
+ * standalone ~/.yeaft/mcp.json for backward compatibility. Returns a plain
+ * array (not wrapped) so `loadMCPConfig` can merge tiers.
+ *
+ * @param {string} yeaftDir
+ * @param {object} [jsonConfig]
+ * @returns {object[]}
+ */
+function loadGlobalMCPServers(yeaftDir, jsonConfig) {
   // Check config.json mcpServers field
   if (jsonConfig && Array.isArray(jsonConfig.mcpServers)) {
     const valid = jsonConfig.mcpServers.filter(s => s.name && s.command);
-    if (valid.length > 0) return { servers: valid };
+    if (valid.length > 0) return valid;
   }
 
   // Fallback: standalone mcp.json
   const mcpPath = join(yeaftDir, 'mcp.json');
-  if (!existsSync(mcpPath)) return { servers: [] };
+  if (!existsSync(mcpPath)) return [];
 
   try {
     const raw = readFileSync(mcpPath, 'utf8');
     const parsed = JSON.parse(raw);
-    if (!parsed.servers || !Array.isArray(parsed.servers)) return { servers: [] };
-    const valid = parsed.servers.filter(s => s.name && s.command);
-    return { servers: valid };
+    if (!parsed.servers || !Array.isArray(parsed.servers)) return [];
+    return parsed.servers.filter(s => s.name && s.command);
   } catch {
-    return { servers: [] };
+    return [];
   }
+}
+
+/**
+ * Parse a project's Claude Code MCP config at `<workDir>/.mcp.json`.
+ *
+ * Format (Claude Code standard):
+ *   { "mcpServers": { "<name>": { command, args?, env?, url?, type? } } }
+ *
+ * Only stdio servers (those with a `command`) are adapted into yeaft's
+ * { name, command, args?, env? } shape. SSE/HTTP servers (url/type, no
+ * command) cannot be spawned by the current MCPManager, so they're reported
+ * in `skipped` with reason 'unsupported-transport' rather than silently
+ * dropped or surfaced later as spawn failures.
+ *
+ * Robust by design: a missing file, malformed JSON, or a non-object
+ * `mcpServers` field all return gracefully with empty arrays — a broken
+ * project `.mcp.json` must never fail session creation.
+ *
+ * @param {string} workDir — project working directory
+ * @returns {{ servers: object[], skipped: { name: string, reason: string, source: string }[] }}
+ */
+export function loadProjectMCPServers(workDir) {
+  const empty = { servers: [], skipped: [] };
+  if (!workDir || typeof workDir !== 'string') return empty;
+
+  const mcpPath = join(workDir, '.mcp.json');
+  if (!existsSync(mcpPath)) return empty;
+
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(mcpPath, 'utf8'));
+  } catch {
+    return empty;
+  }
+
+  const mcpServers = parsed && parsed.mcpServers;
+  if (!mcpServers || typeof mcpServers !== 'object' || Array.isArray(mcpServers)) {
+    return empty;
+  }
+
+  const servers = [];
+  const skipped = [];
+  for (const [name, raw] of Object.entries(mcpServers)) {
+    if (!name || !raw || typeof raw !== 'object') continue;
+    if (typeof raw.command === 'string' && raw.command.length > 0) {
+      // stdio server → adapt to yeaft shape
+      const server = { name, command: raw.command };
+      if (Array.isArray(raw.args)) server.args = raw.args;
+      if (raw.env && typeof raw.env === 'object') server.env = raw.env;
+      servers.push(server);
+    } else if (typeof raw.url === 'string' || typeof raw.type === 'string') {
+      // SSE/HTTP transport — not spawnable by current MCPManager.
+      skipped.push({ name, reason: 'unsupported-transport', source: '.mcp.json' });
+    } else {
+      // No command and no url/type — malformed entry.
+      skipped.push({ name, reason: 'invalid-config', source: '.mcp.json' });
+    }
+  }
+
+  return { servers, skipped };
 }

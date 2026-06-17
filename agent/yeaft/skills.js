@@ -34,9 +34,14 @@
  *   tier 2 (user):    <yeaftDir>/skills (e.g. ~/.yeaft/skills). User edits
  *           land here. `save()` writes here. `init.js` seeds it from tier 1
  *           on first boot so users start with the full bundled set.
- *   tier 3 (project): <workDir>/.yeaft/skills (if provided). Highest
+ *   tier 3 (project-claude): <workDir>/.claude/skills (if provided). Claude
+ *           Code project assets, loaded so a Claude-Code-integrated project
+ *           works out of the box. Higher than user (project-local beats
+ *           user-global), lower than the yeaft-native project tier.
+ *   tier 4 (project): <workDir>/.yeaft/skills (if provided). Highest
  *           priority — a project can pin a skill version without affecting
- *           the user's other projects.
+ *           the user's other projects, and overrides a borrowed
+ *           `.claude/skills` skill of the same name.
  *
  * Reference: yeaft-yeaft-design.md §8, yeaft-yeaft-core-systems.md
  */
@@ -694,10 +699,16 @@ export class SkillManager {
  * Create a SkillManager wired with the standard layered tier list and load it.
  *
  * Tier order (lowest → highest priority):
- *   1. bundled — the yeaft-skills package on disk, located via
+ *   1. bundled        — the yeaft-skills package on disk, located via
  *      `bundledYeaftSkillsDir()` (typically ~/.claude/skills/yeaft-skills/skills/).
- *   2. user    — `<yeaftDir>/skills` (e.g. ~/.yeaft/skills). User edits + saves.
- *   3. project — `<workDir>/.yeaft/skills` when a workDir is provided.
+ *   2. user           — `<yeaftDir>/skills` (e.g. ~/.yeaft/skills). User edits + saves.
+ *   3. project-claude — `<workDir>/.claude/skills` when a workDir is provided.
+ *      Claude Code project assets, loaded so a project that integrates Claude
+ *      Code works out of the box. Ranks above `user` (project-local beats
+ *      user-global) but below the yeaft-native project tier.
+ *   4. project        — `<workDir>/.yeaft/skills` when a workDir is provided.
+ *      Highest priority: a yeaft-native skill pinned in the project overrides
+ *      a borrowed `.claude/skills` skill of the same name.
  *
  * `save()` / `remove()` always target the USER tier, matching Claude Code.
  *
@@ -708,12 +719,14 @@ export class SkillManager {
 export function createSkillManager(yeaftDir, workDir) {
   const bundled = bundledYeaftSkillsDir();
   const userDir = join(yeaftDir, 'skills');
+  const claudeProjectDir = workDir ? join(workDir, '.claude', 'skills') : null;
   const projectDir = workDir ? join(workDir, '.yeaft', 'skills') : null;
 
-  const dirs = [bundled, userDir, projectDir].filter(Boolean);
+  const dirs = [bundled, userDir, claudeProjectDir, projectDir].filter(Boolean);
   const tierByDir = {};
   if (bundled) tierByDir[bundled] = 'bundled';
   tierByDir[userDir] = 'user';
+  if (claudeProjectDir) tierByDir[claudeProjectDir] = 'project-claude';
   if (projectDir) tierByDir[projectDir] = 'project';
 
   const manager = new SkillManager(dirs, { userDir, tierByDir });
