@@ -1319,6 +1319,7 @@ export default {
   'yeaft.session.announcement.emptyBody': 'No announcement set. Add a message that every VP in this session will see at the top of its system prompt — useful for shared context, ground rules, or a CLAUDE.md-style brief.',
   'yeaft.session.announcement.placeholder': 'Write a shared briefing for all VPs in this session…',
   'yeaft.session.announcement.edit': 'Edit announcement',
+  'yeaft.session.announcement.editTitle': 'Edit session announcement',
   'yeaft.session.announcement.saving': 'Saving…',
   'yeaft.session.announcement.saveFailed': 'Save failed: {error}',
   'yeaft.session.announcement.openSettings': 'Open session settings',

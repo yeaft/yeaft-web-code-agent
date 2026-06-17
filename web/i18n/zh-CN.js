@@ -1315,6 +1315,7 @@ export default {
   'yeaft.session.announcement.emptyBody': '未设置会话公告。可以在这里写一段简介，会话内所有 VP 在收到消息时都会在 system prompt 顶部看到 — 适合写共同背景、规则、或 CLAUDE.md 式的指引。',
   'yeaft.session.announcement.placeholder': '为这个会话里的所有 VP 写一段共享的简介…',
   'yeaft.session.announcement.edit': '编辑公告',
+  'yeaft.session.announcement.editTitle': '编辑会话公告',
   'yeaft.session.announcement.saving': '保存中…',
   'yeaft.session.announcement.saveFailed': '保存失败：{error}',
   'yeaft.session.announcement.openSettings': '打开会话设置',
