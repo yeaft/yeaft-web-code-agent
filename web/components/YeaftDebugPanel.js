@@ -37,6 +37,8 @@ export default {
       expandedLoops: {},
       // Per-section expand state, keyed by `${turnId}#${section}`.
       expandedSections: {},
+      // Per-tool detail expand state, keyed by turn/loop/tool id.
+      expandedToolDetails: {},
       copiedFlash: null, // last copy notice key (for transient feedback)
       copiedFlashAt: 0,
       // feat-6af5f9f1 PR C: snapshot of user's expand state captured the
@@ -588,9 +590,86 @@ export default {
       if (s.length <= max) return s;
       return s.slice(0, max) + '…';
     },
-    toolsForLoop(turn, loopNumber) {
-      const all = (turn && turn.tools) || [];
-      return all.filter(t => t && t.loopNumber === loopNumber);
+    toolsForLoop(turn, loopOrNumber) {
+      const loop = typeof loopOrNumber === 'object'
+        ? loopOrNumber
+        : ((turn?.loops || []).find(l => l && l.loopNumber === loopOrNumber) || { loopNumber: loopOrNumber });
+      const loopNumber = loop?.loopNumber || 0;
+      const results = ((turn && turn.tools) || []).filter(t => t && t.loopNumber === loopNumber);
+      const usedResults = new Set();
+      const calls = Array.isArray(loop?.toolCalls) ? loop.toolCalls : [];
+      const rows = [];
+
+      for (let i = 0; i < calls.length; i++) {
+        const call = calls[i] || {};
+        const callId = call.id || call.callId || call.tool_call_id || null;
+        let resultIndex = callId
+          ? results.findIndex((r, ri) => !usedResults.has(ri) && r.callId === callId)
+          : -1;
+        if (resultIndex < 0) {
+          resultIndex = results.findIndex((r, ri) => !usedResults.has(ri) && r.name === call.name);
+        }
+        const result = resultIndex >= 0 ? results[resultIndex] : null;
+        if (resultIndex >= 0) usedResults.add(resultIndex);
+        rows.push(this.normalizeToolDebugRow(loopNumber, call, result, i));
+      }
+
+      for (let i = 0; i < results.length; i++) {
+        if (usedResults.has(i)) continue;
+        rows.push(this.normalizeToolDebugRow(loopNumber, null, results[i], rows.length));
+      }
+      return rows;
+    },
+    normalizeToolDebugRow(loopNumber, call, result, index) {
+      const hasResult = !!result;
+      const input = call && Object.prototype.hasOwnProperty.call(call, 'input') ? call.input : undefined;
+      const callId = (call && (call.id || call.callId || call.tool_call_id)) || result?.callId || null;
+      const name = (call && call.name) || result?.name || '?';
+      return {
+        loopNumber,
+        index,
+        callId,
+        name,
+        input,
+        rawCall: call || null,
+        rawResult: result || null,
+        hasResult,
+        isRunning: !hasResult,
+        isError: !!result?.isError,
+        durationMs: result?.durationMs || 0,
+        toolOutput: result?.toolOutput == null ? null : String(result.toolOutput),
+      };
+    },
+    toolDetailKey(turnId, loopNumber, tool, index = 0) {
+      return `${turnId}#${loopNumber}#${tool?.callId || tool?.name || 'tool'}#${index}`;
+    },
+    isToolDetailExpanded(turnId, loopNumber, tool, index) {
+      return !!this.expandedToolDetails[this.toolDetailKey(turnId, loopNumber, tool, index)];
+    },
+    toggleToolDetail(turnId, loopNumber, tool, index) {
+      const key = this.toolDetailKey(turnId, loopNumber, tool, index);
+      this.expandedToolDetails = { ...this.expandedToolDetails, [key]: !this.expandedToolDetails[key] };
+    },
+    toolStatusClass(tool) {
+      if (tool?.isRunning) return 'running';
+      return tool?.isError ? 'err' : 'ok';
+    },
+    toolStatusLabel(tool) {
+      if (tool?.isRunning) return this.$t ? this.$t('yeaft.debugToolRunning') : 'running';
+      return tool?.isError ? '✗' : '✓';
+    },
+    toolInputText(tool) {
+      if (!tool) return '';
+      if (tool.input !== undefined) return JSON.stringify(tool.input ?? null, null, 2);
+      if (tool.rawCall) return JSON.stringify(tool.rawCall, null, 2);
+      return JSON.stringify(tool.rawResult || tool, null, 2);
+    },
+    toolOutputText(tool) {
+      if (!tool) return '';
+      if (tool.isRunning) return this.$t ? this.$t('yeaft.debugToolRunningNoResult') : 'Running; no result yet';
+      if (tool.toolOutput != null) return tool.toolOutput;
+      if (tool.rawResult) return JSON.stringify(tool.rawResult, null, 2);
+      return '';
     },
     reflectionsForLoop(turn, loopNumber) {
       const all = (turn && turn.reflections) || [];
@@ -704,6 +783,10 @@ export default {
       } catch { /* swallow — copy is best-effort */ }
     },
     copyToolInput(turn, tool) {
+      if (tool && (tool.input !== undefined || tool.rawCall || tool.rawResult)) {
+        this.copyText(this.toolInputText(tool), 'tool input');
+        return;
+      }
       // Find the matching toolCalls entry inside the loops to fetch
       // input args verbatim. Fall back to the tool record if not found.
       for (const loop of turn.loops || []) {
@@ -717,6 +800,10 @@ export default {
       this.copyText(JSON.stringify(tool, null, 2), 'tool record');
     },
     copyToolOutput(turn, tool) {
+      if (tool && (tool.isRunning || tool.rawResult || tool.toolOutput != null)) {
+        this.copyText(this.toolOutputText(tool), 'tool output');
+        return;
+      }
       // Prefer the raw debug tool record. `loop.messages[]` contains the
       // model-context copy, which may be intentionally truncated.
       if (tool && tool.toolOutput != null) {
@@ -777,7 +864,8 @@ export default {
           lines.push('');
           lines.push(`### Tools (${tools.length})`);
           for (const t of tools) {
-            lines.push(`- ${t.name}  ${t.isError ? 'ERROR' : 'ok'}  ${this.formatMs(t.durationMs)}`);
+            const status = t.isRunning ? 'running' : (t.isError ? 'ERROR' : 'ok');
+            lines.push(`- ${t.name}  ${status}  ${t.isRunning ? '-' : this.formatMs(t.durationMs)}`);
           }
         }
         const assistantText = this.assistantResponseForLoop(loop);
@@ -1118,16 +1206,31 @@ export default {
               </div>
 
               <div class="yeaft-debug-loop-body" v-if="isLoopExpanded(turn.turnId, loop.loopNumber)">
-                <!-- Tools — list-only, copy-on-demand -->
-                <div class="yeaft-debug-section" v-if="toolsForLoop(turn, loop.loopNumber).length > 0">
-                  <div class="yeaft-debug-section-title">Tools ({{ toolsForLoop(turn, loop.loopNumber).length }})</div>
-                  <div class="yeaft-debug-tool-row" v-for="(t, ti) in toolsForLoop(turn, loop.loopNumber)" :key="ti">
-                    <span class="yeaft-debug-tool-num">#{{ ti + 1 }}</span>
-                    <span class="yeaft-debug-tool-name">{{ t.name }}</span>
-                    <span class="yeaft-debug-tool-status" :class="t.isError ? 'err' : 'ok'">{{ t.isError ? '✗' : '✓' }}</span>
-                    <span class="yeaft-debug-tool-time">{{ formatMs(t.durationMs) }}</span>
-                    <button class="yeaft-debug-copy-btn small" @click="copyToolInput(turn, t)">copy in</button>
-                    <button class="yeaft-debug-copy-btn small" @click="copyToolOutput(turn, t)">copy out</button>
+                <!-- Tools — model calls joined with completed results. -->
+                <div class="yeaft-debug-section" v-if="toolsForLoop(turn, loop).length > 0">
+                  <div class="yeaft-debug-section-title">Tools ({{ toolsForLoop(turn, loop).length }})</div>
+                  <div class="yeaft-debug-tool-item" v-for="(t, ti) in toolsForLoop(turn, loop)" :key="toolDetailKey(turn.turnId, loop.loopNumber, t, ti)">
+                    <div class="yeaft-debug-tool-row">
+                      <span class="yeaft-debug-tool-num">#{{ ti + 1 }}</span>
+                      <span class="yeaft-debug-tool-name">{{ t.name }}</span>
+                      <span class="yeaft-debug-tool-status" :class="toolStatusClass(t)">{{ toolStatusLabel(t) }}</span>
+                      <span class="yeaft-debug-tool-time">{{ t.isRunning ? '—' : formatMs(t.durationMs) }}</span>
+                      <button class="yeaft-debug-copy-btn small" @click="copyToolInput(turn, t)">copy in</button>
+                      <button class="yeaft-debug-copy-btn small" @click="copyToolOutput(turn, t)">copy out</button>
+                      <button class="yeaft-debug-copy-btn small" @click="toggleToolDetail(turn.turnId, loop.loopNumber, t, ti)">
+                        {{ isToolDetailExpanded(turn.turnId, loop.loopNumber, t, ti) ? $t('yeaft.debugHideDetails') : $t('yeaft.debugShowDetails') }}
+                      </button>
+                    </div>
+                    <div class="yeaft-debug-tool-detail" v-if="isToolDetailExpanded(turn.turnId, loop.loopNumber, t, ti)">
+                      <div class="yeaft-debug-tool-detail-col">
+                        <div class="yeaft-debug-tool-detail-title">{{ $t('yeaft.debugToolInput') }}</div>
+                        <pre>{{ toolInputText(t) }}</pre>
+                      </div>
+                      <div class="yeaft-debug-tool-detail-col">
+                        <div class="yeaft-debug-tool-detail-title">{{ $t('yeaft.debugToolResult') }}</div>
+                        <pre>{{ toolOutputText(t) }}</pre>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
