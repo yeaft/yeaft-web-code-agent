@@ -329,14 +329,14 @@
   background: var(--text-secondary);
   transition: transform 0.18s ease, background 0.15s;
 }
-/* On state: track adopts accent color; thumb turns white and slides.
-   Slide distance = track width (36) − thumb width (16) − 2× 1px border − 2× 1px inset = 16px. */
+/* On state: keep the track theme-neutral; the thumb position carries the state.
+   Slide distance = track width (36) - thumb width (16) - 2x 1px border - 2x 1px inset = 16px. */
 .mode-toggle.is-yeaft .mode-toggle-track {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--session-active);
+  border-color: var(--border-color);
 }
 .mode-toggle.is-yeaft .mode-toggle-thumb {
-  background: var(--accent-fg);
+  background: var(--text-primary);
   transform: translateX(16px);
 }
 .mode-toggle:not(.disabled):not(.is-yeaft):hover .mode-toggle-track {
