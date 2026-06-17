@@ -47,7 +47,21 @@ describe('Yeaft model selector popover contract', () => {
     expect(source).toContain('@click="selectPendingEffort(effort)"');
     expect(source).toContain('@click="applyModelSelection"');
     expect(source).toContain('@click="cancelModelSelection"');
+    expect(source).toContain('yeaft-model-option-main');
+    expect(source).toContain('yeaft-model-option-meta');
     expect(source).not.toContain('@click="selectModel(modelOptionRef(m))"');
     expect(source).not.toContain('@click="selectEffort(effort)"');
+  });
+
+  it('uses a vertical mobile layout instead of a side-by-side effort panel', async () => {
+    const { readFileSync } = await import('fs');
+    const css = readFileSync(new URL('../../web/styles/yeaft.css', import.meta.url), 'utf8');
+
+    expect(css).toContain('.yeaft-model-selector-body {\n  display: flex;\n  flex-direction: column;');
+    expect(css).toContain('@media (max-width: 640px)');
+    expect(css).toContain('.yeaft-topbar-model-dropdown {\n    position: fixed;');
+    expect(css).toContain('max-height: min(72dvh, 560px);');
+    expect(css).toContain('.yeaft-model-actions {\n    position: sticky;');
+    expect(css).not.toContain('grid-template-columns: minmax(0, 1fr) 180px;');
   });
 });
