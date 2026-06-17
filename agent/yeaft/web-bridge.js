@@ -2254,6 +2254,23 @@ function handleEngineEvent(event, hctx) {
       }, envelope);
       break;
 
+    case 'llm_retry':
+      // Engine paused before re-issuing the same turn because the LLM
+      // returned a retryable error (rate limit / 5xx / transient network).
+      // Surface to the client so the UI can show "retrying in Xs (1/3)"
+      // instead of looking frozen mid-turn.
+      sendSessionEvent({
+        type: 'llm_retry',
+        attempt: event.attempt,
+        maxRetries: event.maxRetries,
+        delayMs: event.delayMs,
+        reason: event.reason,
+        errorName: event.errorName,
+        statusCode: event.statusCode,
+        message: event.message,
+      }, envelope);
+      break;
+
     case 'reflection':
       sendSessionEvent({
         type: 'reflection',

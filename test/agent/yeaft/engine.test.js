@@ -557,7 +557,9 @@ describe('Engine', () => {
           },
         },
         trace,
-        config: { model: 'test-model', maxOutputTokens: 1024 },
+        // Disable backoff retry so the test surfaces the legacy error
+        // shape directly. The new retry policy is covered separately.
+        config: { model: 'test-model', maxOutputTokens: 1024, llmRetry: { maxRetries: 0 } },
       });
 
       const events = [];
@@ -580,7 +582,7 @@ describe('Engine', () => {
           },
         },
         trace,
-        config: { model: 'test-model', maxOutputTokens: 1024 },
+        config: { model: 'test-model', maxOutputTokens: 1024, llmRetry: { maxRetries: 0 } },
       });
 
       const events = [];
@@ -591,6 +593,144 @@ describe('Engine', () => {
       const errorEvents = events.filter(e => e.type === 'error');
       expect(errorEvents).toHaveLength(1);
       expect(errorEvents[0].retryable).toBe(true);
+    });
+  });
+
+  describe('LLM retry policy', () => {
+    it('honours server Retry-After on LLMRateLimitError and recovers', async () => {
+      const { LLMRateLimitError } = await import('../../../agent/yeaft/llm/adapter.js');
+      let attempts = 0;
+      const engine = new Engine({
+        adapter: {
+          async *stream() {
+            attempts += 1;
+            if (attempts === 1) {
+              throw new LLMRateLimitError('Too fast', 429, 50);
+            }
+            yield { type: 'text_delta', text: 'ok' };
+            yield { type: 'usage', inputTokens: 1, outputTokens: 1 };
+            yield { type: 'stop', stopReason: 'end_turn' };
+          },
+        },
+        trace,
+        config: {
+          model: 'test-model',
+          maxOutputTokens: 1024,
+          llmRetry: { maxRetries: 3, baseDelayMs: 10, maxDelayMs: 100, jitterRatio: 0 },
+        },
+      });
+
+      const events = [];
+      for await (const event of engine.query({ prompt: 'hello' })) {
+        events.push(event);
+      }
+
+      expect(attempts).toBe(2);
+      const retryEvents = events.filter(e => e.type === 'llm_retry');
+      expect(retryEvents).toHaveLength(1);
+      expect(retryEvents[0].attempt).toBe(1);
+      expect(retryEvents[0].reason).toBe('rate_limit_retry_after');
+      expect(retryEvents[0].delayMs).toBeLessThanOrEqual(50);
+      const errorEvents = events.filter(e => e.type === 'error');
+      expect(errorEvents).toHaveLength(0);
+    });
+
+    it('uses exponential backoff for LLMServerError and gives up after maxRetries', async () => {
+      const { LLMServerError } = await import('../../../agent/yeaft/llm/adapter.js');
+      let attempts = 0;
+      const engine = new Engine({
+        adapter: {
+          async *stream() {
+            attempts += 1;
+            throw new LLMServerError('bad gateway', 502);
+          },
+        },
+        trace,
+        config: {
+          model: 'test-model',
+          maxOutputTokens: 1024,
+          llmRetry: { maxRetries: 2, baseDelayMs: 5, maxDelayMs: 20, jitterRatio: 0 },
+        },
+      });
+
+      const events = [];
+      for await (const event of engine.query({ prompt: 'hello' })) {
+        events.push(event);
+      }
+
+      // First attempt + 2 retries = 3 total adapter calls.
+      expect(attempts).toBe(3);
+      const retryEvents = events.filter(e => e.type === 'llm_retry');
+      expect(retryEvents).toHaveLength(2);
+      expect(retryEvents[0].reason).toBe('transient_backoff');
+      // Backoff grows: attempt 1 uses base, attempt 2 doubles.
+      expect(retryEvents[1].delayMs).toBeGreaterThanOrEqual(retryEvents[0].delayMs);
+      const errorEvents = events.filter(e => e.type === 'error');
+      expect(errorEvents).toHaveLength(1);
+      expect(errorEvents[0].retryable).toBe(true);
+    });
+
+    it('does not retry on non-retryable error', async () => {
+      const { LLMAuthError } = await import('../../../agent/yeaft/llm/adapter.js');
+      let attempts = 0;
+      const engine = new Engine({
+        adapter: {
+          async *stream() {
+            attempts += 1;
+            throw new LLMAuthError('bad key', 401);
+          },
+        },
+        trace,
+        config: {
+          model: 'test-model',
+          maxOutputTokens: 1024,
+          llmRetry: { maxRetries: 5, baseDelayMs: 1, maxDelayMs: 5, jitterRatio: 0 },
+        },
+      });
+
+      const events = [];
+      for await (const event of engine.query({ prompt: 'hello' })) {
+        events.push(event);
+      }
+
+      expect(attempts).toBe(1);
+      expect(events.filter(e => e.type === 'llm_retry')).toHaveLength(0);
+      const errorEvents = events.filter(e => e.type === 'error');
+      expect(errorEvents).toHaveLength(1);
+      // 401 is not in the retryable allow-list at the engine event boundary.
+      expect(errorEvents[0].retryable).toBe(false);
+    });
+
+    it('stops retrying when aborted mid-backoff', async () => {
+      const { LLMRateLimitError } = await import('../../../agent/yeaft/llm/adapter.js');
+      const controller = new AbortController();
+      let attempts = 0;
+      const engine = new Engine({
+        adapter: {
+          async *stream() {
+            attempts += 1;
+            throw new LLMRateLimitError('slow down', 429, 5_000);
+          },
+        },
+        trace,
+        config: {
+          model: 'test-model',
+          maxOutputTokens: 1024,
+          llmRetry: { maxRetries: 3, baseDelayMs: 10, maxDelayMs: 5_000, jitterRatio: 0 },
+        },
+      });
+
+      // Abort right after the first retry event lands.
+      setTimeout(() => controller.abort('test'), 20);
+
+      const events = [];
+      for await (const event of engine.query({ prompt: 'hi', signal: controller.signal })) {
+        events.push(event);
+      }
+
+      expect(attempts).toBe(1);
+      expect(events.some(e => e.type === 'llm_retry')).toBe(true);
+      expect(events.some(e => e.type === 'aborted')).toBe(true);
     });
   });
 
