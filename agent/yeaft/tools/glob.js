@@ -67,7 +67,8 @@ async function* walkDir(dir, baseDir, maxDepth = 10, depth = 0) {
 
 export default defineTool({
   name: 'Glob',
-  description: `Find files matching a glob pattern.
+  description: {
+    en: `Find files matching a glob pattern.
 
 Supports glob patterns like "**/*.js", "src/**/*.ts", "*.md".
 Results are sorted by modification time (newest first).
@@ -77,20 +78,39 @@ Guidelines:
 - Common directories (node_modules, .git, etc.) are skipped
 - Returns file paths relative to the search directory
 - Limited to 500 results by default`,
+    zh: `查找匹配 glob 模式的文件。
+
+支持如 "**/*.js"、"src/**/*.ts"、"*.md" 等 glob 模式。结果按修改时间排序（最新优先）。
+
+使用指南：
+- 用 "**/" 进行递归目录匹配
+- 常见目录（node_modules、.git 等）被跳过
+- 返回相对于搜索目录的文件路径
+- 默认限制 500 条结果`
+  },
   parameters: {
     type: 'object',
     properties: {
       pattern: {
         type: 'string',
-        description: 'Glob pattern to match files (e.g. "**/*.js")',
+        description: {
+          en: 'Glob pattern to match files (e.g. "**/*.js")',
+          zh: '匹配文件的 glob 模式（如 "**/*.js"）',
+        },
       },
       path: {
         type: 'string',
-        description: 'Directory to search in (default: cwd)',
+        description: {
+          en: 'Directory to search in (default: cwd)',
+          zh: '搜索目录（默认当前工作目录）',
+        },
       },
       limit: {
         type: 'number',
-        description: 'Maximum number of results (default: 500)',
+        description: {
+          en: 'Maximum number of results (default: 500)',
+          zh: '最多返回结果数（默认 500）',
+        },
       },
     },
     required: ['pattern'],

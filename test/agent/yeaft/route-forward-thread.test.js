@@ -15,10 +15,10 @@ import {
 
 describe('route_forward thread ownership', () => {
   it('describes route_forward as the required multi-VP hand-off tool', () => {
-    expect(routeForwardTool.description).toContain('required hand-off mechanism');
-    expect(routeForwardTool.description).toContain('VP-authored @mentions');
-    expect(routeForwardTool.description).toContain('call RouteForward');
-    expect(routeForwardTool.description).toContain('same session');
+    expect(routeForwardTool.description.en).toContain('required hand-off mechanism');
+    expect(routeForwardTool.description.en).toContain('VP-authored @mentions');
+    expect(routeForwardTool.description.en).toContain('call RouteForward');
+    expect(routeForwardTool.description.en).toContain('same session');
   });
 
   afterEach(() => {

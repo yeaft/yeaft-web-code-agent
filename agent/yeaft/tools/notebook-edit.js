@@ -11,7 +11,8 @@ import { resolve } from 'path';
 
 export default defineTool({
   name: 'NotebookEdit',
-  description: `Edit a Jupyter notebook (.ipynb file) cell.
+  description: {
+    en: `Edit a Jupyter notebook (.ipynb file) cell.
 
 Actions:
 - "replace" — replace the source of a cell at the given index
@@ -20,30 +21,55 @@ Actions:
 - "read" — read the notebook content (all cells)
 
 Cell types: "code" or "markdown"`,
+    zh: `编辑 Jupyter notebook（.ipynb 文件）单元格。
+
+操作：
+- "replace" — 替换指定索引处单元格的源码
+- "insert" — 在指定索引后插入新单元格
+- "delete" — 删除指定索引处的单元格
+- "read" — 读取 notebook 内容（全部单元格）
+
+单元格类型："code" 或 "markdown"`
+  },
   parameters: {
     type: 'object',
     properties: {
       notebook_path: {
         type: 'string',
-        description: 'Path to the .ipynb file',
+        description: {
+          en: 'Path to the .ipynb file',
+          zh: '.ipynb 文件的路径',
+        },
       },
       action: {
         type: 'string',
         enum: ['replace', 'insert', 'delete', 'read'],
-        description: 'Operation to perform (default: "replace")',
+        description: {
+          en: 'Operation to perform (default: "replace")',
+          zh: '要执行的操作（默认 "replace"）',
+        },
       },
       cell_index: {
         type: 'number',
-        description: 'Cell index (0-based)',
+        description: {
+          en: 'Cell index (0-based)',
+          zh: '单元格索引（从 0 开始）',
+        },
       },
       cell_type: {
         type: 'string',
         enum: ['code', 'markdown'],
-        description: 'Cell type for insert/replace',
+        description: {
+          en: 'Cell type for insert/replace',
+          zh: '插入/替换的单元格类型',
+        },
       },
       source: {
         type: 'string',
-        description: 'New cell source content',
+        description: {
+          en: 'New cell source content',
+          zh: '新单元格的源码内容',
+        },
       },
     },
     required: ['notebook_path'],

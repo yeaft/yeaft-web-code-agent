@@ -12,7 +12,8 @@ import { isTerminalAgentStatus, isPromptableAgentStatus, STATUS, describeAgentSt
 export default defineTool({
   name: 'PromptAgent',
   aliases: ['SendMessage'],
-  description: `Send a follow-up prompt to a sub-agent you previously spawned.
+  description: {
+    en: `Send a follow-up prompt to a sub-agent you previously spawned.
 
 Use this to give the sub-agent more work, additional instructions, or relay
 information. The prompt is queued for the agent to process on its next turn.
@@ -26,16 +27,34 @@ SpawnAgent → (PromptAgent ↔ WaitAgent)+ → CloseAgent → final reply to us
 
 PromptAgent is rejected if the sub-agent is in a terminal state
 (completed/failed/closed/abandoned). Use SpawnAgent to start a fresh one.`,
+    zh: `向之前创建的子 Agent 发送后续提示。
+
+用于给子 Agent 更多工作、额外指令或传递信息。提示会排队等待子 Agent 在其下一个 turn 处理。
+
+重要——PromptAgent 仅将消息排队，不阻塞。返回后你通常需要立即调用 WaitAgent 来收集回复。
+不要在 PromptAgent 后直接结束 turn，除非：(a) 调用 WaitAgent，(b) 向用户说明你刚让子 Agent
+做了什么，或 (c) 调用 CloseAgent。编排循环为：
+SpawnAgent -> (PromptAgent <-> WaitAgent)+ -> CloseAgent -> 最终回复给用户。
+
+如果子 Agent 处于终止状态（completed/failed/closed/abandoned），PromptAgent 会被拒绝。
+用 SpawnAgent 启动新的。`
+  },
   parameters: {
     type: 'object',
     properties: {
       agent_id: {
         type: 'string',
-        description: 'The sub-agent ID (returned by Agent tool)',
+        description: {
+          en: 'The sub-agent ID (returned by Agent tool)',
+          zh: '子 Agent ID（由 Agent 工具返回）',
+        },
       },
       message: {
         type: 'string',
-        description: 'The message to send to the agent',
+        description: {
+          en: 'The message to send to the agent',
+          zh: '要发送给 Agent 的消息',
+        },
       },
     },
     required: ['agent_id', 'message'],

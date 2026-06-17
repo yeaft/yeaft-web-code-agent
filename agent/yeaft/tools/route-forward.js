@@ -27,7 +27,8 @@ import { defineTool } from './types.js';
 
 export default defineTool({
   name: 'RouteForward',
-  description: `Hand this turn off to another VP in the same session.
+  description: {
+    en: `Hand this turn off to another VP in the same session.
 
 Use this tool — NOT free-text @mentions — to route a question or task to
 another VP. VP-authored @mentions in chat text are NOT automatically routed
@@ -55,20 +56,47 @@ Rules:
     per session (throttled).
 
 Returns JSON: { ok, dispatched?, error?, detail? }.`,
+    zh: `将当前 turn 转发给同一 Session 中的其他 VP。
+
+使用此工具——而非自由文本 @mention——将问题或任务路由给其他 VP。VP 在聊天文本中写的 @mention
+不会自动路由（Session 协调器仅对用户消息做文本路由）；你必须调用 RouteForward 才能完成转交。
+
+参数：
+  - to（字符串）：目标 vpId，或字面量 "all" 向 Session 中所有其他成员广播（受 Session fan-out 上限限制）。
+  - text（字符串）：以你名义发送的消息正文。
+  - reason（字符串，可选）：转发原因的简短说明，记录在消息元数据中用于审计/界面显示。
+
+规则：
+  - 转发给自己会被拒绝（self_forward_rejected）。
+  - 转发给非成员会被拒绝（target_not_in_roster）。
+  - 转发带有 causedBy 链；超过 10 跳的链会被阻止（chain_depth_exceeded）。
+  - 同一目标在每 5 秒窗口内最多被转发 8 次（节流限制）。
+
+返回 JSON：{ ok, dispatched?, error?, detail? }。`
+  },
   parameters: {
     type: 'object',
     properties: {
       to: {
         type: 'string',
-        description: 'Target vpId, or "all" for broadcast',
+        description: {
+          en: 'Target vpId, or "all" for broadcast',
+          zh: '目标 vpId，或 "all" 广播给所有人',
+        },
       },
       text: {
         type: 'string',
-        description: 'The message body to forward',
+        description: {
+          en: 'The message body to forward',
+          zh: '要转发的消息正文',
+        },
       },
       reason: {
         type: 'string',
-        description: 'Optional: short rationale for the forward',
+        description: {
+          en: 'Optional: short rationale for the forward',
+          zh: '可选：转交的简短原因',
+        },
       },
     },
     required: ['to', 'text'],

@@ -142,7 +142,8 @@ async function nodeGrep(pattern, searchPath, options) {
 
 export default defineTool({
   name: 'Grep',
-  description: `Search file contents for a regex pattern.
+  description: {
+    en: `Search file contents for a regex pattern.
 
 Uses ripgrep (rg) when available for fast searching, with a Node.js fallback.
 
@@ -156,53 +157,101 @@ Guidelines:
 - Use glob or type filters to narrow the search
 - Skips binary files and common large directories (node_modules, .git)
 - Results are limited to 500 matches by default`,
+    zh: `用正则表达式搜索文件内容。
+
+优先使用 ripgrep (rg) 快速搜索，回退到 Node.js 实现。
+
+输出模式：
+- "content" — 显示匹配行，含文件路径和行号
+- "files_with_matches" — 仅显示匹配的文件路径（默认）
+- "count" — 显示每个文件的匹配数量
+
+使用指南：
+- 使用正则语法（特殊字符需转义：\\.、\\{ 等）
+- 用 glob 或 type 过滤缩小搜索范围
+- 跳过二进制文件和常见大目录（node_modules、.git）
+- 默认结果限制 500 条`
+  },
   parameters: {
     type: 'object',
     properties: {
       pattern: {
         type: 'string',
-        description: 'Regex pattern to search for',
+        description: {
+          en: 'Regex pattern to search for',
+          zh: '要搜索的正则表达式模式',
+        },
       },
       path: {
         type: 'string',
-        description: 'File or directory to search (default: cwd)',
+        description: {
+          en: 'File or directory to search (default: cwd)',
+          zh: '要搜索的文件或目录（默认当前工作目录）',
+        },
       },
       output_mode: {
         type: 'string',
         enum: ['content', 'files_with_matches', 'count'],
-        description: 'Output format (default: "files_with_matches")',
+        description: {
+          en: 'Output format (default: "files_with_matches")',
+          zh: '输出格式（默认 "files_with_matches"）',
+        },
       },
       glob: {
         type: 'string',
-        description: 'Glob filter for file names (e.g. "*.js", "*.{ts,tsx}")',
+        description: {
+          en: 'Glob filter for file names (e.g. "*.js", "*.{ts,tsx}")',
+          zh: '文件名 glob 过滤（如 "*.js"、"*.{ts,tsx}"）',
+        },
       },
       type: {
         type: 'string',
-        description: 'File type filter (e.g. "js", "py", "rust")',
+        description: {
+          en: 'File type filter (e.g. "js", "py", "rust")',
+          zh: '文件类型过滤（如 "js"、"py"、"rust"）',
+        },
       },
       case_insensitive: {
         type: 'boolean',
-        description: 'Case-insensitive search (default: false)',
+        description: {
+          en: 'Case-insensitive search (default: false)',
+          zh: '不区分大小写搜索（默认 false）',
+        },
       },
       context: {
         type: 'number',
-        description: 'Lines of context around matches (for "content" mode)',
+        description: {
+          en: 'Lines of context around matches (for "content" mode)',
+          zh: '匹配行周围的上下文行数（用于 "content" 模式）',
+        },
       },
       before: {
         type: 'number',
-        description: 'Lines before each match',
+        description: {
+          en: 'Lines before each match',
+          zh: '每个匹配之前显示的行数',
+        },
       },
       after: {
         type: 'number',
-        description: 'Lines after each match',
+        description: {
+          en: 'Lines after each match',
+          zh: '每个匹配之后显示的行数',
+        },
       },
       multiline: {
         type: 'boolean',
-        description: 'Enable multiline matching',
+        description: {
+          en: 'Enable multiline matching',
+          zh: '启用多行匹配',
+        },
       },
       head_limit: {
         type: 'number',
-        description: 'Limit output to first N results (default: 250)',
+        description: {
+          en: 'Limit output to first N results (default: 250)',
+          zh: '限制输出前 N 条结果（默认 250）',
+        },
       },
     },
     required: ['pattern'],

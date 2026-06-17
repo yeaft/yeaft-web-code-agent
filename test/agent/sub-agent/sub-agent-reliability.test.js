@@ -680,7 +680,7 @@ describe('wait-agent envelope shape', () => {
     expect(out.status).toBe(STATUS.RUNNING);
     expect(out.outputFile).toBeTruthy();
     expect(out.liveness).toBeTruthy();
-    expect(agentTool.description).not.toMatch(/MUST call WaitAgent next/);
+    expect(agentTool.description.en).not.toMatch(/MUST call WaitAgent next/);
     expect(out.next_steps).toMatch(/background/i);
     expect(out.next_steps).toMatch(/ListAgents/);
     expect(out.next_steps).not.toMatch(/Call WaitAgent next/i);

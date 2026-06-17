@@ -173,7 +173,8 @@ function buildEnvelope(agent, { timedOut = false } = {}) {
 
 export default defineTool({
   name: 'WaitAgent',
-  description: `Wait for a sub-agent's next state change (turn end, terminal, or wait-timeout) and retrieve a status envelope.
+  description: {
+    en: `Wait for a sub-agent's next state change (turn end, terminal, or wait-timeout) and retrieve a status envelope.
 
 Returns JSON with explicit \`status\`, latest \`result\` text, \`liveness\`
 counters (toolUseCount, tokenCount, msSinceLastEvent, recentTools), the
@@ -200,18 +201,44 @@ the sub-agent's reply yet; only you have. The orchestration loop is
 SpawnAgent → (PromptAgent ↔ WaitAgent)+ → CloseAgent → final reply to user.
 
 Compatibility tool. The default wait is a short 5000ms poll. Callers may request up to 300000ms (5 minutes), but this is no longer the primary sub-agent workflow; prefer SpawnAgent + ListAgents + completion notifications for async background work.`,
+    zh: `等待子 Agent 的下一次状态变更（turn 结束、终止或等待超时）并获取状态信封。
+
+返回 JSON，含明确的 status、最新的 result 文本、liveness 计数器（toolUseCount、tokenCount、
+msSinceLastEvent、recentTools）、可随时 Read 的持久化 outputFile 路径，以及状态相关的 next_steps
+指令告诉你下一步该调用什么。
+
+状态语义：
+  - completed / closed / failed / abandoned -> 终止。子 Agent 不再做任何事。将结果传达给用户
+    （或重试/报告失败）。
+  - idle -> 子 Agent 完成了一个 turn 并停在空队列。你可以 PromptAgent 继续或 CloseAgent 结束。
+  - timedOut=true（status='running' 且 runningInBackground=true）-> 等待时间耗尽但子 Agent
+    仍在运行。不需要再 PromptAgent。要么用更大 timeout 再次 WaitAgent，要么 CloseAgent 中断，
+    要么告知用户它仍在工作。
+
+关键——如果信封显示 stale/stalled，子 Agent 可能卡死或空转。不要反复调用 WaitAgent——向用户
+报告情况，决定是 CloseAgent（带 close_reason）还是重试。
+
+此工具保留用于向后兼容。现代异步流程请用 ListAgents 做非阻塞状态检查，依赖 turn 开始时的
+notification 获取完成事件。`
+  },
   parameters: {
     type: 'object',
     properties: {
       agent_id: {
         type: 'string',
-        description: 'The sub-agent ID to wait for',
+        description: {
+          en: 'The sub-agent ID to wait for',
+          zh: '要等待的子 Agent ID',
+        },
       },
       timeout_ms: {
         type: 'number',
         minimum: 0,
         maximum: 300000,
-        description: 'Maximum time to wait in milliseconds (default: 5000 short poll, max: 300000 / 5 minutes)',
+        description: {
+          en: 'Maximum time to wait in milliseconds (default: 5000 short poll, max: 300000 / 5 minutes)',
+          zh: '最长等待时间，单位毫秒（默认 5000 短轮询，最大 300000 / 5 分钟）',
+        },
       },
     },
     required: ['agent_id'],

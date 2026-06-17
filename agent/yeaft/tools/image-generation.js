@@ -8,7 +8,8 @@ import { defineTool } from './types.js';
 
 export default defineTool({
   name: 'ImageGeneration',
-  description: `Generate an image from a text description.
+  description: {
+    en: `Generate an image from a text description.
 
 Uses a configured image generation API to create images.
 Requires an image generation API endpoint in config.
@@ -17,21 +18,39 @@ Guidelines:
 - Provide detailed, specific descriptions for best results
 - Specify style, composition, and mood
 - Images are saved to the working directory`,
+    zh: `根据文字描述生成图片。
+
+使用配置的图片生成 API 创建图片。需要配置中设置图片生成 API 端点。
+
+使用指南：
+- 提供详细具体的描述以获得最佳效果
+- 指定风格、构图和氛围
+- 图片保存到工作目录`
+  },
   parameters: {
     type: 'object',
     properties: {
       prompt: {
         type: 'string',
-        description: 'Text description of the image to generate',
+        description: {
+          en: 'Text description of the image to generate',
+          zh: '要生成图像的文本描述',
+        },
       },
       output_path: {
         type: 'string',
-        description: 'File path to save the generated image',
+        description: {
+          en: 'File path to save the generated image',
+          zh: '保存生成图像的文件路径',
+        },
       },
       size: {
         type: 'string',
         enum: ['256x256', '512x512', '1024x1024'],
-        description: 'Image size (default: "1024x1024")',
+        description: {
+          en: 'Image size (default: "1024x1024")',
+          zh: '图像大小（默认 "1024x1024"）',
+        },
       },
     },
     required: ['prompt'],

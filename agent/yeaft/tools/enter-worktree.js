@@ -16,7 +16,8 @@ import { randomUUID } from 'crypto';
 
 export default defineTool({
   name: 'EnterWorktree',
-  description: `Create an isolated git worktree for development.
+  description: {
+    en: `Create an isolated git worktree for development.
 
 Creates a new git worktree with a dedicated branch, allowing parallel
 development without file conflicts. Useful for:
@@ -26,16 +27,31 @@ development without file conflicts. Useful for:
 
 The worktree is created in .yeaft/worktrees/ with a new branch based on HEAD.
 Returns the worktree path and branch name.`,
+    zh: `创建一个独立的 git worktree 用于开发。
+
+创建带独立分支的新 git worktree，允许并行开发无文件冲突。适用于：
+- 子 Agent 处理独立子任务
+- 合并前隔离测试改动
+- 并行功能开发
+
+Worktree 创建在 .yeaft/worktrees/ 中，基于 HEAD 创建新分支。返回 worktree 路径和分支名。`
+  },
   parameters: {
     type: 'object',
     properties: {
       name: {
         type: 'string',
-        description: 'Name for the worktree (used in path and branch name). If omitted, a random name is generated.',
+        description: {
+          en: 'Name for the worktree (used in path and branch name). If omitted, a random name is generated.',
+          zh: 'worktree 名称（用于路径和分支名）。如省略，自动生成随机名。',
+        },
       },
       base_ref: {
         type: 'string',
-        description: 'Git ref to base the worktree on (default: HEAD)',
+        description: {
+          en: 'Git ref to base the worktree on (default: HEAD)',
+          zh: '基于哪个 Git 引用创建（默认 HEAD）',
+        },
       },
     },
   },
