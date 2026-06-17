@@ -1710,8 +1710,7 @@
   }
 
   .yeaft-topbar-model-name {
-    max-width: 120px;
-    font-size: 12px;
+    display: none;
   }
 
   .yeaft-topbar {
