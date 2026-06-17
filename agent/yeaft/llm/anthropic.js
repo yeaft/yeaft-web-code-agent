@@ -39,11 +39,29 @@ const API_VERSION = '2023-06-01';
 export class AnthropicAdapter extends LLMAdapter {
   #apiKey;
   #baseUrl;
+  #authHeaderMode;
 
-  constructor({ apiKey, baseUrl = DEFAULT_BASE_URL }) {
+  /**
+   * @param {{ apiKey: string, baseUrl?: string, authHeaderMode?: 'x-api-key'|'bearer' }} config
+   */
+  constructor({ apiKey, baseUrl = DEFAULT_BASE_URL, authHeaderMode = 'x-api-key' }) {
     super({ apiKey, baseUrl });
     this.#apiKey = apiKey;
     this.#baseUrl = baseUrl;
+    this.#authHeaderMode = authHeaderMode === 'bearer' ? 'bearer' : 'x-api-key';
+  }
+
+  #headers() {
+    const headers = {
+      'Content-Type': 'application/json',
+      'anthropic-version': API_VERSION,
+    };
+    if (this.#authHeaderMode === 'bearer') {
+      headers.Authorization = `Bearer ${this.#apiKey}`;
+    } else {
+      headers['x-api-key'] = this.#apiKey;
+    }
+    return headers;
   }
 
   /**
@@ -136,23 +154,24 @@ export class AnthropicAdapter extends LLMAdapter {
    * @param {string} body
    */
   #classifyError(status, body) {
+    const authHint = `auth=${this.#authHeaderMode}`;
     if (status === 401 || status === 403) {
-      return new LLMAuthError(`Anthropic auth error: ${body}`, status);
+      return new LLMAuthError(`Anthropic auth error (${authHint}): ${body}`, status);
     }
     if (status === 429) {
       const retryAfter = null; // Could parse retry-after header
-      return new LLMRateLimitError(`Anthropic rate limit: ${body}`, status, retryAfter);
+      return new LLMRateLimitError(`Anthropic rate limit (${authHint}): ${body}`, status, retryAfter);
     }
     if (status === 529) {
-      return new LLMRateLimitError(`Anthropic overloaded: ${body}`, status);
+      return new LLMRateLimitError(`Anthropic overloaded (${authHint}): ${body}`, status);
     }
     if (body.includes('prompt is too long') || body.includes('max_tokens')) {
-      return new LLMContextError(`Anthropic context error: ${body}`);
+      return new LLMContextError(`Anthropic context error (${authHint}): ${body}`);
     }
     if (status >= 500) {
-      return new LLMServerError(`Anthropic server error: ${body}`, status);
+      return new LLMServerError(`Anthropic server error (${authHint}): ${body}`, status);
     }
-    return new Error(`Anthropic API error ${status}: ${body}`);
+    return new Error(`Anthropic API error ${status} (${authHint}): ${body}`);
   }
 
   /**
@@ -194,11 +213,7 @@ export class AnthropicAdapter extends LLMAdapter {
     if (translatedTools) body.tools = translatedTools;
 
     const url = `${this.#baseUrl}/v1/messages`;
-    const headers = {
-      'Content-Type': 'application/json',
-      'x-api-key': this.#apiKey,
-      'anthropic-version': API_VERSION,
-    };
+    const headers = this.#headers();
 
     // Expose the raw request (auth-redacted) for the debug panel. The body
     // is captured verbatim — never truncated — so "copy request" matches
@@ -453,11 +468,7 @@ export class AnthropicAdapter extends LLMAdapter {
 
     const response = await fetch(`${this.#baseUrl}/v1/messages`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': this.#apiKey,
-        'anthropic-version': API_VERSION,
-      },
+      headers: this.#headers(),
       body: JSON.stringify(body),
       signal,
     });
