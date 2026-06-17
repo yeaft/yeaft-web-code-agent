@@ -185,6 +185,41 @@ describe('tool result raw storage boundaries', () => {
     expect(YeaftDebugPanel.methods.toolOutputText.call(ctx, rows[2])).toBe('Running; no result yet');
   });
 
+  it('does not attach same-name results to the wrong pending call', () => {
+    const ctx = {
+      ...YeaftDebugPanel.methods,
+      $t(key) {
+        return {
+          'yeaft.debugToolRunningNoResult': 'Running; no result yet',
+        }[key] || key;
+      },
+    };
+    const loop = {
+      loopNumber: 7,
+      toolCalls: [
+        { id: 'call_a', name: 'FileRead', input: { file_path: 'a.md' } },
+        { id: 'call_b', name: 'FileRead', input: { file_path: 'b.md' } },
+        { id: 'call_c', name: 'FileRead', input: { file_path: 'c.md' } },
+      ],
+    };
+    const turn = {
+      turnId: 'turn_same_name',
+      loops: [loop],
+      tools: [
+        { loopNumber: 7, callId: 'call_b', name: 'FileRead', durationMs: 11, isError: false, toolOutput: 'b output' },
+        { loopNumber: 7, callId: 'call_c', name: 'FileRead', durationMs: 13, isError: true, toolOutput: 'c error' },
+      ],
+    };
+
+    const rows = YeaftDebugPanel.methods.toolsForLoop.call(ctx, turn, loop);
+    expect(rows).toHaveLength(3);
+    expect(rows.map(r => r.callId)).toEqual(['call_a', 'call_b', 'call_c']);
+    expect(rows[0]).toMatchObject({ isRunning: true, hasResult: false, toolOutput: null });
+    expect(YeaftDebugPanel.methods.toolOutputText.call(ctx, rows[0])).toBe('Running; no result yet');
+    expect(rows[1]).toMatchObject({ isRunning: false, isError: false, toolOutput: 'b output' });
+    expect(rows[2]).toMatchObject({ isRunning: false, isError: true, toolOutput: 'c error' });
+  });
+
   it('tracks tool detail expansion by turn loop and call id', () => {
     const ctx = {
       ...YeaftDebugPanel.methods,

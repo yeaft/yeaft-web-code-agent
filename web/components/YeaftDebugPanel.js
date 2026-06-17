@@ -607,7 +607,12 @@ export default {
           ? results.findIndex((r, ri) => !usedResults.has(ri) && r.callId === callId)
           : -1;
         if (resultIndex < 0) {
-          resultIndex = results.findIndex((r, ri) => !usedResults.has(ri) && r.name === call.name);
+          // Only fall back to name matching for legacy records that have no
+          // call id. Never attach another modern call's result by name: loops
+          // commonly contain several same-name tools running in parallel.
+          resultIndex = results.findIndex((r, ri) => !usedResults.has(ri)
+            && !r.callId
+            && r.name === call.name);
         }
         const result = resultIndex >= 0 ? results[resultIndex] : null;
         if (resultIndex >= 0) usedResults.add(resultIndex);
