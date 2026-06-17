@@ -17,7 +17,8 @@ import { defineTool } from './types.js';
 
 export default defineTool({
   name: 'Skill',
-  description: `Load and query skills from the Yeaft skill library.
+  description: {
+    en: `Load and query skills from the Yeaft skill library.
 
 Skills are specialized behaviors or workflows in ~/.yeaft/skills/.
 Two formats supported:
@@ -29,29 +30,57 @@ Actions:
 - "view" — view a skill's full content. For directory skills, also lists linked files. Pass filePath to read a specific reference/template.
 - "search" — find relevant skills for a query string
 - "load" — alias for "view" (backward compatible)`,
+    zh: `从 Yeaft skill 库加载和查询 skill。
+
+Skill 是 ~/.yeaft/skills/ 中的专用行为或工作流。
+支持两种格式：
+- 单文件：skills/my-skill.md
+- 目录：skills/my-skill/SKILL.md + references/ + templates/
+
+动作：
+- "list" — 列出所有 skill（仅元数据：名称、描述、分类）
+- "view" — 查看 skill 的完整内容。目录式 skill 还会列出关联文件。传 filePath 可读取特定引用/模板
+- "search" — 为查询字符串查找相关 skill
+- "load" — "view" 的别名（向后兼容）`,
+  },
   parameters: {
     type: 'object',
     properties: {
       action: {
         type: 'string',
         enum: ['list', 'view', 'load', 'search'],
-        description: '"list" lists all skills, "view"/"load" loads a specific skill, "search" finds relevant skills',
+        description: {
+          en: '"list" lists all skills, "view"/"load" loads a specific skill, "search" finds relevant skills',
+          zh: '"list" 列出所有 skill，"view"/"load" 加载特定 skill，"search" 查找相关 skill',
+        },
       },
       name: {
         type: 'string',
-        description: 'Skill name (for "view"/"load" action)',
+        description: {
+          en: 'Skill name (for "view"/"load" action)',
+          zh: 'Skill 名称（用于 "view"/"load" 动作）',
+        },
       },
       query: {
         type: 'string',
-        description: 'Search query (for "search" action)',
+        description: {
+          en: 'Search query (for "search" action)',
+          zh: '搜索查询（用于 "search" 动作）',
+        },
       },
       filePath: {
         type: 'string',
-        description: 'Read a linked file from a directory skill (e.g. "references/style-guide.md")',
+        description: {
+          en: 'Read a linked file from a directory skill (e.g. "references/style-guide.md")',
+          zh: '读取目录式 skill 的关联文件（如 "references/style-guide.md"）',
+        },
       },
       category: {
         type: 'string',
-        description: 'Filter by category (for "list" action)',
+        description: {
+          en: 'Filter by category (for "list" action)',
+          zh: '按分类过滤（用于 "list" 动作）',
+        },
       },
     },
     required: ['action'],

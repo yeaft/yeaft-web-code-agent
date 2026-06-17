@@ -25,7 +25,8 @@ const VALID_STATUS = new Set(['pending', 'in_progress', 'completed']);
 
 export default defineTool({
   name: 'TodoWrite',
-  description: `Track multi-step task progress with a checklist that the user can see ticked off in real time.
+  description: {
+    en: `Track multi-step task progress with a checklist that the user can see ticked off in real time.
 
 WHEN TO USE:
 - The task has 3+ meaningful steps, or
@@ -40,27 +41,55 @@ HOW TO USE:
 
 WHEN NOT TO USE:
 - Single trivial change, single command run, pure conversation/question.`,
+    zh: `用清单跟踪多步骤任务进度，用户可以实时看到勾选状态。
+
+何时使用：
+- 任务有 3 个以上有意义的步骤，或
+- 用户给了你一个待办事项列表（编号/逗号分隔），或
+- 你即将开始一个非平凡的多文件改动。
+
+如何使用：
+- 首次调用：枚举所有待办项，状态为 "pending"，恰好一项为 "in_progress"
+- 后续每次调用：重写完整清单 — 将刚完成的标记为 "completed"，下一项标记为 "in_progress"
+- 任何时候最多只能有一项为 "in_progress"
+- \`content\` 是命令式描述（如 "Run tests"）；\`activeForm\` 是执行中展示的进行时（如 "Running tests"）
+
+何时不使用：
+- 单条琐碎修改、单次命令执行、纯对话/问题。`,
+  },
   parameters: {
     type: 'object',
     properties: {
       todos: {
         type: 'array',
-        description: 'The full current todo list. Always send the entire list, not a diff.',
+        description: {
+          en: 'The full current todo list. Always send the entire list, not a diff.',
+          zh: '当前完整的待办清单。始终发送整个列表，而非增量。',
+        },
         items: {
           type: 'object',
           properties: {
             content: {
               type: 'string',
-              description: 'Imperative description of the step (e.g. "Run tests").',
+              description: {
+                en: 'Imperative description of the step (e.g. "Run tests").',
+                zh: '步骤的命令式描述（如 "Run tests"）。',
+              },
             },
             status: {
               type: 'string',
               enum: ['pending', 'in_progress', 'completed'],
-              description: 'Current state. At most one item may be "in_progress".',
+              description: {
+                en: 'Current state. At most one item may be "in_progress".',
+                zh: '当前状态。最多只能有一项为 "in_progress"。',
+              },
             },
             activeForm: {
               type: 'string',
-              description: 'Present-continuous form shown while executing (e.g. "Running tests").',
+              description: {
+                en: 'Present-continuous form shown while executing (e.g. "Running tests").',
+                zh: '执行中展示的进行时描述（如 "Running tests"）。',
+              },
             },
           },
           required: ['content', 'status', 'activeForm'],

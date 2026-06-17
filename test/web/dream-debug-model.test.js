@@ -88,6 +88,14 @@ describe('Dream debug model', () => {
     expect(css).toMatch(/\.yeaft-debug-scroll-pre\s*\{[\s\S]*?overflow:\s*auto;/);
   });
 
+  it('keeps ids out of list subtitle and shows search no-results empty state in the component template', () => {
+    const component = readFileSync(resolve(repoRoot, 'web/components/YeaftDebugPanel.js'), 'utf8');
+
+    expect(component).toContain("item.subtitle || $t('yeaft.dreamDebug.noSummary')");
+    expect(component).not.toContain("item.summaryPreview || item.scope");
+    expect(component).toContain("allDreamItems.length ? $t('yeaft.dreamDebug.noSearchResults') : $t('yeaft.dreamDebug.empty')");
+  });
+
   it('uses readable session titles while keeping ids as metadata', () => {
     const items = buildDreamDebugItems({
       snapshots: {
@@ -108,6 +116,22 @@ describe('Dream debug model', () => {
     expect(items[0].sessionId).toBe('session_internal_123');
     expect(items[0].scope).toBe('sessions/session_internal_123');
     expect(items[0].title).not.toContain('session_internal_123');
+  });
+
+  it('does not use scope or session id as the visible list subtitle', () => {
+    const items = buildDreamDebugItems({
+      latest: {
+        'sessions/session_without_summary': { status: 'never-ran', startedAt: '2026-06-02T10:00:00Z' },
+      },
+      sessionTitles: {
+        session_without_summary: 'Readable session',
+      },
+    });
+
+    expect(items[0].title).toBe('Readable session');
+    expect(items[0].subtitle).toBe('');
+    expect(items[0].subtitle).not.toContain('session_without_summary');
+    expect(items[0].subtitle).not.toContain('sessions/session_without_summary');
   });
 
   it('falls back to a summary heading only when no session title is available', () => {

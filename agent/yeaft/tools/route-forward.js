@@ -27,16 +27,22 @@ import { defineTool } from './types.js';
 
 export default defineTool({
   name: 'RouteForward',
-  description: `Hand this turn off to another VP in the same group.
+  description: {
+    en: `Hand this turn off to another VP in the same session.
 
 Use this tool — NOT free-text @mentions — to route a question or task to
 another VP. VP-authored @mentions in chat text are NOT automatically routed
-(the group coordinator only text-routes for user messages); you must call
-RouteForward for the hand-off to take effect.
+(the coordinator only text-routes user messages); you must call RouteForward
+for the hand-off to take effect.
+
+In a multi-VP session, treat RouteForward as the required hand-off mechanism:
+- If the user names another VP, call RouteForward to that vpId.
+- If another VP clearly owns the domain or should continue the work, call RouteForward instead of only mentioning them.
+- If the task needs parallel collaboration, call RouteForward to that vpId or "all".
 
 Arguments:
   - to (string): target vpId, or the literal "all" to broadcast to every
-    other member of the group (subject to the per-group fan-out cap).
+    other member of the session (subject to the session fan-out cap).
   - text (string): the message body to send on your behalf.
   - reason (string, optional): short rationale for the forward, recorded on
     the message meta for audit / UI display.
@@ -47,19 +53,42 @@ Rules:
   - Forwards carry a causedBy chain; chains deeper than 10 hops are blocked
     (chain_depth_exceeded).
   - A single target may be forwarded to at most 8 times per 5-second window
-    per group (throttled).
+    per session (throttled).
 
 Returns JSON: { ok, dispatched?, error?, detail? }.`,
-  parameters: {
+    zh: `将当前 turn 转交给同一 session 中的另一个 VP。
+
+使用此工具 — 而不是在聊天文本中 @提及 — 将问题或任务路由给其他 VP。
+VP 在聊天文本中写的 @提及不会自动路由（协调器只对用户消息做文本路由）；
+你必须调用 RouteForward 才能使转交生效。
+
+在多 VP session 中，将 RouteForward 视为必需的转交机制：
+- 如果用户点名另一个 VP，调用 RouteForward 到该 vpId
+- 如果另一个 VP 明显负责该领域或应继续工作，调用 RouteForward 而不是仅仅提及他们
+- 如果任务需要并行协作，调用 RouteForward 到目标 vpId 或 "all"
+
+参数：
+  - to (string)：目标 vpId，或字面量 "all" 广播给 session 中所有其他成员
+  - text (string)：以你的名义发送的消息正文
+  - reason (string, 可选)：转交的简短原因，记录在消息元数据中用于审计/UI 展示
+
+规则：
+  - 转交给自身会被拒绝（self_forward_rejected）
+  - 转交给非成员会被拒绝（target_not_in_roster）
+  - 转发带有 causedBy 链；超过 10 跳的链会被阻断（chain_depth_exceeded）
+  - 同一 session 中每个目标在 5 秒窗口内最多被转发 8 次（throttled）
+
+返回 JSON：{ ok, dispatched?, error?, detail? }。`,
+  },   parameters: {
     type: 'object',
     properties: {
       to: {
         type: 'string',
-        description: 'Target vpId, or "all" for broadcast',
+        description: { en: 'Target vpId, or "all" for broadcast', zh: '目标 vpId，或 "all" 广播给所有人' },
       },
       text: {
         type: 'string',
-        description: 'The message body to forward',
+        description: { en: 'The message body to forward', zh: '要转发的消息正文' },
       },
       reason: {
         type: 'string',

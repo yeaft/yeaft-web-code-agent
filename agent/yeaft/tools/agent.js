@@ -216,7 +216,8 @@ export function tickAgent(agentId, delta = {}, now = Date.now()) {
 export default defineTool({
   name: 'SpawnAgent',
   aliases: ['Agent'],
-  description: `Create a sub-agent to work on an independent task in parallel.
+  description: {
+    en: `Create a sub-agent to work on an independent task in parallel.
 
 Sub-agents run in their own context and can be given a concrete mission
 with an optional expected_output schema. Optional budget limits
@@ -235,43 +236,57 @@ Guidelines:
 Async orchestration:
   1. SpawnAgent  — starts the sub-agent as a background task and returns immediately.
   2. Continue    — keep working in the parent VP; do not block just to poll.
-  3. ListAgents  — non-blocking status check when you need progress/liveness.
-  4. PromptAgent — optional follow-up if the sub-agent is idle and needs guidance.
-  5. CloseAgent  — stop or finalize a sub-agent when it is no longer needed.
+  3. ListAgents  — non-blocking status check (see that tool's description).`,
+    zh: `创建子 Agent 并行处理独立任务。
 
-Completion/failure is delivered through sub-agent notifications on later parent
-turns. WaitAgent remains available only as a short compatibility poll; do not
-use it as the default workflow or call it repeatedly in a loop.`,
+子 Agent 在独立上下文中运行，可指定具体任务和可选的期望输出 schema。
+可选的预算限制（max_tokens/max_turns/wall_time_ms）仅在提供时作为安全截断。
+选择预设 persona 来预装工具子集和模型等级：
+  - explorer   : 快速只读侦察（Read/Grep/Glob/ListDir）
+  - implementer: 拥有完整工作工具的构建者（主模型）
+  - reviewer   : 只读审查者（主模型）
+  - researcher : 面向网络的信息收集者（WebSearch/WebFetch/Read）
+
+使用指南：
+- 给出清晰、聚焦的任务 — "完成"是什么样子
+- 当返回结构重要时使用 expected_output
+- 仅在需要显式安全截断时添加预算
+
+异步编排：
+  1. SpawnAgent  — 启动子 Agent 作为后台任务，立即返回
+  2. Continue    — 在父 VP 中继续工作；不要阻塞轮询
+  3. ListAgents  — 非阻塞状态查看（见该工具的描述）`,
+  },
   parameters: {
     type: 'object',
     properties: {
       name: {
         type: 'string',
-        description: 'A descriptive name for the sub-agent (e.g. "test-writer", "refactor-auth")',
+        description: { en: 'A descriptive name for the sub-agent (e.g. "test-writer", "refactor-auth")', zh: '子 Agent 的描述性名称（如 "test-writer"、"refactor-auth"）' },
       },
       task: {
         type: 'string',
-        description: 'Legacy one-line task description (used if `mission` is omitted)',
+        description: { en: 'Legacy one-line task description (used if `mission` is omitted)', zh: '旧式单行任务描述（当 `mission` 省略时使用）' },
       },
       mission: {
         type: 'string',
-        description: 'Concrete mission statement — what this agent must accomplish',
+        description: { en: 'Concrete mission statement — what this agent must accomplish', zh: '具体任务陈述 — 该 Agent 必须完成什么' },
       },
       expected_output: {
         type: 'object',
-        description: 'JSON schema describing the structure the agent should return',
+        description: { en: 'JSON schema describing the structure the agent should return', zh: '描述 Agent 应返回结构的 JSON schema' },
       },
       persona: {
         type: 'string',
         enum: ['explorer', 'implementer', 'reviewer', 'researcher'],
-        description: 'Preset persona that pre-wires tool subset + model tier',
+        description: { en: 'Preset persona that pre-wires tool subset + model tier', zh: '预设 persona，预装工具子集和模型等级' },
       },
       budget: {
         type: 'object',
         properties: {
-          max_tokens: { type: 'number', description: 'Optional token ceiling; no default limit is applied' },
-          max_turns: { type: 'number', description: 'Optional turn ceiling; no default limit is applied' },
-          wall_time_ms: { type: 'number', description: 'Optional elapsed-time ceiling in milliseconds; no default limit is applied' },
+          max_tokens: { type: 'number', description: { en: 'Optional token ceiling; no default limit is applied', zh: '可选 token 上限；默认不设限制' } },
+          max_turns: { type: 'number', description: { en: 'Optional turn ceiling; no default limit is applied', zh: '可选 turn 上限；默认不设限制' } },
+          wall_time_ms: { type: 'number', description: { en: 'Optional elapsed-time ceiling in milliseconds; no default limit is applied', zh: '可选耗时上限（毫秒）；默认不设限制' } },
         },
         description: 'Optional safety limits; no max_tokens/max_turns/wall_time_ms defaults are applied. Exceeding an explicit limit returns { status: "budget_exceeded", partial_output, reason }',
       },

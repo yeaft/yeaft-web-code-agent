@@ -53,7 +53,8 @@ function getContext() {
 
 export const jsRepl = defineTool({
   name: 'JsRepl',
-  description: `Evaluate JavaScript code in a persistent REPL environment.
+  description: {
+    en: `Evaluate JavaScript code in a persistent REPL environment.
 
 The REPL context persists across calls — variables and functions
 defined in one call are available in subsequent calls.
@@ -66,16 +67,34 @@ Guidelines:
 - console.log output is captured and returned
 - Returns the last expression's value plus any console output
 - No filesystem or network access from within the REPL`,
+    zh: `在持久化 REPL 环境中执行 JavaScript 代码。
+
+REPL 上下文在多次调用间保持 — 一次调用中定义的变量和函数在后续调用中仍然可用。
+
+使用指南：
+- 用于计算、数据转换和快速实验
+- 状态在调用间保持
+- 传 \`reset: true\` 在求值前清空所有状态（干净环境），此时 \`code\` 可省略（仅重置）
+- console.log 输出被捕获并返回
+- 返回最后一个表达式的值及所有 console 输出
+- REPL 内无文件系统或网络访问`,
+  },
   parameters: {
     type: 'object',
     properties: {
       code: {
         type: 'string',
-        description: 'JavaScript code to evaluate. Optional when reset=true and you only want to clear state.',
+        description: {
+          en: 'JavaScript code to evaluate. Optional when reset=true and you only want to clear state.',
+          zh: '要执行的 JavaScript 代码。当 reset=true 且只想清空状态时可省略。',
+        },
       },
       reset: {
         type: 'boolean',
-        description: 'When true, reset the REPL context BEFORE evaluating `code`. If `code` is omitted, just resets.',
+        description: {
+          en: 'When true, reset the REPL context BEFORE evaluating `code`. If `code` is omitted, just resets.',
+          zh: '为 true 时，在求值前先重置 REPL 上下文。若省略 code，则仅重置。',
+        },
       },
     },
   },
@@ -136,7 +155,10 @@ function warnJsReplResetDeprecated() {
 
 export const jsReplReset = defineTool({
   name: 'JsReplReset',
-  description: 'DEPRECATED — use JsRepl with `reset: true` instead. Resets the persistent REPL context. Removal target: v0.2.0.',
+  description: {
+    en: 'DEPRECATED — use JsRepl with `reset: true` instead. Resets the persistent REPL context. Removal target: v0.2.0.',
+    zh: '已弃用 — 请改用 JsRepl 并设置 `reset: true`。重置持久化 REPL 上下文。计划在 v0.2.0 移除。',
+  },
   parameters: { type: 'object', properties: {} },
   isConcurrencySafe: () => false,
   isReadOnly: () => false,

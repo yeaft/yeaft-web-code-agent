@@ -148,9 +148,10 @@ function formatBytes(n) {
 
 export default defineTool({
   name: 'ViewImage',
-  description: `Load a local image file and attach it to the conversation so the LLM can see it.
+  description: {
+    en: `Load a local image file and attach it to the conversation so the LLM can see it.
 
-Returns a base64 data URI (\`image\` field) plus metadata (format, dimensions,
+Returns a base64 data URI (image field) plus metadata (format, dimensions,
 size). The caller/bridge is responsible for turning the data URI into the
 provider-specific image content block.
 
@@ -166,23 +167,38 @@ When NOT to call:
   - The image is a remote URL (http/https). ViewImage only reads local
     files; use a fetch-style tool for URLs.
   - You only need the file's existence / mtime / size — use Read or a
-    filesystem tool instead; ViewImage loads the full bytes into memory.
+    filesystem tool instead; ViewImage loads the full bytes into memory.`,
+    zh: `加载本地图片文件并附加到对话中，使 LLM 可以看到它。
 
-Path examples:
-  - Relative (resolved against project cwd): "./screenshots/bug.png",
-    "docs/assets/arch.png"
-  - Absolute inside an allowlisted dir: "/home/user/Downloads/error.png"
-    (only works when the host added that dir to ctx.imageAllowlist)
+返回 base64 data URI（image 字段）及元数据（格式、尺寸、大小）。
+调用方/桥接层负责将 data URI 转为 provider 特定的 image content block。
 
-Supported formats: PNG, JPEG (.jpg/.jpeg/.jfif), GIF, WebP.
-Max size: 20 MiB by default (configurable via ctx.maxImageBytes).
-Path must live under the project directory or an explicit host allowlist.`,
+何时调用：
+  - 用户引用本地图片路径（截图、设计稿、日志/图表）并要求读取、分析或描述
+  - 用户说"看看这个文件"/"检查 ... 的截图"/"docs/assets/arch.png 里有什么"
+
+何时不调用：
+  - 图片已附加到当前消息中（宿主已上传 — 无需此工具即可看到）
+  - 图片是远程 URL（http/https）。ViewImage 只读本地文件；远程 URL 用 fetch 类工具
+  - 你只需要文件是否存在/修改时间/大小 — 用 Read 或文件系统工具；ViewImage 会将完整文件加载到内存
+
+路径示例：
+  - 相对路径（相对于项目工作目录解析）："./screenshots/bug.png"、"docs/assets/arch.png"
+  - 允许列表中的绝对路径："/home/user/Downloads/error.png"（仅在宿主将该目录添加到 ctx.imageAllowlist 时有效）
+
+支持的格式：PNG、JPEG（.jpg/.jpeg/.jfif）、GIF、WebP。
+最大大小：默认 20 MiB（可通过 ctx.maxImageBytes 配置）。
+路径必须在项目目录或显式宿主允许列表下。`,
+  },
   parameters: {
     type: 'object',
     properties: {
       file_path: {
         type: 'string',
-        description: 'Path to the image file. Relative paths are resolved against the project cwd.',
+        description: {
+          en: 'Path to the image file. Relative paths are resolved against the project cwd.',
+          zh: '图片文件路径。相对路径相对于项目工作目录解析。',
+        },
       },
     },
     required: ['file_path'],

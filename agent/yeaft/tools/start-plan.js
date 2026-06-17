@@ -40,7 +40,8 @@ import { getDefaultPlanInstruction } from '../prompts.js';
 
 export default defineTool({
   name: 'StartPlan',
-  description: `Enter planning mode for a non-trivial task. Use BEFORE you start working when the request needs multiple steps, has unclear scope, or the user said "make a plan" / "think through this first".
+  description: {
+    en: `Enter planning mode for a non-trivial task. Use BEFORE you start working when the request needs multiple steps, has unclear scope, or the user said "make a plan" / "think through this first".
 
 This tool returns a planning instruction. Use it to land a structured plan, then keep working in the same turn. The expected flow is:
 1. Produce a short prose plan (problem, approach, risks).
@@ -56,31 +57,62 @@ WHEN NOT TO USE:
 - Single trivial change, single command run, lookup-style question.
 - Mid-execution — once you're past the first step, use TodoWrite directly.
 
-EXCEPTION — stop after the plan only if the first step is genuinely "ask the user" (an unresolved unknown that blocks every other step). Otherwise keep moving.
+EXCEPTION — stop after the plan only if the first step is genuinely "ask the user" (an unresolved unknown that blocks every other step). Otherwise keep moving.`,
+    zh: `进入规划模式，用于非平凡任务。在开始工作之前使用，当请求需要多个步骤、范围不明确、或用户说"先做计划"/"先想清楚"时。
 
-The tool takes the topic plus optional guiding fields (stuckAt, userProblem, expectedScale, additionalContext) that help you think; they're echoed back verbatim, so don't repeat the full user request in \`topic\`.`,
+此工具返回规划指令。用它制定结构化计划，然后在同一 turn 内继续工作。预期流程：
+1. 产出简短文字计划（问题、方法、风险）
+2. 调用 \`TodoWrite\` 列出有序步骤，将第一个具体步骤标记为 "in_progress"，其余为 "pending"
+3. 开始执行第一个步骤 — 调用任何需要的工具。不要因为计划写完了就结束 turn；计划是跑道。
+
+何时使用：
+- 多步骤实现（3 步以上）、重构、或开放式调查
+- 用户明确要求计划、TODO 列表、或"先想清楚"
+- 你即将开始大改动，想要一个检查点再深入
+
+何时不使用：
+- 单条琐碎修改、单次命令执行、查询式问题
+- 执行中途 — 已经过了第一步，直接用 TodoWrite
+
+例外 — 只有在第一步确实是"询问用户"（未解决的未知问题阻塞了所有其他步骤）时才在计划后停下。否则继续推进。`,
+  },
   parameters: {
     type: 'object',
     properties: {
       topic: {
         type: 'string',
-        description: 'One-sentence statement of what is being planned (e.g. "Add dark-mode toggle to YeaftPage settings").',
+        description: {
+          en: 'One-sentence statement of what is being planned (e.g. "Add dark-mode toggle to YeaftPage settings").',
+          zh: '用一句话说明要规划什么（如"为 YeaftPage 设置添加深色模式切换"）',
+        },
       },
       userProblem: {
         type: 'string',
-        description: 'Optional. The underlying problem the user is trying to solve (often broader than the immediate ask).',
+        description: {
+          en: 'Optional. The underlying problem the user is trying to solve (often broader than the immediate ask).',
+          zh: '可选。用户试图解决的根本问题（通常比即时请求更宽泛）',
+        },
       },
       stuckAt: {
         type: 'string',
-        description: 'Optional. If you are blocked or unsure, the specific decision or unknown that needs resolving first.',
+        description: {
+          en: 'Optional. If you are blocked or unsure, the specific decision or unknown that needs resolving first.',
+          zh: '可选。如果你被阻塞或不确定，需要首先解决的具体决策或未知点',
+        },
       },
       expectedScale: {
         type: 'string',
-        description: 'Optional. Rough scope estimate — number of files touched, lines of code, time horizon, etc.',
+        description: {
+          en: 'Optional. Rough scope estimate — number of files touched, lines of code, time horizon, etc.',
+          zh: '可选。粗略范围估计 — 涉及文件数、代码行数、时间预期等',
+        },
       },
       additionalContext: {
         type: 'string',
-        description: 'Optional. Any other facts that shape the plan (constraints, deadlines, related prior work).',
+        description: {
+          en: 'Optional. Any other facts that shape the plan (constraints, deadlines, related prior work).',
+          zh: '可选。影响计划的其他事实（约束、截止日期、相关先前工作）',
+        },
       },
     },
     required: ['topic'],

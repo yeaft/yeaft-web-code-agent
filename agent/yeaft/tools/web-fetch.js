@@ -34,7 +34,8 @@ function htmlToText(html) {
 
 export default defineTool({
   name: 'WebFetch',
-  description: `Fetch and read the content of a web page.
+  description: {
+    en: `Fetch and read the content of a web page.
 
 Retrieves the URL content, strips HTML tags, and returns readable text.
 Use this to read documentation, articles, or any web page.
@@ -44,20 +45,40 @@ Guidelines:
 - Large pages will be truncated — use the offset parameter for pagination
 - For APIs, the raw response body is returned as-is
 - Respects the abort signal for cancellation`,
+    zh: `获取并读取网页内容。
+
+获取 URL 内容，去除 HTML 标签，返回可读文本。
+用于阅读文档、文章或任意网页。
+
+使用指南：
+- 提供完整的 URL，包括协议（https://）
+- 大页面会被截断 — 使用 offset 参数分页
+- 对于 API，原始响应体会原样返回
+- 支持通过 abort signal 取消`,
+  },
   parameters: {
     type: 'object',
     properties: {
       url: {
         type: 'string',
-        description: 'The URL to fetch',
+        description: {
+          en: 'The URL to fetch',
+          zh: '要获取的 URL',
+        },
       },
       max_length: {
         type: 'number',
-        description: 'Maximum content length in characters (default: 50000)',
+        description: {
+          en: 'Maximum content length in characters (default: 50000)',
+          zh: '最大内容长度，单位字符（默认 50000）',
+        },
       },
       raw: {
         type: 'boolean',
-        description: 'If true, return raw response without HTML stripping (for APIs)',
+        description: {
+          en: 'If true, return raw response without HTML stripping (for APIs)',
+          zh: '如果为 true，返回原始响应不去除 HTML（用于 API）',
+        },
       },
     },
     required: ['url'],

@@ -107,7 +107,8 @@ function runCommand(command, { cwd, timeout, signal }) {
 
 export default defineTool({
   name: 'Bash',
-  description: `Execute a shell command and return its output.
+  description: {
+    en: `Execute a shell command and return its output.
 
 Use this tool to run CLI commands, scripts, and system operations.
 
@@ -119,20 +120,42 @@ Guidelines:
 - Avoid interactive commands (no stdin support)
 - For long-running tasks, consider redirecting output to a file
 - stderr is captured separately and included in the result`,
+    zh: `执行 Shell 命令并返回输出。
+
+用于运行 CLI 命令、脚本和系统操作。
+
+使用指南：
+- 命令在指定的工作目录中执行（默认为引擎 cwd）
+- 超时默认 2 分钟（最长 10 分钟）
+- 大输出会被截断至 256KB
+- 尽量使用绝对路径
+- 避免交互式命令（不支持 stdin）
+- 对于长时间运行的任务，考虑将输出重定向到文件
+- stderr 单独捕获并包含在结果中`,
+  },
   parameters: {
     type: 'object',
     properties: {
       command: {
         type: 'string',
-        description: 'The shell command to execute',
+        description: {
+          en: 'The shell command to execute',
+          zh: '要执行的 Shell 命令',
+        },
       },
       cwd: {
         type: 'string',
-        description: 'Working directory for the command (default: engine cwd)',
+        description: {
+          en: 'Working directory for the command (default: engine cwd)',
+          zh: '命令的工作目录（默认为引擎当前目录）',
+        },
       },
       timeout_ms: {
         type: 'number',
-        description: `Timeout in milliseconds (default: ${DEFAULT_TIMEOUT_MS}, max: ${MAX_TIMEOUT_MS})`,
+        description: {
+          en: `Timeout in milliseconds (default: ${DEFAULT_TIMEOUT_MS}, max: ${MAX_TIMEOUT_MS})`,
+          zh: `超时时间，单位毫秒（默认 ${DEFAULT_TIMEOUT_MS}，最大 ${MAX_TIMEOUT_MS}）`,
+        },
       },
     },
     required: ['command'],

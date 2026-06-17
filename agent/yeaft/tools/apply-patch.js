@@ -96,7 +96,8 @@ function applyHunks(content, hunks) {
 
 export default defineTool({
   name: 'ApplyPatch',
-  description: `Apply a unified diff patch to files.
+  description: {
+    en: `Apply a unified diff patch to files.
 
 Parses unified diff format (like git diff output) and applies changes.
 Supports patching multiple files in a single diff.
@@ -105,12 +106,25 @@ Guidelines:
 - Provide standard unified diff format (--- a/file, +++ b/file, @@ hunks)
 - Ensure the diff matches the current file content exactly
 - New files are created automatically with parent directories`,
+    zh: `将 unified diff 补丁应用到文件。
+
+解析 unified diff 格式（类似 git diff 输出）并应用修改。
+支持在单个 diff 中修补多个文件。
+
+使用指南：
+- 提供标准 unified diff 格式（--- a/file, +++ b/file, @@ 块）
+- 确保 diff 与当前文件内容完全匹配
+- 新文件会自动创建（含父目录）`,
+  },
   parameters: {
     type: 'object',
     properties: {
       patch: {
         type: 'string',
-        description: 'The unified diff patch content',
+        description: {
+          en: 'The unified diff patch content',
+          zh: 'unified diff 补丁内容',
+        },
       },
     },
     required: ['patch'],

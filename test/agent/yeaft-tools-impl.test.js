@@ -28,7 +28,12 @@ describe('index.js tool registration', () => {
       expect(tool.name).toBeTruthy();
       expect(typeof tool.name).toBe('string');
       expect(tool.description).toBeTruthy();
-      expect(typeof tool.description).toBe('string');
+      // description may be a string (legacy) or {en, zh} object (localized)
+      expect(['string', 'object'].includes(typeof tool.description)).toBe(true);
+      if (typeof tool.description === 'object') {
+        expect(tool.description.en).toBeTruthy();
+        expect(tool.description.zh).toBeTruthy();
+      }
       expect(tool.parameters).toBeTruthy();
       expect(typeof tool.execute).toBe('function');
     }
@@ -757,7 +762,7 @@ describe('JsRepl tool', () => {
   it('JsReplReset deprecated alias still works and is marked DEPRECATED (task-333b)', async () => {
     const { jsRepl, jsReplReset } = await import(`${TOOLS_DIR}/js-repl.js`);
     expect(jsReplReset.name).toBe('JsReplReset');
-    expect(jsReplReset.description).toContain('DEPRECATED');
+    expect(jsReplReset.description.en || jsReplReset.description).toContain('DEPRECATED');
     await jsRepl.execute({ code: 'var aliasReset = 42;' }, {});
     await jsReplReset.execute({}, {});
     const after = await jsRepl.execute({ code: 'typeof aliasReset' }, {});
@@ -1053,7 +1058,7 @@ describe('ViewImage tool', () => {
   it('description includes when-to-call / when-not / path examples (prev-3 P1-B)', async () => {
     const mod = await import(`${TOOLS_DIR}/view-image.js`);
     const tool = mod.default;
-    const desc = tool.description || '';
+    const desc = typeof tool.description === 'object' ? (tool.description.en || '') : (tool.description || '');
     expect(desc).toMatch(/when to call/i);
     expect(desc).toMatch(/when not to call/i);
     // At least one concrete path example

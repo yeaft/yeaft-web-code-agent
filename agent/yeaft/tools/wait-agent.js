@@ -173,34 +173,35 @@ function buildEnvelope(agent, { timedOut = false } = {}) {
 
 export default defineTool({
   name: 'WaitAgent',
-  description: `Wait for a sub-agent's next state change (turn end, terminal, or wait-timeout) and retrieve a status envelope.
+  description: {
+    en: `Wait for a sub-agent's next state change (turn end, terminal, or wait-timeout) and retrieve a status envelope.
 
-Returns JSON with explicit \`status\`, latest \`result\` text, \`liveness\`
-counters (toolUseCount, tokenCount, msSinceLastEvent, recentTools), the
-durable \`outputFile\` path you can Read at any time, and a status-specific
-\`next_steps\` directive telling you what to call next.
+This is a minor utility — ListAgents is the primary non-blocking status
+surface. WaitAgent is a short-poll convenience for the rare case where you
+need a synchronous checkpoint (e.g. "did it finish this turn?"). NEVER
+call WaitAgent in a polling loop — use ListAgents to check progress
+asynchronously.
 
-Status semantics:
-  • completed / closed / failed / abandoned  → terminal. The sub-agent will
-    do nothing more. Relay the result to the user (or retry / report the
-    failure).
-  • idle  → the sub-agent finished a turn and is parked with an empty
-    queue. You can PromptAgent for follow-up or CloseAgent to finalize.
-  • timedOut=true (with status='running' and runningInBackground=true) →
-    the wait elapsed but the sub-agent is STILL working. It does NOT need
-    another PromptAgent. Either WaitAgent again with a larger timeout,
-    CloseAgent to cut it short, or tell the user it's still working.
+Default timeout: 5 seconds. Pass a shorter timeout_ms for a quick poll.
+On timeout the envelope includes "still_running" + liveness + next_steps.
+On stale/stalled agents the next_steps will explicitly advise against
+further waits.
 
-CRITICAL — after WaitAgent returns you MUST take one of these actions:
-  • status terminal: relay/retry/report.
-  • status idle:     reply to user OR PromptAgent OR CloseAgent.
-  • timedOut:        re-wait, cut short, or report progress.
-NEVER end your turn silently right after WaitAgent — the user has not seen
-the sub-agent's reply yet; only you have. The orchestration loop is
-SpawnAgent → (PromptAgent ↔ WaitAgent)+ → CloseAgent → final reply to user.
+Legacy note: earlier versions encouraged repeated WaitAgent polling;
+that pattern is deprecated. Use SpawnAgent → Continue → ListAgents.`,
+    zh: `等待子 Agent 的下一个状态变化（turn 结束、终止或等待超时）并获取状态 envelope。
 
-Compatibility tool. The default wait is a short 5000ms poll. Callers may request up to 300000ms (5 minutes), but this is no longer the primary sub-agent workflow; prefer SpawnAgent + ListAgents + completion notifications for async background work.`,
-  parameters: {
+这是次要工具 — ListAgents 是主要的非阻塞状态查看入口。WaitAgent 是
+短轮询的便利工具，仅用于你需要同步检查点的罕见场景（如"它这个 turn 完成了吗？"）。
+绝不要在轮询循环中调用 WaitAgent — 使用 ListAgents 异步检查进度。
+
+默认超时：5 秒。传较短的 timeout_ms 可做快速轮询。
+超时时 envelope 包含 "still_running" + liveness + next_steps。
+对于 stale/stalled 的 Agent，next_steps 会明确建议不要再继续等待。
+
+旧版说明：早期版本鼓励重复 WaitAgent 轮询；该模式已弃用。
+使用 SpawnAgent → Continue → ListAgents。`,
+  },   parameters: {
     type: 'object',
     properties: {
       agent_id: {

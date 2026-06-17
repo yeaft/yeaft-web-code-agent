@@ -16,16 +16,38 @@ import { diagnoseAgentLiveness } from '../sub-agent/liveness.js';
 
 export default defineTool({
   name: 'ListAgents',
-  description: `List all sub-agents and their current status.
+  description: {
+    en: `List all sub-agents and their current status.
 
 Returns id, name, status, mission/task summary, durable outputFile path,
 liveness counters (toolUseCount, tokenCount, msSinceLastEvent, recentTools),
 stale/stalled diagnostics, result tail, and message count for each agent. Use
-this as the primary non-blocking monitor for async sub-agent work, and Read
-\`outputFile\` for any single agent if you need its full timeline.
+this as the primary non-blocking way to check sub-agent progress.
 
-By default only non-closed agents are returned. Pass include_closed=true
-to also list closed/failed/abandoned/completed agents.`,
+Filtering:
+- By default, hides "closed" agents to keep the view tidy.
+- Pass include_closed=true (or include_terminal=true) to see closed agents.
+- Pass include_terminal=true to see all agents including failed/completed.
+
+Note: WaitAgent is now a minor utility; ListAgents is the main async
+monitoring surface. The caller's owner VP sees all agents it spawned. Use
+include_terminal to inspect completed/failed results.`,
+    zh: `列出所有子 Agent 及其当前状态。
+
+返回每个 Agent 的 id、name、status、任务摘要、持久化 outputFile 路径、
+活跃度计数（toolUseCount、tokenCount、msSinceLastEvent、recentTools）、
+stale/stalled 诊断、结果尾部片段和消息数量。作为主要的非阻塞方式
+检查子 Agent 进度。
+
+过滤：
+- 默认隐藏 "closed" 状态的 Agent 以保持视图整洁
+- 传 include_closed=true（或 include_terminal=true）查看已关闭的 Agent
+- 传 include_terminal=true 查看所有 Agent，包括 failed/completed
+
+注意：WaitAgent 现在是次要工具；ListAgents 是主要的异步监控入口。
+调用方的 owner VP 可看到它生成的所有 Agent。使用 include_terminal
+来检查已完成/失败的结果。`,
+  },
   parameters: {
     type: 'object',
     properties: {

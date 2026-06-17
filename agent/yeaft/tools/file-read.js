@@ -36,7 +36,8 @@ const DEFAULT_LIMIT = 3000;
 
 export default defineTool({
   name: 'FileRead',
-  description: `Read a file from the filesystem with line numbers.
+  description: {
+    en: `Read a file from the filesystem with line numbers.
 
 Returns file contents with line numbers (like \`cat -n\`).
 Supports offset and limit for reading specific portions of large files.
@@ -47,20 +48,41 @@ Guidelines:
 - Binary files are detected by extension and rejected
 - Maximum file size: 10MB
 - Default limit: 3000 lines (matches the "large file = >3000 lines" threshold)`,
+    zh: `从文件系统读取文件，返回带行号的内容。
+
+以 \`cat -n\` 风格返回文件内容，带行号。
+支持 offset 和 limit 参数读取大文件的特定部分。
+
+使用指南：
+- 尽量用绝对路径
+- 只有超过 3000 行的文件才算"大文件"。默认读整个文件；只在超过该阈值或已知精确行范围时才用 offset/limit
+- 二进制文件通过扩展名检测并拒绝读取
+- 最大文件大小：10MB
+- 默认行数上限：3000 行（与"大文件 = >3000 行"阈值一致）`,
+  },
   parameters: {
     type: 'object',
     properties: {
       file_path: {
         type: 'string',
-        description: 'Path to the file to read (absolute or relative to cwd)',
+        description: {
+          en: 'Path to the file to read (absolute or relative to cwd)',
+          zh: '要读取的文件路径（绝对路径或相对于当前工作目录）',
+        },
       },
       offset: {
         type: 'number',
-        description: 'Line number to start reading from (0-based, default: 0)',
+        description: {
+          en: 'Line number to start reading from (0-based, default: 0)',
+          zh: '起始行号（从 0 开始计数，默认 0）',
+        },
       },
       limit: {
         type: 'number',
-        description: `Maximum number of lines to read (default: ${DEFAULT_LIMIT})`,
+        description: {
+          en: `Maximum number of lines to read (default: ${DEFAULT_LIMIT})`,
+          zh: `最多读取行数（默认 ${DEFAULT_LIMIT} 行）`,
+        },
       },
     },
     required: ['file_path'],

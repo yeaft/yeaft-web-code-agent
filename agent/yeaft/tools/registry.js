@@ -95,13 +95,19 @@ function localizeVisibleText(value, language, toolName) {
  */
 function localizeParameters(parameters, language, toolName) {
   const lang = normalizeLanguage(language);
-  if (lang !== 'zh' || !parameters || typeof parameters !== 'object') return parameters;
+  if (!parameters || typeof parameters !== 'object') return parameters;
   if (Array.isArray(parameters)) return parameters.map(v => localizeParameters(v, lang, toolName));
   const out = {};
   for (const [key, value] of Object.entries(parameters)) {
-    if (key === 'description' && typeof value === 'string') {
-      out[key] = localizeVisibleText(value, lang, toolName);
-    } else if (value && typeof value === 'object') {
+    if (key === 'description') {
+      if (typeof value === 'string') {
+        out[key] = localizeVisibleText(value, lang, toolName);
+      } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+        out[key] = localizeVisibleText(value, lang, toolName);
+      } else {
+        out[key] = value;
+      }
+    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
       out[key] = localizeParameters(value, lang, toolName);
     } else {
       out[key] = value;

@@ -13,7 +13,8 @@ import { resolve } from 'path';
 
 export default defineTool({
   name: 'FileEdit',
-  description: `Make surgical text replacements in an existing file.
+  description: {
+    en: `Make surgical text replacements in an existing file.
 
 Replaces exact occurrences of old_string with new_string.
 The old_string must be unique in the file unless replace_all is true.
@@ -24,24 +25,48 @@ Guidelines:
 - Use replace_all: true to replace ALL occurrences
 - For creating new files or full rewrites, use FileWrite instead
 - Always read the file first to understand its current content`,
+    zh: `对现有文件进行精确的文本替换。
+
+用 new_string 替换文件中 old_string 的精确出现。
+除非 replace_all 为 true，否则 old_string 在文件中必须唯一。
+
+使用指南：
+- old_string 必须精确匹配（包括空格和缩进）
+- 如果 old_string 未找到或不唯一，编辑会失败
+- 使用 replace_all: true 替换所有出现
+- 创建新文件或完整覆写请用 FileWrite
+- 编辑前必须先读取文件了解其当前内容`,
+  },
   parameters: {
     type: 'object',
     properties: {
       file_path: {
         type: 'string',
-        description: 'Path to the file to edit (absolute or relative to cwd)',
+        description: {
+          en: 'Path to the file to edit (absolute or relative to cwd)',
+          zh: '要编辑的文件路径（绝对路径或相对于工作目录）',
+        },
       },
       old_string: {
         type: 'string',
-        description: 'The exact text to find and replace',
+        description: {
+          en: 'The exact text to find and replace',
+          zh: '要查找并替换的精确文本',
+        },
       },
       new_string: {
         type: 'string',
-        description: 'The replacement text',
+        description: {
+          en: 'The replacement text',
+          zh: '替换后的文本',
+        },
       },
       replace_all: {
         type: 'boolean',
-        description: 'Replace all occurrences (default: false — fails if not unique)',
+        description: {
+          en: 'Replace all occurrences (default: false — fails if not unique)',
+          zh: '替换所有出现（默认 false — 不唯一时失败）',
+        },
       },
     },
     required: ['file_path', 'old_string', 'new_string'],

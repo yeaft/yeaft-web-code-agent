@@ -138,6 +138,7 @@ export function buildDreamDebugItems({ latest = {}, snapshots = {}, promptLoads 
     const segments = parseDreamMemorySegments(snapshot?.memoryText || '');
     const sessionId = sessionIdFromScope(scope, snapshot);
     const title = readableTitleForScope(scope, snapshot, sessionTitles);
+    const summaryPreview = previewText(snapshot?.summaryText || snapshot?.memoryText || lastEvent?.detail || '', 180);
     return {
       key: scope,
       title,
@@ -151,7 +152,8 @@ export function buildDreamDebugItems({ latest = {}, snapshots = {}, promptLoads 
       events: scopeEvents,
       segmentCount: segments.length,
       segments,
-      summaryPreview: previewText(snapshot?.summaryText || snapshot?.memoryText || lastEvent?.detail || '', 180),
+      summaryPreview,
+      subtitle: summaryPreview,
       hasRequestResponse: scopeEvents.some((evt) => evt?.request || evt?.response || evt?.systemPrompt || evt?.rawRequest || evt?.rawResponse),
     };
   }).sort((a, b) => String(b.lastAt || '').localeCompare(String(a.lastAt || '')));

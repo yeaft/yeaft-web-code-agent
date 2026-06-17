@@ -12,21 +12,26 @@ import { isTerminalAgentStatus, isPromptableAgentStatus, STATUS, describeAgentSt
 export default defineTool({
   name: 'PromptAgent',
   aliases: ['SendMessage'],
-  description: `Send a follow-up prompt to a sub-agent you previously spawned.
+  description: {
+    en: `Send a follow-up prompt to a sub-agent you previously spawned.
 
-Use this to give the sub-agent more work, additional instructions, or relay
-information. The prompt is queued for the agent to process on its next turn.
+Use when a sub-agent finished and you want it to refine / extend its work.
+The sub-agent must be in idle state (not still running). The follow-up is
+processed as a new turn and returns a new result — it does not modify the
+original output file in place.
 
-IMPORTANT — PromptAgent only QUEUES the message; it does NOT block. After this
-returns you almost always want to call WaitAgent next to collect the reply.
-Do NOT end your turn after PromptAgent without either (a) calling WaitAgent,
-(b) explaining to the user what you just asked the sub-agent, or (c) calling
-CloseAgent. The orchestration loop is
-SpawnAgent → (PromptAgent ↔ WaitAgent)+ → CloseAgent → final reply to user.
+Send ONE focused instruction per call. After SendMessage you may WaitAgent
+to get the refined result, or continue your main work and check later via
+ListAgents.`,
+    zh: `向之前创建的子 Agent 发送追加提示。
 
-PromptAgent is rejected if the sub-agent is in a terminal state
-(completed/failed/closed/abandoned). Use SpawnAgent to start a fresh one.`,
-  parameters: {
+当子 Agent 完成且你想要它优化/扩展工作时使用。
+子 Agent 必须处于 idle 状态（不在运行中）。追加提示会作为新 turn 处理，
+返回新结果 — 不会原地修改原始输出文件。
+
+每次调用只发送一条聚焦指令。SendMessage 之后可以 WaitAgent 获取
+优化后的结果，或继续主工作稍后通过 ListAgents 查看。`,
+  },   parameters: {
     type: 'object',
     properties: {
       agent_id: {
