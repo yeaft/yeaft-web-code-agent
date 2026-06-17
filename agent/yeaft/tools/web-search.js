@@ -25,7 +25,8 @@ import { defineTool } from './types.js';
 
 export default defineTool({
   name: 'WebSearch',
-  description: `Search the web for current information.
+  description: {
+    en: `Search the web for current information.
 
 Use this when you need up-to-date information that may not be in your training data.
 Returns search results with titles, URLs, and snippets.
@@ -34,6 +35,15 @@ Guidelines:
 - Use specific, targeted search queries
 - Include the current year for time-sensitive queries
 - Combine with WebFetch to read full page content from results`,
+    zh: `搜索网页获取最新信息。
+
+当你需要训练数据中可能没有的最新信息时使用。返回搜索结果，含标题、URL 和摘要。
+
+使用指南：
+- 使用具体、有针对性的搜索关键词
+- 时间敏感的查询要包含当前年份
+- 配合 WebFetch 读取搜索结果中的完整页面内容`
+  },
   parameters: {
     type: 'object',
     properties: {

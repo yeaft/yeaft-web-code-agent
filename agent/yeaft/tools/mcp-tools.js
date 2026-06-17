@@ -135,7 +135,8 @@ export function buildMcpFlattenedTools(mcpManager) {
 
 export const mcpListTools = defineTool({
   name: 'mcp_list_tools',
-  description: `List all tools available from connected MCP (Model Context Protocol) servers.
+  description: {
+    en: `List all tools available from connected MCP (Model Context Protocol) servers.
 
 Usage guidelines:
 - Use to discover what MCP tools are available in the current session
@@ -143,6 +144,15 @@ Usage guidelines:
 - Each tool is prefixed with the server name (e.g. "github__list_prs", "slack__send_message")
 - Use this before mcp_call_tool to understand available capabilities
 - MCP servers are configured by the user — if none are connected, returns an empty list`,
+    zh: `列出已连接 MCP（Model Context Protocol）服务器提供的所有工具。
+
+使用指南：
+- 用于发现当前会话中可用的 MCP 工具
+- 返回所有已连接 MCP 服务器的工具名称、描述和参数 schema
+- 每个工具名称都带服务器名前缀（例如 "github__list_prs"、"slack__send_message"）
+- 调用 mcp_call_tool 前先用此工具确认可用能力和参数
+- MCP 服务器由用户配置；如果当前没有连接服务器，将返回空列表`,
+  },
   parameters: {
     type: 'object',
     properties: {
@@ -181,7 +191,8 @@ Usage guidelines:
 
 export const mcpCallTool = defineTool({
   name: 'mcp_call_tool',
-  description: `Call a tool on a connected MCP (Model Context Protocol) server.
+  description: {
+    en: `Call a tool on a connected MCP (Model Context Protocol) server.
 
 Usage guidelines:
 - Use after discovering tools via mcp_list_tools
@@ -190,6 +201,16 @@ Usage guidelines:
 - The tool executes on the MCP server and returns the result
 - Timeouts depend on the MCP server — use timeout_ms if the operation is slow
 - Errors from the MCP server are returned as structured error objects`,
+    zh: `调用已连接 MCP（Model Context Protocol）服务器上的某个工具。
+
+使用指南：
+- 先通过 mcp_list_tools 发现工具，再调用此工具
+- 提供包含服务器名前缀的完整工具名（例如 "github__create_issue"）
+- arguments 必须严格匹配该 MCP 工具的参数 schema
+- 工具会在 MCP 服务器侧执行，并返回执行结果
+- 超时时间取决于 MCP 服务器；慢操作可显式传入 timeout_ms
+- MCP 服务器返回的错误会以结构化错误对象返回`,
+  },
   parameters: {
     type: 'object',
     properties: {

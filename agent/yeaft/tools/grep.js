@@ -142,7 +142,8 @@ async function nodeGrep(pattern, searchPath, options) {
 
 export default defineTool({
   name: 'Grep',
-  description: `Search file contents for a regex pattern.
+  description: {
+    en: `Search file contents for a regex pattern.
 
 Uses ripgrep (rg) when available for fast searching, with a Node.js fallback.
 
@@ -156,6 +157,21 @@ Guidelines:
 - Use glob or type filters to narrow the search
 - Skips binary files and common large directories (node_modules, .git)
 - Results are limited to 500 matches by default`,
+    zh: `用正则表达式搜索文件内容。
+
+优先使用 ripgrep (rg) 快速搜索，回退到 Node.js 实现。
+
+输出模式：
+- "content" — 显示匹配行，含文件路径和行号
+- "files_with_matches" — 仅显示匹配的文件路径（默认）
+- "count" — 显示每个文件的匹配数量
+
+使用指南：
+- 使用正则语法（特殊字符需转义：\\.、\\{ 等）
+- 用 glob 或 type 过滤缩小搜索范围
+- 跳过二进制文件和常见大目录（node_modules、.git）
+- 默认结果限制 500 条`
+  },
   parameters: {
     type: 'object',
     properties: {

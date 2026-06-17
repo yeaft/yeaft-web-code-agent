@@ -11,7 +11,8 @@ import { resolve, dirname } from 'path';
 
 export default defineTool({
   name: 'FileWrite',
-  description: `Write content to a file, creating it if it doesn't exist.
+  description: {
+    en: `Write content to a file, creating it if it doesn't exist.
 
 Creates parent directories automatically. Overwrites existing files.
 
@@ -20,6 +21,16 @@ Guidelines:
 - For modifying existing files, prefer FileEdit (surgical edits) over FileWrite (full overwrite)
 - Parent directories are created automatically
 - Content should be the complete file content`,
+    zh: `将内容写入文件，若文件不存在则创建。
+
+自动创建父目录。覆盖已存在的文件。
+
+使用指南：
+- 尽量使用绝对路径
+- 修改已有文件时优先使用 FileEdit（精确编辑）而非 FileWrite（全量覆盖）
+- 父目录自动创建
+- 内容应为完整文件内容`
+  },
   parameters: {
     type: 'object',
     properties: {

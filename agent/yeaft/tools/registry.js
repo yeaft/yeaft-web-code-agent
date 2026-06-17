@@ -10,7 +10,6 @@
  */
 
 import { formatSize } from '../archive/tool-results.js';
-import { getBuiltinToolLocalization } from './localized-descriptions.js';
 
 /**
  * Collaboration tools are mutually exclusive per Yeaft group shape:
@@ -59,13 +58,9 @@ function localizeVisibleText(value, language, toolName) {
     const picked = value[lang] || value[lang === 'zh' ? 'zh-CN' : 'en-US'] || value.en || value.default;
     if (typeof picked === 'string') return picked;
   }
-  const text = typeof value === 'string' ? value : String(value || '');
-  if (lang !== 'zh') return text;
-  if (!text.trim()) return text;
-  return [
-    `工具说明：${toolName || '该工具'}。请严格按照 schema 调用；工具名、参数名、JSON key 和枚举值保持英文，不要翻译。`,
-    `原始协议说明（英文，供精确调用参考）：${text}`,
-  ].join('\n');
+  // Legacy single-string descriptions are already authored text. Return them
+  // unchanged; do not synthesize zh-prefixed wrappers around English strings.
+  return typeof value === 'string' ? value : String(value || '');
 }
 
 /**
@@ -374,11 +369,10 @@ export class ToolRegistry {
     return this.getAllTools()
       .filter(t => !isToolHiddenByCollabPolicy(t.name, collabToolPolicy))
       .map(t => {
-        const localized = getBuiltinToolLocalization(t.name, lang);
         return {
           name: t.name,
-          description: localized?.description || localizeVisibleText(t.description, lang, t.name),
-          parameters: localizeParameters(t.parameters, lang, t.name, localized?.parameters),
+          description: localizeVisibleText(t.description, lang, t.name),
+          parameters: localizeParameters(t.parameters, lang, t.name),
         };
       });
   }

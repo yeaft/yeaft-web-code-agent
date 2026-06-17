@@ -15,7 +15,8 @@ import { snapshotLiveness } from '../sub-agent/liveness.js';
 
 export default defineTool({
   name: 'CloseAgent',
-  description: `Close a sub-agent and release its resources.
+  description: {
+    en: `Close a sub-agent and release its resources.
 
 Use when a sub-agent's task is complete or no longer needed.
 The agent's final \`result\` (if any) is returned in the envelope before closing.
@@ -24,6 +25,13 @@ CRITICAL — closing the sub-agent is NOT the end of YOUR turn. After CloseAgent
 you MUST relay the \`result\` to the user in your own reply (or summarize what
 was accomplished). The user has not seen the sub-agent's reply — only you have.
 Do NOT end your turn silently right after CloseAgent.`,
+    zh: `关闭子 Agent 并释放其资源。
+
+当子 Agent 的任务完成或不再需要时使用。关闭前会返回子 Agent 的最终 result（如有）。
+
+关键——关闭子 Agent 不是你 turn 的结束。CloseAgent 后你必须用自己的回复将 result 传达给用户
+（或总结已完成的内容）。用户看不到子 Agent 的回复——只有你能看到。不要在 CloseAgent 后默默结束 turn。`
+  },
   parameters: {
     type: 'object',
     properties: {

@@ -51,7 +51,7 @@
 /**
  * @typedef {Object} ToolDef
  * @property {string} name — unique tool name (e.g. 'Bash', 'FileRead')
- * @property {string} description — LLM-facing description
+ * @property {string | { en: string, zh: string, default?: string }} description — LLM-facing localized description
  * @property {object} parameters — JSON Schema for input
  * @property {(input: object, ctx?: ToolContext) => Promise<string>} execute — execution function
  * @property {(input?: object) => boolean} [isConcurrencySafe] — can run in parallel?
@@ -64,7 +64,7 @@
  *
  * @param {{
  *   name: string,
- *   description: string,
+ *   description: string | { en: string, zh: string, default?: string },
  *   parameters: object,
  *   execute: (input: object, ctx?: ToolContext) => Promise<string>,
  *   isConcurrencySafe?: (input?: object) => boolean,

@@ -216,7 +216,8 @@ export function tickAgent(agentId, delta = {}, now = Date.now()) {
 export default defineTool({
   name: 'SpawnAgent',
   aliases: ['Agent'],
-  description: `Create a sub-agent to work on an independent task in parallel.
+  description: {
+    en: `Create a sub-agent to work on an independent task in parallel.
 
 Sub-agents run in their own context and can be given a concrete mission
 with an optional expected_output schema. Optional budget limits
@@ -242,6 +243,31 @@ Async orchestration:
 Completion/failure is delivered through sub-agent notifications on later parent
 turns. WaitAgent remains available only as a short compatibility poll; do not
 use it as the default workflow or call it repeatedly in a loop.`,
+    zh: `创建一个子 Agent 并行处理独立任务。
+
+子 Agent 在独立上下文中运行，可给定具体 mission 和可选的 expected_output schema。
+可选的预算限制（max_tokens/max_turns/wall_time_ms）仅在设置后作为安全截止。
+选择预设 persona 来预配置工具子集和模型层级：
+  - explorer   : 快速只读侦察（Read/Grep/Glob/ListDir）
+  - implementer: 具备完整工作工具的构建者（主模型）
+  - reviewer   : 只读审查者（主模型）
+  - researcher : 面向网络的信息收集者（WebSearch/WebFetch/Read）
+
+使用指南：
+- 给出清晰聚焦的 mission——"完成"是什么样子
+- 当返回结构重要时使用 expected_output
+- 仅在需要明确安全截止时添加 budget
+
+异步编排流程：
+  1. SpawnAgent  — 启动子 Agent 作为后台任务并立即返回。
+  2. Continue    — 父 VP 继续工作；不要仅仅为了轮询而阻塞。
+  3. ListAgents  — 需要进度信息时的非阻塞状态检查。
+  4. WaitAgent   — 短轮询（<5s）或仅在真正需要结果时才明确长等待。
+  5. CloseAgent  — 完成后销毁子 Agent。
+
+不要在循环中无终止条件地调用 WaitAgent。如果短检查后子 Agent 仍在运行，继续前进，
+让 notification 在下个 turn 告知你。`
+  },
   parameters: {
     type: 'object',
     properties: {

@@ -17,7 +17,8 @@ import { defineTool } from './types.js';
 
 export default defineTool({
   name: 'Skill',
-  description: `Load and query skills from the Yeaft skill library.
+  description: {
+    en: `Load and query skills from the Yeaft skill library.
 
 Skills are specialized behaviors or workflows in ~/.yeaft/skills/.
 Two formats supported:
@@ -29,6 +30,18 @@ Actions:
 - "view" — view a skill's full content. For directory skills, also lists linked files. Pass filePath to read a specific reference/template.
 - "search" — find relevant skills for a query string
 - "load" — alias for "view" (backward compatible)`,
+    zh: `从 Yeaft 技能库加载和查询技能。
+
+技能是 ~/.yeaft/skills/ 中的专业化行为或工作流。支持两种格式：
+- 单文件：skills/my-skill.md
+- 目录：skills/my-skill/SKILL.md + references/ + templates/
+
+操作：
+- "list" — 列出所有技能（仅元数据：名称、描述、分类）
+- "view" — 查看技能的完整内容。对目录型技能同时列出关联文件。传 filePath 可读取特定引用/模板。
+- "search" — 为查询字符串查找相关技能
+- "load" — "view" 的别名（向后兼容）`
+  },
   parameters: {
     type: 'object',
     properties: {
