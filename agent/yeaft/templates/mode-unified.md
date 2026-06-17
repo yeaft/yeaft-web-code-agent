@@ -10,9 +10,9 @@ This legacy template is no longer injected for normal VP turns. Keep any future 
 
 <!-- lang:zh -->
 
-# Session behavior notes
+# Session 行为说明
 
-这个 legacy template 不再注入普通 VP turn。未来如果重新使用，也只能放行为规则：不要在这里定义身份；身份必须来自选中的 VP soul 或无 VP fallback。
+这个旧模板不再注入普通 VP 回合。未来如果重新使用，也只能放行为规则：不要在这里定义身份；身份必须来自选中的 VP 灵魂或无 VP 时的兜底身份。
 
 - 简单问题直接回答。
 - 复杂任务可以规划、使用工具、验证，并给出简洁完成报告。

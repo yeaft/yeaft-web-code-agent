@@ -61,7 +61,7 @@ export const SCENARIO_EFFORT = Object.freeze({
  * Pick the effort level for a given query context.
  *
  * Decision order:
- *   1. If userEffort is a valid Effort ('low'|'medium'|'high'|'max'),
+ *   1. If userEffort is a valid Effort ('minimal'|'low'|'medium'|'high'|'xhigh'|'max'),
  *      return it unchanged. This is the explicit override path —
  *      `/max` prefix, Settings slider, or API caller.
  *   2. If toolLoopTurns >= LONG_LOOP_TURN_THRESHOLD, upgrade the
@@ -74,7 +74,7 @@ export const SCENARIO_EFFORT = Object.freeze({
  *   already consumed in the current `query()` call.
  * @param {unknown} [ctx.userEffort=null] — User-supplied override.
  *   Invalid values are ignored (fall through to scenario path).
- * @returns {'low'|'medium'|'high'|'max'} Resolved effort. Never null —
+ * @returns {'minimal'|'low'|'medium'|'high'|'xhigh'|'max'} Resolved effort. Never null —
  *   the adapter/router is responsible for dropping it when the
  *   feature flag is off or the model doesn't support thinking.
  */
@@ -97,7 +97,7 @@ export function pickEffort({ scenario = 'chat', toolLoopTurns = 0, userEffort = 
 }
 
 /**
- * Parse a user prompt for `/max`, `/high`, `/medium`, `/low` prefix
+ * Parse a user prompt for `/max`, `/xhigh`, `/high`, `/medium`, `/low` prefix
  * commands. Returns `{ effort, cleanedPrompt }` where cleanedPrompt has
  * the prefix (plus one trailing space) stripped.
  *
@@ -108,11 +108,11 @@ export function pickEffort({ scenario = 'chat', toolLoopTurns = 0, userEffort = 
  * via `!` or `/skill:` instead to avoid collision.
  *
  * @param {string} prompt
- * @returns {{ effort: 'low'|'medium'|'high'|'max'|null, cleanedPrompt: string }}
+ * @returns {{ effort: 'low'|'medium'|'high'|'xhigh'|'max'|null, cleanedPrompt: string }}
  */
 export function parseEffortPrefix(prompt) {
   if (typeof prompt !== 'string') return { effort: null, cleanedPrompt: prompt };
-  const m = prompt.match(/^\/(max|high|medium|low)(\s+|$)/);
+  const m = prompt.match(/^\/(max|xhigh|high|medium|low)(\s+|$)/);
   if (!m) return { effort: null, cleanedPrompt: prompt };
   const effort = m[1];
   const cleanedPrompt = prompt.slice(m[0].length);

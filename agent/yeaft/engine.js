@@ -1375,7 +1375,8 @@ export class Engine {
     // valid prompt prefix.
     const parsed = parseEffortPrefix(prompt);
     const effectivePrompt = parsed.cleanedPrompt;
-    const effectiveUserEffort = normalizeEffort(userEffort) || parsed.effort || null;
+    const configuredEffort = normalizeEffort(this.#config?.modelEffort);
+    const effectiveUserEffort = normalizeEffort(userEffort) || parsed.effort || configuredEffort || null;
     const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
       ? collabToolPolicy
       : null;
@@ -1830,6 +1831,7 @@ export class Engine {
             loopNumber: turnNumber,
             threadId,
             preview: String(item.preview || '').slice(0, 200),
+            internal: Boolean(item.internal),
           };
         }
       }
@@ -1959,6 +1961,7 @@ export class Engine {
           tools: toolDefs.length > 0 ? toolDefs : undefined,
           maxTokens: this.#config.maxOutputTokens || 16384,
           effort: resolvedEffort,
+          effortSource: userEffort ? 'user' : 'auto',
           signal,
           onRawExchange: captureRawExchange,
         })) {
@@ -2236,6 +2239,7 @@ export class Engine {
             loopNumber: turnNumber,
             threadId,
             preview: String(item.preview || '').slice(0, 200),
+            internal: Boolean(item.internal),
           };
         }
         yield { type: 'turn_end', turnNumber, stopReason: 'user_append_continue', threadId };

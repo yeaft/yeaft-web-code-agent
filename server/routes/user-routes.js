@@ -32,6 +32,19 @@ function transformSession(session) {
   };
 }
 
+function loadCurrentUser(req) {
+  let user = userDb.getByUsername(req.user.username);
+  if (!user && CONFIG.skipAuth) {
+    user = userDb.getOrCreate(req.user.username, req.user.username);
+  }
+  return user;
+}
+
+function ensureAgentSecret(user) {
+  if (user?.agent_secret) return user.agent_secret;
+  return userDb.resetAgentSecret(user.id);
+}
+
 /**
  * Register user profile, agent secret, and admin user management routes.
  */
@@ -39,7 +52,7 @@ export function registerUserRoutes(app, { requireAuth, requireAdmin }) {
   // Get my profile
   app.get('/api/user/profile', requireAuth, (req, res) => {
     try {
-      const user = userDb.getByUsername(req.user.username);
+      const user = loadCurrentUser(req);
       if (!user) {
         return res.status(404).json({ error: 'User not found' });
       }
@@ -159,11 +172,12 @@ export function registerUserRoutes(app, { requireAuth, requireAdmin }) {
   // Get my agent secret
   app.get('/api/user/agent-secret', requireAuth, (req, res) => {
     try {
-      const user = userDb.getByUsername(req.user.username);
+      const user = loadCurrentUser(req);
       if (!user) {
         return res.status(404).json({ error: 'User not found' });
       }
-      res.json({ agentSecret: user.agent_secret || null });
+      const agentSecret = ensureAgentSecret(user);
+      res.json({ agentSecret });
     } catch (err) {
       console.error('Get agent secret error:', err);
       res.status(500).json({ error: 'Failed to get agent secret' });
@@ -173,7 +187,7 @@ export function registerUserRoutes(app, { requireAuth, requireAdmin }) {
   // Reset my agent secret
   app.post('/api/user/agent-secret/reset', requireAuth, (req, res) => {
     try {
-      const user = userDb.getByUsername(req.user.username);
+      const user = loadCurrentUser(req);
       if (!user) {
         return res.status(404).json({ error: 'User not found' });
       }

@@ -79,7 +79,7 @@ export function createYeaftStatusCache(options = {}) {
         const previous = snapshot || {};
         snapshot = {
           ...previous,
-          model: config.model || config.primaryModel || previous.model || null,
+          model: config.primaryModel || config.model || previous.model || null,
           availableModels: normalizeAvailableModels(config.availableModels),
           yeaftDir: config.dir || yeaftDir || previous.yeaftDir || null,
           skills: sessionStatus?.skills ?? previous.skills,

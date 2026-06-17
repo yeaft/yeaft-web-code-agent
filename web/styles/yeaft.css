@@ -207,6 +207,26 @@
   border-color: var(--border-color);
 }
 
+.yeaft-topbar-title-group {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  text-align: center;
+}
+
+.yeaft-topbar-session-title {
+  min-width: 0;
+  max-width: 100%;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .yeaft-llm-config-modal {
   width: min(960px, 92vw);
   height: min(720px, 86vh);
@@ -365,6 +385,45 @@
   margin-left: 4px;
 }
 
+.yeaft-model-effort-panel {
+  padding: 7px 8px 8px;
+}
+
+.yeaft-model-effort-title {
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.yeaft-model-effort-options {
+  display: flex;
+  gap: 6px;
+}
+
+.yeaft-model-effort-option {
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 8px;
+  padding: 5px 9px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.yeaft-model-effort-option:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.yeaft-model-effort-option.active {
+  border-color: var(--accent-blue);
+  background: var(--session-active);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
 /* ── Provider edit — per-model row (id + ctx + max) ── */
 
 .yeaft-settings-model-rows {
@@ -421,7 +480,7 @@
 }
 
 .yeaft-topbar-right {
-  margin-left: auto;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -3003,7 +3062,7 @@
 }
 
 /* ── Topbar VP-list toggle button ────────────────────────────────────
-   Sits next to .yeaft-debug-btn on the right side of the topbar.
+   First session action in the right side of the topbar.
    Inactive = muted icon; active = accent-tinted background. Same
    shape/size as the existing topbar buttons. */
 .yeaft-topbar-vp-toggle {
@@ -3031,7 +3090,7 @@
 
 
 /* ── fix/dream-cadence-and-ui-trigger: manual dream trigger button ──
-   Sits to the LEFT of .yeaft-topbar-vp-toggle. Mirrors the shape of
+   Sits after message refresh and before debug. Mirrors the shape of
    the other topbar buttons (16 px icon, ~28 px hit-target). Three
    visual states overlay on the same button so layout stays stable:
      - idle:           muted icon
@@ -3529,6 +3588,23 @@
 .yeaft-debug-dream-search {
   flex: 1 1 auto;
   min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+}
+
+.yeaft-debug-dream-search::placeholder {
+  color: var(--text-muted);
+}
+
+.yeaft-debug-dream-search:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-blue) 12%, transparent);
 }
 
 .yeaft-debug-dream-count {
@@ -3537,49 +3613,57 @@
   font-size: 12px;
 }
 
-.yeaft-debug-dream-shell {
-  display: grid;
-  grid-template-columns: minmax(220px, 32%) minmax(0, 1fr);
-  gap: 10px;
-  width: 100%;
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: hidden;
-}
-
 .yeaft-debug-dream-list,
 .yeaft-debug-dream-detail,
 .yeaft-debug-dream-detail-body,
 .yeaft-debug-dream-segments {
   min-width: 0;
   min-height: 0;
-  overflow: auto;
 }
 
 .yeaft-debug-dream-list {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
   padding: 2px;
 }
 
-.yeaft-debug-dream-item {
+.yeaft-debug-dream-accordion-item {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  width: 100%;
   min-width: 0;
-  padding: 10px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-light);
   border-radius: 10px;
   background: var(--bg-main);
+  overflow: hidden;
+}
+
+.yeaft-debug-dream-accordion-item.expanded {
+  border-color: var(--border-color);
+  background: var(--bg-sidebar);
+}
+
+.yeaft-debug-dream-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
   color: var(--text-primary);
   text-align: left;
   cursor: pointer;
+  font: inherit;
 }
 
-.yeaft-debug-dream-item:hover,
-.yeaft-debug-dream-item.active {
+.yeaft-debug-dream-item:hover {
   background: var(--sidebar-hover);
 }
 
@@ -3591,48 +3675,95 @@
 
 .yeaft-debug-dream-item-main {
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
 }
 
-.yeaft-debug-dream-item-main strong,
-.yeaft-debug-dream-item-main span {
+.yeaft-debug-dream-item-title,
+.yeaft-debug-dream-item-summary,
+.yeaft-debug-dream-item-status,
+.yeaft-debug-dream-item-segments,
+.yeaft-debug-dream-item-time,
+.yeaft-debug-dream-detail-title {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.yeaft-debug-dream-item-main span,
-.yeaft-debug-dream-item-meta {
-  color: var(--text-secondary);
+.yeaft-debug-dream-item-title {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.yeaft-debug-dream-item-summary {
+  color: var(--text-muted);
   font-size: 12px;
+  line-height: 1.35;
 }
 
 .yeaft-debug-dream-item-meta {
-  flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: 132px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.yeaft-debug-dream-item-status {
+  color: var(--accent-blue);
+  font-weight: 500;
+}
+
+.yeaft-debug-dream-item-status.status-completed,
+.yeaft-debug-dream-item-status.status-success {
+  color: var(--success);
+}
+
+.yeaft-debug-dream-item-status.status-error {
+  color: var(--error);
+}
+
+.yeaft-debug-dream-item-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.yeaft-debug-dream-item:hover .yeaft-debug-dream-item-toggle {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
 }
 
 .yeaft-debug-dream-detail {
   display: flex;
   flex-direction: column;
-  border-radius: 12px;
-  background: var(--bg-main);
+  max-height: min(560px, 62vh);
+  overflow: hidden;
 }
 
 .yeaft-debug-dream-detail-header {
-  flex: 0 0 auto;
-  padding: 10px 12px;
+  display: none;
 }
 
 .yeaft-debug-dream-detail-title {
+  font-size: 13px;
   font-weight: 600;
-  color: var(--text-primary);
 }
 
 .yeaft-debug-dream-detail-subtitle,
-.yeaft-debug-dream-segment-meta,
-.yeaft-debug-dream-segment-preview {
-  color: var(--text-secondary);
+.yeaft-debug-dream-event-empty {
+  color: var(--text-muted);
   font-size: 12px;
 }
 
@@ -3648,6 +3779,7 @@
 
 .yeaft-debug-dream-card {
   flex: 0 0 auto;
+  min-width: 0;
   padding: 10px;
   border: 1px solid var(--border-color);
   border-radius: 10px;
@@ -3656,12 +3788,16 @@
 
 .yeaft-debug-dream-card-title {
   margin-bottom: 8px;
+  font-size: 12px;
   font-weight: 600;
+  line-height: 1.35;
   color: var(--text-primary);
 }
 
 .yeaft-debug-dream-layer {
   margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .yeaft-debug-dream-layer summary {
@@ -3681,19 +3817,23 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 420px;
+  min-width: 0;
+  overflow: visible;
 }
 
 .yeaft-debug-dream-segment {
+  min-width: 0;
   padding: 8px;
   border-radius: 8px;
   background: var(--bg-main);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .yeaft-debug-dream-segment-head {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   width: 100%;
   padding: 0;
@@ -3702,6 +3842,8 @@
   color: var(--text-primary);
   text-align: left;
   cursor: pointer;
+  font: inherit;
+  line-height: 1.35;
 }
 
 .yeaft-debug-dream-segment-head span {
@@ -3711,18 +3853,76 @@
   white-space: nowrap;
 }
 
-.yeaft-debug-dream-segment-head em {
+.yeaft-debug-dream-segment-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.yeaft-debug-dream-segment-head:hover .yeaft-debug-dream-segment-toggle {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.yeaft-debug-dream-segment-id {
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+}
+
+.yeaft-debug-dream-segment-kind {
   margin-left: 6px;
   color: var(--text-secondary);
   font-style: normal;
   font-weight: 400;
 }
 
+.yeaft-debug-dream-segment-tags {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: right;
+}
+
 .yeaft-debug-dream-segment-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 4px 8px;
   margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.yeaft-debug-dream-segment-preview,
+.yeaft-debug-dream-segment-content {
+  margin: 8px 0 0;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.yeaft-debug-dream-segment-preview {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.yeaft-debug-dream-segment-content {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-input-wrapper);
+  max-height: 220px;
+  overflow: auto;
 }
 
 @media (max-width: 640px) {
@@ -3730,9 +3930,15 @@
     padding: 0 8px 8px;
   }
 
-  .yeaft-debug-dream-shell {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(120px, 34%) minmax(0, 1fr);
-    width: 100%;
+  .yeaft-debug-dream-toolbar {
+    align-items: stretch;
+  }
+
+  .yeaft-debug-dream-item {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .yeaft-debug-dream-item-meta {
+    display: none;
   }
 }

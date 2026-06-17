@@ -26,6 +26,7 @@ import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getRuntimePlatformInfo, renderRuntimePlatformPrompt } from './runtime-platform.js';
+import { DEFAULT_VPS } from './vp/seed-defaults.js';
 
 // ─── Template Loading (one-time at startup) ──────────────────────
 
@@ -192,12 +193,13 @@ export function getDefaultPlanInstruction(language = 'en') {
 
 const PROMPTS = {
   en: {
-    identity: 'You are Yeaft, a helpful AI assistant.',
+    identity: 'No VP soul is active for this turn. Participate in the current session with grounded, evidence-based answers and preserve the user\'s context.',
     date: (d) => `Date: ${d}`,
     dream: 'You are in dream mode. Reflect on past conversations and consolidate memories.',
     tools: (names) => `Available tools: ${names}`,
     // DESIGN-PROMPT §3 ④ — Active Scope header
     activeScopeHeader: '## active_scope',
+    multiVpRoutingHeader: '## multi_vp_routing',
     sessionAnnouncementHeader: '[Session Announcement]',
     // Project-doc (CLAUDE.md / AGENTS.md) header + one-liner intro. Both
     // filenames are recognized: CLAUDE.md is this project's convention,
@@ -205,23 +207,20 @@ const PROMPTS = {
     projectDocHeader: '[Project Doc]',
     projectDocIntro:
       'The user keeps project-level instructions and context in `CLAUDE.md` or `AGENTS.md` at the session working directory. Treat the content below as authoritative project context — coding conventions, task guidance, workflow rules, etc.',
-    vpPersonaIntro: (name, role) =>
-      `You are ${name}${role ? `, ${role}` : ''}. Think, decide, and respond from ${name}'s perspective. Speak in the first person as ${name}; do not refer to yourself as "Yeaft" or as a generic AI assistant.`,
   },
   zh: {
-    identity: '你是 Yeaft，一个有用的 AI 助手。',
+    identity: '你正在当前会话中参与协作。保持用户上下文，回答要基于证据；需要工具时使用工具，但不要把自己没有实际执行过的事说成已经执行。',
     date: (d) => `日期：${d}`,
     dream: '你处于梦境模式。回顾过去的对话，整理和巩固记忆。',
     tools: (names) => `可用工具：${names}`,
     // DESIGN-PROMPT §3 ④ — Active Scope header
     activeScopeHeader: '## active_scope',
+    multiVpRoutingHeader: '## multi_vp_routing',
     sessionAnnouncementHeader: '[会话公告]',
     // 项目文档块：CLAUDE.md / AGENTS.md（与 Codex 通用命名兼容）。
     projectDocHeader: '[项目文档]',
     projectDocIntro:
       '用户把项目级的说明和上下文记录在 session 工作目录下的 `CLAUDE.md` 或 `AGENTS.md` 中。下面的内容是权威的项目上下文 —— 编码规范、任务指导、工作流约定等，请遵循它来工作。',
-    vpPersonaIntro: (name, role) =>
-      `你是 ${name}${role ? `，${role}` : ''}。请以 ${name} 的思考方式理解问题、判断优先级并回答，并以 ${name} 的第一人称发言；不要自称 "Yeaft" 或泛指的 AI 助手。`,
   },
 };
 
@@ -404,6 +403,9 @@ export function buildSystemPrompt({
   const activeScopeBlock = renderActiveScope(activeScope, lang);
   if (activeScopeBlock) parts.push(activeScopeBlock);
 
+  const multiVpRoutingBlock = renderMultiVpRouting(activeScope, lang);
+  if (multiVpRoutingBlock) parts.push(multiVpRoutingBlock);
+
   return parts.join('\n\n');
 }
 
@@ -434,7 +436,8 @@ function renderVpPersona(vpPersona, lang, effectiveLang = 'en') {
   // generic assistant identity here: the VP soul body is the source of truth.
   // `role` is intentionally not rendered as a second identity line; stock VPs
   // carry bilingual, role-aware soul text in role.md.
-  const lines = [`# ${name}`, '', '## Soul'];
+  const soulHeading = effectiveLang === 'zh' ? '## 灵魂' : '## Soul';
+  const lines = [`# ${name}`, '', soulHeading];
   if (body) lines.push('', body);
   return lines.join('\n');
 }
@@ -448,14 +451,42 @@ function selectVpPersonaName(vpPersona, effectiveLang) {
   return typeof vpPersona.displayName === 'string' ? vpPersona.displayName.trim() : '';
 }
 
+function normalizePersonaBodyForMatch(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function selectMigratedStockPersonaBody(vpPersona, body, effectiveLang) {
+  const vpId = typeof vpPersona?.vpId === 'string' ? vpPersona.vpId.trim() : '';
+  const persistedBody = normalizePersonaBodyForMatch(body);
+  if (!vpId || !persistedBody) return null;
+
+  const stock = DEFAULT_VPS.find(vp => vp.vpId === vpId);
+  if (!stock) return null;
+
+  const acceptedBodies = [
+    stock.legacyPersonaEn,
+    stock.legacyPersona,
+    stock.personaEn,
+    ...(Array.isArray(stock.legacyPersonas) ? stock.legacyPersonas : []),
+  ]
+    .map(normalizePersonaBodyForMatch)
+    .filter(Boolean);
+
+  if (!acceptedBodies.includes(persistedBody)) return null;
+  const selected = effectiveLang === 'zh' ? stock.personaZh : stock.personaEn;
+  return normalizePersonaBodyForMatch(selected) || null;
+}
 
 function selectVpPersonaBody(vpPersona, effectiveLang) {
   const body = typeof vpPersona.persona === 'string' ? vpPersona.persona.trim() : '';
 
-  // role.md persona is the canonical soul. If localized sections exist, select
-  // the requested section; if that section is missing, keep the authored body as
-  // persisted instead of synthesizing a second stock identity here.
+  // role.md persona is the canonical soul. Exact stock legacy bodies are mapped
+  // to the current authored source so old seeded role.md files do not leak
+  // bilingual/English souls into localized system prompts before top-up runs.
   if (body) {
+    const migratedStockBody = selectMigratedStockPersonaBody(vpPersona, body, effectiveLang);
+    if (migratedStockBody) return migratedStockBody;
+
     if (body.includes('<!-- lang:')) {
       const selected = extractExactLangSection(body, effectiveLang);
       return selected !== null ? selected : body;
@@ -476,9 +507,6 @@ function renderActiveScope(activeScope, lang) {
     ? activeScope.sessionId.trim()
     : '';
   if (session) lines.push(`session_id: ${session}`);
-
-  const sessionMember = firstNonEmptyString(activeScope.sessionMember, activeScope.vpId);
-  if (sessionMember) lines.push(`session_member: ${sessionMember}`);
 
   const membersLine = renderSessionMembersLine(activeScope.sessionMembers || activeScope.members);
   if (membersLine) lines.push(`session_members: ${membersLine}`);
@@ -503,7 +531,11 @@ function firstNonEmptyString(...values) {
 }
 
 function renderSessionMembersLine(members) {
-  if (!Array.isArray(members)) return '';
+  return normalizeSessionMemberIds(members).join(', ');
+}
+
+function normalizeSessionMemberIds(members) {
+  if (!Array.isArray(members)) return [];
   const clean = [];
   const seen = new Set();
   for (const member of members) {
@@ -513,7 +545,38 @@ function renderSessionMembersLine(members) {
     seen.add(id);
     clean.push(id);
   }
-  return clean.join(', ');
+  return clean;
+}
+
+function renderMultiVpRouting(activeScope, lang) {
+  if (!activeScope || typeof activeScope !== 'object') return '';
+  const ownId = firstNonEmptyString(activeScope.sessionMember, activeScope.vpId);
+  const members = normalizeSessionMemberIds(activeScope.sessionMembers || activeScope.members);
+  const peers = ownId ? members.filter((member) => member !== ownId) : members;
+  if (peers.length === 0) return '';
+
+  const header = lang.multiVpRoutingHeader || '## multi_vp_routing';
+  if (lang === PROMPTS.zh) {
+    return [
+      header,
+      `当前 VP: ${ownId || 'unknown'}`,
+      `可转发 VP: ${peers.join(', ')}`,
+      '- 多 VP session 中，先主动感知这些 VP 的职责；不要假装只有你一个人在场。',
+      '- 当用户点名其他会话成员、任务明显属于其他会话成员、需要并行协作，或你需要另一个会话成员继续处理时，必须调用 `route_forward`。',
+      '- VP 自己写 @mention 不会触发路由；只有 `route_forward` 工具会真正把任务交给目标 VP。',
+      '- 如果要多人一起处理，调用 `route_forward`，`to` 可填目标 vpId 或 `all`；`text` 要包含明确任务和必要上下文。',
+    ].join('\n');
+  }
+
+  return [
+    header,
+    `Current VP: ${ownId || 'unknown'}`,
+    `Forwardable VPs: ${peers.join(', ')}`,
+    '- In a multi-VP session, actively notice these peers and their likely responsibilities; do not behave as if you are alone.',
+    '- When the user names another VP, the task clearly belongs to another VP, parallel collaboration is needed, or another VP should continue the work, you MUST call `route_forward`.',
+    '- VP-written @mentions do not route anything; only the `route_forward` tool performs a real hand-off.',
+    '- For multi-person work, call `route_forward` with a target vpId or `all`; include the concrete task and required context in `text`.',
+  ].join('\n');
 }
 
 /**

@@ -64,22 +64,23 @@ describe('Yeaft mobile layout CSS', () => {
     expect(mobile).toContain('column-reverse');
   });
 
-  it('keeps Dream debug content scrollable in both axes', () => {
+  it('keeps Dream debug accordion content scrollable without a two-pane shell', () => {
     const css = read('styles/yeaft.css');
     const panel = ruleBlock(css, '.yeaft-debug-dream-panel', 'overflow: hidden');
-    const shell = ruleBlock(css, '.yeaft-debug-dream-shell', 'width: 100%');
+    const list = ruleBlock(css, '.yeaft-debug-dream-list', 'overflow-y: auto');
+    const detail = ruleBlock(css, '.yeaft-debug-dream-detail', 'max-height: min(560px, 62vh)');
     const detailBody = ruleBlock(css, '.yeaft-debug-dream-detail-body', 'overflow: auto');
     const mobile = mediaBlock(css, '(max-width: 640px)', '.yeaft-debug-dream-panel');
 
+    expect(css).not.toContain('.yeaft-debug-dream-shell');
     expect(panel).toContain('min-width: 0');
     expect(panel).toContain('min-height: 0');
     expect(panel).toContain('overflow: hidden');
-    expect(shell).toContain('grid-template-columns: minmax(220px, 32%) minmax(0, 1fr)');
-    expect(shell).toContain('width: 100%');
-    expect(shell).toContain('overflow: hidden');
+    expect(list).toContain('overflow-y: auto');
+    expect(detail).toContain('overflow: hidden');
     expect(detailBody).toContain('overflow: auto');
-    expect(mobile).toContain('grid-template-columns: minmax(0, 1fr)');
-    expect(mobile).toContain('width: 100%');
+    expect(mobile).toContain('.yeaft-debug-dream-item');
+    expect(mobile).toContain('grid-template-columns: minmax(0, 1fr) auto');
   });
 
   it('stacks Yeaft invite CTAs on narrow phones', () => {

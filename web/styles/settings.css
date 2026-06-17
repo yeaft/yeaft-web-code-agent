@@ -1,187 +1,3 @@
-/* ============ Sidebar Proxy Modal ============ */
-
-.sidebar-icon-btn.has-enabled,
-.collapsed-icon-btn.has-enabled {
-  color: #22c55e;
-}
-
-.proxy-modal {
-  width: 420px;
-  max-height: 500px;
-  overflow-y: auto;
-  position: relative;
-  padding-top: 8px;
-}
-
-/* Agent Dropdown */
-.agent-dropdown-trigger {
-  position: relative;
-}
-
-.dropdown-chevron {
-  color: var(--text-secondary);
-  transition: transform 0.2s;
-  flex-shrink: 0;
-}
-
-.dropdown-chevron.open {
-  transform: rotate(180deg);
-}
-
-.agent-dropdown {
-  position: absolute;
-  top: 100%;
-  left: -4px;
-  margin-top: 4px;
-  min-width: 252px;
-  background: var(--bg-main);
-  border-radius: 12px;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
-  z-index: 100;
-  padding: 4px;
-}
-
-.agent-dropdown-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  transition: background 0.15s;
-  font-weight: normal;
-}
-
-.agent-dropdown-item:hover {
-  background: var(--sidebar-hover);
-}
-
-.agent-dropdown-item.offline {
-  opacity: 0.5;
-}
-
-.agent-dropdown-item .status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-secondary);
-  flex-shrink: 0;
-}
-
-.agent-dropdown-item .status-dot.online {
-  background: var(--success);
-}
-
-.agent-dropdown-item .status-dot.restarting,
-.agent-dropdown-item .status-dot.upgrading {
-  background: #f59e0b;
-  animation: pulse-restart 1s infinite;
-}
-
-@keyframes pulse-restart {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-
-.agent-dropdown-name {
-  font-size: 13px;
-  color: var(--text-primary);
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.agent-dropdown-latency {
-  font-size: 11px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.agent-dropdown-version {
-  font-size: 10px;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-.agent-dropdown-status {
-  font-size: 11px;
-  color: #f59e0b;
-  white-space: nowrap;
-}
-
-.agent-dropdown-restart-btn,
-.agent-dropdown-upgrade-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all 0.15s;
-  flex-shrink: 0;
-}
-
-.agent-dropdown-restart-btn:hover:not(:disabled),
-.agent-dropdown-upgrade-btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--accent-color, #3b82f6);
-}
-
-.agent-dropdown-restart-btn:disabled,
-.agent-dropdown-upgrade-btn:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
-.agent-dropdown-empty {
-  padding: 12px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-/* Proxy agent selector — inline in add row */
-.proxy-agent-inline {
-  width: 100px;
-  flex-shrink: 0;
-}
-
-/* Proxy scheme selector — inline in add row */
-.proxy-scheme-inline {
-  width: 68px;
-  flex-shrink: 0;
-}
-
-.proxy-select-wrapper {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.proxy-select {
-  width: 100%;
-  padding: 6px 28px 6px 8px;
-  font-size: 12px;
-}
-
-.proxy-select:focus {
-  outline: none;
-  border-color: var(--accent-blue, #4a9eff);
-  box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.12);
-}
-
-.proxy-select-wrapper .select-arrow {
-  position: absolute;
-  right: 6px;
-  pointer-events: none;
-  color: var(--text-muted);
-}
-
 /* ========================================
    Settings Dialog — ChatGPT-style floating modal
    ======================================== */
@@ -329,14 +145,52 @@
   max-width: 100%;
 }
 
-/* Proxy tab inside settings - remove max-height, hide redundant header */
-.settings-pane .proxy-tab {
-  max-height: none;
-  padding: 0;
+
+/* Yeaft settings segmented tabs */
+.sp-subtab-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  margin: 0 0 20px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
 }
 
-.settings-pane .proxy-header {
-  display: none;
+.sp-subtab {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 9px;
+  padding: 7px 12px;
+  min-height: 32px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.sp-subtab:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.sp-subtab:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+.sp-subtab.active {
+  background: var(--bg-main);
+  color: var(--text-primary);
+  box-shadow: 0 0 0 1px var(--border-color);
+}
+
+.sp-subpane {
+  min-width: 0;
 }
 
 /* Group = a visual section */
@@ -981,15 +835,7 @@
   }
 }
 
-/* ============ Tools Tab — MCP Servers ============ */
-.sp-mcp-item {
-  border-bottom: 1px solid var(--border-light);
-}
-
-.sp-mcp-item:last-child {
-  border-bottom: none;
-}
-
+/* ============ Toggle rows ============ */
 .sp-toggle-row {
   display: flex;
   align-items: center;
@@ -1015,24 +861,6 @@
   font-size: 12px;
   color: var(--text-muted);
   margin-top: 2px;
-}
-
-.sp-toggle-badge {
-  display: inline-block;
-  padding: 1px 8px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 500;
-}
-
-.sp-badge-builtin {
-  background: rgba(59, 130, 246, 0.12);
-  color: #60a5fa;
-}
-
-.sp-badge-mcp {
-  background: rgba(120, 120, 120, 0.12);
-  color: var(--text-secondary);
 }
 
 /* Toggle switch */
@@ -1067,12 +895,6 @@
 
 .sp-toggle.active .sp-toggle-knob {
   transform: translateX(18px);
-}
-
-.sp-tools-hint {
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-top: 4px;
 }
 
 /* ============ LLM Tab ============ */

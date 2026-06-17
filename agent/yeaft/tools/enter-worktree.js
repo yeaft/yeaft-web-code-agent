@@ -45,7 +45,7 @@ Returns the worktree path and branch name.`,
 
     // Verify we're in a git repo
     try {
-      execSync('git rev-parse --git-dir', { cwd, stdio: 'pipe' });
+      execFileSync('git', ['rev-parse', '--git-dir'], { cwd, stdio: 'pipe' });
     } catch {
       return JSON.stringify({ error: 'Not in a git repository' });
     }

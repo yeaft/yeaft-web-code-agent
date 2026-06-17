@@ -1,4 +1,4 @@
-// Pure model helpers for the Yeaft Debug > Dream master-detail view.
+// Pure model helpers for the Yeaft Debug > Dream accordion view.
 
 function parseListValue(value) {
   const text = String(value || '').trim();

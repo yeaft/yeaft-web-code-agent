@@ -22,8 +22,13 @@
  */
 
 import { LLMAdapter } from './adapter.js';
-import { getThinkingCapability, normalizeEffort, parseModelRef } from '../models.js';
-import { normalizeKnownProviderForRuntime } from './known-providers.js';
+import { getModelEffortOptions, getThinkingCapability, normalizeEffort, parseModelRef } from '../models.js';
+import {
+  GITHUB_COPILOT_BASE_URL,
+  GITHUB_COPILOT_CREDENTIAL_PROVIDER,
+  GITHUB_COPILOT_PROVIDER_NAME,
+  normalizeKnownProviderForRuntime,
+} from './known-providers.js';
 import { pairSanitize } from '../pair-sanitize.js';
 
 /**
@@ -99,20 +104,27 @@ function thinkingV1Enabled() {
 export function filterEffortForModel(params) {
   if (!params || !('effort' in params)) return params;
   if (!thinkingV1Enabled()) {
-    const { effort: _drop, ...rest } = params;
-    return rest;
+    if (params.effortSource !== 'user') {
+      const { effort: _drop, effortSource: _source, ...rest } = params;
+      return rest;
+    }
   }
   const norm = normalizeEffort(params.effort);
   if (!norm) {
-    const { effort: _drop, ...rest } = params;
+    const { effort: _drop, effortSource: _source, ...rest } = params;
     return rest;
   }
-  const cap = getThinkingCapability(parseModelRef(params.model).modelId);
+  const modelId = parseModelRef(params.model).modelId;
+  const cap = getThinkingCapability(modelId);
   if (!cap.supportsThinking || cap.thinkingProtocol === 'none') {
-    const { effort: _drop, ...rest } = params;
+    const { effort: _drop, effortSource: _source, ...rest } = params;
     return rest;
   }
-  return { ...params, effort: norm };
+  if (!getModelEffortOptions(modelId).includes(norm)) {
+    const { effort: _drop, effortSource: _source, ...rest } = params;
+    return rest;
+  }
+  return { ...params, effort: norm, effortSource: params.effortSource };
 }
 
 /**
@@ -173,6 +185,31 @@ function sliceUnchanged(original, cleaned) {
     if (aCalls !== bCalls) return false;
   }
   return true;
+}
+
+function normalizedOrigin(url) {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Anthropic native uses x-api-key. Copilot's Anthropic-compatible endpoint uses
+ * a bearer token, and dynamic credential providers generally hand back bearer
+ * tokens unless explicitly overridden.
+ *
+ * @param {object} provider
+ * @returns {'x-api-key'|'bearer'}
+ */
+export function anthropicAuthHeaderModeForProvider(provider) {
+  const explicit = provider?.anthropicAuthHeaderMode || provider?.authHeaderMode;
+  if (explicit === 'bearer' || explicit === 'x-api-key') return explicit;
+  if (provider?.credentialProvider) return 'bearer';
+  if (provider?.name === GITHUB_COPILOT_PROVIDER_NAME) return 'bearer';
+  if (normalizedOrigin(provider?.baseUrl) === GITHUB_COPILOT_BASE_URL) return 'bearer';
+  return 'x-api-key';
 }
 
 /**
@@ -386,7 +423,11 @@ export class AdapterRouter extends LLMAdapter {
     // header. For static providers the apiKey never changes so this stays
     // a one-time-build cache exactly like before.
     const apiKeyFp = apiKey ? this.#shortFingerprint(apiKey) : 'none';
-    const cacheKey = `${provider.name}::${protocol}::${apiKeyFp}`;
+    const anthropicAuthHeaderMode = protocol === 'anthropic'
+      ? anthropicAuthHeaderModeForProvider(provider)
+      : null;
+    const authModeKey = anthropicAuthHeaderMode || 'default';
+    const cacheKey = `${provider.name}::${protocol}::${authModeKey}::${apiKeyFp}`;
     const cached = this.#adapterCache.get(cacheKey);
     if (cached) return { adapter: cached, modelId: entry.id };
 
@@ -396,7 +437,7 @@ export class AdapterRouter extends LLMAdapter {
     // (Copilot tokens rotate every ~30 min). Static-apiKey providers never
     // change fingerprint, so this loop never finds anything to evict for
     // them — back-compat preserved.
-    const prefix = `${provider.name}::${protocol}::`;
+    const prefix = `${provider.name}::${protocol}::${authModeKey}::`;
     for (const key of this.#adapterCache.keys()) {
       if (key.startsWith(prefix)) this.#adapterCache.delete(key);
     }
@@ -408,6 +449,7 @@ export class AdapterRouter extends LLMAdapter {
       adapter = new AnthropicAdapter({
         apiKey,
         baseUrl: provider.baseUrl,
+        authHeaderMode: anthropicAuthHeaderMode,
       });
     } else if (protocol === 'openai-responses') {
       // OpenAI Responses API (/v1/responses) — canonical OpenAI-compatible path.

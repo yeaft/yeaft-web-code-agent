@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import path from 'path';
-import { readFileSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 
 import { getRuntimePlatformInfo, renderRuntimePlatformPrompt } from '../../agent/yeaft/runtime-platform.js';
 import bashTool, { buildShellInvocation } from '../../agent/yeaft/tools/bash.js';
+import enterWorktreeTool from '../../agent/yeaft/tools/enter-worktree.js';
 import { checkPathAllowed, isPathInsideOrEqual } from '../../agent/yeaft/tools/path-safety.js';
 import { buildSystemPrompt } from '../../agent/yeaft/prompts.js';
 
@@ -106,9 +109,32 @@ describe('Yeaft tool runtime platform compatibility', () => {
     const enter = readFileSync(join(repoRoot, 'agent/yeaft/tools/enter-worktree.js'), 'utf8');
     const exit = readFileSync(join(repoRoot, 'agent/yeaft/tools/exit-worktree.js'), 'utf8');
 
+    expect(enter).toContain("execFileSync('git', ['rev-parse', '--git-dir']");
     expect(enter).toContain("execFileSync('git', ['worktree', 'add'");
     expect(exit).toContain("execFileSync('git', ['worktree', 'remove'");
     expect(enter).not.toContain('git worktree add -b');
     expect(exit).not.toContain('git worktree remove "');
+  });
+
+  it('detects a git repo before creating an EnterWorktree worktree', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'yeaft-enter-worktree-'));
+
+    try {
+      execFileSync('git', ['init'], { cwd: tmp, stdio: 'pipe' });
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmp, stdio: 'pipe' });
+      execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: tmp, stdio: 'pipe' });
+      mkdirSync(join(tmp, 'src'));
+      execFileSync('git', ['add', '.'], { cwd: tmp, stdio: 'pipe' });
+      execFileSync('git', ['commit', '--allow-empty', '-m', 'seed'], { cwd: tmp, stdio: 'pipe' });
+
+      const raw = await enterWorktreeTool.execute({ name: 'probe' }, { cwd: tmp });
+      const result = JSON.parse(raw);
+
+      expect(result.error).toBeUndefined();
+      expect(result.path).toBe(join(tmp, '.yeaft', 'worktrees', 'probe'));
+      expect(result.branch).toBe('yeaft-wt/probe');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

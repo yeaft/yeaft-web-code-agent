@@ -90,7 +90,7 @@ describe('Yeaft session pin persistence flow', () => {
     store.setActive('s-other');
 
     expect(store.activeSessionId).toBe('s-other');
-    expect(ids(store.sessionList)).toEqual(['s-pinned', 's-other', 's-active']);
+    expect(ids(store.sessionList)).toEqual(['s-pinned', 's-active', 's-other']);
   });
 
   it('keeps server-persisted pins after a later session list refresh', () => {
@@ -110,7 +110,7 @@ describe('Yeaft session pin persistence flow', () => {
 
     expect(store.sessions['s-pinned']).toMatchObject({ pinned: true });
     expect(chatStore.pinnedSessions).toEqual(['s-pinned']);
-    expect(ids(store.sessionList)).toEqual(['s-pinned', 's-active', 's-new']);
+    expect(ids(store.sessionList)).toEqual(['s-pinned', 's-new', 's-active']);
   });
 
   it('updates row metadata for pin and unpin acknowledgements so pinned block membership recovers', () => {
@@ -129,7 +129,7 @@ describe('Yeaft session pin persistence flow', () => {
     store.applyPinState('s-b', false);
 
     expect(store.sessions['s-b']).toMatchObject({ pinned: false });
-    expect(ids(store.sessionList)).toEqual(['s-a', 's-b', 's-c']);
+    expect(ids(store.sessionList)).toEqual(['s-a', 's-c', 's-b']);
   });
 
   it('keeps a pinned session pinned when selecting a non-pinned session after an upsert without pin fields', () => {
@@ -253,6 +253,7 @@ it('sends Yeaft pin metadata so the server can persist before DB hydration', () 
 });
 
 const { useChatStore } = await import('../../../web/stores/chat.js');
+const { handleAgentList } = await import('../../../web/stores/helpers/handlers/agentHandler.js');
 
 it('loads opened Yeaft sessions from every connected agent on entry', () => {
   const store = useChatStore();
@@ -277,6 +278,50 @@ it('loads opened Yeaft sessions from every connected agent on entry', () => {
   ]);
 });
 
+it('loads opened Yeaft sessions when agents become ready after entering Yeaft', () => {
+  const store = useChatStore();
+  const requests = [];
+  store.currentView = 'yeaft';
+  store.agents = [];
+  store.currentAgent = null;
+  store.yeaftAgentId = null;
+  store._yeaftOpenedSessionsLoadedAgents = {};
+  store.sessionCrudRequest = (op, data, opts) => {
+    requests.push({ op, data, opts });
+    return Promise.resolve({ ok: true });
+  };
+  store.sendWsMessage = () => {};
+
+  const loadedBeforeAgents = store.loadOpenedYeaftSessionsForConnectedAgents();
+  expect(loadedBeforeAgents).toEqual([]);
+
+  handleAgentList(store, { agents: [{ id: 'agent-late', online: true, conversations: [] }] });
+  handleAgentList(store, { agents: [{ id: 'agent-late', online: true, conversations: [] }] });
+
+  expect(store.yeaftAgentId).toBe('agent-late');
+  expect(requests).toEqual([
+    { op: 'list', data: {}, opts: { agentId: 'agent-late' } },
+  ]);
+});
+
+it('force reloads opened Yeaft sessions when re-entering the Yeaft page', () => {
+  const store = useChatStore();
+  const requests = [];
+  store.agents = [{ id: 'agent-a', online: true }];
+  store._yeaftOpenedSessionsLoadedAgents = { 'agent-a': 123 };
+  store.sessionCrudRequest = (op, data, opts) => {
+    requests.push({ op, data, opts });
+    return Promise.resolve({ ok: true });
+  };
+
+  const skipped = store.loadOpenedYeaftSessionsForConnectedAgents();
+  const forced = store.loadOpenedYeaftSessionsForConnectedAgents(null, { force: true });
+
+  expect(skipped).toEqual([]);
+  expect(forced).toEqual(['agent-a']);
+  expect(requests).toEqual([{ op: 'list', data: {}, opts: { agentId: 'agent-a' } }]);
+});
+
 it('persists Yeaft pin actions with agent-scoped metadata', () => {
   const store = useChatStore();
   const sent = [];
@@ -299,4 +344,63 @@ it('persists Yeaft pin actions with agent-scoped metadata', () => {
     sessionName: 'Session A',
     workDir: '/repo',
   }]);
+});
+
+it('restores a running opened Yeaft session from the connected-agent list snapshot after reload', () => {
+  const store = useSessionsStore();
+
+  store.applySnapshot([
+    { id: 'idle-session', name: 'Idle', updatedAt: 20, pinned: false },
+    { id: 'running-session', name: 'Running', updatedAt: 10, running: true, runningVpCount: 1, latestActivityAt: 99, pinned: true },
+  ], 'agent-1');
+
+  expect(store.sessions['running-session']).toMatchObject({
+    agentId: 'agent-1',
+    running: true,
+    active: true,
+    runningVpCount: 1,
+    pinned: true,
+  });
+  expect(store.activeSessionId).toBe('running-session');
+  expect(chatStore.yeaftActiveSessionFilter).toBe('running-session');
+  expect(ids(store.sessionList)[0]).toBe('running-session');
+});
+
+it('treats explicit pinned false from the server as authoritative on reload', () => {
+  const store = useSessionsStore();
+  chatStore.pinnedSessions = ['session-a'];
+
+  store.applySnapshot([
+    { id: 'session-a', name: 'A', pinned: true },
+  ], 'agent-1');
+  expect(store.sessions['session-a'].pinned).toBe(true);
+  expect(chatStore.pinnedSessions).toContain('session-a');
+
+  store.applySnapshot([
+    { id: 'session-a', name: 'A', pinned: false },
+  ], 'agent-1');
+
+  expect(store.sessions['session-a'].pinned).toBe(false);
+  expect(chatStore.pinnedSessions).not.toContain('session-a');
+});
+
+it('restores active Yeaft session filter from a reconnect VP status snapshot when no user filter exists', () => {
+  const store = useChatStore();
+  store.yeaftActiveSessionFilter = null;
+  store.vpStatuses = {};
+  const sessions = useSessionsStore();
+  window.Pinia.useSessionsStore = useSessionsStore;
+  sessions.applySnapshot([
+    { id: 'active-session', name: 'Active' },
+  ], 'agent-1');
+  store.yeaftActiveSessionFilter = null;
+  sessions.activeSessionId = null;
+
+  const restored = store.restoreActiveYeaftSessionFromStatuses([
+    { sessionId: 'active-session', vpId: 'vp-a', state: 'streaming', since: 123 },
+  ]);
+
+  expect(restored).toBe('active-session');
+  expect(store.yeaftActiveSessionFilter).toBe('active-session');
+  expect(sessions.activeSessionId).toBe('active-session');
 });

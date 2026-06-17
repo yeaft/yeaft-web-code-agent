@@ -25,7 +25,7 @@
  *   - raw [copy req] / [copy res]     → JSON-stringified payload
  *   - turn   [copy turn]              → markdown summary
  */
-import { buildDreamDebugItems, filterDreamDebugItems, previewText, selectDreamDebugItem } from './dream-debug-model.js';
+import { buildDreamDebugItems, filterDreamDebugItems, previewText } from './dream-debug-model.js';
 
 export default {
   name: 'YeaftDebugPanel',
@@ -279,7 +279,8 @@ export default {
       return filterDreamDebugItems(this.allDreamItems, this.dreamItemSearch);
     },
     activeDreamItem() {
-      return selectDreamDebugItem(this.dreamItems, this.activeDreamItemKey);
+      if (!this.activeDreamItemKey) return null;
+      return this.dreamItems.find((item) => item.key === this.activeDreamItemKey) || null;
     },
     activeDreamRequestEvents() {
       const item = this.activeDreamItem;
@@ -633,7 +634,7 @@ export default {
       this.expandedSections = { ...this.expandedSections, [sectionKey]: true };
     },
     setActiveDreamItem(key) {
-      this.activeDreamItemKey = key || null;
+      this.activeDreamItemKey = this.activeDreamItemKey === key ? null : (key || null);
     },
     isDreamSegmentExpanded(segment) {
       return !!this.expandedDreamSegments[segment?.id];
@@ -902,126 +903,130 @@ export default {
           />
           <span class="yeaft-debug-dream-count">{{ dreamItems.length }} / {{ allDreamItems.length }}</span>
         </div>
-        <div class="yeaft-debug-dream-shell" v-if="dreamItems.length > 0">
-          <aside class="yeaft-debug-dream-list" :aria-label="$t('yeaft.dreamDebug.itemList')">
+        <div class="yeaft-debug-dream-list" v-if="dreamItems.length > 0" :aria-label="$t('yeaft.dreamDebug.itemList')">
+          <article
+            v-for="item in dreamItems"
+            :key="item.key"
+            class="yeaft-debug-dream-accordion-item"
+            :class="{ expanded: activeDreamItem && activeDreamItem.key === item.key }"
+          >
             <button
-              v-for="item in dreamItems"
-              :key="item.key"
               type="button"
               class="yeaft-debug-dream-item"
-              :class="{ active: activeDreamItem && activeDreamItem.key === item.key }"
+              :aria-expanded="activeDreamItem && activeDreamItem.key === item.key ? 'true' : 'false'"
               @click="setActiveDreamItem(item.key)"
             >
               <span class="yeaft-debug-dream-item-main">
-                <strong :title="item.scope">{{ item.title }}</strong>
-                <span>{{ item.subtitle || $t('yeaft.dreamDebug.noSummary') }}</span>
+                <span class="yeaft-debug-dream-item-title" :title="item.scope">{{ item.title }}</span>
+                <span class="yeaft-debug-dream-item-summary">{{ item.subtitle || $t('yeaft.dreamDebug.noSummary') }}</span>
               </span>
               <span class="yeaft-debug-dream-item-meta">
-                <span :class="'status-' + item.status">{{ item.status }}</span>
-                <span>{{ item.segmentCount }} {{ $t('yeaft.dreamDebug.segments') }}</span>
-                <span>{{ formatTimestamp(item.lastAt) || '-' }}</span>
+                <span class="yeaft-debug-dream-item-status" :class="'status-' + item.status">{{ item.status }}</span>
+                <span class="yeaft-debug-dream-item-segments">{{ item.segmentCount }} {{ $t('yeaft.dreamDebug.segments') }}</span>
+                <span class="yeaft-debug-dream-item-time">{{ formatTimestamp(item.lastAt) || '-' }}</span>
               </span>
+              <span class="yeaft-debug-dream-item-toggle" aria-hidden="true">{{ activeDreamItem && activeDreamItem.key === item.key ? '−' : '+' }}</span>
             </button>
-          </aside>
-
-          <section class="yeaft-debug-dream-detail" v-if="activeDreamItem">
-            <div class="yeaft-debug-dream-detail-header">
-              <div>
-                <div class="yeaft-debug-dream-detail-title">{{ activeDreamItem.title }}</div>
-                <div class="yeaft-debug-dream-detail-subtitle">
-                  {{ activeDreamItem.status }} · {{ formatTimestamp(activeDreamItem.lastAt) || '-' }}
+              <section class="yeaft-debug-dream-detail" v-if="activeDreamItem && activeDreamItem.key === item.key">
+              <div class="yeaft-debug-dream-detail-header">
+                <div>
+                  <div class="yeaft-debug-dream-detail-title">{{ activeDreamItem.title }}</div>
+                  <div class="yeaft-debug-dream-detail-subtitle">
+                    {{ activeDreamItem.status }} · {{ formatTimestamp(activeDreamItem.lastAt) || '-' }}
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <div class="yeaft-debug-dream-detail-body">
-              <section class="yeaft-debug-dream-card">
-                <div class="yeaft-debug-dream-card-title">{{ $t('yeaft.dreamDebug.overview') }}</div>
-                <div class="yeaft-debug-dream-summary-grid">
-                  <span>{{ $t('yeaft.dreamDebug.scope') }}</span>
-                  <strong>{{ activeDreamItem.scope }}</strong>
-                  <span>{{ $t('yeaft.dreamDebug.sessionId') }}</span>
-                  <strong>{{ activeDreamItem.sessionId }}</strong>
-                  <span>{{ $t('yeaft.dreamDebug.lastDream') }}</span>
-                  <strong>{{ formatTimestamp(activeDreamItem.snapshot && activeDreamItem.snapshot.lastDreamAt) || formatTimestamp(activeDreamItem.lastAt) || '-' }}</strong>
-                  <span>{{ $t('yeaft.dreamDebug.messagesCovered') }}</span>
-                  <strong>{{ (activeDreamItem.snapshot && activeDreamItem.snapshot.messageCount) || 0 }}</strong>
-                  <span>{{ $t('yeaft.dreamDebug.segments') }}</span>
-                  <strong>{{ activeDreamItem.segmentCount }}</strong>
-                  <span>{{ $t('yeaft.dreamDebug.loadedAt') }}</span>
-                  <strong>{{ formatTimestamp(activeDreamItem.snapshot && activeDreamItem.snapshot.loadedAt) || '-' }}</strong>
-                </div>
-              </section>
+              <div class="yeaft-debug-dream-detail-body">
+                <section class="yeaft-debug-dream-card">
+                  <div class="yeaft-debug-dream-card-title">{{ $t('yeaft.dreamDebug.overview') }}</div>
+                  <div class="yeaft-debug-dream-summary-grid">
+                    <span>{{ $t('yeaft.dreamDebug.scope') }}</span>
+                    <strong>{{ activeDreamItem.scope }}</strong>
+                    <span>{{ $t('yeaft.dreamDebug.sessionId') }}</span>
+                    <strong>{{ activeDreamItem.sessionId }}</strong>
+                    <span>{{ $t('yeaft.dreamDebug.lastDream') }}</span>
+                    <strong>{{ formatTimestamp(activeDreamItem.snapshot && activeDreamItem.snapshot.lastDreamAt) || formatTimestamp(activeDreamItem.lastAt) || '-' }}</strong>
+                    <span>{{ $t('yeaft.dreamDebug.messagesCovered') }}</span>
+                    <strong>{{ (activeDreamItem.snapshot && activeDreamItem.snapshot.messageCount) || 0 }}</strong>
+                    <span>{{ $t('yeaft.dreamDebug.segments') }}</span>
+                    <strong>{{ activeDreamItem.segmentCount }}</strong>
+                    <span>{{ $t('yeaft.dreamDebug.loadedAt') }}</span>
+                    <strong>{{ formatTimestamp(activeDreamItem.snapshot && activeDreamItem.snapshot.loadedAt) || '-' }}</strong>
+                  </div>
+                </section>
 
-              <section class="yeaft-debug-dream-card">
-                <div class="yeaft-debug-dream-card-title">{{ $t('yeaft.dreamDebug.layers') }}</div>
-                <details class="yeaft-debug-dream-layer" open>
-                  <summary>{{ $t('yeaft.dreamDebug.summaryLayer') }}</summary>
-                  <pre v-if="activeDreamItem.snapshot && activeDreamItem.snapshot.summaryText" class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ activeDreamItem.snapshot.summaryText }}</pre>
-                  <div v-else class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noSummary') }}</div>
-                </details>
-                <details class="yeaft-debug-dream-layer">
-                  <summary>memory.md</summary>
-                  <pre v-if="activeDreamItem.snapshot && activeDreamItem.snapshot.memoryText" class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ activeDreamItem.snapshot.memoryText }}</pre>
-                  <div v-else class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noOutput') }}</div>
-                </details>
-                <details class="yeaft-debug-dream-layer">
-                  <summary>{{ $t('yeaft.dreamDebug.promptLoadTitle') }}</summary>
-                  <pre v-if="activeDreamItem.promptLoad && activeDreamItem.promptLoad.summary" class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ activeDreamItem.promptLoad.summary }}</pre>
-                  <div v-else class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noPromptLoad') }}</div>
-                </details>
-              </section>
-
-              <section class="yeaft-debug-dream-card">
-                <div class="yeaft-debug-dream-card-title">{{ $t('yeaft.dreamDebug.segmentTitle') }}</div>
-                <div v-if="activeDreamItem.segments.length > 0" class="yeaft-debug-dream-segments">
-                  <article v-for="segment in activeDreamItem.segments" :key="segment.id" class="yeaft-debug-dream-segment">
-                    <button type="button" class="yeaft-debug-dream-segment-head" @click="toggleDreamSegment(segment)">
-                      <span>
-                        <strong>{{ segment.id }}</strong>
-                        <em>{{ segment.kind }}</em>
-                      </span>
-                      <span>{{ segment.tags.join(', ') || '-' }}</span>
-                    </button>
-                    <div class="yeaft-debug-dream-segment-meta">
-                      <span>{{ $t('yeaft.dreamDebug.sourceMessages') }}: {{ segment.sourceMessages.join(', ') || '-' }}</span>
-                      <span>{{ $t('yeaft.dreamDebug.createdAt') }}: {{ formatTimestamp(segment.createdAt) || '-' }}</span>
-                      <span>{{ $t('yeaft.dreamDebug.updatedAt') }}: {{ formatTimestamp(segment.updatedAt) || '-' }}</span>
-                    </div>
-                    <p v-if="!isDreamSegmentExpanded(segment)" class="yeaft-debug-dream-segment-preview">{{ dreamPreview(segment.content) }}</p>
-                    <pre v-else class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ segment.content }}</pre>
-                  </article>
-                </div>
-                <div v-else class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noSegments') }}</div>
-              </section>
-
-              <section class="yeaft-debug-dream-card">
-                <div class="yeaft-debug-dream-card-title">{{ $t('yeaft.dreamDebug.requestResponse') }}</div>
-                <div v-if="activeDreamRequestEvents.length > 0" class="yeaft-debug-dream-events">
-                  <details v-for="evt in activeDreamRequestEvents" :key="dreamEventKey(evt)" class="yeaft-debug-dream-layer">
-                    <summary>{{ dreamEventPhaseLabel(evt) }} · {{ formatTimestamp(evt.at || evt.ts) || '-' }}</summary>
-                    <div class="yeaft-debug-section" v-if="evt.systemPrompt">
-                      <div class="yeaft-debug-section-row"><span class="yeaft-debug-section-title">System prompt</span></div>
-                      <pre class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ evt.systemPrompt }}</pre>
-                    </div>
-                    <div class="yeaft-debug-section" v-if="dreamLoopUserContent(evt)">
-                      <div class="yeaft-debug-section-row"><span class="yeaft-debug-section-title">Request</span></div>
-                      <pre class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ dreamLoopUserContent(evt) }}</pre>
-                    </div>
-                    <div class="yeaft-debug-section" v-if="evt.response || evt.rawResponse">
-                      <div class="yeaft-debug-section-row"><span class="yeaft-debug-section-title">Response</span></div>
-                      <pre class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ formatDebugValue(evt.response || evt.rawResponse) }}</pre>
-                    </div>
-                    <div class="yeaft-debug-section">
-                      <div class="yeaft-debug-section-row"><span class="yeaft-debug-section-title">Raw event</span></div>
-                      <pre class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ formatDebugValue(evt) }}</pre>
-                    </div>
+                <section class="yeaft-debug-dream-card">
+                  <div class="yeaft-debug-dream-card-title">{{ $t('yeaft.dreamDebug.layers') }}</div>
+                  <details class="yeaft-debug-dream-layer" open>
+                    <summary>{{ $t('yeaft.dreamDebug.summaryLayer') }}</summary>
+                    <pre v-if="activeDreamItem.snapshot && activeDreamItem.snapshot.summaryText" class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ activeDreamItem.snapshot.summaryText }}</pre>
+                    <div v-else class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noSummary') }}</div>
                   </details>
-                </div>
-                <div v-else class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noRequestResponse') }}</div>
-              </section>
-            </div>
-          </section>
+                  <details class="yeaft-debug-dream-layer">
+                    <summary>memory.md</summary>
+                    <pre v-if="activeDreamItem.snapshot && activeDreamItem.snapshot.memoryText" class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ activeDreamItem.snapshot.memoryText }}</pre>
+                    <div v-else class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noOutput') }}</div>
+                  </details>
+                  <details class="yeaft-debug-dream-layer">
+                    <summary>{{ $t('yeaft.dreamDebug.promptLoadTitle') }}</summary>
+                    <pre v-if="activeDreamItem.promptLoad && activeDreamItem.promptLoad.summary" class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ activeDreamItem.promptLoad.summary }}</pre>
+                    <div v-else class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noPromptLoad') }}</div>
+                  </details>
+                </section>
+
+                <section class="yeaft-debug-dream-card">
+                  <div class="yeaft-debug-dream-card-title">{{ $t('yeaft.dreamDebug.segmentTitle') }}</div>
+                  <div v-if="activeDreamItem.segments.length > 0" class="yeaft-debug-dream-segments">
+                    <article v-for="segment in activeDreamItem.segments" :key="segment.id" class="yeaft-debug-dream-segment">
+                      <button type="button" class="yeaft-debug-dream-segment-head" @click="toggleDreamSegment(segment)">
+                        <span class="yeaft-debug-dream-segment-toggle" aria-hidden="true">{{ isDreamSegmentExpanded(segment) ? '−' : '+' }}</span>
+                        <span class="yeaft-debug-dream-segment-identity">
+                          <strong class="yeaft-debug-dream-segment-id">{{ segment.id }}</strong>
+                          <em class="yeaft-debug-dream-segment-kind">{{ segment.kind }}</em>
+                        </span>
+                        <span class="yeaft-debug-dream-segment-tags">{{ segment.tags.join(', ') || '-' }}</span>
+                      </button>
+                      <div class="yeaft-debug-dream-segment-meta">
+                        <span>{{ $t('yeaft.dreamDebug.sourceMessages') }}: {{ segment.sourceMessages.join(', ') || '-' }}</span>
+                        <span>{{ $t('yeaft.dreamDebug.createdAt') }}: {{ formatTimestamp(segment.createdAt) || '-' }}</span>
+                        <span>{{ $t('yeaft.dreamDebug.updatedAt') }}: {{ formatTimestamp(segment.updatedAt) || '-' }}</span>
+                      </div>
+                      <p v-if="!isDreamSegmentExpanded(segment)" class="yeaft-debug-dream-segment-preview">{{ dreamPreview(segment.content) }}</p>
+                      <div v-else class="yeaft-debug-dream-segment-content">{{ segment.content }}</div>
+                    </article>
+                  </div>
+                  <div v-else class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noSegments') }}</div>
+                </section>
+
+                <section class="yeaft-debug-dream-card">
+                  <div class="yeaft-debug-dream-card-title">{{ $t('yeaft.dreamDebug.requestResponse') }}</div>
+                  <div v-if="activeDreamRequestEvents.length > 0" class="yeaft-debug-dream-events">
+                    <details v-for="evt in activeDreamRequestEvents" :key="dreamEventKey(evt)" class="yeaft-debug-dream-layer">
+                      <summary>{{ dreamEventPhaseLabel(evt) }} · {{ formatTimestamp(evt.at || evt.ts) || '-' }}</summary>
+                      <div class="yeaft-debug-section" v-if="evt.systemPrompt">
+                        <div class="yeaft-debug-section-row"><span class="yeaft-debug-section-title">System prompt</span></div>
+                        <pre class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ evt.systemPrompt }}</pre>
+                      </div>
+                      <div class="yeaft-debug-section" v-if="dreamLoopUserContent(evt)">
+                        <div class="yeaft-debug-section-row"><span class="yeaft-debug-section-title">Request</span></div>
+                        <pre class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ dreamLoopUserContent(evt) }}</pre>
+                      </div>
+                      <div class="yeaft-debug-section" v-if="evt.response || evt.rawResponse">
+                        <div class="yeaft-debug-section-row"><span class="yeaft-debug-section-title">Response</span></div>
+                        <pre class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ formatDebugValue(evt.response || evt.rawResponse) }}</pre>
+                      </div>
+                      <div class="yeaft-debug-section">
+                        <div class="yeaft-debug-section-row"><span class="yeaft-debug-section-title">Raw event</span></div>
+                        <pre class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ formatDebugValue(evt) }}</pre>
+                      </div>
+                    </details>
+                  </div>
+                  <div v-else class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noRequestResponse') }}</div>
+                </section>
+              </div>
+            </section>
+          </article>
         </div>
         <div v-else class="yeaft-debug-empty">{{ allDreamItems.length ? $t('yeaft.dreamDebug.noSearchResults') : $t('yeaft.dreamDebug.empty') }}</div>
       </div>

@@ -6,7 +6,8 @@
  *
  * v1 schema (intentionally tiny — extend via additive keys only):
  *   {
- *     "model": "my-proxy/claude-sonnet-4-20250514"   // optional
+ *     "model": "my-proxy/claude-sonnet-4-20250514",  // optional
+ *     "modelEffort": "high"                          // optional
  *   }
  *
  * Missing file or `{}` → no session-level override. Missing field → fall back to user-level
@@ -26,7 +27,8 @@ import { sessionsRoot, resolveSessionYeaftDir } from './session-crud.js';
 const CONFIG_FILE = 'config.json';
 
 /** Whitelist of persisted session model-override fields. Reject everything else. */
-const ALLOWED_KEYS = new Set(['model']);
+const ALLOWED_KEYS = new Set(['model', 'modelEffort']);
+const ALLOWED_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 
 export class SessionConfigError extends Error {
   constructor(code, message) {
@@ -97,6 +99,11 @@ export function validateSessionConfig(cfg) {
       throw new SessionConfigError('invalid_model', 'model must be a non-empty string');
     }
   }
+  if ('modelEffort' in cfg && cfg.modelEffort !== null && cfg.modelEffort !== undefined && cfg.modelEffort !== '') {
+    if (typeof cfg.modelEffort !== 'string' || !ALLOWED_EFFORTS.has(cfg.modelEffort.trim())) {
+      throw new SessionConfigError('invalid_model_effort', 'modelEffort must be minimal, low, medium, high, xhigh, or max');
+    }
+  }
 }
 
 /**
@@ -162,6 +169,11 @@ export function resolveSessionConfig(userConfig, sessionConfig) {
     const model = overrides.model.trim();
     base.model = model;
     base.primaryModel = model;
+  }
+  if (overrides.modelEffort && typeof overrides.modelEffort === 'string' && ALLOWED_EFFORTS.has(overrides.modelEffort)) {
+    base.modelEffort = overrides.modelEffort;
+  } else {
+    delete base.modelEffort;
   }
   return base;
 }
