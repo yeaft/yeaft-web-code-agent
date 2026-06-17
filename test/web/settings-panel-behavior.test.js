@@ -72,27 +72,22 @@ describe('SettingsPanel Agent secret behavior', () => {
     expect(instance.agentSecret).toBe(null);
   });
 
-  it('leaves run and service commands empty until a secret exists', async () => {
+  it('renders the LLM connect command without requiring a secret and never references --server', async () => {
     const component = await loadComponent();
-    const instance = createInstance(component, { agentSecret: null });
-
-    expect(instance.agentRunCommand).toBe('');
-    expect(instance.agentServiceCommand).toBe('');
-    expect(instance.agentSecretActionLabel).toBe('settings.security.generateKey');
-  });
-
-  it('builds run and service commands with the current fake secret', async () => {
-    const component = await loadComponent();
-    const instance = createInstance(component, {
+    const noSecret = createInstance(component, { agentSecret: null });
+    const withSecret = createInstance(component, {
       agentSecret: 'fake-secret-command',
       profile: { username: 'dev-user', displayName: 'Dev User' },
     });
 
-    expect(instance.agentRunCommand).toContain('--secret fake-secret-command');
-    expect(instance.agentRunCommand).toContain('--server ');
-    expect(instance.agentRunCommand).toContain('--name dev-user-');
-    expect(instance.agentServiceCommand).toContain('--secret fake-secret-command');
-    expect(instance.agentServiceCommand).toContain('yeaft-agent install');
+    const expected = 'yeaft-agent llm use github-copilot --model gpt-5.5';
+    expect(noSecret.agentLlmCommand).toBe(expected);
+    expect(withSecret.agentLlmCommand).toBe(expected);
+    expect(noSecret.agentLlmCommand).not.toContain('--server');
+    expect(withSecret.agentLlmCommand).not.toContain('--server');
+    expect(noSecret.agentRunCommand).toBeUndefined();
+    expect(noSecret.agentServiceCommand).toBeUndefined();
+    expect(noSecret.agentSecretActionLabel).toBe('settings.security.generateKey');
   });
 
   it('loads and preserves the secret when settings is mounted already visible', async () => {
@@ -113,7 +108,6 @@ describe('SettingsPanel Agent secret behavior', () => {
 
     expect(fetch).toHaveBeenCalledWith('/api/user/agent-secret', expect.any(Object));
     expect(instance.agentSecret).toBe('fake-secret-reloaded');
-    expect(instance.agentRunCommand).toContain('--secret fake-secret-reloaded');
   });
 
   it('updates secret and commands immediately after generation', async () => {
@@ -129,7 +123,6 @@ describe('SettingsPanel Agent secret behavior', () => {
 
     expect(instance.agentSecret).toBe('fake-secret-generated');
     expect(instance.showSecret).toBe(true);
-    expect(instance.agentServiceCommand).toContain('--secret fake-secret-generated');
     expect(instance.showMessage).toHaveBeenCalledWith('settings.msg.keyReset');
   });
 });

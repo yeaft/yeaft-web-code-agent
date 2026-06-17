@@ -333,11 +333,6 @@
   user-select: all;
 }
 
-.sp-cmd-placeholder {
-  color: var(--text-muted);
-  user-select: text;
-}
-
 /* Buttons */
 .sp-btn {
   padding: 8px 18px;
