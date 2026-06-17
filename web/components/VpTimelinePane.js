@@ -17,9 +17,9 @@
  *
  * UI polish (feat-vp-list-ui-polish): the row is a single line —
  * name + inline status. The row's primary click action @-mentions
- * the VP into the chat input; opening the detail view is a
- * hover-revealed "info" affordance on the right side, sitting next
- * to the abort button (visible only while a turn is active).
+ * the VP into the chat input; editing the VP is a hover-revealed
+ * affordance on the right side, sitting next to the abort button
+ * (visible only while a turn is active).
  *
  * Props:
  *   rows — TimelineRow[] (see web/stores/helpers/vp-timeline.js for shape).
@@ -28,7 +28,7 @@
  *   mention-vp (vpId)      — primary row click / Enter / Space. YeaftPage
  *                            forwards to the chat input which appends
  *                            `@<vpId> ` to the current draft.
- *   open-vp-detail (vpId)  — hover-revealed info button on the row.
+ *   edit-vp (vpId)         — hover-revealed edit button on the row.
  *   start-resize  (event)  — mousedown on the resize handle; YeaftPage
  *                            owns the drag bookkeeping (matches the
  *                            .yeaft-detail pattern).
@@ -36,7 +36,7 @@
  */
 export default {
   name: 'VpTimelinePane',
-  emits: ['mention-vp', 'open-vp-detail', 'start-resize', 'cancel-vp-turn'],
+  emits: ['mention-vp', 'edit-vp', 'start-resize', 'cancel-vp-turn'],
   props: {
     rows: { type: Array, required: true },
   },
@@ -84,7 +84,7 @@ export default {
             Right-side affordance cluster. Both buttons stop click
             propagation so they don't fall through to the row's primary
             mention action. The abort button is only visible while the VP
-            is actually doing something; the info button is hover-revealed
+            is actually doing something; the edit button is hover-revealed
             (CSS) so the row stays visually quiet at rest.
           -->
           <span class="yeaft-vp-timeline-row-actions">
@@ -106,19 +106,18 @@ export default {
               </svg>
             </span>
             <span
-              class="yeaft-vp-timeline-info"
+              class="yeaft-vp-timeline-edit"
               role="button"
               tabindex="0"
-              :aria-label="$t('yeaft.vpTimeline.info')"
-              :title="$t('yeaft.vpTimeline.info')"
-              @click.stop="$emit('open-vp-detail', row.vpId)"
-              @keydown.enter.stop.prevent="$emit('open-vp-detail', row.vpId)"
-              @keydown.space.stop.prevent="$emit('open-vp-detail', row.vpId)"
+              :aria-label="$t('yeaft.vpTimeline.edit')"
+              :title="$t('yeaft.vpTimeline.edit')"
+              @click.stop="$emit('edit-vp', row.vpId)"
+              @keydown.enter.stop.prevent="$emit('edit-vp', row.vpId)"
+              @keydown.space.stop.prevent="$emit('edit-vp', row.vpId)"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="12" y1="16" x2="12" y2="12"/>
-                <line x1="12" y1="8" x2="12.01" y2="8"/>
+                <path d="M12 20h9"/>
+                <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
               </svg>
             </span>
           </span>

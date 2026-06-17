@@ -12,6 +12,7 @@ export default {
     visible: Boolean,
     initialTab: { type: String, default: '' },
     initialSubTab: { type: String, default: '' },
+    initialEditVpId: { type: String, default: '' },
   },
   emits: ['close'],
   template: `
@@ -350,7 +351,7 @@ export default {
                 </button>
               </div>
               <div v-show="yeaftSubTab === 'vp'" class="sp-subpane">
-                <VpCrudPanel />
+                <VpCrudPanel :initial-edit-vp-id="initialEditVpId" />
               </div>
               <div v-show="yeaftSubTab === 'search'" class="sp-subpane">
                 <SearchSettingsTab @message="onLlmMessage" />
@@ -584,6 +585,9 @@ export default {
           this.yeaftSubTab = this.yeaftSubTabs.some(st => st.key === this.initialSubTab)
             ? this.initialSubTab
             : 'vp';
+        }
+        if (this.initialEditVpId && this.activeTab === 'yeaft') {
+          this.yeaftSubTab = 'vp';
         }
         this.loadData();
       } else {

@@ -29,6 +29,7 @@ import { buildDreamDebugItems, filterDreamDebugItems, previewText } from './drea
 
 export default {
   name: 'YeaftDebugPanel',
+  emits: ['close'],
   data() {
     return {
       // Per-turn expand state, keyed by turnId.
@@ -917,7 +918,18 @@ export default {
     <div class="yeaft-debug-panel">
       <div class="yeaft-debug-header">
         <span class="yeaft-debug-title">{{ $t('yeaft.debug') }}</span>
-        <span v-if="copiedFlash" class="yeaft-debug-copied-flash">{{ copiedFlash }}</span>
+        <div class="yeaft-debug-header-actions">
+          <span v-if="copiedFlash" class="yeaft-debug-copied-flash">{{ copiedFlash }}</span>
+          <button
+            type="button"
+            class="yeaft-debug-close"
+            @click="$emit('close')"
+            :title="$t('yeaft.debugClose')"
+            :aria-label="$t('yeaft.debugClose')"
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M18.3 5.71 12 12l6.3 6.29-1.41 1.41L10.59 13.41 4.29 19.7 2.88 18.29 9.17 12 2.88 5.71 4.29 4.3l6.3 6.29 6.3-6.29 1.41 1.41z"/></svg>
+          </button>
+        </div>
       </div>
 
       <div class="yeaft-debug-tabs" role="tablist" :aria-label="$t('yeaft.debug')">
@@ -939,6 +951,7 @@ export default {
           :aria-selected="activeTab === 'dream'"
           @click="setActiveTab('dream')"
         >
+          <span class="yeaft-debug-tab-dream-icon" aria-hidden="true">☾</span>
           {{ $t('yeaft.debugTabDream') }}
           <span class="yeaft-debug-tab-count" v-if="dreamEventCount > 0">{{ dreamEventCount }}</span>
         </button>

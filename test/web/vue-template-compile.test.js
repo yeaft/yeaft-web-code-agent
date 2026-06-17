@@ -11,6 +11,9 @@ const compileCoveredComponents = [
   'YeaftPage.js',
   'YeaftSidebar.js',
   'PaneTopBar.js',
+  'VpTimelinePane.js',
+  'SettingsPanel.js',
+  'VpCrudPanel.js',
 ];
 
 function walkAst(node, visit) {

@@ -1,0 +1,76 @@
+import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+
+const read = (path) => readFileSync(new URL(`../../web/${path}`, import.meta.url), 'utf8');
+
+const pageSource = read('components/YeaftPage.js');
+const debugSource = read('components/YeaftDebugPanel.js');
+const timelineSource = read('components/VpTimelinePane.js');
+const settingsSource = read('components/SettingsPanel.js');
+const vpCrudSource = read('components/VpCrudPanel.js');
+const yeaftCss = read('styles/yeaft.css');
+const enI18n = read('i18n/en.js');
+const zhI18n = read('i18n/zh-CN.js');
+
+describe('Yeaft UI action polish', () => {
+  it('uses a compact moon/spark Dream icon without the old arc glyph', () => {
+    expect(pageSource).toContain('class="yeaft-dream-icon"');
+    expect(pageSource).toContain('class="yeaft-dream-moon"');
+    expect(pageSource).toContain('class="yeaft-dream-spark"');
+    expect(pageSource).not.toContain('yeaft-dream-arc');
+    expect(yeaftCss).toContain('.yeaft-topbar-dream-toggle.running .yeaft-dream-icon');
+    expect(yeaftCss).not.toContain('.yeaft-topbar-dream-toggle.running .yeaft-topbar-dream-icon');
+  });
+
+  it('replaces VP profile info with an edit action that opens Settings VP editor', () => {
+    expect(timelineSource).toContain("emits: ['mention-vp', 'edit-vp', 'start-resize', 'cancel-vp-turn']");
+    expect(timelineSource).toContain('class="yeaft-vp-timeline-edit"');
+    expect(timelineSource).toContain("$t('yeaft.vpTimeline.edit')");
+    expect(timelineSource).not.toContain('yeaft-vp-timeline-info');
+    expect(timelineSource).not.toContain('vpTimeline.info');
+    expect(timelineSource).not.toContain('open-vp-detail');
+
+    expect(pageSource).toContain('@edit-vp="onEditVpFromTimeline"');
+    expect(pageSource).toContain('const onEditVpFromTimeline = (vpId) => {');
+    expect(pageSource).toContain("openSettings({ initialTab: 'vp', editVpId: vpId });");
+    expect(pageSource).toContain(':initial-edit-vp-id="settingsInitialEditVpId"');
+    expect(pageSource).not.toContain('onOpenVpDetailFromTimeline');
+
+    expect(settingsSource).toContain('initialEditVpId: { type: String, default: \'\' }');
+    expect(settingsSource).toContain('<VpCrudPanel :initial-edit-vp-id="initialEditVpId" />');
+    expect(vpCrudSource).toContain('initialEditVpId: { type: String, default: \'\' }');
+    expect(vpCrudSource).toContain('openInitialEdit()');
+    expect(enI18n).toContain("'yeaft.vpTimeline.edit': 'Edit VP'");
+    expect(zhI18n).toContain("'yeaft.vpTimeline.edit': '编辑 VP'");
+    expect(enI18n).not.toContain('yeaft.vpTimeline.info');
+    expect(zhI18n).not.toContain('yeaft.vpTimeline.info');
+  });
+
+  it('adds an i18n close button to the debug panel header', () => {
+    expect(debugSource).toContain("emits: ['close']");
+    expect(debugSource).toContain('class="yeaft-debug-header-actions"');
+    expect(debugSource).toContain('class="yeaft-debug-close"');
+    expect(debugSource).toContain("@click=\"$emit('close')\"");
+    expect(debugSource).toContain("$t('yeaft.debugClose')");
+    expect(pageSource).toContain('<YeaftDebugPanel @close="closeDebug" />');
+    expect(pageSource).toContain('const closeDebug = () => {');
+    expect(yeaftCss).toContain('.yeaft-debug-close');
+    expect(enI18n).toContain("'yeaft.debugClose': 'Close debug panel'");
+    expect(zhI18n).toContain("'yeaft.debugClose': '关闭调试面板'");
+  });
+
+  it('keeps newly touched Yeaft action CSS on design tokens', () => {
+    const touched = [
+      '.yeaft-debug-close',
+      '.yeaft-vp-timeline-edit',
+      '.yeaft-topbar-dream-toggle',
+    ];
+    for (const selector of touched) {
+      const start = yeaftCss.indexOf(selector);
+      expect(start).toBeGreaterThan(-1);
+      const block = yeaftCss.slice(start, yeaftCss.indexOf('}', start) + 1);
+      expect(block).not.toMatch(/#[0-9a-f]{3,6}/i);
+      expect(block).not.toContain('rgba(');
+    }
+  });
+});
