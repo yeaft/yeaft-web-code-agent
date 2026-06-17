@@ -129,6 +129,7 @@ describe('tool result raw storage boundaries', () => {
   it('copies raw debug tool output before falling back to truncated model messages', () => {
     const copied = [];
     const ctx = {
+      ...YeaftDebugPanel.methods,
       copyText(text, label) {
         copied.push({ text, label });
       },
@@ -145,6 +146,89 @@ describe('tool result raw storage boundaries', () => {
 
     YeaftDebugPanel.methods.copyToolOutput.call(ctx, turn, { callId: 'call_1' });
     expect(copied.at(-1)).toEqual({ text: 'truncated output', label: 'tool output' });
+  });
+
+  it('renders pending tool calls before their results arrive', () => {
+    const ctx = {
+      ...YeaftDebugPanel.methods,
+      $t(key) {
+        return {
+          'yeaft.debugToolRunning': 'running',
+          'yeaft.debugToolRunningNoResult': 'Running; no result yet',
+        }[key] || key;
+      },
+    };
+    const loop = {
+      loopNumber: 66,
+      toolCalls: [
+        { id: 'call_glob', name: 'Glob', input: { pattern: '**/*.js' } },
+        { id: 'call_grep', name: 'Grep', input: { pattern: 'needle' } },
+        { id: 'call_read', name: 'FileRead', input: { file_path: 'README.md' } },
+      ],
+    };
+    const turn = {
+      turnId: 'turn_1',
+      loops: [loop],
+      tools: [
+        { loopNumber: 66, callId: 'call_glob', name: 'Glob', durationMs: 12, isError: false, toolOutput: 'glob ok' },
+        { loopNumber: 66, callId: 'call_grep', name: 'Grep', durationMs: 5, isError: true, toolOutput: 'grep failed' },
+      ],
+    };
+
+    const rows = YeaftDebugPanel.methods.toolsForLoop.call(ctx, turn, loop);
+    expect(rows).toHaveLength(3);
+    expect(rows.map(r => r.name)).toEqual(['Glob', 'Grep', 'FileRead']);
+    expect(rows[0]).toMatchObject({ hasResult: true, isRunning: false, isError: false, toolOutput: 'glob ok' });
+    expect(rows[1]).toMatchObject({ hasResult: true, isRunning: false, isError: true, toolOutput: 'grep failed' });
+    expect(rows[2]).toMatchObject({ callId: 'call_read', hasResult: false, isRunning: true, isError: false });
+    expect(YeaftDebugPanel.methods.toolInputText.call(ctx, rows[2])).toContain('README.md');
+    expect(YeaftDebugPanel.methods.toolOutputText.call(ctx, rows[2])).toBe('Running; no result yet');
+  });
+
+  it('does not attach same-name results to the wrong pending call', () => {
+    const ctx = {
+      ...YeaftDebugPanel.methods,
+      $t(key) {
+        return {
+          'yeaft.debugToolRunningNoResult': 'Running; no result yet',
+        }[key] || key;
+      },
+    };
+    const loop = {
+      loopNumber: 7,
+      toolCalls: [
+        { id: 'call_a', name: 'FileRead', input: { file_path: 'a.md' } },
+        { id: 'call_b', name: 'FileRead', input: { file_path: 'b.md' } },
+        { id: 'call_c', name: 'FileRead', input: { file_path: 'c.md' } },
+      ],
+    };
+    const turn = {
+      turnId: 'turn_same_name',
+      loops: [loop],
+      tools: [
+        { loopNumber: 7, callId: 'call_b', name: 'FileRead', durationMs: 11, isError: false, toolOutput: 'b output' },
+        { loopNumber: 7, callId: 'call_c', name: 'FileRead', durationMs: 13, isError: true, toolOutput: 'c error' },
+      ],
+    };
+
+    const rows = YeaftDebugPanel.methods.toolsForLoop.call(ctx, turn, loop);
+    expect(rows).toHaveLength(3);
+    expect(rows.map(r => r.callId)).toEqual(['call_a', 'call_b', 'call_c']);
+    expect(rows[0]).toMatchObject({ isRunning: true, hasResult: false, toolOutput: null });
+    expect(YeaftDebugPanel.methods.toolOutputText.call(ctx, rows[0])).toBe('Running; no result yet');
+    expect(rows[1]).toMatchObject({ isRunning: false, isError: false, toolOutput: 'b output' });
+    expect(rows[2]).toMatchObject({ isRunning: false, isError: true, toolOutput: 'c error' });
+  });
+
+  it('tracks tool detail expansion by turn loop and call id', () => {
+    const ctx = {
+      ...YeaftDebugPanel.methods,
+      expandedToolDetails: {},
+    };
+    const tool = { callId: 'call_1', name: 'Glob' };
+    expect(YeaftDebugPanel.methods.isToolDetailExpanded.call(ctx, 'turn_1', 2, tool, 0)).toBe(false);
+    YeaftDebugPanel.methods.toggleToolDetail.call(ctx, 'turn_1', 2, tool, 0);
+    expect(YeaftDebugPanel.methods.isToolDetailExpanded.call(ctx, 'turn_1', 2, tool, 0)).toBe(true);
   });
 
   it('keeps in-memory session history raw but truncates replay snapshot for the model', () => {

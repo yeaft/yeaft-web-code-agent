@@ -1962,6 +1962,50 @@
   font-variant-numeric: tabular-nums;
 }
 
+.yeaft-debug-tool-item {
+  padding: 2px 0;
+}
+
+.yeaft-debug-tool-status.running {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.yeaft-debug-tool-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  margin: 4px 0 8px 24px;
+}
+
+.yeaft-debug-tool-detail-col {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-sidebar);
+}
+
+.yeaft-debug-tool-detail-title {
+  margin-bottom: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.yeaft-debug-tool-detail pre {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
 .yeaft-debug-mem-list {
   list-style: none;
   margin: 0;
