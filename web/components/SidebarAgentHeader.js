@@ -3,16 +3,15 @@
  * ChatPage and YeaftSidebar so the two sidebars cannot drift apart.
  *
  * Renders only the left-hand brand block (status dot, "N Agent" label,
- * latency pill, chevron, dropdown menu). The right-hand actions slot
- * (mode toggle, collapse, workbench) is kept in each parent because
- * the actions differ per page.
+ * chevron, dropdown menu). The right-hand actions slot (mode toggle,
+ * collapse, workbench) is kept in each parent because the actions differ
+ * per page.
  */
 export default {
   name: 'SidebarAgentHeader',
   props: {
     onlineAgents: { type: Array, required: true },
     onlineAgentCount: { type: Number, required: true },
-    currentAgentLatency: { type: [Number, null], default: null },
     restartingAgents: { type: Object, default: () => ({}) },
     upgradingAgents: { type: Object, default: () => ({}) },
     // Per-agent action buttons are optional.
@@ -40,12 +39,6 @@ export default {
     }
   },
   methods: {
-    getLatencyClass(latency) {
-      if (latency == null) return '';
-      if (latency < 100) return 'latency-good';
-      if (latency < 300) return 'latency-mid';
-      return 'latency-poor';
-    },
     tr(key, fallback) {
       try {
         const v = this.$t ? this.$t(key) : key;
@@ -60,17 +53,12 @@ export default {
     <div class="sidebar-brand agent-dropdown-trigger" @click.stop="open = !open" :title="tr('chat.agent.manage', 'Manage agents')">
       <span class="status-dot" :class="{ online: onlineAgentCount > 0 }"></span>
       <span class="brand-label">{{ onlineAgentCount }} Agent</span>
-      <span class="latency-indicator" v-if="currentAgentLatency" :class="getLatencyClass(currentAgentLatency)" :title="currentAgentLatency + 'ms'">
-        <svg viewBox="0 0 24 24" width="10" height="10"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>
-        {{ currentAgentLatency }}ms
-      </span>
       <svg class="dropdown-chevron" :class="{ open: open }" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>
       <div class="agent-dropdown" v-if="open" @click.stop>
         <div v-for="agent in onlineAgents" :key="agent.id" class="agent-dropdown-item">
           <span class="status-dot" :class="{ online: agent.online, restarting: restartingAgents[agent.id], upgrading: upgradingAgents[agent.id] }"></span>
           <span class="agent-dropdown-name">{{ agent.name }}</span>
           <span class="agent-dropdown-version" v-if="agent.version">v{{ agent.version }}</span>
-          <span class="agent-dropdown-latency" v-if="agent.online && agent.latency" :class="getLatencyClass(agent.latency)">{{ agent.latency }}ms</span>
           <span class="agent-dropdown-status" v-if="restartingAgents[agent.id]">{{ tr('chat.agent.restarting', 'Restarting…') }}</span>
           <span class="agent-dropdown-status" v-else-if="upgradingAgents[agent.id]">{{ tr('chat.agent.upgrading', 'Upgrading…') }}</span>
           <template v-if="showAgentActions">

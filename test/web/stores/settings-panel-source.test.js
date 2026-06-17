@@ -115,7 +115,6 @@ describe('Settings panel source', () => {
       'agent-dropdown-item',
       'agent-dropdown-name',
       'agent-dropdown-version',
-      'agent-dropdown-latency',
       'agent-dropdown-status',
       'agent-dropdown-restart-btn',
       'agent-dropdown-upgrade-btn',
