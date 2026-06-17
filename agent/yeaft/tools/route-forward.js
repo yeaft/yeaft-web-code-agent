@@ -92,7 +92,7 @@ VP 在聊天文本中写的 @提及不会自动路由（协调器只对用户消
       },
       reason: {
         type: 'string',
-        description: 'Optional: short rationale for the forward',
+        description: { en: 'Optional: short rationale for the forward', zh: '可选：转交的简短原因' },
       },
     },
     required: ['to', 'text'],

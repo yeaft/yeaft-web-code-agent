@@ -241,11 +241,11 @@ Guidelines:
       },
       multiline: {
         type: 'boolean',
-        description: 'Enable multiline matching',
+        description: { en: 'Enable multiline matching', zh: '启用多行匹配' },
       },
       head_limit: {
         type: 'number',
-        description: 'Limit output to first N results (default: 250)',
+        description: { en: 'Limit output to first N results (default: 250)', zh: '限制输出前 N 条结果（默认 250）' },
       },
     },
     required: ['pattern'],

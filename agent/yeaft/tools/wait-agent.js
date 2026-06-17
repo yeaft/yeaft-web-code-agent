@@ -206,13 +206,13 @@ that pattern is deprecated. Use SpawnAgent → Continue → ListAgents.`,
     properties: {
       agent_id: {
         type: 'string',
-        description: 'The sub-agent ID to wait for',
+        description: { en: 'The sub-agent ID to wait for', zh: '要等待的子 Agent ID' },
       },
       timeout_ms: {
         type: 'number',
         minimum: 0,
         maximum: 300000,
-        description: 'Maximum time to wait in milliseconds (default: 5000 short poll, max: 300000 / 5 minutes)',
+        description: { en: 'Maximum time to wait in milliseconds (default: 5000 short poll, max: 300000 / 5 minutes)', zh: '最长等待时间，单位毫秒（默认 5000 短轮询，最大 300000 / 5 分钟）' },
       },
     },
     required: ['agent_id'],
