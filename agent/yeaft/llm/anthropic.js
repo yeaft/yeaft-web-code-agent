@@ -9,6 +9,8 @@
 import {
   LLMAdapter,
   LLMRateLimitError,
+  classifyFetchError,
+  retryAfterFromResponse,
   LLMAuthError,
   LLMContextError,
   LLMServerError,
@@ -175,18 +177,22 @@ export class AnthropicAdapter extends LLMAdapter {
    * Classify HTTP errors into our typed errors.
    * @param {number} status
    * @param {string} body
+   * @param {Response | { headers?: Record<string, string> } | null} [response] -
+   *   When provided, reads the `retry-after` header so the engine can honor
+   *   the server hint instead of guessing a backoff delay.
    */
-  #classifyError(status, body) {
+  #classifyError(status, body, response = null) {
     const authHint = `auth=${this.#authHeaderMode}`;
     if (status === 401 || status === 403) {
       return new LLMAuthError(`Anthropic auth error (${authHint}): ${body}`, status);
     }
     if (status === 429) {
-      const retryAfter = null; // Could parse retry-after header
+      const retryAfter = retryAfterFromResponse(response);
       return new LLMRateLimitError(`Anthropic rate limit (${authHint}): ${body}`, status, retryAfter);
     }
     if (status === 529) {
-      return new LLMRateLimitError(`Anthropic overloaded (${authHint}): ${body}`, status);
+      const retryAfter = retryAfterFromResponse(response);
+      return new LLMRateLimitError(`Anthropic overloaded (${authHint}): ${body}`, status, retryAfter);
     }
     if (body.includes('prompt is too long') || body.includes('max_tokens')) {
       return new LLMContextError(`Anthropic context error (${authHint}): ${body}`);
@@ -231,12 +237,17 @@ export class AnthropicAdapter extends LLMAdapter {
     // exactly what we POST to the LLM.
     const rawRequest = redactRawRequest({ url, method: 'POST', headers, body });
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal,
-    });
+    let response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal,
+      });
+    } catch (err) {
+      throw classifyFetchError(err, { providerLabel: 'Anthropic' });
+    }
 
     if (!response.ok) {
       const errorBody = await response.text();
@@ -253,7 +264,7 @@ export class AnthropicAdapter extends LLMAdapter {
           });
         } catch { /* ignore */ }
       }
-      throw this.#classifyError(response.status, errorBody);
+      throw this.#classifyError(response.status, errorBody, response);
     }
 
     // Parse SSE stream
@@ -469,16 +480,21 @@ export class AnthropicAdapter extends LLMAdapter {
       applyAnthropicThinking(body, model, normEffort);
     }
 
-    const response = await fetch(`${this.#baseUrl}/v1/messages`, {
-      method: 'POST',
-      headers: this.#headers(),
-      body: JSON.stringify(body),
-      signal,
-    });
+    let response;
+    try {
+      response = await fetch(`${this.#baseUrl}/v1/messages`, {
+        method: 'POST',
+        headers: this.#headers(),
+        body: JSON.stringify(body),
+        signal,
+      });
+    } catch (err) {
+      throw classifyFetchError(err, { providerLabel: 'Anthropic' });
+    }
 
     if (!response.ok) {
       const errorBody = await response.text();
-      throw this.#classifyError(response.status, errorBody);
+      throw this.#classifyError(response.status, errorBody, response);
     }
 
     const result = await response.json();

@@ -32,6 +32,8 @@ import {
   LLMContextError,
   LLMServerError,
   LLMAbortError,
+  classifyFetchError,
+  retryAfterFromResponse,
   redactRawRequest,
   safeHeaders,
 } from './adapter.js';
@@ -187,15 +189,17 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
 
   // ─── Error classification ───────────────────────────────
 
-  #classifyError(status, body) {
+  #classifyError(status, body, response = null) {
     if (status === 401 || status === 403) {
       return new LLMAuthError(`Auth error: ${body}`, status);
     }
     if (status === 429) {
-      return new LLMRateLimitError(`Rate limit: ${body}`, status);
+      const retryAfter = retryAfterFromResponse(response);
+      return new LLMRateLimitError(`Rate limit: ${body}`, status, retryAfter);
     }
     if (status === 529) {
-      return new LLMRateLimitError(`Overloaded: ${body}`, status);
+      const retryAfter = retryAfterFromResponse(response);
+      return new LLMRateLimitError(`Overloaded: ${body}`, status, retryAfter);
     }
     if (status === 413 || body.includes('context_length_exceeded') || body.includes('maximum context length')) {
       return new LLMContextError(`Context too long: ${body}`);
@@ -286,7 +290,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       });
     } catch (err) {
       if (err.name === 'AbortError') throw new LLMAbortError();
-      throw err;
+      throw classifyFetchError(err, { providerLabel: 'OpenAI' });
     }
 
     if (!response.ok) {
@@ -304,7 +308,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
           });
         } catch { /* ignore */ }
       }
-      throw this.#classifyError(response.status, errorBody);
+      throw this.#classifyError(response.status, errorBody, response);
     }
 
     const reader = response.body.getReader();
@@ -512,12 +516,12 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       });
     } catch (err) {
       if (err.name === 'AbortError') throw new LLMAbortError();
-      throw err;
+      throw classifyFetchError(err, { providerLabel: 'OpenAI' });
     }
 
     if (!response.ok) {
       const errorBody = await response.text();
-      throw this.#classifyError(response.status, errorBody);
+      throw this.#classifyError(response.status, errorBody, response);
     }
 
     const result = await response.json();

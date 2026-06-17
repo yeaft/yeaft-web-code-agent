@@ -108,6 +108,112 @@ export class LLMAbortError extends Error {
   }
 }
 
+// ─── Retry helpers ─────────────────────────────────────────────
+
+/**
+ * Parse an HTTP `Retry-After` header value into milliseconds.
+ *
+ * The header may be either:
+ *   • An integer number of seconds (delta-seconds) — `"30"`
+ *   • An HTTP-date — `"Fri, 31 Dec 1999 23:59:59 GMT"`
+ *
+ * Returns null when the header is missing, malformed, or yields a non-positive
+ * delay. Callers should treat null as "no server hint" and fall back to their
+ * own backoff schedule.
+ *
+ * @param {string | null | undefined} headerValue
+ * @returns {number | null} milliseconds to wait, or null
+ */
+export function parseRetryAfterMs(headerValue) {
+  if (!headerValue) return null;
+  const trimmed = String(headerValue).trim();
+  if (!trimmed) return null;
+  // Integer seconds path
+  if (/^\d+(\.\d+)?$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    if (!Number.isFinite(seconds) || seconds < 0) return null;
+    return Math.round(seconds * 1000);
+  }
+  // HTTP-date path
+  const ts = Date.parse(trimmed);
+  if (!Number.isFinite(ts)) return null;
+  const delta = ts - Date.now();
+  return delta > 0 ? delta : null;
+}
+
+/**
+ * Read the `retry-after` header from a fetch Response in a case-insensitive
+ * way that tolerates both real `Headers` instances and the plain object
+ * stand-ins our tests sometimes hand us.
+ *
+ * @param {Response | { headers?: Record<string, string> | Headers } | null | undefined} response
+ * @returns {number | null} milliseconds, or null when not present
+ */
+export function retryAfterFromResponse(response) {
+  const headers = response?.headers;
+  if (!headers) return null;
+  let raw = null;
+  if (typeof headers.get === 'function') {
+    raw = headers.get('retry-after');
+  } else {
+    for (const key of Object.keys(headers)) {
+      if (key.toLowerCase() === 'retry-after') {
+        raw = headers[key];
+        break;
+      }
+    }
+  }
+  return parseRetryAfterMs(raw);
+}
+
+/**
+ * Classify a raw error thrown by `fetch()` (or while reading a streaming
+ * body) into one of the unified LLM error types when it represents a
+ * retryable transport-level failure (DNS, ECONN*, socket reset, fetch
+ * `TypeError`, undici `UND_ERR_*`, …).
+ *
+ * Returns:
+ *   • LLMAbortError      — caller-initiated abort; engine short-circuits.
+ *   • LLMServerError     — transient transport failure; engine should retry.
+ *   • the original error — anything that doesn't match a known transient
+ *                          pattern. We never invent retryability we can't
+ *                          prove from the error shape.
+ *
+ * @param {unknown} err
+ * @param {{ providerLabel?: string }} [opts]
+ * @returns {Error}
+ */
+export function classifyFetchError(err, opts = {}) {
+  if (!(err instanceof Error)) return err instanceof Object ? err : new Error(String(err));
+  if (err.name === 'AbortError' || err.name === 'LLMAbortError') return new LLMAbortError();
+  // Anything already classified: keep as-is.
+  if (err instanceof LLMRateLimitError
+    || err instanceof LLMAuthError
+    || err instanceof LLMContextError
+    || err instanceof LLMServerError
+    || err instanceof LLMAbortError) {
+    return err;
+  }
+  const label = opts.providerLabel ? `${opts.providerLabel}: ` : '';
+  const code = err.cause?.code || err.code || null;
+  const transientCodes = new Set([
+    'ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'ETIMEDOUT',
+    'ENOTFOUND', 'EAI_AGAIN', 'EPIPE', 'EHOSTUNREACH', 'ENETUNREACH',
+    'UND_ERR_SOCKET', 'UND_ERR_CLOSED', 'UND_ERR_BODY_TIMEOUT',
+    'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_CONNECT_TIMEOUT',
+  ]);
+  if (code && transientCodes.has(code)) {
+    return new LLMServerError(`${label}network error (${code}): ${err.message}`, 0);
+  }
+  // Node 20+ fetch surfaces network problems as a plain TypeError
+  // with `cause` set to the underlying undici error. We treat any
+  // such TypeError as transient — abort already returned above.
+  if (err.name === 'TypeError' && /fetch failed|terminated|network|socket/i.test(err.message || '')) {
+    return new LLMServerError(`${label}fetch failed: ${err.message}`, 0);
+  }
+  return err;
+}
+
 // ─── Raw payload redaction helper ──────────────────────────────
 
 /**

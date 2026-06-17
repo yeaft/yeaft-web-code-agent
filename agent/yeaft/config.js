@@ -54,7 +54,61 @@ const DEFAULTS = {
   // block is injected). Hand-edited values are NOT clamped — we let
   // power users opt into larger docs at their own context-window risk.
   projectDocMaxBytes: 32 * 1024,
+  // ─── LLM retry policy ──────────────────────────────────────
+  // How the engine reacts when adapter.stream()/call() throws a
+  // retryable error (429 / 529 / 5xx / transport failure). Each field
+  // is overridable from ~/.yeaft/config.json under "llmRetry": {…}.
+  //   • maxRetries: cap on CONSECUTIVE retryable failures per turn.
+  //     0 disables retry entirely (caller falls straight through to
+  //     fallbackModel / error). Default 3.
+  //   • baseDelayMs / maxDelayMs: exponential backoff bounds used when
+  //     the server didn't send a Retry-After header.
+  //   • jitterRatio: ± random fraction applied to backoff; 0 disables.
+  llmRetry: {
+    maxRetries: 3,
+    baseDelayMs: 1_000,
+    maxDelayMs: 30_000,
+    jitterRatio: 0.25,
+  },
 };
+
+// ─── llmRetry normalizer ────────────────────────────────────────
+
+/**
+ * Merge user-supplied retry overrides with DEFAULTS.llmRetry, clamping
+ * each field to its safe range. The output is always a fully-populated
+ * object so the engine never has to deal with `undefined`. Unknown keys
+ * in the input are dropped.
+ *
+ * Precedence: overrides > fileConfig > DEFAULTS.
+ *
+ * @param {object | null | undefined} fileConfig
+ * @param {object | null | undefined} overrides
+ * @returns {{ maxRetries: number, baseDelayMs: number, maxDelayMs: number, jitterRatio: number }}
+ */
+export function normalizeLlmRetry(fileConfig, overrides) {
+  const base = DEFAULTS.llmRetry;
+  const out = { ...base };
+  const apply = (src) => {
+    if (!src || typeof src !== 'object') return;
+    if (Number.isFinite(src.maxRetries) && src.maxRetries >= 0) {
+      out.maxRetries = Math.min(20, Math.floor(src.maxRetries));
+    }
+    if (Number.isFinite(src.baseDelayMs) && src.baseDelayMs >= 0) {
+      out.baseDelayMs = Math.min(60_000, Math.floor(src.baseDelayMs));
+    }
+    if (Number.isFinite(src.maxDelayMs) && src.maxDelayMs >= 0) {
+      out.maxDelayMs = Math.min(600_000, Math.floor(src.maxDelayMs));
+    }
+    if (Number.isFinite(src.jitterRatio) && src.jitterRatio >= 0) {
+      out.jitterRatio = Math.min(1, src.jitterRatio);
+    }
+  };
+  apply(fileConfig);
+  apply(overrides);
+  if (out.maxDelayMs < out.baseDelayMs) out.maxDelayMs = out.baseDelayMs;
+  return out;
+}
 
 // ─── config.json reader ─────────────────────────────────────────
 
@@ -220,6 +274,7 @@ function loadLegacyConfig(dir, overrides) {
   const config = {
     model: overrides.model || env.YEAFT_MODEL || fileConfig.model || 'claude-sonnet-4-20250514',
     fallbackModel: overrides.fallbackModel || env.YEAFT_FALLBACK_MODEL || fileConfig.fallbackModel || null,
+    llmRetry: normalizeLlmRetry(fileConfig.llmRetry, overrides.llmRetry),
     language: overrides.language || env.YEAFT_LANGUAGE || fileConfig.language || DEFAULTS.language,
     apiKey: overrides.apiKey || env.YEAFT_API_KEY || fileConfig.apiKey || null,
     openaiApiKey: overrides.openaiApiKey || env.YEAFT_OPENAI_API_KEY || fileConfig.openaiApiKey || null,
@@ -341,6 +396,7 @@ export function loadConfig(overrides = {}) {
     fastModel: overrides.fastModel || fastModel,
     fastModelId: fastModelId,
     fallbackModel: jsonConfig.fallbackModel || null,
+    llmRetry: normalizeLlmRetry(jsonConfig.llmRetry, overrides.llmRetry),
     modelInfo: modelInfo || null,
 
     // Providers

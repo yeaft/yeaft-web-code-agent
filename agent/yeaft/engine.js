@@ -22,7 +22,7 @@ import { promises as fsp } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { getRuntimePlatformInfo } from './runtime-platform.js';
-import { LLMContextError, LLMAbortError } from './llm/adapter.js';
+import { LLMContextError, LLMAbortError, LLMRateLimitError, LLMServerError } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes } from './sessions/pre-flow.js';
 import { readProjectDoc, pickProjectDocFile, DEFAULT_PROJECT_DOC_MAX_BYTES } from './sessions/project-doc.js';
 import { partitionMessages } from './compact/partition.js';
@@ -75,6 +75,80 @@ import {
 
 /** Maximum auto-continue turns when stopReason is 'max_tokens'. */
 const MAX_CONTINUE_TURNS = 3;
+
+// ─── LLM retry policy defaults ──────────────────────────────────
+// Hard-coded floor / ceiling for retry behaviour. The engine reads the
+// effective policy from `config.llmRetry` so users can dial these via
+// ~/.yeaft/config.json without touching code; the constants here are the
+// fallback when the config is missing or partial.
+//   • maxRetries:     how many times we re-issue the same turn on a
+//                     retryable failure before giving up / falling back
+//   • baseDelayMs:    starting backoff for transient (5xx / network) errors
+//   • maxDelayMs:     ceiling we never exceed regardless of backoff growth
+//   • jitterRatio:    ± random fraction of the delay (0.25 = ±25 %)
+// Rate-limit waits prefer the server's Retry-After header; we only fall
+// back to exponential backoff when the header is missing.
+const RETRY_DEFAULTS = Object.freeze({
+  maxRetries: 3,
+  baseDelayMs: 1_000,
+  maxDelayMs: 30_000,
+  jitterRatio: 0.25,
+});
+
+function resolveRetryPolicy(config) {
+  const raw = config?.llmRetry || {};
+  const num = (v, d) => (Number.isFinite(v) && v >= 0 ? v : d);
+  return {
+    maxRetries: Math.max(0, Math.floor(num(raw.maxRetries, RETRY_DEFAULTS.maxRetries))),
+    baseDelayMs: Math.max(0, Math.floor(num(raw.baseDelayMs, RETRY_DEFAULTS.baseDelayMs))),
+    maxDelayMs: Math.max(0, Math.floor(num(raw.maxDelayMs, RETRY_DEFAULTS.maxDelayMs))),
+    jitterRatio: Math.min(1, Math.max(0, num(raw.jitterRatio, RETRY_DEFAULTS.jitterRatio))),
+  };
+}
+
+/**
+ * Compute the next backoff delay (ms) for a transient error.
+ * Exponential growth (base * 2^attempt) capped at maxDelayMs, with optional
+ * +/- jitter to avoid synchronized retry stampedes.
+ *
+ * @param {{ baseDelayMs: number, maxDelayMs: number, jitterRatio: number }} policy
+ * @param {number} attempt - 0-indexed retry attempt (0 = first retry)
+ * @returns {number} milliseconds to sleep
+ */
+export function computeBackoffDelay(policy, attempt) {
+  const safeAttempt = Math.max(0, Math.floor(attempt));
+  const grown = policy.baseDelayMs * Math.pow(2, safeAttempt);
+  const capped = Math.min(policy.maxDelayMs, grown);
+  if (policy.jitterRatio <= 0) return capped;
+  const jitter = capped * policy.jitterRatio;
+  const offset = (Math.random() * 2 - 1) * jitter; // [-jitter, +jitter]
+  return Math.max(0, Math.round(capped + offset));
+}
+
+/**
+ * Promise-based sleep that resolves early if the caller's AbortSignal fires.
+ * Returns true when the sleep completed normally, false when aborted.
+ *
+ * @param {number} ms
+ * @param {AbortSignal | undefined} signal
+ * @returns {Promise<boolean>}
+ */
+function sleepWithAbort(ms, signal) {
+  if (ms <= 0) return Promise.resolve(true);
+  if (signal?.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      if (signal) signal.removeEventListener('abort', onAbort);
+      resolve(true);
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+      resolve(false);
+    };
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
 
 /**
  * task-331 — Map a conversationMessages entry into the snapshot shape used
@@ -226,8 +300,9 @@ export function shouldAllowGroupReflection({
  * @typedef {{ type: 'consolidate', archivedCount: number, extractedCount: number }} ConsolidateEvent
  * @typedef {{ type: 'recall', entryCount: number, cached: boolean }} RecallEvent
  * @typedef {{ type: 'fallback', from: string, to: string, reason: string }} FallbackEvent
+ * @typedef {{ type: 'llm_retry', attempt: number, maxRetries: number, delayMs: number, reason: 'rate_limit_retry_after'|'rate_limit_backoff'|'transient_backoff', errorName: string, statusCode: number|null, message: string }} LlmRetryEvent
  *
- * @typedef {import('./llm/adapter.js').StreamEvent | TurnStartEvent | TurnEndEvent | ToolStartEvent | ToolEndEvent | ConsolidateEvent | RecallEvent | FallbackEvent} EngineEvent
+ * @typedef {import('./llm/adapter.js').StreamEvent | TurnStartEvent | TurnEndEvent | ToolStartEvent | ToolEndEvent | ConsolidateEvent | RecallEvent | FallbackEvent | LlmRetryEvent} EngineEvent
  */
 
 // ─── Engine ──────────────────────────────────────────────────────
@@ -1760,6 +1835,16 @@ export class Engine {
     // outer-loop iteration so the flag never carries across turns.
     let endTurnRequested = null;
 
+    // LLM retry bookkeeping (rate-limit / 5xx / transient network errors).
+    // Counts CONSECUTIVE retryable failures on the same turn — reset to 0
+    // on any successful stream() iteration, and also on a fallback-model
+    // switch (the new model gets a fresh budget). Reaching maxRetries
+    // gives up: we either fall back to a backup model or surface the
+    // error to the user. LLMContextError has its own compact-retry path
+    // and does NOT count against this budget.
+    const retryPolicy = resolveRetryPolicy(this.#config);
+    let consecutiveRetryableErrors = 0;
+
     while (true) {
       turnNumber++;
 
@@ -2011,6 +2096,11 @@ export class Engine {
               break;
           }
         }
+        // Stream completed without throwing — reset the retry counter so
+        // the next turn starts with a clean budget. Note: this includes
+        // stream() that emitted an in-band `error` event (server didn't
+        // throw), since those are policy-specific and not transport-level.
+        consecutiveRetryableErrors = 0;
       } catch (err) {
         const latencyMs = Date.now() - startTime;
         this.#trace.endTurn(turnId, {
@@ -2087,12 +2177,64 @@ export class Engine {
           }
         }
 
+        // ─── Rate-limit / transient retry ─────────────────
+        // Honour server-supplied Retry-After for 429/529; fall back to
+        // exponential backoff for 5xx and transport failures wrapped as
+        // LLMServerError. Counts against retryPolicy.maxRetries; on
+        // exhaustion we fall through to the fallback-model path (and
+        // ultimately the error event) without further waiting.
+        const isRateLimit = err instanceof LLMRateLimitError;
+        const isTransient = err instanceof LLMServerError;
+        if (isRateLimit || isTransient) {
+          if (consecutiveRetryableErrors < retryPolicy.maxRetries) {
+            consecutiveRetryableErrors += 1;
+            let delayMs;
+            let reason;
+            if (isRateLimit && Number.isFinite(err.retryAfterMs) && err.retryAfterMs > 0) {
+              // Server told us exactly when to come back. Respect it,
+              // but still cap to maxDelayMs so a misconfigured upstream
+              // can't make us hang forever on one turn.
+              delayMs = Math.min(retryPolicy.maxDelayMs, err.retryAfterMs);
+              reason = 'rate_limit_retry_after';
+            } else if (isRateLimit) {
+              // No header — use backoff but start one step higher so the
+              // first retry isn't immediate (rate-limit windows are
+              // usually >= 1s wide).
+              delayMs = computeBackoffDelay(retryPolicy, consecutiveRetryableErrors);
+              reason = 'rate_limit_backoff';
+            } else {
+              delayMs = computeBackoffDelay(retryPolicy, consecutiveRetryableErrors - 1);
+              reason = 'transient_backoff';
+            }
+            yield {
+              type: 'llm_retry',
+              attempt: consecutiveRetryableErrors,
+              maxRetries: retryPolicy.maxRetries,
+              delayMs,
+              reason,
+              errorName: err.name,
+              statusCode: err.statusCode ?? null,
+              message: String(err.message || '').slice(0, 300),
+            };
+            const slept = await sleepWithAbort(delayMs, signal);
+            if (!slept || signal?.aborted) {
+              yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber, threadId };
+              yield { type: 'turn_end', turnNumber, stopReason: 'aborted', threadId };
+              break;
+            }
+            yield { type: 'turn_end', turnNumber, stopReason: 'llm_retry', threadId };
+            continue; // retry the same turn with the same model
+          }
+          // Exhausted — fall through to fallback-model / error paths.
+        }
+
         // ─── Fallback model ──────────────────────────────
         const fallbackModel = this.#config.fallbackModel;
         if (fallbackModel && fallbackModel !== currentModel &&
             (err.name === 'LLMRateLimitError' || err.name === 'LLMServerError')) {
           yield { type: 'fallback', from: currentModel, to: fallbackModel, reason: err.message };
           currentModel = fallbackModel;
+          consecutiveRetryableErrors = 0; // new model, fresh retry budget
           yield { type: 'turn_end', turnNumber, stopReason: 'fallback_retry', threadId };
           continue; // retry with fallback model
         }
