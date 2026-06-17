@@ -26,13 +26,15 @@ describe('Yeaft conversation header actions', () => {
 
     expect(block).toContain('class="yeaft-topbar-announcement-edit"');
     expect(block).toContain('@click="openAnnouncementSettings"');
-    expect(block).toContain("$t('yeaft.session.announcement.edit')");
+    expect(block).toContain('d="M4 14.5V9.5l11-4v13l-11-4z"');
     expect(block).toContain("$t('yeaft.session.announcement.editTitle')");
+    expect(block).not.toContain('yeaft-topbar-announcement-edit-label');
+    expect(block).not.toContain("$t('yeaft.session.announcement.edit')");
     expect(pageSource).toContain('const openAnnouncementSettings = () => {');
     expect(pageSource).toContain("openGroupSettings({ sessionId, section: 'announcement' });");
     expect(pageSource).toContain(':initial-section="groupSettingsSection"');
     expect(yeaftCss).toContain('.yeaft-topbar-announcement-edit');
-    expect(yeaftCss).toContain('.yeaft-topbar-announcement-edit-label');
+    expect(yeaftCss).not.toContain('.yeaft-topbar-announcement-edit-label');
     expect(enI18n).toContain("'yeaft.session.announcement.editTitle': 'Edit session announcement'");
     expect(zhI18n).toContain("'yeaft.session.announcement.editTitle': '编辑会话公告'");
     expect(pageSource).not.toContain('openTopbarGroupSettings');

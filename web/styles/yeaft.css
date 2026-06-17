@@ -486,6 +486,31 @@
   gap: 8px;
 }
 
+.yeaft-topbar-right :where(
+  .yeaft-topbar-vp-toggle,
+  .yeaft-topbar-announcement-edit,
+  .yeaft-reload-btn,
+  .yeaft-topbar-dream-toggle,
+  .yeaft-debug-btn
+) {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 8px;
+}
+
+.yeaft-topbar-right :where(
+  .yeaft-topbar-vp-toggle,
+  .yeaft-topbar-announcement-edit,
+  .yeaft-reload-btn,
+  .yeaft-topbar-dream-toggle,
+  .yeaft-debug-btn
+) svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+}
+
 /* ── Group Selector (task-338-F3) ── */
 
 .yeaft-topbar-group {
@@ -1494,7 +1519,7 @@
   gap: 5px;
   min-width: 32px;
   height: 32px;
-  padding: 0 9px;
+  padding: 0;
   border: none;
   background: transparent;
   color: var(--text-secondary);
@@ -1509,8 +1534,7 @@
   color: var(--text-primary);
 }
 
-.yeaft-topbar-group-settings-label,
-.yeaft-topbar-announcement-edit-label {
+.yeaft-topbar-group-settings-label {
   font-size: 12px;
   font-weight: 600;
 }
@@ -2605,7 +2629,11 @@
 }
 
 .group-settings-roster-item.is-default {
-  background: rgba(91, 141, 239, 0.08);
+  background: var(--session-active);
+}
+
+.group-settings-roster-item.is-edit-target {
+  background: var(--sidebar-hover);
 }
 
 .group-settings-roster-row {

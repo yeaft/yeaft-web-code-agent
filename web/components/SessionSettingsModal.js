@@ -32,10 +32,11 @@ export default {
       default: 'announcement',
       validator: v => ['announcement', 'members', 'rename', 'memory', 'danger'].includes(v),
     },
+    initialEditVpId: { type: String, default: '' },
   },
   data() {
     return {
-      section: this.initialSection,
+      section: this.initialEditVpId ? 'members' : this.initialSection,
       // Announcement editor draft (lazy-init from store on first edit).
       announcementDraft: '',
       announcementBusy: false,
@@ -47,6 +48,7 @@ export default {
       // Members busy flag — gates concurrent toggles.
       membersBusy: false,
       membersError: '',
+      highlightedVpId: this.initialEditVpId || '',
       // Delete confirm flag.
       deleteConfirmText: '',
       deleteBusy: false,
@@ -131,13 +133,18 @@ export default {
       this.deleteError = '';
       this.deleteConfirmText = '';
     },
+    initialEditVpId(next) {
+      this.highlightedVpId = next || '';
+      if (next) this.section = 'members';
+    },
     groupId() {
       // Reset state when parent re-targets a different group while
       // open. Note: don't rely on the section() watcher to reseed
       // drafts — it doesn't fire when section is already equal to
       // initialSection. Seed directly here so the user never sees a
       // momentary empty input.
-      this.section = this.initialSection;
+      this.section = this.initialEditVpId ? 'members' : this.initialSection;
+      this.highlightedVpId = this.initialEditVpId || '';
       this.announcementDraft = this.announcement;
       this.renameDraft = this.groupDisplayName;
       this.deleteConfirmText = '';
@@ -402,7 +409,7 @@ export default {
                   v-for="vp in vpList"
                   :key="vp.vpId"
                   class="group-settings-roster-item"
-                  :class="{ 'is-selected': isMember(vp.vpId), 'is-default': defaultVpId === vp.vpId }"
+                  :class="{ 'is-selected': isMember(vp.vpId), 'is-default': defaultVpId === vp.vpId, 'is-edit-target': highlightedVpId === vp.vpId }"
                 >
                   <label class="group-settings-roster-row">
                     <input
