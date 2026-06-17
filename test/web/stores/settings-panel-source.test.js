@@ -99,6 +99,12 @@ describe('Settings panel source', () => {
     // The Install Agent command (npm install -g) stays as the prerequisite step.
     expect(settingsPanelSource).toContain('agentInstallCommand()');
     expect(settingsPanelSource).toContain("return 'npm install -g @yeaft/webchat-agent';");
+
+    // Removing the --server install hint also retired its helpers and placeholder
+    // styling. Guard against either silently sneaking back in via copy/paste.
+    expect(settingsPanelSource).not.toContain('agentName()');
+    expect(settingsPanelSource).not.toContain('serverWsUrl()');
+    expect(settingsCss).not.toContain('.sp-cmd-placeholder');
   });
 
   it('keeps shared sidebar agent dropdown styles after removing git.css', () => {

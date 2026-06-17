@@ -476,26 +476,6 @@ export default {
       if (p.displayName && p.displayName !== p.username) return p.displayName;
       return p.username || '-';
     },
-    /**
-     * Default agent name suggested in the install command. We combine the
-     * user's username with a short, stable id derived from username so two
-     * machines installed from the same account don't collide on display name
-     * trivially. Users can still override --name on the CLI.
-     */
-    agentName() {
-      const p = this.profile;
-      const base = (p && (p.username || p.displayName)) || 'agent';
-      // FNV-1a 32-bit, stable per username, no crypto dep needed.
-      let h = 0x811c9dc5;
-      for (let i = 0; i < base.length; i++) {
-        h ^= base.charCodeAt(i);
-        h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
-      }
-      const id = h.toString(16).padStart(8, '0').slice(0, 6);
-      // Sanitize username for shell/CLI: keep alnum/_/-, collapse others.
-      const safe = String(base).replace(/[^A-Za-z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || 'agent';
-      return `${safe}-${id}`;
-    },
     visibleTabs() {
       const tabs = [
         { key: 'general', label: this.$t('settings.tabs.general') },
@@ -544,10 +524,6 @@ export default {
       return [
         { value: 'pro', label: this.$t('settings.invite.proUser') }
       ];
-    },
-    serverWsUrl() {
-      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      return `${protocol}//${location.host}`;
     },
     agentInstallCommand() {
       return 'npm install -g @yeaft/webchat-agent';
