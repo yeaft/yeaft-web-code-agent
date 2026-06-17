@@ -25,6 +25,7 @@
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { getRuntimePlatformInfo, renderRuntimePlatformPrompt } from './runtime-platform.js';
 
 // ─── Template Loading (one-time at startup) ──────────────────────
 
@@ -300,6 +301,7 @@ export function buildSystemPrompt({
   vpPersona,
   sessionAnnouncement = '',
   projectDoc = '',
+  runtimePlatform,
 } = {}) {
   // Normalize app locales like `zh-CN` to prompt dictionary/template keys.
   const effectiveLang = normalizePromptLanguage(language);
@@ -363,7 +365,12 @@ export function buildSystemPrompt({
     parts.push(dreamTemplate || lang.dream);
   }
 
-  // ─── 4. Tools + Tool Guidance ──────────────────────────
+  // ─── 4. Runtime Platform + Tools + Tool Guidance ──────
+  const runtimePlatformBlock = renderRuntimePlatformPrompt(runtimePlatform || getRuntimePlatformInfo(), effectiveLang);
+  if (runtimePlatformBlock) {
+    parts.push(runtimePlatformBlock);
+  }
+
   if (toolNames.length > 0) {
     parts.push(lang.tools(toolNames.join(', ')));
 

@@ -27,7 +27,8 @@
 import { defineTool } from './types.js';
 import { stat, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { resolve, extname, isAbsolute, relative } from 'path';
+import { resolve, extname, isAbsolute } from 'path';
+import { checkPathAllowed } from './path-safety.js';
 
 /** Default max image size in bytes (20 MiB). Override via ctx.maxImageBytes. */
 const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -109,36 +110,6 @@ function parseImageDimensions(buffer, ext) {
   return null;
 }
 
-/**
- * Check whether `absPath` is allowed given a project `cwd` and an optional
- * allowlist of absolute directories. Returns `null` on success, or an object
- * `{ kind, message }` describing the failure. The `kind` field lets callers
- * tailor the error text (see prev-3 P2: distinguish "absolute path outside
- * project" from "relative path containing ..").
- */
-function checkPathAllowed(absPath, cwd, allowlist) {
-  // Reject if the resolved path lives inside the project (good).
-  const relToCwd = relative(cwd, absPath);
-  const insideCwd = relToCwd && !relToCwd.startsWith('..') && !isAbsolute(relToCwd);
-  if (insideCwd) return null;
-
-  // Otherwise must match an allowlist entry.
-  if (Array.isArray(allowlist) && allowlist.length > 0) {
-    for (const dir of allowlist) {
-      if (typeof dir !== 'string' || !isAbsolute(dir)) continue;
-      const rel = relative(dir, absPath);
-      if (rel && !rel.startsWith('..') && !isAbsolute(rel)) return null;
-    }
-  }
-
-  return {
-    kind: 'path_outside',
-    message:
-      'Path is outside the project directory and not on the image allowlist. ' +
-      'Either move the file into the project, or ask the user to add its parent ' +
-      'directory to ctx.imageAllowlist (set via ~/.yeaft/config.json imageAllowlist[]).',
-  };
-}
 
 function formatBytes(n) {
   if (n < 1024) return `${n}B`;

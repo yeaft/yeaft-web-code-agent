@@ -9,7 +9,7 @@
  */
 
 import { defineTool } from './types.js';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { existsSync, mkdirSync } from 'fs';
 import { join, resolve } from 'path';
 import { randomUUID } from 'crypto';
@@ -75,9 +75,9 @@ Returns the worktree path and branch name.`,
     }
 
     try {
-      // Create worktree with new branch
-      const cmd = `git worktree add -b "${branchName}" "${worktreeDir}" ${baseRef}`;
-      execSync(cmd, { cwd, stdio: 'pipe' });
+      // Create worktree with new branch. Use execFileSync args instead of
+      // shell quoting so Windows drive letters and spaces in paths survive.
+      execFileSync('git', ['worktree', 'add', '-b', branchName, worktreeDir, baseRef], { cwd, stdio: 'pipe' });
 
       return JSON.stringify({
         success: true,

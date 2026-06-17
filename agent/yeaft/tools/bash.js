@@ -4,13 +4,15 @@
  * Spawns a child process to run shell commands with timeout, output
  * truncation, working directory support, and cancellation via AbortSignal.
  *
- * Modeled after Claude Code's Bash tool implementation.
+ * The tool name remains Bash for wire compatibility. Internally it uses the
+ * platform default shell: POSIX shell on Linux/macOS, PowerShell/cmd on Windows.
  */
 
 import { defineTool } from './types.js';
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
+import { getRuntimePlatformInfo, resolveDefaultShell } from '../runtime-platform.js';
 
 /** Max output size in bytes before truncation (256 KB). */
 const MAX_OUTPUT = 256 * 1024;
@@ -22,17 +24,43 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 
 /**
+ * @param {string} command
+ * @param {{ runtimePlatform?: object }} opts
+ */
+export function buildShellInvocation(command, opts = {}) {
+  const runtimePlatform = opts.runtimePlatform || getRuntimePlatformInfo();
+  const shell = runtimePlatform.defaultShell
+    ? {
+        command: runtimePlatform.defaultShell,
+        argsPrefix: Array.isArray(runtimePlatform.shellArgsPrefix) ? runtimePlatform.shellArgsPrefix : null,
+        family: runtimePlatform.shellFamily,
+      }
+    : resolveDefaultShell({ platform: runtimePlatform.platform });
+
+  const argsPrefix = Array.isArray(shell.argsPrefix)
+    ? shell.argsPrefix
+    : resolveDefaultShell({ platform: runtimePlatform.platform }).argsPrefix;
+
+  return {
+    command: shell.command,
+    args: [...argsPrefix, command],
+    family: shell.family || runtimePlatform.shellFamily || 'posix',
+  };
+}
+
+/**
  * Run a command in a child process.
  * @returns {Promise<{ stdout: string, stderr: string, exitCode: number, timedOut: boolean }>}
  */
-function runCommand(command, { cwd, timeout, signal }) {
-  return new Promise((resolve, reject) => {
-    const shell = process.env.SHELL || '/bin/bash';
-    const proc = spawn(shell, ['-c', command], {
+function runCommand(command, { cwd, timeout, signal, runtimePlatform }) {
+  return new Promise((resolve) => {
+    const platform = runtimePlatform || getRuntimePlatformInfo();
+    const invocation = buildShellInvocation(command, { runtimePlatform: platform });
+    const proc = spawn(invocation.command, invocation.args, {
       cwd,
       env: { ...process.env, TERM: 'dumb', FORCE_COLOR: '0' },
       stdio: ['ignore', 'pipe', 'pipe'],
-      timeout,
+      detached: !platform.isWindows,
     });
 
     let stdout = '';
@@ -40,6 +68,31 @@ function runCommand(command, { cwd, timeout, signal }) {
     let stdoutTruncated = false;
     let stderrTruncated = false;
     let timedOut = false;
+    let settled = false;
+    let timeoutId = null;
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+      resolve(result);
+    };
+
+    const killProcess = () => {
+      try {
+        if (!platform.isWindows && proc.pid) {
+          process.kill(-proc.pid, 'SIGTERM');
+          return;
+        }
+      } catch {
+        // Fall back to killing the shell process below.
+      }
+      try {
+        proc.kill('SIGTERM');
+      } catch {
+        // ignore
+      }
+    };
 
     proc.stdout.on('data', (chunk) => {
       if (stdout.length < MAX_OUTPUT) {
@@ -61,46 +114,41 @@ function runCommand(command, { cwd, timeout, signal }) {
       }
     });
 
-    // Handle abort signal
-    const onAbort = () => {
-      try { proc.kill('SIGTERM'); } catch {}
-      setTimeout(() => {
-        try { proc.kill('SIGKILL'); } catch {}
-      }, 2000);
-    };
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      killProcess();
+      finish({
+        stdout,
+        stderr: stderr + `\nProcess timed out after ${timeout}ms`,
+        exitCode: 124,
+        timedOut: true,
+      });
+    }, timeout);
+
     if (signal) {
-      if (signal.aborted) { onAbort(); return; }
-      signal.addEventListener('abort', onAbort, { once: true });
+      signal.addEventListener('abort', () => {
+        killProcess();
+      }, { once: true });
     }
 
-    proc.on('close', (code) => {
-      if (signal) signal.removeEventListener('abort', onAbort);
-      resolve({
-        stdout: stdoutTruncated ? stdout + '\n... (output truncated)' : stdout,
-        stderr: stderrTruncated ? stderr + '\n... (stderr truncated)' : stderr,
-        exitCode: code ?? 1,
+    proc.on('close', (code, signalName) => {
+      if (stdoutTruncated) stdout += '\n[Output truncated]';
+      if (stderrTruncated) stderr += '\n[Output truncated]';
+      finish({
+        stdout,
+        stderr,
+        exitCode: timedOut ? 124 : (code ?? (signalName ? 128 : 1)),
         timedOut,
       });
     });
 
     proc.on('error', (err) => {
-      if (signal) signal.removeEventListener('abort', onAbort);
-      if (err.code === 'ETIMEDOUT' || err.killed) {
-        timedOut = true;
-        resolve({
-          stdout,
-          stderr: stderr + `\nProcess timed out after ${timeout}ms`,
-          exitCode: 124,
-          timedOut: true,
-        });
-      } else {
-        resolve({
-          stdout,
-          stderr: `Error spawning process: ${err.message}`,
-          exitCode: 1,
-          timedOut: false,
-        });
-      }
+      finish({
+        stdout,
+        stderr: `Error spawning process: ${err.message}`,
+        exitCode: 1,
+        timedOut: false,
+      });
     });
   });
 }
@@ -109,10 +157,13 @@ export default defineTool({
   name: 'Bash',
   description: `Execute a shell command and return its output.
 
-Use this tool to run CLI commands, scripts, and system operations.
+Use this tool to run CLI commands, scripts, and system operations. The tool name
+is kept as Bash for compatibility; on Windows the command is executed through
+the configured Windows shell (PowerShell by default, or cmd when configured).
 
 Guidelines:
 - Commands run in the working directory (cwd from context)
+- Match command syntax to the Agent OS shown in the runtime_platform prompt
 - Timeout defaults to 2 minutes (max 10 minutes)
 - Large outputs are truncated at 256KB
 - Use absolute paths when possible
@@ -124,7 +175,7 @@ Guidelines:
     properties: {
       command: {
         type: 'string',
-        description: 'The shell command to execute',
+        description: 'The shell command to execute using the Agent OS default shell',
       },
       cwd: {
         type: 'string',
@@ -143,8 +194,9 @@ Guidelines:
     if (!input?.command) return false;
     const cmd = input.command.toLowerCase();
     return cmd.includes('rm ') || cmd.includes('rmdir') ||
+           cmd.includes('remove-item') || cmd.startsWith('del ') || cmd.includes(' del ') ||
            cmd.includes('git reset --hard') || cmd.includes('git clean') ||
-           cmd.includes('dd ') || cmd.includes('mkfs') ||
+           cmd.includes('dd ') || cmd.includes('mkfs') || cmd.includes('format ') ||
            cmd.includes('> /dev/') || cmd.includes('chmod 000');
   },
   async execute(input, ctx) {
@@ -162,12 +214,14 @@ Guidelines:
 
     // Clamp timeout
     const timeout = Math.min(Math.max(timeout_ms || DEFAULT_TIMEOUT_MS, 1000), MAX_TIMEOUT_MS);
+    const runtimePlatform = ctx?.runtimePlatform || getRuntimePlatformInfo();
 
     try {
       const result = await runCommand(command, {
         cwd,
         timeout,
         signal: ctx?.signal,
+        runtimePlatform,
       });
 
       // Format output similar to Claude Code
@@ -176,13 +230,13 @@ Guidelines:
       if (result.stderr) parts.push(`STDERR:\n${result.stderr}`);
       if (result.timedOut) parts.push(`\n(Command timed out after ${timeout}ms)`);
 
-      const output = parts.join('\n') || '(no output)';
-
-      return result.exitCode === 0
-        ? output
-        : `Exit code: ${result.exitCode}\n${output}`;
+      const output = parts.join('\n');
+      if (result.exitCode !== 0) {
+        return `Exit code: ${result.exitCode}\n${output}`;
+      }
+      return output || '(no output)';
     } catch (err) {
-      return JSON.stringify({ error: `Bash execution failed: ${err.message}` });
+      return JSON.stringify({ error: err.message });
     }
   },
 });
