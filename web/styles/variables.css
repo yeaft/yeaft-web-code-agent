@@ -78,9 +78,9 @@ select option:checked {
   --accent-blue-hover: #3a6ab5;
   --error: #d65d5d;
   --success: #4a9e5c;
-  --code-bg: #1e1e1e;
-  --code-header-bg: #2d2d2d;
-  --code-text: #e5e5e5;
+  --code-bg: var(--bg-sidebar);
+  --code-header-bg: var(--bg-input-wrapper);
+  --code-text: var(--text-primary);
   --tool-bg: transparent;
   --tool-border: transparent;
   --tool-result-bg: #f0fdf4;
@@ -253,9 +253,9 @@ select option:checked {
   --accent-blue-hover: #9a9792;
   --error: #d09090;
   --success: #7ab87e;
-  --code-bg: #141414;
-  --code-header-bg: #222220;
-  --code-text: #ccc9c4;
+  --code-bg: var(--bg-sidebar);
+  --code-header-bg: var(--bg-input-wrapper);
+  --code-text: var(--text-primary);
   --tool-bg: transparent;
   --tool-border: transparent;
   --tool-result-bg: rgba(180, 180, 170, 0.05);

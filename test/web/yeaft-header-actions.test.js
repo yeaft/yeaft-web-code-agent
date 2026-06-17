@@ -8,6 +8,7 @@ const sidebarSource = read('components/YeaftSidebar.js');
 const chatHeaderSource = read('components/ChatHeader.js');
 const yeaftCss = read('styles/yeaft.css');
 const sidebarCss = read('styles/sidebar.css');
+const variablesCss = read('styles/variables.css');
 const enI18n = read('i18n/en.js');
 const zhI18n = read('i18n/zh-CN.js');
 
@@ -114,5 +115,23 @@ describe('conversation header titles', () => {
     expect(sidebarCss).toContain('.chat-title');
     expect(sidebarCss).toContain('text-overflow: ellipsis;');
     expect(sidebarCss).toContain('white-space: nowrap;');
+  });
+});
+
+describe('light theme surface colors', () => {
+  it('uses neutral Yeaft mode toggle colors instead of the black accent track', () => {
+    expect(sidebarCss).toContain('.mode-toggle.is-yeaft .mode-toggle-track');
+    expect(sidebarCss).toContain('background: var(--session-active);');
+    expect(sidebarCss).toContain('border-color: var(--border-color);');
+    expect(sidebarCss).not.toContain('.mode-toggle.is-yeaft .mode-toggle-track {\n  background: var(--accent);');
+  });
+
+  it('maps code blocks to theme surfaces instead of dark-only colors in light mode', () => {
+    expect(variablesCss).toContain('  --code-bg: var(--bg-sidebar);');
+    expect(variablesCss).toContain('  --code-header-bg: var(--bg-input-wrapper);');
+    expect(variablesCss).toContain('  --code-text: var(--text-primary);');
+    expect(variablesCss).not.toMatch(/--code-bg:\s*#[0-9a-f]{6}/i);
+    expect(variablesCss).not.toMatch(/--code-header-bg:\s*#[0-9a-f]{6}/i);
+    expect(variablesCss).not.toMatch(/--code-text:\s*#[0-9a-f]{6}/i);
   });
 });
