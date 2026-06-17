@@ -2090,6 +2090,30 @@
   color: var(--text-muted);
 }
 
+/* feat-debug-token-breakdown: estimated message/tool split next to
+   the real token totals. Rendered inline, dimmer than the real number,
+   white-space:nowrap so the parent row never wraps. */
+.yeaft-debug-tokens-split {
+  color: var(--text-muted);
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+  margin-left: 4px;
+  white-space: nowrap;
+}
+
+/* feat-debug-timestamp: per-turn / per-loop HH:MM:SS column. Sits at
+   the right end of the stats row, dim + tabular so changing seconds
+   don't reflow the line. */
+.yeaft-debug-turn-clock,
+.yeaft-debug-loop-clock {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+  margin-left: 4px;
+}
+
 .yeaft-debug-loop-body {
   margin-top: 4px;
   margin-left: 10px;

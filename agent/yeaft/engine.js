@@ -2178,6 +2178,11 @@ export class Engine {
           latencyMs,
           ttfbMs,
           stopReason: 'error',
+          // feat-debug-timestamp: epoch ms when this loop completed
+          // (request end). The panel uses this to print HH:MM:SS per
+          // loop; falls back to turn.openedAt + cumulative latency
+          // when missing for hydrated-from-disk loops.
+          at: Date.now(),
           rawRequest,
           rawResponse,
         };
@@ -2345,6 +2350,11 @@ export class Engine {
         latencyMs,
         ttfbMs,
         stopReason,
+        // feat-debug-timestamp: epoch ms when this loop completed
+        // (request end). The panel uses this to print HH:MM:SS per
+        // loop; falls back to turn.openedAt + cumulative latency
+        // when missing for hydrated-from-disk loops.
+        at: Date.now(),
         rawRequest,
         rawResponse,
       };
