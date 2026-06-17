@@ -1094,6 +1094,7 @@ export class Engine {
       threadId,
       ...(sessionId ? { sessionId } : {}),
       ...(this.#chatId ? { chatId: this.#chatId } : {}),
+      ...(this.#vpId ? { speakerVpId: this.#vpId } : {}),
     };
     if (toolCalls && toolCalls.length > 0) {
       assistantMsg.toolCalls = toolCalls;
