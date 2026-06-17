@@ -880,6 +880,113 @@ describe('Engine', () => {
       // tool receives an AbortSignal — not the caller's identity.
       expect(toolReceivedSignal).toBeInstanceOf(AbortSignal);
     });
+
+    // Regression: per-VP Stop in Yeaft Session was not interrupting the
+    // current turn promptly. The wire frame reached the agent, the
+    // controller fired, but the upstream LLM stream had already buffered
+    // a batch of SSE chunks at the network/proxy layer. The adapter
+    // continued reading them (reader.read() doesn't observe the signal
+    // synchronously when chunks are already in the kernel buffer), and
+    // the engine for-await loop happily yielded each chunk to the
+    // web-bridge, which pushed yeaft_output frames to the browser for
+    // 1–2s after Stop. The fix: engine must check signal.aborted before
+    // yielding each adapter event so already-buffered chunks are
+    // dropped — not forwarded — once the user has requested abort.
+    it('drops buffered adapter chunks emitted after abort fires', async () => {
+      // A non-cooperative adapter: it does NOT observe params.signal and
+      // synchronously yields a long sequence of text_delta + tool_call
+      // events, exactly like a fetch() ReadableStream that already has
+      // SSE chunks in its kernel/proxy buffer when AbortSignal fires.
+      const noncoopAdapter = {
+        async *stream(_params) {
+          // Pre-buffered chunks. None of these observe the signal —
+          // that's the whole point: this models the network reality
+          // where bytes are already in flight when Stop is pressed.
+          for (let i = 0; i < 30; i += 1) {
+            yield { type: 'text_delta', text: `chunk-${i} ` };
+          }
+          yield { type: 'stop', stopReason: 'end_turn' };
+        },
+      };
+
+      const ac = new AbortController();
+      const engine = new Engine({
+        adapter: noncoopAdapter,
+        trace,
+        config: { model: 'test-model', maxOutputTokens: 1024 },
+      });
+
+      // Abort fires synchronously BEFORE the first yield is consumed.
+      // This is the most adversarial timing: every single chunk the
+      // adapter emits is post-abort, so a correctly-behaving engine
+      // must yield zero text_delta events to the caller.
+      ac.abort('user');
+
+      const events = [];
+      for await (const event of engine.query({ prompt: 'hi', signal: ac.signal })) {
+        events.push(event);
+      }
+
+      const textDeltas = events.filter(e => e.type === 'text_delta');
+      const aborted = events.filter(e => e.type === 'aborted');
+      const turnEnds = events.filter(e => e.type === 'turn_end');
+
+      // With the bug: textDeltas.length === 30 (all buffered chunks
+      // leaked through). With the fix: textDeltas.length === 0 because
+      // the engine checks signal.aborted before forwarding each adapter
+      // event.
+      expect(textDeltas).toHaveLength(0);
+      expect(aborted).toHaveLength(1);
+      expect(aborted[0].reason).toBe('external');
+      expect(turnEnds.at(-1)?.stopReason).toBe('aborted');
+    });
+
+    it('drops adapter chunks emitted after abort fires mid-stream', async () => {
+      // Same as above but abort fires AFTER a few chunks were already
+      // legitimately delivered. Everything emitted post-abort must be
+      // dropped; pre-abort chunks must still flow.
+      let abortFn = null;
+      const noncoopAdapter = {
+        async *stream(_params) {
+          for (let i = 0; i < 5; i += 1) {
+            yield { type: 'text_delta', text: `pre-${i} ` };
+          }
+          // Trigger abort mid-stream. The remaining 25 chunks are the
+          // "already in network buffer" payload the engine must drop.
+          if (abortFn) abortFn();
+          for (let i = 0; i < 25; i += 1) {
+            yield { type: 'text_delta', text: `post-${i} ` };
+          }
+          yield { type: 'stop', stopReason: 'end_turn' };
+        },
+      };
+
+      const ac = new AbortController();
+      abortFn = () => ac.abort('user');
+
+      const engine = new Engine({
+        adapter: noncoopAdapter,
+        trace,
+        config: { model: 'test-model', maxOutputTokens: 1024 },
+      });
+
+      const events = [];
+      for await (const event of engine.query({ prompt: 'hi', signal: ac.signal })) {
+        events.push(event);
+      }
+
+      const textDeltas = events.filter(e => e.type === 'text_delta');
+      const preChunks = textDeltas.filter(e => e.text.startsWith('pre-'));
+      const postChunks = textDeltas.filter(e => e.text.startsWith('post-'));
+
+      expect(preChunks).toHaveLength(5);
+      // With the bug: postChunks.length === 25. With the fix: 0.
+      expect(postChunks).toHaveLength(0);
+      const aborted = events.filter(e => e.type === 'aborted');
+      const turnEnds = events.filter(e => e.type === 'turn_end');
+      expect(aborted).toHaveLength(1);
+      expect(turnEnds.at(-1)?.stopReason).toBe('aborted');
+    });
   });
 
   describe('debug trace integration', () => {

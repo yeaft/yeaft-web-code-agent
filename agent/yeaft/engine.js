@@ -2051,6 +2051,20 @@ export class Engine {
           signal,
           onRawExchange: captureRawExchange,
         })) {
+          // task-325a (abort-stop fix): per-event abort short-circuit.
+          // The adapter is expected to throw AbortError when fetch's
+          // signal fires, but in practice undici/HTTP-2/proxy layers
+          // can hand us a batch of SSE chunks that were already buffered
+          // when abort was requested. Those chunks would otherwise be
+          // forwarded to the caller (web-bridge → WS → browser) for
+          // 1–2s after the user pressed Stop, producing the exact
+          // symptom "Stop button doesn't stop the turn". Drop every
+          // post-abort event by throwing into the outer catch, which
+          // converges on the same `aborted` + `turn_end` terminal pair
+          // as the adapter-throws-AbortError path.
+          if (signal?.aborted) {
+            throw new LLMAbortError();
+          }
           switch (event.type) {
             case 'text_delta':
               if (ttfbMs === null) ttfbMs = Date.now() - startTime;
