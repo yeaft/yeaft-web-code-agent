@@ -56,7 +56,6 @@ export default {
           <SidebarAgentHeader
             :online-agents="onlineAgents"
             :online-agent-count="onlineAgentCount"
-            :current-agent-latency="currentAgentLatency"
             :restarting-agents="restartingAgents"
             :upgrading-agents="upgradingAgents"
             :show-agent-actions="true"
@@ -140,10 +139,6 @@ export default {
                 <div class="session-info">
                   <span class="session-path">{{ groupPath(s.raw) }}</span>
                   <span class="session-agent" v-if="sessionAgentName(s.raw)">{{ sessionAgentName(s.raw) }}</span>
-                  <span class="latency-indicator" v-if="rowLatency(s.raw)" :class="getLatencyClass(rowLatency(s.raw))" :title="rowLatency(s.raw) + 'ms'">
-                    <svg viewBox="0 0 24 24" width="10" height="10"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>
-                    {{ rowLatency(s.raw) }}ms
-                  </span>
                 </div>
               </div>
             </template>
@@ -295,12 +290,6 @@ export default {
       }
       return s.agents.some(a => a && a.online);
     },
-    currentAgentLatency() {
-      const s = this.chatStore || this.store;
-      if (!s || !s.currentAgent || !Array.isArray(s.agents)) return null;
-      const agent = s.agents.find(a => a && a.id === s.currentAgent);
-      return (agent && agent.latency != null) ? agent.latency : null;
-    },
     agentTitleText() {
       const s = this.chatStore || this.store;
       if (!s || !s.currentAgent) return '';
@@ -330,13 +319,6 @@ export default {
       if (!s || !sessionId) return false;
       if (typeof s.isYeaftSessionProcessing === 'function') return s.isYeaftSessionProcessing(sessionId);
       return !!s.yeaftProcessingSessions?.[sessionId];
-    },
-    // task-341: latency indicator colour mirrors ChatPage.
-    getLatencyClass(latency) {
-      if (latency == null) return '';
-      if (latency < 200) return 'latency-good';
-      if (latency < 500) return 'latency-warn';
-      return 'latency-bad';
     },
     // task-341: workbench toggle, guarded for test env.
     onToggleWorkbench() {
@@ -389,17 +371,9 @@ export default {
       return String(agent?.name || g.agentName || g.agentId || '');
     },
     // Path subtitle for parity with chat rows. Do not fall back to member
-    // count; users need workDir + agent + latency here.
+    // count; users need workDir + agent here.
     groupPath(g) {
       return shortenPath(g?.workDir);
-    },
-    // Per-row latency (parity with chat rows — shows the owning agent's ping).
-    rowLatency(g) {
-      if (!g || !g.agentId) return null;
-      const s = this.chatStore || this.store;
-      if (!s || !Array.isArray(s.agents)) return null;
-      const agent = s.agents.find(a => a && a.id === g.agentId);
-      return (agent && agent.latency != null) ? agent.latency : null;
     },
     // task-yeaft-group-editor: ⚙ button on each group row opens the
     // unified SessionSettingsModal (announcement / members / rename /

@@ -935,33 +935,6 @@
   color: white;
 }
 
-/* Latency indicator */
-.latency-indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-  font-size: 10px;
-  white-space: nowrap;
-  margin-left: auto;
-}
-
-.latency-indicator svg {
-  flex-shrink: 0;
-}
-
-.latency-indicator.latency-good {
-  color: var(--success);
-}
-
-.latency-indicator.latency-warn {
-  color: #eab308;
-}
-
-.latency-indicator.latency-bad {
-  color: #ef4444;
-}
-
 .new-chat-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;

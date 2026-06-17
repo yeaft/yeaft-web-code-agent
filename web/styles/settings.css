@@ -92,12 +92,6 @@
   text-overflow: ellipsis;
 }
 
-.agent-dropdown-latency {
-  font-size: 11px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
 .agent-dropdown-version {
   font-size: 10px;
   color: var(--text-muted);
