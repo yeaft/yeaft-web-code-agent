@@ -82,4 +82,42 @@ describe('LlmTab editable model refs', () => {
     expect(PROTOCOL_PRESET_MODELS.anthropic).toContain('claude-opus-4-8');
     expect(PROTOCOL_PRESET_MODELS.anthropic).toContain('claude-opus-4.8');
   });
+
+  it('hides the fast/secondary model field in the Yeaft context', () => {
+    expect(LlmTab.template).toContain('class="llm-model-select-field" v-if="context !== \'yeaft\'"');
+    expect(LlmTab.template).toContain('settings.llm.fastModel');
+  });
+
+  it('omits fastModel when saving in the Yeaft context but keeps it elsewhere', () => {
+    const baseCtx = () => {
+      const sent = [];
+      return {
+        sent,
+        ctx: {
+          effectiveAgentId: 'agent-1',
+          saving: false,
+          editableProviders: [{ name: 'p1', baseUrl: 'http://x/v1', models: [{ id: 'gpt-5' }] }],
+          localPrimaryModel: 'p1/gpt-5',
+          localFastModel: 'p1/gpt-5-mini',
+          currentConfig: { effectiveConfig: { language: 'en' } },
+          chatStore: { sendWsMessage: msg => sent.push(msg) },
+          $watch: () => () => {},
+          $emit: () => {},
+          isManagedProvider: LlmTab.methods.isManagedProvider,
+          _modelId: LlmTab.methods._modelId,
+        },
+      };
+    };
+
+    const yeaft = baseCtx();
+    yeaft.ctx.context = 'yeaft';
+    LlmTab.methods.saveConfig.call(yeaft.ctx);
+    expect(yeaft.sent[0].config.primaryModel).toBe('p1/gpt-5');
+    expect('fastModel' in yeaft.sent[0].config).toBe(false);
+
+    const settings = baseCtx();
+    settings.ctx.context = 'settings';
+    LlmTab.methods.saveConfig.call(settings.ctx);
+    expect(settings.sent[0].config.fastModel).toBe('p1/gpt-5-mini');
+  });
 });

@@ -428,6 +428,13 @@ export const OPENAI_REASONING_EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'hig
 export const ANTHROPIC_MANUAL_EFFORT_OPTIONS = ['low', 'medium', 'high'];
 export const ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh', 'max'];
 export const ANTHROPIC_ADAPTIVE_MAX_EFFORT_OPTIONS = ['low', 'medium', 'high', 'max'];
+// DeepSeek reasoning models (deepseek-reasoner / deepseek-r1) expose a simple
+// low/medium/high effort scale. DeepSeek's OpenAI-compatible surface accepts a
+// reasoning effort hint; we send it through the standard openai-reasoning
+// `reasoning.effort` path (relay/proxy adapts to DeepSeek's wire format). No
+// `minimal` tier — DeepSeek documents only a high/max effort distinction, so we
+// keep the user-facing scale to the three levels the user expects.
+export const DEEPSEEK_REASONING_EFFORT_OPTIONS = ['low', 'medium', 'high'];
 
 function inferThinkingCapability(model) {
   const id = parseModelRef(model).modelId.toLowerCase();
@@ -466,6 +473,20 @@ function inferThinkingCapability(model) {
   if (/^claude-/.test(id) && (/(^|-)3-7($|-|\.)/.test(id) || /(^|-)4($|-|\.)/.test(id))) {
     const maxBudgetTokens = id.includes('opus') ? 64000 : 32000;
     return { supportsThinking: true, thinkingProtocol: 'anthropic', defaultEffort: null, maxBudgetTokens };
+  }
+
+  // DeepSeek reasoning models expose a thinking effort hint. Only the reasoner
+  // family (deepseek-reasoner / deepseek-r1*) is a reasoning model — plain
+  // deepseek-chat stays effort-less. Effort travels over the openai-reasoning
+  // `reasoning.effort` path; user-facing scale is low/medium/high.
+  if (/^deepseek-(reasoner|r1)/.test(id)) {
+    return {
+      supportsThinking: true,
+      thinkingProtocol: 'openai-reasoning',
+      defaultEffort: null,
+      maxBudgetTokens: null,
+      effortOptions: DEEPSEEK_REASONING_EFFORT_OPTIONS,
+    };
   }
 
   return null;
