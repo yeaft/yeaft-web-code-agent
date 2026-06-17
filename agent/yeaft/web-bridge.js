@@ -74,12 +74,26 @@ let session = null;
 
 let threadClassifier = defaultClassifyThread;
 
+function applyLiveLanguage(language) {
+  if (!language || typeof language !== 'string') return;
+  if (session?.config && typeof session.config === 'object') {
+    session.config.language = language;
+  }
+  for (const eng of vpEngines.values()) {
+    try { eng.setLanguage?.(language); } catch { /* best-effort */ }
+  }
+  try { session?.engine?.setLanguage?.(language); } catch { /* best-effort */ }
+}
+
 function refreshLiveSessionConfig() {
   if (!session) return;
   try {
     const freshConfig = loadConfig({ dir: session.yeaftDir || ctx.CONFIG?.yeaftDir });
     const freshModels = Array.isArray(freshConfig.availableModels) ? freshConfig.availableModels : [];
     session.config.availableModels = freshModels;
+    if (freshConfig.language) {
+      applyLiveLanguage(freshConfig.language);
+    }
     if (freshConfig.model && !freshModels.some(m => modelRefMatchesAvailable(m, session.config.model))) {
       session.config.model = freshConfig.primaryModel || freshConfig.model;
     }
@@ -477,11 +491,7 @@ function invalidateGroupContext(sessionId) {
  * @param {string} language — 'en' | 'zh'
  */
 export function broadcastLanguageChange(language) {
-  if (!language) return;
-  for (const eng of vpEngines.values()) {
-    try { eng.setLanguage?.(language); } catch { /* best-effort */ }
-  }
-  try { session?.engine?.setLanguage?.(language); } catch { /* best-effort */ }
+  applyLiveLanguage(language);
 }
 
 /** Query timeout in ms — abort if LLM doesn't respond within this window */
