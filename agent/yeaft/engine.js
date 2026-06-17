@@ -2267,6 +2267,9 @@ export class Engine {
 
       const latencyMs = Date.now() - startTime;
 
+      const turnInputTokens = (totalUsage.inputTokens || 0) + (totalUsage.cacheInputDeltaTokens || 0);
+      const turnOutputTokens = totalUsage.outputTokens || 0;
+
       // Record turn in debug trace
       this.#trace.endTurn(turnId, {
         model: currentModel,
@@ -2289,8 +2292,8 @@ export class Engine {
           outputTokens: totalUsage.outputTokens || 0,
           cacheReadTokens: totalUsage.cacheReadTokens || 0,
           cacheWriteTokens: totalUsage.cacheWriteTokens || 0,
-          totalInputTokens: (totalUsage.inputTokens || 0) + (totalUsage.cacheReadTokens || 0) + (totalUsage.cacheWriteTokens || 0),
-          totalTokens: (totalUsage.inputTokens || 0) + (totalUsage.cacheReadTokens || 0) + (totalUsage.cacheWriteTokens || 0) + (totalUsage.outputTokens || 0),
+          totalInputTokens: turnInputTokens,
+          totalTokens: turnInputTokens + turnOutputTokens,
         },
         ttfbMs,
         rawRequest,

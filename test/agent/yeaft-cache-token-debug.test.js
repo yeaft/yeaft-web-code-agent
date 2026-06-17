@@ -140,6 +140,18 @@ describe('Yeaft cache token debug accounting', () => {
         totalInputTokens: 100,
         totalTokens: 125,
       });
+
+      const history = trace.fetchRecentDebugHistory({ limit: 10 });
+      expect(history.loops).toHaveLength(1);
+      expect(history.loops[0].usage).toMatchObject({
+        inputTokens: 100,
+        outputTokens: 25,
+        cacheReadTokens: 40,
+        cacheWriteTokens: 0,
+        totalInputTokens: 100,
+        totalTokens: 125,
+      });
+      expect(history.turns[0].totalTokens).toBe(125);
     } finally {
       trace.close();
     }
