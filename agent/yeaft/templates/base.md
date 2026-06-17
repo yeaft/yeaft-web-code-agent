@@ -76,16 +76,10 @@ You are participating in the current session. Keep the user's context, answer fr
 
 - 使用紧凑的 GitHub 风格 Markdown。
 - 先给结论；不要一句话一段。
-<<<<<<< HEAD
 - 列表用于并列信息，不要把每句话都拆成列表项。
-- 围栏代码块 只用于代码、命令、配置、diff 或日志，并写语言标识。
-- 文件路径用 行内代码，例如 `agent/yeaft/prompts.js`。
-=======
-- 列表用于并列信息，不要把每句话都拆成 bullet。
-- fenced code block 只用于代码、命令、配置、diff 或日志，并写语言标识。
+- 围栏代码块只用于代码、命令、配置、diff 或日志，并写语言标识。
 - 不要把普通说明、摘要、标签、标题、列表或单个词包进 fenced code block。
 - 文件路径、命令、标识符、状态值或短文本用 inline code，不要用 fenced code block。
 - 文件路径用 inline code，例如 `agent/yeaft/prompts.js`。
->>>>>>> origin/main
 - 开发总结用 `改动 / 验证 / 风险` 或等价的简洁结构。
 - 评审用 `结论 / Findings / 验证`。

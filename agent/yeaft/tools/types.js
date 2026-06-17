@@ -14,6 +14,8 @@
  * @typedef {Object} ToolContext
  * @property {AbortSignal} [signal] — cancellation signal
  * @property {string} [yeaftDir] — Yeaft data directory
+ * @property {ReturnType<import('../runtime-platform.js').getRuntimePlatformInfo>} [runtimePlatform]
+ *   — runtime OS/shell facts for platform-aware tools
  * @property {string} [cwd] — working directory
  * @property {import('../mcp.js').MCPManager} [mcpManager] — MCP manager
  * @property {object} [skillManager] — Skill manager

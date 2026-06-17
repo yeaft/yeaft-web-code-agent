@@ -8,7 +8,7 @@
  */
 
 import { defineTool } from './types.js';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
 
@@ -66,7 +66,7 @@ unless discard_changes is set to true.`,
       // Check for uncommitted changes
       if (!input.discard_changes) {
         try {
-          const status = execSync('git status --porcelain', {
+          const status = execFileSync('git', ['status', '--porcelain'], {
             cwd: worktreePath,
             encoding: 'utf8',
             stdio: ['pipe', 'pipe', 'pipe'],
@@ -86,7 +86,7 @@ unless discard_changes is set to true.`,
       // Get branch name before removal
       let branchName = null;
       try {
-        branchName = execSync('git rev-parse --abbrev-ref HEAD', {
+        branchName = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
           cwd: worktreePath,
           encoding: 'utf8',
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -95,9 +95,9 @@ unless discard_changes is set to true.`,
         // ignore
       }
 
-      // Remove worktree
-      const forceFlag = input.discard_changes ? ' --force' : '';
-      execSync(`git worktree remove "${worktreePath}"${forceFlag}`, {
+      // Remove worktree. Use argv form so Windows paths with spaces or drive
+      // letters are passed to git unchanged.
+      execFileSync('git', ['worktree', 'remove', ...(input.discard_changes ? ['--force'] : []), worktreePath], {
         cwd: mainCwd,
         stdio: 'pipe',
       });
@@ -105,7 +105,7 @@ unless discard_changes is set to true.`,
       // Remove the branch if it was a yeaft worktree branch
       if (branchName && branchName.startsWith('yeaft-wt/')) {
         try {
-          execSync(`git branch -D "${branchName}"`, {
+          execFileSync('git', ['branch', '-D', branchName], {
             cwd: mainCwd,
             stdio: 'pipe',
           });

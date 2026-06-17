@@ -21,6 +21,7 @@ import { randomUUID } from 'crypto';
 import { promises as fsp } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
+import { getRuntimePlatformInfo } from './runtime-platform.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes } from './sessions/pre-flow.js';
 import { readProjectDoc, pickProjectDocFile, DEFAULT_PROJECT_DOC_MAX_BYTES } from './sessions/project-doc.js';
@@ -815,6 +816,7 @@ export class Engine {
       activeScope,
       sessionAnnouncement,
       projectDoc,
+      runtimePlatform: getRuntimePlatformInfo(),
       taskCtx,
       // Worker-shape harness is descriptive metadata for human inspection;
       // production prompts skip it to save tokens. Re-enable via env when
@@ -903,6 +905,7 @@ export class Engine {
     return {
       signal,
       yeaftDir: this.#yeaftDir,
+      runtimePlatform: getRuntimePlatformInfo(),
       // Group-scoped working directory. Threaded from #runQuery({ workDir })
       // → set by web-bridge runVpTurn from sessionMeta.workDir. Tools read
       // `ctx.cwd` and resolve relative paths against it. Always absolute
