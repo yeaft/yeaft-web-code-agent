@@ -53,7 +53,8 @@ function getContext() {
 
 export const jsRepl = defineTool({
   name: 'JsRepl',
-  description: `Evaluate JavaScript code in a persistent REPL environment.
+  description: {
+  en: `Evaluate JavaScript code in a persistent REPL environment.
 
 The REPL context persists across calls — variables and functions
 defined in one call are available in subsequent calls.
@@ -61,11 +62,23 @@ defined in one call are available in subsequent calls.
 Guidelines:
 - Use for calculations, data transformations, and quick experiments
 - State is preserved between calls
-- Pass \`reset: true\` to wipe all state before evaluating (clean slate).
-  \`code\` becomes optional in this mode — pass reset alone to just clear.
+- Pass reset: true to wipe all state before evaluating (clean slate).
+  code becomes optional in this mode — pass reset alone to just clear.
 - console.log output is captured and returned
 - Returns the last expression's value plus any console output
 - No filesystem or network access from within the REPL`,
+  zh: `在持久 REPL 环境中执行 JavaScript 代码。
+
+REPL 上下文在多次调用间保持——一次调用中定义的变量和函数可在后续调用中使用。
+
+使用指南：
+- 用于计算、数据转换和快速实验
+- 状态在调用间保留
+- 传入 reset: true 可在执行前清除所有状态（干净环境）。此模式下 code 可选——只传 reset 即可清除
+- console.log 输出被捕获并返回
+- 返回最后一个表达式的值及所有 console 输出
+- REPL 内不能访问文件系统或网络`
+},
   parameters: {
     type: 'object',
     properties: {

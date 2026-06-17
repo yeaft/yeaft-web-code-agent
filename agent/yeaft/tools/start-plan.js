@@ -40,11 +40,12 @@ import { getDefaultPlanInstruction } from '../prompts.js';
 
 export default defineTool({
   name: 'StartPlan',
-  description: `Enter planning mode for a non-trivial task. Use BEFORE you start working when the request needs multiple steps, has unclear scope, or the user said "make a plan" / "think through this first".
+  description: {
+  en: `Enter planning mode for a non-trivial task. Use BEFORE you start working when the request needs multiple steps, has unclear scope, or the user said "make a plan" / "think through this first".
 
 This tool returns a planning instruction. Use it to land a structured plan, then keep working in the same turn. The expected flow is:
 1. Produce a short prose plan (problem, approach, risks).
-2. Call \`TodoWrite\` with the ordered steps. Mark the first concrete step "in_progress", the rest "pending".
+2. Call TodoWrite with the ordered steps. Mark the first concrete step "in_progress", the rest "pending".
 3. Start executing that first step — call whatever tools the work needs. Do not end the turn just because the plan is written; the plan is the runway.
 
 WHEN TO USE:
@@ -58,7 +59,28 @@ WHEN NOT TO USE:
 
 EXCEPTION — stop after the plan only if the first step is genuinely "ask the user" (an unresolved unknown that blocks every other step). Otherwise keep moving.
 
-The tool takes the topic plus optional guiding fields (stuckAt, userProblem, expectedScale, additionalContext) that help you think; they're echoed back verbatim, so don't repeat the full user request in \`topic\`.`,
+The tool takes the topic plus optional guiding fields (stuckAt, userProblem, expectedScale, additionalContext) that help you think; they're echoed back verbatim, so don't repeat the full user request in topic.`,
+  zh: `进入规划模式，用于非平凡任务。在开始工作之前使用——当需求涉及多步骤、范围不明确，或用户说"先做个计划"/"先想清楚"时。
+
+此工具返回规划指令。用它产出一份结构化计划，然后在同一个 turn 中继续工作。预期流程是：
+1. 产出简短文字计划（问题、方法、风险）。
+2. 调用 TodoWrite 写出有序步骤。将第一个具体步骤标记为 "in_progress"，其余标记为 "pending"。
+3. 开始执行第一个步骤——调用工作所需的任何工具。不要因为计划写完了就结束 turn；计划是跑道。
+
+何时使用：
+- 多步骤实现（3+ 步）、重构或开放式调查。
+- 用户明确要求计划、TODO 列表或"想清楚"再动手。
+- 你即将开始一个大型改动，想在动手前有个检查点。
+
+何时不使用：
+- 单个琐碎改动、单个命令执行、查询式问题。
+- 中途执行——一旦过了第一步，直接用 TodoWrite。
+
+例外——只有当第一步确实是"询问用户"（一个未解决的未知因素，阻塞所有其他步骤）时才在计划后停止。否则继续前进。
+
+此工具接收 topic 加上可选引导字段（stuckAt、userProblem、expectedScale、additionalContext）
+帮助你思考；它们会被原样回显，所以不要在 topic 中重复完整的用户请求。`
+},
   parameters: {
     type: 'object',
     properties: {

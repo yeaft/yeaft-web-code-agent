@@ -135,14 +135,28 @@ export function buildMcpFlattenedTools(mcpManager) {
 
 export const mcpListTools = defineTool({
   name: 'mcp_list_tools',
-  description: `List all tools available from connected MCP (Model Context Protocol) servers.
+  description: {
+  en: `List all MCP tools available from connected servers and call individual tools.
 
-Usage guidelines:
-- Use to discover what MCP tools are available in the current session
-- Returns tool names, descriptions, and parameter schemas from all connected MCP servers
-- Each tool is prefixed with the server name (e.g. "github__list_prs", "slack__send_message")
-- Use this before mcp_call_tool to understand available capabilities
-- MCP servers are configured by the user — if none are connected, returns an empty list`,
+Two internal tools share this description slot:
+- mcp_list_tools: discover MCP tools. Returns tool names, descriptions, and
+  parameter schemas from all connected MCP servers, each prefixed with the
+  server name (e.g. "github__list_prs").
+- mcp_call_tool: invoke a specific MCP tool by its fully qualified name.
+
+Use mcp_list_tools first to discover what's available, then mcp_call_tool
+with the exact tool name and arguments. MCP servers are configured by the
+user — if none are connected, mcp_list_tools returns an empty list.`,
+  zh: `列出所有已连接 MCP 服务器的工具并调用单个工具。
+
+此描述槽供两个内部工具共用：
+- mcp_list_tools：发现 MCP 工具。返回所有已连接 MCP 服务器的工具名称、描述和参数 schema，
+  每个工具带服务器名前缀（如 "github__list_prs"）。
+- mcp_call_tool：用完全限定名称调用特定 MCP 工具。
+
+先用 mcp_list_tools 发现可用工具，再用 mcp_call_tool 传入精确工具名和参数调用。
+MCP 服务器由用户配置——若无连接，mcp_list_tools 返回空列表。`
+},
   parameters: {
     type: 'object',
     properties: {

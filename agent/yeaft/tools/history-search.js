@@ -10,12 +10,19 @@ import { searchMessages } from '../conversation/search.js';
 
 export default defineTool({
   name: 'HistorySearch',
-  description: `Search through past conversation history.
+  description: {
+  en: `Search through past conversation history.
 
 Searches for keywords in previously persisted conversation messages.
 Useful for finding previous discussions, decisions, or code snippets.
 
 Results are returned newest-first with message role and content.`,
+  zh: `搜索历史对话记录。
+
+在已持久化的对话消息中按关键词搜索。用于查找之前的讨论、决策或代码片段。
+
+结果按最新优先返回，包含消息角色和内容。`
+},
   parameters: {
     type: 'object',
     properties: {

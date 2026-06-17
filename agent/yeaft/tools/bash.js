@@ -107,7 +107,8 @@ function runCommand(command, { cwd, timeout, signal }) {
 
 export default defineTool({
   name: 'Bash',
-  description: `Execute a shell command and return its output.
+  description: {
+  en: `Execute a shell command and return its output.
 
 Use this tool to run CLI commands, scripts, and system operations.
 
@@ -119,6 +120,19 @@ Guidelines:
 - Avoid interactive commands (no stdin support)
 - For long-running tasks, consider redirecting output to a file
 - stderr is captured separately and included in the result`,
+  zh: `执行 Shell 命令并返回输出。
+
+用于运行 CLI 命令、脚本和系统操作。
+
+使用指南：
+- 命令在工作目录中执行（上下文中的 cwd）
+- 默认超时 2 分钟（最大 10 分钟）
+- 大输出在 256KB 处截断
+- 尽量使用绝对路径
+- 避免交互式命令（不支持 stdin）
+- 长时间任务建议重定向输出到文件
+- stderr 单独捕获并包含在结果中`
+},
   parameters: {
     type: 'object',
     properties: {

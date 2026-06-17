@@ -16,16 +16,26 @@ import { diagnoseAgentLiveness } from '../sub-agent/liveness.js';
 
 export default defineTool({
   name: 'ListAgents',
-  description: `List all sub-agents and their current status.
+  description: {
+  en: `List all sub-agents and their current status.
 
 Returns id, name, status, mission/task summary, durable outputFile path,
 liveness counters (toolUseCount, tokenCount, msSinceLastEvent, recentTools),
 stale/stalled diagnostics, result tail, and message count for each agent. Use
 this as the primary non-blocking monitor for async sub-agent work, and Read
-\`outputFile\` for any single agent if you need its full timeline.
+outputFile for any single agent if you need its full timeline.
 
 By default only non-closed agents are returned. Pass include_closed=true
 to also list closed/failed/abandoned/completed agents.`,
+  zh: `列出所有子 Agent 及其当前状态。
+
+返回每个 Agent 的 id、name、status、mission/task 摘要、持久化 outputFile 路径、
+liveness 计数器（toolUseCount、tokenCount、msSinceLastEvent、recentTools）、
+stale/stalled 诊断、result 尾部和消息数量。将此作为异步子 Agent 工作的主要非阻塞监控工具；
+如需查看某个 Agent 的完整时间线，可 Read 其 outputFile。
+
+默认只返回未关闭的 Agent。传 include_closed=true 可同时列出 closed/failed/abandoned/completed 的 Agent。`
+},
   parameters: {
     type: 'object',
     properties: {

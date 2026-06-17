@@ -58,13 +58,9 @@ function localizeVisibleText(value, language, toolName) {
     const picked = value[lang] || value[lang === 'zh' ? 'zh-CN' : 'en-US'] || value.en || value.default;
     if (typeof picked === 'string') return picked;
   }
-  const text = typeof value === 'string' ? value : String(value || '');
-  if (lang !== 'zh') return text;
-  if (!text.trim()) return text;
-  return [
-    `工具说明：${toolName || '该工具'}。请严格按照 schema 调用；工具名、参数名、JSON key 和枚举值保持英文，不要翻译。`,
-    `原始协议说明（英文，供精确调用参考）：${text}`,
-  ].join('\n');
+  // Plain string: return as-is. Bilingual tools use the {en,zh} object
+  // format above; legacy single-string descriptions pass through unchanged.
+  return typeof value === 'string' ? value : String(value || '');
 }
 
 /**

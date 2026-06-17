@@ -17,13 +17,20 @@ const SKIP_DIRS = new Set([
 
 export default defineTool({
   name: 'ListDir',
-  description: `List the contents of a directory.
+  description: {
+  en: `List the contents of a directory.
 
 Shows files and subdirectories with their types and sizes.
 Directories are listed first, then files, both sorted alphabetically.
 Common large directories (node_modules, .git) are skipped.
 
 This is better than using Bash with 'ls' because it provides structured output.`,
+  zh: `列出目录内容。
+
+显示文件和子目录，含类型和大小。目录优先列出，文件次之，均按字母排序。常见大目录（node_modules、.git）被跳过。
+
+比用 Bash 执行 ls 更好，因为它提供结构化输出。`
+},
   parameters: {
     type: 'object',
     properties: {

@@ -14,7 +14,8 @@ import { resolve } from 'path';
 
 export default defineTool({
   name: 'ExitWorktree',
-  description: `Exit a git worktree session.
+  description: {
+  en: `Exit a git worktree session.
 
 Options:
 - "keep": Leave the worktree and branch on disk (can return later)
@@ -22,6 +23,14 @@ Options:
 
 If removing and there are uncommitted changes, the operation will fail
 unless discard_changes is set to true.`,
+  zh: `退出 git worktree 会话。
+
+选项：
+- "keep"：保留 worktree 和分支在磁盘上（之后可返回）
+- "remove"：删除 worktree 目录及其分支
+
+如果删除时有未提交的更改，操作会失败，除非设置 discard_changes 为 true。`
+},
   parameters: {
     type: 'object',
     properties: {
