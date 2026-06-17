@@ -41,6 +41,7 @@ function freshStore() {
   store.yeaftActiveSessionFilter = null;
   store.yeaftConversationId = null;
   store.processingConversations = {};
+  store.compactStatus = null;
   store.yeaftProcessingSessions = {};
   store.activeVpTurns = {};
   store.stoppingVpTurnIds = {};
@@ -108,5 +109,36 @@ describe('per-session running state', () => {
 
     expect(store.isProcessing).toBe(false);
     expect(store.isYeaftSessionProcessing('session-a')).toBe(false);
+  });
+
+  it('keeps Chat compacting state scoped to the active conversation', () => {
+    const store = freshStore();
+    store.currentView = 'chat';
+    store.activeConversations = ['chat-a'];
+    store.compactStatus = { conversationId: 'chat-a', status: 'compacting', message: 'Compacting...' };
+
+    expect(store.isConversationCompacting('chat-a')).toBe(true);
+    expect(store.isConversationCompacting('chat-b')).toBe(false);
+
+    store.activeConversations = ['chat-b'];
+
+    expect(store.isConversationCompacting(store.activeConversationId)).toBe(false);
+  });
+
+  it('does not let Chat compacting state leak into Yeaft input state', () => {
+    const store = freshStore();
+    store.currentView = 'yeaft';
+    store.yeaftConversationId = 'yeaft-conv';
+    store.yeaftActiveSessionFilter = 'session-b';
+    store.compactStatus = { conversationId: 'chat-a', status: 'compacting', message: 'Compacting...' };
+    store.processingConversations = { 'chat-a': true };
+
+    expect(store.isConversationCompacting('chat-a')).toBe(true);
+    expect(store.isConversationCompacting(store.yeaftConversationId)).toBe(false);
+    expect(store.isProcessing).toBe(false);
+
+    store.yeaftProcessingSessions = { 'session-b': true };
+
+    expect(store.isProcessing).toBe(true);
   });
 });

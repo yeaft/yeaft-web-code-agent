@@ -210,6 +210,7 @@ export default {
               <ChatInput
                 :sendFn="sendFn"
                 :cancelFn="cancelFn"
+                :conversationId="conversationId"
                 :showStop="isProcessing"
               />
             </div>

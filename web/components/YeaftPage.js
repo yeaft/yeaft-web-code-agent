@@ -270,6 +270,7 @@ export default {
         <ChatInput
           v-if="!showSettings"
           ref="chatInputRef"
+          :conversation-id="store.yeaftConversationId"
           :send-fn="sendMessage"
           :cancel-fn="cancelYeaft"
           :show-stop="isProcessing"

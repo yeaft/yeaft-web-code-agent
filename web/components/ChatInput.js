@@ -14,7 +14,9 @@ export default {
     /** i18n key for placeholder text. Defaults to 'chatInput.placeholder'. */
     placeholderKey: { type: String, default: '' },
     /** External processing flag. Controls stop button visibility. */
-    showStop: { type: Boolean, default: false }
+    showStop: { type: Boolean, default: false },
+    /** Explicit Chat conversation this input controls. Defaults to the active view conversation. */
+    conversationId: { type: String, default: null }
   },
   template: `
     <footer class="input-area" ref="inputAreaRef">
@@ -337,9 +339,13 @@ export default {
     // Keep filteredCommands as flat string array for keyboard nav compatibility
     const filteredCommands = Vue.computed(() => flatItems.value.map(item => item.cmd));
 
+    const effectiveConversationId = Vue.computed(() => {
+      return props.conversationId || store.activeConversationId || store.currentConversation || null;
+    });
+
     const isCompacting = Vue.computed(() => {
       return store.compactStatus?.status === 'compacting'
-        && store.compactStatus?.conversationId === store.currentConversation;
+        && store.compactStatus?.conversationId === effectiveConversationId.value;
     });
 
     const canSend = Vue.computed(() => {
