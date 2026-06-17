@@ -1450,11 +1450,9 @@
   color: var(--text-primary);
 }
 
-/* task-fix-mobile-group-settings: topbar session button — opens the unified
-   SessionSettingsModal for the active session. Visible on every viewport
-   (no hover-reveal) so touch users always have a settings entry-point.
-   Sits inside `.yeaft-topbar-right` next to clear/debug/detail. */
-.yeaft-topbar-group-settings {
+/* Header session actions — visible buttons, not hover-only affordances. */
+.yeaft-topbar-group-settings,
+.yeaft-topbar-announcement-edit {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1470,12 +1468,14 @@
   flex-shrink: 0;
   transition: color 0.15s ease, background 0.15s ease;
 }
-.yeaft-topbar-group-settings:hover {
+.yeaft-topbar-group-settings:hover,
+.yeaft-topbar-announcement-edit:hover {
   background: var(--sidebar-hover);
   color: var(--text-primary);
 }
 
-.yeaft-topbar-group-settings-label {
+.yeaft-topbar-group-settings-label,
+.yeaft-topbar-announcement-edit-label {
   font-size: 12px;
   font-weight: 600;
 }

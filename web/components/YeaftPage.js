@@ -149,6 +149,22 @@ export default {
             >
               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5s-3 1.34-3 3 1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C15 14.17 10.33 13 8 13zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5C23 14.17 18.33 13 16 13z"/></svg>
             </button>
+            <button
+              v-if="topbarGroup"
+              class="yeaft-topbar-announcement-edit"
+              type="button"
+              @click="openAnnouncementSettings"
+              :title="$t('yeaft.session.announcement.editTitle')"
+              :aria-label="$t('yeaft.session.announcement.editTitle')"
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 19.5V5a2 2 0 0 1 2-2h11a3 3 0 0 1 3 3v13"/>
+                <path d="M6 17h14"/>
+                <path d="M8 7h8"/>
+                <path d="M8 11h5"/>
+              </svg>
+              <span class="yeaft-topbar-announcement-edit-label">{{ $t('yeaft.session.announcement.edit') }}</span>
+            </button>
             <!-- Message refresh — replays current Yeaft session history without a full page reload. -->
             <button
               class="yeaft-reload-btn"
@@ -944,6 +960,11 @@ export default {
       groupSettingsSection.value = section;
       groupSettingsOpen.value = true;
     };
+    const openAnnouncementSettings = () => {
+      const sessionId = topbarGroup.value?.id || null;
+      if (!sessionId) return;
+      openGroupSettings({ sessionId, section: 'announcement' });
+    };
     const closeGroupSettings = () => {
       groupSettingsOpen.value = false;
       groupSettingsId.value = null;
@@ -1145,6 +1166,7 @@ export default {
       groupSettingsId,
       groupSettingsSection,
       openGroupSettings,
+      openAnnouncementSettings,
       closeGroupSettings,
       // task-vp-customize: members → "Open VP Library" handler.
       openVpLibraryFromGroupSettings,

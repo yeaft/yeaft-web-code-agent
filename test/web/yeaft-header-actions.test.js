@@ -8,6 +8,8 @@ const sidebarSource = read('components/YeaftSidebar.js');
 const chatHeaderSource = read('components/ChatHeader.js');
 const yeaftCss = read('styles/yeaft.css');
 const sidebarCss = read('styles/sidebar.css');
+const enI18n = read('i18n/en.js');
+const zhI18n = read('i18n/zh-CN.js');
 
 function topbarRightBlock() {
   const start = pageSource.indexOf('<div class="yeaft-topbar-right">');
@@ -18,11 +20,21 @@ function topbarRightBlock() {
 }
 
 describe('Yeaft conversation header actions', () => {
-  it('removes the duplicate session settings action from the header', () => {
+  it('keeps the header announcement edit action scoped to the announcement section', () => {
     const block = topbarRightBlock();
 
-    expect(block).not.toContain('yeaft-topbar-group-settings');
-    expect(block).not.toContain('openTopbarGroupSettings');
+    expect(block).toContain('class="yeaft-topbar-announcement-edit"');
+    expect(block).toContain('@click="openAnnouncementSettings"');
+    expect(block).toContain("$t('yeaft.session.announcement.edit')");
+    expect(block).toContain("$t('yeaft.session.announcement.editTitle')");
+    expect(pageSource).toContain('const openAnnouncementSettings = () => {');
+    expect(pageSource).toContain("openGroupSettings({ sessionId, section: 'announcement' });");
+    expect(pageSource).toContain(':initial-section="groupSettingsSection"');
+    expect(yeaftCss).toContain('.yeaft-topbar-announcement-edit');
+    expect(yeaftCss).toContain('.yeaft-topbar-announcement-edit-label');
+    expect(enI18n).toContain("'yeaft.session.announcement.editTitle': 'Edit session announcement'");
+    expect(zhI18n).toContain("'yeaft.session.announcement.editTitle': '编辑会话公告'");
+    expect(pageSource).not.toContain('openTopbarGroupSettings');
     expect(sidebarSource).toContain('class="session-dots-btn"');
     expect(sidebarSource).toContain("openGroupSettingsFromMenu(s.raw, 'announcement')");
     expect(sidebarSource).toContain("$t('yeaft.session.openSettings')");
@@ -50,10 +62,11 @@ describe('Yeaft conversation header actions', () => {
     expect(block.indexOf('@click="reloadPage"', block.lastIndexOf('@click="reloadPage"') + 1)).toBe(-1);
   });
 
-  it('orders header actions as VP list, message refresh, dream, debug, mobile page refresh', () => {
+  it('orders header actions as VP list, announcement edit, message refresh, dream, debug, mobile page refresh', () => {
     const block = topbarRightBlock();
     const order = [
       '@click="toggleVpTimeline"',
+      '@click="openAnnouncementSettings"',
       '@click="reloadMessages"',
       '@click="onDreamTriggerClick"',
       '@click="toggleDebug"',
