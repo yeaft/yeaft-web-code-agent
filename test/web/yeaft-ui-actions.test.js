@@ -7,18 +7,23 @@ const pageSource = read('components/YeaftPage.js');
 const debugSource = read('components/YeaftDebugPanel.js');
 const timelineSource = read('components/VpTimelinePane.js');
 const settingsSource = read('components/SettingsPanel.js');
+const sessionSettingsSource = read('components/SessionSettingsModal.js');
 const vpCrudSource = read('components/VpCrudPanel.js');
 const yeaftCss = read('styles/yeaft.css');
 const enI18n = read('i18n/en.js');
 const zhI18n = read('i18n/zh-CN.js');
 
 describe('Yeaft UI action polish', () => {
-  it('uses a compact moon/spark Dream icon without the old arc glyph', () => {
+  it('keeps header action icons visually consistent', () => {
     expect(pageSource).toContain('class="yeaft-dream-icon"');
     expect(pageSource).toContain('class="yeaft-dream-moon"');
     expect(pageSource).toContain('class="yeaft-dream-spark"');
     expect(pageSource).not.toContain('yeaft-dream-arc');
     expect(yeaftCss).toContain('.yeaft-topbar-dream-toggle.running .yeaft-dream-icon');
+    expect(yeaftCss).toContain('.yeaft-topbar-right :where(');
+    expect(yeaftCss).toContain('width: 32px;');
+    expect(yeaftCss).toContain('height: 32px;');
+    expect(yeaftCss).toContain('flex: 0 0 18px;');
     expect(yeaftCss).not.toContain('.yeaft-topbar-dream-toggle.running .yeaft-topbar-dream-icon');
   });
 
@@ -32,11 +37,13 @@ describe('Yeaft UI action polish', () => {
 
     expect(pageSource).toContain('@edit-vp="onEditVpFromTimeline"');
     expect(pageSource).toContain('const onEditVpFromTimeline = (vpId) => {');
-    expect(pageSource).toContain("openSettings({ initialTab: 'vp', editVpId: vpId });");
-    expect(pageSource).toContain(':initial-edit-vp-id="settingsInitialEditVpId"');
+    expect(pageSource).toContain("openGroupSettings({ sessionId, section: 'members', editVpId: vpId });");
+    expect(pageSource).toContain(':initial-edit-vp-id="groupSettingsEditVpId"');
     expect(pageSource).not.toContain('onOpenVpDetailFromTimeline');
 
-    expect(settingsSource).toContain('initialEditVpId: { type: String, default: \'\' }');
+    expect(sessionSettingsSource).toContain('initialEditVpId: { type: String, default: \'\' }');
+    expect(sessionSettingsSource).toContain("section: this.initialEditVpId ? 'members' : this.initialSection");
+    expect(sessionSettingsSource).toContain("'is-edit-target': highlightedVpId === vp.vpId");
     expect(settingsSource).toContain('<VpCrudPanel :initial-edit-vp-id="initialEditVpId" />');
     expect(vpCrudSource).toContain('initialEditVpId: { type: String, default: \'\' }');
     expect(vpCrudSource).toContain('openInitialEdit()');

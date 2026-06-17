@@ -158,12 +158,11 @@ export default {
               :aria-label="$t('yeaft.session.announcement.editTitle')"
             >
               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M4 19.5V5a2 2 0 0 1 2-2h11a3 3 0 0 1 3 3v13"/>
-                <path d="M6 17h14"/>
-                <path d="M8 7h8"/>
-                <path d="M8 11h5"/>
+                <path d="M4 14.5V9.5l11-4v13l-11-4z"/>
+                <path d="M15 8.25c1.25.7 2 1.95 2 3.75s-.75 3.05-2 3.75"/>
+                <path d="M7 15l1.2 4h3.1l-1.6-3.1"/>
+                <path d="M4 14.5H3a1.5 1.5 0 0 1-1.5-1.5v-2A1.5 1.5 0 0 1 3 9.5h1"/>
               </svg>
-              <span class="yeaft-topbar-announcement-edit-label">{{ $t('yeaft.session.announcement.edit') }}</span>
             </button>
             <!-- Message refresh — replays current Yeaft session history without a full page reload. -->
             <button
@@ -343,6 +342,7 @@ export default {
         v-if="groupSettingsOpen && groupSettingsId"
         :group-id="groupSettingsId"
         :initial-section="groupSettingsSection"
+        :initial-edit-vp-id="groupSettingsEditVpId"
         @close="closeGroupSettings"
         @open-vp-library="openVpLibraryFromGroupSettings"
       />
@@ -956,16 +956,19 @@ export default {
     const groupSettingsOpen = Vue.ref(false);
     const groupSettingsId = Vue.ref(null);
     const groupSettingsSection = Vue.ref('announcement');
+    const groupSettingsEditVpId = Vue.ref('');
     const openGroupSettings = (payload = {}) => {
       // Accept both { sessionId } (new) and { groupId } (legacy) — child
       // components were renamed in the msg.groupId→msg.sessionId sweep but
       // a few legacy callers may still pass either shape during the
       // deploy window.
       const sessionId = (payload && (payload.sessionId || payload.groupId)) || null;
-      const section = (payload && payload.section) || 'announcement';
+      const editVpId = (payload && payload.editVpId) || '';
+      const section = editVpId ? 'members' : ((payload && payload.section) || 'announcement');
       if (!sessionId) return;
       groupSettingsId.value = sessionId;
       groupSettingsSection.value = section;
+      groupSettingsEditVpId.value = editVpId;
       groupSettingsOpen.value = true;
     };
     const openAnnouncementSettings = () => {
@@ -976,6 +979,7 @@ export default {
     const closeGroupSettings = () => {
       groupSettingsOpen.value = false;
       groupSettingsId.value = null;
+      groupSettingsEditVpId.value = '';
     };
     // task-vp-customize: GroupSettings → "Open VP Library" shortcut. We
     // close the group settings modal first so the two dialogs never stack
@@ -1088,7 +1092,9 @@ export default {
     const onEditVpFromTimeline = (vpId) => {
       if (!vpId) return;
       if (store.yeaftActiveVpDetailId) store.leaveVpDetailView();
-      openSettings({ initialTab: 'vp', editVpId: vpId });
+      const sessionId = store.yeaftActiveSessionFilter || sessionsStore()?.activeSessionId || topbarGroup.value?.id || null;
+      if (!sessionId) return;
+      openGroupSettings({ sessionId, section: 'members', editVpId: vpId });
     };
 
     // Clicking a VP row @-mentions that VP in the chat input (default
@@ -1176,6 +1182,7 @@ export default {
       groupSettingsOpen,
       groupSettingsId,
       groupSettingsSection,
+      groupSettingsEditVpId,
       openGroupSettings,
       openAnnouncementSettings,
       closeGroupSettings,
