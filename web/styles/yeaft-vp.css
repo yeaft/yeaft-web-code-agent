@@ -1040,25 +1040,19 @@
   color: #f87171;
 }
 
-/* ─── Issue C (2026-05-12) — UserTurnBlock + UserAvatar ──────────────
-   IM-style human row in the Yeaft group view. Mirror of .vp-turn-block:
-   VP turns sit on the left (gutter 36px, content 1fr); human turns sit
-   on the right (content 1fr, gutter 36px). Same 36px avatar size on
-   both sides so the eye-line stays even down the conversation. The
-   inner MessageItem keeps its own bubble styling (.message.user is
-   already `align-items: flex-end` so the content right-aligns inside
-   the left grid cell). */
+/* ─── Issue C (2026-05-12) — UserTurnBlock ──────────────
+   IM-style human row in the Yeaft Session view. VP turns keep their
+   speaker avatar; human turns now render as a plain right-aligned message
+   frame without a separate user avatar gutter. The inner MessageItem keeps
+   its own bubble styling (.message.user is already `align-items: flex-end`). */
 .user-turn-block {
   position: relative;
   margin: 12px 0;
   padding: 0;
-  display: grid;
-  grid-template-columns: 1fr 36px;
-  column-gap: 10px;
+  display: flex;
+  justify-content: flex-end;
 }
 .user-turn-block-main {
-  grid-column: 1;
-  grid-row: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -1069,14 +1063,6 @@
      long-text wrap looks like a chat bubble (not full-row paragraph). */
   max-width: 100%;
   margin: 0;
-}
-.user-turn-block-avatar {
-  grid-column: 2;
-  grid-row: 1;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding-top: 2px;
 }
 
 /* UserAvatar — circular initial badge. The accent color is intentionally
