@@ -221,6 +221,8 @@ export function handleMessage(store, msg) {
       const loops = Array.isArray(msg?.loops) ? msg.loops : [];
       const turns = Array.isArray(msg?.turns) ? msg.turns : [];
       const dreamEvents = Array.isArray(msg?.dreamEvents) ? msg.dreamEvents : [];
+      store.yeaftDebugHistoryHasMore = !!msg?.hasMore;
+      if (Number.isFinite(msg?.limit) && msg.limit > 0) store.yeaftDebugHistoryLimit = msg.limit;
       // Merge into existing in-memory state. Live-streamed turns/loops
       // (received via `yeaft_output` while the panel was open) win because
       // they may carry richer in-flight detail (e.g. memoryUsed/Adjust

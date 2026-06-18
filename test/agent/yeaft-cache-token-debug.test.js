@@ -187,4 +187,32 @@ describe('Yeaft cache token debug accounting', () => {
       trace.close();
     }
   });
+
+
+  it('reports whether older debug history exists', () => {
+    const trace = new DebugTrace(tempDbPath());
+    try {
+      for (let i = 0; i < 3; i += 1) {
+        const turnId = trace.startTurn({ traceId: `trace-${i}`, userPrompt: `prompt ${i}` });
+        trace.endTurn(turnId, {
+          model: 'test-model',
+          inputTokens: i + 1,
+          outputTokens: i + 2,
+          usage: { inputTokens: i + 1, outputTokens: i + 2, totalTokens: i + 3 },
+        });
+      }
+
+      const firstPage = trace.fetchRecentDebugHistory({ limit: 2 });
+      expect(firstPage.loops).toHaveLength(2);
+      expect(firstPage.turns).toHaveLength(2);
+      expect(firstPage.hasMore).toBe(true);
+      expect(firstPage.limit).toBe(2);
+
+      const fullPage = trace.fetchRecentDebugHistory({ limit: 3 });
+      expect(fullPage.loops).toHaveLength(3);
+      expect(fullPage.hasMore).toBe(false);
+    } finally {
+      trace.close();
+    }
+  });
 });

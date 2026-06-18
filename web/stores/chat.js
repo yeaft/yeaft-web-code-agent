@@ -102,6 +102,7 @@ function resolveActiveDreamDebugSessionId(state) {
 // by this cap; the design accepts that trade-off because the alternative
 // (silently truncating payloads) is what this PR is removing.
 const MAX_YEAFT_DEBUG_LOOPS = 50;
+const DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT = 50;
 
 // PR feat-dream-debug-panel-full: per-scope ring buffer cap for dream
 // events. Bounds the yeaftDreamEvents map so long-running sessions
@@ -430,6 +431,8 @@ export const useChatStore = defineStore('chat', {
     yeaftDebugHistoryLoading: false,
     yeaftDebugHistoryError: null,
     yeaftDebugHistoryFetchedAt: 0,
+    yeaftDebugHistoryLimit: DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT,
+    yeaftDebugHistoryHasMore: false,
     // feat-6af5f9f1 PR C: debug-panel toolbar state.
     //   - `yeaftDebugSearch` is a substring filter applied to user prompt,
     //     vpId, tool name, tool input/output, system prompt, raw url.
@@ -1210,12 +1213,14 @@ export const useChatStore = defineStore('chat', {
      */
     loadYeaftDebugHistory({ groupId, limit, dreamLimit } = {}) {
       if (!this.yeaftAgentId) return;
+      const requestedLimit = Number.isFinite(limit) && limit > 0 ? limit : this.yeaftDebugHistoryLimit || DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT;
+      this.yeaftDebugHistoryLimit = requestedLimit;
       this.yeaftDebugHistoryLoading = true;
       this.yeaftDebugHistoryError = null;
       const payload = {
         type: 'yeaft_fetch_debug_history',
         agentId: this.yeaftAgentId,
-        limit: Number.isFinite(limit) && limit > 0 ? limit : 5,
+        limit: requestedLimit,
         dreamLimit: Number.isFinite(dreamLimit) && dreamLimit > 0 ? dreamLimit : 5,
       };
       if (typeof groupId === 'string' && groupId) payload.sessionId = groupId;
@@ -1713,7 +1718,7 @@ export const useChatStore = defineStore('chat', {
               loops: this.yeaftDebugLoops,
               turnsById: this.yeaftDebugTurnsById,
               turnOrder: this.yeaftDebugTurnOrder,
-              maxLoops: MAX_YEAFT_DEBUG_LOOPS,
+              maxLoops: Math.max(MAX_YEAFT_DEBUG_LOOPS, this.yeaftDebugHistoryLimit || 0),
             });
             this.yeaftDebugLoops = next.loops;
             this.yeaftDebugTurnsById = next.turnsById;

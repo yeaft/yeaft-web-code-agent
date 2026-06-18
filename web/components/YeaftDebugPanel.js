@@ -28,6 +28,9 @@
 import { buildDreamDebugItems, filterDreamDebugItems, previewText } from './dream-debug-model.js';
 import { splitTokenBreakdown, apportionToBuckets, formatClockTime } from './yeaft-debug-helpers.js';
 
+const INITIAL_REQUEST_HISTORY_LIMIT = 50;
+const REQUEST_HISTORY_STEP = 50;
+
 export default {
   name: 'YeaftDebugPanel',
   emits: ['close'],
@@ -108,7 +111,7 @@ export default {
     // keep showing agent A's trajectory after the user switches.
     'store.yeaftAgentId'(now, prev) {
       if (now && now !== prev && this.store && typeof this.store.loadYeaftDebugHistory === 'function') {
-        this.store.loadYeaftDebugHistory({ limit: 5, dreamLimit: 5 });
+        this.store.loadYeaftDebugHistory({ limit: INITIAL_REQUEST_HISTORY_LIMIT, dreamLimit: 5 });
       }
     },
   },
@@ -152,6 +155,15 @@ export default {
       // Only render the "M of N" hint when filters/search are active and
       // hiding something — otherwise it's just visual noise.
       return this.turnTotal > this.turns.length;
+    },
+    requestHistoryLoading() {
+      return !!this.store?.yeaftDebugHistoryLoading;
+    },
+    requestHistoryHasMore() {
+      return !!this.store?.yeaftDebugHistoryHasMore;
+    },
+    requestHistoryLimit() {
+      return this.store?.yeaftDebugHistoryLimit || INITIAL_REQUEST_HISTORY_LIMIT;
     },
     toolStats() {
       return this.store?.yeaftToolStats || null;
@@ -303,7 +315,7 @@ export default {
     // the trace had captured it. Pull the most recent 5 request loops and
     // 5 dream events so the panel is useful from frame 1 without flooding.
     if (this.store && typeof this.store.loadYeaftDebugHistory === 'function') {
-      this.store.loadYeaftDebugHistory({ limit: 5, dreamLimit: 5 });
+      this.store.loadYeaftDebugHistory({ limit: INITIAL_REQUEST_HISTORY_LIMIT, dreamLimit: 5 });
     }
   },
   methods: {
@@ -850,6 +862,17 @@ export default {
       if (this.activeTab === 'toolStats' && !this.toolStats && !this.toolStatsLoading) {
         this.refreshToolStats();
       }
+      if (this.activeTab === 'requests' && this.turns.length === 0 && !this.requestHistoryLoading) {
+        this.loadMoreRequestHistory(0);
+      }
+    },
+    loadMoreRequestHistory(step = REQUEST_HISTORY_STEP) {
+      if (!this.store || typeof this.store.loadYeaftDebugHistory !== 'function') return;
+      const nextLimit = Math.min(500, (this.requestHistoryLimit || INITIAL_REQUEST_HISTORY_LIMIT) + step);
+      this.store.loadYeaftDebugHistory({
+        limit: nextLimit,
+        dreamLimit: 5,
+      });
     },
     refreshToolStats() {
       if (this.store && typeof this.store.fetchYeaftToolStats === 'function') {
@@ -1047,6 +1070,7 @@ export default {
             <template v-if="showingMatchedHint">{{ turns.length }} / {{ turnTotal }}</template>
             <template v-else>{{ turns.length }}</template>
           </span>
+          <span class="yeaft-debug-tab-count" v-else-if="requestHistoryLoading">...</span>
         </button>
       </div>
 
@@ -1244,6 +1268,18 @@ export default {
       </div>
 
       <div v-else-if="activeTab === 'requests' && turns.length > 0" class="yeaft-debug-turns">
+        <div class="yeaft-debug-history-bar" v-if="requestHistoryLoading || requestHistoryHasMore || turns.length > 0">
+          <span class="yeaft-debug-history-meta">
+            {{ $t('yeaft.debugHistoryLoaded', { count: turns.length }) }}
+          </span>
+          <button
+            v-if="requestHistoryHasMore"
+            type="button"
+            class="yeaft-debug-show-btn small"
+            :disabled="requestHistoryLoading"
+            @click="loadMoreRequestHistory()"
+          >{{ requestHistoryLoading ? $t('yeaft.debugHistoryLoading') : $t('yeaft.debugHistoryLoadMore') }}</button>
+        </div>
         <div v-for="turn in turns" :key="turn.turnId" class="yeaft-debug-turn">
           <!-- Turn header -->
           <div class="yeaft-debug-turn-header" @click="toggleTurn(turn.turnId)">
@@ -1416,9 +1452,15 @@ export default {
         </div>
       </div>
 
-        <div class="yeaft-debug-empty" v-else>
-          {{ $t('yeaft.noDebugData') }}
-        </div>
+      <div class="yeaft-debug-empty" v-else>
+        <button
+          v-if="activeTab === 'requests' && !requestHistoryLoading"
+          type="button"
+          class="yeaft-debug-show-btn small"
+          @click="loadMoreRequestHistory(0)"
+        >{{ $t('yeaft.debugHistoryLoad') }}</button>
+        <span v-else>{{ requestHistoryLoading ? $t('yeaft.debugHistoryLoading') : $t('yeaft.noDebugData') }}</span>
+      </div>
       </template>
     </div>
   `,
