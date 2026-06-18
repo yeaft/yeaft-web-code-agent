@@ -95,6 +95,20 @@ describe('Yeaft mobile layout CSS', () => {
     expect(mobile).toContain('width: 100%');
   });
 
+  it('hides the Yeaft header title on mobile without hiding actions', () => {
+    const css = read('styles/yeaft.css');
+    const desktopTitle = ruleBlock(css, '.yeaft-topbar-model-name');
+    const mobile = mediaBlock(css, '(max-width: 768px)', '.yeaft-topbar-model-name');
+
+    expect(desktopTitle).toContain('max-width: 220px');
+    expect(desktopTitle).not.toContain('display: none');
+    expect(mobile).toContain('.yeaft-topbar-model-name');
+    expect(mobile).toContain('display: none');
+    expect(mobile).toContain('.yeaft-topbar-sidebar-toggle');
+    expect(mobile).toContain('display: flex');
+    expect(mobile).not.toContain('.yeaft-topbar-right {\n    display: none');
+  });
+
   it('tightens Yeaft create roster and VP turn chrome on mobile', () => {
     const createCss = read('styles/yeaft-session-create.css');
     const createMobile = mediaBlock(createCss, '(max-width: 640px)', '.resume-control-row-vp');
