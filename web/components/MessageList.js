@@ -1432,34 +1432,46 @@ export default {
       });
     };
 
+    const loadMoreYeaft = () => {
+      if (store.hasHiddenYeaftMessages) {
+        store.expandYeaftMessageWindow();
+        return;
+      }
+      store.loadMoreYeaftHistory();
+    };
+
+    const canLoadMoreMessages = () => {
+      if (store.currentView === 'yeaft') {
+        return store.hasHiddenYeaftMessages || (
+          store.yeaftHasMoreHistory
+          && !store.yeaftLoadingMoreHistory
+          && store.yeaftOldestLoadedSeq != null
+        );
+      }
+      return store.hasMoreMessages && !store.loadingMoreMessages;
+    };
+
+    const onClickLoadMore = () => {
+      if (!canLoadMoreMessages()) return;
+      const isYeaft = store.currentView === 'yeaft';
+      preserveScrollAnchorDuringLoad(
+        isYeaft ? loadMoreYeaft : () => store.loadMoreMessages(),
+        isYeaft ? () => store.yeaftLoadingMoreHistory : () => store.loadingMoreMessages
+      );
+    };
+
     const onScroll = () => {
       isAtBottom.value = checkIfAtBottom();
       if (isAtBottom.value) pruneYeaftWindowNearBottom();
 
       if (containerRef.value) {
         const { scrollTop } = containerRef.value;
-        if (scrollTop >= 100) return;
+        if (scrollTop >= 100 || !canLoadMoreMessages()) return;
 
         // Auto-fire load-more when the user scrolls near the top. Two
         // independent paths share this trigger, gated on currentView so
         // that the wrong store-flag pair never wins.
-        const isYeaft = store.currentView === 'yeaft';
-        const eligible = isYeaft
-          ? (store.hasHiddenYeaftMessages || (store.yeaftHasMoreHistory && !store.yeaftLoadingMoreHistory && store.yeaftOldestLoadedSeq != null))
-          : (store.hasMoreMessages && !store.loadingMoreMessages);
-        if (!eligible) return;
-
-        const loadYeaft = () => {
-          if (store.hasHiddenYeaftMessages) {
-            store.expandYeaftMessageWindow();
-            return;
-          }
-          store.loadMoreYeaftHistory();
-        };
-        preserveScrollAnchorDuringLoad(
-          isYeaft ? loadYeaft : () => store.loadMoreMessages(),
-          isYeaft ? () => store.yeaftLoadingMoreHistory : () => store.loadingMoreMessages
-        );
+        onClickLoadMore();
       }
     };
 
