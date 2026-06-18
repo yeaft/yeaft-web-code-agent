@@ -10,6 +10,7 @@ describe('MessageList virtualization wiring', () => {
     expect(source).toContain("import VirtualTranscript from './VirtualTranscript.js';");
     expect(source).toContain('<VirtualTranscript');
     expect(source).toContain(':items="messageBlocks"');
+    expect(source).toContain('@scroll-state="onVirtualTranscriptScrollState"');
     expect(source).toContain('the following VP replies into one virtual item');
     expect(source).toContain('v-if="block.type === \'message-block\'"');
     expect(source).not.toContain('<template v-for="block in messageBlocks"');
