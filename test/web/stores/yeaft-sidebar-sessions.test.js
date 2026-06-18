@@ -129,6 +129,8 @@ describe('Yeaft settings entry markup', () => {
     ));
     expect(cssSource).toContain('.yeaft-topbar-model-dropdown');
     expect(cssSource).toContain('top: calc(100% + 8px);');
+    expect(cssSource).toContain('min-width: 280px;');
+    expect(cssSource).toContain('width: min(320px, calc(100vw - 32px));');
     expect(cssSource).toContain('.yeaft-model-list {\n  min-width: 0;\n  max-height: 220px;\n  overflow-y: auto;');
 
     const enSource = await import('node:fs').then(fs => fs.readFileSync(
