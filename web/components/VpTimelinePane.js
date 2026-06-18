@@ -39,6 +39,7 @@ export default {
   emits: ['mention-vp', 'edit-vp', 'start-resize', 'cancel-vp-turn'],
   props: {
     rows: { type: Array, required: true },
+    tasks: { type: Array, default: () => [] },
   },
   template: `
     <aside class="yeaft-vp-timeline" :aria-label="$t('yeaft.vpTimeline.aria')">
@@ -123,6 +124,30 @@ export default {
           </span>
         </li>
       </ul>
+
+      <section class="yeaft-vp-task-board" :aria-label="$t('yeaft.session.runningTasks')">
+        <header class="yeaft-vp-task-board-header">
+          <span>{{ $t('yeaft.session.runningTasks') }}</span>
+          <span class="yeaft-vp-task-count" v-if="tasks.length">{{ tasks.length }}</span>
+        </header>
+        <div v-if="!tasks.length" class="yeaft-vp-task-empty">
+          {{ $t('yeaft.session.tasksEmpty') }}
+        </div>
+        <div v-else class="yeaft-vp-task-list">
+          <article v-for="task in tasks" :key="task.id" class="yeaft-vp-task-item">
+            <button type="button" class="yeaft-vp-task-summary" @click="toggleTaskExpanded(task.id)">
+              <span class="yeaft-vp-task-dot"></span>
+              <span class="yeaft-vp-task-title">{{ task.title || task.id }}</span>
+              <span class="yeaft-vp-task-kind">{{ task.kind }}</span>
+            </button>
+            <div v-if="expandedTasks[task.id]" class="yeaft-vp-task-detail">
+              <div>{{ $t('yeaft.session.owner') }}: {{ taskOwnerName(task) }}</div>
+              <div>{{ $t('yeaft.session.started') }}: {{ formatTaskTime(task.startedAt) }}</div>
+              <pre v-if="task.log && task.log.preview" class="yeaft-vp-task-log">{{ task.log.preview }}</pre>
+            </div>
+          </article>
+        </div>
+      </section>
     </aside>
   `,
   setup() {
@@ -138,6 +163,20 @@ export default {
     // appContext on every render (40 lookups for 20 rows otherwise).
     const inst = Vue.getCurrentInstance();
     const $t = (inst && inst.appContext.config.globalProperties.$t) || ((k) => k);
+
+    const expandedTasks = Vue.ref({});
+    const toggleTaskExpanded = (taskId) => {
+      expandedTasks.value = { ...expandedTasks.value, [taskId]: !expandedTasks.value[taskId] };
+    };
+    const taskOwnerName = (task) => {
+      const owner = task?.ownerVpId || '';
+      if (!owner) return 'unknown';
+      return vpStore && typeof vpStore.vpLabel === 'function' ? vpStore.vpLabel(owner) : owner;
+    };
+    const formatTaskTime = (value) => {
+      if (!value) return '';
+      try { return new Date(value).toLocaleTimeString(); } catch (_) { return String(value); }
+    };
 
     const statusLabel = (row) => {
       switch (row.status) {
@@ -170,6 +209,6 @@ export default {
         .join('\n');
     };
 
-    return { statusLabel, isActiveStatus, threadCountTitle, vpTextColorFor };
+    return { statusLabel, isActiveStatus, threadCountTitle, vpTextColorFor, expandedTasks, toggleTaskExpanded, taskOwnerName, formatTaskTime };
   },
 };

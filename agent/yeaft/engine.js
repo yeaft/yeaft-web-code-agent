@@ -387,6 +387,9 @@ export class Engine {
   /** @type {import('./tools/registry.js').ToolRegistry|null} */
   #toolRegistry;
 
+  /** @type {import('./tasks/manager.js').TaskManager|null} */
+  #taskManager;
+
   /** @type {import('./skills.js').SkillManager|null} */
   #skillManager;
 
@@ -501,7 +504,7 @@ export class Engine {
    *   toolStats?: import('./stats/tool-usage.js').ToolUsageStats,
    * }} params
    */
-  constructor({ adapter, trace, config, conversationStore, memoryIndex, amsRegistry, toolRegistry, skillManager, mcpManager, yeaftDir, toolStats = null, sessionId = null, vpId = null, chatId = null }) {
+  constructor({ adapter, trace, config, conversationStore, memoryIndex, amsRegistry, toolRegistry, skillManager, mcpManager, yeaftDir, toolStats = null, taskManager = null, sessionId = null, vpId = null, chatId = null }) {
     this.#adapter = adapter;
     this.#trace = trace;
     this.#config = config;
@@ -511,6 +514,7 @@ export class Engine {
     this.#memoryIndex = memoryIndex || null;
     this.#amsRegistry = amsRegistry || null;
     this.#toolRegistry = toolRegistry || null;
+    this.#taskManager = taskManager || null;
     this.#skillManager = skillManager || null;
     this.#mcpManager = mcpManager || null;
     this.#yeaftDir = yeaftDir || null;
@@ -870,7 +874,7 @@ export class Engine {
    * @param {object} [args.taskCtx] — legacy task-context sub-block (optional)
    * @returns {string}
    */
-  #buildSystemPrompt({ prompt, memoryInjection, vpPersona, activeScope, sessionAnnouncement, projectDoc, taskCtx } = {}) {
+  #buildSystemPrompt({ prompt, memoryInjection, vpPersona, activeScope, sessionAnnouncement, projectDoc, taskCtx, activeTasks } = {}) {
     // Get relevant skill content if SkillManager is wired
     let skillContent = '';
     if (this.#skillManager && prompt) {
@@ -893,6 +897,7 @@ export class Engine {
       projectDoc,
       runtimePlatform: getRuntimePlatformInfo(),
       taskCtx,
+      activeTasks,
       // Worker-shape harness is descriptive metadata for human inspection;
       // production prompts skip it to save tokens. Re-enable via env when
       // diagnosing prompt structure issues.
@@ -997,6 +1002,10 @@ export class Engine {
       conversationStore: this.#conversationStore,
       adapter: this.#adapter,
       config: this.#config,
+      taskManager: this.#taskManager,
+      sessionId: vpCtx?.sessionId || this.#sessionId || null,
+      threadId: vpCtx?.threadId || this.#currentThreadId || MAIN_THREAD_ID,
+      currentVpId: vpCtx?.senderVpId || this.#vpId || null,
       // task-704b: per-tool-result hard cap derives from this. Threaded
       // from the live model (resolveModel(currentModel)) every turn so
       // fallbackModel switches see the new window. Falls back to
@@ -1047,6 +1056,7 @@ export class Engine {
         parentVpId: vpCtx?.senderVpId || null,
         parentVpPersona: vpCtx?.vpPersona || null,
         parentSessionId: vpCtx?.sessionId || null,
+        parentThreadId: vpCtx?.threadId || this.#currentThreadId || MAIN_THREAD_ID,
         onEvent: this.#subAgentEventSink || null,
         language: this.#config?.language || 'en',
         // Forward the session-shared ToolUsageStats so sub-agent
@@ -1054,6 +1064,7 @@ export class Engine {
         // (~/.yeaft/stats/tool-usage.json) the parent engine writes
         // to. Null when the parent has no stats wired (e.g. tests).
         toolStats: this.#toolStats || null,
+        taskManager: this.#taskManager || null,
       },
     };
   }
@@ -1614,6 +1625,9 @@ export class Engine {
     };
 
     const projectDoc = this.#getProjectDocBlock(workDir);
+    const activeTasks = this.#taskManager
+      ? this.#taskManager.renderActiveTasksForPrompt(runtimeSessionId)
+      : '';
 
     const systemPrompt = this.#buildSystemPrompt({
       prompt,
@@ -1622,6 +1636,7 @@ export class Engine {
       activeScope,
       sessionAnnouncement,
       projectDoc,
+      activeTasks,
     });
 
     // ─── HARD INVARIANT: Compact ≠ Dream (read DESIGN-COMPACT-VS-DREAM.md) ─

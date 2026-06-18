@@ -126,6 +126,12 @@ export default {
 
   // ============ Yeaft 页面 ============
   'yeaft.back': '返回',
+  'yeaft.session.people': '成员',
+  'yeaft.session.peopleEmpty': '暂无成员',
+  'yeaft.session.runningTasks': '运行中的任务',
+  'yeaft.session.tasksEmpty': '暂无运行任务',
+  'yeaft.session.owner': '负责人',
+  'yeaft.session.started': '开始时间',
   'yeaft.breadcrumb.label': 'Thread 过滤',
   'yeaft.breadcrumb.mainStream': '主流',
   'yeaft.breadcrumb.backHint': '返回全流 (Esc)',

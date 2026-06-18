@@ -419,6 +419,15 @@ use it as the default workflow or call it repeatedly in a loop.`,
     const deps = ctx?.parentEngineDeps;
     if (deps && deps.adapter) {
       try {
+        const task = ctx?.taskManager?.startTask?.({
+          sessionId: callerScope.sessionId || ctx?.sessionId || 'default',
+          ownerVpId: callerScope.parentVpId || ctx?.currentVpId || null,
+          kind: 'sub_agent',
+          title: spec.mission || spec.task || name,
+          runtime: { subAgentId: agentId, name, cwd: agent.cwd },
+          source: { threadId: callerScope.parentThreadId || ctx?.threadId || 'main' },
+        });
+        if (task?.id) agent.taskId = task.id;
         startSubAgent(agent, deps);
       } catch (err) {
         agent.status = STATUS.FAILED;
@@ -449,6 +458,7 @@ use it as the default workflow or call it repeatedly in a loop.`,
       budget: spec.budget || null,
       status: agent.status,
       outputFile: agent.outputFile || null,
+      taskId: agent.taskId || null,
       liveness,
       stale: liveness.stale,
       stalled: liveness.stalled,

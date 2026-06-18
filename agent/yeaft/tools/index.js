@@ -38,6 +38,9 @@ import globTool from './glob.js';
 import grepTool from './grep.js';
 import listDir from './list-dir.js';
 import applyPatch from './apply-patch.js';
+import listTasks from './list-tasks.js';
+import readTaskLog from './read-task-log.js';
+import cancelTask from './cancel-task.js';
 
 // --- P1 Agent tools ---
 import agentTool from './agent.js';
@@ -99,6 +102,9 @@ export const allTools = [
   grepTool,
   listDir,
   applyPatch,
+  listTasks,
+  readTaskLog,
+  cancelTask,
 
   // P1 Agent
   agentTool,

@@ -26,6 +26,7 @@ import { Engine } from './engine.js';
 import { Compactor } from './compact/compactor.js';
 import { resolveContextWindow } from './models.js';
 import { ToolUsageStats } from './stats/tool-usage.js';
+import { TaskManager } from './tasks/manager.js';
 // H2.f.5 removed the old user-facing thread pipeline/dispatcher. The base
 // session still exposes a single default Engine; PR #797 adds group VP thread
 // engines in web-bridge runtime state, keyed below the session layer.
@@ -399,6 +400,7 @@ export async function loadSession(options = {}) {
   }
 
   // ─── 8. Build tool registry ────────────────────────────
+  const taskManager = new TaskManager({ yeaftDir, conversationStore });
   const toolRegistry = createFullRegistry();
 
   // Register any extra tools from caller
@@ -456,6 +458,7 @@ export async function loadSession(options = {}) {
     mcpManager,
     yeaftDir,
     toolStats,
+    taskManager,
   });
 
   // ─── 9a-pre. Create per-group history Compactor ────────
@@ -608,6 +611,7 @@ export async function loadSession(options = {}) {
     status,
     amsRegistry,
     toolStats,
+    taskManager,
     shutdown,
     // task-325c: user-initiated abort API. Delegates to web-bridge which
     // owns the single AbortController. Lazy-imported to avoid a hard cycle

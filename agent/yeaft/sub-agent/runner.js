@@ -154,6 +154,7 @@ export function startSubAgent(agent, deps = {}) {
     mcpManager: deps.mcpManager || null,
     yeaftDir: deps.yeaftDir || null,
     toolStats: deps.toolStats || null,
+    taskManager: deps.taskManager || null,
   });
 
   agent.subEngine = subEngine;
@@ -164,6 +165,9 @@ export function startSubAgent(agent, deps = {}) {
   agent.parentThreadId = deps.parentThreadId || 'main';
   agent.outputLog = createOutputLog(agent.id, deps.subAgentLogDir);
   agent.outputFile = agent.outputLog.path;
+  if (agent.taskId && deps.taskManager && agent.parentSessionId) {
+    try { deps.taskManager.setTaskLogPath(agent.parentSessionId, agent.taskId, agent.outputFile); } catch { /* ignore */ }
+  }
   agent.outputLog.write({ type: 'sub_agent_spawned', agentId: agent.id, agentName: agent.name, mission: agent.mission || agent.task || '' });
 
   // Compose the system-prompt-overlay we want injected.
@@ -268,6 +272,9 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
   const emit = (evt) => {
     const wrapped = wrapEvt(evt);
     try { agent.outputLog?.write(wrapped); } catch { /* ignore log failures */ }
+    if (agent.taskId && deps.taskManager && agent.parentSessionId) {
+      try { deps.taskManager.refreshTaskLog(agent.parentSessionId, agent.taskId); } catch { /* ignore */ }
+    }
     if (onEvent) {
       try { onEvent(agent.id, wrapped); } catch { /* ignore listener errors */ }
     }
@@ -497,6 +504,17 @@ function finalizeTerminal(agent, status, { error, deps } = {}) {
     error: error || agent.error || null,
   };
   try { agent.outputLog?.write(evt); } catch { /* ignore */ }
+  if (agent.taskId && deps?.taskManager && agent.parentSessionId) {
+    const taskStatus = status === STATUS.COMPLETED ? 'succeeded'
+      : status === STATUS.CLOSED ? 'cancelled'
+        : 'failed';
+    try {
+      deps.taskManager.completeTask(agent.parentSessionId, agent.taskId, {
+        status: taskStatus,
+        error: error || agent.error || null,
+      });
+    } catch { /* ignore */ }
+  }
   if (deps && typeof deps.onEvent === 'function') {
     try { deps.onEvent(agent.id, evt); } catch { /* ignore */ }
   }

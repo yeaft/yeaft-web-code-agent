@@ -396,6 +396,7 @@ export const useChatStore = defineStore('chat', {
     yeaftModelsRefreshing: false, // 当前 agent 的 model/status 后台刷新状态
     yeaftModelRefreshError: null, // 当前 agent 最近一次 refresh 错误（保留旧模型列表）
     yeaftYeaftDir: null,          // agent 的 ~/.yeaft 绝对路径（session_ready 携带）— Yeaft workbench 的默认 workDir
+    yeaftActiveTasksBySession: {}, // { [sessionId]: { [taskId]: running task snapshot } }
     // 2026-05-13: tool-call usage stats for the Yeaft debug drawer.
     // Populated by `fetchYeaftToolStats()` → backend → `yeaft_tool_stats`
     // case in handleYeaftOutput. Shape:
@@ -1477,6 +1478,13 @@ export const useChatStore = defineStore('chat', {
           this.yeaftSessionReady = true;
           this.yeaftBootstrapMetaLoadingKey = null;
           this.yeaftAvailableModels = event.availableModels || [];
+          const readyTasks = Array.isArray(event.tasks) ? event.tasks : [];
+          const nextTasks = {};
+          for (const task of readyTasks) {
+            if (!task?.id || !task.sessionId || task.status !== 'running') continue;
+            nextTasks[task.sessionId] = { ...(nextTasks[task.sessionId] || {}), [task.id]: task };
+          }
+          this.yeaftActiveTasksBySession = nextTasks;
           // Surface agent's yeaft home dir so Yeaft workbench (Files/Git tabs)
           // can default to a sensible folder instead of leaking through
           // currentAgentInfo.workDir (which is Chat's cwd, not the group's).
@@ -1793,6 +1801,22 @@ export const useChatStore = defineStore('chat', {
           this.yeaftModel = event.model;
           this.yeaftModelEffort = event.modelEffort || null;
           break;
+
+        case 'yeaft_task_event': {
+          const task = event.task;
+          if (!task?.id || !task.sessionId) break;
+          const bySession = { ...this.yeaftActiveTasksBySession };
+          const current = { ...(bySession[task.sessionId] || {}) };
+          if (task.status === 'running') {
+            current[task.id] = task;
+          } else {
+            delete current[task.id];
+          }
+          if (Object.keys(current).length > 0) bySession[task.sessionId] = current;
+          else delete bySession[task.sessionId];
+          this.yeaftActiveTasksBySession = bySession;
+          break;
+        }
 
         case 'sub_agent_event': {
           // PR-M3: a sub-agent emitted an event. `agentId` identifies the

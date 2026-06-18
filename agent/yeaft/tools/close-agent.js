@@ -95,6 +95,14 @@ Do NOT end your turn silently right after CloseAgent.`,
     const wasTerminal = isTerminalAgentStatus(agent.status);
     if (!wasTerminal) {
       agent.status = STATUS.CLOSED;
+      if (agent.taskId && ctx?.taskManager && agent.parentSessionId) {
+        try {
+          ctx.taskManager.completeTask(agent.parentSessionId, agent.taskId, {
+            status: 'cancelled',
+            error: agent.error || null,
+          });
+        } catch { /* ignore */ }
+      }
       // The driver may not yet have observed the abort / status flip; push
       // a notification so the queue stays consistent (idempotent inside
       // the notifications module). The driver's own finalizeTerminal()
