@@ -62,7 +62,9 @@ export default {
     turn: { type: Object, required: true },
     conversationId: { type: String, default: null },
     nowMs: { type: Number, default: 0 },
+    expandState: { type: String, default: null },
   },
+  emits: ['update-expand-state'],
   template: `
     <div class="vp-turn-block"
          :class="{ 'vp-turn-block-streaming': turn.isStreaming }"
@@ -165,7 +167,7 @@ export default {
       </div>
     </div>
   `,
-  setup(props) {
+  setup(props, { emit }) {
     const store = useChatStore();
     const vpStore = useVpStore();
     const t = Vue.inject('t', null);
@@ -173,7 +175,13 @@ export default {
     // Explicit expand machine. Initial value depends on whether the turn
     // is streaming when first mounted (resumes mid-stream → 'streaming').
     // Completed VP turns are expanded by default; manual collapse still sticks.
-    const expandState = Vue.ref(props.turn.isStreaming ? 'streaming' : 'auto-expanded');
+    const internalExpandState = Vue.ref(props.turn.isStreaming ? 'streaming' : 'auto-expanded');
+    const currentExpandState = Vue.computed(() => props.expandState || internalExpandState.value);
+    const setExpandState = (state) => {
+      if (!state) return;
+      internalExpandState.value = state;
+      emit('update-expand-state', state);
+    };
 
     // Reconcile the auto-* part of the machine whenever the upstream
     // streaming flag changes. The user-* states are immune (see
@@ -181,14 +189,14 @@ export default {
     Vue.watch(
       () => props.turn.isStreaming,
       (isStreaming) => {
-        expandState.value = reconcileStreamingState(expandState.value, !!isStreaming);
+        setExpandState(reconcileStreamingState(currentExpandState.value, !!isStreaming));
       },
     );
 
-    const expanded = Vue.computed(() => isExpandedFn(expandState.value));
+    const expanded = Vue.computed(() => isExpandedFn(currentExpandState.value));
 
     const onToggle = () => {
-      expandState.value = toggleState(expandState.value);
+      setExpandState(toggleState(currentExpandState.value));
     };
 
     const onAvatarClick = () => {
