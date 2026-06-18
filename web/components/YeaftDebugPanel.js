@@ -1299,7 +1299,7 @@ export default {
               <span
                 class="yeaft-debug-turn-tokens"
                 :title="'message ' + turn.tokenBreakdown.messageTotal + ' · tool ' + turn.tokenBreakdown.toolTotal + ' (estimated split)'"
-              >{{ formatTokens(turn.totalTokens) }} tok<span class="yeaft-debug-tokens-split">msg {{ formatTokens(turn.tokenBreakdown.messageTotal) }} · tool {{ formatTokens(turn.tokenBreakdown.toolTotal) }}</span></span>
+              >{{ formatTokens(turn.totalTokens) }} tok</span>
               <span v-if="turn.openedAt" class="yeaft-debug-turn-clock" :title="$t('yeaft.debugTurnStartedAt') || 'turn started at'">{{ formatClock(turn.openedAt) }}</span>
             </span>
             <button class="yeaft-debug-copy-btn small" @click.stop="copyTurnAsMarkdown(turn)" title="Copy turn as markdown">copy</button>
@@ -1365,11 +1365,11 @@ export default {
                   <span
                     class="yeaft-debug-loop-token"
                     :title="'input total ' + loop.tokenBreakdown.inputTotal + ' = message ' + loop.tokenBreakdown.inputMessage + ' + tool ' + loop.tokenBreakdown.inputTool + ' (estimated split)'"
-                  >in {{ formatTokens(usageTotalInputTokens(loop.usage)) }}<span class="yeaft-debug-tokens-split">m{{ loop.tokenBreakdown.inputMessage }} / t{{ loop.tokenBreakdown.inputTool }}</span></span>
+                  >in {{ formatTokens(usageTotalInputTokens(loop.usage)) }}</span>
                   <span
                     class="yeaft-debug-loop-token"
                     :title="'output total ' + loop.tokenBreakdown.outputTotal + ' = message ' + loop.tokenBreakdown.outputMessage + ' + tool ' + loop.tokenBreakdown.outputTool + ' (estimated split)'"
-                  >out {{ formatTokens(loop.usage?.outputTokens || 0) }}<span class="yeaft-debug-tokens-split">m{{ loop.tokenBreakdown.outputMessage }} / t{{ loop.tokenBreakdown.outputTool }}</span></span>
+                  >out {{ formatTokens(loop.usage?.outputTokens || 0) }}</span>
                   <span class="yeaft-debug-loop-total" :title="formatUsageBreakdown(loop.usage)">{{ formatTokens(usageTotalTokens(loop.usage)) }} tok</span>
                   <span class="yeaft-debug-loop-latency">{{ formatMs(loop.latencyMs) }}</span>
                   <span class="yeaft-debug-loop-meta">{{ loopMetaSummary(loop) }}</span>

@@ -19,24 +19,24 @@ describe('YeaftDebugPanel · token breakdown + timestamp', () => {
     expect(panel).toMatch(/import\s*\{[^}]*formatClockTime[^}]*\}\s*from\s*['"]\.\/yeaft-debug-helpers\.js['"]/);
   });
 
-  it('renders message / tool split next to the total in turn header from a cached field', () => {
-    // Turn header still shows the real total tokens unchanged…
+  it('keeps the turn token split in the title, not inline in the crowded row', () => {
+    // Turn header shows the real total tokens unchanged.
     expect(panel).toContain('formatTokens(turn.totalTokens)');
-    // …and now also shows an inline (msg X · tool Y) split from the
-    // computed/decorated turn, not by recomputing in the template.
+    // The message/tool split is still available on hover, but not rendered as
+    // another inline fragment that overlaps narrow debug panels.
     expect(panel).toContain('turn.tokenBreakdown.messageTotal');
     expect(panel).toContain('turn.tokenBreakdown.toolTotal');
-    expect(panel).toContain('yeaft-debug-tokens-split');
+    expect(panel).not.toContain('yeaft-debug-tokens-split');
     expect(panel).not.toMatch(/turnTokenBreakdown\(turn\)/);
   });
 
-  it('renders message / tool split next to per-loop input and output tokens from cached fields', () => {
+  it('keeps per-loop token split in titles, not inline in the row', () => {
     // Real loop input / output unchanged; input goes through the existing
     // cache-aware total helper from origin/main.
     expect(panel).toContain('usageTotalInputTokens(loop.usage)');
     expect(panel).toContain('loop.usage?.outputTokens || 0');
-    // Breakdown fields are read from loop.tokenBreakdown, avoiding repeated
-    // template calls that would walk loop.messages on every patch.
+    // Breakdown fields stay available in titles for hover/debugging, avoiding
+    // repeated template calls and avoiding extra inline text in narrow panels.
     expect(panel).toContain('loop.tokenBreakdown.inputMessage');
     expect(panel).toContain('loop.tokenBreakdown.inputTool');
     expect(panel).toContain('loop.tokenBreakdown.outputMessage');
@@ -70,7 +70,7 @@ describe('YeaftDebugPanel · token breakdown + timestamp', () => {
       const end = css.indexOf('\n}\n', idx);
       return end >= 0 ? css.slice(idx, end + 3) : css.slice(idx, idx + 400);
     };
-    for (const cls of ['yeaft-debug-tokens-split', 'yeaft-debug-turn-clock', 'yeaft-debug-loop-clock']) {
+    for (const cls of ['yeaft-debug-turn-clock', 'yeaft-debug-loop-clock']) {
       const block = sliceFor(cls);
       expect(block.length, `missing CSS for ${cls}`).toBeGreaterThan(0);
       expect(block).not.toMatch(/#[0-9a-fA-F]{3,6}\b/);

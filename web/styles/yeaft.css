@@ -1041,13 +1041,14 @@
 .yeaft-debug-turn-header {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-height: 34px;
-  padding: 5px 6px;
+  padding: 5px 8px;
   margin: 0 -6px;
   border-radius: 8px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.35;
   color: var(--text-secondary);
   background: transparent;
   user-select: none;
@@ -1059,7 +1060,10 @@
 }
 
 .yeaft-debug-turn-chevron {
+  width: 10px;
+  height: 10px;
   flex-shrink: 0;
+  color: var(--text-muted);
   transition: transform 0.15s;
 }
 
@@ -1070,9 +1074,9 @@
 .yeaft-debug-turn-main {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
-  flex: 1 1 240px;
+  flex: 1 1 auto;
 }
 
 .yeaft-debug-turn-num {
@@ -1089,9 +1093,10 @@
   display: flex;
   flex-wrap: nowrap;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 8px;
   font-size: 11px;
   color: var(--text-muted);
+  flex: 0 0 auto;
   min-width: 0;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -1108,7 +1113,7 @@
 
 .yeaft-debug-turn-prompt {
   flex: 1 1 auto;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -1116,17 +1121,24 @@
 .yeaft-debug-turn-source {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
-  flex: 0 1 auto;
+  flex: 0 2 auto;
   color: var(--text-muted);
 }
 
 .yeaft-debug-turn-group,
 .yeaft-debug-turn-vp {
-  max-width: 150px;
+  max-width: 120px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 10px;
+}
+
+.yeaft-debug-turn-loopcount,
+.yeaft-debug-turn-time,
+.yeaft-debug-turn-tokens,
+.yeaft-debug-turn-clock {
+  flex: 0 0 auto;
 }
 
 .yeaft-debug-history-bar {
@@ -2072,7 +2084,8 @@
   background: transparent;
 }
 
-.yeaft-debug-copy-btn.small {
+.yeaft-debug-copy-btn.small,
+.yeaft-debug-show-btn.small {
   padding: 1px 6px;
   font-size: 10px;
 }
@@ -2096,13 +2109,14 @@
 .yeaft-debug-loop-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 32px;
+  gap: 7px;
+  min-height: 30px;
   cursor: pointer;
-  padding: 4px 6px;
-  margin: 0 -6px;
+  padding: 3px 8px;
+  margin: 0 -4px;
   border-radius: 8px;
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.35;
   transition: background 0.15s;
 }
 
@@ -2113,10 +2127,10 @@
 
 .yeaft-debug-loop-main {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  align-items: center;
+  gap: 7px;
   min-width: 0;
-  flex: 1 1 180px;
+  flex: 1 1 auto;
 }
 
 .yeaft-debug-loop-num {
@@ -2126,25 +2140,28 @@
 }
 
 .yeaft-debug-loop-model {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-muted);
   font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  max-width: 140px;
+  flex: 0 2 auto;
 }
 
 .yeaft-debug-loop-stats {
   display: flex;
   flex-wrap: nowrap;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 8px;
   font-size: 11px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   margin-left: auto;
   align-items: center;
+  flex: 0 0 auto;
   min-width: 0;
   white-space: nowrap;
 }
@@ -2152,31 +2169,17 @@
 .yeaft-debug-loop-token,
 .yeaft-debug-loop-total,
 .yeaft-debug-loop-latency {
+  flex: 0 0 auto;
   color: var(--text-secondary);
 }
 
 .yeaft-debug-loop-meta {
+  flex: 0 2 auto;
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 84px;
-}
-
-/* feat-debug-token-breakdown: estimated message/tool split next to
-   the real token totals. Rendered inline, dimmer than the real number,
-   white-space:nowrap so the parent row never wraps. */
-.yeaft-debug-tokens-split {
-  color: var(--text-muted);
-  opacity: 0.75;
-  font-variant-numeric: tabular-nums;
-  margin-left: 4px;
-  white-space: nowrap;
-}
-
-.yeaft-debug-loop-token .yeaft-debug-tokens-split,
-.yeaft-debug-turn-tokens .yeaft-debug-tokens-split {
-  margin-left: 6px;
 }
 
 /* feat-debug-timestamp: per-turn / per-loop HH:MM:SS column. Sits at
