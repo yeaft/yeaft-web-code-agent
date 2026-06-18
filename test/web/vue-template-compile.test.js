@@ -13,6 +13,7 @@ const compileCoveredComponents = [
   'PaneTopBar.js',
   'VpTimelinePane.js',
   'SettingsPanel.js',
+  'LlmTab.js',
   'VpCrudPanel.js',
   'AssistantTurn.js',
   'YeaftDebugPanel.js',

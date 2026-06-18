@@ -38,6 +38,7 @@ describe('LlmTab editable model refs', () => {
       fallbackCopilotModels: LlmTab.methods.fallbackCopilotModels,
     };
 
+    expect(computed.call(ctx)).toContain('github-copilot/gpt-5.5');
     expect(computed.call(ctx)).toContain('github-copilot/claude-opus-4.8');
     expect(computed.call(ctx)).toContain('github-copilot/gpt-5-mini');
   });
