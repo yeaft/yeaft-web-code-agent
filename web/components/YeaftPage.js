@@ -27,6 +27,7 @@ export default {
       <div class="yeaft-sidebar-overlay" v-if="!sidebarCollapsed && isMobile" @click="sidebarCollapsed = true"></div>
 
       <!-- Left Sidebar — V2 (task-341: V2 is the only sidebar now). -->
+      <!-- Legacy sidebar event alias; canonical MessageList path uses open-session-settings. -->
       <YeaftSidebar
         :collapsed="sidebarCollapsed"
         @select-group="onSelectGroupV2"
@@ -34,7 +35,7 @@ export default {
         @toggle-sidebar="toggleSidebar"
         @back="goBack"
         @open-settings="toggleSettings"
-        @open-group-settings="openGroupSettings"
+        @open-group-settings="openSessionSettings"
       />
 
       <!-- Workbench Panel (between sidebar and main) -->
@@ -275,7 +276,7 @@ export default {
             {{ $t('yeaft.session.empty.cta') }}
           </button>
         </div>
-        <MessageList v-if="!showSettings && !store.yeaftActiveVpDetailId && !isActiveGroupEmpty" @open-group-settings="openGroupSettings" />
+        <MessageList v-if="!showSettings && !store.yeaftActiveVpDetailId && !isActiveGroupEmpty" @open-session-settings="openSessionSettings" />
 
         <!-- Settings Panel -->
         <SettingsPanel v-if="showSettings" :visible="showSettings" :initial-tab="'yeaft'" :initial-sub-tab="settingsInitialTab" :initial-edit-vp-id="settingsInitialEditVpId" @close="showSettings = false" />
@@ -987,15 +988,14 @@ export default {
       const g = activeGroupForInvite.value;
       if (g) inviteDismissedFor.add(g.id);
     };
-    // task-fix-group-member-editor → unified group settings modal.
-    // Holds the groupId + initial section so callers (sidebar ⚙, hero
-    // CTA, invite-modal CTA, announcement-bar "Open settings" link) can
-    // target any group and any pane.
+    // Holds the session id + initial section so callers (sidebar settings,
+    // hero CTA, invite-modal CTA, announcement-bar "Open settings" link) can
+    // target any Session and any pane.
     const groupSettingsOpen = Vue.ref(false);
     const groupSettingsId = Vue.ref(null);
     const groupSettingsSection = Vue.ref('announcement');
     const groupSettingsEditVpId = Vue.ref('');
-    const openGroupSettings = (payload = {}) => {
+    const openSessionSettings = (payload = {}) => {
       // Accept both { sessionId } (new) and { groupId } (legacy) — child
       // components were renamed in the msg.groupId→msg.sessionId sweep but
       // a few legacy callers may still pass either shape during the
@@ -1012,7 +1012,7 @@ export default {
     const openAnnouncementSettings = () => {
       const sessionId = topbarGroup.value?.id || null;
       if (!sessionId) return;
-      openGroupSettings({ sessionId, section: 'announcement' });
+      openSessionSettings({ sessionId, section: 'announcement' });
     };
     const closeGroupSettings = () => {
       groupSettingsOpen.value = false;
@@ -1031,7 +1031,7 @@ export default {
     // the Members section of the unified settings modal.
     const openMemberEditor = (sessionId) => {
       if (!sessionId) return;
-      openGroupSettings({ sessionId, section: 'members' });
+      openSessionSettings({ sessionId, section: 'members' });
     };
     // I6: closeMemberEditor shim was unused — dropped. openMemberEditor
     // remains because SessionInviteModal's "open library" CTA still calls
@@ -1132,7 +1132,7 @@ export default {
       if (store.yeaftActiveVpDetailId) store.leaveVpDetailView();
       const sessionId = store.yeaftActiveSessionFilter || sessionsStore()?.activeSessionId || topbarGroup.value?.id || null;
       if (!sessionId) return;
-      openGroupSettings({ sessionId, section: 'members', editVpId: vpId });
+      openSessionSettings({ sessionId, section: 'members', editVpId: vpId });
     };
 
     // Clicking a VP row @-mentions that VP in the chat input (default
@@ -1221,7 +1221,7 @@ export default {
       groupSettingsId,
       groupSettingsSection,
       groupSettingsEditVpId,
-      openGroupSettings,
+      openSessionSettings,
       openAnnouncementSettings,
       closeGroupSettings,
       // task-vp-customize: members → "Open VP Library" handler.

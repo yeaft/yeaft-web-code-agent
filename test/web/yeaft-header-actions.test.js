@@ -31,7 +31,7 @@ describe('Yeaft conversation header actions', () => {
     expect(block).not.toContain('yeaft-topbar-announcement-edit-label');
     expect(block).not.toContain("$t('yeaft.session.announcement.edit')");
     expect(pageSource).toContain('const openAnnouncementSettings = () => {');
-    expect(pageSource).toContain("openGroupSettings({ sessionId, section: 'announcement' });");
+    expect(pageSource).toContain("openSessionSettings({ sessionId, section: 'announcement' });");
     expect(pageSource).toContain(':initial-section="groupSettingsSection"');
     expect(yeaftCss).toContain('.yeaft-topbar-announcement-edit');
     expect(yeaftCss).not.toContain('.yeaft-topbar-announcement-edit-label');

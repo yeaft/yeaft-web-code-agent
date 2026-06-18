@@ -85,13 +85,13 @@ export default {
 
       <!-- Messages when in conversation -->
       <div v-else class="messages">
-        <!-- Group announcement bar — surfaces a CLAUDE.md-style shared
+        <!-- Session announcement bar — surfaces a CLAUDE.md-style shared
              prefix that's injected into every VP's system prompt.
-             Shown only in Yeaft mode when an active group is selected. -->
+             Shown only in Yeaft mode when an active session is selected. -->
         <SessionAnnouncementBar
-          v-if="activeGroupIdForBar"
-          :group-id="activeGroupIdForBar"
-          @open-settings="onOpenGroupSettings"
+          v-if="activeSessionIdForAnnouncement"
+          :session-id="activeSessionIdForAnnouncement"
+          @open-settings="onOpenSessionSettings"
         />
         <!-- Waiting status banner (shown above messages, not overlapping cat animation) -->
         <div v-if="waitingStatus && waitingStatus !== 'normal'" class="typing-status-banner" :class="'typing-status-banner-' + waitingStatus">
@@ -544,7 +544,7 @@ export default {
       </button>
     </main>
   `,
-  emits: ['new-conversation', 'resume-conversation', 'open-settings', 'open-group-settings'],
+  emits: ['new-conversation', 'resume-conversation', 'open-settings', 'open-session-settings'],
   setup(_props, ctx) {
     const store = Pinia.useChatStore();
     const containerRef = Vue.ref(null);
@@ -574,16 +574,16 @@ export default {
     };
     const estimateMessageBlockHeight = (block) => estimateVirtualItemHeight(block);
 
-    // Resolve the active group id for the announcement bar. The bar should
+    // Resolve the active Session id for the announcement bar. The bar should
     // appear only when the user is on the Yeaft page AND has an active
-    // group selected (filter or default). We read the groups store via the
+    // Session selected (filter or default). We read the sessions store via the
     // Pinia global so the component still imports cleanly in node tests.
     const sessionsStore = (() => {
       try { return window.Pinia?.useSessionsStore?.() || null; }
       catch (_) { return null; }
     });
-    const activeGroupIdForBar = Vue.computed(() => {
-      // Only render the bar in Yeaft view. Chat mode has no group concept.
+    const activeSessionIdForAnnouncement = Vue.computed(() => {
+      // Only render the bar in Yeaft view when a Session is selected.
       if (store.currentView !== 'yeaft') return null;
       const gs = sessionsStore();
       if (!gs) return null;
@@ -598,11 +598,11 @@ export default {
     // Issue C (2026-05-12) — IM-style dual-column layout gate.
     // The user explicitly scoped this to Yeaft GROUP conversations only:
     // 1:1 chat and crew are unchanged. We reuse the same predicate as
-    // the announcement bar — Yeaft view + an active group is selected —
+    // the announcement bar — Yeaft view + an active Session is selected —
     // so user messages render as right-side bubbles (UserTurnBlock) and
     // VP turns stay on the left (existing VpTurnBlock). Outside a group,
     // user messages fall through to the legacy centered MessageItem.
-    const useImStyleForUser = Vue.computed(() => activeGroupIdForBar.value !== null);
+    const useImStyleForUser = Vue.computed(() => activeSessionIdForAnnouncement.value !== null);
 
     // Online agents
     const onlineAgents = Vue.computed(() => {
@@ -897,7 +897,7 @@ export default {
       // Chat mode keeps the flat legacy list. Yeaft groups one user row plus
       // the following VP replies into one virtual item, so virtualization never
       // shows a reply without the turn context that caused it.
-      if (store.currentView !== 'yeaft' || !activeGroupIdForBar.value) return turnGroups.value;
+      if (store.currentView !== 'yeaft' || !activeSessionIdForAnnouncement.value) return turnGroups.value;
       const blocks = [];
       let currentBlock = null;
       const finishBlock = () => {
@@ -1542,8 +1542,8 @@ export default {
     // can be opened with the right session id and an initial section
     // focus. MessageList is mounted directly inside YeaftPage, so a
     // normal emit chain — rather than a store-as-bus signal — is the
-    // simpler path. YeaftPage listens for `@open-group-settings`.
-    const onOpenGroupSettings = (payload) => {
+    // simpler path. YeaftPage listens for `@open-session-settings`.
+    const onOpenSessionSettings = (payload) => {
       // Accept legacy bare-string payloads and either { sessionId } or
       // { groupId } shapes (some still-un-renamed child callers may
       // emit the old key). Forward as canonical { sessionId } only.
@@ -1552,7 +1552,7 @@ export default {
         : (payload || {});
       const sessionId = norm.sessionId || norm.groupId || null;
       if (!sessionId) return;
-      ctx.emit('open-group-settings', { sessionId, section: norm.section || 'announcement' });
+      ctx.emit('open-session-settings', { sessionId, section: norm.section || 'announcement' });
     };
 
     // Single click handler for the load-more hint. Branches by view so
@@ -1611,9 +1611,9 @@ export default {
       subAgentCardsForRow,
       orphanSubAgentCards,
       // group editor wiring
-      activeGroupIdForBar,
+      activeSessionIdForAnnouncement,
       useImStyleForUser,
-      onOpenGroupSettings,
+      onOpenSessionSettings,
       onClickLoadMore,
       onVirtualTranscriptScrollState,
       isAtBottom,
