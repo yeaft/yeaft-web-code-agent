@@ -36,7 +36,8 @@ describe('MessageList virtualization wiring', () => {
     expect(source).toContain('const onClickLoadMore = () => {');
     expect(source.match(/const onClickLoadMore = \(\) => \{/g)).toHaveLength(1);
     expect(source).toContain('onClickLoadMore,');
-    expect(source).toContain('v-if="store.sessionLoading"');
+    expect(source).toContain('v-if="showSessionLoadingOverlay"');
+    expect(source).toContain('!!store.sessionLoading && !showInitialMessagesLoading.value');
     expect(source).not.toContain('v-if="sessionLoading"');
   });
 

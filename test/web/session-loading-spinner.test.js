@@ -15,6 +15,14 @@ describe('session message loading spinner', () => {
     expect(source).toContain('class="initial-message-loading"');
   });
 
+  it('keeps the blocking session overlay mutually exclusive with the initial transcript spinner', () => {
+    const source = read('components/MessageList.js');
+
+    expect(source).toContain('v-if="showSessionLoadingOverlay"');
+    expect(source).toContain('const showSessionLoadingOverlay = Vue.computed(() => {');
+    expect(source).toContain('!!store.sessionLoading && !showInitialMessagesLoading.value');
+  });
+
   it('marks cold chat session selection as history loading', () => {
     const source = read('stores/helpers/conversation.js');
 

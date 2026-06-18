@@ -29,7 +29,7 @@ export default {
   template: `
     <main class="chat-container" ref="containerRef">
       <!-- Session Loading Overlay - only covers message area -->
-      <div class="session-loading-overlay" v-if="store.sessionLoading">
+      <div class="session-loading-overlay" v-if="showSessionLoadingOverlay">
         <div class="session-loading-content">
           <div class="session-loading-spinner"></div>
           <div class="session-loading-text">{{ store.sessionLoadingText || $t('common.loading') }}</div>
@@ -1040,6 +1040,10 @@ export default {
 
     const initialMessagesLoadingText = Vue.computed(() => store.sessionLoadingText || '');
 
+    const showSessionLoadingOverlay = Vue.computed(() => {
+      return !!store.sessionLoading && !showInitialMessagesLoading.value;
+    });
+
     // Show typing dots when AI is processing but hasn't started streaming text yet
     const showTypingDots = Vue.computed(() => {
       return store.isProcessing && !hasStreamingMessage.value;
@@ -1637,6 +1641,9 @@ export default {
       hasStreamingMessage,
       nowMs,
       showTypingDots,
+      showInitialMessagesLoading,
+      showSessionLoadingOverlay,
+      initialMessagesLoadingText,
       previewShowTypingDots,
       isPreviewMode,
       waitingStatus,
