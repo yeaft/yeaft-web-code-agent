@@ -474,12 +474,36 @@ export class DebugTrace {
     };
     // Group rows by (turnId, threadId, sessionId, vpId) → frontend Turn
     // record. Each row is also surfaced as a Loop.
+    const duplicateLoopTraceIds = new Set();
+    const seenLoopKeys = new Set();
+    for (const r of rows) {
+      const traceId = r.trace_id || r.id;
+      const key = `${traceId}#${r.turn_number || 0}`;
+      if (seenLoopKeys.has(key)) duplicateLoopTraceIds.add(traceId);
+      else seenLoopKeys.add(key);
+    }
+    // Legacy rows used one Engine-instance trace_id for many user requests.
+    // That creates duplicate Loop 1/2/... rows under the same trace. Split
+    // only those corrupted traces by SQLite row id; healthy rows keep trace_id
+    // so multi-loop requests still hydrate as one turn. Keep this as one
+    // function so loop hydration and tool attachment use the same identity.
+    const turnKeyForRow = (r) => {
+      const baseTurnId = r.trace_id || r.id;
+      return duplicateLoopTraceIds.has(baseTurnId) ? (r.id || baseTurnId) : baseTurnId;
+    };
+    const loopInstanceIdForRow = (r) => {
+      const baseTurnId = r.trace_id || r.id;
+      return duplicateLoopTraceIds.has(baseTurnId) ? (r.id || `${baseTurnId}#${r.turn_number || 0}`) : null;
+    };
     const turnsById = new Map();
     const loops = rows.map((r) => {
       const parsedMessages = parseJsonSafe(r.messages_json) || [];
       const parsedUsage = parseJsonSafe(r.usage_json);
+      const hydratedTurnId = turnKeyForRow(r);
+      const loopInstanceId = loopInstanceIdForRow(r);
       const loop = {
-        turnId: r.trace_id, // panel groups loops by trace_id-as-turnId
+        turnId: hydratedTurnId,
+        ...(loopInstanceId ? { loopInstanceId } : {}),
         loopNumber: r.turn_number || 0,
         model: r.model || null,
         systemPrompt: r.system_prompt || '',
@@ -496,9 +520,9 @@ export class DebugTrace {
         vpId: r.vp_id || null,
         threadId: r.thread_id || null,
       };
-      if (!turnsById.has(r.trace_id)) {
-        turnsById.set(r.trace_id, {
-          turnId: r.trace_id,
+      if (!turnsById.has(hydratedTurnId)) {
+        turnsById.set(hydratedTurnId, {
+          turnId: hydratedTurnId,
           // C2 fix: read the explicit `user_prompt` column persisted at
           // startTurn time. Deriving from messages_json is unsafe — each
           // tool-loop iteration overwrites messages_json with the
@@ -518,7 +542,7 @@ export class DebugTrace {
           tools: [],
         });
       }
-      const t = turnsById.get(r.trace_id);
+      const t = turnsById.get(hydratedTurnId);
       t.loopCount += 1;
       // Aggregate per-loop latency / tokens so the Turn header shows the
       // same totals the live `turn_close` event would have stamped.
@@ -530,11 +554,11 @@ export class DebugTrace {
     // Attach tools to their parent Turn so the panel can render per-tool
     // timing without scanning the loop bodies.
     for (const tool of tools) {
-      // Find which loop row this tool belongs to → that row's trace_id
-      // identifies the Turn.
+      // Find which loop row this tool belongs to; use the same hydrated
+      // identity as the loop/turn records so split legacy rows keep tools.
       const owner = rows.find(r => r.id === tool.turn_id);
       if (!owner) continue;
-      const t = turnsById.get(owner.trace_id);
+      const t = turnsById.get(turnKeyForRow(owner));
       if (!t) continue;
       t.tools.push({
         loopNumber: owner.turn_number || 0,

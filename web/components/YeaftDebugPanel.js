@@ -1352,7 +1352,7 @@ export default {
             </div>
 
             <!-- Loops -->
-            <div class="yeaft-debug-loop" v-for="loop in (turn.loops || [])" :key="loop.loopNumber">
+            <div class="yeaft-debug-loop" v-for="loop in (turn.loops || [])" :key="loop.loopInstanceId || (turn.turnId + '#' + loop.loopNumber)">
               <div class="yeaft-debug-loop-header" :class="{ expanded: isLoopExpanded(turn.turnId, loop.loopNumber) }" @click="toggleLoop(turn.turnId, loop.loopNumber)">
                 <svg class="yeaft-debug-turn-chevron" :class="{ expanded: isLoopExpanded(turn.turnId, loop.loopNumber) }" viewBox="0 0 24 24" width="10" height="10">
                   <path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
