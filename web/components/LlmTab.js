@@ -57,6 +57,41 @@ export default {
           </button>
         </div>
 
+        <section v-if="context === 'yeaft'" class="llm-copilot-instructions" aria-labelledby="llm-copilot-instructions-title">
+          <div class="llm-copilot-instructions-header">
+            <div>
+              <h3 id="llm-copilot-instructions-title">{{ $t('settings.llm.copilotInstructionsTitle') }}</h3>
+              <p class="sp-desc">{{ $t('settings.llm.copilotInstructionsDesc') }}</p>
+            </div>
+          </div>
+          <ol class="llm-copilot-steps">
+            <li>
+              <span class="llm-copilot-step-index">1</span>
+              <div>
+                <strong>{{ $t('settings.llm.copilotStepLoginTitle') }}</strong>
+                <p>{{ $t('settings.llm.copilotStepLoginDesc') }}</p>
+                <code>gh auth login</code>
+              </div>
+            </li>
+            <li>
+              <span class="llm-copilot-step-index">2</span>
+              <div>
+                <strong>{{ $t('settings.llm.copilotStepUseTitle') }}</strong>
+                <p>{{ $t('settings.llm.copilotStepUseDesc') }}</p>
+                <code>{{ $t('settings.llm.copilotUseCommand') }}</code>
+              </div>
+            </li>
+            <li>
+              <span class="llm-copilot-step-index">3</span>
+              <div>
+                <strong>{{ $t('settings.llm.copilotStepVerifyTitle') }}</strong>
+                <p>{{ $t('settings.llm.copilotStepVerifyDesc') }}</p>
+                <code>yeaft-agent llm show</code>
+              </div>
+            </li>
+          </ol>
+        </section>
+
         <!-- Providers Section -->
         <div class="sp-group">
           <div class="sp-group-title">{{ $t('settings.llm.providersTitle') }}</div>
@@ -480,7 +515,7 @@ export default {
 
     fallbackCopilotModels() {
       return [
-        'gpt-5.4', 'gpt-5.4-mini', 'gpt-5-mini', 'gpt-5.3-codex', 'gpt-5.2-codex',
+        'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5-mini', 'gpt-5.3-codex', 'gpt-5.2-codex',
         'gpt-4.1', 'gpt-4o', 'gpt-4o-mini',
         'claude-opus-4.8', 'claude-opus-4.7', 'claude-opus-4.6',
         'claude-sonnet-4.6', 'claude-sonnet-4.5', 'claude-haiku-4.5',
