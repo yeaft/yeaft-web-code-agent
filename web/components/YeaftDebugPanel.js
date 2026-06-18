@@ -1282,28 +1282,27 @@ export default {
         </div>
         <div v-for="turn in turns" :key="turn.turnId" class="yeaft-debug-turn">
           <!-- Turn header -->
-          <div class="yeaft-debug-turn-header" @click="toggleTurn(turn.turnId)">
+          <div class="yeaft-debug-turn-header" :class="{ expanded: expandedTurns[turn.turnId] }" @click="toggleTurn(turn.turnId)">
             <svg class="yeaft-debug-turn-chevron" :class="{ expanded: expandedTurns[turn.turnId] }" viewBox="0 0 24 24" width="12" height="12">
               <path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
             </svg>
-            <span class="yeaft-debug-turn-prompt">{{ truncate(turn.userPrompt, 80) || '(no prompt)' }}</span>
+            <span class="yeaft-debug-turn-main">
+              <span class="yeaft-debug-turn-prompt" :title="turn.userPrompt">{{ truncate(turn.userPrompt, 96) || '(no prompt)' }}</span>
+              <span class="yeaft-debug-turn-source">
+                <span v-if="turn.vpId" class="yeaft-debug-turn-vp">{{ turn.vpId }}</span>
+                <span v-if="debugSessionId(turn)" class="yeaft-debug-turn-group">{{ debugSessionId(turn) }}</span>
+              </span>
+            </span>
             <span class="yeaft-debug-turn-stats">
-              <span v-if="turn.vpId" class="yeaft-debug-turn-vp">{{ turn.vpId }}</span>
-              <span v-if="debugSessionId(turn)" class="yeaft-debug-turn-group">{{ debugSessionId(turn) }}</span>
               <span class="yeaft-debug-turn-loopcount">{{ turn.loopCount || (turn.loops && turn.loops.length) || 0 }}L</span>
               <span class="yeaft-debug-turn-time">{{ formatMs(turn.totalMs) }}</span>
               <span
                 class="yeaft-debug-turn-tokens"
                 :title="'message ' + turn.tokenBreakdown.messageTotal + ' · tool ' + turn.tokenBreakdown.toolTotal + ' (estimated split)'"
-              >
-                {{ formatTokens(turn.totalTokens) }} tok
-                <span class="yeaft-debug-tokens-split">
-                  (msg {{ formatTokens(turn.tokenBreakdown.messageTotal) }} · tool {{ formatTokens(turn.tokenBreakdown.toolTotal) }})
-                </span>
-              </span>
+              >{{ formatTokens(turn.totalTokens) }} tok<span class="yeaft-debug-tokens-split">msg {{ formatTokens(turn.tokenBreakdown.messageTotal) }} · tool {{ formatTokens(turn.tokenBreakdown.toolTotal) }}</span></span>
               <span v-if="turn.openedAt" class="yeaft-debug-turn-clock" :title="$t('yeaft.debugTurnStartedAt') || 'turn started at'">{{ formatClock(turn.openedAt) }}</span>
             </span>
-            <button class="yeaft-debug-copy-btn" @click.stop="copyTurnAsMarkdown(turn)" title="Copy turn as markdown">copy</button>
+            <button class="yeaft-debug-copy-btn small" @click.stop="copyTurnAsMarkdown(turn)" title="Copy turn as markdown">copy</button>
           </div>
 
           <!-- Turn body -->
@@ -1354,21 +1353,25 @@ export default {
 
             <!-- Loops -->
             <div class="yeaft-debug-loop" v-for="loop in (turn.loops || [])" :key="loop.loopNumber">
-              <div class="yeaft-debug-loop-header" @click="toggleLoop(turn.turnId, loop.loopNumber)">
+              <div class="yeaft-debug-loop-header" :class="{ expanded: isLoopExpanded(turn.turnId, loop.loopNumber) }" @click="toggleLoop(turn.turnId, loop.loopNumber)">
                 <svg class="yeaft-debug-turn-chevron" :class="{ expanded: isLoopExpanded(turn.turnId, loop.loopNumber) }" viewBox="0 0 24 24" width="10" height="10">
                   <path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
                 </svg>
-                <span class="yeaft-debug-loop-num">Loop {{ loop.loopNumber }}</span>
-                <span class="yeaft-debug-loop-model">{{ loop.model }}</span>
+                <span class="yeaft-debug-loop-main">
+                  <span class="yeaft-debug-loop-num">Loop {{ loop.loopNumber }}</span>
+                  <span class="yeaft-debug-loop-model" :title="loop.model">{{ loop.model }}</span>
+                </span>
                 <span class="yeaft-debug-loop-stats">
                   <span
+                    class="yeaft-debug-loop-token"
                     :title="'input total ' + loop.tokenBreakdown.inputTotal + ' = message ' + loop.tokenBreakdown.inputMessage + ' + tool ' + loop.tokenBreakdown.inputTool + ' (estimated split)'"
-                  >↑{{ usageTotalInputTokens(loop.usage) }}<span class="yeaft-debug-tokens-split">(m{{ loop.tokenBreakdown.inputMessage }}/t{{ loop.tokenBreakdown.inputTool }})</span></span>
+                  >in {{ formatTokens(usageTotalInputTokens(loop.usage)) }}<span class="yeaft-debug-tokens-split">m{{ loop.tokenBreakdown.inputMessage }} / t{{ loop.tokenBreakdown.inputTool }}</span></span>
                   <span
+                    class="yeaft-debug-loop-token"
                     :title="'output total ' + loop.tokenBreakdown.outputTotal + ' = message ' + loop.tokenBreakdown.outputMessage + ' + tool ' + loop.tokenBreakdown.outputTool + ' (estimated split)'"
-                  >↓{{ loop.usage?.outputTokens || 0 }}<span class="yeaft-debug-tokens-split">(m{{ loop.tokenBreakdown.outputMessage }}/t{{ loop.tokenBreakdown.outputTool }})</span></span>
-                  <span :title="formatUsageBreakdown(loop.usage)">⊕{{ usageTotalTokens(loop.usage) }}</span>
-                  <span>{{ formatMs(loop.latencyMs) }}</span>
+                  >out {{ formatTokens(loop.usage?.outputTokens || 0) }}<span class="yeaft-debug-tokens-split">m{{ loop.tokenBreakdown.outputMessage }} / t{{ loop.tokenBreakdown.outputTool }}</span></span>
+                  <span class="yeaft-debug-loop-total" :title="formatUsageBreakdown(loop.usage)">{{ formatTokens(usageTotalTokens(loop.usage)) }} tok</span>
+                  <span class="yeaft-debug-loop-latency">{{ formatMs(loop.latencyMs) }}</span>
                   <span class="yeaft-debug-loop-meta">{{ loopMetaSummary(loop) }}</span>
                   <span
                     v-if="loopClockTime(turn, loop)"
