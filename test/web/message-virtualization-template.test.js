@@ -38,4 +38,17 @@ describe('message virtualization templates', () => {
       }
     }
   });
+
+  it('returns AssistantTurn tool expansion handlers used by its template', async () => {
+    const assistantTurn = await import('../../web/components/AssistantTurn.js');
+    const setupSource = assistantTurn.default.setup.toString();
+
+    expect(assistantTurn.default.template).toContain('toolExpandedValue(');
+    expect(assistantTurn.default.template).toContain('updateToolExpanded(');
+    expect(setupSource).toContain('const toolExpandedValue = (tool, index, bucket) => {');
+    expect(setupSource).toContain('const updateToolExpanded = (tool, index, bucket, value) => {');
+    expect(setupSource).toContain('toolExpandedValue,');
+    expect(setupSource).toContain('updateToolExpanded,');
+  });
+
 });

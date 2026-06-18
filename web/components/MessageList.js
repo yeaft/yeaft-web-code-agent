@@ -1021,6 +1021,8 @@ export default {
     // Track if user is at bottom (within threshold)
     const isAtBottom = Vue.ref(true);
     const SCROLL_THRESHOLD = 50;
+    const LOAD_MORE_TOP_THRESHOLD = 100;
+    let loadMoreArmed = true;
 
     const hasStreamingMessage = Vue.computed(() => {
       return store.messages.some(m => m.isStreaming);
@@ -1400,8 +1402,23 @@ export default {
       return scrollHeight - scrollTop - clientHeight <= SCROLL_THRESHOLD;
     };
 
+    const maybeLoadMoreNearTop = (scrollTop) => {
+      if (scrollTop > LOAD_MORE_TOP_THRESHOLD) {
+        loadMoreArmed = true;
+        return;
+      }
+      if (!loadMoreArmed || !canLoadMoreMessages()) return;
+      loadMoreArmed = false;
+
+      // Auto-fire load-more when the user scrolls near the top. Chat and
+      // Yeaft share onClickLoadMore() so the click path and scroll path
+      // cannot drift apart.
+      onClickLoadMore();
+    };
+
     const onVirtualTranscriptScrollState = ({ scrollTop, scrollHeight, clientHeight }) => {
       isAtBottom.value = scrollHeight - scrollTop - clientHeight <= SCROLL_THRESHOLD;
+      maybeLoadMoreNearTop(scrollTop || 0);
     };
 
     const preserveScrollAnchorDuringLoad = (loadFn, loadingRef) => {
@@ -1474,15 +1491,7 @@ export default {
       isAtBottom.value = checkIfAtBottom();
       if (isAtBottom.value) pruneYeaftWindowNearBottom();
 
-      if (containerRef.value) {
-        const { scrollTop } = containerRef.value;
-        if (scrollTop >= 100 || !canLoadMoreMessages()) return;
-
-        // Auto-fire load-more when the user scrolls near the top. Two
-        // independent paths share this trigger, gated on currentView so
-        // that the wrong store-flag pair never wins.
-        onClickLoadMore();
-      }
+      if (containerRef.value) maybeLoadMoreNearTop(containerRef.value.scrollTop || 0);
     };
 
     const pruneYeaftWindowNearBottom = () => {
