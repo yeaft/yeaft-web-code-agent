@@ -21,4 +21,17 @@ describe('UserTurnBlock', () => {
     expect(css).not.toContain('grid-template-columns: 1fr 36px');
     expect(css).not.toContain('.user-turn-block-avatar');
   });
+  it('keeps the legacy user avatar component asset-free', async () => {
+    const component = await import('../../web/components/UserAvatar.js');
+    const source = read('components/UserAvatar.js');
+    const css = read('styles/yeaft-vp.css');
+
+    compile(component.default.template);
+
+    expect(source).not.toContain('<img');
+    expect(source).not.toContain('assets/avatars/user');
+    expect(source).not.toContain('user-avatar-img');
+    expect(css).not.toContain('user-avatar-img');
+  });
+
 });

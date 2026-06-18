@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * generate-avatars.mjs — regenerate illustrated avatar SVGs for VPs + the user.
+ * generate-avatars.mjs — regenerate illustrated avatar SVGs for VPs.
  *
  * Why this exists as a one-shot script rather than a runtime fetch:
  *   • The web client explicitly bans CDN dependencies — `web/index.html`
@@ -19,7 +19,7 @@
  *
  * Style choice: DiceBear `personas` — illustrated head-and-shoulders, the
  * most "Crew / IM thread" looking style in the collection. Seed = vpId
- * (or `yeaft-user` for the human) keeps output stable across runs.
+ * keeps output stable across runs.
  *
  * Licensing: DiceBear core is MIT, the `personas` style is licensed CC-BY 4.0
  * by the upstream author Draftbit. Attribution lives in
@@ -83,9 +83,6 @@ const ENTRIES = [
   { id: 'einstein' },
   { id: 'kubrick' },
   { id: 'miyazaki' },
-  // Single human user avatar — the web app is single-user per session,
-  // so one stable image covers every "you" surface.
-  { id: 'user', seed: 'yeaft-user' },
 ];
 
 let count = 0;

@@ -190,12 +190,11 @@ for (const file of filesToGzip) {
 // flips the static root to `web/dist/` so anything outside the bundles
 // has to be explicitly mirrored or it 404s in production.
 //
-// `web/assets/` currently holds the 13 illustrated avatar SVGs referenced
-// by VpAvatar.js / UserAvatar.js. Their `@error` handlers fall back to
-// the letter render, so a missing copy fails silently — every avatar in
-// prod would look like dev's letter fallback with no warning. The mirror
-// step plus the prod-build regression test below keep that quiet failure
-// from shipping.
+// `web/assets/` currently holds illustrated VP avatar SVGs referenced by
+// VpAvatar.js. Its `@error` handler falls back to the letter render, so a
+// missing copy fails silently — every VP avatar in prod would look like dev's
+// letter fallback with no warning. The mirror step plus the prod-build
+// regression test below keep that quiet failure from shipping.
 console.log('6. Copying static assets...');
 const assetsSrc = join(__dirname, 'assets');
 if (existsSync(assetsSrc)) {
