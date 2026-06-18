@@ -43,10 +43,12 @@ describe('LlmTab editable model refs', () => {
     expect(computed.call(ctx)).toContain('github-copilot/gpt-5-mini');
   });
 
-  it('hides custom provider protocol, base URL, key, and model fields for managed Copilot', () => {
+  it('hides custom provider fields for managed Copilot but keeps custom providers key-only', () => {
     expect(LlmTab.template).toContain('v-if="!isManagedProvider(provider)" class="llm-field llm-field-protocol"');
     expect(LlmTab.template).toContain('v-if="!isManagedProvider(provider)" class="llm-field"');
     expect(LlmTab.template).toContain('settings.llm.managedCopilotDesc');
+    expect(LlmTab.template).not.toContain('settings.llm.autoAuthGithubCopilot');
+    expect(LlmTab.template).not.toContain('toggleAutoAuth');
   });
 
   it('saves managed Copilot as minimal config without protocol, baseUrl, or models', () => {

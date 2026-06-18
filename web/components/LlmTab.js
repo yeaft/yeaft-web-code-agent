@@ -153,16 +153,7 @@ export default {
 
             <div v-if="!isManagedProvider(provider)" class="llm-field">
               <label class="llm-field-label">{{ $t('settings.llm.apiKey') }}</label>
-              <label class="llm-auto-auth-toggle">
-                <input type="checkbox"
-                  :checked="provider.credentialProvider === 'github-copilot'"
-                  @change="toggleAutoAuth(idx, $event)" />
-                <span>{{ $t('settings.llm.autoAuthGithubCopilot') }}</span>
-              </label>
-              <div v-if="provider.credentialProvider === 'github-copilot'" class="sp-desc llm-auto-auth-hint">
-                {{ $t('settings.llm.autoAuthGithubCopilotHint') }}
-              </div>
-              <div v-else class="llm-secret-input">
+              <div class="llm-secret-input">
                 <input :type="showApiKey[idx] ? 'text' : 'password'" class="sp-input" v-model="provider.apiKey"
                   :placeholder="$t('settings.llm.apiKeyPlaceholder')" @input="markDirty" />
                 <button class="sp-icon-btn llm-eye-btn" @click="toggleApiKeyVisibility(idx)">
@@ -630,27 +621,6 @@ export default {
 
     toggleApiKeyVisibility(idx) {
       this.showApiKey = { ...this.showApiKey, [idx]: !this.showApiKey[idx] };
-    },
-
-    // Per-provider opt-in for the github-copilot credential provider.
-    // When on, the apiKey field is hidden and the agent resolves a live
-    // token at request time from env / gh CLI / persisted device-flow token.
-    toggleAutoAuth(idx, event) {
-      const on = !!event.target.checked;
-      const row = this.editableProviders[idx];
-      row.credentialProvider = on ? 'github-copilot' : null;
-      if (on) {
-        // Stash the previously-typed apiKey on the local row so a user who
-        // toggles on then off doesn't lose their static key. Cleared at
-        // save time (saveConfig forces apiKey='' when credentialProvider
-        // is set, so what gets persisted is still the regression-safe shape).
-        if (row.apiKey) row._stashedApiKey = row.apiKey;
-        row.apiKey = '';
-      } else if (row._stashedApiKey) {
-        row.apiKey = row._stashedApiKey;
-        row._stashedApiKey = '';
-      }
-      this.markDirty();
     },
 
     toggleDropdown(name) {
