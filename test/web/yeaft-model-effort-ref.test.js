@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { modelOptionMatchesRef, modelOptionRef, resolveSessionModelEffort, resolveSessionModelRef } from '../../web/utils/modelRefs.js';
+import { getDefaultModelEffort, modelOptionMatchesRef, modelOptionRef, resolveSessionModelEffort, resolveSessionModelRef } from '../../web/utils/modelRefs.js';
 
 describe('Yeaft model effort provider-qualified refs', () => {
   it('matches topbar model metadata by explicit ref or provider/id pair', () => {
@@ -39,29 +39,36 @@ describe('Yeaft model effort provider-qualified refs', () => {
 });
 
 describe('Yeaft model selector popover contract', () => {
-  it('keeps model choice pending until Apply and exposes Cancel', async () => {
+  it('applies model choice immediately without Apply or Cancel actions', async () => {
     const { readFileSync } = await import('fs');
     const source = readFileSync(new URL('../../web/components/YeaftPage.js', import.meta.url), 'utf8');
 
-    expect(source).toContain('@click="selectPendingModel(modelOptionRef(m))"');
-    expect(source).toContain('@click="selectPendingEffort(effort)"');
-    expect(source).toContain('@click="applyModelSelection"');
-    expect(source).toContain('@click="cancelModelSelection"');
+    expect(source).toContain('@click="selectModel(modelOptionRef(m))"');
+    expect(source).toContain('@click="selectEffort(effort)"');
     expect(source).toContain('yeaft-model-option-main');
     expect(source).toContain('yeaft-model-option-meta');
-    expect(source).not.toContain('@click="selectModel(modelOptionRef(m))"');
-    expect(source).not.toContain('@click="selectEffort(effort)"');
+    expect(source).not.toContain('selectPendingModel');
+    expect(source).not.toContain('selectPendingEffort');
+    expect(source).not.toContain('applyModelSelection');
+    expect(source).not.toContain('cancelModelSelection');
   });
 
-  it('uses a vertical mobile layout instead of a side-by-side effort panel', async () => {
+  it('uses a fixed bottom controls layout with only the model list scrolling', async () => {
     const { readFileSync } = await import('fs');
     const css = readFileSync(new URL('../../web/styles/yeaft.css', import.meta.url), 'utf8');
 
     expect(css).toContain('.yeaft-model-selector-body {\n  display: flex;\n  flex-direction: column;');
-    expect(css).toContain('@media (max-width: 640px)');
-    expect(css).toContain('.yeaft-topbar-model-dropdown {\n    position: fixed;');
-    expect(css).toContain('max-height: min(72dvh, 560px);');
-    expect(css).toContain('.yeaft-model-actions {\n    position: sticky;');
+    expect(css).toContain('.yeaft-model-list {\n  min-width: 0;\n  max-height: 220px;\n  overflow-y: auto;');
+    expect(css).toContain('.yeaft-model-fixed-controls {\n  flex-shrink: 0;');
+    expect(css).toContain('.yeaft-model-dropdown {\n  background: var(--bg-main);');
+    expect(css).toContain('overflow: hidden;');
     expect(css).not.toContain('grid-template-columns: minmax(0, 1fr) 180px;');
+  });
+
+  it('defaults reasoning effort to the second-highest option', () => {
+    expect(getDefaultModelEffort(['minimal', 'low', 'medium', 'high'])).toBe('medium');
+    expect(getDefaultModelEffort(['low', 'medium', 'high'])).toBe('medium');
+    expect(getDefaultModelEffort(['low', 'high'])).toBe('low');
+    expect(getDefaultModelEffort(['low', 'medium', 'high', 'xhigh'])).toBe('high');
   });
 });

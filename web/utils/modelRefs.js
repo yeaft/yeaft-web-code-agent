@@ -18,6 +18,17 @@ export function resolveSessionModelRef(session, fallbackModel = '') {
   return typeof fallbackModel === 'string' && fallbackModel.trim() ? fallbackModel.trim() : '';
 }
 
+export function getDefaultModelEffort(options) {
+  if (!Array.isArray(options)) return '';
+  const values = options
+    .filter(value => typeof value === 'string')
+    .map(value => value.trim())
+    .filter(Boolean);
+  if (!values.length) return '';
+  if (values.length === 1) return values[0];
+  return values[values.length - 2];
+}
+
 export function resolveSessionModelEffort(session, fallbackEffort = '') {
   const sessionEffort = session?.config?.modelEffort;
   if (typeof sessionEffort === 'string' && sessionEffort.trim()) return sessionEffort.trim();
