@@ -52,6 +52,24 @@ describe('yeaft-agent local LLM config helpers', () => {
     expect(result.provider.models).toBeUndefined();
   });
 
+  it('clears stale fast model when GitHub Copilot is used without --fast', async () => {
+    const result = await useGitHubCopilot({
+      primaryModel: 'my-proxy/claude-sonnet-4',
+      fastModel: 'my-proxy/claude-haiku-3',
+    }, {
+      model: 'gpt-5.5',
+      getTokenFn: async () => ({ token: 'copilot-token' }),
+      fetchFn: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ data: [{ id: 'gpt-5.5' }] }),
+      }),
+    });
+
+    expect(result.config.primaryModel).toBe('github-copilot/gpt-5.5');
+    expect(result.config.fastModel).toBeUndefined();
+  });
+
   it('rejects unknown GitHub Copilot model unless explicitly allowed', async () => {
     const discovery = {
       getTokenFn: async () => ({ token: 'copilot-token' }),

@@ -225,6 +225,7 @@ export async function useGitHubCopilot(config, options = {}) {
   next.providers = providers;
   next.primaryModel = `${provider.name}/${primaryModel}`;
   if (fastModel) next.fastModel = `${provider.name}/${fastModel}`;
+  else delete next.fastModel;
 
   return { config: next, provider, discovery };
 }
