@@ -15,6 +15,7 @@ import {
   LLMContextError,
   LLMServerError,
   LLMAbortError,
+  readStreamChunkWithIdleTimeout,
   redactRawRequest,
   safeHeaders,
 } from './adapter.js';
@@ -291,7 +292,7 @@ export class AnthropicAdapter extends LLMAdapter {
 
     try {
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value } = await readStreamChunkWithIdleTimeout(reader, { signal, providerLabel: 'Anthropic' });
         if (done) break;
 
         const chunkText = decoder.decode(value, { stream: true });
@@ -436,6 +437,8 @@ export class AnthropicAdapter extends LLMAdapter {
           }
         }
       }
+    } catch (err) {
+      throw classifyFetchError(err, { providerLabel: 'Anthropic' });
     } finally {
       reader.releaseLock();
       // Emit raw exchange after stream completes (or errors). Body is the

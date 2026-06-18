@@ -100,11 +100,86 @@ export class LLMServerError extends Error {
   }
 }
 
+/** Streaming response went idle after the server accepted the request. Retryable. */
+export class LLMStreamIdleTimeoutError extends LLMServerError {
+  constructor(message, idleMs) {
+    super(message, 0);
+    this.name = 'LLMStreamIdleTimeoutError';
+    this.idleMs = idleMs;
+  }
+}
+
 /** Abort error — signal was aborted. */
 export class LLMAbortError extends Error {
   constructor() {
     super('Request aborted');
     this.name = 'LLMAbortError';
+  }
+}
+
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 110_000;
+
+/**
+ * Milliseconds to wait for the next SSE chunk before treating a stream as
+ * stalled. A value <= 0 disables the guard. Kept env-configurable for local
+ * tests and emergency tuning without editing runtime config.
+ *
+ * @returns {number}
+ */
+export function streamIdleTimeoutMs() {
+  const raw = Number(process.env.YEAFT_LLM_STREAM_IDLE_TIMEOUT_MS);
+  if (Number.isFinite(raw)) return Math.max(0, Math.floor(raw));
+  return DEFAULT_STREAM_IDLE_TIMEOUT_MS;
+}
+
+/**
+ * Read one chunk from a Fetch stream with a silence timeout. This is not a
+ * total request deadline: every received chunk gets a fresh budget. A caller
+ * abort still wins and is classified as LLMAbortError; only an idle stream is
+ * converted into a retryable server error.
+ *
+ * @param {ReadableStreamDefaultReader<Uint8Array>} reader
+ * @param {{ signal?: AbortSignal, idleMs?: number, providerLabel?: string }} [opts]
+ * @returns {Promise<ReadableStreamReadResult<Uint8Array>>}
+ */
+export async function readStreamChunkWithIdleTimeout(reader, opts = {}) {
+  const idleMs = Number.isFinite(opts.idleMs) ? Math.max(0, Math.floor(opts.idleMs)) : streamIdleTimeoutMs();
+  if (idleMs <= 0) return reader.read();
+  if (opts.signal?.aborted) throw new LLMAbortError();
+
+  let timer = null;
+  let abortListener = null;
+  let settled = false;
+  const clear = () => {
+    settled = true;
+    if (timer) clearTimeout(timer);
+    if (opts.signal && abortListener) opts.signal.removeEventListener('abort', abortListener);
+  };
+  try {
+    return await Promise.race([
+      reader.read().finally(clear),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          if (settled) return;
+          const err = new LLMStreamIdleTimeoutError(
+            `${opts.providerLabel || 'LLM'} stream idle timeout after ${idleMs}ms`,
+            idleMs,
+          );
+          try { Promise.resolve(reader.cancel(err)).catch(() => {}); } catch { /* best-effort: reject below */ }
+          reject(err);
+        }, idleMs);
+        if (timer && typeof timer.unref === 'function') timer.unref();
+        if (opts.signal) {
+          abortListener = () => {
+            if (settled) return;
+            reject(new LLMAbortError());
+          };
+          opts.signal.addEventListener('abort', abortListener, { once: true });
+        }
+      }),
+    ]);
+  } finally {
+    clear();
   }
 }
 
@@ -191,6 +266,7 @@ export function classifyFetchError(err, opts = {}) {
     || err instanceof LLMAuthError
     || err instanceof LLMContextError
     || err instanceof LLMServerError
+    || err instanceof LLMStreamIdleTimeoutError
     || err instanceof LLMAbortError) {
     return err;
   }

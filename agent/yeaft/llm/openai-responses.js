@@ -34,6 +34,7 @@ import {
   LLMAbortError,
   classifyFetchError,
   retryAfterFromResponse,
+  readStreamChunkWithIdleTimeout,
   redactRawRequest,
   safeHeaders,
 } from './adapter.js';
@@ -332,7 +333,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
 
     try {
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value } = await readStreamChunkWithIdleTimeout(reader, { signal, providerLabel: 'OpenAI' });
         if (done) break;
         const chunkText = decoder.decode(value, { stream: true });
         buffer += chunkText;
@@ -452,7 +453,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       }
     } catch (err) {
       if (err?.name === 'AbortError') throw new LLMAbortError();
-      throw err;
+      throw classifyFetchError(err, { providerLabel: 'OpenAI' });
     } finally {
       try { reader.releaseLock(); } catch { /* noop */ }
       // Emit raw exchange after stream completes (or errors). Body is the
