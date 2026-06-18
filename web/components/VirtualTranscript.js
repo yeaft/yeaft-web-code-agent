@@ -16,6 +16,7 @@ export default {
     itemGap: { type: Number, default: virtualTranscriptDefaults.itemGap },
     estimateHeight: { type: Function, default: estimateVirtualItemHeight },
   },
+  emits: ['scroll-state'],
   template: `
     <div class="virtual-transcript" ref="rootRef">
       <div
@@ -44,7 +45,7 @@ export default {
       ></div>
     </div>
   `,
-  setup(props) {
+  setup(props, { emit }) {
     const rootRef = Vue.ref(null);
     const scrollEl = Vue.ref(null);
     const scrollTop = Vue.ref(0);
@@ -68,11 +69,21 @@ export default {
     const topSpacerHeight = Vue.computed(() => virtualWindow.value.topSpacerHeight);
     const bottomSpacerHeight = Vue.computed(() => virtualWindow.value.bottomSpacerHeight);
 
+    function emitScrollState(el) {
+      if (!el) return;
+      emit('scroll-state', {
+        scrollTop: el.scrollTop || 0,
+        scrollHeight: el.scrollHeight || 0,
+        clientHeight: el.clientHeight || 0,
+      });
+    }
+
     function readScrollState() {
       const el = scrollEl.value;
       if (!el) return;
       scrollTop.value = Math.max(0, el.scrollTop || 0);
       viewportHeight.value = Math.max(1, el.clientHeight || virtualTranscriptDefaults.viewportHeight);
+      emitScrollState(el);
     }
 
     function scheduleReadScrollState() {
@@ -112,6 +123,7 @@ export default {
         if (changedBeforeWindow && Math.abs(delta) > 0) {
           scroller.scrollTop += delta;
           scrollTop.value = scroller.scrollTop;
+          emitScrollState(scroller);
         } else if (wasNearBottom) {
           Vue.nextTick(() => {
             scroller.scrollTop = scroller.scrollHeight;

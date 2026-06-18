@@ -127,6 +127,7 @@ export default {
           :estimate-height="estimateMessageBlockHeight"
           :overscan="1"
           :item-gap="18"
+          @scroll-state="onVirtualTranscriptScrollState"
         >
           <template #default="{ item: block }">
           <section
@@ -1412,6 +1413,10 @@ export default {
       return scrollHeight - scrollTop - clientHeight <= SCROLL_THRESHOLD;
     };
 
+    const onVirtualTranscriptScrollState = ({ scrollTop, scrollHeight, clientHeight }) => {
+      isAtBottom.value = scrollHeight - scrollTop - clientHeight <= SCROLL_THRESHOLD;
+    };
+
     const preserveScrollAnchorDuringLoad = (loadFn, loadingRef) => {
       if (!containerRef.value) {
         loadFn();
@@ -1626,6 +1631,7 @@ export default {
       useImStyleForUser,
       onOpenGroupSettings,
       onClickLoadMore,
+      onVirtualTranscriptScrollState,
       isAtBottom,
       scrollToLatest,
     };
