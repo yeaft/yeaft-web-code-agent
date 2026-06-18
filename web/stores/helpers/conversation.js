@@ -197,6 +197,7 @@ export function selectConversation(store, conversationId, agentId) {
     } else {
       // No cache, or cache is all unflushed partials → cold-load 5 turns.
       store.messagesMap[conversationId] = [];
+      setSessionLoading(store, true, t('chat.session.loadingHistory'));
       store.sendWsMessage({
         type: 'sync_messages',
         conversationId,

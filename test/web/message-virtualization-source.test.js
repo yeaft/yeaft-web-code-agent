@@ -11,6 +11,8 @@ describe('MessageList virtualization wiring', () => {
     expect(source).toContain('<VirtualTranscript');
     expect(source).toContain(':items="messageBlocks"');
     expect(source).toContain('@scroll-state="onVirtualTranscriptScrollState"');
+    expect(source).toContain('showInitialMessagesLoading');
+    expect(source).toContain('initial-message-loading');
     expect(source).toContain('the following VP replies into one virtual item');
     expect(source).toContain('v-if="block.type === \'message-block\'"');
     expect(source).not.toContain('<template v-for="block in messageBlocks"');
@@ -34,7 +36,8 @@ describe('MessageList virtualization wiring', () => {
     expect(source).toContain('const onClickLoadMore = () => {');
     expect(source.match(/const onClickLoadMore = \(\) => \{/g)).toHaveLength(1);
     expect(source).toContain('onClickLoadMore,');
-    expect(source).toContain('v-if="store.sessionLoading"');
+    expect(source).toContain('v-if="showSessionLoadingOverlay"');
+    expect(source).toContain('!!store.sessionLoading && !showInitialMessagesLoading.value');
     expect(source).not.toContain('v-if="sessionLoading"');
   });
 

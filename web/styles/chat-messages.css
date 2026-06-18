@@ -1050,6 +1050,31 @@
   color: var(--text-primary);
 }
 
+/* Initial message history loading */
+.initial-message-loading {
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  color: var(--text-muted);
+}
+
+.initial-message-loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--border-color);
+  border-top-color: var(--text-secondary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.initial-message-loading-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
 /* Load More Messages */
 .loading-more, .load-more-hint {
   text-align: center;
