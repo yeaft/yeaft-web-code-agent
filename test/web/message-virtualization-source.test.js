@@ -37,4 +37,16 @@ describe('MessageList virtualization wiring', () => {
     expect(source).toContain('v-if="store.sessionLoading"');
     expect(source).not.toContain('v-if="sessionLoading"');
   });
+
+  it('auto-loads more messages from the virtual scroll near-top event', () => {
+    const source = read('components/MessageList.js');
+
+    expect(source).toContain('const LOAD_MORE_TOP_THRESHOLD = 100;');
+    expect(source).toContain('const maybeLoadMoreNearTop = (scrollTop) => {');
+    expect(source).toContain('if (scrollTop > LOAD_MORE_TOP_THRESHOLD) {');
+    expect(source).toContain('onClickLoadMore();');
+    expect(source).toContain('maybeLoadMoreNearTop(scrollTop || 0);');
+    expect(source).toContain('if (containerRef.value) maybeLoadMoreNearTop(containerRef.value.scrollTop || 0);');
+  });
+
 });

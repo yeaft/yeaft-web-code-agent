@@ -524,6 +524,8 @@ export default {
       historyTools,
       toolSummaryLabel,
       toggleExpand,
+      toolExpandedValue,
+      updateToolExpanded,
       renderedContent,
       copyContent,
       copyFullResponse,
