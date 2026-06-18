@@ -120,7 +120,11 @@ export default {
                store.yeaftHasMoreHistory).
              onClickLoadMore branches by currentView so a single visual
              affordance can drive either mode without leaking state. -->
-        <div v-if="(store.loadingMoreMessages && store.currentView !== 'yeaft') || store.yeaftLoadingMoreHistory" class="loading-more">{{ $t('message.loadingMore') }}</div>
+        <div v-if="showInitialMessagesLoading" class="initial-message-loading" role="status" aria-live="polite">
+          <div class="initial-message-loading-spinner" aria-hidden="true"></div>
+          <div class="initial-message-loading-text">{{ initialMessagesLoadingText || $t('chat.session.loadingHistory') }}</div>
+        </div>
+        <div v-else-if="(store.loadingMoreMessages && store.currentView !== 'yeaft') || store.yeaftLoadingMoreHistory" class="loading-more">{{ $t('message.loadingMore') }}</div>
         <div v-else-if="(store.hasMoreMessages && store.currentView !== 'yeaft') || store.yeaftHasMoreHistory || store.hasHiddenYeaftMessages" class="load-more-hint" @click="onClickLoadMore">{{ $t('message.loadMore') }}</div>
         <VirtualTranscript
           :items="messageBlocks"
@@ -1027,6 +1031,14 @@ export default {
     const hasStreamingMessage = Vue.computed(() => {
       return store.messages.some(m => m.isStreaming);
     });
+
+    const showInitialMessagesLoading = Vue.computed(() => {
+      if (!store.currentConversation || messageBlocks.value.length > 0) return false;
+      if (store.currentView === 'yeaft') return !!store.yeaftLoadingMoreHistory;
+      return !!store.sessionLoading;
+    });
+
+    const initialMessagesLoadingText = Vue.computed(() => store.sessionLoadingText || '');
 
     // Show typing dots when AI is processing but hasn't started streaming text yet
     const showTypingDots = Vue.computed(() => {
