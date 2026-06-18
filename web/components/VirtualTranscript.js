@@ -53,8 +53,10 @@ export default {
     const heightCache = Vue.reactive({});
     const itemIndexByKey = new Map();
     const itemEls = new Map();
+    const pendingMeasurements = new Map();
     let resizeObserver = null;
     let rafId = null;
+    let measureRafId = null;
 
     const virtualWindow = Vue.computed(() => computeVirtualWindow(props.items, {
       scrollTop: scrollTop.value,
@@ -104,6 +106,20 @@ export default {
       });
     }
 
+    function scheduleMeasureElement(key, index, el) {
+      if (!key || !el) return;
+      pendingMeasurements.set(key, { index, el });
+      if (measureRafId) return;
+      measureRafId = requestAnimationFrame(() => {
+        measureRafId = null;
+        const entries = Array.from(pendingMeasurements.entries());
+        pendingMeasurements.clear();
+        for (const [entryKey, entry] of entries) {
+          measureElement(entryKey, entry.index, entry.el);
+        }
+      });
+    }
+
     function measureElement(key, index, el) {
       if (!el) return;
       const nextHeight = Math.ceil(el.getBoundingClientRect?.().height || el.offsetHeight || 0);
@@ -138,7 +154,7 @@ export default {
       if (!el) return;
       itemEls.set(key, el);
       if (resizeObserver) resizeObserver.observe(el);
-      Vue.nextTick(() => measureElement(key, index, el));
+      Vue.nextTick(() => scheduleMeasureElement(key, index, el));
     }
 
     function setItemRef(key, index, el) {
@@ -173,7 +189,7 @@ export default {
           for (const entry of entries) {
             const key = entry.target?.dataset?.virtualId;
             const index = Number(entry.target?.dataset?.virtualIndex);
-            if (key) measureElement(key, index, entry.target);
+            if (key) scheduleMeasureElement(key, index, entry.target);
           }
         });
         for (const [key, el] of itemEls.entries()) {
@@ -188,6 +204,8 @@ export default {
       window.removeEventListener('resize', scheduleReadScrollState);
       if (resizeObserver) resizeObserver.disconnect();
       if (rafId) cancelAnimationFrame(rafId);
+      if (measureRafId) cancelAnimationFrame(measureRafId);
+      pendingMeasurements.clear();
     });
 
     return {

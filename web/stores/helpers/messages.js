@@ -148,8 +148,14 @@ function mergeAssistantTextByStableId(store, conversationId, opts, text) {
   if (opts.sessionId && !existing.sessionId) existing.sessionId = opts.sessionId;
   if (opts.vpId && !existing.vpId) existing.vpId = opts.vpId;
   if (opts.turnId && !existing.turnId) existing.turnId = opts.turnId;
-  if (!existing.content || (typeof existing.content === 'string' && text.length > existing.content.length)) {
+  if (!existing.content) {
     existing.content = text;
+  } else if (typeof existing.content === 'string') {
+    if (text.startsWith(existing.content)) {
+      existing.content = text;
+    } else if (!existing.content.endsWith(text)) {
+      existing.content += text;
+    }
   }
   stampSpeakerOnVpMessage(store, conversationId, existing);
   return true;

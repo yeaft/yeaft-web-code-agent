@@ -49,4 +49,14 @@ describe('MessageList virtualization wiring', () => {
     expect(source).toContain('if (containerRef.value) maybeLoadMoreNearTop(containerRef.value.scrollTop || 0);');
   });
 
+  it('defers ResizeObserver measurements out of the observer callback', () => {
+    const source = read('components/VirtualTranscript.js');
+
+    expect(source).toContain('const pendingMeasurements = new Map();');
+    expect(source).toContain('function scheduleMeasureElement(key, index, el) {');
+    expect(source).toContain('requestAnimationFrame(() => {');
+    expect(source).toContain('if (key) scheduleMeasureElement(key, index, entry.target);');
+    expect(source).not.toContain('if (key) measureElement(key, index, entry.target);');
+  });
+
 });
