@@ -36,7 +36,7 @@ describe('TaskManager', () => {
     if (dir) rmSync(dir, { recursive: true, force: true });
   });
 
-  it('runs shell tasks in the background, persists logs, and emits lifecycle messages', async () => {
+  it('runs shell tasks in the background, persists logs, and emits task events without chat messages', async () => {
     const events = [];
     const manager = new TaskManager({
       yeaftDir: dir,
@@ -64,12 +64,7 @@ describe('TaskManager', () => {
 
     const log = manager.readTaskLog('session_test', task.id, { tail: true });
     expect(log.text).toContain('task-ok');
-    expect(messages.some(m => m.content.includes('[Task started]'))).toBe(true);
-    expect(messages.some(m => m.content.includes('[Task finished]'))).toBe(true);
-    expect(messages.every(m => !m.internal && !m.systemOnly && !m.systemOnlyMessage)).toBe(true);
-    expect(messages.every(m => m.eventType === 'task_lifecycle')).toBe(true);
-    expect(messages.every(m => m.taskId === task.id)).toBe(true);
-    expect(messages.at(-1)?.taskStatus).toBe('succeeded');
+    expect(messages).toHaveLength(0);
     expect(events.some(e => e.type === 'yeaft_task_event' && e.event === 'started')).toBe(true);
     expect(events.some(e => e.type === 'yeaft_task_event' && e.event === 'completed')).toBe(true);
   });
@@ -96,7 +91,7 @@ describe('TaskManager', () => {
     expect(restarted.listActiveTasks('session_restart')).toHaveLength(0);
     const restored = restarted.getTask('session_restart', task.id);
     expect(restored.status).toBe('orphaned');
-    expect(messages.some(m => m.content.includes('Agent restarted while task was running'))).toBe(true);
+    expect(messages).toHaveLength(0);
   });
 
   it('builds Windows process-tree kill arguments', () => {

@@ -40,33 +40,10 @@ function publicSnapshot(task) {
   };
 }
 
-function formatTaskMessage(kind, task, extra = {}) {
-  const lines = [];
-  const label = kind === 'started' ? 'Task started' : 'Task finished';
-  lines.push(`[${label}]`);
-  lines.push(`taskId: ${task.id}`);
-  lines.push(`kind: ${task.kind}`);
-  lines.push(`status: ${task.status}`);
-  lines.push(`ownerVpId: ${task.ownerVpId || 'unknown'}`);
-  lines.push(`title: ${task.title}`);
-  if (task.runtime?.command) lines.push(`command: ${task.runtime.command}`);
-  if (task.runtime?.cwd) lines.push(`cwd: ${task.runtime.cwd}`);
-  if (task.log?.path) lines.push(`log: ${task.log.path}`);
-  if (extra.exitCode != null) lines.push(`exitCode: ${extra.exitCode}`);
-  if (extra.signal) lines.push(`signal: ${extra.signal}`);
-  if (extra.summary) lines.push(`summary: ${extra.summary}`);
-  if (extra.logTail) {
-    lines.push('logTail:');
-    lines.push(extra.logTail.trimEnd());
-  }
-  return lines.join('\n');
-}
-
 export class TaskManager {
-  constructor({ yeaftDir, conversationStore = null, onEvent = null, runtimePlatform = null } = {}) {
+  constructor({ yeaftDir, onEvent = null, runtimePlatform = null } = {}) {
     if (!yeaftDir) throw new Error('TaskManager requires yeaftDir');
     this.store = new TaskStore({ yeaftDir });
-    this.conversationStore = conversationStore;
     this.onEvent = typeof onEvent === 'function' ? onEvent : null;
     this.runtimePlatform = runtimePlatform || getRuntimePlatformInfo();
     this.active = new Map();
@@ -87,24 +64,6 @@ export class TaskManager {
     try { this.onEvent?.(payload); } catch { /* event sinks must not break tasks */ }
   }
 
-  #persistLifecycleMessage(task, kind, extra = {}) {
-    if (!this.conversationStore || !task?.sessionId) return;
-    try {
-      this.conversationStore.append({
-        role: 'assistant',
-        content: formatTaskMessage(kind, task, extra),
-        sessionId: task.sessionId,
-        threadId: task.source?.threadId || 'main',
-        ...(task.ownerVpId ? { speakerVpId: task.ownerVpId } : {}),
-        eventType: 'task_lifecycle',
-        taskId: task.id,
-        taskStatus: task.status,
-      });
-    } catch {
-      // Conversation persistence must not kill the background process.
-    }
-  }
-
   #loadPersistedRunningTasks() {
     for (const task of this.store.loadActiveTasks()) {
       const orphaned = {
@@ -119,7 +78,6 @@ export class TaskManager {
       };
       this.store.writeTask(orphaned);
       this.store.appendEvent(orphaned.sessionId, { event: 'orphaned', taskId: orphaned.id });
-      this.#persistLifecycleMessage(orphaned, 'finished', { summary: orphaned.result.error });
       this.#emit('completed', orphaned);
     }
   }
@@ -150,7 +108,6 @@ export class TaskManager {
     this.store.writeTask(task);
     this.store.appendEvent(task.sessionId, { event: 'started', taskId: task.id, kind: task.kind });
     this.active.set(this.#key(task.sessionId, task.id), task);
-    this.#persistLifecycleMessage(task, 'started');
     this.#emit('started', task);
     return publicSnapshot(task);
   }
@@ -191,7 +148,6 @@ export class TaskManager {
     this.store.writeTask(task);
     this.store.appendEvent(task.sessionId, { event: 'started', taskId: task.id, kind: task.kind });
     this.active.set(this.#key(task.sessionId, task.id), task);
-    this.#persistLifecycleMessage(task, 'started');
     this.#emit('started', task);
 
     const runtime = runtimePlatform || this.runtimePlatform;
@@ -241,12 +197,6 @@ export class TaskManager {
     this.store.appendEvent(sessionId, { event: 'completed', taskId, status: task.status, exitCode, signal, error });
     this.active.delete(key);
     this.processes.delete(key);
-    this.#persistLifecycleMessage(task, 'finished', {
-      exitCode,
-      signal,
-      summary: error || `Task ${task.status}`,
-      logTail: tail.text,
-    });
     this.#emit('completed', task);
     return publicSnapshot(task);
   }
