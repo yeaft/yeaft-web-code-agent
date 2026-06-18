@@ -1735,6 +1735,29 @@
 }
 
 /* Messages */
+.virtual-transcript {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.virtual-transcript-spacer {
+  flex: 0 0 auto;
+}
+
+.virtual-transcript-window {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.virtual-transcript-item {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  contain: layout paint;
+}
+
 .message-block {
   display: flex;
   flex-direction: column;

@@ -6,7 +6,6 @@ import { getTodoDisplayState } from '../utils/todo-display-state.js';
 export default {
   name: 'AssistantTurn',
   components: { ToolLine, AskCard, VpSpeakerHeader },
-  emits: ['open-vp-detail'],
   props: {
     turn: {
       type: Object,
@@ -24,8 +23,21 @@ export default {
     hideSpeakerHeader: {
       type: Boolean,
       default: false
+    },
+    actionsExpanded: {
+      type: Boolean,
+      default: null
+    },
+    toolExpandStates: {
+      type: Object,
+      default: null
+    },
+    toolStatePrefix: {
+      type: String,
+      default: ''
     }
   },
+  emits: ['open-vp-detail', 'update-actions-expanded', 'update-tool-expanded'],
   template: `
     <div class="assistant-turn" ref="turnRef" :class="{ streaming: turn.isStreaming, 'has-vp-speaker': !!turn.speakerVpId }">
       <!-- 0. task-334-ui-b: VP speaker header — only when a speakerVpId is
@@ -80,8 +92,15 @@ export default {
         </div>
         <div v-if="expanded" class="turn-actions-history">
           <template v-for="(tool, i) in historyTools" :key="i">
-            <ToolLine :tool-name="tool.toolName" :tool-input="tool.toolInput"
-                      :tool-result="tool.toolResult" :has-result="!!tool.hasResult" :start-time="tool.startTime" />
+            <ToolLine
+              :tool-name="tool.toolName"
+              :tool-input="tool.toolInput"
+              :tool-result="tool.toolResult"
+              :has-result="!!tool.hasResult"
+              :start-time="tool.startTime"
+              :expanded="toolExpandedValue(tool, i, 'history')"
+              @update:expanded="value => updateToolExpanded(tool, i, 'history', value)"
+            />
           </template>
         </div>
         <div v-if="latestTool" class="turn-actions-latest">
@@ -92,8 +111,15 @@ export default {
             </svg>
             <span>{{ turn.toolMsgs.length - 1 }} more</span>
           </button>
-          <ToolLine :tool-name="latestTool.toolName" :tool-input="latestTool.toolInput"
-                    :tool-result="latestTool.toolResult" :has-result="!!latestTool.hasResult" :start-time="latestTool.startTime" />
+          <ToolLine
+            :tool-name="latestTool.toolName"
+            :tool-input="latestTool.toolInput"
+            :tool-result="latestTool.toolResult"
+            :has-result="!!latestTool.hasResult"
+            :start-time="latestTool.startTime"
+            :expanded="toolExpandedValue(latestTool, latestToolIndex, 'latest')"
+            @update:expanded="value => updateToolExpanded(latestTool, latestToolIndex, 'latest', value)"
+          />
         </div>
       </div>
 
@@ -149,11 +175,16 @@ export default {
       </div>
     </div>
   `,
-  setup(props) {
+  setup(props, { emit }) {
     const store = Pinia.useChatStore();
     const copied = Vue.ref(false);
     const fullCopied = Vue.ref(false);
-    const expanded = Vue.ref(false);
+    const internalExpanded = Vue.ref(false);
+    const expanded = Vue.computed(() => props.actionsExpanded === null ? internalExpanded.value : !!props.actionsExpanded);
+    const setExpanded = (value) => {
+      internalExpanded.value = !!value;
+      emit('update-actions-expanded', !!value);
+    };
     const screenshotting = Vue.ref(false);
     const turnRef = Vue.ref(null);
     const t = Vue.inject('t');
@@ -192,7 +223,25 @@ export default {
     // H2.f.6: threadDisplayName computed removed (single-conversation model).
 
     const toggleExpand = () => {
-      expanded.value = !expanded.value;
+      setExpanded(!expanded.value);
+    };
+
+    const toolKey = (tool, index, bucket) => {
+      const prefix = props.toolStatePrefix || props.turn.id || props.turn.turnId || 'assistant-turn';
+      const name = tool?.toolName || 'tool';
+      const start = tool?.startTime || index;
+      return `${prefix}:tool:${bucket}:${index}:${name}:${start}`;
+    };
+
+    const toolExpandedValue = (tool, index, bucket) => {
+      const key = toolKey(tool, index, bucket);
+      return props.toolExpandStates && Object.prototype.hasOwnProperty.call(props.toolExpandStates, key)
+        ? !!props.toolExpandStates[key]
+        : null;
+    };
+
+    const updateToolExpanded = (tool, index, bucket, value) => {
+      emit('update-tool-expanded', { key: toolKey(tool, index, bucket), value: !!value });
     };
 
     // Markdown rendering

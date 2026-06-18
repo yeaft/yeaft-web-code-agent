@@ -6,7 +6,9 @@ import ReflectionCard from './ReflectionCard.js';
 import SubAgentCard from './SubAgentCard.js';
 import SessionAnnouncementBar from './SessionAnnouncementBar.js';
 import UserTurnBlock from './UserTurnBlock.js';
+import VirtualTranscript from './VirtualTranscript.js';
 import { shouldCloseYeaftVpTurn } from '../stores/helpers/yeaft-turn-boundary.js';
+import { estimateVirtualItemHeight } from '../utils/virtual-transcript.js';
 // task-757: appendTypingPlaceholders removed from the pipeline.
 // The standalone typing card it produced (at the bottom of the
 // conversation) showed "[VP] is typing…" in a separate row that
@@ -23,7 +25,7 @@ import { shouldCloseYeaftVpTurn } from '../stores/helpers/yeaft-turn-boundary.js
 
 export default {
   name: 'MessageList',
-  components: { MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, SessionAnnouncementBar, UserTurnBlock },
+  components: { MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, SessionAnnouncementBar, UserTurnBlock, VirtualTranscript },
   template: `
     <main class="chat-container" ref="containerRef">
       <!-- Session Loading Overlay - only covers message area -->
@@ -120,7 +122,13 @@ export default {
              affordance can drive either mode without leaking state. -->
         <div v-if="(store.loadingMoreMessages && store.currentView !== 'yeaft') || store.yeaftLoadingMoreHistory" class="loading-more">{{ $t('message.loadingMore') }}</div>
         <div v-else-if="(store.hasMoreMessages && store.currentView !== 'yeaft') || store.yeaftHasMoreHistory || store.hasHiddenYeaftMessages" class="load-more-hint" @click="onClickLoadMore">{{ $t('message.loadMore') }}</div>
-        <template v-for="block in messageBlocks" :key="block.id">
+        <VirtualTranscript
+          :items="messageBlocks"
+          :estimate-height="estimateMessageBlockHeight"
+          :overscan="1"
+          :item-gap="18"
+        >
+          <template #default="{ item: block }">
           <section
             v-if="block.type === 'message-block'"
             class="message-block"
@@ -154,10 +162,20 @@ export default {
                   v-else-if="item.type === 'assistant-turn' && item.speakerVpId"
                   :turn="item"
                   :now-ms="nowMs"
+                  :expand-state="vpTurnExpandStateFor(item)"
+                  @update-expand-state="state => setVpTurnExpandState(item, state)"
                 />
-                <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" />
+                <AssistantTurn
+                  v-else-if="item.type === 'assistant-turn'"
+                  :turn="item"
+                  :actions-expanded="assistantTurnActionsExpandedFor(item)"
+                  :tool-expand-states="toolExpandStates"
+                  :tool-state-prefix="turnUiKey(item)"
+                  @update-actions-expanded="value => setAssistantTurnActionsExpanded(item, value)"
+                  @update-tool-expanded="setToolExpanded"
+                />
               </div>
-              <!-- feat-6af5f9f1 PR A: ReflectionCard mounts removed from the
+        <!-- feat-6af5f9f1 PR A: ReflectionCard mounts removed from the
                    main message stream. Reflection is an engine-internal context
                    compaction step - surfacing it inline during normal chat is
                    noise. Cards remain in store.yeaftReflectionCards so the
@@ -183,8 +201,18 @@ export default {
                 v-else-if="block.type === 'assistant-turn' && block.speakerVpId"
                 :turn="block"
                 :now-ms="nowMs"
+                :expand-state="vpTurnExpandStateFor(block)"
+                @update-expand-state="state => setVpTurnExpandState(block, state)"
               />
-              <AssistantTurn v-else-if="block.type === 'assistant-turn'" :turn="block" />
+              <AssistantTurn
+                v-else-if="block.type === 'assistant-turn'"
+                :turn="block"
+                :actions-expanded="assistantTurnActionsExpandedFor(block)"
+                :tool-expand-states="toolExpandStates"
+                :tool-state-prefix="turnUiKey(block)"
+                @update-actions-expanded="value => setAssistantTurnActionsExpanded(block, value)"
+                @update-tool-expanded="setToolExpanded"
+              />
             </div>
             <SubAgentCard
               v-for="card in subAgentCardsForRow(block)"
@@ -193,6 +221,7 @@ export default {
             />
           </template>
         </template>
+        </VirtualTranscript>
         <!-- feat-6af5f9f1 PR A: orphan-card flush also removed. Orphans
              still latch in the store; PR B's debug panel surfaces them
              under the matching loop range. -->
@@ -523,6 +552,39 @@ export default {
   setup(_props, ctx) {
     const store = Pinia.useChatStore();
     const containerRef = Vue.ref(null);
+    const vpTurnExpandStates = Vue.reactive({});
+    const assistantTurnActionStates = Vue.reactive({});
+    const toolExpandStates = Vue.reactive({});
+
+    const turnUiKey = (turn) => String(
+      turn?.id
+        || turn?.turnId
+        || turn?.messageId
+        || turn?.atMessageId
+        || turn?.message?.id
+        || 'turn_unknown'
+    );
+    const defaultVpTurnExpandState = (turn) => turn?.isStreaming ? 'streaming' : 'auto-expanded';
+    const vpTurnExpandStateFor = (turn) => vpTurnExpandStates[turnUiKey(turn)] || defaultVpTurnExpandState(turn);
+    const setVpTurnExpandState = (turn, state) => {
+      const key = turnUiKey(turn);
+      if (!key || !state) return;
+      vpTurnExpandStates[key] = state;
+    };
+    const assistantTurnActionsExpandedFor = (turn) => {
+      const key = turnUiKey(turn);
+      return Object.prototype.hasOwnProperty.call(assistantTurnActionStates, key)
+        ? !!assistantTurnActionStates[key]
+        : false;
+    };
+    const setAssistantTurnActionsExpanded = (turn, value) => {
+      assistantTurnActionStates[turnUiKey(turn)] = !!value;
+    };
+    const setToolExpanded = ({ key, value } = {}) => {
+      if (!key) return;
+      toolExpandStates[key] = !!value;
+    };
+    const estimateMessageBlockHeight = (block) => estimateVirtualItemHeight(block);
 
     // Resolve the active group id for the announcement bar. The bar should
     // appear only when the user is on the Yeaft page AND has an active
@@ -844,20 +906,43 @@ export default {
     });
 
     const messageBlocks = Vue.computed(() => {
-      // Yeaft Session message blocks are keyed by VP + message id. Thread is no
-      // longer a UI grouping primitive; Chat mode keeps the flat legacy list.
+      // Chat mode keeps the flat legacy list. Yeaft groups one user row plus
+      // the following VP replies into one virtual item, so virtualization never
+      // shows a reply without the turn context that caused it.
       if (store.currentView !== 'yeaft' || !activeGroupIdForBar.value) return turnGroups.value;
-      return turnGroups.value.map((item, i) => {
-        if (!item || item.type === 'system' || item.type === 'error') return item;
+      const blocks = [];
+      let currentBlock = null;
+      const finishBlock = () => {
+        if (currentBlock) blocks.push(currentBlock);
+        currentBlock = null;
+      };
+
+      turnGroups.value.forEach((item, i) => {
+        if (!item || item.type === 'system' || item.type === 'error') {
+          finishBlock();
+          blocks.push(item);
+          return;
+        }
+
         const meta = messageBlockMetaForItem(item, i);
-        return {
-          type: 'message-block',
-          id: meta.id,
-          vpId: meta.vpId,
-          messageId: meta.messageId,
-          items: [item],
-        };
+        if (item.type === 'user' || !currentBlock) {
+          finishBlock();
+          currentBlock = {
+            type: 'message-block',
+            id: `turn_${meta.messageId}_${i}`,
+            vpId: meta.vpId,
+            messageId: meta.messageId,
+            items: [item],
+          };
+          return;
+        }
+
+        currentBlock.items.push(item);
+        if (!currentBlock.vpId && meta.vpId) currentBlock.vpId = meta.vpId;
       });
+
+      finishBlock();
+      return blocks;
     });
 
     // PR-L: reflection cards grouped by anchor (the message id present at the
@@ -1430,6 +1515,9 @@ export default {
     Vue.watch(
       () => store.currentConversation,
       () => {
+        for (const key of Object.keys(vpTurnExpandStates)) delete vpTurnExpandStates[key];
+        for (const key of Object.keys(assistantTurnActionStates)) delete assistantTurnActionStates[key];
+        for (const key of Object.keys(toolExpandStates)) delete toolExpandStates[key];
         isAtBottom.value = true;
         Vue.nextTick(scrollToBottom);
       }
@@ -1521,6 +1609,14 @@ export default {
       onlineAgents,
       turnGroups,
       messageBlocks,
+      estimateMessageBlockHeight,
+      turnUiKey,
+      vpTurnExpandStateFor,
+      setVpTurnExpandState,
+      assistantTurnActionsExpandedFor,
+      setAssistantTurnActionsExpanded,
+      toolExpandStates,
+      setToolExpanded,
       cardsForRow,
       orphanCards,
       subAgentCardsForRow,

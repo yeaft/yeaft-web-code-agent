@@ -20,8 +20,10 @@ export default {
     toolResult: { default: null },
     hasResult: { type: Boolean, default: false },
     compact: { type: Boolean, default: false },
-    startTime: { type: Number, default: 0 }
+    startTime: { type: Number, default: 0 },
+    expanded: { type: Boolean, default: null }
   },
+  emits: ['update:expanded'],
   template: `
     <div class="crew-msg-tool">
       <div class="tool-line" :class="{ expandable: hasExpandableContent, expanded: isExpanded, completed: hasResult, running: !hasResult }" @click="toggle">
@@ -58,8 +60,13 @@ export default {
       </div>
     </div>
   `,
-  setup(props) {
-    const isExpanded = Vue.ref(props.toolName === 'Edit');
+  setup(props, { emit }) {
+    const internalExpanded = Vue.ref(props.toolName === 'Edit');
+    const isExpanded = Vue.computed(() => props.expanded === null ? internalExpanded.value : !!props.expanded);
+    const setExpanded = (value) => {
+      internalExpanded.value = !!value;
+      emit('update:expanded', !!value);
+    };
 
     const formattedTime = Vue.computed(() => {
       if (!props.startTime) return '';
@@ -104,7 +111,7 @@ export default {
     });
 
     const toggle = () => {
-      if (hasExpandableContent.value) isExpanded.value = !isExpanded.value;
+      if (hasExpandableContent.value) setExpanded(!isExpanded.value);
     };
 
     const middleTruncate = (text, maxLen = 80) => {
