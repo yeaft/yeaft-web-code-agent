@@ -42,11 +42,12 @@ describe('MessageList virtualization wiring', () => {
     const source = read('components/MessageList.js');
 
     expect(source).toContain('const LOAD_MORE_TOP_THRESHOLD = 100;');
-    expect(source).toContain('const maybeLoadMoreNearTop = (scrollTop) => {');
+    expect(source).toContain('const maybeLoadMoreNearTop = (scrollTop, { allowContinuation = false } = {}) => {');
     expect(source).toContain('if (scrollTop > LOAD_MORE_TOP_THRESHOLD) {');
     expect(source).toContain('onClickLoadMore();');
     expect(source).toContain('maybeLoadMoreNearTop(scrollTop || 0);');
-    expect(source).toContain('if (containerRef.value) maybeLoadMoreNearTop(containerRef.value.scrollTop || 0);');
+    expect(source).toContain('const continueLoadMoreIfStillNearTop = (beforeSnapshot) => {');
+    expect(source).toContain('maybeLoadMoreNearTop(containerRef.value.scrollTop || 0, { allowContinuation: true });');
   });
 
   it('defers ResizeObserver measurements out of the observer callback', () => {
@@ -57,6 +58,22 @@ describe('MessageList virtualization wiring', () => {
     expect(source).toContain('requestAnimationFrame(() => {');
     expect(source).toContain('if (key) scheduleMeasureElement(key, index, entry.target);');
     expect(source).not.toContain('if (key) measureElement(key, index, entry.target);');
+  });
+
+
+  it('requires load-more progress before continuing while pinned near top', () => {
+    const source = read('components/MessageList.js');
+
+    expect(source).toContain('const beforeSnapshot = getLoadMoreProgressSnapshot();');
+    expect(source).toContain('if (!hasLoadMoreProgress(beforeSnapshot, afterSnapshot)) return;');
+    expect(source).toContain('continueLoadMoreIfStillNearTop(beforeSnapshot);');
+    expect(source).not.toContain('continueLoadMoreIfStillNearTop();');
+  });
+
+  it('aligns Chat auto load-more guard with the action guard', () => {
+    const source = read('components/MessageList.js');
+
+    expect(source).toContain('return !!store.currentConversation && store.hasMoreMessages && !store.loadingMoreMessages;');
   });
 
 });
