@@ -48,6 +48,20 @@ describe('Yeaft model selector dropdown', () => {
     expect(css).toMatch(/\.yeaft-model-fixed-controls\s*\{[\s\S]*flex-shrink:\s*0;/);
   });
 
+  it('keeps mobile scrolling on the model list only', () => {
+    const css = styleSource();
+    const mobileBlock = css.match(/@media \(max-width: 640px\) \{[\s\S]*?\/\* ── Provider edit/)?.[0] || '';
+    const bodyBlock = mobileBlock.match(/\.yeaft-model-selector-body\s*\{[\s\S]*?\}/)?.[0] || '';
+    const listBlock = mobileBlock.match(/\.yeaft-model-list\s*\{[\s\S]*?\}/)?.[0] || '';
+
+    expect(mobileBlock).toContain('.yeaft-model-selector-body');
+    expect(bodyBlock).toContain('overflow: hidden;');
+    expect(bodyBlock).not.toContain('overflow-y: auto;');
+    expect(listBlock).toContain('flex: 1 1 auto;');
+    expect(listBlock).toContain('min-height: 0;');
+    expect(listBlock).toContain('overflow-y: auto;');
+  });
+
   it('defaults effort to the second highest available option', () => {
     expect(getDefaultModelEffort(['minimal', 'low', 'medium', 'high'])).toBe('medium');
     expect(getDefaultModelEffort(['low', 'medium', 'high'])).toBe('medium');
