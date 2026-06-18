@@ -19,24 +19,27 @@ describe('YeaftDebugPanel · token breakdown + timestamp', () => {
     expect(panel).toMatch(/import\s*\{[^}]*formatClockTime[^}]*\}\s*from\s*['"]\.\/yeaft-debug-helpers\.js['"]/);
   });
 
-  it('keeps the turn token split in the title, not inline in the crowded row', () => {
-    // Turn header shows the real total tokens unchanged.
-    expect(panel).toContain('formatTokens(turn.totalTokens)');
-    // The message/tool split is still available on hover, but not rendered as
-    // another inline fragment that overlaps narrow debug panels.
+  it('renders turn token split on the second summary line', () => {
+    // Turn header shows the authoritative total plus visible message/tool split.
+    expect(panel).toContain('formatTokens(turnTotalTokens(turn))');
     expect(panel).toContain('turn.tokenBreakdown.messageTotal');
     expect(panel).toContain('turn.tokenBreakdown.toolTotal');
+    expect(panel).toContain('tokenPct(turn.tokenBreakdown.messageTotal, turnTotalTokens(turn))');
+    expect(panel).toContain('tokenPct(turn.tokenBreakdown.toolTotal, turnTotalTokens(turn))');
     expect(panel).not.toContain('yeaft-debug-tokens-split');
     expect(panel).not.toMatch(/turnTokenBreakdown\(turn\)/);
   });
 
-  it('keeps per-loop token split in titles, not inline in the row', () => {
+  it('renders per-loop message/tool token split on the second summary line', () => {
     // Real loop input / output unchanged; input goes through the existing
     // cache-aware total helper from origin/main.
     expect(panel).toContain('usageTotalInputTokens(loop.usage)');
     expect(panel).toContain('loop.usage?.outputTokens || 0');
-    // Breakdown fields stay available in titles for hover/debugging, avoiding
-    // repeated template calls and avoiding extra inline text in narrow panels.
+    expect(panel).toContain('loopMessageTokens(loop)');
+    expect(panel).toContain('loopToolTokens(loop)');
+    expect(panel).toContain('tokenPct(loopMessageTokens(loop), usageTotalTokens(loop.usage))');
+    expect(panel).toContain('tokenPct(loopToolTokens(loop), usageTotalTokens(loop.usage))');
+    // Breakdown is precomputed once per loop and read from loop.tokenBreakdown.
     expect(panel).toContain('loop.tokenBreakdown.inputMessage');
     expect(panel).toContain('loop.tokenBreakdown.inputTool');
     expect(panel).toContain('loop.tokenBreakdown.outputMessage');
@@ -84,27 +87,33 @@ describe('YeaftDebugPanel · token breakdown + timestamp', () => {
     expect(block).toContain('tabular-nums');
   });
 
-  it('renders request log turns and loops as single-line rows', () => {
-    expect(panel).toContain('class="yeaft-debug-turn-main"');
+  it('renders request log turns and loops as two-line summary rows', () => {
+    expect(panel).toContain('class="yeaft-debug-turn-content"');
+    expect(panel).toContain('class="yeaft-debug-turn-primary"');
+    expect(panel).toContain('class="yeaft-debug-turn-secondary"');
     expect(panel).toContain('class="yeaft-debug-turn-source"');
-    expect(panel).toContain('class="yeaft-debug-loop-main"');
+    expect(panel).toContain('class="yeaft-debug-loop-content"');
+    expect(panel).toContain('class="yeaft-debug-loop-primary"');
+    expect(panel).toContain('class="yeaft-debug-loop-secondary"');
     expect(panel).toContain('class="yeaft-debug-loop-token"');
     expect(panel).toContain('in {{ formatTokens(usageTotalInputTokens(loop.usage)) }}');
     expect(panel).toContain('out {{ formatTokens(loop.usage?.outputTokens || 0) }}');
   });
 
-  it('keeps request log expand controls inside the item row', () => {
+  it('keeps request log controls inside the row while allowing token rows to wrap', () => {
     const turnHeader = css.match(/\.yeaft-debug-turn-header\s*\{([\s\S]*?)\n\}/)?.[1] || '';
     const loopHeader = css.match(/\.yeaft-debug-loop-header\s*\{([\s\S]*?)\n\}/)?.[1] || '';
-    const turnStats = css.match(/\.yeaft-debug-turn-stats\s*\{([\s\S]*?)\n\}/)?.[1] || '';
-    const loopStats = css.match(/\.yeaft-debug-loop-stats\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+    const turnSecondary = css.match(/\.yeaft-debug-turn-secondary\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+    const loopSecondary = css.match(/\.yeaft-debug-loop-secondary\s*\{([\s\S]*?)\n\}/)?.[1] || '';
 
-    expect(turnHeader).not.toMatch(/flex-wrap:\s*wrap/);
-    expect(loopHeader).not.toMatch(/flex-wrap:\s*wrap/);
-    expect(turnStats).toMatch(/flex-wrap:\s*nowrap/);
-    expect(loopStats).toMatch(/flex-wrap:\s*nowrap/);
-    expect(css).toContain('.yeaft-debug-turn-main');
-    expect(css).toContain('.yeaft-debug-loop-main');
+    expect(turnHeader).toMatch(/display:\s*flex/);
+    expect(loopHeader).toMatch(/display:\s*flex/);
+    expect(turnSecondary).toMatch(/flex-wrap:\s*wrap/);
+    expect(loopSecondary).toMatch(/flex-wrap:\s*wrap/);
+    expect(css).toContain('.yeaft-debug-turn-content');
+    expect(css).toContain('.yeaft-debug-loop-content');
+    expect(css).toContain('.yeaft-debug-turn-copy');
+    expect(css).toContain('.yeaft-debug-loop-action');
   });
 
   it('store persists loop.at from the wire event', () => {

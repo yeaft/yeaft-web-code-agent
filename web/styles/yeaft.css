@@ -1071,12 +1071,36 @@
   transform: rotate(90deg);
 }
 
-.yeaft-debug-turn-main {
+.yeaft-debug-turn-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.yeaft-debug-turn-main,
+.yeaft-debug-turn-primary {
   display: flex;
   align-items: center;
   gap: 7px;
   min-width: 0;
-  flex: 1 1 auto;
+}
+
+.yeaft-debug-turn-primary {
+  flex-wrap: nowrap;
+}
+
+.yeaft-debug-turn-secondary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex-wrap: wrap;
+  row-gap: 1px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 
 .yeaft-debug-turn-num {
@@ -1091,15 +1115,14 @@
 .yeaft-debug-turn-stats {
   margin-left: auto;
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
   font-size: 11px;
   color: var(--text-muted);
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   min-width: 0;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 .yeaft-debug-turn-prompt,
@@ -1123,7 +1146,7 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
-  flex: 0 2 auto;
+  flex: 0 3 auto;
   color: var(--text-muted);
 }
 
@@ -1137,8 +1160,13 @@
 .yeaft-debug-turn-loopcount,
 .yeaft-debug-turn-time,
 .yeaft-debug-turn-tokens,
+.yeaft-debug-turn-token-part,
 .yeaft-debug-turn-clock {
   flex: 0 0 auto;
+}
+
+.yeaft-debug-turn-copy {
+  align-self: flex-start;
 }
 
 .yeaft-debug-history-bar {
@@ -2099,11 +2127,39 @@
   color: var(--text-primary);
 }
 
-.yeaft-debug-loop-main {
+.yeaft-debug-loop-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.yeaft-debug-loop-main,
+.yeaft-debug-loop-primary {
   display: flex;
   align-items: center;
   gap: 7px;
   min-width: 0;
+}
+
+.yeaft-debug-loop-primary {
+  flex-wrap: nowrap;
+}
+
+.yeaft-debug-loop-secondary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex-wrap: wrap;
+  row-gap: 1px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.yeaft-debug-loop-main {
   flex: 1 1 auto;
 }
 
@@ -2122,12 +2178,12 @@
   white-space: nowrap;
   min-width: 0;
   max-width: 140px;
-  flex: 0 2 auto;
+  flex: 0 3 auto;
 }
 
 .yeaft-debug-loop-stats {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
   font-size: 11px;
@@ -2135,9 +2191,8 @@
   font-variant-numeric: tabular-nums;
   margin-left: auto;
   align-items: center;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   min-width: 0;
-  white-space: nowrap;
 }
 
 .yeaft-debug-loop-token,
@@ -2148,12 +2203,16 @@
 }
 
 .yeaft-debug-loop-meta {
-  flex: 0 2 auto;
+  flex: 0 1 auto;
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 84px;
+  max-width: 96px;
+}
+
+.yeaft-debug-loop-action {
+  flex: 0 0 auto;
 }
 
 /* feat-debug-timestamp: per-turn / per-loop HH:MM:SS column. Sits at
