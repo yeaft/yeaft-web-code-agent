@@ -5,7 +5,6 @@ import YeaftSidebar from './YeaftSidebar.js';
 import VpDetailView from './VpDetailView.js';
 import SessionInviteModal from './SessionInviteModal.js';
 import SessionSettingsModal from './SessionSettingsModal.js';
-import SessionAnnouncementBar from './SessionAnnouncementBar.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
 import YeaftDebugPanel from './YeaftDebugPanel.js';
 import VpTimelinePane from './VpTimelinePane.js';
@@ -21,7 +20,7 @@ import { getDefaultModelEffort, modelOptionMatchesRef, modelOptionRef, resolveSe
 
 export default {
   name: 'YeaftPage',
-  components: { ChatInput, MessageList, SettingsPanel, YeaftSidebar, VpDetailView, SessionInviteModal, SessionSettingsModal, SessionAnnouncementBar, WorkbenchPanel, YeaftDebugPanel, VpTimelinePane, LlmTab },
+  components: { ChatInput, MessageList, SettingsPanel, YeaftSidebar, VpDetailView, SessionInviteModal, SessionSettingsModal, WorkbenchPanel, YeaftDebugPanel, VpTimelinePane, LlmTab },
   template: `
     <div class="yeaft-page">
       <!-- Mobile sidebar overlay -->
@@ -239,13 +238,6 @@ export default {
           </div>
         </div>
 
-        <SessionAnnouncementBar
-          v-if="topbarGroup && !showSettings"
-          class="yeaft-session-announcement-sticky"
-          :session-id="topbarGroup.id"
-          @open-settings="openGroupSettings"
-        />
-
         <!-- H2.f.6: YeaftFeatureDetailView removed — cross-thread aggregation
              retired with the multi-thread engine; the task-detail view had
              no message data source after H2.f.1, so it's been deleted.
@@ -283,7 +275,7 @@ export default {
             {{ $t('yeaft.session.empty.cta') }}
           </button>
         </div>
-        <MessageList v-if="!showSettings && !store.yeaftActiveVpDetailId && !isActiveGroupEmpty" />
+        <MessageList v-if="!showSettings && !store.yeaftActiveVpDetailId && !isActiveGroupEmpty" @open-group-settings="openGroupSettings" />
 
         <!-- Settings Panel -->
         <SettingsPanel v-if="showSettings" :visible="showSettings" :initial-tab="'yeaft'" :initial-sub-tab="settingsInitialTab" :initial-edit-vp-id="settingsInitialEditVpId" @close="showSettings = false" />

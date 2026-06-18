@@ -2292,27 +2292,22 @@
 }
 
 /* ============================================================
-   Session Announcement Bar — collapsible CLAUDE.md-style banner
-   pinned below the conversation header in Yeaft. Per the Yeaft
+   Group Announcement Bar — collapsible CLAUDE.md-style banner
+   shown at the top of MessageList in Yeaft mode. Per the Yeaft
    UI rule, no hard horizontal dividers — separation is via
    spacing + a subtle background tint.
    ============================================================ */
 
 .group-announcement-bar {
+  /* Sits above the message stream, below the yeaft topbar. Padding
+     mirrors the message gutter so the preview line aligns visually
+     with subsequent message rows. */
   margin: 8px 12px 4px;
   border-radius: 10px;
-  background: var(--sidebar-hover);
+  background: var(--sidebar-hover, rgba(0, 0, 0, 0.04));
   color: var(--text-secondary);
   font-size: 12.5px;
   transition: background 0.15s ease;
-}
-
-.group-announcement-bar.yeaft-session-announcement-sticky {
-  position: sticky;
-  top: 0;
-  z-index: 6;
-  flex-shrink: 0;
-  margin: 0 12px 6px;
 }
 
 .group-announcement-bar.is-empty .group-announcement-bar__label {
