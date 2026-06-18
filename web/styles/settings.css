@@ -984,28 +984,6 @@
   align-items: center;
 }
 
-.llm-auto-auth-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  margin-bottom: 6px;
-  cursor: pointer;
-}
-
-.llm-auto-auth-toggle input[type="checkbox"] {
-  accent-color: var(--accent-blue);
-}
-
-.llm-auto-auth-hint {
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-muted);
-  padding: 6px 8px;
-  background: var(--bg-sidebar);
-  border-radius: 4px;
-}
 
 .llm-secret-input .sp-input {
   flex: 1;
