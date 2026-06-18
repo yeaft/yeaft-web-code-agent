@@ -283,7 +283,6 @@
   min-width: 360px;
   width: min(420px, calc(100vw - 32px));
   max-width: min(420px, calc(100vw - 32px));
-  max-height: min(420px, calc(100vh - 120px));
   z-index: 1300;
 }
 
@@ -295,8 +294,15 @@
 
 .yeaft-model-list {
   min-width: 0;
-  max-height: 260px;
+  max-height: 220px;
   overflow-y: auto;
+}
+
+.yeaft-model-fixed-controls {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .yeaft-model-dropdown-separator {
@@ -343,7 +349,7 @@
   border-radius: 10px;
   padding: 4px;
   box-shadow: var(--modal-shadow);
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .yeaft-model-option {
@@ -426,7 +432,7 @@
 .yeaft-model-effort-panel {
   padding: 8px;
   border-radius: 8px;
-  background: var(--bg-input-wrapper);
+  background: transparent;
 }
 
 .yeaft-model-effort-title {
@@ -466,12 +472,6 @@
 }
 
 
-.yeaft-model-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 4px 0;
-}
 
 @media (max-width: 640px) {
   .yeaft-topbar-model {
@@ -499,11 +499,6 @@
     overflow-y: auto;
   }
 
-  .yeaft-model-list {
-    max-height: none;
-    overflow-y: visible;
-  }
-
   .yeaft-model-option {
     padding: 10px;
   }
@@ -522,18 +517,6 @@
     white-space: normal;
   }
 
-  .yeaft-model-actions {
-    position: sticky;
-    bottom: 0;
-    background: var(--bg-main);
-    padding-top: 8px;
-  }
-
-  .yeaft-model-actions .btn-primary,
-  .yeaft-model-actions .btn-secondary {
-    flex: 1 1 0;
-    justify-content: center;
-  }
 }
 
 /* ── Provider edit — per-model row (id + ctx + max) ── */
