@@ -1567,25 +1567,6 @@ export default {
       ctx.emit('open-session-settings', { sessionId, section: norm.section || 'announcement' });
     };
 
-    // Single click handler for the load-more hint. Branches by view so
-    // Chat-mode and Yeaft-mode can share one button while dispatching to
-    // their own pagination paths (different store actions, different
-    // wire verbs, different cursor semantics).
-    const onClickLoadMore = () => {
-      const isYeaft = store.currentView === 'yeaft';
-      const loadYeaft = () => {
-        if (store.hasHiddenYeaftMessages) {
-          store.expandYeaftMessageWindow();
-          return;
-        }
-        store.loadMoreYeaftHistory();
-      };
-      preserveScrollAnchorDuringLoad(
-        isYeaft ? loadYeaft : () => store.loadMoreMessages(),
-        isYeaft ? () => store.yeaftLoadingMoreHistory : () => store.loadingMoreMessages
-      );
-    };
-
     return {
       store,
       containerRef,
