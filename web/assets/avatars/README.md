@@ -1,13 +1,12 @@
 # Avatar assets
 
-13 pre-generated SVG portraits served as static assets at
+Pre-generated SVG portraits served as static assets at
 `/assets/avatars/<id>.svg`:
 
 - `ada.svg`, `alan.svg`, `alice.svg`, `dieter.svg`, `grace.svg`,
   `ken.svg`, `linus.svg`, `margaret.svg`, `martin.svg`, `norman.svg`,
   `shannon.svg`, `steve.svg` — one per VP in the default roster
   (must match `KNOWN_AVATAR_IDS` in `web/components/VpAvatar.js`).
-- `user.svg` — the single human-side avatar used by `UserAvatar.js`.
 
 ## Regeneration
 
