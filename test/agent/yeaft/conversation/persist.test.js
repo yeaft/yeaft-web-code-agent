@@ -151,6 +151,25 @@ describe('ConversationStore', () => {
       expect(existsSync(filePath)).toBe(true);
     });
 
+    it('should persist visible task lifecycle metadata', () => {
+      store.append({
+        role: 'assistant',
+        content: '[Task finished]\ntaskId: task_1\nstatus: succeeded',
+        sessionId: 'session_tasks',
+        eventType: 'task_lifecycle',
+        taskId: 'task_1',
+        taskStatus: 'succeeded',
+      });
+
+      const loaded = store.loadRecentBySession('session_tasks', 10);
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0].eventType).toBe('task_lifecycle');
+      expect(loaded[0].taskId).toBe('task_1');
+      expect(loaded[0].taskStatus).toBe('succeeded');
+      expect(loaded[0].internal).toBeUndefined();
+      expect(loaded[0].content).toContain('[Task finished]');
+    });
+
     it('should auto-increment sequence numbers', () => {
       const msg1 = store.append({ role: 'user', content: 'First' });
       const msg2 = store.append({ role: 'assistant', content: 'Second' });

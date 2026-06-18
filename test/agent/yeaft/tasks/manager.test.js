@@ -3,10 +3,11 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { TaskManager } from '../../../../agent/yeaft/tasks/manager.js';
+import { buildWindowsTaskkillArgs } from '../../../../agent/yeaft/tasks/shell-runner.js';
 
 function makeTempDir() {
   return mkdtempSync(join(tmpdir(), 'yeaft-tasks-'));
@@ -65,6 +66,10 @@ describe('TaskManager', () => {
     expect(log.text).toContain('task-ok');
     expect(messages.some(m => m.content.includes('[Task started]'))).toBe(true);
     expect(messages.some(m => m.content.includes('[Task finished]'))).toBe(true);
+    expect(messages.every(m => !m.internal && !m.systemOnly && !m.systemOnlyMessage)).toBe(true);
+    expect(messages.every(m => m.eventType === 'task_lifecycle')).toBe(true);
+    expect(messages.every(m => m.taskId === task.id)).toBe(true);
+    expect(messages.at(-1)?.taskStatus).toBe('succeeded');
     expect(events.some(e => e.type === 'yeaft_task_event' && e.event === 'started')).toBe(true);
     expect(events.some(e => e.type === 'yeaft_task_event' && e.event === 'completed')).toBe(true);
   });
@@ -92,5 +97,42 @@ describe('TaskManager', () => {
     const restored = restarted.getTask('session_restart', task.id);
     expect(restored.status).toBe('orphaned');
     expect(messages.some(m => m.content.includes('Agent restarted while task was running'))).toBe(true);
+  });
+
+  it('builds Windows process-tree kill arguments', () => {
+    expect(buildWindowsTaskkillArgs(1234)).toEqual(['/pid', '1234', '/t', '/f']);
+  });
+
+  it('does not mark cancel complete when process-tree kill fails', () => {
+    const manager = new TaskManager({ yeaftDir: dir });
+    const task = manager.startTask({
+      sessionId: 'session_cancel',
+      ownerVpId: 'vp_linus',
+      kind: 'shell',
+      title: 'Unattached task',
+    });
+
+    const result = manager.cancelTask('session_cancel', task.id);
+    expect(result.ok).toBe(false);
+    expect(result.task.status).toBe('running');
+    expect(manager.getTask('session_cancel', task.id).status).toBe('running');
+  });
+
+  it('reads log tails without requiring a whole-file read', () => {
+    const manager = new TaskManager({ yeaftDir: dir });
+    const task = manager.startTask({
+      sessionId: 'session_log',
+      ownerVpId: 'vp_linus',
+      kind: 'shell',
+      title: 'Large log',
+    });
+    writeFileSync(join(dir, 'tasks', 'sessions', 'session_log', `${task.id}.log`), `${'x'.repeat(128 * 1024)}tail-end`, 'utf8');
+
+    const log = manager.readTaskLog('session_log', task.id, { tail: true, maxBytes: 16 });
+    expect(log.text).toBe('xxxxxxxxtail-end');
+    expect(log.bytes).toBe(128 * 1024 + 'tail-end'.length);
+    expect(log.offset).toBe(log.bytes - 16);
+    expect(log.nextOffset).toBe(log.bytes);
+    expect(log.truncated).toBe(false);
   });
 });

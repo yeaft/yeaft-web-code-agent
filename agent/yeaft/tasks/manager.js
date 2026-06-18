@@ -96,7 +96,9 @@ export class TaskManager {
         sessionId: task.sessionId,
         threadId: task.source?.threadId || 'main',
         ...(task.ownerVpId ? { speakerVpId: task.ownerVpId } : {}),
-        internal: true,
+        eventType: 'task_lifecycle',
+        taskId: task.id,
+        taskStatus: task.status,
       });
     } catch {
       // Conversation persistence must not kill the background process.
@@ -256,10 +258,16 @@ export class TaskManager {
     if (isTerminalTaskStatus(task.status)) return { ok: true, task: publicSnapshot(task) };
     const runner = this.processes.get(key);
     const killed = runner ? runner.kill('SIGTERM') : false;
+    if (!killed) {
+      return {
+        ok: false,
+        error: 'Unable to cancel task: no live process handle or process-tree kill failed.',
+        task: publicSnapshot(task),
+      };
+    }
     const completed = this.#completeTask(sessionId, taskId, {
       status: TASK_STATUS.CANCELLED,
-      signal: killed ? 'SIGTERM' : null,
-      error: killed ? null : 'No live process handle for task.',
+      signal: 'SIGTERM',
     });
     return { ok: true, task: completed };
   }

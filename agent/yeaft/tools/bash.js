@@ -12,7 +12,9 @@ import { defineTool } from './types.js';
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
-import { getRuntimePlatformInfo, resolveDefaultShell } from '../runtime-platform.js';
+import { buildShellInvocation, getRuntimePlatformInfo } from '../runtime-platform.js';
+
+export { buildShellInvocation };
 
 /** Max output size in bytes before truncation (256 KB). */
 const MAX_OUTPUT = 256 * 1024;
@@ -22,31 +24,6 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 
 /** Max timeout in ms (10 minutes). */
 const MAX_TIMEOUT_MS = 600_000;
-
-/**
- * @param {string} command
- * @param {{ runtimePlatform?: object }} opts
- */
-export function buildShellInvocation(command, opts = {}) {
-  const runtimePlatform = opts.runtimePlatform || getRuntimePlatformInfo();
-  const shell = runtimePlatform.defaultShell
-    ? {
-        command: runtimePlatform.defaultShell,
-        argsPrefix: Array.isArray(runtimePlatform.shellArgsPrefix) ? runtimePlatform.shellArgsPrefix : null,
-        family: runtimePlatform.shellFamily,
-      }
-    : resolveDefaultShell({ platform: runtimePlatform.platform });
-
-  const argsPrefix = Array.isArray(shell.argsPrefix)
-    ? shell.argsPrefix
-    : resolveDefaultShell({ platform: runtimePlatform.platform }).argsPrefix;
-
-  return {
-    command: shell.command,
-    args: [...argsPrefix, command],
-    family: shell.family || runtimePlatform.shellFamily || 'posix',
-  };
-}
 
 /**
  * Run a command in a child process.

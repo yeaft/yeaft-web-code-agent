@@ -2,9 +2,36 @@
  * shell-runner.js — Cross-platform background shell task runner.
  */
 
-import { spawn } from 'child_process';
-import { buildShellInvocation } from '../tools/bash.js';
-import { getRuntimePlatformInfo } from '../runtime-platform.js';
+import { spawn, spawnSync } from 'child_process';
+import { buildShellInvocation, getRuntimePlatformInfo } from '../runtime-platform.js';
+
+export function buildWindowsTaskkillArgs(pid) {
+  return ['/pid', String(pid), '/t', '/f'];
+}
+
+export function killShellProcessTree(pid, runtimePlatform, signal = 'SIGTERM') {
+  if (!pid) return false;
+  const platform = runtimePlatform || getRuntimePlatformInfo();
+  if (platform.isWindows) {
+    const result = spawnSync('taskkill.exe', buildWindowsTaskkillArgs(pid), {
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+    return result.status === 0;
+  }
+
+  try {
+    process.kill(-pid, signal);
+    return true;
+  } catch {
+    try {
+      process.kill(pid, signal);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
 
 export function startShellProcess({ command, cwd, runtimePlatform, onOutput, onExit, onError }) {
   const platform = runtimePlatform || getRuntimePlatformInfo();
@@ -31,21 +58,7 @@ export function startShellProcess({ command, cwd, runtimePlatform, onOutput, onE
   return {
     pid: proc.pid || null,
     kill(signal = 'SIGTERM') {
-      if (!proc.pid) return false;
-      try {
-        if (!platform.isWindows) {
-          process.kill(-proc.pid, signal);
-          return true;
-        }
-      } catch {
-        // Fall through to killing the child pid.
-      }
-      try {
-        proc.kill(signal);
-        return true;
-      } catch {
-        return false;
-      }
+      return killShellProcessTree(proc.pid, platform, signal);
     },
   };
 }

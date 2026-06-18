@@ -5,7 +5,18 @@
  * logs so a noisy process cannot corrupt the task index.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync, statSync } from 'fs';
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from 'fs';
 import { join } from 'path';
 
 export const TASK_STATUS = Object.freeze({
@@ -87,20 +98,32 @@ export class TaskStore {
 
   readLogFile(path, { offset = 0, maxBytes = 64 * 1024, tail = false } = {}) {
     if (!existsSync(path)) return { path, text: '', bytes: 0, offset: 0, nextOffset: 0 };
-    const buf = readFileSync(path);
-    const bytes = buf.length;
+    const st = statSync(path);
+    const bytes = st.size;
     let start = Math.max(0, Number.isFinite(offset) ? Math.floor(offset) : 0);
     const cap = Math.max(0, Math.min(Number.isFinite(maxBytes) ? Math.floor(maxBytes) : 64 * 1024, 1024 * 1024));
     if (tail) start = Math.max(0, bytes - cap);
     const end = Math.min(bytes, start + cap);
-    return {
-      path,
-      text: buf.subarray(start, end).toString('utf8'),
-      bytes,
-      offset: start,
-      nextOffset: end,
-      truncated: end < bytes,
-    };
+    const length = Math.max(0, end - start);
+    if (length === 0) {
+      return { path, text: '', bytes, offset: start, nextOffset: end, truncated: end < bytes };
+    }
+
+    const fd = openSync(path, 'r');
+    try {
+      const buf = Buffer.allocUnsafe(length);
+      const readBytes = readSync(fd, buf, 0, length, start);
+      return {
+        path,
+        text: buf.subarray(0, readBytes).toString('utf8'),
+        bytes,
+        offset: start,
+        nextOffset: start + readBytes,
+        truncated: start + readBytes < bytes,
+      };
+    } finally {
+      closeSync(fd);
+    }
   }
 
   readLog(sessionId, taskId, opts = {}) {
