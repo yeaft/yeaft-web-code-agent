@@ -97,6 +97,8 @@ describe('Dream debug model', () => {
   it('renders Dream items as an inline accordion and keeps ids out of collapsed subtitles', () => {
     const component = readFileSync(resolve(repoRoot, 'web/components/YeaftDebugPanel.js'), 'utf8');
 
+    expect(component).not.toContain('yeaft-debug-tab-dream-icon');
+    expect(component).not.toContain('☾');
     expect(component).toContain('yeaft-debug-dream-accordion-item');
     expect(component).toContain('activeDreamItem && activeDreamItem.key === item.key');
     expect(component).toContain('yeaft-debug-dream-item-summary');
