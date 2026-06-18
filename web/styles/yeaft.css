@@ -935,12 +935,6 @@
   outline: none;
 }
 
-.yeaft-debug-tab-dream-icon {
-  font-family: 'Symbols Nerd Font Mono', inherit;
-  font-size: 13px;
-  line-height: 1;
-}
-
 .yeaft-debug-tabs {
   display: flex;
   align-items: center;

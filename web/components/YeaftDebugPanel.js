@@ -1031,7 +1031,6 @@ export default {
           :aria-selected="activeTab === 'dream'"
           @click="setActiveTab('dream')"
         >
-          <span class="yeaft-debug-tab-dream-icon" aria-hidden="true">☾</span>
           {{ $t('yeaft.debugTabDream') }}
           <span class="yeaft-debug-tab-count" v-if="dreamEventCount > 0">{{ dreamEventCount }}</span>
         </button>
