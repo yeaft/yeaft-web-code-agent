@@ -400,7 +400,7 @@ export async function loadSession(options = {}) {
   }
 
   // ─── 8. Build tool registry ────────────────────────────
-  const taskManager = new TaskManager({ yeaftDir, conversationStore });
+  const taskManager = new TaskManager({ yeaftDir });
   const toolRegistry = createFullRegistry();
 
   // Register any extra tools from caller
