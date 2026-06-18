@@ -3159,19 +3159,39 @@
 .yeaft-vp-timeline-resize-handle:hover {
   background: var(--accent-soft, rgba(99, 102, 241, 0.15));
 }
+.yeaft-session-status-header,
 .yeaft-vp-timeline-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 8px 8px;
+  padding: 4px 8px 10px;
 }
+.yeaft-session-status-title,
 .yeaft-vp-timeline-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text-secondary);
+}
+.yeaft-session-status-icon {
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+.yeaft-session-status-section {
+  padding: 8px 0 10px;
+}
+.yeaft-session-status-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px 6px;
+  color: var(--text-muted);
   font-size: 11px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-muted);
 }
+.yeaft-session-status-count,
 .yeaft-vp-timeline-count {
   font-size: 11px;
   color: var(--text-muted);
@@ -4242,27 +4262,21 @@
   }
 }
 
-/* Session task board inside the VP timeline. */
+/* Running background tasks inside the Session status pane. */
 .yeaft-vp-task-board {
-  padding: 8px;
+  padding: 8px 0 10px;
 }
 
 .yeaft-vp-task-board-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 4px 6px;
   color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 600;
 }
 
 .yeaft-vp-task-count {
-  color: var(--text-secondary);
+  color: var(--text-muted);
 }
 
 .yeaft-vp-task-empty {
-  padding: 6px 4px;
+  padding: 8px;
   color: var(--text-muted);
   font-size: 12px;
 }
@@ -4270,18 +4284,23 @@
 .yeaft-vp-task-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
+}
+
+.yeaft-vp-task-item {
+  border-radius: 10px;
 }
 
 .yeaft-vp-task-summary {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 30px;
-  padding: 6px 8px;
+  min-height: 42px;
+  padding: 7px 8px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 10px;
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
@@ -4289,9 +4308,12 @@
   cursor: pointer;
 }
 
-.yeaft-vp-task-summary:hover {
+.yeaft-vp-task-summary:hover,
+.yeaft-vp-task-summary:focus-visible,
+.yeaft-vp-task-item.is-expanded .yeaft-vp-task-summary {
   background: var(--sidebar-hover);
   color: var(--text-primary);
+  outline: none;
 }
 
 .yeaft-vp-task-dot {
@@ -4302,11 +4324,31 @@
   flex: 0 0 auto;
 }
 
+.yeaft-vp-task-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .yeaft-vp-task-title {
-  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.yeaft-vp-task-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.3;
 }
 
 .yeaft-vp-task-kind {
@@ -4315,20 +4357,39 @@
   font-size: 11px;
 }
 
+.yeaft-vp-task-chevron {
+  color: var(--text-muted);
+  transition: transform 0.15s;
+}
+
+.yeaft-vp-task-item.is-expanded .yeaft-vp-task-chevron {
+  transform: rotate(90deg);
+}
+
 .yeaft-vp-task-detail {
-  margin: 2px 8px 6px 22px;
+  margin: 6px 0 2px;
+  padding-left: 22px;
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.5;
 }
 
-.yeaft-vp-task-log {
-  max-height: 120px;
+.yeaft-vp-task-log,
+.yeaft-vp-task-log-empty {
+  max-height: 150px;
   overflow: auto;
-  margin: 6px 0 0;
-  padding: 8px;
-  border-radius: 8px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
   background: var(--bg-input-wrapper);
   color: var(--text-secondary);
+}
+
+.yeaft-vp-task-log {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.yeaft-vp-task-log-empty {
+  font-size: 12px;
 }
