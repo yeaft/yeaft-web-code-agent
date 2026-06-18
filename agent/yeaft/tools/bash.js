@@ -12,7 +12,9 @@ import { defineTool } from './types.js';
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
-import { getRuntimePlatformInfo, resolveDefaultShell } from '../runtime-platform.js';
+import { buildShellInvocation, getRuntimePlatformInfo } from '../runtime-platform.js';
+
+export { buildShellInvocation };
 
 /** Max output size in bytes before truncation (256 KB). */
 const MAX_OUTPUT = 256 * 1024;
@@ -22,31 +24,6 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 
 /** Max timeout in ms (10 minutes). */
 const MAX_TIMEOUT_MS = 600_000;
-
-/**
- * @param {string} command
- * @param {{ runtimePlatform?: object }} opts
- */
-export function buildShellInvocation(command, opts = {}) {
-  const runtimePlatform = opts.runtimePlatform || getRuntimePlatformInfo();
-  const shell = runtimePlatform.defaultShell
-    ? {
-        command: runtimePlatform.defaultShell,
-        argsPrefix: Array.isArray(runtimePlatform.shellArgsPrefix) ? runtimePlatform.shellArgsPrefix : null,
-        family: runtimePlatform.shellFamily,
-      }
-    : resolveDefaultShell({ platform: runtimePlatform.platform });
-
-  const argsPrefix = Array.isArray(shell.argsPrefix)
-    ? shell.argsPrefix
-    : resolveDefaultShell({ platform: runtimePlatform.platform }).argsPrefix;
-
-  return {
-    command: shell.command,
-    args: [...argsPrefix, command],
-    family: shell.family || runtimePlatform.shellFamily || 'posix',
-  };
-}
 
 /**
  * Run a command in a child process.
@@ -169,7 +146,7 @@ Guidelines:
 - Large outputs are truncated at 256KB
 - Use absolute paths when possible
 - Avoid interactive commands (no stdin support)
-- For long-running tasks, consider redirecting output to a file
+- Use background=true for long-running or persistent tasks that should survive across turns
 - stderr is captured separately and included in the result`,
     zh: `执行 Shell 命令并返回输出。
 
@@ -181,7 +158,7 @@ Guidelines:
 - 大输出在 256KB 处截断
 - 尽量使用绝对路径
 - 避免交互式命令（不支持 stdin）
-- 长时间任务建议重定向输出到文件
+- 长时间或需要跨 turn 持续存在的任务使用 background=true
 - stderr 单独捕获并包含在结果中`
   },
   parameters: {
@@ -208,6 +185,20 @@ Guidelines:
           zh: `超时时间，单位毫秒（默认 ${DEFAULT_TIMEOUT_MS}，最大 ${MAX_TIMEOUT_MS}）`,
         },
       },
+      background: {
+        type: 'boolean',
+        description: {
+          en: 'Run as a persistent Session task and return immediately with a taskId and log path',
+          zh: '作为持久化 Session 后台任务运行，并立即返回 taskId 和日志路径',
+        },
+      },
+      taskTitle: {
+        type: 'string',
+        description: {
+          en: 'Human-readable title for the background task',
+          zh: '后台任务的人类可读标题',
+        },
+      },
     },
     required: ['command'],
   },
@@ -223,7 +214,7 @@ Guidelines:
            cmd.includes('> /dev/') || cmd.includes('chmod 000');
   },
   async execute(input, ctx) {
-    const { command, cwd: inputCwd, timeout_ms } = input;
+    const { command, cwd: inputCwd, timeout_ms, background = false, taskTitle } = input;
     if (!command) return JSON.stringify({ error: 'command is required' });
 
     // Resolve working directory
@@ -238,6 +229,28 @@ Guidelines:
     // Clamp timeout
     const timeout = Math.min(Math.max(timeout_ms || DEFAULT_TIMEOUT_MS, 1000), MAX_TIMEOUT_MS);
     const runtimePlatform = ctx?.runtimePlatform || getRuntimePlatformInfo();
+
+    if (background) {
+      if (!ctx?.taskManager) {
+        return JSON.stringify({ error: 'background tasks are unavailable in this runtime' });
+      }
+      try {
+        const task = ctx.taskManager.startShellTask({
+          command,
+          cwd,
+          sessionId: ctx.sessionId || 'default',
+          ownerVpId: ctx.currentVpId || null,
+          title: taskTitle || command.slice(0, 120),
+          runtimePlatform,
+          source: {
+            threadId: ctx.threadId || 'main',
+          },
+        });
+        return `Started background task ${task.id}.\nStatus: ${task.status}\nLog: ${task.log?.path || ''}\nUse ListTasks, ReadTaskLog, or CancelTask to inspect or control it.`;
+      } catch (err) {
+        return JSON.stringify({ error: err?.message || String(err) });
+      }
+    }
 
     try {
       const result = await runCommand(command, {

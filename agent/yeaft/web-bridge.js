@@ -948,6 +948,7 @@ function getOrCreateVpEngine(sessionId, vpId, threadId = 'main') {
     // (`if (this.#toolStats && ...)`) is false and group VP tool calls
     // are silently dropped.
     toolStats: session.toolStats || null,
+    taskManager: session.taskManager || null,
     // Per-VP fan-out: bind the engine to its (sessionId, vpId) so post-turn
     // compact reads/writes a scoped summary instead of the legacy global
     // compact.md (which every VP would otherwise share, producing
@@ -1943,6 +1944,15 @@ function buildVpPersona(vpId) {
 export function installYeaftRuntimeBridge(s) {
   if (!s) return;
 
+  if (s.taskManager && typeof s.taskManager.setEventSink === 'function') {
+    s.taskManager.setEventSink((event) => {
+      try {
+        const sessionId = event?.task?.sessionId || event?.sessionId || null;
+        sendSessionEvent(event, { sessionId });
+      } catch { /* never let task event delivery throw */ }
+    });
+  }
+
   // Forward dream pipeline progress events to the web debug panel.
   //
   // Group-id stamping is NO LONGER done here. It used to be: this sink
@@ -2896,6 +2906,7 @@ async function ensureSessionLoaded() {
     mcpServers: session.status.mcpServers,
     tools: session.status.tools,
     yeaftDir: ctx.CONFIG?.yeaftDir || null,
+    tasks: session.taskManager ? session.taskManager.listActiveTasks() : [],
   });
   sendSessionSnapshotBroadcast();
   // vp-status: rebuild frontend status table from authoritative agent
@@ -4152,6 +4163,7 @@ export async function handleYeaftLoadHistory(msg) {
     mcpServers: session.status.mcpServers,
     tools: session.status.tools,
     yeaftDir: ctx.CONFIG?.yeaftDir || null,
+    tasks: session.taskManager ? session.taskManager.listActiveTasks() : [],
   });
   sendSessionSnapshotBroadcast();
   if (sessionId) {

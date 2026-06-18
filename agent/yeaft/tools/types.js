@@ -21,6 +21,9 @@
  * @property {object} [skillManager] — Skill manager
  * @property {object} [trace] — debug trace
  * @property {object} [config] — engine config
+ * @property {import('../tasks/manager.js').TaskManager} [taskManager] — Session task manager
+ * @property {string} [sessionId] — current Session id
+ * @property {string} [threadId] — current Session thread id
  * @property {string} [currentVpId] — R6: VP id of the caller (set in multi-VP groups)
  * @property {string} [currentGroupId] — R6: group id of the caller's RoleInstance
  * @property {(sessionId: string) => string[]|null} [getGroupRoster]

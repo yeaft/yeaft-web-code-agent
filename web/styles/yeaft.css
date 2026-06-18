@@ -4241,3 +4241,94 @@
     display: none;
   }
 }
+
+/* Session task board inside the VP timeline. */
+.yeaft-vp-task-board {
+  padding: 8px;
+}
+
+.yeaft-vp-task-board-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.yeaft-vp-task-count {
+  color: var(--text-secondary);
+}
+
+.yeaft-vp-task-empty {
+  padding: 6px 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.yeaft-vp-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.yeaft-vp-task-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.yeaft-vp-task-summary:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.yeaft-vp-task-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--success);
+  flex: 0 0 auto;
+}
+
+.yeaft-vp-task-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.yeaft-vp-task-kind {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.yeaft-vp-task-detail {
+  margin: 2px 8px 6px 22px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.yeaft-vp-task-log {
+  max-height: 120px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--bg-input-wrapper);
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+}

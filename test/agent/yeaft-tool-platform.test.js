@@ -6,8 +6,8 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 
-import { getRuntimePlatformInfo, renderRuntimePlatformPrompt } from '../../agent/yeaft/runtime-platform.js';
-import bashTool, { buildShellInvocation } from '../../agent/yeaft/tools/bash.js';
+import { buildShellInvocation, getRuntimePlatformInfo, renderRuntimePlatformPrompt } from '../../agent/yeaft/runtime-platform.js';
+import bashTool from '../../agent/yeaft/tools/bash.js';
 import enterWorktreeTool from '../../agent/yeaft/tools/enter-worktree.js';
 import { checkPathAllowed, isPathInsideOrEqual } from '../../agent/yeaft/tools/path-safety.js';
 import { buildSystemPrompt } from '../../agent/yeaft/prompts.js';

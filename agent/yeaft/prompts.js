@@ -309,6 +309,7 @@ export function buildSystemPrompt({
   sessionAnnouncement = '',
   projectDoc = '',
   runtimePlatform,
+  activeTasks = '',
 } = {}) {
   // Normalize app locales like `zh-CN` to prompt dictionary/template keys.
   const effectiveLang = normalizePromptLanguage(language);
@@ -410,6 +411,9 @@ export function buildSystemPrompt({
   // never wired and is removed 2026-05-13.)
   const activeScopeBlock = renderActiveScope(activeScope, lang);
   if (activeScopeBlock) parts.push(activeScopeBlock);
+
+  const activeTaskText = typeof activeTasks === 'string' ? activeTasks.trim() : '';
+  if (activeTaskText) parts.push(activeTaskText);
 
   const multiVpRoutingBlock = renderMultiVpRouting(activeScope, lang);
   if (multiVpRoutingBlock) parts.push(multiVpRoutingBlock);

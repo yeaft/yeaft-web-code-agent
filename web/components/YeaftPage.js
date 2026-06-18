@@ -60,6 +60,7 @@ export default {
         <VpTimelinePane
           v-if="showVpTimeline"
           :rows="vpTimelineRows"
+          :tasks="runningTasksForActiveSession"
           :style="timelineWidthStyle"
           @mention-vp="onMentionVpFromTimeline"
           @edit-vp="onEditVpFromTimeline"
@@ -1068,6 +1069,14 @@ export default {
     // from the agent broker) — no reverse-inference from message-level
     // `isStreaming` flags any more (see
     // docs/notes/2026-05-15-vp-status-from-agent.md).
+    const runningTasksForActiveSession = Vue.computed(() => {
+      const gs = sessionsStore();
+      const sessionId = store.yeaftActiveSessionFilter || gs?.activeSessionId || null;
+      if (!sessionId) return [];
+      const map = store.yeaftActiveTasksBySession?.[sessionId] || {};
+      return Object.values(map).filter(task => task && task.status === 'running');
+    });
+
     const vpTimelineRows = Vue.computed(() => {
       const convId = store.yeaftConversationId;
       if (!convId) return [];
@@ -1222,6 +1231,7 @@ export default {
       // VP timeline pane bindings — restored in v0.1.767.
       showVpTimeline,
       vpTimelineRows,
+      runningTasksForActiveSession,
       vpTimelineVisible,
       toggleVpTimeline,
       timelineWidthStyle,

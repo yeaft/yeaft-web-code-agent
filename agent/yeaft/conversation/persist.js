@@ -186,6 +186,9 @@ function serializeMessage(msg) {
   if (msg.model) fm.push(`model: ${msg.model}`);
   if (msg.turnNumber != null) fm.push(`turnNumber: ${msg.turnNumber}`);
   if (msg.toolCallId) fm.push(`toolCallId: ${msg.toolCallId}`);
+  if (msg.eventType) fm.push(`eventType: ${msg.eventType}`);
+  if (msg.taskId) fm.push(`taskId: ${msg.taskId}`);
+  if (msg.taskStatus) fm.push(`taskStatus: ${msg.taskStatus}`);
   if (msg.isError) fm.push(`isError: true`);
   // task-307: every message is stamped with a threadId so multi-thread
   // routing can filter/replay by thread without rescanning JSON blobs.
@@ -312,6 +315,9 @@ export function parseMessage(raw) {
       case 'model': msg.model = value; break;
       case 'turnNumber': msg.turnNumber = parseInt(value, 10); break;
       case 'toolCallId': msg.toolCallId = value; break;
+      case 'eventType': msg.eventType = value; break;
+      case 'taskId': msg.taskId = value; break;
+      case 'taskStatus': msg.taskStatus = value; break;
       case 'isError': msg.isError = value === 'true'; break;
       case 'tokens_est': msg.tokens_est = parseInt(value, 10); break;
       case 'threadId': msg.threadId = value; break;

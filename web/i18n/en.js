@@ -126,6 +126,12 @@ export default {
 
   // ============ Yeaft Page ============
   'yeaft.back': 'Back',
+  'yeaft.session.people': 'People',
+  'yeaft.session.peopleEmpty': 'No people',
+  'yeaft.session.runningTasks': 'Running tasks',
+  'yeaft.session.tasksEmpty': 'No running tasks',
+  'yeaft.session.owner': 'Owner',
+  'yeaft.session.started': 'Started',
   'yeaft.breadcrumb.label': 'Thread filter',
   'yeaft.breadcrumb.mainStream': 'Main stream',
   'yeaft.breadcrumb.backHint': 'Return to full stream (Esc)',

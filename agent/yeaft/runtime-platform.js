@@ -52,6 +52,35 @@ export function resolveDefaultShell(opts = {}) {
 }
 
 /**
+ * Build a platform-specific shell invocation for executing a command string.
+ * Kept in runtime-platform so tools and task runners share OS behavior without
+ * depending on each other.
+ *
+ * @param {string} command
+ * @param {{ runtimePlatform?: object }} opts
+ */
+export function buildShellInvocation(command, opts = {}) {
+  const runtimePlatform = opts.runtimePlatform || getRuntimePlatformInfo();
+  const shell = runtimePlatform.defaultShell
+    ? {
+        command: runtimePlatform.defaultShell,
+        argsPrefix: Array.isArray(runtimePlatform.shellArgsPrefix) ? runtimePlatform.shellArgsPrefix : null,
+        family: runtimePlatform.shellFamily,
+      }
+    : resolveDefaultShell({ platform: runtimePlatform.platform });
+
+  const argsPrefix = Array.isArray(shell.argsPrefix)
+    ? shell.argsPrefix
+    : resolveDefaultShell({ platform: runtimePlatform.platform }).argsPrefix;
+
+  return {
+    command: shell.command,
+    args: [...argsPrefix, command],
+    family: shell.family || runtimePlatform.shellFamily || 'posix',
+  };
+}
+
+/**
  * @param {{ platform?: string, env?: NodeJS.ProcessEnv }} [opts]
  */
 export function getRuntimePlatformInfo(opts = {}) {
