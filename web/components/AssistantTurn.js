@@ -533,7 +533,9 @@ export default {
       getImageUrl,
       handleImageError,
       openImagePreview,
-      displayedTodos
+      displayedTodos,
+      toolExpandedValue,
+      updateToolExpanded
     };
   }
 };

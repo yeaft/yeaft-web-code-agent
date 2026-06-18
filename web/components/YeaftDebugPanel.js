@@ -1464,7 +1464,6 @@ export default {
         >{{ $t('yeaft.debugHistoryLoad') }}</button>
         <span v-else>{{ requestHistoryLoading ? $t('yeaft.debugHistoryLoading') : $t('yeaft.noDebugData') }}</span>
       </div>
-      </template>
     </div>
   `,
 };
