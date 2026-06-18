@@ -1374,15 +1374,9 @@ export default {
   'yeaft.feature.pill.label': '任务',
   'yeaft.feature.messageTime.aria': '发送于 {time}',
 
-  // VP-block redesign Phase 3 (2026-05-08)：VpTurnBlock — 可折叠的
-  // 每个 VP 每轮 turn 的 block 包装。折叠态显示最后 6 行 + 最近 1 个工具；
-  // 展开态是完整的 AssistantTurn。
-  'yeaft.vp.turnBlock.expand': '展开',
-  'yeaft.vp.turnBlock.collapse': '折叠',
+  // VpTurnBlock — 每个 VP 每轮 turn 的 block 包装。body 始终是完整的
+  // AssistantTurn；延迟挂载交给 VirtualTranscript。
   'yeaft.vp.turnBlock.elapsedTitle': '本轮 turn 开始至今的时间',
-  'yeaft.vp.turnBlock.truncated': '已显示最后 6 行（共 {total} 行）— 点击展开',
-  'yeaft.vp.turnBlock.thinking': '思考中…',
-  'yeaft.vp.turnBlock.empty': '（暂无文本）',
 
   // VP 列表面板 —— group conversation 左侧的 roster 列表。v0.1.767
   // 恢复（PR #767 误将其与 Feature 系统一起删除）。已不再有 feature

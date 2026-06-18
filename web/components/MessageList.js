@@ -153,18 +153,15 @@ export default {
 
                 <!-- Assistant turn — VP-block redesign (2026-05-08).
                      - Yeaft multi-VP turns (speakerVpId set) -> VpTurnBlock,
-                       the collapsible per-VP wrapper that renders avatar +
-                       start time + live elapsed ticker, with a 4-state expand
-                       machine (see web/stores/helpers/turn-compact.js).
+                       which renders the VP header plus the full AssistantTurn
+                       body. VirtualTranscript handles delayed mounting for
+                       off-screen blocks; messages themselves are not collapsed.
                      - Legacy 1:1 Chat turns (no VP attribution) -> plain
-                       AssistantTurn unchanged. The collapse affordance only
-                       makes sense in multi-VP conversations. -->
+                       AssistantTurn unchanged. -->
                 <VpTurnBlock
                   v-else-if="item.type === 'assistant-turn' && item.speakerVpId"
                   :turn="item"
                   :now-ms="nowMs"
-                  :expand-state="vpTurnExpandStateFor(item)"
-                  @update-expand-state="state => setVpTurnExpandState(item, state)"
                 />
                 <AssistantTurn
                   v-else-if="item.type === 'assistant-turn'"
@@ -202,8 +199,6 @@ export default {
                 v-else-if="block.type === 'assistant-turn' && block.speakerVpId"
                 :turn="block"
                 :now-ms="nowMs"
-                :expand-state="vpTurnExpandStateFor(block)"
-                @update-expand-state="state => setVpTurnExpandState(block, state)"
               />
               <AssistantTurn
                 v-else-if="block.type === 'assistant-turn'"
@@ -553,7 +548,6 @@ export default {
   setup(_props, ctx) {
     const store = Pinia.useChatStore();
     const containerRef = Vue.ref(null);
-    const vpTurnExpandStates = Vue.reactive({});
     const assistantTurnActionStates = Vue.reactive({});
     const toolExpandStates = Vue.reactive({});
 
@@ -565,13 +559,6 @@ export default {
         || turn?.message?.id
         || 'turn_unknown'
     );
-    const defaultVpTurnExpandState = (turn) => turn?.isStreaming ? 'streaming' : 'auto-expanded';
-    const vpTurnExpandStateFor = (turn) => vpTurnExpandStates[turnUiKey(turn)] || defaultVpTurnExpandState(turn);
-    const setVpTurnExpandState = (turn, state) => {
-      const key = turnUiKey(turn);
-      if (!key || !state) return;
-      vpTurnExpandStates[key] = state;
-    };
     const assistantTurnActionsExpandedFor = (turn) => {
       const key = turnUiKey(turn);
       return Object.prototype.hasOwnProperty.call(assistantTurnActionStates, key)
@@ -1520,7 +1507,6 @@ export default {
     Vue.watch(
       () => store.currentConversation,
       () => {
-        for (const key of Object.keys(vpTurnExpandStates)) delete vpTurnExpandStates[key];
         for (const key of Object.keys(assistantTurnActionStates)) delete assistantTurnActionStates[key];
         for (const key of Object.keys(toolExpandStates)) delete toolExpandStates[key];
         isAtBottom.value = true;
@@ -1616,8 +1602,6 @@ export default {
       messageBlocks,
       estimateMessageBlockHeight,
       turnUiKey,
-      vpTurnExpandStateFor,
-      setVpTurnExpandState,
       assistantTurnActionsExpandedFor,
       setAssistantTurnActionsExpanded,
       toolExpandStates,

@@ -16,14 +16,14 @@ describe('MessageList virtualization wiring', () => {
     expect(source).not.toContain('<template v-for="block in messageBlocks"');
   });
 
-  it('keeps remounted turn and tool UI state keyed by turn id', () => {
+  it('keeps remounted assistant action and tool UI state keyed by turn id', () => {
     const source = read('components/MessageList.js');
 
-    expect(source).toContain('const vpTurnExpandStates = Vue.reactive({});');
     expect(source).toContain('const assistantTurnActionStates = Vue.reactive({});');
     expect(source).toContain('const toolExpandStates = Vue.reactive({});');
-    expect(source).toContain(':expand-state="vpTurnExpandStateFor(block)"');
     expect(source).toContain(':actions-expanded="assistantTurnActionsExpandedFor(block)"');
     expect(source).toContain(':tool-expand-states="toolExpandStates"');
+    expect(source).not.toContain('vpTurnExpandStates');
+    expect(source).not.toContain(':expand-state="vpTurnExpandStateFor(block)"');
   });
 });

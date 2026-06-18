@@ -1378,15 +1378,9 @@ export default {
   'yeaft.feature.pill.label': 'task',
   'yeaft.feature.messageTime.aria': 'Sent at {time}',
 
-  // VP-block redesign Phase 3 (2026-05-08): VpTurnBlock — collapsible
-  // per-VP turn wrapper. The compact view shows last 6 lines + last
-  // 1 tool; the expanded view is the full AssistantTurn surface.
-  'yeaft.vp.turnBlock.expand': 'Expand turn',
-  'yeaft.vp.turnBlock.collapse': 'Collapse turn',
+  // VpTurnBlock — per-VP turn wrapper. The body is always the full
+  // AssistantTurn surface; VirtualTranscript handles delayed mounting.
   'yeaft.vp.turnBlock.elapsedTitle': 'Time elapsed since this turn started',
-  'yeaft.vp.turnBlock.truncated': 'Showing last 6 of {total} lines — click to expand',
-  'yeaft.vp.turnBlock.thinking': 'thinking…',
-  'yeaft.vp.turnBlock.empty': '(no text)',
 
   // VP timeline pane — left-of-conversation roster list. Restored
   // v0.1.767 after PR #767 inadvertently removed it together with the

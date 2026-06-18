@@ -8,30 +8,13 @@
  * Avatar display was removed after user feedback; the VP identity now lives
  * in the colored name text so the sidebar stays readable at small sizes.
  *
- * Header content (always visible, never collapsed):
+ * Header content:
  *   [Display name] · [HH:MM start time] [· Ns elapsed while streaming]
- *                                                  [stop btn] [toggle]
+ *                                                  [stop btn]
  *
- * Body collapse — kept the explicit expand machine (see
- * turn-compact.js) but ONLY collapses the body. The header is
- * unconditional, so identity never disappears when a user manually
- * collapses a turn:
- *
- *     'streaming'      — auto, while turn.isStreaming === true     → expanded body
- *     'auto-expanded'  — auto, after streaming ends                → expanded body
- *     'user-expanded'  — sticky, after user clicks chevron open    → expanded body
- *     'user-collapsed' — sticky, after user clicks chevron close   → collapsed body
- *
- * Expanded body delegates to AssistantTurn (full markdown, tool
- * history, todo, ask, images, footer actions). Collapsed body shows
- * a 6-line tail + the most-recent tool action — same as before, just
- * pinned next to the avatar instead of indented under a wide header.
- *
- * MessageList mounts VpTurnBlock only when the turn carries a
- * `speakerVpId`; legacy 1:1 chat turns (no VP attribution) fall
- * through to a plain AssistantTurn. The live elapsed ticker is
- * driven by a single page-shared `nowMs` ref passed in by MessageList
- * (one interval, not per-turn).
+ * The body is never message-collapsed. The transcript virtualization layer
+ * decides when off-screen turns mount; once a turn is mounted, users see the
+ * real AssistantTurn content instead of a compact placeholder.
  *
  * Props:
  *   turn         — required; the turn object produced by MessageList.turnGroups.
@@ -44,27 +27,18 @@
  *                  MessageList while any turn is streaming.
  */
 import AssistantTurn from './AssistantTurn.js';
-import ToolLine from './ToolLine.js';
 import { useChatStore } from '../stores/chat.js';
 import { useVpStore } from '../stores/vp.js';
-import {
-  compactBody,
-  isExpanded as isExpandedFn,
-  toggleState,
-  reconcileStreamingState,
-  formatElapsed,
-} from '../stores/helpers/turn-compact.js';
+import { formatElapsed } from '../stores/helpers/turn-timing.js';
 
 export default {
   name: 'VpTurnBlock',
-  components: { AssistantTurn, ToolLine },
+  components: { AssistantTurn },
   props: {
     turn: { type: Object, required: true },
     conversationId: { type: String, default: null },
     nowMs: { type: Number, default: 0 },
-    expandState: { type: String, default: null },
   },
-  emits: ['update-expand-state'],
   template: `
     <div class="vp-turn-block"
          :class="{ 'vp-turn-block-streaming': turn.isStreaming }"
@@ -72,7 +46,7 @@ export default {
          :data-vp-id="turn.speakerVpId || ''">
 
       <!-- Header text carries VP identity; avatars were removed from the turn list. -->
-      <!-- Right column: header (always visible) + body (collapsible). -->
+      <!-- Right column: header plus full body. VirtualTranscript handles deferred mounting. -->
       <div class="vp-turn-block-main">
         <div class="vp-turn-block-main-header">
           <span
@@ -112,97 +86,25 @@ export default {
             :title="$t ? $t('yeaft.vp.speaker.stop') : 'Stop'"
             :aria-label="$t ? $t('yeaft.vp.speaker.stop') : 'Stop'"
           ><svg viewBox="0 0 24 24" width="14" height="14"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg></button>
-          <button
-            type="button"
-            class="vp-turn-block-toggle"
-            @click.stop="onToggle"
-            :title="expanded ? toggleCollapseTitle : toggleExpandTitle"
-            :aria-label="expanded ? toggleCollapseTitle : toggleExpandTitle"
-            :aria-expanded="expanded ? 'true' : 'false'"
-          >
-            <svg viewBox="0 0 24 24" width="14" height="14">
-              <path v-if="expanded" fill="currentColor" d="M7 14l5-5 5 5z"/>
-              <path v-else fill="currentColor" d="M7 10l5 5 5-5z"/>
-            </svg>
-          </button>
         </div>
 
-        <!-- Expanded body: full AssistantTurn delegates rendering of
-             markdown text + tool history + todo + ask + images. We
-             pass 'hide-speaker-header' so AssistantTurn suppresses its
-             own VpSpeakerHeader — the avatar/name are already in our
-             right-column header. -->
+        <!-- Full AssistantTurn delegates rendering of markdown text + tool
+             history + todo + ask + images. VirtualTranscript handles deferred
+             mounting for off-screen turns; this component must not replace the
+             message body with a collapsed preview. -->
         <AssistantTurn
-          v-if="expanded"
           class="vp-turn-block-body-expanded"
           :turn="turn"
           :conversation-id="conversationId"
           :hide-speaker-header="true"
         />
-
-        <!-- Collapsed body: 6-line text tail + last 1 tool action.
-             Identity is preserved by the header above — the body just
-             communicates "what they said / what they did". -->
-        <div v-else class="vp-turn-block-compact">
-          <div
-            v-if="compactText.text"
-            class="vp-turn-block-compact-text"
-            :class="{ 'vp-turn-block-compact-truncated': compactText.truncated }"
-            :title="compactText.truncated ? truncatedTitle : ''"
-          >{{ compactText.text }}</div>
-          <div v-if="lastTool" class="vp-turn-block-compact-tool">
-            <ToolLine
-              :tool-name="lastTool.toolName"
-              :tool-input="lastTool.toolInput"
-              :tool-result="lastTool.toolResult"
-              :has-result="!!lastTool.hasResult"
-              :start-time="lastTool.startTime"
-            />
-          </div>
-          <div
-            v-if="!compactText.text && !lastTool"
-            class="vp-turn-block-compact-empty"
-          >{{ emptyText }}</div>
-        </div>
       </div>
     </div>
   `,
-  setup(props, { emit }) {
+  setup(props) {
     const store = useChatStore();
     const vpStore = useVpStore();
-    const t = Vue.inject('t', null);
-
-    // Explicit expand machine. Initial value depends on whether the turn
-    // is streaming when first mounted (resumes mid-stream → 'streaming').
-    // Completed VP turns are expanded by default; manual collapse still sticks.
-    const internalExpandState = Vue.ref(props.turn.isStreaming ? 'streaming' : 'auto-expanded');
-    const currentExpandState = Vue.computed(() => props.expandState || internalExpandState.value);
-    const setExpandState = (state) => {
-      if (!state) return;
-      internalExpandState.value = state;
-      emit('update-expand-state', state);
-    };
-
-    // Reconcile the auto-* part of the machine whenever the upstream
-    // streaming flag changes. The user-* states are immune (see
-    // reconcileStreamingState).
-    Vue.watch(
-      () => props.turn.isStreaming,
-      (isStreaming) => {
-        setExpandState(reconcileStreamingState(currentExpandState.value, !!isStreaming));
-      },
-    );
-
-    const expanded = Vue.computed(() => isExpandedFn(currentExpandState.value));
-
-    const onToggle = () => {
-      setExpandState(toggleState(currentExpandState.value));
-    };
-
     const onAvatarClick = () => {
-      // Reuse the same path the timeline + speaker header use. Click on
-      // either the avatar gutter or the name in the right-column header
-      // routes here so users have a wide, obvious affordance.
       const vpId = props.turn && props.turn.speakerVpId;
       if (!vpId) return;
       store.enterVpDetailView(vpId);
@@ -245,15 +147,6 @@ export default {
       () => !!(props.turn && props.turn.isStreaming && props.turn.turnId)
     );
 
-    // Compact body — recomputed reactively as text streams in.
-    const compactText = Vue.computed(() => compactBody(props.turn.textContent || '', 6));
-
-    const lastTool = Vue.computed(() => {
-      const tools = props.turn.toolMsgs;
-      if (!Array.isArray(tools) || tools.length === 0) return null;
-      return tools[tools.length - 1];
-    });
-
     const startedTimeText = Vue.computed(() => {
       const ts = props.turn.speakerTimestamp;
       if (!ts) return '';
@@ -280,45 +173,16 @@ export default {
       return formatElapsed(ms);
     });
 
-    const truncatedTitle = Vue.computed(() => {
-      const total = compactText.value.totalLines;
-      return t
-        ? t('yeaft.vp.turnBlock.truncated', { total })
-        : `Showing last 6 of ${total} lines — click to expand.`;
-    });
-
-    const emptyText = Vue.computed(() => {
-      if (props.turn.isStreaming) {
-        return t ? t('yeaft.vp.turnBlock.thinking') : 'thinking…';
-      }
-      return t ? t('yeaft.vp.turnBlock.empty') : '(no text)';
-    });
-
-    const toggleExpandTitle = Vue.computed(() =>
-      t ? t('yeaft.vp.turnBlock.expand') : 'Expand turn'
-    );
-    const toggleCollapseTitle = Vue.computed(() =>
-      t ? t('yeaft.vp.turnBlock.collapse') : 'Collapse turn'
-    );
-
     return {
-      expanded,
-      onToggle,
       onAvatarClick,
       onStopTurn,
       isTyping,
       showStop,
       displayName,
       speakerNameStyle,
-      compactText,
-      lastTool,
       startedTimeText,
       startedTimeFullText,
       elapsedText,
-      truncatedTitle,
-      emptyText,
-      toggleExpandTitle,
-      toggleCollapseTitle,
     };
   },
 };
