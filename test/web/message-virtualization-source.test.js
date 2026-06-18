@@ -26,4 +26,14 @@ describe('MessageList virtualization wiring', () => {
     expect(source).not.toContain('vpTurnExpandStates');
     expect(source).not.toContain(':expand-state="vpTurnExpandStateFor(block)"');
   });
+
+  it('keeps load-more template handlers and loading state wired through setup', () => {
+    const source = read('components/MessageList.js');
+
+    expect(source).toContain('@click="onClickLoadMore"');
+    expect(source).toContain('const onClickLoadMore = () => {');
+    expect(source).toContain('onClickLoadMore,');
+    expect(source).toContain('v-if="store.sessionLoading"');
+    expect(source).not.toContain('v-if="sessionLoading"');
+  });
 });
