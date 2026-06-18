@@ -1,28 +1,14 @@
 /**
- * VpTimelinePane — left-of-conversation VP list.
+ * VpTimelinePane — left-of-conversation Session status pane.
  *
- * Originally introduced in PR-3 of the feature-pill double-track
- * redesign. PR #767 ("remove feature system, add TodoWrite + tool
- * usage stats") deleted this component along with the Feature system,
- * but conflated the VP list (a roster-driven left pane that is part
- * of the core group conversation UI) with feature-specific surfaces.
- * v0.1.767 restored the pane WITHOUT the feature-aware row branch.
- *
- * Surfaces, for the active Yeaft conversation, one row per VP showing
- * colored name + live status (typing / streaming / idle). Pane sits
- * inside `yeaft-main` to the LEFT of the conversation, matching Crew's
- * members-left shape. The component itself is placement-agnostic —
- * only its parent container + the resize handle direction in CSS
- * reflect the side it's on.
- *
- * UI polish (feat-vp-list-ui-polish): the row is a single line —
- * name + inline status. The row's primary click action @-mentions
- * the VP into the chat input; editing the VP is a hover-revealed
- * affordance on the right side, sitting next to the abort button
- * (visible only while a turn is active).
+ * Originally introduced as a VP roster pane. It now presents the active
+ * Yeaft Session status: the VP roster first, then running background
+ * tasks. The historical file/component name is intentionally kept to avoid
+ * a noisy rename chain across parent components and tests.
  *
  * Props:
  *   rows — TimelineRow[] (see web/stores/helpers/vp-timeline.js for shape).
+ *   tasks — running Session task snapshots.
  *
  * Emits:
  *   mention-vp (vpId)      — primary row click / Enter / Space. YeaftPage
@@ -42,115 +28,138 @@ export default {
     tasks: { type: Array, default: () => [] },
   },
   template: `
-    <aside class="yeaft-vp-timeline" :aria-label="$t('yeaft.vpTimeline.aria')">
+    <aside class="yeaft-vp-timeline yeaft-session-status-pane" :aria-label="$t('yeaft.sessionStatus.aria')">
       <div
         class="yeaft-vp-timeline-resize-handle"
         @mousedown.prevent="$emit('start-resize', $event)"
         :title="$t('yeaft.vpTimeline.resizeTitle')"
         aria-hidden="true"
       ></div>
-      <header class="yeaft-vp-timeline-header">
-        <span class="yeaft-vp-timeline-title">{{ $t('yeaft.vpTimeline.title') }}</span>
-        <span class="yeaft-vp-timeline-count" v-if="rows.length">{{ rows.length }}</span>
+      <header class="yeaft-session-status-header">
+        <span class="yeaft-session-status-title">
+          <svg class="yeaft-session-status-icon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="16" rx="3"/>
+            <path d="M8 9h8"/>
+            <path d="M8 14h5"/>
+          </svg>
+          <span>{{ $t('yeaft.sessionStatus.title') }}</span>
+        </span>
       </header>
 
-      <div v-if="!rows.length" class="yeaft-vp-timeline-empty">
-        {{ $t('yeaft.vpTimeline.empty') }}
-      </div>
+      <section class="yeaft-session-status-section" :aria-label="$t('yeaft.sessionStatus.vps')">
+        <header class="yeaft-session-status-section-header">
+          <span>{{ $t('yeaft.sessionStatus.vps') }}</span>
+          <span class="yeaft-session-status-count" v-if="rows.length">{{ rows.length }}</span>
+        </header>
 
-      <ul v-else class="yeaft-vp-timeline-list">
-        <li
-          v-for="row in rows"
-          :key="row.vpId"
-          class="yeaft-vp-timeline-row"
-          :class="['is-status-' + row.status, { 'is-stopping': row.isStopping }]"
-          tabindex="0"
-          role="button"
-          :aria-label="row.displayName + ' — ' + statusLabel(row)"
-          :title="$t('yeaft.vpTimeline.mention')"
-          @click="$emit('mention-vp', row.vpId)"
-          @keydown.enter.prevent="$emit('mention-vp', row.vpId)"
-          @keydown.space.prevent="$emit('mention-vp', row.vpId)"
-        >
-          <div class="yeaft-vp-timeline-row-body">
-            <span class="yeaft-vp-timeline-row-name" :style="{ color: vpTextColorFor(row.vpId) }">{{ row.displayName }}</span>
-            <span class="yeaft-vp-timeline-row-status">{{ statusLabel(row) }}</span>
-            <span
-              v-if="row.runningThreadCount > 1"
-              class="yeaft-vp-timeline-thread-count"
-              :title="threadCountTitle(row)"
-            >{{ row.runningThreadCount }} threads</span>
-          </div>
-          <!--
-            Right-side affordance cluster. Both buttons stop click
-            propagation so they don't fall through to the row's primary
-            mention action. The abort button is only visible while the VP
-            is actually doing something; the edit button is hover-revealed
-            (CSS) so the row stays visually quiet at rest.
-          -->
-          <span class="yeaft-vp-timeline-row-actions">
-            <span
-              v-if="isActiveStatus(row.status)"
-              class="yeaft-vp-timeline-abort"
-              :class="{ 'is-stopping': row.isStopping }"
-              role="button"
-              tabindex="0"
-              :aria-label="$t('yeaft.vpTimeline.abort')"
-              :aria-disabled="row.isStopping ? 'true' : 'false'"
-              :title="$t('yeaft.vpTimeline.abort')"
-              @click.stop="!row.isStopping && $emit('cancel-vp-turn', row.vpId)"
-              @keydown.enter.stop.prevent="!row.isStopping && $emit('cancel-vp-turn', row.vpId)"
-              @keydown.space.stop.prevent="!row.isStopping && $emit('cancel-vp-turn', row.vpId)"
-            >
-              <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>
-              </svg>
-            </span>
-            <span
-              class="yeaft-vp-timeline-edit"
-              role="button"
-              tabindex="0"
-              :aria-label="$t('yeaft.vpTimeline.edit')"
-              :title="$t('yeaft.vpTimeline.edit')"
-              @click.stop="$emit('edit-vp', row.vpId)"
-              @keydown.enter.stop.prevent="$emit('edit-vp', row.vpId)"
-              @keydown.space.stop.prevent="$emit('edit-vp', row.vpId)"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 20h9"/>
-                <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
-              </svg>
-            </span>
-          </span>
-        </li>
-      </ul>
+        <div v-if="!rows.length" class="yeaft-vp-timeline-empty">
+          {{ $t('yeaft.vpTimeline.empty') }}
+        </div>
 
-      <section class="yeaft-vp-task-board" :aria-label="$t('yeaft.session.runningTasks')">
-        <header class="yeaft-vp-task-board-header">
-          <span>{{ $t('yeaft.session.runningTasks') }}</span>
-          <span class="yeaft-vp-task-count" v-if="tasks.length">{{ tasks.length }}</span>
+        <ul v-else class="yeaft-vp-timeline-list">
+          <li
+            v-for="row in rows"
+            :key="row.vpId"
+            class="yeaft-vp-timeline-row"
+            :class="['is-status-' + row.status, { 'is-stopping': row.isStopping }]"
+            tabindex="0"
+            role="button"
+            :aria-label="row.displayName + ' — ' + statusLabel(row)"
+            :title="$t('yeaft.vpTimeline.mention')"
+            @click="$emit('mention-vp', row.vpId)"
+            @keydown.enter.prevent="$emit('mention-vp', row.vpId)"
+            @keydown.space.prevent="$emit('mention-vp', row.vpId)"
+          >
+            <div class="yeaft-vp-timeline-row-body">
+              <span class="yeaft-vp-timeline-row-name" :style="{ color: vpTextColorFor(row.vpId) }">{{ row.displayName }}</span>
+              <span class="yeaft-vp-timeline-row-status">{{ statusLabel(row) }}</span>
+              <span
+                v-if="row.runningThreadCount > 1"
+                class="yeaft-vp-timeline-thread-count"
+                :title="threadCountTitle(row)"
+              >{{ row.runningThreadCount }} threads</span>
+            </div>
+            <!--
+              Right-side affordance cluster. Both buttons stop click
+              propagation so they don't fall through to the row's primary
+              mention action. The abort button is only visible while the VP
+              is actually doing something; the edit button is hover-revealed
+              (CSS) so the row stays visually quiet at rest.
+            -->
+            <span class="yeaft-vp-timeline-row-actions">
+              <span
+                v-if="isActiveStatus(row.status)"
+                class="yeaft-vp-timeline-abort"
+                :class="{ 'is-stopping': row.isStopping }"
+                role="button"
+                tabindex="0"
+                :aria-label="$t('yeaft.vpTimeline.abort')"
+                :aria-disabled="row.isStopping ? 'true' : 'false'"
+                :title="$t('yeaft.vpTimeline.abort')"
+                @click.stop="!row.isStopping && $emit('cancel-vp-turn', row.vpId)"
+                @keydown.enter.stop.prevent="!row.isStopping && $emit('cancel-vp-turn', row.vpId)"
+                @keydown.space.stop.prevent="!row.isStopping && $emit('cancel-vp-turn', row.vpId)"
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>
+                </svg>
+              </span>
+              <span
+                class="yeaft-vp-timeline-edit"
+                role="button"
+                tabindex="0"
+                :aria-label="$t('yeaft.vpTimeline.edit')"
+                :title="$t('yeaft.vpTimeline.edit')"
+                @click.stop="$emit('edit-vp', row.vpId)"
+                @keydown.enter.stop.prevent="$emit('edit-vp', row.vpId)"
+                @keydown.space.stop.prevent="$emit('edit-vp', row.vpId)"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 20h9"/>
+                  <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
+                </svg>
+              </span>
+            </span>
+          </li>
+        </ul>
+      </section>
+
+      <section class="yeaft-vp-task-board yeaft-session-status-section" :aria-label="$t('yeaft.sessionStatus.backgroundTasks')">
+        <header class="yeaft-vp-task-board-header yeaft-session-status-section-header">
+          <span>{{ $t('yeaft.sessionStatus.backgroundTasks') }}</span>
+          <span class="yeaft-vp-task-count yeaft-session-status-count" v-if="tasks.length">{{ tasks.length }}</span>
         </header>
         <div v-if="!tasks.length" class="yeaft-vp-task-empty">
           {{ $t('yeaft.session.tasksEmpty') }}
         </div>
         <div v-else class="yeaft-vp-task-list">
-          <article v-for="task in tasks" :key="task.id" class="yeaft-vp-task-item">
+          <article v-for="task in tasks" :key="task.id" class="yeaft-vp-task-item" :class="{ 'is-expanded': expandedTasks[task.id] }">
             <button type="button" class="yeaft-vp-task-summary" @click="toggleTaskExpanded(task.id)">
-              <span class="yeaft-vp-task-dot"></span>
-              <span class="yeaft-vp-task-title">{{ task.title || task.id }}</span>
+              <span class="yeaft-vp-task-dot" aria-hidden="true"></span>
+              <span class="yeaft-vp-task-main">
+                <span class="yeaft-vp-task-title">{{ task.title || task.id }}</span>
+                <span class="yeaft-vp-task-meta">{{ taskOwnerName(task) }} · {{ formatTaskTime(task.startedAt) }}</span>
+              </span>
               <span class="yeaft-vp-task-kind">{{ task.kind }}</span>
+              <svg class="yeaft-vp-task-chevron" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 18l6-6-6-6"/>
+              </svg>
             </button>
             <div v-if="expandedTasks[task.id]" class="yeaft-vp-task-detail">
-              <div>{{ $t('yeaft.session.owner') }}: {{ taskOwnerName(task) }}</div>
-              <div>{{ $t('yeaft.session.started') }}: {{ formatTaskTime(task.startedAt) }}</div>
-              <pre v-if="task.log && task.log.preview" class="yeaft-vp-task-log">{{ task.log.preview }}</pre>
+              <pre
+                v-if="task.log && task.log.preview"
+                class="yeaft-vp-task-log"
+                :ref="el => setTaskLogRef(task.id, el)"
+                @scroll="onTaskLogScroll(task.id)"
+              >{{ task.log.preview }}</pre>
+              <div v-else class="yeaft-vp-task-log-empty">{{ $t('yeaft.sessionStatus.noLogPreview') }}</div>
             </div>
           </article>
         </div>
       </section>
     </aside>
   `,
-  setup() {
+  setup(props) {
     const vpStore = (window.Pinia && window.Pinia.useVpStore)
       ? window.Pinia.useVpStore()
       : null;
@@ -165,9 +174,49 @@ export default {
     const $t = (inst && inst.appContext.config.globalProperties.$t) || ((k) => k);
 
     const expandedTasks = Vue.ref({});
-    const toggleTaskExpanded = (taskId) => {
-      expandedTasks.value = { ...expandedTasks.value, [taskId]: !expandedTasks.value[taskId] };
+    const taskLogRefs = new Map();
+    const taskLogPinned = new Map();
+
+    const scrollTaskLogToBottom = (taskId) => {
+      const el = taskLogRefs.get(taskId);
+      if (!el) return;
+      el.scrollTop = el.scrollHeight;
+      taskLogPinned.set(taskId, true);
     };
+    const toggleTaskExpanded = (taskId) => {
+      const nextExpanded = !expandedTasks.value[taskId];
+      expandedTasks.value = { ...expandedTasks.value, [taskId]: nextExpanded };
+      if (nextExpanded) {
+        taskLogPinned.set(taskId, true);
+        Vue.nextTick(() => scrollTaskLogToBottom(taskId));
+      }
+    };
+    const setTaskLogRef = (taskId, el) => {
+      if (el) {
+        taskLogRefs.set(taskId, el);
+        if (!taskLogPinned.has(taskId)) taskLogPinned.set(taskId, true);
+        Vue.nextTick(() => {
+          if (taskLogPinned.get(taskId)) scrollTaskLogToBottom(taskId);
+        });
+      } else {
+        taskLogRefs.delete(taskId);
+      }
+    };
+    const onTaskLogScroll = (taskId) => {
+      const el = taskLogRefs.get(taskId);
+      if (!el) return;
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      taskLogPinned.set(taskId, distanceFromBottom < 8);
+    };
+    Vue.watch(
+      () => JSON.stringify((Array.isArray(props.tasks) ? props.tasks : []).map(task => [task.id, task?.log?.preview || ''])),
+      () => Vue.nextTick(() => {
+        taskLogRefs.forEach((_, taskId) => {
+          if (taskLogPinned.get(taskId)) scrollTaskLogToBottom(taskId);
+        });
+      })
+    );
+
     const taskOwnerName = (task) => {
       const owner = task?.ownerVpId || '';
       if (!owner) return 'unknown';
@@ -209,6 +258,17 @@ export default {
         .join('\n');
     };
 
-    return { statusLabel, isActiveStatus, threadCountTitle, vpTextColorFor, expandedTasks, toggleTaskExpanded, taskOwnerName, formatTaskTime };
+    return {
+      statusLabel,
+      isActiveStatus,
+      threadCountTitle,
+      vpTextColorFor,
+      expandedTasks,
+      toggleTaskExpanded,
+      taskOwnerName,
+      formatTaskTime,
+      setTaskLogRef,
+      onTaskLogScroll,
+    };
   },
 };

@@ -150,17 +150,21 @@ export default {
           </div>
 
           <div class="yeaft-topbar-right">
-            <!-- VP list show/hide toggle. Hidden under 1024 px because the pane itself is gated by the same breakpoint. -->
+            <!-- Session status show/hide toggle. Hidden under 1024 px because the pane itself is gated by the same breakpoint. -->
             <button
               v-if="!isNarrowDetail"
               class="yeaft-topbar-vp-toggle"
               :class="{ active: vpTimelineVisible }"
               @click="toggleVpTimeline"
-              :title="vpTimelineVisible ? $t('yeaft.vpTimeline.hide') : $t('yeaft.vpTimeline.show')"
-              :aria-label="vpTimelineVisible ? $t('yeaft.vpTimeline.hide') : $t('yeaft.vpTimeline.show')"
+              :title="vpTimelineVisible ? $t('yeaft.sessionStatus.hide') : $t('yeaft.sessionStatus.show')"
+              :aria-label="vpTimelineVisible ? $t('yeaft.sessionStatus.hide') : $t('yeaft.sessionStatus.show')"
               :aria-expanded="vpTimelineVisible ? 'true' : 'false'"
             >
-              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5s-3 1.34-3 3 1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C15 14.17 10.33 13 8 13zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5C23 14.17 18.33 13 16 13z"/></svg>
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="4" width="18" height="16" rx="3"/>
+                <path d="M8 9h8"/>
+                <path d="M8 14h5"/>
+              </svg>
             </button>
             <button
               v-if="topbarGroup"
