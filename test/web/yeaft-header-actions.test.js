@@ -67,6 +67,8 @@ describe('Yeaft conversation header actions', () => {
     expect(announcementSource).toContain('Legacy alias for sessionId');
     expect(announcementSource).toContain("groupId: { type: String, default: '' }");
     expect(announcementSource).toContain('activeSessionId()');
+    expect(announcementSource).toContain('activeSessionId() {\n      this.expanded = false;');
+    expect(announcementSource).not.toContain('sessionId() {\n      this.expanded = false;');
     expect(yeaftCss).toContain('.group-announcement-bar.yeaft-session-announcement-sticky');
     expect(yeaftCss).toContain('position: sticky;');
     expect(yeaftCss).toContain('flex-shrink: 0;');

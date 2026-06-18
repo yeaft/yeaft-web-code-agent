@@ -69,9 +69,10 @@ export default {
     },
   },
   watch: {
-    // If the group flips out from under the bar, reset local edit state so
-    // we don't leak draft text across groups.
-    sessionId() {
+    // If the session flips out from under the bar, reset local edit state so
+    // we don't leak draft text across sessions. Watch the computed id so the
+    // legacy groupId alias gets the same reset behavior during rolling deploys.
+    activeSessionId() {
       this.expanded = false;
       this.editing = false;
       this.draft = '';
