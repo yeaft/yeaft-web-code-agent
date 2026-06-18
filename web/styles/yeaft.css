@@ -1028,11 +1028,11 @@
 .yeaft-debug-turn-header {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 8px 6px;
+  gap: 10px;
+  min-height: 34px;
+  padding: 5px 6px;
   margin: 0 -6px;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
   font-size: 12px;
   color: var(--text-secondary);
@@ -1054,6 +1054,14 @@
   transform: rotate(90deg);
 }
 
+.yeaft-debug-turn-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 240px;
+}
+
 .yeaft-debug-turn-num {
   font-weight: 600;
   color: var(--text-primary);
@@ -1066,12 +1074,14 @@
 .yeaft-debug-turn-stats {
   margin-left: auto;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 10px;
   font-size: 11px;
   color: var(--text-muted);
   min-width: 0;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .yeaft-debug-turn-prompt,
@@ -1084,13 +1094,26 @@
 }
 
 .yeaft-debug-turn-prompt {
-  flex: 1 1 220px;
+  flex: 1 1 auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.yeaft-debug-turn-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 0 1 auto;
+  color: var(--text-muted);
 }
 
 .yeaft-debug-turn-group,
 .yeaft-debug-turn-vp {
-  max-width: 160px;
+  max-width: 150px;
   font-family: var(--font-mono);
+  font-size: 11px;
 }
 
 .yeaft-debug-history-bar {
@@ -1104,7 +1127,7 @@
 }
 
 .yeaft-debug-turn-body {
-  padding: 4px 6px 4px 22px; /* indent past the chevron column */
+  padding: 6px 6px 6px 22px; /* indent past the chevron column */
 }
 
 .yeaft-debug-section {
@@ -2052,20 +2075,20 @@
 }
 
 .yeaft-debug-loop {
-  margin: 6px 0 4px;
-  border-left: 1px solid var(--border-light);
-  padding-left: 10px;
+  margin: 4px 0;
+  border-left: none;
+  padding-left: 0;
 }
 
 .yeaft-debug-loop-header {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 8px;
+  min-height: 32px;
   cursor: pointer;
   padding: 4px 6px;
   margin: 0 -6px;
-  border-radius: 4px;
+  border-radius: 8px;
   font-size: 12px;
   transition: background 0.15s;
 }
@@ -2075,10 +2098,18 @@
   color: var(--text-primary);
 }
 
+.yeaft-debug-loop-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 180px;
+}
+
 .yeaft-debug-loop-num {
   font-weight: 600;
   flex: 0 0 auto;
-  color: var(--text-secondary);
+  color: var(--text-primary);
 }
 
 .yeaft-debug-loop-model {
@@ -2089,12 +2120,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
-  flex: 1 1 180px;
 }
 
 .yeaft-debug-loop-stats {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
   gap: 10px;
   font-size: 11px;
@@ -2102,11 +2132,22 @@
   font-variant-numeric: tabular-nums;
   margin-left: auto;
   align-items: center;
-  flex: 1 1 260px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.yeaft-debug-loop-token,
+.yeaft-debug-loop-total,
+.yeaft-debug-loop-latency {
+  color: var(--text-secondary);
 }
 
 .yeaft-debug-loop-meta {
   color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 84px;
 }
 
 /* feat-debug-token-breakdown: estimated message/tool split next to
@@ -2118,6 +2159,11 @@
   font-variant-numeric: tabular-nums;
   margin-left: 4px;
   white-space: nowrap;
+}
+
+.yeaft-debug-loop-token .yeaft-debug-tokens-split,
+.yeaft-debug-turn-tokens .yeaft-debug-tokens-split {
+  margin-left: 6px;
 }
 
 /* feat-debug-timestamp: per-turn / per-loop HH:MM:SS column. Sits at
@@ -2135,7 +2181,8 @@
 
 .yeaft-debug-loop-body {
   margin-top: 4px;
-  margin-left: 10px;
+  margin-left: 18px;
+  padding-bottom: 8px;
 }
 
 .yeaft-debug-tool-row {
