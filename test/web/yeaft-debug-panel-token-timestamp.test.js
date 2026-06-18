@@ -84,6 +84,29 @@ describe('YeaftDebugPanel · token breakdown + timestamp', () => {
     expect(block).toContain('tabular-nums');
   });
 
+  it('renders request log turns and loops as single-line rows', () => {
+    expect(panel).toContain('class="yeaft-debug-turn-main"');
+    expect(panel).toContain('class="yeaft-debug-turn-source"');
+    expect(panel).toContain('class="yeaft-debug-loop-main"');
+    expect(panel).toContain('class="yeaft-debug-loop-token"');
+    expect(panel).toContain('in {{ formatTokens(usageTotalInputTokens(loop.usage)) }}');
+    expect(panel).toContain('out {{ formatTokens(loop.usage?.outputTokens || 0) }}');
+  });
+
+  it('keeps request log expand controls inside the item row', () => {
+    const turnHeader = css.match(/\.yeaft-debug-turn-header\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+    const loopHeader = css.match(/\.yeaft-debug-loop-header\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+    const turnStats = css.match(/\.yeaft-debug-turn-stats\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+    const loopStats = css.match(/\.yeaft-debug-loop-stats\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+
+    expect(turnHeader).not.toMatch(/flex-wrap:\s*wrap/);
+    expect(loopHeader).not.toMatch(/flex-wrap:\s*wrap/);
+    expect(turnStats).toMatch(/flex-wrap:\s*nowrap/);
+    expect(loopStats).toMatch(/flex-wrap:\s*nowrap/);
+    expect(css).toContain('.yeaft-debug-turn-main');
+    expect(css).toContain('.yeaft-debug-loop-main');
+  });
+
   it('store persists loop.at from the wire event', () => {
     // The chat store's 'loop' case must thread event.at into the
     // pushed loop record so the panel can render per-loop time.
