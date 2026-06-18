@@ -1,10 +1,10 @@
 /**
- * SessionAnnouncementBar — collapsible banner at the top of the message list
- * that surfaces the current group's announcement (CLAUDE.md-style shared
+ * SessionAnnouncementBar — collapsible banner under the conversation header
+ * that surfaces the current session's announcement (CLAUDE.md-style shared
  * prefix injected into every VP's system prompt).
  *
- * Mount contract: rendered inside MessageList ABOVE the message stream
- * when an active group is selected and its `announcement` is non-empty
+ * Mount contract: rendered by YeaftPage below the conversation header
+ * when an active session is selected and its `announcement` is non-empty
  * (or when the user explicitly expands an empty bar to author one).
  *
  * Behavior:
@@ -20,7 +20,10 @@ export default {
   name: 'SessionAnnouncementBar',
   emits: ['open-settings'],
   props: {
-    groupId: { type: String, required: true },
+    sessionId: { type: String, default: '' },
+    // Legacy alias for sessionId. Kept so older parents can still mount the bar
+    // during a rolling deploy; new callers must pass sessionId.
+    groupId: { type: String, default: '' },
   },
   data() {
     return {
@@ -42,10 +45,14 @@ export default {
         return window.Pinia?.useSessionsStore?.() || null;
       } catch (_) { return null; }
     },
+    activeSessionId() {
+      return this.sessionId || this.groupId || '';
+    },
     group() {
       const gs = this.sessionsStore;
       if (!gs || !gs.sessions) return null;
-      return gs.sessions[this.groupId] || null;
+      const sessionId = this.activeSessionId;
+      return sessionId ? (gs.sessions[sessionId] || null) : null;
     },
     announcement() {
       const g = this.group;
@@ -62,9 +69,10 @@ export default {
     },
   },
   watch: {
-    // If the group flips out from under the bar, reset local edit state so
-    // we don't leak draft text across groups.
-    groupId() {
+    // If the session flips out from under the bar, reset local edit state so
+    // we don't leak draft text across sessions. Watch the computed id so the
+    // legacy groupId alias gets the same reset behavior during rolling deploys.
+    activeSessionId() {
       this.expanded = false;
       this.editing = false;
       this.draft = '';
@@ -98,7 +106,7 @@ export default {
       this.error = '';
       try {
         const res = await this.chat.sessionCrudRequest('update', {
-          sessionId: this.groupId,
+          sessionId: this.activeSessionId,
           patch: { announcement: this.draft },
         });
         if (res && res.ok) {
@@ -114,7 +122,7 @@ export default {
       }
     },
     onOpenSettings() {
-      this.$emit('open-settings', { sessionId: this.groupId, section: 'announcement' });
+      this.$emit('open-settings', { sessionId: this.activeSessionId, section: 'announcement' });
     },
   },
   template: `

@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 const read = (path) => readFileSync(new URL(`../../web/${path}`, import.meta.url), 'utf8');
 
 const pageSource = read('components/YeaftPage.js');
+const messageListSource = read('components/MessageList.js');
+const announcementSource = read('components/SessionAnnouncementBar.js');
 const sidebarSource = read('components/YeaftSidebar.js');
 const chatHeaderSource = read('components/ChatHeader.js');
 const yeaftCss = read('styles/yeaft.css');
@@ -42,6 +44,36 @@ describe('Yeaft conversation header actions', () => {
     expect(sidebarSource).toContain("openGroupSettingsFromMenu(s.raw, 'announcement')");
     expect(sidebarSource).toContain("$t('yeaft.session.openSettings')");
   });
+
+  it('pins the session announcement below the conversation header, outside the scrollable message list', () => {
+    const topbarStart = pageSource.indexOf('<div class="yeaft-topbar">');
+    const announcementStart = pageSource.indexOf('<SessionAnnouncementBar');
+    const vpDetailStart = pageSource.indexOf('<!-- task-334-ui-c: VP Detail View');
+
+    expect(topbarStart).toBeGreaterThan(-1);
+    expect(announcementStart).toBeGreaterThan(topbarStart);
+    expect(vpDetailStart).toBeGreaterThan(announcementStart);
+    expect(pageSource).toContain("import SessionAnnouncementBar from './SessionAnnouncementBar.js';");
+    expect(pageSource).toContain('class="yeaft-session-announcement-sticky"');
+    expect(pageSource).toContain(':session-id="topbarGroup.id"');
+    expect(pageSource).toContain('@open-settings="openGroupSettings"');
+
+    expect(messageListSource).not.toContain("import SessionAnnouncementBar from './SessionAnnouncementBar.js';");
+    expect(messageListSource).not.toContain('<SessionAnnouncementBar');
+    expect(messageListSource).toContain('const activeYeaftSessionId = Vue.computed(() => {');
+    expect(messageListSource).not.toContain('activeGroupIdForBar');
+
+    expect(announcementSource).toContain("sessionId: { type: String, default: '' }");
+    expect(announcementSource).toContain('Legacy alias for sessionId');
+    expect(announcementSource).toContain("groupId: { type: String, default: '' }");
+    expect(announcementSource).toContain('activeSessionId()');
+    expect(announcementSource).toContain('activeSessionId() {\n      this.expanded = false;');
+    expect(announcementSource).not.toContain('sessionId() {\n      this.expanded = false;');
+    expect(yeaftCss).toContain('.group-announcement-bar.yeaft-session-announcement-sticky');
+    expect(yeaftCss).toContain('position: sticky;');
+    expect(yeaftCss).toContain('flex-shrink: 0;');
+  });
+
 
   it('keeps message refresh as a session-history refresh action', () => {
     const block = topbarRightBlock();
