@@ -246,6 +246,7 @@ export default {
           @open-settings="openGroupSettings"
         />
 
+        <div class="yeaft-conversation-body">
         <!-- H2.f.6: YeaftFeatureDetailView removed — cross-thread aggregation
              retired with the multi-thread engine; the task-detail view had
              no message data source after H2.f.1, so it's been deleted.
@@ -287,6 +288,7 @@ export default {
 
         <!-- Settings Panel -->
         <SettingsPanel v-if="showSettings" :visible="showSettings" :initial-tab="'yeaft'" :initial-sub-tab="settingsInitialTab" :initial-edit-vp-id="settingsInitialEditVpId" @close="showSettings = false" />
+        </div>
 
         <div v-if="showLlmConfig" class="modal-overlay yeaft-llm-config-overlay" @click.self="showLlmConfig = false">
           <div class="modal-card yeaft-llm-config-modal" role="dialog" aria-modal="true" :aria-label="$t('settings.llm.configureAgent')">
