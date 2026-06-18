@@ -1402,11 +1402,12 @@ export default {
       return scrollHeight - scrollTop - clientHeight <= SCROLL_THRESHOLD;
     };
 
-    const maybeLoadMoreNearTop = (scrollTop) => {
+    const maybeLoadMoreNearTop = (scrollTop, { allowContinuation = false } = {}) => {
       if (scrollTop > LOAD_MORE_TOP_THRESHOLD) {
         loadMoreArmed = true;
         return;
       }
+      if (allowContinuation) loadMoreArmed = true;
       if (!loadMoreArmed || !canLoadMoreMessages()) return;
       loadMoreArmed = false;
 
@@ -1414,6 +1415,13 @@ export default {
       // Yeaft share onClickLoadMore() so the click path and scroll path
       // cannot drift apart.
       onClickLoadMore();
+    };
+
+    const continueLoadMoreIfStillNearTop = () => {
+      Vue.nextTick(() => {
+        if (!containerRef.value) return;
+        maybeLoadMoreNearTop(containerRef.value.scrollTop || 0, { allowContinuation: true });
+      });
     };
 
     const onVirtualTranscriptScrollState = ({ scrollTop, scrollHeight, clientHeight }) => {
@@ -1424,6 +1432,7 @@ export default {
     const preserveScrollAnchorDuringLoad = (loadFn, loadingRef) => {
       if (!containerRef.value) {
         loadFn();
+        continueLoadMoreIfStillNearTop();
         return;
       }
 
@@ -1440,6 +1449,7 @@ export default {
           if (!containerRef.value) return;
           const newScrollHeight = containerRef.value.scrollHeight;
           containerRef.value.scrollTop = newScrollHeight - prevScrollHeight + prevScrollTop;
+          continueLoadMoreIfStillNearTop();
         });
       };
 

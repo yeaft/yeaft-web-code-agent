@@ -42,11 +42,12 @@ describe('MessageList virtualization wiring', () => {
     const source = read('components/MessageList.js');
 
     expect(source).toContain('const LOAD_MORE_TOP_THRESHOLD = 100;');
-    expect(source).toContain('const maybeLoadMoreNearTop = (scrollTop) => {');
+    expect(source).toContain('const maybeLoadMoreNearTop = (scrollTop, { allowContinuation = false } = {}) => {');
     expect(source).toContain('if (scrollTop > LOAD_MORE_TOP_THRESHOLD) {');
     expect(source).toContain('onClickLoadMore();');
     expect(source).toContain('maybeLoadMoreNearTop(scrollTop || 0);');
-    expect(source).toContain('if (containerRef.value) maybeLoadMoreNearTop(containerRef.value.scrollTop || 0);');
+    expect(source).toContain('const continueLoadMoreIfStillNearTop = () => {');
+    expect(source).toContain('maybeLoadMoreNearTop(containerRef.value.scrollTop || 0, { allowContinuation: true });');
   });
 
   it('defers ResizeObserver measurements out of the observer callback', () => {
