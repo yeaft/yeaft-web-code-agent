@@ -41,8 +41,8 @@ class CapturingTrace extends NullTrace {
 }
 
 describe('tool result raw storage boundaries', () => {
-  it('keeps tool_end/debug raw while truncating only the model tool message', async () => {
-    const raw = 'x'.repeat(1500);
+  it('keeps tool_end/debug raw while truncating only the oversized model tool message', async () => {
+    const raw = 'x'.repeat(12 * 1024);
     const adapter = new MockAdapter();
     adapter.pushResponse([
       { type: 'tool_call', id: 'call_1', name: 'BigTool', input: {} },
@@ -81,7 +81,40 @@ describe('tool result raw storage boundaries', () => {
     const secondCallToolMessage = adapter.callLog[1].messages.find(m => m.role === 'tool');
     expect(secondCallToolMessage.content).not.toBe(raw);
     expect(secondCallToolMessage.content).toContain('[truncated: BigTool returned');
+    expect(secondCallToolMessage.content).toContain('capped at 10.0KB');
     expect(secondCallToolMessage.content.length).toBeLessThan(raw.length);
+  });
+
+  it('keeps current model tool messages below 10KiB untruncated', async () => {
+    const raw = 'z'.repeat(9 * 1024);
+    const adapter = new MockAdapter();
+    adapter.pushResponse([
+      { type: 'tool_call', id: 'call_1', name: 'MediumTool', input: {} },
+      { type: 'stop', stopReason: 'tool_use' },
+    ]);
+    adapter.pushResponse([
+      { type: 'text_delta', text: 'done' },
+      { type: 'stop', stopReason: 'end_turn' },
+    ]);
+
+    const engine = new Engine({
+      adapter,
+      trace: new CapturingTrace(),
+      config: { model: 'test-model', language: 'en' },
+    });
+    engine.registerTool({
+      name: 'MediumTool',
+      description: 'returns a medium result',
+      parameters: { type: 'object', properties: {} },
+      execute: async () => raw,
+    });
+
+    for await (const _event of engine.query({ prompt: 'run medium tool' })) {
+      // Drain the turn.
+    }
+
+    const secondCallToolMessage = adapter.callLog[1].messages.find(m => m.role === 'tool');
+    expect(secondCallToolMessage.content).toBe(raw);
   });
 
   it('ToolRegistry.execute returns raw normalized text', async () => {
@@ -233,7 +266,7 @@ describe('tool result raw storage boundaries', () => {
 
   it('keeps in-memory session history raw but truncates replay snapshot for the model', () => {
     const sessionId = `session_tool_raw_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    const raw = 'z'.repeat(1500);
+    const raw = 'z'.repeat(12 * 1024);
     __testAppendTurnToSessionHistory(
       sessionId,
       'main',
