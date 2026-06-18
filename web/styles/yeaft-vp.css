@@ -904,19 +904,16 @@
 }
 
 /* ---------------------------------------------------------------------
- * VpTurnBlock — Slack-style two-column turn block (2026-05-09).
+ * VpTurnBlock — full VP turn block.
  *
- * Two-column grid: avatar gutter | main column (header + body).
+ * Single-column layout: compact VP header followed by the full
+ * AssistantTurn body. Messages are not collapsed here; off-screen
+ * deferred mounting belongs to VirtualTranscript.
  *
  *   ┌──────────────────────────────────────────────────────────┐
- *   │ ┌─avatar──┐  Display Name · 15:42 · 5s     [stop] [^]    │
- *   │ │ [36px]  │  body (text + tools, full or 6-line tail)    │
- *   │ └─────────┘                                              │
+ *   │ Display Name · 15:42 · 5s                                │
+ *   │ full body (text + tools)                                 │
  *   └──────────────────────────────────────────────────────────┘
- *
- * The header stays visible regardless of collapse state, so "who
- * replied" never disappears post-streaming. The body is the only
- * thing the 4-state machine collapses.
  *
  * Per CLAUDE.md "No horizontal dividers" — block boundaries are drawn
  * by spacing alone (margin: 12px 0).
