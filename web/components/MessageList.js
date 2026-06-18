@@ -4,7 +4,6 @@ import VpTurnBlock from './VpTurnBlock.js';
 import VpSpeakerHeader from './VpSpeakerHeader.js';
 import ReflectionCard from './ReflectionCard.js';
 import SubAgentCard from './SubAgentCard.js';
-import SessionAnnouncementBar from './SessionAnnouncementBar.js';
 import UserTurnBlock from './UserTurnBlock.js';
 import VirtualTranscript from './VirtualTranscript.js';
 import { shouldCloseYeaftVpTurn } from '../stores/helpers/yeaft-turn-boundary.js';
@@ -25,7 +24,7 @@ import { estimateVirtualItemHeight } from '../utils/virtual-transcript.js';
 
 export default {
   name: 'MessageList',
-  components: { MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, SessionAnnouncementBar, UserTurnBlock, VirtualTranscript },
+  components: { MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, UserTurnBlock, VirtualTranscript },
   template: `
     <main class="chat-container" ref="containerRef">
       <!-- Session Loading Overlay - only covers message area -->
@@ -85,14 +84,6 @@ export default {
 
       <!-- Messages when in conversation -->
       <div v-else class="messages">
-        <!-- Group announcement bar — surfaces a CLAUDE.md-style shared
-             prefix that's injected into every VP's system prompt.
-             Shown only in Yeaft mode when an active group is selected. -->
-        <SessionAnnouncementBar
-          v-if="activeGroupIdForBar"
-          :group-id="activeGroupIdForBar"
-          @open-settings="onOpenGroupSettings"
-        />
         <!-- Waiting status banner (shown above messages, not overlapping cat animation) -->
         <div v-if="waitingStatus && waitingStatus !== 'normal'" class="typing-status-banner" :class="'typing-status-banner-' + waitingStatus">
           <span v-if="waitingStatus === 'disconnected'" class="typing-status-text typing-status-error">
@@ -549,7 +540,7 @@ export default {
       </button>
     </main>
   `,
-  emits: ['new-conversation', 'resume-conversation', 'open-settings', 'open-group-settings'],
+  emits: ['new-conversation', 'resume-conversation', 'open-settings'],
   setup(_props, ctx) {
     const store = Pinia.useChatStore();
     const containerRef = Vue.ref(null);
@@ -587,20 +578,19 @@ export default {
     };
     const estimateMessageBlockHeight = (block) => estimateVirtualItemHeight(block);
 
-    // Resolve the active group id for the announcement bar. The bar should
-    // appear only when the user is on the Yeaft page AND has an active
-    // group selected (filter or default). We read the groups store via the
-    // Pinia global so the component still imports cleanly in node tests.
+    // Resolve the active session id for Yeaft-only message rendering. We read
+    // the sessions store via the Pinia global so the component still imports
+    // cleanly in node tests.
     const sessionsStore = (() => {
       try { return window.Pinia?.useSessionsStore?.() || null; }
       catch (_) { return null; }
     });
-    const activeGroupIdForBar = Vue.computed(() => {
-      // Only render the bar in Yeaft view. Chat mode has no group concept.
+    const activeYeaftSessionId = Vue.computed(() => {
+      // Only use the Yeaft session layout in Yeaft view. Chat mode has no session roster.
       if (store.currentView !== 'yeaft') return null;
       const gs = sessionsStore();
       if (!gs) return null;
-      // Prefer the explicit "filter" the user picked from the sidebar; fall
+      // Prefer the explicit filter the user picked from the sidebar; fall
       // back to whatever the store considers active.
       const filterId = store.yeaftActiveSessionFilter || null;
       if (filterId && gs.sessions[filterId]) return filterId;
@@ -615,7 +605,7 @@ export default {
     // so user messages render as right-side bubbles (UserTurnBlock) and
     // VP turns stay on the left (existing VpTurnBlock). Outside a group,
     // user messages fall through to the legacy centered MessageItem.
-    const useImStyleForUser = Vue.computed(() => activeGroupIdForBar.value !== null);
+    const useImStyleForUser = Vue.computed(() => activeYeaftSessionId.value !== null);
 
     // Online agents
     const onlineAgents = Vue.computed(() => {
@@ -910,7 +900,7 @@ export default {
       // Chat mode keeps the flat legacy list. Yeaft groups one user row plus
       // the following VP replies into one virtual item, so virtualization never
       // shows a reply without the turn context that caused it.
-      if (store.currentView !== 'yeaft' || !activeGroupIdForBar.value) return turnGroups.value;
+      if (store.currentView !== 'yeaft' || !activeYeaftSessionId.value) return turnGroups.value;
       const blocks = [];
       let currentBlock = null;
       const finishBlock = () => {
@@ -1551,42 +1541,6 @@ export default {
       if (dogRafId) { cancelAnimationFrame(dogRafId); dogRafId = null; }
     });
 
-    // SessionAnnouncementBar's "open settings" link bubbles a request up
-    // to the parent page (YeaftPage) so the unified SessionSettingsModal
-    // can be opened with the right session id and an initial section
-    // focus. MessageList is mounted directly inside YeaftPage, so a
-    // normal emit chain — rather than a store-as-bus signal — is the
-    // simpler path. YeaftPage listens for `@open-group-settings`.
-    const onOpenGroupSettings = (payload) => {
-      // Accept legacy bare-string payloads and either { sessionId } or
-      // { groupId } shapes (some still-un-renamed child callers may
-      // emit the old key). Forward as canonical { sessionId } only.
-      const norm = typeof payload === 'string'
-        ? { sessionId: payload, section: 'announcement' }
-        : (payload || {});
-      const sessionId = norm.sessionId || norm.groupId || null;
-      if (!sessionId) return;
-      ctx.emit('open-group-settings', { sessionId, section: norm.section || 'announcement' });
-    };
-
-    // Single click handler for the load-more hint. Branches by view so
-    // Chat-mode and Yeaft-mode can share one button while dispatching to
-    // their own pagination paths (different store actions, different
-    // wire verbs, different cursor semantics).
-    const onClickLoadMore = () => {
-      const isYeaft = store.currentView === 'yeaft';
-      const loadYeaft = () => {
-        if (store.hasHiddenYeaftMessages) {
-          store.expandYeaftMessageWindow();
-          return;
-        }
-        store.loadMoreYeaftHistory();
-      };
-      preserveScrollAnchorDuringLoad(
-        isYeaft ? loadYeaft : () => store.loadMoreMessages(),
-        isYeaft ? () => store.yeaftLoadingMoreHistory : () => store.loadingMoreMessages
-      );
-    };
 
     return {
       store,
@@ -1627,9 +1581,8 @@ export default {
       subAgentCardsForRow,
       orphanSubAgentCards,
       // group editor wiring
-      activeGroupIdForBar,
+      activeYeaftSessionId,
       useImStyleForUser,
-      onOpenGroupSettings,
       onClickLoadMore,
       onVirtualTranscriptScrollState,
       isAtBottom,
