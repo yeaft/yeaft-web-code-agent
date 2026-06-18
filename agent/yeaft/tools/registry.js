@@ -39,13 +39,13 @@ export const FORWARD_TOOL_NAMES = Object.freeze(['RouteForward']);
  * read, a paginated web fetch). If we forward that verbatim into the next LLM
  * request, it bloats context and makes every replay expensive. Keep the
  * boundary small and deterministic for LLM message history: one tool result
- * gets at most 1 KiB before a visible truncation marker is appended.
+ * gets a bounded slice before a visible truncation marker is appended.
  *
  * Do NOT apply this at tool execution time. Debug events, exec logs, and
  * persisted transcripts need the raw result. The engine/history replay path
  * applies this only when building messages for the model.
  */
-export const TOOL_RESULT_MAX_BYTES = 1024;
+export const TOOL_RESULT_MAX_BYTES = 10 * 1024;
 
 function normalizeLanguage(language) {
   return String(language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
@@ -217,8 +217,8 @@ export function truncateToolResultIfNeeded(output, { toolName, language } = {}) 
   }
   const head = chunks.join('');
   const marker = normalizeLanguage(language) === 'zh'
-    ? `\n\n[已截断：${toolName} 返回 ${formatSize(originalBytes)}，上限为 ${formatSize(TOOL_RESULT_MAX_BYTES)}；原因：单个 tool result 超过 1KB，模型消息历史不会看到剩余内容]`
-    : `\n\n[truncated: ${toolName} returned ${formatSize(originalBytes)}, capped at ${formatSize(TOOL_RESULT_MAX_BYTES)}; reason: single tool result exceeded 1KB, the model message history will not see the rest]`;
+    ? `\n\n[已截断：${toolName} 返回 ${formatSize(originalBytes)}，上限为 ${formatSize(TOOL_RESULT_MAX_BYTES)}；原因：单个 tool result 超过 ${formatSize(TOOL_RESULT_MAX_BYTES)}，模型消息历史不会看到剩余内容]`
+    : `\n\n[truncated: ${toolName} returned ${formatSize(originalBytes)}, capped at ${formatSize(TOOL_RESULT_MAX_BYTES)}; reason: single tool result exceeded ${formatSize(TOOL_RESULT_MAX_BYTES)}, the model message history will not see the rest]`;
   return head + marker;
 }
 
