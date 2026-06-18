@@ -263,7 +263,7 @@ export function handleMessage(store, msg) {
       // I1 fix: merge loops by turnId+loopNumber instead of clobbering.
       // Live-streamed loops collected between request-issued and
       // reply-arrived would otherwise be silently overwritten.
-      const loopKey = (l) => `${l?.turnId || ''}#${l?.loopNumber || 0}`;
+      const loopKey = (l) => l?.loopInstanceId || `${l?.turnId || ''}#${l?.loopNumber || 0}`;
       const liveLoops = store.yeaftDebugLoops;
       const haveKeys = new Set(liveLoops.map(loopKey));
       const mergedLoops = [];

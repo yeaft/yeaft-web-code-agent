@@ -1863,7 +1863,11 @@ export class Engine {
       }
 
       const turnId = this.#trace.startTurn({
-        traceId: this.#traceId,
+        // Persist the wire-level query turn id, not the Engine-instance trace id.
+        // Debug history groups SQLite loop rows by traceId; using #traceId here
+        // merged separate user requests into one debug turn, so every request's
+        // first LLM call showed up as another stale "Loop 1" under the same row.
+        traceId: queryTurnId,
         turnNumber,
         // fix-vp-multi-thread (bug 4): stamp routing context so the
         // debug-trace SQL row carries enough info to be filtered by
