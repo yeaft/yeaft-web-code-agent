@@ -2352,34 +2352,29 @@
 }
 
 /* ============================================================
-   Session Announcement Bar — collapsible CLAUDE.md-style banner
-   pinned below the conversation header in Yeaft. Per the Yeaft
+   Group Announcement Bar — collapsible CLAUDE.md-style banner
+   shown at the top of MessageList in Yeaft mode. Per the Yeaft
    UI rule, no hard horizontal dividers — separation is via
    spacing + a subtle background tint.
    ============================================================ */
 
-.group-announcement-bar {
+.session-announcement-bar {
+  /* Sits above the message stream, below the yeaft topbar. Padding
+     mirrors the message gutter so the preview line aligns visually
+     with subsequent message rows. */
   margin: 8px 12px 4px;
   border-radius: 10px;
-  background: var(--sidebar-hover);
+  background: var(--sidebar-hover, rgba(0, 0, 0, 0.04));
   color: var(--text-secondary);
   font-size: 12.5px;
   transition: background 0.15s ease;
 }
 
-.group-announcement-bar.yeaft-session-announcement-sticky {
-  position: sticky;
-  top: 0;
-  z-index: 6;
-  flex-shrink: 0;
-  margin: 0 12px 6px;
-}
-
-.group-announcement-bar.is-empty .group-announcement-bar__label {
+.session-announcement-bar.is-empty .session-announcement-bar__label {
   color: var(--text-muted);
 }
 
-.group-announcement-bar__header {
+.session-announcement-bar__header {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2388,26 +2383,26 @@
   user-select: none;
 }
 
-.group-announcement-bar__header:focus-visible {
+.session-announcement-bar__header:focus-visible {
   outline: 2px solid var(--accent-blue);
   outline-offset: -2px;
   border-radius: 10px;
 }
 
-.group-announcement-bar__icon {
+.session-announcement-bar__icon {
   display: inline-flex;
   align-items: center;
   color: var(--text-muted);
   flex: 0 0 auto;
 }
 
-.group-announcement-bar__label {
+.session-announcement-bar__label {
   font-weight: 600;
   color: var(--text-secondary);
   flex: 0 0 auto;
 }
 
-.group-announcement-bar__preview {
+.session-announcement-bar__preview {
   flex: 1 1 auto;
   white-space: nowrap;
   overflow: hidden;
@@ -2415,13 +2410,13 @@
   color: var(--text-secondary);
 }
 
-.group-announcement-bar__hint {
+.session-announcement-bar__hint {
   flex: 1 1 auto;
   color: var(--text-muted);
   font-style: italic;
 }
 
-.group-announcement-bar__edit-btn {
+.session-announcement-bar__edit-btn {
   background: none;
   border: none;
   color: var(--text-muted);
@@ -2433,22 +2428,22 @@
   transition: background 0.15s, color 0.15s;
 }
 
-.group-announcement-bar__edit-btn:hover {
+.session-announcement-bar__edit-btn:hover {
   background: var(--bg-input, rgba(0, 0, 0, 0.06));
   color: var(--text-primary);
 }
 
-.group-announcement-bar__chevron {
+.session-announcement-bar__chevron {
   color: var(--text-muted);
   display: inline-flex;
   transition: transform 0.15s ease;
 }
 
-.group-announcement-bar__chevron.open {
+.session-announcement-bar__chevron.open {
   transform: rotate(180deg);
 }
 
-.group-announcement-bar__body {
+.session-announcement-bar__body {
   padding: 4px 14px 12px;
   display: flex;
   flex-direction: column;
@@ -2456,7 +2451,7 @@
   cursor: default;
 }
 
-.group-announcement-bar__text {
+.session-announcement-bar__text {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
@@ -2466,7 +2461,7 @@
   color: var(--text-primary);
 }
 
-.group-announcement-bar__empty {
+.session-announcement-bar__empty {
   margin: 0;
   font-style: italic;
   color: var(--text-muted);
@@ -2474,7 +2469,7 @@
   line-height: 1.5;
 }
 
-.group-announcement-bar__textarea {
+.session-announcement-bar__textarea {
   width: 100%;
   font-family: inherit;
   font-size: 13px;
@@ -2490,25 +2485,25 @@
   box-sizing: border-box;
 }
 
-.group-announcement-bar__textarea:focus {
+.session-announcement-bar__textarea:focus {
   border-color: var(--accent-blue);
   box-shadow: 0 0 0 2px var(--focus-ring);
 }
 
-.group-announcement-bar__error {
+.session-announcement-bar__error {
   margin: 0;
   font-size: 12px;
   color: var(--accent-red, #c0392b);
 }
 
-.group-announcement-bar__actions {
+.session-announcement-bar__actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
 }
 
-.group-announcement-bar__cancel,
-.group-announcement-bar__save {
+.session-announcement-bar__cancel,
+.session-announcement-bar__save {
   font-size: 12.5px;
   padding: 5px 12px;
   border-radius: 6px;
@@ -2517,33 +2512,33 @@
   transition: background 0.15s, color 0.15s, opacity 0.15s;
 }
 
-.group-announcement-bar__cancel {
+.session-announcement-bar__cancel {
   background: transparent;
   color: var(--text-secondary);
 }
 
-.group-announcement-bar__cancel:hover:not(:disabled) {
+.session-announcement-bar__cancel:hover:not(:disabled) {
   background: var(--sidebar-hover);
 }
 
-.group-announcement-bar__save {
+.session-announcement-bar__save {
   background: var(--accent-blue);
   color: white;
   border-color: var(--accent-blue);
   font-weight: 600;
 }
 
-.group-announcement-bar__save:hover:not(:disabled) {
+.session-announcement-bar__save:hover:not(:disabled) {
   filter: brightness(1.05);
 }
 
-.group-announcement-bar__cancel:disabled,
-.group-announcement-bar__save:disabled {
+.session-announcement-bar__cancel:disabled,
+.session-announcement-bar__save:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
-.group-announcement-bar__settings-link {
+.session-announcement-bar__settings-link {
   background: none;
   border: none;
   color: var(--accent-blue);
@@ -2553,7 +2548,7 @@
   padding: 2px 0;
 }
 
-.group-announcement-bar__settings-link:hover {
+.session-announcement-bar__settings-link:hover {
   text-decoration: underline;
 }
 
