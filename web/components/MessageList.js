@@ -1417,9 +1417,40 @@ export default {
       onClickLoadMore();
     };
 
-    const continueLoadMoreIfStillNearTop = () => {
+    const getFirstLoadBlockIdentity = (block) => {
+      if (!block) return '';
+      const items = Array.isArray(block.items) ? block.items : [];
+      const firstItem = items[0] || null;
+      return [
+        block.type || '',
+        block.messageId || '',
+        block.turnId || '',
+        block.vpId || '',
+        firstItem?.id || '',
+        firstItem?.turnId || '',
+        firstItem?.messageId || '',
+      ].join(':');
+    };
+
+    const getLoadMoreProgressSnapshot = () => {
+      const blocks = messageBlocks.value || [];
+      return {
+        blockCount: blocks.length,
+        firstBlockIdentity: getFirstLoadBlockIdentity(blocks[0]),
+      };
+    };
+
+    const hasLoadMoreProgress = (before, after) => {
+      if (!before || !after) return false;
+      return after.blockCount > before.blockCount
+        || after.firstBlockIdentity !== before.firstBlockIdentity;
+    };
+
+    const continueLoadMoreIfStillNearTop = (beforeSnapshot) => {
       Vue.nextTick(() => {
         if (!containerRef.value) return;
+        const afterSnapshot = getLoadMoreProgressSnapshot();
+        if (!hasLoadMoreProgress(beforeSnapshot, afterSnapshot)) return;
         maybeLoadMoreNearTop(containerRef.value.scrollTop || 0, { allowContinuation: true });
       });
     };
@@ -1430,9 +1461,10 @@ export default {
     };
 
     const preserveScrollAnchorDuringLoad = (loadFn, loadingRef) => {
+      const beforeSnapshot = getLoadMoreProgressSnapshot();
       if (!containerRef.value) {
         loadFn();
-        continueLoadMoreIfStillNearTop();
+        continueLoadMoreIfStillNearTop(beforeSnapshot);
         return;
       }
 
@@ -1449,7 +1481,7 @@ export default {
           if (!containerRef.value) return;
           const newScrollHeight = containerRef.value.scrollHeight;
           containerRef.value.scrollTop = newScrollHeight - prevScrollHeight + prevScrollTop;
-          continueLoadMoreIfStillNearTop();
+          continueLoadMoreIfStillNearTop(beforeSnapshot);
         });
       };
 
@@ -1485,7 +1517,7 @@ export default {
           && store.yeaftOldestLoadedSeq != null
         );
       }
-      return store.hasMoreMessages && !store.loadingMoreMessages;
+      return !!store.currentConversation && store.hasMoreMessages && !store.loadingMoreMessages;
     };
 
     const onClickLoadMore = () => {
