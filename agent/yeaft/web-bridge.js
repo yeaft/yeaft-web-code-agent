@@ -4017,12 +4017,14 @@ export async function handleYeaftFetchDebugHistory(msg = {}) {
   let loops = [];
   let turns = [];
   let dreamEvents = [];
+  let hasMore = false;
   try {
     if (session?.trace && typeof session.trace.fetchRecentDebugHistory === 'function') {
       const out = session.trace.fetchRecentDebugHistory({ limit, dreamLimit, sessionId, threadId });
       loops = Array.isArray(out?.loops) ? out.loops : [];
       turns = Array.isArray(out?.turns) ? out.turns : [];
       dreamEvents = Array.isArray(out?.dreamEvents) ? out.dreamEvents : [];
+      hasMore = !!out?.hasMore;
     }
   } catch (err) {
     sendToServer({
@@ -4041,6 +4043,8 @@ export async function handleYeaftFetchDebugHistory(msg = {}) {
     dreamEvents,
     sessionId,
     threadId,
+    hasMore,
+    limit,
   });
 }
 

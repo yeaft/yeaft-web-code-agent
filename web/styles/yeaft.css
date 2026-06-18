@@ -1028,6 +1028,7 @@
 .yeaft-debug-turn-header {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 8px 6px;
   margin: 0 -6px;
@@ -1065,9 +1066,41 @@
 .yeaft-debug-turn-stats {
   margin-left: auto;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
   font-size: 11px;
   color: var(--text-muted);
+  min-width: 0;
+}
+
+.yeaft-debug-turn-prompt,
+.yeaft-debug-turn-group,
+.yeaft-debug-turn-vp {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.yeaft-debug-turn-prompt {
+  flex: 1 1 220px;
+}
+
+.yeaft-debug-turn-group,
+.yeaft-debug-turn-vp {
+  max-width: 160px;
+  font-family: var(--font-mono);
+}
+
+.yeaft-debug-history-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 6px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .yeaft-debug-turn-body {
@@ -2027,6 +2060,7 @@
 .yeaft-debug-loop-header {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   cursor: pointer;
   padding: 4px 6px;
@@ -2055,17 +2089,20 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  flex: 1 1 180px;
 }
 
 .yeaft-debug-loop-stats {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 10px;
   font-size: 11px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   margin-left: auto;
   align-items: center;
-  flex: 0 0 auto;
+  flex: 1 1 260px;
 }
 
 .yeaft-debug-loop-meta {

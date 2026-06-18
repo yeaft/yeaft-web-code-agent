@@ -436,8 +436,12 @@ export class DebugTrace {
       ORDER BY started_at DESC
       LIMIT ?
     `;
-    args.push(lim);
-    const rows = this.#db.prepare(sql).all(...args);
+    // Fetch one extra row so the UI can tell whether older history exists
+    // without issuing a second COUNT(*) against the hot debug trace table.
+    args.push(lim + 1);
+    const fetchedRows = this.#db.prepare(sql).all(...args);
+    const hasMore = fetchedRows.length > lim;
+    const rows = hasMore ? fetchedRows.slice(0, lim) : fetchedRows;
     const turnIds = rows.map(r => r.id);
     const tools = turnIds.length > 0
       ? this.#db.prepare(
@@ -572,7 +576,7 @@ export class DebugTrace {
     // Reverse to oldest-first so the panel's existing append-driven UI
     // renders in chronological order on hydration.
     loops.reverse();
-    return { loops, turns: Array.from(turnsById.values()), dreamEvents };
+    return { loops, turns: Array.from(turnsById.values()), dreamEvents, hasMore, limit: lim };
   }
 
   /**
