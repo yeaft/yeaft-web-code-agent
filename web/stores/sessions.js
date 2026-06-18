@@ -223,7 +223,8 @@ export const useSessionsStore = defineStore('sessions', {
       const runningSessionId = this.sessionOrder
         .filter(id => this.sessions[id] && (!agentId || this.sessions[id].agentId === agentId) && this.sessions[id].running)
         .sort((a, b) => latestActivityValue(this.sessions[b]) - latestActivityValue(this.sessions[a]))[0] || null;
-      const fallbackActiveId = runningSessionId || (lastViewedMatchesAgent ? lastViewed : null) || (this.sessionOrder[0] || null);
+      const firstVisibleSessionId = this.sessionList[0]?.id || null;
+      const fallbackActiveId = runningSessionId || (lastViewedMatchesAgent ? lastViewed : null) || firstVisibleSessionId;
       if (this.activeSessionId && !this.sessions[this.activeSessionId]) {
         this.activeSessionId = fallbackActiveId;
       } else if (!this.activeSessionId && this.sessionOrder.length > 0) {
@@ -231,13 +232,25 @@ export const useSessionsStore = defineStore('sessions', {
       }
       // Sanitize the chat store's parallel filter so a persisted
       // yeaftActiveSessionFilter pointing at a now-deleted session does not
-      // render the main pane as empty until the user clicks.
+      // render the main pane as empty until the user clicks. If Yeaft is
+      // already visible, go through chat.setActiveSessionFilter() instead of
+      // assigning the field directly: the first default selection must trigger
+      // the same history/model bootstrap as a manual sidebar click.
       const chat = _getChatStoreSafe();
       if (chat) {
+        const selectedSessionId = this.activeSessionId || fallbackActiveId;
+        let nextFilterId = null;
         if (chat.yeaftActiveSessionFilter && !this.sessions[chat.yeaftActiveSessionFilter]) {
-          chat.yeaftActiveSessionFilter = fallbackActiveId;
-        } else if (!chat.yeaftActiveSessionFilter && fallbackActiveId) {
-          chat.yeaftActiveSessionFilter = fallbackActiveId;
+          nextFilterId = selectedSessionId;
+        } else if (!chat.yeaftActiveSessionFilter && selectedSessionId) {
+          nextFilterId = selectedSessionId;
+        }
+        if (nextFilterId) {
+          if (chat.currentView === 'yeaft' && typeof chat.setActiveSessionFilter === 'function') {
+            chat.setActiveSessionFilter(nextFilterId, { force: true });
+          } else {
+            chat.yeaftActiveSessionFilter = nextFilterId;
+          }
         }
       }
       // fix-yeaft-session-list-and-menu: mirror server-decorated pin

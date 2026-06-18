@@ -35,8 +35,12 @@ globalThis.Pinia = {
 };
 
 const chatStore = {
+  currentView: 'chat',
   yeaftActiveSessionFilter: null,
   pinnedSessions: [],
+  setActiveSessionFilter: vi.fn(function setActiveSessionFilter(sessionId) {
+    this.yeaftActiveSessionFilter = sessionId || null;
+  }),
   applyServerPinSnapshot(_agentId, pinnedInSnapshot, isOwnedByAgent) {
     const existing = new Set(this.pinnedSessions);
     for (const id of pinnedInSnapshot) {
@@ -62,8 +66,10 @@ function ids(rows) {
 
 beforeEach(() => {
   localStorageData.clear();
+  chatStore.currentView = 'chat';
   chatStore.yeaftActiveSessionFilter = null;
   chatStore.pinnedSessions = [];
+  chatStore.setActiveSessionFilter.mockClear();
   const store = useSessionsStore();
   store.sessions = {};
   store.sessionOrder = [];
@@ -91,6 +97,47 @@ describe('Yeaft session pin persistence flow', () => {
 
     expect(store.activeSessionId).toBe('s-other');
     expect(ids(store.sessionList)).toEqual(['s-pinned', 's-active', 's-other']);
+  });
+
+  it('activates and loads the first visible session when Yeaft opens before the session snapshot arrives', () => {
+    const store = useSessionsStore();
+    chatStore.currentView = 'yeaft';
+
+    store.applySnapshot([
+      { id: 's-old', name: 'Older', updatedAt: 10 },
+      { id: 's-new', name: 'Newer', updatedAt: 50 },
+    ], 'agent-1');
+
+    expect(store.activeSessionId).toBe('s-new');
+    expect(chatStore.setActiveSessionFilter).toHaveBeenCalledTimes(1);
+    expect(chatStore.setActiveSessionFilter).toHaveBeenCalledWith('s-new', { force: true });
+    expect(chatStore.yeaftActiveSessionFilter).toBe('s-new');
+  });
+
+  it('uses the same activation path when the default session is pinned above newer rows', () => {
+    const store = useSessionsStore();
+    chatStore.currentView = 'yeaft';
+
+    store.applySnapshot([
+      { id: 's-new', name: 'Newer', updatedAt: 50 },
+      { id: 's-pinned', name: 'Pinned', updatedAt: 10, pinned: true },
+    ], 'agent-1');
+
+    expect(ids(store.sessionList)).toEqual(['s-pinned', 's-new']);
+    expect(store.activeSessionId).toBe('s-pinned');
+    expect(chatStore.setActiveSessionFilter).toHaveBeenCalledWith('s-pinned', { force: true });
+  });
+
+  it('keeps pre-entry snapshot hydration cheap and lets enterYeaft bootstrap the selected session', () => {
+    const store = useSessionsStore();
+
+    store.applySnapshot([
+      { id: 's-first', name: 'First', updatedAt: 20 },
+    ], 'agent-1');
+
+    expect(store.activeSessionId).toBe('s-first');
+    expect(chatStore.yeaftActiveSessionFilter).toBe('s-first');
+    expect(chatStore.setActiveSessionFilter).not.toHaveBeenCalled();
   });
 
   it('keeps server-persisted pins after a later session list refresh', () => {
