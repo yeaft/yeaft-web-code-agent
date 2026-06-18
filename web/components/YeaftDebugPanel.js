@@ -703,7 +703,39 @@ export default {
         messageTotal: acc.inputMessage + acc.outputMessage,
         toolTotal: acc.inputTool + acc.outputTool,
       };
+      const totalTokens = Math.max(Number(turn.totalTokens) || 0, tokenBreakdown.total || 0);
+      if (totalTokens > tokenBreakdown.total) {
+        const missing = totalTokens - tokenBreakdown.total;
+        tokenBreakdown.total = totalTokens;
+        tokenBreakdown.inputTotal += missing;
+        tokenBreakdown.inputMessage += missing;
+        tokenBreakdown.messageTotal += missing;
+      }
       return { ...turn, loops, tokenBreakdown };
+    },
+    turnTotalTokens(turn) {
+      return Math.max(Number(turn?.totalTokens) || 0, Number(turn?.tokenBreakdown?.total) || 0);
+    },
+    loopMessageTokens(loop) {
+      const b = loop?.tokenBreakdown || {};
+      return (Number(b.inputMessage) || 0) + (Number(b.outputMessage) || 0);
+    },
+    loopToolTokens(loop) {
+      const b = loop?.tokenBreakdown || {};
+      return (Number(b.inputTool) || 0) + (Number(b.outputTool) || 0);
+    },
+    tokenPct(part, total) {
+      const p = Number(part) || 0;
+      const t = Number(total) || 0;
+      if (t <= 0 || p <= 0) return '0%';
+      return `${Math.round((p / t) * 100)}%`;
+    },
+    tokenBreakdownTitle(b) {
+      const x = b || {};
+      const msg = (Number(x.inputMessage) || 0) + (Number(x.outputMessage) || 0);
+      const tool = (Number(x.inputTool) || 0) + (Number(x.outputTool) || 0);
+      const total = Math.max(Number(x.total) || 0, msg + tool);
+      return `estimated token split: message ${msg} (${this.tokenPct(msg, total)}), tool ${tool} (${this.tokenPct(tool, total)}); input ${Number(x.inputTotal) || 0}, output ${Number(x.outputTotal) || 0}, total ${total}`;
     },
     truncate(text, max) {
       const s = String(text || '');
@@ -1286,23 +1318,29 @@ export default {
             <svg class="yeaft-debug-turn-chevron" :class="{ expanded: expandedTurns[turn.turnId] }" viewBox="0 0 24 24" width="12" height="12">
               <path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
             </svg>
-            <span class="yeaft-debug-turn-main">
-              <span class="yeaft-debug-turn-prompt" :title="turn.userPrompt">{{ truncate(turn.userPrompt, 96) || '(no prompt)' }}</span>
-              <span class="yeaft-debug-turn-source">
-                <span v-if="turn.vpId" class="yeaft-debug-turn-vp">{{ turn.vpId }}</span>
-                <span v-if="debugSessionId(turn)" class="yeaft-debug-turn-group">{{ debugSessionId(turn) }}</span>
+            <span class="yeaft-debug-turn-content">
+              <span class="yeaft-debug-turn-primary">
+                <span class="yeaft-debug-turn-prompt" :title="turn.userPrompt">{{ truncate(turn.userPrompt, 96) || '(no prompt)' }}</span>
+                <span class="yeaft-debug-turn-source">
+                  <span v-if="turn.vpId" class="yeaft-debug-turn-vp">{{ turn.vpId }}</span>
+                  <span v-if="debugSessionId(turn)" class="yeaft-debug-turn-group">{{ debugSessionId(turn) }}</span>
+                </span>
+                <span class="yeaft-debug-turn-time">{{ formatMs(turn.totalMs) }}</span>
+                <span v-if="turn.openedAt" class="yeaft-debug-turn-clock" :title="$t('yeaft.debugTurnStartedAt') || 'turn started at'">{{ formatClock(turn.openedAt) }}</span>
+              </span>
+              <span class="yeaft-debug-turn-secondary">
+                <span class="yeaft-debug-turn-loopcount">{{ turn.loopCount || (turn.loops && turn.loops.length) || 0 }}L</span>
+                <span
+                  class="yeaft-debug-turn-tokens"
+                  :title="tokenBreakdownTitle(turn.tokenBreakdown)"
+                >{{ formatTokens(turnTotalTokens(turn)) }} tok</span>
+                <span class="yeaft-debug-turn-token-part">in {{ formatTokens(turn.tokenBreakdown.inputTotal) }}</span>
+                <span class="yeaft-debug-turn-token-part">out {{ formatTokens(turn.tokenBreakdown.outputTotal) }}</span>
+                <span class="yeaft-debug-turn-token-part" :title="tokenBreakdownTitle(turn.tokenBreakdown)">msg {{ formatTokens(turn.tokenBreakdown.messageTotal) }} · {{ tokenPct(turn.tokenBreakdown.messageTotal, turnTotalTokens(turn)) }}</span>
+                <span class="yeaft-debug-turn-token-part" :title="tokenBreakdownTitle(turn.tokenBreakdown)">tool {{ formatTokens(turn.tokenBreakdown.toolTotal) }} · {{ tokenPct(turn.tokenBreakdown.toolTotal, turnTotalTokens(turn)) }}</span>
               </span>
             </span>
-            <span class="yeaft-debug-turn-stats">
-              <span class="yeaft-debug-turn-loopcount">{{ turn.loopCount || (turn.loops && turn.loops.length) || 0 }}L</span>
-              <span class="yeaft-debug-turn-time">{{ formatMs(turn.totalMs) }}</span>
-              <span
-                class="yeaft-debug-turn-tokens"
-                :title="'message ' + turn.tokenBreakdown.messageTotal + ' · tool ' + turn.tokenBreakdown.toolTotal + ' (estimated split)'"
-              >{{ formatTokens(turn.totalTokens) }} tok</span>
-              <span v-if="turn.openedAt" class="yeaft-debug-turn-clock" :title="$t('yeaft.debugTurnStartedAt') || 'turn started at'">{{ formatClock(turn.openedAt) }}</span>
-            </span>
-            <button class="yeaft-debug-copy-btn small" @click.stop="copyTurnAsMarkdown(turn)" title="Copy turn as markdown">copy</button>
+            <button class="yeaft-debug-copy-btn small yeaft-debug-turn-copy" @click.stop="copyTurnAsMarkdown(turn)" title="Copy turn as markdown">copy</button>
           </div>
 
           <!-- Turn body -->
@@ -1357,33 +1395,39 @@ export default {
                 <svg class="yeaft-debug-turn-chevron" :class="{ expanded: isLoopExpanded(turn.turnId, loop.loopNumber) }" viewBox="0 0 24 24" width="10" height="10">
                   <path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
                 </svg>
-                <span class="yeaft-debug-loop-main">
-                  <span class="yeaft-debug-loop-num">Loop {{ loop.loopNumber }}</span>
-                  <span class="yeaft-debug-loop-model" :title="loop.model">{{ loop.model }}</span>
+                <span class="yeaft-debug-loop-content">
+                  <span class="yeaft-debug-loop-primary">
+                    <span class="yeaft-debug-loop-main">
+                      <span class="yeaft-debug-loop-num">Loop {{ loop.loopNumber }}</span>
+                      <span class="yeaft-debug-loop-model" :title="loop.model">{{ loop.model }}</span>
+                    </span>
+                    <span class="yeaft-debug-loop-latency">{{ formatMs(loop.latencyMs) }}</span>
+                    <span
+                      v-if="loopClockTime(turn, loop)"
+                      class="yeaft-debug-loop-clock"
+                      :title="loop.at ? ($t('yeaft.debugRequestAt') || 'request time') : ($t('yeaft.debugRequestAtDerived') || 'derived from turn start')"
+                    >{{ loopClockTime(turn, loop) }}</span>
+                    <button
+                      v-if="assistantResponseForLoop(loop)"
+                      class="yeaft-debug-show-btn small yeaft-debug-loop-action"
+                      @click.stop="showAssistantResponse(turn.turnId, loop.loopNumber)"
+                    >{{ $t('yeaft.debugViewAssistantResponse') }}</button>
+                  </span>
+                  <span class="yeaft-debug-loop-secondary">
+                    <span class="yeaft-debug-loop-total" :title="formatUsageBreakdown(loop.usage)">{{ formatTokens(usageTotalTokens(loop.usage)) }} tok</span>
+                    <span
+                      class="yeaft-debug-loop-token"
+                      :title="'input total ' + loop.tokenBreakdown.inputTotal + ' = message ' + loop.tokenBreakdown.inputMessage + ' + tool ' + loop.tokenBreakdown.inputTool + ' (estimated split)'"
+                    >in {{ formatTokens(usageTotalInputTokens(loop.usage)) }}</span>
+                    <span
+                      class="yeaft-debug-loop-token"
+                      :title="'output total ' + loop.tokenBreakdown.outputTotal + ' = message ' + loop.tokenBreakdown.outputMessage + ' + tool ' + loop.tokenBreakdown.outputTool + ' (estimated split)'"
+                    >out {{ formatTokens(loop.usage?.outputTokens || 0) }}</span>
+                    <span class="yeaft-debug-loop-token" :title="tokenBreakdownTitle(loop.tokenBreakdown)">msg {{ formatTokens(loopMessageTokens(loop)) }} · {{ tokenPct(loopMessageTokens(loop), usageTotalTokens(loop.usage)) }}</span>
+                    <span class="yeaft-debug-loop-token" :title="tokenBreakdownTitle(loop.tokenBreakdown)">tool {{ formatTokens(loopToolTokens(loop)) }} · {{ tokenPct(loopToolTokens(loop), usageTotalTokens(loop.usage)) }}</span>
+                    <span class="yeaft-debug-loop-meta">{{ loopMetaSummary(loop) }}</span>
+                  </span>
                 </span>
-                <span class="yeaft-debug-loop-stats">
-                  <span
-                    class="yeaft-debug-loop-token"
-                    :title="'input total ' + loop.tokenBreakdown.inputTotal + ' = message ' + loop.tokenBreakdown.inputMessage + ' + tool ' + loop.tokenBreakdown.inputTool + ' (estimated split)'"
-                  >in {{ formatTokens(usageTotalInputTokens(loop.usage)) }}</span>
-                  <span
-                    class="yeaft-debug-loop-token"
-                    :title="'output total ' + loop.tokenBreakdown.outputTotal + ' = message ' + loop.tokenBreakdown.outputMessage + ' + tool ' + loop.tokenBreakdown.outputTool + ' (estimated split)'"
-                  >out {{ formatTokens(loop.usage?.outputTokens || 0) }}</span>
-                  <span class="yeaft-debug-loop-total" :title="formatUsageBreakdown(loop.usage)">{{ formatTokens(usageTotalTokens(loop.usage)) }} tok</span>
-                  <span class="yeaft-debug-loop-latency">{{ formatMs(loop.latencyMs) }}</span>
-                  <span class="yeaft-debug-loop-meta">{{ loopMetaSummary(loop) }}</span>
-                  <span
-                    v-if="loopClockTime(turn, loop)"
-                    class="yeaft-debug-loop-clock"
-                    :title="loop.at ? ($t('yeaft.debugRequestAt') || 'request time') : ($t('yeaft.debugRequestAtDerived') || 'derived from turn start')"
-                  >{{ loopClockTime(turn, loop) }}</span>
-                </span>
-                <button
-                  v-if="assistantResponseForLoop(loop)"
-                  class="yeaft-debug-show-btn small"
-                  @click.stop="showAssistantResponse(turn.turnId, loop.loopNumber)"
-                >{{ $t('yeaft.debugViewAssistantResponse') }}</button>
               </div>
 
               <div class="yeaft-debug-loop-body" v-if="isLoopExpanded(turn.turnId, loop.loopNumber)">
