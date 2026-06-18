@@ -50,8 +50,10 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
   it('splits legacy duplicate Loop 1 rows so separate requests do not share stale assistant text', () => {
     const t = openTrace();
     const first = t.startTurn({ traceId: 'engine-instance-legacy', turnNumber: 1, sessionId: 's1', userPrompt: 'old request' });
+    t.logTool(first, { toolName: 'old-tool', toolCallId: 'old-call', toolOutput: 'old tool output', durationMs: 12 });
     t.endTurn(first, { responseText: 'old assistant text', usage: { inputTokens: 5, outputTokens: 1, totalTokens: 6 } });
     const second = t.startTurn({ traceId: 'engine-instance-legacy', turnNumber: 1, sessionId: 's1', userPrompt: 'new request' });
+    t.logTool(second, { toolName: 'new-tool', toolCallId: 'new-call', toolOutput: 'new tool output', durationMs: 34 });
     t.endTurn(second, { responseText: 'new assistant text', usage: { inputTokens: 6, outputTokens: 2, totalTokens: 8 } });
 
     const history = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, sessionId: 's1' });
@@ -67,7 +69,11 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
     const responseByTurnId = new Map(history.loops.map((loop) => [loop.turnId, loop.response]));
     for (const turn of history.turns) {
       const response = responseByTurnId.get(turn.turnId);
-      expect(response).toContain(turn.userPrompt === 'old request' ? 'old' : 'new');
+      const expectedPrefix = turn.userPrompt === 'old request' ? 'old' : 'new';
+      expect(response).toContain(expectedPrefix);
+      expect(turn.tools).toHaveLength(1);
+      expect(turn.tools[0].name).toBe(`${expectedPrefix}-tool`);
+      expect(turn.tools[0].toolOutput).toBe(`${expectedPrefix} tool output`);
     }
   });
 });

@@ -482,17 +482,25 @@ export class DebugTrace {
       if (seenLoopKeys.has(key)) duplicateLoopTraceIds.add(traceId);
       else seenLoopKeys.add(key);
     }
+    // Legacy rows used one Engine-instance trace_id for many user requests.
+    // That creates duplicate Loop 1/2/... rows under the same trace. Split
+    // only those corrupted traces by SQLite row id; healthy rows keep trace_id
+    // so multi-loop requests still hydrate as one turn. Keep this as one
+    // function so loop hydration and tool attachment use the same identity.
+    const turnKeyForRow = (r) => {
+      const baseTurnId = r.trace_id || r.id;
+      return duplicateLoopTraceIds.has(baseTurnId) ? (r.id || baseTurnId) : baseTurnId;
+    };
+    const loopInstanceIdForRow = (r) => {
+      const baseTurnId = r.trace_id || r.id;
+      return duplicateLoopTraceIds.has(baseTurnId) ? (r.id || `${baseTurnId}#${r.turn_number || 0}`) : null;
+    };
     const turnsById = new Map();
     const loops = rows.map((r) => {
       const parsedMessages = parseJsonSafe(r.messages_json) || [];
       const parsedUsage = parseJsonSafe(r.usage_json);
-      const baseTurnId = r.trace_id || r.id;
-      // Legacy rows used one Engine-instance trace_id for many user requests.
-      // That creates duplicate Loop 1/2/... rows under the same trace. Split
-      // only those corrupted traces by SQLite row id; healthy rows keep trace_id
-      // so multi-loop requests still hydrate as one turn.
-      const hydratedTurnId = duplicateLoopTraceIds.has(baseTurnId) ? (r.id || baseTurnId) : baseTurnId;
-      const loopInstanceId = duplicateLoopTraceIds.has(baseTurnId) ? (r.id || `${baseTurnId}#${r.turn_number || 0}`) : null;
+      const hydratedTurnId = turnKeyForRow(r);
+      const loopInstanceId = loopInstanceIdForRow(r);
       const loop = {
         turnId: hydratedTurnId,
         ...(loopInstanceId ? { loopInstanceId } : {}),
@@ -546,11 +554,11 @@ export class DebugTrace {
     // Attach tools to their parent Turn so the panel can render per-tool
     // timing without scanning the loop bodies.
     for (const tool of tools) {
-      // Find which loop row this tool belongs to → that row's trace_id
-      // identifies the Turn.
+      // Find which loop row this tool belongs to; use the same hydrated
+      // identity as the loop/turn records so split legacy rows keep tools.
       const owner = rows.find(r => r.id === tool.turn_id);
       if (!owner) continue;
-      const t = turnsById.get(owner.trace_id);
+      const t = turnsById.get(turnKeyForRow(owner));
       if (!t) continue;
       t.tools.push({
         loopNumber: owner.turn_number || 0,
