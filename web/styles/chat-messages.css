@@ -1410,6 +1410,71 @@
   color: var(--code-text) !important;
 }
 
+.hljs-comment,
+.hljs-quote,
+.hljs-doctag {
+  color: var(--syntax-comment) !important;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-type {
+  color: var(--syntax-keyword) !important;
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-template-variable,
+.hljs-template-tag,
+.hljs-addition {
+  color: var(--syntax-string) !important;
+}
+
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: var(--syntax-number) !important;
+}
+
+.hljs-title,
+.hljs-section,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: var(--syntax-title) !important;
+}
+
+.hljs-variable,
+.hljs-attr,
+.hljs-attribute,
+.hljs-property,
+.hljs-params {
+  color: var(--syntax-variable) !important;
+}
+
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-class .hljs-title,
+.hljs-title.class_ {
+  color: var(--syntax-attribute) !important;
+}
+
+.hljs-meta,
+.hljs-meta .hljs-string,
+.hljs-deletion {
+  color: var(--syntax-meta) !important;
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 600;
+}
+
 /* User Message Attachments - ChatGPT Style */
 /* Attachments indicator (Claude Code style) */
 .user-attachments-indicator {
