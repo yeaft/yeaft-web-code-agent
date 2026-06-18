@@ -343,7 +343,7 @@ use it as the default workflow or call it repeatedly in a loop.`,
   async execute(input, ctx) {
     // NB: every envelope below puts `next_steps` (or `error_next_steps`) at
     // the FIRST position because `agent/yeaft/tools/registry.js` caps tool
-    // output at 1 KiB by chopping the tail. Tail-positioned nudges get
+    // output by chopping the tail at its model-context cap. Tail-positioned nudges get
     // truncated when the rest of the envelope is large.
     const ERROR_NEXT_STEPS =
       'That call failed — see `error`. Either correct the arguments and ' +

@@ -62,8 +62,8 @@ SpawnAgent -> (PromptAgent <-> WaitAgent)+ -> CloseAgent -> 最终回复给用�
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
   async execute(input, ctx) {
-    // NB: next_steps is the FIRST envelope field — the registry's 1 KiB
-    // tail-truncation would eat it if it lived at the end.
+    // NB: next_steps is the FIRST envelope field — the registry's
+    // model-context tail truncation would eat it if it lived at the end.
     const ERROR_NEXT_STEPS =
       'That call failed — see `error`. Either correct the arguments and ' +
       'retry, or tell the user what went wrong. Do NOT end your turn ' +

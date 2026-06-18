@@ -39,8 +39,8 @@ import { consumeNotificationForAgent } from '../sub-agent/notifications.js';
 /**
  * Build the status-specific next-step guidance the LLM reads after a wait.
  * Imperative + names actual tools. Always appears as the FIRST field on
- * the envelope (the registry's 1 KiB tail-truncation would otherwise eat
- * tail-positioned nudges when `result` is long).
+ * the envelope (the registry's model-context tail truncation would
+ * otherwise eat tail-positioned nudges when `result` is long).
  *
  * @param {string} status
  * @param {{ timedOut?: boolean, runningInBackground?: boolean, budgetExceeded?: boolean, stale?: boolean }} [opts]

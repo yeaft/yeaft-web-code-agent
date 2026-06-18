@@ -42,7 +42,7 @@ class CapturingTrace extends NullTrace {
 
 describe('tool result raw storage boundaries', () => {
   it('keeps tool_end/debug raw while truncating only the model tool message', async () => {
-    const raw = 'x'.repeat(1500);
+    const raw = 'x'.repeat(12 * 1024);
     const adapter = new MockAdapter();
     adapter.pushResponse([
       { type: 'tool_call', id: 'call_1', name: 'BigTool', input: {} },
@@ -85,7 +85,7 @@ describe('tool result raw storage boundaries', () => {
   });
 
   it('ToolRegistry.execute returns raw normalized text', async () => {
-    const raw = 'y'.repeat(1500);
+    const raw = 'y'.repeat(12 * 1024);
     const registry = new ToolRegistry();
     registry.register(defineTool({
       name: 'BigRegistryTool',
@@ -233,7 +233,7 @@ describe('tool result raw storage boundaries', () => {
 
   it('keeps in-memory session history raw but truncates replay snapshot for the model', () => {
     const sessionId = `session_tool_raw_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    const raw = 'z'.repeat(1500);
+    const raw = 'z'.repeat(12 * 1024);
     __testAppendTurnToSessionHistory(
       sessionId,
       'main',
