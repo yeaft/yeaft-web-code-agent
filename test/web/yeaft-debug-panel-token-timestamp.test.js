@@ -151,3 +151,21 @@ describe('YeaftDebugPanel · regression guards', () => {
     expect(panel).toMatch(/activeTab:\s*['"]requests['"]/);
   });
 });
+
+describe('YeaftDebugPanel · close affordance', () => {
+  const page = read('web/components/YeaftPage.js');
+  const panel = read('web/components/YeaftDebugPanel.js');
+  const css = read('web/styles/yeaft.css');
+
+  it('uses one persistent panel close button instead of a second mobile-only close button', () => {
+    expect(panel).toContain('class="yeaft-debug-close"');
+    expect(panel).toContain('@click="$emit(\'close\')"');
+    expect(page).not.toContain('yeaft-debug-mobile-close');
+    expect(css).not.toContain('.yeaft-debug-mobile-close');
+  });
+
+  it('keeps the debug panel template compile-covered', () => {
+    const compileTest = read('test/web/vue-template-compile.test.js');
+    expect(compileTest).toContain("'YeaftDebugPanel.js'");
+  });
+});

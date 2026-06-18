@@ -14,6 +14,8 @@ const compileCoveredComponents = [
   'VpTimelinePane.js',
   'SettingsPanel.js',
   'VpCrudPanel.js',
+  'AssistantTurn.js',
+  'YeaftDebugPanel.js',
 ];
 
 function walkAst(node, visit) {

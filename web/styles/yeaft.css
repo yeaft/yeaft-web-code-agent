@@ -1637,32 +1637,6 @@
   }
 }
 
-/* fix/yeaft-mobile-debug-panel: in-panel close button, only rendered
-   (and only visible via @media) on narrow viewports because the topbar
-   toggle is occluded by the overlay. Apple-style icon button — neutral
-   chrome, hover lift. */
-.yeaft-debug-mobile-close {
-  position: absolute;
-  top: 6px;
-  right: 8px;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  border-radius: 6px;
-  cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease;
-}
-.yeaft-debug-mobile-close:hover {
-  background: var(--sidebar-hover);
-  color: var(--text-primary);
-}
-
 /* task-fix-mobile-group-settings: topbar hamburger — hidden on desktop
    (the V2 sidebar header has its own collapse control), shown on mobile
    via the @media block below. Mirrors `.header-sidebar-toggle` chrome. */
