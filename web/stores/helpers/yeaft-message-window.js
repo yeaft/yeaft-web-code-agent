@@ -6,7 +6,12 @@ function isNonEmptyUserMessage(msg) {
 }
 
 function isAssistantMessage(msg) {
-  return msg?.type === 'assistant' || msg?.type === 'thinking' || msg?.type === 'tool_use' || msg?.type === 'tool_result';
+  return msg?.type === 'assistant'
+    || msg?.type === 'thinking'
+    || msg?.type === 'tool_use'
+    || msg?.type === 'tool-use'
+    || msg?.type === 'tool_result'
+    || msg?.type === 'tool-result';
 }
 
 function shouldSplitAssistantTurn(current, msg) {
