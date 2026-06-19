@@ -167,13 +167,12 @@ export default {
             </button>
             <!-- Session status show/hide toggle. Default is open; the pane itself also has a close button. -->
             <button
-              v-if="!isNarrowDetail"
               class="yeaft-topbar-vp-toggle"
-              :class="{ active: vpTimelineVisible }"
-              @click="toggleVpTimeline"
-              :title="vpTimelineVisible ? $t('yeaft.sessionStatus.hide') : $t('yeaft.sessionStatus.show')"
-              :aria-label="vpTimelineVisible ? $t('yeaft.sessionStatus.hide') : $t('yeaft.sessionStatus.show')"
-              :aria-expanded="vpTimelineVisible ? 'true' : 'false'"
+              :class="{ active: sessionStatusVisible }"
+              @click="toggleSessionStatus"
+              :title="sessionStatusVisible ? $t('yeaft.sessionStatus.hide') : $t('yeaft.sessionStatus.show')"
+              :aria-label="sessionStatusVisible ? $t('yeaft.sessionStatus.hide') : $t('yeaft.sessionStatus.show')"
+              :aria-expanded="sessionStatusVisible ? 'true' : 'false'"
             >
               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="3" y="4" width="18" height="16" rx="3"/>
@@ -279,14 +278,15 @@ export default {
         v-if="showVpTimeline"
         :rows="vpTimelineRows"
         :tasks="runningTasksForActiveSession"
-        :session="topbarGroup"
+        :announcement-text="sessionStatusAnnouncementText"
+        :class="{ 'mobile-session-status': isNarrowDetail }"
         :style="timelineWidthStyle"
         @mention-vp="onMentionVpFromTimeline"
         @edit-vp="onEditVpFromTimeline"
         @start-resize="startTimelineResize"
         @cancel-vp-turn="onCancelVpFromTimeline"
         @edit-announcement="openAnnouncementSettings"
-        @close="closeVpTimeline"
+        @close="closeSessionStatus"
       />
 
       <!-- Right Detail Panel — only rendered when debug mode is on. The
@@ -439,33 +439,32 @@ export default {
       document.addEventListener('mouseup', onMouseUp);
     };
 
-    // ── VP Timeline pane state (visibility + resizable width).
-    // Restored in v0.1.767 after PR #767 inadvertently removed it
-    // together with the Feature system. The pane is roster-driven and
-    // has no Feature-system dependency; no per-second tick is needed
-    // (the original `nowMs` only drove the in-feature elapsed timer).
+    // ── Session status pane state (visibility + resizable width).
+    // Historical vpTimeline identifiers are kept only where renaming would
+    // cause a noisy component/storage churn. New user-facing behavior is
+    // Session-status oriented.
 
-    // User-controlled show/hide. Defaults to true so first-time users
-    // see the pane; subsequent sessions restore whatever the user last
-    // chose. localStorage is wrapped in try/catch because in
-    // private-browsing mode setItem can throw.
-    const VP_TIMELINE_VISIBLE_KEY = 'yeaft-vp-timeline-visible';
-    const readVpTimelineVisible = () => {
+    // User-controlled show/hide. The consolidated Session status pane must
+    // default open for everyone, including users who previously hid the old
+    // VP roster pane, so this PR switches to a new preference key instead of
+    // inheriting the legacy `yeaft-vp-timeline-visible` value.
+    const SESSION_STATUS_VISIBLE_KEY = 'yeaft-session-status-visible';
+    const readSessionStatusVisible = () => {
       try {
-        const v = localStorage.getItem(VP_TIMELINE_VISIBLE_KEY);
+        const v = localStorage.getItem(SESSION_STATUS_VISIBLE_KEY);
         if (v === '0' || v === 'false') return false;
         return true;
       } catch (_) { return true; }
     };
-    const vpTimelineVisible = Vue.ref(readVpTimelineVisible());
-    const setVpTimelineVisible = (visible) => {
-      vpTimelineVisible.value = !!visible;
+    const sessionStatusVisible = Vue.ref(readSessionStatusVisible());
+    const setSessionStatusVisible = (visible) => {
+      sessionStatusVisible.value = !!visible;
       try {
-        localStorage.setItem(VP_TIMELINE_VISIBLE_KEY, vpTimelineVisible.value ? '1' : '0');
+        localStorage.setItem(SESSION_STATUS_VISIBLE_KEY, sessionStatusVisible.value ? '1' : '0');
       } catch (_) {}
     };
-    const toggleVpTimeline = () => setVpTimelineVisible(!vpTimelineVisible.value);
-    const closeVpTimeline = () => setVpTimelineVisible(false);
+    const toggleSessionStatus = () => setSessionStatusVisible(!sessionStatusVisible.value);
+    const closeSessionStatus = () => setSessionStatusVisible(false);
     const TIMELINE_MIN_WIDTH = 220;
     const TIMELINE_DEFAULT_WIDTH = 280;
     const savedTimelineWidth = (() => {
@@ -662,6 +661,13 @@ export default {
         return value;
       }
       return '';
+    });
+
+    const sessionStatusAnnouncementText = Vue.computed(() => {
+      const text = topbarGroup.value && typeof topbarGroup.value.announcement === 'string'
+        ? topbarGroup.value.announcement
+        : '';
+      return text;
     });
 
     const topbarModel = Vue.computed(() => resolveSessionModelRef(topbarGroup.value, store.yeaftModel || ''));
@@ -1033,16 +1039,14 @@ export default {
       showSettings.value = false;
     };
 
-    // ── VP Timeline computeds + handlers ───────────────────────────────
-    // Pane is visible when (a) we're not in settings, (b) viewport is
-    // wide enough (CSS also hides .yeaft-vp-timeline at <=1024 px), and
-    // (c) the user hasn't hidden the pane via the topbar toggle. The
-    // pane STAYS visible when yeaftActiveVpDetailId is set so the user
-    // can hop between VPs without losing context.
-    // Restored in v0.1.767 after PR #767 inadvertently removed it
-    // together with the Feature system; no feature-aware status / meta.
+    // ── Session status pane computeds + handlers ───────────────────────
+    // Pane is visible when (a) we're not in settings and (b) the user hasn't
+    // hidden it via the topbar toggle or pane close button. On narrow screens
+    // CSS promotes it to an overlay instead of removing the only announcement
+    // and status surface. Historical vpTimeline naming remains for the row
+    // projection helper and component shell only.
     const showVpTimeline = Vue.computed(
-      () => !showSettings.value && !isNarrowDetail.value && vpTimelineVisible.value
+      () => !showSettings.value && sessionStatusVisible.value
     );
 
     // Resolve the active group's roster and project it into timeline
@@ -1213,9 +1217,10 @@ export default {
       showVpTimeline,
       vpTimelineRows,
       runningTasksForActiveSession,
-      vpTimelineVisible,
-      toggleVpTimeline,
-      closeVpTimeline,
+      sessionStatusAnnouncementText,
+      sessionStatusVisible,
+      toggleSessionStatus,
+      closeSessionStatus,
       timelineWidthStyle,
       startTimelineResize,
       onEditVpFromTimeline,

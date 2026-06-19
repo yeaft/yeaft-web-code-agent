@@ -1413,8 +1413,6 @@ export default {
   'yeaft.sessionStatus.show': 'Show Session status',
   'yeaft.sessionStatus.hide': 'Hide Session status',
   'yeaft.sessionStatus.close': 'Close Session status',
-  'yeaft.vpTimeline.aria': 'Session status',
-  'yeaft.vpTimeline.title': 'VPs',
   'yeaft.vpTimeline.empty': 'No VPs in this Session yet.',
   'yeaft.vpTimeline.resizeTitle': 'Drag to resize',
   'yeaft.vpTimeline.status.idle': 'idle',
@@ -1427,8 +1425,6 @@ export default {
   'yeaft.vpTimeline.abort': 'Abort',
   'yeaft.vpTimeline.edit': 'Edit VP',
   'yeaft.vpTimeline.mention': 'Click to @-mention this VP',
-  'yeaft.vpTimeline.show': 'Show Session status',
-  'yeaft.vpTimeline.hide': 'Hide Session status',
 
   // (2026-05-13) Tool Usage Stats drawer.
   'yeaft.toolStats.title': 'Tool Usage Stats',

@@ -9,7 +9,7 @@
  * Props:
  *   rows — TimelineRow[] (see web/stores/helpers/vp-timeline.js for shape).
  *   tasks — running Session task snapshots.
- *   session — active Session snapshot, used for the announcement preview.
+ *   announcementText — active Session announcement preview source.
  *
  * Emits:
  *   mention-vp (vpId)      — primary row click / Enter / Space. YeaftPage
@@ -29,7 +29,7 @@ export default {
   props: {
     rows: { type: Array, required: true },
     tasks: { type: Array, default: () => [] },
-    session: { type: Object, default: null },
+    announcementText: { type: String, default: '' },
   },
   template: `
     <aside class="yeaft-vp-timeline yeaft-session-status-pane" :aria-label="$t('yeaft.sessionStatus.aria')">
@@ -217,15 +217,13 @@ export default {
     const inst = Vue.getCurrentInstance();
     const $t = (inst && inst.appContext.config.globalProperties.$t) || ((k) => k);
 
-    const announcementText = Vue.computed(() => {
-      const raw = props.session && typeof props.session.announcement === 'string'
-        ? props.session.announcement
-        : '';
+    const normalizedAnnouncementText = Vue.computed(() => {
+      const raw = typeof props.announcementText === 'string' ? props.announcementText : '';
       return raw.trim();
     });
-    const hasAnnouncement = Vue.computed(() => !!announcementText.value);
+    const hasAnnouncement = Vue.computed(() => !!normalizedAnnouncementText.value);
     const announcementPreview = Vue.computed(() => {
-      const text = announcementText.value.replace(/\s+/g, ' ');
+      const text = normalizedAnnouncementText.value.replace(/\s+/g, ' ');
       if (text.length <= 96) return text;
       return text.slice(0, 95) + '…';
     });

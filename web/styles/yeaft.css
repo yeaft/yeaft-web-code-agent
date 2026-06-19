@@ -3003,7 +3003,7 @@
   z-index: 1;
 }
 .yeaft-vp-timeline-resize-handle:hover {
-  background: var(--accent-soft, rgba(99, 102, 241, 0.15));
+  background: var(--sidebar-hover);
 }
 .yeaft-session-status-header,
 .yeaft-vp-timeline-header {
@@ -3143,7 +3143,7 @@
 }
 .yeaft-vp-timeline-row:hover,
 .yeaft-vp-timeline-row:focus-visible {
-  background: var(--sidebar-hover, var(--surface-1, rgba(0, 0, 0, 0.04)));
+  background: var(--sidebar-hover);
   outline: none;
 }
 .yeaft-vp-timeline-row-body {
@@ -3178,9 +3178,22 @@
 }
 
 @media (max-width: 1024px) {
-  /* Pane disappears at the same breakpoint .yeaft-detail does so the
-     conversation pane keeps the right-column real estate. */
-  .yeaft-vp-timeline {
+  /* Narrow screens still need the consolidated announcement/status surface.
+     Promote it to an overlay instead of hiding it with the right column. */
+  .yeaft-vp-timeline.mobile-session-status {
+    display: flex;
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(360px, 92vw);
+    min-width: 0;
+    z-index: 108;
+    background: var(--bg-main);
+    box-shadow: var(--modal-shadow);
+  }
+
+  .yeaft-vp-timeline.mobile-session-status .yeaft-vp-timeline-resize-handle {
     display: none;
   }
 }

@@ -1409,8 +1409,6 @@ export default {
   'yeaft.sessionStatus.show': '显示 Session 状态',
   'yeaft.sessionStatus.hide': '隐藏 Session 状态',
   'yeaft.sessionStatus.close': '关闭 Session 状态',
-  'yeaft.vpTimeline.aria': 'Session 状态',
-  'yeaft.vpTimeline.title': 'VP',
   'yeaft.vpTimeline.empty': '本 Session 还没有 VP。',
   'yeaft.vpTimeline.resizeTitle': '拖动调整宽度',
   'yeaft.vpTimeline.status.idle': '空闲',
@@ -1423,8 +1421,6 @@ export default {
   'yeaft.vpTimeline.abort': '中止',
   'yeaft.vpTimeline.edit': '编辑 VP',
   'yeaft.vpTimeline.mention': '点击 @ 该 VP',
-  'yeaft.vpTimeline.show': '显示 Session 状态',
-  'yeaft.vpTimeline.hide': '隐藏 Session 状态',
 
   // (2026-05-13) 工具使用统计抽屉。
   'yeaft.toolStats.title': '工具使用统计',
