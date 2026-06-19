@@ -427,7 +427,14 @@ use it as the default workflow or call it repeatedly in a loop.`,
           runtime: { subAgentId: agentId, name, cwd: agent.cwd },
           source: { threadId: callerScope.parentThreadId || ctx?.threadId || 'main' },
         });
-        if (task?.id) agent.taskId = task.id;
+        if (task?.id) {
+          agent.taskId = task.id;
+          // Same-turn parking — see tools/bash.js for the contract. The
+          // sub-agent runs in its own engine but reports completion
+          // through the same TaskManager event, so the spawning turn
+          // stays parked until the sub-agent finishes.
+          try { ctx.registerAsyncTask?.(task.id); } catch { /* coord errors must not block spawn */ }
+        }
         startSubAgent(agent, deps);
       } catch (err) {
         agent.status = STATUS.FAILED;

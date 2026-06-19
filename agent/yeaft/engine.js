@@ -467,6 +467,50 @@ export class Engine {
   #pendingUserMessages = [];
 
   /**
+   * Tasks (background bash, sub-agent spawns) that were launched DURING
+   * the currently-running query() and have NOT terminated yet. The query
+   * loop refuses to finalize end_turn while this set is non-empty — instead
+   * it parks on `#asyncTaskWaiters` until a terminal event or a new user
+   * append wakes it up. Cleared at the top of each query() and again in
+   * the finally block so a stale set never leaks across turns.
+   * @type {Set<string>}
+   */
+  #pendingAsyncTaskIds = new Set();
+
+  /**
+   * Terminal task events that arrived after their producing tool already
+   * returned. Each entry becomes a synthetic user message at the next
+   * adapter boundary. Format mirrors `#pendingUserMessages` so the same
+   * drain path can splice both into `conversationMessages`.
+   * @type {Array<{content:string|Array, preview:string, internal:boolean, taskId?:string}>}
+   */
+  #pendingTaskResultMessages = [];
+
+  /**
+   * Resolvers parked by the main loop while it waits for an async task to
+   * terminate (or a fresh user append to arrive). Wake order is FIFO; every
+   * resolver is invoked exactly once and the queue cleared, so a single
+   * task completion releases every waiter in the same engine and the loop
+   * decides on the next iteration whether to keep waiting.
+   * @type {Array<() => void>}
+   */
+  #asyncTaskWaiters = [];
+
+  /**
+   * External coordinator hooks. `getOrCreateVpEngine` (web-bridge.js)
+   * installs these so the bridge can route a `taskManager` `completed`
+   * event back to THIS engine while it's still running its query() — same
+   * turn, next adapter loop. Unset (null) in non-bridge contexts (tests,
+   * sub-agents without a bridge) — the engine then degrades to "no
+   * coordinator", which still works because tools call back through
+   * `toolCtx.registerAsyncTask` and the engine waits locally; web-bridge
+   * fallback (legacy `scheduleTaskResultReentry` → new turn) handles the
+   * post-run case.
+   * @type {{ onRegister?: (taskId:string, engine:Engine) => void, onUnregister?: (taskId:string) => void } | null}
+   */
+  #asyncTaskCoordinator = null;
+
+  /**
    * Per-group "adjust has run at least once this engine lifetime" flag.
    * Keyed by sessionId (or 'default'). The first turn always runs adjust;
    * subsequent turns only run on budget pressure or new memory.
@@ -1042,6 +1086,13 @@ export class Engine {
       // can mark "after this batch, end the turn — do NOT call adapter
       // again". Honored at the top of the tool-loop continuation.
       requestEndTurn: vpCtx?.requestEndTurn,
+      // Background-task ownership hook. Tools that produce a TaskManager
+      // task (bash background, agent spawn) call this with the new
+      // `task.id` so the engine keeps the current query parked at end_turn
+      // until the task terminates — its result is then spliced into the
+      // next adapter loop in the SAME turn. Tools that don't produce
+      // async tasks ignore it.
+      registerAsyncTask: (taskId) => this.#registerAsyncTask(taskId),
       // Sub-agent plumbing — Agent tool needs these to spawn a child
       // Engine that inherits the parent's adapter / stores / toolset.
       parentEngineDeps: {
@@ -1065,6 +1116,12 @@ export class Engine {
         // to. Null when the parent has no stats wired (e.g. tests).
         toolStats: this.#toolStats || null,
         taskManager: this.#taskManager || null,
+        // Propagate the async-task coordinator so sub-agents launched
+        // from this engine register their background tasks against the
+        // SAME owner map the bridge uses. Without this, a sub-agent's
+        // background bash terminal event would not find its engine and
+        // would fall through to the legacy rescue path.
+        asyncTaskCoordinator: this.#asyncTaskCoordinator || null,
       },
     };
   }
@@ -1394,16 +1451,28 @@ export class Engine {
     if (this.#pendingUserMessages.length > 0) {
       pending.push(...this.#pendingUserMessages.splice(0));
     }
+    // Task-result re-entries flow through the same drain so the main loop
+    // sees ONE append queue. Each entry carries `internal: true` so the
+    // `user_append` event downstream is tagged correctly (UI hides the
+    // bubble; persistence stamps role=assistant).
+    if (this.#pendingTaskResultMessages.length > 0) {
+      pending.push(...this.#pendingTaskResultMessages.splice(0));
+    }
     return pending
       .map((item) => {
-        if (typeof item === 'string') return { content: item, preview: item };
+        if (typeof item === 'string') return { content: item, preview: item, internal: false };
         if (!item || typeof item !== 'object') return null;
         const content = item.content ?? item.text;
         if (typeof content !== 'string' && !Array.isArray(content)) return null;
         const preview = typeof item.preview === 'string'
           ? item.preview
           : (typeof content === 'string' ? content : '[content blocks]');
-        return { content, preview };
+        return {
+          content,
+          preview,
+          internal: Boolean(item.internal),
+          taskId: typeof item.taskId === 'string' ? item.taskId : undefined,
+        };
       })
       .filter(Boolean);
   }
@@ -1512,6 +1581,27 @@ export class Engine {
       this.#abortReason = null;
       this.#currentThreadId = MAIN_THREAD_ID;
       this.#pendingUserMessages.length = 0;
+      // Hand back any async tasks still on the books to the coordinator so
+      // a late terminal event falls through to the legacy rescue path
+      // (new turn) instead of being silently swallowed. The coordinator
+      // is responsible for keeping its owner map in sync.
+      if (this.#pendingAsyncTaskIds.size > 0) {
+        const leftover = Array.from(this.#pendingAsyncTaskIds);
+        this.#pendingAsyncTaskIds.clear();
+        for (const tid of leftover) {
+          try { this.#asyncTaskCoordinator?.onUnregister?.(tid); } catch { /* ignore */ }
+        }
+      }
+      this.#pendingTaskResultMessages.length = 0;
+      // Release any parked waiters so they don't pin a microtask after
+      // query() returns. The loop has already exited so they're harmless,
+      // but cleanup keeps the promise graph tight.
+      if (this.#asyncTaskWaiters.length > 0) {
+        const waiters = this.#asyncTaskWaiters.splice(0);
+        for (const r of waiters) {
+          try { r(); } catch { /* ignore */ }
+        }
+      }
     }
   }
 
@@ -2460,6 +2550,80 @@ export class Engine {
         continue;
       }
 
+      // If no tool calls, we're done — UNLESS we still own a pending
+      // async task. The user-facing semantic: a turn that launched a
+      // background bash / sub-agent stays "live" until those tasks
+      // terminate (or the user appends, or abort). The model already
+      // said end_turn; we just defer finalization by parking on the
+      // wait queue, then splice the synthetic task-result message in
+      // and run one more adapter loop. This matches the contract the
+      // bridge documents for `formatTaskResultForVp`: "Consume it now:
+      // tell the user the outcome or continue the work. Do not wait
+      // for another user turn."
+      if ((stopReason !== 'tool_use' || toolCalls.length === 0)
+          && this.#pendingAsyncTaskIds.size > 0
+          && !signal?.aborted) {
+        // Drop into a wait loop. The loop wakes on (a) any task
+        // terminal event delivered via `notifyAsyncTaskCompleted`, (b)
+        // a fresh user append (which is honored as a higher priority
+        // user input), or (c) abort. On wake we re-check: if either
+        // queue has content, drain + splice + continue the outer loop.
+        // If both queues are empty AND we still have pending tasks AND
+        // we're not aborted, we just keep waiting. This is the only
+        // place query() can block on something other than the LLM stream.
+        yield {
+          type: 'async_task_wait_start',
+          turnId: queryTurnId,
+          loopNumber: turnNumber,
+          threadId,
+          pendingTaskIds: Array.from(this.#pendingAsyncTaskIds),
+        };
+        // Race-safe wait: a `notifyAsyncTaskCompleted` callback that
+        // arrives synchronously between `yield` and the `await` below
+        // (e.g. the bridge handles a task event in the same microtask
+        // as the wait_start event) will already have populated the
+        // queues, so #waitForAsyncWake resolves immediately on its
+        // fast-path check. Drain BEFORE deciding to continue so we
+        // never "fall through" with content sitting in either queue.
+        while (!signal?.aborted
+               && this.#pendingTaskResultMessages.length === 0
+               && this.#pendingUserMessages.length === 0) {
+          if (this.#pendingAsyncTaskIds.size === 0) break;
+          await this.#waitForAsyncWake(signal);
+        }
+        yield {
+          type: 'async_task_wait_end',
+          turnId: queryTurnId,
+          loopNumber: turnNumber,
+          threadId,
+          aborted: Boolean(signal?.aborted),
+          remainingTaskIds: Array.from(this.#pendingAsyncTaskIds),
+        };
+        if (!signal?.aborted) {
+          const appendedAfterAsyncWait = this.#drainPendingUserMessages(drainPendingUserMessages);
+          if (appendedAfterAsyncWait.length > 0) {
+            for (const item of appendedAfterAsyncWait) {
+              conversationMessages.push({ role: 'user', content: item.content });
+              yield {
+                type: 'user_append',
+                turnId: queryTurnId,
+                loopNumber: turnNumber,
+                threadId,
+                preview: String(item.preview || '').slice(0, 200),
+                internal: Boolean(item.internal),
+                taskId: typeof item.taskId === 'string' ? item.taskId : undefined,
+              };
+            }
+            yield { type: 'turn_end', turnNumber, stopReason: 'async_task_continue', threadId };
+            continue;
+          }
+        }
+        // If we fall through here, either abort fired or the wait
+        // exited with no payload (all tasks released themselves via
+        // engine teardown / unregister with no notification). Drop into
+        // the regular end_turn path.
+      }
+
       // If no tool calls, we're done
       if (stopReason !== 'tool_use' || toolCalls.length === 0) {
         if (pendingSubAgentNotifs.length > 0) {
@@ -3109,7 +3273,132 @@ export class Engine {
     if (typeof content === 'string' && !content.trim()) return false;
     const preview = typeof content === 'string' ? content : '[content blocks]';
     this.#pendingUserMessages.push({ content, preview });
+    // Wake the async-task wait loop too. A user typing while the engine
+    // is parked on a background task should release the loop immediately
+    // so the user's words get spliced into the next iteration.
+    this.#wakeAsyncTaskWaiters();
     return true;
+  }
+
+  /**
+   * Install the coordinator that lets an external dispatcher (web-bridge)
+   * route a background task's terminal event back to THIS engine while
+   * its query() is still running. Pass `null` to detach.
+   * @param {{ onRegister?: (taskId:string, engine:Engine) => void, onUnregister?: (taskId:string) => void } | null} coord
+   */
+  setAsyncTaskCoordinator(coord) {
+    this.#asyncTaskCoordinator = (coord && typeof coord === 'object') ? coord : null;
+  }
+
+  /**
+   * True iff the currently-running query is holding pending async tasks.
+   * Used by external probes (web-bridge fallback dispatcher) to decide
+   * whether a task terminal event should be injected into the same turn
+   * or fall back to the legacy "open a new turn" rescue path.
+   * @returns {boolean}
+   */
+  hasPendingAsyncTasks() {
+    return this.#pendingAsyncTaskIds.size > 0;
+  }
+
+  /**
+   * True iff THIS engine has registered the given taskId as belonging to
+   * the currently-running query. Web-bridge calls this before
+   * `notifyAsyncTaskCompleted` so a terminal event for a task that wasn't
+   * launched from this turn (or whose engine already finished) falls
+   * through to the legacy rescue path.
+   * @param {string} taskId
+   * @returns {boolean}
+   */
+  ownsPendingAsyncTask(taskId) {
+    return typeof taskId === 'string' && this.#pendingAsyncTaskIds.has(taskId);
+  }
+
+  /**
+   * Deliver a terminal task event into the currently-running query. Drops
+   * the task from the pending set, queues a synthetic user message with
+   * the rendered task result, and wakes the wait loop. Returns true iff
+   * the engine accepted ownership (the bridge should NOT fall back to the
+   * legacy rescue path). Returns false when the engine was never holding
+   * this taskId — caller should fall through to its rescue path.
+   *
+   * @param {string} taskId
+   * @param {string|Array} content — pre-formatted task result body
+   * @param {{ preview?: string }} [opts]
+   * @returns {boolean}
+   */
+  notifyAsyncTaskCompleted(taskId, content, opts = {}) {
+    if (!this.ownsPendingAsyncTask(taskId)) return false;
+    if (typeof content !== 'string' && !Array.isArray(content)) return false;
+    if (typeof content === 'string' && !content.trim()) return false;
+    // Defensive: an empty content-block array would splice as a wire-valid
+    // but semantically empty user message, which the adapter would happily
+    // forward and bill for. Production callers (formatTaskResultForVp)
+    // always emit a non-empty string today; this guards future refactors.
+    if (Array.isArray(content) && content.length === 0) return false;
+    this.#pendingAsyncTaskIds.delete(taskId);
+    try { this.#asyncTaskCoordinator?.onUnregister?.(taskId); } catch { /* coord must not throw into engine */ }
+    const preview = typeof opts.preview === 'string'
+      ? opts.preview
+      : (typeof content === 'string' ? content.slice(0, 200) : '[task result]');
+    this.#pendingTaskResultMessages.push({
+      content,
+      preview,
+      internal: true,
+      taskId,
+    });
+    this.#wakeAsyncTaskWaiters();
+    return true;
+  }
+
+  /**
+   * Register a background task as belonging to the current query. Called
+   * from tools (bash background, agent spawn) via `toolCtx.registerAsyncTask`.
+   * @param {string} taskId
+   * @returns {void}
+   */
+  #registerAsyncTask(taskId) {
+    if (typeof taskId !== 'string' || !taskId) return;
+    this.#pendingAsyncTaskIds.add(taskId);
+    try { this.#asyncTaskCoordinator?.onRegister?.(taskId, this); } catch { /* coord must not throw into tools */ }
+  }
+
+  #wakeAsyncTaskWaiters() {
+    if (this.#asyncTaskWaiters.length === 0) return;
+    const waiters = this.#asyncTaskWaiters.splice(0);
+    for (const resolve of waiters) {
+      try { resolve(); } catch { /* never break the loop on a stray callback */ }
+    }
+  }
+
+  /**
+   * Wait for *any* of: an async task terminal event, a fresh user append,
+   * or signal abort. Resolves immediately if any of those is already
+   * pending. The loop re-evaluates conditions on wake — multiple
+   * concurrent tasks all wake the same waiter once, then the loop drains
+   * everything in one iteration and decides whether to keep waiting.
+   * @param {AbortSignal|null|undefined} signal
+   * @returns {Promise<void>}
+   */
+  #waitForAsyncWake(signal) {
+    return new Promise((resolve) => {
+      // Fast paths — anything already pending releases instantly. This is
+      // the common case when a task finished between adapter loops.
+      if (this.#pendingTaskResultMessages.length > 0) return resolve();
+      if (this.#pendingUserMessages.length > 0) return resolve();
+      if (signal?.aborted) return resolve();
+      this.#asyncTaskWaiters.push(resolve);
+      if (signal && typeof signal.addEventListener === 'function') {
+        // Best-effort abort wakeup; the loop re-checks signal.aborted.
+        const onAbort = () => {
+          // Splice the resolver out of the wait queue so it can't double-fire.
+          const idx = this.#asyncTaskWaiters.indexOf(resolve);
+          if (idx >= 0) this.#asyncTaskWaiters.splice(idx, 1);
+          try { resolve(); } catch { /* ignore */ }
+        };
+        try { signal.addEventListener('abort', onAbort, { once: true }); } catch { /* old runtimes */ }
+      }
+    });
   }
 
   /** @returns {string|null} */
