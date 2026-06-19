@@ -1416,7 +1416,6 @@ export default {
   'yeaft.sessionStatus.task.subAgentStatusUpdated': '{name} status updated',
   'yeaft.sessionStatus.task.subAgentResult': '{name} result: {text}',
   'yeaft.sessionStatus.task.subAgentProducedResult': '{name} produced a result',
-  'yeaft.sessionStatus.task.subAgentSaid': '{name}: {text}',
   'yeaft.sessionStatus.task.subAgentUsedTool': '{name} used {tool}',
   'yeaft.sessionStatus.task.subAgentFinishedTool': '{name} finished {tool}',
   'yeaft.sessionStatus.task.subAgentUsage': '{name} used {tokens} tokens',

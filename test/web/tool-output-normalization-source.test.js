@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { createSubAgentTaskDetailLines } from '../../web/components/VpTimelinePane.js';
 
 const toolLineSource = readFileSync(new URL('../../web/components/ToolLine.js', import.meta.url), 'utf8');
 const assistantTurnSource = readFileSync(new URL('../../web/components/AssistantTurn.js', import.meta.url), 'utf8');
@@ -54,14 +55,32 @@ describe('terminal output normalization render wiring', () => {
   });
 
   it('formats sub-agent task JSONL into human readable detail lines', () => {
-    expect(vpTimelinePaneSource).toContain('const friendlySubAgentEvent = (event) => {');
+    const messages = {
+      'yeaft.sessionStatus.task.subAgentResult': '{name} result: {text}',
+    };
+    const t = (key, params = {}) => Object.entries(params).reduce(
+      (text, [name, value]) => text.replace(new RegExp(`\\{${name}\\}`, 'g'), value),
+      messages[key] || key,
+    );
+    const preview = [
+      JSON.stringify({ type: 'text_delta', agentName: 'worker', text: 'partial answer' }),
+      JSON.stringify({ type: 'sub_agent_turn_end', agentName: 'worker', content: 'final answer' }),
+    ].join('\n');
+
+    expect(createSubAgentTaskDetailLines({ kind: 'sub_agent', log: { preview } }, t)).toEqual([
+      'worker result: final answer',
+    ]);
+    expect(createSubAgentTaskDetailLines({ kind: 'shell', log: { preview } }, t)).toEqual([]);
+
+    expect(vpTimelinePaneSource).toContain('export function createSubAgentTaskDetailLines');
     expect(vpTimelinePaneSource).toContain("case 'sub_agent_spawned':");
     expect(vpTimelinePaneSource).toContain("$t('yeaft.sessionStatus.task.subAgentStartedWithMission'");
     expect(vpTimelinePaneSource).toContain('v-if="task.kind === \'sub_agent\'"');
     expect(vpTimelinePaneSource).toContain('const compactText = (value, maxLength = 360) => {');
-    expect(vpTimelinePaneSource).toContain("case 'text_delta':");
     expect(vpTimelinePaneSource).toContain("$t('yeaft.sessionStatus.task.subAgentNoReadableEvents')");
     expect(vpTimelinePaneSource).toContain('{{ taskKindLabel(task) }}');
+    expect(vpTimelinePaneSource).not.toContain("case 'text_delta':");
+    expect(vpTimelinePaneSource).not.toContain('subAgentSaid');
     expect(vpTimelinePaneSource).not.toContain('{{ task.log.preview }}');
   });
 });

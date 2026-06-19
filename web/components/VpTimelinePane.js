@@ -1,5 +1,72 @@
 import TerminalOutput from './TerminalOutput.js';
 
+const tryParseJsonLine = (line) => {
+  if (typeof line !== 'string') return null;
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
+  try { return JSON.parse(trimmed); } catch (_) { return null; }
+};
+
+const compactText = (value, maxLength = 360) => {
+  if (typeof value !== 'string') return '';
+  const text = value.trim().replace(/\s+/g, ' ');
+  return text.length > maxLength ? text.slice(0, maxLength - 1) + '…' : text;
+};
+
+const readableSubAgentEvent = (event, translate) => {
+  if (!event || typeof event !== 'object') return '';
+  const $t = typeof translate === 'function' ? translate : (key) => key;
+  const name = event.agentName || event.agentId || $t('yeaft.sessionStatus.task.kind.subAgent');
+  switch (event.type) {
+    case 'sub_agent_spawned': {
+      const mission = compactText(event.mission, 240);
+      return mission
+        ? $t('yeaft.sessionStatus.task.subAgentStartedWithMission', { name, mission })
+        : $t('yeaft.sessionStatus.task.subAgentStarted', { name });
+    }
+    case 'sub_agent_status':
+      return event.status
+        ? $t('yeaft.sessionStatus.task.subAgentStatus', { name, status: event.status })
+        : $t('yeaft.sessionStatus.task.subAgentStatusUpdated', { name });
+    case 'sub_agent_turn_end': {
+      const text = compactText(event.content || event.text);
+      return text
+        ? $t('yeaft.sessionStatus.task.subAgentResult', { name, text })
+        : $t('yeaft.sessionStatus.task.subAgentProducedResult', { name });
+    }
+    case 'tool_start':
+    case 'tool_use':
+    case 'tool_call':
+      return $t('yeaft.sessionStatus.task.subAgentUsedTool', { name, tool: event.name || event.toolName || 'tool' });
+    case 'tool_result':
+    case 'tool_end':
+      return $t('yeaft.sessionStatus.task.subAgentFinishedTool', { name, tool: event.name || event.toolName || 'tool' });
+    case 'usage':
+      return typeof event.tokens === 'number'
+        ? $t('yeaft.sessionStatus.task.subAgentUsage', { name, tokens: event.tokens })
+        : '';
+    case 'error': {
+      const error = event.error && (event.error.message || event.error);
+      return error
+        ? $t('yeaft.sessionStatus.task.subAgentError', { name, error })
+        : $t('yeaft.sessionStatus.task.subAgentHitError', { name });
+    }
+    default: {
+      const text = compactText(event.content || event.message, 240);
+      return text ? $t('yeaft.sessionStatus.task.subAgentEvent', { name, text }) : '';
+    }
+  }
+};
+
+export function createSubAgentTaskDetailLines(task, translate) {
+  if (!task || task.kind !== 'sub_agent') return [];
+  const preview = typeof task.log?.preview === 'string' ? task.log.preview : '';
+  return preview
+    .split(/\r?\n/)
+    .map(line => readableSubAgentEvent(tryParseJsonLine(line), translate))
+    .filter(Boolean);
+}
+
 /**
  * VpTimelinePane — right-of-conversation Session status pane.
  *
@@ -294,67 +361,6 @@ export default {
       try { return new Date(value).toLocaleTimeString(); } catch (_) { return String(value); }
     };
 
-    const tryParseJsonLine = (line) => {
-      if (typeof line !== 'string') return null;
-      const trimmed = line.trim();
-      if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
-      try { return JSON.parse(trimmed); } catch (_) { return null; }
-    };
-
-    const compactText = (value, maxLength = 360) => {
-      if (typeof value !== 'string') return '';
-      const text = value.trim().replace(/\s+/g, ' ');
-      return text.length > maxLength ? text.slice(0, maxLength - 1) + '…' : text;
-    };
-
-    const friendlySubAgentEvent = (event) => {
-      if (!event || typeof event !== 'object') return '';
-      const name = event.agentName || event.agentId || $t('yeaft.sessionStatus.task.kind.subAgent');
-      switch (event.type) {
-        case 'sub_agent_spawned': {
-          const mission = compactText(event.mission, 240);
-          return mission
-            ? $t('yeaft.sessionStatus.task.subAgentStartedWithMission', { name, mission })
-            : $t('yeaft.sessionStatus.task.subAgentStarted', { name });
-        }
-        case 'sub_agent_status':
-          return event.status
-            ? $t('yeaft.sessionStatus.task.subAgentStatus', { name, status: event.status })
-            : $t('yeaft.sessionStatus.task.subAgentStatusUpdated', { name });
-        case 'sub_agent_turn_end': {
-          const text = compactText(event.content || event.text);
-          return text
-            ? $t('yeaft.sessionStatus.task.subAgentResult', { name, text })
-            : $t('yeaft.sessionStatus.task.subAgentProducedResult', { name });
-        }
-        case 'text_delta': {
-          const text = compactText(event.text, 160);
-          return text ? $t('yeaft.sessionStatus.task.subAgentSaid', { name, text }) : '';
-        }
-        case 'tool_start':
-        case 'tool_use':
-        case 'tool_call':
-          return $t('yeaft.sessionStatus.task.subAgentUsedTool', { name, tool: event.name || event.toolName || 'tool' });
-        case 'tool_result':
-        case 'tool_end':
-          return $t('yeaft.sessionStatus.task.subAgentFinishedTool', { name, tool: event.name || event.toolName || 'tool' });
-        case 'usage':
-          return typeof event.tokens === 'number'
-            ? $t('yeaft.sessionStatus.task.subAgentUsage', { name, tokens: event.tokens })
-            : '';
-        case 'error': {
-          const error = event.error && (event.error.message || event.error);
-          return error
-            ? $t('yeaft.sessionStatus.task.subAgentError', { name, error })
-            : $t('yeaft.sessionStatus.task.subAgentHitError', { name });
-        }
-        default: {
-          const text = compactText(event.content || event.text || event.message, 240);
-          return text ? $t('yeaft.sessionStatus.task.subAgentEvent', { name, text }) : '';
-        }
-      }
-    };
-
     const taskKindLabel = (task) => {
       switch (task?.kind) {
         case 'sub_agent': return $t('yeaft.sessionStatus.task.kind.subAgent');
@@ -363,14 +369,7 @@ export default {
       }
     };
 
-    const taskDetailLines = (task) => {
-      if (!task || task.kind !== 'sub_agent') return [];
-      const preview = typeof task.log?.preview === 'string' ? task.log.preview : '';
-      return preview
-        .split(/\r?\n/)
-        .map(line => friendlySubAgentEvent(tryParseJsonLine(line)))
-        .filter(Boolean);
-    };
+    const taskDetailLines = (task) => createSubAgentTaskDetailLines(task, $t);
 
     const statusLabel = (row) => {
       switch (row.status) {

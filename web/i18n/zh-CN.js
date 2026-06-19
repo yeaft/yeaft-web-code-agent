@@ -1412,7 +1412,6 @@ export default {
   'yeaft.sessionStatus.task.subAgentStatusUpdated': '{name} 状态已更新',
   'yeaft.sessionStatus.task.subAgentResult': '{name} 结果：{text}',
   'yeaft.sessionStatus.task.subAgentProducedResult': '{name} 已产生结果',
-  'yeaft.sessionStatus.task.subAgentSaid': '{name}：{text}',
   'yeaft.sessionStatus.task.subAgentUsedTool': '{name} 调用了 {tool}',
   'yeaft.sessionStatus.task.subAgentFinishedTool': '{name} 完成了 {tool}',
   'yeaft.sessionStatus.task.subAgentUsage': '{name} 使用了 {tokens} tokens',
