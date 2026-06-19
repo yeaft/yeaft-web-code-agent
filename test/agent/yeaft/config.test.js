@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
-import { existsSync, writeFileSync, mkdirSync, rmSync } from 'fs';
+import { existsSync, writeFileSync, mkdirSync, rmSync, mkdtempSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { loadConfig, parseFrontmatter, loadMCPConfig, loadProjectMCPServers } from '../../../agent/yeaft/config.js';
@@ -7,9 +7,14 @@ import { resolveContextWindow, resolveMaxOutputTokens } from '../../../agent/yea
 import { _resetMemCache, _setMemCacheForTest } from '../../../agent/yeaft/llm/models-dev.js';
 
 const TEST_DIR = join(tmpdir(), `yeaft-test-config-${Date.now()}`);
+let TEST_HOME;
+let PREVIOUS_HOME;
 
 beforeEach(() => {
   mkdirSync(TEST_DIR, { recursive: true });
+  TEST_HOME = mkdtempSync(join(tmpdir(), 'yeaft-test-home-'));
+  PREVIOUS_HOME = process.env.HOME;
+  process.env.HOME = TEST_HOME;
   // Clear relevant env vars
   delete process.env.YEAFT_MODEL;
   delete process.env.YEAFT_API_KEY;
@@ -29,6 +34,16 @@ afterEach(() => {
   if (existsSync(TEST_DIR)) {
     rmSync(TEST_DIR, { recursive: true, force: true });
   }
+  if (TEST_HOME && existsSync(TEST_HOME)) {
+    rmSync(TEST_HOME, { recursive: true, force: true });
+  }
+  if (PREVIOUS_HOME === undefined) {
+    delete process.env.HOME;
+  } else {
+    process.env.HOME = PREVIOUS_HOME;
+  }
+  TEST_HOME = null;
+  PREVIOUS_HOME = undefined;
   // Re-clear env vars
   delete process.env.YEAFT_MODEL;
   delete process.env.YEAFT_API_KEY;
@@ -463,6 +478,11 @@ describe('loadProjectMCPServers', () => {
     writeFileSync(join(PROJECT_DIR, '.mcp.json'), JSON.stringify(obj));
   }
 
+  function writeCodexMcp(toml) {
+    mkdirSync(join(PROJECT_DIR, '.codex'), { recursive: true });
+    writeFileSync(join(PROJECT_DIR, '.codex', 'config.toml'), toml);
+  }
+
   it('parses Claude Code mcpServers object into yeaft array shape', () => {
     writeMcp({
       mcpServers: {
@@ -478,6 +498,23 @@ describe('loadProjectMCPServers', () => {
       args: ['-y', '@mcp/github'],
       env: { TOKEN: 'x' },
     });
+    expect(result.skipped).toEqual([]);
+  });
+
+  it('parses Codex .codex/config.toml MCP servers into yeaft array shape', () => {
+    writeCodexMcp(`
+[mcp_servers.filesystem]
+command = "npx"
+args = ["-y", "@mcp/filesystem"]
+
+[mcp_servers.filesystem.env]
+ROOT = "/tmp"
+`);
+
+    const result = loadProjectMCPServers(PROJECT_DIR);
+    expect(result.servers).toEqual([
+      { name: 'filesystem', command: 'npx', args: ['-y', '@mcp/filesystem'], env: { ROOT: '/tmp' } },
+    ]);
     expect(result.skipped).toEqual([]);
   });
 
@@ -565,6 +602,20 @@ describe('loadMCPConfig — global/project merge', () => {
     writeFileSync(join(PROJECT_DIR, '.mcp.json'), JSON.stringify(obj));
   }
 
+  function writeClaudeUserMcp(obj) {
+    writeFileSync(join(TEST_HOME, '.claude.json'), JSON.stringify(obj));
+  }
+
+  function writeCodexUserMcp(toml) {
+    mkdirSync(join(TEST_HOME, '.codex'), { recursive: true });
+    writeFileSync(join(TEST_HOME, '.codex', 'config.toml'), toml);
+  }
+
+  function writeCodexProjectMcp(toml) {
+    mkdirSync(join(PROJECT_DIR, '.codex'), { recursive: true });
+    writeFileSync(join(PROJECT_DIR, '.codex', 'config.toml'), toml);
+  }
+
   it('merges global config.json servers with project .mcp.json servers', () => {
     const jsonConfig = { mcpServers: [{ name: 'global-srv', command: 'g' }] };
     writeProjectMcp({ mcpServers: { 'project-srv': { command: 'p' } } });
@@ -573,13 +624,49 @@ describe('loadMCPConfig — global/project merge', () => {
     expect(result.servers.map(s => s.name).sort()).toEqual(['global-srv', 'project-srv']);
   });
 
-  it('global (~/.yeaft) server wins over a same-named project server', () => {
+  it('global (~/.yeaft) server wins over same-named borrowed user and project servers', () => {
     const jsonConfig = { mcpServers: [{ name: 'dup', command: 'global-cmd' }] };
+    writeClaudeUserMcp({ mcpServers: { dup: { command: 'claude-user-cmd' } } });
+    writeCodexUserMcp('[mcp_servers.dup]\ncommand = "codex-user-cmd"\n');
     writeProjectMcp({ mcpServers: { dup: { command: 'project-cmd' } } });
 
     const result = loadMCPConfig(TEST_DIR, jsonConfig, PROJECT_DIR);
     expect(result.servers).toHaveLength(1);
     expect(result.servers[0].command).toBe('global-cmd');
+  });
+
+  it('loads borrowed Claude Code and Codex user MCP configs before project configs', () => {
+    writeClaudeUserMcp({ mcpServers: { claudeUser: { command: 'claude-user', args: ['a'] } } });
+    writeCodexUserMcp(`
+[mcp_servers.codexUser]
+command = "codex-user"
+args = ["--flag"]
+env = { TOKEN = "secret" }
+`);
+    writeProjectMcp({ mcpServers: { project: { command: 'project-cmd' } } });
+
+    const result = loadMCPConfig(TEST_DIR, undefined, PROJECT_DIR);
+    expect(result.servers).toEqual([
+      { name: 'claudeUser', command: 'claude-user', args: ['a'] },
+      { name: 'codexUser', command: 'codex-user', args: ['--flag'], env: { TOKEN: 'secret' } },
+      { name: 'project', command: 'project-cmd' },
+    ]);
+  });
+
+  it('loads Codex project MCP configs from <workDir>/.codex/config.toml', () => {
+    writeCodexProjectMcp(`
+[mcp_servers."codex-project"]
+command = "node"
+args = ["server.js"]
+
+[mcp_servers."codex-project".env]
+API_KEY = "x"
+`);
+
+    const result = loadMCPConfig(TEST_DIR, undefined, PROJECT_DIR);
+    expect(result.servers).toEqual([
+      { name: 'codex-project', command: 'node', args: ['server.js'], env: { API_KEY: 'x' } },
+    ]);
   });
 
   it('surfaces project skipped servers through loadMCPConfig', () => {
