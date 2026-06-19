@@ -40,6 +40,27 @@ const ANSI_BG_CLASS = new Map([
   [107, 'terminal-bg-bright-white'],
 ]);
 
+const ANSI_COLOR_PALETTE = [
+  { code: 30, r: 0, g: 0, b: 0 },
+  { code: 31, r: 170, g: 0, b: 0 },
+  { code: 32, r: 0, g: 170, b: 0 },
+  { code: 33, r: 170, g: 85, b: 0 },
+  { code: 34, r: 0, g: 0, b: 170 },
+  { code: 35, r: 170, g: 0, b: 170 },
+  { code: 36, r: 0, g: 170, b: 170 },
+  { code: 37, r: 170, g: 170, b: 170 },
+  { code: 90, r: 85, g: 85, b: 85 },
+  { code: 91, r: 255, g: 85, b: 85 },
+  { code: 92, r: 85, g: 255, b: 85 },
+  { code: 93, r: 255, g: 255, b: 85 },
+  { code: 94, r: 85, g: 85, b: 255 },
+  { code: 95, r: 255, g: 85, b: 255 },
+  { code: 96, r: 85, g: 255, b: 255 },
+  { code: 97, r: 255, g: 255, b: 255 },
+];
+
+const XTERM_COLOR_STEPS = [0, 95, 135, 175, 215, 255];
+
 function applyBackspaces(line) {
   const out = [];
   for (const ch of line) {
@@ -81,9 +102,80 @@ function parseSgrCodes(params) {
     .filter(Number.isFinite);
 }
 
+function classForAnsiColorCode(code, target) {
+  const normalized = target === 'bg' && code >= 30 && code <= 37
+    ? code + 10
+    : target === 'bg' && code >= 90 && code <= 97
+      ? code + 10
+      : code;
+  return target === 'bg' ? ANSI_BG_CLASS.get(normalized) : ANSI_FG_CLASS.get(normalized);
+}
+
+function nearestAnsiColorCode(r, g, b) {
+  let nearest = ANSI_COLOR_PALETTE[0];
+  let nearestDistance = Infinity;
+
+  for (const color of ANSI_COLOR_PALETTE) {
+    const distance = ((color.r - r) ** 2) + ((color.g - g) ** 2) + ((color.b - b) ** 2);
+    if (distance < nearestDistance) {
+      nearest = color;
+      nearestDistance = distance;
+    }
+  }
+
+  return nearest.code;
+}
+
+function rgbForXterm256Color(code) {
+  if (code < 0 || code > 255) return null;
+  if (code < 16) {
+    const color = ANSI_COLOR_PALETTE[code];
+    return { r: color.r, g: color.g, b: color.b };
+  }
+  if (code >= 232) {
+    const value = 8 + ((code - 232) * 10);
+    return { r: value, g: value, b: value };
+  }
+
+  const offset = code - 16;
+  return {
+    r: XTERM_COLOR_STEPS[Math.floor(offset / 36)],
+    g: XTERM_COLOR_STEPS[Math.floor((offset % 36) / 6)],
+    b: XTERM_COLOR_STEPS[offset % 6],
+  };
+}
+
+function applyExtendedColor(next, target, codes, index) {
+  const mode = codes[index + 1];
+  if (mode === 5) {
+    const colorCode = codes[index + 2];
+    if (Number.isFinite(colorCode)) {
+      const rgb = rgbForXterm256Color(colorCode);
+      if (rgb) {
+        next[target] = classForAnsiColorCode(nearestAnsiColorCode(rgb.r, rgb.g, rgb.b), target) || '';
+      }
+    }
+    return index + 3;
+  }
+
+  if (mode === 2) {
+    const r = codes[index + 2];
+    const g = codes[index + 3];
+    const b = codes[index + 4];
+    if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) {
+      next[target] = classForAnsiColorCode(nearestAnsiColorCode(r, g, b), target) || '';
+    }
+    return index + 5;
+  }
+
+  return index + 2;
+}
+
 function applySgrCodes(style, codes) {
   const next = { ...style };
-  for (const code of codes.length ? codes : [0]) {
+  const sgrCodes = codes.length ? codes : [0];
+  for (let index = 0; index < sgrCodes.length;) {
+    const code = sgrCodes[index];
     if (code === 0) {
       next.fg = '';
       next.bg = '';
@@ -116,7 +208,14 @@ function applySgrCodes(style, codes) {
       next.fg = ANSI_FG_CLASS.get(code);
     } else if (ANSI_BG_CLASS.has(code)) {
       next.bg = ANSI_BG_CLASS.get(code);
+    } else if (code === 38) {
+      index = applyExtendedColor(next, 'fg', sgrCodes, index);
+      continue;
+    } else if (code === 48) {
+      index = applyExtendedColor(next, 'bg', sgrCodes, index);
+      continue;
     }
+    index += 1;
   }
   return next;
 }

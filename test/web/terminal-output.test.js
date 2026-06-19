@@ -49,4 +49,31 @@ describe('normalizeTerminalOutput', () => {
       { text: ' RUN ', className: 'terminal-bg-cyan terminal-bold' },
     ]);
   });
+
+  it('maps 24-bit foreground colors without treating RGB parameters as style codes', () => {
+    const raw = '\u001b[38;2;255;0;0mred\u001b[0m plain';
+
+    expect(tokenizeTerminalOutput(raw)).toEqual([
+      { text: 'red', className: 'terminal-fg-red' },
+      { text: ' plain', className: '' },
+    ]);
+  });
+
+  it('maps 256-color foreground colors without leaking extended parameters', () => {
+    const raw = '\u001b[38;5;196mred\u001b[0m plain';
+
+    expect(tokenizeTerminalOutput(raw)).toEqual([
+      { text: 'red', className: 'terminal-fg-red' },
+      { text: ' plain', className: '' },
+    ]);
+  });
+
+  it('maps 24-bit background colors without resetting on RGB zero parameters', () => {
+    const raw = '\u001b[48;2;0;255;0mgreen bg\u001b[0m plain';
+
+    expect(tokenizeTerminalOutput(raw)).toEqual([
+      { text: 'green bg', className: 'terminal-bg-green' },
+      { text: ' plain', className: '' },
+    ]);
+  });
 });
