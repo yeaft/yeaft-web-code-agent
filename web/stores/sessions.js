@@ -238,6 +238,13 @@ export const useSessionsStore = defineStore('sessions', {
       // the same history/model bootstrap as a manual sidebar click.
       const chat = _getChatStoreSafe();
       if (chat) {
+        if (agentId) {
+          const nextSessionAgents = { ...(chat.yeaftSessionAgentById || {}) };
+          for (const s of arr) {
+            if (s && s.id) nextSessionAgents[s.id] = agentId;
+          }
+          chat.yeaftSessionAgentById = nextSessionAgents;
+        }
         const selectedSessionId = this.activeSessionId || fallbackActiveId;
         let nextFilterId = null;
         if (chat.yeaftActiveSessionFilter && !this.sessions[chat.yeaftActiveSessionFilter]) {
