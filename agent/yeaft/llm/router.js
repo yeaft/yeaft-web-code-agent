@@ -241,12 +241,18 @@ export class AdapterRouter extends LLMAdapter {
   /** @type {object[]} raw providers array */
   #providers;
 
+  /** @type {number} per-SSE-chunk silence budget; <= 0 disables the guard */
+  #streamIdleTimeoutMs;
+
   /**
-   * @param {{ providers: object[], config?: object }} params
+   * @param {{ providers: object[], llmRetry?: { streamIdleTimeoutMs?: number } }} params
    * @param {object[]} params.providers — Array of { name, baseUrl, apiKey, protocol?, models[] }
    */
-  constructor({ providers }) {
+  constructor({ providers, llmRetry = {} }) {
     super();
+    this.#streamIdleTimeoutMs = Number.isFinite(llmRetry.streamIdleTimeoutMs)
+      ? Math.max(0, Math.floor(llmRetry.streamIdleTimeoutMs))
+      : 0;
     this.#providers = [];
     this.#modelToProvider = new Map();
     this.#adapterCache = new Map();
@@ -466,6 +472,7 @@ export class AdapterRouter extends LLMAdapter {
         apiKey,
         baseUrl: provider.baseUrl,
         authHeaderMode: anthropicAuthHeaderMode,
+        streamIdleTimeoutMs: this.#streamIdleTimeoutMs,
       });
     } else if (protocol === 'openai-responses') {
       // OpenAI Responses API (/v1/responses) — canonical OpenAI-compatible path.
@@ -473,6 +480,7 @@ export class AdapterRouter extends LLMAdapter {
       adapter = new OpenAIResponsesAdapter({
         apiKey,
         baseUrl: provider.baseUrl,
+        streamIdleTimeoutMs: this.#streamIdleTimeoutMs,
       });
     } else {
       throw new Error(

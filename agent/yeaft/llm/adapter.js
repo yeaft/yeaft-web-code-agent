@@ -117,21 +117,6 @@ export class LLMAbortError extends Error {
   }
 }
 
-const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 110_000;
-
-/**
- * Milliseconds to wait for the next SSE chunk before treating a stream as
- * stalled. A value <= 0 disables the guard. Kept env-configurable for local
- * tests and emergency tuning without editing runtime config.
- *
- * @returns {number}
- */
-export function streamIdleTimeoutMs() {
-  const raw = Number(process.env.YEAFT_LLM_STREAM_IDLE_TIMEOUT_MS);
-  if (Number.isFinite(raw)) return Math.max(0, Math.floor(raw));
-  return DEFAULT_STREAM_IDLE_TIMEOUT_MS;
-}
-
 /**
  * Read one chunk from a Fetch stream with a silence timeout. This is not a
  * total request deadline: every received chunk gets a fresh budget. A caller
@@ -143,7 +128,7 @@ export function streamIdleTimeoutMs() {
  * @returns {Promise<ReadableStreamReadResult<Uint8Array>>}
  */
 export async function readStreamChunkWithIdleTimeout(reader, opts = {}) {
-  const idleMs = Number.isFinite(opts.idleMs) ? Math.max(0, Math.floor(opts.idleMs)) : streamIdleTimeoutMs();
+  const idleMs = Number.isFinite(opts.idleMs) ? Math.max(0, Math.floor(opts.idleMs)) : 0;
   if (idleMs <= 0) return reader.read();
   if (opts.signal?.aborted) throw new LLMAbortError();
 
@@ -266,7 +251,6 @@ export function classifyFetchError(err, opts = {}) {
     || err instanceof LLMAuthError
     || err instanceof LLMContextError
     || err instanceof LLMServerError
-    || err instanceof LLMStreamIdleTimeoutError
     || err instanceof LLMAbortError) {
     return err;
   }
@@ -395,7 +379,7 @@ export async function createLLMAdapter(config) {
   // ─── New path: config.json with providers ─────────────
   if (config.providers && config.providers.length > 0) {
     const { AdapterRouter } = await import('./router.js');
-    return new AdapterRouter({ providers: config.providers });
+    return new AdapterRouter({ providers: config.providers, llmRetry: config.llmRetry });
   }
 
   // ─── Legacy path: single adapter from env vars ────────
@@ -409,6 +393,7 @@ export async function createLLMAdapter(config) {
     return new AnthropicAdapter({
       apiKey: config.apiKey,
       baseUrl: config.baseUrl || undefined, // AnthropicAdapter has its own default
+      streamIdleTimeoutMs: config.llmRetry?.streamIdleTimeoutMs,
     });
   }
 

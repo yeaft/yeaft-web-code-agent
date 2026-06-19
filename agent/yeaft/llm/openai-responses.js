@@ -68,14 +68,16 @@ function effortForResponses(effort) {
 export class OpenAIResponsesAdapter extends LLMAdapter {
   #apiKey;
   #baseUrl;
+  #streamIdleTimeoutMs;
 
   /**
-   * @param {{ apiKey: string, baseUrl?: string }} config
+   * @param {{ apiKey: string, baseUrl?: string, streamIdleTimeoutMs?: number }} config
    */
-  constructor({ apiKey, baseUrl = DEFAULT_BASE_URL }) {
-    super({ apiKey, baseUrl });
+  constructor({ apiKey, baseUrl = DEFAULT_BASE_URL, streamIdleTimeoutMs = 0 }) {
+    super({ apiKey, baseUrl, streamIdleTimeoutMs });
     this.#apiKey = apiKey;
     this.#baseUrl = (baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
+    this.#streamIdleTimeoutMs = Number.isFinite(streamIdleTimeoutMs) ? Math.max(0, Math.floor(streamIdleTimeoutMs)) : 0;
   }
 
   /** Expose baseUrl for testing. */
@@ -333,7 +335,11 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
 
     try {
       while (true) {
-        const { done, value } = await readStreamChunkWithIdleTimeout(reader, { signal, providerLabel: 'OpenAI' });
+        const { done, value } = await readStreamChunkWithIdleTimeout(reader, {
+          signal,
+          idleMs: this.#streamIdleTimeoutMs,
+          providerLabel: 'OpenAI',
+        });
         if (done) break;
         const chunkText = decoder.decode(value, { stream: true });
         buffer += chunkText;

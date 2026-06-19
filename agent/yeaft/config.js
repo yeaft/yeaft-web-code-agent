@@ -65,11 +65,14 @@ const DEFAULTS = {
   //   • baseDelayMs / maxDelayMs: exponential backoff bounds used when
   //     the server didn't send a Retry-After header.
   //   • jitterRatio: ± random fraction applied to backoff; 0 disables.
+  //   • streamIdleTimeoutMs: per-SSE-chunk silence budget. 0 disables the
+  //     stalled-stream guard; every received chunk refreshes the budget.
   llmRetry: {
     maxRetries: 3,
     baseDelayMs: 1_000,
     maxDelayMs: 30_000,
     jitterRatio: 0.25,
+    streamIdleTimeoutMs: 110_000,
   },
 };
 
@@ -85,7 +88,7 @@ const DEFAULTS = {
  *
  * @param {object | null | undefined} fileConfig
  * @param {object | null | undefined} overrides
- * @returns {{ maxRetries: number, baseDelayMs: number, maxDelayMs: number, jitterRatio: number }}
+ * @returns {{ maxRetries: number, baseDelayMs: number, maxDelayMs: number, jitterRatio: number, streamIdleTimeoutMs: number }}
  */
 export function normalizeLlmRetry(fileConfig, overrides) {
   const base = DEFAULTS.llmRetry;
@@ -103,6 +106,9 @@ export function normalizeLlmRetry(fileConfig, overrides) {
     }
     if (Number.isFinite(src.jitterRatio) && src.jitterRatio >= 0) {
       out.jitterRatio = Math.min(1, src.jitterRatio);
+    }
+    if (Number.isFinite(src.streamIdleTimeoutMs) && src.streamIdleTimeoutMs >= 0) {
+      out.streamIdleTimeoutMs = Math.min(600_000, Math.floor(src.streamIdleTimeoutMs));
     }
   };
   apply(fileConfig);

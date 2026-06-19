@@ -52,7 +52,6 @@ function idleStreamResponse() {
 describe('AnthropicAdapter error classification', () => {
   afterEach(() => {
     global.fetch = originalFetch;
-    delete process.env.YEAFT_LLM_STREAM_IDLE_TIMEOUT_MS;
   });
 
   it('throws LLMRateLimitError with parsed Retry-After on 429', async () => {
@@ -127,9 +126,8 @@ describe('AnthropicAdapter error classification', () => {
   });
 
   it('throws retryable stream idle timeout when SSE stalls after message_start', async () => {
-    process.env.YEAFT_LLM_STREAM_IDLE_TIMEOUT_MS = '5';
     global.fetch = async () => idleStreamResponse();
-    const adapter = new AnthropicAdapter({ baseUrl: 'https://x', apiKey: 'k' });
+    const adapter = new AnthropicAdapter({ baseUrl: 'https://x', apiKey: 'k', streamIdleTimeoutMs: 5 });
     let caught;
     try { await consume(adapter.stream({ model: 'claude-3-5-sonnet', system: '', messages: [{ role: 'user', content: 'hi' }] })); }
     catch (err) { caught = err; }
@@ -141,7 +139,6 @@ describe('AnthropicAdapter error classification', () => {
 describe('OpenAIResponsesAdapter error classification', () => {
   afterEach(() => {
     global.fetch = originalFetch;
-    delete process.env.YEAFT_LLM_STREAM_IDLE_TIMEOUT_MS;
   });
 
   it('throws LLMRateLimitError with parsed Retry-After on 429', async () => {
@@ -186,9 +183,8 @@ describe('OpenAIResponsesAdapter error classification', () => {
   });
 
   it('throws retryable stream idle timeout when Responses SSE stalls', async () => {
-    process.env.YEAFT_LLM_STREAM_IDLE_TIMEOUT_MS = '5';
     global.fetch = async () => idleStreamResponse();
-    const adapter = new OpenAIResponsesAdapter({ baseUrl: 'https://x', apiKey: 'k' });
+    const adapter = new OpenAIResponsesAdapter({ baseUrl: 'https://x', apiKey: 'k', streamIdleTimeoutMs: 5 });
     let caught;
     try { await consume(adapter.stream({ model: 'gpt-5', system: '', messages: [{ role: 'user', content: 'hi' }] })); }
     catch (err) { caught = err; }

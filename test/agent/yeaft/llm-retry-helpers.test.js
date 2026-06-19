@@ -197,13 +197,18 @@ describe('normalizeLlmRetry', () => {
     expect(out.baseDelayMs).toBe(1_000);
     expect(out.maxDelayMs).toBe(30_000);
     expect(out.jitterRatio).toBe(0.25);
+    expect(out.streamIdleTimeoutMs).toBe(110_000);
   });
 
   it('merges fileConfig and override (override wins)', () => {
-    const out = normalizeLlmRetry({ maxRetries: 1 }, { maxRetries: 7, baseDelayMs: 500 });
+    const out = normalizeLlmRetry(
+      { maxRetries: 1, streamIdleTimeoutMs: 90_000 },
+      { maxRetries: 7, baseDelayMs: 500, streamIdleTimeoutMs: 5 },
+    );
     expect(out.maxRetries).toBe(7);
     expect(out.baseDelayMs).toBe(500);
     expect(out.maxDelayMs).toBe(30_000); // default
+    expect(out.streamIdleTimeoutMs).toBe(5);
   });
 
   it('clamps absurd values into safe ranges', () => {
@@ -212,11 +217,13 @@ describe('normalizeLlmRetry', () => {
       baseDelayMs: 9_999_999,
       maxDelayMs: 9_999_999,
       jitterRatio: 5,
+      streamIdleTimeoutMs: 9_999_999,
     }, null);
     expect(out.maxRetries).toBeLessThanOrEqual(20);
     expect(out.baseDelayMs).toBeLessThanOrEqual(60_000);
     expect(out.maxDelayMs).toBeLessThanOrEqual(600_000);
     expect(out.jitterRatio).toBeLessThanOrEqual(1);
+    expect(out.streamIdleTimeoutMs).toBeLessThanOrEqual(600_000);
   });
 
   it('forces maxDelayMs >= baseDelayMs', () => {
