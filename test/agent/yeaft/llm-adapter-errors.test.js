@@ -15,6 +15,7 @@ import {
   LLMServerError,
   LLMAuthError,
   LLMContextError,
+  LLMStreamIdleTimeoutError,
 } from '../../../agent/yeaft/llm/adapter.js';
 
 const originalFetch = global.fetch;
@@ -32,6 +33,20 @@ async function consume(generator) {
   // We only care about the throw — discard any events.
   // eslint-disable-next-line no-unused-vars
   for await (const _ of generator) { /* drain */ }
+}
+
+function idleStreamResponse() {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ 'content-type': 'text/event-stream' }),
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":0,"output_tokens":0}}}\n\n'));
+      },
+      cancel() {},
+    }),
+  };
 }
 
 describe('AnthropicAdapter error classification', () => {
@@ -109,6 +124,16 @@ describe('AnthropicAdapter error classification', () => {
     expect(caught).toBeInstanceOf(LLMServerError);
     expect(caught.message).toContain('Anthropic');
   });
+
+  it('throws retryable stream idle timeout when SSE stalls after message_start', async () => {
+    global.fetch = async () => idleStreamResponse();
+    const adapter = new AnthropicAdapter({ baseUrl: 'https://x', apiKey: 'k', streamIdleTimeoutMs: 5 });
+    let caught;
+    try { await consume(adapter.stream({ model: 'claude-3-5-sonnet', system: '', messages: [{ role: 'user', content: 'hi' }] })); }
+    catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(LLMStreamIdleTimeoutError);
+    expect(caught).toBeInstanceOf(LLMServerError);
+  });
 });
 
 describe('OpenAIResponsesAdapter error classification', () => {
@@ -154,6 +179,16 @@ describe('OpenAIResponsesAdapter error classification', () => {
     let caught;
     try { await consume(adapter.stream({ model: 'gpt-5', system: '', messages: [{ role: 'user', content: 'hi' }] })); }
     catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(LLMServerError);
+  });
+
+  it('throws retryable stream idle timeout when Responses SSE stalls', async () => {
+    global.fetch = async () => idleStreamResponse();
+    const adapter = new OpenAIResponsesAdapter({ baseUrl: 'https://x', apiKey: 'k', streamIdleTimeoutMs: 5 });
+    let caught;
+    try { await consume(adapter.stream({ model: 'gpt-5', system: '', messages: [{ role: 'user', content: 'hi' }] })); }
+    catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(LLMStreamIdleTimeoutError);
     expect(caught).toBeInstanceOf(LLMServerError);
   });
 });

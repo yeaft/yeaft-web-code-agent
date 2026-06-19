@@ -11,11 +11,13 @@ import {
   parseRetryAfterMs,
   retryAfterFromResponse,
   classifyFetchError,
+  readStreamChunkWithIdleTimeout,
   LLMRateLimitError,
   LLMServerError,
   LLMAuthError,
   LLMContextError,
   LLMAbortError,
+  LLMStreamIdleTimeoutError,
 } from '../../../agent/yeaft/llm/adapter.js';
 import { computeBackoffDelay } from '../../../agent/yeaft/engine.js';
 import { normalizeLlmRetry } from '../../../agent/yeaft/config.js';
@@ -108,11 +110,55 @@ describe('classifyFetchError', () => {
     expect(classifyFetchError(ctx)).toBe(ctx);
     const auth = new LLMAuthError('nope', 401);
     expect(classifyFetchError(auth)).toBe(auth);
+    const idle = new LLMStreamIdleTimeoutError('idle', 120_000);
+    expect(classifyFetchError(idle)).toBe(idle);
   });
 
   it('returns unknown errors unchanged', () => {
     const err = new Error('some weird thing');
     expect(classifyFetchError(err)).toBe(err);
+  });
+});
+
+describe('readStreamChunkWithIdleTimeout', () => {
+  it('returns stream chunks before the idle deadline', async () => {
+    const chunk = new Uint8Array([1, 2, 3]);
+    const reader = {
+      read: async () => ({ done: false, value: chunk }),
+      cancel: async () => {},
+    };
+    await expect(readStreamChunkWithIdleTimeout(reader, { idleMs: 50, providerLabel: 'Test' }))
+      .resolves.toEqual({ done: false, value: chunk });
+  });
+
+  it('throws retryable idle timeout and cancels the reader when no chunk arrives', async () => {
+    let cancelled = false;
+    const reader = {
+      read: () => new Promise(() => {}),
+      cancel: async () => { cancelled = true; },
+    };
+    let caught;
+    try {
+      await readStreamChunkWithIdleTimeout(reader, { idleMs: 5, providerLabel: 'Test' });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(LLMStreamIdleTimeoutError);
+    expect(caught).toBeInstanceOf(LLMServerError);
+    expect(caught.idleMs).toBe(5);
+    expect(caught.message).toContain('Test stream idle timeout');
+    expect(cancelled).toBe(true);
+  });
+
+  it('throws abort error when caller signal aborts before a chunk arrives', async () => {
+    const ctrl = new AbortController();
+    const reader = {
+      read: () => new Promise(() => {}),
+      cancel: async () => {},
+    };
+    const pending = readStreamChunkWithIdleTimeout(reader, { idleMs: 1_000, signal: ctrl.signal });
+    ctrl.abort();
+    await expect(pending).rejects.toBeInstanceOf(LLMAbortError);
   });
 });
 
@@ -151,13 +197,18 @@ describe('normalizeLlmRetry', () => {
     expect(out.baseDelayMs).toBe(1_000);
     expect(out.maxDelayMs).toBe(30_000);
     expect(out.jitterRatio).toBe(0.25);
+    expect(out.streamIdleTimeoutMs).toBe(110_000);
   });
 
   it('merges fileConfig and override (override wins)', () => {
-    const out = normalizeLlmRetry({ maxRetries: 1 }, { maxRetries: 7, baseDelayMs: 500 });
+    const out = normalizeLlmRetry(
+      { maxRetries: 1, streamIdleTimeoutMs: 90_000 },
+      { maxRetries: 7, baseDelayMs: 500, streamIdleTimeoutMs: 5 },
+    );
     expect(out.maxRetries).toBe(7);
     expect(out.baseDelayMs).toBe(500);
     expect(out.maxDelayMs).toBe(30_000); // default
+    expect(out.streamIdleTimeoutMs).toBe(5);
   });
 
   it('clamps absurd values into safe ranges', () => {
@@ -166,11 +217,13 @@ describe('normalizeLlmRetry', () => {
       baseDelayMs: 9_999_999,
       maxDelayMs: 9_999_999,
       jitterRatio: 5,
+      streamIdleTimeoutMs: 9_999_999,
     }, null);
     expect(out.maxRetries).toBeLessThanOrEqual(20);
     expect(out.baseDelayMs).toBeLessThanOrEqual(60_000);
     expect(out.maxDelayMs).toBeLessThanOrEqual(600_000);
     expect(out.jitterRatio).toBeLessThanOrEqual(1);
+    expect(out.streamIdleTimeoutMs).toBeLessThanOrEqual(600_000);
   });
 
   it('forces maxDelayMs >= baseDelayMs', () => {

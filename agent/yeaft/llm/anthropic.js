@@ -15,6 +15,7 @@ import {
   LLMContextError,
   LLMServerError,
   LLMAbortError,
+  readStreamChunkWithIdleTimeout,
   redactRawRequest,
   safeHeaders,
 } from './adapter.js';
@@ -65,15 +66,17 @@ export class AnthropicAdapter extends LLMAdapter {
   #apiKey;
   #baseUrl;
   #authHeaderMode;
+  #streamIdleTimeoutMs;
 
   /**
-   * @param {{ apiKey: string, baseUrl?: string, authHeaderMode?: 'x-api-key'|'bearer' }} config
+   * @param {{ apiKey: string, baseUrl?: string, authHeaderMode?: 'x-api-key'|'bearer', streamIdleTimeoutMs?: number }} config
    */
-  constructor({ apiKey, baseUrl = DEFAULT_BASE_URL, authHeaderMode = 'x-api-key' }) {
-    super({ apiKey, baseUrl });
+  constructor({ apiKey, baseUrl = DEFAULT_BASE_URL, authHeaderMode = 'x-api-key', streamIdleTimeoutMs = 0 }) {
+    super({ apiKey, baseUrl, streamIdleTimeoutMs });
     this.#apiKey = apiKey;
     this.#baseUrl = baseUrl;
     this.#authHeaderMode = authHeaderMode === 'bearer' ? 'bearer' : 'x-api-key';
+    this.#streamIdleTimeoutMs = Number.isFinite(streamIdleTimeoutMs) ? Math.max(0, Math.floor(streamIdleTimeoutMs)) : 0;
   }
 
   #headers() {
@@ -291,7 +294,11 @@ export class AnthropicAdapter extends LLMAdapter {
 
     try {
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value } = await readStreamChunkWithIdleTimeout(reader, {
+          signal,
+          idleMs: this.#streamIdleTimeoutMs,
+          providerLabel: 'Anthropic',
+        });
         if (done) break;
 
         const chunkText = decoder.decode(value, { stream: true });
@@ -436,6 +443,8 @@ export class AnthropicAdapter extends LLMAdapter {
           }
         }
       }
+    } catch (err) {
+      throw classifyFetchError(err, { providerLabel: 'Anthropic' });
     } finally {
       reader.releaseLock();
       // Emit raw exchange after stream completes (or errors). Body is the
