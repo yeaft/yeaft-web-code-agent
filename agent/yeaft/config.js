@@ -73,7 +73,7 @@ const DEFAULTS = {
     baseDelayMs: 1_000,
     maxDelayMs: 30_000,
     jitterRatio: 0.25,
-    streamIdleTimeoutMs: 110_000,
+    streamIdleTimeoutMs: 20_000,
   },
 };
 
