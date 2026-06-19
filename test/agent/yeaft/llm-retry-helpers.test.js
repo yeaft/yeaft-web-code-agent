@@ -197,7 +197,7 @@ describe('normalizeLlmRetry', () => {
     expect(out.baseDelayMs).toBe(1_000);
     expect(out.maxDelayMs).toBe(30_000);
     expect(out.jitterRatio).toBe(0.25);
-    expect(out.streamIdleTimeoutMs).toBe(110_000);
+    expect(out.streamIdleTimeoutMs).toBe(20_000);
   });
 
   it('merges fileConfig and override (override wins)', () => {
