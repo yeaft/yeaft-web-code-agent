@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeTerminalOutput } from '../../web/utils/terminal-output.js';
+import { normalizeTerminalOutput, tokenizeTerminalOutput } from '../../web/utils/terminal-output.js';
 
 describe('normalizeTerminalOutput', () => {
   it('strips ANSI SGR color codes from command output', () => {
@@ -22,5 +22,31 @@ describe('normalizeTerminalOutput', () => {
 
   it('applies backspace rewrites', () => {
     expect(normalizeTerminalOutput('abc\b\bd')).toBe('ad');
+  });
+
+  it('tokenizes ANSI colors without returning terminal protocol bytes', () => {
+    const raw = '\u001b[32m✓\u001b[39m test \u001b[2m(3 tests)\u001b[22m';
+
+    expect(tokenizeTerminalOutput(raw)).toEqual([
+      { text: '✓', className: 'terminal-fg-green' },
+      { text: ' test ', className: '' },
+      { text: '(3 tests)', className: 'terminal-dim' },
+    ]);
+  });
+
+  it('drops cursor controls while keeping SGR styling', () => {
+    const raw = '\u001b[?25l\u001b[31mfail\u001b[0m\u001b[?25h';
+
+    expect(tokenizeTerminalOutput(raw)).toEqual([
+      { text: 'fail', className: 'terminal-fg-red' },
+    ]);
+  });
+
+  it('preserves ANSI background color spans from terminal status labels', () => {
+    const raw = '\u001b[1m\u001b[46m RUN \u001b[49m\u001b[22m';
+
+    expect(tokenizeTerminalOutput(raw)).toEqual([
+      { text: ' RUN ', className: 'terminal-bg-cyan terminal-bold' },
+    ]);
   });
 });
