@@ -4404,7 +4404,7 @@
 }
 
 .yeaft-vp-task-detail {
-  margin: 6px 0 2px;
+  margin: 4px 0 2px;
   padding-left: 22px;
   color: var(--text-muted);
   font-size: 12px;
@@ -4413,18 +4413,17 @@
 
 .yeaft-vp-task-log,
 .yeaft-vp-task-log-empty {
-  max-height: 150px;
+  max-height: 180px;
   overflow: auto;
   margin: 0;
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: var(--bg-input-wrapper);
+  padding: 6px 0 6px 8px;
+  background: transparent;
   color: var(--text-secondary);
 }
 
 .yeaft-vp-task-log {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .yeaft-vp-task-log-empty {

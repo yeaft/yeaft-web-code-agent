@@ -234,6 +234,39 @@ select option:checked {
   --status-online: #4a9e5c;
   --status-busy:   #c98a3d;
   --status-error:  #c45c52;
+  /* Terminal ANSI palette */
+  --terminal-fg-black: #4f4f4f;
+  --terminal-fg-red: #b93535;
+  --terminal-fg-green: #2a7a3f;
+  --terminal-fg-yellow: #9a6a1a;
+  --terminal-fg-blue: #245a8d;
+  --terminal-fg-magenta: #7a3e9d;
+  --terminal-fg-cyan: #0f766e;
+  --terminal-fg-white: #6b6b6b;
+  --terminal-fg-bright-black: #7a7a7a;
+  --terminal-fg-bright-red: #d65d5d;
+  --terminal-fg-bright-green: #4a9e5c;
+  --terminal-fg-bright-yellow: #c98a3d;
+  --terminal-fg-bright-blue: #4a7cc9;
+  --terminal-fg-bright-magenta: #9357ad;
+  --terminal-fg-bright-cyan: #35818d;
+  --terminal-fg-bright-white: #2c2c2c;
+  --terminal-bg-black: #2c2c2c;
+  --terminal-bg-red: #f4dddd;
+  --terminal-bg-green: #e1f1e4;
+  --terminal-bg-yellow: #f5ebd8;
+  --terminal-bg-blue: #e0e8f6;
+  --terminal-bg-magenta: #eadff1;
+  --terminal-bg-cyan: #dceff1;
+  --terminal-bg-white: #f3f3f0;
+  --terminal-bg-bright-black: #e0ddd8;
+  --terminal-bg-bright-red: #f0c8c8;
+  --terminal-bg-bright-green: #d4ead8;
+  --terminal-bg-bright-yellow: #ead9b9;
+  --terminal-bg-bright-blue: #d5e0f1;
+  --terminal-bg-bright-magenta: #e1d0eb;
+  --terminal-bg-bright-cyan: #cfe4e8;
+  --terminal-bg-bright-white: #fafaf8;
   /* Fonts */
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
@@ -395,6 +428,38 @@ select option:checked {
   --danger-color: var(--error);
   --warn-text: #d6b07a;
   --warn-bg: rgba(214, 176, 122, 0.10);
+  --terminal-fg-black: #777572;
+  --terminal-fg-red: #d4a0a0;
+  --terminal-fg-green: #9cc9a0;
+  --terminal-fg-yellow: #d6b07a;
+  --terminal-fg-blue: #9fc2e6;
+  --terminal-fg-magenta: #d6b2f2;
+  --terminal-fg-cyan: #8bc7bd;
+  --terminal-fg-white: #a09d98;
+  --terminal-fg-bright-black: #a09d98;
+  --terminal-fg-bright-red: #d09090;
+  --terminal-fg-bright-green: #7ab87e;
+  --terminal-fg-bright-yellow: #cdb479;
+  --terminal-fg-bright-blue: #b6c5e0;
+  --terminal-fg-bright-magenta: #bc93bd;
+  --terminal-fg-bright-cyan: #76bcb2;
+  --terminal-fg-bright-white: #d8d5d0;
+  --terminal-bg-black: #080808;
+  --terminal-bg-red: #4a2525;
+  --terminal-bg-green: #263d2a;
+  --terminal-bg-yellow: #4a3a22;
+  --terminal-bg-blue: #26364a;
+  --terminal-bg-magenta: #3b2b48;
+  --terminal-bg-cyan: #243d40;
+  --terminal-bg-white: #2a2a28;
+  --terminal-bg-bright-black: #363330;
+  --terminal-bg-bright-red: #5a3030;
+  --terminal-bg-bright-green: #304d34;
+  --terminal-bg-bright-yellow: #5a4728;
+  --terminal-bg-bright-blue: #33465c;
+  --terminal-bg-bright-magenta: #4a3658;
+  --terminal-bg-bright-cyan: #304d50;
+  --terminal-bg-bright-white: #3a3835;
   --focus-ring: rgba(181, 178, 173, 0.22);
   /* Usage / price tags (dark) */
   --tag-low-bg: rgba(122, 184, 126, 0.16);
@@ -409,6 +474,59 @@ select option:checked {
   --status-busy:   #cda284;
   --status-error:  #d09090;
 }
+
+.terminal-output {
+  margin: 0;
+  font-family: var(--font-mono);
+  color: var(--code-text, var(--text-primary));
+  background: transparent;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.terminal-output code {
+  font-family: inherit;
+  color: inherit;
+  background: transparent;
+  padding: 0;
+}
+
+.terminal-fg-black { color: var(--terminal-fg-black); }
+.terminal-fg-red { color: var(--terminal-fg-red); }
+.terminal-fg-green { color: var(--terminal-fg-green); }
+.terminal-fg-yellow { color: var(--terminal-fg-yellow); }
+.terminal-fg-blue { color: var(--terminal-fg-blue); }
+.terminal-fg-magenta { color: var(--terminal-fg-magenta); }
+.terminal-fg-cyan { color: var(--terminal-fg-cyan); }
+.terminal-fg-white { color: var(--terminal-fg-white); }
+.terminal-fg-bright-black { color: var(--terminal-fg-bright-black); }
+.terminal-fg-bright-red { color: var(--terminal-fg-bright-red); }
+.terminal-fg-bright-green { color: var(--terminal-fg-bright-green); }
+.terminal-fg-bright-yellow { color: var(--terminal-fg-bright-yellow); }
+.terminal-fg-bright-blue { color: var(--terminal-fg-bright-blue); }
+.terminal-fg-bright-magenta { color: var(--terminal-fg-bright-magenta); }
+.terminal-fg-bright-cyan { color: var(--terminal-fg-bright-cyan); }
+.terminal-fg-bright-white { color: var(--terminal-fg-bright-white); }
+.terminal-bg-black { background-color: var(--terminal-bg-black); }
+.terminal-bg-red { background-color: var(--terminal-bg-red); }
+.terminal-bg-green { background-color: var(--terminal-bg-green); }
+.terminal-bg-yellow { background-color: var(--terminal-bg-yellow); }
+.terminal-bg-blue { background-color: var(--terminal-bg-blue); }
+.terminal-bg-magenta { background-color: var(--terminal-bg-magenta); }
+.terminal-bg-cyan { background-color: var(--terminal-bg-cyan); }
+.terminal-bg-white { background-color: var(--terminal-bg-white); }
+.terminal-bg-bright-black { background-color: var(--terminal-bg-bright-black); }
+.terminal-bg-bright-red { background-color: var(--terminal-bg-bright-red); }
+.terminal-bg-bright-green { background-color: var(--terminal-bg-bright-green); }
+.terminal-bg-bright-yellow { background-color: var(--terminal-bg-bright-yellow); }
+.terminal-bg-bright-blue { background-color: var(--terminal-bg-bright-blue); }
+.terminal-bg-bright-magenta { background-color: var(--terminal-bg-bright-magenta); }
+.terminal-bg-bright-cyan { background-color: var(--terminal-bg-bright-cyan); }
+.terminal-bg-bright-white { background-color: var(--terminal-bg-bright-white); }
+.terminal-bold { font-weight: 700; }
+.terminal-dim { opacity: 0.72; }
+.terminal-italic { font-style: italic; }
+.terminal-underline { text-decoration: underline; }
 
 html {
   height: 100%;

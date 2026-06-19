@@ -12,9 +12,11 @@
  */
 import { formatRouteForwardToolLine } from '../utils/route-forward-display.js';
 import { normalizeTerminalOutput } from '../utils/terminal-output.js';
+import TerminalOutput from './TerminalOutput.js';
 
 export default {
   name: 'ToolLine',
+  components: { TerminalOutput },
   props: {
     toolName: { type: String, required: true },
     toolInput: { type: Object, default: null },
@@ -46,7 +48,7 @@ export default {
           <pre><code>{{ toolInput.command }}</code></pre>
           <div v-if="hasResult && bashOutput" class="bash-output">
             <div class="bash-output-header">Output</div>
-            <pre class="bash-output-content"><code>{{ bashOutput }}</code></pre>
+            <TerminalOutput class="bash-output-content" :content="bashOutput" />
           </div>
         </div>
         <div v-else-if="toolName === '__SubagentResult'" class="tool-expand-code">
@@ -112,7 +114,7 @@ export default {
 
     const bashOutput = Vue.computed(() => {
       if (props.toolName !== 'Bash') return '';
-      return normalizeTerminalOutput(extractTextResult(props.toolResult));
+      return extractTextResult(props.toolResult);
     });
 
     const syntheticResultOutput = Vue.computed(() => {
