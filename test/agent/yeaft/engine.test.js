@@ -670,6 +670,127 @@ describe('Engine', () => {
       expect(errorEvents[0].retryable).toBe(true);
     });
 
+    it('classifies stream idle timeout retries separately and marks final retry exhaustion', async () => {
+      const { LLMStreamIdleTimeoutError } = await import('../../../agent/yeaft/llm/adapter.js');
+      let attempts = 0;
+      const engine = new Engine({
+        adapter: {
+          async *stream() {
+            attempts += 1;
+            throw new LLMStreamIdleTimeoutError('OpenAI stream idle timeout after 20000ms', 20_000);
+          },
+        },
+        trace,
+        config: {
+          model: 'test-model',
+          maxOutputTokens: 1024,
+          llmRetry: { maxRetries: 3, baseDelayMs: 1, maxDelayMs: 5, jitterRatio: 0 },
+        },
+      });
+
+      const events = [];
+      for await (const event of engine.query({ prompt: 'hello' })) {
+        events.push(event);
+      }
+
+      // First attempt + 3 retries = 4 total adapter calls.
+      expect(attempts).toBe(4);
+      const retryEvents = events.filter(e => e.type === 'llm_retry');
+      expect(retryEvents).toHaveLength(3);
+      expect(retryEvents.map(e => e.reason)).toEqual([
+        'stream_idle_timeout',
+        'stream_idle_timeout',
+        'stream_idle_timeout',
+      ]);
+      expect(retryEvents[0].message).toContain('20000ms');
+      const errorEvents = events.filter(e => e.type === 'error');
+      expect(errorEvents).toHaveLength(1);
+      expect(errorEvents[0].retryable).toBe(true);
+      expect(errorEvents[0].reason).toBe('stream_idle_timeout');
+      expect(errorEvents[0].retryExhausted).toBe(true);
+      expect(errorEvents[0].error).toBeInstanceOf(LLMStreamIdleTimeoutError);
+    });
+
+    it('falls back after stream idle timeout retries are exhausted', async () => {
+      const { LLMStreamIdleTimeoutError } = await import('../../../agent/yeaft/llm/adapter.js');
+      const models = [];
+      const engine = new Engine({
+        adapter: {
+          async *stream(params) {
+            models.push(params.model);
+            if (params.model === 'primary-model') {
+              throw new LLMStreamIdleTimeoutError('OpenAI stream idle timeout after 20000ms', 20_000);
+            }
+            yield { type: 'text_delta', text: 'fallback ok' };
+            yield { type: 'stop', stopReason: 'end_turn' };
+          },
+        },
+        trace,
+        config: {
+          model: 'primary-model',
+          fallbackModel: 'fallback-model',
+          maxOutputTokens: 1024,
+          llmRetry: { maxRetries: 2, baseDelayMs: 1, maxDelayMs: 5, jitterRatio: 0 },
+        },
+      });
+
+      const events = [];
+      for await (const event of engine.query({ prompt: 'hello' })) {
+        events.push(event);
+      }
+
+      expect(models).toEqual(['primary-model', 'primary-model', 'primary-model', 'fallback-model']);
+      const retryEvents = events.filter(e => e.type === 'llm_retry');
+      expect(retryEvents).toHaveLength(2);
+      expect(retryEvents.map(e => e.reason)).toEqual(['stream_idle_timeout', 'stream_idle_timeout']);
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'fallback',
+        from: 'primary-model',
+        to: 'fallback-model',
+      }));
+      expect(events.filter(e => e.type === 'error')).toHaveLength(0);
+      expect(events).toContainEqual(expect.objectContaining({ type: 'text_delta', text: 'fallback ok' }));
+    });
+
+    it('falls back immediately on stream idle timeout when maxRetries is zero', async () => {
+      const { LLMStreamIdleTimeoutError } = await import('../../../agent/yeaft/llm/adapter.js');
+      const models = [];
+      const engine = new Engine({
+        adapter: {
+          async *stream(params) {
+            models.push(params.model);
+            if (params.model === 'primary-model') {
+              throw new LLMStreamIdleTimeoutError('OpenAI stream idle timeout after 20000ms', 20_000);
+            }
+            yield { type: 'text_delta', text: 'fallback ok' };
+            yield { type: 'stop', stopReason: 'end_turn' };
+          },
+        },
+        trace,
+        config: {
+          model: 'primary-model',
+          fallbackModel: 'fallback-model',
+          maxOutputTokens: 1024,
+          llmRetry: { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 5, jitterRatio: 0 },
+        },
+      });
+
+      const events = [];
+      for await (const event of engine.query({ prompt: 'hello' })) {
+        events.push(event);
+      }
+
+      expect(models).toEqual(['primary-model', 'fallback-model']);
+      expect(events.filter(e => e.type === 'llm_retry')).toHaveLength(0);
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'fallback',
+        from: 'primary-model',
+        to: 'fallback-model',
+      }));
+      expect(events.filter(e => e.type === 'error')).toHaveLength(0);
+      expect(events).toContainEqual(expect.objectContaining({ type: 'text_delta', text: 'fallback ok' }));
+    });
+
     it('does not retry on non-retryable error', async () => {
       const { LLMAuthError } = await import('../../../agent/yeaft/llm/adapter.js');
       let attempts = 0;

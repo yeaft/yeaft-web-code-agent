@@ -2421,8 +2421,9 @@ function handleEngineEvent(event, hctx) {
 
     case 'llm_retry':
       // Engine paused before re-issuing the same turn because the LLM
-      // returned a retryable error (rate limit / 5xx / transient network).
-      // Surface to the client so the UI can show "retrying in Xs (1/3)"
+      // returned a retryable error (rate limit / 5xx / transient network /
+      // stream idle timeout). Surface to the client so the UI can show
+      // "retrying in Xs (1/3)"
       // instead of looking frozen mid-turn.
       sendSessionEvent({
         type: 'llm_retry',
@@ -2589,6 +2590,14 @@ function handleEngineEvent(event, hctx) {
 
     case 'error': {
       const errMsg = event.error?.message || 'Unknown error';
+      sendSessionEvent({
+        type: 'error',
+        message: errMsg,
+        errorName: event.error?.name || null,
+        retryable: !!event.retryable,
+        ...(event.reason ? { reason: event.reason } : {}),
+        ...(event.retryExhausted !== undefined ? { retryExhausted: !!event.retryExhausted } : {}),
+      }, envelope);
       if (isPermissionErrorMsg(errMsg)) {
         if (!_permissionDiagnosticSent) {
           _permissionDiagnosticSent = true;
