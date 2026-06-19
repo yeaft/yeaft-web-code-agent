@@ -31,17 +31,23 @@
  *   tier 1 (bundled): wherever yeaft-skills is installed on disk — typically
  *           ~/.claude/skills/yeaft-skills/skills/. Read-only — `save()` and
  *           `remove()` never target this tier.
- *   tier 2 (user):    <yeaftDir>/skills (e.g. ~/.yeaft/skills). User edits
+ *   tier 2 (user-claude): ~/.claude/skills. User-level Claude Code assets,
+ *           loaded read-only for cross-tool compatibility.
+ *   tier 3 (user-codex): ~/.codex/skills. User-level Codex assets, loaded
+ *           read-only for cross-tool compatibility.
+ *   tier 4 (user):    <yeaftDir>/skills (e.g. ~/.yeaft/skills). User edits
  *           land here. `save()` writes here. `init.js` seeds it from tier 1
  *           on first boot so users start with the full bundled set.
- *   tier 3 (project-claude): <workDir>/.claude/skills (if provided). Claude
+ *   tier 5 (project-claude): <workDir>/.claude/skills (if provided). Claude
  *           Code project assets, loaded so a Claude-Code-integrated project
  *           works out of the box. Higher than user (project-local beats
  *           user-global), lower than the yeaft-native project tier.
- *   tier 4 (project): <workDir>/.yeaft/skills (if provided). Highest
+ *   tier 6 (project-codex): <workDir>/.agents/skills (if provided). Codex
+ *           project assets, loaded with the same project-local precedence.
+ *   tier 7 (project): <workDir>/.yeaft/skills (if provided). Highest
  *           priority — a project can pin a skill version without affecting
  *           the user's other projects, and overrides a borrowed
- *           `.claude/skills` skill of the same name.
+ *           `.claude/skills` / `.agents/skills` skill of the same name.
  *
  * Reference: yeaft-yeaft-design.md §8, yeaft-yeaft-core-systems.md
  */
@@ -207,8 +213,19 @@ function listSubdirFiles(dir) {
  * @param {string} [subPath] — relative path from root (for category derivation)
  * @returns {{ skills: Skill[], errors: string[] }}
  */
-function discoverSkills(rootDir, subPath = '') {
+function pathIsInside(childPath, parentPath) {
+  const child = resolve(childPath);
+  const parent = resolve(parentPath);
+  return child === parent || child.startsWith(parent + sep);
+}
+
+function shouldIgnorePath(candidatePath, ignorePaths) {
+  return ignorePaths.some(ignorePath => pathIsInside(candidatePath, ignorePath));
+}
+
+function discoverSkills(rootDir, subPath = '', opts = {}) {
   const dir = subPath ? join(rootDir, subPath) : rootDir;
+  const ignorePaths = Array.isArray(opts.ignorePaths) ? opts.ignorePaths : [];
   const skills = [];
   const errors = [];
 
@@ -225,6 +242,8 @@ function discoverSkills(rootDir, subPath = '') {
   for (const entry of entries) {
     const entryPath = join(dir, entry.name);
     const relPath = subPath ? join(subPath, entry.name) : entry.name;
+
+    if (shouldIgnorePath(entryPath, ignorePaths)) continue;
 
     if (entry.isFile() && entry.name.endsWith('.md') && entry.name !== 'SKILL.md') {
       // Single-file skill (legacy format)
@@ -272,7 +291,7 @@ function discoverSkills(rootDir, subPath = '') {
         }
       } else {
         // No SKILL.md — treat as category directory, recurse
-        const sub = discoverSkills(rootDir, relPath);
+        const sub = discoverSkills(rootDir, relPath, opts);
         skills.push(...sub.skills);
         errors.push(...sub.errors);
       }
@@ -362,17 +381,22 @@ export class SkillManager {
   /** @type {Map<string, string>} — dir path → tier label */
   #tierByDir;
 
+  /** @type {Map<string, string[]>} — dir path → resolved ignore paths */
+  #ignorePathsByDir;
+
   /**
    * @param {string | string[]} dirs — single directory (back-compat) or array of
    *   directories in priority order (lowest → highest). Falsy entries are
    *   filtered out so callers can write `[bundled, user, projectOrNull]`.
-   * @param {{ userDir?: string, tierByDir?: Record<string, string> }} [opts]
+   * @param {{ userDir?: string, tierByDir?: Record<string, string>, ignorePathsByDir?: Record<string, string[]> }} [opts]
    *   userDir: directory where `save()` and `remove()` write. Defaults to the
    *     last entry in `dirs` (typical case: user dir is highest priority that
    *     isn't a per-project layer).
    *   tierByDir: optional label map — dir path → 'bundled' | 'user' | 'project'.
    *     Decorates each discovered Skill with `_tier` for diagnostics (Settings
    *     UI uses this to show "where this skill came from").
+   *   ignorePathsByDir: optional map of scan dir → subtrees to skip while
+   *     recursively discovering skills in that dir.
    */
   constructor(dirs, opts = {}) {
     const list = Array.isArray(dirs)
@@ -391,6 +415,13 @@ export class SkillManager {
         if (typeof d === 'string' && typeof tier === 'string') {
           this.#tierByDir.set(d, tier);
         }
+      }
+    }
+    this.#ignorePathsByDir = new Map();
+    if (opts && opts.ignorePathsByDir && typeof opts.ignorePathsByDir === 'object') {
+      for (const [d, ignorePaths] of Object.entries(opts.ignorePathsByDir)) {
+        if (typeof d !== 'string' || !Array.isArray(ignorePaths)) continue;
+        this.#ignorePathsByDir.set(d, ignorePaths.filter(p => typeof p === 'string' && p.length > 0).map(p => resolve(p)));
       }
     }
   }
@@ -425,7 +456,7 @@ export class SkillManager {
 
     for (const dir of this.#skillsDirs) {
       if (!existsSync(dir)) continue;
-      const { skills, errors } = discoverSkills(dir);
+      const { skills, errors } = discoverSkills(dir, '', { ignorePaths: this.#ignorePathsByDir.get(dir) || [] });
       const tier = this.#tierByDir.get(dir) || basename(dir);
       for (const skill of skills) {
         // Platform filtering at load time
@@ -701,14 +732,19 @@ export class SkillManager {
  * Tier order (lowest → highest priority):
  *   1. bundled        — the yeaft-skills package on disk, located via
  *      `bundledYeaftSkillsDir()` (typically ~/.claude/skills/yeaft-skills/skills/).
- *   2. user           — `<yeaftDir>/skills` (e.g. ~/.yeaft/skills). User edits + saves.
- *   3. project-claude — `<workDir>/.claude/skills` when a workDir is provided.
+ *   2. user-claude    — `~/.claude/skills`, read-only borrowed Claude Code assets.
+ *   3. user-codex     — `~/.codex/skills`, read-only borrowed Codex assets.
+ *   4. user           — `<yeaftDir>/skills` (e.g. ~/.yeaft/skills). User edits + saves.
+ *   5. project-claude — `<workDir>/.claude/skills` when a workDir is provided.
  *      Claude Code project assets, loaded so a project that integrates Claude
  *      Code works out of the box. Ranks above `user` (project-local beats
  *      user-global) but below the yeaft-native project tier.
- *   4. project        — `<workDir>/.yeaft/skills` when a workDir is provided.
+ *   6. project-codex  — `<workDir>/.agents/skills` when a workDir is provided.
+ *      Codex project assets, loaded so Codex-integrated repositories work out
+ *      of the box. Same precedence band as project Claude Code assets.
+ *   7. project        — `<workDir>/.yeaft/skills` when a workDir is provided.
  *      Highest priority: a yeaft-native skill pinned in the project overrides
- *      a borrowed `.claude/skills` skill of the same name.
+ *      a borrowed `.claude/skills` / `.agents/skills` skill of the same name.
  *
  * `save()` / `remove()` always target the USER tier, matching Claude Code.
  *
@@ -718,18 +754,32 @@ export class SkillManager {
  */
 export function createSkillManager(yeaftDir, workDir) {
   const bundled = bundledYeaftSkillsDir();
+  const home = homedir();
+  const claudeUserDir = home ? join(home, '.claude', 'skills') : null;
+  const codexUserDir = home ? join(home, '.codex', 'skills') : null;
   const userDir = join(yeaftDir, 'skills');
   const claudeProjectDir = workDir ? join(workDir, '.claude', 'skills') : null;
+  const codexProjectDir = workDir ? join(workDir, '.agents', 'skills') : null;
   const projectDir = workDir ? join(workDir, '.yeaft', 'skills') : null;
 
-  const dirs = [bundled, userDir, claudeProjectDir, projectDir].filter(Boolean);
+  const dirs = [bundled, claudeUserDir, codexUserDir, userDir, claudeProjectDir, codexProjectDir, projectDir].filter(Boolean);
   const tierByDir = {};
   if (bundled) tierByDir[bundled] = 'bundled';
+  if (claudeUserDir) tierByDir[claudeUserDir] = 'user-claude';
+  if (codexUserDir) tierByDir[codexUserDir] = 'user-codex';
   tierByDir[userDir] = 'user';
   if (claudeProjectDir) tierByDir[claudeProjectDir] = 'project-claude';
+  if (codexProjectDir) tierByDir[codexProjectDir] = 'project-codex';
   if (projectDir) tierByDir[projectDir] = 'project';
 
-  const manager = new SkillManager(dirs, { userDir, tierByDir });
+  const ignorePathsByDir = {};
+  if (claudeUserDir && bundled && pathIsInside(bundled, claudeUserDir)) {
+    // Borrowed ~/.claude/skills must not recurse into the Yeaft bundled plugin
+    // package; bundled skills have their own lower-priority tier/provenance.
+    ignorePathsByDir[claudeUserDir] = [join(claudeUserDir, 'yeaft-skills')];
+  }
+
+  const manager = new SkillManager(dirs, { userDir, tierByDir, ignorePathsByDir });
   manager.load();
   return manager;
 }

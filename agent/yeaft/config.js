@@ -20,6 +20,7 @@
  */
 
 import { existsSync, readFileSync } from 'fs';
+import { homedir } from 'os';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
 import { getModelEffortOptions, getThinkingCapability, modelSupportsEffort, resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
@@ -513,13 +514,16 @@ export function loadConfig(overrides = {}) {
 /**
  * Load MCP server configuration.
  *
- * Merges two tiers, in priority order (highest first):
- *   1. global  — ~/.yeaft authoritative config: config.json "mcpServers"
+ * Merges compatibility tiers, in priority order (highest first):
+ *   1. yeaft-global — ~/.yeaft authoritative config: config.json "mcpServers"
  *      array, else standalone ~/.yeaft/mcp.json ({ servers: [...] }).
- *   2. project — `<workDir>/.mcp.json` (Claude Code standard location), so a
- *      project that integrates Claude Code works out of the box. Supplementary:
- *      a project server whose name collides with a global one is dropped (the
- *      explicit ~/.yeaft config wins).
+ *   2. claude-user  — ~/.claude.json (Claude Code user-scope MCP config).
+ *   3. codex-user   — ~/.codex/config.toml (Codex user-scope MCP config).
+ *   4. project      — `<workDir>/.mcp.json` (Claude Code project location)
+ *      plus `<workDir>/.codex/config.toml` (Codex project location).
+ *
+ * Higher tiers win. Borrowed Claude/Codex configs supplement Yeaft, but never
+ * override explicit ~/.yeaft settings.
  *
  * @param {string} yeaftDir
  * @param {object} [jsonConfig] — Already-parsed config.json (optional, avoids re-read)
@@ -527,24 +531,23 @@ export function loadConfig(overrides = {}) {
  * @returns {{ servers: object[], skipped: { name: string, reason: string, source: string }[] }}
  */
 export function loadMCPConfig(yeaftDir, jsonConfig, workDir) {
-  // ── Global tier: ~/.yeaft authoritative config ──
-  const globalServers = loadGlobalMCPServers(yeaftDir, jsonConfig);
-
-  // ── Project tier: <workDir>/.mcp.json (Claude Code standard) ──
+  const yeaftGlobal = loadGlobalMCPServers(yeaftDir, jsonConfig);
+  const externalUser = loadExternalUserMCPServers();
   const project = workDir
     ? loadProjectMCPServers(workDir)
     : { servers: [], skipped: [] };
 
-  // Dedup: global (~/.yeaft explicit config) wins over project supplements.
-  const seen = new Set(globalServers.map(s => s.name));
-  const servers = [...globalServers];
-  for (const s of project.servers) {
-    if (seen.has(s.name)) continue;
-    seen.add(s.name);
-    servers.push(s);
+  const servers = [];
+  const seen = new Set();
+  for (const tier of [yeaftGlobal, externalUser.servers, project.servers]) {
+    for (const s of tier) {
+      if (!s?.name || seen.has(s.name)) continue;
+      seen.add(s.name);
+      servers.push(s);
+    }
   }
 
-  return { servers, skipped: project.skipped };
+  return { servers, skipped: [...externalUser.skipped, ...project.skipped] };
 }
 
 /**
@@ -579,35 +582,27 @@ function loadGlobalMCPServers(yeaftDir, jsonConfig) {
   }
 }
 
-/**
- * Parse a project's Claude Code MCP config at `<workDir>/.mcp.json`.
- *
- * Format (Claude Code standard):
- *   { "mcpServers": { "<name>": { command, args?, env?, url?, type? } } }
- *
- * Only stdio servers (those with a `command`) are adapted into yeaft's
- * { name, command, args?, env? } shape. SSE/HTTP servers (url/type, no
- * command) cannot be spawned by the current MCPManager, so they're reported
- * in `skipped` with reason 'unsupported-transport' rather than silently
- * dropped or surfaced later as spawn failures.
- *
- * Robust by design: a missing file, malformed JSON, or a non-object
- * `mcpServers` field all return gracefully with empty arrays — a broken
- * project `.mcp.json` must never fail session creation.
- *
- * @param {string} workDir — project working directory
- * @returns {{ servers: object[], skipped: { name: string, reason: string, source: string }[] }}
- */
-export function loadProjectMCPServers(workDir) {
-  const empty = { servers: [], skipped: [] };
-  if (!workDir || typeof workDir !== 'string') return empty;
+function normaliseStdioMCPServer(name, raw, source) {
+  if (!name || !raw || typeof raw !== 'object') return { server: null, skipped: null };
+  if (typeof raw.command === 'string' && raw.command.length > 0) {
+    const server = { name, command: raw.command };
+    if (Array.isArray(raw.args)) server.args = raw.args;
+    if (raw.env && typeof raw.env === 'object' && !Array.isArray(raw.env)) server.env = raw.env;
+    return { server, skipped: null };
+  }
+  if (typeof raw.url === 'string' || typeof raw.type === 'string') {
+    return { server: null, skipped: { name, reason: 'unsupported-transport', source } };
+  }
+  return { server: null, skipped: { name, reason: 'invalid-config', source } };
+}
 
-  const mcpPath = join(workDir, '.mcp.json');
-  if (!existsSync(mcpPath)) return empty;
+function loadClaudeMCPJsonFile(filePath, source) {
+  const empty = { servers: [], skipped: [] };
+  if (!filePath || !existsSync(filePath)) return empty;
 
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync(mcpPath, 'utf8'));
+    parsed = JSON.parse(readFileSync(filePath, 'utf8'));
   } catch {
     return empty;
   }
@@ -620,21 +615,189 @@ export function loadProjectMCPServers(workDir) {
   const servers = [];
   const skipped = [];
   for (const [name, raw] of Object.entries(mcpServers)) {
-    if (!name || !raw || typeof raw !== 'object') continue;
-    if (typeof raw.command === 'string' && raw.command.length > 0) {
-      // stdio server → adapt to yeaft shape
-      const server = { name, command: raw.command };
-      if (Array.isArray(raw.args)) server.args = raw.args;
-      if (raw.env && typeof raw.env === 'object') server.env = raw.env;
-      servers.push(server);
-    } else if (typeof raw.url === 'string' || typeof raw.type === 'string') {
-      // SSE/HTTP transport — not spawnable by current MCPManager.
-      skipped.push({ name, reason: 'unsupported-transport', source: '.mcp.json' });
+    const normalised = normaliseStdioMCPServer(name, raw, source);
+    if (normalised.server) servers.push(normalised.server);
+    if (normalised.skipped) skipped.push(normalised.skipped);
+  }
+  return { servers, skipped };
+}
+
+function stripTomlInlineComment(raw) {
+  const text = String(raw || '');
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  let depth = 0;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inDouble) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inDouble = false;
+      }
+      continue;
+    }
+    if (inSingle) {
+      if (ch === "'") inSingle = false;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      continue;
+    }
+    if (ch === '[' || ch === '{') {
+      depth++;
+      continue;
+    }
+    if ((ch === ']' || ch === '}') && depth > 0) {
+      depth--;
+      continue;
+    }
+    if (ch === '#' && depth === 0) return text.slice(0, i).trim();
+  }
+  return text.trim();
+}
+
+function parseTomlValue(raw) {
+  const value = stripTomlInlineComment(raw);
+  if (value.startsWith('"') && value.endsWith('"')) {
+    try { return JSON.parse(value); } catch { return value.slice(1, -1); }
+  }
+  if (value.startsWith("'") && value.endsWith("'")) return value.slice(1, -1);
+  if (value.startsWith('[') && value.endsWith(']')) {
+    try { return JSON.parse(value.replace(/'/g, '"')); } catch { return undefined; }
+  }
+  if (value.startsWith('{') && value.endsWith('}')) {
+    const obj = {};
+    const inner = value.slice(1, -1).trim();
+    if (!inner) return obj;
+    for (const part of inner.split(',')) {
+      const eq = part.indexOf('=');
+      if (eq <= 0) return undefined;
+      const key = part.slice(0, eq).trim().replace(/^['"]|['"]$/g, '');
+      const parsed = parseTomlValue(part.slice(eq + 1));
+      if (!key || parsed === undefined) return undefined;
+      obj[key] = parsed;
+    }
+    return obj;
+  }
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return value;
+}
+
+function parseCodexMCPServersToml(content, source) {
+  const rawServers = {};
+  let current = null;
+  for (const line of String(content || '').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const section = trimmed.match(/^\[mcp_servers\.("[^"]+"|'[^']+'|[^\].]+)(?:\.(env))?\]$/);
+    if (section) {
+      const name = section[1].replace(/^['"]|['"]$/g, '');
+      rawServers[name] ||= {};
+      current = { name, env: section[2] === 'env' };
+      continue;
+    }
+    if (!current) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq <= 0) continue;
+    const key = trimmed.slice(0, eq).trim();
+    const value = parseTomlValue(trimmed.slice(eq + 1));
+    if (value === undefined) continue;
+    if (current.env) {
+      rawServers[current.name].env ||= {};
+      rawServers[current.name].env[key] = String(value);
+    } else if (key === 'env' && value && typeof value === 'object' && !Array.isArray(value)) {
+      rawServers[current.name].env = Object.fromEntries(Object.entries(value).map(([k, v]) => [k, String(v)]));
     } else {
-      // No command and no url/type — malformed entry.
-      skipped.push({ name, reason: 'invalid-config', source: '.mcp.json' });
+      rawServers[current.name][key] = value;
     }
   }
 
+  const servers = [];
+  const skipped = [];
+  for (const [name, raw] of Object.entries(rawServers)) {
+    const normalised = normaliseStdioMCPServer(name, raw, source);
+    if (normalised.server) servers.push(normalised.server);
+    if (normalised.skipped) skipped.push(normalised.skipped);
+  }
   return { servers, skipped };
+}
+
+function loadCodexMCPConfigFile(filePath, source) {
+  const empty = { servers: [], skipped: [] };
+  if (!filePath || !existsSync(filePath)) return empty;
+  try {
+    return parseCodexMCPServersToml(readFileSync(filePath, 'utf8'), source);
+  } catch {
+    return empty;
+  }
+}
+
+function mergeMCPConfigResults(results) {
+  const servers = [];
+  const skipped = [];
+  const seen = new Set();
+  for (const result of results) {
+    for (const s of result.servers || []) {
+      if (!s?.name || seen.has(s.name)) continue;
+      seen.add(s.name);
+      servers.push(s);
+    }
+    skipped.push(...(result.skipped || []));
+  }
+  return { servers, skipped };
+}
+
+function loadExternalUserMCPServers() {
+  const home = homedir();
+  if (!home) return { servers: [], skipped: [] };
+  return mergeMCPConfigResults([
+    loadClaudeMCPJsonFile(join(home, '.claude.json'), '~/.claude.json'),
+    loadCodexMCPConfigFile(join(home, '.codex', 'config.toml'), '~/.codex/config.toml'),
+  ]);
+}
+
+/**
+ * Parse project-level borrowed MCP configs from `<workDir>/.mcp.json` (Claude
+ * Code) and `<workDir>/.codex/config.toml` (Codex).
+ *
+ * Claude Code format:
+ *   { "mcpServers": { "<name>": { command, args?, env?, url?, type? } } }
+ *
+ * Codex format subset:
+ *   [mcp_servers.<name>]
+ *   command = "..."
+ *   args = ["..."]
+ *
+ * Only stdio servers (those with a `command`) are adapted into yeaft's
+ * { name, command, args?, env? } shape. SSE/HTTP servers (url/type, no
+ * command) cannot be spawned by the current MCPManager, so they're reported
+ * in `skipped` with reason 'unsupported-transport' rather than silently
+ * dropped or surfaced later as spawn failures.
+ *
+ * Robust by design: missing files, malformed JSON/TOML, or non-object
+ * `mcpServers` fields all return gracefully with empty arrays — broken borrowed
+ * configs must never fail session creation.
+ *
+ * @param {string} workDir — project working directory
+ * @returns {{ servers: object[], skipped: { name: string, reason: string, source: string }[] }}
+ */
+export function loadProjectMCPServers(workDir) {
+  const empty = { servers: [], skipped: [] };
+  if (!workDir || typeof workDir !== 'string') return empty;
+
+  return mergeMCPConfigResults([
+    loadClaudeMCPJsonFile(join(workDir, '.mcp.json'), '.mcp.json'),
+    loadCodexMCPConfigFile(join(workDir, '.codex', 'config.toml'), '.codex/config.toml'),
+  ]);
 }
