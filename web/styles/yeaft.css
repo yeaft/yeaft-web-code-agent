@@ -3173,18 +3173,20 @@
 
 @media (max-width: 1024px) {
   /* Narrow screens still need the consolidated announcement/status surface.
-     Promote it to an overlay instead of hiding it with the right column. */
+     Promote it to a full-screen panel instead of a right-side drawer so the
+     mobile view does not leave a dead strip of conversation on the left. */
   .yeaft-vp-timeline.mobile-session-status {
     display: flex;
     position: fixed;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: min(360px, 92vw);
+    inset: 0;
+    width: 100vw;
+    max-width: none;
     min-width: 0;
+    height: 100vh;
+    height: 100dvh;
     z-index: 108;
     background: var(--bg-main);
-    box-shadow: var(--modal-shadow);
+    box-shadow: none;
   }
 
   .yeaft-vp-timeline.mobile-session-status .yeaft-vp-timeline-resize-handle {

@@ -57,11 +57,14 @@ describe('Yeaft conversation header actions', () => {
     expect(afterStatusPane).not.toContain('YeaftSessionActions');
   });
 
-  it('keeps the mobile status pane as a standalone surface with title and close button', () => {
+  it('keeps the mobile status pane as a full-screen standalone surface with title and close button', () => {
     expect(vpTimelineSource).toContain('class="yeaft-session-status-header"');
     expect(vpTimelineSource).toContain('class="yeaft-session-status-title"');
     expect(vpTimelineSource).toContain('class="yeaft-session-status-close"');
     expect(yeaftCss).toContain('.yeaft-session-status-header {\n  display: none;\n}');
+    expect(yeaftCss).toContain('.yeaft-vp-timeline.mobile-session-status {\n    display: flex;\n    position: fixed;\n    inset: 0;\n    width: 100vw;');
+    expect(yeaftCss).toContain('height: 100dvh;\n    z-index: 108;\n    background: var(--bg-main);\n    box-shadow: none;');
+    expect(yeaftCss).not.toContain('width: min(360px, 92vw);');
     expect(yeaftCss).toContain('.yeaft-vp-timeline.mobile-session-status .yeaft-session-status-header {\n    display: flex;\n  }');
   });
 
