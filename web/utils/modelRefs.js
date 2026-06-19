@@ -18,12 +18,33 @@ export function resolveSessionModelRef(session, fallbackModel = '') {
   return typeof fallbackModel === 'string' && fallbackModel.trim() ? fallbackModel.trim() : '';
 }
 
+const EFFORT_RANK = Object.freeze({
+  minimal: 0,
+  low: 1,
+  medium: 2,
+  high: 3,
+  xhigh: 4,
+  max: 5,
+});
+
+function normalizeEffortList(options) {
+  if (!Array.isArray(options)) return [];
+  const values = [];
+  for (const value of options) {
+    if (typeof value !== 'string') continue;
+    const effort = value.trim();
+    if (!effort || values.includes(effort)) continue;
+    values.push(effort);
+  }
+  return values;
+}
+
+export function getSelectableModelEfforts(options) {
+  return normalizeEffortList(options).filter(effort => (EFFORT_RANK[effort] ?? -1) >= EFFORT_RANK.medium);
+}
+
 export function getDefaultModelEffort(options) {
-  if (!Array.isArray(options)) return '';
-  const values = options
-    .filter(value => typeof value === 'string')
-    .map(value => value.trim())
-    .filter(Boolean);
+  const values = normalizeEffortList(options);
   if (!values.length) return '';
   if (values.length === 1) return values[0];
   return values[values.length - 2];
