@@ -6,12 +6,14 @@ import { tmpdir } from 'node:os';
 import {
   __testDrainVpDrivers,
   __testGetOrCreateVpEngine,
+  __testHandleEngineEvent,
   __testResetVpState,
   __testSetSession,
   installYeaftRuntimeBridge,
 } from '../../../agent/yeaft/web-bridge.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
+import ctx from '../../../agent/context.js';
 
 class IdleAdapter {
   async *stream() {
@@ -233,5 +235,62 @@ describe('web-bridge — same-turn async task injection', () => {
       threadId: 'main',
     });
     expect(internalRows[0].content).toContain('task-orphan-1');
+  });
+
+  it('forwards async_task_wait_start / async_task_wait_end engine events as vp_async_task_wait_* wire frames', async () => {
+    // Pure event-routing test — bypasses the engine to confirm the
+    // bridge case branches actually emit on the wire. Uses the message
+    // buffer (which collects `yeaft_output` when no ws is connected) as
+    // the observation channel.
+    ctx.messageBuffer.length = 0;
+
+    const hctx = {
+      sessionId: 'sess-evt',
+      vpId: 'vp-evt',
+      threadId: 'thr-1',
+      turnId: 'turn-abc',
+      resetQueryTimer() { /* no-op for routing test */ },
+    };
+
+    __testHandleEngineEvent(
+      {
+        type: 'async_task_wait_start',
+        turnId: 'turn-abc',
+        threadId: 'thr-1',
+        loopNumber: 7,
+        pendingTaskIds: ['task-a', 'task-b'],
+      },
+      hctx,
+    );
+    __testHandleEngineEvent(
+      {
+        type: 'async_task_wait_end',
+        turnId: 'turn-abc',
+        threadId: 'thr-1',
+        loopNumber: 7,
+        aborted: false,
+        remainingTaskIds: [],
+      },
+      hctx,
+    );
+
+    const events = ctx.messageBuffer
+      .filter(m => m && m.type === 'yeaft_output' && m.event && (m.event.type === 'vp_async_task_wait_start' || m.event.type === 'vp_async_task_wait_end'));
+    expect(events).toHaveLength(2);
+
+    const start = events.find(e => e.event.type === 'vp_async_task_wait_start');
+    expect(start.sessionId).toBe('sess-evt');
+    expect(start.vpId).toBe('vp-evt');
+    expect(start.event.turnId).toBe('turn-abc');
+    expect(start.event.threadId).toBe('thr-1');
+    expect(start.event.loopNumber).toBe(7);
+    expect(start.event.pendingTaskIds).toEqual(['task-a', 'task-b']);
+    expect(typeof start.event.ts).toBe('number');
+
+    const end = events.find(e => e.event.type === 'vp_async_task_wait_end');
+    expect(end.event.aborted).toBe(false);
+    expect(end.event.remainingTaskIds).toEqual([]);
+
+    ctx.messageBuffer.length = 0;
   });
 });

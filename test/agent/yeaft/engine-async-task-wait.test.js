@@ -339,4 +339,52 @@ describe('engine — same-turn background task wait', () => {
     expect(e.ownsPendingAsyncTask('nope')).toBe(false);
     expect(e.notifyAsyncTaskCompleted('nope', 'irrelevant')).toBe(false);
   });
+
+  it('notifyAsyncTaskCompleted defensively rejects empty / non-content payloads even when the engine owns the task', async () => {
+    const e = engine;
+    const a = adapter;
+
+    e.registerTool({
+      name: 'fakeBgTool',
+      description: 'launches a fake background task',
+      parameters: { type: 'object', properties: {} },
+      execute: async (_input, ctx) => {
+        ctx.registerAsyncTask('task-empty');
+        return 'started';
+      },
+    });
+
+    a.pushResponse([
+      { type: 'tool_call', id: 'call-1', name: 'fakeBgTool', input: {} },
+      { type: 'stop', stopReason: 'tool_use' },
+    ]);
+    a.pushResponse(endTurn('parking'));
+    a.pushResponse(endTurn('done'));
+
+    const queryPromise = (async () => {
+      for await (const ev of e.query({ prompt: 'do', messages: [] })) {
+        if (ev.type === 'async_task_wait_start') {
+          // Each of these must be rejected (returns false) AND must leave
+          // the task in the pending set — otherwise we'd hang on the
+          // next loop iteration. Note: empty/whitespace string and
+          // non-string-non-array are rejected BEFORE the engine removes
+          // the task; an empty content-block array is too. Only the
+          // final well-formed payload should actually unblock the wait.
+          expect(e.notifyAsyncTaskCompleted('task-empty', '')).toBe(false);
+          expect(e.notifyAsyncTaskCompleted('task-empty', '   ')).toBe(false);
+          expect(e.notifyAsyncTaskCompleted('task-empty', null)).toBe(false);
+          expect(e.notifyAsyncTaskCompleted('task-empty', 42)).toBe(false);
+          expect(e.notifyAsyncTaskCompleted('task-empty', [])).toBe(false);
+          // All rejections must have left the task in flight.
+          expect(e.ownsPendingAsyncTask('task-empty')).toBe(true);
+          // Now deliver the real payload to drain the wait.
+          expect(e.notifyAsyncTaskCompleted('task-empty', '<task-result>ok</task-result>')).toBe(true);
+        }
+      }
+    })();
+    await queryPromise;
+
+    expect(a.streamCalls.length).toBe(3);
+    expect(e.hasPendingAsyncTasks()).toBe(false);
+  });
 });

@@ -2532,6 +2532,37 @@ function handleEngineEvent(event, hctx) {
       }, envelope);
       break;
 
+    // Same-turn async-task wait. Engine parks at end_turn while a
+    // background bash / sub-agent is still running and re-enters the
+    // same turn when the terminal event arrives (see engine.js
+    // `#runQuery` wait block). Bridge forwards both edges so the debug
+    // panel (and any other in-process subscriber) can render the park
+    // window with the live list of pending taskIds. Wire types stay
+    // namespaced under `vp_async_task_*` to match the existing
+    // `vp_thread_*` / `vp_typing_*` event family.
+    case 'async_task_wait_start':
+      sendSessionEvent({
+        type: 'vp_async_task_wait_start',
+        turnId: event.turnId,
+        threadId: event.threadId,
+        loopNumber: event.loopNumber,
+        pendingTaskIds: Array.isArray(event.pendingTaskIds) ? event.pendingTaskIds : [],
+        ts: Date.now(),
+      }, envelope);
+      break;
+
+    case 'async_task_wait_end':
+      sendSessionEvent({
+        type: 'vp_async_task_wait_end',
+        turnId: event.turnId,
+        threadId: event.threadId,
+        loopNumber: event.loopNumber,
+        aborted: Boolean(event.aborted),
+        remainingTaskIds: Array.isArray(event.remainingTaskIds) ? event.remainingTaskIds : [],
+        ts: Date.now(),
+      }, envelope);
+      break;
+
     case 'loop':
       // feat-6af5f9f1 PR B: replaces the old `debug_turn` event. Same
       // payload shape plus turnId + loopNumber + usage.totalTokens.

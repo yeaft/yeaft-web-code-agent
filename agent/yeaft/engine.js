@@ -3331,6 +3331,11 @@ export class Engine {
     if (!this.ownsPendingAsyncTask(taskId)) return false;
     if (typeof content !== 'string' && !Array.isArray(content)) return false;
     if (typeof content === 'string' && !content.trim()) return false;
+    // Defensive: an empty content-block array would splice as a wire-valid
+    // but semantically empty user message, which the adapter would happily
+    // forward and bill for. Production callers (formatTaskResultForVp)
+    // always emit a non-empty string today; this guards future refactors.
+    if (Array.isArray(content) && content.length === 0) return false;
     this.#pendingAsyncTaskIds.delete(taskId);
     try { this.#asyncTaskCoordinator?.onUnregister?.(taskId); } catch { /* coord must not throw into engine */ }
     const preview = typeof opts.preview === 'string'
