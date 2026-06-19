@@ -449,10 +449,19 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
         return;
       }
 
-      // Turn complete cleanly. Stash the result for WaitAgent and emit
-      // a turn-end event for the UI. Loop re-enters: if more
-      // pendingPrompts queued by PromptAgent, run the next; else idle.
+      // Turn complete cleanly. Task-backed sub-agents are one-shot
+      // background tasks: once they produce their mission result, complete
+      // the agent/task instead of letting the idle watchdog later mark the
+      // already-delivered work as abandoned. Legacy in-process callers with
+      // no TaskManager keep the old idle/PromptAgent continuation flow.
       emit({ type: 'sub_agent_turn_end', content: assistantText });
+      if (agent.taskId && deps.taskManager && agent.parentSessionId) {
+        transitionTerminal(agent, STATUS.COMPLETED, {
+          diagnostic: 'task_turn_complete',
+          deps,
+        });
+        return;
+      }
     }
   } finally {
     if (wallTimeWatchdog) clearTimeout(wallTimeWatchdog);
@@ -512,6 +521,9 @@ function finalizeTerminal(agent, status, { error, deps } = {}) {
       deps.taskManager.completeTask(agent.parentSessionId, agent.taskId, {
         status: taskStatus,
         error: error || agent.error || null,
+        summary: status === STATUS.COMPLETED
+          ? (typeof agent.result === 'string' ? agent.result : (agent.lastResult || null))
+          : null,
       });
     } catch { /* ignore */ }
   }
@@ -519,34 +531,37 @@ function finalizeTerminal(agent, status, { error, deps } = {}) {
     try { deps.onEvent(agent.id, evt); } catch { /* ignore */ }
   }
 
-  // Push the re-entry notification so the parent learns about this
-  // even if it forgot to call WaitAgent. A prior idle notification may
-  // still be indexed by agentId after the parent consumed the queue; remove
-  // it so terminal state can replace that non-terminal progress notice.
+  // Push the legacy sub-agent notification so the parent learns about this
+  // even if it forgot to call WaitAgent. Task-backed sub-agents use the
+  // generic TaskManager async tool-result re-entry instead; queueing both
+  // would make the owner VP see duplicate results.
   try { consumeNotificationForAgent(agent.id); } catch { /* ignore */ }
-  try {
-    const budgetResult = agent.result && typeof agent.result === 'object'
-      && agent.result.status === 'budget_exceeded'
-      ? agent.result
-      : null;
-    enqueueTerminalNotification({
-      agentId: agent.id,
-      agentName: agent.name,
-      status,
-      result: budgetResult
-        ? (budgetResult.partial_output || '')
-        : (typeof agent.result === 'string' ? agent.result : (agent.lastResult || '')),
-      error: error || agent.error || null,
-      outputFile: agent.outputFile || null,
-      turns: agent.usage?.turns || 0,
-      parentVpId: agent.parentVpId || null,
-      parentSessionId: agent.parentSessionId || null,
-      parentThreadId: agent.parentThreadId || 'main',
-      budgetExceeded: !!budgetResult,
-      budgetReason: budgetResult?.reason || null,
-      budgetUsage: budgetResult?.usage || null,
-    });
-  } catch { /* never let the notification queue throw kill the driver */ }
+  const taskBacked = !!(agent.taskId && deps?.taskManager && agent.parentSessionId);
+  if (!taskBacked) {
+    try {
+      const budgetResult = agent.result && typeof agent.result === 'object'
+        && agent.result.status === 'budget_exceeded'
+        ? agent.result
+        : null;
+      enqueueTerminalNotification({
+        agentId: agent.id,
+        agentName: agent.name,
+        status,
+        result: budgetResult
+          ? (budgetResult.partial_output || '')
+          : (typeof agent.result === 'string' ? agent.result : (agent.lastResult || '')),
+        error: error || agent.error || null,
+        outputFile: agent.outputFile || null,
+        turns: agent.usage?.turns || 0,
+        parentVpId: agent.parentVpId || null,
+        parentSessionId: agent.parentSessionId || null,
+        parentThreadId: agent.parentThreadId || 'main',
+        budgetExceeded: !!budgetResult,
+        budgetReason: budgetResult?.reason || null,
+        budgetUsage: budgetResult?.usage || null,
+      });
+    } catch { /* never let the notification queue throw kill the driver */ }
+  }
 }
 
 /**

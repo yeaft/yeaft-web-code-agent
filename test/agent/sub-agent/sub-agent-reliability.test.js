@@ -84,6 +84,7 @@ import listAgents from '../../../agent/yeaft/tools/list-agents.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
+import { TaskManager } from '../../../agent/yeaft/tasks/manager.js';
 
 // -------------------------------------------------------------------------
 // Shared scripted adapter + helpers
@@ -1396,6 +1397,37 @@ describe('list-agents envelope', () => {
     expect(notifications[0].agentId).toBe(out.agentId);
     expect(notifications[0].status).toBe(STATUS.IDLE);
     expect(notifications[0].result).toMatch(/background done/);
+  });
+
+  it('task-backed sub-agent completes its task instead of becoming idle then abandoned', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yeaft-sub-agent-task-'));
+    try {
+      const taskManager = new TaskManager({ yeaftDir: dir });
+      const deps = mkDeps(new TextAdapter('task backed done'), {
+        parentSessionId: 'session-task-backed',
+        idleAbandonMs: 50,
+        taskManager,
+      });
+      const out = JSON.parse(await agentTool.execute(
+        { name: 'task-backed-finish', mission: 'finish async' },
+        { parentEngineDeps: deps, taskManager },
+      ));
+      const agent = getAgentRegistry().get(out.agentId);
+
+      const deadline = Date.now() + 2000;
+      while (Date.now() < deadline && !isTerminalAgentStatus(agent.status)) {
+        await new Promise(r => setTimeout(r, 20));
+      }
+
+      expect(agent.status).toBe(STATUS.COMPLETED);
+      expect(taskManager.getTask('session-task-backed', out.taskId).status).toBe('succeeded');
+      expect(taskManager.getTask('session-task-backed', out.taskId).result.summary).toContain('task backed done');
+      await new Promise(r => setTimeout(r, 80));
+      expect(agent.status).toBe(STATUS.COMPLETED);
+      expect(agent.status).not.toBe(STATUS.ABANDONED);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('wall_time_ms watchdog aborts stuck turns and leaves a terminal record', async () => {
