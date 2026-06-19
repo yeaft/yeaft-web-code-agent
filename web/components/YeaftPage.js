@@ -8,6 +8,7 @@ import SessionSettingsModal from './SessionSettingsModal.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
 import YeaftDebugPanel from './YeaftDebugPanel.js';
 import VpTimelinePane from './VpTimelinePane.js';
+import YeaftSessionActions from './YeaftSessionActions.js';
 import LlmTab from './LlmTab.js';
 import { parseMentions } from '../utils/parseMentions.js';
 import { buildTimelineRows, selectGroupRosterVpList } from '../stores/helpers/vp-timeline.js';
@@ -20,7 +21,7 @@ import { getDefaultModelEffort, getSelectableModelEfforts, modelOptionMatchesRef
 
 export default {
   name: 'YeaftPage',
-  components: { ChatInput, MessageList, SettingsPanel, YeaftSidebar, VpDetailView, SessionInviteModal, SessionSettingsModal, WorkbenchPanel, YeaftDebugPanel, VpTimelinePane, LlmTab },
+  components: { ChatInput, MessageList, SettingsPanel, YeaftSidebar, VpDetailView, SessionInviteModal, SessionSettingsModal, WorkbenchPanel, YeaftDebugPanel, VpTimelinePane, YeaftSessionActions, LlmTab },
   template: `
     <div class="yeaft-page">
       <!-- Mobile sidebar overlay -->
@@ -112,83 +113,23 @@ export default {
             <div class="yeaft-topbar-session-title">{{ topbarSessionTitle || $t('yeaft.session.create.untitled') }}</div>
           </div>
 
-          <div v-if="showHeaderSessionActions" class="yeaft-topbar-right">
-            <!-- Message refresh — replays current Yeaft session history without a full page reload. -->
-            <button
-              class="yeaft-reload-btn"
-              @click="reloadMessages"
-              :disabled="store.yeaftLoadingMoreHistory"
-              :title="$t('yeaft.reloadMessages')"
-              :aria-label="$t('yeaft.reloadMessages')"
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-              </svg>
-            </button>
-            <button
-              class="yeaft-topbar-dream-toggle"
-              :class="{
-                active: dreamRunning,
-                'just-finished': dreamJustFinished,
-                stale: dreamStale,
-              }"
-              @click="onDreamTriggerClick"
-              :disabled="dreamRunning"
-              :title="dreamRunButtonTitle"
-              :aria-label="$t('yeaft.dream.runNow')"
-              :aria-busy="dreamRunning ? 'true' : 'false'"
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" class="yeaft-dream-icon">
-                <path class="yeaft-dream-moon" fill="currentColor" d="M20.4 14.2A7.4 7.4 0 0 1 9.8 3.6 8.2 8.2 0 1 0 20.4 14.2z"/>
-                <path class="yeaft-dream-spark" fill="currentColor" d="M16.8 3.2l.46 1.22 1.22.46-1.22.46-.46 1.22-.46-1.22-1.22-.46 1.22-.46.46-1.22zm3.4 4.1l.32.86.86.32-.86.32-.32.86-.32-.86-.86-.32.86-.32.32-.86z"/>
-              </svg>
-              <span
-                v-if="dreamJustFinished && dreamEntriesCreated !== null"
-                class="yeaft-topbar-dream-bubble"
-                aria-hidden="true"
-              >+{{ dreamEntriesCreated }}</span>
-              <span
-                v-if="dreamStale && !dreamRunning && !dreamJustFinished"
-                class="yeaft-topbar-dream-staledot"
-                aria-hidden="true"
-              ></span>
-            </button>
-            <!-- Session status show/hide toggle. Default is open; the pane itself also has a close button. -->
-            <button
-              class="yeaft-topbar-vp-toggle"
-              :class="{ active: sessionStatusVisible }"
-              @click="toggleSessionStatus"
-              :title="sessionStatusVisible ? $t('yeaft.sessionStatus.hide') : $t('yeaft.sessionStatus.show')"
-              :aria-label="sessionStatusVisible ? $t('yeaft.sessionStatus.hide') : $t('yeaft.sessionStatus.show')"
-              :aria-expanded="sessionStatusVisible ? 'true' : 'false'"
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="4" width="18" height="16" rx="3"/>
-                <path d="M8 9h8"/>
-                <path d="M8 14h5"/>
-              </svg>
-            </button>
-            <button
-              class="yeaft-debug-btn"
-              :class="{ active: debugMode }"
-              @click="toggleDebug"
-              :title="debugMode ? $t('yeaft.hideDebug') : $t('yeaft.showDebug')"
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 8h-2.81c-.45-.78-1.07-1.45-1.82-1.96L17 4.41 15.59 3l-2.17 2.17C12.96 5.06 12.49 5 12 5s-.96.06-1.41.17L8.41 3 7 4.41l1.62 1.63C7.88 6.55 7.26 7.22 6.81 8H4v2h2.09c-.05.33-.09.66-.09 1v1H4v2h2v1c0 .34.04.67.09 1H4v2h2.81c1.04 1.79 2.97 3 5.19 3s4.15-1.21 5.19-3H20v-2h-2.09c.05-.33.09-.66.09-1v-1h2v-2h-2v-1c0-.34-.04-.67-.09-1H20V8zm-6 8h-4v-2h4v2zm0-4h-4v-2h4v2z"/></svg>
-            </button>
-            <!-- Page refresh is a mobile-only escape hatch; desktop keeps the header focused on session actions. -->
-            <button
-              v-if="isMobile"
-              class="yeaft-reload-btn yeaft-page-reload-btn"
-              @click="reloadPage"
-              :title="$t('yeaft.reloadPage')"
-              :aria-label="$t('yeaft.reloadPage')"
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <polyline points="23 20 23 14 17 14"/><polyline points="1 4 1 10 7 10"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-              </svg>
-            </button>
-          </div>
+          <YeaftSessionActions
+            class="yeaft-topbar-right"
+            :loading-more-history="store.yeaftLoadingMoreHistory"
+            :dream-running="dreamRunning"
+            :dream-just-finished="dreamJustFinished"
+            :dream-stale="dreamStale"
+            :dream-entries-created="dreamEntriesCreated"
+            :dream-run-button-title="dreamRunButtonTitle"
+            :session-status-visible="sessionStatusVisible"
+            :debug-mode="debugMode"
+            :show-page-reload="isMobile"
+            @reload-messages="reloadMessages"
+            @run-dream="onDreamTriggerClick"
+            @toggle-session-status="toggleSessionStatus"
+            @toggle-debug="toggleDebug"
+            @reload-page="reloadPage"
+          />
         </div>
 
         <div class="yeaft-conversation-body">
@@ -275,87 +216,7 @@ export default {
         @cancel-vp-turn="onCancelVpFromTimeline"
         @edit-announcement="openAnnouncementSettings"
         @close="closeSessionStatus"
-      >
-        <template #actions>
-          <div class="yeaft-session-status-actions">
-            <!-- Message refresh — replays current Yeaft session history without a full page reload. -->
-            <button
-              class="yeaft-reload-btn"
-              @click="reloadMessages"
-              :disabled="store.yeaftLoadingMoreHistory"
-              :title="$t('yeaft.reloadMessages')"
-              :aria-label="$t('yeaft.reloadMessages')"
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-              </svg>
-            </button>
-            <button
-              class="yeaft-topbar-dream-toggle"
-              :class="{
-                active: dreamRunning,
-                'just-finished': dreamJustFinished,
-                stale: dreamStale,
-              }"
-              @click="onDreamTriggerClick"
-              :disabled="dreamRunning"
-              :title="dreamRunButtonTitle"
-              :aria-label="$t('yeaft.dream.runNow')"
-              :aria-busy="dreamRunning ? 'true' : 'false'"
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" class="yeaft-dream-icon">
-                <path class="yeaft-dream-moon" fill="currentColor" d="M20.4 14.2A7.4 7.4 0 0 1 9.8 3.6 8.2 8.2 0 1 0 20.4 14.2z"/>
-                <path class="yeaft-dream-spark" fill="currentColor" d="M16.8 3.2l.46 1.22 1.22.46-1.22.46-.46 1.22-.46-1.22-1.22-.46 1.22-.46.46-1.22zm3.4 4.1l.32.86.86.32-.86.32-.32.86-.32-.86-.86-.32.86-.32.32-.86z"/>
-              </svg>
-              <span
-                v-if="dreamJustFinished && dreamEntriesCreated !== null"
-                class="yeaft-topbar-dream-bubble"
-                aria-hidden="true"
-              >+{{ dreamEntriesCreated }}</span>
-              <span
-                v-if="dreamStale && !dreamRunning && !dreamJustFinished"
-                class="yeaft-topbar-dream-staledot"
-                aria-hidden="true"
-              ></span>
-            </button>
-            <!-- Session status show/hide toggle. Default is open; the pane itself also has a close button. -->
-            <button
-              class="yeaft-topbar-vp-toggle"
-              :class="{ active: sessionStatusVisible }"
-              @click="toggleSessionStatus"
-              :title="sessionStatusVisible ? $t('yeaft.sessionStatus.hide') : $t('yeaft.sessionStatus.show')"
-              :aria-label="sessionStatusVisible ? $t('yeaft.sessionStatus.hide') : $t('yeaft.sessionStatus.show')"
-              :aria-expanded="sessionStatusVisible ? 'true' : 'false'"
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="4" width="18" height="16" rx="3"/>
-                <path d="M8 9h8"/>
-                <path d="M8 14h5"/>
-              </svg>
-            </button>
-            <button
-              class="yeaft-debug-btn"
-              :class="{ active: debugMode }"
-              @click="toggleDebug"
-              :title="debugMode ? $t('yeaft.hideDebug') : $t('yeaft.showDebug')"
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 8h-2.81c-.45-.78-1.07-1.45-1.82-1.96L17 4.41 15.59 3l-2.17 2.17C12.96 5.06 12.49 5 12 5s-.96.06-1.41.17L8.41 3 7 4.41l1.62 1.63C7.88 6.55 7.26 7.22 6.81 8H4v2h2.09c-.05.33-.09.66-.09 1v1H4v2h2v1c0 .34.04.67.09 1H4v2h2.81c1.04 1.79 2.97 3 5.19 3s4.15-1.21 5.19-3H20v-2h-2.09c.05-.33.09-.66.09-1v-1h2v-2h-2v-1c0-.34-.04-.67-.09-1H20V8zm-6 8h-4v-2h4v2zm0-4h-4v-2h4v2z"/></svg>
-            </button>
-            <!-- Page refresh is a mobile-only escape hatch; desktop keeps the header focused on session actions. -->
-            <button
-              v-if="isMobile"
-              class="yeaft-reload-btn yeaft-page-reload-btn"
-              @click="reloadPage"
-              :title="$t('yeaft.reloadPage')"
-              :aria-label="$t('yeaft.reloadPage')"
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <polyline points="23 20 23 14 17 14"/><polyline points="1 4 1 10 7 10"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-              </svg>
-            </button>
-          </div>
-        </template>
-      </VpTimelinePane>
+      />
 
       <!-- Right Detail Panel — only rendered when debug mode is on. The
            legacy "tasks memory" placeholder + collapse-toggle were retired
@@ -1115,9 +976,6 @@ export default {
     const showVpTimeline = Vue.computed(
       () => !showSettings.value && sessionStatusVisible.value
     );
-    const showHeaderSessionActions = Vue.computed(
-      () => isNarrowDetail.value || !showVpTimeline.value
-    );
 
     // Resolve the active group's roster and project it into timeline
     // rows. Status comes from the store's `vpStatuses` map (mirrored
@@ -1285,7 +1143,6 @@ export default {
       openMemberEditor,
       // VP timeline pane bindings — restored in v0.1.767.
       showVpTimeline,
-      showHeaderSessionActions,
       vpTimelineRows,
       runningTasksForActiveSession,
       sessionStatusAnnouncementText,

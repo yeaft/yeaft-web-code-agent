@@ -65,10 +65,6 @@ export default {
         </button>
       </header>
 
-      <header class="yeaft-session-status-actionbar" aria-hidden="false">
-        <slot name="actions"></slot>
-      </header>
-
       <section class="yeaft-session-status-section yeaft-session-status-announcement" :aria-label="$t('yeaft.sessionStatus.announcement')">
         <header class="yeaft-session-status-section-header">
           <span>{{ $t('yeaft.sessionStatus.announcement') }}</span>
