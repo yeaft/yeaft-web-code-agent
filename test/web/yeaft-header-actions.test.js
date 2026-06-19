@@ -7,26 +7,25 @@ const pageSource = read('components/YeaftPage.js');
 const sidebarSource = read('components/YeaftSidebar.js');
 const chatHeaderSource = read('components/ChatHeader.js');
 const vpTimelineSource = read('components/VpTimelinePane.js');
+const sessionActionsSource = read('components/YeaftSessionActions.js');
 const yeaftCss = read('styles/yeaft.css');
 const sidebarCss = read('styles/sidebar.css');
 const variablesCss = read('styles/variables.css');
 const enI18n = read('i18n/en.js');
 const zhI18n = read('i18n/zh-CN.js');
 
-function topbarRightBlock() {
-  const start = pageSource.indexOf('<div class="yeaft-topbar-right">');
+function actionComponentBlock() {
+  const start = sessionActionsSource.indexOf('<div class="yeaft-session-actions">');
   expect(start).toBeGreaterThan(-1);
-  const end = pageSource.indexOf('          </div>\n        </div>\n\n', start);
+  const end = sessionActionsSource.indexOf('    </div>', start);
   expect(end).toBeGreaterThan(start);
-  return pageSource.slice(start, end);
+  return sessionActionsSource.slice(start, end);
 }
 
 describe('Yeaft conversation header actions', () => {
   it('keeps announcement controls in the Session status pane, not the conversation header', () => {
-    const block = topbarRightBlock();
-
-    expect(block).not.toContain('yeaft-topbar-announcement-edit');
-    expect(block).not.toContain('@click="openAnnouncementSettings"');
+    expect(pageSource).not.toContain('yeaft-topbar-announcement-edit');
+    expect(pageSource).not.toContain('@click="openAnnouncementSettings"');
     expect(pageSource).toContain('@edit-announcement="openAnnouncementSettings"');
     expect(pageSource).toContain('const openAnnouncementSettings = () => {');
     expect(pageSource).toContain("openSessionSettings({ sessionId, section: 'announcement' });");
@@ -44,10 +43,32 @@ describe('Yeaft conversation header actions', () => {
     expect(sidebarSource).toContain("$t('yeaft.session.openSettings')");
   });
 
-  it('keeps message refresh as a session-history refresh action', () => {
-    const block = topbarRightBlock();
+  it('keeps the four session controls owned by the conversation header on desktop', () => {
+    expect(pageSource).toContain('<YeaftSessionActions\n            class="yeaft-topbar-right"');
+    expect(pageSource).not.toContain('v-if="showHeaderSessionActions"');
+    expect(pageSource).not.toContain('showHeaderSessionActions');
+    expect(pageSource).not.toContain('<template #actions>');
+    expect(vpTimelineSource).not.toContain('<slot name="actions"></slot>');
+    expect(yeaftCss).not.toContain('yeaft-session-status-actionbar');
 
-    expect(block).toContain('@click="reloadMessages"');
+    const statusPaneStart = pageSource.indexOf('<VpTimelinePane');
+    expect(statusPaneStart).toBeGreaterThan(-1);
+    const afterStatusPane = pageSource.slice(statusPaneStart, pageSource.indexOf('<!-- Right Detail Panel', statusPaneStart));
+    expect(afterStatusPane).not.toContain('YeaftSessionActions');
+  });
+
+  it('keeps the mobile status pane as a standalone surface with title and close button', () => {
+    expect(vpTimelineSource).toContain('class="yeaft-session-status-header"');
+    expect(vpTimelineSource).toContain('class="yeaft-session-status-title"');
+    expect(vpTimelineSource).toContain('class="yeaft-session-status-close"');
+    expect(yeaftCss).toContain('.yeaft-session-status-header {\n  display: none;\n}');
+    expect(yeaftCss).toContain('.yeaft-vp-timeline.mobile-session-status .yeaft-session-status-header {\n    display: flex;\n  }');
+  });
+
+  it('keeps message refresh as a session-history refresh action', () => {
+    const block = actionComponentBlock();
+
+    expect(block).toContain("@click=\"$emit('reload-messages')\"");
     expect(block).toContain("$t('yeaft.reloadMessages')");
     expect(block).toContain('<polyline points="23 4 23 10 17 10"/>');
     expect(block).toContain('<path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>');
@@ -55,25 +76,25 @@ describe('Yeaft conversation header actions', () => {
     expect(pageSource).toContain('const reloadMessages = () => {\n      store.reloadYeaftMessages();\n    };');
   });
 
-  it('renders page reload only behind the mobile condition and as the last header action', () => {
-    const block = topbarRightBlock();
-    const pageReloadStart = block.indexOf('v-if="isMobile"');
+  it('renders page reload only behind the mobile prop and as the last action', () => {
+    const block = actionComponentBlock();
+    const pageReloadStart = block.indexOf('v-if="showPageReload"');
 
     expect(pageReloadStart).toBeGreaterThan(-1);
-    expect(block.slice(pageReloadStart)).toContain('@click="reloadPage"');
-    expect(block.slice(0, pageReloadStart)).not.toContain('@click="reloadPage"');
-    expect(block.lastIndexOf('@click="reloadPage"')).toBeGreaterThan(block.lastIndexOf('@click="toggleDebug"'));
-    expect(block.indexOf('@click="reloadPage"', block.lastIndexOf('@click="reloadPage"') + 1)).toBe(-1);
+    expect(block.slice(pageReloadStart)).toContain("@click=\"$emit('reload-page')\"");
+    expect(block.slice(0, pageReloadStart)).not.toContain("$emit('reload-page')");
+    expect(block.lastIndexOf("$emit('reload-page')")).toBeGreaterThan(block.lastIndexOf("$emit('toggle-debug')"));
+    expect(pageSource).toContain(':show-page-reload="isMobile"');
   });
 
-  it('orders header actions as refresh, dream, Session status, debug, mobile page refresh', () => {
-    const block = topbarRightBlock();
+  it('orders actions as refresh, dream, Session status, debug, mobile page refresh', () => {
+    const block = actionComponentBlock();
     const order = [
-      '@click="reloadMessages"',
-      '@click="onDreamTriggerClick"',
-      '@click="toggleSessionStatus"',
-      '@click="toggleDebug"',
-      '@click="reloadPage"',
+      "$emit('reload-messages')",
+      "$emit('run-dream')",
+      "$emit('toggle-session-status')",
+      "$emit('toggle-debug')",
+      "$emit('reload-page')",
     ].map((needle) => block.indexOf(needle));
 
     expect(order.every((index) => index >= 0)).toBe(true);

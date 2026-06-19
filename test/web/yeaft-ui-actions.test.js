@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 const read = (path) => readFileSync(new URL(`../../web/${path}`, import.meta.url), 'utf8');
 
 const pageSource = read('components/YeaftPage.js');
+const sessionActionsSource = read('components/YeaftSessionActions.js');
 const debugSource = read('components/YeaftDebugPanel.js');
 const timelineSource = read('components/VpTimelinePane.js');
 const settingsSource = read('components/SettingsPanel.js');
@@ -15,10 +16,10 @@ const zhI18n = read('i18n/zh-CN.js');
 
 describe('Yeaft UI action polish', () => {
   it('keeps header action icons visually consistent', () => {
-    expect(pageSource).toContain('class="yeaft-dream-icon"');
-    expect(pageSource).toContain('class="yeaft-dream-moon"');
-    expect(pageSource).toContain('class="yeaft-dream-spark"');
-    expect(pageSource).not.toContain('yeaft-dream-arc');
+    expect(sessionActionsSource).toContain('class="yeaft-dream-icon"');
+    expect(sessionActionsSource).toContain('class="yeaft-dream-moon"');
+    expect(sessionActionsSource).toContain('class="yeaft-dream-spark"');
+    expect(sessionActionsSource).not.toContain('yeaft-dream-arc');
     expect(yeaftCss).toContain('.yeaft-topbar-dream-toggle.running .yeaft-dream-icon');
     expect(yeaftCss).toContain('.yeaft-topbar-right :where(');
     expect(yeaftCss).toContain('width: 32px;');

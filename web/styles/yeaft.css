@@ -568,7 +568,8 @@
   font-weight: 500;
 }
 
-.yeaft-topbar-right {
+.yeaft-topbar-right,
+.yeaft-session-actions {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -576,6 +577,12 @@
 }
 
 .yeaft-topbar-right :where(
+  .yeaft-topbar-vp-toggle,
+  .yeaft-reload-btn,
+  .yeaft-topbar-dream-toggle,
+  .yeaft-debug-btn
+),
+.yeaft-session-actions :where(
   .yeaft-topbar-vp-toggle,
   .yeaft-reload-btn,
   .yeaft-topbar-dream-toggle,
@@ -588,6 +595,12 @@
 }
 
 .yeaft-topbar-right :where(
+  .yeaft-topbar-vp-toggle,
+  .yeaft-reload-btn,
+  .yeaft-topbar-dream-toggle,
+  .yeaft-debug-btn
+) svg,
+.yeaft-session-actions :where(
   .yeaft-topbar-vp-toggle,
   .yeaft-reload-btn,
   .yeaft-topbar-dream-toggle,
@@ -3022,6 +3035,9 @@
   color: var(--text-primary);
   outline: none;
 }
+.yeaft-session-status-header {
+  display: none;
+}
 .yeaft-session-status-section {
   padding: 8px 0 10px;
 }
@@ -3173,6 +3189,10 @@
 
   .yeaft-vp-timeline.mobile-session-status .yeaft-vp-timeline-resize-handle {
     display: none;
+  }
+
+  .yeaft-vp-timeline.mobile-session-status .yeaft-session-status-header {
+    display: flex;
   }
 }
 
