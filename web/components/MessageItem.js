@@ -1,5 +1,6 @@
 import { openImagePreview } from '../utils/imagePreview.js';
 import { getSelectionLabel } from '../utils/expert-roles.js';
+import { normalizeTerminalOutput } from '../utils/terminal-output.js';
 
 export default {
   name: 'MessageItem',
@@ -21,7 +22,7 @@ export default {
             class="expert-label"
           >{{ formatExpertLabel(sel) }}</span>
         </div>
-        <div class="message-content" v-if="message.content">{{ message.content }}</div>
+        <div class="message-content" v-if="message.content">{{ displayContent }}</div>
         <span v-if="messageTime" class="message-time" :title="messageTimeFull">{{ messageTime }}</span>
         <!-- Attachments indicator -->
         <div class="user-attachments-indicator" v-if="message.attachments && message.attachments.length > 0">
@@ -58,12 +59,12 @@ export default {
 
       <!-- System message -->
       <template v-else-if="message.type === 'system'">
-        {{ message.content }}
+        {{ displayContent }}
       </template>
 
       <!-- Error message -->
       <template v-else-if="message.type === 'error'">
-        {{ message.content }}
+        {{ displayContent }}
       </template>
     </div>
   `,
@@ -96,6 +97,8 @@ export default {
       if (!ts) return '';
       try { return new Date(ts).toLocaleString(); } catch { return ''; }
     });
+
+    const displayContent = Vue.computed(() => normalizeTerminalOutput(props.message.content || ''));
 
     const toggleAttachments = () => {
       showAttachments.value = !showAttachments.value;
@@ -133,6 +136,7 @@ export default {
       messageClass,
       messageTime,
       messageTimeFull,
+      displayContent,
       showAttachments,
       toggleAttachments,
       formatExpertLabel,

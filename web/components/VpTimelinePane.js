@@ -1,3 +1,5 @@
+import TerminalOutput from './TerminalOutput.js';
+
 /**
  * VpTimelinePane — right-of-conversation Session status pane.
  *
@@ -25,6 +27,7 @@
  */
 export default {
   name: 'VpTimelinePane',
+  components: { TerminalOutput },
   emits: ['mention-vp', 'edit-vp', 'start-resize', 'cancel-vp-turn', 'edit-announcement', 'close'],
   props: {
     rows: { type: Array, required: true },
@@ -190,12 +193,13 @@ export default {
               </svg>
             </button>
             <div v-if="expandedTasks[task.id]" class="yeaft-vp-task-detail">
-              <pre
+              <TerminalOutput
                 v-if="task.log && task.log.preview"
                 class="yeaft-vp-task-log"
-                :ref="el => setTaskLogRef(task.id, el)"
+                :content="task.log.preview"
+                :ref="el => setTaskLogRef(task.id, el && (el.$el || el))"
                 @scroll="onTaskLogScroll(task.id)"
-              >{{ task.log.preview }}</pre>
+              />
               <div v-else class="yeaft-vp-task-log-empty">{{ $t('yeaft.sessionStatus.noLogPreview') }}</div>
             </div>
           </article>

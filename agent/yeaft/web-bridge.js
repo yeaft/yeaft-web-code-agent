@@ -396,7 +396,7 @@ function buildVpPromptPayload(vpId, envelope) {
 export function visibleInboundThreadId(envelope, fallbackThreadId = 'main') {
   const meta = envelope?.msg?.meta || {};
   if (
-    meta.injectedBy === 'route_forward'
+    (meta.injectedBy === 'route_forward' || meta.injectedBy === 'task_result')
     && typeof meta.sourceThreadId === 'string'
     && meta.sourceThreadId.trim()
   ) {
@@ -1024,13 +1024,74 @@ function enqueueForVp(sessionId, vpId, envelope) {
   registerRoutePromise(envelope?.msg?.id, routePromise);
 }
 
+function formatTaskResultForVp(task) {
+  const result = task?.result || {};
+  const log = task?.log || {};
+  const lines = [
+    `<task-result id="${task.id}" kind="${task.kind}" status="${task.status}">`,
+    `title: ${task.title || task.kind || task.id}`,
+  ];
+  if (result.exitCode !== undefined && result.exitCode !== null) lines.push(`exitCode: ${result.exitCode}`);
+  if (result.signal) lines.push(`signal: ${result.signal}`);
+  if (result.error) lines.push(`error: ${result.error}`);
+  if (result.summary) lines.push(`summary: ${result.summary}`);
+  if (log.path) lines.push(`log: ${log.path}`);
+  if (log.preview) {
+    const preview = String(log.preview).slice(-4000);
+    lines.push('logTail:');
+    lines.push(preview.split('\n').map(line => `  ${line}`).join('\n'));
+  }
+  lines.push('</task-result>');
+  lines.push('This is an asynchronous tool result from a background task, not a user message. Consume it now: tell the user the outcome or continue the work. Do not wait for another user turn.');
+  return lines.join('\n');
+}
+
+function scheduleTaskResultReentry(event) {
+  if (!event || event.event !== 'completed' || !event.task) return;
+  const task = event.task;
+  const sessionId = task.sessionId || event.sessionId || null;
+  const vpId = task.ownerVpId || null;
+  if (!sessionId || !vpId) return;
+  const threadId = task.source?.threadId || task.runtime?.threadId || 'main';
+  const msgId = `task_result_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`;
+  queueMicrotask(() => {
+    enqueueForVp(sessionId, vpId, {
+      sessionId,
+      taskId: task.id,
+      trigger: 'task_result',
+      _promptSuffix: '',
+      msg: {
+        id: msgId,
+        from: 'tool',
+        role: 'assistant',
+        text: formatTaskResultForVp(task),
+        meta: {
+          injectedBy: 'task_result',
+          taskId: task.id,
+          taskKind: task.kind,
+          taskStatus: task.status,
+          sourceThreadId: threadId,
+        },
+      },
+    });
+  });
+}
+
 async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
   const { text, prompt, promptParts } = buildVpPromptPayload(vpId, envelope);
   const runningThreads = getRunningThreads(sessionId, vpId);
   let thread = null;
   let related = false;
 
-  if (runningThreads.length === 0) {
+  const meta = envelope?.msg?.meta || {};
+  const isTaskResult = meta.injectedBy === 'task_result';
+  const sourceThreadId = typeof meta.sourceThreadId === 'string' && meta.sourceThreadId.trim()
+    ? meta.sourceThreadId.trim()
+    : null;
+
+  if (isTaskResult && sourceThreadId) {
+    thread = getOrCreateVpThread({ sessionId, vpId, threadId: sourceThreadId, title: fallbackTitle(text) });
+  } else if (runningThreads.length === 0) {
     thread = getOrCreateVpThread({ sessionId, vpId, title: fallbackTitle(text) });
   } else {
     const decision = await threadClassifier({
@@ -1064,23 +1125,24 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
 
   if (related) {
     const content = promptParts || prompt;
-    const isForwardAppend = envelope?.msg?.meta?.injectedBy === 'route_forward';
+    const injectedBy = envelope?.msg?.meta?.injectedBy;
+    const isInternalAppend = injectedBy === 'route_forward' || injectedBy === 'task_result';
     thread.pendingQueries.push({
       content,
       preview: prompt,
       originalText: text,
       originalParts: Array.isArray(envelope?._promptParts) ? envelope._promptParts : null,
-      internal: isForwardAppend,
+      internal: isInternalAppend,
     });
     persistInboundMessageOnceByMsgId({
       msgId: envelope?.msg?.id,
       text,
       sessionId,
       threadId: visibleInboundThreadId(envelope, thread.threadId),
-      role: isForwardAppend ? 'assistant' : 'user',
+      role: isInternalAppend ? 'assistant' : 'user',
       speakerVpId: envelope?.msg?.meta?.senderVpId || envelope?.msg?.from || null,
       attachments: Array.isArray(envelope?.msg?.meta?.attachments) ? envelope.msg.meta.attachments : [],
-      internal: isForwardAppend,
+      internal: isInternalAppend,
     });
     thread.updatedAt = Date.now();
     try {
@@ -1165,17 +1227,18 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
         const envMsgId = envelope?.msg?.id;
         if (envMsgId && text) {
           const meta = envelope?.msg?.meta || {};
-          const isForward = meta.injectedBy === 'route_forward';
-          const senderVpId = isForward ? (meta.senderVpId || envelope?.msg?.from || null) : null;
+          const injectedBy = meta.injectedBy;
+          const isInternal = injectedBy === 'route_forward' || injectedBy === 'task_result';
+          const senderVpId = isInternal ? (meta.senderVpId || envelope?.msg?.from || null) : null;
           persistInboundMessageOnceByMsgId({
             msgId: envMsgId,
             text,
             sessionId,
             threadId: visibleInboundThreadId(envelope, thread.threadId),
-            role: isForward ? 'assistant' : 'user',
+            role: isInternal ? 'assistant' : 'user',
             speakerVpId: senderVpId,
             attachments: Array.isArray(meta.attachments) ? meta.attachments : [],
-            internal: isForward,
+            internal: isInternal,
           });
         }
       } catch { /* never crash WS pipeline */ }
@@ -1211,7 +1274,9 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
         } catch { /* never crash WS pipeline */ }
       }
       try {
-        if (text && envelope?.msg) {
+        const injectedBy = envelope?.msg?.meta?.injectedBy;
+        const isInternalMessage = injectedBy === 'route_forward' || injectedBy === 'task_result';
+        if (text && envelope?.msg && !isInternalMessage) {
           sendSessionEvent({
             type: 'session_message',
             sessionId,
@@ -1949,6 +2014,7 @@ export function installYeaftRuntimeBridge(s) {
       try {
         const sessionId = event?.task?.sessionId || event?.sessionId || null;
         sendSessionEvent(event, { sessionId });
+        scheduleTaskResultReentry(event);
       } catch { /* never let task event delivery throw */ }
     });
   }
@@ -3182,8 +3248,9 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       // the source VP's tool action. Do not append it as a visible prompt for
       // the target VP turn; otherwise UI replay can show a trailing handoff
       // block after the target response.
-      const inboundIsRouteForward = inboundEnvelope?.msg?.meta?.injectedBy === 'route_forward';
-      const visiblePrompts = inboundIsRouteForward ? appendedUserPrompts : [prompt, ...appendedUserPrompts];
+      const inboundInjectedBy = inboundEnvelope?.msg?.meta?.injectedBy;
+      const inboundIsInternal = inboundInjectedBy === 'route_forward' || inboundInjectedBy === 'task_result';
+      const visiblePrompts = inboundIsInternal ? appendedUserPrompts : [prompt, ...appendedUserPrompts];
       appendTurnToSessionHistory(sessionId, threadId, vpId, visiblePrompts, assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum);
 
       sendSessionOutputFrame({
@@ -3368,7 +3435,7 @@ function appendTurnToSessionHistory(sessionId, threadId, vpId, prompts, assistan
  * Persist an inbound message row to disk EXACTLY ONCE per
  * coordinator-ingest call, keyed by the coordinator-assigned `msgId`.
  * Both `handleYeaftSessionSend` (real user input, persists as
- * role='user') and `enqueueForVp`'s driver loop (route_forward
+ * role='user') and `enqueueForVp`'s driver loop (route_forward / task_result
  * synthetic injections, persists as role='assistant' attributed via
  * `speakerVpId`) call this — the Set guard makes either path the
  * writer, whichever runs first, while the other becomes a no-op.
@@ -3427,9 +3494,9 @@ function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = '
   try {
     // role defaults to 'user' for back-compat: handleYeaftSessionSend's
     // real-user call site passes no role and gets a user row. The driver
-    // loop passes role='assistant' + speakerVpId for route_forward
-    // injections so the on-disk record correctly attributes the text to
-    // the sending VP.
+    // loop passes role='assistant' + speakerVpId for route_forward /
+    // task_result injections so the on-disk record correctly attributes
+    // the internal trigger text.
     const persistRole = role === 'assistant' ? 'assistant' : 'user';
     const record = {
       role: persistRole,

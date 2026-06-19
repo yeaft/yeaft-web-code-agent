@@ -16,7 +16,7 @@ import {
   DREAM_REDDOT_THRESHOLD_MS,
   DREAM_RELATIVE_TIME_REFRESH_MS,
 } from './dream-ui-constants.js';
-import { getDefaultModelEffort, modelOptionMatchesRef, modelOptionRef, resolveSessionModelEffort, resolveSessionModelRef } from '../utils/modelRefs.js';
+import { getDefaultModelEffort, getSelectableModelEfforts, modelOptionMatchesRef, modelOptionRef, resolveSessionModelEffort, resolveSessionModelRef } from '../utils/modelRefs.js';
 
 export default {
   name: 'YeaftPage',
@@ -74,44 +74,32 @@ export default {
               <div class="yeaft-model-selector-body">
                 <div class="yeaft-model-list" role="listbox" :aria-label="$t('settings.llm.selectModel')">
                   <button
-                    v-for="m in store.yeaftAvailableModels"
-                    :key="modelOptionRef(m) || m.id"
+                    v-for="option in topbarModelOptions"
+                    :key="option.key"
                     type="button"
                     class="yeaft-model-option"
-                    :class="{ active: modelOptionMatchesRef(m, topbarModel), current: modelOptionMatchesRef(m, topbarModel) }"
+                    :class="{
+                      active: isModelSelectionActive(option.model, option.effort),
+                      current: modelOptionMatchesRef(option.model, topbarModel),
+                      'yeaft-model-option-with-effort': !!option.effort,
+                    }"
                     role="option"
-                    :aria-selected="modelOptionMatchesRef(m, topbarModel) ? 'true' : 'false'"
-                    @click="selectModel(modelOptionRef(m))"
+                    :aria-selected="isModelSelectionActive(option.model, option.effort) ? 'true' : 'false'"
+                    @click="selectModel(option.modelRef, option.effort)"
                   >
-                    <span class="yeaft-model-check" v-if="modelOptionMatchesRef(m, topbarModel)">&check;</span>
+                    <span class="yeaft-model-check" v-if="isModelSelectionActive(option.model, option.effort)">&check;</span>
                     <span class="yeaft-model-check" v-else></span>
                     <span class="yeaft-model-option-main">
-                      <span class="yeaft-model-option-label">{{ m.label || m.id }}</span>
+                      <span class="yeaft-model-option-label">{{ option.label }}</span>
                       <span class="yeaft-model-option-meta">
-                        <span class="yeaft-model-option-provider" v-if="m.provider">{{ m.provider }}</span>
-                        <span class="yeaft-model-option-ctx" v-if="m.contextWindow">{{ formatModelCtx(m) }}</span>
+                        <span class="yeaft-model-option-provider" v-if="option.model.provider">{{ option.model.provider }}</span>
+                        <span class="yeaft-model-option-ctx" v-if="option.model.contextWindow">{{ formatModelCtx(option.model) }}</span>
                       </span>
                     </span>
+                    <span class="yeaft-model-effort-chip" v-if="option.effort">{{ $t('yeaft.modelMenu.effort.' + option.effort) }}</span>
                   </button>
                 </div>
                 <div class="yeaft-model-fixed-controls">
-                  <div v-if="topbarEffortOptions.length" class="yeaft-model-effort-panel">
-                    <div class="yeaft-model-effort-title">{{ topbarEffortTitle }}</div>
-                    <div class="yeaft-model-effort-options" role="radiogroup" :aria-label="topbarEffortTitle">
-                      <button
-                        v-for="effort in topbarEffortOptions"
-                        :key="effort"
-                        type="button"
-                        class="yeaft-model-effort-option"
-                        :class="{ active: effort === topbarEffort }"
-                        role="radio"
-                        :aria-checked="effort === topbarEffort ? 'true' : 'false'"
-                        @click="selectEffort(effort)"
-                      >
-                        {{ $t('yeaft.modelMenu.effort.' + effort) }}
-                      </button>
-                    </div>
-                  </div>
                   <button type="button" class="yeaft-model-config-option" @click="openLlmConfig">
                     <span class="yeaft-model-config-label">{{ $t('settings.llm.configureMenu') }}</span>
                     <span class="yeaft-model-config-hint">{{ $t('yeaft.modelMenu.configureHint') }}</span>
@@ -678,30 +666,43 @@ export default {
       return store.yeaftAvailableModels.find(m => modelOptionMatchesRef(m, id)) || null;
     });
 
-    const topbarEffortOptions = Vue.computed(() => {
-      const options = topbarModelMeta.value?.effortOptions;
-      return Array.isArray(options) ? options.filter(Boolean) : [];
-    });
+    const selectableEffortsForModel = (model) => getSelectableModelEfforts(model?.effortOptions);
 
     const topbarRawEffort = Vue.computed(() => resolveSessionModelEffort(topbarGroup.value, store.yeaftModelEffort || ''));
 
     const topbarEffort = Vue.computed(() => {
-      const options = topbarEffortOptions.value;
+      const options = Array.isArray(topbarModelMeta.value?.effortOptions)
+        ? topbarModelMeta.value.effortOptions.filter(Boolean)
+        : [];
       if (!options.length) return null;
       return options.includes(topbarRawEffort.value)
         ? topbarRawEffort.value
         : getDefaultModelEffort(options);
     });
 
-    const effortTitleForMeta = (meta) => {
-      const protocol = meta?.effortProtocol;
-      if (protocol === 'anthropic-adaptive') return $t('yeaft.modelMenu.effort.anthropicAdaptive');
-      if (protocol === 'anthropic') return $t('yeaft.modelMenu.effort.anthropicBudget');
-      if (protocol === 'openai-reasoning') return $t('yeaft.modelMenu.effort.openaiReasoning');
-      return $t('yeaft.modelMenu.effort');
-    };
+    const topbarModelOptions = Vue.computed(() => {
+      const rows = [];
+      for (const model of store.yeaftAvailableModels || []) {
+        const modelRef = modelOptionRef(model);
+        if (!modelRef) continue;
+        const label = model.label || model.id || modelRef;
+        const efforts = selectableEffortsForModel(model);
+        if (!efforts.length) {
+          rows.push({ key: modelRef, model, modelRef, effort: null, label });
+          continue;
+        }
+        for (const effort of efforts) {
+          rows.push({ key: `${modelRef}:${effort}`, model, modelRef, effort, label });
+        }
+      }
+      return rows;
+    });
 
-    const topbarEffortTitle = Vue.computed(() => effortTitleForMeta(topbarModelMeta.value));
+    const isModelSelectionActive = (model, effort) => {
+      if (!modelOptionMatchesRef(model, topbarModel.value)) return false;
+      if (!effort) return !selectableEffortsForModel(model).length;
+      return effort === topbarEffort.value;
+    };
 
     // ── manual dream trigger ──
     // Header dream acts on the conversation currently on screen. That is
@@ -832,25 +833,11 @@ export default {
       }
     };
 
-    const effortForModelRef = (modelId) => {
-      const meta = store.yeaftAvailableModels.find(m => modelOptionMatchesRef(m, modelId)) || null;
-      const options = Array.isArray(meta?.effortOptions) ? meta.effortOptions.filter(Boolean) : [];
-      return options.length ? getDefaultModelEffort(options) : null;
-    };
-
-    const selectModel = (modelId) => {
-      if (!modelId) return;
-      const groupId = topbarGroup.value?.id || null;
-      store.switchYeaftModel(modelId, groupId, effortForModelRef(modelId));
-      closeModelDropdown();
-    };
-
-    const selectEffort = (effort) => {
-      if (!topbarEffortOptions.value.includes(effort)) return;
-      const modelId = topbarModel.value;
+    const selectModel = (modelId, effort = null) => {
       if (!modelId) return;
       const groupId = topbarGroup.value?.id || null;
       store.switchYeaftModel(modelId, groupId, effort);
+      closeModelDropdown();
     };
 
     // Format a token count compactly: 400000 → "400k", 1048576 → "1m", <1000 → raw.
@@ -1154,8 +1141,9 @@ export default {
       topbarSessionTitle,
       topbarModel,
       topbarEffort,
-      topbarEffortOptions,
-      topbarEffortTitle,
+      topbarModelOptions,
+      selectableEffortsForModel,
+      isModelSelectionActive,
       modelOptionRef,
       modelOptionMatchesRef,
       showSettings,
@@ -1181,7 +1169,6 @@ export default {
       reloadPage,
       toggleModelDropdown,
       selectModel,
-      selectEffort,
       openLlmConfig,
       onLlmConfigMessage,
       onLlmConfigSaved,

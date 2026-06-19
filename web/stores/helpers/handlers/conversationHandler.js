@@ -452,7 +452,14 @@ export function handleSyncMessagesResult(store, msg) {
  * `yeaftHasMoreHistory` from the server's authoritative value.
  */
 export function handleYeaftHistoryChunk(store, msg) {
-  const convId = msg.conversationId || store.yeaftConversationId;
+  const msgSessionId = msg.sessionId != null ? msg.sessionId : msg.groupId;
+  const sessionAgentId = msgSessionId && store.yeaftSessionAgentById
+    ? store.yeaftSessionAgentById[msgSessionId]
+    : null;
+  const agentConversationId = sessionAgentId && store.yeaftConversationIdsByAgent
+    ? store.yeaftConversationIdsByAgent[sessionAgentId]
+    : null;
+  const convId = msg.conversationId || agentConversationId || store.yeaftConversationId;
   if (!convId) {
     store.yeaftLoadingMoreHistory = false;
     return;
@@ -465,7 +472,6 @@ export function handleYeaftHistoryChunk(store, msg) {
   // The chunk's sessionId is authoritative — it's stamped by the agent
   // from the request sessionId, not from messagesMap state.
   const activeFilter = store.yeaftActiveSessionFilter ?? null;
-  const msgSessionId = msg.sessionId != null ? msg.sessionId : msg.groupId;
   const hasChunkGroup = msgSessionId != null;
   if (hasChunkGroup && activeFilter && msgSessionId !== activeFilter) {
     const staleKey = msgSessionId ?? '__all__';

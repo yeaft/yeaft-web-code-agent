@@ -182,7 +182,7 @@ export class TaskManager {
     return publicSnapshot(task);
   }
 
-  #completeTask(sessionId, taskId, { status, exitCode = null, signal = null, error = null } = {}) {
+  #completeTask(sessionId, taskId, { status, exitCode = null, signal = null, error = null, summary = null } = {}) {
     const key = this.#key(sessionId, taskId);
     const task = this.active.get(key) || this.store.readTask(sessionId, taskId);
     if (!task || isTerminalTaskStatus(task.status)) return publicSnapshot(task);
@@ -192,9 +192,9 @@ export class TaskManager {
     task.updatedAt = nowIso();
     task.endedAt = nowIso();
     task.log = { ...(task.log || {}), path: tail.path, bytes: tail.bytes, preview: tail.text };
-    task.result = { ...(task.result || {}), exitCode, signal, error };
+    task.result = { ...(task.result || {}), exitCode, signal, error, summary };
     this.store.writeTask(task);
-    this.store.appendEvent(sessionId, { event: 'completed', taskId, status: task.status, exitCode, signal, error });
+    this.store.appendEvent(sessionId, { event: 'completed', taskId, status: task.status, exitCode, signal, error, summary });
     this.active.delete(key);
     this.processes.delete(key);
     this.#emit('completed', task);

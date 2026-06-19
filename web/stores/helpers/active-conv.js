@@ -28,10 +28,21 @@
  */
 export function selectActiveConversationId(state) {
   if (state.currentView === 'yeaft') {
-    // Hardening: when in Yeaft and the session hasn't issued
-    // `session_ready` yet, return null. We deliberately do NOT fall
-    // back to `activeConversations[0]` — that's exactly the bleed path.
-    return state.yeaftConversationId || null;
+    // Cross-agent Yeaft sessions do not share an agent-side conversationId:
+    // every local agent process owns its own virtual conversation. In Yeaft
+    // view, prefer the conversation owned by the active session's agent; if
+    // the session row is not known yet, fall back to the current Yeaft agent.
+    // This prevents A -> B -> A switches from rendering A rows out of B's
+    // message cache just because B was the last agent to replay session_ready.
+    const sessionId = state.yeaftActiveSessionFilter || null;
+    const sessionAgentId = sessionId && state.yeaftSessionAgentById
+      ? state.yeaftSessionAgentById[sessionId]
+      : null;
+    const agentId = sessionAgentId || state.yeaftAgentId || null;
+    const agentConversationId = agentId && state.yeaftConversationIdsByAgent
+      ? state.yeaftConversationIdsByAgent[agentId]
+      : null;
+    return agentConversationId || state.yeaftConversationId || null;
   }
   // Chat and Crew share `activeConversations[0]`. Crew runs alongside
   // chat in the same conversation list, so the same selector serves

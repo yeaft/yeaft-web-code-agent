@@ -304,7 +304,7 @@
 
 .yeaft-model-list {
   min-width: 0;
-  max-height: 220px;
+  max-height: 320px;
   overflow-y: auto;
 }
 
@@ -378,6 +378,10 @@
   transition: background 0.12s;
 }
 
+.yeaft-model-option-with-effort {
+  align-items: center;
+}
+
 .yeaft-model-option:hover {
   background: var(--sidebar-hover);
 }
@@ -439,49 +443,23 @@
   opacity: 0.75;
 }
 
-.yeaft-model-effort-panel {
-  padding: 8px;
-  border-radius: 8px;
-  background: transparent;
-}
-
-.yeaft-model-effort-title {
-  margin-bottom: 6px;
+.yeaft-model-effort-chip {
+  flex-shrink: 0;
+  align-self: center;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 3px 8px;
   font-size: 11px;
   font-weight: 600;
-  color: var(--text-muted);
-}
-
-.yeaft-model-effort-options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.yeaft-model-effort-option {
-  border: 1px solid var(--border-color);
-  background: transparent;
   color: var(--text-secondary);
-  border-radius: 8px;
-  padding: 5px 9px;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
+  background: var(--bg-input-wrapper);
 }
 
-.yeaft-model-effort-option:hover {
-  background: var(--sidebar-hover);
-  color: var(--text-primary);
-}
-
-.yeaft-model-effort-option.active {
+.yeaft-model-option.active .yeaft-model-effort-chip {
   border-color: var(--accent-blue);
-  background: var(--session-active);
   color: var(--text-primary);
-  font-weight: 600;
+  background: var(--session-active);
 }
-
-
 
 @media (max-width: 640px) {
   .yeaft-topbar-model {
@@ -4298,7 +4276,7 @@
 }
 
 .yeaft-vp-task-detail {
-  margin: 6px 0 2px;
+  margin: 4px 0 2px;
   padding-left: 22px;
   color: var(--text-muted);
   font-size: 12px;
@@ -4307,18 +4285,17 @@
 
 .yeaft-vp-task-log,
 .yeaft-vp-task-log-empty {
-  max-height: 150px;
+  max-height: 180px;
   overflow: auto;
   margin: 0;
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: var(--bg-input-wrapper);
+  padding: 6px 0 6px 8px;
+  background: transparent;
   color: var(--text-secondary);
 }
 
 .yeaft-vp-task-log {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .yeaft-vp-task-log-empty {
