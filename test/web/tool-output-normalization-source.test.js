@@ -40,14 +40,28 @@ describe('terminal output normalization render wiring', () => {
     expect(terminalOutputSource).not.toContain('v-html');
   });
 
-  it('styles background task logs as a plain terminal region', () => {
+  it('styles background task logs inside a subtle detail region', () => {
+    const taskDetailBlock = yeaftCssSource.match(/\.yeaft-vp-task-detail \{[\s\S]*?\n\}/)?.[0] || '';
     const taskLogBlock = yeaftCssSource.match(/\.yeaft-vp-task-log,\n\.yeaft-vp-task-log-empty \{[\s\S]*?\n\}/)?.[0] || '';
 
+    expect(taskDetailBlock).toContain('background: var(--bg-user-msg-subtle);');
+    expect(taskDetailBlock).toContain('border-radius: 8px;');
     expect(taskLogBlock).toContain('background: transparent;');
     expect(taskLogBlock).not.toContain('border:');
-    expect(taskLogBlock).not.toContain('border-radius:');
     expect(variablesCssSource).toContain('.terminal-fg-green { color: var(--terminal-fg-green); }');
     expect(variablesCssSource).toContain('.terminal-bg-cyan { background-color: var(--terminal-bg-cyan); }');
     expect(variablesCssSource).toContain('.terminal-output');
+  });
+
+  it('formats sub-agent task JSONL into human readable detail lines', () => {
+    expect(vpTimelinePaneSource).toContain('const friendlySubAgentEvent = (event) => {');
+    expect(vpTimelinePaneSource).toContain("case 'sub_agent_spawned':");
+    expect(vpTimelinePaneSource).toContain("$t('yeaft.sessionStatus.task.subAgentStartedWithMission'");
+    expect(vpTimelinePaneSource).toContain('v-if="task.kind === \'sub_agent\'"');
+    expect(vpTimelinePaneSource).toContain('const compactText = (value, maxLength = 360) => {');
+    expect(vpTimelinePaneSource).toContain("case 'text_delta':");
+    expect(vpTimelinePaneSource).toContain("$t('yeaft.sessionStatus.task.subAgentNoReadableEvents')");
+    expect(vpTimelinePaneSource).toContain('{{ taskKindLabel(task) }}');
+    expect(vpTimelinePaneSource).not.toContain('{{ task.log.preview }}');
   });
 });

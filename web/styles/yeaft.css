@@ -4215,11 +4215,11 @@
 .yeaft-vp-task-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
 }
 
 .yeaft-vp-task-item {
-  border-radius: 10px;
+  border-radius: 0;
 }
 
 .yeaft-vp-task-summary {
@@ -4228,10 +4228,10 @@
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 42px;
-  padding: 7px 8px;
+  min-height: 38px;
+  padding: 5px 4px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 8px;
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
@@ -4240,9 +4240,13 @@
 }
 
 .yeaft-vp-task-summary:hover,
-.yeaft-vp-task-summary:focus-visible,
-.yeaft-vp-task-item.is-expanded .yeaft-vp-task-summary {
+.yeaft-vp-task-summary:focus-visible {
   background: var(--sidebar-hover);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.yeaft-vp-task-item.is-expanded .yeaft-vp-task-summary {
   color: var(--text-primary);
   outline: none;
 }
@@ -4298,11 +4302,24 @@
 }
 
 .yeaft-vp-task-detail {
-  margin: 4px 0 2px;
-  padding-left: 22px;
+  margin: 4px 0 6px 22px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: var(--bg-user-msg-subtle);
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.yeaft-vp-task-detail-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.yeaft-vp-task-detail-line {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }
 
 .yeaft-vp-task-log,
@@ -4310,7 +4327,7 @@
   max-height: 180px;
   overflow: auto;
   margin: 0;
-  padding: 6px 0 6px 8px;
+  padding: 0;
   background: transparent;
   color: var(--text-secondary);
 }
