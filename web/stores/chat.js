@@ -1906,7 +1906,10 @@ export const useChatStore = defineStore('chat', {
               if (payload.error) next.error = payload.error;
               break;
             case 'text_delta':
-              if (typeof payload.text === 'string') next.text += payload.text;
+              // Sub-agent text is intentionally delivered as one complete
+              // result via sub_agent_turn_end. Older agents may still emit
+              // deltas; ignore them here so the card doesn't present a
+              // partial streamed answer as the final result.
               break;
             case 'tool_start':
             case 'tool_use':
@@ -1936,7 +1939,7 @@ export const useChatStore = defineStore('chat', {
               next.turns += 1;
               if (typeof payload.content === 'string') next.text = payload.content;
               if (next.status !== 'failed' && next.status !== 'closed') {
-                next.status = 'idle';
+                next.status = payload.status || 'idle';
               }
               break;
             case 'error':

@@ -979,13 +979,13 @@ describe('driver finally cleanup', () => {
     expect(agent.outputFile.length).toBeGreaterThan(0);
   });
 
-  it('a thrown listener does not stop liveness from being bumped', async () => {
+  it('does not stream sub-agent text deltas to the live listener', async () => {
     const adapter = new TextAdapter('hi');
     const events = [];
     const deps = mkDeps(adapter, {
       onEvent: (id, evt) => {
         events.push(evt.type);
-        if (evt.type === 'text_delta') throw new Error('listener boom');
+        if (evt.type === 'stop') throw new Error('listener boom');
       },
     });
     const out = JSON.parse(await agentTool.execute(
@@ -997,7 +997,8 @@ describe('driver finally cleanup', () => {
     await settle(agent, 2000);
     expect(agent.liveness.tokenCount).toBeGreaterThan(0);
     expect(agent.status).toBe(STATUS.IDLE);
-    expect(events).toContain('text_delta');
+    expect(events).not.toContain('text_delta');
+    expect(events).toContain('sub_agent_turn_end');
   });
 
   it('closing a running agent preserves the explicit close result', async () => {
@@ -1403,10 +1404,12 @@ describe('list-agents envelope', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yeaft-sub-agent-task-'));
     try {
       const taskManager = new TaskManager({ yeaftDir: dir });
+      const events = [];
       const deps = mkDeps(new TextAdapter('task backed done'), {
         parentSessionId: 'session-task-backed',
         idleAbandonMs: 50,
         taskManager,
+        onEvent: (_id, evt) => events.push(evt),
       });
       const out = JSON.parse(await agentTool.execute(
         { name: 'task-backed-finish', mission: 'finish async' },
@@ -1422,6 +1425,12 @@ describe('list-agents envelope', () => {
       expect(agent.status).toBe(STATUS.COMPLETED);
       expect(taskManager.getTask('session-task-backed', out.taskId).status).toBe('succeeded');
       expect(taskManager.getTask('session-task-backed', out.taskId).result.summary).toContain('task backed done');
+      expect(events.some(evt => evt.type === 'text_delta')).toBe(false);
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'sub_agent_turn_end',
+        status: STATUS.COMPLETED,
+        content: expect.stringContaining('task backed done'),
+      }));
       await new Promise(r => setTimeout(r, 80));
       expect(agent.status).toBe(STATUS.COMPLETED);
       expect(agent.status).not.toBe(STATUS.ABANDONED);
