@@ -258,6 +258,42 @@ const vpDrivers = new Map();
 const vpEngines = new Map();
 /** @type {Map<string, AbortController>} */
 const vpAborts = new Map();
+
+/**
+ * Owner index for background tasks currently parked on a running engine.
+ * Populated by the per-engine async-task coordinator at register time;
+ * cleared at notify time or when the engine teardown unregisters whatever
+ * it didn't get to deliver. Used by `scheduleTaskResultReentry` to pick
+ * "same-turn injection" over the legacy "new turn" rescue path when the
+ * engine is still live.
+ * @type {Map<string, import('./engine.js').Engine>}
+ */
+const asyncTaskOwners = new Map();
+
+/**
+ * Build a coordinator for a freshly-constructed engine. The coordinator
+ * keeps `asyncTaskOwners` in sync so a `taskManager` `completed` event
+ * can find the engine that launched it in O(1).
+ *
+ * Defined as a factory (not a single shared object) so each engine's
+ * `onRegister` callback closes over its own engine reference — sub-agents
+ * inherit a coordinator that still associates their tasks with the
+ * sub-engine, not the parent.
+ *
+ * @returns {{ onRegister: (taskId: string, engine: import('./engine.js').Engine) => void, onUnregister: (taskId: string) => void }}
+ */
+function buildAsyncTaskCoordinator() {
+  return {
+    onRegister(taskId, engine) {
+      if (typeof taskId !== 'string' || !taskId) return;
+      asyncTaskOwners.set(taskId, engine);
+    },
+    onUnregister(taskId) {
+      if (typeof taskId !== 'string' || !taskId) return;
+      asyncTaskOwners.delete(taskId);
+    },
+  };
+}
 /**
  * Per-(sessionId, vpId) current TodoWrite list. Each VP in a group keeps
  * its own todo state so two VPs in the same group can independently
@@ -956,6 +992,15 @@ function getOrCreateVpEngine(sessionId, vpId, threadId = 'main') {
     sessionId,
     vpId,
   });
+  // Install the async-task coordinator so background tasks launched
+  // from this engine register against the shared owner map and
+  // `scheduleTaskResultReentry` can deliver terminal events back into
+  // the same query() instead of opening a fresh turn.
+  try {
+    if (typeof eng.setAsyncTaskCoordinator === 'function') {
+      eng.setAsyncTaskCoordinator(buildAsyncTaskCoordinator());
+    }
+  } catch { /* coordinator is best-effort plumbing, never block engine creation */ }
   vpEngines.set(key, eng);
   return eng;
 }
@@ -1053,6 +1098,36 @@ function scheduleTaskResultReentry(event) {
   const vpId = task.ownerVpId || null;
   if (!sessionId || !vpId) return;
   const threadId = task.source?.threadId || task.runtime?.threadId || 'main';
+  const formatted = formatTaskResultForVp(task);
+
+  // Same-turn fast path: when the engine that launched this task is
+  // still running its query() AND has parked on the wait queue, hand
+  // the result straight in — it splices into the very next adapter
+  // loop with no new turn / new VP envelope. Falls through to the
+  // legacy "open a new turn" rescue path when:
+  //   - the engine already finished (typical orphan / late completion),
+  //   - the engine was torn down between register and complete, or
+  //   - the task wasn't registered with the engine in the first place
+  //     (e.g. legacy `taskManager.startTask` callers that bypass tools).
+  const ownerEngine = asyncTaskOwners.get(task.id);
+  if (ownerEngine
+      && typeof ownerEngine.ownsPendingAsyncTask === 'function'
+      && ownerEngine.ownsPendingAsyncTask(task.id)
+      && typeof ownerEngine.notifyAsyncTaskCompleted === 'function') {
+    try {
+      const accepted = ownerEngine.notifyAsyncTaskCompleted(task.id, formatted, {
+        preview: `task ${task.kind || 'tool'} ${task.status}`,
+      });
+      if (accepted) {
+        asyncTaskOwners.delete(task.id);
+        return;
+      }
+    } catch {
+      // Same-turn delivery is best-effort. Fall through to the legacy
+      // rescue path so we never drop a terminal event on the floor.
+    }
+  }
+
   const msgId = `task_result_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`;
   queueMicrotask(() => {
     enqueueForVp(sessionId, vpId, {
@@ -1064,7 +1139,7 @@ function scheduleTaskResultReentry(event) {
         id: msgId,
         from: 'tool',
         role: 'assistant',
-        text: formatTaskResultForVp(task),
+        text: formatted,
         meta: {
           injectedBy: 'task_result',
           taskId: task.id,
@@ -1399,6 +1474,7 @@ export async function __testResetVpState() {
   vpInboxes.clear();
   vpDrivers.clear();
   vpEngines.clear();
+  asyncTaskOwners.clear();
   vpAborts.clear();
   sessionContexts.clear();
   vpCurrentTodos.clear();
@@ -4160,6 +4236,7 @@ export function handleYeaftModelSwitch(msg) {
   // Engines would otherwise keep the old effective config and drop newly
   // selected effort values until process restart.
   vpEngines.clear();
+  asyncTaskOwners.clear();
 
   sendSessionEvent({
     type: 'model_switched',
@@ -4501,6 +4578,7 @@ export async function resetYeaftSession() {
   vpInboxes.clear();
   vpDrivers.clear();
   vpEngines.clear();
+  asyncTaskOwners.clear();
   sessionContexts.clear();
   vpCurrentTodos.clear();
   threadClassifier = defaultClassifyThread;

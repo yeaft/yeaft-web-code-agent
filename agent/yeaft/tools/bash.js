@@ -246,6 +246,12 @@ Guidelines:
             threadId: ctx.threadId || 'main',
           },
         });
+        // Same-turn parking: tell the engine "this turn has an async
+        // task in flight". The engine refuses to finalize end_turn
+        // while the set is non-empty and will splice the task result
+        // into the next adapter loop when it terminates. No-op when
+        // the engine didn't wire the hook (legacy callers / tests).
+        try { ctx.registerAsyncTask?.(task.id); } catch { /* never block tool return on coord errors */ }
         return `Started background task ${task.id}.\nStatus: ${task.status}\nLog: ${task.log?.path || ''}\nUse ListTasks, ReadTaskLog, or CancelTask to inspect or control it.`;
       } catch (err) {
         return JSON.stringify({ error: err?.message || String(err) });

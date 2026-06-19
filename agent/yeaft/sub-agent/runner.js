@@ -156,6 +156,12 @@ export function startSubAgent(agent, deps = {}) {
     toolStats: deps.toolStats || null,
     taskManager: deps.taskManager || null,
   });
+  // Same-turn async-task plumbing: inherit the parent's coordinator so a
+  // background bash launched FROM this sub-agent registers itself against
+  // the shared owner map and its terminal event reaches the sub-engine.
+  if (deps.asyncTaskCoordinator && typeof subEngine.setAsyncTaskCoordinator === 'function') {
+    subEngine.setAsyncTaskCoordinator(deps.asyncTaskCoordinator);
+  }
 
   agent.subEngine = subEngine;
   agent.engineMessages = agent.engineMessages || [];
