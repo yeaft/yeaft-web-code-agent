@@ -6,7 +6,7 @@ vi.mock('../../../agent/connection/buffer.js', () => ({
   sendToServer: vi.fn((msg) => { sent.push(msg); }),
 }));
 
-const { handleYeaftAbortTurn, __testHooks } = await import('../../../agent/yeaft/web-bridge.js');
+const { handleYeaftAbortTurn, __testHandleEngineEvent, __testHooks } = await import('../../../agent/yeaft/web-bridge.js');
 
 describe('Yeaft VP turn abort routing', () => {
   beforeEach(() => {
@@ -84,5 +84,43 @@ describe('Yeaft VP turn abort routing', () => {
     expect(sent.some((msg) => msg.event?.type === 'yeaft_turn_aborted'
       && msg.event.turnIds?.includes('turn-a')
       && msg.event.success === true)).toBe(true);
+  });
+
+  it('forwards final stream idle error metadata as a structured session event', () => {
+    const err = new Error('OpenAI stream idle timeout after 20000ms');
+    err.name = 'LLMStreamIdleTimeoutError';
+
+    __testHandleEngineEvent({
+      type: 'error',
+      error: err,
+      retryable: true,
+      reason: 'stream_idle_timeout',
+      retryExhausted: true,
+    }, {
+      resetQueryTimer: vi.fn(),
+      sessionId: 'session-1',
+      vpId: 'vp-a',
+      turnId: 'turn-a',
+      threadId: 'main',
+    });
+
+    expect(sent).toContainEqual(expect.objectContaining({
+      type: 'yeaft_output',
+      sessionId: 'session-1',
+      vpId: 'vp-a',
+      turnId: 'turn-a',
+      event: expect.objectContaining({
+        type: 'error',
+        message: 'OpenAI stream idle timeout after 20000ms',
+        errorName: 'LLMStreamIdleTimeoutError',
+        retryable: true,
+        reason: 'stream_idle_timeout',
+        retryExhausted: true,
+      }),
+    }));
+    expect(sent).toContainEqual(expect.objectContaining({
+      type: 'yeaft_output',
+      data: expect.objectContaining({ type: 'assistant' }),
+    }));
   });
 });

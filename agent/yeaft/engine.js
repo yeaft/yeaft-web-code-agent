@@ -22,7 +22,7 @@ import { promises as fsp } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { getRuntimePlatformInfo } from './runtime-platform.js';
-import { LLMContextError, LLMAbortError, LLMRateLimitError, LLMServerError } from './llm/adapter.js';
+import { LLMContextError, LLMAbortError, LLMRateLimitError, LLMServerError, LLMStreamIdleTimeoutError } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes } from './sessions/pre-flow.js';
 import { readProjectDoc, pickProjectDocFile, DEFAULT_PROJECT_DOC_MAX_BYTES } from './sessions/project-doc.js';
 import { partitionMessages } from './compact/partition.js';
@@ -300,9 +300,10 @@ export function shouldAllowGroupReflection({
  * @typedef {{ type: 'consolidate', archivedCount: number, extractedCount: number }} ConsolidateEvent
  * @typedef {{ type: 'recall', entryCount: number, cached: boolean }} RecallEvent
  * @typedef {{ type: 'fallback', from: string, to: string, reason: string }} FallbackEvent
- * @typedef {{ type: 'llm_retry', attempt: number, maxRetries: number, delayMs: number, reason: 'rate_limit_retry_after'|'rate_limit_backoff'|'transient_backoff', errorName: string, statusCode: number|null, message: string }} LlmRetryEvent
+ * @typedef {{ type: 'llm_retry', attempt: number, maxRetries: number, delayMs: number, reason: 'rate_limit_retry_after'|'rate_limit_backoff'|'transient_backoff'|'stream_idle_timeout', errorName: string, statusCode: number|null, message: string }} LlmRetryEvent
+ * @typedef {{ type: 'error', error: Error, retryable: boolean, reason?: 'stream_idle_timeout', retryExhausted?: boolean }} ErrorEvent
  *
- * @typedef {import('./llm/adapter.js').StreamEvent | TurnStartEvent | TurnEndEvent | ToolStartEvent | ToolEndEvent | ConsolidateEvent | RecallEvent | FallbackEvent | LlmRetryEvent} EngineEvent
+ * @typedef {import('./llm/adapter.js').StreamEvent | TurnStartEvent | TurnEndEvent | ToolStartEvent | ToolEndEvent | ConsolidateEvent | RecallEvent | FallbackEvent | LlmRetryEvent | ErrorEvent} EngineEvent
  */
 
 // ─── Engine ──────────────────────────────────────────────────────
@@ -2322,12 +2323,13 @@ export class Engine {
           }
         }
 
-        // ─── Rate-limit / transient retry ─────────────────
+        // ─── Rate-limit / transient / stream-idle retry ───
         // Honour server-supplied Retry-After for 429/529; fall back to
-        // exponential backoff for 5xx and transport failures wrapped as
-        // LLMServerError. Counts against retryPolicy.maxRetries; on
-        // exhaustion we fall through to the fallback-model path (and
-        // ultimately the error event) without further waiting.
+        // exponential backoff for 5xx, transport failures, and stream-idle
+        // timeouts wrapped as LLMServerError. Counts against
+        // retryPolicy.maxRetries; on exhaustion we fall through to the
+        // fallback-model path (and ultimately the error event) without
+        // further waiting.
         const isRateLimit = err instanceof LLMRateLimitError;
         const isTransient = err instanceof LLMServerError;
         if (isRateLimit || isTransient) {
@@ -2349,7 +2351,9 @@ export class Engine {
               reason = 'rate_limit_backoff';
             } else {
               delayMs = computeBackoffDelay(retryPolicy, consecutiveRetryableErrors - 1);
-              reason = 'transient_backoff';
+              reason = err instanceof LLMStreamIdleTimeoutError
+                ? 'stream_idle_timeout'
+                : 'transient_backoff';
             }
             yield {
               type: 'llm_retry',
@@ -2376,7 +2380,7 @@ export class Engine {
         // ─── Fallback model ──────────────────────────────
         const fallbackModel = this.#config.fallbackModel;
         if (fallbackModel && fallbackModel !== currentModel &&
-            (err.name === 'LLMRateLimitError' || err.name === 'LLMServerError')) {
+            (err instanceof LLMRateLimitError || err instanceof LLMServerError)) {
           yield { type: 'fallback', from: currentModel, to: fallbackModel, reason: err.message };
           currentModel = fallbackModel;
           consecutiveRetryableErrors = 0; // new model, fresh retry budget
@@ -2384,11 +2388,17 @@ export class Engine {
           continue; // retry with fallback model
         }
 
-        yield {
+        const isRetryableError = err instanceof LLMRateLimitError || err instanceof LLMServerError;
+        const errorEvent = {
           type: 'error',
           error: err,
-          retryable: err.name === 'LLMRateLimitError' || err.name === 'LLMServerError',
+          retryable: isRetryableError,
         };
+        if (err instanceof LLMStreamIdleTimeoutError) {
+          errorEvent.reason = 'stream_idle_timeout';
+          errorEvent.retryExhausted = consecutiveRetryableErrors >= retryPolicy.maxRetries;
+        }
+        yield errorEvent;
         yield { type: 'turn_end', turnNumber, stopReason: 'error', threadId };
         break;
       }
