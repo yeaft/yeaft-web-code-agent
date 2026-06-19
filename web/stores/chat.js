@@ -80,6 +80,18 @@ function resolveActiveDreamDebugSessionId(state) {
   return null;
 }
 
+function resolveYeaftConversationIdForSession(state, sessionId = null) {
+  const targetSessionId = sessionId || state?.yeaftActiveSessionFilter || null;
+  const sessionAgentId = targetSessionId && state?.yeaftSessionAgentById
+    ? state.yeaftSessionAgentById[targetSessionId]
+    : null;
+  const agentId = sessionAgentId || state?.yeaftAgentId || null;
+  const agentConversationId = agentId && state?.yeaftConversationIdsByAgent
+    ? state.yeaftConversationIdsByAgent[agentId]
+    : null;
+  return agentConversationId || state?.yeaftConversationId || null;
+}
+
 // feat-6af5f9f1 PR C: turnMatchesSearch lives in helpers/debug-search.js
 // so it can be unit-tested without the Pinia browser globals.
 
@@ -385,7 +397,9 @@ export const useChatStore = defineStore('chat', {
     // Yeaft 独立页面状态
     // =====================
     currentView: 'chat',           // 'chat' | 'yeaft' — 顶级页面切换
-    yeaftConversationId: null,     // 虚拟 conversationId（从 agent session_ready 获取）
+    yeaftConversationId: null,     // 当前 Yeaft agent 的虚拟 conversationId（从 agent session_ready 获取）
+    yeaftConversationIdsByAgent: {}, // { [agentId]: conversationId } 跨机器 agent 的 Yeaft message cache 隔离
+    yeaftSessionAgentById: {},      // { [sessionId]: agentId } 用 active session 反查所属 agent 的 conversationId
     yeaftModel: null,              // agent/default Yeaft 模型名；Session override lives in sessions[].config.model
     yeaftModelEffort: null,        // agent/default effort；Session override lives in sessions[].config.modelEffort
     yeaftAgentId: null,            // 绑定的 agent ID
@@ -607,11 +621,11 @@ export const useChatStore = defineStore('chat', {
     },
     // ★ Yeaft: the raw message list for the active Yeaft conversation (no thread filter applied).
     yeaftAllMessages: (state) => {
-      const convId = state.yeaftConversationId;
+      const convId = resolveYeaftConversationIdForSession(state);
       return convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
     },
     yeaftVisibleMessages(state) {
-      const convId = state.yeaftConversationId;
+      const convId = resolveYeaftConversationIdForSession(state);
       const raw = convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
       const scoped = state.yeaftActiveSessionFilter
         ? raw.filter(m => m && (m.sessionId ?? m.groupId) === state.yeaftActiveSessionFilter)
@@ -623,7 +637,7 @@ export const useChatStore = defineStore('chat', {
     },
     hasHiddenYeaftMessages(state) {
       if (state.currentView !== 'yeaft') return false;
-      const convId = state.yeaftConversationId;
+      const convId = resolveYeaftConversationIdForSession(state);
       const raw = convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
       const scoped = state.yeaftActiveSessionFilter
         ? raw.filter(m => m && (m.sessionId ?? m.groupId) === state.yeaftActiveSessionFilter)
@@ -1061,8 +1075,21 @@ export const useChatStore = defineStore('chat', {
         this.yeaftModelsRefreshing = true;
         this.yeaftModelRefreshError = null;
       }
-      // Create a local conversationId immediately so MessageList has something to render
-      if (!this.yeaftConversationId) {
+      // Create/select a per-agent local conversationId immediately so
+      // MessageList has something to render. A/B agents run distinct Yeaft
+      // bridges, so sharing one global placeholder lets their history frames
+      // collide before session_ready has replayed.
+      if (this.yeaftAgentId) {
+        let agentConvId = this.yeaftConversationIdsByAgent?.[this.yeaftAgentId] || null;
+        if (!agentConvId) {
+          agentConvId = `yeaft-local-${this.yeaftAgentId}-${Date.now()}`;
+          this.yeaftConversationIdsByAgent = {
+            ...(this.yeaftConversationIdsByAgent || {}),
+            [this.yeaftAgentId]: agentConvId,
+          };
+        }
+        this.yeaftConversationId = agentConvId;
+      } else if (!this.yeaftConversationId) {
         this.yeaftConversationId = `yeaft-local-${Date.now()}`;
       }
       if (!this.messagesMap[this.yeaftConversationId]) {
@@ -1136,7 +1163,11 @@ export const useChatStore = defineStore('chat', {
       const needHistoryCatchUp = !!activeSessionId
         && msgHelpers.shouldCatchUpLoadedYeaftSession(sessionState, catchUpHistory);
       if (!needSessionReady && !needHistoryReplay && !needHistoryCatchUp) return false;
-      const metaKey = `${this.yeaftAgentId}:${activeSessionId || '__none__'}`;
+      const sessionAgentId = activeSessionId && this.yeaftSessionAgentById
+        ? this.yeaftSessionAgentById[activeSessionId]
+        : null;
+      const targetAgentId = sessionAgentId || this.yeaftAgentId;
+      const metaKey = `${targetAgentId}:${activeSessionId || '__none__'}`;
       const metadataOnly = needSessionReady && !needHistoryReplay && !needHistoryCatchUp;
       if (metadataOnly && this.yeaftBootstrapMetaLoadingKey === metaKey) return false;
       if (metadataOnly) this.yeaftBootstrapMetaLoadingKey = metaKey;
@@ -1155,7 +1186,7 @@ export const useChatStore = defineStore('chat', {
       }
       const payload = {
         type: 'yeaft_load_history',
-        agentId: this.yeaftAgentId,
+        agentId: targetAgentId,
         sessionId: activeSessionId,
       };
       if (needHistoryCatchUp) payload.afterSeq = latestSeq;
@@ -1260,7 +1291,8 @@ export const useChatStore = defineStore('chat', {
       if (!text?.trim() && !hasAttachments) return;
       const effectiveText = text?.trim() ? text : '(attached files)';
       const clientMessageId = `u_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-      if (this.yeaftConversationId) {
+      const activeYeaftConvId = resolveYeaftConversationIdForSession(this, groupId);
+      if (activeYeaftConvId) {
         const localMsg = {
           id: clientMessageId,
           messageId: clientMessageId,
@@ -1285,20 +1317,20 @@ export const useChatStore = defineStore('chat', {
             mimeType: a.mimeType || '',
           }));
         }
-        this.addMessageToConversation(this.yeaftConversationId, localMsg);
-        this.processingConversations[this.yeaftConversationId] = true;
+        this.addMessageToConversation(activeYeaftConvId, localMsg);
+        this.processingConversations[activeYeaftConvId] = true;
         if (groupId) {
           this.yeaftProcessingSessions = {
             ...this.yeaftProcessingSessions,
             [groupId]: true,
           };
         }
-        this._turnCompletedConvs?.delete(this.yeaftConversationId);
-        if (this._closedAt?.[this.yeaftConversationId]) {
-          delete this._closedAt[this.yeaftConversationId];
+        this._turnCompletedConvs?.delete(activeYeaftConvId);
+        if (this._closedAt?.[activeYeaftConvId]) {
+          delete this._closedAt[activeYeaftConvId];
         }
-        this.getOrCreateExecutionStatus(this.yeaftConversationId);
-        watchdogHelpers.startYeaftWatchdog(this, this.yeaftConversationId);
+        this.getOrCreateExecutionStatus(activeYeaftConvId);
+        watchdogHelpers.startYeaftWatchdog(this, activeYeaftConvId);
       }
       const wsMsg = {
         type: 'yeaft_session_send',
@@ -1439,20 +1471,28 @@ export const useChatStore = defineStore('chat', {
       switch (event.type) {
         case 'session_ready': {
           const agentConvId = event.conversationId;
-          const localConvId = this.yeaftConversationId;
+          const statusAgentId = msg.agentId || this.yeaftAgentId || this.currentAgent;
+          const previousAgentConvId = statusAgentId && this.yeaftConversationIdsByAgent
+            ? this.yeaftConversationIdsByAgent[statusAgentId]
+            : null;
+          const currentConvId = this.yeaftConversationId ? String(this.yeaftConversationId) : '';
+          const fallbackLocalConvId = currentConvId.startsWith('yeaft-local-')
+            && (!statusAgentId || currentConvId.startsWith(`yeaft-local-${statusAgentId}-`) || /^yeaft-local-\d/.test(currentConvId))
+            ? this.yeaftConversationId
+            : null;
+          const localConvId = previousAgentConvId || fallbackLocalConvId;
 
-          // Migrate messages from local placeholder to agent's conversationId.
-          // On Yeaft re-entry the server may replay session_ready with the same
-          // agent conversation id while a fresh local placeholder is active.
-          // Merge instead of replacing so cached/live rows don't disappear and
-          // then reappear when group history lands.
+          // Migrate messages from this agent's local placeholder to this
+          // agent's conversationId. Do not merge the last globally-active
+          // conversation blindly: with multiple machines, B's session_ready can
+          // arrive while A's cache is still the global yeaftConversationId.
           if (localConvId && localConvId !== agentConvId) {
             const existingMsgs = this.messagesMap[localConvId] || [];
             const targetMsgs = this.messagesMap[agentConvId] || [];
             this.messagesMap[agentConvId] = msgHelpers
               .mergeMessagesByStableId(targetMsgs, existingMsgs)
               .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-            delete this.messagesMap[localConvId];
+            if (localConvId.startsWith('yeaft-local-')) delete this.messagesMap[localConvId];
             // Migrate processing state
             if (this.processingConversations[localConvId]) {
               this.processingConversations[agentConvId] = true;
@@ -1468,9 +1508,12 @@ export const useChatStore = defineStore('chat', {
           }
 
           this.yeaftConversationId = agentConvId;
-          const statusAgentId = msg.agentId || this.yeaftAgentId || this.currentAgent;
           if (statusAgentId) {
             this.yeaftAgentId = statusAgentId;
+            this.yeaftConversationIdsByAgent = {
+              ...(this.yeaftConversationIdsByAgent || {}),
+              [statusAgentId]: agentConvId,
+            };
             this.cacheYeaftAgentStatus(statusAgentId, event);
           }
           this.yeaftModel = event.model;
@@ -2811,6 +2854,22 @@ export const useChatStore = defineStore('chat', {
         }
       }
       if (targetAgentId && next) {
+        this.yeaftSessionAgentById = {
+          ...(this.yeaftSessionAgentById || {}),
+          [next]: targetAgentId,
+        };
+        let targetConversationId = this.yeaftConversationIdsByAgent?.[targetAgentId] || null;
+        if (!targetConversationId) {
+          targetConversationId = `yeaft-local-${targetAgentId}-${Date.now()}`;
+          this.yeaftConversationIdsByAgent = {
+            ...(this.yeaftConversationIdsByAgent || {}),
+            [targetAgentId]: targetConversationId,
+          };
+        }
+        this.yeaftConversationId = targetConversationId;
+        if (!this.messagesMap[targetConversationId]) this.messagesMap[targetConversationId] = [];
+        if (this.currentView === 'yeaft') this.activeConversations = [targetConversationId];
+
         const latestSeq = Number.isFinite(savedState?.latestSeq) ? savedState.latestSeq : null;
         const payload = {
           type: 'yeaft_load_history',
@@ -3056,8 +3115,16 @@ export const useChatStore = defineStore('chat', {
         delete this.processingConversations[oldConvId];
         delete this.executionStatusMap[oldConvId];
       }
-      // Create a fresh local conversationId
-      this.yeaftConversationId = `yeaft-local-${Date.now()}`;
+      // Create a fresh local conversationId for the current Yeaft agent.
+      this.yeaftConversationId = this.yeaftAgentId
+        ? `yeaft-local-${this.yeaftAgentId}-${Date.now()}`
+        : `yeaft-local-${Date.now()}`;
+      if (this.yeaftAgentId) {
+        this.yeaftConversationIdsByAgent = {
+          ...(this.yeaftConversationIdsByAgent || {}),
+          [this.yeaftAgentId]: this.yeaftConversationId,
+        };
+      }
       this.messagesMap[this.yeaftConversationId] = [];
       this.activeConversations = [this.yeaftConversationId];
       this.yeaftSessionReady = false;
