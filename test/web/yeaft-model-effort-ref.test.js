@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getDefaultModelEffort, modelOptionMatchesRef, modelOptionRef, resolveSessionModelEffort, resolveSessionModelRef } from '../../web/utils/modelRefs.js';
+import { getDefaultModelEffort, getSelectableModelEfforts, modelOptionMatchesRef, modelOptionRef, resolveSessionModelEffort, resolveSessionModelRef } from '../../web/utils/modelRefs.js';
 
 describe('Yeaft model effort provider-qualified refs', () => {
   it('matches topbar model metadata by explicit ref or provider/id pair', () => {
@@ -39,27 +39,35 @@ describe('Yeaft model effort provider-qualified refs', () => {
 });
 
 describe('Yeaft model selector popover contract', () => {
-  it('applies model choice immediately without Apply or Cancel actions', async () => {
+  it('applies a combined model and effort choice immediately without Apply or Cancel actions', async () => {
     const { readFileSync } = await import('fs');
     const source = readFileSync(new URL('../../web/components/YeaftPage.js', import.meta.url), 'utf8');
 
-    expect(source).toContain('@click="selectModel(modelOptionRef(m))"');
-    expect(source).toContain('@click="selectEffort(effort)"');
+    expect(source).toContain('v-for="option in topbarModelOptions"');
+    expect(source).toContain('@click="selectModel(option.modelRef, option.effort)"');
+    expect(source).toContain('yeaft-model-effort-chip');
+    expect(source).toContain('getSelectableModelEfforts');
+    expect(source).toContain('selectableEffortsForModel');
     expect(source).toContain('yeaft-model-option-main');
     expect(source).toContain('yeaft-model-option-meta');
+    expect(source).not.toContain('selectEffort(');
+    expect(source).not.toContain('yeaft-model-effort-panel');
     expect(source).not.toContain('selectPendingModel');
     expect(source).not.toContain('selectPendingEffort');
     expect(source).not.toContain('applyModelSelection');
     expect(source).not.toContain('cancelModelSelection');
   });
 
-  it('uses a fixed bottom controls layout with only the model list scrolling', async () => {
+  it('uses a fixed bottom controls layout with only the combined model list scrolling', async () => {
     const { readFileSync } = await import('fs');
     const css = readFileSync(new URL('../../web/styles/yeaft.css', import.meta.url), 'utf8');
 
     expect(css).toContain('.yeaft-model-selector-body {\n  display: flex;\n  flex-direction: column;');
-    expect(css).toContain('.yeaft-model-list {\n  min-width: 0;\n  max-height: 220px;\n  overflow-y: auto;');
+    expect(css).toContain('.yeaft-model-list {\n  min-width: 0;\n  max-height: 320px;\n  overflow-y: auto;');
     expect(css).toContain('.yeaft-model-fixed-controls {\n  flex-shrink: 0;');
+    expect(css).toContain('.yeaft-model-effort-chip {');
+    expect(css).not.toContain('.yeaft-model-effort-panel');
+    expect(css).not.toContain('.yeaft-model-effort-options');
     expect(css).toContain('.yeaft-model-dropdown {\n  background: var(--bg-main);');
     expect(css).toContain('overflow: hidden;');
     expect(css).not.toContain('grid-template-columns: minmax(0, 1fr) 180px;');
@@ -70,5 +78,12 @@ describe('Yeaft model selector popover contract', () => {
     expect(getDefaultModelEffort(['low', 'medium', 'high'])).toBe('medium');
     expect(getDefaultModelEffort(['low', 'high'])).toBe('low');
     expect(getDefaultModelEffort(['low', 'medium', 'high', 'xhigh'])).toBe('high');
+  });
+
+  it('only exposes medium-or-stronger effort variants in the model menu', () => {
+    expect(getSelectableModelEfforts(['minimal', 'low', 'medium', 'high'])).toEqual(['medium', 'high']);
+    expect(getSelectableModelEfforts(['low', 'medium', 'high', 'xhigh', 'max'])).toEqual(['medium', 'high', 'xhigh', 'max']);
+    expect(getSelectableModelEfforts(['minimal', 'low'])).toEqual([]);
+    expect(getSelectableModelEfforts(['medium', 'medium', 'high'])).toEqual(['medium', 'high']);
   });
 });
