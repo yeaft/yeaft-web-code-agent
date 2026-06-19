@@ -131,7 +131,7 @@ export default {
                     <button type="button" role="menuitem" class="session-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'announcement')">
                       {{ $t('yeaft.session.openSettings') }}
                     </button>
-                    <button type="button" role="menuitem" class="session-menu-item danger" @click="onRemoveFromList(s.raw)">
+                    <button type="button" role="menuitem" class="session-menu-item" @click="onRemoveFromList(s.raw)">
                       {{ $t('yeaft.session.removeFromList') }}
                     </button>
                   </div>

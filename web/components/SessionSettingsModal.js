@@ -5,7 +5,7 @@
  *   - Announcement   (CLAUDE.md-style shared system-prompt prefix)
  *   - Members        (roster checkboxes + ★ default-VP picker)
  *   - Rename         (group display name)
- *   - Danger zone    (delete the group permanently)
+ *   - Delete session (delete the session permanently)
  *
  * Per the design lock: NOT tabs. Always-visible left nav with a single
  * pane on the right, Mac-System-Settings style. Active nav item uses
@@ -303,7 +303,7 @@ export default {
       if (!ms) return '';
       try { return new Date(ms).toLocaleString(); } catch (_) { return ''; }
     },
-    // ── Danger zone (delete) ────────────────────────────────
+    // ── Delete session ──────────────────────────────────────
     async confirmDelete() {
       if (!this.deleteConfirmReady || this.deleteBusy || !this.chat) return;
       this.deleteBusy = true;
@@ -355,7 +355,7 @@ export default {
               :key="s.id"
               type="button"
               class="group-settings-nav-item"
-              :class="{ 'is-active': section === s.id, 'is-danger': s.id === 'danger' }"
+              :class="{ 'is-active': section === s.id }"
               role="tab"
               :aria-selected="section === s.id"
               @click="selectSection(s.id)"
@@ -486,8 +486,8 @@ export default {
               >{{ $t('yeaft.session.settings.memory.lastError', { error: groupDreamStatus.lastError || 'unknown' }) }}</p>
             </div>
 
-            <!-- Danger zone -->
-            <div v-else-if="section === 'danger'" class="group-settings-section group-settings-section-danger">
+            <!-- Delete session -->
+            <div v-else-if="section === 'danger'" class="group-settings-section group-settings-section-delete">
               <h3 class="group-settings-heading">{{ $t('yeaft.session.settings.danger.heading') }}</h3>
               <p class="group-settings-help">{{ $t('yeaft.session.settings.danger.deleteHelp') }}</p>
               <label class="group-settings-field-label">
@@ -504,7 +504,7 @@ export default {
               <div class="group-settings-actions">
                 <button
                   type="button"
-                  class="group-settings-danger-btn"
+                  class="group-settings-delete-btn"
                   :disabled="!deleteConfirmReady || deleteBusy"
                   @click="confirmDelete"
                 >{{ deleteBusy ? $t('yeaft.session.deletingEllipsis') : $t('yeaft.session.settings.danger.deleteBtn') }}</button>

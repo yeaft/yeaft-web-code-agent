@@ -1286,10 +1286,10 @@ export default {
   'yeaft.session.deleteConfirm': 'Delete "{name}"? This permanently removes the session and all its data — this cannot be undone.',
   'yeaft.session.rename': 'Rename',
   // fix-yeaft-session-list-and-menu: sidebar ⋯ menu now mirrors chat
-  // (pin / open settings / remove from list). Real delete stays in the
-  // settings modal's danger zone (uses `yeaft.session.delete*` above).
+  // (pin / open settings / remove from current list). Real delete stays in
+  // the settings modal's Delete session page (uses `yeaft.session.delete*` above).
   'yeaft.session.openSettings': 'Settings',
-  'yeaft.session.removeFromList': 'Remove from list',
+  'yeaft.session.removeFromList': 'Remove from current list (recover from Create)',
   'yeaft.session.manageMembers': 'Manage members',
   'yeaft.session.memberCount.one': '1 member',
   'yeaft.session.memberCount.other': '{count} members',
@@ -1361,7 +1361,7 @@ export default {
   'yeaft.session.settings.nav.members': 'Members',
   'yeaft.session.settings.nav.rename': 'Rename',
   'yeaft.session.settings.nav.memory': 'Memory',
-  'yeaft.session.settings.nav.danger': 'Danger zone',
+  'yeaft.session.settings.nav.danger': 'Delete session',
   'yeaft.session.settings.announcement.heading': 'Session announcement',
   'yeaft.session.settings.announcement.help': 'Shared at the top of every VP\'s system prompt while in this session. Like a CLAUDE.md for the team.',
   'yeaft.session.settings.members.heading': 'Members',
@@ -1375,8 +1375,8 @@ export default {
   'yeaft.session.settings.memory.running': 'Running…',
   'yeaft.session.settings.memory.lastSuccess': 'Last run {time} — {count} target(s) updated.',
   'yeaft.session.settings.memory.lastError': 'Last run failed: {error}',
-  'yeaft.session.settings.danger.heading': 'Danger zone',
-  'yeaft.session.settings.danger.deleteHelp': 'Delete this session permanently. This removes session.json and all message history on disk. Cannot be undone.',
+  'yeaft.session.settings.danger.heading': 'Delete session',
+  'yeaft.session.settings.danger.deleteHelp': 'This permanently deletes the session, removing session.json and all message history on disk. It cannot be undone.',
   'yeaft.session.settings.danger.deleteBtn': 'Delete session',
 
   // ===== task-334j: group view (mentions / replyTo / reject) =====

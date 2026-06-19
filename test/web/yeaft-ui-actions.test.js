@@ -9,6 +9,7 @@ const debugSource = read('components/YeaftDebugPanel.js');
 const timelineSource = read('components/VpTimelinePane.js');
 const settingsSource = read('components/SettingsPanel.js');
 const sessionSettingsSource = read('components/SessionSettingsModal.js');
+const sidebarSource = read('components/YeaftSidebar.js');
 const vpCrudSource = read('components/VpCrudPanel.js');
 const yeaftCss = read('styles/yeaft.css');
 const enI18n = read('i18n/en.js');
@@ -67,11 +68,29 @@ describe('Yeaft UI action polish', () => {
     expect(zhI18n).toContain("'yeaft.debugClose': '关闭调试面板'");
   });
 
+  it('labels session deletion plainly and keeps list removal recoverable', () => {
+    expect(enI18n).toContain("'yeaft.session.settings.nav.danger': 'Delete session'");
+    expect(zhI18n).toContain("'yeaft.session.settings.nav.danger': '删除会话'");
+    expect(enI18n).toContain("'yeaft.session.removeFromList': 'Remove from current list (recover from Create)'");
+    expect(zhI18n).toContain("'yeaft.session.removeFromList': '从当前列表移除（可从创建页恢复）'");
+
+    expect(enI18n).not.toContain('Danger zone');
+    expect(zhI18n).not.toContain('危险操作');
+    expect(sessionSettingsSource).toContain('group-settings-section-delete');
+    expect(sessionSettingsSource).toContain('group-settings-delete-btn');
+    expect(sessionSettingsSource).not.toContain('group-settings-section-danger');
+    expect(sessionSettingsSource).not.toContain('group-settings-danger-btn');
+    expect(sidebarSource).toContain("sessionCrudRequest;\n      if (typeof fn === 'function') fn.call(this.chatStore, 'archive', { sessionId: g.id });");
+    expect(sidebarSource).not.toContain('class="session-menu-item danger" @click="onRemoveFromList');
+  });
+
   it('keeps newly touched Yeaft action CSS on design tokens', () => {
     const touched = [
       '.yeaft-debug-close',
       '.yeaft-vp-timeline-edit',
       '.yeaft-topbar-dream-toggle',
+      '.group-settings-delete-btn',
+      '.group-settings-section-delete .group-settings-heading',
     ];
     for (const selector of touched) {
       const start = yeaftCss.indexOf(selector);
@@ -79,6 +98,7 @@ describe('Yeaft UI action polish', () => {
       const block = yeaftCss.slice(start, yeaftCss.indexOf('}', start) + 1);
       expect(block).not.toMatch(/#[0-9a-f]{3,6}/i);
       expect(block).not.toContain('rgba(');
+      expect(block).not.toContain('var(--error)');
     }
   });
 });
