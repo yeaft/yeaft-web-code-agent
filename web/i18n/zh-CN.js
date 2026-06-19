@@ -1282,10 +1282,10 @@ export default {
   'yeaft.session.deletingEllipsis': '删除中…',
   'yeaft.session.rename': '重命名',
   // fix-yeaft-session-list-and-menu: 侧栏 ⋯ 菜单和 chat 对齐
-  // （置顶 / 设置 / 从列表移除）。真删保留在设置 modal 的危险区域
+  // （置顶 / 设置 / 从当前列表移除）。真删保留在设置 modal 的删除会话页
   // （仍走上面的 `yeaft.session.delete*` 一组 key）。
   'yeaft.session.openSettings': '设置',
-  'yeaft.session.removeFromList': '从列表移除',
+  'yeaft.session.removeFromList': '从当前列表移除（可从创建页恢复）',
   'yeaft.session.manageMembers': '管理成员',
   'yeaft.session.memberCount.one': '1 位成员',
   'yeaft.session.memberCount.other': '{count} 位成员',
@@ -1357,7 +1357,7 @@ export default {
   'yeaft.session.settings.nav.members': '成员',
   'yeaft.session.settings.nav.rename': '重命名',
   'yeaft.session.settings.nav.memory': '会话记忆',
-  'yeaft.session.settings.nav.danger': '危险操作',
+  'yeaft.session.settings.nav.danger': '删除会话',
   'yeaft.session.settings.announcement.heading': '会话公告',
   'yeaft.session.settings.announcement.help': '注入到会话内每个 VP 的 system prompt 顶部 — 类似团队共享的 CLAUDE.md。',
   'yeaft.session.settings.members.heading': '成员',
@@ -1371,8 +1371,8 @@ export default {
   'yeaft.session.settings.memory.running': '运行中…',
   'yeaft.session.settings.memory.lastSuccess': '上次成功：{time} — 更新了 {count} 个目标。',
   'yeaft.session.settings.memory.lastError': '上次运行失败：{error}',
-  'yeaft.session.settings.danger.heading': '危险操作',
-  'yeaft.session.settings.danger.deleteHelp': '永久删除这个会话。会移除磁盘上的 session.json 和全部消息历史，不可恢复。',
+  'yeaft.session.settings.danger.heading': '删除会话',
+  'yeaft.session.settings.danger.deleteHelp': '这会永久删除该会话，移除磁盘上的 session.json 和全部消息历史，不可恢复。',
   'yeaft.session.settings.danger.deleteBtn': '删除会话',
 
   // ===== task-334j: 群聊视图（@ 提及 / 引用回复 / 发送拒绝） =====

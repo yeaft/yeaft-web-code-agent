@@ -2484,16 +2484,12 @@
 
 .group-settings-nav-item.is-active {
   background: var(--accent-blue);
-  color: #ffffff;
+  color: var(--accent-fg);
 }
 
 .group-settings-nav-item.is-active:hover {
   background: var(--accent-blue);
   filter: brightness(1.05);
-}
-
-.group-settings-nav-item.is-danger:not(.is-active) {
-  color: #c83737;
 }
 
 .group-settings-nav-item:focus-visible {
@@ -2717,14 +2713,14 @@
   cursor: default;
 }
 
-.group-settings-section-danger .group-settings-heading {
-  color: #c83737;
+.group-settings-section-delete .group-settings-heading {
+  color: var(--text-primary);
 }
 
-.group-settings-danger-btn {
-  background: #c83737;
-  color: #ffffff;
-  border: 1px solid #c83737;
+.group-settings-delete-btn {
+  background: var(--accent-blue);
+  color: var(--accent-fg);
+  border: 1px solid var(--accent-blue);
   border-radius: 6px;
   padding: 6px 16px;
   font-size: 13px;
@@ -2733,12 +2729,12 @@
   transition: filter 0.15s, opacity 0.15s;
 }
 
-.group-settings-danger-btn:hover:not(:disabled) {
-  filter: brightness(1.08);
+.group-settings-delete-btn:hover:not(:disabled) {
+  filter: brightness(1.05);
 }
 
-.group-settings-danger-btn:disabled {
-  opacity: 0.5;
+.group-settings-delete-btn:disabled {
+  opacity: 0.55;
   cursor: not-allowed;
 }
 
