@@ -14,9 +14,17 @@ const enI18n = read('i18n/en.js');
 const zhI18n = read('i18n/zh-CN.js');
 
 function topbarRightBlock() {
-  const start = pageSource.indexOf('<div class="yeaft-topbar-right">');
+  const start = pageSource.indexOf('<div v-if="showHeaderSessionActions" class="yeaft-topbar-right">');
   expect(start).toBeGreaterThan(-1);
   const end = pageSource.indexOf('          </div>\n        </div>\n\n', start);
+  expect(end).toBeGreaterThan(start);
+  return pageSource.slice(start, end);
+}
+
+function statusActionBlock() {
+  const start = pageSource.indexOf('<div class="yeaft-session-status-actions">');
+  expect(start).toBeGreaterThan(-1);
+  const end = pageSource.indexOf('          </div>\n        </template>', start);
   expect(end).toBeGreaterThan(start);
   return pageSource.slice(start, end);
 }
@@ -45,39 +53,55 @@ describe('Yeaft conversation header actions', () => {
   });
 
   it('keeps message refresh as a session-history refresh action', () => {
-    const block = topbarRightBlock();
+    const headerBlock = topbarRightBlock();
+    const statusBlock = statusActionBlock();
 
-    expect(block).toContain('@click="reloadMessages"');
-    expect(block).toContain("$t('yeaft.reloadMessages')");
-    expect(block).toContain('<polyline points="23 4 23 10 17 10"/>');
-    expect(block).toContain('<path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>');
-    expect(block).not.toContain('<path d="M21 15a4 4 0 0 1-4 4H7l-4 4V7a4 4 0 0 1 4-4h5"/>');
+    for (const block of [headerBlock, statusBlock]) {
+      expect(block).toContain('@click="reloadMessages"');
+      expect(block).toContain("$t('yeaft.reloadMessages')");
+      expect(block).toContain('<polyline points="23 4 23 10 17 10"/>');
+      expect(block).toContain('<path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>');
+      expect(block).not.toContain('<path d="M21 15a4 4 0 0 1-4 4H7l-4 4V7a4 4 0 0 1 4-4h5"/>');
+    }
     expect(pageSource).toContain('const reloadMessages = () => {\n      store.reloadYeaftMessages();\n    };');
   });
 
-  it('renders page reload only behind the mobile condition and as the last header action', () => {
-    const block = topbarRightBlock();
-    const pageReloadStart = block.indexOf('v-if="isMobile"');
+  it('moves session actions into the desktop status pane and returns them to the header when collapsed or mobile', () => {
+    expect(pageSource).toContain('<div v-if="showHeaderSessionActions" class="yeaft-topbar-right">');
+    expect(pageSource).toContain('<template #actions>');
+    expect(vpTimelineSource).toContain('<slot name="actions"></slot>');
+    expect(pageSource).toContain('const showHeaderSessionActions = Vue.computed(\n      () => isNarrowDetail.value || !showVpTimeline.value\n    );');
 
-    expect(pageReloadStart).toBeGreaterThan(-1);
-    expect(block.slice(pageReloadStart)).toContain('@click="reloadPage"');
-    expect(block.slice(0, pageReloadStart)).not.toContain('@click="reloadPage"');
-    expect(block.lastIndexOf('@click="reloadPage"')).toBeGreaterThan(block.lastIndexOf('@click="toggleDebug"'));
-    expect(block.indexOf('@click="reloadPage"', block.lastIndexOf('@click="reloadPage"') + 1)).toBe(-1);
+    expect(yeaftCss).toContain('.yeaft-session-status-header {\n  display: none;\n}');
+    expect(yeaftCss).toContain('.yeaft-vp-timeline.mobile-session-status .yeaft-session-status-header {\n    display: flex;\n  }');
+    expect(yeaftCss).toContain('.yeaft-vp-timeline.mobile-session-status .yeaft-session-status-actionbar {\n    display: none;\n  }');
   });
 
-  it('orders header actions as refresh, dream, Session status, debug, mobile page refresh', () => {
-    const block = topbarRightBlock();
-    const order = [
-      '@click="reloadMessages"',
-      '@click="onDreamTriggerClick"',
-      '@click="toggleSessionStatus"',
-      '@click="toggleDebug"',
-      '@click="reloadPage"',
-    ].map((needle) => block.indexOf(needle));
+  it('renders page reload only behind the mobile condition and as the last action', () => {
+    for (const block of [topbarRightBlock(), statusActionBlock()]) {
+      const pageReloadStart = block.indexOf('v-if="isMobile"');
 
-    expect(order.every((index) => index >= 0)).toBe(true);
-    expect(order).toEqual([...order].sort((a, b) => a - b));
+      expect(pageReloadStart).toBeGreaterThan(-1);
+      expect(block.slice(pageReloadStart)).toContain('@click="reloadPage"');
+      expect(block.slice(0, pageReloadStart)).not.toContain('@click="reloadPage"');
+      expect(block.lastIndexOf('@click="reloadPage"')).toBeGreaterThan(block.lastIndexOf('@click="toggleDebug"'));
+      expect(block.indexOf('@click="reloadPage"', block.lastIndexOf('@click="reloadPage"') + 1)).toBe(-1);
+    }
+  });
+
+  it('orders actions as refresh, dream, Session status, debug, mobile page refresh', () => {
+    for (const block of [topbarRightBlock(), statusActionBlock()]) {
+      const order = [
+        '@click="reloadMessages"',
+        '@click="onDreamTriggerClick"',
+        '@click="toggleSessionStatus"',
+        '@click="toggleDebug"',
+        '@click="reloadPage"',
+      ].map((needle) => block.indexOf(needle));
+
+      expect(order.every((index) => index >= 0)).toBe(true);
+      expect(order).toEqual([...order].sort((a, b) => a - b));
+    }
   });
 });
 

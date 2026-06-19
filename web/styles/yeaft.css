@@ -568,7 +568,8 @@
   font-weight: 500;
 }
 
-.yeaft-topbar-right {
+.yeaft-topbar-right,
+.yeaft-session-status-actions {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -576,6 +577,12 @@
 }
 
 .yeaft-topbar-right :where(
+  .yeaft-topbar-vp-toggle,
+  .yeaft-reload-btn,
+  .yeaft-topbar-dream-toggle,
+  .yeaft-debug-btn
+),
+.yeaft-session-status-actions :where(
   .yeaft-topbar-vp-toggle,
   .yeaft-reload-btn,
   .yeaft-topbar-dream-toggle,
@@ -588,6 +595,12 @@
 }
 
 .yeaft-topbar-right :where(
+  .yeaft-topbar-vp-toggle,
+  .yeaft-reload-btn,
+  .yeaft-topbar-dream-toggle,
+  .yeaft-debug-btn
+) svg,
+.yeaft-session-status-actions :where(
   .yeaft-topbar-vp-toggle,
   .yeaft-reload-btn,
   .yeaft-topbar-dream-toggle,
@@ -3022,6 +3035,19 @@
   color: var(--text-primary);
   outline: none;
 }
+.yeaft-session-status-header {
+  display: none;
+}
+.yeaft-session-status-actionbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 8px 8px;
+}
+.yeaft-session-status-actionbar .yeaft-session-status-actions {
+  width: 100%;
+  justify-content: flex-end;
+}
 .yeaft-session-status-section {
   padding: 8px 0 10px;
 }
@@ -3172,6 +3198,14 @@
   }
 
   .yeaft-vp-timeline.mobile-session-status .yeaft-vp-timeline-resize-handle {
+    display: none;
+  }
+
+  .yeaft-vp-timeline.mobile-session-status .yeaft-session-status-header {
+    display: flex;
+  }
+
+  .yeaft-vp-timeline.mobile-session-status .yeaft-session-status-actionbar {
     display: none;
   }
 }
