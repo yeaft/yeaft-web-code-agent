@@ -1,6 +1,7 @@
 import ToolLine from './ToolLine.js';
 import AskCard from './AskCard.js';
 import VpSpeakerHeader from './VpSpeakerHeader.js';
+import { normalizeTerminalOutput } from '../utils/terminal-output.js';
 import { getTodoDisplayState } from '../utils/todo-display-state.js';
 
 export default {
@@ -275,6 +276,7 @@ export default {
           content = String(content);
         }
       }
+      content = normalizeTerminalOutput(content);
       if (!content) return '';
       try {
         if (typeof marked !== 'undefined') {

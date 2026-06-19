@@ -11,6 +11,7 @@
  *   startTime  — Number, timestamp when tool execution started (optional)
  */
 import { formatRouteForwardToolLine } from '../utils/route-forward-display.js';
+import { normalizeTerminalOutput } from '../utils/terminal-output.js';
 
 export default {
   name: 'ToolLine',
@@ -49,10 +50,10 @@ export default {
           </div>
         </div>
         <div v-else-if="toolName === '__SubagentResult'" class="tool-expand-code">
-          <pre><code>{{ toolInput?.result || toolInput?.summary || formatInput(toolInput) }}</code></pre>
+          <pre><code>{{ syntheticResultOutput }}</code></pre>
         </div>
         <div v-else-if="toolName === '__CompactSummary'" class="tool-expand-code">
-          <pre><code>{{ toolInput?.summary || formatInput(toolInput) }}</code></pre>
+          <pre><code>{{ compactSummaryOutput }}</code></pre>
         </div>
         <div v-else class="tool-expand-code">
           <pre><code>{{ formatInput(toolInput) }}</code></pre>
@@ -93,9 +94,8 @@ export default {
       return Object.keys(input).length > 0;
     });
 
-    const bashOutput = Vue.computed(() => {
-      if (props.toolName !== 'Bash' || !props.toolResult) return '';
-      const result = props.toolResult;
+    const extractTextResult = (result) => {
+      if (!result) return '';
       if (typeof result === 'string') return result;
       if (Array.isArray(result)) {
         return result.map(r => typeof r === 'string' ? r : r?.type === 'text' ? r.text : '').filter(Boolean).join('\n');
@@ -108,6 +108,21 @@ export default {
         }
       }
       return '';
+    };
+
+    const bashOutput = Vue.computed(() => {
+      if (props.toolName !== 'Bash') return '';
+      return normalizeTerminalOutput(extractTextResult(props.toolResult));
+    });
+
+    const syntheticResultOutput = Vue.computed(() => {
+      if (props.toolName !== '__SubagentResult') return '';
+      return normalizeTerminalOutput(props.toolInput?.result || props.toolInput?.summary || formatInput(props.toolInput));
+    });
+
+    const compactSummaryOutput = Vue.computed(() => {
+      if (props.toolName !== '__CompactSummary') return '';
+      return normalizeTerminalOutput(props.toolInput?.summary || formatInput(props.toolInput));
     });
 
     const toggle = () => {
@@ -133,6 +148,8 @@ export default {
       };
       return icons[name] || '\u2699\uFE0F';
     };
+
+    const cleanOneLine = (text) => normalizeTerminalOutput(text).replace(/\s+/g, ' ').trim();
 
     const getToolOneLine = (toolName, input) => {
       if (!input) return toolName;
@@ -180,12 +197,12 @@ export default {
       // Synthetic tools — agent rewrites Claude Code's fake-user messages
       // into these blocks (see agent/claude.js).
       if (toolName === '__SubagentResult') {
-        const label = input.summary || input.status || 'completed';
+        const label = cleanOneLine(input.summary || input.status || 'completed');
         return `Sub-agent: ${middleTruncate(label, 80)}`;
       }
       if (toolName === '__CompactSummary') {
-        const len = typeof input.summary === 'string' ? input.summary.length : 0;
-        return `Context summarized (${len} chars)`;
+        const summary = normalizeTerminalOutput(input.summary || '');
+        return `Context summarized (${summary.length} chars)`;
       }
       return toolName;
     };
@@ -210,7 +227,8 @@ export default {
     };
 
     return {
-      isExpanded, isEditTool, hasDiff, hasExpandableContent, bashOutput, formattedTime,
+      isExpanded, isEditTool, hasDiff, hasExpandableContent, bashOutput,
+      syntheticResultOutput, compactSummaryOutput, formattedTime,
       toggle, getToolIcon, getToolOneLine, renderDiff, formatInput
     };
   }
