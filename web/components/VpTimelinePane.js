@@ -1,7 +1,7 @@
 import TerminalOutput from './TerminalOutput.js';
 
 /**
- * VpTimelinePane — left-of-conversation Session status pane.
+ * VpTimelinePane — right-of-conversation Session status pane.
  *
  * Originally introduced as a VP roster pane. It now presents the active
  * Yeaft Session status: the VP roster first, then running background
@@ -11,6 +11,7 @@ import TerminalOutput from './TerminalOutput.js';
  * Props:
  *   rows — TimelineRow[] (see web/stores/helpers/vp-timeline.js for shape).
  *   tasks — running Session task snapshots.
+ *   announcementText — active Session announcement preview source.
  *
  * Emits:
  *   mention-vp (vpId)      — primary row click / Enter / Space. YeaftPage
@@ -21,14 +22,17 @@ import TerminalOutput from './TerminalOutput.js';
  *                            owns the drag bookkeeping (matches the
  *                            .yeaft-detail pattern).
  *   cancel-vp-turn (vpId)  — abort button click for an active turn.
+ *   edit-announcement      — open the Session settings announcement editor.
+ *   close                  — hide the Session status pane.
  */
 export default {
   name: 'VpTimelinePane',
   components: { TerminalOutput },
-  emits: ['mention-vp', 'edit-vp', 'start-resize', 'cancel-vp-turn'],
+  emits: ['mention-vp', 'edit-vp', 'start-resize', 'cancel-vp-turn', 'edit-announcement', 'close'],
   props: {
     rows: { type: Array, required: true },
     tasks: { type: Array, default: () => [] },
+    announcementText: { type: String, default: '' },
   },
   template: `
     <aside class="yeaft-vp-timeline yeaft-session-status-pane" :aria-label="$t('yeaft.sessionStatus.aria')">
@@ -47,7 +51,47 @@ export default {
           </svg>
           <span>{{ $t('yeaft.sessionStatus.title') }}</span>
         </span>
+        <button
+          type="button"
+          class="yeaft-session-status-close"
+          :title="$t('yeaft.sessionStatus.close')"
+          :aria-label="$t('yeaft.sessionStatus.close')"
+          @click="$emit('close')"
+        >
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 6L6 18"/>
+            <path d="M6 6l12 12"/>
+          </svg>
+        </button>
       </header>
+
+      <section class="yeaft-session-status-section yeaft-session-status-announcement" :aria-label="$t('yeaft.sessionStatus.announcement')">
+        <header class="yeaft-session-status-section-header">
+          <span>{{ $t('yeaft.sessionStatus.announcement') }}</span>
+        </header>
+        <button
+          type="button"
+          class="yeaft-session-status-announcement-card"
+          :class="{ 'is-empty': !hasAnnouncement }"
+          @click="$emit('edit-announcement')"
+        >
+          <span class="yeaft-session-status-announcement-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 14.5V9.5l11-4v13l-11-4z"/>
+              <path d="M15 8.25c1.25.7 2 1.95 2 3.75s-.75 3.05-2 3.75"/>
+              <path d="M7 15l1.2 4h3.1l-1.6-3.1"/>
+            </svg>
+          </span>
+          <span class="yeaft-session-status-announcement-main">
+            <span class="yeaft-session-status-announcement-text">
+              {{ announcementPreview || $t('yeaft.sessionStatus.announcementEmpty') }}
+            </span>
+            <span class="yeaft-session-status-announcement-action">
+              {{ hasAnnouncement ? $t('yeaft.sessionStatus.announcementEdit') : $t('yeaft.sessionStatus.announcementAdd') }}
+            </span>
+          </span>
+        </button>
+      </section>
 
       <section class="yeaft-session-status-section" :aria-label="$t('yeaft.sessionStatus.vps')">
         <header class="yeaft-session-status-section-header">
@@ -177,6 +221,17 @@ export default {
     const inst = Vue.getCurrentInstance();
     const $t = (inst && inst.appContext.config.globalProperties.$t) || ((k) => k);
 
+    const normalizedAnnouncementText = Vue.computed(() => {
+      const raw = typeof props.announcementText === 'string' ? props.announcementText : '';
+      return raw.trim();
+    });
+    const hasAnnouncement = Vue.computed(() => !!normalizedAnnouncementText.value);
+    const announcementPreview = Vue.computed(() => {
+      const text = normalizedAnnouncementText.value.replace(/\s+/g, ' ');
+      if (text.length <= 96) return text;
+      return text.slice(0, 95) + '…';
+    });
+
     const expandedTasks = Vue.ref({});
     const taskLogRefs = new Map();
     const taskLogPinned = new Map();
@@ -263,6 +318,8 @@ export default {
     };
 
     return {
+      hasAnnouncement,
+      announcementPreview,
       statusLabel,
       isActiveStatus,
       threadCountTitle,

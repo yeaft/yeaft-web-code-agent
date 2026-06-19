@@ -27,7 +27,7 @@ export default {
       <div class="yeaft-sidebar-overlay" v-if="!sidebarCollapsed && isMobile" @click="sidebarCollapsed = true"></div>
 
       <!-- Left Sidebar — V2 (task-341: V2 is the only sidebar now). -->
-      <!-- Legacy sidebar event alias; canonical MessageList path uses open-session-settings. -->
+      <!-- Legacy sidebar event alias; canonical settings dialog uses session terminology. -->
       <YeaftSidebar
         :collapsed="sidebarCollapsed"
         @select-group="onSelectGroupV2"
@@ -41,37 +41,12 @@ export default {
       <!-- Workbench Panel (between sidebar and main) -->
       <WorkbenchPanel v-if="canUseWorkbench" />
 
-      <!-- Center Conversation. yeaft-main is now an inner row layout so
-           the VP list sits to the LEFT of the conversation (mirroring
-           Crew's role-panel-left + crew-panel-center). The conversation
-           stack lives inside .yeaft-main-center; the right .yeaft-detail
-           is still a sibling of .yeaft-main at the page level. -->
+      <!-- Center Conversation. The Session status pane is rendered as a
+           sibling to the RIGHT of this main column so the visual order is
+           [conversation][Session status][debug], with debug always far right. -->
       <div class="yeaft-main" :class="{ 'workbench-active': canUseWorkbench && store.workbenchExpanded, 'workbench-maximized': canUseWorkbench && store.workbenchMaximized && store.workbenchExpanded }">
-        <!-- Left VP List Pane (Crew-style alignment).
-             Surfaces, for the active Yeaft conversation, one row per VP
-             showing live status (typing / streaming / idle). Click →
-             @-mention; hover-revealed edit button → open Settings VP editor.
-             Hidden under 1024 px (CSS @media + Vue gate). The pane sits
-             at the LEFT edge of yeaft-main so visual order is
-             [VP list][conversation], matching Crew's members-left layout.
-             Restored in v0.1.767 after PR #767 inadvertently removed it
-             along with the Feature system; the row no longer renders
-             feature-specific fields. -->
-        <VpTimelinePane
-          v-if="showVpTimeline"
-          :rows="vpTimelineRows"
-          :tasks="runningTasksForActiveSession"
-          :style="timelineWidthStyle"
-          @mention-vp="onMentionVpFromTimeline"
-          @edit-vp="onEditVpFromTimeline"
-          @start-resize="startTimelineResize"
-          @cancel-vp-turn="onCancelVpFromTimeline"
-        />
-
         <!-- Center column: topbar + (settings | VpDetailView | empty-hero |
-             MessageList) + ChatInput. Wrapped in yeaft-main-center so
-             yeaft-main itself can be a row flex without breaking the
-             column stacking these descendants rely on. -->
+             MessageList) + ChatInput. -->
         <div class="yeaft-main-center">
         <!-- Conversation Header -->
         <div class="yeaft-topbar">
@@ -138,37 +113,6 @@ export default {
           </div>
 
           <div class="yeaft-topbar-right">
-            <!-- Session status show/hide toggle. Hidden under 1024 px because the pane itself is gated by the same breakpoint. -->
-            <button
-              v-if="!isNarrowDetail"
-              class="yeaft-topbar-vp-toggle"
-              :class="{ active: vpTimelineVisible }"
-              @click="toggleVpTimeline"
-              :title="vpTimelineVisible ? $t('yeaft.sessionStatus.hide') : $t('yeaft.sessionStatus.show')"
-              :aria-label="vpTimelineVisible ? $t('yeaft.sessionStatus.hide') : $t('yeaft.sessionStatus.show')"
-              :aria-expanded="vpTimelineVisible ? 'true' : 'false'"
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="4" width="18" height="16" rx="3"/>
-                <path d="M8 9h8"/>
-                <path d="M8 14h5"/>
-              </svg>
-            </button>
-            <button
-              v-if="topbarGroup"
-              class="yeaft-topbar-announcement-edit"
-              type="button"
-              @click="openAnnouncementSettings"
-              :title="$t('yeaft.session.announcement.editTitle')"
-              :aria-label="$t('yeaft.session.announcement.editTitle')"
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M4 14.5V9.5l11-4v13l-11-4z"/>
-                <path d="M15 8.25c1.25.7 2 1.95 2 3.75s-.75 3.05-2 3.75"/>
-                <path d="M7 15l1.2 4h3.1l-1.6-3.1"/>
-                <path d="M4 14.5H3a1.5 1.5 0 0 1-1.5-1.5v-2A1.5 1.5 0 0 1 3 9.5h1"/>
-              </svg>
-            </button>
             <!-- Message refresh — replays current Yeaft session history without a full page reload. -->
             <button
               class="yeaft-reload-btn"
@@ -208,6 +152,21 @@ export default {
                 class="yeaft-topbar-dream-staledot"
                 aria-hidden="true"
               ></span>
+            </button>
+            <!-- Session status show/hide toggle. Default is open; the pane itself also has a close button. -->
+            <button
+              class="yeaft-topbar-vp-toggle"
+              :class="{ active: sessionStatusVisible }"
+              @click="toggleSessionStatus"
+              :title="sessionStatusVisible ? $t('yeaft.sessionStatus.hide') : $t('yeaft.sessionStatus.show')"
+              :aria-label="sessionStatusVisible ? $t('yeaft.sessionStatus.hide') : $t('yeaft.sessionStatus.show')"
+              :aria-expanded="sessionStatusVisible ? 'true' : 'false'"
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="4" width="18" height="16" rx="3"/>
+                <path d="M8 9h8"/>
+                <path d="M8 14h5"/>
+              </svg>
             </button>
             <button
               class="yeaft-debug-btn"
@@ -270,7 +229,7 @@ export default {
             {{ $t('yeaft.session.empty.cta') }}
           </button>
         </div>
-        <MessageList v-if="!showSettings && !store.yeaftActiveVpDetailId && !isActiveGroupEmpty" @open-session-settings="openSessionSettings" />
+        <MessageList v-if="!showSettings && !store.yeaftActiveVpDetailId && !isActiveGroupEmpty" />
 
         <!-- Settings Panel -->
         <SettingsPanel v-if="showSettings" :visible="showSettings" :initial-tab="'yeaft'" :initial-sub-tab="settingsInitialTab" :initial-edit-vp-id="settingsInitialEditVpId" @close="showSettings = false" />
@@ -300,6 +259,23 @@ export default {
         />
         </div><!-- /.yeaft-main-center -->
       </div>
+
+      <!-- Session status pane: announcement + VP roster + background tasks.
+           It sits to the right of the conversation and to the left of debug. -->
+      <VpTimelinePane
+        v-if="showVpTimeline"
+        :rows="vpTimelineRows"
+        :tasks="runningTasksForActiveSession"
+        :announcement-text="sessionStatusAnnouncementText"
+        :class="{ 'mobile-session-status': isNarrowDetail }"
+        :style="timelineWidthStyle"
+        @mention-vp="onMentionVpFromTimeline"
+        @edit-vp="onEditVpFromTimeline"
+        @start-resize="startTimelineResize"
+        @cancel-vp-turn="onCancelVpFromTimeline"
+        @edit-announcement="openAnnouncementSettings"
+        @close="closeSessionStatus"
+      />
 
       <!-- Right Detail Panel — only rendered when debug mode is on. The
            legacy "tasks memory" placeholder + collapse-toggle were retired
@@ -366,9 +342,9 @@ export default {
     const settingsInitialTab = Vue.ref('vp');
     const settingsInitialEditVpId = Vue.ref(null);
     // feat-vp-list-ui-polish: template ref to the embedded ChatInput so we
-    // can call its imperative `appendMention(vpId)` when the VP list pane
-    // emits a mention request. Keeps the Yeaft-specific @-syntax out of
-    // ChatInput (review fix — Fowler C2, PR #763).
+    // can call its imperative `appendMention(vpId)` when the Session status
+    // pane emits a VP mention request. Keeps the Yeaft-specific @-syntax out
+    // of ChatInput (review fix — Fowler C2, PR #763).
     const chatInputRef = Vue.ref(null);
 
     // task-340: Workbench capability gate — matches ChatPage.canUseWorkbench
@@ -451,31 +427,32 @@ export default {
       document.addEventListener('mouseup', onMouseUp);
     };
 
-    // ── VP Timeline pane state (visibility + resizable width).
-    // Restored in v0.1.767 after PR #767 inadvertently removed it
-    // together with the Feature system. The pane is roster-driven and
-    // has no Feature-system dependency; no per-second tick is needed
-    // (the original `nowMs` only drove the in-feature elapsed timer).
+    // ── Session status pane state (visibility + resizable width).
+    // Historical vpTimeline identifiers are kept only where renaming would
+    // cause a noisy component/storage churn. New user-facing behavior is
+    // Session-status oriented.
 
-    // User-controlled show/hide. Defaults to true so first-time users
-    // see the pane; subsequent sessions restore whatever the user last
-    // chose. localStorage is wrapped in try/catch because in
-    // private-browsing mode setItem can throw.
-    const VP_TIMELINE_VISIBLE_KEY = 'yeaft-vp-timeline-visible';
-    const readVpTimelineVisible = () => {
+    // User-controlled show/hide. The consolidated Session status pane must
+    // default open for everyone, including users who previously hid the old
+    // VP roster pane, so this PR switches to a new preference key instead of
+    // inheriting the legacy `yeaft-vp-timeline-visible` value.
+    const SESSION_STATUS_VISIBLE_KEY = 'yeaft-session-status-visible';
+    const readSessionStatusVisible = () => {
       try {
-        const v = localStorage.getItem(VP_TIMELINE_VISIBLE_KEY);
+        const v = localStorage.getItem(SESSION_STATUS_VISIBLE_KEY);
         if (v === '0' || v === 'false') return false;
         return true;
       } catch (_) { return true; }
     };
-    const vpTimelineVisible = Vue.ref(readVpTimelineVisible());
-    const toggleVpTimeline = () => {
-      vpTimelineVisible.value = !vpTimelineVisible.value;
+    const sessionStatusVisible = Vue.ref(readSessionStatusVisible());
+    const setSessionStatusVisible = (visible) => {
+      sessionStatusVisible.value = !!visible;
       try {
-        localStorage.setItem(VP_TIMELINE_VISIBLE_KEY, vpTimelineVisible.value ? '1' : '0');
+        localStorage.setItem(SESSION_STATUS_VISIBLE_KEY, sessionStatusVisible.value ? '1' : '0');
       } catch (_) {}
     };
+    const toggleSessionStatus = () => setSessionStatusVisible(!sessionStatusVisible.value);
+    const closeSessionStatus = () => setSessionStatusVisible(false);
     const TIMELINE_MIN_WIDTH = 220;
     const TIMELINE_DEFAULT_WIDTH = 280;
     const savedTimelineWidth = (() => {
@@ -496,12 +473,12 @@ export default {
     const startTimelineResize = (e) => {
       const startX = e.clientX;
       const startWidth = timelineWidth.value;
-      // Cap at 40% of viewport — the VP list is supplementary; never
+      // Cap at 40% of viewport — Session status is supplementary; never
       // let it crowd the conversation pane.
       const maxWidth = Math.max(TIMELINE_MIN_WIDTH, Math.floor(window.innerWidth * 0.4));
 
       const onMouseMove = (ev) => {
-        const delta = ev.clientX - startX; // drag right = wider (handle on right edge)
+        const delta = startX - ev.clientX; // right-side pane: drag left = wider
         const newWidth = Math.min(maxWidth, Math.max(TIMELINE_MIN_WIDTH, startWidth + delta));
         timelineWidth.value = newWidth;
       };
@@ -646,8 +623,7 @@ export default {
     // task-fix-mobile-group-settings: surface a group ⚙ in the topbar
     // so the conversation always has a settings entry-point — sidebar
     // collapses to a slide-over on mobile, hover-reveal affordances
-    // don't exist on touch, and the announcement bar may not be
-    // visible if the active group has none. Resolve the group from the
+    // don't exist on touch. Resolve the group from the
     // groups store the same way `sendMessage` does (filter > activeSessionId
     // > grp_default fallback) so the gear targets whatever is on screen.
     const topbarGroup = Vue.computed(() => {
@@ -673,6 +649,13 @@ export default {
         return value;
       }
       return '';
+    });
+
+    const sessionStatusAnnouncementText = Vue.computed(() => {
+      const text = topbarGroup.value && typeof topbarGroup.value.announcement === 'string'
+        ? topbarGroup.value.announcement
+        : '';
+      return text;
     });
 
     const topbarModel = Vue.computed(() => resolveSessionModelRef(topbarGroup.value, store.yeaftModel || ''));
@@ -972,7 +955,7 @@ export default {
       if (g) inviteDismissedFor.add(g.id);
     };
     // Holds the session id + initial section so callers (sidebar settings,
-    // hero CTA, invite-modal CTA, announcement-bar "Open settings" link) can
+    // hero CTA, invite-modal CTA, and Session status pane actions) can
     // target any Session and any pane.
     const groupSettingsOpen = Vue.ref(false);
     const groupSettingsId = Vue.ref(null);
@@ -1043,16 +1026,14 @@ export default {
       showSettings.value = false;
     };
 
-    // ── VP Timeline computeds + handlers ───────────────────────────────
-    // Pane is visible when (a) we're not in settings, (b) viewport is
-    // wide enough (CSS also hides .yeaft-vp-timeline at <=1024 px), and
-    // (c) the user hasn't hidden the pane via the topbar toggle. The
-    // pane STAYS visible when yeaftActiveVpDetailId is set so the user
-    // can hop between VPs without losing context.
-    // Restored in v0.1.767 after PR #767 inadvertently removed it
-    // together with the Feature system; no feature-aware status / meta.
+    // ── Session status pane computeds + handlers ───────────────────────
+    // Pane is visible when (a) we're not in settings and (b) the user hasn't
+    // hidden it via the topbar toggle or pane close button. On narrow screens
+    // CSS promotes it to an overlay instead of removing the only announcement
+    // and status surface. Historical vpTimeline naming remains for the row
+    // projection helper and component shell only.
     const showVpTimeline = Vue.computed(
-      () => !showSettings.value && !isNarrowDetail.value && vpTimelineVisible.value
+      () => !showSettings.value && sessionStatusVisible.value
     );
 
     // Resolve the active group's roster and project it into timeline
@@ -1223,8 +1204,10 @@ export default {
       showVpTimeline,
       vpTimelineRows,
       runningTasksForActiveSession,
-      vpTimelineVisible,
-      toggleVpTimeline,
+      sessionStatusAnnouncementText,
+      sessionStatusVisible,
+      toggleSessionStatus,
+      closeSessionStatus,
       timelineWidthStyle,
       startTimelineResize,
       onEditVpFromTimeline,
