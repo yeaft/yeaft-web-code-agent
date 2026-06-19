@@ -360,7 +360,10 @@ export const useVpStore = defineStore('vp', {
         return;
       }
       const frame = { type: 'yeaft_dream_trigger', groupId };
-      if (chat.yeaftAgentId) frame.agentId = chat.yeaftAgentId;
+      const agentId = typeof chat.resolveSessionAgentId === 'function'
+        ? chat.resolveSessionAgentId(groupId)
+        : chat.currentAgent;
+      if (agentId) frame.agentId = agentId;
       const sent = chat.sendWsMessage(frame);
       if (sent === false) {
         projectDreamDebugEvent(chat, {

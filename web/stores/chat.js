@@ -313,8 +313,8 @@ export const useChatStore = defineStore('chat', {
 
     // Search settings cache (web-search backend + Tavily key state).
     // Single record (not per-agent) — config.json is one file per agent's
-    // ~/.yeaft, so the active yeaftAgentId determines which agent we
-    // talked to last. Shape:
+    // ~/.yeaft, so the active `currentAgent` (focused Yeaft agent) determines
+    // which agent we talked to last. Shape:
     //   { backend, tavilyKeyConfigured, tavilyKeyMasked, disableHtmlFallback,
     //     loaded, error, at }
     searchSettings: null,
@@ -388,7 +388,11 @@ export const useChatStore = defineStore('chat', {
     yeaftConversationId: null,     // 虚拟 conversationId（从 agent session_ready 获取）
     yeaftModel: null,              // agent/default Yeaft 模型名；Session override lives in sessions[].config.model
     yeaftModelEffort: null,        // agent/default effort；Session override lives in sessions[].config.modelEffort
-    yeaftAgentId: null,            // 绑定的 agent ID
+    // NOTE: there is intentionally no `yeaftAgentId` field. The focused Yeaft
+    // agent IS `currentAgent` (kept in sync on entry + session switch), and
+    // session-scoped operations route by the session row's owning agentId via
+    // resolveSessionAgentId(). A separate focus field used to drift out of sync
+    // during agent/session switches and caused "Session <id> not found".
     yeaftSessionReady: false,     // Session 是否已初始化
     yeaftStatus: null,            // { skills, mcpServers, tools } 从 session_ready 获取
     yeaftAvailableModels: [],     // 可用模型列表 [{ id, provider, label }]
@@ -1009,11 +1013,11 @@ export const useChatStore = defineStore('chat', {
         availableModels,
       };
       this.yeaftStatusByAgent = { ...this.yeaftStatusByAgent, [agentId]: next };
-      if (this.yeaftAgentId === agentId || this.currentAgent === agentId) {
+      if (this.currentAgent === agentId) {
         this.applyCachedYeaftStatus(agentId);
       }
     },
-    applyCachedYeaftStatus(agentId = this.yeaftAgentId) {
+    applyCachedYeaftStatus(agentId = this.currentAgent) {
       const cached = agentId ? this.yeaftStatusByAgent[agentId] : null;
       if (!cached) return false;
       if (cached.model) this.yeaftModel = cached.model;
@@ -1029,8 +1033,27 @@ export const useChatStore = defineStore('chat', {
       };
       return true;
     },
+    /**
+     * Resolve the owning agent for a session-scoped Yeaft operation. The
+     * session row in the sessions store carries the authoritative `agentId`;
+     * routing by it (instead of the focused agent) is what keeps a send /
+     * history / abort from landing on an agent that has no such session on
+     * disk — the root cause of intermittent "Session <id> not found". Falls
+     * back to `currentAgent` (the focused Yeaft agent) when no sessionId is
+     * given or the row hasn't synced yet.
+     * @param {string|null} sessionId
+     * @returns {string|null}
+     */
+    resolveSessionAgentId(sessionId) {
+      if (sessionId) {
+        const gs = getSessionsStore();
+        const sess = gs && typeof gs.sessionById === 'function' ? gs.sessionById(sessionId) : null;
+        if (sess && sess.agentId) return sess.agentId;
+      }
+      return this.currentAgent || null;
+    },
     enterYeaft(agentId = null) {
-      const previousYeaftAgentId = this.yeaftAgentId;
+      const previousAgentId = this.currentAgent;
       // Capture the chat-side activeConversations snapshot BEFORE flipping
       // currentView. The transition helper is idempotent: if we're
       // already in Yeaft (e.g. switching agents, programmatic re-entry,
@@ -1038,10 +1061,15 @@ export const useChatStore = defineStore('chat', {
       // with the yeaft-only array — which would otherwise cause
       // leaveYeaft to "restore" the yeaft conversationId back into Chat
       // and leak yeaft messages into the Chat view.
-      if (agentId) this.yeaftAgentId = agentId;
-      else if (!this.yeaftAgentId) {
+      //
+      // The focused Yeaft agent IS `currentAgent`. Explicit arg wins;
+      // otherwise keep the current selection; otherwise pick the first
+      // online agent. selectAgent() short-circuits when already selected,
+      // so this is a no-op on the common (single-agent) path.
+      let focusAgentId = agentId || this.currentAgent || null;
+      if (!focusAgentId) {
         const online = this.agents.find(a => a.online);
-        if (online) this.yeaftAgentId = online.id;
+        if (online) focusAgentId = online.id;
       }
       // Keep currentAgent / currentAgentInfo in sync with the Yeaft agent
       // selection. The sidebar header indicator and the entire Files /
@@ -1050,11 +1078,11 @@ export const useChatStore = defineStore('chat', {
       // stuck on whichever agent Chat had auto-selected first, so opening
       // Yeaft for the 2nd/3rd agent showed the wrong agent badge and
       // browsed the first agent's folder.
-      if (this.yeaftAgentId && this.currentAgent !== this.yeaftAgentId) {
-        this.selectAgent(this.yeaftAgentId);
+      if (focusAgentId && this.currentAgent !== focusAgentId) {
+        this.selectAgent(focusAgentId);
       }
-      const appliedCachedStatus = this.applyCachedYeaftStatus(this.yeaftAgentId);
-      if (!appliedCachedStatus && previousYeaftAgentId && previousYeaftAgentId !== this.yeaftAgentId) {
+      const appliedCachedStatus = this.applyCachedYeaftStatus(focusAgentId);
+      if (!appliedCachedStatus && previousAgentId && previousAgentId !== focusAgentId) {
         this.yeaftAvailableModels = [];
         this.yeaftStatus = null;
         this.yeaftModelsRefreshing = true;
@@ -1124,8 +1152,12 @@ export const useChatStore = defineStore('chat', {
     },
 
     requestYeaftSessionBootstrap({ forceSessionReady = false, catchUpHistory = false } = {}) {
-      if (!this.yeaftAgentId) return;
+      if (!this.currentAgent) return;
       const activeSessionId = resolveActiveYeaftSessionId(this);
+      // Session-scoped load → route by the session's owning agent; metadata-only
+      // session_ready (no active session) → the focused agent (currentAgent).
+      const targetAgentId = this.resolveSessionAgentId(activeSessionId);
+      if (!targetAgentId) return;
       const sessionState = activeSessionId
         ? this.yeaftSessionHistoryState[activeSessionId]
         : null;
@@ -1135,7 +1167,7 @@ export const useChatStore = defineStore('chat', {
       const needHistoryCatchUp = !!activeSessionId
         && msgHelpers.shouldCatchUpLoadedYeaftSession(sessionState, catchUpHistory);
       if (!needSessionReady && !needHistoryReplay && !needHistoryCatchUp) return false;
-      const metaKey = `${this.yeaftAgentId}:${activeSessionId || '__none__'}`;
+      const metaKey = `${targetAgentId}:${activeSessionId || '__none__'}`;
       const metadataOnly = needSessionReady && !needHistoryReplay && !needHistoryCatchUp;
       if (metadataOnly && this.yeaftBootstrapMetaLoadingKey === metaKey) return false;
       if (metadataOnly) this.yeaftBootstrapMetaLoadingKey = metaKey;
@@ -1154,7 +1186,7 @@ export const useChatStore = defineStore('chat', {
       }
       const payload = {
         type: 'yeaft_load_history',
-        agentId: this.yeaftAgentId,
+        agentId: targetAgentId,
         sessionId: activeSessionId,
       };
       if (needHistoryCatchUp) payload.afterSeq = latestSeq;
@@ -1177,11 +1209,11 @@ export const useChatStore = defineStore('chat', {
      * Used by the YeaftDebugDrawer "Tool Stats" panel.
      */
     fetchYeaftToolStats() {
-      if (!this.yeaftAgentId) return;
+      if (!this.currentAgent) return;
       this.yeaftToolStatsLoading = true;
       this.sendWsMessage({
         type: 'yeaft_fetch_tool_stats',
-        agentId: this.yeaftAgentId,
+        agentId: this.currentAgent,
       });
       // Guard against silent drops (agent down, relay loss). Without a
       // timeout the drawer spinner runs forever; surface the failure to
@@ -1212,14 +1244,14 @@ export const useChatStore = defineStore('chat', {
      * `yeaftDebugLoops` / `yeaftDebugTurnsById` / `yeaftDebugTurnOrder`).
      */
     loadYeaftDebugHistory({ groupId, limit, dreamLimit } = {}) {
-      if (!this.yeaftAgentId) return;
+      if (!this.currentAgent) return;
       const requestedLimit = Number.isFinite(limit) && limit > 0 ? limit : this.yeaftDebugHistoryLimit || DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT;
       this.yeaftDebugHistoryLimit = requestedLimit;
       this.yeaftDebugHistoryLoading = true;
       this.yeaftDebugHistoryError = null;
       const payload = {
         type: 'yeaft_fetch_debug_history',
-        agentId: this.yeaftAgentId,
+        agentId: this.currentAgent,
         limit: requestedLimit,
         dreamLimit: Number.isFinite(dreamLimit) && dreamLimit > 0 ? dreamLimit : 5,
       };
@@ -1246,7 +1278,11 @@ export const useChatStore = defineStore('chat', {
      *                               isImage?:boolean,mimeType?:string}>}} payload
      */
     sendYeaftSessionMessage({ groupId, text, mentions, attachments }) {
-      if (!groupId || !this.yeaftAgentId) return;
+      // Route by the session's owning agent (not a focus field): this is what
+      // prevents the send from landing on an agent that has no such session,
+      // which surfaced as intermittent "Session <id> not found".
+      const agentId = this.resolveSessionAgentId(groupId);
+      if (!groupId || !agentId) return;
       const safeAttachments = Array.isArray(attachments)
         ? attachments.filter((a) => a && a.fileId)
         : [];
@@ -1301,7 +1337,7 @@ export const useChatStore = defineStore('chat', {
       }
       const wsMsg = {
         type: 'yeaft_session_send',
-        agentId: this.yeaftAgentId,
+        agentId,
         id: clientMessageId,
         sessionId: groupId,
         text: effectiveText,
@@ -1467,9 +1503,12 @@ export const useChatStore = defineStore('chat', {
           }
 
           this.yeaftConversationId = agentConvId;
-          const statusAgentId = msg.agentId || this.yeaftAgentId || this.currentAgent;
+          const statusAgentId = msg.agentId || this.currentAgent;
           if (statusAgentId) {
-            this.yeaftAgentId = statusAgentId;
+            // The focused Yeaft agent is `currentAgent`; converge it to the
+            // agent this session_ready came from. selectAgent short-circuits
+            // when already selected (the common path).
+            if (this.currentAgent !== statusAgentId) this.selectAgent(statusAgentId);
             this.cacheYeaftAgentStatus(statusAgentId, event);
           }
           this.yeaftModel = event.model;
@@ -1505,10 +1544,9 @@ export const useChatStore = defineStore('chat', {
           // the server can route this subscribe to the right agent even
           // before `client.currentAgent` has converged. `msg.agentId` is
           // the envelope from the server (stamped at agent-output relay);
-          // `yeaftAgentId` is the agent we just entered; `currentAgent`
-          // is the chat-mode default. Falling through `||` covers single-
-          // agent and multi-agent deployments alike.
-          const subscribeAgentId = this.yeaftAgentId || msg.agentId || this.currentAgent || null;
+          // `currentAgent` is the focused agent. Falling through `||` covers
+          // single-agent and multi-agent deployments alike.
+          const subscribeAgentId = msg.agentId || this.currentAgent || null;
           this.sendWsMessage(subscribeAgentId
             ? { type: 'yeaft_vp_subscribe', agentId: subscribeAgentId }
             : { type: 'yeaft_vp_subscribe' });
@@ -1516,7 +1554,7 @@ export const useChatStore = defineStore('chat', {
         }
 
         case 'yeaft_status': {
-          const statusAgentId = msg.agentId || this.yeaftAgentId || this.currentAgent;
+          const statusAgentId = msg.agentId || this.currentAgent;
           if (statusAgentId) this.cacheYeaftAgentStatus(statusAgentId, event);
           break;
         }
@@ -2760,31 +2798,23 @@ export const useChatStore = defineStore('chat', {
       // request the initial recent-N window.
       //
       // fix-yeaft-session-per-agent: the session may belong to an agent
-      // other than `yeaftAgentId` (cross-agent click from the unified
+      // other than the focused one (cross-agent click from the unified
       // sidebar or from the resume list in SessionCreateModal). Look up
       // the session's owning agent from the sessions store first; fall
       // back to currentAgent (just-selected via selectAgent on the same
-      // click), then to yeaftAgentId. Without this, `yeaft_load_history`
-      // gets routed to the wrong agent — which has no such session on
-      // disk — and the main pane stays empty while the previously-
-      // loaded snapshot for that other agent silently goes stale.
+      // click). Without this, `yeaft_load_history` gets routed to the
+      // wrong agent — which has no such session on disk — and the main
+      // pane stays empty while the previously-loaded snapshot for that
+      // other agent silently goes stale.
       //
-      // Also sync yeaftAgentId to the resolved agent so downstream
-      // calls (sendYeaftGroupChat, switchYeaftModel, abort routes) all
-      // route correctly after the cross-agent click.
-      let targetAgentId = this.yeaftAgentId;
-      if (next) {
-        const gs = getSessionsStore();
-        const sess = gs && typeof gs.sessionById === 'function'
-          ? gs.sessionById(next) : null;
-        if (sess && sess.agentId) {
-          targetAgentId = sess.agentId;
-        } else if (this.currentAgent) {
-          targetAgentId = this.currentAgent;
-        }
-        if (targetAgentId && targetAgentId !== this.yeaftAgentId) {
-          this.yeaftAgentId = targetAgentId;
-        }
+      // The load payload uses the synchronously-resolved local
+      // `targetAgentId` (NOT currentAgent, which converges async via the
+      // select_agent round-trip), so the request is always routed
+      // correctly. We also converge currentAgent so downstream agent-level
+      // ops (model list, LLM/search/MCP settings) follow the focused agent.
+      let targetAgentId = this.resolveSessionAgentId(next);
+      if (next && targetAgentId && this.currentAgent !== targetAgentId) {
+        this.selectAgent(targetAgentId);
       }
       if (targetAgentId && next) {
         const latestSeq = Number.isFinite(savedState?.latestSeq) ? savedState.latestSeq : null;
@@ -2822,7 +2852,7 @@ export const useChatStore = defineStore('chat', {
     // H2.f.6: setYeaftFeatureReplyThreadId / setYeaftJumpTarget /
     // clearYeaftJumpTarget actions removed.
     async switchYeaftModel(modelId, groupId = null, modelEffort = undefined) {
-      if (!modelId || !this.yeaftAgentId) return;
+      if (!modelId || !this.currentAgent) return;
       const targetSessionId = groupId || null;
       if (targetSessionId) {
         const config = { model: modelId };
@@ -2840,7 +2870,7 @@ export const useChatStore = defineStore('chat', {
         type: 'yeaft_model_switch',
         model: modelId,
         modelEffort: modelEffort || null,
-        agentId: this.yeaftAgentId,
+        agentId: this.currentAgent,
       });
       return null;
     },
@@ -2893,14 +2923,14 @@ export const useChatStore = defineStore('chat', {
      * an `{ error }` shape if the agent returns one).
      */
     loadSearchSettings() {
-      if (!this.yeaftAgentId) {
+      if (!this.currentAgent) {
         this.searchSettings = { backend: 'tavily', tavilyKeyConfigured: false, tavilyKeyMasked: null, disableHtmlFallback: false, loaded: true };
         return Promise.resolve(this.searchSettings);
       }
       return new Promise((resolve) => {
         if (!this._searchPending) this._searchPending = {};
         this._searchPending.load = resolve;
-        this.sendWsMessage({ type: 'get_search_settings', agentId: this.yeaftAgentId });
+        this.sendWsMessage({ type: 'get_search_settings', agentId: this.currentAgent });
       });
     },
 
@@ -2911,13 +2941,13 @@ export const useChatStore = defineStore('chat', {
      * passes only when the user actually edited the input.
      */
     updateSearchSettings(payload) {
-      if (!this.yeaftAgentId) return Promise.resolve({ error: 'no agent' });
+      if (!this.currentAgent) return Promise.resolve({ error: 'no agent' });
       return new Promise((resolve) => {
         if (!this._searchPending) this._searchPending = {};
         this._searchPending.update = resolve;
         this.sendWsMessage({
           type: 'update_search_settings',
-          agentId: this.yeaftAgentId,
+          agentId: this.currentAgent,
           settings: payload || {},
         });
       });
@@ -2929,12 +2959,12 @@ export const useChatStore = defineStore('chat', {
      * never on a timer.
      */
     loadTavilyUsage() {
-      if (!this.yeaftAgentId) return Promise.resolve(null);
+      if (!this.currentAgent) return Promise.resolve(null);
       this.tavilyUsageLoading = true;
       return new Promise((resolve) => {
         if (!this._searchPending) this._searchPending = {};
         this._searchPending.usage = resolve;
-        this.sendWsMessage({ type: 'get_tavily_usage', agentId: this.yeaftAgentId });
+        this.sendWsMessage({ type: 'get_tavily_usage', agentId: this.currentAgent });
       });
     },
 
@@ -2950,7 +2980,7 @@ export const useChatStore = defineStore('chat', {
     // before any agent is registered and we don't want to throw.
 
     loadYeaftMcpServers() {
-      if (!this.yeaftAgentId) {
+      if (!this.currentAgent) {
         this.yeaftMcpServers = [];
         this.yeaftMcpRuntime = { connected: false, toolCount: 0, perServer: [] };
         return Promise.resolve({ servers: [], runtime: this.yeaftMcpRuntime });
@@ -2962,7 +2992,7 @@ export const useChatStore = defineStore('chat', {
         this._mcpPending[requestId] = resolve;
         this.sendWsMessage({
           type: 'yeaft_mcp_list',
-          agentId: this.yeaftAgentId,
+          agentId: this.currentAgent,
           requestId,
         });
       });
@@ -2974,7 +3004,7 @@ export const useChatStore = defineStore('chat', {
      * so the caller can surface connectError to the UI.
      */
     addYeaftMcpServer(server) {
-      if (!this.yeaftAgentId) return Promise.resolve({ error: 'no agent' });
+      if (!this.currentAgent) return Promise.resolve({ error: 'no agent' });
       this.yeaftMcpLoading = true;
       const requestId = `mcp-add-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       return new Promise((resolve) => {
@@ -2982,7 +3012,7 @@ export const useChatStore = defineStore('chat', {
         this._mcpPending[requestId] = resolve;
         this.sendWsMessage({
           type: 'yeaft_mcp_add',
-          agentId: this.yeaftAgentId,
+          agentId: this.currentAgent,
           requestId,
           server: server || {},
         });
@@ -2990,7 +3020,7 @@ export const useChatStore = defineStore('chat', {
     },
 
     removeYeaftMcpServer(name) {
-      if (!this.yeaftAgentId) return Promise.resolve({ error: 'no agent' });
+      if (!this.currentAgent) return Promise.resolve({ error: 'no agent' });
       this.yeaftMcpLoading = true;
       const requestId = `mcp-rem-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       return new Promise((resolve) => {
@@ -2998,7 +3028,7 @@ export const useChatStore = defineStore('chat', {
         this._mcpPending[requestId] = resolve;
         this.sendWsMessage({
           type: 'yeaft_mcp_remove',
-          agentId: this.yeaftAgentId,
+          agentId: this.currentAgent,
           requestId,
           name,
         });
@@ -3010,7 +3040,7 @@ export const useChatStore = defineStore('chat', {
      * Performs disconnect+reconnect on the agent and re-flattens tools.
      */
     reloadYeaftMcpServer(name) {
-      if (!this.yeaftAgentId) return Promise.resolve({ error: 'no agent' });
+      if (!this.currentAgent) return Promise.resolve({ error: 'no agent' });
       this.yeaftMcpLoading = true;
       const requestId = `mcp-rel-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       return new Promise((resolve) => {
@@ -3018,7 +3048,7 @@ export const useChatStore = defineStore('chat', {
         this._mcpPending[requestId] = resolve;
         this.sendWsMessage({
           type: 'yeaft_mcp_reload',
-          agentId: this.yeaftAgentId,
+          agentId: this.currentAgent,
           requestId,
           name: name || null,
         });
@@ -3066,10 +3096,10 @@ export const useChatStore = defineStore('chat', {
       // The agent will re-broadcast a fresh snapshot after re-init.
       this.vpStatuses = {};
       // Tell agent to reset session so Engine gets a fresh start
-      if (this.yeaftAgentId) {
+      if (this.currentAgent) {
         this.sendWsMessage({
           type: 'yeaft_reset',
-          agentId: this.yeaftAgentId,
+          agentId: this.currentAgent,
         });
       }
     },
@@ -3540,10 +3570,10 @@ export const useChatStore = defineStore('chat', {
      * standard pipeline.
      */
     cancelYeaft() {
-      if (!this.yeaftAgentId) return;
+      if (!this.currentAgent) return;
       this.sendWsMessage({
         type: 'yeaft_abort_all',
-        agentId: this.yeaftAgentId,
+        agentId: this.currentAgent,
       });
       // Legacy/global stop path: clear every local Yeaft running flag.
       if (this.yeaftConversationId) {
@@ -3554,10 +3584,11 @@ export const useChatStore = defineStore('chat', {
       this.yeaftProcessingSessions = {};
     },
     cancelYeaftSession(sessionId) {
-      if (!this.yeaftAgentId || !sessionId) return;
+      const agentId = this.resolveSessionAgentId(sessionId);
+      if (!agentId || !sessionId) return;
       this.sendWsMessage({
         type: 'yeaft_abort_all',
-        agentId: this.yeaftAgentId,
+        agentId,
         sessionId,
       });
       this.activeVpTurns = Object.fromEntries(
@@ -3574,14 +3605,15 @@ export const useChatStore = defineStore('chat', {
      * still use the turnId-only path.
      */
     cancelVpTurn(turnId, { sessionId = null, vpId = null } = {}) {
-      if (!this.yeaftAgentId || !turnId) return;
+      const agentId = this.resolveSessionAgentId(sessionId);
+      if (!agentId || !turnId) return;
       this.stoppingVpTurnIds = {
         ...this.stoppingVpTurnIds,
         [turnId]: Date.now(),
       };
       const msg = {
         type: 'yeaft_abort_turn',
-        agentId: this.yeaftAgentId,
+        agentId,
         turnId,
       };
       if (sessionId) msg.sessionId = sessionId;
@@ -3589,9 +3621,11 @@ export const useChatStore = defineStore('chat', {
       this.sendWsMessage(msg);
     },
     cancelVpTurnForSession(vpId, sessionId = null) {
-      if (!this.yeaftAgentId || !vpId) return false;
+      if (!vpId) return false;
       const targetSessionId = sessionId || this.yeaftActiveSessionFilter || null;
       if (!targetSessionId) return false;
+      const agentId = this.resolveSessionAgentId(targetSessionId);
+      if (!agentId) return false;
       const map = this.activeVpTurns || {};
       let bestTurnId = null;
       let bestStartedAt = -Infinity;
@@ -3616,7 +3650,7 @@ export const useChatStore = defineStore('chat', {
       }
       this.sendWsMessage({
         type: 'yeaft_abort_turn',
-        agentId: this.yeaftAgentId,
+        agentId,
         sessionId: targetSessionId,
         vpId,
       });
@@ -3693,8 +3727,9 @@ export const useChatStore = defineStore('chat', {
 
     reloadYeaftMessages() {
       if (this.currentView !== 'yeaft') return false;
-      if (!this.yeaftAgentId) return false;
       const sessionId = resolveActiveYeaftSessionId(this);
+      const agentId = this.resolveSessionAgentId(sessionId);
+      if (!agentId) return false;
       const sessionKey = sessionId || '__all__';
       const convId = this.yeaftConversationId;
 
@@ -3720,7 +3755,7 @@ export const useChatStore = defineStore('chat', {
 
       this.sendWsMessage({
         type: 'yeaft_load_history',
-        agentId: this.yeaftAgentId,
+        agentId,
         limit: YEAFT_RECENT_TURNS,
         sessionId,
       });
@@ -3730,9 +3765,11 @@ export const useChatStore = defineStore('chat', {
     loadMoreYeaftHistory() {
       if (this.currentView !== 'yeaft') return;
       if (this.yeaftLoadingMoreHistory || !this.yeaftHasMoreHistory) return;
-      if (!this.yeaftAgentId || this.yeaftOldestLoadedSeq == null) return;
+      if (this.yeaftOldestLoadedSeq == null) return;
 
       const sessionId = resolveActiveYeaftSessionId(this);
+      const agentId = this.resolveSessionAgentId(sessionId);
+      if (!agentId) return;
 
       this.yeaftLoadingMoreHistory = true;
       const sessionKey = sessionId || '__all__';
@@ -3745,7 +3782,7 @@ export const useChatStore = defineStore('chat', {
       };
       this.sendWsMessage({
         type: 'yeaft_load_more_history',
-        agentId: this.yeaftAgentId,
+        agentId,
         sessionId,
         beforeSeq: this.yeaftOldestLoadedSeq,
         turns: 10,
@@ -3825,7 +3862,7 @@ export const useChatStore = defineStore('chat', {
       if (!forceRefresh && fresh) {
         return Promise.resolve(this.modelsDevRegistry);
       }
-      const agentId = this.yeaftAgentId || this.currentAgent;
+      const agentId = this.currentAgent;
       if (!agentId) {
         return Promise.resolve(this.modelsDevRegistry);
       }
@@ -3879,11 +3916,11 @@ export const useChatStore = defineStore('chat', {
       // re-renders the system prompt in the chosen language on the very
       // next turn — no session reload required. Skipped when no Yeaft
       // agent is bound (Chat-only or pre-connect state).
-      if (this.yeaftAgentId) {
+      if (this.currentAgent) {
         try {
           this.sendWsMessage({
             type: 'update_llm_config',
-            agentId: this.yeaftAgentId,
+            agentId: this.currentAgent,
             config: { language: locale },
           });
         } catch { /* best-effort; locale already applied to UI */ }

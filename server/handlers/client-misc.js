@@ -146,10 +146,10 @@ export async function handleClientMisc(clientId, client, msg, checkAgentAccess) 
     }
 
     case 'get_yeaft_settings': {
-      const yeaftAgentId = msg.agentId || client.currentAgent;
-      if (!yeaftAgentId) break;
-      if (!await checkAgentAccess(yeaftAgentId)) break;
-      await forwardToAgent(yeaftAgentId, { type: 'get_yeaft_settings' });
+      const agentId = msg.agentId || client.currentAgent;
+      if (!agentId) break;
+      if (!await checkAgentAccess(agentId)) break;
+      await forwardToAgent(agentId, { type: 'get_yeaft_settings' });
       break;
     }
 

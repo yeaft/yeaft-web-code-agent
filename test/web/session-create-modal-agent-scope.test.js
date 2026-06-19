@@ -47,7 +47,7 @@ describe('SessionCreateModal — seedAgentDefault', () => {
   it('seeds form.agentId once agents hydrate (cold-load: empty at mount)', () => {
     const ctx = {
       form: { agentId: null },
-      chat: { yeaftAgentId: null, currentAgent: null },
+      chat: { currentAgent: null },
       agentOptions: [
         { id: 'server', online: true },
         { id: 'laptop', online: true },
@@ -58,10 +58,10 @@ describe('SessionCreateModal — seedAgentDefault', () => {
     expect(ctx.form.agentId).toBe('server');
   });
 
-  it('prefers the chat yeaftAgentId / currentAgent when it is online', () => {
+  it('prefers the chat currentAgent (focused agent) when it is online', () => {
     const ctx = {
       form: { agentId: null },
-      chat: { yeaftAgentId: 'laptop', currentAgent: 'server' },
+      chat: { currentAgent: 'laptop' },
       agentOptions: [
         { id: 'server', online: true },
         { id: 'laptop', online: true },
@@ -74,7 +74,7 @@ describe('SessionCreateModal — seedAgentDefault', () => {
   it('does NOT clobber an already-valid online selection (user choice wins)', () => {
     const ctx = {
       form: { agentId: 'laptop' },
-      chat: { yeaftAgentId: 'server', currentAgent: 'server' },
+      chat: { currentAgent: 'server' },
       agentOptions: [
         { id: 'server', online: true },
         { id: 'laptop', online: true },
@@ -87,7 +87,7 @@ describe('SessionCreateModal — seedAgentDefault', () => {
   it('re-seeds when the current selection has gone offline / stale', () => {
     const ctx = {
       form: { agentId: 'laptop' },
-      chat: { yeaftAgentId: null, currentAgent: null },
+      chat: { currentAgent: null },
       agentOptions: [
         { id: 'server', online: true },
         { id: 'laptop', online: false }, // went offline
@@ -100,7 +100,7 @@ describe('SessionCreateModal — seedAgentDefault', () => {
   it('leaves agentId null when nothing is online (canSubmit gates the form)', () => {
     const ctx = {
       form: { agentId: null },
-      chat: { yeaftAgentId: null, currentAgent: null },
+      chat: { currentAgent: null },
       agentOptions: [{ id: 'server', online: false }],
     };
     seedAgentDefault.call(ctx);
@@ -110,7 +110,7 @@ describe('SessionCreateModal — seedAgentDefault', () => {
   it('is a no-op when the roster is empty (still loading)', () => {
     const ctx = {
       form: { agentId: null },
-      chat: { yeaftAgentId: 'server', currentAgent: 'server' },
+      chat: { currentAgent: 'server' },
       agentOptions: [],
     };
     seedAgentDefault.call(ctx);
@@ -151,7 +151,7 @@ describe('SessionCreateModal — agentSignature watcher key (offline detection)'
     // seedAgentDefault, which must move the selection to an online agent.
     const ctx = {
       form: { agentId: 'server' },
-      chat: { yeaftAgentId: null, currentAgent: null },
+      chat: { currentAgent: null },
       agentOptions: [{ id: 'server', online: false }, { id: 'laptop', online: true }],
     };
     seedAgentDefault.call(ctx); // what the watcher calls
