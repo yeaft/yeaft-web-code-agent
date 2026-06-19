@@ -1,5 +1,81 @@
 import TerminalOutput from './TerminalOutput.js';
 
+const tryParseJsonLine = (line) => {
+  if (typeof line !== 'string') return null;
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
+  try { return JSON.parse(trimmed); } catch (_) { return null; }
+};
+
+const compactText = (value, maxLength = 360) => {
+  if (typeof value !== 'string') return '';
+  const text = value.trim().replace(/\s+/g, ' ');
+  return text.length > maxLength ? text.slice(0, maxLength - 1) + '…' : text;
+};
+
+const readableSubAgentEvent = (event, translate) => {
+  if (!event || typeof event !== 'object') return '';
+  const $t = typeof translate === 'function' ? translate : (key) => key;
+  const name = event.agentName || event.agentId || $t('yeaft.sessionStatus.task.kind.subAgent');
+  switch (event.type) {
+    case 'sub_agent_spawned': {
+      const mission = compactText(event.mission, 240);
+      return mission
+        ? $t('yeaft.sessionStatus.task.subAgentStartedWithMission', { name, mission })
+        : $t('yeaft.sessionStatus.task.subAgentStarted', { name });
+    }
+    case 'sub_agent_status':
+      return event.status
+        ? $t('yeaft.sessionStatus.task.subAgentStatus', { name, status: event.status })
+        : $t('yeaft.sessionStatus.task.subAgentStatusUpdated', { name });
+    case 'sub_agent_turn_end': {
+      const text = compactText(event.content || event.text);
+      return text
+        ? $t('yeaft.sessionStatus.task.subAgentResult', { name, text })
+        : $t('yeaft.sessionStatus.task.subAgentProducedResult', { name });
+    }
+    case 'tool_start':
+    case 'tool_use':
+    case 'tool_call':
+      return $t('yeaft.sessionStatus.task.subAgentUsedTool', { name, tool: event.name || event.toolName || 'tool' });
+    case 'tool_result':
+    case 'tool_end':
+      return $t('yeaft.sessionStatus.task.subAgentFinishedTool', { name, tool: event.name || event.toolName || 'tool' });
+    case 'usage':
+      return typeof event.tokens === 'number'
+        ? $t('yeaft.sessionStatus.task.subAgentUsage', { name, tokens: event.tokens })
+        : '';
+    case 'error': {
+      const error = event.error && (event.error.message || event.error);
+      return error
+        ? $t('yeaft.sessionStatus.task.subAgentError', { name, error })
+        : $t('yeaft.sessionStatus.task.subAgentHitError', { name });
+    }
+    default: {
+      const text = compactText(event.content || event.message, 240);
+      return text ? $t('yeaft.sessionStatus.task.subAgentEvent', { name, text }) : '';
+    }
+  }
+};
+
+export function createSubAgentTaskDetailLines(task, translate) {
+  if (!task || task.kind !== 'sub_agent') return [];
+  const $t = typeof translate === 'function' ? translate : (key) => key;
+  const resultSummary = compactText(task.result?.summary);
+  const fallbackName = $t('yeaft.sessionStatus.task.kind.subAgent');
+  const resultName = task.agentName || task.agentId || fallbackName;
+  const resultLine = resultSummary
+    ? [$t('yeaft.sessionStatus.task.subAgentResult', { name: resultName, text: resultSummary })]
+    : [];
+  const preview = typeof task.log?.preview === 'string' ? task.log.preview : '';
+  const activityLines = preview
+    .split(/\r?\n/)
+    .map(line => readableSubAgentEvent(tryParseJsonLine(line), translate))
+    .filter(Boolean)
+    .filter(line => !resultLine.includes(line));
+  return [...resultLine, ...activityLines];
+}
+
 /**
  * VpTimelinePane — right-of-conversation Session status pane.
  *
@@ -180,21 +256,34 @@ export default {
           {{ $t('yeaft.session.tasksEmpty') }}
         </div>
         <div v-else class="yeaft-vp-task-list">
-          <article v-for="task in tasks" :key="task.id" class="yeaft-vp-task-item" :class="{ 'is-expanded': expandedTasks[task.id] }">
+          <article
+            v-for="task in tasks"
+            :key="task.id"
+            class="yeaft-vp-task-item"
+            :class="{ 'is-expanded': expandedTasks[task.id], 'is-terminal': task.status !== 'running' }"
+          >
             <button type="button" class="yeaft-vp-task-summary" @click="toggleTaskExpanded(task.id)">
               <span class="yeaft-vp-task-dot" aria-hidden="true"></span>
               <span class="yeaft-vp-task-main">
                 <span class="yeaft-vp-task-title">{{ task.title || task.id }}</span>
                 <span class="yeaft-vp-task-meta">{{ taskOwnerName(task) }} · {{ formatTaskTime(task.startedAt) }}</span>
               </span>
-              <span class="yeaft-vp-task-kind">{{ task.kind }}</span>
+              <span class="yeaft-vp-task-kind">{{ taskKindLabel(task) }}</span>
               <svg class="yeaft-vp-task-chevron" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M9 18l6-6-6-6"/>
               </svg>
             </button>
             <div v-if="expandedTasks[task.id]" class="yeaft-vp-task-detail">
+              <div v-if="task.kind === 'sub_agent'" class="yeaft-vp-task-detail-lines">
+                <template v-if="taskDetailLines(task).length">
+                  <div v-for="(line, index) in taskDetailLines(task)" :key="index" class="yeaft-vp-task-detail-line">
+                    {{ line }}
+                  </div>
+                </template>
+                <div v-else class="yeaft-vp-task-log-empty">{{ $t('yeaft.sessionStatus.task.subAgentNoReadableEvents') }}</div>
+              </div>
               <TerminalOutput
-                v-if="task.log && task.log.preview"
+                v-else-if="task.log && task.log.preview"
                 class="yeaft-vp-task-log"
                 :content="task.log.preview"
                 :ref="el => setTaskLogRef(task.id, el && (el.$el || el))"
@@ -286,6 +375,16 @@ export default {
       try { return new Date(value).toLocaleTimeString(); } catch (_) { return String(value); }
     };
 
+    const taskKindLabel = (task) => {
+      switch (task?.kind) {
+        case 'sub_agent': return $t('yeaft.sessionStatus.task.kind.subAgent');
+        case 'shell': return $t('yeaft.sessionStatus.task.kind.shell');
+        default: return task?.kind || '';
+      }
+    };
+
+    const taskDetailLines = (task) => createSubAgentTaskDetailLines(task, $t);
+
     const statusLabel = (row) => {
       switch (row.status) {
         case 'idle':      return $t('yeaft.vpTimeline.status.idle');
@@ -328,6 +427,8 @@ export default {
       toggleTaskExpanded,
       taskOwnerName,
       formatTaskTime,
+      taskKindLabel,
+      taskDetailLines,
       setTaskLogRef,
       onTaskLogScroll,
     };

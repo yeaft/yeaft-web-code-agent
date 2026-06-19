@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { createSubAgentTaskDetailLines } from '../../web/components/VpTimelinePane.js';
 
 const toolLineSource = readFileSync(new URL('../../web/components/ToolLine.js', import.meta.url), 'utf8');
 const assistantTurnSource = readFileSync(new URL('../../web/components/AssistantTurn.js', import.meta.url), 'utf8');
@@ -40,14 +41,58 @@ describe('terminal output normalization render wiring', () => {
     expect(terminalOutputSource).not.toContain('v-html');
   });
 
-  it('styles background task logs as a plain terminal region', () => {
+  it('styles background task logs inside a subtle detail region', () => {
+    const taskDetailBlock = yeaftCssSource.match(/\.yeaft-vp-task-detail \{[\s\S]*?\n\}/)?.[0] || '';
     const taskLogBlock = yeaftCssSource.match(/\.yeaft-vp-task-log,\n\.yeaft-vp-task-log-empty \{[\s\S]*?\n\}/)?.[0] || '';
 
+    expect(taskDetailBlock).toContain('background: var(--bg-user-msg-subtle);');
+    expect(taskDetailBlock).toContain('border-radius: 8px;');
     expect(taskLogBlock).toContain('background: transparent;');
     expect(taskLogBlock).not.toContain('border:');
-    expect(taskLogBlock).not.toContain('border-radius:');
     expect(variablesCssSource).toContain('.terminal-fg-green { color: var(--terminal-fg-green); }');
     expect(variablesCssSource).toContain('.terminal-bg-cyan { background-color: var(--terminal-bg-cyan); }');
     expect(variablesCssSource).toContain('.terminal-output');
+  });
+
+  it('formats sub-agent task JSONL into human readable detail lines', () => {
+    const messages = {
+      'yeaft.sessionStatus.task.subAgentResult': '{name} result: {text}',
+      'yeaft.sessionStatus.task.subAgentStatus': '{name} is {status}',
+    };
+    const t = (key, params = {}) => Object.entries(params).reduce(
+      (text, [name, value]) => text.replace(new RegExp(`\\{${name}\\}`, 'g'), value),
+      messages[key] || key,
+    );
+    const preview = [
+      JSON.stringify({ type: 'text_delta', agentName: 'worker', text: 'partial answer' }),
+      JSON.stringify({ type: 'sub_agent_turn_end', agentName: 'worker', content: 'final answer' }),
+    ].join('\n');
+
+    expect(createSubAgentTaskDetailLines({ kind: 'sub_agent', log: { preview } }, t)).toEqual([
+      'worker result: final answer',
+    ]);
+    expect(createSubAgentTaskDetailLines({
+      kind: 'sub_agent',
+      agentName: 'worker',
+      result: { summary: 'final answer from task snapshot' },
+      log: { preview: JSON.stringify({ type: 'sub_agent_status', agentName: 'worker', status: 'running' }) },
+    }, t)).toEqual([
+      'worker result: final answer from task snapshot',
+      'worker is running',
+    ]);
+    expect(createSubAgentTaskDetailLines({ kind: 'shell', log: { preview } }, t)).toEqual([]);
+
+    expect(vpTimelinePaneSource).toContain('export function createSubAgentTaskDetailLines');
+    expect(vpTimelinePaneSource).toContain('const resultSummary = compactText(task.result?.summary);');
+    expect(vpTimelinePaneSource).toContain("case 'sub_agent_spawned':");
+    expect(vpTimelinePaneSource).toContain("$t('yeaft.sessionStatus.task.subAgentStartedWithMission'");
+    expect(vpTimelinePaneSource).toContain('v-if="task.kind === \'sub_agent\'"');
+    expect(vpTimelinePaneSource).toContain('const compactText = (value, maxLength = 360) => {');
+    expect(vpTimelinePaneSource).toContain("$t('yeaft.sessionStatus.task.subAgentNoReadableEvents')");
+    expect(vpTimelinePaneSource).toContain('{{ taskKindLabel(task) }}');
+    expect(vpTimelinePaneSource).toContain("task.status !== 'running'");
+    expect(vpTimelinePaneSource).not.toContain("case 'text_delta':");
+    expect(vpTimelinePaneSource).not.toContain('subAgentSaid');
+    expect(vpTimelinePaneSource).not.toContain('{{ task.log.preview }}');
   });
 });
