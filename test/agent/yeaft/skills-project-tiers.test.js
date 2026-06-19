@@ -83,6 +83,19 @@ describe('createSkillManager — borrowed user skill tiers', () => {
     expect(shared.description).toBe('Yeaft user version.');
     expect(manager.skillsDir).toBe(join(yeaftDir, 'skills'));
   });
+
+  it('does not re-scan Yeaft bundled plugin skills as borrowed Claude user skills', () => {
+    rmSync(emptyBundledDir, { recursive: true, force: true });
+    const bundledDir = join(homeDir, '.claude', 'skills', 'yeaft-skills', 'skills');
+    process.env.YEAFT_SKILLS_BUNDLED_DIR = bundledDir;
+    writeSkill(homeDir, '.claude/skills/yeaft-skills/skills', 'foo', 'Bundled plugin skill.');
+
+    const manager = createSkillManager(yeaftDir, workDir);
+    const skill = manager.list().find(s => s.name === 'foo');
+    expect(skill).toBeTruthy();
+    expect(skill.tier).toBe('bundled');
+    expect(skill.description).toBe('Bundled plugin skill.');
+  });
 });
 
 describe('createSkillManager — project .claude/skills tier', () => {

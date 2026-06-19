@@ -518,6 +518,24 @@ ROOT = "/tmp"
     expect(result.skipped).toEqual([]);
   });
 
+  it('strips Codex TOML inline comments outside quoted values', () => {
+    writeCodexMcp(`
+[mcp_servers.filesystem]
+command = "npx" # common TOML inline comment
+args = ["-y", "@mcp/filesystem"] # package args
+note = "literal # is not a comment"
+
+[mcp_servers.filesystem.env]
+TOKEN = 'abc#123' # env comment
+`);
+
+    const result = loadProjectMCPServers(PROJECT_DIR);
+    expect(result.servers).toEqual([
+      { name: 'filesystem', command: 'npx', args: ['-y', '@mcp/filesystem'], env: { TOKEN: 'abc#123' } },
+    ]);
+    expect(result.skipped).toEqual([]);
+  });
+
   it('includes stdio servers and skips SSE/HTTP (url/type) servers as unsupported', () => {
     writeMcp({
       mcpServers: {

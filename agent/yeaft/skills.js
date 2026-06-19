@@ -213,8 +213,19 @@ function listSubdirFiles(dir) {
  * @param {string} [subPath] — relative path from root (for category derivation)
  * @returns {{ skills: Skill[], errors: string[] }}
  */
-function discoverSkills(rootDir, subPath = '') {
+function pathIsInside(childPath, parentPath) {
+  const child = resolve(childPath);
+  const parent = resolve(parentPath);
+  return child === parent || child.startsWith(parent + sep);
+}
+
+function shouldIgnorePath(candidatePath, ignorePaths) {
+  return ignorePaths.some(ignorePath => pathIsInside(candidatePath, ignorePath));
+}
+
+function discoverSkills(rootDir, subPath = '', opts = {}) {
   const dir = subPath ? join(rootDir, subPath) : rootDir;
+  const ignorePaths = Array.isArray(opts.ignorePaths) ? opts.ignorePaths : [];
   const skills = [];
   const errors = [];
 
@@ -231,6 +242,8 @@ function discoverSkills(rootDir, subPath = '') {
   for (const entry of entries) {
     const entryPath = join(dir, entry.name);
     const relPath = subPath ? join(subPath, entry.name) : entry.name;
+
+    if (shouldIgnorePath(entryPath, ignorePaths)) continue;
 
     if (entry.isFile() && entry.name.endsWith('.md') && entry.name !== 'SKILL.md') {
       // Single-file skill (legacy format)
@@ -278,7 +291,7 @@ function discoverSkills(rootDir, subPath = '') {
         }
       } else {
         // No SKILL.md — treat as category directory, recurse
-        const sub = discoverSkills(rootDir, relPath);
+        const sub = discoverSkills(rootDir, relPath, opts);
         skills.push(...sub.skills);
         errors.push(...sub.errors);
       }
@@ -368,17 +381,22 @@ export class SkillManager {
   /** @type {Map<string, string>} — dir path → tier label */
   #tierByDir;
 
+  /** @type {Map<string, string[]>} — dir path → resolved ignore paths */
+  #ignorePathsByDir;
+
   /**
    * @param {string | string[]} dirs — single directory (back-compat) or array of
    *   directories in priority order (lowest → highest). Falsy entries are
    *   filtered out so callers can write `[bundled, user, projectOrNull]`.
-   * @param {{ userDir?: string, tierByDir?: Record<string, string> }} [opts]
+   * @param {{ userDir?: string, tierByDir?: Record<string, string>, ignorePathsByDir?: Record<string, string[]> }} [opts]
    *   userDir: directory where `save()` and `remove()` write. Defaults to the
    *     last entry in `dirs` (typical case: user dir is highest priority that
    *     isn't a per-project layer).
    *   tierByDir: optional label map — dir path → 'bundled' | 'user' | 'project'.
    *     Decorates each discovered Skill with `_tier` for diagnostics (Settings
    *     UI uses this to show "where this skill came from").
+   *   ignorePathsByDir: optional map of scan dir → subtrees to skip while
+   *     recursively discovering skills in that dir.
    */
   constructor(dirs, opts = {}) {
     const list = Array.isArray(dirs)
@@ -397,6 +415,13 @@ export class SkillManager {
         if (typeof d === 'string' && typeof tier === 'string') {
           this.#tierByDir.set(d, tier);
         }
+      }
+    }
+    this.#ignorePathsByDir = new Map();
+    if (opts && opts.ignorePathsByDir && typeof opts.ignorePathsByDir === 'object') {
+      for (const [d, ignorePaths] of Object.entries(opts.ignorePathsByDir)) {
+        if (typeof d !== 'string' || !Array.isArray(ignorePaths)) continue;
+        this.#ignorePathsByDir.set(d, ignorePaths.filter(p => typeof p === 'string' && p.length > 0).map(p => resolve(p)));
       }
     }
   }
@@ -431,7 +456,7 @@ export class SkillManager {
 
     for (const dir of this.#skillsDirs) {
       if (!existsSync(dir)) continue;
-      const { skills, errors } = discoverSkills(dir);
+      const { skills, errors } = discoverSkills(dir, '', { ignorePaths: this.#ignorePathsByDir.get(dir) || [] });
       const tier = this.#tierByDir.get(dir) || basename(dir);
       for (const skill of skills) {
         // Platform filtering at load time
@@ -747,7 +772,14 @@ export function createSkillManager(yeaftDir, workDir) {
   if (codexProjectDir) tierByDir[codexProjectDir] = 'project-codex';
   if (projectDir) tierByDir[projectDir] = 'project';
 
-  const manager = new SkillManager(dirs, { userDir, tierByDir });
+  const ignorePathsByDir = {};
+  if (claudeUserDir && bundled && pathIsInside(bundled, claudeUserDir)) {
+    // Borrowed ~/.claude/skills must not recurse into the Yeaft bundled plugin
+    // package; bundled skills have their own lower-priority tier/provenance.
+    ignorePathsByDir[claudeUserDir] = [join(claudeUserDir, 'yeaft-skills')];
+  }
+
+  const manager = new SkillManager(dirs, { userDir, tierByDir, ignorePathsByDir });
   manager.load();
   return manager;
 }

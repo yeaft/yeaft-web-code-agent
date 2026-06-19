@@ -622,8 +622,52 @@ function loadClaudeMCPJsonFile(filePath, source) {
   return { servers, skipped };
 }
 
+function stripTomlInlineComment(raw) {
+  const text = String(raw || '');
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  let depth = 0;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inDouble) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inDouble = false;
+      }
+      continue;
+    }
+    if (inSingle) {
+      if (ch === "'") inSingle = false;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      continue;
+    }
+    if (ch === '[' || ch === '{') {
+      depth++;
+      continue;
+    }
+    if ((ch === ']' || ch === '}') && depth > 0) {
+      depth--;
+      continue;
+    }
+    if (ch === '#' && depth === 0) return text.slice(0, i).trim();
+  }
+  return text.trim();
+}
+
 function parseTomlValue(raw) {
-  const value = String(raw || '').trim();
+  const value = stripTomlInlineComment(raw);
   if (value.startsWith('"') && value.endsWith('"')) {
     try { return JSON.parse(value); } catch { return value.slice(1, -1); }
   }
