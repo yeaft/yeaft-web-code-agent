@@ -237,8 +237,8 @@ export default {
     //
     // TODO(arch): this `yeaftActiveSessionFilter || activeSessionId` chain is
     //   duplicated in YeaftPage.js (timeline + topbar) and MessageList.js
-    //   (announcement bar). Consolidate into a `sessionsStore.activeGroupIdResolved`
-    //   getter and migrate all four call sites in a follow-up PR.
+    //   (IM layout gate). Consolidate into a `sessionsStore.activeGroupIdResolved`
+    //   getter and migrate all call sites in a follow-up PR.
     const mentionVpCandidates = Vue.computed(() => {
       if (!sessionsStore) return vpStore.vpList || [];
       const activeSessionId = store.yeaftActiveSessionFilter || sessionsStore.activeSessionId || null;
@@ -279,7 +279,7 @@ export default {
 
     // feat-vp-list-ui-polish: external mention API. Parents that need to
     // inject an `@<vpId> ` token into the draft (e.g. YeaftPage when its
-    // VP list pane gets clicked) call this via a template ref. Keeping
+    // Session status pane gets clicked) call this via a template ref. Keeping
     // the mechanism imperative — and the Yeaft-specific knowledge
     // (`@<vpId>` syntax, which view it lives in) out of this generic
     // component — avoids a reverse dependency where the shared input

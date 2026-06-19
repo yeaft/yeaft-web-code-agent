@@ -6,6 +6,7 @@ const read = (path) => readFileSync(new URL(`../../web/${path}`, import.meta.url
 const pageSource = read('components/YeaftPage.js');
 const sidebarSource = read('components/YeaftSidebar.js');
 const chatHeaderSource = read('components/ChatHeader.js');
+const vpTimelineSource = read('components/VpTimelinePane.js');
 const yeaftCss = read('styles/yeaft.css');
 const sidebarCss = read('styles/sidebar.css');
 const variablesCss = read('styles/variables.css');
@@ -21,22 +22,22 @@ function topbarRightBlock() {
 }
 
 describe('Yeaft conversation header actions', () => {
-  it('keeps the header announcement edit action scoped to the announcement section', () => {
+  it('keeps announcement controls in the Session status pane, not the conversation header', () => {
     const block = topbarRightBlock();
 
-    expect(block).toContain('class="yeaft-topbar-announcement-edit"');
-    expect(block).toContain('@click="openAnnouncementSettings"');
-    expect(block).toContain('d="M4 14.5V9.5l11-4v13l-11-4z"');
-    expect(block).toContain("$t('yeaft.session.announcement.editTitle')");
-    expect(block).not.toContain('yeaft-topbar-announcement-edit-label');
-    expect(block).not.toContain("$t('yeaft.session.announcement.edit')");
+    expect(block).not.toContain('yeaft-topbar-announcement-edit');
+    expect(block).not.toContain('@click="openAnnouncementSettings"');
+    expect(pageSource).toContain('@edit-announcement="openAnnouncementSettings"');
     expect(pageSource).toContain('const openAnnouncementSettings = () => {');
     expect(pageSource).toContain("openSessionSettings({ sessionId, section: 'announcement' });");
     expect(pageSource).toContain(':initial-section="groupSettingsSection"');
-    expect(yeaftCss).toContain('.yeaft-topbar-announcement-edit');
-    expect(yeaftCss).not.toContain('.yeaft-topbar-announcement-edit-label');
-    expect(enI18n).toContain("'yeaft.session.announcement.editTitle': 'Edit session announcement'");
-    expect(zhI18n).toContain("'yeaft.session.announcement.editTitle': '编辑会话公告'");
+    expect(vpTimelineSource).toContain('class="yeaft-session-status-announcement-card"');
+    expect(vpTimelineSource).toContain("$t('yeaft.sessionStatus.announcement')");
+    expect(vpTimelineSource).toContain("$t('yeaft.sessionStatus.announcementAdd')");
+    expect(yeaftCss).toContain('.yeaft-session-status-announcement-card');
+    expect(yeaftCss).not.toContain('.yeaft-topbar-announcement-edit');
+    expect(enI18n).toContain("'yeaft.sessionStatus.announcement': 'Announcement'");
+    expect(zhI18n).toContain("'yeaft.sessionStatus.announcement': '公告'");
     expect(pageSource).not.toContain('openTopbarGroupSettings');
     expect(sidebarSource).toContain('class="session-dots-btn"');
     expect(sidebarSource).toContain("openGroupSettingsFromMenu(s.raw, 'announcement')");
@@ -65,13 +66,12 @@ describe('Yeaft conversation header actions', () => {
     expect(block.indexOf('@click="reloadPage"', block.lastIndexOf('@click="reloadPage"') + 1)).toBe(-1);
   });
 
-  it('orders header actions as VP list, announcement edit, message refresh, dream, debug, mobile page refresh', () => {
+  it('orders header actions as refresh, dream, Session status, debug, mobile page refresh', () => {
     const block = topbarRightBlock();
     const order = [
-      '@click="toggleVpTimeline"',
-      '@click="openAnnouncementSettings"',
       '@click="reloadMessages"',
       '@click="onDreamTriggerClick"',
+      '@click="toggleVpTimeline"',
       '@click="toggleDebug"',
       '@click="reloadPage"',
     ].map((needle) => block.indexOf(needle));

@@ -1399,15 +1399,20 @@ export default {
   // AssistantTurn surface; VirtualTranscript handles delayed mounting.
   'yeaft.vp.turnBlock.elapsedTitle': 'Time elapsed since this turn started',
 
-  // Session status pane — left-of-conversation status board. The old
+  // Session status pane — right-of-conversation status board. The old
   // vpTimeline keys remain as compatibility labels for the roster rows.
   'yeaft.sessionStatus.aria': 'Session status',
   'yeaft.sessionStatus.title': 'Session status',
+  'yeaft.sessionStatus.announcement': 'Announcement',
+  'yeaft.sessionStatus.announcementEmpty': 'No announcement',
+  'yeaft.sessionStatus.announcementAdd': 'Add announcement',
+  'yeaft.sessionStatus.announcementEdit': 'Edit announcement',
   'yeaft.sessionStatus.vps': 'VPs',
   'yeaft.sessionStatus.backgroundTasks': 'Background tasks',
   'yeaft.sessionStatus.noLogPreview': 'No log output yet.',
   'yeaft.sessionStatus.show': 'Show Session status',
   'yeaft.sessionStatus.hide': 'Hide Session status',
+  'yeaft.sessionStatus.close': 'Close Session status',
   'yeaft.vpTimeline.aria': 'Session status',
   'yeaft.vpTimeline.title': 'VPs',
   'yeaft.vpTimeline.empty': 'No VPs in this Session yet.',

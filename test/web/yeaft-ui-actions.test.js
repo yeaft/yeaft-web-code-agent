@@ -28,7 +28,7 @@ describe('Yeaft UI action polish', () => {
   });
 
   it('replaces VP profile info with an edit action that opens Settings VP editor', () => {
-    expect(timelineSource).toContain("emits: ['mention-vp', 'edit-vp', 'start-resize', 'cancel-vp-turn']");
+    expect(timelineSource).toContain("emits: ['mention-vp', 'edit-vp', 'start-resize', 'cancel-vp-turn', 'edit-announcement', 'close']");
     expect(timelineSource).toContain('class="yeaft-vp-timeline-edit"');
     expect(timelineSource).toContain("$t('yeaft.vpTimeline.edit')");
     expect(timelineSource).not.toContain('yeaft-vp-timeline-info');

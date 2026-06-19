@@ -1395,15 +1395,20 @@ export default {
   // AssistantTurn；延迟挂载交给 VirtualTranscript。
   'yeaft.vp.turnBlock.elapsedTitle': '本轮 turn 开始至今的时间',
 
-  // Session 状态面板 —— 对话左侧的状态看板。旧 vpTimeline key 仍作为
+  // Session 状态面板 —— 对话右侧的状态看板。旧 vpTimeline key 仍作为
   // roster 行的兼容标签保留。
   'yeaft.sessionStatus.aria': 'Session 状态',
   'yeaft.sessionStatus.title': 'Session 状态',
+  'yeaft.sessionStatus.announcement': '公告',
+  'yeaft.sessionStatus.announcementEmpty': '暂无公告',
+  'yeaft.sessionStatus.announcementAdd': '添加公告',
+  'yeaft.sessionStatus.announcementEdit': '编辑公告',
   'yeaft.sessionStatus.vps': 'VP',
   'yeaft.sessionStatus.backgroundTasks': '后台任务',
   'yeaft.sessionStatus.noLogPreview': '暂无日志输出。',
   'yeaft.sessionStatus.show': '显示 Session 状态',
   'yeaft.sessionStatus.hide': '隐藏 Session 状态',
+  'yeaft.sessionStatus.close': '关闭 Session 状态',
   'yeaft.vpTimeline.aria': 'Session 状态',
   'yeaft.vpTimeline.title': 'VP',
   'yeaft.vpTimeline.empty': '本 Session 还没有 VP。',
