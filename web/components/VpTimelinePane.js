@@ -60,11 +60,20 @@ const readableSubAgentEvent = (event, translate) => {
 
 export function createSubAgentTaskDetailLines(task, translate) {
   if (!task || task.kind !== 'sub_agent') return [];
+  const $t = typeof translate === 'function' ? translate : (key) => key;
+  const resultSummary = compactText(task.result?.summary);
+  const fallbackName = $t('yeaft.sessionStatus.task.kind.subAgent');
+  const resultName = task.agentName || task.agentId || fallbackName;
+  const resultLine = resultSummary
+    ? [$t('yeaft.sessionStatus.task.subAgentResult', { name: resultName, text: resultSummary })]
+    : [];
   const preview = typeof task.log?.preview === 'string' ? task.log.preview : '';
-  return preview
+  const activityLines = preview
     .split(/\r?\n/)
     .map(line => readableSubAgentEvent(tryParseJsonLine(line), translate))
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter(line => !resultLine.includes(line));
+  return [...resultLine, ...activityLines];
 }
 
 /**

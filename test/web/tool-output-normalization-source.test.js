@@ -57,6 +57,7 @@ describe('terminal output normalization render wiring', () => {
   it('formats sub-agent task JSONL into human readable detail lines', () => {
     const messages = {
       'yeaft.sessionStatus.task.subAgentResult': '{name} result: {text}',
+      'yeaft.sessionStatus.task.subAgentStatus': '{name} is {status}',
     };
     const t = (key, params = {}) => Object.entries(params).reduce(
       (text, [name, value]) => text.replace(new RegExp(`\\{${name}\\}`, 'g'), value),
@@ -70,9 +71,19 @@ describe('terminal output normalization render wiring', () => {
     expect(createSubAgentTaskDetailLines({ kind: 'sub_agent', log: { preview } }, t)).toEqual([
       'worker result: final answer',
     ]);
+    expect(createSubAgentTaskDetailLines({
+      kind: 'sub_agent',
+      agentName: 'worker',
+      result: { summary: 'final answer from task snapshot' },
+      log: { preview: JSON.stringify({ type: 'sub_agent_status', agentName: 'worker', status: 'running' }) },
+    }, t)).toEqual([
+      'worker result: final answer from task snapshot',
+      'worker is running',
+    ]);
     expect(createSubAgentTaskDetailLines({ kind: 'shell', log: { preview } }, t)).toEqual([]);
 
     expect(vpTimelinePaneSource).toContain('export function createSubAgentTaskDetailLines');
+    expect(vpTimelinePaneSource).toContain('const resultSummary = compactText(task.result?.summary);');
     expect(vpTimelinePaneSource).toContain("case 'sub_agent_spawned':");
     expect(vpTimelinePaneSource).toContain("$t('yeaft.sessionStatus.task.subAgentStartedWithMission'");
     expect(vpTimelinePaneSource).toContain('v-if="task.kind === \'sub_agent\'"');
