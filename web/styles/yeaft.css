@@ -4259,6 +4259,10 @@
   flex: 0 0 auto;
 }
 
+.yeaft-vp-task-item.is-terminal .yeaft-vp-task-dot {
+  background: var(--text-muted);
+}
+
 .yeaft-vp-task-main {
   display: flex;
   flex-direction: column;

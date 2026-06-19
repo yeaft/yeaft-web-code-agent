@@ -29,10 +29,12 @@ function createStoreFactory(_id, options) {
 }
 
 globalThis.Pinia = { defineStore: createStoreFactory };
+globalThis.Vue = globalThis.Vue || {};
 globalThis.window = globalThis.window || { addEventListener: vi.fn(), removeEventListener: vi.fn() };
 globalThis.document = globalThis.document || { addEventListener: vi.fn(), removeEventListener: vi.fn() };
 
 const { useChatStore } = await import('../../../web/stores/chat.js');
+const { visibleSessionStatusTasks } = await import('../../../web/components/YeaftPage.js');
 
 function freshStore() {
   const store = useChatStore();
@@ -46,6 +48,7 @@ function freshStore() {
   store.activeVpTurns = {};
   store.stoppingVpTurnIds = {};
   store.messagesMap = {};
+  store.yeaftActiveTasksBySession = {};
   store.sendWsMessage = vi.fn(() => true);
   return store;
 }
@@ -109,6 +112,48 @@ describe('per-session running state', () => {
 
     expect(store.isProcessing).toBe(false);
     expect(store.isYeaftSessionProcessing('session-a')).toBe(false);
+  });
+
+  it('keeps recently completed task snapshots visible to the Session status pane', () => {
+    const store = freshStore();
+    store.yeaftActiveSessionFilter = 'session-a';
+
+    store.handleYeaftOutput({ event: { type: 'yeaft_task_event', task: {
+      id: 'task-1',
+      sessionId: 'session-a',
+      kind: 'sub_agent',
+      status: 'running',
+      createdAt: '2026-06-19T10:00:00.000Z',
+      updatedAt: '2026-06-19T10:00:00.000Z',
+    } } });
+    store.handleYeaftOutput({ event: { type: 'yeaft_task_event', task: {
+      id: 'task-1',
+      sessionId: 'session-a',
+      kind: 'sub_agent',
+      status: 'succeeded',
+      createdAt: '2026-06-19T10:00:00.000Z',
+      updatedAt: '2026-06-19T10:00:02.000Z',
+      endedAt: '2026-06-19T10:00:02.000Z',
+      result: { summary: 'final answer from task snapshot' },
+    } } });
+
+    const paneTasks = visibleSessionStatusTasks(store.yeaftActiveTasksBySession['session-a']);
+
+    expect(paneTasks).toHaveLength(1);
+    expect(paneTasks[0]).toMatchObject({
+      id: 'task-1',
+      status: 'succeeded',
+      result: { summary: 'final answer from task snapshot' },
+    });
+  });
+
+  it('sorts running tasks before recent terminal task snapshots', () => {
+    const tasks = visibleSessionStatusTasks({
+      done: { id: 'done', status: 'succeeded', updatedAt: '2026-06-19T10:00:03.000Z' },
+      running: { id: 'running', status: 'running', updatedAt: '2026-06-19T10:00:01.000Z' },
+    });
+
+    expect(tasks.map(task => task.id)).toEqual(['running', 'done']);
   });
 
   it('keeps Chat compacting state scoped to the active conversation', () => {

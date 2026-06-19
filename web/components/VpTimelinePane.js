@@ -256,7 +256,12 @@ export default {
           {{ $t('yeaft.session.tasksEmpty') }}
         </div>
         <div v-else class="yeaft-vp-task-list">
-          <article v-for="task in tasks" :key="task.id" class="yeaft-vp-task-item" :class="{ 'is-expanded': expandedTasks[task.id] }">
+          <article
+            v-for="task in tasks"
+            :key="task.id"
+            class="yeaft-vp-task-item"
+            :class="{ 'is-expanded': expandedTasks[task.id], 'is-terminal': task.status !== 'running' }"
+          >
             <button type="button" class="yeaft-vp-task-summary" @click="toggleTaskExpanded(task.id)">
               <span class="yeaft-vp-task-dot" aria-hidden="true"></span>
               <span class="yeaft-vp-task-main">

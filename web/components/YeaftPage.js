@@ -19,6 +19,22 @@ import {
 } from './dream-ui-constants.js';
 import { getDefaultModelEffort, getSelectableModelEfforts, modelOptionMatchesRef, modelOptionRef, resolveSessionModelEffort, resolveSessionModelRef } from '../utils/modelRefs.js';
 
+function sessionTaskSortTime(task) {
+  const raw = task?.updatedAt || task?.endedAt || task?.createdAt;
+  const ms = raw ? Date.parse(raw) : NaN;
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+export function visibleSessionStatusTasks(taskMap) {
+  return Object.values(taskMap || {})
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (a.status === 'running' && b.status !== 'running') return -1;
+      if (a.status !== 'running' && b.status === 'running') return 1;
+      return sessionTaskSortTime(b) - sessionTaskSortTime(a);
+    });
+}
+
 export default {
   name: 'YeaftPage',
   components: { ChatInput, MessageList, SettingsPanel, YeaftSidebar, VpDetailView, SessionInviteModal, SessionSettingsModal, WorkbenchPanel, YeaftDebugPanel, VpTimelinePane, YeaftSessionActions, LlmTab },
@@ -206,7 +222,7 @@ export default {
       <VpTimelinePane
         v-if="showVpTimeline"
         :rows="vpTimelineRows"
-        :tasks="runningTasksForActiveSession"
+        :tasks="sessionStatusTasksForActiveSession"
         :announcement-text="sessionStatusAnnouncementText"
         :class="{ 'mobile-session-status': isNarrowDetail }"
         :style="timelineWidthStyle"
@@ -982,12 +998,12 @@ export default {
     // from the agent broker) — no reverse-inference from message-level
     // `isStreaming` flags any more (see
     // docs/notes/2026-05-15-vp-status-from-agent.md).
-    const runningTasksForActiveSession = Vue.computed(() => {
+    const sessionStatusTasksForActiveSession = Vue.computed(() => {
       const gs = sessionsStore();
       const sessionId = store.yeaftActiveSessionFilter || gs?.activeSessionId || null;
       if (!sessionId) return [];
       const map = store.yeaftActiveTasksBySession?.[sessionId] || {};
-      return Object.values(map).filter(task => task && task.status === 'running');
+      return visibleSessionStatusTasks(map);
     });
 
     const vpTimelineRows = Vue.computed(() => {
@@ -1144,7 +1160,7 @@ export default {
       // VP timeline pane bindings — restored in v0.1.767.
       showVpTimeline,
       vpTimelineRows,
-      runningTasksForActiveSession,
+      sessionStatusTasksForActiveSession,
       sessionStatusAnnouncementText,
       sessionStatusVisible,
       toggleSessionStatus,

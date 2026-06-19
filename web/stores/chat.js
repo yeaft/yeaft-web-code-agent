@@ -40,6 +40,8 @@ const vpStatusKey = (groupId, vpId) => `${groupId || ''}::${vpId}`;
 // a session the UI has never seen). User-confirmed: 5 turns is the sweet
 // spot — small enough to paint instantly, large enough to give context.
 const YEAFT_RECENT_TURNS = 5;
+const YEAFT_RECENT_TERMINAL_TASK_LIMIT = 8;
+const YEAFT_TERMINAL_TASK_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'orphaned']);
 
 // Yeaft message ids are `NNNNNN-…` where NNNNNN is the zero-padded seq.
 // Pull the seq out so the store can stamp / advance its delta cursor on
@@ -50,6 +52,22 @@ function parseYeaftMessageSeq(id) {
   if (!m) return null;
   const n = Number(m[1]);
   return Number.isFinite(n) ? n : null;
+}
+
+function taskUpdatedTime(task) {
+  const raw = task?.updatedAt || task?.endedAt || task?.createdAt;
+  const ms = raw ? Date.parse(raw) : NaN;
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function keepRecentSessionTasks(tasksById) {
+  const entries = Object.entries(tasksById || {});
+  const running = entries.filter(([, task]) => task?.status === 'running');
+  const terminal = entries
+    .filter(([, task]) => task && task.status !== 'running' && YEAFT_TERMINAL_TASK_STATUSES.has(task.status))
+    .sort((a, b) => taskUpdatedTime(b[1]) - taskUpdatedTime(a[1]))
+    .slice(0, YEAFT_RECENT_TERMINAL_TASK_LIMIT);
+  return Object.fromEntries([...running, ...terminal]);
 }
 
 function getSessionsStore() {
@@ -410,7 +428,7 @@ export const useChatStore = defineStore('chat', {
     yeaftModelsRefreshing: false, // 当前 agent 的 model/status 后台刷新状态
     yeaftModelRefreshError: null, // 当前 agent 最近一次 refresh 错误（保留旧模型列表）
     yeaftYeaftDir: null,          // agent 的 ~/.yeaft 绝对路径（session_ready 携带）— Yeaft workbench 的默认 workDir
-    yeaftActiveTasksBySession: {}, // { [sessionId]: { [taskId]: running task snapshot } }
+    yeaftActiveTasksBySession: {}, // { [sessionId]: { [taskId]: running or recent terminal task snapshot } }
     // 2026-05-13: tool-call usage stats for the Yeaft debug drawer.
     // Populated by `fetchYeaftToolStats()` → backend → `yeaft_tool_stats`
     // case in handleYeaftOutput. Shape:
@@ -1850,12 +1868,13 @@ export const useChatStore = defineStore('chat', {
           if (!task?.id || !task.sessionId) break;
           const bySession = { ...this.yeaftActiveTasksBySession };
           const current = { ...(bySession[task.sessionId] || {}) };
-          if (task.status === 'running') {
+          if (task.status === 'running' || YEAFT_TERMINAL_TASK_STATUSES.has(task.status)) {
             current[task.id] = task;
           } else {
             delete current[task.id];
           }
-          if (Object.keys(current).length > 0) bySession[task.sessionId] = current;
+          const retained = keepRecentSessionTasks(current);
+          if (Object.keys(retained).length > 0) bySession[task.sessionId] = retained;
           else delete bySession[task.sessionId];
           this.yeaftActiveTasksBySession = bySession;
           break;

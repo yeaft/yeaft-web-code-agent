@@ -90,6 +90,7 @@ describe('terminal output normalization render wiring', () => {
     expect(vpTimelinePaneSource).toContain('const compactText = (value, maxLength = 360) => {');
     expect(vpTimelinePaneSource).toContain("$t('yeaft.sessionStatus.task.subAgentNoReadableEvents')");
     expect(vpTimelinePaneSource).toContain('{{ taskKindLabel(task) }}');
+    expect(vpTimelinePaneSource).toContain("task.status !== 'running'");
     expect(vpTimelinePaneSource).not.toContain("case 'text_delta':");
     expect(vpTimelinePaneSource).not.toContain('subAgentSaid');
     expect(vpTimelinePaneSource).not.toContain('{{ task.log.preview }}');
