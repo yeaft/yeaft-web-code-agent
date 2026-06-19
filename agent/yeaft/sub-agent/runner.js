@@ -354,11 +354,16 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
           // the bump.
           bumpLivenessFromEvent(agent.liveness, evt);
 
-          // Mirror to log + UI sink.
+          // Mirror every raw event to the durable log, but do not live-stream
+          // assistant text to the parent/UI. A sub-agent's answer is consumed
+          // as one complete result at sub_agent_turn_end / task_result re-entry;
+          // streaming deltas here make the card look like the result itself
+          // and can leave users staring at an "idle" preview before the parent
+          // VP consumes the completed task result.
           if (agent.outputLog) {
             try { agent.outputLog.write(wrapEvt(evt)); } catch { /* ignore */ }
           }
-          if (onEvent) {
+          if (onEvent && evt?.type !== 'text_delta') {
             try { onEvent(agent.id, wrapEvt(evt)); } catch { /* ignore listener errors */ }
           }
 
@@ -454,14 +459,15 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
       // the agent/task instead of letting the idle watchdog later mark the
       // already-delivered work as abandoned. Legacy in-process callers with
       // no TaskManager keep the old idle/PromptAgent continuation flow.
-      emit({ type: 'sub_agent_turn_end', content: assistantText });
       if (agent.taskId && deps.taskManager && agent.parentSessionId) {
         transitionTerminal(agent, STATUS.COMPLETED, {
           diagnostic: 'task_turn_complete',
           deps,
         });
+        emit({ type: 'sub_agent_turn_end', content: assistantText, status: STATUS.COMPLETED });
         return;
       }
+      emit({ type: 'sub_agent_turn_end', content: assistantText, status: STATUS.IDLE });
     }
   } finally {
     if (wallTimeWatchdog) clearTimeout(wallTimeWatchdog);
