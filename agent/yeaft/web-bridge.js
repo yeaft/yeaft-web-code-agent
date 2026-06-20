@@ -68,6 +68,8 @@ import { createVpStatusBroker } from './vp-status-broker.js';
 import { classifyThread as defaultClassifyThread, fallbackTitle } from './vp/thread-classifier.js';
 import { listMcpServers, upsertMcpServer, removeMcpServer } from './config-api.js';
 import { buildMcpFlattenedTools } from './tools/mcp-tools.js';
+import { getAgentRegistry, agentBelongsToScope } from './tools/agent.js';
+import { isPromptableAgentStatus } from './sub-agent/status.js';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -4242,6 +4244,71 @@ export async function handleYeaftFetchDebugHistory(msg = {}) {
   });
 }
 
+export function handleYeaftSubAgentPrompt(msg) {
+  const sessionId = typeof msg?.sessionId === 'string' ? msg.sessionId.trim() : '';
+  const taskId = typeof msg?.taskId === 'string' ? msg.taskId.trim() : '';
+  const subAgentId = typeof msg?.subAgentId === 'string' ? msg.subAgentId.trim() : '';
+  const message = typeof msg?.message === 'string' ? msg.message.trim() : '';
+  const fail = (error) => {
+    sendSessionEvent({
+      type: 'yeaft_sub_agent_prompt_result',
+      success: false,
+      taskId: taskId || null,
+      subAgentId: subAgentId || null,
+      error,
+    }, sessionId ? { sessionId } : undefined);
+  };
+
+  if (!sessionId || !taskId || !subAgentId || !message) {
+    fail('sessionId, taskId, subAgentId and message are required');
+    return;
+  }
+  const task = session?.taskManager?.getTask?.(sessionId, taskId) || null;
+  if (!task || task.kind !== 'sub_agent' || task.status !== 'running' || task.runtime?.subAgentId !== subAgentId) {
+    fail('sub-agent task not found');
+    return;
+  }
+
+  const agent = getAgentRegistry().get(subAgentId);
+  const scope = {
+    sessionId,
+    parentVpId: task.ownerVpId || null,
+    parentThreadId: task.source?.threadId || 'main',
+  };
+  if (!agent || !agentBelongsToScope(agent, scope)) {
+    fail('sub-agent not found');
+    return;
+  }
+  if (!isPromptableAgentStatus(agent.status)) {
+    fail(`sub-agent status "${agent.status}" does not accept prompts`);
+    return;
+  }
+
+  if (!Array.isArray(agent.pendingPrompts)) agent.pendingPrompts = [];
+  agent.pendingPrompts.push(message);
+  if (!Array.isArray(agent.messages)) agent.messages = [];
+  agent.messages.push({ role: 'user', content: message, timestamp: Date.now() });
+  if (agent.status === 'idle' || agent.status === 'created') agent.status = 'running';
+
+  try {
+    agent.outputLog?.write?.({
+      type: 'user_prompt',
+      agentId: agent.id,
+      agentName: agent.name,
+      content: message,
+    });
+    session?.taskManager?.refreshTaskLog?.(sessionId, taskId);
+  } catch { /* prompt queueing must not depend on log refresh */ }
+
+  sendSessionEvent({
+    type: 'yeaft_sub_agent_prompt_result',
+    success: true,
+    taskId,
+    subAgentId,
+    pending: agent.pendingPrompts.length,
+  }, { sessionId, vpId: task.ownerVpId || null, threadId: task.source?.threadId || null });
+}
+
 /** Deprecated mode switch — Yeaft is single-mode. */
 export function handleYeaftModeSwitch(_msg) {
   console.warn('[Yeaft] yeaft_mode_switch is deprecated and ignored — Yeaft now runs in a single unified mode.');
@@ -4906,6 +4973,9 @@ export async function handleYeaftMcpReload(msg = {}) {
 }
 
 export const __testHooks = {
+  setSessionForTest(nextSession) {
+    session = nextSession || null;
+  },
   resetAbortState() {
     turnAbortCtrls.clear();
     turnAbortMeta.clear();

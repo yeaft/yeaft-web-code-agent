@@ -1371,6 +1371,20 @@ export const useChatStore = defineStore('chat', {
       this.sendWsMessage(wsMsg);
     },
 
+    sendYeaftSubAgentPrompt({ sessionId, taskId, subAgentId, message }) {
+      const text = typeof message === 'string' ? message.trim() : '';
+      if (!sessionId || !taskId || !subAgentId || !text || !this.yeaftAgentId) return false;
+      this.sendWsMessage({
+        type: 'yeaft_sub_agent_prompt',
+        agentId: this.yeaftAgentId,
+        sessionId,
+        taskId,
+        subAgentId,
+        message: text,
+      });
+      return true;
+    },
+
     getYeaftMessageWindowKey(sessionId = null) {
       return sessionId || this.yeaftActiveSessionFilter || '__all__';
     },

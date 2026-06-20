@@ -156,6 +156,36 @@ describe('per-session running state', () => {
     expect(tasks.map(task => task.id)).toEqual(['running', 'done']);
   });
 
+  it('sends scoped sub-agent prompts through a narrow Yeaft wire message', () => {
+    const store = freshStore();
+    store.yeaftAgentId = 'agent-1';
+
+    const sent = store.sendYeaftSubAgentPrompt({
+      sessionId: 'session-a',
+      taskId: 'task-1',
+      subAgentId: 'sub-1',
+      message: ' new user idea ',
+    });
+
+    expect(sent).toBe(true);
+    expect(store.sendWsMessage).toHaveBeenCalledWith({
+      type: 'yeaft_sub_agent_prompt',
+      agentId: 'agent-1',
+      sessionId: 'session-a',
+      taskId: 'task-1',
+      subAgentId: 'sub-1',
+      message: 'new user idea',
+    });
+  });
+
+  it('rejects incomplete scoped sub-agent prompts before the wire', () => {
+    const store = freshStore();
+    store.yeaftAgentId = 'agent-1';
+
+    expect(store.sendYeaftSubAgentPrompt({ sessionId: 'session-a', taskId: 'task-1', subAgentId: '', message: 'x' })).toBe(false);
+    expect(store.sendWsMessage).not.toHaveBeenCalled();
+  });
+
   it('keeps Chat compacting state scoped to the active conversation', () => {
     const store = freshStore();
     store.currentView = 'chat';

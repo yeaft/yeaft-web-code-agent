@@ -34,6 +34,14 @@ const readableSubAgentEvent = (event, translate) => {
         ? $t('yeaft.sessionStatus.task.subAgentResult', { name, text })
         : $t('yeaft.sessionStatus.task.subAgentProducedResult', { name });
     }
+    case 'text_delta': {
+      const text = compactText(event.text || event.content || event.delta, 240);
+      return text ? $t('yeaft.sessionStatus.task.subAgentEvent', { name, text }) : '';
+    }
+    case 'user_prompt': {
+      const text = compactText(event.content || event.message, 240);
+      return text ? $t('yeaft.sessionStatus.task.subAgentUserPrompt', { text }) : '';
+    }
     case 'tool_start':
     case 'tool_use':
     case 'tool_call':
@@ -58,6 +66,41 @@ const readableSubAgentEvent = (event, translate) => {
   }
 };
 
+export function createSubAgentTaskStreamText(task, translate) {
+  if (!task || task.kind !== 'sub_agent') return '';
+  const $t = typeof translate === 'function' ? translate : (key) => key;
+  const preview = typeof task.log?.preview === 'string' ? task.log.preview : '';
+  const lines = [];
+  let deltaAgentName = '';
+  let deltaText = '';
+  const flushDelta = () => {
+    const text = compactText(deltaText, 720);
+    if (text) {
+      lines.push($t('yeaft.sessionStatus.task.subAgentEvent', {
+        name: deltaAgentName || $t('yeaft.sessionStatus.task.kind.subAgent'),
+        text,
+      }));
+    }
+    deltaAgentName = '';
+    deltaText = '';
+  };
+
+  for (const line of preview.split(/\r?\n/)) {
+    const event = tryParseJsonLine(line);
+    if (!event) continue;
+    if (event.type === 'text_delta') {
+      deltaAgentName = event.agentName || event.agentId || deltaAgentName;
+      deltaText += event.text || event.content || event.delta || '';
+      continue;
+    }
+    flushDelta();
+    const rendered = readableSubAgentEvent(event, $t);
+    if (rendered) lines.push(rendered);
+  }
+  flushDelta();
+  return lines.join('\n');
+}
+
 export function createSubAgentTaskDetailLines(task, translate) {
   if (!task || task.kind !== 'sub_agent') return [];
   const $t = typeof translate === 'function' ? translate : (key) => key;
@@ -67,10 +110,8 @@ export function createSubAgentTaskDetailLines(task, translate) {
   const resultLine = resultSummary
     ? [$t('yeaft.sessionStatus.task.subAgentResult', { name: resultName, text: resultSummary })]
     : [];
-  const preview = typeof task.log?.preview === 'string' ? task.log.preview : '';
-  const activityLines = preview
-    .split(/\r?\n/)
-    .map(line => readableSubAgentEvent(tryParseJsonLine(line), translate))
+  const activityLines = createSubAgentTaskStreamText(task, translate)
+    .split('\n')
     .filter(Boolean)
     .filter(line => !resultLine.includes(line));
   return [...resultLine, ...activityLines];
@@ -86,7 +127,7 @@ export function createSubAgentTaskDetailLines(task, translate) {
  *
  * Props:
  *   rows — TimelineRow[] (see web/stores/helpers/vp-timeline.js for shape).
- *   tasks — running Session task snapshots.
+ *   tasks — running and recent terminal Session task snapshots.
  *   announcementText — active Session announcement preview source.
  *
  * Emits:
@@ -104,7 +145,7 @@ export function createSubAgentTaskDetailLines(task, translate) {
 export default {
   name: 'VpTimelinePane',
   components: { TerminalOutput },
-  emits: ['mention-vp', 'edit-vp', 'start-resize', 'cancel-vp-turn', 'edit-announcement', 'close'],
+  emits: ['mention-vp', 'edit-vp', 'start-resize', 'cancel-vp-turn', 'edit-announcement', 'prompt-sub-agent', 'close'],
   props: {
     rows: { type: Array, required: true },
     tasks: { type: Array, default: () => [] },
@@ -260,7 +301,7 @@ export default {
             v-for="task in tasks"
             :key="task.id"
             class="yeaft-vp-task-item"
-            :class="{ 'is-expanded': expandedTasks[task.id], 'is-terminal': task.status !== 'running' }"
+            :class="{ 'is-expanded': expandedTasks[task.id], 'is-terminal': task.status !== 'running', 'is-running': task.status === 'running' }"
           >
             <button type="button" class="yeaft-vp-task-summary" @click="toggleTaskExpanded(task.id)">
               <span class="yeaft-vp-task-dot" aria-hidden="true"></span>
@@ -274,13 +315,31 @@ export default {
               </svg>
             </button>
             <div v-if="expandedTasks[task.id]" class="yeaft-vp-task-detail">
-              <div v-if="task.kind === 'sub_agent'" class="yeaft-vp-task-detail-lines">
-                <template v-if="taskDetailLines(task).length">
-                  <div v-for="(line, index) in taskDetailLines(task)" :key="index" class="yeaft-vp-task-detail-line">
-                    {{ line }}
-                  </div>
-                </template>
+              <div v-if="task.kind === 'sub_agent'" class="yeaft-vp-task-sub-agent-panel">
+                <TerminalOutput
+                  v-if="subAgentTaskStreamText(task)"
+                  class="yeaft-vp-task-log yeaft-vp-task-stream"
+                  :content="subAgentTaskStreamText(task)"
+                  :ref="el => setTaskLogRef(task.id, el && (el.$el || el))"
+                  @scroll="onTaskLogScroll(task.id)"
+                />
                 <div v-else class="yeaft-vp-task-log-empty">{{ $t('yeaft.sessionStatus.task.subAgentNoReadableEvents') }}</div>
+                <form
+                  v-if="isSubAgentPromptable(task)"
+                  class="yeaft-vp-task-prompt-form"
+                  @submit.prevent="submitSubAgentPrompt(task)"
+                >
+                  <textarea
+                    class="yeaft-vp-task-prompt-input"
+                    v-model="subAgentPromptDrafts[task.id]"
+                    :placeholder="$t('yeaft.sessionStatus.task.promptPlaceholder')"
+                    rows="2"
+                    @keydown.enter.exact.prevent="submitSubAgentPrompt(task)"
+                  ></textarea>
+                  <button type="submit" class="btn-secondary yeaft-vp-task-prompt-submit" :disabled="!subAgentPromptDraft(task)">
+                    {{ $t('yeaft.sessionStatus.task.promptSend') }}
+                  </button>
+                </form>
               </div>
               <TerminalOutput
                 v-else-if="task.log && task.log.preview"
@@ -296,7 +355,7 @@ export default {
       </section>
     </aside>
   `,
-  setup(props) {
+  setup(props, { emit }) {
     const vpStore = (window.Pinia && window.Pinia.useVpStore)
       ? window.Pinia.useVpStore()
       : null;
@@ -322,6 +381,7 @@ export default {
     });
 
     const expandedTasks = Vue.ref({});
+    const subAgentPromptDrafts = Vue.ref({});
     const taskLogRefs = new Map();
     const taskLogPinned = new Map();
 
@@ -384,6 +444,26 @@ export default {
     };
 
     const taskDetailLines = (task) => createSubAgentTaskDetailLines(task, $t);
+    const subAgentTaskStreamText = (task) => createSubAgentTaskStreamText(task, $t);
+    const isSubAgentPromptable = (task) => (
+      task?.kind === 'sub_agent'
+      && task?.status === 'running'
+      && typeof task?.runtime?.subAgentId === 'string'
+      && task.runtime.subAgentId.trim()
+    );
+    const subAgentPromptDraft = (task) => (subAgentPromptDrafts.value[task?.id] || '').trim();
+    const submitSubAgentPrompt = (task) => {
+      const message = subAgentPromptDraft(task);
+      const subAgentId = task?.runtime?.subAgentId;
+      if (!message || !task?.id || !task?.sessionId || !subAgentId) return;
+      emit('prompt-sub-agent', {
+        sessionId: task.sessionId,
+        taskId: task.id,
+        subAgentId,
+        message,
+      });
+      subAgentPromptDrafts.value = { ...subAgentPromptDrafts.value, [task.id]: '' };
+    };
 
     const statusLabel = (row) => {
       switch (row.status) {
@@ -424,11 +504,16 @@ export default {
       threadCountTitle,
       vpTextColorFor,
       expandedTasks,
+      subAgentPromptDrafts,
       toggleTaskExpanded,
       taskOwnerName,
       formatTaskTime,
       taskKindLabel,
       taskDetailLines,
+      subAgentTaskStreamText,
+      isSubAgentPromptable,
+      subAgentPromptDraft,
+      submitSubAgentPrompt,
       setTaskLogRef,
       onTaskLogScroll,
     };
