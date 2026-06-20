@@ -54,33 +54,46 @@ test/            — Vitest 测试
 ### 核心组件
 
 ```
-engine.js        — 主 query loop（turn-based：prompt -> LLM -> tool_calls -> execute -> 循环）
-session.js       — Session orchestrator（loadSession 把所有子系统串起来）
-config.js        — 从 ~/.yeaft/config.json 读配置（providers、models、limits）
+engine.js        — 主 query loop（prompt -> LLM -> tool_calls -> execute -> tool folding / persist）
+session.js       — Session orchestrator（loadSession 把 roster、memory、dream、tasks、VP loader 等串起来）
+config.js        — 从 ~/.yeaft/config.json 读配置（providers、models、limits、runtime defaults）
+config-api.js    — Web 设置页 / CLI 共用的 agent-local 配置读写 API
+debug-trace.js   — Yeaft loop / tool / adapter 调试 trace 存储与查询
 prompts.js       — 双语 system prompt builder（en/zh）
-models.js        — Model 注册表（上下文窗口、output limit、provider 推断）
-sessions/        — Session 编排（coordinator、roster、session-store、pre-flow 等）
+models.js        — Model 注册表（protocol、context/output limit、effort / thinking capability）
+runtime-platform.js — 运行平台探测（shell、路径、OS 提示，供工具和 prompt 注入）
+sessions/        — Session 编排（coordinator、roster、session-store、session-crud、pre-flow、config 等）
 routing/         — Turn 内路由 + loop guard
 router/          — Continuity / thinking 相关路由策略
 memory/          — H2-AMS 记忆子系统
-llm/             — LLM 适配器层（router、anthropic、openai-responses、credentials）
+llm/             — LLM 适配器层（router、anthropic、openai-responses、dynamic credentials、models.dev）
 tools/           — 内置工具表
+tasks/           — Session-scoped 后台任务（shell background、日志、状态事件）
+sub-agent/       — 子 Agent runner、liveness、output log、terminal notification 队列
+tool-folding/    — V7 tool-call reflection / folding（T1 turn 内折叠、T2 end-turn 折叠、重复工具提醒）
+archive/         — 冷存储辅助（tool result / turn archive 与 trace 读取）
 templates/       — System prompt 模板（base.md、mode-unified.md、mode-dream.md 等）
 conversation/    — Message 持久化 + 搜索
+vp/              — VP store / loader / seed defaults / top-up / registry / thread classifier
+stats/           — 工具用量等统计格式化
+storage/         — atomic write、JSONL log、compact storage 基础设施
 dream/           — 后台记忆维护
 compact/         — 上下文 compact 策略
 eval/            — 评估脚本
 ```
 
 ### Engine Query Loop（engine.js）
-1. Pre-query：召回记忆 -> 注入到 system prompt
-2. 构造 messages 数组（带 compact summary 时一并带上）
-3. 调 adapter.stream() -> 收集 text + tool_calls
-4. 如果有 tool_calls -> 执行工具 -> 追加结果 -> 回到第 3 步
-5. end_turn -> 持久化 messages -> 检查是否需要 consolidation -> 完成
-6. max_tokens -> 自动续写（最多 3 次）
-7. 遇到 LLMContextError -> 强制 compact -> 重试
-8. 可重试错误且配了 fallbackModel -> 换 model -> 重试
+> 这里描述的是当前实现路径，目的是帮助维护者定位代码，不是对外稳定 API 契约。改 query loop、tool folding、debug trace、sub-agent notification 时必须同步更新本段。
+
+1. Pre-query：召回记忆 + project docs + runtime platform + pending sub-agent notification -> 注入 system prompt / 当前 user turn
+2. 构造 messages 数组（带 compact summary、reflection message、attachment payload 时一并带上）
+3. 调 adapter.stream() -> 收集 text、thinking blocks / reasoning、tool_calls、usage、debug trace
+4. 如果有 tool_calls -> ToolRegistry 执行；普通结果进入当前 loop，后台任务 / 子 Agent 返回 task envelope 并继续异步
+5. Tool folding：T1 在 turn 内按 `TOOL_BATCH_SIZE = 30` 折叠长工具弧；T2 在 end_turn 对超过 `TURN_SUMMARY_THRESHOLD = 8` 的长 turn 做 reflection；重复同参工具调用第 3 次会插入提醒
+6. end_turn -> 持久化 messages / raw tool output / debug trace -> acknowledge sub-agent notifications -> 检查 Dream / AMS adjust / compact 触发
+7. max_tokens -> 自动续写（最多 3 次）
+8. 遇到 LLMContextError -> 强制 compact -> 重试
+9. 可重试错误且配了 fallbackModel -> 换 model -> 重试；adapter 层会对 rate limit / 5xx / idle timeout 做分类
 
 ### LLM 层（agent/yeaft/llm/）— Yeaft Code Agent provider 集成
 ```
@@ -94,8 +107,11 @@ credentials/         — 动态凭证（github-copilot 等）
 - 配置：`~/.yeaft/config.json` 里的 `providers[]` 数组；Web 设置页和 `yeaft-agent llm` CLI 写的是同一份 agent-local config
 - 每个 provider：`{ name, baseUrl, apiKey?, credentialProvider?, protocol?, models[] }`；`apiKey` 适合静态密钥，`credentialProvider` 适合 GitHub Copilot 这类动态凭证
 - 支持的 Protocol：`"anthropic"` 或 `"openai-responses"`（旧的 chat-completions 已在 Phase 7 移除）
-- Models 项可以是字符串 `"gpt-5"`，也可以是对象 `{ id, protocol? }` 做 per-model 覆盖
-- Protocol 解析顺序：per-model > provider-level > 按 model id 启发式（claude-* → anthropic / gpt-* / o1-4 / chatgpt-* → openai-responses） > 默认 openai-responses；同一 provider 可同时暴露 Claude 系和 GPT 系 model
+- Models 项可以是字符串 `"gpt-5"`，也可以是对象 `{ id, protocol?, contextWindow?, maxOutputTokens?, effortOptions? }` 做 per-model 覆盖
+- Protocol 解析顺序：per-model > provider-level > 按 model id 启发式（claude-* → anthropic / gpt-* / o1-4 / chatgpt-* / codex-* / omni-* → openai-responses） > 默认 openai-responses；同一 provider 可同时暴露 Claude 系和 GPT 系 model
+- Token limit 解析顺序：provider model override > `models.dev` catalog（`llm/models-dev.js`）> 内置保守默认；不要把 context window 写死在 UI 或 prompt 里
+- Effort / thinking：`models.js` 记录模型是否支持 Anthropic thinking、Anthropic adaptive thinking 或 OpenAI reasoning；前端模型菜单可选择 `modelEffort`，Session override 存在该 Session 自己的 `config.json`（普通 Session 在 agent-local sessions 目录，workDir-backed Session 在 `<workDir>/.yeaft/sessions/<id>/`），adapter 在请求时翻译成 `thinking` / `output_config.effort` / `reasoning.effort`
+- Anthropic adapter 现在会过滤空文本 user / assistant content，但保留 image/document/tool_result 等非文本 block；不要为了兼容空字符串重新构造无意义文本
 
 ### 记忆系统（agent/yeaft/memory/）— H2-AMS 架构
 
@@ -147,10 +163,20 @@ index.js     — 入口，把所有内置工具聚合成 createFullRegistry()
 - 文件 / 编辑：`file-read.js` / `file-write.js` / `file-edit.js` / `apply-patch.js` / `notebook-edit.js`
 - 搜索 / 探索：`grep.js` / `glob.js` / `list-dir.js` / `history-search.js`
 - 执行：`bash.js` / `js-repl.js` / `enter-worktree.js` / `exit-worktree.js`
+- 后台任务：`list-tasks.js` / `read-task-log.js` / `cancel-task.js`（配合 `Bash background=true` 和 `tasks/` 子系统）
 - 网络 / 媒体：`web-fetch.js` / `web-search.js` / `image-generation.js` / `view-image.js`
 - 编排：`agent.js` / `send-message.js` / `wait-agent.js` / `close-agent.js` / `list-agents.js` / `route-forward.js`
 - 任务 / 计划：`todo-write.js` / `start-plan.js`
 - 对外集成：`ask-user.js` / `skill.js` / `mcp-tools.js`
+
+**Tool result 生命周期：** 工具执行事件、debug trace、持久化历史保留 raw output；进入模型上下文的 tool result 有单独预算与 tool folding 保护，长工具弧会被 reflection 压缩，历史窗口里的大结果可走 archive / stub 路径。不要把 UI 展示截断误认为磁盘只保存截断内容。Raw output / debug trace 可能包含敏感项目内容，新增展示、导出或跨 session 读取能力时必须遵守 session storage / owner 边界。
+
+### 后台任务 / 子 Agent 编排
+- `Bash background=true` 进入 `tasks/` 子系统：返回 `taskId` 和日志路径；`ListTasks` / `ReadTaskLog` / `CancelTask` 读取或控制同一套任务记录
+- `TaskManager` 按 Session 持久化任务状态和日志；agent 重启后仍标记未完成任务为 `orphaned`，不会假装进程还可控
+- `SpawnAgent` 走 `sub-agent/runner.js`，每个子 Agent 有独立 output log、liveness 计数器、预算上限和 terminal 状态
+- 子 Agent 终止 / idle 通知会进入 `sub-agent/notifications.js` 队列；`WaitAgent` 可按 agentId drain，Engine 在 parent 下一次 user-driven turn 前也会把 pending notification 注入上下文并在 turn 成功后 acknowledge
+- sub-agent terminal notification 语义上是 parent re-entry control context，不是用户原始输入；改这条链路时要避免把它当作用户手写文本做长期语义记忆或展示
 
 ### System Prompt 模板（agent/yeaft/templates/）
 ```
@@ -197,6 +223,7 @@ mcp.js     — MCPManager：连接 MCP server，桥接其工具
 currentView: 'chat' | 'yeaft'        // 顶层页面切换（'yeaft' 即 Yeaft 页）
 yeaftConversationId: null            // Agent session_ready 给出的虚拟 conversationId
 yeaftModel: null                     // 当前 model
+yeaftModelEffort: null               // 当前 model effort；Session override 在 session.config.modelEffort
 yeaftSessionReady: false             // Session 初始化状态
 yeaftStatus: null                    // { skills, mcpServers, tools }
 yeaftActiveSessionFilter: null       // 当前选中的 session
@@ -212,6 +239,8 @@ sendYeaftSessionMessage({groupId, text, mentions, attachments})
                          // 内部把它 read 成 sessionId 后再写到 wire payload 的
                          // `sessionId` 字段。Wire 层本身不带 `groupId`。
 handleYeaftOutput(msg)   // 把 Engine 事件丢给标准 claude_output 管线
+switchYeaftModel(modelId, sessionId?, modelEffort?)
+                         // 切模型；带 sessionId 时只写该 Session 的 config（model / modelEffort），不泄漏到 agent 默认模型；不带 sessionId 时才发 yeaft_model_switch 更新 agent/default 状态
 clearYeaftMessages()     // 重置 session
 ```
 
@@ -242,6 +271,13 @@ Web 客户端 -> ws "yeaft_session_send" -> Server -> ws agent
   -> ws "yeaft_output" -> Web 客户端 -> handleYeaftOutput() -> handleClaudeOutput()
 ```
 
+### Session 创建 / 恢复 / workDir
+- Web 创建入口：`SessionCreateModal` -> `chat.createYeaftSession()` -> `sessionCrudRequest('create')` -> wire `yeaft_create_session`
+- 后端创建入口：`agent/yeaft/sessions/session-crud.js#createSessionFromSpec()`，写 `session.json`，同时初始化 per-session `config.json` 和 memory seed summary
+- VP 默认值边界：前端 roster hydrate 后会优先预选 `omni`；后端也做兜底，但只在调用方 roster 为空或未传时生效。若 VP library 存在 `omni`，创建 `roster: ['omni']` / `defaultVpId: 'omni'`；显式非空 roster 永不被覆盖；VP library 为空时允许空 roster / `defaultVpId: null`
+- `workDir` Session：带 `workDir` 创建时，真实 Session 数据写到 `<workDir>/.yeaft/sessions/<sessionId>/`；agent-local `~/.yeaft/group-workdirs.json` 只作为 registry 记录 `sessionId -> workDir`，用于 sidebar snapshot / restore
+- 恢复入口边界：`yeaft_scan_workdir_sessions` 只读扫描 `<workDir>/.yeaft/sessions/`；`yeaft_restore_session` 才把该 Session 注册回当前 agent 的 registry
+
 ## 配置
 
 ### Agent 配置（~/.yeaft/config.json）
@@ -265,13 +301,14 @@ Web 客户端 -> ws "yeaft_session_send" -> Server -> ws agent
 
 - `apiKey` 和 `credentialProvider` 二选一：填了 `credentialProvider` 就由 agent 在 request 时动态拿 token（目前支持 `github-copilot`），静态 `apiKey` 路径完全不变。
 - per-model `protocol` 用于同一个 provider 同时跑两种 wire 协议（典型场景：GitHub Copilot 既要 Claude 系也要 GPT 系）。新增 provider 时优先接入 Yeaft LLM adapter 层；只有要新增 1:1 CLI 后端时才实现 `agent/providers/*` 的 ChatProvider。
+- provider model 对象还可以带 `contextWindow` / `maxOutputTokens` / `effortOptions` 覆盖；Web 模型菜单会按 `effortOptions` 显示推理强度 chip。Session 级 override 写在该 Session 自己的 `config.json`，目前只允许 `model` 和 `modelEffort`。
 
 ## 测试
 
 - **框架**：Vitest
 - **运行**：`npx vitest run`
 - **测试文件**：`test/` 目录，命名 `*.test.js`
-- **Yeaft 相关**：单元 / 子模块测试集中在 `test/agent/yeaft/`（按子系统分目录：`compact/`、`conversation/`、`dream/`、`memory/`、`sessions/`、`sub-agent/` …）；跨模块场景在 `test/agent/yeaft-*.test.js`、`test/server/yeaft-*.test.js`、`test/web/yeaft-*.test.js`。前缀名沿用历史 "yeaft" 别名，实际覆盖 Yeaft 引擎
+- **Yeaft 相关**：单元 / 子模块测试集中在 `test/agent/yeaft/`（按子系统分目录：`compact/`、`conversation/`、`dream/`、`memory/`、`sessions/`、`sub-agent/`、`tasks/`、`tool-folding/` 等）；跨模块场景在 `test/agent/yeaft-*.test.js`、`test/server/yeaft-*.test.js`、`test/web/yeaft-*.test.js`。前缀名沿用历史 "yeaft" 别名，实际覆盖 Yeaft 引擎
 
 ## 开发规范
 

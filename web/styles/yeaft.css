@@ -1648,10 +1648,7 @@
   .yeaft-detail.mobile-debug {
     display: flex;
     position: fixed;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    left: 0;
+    inset: 0;
     width: 100vw;
     min-width: 0;
     z-index: 110;
@@ -4329,7 +4326,7 @@
 
 .yeaft-vp-task-log,
 .yeaft-vp-task-log-empty {
-  max-height: 180px;
+  max-height: min(52vh, 520px);
   overflow: auto;
   margin: 0;
   padding: 0;
@@ -4344,61 +4341,6 @@
 
 .yeaft-vp-task-log-empty {
   font-size: 12px;
-}
-
-.yeaft-vp-task-prompt-form {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 42px;
-  padding: 6px 6px 6px 14px;
-  background: var(--bg-input-wrapper);
-  border-radius: 20px;
-  transition: box-shadow 0.2s;
-}
-
-.yeaft-vp-task-prompt-form:focus-within {
-  box-shadow: 0 0 0 2px var(--text-secondary);
-}
-
-.yeaft-vp-task-prompt-input {
-  flex: 1 1 auto;
-  min-width: 0;
-  max-height: 84px;
-  border: 0;
-  background: transparent;
-  color: var(--text-primary);
-  caret-color: var(--text-primary);
-  resize: none;
-  font: inherit;
-  font-size: 13px;
-  line-height: 1.45;
-  outline: none;
-  appearance: none;
-  -webkit-appearance: none;
-  -webkit-text-fill-color: var(--text-primary);
-}
-
-.yeaft-vp-task-prompt-input::placeholder {
-  color: var(--text-secondary);
-  -webkit-text-fill-color: var(--text-secondary);
-}
-
-.yeaft-vp-task-prompt-submit {
-  flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
-}
-
-.yeaft-vp-task-prompt-submit svg {
-  width: 15px;
-  height: 15px;
-}
-
-.yeaft-vp-task-prompt-error {
-  color: var(--error);
-  font-size: 12px;
-  line-height: 1.4;
 }
 
 /* ── No-session onboarding guide ── */

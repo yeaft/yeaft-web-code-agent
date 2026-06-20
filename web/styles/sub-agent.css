@@ -104,6 +104,8 @@
 }
 
 .sub-agent-text {
+  max-height: min(52vh, 520px);
+  overflow: auto;
   white-space: pre-wrap;
   font-weight: 400;
   color: var(--text-primary, #1f1f1f);

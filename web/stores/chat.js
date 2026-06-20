@@ -459,7 +459,6 @@ export const useChatStore = defineStore('chat', {
     yeaftYeaftDir: null,          // agent 的 ~/.yeaft 绝对路径（session_ready 携带）— Yeaft workbench 的默认 workDir
     yeaftActiveTasksBySession: {}, // { [sessionId]: { [taskId]: running or recent terminal task snapshot } }
     yeaftStoppingTasksById: {}, // { [`${sessionId}::${taskId}`]: true } UI-side pending stop requests
-    yeaftSubAgentPromptResults: {}, // { [clientPromptId]: latest sub-agent prompt ack/error }
     // 2026-05-13: tool-call usage stats for the Yeaft debug drawer.
     // Populated by `fetchYeaftToolStats()` → backend → `yeaft_tool_stats`
     // case in handleYeaftOutput. Shape:
@@ -1432,52 +1431,6 @@ export const useChatStore = defineStore('chat', {
       this.sendWsMessage(wsMsg);
     },
 
-    sendYeaftSubAgentPrompt({ sessionId, taskId, subAgentId, message, clientPromptId }) {
-      const text = typeof message === 'string' ? message.trim() : '';
-      const promptId = typeof clientPromptId === 'string' && clientPromptId.trim()
-        ? clientPromptId.trim()
-        : `sap_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      if (!sessionId || !taskId || !subAgentId || !text || !this.yeaftAgentId) {
-        this.yeaftSubAgentPromptResults = {
-          ...this.yeaftSubAgentPromptResults,
-          [promptId]: {
-            clientPromptId: promptId,
-            sessionId: sessionId || null,
-            taskId: taskId || null,
-            subAgentId: subAgentId || null,
-            message: text,
-            status: 'failed',
-            error: null,
-            updatedAt: Date.now(),
-          },
-        };
-        return false;
-      }
-      this.yeaftSubAgentPromptResults = {
-        ...this.yeaftSubAgentPromptResults,
-        [promptId]: {
-          clientPromptId: promptId,
-          sessionId,
-          taskId,
-          subAgentId,
-          message: text,
-          status: 'pending',
-          error: null,
-          updatedAt: Date.now(),
-        },
-      };
-      this.sendWsMessage({
-        type: 'yeaft_sub_agent_prompt',
-        agentId: this.yeaftAgentId,
-        sessionId,
-        taskId,
-        subAgentId,
-        message: text,
-        clientPromptId: promptId,
-      });
-      return promptId;
-    },
-
     cancelYeaftTask({ sessionId, taskId }) {
       const targetSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
       const targetTaskId = typeof taskId === 'string' ? taskId.trim() : '';
@@ -2048,29 +2001,6 @@ export const useChatStore = defineStore('chat', {
             else delete bySession[task.sessionId];
             this.yeaftActiveTasksBySession = bySession;
           }
-          break;
-        }
-
-        case 'yeaft_sub_agent_prompt_result': {
-          const clientPromptId = typeof event.clientPromptId === 'string' && event.clientPromptId
-            ? event.clientPromptId
-            : null;
-          if (!clientPromptId) break;
-          const previous = this.yeaftSubAgentPromptResults[clientPromptId] || {};
-          this.yeaftSubAgentPromptResults = {
-            ...this.yeaftSubAgentPromptResults,
-            [clientPromptId]: {
-              ...previous,
-              clientPromptId,
-              sessionId: event.sessionId || msg.sessionId || previous.sessionId || null,
-              taskId: event.taskId || previous.taskId || null,
-              subAgentId: event.subAgentId || previous.subAgentId || null,
-              status: event.success ? 'succeeded' : 'failed',
-              error: event.success ? null : (event.error || 'Failed to send prompt'),
-              pending: typeof event.pending === 'number' ? event.pending : previous.pending,
-              updatedAt: Date.now(),
-            },
-          };
           break;
         }
 

@@ -13,6 +13,11 @@ const compactText = (value, maxLength = 360) => {
   return text.length > maxLength ? text.slice(0, maxLength - 1) + '…' : text;
 };
 
+const readableText = (value) => {
+  if (typeof value !== 'string') return '';
+  return value.trim();
+};
+
 const readableSubAgentEvent = (event, translate) => {
   if (!event || typeof event !== 'object') return '';
   const $t = typeof translate === 'function' ? translate : (key) => key;
@@ -29,13 +34,13 @@ const readableSubAgentEvent = (event, translate) => {
         ? $t('yeaft.sessionStatus.task.subAgentStatus', { name, status: event.status })
         : $t('yeaft.sessionStatus.task.subAgentStatusUpdated', { name });
     case 'sub_agent_turn_end': {
-      const text = compactText(event.content || event.text);
+      const text = readableText(event.content || event.text);
       return text
         ? $t('yeaft.sessionStatus.task.subAgentResult', { name, text })
         : $t('yeaft.sessionStatus.task.subAgentProducedResult', { name });
     }
     case 'text_delta': {
-      const text = compactText(event.text || event.content || event.delta, 240);
+      const text = readableText(event.text || event.content || event.delta);
       return text ? $t('yeaft.sessionStatus.task.subAgentEvent', { name, text }) : '';
     }
     case 'user_prompt': {
@@ -74,7 +79,7 @@ export function createSubAgentTaskStreamText(task, translate) {
   let deltaAgentName = '';
   let deltaText = '';
   const flushDelta = () => {
-    const text = compactText(deltaText, 720);
+    const text = readableText(deltaText);
     if (text) {
       lines.push($t('yeaft.sessionStatus.task.subAgentEvent', {
         name: deltaAgentName || $t('yeaft.sessionStatus.task.kind.subAgent'),
@@ -129,8 +134,6 @@ export function createSubAgentTaskDetailLines(task, translate) {
  *   rows — TimelineRow[] (see web/stores/helpers/vp-timeline.js for shape).
  *   tasks — running and recent terminal Session task snapshots.
  *   announcementText — active Session announcement preview source.
- *   subAgentPromptResults — per-client prompt ack/error state from the store.
- *
  * Emits:
  *   mention-vp (vpId)      — primary row click / Enter / Space. YeaftPage
  *                            forwards to the chat input which appends
@@ -146,12 +149,11 @@ export function createSubAgentTaskDetailLines(task, translate) {
 export default {
   name: 'VpTimelinePane',
   components: { TerminalOutput },
-  emits: ['mention-vp', 'edit-vp', 'start-resize', 'cancel-vp-turn', 'edit-announcement', 'prompt-sub-agent', 'cancel-task', 'close'],
+  emits: ['mention-vp', 'edit-vp', 'start-resize', 'cancel-vp-turn', 'edit-announcement', 'cancel-task', 'close'],
   props: {
     rows: { type: Array, required: true },
     tasks: { type: Array, default: () => [] },
     announcementText: { type: String, default: '' },
-    subAgentPromptResults: { type: Object, default: () => ({}) },
     stoppingTasksById: { type: Object, default: () => ({}) },
   },
   template: `
@@ -340,31 +342,6 @@ export default {
                   @scroll="onTaskLogScroll(task.id)"
                 />
                 <div v-else class="yeaft-vp-task-log-empty">{{ $t('yeaft.sessionStatus.task.subAgentNoReadableEvents') }}</div>
-                <form
-                  v-if="isSubAgentPromptable(task)"
-                  class="yeaft-vp-task-prompt-form"
-                  @submit.prevent="submitSubAgentPrompt(task)"
-                >
-                  <textarea
-                    class="yeaft-vp-task-prompt-input"
-                    v-model="subAgentPromptDrafts[task.id]"
-                    :placeholder="$t('yeaft.sessionStatus.task.promptPlaceholder')"
-                    rows="1"
-                    @keydown.enter.exact.prevent="submitSubAgentPrompt(task)"
-                  ></textarea>
-                  <button
-                    type="submit"
-                    class="send-btn yeaft-vp-task-prompt-submit"
-                    :disabled="!subAgentPromptDraft(task) || isSubAgentPromptPending(task)"
-                    :title="isSubAgentPromptPending(task) ? $t('yeaft.sessionStatus.task.promptSending') : $t('yeaft.sessionStatus.task.promptSend')"
-                    :aria-label="isSubAgentPromptPending(task) ? $t('yeaft.sessionStatus.task.promptSending') : $t('yeaft.sessionStatus.task.promptSend')"
-                  >
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-                  </button>
-                </form>
-                <div v-if="subAgentPromptError(task)" class="yeaft-vp-task-prompt-error">
-                  {{ subAgentPromptError(task) }}
-                </div>
               </div>
               <TerminalOutput
                 v-else-if="task.log && task.log.preview"
@@ -406,8 +383,6 @@ export default {
     });
 
     const expandedTasks = Vue.ref({});
-    const subAgentPromptDrafts = Vue.ref({});
-    const subAgentPromptByTask = Vue.ref({});
     const taskLogRefs = new Map();
     const taskLogPinned = new Map();
 
@@ -477,53 +452,6 @@ export default {
 
     const taskDetailLines = (task) => createSubAgentTaskDetailLines(task, $t);
     const subAgentTaskStreamText = (task) => createSubAgentTaskStreamText(task, $t);
-    const isSubAgentPromptable = (task) => (
-      task?.kind === 'sub_agent'
-      && task?.status === 'running'
-      && typeof task?.runtime?.subAgentId === 'string'
-      && task.runtime.subAgentId.trim()
-    );
-    const subAgentPromptDraft = (task) => (subAgentPromptDrafts.value[task?.id] || '').trim();
-    const subAgentPromptState = (task) => {
-      const promptId = subAgentPromptByTask.value[task?.id];
-      return promptId ? props.subAgentPromptResults[promptId] || null : null;
-    };
-    const isSubAgentPromptPending = (task) => subAgentPromptState(task)?.status === 'pending';
-    const subAgentPromptError = (task) => {
-      const state = subAgentPromptState(task);
-      return state?.status === 'failed' ? (state.error || $t('yeaft.sessionStatus.task.promptFailed')) : '';
-    };
-    Vue.watch(
-      () => props.subAgentPromptResults,
-      (results) => {
-        for (const [taskId, promptId] of Object.entries(subAgentPromptByTask.value)) {
-          const result = results?.[promptId];
-          if (!result) continue;
-          if (result.status === 'succeeded') {
-            const currentDraft = (subAgentPromptDrafts.value[taskId] || '').trim();
-            const submitted = typeof result.message === 'string' ? result.message.trim() : '';
-            if (!submitted || currentDraft === submitted) {
-              subAgentPromptDrafts.value = { ...subAgentPromptDrafts.value, [taskId]: '' };
-            }
-          }
-        }
-      },
-      { deep: true }
-    );
-    const submitSubAgentPrompt = (task) => {
-      const message = subAgentPromptDraft(task);
-      const subAgentId = task?.runtime?.subAgentId;
-      if (!message || !task?.id || !task?.sessionId || !subAgentId || isSubAgentPromptPending(task)) return;
-      const clientPromptId = `sap_${task.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      subAgentPromptByTask.value = { ...subAgentPromptByTask.value, [task.id]: clientPromptId };
-      emit('prompt-sub-agent', {
-        sessionId: task.sessionId,
-        taskId: task.id,
-        subAgentId,
-        message,
-        clientPromptId,
-      });
-    };
 
     const statusLabel = (row) => {
       switch (row.status) {
@@ -564,7 +492,6 @@ export default {
       threadCountTitle,
       vpTextColorFor,
       expandedTasks,
-      subAgentPromptDrafts,
       toggleTaskExpanded,
       taskOwnerName,
       formatTaskTime,
@@ -573,11 +500,6 @@ export default {
       isTaskStopping,
       taskDetailLines,
       subAgentTaskStreamText,
-      isSubAgentPromptable,
-      subAgentPromptDraft,
-      isSubAgentPromptPending,
-      subAgentPromptError,
-      submitSubAgentPrompt,
       setTaskLogRef,
       onTaskLogScroll,
     };

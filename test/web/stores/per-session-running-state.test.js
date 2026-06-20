@@ -250,66 +250,11 @@ describe('per-session running state', () => {
     expect(tasks.map(task => task.id)).toEqual(['running', 'done']);
   });
 
-  it('sends scoped sub-agent prompts through a narrow Yeaft wire message', () => {
+  it('does not expose direct user-to-sub-agent prompt sending from the web store', () => {
     const store = freshStore();
-    store.yeaftAgentId = 'agent-1';
 
-    const sent = store.sendYeaftSubAgentPrompt({
-      sessionId: 'session-a',
-      taskId: 'task-1',
-      subAgentId: 'sub-1',
-      message: ' new user idea ',
-      clientPromptId: 'prompt-1',
-    });
-
-    expect(sent).toBe('prompt-1');
-    expect(store.yeaftSubAgentPromptResults['prompt-1']).toMatchObject({
-      status: 'pending',
-      message: 'new user idea',
-    });
-    expect(store.sendWsMessage).toHaveBeenCalledWith({
-      type: 'yeaft_sub_agent_prompt',
-      agentId: 'agent-1',
-      sessionId: 'session-a',
-      taskId: 'task-1',
-      subAgentId: 'sub-1',
-      message: 'new user idea',
-      clientPromptId: 'prompt-1',
-    });
-  });
-
-  it('stores sub-agent prompt result events for UI ack and error feedback', () => {
-    const store = freshStore();
-    store.yeaftSubAgentPromptResults = {
-      'prompt-1': { clientPromptId: 'prompt-1', status: 'pending', message: 'keep me' },
-    };
-
-    store.handleYeaftOutput({ sessionId: 'session-a', event: {
-      type: 'yeaft_sub_agent_prompt_result',
-      clientPromptId: 'prompt-1',
-      success: false,
-      taskId: 'task-1',
-      subAgentId: 'sub-1',
-      error: 'sub-agent task not found',
-    } });
-
-    expect(store.yeaftSubAgentPromptResults['prompt-1']).toMatchObject({
-      status: 'failed',
-      message: 'keep me',
-      error: 'sub-agent task not found',
-      sessionId: 'session-a',
-      taskId: 'task-1',
-      subAgentId: 'sub-1',
-    });
-  });
-
-  it('rejects incomplete scoped sub-agent prompts before the wire', () => {
-    const store = freshStore();
-    store.yeaftAgentId = 'agent-1';
-
-    expect(store.sendYeaftSubAgentPrompt({ sessionId: 'session-a', taskId: 'task-1', subAgentId: '', message: 'x', clientPromptId: 'bad-prompt' })).toBe(false);
-    expect(store.yeaftSubAgentPromptResults['bad-prompt']).toMatchObject({ status: 'failed' });
-    expect(store.sendWsMessage).not.toHaveBeenCalled();
+    expect(store.sendYeaftSubAgentPrompt).toBeUndefined();
+    expect(store.yeaftSubAgentPromptResults).toBeUndefined();
   });
 
   it('keeps Chat compacting state scoped to the active conversation', () => {

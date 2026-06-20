@@ -242,8 +242,7 @@
 }
 
 .subagent-msg-text.markdown-body pre {
-  max-height: 200px;
-  overflow-y: auto;
+  overflow-x: auto;
 }
 
 /* ---- Tool Message ---- */

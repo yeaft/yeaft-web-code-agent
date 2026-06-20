@@ -147,4 +147,32 @@ describe('TaskManager', () => {
     expect(log.nextOffset).toBe(log.bytes);
     expect(log.truncated).toBe(false);
   });
+
+  it('keeps a larger live preview for sub-agent task output than shell task output', () => {
+    const manager = new TaskManager({ yeaftDir: dir });
+    const payload = `${'x'.repeat(5000)}sub-agent-tail`;
+    const subAgentTask = manager.startTask({
+      sessionId: 'session_sub_log',
+      ownerVpId: 'vp_linus',
+      kind: 'sub_agent',
+      title: 'Verbose sub-agent',
+    });
+    writeFileSync(join(dir, 'tasks', 'sessions', 'session_sub_log', `${subAgentTask.id}.log`), payload, 'utf8');
+
+    const refreshedSubAgent = manager.refreshTaskLog('session_sub_log', subAgentTask.id);
+    expect(refreshedSubAgent.log.preview).toBe(payload);
+
+    const shellTask = manager.startTask({
+      sessionId: 'session_shell_log',
+      ownerVpId: 'vp_linus',
+      kind: 'shell',
+      title: 'Verbose shell',
+    });
+    writeFileSync(join(dir, 'tasks', 'sessions', 'session_shell_log', `${shellTask.id}.log`), payload, 'utf8');
+
+    const refreshedShell = manager.refreshTaskLog('session_shell_log', shellTask.id);
+    expect(refreshedShell.log.preview).not.toBe(payload);
+    expect(refreshedShell.log.preview).toHaveLength(4096);
+    expect(refreshedShell.log.preview.endsWith('sub-agent-tail')).toBe(true);
+  });
 });
