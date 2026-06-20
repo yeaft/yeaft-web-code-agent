@@ -49,6 +49,72 @@ function idleStreamResponse() {
   };
 }
 
+function truncatedAnthropicStreamResponse() {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ 'content-type': 'text/event-stream' }),
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode([
+          'event: message_start',
+          'data: {"type":"message_start","message":{"usage":{"input_tokens":118,"output_tokens":0}}}',
+          '',
+          'event: content_block_start',
+          'data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}',
+          '',
+          'event: ping',
+          'data: {"type":"ping"}',
+          '',
+        ].join('\n')));
+        controller.close();
+      },
+      cancel() {},
+    }),
+  };
+}
+
+function truncatedResponsesStreamResponse() {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ 'content-type': 'text/event-stream' }),
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode([
+          'event: response.created',
+          'data: {"type":"response.created","response":{"id":"resp_1","status":"in_progress"}}',
+          '',
+          'event: response.output_text.delta',
+          'data: {"type":"response.output_text.delta","delta":"partial"}',
+          '',
+        ].join('\n')));
+        controller.close();
+      },
+      cancel() {},
+    }),
+  };
+}
+
+function failedResponsesStreamResponse() {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ 'content-type': 'text/event-stream' }),
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode([
+          'event: response.failed',
+          'data: {"type":"response.failed","response":{"status":"failed","error":{"code":"invalid_request_error","message":"bad request body"}}}',
+          '',
+        ].join('\n')));
+        controller.close();
+      },
+      cancel() {},
+    }),
+  };
+}
+
 describe('AnthropicAdapter error classification', () => {
   afterEach(() => {
     global.fetch = originalFetch;
@@ -134,6 +200,16 @@ describe('AnthropicAdapter error classification', () => {
     expect(caught).toBeInstanceOf(LLMStreamIdleTimeoutError);
     expect(caught).toBeInstanceOf(LLMServerError);
   });
+
+  it('throws retryable error when Anthropic SSE ends before a stop event', async () => {
+    global.fetch = async () => truncatedAnthropicStreamResponse();
+    const adapter = new AnthropicAdapter({ baseUrl: 'https://x', apiKey: 'k' });
+    let caught;
+    try { await consume(adapter.stream({ model: 'deepseek-v4-pro', system: '', messages: [{ role: 'user', content: 'hi' }] })); }
+    catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(LLMServerError);
+    expect(caught.message).toContain('stream ended before stop event');
+  });
 });
 
 describe('OpenAIResponsesAdapter error classification', () => {
@@ -190,5 +266,33 @@ describe('OpenAIResponsesAdapter error classification', () => {
     catch (err) { caught = err; }
     expect(caught).toBeInstanceOf(LLMStreamIdleTimeoutError);
     expect(caught).toBeInstanceOf(LLMServerError);
+  });
+
+  it('throws retryable error when Responses SSE ends before a terminal event', async () => {
+    global.fetch = async () => truncatedResponsesStreamResponse();
+    const adapter = new OpenAIResponsesAdapter({ baseUrl: 'https://x', apiKey: 'k' });
+    let caught;
+    const seen = [];
+    try {
+      for await (const event of adapter.stream({ model: 'deepseek-chat', system: '', messages: [{ role: 'user', content: 'hi' }] })) {
+        seen.push(event);
+      }
+    } catch (err) { caught = err; }
+    expect(seen).toContainEqual({ type: 'text_delta', text: 'partial' });
+    expect(caught).toBeInstanceOf(LLMServerError);
+    expect(caught.message).toContain('stream ended before terminal event');
+  });
+
+  it('treats Responses failed event as terminal non-retryable error event', async () => {
+    global.fetch = async () => failedResponsesStreamResponse();
+    const adapter = new OpenAIResponsesAdapter({ baseUrl: 'https://x', apiKey: 'k' });
+    const events = [];
+    for await (const event of adapter.stream({ model: 'gpt-5', system: '', messages: [{ role: 'user', content: 'hi' }] })) {
+      events.push(event);
+    }
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'error', retryable: false });
+    expect(events[0].error.message).toBe('bad request body');
+    expect(events[0].error.code).toBe('invalid_request_error');
   });
 });

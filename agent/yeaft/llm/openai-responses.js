@@ -17,7 +17,7 @@
  *     - response.function_call_arguments.delta / .done
  *     - response.completed  (contains final response.usage)
  *     - response.incomplete (e.g. max_output_tokens)
- *     - response.error
+ *     - response.failed
  *   - Usage: only in terminal completed/incomplete events
  *
  * Id contract (agreed with PM):
@@ -292,8 +292,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
         signal,
       });
     } catch (err) {
-      if (err.name === 'AbortError') throw new LLMAbortError();
-      throw classifyFetchError(err, { providerLabel: 'OpenAI' });
+      throw classifyFetchError(err, { providerLabel: 'OpenAI', signal });
     }
 
     if (!response.ok) {
@@ -332,6 +331,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     const rawSseBodyChunks = [];
     const responseHeaders = safeHeaders(response);
     const responseStatus = response.status;
+    let sawTerminalEvent = false;
 
     try {
       while (true) {
@@ -353,7 +353,8 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
           const line = rawLine.trimEnd();
           if (!line.startsWith('data:')) continue;
           const data = line.slice(5).trim();
-          if (!data || data === '[DONE]') continue;
+          if (!data) continue;
+          if (data === '[DONE]') continue;
 
           let event;
           try {
@@ -409,6 +410,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
               toolCallAccum.delete(idx);
             }
           } else if (type === 'response.completed' || type === 'response.incomplete') {
+            sawTerminalEvent = true;
             const respObj = event.response || {};
 
             // Fallback: flush any function_call items in the final output that we
@@ -449,17 +451,26 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
               type: 'stop',
               stopReason: this.#mapStopReason(respObj, sawToolCall),
             };
-          } else if (type === 'response.error') {
-            // Let the engine decide; emit error event
-            const message = event.error?.message || event.message || 'response.error';
-            yield { type: 'error', error: new Error(message), retryable: false };
+          } else if (type === 'response.failed' || type === 'response.error') {
+            sawTerminalEvent = true;
+            // Let the engine decide; emit error event. `response.failed` is
+            // the official terminal event; keep `response.error` as a legacy
+            // compatibility alias for older mocks/proxies.
+            const errObj = event.response?.error || event.error || {};
+            const code = errObj.code || event.response?.status || type;
+            const message = errObj.message || event.message || `${type}: ${code}`;
+            const failure = new Error(message);
+            failure.code = code;
+            yield { type: 'error', error: failure, retryable: false };
           }
           // Other semantic events (output_item.done, content_part.added, etc.) are ignored.
         }
       }
+      if (!sawTerminalEvent) {
+        throw new LLMServerError('OpenAI stream ended before terminal event', 0);
+      }
     } catch (err) {
-      if (err?.name === 'AbortError') throw new LLMAbortError();
-      throw classifyFetchError(err, { providerLabel: 'OpenAI' });
+      throw classifyFetchError(err, { providerLabel: 'OpenAI', signal });
     } finally {
       try { reader.releaseLock(); } catch { /* noop */ }
       // Emit raw exchange after stream completes (or errors). Body is the
@@ -523,8 +534,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
         signal,
       });
     } catch (err) {
-      if (err.name === 'AbortError') throw new LLMAbortError();
-      throw classifyFetchError(err, { providerLabel: 'OpenAI' });
+      throw classifyFetchError(err, { providerLabel: 'OpenAI', signal });
     }
 
     if (!response.ok) {

@@ -71,7 +71,22 @@ describe('AdapterRouter resolution', () => {
   });
 
   it('routes managed GitHub Copilot Claude and GPT refs through their catalog protocols', async () => {
-    const fetchFn = vi.fn(async () => ({ ok: true, body: { getReader: () => ({ read: async () => ({ done: true }), releaseLock: () => {} }) } }));
+    const responsesCompletedBody = [
+      'event: response.completed',
+      'data: {"type":"response.completed","response":{"status":"completed","output":[],"usage":{"input_tokens":0,"output_tokens":0}}}',
+      '',
+    ].join('\n');
+    const fetchFn = vi.fn(async (url) => ({
+      ok: true,
+      body: String(url).endsWith('/responses')
+        ? new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(responsesCompletedBody));
+            controller.close();
+          },
+        })
+        : { getReader: () => ({ read: async () => ({ done: true }), releaseLock: () => {} }) },
+    }));
     const originalFetch = globalThis.fetch;
     globalThis.fetch = fetchFn;
     try {

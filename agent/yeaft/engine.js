@@ -2294,18 +2294,139 @@ export class Engine {
               stopReason = event.stopReason;
               yield event;
               break;
-            case 'error':
-              yield event;
-              break;
+            case 'error': {
+              const adapterError = event.error instanceof Error
+                ? event.error
+                : new Error(String(event.error?.message || event.error || 'LLM stream error'));
+              adapterError.retryable = Boolean(event.retryable);
+              if (event.retryable) {
+                if (adapterError instanceof LLMRateLimitError || adapterError instanceof LLMServerError) {
+                  throw adapterError;
+                }
+                throw new LLMServerError(adapterError.message, adapterError.statusCode ?? 0);
+              }
+              if (adapterError instanceof LLMRateLimitError || adapterError instanceof LLMServerError) {
+                const nonRetryableError = new Error(adapterError.message);
+                nonRetryableError.name = adapterError.name || 'LLMStreamError';
+                nonRetryableError.code = adapterError.code;
+                nonRetryableError.statusCode = adapterError.statusCode;
+                nonRetryableError.retryable = false;
+                throw nonRetryableError;
+              }
+              throw adapterError;
+            }
           }
         }
         // Stream completed without throwing — reset the retry counter so
-        // the next turn starts with a clean budget. Note: this includes
-        // stream() that emitted an in-band `error` event (server didn't
-        // throw), since those are policy-specific and not transport-level.
+        // the next turn starts with a clean budget. In-band adapter errors
+        // are converted to throws above so they share the real error path.
         consecutiveRetryableErrors = 0;
       } catch (err) {
         const latencyMs = Date.now() - startTime;
+
+        const endAttemptTrace = (attemptStopReason) => {
+          this.#trace.endTurn(turnId, {
+            model: currentModel,
+            inputTokens: totalUsage.inputTokens,
+            outputTokens: totalUsage.outputTokens,
+            cacheReadTokens: totalUsage.cacheReadTokens,
+            cacheWriteTokens: totalUsage.cacheWriteTokens,
+            stopReason: attemptStopReason,
+            latencyMs,
+            responseText,
+            systemPrompt,
+            messages: conversationMessages.map(mapDebugMessage),
+            toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
+            usage: {
+              inputTokens: totalUsage.inputTokens || 0,
+              outputTokens: totalUsage.outputTokens || 0,
+              cacheReadTokens: totalUsage.cacheReadTokens || 0,
+              cacheWriteTokens: totalUsage.cacheWriteTokens || 0,
+              totalInputTokens: (totalUsage.inputTokens || 0) + (totalUsage.cacheInputDeltaTokens || 0),
+              totalTokens: (totalUsage.inputTokens || 0) + (totalUsage.cacheInputDeltaTokens || 0) + (totalUsage.outputTokens || 0),
+            },
+            ttfbMs,
+            rawRequest,
+            rawResponse,
+          });
+        };
+
+        // Abort/retry/fallback are not final assistant responses. Handle them
+        // before writing debug loop rows; otherwise transient DeepSeek stream
+        // cuts or user stops show up as bogus `Error: Request aborted` replies.
+        const earlyIsAbort = err instanceof LLMAbortError
+          || err?.name === 'AbortError'
+          || err?.name === 'LLMAbortError'
+          || (signal?.aborted && /abort/i.test(err?.message || ''));
+        if (earlyIsAbort || signal?.aborted) {
+          endAttemptTrace('aborted');
+          yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber, threadId };
+          yield { type: 'turn_end', turnNumber, stopReason: 'aborted', threadId };
+          break;
+        }
+
+        if (err instanceof LLMContextError && this.#conversationStore) {
+          const retryConsolidated = await this.#maybeConsolidate();
+          if (retryConsolidated && retryConsolidated.archivedCount > 0) {
+            endAttemptTrace('context_overflow_retry');
+            yield { type: 'consolidate', archivedCount: retryConsolidated.archivedCount, extractedCount: retryConsolidated.extractedCount };
+            yield { type: 'turn_end', turnNumber, stopReason: 'context_overflow_retry', threadId };
+            continue;
+          }
+        }
+
+        const earlyIsRateLimit = err instanceof LLMRateLimitError;
+        const earlyIsTransient = err instanceof LLMServerError;
+        if (earlyIsRateLimit || earlyIsTransient) {
+          if (consecutiveRetryableErrors < retryPolicy.maxRetries) {
+            consecutiveRetryableErrors += 1;
+            let delayMs;
+            let reason;
+            if (earlyIsRateLimit && Number.isFinite(err.retryAfterMs) && err.retryAfterMs > 0) {
+              delayMs = Math.min(retryPolicy.maxDelayMs, err.retryAfterMs);
+              reason = 'rate_limit_retry_after';
+            } else if (earlyIsRateLimit) {
+              delayMs = computeBackoffDelay(retryPolicy, consecutiveRetryableErrors);
+              reason = 'rate_limit_backoff';
+            } else {
+              delayMs = computeBackoffDelay(retryPolicy, consecutiveRetryableErrors - 1);
+              reason = err instanceof LLMStreamIdleTimeoutError
+                ? 'stream_idle_timeout'
+                : 'transient_backoff';
+            }
+            endAttemptTrace('llm_retry');
+            yield {
+              type: 'llm_retry',
+              attempt: consecutiveRetryableErrors,
+              maxRetries: retryPolicy.maxRetries,
+              delayMs,
+              reason,
+              errorName: err.name,
+              statusCode: err.statusCode ?? null,
+              message: String(err.message || '').slice(0, 300),
+            };
+            const slept = await sleepWithAbort(delayMs, signal);
+            if (!slept || signal?.aborted) {
+              yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber, threadId };
+              yield { type: 'turn_end', turnNumber, stopReason: 'aborted', threadId };
+              break;
+            }
+            yield { type: 'turn_end', turnNumber, stopReason: 'llm_retry', threadId };
+            continue;
+          }
+        }
+
+        const earlyFallbackModel = this.#config.fallbackModel;
+        if (earlyFallbackModel && earlyFallbackModel !== currentModel
+          && (earlyIsRateLimit || earlyIsTransient)) {
+          endAttemptTrace('fallback_retry');
+          yield { type: 'fallback', from: currentModel, to: earlyFallbackModel, reason: err.message };
+          currentModel = earlyFallbackModel;
+          consecutiveRetryableErrors = 0;
+          yield { type: 'turn_end', turnNumber, stopReason: 'fallback_retry', threadId };
+          continue;
+        }
+
         this.#trace.endTurn(turnId, {
           model: currentModel,
           inputTokens: totalUsage.inputTokens,
@@ -2367,96 +2488,6 @@ export class Engine {
           rawResponse,
         };
 
-        // ─── task-325a: abort short-circuit ────────────────
-        // If the adapter threw LLMAbortError, or the signal fired during
-        // stream() (fetch throws AbortError / DOMException), we converge
-        // the state machine on the 'aborted' terminal state — no retry,
-        // no fallback, no persistence. One `aborted` event + one
-        // `turn_end` with stopReason='aborted' and we're done.
-        const isAbort = err instanceof LLMAbortError
-          || err?.name === 'AbortError'
-          || err?.name === 'LLMAbortError'
-          || (signal?.aborted && /abort/i.test(err?.message || ''));
-        if (isAbort || signal?.aborted) {
-          yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber, threadId };
-          yield { type: 'turn_end', turnNumber, stopReason: 'aborted', threadId };
-          break;
-        }
-
-        // ─── LLMContextError → force compact → retry ──────
-        if (err instanceof LLMContextError && this.#conversationStore) {
-          const consolidated = await this.#maybeConsolidate();
-          if (consolidated && consolidated.archivedCount > 0) {
-            yield { type: 'consolidate', archivedCount: consolidated.archivedCount, extractedCount: consolidated.extractedCount };
-            yield { type: 'turn_end', turnNumber, stopReason: 'context_overflow_retry', threadId };
-            continue; // retry with fewer messages
-          }
-        }
-
-        // ─── Rate-limit / transient / stream-idle retry ───
-        // Honour server-supplied Retry-After for 429/529; fall back to
-        // exponential backoff for 5xx, transport failures, and stream-idle
-        // timeouts wrapped as LLMServerError. Counts against
-        // retryPolicy.maxRetries; on exhaustion we fall through to the
-        // fallback-model path (and ultimately the error event) without
-        // further waiting.
-        const isRateLimit = err instanceof LLMRateLimitError;
-        const isTransient = err instanceof LLMServerError;
-        if (isRateLimit || isTransient) {
-          if (consecutiveRetryableErrors < retryPolicy.maxRetries) {
-            consecutiveRetryableErrors += 1;
-            let delayMs;
-            let reason;
-            if (isRateLimit && Number.isFinite(err.retryAfterMs) && err.retryAfterMs > 0) {
-              // Server told us exactly when to come back. Respect it,
-              // but still cap to maxDelayMs so a misconfigured upstream
-              // can't make us hang forever on one turn.
-              delayMs = Math.min(retryPolicy.maxDelayMs, err.retryAfterMs);
-              reason = 'rate_limit_retry_after';
-            } else if (isRateLimit) {
-              // No header — use backoff but start one step higher so the
-              // first retry isn't immediate (rate-limit windows are
-              // usually >= 1s wide).
-              delayMs = computeBackoffDelay(retryPolicy, consecutiveRetryableErrors);
-              reason = 'rate_limit_backoff';
-            } else {
-              delayMs = computeBackoffDelay(retryPolicy, consecutiveRetryableErrors - 1);
-              reason = err instanceof LLMStreamIdleTimeoutError
-                ? 'stream_idle_timeout'
-                : 'transient_backoff';
-            }
-            yield {
-              type: 'llm_retry',
-              attempt: consecutiveRetryableErrors,
-              maxRetries: retryPolicy.maxRetries,
-              delayMs,
-              reason,
-              errorName: err.name,
-              statusCode: err.statusCode ?? null,
-              message: String(err.message || '').slice(0, 300),
-            };
-            const slept = await sleepWithAbort(delayMs, signal);
-            if (!slept || signal?.aborted) {
-              yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber, threadId };
-              yield { type: 'turn_end', turnNumber, stopReason: 'aborted', threadId };
-              break;
-            }
-            yield { type: 'turn_end', turnNumber, stopReason: 'llm_retry', threadId };
-            continue; // retry the same turn with the same model
-          }
-          // Exhausted — fall through to fallback-model / error paths.
-        }
-
-        // ─── Fallback model ──────────────────────────────
-        const fallbackModel = this.#config.fallbackModel;
-        if (fallbackModel && fallbackModel !== currentModel &&
-            (err instanceof LLMRateLimitError || err instanceof LLMServerError)) {
-          yield { type: 'fallback', from: currentModel, to: fallbackModel, reason: err.message };
-          currentModel = fallbackModel;
-          consecutiveRetryableErrors = 0; // new model, fresh retry budget
-          yield { type: 'turn_end', turnNumber, stopReason: 'fallback_retry', threadId };
-          continue; // retry with fallback model
-        }
 
         const isRetryableError = err instanceof LLMRateLimitError || err instanceof LLMServerError;
         const errorEvent = {

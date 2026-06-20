@@ -71,11 +71,24 @@ describe('retryAfterFromResponse', () => {
 });
 
 describe('classifyFetchError', () => {
-  it('passes through abort errors', () => {
+  it('treats AbortError as caller abort only when the signal was aborted', () => {
     const err = new Error('aborted');
     err.name = 'AbortError';
-    const out = classifyFetchError(err);
+    const ctrl = new AbortController();
+    ctrl.abort();
+    const out = classifyFetchError(err, { signal: ctrl.signal });
     expect(out).toBeInstanceOf(LLMAbortError);
+  });
+
+  it('wraps AbortError from an open signal as retryable transport failure', () => {
+    const err = new Error('terminated');
+    err.name = 'AbortError';
+    const ctrl = new AbortController();
+    const out = classifyFetchError(err, { providerLabel: 'TestProvider', signal: ctrl.signal });
+    expect(out).toBeInstanceOf(LLMServerError);
+    expect(out).not.toBeInstanceOf(LLMAbortError);
+    expect(out.message).toContain('TestProvider');
+    expect(out.message).toContain('stream aborted unexpectedly');
   });
 
   it('wraps known transient error codes as LLMServerError', () => {
