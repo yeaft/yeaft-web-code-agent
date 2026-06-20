@@ -54,37 +54,35 @@ describe('Yeaft conversation layout', () => {
     expect(zh).toContain("'yeaft.onboarding.title': '先连接 Agent，再开始会话'");
   });
 
-  it('does not treat an unloaded Session snapshot as an empty Session list', () => {
+  it('only shows onboarding when there is no connected Agent or no Session rows', () => {
     expect(shouldShowYeaftOnboardingGuide({
       hasYeaftAgent: true,
       sessionsReady: false,
       sessionsEmpty: true,
-      activeSessionId: null,
-      topbarSession: null,
     })).toBe(false);
 
     expect(shouldShowYeaftOnboardingGuide({
       hasYeaftAgent: true,
       sessionsReady: true,
       sessionsEmpty: true,
-      activeSessionId: null,
-      topbarSession: null,
     })).toBe(true);
 
     expect(shouldShowYeaftOnboardingGuide({
       hasYeaftAgent: true,
       sessionsReady: true,
       sessionsEmpty: false,
-      activeSessionId: 'session-1',
-      topbarSession: { id: 'session-1' },
+    })).toBe(false);
+
+    expect(shouldShowYeaftOnboardingGuide({
+      hasYeaftAgent: false,
+      sessionsReady: true,
+      sessionsEmpty: false,
     })).toBe(false);
 
     expect(shouldShowYeaftOnboardingGuide({
       hasYeaftAgent: false,
       sessionsReady: false,
       sessionsEmpty: false,
-      activeSessionId: null,
-      topbarSession: null,
     })).toBe(true);
   });
 });

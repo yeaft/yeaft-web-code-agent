@@ -8,11 +8,9 @@ export function shouldShowYeaftOnboardingGuide({
   hasYeaftAgent = false,
   sessionsReady = false,
   sessionsEmpty = false,
-  activeSessionId = null,
-  topbarSession = null,
 } = {}) {
+  if (sessionsReady && !sessionsEmpty) return false;
   if (!hasYeaftAgent) return true;
   if (!sessionsReady) return false;
-  if (sessionsEmpty) return true;
-  return !topbarSession && !activeSessionId;
+  return sessionsEmpty;
 }
