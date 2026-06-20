@@ -1784,7 +1784,7 @@
     padding: 6px 10px;
     position: sticky;
     top: 0;
-    z-index: 1100;
+    z-index: 20;
   }
 
   /* task-fix-mobile-group-settings: show the topbar hamburger so users
