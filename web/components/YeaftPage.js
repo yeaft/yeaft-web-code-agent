@@ -4,6 +4,7 @@ import SettingsPanel from './SettingsPanel.js';
 import YeaftSidebar from './YeaftSidebar.js';
 import VpDetailView from './VpDetailView.js';
 import SessionInviteModal from './SessionInviteModal.js';
+import SessionCreateModal from './SessionCreateModal.js';
 import SessionSettingsModal from './SessionSettingsModal.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
 import YeaftDebugPanel from './YeaftDebugPanel.js';
@@ -37,7 +38,7 @@ export function visibleSessionStatusTasks(taskMap) {
 
 export default {
   name: 'YeaftPage',
-  components: { ChatInput, MessageList, SettingsPanel, YeaftSidebar, VpDetailView, SessionInviteModal, SessionSettingsModal, WorkbenchPanel, YeaftDebugPanel, VpTimelinePane, YeaftSessionActions, LlmTab },
+  components: { ChatInput, MessageList, SettingsPanel, YeaftSidebar, VpDetailView, SessionInviteModal, SessionCreateModal, SessionSettingsModal, WorkbenchPanel, YeaftDebugPanel, VpTimelinePane, YeaftSessionActions, LlmTab },
   template: `
     <div class="yeaft-page">
       <!-- Mobile sidebar overlay -->
@@ -125,11 +126,12 @@ export default {
               </div>
             </div>
           </div>
-          <div class="yeaft-topbar-title-group" :title="topbarSessionTitle || topbarGroup?.id || ''">
-            <div class="yeaft-topbar-session-title">{{ topbarSessionTitle || $t('yeaft.session.create.untitled') }}</div>
+          <div class="yeaft-topbar-title-group" :title="showOnboardingGuide ? $t('yeaft.onboarding.topbarTitle') : (topbarSessionTitle || topbarGroup?.id || '')">
+            <div class="yeaft-topbar-session-title">{{ showOnboardingGuide ? $t('yeaft.onboarding.topbarTitle') : (topbarSessionTitle || $t('yeaft.session.create.untitled')) }}</div>
           </div>
 
           <YeaftSessionActions
+            v-if="!showOnboardingGuide"
             class="yeaft-topbar-right"
             :loading-more-history="store.yeaftLoadingMoreHistory"
             :dream-running="dreamRunning"
@@ -166,13 +168,95 @@ export default {
           @back="exitVpDetailView"
         />
 
+        <!-- No-session onboarding — when there is no Session, the bottom input
+             cannot send anywhere. Replace the chat chrome with setup guidance
+             instead of inviting the user to type into a dead input. -->
+        <section
+          v-if="!showSettings && !store.yeaftActiveVpDetailId && showOnboardingGuide"
+          class="yeaft-onboarding"
+          :aria-label="$t('yeaft.onboarding.ariaLabel')"
+        >
+          <div class="yeaft-onboarding-shell">
+            <div class="yeaft-onboarding-eyebrow">{{ $t('yeaft.onboarding.eyebrow') }}</div>
+            <h1 class="yeaft-onboarding-title">{{ $t('yeaft.onboarding.title') }}</h1>
+            <p class="yeaft-onboarding-subtitle">{{ $t('yeaft.onboarding.subtitle') }}</p>
+
+            <div class="yeaft-onboarding-actions">
+              <button type="button" class="btn-primary yeaft-onboarding-primary" @click="openSessionCreate">
+                {{ $t('yeaft.onboarding.createSession') }}
+              </button>
+              <button type="button" class="btn-secondary" @click="openLlmConfig">
+                {{ $t('yeaft.onboarding.configureLlm') }}
+              </button>
+            </div>
+
+            <div class="yeaft-onboarding-steps" role="list">
+              <article class="yeaft-onboarding-card" role="listitem">
+                <div class="yeaft-onboarding-step-index">1</div>
+                <div class="yeaft-onboarding-card-body">
+                  <h2>{{ $t('yeaft.onboarding.installTitle') }}</h2>
+                  <p>{{ $t('yeaft.onboarding.installDesc') }}</p>
+                  <div class="yeaft-onboarding-command">
+                    <code>{{ installAgentCommand }}</code>
+                    <button type="button" class="yeaft-onboarding-copy" @click="copyOnboardingCommand(installAgentCommand)">
+                      {{ $t('common.copy') }}
+                    </button>
+                  </div>
+                </div>
+              </article>
+
+              <article class="yeaft-onboarding-card" role="listitem">
+                <div class="yeaft-onboarding-step-index">2</div>
+                <div class="yeaft-onboarding-card-body">
+                  <h2>{{ $t('yeaft.onboarding.connectTitle') }}</h2>
+                  <p>{{ $t('yeaft.onboarding.connectDesc') }}</p>
+                  <div class="yeaft-onboarding-command">
+                    <code>{{ connectAgentCommand }}</code>
+                    <button type="button" class="yeaft-onboarding-copy" @click="copyOnboardingCommand(connectAgentCommand)">
+                      {{ $t('common.copy') }}
+                    </button>
+                  </div>
+                </div>
+              </article>
+
+              <article class="yeaft-onboarding-card yeaft-onboarding-card-wide" role="listitem">
+                <div class="yeaft-onboarding-step-index">3</div>
+                <div class="yeaft-onboarding-card-body">
+                  <h2>{{ $t('yeaft.onboarding.llmTitle') }}</h2>
+                  <p>{{ $t('yeaft.onboarding.llmDesc') }}</p>
+                  <div class="yeaft-onboarding-provider-grid">
+                    <div class="yeaft-onboarding-provider">
+                      <div class="yeaft-onboarding-provider-title">{{ $t('yeaft.onboarding.copilotTitle') }}</div>
+                      <div class="yeaft-onboarding-command">
+                        <code>{{ copilotCommand }}</code>
+                        <button type="button" class="yeaft-onboarding-copy" @click="copyOnboardingCommand(copilotCommand)">
+                          {{ $t('common.copy') }}
+                        </button>
+                      </div>
+                    </div>
+                    <div class="yeaft-onboarding-provider">
+                      <div class="yeaft-onboarding-provider-title">{{ $t('yeaft.onboarding.apiTitle') }}</div>
+                      <div class="yeaft-onboarding-command">
+                        <code>{{ apiProviderCommand }}</code>
+                        <button type="button" class="yeaft-onboarding-copy" @click="copyOnboardingCommand(apiProviderCommand)">
+                          {{ $t('common.copy') }}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </div>
+        </section>
+
         <!-- Messages Area — reuse standard MessageList for identical rendering -->
         <!-- task-fix-empty-group: hero state replaces MessageList when the
              active group has no roster — gives the user a single, clear
              next step instead of a blank canvas. The modal still pops on
              top for groups the user hasn't dismissed yet. -->
         <div
-          v-if="!showSettings && !store.yeaftActiveVpDetailId && isActiveGroupEmpty"
+          v-if="!showSettings && !store.yeaftActiveVpDetailId && !showOnboardingGuide && isActiveGroupEmpty"
           class="yeaft-empty-group-hero"
         >
           <div class="yeaft-empty-group-hero__icon" aria-hidden="true">
@@ -186,7 +270,7 @@ export default {
             {{ $t('yeaft.session.empty.cta') }}
           </button>
         </div>
-        <MessageList v-if="!showSettings && !store.yeaftActiveVpDetailId && !isActiveGroupEmpty" />
+        <MessageList v-if="!showSettings && !store.yeaftActiveVpDetailId && !showOnboardingGuide && !isActiveGroupEmpty" />
 
         <!-- Settings Panel -->
         <SettingsPanel v-if="showSettings" :visible="showSettings" :initial-tab="'yeaft'" :initial-sub-tab="settingsInitialTab" :initial-edit-vp-id="settingsInitialEditVpId" @close="showSettings = false" />
@@ -206,7 +290,7 @@ export default {
 
         <!-- Input Area -->
         <ChatInput
-          v-if="!showSettings"
+          v-if="!showSettings && !showOnboardingGuide"
           ref="chatInputRef"
           :conversation-id="store.yeaftConversationId"
           :send-fn="sendMessage"
@@ -262,6 +346,12 @@ export default {
         @dismiss="onInviteDismiss"
       />
 
+      <SessionCreateModal
+        v-if="sessionCreateOpen"
+        @close="sessionCreateOpen = false"
+        @created="onSessionCreated"
+      />
+
       <!-- task-fix-group-member-editor → unified SessionSettingsModal: a
            single dialog (announcement / members / rename / danger) owned
            at this level so the empty-group hero CTA, the sidebar ⚙
@@ -296,6 +386,7 @@ export default {
     const modelDropdownOpen = Vue.ref(false);
     const showSettings = Vue.ref(false);
     const showLlmConfig = Vue.ref(false);
+    const sessionCreateOpen = Vue.ref(false);
     const settingsInitialTab = Vue.ref('vp');
     const settingsInitialEditVpId = Vue.ref(null);
     // feat-vp-list-ui-polish: template ref to the embedded ChatInput so we
@@ -843,6 +934,24 @@ export default {
       showLlmConfig.value = true;
     };
 
+    const openSessionCreate = () => {
+      sessionCreateOpen.value = true;
+    };
+
+    const onSessionCreated = (_session) => {
+      sessionCreateOpen.value = false;
+    };
+
+    const copyOnboardingCommand = async (command) => {
+      if (!command) return;
+      if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) return;
+      try {
+        await navigator.clipboard.writeText(command);
+      } catch (_) {
+        // Clipboard is best-effort; the command remains visible for manual copy.
+      }
+    };
+
     const onLlmConfigMessage = (msg, isError) => {
       if (isError) console.error('[Yeaft] LLM config:', msg);
       else console.log('[Yeaft] LLM config:', msg);
@@ -898,6 +1007,16 @@ export default {
       const gs = sessionsStore();
       return !!(gs && gs.activeNeedsInvite);
     });
+    const showOnboardingGuide = Vue.computed(() => {
+      const gs = sessionsStore();
+      if (!gs) return false;
+      if (gs.isEmpty === true) return true;
+      return !topbarGroup.value && !gs.activeSessionId;
+    });
+    const installAgentCommand = 'npm install -g @yeaft/webchat-agent';
+    const connectAgentCommand = 'yeaft-agent install --server <your-server-url> --name my-worker --secret <agent-secret>';
+    const copilotCommand = 'gh auth login && yeaft-agent llm use github-copilot --model gpt-5.5';
+    const apiProviderCommand = 'OPENAI_KEY=sk-... yeaft-agent llm use openai-compatible --name openai --base-url https://api.openai.com/v1 --api-key-env OPENAI_KEY --model gpt-5';
     const onInviteOpenLibrary = () => {
       const g = activeGroupForInvite.value;
       if (g) inviteDismissedFor.add(g.id);
@@ -990,7 +1109,7 @@ export default {
     // and status surface. Historical vpTimeline naming remains for the row
     // projection helper and component shell only.
     const showVpTimeline = Vue.computed(
-      () => !showSettings.value && sessionStatusVisible.value
+      () => !showSettings.value && !showOnboardingGuide.value && sessionStatusVisible.value
     );
 
     // Resolve the active group's roster and project it into timeline
@@ -1105,6 +1224,7 @@ export default {
       modelOptionMatchesRef,
       showSettings,
       showLlmConfig,
+      sessionCreateOpen,
       settingsInitialTab,
       settingsInitialEditVpId,
       chatInputRef,
@@ -1127,6 +1247,9 @@ export default {
       toggleModelDropdown,
       selectModel,
       openLlmConfig,
+      openSessionCreate,
+      onSessionCreated,
+      copyOnboardingCommand,
       onLlmConfigMessage,
       onLlmConfigSaved,
       formatTokens,
@@ -1145,6 +1268,11 @@ export default {
       onInviteOpenLibrary,
       onInviteDismiss,
       isActiveGroupEmpty,
+      showOnboardingGuide,
+      installAgentCommand,
+      connectAgentCommand,
+      copilotCommand,
+      apiProviderCommand,
       // task-fix-group-member-editor → unified group settings modal.
       groupSettingsOpen,
       groupSettingsId,

@@ -686,6 +686,21 @@ export default {
   'yeaft.session.create.creating': '创建中…',
   'yeaft.session.create.submit': '创建',
   'yeaft.session.empty': '还没有会话，点击 + 新建一个。',
+  'yeaft.onboarding.ariaLabel': 'Yeaft 上手说明',
+  'yeaft.onboarding.topbarTitle': '开始使用 Yeaft',
+  'yeaft.onboarding.eyebrow': 'Yeaft 上手指南',
+  'yeaft.onboarding.title': '先连接 Agent，再开始会话',
+  'yeaft.onboarding.subtitle': '当前还没有可聊天的 Yeaft Session。请先在你的机器上安装 yeaft-agent，配置 GitHub Copilot 或其他 LLM API，然后创建一个 Session。',
+  'yeaft.onboarding.createSession': '创建或恢复 Session',
+  'yeaft.onboarding.configureLlm': '打开 LLM 设置',
+  'yeaft.onboarding.installTitle': '安装 yeaft-agent',
+  'yeaft.onboarding.installDesc': '在你希望运行任务的本机、VPS 或开发容器中安装 Agent。Web 端只负责界面，真正执行工具和调用模型的是 Agent。',
+  'yeaft.onboarding.connectTitle': '连接到这个 Web 服务',
+  'yeaft.onboarding.connectDesc': '使用管理员给你的 server URL 和 agent secret 启动或安装服务。连接成功后，左侧会显示在线 Agent。',
+  'yeaft.onboarding.llmTitle': '配置 LLM provider',
+  'yeaft.onboarding.llmDesc': '推荐直接使用 GitHub Copilot；也可以接入 OpenAI、Anthropic 或任何 OpenAI-compatible API。配置会写入运行 Agent 的机器上的 ~/.yeaft/config.json。',
+  'yeaft.onboarding.copilotTitle': '推荐：GitHub Copilot',
+  'yeaft.onboarding.apiTitle': '其他 LLM API',
   // fix-session-restore-modal-unify: 独立的 SessionRestoreModal 已经
   // 合并进 SessionCreateModal — "Restore from disk" 分组内复用 create
   // 模态的 workdir 输入。2026-06-09 单列表合并后，sessionsLabel 也被

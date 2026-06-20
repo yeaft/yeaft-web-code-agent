@@ -688,6 +688,21 @@ export default {
   'yeaft.session.create.creating': 'Creating…',
   'yeaft.session.create.submit': 'Create',
   'yeaft.session.empty': 'No sessions yet. Click + to create one.',
+  'yeaft.onboarding.ariaLabel': 'Yeaft getting started guide',
+  'yeaft.onboarding.topbarTitle': 'Get started with Yeaft',
+  'yeaft.onboarding.eyebrow': 'Yeaft setup guide',
+  'yeaft.onboarding.title': 'Connect an Agent before chatting',
+  'yeaft.onboarding.subtitle': 'There is no Yeaft Session to chat in yet. Install yeaft-agent on your machine, configure GitHub Copilot or another LLM API, then create a Session.',
+  'yeaft.onboarding.createSession': 'Create or restore Session',
+  'yeaft.onboarding.configureLlm': 'Open LLM settings',
+  'yeaft.onboarding.installTitle': 'Install yeaft-agent',
+  'yeaft.onboarding.installDesc': 'Install the Agent on the laptop, VPS, or dev container that should run tools and call models. The web app is only the interface.',
+  'yeaft.onboarding.connectTitle': 'Connect to this web service',
+  'yeaft.onboarding.connectDesc': 'Start or install the service with the server URL and agent secret from your administrator. Once connected, the sidebar will show the online Agent.',
+  'yeaft.onboarding.llmTitle': 'Configure an LLM provider',
+  'yeaft.onboarding.llmDesc': 'GitHub Copilot is the recommended path. You can also connect OpenAI, Anthropic, or any OpenAI-compatible API. The config is saved to ~/.yeaft/config.json on the Agent machine.',
+  'yeaft.onboarding.copilotTitle': 'Recommended: GitHub Copilot',
+  'yeaft.onboarding.apiTitle': 'Other LLM API',
   // fix-session-restore-modal-unify: the standalone SessionRestoreModal
   // is gone — its flow was folded into SessionCreateModal. The 2026-06-09
   // single-list merge also dropped `sessionsLabel` (panel header now reuses
