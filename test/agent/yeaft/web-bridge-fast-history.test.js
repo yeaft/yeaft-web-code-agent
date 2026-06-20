@@ -66,13 +66,24 @@ describe('Yeaft load-history first paint', () => {
         { role: 'user', content: 'old q', sessionId: 'session-fast' },
         { role: 'assistant', content: 'old a', sessionId: 'session-fast', speakerVpId: 'vp-linus' },
         { role: 'user', content: 'new q', sessionId: 'session-fast' },
-        { role: 'assistant', content: 'new a', sessionId: 'session-fast', speakerVpId: 'vp-linus' },
+        { role: 'assistant', content: '', sessionId: 'session-fast', speakerVpId: 'vp-linus', toolCalls: [{ id: 'tool-1', name: 'Bash', input: { command: 'echo ok' } }] },
       ]);
 
       const pending = handleYeaftLoadHistory({ sessionId: 'session-fast', limit: 1 });
       await flushMicrotasks();
 
       expect(loadSession).toHaveBeenCalledTimes(1);
+      const chunk = sent.find(m => m.type === 'yeaft_history_chunk');
+      expect(chunk).toMatchObject({
+        type: 'yeaft_history_chunk',
+        sessionId: 'session-fast',
+        mode: 'recent',
+        hasMore: true,
+        messages: [
+          { role: 'user', content: 'new q', sessionId: 'session-fast' },
+          { role: 'assistant', content: '', sessionId: 'session-fast', speakerVpId: 'vp-linus', toolSummaryCount: 1 },
+        ],
+      });
       const historyDone = sent.find(m => m.event?.type === 'history_loaded');
       expect(historyDone).toMatchObject({
         type: 'yeaft_output',
@@ -84,11 +95,7 @@ describe('Yeaft load-history first paint', () => {
           hasMore: true,
         },
       });
-      const texts = sent
-        .filter(m => m.type === 'yeaft_output' && m.data)
-        .map(m => m.data?.message?.content?.[0]?.text || m.data?.message?.content)
-        .filter(Boolean);
-      expect(texts).toEqual(['new q', 'new a']);
+      expect(sent.filter(m => m.type === 'yeaft_output' && m.data)).toHaveLength(0);
 
       resolveLoadSession({
         conversationStore: store,
@@ -174,32 +181,33 @@ describe('Yeaft load-history first paint', () => {
       const pending = handleYeaftLoadHistory({ sessionId: 'session-fast', afterMessageId: anchor.id });
       await flushMicrotasks();
 
-      const frames = sent.filter(m => m.type === 'yeaft_output' && m.data);
-      const userFrame = frames.find(m => m.data.type === 'user');
-      expect(userFrame?.data).toMatchObject({
-        type: 'user',
-        ts: '2026-06-20T01:00:01.000Z',
-        message: {
-          content: 'with file',
-          attachments: [{ fileId: 'file_1', name: 'note.txt', isImage: false }],
-        },
+      const chunk = sent.find(m => m.type === 'yeaft_history_chunk' && m.mode === 'delta');
+      expect(chunk).toMatchObject({
+        type: 'yeaft_history_chunk',
+        sessionId: 'session-fast',
+        mode: 'delta',
+        afterSeq: Number(anchor.id.slice(1)),
+        messages: [
+          {
+            role: 'user',
+            content: 'with file',
+            ts: '2026-06-20T01:00:01.000Z',
+            attachments: [{ fileId: 'file_1', name: 'note.txt', isImage: false }],
+          },
+          {
+            role: 'assistant',
+            content: 'I will use a tool',
+            ts: '2026-06-20T01:00:02.000Z',
+            speakerVpId: 'vp-linus',
+            toolSummaryCount: 1,
+          },
+        ],
       });
-      const assistantFrame = frames.find(m => m.data.type === 'assistant' && m.data.message?.content?.[0]?.type === 'text');
-      expect(assistantFrame).toMatchObject({
-        vpId: 'vp-linus',
-        data: {
-          ts: '2026-06-20T01:00:02.000Z',
-          message: { content: [{ type: 'text', text: 'I will use a tool' }] },
-        },
-      });
-      const toolSummary = frames.find(m => m.data.type === 'assistant' && m.data.message?.content?.[0]?.type === 'tool_summary');
-      expect(toolSummary?.data).toMatchObject({
-        ts: '2026-06-20T01:00:02.000Z',
-        message: { content: [{ type: 'tool_summary', count: 1, omittedCount: 1, source: 'history' }] },
-      });
+      expect(chunk.messages).toHaveLength(2);
+      expect(sent.filter(m => m.type === 'yeaft_output' && m.data)).toHaveLength(0);
       expect(sent.find(m => m.event?.type === 'history_loaded')?.event).toMatchObject({
         mode: 'delta',
-        count: 2,
+        count: chunk.messages.length,
         sessionId: 'session-fast',
       });
 
@@ -256,25 +264,33 @@ describe('Yeaft load-history first paint', () => {
 
       await handleYeaftLoadHistory({ sessionId: 'session-fast', afterSeq: Number(anchor.id.slice(1)) });
 
-      const frames = sent.filter(m => m.type === 'yeaft_output' && m.data);
-      expect(frames.find(m => m.data.type === 'user')?.data).toMatchObject({
-        ts: '2026-06-20T02:00:01.000Z',
-        message: {
-          content: 'ready delta user',
-          attachments: [{ fileId: 'file_2', name: 'diagram.png', isImage: true }],
-        },
+      const chunk = sent.find(m => m.type === 'yeaft_history_chunk' && m.mode === 'delta');
+      expect(chunk).toMatchObject({
+        type: 'yeaft_history_chunk',
+        sessionId: 'session-fast',
+        mode: 'delta',
+        afterSeq: Number(anchor.id.slice(1)),
+        messages: [
+          {
+            role: 'user',
+            content: 'ready delta user',
+            ts: '2026-06-20T02:00:01.000Z',
+            attachments: [{ fileId: 'file_2', name: 'diagram.png', isImage: true }],
+          },
+          {
+            role: 'assistant',
+            content: 'ready delta assistant',
+            ts: '2026-06-20T02:00:02.000Z',
+            speakerVpId: 'vp-martin',
+            toolSummaryCount: 1,
+          },
+        ],
       });
-      expect(frames.find(m => m.data.type === 'assistant' && m.data.message?.content?.[0]?.type === 'text')).toMatchObject({
-        vpId: 'vp-martin',
-        data: { ts: '2026-06-20T02:00:02.000Z' },
-      });
-      expect(frames.find(m => m.data.type === 'assistant' && m.data.message?.content?.[0]?.type === 'tool_summary')?.data).toMatchObject({
-        ts: '2026-06-20T02:00:02.000Z',
-        message: { content: [{ type: 'tool_summary', count: 1, omittedCount: 1, source: 'history' }] },
-      });
+      expect(chunk.messages).toHaveLength(2);
+      expect(sent.filter(m => m.type === 'yeaft_output' && m.data)).toHaveLength(0);
       expect(sent.find(m => m.event?.type === 'history_loaded')?.event).toMatchObject({
         mode: 'delta',
-        count: 2,
+        count: chunk.messages.length,
         sessionId: 'session-fast',
       });
     } finally {

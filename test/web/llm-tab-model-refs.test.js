@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import LlmTab from '../../web/components/LlmTab.js';
+import en from '../../web/i18n/en.js';
+import zhCN from '../../web/i18n/zh-CN.js';
 import { PROTOCOL_PRESET_MODELS } from '../../web/utils/protocolPresets.js';
 
 describe('LlmTab editable model refs', () => {
@@ -86,24 +88,26 @@ describe('LlmTab editable model refs', () => {
     expect(PROTOCOL_PRESET_MODELS.anthropic).toContain('claude-opus-4.8');
   });
 
-  it('renders copy-only Agent install commands in the Yeaft LLM tab', () => {
-    expect(LlmTab.template).toContain('class="llm-agent-install"');
-    expect(LlmTab.template).toContain('v-if="context === \'yeaft\'" class="llm-agent-install"');
-    expect(LlmTab.template).toContain(':aria-label="$t(\'settings.llm.agentInstallCommands\')"');
-    expect(LlmTab.template).toContain('{{ agentInstallCommand }}');
-    expect(LlmTab.template).toContain('{{ copilotUseCommand }}');
-    expect(LlmTab.template).toContain('copyText(agentInstallCommand)');
-    expect(LlmTab.template).toContain('copyText(copilotUseCommand)');
-    expect(LlmTab.template.indexOf('class="llm-agent-install"')).toBeLessThan(LlmTab.template.indexOf('v-if="!effectiveAgentId"'));
-    expect(LlmTab.template.indexOf('class="llm-agent-install"')).toBeLessThan(LlmTab.template.indexOf('v-else-if="!agentOnline"'));
-    expect(LlmTab.template.indexOf('class="llm-agent-install"')).toBeLessThan(LlmTab.template.indexOf('v-else-if="loadError"'));
-    expect(LlmTab.template.indexOf('class="llm-agent-install"')).toBeLessThan(LlmTab.template.indexOf('<!-- Config loaded -->'));
+  it('keeps Agent install commands out of the Yeaft LLM tab', () => {
+    expect(LlmTab.template).not.toContain('class="llm-agent-install"');
+    expect(LlmTab.template).not.toContain('settings.llm.agentInstallCommands');
+    expect(LlmTab.template).not.toContain('{{ agentInstallCommand }}');
+    expect(LlmTab.template).not.toContain('{{ copilotUseCommand }}');
+    expect(LlmTab.template).not.toContain('copyText(agentInstallCommand)');
+    expect(LlmTab.template).not.toContain('copyText(copilotUseCommand)');
     expect(LlmTab.template).not.toContain('copilotInstructionsDesc');
     expect(LlmTab.template).not.toContain('copilotStepVerifyDesc');
     expect(LlmTab.template).not.toContain('yeaft-agent llm show');
+    expect(LlmTab.computed.agentInstallCommand).toBeUndefined();
+    expect(LlmTab.computed.copilotUseCommand).toBeUndefined();
+  });
 
-    expect(LlmTab.computed.agentInstallCommand.call({})).toBe('npm install -g @yeaft/webchat-agent');
-    expect(LlmTab.computed.copilotUseCommand.call({})).toBe('yeaft-agent llm use github-copilot --model gpt-5.5');
+  it('has translations for every LLM tab template key in both locales', () => {
+    const keys = Array.from(LlmTab.template.matchAll(/settings\.llm\.[A-Za-z0-9_.-]+/g), m => m[0]);
+    for (const key of new Set(keys)) {
+      expect(Object.prototype.hasOwnProperty.call(en, key), `missing en translation for ${key}`).toBe(true);
+      expect(Object.prototype.hasOwnProperty.call(zhCN, key), `missing zh-CN translation for ${key}`).toBe(true);
+    }
   });
 
   it('hides the fast/secondary model field in the Yeaft context', () => {

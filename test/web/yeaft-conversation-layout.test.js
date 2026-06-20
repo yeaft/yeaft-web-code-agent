@@ -35,7 +35,9 @@ describe('Yeaft conversation layout', () => {
     expect(source).toContain('<ChatInput\n          v-if="!showSettings && !showOnboardingGuide"');
     expect(source).toContain('const showOnboardingGuide = Vue.computed(() => {');
     expect(source).toContain('shouldShowYeaftOnboardingGuide({');
+    expect(source).toContain('hasYeaftAgent: hasUsableYeaftAgent(store)');
     expect(source).toContain('sessionsReady: !!(gs && gs.hasLoadedSnapshot)');
+    expect(source).not.toContain('hasYeaftAgent: !!store.yeaftAgentId');
     expect(source).toContain('openSessionCreate');
     expect(source).toContain('openLlmConfig');
     expect(source).toContain('npm install -g @yeaft/webchat-agent');

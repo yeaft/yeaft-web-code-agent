@@ -135,6 +135,33 @@ export default {
                   </button>
                   <span class="sp-warning" v-if="resetConfirm">{{ $t('settings.security.resetWarning') }}</span>
                 </div>
+                <div class="sp-cmd-group" :aria-label="$t('settings.security.agentSetupCommands')">
+                  <div class="sp-cmd-row">
+                    <span class="sp-cmd-label">{{ $t('settings.security.agentCmdInstall') }}</span>
+                    <code class="sp-cmd">{{ agentInstallCommand }}</code>
+                    <button class="sp-icon-btn" @click="copyText(agentInstallCommand)" :title="$t('common.copy')">
+                      <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                    </button>
+                  </div>
+                  <div class="sp-cmd-row">
+                    <span class="sp-cmd-label">{{ $t('settings.security.agentCmdService') }}</span>
+                    <template v-if="agentSecret">
+                      <code class="sp-cmd">{{ agentServiceCommand }}</code>
+                      <button class="sp-icon-btn" @click="copyText(agentServiceCommand)" :title="$t('common.copy')">
+                        <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                      </button>
+                    </template>
+                    <span v-else class="sp-cmd sp-cmd-placeholder">{{ $t('settings.security.agentCmdNeedsSecret') }}</span>
+                  </div>
+                  <div class="sp-cmd-row">
+                    <span class="sp-cmd-label">{{ $t('settings.security.agentCmdLlm') }}</span>
+                    <code class="sp-cmd">{{ agentLlmCommand }}</code>
+                    <button class="sp-icon-btn" @click="copyText(agentLlmCommand)" :title="$t('common.copy')">
+                      <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                    </button>
+                  </div>
+                  <p class="sp-desc">{{ $t('settings.security.agentCmdLlmDesc') }}</p>
+                </div>
               </div>
 
               <div class="sp-group">
@@ -511,6 +538,32 @@ export default {
     },
     agentSecretActionLabel() {
       return this.agentSecret ? this.$t('settings.security.resetKey') : this.$t('settings.security.generateKey');
+    },
+    agentName() {
+      const p = this.profile;
+      const base = (p && (p.username || p.displayName)) || 'agent';
+      let h = 0x811c9dc5;
+      for (let i = 0; i < base.length; i++) {
+        h ^= base.charCodeAt(i);
+        h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+      }
+      const id = h.toString(16).padStart(8, '0').slice(0, 6);
+      const safe = String(base).replace(/[^A-Za-z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || 'agent';
+      return `${safe}-${id}`;
+    },
+    serverWsUrl() {
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${protocol}//${location.host}`;
+    },
+    agentInstallCommand() {
+      return 'npm install -g @yeaft/webchat-agent';
+    },
+    agentServiceCommand() {
+      if (!this.agentSecret) return '';
+      return `yeaft-agent install --server ${this.serverWsUrl} --secret ${this.agentSecret} --name ${this.agentName}`;
+    },
+    agentLlmCommand() {
+      return 'yeaft-agent llm use github-copilot --model gpt-5.5';
     },
     ssoProviderRows() {
       const auth = this.authStore;
