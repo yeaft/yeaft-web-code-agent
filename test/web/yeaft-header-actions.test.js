@@ -27,7 +27,9 @@ describe('Yeaft conversation header actions', () => {
     expect(pageSource).not.toContain('yeaft-topbar-announcement-edit');
     expect(pageSource).not.toContain('@click="openAnnouncementSettings"');
     expect(pageSource).toContain('@edit-announcement="openAnnouncementSettings"');
+    expect(pageSource).toContain('resolveActiveSessionIdForSettings({');
     expect(pageSource).toContain('const openAnnouncementSettings = () => {');
+    expect(pageSource).toContain('const sessionId = activeSessionIdForSettings();');
     expect(pageSource).toContain("openSessionSettings({ sessionId, section: 'announcement' });");
     expect(pageSource).toContain(':initial-section="groupSettingsSection"');
     expect(vpTimelineSource).toContain('class="yeaft-session-status-announcement-card"');
