@@ -331,6 +331,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     const rawSseBodyChunks = [];
     const responseHeaders = safeHeaders(response);
     const responseStatus = response.status;
+    let sawTerminalEvent = false;
 
     try {
       while (true) {
@@ -352,7 +353,8 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
           const line = rawLine.trimEnd();
           if (!line.startsWith('data:')) continue;
           const data = line.slice(5).trim();
-          if (!data || data === '[DONE]') continue;
+          if (!data) continue;
+          if (data === '[DONE]') continue;
 
           let event;
           try {
@@ -408,6 +410,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
               toolCallAccum.delete(idx);
             }
           } else if (type === 'response.completed' || type === 'response.incomplete') {
+            sawTerminalEvent = true;
             const respObj = event.response || {};
 
             // Fallback: flush any function_call items in the final output that we
@@ -449,12 +452,16 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
               stopReason: this.#mapStopReason(respObj, sawToolCall),
             };
           } else if (type === 'response.error') {
+            sawTerminalEvent = true;
             // Let the engine decide; emit error event
             const message = event.error?.message || event.message || 'response.error';
             yield { type: 'error', error: new Error(message), retryable: false };
           }
           // Other semantic events (output_item.done, content_part.added, etc.) are ignored.
         }
+      }
+      if (!sawTerminalEvent) {
+        throw new LLMServerError('OpenAI stream ended before terminal event', 0);
       }
     } catch (err) {
       throw classifyFetchError(err, { providerLabel: 'OpenAI', signal });

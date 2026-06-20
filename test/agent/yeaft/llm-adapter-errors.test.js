@@ -74,6 +74,28 @@ function truncatedAnthropicStreamResponse() {
   };
 }
 
+function truncatedResponsesStreamResponse() {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ 'content-type': 'text/event-stream' }),
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode([
+          'event: response.created',
+          'data: {"type":"response.created","response":{"id":"resp_1","status":"in_progress"}}',
+          '',
+          'event: response.output_text.delta',
+          'data: {"type":"response.output_text.delta","delta":"partial"}',
+          '',
+        ].join('\n')));
+        controller.close();
+      },
+      cancel() {},
+    }),
+  };
+}
+
 describe('AnthropicAdapter error classification', () => {
   afterEach(() => {
     global.fetch = originalFetch;
@@ -225,5 +247,20 @@ describe('OpenAIResponsesAdapter error classification', () => {
     catch (err) { caught = err; }
     expect(caught).toBeInstanceOf(LLMStreamIdleTimeoutError);
     expect(caught).toBeInstanceOf(LLMServerError);
+  });
+
+  it('throws retryable error when Responses SSE ends before a terminal event', async () => {
+    global.fetch = async () => truncatedResponsesStreamResponse();
+    const adapter = new OpenAIResponsesAdapter({ baseUrl: 'https://x', apiKey: 'k' });
+    let caught;
+    const seen = [];
+    try {
+      for await (const event of adapter.stream({ model: 'deepseek-chat', system: '', messages: [{ role: 'user', content: 'hi' }] })) {
+        seen.push(event);
+      }
+    } catch (err) { caught = err; }
+    expect(seen).toContainEqual({ type: 'text_delta', text: 'partial' });
+    expect(caught).toBeInstanceOf(LLMServerError);
+    expect(caught.message).toContain('stream ended before terminal event');
   });
 });
