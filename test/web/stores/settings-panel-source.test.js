@@ -9,6 +9,10 @@ const settingsCss = readFileSync(
   new URL('../../../web/styles/settings.css', import.meta.url),
   'utf8',
 );
+const llmTabSource = readFileSync(
+  new URL('../../../web/components/LlmTab.js', import.meta.url),
+  'utf8',
+);
 const sidebarAgentHeaderSource = readFileSync(
   new URL('../../../web/components/SidebarAgentHeader.js', import.meta.url),
   'utf8',
@@ -63,9 +67,10 @@ describe('Settings panel source', () => {
     expect(settingsPanelSource).toContain('<McpTab @message="onLlmMessage" />');
   });
 
-  it('replaces the legacy --server install hint with a one-line LLM connect command', () => {
+  it('moves Agent install commands from Security to the LLM tab', () => {
     // Legacy --server / agent-secret install commands are gone from source + i18n.
     expect(settingsPanelSource).not.toMatch(/--server\s/);
+    expect(llmTabSource).not.toMatch(/--server\s/);
     expect(settingsPanelSource).not.toContain('agentRunCommand');
     expect(settingsPanelSource).not.toContain('agentServiceCommand');
     expect(settingsPanelSource).not.toContain('agentCmdRun');
@@ -80,25 +85,46 @@ describe('Settings panel source', () => {
     expect(zhSource).not.toContain('agentCmdNeedsSecret');
     expect(zhSource).not.toContain('--server');
 
-    // The new LLM connect command is the single copy-able snippet.
-    expect(settingsPanelSource).toContain('agentLlmCommand()');
-    expect(settingsPanelSource).toContain("return 'yeaft-agent llm use github-copilot --model gpt-5.5';");
+    // Security now only owns the secret. Agent install guidance belongs under LLM.
+    expect(settingsPanelSource).not.toContain('agentInstallCommand()');
+    expect(settingsPanelSource).not.toContain('agentLlmCommand()');
+    expect(settingsPanelSource).not.toContain('settings.security.agentCmdInstall');
+    expect(settingsPanelSource).not.toContain('settings.security.agentCmdLlm');
+    expect(settingsPanelSource).not.toContain('settings.security.agentCmdLlmDesc');
+    expect(enSource).not.toContain('settings.security.agentCmdInstall');
+    expect(enSource).not.toContain('settings.security.agentCmdLlm');
+    expect(enSource).not.toContain('settings.security.agentCmdLlmDesc');
+    expect(zhSource).not.toContain('settings.security.agentCmdInstall');
+    expect(zhSource).not.toContain('settings.security.agentCmdLlm');
+    expect(zhSource).not.toContain('settings.security.agentCmdLlmDesc');
 
-    // Template renders the new command and wires its own copy button to it.
-    expect(settingsPanelSource).toContain("{{ $t('settings.security.agentCmdLlm') }}");
-    expect(settingsPanelSource).toContain('{{ agentLlmCommand }}');
-    expect(settingsPanelSource).toContain('copyText(agentLlmCommand)');
-    expect(settingsPanelSource).toContain("{{ $t('settings.security.agentCmdLlmDesc') }}");
+    // LLM renders only copyable script rows: install Agent, then configure Copilot.
+    expect(llmTabSource).toContain('class="llm-agent-install"');
+    expect(llmTabSource).toContain('agentInstallCommand()');
+    expect(llmTabSource).toContain("return 'npm install -g @yeaft/webchat-agent';");
+    expect(llmTabSource).toContain('copilotUseCommand()');
+    expect(llmTabSource).toContain("return 'yeaft-agent llm use github-copilot --model gpt-5.5';");
+    expect(llmTabSource).toContain('copyText(agentInstallCommand)');
+    expect(llmTabSource).toContain('copyText(copilotUseCommand)');
+    expect(llmTabSource.indexOf('class="llm-agent-install"')).toBeLessThan(llmTabSource.indexOf('v-if="!effectiveAgentId"'));
+    expect(llmTabSource.indexOf('class="llm-agent-install"')).toBeLessThan(llmTabSource.indexOf('v-else-if="!agentOnline"'));
+    expect(llmTabSource.indexOf('class="llm-agent-install"')).toBeLessThan(llmTabSource.indexOf('v-else-if="loadError"'));
+    expect(llmTabSource.indexOf('class="llm-agent-install"')).toBeLessThan(llmTabSource.indexOf('<!-- Config loaded -->'));
+    expect(llmTabSource).not.toContain('copilotInstructionsDesc');
+    expect(llmTabSource).not.toContain('copilotStepLoginDesc');
+    expect(llmTabSource).not.toContain('yeaft-agent llm show');
 
-    // Both locales carry real strings for the new keys (no bare i18n key fallback).
-    expect(enSource).toContain("'settings.security.agentCmdLlm': 'Connect to LLM'");
-    expect(enSource).toMatch(/'settings\.security\.agentCmdLlmDesc': 'Connect the Yeaft Agent to GitHub Copilot\./);
-    expect(zhSource).toContain("'settings.security.agentCmdLlm': '接入 LLM'");
-    expect(zhSource).toMatch(/'settings\.security\.agentCmdLlmDesc': '将 Yeaft Agent 接入 GitHub Copilot/);
-
-    // The Install Agent command (npm install -g) stays as the prerequisite step.
-    expect(settingsPanelSource).toContain('agentInstallCommand()');
-    expect(settingsPanelSource).toContain("return 'npm install -g @yeaft/webchat-agent';");
+    // Both locales carry labels for the two copied snippets, not long instructions.
+    expect(enSource).toContain("'settings.llm.agentInstallCommands': 'Yeaft Agent install commands'");
+    expect(enSource).toContain("'settings.llm.agentInstallCommand': 'Install Agent'");
+    expect(enSource).toContain("'settings.llm.copilotUseLabel': 'Use Copilot'");
+    expect(enSource).not.toContain('copilotInstructionsDesc');
+    expect(enSource).not.toContain('copilotStepVerifyDesc');
+    expect(zhSource).toContain("'settings.llm.agentInstallCommands': 'Yeaft Agent 安装命令'");
+    expect(zhSource).toContain("'settings.llm.agentInstallCommand': '安装 Agent'");
+    expect(zhSource).toContain("'settings.llm.copilotUseLabel': '使用 Copilot'");
+    expect(zhSource).not.toContain('copilotInstructionsDesc');
+    expect(zhSource).not.toContain('copilotStepVerifyDesc');
 
     // Removing the --server install hint also retired its helpers and placeholder
     // styling. Guard against either silently sneaking back in via copy/paste.

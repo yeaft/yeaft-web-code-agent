@@ -73,19 +73,12 @@ describe('SettingsPanel Agent secret behavior', () => {
     expect(instance.agentSecret).toBe(null);
   });
 
-  it('renders the LLM connect command without requiring a secret and never references --server', async () => {
+  it('keeps Agent install commands out of the Security tab', async () => {
     const component = await loadComponent();
     const noSecret = createInstance(component, { agentSecret: null });
-    const withSecret = createInstance(component, {
-      agentSecret: 'fake-secret-command',
-      profile: { username: 'dev-user', displayName: 'Dev User' },
-    });
 
-    const expected = 'yeaft-agent llm use github-copilot --model gpt-5.5';
-    expect(noSecret.agentLlmCommand).toBe(expected);
-    expect(withSecret.agentLlmCommand).toBe(expected);
-    expect(noSecret.agentLlmCommand).not.toContain('--server');
-    expect(withSecret.agentLlmCommand).not.toContain('--server');
+    expect(noSecret.agentInstallCommand).toBeUndefined();
+    expect(noSecret.agentLlmCommand).toBeUndefined();
     expect(noSecret.agentRunCommand).toBeUndefined();
     expect(noSecret.agentServiceCommand).toBeUndefined();
     expect(noSecret.agentSecretActionLabel).toBe('settings.security.generateKey');

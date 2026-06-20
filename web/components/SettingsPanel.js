@@ -135,23 +135,6 @@ export default {
                   </button>
                   <span class="sp-warning" v-if="resetConfirm">{{ $t('settings.security.resetWarning') }}</span>
                 </div>
-                <div class="sp-cmd-group">
-                  <div class="sp-cmd-row">
-                    <span class="sp-cmd-label">{{ $t('settings.security.agentCmdInstall') }}</span>
-                    <code class="sp-cmd">{{ agentInstallCommand }}</code>
-                    <button class="sp-icon-btn" @click="copyText(agentInstallCommand)" :title="$t('common.copy')">
-                      <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
-                    </button>
-                  </div>
-                  <div class="sp-cmd-row">
-                    <span class="sp-cmd-label">{{ $t('settings.security.agentCmdLlm') }}</span>
-                    <code class="sp-cmd">{{ agentLlmCommand }}</code>
-                    <button class="sp-icon-btn" @click="copyText(agentLlmCommand)" :title="$t('common.copy')">
-                      <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
-                    </button>
-                  </div>
-                  <p class="sp-desc">{{ $t('settings.security.agentCmdLlmDesc') }}</p>
-                </div>
               </div>
 
               <div class="sp-group">
@@ -525,12 +508,6 @@ export default {
       return [
         { value: 'pro', label: this.$t('settings.invite.proUser') }
       ];
-    },
-    agentInstallCommand() {
-      return 'npm install -g @yeaft/webchat-agent';
-    },
-    agentLlmCommand() {
-      return 'yeaft-agent llm use github-copilot --model gpt-5.5';
     },
     agentSecretActionLabel() {
       return this.agentSecret ? this.$t('settings.security.resetKey') : this.$t('settings.security.generateKey');
