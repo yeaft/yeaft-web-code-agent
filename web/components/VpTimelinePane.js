@@ -335,11 +335,17 @@ export default {
                     class="yeaft-vp-task-prompt-input"
                     v-model="subAgentPromptDrafts[task.id]"
                     :placeholder="$t('yeaft.sessionStatus.task.promptPlaceholder')"
-                    rows="2"
+                    rows="1"
                     @keydown.enter.exact.prevent="submitSubAgentPrompt(task)"
                   ></textarea>
-                  <button type="submit" class="btn-secondary yeaft-vp-task-prompt-submit" :disabled="!subAgentPromptDraft(task) || isSubAgentPromptPending(task)">
-                    {{ isSubAgentPromptPending(task) ? $t('yeaft.sessionStatus.task.promptSending') : $t('yeaft.sessionStatus.task.promptSend') }}
+                  <button
+                    type="submit"
+                    class="send-btn yeaft-vp-task-prompt-submit"
+                    :disabled="!subAgentPromptDraft(task) || isSubAgentPromptPending(task)"
+                    :title="isSubAgentPromptPending(task) ? $t('yeaft.sessionStatus.task.promptSending') : $t('yeaft.sessionStatus.task.promptSend')"
+                    :aria-label="isSubAgentPromptPending(task) ? $t('yeaft.sessionStatus.task.promptSending') : $t('yeaft.sessionStatus.task.promptSend')"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
                   </button>
                 </form>
                 <div v-if="subAgentPromptError(task)" class="yeaft-vp-task-prompt-error">

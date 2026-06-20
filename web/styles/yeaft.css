@@ -4379,25 +4379,51 @@
 
 .yeaft-vp-task-prompt-form {
   display: flex;
-  align-items: flex-end;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 6px 6px 6px 14px;
+  background: var(--bg-input-wrapper);
+  border-radius: 20px;
+  transition: box-shadow 0.2s;
+}
+
+.yeaft-vp-task-prompt-form:focus-within {
+  box-shadow: 0 0 0 2px var(--text-secondary);
 }
 
 .yeaft-vp-task-prompt-input {
   flex: 1 1 auto;
   min-width: 0;
-  min-height: 34px;
   max-height: 84px;
-  resize: vertical;
-  font-size: 12px;
-  line-height: 1.4;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  caret-color: var(--text-primary);
+  resize: none;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  -webkit-text-fill-color: var(--text-primary);
+}
+
+.yeaft-vp-task-prompt-input::placeholder {
+  color: var(--text-secondary);
+  -webkit-text-fill-color: var(--text-secondary);
 }
 
 .yeaft-vp-task-prompt-submit {
   flex: 0 0 auto;
-  min-height: 34px;
-  padding: 6px 10px;
-  font-size: 12px;
+  width: 30px;
+  height: 30px;
+}
+
+.yeaft-vp-task-prompt-submit svg {
+  width: 15px;
+  height: 15px;
 }
 
 .yeaft-vp-task-prompt-error {
