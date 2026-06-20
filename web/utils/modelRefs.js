@@ -55,3 +55,21 @@ export function resolveSessionModelEffort(session, fallbackEffort = '') {
   if (typeof sessionEffort === 'string' && sessionEffort.trim()) return sessionEffort.trim();
   return typeof fallbackEffort === 'string' && fallbackEffort.trim() ? fallbackEffort.trim() : '';
 }
+
+export function buildModelSelectionRows(models) {
+  const rows = [];
+  for (const model of Array.isArray(models) ? models : []) {
+    const modelRef = modelOptionRef(model);
+    if (!modelRef) continue;
+    const label = model.label || model.id || modelRef;
+    const efforts = getSelectableModelEfforts(model?.effortOptions);
+    rows.push({
+      model,
+      modelRef,
+      label,
+      efforts,
+      defaultEffort: getDefaultModelEffort(efforts) || null,
+    });
+  }
+  return rows;
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getDefaultModelEffort, getSelectableModelEfforts, modelOptionMatchesRef, modelOptionRef, resolveSessionModelEffort, resolveSessionModelRef } from '../../web/utils/modelRefs.js';
+import { buildModelSelectionRows, getDefaultModelEffort, getSelectableModelEfforts, modelOptionMatchesRef, modelOptionRef, resolveSessionModelEffort, resolveSessionModelRef } from '../../web/utils/modelRefs.js';
 
 describe('Yeaft model effort provider-qualified refs', () => {
   it('matches topbar model metadata by explicit ref or provider/id pair', () => {
@@ -13,15 +13,16 @@ describe('Yeaft model effort provider-qualified refs', () => {
     expect(modelOptionMatchesRef(withProvider, 'claude-opus-4.8')).toBe(true);
   });
 
-  it('preserves per-model effort option counts for UI selectors', () => {
+  it('groups each model into one UI row with selectable effort chips', () => {
     const gpt = { id: 'gpt-5.5', provider: 'github-copilot', effortOptions: ['minimal', 'low', 'medium', 'high'] };
     const claude = { id: 'claude-opus-4.8', provider: 'github-copilot', effortOptions: ['low', 'medium', 'high', 'xhigh', 'max'], effortProtocol: 'anthropic-adaptive' };
+    const rows = buildModelSelectionRows([gpt, claude]);
 
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ modelRef: 'github-copilot/gpt-5.5', efforts: ['medium', 'high'], defaultEffort: 'medium' });
+    expect(rows[1]).toMatchObject({ modelRef: 'github-copilot/claude-opus-4.8', efforts: ['medium', 'high', 'xhigh', 'max'], defaultEffort: 'xhigh' });
     expect(modelOptionMatchesRef(gpt, 'github-copilot/gpt-5.5')).toBe(true);
-    expect(gpt.effortOptions).toEqual(['minimal', 'low', 'medium', 'high']);
     expect(modelOptionMatchesRef(claude, 'github-copilot/claude-opus-4.8')).toBe(true);
-    expect(claude.effortOptions).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
-    expect(gpt.effortOptions).not.toContain('max');
   });
 
   it('resolves topbar model and effort from the active Session before agent defaults', () => {
@@ -43,8 +44,9 @@ describe('Yeaft model selector popover contract', () => {
     const { readFileSync } = await import('fs');
     const source = readFileSync(new URL('../../web/components/YeaftPage.js', import.meta.url), 'utf8');
 
-    expect(source).toContain('v-for="option in topbarModelOptions"');
-    expect(source).toContain('@click="selectModel(option.modelRef, option.effort)"');
+    expect(source).toContain('v-for="row in topbarModelRows"');
+    expect(source).toContain('@click="selectModel(row.modelRef, effort)"');
+    expect(source).toContain('@click="selectModel(row.modelRef, row.defaultEffort)"');
     expect(source).toContain('yeaft-model-effort-chip');
     expect(source).toContain('getSelectableModelEfforts');
     expect(source).toContain('selectableEffortsForModel');
