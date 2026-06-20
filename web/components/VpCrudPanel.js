@@ -38,15 +38,24 @@ export default {
           </div>
           <div class="vp-crud-card-grid">
             <div class="vp-crud-card" v-for="vp in vpList" :key="vp.vpId">
-              <div class="vp-crud-card-meta">
-                <div class="vp-crud-card-name" :style="{ color: vpTextColorFor(vp.vpId) }">
-                  <span>{{ vp.displayName || vp.vpId }}</span>
-                  <span v-if="vp.isStock" class="vp-crud-stock-badge" :title="$t('yeaft.vp.crud.stockReadOnly')">
-                    {{ $t('yeaft.vp.crud.stockBadge') }}
-                  </span>
+              <div class="vp-crud-card-main">
+                <div class="vp-crud-card-avatar" :style="{ color: vpTextColorFor(vp.vpId) }" aria-hidden="true">
+                  {{ vpInitial(vp) }}
                 </div>
-                <div class="vp-crud-card-id">@{{ vp.vpId }}</div>
-                <div class="vp-crud-card-role" v-if="vp.role">{{ vp.role }}</div>
+                <div class="vp-crud-card-meta">
+                  <div class="vp-crud-card-title-row">
+                    <div class="vp-crud-card-name" :style="{ color: vpTextColorFor(vp.vpId) }">
+                      <span>{{ vp.displayName || vp.vpId }}</span>
+                    </div>
+                    <span v-if="vp.isStock" class="vp-crud-stock-badge" :title="$t('yeaft.vp.crud.stockReadOnly')">
+                      {{ $t('yeaft.vp.crud.stockBadge') }}
+                    </span>
+                  </div>
+                  <div class="vp-crud-card-subline">
+                    <span class="vp-crud-card-id">@{{ vp.vpId }}</span>
+                    <span class="vp-crud-card-role" v-if="vp.role">{{ vp.role }}</span>
+                  </div>
+                </div>
               </div>
               <div class="vp-crud-card-actions">
                 <button
@@ -267,6 +276,11 @@ export default {
       };
     },
     vpTextColorFor(vpId) { return this.vpStore.vpTextColor(vpId); },
+    vpInitial(vp) {
+      const source = String((vp && (vp.displayName || vp.vpId)) || '').trim();
+      const first = Array.from(source)[0] || '?';
+      return first.toUpperCase();
+    },
 
     /**
      * Populate `this.form` from a VP-shaped object (either a fresh read
