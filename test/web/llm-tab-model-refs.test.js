@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import LlmTab from '../../web/components/LlmTab.js';
+import en from '../../web/i18n/en.js';
+import zhCN from '../../web/i18n/zh-CN.js';
 import { PROTOCOL_PRESET_MODELS } from '../../web/utils/protocolPresets.js';
 
 describe('LlmTab editable model refs', () => {
@@ -98,6 +100,14 @@ describe('LlmTab editable model refs', () => {
     expect(LlmTab.template).not.toContain('yeaft-agent llm show');
     expect(LlmTab.computed.agentInstallCommand).toBeUndefined();
     expect(LlmTab.computed.copilotUseCommand).toBeUndefined();
+  });
+
+  it('has translations for every LLM tab template key in both locales', () => {
+    const keys = Array.from(LlmTab.template.matchAll(/settings\.llm\.[A-Za-z0-9_.-]+/g), m => m[0]);
+    for (const key of new Set(keys)) {
+      expect(Object.prototype.hasOwnProperty.call(en, key), `missing en translation for ${key}`).toBe(true);
+      expect(Object.prototype.hasOwnProperty.call(zhCN, key), `missing zh-CN translation for ${key}`).toBe(true);
+    }
   });
 
   it('hides the fast/secondary model field in the Yeaft context', () => {
