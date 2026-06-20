@@ -96,6 +96,25 @@ function truncatedResponsesStreamResponse() {
   };
 }
 
+function failedResponsesStreamResponse() {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ 'content-type': 'text/event-stream' }),
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode([
+          'event: response.failed',
+          'data: {"type":"response.failed","response":{"status":"failed","error":{"code":"invalid_request_error","message":"bad request body"}}}',
+          '',
+        ].join('\n')));
+        controller.close();
+      },
+      cancel() {},
+    }),
+  };
+}
+
 describe('AnthropicAdapter error classification', () => {
   afterEach(() => {
     global.fetch = originalFetch;
@@ -262,5 +281,18 @@ describe('OpenAIResponsesAdapter error classification', () => {
     expect(seen).toContainEqual({ type: 'text_delta', text: 'partial' });
     expect(caught).toBeInstanceOf(LLMServerError);
     expect(caught.message).toContain('stream ended before terminal event');
+  });
+
+  it('treats Responses failed event as terminal non-retryable error event', async () => {
+    global.fetch = async () => failedResponsesStreamResponse();
+    const adapter = new OpenAIResponsesAdapter({ baseUrl: 'https://x', apiKey: 'k' });
+    const events = [];
+    for await (const event of adapter.stream({ model: 'gpt-5', system: '', messages: [{ role: 'user', content: 'hi' }] })) {
+      events.push(event);
+    }
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'error', retryable: false });
+    expect(events[0].error.message).toBe('bad request body');
+    expect(events[0].error.code).toBe('invalid_request_error');
   });
 });

@@ -17,7 +17,7 @@
  *     - response.function_call_arguments.delta / .done
  *     - response.completed  (contains final response.usage)
  *     - response.incomplete (e.g. max_output_tokens)
- *     - response.error
+ *     - response.failed
  *   - Usage: only in terminal completed/incomplete events
  *
  * Id contract (agreed with PM):
@@ -451,11 +451,17 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
               type: 'stop',
               stopReason: this.#mapStopReason(respObj, sawToolCall),
             };
-          } else if (type === 'response.error') {
+          } else if (type === 'response.failed' || type === 'response.error') {
             sawTerminalEvent = true;
-            // Let the engine decide; emit error event
-            const message = event.error?.message || event.message || 'response.error';
-            yield { type: 'error', error: new Error(message), retryable: false };
+            // Let the engine decide; emit error event. `response.failed` is
+            // the official terminal event; keep `response.error` as a legacy
+            // compatibility alias for older mocks/proxies.
+            const errObj = event.response?.error || event.error || {};
+            const code = errObj.code || event.response?.status || type;
+            const message = errObj.message || event.message || `${type}: ${code}`;
+            const failure = new Error(message);
+            failure.code = code;
+            yield { type: 'error', error: failure, retryable: false };
           }
           // Other semantic events (output_item.done, content_part.added, etc.) are ignored.
         }
