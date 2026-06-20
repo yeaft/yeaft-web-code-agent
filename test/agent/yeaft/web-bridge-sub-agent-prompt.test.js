@@ -55,6 +55,7 @@ describe('Yeaft sub-agent prompt wire handler', () => {
       taskId: 'task-1',
       subAgentId: 'sub-1',
       message: '  latest user idea  ',
+      clientPromptId: 'prompt-1',
     });
 
     const agent = getAgentRegistry().get('sub-1');
@@ -72,6 +73,7 @@ describe('Yeaft sub-agent prompt wire handler', () => {
         success: true,
         taskId: 'task-1',
         subAgentId: 'sub-1',
+        clientPromptId: 'prompt-1',
         pending: 1,
       },
     });
@@ -107,6 +109,7 @@ describe('Yeaft sub-agent prompt wire handler', () => {
       taskId: 'task-1',
       subAgentId: 'sub-2',
       message: 'wrong target',
+      clientPromptId: 'prompt-2',
     });
 
     expect(getAgentRegistry().get('sub-2').pendingPrompts).toEqual([]);
@@ -116,6 +119,7 @@ describe('Yeaft sub-agent prompt wire handler', () => {
         success: false,
         taskId: 'task-1',
         subAgentId: 'sub-2',
+        clientPromptId: 'prompt-2',
         error: 'sub-agent task not found',
       },
     });

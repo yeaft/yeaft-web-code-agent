@@ -105,6 +105,8 @@ describe('terminal output normalization render wiring', () => {
     expect(vpTimelinePaneSource).toContain('createSubAgentTaskStreamText');
     expect(vpTimelinePaneSource).toContain("emit('prompt-sub-agent'");
     expect(vpTimelinePaneSource).toContain('yeaft-vp-task-prompt-form');
+    expect(vpTimelinePaneSource).toContain('subAgentPromptError(task)');
+    expect(vpTimelinePaneSource).toContain('isSubAgentPromptPending(task)');
     expect(vpTimelinePaneSource).not.toContain('subAgentSaid');
     expect(vpTimelinePaneSource).not.toContain('{{ task.log.preview }}');
   });

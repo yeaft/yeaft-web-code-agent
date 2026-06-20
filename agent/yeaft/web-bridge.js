@@ -4249,12 +4249,14 @@ export function handleYeaftSubAgentPrompt(msg) {
   const taskId = typeof msg?.taskId === 'string' ? msg.taskId.trim() : '';
   const subAgentId = typeof msg?.subAgentId === 'string' ? msg.subAgentId.trim() : '';
   const message = typeof msg?.message === 'string' ? msg.message.trim() : '';
+  const clientPromptId = typeof msg?.clientPromptId === 'string' ? msg.clientPromptId.trim() : '';
   const fail = (error) => {
     sendSessionEvent({
       type: 'yeaft_sub_agent_prompt_result',
       success: false,
       taskId: taskId || null,
       subAgentId: subAgentId || null,
+      clientPromptId: clientPromptId || null,
       error,
     }, sessionId ? { sessionId } : undefined);
   };
@@ -4305,6 +4307,7 @@ export function handleYeaftSubAgentPrompt(msg) {
     success: true,
     taskId,
     subAgentId,
+    clientPromptId: clientPromptId || null,
     pending: agent.pendingPrompts.length,
   }, { sessionId, vpId: task.ownerVpId || null, threadId: task.source?.threadId || null });
 }

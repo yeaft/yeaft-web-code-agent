@@ -129,6 +129,7 @@ export function createSubAgentTaskDetailLines(task, translate) {
  *   rows — TimelineRow[] (see web/stores/helpers/vp-timeline.js for shape).
  *   tasks — running and recent terminal Session task snapshots.
  *   announcementText — active Session announcement preview source.
+ *   subAgentPromptResults — per-client prompt ack/error state from the store.
  *
  * Emits:
  *   mention-vp (vpId)      — primary row click / Enter / Space. YeaftPage
@@ -150,6 +151,7 @@ export default {
     rows: { type: Array, required: true },
     tasks: { type: Array, default: () => [] },
     announcementText: { type: String, default: '' },
+    subAgentPromptResults: { type: Object, default: () => ({}) },
   },
   template: `
     <aside class="yeaft-vp-timeline yeaft-session-status-pane" :aria-label="$t('yeaft.sessionStatus.aria')">
@@ -336,10 +338,13 @@ export default {
                     rows="2"
                     @keydown.enter.exact.prevent="submitSubAgentPrompt(task)"
                   ></textarea>
-                  <button type="submit" class="btn-secondary yeaft-vp-task-prompt-submit" :disabled="!subAgentPromptDraft(task)">
-                    {{ $t('yeaft.sessionStatus.task.promptSend') }}
+                  <button type="submit" class="btn-secondary yeaft-vp-task-prompt-submit" :disabled="!subAgentPromptDraft(task) || isSubAgentPromptPending(task)">
+                    {{ isSubAgentPromptPending(task) ? $t('yeaft.sessionStatus.task.promptSending') : $t('yeaft.sessionStatus.task.promptSend') }}
                   </button>
                 </form>
+                <div v-if="subAgentPromptError(task)" class="yeaft-vp-task-prompt-error">
+                  {{ subAgentPromptError(task) }}
+                </div>
               </div>
               <TerminalOutput
                 v-else-if="task.log && task.log.preview"
@@ -382,6 +387,7 @@ export default {
 
     const expandedTasks = Vue.ref({});
     const subAgentPromptDrafts = Vue.ref({});
+    const subAgentPromptByTask = Vue.ref({});
     const taskLogRefs = new Map();
     const taskLogPinned = new Map();
 
@@ -452,17 +458,45 @@ export default {
       && task.runtime.subAgentId.trim()
     );
     const subAgentPromptDraft = (task) => (subAgentPromptDrafts.value[task?.id] || '').trim();
+    const subAgentPromptState = (task) => {
+      const promptId = subAgentPromptByTask.value[task?.id];
+      return promptId ? props.subAgentPromptResults[promptId] || null : null;
+    };
+    const isSubAgentPromptPending = (task) => subAgentPromptState(task)?.status === 'pending';
+    const subAgentPromptError = (task) => {
+      const state = subAgentPromptState(task);
+      return state?.status === 'failed' ? (state.error || $t('yeaft.sessionStatus.task.promptFailed')) : '';
+    };
+    Vue.watch(
+      () => props.subAgentPromptResults,
+      (results) => {
+        for (const [taskId, promptId] of Object.entries(subAgentPromptByTask.value)) {
+          const result = results?.[promptId];
+          if (!result) continue;
+          if (result.status === 'succeeded') {
+            const currentDraft = (subAgentPromptDrafts.value[taskId] || '').trim();
+            const submitted = typeof result.message === 'string' ? result.message.trim() : '';
+            if (!submitted || currentDraft === submitted) {
+              subAgentPromptDrafts.value = { ...subAgentPromptDrafts.value, [taskId]: '' };
+            }
+          }
+        }
+      },
+      { deep: true }
+    );
     const submitSubAgentPrompt = (task) => {
       const message = subAgentPromptDraft(task);
       const subAgentId = task?.runtime?.subAgentId;
-      if (!message || !task?.id || !task?.sessionId || !subAgentId) return;
+      if (!message || !task?.id || !task?.sessionId || !subAgentId || isSubAgentPromptPending(task)) return;
+      const clientPromptId = `sap_${task.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      subAgentPromptByTask.value = { ...subAgentPromptByTask.value, [task.id]: clientPromptId };
       emit('prompt-sub-agent', {
         sessionId: task.sessionId,
         taskId: task.id,
         subAgentId,
         message,
+        clientPromptId,
       });
-      subAgentPromptDrafts.value = { ...subAgentPromptDrafts.value, [task.id]: '' };
     };
 
     const statusLabel = (row) => {
@@ -513,6 +547,8 @@ export default {
       subAgentTaskStreamText,
       isSubAgentPromptable,
       subAgentPromptDraft,
+      isSubAgentPromptPending,
+      subAgentPromptError,
       submitSubAgentPrompt,
       setTaskLogRef,
       onTaskLogScroll,

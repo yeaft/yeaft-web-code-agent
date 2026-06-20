@@ -165,9 +165,14 @@ describe('per-session running state', () => {
       taskId: 'task-1',
       subAgentId: 'sub-1',
       message: ' new user idea ',
+      clientPromptId: 'prompt-1',
     });
 
-    expect(sent).toBe(true);
+    expect(sent).toBe('prompt-1');
+    expect(store.yeaftSubAgentPromptResults['prompt-1']).toMatchObject({
+      status: 'pending',
+      message: 'new user idea',
+    });
     expect(store.sendWsMessage).toHaveBeenCalledWith({
       type: 'yeaft_sub_agent_prompt',
       agentId: 'agent-1',
@@ -175,6 +180,32 @@ describe('per-session running state', () => {
       taskId: 'task-1',
       subAgentId: 'sub-1',
       message: 'new user idea',
+      clientPromptId: 'prompt-1',
+    });
+  });
+
+  it('stores sub-agent prompt result events for UI ack and error feedback', () => {
+    const store = freshStore();
+    store.yeaftSubAgentPromptResults = {
+      'prompt-1': { clientPromptId: 'prompt-1', status: 'pending', message: 'keep me' },
+    };
+
+    store.handleYeaftOutput({ sessionId: 'session-a', event: {
+      type: 'yeaft_sub_agent_prompt_result',
+      clientPromptId: 'prompt-1',
+      success: false,
+      taskId: 'task-1',
+      subAgentId: 'sub-1',
+      error: 'sub-agent task not found',
+    } });
+
+    expect(store.yeaftSubAgentPromptResults['prompt-1']).toMatchObject({
+      status: 'failed',
+      message: 'keep me',
+      error: 'sub-agent task not found',
+      sessionId: 'session-a',
+      taskId: 'task-1',
+      subAgentId: 'sub-1',
     });
   });
 
@@ -182,7 +213,8 @@ describe('per-session running state', () => {
     const store = freshStore();
     store.yeaftAgentId = 'agent-1';
 
-    expect(store.sendYeaftSubAgentPrompt({ sessionId: 'session-a', taskId: 'task-1', subAgentId: '', message: 'x' })).toBe(false);
+    expect(store.sendYeaftSubAgentPrompt({ sessionId: 'session-a', taskId: 'task-1', subAgentId: '', message: 'x', clientPromptId: 'bad-prompt' })).toBe(false);
+    expect(store.yeaftSubAgentPromptResults['bad-prompt']).toMatchObject({ status: 'failed' });
     expect(store.sendWsMessage).not.toHaveBeenCalled();
   });
 

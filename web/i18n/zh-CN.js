@@ -1422,6 +1422,8 @@ export default {
   'yeaft.sessionStatus.task.subAgentNoReadableEvents': '暂无可读的 sub-agent 活动。',
   'yeaft.sessionStatus.task.promptPlaceholder': '给这个 sub-agent 追加想法…',
   'yeaft.sessionStatus.task.promptSend': '发送',
+  'yeaft.sessionStatus.task.promptSending': '发送中…',
+  'yeaft.sessionStatus.task.promptFailed': '发送失败。',
   'yeaft.sessionStatus.task.kind.subAgent': 'sub-agent',
   'yeaft.sessionStatus.task.kind.shell': 'shell',
   'yeaft.sessionStatus.show': '显示 Session 状态',

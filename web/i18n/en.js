@@ -1426,6 +1426,8 @@ export default {
   'yeaft.sessionStatus.task.subAgentNoReadableEvents': 'No readable sub-agent activity yet.',
   'yeaft.sessionStatus.task.promptPlaceholder': 'Add guidance for this sub-agent…',
   'yeaft.sessionStatus.task.promptSend': 'Send',
+  'yeaft.sessionStatus.task.promptSending': 'Sending…',
+  'yeaft.sessionStatus.task.promptFailed': 'Failed to send prompt.',
   'yeaft.sessionStatus.task.kind.subAgent': 'sub-agent',
   'yeaft.sessionStatus.task.kind.shell': 'shell',
   'yeaft.sessionStatus.show': 'Show Session status',

@@ -235,6 +235,7 @@ export default {
         :rows="vpTimelineRows"
         :tasks="sessionStatusTasksForActiveSession"
         :announcement-text="sessionStatusAnnouncementText"
+        :sub-agent-prompt-results="store.yeaftSubAgentPromptResults"
         :class="{ 'mobile-session-status': isNarrowDetail }"
         :style="timelineWidthStyle"
         @mention-vp="onMentionVpFromTimeline"
@@ -1092,8 +1093,8 @@ export default {
     };
 
     const onPromptSubAgentFromTimeline = (payload) => {
-      if (!payload || typeof store.sendYeaftSubAgentPrompt !== 'function') return;
-      store.sendYeaftSubAgentPrompt(payload);
+      if (!payload || typeof store.sendYeaftSubAgentPrompt !== 'function') return false;
+      return store.sendYeaftSubAgentPrompt(payload);
     };
 
     return {
