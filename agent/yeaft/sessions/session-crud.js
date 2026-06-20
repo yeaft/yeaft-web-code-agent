@@ -12,16 +12,18 @@
  * Plus the D1 bootstrap helper:
  *   ensureDefaultSessionIfEmpty(yeaftDir, {libDir}) — if NO session exists on
  *   disk, seed `session_default` with roster = every VP in the library, and
- *   defaultVpId = alphabetically first vpId. No-op when ≥1 session present.
+ *   defaultVpId = `omni` when present, otherwise the alphabetically first vpId.
+ *   No-op when ≥1 session present.
  *
  * Hard constraints (PM):
  *   (a) We don't touch 334o storage primitives (storage/index.js) — we call
  *       group-store.openSession / saveMeta which already go through openLog.
  *   (b) We don't touch VP entity (vp-store.js / vp-loader.js) — only read
  *       via scanVpLibrary to know which VPs exist at seed time.
- *   (c) When `addMember` is called with an empty roster and no defaultVpId
- *       resolvable, callers surface `no_default_vp` via `createSessionFromSpec`;
- *       on `removeMember` we permit the empty state (UI nudges the user).
+ *   (c) `createSessionFromSpec` seeds omitted/empty rosters with the default
+ *       generalist VP when the library has one; truly empty VP libraries can
+ *       still create empty sessions and surface `no_default_vp` on first send.
+ *       On `removeMember` we permit the empty state (UI nudges the user).
  *
  * Error shape — every throw is a `SessionCrudError` with a stable `.code`:
  *   'not_found'        — group id has no dir / meta
@@ -98,6 +100,7 @@ export class SessionCrudError extends Error {
 }
 
 const GROUP_WORKDIR_REGISTRY = 'group-workdirs.json';
+const DEFAULT_VP_ID = 'omni';
 
 export function sessionsRoot(yeaftDir) {
   return join(yeaftDir, 'sessions');
@@ -260,11 +263,24 @@ export function makeSessionId(name) {
   return nextSessionId(slug);
 }
 
+function preferDefaultVp(vpIds) {
+  if (!Array.isArray(vpIds) || vpIds.length === 0) return null;
+  return vpIds.includes(DEFAULT_VP_ID) ? DEFAULT_VP_ID : vpIds[0];
+}
+
+function scanSortedVpIds(libDir) {
+  const vpIds = scanVpLibrary({ dir: libDir })
+    .map(v => v && v.id)
+    .filter(v => typeof v === 'string' && v.length > 0);
+  vpIds.sort((a, b) => a.localeCompare(b));
+  return vpIds;
+}
+
 /**
  * (B) D1 seed — called at boot (or when multi-VP is first enabled). Idempotent:
  * returns `{seeded:false}` if any session already exists on disk (including
  * `session_default`). When empty, seeds with roster = full VP library, sorted
- * alphabetically; defaultVpId = roster[0].
+ * alphabetically; defaultVpId = `omni` when present, otherwise roster[0].
  *
  * When the VP library is also empty, we still seed an empty-roster session so
  * the UI has somewhere to land — but defaultVpId is null and downstream
@@ -278,14 +294,12 @@ export function ensureDefaultSessionIfEmpty(yeaftDir, options = {}) {
     return { seeded: false, sessionId: existing[0].id };
   }
 
-  // Sort VP ids alphabetically (stable for tests / deterministic UI).
-  // NB: vp-store returns records with `.id` (not `.vpId`) — keep this in sync.
-  const vps = scanVpLibrary({ dir: libDir })
-    .map(v => v && v.id)
-    .filter(v => typeof v === 'string' && v.length > 0);
-  vps.sort((a, b) => a.localeCompare(b));
+  // Sort VP ids alphabetically (stable for tests / deterministic UI), but
+  // prefer the generalist Omni VP as the default when present so first-run
+  // sessions land on a useful assistant instead of an arbitrary first id.
+  const vps = scanSortedVpIds(libDir);
 
-  const defaultVpId = vps[0] || null;
+  const defaultVpId = preferDefaultVp(vps);
   const { group, created } = seedDefaultSession(yeaftDir, {
     name: options.name || 'Default',
     roster: vps,
@@ -301,21 +315,27 @@ export function ensureDefaultSessionIfEmpty(yeaftDir, options = {}) {
 }
 
 /**
- * (A.1) Create group from a wizard spec. `spec.roster` is authoritative —
- * we do NOT auto-expand to the full VP library here. That's D1's job only.
+ * (A.1) Create session from a wizard spec. `spec.roster` is authoritative
+ * when non-empty. If the caller omits a roster, seed the session with the
+ * default generalist VP (`omni`) when it exists so a new Session is usable
+ * immediately instead of opening with an empty roster.
  *
  * @param {string} yeaftDir
  * @param {{name:string, roster?:string[], defaultVpId?:string|null, workDir?:string}} spec
  * @returns {{id:string, name:string, roster:string[], defaultVpId:string|null, workDir?:string}}
  */
 export function createSessionFromSpec(yeaftDir, spec, options = {}) {
-  const normalizedWorkDir = normalizeWorkDir(spec && spec.workDir);
+  const input = spec || {};
+  const normalizedWorkDir = normalizeWorkDir(input.workDir);
   const groupYeaftDir = normalizedWorkDir ? yeaftDirForWorkDir(normalizedWorkDir) : yeaftDir;
   const memoryRoot = options.memoryRoot || (groupYeaftDir ? join(groupYeaftDir, 'memory') : DEFAULT_MEMORY_ROOT);
-  const name = String(spec && spec.name || '').trim();
+  const libDir = options.libDir || DEFAULT_VP_LIB_DIR;
+  const name = String(input.name || '').trim();
   if (!name) throw new SessionCrudError('invalid_name', null, 'group name required');
 
-  const roster = Array.isArray(spec.roster) ? spec.roster.slice() : [];
+  const callerRoster = Array.isArray(input.roster) ? input.roster.slice() : [];
+  const fallbackVpId = callerRoster.length > 0 ? null : preferDefaultVp(scanSortedVpIds(libDir));
+  const roster = callerRoster.length > 0 ? callerRoster : (fallbackVpId ? [fallbackVpId] : []);
   // Validate every member up-front so we fail before touching fs.
   for (const vpId of roster) {
     if (isReservedVpId(vpId)) {
@@ -325,10 +345,9 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
     if (!v.ok) throw new SessionCrudError(v.reason, null, `invalid vpId: ${vpId}`);
   }
 
-  // defaultVpId resolution: explicit > roster[0] > null. Null is allowed at
-  // create time (empty roster) — the wizard modal warns the user downstream
-  // (task-334m spec: `no_default_vp` surfaced on first send, not on create).
-  let defaultVpId = spec.defaultVpId || null;
+  // defaultVpId resolution: explicit > roster[0] > null. Null is only
+  // possible when both caller roster and VP library are empty.
+  let defaultVpId = input.defaultVpId || null;
   if (defaultVpId && !roster.includes(defaultVpId)) {
     throw new SessionCrudError('default_not_in_roster', null, `${defaultVpId} not in roster`);
   }
@@ -354,8 +373,8 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
   // turn.
   try {
     ensureSessionConfigFile(yeaftDir, id);
-    if (spec && spec.config && typeof spec.config === 'object') {
-      saveSessionConfig(yeaftDir, id, spec.config);
+    if (input.config && typeof input.config === 'object') {
+      saveSessionConfig(yeaftDir, id, input.config);
     }
   } catch (err) {
     console.warn(`[session-crud] failed to seed config.json for ${id}:`, err?.message || err);
