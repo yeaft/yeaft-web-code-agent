@@ -106,6 +106,11 @@ describe('Yeaft mobile layout CSS', () => {
     expect(mobile).toContain('display: none');
     expect(mobile).toContain('.yeaft-topbar-sidebar-toggle');
     expect(mobile).toContain('display: flex');
+    expect(mobile).toContain('.yeaft-topbar');
+    expect(mobile).toContain('position: sticky');
+    expect(mobile).toContain('top: 0');
+    expect(mobile).toContain('z-index: 20');
+    expect(mobile).not.toContain('z-index: 1100');
     expect(mobile).not.toContain('.yeaft-topbar-right {\n    display: none');
   });
 
