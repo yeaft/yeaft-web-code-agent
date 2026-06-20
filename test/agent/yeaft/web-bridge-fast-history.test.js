@@ -21,7 +21,7 @@ vi.mock('../../../agent/yeaft/status-cache.js', () => ({
 
 const ctx = (await import('../../../agent/context.js')).default;
 const { ConversationStore } = await import('../../../agent/yeaft/conversation/persist.js');
-const { handleYeaftLoadHistory, __testSetSession } = await import('../../../agent/yeaft/web-bridge.js');
+const { handleYeaftLoadHistory, __testSetSession, __testHooks } = await import('../../../agent/yeaft/web-bridge.js');
 
 function flushMicrotasks() {
   return new Promise(resolve => setImmediate(resolve));
@@ -34,6 +34,27 @@ describe('Yeaft load-history first paint', () => {
     loadSession.mockClear();
     resolveLoadSession = null;
     ctx.CONFIG = null;
+  });
+
+  it('filters legacy internal-control rows in the visible-history fallback path', () => {
+    const rows = [
+      { id: 'm0001', role: 'user', content: 'visible q', sessionId: 'session-fast', threadId: 'main' },
+      { id: 'm0002', role: 'user', content: '<task-result id="task_1" kind="shell" status="succeeded">\nPASS\n</task-result>', sessionId: 'session-fast', threadId: 'main' },
+      { id: 'm0003', role: 'user', content: '[system note] You have called ListAgents with the same arguments 3 times. Previous result: {...}', sessionId: 'session-fast', threadId: 'main' },
+      { id: 'm0004', role: 'assistant', content: 'visible a', sessionId: 'session-fast', threadId: 'main', speakerVpId: 'vp-linus' },
+      { id: 'm0005', role: 'user', content: 'In docs, <task-result> is just prose', sessionId: 'session-fast', threadId: 'main' },
+    ];
+    const page = __testHooks.loadVisibleGroupHistoryPage({
+      loadOlderBySession() {
+        return { messages: rows };
+      },
+    }, 'session-fast', 10);
+
+    expect(page.messages.map(m => m.content)).toEqual([
+      'visible q',
+      'visible a',
+      'In docs, <task-result> is just prose',
+    ]);
   });
 
   it('replays the recent message window before full session boot resolves', async () => {
