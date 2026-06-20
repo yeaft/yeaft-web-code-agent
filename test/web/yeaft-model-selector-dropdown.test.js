@@ -58,6 +58,12 @@ describe('Yeaft model selector dropdown', () => {
     const bodyBlock = mobileBlock.match(/\.yeaft-model-selector-body\s*\{[\s\S]*?\}/)?.[0] || '';
     const listBlock = mobileBlock.match(/\.yeaft-model-list\s*\{[\s\S]*?\}/)?.[0] || '';
 
+    expect(mobileBlock).toContain('.yeaft-topbar-model-dropdown');
+    expect(mobileBlock).toContain('position: fixed;');
+    expect(mobileBlock).toContain('top: calc(52px + env(safe-area-inset-top, 0px));');
+    expect(mobileBlock).toContain('bottom: auto;');
+    expect(mobileBlock).toContain('max-height: min(72dvh, calc(100dvh - 64px));');
+    expect(mobileBlock).not.toContain('bottom: 12px;');
     expect(mobileBlock).toContain('.yeaft-model-selector-body');
     expect(bodyBlock).toContain('overflow: hidden;');
     expect(bodyBlock).not.toContain('overflow-y: auto;');

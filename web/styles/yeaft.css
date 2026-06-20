@@ -487,12 +487,12 @@
     position: fixed;
     left: 12px;
     right: 12px;
-    top: auto;
-    bottom: 12px;
+    top: calc(52px + env(safe-area-inset-top, 0px));
+    bottom: auto;
     min-width: 0;
     width: auto;
     max-width: none;
-    max-height: min(72dvh, 560px);
+    max-height: min(72dvh, calc(100dvh - 64px));
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -1782,6 +1782,9 @@
 
   .yeaft-topbar {
     padding: 6px 10px;
+    position: sticky;
+    top: 0;
+    z-index: 1100;
   }
 
   /* task-fix-mobile-group-settings: show the topbar hamburger so users
