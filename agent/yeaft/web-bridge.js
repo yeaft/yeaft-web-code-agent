@@ -782,7 +782,35 @@ function emitVisibleHistoryReplay({ store, sessionId, limit, beforeSeq = null, m
       .map(projectPersistedToVisibleHistoryEntry)
       .filter(Boolean);
 
-  for (const entry of replayEntries) {
+  emitProjectedEntryFrames(replayEntries);
+
+  const latestSeq = replayEntries.length
+    ? parseSeqFromId(replayEntries[replayEntries.length - 1]?.id)
+    : null;
+  sendSessionEvent({
+    type: 'history_loaded',
+    mode,
+    count: replayEntries.length,
+    sessionId,
+    hasMore: visiblePage.hasMore,
+    oldestSeq: visiblePage.oldestSeq,
+    latestSeq: Number.isFinite(latestSeq) ? latestSeq : null,
+  });
+}
+
+/**
+ * Emit `yeaft_output` frames for a pre-projected history entry list.
+ * Entries MUST already have passed through `projectPersistedToHistoryEntry`
+ * (or its visible variant) so that `time` becomes `ts`, tool / attachment
+ * field shapes, and internal-row filtering are normalized. Both the cold-start
+ * full replay path and the catch-up delta replay path call this helper so
+ * the wire frames stay byte-identical between paths.
+ *
+ * @param {Array<object>} entries — projected entries (skip falsy)
+ */
+function emitProjectedEntryFrames(entries) {
+  for (const entry of entries) {
+    if (!entry) continue;
     if (entry.role === 'user') {
       sendSessionOutputFrame({
         type: 'user',
@@ -822,19 +850,6 @@ function emitVisibleHistoryReplay({ store, sessionId, limit, beforeSeq = null, m
       sendSessionOutputFrame({ type: 'result', result_text: '' }, envelopeOpts);
     }
   }
-
-  const latestSeq = replayEntries.length
-    ? parseSeqFromId(replayEntries[replayEntries.length - 1]?.id)
-    : null;
-  sendSessionEvent({
-    type: 'history_loaded',
-    mode,
-    count: replayEntries.length,
-    sessionId,
-    hasMore: visiblePage.hasMore,
-    oldestSeq: visiblePage.oldestSeq,
-    latestSeq: Number.isFinite(latestSeq) ? latestSeq : null,
-  });
 }
 
 /**
@@ -1290,6 +1305,7 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
       speakerVpId: envelope?.msg?.meta?.senderVpId || envelope?.msg?.from || null,
       attachments: Array.isArray(envelope?.msg?.meta?.attachments) ? envelope.msg.meta.attachments : [],
       internal: isInternalAppend,
+      ts: envelope?.msg?.ts || null,
     });
     thread.updatedAt = Date.now();
     try {
@@ -1386,6 +1402,7 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
             speakerVpId: senderVpId,
             attachments: Array.isArray(meta.attachments) ? meta.attachments : [],
             internal: isInternal,
+            ts: envelope?.msg?.ts || null,
           });
         }
       } catch { /* never crash WS pipeline */ }
@@ -3675,7 +3692,7 @@ function appendTurnToSessionHistory(sessionId, threadId, vpId, prompts, assistan
  * @returns {boolean} true if this call wrote the row, false if a prior
  *   call already wrote it (dedup hit).
  */
-function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = 'main', role, speakerVpId, attachments, internal = false }) {
+function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = 'main', role, speakerVpId, attachments, internal = false, ts = null }) {
   if (!session?.conversationStore) return false;
   // No msgId means no dedup key — caller is responsible for guarding.
   // Both call sites already do (`if (envMsgId && text)` and
@@ -3729,6 +3746,17 @@ function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = '
     if (internal) record.internal = true;
     if (persistRole === 'user' && Array.isArray(attachments) && attachments.length > 0) {
       record.attachments = attachments;
+    }
+    // Stamp the real receive time from the coordinator envelope (set in
+    // session-store.appendMessage as `ts`). Without this, the markdown
+    // serializer falls back to `new Date().toISOString()` inside
+    // ConversationStore.append — which can run hundreds of ms (or even
+    // seconds) after the user actually sent the message due to pre-flow
+    // recall / VP selection / queue delays. The downstream UI sorts
+    // messages by timestamp, so a late stamp lets a user message drift
+    // BELOW VP tool actions that started earlier.
+    if (ts && typeof ts === 'string') {
+      record.time = ts;
     }
     session.conversationStore.append(record);
     return true;
@@ -4492,25 +4520,16 @@ export async function handleYeaftLoadHistory(msg) {
       const delta = afterSeq !== null && typeof coldStore.loadAfterSeqByGroup === 'function'
         ? coldStore.loadAfterSeqByGroup(sessionId, afterSeq)
         : { messages: [], latestSeq: null };
-      for (const entry of delta.messages) {
-        if (entry.role === 'user') {
-          sendSessionOutputFrame({
-            type: 'user',
-            message: { content: entry.content, id: entry.id || null },
-            ts: entry.ts || null,
-          }, { sessionId: entry.sessionId || null, threadId: entry.threadId || 'main', turnId: entry.turnId || entry.threadId || 'main' });
-        } else if (entry.role === 'assistant') {
-          const envelopeOpts = { sessionId: entry.sessionId || null, threadId: entry.threadId || 'main', turnId: entry.turnId || entry.threadId || 'main' };
-          if (entry.speakerVpId) envelopeOpts.vpId = entry.speakerVpId;
-          sendSessionOutputFrame({
-            type: 'assistant',
-            message: { id: entry.id || null, content: [{ type: 'text', text: entry.content }] },
-            ts: entry.ts || null,
-          }, envelopeOpts);
-          sendSessionOutputFrame({ type: 'result', result_text: '' }, envelopeOpts);
-        }
-      }
-      sendSessionEvent({ type: 'history_loaded', mode: 'delta', count: delta.messages.length, sessionId, latestSeq: delta.latestSeq, afterSeq });
+      // Route through the same projector the full-replay branch uses so
+      // the wire frames stay byte-identical: `time` becomes `ts`, attachments,
+      // toolCalls become tool_summary frames, speakerVpId becomes vp envelope, and visible-row
+      // filtering. Upstream already drops internal rows; the projector keeps
+      // this branch consistent with every other history replay path.
+      const projected = delta.messages
+        .map(projectPersistedToVisibleHistoryEntry)
+        .filter(Boolean);
+      emitProjectedEntryFrames(projected);
+      sendSessionEvent({ type: 'history_loaded', mode: 'delta', count: projected.length, sessionId, latestSeq: delta.latestSeq, afterSeq });
     } else {
       emitVisibleHistoryReplay({ store: coldStore, sessionId, limit, mode: 'recent' });
     }
@@ -4585,36 +4604,20 @@ export async function handleYeaftLoadHistory(msg) {
   }
   if (sessionId && afterSeq !== null && typeof session.conversationStore.loadAfterSeqByGroup === 'function') {
     const delta = session.conversationStore.loadAfterSeqByGroup(sessionId, afterSeq);
-    for (const entry of delta.messages) {
-      if (entry.role === 'user') {
-        sendSessionOutputFrame({
-          type: 'user',
-          message: {
-            content: entry.content,
-            id: entry.id || null,
-            ...(Array.isArray(entry.attachments) && entry.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(entry.attachments) } : {}),
-          },
-          ts: entry.ts || null,
-        }, { sessionId: entry.sessionId || null, threadId: entry.threadId || 'main', turnId: entry.turnId || entry.threadId || 'main' });
-      } else if (entry.role === 'assistant') {
-        const envelopeOpts = {
-          sessionId: entry.sessionId || null,
-          threadId: entry.threadId || 'main',
-          turnId: entry.turnId || entry.threadId || 'main',
-        };
-        if (entry.speakerVpId) envelopeOpts.vpId = entry.speakerVpId;
-        sendSessionOutputFrame({
-          type: 'assistant',
-          message: { id: entry.id || null, content: [{ type: 'text', text: entry.content }] },
-          ts: entry.ts || null,
-        }, envelopeOpts);
-        sendSessionOutputFrame({ type: 'result', result_text: '' }, envelopeOpts);
-      }
-    }
+    // Same shape contract as the early `coldStore.loadAfterSeqByGroup`
+    // branch above and as `emitVisibleHistoryReplay`. Without the
+    // projector, raw store rows carry `time` not `ts` and skip the
+    // tool_summary frame — those discrepancies caused user messages on
+    // reload to fall back to the arrival timestamp (no `ts` reached the
+    // UI's `normalizeMessageTimestamp`).
+    const projected = delta.messages
+      .map(projectPersistedToVisibleHistoryEntry)
+      .filter(Boolean);
+    emitProjectedEntryFrames(projected);
     sendSessionEvent({
       type: 'history_loaded',
       mode: 'delta',
-      count: delta.messages.length,
+      count: projected.length,
       sessionId,
       latestSeq: delta.latestSeq,
       afterSeq,
@@ -5118,6 +5121,7 @@ export async function handleYeaftMcpReload(msg = {}) {
 
 export const __testHooks = {
   loadVisibleGroupHistoryPage,
+  persistInboundMessageOnceByMsgId,
   setSessionForTest(nextSession) {
     session = nextSession || null;
   },
