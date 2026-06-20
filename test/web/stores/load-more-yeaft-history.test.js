@@ -265,13 +265,15 @@ describe('handleYeaftHistoryChunk', () => {
     expect(arr[0].sessionId).toBe('g1');
   });
 
-  it('replaces only the active session rows for batched recent bootstrap chunks', () => {
+  it('merges batched recent bootstrap chunks without deleting live session rows', () => {
     const store = mkStore({
       yeaftActiveSessionFilter: 'g1',
       messagesMap: {
         'yeaft-1': [
-          { id: 'stale-g1', type: 'user', content: 'stale', sessionId: 'g1' },
-          { id: 'keep-g2', type: 'user', content: 'other session', sessionId: 'g2' },
+          { id: 'm0100', type: 'user', content: 'stale-q', sessionId: 'g1', timestamp: new Date('2026-05-01T09:59:59.000Z').getTime() },
+          { id: 'live-user', type: 'user', content: 'live user', sessionId: 'g1', timestamp: new Date('2026-05-01T10:00:02.000Z').getTime() },
+          { id: 'live-assistant', type: 'assistant', content: 'streaming', sessionId: 'g1', timestamp: new Date('2026-05-01T10:00:03.000Z').getTime(), isStreaming: true },
+          { id: 'keep-g2', type: 'user', content: 'other session', sessionId: 'g2', timestamp: new Date('2026-05-01T09:59:58.000Z').getTime() },
         ],
       },
     });
@@ -289,7 +291,11 @@ describe('handleYeaftHistoryChunk', () => {
       hasMore: true,
     });
 
-    expect(store.messagesMap['yeaft-1'].map(m => m.id)).toEqual(['keep-g2', 'm0100', 'm0101']);
+    const g1Ids = store.messagesMap['yeaft-1'].filter(m => m.sessionId === 'g1').map(m => m.id);
+    expect(g1Ids).toEqual(['m0100', 'm0101', 'live-user', 'live-assistant']);
+    expect(store.messagesMap['yeaft-1'].map(m => m.id)).toContain('keep-g2');
+    expect(store.messagesMap['yeaft-1'].find(m => m.id === 'm0100')?.content).toBe('fresh-q');
+    expect(store.messagesMap['yeaft-1'].find(m => m.id === 'live-assistant')?.isStreaming).toBe(true);
     expect(store.yeaftSessionHistoryState.g1).toEqual(expect.objectContaining({
       loaded: true,
       loading: false,
@@ -299,6 +305,37 @@ describe('handleYeaftHistoryChunk', () => {
       count: 2,
     }));
     expect(store.yeaftLoadingMoreHistory).toBe(false);
+  });
+
+  it('synthesizes tool-summary rows for assistant history with omitted tool calls', () => {
+    const store = mkStore({
+      yeaftActiveSessionFilter: 'g1',
+      messagesMap: { 'yeaft-1': [] },
+    });
+
+    handleYeaftHistoryChunk(store, {
+      conversationId: 'yeaft-1',
+      sessionId: 'g1',
+      mode: 'recent',
+      messages: [{
+        id: 'm0200',
+        role: 'assistant',
+        content: 'used tools',
+        sessionId: 'g1',
+        speakerVpId: 'vp-linus',
+        toolSummaryCount: 3,
+        ts: '2026-05-01T10:00:00.000Z',
+      }],
+      oldestSeq: 200,
+      latestSeq: 200,
+      hasMore: false,
+    });
+
+    expect(store.messagesMap['yeaft-1']).toEqual([
+      expect.objectContaining({ id: 'm0200', type: 'assistant', content: 'used tools', speakerVpId: 'vp-linus' }),
+      expect.objectContaining({ id: 'm0200:tool-summary', type: 'tool-summary', count: 3, omittedCount: 3, source: 'history', speakerVpId: 'vp-linus' }),
+    ]);
+    expect(store.yeaftSessionHistoryState.g1).toEqual(expect.objectContaining({ count: 1 }));
   });
 
   it('appends delta chunks without clobbering older-history cursors', () => {

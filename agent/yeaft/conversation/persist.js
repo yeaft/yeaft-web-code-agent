@@ -1088,7 +1088,7 @@ export class ConversationStore {
     const messages = page.messages.map(m => {
       if (m && m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
         const { toolCalls, ...rest } = m;
-        return rest;
+        return { ...rest, toolSummaryCount: toolCalls.length };
       }
       return m;
     });

@@ -697,6 +697,9 @@ function projectPersistedToHistoryEntry(m) {
       input: tc.input,
     }));
   }
+  if (Number.isFinite(m.toolSummaryCount) && m.toolSummaryCount > 0) {
+    entry.toolSummaryCount = m.toolSummaryCount;
+  }
   if (m.isError) entry.isError = true;
   if (m.ts) entry.ts = m.ts;
   else if (m.time) entry.ts = m.time;
@@ -786,6 +789,9 @@ function projectVisibleHistoryChunkMessages(messages = []) {
       turnId: m.turnId || m.threadId || 'main',
       ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(m.attachments) } : {}),
       ...(m.speakerVpId ? { speakerVpId: m.speakerVpId } : {}),
+      ...(Number.isFinite(m.toolSummaryCount) && m.toolSummaryCount > 0
+        ? { toolSummaryCount: m.toolSummaryCount }
+        : (Array.isArray(m.toolCalls) && m.toolCalls.length > 0 ? { toolSummaryCount: m.toolCalls.length } : {})),
     }));
 }
 
