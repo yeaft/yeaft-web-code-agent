@@ -2397,7 +2397,7 @@
 /* ───────────────────────────────────────────────────────────
  * SessionSettingsModal — unified left-nav / right-pane dialog
  * Replaces the previous standalone SessionMemberEditor.
- * Sections: announcement / members / rename / danger.
+ * Sections: session / members / memory.
  * ─────────────────────────────────────────────────────────── */
 
 .group-settings-overlay {
@@ -2528,6 +2528,16 @@
 }
 
 .group-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.group-settings-section-session {
+  gap: 16px;
+}
+
+.group-settings-card {
   display: flex;
   flex-direction: column;
   gap: 10px;

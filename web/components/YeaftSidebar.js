@@ -128,7 +128,7 @@ export default {
                     <button type="button" role="menuitem" class="session-menu-item" @click="onTogglePin(s.raw)">
                       {{ isSessionPinned(s) ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin') }}
                     </button>
-                    <button type="button" role="menuitem" class="session-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'announcement')">
+                    <button type="button" role="menuitem" class="session-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'session')">
                       {{ $t('yeaft.session.openSettings') }}
                     </button>
                     <button type="button" role="menuitem" class="session-menu-item" @click="onRemoveFromList(s.raw)">
@@ -419,11 +419,11 @@ export default {
     groupPath(g) {
       return shortenPath(g?.workDir);
     },
-    // task-yeaft-group-editor: ⚙ button on each group row opens the
-    // unified SessionSettingsModal (announcement / members / rename /
-    // danger). Default landing section is 'members' so the existing
-    // muscle-memory of the kebab "Manage members" lands in the same
-    // place. YeaftPage owns the modal lifecycle.
+    // task-yeaft-group-editor: each session row opens the unified
+    // SessionSettingsModal (session / members / memory). The row settings
+    // action lands on the combined Session page; legacy callers can still
+    // pass old announcement / rename / danger section aliases and the modal
+    // maps them to Session. YeaftPage owns the modal lifecycle.
     openGroupSettings(g, section = 'members') {
       if (!g || !g.id) return;
       this.$emit('open-group-settings', { sessionId: g.id, section });

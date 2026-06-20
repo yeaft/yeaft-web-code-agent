@@ -30,7 +30,7 @@ describe('Yeaft conversation header actions', () => {
     expect(pageSource).toContain('resolveActiveSessionIdForSettings({');
     expect(pageSource).toContain('const openAnnouncementSettings = () => {');
     expect(pageSource).toContain('const sessionId = activeSessionIdForSettings();');
-    expect(pageSource).toContain("openSessionSettings({ sessionId, section: 'announcement' });");
+    expect(pageSource).toContain("openSessionSettings({ sessionId, section: 'session' });");
     expect(pageSource).toContain(':initial-section="groupSettingsSection"');
     expect(vpTimelineSource).toContain('class="yeaft-session-status-announcement-card"');
     expect(vpTimelineSource).toContain("$t('yeaft.sessionStatus.announcement')");
@@ -41,7 +41,7 @@ describe('Yeaft conversation header actions', () => {
     expect(zhI18n).toContain("'yeaft.sessionStatus.announcement': '公告'");
     expect(pageSource).not.toContain('openTopbarGroupSettings');
     expect(sidebarSource).toContain('class="session-dots-btn"');
-    expect(sidebarSource).toContain("openGroupSettingsFromMenu(s.raw, 'announcement')");
+    expect(sidebarSource).toContain("openGroupSettingsFromMenu(s.raw, 'session')");
     expect(sidebarSource).toContain("$t('yeaft.session.openSettings')");
   });
 

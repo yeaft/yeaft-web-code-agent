@@ -1368,15 +1368,13 @@ export default {
   'yeaft.session.announcement.saveFailed': 'Save failed: {error}',
   'yeaft.session.announcement.openSettings': 'Open session settings',
 
-  // Unified session settings modal (announcement + members + rename + danger).
+  // Unified session settings modal (session management + members + memory).
   'yeaft.session.settings.title': '{name} — session settings',
   'yeaft.session.settings.short': 'Session',
   'yeaft.session.settings.close': 'Close',
-  'yeaft.session.settings.nav.announcement': 'Announcement',
+  'yeaft.session.settings.nav.session': 'Session',
   'yeaft.session.settings.nav.members': 'Members',
-  'yeaft.session.settings.nav.rename': 'Rename',
   'yeaft.session.settings.nav.memory': 'Memory',
-  'yeaft.session.settings.nav.danger': 'Delete session',
   'yeaft.session.settings.announcement.heading': 'Session announcement',
   'yeaft.session.settings.announcement.help': 'Shared at the top of every VP\'s system prompt while in this session. Like a CLAUDE.md for the team.',
   'yeaft.session.settings.members.heading': 'Members',

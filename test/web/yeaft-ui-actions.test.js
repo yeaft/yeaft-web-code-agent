@@ -46,7 +46,7 @@ describe('Yeaft UI action polish', () => {
     expect(pageSource).not.toContain('onOpenVpDetailFromTimeline');
 
     expect(sessionSettingsSource).toContain('initialEditVpId: { type: String, default: \'\' }');
-    expect(sessionSettingsSource).toContain("section: this.initialEditVpId ? 'members' : this.initialSection");
+    expect(sessionSettingsSource).toContain("section: this.initialEditVpId ? 'members' : normalizeSettingsSection(this.initialSection)");
     expect(sessionSettingsSource).toContain("'is-edit-target': highlightedVpId === vp.vpId");
     expect(settingsSource).toContain('<VpCrudPanel :initial-edit-vp-id="initialEditVpId" />');
     expect(vpCrudSource).toContain('initialEditVpId: { type: String, default: \'\' }');
@@ -70,14 +70,21 @@ describe('Yeaft UI action polish', () => {
     expect(zhI18n).toContain("'yeaft.debugClose': '关闭调试面板'");
   });
 
-  it('labels session deletion plainly and keeps list removal recoverable', () => {
-    expect(enI18n).toContain("'yeaft.session.settings.nav.danger': 'Delete session'");
-    expect(zhI18n).toContain("'yeaft.session.settings.nav.danger': '删除会话'");
+  it('keeps rename, announcement, and delete on one Session settings page', () => {
+    expect(enI18n).toContain("'yeaft.session.settings.nav.session': 'Session'");
+    expect(zhI18n).toContain("'yeaft.session.settings.nav.session': '会话'");
     expect(enI18n).toContain("'yeaft.session.removeFromList': 'Remove'");
     expect(zhI18n).toContain("'yeaft.session.removeFromList': '移除'");
 
     expect(enI18n).not.toContain('Danger zone');
     expect(zhI18n).not.toContain('危险操作');
+    expect(sessionSettingsSource).toContain("const SESSION_SETTINGS_SECTION = 'session';");
+    expect(sessionSettingsSource).toContain("const LEGACY_SESSION_SETTINGS_SECTIONS = new Set(['announcement', 'rename', 'danger']);");
+    expect(sessionSettingsSource).toContain("{ id: SESSION_SETTINGS_SECTION, label: this.$t('yeaft.session.settings.nav.session') }");
+    expect(sessionSettingsSource).not.toContain("settings.nav.announcement");
+    expect(sessionSettingsSource).not.toContain("settings.nav.rename");
+    expect(sessionSettingsSource).not.toContain("settings.nav.danger");
+    expect(sessionSettingsSource).toContain('group-settings-section-session');
     expect(sessionSettingsSource).toContain('group-settings-section-delete');
     expect(sessionSettingsSource).toContain('group-settings-delete-btn');
     expect(sessionSettingsSource).not.toContain('group-settings-section-danger');
@@ -93,6 +100,7 @@ describe('Yeaft UI action polish', () => {
       '.yeaft-topbar-dream-toggle',
       '.group-settings-delete-btn',
       '.group-settings-section-delete .group-settings-heading',
+      '.group-settings-section-session',
     ];
     for (const selector of touched) {
       const start = yeaftCss.indexOf(selector);

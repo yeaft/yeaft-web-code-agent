@@ -368,10 +368,10 @@ export default {
       />
 
       <!-- task-fix-group-member-editor → unified SessionSettingsModal: a
-           single dialog (announcement / members / rename / danger) owned
-           at this level so the empty-group hero CTA, the sidebar ⚙
-           button, the invite-modal CTA, and the legacy openMemberEditor
-           shim all converge here. -->
+           single dialog (session / members / memory) owned at this level
+           so the empty-group hero CTA, the sidebar settings action, the
+           invite-modal CTA, and the legacy openMemberEditor shim all
+           converge here. -->
       <SessionSettingsModal
         v-if="groupSettingsOpen && groupSettingsId"
         :group-id="groupSettingsId"
@@ -1110,7 +1110,7 @@ export default {
     // target any Session and any pane.
     const groupSettingsOpen = Vue.ref(false);
     const groupSettingsId = Vue.ref(null);
-    const groupSettingsSection = Vue.ref('announcement');
+    const groupSettingsSection = Vue.ref('session');
     const groupSettingsEditVpId = Vue.ref('');
     const openSessionSettings = (payload = {}) => {
       // Accept both { sessionId } (new) and { groupId } (legacy) — child
@@ -1119,7 +1119,7 @@ export default {
       // deploy window.
       const sessionId = (payload && (payload.sessionId || payload.groupId)) || null;
       const editVpId = (payload && payload.editVpId) || '';
-      const section = editVpId ? 'members' : ((payload && payload.section) || 'announcement');
+      const section = editVpId ? 'members' : ((payload && payload.section) || 'session');
       if (!sessionId) return;
       groupSettingsId.value = sessionId;
       groupSettingsSection.value = section;
@@ -1129,7 +1129,7 @@ export default {
     const openAnnouncementSettings = () => {
       const sessionId = activeSessionIdForSettings();
       if (!sessionId) return;
-      openSessionSettings({ sessionId, section: 'announcement' });
+      openSessionSettings({ sessionId, section: 'session' });
     };
     const closeGroupSettings = () => {
       groupSettingsOpen.value = false;
