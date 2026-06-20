@@ -52,6 +52,7 @@ describe('Yeaft model effort metadata and config', () => {
     expect(getModelEffortOptions('deepseek-chat')).toEqual(['low', 'medium', 'high']);
     expect(getThinkingCapability('deepseek-reasoner').thinkingProtocol).toBe('openai-reasoning');
     expect(getThinkingCapability('deepseek-reasoner', { protocol: 'anthropic' }).thinkingProtocol).toBe('anthropic-adaptive');
+    expect(getModelEffortOptions('deepseek-reasoner', { protocol: 'anthropic' })).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
 
     expect(getThinkingCapability('github-copilot/gpt-5.4').thinkingProtocol).toBe('openai-reasoning');
     expect(getThinkingCapability('github-copilot/gpt-5.5').thinkingProtocol).toBe('openai-reasoning');
@@ -105,7 +106,7 @@ describe('Yeaft model effort metadata and config', () => {
         effortProtocol: 'openai-reasoning',
       });
       expect(byRef['anthropic-row/deepseek-reasoner']).toMatchObject({
-        effortOptions: ['low', 'medium', 'high'],
+        effortOptions: ['low', 'medium', 'high', 'xhigh', 'max'],
         effortProtocol: 'anthropic-adaptive',
       });
       expect(byRef['custom/my-reasoner']).toMatchObject({
