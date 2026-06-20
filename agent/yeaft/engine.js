@@ -2294,15 +2294,32 @@ export class Engine {
               stopReason = event.stopReason;
               yield event;
               break;
-            case 'error':
-              yield event;
-              break;
+            case 'error': {
+              const adapterError = event.error instanceof Error
+                ? event.error
+                : new Error(String(event.error?.message || event.error || 'LLM stream error'));
+              adapterError.retryable = Boolean(event.retryable);
+              if (event.retryable) {
+                if (adapterError instanceof LLMRateLimitError || adapterError instanceof LLMServerError) {
+                  throw adapterError;
+                }
+                throw new LLMServerError(adapterError.message, adapterError.statusCode ?? 0);
+              }
+              if (adapterError instanceof LLMRateLimitError || adapterError instanceof LLMServerError) {
+                const nonRetryableError = new Error(adapterError.message);
+                nonRetryableError.name = adapterError.name || 'LLMStreamError';
+                nonRetryableError.code = adapterError.code;
+                nonRetryableError.statusCode = adapterError.statusCode;
+                nonRetryableError.retryable = false;
+                throw nonRetryableError;
+              }
+              throw adapterError;
+            }
           }
         }
         // Stream completed without throwing — reset the retry counter so
-        // the next turn starts with a clean budget. Note: this includes
-        // stream() that emitted an in-band `error` event (server didn't
-        // throw), since those are policy-specific and not transport-level.
+        // the next turn starts with a clean budget. In-band adapter errors
+        // are converted to throws above so they share the real error path.
         consecutiveRetryableErrors = 0;
       } catch (err) {
         const latencyMs = Date.now() - startTime;

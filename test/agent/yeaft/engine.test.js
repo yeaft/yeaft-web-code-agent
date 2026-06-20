@@ -857,6 +857,41 @@ describe('Engine', () => {
       expect(errorEvents[0].retryable).toBe(false);
     });
 
+    it('terminates on non-retryable in-band adapter error instead of normal end_turn', async () => {
+      const failed = new Error('bad request body');
+      failed.code = 'invalid_request_error';
+      const engine = new Engine({
+        adapter: {
+          async *stream() {
+            yield { type: 'error', error: failed, retryable: false };
+          },
+        },
+        trace,
+        config: {
+          model: 'test-model',
+          maxOutputTokens: 1024,
+          llmRetry: { maxRetries: 5, baseDelayMs: 1, maxDelayMs: 5, jitterRatio: 0 },
+        },
+      });
+
+      const events = [];
+      for await (const event of engine.query({ prompt: 'hello' })) {
+        events.push(event);
+      }
+
+      expect(events.filter(e => e.type === 'llm_retry')).toHaveLength(0);
+      const errorEvents = events.filter(e => e.type === 'error');
+      expect(errorEvents).toHaveLength(1);
+      expect(errorEvents[0].error.message).toBe('bad request body');
+      expect(errorEvents[0].retryable).toBe(false);
+      const loops = events.filter(e => e.type === 'loop');
+      expect(loops).toHaveLength(1);
+      expect(loops[0].stopReason).toBe('error');
+      expect(loops[0].response).toBe('Error: bad request body');
+      expect(events).toContainEqual(expect.objectContaining({ type: 'turn_end', stopReason: 'error' }));
+      expect(events).not.toContainEqual(expect.objectContaining({ type: 'turn_end', stopReason: 'end_turn' }));
+    });
+
     it('stops retrying when aborted mid-backoff', async () => {
       const { LLMRateLimitError } = await import('../../../agent/yeaft/llm/adapter.js');
       const controller = new AbortController();
