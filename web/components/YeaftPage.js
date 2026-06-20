@@ -310,7 +310,6 @@ export default {
         :rows="vpTimelineRows"
         :tasks="sessionStatusTasksForActiveSession"
         :announcement-text="sessionStatusAnnouncementText"
-        :sub-agent-prompt-results="store.yeaftSubAgentPromptResults"
         :class="{ 'mobile-session-status': isNarrowDetail }"
         :style="timelineWidthStyle"
         @mention-vp="onMentionVpFromTimeline"
@@ -318,7 +317,6 @@ export default {
         @start-resize="startTimelineResize"
         @cancel-vp-turn="onCancelVpFromTimeline"
         @edit-announcement="openAnnouncementSettings"
-        @prompt-sub-agent="onPromptSubAgentFromTimeline"
         @close="closeSessionStatus"
       />
 
@@ -1164,11 +1162,6 @@ export default {
       if (typeof store.cancelVpTurnForSession === 'function') {
         store.cancelVpTurnForSession(vpId, sessionId);
       }
-    };
-
-    const onPromptSubAgentFromTimeline = (payload) => {
-      if (!payload || typeof store.sendYeaftSubAgentPrompt !== 'function') return false;
-      return store.sendYeaftSubAgentPrompt(payload);
     };
 
     return {
