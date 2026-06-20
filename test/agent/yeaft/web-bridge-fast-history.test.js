@@ -112,4 +112,190 @@ describe('Yeaft load-history first paint', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('persists inbound user rows with the coordinator receive timestamp', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-inbound-ts-'));
+    try {
+      const store = new ConversationStore(dir);
+      __testSetSession({ conversationStore: store });
+
+      const wrote = __testHooks.persistInboundMessageOnceByMsgId({
+        msgId: 'g_msg_1',
+        text: 'hello at the real send time',
+        sessionId: 'session-fast',
+        threadId: 'main',
+        role: 'user',
+        ts: '2026-06-20T01:02:03.456Z',
+      });
+
+      expect(wrote).toBe(true);
+      const rows = store.loadAllBySession('session-fast');
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        role: 'user',
+        content: 'hello at the real send time',
+        time: '2026-06-20T01:02:03.456Z',
+      });
+    } finally {
+      __testSetSession(null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('cold-start delta replay preserves timestamps, attachments, and tool summaries', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-delta-cold-'));
+    try {
+      ctx.CONFIG = { yeaftDir: dir };
+      const store = new ConversationStore(dir);
+      const anchor = store.append({
+        role: 'user',
+        content: 'already seen',
+        sessionId: 'session-fast',
+        time: '2026-06-20T01:00:00.000Z',
+      });
+      store.append({
+        role: 'user',
+        content: 'with file',
+        sessionId: 'session-fast',
+        time: '2026-06-20T01:00:01.000Z',
+        attachments: [{ fileId: 'file_1', name: 'note.txt', isImage: false }],
+      });
+      store.append({
+        role: 'assistant',
+        content: 'I will use a tool',
+        sessionId: 'session-fast',
+        threadId: 'main',
+        speakerVpId: 'vp-linus',
+        time: '2026-06-20T01:00:02.000Z',
+        toolCalls: [{ id: 'toolu_1', name: 'Bash', input: { command: 'echo ok' } }],
+      });
+      store.append({
+        role: 'tool',
+        content: 'ok',
+        sessionId: 'session-fast',
+        threadId: 'main',
+        toolCallId: 'toolu_1',
+        time: '2026-06-20T01:00:03.000Z',
+      });
+
+      const pending = handleYeaftLoadHistory({ sessionId: 'session-fast', afterMessageId: anchor.id });
+      await flushMicrotasks();
+
+      const chunk = sent.find(m => m.type === 'yeaft_history_chunk' && m.mode === 'delta');
+      expect(chunk).toMatchObject({
+        type: 'yeaft_history_chunk',
+        sessionId: 'session-fast',
+        mode: 'delta',
+        afterSeq: Number(anchor.id.slice(1)),
+        messages: [
+          {
+            role: 'user',
+            content: 'with file',
+            ts: '2026-06-20T01:00:01.000Z',
+            attachments: [{ fileId: 'file_1', name: 'note.txt', isImage: false }],
+          },
+          {
+            role: 'assistant',
+            content: 'I will use a tool',
+            ts: '2026-06-20T01:00:02.000Z',
+            speakerVpId: 'vp-linus',
+            toolSummaryCount: 1,
+          },
+        ],
+      });
+      expect(chunk.messages).toHaveLength(2);
+      expect(sent.filter(m => m.type === 'yeaft_output' && m.data)).toHaveLength(0);
+      expect(sent.find(m => m.event?.type === 'history_loaded')?.event).toMatchObject({
+        mode: 'delta',
+        count: chunk.messages.length,
+        sessionId: 'session-fast',
+      });
+
+      resolveLoadSession({
+        conversationStore: store,
+        config: { model: 'test-model', availableModels: [] },
+        status: { skills: 0, mcpServers: [], tools: 0 },
+        taskManager: { listActiveTasks: () => [] },
+      });
+      await pending;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('ready-session delta replay uses the same projected frame shape', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-delta-ready-'));
+    try {
+      const store = new ConversationStore(dir);
+      const anchor = store.append({
+        role: 'user',
+        content: 'already seen',
+        sessionId: 'session-fast',
+        time: '2026-06-20T02:00:00.000Z',
+      });
+      store.append({
+        role: 'user',
+        content: 'ready delta user',
+        sessionId: 'session-fast',
+        time: '2026-06-20T02:00:01.000Z',
+        attachments: [{ fileId: 'file_2', name: 'diagram.png', isImage: true }],
+      });
+      store.append({
+        role: 'assistant',
+        content: 'ready delta assistant',
+        sessionId: 'session-fast',
+        speakerVpId: 'vp-martin',
+        time: '2026-06-20T02:00:02.000Z',
+        toolCalls: [{ id: 'toolu_2', name: 'WebSearch', input: { query: 'yeaft' } }],
+      });
+      store.append({
+        role: 'tool',
+        content: 'result',
+        sessionId: 'session-fast',
+        toolCallId: 'toolu_2',
+        time: '2026-06-20T02:00:03.000Z',
+      });
+      __testSetSession({
+        conversationStore: store,
+        config: { model: 'test-model', availableModels: [] },
+        status: { skills: 0, mcpServers: [], tools: 0 },
+        taskManager: { listActiveTasks: () => [] },
+      });
+
+      await handleYeaftLoadHistory({ sessionId: 'session-fast', afterSeq: Number(anchor.id.slice(1)) });
+
+      const chunk = sent.find(m => m.type === 'yeaft_history_chunk' && m.mode === 'delta');
+      expect(chunk).toMatchObject({
+        type: 'yeaft_history_chunk',
+        sessionId: 'session-fast',
+        mode: 'delta',
+        afterSeq: Number(anchor.id.slice(1)),
+        messages: [
+          {
+            role: 'user',
+            content: 'ready delta user',
+            ts: '2026-06-20T02:00:01.000Z',
+            attachments: [{ fileId: 'file_2', name: 'diagram.png', isImage: true }],
+          },
+          {
+            role: 'assistant',
+            content: 'ready delta assistant',
+            ts: '2026-06-20T02:00:02.000Z',
+            speakerVpId: 'vp-martin',
+            toolSummaryCount: 1,
+          },
+        ],
+      });
+      expect(chunk.messages).toHaveLength(2);
+      expect(sent.filter(m => m.type === 'yeaft_output' && m.data)).toHaveLength(0);
+      expect(sent.find(m => m.event?.type === 'history_loaded')?.event).toMatchObject({
+        mode: 'delta',
+        count: chunk.messages.length,
+        sessionId: 'session-fast',
+      });
+    } finally {
+      __testSetSession(null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

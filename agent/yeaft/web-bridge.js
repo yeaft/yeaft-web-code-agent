@@ -777,11 +777,13 @@ function ensureYeaftConversationId() {
 
 function projectVisibleHistoryChunkMessages(messages = []) {
   return (messages || [])
+    .map(projectPersistedToVisibleHistoryEntry)
+    .filter(Boolean)
     .map(m => ({
       ...(m.id ? { id: m.id } : {}),
       role: m.role,
       content: m.content,
-      ts: m.ts || m.time || null,
+      ts: m.ts || null,
       sessionId: m.sessionId || null,
       threadId: m.threadId || m.turnId || 'main',
       turnId: m.turnId || m.threadId || 'main',
@@ -794,18 +796,20 @@ function projectVisibleHistoryChunkMessages(messages = []) {
 }
 
 function emitHistoryChunk({ sessionId, messages, mode = 'older', oldestSeq = null, hasMore = false, latestSeq = null, afterSeq = null, turns = null }) {
+  const projectedMessages = projectVisibleHistoryChunkMessages(messages);
   sendToServer({
     type: 'yeaft_history_chunk',
     conversationId: yeaftConversationId,
     sessionId,
     mode,
-    messages: projectVisibleHistoryChunkMessages(messages),
+    messages: projectedMessages,
     oldestSeq,
     hasMore: !!hasMore,
     latestSeq,
     afterSeq,
     turns,
   });
+  return projectedMessages;
 }
 
 function emitLegacyHistoryOutputFrames(replayEntries) {
@@ -1355,6 +1359,7 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
       speakerVpId: envelope?.msg?.meta?.senderVpId || envelope?.msg?.from || null,
       attachments: Array.isArray(envelope?.msg?.meta?.attachments) ? envelope.msg.meta.attachments : [],
       internal: isInternalAppend,
+      ts: envelope?.msg?.ts || null,
     });
     thread.updatedAt = Date.now();
     try {
@@ -1451,6 +1456,7 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
             speakerVpId: senderVpId,
             attachments: Array.isArray(meta.attachments) ? meta.attachments : [],
             internal: isInternal,
+            ts: envelope?.msg?.ts || null,
           });
         }
       } catch { /* never crash WS pipeline */ }
@@ -3736,11 +3742,11 @@ function appendTurnToSessionHistory(sessionId, threadId, vpId, prompts, assistan
  * refresh replay can render chips without leaking image source data into
  * the message body.
  *
- * @param {{ msgId:string, text:string, sessionId:string, role?:string, speakerVpId?:string|null, attachments?:Array<object>, internal?:boolean }} args
+ * @param {{ msgId:string, text:string, sessionId:string, role?:string, speakerVpId?:string|null, attachments?:Array<object>, internal?:boolean, ts?:string|null }} args
  * @returns {boolean} true if this call wrote the row, false if a prior
  *   call already wrote it (dedup hit).
  */
-function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = 'main', role, speakerVpId, attachments, internal = false }) {
+function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = 'main', role, speakerVpId, attachments, internal = false, ts = null }) {
   if (!session?.conversationStore) return false;
   // No msgId means no dedup key — caller is responsible for guarding.
   // Both call sites already do (`if (envMsgId && text)` and
@@ -3794,6 +3800,9 @@ function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = '
     if (internal) record.internal = true;
     if (persistRole === 'user' && Array.isArray(attachments) && attachments.length > 0) {
       record.attachments = attachments;
+    }
+    if (ts && typeof ts === 'string') {
+      record.time = ts;
     }
     session.conversationStore.append(record);
     return true;
@@ -4557,14 +4566,14 @@ export async function handleYeaftLoadHistory(msg) {
       const delta = afterSeq !== null && typeof coldStore.loadAfterSeqByGroup === 'function'
         ? coldStore.loadAfterSeqByGroup(sessionId, afterSeq)
         : { messages: [], latestSeq: null };
-      emitHistoryChunk({
+      const projectedMessages = emitHistoryChunk({
         sessionId,
         messages: delta.messages,
         mode: 'delta',
         latestSeq: delta.latestSeq,
         afterSeq,
       });
-      sendSessionEvent({ type: 'history_loaded', mode: 'delta', count: delta.messages.length, sessionId, latestSeq: delta.latestSeq, afterSeq });
+      sendSessionEvent({ type: 'history_loaded', mode: 'delta', count: projectedMessages.length, sessionId, latestSeq: delta.latestSeq, afterSeq });
     } else {
       emitVisibleHistoryReplay({ store: coldStore, sessionId, limit, mode: 'recent' });
     }
@@ -4639,7 +4648,7 @@ export async function handleYeaftLoadHistory(msg) {
   }
   if (sessionId && afterSeq !== null && typeof session.conversationStore.loadAfterSeqByGroup === 'function') {
     const delta = session.conversationStore.loadAfterSeqByGroup(sessionId, afterSeq);
-    emitHistoryChunk({
+    const projectedMessages = emitHistoryChunk({
       sessionId,
       messages: delta.messages,
       mode: 'delta',
@@ -4649,7 +4658,7 @@ export async function handleYeaftLoadHistory(msg) {
     sendSessionEvent({
       type: 'history_loaded',
       mode: 'delta',
-      count: delta.messages.length,
+      count: projectedMessages.length,
       sessionId,
       latestSeq: delta.latestSeq,
       afterSeq,
@@ -5102,6 +5111,7 @@ export async function handleYeaftMcpReload(msg = {}) {
 
 export const __testHooks = {
   loadVisibleGroupHistoryPage,
+  persistInboundMessageOnceByMsgId,
   setSessionForTest(nextSession) {
     session = nextSession || null;
   },
