@@ -137,13 +137,26 @@ describe('Settings panel source', () => {
     expect(agentDropdownCss).not.toContain('var(--bg-hover');
   });
 
+  it('keeps mobile settings content independently scrollable', () => {
+    expect(settingsCss).toContain('.settings-content {');
+    expect(settingsCss).toContain('min-height: 0;');
+    expect(settingsCss).toContain('.settings-scroll {');
+    expect(settingsCss).toContain('overflow-y: auto;');
+    expect(settingsCss).toContain('-webkit-overflow-scrolling: touch;');
+    expect(settingsCss).toContain('@media (max-width: 640px)');
+    expect(settingsCss).toContain('height: 100dvh;');
+    expect(settingsCss).toContain('max-height: 100dvh;');
+  });
+
   it('styles Yeaft settings subtabs as a segmented control', () => {
+    expect(settingsPanelSource).toContain('class="settings-pane settings-pane-yeaft"');
     expect(settingsPanelSource).toContain('class="sp-subtab-bar"');
     expect(settingsPanelSource).toContain('class="sp-subtab"');
     expect(settingsPanelSource).toContain("settings.yeaft.tabs.vp");
     expect(settingsPanelSource).toContain("settings.yeaft.tabs.search");
     expect(settingsPanelSource).toContain("settings.yeaft.tabs.mcp");
 
+    expect(settingsCss).toContain('.settings-pane-yeaft');
     expect(settingsCss).toContain('.sp-subtab-bar');
     expect(settingsCss).toContain('display: inline-flex;');
     expect(settingsCss).toContain('background: var(--bg-sidebar);');
