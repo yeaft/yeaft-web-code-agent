@@ -351,7 +351,7 @@ export default {
             <!-- Yeaft sub-section (LLM / VPs / Search). Replaces the old
                  standalone YeaftSettings modal — everything Yeaft-scoped
                  lives behind this single nav entry. -->
-            <div v-show="activeTab === 'yeaft'" class="settings-pane">
+            <div v-show="activeTab === 'yeaft'" class="settings-pane settings-pane-yeaft">
               <div class="sp-subtab-bar">
                 <button v-for="st in yeaftSubTabs" :key="st.key"
                   class="sp-subtab"
