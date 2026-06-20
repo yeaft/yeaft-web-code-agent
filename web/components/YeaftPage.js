@@ -1025,8 +1025,6 @@ export default {
         hasYeaftAgent: !!store.yeaftAgentId,
         sessionsReady: !!(gs && gs.hasLoadedSnapshot),
         sessionsEmpty: !!(gs && gs.isEmpty),
-        activeSessionId: gs ? gs.activeSessionId : null,
-        topbarSession: topbarGroup.value,
       });
     });
     const installAgentCommand = 'npm install -g @yeaft/webchat-agent';
