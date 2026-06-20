@@ -4,6 +4,6 @@
 >
 > 另见：
 > - [Copilot 模式](./user/copilot-mode.md) —— 同一聊天界面，GitHub Copilot CLI 后端
-> - [Yeaft 会话 模式](./user/yeaft-group.md) —— 多 VP 协作模式
+> - [Yeaft Code Agent](./user/yeaft-group.md) —— 多 VP 协作模式
 >
 > 旧 URL 保留以兼容外部链接；后续修改请到新位置。

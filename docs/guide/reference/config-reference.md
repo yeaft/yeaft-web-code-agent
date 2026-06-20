@@ -154,7 +154,7 @@ The Agent reads environment variables on startup. Most values can also be set in
 | Variable | Default | Description |
 | --- | --- | --- |
 | `TOTP_ENABLED` | `true` | Globally enable TOTP 2FA |
-| `TOTP_ISSUER` | `'Claude Web Chat'` | Issuer label embedded in the otpauth URI |
+| `TOTP_ISSUER` | `'Claude Web Chat'` (legacy default) | Issuer label embedded in the otpauth URI; set to `Yeaft Web Code Agent` for new deployments |
 | `TOTP_WINDOW` | `1` | Allowed time-step drift |
 
 ### SSO providers

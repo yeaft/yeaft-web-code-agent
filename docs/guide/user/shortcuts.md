@@ -77,7 +77,7 @@ Quick reference for keyboard shortcuts in the Yeaft Web UI.
 | **Ctrl+click sidebar session** | Open in a new panel (enters split mode) |
 | Panel header **×** | Close panel |
 
-## Yeaft Sessions
+## Yeaft Code Agent
 
 | Shortcut | Action |
 | --- | --- |

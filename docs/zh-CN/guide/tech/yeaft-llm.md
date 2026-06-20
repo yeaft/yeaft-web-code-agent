@@ -155,7 +155,7 @@ provider 的 `apiKey` 和 `credentialProvider` **二选一**：
 - 添加必需的 header（`Copilot-Integration-Id`、`Editor-Version` 等）
 - 自动续期
 
-> **重要**：这个 credential provider 跟 [Copilot 模式](../user/copilot-mode.md)（spawn `copilot --acp` 子进程）是**完全不同**的两条路径，只是共用同一个 GitHub OAuth token。前者给 Yeaft 引擎直接调 Copilot API 用；后者给 Web Chat 模式当 AI 后端。
+> **重要**：这个 credential provider 跟 [Copilot 模式](../user/copilot-mode.md)（spawn `copilot --acp` 子进程）是**完全不同**的两条路径，只是共用同一个 GitHub OAuth token。前者给 Yeaft 引擎直接调 Copilot API 用；后者把 Copilot CLI 作为 Yeaft Web Code Agent 的 1:1 chat 后端。
 
 #### 写自定义 credential provider
 1. 在 `credentials/` 加 `<name>.js`，导出 `getToken({ provider })`

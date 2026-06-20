@@ -32,7 +32,7 @@ Yeaft 有三层独立的凭证模型，要分开理解：
 
 ## Yeaft 引擎凭证
 
-Agent 跑 Yeaft 会话 时会直接调你在 `~/.yeaft/config.json` 里列出的 LLM provider。每个 provider 条目 **二选一** 用一种凭证模式：
+Agent 跑 Yeaft Code Agent 时会直接调你在 `~/.yeaft/config.json` 里列出的 LLM provider。每个 provider 条目 **二选一** 用一种凭证模式：
 
 | 模式 | 字段 | 行为 |
 | --- | --- | --- |

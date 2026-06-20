@@ -1,109 +1,231 @@
-# Yeaft Sessions
+# Yeaft Code Agent
 
-A **Yeaft session** is the dominant usage pattern of the Yeaft in-house AI engine today — a session hosts multiple VPs (Virtual Persons, customizable persona / model / tool bundles), one user message can **fan out in parallel** to many VPs, each VP replies independently, and all share a **persistent memory** that crosses sessions.
+**Yeaft Code Agent** is Yeaft's native web-first coding agent experience. It runs inside the local `yeaft-agent`, does not require Claude Code CLI or GitHub Copilot CLI, and is built around **Sessions**: one workspace can host one or many VPs (Virtual Persons), each with its own persona, model, memory, and tool permissions.
 
-> Yeaft also plans a **single-VP chat mode** (1:1 with a single VP), but it's **not yet implemented**. This chapter covers the current multi-VP session experience.
+The historical page name is `yeaft-group.md` for URL compatibility, but the product concept is now **Yeaft Code Agent**. In the engine, the orchestration unit is still called a **Session**.
 
-## What sets it apart from Claude Code Chat / Copilot
+## What it is for
 
-- **No external CLI dependency** — Yeaft runs its own query loop (`agent/yeaft/engine.js`) with a built-in toolset
-- **Multi-VP parallel** — get opinions from PM, Dev and Reviewer simultaneously, no session-switching
-- **Cross-session memory** — the H2-AMS memory subsystem persists by scope (user / vp / group / feature / global), so VPs remember you across sessions
-- **Multi-provider** — different VPs in the same session can use different models (one Claude, one GPT-5, one Copilot)
+Yeaft Code Agent is designed for code work that benefits from a browser control plane and a local execution agent:
 
-## Enter the Yeaft page
+- **Implement and review code** with file, shell, git/worktree, notebook, search, and patch tools.
+- **Run multi-perspective thinking** by adding VPs such as product, architect, developer, reviewer, tester, or designer.
+- **Keep long-lived project context** through H2-AMS memory, so a VP can recall decisions, preferences, and prior work across sessions.
+- **Mix providers and models** in the same product surface: Anthropic, OpenAI Responses, GitHub Copilot API credentials, Azure/OpenAI-compatible gateways, or local proxies.
+- **Use one web UI for many machines**: each `yeaft-agent` connects a laptop, VM, or container to the server and exposes its workspace safely through WebSocket.
 
-Click the **Yeaft** tab at the top of the sidebar tab bar. On first entry, Yeaft handshakes with its bound Agent and establishes a **virtual conversationId** (it doesn't occupy a Claude Chat / Copilot session slot).
+## How it differs from the other backends
 
-> One Agent can run Claude Code sessions, Copilot sessions and Yeaft simultaneously — they don't interfere with each other.
+| Path | Execution model | Best for |
+| --- | --- | --- |
+| **Claude Code Chat** | One Claude Code CLI subprocess per 1:1 chat | Maximum Claude Code compatibility, Claude skills/MCP ecosystem |
+| **Copilot Mode** | One `copilot --acp` subprocess per 1:1 chat | Existing GitHub Copilot entitlement, ACP permissions, quick model switching |
+| **Yeaft Code Agent** | Native Yeaft engine inside `yeaft-agent`, one Session with 1..N VPs | Multi-provider code agents, persistent memory, multi-VP collaboration, custom tool policy |
 
-## Create a session
+Yeaft Code Agent is not a wrapper around a vendor CLI. It owns the query loop, tool registry, memory recall, provider routing, and VP orchestration. That makes it the best place to integrate non-Claude providers or specialized proxies.
 
-1. Yeaft page → sidebar **+ New session**
-2. **Name** — e.g. "Weekly report review", "Refactor discussion"
-3. **Pick VPs** — tick the VPs you want in this session. VPs are managed in the VP Library (each one has its own persona / model / tool config; see VP setup notes below).
-4. **Default VP** — the VP that answers when no one is `@`-mentioned
-5. **Create**
+## Mental model: Session, VP, turn, tool
 
-> VPs themselves are reusable across sessions — you build them once in the VP Library, then mix and match them per session.
+- A **Session** is the durable collaboration space. It has a title, announcement, roster, default VP, message history, debug state, and memory scope.
+- A **VP** is a configurable virtual person. A VP has a persona, model reference, tool allowlist, memory, and optional sub-agents.
+- A **turn** is a user message routed to one or more VPs. If multiple VPs are addressed, they run in parallel.
+- A **tool** is an explicit capability exposed by the Yeaft engine, such as file editing, shell execution, web search, or spawning sub-agents.
 
-## Talk to the session
+A Session with one VP behaves like a focused code assistant. Add more VPs when you want parallel design review, test planning, product critique, or implementation/review separation.
 
-Inside a session, the input box looks like Chat mode. The differences:
+## First-time setup
 
-- **@mention selects VPs**: `@PM @Reviewer take a look at this report`
-  - Without `@`, the default VP handles the turn
-  - With `@`, only the mentioned VPs receive it (parallel fan-out)
-- **VPs reply in parallel** — each mentioned VP runs the query loop in its own turn; completion times differ; the UI groups replies by VP
-- **Attachments** are supported — drag/paste like in Chat
+### 1. Install and connect an Agent
 
-## What the memory system does
+```bash
+npm install -g @yeaft/webchat-agent
+yeaft-agent --server wss://your-server.com --name worker-1 --secret your-secret
+```
 
-Yeaft has a background memory subsystem called **H2-AMS** (AMS + SQLite FTS pre-flow — see the engine's `memory/DESIGN-H2-AMS.md` for the long form). It works in three loops:
+The Agent runs on the machine that owns the code. The browser talks to the server; the server relays encrypted traffic to the Agent; the Agent reads files, runs commands, talks to providers, and streams events back.
 
-1. **Pre-turn**: Yeaft runs FTS5 full-text recall over relevant scopes and injects the hits into the system prompt
-2. **Post-turn** (max once per session per session-id): an LLM adjusts the Active Memory Set
-3. **Background dream maintenance**: chops conversation history into atomic memory segments and stores them as markdown files in the relevant scope
+### 2. Configure at least one LLM provider
 
-What you see:
-- VPs remember things you told them last time (across multiple sessions)
-- VPs in a session share session-scoped memory, but each VP also has its own vp-scoped private memory
-- Your profile / preferences live in user scope and are read by every VP in every session during pre-flow
+Yeaft Code Agent reads provider config from `~/.yeaft/config.json`. The quickest path is the Agent CLI:
 
-> Memories live on the Agent machine at `~/.yeaft/memory/<scope>/memory.md` — plain markdown files you can read, back up, or migrate.
+```bash
+yeaft-agent llm setup
+```
 
-## Debug panel
+Use GitHub Copilot credentials without storing an API token:
 
-The Yeaft page has a **Debug panel** (icon at the bottom of the sidebar) showing:
+```bash
+yeaft-agent llm use github-copilot --model claude-sonnet-4.5 --fast gpt-4.1
+```
 
-- Turn history per VP for the current session
-- For each turn: recalled memory segments, messages sent to the LLM, tool_calls received, final reply
-- Token / cost stats
-- LLM provider / model routing result
+Or add an OpenAI-compatible provider:
 
-Good for:
-- Wondering why a VP replied a certain way — look at what memory it recalled
-- Optimizing memory — see which segments hit, which missed
-- Debugging a new tool — see tool_call inputs / outputs
+```bash
+OPENAI_KEY=sk-... yeaft-agent llm use openai-compatible \
+  --name openai \
+  --base-url https://api.openai.com/v1 \
+  --api-key-env OPENAI_KEY \
+  --model gpt-5
+```
 
-## Tools
+See [Yeaft Engine Config](../yeaft-config.md) for complete examples, including Anthropic, Azure OpenAI, GitHub Copilot dynamic credentials, and self-hosted OpenAI-compatible gateways.
 
-The Yeaft engine ships 40+ built-in tools, grouped by category:
+### 3. Open the Yeaft page
 
-- **Files**: file_read / file_write / file_edit / apply_patch / notebook_edit
-- **Search**: grep / glob / list_dir / history_search
-- **Execution**: bash / js_repl / enter_worktree / exit_worktree
-- **Network**: web_fetch / web_search / image_generation / view_image
-- **Orchestration**: agent (spawn a sub-Agent) / send_message / wait_agent / close_agent / list_agents / route_forward (explicit VP→VP handoff)
-- **Tasks**: todo_write / start_plan
-- **External**: ask_user / skill / mcp_tools
+In the web UI, click the **Yeaft** tab in the sidebar tab bar. If no Agent is online, the onboarding panel points you to the Agent setup page. Once the Agent is connected and has a provider, create a Session.
 
-Whether a VP can call a given tool is determined by per-VP tool config + the tool registry's mode filter.
+## Create and use a Session
 
-## Common usage patterns
+1. Go to **Yeaft → + New Session**.
+2. Give it a name, for example `Refactor auth flow` or `Release review`.
+3. Pick one or more VPs from the roster.
+4. Choose the default VP. When a message has no `@mention`, this VP receives the turn.
+5. Send a message. Use `@VPName` to target a subset of VPs.
 
-### Pattern A — Decision review
+Example prompts:
 
-Create a session with 3–4 VPs of different personas (e.g. PM-Jobs + Dev-Torvalds + Architect-Fowler + Designer-Rams), drop your proposal in, let them **opine in parallel**. Much more efficient than switching personas one at a time.
+```text
+@Architect @Reviewer Review this migration plan before I implement it.
+```
 
-### Pattern B — Long-project assistant
+```text
+@Dev Implement the smallest safe fix, add tests, and open a PR.
+```
 
-Create a session with one default VP and treat it as your project's "personal assistant". Yeaft's memory lets it gradually learn your codebase, style preferences and decision history.
+```text
+@Tester Find regression risks in this diff and suggest targeted tests.
+```
 
-### Pattern C — Cross-VP handoff
+When several VPs are mentioned, the coordinator fans out the same user turn. Each VP builds its own prompt, recalls its own memory, calls its configured provider/model, executes allowed tools, and streams its result back into the shared Session timeline.
 
-Use the `route_forward` tool to make VPs explicitly hand off — the PM VP breaks down the requirement and hands it to the Dev VP, the Dev VP finishes the code and hands the PR to the Reviewer VP.
+## Tools available to Yeaft Code Agent
 
-## Difference vs Crew Mode
+Yeaft ships with 30+ built-in tools. Availability is controlled by the VP config and by engine mode.
 
-- **Crew** runs on top of Claude Code (each role is a Claude CLI process); full Claude Code capability but only one model
-- **Yeaft Sessions** run on top of the Yeaft engine; each VP picks its own provider/model, with persistent memory built in, but the toolset differs from Claude Code
+- **Files and edits**: `file_read`, `file_write`, `file_edit`, `apply_patch`, `notebook_edit`
+- **Search and discovery**: `grep`, `glob`, `list_dir`, `history_search`
+- **Execution**: `bash`, `js_repl`, `enter_worktree`, `exit_worktree`
+- **Network and media**: `web_fetch`, `web_search`, `image_generation`, `view_image`
+- **Planning and tasks**: `start_plan`, `todo_write`
+- **Agent orchestration**: `agent`, `send_message`, `wait_agent`, `list_agents`, `close_agent`, `route_forward`
+- **External integration**: `ask_user`, `skill`, `mcp_tools`
 
-If your need is "multi-AI roles collaborating on a concrete feature", both work. Pick **Yeaft Sessions** for "cross-session persistent memory + freely mixed providers"; pick **Crew** for "full Claude Code skill / MCP ecosystem + standard dev pipeline".
+For code work, the typical loop is: inspect files, plan, edit, run targeted tests, run broader tests, summarize risk, then hand off for review. Multi-VP Sessions let you make that loop explicit: one VP implements, another reviews, another focuses on tests.
+
+## Provider integration model
+
+Yeaft Code Agent has two provider layers:
+
+1. **ChatProvider layer** for 1:1 chat backends such as Claude Code CLI and Copilot CLI. Those drivers normalize their output into the shared web rendering protocol.
+2. **Yeaft LLM adapter layer** for the native engine. This is what Yeaft Code Agent uses. It routes each VP/model request through `AdapterRouter` to an Anthropic or OpenAI Responses compatible adapter.
+
+For native Yeaft models, configure providers like this:
+
+```json
+{
+  "providers": [
+    {
+      "name": "anthropic",
+      "baseUrl": "https://api.anthropic.com",
+      "apiKey": "sk-ant-...",
+      "protocol": "anthropic",
+      "models": ["claude-sonnet-4-20250514"]
+    },
+    {
+      "name": "openai",
+      "baseUrl": "https://api.openai.com/v1",
+      "apiKey": "sk-...",
+      "protocol": "openai-responses",
+      "models": ["gpt-5", "gpt-5-mini"]
+    },
+    {
+      "name": "github-copilot",
+      "baseUrl": "https://api.githubcopilot.com",
+      "credentialProvider": "github-copilot",
+      "protocol": "openai-responses",
+      "models": [
+        { "id": "claude-sonnet-4.5", "protocol": "anthropic" },
+        "gpt-5"
+      ]
+    }
+  ],
+  "primaryModel": "anthropic/claude-sonnet-4-20250514",
+  "fastModel": "openai/gpt-5-mini"
+}
+```
+
+A VP can use `anthropic/claude-sonnet-4-20250514` while another uses `openai/gpt-5` and a third uses `github-copilot/claude-sonnet-4.5`. Per-model protocol overrides let a single provider expose both Claude-family and GPT-family models safely.
+
+## Memory design
+
+Yeaft Code Agent uses **H2-AMS** memory:
+
+1. **Pre-turn recall**: full-text search over relevant scopes injects memory into the system prompt.
+2. **Active Memory Set**: resident summaries, recent context, and on-demand memory are budgeted per turn.
+3. **Post-turn adjustment**: the engine can update the active set after a turn.
+4. **Dream maintenance**: background jobs break conversation history into atomic markdown memory segments.
+
+Memory is scoped, not global by accident:
+
+- `user/<userId>` stores user preferences and profile.
+- `vp/<vpId>` stores a VP's own long-lived knowledge.
+- `session/<sessionId>` stores Session-shared context.
+- `feature/<featureId>` stores project/feature-level collaboration memory.
+- `global` stores global facts.
+
+This design is why a reviewer VP can remember your review standards, while a product VP remembers product constraints, and both can share Session-level facts for the current task.
+
+## Recommended workflows
+
+### Single-VP coding assistant
+
+Create a Session with one default VP. Use it like a conventional coding agent, but with Yeaft memory and provider routing. This is best for focused implementation, bug fixes, documentation changes, and repeated work on one repo.
+
+### PM + Developer + Reviewer
+
+Create a Session with three VPs:
+
+- PM VP clarifies user intent and acceptance criteria.
+- Developer VP implements the smallest safe change.
+- Reviewer VP checks architecture, edge cases, and tests.
+
+Mention all three for design discussion; mention only `@Dev` for implementation; mention `@Reviewer` after the diff is ready.
+
+### Provider comparison
+
+Give two VPs the same persona but different models. Ask both to review the same design or bug. This is a practical way to compare Anthropic, OpenAI, Copilot, or a local gateway on your own tasks.
+
+### Long-lived project memory
+
+Keep one Session per important project. Add project-specific VPs and let memory accumulate decisions, naming rules, deployment constraints, and review preferences.
+
+## Debugging and observability
+
+The Yeaft page includes a debug panel for native engine turns. Use it to inspect:
+
+- which provider/model handled a turn;
+- which memory segments were recalled;
+- what messages and tools were sent to the model;
+- tool call inputs/outputs;
+- token and stop-reason metadata.
+
+If a VP gives a surprising answer, debug memory recall and model routing first. If a provider fails, check `~/.yeaft/config.json`, the Agent logs, and the Yeaft LLM layer error.
+
+## Design principles
+
+Yeaft Code Agent follows a few product and engineering rules:
+
+- **Local execution, web control**: code runs on your Agent machine; the browser is the control plane.
+- **Session-first collaboration**: the product no longer has separate chat/group modes in the native engine. A Session can have one VP or many VPs.
+- **Provider-neutral core**: providers are routing targets, not product identity. Model references are explicit: `<provider>/<model-id>`.
+- **Memory by scope**: VPs and users own memory scopes; sharing is deliberate through Session/feature scopes.
+- **Tools are explicit**: every file edit, shell command, or network request goes through a named tool and can be logged, rendered, tested, and reviewed.
+- **Compatibility without leaking old names**: some wire fields and disk paths keep historical `group`/`unify` aliases, but new documentation and code should use Yeaft and Session terminology.
 
 ## Going deeper
 
-- Configure custom providers / models: see [Yeaft Engine Config](../yeaft-config.md)
-- How the engine works: see [Yeaft Engine](../tech/yeaft-engine.md)
-- Memory system design: see [Yeaft Memory (H2-AMS)](../tech/yeaft-memory.md)
-- LLM routing / multi-provider: see [Yeaft LLM Layer](../tech/yeaft-llm.md)
+- Configure custom providers and models: [Yeaft Engine Config](../yeaft-config.md)
+- Native engine architecture: [Yeaft Engine](../tech/yeaft-engine.md)
+- LLM routing and protocol selection: [Yeaft LLM Layer](../tech/yeaft-llm.md)
+- Memory internals: [Yeaft Memory (H2-AMS)](../tech/yeaft-memory.md)
+- ChatProvider integration for CLI backends: [Provider System](../tech/providers.md)

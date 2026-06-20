@@ -1,8 +1,13 @@
 # Provider System
 
-Yeaft abstracts "AI backend" as a **ChatProvider** interface — there are two implementations today: `claude-code` (Claude Code CLI subprocess) and `copilot` (GitHub Copilot CLI subprocess over ACP). This chapter covers how the abstraction is designed, how to write a provider, and how the protocol is aligned.
+Yeaft has two provider integration paths:
 
-> Audience: **engineers who want to add a new provider** or **understand why the frontend doesn't branch on Claude vs Copilot rendering**. End-user view in [Choose a Session Backend](../user/choose-backend.md).
+1. **ChatProvider** for 1:1 CLI-style chat backends such as Claude Code CLI and GitHub Copilot CLI.
+2. **Yeaft LLM adapters** for the native **Yeaft Code Agent** engine, where each VP routes directly to an Anthropic or OpenAI Responses compatible provider.
+
+This chapter focuses on ChatProvider because that is the extension point for adding a new 1:1 chat backend. If you want to connect another LLM to Yeaft Code Agent, start with [Yeaft Engine Config](../yeaft-config.md) and [Yeaft LLM Layer](./yeaft-llm.md); most providers only need `~/.yeaft/config.json`, not a new ChatProvider driver.
+
+> Audience: **engineers who want to add a new provider** or **understand why the frontend doesn't branch on Claude vs Copilot rendering**. End-user view in [Choose a Code Agent Path](../user/choose-backend.md).
 
 ## Design Goals
 
@@ -156,7 +161,7 @@ If the new provider needs special config (like Copilot's model picker / Allow al
 
 ## Not in This Layer
 
-- **Yeaft engine** — not a ChatProvider. It uses dedicated wire types `yeaft_output` / `yeaft_session_chat` because its event model (parallel VP turns, group fan-out, cross-session memory) differs from 1:1 chat
+- **Yeaft Code Agent engine** — not a ChatProvider. It uses the native Yeaft Session path (`yeaft_session_send` → `yeaft_output`) because its event model (parallel VP turns, Session fan-out, cross-session memory) differs from 1:1 chat. Legacy aliases such as `yeaft_session_chat`, `unify_group_chat`, and old `groupId` payload names remain accepted only as compatibility names.
 - **WebSocket transport** — base.js doesn't care about WebSocket; the driver pushes messages via `ctx.sendToServer`, with transport provided by message-router
 - **Auth** — driver doesn't verify tokens; server has already done the handshake when agent boots
 

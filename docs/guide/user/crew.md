@@ -139,18 +139,18 @@ Collapsed by default — click the header to expand; shows finished features wit
 - Add / remove roles
 - **Apply changes** — take effect immediately
 
-## Difference vs Yeaft Sessions
+## Difference vs Yeaft Code Agent
 
-|  | Crew | Yeaft Sessions |
+|  | Crew | Yeaft Code Agent |
 | --- | --- | --- |
 | Engine | Claude Code CLI (one process per role) | Yeaft in-house engine |
 | Model | Claude only (CLI decides) | Each VP picks provider/model |
 | Memory | Within session | Cross-session H2-AMS |
 | Routing | ROUTE protocol auto (PM dispatches) | @mention + `route_forward` explicit |
-| Tools | Full Claude Code skill / MCP ecosystem | Yeaft's built-in 40+ tools |
+| Tools | Full Claude Code skill / MCP ecosystem | Yeaft's built-in 30+ tools |
 | Resources | Process per role, multiple worktrees | Shared engine, VPs are logical entities |
 
 **Pick Crew**: you're already in the Claude Code ecosystem and want the full pipeline for one concrete feature (decompose → write → review → test)
-**Pick Yeaft Sessions**: you want long-term memory + freely mixed providers + multi-VP parallel discussion
+**Pick Yeaft Code Agent**: you want long-term memory + freely mixed providers + multi-VP parallel discussion
 
 Detailed comparison: [Choose a Backend](./choose-backend.md).

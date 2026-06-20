@@ -1,4 +1,4 @@
-# Yeaft
+# Yeaft Web Code Agent
 
 ![CI](https://github.com/yeaft/claude-web-chat/actions/workflows/ci.yml/badge.svg)
 [![npm](https://img.shields.io/npm/v/@yeaft/webchat-agent)](https://www.npmjs.com/package/@yeaft/webchat-agent)
@@ -8,23 +8,30 @@
 
 [English](README.md) | [中文](README.zh-CN.md) | [文档站点](https://yeaft.github.io/claude-web-chat/zh-CN/)
 
-> 多 provider AI 协作平台 — 一份 Web 界面，三种后端：Claude Code CLI · GitHub Copilot CLI · Yeaft 自有多 VP 引擎。多机器管理、端到端加密、多角色协作。
+> Web 端多 provider 代码 Agent 平台 — 在同一个浏览器 UI 里运行 Claude Code CLI、GitHub Copilot CLI，或 Yeaft 原生 Code Agent。支持多工作机器、本地执行、跨 provider 模型路由、持久记忆和多 VP Session 协作。
 
 **🌐 在线体验：[cc.yeaft.com](https://cc.yeaft.com)** — 开放注册，无需邀请码。
+
+## 术语表
+
+- **Yeaft Web Code Agent**：完整 Web 端产品，包括 server、浏览器 UI、已连接的 worker agent、文档和部署形态。
+- **Yeaft Code Agent**：运行在 `yeaft-agent` 内的原生代码 Agent 能力，包含 Yeaft 引擎、工具、记忆和直接 LLM provider 路由。
+- **Yeaft Session**：原生引擎的持久协作单元。一个 Session 可以只有 1 个 VP 做专注编码，也可以有多个 VP 并行协作。
+- **Legacy wire/storage names**：部分代码和协议字段仍保留 `group`、`groupId`、`yeaft_session_chat`、`unify_*`、`claude_output` 等旧名。这些是兼容契约，不是新的产品语言。新文档和新代码应使用 Yeaft + Session 术语，除非是在明确说明兼容层。
 
 ![Screenshot](docs/images/zh-CN/hero.jpg)
 
 ## 功能特性
 
-### 选择你的后端
+### 选择你的代码 Agent 路径
 
-Yeaft 不绑定单一 AI 厂商。建新会话时挑：
+Yeaft Web Code Agent 不绑定单一 AI 厂商，也不绑定单一执行模型。开始工作时可以选择：
 
 | 后端 | 适合 |
 | --- | --- |
 | **Claude Code** | 1:1 chat 配 Claude Code CLI — 全套 Claude 工具 |
 | **Copilot** | 1:1 chat 走 GitHub Copilot CLI（ACP 协议）— 任挑 Claude / GPT 系 model |
-| **Yeaft 会话** | 多 VP 群组协作，并行 fan-out，跨 session 持久记忆 |
+| **Yeaft Code Agent** | 原生多 provider 代码 Agent，1..N 个 VP，并行 fan-out，持久记忆，30+ 内置工具 |
 
 ### Chat（Claude Code）
 
@@ -51,16 +58,18 @@ ChatGPT 风格对话界面，实时工具追踪，会话管理和文件上传。
 - Session 恢复 + 历史
 - 复用你的 GitHub Copilot OAuth，不需要额外 API key
 
-### Yeaft 会话
+### Yeaft Code Agent
 
-多 VP（Virtual Person）并行协作，由 Yeaft 自有引擎驱动（不需要任何外部 CLI）。
+Yeaft 原生代码 Agent 引擎运行在 `yeaft-agent` 内，不需要外部 CLI 子进程。它以 Session 为核心：一个 Session 可以只有 1 个 VP 做专注编码，也可以放多个 VP 做产品 / 架构 / 实现 / 审查协作。
 
-- 拉一个 group，塞多个 VP（人格 / 模型 / 工具独立配置）
-- `@mention` 决定哪些 VP 接管这条消息 — 并行 fan-out
-- 跨 session 持久记忆（H2-AMS）— 新 session 也记得你上次说的事
-- 多 provider LLM router（Anthropic、OpenAI Responses、GitHub Copilot、任意 OpenAI 兼容 proxy）
-- 40+ 内置工具（文件、bash、网络、Agent 编排）
-- VP→VP 显式 handoff（`route_forward` 工具）
+- 用可复用 VP 组建 Session，每个 VP 独立配置人格、provider/model、记忆和工具策略
+- 用 `@mention` 决定哪些 VP 处理本轮；多个 VP 会并行运行
+- 通过 H2-AMS 保留跨 session 持久记忆，按 user / VP / Session / feature 分 scope 管理
+- LLM 调用可路由到 Anthropic、OpenAI Responses、GitHub Copilot 动态凭证、Azure/OpenAI-compatible gateway 或本地 proxy
+- 内置 30+ 工具，覆盖文件、patch、shell、git worktree、Web、notebook、计划和子 Agent 编排
+- 在 Yeaft debug panel 中查看模型路由、召回记忆、工具调用、token 用量和 stop reason
+
+完整用法、provider 设置和设计原则见 [Yeaft Code Agent 指南](docs/zh-CN/guide/user/yeaft-group.md)。
 
 ![Chat](docs/images/zh-CN/chat.jpg)
 
@@ -126,7 +135,7 @@ AI 专家团队辅助对话 — 选择一个团队（如写作、交易），在
 - **Agent**: Node.js >= 22.5，按需安装下列至少一项：
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — Claude Chat 模式必需
   - [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) — Copilot 模式必需（可选）
-  - **Yeaft 引擎已内置**于 npm 包，Yeaft 会话 **无需任何额外 CLI**
+  - **Yeaft Code Agent 已内置**于 npm 包，原生 Yeaft Session **无需任何额外 CLI**
 - **Web 客户端**: 现代浏览器（Chrome, Firefox, Safari, Edge）
 
 ### 通过 Agent CLI 配置 Yeaft LLM provider
@@ -165,7 +174,7 @@ yeaft-agent llm set-model --primary openai/gpt-5 --fast openai/gpt-4.1
 yeaft-agent llm remove-provider --name openai
 ```
 
-完整用法和示例见 `yeaft-agent llm --help`。Yeaft 会话 header 里的 LLM 配置按钮编辑的是同一份 agent-local config。
+完整用法和示例见 `yeaft-agent llm --help`。Yeaft Code Agent session header 里的 LLM 配置按钮编辑的是同一份 agent-local config。
 
 ## 架构
 
@@ -187,10 +196,10 @@ yeaft-agent llm remove-provider --name openai
 │ @yeaft/       │      │    (web/)       │
 │ webchat-agent │      │                 │
 │               │      │ - Vue 3 + Pinia │
-│ - 管理 Claude │      │ - 分屏多面板    │
-│   CLI 进程    │      │ - 端到端加密    │
-│ - Crew 多角色 │      │ - 深色/浅色主题 │
-│   协调        │      │ - 中英双语      │
+│ - 原生 Yeaft  │      │ - 分屏多面板    │
+│   Code Agent  │      │ - 端到端加密    │
+│ - Claude /    │      │ - 深色/浅色主题 │
+│   Copilot CLI │      │ - 中英双语      │
 │ - 终端 / Git  │      │ - 文件上传      │
 │ - 文件管理    │      │                 │
 └───────────────┘      └─────────────────┘
@@ -249,7 +258,7 @@ SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USER=your@gmail.com
 SMTP_PASS=your-app-password
-SMTP_FROM=WebChat <noreply@example.com>
+SMTP_FROM=Yeaft Web Code Agent <noreply@example.com>
 
 # 可选：TOTP 双因素认证
 TOTP_ENABLED=true
@@ -446,7 +455,7 @@ npm run build
 ## 项目结构
 
 ```
-claude-web-chat/
+yeaft-web-code-agent/
 ├── server/              # 中央 WebSocket 服务器
 │   ├── index.js         # 入口
 │   ├── handlers/        # 消息处理器（agent↔client 路由）
@@ -467,8 +476,8 @@ claude-web-chat/
 │   │   ├── engine.js    # 主 query loop
 │   │   ├── memory/      # H2-AMS 记忆子系统
 │   │   ├── llm/         # 多 provider LLM 适配器
-│   │   ├── groups/      # Group Mode 编排
-│   │   └── tools/       # 40+ 内置工具
+│   │   ├── sessions/    # Session 编排
+│   │   └── tools/       # 30+ 内置工具
 │   ├── claude.js        # Legacy Claude CLI 进程管理
 │   ├── conversation.js  # 会话生命周期与斜杠命令
 │   ├── crew/            # 多角色 Crew 协调（13 个模块）

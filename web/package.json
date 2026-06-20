@@ -2,7 +2,7 @@
   "name": "@yeaft/webchat-web",
   "version": "1.0.0",
   "private": true,
-  "description": "Web frontend for Yeaft WebChat",
+  "description": "Web frontend for Yeaft Web Code Agent",
   "main": "app.js",
   "scripts": {
     "build": "node build.js"

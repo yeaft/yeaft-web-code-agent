@@ -1,7 +1,7 @@
 {
   "name": "@yeaft/webchat-agent",
   "version": "1.0.0",
-  "description": "Remote agent for Yeaft WebChat — connects worker machines to the central server",
+  "description": "Remote worker agent for Yeaft Web Code Agent — connects the native Yeaft engine, CLI providers, and workbench tools",
   "main": "index.js",
   "type": "module",
   "bin": {

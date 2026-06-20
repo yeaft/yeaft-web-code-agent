@@ -103,6 +103,6 @@ Copilot stores sessions in `~/.copilot/session-store.db` (SQLite). Yeaft will:
 There are two distinct "Copilots" — keep them separate:
 
 - **Copilot Mode (this chapter)** — Agent spawns a `copilot --acp` subprocess; the **subprocess** is the AI backend, model selection lives inside the Copilot CLI
-- **Yeaft engine's `github-copilot` credential provider** — used by Yeaft Sessions; Yeaft grabs the GitHub OAuth token itself and calls the Copilot API directly, **no** `copilot --acp` subprocess
+- **Yeaft engine's `github-copilot` credential provider** — used by Yeaft Code Agent; Yeaft grabs the GitHub OAuth token itself and calls the Copilot API directly, **no** `copilot --acp` subprocess
 
-Both authenticate against the same GitHub account, but they take different code paths. The first is for "I want Copilot CLI as a Claude replacement"; the second is for "I want a VP inside Yeaft Sessions to use Copilot-provided models".
+Both authenticate against the same GitHub account, but they take different code paths. The first is for "I want Copilot CLI as a Claude replacement"; the second is for "I want a VP inside Yeaft Code Agent to use Copilot-provided models".

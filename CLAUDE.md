@@ -1,6 +1,6 @@
-# Claude Web Chat (Yeaft)
+# Yeaft Web Code Agent
 
-一个 Web 端的 AI 聊天应用。产品名是 **Yeaft**。当前对外提供两类模式：**Claude Chat**（基于 Claude CLI 的 1:1 对话，旧模式）、**Crew**（多 Agent 团队协作）；以及 Yeaft 自有引擎下的 **Session**。
+一个 Web 端多 provider 代码 Agent 平台。对外产品名是 **Yeaft Web Code Agent**（简称 **Yeaft**）：同一套 Web UI 可以运行 Claude Code CLI、GitHub Copilot CLI，也可以运行 Yeaft 原生 Code Agent 引擎。当前重点是 Yeaft 原生引擎下的 **Session**：1..N 个 VP（Virtual Person）协作，支持持久记忆、工具调用和多 provider LLM 路由。
 
 **Yeaft 只有 Session 一种编排单元** — 不再有 "chat mode" / "group mode" 的划分。一个 Session 默认 1 个 VP（就是 1:1 对话），可以加更多 VP 实现多人协作；区别只是 VP 数量，不是 mode。
 
@@ -40,14 +40,14 @@ test/            — Vitest 测试
 - 角色间通过 `---ROUTE---` 协议路由消息
 - 通过 `.crew/context/features/` 和 `.crew/context/kanban.md` 跟踪 feature
 
-### Yeaft Session
-- **唯一编排单元** — Yeaft 引擎里所有对话都是 Session；没有 "chat mode" / "group mode" 之分
-- **1..N 个 VP** — 一个 Session 包含 1 到 N 个 VP（Virtual Person，可配置人格 / 模型 / 工具）。默认 1 个 VP（1:1 对话），加更多 VP 就变成多人协作；同一个 user turn 可以并行 fan-out 到选中的 VP
+### Yeaft Code Agent / Session
+- **唯一编排单元** — Yeaft 原生 Code Agent 里所有对话都是 Session；没有 "chat mode" / "group mode" 之分
+- **1..N 个 VP** — 一个 Session 包含 1 到 N 个 VP（Virtual Person，可配置人格 / 模型 / 工具 / 记忆）。默认 1 个 VP（专注代码 Agent），加更多 VP 就变成多人协作；同一个 user turn 可以并行 fan-out 到选中的 VP
 - **自有引擎** — 不依赖 Claude CLI，自己跑 query loop（`agent/yeaft/engine.js`）
 - **记忆系统** — H2-AMS 持久化记忆，支持 scope 级 recall、consolidation、dream 维护
-- **多 provider LLM** — 通过 `AdapterRouter` 路由到不同 provider，支持 per-model protocol
-- **工具系统** — 40+ 个内置工具，按 mode 过滤
-- **多 Agent 编排** — VP 可派生子 Agent 并行执行任务
+- **多 provider LLM** — 通过 `AdapterRouter` 路由到 Anthropic、OpenAI Responses、GitHub Copilot 动态凭证、Azure/OpenAI-compatible gateway 或本地 proxy，支持 per-model protocol
+- **代码 Agent 工具系统** — 30+ 个内置工具，覆盖文件/patch、shell、git worktree、Web、notebook、计划和子 Agent 编排，按 mode 与 VP 配置过滤
+- **多 Agent 编排** — VP 可派生子 Agent 并行执行任务，也可用 `route_forward` 做 VP→VP 显式 handoff
 
 ## Yeaft 引擎架构（agent/yeaft/）
 
@@ -82,7 +82,7 @@ eval/            — 评估脚本
 7. 遇到 LLMContextError -> 强制 compact -> 重试
 8. 可重试错误且配了 fallbackModel -> 换 model -> 重试
 
-### LLM 层（agent/yeaft/llm/）
+### LLM 层（agent/yeaft/llm/）— Yeaft Code Agent provider 集成
 ```
 adapter.js           — Base LLMAdapter 类 + error 类型 + createLLMAdapter()
 router.js            — AdapterRouter：按 model 路由到 provider，lazy 创建 adapter
@@ -91,11 +91,11 @@ openai-responses.js  — OpenAI Responses API 适配器（/v1/responses）
 models-dev.js        — models.dev 注册表（UI 自动补全用）
 credentials/         — 动态凭证（github-copilot 等）
 ```
-- 配置：`~/.yeaft/config.json` 里的 `providers[]` 数组
-- 每个 provider：`{ name, baseUrl, apiKey?, credentialProvider?, protocol?, models[] }`
+- 配置：`~/.yeaft/config.json` 里的 `providers[]` 数组；Web 设置页和 `yeaft-agent llm` CLI 写的是同一份 agent-local config
+- 每个 provider：`{ name, baseUrl, apiKey?, credentialProvider?, protocol?, models[] }`；`apiKey` 适合静态密钥，`credentialProvider` 适合 GitHub Copilot 这类动态凭证
 - 支持的 Protocol：`"anthropic"` 或 `"openai-responses"`（旧的 chat-completions 已在 Phase 7 移除）
 - Models 项可以是字符串 `"gpt-5"`，也可以是对象 `{ id, protocol? }` 做 per-model 覆盖
-- Protocol 解析顺序：per-model > provider-level > 按 model id 启发式（claude-* → anthropic / gpt-* / o1-4 / chatgpt-* → openai-responses） > 默认 openai-responses
+- Protocol 解析顺序：per-model > provider-level > 按 model id 启发式（claude-* → anthropic / gpt-* / o1-4 / chatgpt-* → openai-responses） > 默认 openai-responses；同一 provider 可同时暴露 Claude 系和 GPT 系 model
 
 ### 记忆系统（agent/yeaft/memory/）— H2-AMS 架构
 
@@ -264,7 +264,7 @@ Web 客户端 -> ws "yeaft_session_send" -> Server -> ws agent
 ```
 
 - `apiKey` 和 `credentialProvider` 二选一：填了 `credentialProvider` 就由 agent 在 request 时动态拿 token（目前支持 `github-copilot`），静态 `apiKey` 路径完全不变。
-- per-model `protocol` 用于同一个 provider 同时跑两种 wire 协议（典型场景：GitHub Copilot 既要 Claude 系也要 GPT 系）。
+- per-model `protocol` 用于同一个 provider 同时跑两种 wire 协议（典型场景：GitHub Copilot 既要 Claude 系也要 GPT 系）。新增 provider 时优先接入 Yeaft LLM adapter 层；只有要新增 1:1 CLI 后端时才实现 `agent/providers/*` 的 ChatProvider。
 
 ## 测试
 

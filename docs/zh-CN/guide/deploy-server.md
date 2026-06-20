@@ -21,7 +21,7 @@ SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USER=your@gmail.com
 SMTP_PASS=your-app-password
-SMTP_FROM=WebChat <noreply@example.com>
+SMTP_FROM=Yeaft Web Code Agent <noreply@example.com>
 
 # 可选：TOTP 双因素认证
 TOTP_ENABLED=true

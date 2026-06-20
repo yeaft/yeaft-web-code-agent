@@ -1,10 +1,10 @@
 # What is Yeaft?
 
-**Yeaft** is a **multi-provider AI collaboration platform** — a web UI on the front, with Claude Code CLI, GitHub Copilot CLI, or Yeaft's own multi-VP engine behind it. One interface, three backends, switch as your task demands.
+**Yeaft Web Code Agent** is a web-based, multi-provider code agent platform. It gives you one browser UI for Claude Code CLI, GitHub Copilot CLI, and Yeaft's native Code Agent engine, while execution stays on your connected Agent machines.
 
 ![Screenshot](/images/hero.jpg)
 
-## Three Backends, Each Has Its Strengths
+## Three Code Agent Paths, Each Has Its Strengths
 
 Yeaft doesn't lock you to a single AI backend. When you start a new session you pick:
 
@@ -12,9 +12,9 @@ Yeaft doesn't lock you to a single AI backend. When you start a new session you 
 | --- | --- | --- |
 | **Claude Code** | 1:1 chat with the full Claude toolset | [Chat Mode](./user/chat-mode.md) |
 | **Copilot** | Same 1:1 shape but via GitHub Copilot CLI (ACP), pick any Claude / GPT model | [Copilot Mode](./user/copilot-mode.md) |
-| **Yeaft Sessions** | Multi-VP group collaboration, parallel fan-out, cross-session persistent memory | [Yeaft Sessions](./user/yeaft-group.md) |
+| **Yeaft Code Agent** | Native multi-provider code agent, 1..N VPs, parallel fan-out, persistent memory, 30+ tools | [Yeaft Code Agent](./user/yeaft-group.md) |
 
-Not sure which? See [Choose a Session Backend](./user/choose-backend.md).
+Not sure which? See [Choose a Code Agent Path](./user/choose-backend.md).
 
 ## Core Capabilities
 
@@ -27,11 +27,12 @@ Not sure which? See [Choose a Session Backend](./user/choose-backend.md).
 
 ![Chat](/images/chat.jpg)
 
-### 👥 Yeaft Sessions
-- Create a group, drop multiple VPs (Virtual Persons, independently configurable persona / model / tools)
+### 👥 Yeaft Code Agent
+- Create a Session with one focused VP or many VPs (Virtual Persons with independent persona / model / tools)
 - `@mention` decides which VPs handle the message — parallel fan-out
-- Cross-session persistent memory (H2-AMS) — VPs remember what you said last time
-- Explicit VP→VP handoff (`route_forward` tool)
+- Cross-session persistent memory (H2-AMS) — VPs remember project decisions and preferences
+- Multi-provider routing across Anthropic, OpenAI Responses, GitHub Copilot dynamic credentials, and compatible gateways
+- Explicit VP→VP handoff (`route_forward` tool) plus sub-agent orchestration
 
 ### 🧠 Expert Panel
 AI expert teams in a side panel that assist your main conversation.
@@ -82,5 +83,5 @@ User activity / agent status / traffic stats.
 ## What's Next
 
 - Never installed → [Getting Started](./getting-started.md)
-- Picking a backend → [Choose a Session Backend](./user/choose-backend.md)
+- Picking a backend → [Choose a Code Agent Path](./user/choose-backend.md)
 - Understanding the architecture → [Architecture Overview](./tech/architecture.md)

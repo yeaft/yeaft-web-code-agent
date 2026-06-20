@@ -42,7 +42,7 @@ Yeaft 的 server / agent / web client 之间通过 **WebSocket** 通信，所有
 | Type | 字段 | 含义 |
 | --- | --- | --- |
 | `send_message` | `conversationId, text, attachments?` | 用户在 Chat 模式发消息 |
-| `yeaft_session_chat` | `groupId, text, mentions?, attachments?` | 在 Yeaft 会话 发消息（可 @mention VP） |
+| `yeaft_session_send` | `sessionId, text, mentions?, attachments?` | 向 Yeaft Code Agent Session 发消息（可 @mention VP） |
 | `cancel_execution` | `conversationId` | 中断当前 turn |
 | `ask_user_answer` | `requestId, answer` | 用户回答 ask-user 提示 |
 | `create_conversation` | `provider, workDir, options?` | 启动新 session |
@@ -147,15 +147,15 @@ Yeaft engine 吐自己的事件（`text_delta` / `thinking_delta` / `tool_call` 
 | tool 结果（registry 执行完） | `{ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id, content }] } }` |
 | `stop { stopReason }` + `usage` | `{ type: 'result', subtype, usage, total_cost_usd }` |
 
-Yeaft 走 `yeaft_output` type（payload 同 claude_output `data`），前端 store 收到后调 `handleYeaftOutput()` → 内部转给 `handleClaudeOutput()`。多套一层 type 是为了按 VP / group 分流。
+Yeaft 走 `yeaft_output` type（payload 同 claude_output `data`），前端 store 收到后调 `handleYeaftOutput()` → 内部转给 `handleClaudeOutput()`。多套一层 type 是为了按 VP / Session 分流。
 
-## yeaft_session_chat（Group Mode 唯一发送通道）
+## yeaft_session_send（Yeaft Code Agent Session 发送通道）
 
 ```js
 {
-  type: 'yeaft_session_chat',
+  type: 'yeaft_session_send',
   conversationId: 'yeaft-virtual-xxx',
-  groupId: 'group-abc',
+  sessionId: 'session-abc',
   text: '@alice 帮我看下 bug',
   mentions: ['alice'],            // 解析后的 @mention VP names
   attachments: [{ name, mime, base64 }],
@@ -163,14 +163,14 @@ Yeaft 走 `yeaft_output` type（payload 同 claude_output `data`），前端 sto
 ```
 
 Agent 收到后：
-1. `message-router.js` 派给 `handleYeaftGroupChat()`
-2. `coordinator.ingest({ groupId, text, mentions, attachments })`
-3. 按 mentions 选出 VP 集合（不写 mentions 默认全员）
+1. `message-router.js` 派给 `handleYeaftSessionSend()`
+2. `coordinator.ingest({ sessionId, text, mentions, attachments })`
+3. 按 mentions 选出 VP 集合（不写 mentions 默认 VP）
 4. `Promise.all(vps.map(runVpTurn))` 并行跑
 5. 每个 VP 的 Engine 事件经 `web-bridge` 翻译成 `yeaft_output` 推回
 6. 前端按 VP id 分流到对应 thread
 
-历史别名：`unify_group_chat` 是 `yeaft_session_chat` 的同义词（早期 wire type），server / agent 都接受两个名字，**不要在新代码里使用 `unify_*`**。
+历史别名：`yeaft_session_chat` 和 `unify_group_chat` 仍为兼容保留，部分旧 payload 仍含 `groupId`。新代码应发送带 `sessionId` 的 `yeaft_session_send`。**不要在新代码里使用 `unify_*` 或新增 `group*` 命名**。
 
 ## ask-user 双向通信
 

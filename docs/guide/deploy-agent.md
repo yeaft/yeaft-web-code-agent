@@ -1,6 +1,6 @@
 # Agent Setup
 
-The Agent is a Node.js process that runs on a machine you control (your laptop, a VPS, a dev container) and connects to the Yeaft server over WebSocket. **One Agent process can handle all three backends** — Claude Code chat, Copilot chat, and Yeaft Sessions — depending on what CLIs are installed locally.
+The Agent is a Node.js process that runs on a machine you control (your laptop, a VPS, a dev container) and connects to the Yeaft server over WebSocket. **One Agent process can handle all three backends** — Claude Code chat, Copilot chat, and Yeaft Code Agent — depending on what CLIs are installed locally.
 
 ## Prerequisites
 
@@ -10,7 +10,7 @@ You need Node.js 22.5+ on the machine. **None of the CLIs below are mandatory** 
 | --- | --- | --- |
 | **Claude Code** chat | [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude` command, authenticated) | `npm install -g @anthropic-ai/claude-code` then `claude login` |
 | **Copilot** chat | [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) (`copilot` command, GitHub auth) | install via `gh extension install github/gh-copilot` or the standalone Copilot CLI, then `copilot auth login` |
-| **Yeaft Sessions** | **None** — engine is bundled in the npm package; you only need `~/.yeaft/config.json` with at least one LLM provider configured | See [Yeaft Engine Config](./yeaft-config.md) |
+| **Yeaft Code Agent** | **None** — engine is bundled in the npm package; you only need `~/.yeaft/config.json` with at least one LLM provider configured | See [Yeaft Engine Config](./yeaft-config.md) |
 
 The Agent capability-detects what's installed at startup and exposes only the backends that actually work — for example, if you don't have the Copilot CLI on this machine, the Copilot option won't show up in the new-session dialog.
 
@@ -69,6 +69,6 @@ After the Agent connects, open the web UI and start a new session:
 
 - **Claude Code** option missing → `claude --version` doesn't work on the agent machine, or the CLI isn't logged in
 - **Copilot** option missing → `copilot --version` doesn't work on the agent machine, or Copilot CLI isn't authenticated
-- **Yeaft Sessions** option always available — the engine is bundled, but you still need `~/.yeaft/config.json` with at least one provider before you can actually run a chat
+- **Yeaft Code Agent** option always available — the engine is bundled, but you still need `~/.yeaft/config.json` with at least one provider before you can actually run a chat
 
 For Yeaft engine setup, jump to [Yeaft Engine Config](./yeaft-config.md).
