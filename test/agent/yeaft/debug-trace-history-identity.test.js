@@ -100,5 +100,14 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
       expect(turn.tools[0].name).toBe(`${expectedPrefix}-tool`);
       expect(turn.tools[0].toolOutput).toBe(`${expectedPrefix} tool output`);
     }
+
+    const index = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, sessionId: 's1', indexOnly: true });
+    for (const indexedTurn of index.turns) {
+      const detail = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, sessionId: 's1', detailTurnId: indexedTurn.turnId });
+      expect(detail.turns).toHaveLength(1);
+      expect(detail.turns[0].turnId).toBe(indexedTurn.turnId);
+      expect(detail.turns[0].userPrompt).toBe(indexedTurn.userPrompt);
+      expect(detail.loops).toHaveLength(1);
+    }
   });
 });

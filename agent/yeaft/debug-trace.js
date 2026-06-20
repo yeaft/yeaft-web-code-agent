@@ -417,8 +417,10 @@ export class DebugTrace {
    *
    * Default mode returns recent loop details for backward compatibility.
    * `indexOnly` returns all matching request summaries without loop payloads
-   * so the panel can list every past request cheaply. `detailTurnId` returns
-   * the full loop/tool payload for one request on demand.
+   * so the panel can list every past request cheaply. `limit` is intentionally
+   * ignored in index-only mode; the returned `limit` only reports the requested
+   * retention window used by older/detail paths. `detailTurnId` returns the
+   * full loop/tool payload for one request on demand.
    *
    * @param {{ limit?: number, dreamLimit?: number, sessionId?: string|null, threadId?: string|null, indexOnly?: boolean, detailTurnId?: string|null }} [opts]
    * @returns {{ loops: object[], turns: object[], dreamEvents: object[], hasMore?: boolean, indexOnly?: boolean, detailTurnId?: string|null }}
@@ -497,8 +499,14 @@ export class DebugTrace {
       }
       return duplicateLoopTraceIds;
     };
-    const summarizeRows = (rows, duplicateLoopTraceIds = duplicateLoopTraceIdsForRows(rows)) => {
+    const detailRequestedByRowId = (rows) => {
+      if (!requestedDetailTurnId || rows.length !== 1) return false;
+      const row = rows[0];
+      return row?.id === requestedDetailTurnId && row?.trace_id !== requestedDetailTurnId;
+    };
+    const summarizeRows = (rows, duplicateLoopTraceIds = duplicateLoopTraceIdsForRows(rows), forceRowId = false) => {
       const turnKeyForRow = (r) => {
+        if (forceRowId) return r.id || r.trace_id;
         const baseTurnId = r.trace_id || r.id;
         return duplicateLoopTraceIds.has(baseTurnId) ? (r.id || baseTurnId) : baseTurnId;
       };
@@ -541,15 +549,17 @@ export class DebugTrace {
     };
     const expandRows = (rows) => {
       const duplicateLoopTraceIds = duplicateLoopTraceIdsForRows(rows);
+      const forceRowId = detailRequestedByRowId(rows);
       const turnKeyForRow = (r) => {
+        if (forceRowId) return r.id || r.trace_id;
         const baseTurnId = r.trace_id || r.id;
         return duplicateLoopTraceIds.has(baseTurnId) ? (r.id || baseTurnId) : baseTurnId;
       };
       const loopInstanceIdForRow = (r) => {
         const baseTurnId = r.trace_id || r.id;
-        return duplicateLoopTraceIds.has(baseTurnId) ? (r.id || `${baseTurnId}#${r.turn_number || 0}`) : null;
+        return forceRowId || duplicateLoopTraceIds.has(baseTurnId) ? (r.id || `${baseTurnId}#${r.turn_number || 0}`) : null;
       };
-      const turnsById = new Map(summarizeRows(rows, duplicateLoopTraceIds).map((t) => [t.turnId, { ...t, detailsLoaded: true }]));
+      const turnsById = new Map(summarizeRows(rows, duplicateLoopTraceIds, forceRowId).map((t) => [t.turnId, { ...t, detailsLoaded: true }]));
       const loops = rows.map((r) => {
         const parsedMessages = parseJsonSafe(r.messages_json) || [];
         const parsedUsage = parseJsonSafe(r.usage_json);
