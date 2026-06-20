@@ -343,6 +343,52 @@ describe('ConversationStore', () => {
       expect(page.messages.map(m => m.content)).toEqual(['target response']);
     });
 
+    it('loadVisibleBySession returns a recent turn window with multi-VP boundary intact', () => {
+      store.appendBatch([
+        { role: 'user', content: 'old q', sessionId: 'grp_a' },
+        { role: 'assistant', content: 'old a', sessionId: 'grp_a' },
+        { role: 'user', content: 'noise', sessionId: 'grp_b' },
+        { role: 'user', content: '@vp-linus shared q', sessionId: 'grp_a' },
+        { role: 'user', content: '@vp-martin shared q', sessionId: 'grp_a' },
+        { role: 'assistant', content: 'linus a', sessionId: 'grp_a', speakerVpId: 'vp-linus' },
+        { role: 'assistant', content: 'martin a', sessionId: 'grp_a', speakerVpId: 'vp-martin' },
+        { role: 'user', content: 'new q', sessionId: 'grp_a' },
+        { role: 'assistant', content: 'new a', sessionId: 'grp_a' },
+      ]);
+
+      const page = store.loadVisibleBySession('grp_a', null, 2);
+      expect(page.messages.map(m => m.content)).toEqual([
+        '@vp-linus shared q',
+        '@vp-martin shared q',
+        'linus a',
+        'martin a',
+        'new q',
+        'new a',
+      ]);
+      expect(page.hasMore).toBe(true);
+      expect(page.oldestSeq).toBe(Number(page.messages[0].id.replace(/^m/, '')));
+
+      const older = store.loadVisibleBySession('grp_a', page.oldestSeq, 1);
+      expect(older.messages.map(m => m.content)).toEqual(['old q', 'old a']);
+      expect(older.hasMore).toBe(false);
+    });
+
+    it('loadVisibleBySession keeps interleaved multi-VP rows for the boundary turn', () => {
+      store.append({ role: 'user', content: '@vp-a one', sessionId: 'grp_a' });
+      store.append({ role: 'assistant', content: 'a1', sessionId: 'grp_a', speakerVpId: 'a' });
+      store.append({ role: 'user', content: '@vp-b one', sessionId: 'grp_a' });
+      store.append({ role: 'assistant', content: 'b1', sessionId: 'grp_a', speakerVpId: 'b' });
+
+      const page = store.loadVisibleBySession('grp_a', null, 1);
+      expect(page.messages.map(m => [m.role, m.content, m.speakerVpId || ''])).toEqual([
+        ['user', '@vp-a one', ''],
+        ['assistant', 'a1', 'a'],
+        ['user', '@vp-b one', ''],
+        ['assistant', 'b1', 'b'],
+      ]);
+      expect(page.hasMore).toBe(false);
+    });
+
     it('returns [] for empty/null sessionId without throwing', () => {
       store.append({ role: 'user', content: 'X', sessionId: 'grp_a' });
       expect(store.loadRecentBySession(null, 10)).toEqual([]);
