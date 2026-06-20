@@ -704,7 +704,7 @@ function projectPersistedToHistoryEntry(m) {
   if (m.ts) entry.ts = m.ts;
   else if (m.time) entry.ts = m.time;
   if (Array.isArray(m.attachments) && m.attachments.length > 0) entry.attachments = m.attachments;
-  if ((entry.role === 'user' || entry.role === 'assistant') && !entry.content && !entry.attachments && !entry.toolCalls) return null;
+  if ((entry.role === 'user' || entry.role === 'assistant') && !entry.content && !entry.attachments && !entry.toolCalls && !entry.toolSummaryCount) return null;
   return entry;
 }
 

@@ -45,7 +45,7 @@ describe('Yeaft load-history first paint', () => {
         { role: 'user', content: 'old q', sessionId: 'session-fast' },
         { role: 'assistant', content: 'old a', sessionId: 'session-fast', speakerVpId: 'vp-linus' },
         { role: 'user', content: 'new q', sessionId: 'session-fast' },
-        { role: 'assistant', content: 'new a', sessionId: 'session-fast', speakerVpId: 'vp-linus', toolCalls: [{ id: 'tool-1', name: 'Bash', input: { command: 'echo ok' } }] },
+        { role: 'assistant', content: '', sessionId: 'session-fast', speakerVpId: 'vp-linus', toolCalls: [{ id: 'tool-1', name: 'Bash', input: { command: 'echo ok' } }] },
       ]);
 
       const pending = handleYeaftLoadHistory({ sessionId: 'session-fast', limit: 1 });
@@ -60,7 +60,7 @@ describe('Yeaft load-history first paint', () => {
         hasMore: true,
         messages: [
           { role: 'user', content: 'new q', sessionId: 'session-fast' },
-          { role: 'assistant', content: 'new a', sessionId: 'session-fast', speakerVpId: 'vp-linus', toolSummaryCount: 1 },
+          { role: 'assistant', content: '', sessionId: 'session-fast', speakerVpId: 'vp-linus', toolSummaryCount: 1 },
         ],
       });
       const historyDone = sent.find(m => m.event?.type === 'history_loaded');

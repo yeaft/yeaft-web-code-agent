@@ -307,7 +307,7 @@ describe('handleYeaftHistoryChunk', () => {
     expect(store.yeaftLoadingMoreHistory).toBe(false);
   });
 
-  it('synthesizes tool-summary rows for assistant history with omitted tool calls', () => {
+  it('synthesizes only a tool-summary row for tool-only assistant history', () => {
     const store = mkStore({
       yeaftActiveSessionFilter: 'g1',
       messagesMap: { 'yeaft-1': [] },
@@ -320,7 +320,7 @@ describe('handleYeaftHistoryChunk', () => {
       messages: [{
         id: 'm0200',
         role: 'assistant',
-        content: 'used tools',
+        content: '',
         sessionId: 'g1',
         speakerVpId: 'vp-linus',
         toolSummaryCount: 3,
@@ -332,7 +332,6 @@ describe('handleYeaftHistoryChunk', () => {
     });
 
     expect(store.messagesMap['yeaft-1']).toEqual([
-      expect.objectContaining({ id: 'm0200', type: 'assistant', content: 'used tools', speakerVpId: 'vp-linus' }),
       expect.objectContaining({ id: 'm0200:tool-summary', type: 'tool-summary', count: 3, omittedCount: 3, source: 'history', speakerVpId: 'vp-linus' }),
     ]);
     expect(store.yeaftSessionHistoryState.g1).toEqual(expect.objectContaining({ count: 1 }));

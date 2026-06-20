@@ -561,17 +561,20 @@ export function handleYeaftHistoryChunk(store, msg) {
       const speakerVpId = resolveHistorySpeakerVpId(m, rowSessionId);
       const timestamp = normalizeHistoryTimestamp(m);
       const turnId = m.turnId || messageId;
-      formatted.push({
-        ...(stableId ? { id: stableId, messageId: stableId } : {}),
-        type: 'assistant',
-        content: m.content,
-        timestamp,
-        sessionId: rowSessionId,
-        turnId,
-        ...(speakerVpId ? { vpId: speakerVpId, speakerVpId } : {}),
-        isStreaming: false,
-        isHistory: true,
-      });
+      const assistantContent = typeof m.content === 'string' ? m.content : (m.content || '');
+      if (typeof assistantContent !== 'string' || assistantContent.trim()) {
+        formatted.push({
+          ...(stableId ? { id: stableId, messageId: stableId } : {}),
+          type: 'assistant',
+          content: assistantContent,
+          timestamp,
+          sessionId: rowSessionId,
+          turnId,
+          ...(speakerVpId ? { vpId: speakerVpId, speakerVpId } : {}),
+          isStreaming: false,
+          isHistory: true,
+        });
+      }
       const toolSummaryCount = Number(m.toolSummaryCount || m.toolCalls?.length || 0) || 0;
       if (toolSummaryCount > 0) {
         formatted.push({
