@@ -44,7 +44,7 @@ describe('Yeaft conversation header actions', () => {
   });
 
   it('keeps the four session controls owned by the conversation header on desktop', () => {
-    expect(pageSource).toContain('<YeaftSessionActions\n            class="yeaft-topbar-right"');
+    expect(pageSource).toContain('<YeaftSessionActions\n            v-if="!showOnboardingGuide"\n            class="yeaft-topbar-right"');
     expect(pageSource).not.toContain('v-if="showHeaderSessionActions"');
     expect(pageSource).not.toContain('showHeaderSessionActions');
     expect(pageSource).not.toContain('<template #actions>');
@@ -108,7 +108,7 @@ describe('Yeaft conversation header actions', () => {
 describe('conversation header titles', () => {
   it('renders a readable Yeaft session title in the header with id/path fallback hidden from visible text', () => {
     expect(pageSource).toContain('class="yeaft-topbar-title-group"');
-    expect(pageSource).toContain('{{ topbarSessionTitle || $t(\'yeaft.session.create.untitled\') }}');
+    expect(pageSource).toContain("showOnboardingGuide ? $t('yeaft.onboarding.topbarTitle') : (topbarSessionTitle || $t('yeaft.session.create.untitled'))");
     expect(pageSource).toContain('if (id && value === id) continue;');
     expect(pageSource).toContain('/^(sessions?|groups?)\\//i.test(value)');
     expect(pageSource).toContain('if (g.workDir && value === g.workDir) continue;');

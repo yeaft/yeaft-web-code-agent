@@ -9,6 +9,7 @@ export default {
   'common.cancel': 'Cancel',
   'common.delete': 'Delete',
   'common.copy': 'Copy',
+  'common.copied': 'Copied',
   'common.close': 'Close',
   'common.refresh': 'Refresh',
   'common.open': 'Open',
@@ -589,9 +590,6 @@ export default {
   // Settings - Security
   'settings.security.agentKey': 'Agent Secret',
   'settings.security.agentKeyDesc': 'Shared secret for Agent connection authentication',
-  'settings.security.agentCmdInstall': 'Install Agent',
-  'settings.security.agentCmdLlm': 'Connect to LLM',
-  'settings.security.agentCmdLlmDesc': 'Connect the Yeaft Agent to GitHub Copilot. Run yeaft-agent llm list-models github-copilot to see all available models.',
   'settings.security.none': 'None',
   'settings.security.show': 'Show',
   'settings.security.hide': 'Hide',
@@ -688,6 +686,21 @@ export default {
   'yeaft.session.create.creating': 'Creating…',
   'yeaft.session.create.submit': 'Create',
   'yeaft.session.empty': 'No sessions yet. Click + to create one.',
+  'yeaft.onboarding.ariaLabel': 'Yeaft getting started guide',
+  'yeaft.onboarding.topbarTitle': 'Get started with Yeaft',
+  'yeaft.onboarding.eyebrow': 'Yeaft setup guide',
+  'yeaft.onboarding.title': 'Connect an Agent before chatting',
+  'yeaft.onboarding.subtitle': 'There is no Yeaft Session to chat in yet. Install yeaft-agent on your machine, configure GitHub Copilot or another LLM API, then create a Session.',
+  'yeaft.onboarding.createSession': 'Create or restore Session',
+  'yeaft.onboarding.configureLlm': 'Open LLM settings',
+  'yeaft.onboarding.installTitle': 'Install yeaft-agent',
+  'yeaft.onboarding.installDesc': 'Install the Agent on the laptop, VPS, or dev container that should run tools and call models. The web app is only the interface.',
+  'yeaft.onboarding.connectTitle': 'Connect to this web service',
+  'yeaft.onboarding.connectDesc': 'Start or install the service with the server URL and agent secret from your administrator. Once connected, the sidebar will show the online Agent.',
+  'yeaft.onboarding.llmTitle': 'Configure an LLM provider',
+  'yeaft.onboarding.llmDesc': 'GitHub Copilot is the recommended path. You can also connect OpenAI, Anthropic, or any OpenAI-compatible API. The config is saved to ~/.yeaft/config.json on the Agent machine.',
+  'yeaft.onboarding.copilotTitle': 'Recommended: GitHub Copilot',
+  'yeaft.onboarding.apiTitle': 'Other LLM API',
   // fix-session-restore-modal-unify: the standalone SessionRestoreModal
   // is gone — its flow was folded into SessionCreateModal. The 2026-06-09
   // single-list merge also dropped `sessionsLabel` (panel header now reuses
@@ -713,15 +726,9 @@ export default {
   'settings.llm.simpleCopilotDesc': 'Use the local GitHub Copilot device token or gh auth, refresh available models automatically, then choose a model. No API key is written to config.',
   'settings.llm.useGitHubCopilot': 'Use GitHub Copilot',
   'settings.llm.refreshingModels': 'Refreshing models...',
-  'settings.llm.copilotInstructionsTitle': 'Use GitHub as the LLM provider',
-  'settings.llm.copilotInstructionsDesc': 'After GitHub CLI login succeeds, run one command on the machine where the agent is installed. Yeaft will use the GitHub Copilot credential provider; no static token is saved.',
-  'settings.llm.copilotStepLoginTitle': 'Sign in with GitHub CLI',
-  'settings.llm.copilotStepLoginDesc': 'Make sure gh is authenticated in the same user account that runs yeaft-agent.',
-  'settings.llm.copilotStepUseTitle': 'Switch Yeaft to GitHub Copilot',
-  'settings.llm.copilotStepUseDesc': 'This writes the managed GitHub Copilot provider and selects the primary model.',
-  'settings.llm.copilotUseCommand': 'yeaft-agent llm use github-copilot --model gpt-5.5',
-  'settings.llm.copilotStepVerifyTitle': 'Verify the saved provider',
-  'settings.llm.copilotStepVerifyDesc': 'Check that primaryModel points at github-copilot/gpt-5.5 before starting a new turn.',
+  'settings.llm.agentInstallCommands': 'Yeaft Agent install commands',
+  'settings.llm.agentInstallCommand': 'Install Agent',
+  'settings.llm.copilotUseLabel': 'Use Copilot',
   'settings.llm.managedCopilotTitle': 'Managed GitHub Copilot',
   'settings.llm.managedCopilotDesc': 'Base URL, authentication, model catalog, and per-model API protocol are managed automatically. Claude models use Anthropic Messages; GPT/o models use OpenAI Responses.',
   'settings.llm.providersTitle': 'Providers',
@@ -1286,10 +1293,10 @@ export default {
   'yeaft.session.deleteConfirm': 'Delete "{name}"? This permanently removes the session and all its data — this cannot be undone.',
   'yeaft.session.rename': 'Rename',
   // fix-yeaft-session-list-and-menu: sidebar ⋯ menu now mirrors chat
-  // (pin / open settings / remove from current list). Real delete stays in
-  // the settings modal's Delete session page (uses `yeaft.session.delete*` above).
+  // (pin / open settings / remove). Real delete stays in the settings
+  // modal's Delete session page (uses `yeaft.session.delete*` above).
   'yeaft.session.openSettings': 'Settings',
-  'yeaft.session.removeFromList': 'Remove from current list (recover from Create)',
+  'yeaft.session.removeFromList': 'Remove',
   'yeaft.session.manageMembers': 'Manage members',
   'yeaft.session.memberCount.one': '1 member',
   'yeaft.session.memberCount.other': '{count} members',
