@@ -122,14 +122,18 @@ describe('web-bridge — same-turn async task injection', () => {
       ],
     ];
     let streamCallCount = 0;
-    adapter.stream = async function* (_params) {
+    const streamInputs = [];
+    adapter.stream = async function* (params) {
+      streamInputs.push(JSON.parse(JSON.stringify(params.messages || [])));
       const events = responses[streamCallCount++];
       if (!events) throw new Error('adapter exhausted');
       for (const ev of events) yield ev;
     };
 
+    const emittedEvents = [];
     const queryPromise = (async () => {
       for await (const ev of engine.query({ prompt: 'go', messages: [] })) {
+        emittedEvents.push(ev);
         if (ev.type === 'async_task_wait_start') {
           // Fire a TaskManager `completed` event through the bridge
           // sink installed by installYeaftRuntimeBridge. This is the
@@ -162,6 +166,19 @@ describe('web-bridge — same-turn async task injection', () => {
     // a separate driver would have opened a NEW turn — the engine here
     // would have stopped at 2 calls.
     expect(streamCallCount).toBe(3);
+    const updateEvent = emittedEvents.find(ev => ev.type === 'tool_result_update');
+    expect(updateEvent).toMatchObject({
+      taskId: 'task-bridge-1',
+      toolCallId: 'c1',
+    });
+    expect(streamInputs[2]).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: 'tool',
+        toolCallId: 'c1',
+        content: expect.stringContaining('<task-result id="task-bridge-1" kind="shell" status="succeeded">'),
+      }),
+    ]));
+    expect(JSON.stringify(streamInputs[2])).toContain('summary: okay');
     // The bridge should NOT have left an enqueued envelope for the
     // legacy rescue path (we did not let any driver run after query()
     // finished).

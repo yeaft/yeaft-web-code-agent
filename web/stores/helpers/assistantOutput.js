@@ -145,6 +145,7 @@ export function handleAssistantOutputFrame(store, conversationId, data) {
 
         store.addMessageToConversation(conversationId, {
           type: 'tool-use',
+          toolId: block.id || block.tool_use_id || null,
           toolName: block.name,
           toolInput: block.input,
           startTime: Date.now()
@@ -212,11 +213,28 @@ export function handleAssistantOutputFrame(store, conversationId, data) {
           if (runningIdx >= 0) execStatus.toolHistory[runningIdx].status = 'done';
         }
 
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          if (msgs[i].type === 'tool-use' && !msgs[i].hasResult) {
-            msgs[i].hasResult = true;
-            msgs[i].toolResult = result.content || result;
-            break;
+        const resultToolUseId = result.tool_use_id || result.toolUseId || result.tool_call_id || result.toolCallId || null;
+        const resultContent = result.content || result;
+        let matched = false;
+        if (resultToolUseId) {
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            if (msgs[i].type === 'tool-use' && msgs[i].toolId === resultToolUseId) {
+              msgs[i].hasResult = true;
+              msgs[i].toolResult = result.is_update && msgs[i].toolResult
+                ? `${msgs[i].toolResult}\n\n${resultContent}`
+                : resultContent;
+              matched = true;
+              break;
+            }
+          }
+        }
+        if (!matched) {
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            if (msgs[i].type === 'tool-use' && !msgs[i].hasResult) {
+              msgs[i].hasResult = true;
+              msgs[i].toolResult = resultContent;
+              break;
+            }
           }
         }
       }

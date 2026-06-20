@@ -2411,6 +2411,33 @@ function handleEngineEvent(event, hctx) {
       // until the next real event arrives.
       break;
 
+    case 'tool_result_update': {
+      const content = typeof event.content === 'string'
+        ? event.content
+        : JSON.stringify(event.content ?? '');
+      if (hctx.toolResultsAccum && event.toolCallId) {
+        const idx = hctx.toolResultsAccum.findIndex((tr) => tr.toolCallId === event.toolCallId);
+        if (idx >= 0) {
+          const prior = hctx.toolResultsAccum[idx].content || '';
+          hctx.toolResultsAccum[idx] = {
+            ...hctx.toolResultsAccum[idx],
+            content: `${prior}\n\n${content}`,
+          };
+        }
+      }
+      sendSessionOutputFrame({
+        type: 'user',
+        tool_use_result: [{
+          type: 'tool_result',
+          tool_use_id: event.toolCallId,
+          content,
+          is_update: true,
+          task_id: event.taskId || null,
+        }],
+      }, envelope);
+      break;
+    }
+
     case 'turn_start':
     case 'stop':
       // No UI action needed; outer loop sends the final result.

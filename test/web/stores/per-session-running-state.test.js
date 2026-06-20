@@ -147,6 +147,49 @@ describe('per-session running state', () => {
     });
   });
 
+  it('appends async task completion updates to the originating tool result', () => {
+    const store = freshStore();
+    store.yeaftConversationId = 'yeaft-conv';
+    store.currentView = 'yeaft';
+
+    store.handleYeaftOutput({
+      conversationId: 'yeaft-conv',
+      sessionId: 'session-a',
+      vpId: 'vp-a',
+      turnId: 'turn-a',
+      data: {
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', id: 'spawn-1', name: 'SpawnAgent', input: { name: 'worker' } }] },
+      },
+    });
+    store.handleYeaftOutput({
+      conversationId: 'yeaft-conv',
+      sessionId: 'session-a',
+      vpId: 'vp-a',
+      turnId: 'turn-a',
+      data: {
+        type: 'user',
+        tool_use_result: [{ type: 'tool_result', tool_use_id: 'spawn-1', content: 'Started background task task-1.' }],
+      },
+    });
+    store.handleYeaftOutput({
+      conversationId: 'yeaft-conv',
+      sessionId: 'session-a',
+      vpId: 'vp-a',
+      turnId: 'turn-a',
+      data: {
+        type: 'user',
+        tool_use_result: [{ type: 'tool_result', tool_use_id: 'spawn-1', content: '<task-result id="task-1">done</task-result>', is_update: true }],
+      },
+    });
+
+    const tools = store.messagesMap['yeaft-conv'].filter(msg => msg.type === 'tool-use');
+    expect(tools).toHaveLength(1);
+    expect(tools[0]).toMatchObject({ toolId: 'spawn-1', toolName: 'SpawnAgent', hasResult: true });
+    expect(tools[0].toolResult).toContain('Started background task task-1.');
+    expect(tools[0].toolResult).toContain('<task-result id="task-1">done</task-result>');
+  });
+
   it('sorts running tasks before recent terminal task snapshots', () => {
     const tasks = visibleSessionStatusTasks({
       done: { id: 'done', status: 'succeeded', updatedAt: '2026-06-19T10:00:03.000Z' },

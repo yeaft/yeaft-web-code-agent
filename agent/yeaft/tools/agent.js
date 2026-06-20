@@ -433,7 +433,8 @@ use it as the default workflow or call it repeatedly in a loop.`,
           // sub-agent runs in its own engine but reports completion
           // through the same TaskManager event, so the spawning turn
           // stays parked until the sub-agent finishes.
-          try { ctx.registerAsyncTask?.(task.id); } catch { /* coord errors must not block spawn */ }
+          const currentToolCall = typeof ctx.currentToolCall === 'function' ? ctx.currentToolCall() : null;
+          try { ctx.registerAsyncTask?.(task.id, currentToolCall || {}); } catch { /* coord errors must not block spawn */ }
         }
         startSubAgent(agent, deps);
       } catch (err) {
