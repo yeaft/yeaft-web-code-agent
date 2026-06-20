@@ -4,6 +4,7 @@
 
 import { spawn, spawnSync } from 'child_process';
 import { buildShellInvocation, getRuntimePlatformInfo } from '../runtime-platform.js';
+import { wrapInvocationInSystemdUserScope } from '../systemd-scope.js';
 
 export function buildWindowsTaskkillArgs(pid) {
   return ['/pid', String(pid), '/t', '/f'];
@@ -33,12 +34,18 @@ export function killShellProcessTree(pid, runtimePlatform, signal = 'SIGTERM') {
   }
 }
 
-export function startShellProcess({ command, cwd, runtimePlatform, onOutput, onExit, onError }) {
+export function startShellProcess({ command, cwd, runtimePlatform, scopeId = null, onOutput, onExit, onError }) {
   const platform = runtimePlatform || getRuntimePlatformInfo();
-  const invocation = buildShellInvocation(command, { runtimePlatform: platform });
+  const env = { ...process.env, TERM: 'dumb', FORCE_COLOR: '0' };
+  const baseInvocation = buildShellInvocation(command, { runtimePlatform: platform });
+  const invocation = wrapInvocationInSystemdUserScope(baseInvocation, {
+    runtimePlatform: platform,
+    env,
+    scopeId,
+  });
   const proc = spawn(invocation.command, invocation.args, {
     cwd,
-    env: { ...process.env, TERM: 'dumb', FORCE_COLOR: '0' },
+    env,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: !platform.isWindows,
     windowsHide: true,
@@ -57,6 +64,7 @@ export function startShellProcess({ command, cwd, runtimePlatform, onOutput, onE
 
   return {
     pid: proc.pid || null,
+    systemdScope: invocation.systemdScope || null,
     kill(signal = 'SIGTERM') {
       return killShellProcessTree(proc.pid, platform, signal);
     },

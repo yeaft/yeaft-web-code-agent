@@ -3,6 +3,8 @@ import { existsSync, chmodSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 import { createRequire } from 'module';
 import ctx from './context.js';
+import { getRuntimePlatformInfo } from './yeaft/runtime-platform.js';
+import { wrapInvocationInSystemdUserScope } from './yeaft/systemd-scope.js';
 
 // Package name of the PTY backend. We use the Homebridge prebuilt fork
 // because upstream node-pty ships no Linux prebuilds and falls back to
@@ -91,12 +93,22 @@ export async function handleTerminalCreate(msg) {
           ? `${process.env.SystemRoot || 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
           : (process.env.COMSPEC || 'cmd.exe')))
       : (process.env.SHELL || 'bash');
-    const ptyProcess = pty.spawn(shell, [], {
+    const terminalEnv = { ...process.env };
+    const terminalInvocation = wrapInvocationInSystemdUserScope(
+      { command: shell, args: [], family: platform() === 'win32' ? 'powershell' : 'posix' },
+      {
+        runtimePlatform: getRuntimePlatformInfo(),
+        env: terminalEnv,
+        scopeId: `terminal-${terminalId}`,
+        scopePrefix: 'yeaft-terminal',
+      },
+    );
+    const ptyProcess = pty.spawn(terminalInvocation.command, terminalInvocation.args || [], {
       name: 'xterm-256color',
       cols: cols || 80,
       rows: rows || 24,
       cwd: workDir,
-      env: process.env
+      env: terminalEnv
     });
 
     // 输出缓冲 - 每 16ms 批量发送

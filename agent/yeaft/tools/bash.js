@@ -13,6 +13,7 @@ import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { buildShellInvocation, getRuntimePlatformInfo } from '../runtime-platform.js';
+import { wrapInvocationInSystemdUserScope } from '../systemd-scope.js';
 
 export { buildShellInvocation };
 
@@ -32,10 +33,16 @@ const MAX_TIMEOUT_MS = 600_000;
 function runCommand(command, { cwd, timeout, signal, runtimePlatform }) {
   return new Promise((resolve) => {
     const platform = runtimePlatform || getRuntimePlatformInfo();
-    const invocation = buildShellInvocation(command, { runtimePlatform: platform });
+    const env = { ...process.env, TERM: 'dumb', FORCE_COLOR: '0' };
+    const baseInvocation = buildShellInvocation(command, { runtimePlatform: platform });
+    const invocation = wrapInvocationInSystemdUserScope(baseInvocation, {
+      runtimePlatform: platform,
+      env,
+      scopeId: `foreground-${Date.now()}-${process.pid}`,
+    });
     const proc = spawn(invocation.command, invocation.args, {
       cwd,
-      env: { ...process.env, TERM: 'dumb', FORCE_COLOR: '0' },
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: !platform.isWindows,
     });
