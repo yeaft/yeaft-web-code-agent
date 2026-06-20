@@ -18,8 +18,8 @@ import { trimDebugRetention } from './helpers/debug-retention.js';
 import {
   getDefaultYeaftVisibleTurns,
   getYeaftWindowLoadStepTurns,
-  hasHiddenYeaftMessageTurns,
-  sliceYeaftMessagesByRecentTurns,
+  hasHiddenScopedYeaftMessageTurns,
+  sliceScopedYeaftMessagesByRecentTurns,
 } from './helpers/yeaft-message-window.js';
 
 const { defineStore } = Pinia;
@@ -653,13 +653,10 @@ export const useChatStore = defineStore('chat', {
       // Falls back to legacy `groupId` so in-flight messages from older
       // builds still match during a deploy window.
       if (state.currentView === 'yeaft') {
-        const scoped = state.yeaftActiveSessionFilter
-          ? raw.filter(m => m && (m.sessionId ?? m.groupId) === state.yeaftActiveSessionFilter)
-          : raw;
         const sessionKey = state.yeaftActiveSessionFilter || '__all__';
         const visibleTurns = state.yeaftMessageWindowState[sessionKey]?.visibleTurns
           || getDefaultYeaftVisibleTurns();
-        return sliceYeaftMessagesByRecentTurns(scoped, visibleTurns);
+        return sliceScopedYeaftMessagesByRecentTurns(raw, state.yeaftActiveSessionFilter || null, visibleTurns);
       }
       return raw;
     },
@@ -671,25 +668,19 @@ export const useChatStore = defineStore('chat', {
     yeaftVisibleMessages(state) {
       const convId = resolveYeaftConversationIdForSession(state);
       const raw = convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
-      const scoped = state.yeaftActiveSessionFilter
-        ? raw.filter(m => m && (m.sessionId ?? m.groupId) === state.yeaftActiveSessionFilter)
-        : raw;
       const sessionKey = state.yeaftActiveSessionFilter || '__all__';
       const visibleTurns = state.yeaftMessageWindowState[sessionKey]?.visibleTurns
         || getDefaultYeaftVisibleTurns();
-      return sliceYeaftMessagesByRecentTurns(scoped, visibleTurns);
+      return sliceScopedYeaftMessagesByRecentTurns(raw, state.yeaftActiveSessionFilter || null, visibleTurns);
     },
     hasHiddenYeaftMessages(state) {
       if (state.currentView !== 'yeaft') return false;
       const convId = resolveYeaftConversationIdForSession(state);
       const raw = convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
-      const scoped = state.yeaftActiveSessionFilter
-        ? raw.filter(m => m && (m.sessionId ?? m.groupId) === state.yeaftActiveSessionFilter)
-        : raw;
       const sessionKey = state.yeaftActiveSessionFilter || '__all__';
       const visibleTurns = state.yeaftMessageWindowState[sessionKey]?.visibleTurns
         || getDefaultYeaftVisibleTurns();
-      return hasHiddenYeaftMessageTurns(scoped, visibleTurns);
+      return hasHiddenScopedYeaftMessageTurns(raw, state.yeaftActiveSessionFilter || null, visibleTurns);
     },
     // task-fix: per-VP typing-indicator getters scoped to the CURRENT
     // conversation. Components read these instead of the underlying
@@ -2147,6 +2138,7 @@ export const useChatStore = defineStore('chat', {
                   loaded: true,
                   loading: false,
                   latestSeq: nextLatest,
+                  syncingAfterSeq: null,
                   count: (prevState.count || 0) + (event.count || 0),
                 }
               : {
@@ -2156,6 +2148,7 @@ export const useChatStore = defineStore('chat', {
                   oldestSeq: (typeof event.oldestSeq === 'number') ? event.oldestSeq : null,
                   count: (typeof event.count === 'number') ? event.count : 0,
                   latestSeq: nextLatest,
+                  syncingAfterSeq: null,
                 };
             this.yeaftSessionHistoryState = {
               ...this.yeaftSessionHistoryState,
@@ -3051,21 +3044,51 @@ export const useChatStore = defineStore('chat', {
           agentId: targetAgentId,
           sessionId: next,
         };
+        const hasLoadedWindow = !!savedState?.loaded;
         if (latestSeq !== null) {
           payload.afterSeq = latestSeq;
         } else {
           payload.limit = YEAFT_RECENT_TURNS;
         }
-        this.yeaftSessionHistoryState = {
-          ...this.yeaftSessionHistoryState,
-          [sessionKey]: {
-            ...(savedState || { hasMore: false, oldestSeq: null, count: 0 }),
-            loaded: false,
-            loading: true,
-            latestSeq,
-          },
-        };
-        this.yeaftLoadingMoreHistory = true;
+        if (hasLoadedWindow && latestSeq === null) {
+          this.yeaftSessionHistoryState = {
+            ...this.yeaftSessionHistoryState,
+            [sessionKey]: {
+              ...(savedState || { hasMore: false, oldestSeq: null, count: 0 }),
+              loaded: true,
+              loading: false,
+              syncingAfterSeq: null,
+            },
+          };
+          this.yeaftLoadingMoreHistory = false;
+          return;
+        }
+        if (hasLoadedWindow) {
+          if (savedState?.syncingAfterSeq === latestSeq) return;
+          this.yeaftSessionHistoryState = {
+            ...this.yeaftSessionHistoryState,
+            [sessionKey]: {
+              ...(savedState || { hasMore: false, oldestSeq: null, count: 0 }),
+              loaded: true,
+              loading: false,
+              syncingAfterSeq: latestSeq,
+              latestSeq,
+            },
+          };
+          this.yeaftLoadingMoreHistory = false;
+        } else {
+          this.yeaftSessionHistoryState = {
+            ...this.yeaftSessionHistoryState,
+            [sessionKey]: {
+              ...(savedState || { hasMore: false, oldestSeq: null, count: 0 }),
+              loaded: false,
+              loading: true,
+              syncingAfterSeq: null,
+              latestSeq,
+            },
+          };
+          this.yeaftLoadingMoreHistory = true;
+        }
         this.sendWsMessage(payload);
       }
     },

@@ -774,16 +774,37 @@ function ensureYeaftConversationId() {
   return yeaftConversationId;
 }
 
-function emitVisibleHistoryReplay({ store, sessionId, limit, beforeSeq = null, mode = 'recent' }) {
-  const visiblePage = sessionId
-    ? loadVisibleGroupHistoryPage(store, sessionId, limit, beforeSeq)
-    : { messages: limit > 0 ? (store.loadRecent?.(limit) || []) : [], oldestSeq: null, hasMore: false };
-  const replayEntries = sessionId
-    ? visiblePage.messages
-    : visiblePage.messages
-      .map(projectPersistedToVisibleHistoryEntry)
-      .filter(Boolean);
+function projectVisibleHistoryChunkMessages(messages = []) {
+  return (messages || [])
+    .map(m => ({
+      ...(m.id ? { id: m.id } : {}),
+      role: m.role,
+      content: m.content,
+      ts: m.ts || m.time || null,
+      sessionId: m.sessionId || null,
+      threadId: m.threadId || m.turnId || 'main',
+      turnId: m.turnId || m.threadId || 'main',
+      ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(m.attachments) } : {}),
+      ...(m.speakerVpId ? { speakerVpId: m.speakerVpId } : {}),
+    }));
+}
 
+function emitHistoryChunk({ sessionId, messages, mode = 'older', oldestSeq = null, hasMore = false, latestSeq = null, afterSeq = null, turns = null }) {
+  sendToServer({
+    type: 'yeaft_history_chunk',
+    conversationId: yeaftConversationId,
+    sessionId,
+    mode,
+    messages: projectVisibleHistoryChunkMessages(messages),
+    oldestSeq,
+    hasMore: !!hasMore,
+    latestSeq,
+    afterSeq,
+    turns,
+  });
+}
+
+function emitLegacyHistoryOutputFrames(replayEntries) {
   for (const entry of replayEntries) {
     if (entry.role === 'user') {
       sendSessionOutputFrame({
@@ -824,6 +845,44 @@ function emitVisibleHistoryReplay({ store, sessionId, limit, beforeSeq = null, m
       sendSessionOutputFrame({ type: 'result', result_text: '' }, envelopeOpts);
     }
   }
+}
+
+function emitVisibleHistoryReplay({ store, sessionId, limit, beforeSeq = null, mode = 'recent' }) {
+  const visiblePage = sessionId
+    ? loadVisibleGroupHistoryPage(store, sessionId, limit, beforeSeq)
+    : { messages: limit > 0 ? (store.loadRecent?.(limit) || []) : [], oldestSeq: null, hasMore: false };
+  const replayEntries = sessionId
+    ? visiblePage.messages
+    : visiblePage.messages
+      .map(projectPersistedToVisibleHistoryEntry)
+      .filter(Boolean);
+
+  if (sessionId) {
+    const latestSeq = replayEntries.length
+      ? parseSeqFromId(replayEntries[replayEntries.length - 1]?.id)
+      : null;
+    emitHistoryChunk({
+      sessionId,
+      messages: replayEntries,
+      mode,
+      oldestSeq: visiblePage.oldestSeq,
+      hasMore: visiblePage.hasMore,
+      latestSeq: Number.isFinite(latestSeq) ? latestSeq : null,
+      turns: limit,
+    });
+    sendSessionEvent({
+      type: 'history_loaded',
+      mode,
+      count: replayEntries.length,
+      sessionId,
+      hasMore: visiblePage.hasMore,
+      oldestSeq: visiblePage.oldestSeq,
+      latestSeq: Number.isFinite(latestSeq) ? latestSeq : null,
+    });
+    return;
+  }
+
+  emitLegacyHistoryOutputFrames(replayEntries);
 
   const latestSeq = replayEntries.length
     ? parseSeqFromId(replayEntries[replayEntries.length - 1]?.id)
@@ -4494,24 +4553,13 @@ export async function handleYeaftLoadHistory(msg) {
       const delta = afterSeq !== null && typeof coldStore.loadAfterSeqByGroup === 'function'
         ? coldStore.loadAfterSeqByGroup(sessionId, afterSeq)
         : { messages: [], latestSeq: null };
-      for (const entry of delta.messages) {
-        if (entry.role === 'user') {
-          sendSessionOutputFrame({
-            type: 'user',
-            message: { content: entry.content, id: entry.id || null },
-            ts: entry.ts || null,
-          }, { sessionId: entry.sessionId || null, threadId: entry.threadId || 'main', turnId: entry.turnId || entry.threadId || 'main' });
-        } else if (entry.role === 'assistant') {
-          const envelopeOpts = { sessionId: entry.sessionId || null, threadId: entry.threadId || 'main', turnId: entry.turnId || entry.threadId || 'main' };
-          if (entry.speakerVpId) envelopeOpts.vpId = entry.speakerVpId;
-          sendSessionOutputFrame({
-            type: 'assistant',
-            message: { id: entry.id || null, content: [{ type: 'text', text: entry.content }] },
-            ts: entry.ts || null,
-          }, envelopeOpts);
-          sendSessionOutputFrame({ type: 'result', result_text: '' }, envelopeOpts);
-        }
-      }
+      emitHistoryChunk({
+        sessionId,
+        messages: delta.messages,
+        mode: 'delta',
+        latestSeq: delta.latestSeq,
+        afterSeq,
+      });
       sendSessionEvent({ type: 'history_loaded', mode: 'delta', count: delta.messages.length, sessionId, latestSeq: delta.latestSeq, afterSeq });
     } else {
       emitVisibleHistoryReplay({ store: coldStore, sessionId, limit, mode: 'recent' });
@@ -4587,32 +4635,13 @@ export async function handleYeaftLoadHistory(msg) {
   }
   if (sessionId && afterSeq !== null && typeof session.conversationStore.loadAfterSeqByGroup === 'function') {
     const delta = session.conversationStore.loadAfterSeqByGroup(sessionId, afterSeq);
-    for (const entry of delta.messages) {
-      if (entry.role === 'user') {
-        sendSessionOutputFrame({
-          type: 'user',
-          message: {
-            content: entry.content,
-            id: entry.id || null,
-            ...(Array.isArray(entry.attachments) && entry.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(entry.attachments) } : {}),
-          },
-          ts: entry.ts || null,
-        }, { sessionId: entry.sessionId || null, threadId: entry.threadId || 'main', turnId: entry.turnId || entry.threadId || 'main' });
-      } else if (entry.role === 'assistant') {
-        const envelopeOpts = {
-          sessionId: entry.sessionId || null,
-          threadId: entry.threadId || 'main',
-          turnId: entry.turnId || entry.threadId || 'main',
-        };
-        if (entry.speakerVpId) envelopeOpts.vpId = entry.speakerVpId;
-        sendSessionOutputFrame({
-          type: 'assistant',
-          message: { id: entry.id || null, content: [{ type: 'text', text: entry.content }] },
-          ts: entry.ts || null,
-        }, envelopeOpts);
-        sendSessionOutputFrame({ type: 'result', result_text: '' }, envelopeOpts);
-      }
-    }
+    emitHistoryChunk({
+      sessionId,
+      messages: delta.messages,
+      mode: 'delta',
+      latestSeq: delta.latestSeq,
+      afterSeq,
+    });
     sendSessionEvent({
       type: 'history_loaded',
       mode: 'delta',
@@ -4642,49 +4671,24 @@ export async function handleYeaftLoadHistory(msg) {
       .map(projectPersistedToVisibleHistoryEntry)
       .filter(Boolean);
 
-  for (const entry of replayEntries) {
-    if (entry.role === 'user') {
-      sendSessionOutputFrame({
-        type: 'user',
-        message: {
-          content: entry.content,
-          id: entry.id || null,
-          ...(Array.isArray(entry.attachments) && entry.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(entry.attachments) } : {}),
-        },
-        ts: entry.ts || null,
-      }, { sessionId: entry.sessionId || null, threadId: entry.threadId || 'main', turnId: entry.turnId || entry.threadId || 'main' });
-    } else if (entry.role === 'assistant') {
-      // speakerVpId rides on the envelope so the frontend can route this
-      // replayed assistant text to the correct VP track. Without it, the
-      // history replay would merge replies from different VPs onto one
-      // anonymous assistant turn.
-      const envelopeOpts = {
-        sessionId: entry.sessionId || null,
-        threadId: entry.threadId || 'main',
-        turnId: entry.turnId || entry.threadId || 'main',
-      };
-      if (entry.speakerVpId) envelopeOpts.vpId = entry.speakerVpId;
-      sendSessionOutputFrame({
-        type: 'assistant',
-        message: { id: entry.id || null, content: [{ type: 'text', text: entry.content }] },
-        ts: entry.ts || null,
-      }, envelopeOpts);
-      if (Array.isArray(entry.toolCalls) && entry.toolCalls.length > 0) {
-        sendSessionOutputFrame({
-          type: 'assistant',
-          message: {
-            content: [{
-              type: 'tool_summary',
-              count: entry.toolCalls.length,
-              omittedCount: entry.toolCalls.length,
-              source: 'history',
-            }],
-          },
-          ts: entry.ts || null,
-        }, envelopeOpts);
-      }
-      sendSessionOutputFrame({ type: 'result', result_text: '' }, envelopeOpts);
-    }
+  let latestSeq = null;
+  if (replayEntries.length > 0 && typeof session.conversationStore.getMessageSeqById === 'function') {
+    const last = replayEntries[replayEntries.length - 1];
+    if (last && last.id) latestSeq = session.conversationStore.getMessageSeqById(last.id);
+  }
+
+  if (sessionId) {
+    emitHistoryChunk({
+      sessionId,
+      messages: replayEntries,
+      mode: 'recent',
+      oldestSeq: visiblePage.oldestSeq,
+      hasMore: visiblePage.hasMore,
+      latestSeq,
+      turns: limit,
+    });
+  } else {
+    emitLegacyHistoryOutputFrames(replayEntries);
   }
 
   // Compute the pagination cursor for the bootstrap load so the frontend
@@ -4706,15 +4710,6 @@ export async function handleYeaftLoadHistory(msg) {
   let hasCompactSummaryFlag = !!compactSummary;
   if (sessionId && typeof session.conversationStore.hasAnyCompactSummaryForSession === 'function') {
     hasCompactSummaryFlag = session.conversationStore.hasAnyCompactSummaryForSession(sessionId);
-  }
-
-  // Latest seq cursor in the recent-mode reply lets the frontend stamp its
-  // delta cursor on first paint, so the next session-switch can ask for
-  // afterSeq instead of a full recent-N replay.
-  let latestSeq = null;
-  if (replayEntries.length > 0 && typeof session.conversationStore.getMessageSeqById === 'function') {
-    const last = replayEntries[replayEntries.length - 1];
-    if (last && last.id) latestSeq = session.conversationStore.getMessageSeqById(last.id);
   }
 
   sendSessionEvent({
@@ -4746,15 +4741,8 @@ export async function handleYeaftLoadHistory(msg) {
  */
 export async function handleYeaftLoadMoreHistory(msg) {
   const sessionId = (msg && typeof msg.sessionId === 'string' && msg.sessionId) || null;
-  const emit = (payload) => sendToServer({
-    type: 'yeaft_history_chunk',
-    conversationId: yeaftConversationId,
-    sessionId,
-    ...payload,
-  });
-
   if (!session || !sessionId) {
-    emit({ messages: [], oldestSeq: null, hasMore: false });
+    emitHistoryChunk({ sessionId, messages: [], mode: 'older', oldestSeq: null, hasMore: false });
     return;
   }
 
@@ -4773,23 +4761,13 @@ export async function handleYeaftLoadMoreHistory(msg) {
   // user / assistant text rows. Internal reflection/system-only rows stay
   // server-side, and stable ids + speaker attribution ride with each row
   // so older-history prepend renders exactly like refresh replay.
-  const projected = (result.messages || [])
-    .map(m => ({
-      ...(m.id ? { id: m.id } : {}),
-      role: m.role,
-      content: m.content,
-      ts: m.ts || m.time || null,
-      sessionId: m.sessionId || null,
-      threadId: m.threadId || m.turnId || 'main',
-      turnId: m.turnId || m.threadId || 'main',
-      ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(m.attachments) } : {}),
-      ...(m.speakerVpId ? { speakerVpId: m.speakerVpId } : {}),
-    }));
-
-  emit({
-    messages: projected,
+  emitHistoryChunk({
+    sessionId,
+    messages: result.messages || [],
+    mode: 'older',
     oldestSeq: result.oldestSeq,
     hasMore: !!result.hasMore,
+    turns,
   });
 }
 

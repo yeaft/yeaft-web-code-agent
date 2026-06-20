@@ -36,8 +36,8 @@ const { handleYeaftHistoryChunk } = await import('../../../web/stores/helpers/ha
 const {
   getDefaultYeaftVisibleTurns,
   getYeaftWindowLoadStepTurns,
-  hasHiddenYeaftMessageTurns,
-  sliceYeaftMessagesByRecentTurns,
+  hasHiddenScopedYeaftMessageTurns,
+  sliceScopedYeaftMessagesByRecentTurns,
 } = await import('../../../web/stores/helpers/yeaft-message-window.js');
 
 // Mirror production's `resolveAgentIdForSession`: prefer the session row's
@@ -132,18 +132,19 @@ function visibleMessages(state) {
     : (state.activeConversations?.[0] || null);
   const raw = convId ? (state.messagesMap[convId] || []) : [];
   if (state.currentView !== 'yeaft') return raw;
-  const scoped = scopedYeaftMessages(state);
   const sessionKey = state.yeaftActiveSessionFilter || '__all__';
   const visibleTurns = state.yeaftMessageWindowState[sessionKey]?.visibleTurns
     || getDefaultYeaftVisibleTurns();
-  return sliceYeaftMessagesByRecentTurns(scoped, visibleTurns);
+  return sliceScopedYeaftMessagesByRecentTurns(raw, state.yeaftActiveSessionFilter || null, visibleTurns);
 }
 
 function hasHiddenYeaftMessages(state) {
+  const convId = state.yeaftConversationId || null;
+  const raw = convId ? (state.messagesMap[convId] || []) : [];
   const sessionKey = state.yeaftActiveSessionFilter || '__all__';
   const visibleTurns = state.yeaftMessageWindowState[sessionKey]?.visibleTurns
     || getDefaultYeaftVisibleTurns();
-  return hasHiddenYeaftMessageTurns(scopedYeaftMessages(state), visibleTurns);
+  return hasHiddenScopedYeaftMessageTurns(raw, state.yeaftActiveSessionFilter || null, visibleTurns);
 }
 
 function pruneYeaftMessageWindow(sessionId = null) {
@@ -176,20 +177,29 @@ function setActiveSessionFilter(sessionId) {
   this.yeaftOldestLoadedSeq = (typeof savedState?.oldestSeq === 'number') ? savedState.oldestSeq : null;
   pruneYeaftMessageWindow.call(this, next);
 
-  const needsHydrate = !savedState?.loaded && !savedState?.loading;
   const targetAgentId = next ? resolveAgentIdForSession(this, next) : this.currentAgent;
-  if (targetAgentId && next && needsHydrate) {
-    this.yeaftSessionHistoryState = {
-      ...this.yeaftSessionHistoryState,
-      [sessionKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
-    };
-    this.yeaftLoadingMoreHistory = true;
-    this.sendWsMessage({
-      type: 'yeaft_load_history',
-      agentId: targetAgentId,
-      limit: 50,
-      sessionId: next,
-    });
+  if (targetAgentId && next && !savedState?.loading) {
+    const latestSeq = Number.isFinite(savedState?.latestSeq) ? savedState.latestSeq : null;
+    if (savedState?.loaded && latestSeq === null) return;
+    const payload = { type: 'yeaft_load_history', agentId: targetAgentId, sessionId: next };
+    if (latestSeq !== null) payload.afterSeq = latestSeq;
+    else payload.limit = 50;
+
+    if (savedState?.loaded) {
+      if (savedState?.syncingAfterSeq === latestSeq) return;
+      this.yeaftSessionHistoryState = {
+        ...this.yeaftSessionHistoryState,
+        [sessionKey]: { ...savedState, loaded: true, loading: false, syncingAfterSeq: latestSeq, latestSeq },
+      };
+      this.yeaftLoadingMoreHistory = false;
+    } else {
+      this.yeaftSessionHistoryState = {
+        ...this.yeaftSessionHistoryState,
+        [sessionKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0, syncingAfterSeq: null, latestSeq },
+      };
+      this.yeaftLoadingMoreHistory = true;
+    }
+    this.sendWsMessage(payload);
   }
 }
 
@@ -253,6 +263,75 @@ describe('handleYeaftHistoryChunk', () => {
     expect(arr[0].type).toBe('user');
     expect(arr[1].type).toBe('assistant');
     expect(arr[0].sessionId).toBe('g1');
+  });
+
+  it('replaces only the active session rows for batched recent bootstrap chunks', () => {
+    const store = mkStore({
+      yeaftActiveSessionFilter: 'g1',
+      messagesMap: {
+        'yeaft-1': [
+          { id: 'stale-g1', type: 'user', content: 'stale', sessionId: 'g1' },
+          { id: 'keep-g2', type: 'user', content: 'other session', sessionId: 'g2' },
+        ],
+      },
+    });
+
+    handleYeaftHistoryChunk(store, {
+      conversationId: 'yeaft-1',
+      sessionId: 'g1',
+      mode: 'recent',
+      messages: [
+        { id: 'm0100', role: 'user', content: 'fresh-q', sessionId: 'g1', ts: '2026-05-01T10:00:00.000Z' },
+        { id: 'm0101', role: 'assistant', content: 'fresh-a', sessionId: 'g1', ts: '2026-05-01T10:00:01.000Z' },
+      ],
+      oldestSeq: 100,
+      latestSeq: 101,
+      hasMore: true,
+    });
+
+    expect(store.messagesMap['yeaft-1'].map(m => m.id)).toEqual(['keep-g2', 'm0100', 'm0101']);
+    expect(store.yeaftSessionHistoryState.g1).toEqual(expect.objectContaining({
+      loaded: true,
+      loading: false,
+      hasMore: true,
+      oldestSeq: 100,
+      latestSeq: 101,
+      count: 2,
+    }));
+    expect(store.yeaftLoadingMoreHistory).toBe(false);
+  });
+
+  it('appends delta chunks without clobbering older-history cursors', () => {
+    const store = mkStore({
+      yeaftActiveSessionFilter: 'g1',
+      yeaftHasMoreHistory: true,
+      yeaftOldestLoadedSeq: 50,
+      yeaftSessionHistoryState: {
+        g1: { loaded: true, loading: false, hasMore: true, oldestSeq: 50, latestSeq: 100, count: 2 },
+      },
+      messagesMap: { 'yeaft-1': [{ id: 'm0100', type: 'user', content: 'cached', sessionId: 'g1', timestamp: 100 }] },
+    });
+
+    handleYeaftHistoryChunk(store, {
+      conversationId: 'yeaft-1',
+      sessionId: 'g1',
+      mode: 'delta',
+      messages: [{ id: 'm0101', role: 'assistant', content: 'new', sessionId: 'g1', ts: 101 }],
+      latestSeq: 101,
+      hasMore: false,
+      oldestSeq: null,
+    });
+
+    expect(store.messagesMap['yeaft-1'].map(m => m.id)).toEqual(['m0100', 'm0101']);
+    expect(store.yeaftSessionHistoryState.g1).toEqual(expect.objectContaining({
+      hasMore: true,
+      oldestSeq: 50,
+      latestSeq: 101,
+      count: 3,
+    }));
+    expect(store.yeaftHasMoreHistory).toBe(true);
+    expect(store.yeaftOldestLoadedSeq).toBe(50);
+    expect(store.yeaftLoadingMoreHistory).toBe(false);
   });
 
   it('accepts legacy groupId field on a chunk for deploy-window compat', () => {
@@ -769,6 +848,27 @@ describe('setActiveSessionFilter — session-scoped conversation cache', () => {
     expect(store.messagesMap['yeaft-1'].map(m => m.id)).toEqual(['a1']);
     expect(store._sent).toEqual([{ type: 'yeaft_load_history', agentId: 'agent-1', limit: 50, sessionId: 'group-C' }]);
     expect(store.yeaftSessionHistoryState['group-C']).toEqual(expect.objectContaining({ loading: true, loaded: false }));
+  });
+
+  it('switches to a cached session instantly and requests only a silent delta when latestSeq exists', () => {
+    const store = mkStore({
+      yeaftActiveSessionFilter: 'group-A',
+      yeaftSessionHistoryState: {
+        'group-B': { loaded: true, loading: false, hasMore: true, oldestSeq: 10, latestSeq: 42, count: 2 },
+      },
+      messagesMap: { 'yeaft-1': [{ id: 'b1', type: 'user', content: 'B cached', sessionId: 'group-B' }] },
+    });
+
+    setActiveSessionFilter.call(store, 'group-B');
+
+    expect(visibleMessages(store).map(m => m.id)).toEqual(['b1']);
+    expect(store.yeaftLoadingMoreHistory).toBe(false);
+    expect(store.yeaftSessionHistoryState['group-B']).toEqual(expect.objectContaining({
+      loaded: true,
+      loading: false,
+      syncingAfterSeq: 42,
+    }));
+    expect(store._sent).toEqual([{ type: 'yeaft_load_history', agentId: 'agent-1', sessionId: 'group-B', afterSeq: 42 }]);
   });
 
   it('keeps selected session and pending history state isolated across sessions', () => {

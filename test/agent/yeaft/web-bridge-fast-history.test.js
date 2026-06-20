@@ -52,6 +52,17 @@ describe('Yeaft load-history first paint', () => {
       await flushMicrotasks();
 
       expect(loadSession).toHaveBeenCalledTimes(1);
+      const chunk = sent.find(m => m.type === 'yeaft_history_chunk');
+      expect(chunk).toMatchObject({
+        type: 'yeaft_history_chunk',
+        sessionId: 'session-fast',
+        mode: 'recent',
+        hasMore: true,
+        messages: [
+          { role: 'user', content: 'new q', sessionId: 'session-fast' },
+          { role: 'assistant', content: 'new a', sessionId: 'session-fast', speakerVpId: 'vp-linus' },
+        ],
+      });
       const historyDone = sent.find(m => m.event?.type === 'history_loaded');
       expect(historyDone).toMatchObject({
         type: 'yeaft_output',
@@ -63,11 +74,7 @@ describe('Yeaft load-history first paint', () => {
           hasMore: true,
         },
       });
-      const texts = sent
-        .filter(m => m.type === 'yeaft_output' && m.data)
-        .map(m => m.data?.message?.content?.[0]?.text || m.data?.message?.content)
-        .filter(Boolean);
-      expect(texts).toEqual(['new q', 'new a']);
+      expect(sent.filter(m => m.type === 'yeaft_output' && m.data)).toHaveLength(0);
 
       resolveLoadSession({
         conversationStore: store,
