@@ -27,7 +27,7 @@ export default {
       </button>
       <div class="login-container" :class="{ 'is-narrow': loginMode === 'oauth' && !authStore.qrPanel }">
         <div class="login-brand">
-          <h1>Claude Web Chat</h1>
+          <h1>Yeaft</h1>
           <p class="login-subtitle">{{ $t('login.subtitle') }}</p>
         </div>
 

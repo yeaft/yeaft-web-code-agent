@@ -26,7 +26,7 @@ export default {
   'chat.toolActionsOmitted': '{count} older tool actions omitted',
 
   // ============ Login ============
-  'login.subtitle': 'Remote Claude Code CLI Access',
+  'login.subtitle': 'Yeaft Web Code Agent',
   'login.username': 'Username',
   'login.password': 'Password',
   'login.login': 'Login',
@@ -436,7 +436,7 @@ export default {
   'modal.folderPicker.parentDir': 'Parent Directory',
 
   // ============ Welcome Screen ============
-  'welcome.subtitle': 'Remote Claude Code CLI Access',
+  'welcome.subtitle': 'Web Code Agent for sessions, tools, and VP collaboration',
   'welcome.agentOnline': '{count} Agent(s) online',
   'welcome.noAgents': 'No Agents Online',
   'welcome.noAgentsHint': 'Please start an Agent and connect it to the server',

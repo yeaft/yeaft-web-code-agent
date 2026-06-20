@@ -39,13 +39,15 @@ export default {
       <div v-if="!store.currentConversation" class="welcome-screen">
         <div class="welcome-content">
           <div class="welcome-logo">
-            <svg viewBox="0 0 48 48" width="64" height="64">
-              <rect width="48" height="48" rx="12" fill="#d97706"/>
-              <path d="M12 16l6 6-6 6" stroke="white" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-              <path d="M21 28h15" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+            <svg viewBox="0 0 48 48" width="64" height="64" aria-hidden="true">
+              <rect width="48" height="48" rx="12" fill="var(--accent)"/>
+              <path d="M24 34V19M24 19L15 11M24 19L33 11" stroke="var(--accent-fg)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+              <circle cx="15" cy="11" r="3.5" fill="var(--accent-fg)"/>
+              <circle cx="33" cy="11" r="3.5" fill="var(--accent-fg)"/>
+              <circle cx="24" cy="34" r="3.5" fill="var(--accent-fg)"/>
             </svg>
           </div>
-          <h1 class="welcome-title">Claude Web Chat</h1>
+          <h1 class="welcome-title">Yeaft</h1>
           <p class="welcome-subtitle">{{ $t('welcome.subtitle') }}</p>
 
           <!-- Agent Status -->

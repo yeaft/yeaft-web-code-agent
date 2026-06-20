@@ -192,7 +192,7 @@ export default {
 
     const headerTitle = Vue.computed(() => {
       if (!effectiveConvId.value) {
-        return 'Claude Web Chat';
+        return 'Yeaft';
       }
 
       // Crew conversation — use renamed session name if available
