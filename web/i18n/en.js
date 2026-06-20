@@ -9,6 +9,7 @@ export default {
   'common.cancel': 'Cancel',
   'common.delete': 'Delete',
   'common.copy': 'Copy',
+  'common.copied': 'Copied',
   'common.close': 'Close',
   'common.refresh': 'Refresh',
   'common.open': 'Open',

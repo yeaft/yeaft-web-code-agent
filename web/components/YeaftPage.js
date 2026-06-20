@@ -19,6 +19,7 @@ import {
   DREAM_RELATIVE_TIME_REFRESH_MS,
 } from './dream-ui-constants.js';
 import { buildModelSelectionRows, getDefaultModelEffort, getSelectableModelEfforts, modelOptionMatchesRef, modelOptionRef, resolveSessionModelEffort, resolveSessionModelRef } from '../utils/modelRefs.js';
+import { shouldShowYeaftOnboardingGuide } from '../utils/yeaftOnboarding.js';
 
 function sessionTaskSortTime(task) {
   const raw = task?.updatedAt || task?.endedAt || task?.createdAt;
@@ -209,8 +210,8 @@ export default {
                   <p>{{ $t('yeaft.onboarding.installDesc') }}</p>
                   <div class="yeaft-onboarding-command">
                     <code>{{ installAgentCommand }}</code>
-                    <button type="button" class="yeaft-onboarding-copy" @click="copyOnboardingCommand(installAgentCommand)">
-                      {{ $t('common.copy') }}
+                    <button type="button" class="yeaft-onboarding-copy" @click="copyOnboardingCommand('install', installAgentCommand)">
+                      {{ copiedOnboardingCommand === 'install' ? $t('common.copied') : $t('common.copy') }}
                     </button>
                   </div>
                 </div>
@@ -223,8 +224,8 @@ export default {
                   <p>{{ $t('yeaft.onboarding.connectDesc') }}</p>
                   <div class="yeaft-onboarding-command">
                     <code>{{ connectAgentCommand }}</code>
-                    <button type="button" class="yeaft-onboarding-copy" @click="copyOnboardingCommand(connectAgentCommand)">
-                      {{ $t('common.copy') }}
+                    <button type="button" class="yeaft-onboarding-copy" @click="copyOnboardingCommand('connect', connectAgentCommand)">
+                      {{ copiedOnboardingCommand === 'connect' ? $t('common.copied') : $t('common.copy') }}
                     </button>
                   </div>
                 </div>
@@ -240,8 +241,8 @@ export default {
                       <div class="yeaft-onboarding-provider-title">{{ $t('yeaft.onboarding.copilotTitle') }}</div>
                       <div class="yeaft-onboarding-command">
                         <code>{{ copilotCommand }}</code>
-                        <button type="button" class="yeaft-onboarding-copy" @click="copyOnboardingCommand(copilotCommand)">
-                          {{ $t('common.copy') }}
+                        <button type="button" class="yeaft-onboarding-copy" @click="copyOnboardingCommand('copilot', copilotCommand)">
+                          {{ copiedOnboardingCommand === 'copilot' ? $t('common.copied') : $t('common.copy') }}
                         </button>
                       </div>
                     </div>
@@ -249,8 +250,8 @@ export default {
                       <div class="yeaft-onboarding-provider-title">{{ $t('yeaft.onboarding.apiTitle') }}</div>
                       <div class="yeaft-onboarding-command">
                         <code>{{ apiProviderCommand }}</code>
-                        <button type="button" class="yeaft-onboarding-copy" @click="copyOnboardingCommand(apiProviderCommand)">
-                          {{ $t('common.copy') }}
+                        <button type="button" class="yeaft-onboarding-copy" @click="copyOnboardingCommand('api', apiProviderCommand)">
+                          {{ copiedOnboardingCommand === 'api' ? $t('common.copied') : $t('common.copy') }}
                         </button>
                       </div>
                     </div>
@@ -398,6 +399,8 @@ export default {
     const showSettings = Vue.ref(false);
     const showLlmConfig = Vue.ref(false);
     const sessionCreateOpen = Vue.ref(false);
+    const copiedOnboardingCommand = Vue.ref('');
+    let copiedOnboardingTimer = null;
     const settingsInitialTab = Vue.ref('vp');
     const settingsInitialEditVpId = Vue.ref(null);
     // feat-vp-list-ui-polish: template ref to the embedded ChatInput so we
@@ -943,11 +946,17 @@ export default {
       sessionCreateOpen.value = false;
     };
 
-    const copyOnboardingCommand = async (command) => {
+    const copyOnboardingCommand = async (key, command) => {
       if (!command) return;
       if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) return;
       try {
         await navigator.clipboard.writeText(command);
+        copiedOnboardingCommand.value = key || '';
+        if (copiedOnboardingTimer) clearTimeout(copiedOnboardingTimer);
+        copiedOnboardingTimer = setTimeout(() => {
+          copiedOnboardingCommand.value = '';
+          copiedOnboardingTimer = null;
+        }, 1800);
       } catch (_) {
         // Clipboard is best-effort; the command remains visible for manual copy.
       }
@@ -1010,14 +1019,18 @@ export default {
     });
     const showOnboardingGuide = Vue.computed(() => {
       const gs = sessionsStore();
-      if (!gs) return false;
-      if (gs.isEmpty === true) return true;
-      return !topbarGroup.value && !gs.activeSessionId;
+      return shouldShowYeaftOnboardingGuide({
+        hasYeaftAgent: !!store.yeaftAgentId,
+        sessionsReady: !!(gs && gs.hasLoadedSnapshot),
+        sessionsEmpty: !!(gs && gs.isEmpty),
+        activeSessionId: gs ? gs.activeSessionId : null,
+        topbarSession: topbarGroup.value,
+      });
     });
     const installAgentCommand = 'npm install -g @yeaft/webchat-agent';
     const connectAgentCommand = 'yeaft-agent install --server <your-server-url> --name my-worker --secret <agent-secret>';
-    const copilotCommand = 'gh auth login && yeaft-agent llm use github-copilot --model gpt-5.5';
-    const apiProviderCommand = 'OPENAI_KEY=sk-... yeaft-agent llm use openai-compatible --name openai --base-url https://api.openai.com/v1 --api-key-env OPENAI_KEY --model gpt-5';
+    const copilotCommand = 'gh auth login && yeaft-agent llm list-models github-copilot && yeaft-agent llm use github-copilot --model <model-id>';
+    const apiProviderCommand = 'export OPENAI_KEY=<your-api-key> && yeaft-agent llm use openai-compatible --name openai --base-url https://api.openai.com/v1 --api-key-env OPENAI_KEY --model <model-id>';
     const onInviteOpenLibrary = () => {
       const g = activeGroupForInvite.value;
       if (g) inviteDismissedFor.add(g.id);
@@ -1098,6 +1111,13 @@ export default {
         }
       },
     );
+
+    if (typeof Vue.onBeforeUnmount === 'function') {
+      Vue.onBeforeUnmount(() => {
+        if (copiedOnboardingTimer) clearTimeout(copiedOnboardingTimer);
+        copiedOnboardingTimer = null;
+      });
+    }
 
     const onSettingsSaved = () => {
       showSettings.value = false;
@@ -1252,6 +1272,7 @@ export default {
       openSessionCreate,
       onSessionCreated,
       copyOnboardingCommand,
+      copiedOnboardingCommand,
       onLlmConfigMessage,
       onLlmConfigSaved,
       formatTokens,

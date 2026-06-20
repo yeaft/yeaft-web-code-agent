@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { shouldShowYeaftOnboardingGuide } from '../../web/utils/yeaftOnboarding.js';
 
 function read(path) {
   return readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8');
@@ -33,11 +34,15 @@ describe('Yeaft conversation layout', () => {
     expect(source).toContain("v-if=\"!showSettings && !store.yeaftActiveVpDetailId && showOnboardingGuide\"");
     expect(source).toContain('<ChatInput\n          v-if="!showSettings && !showOnboardingGuide"');
     expect(source).toContain('const showOnboardingGuide = Vue.computed(() => {');
-    expect(source).toContain('if (gs.isEmpty === true) return true;');
+    expect(source).toContain('shouldShowYeaftOnboardingGuide({');
+    expect(source).toContain('sessionsReady: !!(gs && gs.hasLoadedSnapshot)');
     expect(source).toContain('openSessionCreate');
     expect(source).toContain('openLlmConfig');
     expect(source).toContain('npm install -g @yeaft/webchat-agent');
-    expect(source).toContain('yeaft-agent llm use github-copilot');
+    expect(source).toContain('yeaft-agent llm list-models github-copilot');
+    expect(source).toContain('--model <model-id>');
+    expect(source).not.toContain('--model gpt-5.5');
+    expect(source).not.toContain('OPENAI_KEY=sk-...');
 
     expect(css).toContain('.yeaft-onboarding {');
     expect(css).toContain('.yeaft-onboarding-card {');
@@ -47,5 +52,39 @@ describe('Yeaft conversation layout', () => {
 
     expect(en).toContain("'yeaft.onboarding.title': 'Connect an Agent before chatting'");
     expect(zh).toContain("'yeaft.onboarding.title': '先连接 Agent，再开始会话'");
+  });
+
+  it('does not treat an unloaded Session snapshot as an empty Session list', () => {
+    expect(shouldShowYeaftOnboardingGuide({
+      hasYeaftAgent: true,
+      sessionsReady: false,
+      sessionsEmpty: true,
+      activeSessionId: null,
+      topbarSession: null,
+    })).toBe(false);
+
+    expect(shouldShowYeaftOnboardingGuide({
+      hasYeaftAgent: true,
+      sessionsReady: true,
+      sessionsEmpty: true,
+      activeSessionId: null,
+      topbarSession: null,
+    })).toBe(true);
+
+    expect(shouldShowYeaftOnboardingGuide({
+      hasYeaftAgent: true,
+      sessionsReady: true,
+      sessionsEmpty: false,
+      activeSessionId: 'session-1',
+      topbarSession: { id: 'session-1' },
+    })).toBe(false);
+
+    expect(shouldShowYeaftOnboardingGuide({
+      hasYeaftAgent: false,
+      sessionsReady: false,
+      sessionsEmpty: false,
+      activeSessionId: null,
+      topbarSession: null,
+    })).toBe(true);
   });
 });

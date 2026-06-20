@@ -9,6 +9,7 @@ export default {
   'common.cancel': '取消',
   'common.delete': '删除',
   'common.copy': '复制',
+  'common.copied': '已复制',
   'common.close': '关闭',
   'common.refresh': '刷新',
   'common.open': '打开',
