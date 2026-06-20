@@ -50,7 +50,8 @@ describe('terminal output normalization render wiring', () => {
     expect(taskLogBlock).toContain('background: transparent;');
     expect(taskLogBlock).not.toContain('border:');
     expect(yeaftCssSource).toContain('@keyframes yeaft-task-running-pulse');
-    expect(yeaftCssSource).toContain('.yeaft-vp-task-prompt-form');
+    expect(yeaftCssSource).toContain('max-height: min(52vh, 520px);');
+    expect(yeaftCssSource).not.toContain('.yeaft-vp-task-prompt-form');
     expect(variablesCssSource).toContain('.terminal-fg-green { color: var(--terminal-fg-green); }');
     expect(variablesCssSource).toContain('.terminal-bg-cyan { background-color: var(--terminal-bg-cyan); }');
     expect(variablesCssSource).toContain('.terminal-output');
@@ -92,6 +93,12 @@ describe('terminal output normalization render wiring', () => {
     ]);
     expect(createSubAgentTaskDetailLines({ kind: 'shell', log: { preview } }, t)).toEqual([]);
 
+    const longDelta = 'x'.repeat(900);
+    expect(createSubAgentTaskStreamText({
+      kind: 'sub_agent',
+      log: { preview: JSON.stringify({ type: 'text_delta', agentName: 'worker', text: longDelta }) },
+    }, t)).toBe(`worker: ${longDelta}`);
+
     expect(vpTimelinePaneSource).toContain('export function createSubAgentTaskDetailLines');
     expect(vpTimelinePaneSource).toContain('const resultSummary = compactText(task.result?.summary);');
     expect(vpTimelinePaneSource).toContain("case 'sub_agent_spawned':");
@@ -103,10 +110,11 @@ describe('terminal output normalization render wiring', () => {
     expect(vpTimelinePaneSource).toContain("task.status !== 'running'");
     expect(vpTimelinePaneSource).toContain("case 'text_delta':");
     expect(vpTimelinePaneSource).toContain('createSubAgentTaskStreamText');
-    expect(vpTimelinePaneSource).toContain("emit('prompt-sub-agent'");
-    expect(vpTimelinePaneSource).toContain('yeaft-vp-task-prompt-form');
-    expect(vpTimelinePaneSource).toContain('subAgentPromptError(task)');
-    expect(vpTimelinePaneSource).toContain('isSubAgentPromptPending(task)');
+    expect(vpTimelinePaneSource).toContain('const readableText = (value) => {');
+    expect(vpTimelinePaneSource).not.toContain("emit('prompt-sub-agent'");
+    expect(vpTimelinePaneSource).not.toContain('yeaft-vp-task-prompt-form');
+    expect(vpTimelinePaneSource).not.toContain('subAgentPromptError(task)');
+    expect(vpTimelinePaneSource).not.toContain('isSubAgentPromptPending(task)');
     expect(vpTimelinePaneSource).not.toContain('subAgentSaid');
     expect(vpTimelinePaneSource).not.toContain('{{ task.log.preview }}');
   });

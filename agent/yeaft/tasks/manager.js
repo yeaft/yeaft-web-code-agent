@@ -11,6 +11,11 @@ import { startShellProcess } from './shell-runner.js';
 import { getRuntimePlatformInfo } from '../runtime-platform.js';
 
 const LOG_PREVIEW_BYTES = 4096;
+const SUB_AGENT_LOG_PREVIEW_BYTES = 1024 * 1024;
+
+function logPreviewBytesFor(task) {
+  return task?.kind === 'sub_agent' ? SUB_AGENT_LOG_PREVIEW_BYTES : LOG_PREVIEW_BYTES;
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -187,7 +192,7 @@ export class TaskManager {
     const task = this.active.get(key) || this.store.readTask(sessionId, taskId);
     if (!task || isTerminalTaskStatus(task.status)) return publicSnapshot(task);
     const logPath = task.log?.path || this.store.logPath(sessionId, taskId);
-    const tail = this.store.readLogFile(logPath, { tail: true, maxBytes: LOG_PREVIEW_BYTES });
+    const tail = this.store.readLogFile(logPath, { tail: true, maxBytes: logPreviewBytesFor(task) });
     task.status = status || TASK_STATUS.FAILED;
     task.updatedAt = nowIso();
     task.endedAt = nowIso();
@@ -254,7 +259,7 @@ export class TaskManager {
     const task = this.active.get(key) || this.store.readTask(sessionId, taskId);
     if (!task) return null;
     const logPath = task.log?.path || this.store.logPath(sessionId, taskId);
-    const tail = this.store.readLogFile(logPath, { tail: true, maxBytes: LOG_PREVIEW_BYTES });
+    const tail = this.store.readLogFile(logPath, { tail: true, maxBytes: logPreviewBytesFor(task) });
     task.log = { ...(task.log || {}), path: tail.path, bytes: tail.bytes, preview: tail.text };
     task.updatedAt = nowIso();
     this.store.writeTask(task);
