@@ -44,13 +44,14 @@ describe('Yeaft model effort metadata and config', () => {
     expect(getModelEffortOptions('claude-sonnet-4-20250514')).toEqual(['low', 'medium', 'high']);
     expect(getModelEffortOptions('gpt-4o')).toEqual([]);
 
-    // DeepSeek effort is carried only by compatible OpenAI-Responses-style
-    // adapters; the UI/config layer still gates it by effective provider protocol.
+    // DeepSeek exposes low/medium/high effort. OpenAI-compatible providers use
+    // reasoning.effort; Anthropic-compatible providers use adaptive effort.
     expect(getModelEffortOptions('deepseek-reasoner')).toEqual(['low', 'medium', 'high']);
     expect(getModelEffortOptions('deepseek-r1')).toEqual(['low', 'medium', 'high']);
     expect(getModelEffortOptions('my-proxy/deepseek-reasoner')).toEqual(['low', 'medium', 'high']);
     expect(getModelEffortOptions('deepseek-chat')).toEqual(['low', 'medium', 'high']);
     expect(getThinkingCapability('deepseek-reasoner').thinkingProtocol).toBe('openai-reasoning');
+    expect(getThinkingCapability('deepseek-reasoner', { protocol: 'anthropic' }).thinkingProtocol).toBe('anthropic-adaptive');
 
     expect(getThinkingCapability('github-copilot/gpt-5.4').thinkingProtocol).toBe('openai-reasoning');
     expect(getThinkingCapability('github-copilot/gpt-5.5').thinkingProtocol).toBe('openai-reasoning');
@@ -92,6 +93,7 @@ describe('Yeaft model effort metadata and config', () => {
         { name: 'responses', protocol: 'openai-responses', apiKey: 'x', models: ['deepseek-chat'] },
         { name: 'anthropic-row', protocol: 'anthropic', apiKey: 'x', models: ['deepseek-reasoner'] },
         { name: 'custom', protocol: 'openai-responses', apiKey: 'x', models: [{ id: 'my-reasoner', supportsEffort: true, effortOptions: ['low', 'high'] }] },
+        { name: 'deepseek-override', protocol: 'anthropic', apiKey: 'x', models: [{ id: 'deepseek-v4-pro', supportsEffort: true, effortOptions: ['low', 'high'] }] },
       ],
       primaryModel: 'responses/deepseek-chat',
     }));
@@ -102,10 +104,17 @@ describe('Yeaft model effort metadata and config', () => {
         effortOptions: ['low', 'medium', 'high'],
         effortProtocol: 'openai-reasoning',
       });
-      expect(byRef['anthropic-row/deepseek-reasoner']?.effortOptions).toBeUndefined();
+      expect(byRef['anthropic-row/deepseek-reasoner']).toMatchObject({
+        effortOptions: ['low', 'medium', 'high'],
+        effortProtocol: 'anthropic-adaptive',
+      });
       expect(byRef['custom/my-reasoner']).toMatchObject({
         effortOptions: ['low', 'high'],
         effortProtocol: 'openai-reasoning',
+      });
+      expect(byRef['deepseek-override/deepseek-v4-pro']).toMatchObject({
+        effortOptions: ['low', 'high'],
+        effortProtocol: 'anthropic-adaptive',
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -169,7 +178,7 @@ describe('Yeaft adapter effort request mapping', () => {
     expect(filterEffortForModel(
       { model: 'deepseek-reasoner', effort: 'high', effortSource: 'user' },
       { protocol: 'anthropic', entry: { id: 'deepseek-reasoner' } },
-    ).effort).toBeUndefined();
+    )).toMatchObject({ effort: 'high', effortSource: 'user' });
     expect(filterEffortForModel({ model: 'github-copilot/claude-opus-4.8', effort: 'xhigh', effortSource: 'user' }))
       .toMatchObject({ effort: 'xhigh', effortSource: 'user' });
     expect(filterEffortForModel({ model: 'claude-opus-4-6', effort: 'max', effortSource: 'user' }))
@@ -255,6 +264,37 @@ describe('Yeaft adapter effort request mapping', () => {
     }
   });
 
+
+  it('maps DeepSeek effort through Anthropic-compatible providers', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
+      content: [{ type: 'text', text: 'ok' }],
+      usage: {},
+    }));
+    const router = new AdapterRouter({
+      providers: [{
+        name: 'deepseek-anthropic',
+        baseUrl: 'https://api.deepseek.test',
+        apiKey: 'test',
+        protocol: 'anthropic',
+        models: ['deepseek-reasoner'],
+      }],
+    });
+
+    await router.call({
+      model: 'deepseek-anthropic/deepseek-reasoner',
+      system: 's',
+      messages: [{ role: 'user', content: 'hi' }],
+      maxTokens: 1000,
+      effort: 'high',
+      effortSource: 'user',
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.model).toBe('deepseek-reasoner');
+    expect(body.thinking).toEqual({ type: 'adaptive' });
+    expect(body.output_config).toEqual({ effort: 'high' });
+    expect(body.max_tokens).toBe(1000);
+  });
 
   it('keeps manual Anthropic thinking budgets for older thinking models', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({

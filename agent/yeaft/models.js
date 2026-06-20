@@ -537,8 +537,13 @@ export function thinkingBudgetForEffort(model, effort) {
  */
 export function getThinkingCapability(model, context = {}) {
   const info = MODEL_REGISTRY.get(model);
+  const modelId = parseModelRef(model).modelId;
   const overrideOptions = normalizeEffortOptions(context.effortOptions);
-  const overrideProtocol = context.thinkingProtocol || (context.protocol === 'anthropic' ? 'anthropic' : context.protocol === 'openai-responses' ? 'openai-reasoning' : null);
+  const overrideProtocol = context.thinkingProtocol || (
+    context.protocol === 'anthropic'
+      ? (/^deepseek/i.test(modelId) ? 'anthropic-adaptive' : 'anthropic')
+      : context.protocol === 'openai-responses' ? 'openai-reasoning' : null
+  );
   if (context.supportsEffort === true || overrideOptions) {
     return {
       supportsThinking: true,
@@ -560,7 +565,15 @@ export function getThinkingCapability(model, context = {}) {
     };
   }
   if (context.protocol === 'anthropic' && inferred?.thinkingProtocol === 'openai-reasoning') {
-    inferred = null;
+    if (/^deepseek/i.test(modelId)) {
+      inferred = {
+        ...inferred,
+        thinkingProtocol: 'anthropic-adaptive',
+        effortOptions: DEEPSEEK_REASONING_EFFORT_OPTIONS,
+      };
+    } else {
+      inferred = null;
+    }
   }
   if ((!info || !info.supportsThinking) && !inferred) {
     return {

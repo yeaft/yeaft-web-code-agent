@@ -34,10 +34,10 @@ function thinkingV1Enabled() {
   return process.env.YEAFT_THINKING_V1 === '1';
 }
 
-function applyAnthropicThinking(body, model, effort) {
-  const cap = getThinkingCapability(model);
+function applyAnthropicThinking(body, model, effort, effortContext = {}) {
+  const cap = getThinkingCapability(model, effortContext);
   if (!cap.supportsThinking) return;
-  if (!getModelEffortOptions(model).includes(effort)) return;
+  if (!getModelEffortOptions(model, effortContext).includes(effort)) return;
 
   if (cap.thinkingProtocol === 'anthropic-adaptive') {
     body.thinking = { type: 'adaptive' };
@@ -207,10 +207,10 @@ export class AnthropicAdapter extends LLMAdapter {
   }
 
   /**
-   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'xhigh'|'max', effortSource?: 'user'|'auto', signal?: AbortSignal }} params
+   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'xhigh'|'max', effortSource?: 'user'|'auto', effortContext?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void }} params
    * @returns {AsyncGenerator<import('./adapter.js').StreamEvent>}
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, signal, onRawExchange }) {
+  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, effortContext, signal, onRawExchange }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const body = {
@@ -226,7 +226,7 @@ export class AnthropicAdapter extends LLMAdapter {
     // models use budget_tokens. Unsupported combinations silently drop effort.
     const normEffort = normalizeEffort(effort);
     if ((thinkingV1Enabled() || effortSource === 'user') && normEffort) {
-      applyAnthropicThinking(body, model, normEffort);
+      applyAnthropicThinking(body, model, normEffort, effortContext);
     }
 
     const translatedTools = this.#translateTools(tools);
@@ -473,7 +473,7 @@ export class AnthropicAdapter extends LLMAdapter {
    * models silently drop the param. max_tokens auto-widens to budget+1024
    * when needed.
    */
-  async call({ model, system, messages, maxTokens = 4096, effort, effortSource, signal }) {
+  async call({ model, system, messages, maxTokens = 4096, effort, effortSource, effortContext, signal }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const body = {
@@ -486,7 +486,7 @@ export class AnthropicAdapter extends LLMAdapter {
     // task-327c: mirror stream()'s thinking injection for side queries.
     const normEffort = normalizeEffort(effort);
     if ((thinkingV1Enabled() || effortSource === 'user') && normEffort) {
-      applyAnthropicThinking(body, model, normEffort);
+      applyAnthropicThinking(body, model, normEffort, effortContext);
     }
 
     let response;
