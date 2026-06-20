@@ -569,7 +569,7 @@ export function getThinkingCapability(model, context = {}) {
       inferred = {
         ...inferred,
         thinkingProtocol: 'anthropic-adaptive',
-        effortOptions: DEEPSEEK_REASONING_EFFORT_OPTIONS,
+        effortOptions: ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS,
       };
     } else {
       inferred = null;
