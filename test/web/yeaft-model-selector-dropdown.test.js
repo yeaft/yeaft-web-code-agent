@@ -18,8 +18,9 @@ describe('Yeaft model selector dropdown', () => {
   it('applies and closes immediately when selecting a combined model-effort row', () => {
     const source = pageSource();
 
-    expect(source).toContain('v-for="option in topbarModelOptions"');
-    expect(source).toContain('@click="selectModel(option.modelRef, option.effort)"');
+    expect(source).toContain('v-for="row in topbarModelRows"');
+    expect(source).toContain('@click="selectModel(row.modelRef, effort)"');
+    expect(source).toContain('@click="selectModel(row.modelRef, row.defaultEffort)"');
     expect(source).toContain('const selectModel = (modelId, effort = null) => {');
     expect(source).toContain('store.switchYeaftModel(modelId, groupId, effort);');
     expect(source).toContain('closeModelDropdown();');
@@ -37,7 +38,9 @@ describe('Yeaft model selector dropdown', () => {
     expect(listStart).toBeGreaterThan(bodyStart);
     expect(controlsStart).toBeGreaterThan(listEnd);
     expect(settingsStart).toBeGreaterThan(controlsStart);
+    expect(source).toContain('yeaft-model-effort-list');
     expect(source).toContain('yeaft-model-effort-chip');
+    expect(source).not.toContain('topbarModelOptions');
     expect(source).not.toContain('yeaft-model-effort-panel');
   });
 
