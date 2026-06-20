@@ -17,7 +17,7 @@ import {
   DREAM_REDDOT_THRESHOLD_MS,
   DREAM_RELATIVE_TIME_REFRESH_MS,
 } from './dream-ui-constants.js';
-import { getDefaultModelEffort, getSelectableModelEfforts, modelOptionMatchesRef, modelOptionRef, resolveSessionModelEffort, resolveSessionModelRef } from '../utils/modelRefs.js';
+import { buildModelSelectionRows, getDefaultModelEffort, getSelectableModelEfforts, modelOptionMatchesRef, modelOptionRef, resolveSessionModelEffort, resolveSessionModelRef } from '../utils/modelRefs.js';
 
 function sessionTaskSortTime(task) {
   const raw = task?.updatedAt || task?.endedAt || task?.createdAt;
@@ -90,31 +90,42 @@ export default {
             <div class="yeaft-model-dropdown yeaft-topbar-model-dropdown" v-if="modelDropdownOpen" @click.stop>
               <div class="yeaft-model-selector-body">
                 <div class="yeaft-model-list" role="listbox" :aria-label="$t('settings.llm.selectModel')">
-                  <button
-                    v-for="option in topbarModelOptions"
-                    :key="option.key"
-                    type="button"
+                  <div
+                    v-for="row in topbarModelRows"
+                    :key="row.modelRef"
                     class="yeaft-model-option"
                     :class="{
-                      active: isModelSelectionActive(option.model, option.effort),
-                      current: modelOptionMatchesRef(option.model, topbarModel),
-                      'yeaft-model-option-with-effort': !!option.effort,
+                      active: isModelRowActive(row),
+                      current: modelOptionMatchesRef(row.model, topbarModel),
+                      'yeaft-model-option-with-effort': row.efforts.length,
                     }"
                     role="option"
-                    :aria-selected="isModelSelectionActive(option.model, option.effort) ? 'true' : 'false'"
-                    @click="selectModel(option.modelRef, option.effort)"
+                    :aria-selected="isModelRowActive(row) ? 'true' : 'false'"
                   >
-                    <span class="yeaft-model-check" v-if="isModelSelectionActive(option.model, option.effort)">&check;</span>
+                    <span class="yeaft-model-check" v-if="isModelRowActive(row)">&check;</span>
                     <span class="yeaft-model-check" v-else></span>
-                    <span class="yeaft-model-option-main">
-                      <span class="yeaft-model-option-label">{{ option.label }}</span>
+                    <button
+                      type="button"
+                      class="yeaft-model-option-main"
+                      @click="selectModel(row.modelRef, row.defaultEffort)"
+                    >
+                      <span class="yeaft-model-option-label">{{ row.label }}</span>
                       <span class="yeaft-model-option-meta">
-                        <span class="yeaft-model-option-provider" v-if="option.model.provider">{{ option.model.provider }}</span>
-                        <span class="yeaft-model-option-ctx" v-if="option.model.contextWindow">{{ formatModelCtx(option.model) }}</span>
+                        <span class="yeaft-model-option-provider" v-if="row.model.provider">{{ row.model.provider }}</span>
+                        <span class="yeaft-model-option-ctx" v-if="row.model.contextWindow">{{ formatModelCtx(row.model) }}</span>
                       </span>
+                    </button>
+                    <span class="yeaft-model-effort-list" v-if="row.efforts.length" :aria-label="row.label">
+                      <button
+                        v-for="effort in row.efforts"
+                        :key="row.modelRef + ':' + effort"
+                        type="button"
+                        class="yeaft-model-effort-chip"
+                        :class="{ active: isModelSelectionActive(row.model, effort) }"
+                        @click="selectModel(row.modelRef, effort)"
+                      >{{ $t('yeaft.modelMenu.effort.' + effort) }}</button>
                     </span>
-                    <span class="yeaft-model-effort-chip" v-if="option.effort">{{ $t('yeaft.modelMenu.effort.' + option.effort) }}</span>
-                  </button>
+                  </div>
                 </div>
                 <div class="yeaft-model-fixed-controls">
                   <button type="button" class="yeaft-model-config-option" @click="openLlmConfig">
@@ -637,28 +648,18 @@ export default {
         : getDefaultModelEffort(options);
     });
 
-    const topbarModelOptions = Vue.computed(() => {
-      const rows = [];
-      for (const model of store.yeaftAvailableModels || []) {
-        const modelRef = modelOptionRef(model);
-        if (!modelRef) continue;
-        const label = model.label || model.id || modelRef;
-        const efforts = selectableEffortsForModel(model);
-        if (!efforts.length) {
-          rows.push({ key: modelRef, model, modelRef, effort: null, label });
-          continue;
-        }
-        for (const effort of efforts) {
-          rows.push({ key: `${modelRef}:${effort}`, model, modelRef, effort, label });
-        }
-      }
-      return rows;
-    });
+    const topbarModelRows = Vue.computed(() => buildModelSelectionRows(store.yeaftAvailableModels));
 
     const isModelSelectionActive = (model, effort) => {
       if (!modelOptionMatchesRef(model, topbarModel.value)) return false;
       if (!effort) return !selectableEffortsForModel(model).length;
       return effort === topbarEffort.value;
+    };
+
+    const isModelRowActive = (row) => {
+      if (!row || !modelOptionMatchesRef(row.model, topbarModel.value)) return false;
+      if (!row.efforts.length) return true;
+      return row.efforts.includes(topbarEffort.value);
     };
 
     // ── manual dream trigger ──
@@ -1098,9 +1099,10 @@ export default {
       topbarSessionTitle,
       topbarModel,
       topbarEffort,
-      topbarModelOptions,
+      topbarModelRows,
       selectableEffortsForModel,
       isModelSelectionActive,
+      isModelRowActive,
       modelOptionRef,
       modelOptionMatchesRef,
       showSettings,
