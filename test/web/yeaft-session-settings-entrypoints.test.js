@@ -4,7 +4,7 @@ import { hasUsableYeaftAgent, resolveActiveSessionIdForSettings } from '../../we
 function openAnnouncementFromStatusPane(state) {
   const sessionId = resolveActiveSessionIdForSettings(state);
   if (!sessionId) return null;
-  return { sessionId, section: 'announcement' };
+  return { sessionId, section: 'session' };
 }
 
 function openVpEditFromStatusPane(state, vpId) {
@@ -22,7 +22,7 @@ describe('Yeaft session settings entrypoints', () => {
       topbarGroup: null,
     });
 
-    expect(payload).toEqual({ sessionId: 'session_a', section: 'announcement' });
+    expect(payload).toEqual({ sessionId: 'session_a', section: 'session' });
   });
 
   it('opens VP editing from the active session before topbarGroup hydrates', () => {

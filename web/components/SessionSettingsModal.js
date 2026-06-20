@@ -2,10 +2,8 @@
  * SessionSettingsModal — unified left-nav / right-pane settings dialog.
  *
  * Replaces the previous standalone SessionMemberEditor. Sections:
- *   - Announcement   (CLAUDE.md-style shared system-prompt prefix)
+ *   - Session        (rename + announcement + delete)
  *   - Members        (roster checkboxes + ★ default-VP picker)
- *   - Rename         (group display name)
- *   - Delete session (delete the session permanently)
  *
  * Per the design lock: NOT tabs. Always-visible left nav with a single
  * pane on the right, Mac-System-Settings style. Active nav item uses
@@ -17,10 +15,20 @@
  * inline per section.
  *
  * Mount contract: parent passes `group-id` and `initial-section`
- * ('announcement' | 'members' | 'rename' | 'danger'); listens for
+ * ('session' | 'members' | 'memory', with legacy announcement/rename/danger
+ * aliases mapped to 'session'); listens for
  * `close`. Parent owns visibility and re-mounts when the active group
  * changes (the modal re-derives state from the store on each render).
  */
+
+const SESSION_SETTINGS_SECTION = 'session';
+const LEGACY_SESSION_SETTINGS_SECTIONS = new Set(['announcement', 'rename', 'danger']);
+
+function normalizeSettingsSection(section) {
+  if (section === 'members' || section === 'memory' || section === SESSION_SETTINGS_SECTION) return section;
+  if (LEGACY_SESSION_SETTINGS_SECTIONS.has(section)) return SESSION_SETTINGS_SECTION;
+  return SESSION_SETTINGS_SECTION;
+}
 
 export default {
   name: 'SessionSettingsModal',
@@ -29,14 +37,14 @@ export default {
     groupId: { type: String, required: true },
     initialSection: {
       type: String,
-      default: 'announcement',
-      validator: v => ['announcement', 'members', 'rename', 'memory', 'danger'].includes(v),
+      default: SESSION_SETTINGS_SECTION,
+      validator: v => [SESSION_SETTINGS_SECTION, 'announcement', 'members', 'rename', 'memory', 'danger'].includes(v),
     },
     initialEditVpId: { type: String, default: '' },
   },
   data() {
     return {
-      section: this.initialEditVpId ? 'members' : this.initialSection,
+      section: this.initialEditVpId ? 'members' : normalizeSettingsSection(this.initialSection),
       // Announcement editor draft (lazy-init from store on first edit).
       announcementDraft: '',
       announcementBusy: false,
@@ -98,11 +106,9 @@ export default {
     },
     sections() {
       return [
-        { id: 'announcement', label: this.$t('yeaft.session.settings.nav.announcement') },
+        { id: SESSION_SETTINGS_SECTION, label: this.$t('yeaft.session.settings.nav.session') },
         { id: 'members', label: this.$t('yeaft.session.settings.nav.members') },
-        { id: 'rename', label: this.$t('yeaft.session.settings.nav.rename') },
         { id: 'memory', label: this.$t('yeaft.session.settings.nav.memory') },
-        { id: 'danger', label: this.$t('yeaft.session.settings.nav.danger') },
       ];
     },
     /**
@@ -124,8 +130,10 @@ export default {
     section(next) {
       // Seed the relevant draft when entering a section so the user sees
       // the current value rather than a stale or empty input.
-      if (next === 'announcement') this.announcementDraft = this.announcement;
-      if (next === 'rename') this.renameDraft = this.groupDisplayName;
+      if (next === SESSION_SETTINGS_SECTION) {
+        this.announcementDraft = this.announcement;
+        this.renameDraft = this.groupDisplayName;
+      }
       // Clear unrelated errors so they don't haunt other sections.
       this.announcementError = '';
       this.renameError = '';
@@ -137,13 +145,16 @@ export default {
       this.highlightedVpId = next || '';
       if (next) this.section = 'members';
     },
+    initialSection(next) {
+      if (!this.initialEditVpId) this.section = normalizeSettingsSection(next);
+    },
     groupId() {
       // Reset state when parent re-targets a different group while
       // open. Note: don't rely on the section() watcher to reseed
       // drafts — it doesn't fire when section is already equal to
       // initialSection. Seed directly here so the user never sees a
       // momentary empty input.
-      this.section = this.initialEditVpId ? 'members' : this.initialSection;
+      this.section = this.initialEditVpId ? 'members' : normalizeSettingsSection(this.initialSection);
       this.highlightedVpId = this.initialEditVpId || '';
       this.announcementDraft = this.announcement;
       this.renameDraft = this.groupDisplayName;
@@ -175,8 +186,10 @@ export default {
       }
     } catch (_) { /* test env */ }
     // Seed initial draft for whatever the entry section is.
-    if (this.section === 'announcement') this.announcementDraft = this.announcement;
-    if (this.section === 'rename') this.renameDraft = this.groupDisplayName;
+    if (this.section === SESSION_SETTINGS_SECTION) {
+      this.announcementDraft = this.announcement;
+      this.renameDraft = this.groupDisplayName;
+    }
   },
   beforeUnmount() {
     window.removeEventListener('keydown', this.onEsc);
@@ -364,26 +377,73 @@ export default {
 
           <!-- Right pane -->
           <section class="group-settings-pane">
-            <!-- Announcement -->
-            <div v-if="section === 'announcement'" class="group-settings-section">
-              <h3 class="group-settings-heading">{{ $t('yeaft.session.settings.announcement.heading') }}</h3>
-              <p class="group-settings-help">{{ $t('yeaft.session.settings.announcement.help') }}</p>
-              <textarea
-                class="group-settings-textarea"
-                v-model="announcementDraft"
-                :placeholder="$t('yeaft.session.announcement.placeholder')"
-                :disabled="announcementBusy"
-                rows="10"
-              ></textarea>
-              <p v-if="announcementError" class="group-settings-error" role="alert">{{ announcementError }}</p>
-              <div class="group-settings-actions">
-                <button
-                  type="button"
-                  class="group-settings-primary"
-                  :disabled="announcementBusy || announcementDraft === announcement"
-                  @click="saveAnnouncement"
-                >{{ announcementBusy ? $t('yeaft.session.announcement.saving') : $t('common.save') }}</button>
-              </div>
+            <!-- Session management -->
+            <div v-if="section === 'session'" class="group-settings-section group-settings-section-session">
+              <section class="group-settings-card">
+                <h3 class="group-settings-heading">{{ $t('yeaft.session.settings.rename.heading') }}</h3>
+                <label class="group-settings-field-label">{{ $t('yeaft.session.settings.rename.label') }}</label>
+                <input
+                  type="text"
+                  class="group-settings-input"
+                  v-model="renameDraft"
+                  :disabled="renameBusy"
+                  @keydown.enter="saveRename"
+                />
+                <p v-if="renameError" class="group-settings-error" role="alert">{{ renameError }}</p>
+                <div class="group-settings-actions">
+                  <button
+                    type="button"
+                    class="group-settings-primary"
+                    :disabled="renameBusy || !renameDraft.trim() || renameDraft.trim() === groupDisplayName"
+                    @click="saveRename"
+                  >{{ renameBusy ? $t('yeaft.session.settings.rename.saving') : $t('yeaft.session.settings.rename.save') }}</button>
+                </div>
+              </section>
+
+              <section class="group-settings-card">
+                <h3 class="group-settings-heading">{{ $t('yeaft.session.settings.announcement.heading') }}</h3>
+                <p class="group-settings-help">{{ $t('yeaft.session.settings.announcement.help') }}</p>
+                <textarea
+                  class="group-settings-textarea"
+                  v-model="announcementDraft"
+                  :placeholder="$t('yeaft.session.announcement.placeholder')"
+                  :disabled="announcementBusy"
+                  rows="8"
+                ></textarea>
+                <p v-if="announcementError" class="group-settings-error" role="alert">{{ announcementError }}</p>
+                <div class="group-settings-actions">
+                  <button
+                    type="button"
+                    class="group-settings-primary"
+                    :disabled="announcementBusy || announcementDraft === announcement"
+                    @click="saveAnnouncement"
+                  >{{ announcementBusy ? $t('yeaft.session.announcement.saving') : $t('common.save') }}</button>
+                </div>
+              </section>
+
+              <section class="group-settings-card group-settings-section-delete">
+                <h3 class="group-settings-heading">{{ $t('yeaft.session.settings.danger.heading') }}</h3>
+                <p class="group-settings-help">{{ $t('yeaft.session.settings.danger.deleteHelp') }}</p>
+                <label class="group-settings-field-label">
+                  {{ $t('yeaft.session.deleteConfirm', { name: groupDisplayName }) }}
+                </label>
+                <input
+                  type="text"
+                  class="group-settings-input"
+                  v-model="deleteConfirmText"
+                  :placeholder="groupDisplayName"
+                  :disabled="deleteBusy"
+                />
+                <p v-if="deleteError" class="group-settings-error" role="alert">{{ deleteError }}</p>
+                <div class="group-settings-actions">
+                  <button
+                    type="button"
+                    class="group-settings-delete-btn"
+                    :disabled="!deleteConfirmReady || deleteBusy"
+                    @click="confirmDelete"
+                  >{{ deleteBusy ? $t('yeaft.session.deletingEllipsis') : $t('yeaft.session.settings.danger.deleteBtn') }}</button>
+                </div>
+              </section>
             </div>
 
             <!-- Members -->
@@ -436,28 +496,6 @@ export default {
               <p v-if="membersError" class="group-settings-error" role="alert">{{ membersError }}</p>
             </div>
 
-            <!-- Rename -->
-            <div v-else-if="section === 'rename'" class="group-settings-section">
-              <h3 class="group-settings-heading">{{ $t('yeaft.session.settings.rename.heading') }}</h3>
-              <label class="group-settings-field-label">{{ $t('yeaft.session.settings.rename.label') }}</label>
-              <input
-                type="text"
-                class="group-settings-input"
-                v-model="renameDraft"
-                :disabled="renameBusy"
-                @keydown.enter="saveRename"
-              />
-              <p v-if="renameError" class="group-settings-error" role="alert">{{ renameError }}</p>
-              <div class="group-settings-actions">
-                <button
-                  type="button"
-                  class="group-settings-primary"
-                  :disabled="renameBusy || !renameDraft.trim() || renameDraft.trim() === groupDisplayName"
-                  @click="saveRename"
-                >{{ renameBusy ? $t('yeaft.session.settings.rename.saving') : $t('yeaft.session.settings.rename.save') }}</button>
-              </div>
-            </div>
-
             <!-- Memory (manual dream trigger) -->
             <div v-else-if="section === 'memory'" class="group-settings-section">
               <h3 class="group-settings-heading">{{ $t('yeaft.session.settings.memory.heading') }}</h3>
@@ -486,30 +524,6 @@ export default {
               >{{ $t('yeaft.session.settings.memory.lastError', { error: groupDreamStatus.lastError || 'unknown' }) }}</p>
             </div>
 
-            <!-- Delete session -->
-            <div v-else-if="section === 'danger'" class="group-settings-section group-settings-section-delete">
-              <h3 class="group-settings-heading">{{ $t('yeaft.session.settings.danger.heading') }}</h3>
-              <p class="group-settings-help">{{ $t('yeaft.session.settings.danger.deleteHelp') }}</p>
-              <label class="group-settings-field-label">
-                {{ $t('yeaft.session.deleteConfirm', { name: groupDisplayName }) }}
-              </label>
-              <input
-                type="text"
-                class="group-settings-input"
-                v-model="deleteConfirmText"
-                :placeholder="groupDisplayName"
-                :disabled="deleteBusy"
-              />
-              <p v-if="deleteError" class="group-settings-error" role="alert">{{ deleteError }}</p>
-              <div class="group-settings-actions">
-                <button
-                  type="button"
-                  class="group-settings-delete-btn"
-                  :disabled="!deleteConfirmReady || deleteBusy"
-                  @click="confirmDelete"
-                >{{ deleteBusy ? $t('yeaft.session.deletingEllipsis') : $t('yeaft.session.settings.danger.deleteBtn') }}</button>
-              </div>
-            </div>
           </section>
         </div>
       </div>
