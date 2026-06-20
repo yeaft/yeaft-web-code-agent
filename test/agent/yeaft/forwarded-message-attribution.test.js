@@ -102,15 +102,16 @@ describe('forwarded message VP attribution', () => {
 
       await handleYeaftLoadHistory({ sessionId: 'session-review', limit: 10 });
 
-      const assistantFrames = sent
-        .filter(msg => msg.type === 'yeaft_output' && msg.data?.type === 'assistant')
-        .map(msg => ({ vpId: msg.vpId, text: msg.data.message?.content?.[0]?.text || '' }));
+      const chunk = sent.find(msg => msg.type === 'yeaft_history_chunk' && msg.mode === 'recent');
+      const assistantRows = (chunk?.messages || [])
+        .filter(msg => msg.role === 'assistant')
+        .map(msg => ({ vpId: msg.speakerVpId, text: msg.content || '' }));
 
-      expect(assistantFrames).toEqual(expect.arrayContaining([
+      expect(assistantRows).toEqual(expect.arrayContaining([
         { vpId: 'vp-linus', text: 'Linus forwarded: please review this PR' },
         { vpId: 'vp-martin', text: 'Martin review: the fix is correct' },
       ]));
-      expect(assistantFrames.find(frame => frame.text.startsWith('Martin review'))?.vpId).toBe('vp-martin');
+      expect(assistantRows.find(row => row.text.startsWith('Martin review'))?.vpId).toBe('vp-martin');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

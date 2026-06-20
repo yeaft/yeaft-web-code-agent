@@ -7,6 +7,7 @@ import {
 } from '../utils/virtual-transcript.js';
 
 const BOTTOM_THRESHOLD = 80;
+const HEIGHT_CHANGE_THRESHOLD = 2;
 
 export default {
   name: 'VirtualTranscript',
@@ -57,6 +58,9 @@ export default {
     let resizeObserver = null;
     let rafId = null;
     let measureRafId = null;
+    let scrollAdjustRafId = null;
+    let pendingScrollDelta = 0;
+    let pendingScrollToBottom = false;
 
     const virtualWindow = Vue.computed(() => computeVirtualWindow(props.items, {
       scrollTop: scrollTop.value,
@@ -106,6 +110,29 @@ export default {
       });
     }
 
+    function scheduleScrollAdjustment({ delta = 0, toBottom = false } = {}) {
+      if (Math.abs(delta) >= HEIGHT_CHANGE_THRESHOLD) pendingScrollDelta += delta;
+      if (toBottom) pendingScrollToBottom = true;
+      if (scrollAdjustRafId) return;
+      scrollAdjustRafId = requestAnimationFrame(() => {
+        scrollAdjustRafId = null;
+        const scroller = scrollEl.value;
+        if (!scroller) {
+          pendingScrollDelta = 0;
+          pendingScrollToBottom = false;
+          return;
+        }
+        if (pendingScrollToBottom) {
+          scroller.scrollTop = scroller.scrollHeight;
+        } else if (Math.abs(pendingScrollDelta) >= HEIGHT_CHANGE_THRESHOLD) {
+          scroller.scrollTop += pendingScrollDelta;
+        }
+        pendingScrollDelta = 0;
+        pendingScrollToBottom = false;
+        readScrollState();
+      });
+    }
+
     function scheduleMeasureElement(key, index, el) {
       if (!key || !el) return;
       pendingMeasurements.set(key, { index, el });
@@ -136,15 +163,11 @@ export default {
 
       if (scroller && Number.isFinite(previousHeight)) {
         const delta = nextHeight - previousHeight;
-        if (changedBeforeWindow && Math.abs(delta) > 0) {
-          scroller.scrollTop += delta;
-          scrollTop.value = scroller.scrollTop;
-          emitScrollState(scroller);
+        if (Math.abs(delta) < HEIGHT_CHANGE_THRESHOLD) return;
+        if (changedBeforeWindow) {
+          scheduleScrollAdjustment({ delta });
         } else if (wasNearBottom) {
-          Vue.nextTick(() => {
-            scroller.scrollTop = scroller.scrollHeight;
-            readScrollState();
-          });
+          Vue.nextTick(() => scheduleScrollAdjustment({ toBottom: true }));
         }
       }
     }
@@ -205,7 +228,10 @@ export default {
       if (resizeObserver) resizeObserver.disconnect();
       if (rafId) cancelAnimationFrame(rafId);
       if (measureRafId) cancelAnimationFrame(measureRafId);
+      if (scrollAdjustRafId) cancelAnimationFrame(scrollAdjustRafId);
       pendingMeasurements.clear();
+      pendingScrollDelta = 0;
+      pendingScrollToBottom = false;
     });
 
     return {

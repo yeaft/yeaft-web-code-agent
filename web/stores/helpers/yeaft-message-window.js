@@ -77,12 +77,105 @@ export function sliceYeaftMessagesByRecentTurns(messages = [], visibleTurns = DE
   return messages.slice(firstVisible.start);
 }
 
+function messageMatchesSession(msg, sessionId) {
+  if (!sessionId) return true;
+  return msg && (msg.sessionId ?? msg.groupId) === sessionId;
+}
+
+export function sliceScopedYeaftMessagesByRecentTurns(messages = [], sessionId = null, visibleTurns = DEFAULT_VISIBLE_TURNS) {
+  const safeTurns = Math.max(1, Number.isFinite(visibleTurns) ? Math.floor(visibleTurns) : DEFAULT_VISIBLE_TURNS);
+  const scoped = [];
+  const spans = [];
+  let current = null;
+
+  const finish = (end) => {
+    if (!current) return;
+    spans.push({ start: current.start, end, kind: current.kind });
+    current = null;
+  };
+
+  for (const msg of messages) {
+    if (!messageMatchesSession(msg, sessionId)) continue;
+    const i = scoped.length;
+    scoped.push(msg);
+
+    if (isNonEmptyUserMessage(msg) || msg.type === 'system' || msg.type === 'error') {
+      finish(i);
+      current = { start: i, kind: msg.type };
+      continue;
+    }
+
+    if (!isAssistantMessage(msg)) {
+      if (!current) current = { start: i, kind: 'other' };
+      continue;
+    }
+
+    if (!current || (current.kind === 'assistant' && shouldSplitAssistantTurn(current, msg))) {
+      finish(i);
+      current = {
+        start: i,
+        kind: 'assistant',
+        turnId: msg.turnId || '',
+        speakerVpId: msg.speakerVpId || msg.vpId || '',
+      };
+    }
+    current.lastTurnId = msg.turnId || current.lastTurnId || '';
+    current.speakerVpId = current.speakerVpId || msg.speakerVpId || msg.vpId || '';
+  }
+
+  finish(scoped.length);
+  if (spans.length <= safeTurns) return scoped;
+  const firstVisible = spans[spans.length - safeTurns];
+  return scoped.slice(firstVisible.start);
+}
+
 export function countYeaftMessageTurns(messages = []) {
   return buildYeaftMessageTurnSpans(messages).length;
 }
 
 export function hasHiddenYeaftMessageTurns(messages = [], visibleTurns = DEFAULT_VISIBLE_TURNS) {
   return countYeaftMessageTurns(messages) > Math.max(1, visibleTurns || DEFAULT_VISIBLE_TURNS);
+}
+
+export function hasHiddenScopedYeaftMessageTurns(messages = [], sessionId = null, visibleTurns = DEFAULT_VISIBLE_TURNS) {
+  const safeTurns = Math.max(1, visibleTurns || DEFAULT_VISIBLE_TURNS);
+  let count = 0;
+  let current = null;
+  const finish = () => {
+    if (!current) return false;
+    current = null;
+    count += 1;
+    return count > safeTurns;
+  };
+
+  for (const msg of messages) {
+    if (!messageMatchesSession(msg, sessionId)) continue;
+
+    if (isNonEmptyUserMessage(msg) || msg.type === 'system' || msg.type === 'error') {
+      if (finish()) return true;
+      current = { kind: msg.type };
+      continue;
+    }
+
+    if (!isAssistantMessage(msg)) {
+      if (!current) current = { kind: 'other' };
+      continue;
+    }
+
+    if (!current || (current.kind === 'assistant' && shouldSplitAssistantTurn(current, msg))) {
+      if (finish()) return true;
+      current = {
+        kind: 'assistant',
+        turnId: msg.turnId || '',
+        speakerVpId: msg.speakerVpId || msg.vpId || '',
+      };
+    }
+    current.lastTurnId = msg.turnId || current.lastTurnId || '';
+    current.speakerVpId = current.speakerVpId || msg.speakerVpId || msg.vpId || '';
+  }
+
+  finish();
+  return count > safeTurns;
 }
 
 export function getDefaultYeaftVisibleTurns() {

@@ -454,8 +454,12 @@ export async function handleAgentOutput(agentId, agent, msg) {
             conversationId: msg.conversationId,
             ...(msg.sessionId != null ? { sessionId: msg.sessionId } : {}),
             messages,
+            mode: msg.mode || 'older',
             oldestSeq: msg.oldestSeq ?? null,
             hasMore: !!msg.hasMore,
+            latestSeq: msg.latestSeq ?? null,
+            afterSeq: msg.afterSeq ?? null,
+            turns: msg.turns ?? null,
           });
         }
       }

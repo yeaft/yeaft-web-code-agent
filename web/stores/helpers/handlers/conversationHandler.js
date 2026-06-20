@@ -52,6 +52,37 @@ function resolveHistorySpeakerVpId(m, groupId) {
   return m.speakerVpId || m.vpId || m.vp_id || m.authorVpId || m.authorVP || resolveGroupDefaultVpId(groupId);
 }
 
+function stableHistoryRowId(row) {
+  return row && (row.messageId || row.id) ? (row.messageId || row.id) : null;
+}
+
+function sortYeaftRowsByTimestamp(rows) {
+  rows.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+}
+
+function upsertYeaftHistoryRows(existingRows, incomingRows) {
+  const indexById = new Map();
+  existingRows.forEach((row, index) => {
+    const id = stableHistoryRowId(row);
+    if (id) indexById.set(id, index);
+  });
+
+  let inserted = 0;
+  for (const row of incomingRows) {
+    const id = stableHistoryRowId(row);
+    if (id && indexById.has(id)) {
+      const index = indexById.get(id);
+      existingRows[index] = { ...existingRows[index], ...row };
+    } else {
+      if (id) indexById.set(id, existingRows.length);
+      existingRows.push(row);
+      inserted += 1;
+    }
+  }
+  sortYeaftRowsByTimestamp(existingRows);
+  return inserted;
+}
+
 function isInternalControlHistoryContent(content) {
   if (typeof content !== 'string') return false;
   const text = content.trimStart();
@@ -445,14 +476,12 @@ export function handleSyncMessagesResult(store, msg) {
 }
 
 /**
- * Handle a `yeaft_history_chunk` envelope — the response to
- * `yeaft_load_more_history`. Unlike Chat-mode's `sync_messages_result`,
- * Yeaft history doesn't live in a SQLite DB and isn't keyed by
- * `dbMessageId`; the agent computes the page directly from on-disk
- * markdown. The chunk is GUARANTEED to be strictly older than every
- * message currently in `messagesMap[yeaftConversationId]` (the cursor
- * was the oldest currently-loaded seq), so prepending at index 0 is
- * always correct.
+ * Handle a `yeaft_history_chunk` envelope — the batched response to
+ * `yeaft_load_history` / `yeaft_load_more_history`. Unlike Chat-mode's
+ * `sync_messages_result`, Yeaft history doesn't live in a SQLite DB and
+ * isn't keyed by `dbMessageId`; the agent computes the page directly from
+ * on-disk markdown. Older chunks prepend, recent bootstrap chunks replace
+ * that session's cached rows, and delta chunks append.
  *
  * Always clears `yeaftLoadingMoreHistory` — even on an empty / error
  * chunk — so the spinner doesn't get stuck. Always overwrites
@@ -488,6 +517,7 @@ export function handleYeaftHistoryChunk(store, msg) {
         [staleKey]: {
           ...(store.yeaftSessionHistoryState[staleKey] || {}),
           loading: false,
+          syncingAfterSeq: null,
         },
       };
     }
@@ -495,6 +525,8 @@ export function handleYeaftHistoryChunk(store, msg) {
     return;
   }
   if (!store.messagesMap[convId]) store.messagesMap[convId] = [];
+
+  const mode = msg.mode === 'recent' || msg.mode === 'delta' ? msg.mode : 'older';
 
   // Same visible projection as handleYeaftLoadHistory's bootstrap replay:
   // only user / assistant text rows. Reflection, internal, and system-only
@@ -507,14 +539,17 @@ export function handleYeaftHistoryChunk(store, msg) {
   );
   const seenIds = new Set();
   const formatted = [];
+  let acceptedHistoryMessages = 0;
   for (const m of (msg.messages || [])) {
     if (!m) continue;
     if (m._reflection || m.internal || m.systemOnly || m.systemOnlyMessage) continue;
     if (isInternalControlHistoryContent(m.content)) continue;
     const stableId = m.id || m.messageId || null;
-    if (stableId && (existingIds.has(stableId) || seenIds.has(stableId))) continue;
+    if (stableId && seenIds.has(stableId)) continue;
+    if (stableId && mode !== 'recent' && existingIds.has(stableId)) continue;
     if (stableId) seenIds.add(stableId);
     if (m.role === 'user') {
+      acceptedHistoryMessages += 1;
       const messageId = stableId || m.messageId || m.turnId || null;
       const rowSessionId = m.sessionId ?? m.groupId ?? msgSessionId ?? null;
       formatted.push({
@@ -528,41 +563,82 @@ export function handleYeaftHistoryChunk(store, msg) {
         isStreaming: false,
       });
     } else if (m.role === 'assistant') {
+      acceptedHistoryMessages += 1;
       const messageId = stableId || m.messageId || m.turnId || null;
       const rowSessionId = m.sessionId ?? m.groupId ?? msgSessionId ?? null;
       const speakerVpId = resolveHistorySpeakerVpId(m, rowSessionId);
-      formatted.push({
-        ...(stableId ? { id: stableId, messageId: stableId } : {}),
-        type: 'assistant',
-        content: m.content,
-        timestamp: normalizeHistoryTimestamp(m),
-        sessionId: rowSessionId,
-        turnId: m.turnId || messageId,
-        ...(speakerVpId ? { vpId: speakerVpId, speakerVpId } : {}),
-        isStreaming: false,
-        isHistory: true,
-      });
+      const timestamp = normalizeHistoryTimestamp(m);
+      const turnId = m.turnId || messageId;
+      const assistantContent = typeof m.content === 'string' ? m.content : (m.content || '');
+      if (typeof assistantContent !== 'string' || assistantContent.trim()) {
+        formatted.push({
+          ...(stableId ? { id: stableId, messageId: stableId } : {}),
+          type: 'assistant',
+          content: assistantContent,
+          timestamp,
+          sessionId: rowSessionId,
+          turnId,
+          ...(speakerVpId ? { vpId: speakerVpId, speakerVpId } : {}),
+          isStreaming: false,
+          isHistory: true,
+        });
+      }
+      const toolSummaryCount = Number(m.toolSummaryCount || m.toolCalls?.length || 0) || 0;
+      if (toolSummaryCount > 0) {
+        formatted.push({
+          ...(stableId ? { id: `${stableId}:tool-summary`, messageId: `${stableId}:tool-summary` } : {}),
+          type: 'tool-summary',
+          count: toolSummaryCount,
+          omittedCount: toolSummaryCount,
+          source: 'history',
+          timestamp,
+          sessionId: rowSessionId,
+          turnId,
+          ...(speakerVpId ? { vpId: speakerVpId, speakerVpId } : {}),
+          isStreaming: false,
+          isHistory: true,
+        });
+      }
     }
   }
 
+  let insertedRows = 0;
   if (formatted.length > 0) {
-    store.messagesMap[convId].splice(0, 0, ...formatted);
-    if (typeof store.expandYeaftMessageWindow === 'function') {
-      // These rows were explicitly requested by scrolling upward. Keep them in
-      // the render window; the near-bottom path will prune again later.
-      const windowSessionId = store.yeaftActiveSessionFilter ? (msgSessionId ?? null) : null;
-      store.expandYeaftMessageWindow(windowSessionId, msg.turns || 10);
+    if (mode === 'older') {
+      store.messagesMap[convId].splice(0, 0, ...formatted);
+      insertedRows = formatted.length;
+      if (typeof store.expandYeaftMessageWindow === 'function') {
+        // These rows were explicitly requested by scrolling upward. Keep them in
+        // the render window; the near-bottom path will prune again later.
+        const windowSessionId = store.yeaftActiveSessionFilter ? (msgSessionId ?? null) : null;
+        store.expandYeaftMessageWindow(windowSessionId, msg.turns || 10);
+      }
+    } else {
+      insertedRows = upsertYeaftHistoryRows(store.messagesMap[convId], formatted);
     }
   }
 
   const groupKey = msgSessionId ?? '__all__';
-  const nextState = {
-    loaded: true,
-    loading: false,
-    hasMore: !!msg.hasMore,
-    oldestSeq: (typeof msg.oldestSeq === 'number') ? msg.oldestSeq : store.yeaftOldestLoadedSeq,
-    count: formatted.length,
-  };
+  const prevState = store.yeaftSessionHistoryState?.[groupKey] || {};
+  const nextLatest = (typeof msg.latestSeq === 'number') ? msg.latestSeq : (prevState.latestSeq ?? null);
+  const nextState = mode === 'delta'
+    ? {
+        ...prevState,
+        loaded: true,
+        loading: false,
+        latestSeq: nextLatest,
+        syncingAfterSeq: null,
+        count: (prevState.count || 0) + insertedRows,
+      }
+    : {
+        loaded: true,
+        loading: false,
+        hasMore: !!msg.hasMore,
+        oldestSeq: (typeof msg.oldestSeq === 'number') ? msg.oldestSeq : store.yeaftOldestLoadedSeq,
+        count: mode === 'older' ? (prevState.count || 0) + insertedRows : acceptedHistoryMessages,
+        latestSeq: nextLatest,
+        syncingAfterSeq: null,
+      };
   if (store.yeaftSessionHistoryState) {
     store.yeaftSessionHistoryState = {
       ...store.yeaftSessionHistoryState,
