@@ -1211,94 +1211,11 @@
   margin: 4px 0 0;
 }
 
-.llm-copilot-instructions {
-  padding: 16px;
-  background: var(--bg-input-wrapper);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  margin-bottom: 20px;
-}
-
-.llm-copilot-instructions-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 12px;
-}
-
-.llm-copilot-instructions h3 {
-  font-size: 14px;
-  line-height: 1.4;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin: 0 0 4px;
-}
-
-.llm-copilot-instructions .sp-desc {
-  margin-bottom: 0;
-}
-
-.llm-copilot-steps {
+.llm-agent-install {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.llm-copilot-steps li {
-  display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-  padding: 12px;
-  background: var(--bg-main);
-  border: 1px solid var(--border-light);
-  border-radius: 10px;
-}
-
-.llm-copilot-step-index {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 999px;
-  background: var(--session-active);
-  color: var(--accent-blue);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.llm-copilot-steps strong {
-  display: block;
-  font-size: 13px;
-  line-height: 1.4;
-  color: var(--text-primary);
-  margin-bottom: 2px;
-}
-
-.llm-copilot-steps p {
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-  margin: 0 0 8px;
-}
-
-.llm-copilot-steps code {
-  display: block;
-  width: fit-content;
-  max-width: 100%;
-  box-sizing: border-box;
-  overflow-x: auto;
-  padding: 7px 9px;
-  background: var(--bg-input);
-  border: 1px solid var(--border-light);
-  border-radius: 8px;
-  color: var(--text-primary);
-  font-size: 12px;
-  line-height: 1.4;
+  gap: 8px;
+  margin-bottom: 20px;
 }
 
 /* LLM Setup Banner */
