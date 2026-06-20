@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 const read = (path) => readFileSync(new URL(`../../web/${path}`, import.meta.url), 'utf8');
 
 const pageSource = read('components/YeaftPage.js');
+const chatStoreSource = read('stores/chat.js');
 const sessionActionsSource = read('components/YeaftSessionActions.js');
 const debugSource = read('components/YeaftDebugPanel.js');
 const timelineSource = read('components/VpTimelinePane.js');
@@ -85,6 +86,33 @@ describe('Yeaft UI action polish', () => {
     expect(sessionSettingsSource).not.toContain('group-settings-danger-btn');
     expect(sidebarSource).toContain("sessionCrudRequest;\n      if (typeof fn === 'function') fn.call(this.chatStore, 'archive', { sessionId: g.id });");
     expect(sidebarSource).not.toContain('class="session-menu-item danger" @click="onRemoveFromList');
+  });
+
+  it('lets users inspect and stop background shell tasks from the Session status pane', () => {
+    expect(timelineSource).toContain('stoppingTasksById: { type: Object');
+    expect(timelineSource).toContain("'cancel-task'");
+    expect(timelineSource).toContain('shellTaskCommand(task)');
+    expect(timelineSource).toContain("$t('yeaft.sessionStatus.task.command')");
+    expect(timelineSource).toContain("$emit('cancel-task', task)");
+    expect(timelineSource).toContain('isTaskStopping(task)');
+
+    expect(pageSource).toContain(':stopping-tasks-by-id="store.yeaftStoppingTasksById"');
+    expect(pageSource).toContain('@cancel-task="onCancelTaskFromTimeline"');
+    expect(pageSource).toContain('const onCancelTaskFromTimeline = (task) => {');
+    expect(pageSource).toContain('store.cancelYeaftTask({ sessionId: task.sessionId, taskId: task.id })');
+
+    expect(chatStoreSource).toContain('yeaftStoppingTasksById: {}');
+    expect(chatStoreSource).toContain('function taskStopKey(sessionId, taskId)');
+    expect(chatStoreSource).toContain('cancelYeaftTask({ sessionId, taskId })');
+    expect(chatStoreSource).toContain("type: 'yeaft_task_cancel'");
+    expect(chatStoreSource).toContain("case 'yeaft_task_cancel_result':");
+
+    expect(enI18n).toContain("'yeaft.sessionStatus.task.command': 'Command'");
+    expect(enI18n).toContain("'yeaft.sessionStatus.task.stop': 'Stop task'");
+    expect(zhI18n).toContain("'yeaft.sessionStatus.task.command': '命令'");
+    expect(zhI18n).toContain("'yeaft.sessionStatus.task.stop': '停止任务'");
+    expect(yeaftCss).toContain('.yeaft-vp-task-command');
+    expect(yeaftCss).toContain('.yeaft-vp-task-cancel');
   });
 
   it('keeps newly touched Yeaft action CSS on design tokens', () => {

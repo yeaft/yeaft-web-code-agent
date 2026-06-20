@@ -6,7 +6,7 @@ vi.mock('../../../agent/connection/buffer.js', () => ({
   sendToServer: vi.fn((msg) => { sent.push(msg); }),
 }));
 
-const { handleYeaftSubAgentPrompt, __testHooks } = await import('../../../agent/yeaft/web-bridge.js');
+const { handleYeaftSubAgentPrompt, handleYeaftTaskCancel, __testHooks } = await import('../../../agent/yeaft/web-bridge.js');
 const { getAgentRegistry, _resetAgentRegistry } = await import('../../../agent/yeaft/tools/agent.js');
 
 describe('Yeaft sub-agent prompt wire handler', () => {
@@ -75,6 +75,45 @@ describe('Yeaft sub-agent prompt wire handler', () => {
         subAgentId: 'sub-1',
         clientPromptId: 'prompt-1',
         pending: 1,
+      },
+    });
+  });
+
+  it('cancels a Session background task through the web handler', () => {
+    const cancelledTask = {
+      id: 'task-shell-1',
+      sessionId: 'session-a',
+      ownerVpId: 'vp-a',
+      kind: 'shell',
+      status: 'cancelled',
+      source: { threadId: 'main' },
+      runtime: { command: 'npm run dev' },
+    };
+    const cancelTask = vi.fn(() => ({ ok: true, task: cancelledTask }));
+    __testHooks.setSessionForTest({
+      taskManager: {
+        cancelTask,
+        getTask: vi.fn(() => cancelledTask),
+      },
+    });
+
+    handleYeaftTaskCancel({
+      sessionId: 'session-a',
+      taskId: 'task-shell-1',
+      clientRequestId: 'cancel-1',
+    });
+
+    expect(cancelTask).toHaveBeenCalledWith('session-a', 'task-shell-1');
+    expect(sent.at(-1)).toMatchObject({
+      type: 'yeaft_output',
+      sessionId: 'session-a',
+      vpId: 'vp-a',
+      event: {
+        type: 'yeaft_task_cancel_result',
+        success: true,
+        taskId: 'task-shell-1',
+        clientRequestId: 'cancel-1',
+        task: cancelledTask,
       },
     });
   });

@@ -60,6 +60,10 @@ function taskUpdatedTime(task) {
   return Number.isFinite(ms) ? ms : 0;
 }
 
+function taskStopKey(sessionId, taskId) {
+  return `${sessionId || ''}::${taskId || ''}`;
+}
+
 function keepRecentSessionTasks(tasksById) {
   const entries = Object.entries(tasksById || {});
   const running = entries.filter(([, task]) => task?.status === 'running');
@@ -454,6 +458,7 @@ export const useChatStore = defineStore('chat', {
     yeaftModelRefreshError: null, // 当前 agent 最近一次 refresh 错误（保留旧模型列表）
     yeaftYeaftDir: null,          // agent 的 ~/.yeaft 绝对路径（session_ready 携带）— Yeaft workbench 的默认 workDir
     yeaftActiveTasksBySession: {}, // { [sessionId]: { [taskId]: running or recent terminal task snapshot } }
+    yeaftStoppingTasksById: {}, // { [`${sessionId}::${taskId}`]: true } UI-side pending stop requests
     yeaftSubAgentPromptResults: {}, // { [clientPromptId]: latest sub-agent prompt ack/error }
     // 2026-05-13: tool-call usage stats for the Yeaft debug drawer.
     // Populated by `fetchYeaftToolStats()` → backend → `yeaft_tool_stats`
@@ -1473,6 +1478,25 @@ export const useChatStore = defineStore('chat', {
       return promptId;
     },
 
+    cancelYeaftTask({ sessionId, taskId }) {
+      const targetSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+      const targetTaskId = typeof taskId === 'string' ? taskId.trim() : '';
+      const targetAgentId = resolveAgentIdForSession(this, targetSessionId);
+      if (!targetAgentId || !targetSessionId || !targetTaskId) return false;
+      this.yeaftStoppingTasksById = {
+        ...this.yeaftStoppingTasksById,
+        [taskStopKey(targetSessionId, targetTaskId)]: true,
+      };
+      this.sendWsMessage({
+        type: 'yeaft_task_cancel',
+        agentId: targetAgentId,
+        sessionId: targetSessionId,
+        taskId: targetTaskId,
+        clientRequestId: `task_cancel_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      });
+      return true;
+    },
+
     getYeaftMessageWindowKey(sessionId = null) {
       return sessionId || this.yeaftActiveSessionFilter || '__all__';
     },
@@ -2000,6 +2024,30 @@ export const useChatStore = defineStore('chat', {
           if (Object.keys(retained).length > 0) bySession[task.sessionId] = retained;
           else delete bySession[task.sessionId];
           this.yeaftActiveTasksBySession = bySession;
+          if (task.status !== 'running') {
+            const { [taskStopKey(task.sessionId, task.id)]: _done, ...rest } = this.yeaftStoppingTasksById || {};
+            this.yeaftStoppingTasksById = rest;
+          }
+          break;
+        }
+
+        case 'yeaft_task_cancel_result': {
+          const taskId = event.taskId || event.task?.id || null;
+          const sessionId = event.task?.sessionId || event.sessionId || msg.sessionId || null;
+          if (taskId && sessionId) {
+            const { [taskStopKey(sessionId, taskId)]: _done, ...rest } = this.yeaftStoppingTasksById || {};
+            this.yeaftStoppingTasksById = rest;
+          }
+          const task = event.task;
+          if (task?.id && task.sessionId) {
+            const bySession = { ...this.yeaftActiveTasksBySession };
+            const current = { ...(bySession[task.sessionId] || {}) };
+            current[task.id] = task;
+            const retained = keepRecentSessionTasks(current);
+            if (Object.keys(retained).length > 0) bySession[task.sessionId] = retained;
+            else delete bySession[task.sessionId];
+            this.yeaftActiveTasksBySession = bySession;
+          }
           break;
         }
 

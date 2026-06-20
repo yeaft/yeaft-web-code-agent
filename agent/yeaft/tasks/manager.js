@@ -40,6 +40,11 @@ function publicSnapshot(task) {
   };
 }
 
+function taskCommand(task) {
+  const command = task?.runtime?.command;
+  return typeof command === 'string' && command.trim() ? command.trim() : '';
+}
+
 export class TaskManager {
   constructor({ yeaftDir, onEvent = null, runtimePlatform = null } = {}) {
     if (!yeaftDir) throw new Error('TaskManager requires yeaftDir');
@@ -269,7 +274,8 @@ export class TaskManager {
     const lines = ['<active_tasks>'];
     for (const task of tasks) {
       const preview = (task.log?.preview || '').trim().split('\n').slice(-3).join(' | ');
-      lines.push(`- ${task.id} | ${task.kind} | ${task.status} | owner=${task.ownerVpId || 'unknown'} | title=${JSON.stringify(task.title)} | log=${task.log?.path || ''}${preview ? ` | tail=${JSON.stringify(preview)}` : ''}`);
+      const command = taskCommand(task);
+      lines.push(`- ${task.id} | ${task.kind} | ${task.status} | owner=${task.ownerVpId || 'unknown'} | title=${JSON.stringify(task.title)}${command ? ` | command=${JSON.stringify(command)}` : ''} | log=${task.log?.path || ''}${preview ? ` | tail=${JSON.stringify(preview)}` : ''}`);
     }
     lines.push('</active_tasks>');
     return lines.join('\n');

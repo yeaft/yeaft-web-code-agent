@@ -113,6 +113,23 @@ describe('TaskManager', () => {
     expect(manager.getTask('session_cancel', task.id).status).toBe('running');
   });
 
+  it('includes shell commands and log tails in active task prompt summaries', () => {
+    const manager = new TaskManager({ yeaftDir: dir });
+    const task = manager.startTask({
+      sessionId: 'session_prompt',
+      ownerVpId: 'vp_linus',
+      kind: 'shell',
+      title: 'Dev server',
+      runtime: { command: 'npm run dev -- --host 0.0.0.0' },
+    });
+    manager.store.appendLog('session_prompt', task.id, 'ready on port 5173\n');
+    manager.refreshTaskLog('session_prompt', task.id);
+
+    const rendered = manager.renderActiveTasksForPrompt('session_prompt');
+    expect(rendered).toContain('command="npm run dev -- --host 0.0.0.0"');
+    expect(rendered).toContain('tail="ready on port 5173"');
+  });
+
   it('reads log tails without requiring a whole-file read', () => {
     const manager = new TaskManager({ yeaftDir: dir });
     const task = manager.startTask({

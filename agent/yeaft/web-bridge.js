@@ -1217,6 +1217,7 @@ function formatTaskResultForVp(task) {
     `<task-result id="${task.id}" kind="${task.kind}" status="${task.status}">`,
     `title: ${task.title || task.kind || task.id}`,
   ];
+  if (task?.runtime?.command) lines.push(`command: ${task.runtime.command}`);
   if (result.exitCode !== undefined && result.exitCode !== null) lines.push(`exitCode: ${result.exitCode}`);
   if (result.signal) lines.push(`signal: ${result.signal}`);
   if (result.error) lines.push(`error: ${result.error}`);
@@ -4487,6 +4488,53 @@ export function handleYeaftSubAgentPrompt(msg) {
     clientPromptId: clientPromptId || null,
     pending: agent.pendingPrompts.length,
   }, { sessionId, vpId: task.ownerVpId || null, threadId: task.source?.threadId || null });
+}
+
+export function handleYeaftTaskCancel(msg) {
+  const sessionId = typeof msg?.sessionId === 'string' ? msg.sessionId.trim() : '';
+  const taskId = typeof msg?.taskId === 'string' ? msg.taskId.trim() : '';
+  const clientRequestId = typeof msg?.clientRequestId === 'string' ? msg.clientRequestId.trim() : '';
+  const fail = (error, task = null) => {
+    sendSessionEvent({
+      type: 'yeaft_task_cancel_result',
+      success: false,
+      taskId: taskId || null,
+      clientRequestId: clientRequestId || null,
+      error,
+      ...(task ? { task } : {}),
+    }, sessionId ? { sessionId, vpId: task?.ownerVpId || null, threadId: task?.source?.threadId || null } : undefined);
+  };
+
+  if (!sessionId || !taskId) {
+    fail('sessionId and taskId are required');
+    return;
+  }
+  if (!session?.taskManager || typeof session.taskManager.cancelTask !== 'function') {
+    fail('task manager unavailable');
+    return;
+  }
+
+  let result;
+  try {
+    result = session.taskManager.cancelTask(sessionId, taskId);
+  } catch (err) {
+    fail(err?.message || String(err));
+    return;
+  }
+
+  const task = result?.task || session.taskManager.getTask?.(sessionId, taskId) || null;
+  if (!result?.ok) {
+    fail(result?.error || 'Failed to cancel task', task);
+    return;
+  }
+
+  sendSessionEvent({
+    type: 'yeaft_task_cancel_result',
+    success: true,
+    taskId,
+    clientRequestId: clientRequestId || null,
+    task,
+  }, { sessionId, vpId: task?.ownerVpId || null, threadId: task?.source?.threadId || null });
 }
 
 /** Deprecated mode switch — Yeaft is single-mode. */
