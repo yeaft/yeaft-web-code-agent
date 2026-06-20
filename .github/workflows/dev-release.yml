@@ -118,7 +118,7 @@ jobs:
         run: |
           TAG="${{ needs.validate-tag.outputs.tag }}"
           VERSION=${TAG#v}
-          cd agent && npm version $VERSION --no-git-tag-version
+          cd agent && npm version $VERSION --no-git-tag-version --allow-same-version
 
       - name: Publish to npm
         run: cd agent && npm publish --access public --tag latest
