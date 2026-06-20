@@ -325,7 +325,7 @@ export default {
                 <code>{{ shellTaskCommand(task) }}</code>
               </div>
               <button
-                v-if="task.status === 'running'"
+                v-if="isTaskCancellable(task)"
                 type="button"
                 class="yeaft-vp-task-cancel"
                 :disabled="isTaskStopping(task)"
@@ -448,6 +448,7 @@ export default {
       return typeof command === 'string' ? command.trim() : '';
     };
     const taskStopKey = (task) => `${task?.sessionId || ''}::${task?.id || ''}`;
+    const isTaskCancellable = (task) => task?.kind === 'shell' && task?.status === 'running' && !!task?.runtime?.pid;
     const isTaskStopping = (task) => !!(task?.id && props.stoppingTasksById?.[taskStopKey(task)]);
 
     const taskDetailLines = (task) => createSubAgentTaskDetailLines(task, $t);
@@ -497,6 +498,7 @@ export default {
       formatTaskTime,
       taskKindLabel,
       shellTaskCommand,
+      isTaskCancellable,
       isTaskStopping,
       taskDetailLines,
       subAgentTaskStreamText,

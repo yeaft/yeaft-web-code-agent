@@ -94,6 +94,8 @@ describe('Yeaft UI action polish', () => {
     expect(timelineSource).toContain('shellTaskCommand(task)');
     expect(timelineSource).toContain("$t('yeaft.sessionStatus.task.command')");
     expect(timelineSource).toContain("$emit('cancel-task', task)");
+    expect(timelineSource).toContain('isTaskCancellable(task)');
+    expect(timelineSource).toContain("task?.kind === 'shell' && task?.status === 'running' && !!task?.runtime?.pid");
     expect(timelineSource).toContain('isTaskStopping(task)');
 
     expect(pageSource).toContain(':stopping-tasks-by-id="store.yeaftStoppingTasksById"');

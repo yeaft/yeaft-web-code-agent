@@ -4533,6 +4533,7 @@ export function handleYeaftTaskCancel(msg) {
     success: true,
     taskId,
     clientRequestId: clientRequestId || null,
+    pending: !!result?.pending,
     task,
   }, { sessionId, vpId: task?.ownerVpId || null, threadId: task?.source?.threadId || null });
 }

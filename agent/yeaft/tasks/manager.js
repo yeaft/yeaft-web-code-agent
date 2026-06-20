@@ -12,6 +12,7 @@ import { getRuntimePlatformInfo } from '../runtime-platform.js';
 
 const LOG_PREVIEW_BYTES = 4096;
 const SUB_AGENT_LOG_PREVIEW_BYTES = 1024 * 1024;
+const DEFAULT_CANCEL_ESCALATION_MS = 2000;
 
 function logPreviewBytesFor(task) {
   return task?.kind === 'sub_agent' ? SUB_AGENT_LOG_PREVIEW_BYTES : LOG_PREVIEW_BYTES;
@@ -51,13 +52,17 @@ function taskCommand(task) {
 }
 
 export class TaskManager {
-  constructor({ yeaftDir, onEvent = null, runtimePlatform = null } = {}) {
+  constructor({ yeaftDir, onEvent = null, runtimePlatform = null, cancelEscalationMs = DEFAULT_CANCEL_ESCALATION_MS } = {}) {
     if (!yeaftDir) throw new Error('TaskManager requires yeaftDir');
     this.store = new TaskStore({ yeaftDir });
     this.onEvent = typeof onEvent === 'function' ? onEvent : null;
     this.runtimePlatform = runtimePlatform || getRuntimePlatformInfo();
+    this.cancelEscalationMs = Number.isFinite(cancelEscalationMs)
+      ? Math.max(0, Math.floor(cancelEscalationMs))
+      : DEFAULT_CANCEL_ESCALATION_MS;
     this.active = new Map();
     this.processes = new Map();
+    this.cancelEscalationTimers = new Map();
     this.#loadPersistedRunningTasks();
   }
 
@@ -196,9 +201,15 @@ export class TaskManager {
     const key = this.#key(sessionId, taskId);
     const task = this.active.get(key) || this.store.readTask(sessionId, taskId);
     if (!task || isTerminalTaskStatus(task.status)) return publicSnapshot(task);
+    const escalationTimer = this.cancelEscalationTimers.get(key);
+    if (escalationTimer) {
+      clearTimeout(escalationTimer);
+      this.cancelEscalationTimers.delete(key);
+    }
     const logPath = task.log?.path || this.store.logPath(sessionId, taskId);
     const tail = this.store.readLogFile(logPath, { tail: true, maxBytes: logPreviewBytesFor(task) });
-    task.status = status || TASK_STATUS.FAILED;
+    const cancelRequested = !!task.runtime?.cancelRequestedAt;
+    task.status = cancelRequested ? TASK_STATUS.CANCELLED : (status || TASK_STATUS.FAILED);
     task.updatedAt = nowIso();
     task.endedAt = nowIso();
     task.log = { ...(task.log || {}), path: tail.path, bytes: tail.bytes, preview: tail.text };
@@ -217,19 +228,61 @@ export class TaskManager {
     if (!task) return { ok: false, error: `Unknown task: ${taskId}` };
     if (isTerminalTaskStatus(task.status)) return { ok: true, task: publicSnapshot(task) };
     const runner = this.processes.get(key);
-    const killed = runner ? runner.kill('SIGTERM') : false;
-    if (!killed) {
+    if (!runner) {
       return {
         ok: false,
-        error: 'Unable to cancel task: no live process handle or process-tree kill failed.',
+        error: 'Unable to cancel task: no live process handle.',
         task: publicSnapshot(task),
       };
     }
-    const completed = this.#completeTask(sessionId, taskId, {
-      status: TASK_STATUS.CANCELLED,
-      signal: 'SIGTERM',
-    });
-    return { ok: true, task: completed };
+
+    if (!task.runtime?.cancelRequestedAt) {
+      const signalled = runner.kill('SIGTERM');
+      if (!signalled) {
+        return {
+          ok: false,
+          error: 'Unable to cancel task: process-tree signal failed.',
+          task: publicSnapshot(task),
+        };
+      }
+      const cancelRequestedAt = nowIso();
+      task.runtime = {
+        ...(task.runtime || {}),
+        cancelRequestedAt,
+        cancelSignal: 'SIGTERM',
+        cancelEscalationMs: this.cancelEscalationMs,
+      };
+      task.updatedAt = cancelRequestedAt;
+      this.store.writeTask(task);
+      this.active.set(key, task);
+      this.store.appendEvent(sessionId, { event: 'cancel_requested', taskId, signal: 'SIGTERM' });
+      this.#emit('updated', task, { cancelRequested: true });
+
+      if (this.cancelEscalationMs >= 0 && !this.cancelEscalationTimers.has(key)) {
+        const timer = setTimeout(() => {
+          this.cancelEscalationTimers.delete(key);
+          const current = this.active.get(key) || this.store.readTask(sessionId, taskId);
+          if (!current || isTerminalTaskStatus(current.status)) return;
+          const liveRunner = this.processes.get(key);
+          const escalated = liveRunner ? liveRunner.kill('SIGKILL') : false;
+          current.runtime = {
+            ...(current.runtime || {}),
+            cancelEscalatedAt: nowIso(),
+            cancelEscalatedSignal: 'SIGKILL',
+            cancelEscalationFailed: !escalated,
+          };
+          current.updatedAt = current.runtime.cancelEscalatedAt;
+          this.store.writeTask(current);
+          this.active.set(key, current);
+          this.store.appendEvent(sessionId, { event: 'cancel_escalated', taskId, signal: 'SIGKILL', ok: escalated });
+          this.#emit('updated', current, { cancelEscalated: true, cancelEscalationOk: escalated });
+        }, this.cancelEscalationMs);
+        if (typeof timer.unref === 'function') timer.unref();
+        this.cancelEscalationTimers.set(key, timer);
+      }
+    }
+
+    return { ok: true, task: publicSnapshot(task), pending: true };
   }
 
   listActiveTasks(sessionId = null) {
@@ -280,7 +333,8 @@ export class TaskManager {
     for (const task of tasks) {
       const preview = (task.log?.preview || '').trim().split('\n').slice(-3).join(' | ');
       const command = taskCommand(task);
-      lines.push(`- ${task.id} | ${task.kind} | ${task.status} | owner=${task.ownerVpId || 'unknown'} | title=${JSON.stringify(task.title)}${command ? ` | command=${JSON.stringify(command)}` : ''} | log=${task.log?.path || ''}${preview ? ` | tail=${JSON.stringify(preview)}` : ''}`);
+      const cancelRequestedAt = typeof task.runtime?.cancelRequestedAt === 'string' ? task.runtime.cancelRequestedAt : '';
+      lines.push(`- ${task.id} | ${task.kind} | ${task.status} | owner=${task.ownerVpId || 'unknown'} | title=${JSON.stringify(task.title)}${command ? ` | command=${JSON.stringify(command)}` : ''}${cancelRequestedAt ? ` | cancelRequestedAt=${JSON.stringify(cancelRequestedAt)}` : ''} | log=${task.log?.path || ''}${preview ? ` | tail=${JSON.stringify(preview)}` : ''}`);
     }
     lines.push('</active_tasks>');
     return lines.join('\n');

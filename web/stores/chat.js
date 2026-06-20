@@ -1987,7 +1987,7 @@ export const useChatStore = defineStore('chat', {
         case 'yeaft_task_cancel_result': {
           const taskId = event.taskId || event.task?.id || null;
           const sessionId = event.task?.sessionId || event.sessionId || msg.sessionId || null;
-          if (taskId && sessionId) {
+          if (taskId && sessionId && event.success === false) {
             const { [taskStopKey(sessionId, taskId)]: _done, ...rest } = this.yeaftStoppingTasksById || {};
             this.yeaftStoppingTasksById = rest;
           }

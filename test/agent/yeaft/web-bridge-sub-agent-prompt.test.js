@@ -89,7 +89,7 @@ describe('Yeaft sub-agent prompt wire handler', () => {
       source: { threadId: 'main' },
       runtime: { command: 'npm run dev' },
     };
-    const cancelTask = vi.fn(() => ({ ok: true, task: cancelledTask }));
+    const cancelTask = vi.fn(() => ({ ok: true, pending: true, task: cancelledTask }));
     __testHooks.setSessionForTest({
       taskManager: {
         cancelTask,
@@ -113,6 +113,7 @@ describe('Yeaft sub-agent prompt wire handler', () => {
         success: true,
         taskId: 'task-shell-1',
         clientRequestId: 'cancel-1',
+        pending: true,
         task: cancelledTask,
       },
     });
