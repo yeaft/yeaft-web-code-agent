@@ -1,4 +1,4 @@
-# Contributing to Yeaft WebChat
+# Contributing to Yeaft Web Code Agent
 
 Thanks for your interest in contributing!
 
@@ -16,7 +16,7 @@ Open `http://localhost:3456` — dev mode skips authentication.
 ## Project Structure
 
 - `server/` — Central WebSocket server (Express + ws)
-- `agent/` — Worker machine agent (manages Claude CLI, Crew coordination)
+- `agent/` — Worker machine agent (runs the native Yeaft Code Agent engine, Claude/Copilot CLI providers, Crew coordination, and workbench backends)
 - `web/` — Vue 3 frontend (no build step in dev)
 - `test/` — Vitest unit & integration tests
 - `e2e/` — Playwright end-to-end tests
@@ -32,7 +32,7 @@ npm test
 npm run test:e2e
 ```
 
-2,700+ tests covering server, agent, frontend, and integration scenarios across 68 test files.
+Vitest and Playwright cover server, agent, frontend, Yeaft engine, provider routing, and integration scenarios.
 
 ## Building Frontend
 
@@ -59,22 +59,25 @@ hook in this directory exists specifically to prevent a recurrence.
 
 ### Correct flow
 
-```
-  worktree-feat-xxx  ──push──►  origin/main  ──tag──►  git tag v0.1.X
-        │                           ▲                         │
-        │                           │                         ▼
-        └───  (review + test)  ─────┘                   git push origin v0.1.X
-                                                       (only from `main`)
+````
+  worktree-feat-xxx  ──push branch──►  PR  ──merge──►  origin/main  ──tag──►  v0.1.X
+        │                            ▲                  ▲                    │
+        │                            │                  │                    ▼
+        └────── tests + review ──────┘                  └────────── git push origin v0.1.X
+                                                                    (only from `main`)
 ```
 
 1. Develop on a worktree branch (`worktree-feat-...`).
 2. Run `npm test` — every test must pass.
-3. `git push origin HEAD:main` — merge the feature onto `main`.
-4. `git checkout main && git pull` — switch to `main` locally.
-5. `git tag v0.1.X` — tag the `main` commit.
-6. `git push origin v0.1.X` — publish the dev tag.
-7. Only when a production release is explicitly requested: repeat (5)–(6)
-   with `release-v0.1.X`.
+3. Push the feature branch, not `main`.
+4. Open a PR against `main`.
+5. Merge the PR only after review and green validation.
+6. `git checkout main && git pull --ff-only` — switch to `main` locally.
+7. `git tag v0.1.X` — tag the merged `main` commit.
+8. `git push origin v0.1.X` — publish the dev tag.
+9. Only when a production release is explicitly requested: repeat (7)–(8) with `release-v0.1.X`.
+
+Do **not** push feature branches directly to `main` (`HEAD:main`, `<branch>:main`, or equivalent).
 
 ### Enforcement
 

@@ -26,7 +26,7 @@ Yeaft 是一个**三层架构**的多 provider AI 协作平台：
 │  │  ─ claude-code        │  │  ─ engine.js query loop          │ │
 │  │  ─ copilot (ACP)      │  │  ─ H2-AMS 记忆                   │ │
 │  │                       │  │  ─ multi-provider LLM router      │ │
-│  │  spawn 外部 CLI 子进程 │  │  ─ 40+ 工具                       │ │
+│  │  spawn 外部 CLI 子进程 │  │  ─ 30+ 工具                       │ │
 │  └─────────────────────┘  └──────────────────────────────────┘ │
 │  ┌─────────────────────────────────────────────────────────┐  │
 │  │  Crew 多角色子系统（独立 wire type，跨 worktree）          │  │
@@ -81,7 +81,7 @@ claude-web-chat/
 │   │   ├── memory/          # H2-AMS 记忆
 │   │   ├── llm/             # LLM adapter（anthropic / openai-responses）
 │   │   ├── sessions/        # Session 编排（多 VP fan-out）
-│   │   ├── tools/           # 40+ 内置工具
+│   │   ├── tools/           # 30+ 内置工具
 │   │   └── ...
 │   ├── claude.js            # Claude Chat 旧路径（仍保留）
 │   ├── conversation.js      # Chat session 生命周期
@@ -115,14 +115,17 @@ Web → ws "send_message" → Server → ws agent
   → ws "claude_output" → Server → ws Web → MessageList 渲染
 ```
 
-### Yeaft 会话
+### Yeaft Code Agent
 ```
-Web → ws "yeaft_session_chat" → Server → ws agent
-  → coordinator.ingest() → Promise.all(runVpTurn × VPs)
-  → Engine.query() → tool exec → LLM stream → 事件
-  → web-bridge.js 翻译为 claude_output envelope
-  → ws "yeaft_output" → Server → ws Web → handleYeaftOutput → handleClaudeOutput → MessageList
+Web → ws "yeaft_session_send" → Server → ws agent
+  → handleYeaftSessionSend() → coordinator.ingest()
+  → Promise.all(runVpTurn × selected VPs)
+  → Engine.query() → tool exec → LLM stream → engine events
+  → web-bridge.js 归一化事件，复用 MessageList 渲染
+  → ws "yeaft_output" → Server → ws Web → handleYeaftOutput → MessageList
 ```
+
+**兼容命名说明：** `yeaft_session_send` 是当前产品层发送通道。`yeaft_session_chat`、`unify_group_chat` 等旧 wire alias，`groupId` 等旧 payload 字段，以及 `claude_output` / `handleClaudeOutput` 等渲染内部名仍为兼容保留。它们不是新的领域术语；除非代码明确在处理 legacy compatibility，否则新 API 不应使用这些名字。
 
 ## CI/CD
 

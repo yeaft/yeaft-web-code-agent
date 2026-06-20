@@ -32,7 +32,7 @@ If no users are configured, the server starts with a warning — create the firs
 
 ## Yeaft Engine Credentials
 
-When the agent runs Yeaft Sessions it talks directly to the LLM providers you list in `~/.yeaft/config.json`. Each provider entry has **one of two** credential modes:
+When the agent runs Yeaft Code Agent it talks directly to the LLM providers you list in `~/.yeaft/config.json`. Each provider entry has **one of two** credential modes:
 
 | Mode | Field | What happens |
 | --- | --- | --- |

@@ -155,7 +155,7 @@ Each request gets the current valid token from the credential provider.
 - Adds required headers (`Copilot-Integration-Id`, `Editor-Version`, etc.)
 - Auto-refreshes
 
-> **Important**: this credential provider is a **completely different path** from [Copilot Mode](../user/copilot-mode.md) (which spawns `copilot --acp` subprocess), although both use the same GitHub OAuth token. The former lets the Yeaft engine call Copilot API directly; the latter uses Copilot CLI as Web Chat's AI backend.
+> **Important**: this credential provider is a **completely different path** from [Copilot Mode](../user/copilot-mode.md) (which spawns `copilot --acp` subprocess), although both use the same GitHub OAuth token. The former lets the Yeaft engine call Copilot API directly; the latter uses Copilot CLI as a 1:1 chat backend in Yeaft Web Code Agent.
 
 #### Writing a custom credential provider
 1. Add `<name>.js` under `credentials/`, exporting `getToken({ provider })`

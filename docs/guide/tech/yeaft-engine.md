@@ -2,7 +2,7 @@
 
 Yeaft's own AI engine runs in `agent/yeaft/` and depends on **no external CLI** (neither Claude nor Copilot is required). It has its own query loop, memory system, tool registry, and LLM router. This chapter covers its **core architecture** and **turn lifecycle**.
 
-> Audience: developers who want to **read or modify the Yeaft engine**. For the end-user view see [Yeaft Sessions](../user/yeaft-group.md).
+> Audience: developers who want to **read or modify the Yeaft engine**. For the end-user view see [Yeaft Code Agent](../user/yeaft-group.md).
 
 ## Module Layout
 
@@ -104,7 +104,7 @@ agent/yeaft/
         turn complete → web-bridge emits 'result' envelope
 ```
 
-## Session & Group Orchestration
+## Session & VP Orchestration
 
 ### Session
 `session.js`'s `loadSession()` wires up all subsystems:
@@ -116,16 +116,16 @@ const session = await loadSession({ conversationId, userId, agentId });
 
 A session contains:
 - one `Engine` instance
-- a set of `groups[]` (Group Mode may have several; Chat Mode just one)
+- Session state, roster, active VPs, and per-VP turn state
 - shared `memory` / `tools` / `llm` subsystems
 
-### Group Mode
-`sessions/coordinator.js` on receiving `yeaft_session_chat`:
+### Session fan-out
+`sessions/coordinator.js` on receiving `yeaft_session_send` (legacy alias: `yeaft_session_chat`):
 
 ```js
-async ingest({ groupId, text, mentions, attachments }) {
-  const vps = roster.resolveVps(mentions);  // @mention → VPs (no mentions → everyone)
-  await Promise.all(vps.map(vp => runVpTurn(group, vp, text)));
+async ingest({ sessionId, text, mentions, attachments }) {
+  const vps = roster.resolveVps(mentions);  // @mention → VPs (no mentions → default VP)
+  await Promise.all(vps.map(vp => runVpTurn(session, vp, text)));
 }
 ```
 
@@ -143,7 +143,7 @@ VPs run `runVpTurn` in parallel, each with its own `Engine.query()`. Completion 
 | `base.md` | Core identity + principles (bilingual EN/zh) |
 | `identity-yeaft.md` | Yeaft identity + brand instructions |
 | `common-rules.md` | Common behavior rules (don't lie, don't fake lookups…) |
-| `mode-unified.md` | The single current run mode (covers all group collab instructions) |
+| `mode-unified.md` | The single current run mode (covers Session collaboration instructions) |
 | `mode-dream.md` | Dream mode: prompt for memory maintenance |
 | `plan-instruction.md` | Extra instructions for the plan phase |
 | `tool-guidance.md` | Tool usage best practices |
@@ -179,9 +179,9 @@ const registry = createFullRegistry({ scope, mode, allowedTools });
 const result = await registry.execute(toolName, input, ctx);
 ```
 
-Tools are filtered by mode: `unified` mode gets the full 40+ tool set; `dream` mode only gets memory-maintenance-related tools.
+Tools are filtered by mode: `unified` mode gets the full 30+ tool set; `dream` mode only gets memory-maintenance-related tools.
 
-Tool implementations are split by category — see [Yeaft Sessions](../user/yeaft-group.md) for the full list.
+Tool implementations are split by category — see [Yeaft Code Agent](../user/yeaft-group.md) for the full list.
 
 ## Memory / LLM / Group Subsystems
 

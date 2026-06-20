@@ -2,7 +2,7 @@
 
 H2-AMS is the **cross-session persistent memory** subsystem of the Yeaft engine. It combines an in-memory Active Memory Set with a SQLite FTS pre-flow recall layer (see `agent/yeaft/memory/DESIGN-H2-AMS.md` for the long-form rationale). Before each turn the engine actively recalls relevant memory and injects it into the system prompt; after each turn it uses an LLM to amend memory. This chapter covers the **architecture**, **scope model**, and **read/write paths**.
 
-> Audience: developers who want to understand / debug / extend Yeaft memory. End-user blurb in [Yeaft Sessions](../user/yeaft-group.md#what-the-memory-system-does).
+> Audience: developers who want to understand / debug / extend Yeaft memory. End-user blurb in [Yeaft Code Agent](../user/yeaft-group.md#memory-design).
 
 ## Design Goals
 

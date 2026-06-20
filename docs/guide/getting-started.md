@@ -3,7 +3,7 @@
 Yeaft has two components:
 
 1. **Server** — central hub (Express + WebSocket), runs once per deployment.
-2. **Agent** — runs on each machine you want to drive (your laptop, a VPS, a sandbox container). The Yeaft engine for Group Mode is **bundled** in the agent; the Claude / Copilot CLIs are **optional** depending on which backends you want.
+2. **Agent** — runs on each machine you want to drive (your laptop, a VPS, a sandbox container). The native Yeaft Code Agent engine is **bundled** in the agent; the Claude / Copilot CLIs are **optional** depending on which backends you want.
 
 ## Option A: npm (Agent only)
 
@@ -39,9 +39,9 @@ Then open `http://localhost:3456` in your browser.
 
 ## Next Steps
 
-- [Choose a Session Backend](./user/choose-backend.md) — Claude Code vs Copilot vs Yeaft Sessions
+- [Choose a Code Agent Path](./user/choose-backend.md) — Claude Code vs Copilot vs Yeaft Code Agent
 - [Deploy the Server (Docker)](./deploy-server.md) — Production deployment guide
 - [Set up an Agent](./deploy-agent.md) — Connect a worker machine
 - [Yeaft Engine Config](./yeaft-config.md) — `~/.yeaft/config.json` schema
 - [Chat (Claude Code)](./user/chat-mode.md) — Start using the chat interface
-- [Yeaft Sessions](./user/yeaft-group.md) — Multi-VP collaboration
+- [Yeaft Code Agent](./user/yeaft-group.md) — Multi-VP collaboration

@@ -1,6 +1,8 @@
 # Yeaft Memory & Prompt Architecture — Design Doc
 
-**Status**: draft v4 (autoplan-reviewed) · 2026-04-27
+**Status**: historical/internal draft v4 (autoplan-reviewed) · 2026-04-27
+
+> **Terminology note (2026-06):** this file predates the public **Yeaft Web Code Agent** wording. It intentionally preserves historical/internal terms such as `group`, `groupId`, `yeaft_session_chat`, and Chinese `群` where they describe old design sketches or compatibility contracts. Current product-facing docs should use **Yeaft Code Agent** and **Yeaft Session** terminology; new code should not introduce new `group*` / `unify*` names unless explicitly handling legacy compatibility.
 **Owner**: Yeaft Yeaft
 **Scope**: rewrite of memory layout, system-prompt assembly, compact policy, and tool-result lifecycle. Replaces the implicit design currently spread across `prompts.js`, `engine.js`, `memory/*`, and `pipeline/dispatcher.js`.
 

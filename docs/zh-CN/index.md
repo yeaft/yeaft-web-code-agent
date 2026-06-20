@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: Yeaft
-  text: 多 provider AI 协作平台
-  tagline: 一份 Web 界面，三种后端 — Claude Code · GitHub Copilot · Yeaft 会话
+  text: Yeaft Web Code Agent
+  tagline: Web 端代码 Agent 平台：Claude Code、GitHub Copilot、Yeaft 原生多 provider Code Agent
   image:
     src: /images/zh-CN/hero.jpg
     alt: Yeaft
@@ -29,12 +29,12 @@ features:
     details: 用 GitHub Copilot CLI 当后端（ACP 协议）— 同一界面，可挑 Claude / GPT 系任意 model。
     link: /zh-CN/guide/user/copilot-mode
   - icon: 👥
-    title: Yeaft 会话
-    details: 多 VP 群组协作 — @mention 决定 fan-out，跨 session 持久记忆，VP→VP 显式 handoff。
+    title: Yeaft Code Agent
+    details: 原生多 provider 代码 Agent — 1..N 个 VP，持久记忆，30+ 工具，provider/model 路由。
     link: /zh-CN/guide/user/yeaft-group
   - icon: 🖥️
     title: 分屏模式
-    details: 最多 3 个面板并排打开 — 跨后端混搭（一个 Claude + 一个 Copilot + 一个 Yeaft 会话）。
+    details: 最多 3 个面板并排打开 — 跨后端混搭（一个 Claude + 一个 Copilot + 一个原生 Yeaft Session）。
     link: /zh-CN/guide/user/split-screen
   - icon: 🧠
     title: 帮帮团（Expert Panel）

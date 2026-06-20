@@ -1,65 +1,67 @@
-# Choose a Session Backend
+# Choose a Code Agent Path
 
-Yeaft puts three AI backends side-by-side in the same Web UI — you pick one per task. They're **not mutually exclusive**: a single Agent can run Claude Code sessions, Copilot sessions and Yeaft sessions in parallel without interfering with each other.
+Yeaft Web Code Agent puts three execution paths side-by-side in the same Web UI. They are **not mutually exclusive**: a single connected Agent can run Claude Code sessions, Copilot sessions, and native Yeaft Sessions in parallel.
 
-| Backend | Good for | Not ideal for |
+| Path | Good for | Not ideal for |
 | --- | --- | --- |
-| **Claude Code Chat** | Long project collaboration, deep code understanding, requires `/skills` and MCP tools | No Claude Code CLI installed; budget-tight workflows |
-| **Copilot Mode** | Existing GitHub Copilot subscription, want to swap between GPT-5 / Gemini / Claude on demand, standardized ACP protocol | Need `/compact`; depend on Claude-only skill system |
-| **Yeaft Sessions** | Multi-VP parallel discussion, cross-session persistent memory, custom VPs (persona + model + tools) | Single-thread 1:1 chat (Yeaft sessions are multi-VP today) |
+| **Claude Code Chat** | Long project collaboration, deep code understanding, Claude Code `/skills` and MCP tools | No Claude Code CLI installed; workflows that must avoid vendor CLI dependency |
+| **Copilot Mode** | Existing GitHub Copilot subscription, GPT/Claude/Gemini switching through ACP, per-call permission prompts | Need `/compact`; depend on Claude-only skill behavior |
+| **Yeaft Code Agent** | Native multi-provider coding, 1..N VPs, persistent memory, custom tool policy, provider mixing | Workflows that require exact Claude Code CLI behavior |
 
 ## Core differences
 
-### Claude Code Chat (1:1 chat backed by Claude Code CLI)
+### Claude Code Chat
 
-- Each session = one Claude Code CLI subprocess
-- Full Claude Code stack: skills, MCP, subagents, `/compact`, `/clear`, `/btw`
-- Tool calls go through Claude Code's own stream-json protocol
-- Session history lives in `~/.claude/projects/` and can be resumed
+- Each chat session is one Claude Code CLI subprocess.
+- Full Claude Code stack: skills, MCP, subagents, `/compact`, `/clear`, `/btw`.
+- Tool calls go through Claude Code's stream-json protocol.
+- Session history lives in `~/.claude/projects/` and can be resumed.
 
-### Copilot Mode (1:1 chat backed by GitHub Copilot CLI)
+### Copilot Mode
 
-- Each session = one `copilot --acp` subprocess, talks ACP (Agent Client Protocol)
-- Multiple models available (Claude Sonnet 4.x / Claude Opus 4.x / GPT-5.x / Gemini 2.5 Pro etc.), gated by your Copilot subscription
-- Tool permissions confirmed **per call via ask-user popup** (you can toggle "Allow all tools" to skip)
-- Session history lives in `~/.copilot/session-store.db` and can be resumed
+- Each chat session is one `copilot --acp` subprocess.
+- Model availability follows your GitHub Copilot entitlement.
+- Tool permissions are confirmed per call via ask-user popup; the UI can also enable "Allow all tools".
+- Session history lives in `~/.copilot/session-store.db` and can be resumed.
 
-### Yeaft Sessions (multi-VP collaboration on the in-house engine)
+### Yeaft Code Agent
 
-- No external CLI dependency — Yeaft ships its own query loop, memory and tools
-- A session hosts multiple **VPs (Virtual Persons)** — each VP has its own persona, model and toolset
-- A single user message **fan-outs in parallel** to multiple VPs, each replies independently
-- **H2-AMS persistent memory** — keeps vp / group / user / feature / global scopes across sessions
-- Multi-provider LLM: configure OpenAI / Anthropic / GitHub Copilot in any combination via `~/.yeaft/config.json`
+- No external CLI dependency. The native engine, memory, tools, and LLM router ship inside `yeaft-agent`.
+- A Session can host one or many **VPs (Virtual Persons)**. Each VP has its own persona, model, memory, and tool allowlist.
+- One user message can fan out in parallel to several VPs.
+- **H2-AMS persistent memory** keeps user / VP / Session / feature scopes across tasks.
+- Multi-provider LLM routing supports Anthropic, OpenAI Responses, GitHub Copilot dynamic credentials, Azure/OpenAI-compatible gateways, and local proxies through `~/.yeaft/config.json`.
 
 ## How to pick in the UI
 
-### Chat / Crew Mode (Claude Code or Copilot)
+### Claude Code Chat or Copilot Mode
 
 Sidebar `+` opens the session config modal:
 
-1. Pick **Agent** (machine)
-2. Pick **Provider**: `Claude Code` or `Copilot`
-3. Pick **Working directory**
-4. If Copilot, a **model picker** and **Allow all tools** checkbox appear
+1. Pick **Agent** (machine).
+2. Pick **Provider**: `Claude Code` or `Copilot`.
+3. Pick **Working directory**.
+4. If Copilot is selected, model and permission options appear.
 
-### Yeaft Sessions
+### Yeaft Code Agent
 
-Sidebar tab bar at the top → switch to **Yeaft**, then use `+` to create a session:
+Switch the sidebar tab bar to **Yeaft**, then use `+` to create a Session:
 
-1. Enter session name
-2. Pick the VPs you want in this session (VPs are reusable; build them in the VP Library)
-3. Send a user message; the VPs reply **in parallel** (use `@VPname` to address a subset)
+1. Enter a Session name.
+2. Pick reusable VPs from the roster.
+3. Choose the default VP.
+4. Send a message; use `@VPName` to address a subset.
 
 ## Which one should I use?
 
-- **Write code daily + already using Claude Code** → Claude Code Chat
-- **Want it cheaper / want GPT-5 / company has Copilot Enterprise** → Copilot Mode
-- **Want "PM + Dev + Reviewer" to discuss a feature with you simultaneously** → Crew Mode (on top of Claude Code)
-- **Want multiple VPs to remember you long-term / continue memory across tasks / mix OpenAI + Anthropic freely** → Yeaft Sessions
+- **Already use Claude Code daily and need exact Claude behavior** → Claude Code Chat.
+- **Have Copilot Enterprise or want ACP permission prompts / Copilot model catalog** → Copilot Mode.
+- **Want PM + Dev + Reviewer to reason in parallel with long-term memory** → Yeaft Code Agent.
+- **Want to compare Anthropic, OpenAI, Copilot, or a proxy on the same task** → Yeaft Code Agent with multiple VPs.
+- **Want a structured Claude Code based feature team** → Crew Mode.
 
 Next:
 
 - [Claude Code Chat](./chat-mode.md)
 - [Copilot Mode](./copilot-mode.md)
-- [Yeaft Sessions](./yeaft-group.md)
+- [Yeaft Code Agent](./yeaft-group.md)

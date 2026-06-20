@@ -42,7 +42,7 @@ Yeaft's server / agent / web client talk over **WebSocket**. Every message is a 
 | Type | Fields | Meaning |
 | --- | --- | --- |
 | `send_message` | `conversationId, text, attachments?` | User sends a message in Chat mode |
-| `yeaft_session_chat` | `groupId, text, mentions?, attachments?` | Send in Yeaft Sessions (with @mention) |
+| `yeaft_session_send` | `sessionId, text, mentions?, attachments?` | Send to Yeaft Code Agent Session (with @mention) |
 | `cancel_execution` | `conversationId` | Abort current turn |
 | `ask_user_answer` | `requestId, answer` | User responds to an ask-user prompt |
 | `create_conversation` | `provider, workDir, options?` | Start a new session |
@@ -147,15 +147,15 @@ The Yeaft engine emits its own events (`text_delta` / `thinking_delta` / `tool_c
 | tool result (after registry executes) | `{ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id, content }] } }` |
 | `stop { stopReason }` + `usage` | `{ type: 'result', subtype, usage, total_cost_usd }` |
 
-Yeaft uses the `yeaft_output` type (payload same as claude_output `data`); frontend store handles it with `handleYeaftOutput()` → internally routes to `handleClaudeOutput()`. The extra type layer is purely for per-VP / per-group fan-out.
+Yeaft uses the `yeaft_output` type (payload same as claude_output `data`); frontend store handles it with `handleYeaftOutput()` → internally routes to `handleClaudeOutput()`. The extra type layer is purely for per-VP / per-Session fan-out.
 
-## yeaft_session_chat (Group Mode's only send channel)
+## yeaft_session_send (Yeaft Code Agent Session send channel)
 
 ```js
 {
-  type: 'yeaft_session_chat',
+  type: 'yeaft_session_send',
   conversationId: 'yeaft-virtual-xxx',
-  groupId: 'group-abc',
+  sessionId: 'session-abc',
   text: '@alice take a look at this bug',
   mentions: ['alice'],            // parsed @mention VP names
   attachments: [{ name, mime, base64 }],
@@ -163,14 +163,14 @@ Yeaft uses the `yeaft_output` type (payload same as claude_output `data`); front
 ```
 
 Agent flow on receipt:
-1. `message-router.js` dispatches to `handleYeaftGroupChat()`
-2. `coordinator.ingest({ groupId, text, mentions, attachments })`
-3. Resolve VP set from mentions (no mentions → everyone)
+1. `message-router.js` dispatches to `handleYeaftSessionSend()`
+2. `coordinator.ingest({ sessionId, text, mentions, attachments })`
+3. Resolve VP set from mentions (no mentions → default VP)
 4. `Promise.all(vps.map(runVpTurn))` in parallel
 5. Each VP's Engine events translated to `yeaft_output` via `web-bridge` and pushed back
 6. Frontend fans out per VP id into per-thread views
 
-Legacy alias: `unify_group_chat` is a synonym (early wire type); both server and agent accept it. **Do not use `unify_*` in new code.**
+Legacy aliases: `yeaft_session_chat` and `unify_group_chat` are accepted for compatibility, and some old payloads still contain `groupId`. New code should send `yeaft_session_send` with `sessionId`. **Do not use `unify_*` or introduce new `group*` names in new code.**
 
 ## ask-user Round-Trip
 
