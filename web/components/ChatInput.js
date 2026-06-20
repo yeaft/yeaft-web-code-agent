@@ -221,7 +221,7 @@ export default {
       // to the actual send surface: Chat mode must stay on the expert path,
       // while group/Yeaft mode alone gets VP mentions. This prevents a mode
       // check from making ordinary Chat messages follow group semantics.
-      return store.currentView === 'yeaft' && !!store.yeaftAgentId;
+      return store.currentView === 'yeaft' && !!store.currentAgent;
     };
 
     const vpMentionQuery = Vue.computed(() => {

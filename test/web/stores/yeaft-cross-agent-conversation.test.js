@@ -15,7 +15,7 @@ describe('Yeaft cross-agent conversation selection', () => {
   it('uses the active session owner agent conversation when returning from another agent', () => {
     const state = {
       currentView: 'yeaft',
-      yeaftAgentId: 'agent-a',
+      currentAgent: 'agent-a',
       yeaftConversationId: 'conv-b',
       yeaftConversationIdsByAgent: {
         'agent-a': 'conv-a',
@@ -45,7 +45,7 @@ describe('Yeaft cross-agent conversation selection', () => {
   it('falls back to the current agent conversation when the session owner is unknown', () => {
     const state = {
       currentView: 'yeaft',
-      yeaftAgentId: 'agent-b',
+      currentAgent: 'agent-b',
       yeaftConversationId: 'conv-b',
       yeaftConversationIdsByAgent: {
         'agent-a': 'conv-a',

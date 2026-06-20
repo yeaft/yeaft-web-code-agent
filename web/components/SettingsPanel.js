@@ -1017,7 +1017,7 @@ export default {
     },
     onYeaftLlmSaved() {
       // Mirror old YeaftSettings: bounce engine so new LLM config takes effect.
-      const agentId = this.chatStore?.yeaftAgentId;
+      const agentId = this.chatStore?.currentAgent;
       if (agentId) {
         this.chatStore.sendWsMessage({ type: 'yeaft_reset', agentId });
       }

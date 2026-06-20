@@ -385,7 +385,7 @@ export default {
       return this.agentOptions.map(a => `${a.id}:${a.online ? 1 : 0}`).join(',');
     },
     folderPickerAgentId() {
-      return this.form.agentId || this.chat?.yeaftAgentId || this.chat?.currentAgent || '';
+      return this.form.agentId || this.chat?.currentAgent || '';
     },
     defaultWorkDir() {
       const selected = this.agentOptions.find(a => a.id === this.form.agentId);
@@ -556,7 +556,7 @@ export default {
         const current = agents.find(a => a.id === this.form.agentId && a.online);
         if (current) return;
         const chat = this.chat;
-        const preferred = chat ? (chat.yeaftAgentId || chat.currentAgent || null) : null;
+        const preferred = chat ? (chat.currentAgent || null) : null;
         const onlinePick = agents.find(a => a.id === preferred && a.online)
           || agents.find(a => a.online)
           || null;
@@ -578,20 +578,19 @@ export default {
      *      lingers when targeting agent B.
      *
      * We compute the agent target with the same precedence the rest of
-     * this modal uses (form.agentId wins; falls back to yeaftAgentId for
-     * users who landed here from inside Yeaft; falls back to
-     * currentAgent for chat-mode users who haven't entered Yeaft yet).
+     * this modal uses (form.agentId wins; falls back to currentAgent — the
+     * single client-bound agent — for users who haven't picked one yet).
      * If nothing resolves, we WARN loudly — silent failure is what made
      * the original bug a multi-file root-cause hunt.
      */
     subscribeVpsFor(agentId) {
       const chat = this.chat;
       if (!chat || typeof chat.sendWsMessage !== 'function') return;
-      const target = agentId || chat.yeaftAgentId || chat.currentAgent || null;
+      const target = agentId || chat.currentAgent || null;
       if (!target) {
         console.warn(
           '[SessionCreateModal] cannot subscribe to VP library — no agent resolved'
-          + ' (form.agentId / chat.yeaftAgentId / chat.currentAgent all null)'
+          + ' (form.agentId / chat.currentAgent all null)'
         );
         return;
       }

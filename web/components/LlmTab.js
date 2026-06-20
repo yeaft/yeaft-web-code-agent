@@ -5,9 +5,9 @@ export default {
   name: 'LlmTab',
   components: { ProviderPresetPicker },
   props: {
-    // task-343: 'chat' (default) binds provider CRUD to chatStore.currentAgent;
-    // 'yeaft' binds to chatStore.yeaftAgentId so Yeaft settings can reuse
-    // this tab without cross-polluting the Chat agent config.
+    // task-343: 'chat' (default) and 'yeaft' both bind provider CRUD to
+    // chatStore.currentAgent (the single client-bound agent). 'yeaft' only
+    // changes the UI affordances (preset picker, simple setup, copilot help).
     context: { type: String, default: 'chat' },
   },
   emits: ['message', 'saved'],
@@ -288,13 +288,13 @@ export default {
     chatStore() {
       return Pinia.useChatStore();
     },
-    // task-343: effective agent id depends on tab context. Swapping here
-    // cascades to agentOnline / currentConfig / requestConfig / saveConfig
-    // without any other call-site changes.
+    // task-343: effective agent id. Both Chat and Yeaft operate on the single
+    // client-bound `currentAgent` pointer — the Yeaft engine config lives in
+    // the same agent's ~/.yeaft, so there is no separate Yeaft agent id. The
+    // `context` prop still drives Yeaft-only UI (preset picker, simple setup),
+    // just not a different agent.
     effectiveAgentId() {
-      return this.context === 'yeaft'
-        ? this.chatStore.yeaftAgentId
-        : this.chatStore.currentAgent;
+      return this.chatStore.currentAgent;
     },
     agentOnline() {
       const agentId = this.effectiveAgentId;
