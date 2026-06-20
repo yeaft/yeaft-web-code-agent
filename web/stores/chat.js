@@ -1564,8 +1564,8 @@ export const useChatStore = defineStore('chat', {
           const prevVpId = this._currentYeaftVpId;
           const prevTurnId = this._currentYeaftTurnId;
           if (msgSessionId != null) this._currentYeaftSessionId = msgSessionId;
-          if (msg.vpId && msg.data.type !== 'result') this._currentYeaftVpId = msg.vpId;
-          if (msg.turnId && msg.data.type !== 'result') this._currentYeaftTurnId = msg.turnId;
+          if (msg.vpId) this._currentYeaftVpId = msg.vpId;
+          if (msg.turnId) this._currentYeaftTurnId = msg.turnId;
           // (2026-05-13) featureId stamping removed along with the Feature system.
           try {
             const shouldPruneWindow = this.currentView === 'yeaft'

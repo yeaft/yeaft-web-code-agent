@@ -302,9 +302,18 @@ export function handleAssistantOutputFrame(store, conversationId, data) {
     stopProcessingWatchdog(store, conversationId);
 
     // Clear per-VP turn tracking if this result belongs to a specific turnId.
+    // `result` is the terminal frame for this VP turn. `vp_turn_end` normally
+    // clears the session-scoped flag, but result is the older/stronger signal
+    // and covers missed or reordered metadata events. Keep the idle check
+    // session-scoped so sibling VP turns in the same session remain running.
+    let completedYeaftSessionId = store._currentYeaftSessionId || null;
     if (store._currentYeaftTurnId && store.activeVpTurns[store._currentYeaftTurnId]) {
       const { [store._currentYeaftTurnId]: _removed, ...rest } = store.activeVpTurns;
+      if (!completedYeaftSessionId && _removed?.sessionId) completedYeaftSessionId = _removed.sessionId;
       store.activeVpTurns = rest;
+    }
+    if (completedYeaftSessionId && typeof store.clearYeaftSessionProcessingIfIdle === 'function') {
+      store.clearYeaftSessionProcessingIfIdle(completedYeaftSessionId);
     }
     // ★ 设置防护窗口，防止后续 agent_list 中的 stale processing:true 重新设回
     if (!store._closedAt) store._closedAt = {};
