@@ -71,8 +71,8 @@ describe('Yeaft UI action polish', () => {
   it('labels session deletion plainly and keeps list removal recoverable', () => {
     expect(enI18n).toContain("'yeaft.session.settings.nav.danger': 'Delete session'");
     expect(zhI18n).toContain("'yeaft.session.settings.nav.danger': '删除会话'");
-    expect(enI18n).toContain("'yeaft.session.removeFromList': 'Remove from current list (recover from Create)'");
-    expect(zhI18n).toContain("'yeaft.session.removeFromList': '从当前列表移除（可从创建页恢复）'");
+    expect(enI18n).toContain("'yeaft.session.removeFromList': 'Remove'");
+    expect(zhI18n).toContain("'yeaft.session.removeFromList': '移除'");
 
     expect(enI18n).not.toContain('Danger zone');
     expect(zhI18n).not.toContain('危险操作');
