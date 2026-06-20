@@ -117,19 +117,19 @@ describe('engine — same-turn background task wait', () => {
     expect(lastMessageText).toContain('all good');
 
     // Engine should have emitted both wait_start and wait_end, plus
-    // user_append for the synthetic task result, plus a final turn_end.
+    // tool_result_update for the original tool result, plus a final turn_end.
     const waitStart = events.find(ev => ev.type === 'async_task_wait_start');
     const waitEnd = events.find(ev => ev.type === 'async_task_wait_end');
     const userAppend = events.find(ev => ev.type === 'user_append');
+    const toolResultUpdate = events.find(ev => ev.type === 'tool_result_update');
     const finalTurnEnd = events.filter(ev => ev.type === 'turn_end').pop();
 
     expect(waitStart).toBeTruthy();
     expect(waitStart.pendingTaskIds).toContain('task-xyz');
     expect(waitEnd).toBeTruthy();
     expect(waitEnd.aborted).toBe(false);
-    expect(userAppend).toBeTruthy();
-    expect(userAppend.internal).toBe(true);
-    expect(userAppend.taskId).toBe('task-xyz');
+    expect(userAppend).toBeFalsy();
+    expect(toolResultUpdate).toMatchObject({ taskId: 'task-xyz', toolCallId: 'call-1' });
     expect(finalTurnEnd).toBeTruthy();
     expect(finalTurnEnd.stopReason).toBe('end_turn');
 
@@ -213,13 +213,15 @@ describe('engine — same-turn background task wait', () => {
     const wireRound4 = JSON.stringify(a.streamCalls[3].messages);
     expect(wireRound4).toContain('finally done');
 
-    // The user append before the task should NOT be tagged internal=true.
+    // The user append before the task should NOT be tagged internal=true;
+    // the later task completion is a tool_result_update, not another
+    // synthetic user append.
     const userAppendEvts = events.filter(ev => ev.type === 'user_append');
-    expect(userAppendEvts.length).toBe(2);
+    expect(userAppendEvts.length).toBe(1);
     expect(userAppendEvts[0].internal).toBe(false);
     expect(userAppendEvts[0].preview).toContain('also tell me');
-    expect(userAppendEvts[1].internal).toBe(true);
-    expect(userAppendEvts[1].taskId).toBe('task-slow');
+    const toolResultUpdate = events.find(ev => ev.type === 'tool_result_update');
+    expect(toolResultUpdate).toMatchObject({ taskId: 'task-slow', toolCallId: 'call-1' });
 
     // Two wait starts, two wait ends.
     expect(events.filter(ev => ev.type === 'async_task_wait_start').length).toBe(2);

@@ -488,6 +488,21 @@ export class Engine {
   #pendingTaskResultMessages = [];
 
   /**
+   * Terminal async task results that should be appended to the original
+   * tool_result message instead of injected as a synthetic user prompt.
+   * @type {Array<{taskId:string, toolCallId:string, content:string|Array, preview:string}>}
+   */
+  #pendingTaskResultUpdates = [];
+
+  /**
+   * Async task ownership metadata captured when a tool registers a
+   * background task. Keyed by taskId so terminal events can update the
+   * original tool_result instead of fabricating a separate turn.
+   * @type {Map<string, { toolCallId?: string, toolName?: string, threadId?: string }>}
+   */
+  #asyncTaskToolMeta = new Map();
+
+  /**
    * Resolvers parked by the main loop while it waits for an async task to
    * terminate (or a fresh user append to arrive). Wake order is FIFO; every
    * resolver is invoked exactly once and the queue cleared, so a single
@@ -1093,7 +1108,10 @@ export class Engine {
       // until the task terminates — its result is then spliced into the
       // next adapter loop in the SAME turn. Tools that don't produce
       // async tasks ignore it.
-      registerAsyncTask: (taskId) => this.#registerAsyncTask(taskId),
+      registerAsyncTask: (taskId, meta = {}) => {
+        const current = typeof vpCtx?.currentToolCall === 'function' ? vpCtx.currentToolCall() : null;
+        this.#registerAsyncTask(taskId, { ...(current || {}), ...(meta || {}) });
+      },
       // Sub-agent plumbing — Agent tool needs these to spawn a child
       // Engine that inherits the parent's adapter / stores / toolset.
       parentEngineDeps: {
@@ -1439,6 +1457,40 @@ export class Engine {
     }
   }
 
+  #formatTaskResultUpdateContent(content) {
+    if (typeof content === 'string') return content;
+    try { return JSON.stringify(content); } catch { return String(content); }
+  }
+
+  #drainPendingTaskResultUpdates(conversationMessages) {
+    if (this.#pendingTaskResultUpdates.length === 0) return [];
+    const updates = this.#pendingTaskResultUpdates.splice(0);
+    const applied = [];
+    for (const update of updates) {
+      if (!update?.toolCallId) continue;
+      const appendText = this.#formatTaskResultUpdateContent(update.content);
+      if (!appendText.trim()) continue;
+      const toolMsg = [...conversationMessages].reverse().find((msg) => (
+        msg && msg.role === 'tool' && msg.toolCallId === update.toolCallId
+      ));
+      if (!toolMsg) {
+        this.#pendingTaskResultMessages.push({
+          content: update.content,
+          preview: update.preview,
+          internal: true,
+          taskId: update.taskId,
+        });
+        continue;
+      }
+      const prior = typeof toolMsg.content === 'string'
+        ? toolMsg.content
+        : this.#formatTaskResultUpdateContent(toolMsg.content);
+      toolMsg.content = `${prior}\n\n${appendText}`;
+      applied.push(update);
+    }
+    return applied;
+  }
+
   #drainPendingUserMessages(drainPendingUserMessages) {
     const pending = [];
     if (typeof drainPendingUserMessages === 'function') {
@@ -1590,10 +1642,13 @@ export class Engine {
         const leftover = Array.from(this.#pendingAsyncTaskIds);
         this.#pendingAsyncTaskIds.clear();
         for (const tid of leftover) {
+          this.#asyncTaskToolMeta.delete(tid);
           try { this.#asyncTaskCoordinator?.onUnregister?.(tid); } catch { /* ignore */ }
         }
       }
+      this.#asyncTaskToolMeta.clear();
       this.#pendingTaskResultMessages.length = 0;
+      this.#pendingTaskResultUpdates.length = 0;
       // Release any parked waiters so they don't pin a microtask after
       // query() returns. The loop has already exited so they're harmless,
       // but cleanup keeps the promise graph tight.
@@ -2028,6 +2083,21 @@ export class Engine {
             threadId,
             preview: String(item.preview || '').slice(0, 200),
             internal: Boolean(item.internal),
+          };
+        }
+      }
+      const taskResultUpdatesBeforeStream = this.#drainPendingTaskResultUpdates(conversationMessages);
+      if (taskResultUpdatesBeforeStream.length > 0) {
+        for (const update of taskResultUpdatesBeforeStream) {
+          yield {
+            type: 'tool_result_update',
+            turnId: queryTurnId,
+            loopNumber: turnNumber,
+            threadId,
+            taskId: update.taskId,
+            toolCallId: update.toolCallId,
+            content: update.content,
+            preview: update.preview,
           };
         }
       }
@@ -2597,6 +2667,7 @@ export class Engine {
         // never "fall through" with content sitting in either queue.
         while (!signal?.aborted
                && this.#pendingTaskResultMessages.length === 0
+               && this.#pendingTaskResultUpdates.length === 0
                && this.#pendingUserMessages.length === 0) {
           if (this.#pendingAsyncTaskIds.size === 0) break;
           await this.#waitForAsyncWake(signal);
@@ -2610,6 +2681,23 @@ export class Engine {
           remainingTaskIds: Array.from(this.#pendingAsyncTaskIds),
         };
         if (!signal?.aborted) {
+          const taskResultUpdatesAfterAsyncWait = this.#drainPendingTaskResultUpdates(conversationMessages);
+          if (taskResultUpdatesAfterAsyncWait.length > 0) {
+            for (const update of taskResultUpdatesAfterAsyncWait) {
+              yield {
+                type: 'tool_result_update',
+                turnId: queryTurnId,
+                loopNumber: turnNumber,
+                threadId,
+                taskId: update.taskId,
+                toolCallId: update.toolCallId,
+                content: update.content,
+                preview: update.preview,
+              };
+            }
+            yield { type: 'turn_end', turnNumber, stopReason: 'async_task_continue', threadId };
+            continue;
+          }
           const appendedAfterAsyncWait = this.#drainPendingUserMessages(drainPendingUserMessages);
           if (appendedAfterAsyncWait.length > 0) {
             for (const item of appendedAfterAsyncWait) {
@@ -2781,6 +2869,7 @@ export class Engine {
       }
 
       // Execute tool calls and feed results back
+      let currentToolCallForAsyncTask = null;
       // task-707: requestEndTurn is a per-batch closure that lets a tool
       // signal "end this turn after the current batch — no adapter retry".
       // We re-create the closure each iteration because endTurnRequested
@@ -2798,6 +2887,7 @@ export class Engine {
         getCurrentTodos,
         setCurrentTodos,
         workDir,
+        currentToolCall: () => currentToolCallForAsyncTask ? { ...currentToolCallForAsyncTask } : null,
         requestEndTurn: (reason) => {
           // First call wins — preserve the kind/reason of the first tool
           // that asked to end the turn. Late callers (a second
@@ -2859,6 +2949,11 @@ export class Engine {
 
         let output;
         let isError = false;
+        currentToolCallForAsyncTask = {
+          id: tc.id,
+          name: tc.name,
+          threadId: runtimeThreadId,
+        };
 
         // Resolve tool: prefer ToolRegistry, fallback to legacy #tools Map
         const hasTool = this.#toolRegistry
@@ -2893,6 +2988,8 @@ export class Engine {
             yield { type: 'tool_end', id: tc.id, name: tc.name, output, isError: true, threadId: this.currentThreadId };
           }
         }
+
+        currentToolCallForAsyncTask = null;
 
         const toolDurationMs = Date.now() - toolStartTime;
 
@@ -3351,12 +3448,23 @@ export class Engine {
     const preview = typeof opts.preview === 'string'
       ? opts.preview
       : (typeof content === 'string' ? content.slice(0, 200) : '[task result]');
-    this.#pendingTaskResultMessages.push({
-      content,
-      preview,
-      internal: true,
-      taskId,
-    });
+    const meta = this.#asyncTaskToolMeta.get(taskId) || {};
+    this.#asyncTaskToolMeta.delete(taskId);
+    if (typeof meta.toolCallId === 'string' && meta.toolCallId) {
+      this.#pendingTaskResultUpdates.push({
+        taskId,
+        toolCallId: meta.toolCallId,
+        content,
+        preview,
+      });
+    } else {
+      this.#pendingTaskResultMessages.push({
+        content,
+        preview,
+        internal: true,
+        taskId,
+      });
+    }
     this.#wakeAsyncTaskWaiters();
     return true;
   }
@@ -3365,11 +3473,22 @@ export class Engine {
    * Register a background task as belonging to the current query. Called
    * from tools (bash background, agent spawn) via `toolCtx.registerAsyncTask`.
    * @param {string} taskId
+   * @param {{ id?: string, name?: string, threadId?: string, toolCallId?: string, toolName?: string }} [meta]
    * @returns {void}
    */
-  #registerAsyncTask(taskId) {
+  #registerAsyncTask(taskId, meta = {}) {
     if (typeof taskId !== 'string' || !taskId) return;
     this.#pendingAsyncTaskIds.add(taskId);
+    const toolCallId = typeof meta.toolCallId === 'string' && meta.toolCallId
+      ? meta.toolCallId
+      : (typeof meta.id === 'string' && meta.id ? meta.id : null);
+    if (toolCallId) {
+      this.#asyncTaskToolMeta.set(taskId, {
+        toolCallId,
+        toolName: typeof meta.toolName === 'string' && meta.toolName ? meta.toolName : (typeof meta.name === 'string' ? meta.name : undefined),
+        threadId: typeof meta.threadId === 'string' && meta.threadId ? meta.threadId : undefined,
+      });
+    }
     try { this.#asyncTaskCoordinator?.onRegister?.(taskId, this); } catch { /* coord must not throw into tools */ }
   }
 
@@ -3395,6 +3514,7 @@ export class Engine {
       // Fast paths — anything already pending releases instantly. This is
       // the common case when a task finished between adapter loops.
       if (this.#pendingTaskResultMessages.length > 0) return resolve();
+      if (this.#pendingTaskResultUpdates.length > 0) return resolve();
       if (this.#pendingUserMessages.length > 0) return resolve();
       if (signal?.aborted) return resolve();
       this.#asyncTaskWaiters.push(resolve);
