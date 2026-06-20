@@ -333,8 +333,13 @@
   user-select: all;
 }
 
+.sp-cmd-placeholder {
+  color: var(--text-muted);
+}
+
 /* Buttons */
 .sp-btn {
+  padding: 8px 16px;
   padding: 8px 18px;
   border: 1px solid var(--border-color);
   border-radius: 10px;
@@ -1211,19 +1216,13 @@
   margin: 4px 0 0;
 }
 
-.llm-agent-install {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 20px;
+  margin: 4px 0 0;
 }
 
 /* LLM Setup Banner */
 .llm-setup-banner {
   display: flex;
-  gap: 12px;
-  padding: 14px 16px;
-  background: rgba(245, 158, 11, 0.08);
+
   border: 1px solid rgba(245, 158, 11, 0.3);
   border-radius: 8px;
   margin-bottom: 16px;

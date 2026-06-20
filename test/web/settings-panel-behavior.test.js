@@ -73,15 +73,34 @@ describe('SettingsPanel Agent secret behavior', () => {
     expect(instance.agentSecret).toBe(null);
   });
 
-  it('keeps Agent install commands out of the Security tab', async () => {
+  it('keeps Agent setup commands with the Security secret', async () => {
     const component = await loadComponent();
     const noSecret = createInstance(component, { agentSecret: null });
 
-    expect(noSecret.agentInstallCommand).toBeUndefined();
-    expect(noSecret.agentLlmCommand).toBeUndefined();
-    expect(noSecret.agentRunCommand).toBeUndefined();
-    expect(noSecret.agentServiceCommand).toBeUndefined();
+    expect(component.template).toContain("settings.security.agentSetupCommands");
+    expect(component.template).toContain("settings.security.agentCmdInstall");
+    expect(component.template).toContain("settings.security.agentCmdService");
+    expect(component.template).toContain("settings.security.agentCmdLlm");
+    expect(component.template.indexOf("settings.security.agentKey")).toBeLessThan(
+      component.template.indexOf("settings.security.agentCmdInstall"),
+    );
+    expect(noSecret.agentInstallCommand).toBe('npm install -g @yeaft/webchat-agent');
+    expect(noSecret.agentLlmCommand).toBe('yeaft-agent llm use github-copilot --model gpt-5.5');
+    expect(noSecret.agentServiceCommand).toBe('');
     expect(noSecret.agentSecretActionLabel).toBe('settings.security.generateKey');
+  });
+
+  it('builds the Agent server install command from the visible secret and current origin', async () => {
+    const component = await loadComponent();
+    const instance = createInstance(component, {
+      agentSecret: 'fake-secret-generated',
+      profile: { username: 'dev user', displayName: 'Dev User' },
+    });
+
+    expect(instance.serverWsUrl).toBe('wss://example.test');
+    expect(instance.agentServiceCommand).toContain('yeaft-agent install --server wss://example.test');
+    expect(instance.agentServiceCommand).toContain('--secret fake-secret-generated');
+    expect(instance.agentServiceCommand).toContain('--name dev-user-');
   });
 
   it('loads and preserves the secret when settings is mounted already visible', async () => {

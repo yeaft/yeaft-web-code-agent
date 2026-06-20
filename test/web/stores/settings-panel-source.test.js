@@ -67,70 +67,49 @@ describe('Settings panel source', () => {
     expect(settingsPanelSource).toContain('<McpTab @message="onLlmMessage" />');
   });
 
-  it('moves Agent install commands from Security to the LLM tab', () => {
-    // Legacy --server / agent-secret install commands are gone from source + i18n.
-    expect(settingsPanelSource).not.toMatch(/--server\s/);
-    expect(llmTabSource).not.toMatch(/--server\s/);
+  it('keeps Agent setup commands next to the Security secret', () => {
+    expect(settingsPanelSource).toMatch(/--server\s/);
+    expect(settingsPanelSource).toContain('agentServiceCommand()');
+    expect(settingsPanelSource).toContain('agentInstallCommand()');
+    expect(settingsPanelSource).toContain('agentLlmCommand()');
+    expect(settingsPanelSource).toContain('serverWsUrl()');
+    expect(settingsPanelSource).toContain('agentName()');
+    expect(settingsPanelSource).toContain('settings.security.agentSetupCommands');
+    expect(settingsPanelSource).toContain('settings.security.agentCmdInstall');
+    expect(settingsPanelSource).toContain('settings.security.agentCmdService');
+    expect(settingsPanelSource).toContain('settings.security.agentCmdNeedsSecret');
+    expect(settingsPanelSource).toContain('settings.security.agentCmdLlm');
+    expect(settingsPanelSource).toContain('settings.security.agentCmdLlmDesc');
+    expect(settingsPanelSource.indexOf('settings.security.agentKey')).toBeLessThan(
+      settingsPanelSource.indexOf('settings.security.agentCmdInstall'),
+    );
     expect(settingsPanelSource).not.toContain('agentRunCommand');
-    expect(settingsPanelSource).not.toContain('agentServiceCommand');
     expect(settingsPanelSource).not.toContain('agentCmdRun');
-    expect(settingsPanelSource).not.toContain('agentCmdService');
-    expect(settingsPanelSource).not.toContain('agentCmdNeedsSecret');
-    expect(enSource).not.toContain('agentCmdRun');
-    expect(enSource).not.toContain('agentCmdService');
-    expect(enSource).not.toContain('agentCmdNeedsSecret');
-    expect(enSource).not.toContain('--server');
-    expect(zhSource).not.toContain('agentCmdRun');
-    expect(zhSource).not.toContain('agentCmdService');
-    expect(zhSource).not.toContain('agentCmdNeedsSecret');
-    expect(zhSource).not.toContain('--server');
 
-    // Security now only owns the secret. Agent install guidance belongs under LLM.
-    expect(settingsPanelSource).not.toContain('agentInstallCommand()');
-    expect(settingsPanelSource).not.toContain('agentLlmCommand()');
-    expect(settingsPanelSource).not.toContain('settings.security.agentCmdInstall');
-    expect(settingsPanelSource).not.toContain('settings.security.agentCmdLlm');
-    expect(settingsPanelSource).not.toContain('settings.security.agentCmdLlmDesc');
-    expect(enSource).not.toContain('settings.security.agentCmdInstall');
-    expect(enSource).not.toContain('settings.security.agentCmdLlm');
-    expect(enSource).not.toContain('settings.security.agentCmdLlmDesc');
-    expect(zhSource).not.toContain('settings.security.agentCmdInstall');
-    expect(zhSource).not.toContain('settings.security.agentCmdLlm');
-    expect(zhSource).not.toContain('settings.security.agentCmdLlmDesc');
+    // LLM settings owns model/provider configuration. Agent bootstrap commands
+    // stay with the secret because users need both to connect a new machine.
+    expect(llmTabSource).not.toContain('class="llm-agent-install"');
+    expect(llmTabSource).not.toContain('agentInstallCommand()');
+    expect(llmTabSource).not.toContain('copilotUseCommand()');
+    expect(llmTabSource).not.toContain('--server');
 
-    // LLM renders only copyable script rows: install Agent, then configure Copilot.
-    expect(llmTabSource).toContain('class="llm-agent-install"');
-    expect(llmTabSource).toContain('agentInstallCommand()');
-    expect(llmTabSource).toContain("return 'npm install -g @yeaft/webchat-agent';");
-    expect(llmTabSource).toContain('copilotUseCommand()');
-    expect(llmTabSource).toContain("return 'yeaft-agent llm use github-copilot --model gpt-5.5';");
-    expect(llmTabSource).toContain('copyText(agentInstallCommand)');
-    expect(llmTabSource).toContain('copyText(copilotUseCommand)');
-    expect(llmTabSource.indexOf('class="llm-agent-install"')).toBeLessThan(llmTabSource.indexOf('v-if="!effectiveAgentId"'));
-    expect(llmTabSource.indexOf('class="llm-agent-install"')).toBeLessThan(llmTabSource.indexOf('v-else-if="!agentOnline"'));
-    expect(llmTabSource.indexOf('class="llm-agent-install"')).toBeLessThan(llmTabSource.indexOf('v-else-if="loadError"'));
-    expect(llmTabSource.indexOf('class="llm-agent-install"')).toBeLessThan(llmTabSource.indexOf('<!-- Config loaded -->'));
-    expect(llmTabSource).not.toContain('copilotInstructionsDesc');
-    expect(llmTabSource).not.toContain('copilotStepLoginDesc');
-    expect(llmTabSource).not.toContain('yeaft-agent llm show');
+    expect(enSource).toContain("'settings.security.agentSetupCommands': 'Agent setup commands'");
+    expect(enSource).toContain("'settings.security.agentCmdInstall': 'Install Agent'");
+    expect(enSource).toContain("'settings.security.agentCmdService': 'Run Agent server'");
+    expect(enSource).toContain("'settings.security.agentCmdLlm': 'Use Copilot'");
+    expect(enSource).not.toContain('settings.llm.agentInstallCommands');
+    expect(enSource).not.toContain('settings.llm.agentInstallCommand');
+    expect(enSource).not.toContain('settings.llm.copilotUseLabel');
+    expect(zhSource).toContain("'settings.security.agentSetupCommands': 'Agent 接入命令'");
+    expect(zhSource).toContain("'settings.security.agentCmdInstall': '安装 Agent'");
+    expect(zhSource).toContain("'settings.security.agentCmdService': '运行 Agent server'");
+    expect(zhSource).toContain("'settings.security.agentCmdLlm': '使用 Copilot'");
+    expect(zhSource).not.toContain('settings.llm.agentInstallCommands');
+    expect(zhSource).not.toContain('settings.llm.agentInstallCommand');
+    expect(zhSource).not.toContain('settings.llm.copilotUseLabel');
 
-    // Both locales carry labels for the two copied snippets, not long instructions.
-    expect(enSource).toContain("'settings.llm.agentInstallCommands': 'Yeaft Agent install commands'");
-    expect(enSource).toContain("'settings.llm.agentInstallCommand': 'Install Agent'");
-    expect(enSource).toContain("'settings.llm.copilotUseLabel': 'Use Copilot'");
-    expect(enSource).not.toContain('copilotInstructionsDesc');
-    expect(enSource).not.toContain('copilotStepVerifyDesc');
-    expect(zhSource).toContain("'settings.llm.agentInstallCommands': 'Yeaft Agent 安装命令'");
-    expect(zhSource).toContain("'settings.llm.agentInstallCommand': '安装 Agent'");
-    expect(zhSource).toContain("'settings.llm.copilotUseLabel': '使用 Copilot'");
-    expect(zhSource).not.toContain('copilotInstructionsDesc');
-    expect(zhSource).not.toContain('copilotStepVerifyDesc');
-
-    // Removing the --server install hint also retired its helpers and placeholder
-    // styling. Guard against either silently sneaking back in via copy/paste.
-    expect(settingsPanelSource).not.toContain('agentName()');
-    expect(settingsPanelSource).not.toContain('serverWsUrl()');
-    expect(settingsCss).not.toContain('.sp-cmd-placeholder');
+    expect(settingsCss).toContain('.sp-cmd-placeholder');
+    expect(settingsCss).not.toContain('.llm-agent-install');
   });
 
   it('keeps shared sidebar agent dropdown styles after removing git.css', () => {
