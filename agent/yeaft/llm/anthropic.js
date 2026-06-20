@@ -278,7 +278,7 @@ export class AnthropicAdapter extends LLMAdapter {
         signal,
       });
     } catch (err) {
-      throw classifyFetchError(err, { providerLabel: 'Anthropic' });
+      throw classifyFetchError(err, { providerLabel: 'Anthropic', signal });
     }
 
     if (!response.ok) {
@@ -320,6 +320,8 @@ export class AnthropicAdapter extends LLMAdapter {
     const rawSseBodyChunks = [];
     const responseHeaders = safeHeaders(response);
     const responseStatus = response.status;
+    let sawStop = false;
+    let sawMessageStart = false;
 
     try {
       while (true) {
@@ -339,7 +341,10 @@ export class AnthropicAdapter extends LLMAdapter {
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           const data = line.slice(6).trim();
-          if (data === '[DONE]') continue;
+          if (data === '[DONE]') {
+            sawStop = true;
+            continue;
+          }
 
           let event;
           try {
@@ -439,6 +444,7 @@ export class AnthropicAdapter extends LLMAdapter {
           } else if (type === 'message_delta') {
             const stopReason = event.delta?.stop_reason;
             if (stopReason) {
+              sawStop = true;
               yield {
                 type: 'stop',
                 stopReason: this.#mapStopReason(stopReason),
@@ -452,7 +458,10 @@ export class AnthropicAdapter extends LLMAdapter {
                 outputTokens: event.usage.output_tokens || 0,
               };
             }
+          } else if (type === 'message_stop') {
+            sawStop = true;
           } else if (type === 'message_start') {
+            sawMessageStart = true;
             // Usage from message_start
             if (event.message?.usage) {
               yield {
@@ -472,8 +481,11 @@ export class AnthropicAdapter extends LLMAdapter {
           }
         }
       }
+      if (sawMessageStart && !sawStop) {
+        throw new LLMServerError('Anthropic stream ended before stop event', 0);
+      }
     } catch (err) {
-      throw classifyFetchError(err, { providerLabel: 'Anthropic' });
+      throw classifyFetchError(err, { providerLabel: 'Anthropic', signal });
     } finally {
       reader.releaseLock();
       // Emit raw exchange after stream completes (or errors). Body is the
@@ -527,7 +539,7 @@ export class AnthropicAdapter extends LLMAdapter {
         signal,
       });
     } catch (err) {
-      throw classifyFetchError(err, { providerLabel: 'Anthropic' });
+      throw classifyFetchError(err, { providerLabel: 'Anthropic', signal });
     }
 
     if (!response.ok) {

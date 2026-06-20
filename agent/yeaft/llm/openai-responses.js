@@ -292,8 +292,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
         signal,
       });
     } catch (err) {
-      if (err.name === 'AbortError') throw new LLMAbortError();
-      throw classifyFetchError(err, { providerLabel: 'OpenAI' });
+      throw classifyFetchError(err, { providerLabel: 'OpenAI', signal });
     }
 
     if (!response.ok) {
@@ -458,8 +457,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
         }
       }
     } catch (err) {
-      if (err?.name === 'AbortError') throw new LLMAbortError();
-      throw classifyFetchError(err, { providerLabel: 'OpenAI' });
+      throw classifyFetchError(err, { providerLabel: 'OpenAI', signal });
     } finally {
       try { reader.releaseLock(); } catch { /* noop */ }
       // Emit raw exchange after stream completes (or errors). Body is the
@@ -523,8 +521,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
         signal,
       });
     } catch (err) {
-      if (err.name === 'AbortError') throw new LLMAbortError();
-      throw classifyFetchError(err, { providerLabel: 'OpenAI' });
+      throw classifyFetchError(err, { providerLabel: 'OpenAI', signal });
     }
 
     if (!response.ok) {

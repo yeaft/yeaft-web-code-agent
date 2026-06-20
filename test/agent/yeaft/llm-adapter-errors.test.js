@@ -49,6 +49,31 @@ function idleStreamResponse() {
   };
 }
 
+function truncatedAnthropicStreamResponse() {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ 'content-type': 'text/event-stream' }),
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode([
+          'event: message_start',
+          'data: {"type":"message_start","message":{"usage":{"input_tokens":118,"output_tokens":0}}}',
+          '',
+          'event: content_block_start',
+          'data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}',
+          '',
+          'event: ping',
+          'data: {"type":"ping"}',
+          '',
+        ].join('\n')));
+        controller.close();
+      },
+      cancel() {},
+    }),
+  };
+}
+
 describe('AnthropicAdapter error classification', () => {
   afterEach(() => {
     global.fetch = originalFetch;
@@ -133,6 +158,16 @@ describe('AnthropicAdapter error classification', () => {
     catch (err) { caught = err; }
     expect(caught).toBeInstanceOf(LLMStreamIdleTimeoutError);
     expect(caught).toBeInstanceOf(LLMServerError);
+  });
+
+  it('throws retryable error when Anthropic SSE ends before a stop event', async () => {
+    global.fetch = async () => truncatedAnthropicStreamResponse();
+    const adapter = new AnthropicAdapter({ baseUrl: 'https://x', apiKey: 'k' });
+    let caught;
+    try { await consume(adapter.stream({ model: 'deepseek-v4-pro', system: '', messages: [{ role: 'user', content: 'hi' }] })); }
+    catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(LLMServerError);
+    expect(caught.message).toContain('stream ended before stop event');
   });
 });
 

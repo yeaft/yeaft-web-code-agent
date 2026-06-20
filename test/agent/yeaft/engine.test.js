@@ -752,6 +752,41 @@ describe('Engine', () => {
       expect(events).toContainEqual(expect.objectContaining({ type: 'text_delta', text: 'fallback ok' }));
     });
 
+    it('does not emit debug loop rows for retryable attempts before fallback succeeds', async () => {
+      const { LLMServerError } = await import('../../../agent/yeaft/llm/adapter.js');
+      const engine = new Engine({
+        adapter: {
+          async *stream(params) {
+            if (params.model === 'primary-model') {
+              throw new LLMServerError('Anthropic stream ended before stop event', 0);
+            }
+            yield { type: 'text_delta', text: 'fallback ok' };
+            yield { type: 'stop', stopReason: 'end_turn' };
+          },
+        },
+        trace,
+        config: {
+          model: 'primary-model',
+          fallbackModel: 'fallback-model',
+          maxOutputTokens: 1024,
+          llmRetry: { maxRetries: 1, baseDelayMs: 1, maxDelayMs: 5, jitterRatio: 0 },
+        },
+      });
+
+      const events = [];
+      for await (const event of engine.query({ prompt: 'hello' })) {
+        events.push(event);
+      }
+
+      expect(events.filter(e => e.type === 'llm_retry')).toHaveLength(1);
+      expect(events.filter(e => e.type === 'fallback')).toHaveLength(1);
+      expect(events.filter(e => e.type === 'error')).toHaveLength(0);
+      const loops = events.filter(e => e.type === 'loop');
+      expect(loops).toHaveLength(1);
+      expect(loops[0].model).toBe('fallback-model');
+      expect(loops[0].response).toBe('fallback ok');
+    });
+
     it('falls back immediately on stream idle timeout when maxRetries is zero', async () => {
       const { LLMStreamIdleTimeoutError } = await import('../../../agent/yeaft/llm/adapter.js');
       const models = [];

@@ -240,12 +240,17 @@ export function retryAfterFromResponse(response) {
  *                          prove from the error shape.
  *
  * @param {unknown} err
- * @param {{ providerLabel?: string }} [opts]
+ * @param {{ providerLabel?: string, signal?: AbortSignal }} [opts]
  * @returns {Error}
  */
 export function classifyFetchError(err, opts = {}) {
   if (!(err instanceof Error)) return err instanceof Object ? err : new Error(String(err));
-  if (err.name === 'AbortError' || err.name === 'LLMAbortError') return new LLMAbortError();
+  if (err.name === 'LLMAbortError' || err instanceof LLMAbortError) return new LLMAbortError();
+  const label = opts.providerLabel ? `${opts.providerLabel}: ` : '';
+  if (err.name === 'AbortError') {
+    if (opts.signal?.aborted) return new LLMAbortError();
+    return new LLMServerError(`${label}stream aborted unexpectedly: ${err.message || 'AbortError'}`, 0);
+  }
   // Anything already classified: keep as-is.
   if (err instanceof LLMRateLimitError
     || err instanceof LLMAuthError
@@ -254,7 +259,6 @@ export function classifyFetchError(err, opts = {}) {
     || err instanceof LLMAbortError) {
     return err;
   }
-  const label = opts.providerLabel ? `${opts.providerLabel}: ` : '';
   const code = err.cause?.code || err.code || null;
   const transientCodes = new Set([
     'ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'ETIMEDOUT',
