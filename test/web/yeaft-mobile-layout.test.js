@@ -110,8 +110,23 @@ describe('Yeaft mobile layout CSS', () => {
     expect(mobile).toContain('position: sticky');
     expect(mobile).toContain('top: 0');
     expect(mobile).toContain('z-index: 20');
+    expect(mobile).toContain('min-height: 48px');
+    expect(mobile).toContain('flex-shrink: 0');
     expect(mobile).not.toContain('z-index: 1100');
     expect(mobile).not.toContain('.yeaft-topbar-right {\n    display: none');
+  });
+
+  it('uses visual viewport recovery hooks so mobile keyboards do not strand the header offscreen', () => {
+    const pageSource = read('components/YeaftPage.js');
+    const css = read('styles/yeaft.css');
+    const page = ruleBlock(css, '.yeaft-page');
+
+    expect(pageSource).toContain('ref="pageRef"');
+    expect(pageSource).toContain('const pageRef = Vue.ref(null);');
+    expect(pageSource).toContain('window.visualViewport?.addEventListener(\'resize\', scheduleMobileViewportRecovery);');
+    expect(pageSource).toContain('window.visualViewport?.addEventListener(\'scroll\', scheduleMobileViewportRecovery);');
+    expect(pageSource).toContain('window.scrollTo(0, 0);');
+    expect(page).toContain('height: var(--yeaft-visual-viewport-height, 100dvh);');
   });
 
   it('tightens Yeaft create roster and VP turn chrome on mobile', () => {

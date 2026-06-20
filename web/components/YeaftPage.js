@@ -42,7 +42,7 @@ export default {
   name: 'YeaftPage',
   components: { ChatInput, MessageList, SettingsPanel, YeaftSidebar, VpDetailView, SessionInviteModal, SessionCreateModal, SessionSettingsModal, WorkbenchPanel, YeaftDebugPanel, VpTimelinePane, YeaftSessionActions, LlmTab },
   template: `
-    <div class="yeaft-page">
+    <div class="yeaft-page" ref="pageRef">
       <!-- Mobile sidebar overlay -->
       <div class="yeaft-sidebar-overlay" v-if="!sidebarCollapsed && isMobile" @click="sidebarCollapsed = true"></div>
 
@@ -411,6 +411,52 @@ export default {
     // pane emits a VP mention request. Keeps the Yeaft-specific @-syntax out
     // of ChatInput (review fix — Fowler C2, PR #763).
     const chatInputRef = Vue.ref(null);
+    const pageRef = Vue.ref(null);
+    let mobileViewportRaf = null;
+    let mobileViewportRecoverTimer = null;
+
+    const isTextEditingElement = (el) => {
+      if (!el) return false;
+      const tag = String(el.tagName || '').toLowerCase();
+      return tag === 'textarea' || tag === 'input' || el.isContentEditable === true;
+    };
+
+    const syncMobileViewportHeight = ({ recoverScroll = false } = {}) => {
+      const page = pageRef.value;
+      if (!page) return;
+      if (!isMobile.value) {
+        page.style.removeProperty('--yeaft-visual-viewport-height');
+        return;
+      }
+
+      const vv = window.visualViewport;
+      const height = Math.max(1, Math.round(vv?.height || window.innerHeight || 1));
+      page.style.setProperty('--yeaft-visual-viewport-height', `${height}px`);
+
+      if (!recoverScroll) return;
+      const keyboardLikelyOpen = vv && window.innerHeight
+        ? vv.height < window.innerHeight * 0.85
+        : false;
+      if (keyboardLikelyOpen || isTextEditingElement(document.activeElement)) return;
+      window.scrollTo(0, 0);
+    };
+
+    const scheduleMobileViewportSync = (opts = {}) => {
+      if (mobileViewportRaf != null) cancelAnimationFrame(mobileViewportRaf);
+      mobileViewportRaf = requestAnimationFrame(() => {
+        mobileViewportRaf = null;
+        syncMobileViewportHeight(opts);
+      });
+    };
+
+    const scheduleMobileViewportRecovery = () => {
+      scheduleMobileViewportSync({ recoverScroll: true });
+      if (mobileViewportRecoverTimer) clearTimeout(mobileViewportRecoverTimer);
+      mobileViewportRecoverTimer = setTimeout(() => {
+        mobileViewportRecoverTimer = null;
+        scheduleMobileViewportSync({ recoverScroll: true });
+      }, 260);
+    };
 
     // task-340: Workbench capability gate — matches ChatPage.canUseWorkbench
     // semantics via store.hasCapability. store.workbenchExpanded and
@@ -571,6 +617,7 @@ export default {
     const onResize = () => {
       isMobile.value = window.innerWidth <= 768;
       isNarrowDetail.value = window.innerWidth <= 1024;
+      scheduleMobileViewportRecovery();
     };
 
     // Esc handling — exit the VP detail view if it's open. (Task-detail
@@ -589,13 +636,20 @@ export default {
 
     Vue.onMounted(() => {
       window.addEventListener('resize', onResize);
+      window.visualViewport?.addEventListener('resize', scheduleMobileViewportRecovery);
+      window.visualViewport?.addEventListener('scroll', scheduleMobileViewportRecovery);
       document.addEventListener('click', closeModelDropdownOutside);
       document.addEventListener('keydown', onKeyDown);
+      scheduleMobileViewportSync();
     });
     Vue.onUnmounted(() => {
       window.removeEventListener('resize', onResize);
+      window.visualViewport?.removeEventListener('resize', scheduleMobileViewportRecovery);
+      window.visualViewport?.removeEventListener('scroll', scheduleMobileViewportRecovery);
       document.removeEventListener('click', closeModelDropdownOutside);
       document.removeEventListener('keydown', onKeyDown);
+      if (mobileViewportRaf != null) cancelAnimationFrame(mobileViewportRaf);
+      if (mobileViewportRecoverTimer) clearTimeout(mobileViewportRecoverTimer);
     });
 
     // Watch for conversationId changes (session_ready migrates local -> agent ID)
@@ -1243,6 +1297,7 @@ export default {
 
     return {
       store,
+      pageRef,
       sidebarCollapsed,
       debugMode,
       modelDropdownOpen,
