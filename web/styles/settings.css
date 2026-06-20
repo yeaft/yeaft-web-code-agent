@@ -284,27 +284,38 @@
 }
 
 .settings-pane-yeaft .vp-crud-card-name {
+  flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 13px;
   line-height: 1.25;
 }
 
-.settings-pane-yeaft .vp-crud-card-name span,
+.settings-pane-yeaft .vp-crud-card-name span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .settings-pane-yeaft .vp-crud-card-id,
 .settings-pane-yeaft .vp-crud-card-role {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .settings-pane-yeaft .vp-crud-card-id {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   font-size: 11px;
   line-height: 1.25;
 }
 
 .settings-pane-yeaft .vp-crud-card-role {
-  min-width: 0;
+  flex: 1 1 auto;
   margin-top: 0;
   font-size: 12px;
   line-height: 1.25;

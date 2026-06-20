@@ -182,6 +182,9 @@ describe('Settings panel source', () => {
     expect(settingsCss).toContain('.settings-pane-yeaft .vp-crud-card-main');
     expect(settingsCss).toContain('.settings-pane-yeaft .vp-crud-card-actions .vp-crud-link-btn');
     expect(settingsCss).toContain('min-height: 30px;');
-    expect(settingsCss).toContain('text-overflow: ellipsis;');
+    expect(settingsCss).toMatch(/\.settings-pane-yeaft \.vp-crud-card-name\s*\{[\s\S]*?flex:\s*1 1 auto;[\s\S]*?min-width:\s*0;[\s\S]*?text-overflow:\s*ellipsis;/);
+    expect(settingsCss).toMatch(/\.settings-pane-yeaft \.vp-crud-card-name span\s*\{[\s\S]*?display:\s*block;[\s\S]*?text-overflow:\s*ellipsis;/);
+    expect(settingsCss).toMatch(/\.settings-pane-yeaft \.vp-crud-card-id\s*\{[\s\S]*?flex:\s*0 1 auto;/);
+    expect(settingsCss).toMatch(/\.settings-pane-yeaft \.vp-crud-card-role\s*\{[\s\S]*?flex:\s*1 1 auto;/);
   });
 });
