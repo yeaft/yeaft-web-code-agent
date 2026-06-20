@@ -1439,16 +1439,32 @@ export const useChatStore = defineStore('chat', {
       if (msg.data) {
         const conversationId = msg.conversationId || this.yeaftConversationId;
         if (conversationId) {
+          const frameAgentId = msg.agentId || this.yeaftAgentId || this.currentAgent || null;
+          const previousAgentConvId = frameAgentId && this.yeaftConversationIdsByAgent
+            ? this.yeaftConversationIdsByAgent[frameAgentId]
+            : null;
+          if (this.currentView === 'yeaft' && frameAgentId && previousAgentConvId && previousAgentConvId !== conversationId) {
+            const existingMsgs = this.messagesMap[previousAgentConvId] || [];
+            const targetMsgs = this.messagesMap[conversationId] || [];
+            this.messagesMap[conversationId] = msgHelpers
+              .mergeMessagesByStableId(targetMsgs, existingMsgs)
+              .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+            if (String(previousAgentConvId).startsWith('yeaft-local-')) delete this.messagesMap[previousAgentConvId];
+          }
+          if (frameAgentId) {
+            this.yeaftConversationIdsByAgent = {
+              ...(this.yeaftConversationIdsByAgent || {}),
+              [frameAgentId]: conversationId,
+            };
+          }
+          this.yeaftConversationId = conversationId;
+          if (this.currentView === 'yeaft') this.activeConversations = [conversationId];
           // Ensure messagesMap exists for this conversation
           if (!this.messagesMap[conversationId]) {
             this.messagesMap[conversationId] = [];
           }
           if (this.currentView === 'yeaft' && (msg.data?.type === 'user' || msg.data?.type === 'text_delta')) {
             this.pruneYeaftMessageWindow(this.yeaftActiveSessionFilter ? (msg.sessionId || null) : null);
-          }
-          // Store the conversationId if we didn't have it yet
-          if (!this.yeaftConversationId) {
-            this.yeaftConversationId = conversationId;
           }
           // Stamp the in-flight SEND-context session so messages land in the
           // originating session regardless of the user's current filter.

@@ -27,7 +27,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rename
 import { join, basename } from 'path';
 import { isPermissionError } from '../init.js';
 import { pairSanitize } from '../pair-sanitize.js';
-import { countTurns, indexOfNthTurnFromEnd, sliceLastNTurns } from '../turn-utils.js';
+import { countTurns, indexOfNthTurnFromEnd, sliceLastNTurns, stripVpMentionPrefix } from '../turn-utils.js';
 
 /**
  * Default cold-start "recent window" size, expressed in TURNS (not raw
@@ -165,6 +165,17 @@ function compareMessagesBySeq(a, b) {
   const sb = parseSeqFromId(b?.id);
   if (Number.isFinite(sa) && Number.isFinite(sb) && sa !== sb) return sa - sb;
   return String(a?.time || '').localeCompare(String(b?.time || ''));
+}
+
+function canonicalUserTurnContent(content) {
+  if (typeof content === 'string') return stripVpMentionPrefix(content);
+  if (!Array.isArray(content)) return null;
+  const text = content
+    .filter(part => part && typeof part === 'object' && part.type === 'text')
+    .map(part => typeof part.text === 'string' ? part.text : '')
+    .join('\n')
+    .trim();
+  return text ? stripVpMentionPrefix(text) : null;
 }
 
 // ─── Frontmatter helpers ─────────────────────────────────────
@@ -1057,19 +1068,24 @@ export class ConversationStore {
     if (!sessionId || !(turnsLimit > 0)) return { messages: [], oldestSeq: null, hasMore: false };
 
     const cutoff = Number.isFinite(beforeSeq) ? beforeSeq : Infinity;
-    const hot = this.#loadVisibleFromDirsBySession([...this.#sessionMessageDirs('messages', sessionId), this.#legacyMsgDir], sessionId, cutoff);
-    const cold = this.#loadVisibleFromDirsBySession([...this.#sessionMessageDirs('cold', sessionId), this.#legacyColdDir], sessionId, cutoff);
-    const visible = [...cold, ...hot];
-    if (visible.length === 0) return { messages: [], oldestSeq: null, hasMore: false };
+    const page = this.#loadVisibleWindowBySession(
+      [
+        ...this.#sessionMessageDirs('messages', sessionId),
+        this.#legacyMsgDir,
+        ...this.#sessionMessageDirs('cold', sessionId),
+        this.#legacyColdDir,
+      ],
+      sessionId,
+      cutoff,
+      turnsLimit
+    );
 
-    const startIdx = indexOfNthTurnFromEnd(visible, turnsLimit);
-    const start = startIdx === -1 ? 0 : startIdx;
     // Visible history is for UI replay, not LLM context. The visible loader
     // already excludes tool-result rows, so running pairSanitize here can
     // incorrectly treat tool-using assistant replies as orphaned tool arcs and
     // drop/trim VP messages. Strip tool-call metadata instead and keep the
     // user-visible assistant text for the conversation pane.
-    const messages = visible.slice(start).map(m => {
+    const messages = page.messages.map(m => {
       if (m && m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
         const { toolCalls, ...rest } = m;
         return rest;
@@ -1077,16 +1093,11 @@ export class ConversationStore {
       return m;
     });
     const oldestSeq = messages.length ? parseSeqFromId(messages[0].id) : null;
-    const firstVisibleSeq = parseSeqFromId(visible[0].id);
-    const hasMore = messages.length > 0
-      && Number.isFinite(oldestSeq)
-      && Number.isFinite(firstVisibleSeq)
-      && oldestSeq > firstVisibleSeq;
 
     return {
       messages,
       oldestSeq: Number.isFinite(oldestSeq) ? oldestSeq : null,
-      hasMore,
+      hasMore: page.hasMore,
     };
   }
 
@@ -1733,9 +1744,85 @@ export class ConversationStore {
     return total;
   }
 
-  #loadVisibleFromDirsBySession(dirs, sessionId, beforeSeq) {
-    return dirs.flatMap(dir => this.#loadVisibleFromDirBySession(dir, sessionId, beforeSeq))
-      .sort(compareMessagesBySeq);
+  #loadVisibleWindowBySession(dirs, sessionId, beforeSeq, turnsLimit) {
+    const candidates = [];
+    const seen = new Set();
+    for (const dir of dirs) {
+      if (!existsSync(dir)) continue;
+      let files = [];
+      try {
+        files = readdirSync(dir);
+      } catch (err) {
+        if (!isPermissionError(err)) throw err;
+        continue;
+      }
+      for (const file of files) {
+        if (!file.endsWith('.md')) continue;
+        const seq = parseSeqFromId(basename(file, '.md'));
+        if (!Number.isFinite(seq) || seq >= beforeSeq) continue;
+        const path = join(dir, file);
+        if (seen.has(path)) continue;
+        seen.add(path);
+        candidates.push({ seq, path });
+      }
+    }
+
+    candidates.sort((a, b) => b.seq - a.seq);
+
+    const selected = [];
+    const pendingBoundaryTail = [];
+    let turnsSeen = 0;
+    let openCanonical = null;
+    let boundaryCanonical = null;
+    let hasMore = false;
+
+    for (const candidate of candidates) {
+      let raw = '';
+      try {
+        raw = readFileSync(candidate.path, 'utf8');
+      } catch (err) {
+        if (!isPermissionError(err)) throw err;
+        continue;
+      }
+      if (!raw.includes(`sessionId: ${sessionId}`)) continue;
+      if (!raw.includes('role: user') && !raw.includes('role: assistant')) continue;
+
+      const parsed = parseMessage(raw);
+      if (!parsed || parsed.sessionId !== sessionId) continue;
+      if (parsed._reflection || parsed.internal || parsed.systemOnly || parsed.systemOnlyMessage) continue;
+      if (parsed.role !== 'user' && parsed.role !== 'assistant') continue;
+
+      if (boundaryCanonical !== null) {
+        if (parsed.role !== 'user') {
+          pendingBoundaryTail.push(parsed);
+          continue;
+        }
+
+        const canonical = canonicalUserTurnContent(parsed.content);
+        if (canonical !== boundaryCanonical) {
+          hasMore = true;
+          break;
+        }
+
+        if (pendingBoundaryTail.length > 0) {
+          selected.push(...pendingBoundaryTail.splice(0));
+        }
+        selected.push(parsed);
+        continue;
+      }
+
+      selected.push(parsed);
+      if (parsed.role === 'user') {
+        const canonical = canonicalUserTurnContent(parsed.content);
+        if (canonical != null && canonical !== openCanonical) {
+          turnsSeen += 1;
+          openCanonical = canonical;
+          if (turnsSeen === turnsLimit) boundaryCanonical = canonical;
+        }
+      }
+    }
+
+    return { messages: selected.reverse(), hasMore };
   }
 
   // task-314: per-thread sub-directory for forked threads.
@@ -1794,32 +1881,6 @@ export class ConversationStore {
     }
 
     return messages;
-  }
-
-  #loadVisibleFromDirBySession(dir, sessionId, beforeSeq) {
-    if (!existsSync(dir)) return [];
-
-    const files = readdirSync(dir)
-      .filter(f => f.endsWith('.md'))
-      .sort();
-
-    const out = [];
-    for (const file of files) {
-      const seq = parseSeqFromId(basename(file, '.md'));
-      if (!Number.isFinite(seq) || seq >= beforeSeq) continue;
-
-      const raw = readFileSync(join(dir, file), 'utf8');
-      if (!raw.includes(`sessionId: ${sessionId}`)) continue;
-      if (!raw.includes('role: user') && !raw.includes('role: assistant')) continue;
-
-      const parsed = parseMessage(raw);
-      if (!parsed || parsed.sessionId !== sessionId) continue;
-      if (parsed._reflection || parsed.internal || parsed.systemOnly || parsed.systemOnlyMessage) continue;
-      if (parsed.role !== 'user' && parsed.role !== 'assistant') continue;
-      out.push(parsed);
-    }
-
-    return out;
   }
 
   /**
