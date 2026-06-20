@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { TaskManager } from '../../../../agent/yeaft/tasks/manager.js';
@@ -98,6 +98,37 @@ describe('TaskManager', () => {
     expect(buildWindowsTaskkillArgs(1234)).toEqual(['/pid', '1234', '/t', '/f']);
   });
 
+  it('waits for process exit before marking a cancelled shell task terminal', async () => {
+    const manager = new TaskManager({ yeaftDir: dir, cancelEscalationMs: 1000 });
+    const markerPath = join(dir, 'term-ignored');
+    const command = `trap 'echo ignored-term; touch ${JSON.stringify(markerPath)}' TERM; echo started; while true; do echo tick; sleep 0.05; done`;
+    const task = manager.startShellTask({
+      command,
+      cwd: dir,
+      sessionId: 'session_cancel_live',
+      ownerVpId: 'vp_linus',
+      title: 'Ignore SIGTERM',
+    });
+
+    await waitFor(() => manager.readTaskLog('session_cancel_live', task.id, { tail: true }).text.includes('started'));
+    const cancelResult = manager.cancelTask('session_cancel_live', task.id);
+
+    expect(cancelResult).toMatchObject({ ok: true, pending: true });
+    expect(cancelResult.task.status).toBe('running');
+    expect(cancelResult.task.runtime.cancelRequestedAt).toBeTruthy();
+    expect(manager.getTask('session_cancel_live', task.id).status).toBe('running');
+
+    await waitFor(() => existsSync(markerPath), { timeoutMs: 500 });
+    expect(manager.getTask('session_cancel_live', task.id).status).toBe('running');
+
+    await waitFor(() => manager.getTask('session_cancel_live', task.id)?.status === 'cancelled', { timeoutMs: 5000 });
+    const completed = manager.getTask('session_cancel_live', task.id);
+    expect(completed.status).toBe('cancelled');
+    expect(completed.result.signal).toBe('SIGKILL');
+    expect(completed.runtime.cancelEscalatedSignal).toBe('SIGKILL');
+    expect(manager.listActiveTasks('session_cancel_live')).toHaveLength(0);
+  });
+
   it('does not mark cancel complete when process-tree kill fails', () => {
     const manager = new TaskManager({ yeaftDir: dir });
     const task = manager.startTask({
@@ -111,6 +142,23 @@ describe('TaskManager', () => {
     expect(result.ok).toBe(false);
     expect(result.task.status).toBe('running');
     expect(manager.getTask('session_cancel', task.id).status).toBe('running');
+  });
+
+  it('includes shell commands and log tails in active task prompt summaries', () => {
+    const manager = new TaskManager({ yeaftDir: dir });
+    const task = manager.startTask({
+      sessionId: 'session_prompt',
+      ownerVpId: 'vp_linus',
+      kind: 'shell',
+      title: 'Dev server',
+      runtime: { command: 'npm run dev -- --host 0.0.0.0' },
+    });
+    manager.store.appendLog('session_prompt', task.id, 'ready on port 5173\n');
+    manager.refreshTaskLog('session_prompt', task.id);
+
+    const rendered = manager.renderActiveTasksForPrompt('session_prompt');
+    expect(rendered).toContain('command="npm run dev -- --host 0.0.0.0"');
+    expect(rendered).toContain('tail="ready on port 5173"');
   });
 
   it('reads log tails without requiring a whole-file read', () => {

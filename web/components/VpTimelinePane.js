@@ -149,11 +149,12 @@ export function createSubAgentTaskDetailLines(task, translate) {
 export default {
   name: 'VpTimelinePane',
   components: { TerminalOutput },
-  emits: ['mention-vp', 'edit-vp', 'start-resize', 'cancel-vp-turn', 'edit-announcement', 'close'],
+  emits: ['mention-vp', 'edit-vp', 'start-resize', 'cancel-vp-turn', 'edit-announcement', 'cancel-task', 'close'],
   props: {
     rows: { type: Array, required: true },
     tasks: { type: Array, default: () => [] },
     announcementText: { type: String, default: '' },
+    stoppingTasksById: { type: Object, default: () => ({}) },
   },
   template: `
     <aside class="yeaft-vp-timeline yeaft-session-status-pane" :aria-label="$t('yeaft.sessionStatus.aria')">
@@ -319,6 +320,19 @@ export default {
               </svg>
             </button>
             <div v-if="expandedTasks[task.id]" class="yeaft-vp-task-detail">
+              <div v-if="shellTaskCommand(task)" class="yeaft-vp-task-command">
+                <span class="yeaft-vp-task-command-label">{{ $t('yeaft.sessionStatus.task.command') }}</span>
+                <code>{{ shellTaskCommand(task) }}</code>
+              </div>
+              <button
+                v-if="isTaskCancellable(task)"
+                type="button"
+                class="yeaft-vp-task-cancel"
+                :disabled="isTaskStopping(task)"
+                @click.stop="$emit('cancel-task', task)"
+              >
+                {{ isTaskStopping(task) ? $t('yeaft.sessionStatus.task.stopping') : $t('yeaft.sessionStatus.task.stop') }}
+              </button>
               <div v-if="task.kind === 'sub_agent'" class="yeaft-vp-task-sub-agent-panel">
                 <TerminalOutput
                   v-if="subAgentTaskStreamText(task)"
@@ -429,6 +443,13 @@ export default {
         default: return task?.kind || '';
       }
     };
+    const shellTaskCommand = (task) => {
+      const command = task?.runtime?.command;
+      return typeof command === 'string' ? command.trim() : '';
+    };
+    const taskStopKey = (task) => `${task?.sessionId || ''}::${task?.id || ''}`;
+    const isTaskCancellable = (task) => task?.kind === 'shell' && task?.status === 'running' && !!task?.runtime?.pid;
+    const isTaskStopping = (task) => !!(task?.id && props.stoppingTasksById?.[taskStopKey(task)]);
 
     const taskDetailLines = (task) => createSubAgentTaskDetailLines(task, $t);
     const subAgentTaskStreamText = (task) => createSubAgentTaskStreamText(task, $t);
@@ -476,6 +497,9 @@ export default {
       taskOwnerName,
       formatTaskTime,
       taskKindLabel,
+      shellTaskCommand,
+      isTaskCancellable,
+      isTaskStopping,
       taskDetailLines,
       subAgentTaskStreamText,
       setTaskLogRef,

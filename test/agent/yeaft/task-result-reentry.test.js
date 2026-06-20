@@ -113,6 +113,7 @@ describe('task result re-entry', () => {
     expect(adapter.streamCalls).toHaveLength(1);
     const rendered = JSON.stringify(adapter.streamCalls[0].messages);
     expect(rendered).toContain('<task-result id=\\"task_done_1\\" kind=\\"shell\\" status=\\"succeeded\\">');
+    expect(rendered).toContain('command: npm test');
     expect(rendered).toContain('all tests passed');
     expect(rendered).toContain('This is an asynchronous tool result from a background task, not a user message');
 

@@ -198,6 +198,54 @@ describe('per-session running state', () => {
     });
   });
 
+  it('keeps background task stop pending until terminal task event', () => {
+    const store = freshStore();
+    store.yeaftSessionAgentById = { 'session-a': 'agent-a' };
+
+    const sent = store.cancelYeaftTask({ sessionId: 'session-a', taskId: 'task-1' });
+
+    expect(sent).toBe(true);
+    expect(store.sendWsMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'yeaft_task_cancel',
+      agentId: 'agent-a',
+      sessionId: 'session-a',
+      taskId: 'task-1',
+    }));
+    expect(store.yeaftStoppingTasksById['session-a::task-1']).toBe(true);
+
+    store.handleYeaftOutput({ event: { type: 'yeaft_task_cancel_result', success: true, taskId: 'task-1', task: {
+      id: 'task-1',
+      sessionId: 'session-a',
+      kind: 'shell',
+      status: 'running',
+      runtime: { pid: 123, cancelRequestedAt: '2026-06-20T10:00:00.000Z' },
+    } } });
+    expect(store.yeaftStoppingTasksById['session-a::task-1']).toBe(true);
+
+    store.handleYeaftOutput({ event: { type: 'yeaft_task_event', task: {
+      id: 'task-1',
+      sessionId: 'session-a',
+      kind: 'shell',
+      status: 'cancelled',
+      runtime: { pid: 123, cancelRequestedAt: '2026-06-20T10:00:00.000Z' },
+    } } });
+    expect(store.yeaftStoppingTasksById['session-a::task-1']).toBeUndefined();
+  });
+
+  it('clears background task stop pending on cancel request failure', () => {
+    const store = freshStore();
+    store.yeaftStoppingTasksById = { 'session-a::task-1': true };
+
+    store.handleYeaftOutput({ event: {
+      type: 'yeaft_task_cancel_result',
+      success: false,
+      taskId: 'task-1',
+      task: { id: 'task-1', sessionId: 'session-a', kind: 'shell', status: 'running' },
+    } });
+
+    expect(store.yeaftStoppingTasksById['session-a::task-1']).toBeUndefined();
+  });
+
   it('appends async task completion updates to the originating tool result', () => {
     const store = freshStore();
     store.yeaftConversationId = 'yeaft-conv';
