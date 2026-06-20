@@ -52,6 +52,13 @@ function resolveHistorySpeakerVpId(m, groupId) {
   return m.speakerVpId || m.vpId || m.vp_id || m.authorVpId || m.authorVP || resolveGroupDefaultVpId(groupId);
 }
 
+function isInternalControlHistoryContent(content) {
+  if (typeof content !== 'string') return false;
+  const text = content.trimStart();
+  return text.startsWith('<task-result ')
+    || /^\[system note\] You have called \S+ with the same arguments \d+ times\./.test(text);
+}
+
 /** Mark all pending tool-use messages as completed for a conversation */
 export function markAllToolsCompleted(store, convId) {
   const msgs = store.messagesMap[convId] || [];
@@ -503,6 +510,7 @@ export function handleYeaftHistoryChunk(store, msg) {
   for (const m of (msg.messages || [])) {
     if (!m) continue;
     if (m._reflection || m.internal || m.systemOnly || m.systemOnlyMessage) continue;
+    if (isInternalControlHistoryContent(m.content)) continue;
     const stableId = m.id || m.messageId || null;
     if (stableId && (existingIds.has(stableId) || seenIds.has(stableId))) continue;
     if (stableId) seenIds.add(stableId);

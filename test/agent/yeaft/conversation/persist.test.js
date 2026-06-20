@@ -343,6 +343,52 @@ describe('ConversationStore', () => {
       expect(page.messages.map(m => m.content)).toEqual(['target response']);
     });
 
+    it('hides legacy unstamped task-result and system-note rows from session history', () => {
+      const first = store.append({ role: 'user', content: 'real user', sessionId: 'grp_a' });
+      store.append({
+        role: 'user',
+        content: '<task-result id="task_1" kind="shell" status="succeeded">\nlogTail:\n  PASS\n</task-result>\nThis is an asynchronous tool result from a background task, not a user message.',
+        sessionId: 'grp_a',
+      });
+      store.append({
+        role: 'user',
+        content: '[system note] You have called ReadTaskLog with the same arguments 3 times. Previous result: {...}. Consider whether re-running this tool is necessary or if you should try a different approach.',
+        sessionId: 'grp_a',
+      });
+      store.append({ role: 'assistant', content: 'visible response', sessionId: 'grp_a', speakerVpId: 'vp-main' });
+      store.append({ role: 'user', content: 'please explain <task-result> tags in XML', sessionId: 'grp_a' });
+      store.append({ role: 'user', content: 'In docs, <task-result> means XML-ish markup here', sessionId: 'grp_a' });
+      store.append({ role: 'user', content: '[system note] this is just prose, not a tool-folding warning', sessionId: 'grp_a' });
+
+      expect(store.loadRecentBySession('grp_a', Infinity).map(m => m.content)).toEqual([
+        'real user',
+        'visible response',
+        'please explain <task-result> tags in XML',
+        'In docs, <task-result> means XML-ish markup here',
+        '[system note] this is just prose, not a tool-folding warning',
+      ]);
+      expect(store.loadSessionHistoryForVp('grp_a', 'vp-main').map(m => m.content)).toEqual([
+        'real user',
+        'visible response',
+        'please explain <task-result> tags in XML',
+        'In docs, <task-result> means XML-ish markup here',
+        '[system note] this is just prose, not a tool-folding warning',
+      ]);
+      expect(store.loadAfterSeqByGroup('grp_a', Number(first.id.replace(/^m/, ''))).messages.map(m => m.content)).toEqual([
+        'visible response',
+        'please explain <task-result> tags in XML',
+        'In docs, <task-result> means XML-ish markup here',
+        '[system note] this is just prose, not a tool-folding warning',
+      ]);
+      expect(store.loadVisibleBySession('grp_a', null, 10).messages.map(m => m.content)).toEqual([
+        'real user',
+        'visible response',
+        'please explain <task-result> tags in XML',
+        'In docs, <task-result> means XML-ish markup here',
+        '[system note] this is just prose, not a tool-folding warning',
+      ]);
+    });
+
     it('loadVisibleBySession returns a recent turn window with multi-VP boundary intact', () => {
       store.appendBatch([
         { role: 'user', content: 'old q', sessionId: 'grp_a' },
@@ -509,6 +555,35 @@ describe('ConversationStore', () => {
       const result = store.compactOrphans({ keepGroupIds: ['grp_live'] });
       expect(result.removed).toBe(1);
       expect(store.countCold()).toBe(0);
+    });
+  });
+
+  describe('chat history', () => {
+    it('hides legacy internal control rows from chat history mirrors', () => {
+      store.append({ role: 'user', content: 'chat real user', chatId: 'chat_a' });
+      store.append({
+        role: 'user',
+        content: '<task-result id="task_chat" kind="shell" status="succeeded">\nlogTail:\n  PASS\n</task-result>',
+        chatId: 'chat_a',
+      });
+      store.append({
+        role: 'assistant',
+        content: '[system note] You have called ReadTaskLog with the same arguments 3 times. Previous result: {...}',
+        chatId: 'chat_a',
+      });
+      store.append({ role: 'assistant', content: 'chat visible assistant', chatId: 'chat_a' });
+      store.append({ role: 'user', content: 'In docs, <task-result> is just prose here', chatId: 'chat_a' });
+
+      expect(store.loadRecentByChat('chat_a', Infinity).map(m => m.content)).toEqual([
+        'chat real user',
+        'chat visible assistant',
+        'In docs, <task-result> is just prose here',
+      ]);
+      expect(store.loadChatHistoryForVp('chat_a', 'vp-main').map(m => m.content)).toEqual([
+        'chat real user',
+        'chat visible assistant',
+        'In docs, <task-result> is just prose here',
+      ]);
     });
   });
 

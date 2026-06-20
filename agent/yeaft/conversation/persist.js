@@ -28,6 +28,7 @@ import { join, basename } from 'path';
 import { isPermissionError } from '../init.js';
 import { pairSanitize } from '../pair-sanitize.js';
 import { countTurns, indexOfNthTurnFromEnd, sliceLastNTurns, stripVpMentionPrefix } from '../turn-utils.js';
+import { isHiddenConversationRow } from './internal-control.js';
 
 /**
  * Default cold-start "recent window" size, expressed in TURNS (not raw
@@ -899,7 +900,7 @@ export class ConversationStore {
   loadRecentBySession(sessionId, turnsLimit = DEFAULT_RECENT_TURNS) {
     if (!sessionId) return [];
     const all = this.#loadSessionMessages(sessionId);
-    const filtered = all.filter(m => m && m.sessionId === sessionId);
+    const filtered = all.filter(m => m && m.sessionId === sessionId && !isHiddenConversationRow(m));
     if (turnsLimit === Infinity || turnsLimit < 0) return pairSanitize(filtered);
     const sliced = sliceLastNTurns(filtered, turnsLimit);
     // Warn once per (sessionId, storeDir) when truncation drops turns
@@ -943,8 +944,10 @@ export class ConversationStore {
    *     block contract and would never appear in another VP's context).
    *   - OTHER VPs' tool result rows (role:'tool'): DROP — they pair with
    *     stripped tool_use ids and would orphan on replay.
-   *   - Rows with `_reflection` / `internal` / `systemOnly`: DROP — they
-   *     are engine-private and never enter another VP's context.
+   *   - Hidden conversation rows (`_reflection`, `internal`, `systemOnly`,
+   *     `systemOnlyMessage`, compact summaries, and legacy internal-control
+   *     content signatures): DROP — they are engine-private and never enter
+   *     visible history or another VP's context.
    *
    * The output is pair-safe by construction for THIS VP's tool arcs and
    * carries only summary-relevant text for the other VPs.
@@ -959,7 +962,7 @@ export class ConversationStore {
     const out = [];
     for (const m of all) {
       if (!m || m.sessionId !== sessionId) continue;
-      if (m._reflection || m.internal || m.systemOnly || m.systemOnlyMessage) continue;
+      if (isHiddenConversationRow(m)) continue;
       if (m.role === 'user') {
         out.push(m);
         continue;
@@ -1033,6 +1036,7 @@ export class ConversationStore {
     const all = [...cold, ...hot];
     const cutoff = Number.isFinite(beforeSeq) ? beforeSeq : Infinity;
     const prefix = all.filter(m => m && m.sessionId === sessionId
+      && !isHiddenConversationRow(m)
       && parseSeqFromId(m.id) < cutoff);
     if (prefix.length === 0) return { messages: [], oldestSeq: null, hasMore: false };
     const sliced = pairSanitize(sliceLastNTurns(prefix, turnsLimit));
@@ -1121,7 +1125,7 @@ export class ConversationStore {
     const all = [...cold, ...hot].sort(compareMessagesBySeq);
     const after = all.filter((m) => {
       if (!m || m.sessionId !== sessionId) return false;
-      if (m._reflection || m.internal || m.systemOnly || m.systemOnlyMessage) return false;
+      if (isHiddenConversationRow(m)) return false;
       const seq = parseSeqFromId(m.id);
       return Number.isFinite(seq) && seq > cutoff;
     });
@@ -1605,7 +1609,7 @@ export class ConversationStore {
       ...this.#chatMessageDirs('messages', chatId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
       ...this.#chatMessageDirs('cold', chatId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
     ].sort(compareMessagesBySeq);
-    const filtered = all.filter(m => m && m.chatId === chatId);
+    const filtered = all.filter(m => m && m.chatId === chatId && !isHiddenConversationRow(m));
     if (turnsLimit === Infinity || turnsLimit < 0) return pairSanitize(filtered);
     return pairSanitize(sliceLastNTurns(filtered, turnsLimit));
   }
@@ -1620,7 +1624,7 @@ export class ConversationStore {
     const out = [];
     for (const m of all) {
       if (!m || m.chatId !== chatId) continue;
-      if (m._reflection || m.internal || m.systemOnly || m.systemOnlyMessage) continue;
+      if (isHiddenConversationRow(m)) continue;
       if (m.role === 'user') { out.push(m); continue; }
       if (m.role === 'assistant') {
         // Chat is 1:1 — every assistant row is "ours".
@@ -1789,7 +1793,7 @@ export class ConversationStore {
 
       const parsed = parseMessage(raw);
       if (!parsed || parsed.sessionId !== sessionId) continue;
-      if (parsed._reflection || parsed.internal || parsed.systemOnly || parsed.systemOnlyMessage) continue;
+      if (isHiddenConversationRow(parsed)) continue;
       if (parsed.role !== 'user' && parsed.role !== 'assistant') continue;
 
       if (boundaryCanonical !== null) {

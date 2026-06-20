@@ -603,6 +603,35 @@ describe('handleYeaftHistoryChunk', () => {
     expect(store.yeaftOldestLoadedSeq).toBe(1);
   });
 
+  it('does not render legacy task-result or system-note rows from older history chunks', () => {
+    const store = mkStore({
+      yeaftActiveSessionFilter: 'group-A',
+      messagesMap: { 'yeaft-1': [] },
+    });
+    handleYeaftHistoryChunk(store, {
+      conversationId: 'yeaft-1',
+      sessionId: 'group-A',
+      messages: [
+        { id: 'm0001', role: 'user', content: 'visible q', sessionId: 'group-A' },
+        { id: 'm0002', role: 'user', content: '<task-result id="task_1" kind="shell" status="succeeded">\nlogTail:\n  PASS\n</task-result>', sessionId: 'group-A' },
+        { id: 'm0003', role: 'user', content: '[system note] You have called ReadTaskLog with the same arguments 3 times. Previous result: {...}', sessionId: 'group-A' },
+        { id: 'm0004', role: 'assistant', content: 'visible a', sessionId: 'group-A', speakerVpId: 'vp-a' },
+        { id: 'm0005', role: 'user', content: 'please explain <task-result> tags', sessionId: 'group-A' },
+        { id: 'm0006', role: 'user', content: 'In docs, <task-result> means XML-ish markup here', sessionId: 'group-A' },
+        { id: 'm0007', role: 'user', content: '[system note] this is just prose, not a tool-folding warning', sessionId: 'group-A' },
+      ],
+      oldestSeq: 1,
+      hasMore: false,
+    });
+    expect(store.messagesMap['yeaft-1'].map(m => m.content)).toEqual([
+      'visible q',
+      'visible a',
+      'please explain <task-result> tags',
+      'In docs, <task-result> means XML-ish markup here',
+      '[system note] this is just prose, not a tool-folding warning',
+    ]);
+  });
+
   it('accepts a chunk when the active filter is null (no per-session scope set)', () => {
     // Edge case: bootstrap path before any session has been selected. The
     // chunk may carry a sessionId stamp; without an active filter we accept.

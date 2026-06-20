@@ -62,6 +62,7 @@ import {
 } from './history-compact.js';
 import { persistYeaftAttachments, attachmentsForPersistence, persistedAttachmentPreviewPayload } from './attachments.js';
 import { ConversationStore, parseSeqFromId } from './conversation/persist.js';
+import { isHiddenConversationRow } from './conversation/internal-control.js';
 import { sliceLastNTurns } from './turn-utils.js';
 import { pairSanitize } from './pair-sanitize.js';
 import { filterSnapshotForVp } from './snapshot-filter.js';
@@ -664,10 +665,7 @@ export function __testNormalizePersistedVisibleContent(content) {
 }
 
 function isPersistedInternalMessage(m) {
-  if (!m) return true;
-  if (m._reflection || m.internal || m.systemOnly || m.systemOnlyMessage) return true;
-  if (m.kind === 'compact_summary' || m._compactSummary) return true;
-  return false;
+  return isHiddenConversationRow(m);
 }
 
 /**
@@ -5119,6 +5117,7 @@ export async function handleYeaftMcpReload(msg = {}) {
 }
 
 export const __testHooks = {
+  loadVisibleGroupHistoryPage,
   setSessionForTest(nextSession) {
     session = nextSession || null;
   },
