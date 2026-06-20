@@ -20,6 +20,7 @@ import {
 } from './dream-ui-constants.js';
 import { buildModelSelectionRows, getDefaultModelEffort, getSelectableModelEfforts, modelOptionMatchesRef, modelOptionRef, resolveSessionModelEffort, resolveSessionModelRef } from '../utils/modelRefs.js';
 import { shouldShowYeaftOnboardingGuide } from '../utils/yeaftOnboarding.js';
+import { hasUsableYeaftAgent, resolveActiveSessionIdForSettings } from '../utils/yeaftSessionSettings.js';
 
 function sessionTaskSortTime(task) {
   const raw = task?.updatedAt || task?.endedAt || task?.createdAt;
@@ -699,6 +700,12 @@ export default {
       return gs.sessions['grp_default'] || null;
     });
 
+    const activeSessionIdForSettings = () => resolveActiveSessionIdForSettings({
+      activeSessionFilter: store.yeaftActiveSessionFilter,
+      sessionsStore: sessionsStore(),
+      topbarGroup: topbarGroup.value,
+    });
+
     const topbarSessionTitle = Vue.computed(() => {
       const g = topbarGroup.value || {};
       const id = typeof g.id === 'string' ? g.id.trim() : '';
@@ -1022,7 +1029,7 @@ export default {
     const showOnboardingGuide = Vue.computed(() => {
       const gs = sessionsStore();
       return shouldShowYeaftOnboardingGuide({
-        hasYeaftAgent: !!store.yeaftAgentId,
+        hasYeaftAgent: hasUsableYeaftAgent(store),
         sessionsReady: !!(gs && gs.hasLoadedSnapshot),
         sessionsEmpty: !!(gs && gs.isEmpty),
       });
@@ -1066,7 +1073,7 @@ export default {
       groupSettingsOpen.value = true;
     };
     const openAnnouncementSettings = () => {
-      const sessionId = topbarGroup.value?.id || null;
+      const sessionId = activeSessionIdForSettings();
       if (!sessionId) return;
       openSessionSettings({ sessionId, section: 'announcement' });
     };
@@ -1199,7 +1206,7 @@ export default {
     const onEditVpFromTimeline = (vpId) => {
       if (!vpId) return;
       if (store.yeaftActiveVpDetailId) store.leaveVpDetailView();
-      const sessionId = store.yeaftActiveSessionFilter || sessionsStore()?.activeSessionId || topbarGroup.value?.id || null;
+      const sessionId = activeSessionIdForSettings();
       if (!sessionId) return;
       openSessionSettings({ sessionId, section: 'members', editVpId: vpId });
     };

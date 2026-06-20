@@ -40,6 +40,7 @@ describe('Yeaft UI action polish', () => {
 
     expect(pageSource).toContain('@edit-vp="onEditVpFromTimeline"');
     expect(pageSource).toContain('const onEditVpFromTimeline = (vpId) => {');
+    expect(pageSource).toContain('const sessionId = activeSessionIdForSettings();');
     expect(pageSource).toContain("openSessionSettings({ sessionId, section: 'members', editVpId: vpId });");
     expect(pageSource).toContain(':initial-edit-vp-id="groupSettingsEditVpId"');
     expect(pageSource).not.toContain('onOpenVpDetailFromTimeline');
