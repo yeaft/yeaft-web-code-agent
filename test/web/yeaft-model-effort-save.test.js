@@ -24,7 +24,7 @@ function mkStore() {
   const crudRequests = [];
   const wsMessages = [];
   return {
-    yeaftAgentId: 'agent-a',
+    currentAgent: 'agent-a',
     yeaftModel: null,
     yeaftModelEffort: null,
     crudRequests,

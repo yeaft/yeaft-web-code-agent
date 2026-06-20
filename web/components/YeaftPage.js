@@ -969,7 +969,7 @@ export default {
 
     const onLlmConfigSaved = () => {
       showLlmConfig.value = false;
-      const agentId = store.yeaftAgentId;
+      const agentId = store.currentAgent;
       if (agentId) store.sendWsMessage({ type: 'yeaft_reset', agentId });
     };
 

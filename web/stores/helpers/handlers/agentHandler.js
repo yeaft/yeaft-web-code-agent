@@ -110,12 +110,12 @@ export function handleAgentList(store, msg) {
   // Edge-triggered on purpose (NOT every agent_list): the v0.1.954 loop came
   // from firing the catch-up on every routine broadcast. Steady state (same
   // agent, online, same version, repeated frames) arms nothing.
-  const yeaftAgentId = store.yeaftAgentId || store.currentAgent || null;
-  if (yeaftAgentId) {
-    const seen = (store._yeaftAgentSeen && store._yeaftAgentSeen.id === yeaftAgentId)
+  const trackedAgentId = store.currentAgent || null;
+  if (trackedAgentId) {
+    const seen = (store._yeaftAgentSeen && store._yeaftAgentSeen.id === trackedAgentId)
       ? store._yeaftAgentSeen
       : null;
-    const nextRec = msg.agents.find(a => a.id === yeaftAgentId) || null;
+    const nextRec = msg.agents.find(a => a.id === trackedAgentId) || null;
     if (store.currentView === 'yeaft' && detectYeaftAgentRestart(seen, nextRec)) {
       store._yeaftReconnectCatchUpPending = true;
     }
@@ -125,18 +125,18 @@ export function handleAgentList(store, msg) {
     // the agent is present in this frame.
     if (nextRec) {
       store._yeaftAgentSeen = {
-        id: yeaftAgentId,
+        id: trackedAgentId,
         online: !!nextRec.online,
         version: nextRec.version != null ? nextRec.version : null,
       };
     } else if (!seen) {
       // First time we're tracking this agent and it's absent — record the
       // id so a later reappear is recognized as a restart, not a cold start.
-      store._yeaftAgentSeen = { id: yeaftAgentId, online: false, version: null };
+      store._yeaftAgentSeen = { id: trackedAgentId, online: false, version: null };
     } else if (seen.online) {
       // Agent dropped out of the list → mark offline but retain the version
       // so a same-version restart is still a cameBackOnline edge next frame.
-      store._yeaftAgentSeen = { id: yeaftAgentId, online: false, version: seen.version };
+      store._yeaftAgentSeen = { id: trackedAgentId, online: false, version: seen.version };
     }
   }
   {
@@ -165,10 +165,9 @@ export function handleAgentList(store, msg) {
   // stayed empty until the user clicked another session. When an online agent
   // appears while the Yeaft page is active, pick it here; the existing
   // reconnect branch below sends select_agent and runs the bootstrap in order.
-  if (store.currentView === 'yeaft' && !store.yeaftAgentId) {
+  if (store.currentView === 'yeaft' && !store.currentAgent) {
     const online = msg.agents.find(a => a.online);
     if (online) {
-      store.yeaftAgentId = online.id;
       store.currentAgent = online.id;
       store.currentAgentInfo = online;
     }

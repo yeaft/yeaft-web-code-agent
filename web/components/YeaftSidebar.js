@@ -459,7 +459,7 @@ export default {
       if (typeof fn === 'function') {
         fn.call(this.chatStore, g.id, {
           sessionKind: 'yeaft',
-          agentId: g.agentId || this.store?.yeaftAgentId || this.store?.currentAgent || null,
+          agentId: g.agentId || this.store?.currentAgent || null,
           sessionName: g.name || g.title || g.id,
           workDir: g.workDir || '',
         });

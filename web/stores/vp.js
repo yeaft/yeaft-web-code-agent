@@ -360,7 +360,12 @@ export const useVpStore = defineStore('vp', {
         return;
       }
       const frame = { type: 'yeaft_dream_trigger', groupId };
-      if (chat.yeaftAgentId) frame.agentId = chat.yeaftAgentId;
+      // Route by the session's owning agent (dream is session-scoped). Falls
+      // back to currentAgent; server also defaults to client.currentAgent.
+      const dreamAgentId = typeof chat.agentIdForSession === 'function'
+        ? chat.agentIdForSession(groupId)
+        : chat.currentAgent;
+      if (dreamAgentId) frame.agentId = dreamAgentId;
       const sent = chat.sendWsMessage(frame);
       if (sent === false) {
         projectDreamDebugEvent(chat, {

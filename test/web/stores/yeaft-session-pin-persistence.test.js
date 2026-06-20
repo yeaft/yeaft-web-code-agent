@@ -277,7 +277,7 @@ it('sends Yeaft pin metadata so the server can persist before DB hydration', () 
   const calls = [];
   const component = {
     groupMenu: { open: true, groupId: 'session-a' },
-    store: { yeaftAgentId: 'agent-a', currentAgent: 'agent-current' },
+    store: { currentAgent: 'agent-current' },
     chatStore: {
       togglePin(...args) { calls.push(args); },
     },
@@ -331,7 +331,6 @@ it('loads opened Yeaft sessions when agents become ready after entering Yeaft', 
   store.currentView = 'yeaft';
   store.agents = [];
   store.currentAgent = null;
-  store.yeaftAgentId = null;
   store._yeaftOpenedSessionsLoadedAgents = {};
   store.sessionCrudRequest = (op, data, opts) => {
     requests.push({ op, data, opts });
@@ -345,7 +344,7 @@ it('loads opened Yeaft sessions when agents become ready after entering Yeaft', 
   handleAgentList(store, { agents: [{ id: 'agent-late', online: true, conversations: [] }] });
   handleAgentList(store, { agents: [{ id: 'agent-late', online: true, conversations: [] }] });
 
-  expect(store.yeaftAgentId).toBe('agent-late');
+  expect(store.currentAgent).toBe('agent-late');
   expect(requests).toEqual([
     { op: 'list', data: {}, opts: { agentId: 'agent-late' } },
   ]);

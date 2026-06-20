@@ -7,7 +7,8 @@
  *      / `yeaftOldestLoadedSeq`, and ALWAYS clears `yeaftLoadingMoreHistory`
  *      (even on empty / missing-conv-id paths so the spinner doesn't stick).
  *   2. The store action `loadMoreYeaftHistory` — gates on `currentView`,
- *      `yeaftLoadingMoreHistory`, `yeaftHasMoreHistory`, `yeaftAgentId`,
+ *      `yeaftLoadingMoreHistory`, `yeaftHasMoreHistory`, a resolvable agent
+ *      (the active session's owner, else `currentAgent`),
  *      and `yeaftOldestLoadedSeq`; flips `yeaftLoadingMoreHistory=true`
  *      and posts a `yeaft_load_more_history` envelope.
  *
@@ -39,13 +40,32 @@ const {
   sliceYeaftMessagesByRecentTurns,
 } = await import('../../../web/stores/helpers/yeaft-message-window.js');
 
+// Mirror production's `resolveAgentIdForSession`: prefer the session row's
+// owning agent (sessions store), then the per-session cache, then the single
+// client-bound `currentAgent`.
+function resolveAgentIdForSession(state, sessionId) {
+  if (sessionId) {
+    try {
+      const gs = (typeof window !== 'undefined') && (
+        window.Pinia?.useSessionsStore?.() ||
+        (window.__useSessionsStore && window.__useSessionsStore())
+      );
+      const sess = gs && typeof gs.sessionById === 'function' ? gs.sessionById(sessionId) : null;
+      if (sess && sess.agentId) return sess.agentId;
+    } catch { /* sessions store missing */ }
+    const mapped = state?.yeaftSessionAgentById ? state.yeaftSessionAgentById[sessionId] : null;
+    if (mapped) return mapped;
+  }
+  return state?.currentAgent || null;
+}
+
 // Re-implement the action body 1:1 here so we can drive it without booting
 // Pinia. Keeping it in lock-step with the production version is what the
 // review will scan against.
 function loadMoreYeaftHistory() {
   if (this.currentView !== 'yeaft') return;
   if (this.yeaftLoadingMoreHistory || !this.yeaftHasMoreHistory) return;
-  if (!this.yeaftAgentId || this.yeaftOldestLoadedSeq == null) return;
+  if (this.yeaftOldestLoadedSeq == null) return;
 
   let sessionId = this.yeaftActiveSessionFilter || null;
   if (!sessionId) {
@@ -58,6 +78,9 @@ function loadMoreYeaftHistory() {
     } catch { /* sessions store missing — agent treats null as no-op */ }
   }
 
+  const targetAgentId = resolveAgentIdForSession(this, sessionId);
+  if (!targetAgentId) return;
+
   this.yeaftLoadingMoreHistory = true;
   const sessionKey = sessionId || '__all__';
   this.yeaftSessionHistoryState = {
@@ -69,7 +92,7 @@ function loadMoreYeaftHistory() {
   };
   this.sendWsMessage({
     type: 'yeaft_load_more_history',
-    agentId: this.yeaftAgentId,
+    agentId: targetAgentId,
     sessionId,
     beforeSeq: this.yeaftOldestLoadedSeq,
     turns: 10,
@@ -81,7 +104,7 @@ function mkStore(overrides = {}) {
   return {
     currentView: 'yeaft',
     yeaftConversationId: 'yeaft-1',
-    yeaftAgentId: 'agent-1',
+    currentAgent: 'agent-1',
     yeaftHasMoreHistory: true,
     yeaftLoadingMoreHistory: false,
     yeaftOldestLoadedSeq: 100,
@@ -154,7 +177,8 @@ function setActiveSessionFilter(sessionId) {
   pruneYeaftMessageWindow.call(this, next);
 
   const needsHydrate = !savedState?.loaded && !savedState?.loading;
-  if (this.yeaftAgentId && next && needsHydrate) {
+  const targetAgentId = next ? resolveAgentIdForSession(this, next) : this.currentAgent;
+  if (targetAgentId && next && needsHydrate) {
     this.yeaftSessionHistoryState = {
       ...this.yeaftSessionHistoryState,
       [sessionKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
@@ -162,7 +186,7 @@ function setActiveSessionFilter(sessionId) {
     this.yeaftLoadingMoreHistory = true;
     this.sendWsMessage({
       type: 'yeaft_load_history',
-      agentId: this.yeaftAgentId,
+      agentId: targetAgentId,
       limit: 50,
       sessionId: next,
     });
@@ -674,8 +698,8 @@ describe('loadMoreYeaftHistory — action gates', () => {
     expect(store._sent).toEqual([]);
   });
 
-  it('no-op when yeaftAgentId is missing', () => {
-    const store = mkStore({ yeaftAgentId: null });
+  it('no-op when no agent resolves (no session owner, no currentAgent)', () => {
+    const store = mkStore({ currentAgent: null });
     loadMoreYeaftHistory.call(store);
     expect(store._sent).toEqual([]);
   });

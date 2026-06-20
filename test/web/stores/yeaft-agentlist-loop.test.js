@@ -57,7 +57,6 @@ function makeStore() {
   // loaded and a known latestSeq cursor (the steady state after first load).
   store.currentView = 'yeaft';
   store.currentAgent = AGENT_ID;
-  store.yeaftAgentId = AGENT_ID;
   store.yeaftConversationId = 'yeaft-1';
   store.yeaftActiveSessionFilter = SESSION_ID;
   store.yeaftSessionReady = true;

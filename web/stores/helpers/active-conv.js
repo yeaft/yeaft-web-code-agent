@@ -31,14 +31,15 @@ export function selectActiveConversationId(state) {
     // Cross-agent Yeaft sessions do not share an agent-side conversationId:
     // every local agent process owns its own virtual conversation. In Yeaft
     // view, prefer the conversation owned by the active session's agent; if
-    // the session row is not known yet, fall back to the current Yeaft agent.
-    // This prevents A -> B -> A switches from rendering A rows out of B's
-    // message cache just because B was the last agent to replay session_ready.
+    // the session row is not known yet, fall back to the agent this client is
+    // bound to (`currentAgent`). This prevents A -> B -> A switches from
+    // rendering A rows out of B's message cache just because B was the last
+    // agent to replay session_ready.
     const sessionId = state.yeaftActiveSessionFilter || null;
     const sessionAgentId = sessionId && state.yeaftSessionAgentById
       ? state.yeaftSessionAgentById[sessionId]
       : null;
-    const agentId = sessionAgentId || state.yeaftAgentId || null;
+    const agentId = sessionAgentId || state.currentAgent || null;
     const agentConversationId = agentId && state.yeaftConversationIdsByAgent
       ? state.yeaftConversationIdsByAgent[agentId]
       : null;

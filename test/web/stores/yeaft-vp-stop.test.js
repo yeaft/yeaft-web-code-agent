@@ -40,7 +40,7 @@ function freshStore() {
   store.currentView = 'chat';
   store.activeConversations = [];
   store.processingConversations = {};
-  store.yeaftAgentId = null;
+  store.currentAgent = null;
   store.yeaftConversationId = null;
   store.yeaftActiveSessionFilter = null;
   store.activeVpTurns = {};
@@ -59,7 +59,7 @@ describe('Yeaft VP stop', () => {
 
   it('sends yeaft_abort_turn with the active turn id and marks it stopping', () => {
     const store = freshStore();
-    store.yeaftAgentId = 'agent-1';
+    store.currentAgent = 'agent-1';
     store.sendWsMessage = vi.fn();
 
     store.cancelVpTurn('turn-1');
@@ -74,7 +74,7 @@ describe('Yeaft VP stop', () => {
 
   it('falls back to the VP status turn id before vp_turn_start exists', () => {
     const store = freshStore();
-    store.yeaftAgentId = 'agent-1';
+    store.currentAgent = 'agent-1';
     store.yeaftActiveSessionFilter = 'session-1';
     store.sendWsMessage = vi.fn();
     store.activeVpTurns = {};
@@ -100,7 +100,7 @@ describe('Yeaft VP stop', () => {
 
   it('sends sessionId and vpId when no turn id is known yet', () => {
     const store = freshStore();
-    store.yeaftAgentId = 'agent-1';
+    store.currentAgent = 'agent-1';
     store.yeaftActiveSessionFilter = 'session-1';
     store.sendWsMessage = vi.fn();
     store.activeVpTurns = {};
@@ -212,7 +212,7 @@ describe('Yeaft session active indicator state', () => {
 
   it('stops only the selected Yeaft session', () => {
     const store = freshStore();
-    store.yeaftAgentId = 'agent-1';
+    store.currentAgent = 'agent-1';
     store.yeaftProcessingSessions = { 'session-a': true, 'session-b': true };
     store.activeVpTurns = {
       'turn-a': { sessionId: 'session-a', vpId: 'vp-a', startedAt: 1 },
