@@ -230,8 +230,89 @@
   border-radius: 12px;
 }
 
+.settings-pane-yeaft .vp-crud-list-toolbar {
+  margin-bottom: 10px;
+}
+
+.settings-pane-yeaft .vp-crud-card-grid {
+  gap: 8px;
+}
+
 .settings-pane-yeaft .vp-crud-card {
-  padding: 14px 16px;
+  min-height: 0;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  gap: 12px;
+}
+
+.settings-pane-yeaft .vp-crud-card-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.settings-pane-yeaft .vp-crud-card-avatar {
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.settings-pane-yeaft .vp-crud-card-meta {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-pane-yeaft .vp-crud-card-title-row,
+.settings-pane-yeaft .vp-crud-card-subline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-pane-yeaft .vp-crud-card-name {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.settings-pane-yeaft .vp-crud-card-name span,
+.settings-pane-yeaft .vp-crud-card-id,
+.settings-pane-yeaft .vp-crud-card-role {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-pane-yeaft .vp-crud-card-id {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.settings-pane-yeaft .vp-crud-card-role {
+  min-width: 0;
+  margin-top: 0;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.settings-pane-yeaft .vp-crud-stock-badge {
+  flex: 0 0 auto;
+  border-color: var(--border-light);
 }
 
 .settings-pane-yeaft .vp-crud-card-actions,
@@ -239,6 +320,19 @@
 .settings-pane-yeaft .settings-section-actions,
 .settings-pane-yeaft .mcp-server-actions {
   gap: 8px;
+}
+
+.settings-pane-yeaft .vp-crud-card-actions {
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+}
+
+.settings-pane-yeaft .vp-crud-card-actions .vp-crud-link-btn {
+  min-height: 30px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1;
 }
 
 .settings-pane-yeaft .vp-crud-primary-btn,
@@ -891,6 +985,25 @@
   .vp-crud-card-actions,
   .vp-crud-form-actions {
     flex-wrap: wrap;
+  }
+
+  .settings-pane-yeaft .vp-crud-card {
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .settings-pane-yeaft .vp-crud-card-main,
+  .settings-pane-yeaft .vp-crud-card-actions {
+    width: 100%;
+  }
+
+  .settings-pane-yeaft .vp-crud-card-actions {
+    justify-content: flex-start;
+  }
+
+  .settings-pane-yeaft .vp-crud-card-actions .vp-crud-link-btn {
+    flex: 1 1 auto;
+    padding: 7px 8px;
   }
 
   .sp-language-options {

@@ -13,6 +13,10 @@ const llmTabSource = readFileSync(
   new URL('../../../web/components/LlmTab.js', import.meta.url),
   'utf8',
 );
+const vpCrudPanelSource = readFileSync(
+  new URL('../../../web/components/VpCrudPanel.js', import.meta.url),
+  'utf8',
+);
 const sidebarAgentHeaderSource = readFileSync(
   new URL('../../../web/components/SidebarAgentHeader.js', import.meta.url),
   'utf8',
@@ -166,5 +170,18 @@ describe('Settings panel source', () => {
     expect(settingsCss).toContain('border: 1px solid var(--border-light);');
     expect(settingsCss).toContain('.sp-subtab.active');
     expect(settingsCss).toContain('outline: 2px solid var(--accent-blue);');
+  });
+
+  it('keeps Yeaft VP rows compact inside settings', () => {
+    expect(vpCrudPanelSource).toContain('class="vp-crud-card-main"');
+    expect(vpCrudPanelSource).toContain('class="vp-crud-card-avatar"');
+    expect(vpCrudPanelSource).toContain('class="vp-crud-card-title-row"');
+    expect(vpCrudPanelSource).toContain('class="vp-crud-card-subline"');
+    expect(vpCrudPanelSource).toContain('vpInitial(vp)');
+
+    expect(settingsCss).toContain('.settings-pane-yeaft .vp-crud-card-main');
+    expect(settingsCss).toContain('.settings-pane-yeaft .vp-crud-card-actions .vp-crud-link-btn');
+    expect(settingsCss).toContain('min-height: 30px;');
+    expect(settingsCss).toContain('text-overflow: ellipsis;');
   });
 });
