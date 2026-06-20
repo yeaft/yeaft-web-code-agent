@@ -591,20 +591,34 @@ export default {
       document.addEventListener('mouseup', onMouseUp);
     };
 
-    // Detect mobile for overlay behavior.
-    //   isMobile        — sidebar overlay (<=768)
-    //   isNarrowDetail  — debug-panel overlay (<=1024). The base
-    //     responsive rule hides .yeaft-detail at 1024 and below, which
-    //     was making the debug toggle a no-op on tablets too. We mirror
-    //     that breakpoint here so the JS-driven overlay class is
-    //     applied on every viewport where CSS would otherwise hide the
-    //     panel.
-    const isMobile = Vue.ref(window.innerWidth <= 768);
-    const isNarrowDetail = Vue.ref(window.innerWidth <= 1024);
+    // Detect mobile/narrow layouts from the same media queries CSS uses.
+    // Reading window.innerWidth directly can drift from @media evaluation on
+    // real phones (browser chrome / visual viewport / device emulation), which
+    // leaves .yeaft-detail hidden while the Debug button toggles state.
+    const MOBILE_QUERY = '(max-width: 768px)';
+    const NARROW_DETAIL_QUERY = '(max-width: 1024px)';
+    const mobileMedia = typeof window.matchMedia === 'function' ? window.matchMedia(MOBILE_QUERY) : null;
+    const narrowDetailMedia = typeof window.matchMedia === 'function' ? window.matchMedia(NARROW_DETAIL_QUERY) : null;
+    const matchesMedia = (media, fallbackWidth) => media ? media.matches : window.innerWidth <= fallbackWidth;
+    const isMobile = Vue.ref(matchesMedia(mobileMedia, 768));
+    const isNarrowDetail = Vue.ref(matchesMedia(narrowDetailMedia, 1024));
+    const syncResponsiveFlags = () => {
+      isMobile.value = matchesMedia(mobileMedia, 768);
+      isNarrowDetail.value = matchesMedia(narrowDetailMedia, 1024);
+    };
     const onResize = () => {
-      isMobile.value = window.innerWidth <= 768;
-      isNarrowDetail.value = window.innerWidth <= 1024;
+      syncResponsiveFlags();
       scheduleMobileViewportRecovery();
+    };
+    const addMediaChangeListener = (media) => {
+      if (!media) return;
+      if (typeof media.addEventListener === 'function') media.addEventListener('change', onResize);
+      else if (typeof media.addListener === 'function') media.addListener(onResize);
+    };
+    const removeMediaChangeListener = (media) => {
+      if (!media) return;
+      if (typeof media.removeEventListener === 'function') media.removeEventListener('change', onResize);
+      else if (typeof media.removeListener === 'function') media.removeListener(onResize);
     };
 
     // Esc handling — exit the VP detail view if it's open. (Task-detail
@@ -622,7 +636,10 @@ export default {
     };
 
     Vue.onMounted(() => {
+      syncResponsiveFlags();
       window.addEventListener('resize', onResize);
+      addMediaChangeListener(mobileMedia);
+      addMediaChangeListener(narrowDetailMedia);
       window.visualViewport?.addEventListener('resize', scheduleMobileViewportRecovery);
       window.visualViewport?.addEventListener('scroll', scheduleMobileViewportRecovery);
       document.addEventListener('click', closeModelDropdownOutside);
@@ -631,6 +648,8 @@ export default {
     });
     Vue.onUnmounted(() => {
       window.removeEventListener('resize', onResize);
+      removeMediaChangeListener(mobileMedia);
+      removeMediaChangeListener(narrowDetailMedia);
       window.visualViewport?.removeEventListener('resize', scheduleMobileViewportRecovery);
       window.visualViewport?.removeEventListener('scroll', scheduleMobileViewportRecovery);
       document.removeEventListener('click', closeModelDropdownOutside);
