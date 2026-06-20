@@ -1,20 +1,20 @@
 ---
 name: review-merge-tag
-description: PR 复审通过后的自动收尾流程。确认 review 无阻塞后，通过 gh pr merge 合并到 main，从 main 生成并推送下一个 v0.1.X tag，然后清理对应 worktree。
+description: PR 复审通过后的自动收尾流程。确认 review 无阻塞后，通过 gh pr merge 合并到 main，从 main 生成并推送下一个 v1.0.X tag，然后清理对应 worktree。
 ---
 
 # Review Merge Tag
 
-把“PR 已开发完成并复审通过”之后的收尾动作固化为可重复流程：合并 PR、从 `main` 打下一个 `v0.1.X` tag、推送 tag、清理 worktree。
+把“PR 已开发完成并复审通过”之后的收尾动作固化为可重复流程：合并 PR、从 `main` 打下一个 `v1.0.X` tag、推送 tag、清理 worktree。
 
 ## 输入
 
 - `pr`：PR number 或 PR URL，必填。
 - `worktreePath`：对应开发 worktree 路径，可选；提供后用于最后 `ExitWorktree` 清理。
 - `branch`：PR head branch，可选；用于核对和清理说明。
-- `tagPrefix`：tag 前缀，可选，默认 `v0.1.`。
+- `tagPrefix`：tag 前缀，可选，默认 `v1.0.`。
 - `reviewPassedContext`：复审通过上下文，可选；当自动检查不到 Martin 审计 comment 时必须提供。
-- `releaseTag`：是否额外打 `release-v0.1.X`，默认 `false`；只有用户明确要求发布触发 tag 时才允许。
+- `releaseTag`：是否额外打 `release-v1.0.X`，默认 `false`；只有用户明确要求发布触发 tag 时才允许。
 
 ## 不可违反的安全规则
 
@@ -90,13 +90,13 @@ git merge-base --is-ancestor <mergeCommitOrHead> origin/main
 
 ### Step 4: 计算下一个 tag
 
-不要用创建时间排序。按数值解析现有 `v0.1.X`：
+不要用创建时间排序。按数值解析现有 `v1.0.X`：
 
 ```bash
-git tag --list 'v0.1.*'
+git tag --list 'v1.0.*'
 ```
 
-选择最大的数字后缀 `X`，下一个 tag 是 `v0.1.<X+1>`。如果传了 `tagPrefix`，只在完全理解其格式时使用；否则停止确认。
+如果还没有现有 `v1.0.*` tag，第一个 tag 是 `v1.0.0`。否则选择最大的数字后缀 `X`，下一个 tag 是 `v1.0.<X+1>`。如果传了 `tagPrefix`，只在完全理解其格式时使用；否则停止确认。
 
 创建前检查：
 
@@ -115,7 +115,7 @@ git tag <nextTag>
 git push origin <nextTag>
 ```
 
-默认不要打 `release-v0.1.X`。只有 `releaseTag: true` 且用户明确要求时才允许：
+默认不要打 `release-v1.0.X`。只有 `releaseTag: true` 且用户明确要求时才允许：
 
 ```bash
 git tag release-<nextTag>
@@ -164,6 +164,6 @@ ExitWorktree(path: worktreePath, action: "remove", discard_changes: true)
 完成。
 - PR: #970 https://github.com/yeaft/claude-web-chat/pull/970
 - Merge commit: e082f3a42b3740873b5ade1558d7d52171badc06
-- Tag: v0.1.959
+- Tag: v1.0.0
 - Worktree cleanup: removed .yeaft/worktrees/fix-prompt-language-concise
 ```

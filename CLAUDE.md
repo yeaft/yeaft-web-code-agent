@@ -279,8 +279,8 @@ Web 客户端 -> ws "yeaft_session_send" -> Server -> ws agent
 - **不用 TypeScript**：纯 JS + JSDoc 类型注解
 - **无构建步骤**：前端走静态文件，Vue/Pinia 直接 CDN 引入
 - **Commit 风格**：Conventional commits（`feat:`、`fix:`、`perf:`、`revert:`）
-- **Tag 格式**：`v0.1.X`（用 `git tag --sort=-creatordate | head -1` 查最新）
-- **Release tag**：`release-v0.1.X` 触发生产部署（仅在用户明确要求时打）
+- **Tag 格式**：`v1.0.X`（从 `v1.0.0` 起，后续按 patch 小版本递增；用 `git tag --sort=-v:refname | head -1` 查最新）
+- **Release tag**：`release-v1.0.X` 触发生产部署（仅在用户明确要求时打）
 - **文档语言**：项目内 CLAUDE.md / 文档说明一律用中文；代码注释允许英文以便国际协作
 
 ## 命名约束（每次起新名字必读）
@@ -403,7 +403,7 @@ Web 客户端 -> ws "yeaft_session_send" -> Server -> ws agent
 4. **push worktree 分支**（不是 `main`）：`git push -u origin <worktree-branch>`。
 5. **开 PR**：`gh pr create --base main --head <worktree-branch> --title "..." --body "..."`。
 6. **等 PR 合并**（CI 绿 + 用户批准）。**不要**自己合并 PR，除非用户明确授权。
-7. **从 `main` 打 tag**（合并之后）：切到 main checkout（`/home/azureuser/projects/claude-web-chat`），`git checkout main && git pull`，然后 `git tag v0.1.X && git push origin v0.1.X`。
+7. **从 `main` 打 tag**（合并之后）：切到 main checkout（`/home/azureuser/projects/claude-web-chat`），`git checkout main && git pull`，然后 `git tag v1.0.X && git push origin v1.0.X`。
 
 ### 禁止的捷径（永远不能做）
 
@@ -429,7 +429,7 @@ PR 是 review 闸门。跳过它就跳过了 code review，破坏了审计链。
 3. **验证** — 跑 `npx vitest run`。修完之后的 HEAD 必须全绿。
 4. **push 修复 + 把 review summary 作为 PR comment 贴上** — 这条 comment 是审计链，记录每个 persona 发现了什么、修了什么。
 5. **合并** — `gh pr merge <num> --merge --delete-branch`。本地分支删除可能失败（worktree 还 check out 着），这是预期，没事 — 远端 merge + 远端分支删除已成功。
-6. **从 main 打 tag** — 切到 `/home/azureuser/projects/claude-web-chat`，`git checkout main && git pull --ff-only`，确认 `git branch --show-current` 输出 `main`，然后 `git tag v0.1.X && git push origin v0.1.X`。tag commit 必须能从 `origin/main` 到达。
+6. **从 main 打 tag** — 切到 `/home/azureuser/projects/claude-web-chat`，`git checkout main && git pull --ff-only`，确认 `git branch --show-current` 输出 `main`，然后 `git tag v1.0.X && git push origin v1.0.X`。tag commit 必须能从 `origin/main` 到达。
 7. **清理 worktree**（`ExitWorktree action: "remove"`；带 `discard_changes: true`，因为 commit 已经通过 PR 进了 main）。
 
 **只在以下情况停下来问** review 出现了你不能放心自动修的 Critical / Important 问题，或者修的范围真的不确定。否则不问，直接做完。

@@ -45,7 +45,7 @@ Bundles `web/` into `web/dist/` via esbuild. Docker builds do this automatically
 ## 🚨 Tagging & Release Rules (Governance)
 
 > **RED RULE — read before you ever run `git tag`.**
-> **Version tags (`v0.1.X`) and release tags (`release-v0.1.X`) MUST only be
+> **Version tags (`v1.0.X`) and release tags (`release-v1.0.X`) MUST only be
 > created on commits that are on `main`. Developers (including AI crew
 > `dev-*` roles) MUST NOT tag from a feature / worktree branch.**
 
@@ -60,10 +60,10 @@ hook in this directory exists specifically to prevent a recurrence.
 ### Correct flow
 
 ````
-  worktree-feat-xxx  ──push branch──►  PR  ──merge──►  origin/main  ──tag──►  v0.1.X
+  worktree-feat-xxx  ──push branch──►  PR  ──merge──►  origin/main  ──tag──►  v1.0.X
         │                            ▲                  ▲                    │
         │                            │                  │                    ▼
-        └────── tests + review ──────┘                  └────────── git push origin v0.1.X
+        └────── tests + review ──────┘                  └────────── git push origin v1.0.X
                                                                     (only from `main`)
 ```
 
@@ -73,9 +73,9 @@ hook in this directory exists specifically to prevent a recurrence.
 4. Open a PR against `main`.
 5. Merge the PR only after review and green validation.
 6. `git checkout main && git pull --ff-only` — switch to `main` locally.
-7. `git tag v0.1.X` — tag the merged `main` commit.
-8. `git push origin v0.1.X` — publish the dev tag.
-9. Only when a production release is explicitly requested: repeat (7)–(8) with `release-v0.1.X`.
+7. `git tag v1.0.X` — tag the merged `main` commit.
+8. `git push origin v1.0.X` — publish the dev tag.
+9. Only when a production release is explicitly requested: repeat (7)–(8) with `release-v1.0.X`.
 
 Do **not** push feature branches directly to `main` (`HEAD:main`, `<branch>:main`, or equivalent).
 
