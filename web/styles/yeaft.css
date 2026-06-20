@@ -1648,10 +1648,7 @@
   .yeaft-detail.mobile-debug {
     display: flex;
     position: fixed;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    left: 0;
+    inset: 0;
     width: 100vw;
     min-width: 0;
     z-index: 110;

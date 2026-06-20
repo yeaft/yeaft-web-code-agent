@@ -129,6 +129,30 @@ describe('Yeaft mobile layout CSS', () => {
     expect(page).toContain('height: var(--yeaft-visual-viewport-height, 100dvh);');
   });
 
+  it('keeps Debug panel opening visible on mobile and desktop breakpoints', () => {
+    const pageSource = read('components/YeaftPage.js');
+    const css = read('styles/yeaft.css');
+    const tablet = mediaBlock(css, '(max-width: 1024px)', '.yeaft-detail.mobile-debug');
+    const mobile = mediaBlock(css, '(max-width: 768px)', '.yeaft-detail.mobile-debug');
+
+    expect(pageSource).toContain('v-if="debugMode"');
+    expect(pageSource).toContain(":class=\"{ resizing: isResizingDetail, 'mobile-debug': isNarrowDetail }\"");
+    expect(pageSource).toContain("const NARROW_DETAIL_QUERY = '(max-width: 1024px)';");
+    expect(pageSource).toContain('window.matchMedia(NARROW_DETAIL_QUERY)');
+    expect(pageSource).toContain('addMediaChangeListener(narrowDetailMedia);');
+    expect(pageSource).toContain('removeMediaChangeListener(narrowDetailMedia);');
+
+    expect(tablet).toContain('.yeaft-detail {');
+    expect(tablet).toContain('display: none');
+    expect(tablet).toContain('.yeaft-detail.mobile-debug');
+    expect(tablet).toContain('display: flex');
+    expect(tablet).toContain('position: fixed');
+    expect(tablet).toContain('inset: 0');
+    expect(tablet).toContain('z-index: 110');
+    expect(mobile).toContain('.yeaft-detail.mobile-debug');
+    expect(mobile).toContain('display: flex');
+  });
+
   it('tightens Yeaft create roster and VP turn chrome on mobile', () => {
     const createCss = read('styles/yeaft-session-create.css');
     const createMobile = mediaBlock(createCss, '(max-width: 640px)', '.resume-control-row-vp');
