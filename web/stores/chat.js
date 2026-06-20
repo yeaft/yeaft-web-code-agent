@@ -126,10 +126,10 @@ function resolveActiveDreamDebugSessionId(state) {
 
 function resolveYeaftConversationIdForSession(state, sessionId = null) {
   const targetSessionId = sessionId || state?.yeaftActiveSessionFilter || null;
-  const sessionAgentId = targetSessionId && state?.yeaftSessionAgentById
-    ? state.yeaftSessionAgentById[targetSessionId]
-    : null;
-  const agentId = sessionAgentId || state?.currentAgent || null;
+  // Reuse the single owner-resolver so this stays in lock-step with how
+  // sends / history / aborts pick the agent. (sessions store → per-session
+  // cache → currentAgent.)
+  const agentId = resolveAgentIdForSession(state, targetSessionId);
   const agentConversationId = agentId && state?.yeaftConversationIdsByAgent
     ? state.yeaftConversationIdsByAgent[agentId]
     : null;
@@ -1222,10 +1222,15 @@ export const useChatStore = defineStore('chat', {
       const needHistoryCatchUp = !!activeSessionId
         && msgHelpers.shouldCatchUpLoadedYeaftSession(sessionState, catchUpHistory);
       if (!needSessionReady && !needHistoryReplay && !needHistoryCatchUp) return false;
-      const sessionAgentId = activeSessionId && this.yeaftSessionAgentById
-        ? this.yeaftSessionAgentById[activeSessionId]
-        : null;
-      const targetAgentId = sessionAgentId || this.currentAgent;
+      // Route session-scoped history through the single resolver (sessions
+      // store → per-session cache → currentAgent), same as every other
+      // session-scoped emitter. The old inline `cache || currentAgent` skipped
+      // the authoritative sessionById lookup, so in the cold/cross-agent window
+      // it could ship yeaft_load_history to an agent that doesn't own the
+      // session — the exact misroute this refactor removes.
+      const targetAgentId = activeSessionId
+        ? resolveAgentIdForSession(this, activeSessionId)
+        : this.currentAgent;
       const metaKey = `${targetAgentId}:${activeSessionId || '__none__'}`;
       const metadataOnly = needSessionReady && !needHistoryReplay && !needHistoryCatchUp;
       if (metadataOnly && this.yeaftBootstrapMetaLoadingKey === metaKey) return false;
@@ -1326,6 +1331,16 @@ export const useChatStore = defineStore('chat', {
       }, 10_000);
     },
     /**
+     * Resolve the agent that owns a Yeaft session. Public wrapper over the
+     * module-private resolver so components / sibling stores (vp.js) can route
+     * session-scoped frames by the session's owning agent instead of a
+     * page-level pointer. Falls back to `currentAgent` when no session id is
+     * given or the session's agent is not yet known.
+     */
+    agentIdForSession(sessionId) {
+      return resolveAgentIdForSession(this, sessionId);
+    },
+    /**
      * Send a group-scoped Yeaft chat message. Routes through the agent-side
      * GroupCoordinator which fans out to the target VP(s) or falls back to
      * the group's defaultVpId. This is the SOLE Yeaft send path —
@@ -1336,16 +1351,6 @@ export const useChatStore = defineStore('chat', {
      *           attachments?:Array<{fileId:string,name:string,preview?:string,
      *                               isImage?:boolean,mimeType?:string}>}} payload
      */
-    /**
-     * Resolve the agent that owns a Yeaft session. Public wrapper over the
-     * module-private resolver so components / sibling stores (vp.js) can route
-     * session-scoped frames by the session's owning agent instead of a
-     * page-level pointer. Falls back to `currentAgent` when no session id is
-     * given or the session's agent is not yet known.
-     */
-    agentIdForSession(sessionId) {
-      return resolveAgentIdForSession(this, sessionId);
-    },
     sendYeaftSessionMessage({ groupId, text, mentions, attachments }) {
       // Route by the session's owning agent, not a page-level pointer. A
       // cross-agent click or a late session_ready replay used to leave the
@@ -2918,11 +2923,25 @@ export const useChatStore = defineStore('chat', {
       // that other agent silently goes stale.
       //
       // The cross-agent callers (YeaftSidebar.onSelectGroup,
-      // SessionCreateModal resume) already `selectAgent(owner)` before
-      // calling here, so `currentAgent` follows the active session; we only
-      // record the per-session agent so session-scoped sends/aborts route by
-      // the session, never by a drifting page pointer.
+      // SessionCreateModal resume) already `selectAgent(owner)` before calling
+      // here. But other callers reach this seam WITHOUT a preceding
+      // selectAgent (restoreActiveYeaftSessionFromStatuses, the
+      // group_list_updated snapshot handler, YeaftPage.onSelectGroupV2). Since
+      // agent-level ops (global cancelYeaft, MCP / search settings, reset) now
+      // route by `currentAgent`, a stale currentAgent would silently target
+      // the wrong agent after a cross-agent session switch. Make the seam
+      // self-healing: when the resolved owner differs, sync currentAgent the
+      // same synchronous way enterYeaft does (selectAgent kicks off the
+      // round-trip while currentAgent is still old so its same-agent guard
+      // doesn't swallow the frame; the assignment then makes same-tick reads
+      // see the new owner).
       const targetAgentId = next ? resolveAgentIdForSession(this, next) : this.currentAgent;
+      if (targetAgentId && next && this.currentAgent !== targetAgentId) {
+        this.selectAgent(targetAgentId);
+        this.currentAgent = targetAgentId;
+        const info = this.agents.find(a => a.id === targetAgentId);
+        if (info) this.currentAgentInfo = info;
+      }
       if (targetAgentId && next) {
         this.yeaftSessionAgentById = {
           ...(this.yeaftSessionAgentById || {}),
@@ -3736,6 +3755,10 @@ export const useChatStore = defineStore('chat', {
      * still use the turnId-only path.
      */
     cancelVpTurn(turnId, { sessionId = null, vpId = null } = {}) {
+      // sessionId is optional metadata from newer agents. When present we route
+      // by the session's owner; the legacy turnId-only path (no sessionId)
+      // resolves to currentAgent — matching the pre-refactor behavior where the
+      // abort always hit the active page agent.
       const targetAgentId = resolveAgentIdForSession(this, sessionId);
       if (!targetAgentId || !turnId) return;
       this.stoppingVpTurnIds = {

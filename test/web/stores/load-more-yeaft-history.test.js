@@ -53,10 +53,10 @@ function resolveAgentIdForSession(state, sessionId) {
       const sess = gs && typeof gs.sessionById === 'function' ? gs.sessionById(sessionId) : null;
       if (sess && sess.agentId) return sess.agentId;
     } catch { /* sessions store missing */ }
-    const mapped = state.yeaftSessionAgentById ? state.yeaftSessionAgentById[sessionId] : null;
+    const mapped = state?.yeaftSessionAgentById ? state.yeaftSessionAgentById[sessionId] : null;
     if (mapped) return mapped;
   }
-  return state.currentAgent || null;
+  return state?.currentAgent || null;
 }
 
 // Re-implement the action body 1:1 here so we can drive it without booting
