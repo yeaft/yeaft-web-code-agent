@@ -285,11 +285,6 @@ export default {
   'yeaft.modelMenu.effort.max': '最高',
   'yeaft.modelMenu.noEffort': '当前模型没有可兼容映射的推理强度控制。',
   'yeaft.modelMenu.configureHint': 'Provider、密钥、模型列表',
-  // fix/dream-cadence-and-ui-trigger: manual dream trigger button.
-  'yeaft.dream.runNow': '立即整理记忆',
-  'yeaft.dream.lastRun': '上次：{ago}前',
-  'yeaft.dream.lastRunNever': '尚未运行',
-  'yeaft.dream.entriesCreated': '{n} 条',
   'yeaft.settings.title': '设置',
   // task-343: tab labels for the two-column Settings dialog
   'yeaft.settings.tabs.vp': 'VP 库',

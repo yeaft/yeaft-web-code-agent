@@ -285,11 +285,6 @@ export default {
   'yeaft.modelMenu.effort.max': 'Max',
   'yeaft.modelMenu.noEffort': 'This model does not expose a compatible effort control.',
   'yeaft.modelMenu.configureHint': 'Providers, keys, model list',
-  // fix/dream-cadence-and-ui-trigger: manual dream trigger button.
-  'yeaft.dream.runNow': 'Run dream now',
-  'yeaft.dream.lastRun': 'Last run: {ago} ago',
-  'yeaft.dream.lastRunNever': 'Not run yet',
-  'yeaft.dream.entriesCreated': '{n} entries',
   'yeaft.settings.title': 'Settings',
   // task-343: tab labels for the two-column Settings dialog
   'settings.yeaft.tabs.vp': 'VP Library',
