@@ -320,6 +320,7 @@ export default {
         :rows="vpTimelineRows"
         :tasks="sessionStatusTasksForActiveSession"
         :announcement-text="sessionStatusAnnouncementText"
+        :sub-agent-prompt-results="store.yeaftSubAgentPromptResults"
         :class="{ 'mobile-session-status': isNarrowDetail }"
         :style="timelineWidthStyle"
         @mention-vp="onMentionVpFromTimeline"
@@ -327,6 +328,7 @@ export default {
         @start-resize="startTimelineResize"
         @cancel-vp-turn="onCancelVpFromTimeline"
         @edit-announcement="openAnnouncementSettings"
+        @prompt-sub-agent="onPromptSubAgentFromTimeline"
         @close="closeSessionStatus"
       />
 
@@ -1229,6 +1231,11 @@ export default {
       }
     };
 
+    const onPromptSubAgentFromTimeline = (payload) => {
+      if (!payload || typeof store.sendYeaftSubAgentPrompt !== 'function') return false;
+      return store.sendYeaftSubAgentPrompt(payload);
+    };
+
     return {
       store,
       sidebarCollapsed,
@@ -1321,6 +1328,7 @@ export default {
       onEditVpFromTimeline,
       onMentionVpFromTimeline,
       onCancelVpFromTimeline,
+      onPromptSubAgentFromTimeline,
       // fix/dream-cadence-and-ui-trigger: manual dream trigger bindings.
       dreamRunning,
       dreamJustFinished,

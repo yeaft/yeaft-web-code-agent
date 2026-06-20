@@ -4272,8 +4272,23 @@
   flex: 0 0 auto;
 }
 
+.yeaft-vp-task-item.is-running .yeaft-vp-task-dot {
+  animation: yeaft-task-running-pulse 1.25s ease-in-out infinite;
+}
+
 .yeaft-vp-task-item.is-terminal .yeaft-vp-task-dot {
   background: var(--text-muted);
+}
+
+@keyframes yeaft-task-running-pulse {
+  0%, 100% {
+    opacity: 0.45;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.25);
+  }
 }
 
 .yeaft-vp-task-main {
@@ -4328,10 +4343,11 @@
   line-height: 1.5;
 }
 
+.yeaft-vp-task-sub-agent-panel,
 .yeaft-vp-task-detail-lines {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 7px;
 }
 
 .yeaft-vp-task-detail-line {
@@ -4356,6 +4372,35 @@
 
 .yeaft-vp-task-log-empty {
   font-size: 12px;
+}
+
+.yeaft-vp-task-prompt-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.yeaft-vp-task-prompt-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 34px;
+  max-height: 84px;
+  resize: vertical;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.yeaft-vp-task-prompt-submit {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.yeaft-vp-task-prompt-error {
+  color: var(--error);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 /* ── No-session onboarding guide ── */

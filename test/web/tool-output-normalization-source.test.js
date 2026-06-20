@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { createSubAgentTaskDetailLines } from '../../web/components/VpTimelinePane.js';
+import { createSubAgentTaskDetailLines, createSubAgentTaskStreamText } from '../../web/components/VpTimelinePane.js';
 
 const toolLineSource = readFileSync(new URL('../../web/components/ToolLine.js', import.meta.url), 'utf8');
 const assistantTurnSource = readFileSync(new URL('../../web/components/AssistantTurn.js', import.meta.url), 'utf8');
@@ -49,6 +49,8 @@ describe('terminal output normalization render wiring', () => {
     expect(taskDetailBlock).toContain('border-radius: 8px;');
     expect(taskLogBlock).toContain('background: transparent;');
     expect(taskLogBlock).not.toContain('border:');
+    expect(yeaftCssSource).toContain('@keyframes yeaft-task-running-pulse');
+    expect(yeaftCssSource).toContain('.yeaft-vp-task-prompt-form');
     expect(variablesCssSource).toContain('.terminal-fg-green { color: var(--terminal-fg-green); }');
     expect(variablesCssSource).toContain('.terminal-bg-cyan { background-color: var(--terminal-bg-cyan); }');
     expect(variablesCssSource).toContain('.terminal-output');
@@ -58,17 +60,25 @@ describe('terminal output normalization render wiring', () => {
     const messages = {
       'yeaft.sessionStatus.task.subAgentResult': '{name} result: {text}',
       'yeaft.sessionStatus.task.subAgentStatus': '{name} is {status}',
+      'yeaft.sessionStatus.task.subAgentEvent': '{name}: {text}',
+      'yeaft.sessionStatus.task.subAgentUserPrompt': 'You: {text}',
     };
     const t = (key, params = {}) => Object.entries(params).reduce(
       (text, [name, value]) => text.replace(new RegExp(`\\{${name}\\}`, 'g'), value),
       messages[key] || key,
     );
     const preview = [
-      JSON.stringify({ type: 'text_delta', agentName: 'worker', text: 'partial answer' }),
+      JSON.stringify({ type: 'text_delta', agentName: 'worker', text: 'partial ' }),
+      JSON.stringify({ type: 'text_delta', agentName: 'worker', text: 'answer' }),
       JSON.stringify({ type: 'sub_agent_turn_end', agentName: 'worker', content: 'final answer' }),
     ].join('\n');
 
+    expect(createSubAgentTaskStreamText({ kind: 'sub_agent', log: { preview } }, t)).toBe([
+      'worker: partial answer',
+      'worker result: final answer',
+    ].join('\n'));
     expect(createSubAgentTaskDetailLines({ kind: 'sub_agent', log: { preview } }, t)).toEqual([
+      'worker: partial answer',
       'worker result: final answer',
     ]);
     expect(createSubAgentTaskDetailLines({
@@ -91,7 +101,12 @@ describe('terminal output normalization render wiring', () => {
     expect(vpTimelinePaneSource).toContain("$t('yeaft.sessionStatus.task.subAgentNoReadableEvents')");
     expect(vpTimelinePaneSource).toContain('{{ taskKindLabel(task) }}');
     expect(vpTimelinePaneSource).toContain("task.status !== 'running'");
-    expect(vpTimelinePaneSource).not.toContain("case 'text_delta':");
+    expect(vpTimelinePaneSource).toContain("case 'text_delta':");
+    expect(vpTimelinePaneSource).toContain('createSubAgentTaskStreamText');
+    expect(vpTimelinePaneSource).toContain("emit('prompt-sub-agent'");
+    expect(vpTimelinePaneSource).toContain('yeaft-vp-task-prompt-form');
+    expect(vpTimelinePaneSource).toContain('subAgentPromptError(task)');
+    expect(vpTimelinePaneSource).toContain('isSubAgentPromptPending(task)');
     expect(vpTimelinePaneSource).not.toContain('subAgentSaid');
     expect(vpTimelinePaneSource).not.toContain('{{ task.log.preview }}');
   });

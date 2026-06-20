@@ -274,13 +274,19 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
     ? deps.idleAbandonMs : IDLE_ABANDON_MS;
 
   const wrapEvt = (evt) => ({ ...evt, agentId: agent.id, agentName: agent.name });
+  let lastTaskLogRefreshAt = 0;
+  const refreshTaskLog = ({ force = false } = {}) => {
+    if (!agent.taskId || !deps.taskManager || !agent.parentSessionId) return;
+    const now = Date.now();
+    if (!force && now - lastTaskLogRefreshAt < 250) return;
+    lastTaskLogRefreshAt = now;
+    try { deps.taskManager.refreshTaskLog(agent.parentSessionId, agent.taskId); } catch { /* ignore */ }
+  };
 
   const emit = (evt) => {
     const wrapped = wrapEvt(evt);
     try { agent.outputLog?.write(wrapped); } catch { /* ignore log failures */ }
-    if (agent.taskId && deps.taskManager && agent.parentSessionId) {
-      try { deps.taskManager.refreshTaskLog(agent.parentSessionId, agent.taskId); } catch { /* ignore */ }
-    }
+    refreshTaskLog({ force: true });
     if (onEvent) {
       try { onEvent(agent.id, wrapped); } catch { /* ignore listener errors */ }
     }
@@ -360,15 +366,14 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
           // the bump.
           bumpLivenessFromEvent(agent.liveness, evt);
 
-          // Mirror every raw event to the durable log, but do not live-stream
-          // assistant text to the parent/UI. A sub-agent's answer is consumed
-          // as one complete result at sub_agent_turn_end / task_result re-entry;
-          // streaming deltas here make the card look like the result itself
-          // and can leave users staring at an "idle" preview before the parent
-          // VP consumes the completed task result.
+          // Mirror every raw event to the durable log. We still keep
+          // `sub_agent_event` text_delta suppressed so the inline transcript
+          // card remains result-oriented, but task-backed sub-agents refresh
+          // their task log so the Session status pane can show a live stream.
           if (agent.outputLog) {
             try { agent.outputLog.write(wrapEvt(evt)); } catch { /* ignore */ }
           }
+          refreshTaskLog({ force: evt?.type !== 'text_delta' });
           if (onEvent && evt?.type !== 'text_delta') {
             try { onEvent(agent.id, wrapEvt(evt)); } catch { /* ignore listener errors */ }
           }
@@ -460,12 +465,14 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
         return;
       }
 
-      // Turn complete cleanly. Task-backed sub-agents are one-shot
+      // Turn complete cleanly. Task-backed sub-agents are usually one-shot
       // background tasks: once they produce their mission result, complete
       // the agent/task instead of letting the idle watchdog later mark the
-      // already-delivered work as abandoned. Legacy in-process callers with
-      // no TaskManager keep the old idle/PromptAgent continuation flow.
-      if (agent.taskId && deps.taskManager && agent.parentSessionId) {
+      // already-delivered work as abandoned. If the user queued a follow-up
+      // while the turn was running, keep the driver alive and immediately
+      // continue into the next prompt instead of dropping that input.
+      const hasQueuedFollowUp = Array.isArray(agent.pendingPrompts) && agent.pendingPrompts.length > 0;
+      if (agent.taskId && deps.taskManager && agent.parentSessionId && !hasQueuedFollowUp) {
         transitionTerminal(agent, STATUS.COMPLETED, {
           diagnostic: 'task_turn_complete',
           deps,
@@ -473,7 +480,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
         emit({ type: 'sub_agent_turn_end', content: assistantText, status: STATUS.COMPLETED });
         return;
       }
-      emit({ type: 'sub_agent_turn_end', content: assistantText, status: STATUS.IDLE });
+      emit({ type: 'sub_agent_turn_end', content: assistantText, status: hasQueuedFollowUp ? STATUS.RUNNING : STATUS.IDLE });
     }
   } finally {
     if (wallTimeWatchdog) clearTimeout(wallTimeWatchdog);
