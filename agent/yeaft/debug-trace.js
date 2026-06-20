@@ -413,41 +413,22 @@ export class DebugTrace {
   }
 
   /**
-   * Fetch the recent debug history for the YeaftDebugPanel. Returns one
-   * record per LLM loop (ordered oldest → newest) with the structured
-   * fields the panel expects. JSON columns are parsed; truncated /
-   * malformed payloads degrade to null instead of failing the call.
+   * Fetch debug history for the YeaftDebugPanel.
    *
-   * @param {{ limit?: number, dreamLimit?: number, sessionId?: string|null, threadId?: string|null }} [opts]
-   * @returns {{ loops: object[], turns: object[], dreamEvents: object[] }}
+   * Default mode returns recent loop details for backward compatibility.
+   * `indexOnly` returns all matching request summaries without loop payloads
+   * so the panel can list every past request cheaply. `detailTurnId` returns
+   * the full loop/tool payload for one request on demand.
+   *
+   * @param {{ limit?: number, dreamLimit?: number, sessionId?: string|null, threadId?: string|null, indexOnly?: boolean, detailTurnId?: string|null }} [opts]
+   * @returns {{ loops: object[], turns: object[], dreamEvents: object[], hasMore?: boolean, indexOnly?: boolean, detailTurnId?: string|null }}
    */
-  fetchRecentDebugHistory({ limit = 100, dreamLimit = 5, sessionId = null, threadId = null } = {}) {
+  fetchRecentDebugHistory({ limit = 100, dreamLimit = 5, sessionId = null, threadId = null, indexOnly = false, detailTurnId = null } = {}) {
     const lim = Math.max(1, Math.min(500, Number(limit) || 100));
     const dreamLim = Number.isFinite(Number(dreamLimit))
       ? Math.max(0, Math.min(50, Number(dreamLimit)))
       : 5;
-    const where = [];
-    const args = [];
-    if (sessionId) { where.push('group_id = ?'); args.push(sessionId); }
-    if (threadId) { where.push('thread_id = ?'); args.push(threadId); }
-    const sql = `
-      SELECT * FROM trace_turns
-      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-      ORDER BY started_at DESC
-      LIMIT ?
-    `;
-    // Fetch one extra row so the UI can tell whether older history exists
-    // without issuing a second COUNT(*) against the hot debug trace table.
-    args.push(lim + 1);
-    const fetchedRows = this.#db.prepare(sql).all(...args);
-    const hasMore = fetchedRows.length > lim;
-    const rows = hasMore ? fetchedRows.slice(0, lim) : fetchedRows;
-    const turnIds = rows.map(r => r.id);
-    const tools = turnIds.length > 0
-      ? this.#db.prepare(
-          `SELECT * FROM trace_tools WHERE turn_id IN (${turnIds.map(() => '?').join(',')}) ORDER BY created_at`
-        ).all(...turnIds)
-      : [];
+    const requestedDetailTurnId = typeof detailTurnId === 'string' && detailTurnId ? detailTurnId : null;
     const parseJsonSafe = (s) => {
       if (s == null) return null;
       try { return JSON.parse(s); }
@@ -472,104 +453,12 @@ export class DebugTrace {
           : totalInputTokens + outputTokens,
       };
     };
-    // Group rows by (turnId, threadId, sessionId, vpId) → frontend Turn
-    // record. Each row is also surfaced as a Loop.
-    const duplicateLoopTraceIds = new Set();
-    const seenLoopKeys = new Set();
-    for (const r of rows) {
-      const traceId = r.trace_id || r.id;
-      const key = `${traceId}#${r.turn_number || 0}`;
-      if (seenLoopKeys.has(key)) duplicateLoopTraceIds.add(traceId);
-      else seenLoopKeys.add(key);
-    }
-    // Legacy rows used one Engine-instance trace_id for many user requests.
-    // That creates duplicate Loop 1/2/... rows under the same trace. Split
-    // only those corrupted traces by SQLite row id; healthy rows keep trace_id
-    // so multi-loop requests still hydrate as one turn. Keep this as one
-    // function so loop hydration and tool attachment use the same identity.
-    const turnKeyForRow = (r) => {
-      const baseTurnId = r.trace_id || r.id;
-      return duplicateLoopTraceIds.has(baseTurnId) ? (r.id || baseTurnId) : baseTurnId;
-    };
-    const loopInstanceIdForRow = (r) => {
-      const baseTurnId = r.trace_id || r.id;
-      return duplicateLoopTraceIds.has(baseTurnId) ? (r.id || `${baseTurnId}#${r.turn_number || 0}`) : null;
-    };
-    const turnsById = new Map();
-    const loops = rows.map((r) => {
-      const parsedMessages = parseJsonSafe(r.messages_json) || [];
-      const parsedUsage = parseJsonSafe(r.usage_json);
-      const hydratedTurnId = turnKeyForRow(r);
-      const loopInstanceId = loopInstanceIdForRow(r);
-      const loop = {
-        turnId: hydratedTurnId,
-        ...(loopInstanceId ? { loopInstanceId } : {}),
-        loopNumber: r.turn_number || 0,
-        model: r.model || null,
-        systemPrompt: r.system_prompt || '',
-        messages: parsedMessages,
-        response: r.response_text || '',
-        toolCalls: parseJsonSafe(r.tool_calls_json) || [],
-        usage: normalizeUsage(parsedUsage, r),
-        latencyMs: r.latency_ms || 0,
-        ttfbMs: r.ttfb_ms || null,
-        stopReason: r.stop_reason || null,
-        rawRequest: r.raw_request || null,
-        rawResponse: r.raw_response || null,
-        sessionId: r.group_id || null,
-        vpId: r.vp_id || null,
-        threadId: r.thread_id || null,
-      };
-      if (!turnsById.has(hydratedTurnId)) {
-        turnsById.set(hydratedTurnId, {
-          turnId: hydratedTurnId,
-          // C2 fix: read the explicit `user_prompt` column persisted at
-          // startTurn time. Deriving from messages_json is unsafe — each
-          // tool-loop iteration overwrites messages_json with the
-          // cumulative conversation snapshot, so `messages[0].content`
-          // would be turn-1's prompt for every subsequent turn header.
-          userPrompt: r.user_prompt || '',
-          sessionId: r.group_id || null,
-          vpId: r.vp_id || null,
-          threadId: r.thread_id || null,
-          openedAt: r.started_at || 0,
-          closedAt: r.ended_at || null,
-          totalMs: 0,
-          totalTokens: 0,
-          loopCount: 0,
-          memoryLoaded: null,
-          memoryAdjust: null,
-          tools: [],
-        });
-      }
-      const t = turnsById.get(hydratedTurnId);
-      t.loopCount += 1;
-      // Aggregate per-loop latency / tokens so the Turn header shows the
-      // same totals the live `turn_close` event would have stamped.
-      t.totalMs += r.latency_ms || 0;
-      t.totalTokens += loop.usage.totalTokens || 0;
-      if (r.ended_at && (!t.closedAt || r.ended_at > t.closedAt)) t.closedAt = r.ended_at;
-      return loop;
-    });
-    // Attach tools to their parent Turn so the panel can render per-tool
-    // timing without scanning the loop bodies.
-    for (const tool of tools) {
-      // Find which loop row this tool belongs to; use the same hydrated
-      // identity as the loop/turn records so split legacy rows keep tools.
-      const owner = rows.find(r => r.id === tool.turn_id);
-      if (!owner) continue;
-      const t = turnsById.get(turnKeyForRow(owner));
-      if (!t) continue;
-      t.tools.push({
-        loopNumber: owner.turn_number || 0,
-        callId: tool.tool_call_id || tool.id,
-        traceToolId: tool.id,
-        name: tool.tool_name,
-        toolOutput: tool.tool_output == null ? null : String(tool.tool_output),
-        durationMs: tool.duration_ms || 0,
-        isError: !!tool.is_error,
-      });
-    }
+    const scopedWhere = [];
+    const scopedArgs = [];
+    if (sessionId) { scopedWhere.push('group_id = ?'); scopedArgs.push(sessionId); }
+    if (threadId) { scopedWhere.push('thread_id = ?'); scopedArgs.push(threadId); }
+    const whereSql = scopedWhere.length ? `WHERE ${scopedWhere.join(' AND ')}` : '';
+
     const dreamEvents = [];
     if (dreamLim > 0) {
       const eventRows = this.#db.prepare(`
@@ -597,10 +486,159 @@ export class DebugTrace {
       dreamEvents.reverse();
     }
 
-    // Reverse to oldest-first so the panel's existing append-driven UI
-    // renders in chronological order on hydration.
-    loops.reverse();
-    return { loops, turns: Array.from(turnsById.values()), dreamEvents, hasMore, limit: lim };
+    const duplicateLoopTraceIdsForRows = (rows) => {
+      const duplicateLoopTraceIds = new Set();
+      const seenLoopKeys = new Set();
+      for (const r of rows) {
+        const traceId = r.trace_id || r.id;
+        const key = `${traceId}#${r.turn_number || 0}`;
+        if (seenLoopKeys.has(key)) duplicateLoopTraceIds.add(traceId);
+        else seenLoopKeys.add(key);
+      }
+      return duplicateLoopTraceIds;
+    };
+    const summarizeRows = (rows, duplicateLoopTraceIds = duplicateLoopTraceIdsForRows(rows)) => {
+      const turnKeyForRow = (r) => {
+        const baseTurnId = r.trace_id || r.id;
+        return duplicateLoopTraceIds.has(baseTurnId) ? (r.id || baseTurnId) : baseTurnId;
+      };
+      const turnsById = new Map();
+      for (const r of rows) {
+        const hydratedTurnId = turnKeyForRow(r);
+        const parsedUsage = parseJsonSafe(r.usage_json);
+        const usage = normalizeUsage(parsedUsage, r);
+        if (!turnsById.has(hydratedTurnId)) {
+          turnsById.set(hydratedTurnId, {
+            turnId: hydratedTurnId,
+            userPrompt: r.user_prompt || '',
+            sessionId: r.group_id || null,
+            vpId: r.vp_id || null,
+            threadId: r.thread_id || null,
+            openedAt: r.started_at || 0,
+            closedAt: r.ended_at || null,
+            totalMs: 0,
+            totalTokens: 0,
+            summaryInputTokens: 0,
+            summaryOutputTokens: 0,
+            loopCount: 0,
+            memoryLoaded: null,
+            memoryAdjust: null,
+            tools: [],
+            detailsLoaded: false,
+          });
+        }
+        const t = turnsById.get(hydratedTurnId);
+        t.loopCount += 1;
+        t.totalMs += r.latency_ms || 0;
+        t.totalTokens += usage.totalTokens || 0;
+        t.summaryInputTokens += usage.totalInputTokens || 0;
+        t.summaryOutputTokens += usage.outputTokens || 0;
+        if (r.started_at && (!t.openedAt || r.started_at < t.openedAt)) t.openedAt = r.started_at;
+        if (r.ended_at && (!t.closedAt || r.ended_at > t.closedAt)) t.closedAt = r.ended_at;
+        if (!t.userPrompt && r.user_prompt) t.userPrompt = r.user_prompt;
+      }
+      return Array.from(turnsById.values()).sort((a, b) => (a.openedAt || 0) - (b.openedAt || 0));
+    };
+    const expandRows = (rows) => {
+      const duplicateLoopTraceIds = duplicateLoopTraceIdsForRows(rows);
+      const turnKeyForRow = (r) => {
+        const baseTurnId = r.trace_id || r.id;
+        return duplicateLoopTraceIds.has(baseTurnId) ? (r.id || baseTurnId) : baseTurnId;
+      };
+      const loopInstanceIdForRow = (r) => {
+        const baseTurnId = r.trace_id || r.id;
+        return duplicateLoopTraceIds.has(baseTurnId) ? (r.id || `${baseTurnId}#${r.turn_number || 0}`) : null;
+      };
+      const turnsById = new Map(summarizeRows(rows, duplicateLoopTraceIds).map((t) => [t.turnId, { ...t, detailsLoaded: true }]));
+      const loops = rows.map((r) => {
+        const parsedMessages = parseJsonSafe(r.messages_json) || [];
+        const parsedUsage = parseJsonSafe(r.usage_json);
+        const hydratedTurnId = turnKeyForRow(r);
+        const loopInstanceId = loopInstanceIdForRow(r);
+        return {
+          turnId: hydratedTurnId,
+          ...(loopInstanceId ? { loopInstanceId } : {}),
+          loopNumber: r.turn_number || 0,
+          model: r.model || null,
+          systemPrompt: r.system_prompt || '',
+          messages: parsedMessages,
+          response: r.response_text || '',
+          toolCalls: parseJsonSafe(r.tool_calls_json) || [],
+          usage: normalizeUsage(parsedUsage, r),
+          latencyMs: r.latency_ms || 0,
+          ttfbMs: r.ttfb_ms || null,
+          stopReason: r.stop_reason || null,
+          rawRequest: r.raw_request || null,
+          rawResponse: r.raw_response || null,
+          sessionId: r.group_id || null,
+          vpId: r.vp_id || null,
+          threadId: r.thread_id || null,
+        };
+      });
+      const turnIds = rows.map(r => r.id);
+      const tools = turnIds.length > 0
+        ? this.#db.prepare(
+            `SELECT * FROM trace_tools WHERE turn_id IN (${turnIds.map(() => '?').join(',')}) ORDER BY created_at`
+          ).all(...turnIds)
+        : [];
+      for (const tool of tools) {
+        const owner = rows.find(r => r.id === tool.turn_id);
+        if (!owner) continue;
+        const t = turnsById.get(turnKeyForRow(owner));
+        if (!t) continue;
+        t.tools.push({
+          loopNumber: owner.turn_number || 0,
+          callId: tool.tool_call_id || tool.id,
+          traceToolId: tool.id,
+          name: tool.tool_name,
+          toolOutput: tool.tool_output == null ? null : String(tool.tool_output),
+          durationMs: tool.duration_ms || 0,
+          isError: !!tool.is_error,
+        });
+      }
+      return { loops, turns: Array.from(turnsById.values()).sort((a, b) => (a.openedAt || 0) - (b.openedAt || 0)) };
+    };
+
+    if (requestedDetailTurnId) {
+      const detailWhere = [`(trace_id = ? OR id = ?)`];
+      const detailArgs = [requestedDetailTurnId, requestedDetailTurnId];
+      if (sessionId) { detailWhere.push('group_id = ?'); detailArgs.push(sessionId); }
+      if (threadId) { detailWhere.push('thread_id = ?'); detailArgs.push(threadId); }
+      detailArgs.push(5000);
+      const rows = this.#db.prepare(`
+        SELECT * FROM trace_turns
+        WHERE ${detailWhere.join(' AND ')}
+        ORDER BY started_at ASC, turn_number ASC, rowid ASC
+        LIMIT ?
+      `).all(...detailArgs);
+      const expanded = expandRows(rows);
+      return { ...expanded, dreamEvents, hasMore: false, limit: rows.length, indexOnly: false, detailTurnId: requestedDetailTurnId };
+    }
+
+    if (indexOnly) {
+      const rows = this.#db.prepare(`
+        SELECT id, trace_id, message_id, mode, turn_number, model,
+               input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+               stop_reason, latency_ms, started_at, ended_at, group_id, vp_id,
+               thread_id, usage_json, user_prompt
+        FROM trace_turns
+        ${whereSql}
+        ORDER BY started_at ASC, turn_number ASC, rowid ASC
+      `).all(...scopedArgs);
+      return { loops: [], turns: summarizeRows(rows), dreamEvents, hasMore: false, limit: lim, indexOnly: true };
+    }
+
+    const args = [...scopedArgs, lim + 1];
+    const fetchedRows = this.#db.prepare(`
+      SELECT * FROM trace_turns
+      ${whereSql}
+      ORDER BY started_at DESC
+      LIMIT ?
+    `).all(...args);
+    const hasMore = fetchedRows.length > lim;
+    const rows = (hasMore ? fetchedRows.slice(0, lim) : fetchedRows).reverse();
+    const expanded = expandRows(rows);
+    return { ...expanded, dreamEvents, hasMore, limit: lim, indexOnly: false };
   }
 
   /**

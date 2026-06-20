@@ -4366,12 +4366,14 @@ export async function handleYeaftFetchToolStats(_msg = {}) {
  * splices into place.
  *
  * Inputs (all optional):
- *   - `limit`     — max number of loops to return (1..500, default 100)
- *   - `sessionId`   — narrow by group
- *   - `threadId`  — narrow by thread
+ *   - `limit`        — legacy recent-detail loop cap; ignored by index-only
+ *   - `indexOnly`    — list request summaries without loop/detail payloads
+ *   - `detailTurnId` — fetch full loops/tools for one request
+ *   - `sessionId`    — narrow by Session
+ *   - `threadId`     — narrow by thread
  *
  * Sends:
- *   { type: 'yeaft_debug_history', loops: [...], turns: [...] }
+ *   { type: 'yeaft_debug_history', loops: [...], turns: [...], indexOnly, detailTurnId }
  *
  * Best-effort: if the session / trace isn't ready, sends an empty
  * snapshot so the panel renders a placeholder instead of spinning.
@@ -4381,13 +4383,15 @@ export async function handleYeaftFetchDebugHistory(msg = {}) {
   const dreamLimit = Number.isFinite(msg?.dreamLimit) ? Number(msg.dreamLimit) : 5;
   const sessionId = typeof msg?.sessionId === 'string' && msg.sessionId ? msg.sessionId : null;
   const threadId = typeof msg?.threadId === 'string' && msg.threadId ? msg.threadId : null;
+  const indexOnly = !!msg?.indexOnly;
+  const detailTurnId = typeof msg?.detailTurnId === 'string' && msg.detailTurnId ? msg.detailTurnId : null;
   let loops = [];
   let turns = [];
   let dreamEvents = [];
   let hasMore = false;
   try {
     if (session?.trace && typeof session.trace.fetchRecentDebugHistory === 'function') {
-      const out = session.trace.fetchRecentDebugHistory({ limit, dreamLimit, sessionId, threadId });
+      const out = session.trace.fetchRecentDebugHistory({ limit, dreamLimit, sessionId, threadId, indexOnly, detailTurnId });
       loops = Array.isArray(out?.loops) ? out.loops : [];
       turns = Array.isArray(out?.turns) ? out.turns : [];
       dreamEvents = Array.isArray(out?.dreamEvents) ? out.dreamEvents : [];
@@ -4412,6 +4416,8 @@ export async function handleYeaftFetchDebugHistory(msg = {}) {
     threadId,
     hasMore,
     limit,
+    indexOnly,
+    detailTurnId,
   });
 }
 

@@ -47,6 +47,31 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
     expect(history.loops.map((loop) => loop.loopNumber)).toEqual([1, 2]);
   });
 
+  it('index-only history lists requests without shipping loop detail, and detail fetch returns every loop', () => {
+    const t = openTrace();
+    for (let i = 1; i <= 60; i++) {
+      const row = t.startTurn({ traceId: 'long-request', turnNumber: i, sessionId: 's1', userPrompt: 'long work' });
+      t.endTurn(row, { responseText: `loop ${i}`, usage: { inputTokens: i, outputTokens: 1, totalTokens: i + 1 } });
+    }
+    const other = t.startTurn({ traceId: 'other-request', turnNumber: 1, sessionId: 's1', userPrompt: 'other work' });
+    t.endTurn(other, { responseText: 'other', usage: { inputTokens: 3, outputTokens: 1, totalTokens: 4 } });
+
+    const index = t.fetchRecentDebugHistory({ limit: 1, dreamLimit: 0, sessionId: 's1', indexOnly: true });
+    expect(index.loops).toHaveLength(0);
+    expect(index.turns.map(turn => turn.turnId)).toEqual(['long-request', 'other-request']);
+    expect(index.turns.find(turn => turn.turnId === 'long-request')).toMatchObject({
+      loopCount: 60,
+      detailsLoaded: false,
+      userPrompt: 'long work',
+    });
+
+    const detail = t.fetchRecentDebugHistory({ limit: 1, dreamLimit: 0, sessionId: 's1', detailTurnId: 'long-request' });
+    expect(detail.turns).toHaveLength(1);
+    expect(detail.turns[0]).toMatchObject({ turnId: 'long-request', loopCount: 60, detailsLoaded: true });
+    expect(detail.loops).toHaveLength(60);
+    expect(detail.loops.map(loop => loop.loopNumber)).toEqual(Array.from({ length: 60 }, (_, i) => i + 1));
+  });
+
   it('splits legacy duplicate Loop 1 rows so separate requests do not share stale assistant text', () => {
     const t = openTrace();
     const first = t.startTurn({ traceId: 'engine-instance-legacy', turnNumber: 1, sessionId: 's1', userPrompt: 'old request' });

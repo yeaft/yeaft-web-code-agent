@@ -222,7 +222,12 @@ export function handleMessage(store, msg) {
       const turns = Array.isArray(msg?.turns) ? msg.turns : [];
       const dreamEvents = Array.isArray(msg?.dreamEvents) ? msg.dreamEvents : [];
       store.yeaftDebugHistoryHasMore = !!msg?.hasMore;
-      if (Number.isFinite(msg?.limit) && msg.limit > 0) store.yeaftDebugHistoryLimit = msg.limit;
+      // A single-request detail fetch may return `limit = loopCount`; do not
+      // let that shrink the global debug retention window after the index
+      // loader deliberately raised it to keep long expanded requests stable.
+      if (!msg?.detailTurnId && Number.isFinite(msg?.limit) && msg.limit > 0) {
+        store.yeaftDebugHistoryLimit = msg.limit;
+      }
       // Merge into existing in-memory state. Live-streamed turns/loops
       // (received via `yeaft_output` while the panel was open) win because
       // they may carry richer in-flight detail (e.g. memoryUsed/Adjust
@@ -250,11 +255,15 @@ export function handleMessage(store, msg) {
         if (!tid) continue;
         const existing = nextTurnsById[tid];
         if (existing) {
-          // Live event already populated this turn — keep its richer
-          // detail (memoryLoaded/memoryAdjust/tools etc.), but backfill
-          // any field that hydration captured and live missed (e.g.
-          // userPrompt for a turn that opened before the panel mounted).
-          nextTurnsById[tid] = { ...turn, ...existing };
+          // Index rows are lightweight placeholders. Detail rows carry full
+          // request data and should replace placeholders, while preserving
+          // live-only fields that SQLite does not store.
+          const merged = turn?.detailsLoaded
+            ? { ...existing, ...turn }
+            : { ...turn, ...existing };
+          if (merged.memoryLoaded == null && existing.memoryLoaded != null) merged.memoryLoaded = existing.memoryLoaded;
+          if (merged.memoryAdjust == null && existing.memoryAdjust != null) merged.memoryAdjust = existing.memoryAdjust;
+          nextTurnsById[tid] = merged;
         } else {
           nextTurnsById[tid] = turn;
         }
@@ -265,32 +274,46 @@ export function handleMessage(store, msg) {
       // reply-arrived would otherwise be silently overwritten.
       const loopKey = (l) => l?.loopInstanceId || `${l?.turnId || ''}#${l?.loopNumber || 0}`;
       const liveLoops = store.yeaftDebugLoops;
-      const haveKeys = new Set(liveLoops.map(loopKey));
+      const liveByKey = new Map();
+      for (const live of liveLoops) {
+        if (!live) continue;
+        liveByKey.set(loopKey(live), live);
+      }
+      const hydratedKeys = new Set();
       const mergedLoops = [];
       for (const hydrated of loops) {
         if (!hydrated) continue;
-        if (!haveKeys.has(loopKey(hydrated))) {
-          mergedLoops.push(hydrated);
-        }
+        const key = loopKey(hydrated);
+        hydratedKeys.add(key);
+        // If a live loop exists for the same logical row, keep it; it may
+        // carry richer in-flight fields than the SQLite snapshot. The
+        // hydrated order still drives the final ordering, so detail fetches
+        // restore long requests chronologically instead of appending gaps.
+        mergedLoops.push(liveByKey.get(key) || hydrated);
       }
-      // Append the live loops in their existing order so anything
-      // observed in real time still shows up exactly once.
-      for (const live of liveLoops) mergedLoops.push(live);
+      for (const live of liveLoops) {
+        if (!live || hydratedKeys.has(loopKey(live))) continue;
+        mergedLoops.push(live);
+      }
       store.yeaftDebugLoops = mergedLoops;
-      // Rebuild turn order: hydrated turns first (in arrival order),
-      // then any live turn IDs not present in hydration.
+      // Rebuild turn order. Index refreshes carry a chronological
+      // request list and may replace the order. Detail fetches carry exactly
+      // one request; they must NOT move that request in the list just because
+      // its payload arrived later.
       const seenIds = new Set();
       const mergedOrder = [];
-      for (const turn of turns) {
-        const tid = turn?.turnId;
-        if (!tid || seenIds.has(tid)) continue;
+      const isDetailFetch = typeof msg?.detailTurnId === 'string' && msg.detailTurnId;
+      const appendTurnId = (tid) => {
+        if (!tid || seenIds.has(tid)) return;
         seenIds.add(tid);
         mergedOrder.push(tid);
-      }
-      for (const tid of store.yeaftDebugTurnOrder) {
-        if (!tid || seenIds.has(tid)) continue;
-        seenIds.add(tid);
-        mergedOrder.push(tid);
+      };
+      if (isDetailFetch) {
+        for (const tid of store.yeaftDebugTurnOrder) appendTurnId(tid);
+        for (const turn of turns) appendTurnId(turn?.turnId);
+      } else {
+        for (const turn of turns) appendTurnId(turn?.turnId);
+        for (const tid of store.yeaftDebugTurnOrder) appendTurnId(tid);
       }
       store.yeaftDebugTurnOrder = mergedOrder;
       for (const evt of dreamEvents) {

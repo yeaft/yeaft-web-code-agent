@@ -28,8 +28,8 @@
 import { buildDreamDebugItems, filterDreamDebugItems, previewText } from './dream-debug-model.js';
 import { splitTokenBreakdown, apportionToBuckets, formatClockTime } from './yeaft-debug-helpers.js';
 
-const INITIAL_REQUEST_HISTORY_LIMIT = 50;
-const REQUEST_HISTORY_STEP = 50;
+const INITIAL_REQUEST_HISTORY_LIMIT = 5000;
+const REQUEST_HISTORY_STEP = 5000;
 
 export default {
   name: 'YeaftDebugPanel',
@@ -111,7 +111,7 @@ export default {
     // keep showing agent A's trajectory after the user switches.
     'store.currentAgent'(now, prev) {
       if (now && now !== prev && this.store && typeof this.store.loadYeaftDebugHistory === 'function') {
-        this.store.loadYeaftDebugHistory({ limit: INITIAL_REQUEST_HISTORY_LIMIT, dreamLimit: 5 });
+        this.store.loadYeaftDebugHistory({ limit: INITIAL_REQUEST_HISTORY_LIMIT, dreamLimit: 5, indexOnly: true });
       }
     },
   },
@@ -312,10 +312,10 @@ export default {
     // SQLite trace as soon as the panel is mounted. Previously the panel
     // only ever showed turns observed live via `yeaft_output` events, so
     // anything before the panel was opened was invisible — even though
-    // the trace had captured it. Pull the most recent 5 request loops and
-    // 5 dream events so the panel is useful from frame 1 without flooding.
+    // the trace had captured it. Pull a lightweight request index plus a
+    // few dream events; full loop/detail payloads are fetched on expansion.
     if (this.store && typeof this.store.loadYeaftDebugHistory === 'function') {
-      this.store.loadYeaftDebugHistory({ limit: INITIAL_REQUEST_HISTORY_LIMIT, dreamLimit: 5 });
+      this.store.loadYeaftDebugHistory({ limit: INITIAL_REQUEST_HISTORY_LIMIT, dreamLimit: 5, indexOnly: true });
     }
   },
   methods: {
@@ -330,7 +330,19 @@ export default {
       return raw.startsWith('grp_') ? raw.slice(4) : raw;
     },
     toggleTurn(turnId) {
-      this.expandedTurns = { ...this.expandedTurns, [turnId]: !this.expandedTurns[turnId] };
+      const willExpand = !this.expandedTurns[turnId];
+      this.expandedTurns = { ...this.expandedTurns, [turnId]: willExpand };
+      if (willExpand) this.ensureRequestDetailLoaded(turnId);
+    },
+    ensureRequestDetailLoaded(turnId) {
+      const turn = this.store?.yeaftDebugTurnsById?.[turnId];
+      if (!turn || turn.detailsLoaded || !this.store || typeof this.store.loadYeaftDebugHistory !== 'function') return;
+      this.store.loadYeaftDebugHistory({
+        limit: INITIAL_REQUEST_HISTORY_LIMIT,
+        dreamLimit: 0,
+        detailTurnId: turnId,
+        groupId: turn.sessionId || null,
+      });
     },
     // PR feat-dream-debug-panel-full: toggle the expanded event timeline
     // under the Dream row.
@@ -698,6 +710,15 @@ export default {
         acc.total += b.total;
         return { ...loop, tokenBreakdown: b };
       });
+      if (loops.length === 0) {
+        acc.inputTotal = Math.max(0, Number(turn.summaryInputTokens) || 0);
+        acc.outputTotal = Math.max(0, Number(turn.summaryOutputTokens) || 0);
+        acc.total = acc.inputTotal + acc.outputTotal;
+      }
+      const maxLoop = loops.reduce((best, loop) => {
+        const total = Number(loop?.tokenBreakdown?.total) || 0;
+        return total > (Number(best?.tokenBreakdown?.total) || 0) ? loop : best;
+      }, null);
       const tokenBreakdown = {
         ...acc,
         messageTotal: acc.inputMessage + acc.outputMessage,
@@ -711,18 +732,29 @@ export default {
         tokenBreakdown.inputMessage += missing;
         tokenBreakdown.messageTotal += missing;
       }
-      return { ...turn, loops, tokenBreakdown };
+      return {
+        ...turn,
+        loops,
+        tokenBreakdown,
+        maxLoopTokenBreakdown: maxLoop?.tokenBreakdown || null,
+        maxLoopTokenTotal: Number(maxLoop?.tokenBreakdown?.total) || 0,
+        maxLoopNumber: maxLoop?.loopNumber || null,
+      };
     },
     turnTotalTokens(turn) {
       return Math.max(Number(turn?.totalTokens) || 0, Number(turn?.tokenBreakdown?.total) || 0);
     },
+    loopBreakdownMessageTokens(b) {
+      return (Number(b?.inputMessage) || 0) + (Number(b?.outputMessage) || 0);
+    },
+    loopBreakdownToolTokens(b) {
+      return (Number(b?.inputTool) || 0) + (Number(b?.outputTool) || 0);
+    },
     loopMessageTokens(loop) {
-      const b = loop?.tokenBreakdown || {};
-      return (Number(b.inputMessage) || 0) + (Number(b.outputMessage) || 0);
+      return this.loopBreakdownMessageTokens(loop?.tokenBreakdown || {});
     },
     loopToolTokens(loop) {
-      const b = loop?.tokenBreakdown || {};
-      return (Number(b.inputTool) || 0) + (Number(b.outputTool) || 0);
+      return this.loopBreakdownToolTokens(loop?.tokenBreakdown || {});
     },
     tokenPct(part, total) {
       const p = Number(part) || 0;
@@ -900,10 +932,11 @@ export default {
     },
     loadMoreRequestHistory(step = REQUEST_HISTORY_STEP) {
       if (!this.store || typeof this.store.loadYeaftDebugHistory !== 'function') return;
-      const nextLimit = Math.min(500, (this.requestHistoryLimit || INITIAL_REQUEST_HISTORY_LIMIT) + step);
+      const nextLimit = Math.max(INITIAL_REQUEST_HISTORY_LIMIT, (this.requestHistoryLimit || INITIAL_REQUEST_HISTORY_LIMIT) + step);
       this.store.loadYeaftDebugHistory({
         limit: nextLimit,
         dreamLimit: 5,
+        indexOnly: true,
       });
     },
     refreshToolStats() {
@@ -1336,8 +1369,8 @@ export default {
                 >{{ formatTokens(turnTotalTokens(turn)) }} tok</span>
                 <span class="yeaft-debug-turn-token-part">in {{ formatTokens(turn.tokenBreakdown.inputTotal) }}</span>
                 <span class="yeaft-debug-turn-token-part">out {{ formatTokens(turn.tokenBreakdown.outputTotal) }}</span>
-                <span class="yeaft-debug-turn-token-part" :title="tokenBreakdownTitle(turn.tokenBreakdown)">msg {{ formatTokens(turn.tokenBreakdown.messageTotal) }} · {{ tokenPct(turn.tokenBreakdown.messageTotal, turnTotalTokens(turn)) }}</span>
-                <span class="yeaft-debug-turn-token-part" :title="tokenBreakdownTitle(turn.tokenBreakdown)">tool {{ formatTokens(turn.tokenBreakdown.toolTotal) }} · {{ tokenPct(turn.tokenBreakdown.toolTotal, turnTotalTokens(turn)) }}</span>
+                <span v-if="turn.maxLoopTokenBreakdown" class="yeaft-debug-turn-token-part" :title="tokenBreakdownTitle(turn.maxLoopTokenBreakdown)">max L{{ turn.maxLoopNumber }} msg {{ formatTokens(loopBreakdownMessageTokens(turn.maxLoopTokenBreakdown)) }} · {{ tokenPct(loopBreakdownMessageTokens(turn.maxLoopTokenBreakdown), turn.maxLoopTokenTotal) }}</span>
+                <span v-if="turn.maxLoopTokenBreakdown" class="yeaft-debug-turn-token-part" :title="tokenBreakdownTitle(turn.maxLoopTokenBreakdown)">max L{{ turn.maxLoopNumber }} tool {{ formatTokens(loopBreakdownToolTokens(turn.maxLoopTokenBreakdown)) }} · {{ tokenPct(loopBreakdownToolTokens(turn.maxLoopTokenBreakdown), turn.maxLoopTokenTotal) }}</span>
               </span>
             </span>
             <button class="yeaft-debug-copy-btn small yeaft-debug-turn-copy" @click.stop="copyTurnAsMarkdown(turn)" title="Copy turn as markdown">copy</button>
@@ -1345,6 +1378,9 @@ export default {
 
           <!-- Turn body -->
           <div class="yeaft-debug-turn-body" v-if="expandedTurns[turn.turnId]">
+            <div v-if="!turn.detailsLoaded && (!turn.loops || turn.loops.length === 0)" class="yeaft-debug-empty">
+              {{ $t('yeaft.debugHistoryLoading') }}
+            </div>
             <!-- Turn-level: System prompt (constant within a turn) -->
             <div class="yeaft-debug-section" v-if="turn.loops && turn.loops.length > 0 && turn.loops[0].systemPrompt">
               <div class="yeaft-debug-section-row">
@@ -1423,8 +1459,6 @@ export default {
                       class="yeaft-debug-loop-token"
                       :title="'output total ' + loop.tokenBreakdown.outputTotal + ' = message ' + loop.tokenBreakdown.outputMessage + ' + tool ' + loop.tokenBreakdown.outputTool + ' (estimated split)'"
                     >out {{ formatTokens(loop.usage?.outputTokens || 0) }}</span>
-                    <span class="yeaft-debug-loop-token" :title="tokenBreakdownTitle(loop.tokenBreakdown)">msg {{ formatTokens(loopMessageTokens(loop)) }} · {{ tokenPct(loopMessageTokens(loop), usageTotalTokens(loop.usage)) }}</span>
-                    <span class="yeaft-debug-loop-token" :title="tokenBreakdownTitle(loop.tokenBreakdown)">tool {{ formatTokens(loopToolTokens(loop)) }} · {{ tokenPct(loopToolTokens(loop), usageTotalTokens(loop.usage)) }}</span>
                     <span class="yeaft-debug-loop-meta">{{ loopMetaSummary(loop) }}</span>
                   </span>
                 </span>
