@@ -552,9 +552,16 @@ export class AdapterRouter extends LLMAdapter {
    */
   async *stream(params) {
     const resolved = await this.#resolveAdapter(params.model);
+    const effortContext = {
+      protocol: resolved.protocol,
+      supportsEffort: resolved.entry?.supportsEffort,
+      effortOptions: resolved.entry?.effortOptions,
+      thinkingProtocol: resolved.entry?.thinkingProtocol,
+      maxBudgetTokens: resolved.entry?.maxBudgetTokens,
+    };
     const filtered = filterEffortForModel({ ...params, model: resolved.modelId }, resolved);
     const sanitized = sanitizeMessagesForWire(filtered);
-    yield* resolved.adapter.stream({ ...sanitized, model: resolved.modelId });
+    yield* resolved.adapter.stream({ ...sanitized, model: resolved.modelId, effortContext });
   }
 
   /**
@@ -565,9 +572,16 @@ export class AdapterRouter extends LLMAdapter {
    */
   async call(params) {
     const resolved = await this.#resolveAdapter(params.model);
+    const effortContext = {
+      protocol: resolved.protocol,
+      supportsEffort: resolved.entry?.supportsEffort,
+      effortOptions: resolved.entry?.effortOptions,
+      thinkingProtocol: resolved.entry?.thinkingProtocol,
+      maxBudgetTokens: resolved.entry?.maxBudgetTokens,
+    };
     const filtered = filterEffortForModel({ ...params, model: resolved.modelId }, resolved);
     const sanitized = sanitizeMessagesForWire(filtered);
-    return resolved.adapter.call({ ...sanitized, model: resolved.modelId });
+    return resolved.adapter.call({ ...sanitized, model: resolved.modelId, effortContext });
   }
 
   /**
