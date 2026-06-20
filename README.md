@@ -454,8 +454,8 @@ GitHub Actions workflows included:
 
 ```bash
 # Tag and push (use release- prefix)
-git tag release-v0.1.294
-git push origin release-v0.1.294
+git tag release-v1.0.0
+git push origin release-v1.0.0
 # GitHub Actions handles the rest
 ```
 

@@ -138,7 +138,7 @@ Available memory files under ~/.yeaft/memory/:
 ## Project Header (claude-web-chat)
 
 Web-based AI chat with three modes: Chat (Claude CLI), Crew (multi-agent),
-Yeaft (own engine). Tag format v0.1.X. Main branch protected.
+Yeaft (own engine). Tag format v1.0.X. Main branch protected.
 `;
 
 const SAMPLE_COMPACT_SUMMARY = `Earlier in this conversation the user asked to audit Yeaft's prompt

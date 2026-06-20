@@ -520,8 +520,8 @@ yeaft-web-code-agent/
 ### 发布新版本
 
 ```bash
-git tag release-v0.1.294
-git push origin release-v0.1.294
+git tag release-v1.0.0
+git push origin release-v1.0.0
 # GitHub Actions 自动完成后续工作
 ```
 

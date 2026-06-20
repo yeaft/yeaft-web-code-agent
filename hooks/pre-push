@@ -21,11 +21,12 @@ while read local_ref local_sha remote_ref remote_sha; do
       echo "  ERROR: Cannot push tag '$TAG_NAME' from branch '$CURRENT_BRANCH'"
       echo ""
       echo "  Tags MUST only be pushed from the 'main' branch."
-      echo "  Switch to main first:"
+      echo "  Correct flow:"
       echo ""
-      echo "    git checkout main"
-      echo "    git tag $TAG_NAME"
-      echo "    git push origin $TAG_NAME"
+      echo "    1. Merge the feature PR into main"
+      echo "    2. git checkout main && git pull --ff-only"
+      echo "    3. git tag $TAG_NAME"
+      echo "    4. git push origin $TAG_NAME"
       echo ""
       exit 1
     fi

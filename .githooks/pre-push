@@ -12,7 +12,7 @@
 # (See .githooks/README.md for details.)
 #
 # Rationale (see CONTRIBUTING.md "Tagging & Release" section):
-#   - v0.1.X dev tags and release-v0.1.X release tags MUST only exist on
+#   - v1.0.X dev tags and release-v1.0.X release tags MUST only exist on
 #     commits that are reachable from origin/main.
 #   - Pushing a tag from a feature/worktree branch pins production to a
 #     commit that was never merged — dev and prod diverge silently.
@@ -46,8 +46,8 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     echo "  production shipped from an un-merged commit. Do not repeat." >&2
     echo "" >&2
     echo "  Correct flow:" >&2
-    echo "    1. git push origin HEAD:main          # merge feature to main" >&2
-    echo "    2. git checkout main && git pull" >&2
+    echo "    1. Merge the feature PR into main" >&2
+    echo "    2. git checkout main && git pull --ff-only" >&2
     echo "    3. git tag $TAG_NAME" >&2
     echo "    4. git push origin $TAG_NAME" >&2
     echo "" >&2
