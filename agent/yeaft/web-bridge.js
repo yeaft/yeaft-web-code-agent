@@ -2355,6 +2355,89 @@ function maybeTransitionVpStatus(hctx, state) {
   }
 }
 
+const STREAM_TEXT_BATCH_MAX_CHARS = 200;
+const STREAM_TEXT_BATCH_MAX_MS = 200;
+
+function createStreamTextBatch() {
+  return {
+    parts: [],
+    charCount: 0,
+    timer: null,
+    envelope: null,
+    immediateNext: true,
+  };
+}
+
+function getStreamTextBatch(hctx) {
+  if (!hctx) return null;
+  if (!hctx.streamTextBatch) hctx.streamTextBatch = createStreamTextBatch();
+  return hctx.streamTextBatch;
+}
+
+function clearStreamTextBatchTimer(batch) {
+  if (!batch?.timer) return;
+  clearTimeout(batch.timer);
+  batch.timer = null;
+}
+
+function sendAssistantTextFrame(text, envelope) {
+  if (!text) return;
+  sendSessionOutputFrame({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text }] },
+  }, envelope);
+}
+
+function flushStreamTextBatch(hctx, envelope, { resetImmediate = false } = {}) {
+  const batch = hctx?.streamTextBatch;
+  if (!batch) return false;
+  clearStreamTextBatchTimer(batch);
+  const text = batch.parts.join('');
+  batch.parts = [];
+  batch.charCount = 0;
+  const flushEnvelope = envelope || batch.envelope;
+  batch.envelope = flushEnvelope || null;
+  if (resetImmediate) batch.immediateNext = true;
+  if (!text) return false;
+  sendAssistantTextFrame(text, flushEnvelope);
+  return true;
+}
+
+function scheduleStreamTextBatchFlush(hctx, batch) {
+  if (!hctx || batch.timer) return;
+  batch.timer = setTimeout(() => {
+    batch.timer = null;
+    flushStreamTextBatch(hctx, batch.envelope);
+  }, STREAM_TEXT_BATCH_MAX_MS);
+  if (batch.timer && typeof batch.timer.unref === 'function') {
+    batch.timer.unref();
+  }
+}
+
+function queueStreamTextDelta(hctx, text, envelope) {
+  if (typeof text !== 'string' || text.length === 0) return;
+  const batch = getStreamTextBatch(hctx);
+  if (!batch) {
+    sendAssistantTextFrame(text, envelope);
+    return;
+  }
+
+  batch.envelope = envelope;
+  if (batch.immediateNext) {
+    batch.immediateNext = false;
+    sendAssistantTextFrame(text, envelope);
+    return;
+  }
+
+  batch.parts.push(text);
+  batch.charCount += text.length;
+  if (batch.charCount >= STREAM_TEXT_BATCH_MAX_CHARS) {
+    flushStreamTextBatch(hctx, envelope);
+    return;
+  }
+  scheduleStreamTextBatchFlush(hctx, batch);
+}
+
 /**
  * Handle a single engine event unwrapped from an `engine_event` envelope.
  * Stamps threadId on every outgoing frame so frontend grouping, tools,
@@ -2376,13 +2459,17 @@ function handleEngineEvent(event, hctx) {
     threadId: hctx.threadId || event.threadId,
   };
 
+  if (event.type !== 'text_delta') {
+    // Preserve wire order. Any boundary/metadata/tool event must see all text
+    // accepted before it flushed first; otherwise the browser can render a tool
+    // call or terminal result before the text that led to it.
+    flushStreamTextBatch(hctx, envelope, { resetImmediate: true });
+  }
+
   switch (event.type) {
     case 'text_delta':
       hctx.assistantTextParts.push(event.text);
-      sendSessionOutputFrame({
-        type: 'assistant',
-        message: { content: [{ type: 'text', text: event.text }] },
-      }, envelope);
+      queueStreamTextDelta(hctx, event.text, envelope);
       // vp-status: first text-delta of a (thinking|tool) phase flips
       // the row to 'streaming'. transition() is a no-op when already
       // streaming, so subsequent deltas are cheap.
@@ -3411,6 +3498,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
   let turnEndReason = 'end_turn';
   let turnEndEmitted = false;
   let turnEndDetail = null;
+  let handlerCtx = null;
   const markTurnEnd = (reason) => { turnEndEmitted = true; turnEndReason = reason; };
   const emitVpTurnEnd = (reason, detail = null) => {
     if (turnEndEmitted) return;
@@ -3484,7 +3572,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       vpEngine = getOrCreateVpEngine(sessionId, vpId, threadId);
       if (thread) thread.engine = vpEngine;
 
-      const handlerCtx = {
+      handlerCtx = {
         assistantTextParts,
         toolCallsAccum,
         toolResultsAccum,
@@ -3530,6 +3618,8 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         handleEngineEvent(event, handlerCtx);
       }
 
+      flushStreamTextBatch(handlerCtx, envelope, { resetImmediate: true });
+
       // Turn completed — atomically append this VP's output to shared history.
       // route_forward handoff text is an internal trigger, already visible as
       // the source VP's tool action. Do not append it as a visible prompt for
@@ -3558,6 +3648,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
   } catch (err) {
     const isAbort = err && (err.name === 'AbortError' || err.name === 'LLMAbortError');
     if (isAbort) {
+      flushStreamTextBatch(handlerCtx, envelope, { resetImmediate: true });
       sendSessionOutputFrame({
         type: 'result',
         result_text: '',
@@ -3581,6 +3672,8 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
     } catch (brokerErr) {
       console.warn('[Yeaft] vp-status error transition failed:', brokerErr?.message || brokerErr);
     }
+
+    flushStreamTextBatch(handlerCtx, envelope, { resetImmediate: true });
 
     if (isPermissionErrorMsg(err.message)) {
       if (!_permissionDiagnosticSent) {
