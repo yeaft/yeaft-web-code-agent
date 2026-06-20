@@ -149,6 +149,7 @@ export class TaskManager {
         command,
         cwd,
         pid: null,
+        systemdScope: null,
         platform: (runtimePlatform || this.runtimePlatform)?.platform || process.platform,
       },
       log: {
@@ -170,6 +171,7 @@ export class TaskManager {
       command,
       cwd,
       runtimePlatform: runtime,
+      scopeId: task.id,
       onOutput: (stream, text) => {
         const prefix = stream === 'stderr' ? '[stderr] ' : '';
         this.store.appendLog(task.sessionId, task.id, prefix ? text.split(/(\n)/).map(part => part === '\n' ? part : (part ? `${prefix}${part}` : part)).join('') : text);
@@ -191,6 +193,7 @@ export class TaskManager {
     });
 
     task.runtime.pid = runner.pid;
+    task.runtime.systemdScope = runner.systemdScope || null;
     this.processes.set(this.#key(task.sessionId, task.id), runner);
     this.store.writeTask(task);
     this.#emit('updated', task);
