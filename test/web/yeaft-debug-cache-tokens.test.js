@@ -43,3 +43,21 @@ describe('Yeaft debug cache token display', () => {
     expect(callMethod('formatUsageBreakdown', usage)).toBe('100 in / 25 out / 125 total');
   });
 });
+
+
+describe('Yeaft debug request-level token distribution', () => {
+  it('selects the highest-token loop for the request header split', () => {
+    const turn = callMethod('decorateTurnTokenBreakdowns', {
+      turnId: 'turn-1',
+      totalTokens: 120,
+      loops: [
+        { loopNumber: 1, usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }, messages: [{ role: 'user', content: 'small' }] },
+        { loopNumber: 2, usage: { inputTokens: 80, outputTokens: 40, totalTokens: 120 }, messages: [{ role: 'user', content: 'large request body' }] },
+      ],
+    });
+
+    expect(turn.maxLoopNumber).toBe(2);
+    expect(turn.maxLoopTokenTotal).toBe(120);
+    expect(turn.maxLoopTokenBreakdown).toBeTruthy();
+  });
+});

@@ -19,27 +19,27 @@ describe('YeaftDebugPanel · token breakdown + timestamp', () => {
     expect(panel).toMatch(/import\s*\{[^}]*formatClockTime[^}]*\}\s*from\s*['"]\.\/yeaft-debug-helpers\.js['"]/);
   });
 
-  it('renders turn token split on the second summary line', () => {
-    // Turn header shows the authoritative total plus visible message/tool split.
+  it('renders only the request-level max-loop message/tool split', () => {
+    // Turn header shows the authoritative request total plus the message/tool
+    // split for the single largest loop in that request. Per-loop rows keep
+    // in/out totals but no longer repeat msg/tool distribution noise.
     expect(panel).toContain('formatTokens(turnTotalTokens(turn))');
-    expect(panel).toContain('turn.tokenBreakdown.messageTotal');
-    expect(panel).toContain('turn.tokenBreakdown.toolTotal');
-    expect(panel).toContain('tokenPct(turn.tokenBreakdown.messageTotal, turnTotalTokens(turn))');
-    expect(panel).toContain('tokenPct(turn.tokenBreakdown.toolTotal, turnTotalTokens(turn))');
+    expect(panel).toContain('turn.maxLoopTokenBreakdown');
+    expect(panel).toContain('turn.maxLoopNumber');
+    expect(panel).toContain('loopBreakdownMessageTokens(turn.maxLoopTokenBreakdown)');
+    expect(panel).toContain('loopBreakdownToolTokens(turn.maxLoopTokenBreakdown)');
+    const template = panel.slice(panel.indexOf('template: `'));
+    expect(template).not.toMatch(/loopMessageTokens\(loop\)/);
+    expect(template).not.toMatch(/loopToolTokens\(loop\)/);
+    expect(template).not.toMatch(/tokenPct\(loopMessageTokens\(loop\),\s*usageTotalTokens\(loop\.usage\)\)/);
+    expect(template).not.toMatch(/tokenPct\(loopToolTokens\(loop\),\s*usageTotalTokens\(loop\.usage\)\)/);
     expect(panel).not.toContain('yeaft-debug-tokens-split');
     expect(panel).not.toMatch(/turnTokenBreakdown\(turn\)/);
   });
 
-  it('renders per-loop message/tool token split on the second summary line', () => {
-    // Real loop input / output unchanged; input goes through the existing
-    // cache-aware total helper from origin/main.
+  it('keeps loop rows to in/out totals while precomputing loop breakdowns for the request max', () => {
     expect(panel).toContain('usageTotalInputTokens(loop.usage)');
     expect(panel).toContain('loop.usage?.outputTokens || 0');
-    expect(panel).toContain('loopMessageTokens(loop)');
-    expect(panel).toContain('loopToolTokens(loop)');
-    expect(panel).toContain('tokenPct(loopMessageTokens(loop), usageTotalTokens(loop.usage))');
-    expect(panel).toContain('tokenPct(loopToolTokens(loop), usageTotalTokens(loop.usage))');
-    // Breakdown is precomputed once per loop and read from loop.tokenBreakdown.
     expect(panel).toContain('loop.tokenBreakdown.inputMessage');
     expect(panel).toContain('loop.tokenBreakdown.inputTool');
     expect(panel).toContain('loop.tokenBreakdown.outputMessage');
@@ -176,5 +176,30 @@ describe('YeaftDebugPanel · close affordance', () => {
   it('keeps the debug panel template compile-covered', () => {
     const compileTest = read('test/web/vue-template-compile.test.js');
     expect(compileTest).toContain("'YeaftDebugPanel.js'");
+  });
+});
+
+
+describe('YeaftDebugPanel · request history loading model', () => {
+  const panel = read('web/components/YeaftDebugPanel.js');
+  const storeJs = read('web/stores/chat.js');
+  const bridge = read('agent/yeaft/web-bridge.js');
+
+  it('loads request indexes first and fetches request details on expansion', () => {
+    expect(panel).toContain('indexOnly: true');
+    expect(panel).toContain('detailTurnId: turnId');
+    expect(storeJs).toContain('indexOnly = false, detailTurnId = null');
+    expect(storeJs).toContain('payload.indexOnly = true');
+    expect(storeJs).toContain('payload.detailTurnId = detailTurnId');
+    expect(bridge).toContain('const indexOnly = !!msg?.indexOnly');
+    expect(bridge).toContain('detailTurnId');
+  });
+
+  it('keeps request order stable when a detail payload arrives', () => {
+    const handler = read('web/stores/helpers/messageHandler.js');
+    expect(handler).toContain('const isDetailFetch = typeof msg?.detailTurnId');
+    expect(handler).toContain('they must NOT move that request in the list');
+    expect(handler).toContain('let that shrink the global debug retention window');
+    expect(handler).toMatch(/if \(isDetailFetch\) \{[\s\S]{0,160}store\.yeaftDebugTurnOrder/);
   });
 });

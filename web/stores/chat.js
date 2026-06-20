@@ -794,7 +794,7 @@ export const useChatStore = defineStore('chat', {
       } else if (debugFilter) {
         target = debugFilter;
       } else {
-        target = mainFilter;
+        target = null;
       }
 
       // Group loops by turnId once.
@@ -835,8 +835,9 @@ export const useChatStore = defineStore('chat', {
         // turn is still in flight those fields are 0, so the header shows
         // "0L 0ms 0 tok". Worse, the template falls back to
         // `turn.loops.length` for the L count, but the global loop ring is
-        // capped at MAX_YEAFT_DEBUG_LOOPS (=50), so a long in-flight turn
-        // pins the header at "50L". For old turns hydrated from SQLite
+        // capped at MAX_YEAFT_DEBUG_LOOPS (=50) for live detail payloads,
+        // so a long in-flight turn can otherwise pin the header at "50L".
+        // For old turns hydrated from SQLite
         // whose `turn_close` was never persisted, the row stays "0L" forever.
         //
         // Fix: derive live aggregates from the per-turn loops we just
@@ -1299,7 +1300,7 @@ export const useChatStore = defineStore('chat', {
      * web (`yeaft_debug_history` case in messageHandler merges into
      * `yeaftDebugLoops` / `yeaftDebugTurnsById` / `yeaftDebugTurnOrder`).
      */
-    loadYeaftDebugHistory({ groupId, limit, dreamLimit } = {}) {
+    loadYeaftDebugHistory({ groupId, limit, dreamLimit, indexOnly = false, detailTurnId = null } = {}) {
       if (!this.currentAgent) return;
       const requestedLimit = Number.isFinite(limit) && limit > 0 ? limit : this.yeaftDebugHistoryLimit || DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT;
       this.yeaftDebugHistoryLimit = requestedLimit;
@@ -1311,6 +1312,8 @@ export const useChatStore = defineStore('chat', {
         limit: requestedLimit,
         dreamLimit: Number.isFinite(dreamLimit) && dreamLimit > 0 ? dreamLimit : 5,
       };
+      if (indexOnly) payload.indexOnly = true;
+      if (typeof detailTurnId === 'string' && detailTurnId) payload.detailTurnId = detailTurnId;
       if (typeof groupId === 'string' && groupId) payload.sessionId = groupId;
       this.sendWsMessage(payload);
       if (this._fetchYeaftDebugHistoryTimer) clearTimeout(this._fetchYeaftDebugHistoryTimer);
@@ -1731,6 +1734,7 @@ export const useChatStore = defineStore('chat', {
             memoryLoaded: null,
             memoryAdjust: null,
             tools: [],
+            detailsLoaded: true,
           };
           this.yeaftDebugTurnsById = { ...this.yeaftDebugTurnsById, [event.turnId]: turn };
           if (!this.yeaftDebugTurnOrder.includes(event.turnId)) {
