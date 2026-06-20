@@ -59,6 +59,34 @@ function applyAnthropicThinking(body, model, effort, effortContext = {}) {
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
 const API_VERSION = '2023-06-01';
 
+function hasNonEmptyText(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function translateUserContent(content) {
+  if (hasNonEmptyText(content)) return content;
+
+  if (Array.isArray(content)) {
+    const parts = [];
+    for (const part of content) {
+      if (!part || typeof part !== 'object') {
+        if (hasNonEmptyText(part)) parts.push({ type: 'text', text: String(part) });
+        continue;
+      }
+      if (part.type === 'text') {
+        if (hasNonEmptyText(part.text)) parts.push(part);
+        continue;
+      }
+      // Non-text blocks (image/document/tool_result-like compatible payloads)
+      // are meaningful even without a text field. Preserve them verbatim.
+      parts.push(part);
+    }
+    return parts.length > 0 ? parts : null;
+  }
+
+  return null;
+}
+
 /**
  * AnthropicAdapter — Talks to Anthropic Messages API.
  */
@@ -116,7 +144,8 @@ export class AnthropicAdapter extends LLMAdapter {
     for (const msg of messages) {
       if (msg.role === 'system') continue; // system goes separately
       if (msg.role === 'user') {
-        result.push({ role: 'user', content: msg.content });
+        const content = translateUserContent(msg.content);
+        if (content) result.push({ role: 'user', content });
       } else if (msg.role === 'assistant') {
         const content = [];
         // task-327d: Anthropic requires thinking blocks to appear BEFORE
@@ -137,7 +166,7 @@ export class AnthropicAdapter extends LLMAdapter {
             }
           }
         }
-        if (msg.content) {
+        if (hasNonEmptyText(msg.content)) {
           content.push({ type: 'text', text: msg.content });
         }
         if (msg.toolCalls) {
@@ -150,7 +179,7 @@ export class AnthropicAdapter extends LLMAdapter {
             });
           }
         }
-        result.push({ role: 'assistant', content });
+        if (content.length > 0) result.push({ role: 'assistant', content });
       } else if (msg.role === 'tool') {
         // Anthropic requires all tool_results from the same turn in a single
         // user message. Merge consecutive tool messages into one.
