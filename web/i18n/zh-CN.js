@@ -1282,10 +1282,10 @@ export default {
   'yeaft.session.deletingEllipsis': '删除中…',
   'yeaft.session.rename': '重命名',
   // fix-yeaft-session-list-and-menu: 侧栏 ⋯ 菜单和 chat 对齐
-  // （置顶 / 设置 / 从当前列表移除）。真删保留在设置 modal 的删除会话页
+  // （置顶 / 设置 / 移除）。真删保留在设置 modal 的删除会话页
   // （仍走上面的 `yeaft.session.delete*` 一组 key）。
   'yeaft.session.openSettings': '设置',
-  'yeaft.session.removeFromList': '从当前列表移除（可从创建页恢复）',
+  'yeaft.session.removeFromList': '移除',
   'yeaft.session.manageMembers': '管理成员',
   'yeaft.session.memberCount.one': '1 位成员',
   'yeaft.session.memberCount.other': '{count} 位成员',
