@@ -1077,6 +1077,7 @@ describe('CONV_EXEMPT_TYPES — workbench responses must bypass conversation-id 
     'proxy_response_end', 'proxy_ports_update', 'proxy_ws_opened', 'proxy_ws_message',
     'proxy_ws_closed', 'proxy_ws_error', 'restart_agent_ack', 'upgrade_agent_ack',
     'directory_listing', 'folders_list', 'yeaft_output', 'yeaft_session_output', 'session_output',
+    'yeaft_history_chunk',
     'file_content', 'file_saved', 'file_op_result', 'file_search_result',
     'git_status_result', 'git_diff_result', 'git_op_result'
   ]);
@@ -1124,6 +1125,18 @@ describe('CONV_EXEMPT_TYPES — workbench responses must bypass conversation-id 
     for (const type of ['yeaft_output', 'yeaft_session_output', 'session_output']) {
       expect(isDropped(agent, { type, conversationId: cid, data: { type: 'assistant' } })).toBe(false);
     }
+  });
+
+  it('passes Yeaft history chunks for unknown virtual conversationIds', () => {
+    const agent = createMockAgent();
+    const msg = {
+      type: 'yeaft_history_chunk',
+      conversationId: 'yeaft-1762400000000',
+      sessionId: 'session-1',
+      mode: 'recent',
+      messages: [{ id: 'm0001', role: 'user', content: 'visible history' }],
+    };
+    expect(isDropped(agent, msg)).toBe(false);
   });
 
   it('still drops non-exempt types for unknown conversationIds (security preserved)', () => {
