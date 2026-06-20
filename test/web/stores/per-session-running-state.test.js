@@ -114,6 +114,57 @@ describe('per-session running state', () => {
     expect(store.isYeaftSessionProcessing('session-a')).toBe(false);
   });
 
+  it('clears Yeaft session running state on terminal result when metadata end is missed', () => {
+    const store = freshStore();
+    store.currentView = 'yeaft';
+    store.yeaftConversationId = 'yeaft-conv';
+    store.yeaftActiveSessionFilter = 'session-a';
+    store.processingConversations = { 'yeaft-conv': true };
+    store.yeaftProcessingSessions = { 'session-a': true };
+    store.activeVpTurns = {
+      'turn-a': { sessionId: 'session-a', vpId: 'vp-a', startedAt: 1 },
+    };
+
+    store.handleYeaftOutput({
+      conversationId: 'yeaft-conv',
+      sessionId: 'session-a',
+      vpId: 'vp-a',
+      turnId: 'turn-a',
+      data: { type: 'result', result_text: '' },
+    });
+
+    expect(store.activeVpTurns['turn-a']).toBeUndefined();
+    expect(store.processingConversations['yeaft-conv']).toBeUndefined();
+    expect(store.isYeaftSessionProcessing('session-a')).toBe(false);
+    expect(store.isProcessing).toBe(false);
+  });
+
+  it('does not clear Yeaft session running state while sibling VP result is still active', () => {
+    const store = freshStore();
+    store.currentView = 'yeaft';
+    store.yeaftConversationId = 'yeaft-conv';
+    store.yeaftActiveSessionFilter = 'session-a';
+    store.processingConversations = { 'yeaft-conv': true };
+    store.yeaftProcessingSessions = { 'session-a': true };
+    store.activeVpTurns = {
+      'turn-a': { sessionId: 'session-a', vpId: 'vp-a', startedAt: 1 },
+      'turn-b': { sessionId: 'session-a', vpId: 'vp-b', startedAt: 2 },
+    };
+
+    store.handleYeaftOutput({
+      conversationId: 'yeaft-conv',
+      sessionId: 'session-a',
+      vpId: 'vp-a',
+      turnId: 'turn-a',
+      data: { type: 'result', result_text: '' },
+    });
+
+    expect(store.activeVpTurns['turn-a']).toBeUndefined();
+    expect(store.activeVpTurns['turn-b']).toEqual(expect.objectContaining({ sessionId: 'session-a' }));
+    expect(store.isYeaftSessionProcessing('session-a')).toBe(true);
+    expect(store.isProcessing).toBe(true);
+  });
+
   it('keeps recently completed task snapshots visible to the Session status pane', () => {
     const store = freshStore();
     store.yeaftActiveSessionFilter = 'session-a';
