@@ -2,7 +2,7 @@ import { defineConfig } from 'vitepress'
 
 export default defineConfig({
   title: 'Yeaft',
-  description: 'Multi-provider AI collaboration platform — Claude Code, GitHub Copilot, and the Yeaft engine',
+  description: 'Web-based multi-provider code agent platform — Claude Code, GitHub Copilot, and Yeaft Code Agent',
   base: '/claude-web-chat/',
 
   rewrites: {
@@ -47,7 +47,7 @@ export default defineConfig({
               { text: 'Choose a Backend', link: '/guide/user/choose-backend' },
               { text: 'Claude Code Chat', link: '/guide/user/chat-mode' },
               { text: 'Copilot Mode', link: '/guide/user/copilot-mode' },
-              { text: 'Yeaft Group Mode', link: '/guide/user/yeaft-group' },
+              { text: 'Yeaft Code Agent', link: '/guide/user/yeaft-group' },
               { text: 'Crew Collaboration', link: '/guide/user/crew' },
               { text: 'Expert Panel', link: '/guide/user/expert-panel' },
               { text: 'Split Screen', link: '/guide/user/split-screen' },
@@ -62,7 +62,7 @@ export default defineConfig({
             items: [
               { text: 'Architecture', link: '/guide/tech/architecture' },
               { text: 'Provider System', link: '/guide/tech/providers' },
-              { text: 'Yeaft Engine', link: '/guide/tech/yeaft-engine' },
+              { text: 'Yeaft Code Agent Engine', link: '/guide/tech/yeaft-engine' },
               { text: 'Yeaft Memory (H2-AMS)', link: '/guide/tech/yeaft-memory' },
               { text: 'Yeaft LLM Layer', link: '/guide/tech/yeaft-llm' },
               { text: 'WebSocket Protocol', link: '/guide/tech/wire-protocol' },
@@ -114,7 +114,7 @@ export default defineConfig({
               { text: '选择会话后端', link: '/zh-CN/guide/user/choose-backend' },
               { text: 'Claude Code Chat', link: '/zh-CN/guide/user/chat-mode' },
               { text: 'Copilot 模式', link: '/zh-CN/guide/user/copilot-mode' },
-              { text: 'Yeaft Group Mode', link: '/zh-CN/guide/user/yeaft-group' },
+              { text: 'Yeaft Code Agent', link: '/zh-CN/guide/user/yeaft-group' },
               { text: 'Crew 团队协作', link: '/zh-CN/guide/user/crew' },
               { text: '帮帮团', link: '/zh-CN/guide/user/expert-panel' },
               { text: '分屏模式', link: '/zh-CN/guide/user/split-screen' },
@@ -129,7 +129,7 @@ export default defineConfig({
             items: [
               { text: '架构总览', link: '/zh-CN/guide/tech/architecture' },
               { text: 'Provider 系统', link: '/zh-CN/guide/tech/providers' },
-              { text: 'Yeaft 引擎', link: '/zh-CN/guide/tech/yeaft-engine' },
+              { text: 'Yeaft Code Agent 引擎', link: '/zh-CN/guide/tech/yeaft-engine' },
               { text: 'Yeaft 记忆系统（H2-AMS）', link: '/zh-CN/guide/tech/yeaft-memory' },
               { text: 'Yeaft LLM 层', link: '/zh-CN/guide/tech/yeaft-llm' },
               { text: 'WebSocket 协议', link: '/zh-CN/guide/tech/wire-protocol' },

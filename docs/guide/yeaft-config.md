@@ -1,6 +1,6 @@
 # Yeaft Engine Configuration
 
-To run Yeaft's own engine you need to tell it **which LLM providers to use** and **which model is primary / fast**. All of that lives in `~/.yeaft/config.json`. This chapter is the **field-by-field** filling guide.
+To run **Yeaft Code Agent** you need to tell the native engine **which LLM providers to use** and **which model is primary / fast**. All of that lives in `~/.yeaft/config.json`. This is the main integration point for other providers: Anthropic, OpenAI Responses, GitHub Copilot dynamic credentials, Azure/OpenAI-compatible gateways, and local proxies can all coexist in one config. This chapter is the **field-by-field** filling guide.
 
 > For the complete schema, every optional field, and Agent-side `.env`, see [Config Reference](./reference/config-reference.md).
 
@@ -134,7 +134,7 @@ Built-in today:
 }
 ```
 
-> The `github-copilot` credential provider here is a **completely different path** from [Copilot Mode](./user/copilot-mode.md) (which spawns `copilot --acp` subprocess). The former lets the Yeaft engine **directly** call the Copilot API; the latter uses the Copilot CLI as Web Chat's AI backend. Both reuse the same GitHub OAuth credential.
+> The `github-copilot` credential provider here is a **completely different path** from [Copilot Mode](./user/copilot-mode.md) (which spawns `copilot --acp` subprocess). The former lets the Yeaft engine **directly** call the Copilot API; the latter uses the Copilot CLI as a 1:1 chat backend in Yeaft Web Code Agent. Both reuse the same GitHub OAuth credential.
 
 ## Model Reference Format
 

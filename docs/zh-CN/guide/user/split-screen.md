@@ -41,7 +41,7 @@ Yeaft 支持同时打开 **多个对话面板**（最多 3 个），并排展示
 
 - 面板 A：Claude Code Chat（项目 A）
 - 面板 B：Copilot 会话（项目 B）
-- 面板 C：Yeaft 会话（讨论组）
+- 面板 C：Yeaft Code Agent（讨论组）
 
 每个面板的状态独立持久化，刷新页面后**保持分屏布局**。
 
@@ -59,7 +59,7 @@ Yeaft 支持同时打开 **多个对话面板**（最多 3 个），并排展示
 
 - **对照评审** — 两个 Copilot 会话用不同 model 跑同一个任务，对照输出
 - **长任务监控** — 一个面板跑长任务（如 refactor），另一个面板继续讨论
-- **多项目并行** — 项目 A 的 Crew + 项目 B 的 Yeaft 会话 + 项目 C 的 Claude Chat
+- **多项目并行** — 项目 A 的 Crew + 项目 B 的 Yeaft Code Agent + 项目 C 的 Claude Chat
 - **跨 Agent** — 一个面板连 Agent X，另一个面板连 Agent Y
 
 ## 性能建议

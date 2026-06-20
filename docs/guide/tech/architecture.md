@@ -26,7 +26,7 @@ Yeaft is a **three-layer architecture** multi-provider AI collaboration platform
 │  │  ─ claude-code        │  │  ─ engine.js query loop          │ │
 │  │  ─ copilot (ACP)      │  │  ─ H2-AMS memory                 │ │
 │  │                       │  │  ─ multi-provider LLM router     │ │
-│  │  spawn external CLI    │  │  ─ 40+ tools                     │ │
+│  │  spawn external CLI    │  │  ─ 30+ tools                     │ │
 │  └─────────────────────┘  └──────────────────────────────────┘ │
 │  ┌─────────────────────────────────────────────────────────┐  │
 │  │  Crew multi-role subsystem (own wire type, cross-worktree) │  │
@@ -81,7 +81,7 @@ claude-web-chat/
 │   │   ├── memory/          # H2-AMS memory
 │   │   ├── llm/             # LLM adapters (anthropic / openai-responses)
 │   │   ├── sessions/        # Session orchestration (multi-VP fan-out)
-│   │   ├── tools/           # 40+ built-in tools
+│   │   ├── tools/           # 30+ built-in tools
 │   │   └── ...
 │   ├── claude.js            # Legacy Claude Chat path (kept)
 │   ├── conversation.js      # Chat session lifecycle
@@ -115,14 +115,17 @@ Web → ws "send_message" → Server → ws agent
   → ws "claude_output" → Server → ws Web → MessageList render
 ```
 
-### Yeaft Sessions
+### Yeaft Code Agent
 ```
-Web → ws "yeaft_session_chat" → Server → ws agent
-  → coordinator.ingest() → Promise.all(runVpTurn × VPs)
-  → Engine.query() → tool exec → LLM stream → events
-  → web-bridge.js translates to claude_output envelope
-  → ws "yeaft_output" → Server → ws Web → handleYeaftOutput → handleClaudeOutput → MessageList
+Web → ws "yeaft_session_send" → Server → ws agent
+  → handleYeaftSessionSend() → coordinator.ingest()
+  → Promise.all(runVpTurn × selected VPs)
+  → Engine.query() → tool exec → LLM stream → engine events
+  → web-bridge.js normalizes events for the shared MessageList renderer
+  → ws "yeaft_output" → Server → ws Web → handleYeaftOutput → MessageList
 ```
+
+**Compatibility naming:** `yeaft_session_send` is the current product-level send channel. Older wire aliases such as `yeaft_session_chat` and `unify_group_chat`, older payload fields such as `groupId`, and renderer internals such as `claude_output` / `handleClaudeOutput` still exist for compatibility. They are not new domain terminology and should not be used as names for new APIs unless the code is explicitly handling legacy compatibility.
 
 ## CI/CD
 

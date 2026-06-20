@@ -2,7 +2,7 @@
 
 H2-AMS 是 Yeaft 引擎的**跨 session 持久记忆子系统**。它结合了 in-memory 的 Active Memory Set 和基于 SQLite FTS 的 pre-flow 召回层（长版本设计见 `agent/yeaft/memory/DESIGN-H2-AMS.md`）。每个 turn 之前主动召回相关记忆注入 system prompt，每个 turn 之后用 LLM 修正记忆。本章讲它的**架构**、**scope 模型**、**读写路径**。
 
-> 面向想理解 / 调试 / 扩展 Yeaft 记忆的开发者。用户视角的简介在 [Yeaft 会话](../user/yeaft-group.md#记忆系统能干什么)。
+> 面向想理解 / 调试 / 扩展 Yeaft 记忆的开发者。用户视角的简介在 [Yeaft Code Agent](../user/yeaft-group.md#记忆设计)。
 
 ## 设计目标
 

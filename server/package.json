@@ -1,7 +1,7 @@
 {
   "name": "@yeaft/webchat-server",
   "version": "1.0.0",
-  "description": "Central WebSocket server for Yeaft WebChat",
+  "description": "Central WebSocket server for Yeaft Web Code Agent",
   "main": "index.js",
   "type": "module",
   "scripts": {

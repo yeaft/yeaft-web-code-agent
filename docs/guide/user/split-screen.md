@@ -41,7 +41,7 @@ Different backends can be mixed across panels:
 
 - Panel A: Claude Code Chat (project A)
 - Panel B: Copilot session (project B)
-- Panel C: Yeaft Sessions (a discussion group)
+- Panel C: Yeaft Code Agent (a discussion group)
 
 State per panel is persisted independently and the **split layout survives page refresh**.
 
@@ -59,7 +59,7 @@ Mobile doesn't support split — screens are too narrow, single-panel forced. Sp
 
 - **Comparative review** — two Copilot sessions running different models on the same task, compare outputs
 - **Long-task monitoring** — one panel runs a long task (refactor), another panel keeps discussing
-- **Multi-project parallel** — Project A's Crew + Project B's Yeaft Sessions + Project C's Claude Chat
+- **Multi-project parallel** — Project A's Crew + Project B's Yeaft Code Agent + Project C's Claude Chat
 - **Cross-Agent** — one panel connected to Agent X, another to Agent Y
 
 ## Performance notes

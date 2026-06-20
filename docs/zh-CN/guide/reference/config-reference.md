@@ -154,7 +154,7 @@ Agent 启动时读环境变量。多数值也可以写在 Agent 的 `config.json
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `TOTP_ENABLED` | `true` | 全局启用 TOTP 2FA |
-| `TOTP_ISSUER` | `'Claude Web Chat'` | otpauth URI 里的 issuer label |
+| `TOTP_ISSUER` | `'Claude Web Chat'`（legacy default） | otpauth URI 里的 issuer label；新部署建议设为 `Yeaft Web Code Agent` |
 | `TOTP_WINDOW` | `1` | 允许的时间步漂移 |
 
 ### SSO

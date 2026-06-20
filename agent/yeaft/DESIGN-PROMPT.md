@@ -2,6 +2,7 @@
 
 > **Status**: 设计基线（v1）
 > **Scope**: 定义 Yeaft 引擎每轮发给 LLM 的 system prompt + messages 的概念分层、预算、生命周期。
+> **术语说明（2026-06）**：本文是内部 prompt 设计基线，部分字段/示例仍沿用 legacy `group` / `groupId` / `群` 命名来描述兼容层或历史实现。产品文档统一使用 **Yeaft Web Code Agent** / **Yeaft Code Agent** / **Yeaft Session**；新代码不要新增 `group*` / `unify*` 命名，除非明确在处理旧 wire/storage 兼容。
 > **关系**: 与既有 `DESIGN-H2-AMS` / `DESIGN.md` 等文档不一致的部分，以本文为准；老文档对应章节标记 deprecated。
 
 ---

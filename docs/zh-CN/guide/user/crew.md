@@ -139,18 +139,18 @@ Crew 模式让多个 Claude Code Agent 角色（PM、Dev、Reviewer、Tester、D
 - 增 / 删角色
 - **应用更改** — 实时生效
 
-## 跟 Yeaft 会话 的区别
+## 跟 Yeaft Code Agent 的区别
 
-|  | Crew | Yeaft 会话 |
+|  | Crew | Yeaft Code Agent |
 | --- | --- | --- |
 | 引擎 | Claude Code CLI（每角色一进程） | Yeaft 自有引擎 |
 | 模型 | 仅 Claude（CLI 决定） | 每 VP 独立选 provider/model |
 | 记忆 | session 内 | 跨 session H2-AMS 持久 |
 | 路由 | ROUTE 协议自动（PM 调度） | @mention + `route_forward` 显式 |
-| 工具 | Claude Code 完整 skill / MCP 生态 | Yeaft 自带 40+ 工具 |
+| 工具 | Claude Code 完整 skill / MCP 生态 | Yeaft 自带 30+ 工具 |
 | 资源 | 每角色一进程，多 worktree | 共享 engine，VP 是逻辑实体 |
 
 **用 Crew**：你已经在 Claude Code 生态，要做一个具体 feature 的完整流水线（拆 → 写 → 审 → 测）
-**用 Yeaft 会话**：你需要长期记忆 + 多 provider 自由组合 + 多 VP 并行讨论
+**用 Yeaft Code Agent**：你需要长期记忆 + 多 provider 自由组合 + 多 VP 并行讨论
 
 详细对比看 [选择会话后端](./choose-backend.md)。

@@ -1,10 +1,10 @@
 # 什么是 Yeaft？
 
-**Yeaft** 是一个**多 provider AI 协作平台** — Web 端入口，背后可以接 Claude Code CLI、GitHub Copilot CLI，或 Yeaft 自有的多 VP 引擎。一份界面，三种后端，按任务自由切换。
+**Yeaft Web Code Agent** 是 Web 端多 provider 代码 Agent 平台。一份浏览器 UI 可以接 Claude Code CLI、GitHub Copilot CLI，也可以使用 Yeaft 原生 Code Agent 引擎；实际代码执行仍发生在你连接的 Agent 机器上。
 
 ![Screenshot](/images/zh-CN/hero.jpg)
 
-## 三种后端，各自擅长
+## 三条代码 Agent 路径，各自擅长
 
 Yeaft 不绑定单一 AI 后端。打开一个新会话时你能选：
 
@@ -12,7 +12,7 @@ Yeaft 不绑定单一 AI 后端。打开一个新会话时你能选：
 | --- | --- | --- |
 | **Claude Code** | 单 1:1 chat，配 Claude 全套工具 | [Chat 模式](./user/chat-mode.md) |
 | **Copilot** | 同样 1:1，但走 GitHub Copilot CLI（ACP 协议），可挑 Claude / GPT 系 model | [Copilot 模式](./user/copilot-mode.md) |
-| **Yeaft 会话** | 多 VP 群组协作，并行 fan-out，跨 session 持久记忆 | [Yeaft 会话](./user/yeaft-group.md) |
+| **Yeaft Code Agent** | 原生多 provider 代码 Agent，1..N 个 VP，并行 fan-out，持久记忆，30+ 工具 | [Yeaft Code Agent](./user/yeaft-group.md) |
 
 不确定选哪个？看 [选择会话后端](./user/choose-backend.md)。
 
@@ -27,11 +27,12 @@ Yeaft 不绑定单一 AI 后端。打开一个新会话时你能选：
 
 ![Chat](/images/zh-CN/chat.jpg)
 
-### 👥 Yeaft 会话
-- 拉一个 group，里面塞多个 VP（Virtual Person，可独立配人格 / 模型 / 工具）
-- `@mention` 决定哪些 VP 接管这条消息，并行 fan-out
-- 跨 session 持久记忆（H2-AMS）— 新 session 也记得你上次说的事
-- VP→VP 显式 handoff（`route_forward` 工具）
+### 👥 Yeaft Code Agent
+- 创建一个 Session，可以只有一个专注 VP，也可以放多个 VP（Virtual Person，人格 / 模型 / 工具独立配置）
+- `@mention` 决定哪些 VP 接管本轮消息，并行 fan-out
+- 跨 session 持久记忆（H2-AMS）— 记住项目决策和个人偏好
+- 多 provider 路由：Anthropic、OpenAI Responses、GitHub Copilot 动态凭证和兼容 gateway
+- VP→VP 显式 handoff（`route_forward` 工具）和子 Agent 编排
 
 ### 🧠 帮帮团（Expert Panel）
 AI 专家团队侧边面板辅助你的对话。

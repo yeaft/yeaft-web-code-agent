@@ -1,6 +1,11 @@
 # Provider 系统
 
-Yeaft 把"AI 后端"抽象成 **ChatProvider** 接口 — 当前有两个实现：`claude-code`（Claude Code CLI 子进程） 和 `copilot`（GitHub Copilot CLI 子进程，走 ACP 协议）。本章讲这个抽象怎么设计、Provider 怎么写、协议怎么对齐。
+Yeaft 有两条 provider 集成路径：
+
+1. **ChatProvider**：给 Claude Code CLI、GitHub Copilot CLI 这类 1:1 CLI chat 后端使用。
+2. **Yeaft LLM adapter**：给原生 **Yeaft Code Agent** 引擎使用，每个 VP 直接路由到 Anthropic 或 OpenAI Responses 兼容 provider。
+
+本章重点讲 ChatProvider，因为这是新增 1:1 chat 后端的扩展点。如果你只是想把另一个 LLM 接到 Yeaft Code Agent，先看 [Yeaft 引擎配置](../yeaft-config.md) 和 [Yeaft LLM 层](./yeaft-llm.md)；大多数 provider 只需要改 `~/.yeaft/config.json`，不需要写新的 ChatProvider driver。
 
 > 本章面向**想加新 provider** 或**想理解为什么前端不区分 Claude / Copilot 渲染**的开发者。普通用户视角看 [选择会话后端](../user/choose-backend.md)。
 
@@ -156,7 +161,7 @@ driver 内部用任何 SDK / CLI / API，但**输出**必须翻译成 `claude_ou
 
 ## 不在这一层的东西
 
-- **Yeaft 引擎** — 不是 ChatProvider。它是独立的 wire type `yeaft_output` / `yeaft_session_chat`，因为它的事件模型（VP 并行 turn、group fan-out、跨 session 记忆）和单 1:1 chat 不一样
+- **Yeaft Code Agent 引擎** — 不是 ChatProvider。它走原生 Yeaft Session 路径（`yeaft_session_send` → `yeaft_output`），因为它的事件模型（VP 并行 turn、Session fan-out、跨 session 记忆）和单 1:1 chat 不一样。`yeaft_session_chat`、`unify_group_chat`、旧 `groupId` payload 名仍仅作为兼容名接受。
 - **WebSocket transport** — base.js 不管 WebSocket，driver 通过 `ctx.sendToServer` 推消息，transport 由 message-router 提供
 - **鉴权** — driver 不管 token 验证，agent 启动时 server 已经握过手
 

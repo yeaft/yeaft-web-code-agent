@@ -1,7 +1,7 @@
 {
   "name": "@yeaft/webchat",
   "version": "1.0.0",
-  "description": "Web interface for remotely accessing Claude Code CLI across multiple worker machines",
+  "description": "Web-based multi-provider code agent platform with native Yeaft Code Agent, Claude Code CLI, and GitHub Copilot CLI backends",
   "private": true,
   "type": "module",
   "workspaces": [

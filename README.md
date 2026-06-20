@@ -1,4 +1,4 @@
-# Yeaft
+# Yeaft Web Code Agent
 
 ![CI](https://github.com/yeaft/claude-web-chat/actions/workflows/ci.yml/badge.svg)
 [![npm](https://img.shields.io/npm/v/@yeaft/webchat-agent)](https://www.npmjs.com/package/@yeaft/webchat-agent)
@@ -8,23 +8,30 @@
 
 [English](README.md) | [中文](README.zh-CN.md) | [Documentation](https://yeaft.github.io/claude-web-chat/)
 
-> Multi-provider AI collaboration platform — one web interface, three backends: Claude Code CLI · GitHub Copilot CLI · Yeaft's own multi-VP engine. Multi-machine management, end-to-end encryption, multi-role collaboration.
+> Web-based multi-provider code agent platform — run Claude Code CLI, GitHub Copilot CLI, or Yeaft's native Code Agent from one browser UI. Connect many worker machines, keep execution local, route models across providers, and collaborate with persistent multi-VP Sessions.
 
 **🌐 Try it now: [cc.yeaft.com](https://cc.yeaft.com)** — open registration, no invite code required.
+
+## Terminology
+
+- **Yeaft Web Code Agent** — the whole web-based product: server, browser UI, connected worker agents, docs, and deployment story.
+- **Yeaft Code Agent** — the native code-agent capability running inside `yeaft-agent`; it owns the Yeaft engine, tools, memory, and direct LLM provider routing.
+- **Yeaft Session** — the native engine's durable collaboration unit. A Session can have one VP for focused coding or many VPs for parallel collaboration.
+- **Legacy wire/storage names** — some code and protocol fields still say `group`, `groupId`, `yeaft_session_chat`, `unify_*`, or `claude_output`. Those names are compatibility contracts, not new product language. New docs and new code should use Yeaft + Session terminology unless they are explicitly describing compatibility.
 
 ![Screenshot](docs/images/hero.jpg)
 
 ## Features
 
-### Pick Your Backend
+### Pick Your Code Agent Path
 
-Yeaft is not bound to a single AI vendor. When starting a new session, choose:
+Yeaft Web Code Agent is not bound to a single AI vendor or one execution model. When starting work, choose:
 
 | Backend | Best for |
 | --- | --- |
 | **Claude Code** | 1:1 chat with Claude Code CLI — full Claude toolset |
 | **Copilot** | 1:1 chat via GitHub Copilot CLI (ACP protocol) — pick any Claude / GPT model |
-| **Yeaft Sessions** | Multi-VP group collaboration, parallel fan-out, cross-session persistent memory |
+| **Yeaft Code Agent** | Native multi-provider code agent with 1..N VPs, parallel fan-out, persistent memory, and 30+ built-in tools |
 
 ### Chat (Claude Code)
 
@@ -51,16 +58,18 @@ The same chat surface but powered by `copilot --acp` instead of `claude`. Speaks
 - Session resume + history
 - Uses your existing GitHub Copilot OAuth — no separate API key
 
-### Yeaft Sessions
+### Yeaft Code Agent
 
-Multi-VP (Virtual Person) parallel collaboration, powered by Yeaft's own engine (no CLI subprocess required).
+Yeaft's native code-agent engine runs inside `yeaft-agent` with no external CLI subprocess required. It is Session-first: a Session can have one VP for focused coding or many VPs for product / architecture / implementation / review collaboration.
 
-- Create a group, drop multiple VPs (independently configured persona / model / tools)
-- `@mention` decides which VPs handle each message — parallel fan-out
-- Cross-session persistent memory (H2-AMS) — VPs remember what you said last session
-- Multi-provider LLM router (Anthropic, OpenAI Responses, GitHub Copilot, any OpenAI-compatible proxy)
-- 40+ built-in tools (file, bash, web, agent orchestration)
-- VP→VP explicit handoff via `route_forward` tool
+- Build Sessions with reusable VPs, each with independent persona, provider/model, memory, and tool policy
+- Use `@mention` to decide which VPs handle a turn; multiple VPs run in parallel
+- Keep cross-session persistent memory through H2-AMS, scoped by user / VP / Session / feature
+- Route LLM calls across Anthropic, OpenAI Responses, GitHub Copilot dynamic credentials, Azure/OpenAI-compatible gateways, or local proxies
+- Use 30+ built-in tools for files, patching, shell, git worktrees, web, notebooks, planning, and sub-agent orchestration
+- Inspect model routing, recalled memory, tool calls, token usage, and stop reasons in the Yeaft debug panel
+
+Read the full [Yeaft Code Agent guide](docs/guide/user/yeaft-group.md) for usage patterns, provider setup, and design principles.
 
 ![Chat](docs/images/chat.jpg)
 
@@ -126,7 +135,7 @@ Integrated development environment with terminal, Git operations, file browser, 
 - **Agent**: Node.js >= 22.5, plus at least one of:
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — required for Claude Chat mode
   - [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) — required for Copilot mode (optional)
-  - **Yeaft engine is bundled** in the npm package; no extra CLI required for Yeaft Sessions
+  - **Yeaft Code Agent is bundled** in the npm package; no extra CLI required for native Yeaft Sessions
 - **Web Client**: Modern browser (Chrome, Firefox, Safari, Edge)
 
 ### Configure Yeaft LLM providers from the agent CLI
@@ -165,7 +174,7 @@ yeaft-agent llm set-model --primary openai/gpt-5 --fast openai/gpt-4.1
 yeaft-agent llm remove-provider --name openai
 ```
 
-Run `yeaft-agent llm --help` for the full command list and examples. The Yeaft session header's LLM config button edits the same local agent config.
+Run `yeaft-agent llm --help` for the full command list and examples. The Yeaft Code Agent session header's LLM config button edits the same local agent config.
 
 ## Architecture
 
@@ -187,11 +196,11 @@ Run `yeaft-agent llm --help` for the full command list and examples. The Yeaft s
 │ @yeaft/       │      │    (web/)       │
 │ webchat-agent │      │                 │
 │               │      │ - Vue 3 + Pinia │
-│ - Manages     │      │ - Split-screen  │
-│   Claude CLI  │      │   multi-panel   │
-│ - Crew multi- │      │ - E2E encrypted │
-│   agent coord │      │ - Dark / light  │
-│ - Terminal    │      │ - en / zh-CN    │
+│ - Native      │      │ - Split-screen  │
+│   Yeaft Code  │      │   multi-panel   │
+│   Agent       │      │ - E2E encrypted │
+│ - Claude /    │      │ - Dark / light  │
+│   Copilot CLI │      │ - en / zh-CN    │
 │ - Git / Files │      │ - File upload   │
 └───────────────┘      └─────────────────┘
 ```
@@ -379,7 +388,7 @@ All registered users are **Pro** by default. The first user created via CLI is *
 ## Project Structure
 
 ```
-claude-web-chat/
+yeaft-web-code-agent/
 ├── server/              # Central WebSocket hub (Express + ws)
 │   ├── index.js         # Entry point
 │   ├── handlers/        # Message handlers (agent↔client routing)
@@ -400,8 +409,8 @@ claude-web-chat/
 │   │   ├── engine.js    # Main query loop
 │   │   ├── memory/      # H2-AMS memory subsystem
 │   │   ├── llm/         # Multi-provider LLM adapters
-│   │   ├── groups/      # Group Mode orchestration
-│   │   └── tools/       # 40+ built-in tools
+│   │   ├── sessions/    # Session orchestration
+│   │   └── tools/       # 30+ built-in tools
 │   ├── claude.js        # Legacy Claude CLI process management
 │   ├── conversation.js  # Chat session lifecycle & slash commands
 │   ├── crew/            # Multi-agent Crew coordination (13 modules)
@@ -460,9 +469,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
 
 ## Disclaimer
 
-This is an independent, community-driven open-source project. It is **not** affiliated with, endorsed by, or officially connected to Anthropic, PBC in any way.
+This is an independent, community-driven open-source project. It is **not** affiliated with, endorsed by, or officially connected to Anthropic, OpenAI, GitHub, or any other model provider.
 
-"Claude" is a trademark of Anthropic. This project provides a web interface for the Claude Code CLI and does not modify or redistribute any Anthropic software.
+"Claude" is a trademark of Anthropic. Yeaft can connect to Claude Code CLI and Anthropic APIs, but it does not modify or redistribute Anthropic software. Other provider names are trademarks of their respective owners.
 
 Use at your own risk. The authors assume no liability for any issues arising from the use of this software.
 
