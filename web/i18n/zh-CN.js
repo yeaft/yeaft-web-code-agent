@@ -26,7 +26,7 @@ export default {
   'chat.toolActionsOmitted': '已省略 {count} 个历史工具动作',
 
   // ============ Login ============
-  'login.subtitle': '远程 Claude Code CLI 访问界面',
+  'login.subtitle': 'Yeaft Web Code Agent',
   'login.username': '用户名',
   'login.password': '密码',
   'login.login': '登录',
@@ -400,7 +400,7 @@ export default {
   'modal.folderPicker.parentDir': '上级目录',
 
   // ============ Welcome Screen ============
-  'welcome.subtitle': '远程访问 Claude Code CLI',
+  'welcome.subtitle': '面向 Session、工具和 VP 协作的 Web Code Agent',
   'welcome.agentOnline': '{count} 个 Agent 在线',
   'welcome.noAgents': '暂无在线 Agent',
   'welcome.noAgentsHint': '请先启动 Agent 程序连接到服务器',

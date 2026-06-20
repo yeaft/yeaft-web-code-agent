@@ -158,8 +158,8 @@ const indexHtml = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>Claude Web Chat</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23d97706'/><path d='M8 11l4 4-4 4' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' fill='none'/><path d='M14 19h10' stroke='white' stroke-width='2.5' stroke-linecap='round'/></svg>">
+  <title>Yeaft</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%232c2c2c'/><path d='M16 22V13M16 13L10 8M16 13L22 8' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round' fill='none'/><circle cx='10' cy='8' r='2.4' fill='white'/><circle cx='22' cy='8' r='2.4' fill='white'/><circle cx='16' cy='22' r='2.4' fill='white'/></svg>">
   <link rel="stylesheet" href="style.bundle.css?v=${cssHash}">
   <script src="vendor.bundle.js?v=${vendorHash}"></script>
   <script defer src="jszip.min.js"></script>
