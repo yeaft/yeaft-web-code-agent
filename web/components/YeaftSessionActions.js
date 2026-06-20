@@ -1,13 +1,8 @@
 export default {
   name: 'YeaftSessionActions',
-  emits: ['reload-messages', 'run-dream', 'toggle-session-status', 'toggle-debug', 'reload-page'],
+  emits: ['reload-messages', 'toggle-session-status', 'toggle-debug', 'reload-page'],
   props: {
     loadingMoreHistory: { type: Boolean, default: false },
-    dreamRunning: { type: Boolean, default: false },
-    dreamJustFinished: { type: Boolean, default: false },
-    dreamStale: { type: Boolean, default: false },
-    dreamEntriesCreated: { type: Number, default: null },
-    dreamRunButtonTitle: { type: String, default: '' },
     sessionStatusVisible: { type: Boolean, default: true },
     debugMode: { type: Boolean, default: false },
     showPageReload: { type: Boolean, default: false },
@@ -25,34 +20,6 @@ export default {
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
         </svg>
-      </button>
-      <button
-        class="yeaft-topbar-dream-toggle"
-        :class="{
-          active: dreamRunning,
-          'just-finished': dreamJustFinished,
-          stale: dreamStale,
-        }"
-        @click="$emit('run-dream')"
-        :disabled="dreamRunning"
-        :title="dreamRunButtonTitle"
-        :aria-label="$t('yeaft.dream.runNow')"
-        :aria-busy="dreamRunning ? 'true' : 'false'"
-      >
-        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" class="yeaft-dream-icon">
-          <path class="yeaft-dream-moon" fill="currentColor" d="M20.4 14.2A7.4 7.4 0 0 1 9.8 3.6 8.2 8.2 0 1 0 20.4 14.2z"/>
-          <path class="yeaft-dream-spark" fill="currentColor" d="M16.8 3.2l.46 1.22 1.22.46-1.22.46-.46 1.22-.46-1.22-1.22-.46 1.22-.46.46-1.22zm3.4 4.1l.32.86.86.32-.86.32-.32.86-.32-.86-.86-.32.86-.32.32-.86z"/>
-        </svg>
-        <span
-          v-if="dreamJustFinished && dreamEntriesCreated !== null"
-          class="yeaft-topbar-dream-bubble"
-          aria-hidden="true"
-        >+{{ dreamEntriesCreated }}</span>
-        <span
-          v-if="dreamStale && !dreamRunning && !dreamJustFinished"
-          class="yeaft-topbar-dream-staledot"
-          aria-hidden="true"
-        ></span>
       </button>
       <button
         class="yeaft-topbar-vp-toggle"

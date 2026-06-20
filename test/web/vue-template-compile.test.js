@@ -76,18 +76,10 @@ describe('Vue component templates', () => {
   it('keeps Yeaft page tooltip translation out of the inline template without losing i18n', () => {
     const pageSource = readFileSync(join(componentsDir, 'YeaftPage.js'), 'utf8');
     const actionsSource = readFileSync(join(componentsDir, 'YeaftSessionActions.js'), 'utf8');
-    expect(actionsSource).toContain(':title="dreamRunButtonTitle"');
     expect(pageSource).toContain('const $t = (inst && inst.appContext.config.globalProperties.$t)');
-    expect(actionsSource).toContain("$t('yeaft.dream.runNow')");
-    expect(pageSource).toContain("$t('yeaft.dream.lastRun', { ago: dreamLastRunRelative.value })");
-    expect(pageSource).toContain("$t('yeaft.dream.lastRunNever')");
-    expect(pageSource).not.toContain("$t('yeaft.dream.runNow') + '\\n'");
-    expect(actionsSource).not.toContain("$t('yeaft.dream.runNow') + '\\n'");
     expect(pageSource).not.toContain('store.t?.(');
     expect(actionsSource).not.toContain('store.t?.(');
     expect(pageSource).not.toContain('Run Dream');
     expect(actionsSource).not.toContain('Run Dream');
-    expect(pageSource).not.toContain('Never run');
-    expect(pageSource).not.toContain('Last run ${dreamLastRunRelative.value} ago');
   });
 });

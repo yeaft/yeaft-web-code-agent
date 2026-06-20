@@ -597,13 +597,11 @@
 .yeaft-topbar-right :where(
   .yeaft-topbar-vp-toggle,
   .yeaft-reload-btn,
-  .yeaft-topbar-dream-toggle,
   .yeaft-debug-btn
 ),
 .yeaft-session-actions :where(
   .yeaft-topbar-vp-toggle,
   .yeaft-reload-btn,
-  .yeaft-topbar-dream-toggle,
   .yeaft-debug-btn
 ) {
   width: 32px;
@@ -615,13 +613,11 @@
 .yeaft-topbar-right :where(
   .yeaft-topbar-vp-toggle,
   .yeaft-reload-btn,
-  .yeaft-topbar-dream-toggle,
   .yeaft-debug-btn
 ) svg,
 .yeaft-session-actions :where(
   .yeaft-topbar-vp-toggle,
   .yeaft-reload-btn,
-  .yeaft-topbar-dream-toggle,
   .yeaft-debug-btn
 ) svg {
   width: 18px;
@@ -3367,91 +3363,6 @@
   background: var(--accent-soft, rgba(99, 102, 241, 0.10));
 }
 
-
-/* ── fix/dream-cadence-and-ui-trigger: manual dream trigger button ──
-   Sits after message refresh and before debug. Mirrors the shape of
-   the other topbar buttons (16 px icon, ~28 px hit-target). Three
-   visual states overlay on the same button so layout stays stable:
-     - idle:           muted icon
-     - running:        spin animation, disabled hit
-     - just-finished:  +N bubble (3 s)
-   A 24h-stale red dot may appear at the top-right when idle. */
-.yeaft-topbar-dream-toggle {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 4px 6px;
-  border-radius: 6px;
-  transition: background 0.15s, color 0.15s;
-}
-.yeaft-topbar-dream-toggle:hover:not(:disabled),
-.yeaft-topbar-dream-toggle:focus-visible {
-  background: var(--sidebar-hover);
-  color: var(--text-primary);
-  outline: none;
-}
-.yeaft-topbar-dream-toggle:disabled {
-  cursor: default;
-  opacity: 0.85;
-}
-.yeaft-topbar-dream-toggle.running {
-  color: var(--accent);
-}
-.yeaft-topbar-dream-toggle.running .yeaft-dream-icon {
-  animation: yeaft-dream-spin 0.9s linear infinite;
-  transform-origin: 50% 50%;
-}
-.yeaft-topbar-dream-toggle.just-finished {
-  color: var(--success);
-}
-@keyframes yeaft-dream-spin {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
-}
-
-/* Post-success "+N entries" bubble. Anchors to the button so the topbar
-   does not reflow. */
-.yeaft-topbar-dream-bubble {
-  position: absolute;
-  top: -6px;
-  right: -10px;
-  min-width: 18px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--success);
-  color: var(--accent-fg);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 16px;
-  text-align: center;
-  white-space: nowrap;
-  pointer-events: none;
-  /* gentle fade-in; the disappearance is timer-driven (v-if flip) */
-  animation: yeaft-dream-bubble-in 0.18s ease-out;
-}
-@keyframes yeaft-dream-bubble-in {
-  from { opacity: 0; transform: translateY(2px) scale(0.9); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-/* 24h-stale red dot. 6 px solid; no animation, no number — the spec
-   explicitly calls for a subtle visual nudge, not a notification. */
-.yeaft-topbar-dream-staledot {
-  position: absolute;
-  top: 4px;
-  right: 6px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--error, #dc2626);
-  pointer-events: none;
-}
 
 /* ── 2026-05-13 Tool Usage Stats drawer ──────────────────────────── */
 

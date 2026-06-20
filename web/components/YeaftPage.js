@@ -13,11 +13,6 @@ import YeaftSessionActions from './YeaftSessionActions.js';
 import LlmTab from './LlmTab.js';
 import { parseMentions } from '../utils/parseMentions.js';
 import { buildTimelineRows, selectGroupRosterVpList } from '../stores/helpers/vp-timeline.js';
-import {
-  DREAM_JUST_FINISHED_MS,
-  DREAM_REDDOT_THRESHOLD_MS,
-  DREAM_RELATIVE_TIME_REFRESH_MS,
-} from './dream-ui-constants.js';
 import { buildModelSelectionRows, getDefaultModelEffort, getSelectableModelEfforts, modelOptionMatchesRef, modelOptionRef, resolveSessionModelEffort, resolveSessionModelRef } from '../utils/modelRefs.js';
 import { shouldShowYeaftOnboardingGuide } from '../utils/yeaftOnboarding.js';
 import { hasUsableYeaftAgent, resolveActiveSessionIdForSettings } from '../utils/yeaftSessionSettings.js';
@@ -147,16 +142,10 @@ export default {
             v-if="!showOnboardingGuide"
             class="yeaft-topbar-right"
             :loading-more-history="store.yeaftLoadingMoreHistory"
-            :dream-running="dreamRunning"
-            :dream-just-finished="dreamJustFinished"
-            :dream-stale="dreamStale"
-            :dream-entries-created="dreamEntriesCreated"
-            :dream-run-button-title="dreamRunButtonTitle"
             :session-status-visible="sessionStatusVisible"
             :debug-mode="debugMode"
             :show-page-reload="isMobile"
             @reload-messages="reloadMessages"
-            @run-dream="onDreamTriggerClick"
             @toggle-session-status="toggleSessionStatus"
             @toggle-debug="toggleDebug"
             @reload-page="reloadPage"
@@ -721,14 +710,6 @@ export default {
       window.location.reload();
     };
 
-    // sessionsStore + topbarGroup must be declared BEFORE dreamButtonVpId.
-    // The chain that hits TDZ otherwise:
-    //   Vue.watch(dreamLastRunAt, …) eagerly resolves its source during
-    //   setup → dreamLastRunAt.value reads dreamStatusEntry.value →
-    //   vpStore.dreamStatusFor(dreamButtonVpId.value) → topbarGroup.value
-    // If topbarGroup is declared later in setup() the last step throws
-    // "ReferenceError: Cannot access 'topbarGroup' before initialization"
-    // and the component fails to mount, blanking out the page.
     const sessionsStore = () => {
       try {
         return window.Pinia?.useSessionsStore?.() || null;
@@ -817,111 +798,6 @@ export default {
       if (!row || !modelOptionMatchesRef(row.model, topbarModel.value)) return false;
       if (!row.efforts.length) return true;
       return row.efforts.includes(topbarEffort.value);
-    };
-
-    // ── manual dream trigger ──
-    // Header dream acts on the conversation currently on screen. That is
-    // a group-scoped manual pass, not a VP-scoped/global pass.
-    const dreamButtonGroupId = Vue.computed(() => {
-      const g = topbarGroup.value;
-      return (g && g.id) || null;
-    });
-
-    /** @type {import('vue').Ref<number|null>} just-finished flag — wall-clock when the last result arrived. */
-    const dreamFinishedAt = Vue.ref(null);
-    let dreamFinishedTimer = null;
-    /** Ticker used to re-evaluate "stale" + relative-time strings without re-rendering on every input event. */
-    const dreamTickMs = Vue.ref(Date.now());
-    let dreamTickHandle = null;
-    Vue.onMounted(() => {
-      // Refresh ticker — re-evaluates the relative-time tooltip and
-      // the 24h-stale check at DREAM_RELATIVE_TIME_REFRESH_MS cadence.
-      dreamTickHandle = setInterval(
-        () => { dreamTickMs.value = Date.now(); },
-        DREAM_RELATIVE_TIME_REFRESH_MS,
-      );
-    });
-    Vue.onBeforeUnmount(() => {
-      if (dreamTickHandle) { clearInterval(dreamTickHandle); dreamTickHandle = null; }
-      if (dreamFinishedTimer) { clearTimeout(dreamFinishedTimer); dreamFinishedTimer = null; }
-    });
-
-    const dreamStatusEntry = Vue.computed(
-      () => vpStore.groupDreamStatusFor(dreamButtonGroupId.value),
-    );
-    const dreamRunning = Vue.computed(() => dreamStatusEntry.value.status === 'running');
-    const dreamLastRunAt = Vue.computed(() => dreamStatusEntry.value.lastRunAt);
-
-    // Auto-clear the post-success bubble after 3 s. Watching `lastRunAt`
-    // catches both success and error paths; we only show the +N badge on
-    // success (entriesCreated will be null on error).
-    Vue.watch(dreamLastRunAt, (newVal) => {
-      if (!newVal) return;
-      dreamFinishedAt.value = newVal;
-      if (dreamFinishedTimer) clearTimeout(dreamFinishedTimer);
-      dreamFinishedTimer = setTimeout(() => {
-        dreamFinishedAt.value = null;
-        dreamFinishedTimer = null;
-      }, DREAM_JUST_FINISHED_MS);
-    });
-
-    const dreamJustFinished = Vue.computed(() => {
-      const f = dreamFinishedAt.value;
-      if (!f) return false;
-      // Only paint the bubble for successful runs — error path leaves
-      // status='error' and lastResult=null.
-      return dreamStatusEntry.value.status === 'success'
-        && !!dreamStatusEntry.value.lastResult;
-    });
-    const dreamEntriesCreated = Vue.computed(() => {
-      const lr = dreamStatusEntry.value.lastResult;
-      if (!lr) return null;
-      const n = lr.entriesCreated;
-      return typeof n === 'number' ? n : null;
-    });
-
-    // Stale = no run observed yet OR last run >24h old. The local cache
-    // is per-tab; a freshly opened browser tab will always show stale
-    // until the server pushes a state snapshot or the user runs it
-    // manually. That's intentional — better to nudge once than to
-    // silently let dream rot.
-    const dreamStale = Vue.computed(() => {
-      const groupId = dreamButtonGroupId.value;
-      const scope = groupId ? `group/${groupId}` : '*';
-      const debugLatest = store.yeaftDreamLatest?.[scope] || store.yeaftDreamLatest?.['*'] || null;
-      const debugFinishedAt = debugLatest?.finishedAt || null;
-      const t = dreamLastRunAt.value || debugFinishedAt;
-      if (!t) return true;
-      return (dreamTickMs.value - t) > DREAM_REDDOT_THRESHOLD_MS;
-    });
-
-    /** Format a millisecond delta as a short relative-time string. */
-    const formatRelativeFromNow = (whenMs) => {
-      if (!whenMs) return null;
-      const dt = Math.max(0, dreamTickMs.value - whenMs);
-      const min = Math.floor(dt / 60_000);
-      if (min < 1) return null; // "just now" handled by the bubble already
-      if (min < 60) return `${min}m`;
-      const hr = Math.floor(min / 60);
-      if (hr < 24) return `${hr}h`;
-      const day = Math.floor(hr / 24);
-      return `${day}d`;
-    };
-
-    /** Relative-time string for the tooltip's second line (or null = never run). */
-    const dreamLastRunRelative = Vue.computed(() => formatRelativeFromNow(dreamLastRunAt.value));
-
-    const dreamRunButtonTitle = Vue.computed(() => {
-      const title = $t('yeaft.dream.runNow');
-      if (dreamLastRunRelative.value) {
-        return `${title}\n${$t('yeaft.dream.lastRun', { ago: dreamLastRunRelative.value })}`;
-      }
-      return `${title}\n${$t('yeaft.dream.lastRunNever')}`;
-    });
-
-    const onDreamTriggerClick = () => {
-      if (dreamRunning.value || !dreamButtonGroupId.value) return;
-      vpStore.triggerGroupDream(dreamButtonGroupId.value);
     };
 
     // feat-6af5f9f1 PR C: the legacy debug helpers (toggleTurnExpand,
@@ -1389,14 +1265,6 @@ export default {
       onMentionVpFromTimeline,
       onCancelVpFromTimeline,
       onPromptSubAgentFromTimeline,
-      // fix/dream-cadence-and-ui-trigger: manual dream trigger bindings.
-      dreamRunning,
-      dreamJustFinished,
-      dreamStale,
-      dreamEntriesCreated,
-      dreamLastRunRelative,
-      dreamRunButtonTitle,
-      onDreamTriggerClick,
     };
   }
 };

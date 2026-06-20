@@ -92,11 +92,10 @@ describe('Yeaft conversation header actions', () => {
     expect(pageSource).toContain(':show-page-reload="isMobile"');
   });
 
-  it('orders actions as refresh, dream, Session status, debug, mobile page refresh', () => {
+  it('orders actions as refresh, Session status, debug, mobile page refresh', () => {
     const block = actionComponentBlock();
     const order = [
       "$emit('reload-messages')",
-      "$emit('run-dream')",
       "$emit('toggle-session-status')",
       "$emit('toggle-debug')",
       "$emit('reload-page')",

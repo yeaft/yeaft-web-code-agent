@@ -17,16 +17,10 @@ const zhI18n = read('i18n/zh-CN.js');
 
 describe('Yeaft UI action polish', () => {
   it('keeps header action icons visually consistent', () => {
-    expect(sessionActionsSource).toContain('class="yeaft-dream-icon"');
-    expect(sessionActionsSource).toContain('class="yeaft-dream-moon"');
-    expect(sessionActionsSource).toContain('class="yeaft-dream-spark"');
-    expect(sessionActionsSource).not.toContain('yeaft-dream-arc');
-    expect(yeaftCss).toContain('.yeaft-topbar-dream-toggle.running .yeaft-dream-icon');
     expect(yeaftCss).toContain('.yeaft-topbar-right :where(');
     expect(yeaftCss).toContain('width: 32px;');
     expect(yeaftCss).toContain('height: 32px;');
     expect(yeaftCss).toContain('flex: 0 0 18px;');
-    expect(yeaftCss).not.toContain('.yeaft-topbar-dream-toggle.running .yeaft-topbar-dream-icon');
   });
 
   it('replaces VP profile info with an edit action that opens Settings VP editor', () => {
@@ -97,7 +91,6 @@ describe('Yeaft UI action polish', () => {
     const touched = [
       '.yeaft-debug-close',
       '.yeaft-vp-timeline-edit',
-      '.yeaft-topbar-dream-toggle',
       '.group-settings-delete-btn',
       '.group-settings-section-delete .group-settings-heading',
       '.group-settings-section-session',
