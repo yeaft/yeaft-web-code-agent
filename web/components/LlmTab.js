@@ -13,6 +13,23 @@ export default {
   emits: ['message', 'saved'],
   template: `
     <div class="llm-tab">
+      <section v-if="context === 'yeaft'" class="llm-agent-install" :aria-label="$t('settings.llm.agentInstallCommands')">
+        <div class="sp-cmd-row">
+          <span class="sp-cmd-label">{{ $t('settings.llm.agentInstallCommand') }}</span>
+          <code class="sp-cmd">{{ agentInstallCommand }}</code>
+          <button class="sp-icon-btn" @click="copyText(agentInstallCommand)" :title="$t('common.copy')">
+            <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+          </button>
+        </div>
+        <div class="sp-cmd-row">
+          <span class="sp-cmd-label">{{ $t('settings.llm.copilotUseLabel') }}</span>
+          <code class="sp-cmd">{{ copilotUseCommand }}</code>
+          <button class="sp-icon-btn" @click="copyText(copilotUseCommand)" :title="$t('common.copy')">
+            <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+          </button>
+        </div>
+      </section>
+
       <!-- No agent selected -->
       <div v-if="!effectiveAgentId" class="sp-desc">
         {{ $t('settings.llm.noAgent') }}
@@ -57,40 +74,6 @@ export default {
           </button>
         </div>
 
-        <section v-if="context === 'yeaft'" class="llm-copilot-instructions" aria-labelledby="llm-copilot-instructions-title">
-          <div class="llm-copilot-instructions-header">
-            <div>
-              <h3 id="llm-copilot-instructions-title">{{ $t('settings.llm.copilotInstructionsTitle') }}</h3>
-              <p class="sp-desc">{{ $t('settings.llm.copilotInstructionsDesc') }}</p>
-            </div>
-          </div>
-          <ol class="llm-copilot-steps">
-            <li>
-              <span class="llm-copilot-step-index">1</span>
-              <div>
-                <strong>{{ $t('settings.llm.copilotStepLoginTitle') }}</strong>
-                <p>{{ $t('settings.llm.copilotStepLoginDesc') }}</p>
-                <code>gh auth login</code>
-              </div>
-            </li>
-            <li>
-              <span class="llm-copilot-step-index">2</span>
-              <div>
-                <strong>{{ $t('settings.llm.copilotStepUseTitle') }}</strong>
-                <p>{{ $t('settings.llm.copilotStepUseDesc') }}</p>
-                <code>{{ $t('settings.llm.copilotUseCommand') }}</code>
-              </div>
-            </li>
-            <li>
-              <span class="llm-copilot-step-index">3</span>
-              <div>
-                <strong>{{ $t('settings.llm.copilotStepVerifyTitle') }}</strong>
-                <p>{{ $t('settings.llm.copilotStepVerifyDesc') }}</p>
-                <code>yeaft-agent llm show</code>
-              </div>
-            </li>
-          </ol>
-        </section>
 
         <!-- Providers Section -->
         <div class="sp-group">
@@ -322,6 +305,12 @@ export default {
         for (const m of models) refs.push(`${p.name}/${m}`);
       }
       return refs;
+    },
+    agentInstallCommand() {
+      return 'npm install -g @yeaft/webchat-agent';
+    },
+    copilotUseCommand() {
+      return 'yeaft-agent llm use github-copilot --model gpt-5.5';
     }
   },
   watch: {
@@ -347,7 +336,14 @@ export default {
     },
   },
   methods: {
-
+    async copyText(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        this.$emit('message', this.$t('settings.msg.copiedClipboard'), false);
+      } catch {
+        this.$emit('message', this.$t('settings.msg.copyFailed'), true);
+      }
+    },
 
     async useGitHubCopilotPreset() {
       const agentId = this.effectiveAgentId;

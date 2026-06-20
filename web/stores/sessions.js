@@ -116,6 +116,9 @@ export const useSessionsStore = defineStore('sessions', {
     activeSession(state) {
       return state.activeSessionId ? (state.sessions[state.activeSessionId] || null) : null;
     },
+    hasLoadedSnapshot(state) {
+      return state.lastSnapshotAt > 0;
+    },
     isEmpty(state) {
       return state.sessionOrder.length === 0;
     },

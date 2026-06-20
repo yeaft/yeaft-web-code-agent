@@ -4402,3 +4402,217 @@
   font-size: 12px;
   line-height: 1.4;
 }
+
+/* ── No-session onboarding guide ── */
+
+.yeaft-onboarding {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  justify-content: center;
+  padding: 48px 24px;
+  background: var(--bg-main);
+}
+
+.yeaft-onboarding-shell {
+  width: min(1040px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  text-align: center;
+}
+
+.yeaft-onboarding-eyebrow {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.yeaft-onboarding-title {
+  margin: 0;
+  max-width: 760px;
+  color: var(--text-primary);
+  font-size: clamp(30px, 5vw, 52px);
+  line-height: 1.05;
+  letter-spacing: -0.04em;
+}
+
+.yeaft-onboarding-subtitle {
+  margin: 0;
+  max-width: 700px;
+  color: var(--text-secondary);
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.yeaft-onboarding-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.yeaft-onboarding-primary,
+.yeaft-onboarding-actions .btn-secondary {
+  min-height: 40px;
+  padding: 9px 16px;
+}
+
+.yeaft-onboarding-steps {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.yeaft-onboarding-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  min-width: 0;
+  padding: 18px;
+  text-align: left;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border-light);
+  border-radius: 18px;
+}
+
+.yeaft-onboarding-card-wide {
+  grid-column: 1 / -1;
+}
+
+.yeaft-onboarding-step-index {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.yeaft-onboarding-card-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.yeaft-onboarding-card h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.yeaft-onboarding-card p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.yeaft-onboarding-command {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: var(--bg-main);
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+}
+
+.yeaft-onboarding-command code {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
+.yeaft-onboarding-copy {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.yeaft-onboarding-copy:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.yeaft-onboarding-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.yeaft-onboarding-provider {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.yeaft-onboarding-provider-title {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+@media (max-width: 900px) {
+  .yeaft-onboarding {
+    padding: 36px 18px;
+  }
+
+  .yeaft-onboarding-steps,
+  .yeaft-onboarding-provider-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .yeaft-onboarding {
+    padding: 28px 14px;
+  }
+
+  .yeaft-onboarding-shell {
+    align-items: stretch;
+    text-align: left;
+  }
+
+  .yeaft-onboarding-actions {
+    flex-direction: column;
+  }
+
+  .yeaft-onboarding-actions .btn-primary,
+  .yeaft-onboarding-actions .btn-secondary {
+    width: 100%;
+  }
+
+  .yeaft-onboarding-card {
+    grid-template-columns: 1fr;
+  }
+}

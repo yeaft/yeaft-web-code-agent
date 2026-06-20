@@ -75,6 +75,32 @@ function agentListMsg() {
 
 const loadHistoryCount = (store) => store.sent.filter(m => m.type === 'yeaft_load_history').length;
 
+describe('Yeaft early history frames', () => {
+  it('moves the active Yeaft conversation from local placeholder to the agent conversation id', () => {
+    const store = makeStore();
+    store.yeaftConversationId = 'yeaft-local-agent-1';
+    store.yeaftConversationIdsByAgent = { [AGENT_ID]: 'yeaft-local-agent-1' };
+    store.activeConversations = ['yeaft-local-agent-1'];
+    store.messagesMap = { 'yeaft-local-agent-1': [{ id: 'local-old', type: 'user', content: 'draft', timestamp: 1, sessionId: SESSION_ID }] };
+    store.handleAssistantOutputFrame = (conversationId, data) => {
+      store.messagesMap[conversationId].push({ id: data.message?.id, type: data.type, content: data.message?.content, timestamp: 2, sessionId: SESSION_ID });
+    };
+
+    store.handleYeaftOutput({
+      conversationId: 'yeaft-real-1',
+      agentId: AGENT_ID,
+      sessionId: SESSION_ID,
+      data: { type: 'user', message: { id: 'm0002', content: 'hello' } },
+    });
+
+    expect(store.yeaftConversationId).toBe('yeaft-real-1');
+    expect(store.yeaftConversationIdsByAgent[AGENT_ID]).toBe('yeaft-real-1');
+    expect(store.activeConversations).toEqual(['yeaft-real-1']);
+    expect(store.messagesMap['yeaft-local-agent-1']).toBeUndefined();
+    expect(store.messagesMap['yeaft-real-1'].map(m => m.content)).toEqual(['draft', 'hello']);
+  });
+});
+
 describe('Yeaft agent_list does not loop history catch-up', () => {
   it('sends NO yeaft_load_history on routine agent_list for a loaded session (no reconnect)', () => {
     const store = makeStore();

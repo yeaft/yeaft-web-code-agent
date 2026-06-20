@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { COLLAB_TOOL_POLICY } from './tools/registry.js';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { DEFAULT_YEAFT_DIR } from './init.js';
 import { buildDreamOutputSnapshot } from './dream/output-snapshot.js';
 import { Engine } from './engine.js';
 import { loadSession } from './session.js';
@@ -60,7 +61,7 @@ import {
   trimSnapshotForBudget,
 } from './history-compact.js';
 import { persistYeaftAttachments, attachmentsForPersistence, persistedAttachmentPreviewPayload } from './attachments.js';
-import { parseSeqFromId } from './conversation/persist.js';
+import { ConversationStore, parseSeqFromId } from './conversation/persist.js';
 import { sliceLastNTurns } from './turn-utils.js';
 import { pairSanitize } from './pair-sanitize.js';
 import { filterSnapshotForVp } from './snapshot-filter.js';
@@ -768,6 +769,76 @@ function loadVisibleGroupHistoryPage(store, sessionId, limit, beforeSeq = null) 
   };
 }
 
+function ensureYeaftConversationId() {
+  if (!yeaftConversationId) yeaftConversationId = `yeaft-${Date.now()}`;
+  return yeaftConversationId;
+}
+
+function emitVisibleHistoryReplay({ store, sessionId, limit, beforeSeq = null, mode = 'recent' }) {
+  const visiblePage = sessionId
+    ? loadVisibleGroupHistoryPage(store, sessionId, limit, beforeSeq)
+    : { messages: limit > 0 ? (store.loadRecent?.(limit) || []) : [], oldestSeq: null, hasMore: false };
+  const replayEntries = sessionId
+    ? visiblePage.messages
+    : visiblePage.messages
+      .map(projectPersistedToVisibleHistoryEntry)
+      .filter(Boolean);
+
+  for (const entry of replayEntries) {
+    if (entry.role === 'user') {
+      sendSessionOutputFrame({
+        type: 'user',
+        message: {
+          content: entry.content,
+          id: entry.id || null,
+          ...(Array.isArray(entry.attachments) && entry.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(entry.attachments) } : {}),
+        },
+        ts: entry.ts || null,
+      }, { sessionId: entry.sessionId || null, threadId: entry.threadId || 'main', turnId: entry.turnId || entry.threadId || 'main' });
+    } else if (entry.role === 'assistant') {
+      const envelopeOpts = {
+        sessionId: entry.sessionId || null,
+        threadId: entry.threadId || 'main',
+        turnId: entry.turnId || entry.threadId || 'main',
+      };
+      if (entry.speakerVpId) envelopeOpts.vpId = entry.speakerVpId;
+      sendSessionOutputFrame({
+        type: 'assistant',
+        message: { id: entry.id || null, content: [{ type: 'text', text: entry.content }] },
+        ts: entry.ts || null,
+      }, envelopeOpts);
+      if (Array.isArray(entry.toolCalls) && entry.toolCalls.length > 0) {
+        sendSessionOutputFrame({
+          type: 'assistant',
+          message: {
+            content: [{
+              type: 'tool_summary',
+              count: entry.toolCalls.length,
+              omittedCount: entry.toolCalls.length,
+              source: 'history',
+            }],
+          },
+          ts: entry.ts || null,
+        }, envelopeOpts);
+      }
+      sendSessionOutputFrame({ type: 'result', result_text: '' }, envelopeOpts);
+    }
+  }
+
+  const latestSeq = replayEntries.length
+    ? parseSeqFromId(replayEntries[replayEntries.length - 1]?.id)
+    : null;
+  sendSessionEvent({
+    type: 'history_loaded',
+    mode,
+    count: replayEntries.length,
+    sessionId,
+    hasMore: visiblePage.hasMore,
+    oldestSeq: visiblePage.oldestSeq,
+    latestSeq: Number.isFinite(latestSeq) ? latestSeq : null,
+  });
+}
+
 /**
  * Hydrate a freshly-created GroupContext's history from the on-disk
  * conversation store. Returns an empty array if the session isn't
@@ -875,6 +946,7 @@ export function __testGroupHistory(sessionId) {
  */
 export function __testSetSession(sessionLike) {
   session = sessionLike;
+  if (!sessionLike) yeaftConversationId = null;
 }
 
 /**
@@ -4373,18 +4445,60 @@ export async function handleYeaftLoadHistory(msg) {
   // (DEFAULT_RECENT_TURNS = 20 turns).
   const pickRecent = (store, lim) =>
     sessionId ? store.loadRecentBySession(sessionId, lim) : store.loadRecent(lim);
+  let historyAlreadyReplayed = false;
 
   if (!session) {
-    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const yeaftDir = ctx.CONFIG?.yeaftDir || DEFAULT_YEAFT_DIR;
+    const afterSeqRaw = (msg && Number.isFinite(msg.afterSeq)) ? msg.afterSeq : null;
+    const afterMessageId = (msg && typeof msg.afterMessageId === 'string') ? msg.afterMessageId : null;
+    const limit = (typeof msg.limit === 'number') ? msg.limit : 10;
+    ensureYeaftConversationId();
+
+    // First paint must not wait for full Yeaft runtime boot (MCP connects,
+    // skill scans, memory index sync). The conversation markdown store is the
+    // source of truth and can be opened cheaply, so replay the visible message
+    // window immediately, then finish loadSession below for actual turns.
+    const coldStore = new ConversationStore(yeaftDir);
+    if (sessionId && (afterSeqRaw !== null || afterMessageId)) {
+      let afterSeq = afterSeqRaw;
+      if (afterSeq === null && afterMessageId && typeof coldStore.getMessageSeqById === 'function') {
+        afterSeq = coldStore.getMessageSeqById(afterMessageId);
+      }
+      const delta = afterSeq !== null && typeof coldStore.loadAfterSeqByGroup === 'function'
+        ? coldStore.loadAfterSeqByGroup(sessionId, afterSeq)
+        : { messages: [], latestSeq: null };
+      for (const entry of delta.messages) {
+        if (entry.role === 'user') {
+          sendSessionOutputFrame({
+            type: 'user',
+            message: { content: entry.content, id: entry.id || null },
+            ts: entry.ts || null,
+          }, { sessionId: entry.sessionId || null, threadId: entry.threadId || 'main', turnId: entry.turnId || entry.threadId || 'main' });
+        } else if (entry.role === 'assistant') {
+          const envelopeOpts = { sessionId: entry.sessionId || null, threadId: entry.threadId || 'main', turnId: entry.turnId || entry.threadId || 'main' };
+          if (entry.speakerVpId) envelopeOpts.vpId = entry.speakerVpId;
+          sendSessionOutputFrame({
+            type: 'assistant',
+            message: { id: entry.id || null, content: [{ type: 'text', text: entry.content }] },
+            ts: entry.ts || null,
+          }, envelopeOpts);
+          sendSessionOutputFrame({ type: 'result', result_text: '' }, envelopeOpts);
+        }
+      }
+      sendSessionEvent({ type: 'history_loaded', mode: 'delta', count: delta.messages.length, sessionId, latestSeq: delta.latestSeq, afterSeq });
+    } else {
+      emitVisibleHistoryReplay({ store: coldStore, sessionId, limit, mode: 'recent' });
+    }
+    historyAlreadyReplayed = true;
+
     session = await loadSession({
-      ...(yeaftDir && { dir: yeaftDir }),
+      dir: yeaftDir,
       skipMCP: false,
       skipSkills: false,
       serverMode: true,
     });
     installYeaftRuntimeBridge(session);
 
-    yeaftConversationId = `yeaft-${Date.now()}`;
     refreshLiveSessionConfig();
     hydrateYeaftStatusFromSession(session, { reason: 'history_load', emitEvent: true });
 
@@ -4431,6 +4545,8 @@ export async function handleYeaftLoadHistory(msg) {
   } catch (err) {
     console.warn('[Yeaft] vp-status snapshot broadcast (replay) failed:', err?.message || err);
   }
+
+  if (historyAlreadyReplayed) return;
 
   // Delta path: caller knows the latest seq (or message id) it has cached
   // and wants only the messages that arrived after that cursor. Returns
