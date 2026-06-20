@@ -146,6 +146,9 @@ describe('Settings panel source', () => {
     expect(settingsCss).toContain('@media (max-width: 640px)');
     expect(settingsCss).toContain('height: 100dvh;');
     expect(settingsCss).toContain('max-height: 100dvh;');
+    expect(settingsCss).toContain('.sp-qr-overlay {');
+    expect(settingsCss).toContain('align-items: center;');
+    expect(settingsCss).toContain('justify-content: center;');
   });
 
   it('styles Yeaft settings subtabs as a segmented control', () => {
