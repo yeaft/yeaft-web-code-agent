@@ -245,31 +245,6 @@
   overflow-x: auto;
 }
 
-/* ---- Tool Message ---- */
-.subagent-msg-tool {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  padding: 6px 10px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  background: var(--sidebar-hover);
-  border-radius: 6px;
-  line-height: 1.5;
-}
-
-.subagent-tool-icon {
-  flex-shrink: 0;
-  margin-top: 2px;
-  color: var(--text-muted);
-}
-
-.subagent-tool-text {
-  flex: 1;
-  font-family: var(--font-mono, monospace);
-  word-break: break-word;
-}
-
 /* ---- Empty / Waiting State ---- */
 .subagent-msg-empty {
   display: flex;
@@ -369,11 +344,6 @@
 .dark .subagent-card {
   background: var(--bg-main);
   border-color: var(--border-light);
-}
-
-[data-theme="dark"] .subagent-msg-tool,
-.dark .subagent-msg-tool {
-  background: rgba(255, 255, 255, 0.04);
 }
 
 /* ==================================

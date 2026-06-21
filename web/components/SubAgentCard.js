@@ -4,8 +4,8 @@
  *
  * Backed by `chatStore.yeaftSubAgentCards[key]` where key = `${convId}:${agentId}`.
  * The card aggregates per-agent state populated by the `sub_agent_event`
- * dispatcher in chat.js: status badge, accumulated text, tool-call list,
- * and turn count.
+ * dispatcher in chat.js: status badge, assistant text, compact tool-call
+ * count, and turn count.
  *
  * Per CLAUDE.md "Yeaft UI Design Rules": no horizontal dividers, soft
  * surface, spacing-only separation.
@@ -58,8 +58,8 @@ export default {
         <span class="sub-agent-name">{{ card.agentName }}</span>
         <span class="sub-agent-status-badge" :class="statusClass">{{ statusLabel }}</span>
         <span v-if="card.turns" class="sub-agent-meta">{{ card.turns }} turn{{ card.turns === 1 ? '' : 's' }}</span>
-        <span v-if="card.toolCalls && card.toolCalls.length" class="sub-agent-meta">
-          {{ card.toolCalls.length }} tool call{{ card.toolCalls.length === 1 ? '' : 's' }}
+        <span v-if="card.toolCallCount" class="sub-agent-meta">
+          {{ $t('subAgentPanel.toolCount', { count: card.toolCallCount }) }}
         </span>
         <span class="sub-agent-caret">{{ isExpanded ? '▾' : '▸' }}</span>
       </div>
@@ -74,19 +74,8 @@ export default {
 
       <div v-if="isExpanded" class="sub-agent-body">
         <div v-if="card.text" class="sub-agent-text">{{ card.text }}</div>
-
-        <div v-if="card.toolCalls && card.toolCalls.length" class="sub-agent-tools">
-          <div class="sub-agent-tools-label">Tool calls</div>
-          <ul class="sub-agent-tools-list">
-            <li
-              v-for="tc in card.toolCalls"
-              :key="tc.id"
-              :class="'sub-agent-tool-' + (tc.status || 'running')"
-            >
-              <span class="sub-agent-tool-name">{{ tc.name }}</span>
-              <span class="sub-agent-tool-status">{{ tc.status }}</span>
-            </li>
-          </ul>
+        <div v-if="card.toolCallCount" class="sub-agent-tool-summary">
+          {{ $t('subAgentPanel.toolSummary', { count: card.toolCallCount }) }}
         </div>
       </div>
     </div>

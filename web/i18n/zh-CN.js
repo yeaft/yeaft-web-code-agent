@@ -1144,6 +1144,8 @@ export default {
   'subAgentPanel.running': '运行中',
   'subAgentPanel.completed': '已完成',
   'subAgentPanel.waitingMessages': '等待消息...',
+  'subAgentPanel.toolCount': '{count} 个工具',
+  'subAgentPanel.toolSummary': '已完成 {count} 次工具调用',
   'subAgentPanel.empty': '暂无子代理',
   'subAgentPanel.emptyHint': '当 Claude 委派任务时，子代理会在这里显示',
 
@@ -1437,6 +1439,7 @@ export default {
   'yeaft.sessionStatus.task.subAgentUsage': '{name} 使用了 {tokens} tokens',
   'yeaft.sessionStatus.task.subAgentEvent': '{name}：{text}',
   'yeaft.sessionStatus.task.subAgentUserPrompt': '你：{text}',
+  'yeaft.sessionStatus.task.subAgentToolSummary': '已完成 {count} 次工具调用',
   'yeaft.sessionStatus.task.subAgentError': '{name} 错误：{error}',
   'yeaft.sessionStatus.task.subAgentHitError': '{name} 遇到错误',
   'yeaft.sessionStatus.task.subAgentNoReadableEvents': '暂无可读的 sub-agent 活动。',

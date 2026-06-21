@@ -16,6 +16,7 @@ export default {
           </button>
           <span class="subagent-expanded-slug">{{ activeAgent.slug }}</span>
           <span class="subagent-type-badge">{{ activeAgent.type }}</span>
+          <span v-if="activeAgent.toolCallCount" class="subagent-type-badge">{{ $t('subAgentPanel.toolCount', { count: activeAgent.toolCallCount }) }}</span>
           <span class="subagent-status-dot" :class="{ 'is-running': activeAgent.status === 'running' }"></span>
           <button class="subagent-panel-close" @click="$emit('close')" :aria-label="$t('common.close')">
             <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -26,10 +27,6 @@ export default {
             <div v-for="(msg, idx) in activeMessages" :key="idx"
                  class="subagent-msg" :class="'is-' + msg.type">
               <div v-if="msg.type === 'text'" class="subagent-msg-text markdown-body" v-html="renderMd(msg.content)"></div>
-              <div v-else-if="msg.type === 'tool'" class="subagent-msg-tool">
-                <svg class="subagent-tool-icon" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg>
-                <span class="subagent-tool-text">{{ msg.content }}</span>
-              </div>
             </div>
           </template>
           <div v-else class="subagent-msg-empty">
@@ -63,6 +60,7 @@ export default {
               <span class="subagent-card-icon">&#x1F916;</span>
               <span class="subagent-card-slug">{{ agent.slug }}</span>
               <span class="subagent-type-badge">{{ agent.type }}</span>
+              <span v-if="agent.toolCallCount" class="subagent-type-badge">{{ $t('subAgentPanel.toolCount', { count: agent.toolCallCount }) }}</span>
               <span class="subagent-status-dot" :class="{ 'is-running': agent.status === 'running' }"></span>
             </div>
             <div v-if="getLastMessage(agent)" class="subagent-card-preview">
@@ -128,11 +126,12 @@ export default {
 
     const getLastMessage = (agent) => {
       if (!agent.messages || agent.messages.length === 0) return null;
-      // Find the last text message for preview
+      // Find the last assistant text message for preview. Tool calls are only
+      // summarized as counts, not rendered as messages.
       for (let i = agent.messages.length - 1; i >= 0; i--) {
         if (agent.messages[i].type === 'text') return agent.messages[i];
       }
-      return agent.messages[agent.messages.length - 1];
+      return null;
     };
 
     const truncate = (text, maxLen) => {

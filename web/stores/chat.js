@@ -518,7 +518,7 @@ export const useChatStore = defineStore('chat', {
     // after the message present at first emit (`pending`).
     yeaftReflectionCards: {},
     // PR-M3: sub-agent cards. Keyed by `${conversationId}:${agentId}`.
-    // Each entry: { agentId, agentName, status, text, toolCalls[], turns,
+    // Each entry: { agentId, agentName, status, text, toolCallCount, turns,
     // error, anchorMsgId, anchorOrder, expanded, updatedAt }.
     // Populated by `sub_agent_event` handler — fed by Engine
     // sub-agent event sink → web-bridge.js → yeaft_output.
@@ -983,7 +983,8 @@ export const useChatStore = defineStore('chat', {
       const convSubagents = state.subagents[state.currentConversation];
       if (!convSubagents) return EMPTY_ARRAY;
       const agent = convSubagents[state.activeSubagentId];
-      return agent?.messages || EMPTY_ARRAY;
+      const messages = Array.isArray(agent?.messages) ? agent.messages : EMPTY_ARRAY;
+      return messages.filter((msg) => msg?.type === 'text');
     },
     // 当前选中的后台任务详情（保留接口兼容）
     selectedTaskInfo: () => {
@@ -2019,7 +2020,7 @@ export const useChatStore = defineStore('chat', {
             agentName: payload.agentName || 'sub-agent',
             status: 'running',
             text: '',
-            toolCalls: [],
+            toolCallCount: 0,
             turns: 0,
             error: null,
             expanded: false,
@@ -2046,34 +2047,20 @@ export const useChatStore = defineStore('chat', {
             case 'tool_start':
             case 'tool_use':
             case 'tool_call':
-              next.toolCalls = [
-                ...next.toolCalls,
-                {
-                  id: payload.id || `${agentId}-${next.toolCalls.length}`,
-                  name: payload.name || payload.toolName || 'tool',
-                  status: 'running',
-                },
-              ];
+              next.toolCallCount = Number(next.toolCallCount || 0) + 1;
               break;
             case 'tool_result':
-            case 'tool_end': {
-              const idx = next.toolCalls.findIndex(
-                (t) => t.id === (payload.id || payload.toolUseId),
-              );
-              if (idx >= 0) {
-                const arr = next.toolCalls.slice();
-                arr[idx] = { ...arr[idx], status: payload.isError || payload.error ? 'error' : 'done' };
-                next.toolCalls = arr;
-              }
+            case 'tool_end':
               break;
-            }
-            case 'sub_agent_turn_end':
+            case 'sub_agent_turn_end': {
               next.turns += 1;
-              if (typeof payload.content === 'string') next.text = payload.content;
+              const content = typeof payload.content === 'string' ? payload.content.trim() : '';
+              if (content) next.text = next.text ? `${next.text}\n\n${content}` : content;
               if (next.status !== 'failed' && next.status !== 'closed') {
                 next.status = payload.status || 'idle';
               }
               break;
+            }
             case 'error':
               if (payload.error) {
                 next.error = payload.error.message || String(payload.error);
@@ -3485,7 +3472,8 @@ export const useChatStore = defineStore('chat', {
         parentToolUseId: info.parentToolUseId || null,
         status: 'running',
         startTime: Date.now(),
-        messages: []
+        messages: [],
+        toolCallCount: 0
       };
       // Auto-open panel when first subagent starts for current conversation
       if (conversationId === this.currentConversation && this.activeRightPanel !== 'subagents') {
@@ -3495,7 +3483,12 @@ export const useChatStore = defineStore('chat', {
     appendSubagentMessage(conversationId, subagentId, message) {
       const convSubagents = this.subagents[conversationId];
       if (!convSubagents || !convSubagents[subagentId]) return;
-      convSubagents[subagentId].messages.push(message);
+      const agent = convSubagents[subagentId];
+      if (message?.type === 'tool') {
+        agent.toolCallCount = Number(agent.toolCallCount || 0) + 1;
+        return;
+      }
+      if (message?.type === 'text') agent.messages.push(message);
     },
     completeSubagent(conversationId, subagentId) {
       const convSubagents = this.subagents[conversationId];

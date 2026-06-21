@@ -111,45 +111,7 @@
   color: var(--text-primary, #1f1f1f);
 }
 
-.sub-agent-tools-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-secondary, #6b7280);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 4px;
-}
-
-.sub-agent-tools-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.sub-agent-tools-list li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.sub-agent-tool-summary {
   font-size: 12px;
-}
-
-.sub-agent-tool-name {
-  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  color: var(--text-primary, #1f1f1f);
-}
-
-.sub-agent-tool-status {
-  font-size: 11px;
   color: var(--text-secondary, #6b7280);
-}
-
-.sub-agent-tool-error .sub-agent-tool-status {
-  color: var(--text-warn, #b03a2e);
-}
-
-.sub-agent-tool-done .sub-agent-tool-status {
-  color: #065f46;
 }
