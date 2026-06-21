@@ -32,6 +32,8 @@ function defaultAgentLlmConfig(msg = {}) {
   };
 }
 
+const DEBUG_HISTORY_LIST_LIMIT = 5;
+
 function cloneDebugValue(value) {
   if (value == null) return value;
   try { return JSON.parse(JSON.stringify(value)); }
@@ -296,23 +298,23 @@ export function handleMessage(store, msg) {
         store._fetchYeaftDebugHistoryTimer = null;
       }
       store._yeaftDebugHistoryInFlightKey = null;
-      const loops = hydrateDebugLoopRequests(Array.isArray(msg?.loops) ? msg.loops : []);
-      const turns = Array.isArray(msg?.turns) ? msg.turns : [];
+      const rawTurns = Array.isArray(msg?.turns) ? msg.turns : [];
+      const turns = isDetailFetch ? rawTurns : rawTurns.slice(-DEBUG_HISTORY_LIST_LIMIT);
+      const turnIds = new Set(turns.map(turn => turn?.turnId).filter(Boolean));
+      const rawLoops = hydrateDebugLoopRequests(Array.isArray(msg?.loops) ? msg.loops : []);
+      const loops = isDetailFetch ? rawLoops : rawLoops.filter(loop => !loop?.turnId || turnIds.has(loop.turnId));
       const dreamEvents = Array.isArray(msg?.dreamEvents) ? msg.dreamEvents : [];
-      store.yeaftDebugHistoryHasMore = !!msg?.hasMore;
+      store.yeaftDebugHistoryHasMore = !!msg?.hasMore || (!isDetailFetch && rawTurns.length > turns.length);
       // A single-request detail fetch may return `limit = loopCount`; do not
       // let that shrink the global debug retention window after the index
       // loader deliberately raised it to keep long expanded requests stable.
       if (!msg?.detailTurnId && Number.isFinite(msg?.limit) && msg.limit > 0) {
-        store.yeaftDebugHistoryLimit = msg.limit;
+        store.yeaftDebugHistoryLimit = Math.min(DEBUG_HISTORY_LIST_LIMIT, msg.limit);
       }
-      // Merge into existing in-memory state. Live-streamed turns/loops
-      // (received via `yeaft_output` while the panel was open) win because
-      // they may carry richer in-flight detail (e.g. memoryUsed/Adjust
-      // attached after turn_open). Hydrated rows backfill anything we
-      // never saw. The order is computed as hydrated loops first
-      // (oldest-first per fetchRecentDebugHistory's `.reverse()`), then
-      // any live turn IDs we already had appended at the tail.
+      // Merge detail fetches into existing in-memory state, but treat list
+      // fetches/searches as a bounded replacement window. That keeps the debug
+      // panel from accumulating old request rows after repeated searches while
+      // still letting an explicit expand hydrate one request's full payload.
       if (!store.yeaftDebugTurnsById || typeof store.yeaftDebugTurnsById !== 'object') {
         store.yeaftDebugTurnsById = {};
       }
@@ -327,7 +329,7 @@ export function handleMessage(store, msg) {
       // throughout the codebase — see chat.js:1041 and the Turn shape in
       // yeaftDebugTurnsById's selectors. Reading `turn.id` here would
       // silently drop every hydrated row.
-      const nextTurnsById = { ...store.yeaftDebugTurnsById };
+      const nextTurnsById = isDetailFetch ? { ...store.yeaftDebugTurnsById } : {};
       for (const turn of turns) {
         const tid = turn?.turnId;
         if (!tid) continue;
@@ -369,9 +371,11 @@ export function handleMessage(store, msg) {
         // restore long requests chronologically instead of appending gaps.
         mergedLoops.push(liveByKey.get(key) || hydrated);
       }
-      for (const live of liveLoops) {
-        if (!live || hydratedKeys.has(loopKey(live))) continue;
-        mergedLoops.push(live);
+      if (isDetailFetch) {
+        for (const live of liveLoops) {
+          if (!live || hydratedKeys.has(loopKey(live))) continue;
+          mergedLoops.push(live);
+        }
       }
       store.yeaftDebugLoops = mergedLoops;
       // Rebuild turn order. Index refreshes carry a chronological
@@ -390,9 +394,8 @@ export function handleMessage(store, msg) {
         for (const turn of turns) appendTurnId(turn?.turnId);
       } else {
         for (const turn of turns) appendTurnId(turn?.turnId);
-        for (const tid of store.yeaftDebugTurnOrder) appendTurnId(tid);
       }
-      store.yeaftDebugTurnOrder = mergedOrder;
+      store.yeaftDebugTurnOrder = isDetailFetch ? mergedOrder : mergedOrder.slice(-DEBUG_HISTORY_LIST_LIMIT);
       for (const evt of dreamEvents) {
         if (!evt) continue;
         let scope = null;

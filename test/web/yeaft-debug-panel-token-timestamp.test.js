@@ -195,9 +195,12 @@ describe('YeaftDebugPanel · request history loading model', () => {
   const storeJs = read('web/stores/chat.js');
   const bridge = read('agent/yeaft/web-bridge.js');
 
-  it('loads request indexes first and fetches request details on expansion', () => {
+  it('loads request indexes first, caps the request list to 5, and fetches details on expansion', () => {
+    expect(panel).toContain('const INITIAL_REQUEST_HISTORY_LIMIT = 5');
     expect(panel).toContain('indexOnly: true');
     expect(panel).toContain('detailTurnId: turnId');
+    expect(storeJs).toContain('const DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT = 5');
+    expect(read('web/stores/helpers/messageHandler.js')).toContain('const DEBUG_HISTORY_LIST_LIMIT = 5');
     expect(storeJs).toContain('indexOnly = false, detailTurnId = null');
     expect(storeJs).toContain('payload.indexOnly = true');
     expect(storeJs).toContain('payload.detailTurnId = detailTurnId');
