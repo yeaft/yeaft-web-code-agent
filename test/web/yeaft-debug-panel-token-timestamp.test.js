@@ -221,6 +221,7 @@ describe('YeaftDebugPanel · request history loading model', () => {
     expect(storeJs).toContain('_yeaftDebugHistoryLatestListRequestId');
     expect(handler).toContain('requestId && !isDetailFetch');
     expect(handler).toContain('requestId !== store._yeaftDebugHistoryLatestListRequestId');
+    expect(handler).not.toContain('store._yeaftDebugHistoryLatestListRequestId = null');
     expect(serverRelay).toContain('requestId: msg.requestId');
     expect(serverRelay).toContain('search: msg.search');
   });

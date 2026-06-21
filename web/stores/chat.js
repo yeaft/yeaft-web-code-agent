@@ -1315,9 +1315,6 @@ export const useChatStore = defineStore('chat', {
           this.yeaftDebugHistoryError = 'Debug history is unavailable right now. Try again after the agent reconnects.';
         }
         this._yeaftDebugHistoryInFlightKey = null;
-        if (!isDetailRequest && this._yeaftDebugHistoryLatestListRequestId === requestId) {
-          this._yeaftDebugHistoryLatestListRequestId = null;
-        }
         this._fetchYeaftDebugHistoryTimer = null;
       }, 10_000);
     },

@@ -288,7 +288,7 @@ export function handleMessage(store, msg) {
     case 'yeaft_debug_history': {
       const requestId = typeof msg?.requestId === 'string' ? msg.requestId : '';
       const isDetailFetch = typeof msg?.detailTurnId === 'string' && msg.detailTurnId;
-      if (requestId && !isDetailFetch && store._yeaftDebugHistoryLatestListRequestId && requestId !== store._yeaftDebugHistoryLatestListRequestId) {
+      if (requestId && !isDetailFetch && requestId !== store._yeaftDebugHistoryLatestListRequestId) {
         break;
       }
       if (store._fetchYeaftDebugHistoryTimer) {
@@ -296,9 +296,6 @@ export function handleMessage(store, msg) {
         store._fetchYeaftDebugHistoryTimer = null;
       }
       store._yeaftDebugHistoryInFlightKey = null;
-      if (requestId && !isDetailFetch && store._yeaftDebugHistoryLatestListRequestId === requestId) {
-        store._yeaftDebugHistoryLatestListRequestId = null;
-      }
       const loops = hydrateDebugLoopRequests(Array.isArray(msg?.loops) ? msg.loops : []);
       const turns = Array.isArray(msg?.turns) ? msg.turns : [];
       const dreamEvents = Array.isArray(msg?.dreamEvents) ? msg.dreamEvents : [];
