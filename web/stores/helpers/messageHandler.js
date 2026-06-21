@@ -32,6 +32,81 @@ function defaultAgentLlmConfig(msg = {}) {
   };
 }
 
+function cloneDebugValue(value) {
+  if (value == null) return value;
+  try { return JSON.parse(JSON.stringify(value)); }
+  catch { return value; }
+}
+
+function applyDebugRawRequestDelta(previous, delta) {
+  if (!delta) return previous ?? null;
+  if (Object.prototype.hasOwnProperty.call(delta, 'base')) return cloneDebugValue(delta.base) ?? null;
+  if (Object.prototype.hasOwnProperty.call(delta, 'replacement')) return cloneDebugValue(delta.replacement) ?? null;
+  const next = previous && typeof previous === 'object' && !Array.isArray(previous)
+    ? cloneDebugValue(previous)
+    : {};
+  if (delta.set && typeof delta.set === 'object') {
+    for (const [key, value] of Object.entries(delta.set)) next[key] = cloneDebugValue(value);
+  }
+  if (delta.body && typeof delta.body === 'object') {
+    const body = next.body && typeof next.body === 'object' && !Array.isArray(next.body) ? { ...next.body } : {};
+    for (const [key, value] of Object.entries(delta.body)) {
+      if (key === 'messages' || key === 'messagesFrom' || key === 'messagesAppend') continue;
+      body[key] = cloneDebugValue(value);
+    }
+    if (Array.isArray(delta.body.messages)) {
+      body.messages = cloneDebugValue(delta.body.messages) || [];
+    } else if (Array.isArray(delta.body.messagesAppend)) {
+      const from = Number.isFinite(Number(delta.body.messagesFrom)) ? Number(delta.body.messagesFrom) : (Array.isArray(body.messages) ? body.messages.length : 0);
+      body.messages = (Array.isArray(body.messages) ? body.messages.slice(0, from) : []).concat(cloneDebugValue(delta.body.messagesAppend) || []);
+    }
+    next.body = body;
+  }
+  return next;
+}
+
+function applyDebugRequestDelta(previous, delta = {}) {
+  const base = previous || { systemPrompt: '', messages: [], rawRequest: null };
+  const next = {
+    systemPrompt: base.systemPrompt || '',
+    messages: Array.isArray(base.messages) ? [...base.messages] : [],
+    rawRequest: base.rawRequest ?? null,
+  };
+  if (delta?.base) {
+    return {
+      systemPrompt: delta.systemPrompt || '',
+      messages: Array.isArray(delta.messages) ? delta.messages : [],
+      rawRequest: base.rawRequest ?? null,
+    };
+  }
+  if (typeof delta?.systemPrompt === 'string') next.systemPrompt = delta.systemPrompt;
+  if (Array.isArray(delta?.messages)) {
+    next.messages = delta.messages;
+  } else if (Array.isArray(delta?.messagesAppend)) {
+    const from = Number.isFinite(Number(delta.messagesFrom)) ? Number(delta.messagesFrom) : next.messages.length;
+    next.messages = next.messages.slice(0, from).concat(delta.messagesAppend);
+  }
+  if (Object.prototype.hasOwnProperty.call(delta || {}, 'rawRequestDelta')) next.rawRequest = applyDebugRawRequestDelta(next.rawRequest, delta.rawRequestDelta);
+  return next;
+}
+
+function hydrateDebugLoopRequests(loops = []) {
+  const snapshotsByTurn = new Map();
+  return loops.map((loop) => {
+    if (!loop || !loop.requestDelta) return loop;
+    const turnId = loop.turnId || '__unknown__';
+    const previous = snapshotsByTurn.get(turnId) || loop.requestBase || null;
+    const snapshot = applyDebugRequestDelta(previous, loop.requestDelta);
+    snapshotsByTurn.set(turnId, snapshot);
+    return {
+      ...loop,
+      systemPrompt: typeof loop.systemPrompt === 'string' && loop.systemPrompt ? loop.systemPrompt : snapshot.systemPrompt,
+      messages: Array.isArray(loop.messages) && loop.messages.length > 0 ? loop.messages : snapshot.messages,
+      rawRequest: loop.rawRequest ?? snapshot.rawRequest,
+    };
+  });
+}
+
 export function handleMessage(store, msg) {
   const authStore = useAuthStore();
 
@@ -205,20 +280,18 @@ export function handleMessage(store, msg) {
       break;
     }
 
-    // fix-vp-multi-thread (bug 4): hydrate the Yeaft debug panel from the
-    // persistent SQLite trace. The agent replies via a bare top-level
-    // `yeaft_debug_history` message (mirrors `yeaft_tool_stats` shape —
-    // NOT a `yeaft_output` envelope), so we route it from the top-level
-    // switch here. Without this, the debug panel only shows turns that
-    // happened after the panel was opened — every previous turn is
-    // invisible even though `~/.yeaft/cache/yeaft-debug-trace.sqlite`
-    // has them.
+    // Hydrate the Yeaft debug panel from the persistent file-backed trace.
+    // The agent replies via a bare top-level `yeaft_debug_history` message
+    // (mirrors `yeaft_tool_stats` shape — NOT a `yeaft_output` envelope), so
+    // we route it from the top-level switch here. Without this, the debug
+    // panel only shows turns that happened after the panel was opened.
     case 'yeaft_debug_history': {
       if (store._fetchYeaftDebugHistoryTimer) {
         clearTimeout(store._fetchYeaftDebugHistoryTimer);
         store._fetchYeaftDebugHistoryTimer = null;
       }
-      const loops = Array.isArray(msg?.loops) ? msg.loops : [];
+      store._yeaftDebugHistoryInFlightKey = null;
+      const loops = hydrateDebugLoopRequests(Array.isArray(msg?.loops) ? msg.loops : []);
       const turns = Array.isArray(msg?.turns) ? msg.turns : [];
       const dreamEvents = Array.isArray(msg?.dreamEvents) ? msg.dreamEvents : [];
       store.yeaftDebugHistoryHasMore = !!msg?.hasMore;
@@ -257,7 +330,7 @@ export function handleMessage(store, msg) {
         if (existing) {
           // Index rows are lightweight placeholders. Detail rows carry full
           // request data and should replace placeholders, while preserving
-          // live-only fields that SQLite does not store.
+          // live-only fields that persisted debug history does not store.
           const merged = turn?.detailsLoaded
             ? { ...existing, ...turn }
             : { ...turn, ...existing };
@@ -286,7 +359,7 @@ export function handleMessage(store, msg) {
         const key = loopKey(hydrated);
         hydratedKeys.add(key);
         // If a live loop exists for the same logical row, keep it; it may
-        // carry richer in-flight fields than the SQLite snapshot. The
+        // carry richer in-flight fields than the persisted snapshot. The
         // hydrated order still drives the final ordering, so detail fetches
         // restore long requests chronologically instead of appending gaps.
         mergedLoops.push(liveByKey.get(key) || hydrated);

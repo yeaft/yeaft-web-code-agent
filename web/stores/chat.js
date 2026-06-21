@@ -143,26 +143,13 @@ function resolveYeaftConversationIdForSession(state, sessionId = null) {
 // feat-6af5f9f1 PR C: turnMatchesSearch lives in helpers/debug-search.js
 // so it can be unit-tested without the Pinia browser globals.
 
-// fix-debug-copy-no-truncate: bound debug retention by COUNT, not by
-// per-payload truncation. The adapter / engine pass through verbatim
-// what was sent to the LLM (so "copy request" matches reality); we cap
-// growth here by dropping the oldest loop entries — and the orphaned
-// turn records that no surviving loop references — once we exceed
-// MAX_YEAFT_DEBUG_LOOPS. This replaces the old per-payload mutilation
-// path that lied about what the model actually saw.
-//
-// Why 50, not 200 / 1000:
-//   • per-loop worst case ≈ 1 MiB raw SSE body (large tool output)
-//   • 50 loops ≈ 50 MiB per tab — survivable, won't surprise the GC
-//   • covers ~10 user turns at ~5 loops each, which is ~95% of debug
-//     workflows (you almost never scroll back further than that)
-// Memory cost is roughly linear in this number — bump cautiously.
-// NOTE: this is a count-based bound, not a byte-based one. A pathological
-// single loop (e.g. a 100 MiB tool dump kept verbatim) is *not* protected
-// by this cap; the design accepts that trade-off because the alternative
-// (silently truncating payloads) is what this PR is removing.
-const MAX_YEAFT_DEBUG_LOOPS = 50;
-const DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT = 50;
+// Debug history is now request-bounded on disk: the agent keeps the newest
+// 10 requests per Session. A single request can legitimately run 100-200
+// loops, so the live in-memory loop cap must not be smaller than that or the
+// panel will miss loops while the request is still streaming. 2000 covers the
+// worst expected 10-request window while staying finite.
+const MAX_YEAFT_DEBUG_LOOPS = 2000;
+const DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT = 10;
 
 // PR feat-dream-debug-panel-full: per-scope ring buffer cap for dream
 // events. Bounds the yeaftDreamEvents map so long-running sessions
@@ -1306,7 +1293,18 @@ export const useChatStore = defineStore('chat', {
      */
     loadYeaftDebugHistory({ groupId, limit, dreamLimit, indexOnly = false, detailTurnId = null } = {}) {
       if (!this.currentAgent) return;
-      const requestedLimit = Number.isFinite(limit) && limit > 0 ? limit : this.yeaftDebugHistoryLimit || DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT;
+      const rawLimit = Number.isFinite(limit) && limit > 0 ? limit : this.yeaftDebugHistoryLimit || DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT;
+      const requestedLimit = Math.max(1, Math.min(DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT, rawLimit));
+      const requestKey = JSON.stringify({
+        agentId: this.currentAgent,
+        groupId: groupId || null,
+        limit: requestedLimit,
+        dreamLimit: Number.isFinite(dreamLimit) && dreamLimit > 0 ? dreamLimit : 5,
+        indexOnly: !!indexOnly,
+        detailTurnId: detailTurnId || null,
+      });
+      if (this._yeaftDebugHistoryInFlightKey === requestKey) return;
+      this._yeaftDebugHistoryInFlightKey = requestKey;
       this.yeaftDebugHistoryLimit = requestedLimit;
       this.yeaftDebugHistoryLoading = true;
       this.yeaftDebugHistoryError = null;
@@ -1326,6 +1324,7 @@ export const useChatStore = defineStore('chat', {
           this.yeaftDebugHistoryLoading = false;
           this.yeaftDebugHistoryError = 'Debug history is unavailable right now. Try again after the agent reconnects.';
         }
+        this._yeaftDebugHistoryInFlightKey = null;
         this._fetchYeaftDebugHistoryTimer = null;
       }, 10_000);
     },

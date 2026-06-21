@@ -632,10 +632,10 @@ export async function handleAgentOutput(agentId, agent, msg) {
     }
 
     case 'yeaft_debug_history':
-      // fix-vp-multi-thread (bug 4): relay the persistent SQLite trace
-      // snapshot from the agent to the web client that requested it via
-      // `yeaft_fetch_debug_history`. Without this case the agent's
-      // bare-message reply is dropped here and the UI never hydrates.
+      // Relay the file-backed debug trace snapshot from the agent to the web
+      // client that requested it via `yeaft_fetch_debug_history`. Keep the
+      // paging/detail flags intact; otherwise the store cannot distinguish a
+      // bounded index refresh from a single-request detail hydration.
       for (const [, c] of webClients) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
           await sendToWebClient(c, {
@@ -645,6 +645,10 @@ export async function handleAgentOutput(agentId, agent, msg) {
             dreamEvents: Array.isArray(msg.dreamEvents) ? msg.dreamEvents : [],
             ...(msg.sessionId != null ? { sessionId: msg.sessionId } : {}),
             ...(msg.threadId != null ? { threadId: msg.threadId } : {}),
+            ...(msg.hasMore != null ? { hasMore: !!msg.hasMore } : {}),
+            ...(msg.limit != null ? { limit: msg.limit } : {}),
+            ...(msg.indexOnly != null ? { indexOnly: !!msg.indexOnly } : {}),
+            ...(msg.detailTurnId != null ? { detailTurnId: msg.detailTurnId } : {}),
             ...(msg.error != null ? { error: msg.error } : {}),
           });
         }

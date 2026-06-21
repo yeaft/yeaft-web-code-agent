@@ -218,26 +218,18 @@ export async function loadSession(options = {}) {
   }
 
   // ─── 3. Create trajectory trace ─────────────────────────
-  // feat-always-on-trajectory-store: the trace is no longer gated on
-  // config.debug. It is a TRAJECTORY STORE: every turn's full
-  // (system_prompt, messages, tool_calls, tool_results, response, usage)
-  // is persisted to ~/.yeaft/debug.db so it can serve two purposes:
-  //   1. Debug panel hydration — user opens "请求日志" and sees prior turns.
-  //   2. SFT / RL training data — scripts can later dump JSONL trajectories.
-  // Cost is negligible (one insert per turn, WAL mode), and the data only
-  // accumulates while the user actually uses the agent. The previous gate
-  // silently discarded every turn unless the user had set debug:true in
-  // ~/.yeaft/config.json, which nobody ever did — wasting the asset.
+  // Always-on request trace for the Debug panel. It is file-backed, not
+  // SQLite-backed: each request writes one bounded JSON file under
+  // `<yeaftDir>/debug/` (session traces are nested under
+  // `<yeaftDir>/sessions/<sessionId>/debug/requests/`). A request file stores one
+  // base request snapshot plus per-loop deltas, so 100-200 loop requests do
+  // not become hundreds of tiny files or repeated cumulative payloads.
   const trace = createTrace({
     enabled: true,
-    dbPath: join(yeaftDir, 'debug.db'),
+    dirPath: yeaftDir,
   });
-  // Bound disk growth: prune trajectories older than 10 days on session load.
-  // Cheap (indexed DELETE + incremental_vacuum), runs once per process start,
-  // not per turn. The always-on store stamps every turn with the *cumulative*
-  // request/response (each long-session row is ~MB), so without a tight TTL the
-  // file balloons — a real deployment hit 5GB in 15 days. 10 days keeps enough
-  // history for debug-panel replay while capping the steady-state footprint.
+  // Hard cap debug history to the most recent 10 requests per Session. Trace
+  // failures are best-effort and must never stop the agent loop.
   try { trace.cleanup?.(10); } catch (err) {
     console.warn('[Yeaft] trace.cleanup failed:', err?.message || err);
   }

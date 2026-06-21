@@ -7,7 +7,7 @@
  *
  * Features:
  *   --dry-run "prompt"   — Assemble system prompt + messages, don't call LLM
- *   --trace stats|recent|search <keyword>|tools|compact  — Query/maintain debug.db
+ *   --trace stats|recent|search <keyword>|tools|compact  — Query/maintain debug trace files
  *   -i / --interactive   — REPL mode with / commands
  *   <prompt>             — One-shot query (Phase 1: engine.query)
  *   --skip-mcp           — Skip MCP server connections (faster startup)
@@ -117,12 +117,12 @@ function parseArgs(argv) {
 // ─── Trace query handler ───────────────────────────────────────
 
 function handleTraceQuery(args, config) {
-  const dbPath = join(config.dir, 'debug.db');
+  const traceDir = config.dir;
   let trace;
   try {
-    trace = new DebugTrace(dbPath);
+    trace = new DebugTrace(traceDir);
   } catch (e) {
-    throw new Error(`Cannot open debug database at ${dbPath}: ${e.message}`);
+    throw new Error(`Cannot open debug trace store at ${traceDir}: ${e.message}`);
   }
 
   try {
@@ -133,7 +133,7 @@ function handleTraceQuery(args, config) {
         console.log(`  Turns:    ${s.turnCount}`);
         console.log(`  Tools:    ${s.toolCount}`);
         console.log(`  Events:   ${s.eventCount}`);
-        console.log(`  DB Size:  ${(s.dbSizeBytes / 1024).toFixed(1)} KB`);
+        console.log(`  Disk:     ${(s.dbSizeBytes / 1024).toFixed(1)} KB`);
         break;
       }
       case 'recent': {
@@ -175,8 +175,8 @@ function handleTraceQuery(args, config) {
       }
       case 'compact': {
         const s = trace.stats();
-        console.log(`Compacting debug database (${(s.dbSizeBytes / 1048576).toFixed(1)} MB, ${s.turnCount} turns)...`);
-        console.log('This rebuilds the file and may take a while on a large DB. Do not interrupt.');
+        console.log(`Compacting debug trace files (${(s.dbSizeBytes / 1048576).toFixed(1)} MB, ${s.turnCount} turns)...`);
+        console.log('This prunes old request folders and may take a moment. Do not interrupt.');
         const { before, after } = trace.compact();
         const saved = Math.max(0, before - after);
         console.log(`Done. ${(before / 1048576).toFixed(1)} MB → ${(after / 1048576).toFixed(1)} MB (reclaimed ${(saved / 1048576).toFixed(1)} MB).`);

@@ -4452,7 +4452,7 @@ export async function handleYeaftFetchToolStats(_msg = {}) {
 }
 
 /**
- * Hydrate the YeaftDebugPanel from the persistent SQLite trace. The
+ * Hydrate the YeaftDebugPanel from the persistent file-backed trace. The
  * panel state (`yeaftDebugLoops` / `yeaftDebugTurnsById`) is otherwise
  * built ONLY from in-flight `loop` / `turn_open` events on the wire,
  * so a panel opened after a turn has finished sees nothing for that
@@ -4460,7 +4460,7 @@ export async function handleYeaftFetchToolStats(_msg = {}) {
  * splices into place.
  *
  * Inputs (all optional):
- *   - `limit`        — legacy recent-detail loop cap; ignored by index-only
+ *   - `limit`        — request cap; bounded by the file trace store
  *   - `indexOnly`    — list request summaries without loop/detail payloads
  *   - `detailTurnId` — fetch full loops/tools for one request
  *   - `sessionId`    — narrow by Session
@@ -4473,7 +4473,7 @@ export async function handleYeaftFetchToolStats(_msg = {}) {
  * snapshot so the panel renders a placeholder instead of spinning.
  */
 export async function handleYeaftFetchDebugHistory(msg = {}) {
-  const limit = Number.isFinite(msg?.limit) ? Number(msg.limit) : 100;
+  const limit = Number.isFinite(msg?.limit) ? Number(msg.limit) : 10;
   const dreamLimit = Number.isFinite(msg?.dreamLimit) ? Number(msg.dreamLimit) : 5;
   const sessionId = typeof msg?.sessionId === 'string' && msg.sessionId ? msg.sessionId : null;
   const threadId = typeof msg?.threadId === 'string' && msg.threadId ? msg.threadId : null;
