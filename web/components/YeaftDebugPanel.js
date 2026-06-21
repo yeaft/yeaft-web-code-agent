@@ -334,9 +334,39 @@ export default {
       this.expandedTurns = { ...this.expandedTurns, [turnId]: willExpand };
       if (willExpand) this.ensureRequestDetailLoaded(turnId);
     },
+    debugLoopsForTurn(turnId) {
+      const loops = Array.isArray(this.store?.yeaftDebugLoops) ? this.store.yeaftDebugLoops : [];
+      return loops.filter(loop => loop && loop.turnId === turnId);
+    },
+    debugTurnNeedsDetailLoad(turn) {
+      if (!turn || !turn.turnId) return false;
+      if (!turn.detailsLoaded) return true;
+
+      const loops = this.debugLoopsForTurn(turn.turnId);
+      const expectedCount = Math.max(0, Number(turn.loopCount || 0));
+      const seen = new Set();
+      for (const loop of loops) {
+        const n = Number(loop?.loopNumber || 0);
+        if (Number.isFinite(n) && n > 0) seen.add(n);
+      }
+      const maxSeen = seen.size > 0 ? Math.max(...seen) : 0;
+
+      // Live websocket events are best-effort for retry/fallback attempts.
+      // A live Turn can therefore be marked detailsLoaded while still showing
+      // Loop 1, 3, 4... with Loop 2 only present in the file-backed trace.
+      // Expansion is the user's explicit request for detail, so backfill from
+      // the agent whenever the loop sequence or turn summary proves a gap.
+      if (maxSeen > seen.size) return true;
+      if (expectedCount > loops.length) return true;
+      for (let n = 1; n <= expectedCount; n++) {
+        if (!seen.has(n)) return true;
+      }
+      return false;
+    },
     ensureRequestDetailLoaded(turnId) {
       const turn = this.store?.yeaftDebugTurnsById?.[turnId];
-      if (!turn || turn.detailsLoaded || !this.store || typeof this.store.loadYeaftDebugHistory !== 'function') return;
+      if (!turn || !this.store || typeof this.store.loadYeaftDebugHistory !== 'function') return;
+      if (!this.debugTurnNeedsDetailLoad(turn)) return;
       this.store.loadYeaftDebugHistory({
         limit: INITIAL_REQUEST_HISTORY_LIMIT,
         dreamLimit: 0,
