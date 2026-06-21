@@ -8,6 +8,8 @@ import {
   modelIdsFromProviderModels,
 } from './llm-model-discovery.js';
 
+export const DEFAULT_GITHUB_COPILOT_MODEL = 'gpt-5.5';
+
 const VALID_PROTOCOLS = new Set(['anthropic', 'openai-responses']);
 const VALID_CREDENTIAL_PROVIDERS = new Set(['github-copilot']);
 
@@ -228,6 +230,52 @@ export async function useGitHubCopilot(config, options = {}) {
   else delete next.fastModel;
 
   return { config: next, provider, discovery };
+}
+
+export function hasLocalLlmConfig(config = {}) {
+  const providers = Array.isArray(config.providers) ? config.providers.filter(Boolean) : [];
+  return providers.length > 0 || Boolean(config.primaryModel) || Boolean(config.fastModel);
+}
+
+export function isDefaultSeedLlmConfig(config = {}) {
+  const providers = Array.isArray(config.providers) ? config.providers.filter(Boolean) : [];
+  if (providers.length !== 1) return false;
+  const provider = providers[0];
+  return provider?.name === 'my-proxy'
+    && provider?.baseUrl === 'http://localhost:6628/v1'
+    && provider?.apiKey === 'proxy'
+    && typeof config.primaryModel === 'string'
+    && config.primaryModel.startsWith('my-proxy/');
+}
+
+export async function tryAutoConfigureGitHubCopilot(configPath = getDefaultYeaftConfigPath(), options = {}) {
+  let current;
+  try {
+    current = readLocalLlmConfig(configPath);
+  } catch (error) {
+    return { configured: false, reason: 'invalid-config', error, config: null };
+  }
+
+  const allowConfigured = Boolean(options.allowConfigured) || isDefaultSeedLlmConfig(current);
+  if (!allowConfigured && hasLocalLlmConfig(current)) {
+    return { configured: false, reason: 'already-configured', config: current };
+  }
+
+  try {
+    const result = await useGitHubCopilot(current, {
+      ...options,
+      model: options.model || DEFAULT_GITHUB_COPILOT_MODEL,
+    });
+    writeLocalLlmConfig(result.config, configPath);
+    return { configured: true, reason: 'configured', ...result };
+  } catch (error) {
+    return {
+      configured: false,
+      reason: error?.code === 'COPILOT_CREDENTIAL_MISSING' ? 'credential-missing' : 'unavailable',
+      error,
+      config: current,
+    };
+  }
 }
 
 

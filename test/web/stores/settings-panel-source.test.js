@@ -109,14 +109,14 @@ describe('Settings panel source', () => {
     expect(enSource).toContain("'settings.security.agentSetupCommands': 'Agent setup commands'");
     expect(enSource).toContain("'settings.security.agentCmdInstall': 'Install Agent'");
     expect(enSource).toContain("'settings.security.agentCmdService': 'Run Agent server'");
-    expect(enSource).toContain("'settings.security.agentCmdLlm': 'Use Copilot'");
+    expect(enSource).toContain("'settings.security.agentCmdLlm': 'Manual Copilot fallback'");
     expect(enSource).not.toContain('settings.llm.agentInstallCommands');
     expect(enSource).not.toContain('settings.llm.agentInstallCommand');
     expect(enSource).not.toContain('settings.llm.copilotUseLabel');
     expect(zhSource).toContain("'settings.security.agentSetupCommands': 'Agent 接入命令'");
     expect(zhSource).toContain("'settings.security.agentCmdInstall': '安装 Agent'");
     expect(zhSource).toContain("'settings.security.agentCmdService': '运行 Agent server'");
-    expect(zhSource).toContain("'settings.security.agentCmdLlm': '使用 Copilot'");
+    expect(zhSource).toContain("'settings.security.agentCmdLlm': 'Copilot 手动兜底'");
     expect(zhSource).not.toContain('settings.llm.agentInstallCommands');
     expect(zhSource).not.toContain('settings.llm.agentInstallCommand');
     expect(zhSource).not.toContain('settings.llm.copilotUseLabel');

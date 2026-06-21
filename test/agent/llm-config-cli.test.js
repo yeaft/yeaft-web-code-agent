@@ -5,9 +5,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   addOrUpdateProvider,
   formatLlmConfig,
+  hasLocalLlmConfig,
+  isDefaultSeedLlmConfig,
   readLocalLlmConfig,
   removeProvider,
   setLocalModels,
+  tryAutoConfigureGitHubCopilot,
   useGitHubCopilot,
   useOpenAICompatible,
   writeLocalLlmConfig,
@@ -84,6 +87,121 @@ describe('yeaft-agent local LLM config helpers', () => {
     const allowed = await useGitHubCopilot({}, { model: 'missing-model', allowUnknownModel: true, ...discovery });
     expect(allowed.config.primaryModel).toBe('github-copilot/missing-model');
     expect(allowed.provider.models).toBeUndefined();
+  });
+
+  it('auto-configures GitHub Copilot with gpt-5.5 when a credential is already available', async () => {
+    const path = configPath();
+    writeLocalLlmConfig({ language: 'zh' }, path);
+
+    const result = await tryAutoConfigureGitHubCopilot(path, {
+      getTokenFn: async () => ({ token: 'copilot-token' }),
+      fetchFn: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ data: [{ id: 'gpt-5.5' }] }),
+      }),
+    });
+
+    expect(result.configured).toBe(true);
+    const saved = readLocalLlmConfig(path);
+    expect(saved.language).toBe('zh');
+    expect(saved.primaryModel).toBe('github-copilot/gpt-5.5');
+    expect(saved.fastModel).toBeUndefined();
+    expect(saved.providers).toEqual([
+      expect.objectContaining({
+        name: 'github-copilot',
+        credentialProvider: 'github-copilot',
+        managed: 'github-copilot',
+      }),
+    ]);
+    expect(saved.providers[0].apiKey).toBeUndefined();
+  });
+
+  it('skips GitHub Copilot auto-config when local LLM config already exists', async () => {
+    const path = configPath();
+    writeLocalLlmConfig({
+      providers: [{ name: 'proxy', baseUrl: 'http://proxy/v1', apiKey: 'k', models: ['m'] }],
+      primaryModel: 'proxy/m',
+    }, path);
+
+    const result = await tryAutoConfigureGitHubCopilot(path, {
+      getTokenFn: async () => ({ token: 'copilot-token' }),
+      fetchFn: async () => { throw new Error('should not discover models'); },
+    });
+
+    expect(result).toMatchObject({ configured: false, reason: 'already-configured' });
+    expect(readLocalLlmConfig(path).primaryModel).toBe('proxy/m');
+  });
+
+  it('reports missing Copilot credentials without writing config', async () => {
+    const path = configPath();
+    writeLocalLlmConfig({}, path);
+
+    const result = await tryAutoConfigureGitHubCopilot(path, {
+      getTokenFn: async () => null,
+    });
+
+    expect(result).toMatchObject({ configured: false, reason: 'credential-missing' });
+    expect(readLocalLlmConfig(path)).toEqual({});
+  });
+
+  it('treats invalid config as a non-fatal auto-config skip', async () => {
+    const path = configPath();
+    mkdirSync(join(tmp, '.yeaft'), { recursive: true });
+    writeFileSync(path, '{bad json', 'utf8');
+
+    const result = await tryAutoConfigureGitHubCopilot(path, {
+      getTokenFn: async () => { throw new Error('should not read credentials'); },
+    });
+
+    expect(result.configured).toBe(false);
+    expect(result.reason).toBe('invalid-config');
+    expect(readFileSync(path, 'utf8')).toBe('{bad json');
+  });
+
+  it('allows the generated my-proxy seed config to be replaced during Copilot auto-config', async () => {
+    const path = configPath();
+    writeLocalLlmConfig({
+      providers: [{ name: 'my-proxy', baseUrl: 'http://localhost:6628/v1', apiKey: 'proxy', models: ['gpt-5'] }],
+      primaryModel: 'my-proxy/gpt-5',
+      fastModel: 'my-proxy/gpt-5',
+      debug: false,
+    }, path);
+
+    const result = await tryAutoConfigureGitHubCopilot(path, {
+      getTokenFn: async () => ({ token: 'copilot-token' }),
+      fetchFn: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ data: [{ id: 'gpt-5.5' }] }),
+      }),
+    });
+
+    expect(result.configured).toBe(true);
+    expect(readLocalLlmConfig(path).primaryModel).toBe('github-copilot/gpt-5.5');
+  });
+
+  it('detects whether local LLM config is already present', () => {
+    expect(hasLocalLlmConfig({})).toBe(false);
+    expect(hasLocalLlmConfig({ providers: [] })).toBe(false);
+    expect(hasLocalLlmConfig({ providers: [{ name: 'p' }] })).toBe(true);
+    expect(hasLocalLlmConfig({ primaryModel: 'p/m' })).toBe(true);
+    expect(hasLocalLlmConfig({ fastModel: 'p/f' })).toBe(true);
+  });
+
+  it('detects the generated my-proxy seed config', () => {
+    expect(isDefaultSeedLlmConfig({
+      providers: [{ name: 'my-proxy', baseUrl: 'http://localhost:6628/v1', apiKey: 'proxy', models: ['gpt-5'] }],
+      primaryModel: 'my-proxy/gpt-5',
+    })).toBe(true);
+    expect(isDefaultSeedLlmConfig({
+      providers: [{ name: 'my-proxy', baseUrl: 'http://localhost:6628/v1', apiKey: 'changed', models: ['gpt-5'] }],
+      primaryModel: 'my-proxy/gpt-5',
+    })).toBe(false);
+    expect(isDefaultSeedLlmConfig({
+      providers: [{ name: 'proxy', baseUrl: 'http://localhost:6628/v1', apiKey: 'proxy', models: ['gpt-5'] }],
+      primaryModel: 'proxy/gpt-5',
+    })).toBe(false);
   });
 
 

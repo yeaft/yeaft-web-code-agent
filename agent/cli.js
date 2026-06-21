@@ -41,7 +41,7 @@ const subArgs = args.slice(1);
 const SERVICE_COMMANDS = ['install', 'uninstall', 'start', 'stop', 'restart', 'status', 'logs'];
 
 if (command === 'doctor') {
-  handleDoctorCommand();
+  await handleDoctorCommand();
 } else if (command === 'llm') {
   await handleLlmCommand(subArgs);
 } else if (command === 'upgrade') {
@@ -51,7 +51,7 @@ if (command === 'doctor') {
 } else if (command === '--help' || command === '-h') {
   printHelp();
 } else if (SERVICE_COMMANDS.includes(command)) {
-  handleServiceCommand(command, subArgs);
+  await handleServiceCommand(command, subArgs);
 } else {
   // Normal agent startup — parse flags and set env vars
   parseAndStart(args);
@@ -385,13 +385,13 @@ function parseLlmArgs(args) {
 async function handleServiceCommand(command, args) {
   const service = await import('./service.js');
   switch (command) {
-    case 'install':   service.install(args); break;
-    case 'uninstall': service.uninstall(args); break;
-    case 'start':     service.start(args); break;
-    case 'stop':      service.stop(args); break;
-    case 'restart':   service.restart(args); break;
-    case 'status':    service.status(args); break;
-    case 'logs':      service.logs(args); break;
+    case 'install':   await service.install(args); break;
+    case 'uninstall': await service.uninstall(args); break;
+    case 'start':     await service.start(args); break;
+    case 'stop':      await service.stop(args); break;
+    case 'restart':   await service.restart(args); break;
+    case 'status':    await service.status(args); break;
+    case 'logs':      await service.logs(args); break;
   }
 }
 
