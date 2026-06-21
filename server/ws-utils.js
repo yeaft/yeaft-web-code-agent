@@ -89,6 +89,7 @@ export async function broadcastAgentList() {
         .map(([id, agent]) => ({
           id,
           name: agent.name,
+          instanceId: agent.instanceId || null,
           workDir: agent.workDir,
           online: agent.ws.readyState === WebSocket.OPEN,
           status: agent.status || 'ready',

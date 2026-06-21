@@ -2,14 +2,14 @@ import { assertNodeVersion } from './check-node-version.js';
 assertNodeVersion({ component: '@yeaft/webchat-agent' });
 
 import 'dotenv/config';
-import { platform, homedir } from 'os';
+import { platform } from 'os';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync, chmodSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import ctx from './context.js';
-import { getConfigPath, loadServiceConfig } from './service.js';
+import { DEFAULT_INSTANCE_ID, getDefaultYeaftDir, validateInstanceId, getConfigPath, loadServiceConfig } from './service.js';
 import { loadNodePty } from './terminal.js';
 import { connect } from './connection.js';
 import { loadMcpServers } from './mcp.js';
@@ -60,6 +60,7 @@ function saveConfig(config) {
 }
 
 const fileConfig = loadConfig();
+const INSTANCE_ID = validateInstanceId(process.env.YEAFT_AGENT_INSTANCE || fileConfig.instanceId || DEFAULT_INSTANCE_ID);
 
 // task-fix (5-bugs): the Yeaft web-bridge reads `ctx.CONFIG.yeaftDir`
 // for every group / VP / memory operation. If unset, `path.join(undefined, …)`
@@ -67,7 +68,7 @@ const fileConfig = loadConfig();
 // and the UI surfaces "群组操作失败: …" with a raw node error. Resolve the
 // default (`~/.yeaft`) here and make sure the directory exists before the
 // WebSocket connection goes live, so downstream code can assume a real path.
-const YEAFT_DIR = process.env.YEAFT_DIR || fileConfig.yeaftDir || join(homedir(), '.yeaft');
+const YEAFT_DIR = process.env.YEAFT_DIR || fileConfig.yeaftDir || getDefaultYeaftDir(INSTANCE_ID);
 try {
   if (!existsSync(YEAFT_DIR)) {
     mkdirSync(YEAFT_DIR, { recursive: true });
@@ -78,6 +79,7 @@ try {
 }
 
 const CONFIG = {
+  instanceId: INSTANCE_ID,
   serverUrl: process.env.SERVER_URL || fileConfig.serverUrl,
   agentName: process.env.AGENT_NAME || fileConfig.agentName,
   workDir: process.env.WORK_DIR || fileConfig.workDir || process.cwd(),

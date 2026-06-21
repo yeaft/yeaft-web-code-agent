@@ -98,7 +98,8 @@ describe('SettingsPanel Agent secret behavior', () => {
     });
 
     expect(instance.serverWsUrl).toBe('wss://example.test');
-    expect(instance.agentServiceCommand).toContain('yeaft-agent install --server wss://example.test');
+    expect(instance.agentServiceCommand).toContain('yeaft-agent install --instance dev-user-');
+    expect(instance.agentServiceCommand).toContain('--server wss://example.test');
     expect(instance.agentServiceCommand).toContain('--secret fake-secret-generated');
     expect(instance.agentServiceCommand).toContain('--name dev-user-');
   });

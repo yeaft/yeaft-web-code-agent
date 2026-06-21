@@ -5,12 +5,15 @@ import { startAgentHeartbeat, stopAgentHeartbeat, scheduleReconnect } from './he
 import { handleMessage } from './message-router.js';
 
 export function connect() {
-  // Don't include secret in URL - it will be sent via WebSocket message after connection
-  // 使用 agentName 作为唯一标识（不再使用随机 UUID）
+  // Don't include secret in URL - it will be sent via WebSocket message after connection.
+  // instanceId is the stable local service identity; agentName is display-only.
+  // Old configs without instanceId still use agentName for backward-compatible identity.
+  const instanceId = ctx.CONFIG.instanceId || ctx.CONFIG.agentName;
   const params = new URLSearchParams({
     type: 'agent',
-    id: ctx.CONFIG.agentName,  // 直接用名称作为 ID
+    id: instanceId,
     name: ctx.CONFIG.agentName,
+    instanceId,
     workDir: ctx.CONFIG.workDir,
     capabilities: ctx.agentCapabilities.join(',')
   });

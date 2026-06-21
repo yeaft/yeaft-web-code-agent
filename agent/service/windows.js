@@ -1,17 +1,16 @@
-/**
+/*
  * Service — Windows (pm2) platform implementation
  */
 import { execSync, spawn } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
-import { SERVICE_NAME, getConfigDir, getLogDir, getNodePath, getCliPath } from './config.js';
+import { getConfigDir, getLogDir, getNodePath, getCliPath, getPm2AppName, DEFAULT_INSTANCE_ID } from './config.js';
 
 const WIN_TASK_NAME = 'YeaftAgent';
-const PM2_APP_NAME = 'yeaft-agent';
 
 // Legacy paths for cleanup
-function getWinWrapperPath() { return join(getConfigDir(), 'run.vbs'); }
-function getWinBatPath() { return join(getConfigDir(), 'run.bat'); }
+function getWinWrapperPath(instanceId = DEFAULT_INSTANCE_ID) { return join(getConfigDir(instanceId), 'run.vbs'); }
+function getWinBatPath(instanceId = DEFAULT_INSTANCE_ID) { return join(getConfigDir(instanceId), 'run.bat'); }
 
 function ensurePm2() {
   try {
@@ -22,25 +21,28 @@ function ensurePm2() {
   }
 }
 
-export function getEcosystemPath() {
-  return join(getConfigDir(), 'ecosystem.config.cjs');
+export function getEcosystemPath(instanceId = DEFAULT_INSTANCE_ID) {
+  return join(getConfigDir(instanceId), 'ecosystem.config.cjs');
 }
 
 function generateEcosystem(config) {
   const nodePath = getNodePath();
   const cliPath = getCliPath();
   const cliDir = dirname(cliPath);
-  const logDir = getLogDir();
+  const logDir = getLogDir(config.instanceId);
+  const pm2AppName = getPm2AppName(config.instanceId);
 
   const env = {};
+  if (config.instanceId) env.YEAFT_AGENT_INSTANCE = config.instanceId;
   if (config.serverUrl) env.SERVER_URL = config.serverUrl;
   if (config.agentName) env.AGENT_NAME = config.agentName;
   if (config.agentSecret) env.AGENT_SECRET = config.agentSecret;
   if (config.workDir) env.WORK_DIR = config.workDir;
+  if (config.yeaftDir) env.YEAFT_DIR = config.yeaftDir;
 
   return `module.exports = {
   apps: [{
-    name: '${PM2_APP_NAME}',
+    name: '${pm2AppName}',
     script: '${cliPath.replace(/\\/g, '\\\\')}',
     interpreter: '${nodePath.replace(/\\/g, '\\\\')}',
     cwd: '${cliDir.replace(/\\/g, '\\\\')}',
@@ -61,15 +63,16 @@ function generateEcosystem(config) {
 
 export function winInstall(config) {
   ensurePm2();
-  const logDir = getLogDir();
+  const logDir = getLogDir(config.instanceId);
+  const pm2AppName = getPm2AppName(config.instanceId);
   mkdirSync(logDir, { recursive: true });
 
   // Generate ecosystem config
-  const ecoPath = getEcosystemPath();
+  const ecoPath = getEcosystemPath(config.instanceId);
   writeFileSync(ecoPath, generateEcosystem(config));
 
   // Stop existing instance if any
-  try { execSync(`pm2 delete ${PM2_APP_NAME}`, { stdio: 'pipe' }); } catch {}
+  try { execSync(`pm2 delete ${pm2AppName}`, { stdio: 'pipe' }); } catch {}
 
   // Start with pm2
   execSync(`pm2 start "${ecoPath}"`, { stdio: 'inherit' });
@@ -81,7 +84,7 @@ export function winInstall(config) {
   // pm2-startup doesn't work well on Windows, use Startup folder approach
   const trayScript = join(dirname(getCliPath()), 'scripts', 'agent-tray.ps1');
   const startupDir = join(process.env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
-  const startupBat = join(startupDir, `${PM2_APP_NAME}.bat`);
+  const startupBat = join(startupDir, `${pm2AppName}.bat`);
   // Resurrect pm2 processes + launch tray icon
   let batContent = `@echo off\r\npm2 resurrect\r\n`;
   if (existsSync(trayScript)) {
@@ -96,41 +99,43 @@ export function winInstall(config) {
     }).unref();
   }
 
-  console.log(`\nService installed and started.`);
+  console.log(`\nService installed and started: ${pm2AppName}`);
   console.log(`  Ecosystem: ${ecoPath}`);
   console.log(`  Startup:   ${startupBat}`);
   console.log(`\nManage with:`);
-  console.log(`  yeaft-agent status`);
-  console.log(`  yeaft-agent logs`);
-  console.log(`  yeaft-agent restart`);
-  console.log(`  yeaft-agent uninstall`);
+  console.log(`  yeaft-agent status --instance ${config.instanceId}`);
+  console.log(`  yeaft-agent logs --instance ${config.instanceId}`);
+  console.log(`  yeaft-agent restart --instance ${config.instanceId}`);
+  console.log(`  yeaft-agent uninstall --instance ${config.instanceId}`);
 }
 
-export function winUninstall() {
-  try { execSync(`pm2 delete ${PM2_APP_NAME}`, { stdio: 'pipe' }); } catch {}
+export function winUninstall(instanceId = DEFAULT_INSTANCE_ID) {
+  const pm2AppName = getPm2AppName(instanceId);
+  try { execSync(`pm2 delete ${pm2AppName}`, { stdio: 'pipe' }); } catch {}
   try { execSync('pm2 save', { stdio: 'pipe' }); } catch {}
   // Clean up ecosystem config
-  const ecoPath = getEcosystemPath();
+  const ecoPath = getEcosystemPath(instanceId);
   if (existsSync(ecoPath)) unlinkSync(ecoPath);
   // Clean up Startup bat
-  const startupBat = join(process.env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', `${PM2_APP_NAME}.bat`);
+  const startupBat = join(process.env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', `${pm2AppName}.bat`);
   if (existsSync(startupBat)) unlinkSync(startupBat);
   // Clean up legacy files
-  const vbsPath = getWinWrapperPath();
-  const batPath = getWinBatPath();
+  const vbsPath = getWinWrapperPath(instanceId);
+  const batPath = getWinBatPath(instanceId);
   if (existsSync(vbsPath)) unlinkSync(vbsPath);
   if (existsSync(batPath)) unlinkSync(batPath);
   const startupVbs = join(process.env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', `${WIN_TASK_NAME}.vbs`);
   if (existsSync(startupVbs)) unlinkSync(startupVbs);
-  console.log('Service uninstalled.');
+  console.log(`Service uninstalled: ${pm2AppName}`);
 }
 
-export function winStart() {
+export function winStart(instanceId = DEFAULT_INSTANCE_ID) {
+  const pm2AppName = getPm2AppName(instanceId);
   try {
-    execSync(`pm2 start ${PM2_APP_NAME}`, { stdio: 'inherit' });
+    execSync(`pm2 start ${pm2AppName}`, { stdio: 'inherit' });
   } catch {
     // Try ecosystem file
-    const ecoPath = getEcosystemPath();
+    const ecoPath = getEcosystemPath(instanceId);
     if (existsSync(ecoPath)) {
       execSync(`pm2 start "${ecoPath}"`, { stdio: 'inherit' });
     } else {
@@ -140,17 +145,17 @@ export function winStart() {
   }
 }
 
-export function winStop() {
+export function winStop(instanceId = DEFAULT_INSTANCE_ID) {
   try {
-    execSync(`pm2 stop ${PM2_APP_NAME}`, { stdio: 'inherit' });
+    execSync(`pm2 stop ${getPm2AppName(instanceId)}`, { stdio: 'inherit' });
   } catch {
     console.error('Service not running or not installed.');
   }
 }
 
-export function winRestart() {
+export function winRestart(instanceId = DEFAULT_INSTANCE_ID) {
   try {
-    execSync(`pm2 restart ${PM2_APP_NAME}`, { stdio: 'inherit' });
+    execSync(`pm2 restart ${getPm2AppName(instanceId)}`, { stdio: 'inherit' });
   } catch {
     console.error('Service not running. Use "yeaft-agent start" to start.');
   }
@@ -160,14 +165,15 @@ export function winRestart() {
  * Query pm2 for the current service status.
  * Returns { running: boolean, pid: string|null }.
  */
-export function getWinServiceStatus() {
+export function getWinServiceStatus(instanceId = DEFAULT_INSTANCE_ID) {
+  const pm2AppName = getPm2AppName(instanceId);
   try {
     const output = execSync('pm2 jlist', {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const apps = JSON.parse(output);
-    const app = Array.isArray(apps) && apps.find(a => a.name === 'yeaft-agent');
+    const app = Array.isArray(apps) && apps.find(a => a.name === pm2AppName);
     if (app) {
       const running = app.pm2_env && app.pm2_env.status === 'online';
       const pid = running ? app.pid : null;
@@ -179,22 +185,23 @@ export function getWinServiceStatus() {
   }
 }
 
-export function winStatus() {
+export function winStatus(instanceId = DEFAULT_INSTANCE_ID) {
   try {
-    execSync(`pm2 describe ${PM2_APP_NAME}`, { stdio: 'inherit' });
+    execSync(`pm2 describe ${getPm2AppName(instanceId)}`, { stdio: 'inherit' });
   } catch {
     console.log('Service is not installed.');
   }
 }
 
-export function winLogs() {
-  const child = spawn('pm2', ['logs', PM2_APP_NAME, '--lines', '100'], {
+export function winLogs(instanceId = DEFAULT_INSTANCE_ID) {
+  const pm2AppName = getPm2AppName(instanceId);
+  const child = spawn('pm2', ['logs', pm2AppName, '--lines', '100'], {
     stdio: 'inherit',
     shell: true
   });
   child.on('error', () => {
     // Fallback to reading log file directly
-    const logFile = join(getLogDir(), 'out.log');
+    const logFile = join(getLogDir(instanceId), 'out.log');
     if (existsSync(logFile)) {
       console.log(readFileSync(logFile, 'utf-8'));
     } else {
