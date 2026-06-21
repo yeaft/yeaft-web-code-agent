@@ -1464,6 +1464,7 @@ export default {
   'yeaft.vpTimeline.abort': '中止',
   'yeaft.vpTimeline.edit': '编辑 VP',
   'yeaft.vpTimeline.mention': '点击 @ 该 VP',
+  'yeaft.vpTimeline.expand': '展开任务详情',
 
   // (2026-05-13) 工具使用统计抽屉。
   'yeaft.toolStats.title': '工具使用统计',

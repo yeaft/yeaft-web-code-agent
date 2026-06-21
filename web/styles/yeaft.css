@@ -4184,15 +4184,26 @@
 }
 
 .yeaft-vp-task-summary {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
   min-height: 38px;
-  padding: 5px 4px;
-  border: 0;
+  padding: 4px;
   border-radius: 8px;
+  background: transparent;
+}
+
+.yeaft-vp-task-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
@@ -4200,14 +4211,14 @@
   cursor: pointer;
 }
 
-.yeaft-vp-task-summary:hover,
-.yeaft-vp-task-summary:focus-visible {
+.yeaft-vp-task-toggle:hover,
+.yeaft-vp-task-toggle:focus-visible {
   background: var(--sidebar-hover);
   color: var(--text-primary);
   outline: none;
 }
 
-.yeaft-vp-task-item.is-expanded .yeaft-vp-task-summary {
+.yeaft-vp-task-item.is-expanded .yeaft-vp-task-toggle {
   color: var(--text-primary);
   outline: none;
 }
@@ -4299,48 +4310,77 @@
 }
 
 .yeaft-vp-task-command {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  margin-bottom: 7px;
-  color: var(--text-secondary);
-}
-
-.yeaft-vp-task-command-label {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-muted);
-  font-size: 11px;
-}
-
-.yeaft-vp-task-command code {
-  overflow-wrap: anywhere;
-  color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 11px;
-  line-height: 1.45;
+  line-height: 1.35;
 }
 
 .yeaft-vp-task-cancel {
-  margin: 0 0 8px;
-  padding: 5px 9px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
   background: transparent;
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: 12px;
+  color: var(--text-muted);
   cursor: pointer;
+  opacity: 0;
 }
 
-.yeaft-vp-task-cancel:hover:not(:disabled),
-.yeaft-vp-task-cancel:focus-visible:not(:disabled) {
+.yeaft-vp-task-item.is-running .yeaft-vp-task-cancel {
+  opacity: 0.7;
+}
+
+.yeaft-vp-task-summary:hover .yeaft-vp-task-cancel,
+.yeaft-vp-task-cancel:focus-visible {
+  opacity: 1;
+}
+
+.yeaft-vp-task-cancel:hover:not(:disabled) {
   background: var(--sidebar-hover);
-  color: var(--text-primary);
-  outline: none;
+  color: var(--error);
+}
+
+.yeaft-vp-task-cancel:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: -1px;
 }
 
 .yeaft-vp-task-cancel:disabled {
+  opacity: 0.35;
   cursor: default;
-  opacity: 0.65;
+}
+
+.yeaft-vp-task-chevron-btn {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.yeaft-vp-task-chevron-btn:hover,
+.yeaft-vp-task-chevron-btn:focus-visible {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+  outline: none;
 }
 
 .yeaft-vp-task-detail-line {
