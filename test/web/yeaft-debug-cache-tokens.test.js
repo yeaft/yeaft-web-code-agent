@@ -61,3 +61,57 @@ describe('Yeaft debug request-level token distribution', () => {
     expect(turn.maxLoopTokenBreakdown).toBeTruthy();
   });
 });
+
+
+describe('Yeaft debug request detail loading', () => {
+  it('backfills a live request when the loop sequence has a gap', () => {
+    const ctx = {
+      ...YeaftDebugPanel.methods,
+      store: {
+        yeaftDebugLoops: [
+          { turnId: 'turn-gap', loopNumber: 1 },
+          { turnId: 'turn-gap', loopNumber: 3 },
+          { turnId: 'other-turn', loopNumber: 2 },
+        ],
+      },
+    };
+
+    expect(YeaftDebugPanel.methods.debugTurnNeedsDetailLoad.call(ctx, {
+      turnId: 'turn-gap',
+      detailsLoaded: true,
+      loopCount: 3,
+    })).toBe(true);
+  });
+
+  it('does not refetch a complete detailed request', () => {
+    const ctx = {
+      ...YeaftDebugPanel.methods,
+      store: {
+        yeaftDebugLoops: [
+          { turnId: 'turn-complete', loopNumber: 1 },
+          { turnId: 'turn-complete', loopNumber: 2 },
+          { turnId: 'turn-complete', loopNumber: 3 },
+        ],
+      },
+    };
+
+    expect(YeaftDebugPanel.methods.debugTurnNeedsDetailLoad.call(ctx, {
+      turnId: 'turn-complete',
+      detailsLoaded: true,
+      loopCount: 3,
+    })).toBe(false);
+  });
+
+  it('keeps fetching lightweight index rows until details are loaded', () => {
+    const ctx = {
+      ...YeaftDebugPanel.methods,
+      store: { yeaftDebugLoops: [] },
+    };
+
+    expect(YeaftDebugPanel.methods.debugTurnNeedsDetailLoad.call(ctx, {
+      turnId: 'turn-index-only',
+      detailsLoaded: false,
+      loopCount: 7,
+    })).toBe(true);
+  });
+});
