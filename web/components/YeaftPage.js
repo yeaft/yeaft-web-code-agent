@@ -189,73 +189,68 @@ export default {
           :aria-label="$t('yeaft.onboarding.ariaLabel')"
         >
           <div class="yeaft-onboarding-shell">
-            <div class="yeaft-onboarding-eyebrow">{{ $t('yeaft.onboarding.eyebrow') }}</div>
-            <h1 class="yeaft-onboarding-title">{{ $t('yeaft.onboarding.title') }}</h1>
-            <p class="yeaft-onboarding-subtitle">{{ $t('yeaft.onboarding.subtitle') }}</p>
-
-            <div class="yeaft-onboarding-actions">
-              <button type="button" class="btn-primary yeaft-onboarding-primary" @click="openSessionCreate">
-                {{ $t('yeaft.onboarding.createSession') }}
-              </button>
-              <button type="button" class="btn-secondary" @click="openLlmConfig">
-                {{ $t('yeaft.onboarding.configureLlm') }}
-              </button>
+            <div class="yeaft-onboarding-copy-block">
+              <div class="yeaft-onboarding-eyebrow">{{ $t('yeaft.onboarding.eyebrow') }}</div>
+              <h1 class="yeaft-onboarding-title">{{ $t('yeaft.onboarding.title') }}</h1>
+              <p class="yeaft-onboarding-subtitle">{{ $t('yeaft.onboarding.subtitle') }}</p>
+              <p v-if="agentSecretLoading" class="yeaft-onboarding-note">{{ $t('yeaft.onboarding.secretLoading') }}</p>
+              <p v-else-if="agentSecretError" class="yeaft-onboarding-note is-error">{{ agentSecretError }}</p>
+              <div class="yeaft-onboarding-actions">
+                <button type="button" class="btn-primary yeaft-onboarding-primary" @click="openSessionCreate">
+                  {{ $t('yeaft.onboarding.createSession') }}
+                </button>
+                <button type="button" class="btn-secondary" @click="openLlmConfig">
+                  {{ $t('yeaft.onboarding.configureLlm') }}
+                </button>
+              </div>
             </div>
 
-            <div class="yeaft-onboarding-steps" role="list">
-              <article class="yeaft-onboarding-card" role="listitem">
-                <div class="yeaft-onboarding-step-index">1</div>
-                <div class="yeaft-onboarding-card-body">
-                  <h2>{{ $t('yeaft.onboarding.installTitle') }}</h2>
-                  <p>{{ $t('yeaft.onboarding.installDesc') }}</p>
-                  <div class="yeaft-onboarding-command">
-                    <code>{{ installAgentCommand }}</code>
-                    <button type="button" class="yeaft-onboarding-copy" @click="copyOnboardingCommand('install', installAgentCommand)">
-                      {{ copiedOnboardingCommand === 'install' ? $t('common.copied') : $t('common.copy') }}
-                    </button>
+            <div class="yeaft-onboarding-terminal" role="list">
+              <article class="yeaft-onboarding-step" role="listitem">
+                <div class="yeaft-onboarding-step-head">
+                  <span class="yeaft-onboarding-step-index">1</span>
+                  <div>
+                    <h2>{{ $t('yeaft.onboarding.installTitle') }}</h2>
+                    <p>{{ $t('yeaft.onboarding.installDesc') }}</p>
                   </div>
+                </div>
+                <div class="yeaft-onboarding-command">
+                  <code>{{ installAgentCommand }}</code>
+                  <button type="button" class="yeaft-onboarding-copy" @click="copyOnboardingCommand('install', installAgentCommand)">
+                    {{ copiedOnboardingCommand === 'install' ? $t('common.copied') : $t('common.copy') }}
+                  </button>
                 </div>
               </article>
 
-              <article class="yeaft-onboarding-card" role="listitem">
-                <div class="yeaft-onboarding-step-index">2</div>
-                <div class="yeaft-onboarding-card-body">
-                  <h2>{{ $t('yeaft.onboarding.connectTitle') }}</h2>
-                  <p>{{ $t('yeaft.onboarding.connectDesc') }}</p>
-                  <div class="yeaft-onboarding-command">
-                    <code>{{ connectAgentCommand }}</code>
-                    <button type="button" class="yeaft-onboarding-copy" @click="copyOnboardingCommand('connect', connectAgentCommand)">
-                      {{ copiedOnboardingCommand === 'connect' ? $t('common.copied') : $t('common.copy') }}
-                    </button>
+              <article class="yeaft-onboarding-step" role="listitem">
+                <div class="yeaft-onboarding-step-head">
+                  <span class="yeaft-onboarding-step-index">2</span>
+                  <div>
+                    <h2>{{ $t('yeaft.onboarding.connectTitle') }}</h2>
+                    <p>{{ $t('yeaft.onboarding.connectDesc') }}</p>
                   </div>
+                </div>
+                <div class="yeaft-onboarding-command">
+                  <code>{{ connectAgentCommand }}</code>
+                  <button type="button" class="yeaft-onboarding-copy" :disabled="!agentSecret" @click="copyOnboardingCommand('connect', connectAgentCommand)">
+                    {{ copiedOnboardingCommand === 'connect' ? $t('common.copied') : $t('common.copy') }}
+                  </button>
                 </div>
               </article>
 
-              <article class="yeaft-onboarding-card yeaft-onboarding-card-wide" role="listitem">
-                <div class="yeaft-onboarding-step-index">3</div>
-                <div class="yeaft-onboarding-card-body">
-                  <h2>{{ $t('yeaft.onboarding.llmTitle') }}</h2>
-                  <p>{{ $t('yeaft.onboarding.llmDesc') }}</p>
-                  <div class="yeaft-onboarding-provider-grid">
-                    <div class="yeaft-onboarding-provider">
-                      <div class="yeaft-onboarding-provider-title">{{ $t('yeaft.onboarding.copilotTitle') }}</div>
-                      <div class="yeaft-onboarding-command">
-                        <code>{{ copilotCommand }}</code>
-                        <button type="button" class="yeaft-onboarding-copy" @click="copyOnboardingCommand('copilot', copilotCommand)">
-                          {{ copiedOnboardingCommand === 'copilot' ? $t('common.copied') : $t('common.copy') }}
-                        </button>
-                      </div>
-                    </div>
-                    <div class="yeaft-onboarding-provider">
-                      <div class="yeaft-onboarding-provider-title">{{ $t('yeaft.onboarding.apiTitle') }}</div>
-                      <div class="yeaft-onboarding-command">
-                        <code>{{ apiProviderCommand }}</code>
-                        <button type="button" class="yeaft-onboarding-copy" @click="copyOnboardingCommand('api', apiProviderCommand)">
-                          {{ copiedOnboardingCommand === 'api' ? $t('common.copied') : $t('common.copy') }}
-                        </button>
-                      </div>
-                    </div>
+              <article class="yeaft-onboarding-step" role="listitem">
+                <div class="yeaft-onboarding-step-head">
+                  <span class="yeaft-onboarding-step-index">3</span>
+                  <div>
+                    <h2>{{ $t('yeaft.onboarding.llmTitle') }}</h2>
+                    <p>{{ $t('yeaft.onboarding.llmDesc') }}</p>
                   </div>
+                </div>
+                <div class="yeaft-onboarding-command">
+                  <code>{{ copilotCommand }}</code>
+                  <button type="button" class="yeaft-onboarding-copy" @click="copyOnboardingCommand('copilot', copilotCommand)">
+                    {{ copiedOnboardingCommand === 'copilot' ? $t('common.copied') : $t('common.copy') }}
+                  </button>
                 </div>
               </article>
             </div>
@@ -381,6 +376,7 @@ export default {
   `,
   setup() {
     const store = Pinia.useChatStore();
+    const authStore = Pinia.useAuthStore();
     // PR-3: VP roster is the source of truth for timeline ordering and
     // locale-aware naming. Read from the dedicated vp store rather than
     // reaching into the chat store so the helper signature stays clean.
@@ -400,6 +396,9 @@ export default {
     const showLlmConfig = Vue.ref(false);
     const sessionCreateOpen = Vue.ref(false);
     const copiedOnboardingCommand = Vue.ref('');
+    const agentSecret = Vue.ref('');
+    const agentSecretLoading = Vue.ref(false);
+    const agentSecretError = Vue.ref('');
     let copiedOnboardingTimer = null;
     const settingsInitialTab = Vue.ref('vp');
     const settingsInitialEditVpId = Vue.ref(null);
@@ -938,6 +937,33 @@ export default {
       showLlmConfig.value = true;
     };
 
+    const loadAgentSecret = async () => {
+      if (agentSecret.value || agentSecretLoading.value) return;
+      agentSecretLoading.value = true;
+      agentSecretError.value = '';
+      try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (authStore.token) headers.Authorization = `Bearer ${authStore.token}`;
+        const res = await fetch('/api/user/agent-secret', { headers });
+        if (!res.ok) {
+          let message = $t('yeaft.onboarding.secretError');
+          try {
+            const data = await res.json();
+            if (data?.error) message = data.error;
+          } catch (_) {}
+          throw new Error(message);
+        }
+        const data = await res.json();
+        const secret = data?.agentSecret || data?.agent_secret || '';
+        agentSecret.value = String(secret || '').trim();
+        if (!agentSecret.value) throw new Error($t('yeaft.onboarding.secretError'));
+      } catch (err) {
+        agentSecretError.value = err?.message || $t('yeaft.onboarding.secretError');
+      } finally {
+        agentSecretLoading.value = false;
+      }
+    };
+
     const openSessionCreate = () => {
       sessionCreateOpen.value = true;
     };
@@ -950,7 +976,9 @@ export default {
       if (!command) return;
       if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) return;
       try {
-        await navigator.clipboard.writeText(command);
+        const text = typeof command === 'string' ? command : (command?.value || '');
+        if (!text) return;
+        await navigator.clipboard.writeText(text);
         copiedOnboardingCommand.value = key || '';
         if (copiedOnboardingTimer) clearTimeout(copiedOnboardingTimer);
         copiedOnboardingTimer = setTimeout(() => {
@@ -1027,10 +1055,17 @@ export default {
         topbarSession: topbarGroup.value,
       });
     });
+    Vue.watch(showOnboardingGuide, (visible) => {
+      if (visible) loadAgentSecret();
+    }, { immediate: true });
     const installAgentCommand = 'npm install -g @yeaft/webchat-agent';
-    const connectAgentCommand = 'yeaft-agent install --server <your-server-url> --name my-worker --secret <agent-secret>';
-    const copilotCommand = 'gh auth login && yeaft-agent llm list-models github-copilot && yeaft-agent llm use github-copilot --model <model-id>';
-    const apiProviderCommand = 'export OPENAI_KEY=<your-api-key> && yeaft-agent llm use openai-compatible --name openai --base-url https://api.openai.com/v1 --api-key-env OPENAI_KEY --model <model-id>';
+    const connectAgentCommand = Vue.computed(() => {
+      const origin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'http://localhost:3456';
+      const serverUrl = origin.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
+      const secret = agentSecret.value || $t('yeaft.onboarding.secretPending');
+      return `yeaft-agent install --server ${serverUrl} --name yeaft-agent --secret ${secret}`;
+    });
+    const copilotCommand = 'gh auth login && yeaft-agent llm use github-copilot --model gpt-5.5';
     const onInviteOpenLibrary = () => {
       const g = activeGroupForInvite.value;
       if (g) inviteDismissedFor.add(g.id);
@@ -1295,7 +1330,9 @@ export default {
       installAgentCommand,
       connectAgentCommand,
       copilotCommand,
-      apiProviderCommand,
+      agentSecret,
+      agentSecretLoading,
+      agentSecretError,
       // task-fix-group-member-editor → unified group settings modal.
       groupSettingsOpen,
       groupSettingsId,

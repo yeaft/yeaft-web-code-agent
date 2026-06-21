@@ -39,13 +39,14 @@ describe('Yeaft conversation layout', () => {
     expect(source).toContain('openSessionCreate');
     expect(source).toContain('openLlmConfig');
     expect(source).toContain('npm install -g @yeaft/webchat-agent');
-    expect(source).toContain('yeaft-agent llm list-models github-copilot');
-    expect(source).toContain('--model <model-id>');
-    expect(source).not.toContain('--model gpt-5.5');
+    expect(source).toContain("fetch('/api/user/agent-secret'");
+    expect(source).toContain('yeaft-agent install --server ${serverUrl} --name yeaft-agent --secret ${secret}');
+    expect(source).toContain('yeaft-agent llm use github-copilot --model gpt-5.5');
+    expect(source).not.toContain('--model <model-id>');
     expect(source).not.toContain('OPENAI_KEY=sk-...');
 
     expect(css).toContain('.yeaft-onboarding {');
-    expect(css).toContain('.yeaft-onboarding-card {');
+    expect(css).toContain('.yeaft-onboarding-terminal {');
     expect(css).toContain('.yeaft-onboarding-command code {');
     expect(css).not.toMatch(/\.yeaft-onboarding[\s\S]*?#[0-9a-f]{3,6}/i);
     expect(css).not.toMatch(/\.yeaft-onboarding[\s\S]*?rgba\(/i);
