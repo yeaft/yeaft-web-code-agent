@@ -214,7 +214,10 @@ describe('ConversationStore', () => {
 
       const compatStore = new ConversationStore(TEST_DIR);
       expect(compatStore.loadRecent(10).map(m => m.content)).toEqual(['legacy chat']);
-      expect(compatStore.loadRecentBySession('s_fun', 10).map(m => m.content)).toEqual(['legacy session']);
+      // Per-session load paths no longer fall back to the legacy flat dir.
+      // Messages written only under conversation/messages/ are NOT visible
+      // to per-session queries — only chat mode (loadRecent) sees them.
+      expect(compatStore.loadRecentBySession('s_fun', 10).map(m => m.content)).toEqual([]);
     });
 
   describe('appendBatch', () => {
@@ -779,6 +782,90 @@ describe('ConversationStore', () => {
       expect(tool).toBeDefined();
       expect(tool.toolCallId).toBe('call_abc');
       expect(tool.isError).toBe(true);
+    });
+  });
+
+  // ─── Legacy flat dir regression guard: the legacy
+  //     conversation/messages/ and conversation/cold/ flat directories
+  //     are NEVER scanned when loading session history.  All session
+  //     messages now live exclusively in per-session directories, and
+  //     scanning the flat dirs would be a pure-performance regression.
+  describe('legacy dir is never scanned', () => {
+    function writeLegacyMessage(baseDir, seq, sessionId, role, content) {
+      const msgDir = join(baseDir, 'conversation', 'messages');
+      mkdirSync(msgDir, { recursive: true });
+      const id = `m${String(seq).padStart(4, '0')}`;
+      const raw = `---
+id: ${id}
+role: ${role}
+time: 2026-06-21T10:00:00Z
+threadId: main
+sessionId: ${sessionId}
+tokens_est: 5
+---
+
+${content}`;
+      writeFileSync(join(msgDir, `${id}.md`), raw, { encoding: 'utf8', mode: 0o644 });
+    }
+
+    it('never reads from the legacy flat messages/ dir', () => {
+      const store = new ConversationStore(TEST_DIR);
+
+      // Write a message into the legacy flat dir.
+      writeLegacyMessage(TEST_DIR, 1, 'grp_never', 'user', 'legacy msg');
+
+      // Also write the session's own message via append (dedicated dir).
+      store.append({ role: 'user', content: 'dedicated msg', sessionId: 'grp_never' });
+
+      // Legacy message must NOT appear — flat dir is never scanned.
+      const recent = store.loadRecentBySession('grp_never', 50);
+      expect(recent.map(m => m.content)).toEqual(['dedicated msg']);
+
+      const visible = store.loadVisibleBySession('grp_never', null, 10);
+      expect(visible.messages.map(m => m.content)).toEqual(['dedicated msg']);
+
+      const older = store.loadOlderBySession('grp_never', null, 10);
+      expect(older.messages.map(m => m.content)).toEqual(['dedicated msg']);
+
+      const appended = store.append({ role: 'user', content: 'delta', sessionId: 'grp_never' });
+      const seq = Number(appended.id.replace(/^m/, ''));
+      const delta = store.loadAfterSeqByGroup('grp_never', seq - 2);
+      expect(delta.messages.map(m => m.content)).toEqual(['dedicated msg', 'delta']);
+    });
+
+    it('session with no dedicated dirs returns empty (no legacy fallback)', () => {
+      const store = new ConversationStore(TEST_DIR);
+      writeLegacyMessage(TEST_DIR, 1, 'grp_legacy_only', 'user', 'legacy-only msg');
+
+      // No dedicated dir at all → no legacy fallback → empty.
+      const recent = store.loadRecentBySession('grp_legacy_only', 50);
+      expect(recent).toEqual([]);
+
+      const visible = store.loadVisibleBySession('grp_legacy_only', null, 10);
+      expect(visible.messages).toEqual([]);
+
+      const page = store.loadOlderBySession('grp_legacy_only', null, 10);
+      expect(page.messages).toEqual([]);
+    });
+
+    it('loadVisibleBySession respects turn window without legacy interference', () => {
+      const store = new ConversationStore(TEST_DIR);
+      writeLegacyMessage(TEST_DIR, 1, 'grp_window', 'user', 'legacy');
+
+      // Write 3 dedicated user turns.
+      store.append({ role: 'user', content: 'turn0', sessionId: 'grp_window' });
+      store.append({ role: 'assistant', content: 'reply0', sessionId: 'grp_window' });
+      store.append({ role: 'user', content: 'turn1', sessionId: 'grp_window' });
+      store.append({ role: 'assistant', content: 'reply1', sessionId: 'grp_window' });
+      store.append({ role: 'user', content: 'turn2', sessionId: 'grp_window' });
+      store.append({ role: 'assistant', content: 'reply2', sessionId: 'grp_window' });
+
+      // Limit to 2 turns — only turn1 and turn2 should appear.
+      const visible = store.loadVisibleBySession('grp_window', null, 2);
+      expect(visible.messages.map(m => m.content)).toEqual([
+        'turn1', 'reply1', 'turn2', 'reply2',
+      ]);
+      expect(visible.hasMore).toBe(true);
     });
   });
 });

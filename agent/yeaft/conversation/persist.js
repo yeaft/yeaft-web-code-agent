@@ -1030,10 +1030,7 @@ export class ConversationStore {
    */
   loadOlderBySession(sessionId, beforeSeq, turnsLimit = DEFAULT_RECENT_TURNS) {
     if (!sessionId) return { messages: [], oldestSeq: null, hasMore: false };
-    const hot = this.#loadSessionHotMessages(sessionId);
-    const cold = this.#loadSessionColdMessages(sessionId);
-    // Cold ids strictly < hot ids by construction → chronological concat.
-    const all = [...cold, ...hot];
+    const all = this.#loadSessionMessages(sessionId);
     const cutoff = Number.isFinite(beforeSeq) ? beforeSeq : Infinity;
     const prefix = all.filter(m => m && m.sessionId === sessionId
       && !isHiddenConversationRow(m)
@@ -1072,24 +1069,28 @@ export class ConversationStore {
     if (!sessionId || !(turnsLimit > 0)) return { messages: [], oldestSeq: null, hasMore: false };
 
     const cutoff = Number.isFinite(beforeSeq) ? beforeSeq : Infinity;
-    const page = this.#loadVisibleWindowBySession(
-      [
-        ...this.#sessionMessageDirs('messages', sessionId),
-        this.#legacyMsgDir,
-        ...this.#sessionMessageDirs('cold', sessionId),
-        this.#legacyColdDir,
-      ],
-      sessionId,
-      cutoff,
-      turnsLimit
-    );
+    const all = this.#loadSessionMessages(sessionId);
+    const visible = all.filter(m => m && m.sessionId === sessionId
+      && !isHiddenConversationRow(m)
+      && (m.role === 'user' || m.role === 'assistant')
+      && parseSeqFromId(m.id) < cutoff);
 
-    // Visible history is for UI replay, not LLM context. The visible loader
-    // already excludes tool-result rows, so running pairSanitize here can
-    // incorrectly treat tool-using assistant replies as orphaned tool arcs and
-    // drop/trim VP messages. Strip tool-call metadata instead and keep the
-    // user-visible assistant text for the conversation pane.
-    const messages = page.messages.map(m => {
+    if (visible.length === 0) return { messages: [], oldestSeq: null, hasMore: false };
+
+    const sliced = sliceLastNTurns(visible, turnsLimit);
+
+    // Turn-based hasMore: an EARLIER turn boundary was dropped.
+    const oldestSlicedSeq = sliced.length ? parseSeqFromId(sliced[0].id) : NaN;
+    const oldestVisibleSeq = parseSeqFromId(visible[0].id);
+    const hasMore = sliced.length > 0
+      && Number.isFinite(oldestSlicedSeq)
+      && Number.isFinite(oldestVisibleSeq)
+      && oldestSlicedSeq > oldestVisibleSeq;
+
+    // Visible history is for UI replay, not LLM context. Strip tool-call
+    // metadata — don't run pairSanitize (it can incorrectly drop assistant
+    // messages that reference tool calls stripped from the UI).
+    const messages = sliced.map(m => {
       if (m && m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
         const { toolCalls, ...rest } = m;
         return { ...rest, toolSummaryCount: toolCalls.length };
@@ -1101,7 +1102,7 @@ export class ConversationStore {
     return {
       messages,
       oldestSeq: Number.isFinite(oldestSeq) ? oldestSeq : null,
-      hasMore: page.hasMore,
+      hasMore,
     };
   }
 
@@ -1120,9 +1121,7 @@ export class ConversationStore {
     const limit = Number.isFinite(opts.limit) && opts.limit > 0 ? opts.limit : 500;
     const cutoff = Number.isFinite(afterSeq) && afterSeq >= 0 ? afterSeq : null;
     if (cutoff === null) return { messages: [], latestSeq: null };
-    const hot = this.#loadSessionHotMessages(sessionId);
-    const cold = this.#loadSessionColdMessages(sessionId);
-    const all = [...cold, ...hot].sort(compareMessagesBySeq);
+    const all = this.#loadSessionMessages(sessionId);
     const after = all.filter((m) => {
       if (!m || m.sessionId !== sessionId) return false;
       if (isHiddenConversationRow(m)) return false;
@@ -1707,21 +1706,13 @@ export class ConversationStore {
   }
 
   #loadSessionHotMessages(sessionId = null) {
-    return [
-      ...this.#loadFromDir(this.#legacyMsgDir, Infinity).filter(m => m?.sessionId),
-      ...this.#sessionMessageDirs('messages', sessionId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
-    ].sort(compareMessagesBySeq);
-  }
-
-  #loadSessionColdMessages(sessionId = null) {
-    return [
-      ...this.#loadFromDir(this.#legacyColdDir, Infinity).filter(m => m?.sessionId),
-      ...this.#sessionMessageDirs('cold', sessionId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
-    ].sort(compareMessagesBySeq);
+    return this.#sessionMessageDirs('messages', sessionId)
+      .flatMap(dir => this.#loadFromDir(dir, Infinity))
+      .sort(compareMessagesBySeq);
   }
 
   #loadSessionMessages(sessionId = null) {
-    return [...this.#loadSessionColdMessages(sessionId), ...this.#loadSessionHotMessages(sessionId)].sort(compareMessagesBySeq);
+    return this.#loadSessionHotMessages(sessionId);
   }
 
   #loadAllMessages() {
@@ -1746,87 +1737,6 @@ export class ConversationStore {
       }
     }
     return total;
-  }
-
-  #loadVisibleWindowBySession(dirs, sessionId, beforeSeq, turnsLimit) {
-    const candidates = [];
-    const seen = new Set();
-    for (const dir of dirs) {
-      if (!existsSync(dir)) continue;
-      let files = [];
-      try {
-        files = readdirSync(dir);
-      } catch (err) {
-        if (!isPermissionError(err)) throw err;
-        continue;
-      }
-      for (const file of files) {
-        if (!file.endsWith('.md')) continue;
-        const seq = parseSeqFromId(basename(file, '.md'));
-        if (!Number.isFinite(seq) || seq >= beforeSeq) continue;
-        const path = join(dir, file);
-        if (seen.has(path)) continue;
-        seen.add(path);
-        candidates.push({ seq, path });
-      }
-    }
-
-    candidates.sort((a, b) => b.seq - a.seq);
-
-    const selected = [];
-    const pendingBoundaryTail = [];
-    let turnsSeen = 0;
-    let openCanonical = null;
-    let boundaryCanonical = null;
-    let hasMore = false;
-
-    for (const candidate of candidates) {
-      let raw = '';
-      try {
-        raw = readFileSync(candidate.path, 'utf8');
-      } catch (err) {
-        if (!isPermissionError(err)) throw err;
-        continue;
-      }
-      if (!raw.includes(`sessionId: ${sessionId}`)) continue;
-      if (!raw.includes('role: user') && !raw.includes('role: assistant')) continue;
-
-      const parsed = parseMessage(raw);
-      if (!parsed || parsed.sessionId !== sessionId) continue;
-      if (isHiddenConversationRow(parsed)) continue;
-      if (parsed.role !== 'user' && parsed.role !== 'assistant') continue;
-
-      if (boundaryCanonical !== null) {
-        if (parsed.role !== 'user') {
-          pendingBoundaryTail.push(parsed);
-          continue;
-        }
-
-        const canonical = canonicalUserTurnContent(parsed.content);
-        if (canonical !== boundaryCanonical) {
-          hasMore = true;
-          break;
-        }
-
-        if (pendingBoundaryTail.length > 0) {
-          selected.push(...pendingBoundaryTail.splice(0));
-        }
-        selected.push(parsed);
-        continue;
-      }
-
-      selected.push(parsed);
-      if (parsed.role === 'user') {
-        const canonical = canonicalUserTurnContent(parsed.content);
-        if (canonical != null && canonical !== openCanonical) {
-          turnsSeen += 1;
-          openCanonical = canonical;
-          if (turnsSeen === turnsLimit) boundaryCanonical = canonical;
-        }
-      }
-    }
-
-    return { messages: selected.reverse(), hasMore };
   }
 
   // task-314: per-thread sub-directory for forked threads.
