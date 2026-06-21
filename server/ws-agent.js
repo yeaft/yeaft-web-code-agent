@@ -26,13 +26,14 @@ function buildAgentMapKey(ownerId, agentName) {
 export function handleAgentConnection(ws, url) {
   const clientAgentId = url.searchParams.get('id') || randomUUID();
   const agentName = url.searchParams.get('name') || `Agent-${clientAgentId.slice(0, 8)}`;
+  const instanceId = url.searchParams.get('instanceId') || clientAgentId;
   const workDir = url.searchParams.get('workDir') || '';
 
   // In development mode (SKIP_AUTH), register immediately
   if (CONFIG.skipAuth) {
     // Dev mode: no owner isolation, use clientAgentId as-is for backward compat
     const capabilities = (url.searchParams.get('capabilities') || '').split(',').filter(Boolean);
-    completeAgentRegistration(ws, clientAgentId, agentName, workDir, null, capabilities);
+    completeAgentRegistration(ws, clientAgentId, agentName, workDir, null, capabilities, null, null, null, instanceId);
 
     ws.on('message', async (data) => {
       const agent = agents.get(clientAgentId);
@@ -74,6 +75,7 @@ export function handleAgentConnection(ws, url) {
     ws,
     agentId: clientAgentId,
     agentName,
+    instanceId,
     workDir,
     timeout: authTimeout
   });
@@ -103,9 +105,11 @@ export function handleAgentConnection(ws, url) {
 
           const capabilities = msg.capabilities || [];
           const agentVersion = msg.version || null;
-          // Build owner-scoped key to prevent cross-user collision
-          resolvedAgentId = buildAgentMapKey(authResult.userId, pending.agentName);
-          completeAgentRegistration(ws, resolvedAgentId, pending.agentName, pending.workDir, authResult.sessionKey, capabilities, authResult.userId, authResult.username, agentVersion);
+          // Build owner-scoped key to prevent cross-user collision. New agents
+          // identify local service instances separately from display names;
+          // old agents keep using their name as the stable id.
+          resolvedAgentId = buildAgentMapKey(authResult.userId, pending.instanceId || pending.agentId || pending.agentName);
+          completeAgentRegistration(ws, resolvedAgentId, pending.agentName, pending.workDir, authResult.sessionKey, capabilities, authResult.userId, authResult.username, agentVersion, pending.instanceId || pending.agentId || pending.agentName);
         }
       } catch (e) {
         console.error('Failed to parse agent auth message:', e.message);
@@ -164,7 +168,7 @@ function handleAgentDisconnect(agentId, agentName) {
   broadcastAgentList();
 }
 
-function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, capabilities = [], ownerId = null, ownerUsername = null, agentVersion = null) {
+function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, capabilities = [], ownerId = null, ownerUsername = null, agentVersion = null, instanceId = null) {
   // 如果是重连，保留 conversations；否则（server 重启）创建空 Map
   const existingAgent = agents.get(agentId);
   const conversations = existingAgent?.conversations || new Map();
@@ -186,6 +190,7 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
   agents.set(agentId, {
     ws,
     name: agentName,
+    instanceId,
     workDir,
     conversations,
     sessionKey,

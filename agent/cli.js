@@ -64,35 +64,40 @@ function printHelp() {
   Usage:
     yeaft-agent [options]              Run agent in foreground
     yeaft-agent install [options]      Install as system service
-    yeaft-agent uninstall              Remove system service
-    yeaft-agent start                  Start installed service
-    yeaft-agent stop                   Stop installed service
-    yeaft-agent restart                Restart installed service
-    yeaft-agent status                 Show service status
-    yeaft-agent logs                   View service logs (follow mode)
+    yeaft-agent uninstall [options]    Remove system service
+    yeaft-agent start [options]        Start installed service
+    yeaft-agent stop [options]         Stop installed service
+    yeaft-agent restart [options]      Restart installed service
+    yeaft-agent status [options]       Show service status
+    yeaft-agent logs [options]         View service logs (follow mode)
     yeaft-agent doctor                 Diagnose service configuration
     yeaft-agent llm <command>          Configure local Yeaft LLM providers/models
     yeaft-agent upgrade                Upgrade to latest version
     yeaft-agent --version              Show version
 
   Options:
+    --instance <id>     Local service instance id (default: default)
     --server <url>      WebSocket server URL (default: ws://localhost:3456)
     --name <name>       Agent display name (default: Worker-{platform}-{pid})
     --secret <secret>   Agent secret for authentication
     --work-dir <dir>    Default working directory (default: cwd)
+    --yeaft-dir <dir>   Yeaft data directory for this instance
     --auto-upgrade      Check for updates on startup
 
   Environment variables (alternative to flags):
+    YEAFT_AGENT_INSTANCE Local service instance id
     SERVER_URL          WebSocket server URL
     AGENT_NAME          Agent display name
     AGENT_SECRET        Agent secret
     WORK_DIR            Working directory
+    YEAFT_DIR           Yeaft data directory
 
   Examples:
     yeaft-agent --server wss://your-server.com --name my-worker --secret xxx
     yeaft-agent install --server wss://your-server.com --name my-worker --secret xxx
-    yeaft-agent status
-    yeaft-agent logs
+    yeaft-agent install --instance second --server wss://your-server.com --name my-worker-2 --secret xxx
+    yeaft-agent status --instance second
+    yeaft-agent logs --instance second
 `);
 }
 
@@ -381,12 +386,12 @@ async function handleServiceCommand(command, args) {
   const service = await import('./service.js');
   switch (command) {
     case 'install':   service.install(args); break;
-    case 'uninstall': service.uninstall(); break;
-    case 'start':     service.start(); break;
-    case 'stop':      service.stop(); break;
-    case 'restart':   service.restart(); break;
-    case 'status':    service.status(); break;
-    case 'logs':      service.logs(); break;
+    case 'uninstall': service.uninstall(args); break;
+    case 'start':     service.start(args); break;
+    case 'stop':      service.stop(args); break;
+    case 'restart':   service.restart(args); break;
+    case 'status':    service.status(args); break;
+    case 'logs':      service.logs(args); break;
   }
 }
 
@@ -402,6 +407,9 @@ function parseAndStart(args) {
     const next = args[i + 1];
 
     switch (arg) {
+      case '--instance':
+        if (next) { process.env.YEAFT_AGENT_INSTANCE = process.env.YEAFT_AGENT_INSTANCE || next; i++; }
+        break;
       case '--server':
         if (next) { process.env.SERVER_URL = process.env.SERVER_URL || next; i++; }
         break;
@@ -413,6 +421,9 @@ function parseAndStart(args) {
         break;
       case '--work-dir':
         if (next) { process.env.WORK_DIR = process.env.WORK_DIR || next; i++; }
+        break;
+      case '--yeaft-dir':
+        if (next) { process.env.YEAFT_DIR = process.env.YEAFT_DIR || next; i++; }
         break;
       case '--auto-upgrade':
         checkForUpdates();

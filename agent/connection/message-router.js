@@ -58,11 +58,13 @@ export async function handleMessage(msg) {
         console.log('[WS] Server accepts plaintext, disabling outbound encryption');
       }
 
-      // 只保存基本配置（不再保存 agentId，因为现在用 agentName 作为 ID）
+      // 只保存基本配置。instanceId 是本地服务实例身份；agentName 只用于展示。
       ctx.saveConfig({
+        instanceId: ctx.CONFIG.instanceId,
         serverUrl: ctx.CONFIG.serverUrl,
         agentName: ctx.CONFIG.agentName,
         workDir: ctx.CONFIG.workDir,
+        yeaftDir: ctx.CONFIG.yeaftDir,
         reconnectInterval: ctx.CONFIG.reconnectInterval
         // 不保存 agentSecret 到配置文件（安全考虑）
       });
