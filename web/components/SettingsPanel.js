@@ -551,6 +551,9 @@ export default {
       const safe = String(base).replace(/[^A-Za-z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || 'agent';
       return `${safe}-${id}`;
     },
+    agentInstanceId() {
+      return this.agentName;
+    },
     serverWsUrl() {
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
       return `${protocol}//${location.host}`;
@@ -560,7 +563,7 @@ export default {
     },
     agentServiceCommand() {
       if (!this.agentSecret) return '';
-      return `yeaft-agent install --server ${this.serverWsUrl} --secret ${this.agentSecret} --name ${this.agentName}`;
+      return `yeaft-agent install --instance ${this.agentInstanceId} --server ${this.serverWsUrl} --secret ${this.agentSecret} --name ${this.agentName}`;
     },
     agentLlmCommand() {
       return 'yeaft-agent llm use github-copilot --model gpt-5.5';

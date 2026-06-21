@@ -78,6 +78,8 @@ describe('Settings panel source', () => {
     expect(settingsPanelSource).toContain('agentLlmCommand()');
     expect(settingsPanelSource).toContain('serverWsUrl()');
     expect(settingsPanelSource).toContain('agentName()');
+    expect(settingsPanelSource).toContain('agentInstanceId()');
+    expect(settingsPanelSource).toContain('--instance ${this.agentInstanceId}');
     expect(settingsPanelSource).toContain('settings.security.agentSetupCommands');
     expect(settingsPanelSource).toContain('settings.security.agentCmdInstall');
     expect(settingsPanelSource).toContain('settings.security.agentCmdService');
