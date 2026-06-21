@@ -1072,13 +1072,17 @@ export class ConversationStore {
     if (!sessionId || !(turnsLimit > 0)) return { messages: [], oldestSeq: null, hasMore: false };
 
     const cutoff = Number.isFinite(beforeSeq) ? beforeSeq : Infinity;
+    // Perf: when the session has its own dedicated message directories, skip
+    // the legacy flat conversation/ dirs.  See #hasSessionOwnMessages.
+    const skipLegacy = this.#hasSessionOwnMessages(sessionId);
+    const dirs = [
+      ...this.#sessionMessageDirs('messages', sessionId),
+      ...(skipLegacy ? [] : [this.#legacyMsgDir]),
+      ...this.#sessionMessageDirs('cold', sessionId),
+      ...(skipLegacy ? [] : [this.#legacyColdDir]),
+    ];
     const page = this.#loadVisibleWindowBySession(
-      [
-        ...this.#sessionMessageDirs('messages', sessionId),
-        this.#legacyMsgDir,
-        ...this.#sessionMessageDirs('cold', sessionId),
-        this.#legacyColdDir,
-      ],
+      dirs,
       sessionId,
       cutoff,
       turnsLimit
@@ -1674,6 +1678,33 @@ export class ConversationStore {
     return dirs;
   }
 
+  /**
+   * Returns true when `sessionId` has at least one dedicated message directory
+   * (sessions/ or groups/) that contains .md files. When this is true the
+   * session was created under the per-session layout and ALL its messages live
+   * in those directories — the legacy flat `conversation/messages/` directory
+   * can be skipped entirely, avoiding an O(all-sessions) scan on every load.
+   *
+   * @param {string} sessionId
+   * @returns {boolean}
+   */
+  #hasSessionOwnMessages(sessionId) {
+    if (!sessionId) return false;
+    for (const kind of ['messages', 'cold']) {
+      const dirs = [
+        join(this.#sessionConversationDir(sessionId), kind),
+        join(this.#legacySessionConversationDir(sessionId), kind),
+      ];
+      for (const dir of dirs) {
+        if (!existsSync(dir)) continue;
+        try {
+          if (readdirSync(dir).some(f => f.endsWith('.md'))) return true;
+        } catch (_) { /* permission error — treat as not found */ }
+      }
+    }
+    return false;
+  }
+
   #sessionMessageDirs(kind, sessionId = null) {
     if (sessionId) {
       const dirs = [
@@ -1707,16 +1738,30 @@ export class ConversationStore {
   }
 
   #loadSessionHotMessages(sessionId = null) {
+    const fromDedicated = this.#sessionMessageDirs('messages', sessionId)
+      .flatMap(dir => this.#loadFromDir(dir, Infinity));
+    // When the session has its own dedicated message directories we can skip
+    // the legacy flat dir — all of this session's messages live in dedicated
+    // dirs and scanning ~/.yeaft/conversation/messages/ (which may hold
+    // thousands of files from other sessions) is pure waste.
+    if (sessionId && this.#hasSessionOwnMessages(sessionId)) {
+      return fromDedicated.sort(compareMessagesBySeq);
+    }
     return [
       ...this.#loadFromDir(this.#legacyMsgDir, Infinity).filter(m => m?.sessionId),
-      ...this.#sessionMessageDirs('messages', sessionId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
+      ...fromDedicated,
     ].sort(compareMessagesBySeq);
   }
 
   #loadSessionColdMessages(sessionId = null) {
+    const fromDedicated = this.#sessionMessageDirs('cold', sessionId)
+      .flatMap(dir => this.#loadFromDir(dir, Infinity));
+    if (sessionId && this.#hasSessionOwnMessages(sessionId)) {
+      return fromDedicated.sort(compareMessagesBySeq);
+    }
     return [
       ...this.#loadFromDir(this.#legacyColdDir, Infinity).filter(m => m?.sessionId),
-      ...this.#sessionMessageDirs('cold', sessionId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
+      ...fromDedicated,
     ].sort(compareMessagesBySeq);
   }
 
