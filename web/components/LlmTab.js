@@ -34,34 +34,30 @@ export default {
       </div>
 
       <!-- Config loaded -->
-      <div v-else>
-        <!-- First-time setup banner -->
-        <div v-if="currentConfig?.needsSetup" class="llm-setup-banner">
-          <div class="llm-setup-icon">
-            <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+      <div v-else class="llm-config-surface">
+        <section class="llm-hero">
+          <div class="llm-hero-copy">
+            <p class="llm-kicker">{{ $t('settings.llm.configureMenu') }}</p>
+            <h2>{{ currentConfig?.needsSetup ? $t('settings.llm.setupTitle') : $t('settings.llm.configureAgent') }}</h2>
+            <p>{{ currentConfig?.needsSetup ? $t('settings.llm.setupDesc') : $t('settings.llm.providersDesc') }}</p>
           </div>
-          <div class="llm-setup-text">
-            <strong>{{ $t('settings.llm.setupTitle') }}</strong>
-            <p>{{ $t('settings.llm.setupDesc') }}</p>
-          </div>
-        </div>
-        <div v-if="context === 'yeaft'" class="llm-simple-setup">
-          <div>
-            <strong>{{ $t('settings.llm.simpleCopilotTitle') }}</strong>
-            <p class="sp-desc">{{ $t('settings.llm.simpleCopilotDesc') }}</p>
-            <p v-if="modelDiscoveryWarning" class="sp-desc">{{ modelDiscoveryWarning }}</p>
-            <p v-if="modelDiscoveryError" class="sp-desc sp-error-text">{{ modelDiscoveryError }}</p>
-          </div>
-          <button class="sp-btn sp-btn-primary" @click="useGitHubCopilotPreset" :disabled="discoveringModels">
+          <button v-if="context === 'yeaft'" class="sp-btn sp-btn-primary llm-hero-action" @click="useGitHubCopilotPreset" :disabled="discoveringModels">
             {{ discoveringModels ? $t('settings.llm.refreshingModels') : $t('settings.llm.useGitHubCopilot') }}
           </button>
+        </section>
+
+        <div v-if="modelDiscoveryWarning || modelDiscoveryError" class="llm-inline-status" :class="modelDiscoveryError ? 'is-error' : 'is-warning'">
+          {{ modelDiscoveryError || modelDiscoveryWarning }}
         </div>
 
-
         <!-- Providers Section -->
-        <div class="sp-group">
-          <div class="sp-group-title">{{ $t('settings.llm.providersTitle') }}</div>
-          <p class="sp-desc">{{ $t('settings.llm.providersDesc') }}</p>
+        <div class="sp-group llm-section">
+          <div class="llm-section-header">
+            <div>
+              <div class="sp-group-title">{{ $t('settings.llm.providersTitle') }}</div>
+              <p class="sp-desc">{{ $t('settings.llm.providerSectionHint') }}</p>
+            </div>
+          </div>
           <!-- Provider cards -->
           <div class="llm-provider-card" v-for="(provider, idx) in editableProviders" :key="idx">
             <div class="llm-provider-header">
@@ -72,12 +68,12 @@ export default {
             </div>
 
             <div class="llm-field-row">
-              <div class="llm-field llm-field-name">
+              <div class="llm-field">
                 <label class="llm-field-label">{{ $t('settings.llm.providerName') }}</label>
                 <input type="text" class="sp-input" v-model="provider.name"
                   :placeholder="$t('settings.llm.providerNamePlaceholder')" @input="markDirty" />
               </div>
-              <div v-if="!isManagedProvider(provider)" class="llm-field llm-field-protocol">
+              <div v-if="!isManagedProvider(provider)" class="llm-field">
                 <label class="llm-field-label">{{ $t('settings.llm.protocol') }}</label>
                 <div class="sp-custom-select" :class="{ open: openDropdown === 'protocol-' + idx }" v-click-outside="() => closeDropdown('protocol-' + idx)">
                   <button class="sp-custom-select-trigger" @click="toggleDropdown('protocol-' + idx)">
@@ -156,7 +152,7 @@ export default {
           @pick="onPresetPick" />
 
         <!-- Model Selection Section -->
-        <div class="sp-group">
+        <div class="sp-group llm-section llm-model-section">
           <div class="sp-group-title">{{ $t('settings.llm.modelSelectionTitle') }}</div>
           <p class="sp-desc">{{ $t('settings.llm.modelSelectionDesc') }}</p>
 

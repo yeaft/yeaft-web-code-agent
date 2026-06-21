@@ -46,8 +46,8 @@ describe('LlmTab editable model refs', () => {
   });
 
   it('hides custom provider fields for managed Copilot but keeps custom providers key-only', () => {
-    expect(LlmTab.template).toContain('v-if="!isManagedProvider(provider)" class="llm-field llm-field-protocol"');
     expect(LlmTab.template).toContain('v-if="!isManagedProvider(provider)" class="llm-field"');
+    expect(LlmTab.template).toContain('settings.llm.protocol');
     expect(LlmTab.template).toContain('settings.llm.managedCopilotDesc');
     expect(LlmTab.template).not.toContain('settings.llm.autoAuthGithubCopilot');
     expect(LlmTab.template).not.toContain('toggleAutoAuth');
