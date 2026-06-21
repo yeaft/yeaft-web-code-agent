@@ -1,3 +1,10 @@
+import { useAuthStore } from '../stores/auth.js';
+import {
+  getAgentInstallCommand,
+  getAgentLlmCommand,
+  getAgentServiceCommand,
+  getServerWsUrl,
+} from '../utils/agentSetup.js';
 import MessageItem from './MessageItem.js';
 import AssistantTurn from './AssistantTurn.js';
 import VpTurnBlock from './VpTurnBlock.js';
@@ -58,16 +65,50 @@ export default {
 
           <!-- No agents online -->
           <div class="welcome-section" v-else>
-            <div class="welcome-empty">
-              <div class="empty-icon">📡</div>
-              <div class="empty-text">{{ $t('welcome.noAgent') }}</div>
-              <div class="empty-hint">{{ $t('welcome.noAgentHint') }}</div>
-              <button class="welcome-btn setup-agent-btn" @click="$emit('open-settings')">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-                </svg>
-                {{ $t('welcome.setupAgent') }}
-              </button>
+            <div class="welcome-setup-card">
+              <div class="welcome-setup-header">
+                <div class="welcome-setup-kicker">{{ $t('welcome.setupKicker') }}</div>
+                <div class="welcome-setup-title">{{ $t('welcome.setupTitle') }}</div>
+                <div class="welcome-setup-desc">{{ $t('welcome.setupDesc') }}</div>
+              </div>
+              <ol class="welcome-setup-steps">
+                <li class="welcome-setup-step">
+                  <span class="welcome-setup-step-number">1</span>
+                  <div class="welcome-setup-step-body">
+                    <div class="welcome-setup-step-title">{{ $t('welcome.setupInstallTitle') }}</div>
+                    <div class="welcome-command-row">
+                      <code>{{ welcomeInstallCommand }}</code>
+                      <button type="button" class="welcome-copy-btn" @click="copyWelcomeCommand(welcomeInstallCommand)">{{ $t('common.copy') }}</button>
+                    </div>
+                  </div>
+                </li>
+                <li class="welcome-setup-step">
+                  <span class="welcome-setup-step-number">2</span>
+                  <div class="welcome-setup-step-body">
+                    <div class="welcome-setup-step-title">{{ $t('welcome.setupCopilotTitle') }}</div>
+                    <p class="welcome-setup-step-desc">{{ $t('welcome.setupCopilotDesc') }}</p>
+                    <div class="welcome-command-row">
+                      <code>{{ welcomeLlmCommand }}</code>
+                      <button type="button" class="welcome-copy-btn" @click="copyWelcomeCommand(welcomeLlmCommand)">{{ $t('common.copy') }}</button>
+                    </div>
+                  </div>
+                </li>
+                <li class="welcome-setup-step">
+                  <span class="welcome-setup-step-number">3</span>
+                  <div class="welcome-setup-step-body">
+                    <div class="welcome-setup-step-title">{{ $t('welcome.setupRunTitle') }}</div>
+                    <p class="welcome-setup-step-desc" v-if="welcomeSetupLoading">{{ $t('welcome.setupSecretLoading') }}</p>
+                    <p class="welcome-setup-step-desc welcome-setup-error" v-else-if="welcomeSetupError">{{ $t('welcome.setupSecretError') }}</p>
+                    <div class="welcome-command-row" v-if="welcomeServiceCommand">
+                      <code>{{ welcomeServiceCommand }}</code>
+                      <button type="button" class="welcome-copy-btn" @click="copyWelcomeCommand(welcomeServiceCommand)">{{ $t('common.copy') }}</button>
+                    </div>
+                    <button v-else type="button" class="welcome-btn setup-agent-btn" @click="$emit('open-settings')">
+                      {{ $t('welcome.openSecuritySettings') }}
+                    </button>
+                  </div>
+                </li>
+              </ol>
             </div>
           </div>
 
@@ -544,6 +585,7 @@ export default {
   emits: ['new-conversation', 'resume-conversation', 'open-settings'],
   setup() {
     const store = Pinia.useChatStore();
+    const authStore = useAuthStore();
     const containerRef = Vue.ref(null);
     const assistantTurnActionStates = Vue.reactive({});
     const toolExpandStates = Vue.reactive({});
@@ -600,6 +642,80 @@ export default {
     const onlineAgents = Vue.computed(() => {
       return store.agents.filter(a => a.online);
     });
+
+    const welcomeProfile = Vue.ref(null);
+    const welcomeAgentSecret = Vue.ref(null);
+    const welcomeSetupLoading = Vue.ref(false);
+    const welcomeSetupError = Vue.ref('');
+    let welcomeSetupPromise = null;
+    let welcomeSetupRequestSeq = 0;
+    let lastWelcomeAuthToken = authStore.token || '';
+
+    const resetWelcomeAgentSetup = () => {
+      welcomeProfile.value = null;
+      welcomeAgentSecret.value = null;
+      welcomeSetupError.value = '';
+      welcomeSetupPromise = null;
+      welcomeSetupRequestSeq += 1;
+    };
+
+    const welcomeInstallCommand = getAgentInstallCommand();
+    const welcomeLlmCommand = getAgentLlmCommand();
+    const welcomeServiceCommand = Vue.computed(() => getAgentServiceCommand({
+      profile: welcomeProfile.value,
+      agentSecret: welcomeAgentSecret.value,
+      serverWsUrl: getServerWsUrl(location),
+    }));
+
+    const welcomeHeaders = () => {
+      const headers = { 'Content-Type': 'application/json' };
+      if (authStore.token) headers.Authorization = `Bearer ${authStore.token}`;
+      return headers;
+    };
+
+    const ensureWelcomeAgentSetup = async () => {
+      if (onlineAgents.value.length > 0 || store.currentConversation) return;
+      if (welcomeAgentSecret.value || welcomeSetupPromise) return welcomeSetupPromise;
+      welcomeSetupLoading.value = true;
+      welcomeSetupError.value = '';
+      const requestSeq = ++welcomeSetupRequestSeq;
+      welcomeSetupPromise = (async () => {
+        const requestToken = authStore.token || '';
+        const headers = welcomeHeaders();
+        const [profileRes, secretRes] = await Promise.all([
+          fetch('/api/user/profile', { headers }),
+          fetch('/api/user/agent-secret', { headers }),
+        ]);
+        const profileData = profileRes.ok ? await profileRes.json() : null;
+        if (requestSeq !== welcomeSetupRequestSeq || requestToken !== (authStore.token || '')) return;
+        if (profileData) welcomeProfile.value = profileData;
+        if (!secretRes.ok) {
+          let message = '';
+          try { message = (await secretRes.json())?.error || ''; } catch {}
+          throw new Error(message || 'Failed to load Agent secret');
+        }
+        const data = await secretRes.json();
+        if (requestSeq !== welcomeSetupRequestSeq || requestToken !== (authStore.token || '')) return;
+        const secret = data?.agentSecret || data?.agent_secret || null;
+        welcomeAgentSecret.value = secret && String(secret).trim() ? String(secret) : null;
+      })()
+        .catch((err) => {
+          if (requestSeq !== welcomeSetupRequestSeq) return;
+          welcomeSetupError.value = err?.message || 'Failed to load Agent secret';
+        })
+        .finally(() => {
+          if (requestSeq !== welcomeSetupRequestSeq) return;
+          welcomeSetupLoading.value = false;
+          welcomeSetupPromise = null;
+        });
+      return welcomeSetupPromise;
+    };
+
+    const copyWelcomeCommand = async (text) => {
+      if (!text) return;
+      try { await navigator.clipboard.writeText(text); }
+      catch (err) { console.warn('Failed to copy welcome setup command:', err); }
+    };
 
     const messageBlockMetaForItem = (item, index) => {
       const msg = item?.message || null;
@@ -1568,6 +1684,19 @@ export default {
       }
     };
 
+    Vue.watch(
+      () => [store.currentConversation, onlineAgents.value.length, authStore.token],
+      () => {
+        const currentToken = authStore.token || '';
+        if (currentToken !== lastWelcomeAuthToken) {
+          lastWelcomeAuthToken = currentToken;
+          resetWelcomeAgentSetup();
+        }
+        ensureWelcomeAgentSetup();
+      },
+      { immediate: true }
+    );
+
     Vue.watch(() => store.messages.length, smartScrollToBottom);
     Vue.watch(() => store.messages[store.messages.length - 1]?.content, smartScrollToBottom);
     Vue.watch(previewShowTypingDots, (show) => { if (show) smartScrollToBottom(); });
@@ -1631,6 +1760,12 @@ export default {
       questionRX,
       refreshSession,
       onlineAgents,
+      welcomeInstallCommand,
+      welcomeLlmCommand,
+      welcomeServiceCommand,
+      welcomeSetupLoading,
+      welcomeSetupError,
+      copyWelcomeCommand,
       turnGroups,
       messageBlocks,
       estimateMessageBlockHeight,

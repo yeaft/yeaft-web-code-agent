@@ -1645,6 +1645,120 @@
   margin-top: 16px;
 }
 
+.welcome-setup-card {
+  width: min(720px, 88vw);
+  margin: 0 auto;
+  padding: 24px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border-color);
+  border-radius: 18px;
+  text-align: left;
+}
+
+.welcome-setup-header {
+  margin-bottom: 20px;
+}
+
+.welcome-setup-kicker {
+  margin-bottom: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.welcome-setup-title {
+  margin-bottom: 6px;
+  color: var(--text-primary);
+  font-size: 20px;
+  font-weight: 650;
+}
+
+.welcome-setup-desc,
+.welcome-setup-step-desc {
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.welcome-setup-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.welcome-setup-step {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.welcome-setup-step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--bg-input-wrapper);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.welcome-setup-step-title {
+  margin-bottom: 8px;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.welcome-setup-error {
+  color: var(--error);
+}
+
+.welcome-command-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.welcome-command-row code {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  background: var(--bg-input-wrapper);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  color: var(--text-primary);
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.welcome-copy-btn {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.welcome-copy-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
 .welcome-actions {
   display: flex;
   gap: 12px;
@@ -1682,6 +1796,20 @@
 }
 
 @media (max-width: 480px) {
+  .welcome-setup-card {
+    width: min(100%, 92vw);
+    padding: 18px;
+  }
+
+  .welcome-command-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .welcome-copy-btn {
+    width: 100%;
+  }
+
   .welcome-actions {
     flex-direction: column;
   }
