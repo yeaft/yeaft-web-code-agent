@@ -35,7 +35,7 @@ export default {
 
       <!-- Config loaded -->
       <div v-else class="llm-config-surface">
-        <section class="llm-hero" :class="{ 'needs-setup': currentConfig?.needsSetup }">
+        <section class="llm-hero">
           <div class="llm-hero-copy">
             <p class="llm-kicker">{{ $t('settings.llm.configureMenu') }}</p>
             <h2>{{ currentConfig?.needsSetup ? $t('settings.llm.setupTitle') : $t('settings.llm.configureAgent') }}</h2>
@@ -46,7 +46,7 @@ export default {
           </button>
         </section>
 
-        <div v-if="modelDiscoveryWarning || modelDiscoveryError" class="llm-inline-status" :class="{ error: modelDiscoveryError }">
+        <div v-if="modelDiscoveryWarning || modelDiscoveryError" class="llm-inline-status" :class="modelDiscoveryError ? 'is-error' : 'is-warning'">
           {{ modelDiscoveryError || modelDiscoveryWarning }}
         </div>
 

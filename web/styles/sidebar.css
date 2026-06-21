@@ -1838,6 +1838,40 @@
   }
 }
 
+.messages {
+  max-width: 60%;
+  width: 100%;
+  margin: 0 auto;
+  padding: 0 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  box-sizing: border-box;
+}
+
+/* Load More Button */
+.load-more-top {
+  text-align: center;
+  padding: 8px 0 16px;
+}
+
+.load-more-btn {
+  padding: 8px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  background: var(--bg-sidebar);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.load-more-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
 /* Messages */
 .virtual-transcript {
   display: flex;

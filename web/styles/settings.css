@@ -1167,8 +1167,6 @@
 
 /* ============ LLM Tab ============ */
 
-/* ============ LLM Tab ============ */
-
 .llm-tab {
   display: flex;
   flex-direction: column;
@@ -1246,7 +1244,11 @@
   font-size: 13px;
 }
 
-.llm-inline-status.error {
+.llm-inline-status.is-warning {
+  color: var(--text-secondary);
+}
+
+.llm-inline-status.is-error {
   color: var(--error);
 }
 
@@ -1577,18 +1579,21 @@
   font-size: 12px;
 }
 
-.sp-btn-primary {
+.llm-tab .sp-btn-primary,
+.llm-preset-modal .sp-btn-primary {
   border-color: var(--accent);
   background: var(--accent);
   color: var(--accent-fg);
 }
 
-.sp-btn-primary:hover:not(:disabled) {
+.llm-tab .sp-btn-primary:hover:not(:disabled),
+.llm-preset-modal .sp-btn-primary:hover:not(:disabled) {
   border-color: var(--accent-hover);
   background: var(--accent-hover);
 }
 
-.sp-btn-primary:disabled {
+.llm-tab .sp-btn-primary:disabled,
+.llm-preset-modal .sp-btn-primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
