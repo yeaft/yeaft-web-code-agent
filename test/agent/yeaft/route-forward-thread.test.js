@@ -11,6 +11,7 @@ import {
   __testWaitForRoutePromises,
   buildVpQueryOpts,
   visibleInboundThreadId,
+  __testHooks,
 } from '../../../agent/yeaft/web-bridge.js';
 
 describe('route_forward thread ownership', () => {
@@ -179,5 +180,72 @@ describe('route_forward thread ownership', () => {
 
     expect(JSON.parse(output)).toMatchObject({ ok: true, dispatched: ['vp-martin'] });
     expect(stored[0].meta.sourceThreadId).toBe('thr-source');
+  });
+
+  it('preserves route_forward internal provenance when rescuing pending queries', () => {
+    const envelope = __testHooks.buildPendingRescueEnvelope({
+      sessionId: 'session-route-thread',
+      taskId: null,
+      threadId: 'thr-target',
+      followUpId: 'followup-route-forward',
+      replayText: '@vp-martin please review this PR',
+      replayParts: null,
+      leftover: {
+        internal: true,
+        injectedBy: 'route_forward',
+        senderVpId: 'vp-linus',
+        sourceThreadId: 'thr-source',
+      },
+    });
+
+    expect(envelope).toMatchObject({
+      sessionId: 'session-route-thread',
+      trigger: 'pending_rescue',
+      msg: {
+        id: 'followup-route-forward',
+        from: 'vp-linus',
+        role: 'assistant',
+        text: '@vp-martin please review this PR',
+        meta: {
+          rescuedFrom: 'pendingQueries',
+          threadId: 'thr-target',
+          injectedBy: 'route_forward',
+          senderVpId: 'vp-linus',
+          sourceThreadId: 'thr-source',
+        },
+      },
+    });
+  });
+
+  it('keeps explicit user @mentions visible when rescuing pending queries', () => {
+    const envelope = __testHooks.buildPendingRescueEnvelope({
+      sessionId: 'session-route-thread',
+      taskId: null,
+      threadId: 'thr-target',
+      followUpId: 'followup-user-mention',
+      replayText: '@vp-martin please review this PR',
+      replayParts: null,
+      leftover: {
+        internal: false,
+      },
+    });
+
+    expect(envelope).toMatchObject({
+      sessionId: 'session-route-thread',
+      trigger: 'pending_rescue',
+      msg: {
+        id: 'followup-user-mention',
+        from: 'user',
+        role: 'user',
+        text: '@vp-martin please review this PR',
+        meta: {
+          rescuedFrom: 'pendingQueries',
+          threadId: 'thr-target',
+        },
+      },
+    });
+    expect(envelope.msg.meta.injectedBy).toBeUndefined();
+    expect(envelope.msg.meta.senderVpId).toBeUndefined();
+    expect(envelope.msg.meta.sourceThreadId).toBeUndefined();
   });
 });

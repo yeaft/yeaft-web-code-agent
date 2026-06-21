@@ -433,6 +433,32 @@ function buildVpPromptPayload(vpId, envelope) {
   return { text, prompt, promptParts };
 }
 
+function buildPendingRescueEnvelope({ sessionId, taskId = null, threadId = 'main', followUpId, leftover, replayText, replayParts = null }) {
+  const leftoverIsInternal = Boolean(leftover?.internal);
+  const leftoverInjectedBy = leftoverIsInternal && typeof leftover?.injectedBy === 'string'
+    ? leftover.injectedBy
+    : null;
+  return {
+    sessionId,
+    taskId,
+    trigger: 'pending_rescue',
+    msg: {
+      id: followUpId,
+      from: leftoverIsInternal && leftover.senderVpId ? leftover.senderVpId : 'user',
+      role: leftoverIsInternal ? 'assistant' : 'user',
+      text: replayText,
+      meta: {
+        rescuedFrom: 'pendingQueries',
+        threadId,
+        ...(leftoverInjectedBy ? { injectedBy: leftoverInjectedBy } : {}),
+        ...(leftoverIsInternal && leftover.senderVpId ? { senderVpId: leftover.senderVpId } : {}),
+        ...(leftoverIsInternal && leftover.sourceThreadId ? { sourceThreadId: leftover.sourceThreadId } : {}),
+      },
+    },
+    ...(Array.isArray(replayParts) && replayParts.length > 0 ? { _promptParts: replayParts } : {}),
+  };
+}
+
 export function visibleInboundThreadId(envelope, fallbackThreadId = 'main') {
   const meta = envelope?.msg?.meta || {};
   if (
@@ -1350,6 +1376,9 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
       originalText: text,
       originalParts: Array.isArray(envelope?._promptParts) ? envelope._promptParts : null,
       internal: isInternalAppend,
+      injectedBy: isInternalAppend ? injectedBy : null,
+      senderVpId: isInternalAppend ? (envelope?.msg?.meta?.senderVpId || envelope?.msg?.from || null) : null,
+      sourceThreadId: isInternalAppend ? visibleInboundThreadId(envelope, thread.threadId) : null,
     });
     persistInboundMessageOnceByMsgId({
       msgId: envelope?.msg?.id,
@@ -1534,18 +1563,15 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
             : null;
           if (!replayText && !replayParts) continue;
           const followUpId = `followup_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`;
-          const followUpEnvelope = {
+          const followUpEnvelope = buildPendingRescueEnvelope({
             sessionId,
             taskId: envelope?.taskId || null,
-            trigger: 'pending_rescue',
-            msg: {
-              id: followUpId,
-              from: 'user',
-              text: replayText,
-              meta: { rescuedFrom: 'pendingQueries', threadId: thread.threadId },
-            },
-            ...(replayParts ? { _promptParts: replayParts } : {}),
-          };
+            threadId: thread.threadId,
+            followUpId,
+            leftover,
+            replayText,
+            replayParts,
+          });
           const followUpTurnId = `${randomUUID().slice(0, 8)}:${vpId}`;
           inbox.push({ envelope: followUpEnvelope, turnId: followUpTurnId, thread });
           try {
@@ -5260,6 +5286,7 @@ export async function handleYeaftMcpReload(msg = {}) {
 export const __testHooks = {
   loadVisibleGroupHistoryPage,
   persistInboundMessageOnceByMsgId,
+  buildPendingRescueEnvelope,
   setSessionForTest(nextSession) {
     session = nextSession || null;
   },
