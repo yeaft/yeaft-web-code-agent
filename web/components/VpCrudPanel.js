@@ -25,35 +25,28 @@ export default {
       <div v-if="view === 'list'" class="vp-crud-body vp-crud-list">
         <div v-if="vpList.length === 0" class="vp-crud-empty">
           <span class="vp-crud-empty-text">{{ $t('yeaft.vp.crud.empty') }}</span>
-          <button class="vp-crud-primary-btn" type="button" @click="startCreate">
+          <button class="sp-btn sp-btn-primary" type="button" @click="startCreate">
             {{ $t('yeaft.vp.createFirst') }}
           </button>
         </div>
 
         <template v-else>
           <div class="vp-crud-list-toolbar">
-            <button class="vp-crud-primary-btn" type="button" @click="startCreate">
+            <button class="sp-btn sp-btn-primary" type="button" @click="startCreate">
               {{ $t('yeaft.vp.crud.addNew') }}
             </button>
           </div>
           <div class="vp-crud-card-grid">
             <div class="vp-crud-card" v-for="vp in vpList" :key="vp.vpId">
               <div class="vp-crud-card-main">
-                <div class="vp-crud-card-avatar" :style="{ color: vpTextColorFor(vp.vpId) }" aria-hidden="true">
-                  {{ vpInitial(vp) }}
-                </div>
                 <div class="vp-crud-card-meta">
                   <div class="vp-crud-card-title-row">
-                    <div class="vp-crud-card-name" :style="{ color: vpTextColorFor(vp.vpId) }">
+                    <div class="vp-crud-card-name">
                       <span>{{ vp.displayName || vp.vpId }}</span>
                     </div>
                     <span v-if="vp.isStock" class="vp-crud-stock-badge" :title="$t('yeaft.vp.crud.stockReadOnly')">
                       {{ $t('yeaft.vp.crud.stockBadge') }}
                     </span>
-                  </div>
-                  <div class="vp-crud-card-subline">
-                    <span class="vp-crud-card-id">@{{ vp.vpId }}</span>
-                    <span class="vp-crud-card-role" v-if="vp.role">{{ vp.role }}</span>
                   </div>
                 </div>
               </div>
@@ -138,7 +131,7 @@ export default {
           <button
             v-if="detail && !detail.isStock"
             type="button"
-            class="vp-crud-primary-btn"
+            class="sp-btn sp-btn-primary"
             @click="editFromDetail"
             :disabled="busy"
           >
@@ -233,7 +226,7 @@ export default {
           <button type="button" class="vp-crud-link-btn" @click="returnToList" :disabled="busy">
             {{ $t('yeaft.vp.crud.form.cancel') }}
           </button>
-          <button type="submit" class="vp-crud-primary-btn" :disabled="!canSubmit">
+          <button type="submit" class="sp-btn sp-btn-primary" :disabled="!canSubmit">
             {{ busy ? $t('yeaft.vp.crud.saving') : $t('yeaft.vp.crud.form.submit') }}
           </button>
         </div>
@@ -275,13 +268,6 @@ export default {
         persona: '',
       };
     },
-    vpTextColorFor(vpId) { return this.vpStore.vpTextColor(vpId); },
-    vpInitial(vp) {
-      const source = String((vp && (vp.displayName || vp.vpId)) || '').trim();
-      const first = Array.from(source)[0] || '?';
-      return first.toUpperCase();
-    },
-
     /**
      * Populate `this.form` from a VP-shaped object (either a fresh read
      * response or this.detail). Shared between `startEdit` and

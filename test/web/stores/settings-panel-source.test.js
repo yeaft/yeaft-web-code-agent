@@ -202,19 +202,24 @@ describe('Settings panel source', () => {
     expect(settingsCss).toContain('outline: 2px solid var(--accent-blue);');
   });
 
-  it('keeps Yeaft VP rows compact inside settings', () => {
+  it('keeps Yeaft VP rows single-line and visually flat inside settings', () => {
     expect(vpCrudPanelSource).toContain('class="vp-crud-card-main"');
-    expect(vpCrudPanelSource).toContain('class="vp-crud-card-avatar"');
     expect(vpCrudPanelSource).toContain('class="vp-crud-card-title-row"');
-    expect(vpCrudPanelSource).toContain('class="vp-crud-card-subline"');
-    expect(vpCrudPanelSource).toContain('vpInitial(vp)');
+    expect(vpCrudPanelSource).toContain('class="vp-crud-card-name"');
+    expect(vpCrudPanelSource).toContain('sp-btn sp-btn-primary');
+    expect(vpCrudPanelSource).not.toContain('vp-crud-primary-btn');
+    expect(vpCrudPanelSource).not.toContain('class="vp-crud-card-avatar"');
+    expect(vpCrudPanelSource).not.toContain('class="vp-crud-card-subline"');
+    expect(vpCrudPanelSource).not.toContain('@{{ vp.vpId }}');
+    expect(vpCrudPanelSource).not.toContain('vpInitial(vp)');
+    expect(vpCrudPanelSource).not.toContain('vpTextColorFor');
 
     expect(settingsCss).toContain('.settings-pane-yeaft .vp-crud-card-main');
     expect(settingsCss).toContain('.settings-pane-yeaft .vp-crud-card-actions .vp-crud-link-btn');
-    expect(settingsCss).toContain('min-height: 30px;');
-    expect(settingsCss).toMatch(/\.settings-pane-yeaft \.vp-crud-card-name\s*\{[\s\S]*?flex:\s*1 1 auto;[\s\S]*?min-width:\s*0;[\s\S]*?text-overflow:\s*ellipsis;/);
-    expect(settingsCss).toMatch(/\.settings-pane-yeaft \.vp-crud-card-name span\s*\{[\s\S]*?display:\s*block;[\s\S]*?text-overflow:\s*ellipsis;/);
-    expect(settingsCss).toMatch(/\.settings-pane-yeaft \.vp-crud-card-id\s*\{[\s\S]*?flex:\s*0 1 auto;/);
-    expect(settingsCss).toMatch(/\.settings-pane-yeaft \.vp-crud-card-role\s*\{[\s\S]*?flex:\s*1 1 auto;/);
+    expect(settingsCss).toContain('min-height: 28px;');
+    expect(settingsCss).toMatch(/\.settings-pane-yeaft \.vp-crud-card\s*\{[\s\S]*?background:\s*transparent;[\s\S]*?border:\s*0;[\s\S]*?border-radius:\s*0;/);
+    expect(settingsCss).toMatch(/\.settings-pane-yeaft \.vp-crud-card-name\s*\{[\s\S]*?flex:\s*1 1 auto;[\s\S]*?min-width:\s*0;[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?white-space:\s*nowrap;/);
+    expect(settingsCss).not.toMatch(/\.settings-pane-yeaft \.vp-crud-primary-btn\b/);
+    expect(settingsCss).not.toMatch(/\.settings-pane-yeaft \.vp-crud-primary-btn[\s\S]*?background:\s*var\(--accent-blue\)/);
   });
 });
