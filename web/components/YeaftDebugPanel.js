@@ -28,7 +28,7 @@
 import { buildDreamDebugItems, filterDreamDebugItems, previewText } from './dream-debug-model.js';
 import { splitTokenBreakdown, apportionToBuckets, formatClockTime } from './yeaft-debug-helpers.js';
 
-const INITIAL_REQUEST_HISTORY_LIMIT = 10;
+const INITIAL_REQUEST_HISTORY_LIMIT = 5;
 
 export default {
   name: 'YeaftDebugPanel',
@@ -306,8 +306,8 @@ export default {
   mounted() {
     // Hydrate from the agent's persistent file-backed trace as soon as the
     // panel is mounted. The request log intentionally starts with the newest
-    // 10 requests across all Sessions; regex search asks the agent to find
-    // older matching requests instead of depending on per-Session paging.
+    // 5 requests across all Sessions; regex search asks the agent to find older
+    // matching requests, but the returned list is still capped at 5 rows.
     if (this.store && typeof this.store.loadYeaftDebugHistory === 'function') {
       this.store.loadYeaftDebugHistory({ limit: INITIAL_REQUEST_HISTORY_LIMIT, dreamLimit: 5, indexOnly: true });
     }

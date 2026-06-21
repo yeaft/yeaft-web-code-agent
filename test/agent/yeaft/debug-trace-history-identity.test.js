@@ -165,6 +165,21 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
     expect(slashForm.turns[0]).toMatchObject({ turnId: 'alpha-request', sessionId: 's1' });
   });
 
+  it('caps search result history to the newest 5 matching requests', () => {
+    const t = openTrace();
+    for (let i = 0; i < 8; i++) {
+      const row = t.startTurn({ traceId: `search-match-${i}`, turnNumber: 1, sessionId: 's1', userPrompt: `debug overflow match ${i}` });
+      t.endTurn(row, { responseText: 'done' });
+    }
+
+    const results = t.fetchRecentDebugHistory({ limit: 999, dreamLimit: 0, indexOnly: true, search: 'debug overflow match' });
+
+    expect(results.turns).toHaveLength(5);
+    expect(results.limit).toBe(5);
+    expect(results.hasMore).toBe(true);
+    expect(results.turns.map(turn => turn.turnId)).toEqual(['search-match-3', 'search-match-4', 'search-match-5', 'search-match-6', 'search-match-7']);
+  });
+
   it('reports invalid debug history regexes instead of silently falling back', () => {
     const t = openTrace();
     const row = t.startTurn({ traceId: 'bad-regex-check', turnNumber: 1, sessionId: 's1', userPrompt: 'work' });
