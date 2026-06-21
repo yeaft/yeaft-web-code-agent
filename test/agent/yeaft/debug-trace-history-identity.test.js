@@ -141,6 +141,60 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
     expect(newDetail.loops.map(loop => loop.response)).toEqual(['new loop 1', 'new loop 2']);
   });
 
+  it('searches recent debug history with a regex across sessions', () => {
+    const t = openTrace();
+    const alpha = t.startTurn({ traceId: 'alpha-request', turnNumber: 1, sessionId: 's1', vpId: 'linus', userPrompt: 'fix debug panel' });
+    t.endTurn(alpha, {
+      responseText: 'done',
+      messages: [{ role: 'user', content: 'fix debug panel' }],
+      toolCalls: [{ name: 'Bash', input: { command: 'npm test' } }],
+    });
+    const beta = t.startTurn({ traceId: 'beta-request', turnNumber: 1, sessionId: 's2', vpId: 'martin', userPrompt: 'review release flow' });
+    t.endTurn(beta, {
+      responseText: 'approved',
+      messages: [{ role: 'user', content: 'review release flow' }],
+      rawRequest: { url: 'https://llm.example/v1/responses', body: { model: 'm' } },
+    });
+
+    const global = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, indexOnly: true, search: 'release\\s+flow' });
+    expect(global.turns).toHaveLength(1);
+    expect(global.turns[0]).toMatchObject({ turnId: 'beta-request', sessionId: 's2' });
+
+    const slashForm = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, indexOnly: true, search: '/debug panel/i' });
+    expect(slashForm.turns).toHaveLength(1);
+    expect(slashForm.turns[0]).toMatchObject({ turnId: 'alpha-request', sessionId: 's1' });
+  });
+
+  it('reports invalid debug history regexes instead of silently falling back', () => {
+    const t = openTrace();
+    const row = t.startTurn({ traceId: 'bad-regex-check', turnNumber: 1, sessionId: 's1', userPrompt: 'work' });
+    t.endTurn(row, { responseText: 'done' });
+
+    expect(() => t.fetchRecentDebugHistory({ search: '[' })).toThrow(/Invalid regular expression/);
+    expect(() => t.fetchRecentDebugHistory({ search: '/x/q' })).toThrow(/Invalid debug search regex flag: q/);
+    expect(() => t.fetchRecentDebugHistory({ search: '(a+)+$' })).toThrow(/unsafe quantified group/);
+    expect(() => t.fetchRecentDebugHistory({ search: '(a|aa)+$' })).toThrow(/unsafe quantified group/);
+  });
+
+  it('does not run regex search against full raw request JSON', () => {
+    const t = openTrace();
+    const row = t.startTurn({ traceId: 'raw-only-request', turnNumber: 1, sessionId: 's1', userPrompt: 'ordinary prompt' });
+    t.endTurn(row, {
+      responseText: 'done',
+      rawRequest: {
+        url: 'https://llm.example/v1/responses',
+        body: { messages: [{ role: 'user', content: 'needle-only-in-raw-request' }] },
+      },
+    });
+
+    const byRawPayload = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, indexOnly: true, search: 'needle-only-in-raw-request' });
+    expect(byRawPayload.turns).toHaveLength(0);
+
+    const bySummary = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, indexOnly: true, search: 'ordinary prompt' });
+    expect(bySummary.turns).toHaveLength(1);
+    expect(bySummary.turns[0]).toMatchObject({ turnId: 'raw-only-request' });
+  });
+
   it('stores cumulative rawRequest as base plus structural message deltas instead of repeating full requests', () => {
     const t = openTrace();
     const messages = [];

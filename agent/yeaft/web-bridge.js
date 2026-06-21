@@ -4491,6 +4491,7 @@ export async function handleYeaftFetchToolStats(_msg = {}) {
  *   - `detailTurnId` — fetch full loops/tools for one request
  *   - `sessionId`    — narrow by Session
  *   - `threadId`     — narrow by thread
+ *   - `search`       — regex matched against bounded request summaries
  *
  * Sends:
  *   { type: 'yeaft_debug_history', loops: [...], turns: [...], indexOnly, detailTurnId }
@@ -4503,6 +4504,9 @@ export async function handleYeaftFetchDebugHistory(msg = {}) {
   const dreamLimit = Number.isFinite(msg?.dreamLimit) ? Number(msg.dreamLimit) : 5;
   const sessionId = typeof msg?.sessionId === 'string' && msg.sessionId ? msg.sessionId : null;
   const threadId = typeof msg?.threadId === 'string' && msg.threadId ? msg.threadId : null;
+  const search = typeof msg?.search === 'string' ? msg.search.trim() : '';
+  const requestId = typeof msg?.requestId === 'string' && msg.requestId ? msg.requestId : null;
+  const requestKind = typeof msg?.requestKind === 'string' && msg.requestKind ? msg.requestKind : null;
   const indexOnly = !!msg?.indexOnly;
   const detailTurnId = typeof msg?.detailTurnId === 'string' && msg.detailTurnId ? msg.detailTurnId : null;
   let loops = [];
@@ -4511,7 +4515,7 @@ export async function handleYeaftFetchDebugHistory(msg = {}) {
   let hasMore = false;
   try {
     if (session?.trace && typeof session.trace.fetchRecentDebugHistory === 'function') {
-      const out = session.trace.fetchRecentDebugHistory({ limit, dreamLimit, sessionId, threadId, indexOnly, detailTurnId });
+      const out = session.trace.fetchRecentDebugHistory({ limit, dreamLimit, sessionId, threadId, indexOnly, detailTurnId, search });
       loops = Array.isArray(out?.loops) ? out.loops : [];
       turns = Array.isArray(out?.turns) ? out.turns : [];
       dreamEvents = Array.isArray(out?.dreamEvents) ? out.dreamEvents : [];
@@ -4523,6 +4527,14 @@ export async function handleYeaftFetchDebugHistory(msg = {}) {
       loops: [],
       turns: [],
       dreamEvents: [],
+      requestId,
+      requestKind,
+      sessionId,
+      threadId,
+      search,
+      limit,
+      indexOnly,
+      detailTurnId,
       error: err && err.message ? err.message : String(err),
     });
     return;
@@ -4532,8 +4544,11 @@ export async function handleYeaftFetchDebugHistory(msg = {}) {
     loops,
     turns,
     dreamEvents,
+    requestId,
+    requestKind,
     sessionId,
     threadId,
+    search,
     hasMore,
     limit,
     indexOnly,

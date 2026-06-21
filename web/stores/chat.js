@@ -13,7 +13,6 @@ import * as crewHelpers from './helpers/crew.js';
 import * as yeaftViewHelpers from './helpers/yeaft-view.js';
 import { incVpTyping, decVpTyping } from './helpers/vp-typing.js';
 import { selectActiveConversationId } from './helpers/active-conv.js';
-import { turnMatchesSearch } from './helpers/debug-search.js';
 import { trimDebugRetention } from './helpers/debug-retention.js';
 import {
   getDefaultYeaftVisibleTurns,
@@ -140,12 +139,9 @@ function resolveYeaftConversationIdForSession(state, sessionId = null) {
   return agentConversationId || state?.yeaftConversationId || null;
 }
 
-// feat-6af5f9f1 PR C: turnMatchesSearch lives in helpers/debug-search.js
-// so it can be unit-tested without the Pinia browser globals.
-
-// Debug history is now request-bounded on disk: the agent keeps the newest
-// 10 requests per Session. A single request can legitimately run 100-200
-// loops, so the live in-memory loop cap must not be smaller than that or the
+// Debug history is request-bounded on disk. The panel loads the newest
+// 10 requests globally by default. A single request can legitimately run
+// 100-200 loops, so the live in-memory loop cap must not be smaller than that or the
 // panel will miss loops while the request is still streaming. 2000 covers the
 // worst expected 10-request window while staying finite.
 const MAX_YEAFT_DEBUG_LOOPS = 2000;
@@ -471,9 +467,9 @@ export const useChatStore = defineStore('chat', {
     yeaftDebugLoops: [],
     yeaftDebugTurnsById: {},
     yeaftDebugTurnOrder: [],
-    // fix-vp-multi-thread (bug 4): hydration status for the persistent
-    // SQLite trace round-trip. `loadYeaftDebugHistory()` flips
-    // `yeaftDebugHistoryLoading` while the request is in flight; the
+    // Hydration status for the persistent file-backed trace round-trip.
+    // `loadYeaftDebugHistory()` flips `yeaftDebugHistoryLoading` while
+    // the request is in flight; the
     // `yeaft_debug_history` case in messageHandler resets it and stamps
     // `yeaftDebugHistoryFetchedAt`. `yeaftDebugHistoryError` is non-null
     // when the 10-second guard timer fires before the agent replies
@@ -483,12 +479,11 @@ export const useChatStore = defineStore('chat', {
     yeaftDebugHistoryFetchedAt: 0,
     yeaftDebugHistoryLimit: DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT,
     yeaftDebugHistoryHasMore: false,
-    // feat-6af5f9f1 PR C: debug-panel toolbar state.
-    //   - `yeaftDebugSearch` is a substring filter applied to user prompt,
-    //     vpId, tool name, tool input/output, system prompt, raw url.
-    //   - `yeaftDebugSessionFilter` is INDEPENDENT of the main pane's group
-    //     filter (per user spec): debug can show all groups while the
-    //     main pane is scoped to one. Default null = "All".
+    // Debug-panel toolbar state.
+    // `yeaftDebugSearch` is sent to the agent as a regex over bounded request
+    // summaries so the request log can find traces outside the 10-row window.
+    // `yeaftDebugSessionFilter` is an optional debug-side pin; default null
+    // means the request log is global across Sessions.
     yeaftDebugSearch: '',
     yeaftDebugSessionFilter: null,
     // v0.1.755: latest dream pass status per scope, keyed by scope string
@@ -761,16 +756,10 @@ export const useChatStore = defineStore('chat', {
     //                    memoryAdjust, totalMs, totalTokens, loopCount }, ...]`
     // sorted newest-first.
     //
-    // PR C: filter precedence is now:
-    //   1. `yeaftDebugSessionFilter` (independent debug-side filter; user's spec)
-    //   2. fall back to `yeaftActiveSessionFilter` (main pane filter) ONLY if
-    //      the debug filter is null AND the user has selected a main group.
-    //   3. otherwise show all turns.
-    //
-    // The independent filter wins: setting it to a value (even one that
-    // doesn't match the main pane) shows just that group. Setting it to
-    // the empty-string sentinel `'__all__'` forces "show all" even when
-    // the main pane is filtered.
+    // Request log filtering is independent from the main Session pane. By
+    // default it shows the loaded global trace window; an explicit debug filter
+    // may still pin a Session for legacy callers, but active Session selection
+    // no longer narrows the request log.
     yeaftDebugTurnsForActiveSession: (state) => {
       const order = state.yeaftDebugTurnOrder || EMPTY_ARRAY;
       const byId = state.yeaftDebugTurnsById || {};
@@ -778,7 +767,6 @@ export const useChatStore = defineStore('chat', {
       const reflections = state.yeaftReflectionCards || {};
 
       const debugFilter = state.yeaftDebugSessionFilter;
-      const mainFilter = state.yeaftActiveSessionFilter || null;
       let target;
       if (debugFilter === '__all__') {
         target = null;
@@ -804,8 +792,6 @@ export const useChatStore = defineStore('chat', {
         reflectionsByTurn[card.turnId].push(card);
       }
 
-      const search = (state.yeaftDebugSearch || '').trim().toLowerCase();
-
       const out = [];
       for (let i = order.length - 1; i >= 0; i--) {
         const turnId = order[i];
@@ -815,10 +801,6 @@ export const useChatStore = defineStore('chat', {
 
         const loops = loopsByTurn[turnId] || EMPTY_ARRAY;
         const refls = reflectionsByTurn[turnId] || EMPTY_ARRAY;
-
-        if (search) {
-          if (!turnMatchesSearch(turn, loops, refls, search)) continue;
-        }
 
         // fix-debug-panel-live-aggregates: the turn header (NL · Xms · Y tok)
         // is sourced from `turn.loopCount` / `totalMs` / `totalTokens`, which
@@ -1281,20 +1263,23 @@ export const useChatStore = defineStore('chat', {
       }, 10_000);
     },
     /**
-     * fix-vp-multi-thread (bug 4): hydrate the Yeaft debug panel from the
-     * persistent SQLite trace. The agent maintains a per-call SQLite log at
-     * `~/.yeaft/cache/yeaft-debug-trace.sqlite`; before this action existed
-     * the panel only displayed turns observed live via `yeaft_output`, so
-     * everything before the panel was mounted was invisible.
+     * Hydrate the Yeaft debug panel from the persistent file-backed trace.
+     * The agent keeps request JSON under the Yeaft debug folder; before this
+     * action existed the panel only displayed turns observed live via
+     * `yeaft_output`, so everything before the panel was mounted was invisible.
      *
      * Round-trip: web → server → agent (handleYeaftFetchDebugHistory) →
      * web (`yeaft_debug_history` case in messageHandler merges into
      * `yeaftDebugLoops` / `yeaftDebugTurnsById` / `yeaftDebugTurnOrder`).
      */
-    loadYeaftDebugHistory({ groupId, limit, dreamLimit, indexOnly = false, detailTurnId = null } = {}) {
+    loadYeaftDebugHistory({ groupId, limit, dreamLimit, indexOnly = false, detailTurnId = null, search = undefined } = {}) {
       if (!this.currentAgent) return;
       const rawLimit = Number.isFinite(limit) && limit > 0 ? limit : this.yeaftDebugHistoryLimit || DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT;
       const requestedLimit = Math.max(1, Math.min(DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT, rawLimit));
+      const searchPattern = typeof search === 'string' ? search.trim() : (this.yeaftDebugSearch || '').trim();
+      const isDetailRequest = typeof detailTurnId === 'string' && detailTurnId;
+      const requestKind = isDetailRequest ? 'detail' : 'list';
+      const requestId = `dbg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
       const requestKey = JSON.stringify({
         agentId: this.currentAgent,
         groupId: groupId || null,
@@ -1302,20 +1287,25 @@ export const useChatStore = defineStore('chat', {
         dreamLimit: Number.isFinite(dreamLimit) && dreamLimit > 0 ? dreamLimit : 5,
         indexOnly: !!indexOnly,
         detailTurnId: detailTurnId || null,
+        search: isDetailRequest ? '' : searchPattern,
       });
       if (this._yeaftDebugHistoryInFlightKey === requestKey) return;
       this._yeaftDebugHistoryInFlightKey = requestKey;
+      if (!isDetailRequest) this._yeaftDebugHistoryLatestListRequestId = requestId;
       this.yeaftDebugHistoryLimit = requestedLimit;
       this.yeaftDebugHistoryLoading = true;
       this.yeaftDebugHistoryError = null;
       const payload = {
         type: 'yeaft_fetch_debug_history',
         agentId: this.currentAgent,
+        requestId,
+        requestKind,
         limit: requestedLimit,
         dreamLimit: Number.isFinite(dreamLimit) && dreamLimit > 0 ? dreamLimit : 5,
       };
       if (indexOnly) payload.indexOnly = true;
       if (typeof detailTurnId === 'string' && detailTurnId) payload.detailTurnId = detailTurnId;
+      else if (searchPattern) payload.search = searchPattern;
       if (typeof groupId === 'string' && groupId) payload.sessionId = groupId;
       this.sendWsMessage(payload);
       if (this._fetchYeaftDebugHistoryTimer) clearTimeout(this._fetchYeaftDebugHistoryTimer);
@@ -3106,12 +3096,24 @@ export const useChatStore = defineStore('chat', {
       });
       return null;
     },
-    // feat-6af5f9f1 PR C: search query for the debug panel toolbar.
-    // Substring filter (case-insensitive) applied to the per-turn fields
-    // listed in turnMatchesSearch(). Not persisted — search is a transient
-    // exploration tool, not a session preference.
+    // Search query for the debug panel toolbar. The request log sends this to
+    // the agent as a regex over bounded request summaries, so results are not
+    // limited to the currently loaded 10-row window. Not persisted.
     setYeaftDebugSearch(query) {
       this.yeaftDebugSearch = typeof query === 'string' ? query : '';
+      if (this._yeaftDebugSearchTimer) clearTimeout(this._yeaftDebugSearchTimer);
+      this._yeaftDebugSearchTimer = setTimeout(() => {
+        this._yeaftDebugSearchTimer = null;
+        this.yeaftDebugLoops = [];
+        this.yeaftDebugTurnsById = {};
+        this.yeaftDebugTurnOrder = [];
+        this.loadYeaftDebugHistory({
+          limit: DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT,
+          dreamLimit: 5,
+          indexOnly: true,
+          search: this.yeaftDebugSearch,
+        });
+      }, 250);
     },
 
     // feat-6af5f9f1 PR C: independent debug-panel session filter. Distinct
@@ -3325,6 +3327,16 @@ export const useChatStore = defineStore('chat', {
       // from a previous session doesn't hide all incoming turns.
       this.yeaftDebugSearch = '';
       this.yeaftDebugSessionFilter = null;
+      if (this._yeaftDebugSearchTimer) {
+        clearTimeout(this._yeaftDebugSearchTimer);
+        this._yeaftDebugSearchTimer = null;
+      }
+      if (this._fetchYeaftDebugHistoryTimer) {
+        clearTimeout(this._fetchYeaftDebugHistoryTimer);
+        this._fetchYeaftDebugHistoryTimer = null;
+      }
+      this._yeaftDebugHistoryInFlightKey = null;
+      this._yeaftDebugHistoryLatestListRequestId = null;
       this.yeaftReflectionCards = {};
       this.yeaftSubAgentCards = {};
       // VP-block redesign (2026-05-08): per-turn detail drawer retired.

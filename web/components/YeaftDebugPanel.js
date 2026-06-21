@@ -29,7 +29,6 @@ import { buildDreamDebugItems, filterDreamDebugItems, previewText } from './drea
 import { splitTokenBreakdown, apportionToBuckets, formatClockTime } from './yeaft-debug-helpers.js';
 
 const INITIAL_REQUEST_HISTORY_LIMIT = 10;
-const REQUEST_HISTORY_STEP = 10;
 
 export default {
   name: 'YeaftDebugPanel',
@@ -159,11 +158,8 @@ export default {
     requestHistoryLoading() {
       return !!this.store?.yeaftDebugHistoryLoading;
     },
-    requestHistoryHasMore() {
-      return !!this.store?.yeaftDebugHistoryHasMore;
-    },
-    requestHistoryLimit() {
-      return this.store?.yeaftDebugHistoryLimit || INITIAL_REQUEST_HISTORY_LIMIT;
+    requestHistoryError() {
+      return this.store?.yeaftDebugHistoryError || '';
     },
     toolStats() {
       return this.store?.yeaftToolStats || null;
@@ -308,12 +304,10 @@ export default {
     },
   },
   mounted() {
-    // fix-vp-multi-thread (bug 4): hydrate from the agent's persistent
-    // SQLite trace as soon as the panel is mounted. Previously the panel
-    // only ever showed turns observed live via `yeaft_output` events, so
-    // anything before the panel was opened was invisible — even though
-    // the trace had captured it. Pull a lightweight request index plus a
-    // few dream events; full loop/detail payloads are fetched on expansion.
+    // Hydrate from the agent's persistent file-backed trace as soon as the
+    // panel is mounted. The request log intentionally starts with the newest
+    // 10 requests across all Sessions; regex search asks the agent to find
+    // older matching requests instead of depending on per-Session paging.
     if (this.store && typeof this.store.loadYeaftDebugHistory === 'function') {
       this.store.loadYeaftDebugHistory({ limit: INITIAL_REQUEST_HISTORY_LIMIT, dreamLimit: 5, indexOnly: true });
     }
@@ -957,16 +951,16 @@ export default {
         this.refreshToolStats();
       }
       if (this.activeTab === 'requests' && this.turns.length === 0 && !this.requestHistoryLoading) {
-        this.loadMoreRequestHistory(0);
+        this.loadRequestHistory();
       }
     },
-    loadMoreRequestHistory(step = REQUEST_HISTORY_STEP) {
+    loadRequestHistory() {
       if (!this.store || typeof this.store.loadYeaftDebugHistory !== 'function') return;
-      const nextLimit = Math.max(INITIAL_REQUEST_HISTORY_LIMIT, (this.requestHistoryLimit || INITIAL_REQUEST_HISTORY_LIMIT) + step);
       this.store.loadYeaftDebugHistory({
-        limit: nextLimit,
+        limit: INITIAL_REQUEST_HISTORY_LIMIT,
         dreamLimit: 5,
         indexOnly: true,
+        search: this.searchQuery,
       });
     },
     refreshToolStats() {
@@ -1363,17 +1357,20 @@ export default {
       </div>
 
       <div v-else-if="activeTab === 'requests' && turns.length > 0" class="yeaft-debug-turns">
-        <div class="yeaft-debug-history-bar" v-if="requestHistoryLoading || requestHistoryHasMore || turns.length > 0">
+        <div class="yeaft-debug-toolbar yeaft-debug-request-toolbar">
+          <input
+            v-model="searchQuery"
+            type="search"
+            class="yeaft-debug-search"
+            :placeholder="$t('yeaft.debugSearchPlaceholder')"
+          />
+          <span class="yeaft-debug-search-hint">{{ $t('yeaft.debugSearchHint') }}</span>
+        </div>
+        <div v-if="requestHistoryError" class="yeaft-debug-error">{{ requestHistoryError }}</div>
+        <div class="yeaft-debug-history-bar" v-if="requestHistoryLoading || turns.length > 0">
           <span class="yeaft-debug-history-meta">
-            {{ $t('yeaft.debugHistoryLoaded', { count: turns.length }) }}
+            {{ requestHistoryLoading ? $t('yeaft.debugHistoryLoading') : $t('yeaft.debugHistoryLoaded', { count: turns.length }) }}
           </span>
-          <button
-            v-if="requestHistoryHasMore"
-            type="button"
-            class="yeaft-debug-show-btn small"
-            :disabled="requestHistoryLoading"
-            @click="loadMoreRequestHistory()"
-          >{{ requestHistoryLoading ? $t('yeaft.debugHistoryLoading') : $t('yeaft.debugHistoryLoadMore') }}</button>
         </div>
         <div v-for="turn in turns" :key="turn.turnId" class="yeaft-debug-turn">
           <!-- Turn header -->
@@ -1563,13 +1560,26 @@ export default {
         </div>
       </div>
 
-      <div class="yeaft-debug-empty" v-else>
-        <button
-          v-if="activeTab === 'requests' && !requestHistoryLoading"
-          type="button"
-          class="yeaft-debug-show-btn small"
-          @click="loadMoreRequestHistory(0)"
-        >{{ $t('yeaft.debugHistoryLoad') }}</button>
+      <div class="yeaft-debug-empty" :class="{ 'yeaft-debug-empty-requests': activeTab === 'requests' }" v-else>
+        <template v-if="activeTab === 'requests'">
+          <div class="yeaft-debug-toolbar yeaft-debug-request-toolbar">
+            <input
+              v-model="searchQuery"
+              type="search"
+              class="yeaft-debug-search"
+              :placeholder="$t('yeaft.debugSearchPlaceholder')"
+            />
+            <span class="yeaft-debug-search-hint">{{ $t('yeaft.debugSearchHint') }}</span>
+          </div>
+          <div v-if="requestHistoryError" class="yeaft-debug-error">{{ requestHistoryError }}</div>
+          <button
+            v-if="!requestHistoryLoading"
+            type="button"
+            class="yeaft-debug-show-btn small"
+            @click="loadRequestHistory()"
+          >{{ $t('yeaft.debugHistoryLoad') }}</button>
+          <span v-else>{{ $t('yeaft.debugHistoryLoading') }}</span>
+        </template>
         <span v-else>{{ requestHistoryLoading ? $t('yeaft.debugHistoryLoading') : $t('yeaft.noDebugData') }}</span>
       </div>
     </div>
