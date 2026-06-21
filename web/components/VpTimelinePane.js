@@ -18,57 +18,28 @@ const readableText = (value) => {
   return value.trim();
 };
 
+const toolSummaryLine = (count, translate) => {
+  const n = Number(count || 0);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  const $t = typeof translate === 'function' ? translate : (key) => key;
+  return $t('yeaft.sessionStatus.task.subAgentToolSummary', { count: n });
+};
+
 const readableSubAgentEvent = (event, translate) => {
   if (!event || typeof event !== 'object') return '';
   const $t = typeof translate === 'function' ? translate : (key) => key;
   const name = event.agentName || event.agentId || $t('yeaft.sessionStatus.task.kind.subAgent');
-  switch (event.type) {
-    case 'sub_agent_spawned': {
-      const mission = compactText(event.mission, 240);
-      return mission
-        ? $t('yeaft.sessionStatus.task.subAgentStartedWithMission', { name, mission })
-        : $t('yeaft.sessionStatus.task.subAgentStarted', { name });
-    }
-    case 'sub_agent_status':
-      return event.status
-        ? $t('yeaft.sessionStatus.task.subAgentStatus', { name, status: event.status })
-        : $t('yeaft.sessionStatus.task.subAgentStatusUpdated', { name });
-    case 'sub_agent_turn_end': {
-      const text = readableText(event.content || event.text);
-      return text
-        ? $t('yeaft.sessionStatus.task.subAgentResult', { name, text })
-        : $t('yeaft.sessionStatus.task.subAgentProducedResult', { name });
-    }
-    case 'text_delta': {
-      const text = readableText(event.text || event.content || event.delta);
-      return text ? $t('yeaft.sessionStatus.task.subAgentEvent', { name, text }) : '';
-    }
-    case 'user_prompt': {
-      const text = compactText(event.content || event.message, 240);
-      return text ? $t('yeaft.sessionStatus.task.subAgentUserPrompt', { text }) : '';
-    }
-    case 'tool_start':
-    case 'tool_use':
-    case 'tool_call':
-      return $t('yeaft.sessionStatus.task.subAgentUsedTool', { name, tool: event.name || event.toolName || 'tool' });
-    case 'tool_result':
-    case 'tool_end':
-      return $t('yeaft.sessionStatus.task.subAgentFinishedTool', { name, tool: event.name || event.toolName || 'tool' });
-    case 'usage':
-      return typeof event.tokens === 'number'
-        ? $t('yeaft.sessionStatus.task.subAgentUsage', { name, tokens: event.tokens })
-        : '';
-    case 'error': {
-      const error = event.error && (event.error.message || event.error);
-      return error
-        ? $t('yeaft.sessionStatus.task.subAgentError', { name, error })
-        : $t('yeaft.sessionStatus.task.subAgentHitError', { name });
-    }
-    default: {
-      const text = compactText(event.content || event.message, 240);
-      return text ? $t('yeaft.sessionStatus.task.subAgentEvent', { name, text }) : '';
-    }
+  if (event.type === 'sub_agent_turn_end') {
+    const text = readableText(event.content || event.text);
+    return text ? $t('yeaft.sessionStatus.task.subAgentResult', { name, text }) : '';
   }
+  if (event.type === 'error') {
+    const error = event.error && (event.error.message || event.error);
+    return error
+      ? $t('yeaft.sessionStatus.task.subAgentError', { name, error })
+      : $t('yeaft.sessionStatus.task.subAgentHitError', { name });
+  }
+  return '';
 };
 
 export function createSubAgentTaskStreamText(task, translate) {
@@ -78,6 +49,7 @@ export function createSubAgentTaskStreamText(task, translate) {
   const lines = [];
   let deltaAgentName = '';
   let deltaText = '';
+  let toolCallCount = 0;
   const flushDelta = () => {
     const text = readableText(deltaText);
     if (text) {
@@ -86,6 +58,10 @@ export function createSubAgentTaskStreamText(task, translate) {
         text,
       }));
     }
+    deltaAgentName = '';
+    deltaText = '';
+  };
+  const discardDelta = () => {
     deltaAgentName = '';
     deltaText = '';
   };
@@ -98,11 +74,25 @@ export function createSubAgentTaskStreamText(task, translate) {
       deltaText += event.text || event.content || event.delta || '';
       continue;
     }
-    flushDelta();
-    const rendered = readableSubAgentEvent(event, $t);
-    if (rendered) lines.push(rendered);
+    if (event.type === 'tool_use' || event.type === 'tool_call') {
+      toolCallCount += 1;
+      continue;
+    }
+    if (event.type === 'sub_agent_turn_end') {
+      discardDelta();
+      const rendered = readableSubAgentEvent(event, $t);
+      if (rendered) lines.push(rendered);
+      continue;
+    }
+    if (event.type === 'error') {
+      flushDelta();
+      const rendered = readableSubAgentEvent(event, $t);
+      if (rendered) lines.push(rendered);
+    }
   }
   flushDelta();
+  const summary = toolSummaryLine(toolCallCount, $t);
+  if (summary) lines.push(summary);
   return lines.join('\n');
 }
 

@@ -63,24 +63,30 @@ describe('terminal output normalization render wiring', () => {
       'yeaft.sessionStatus.task.subAgentStatus': '{name} is {status}',
       'yeaft.sessionStatus.task.subAgentEvent': '{name}: {text}',
       'yeaft.sessionStatus.task.subAgentUserPrompt': 'You: {text}',
+      'yeaft.sessionStatus.task.subAgentToolSummary': '{count} tool calls completed',
     };
     const t = (key, params = {}) => Object.entries(params).reduce(
       (text, [name, value]) => text.replace(new RegExp(`\\{${name}\\}`, 'g'), value),
       messages[key] || key,
     );
     const preview = [
+      JSON.stringify({ type: 'sub_agent_status', agentName: 'worker', status: 'running' }),
+      JSON.stringify({ type: 'tool_call', id: 'tool-1', agentName: 'worker', name: 'FileRead' }),
+      JSON.stringify({ type: 'tool_start', id: 'tool-1', agentName: 'worker', name: 'FileRead' }),
+      JSON.stringify({ type: 'tool_end', id: 'tool-1', agentName: 'worker', name: 'FileRead' }),
       JSON.stringify({ type: 'text_delta', agentName: 'worker', text: 'partial ' }),
       JSON.stringify({ type: 'text_delta', agentName: 'worker', text: 'answer' }),
+      JSON.stringify({ type: 'tool_call', agentName: 'worker', name: 'Bash' }),
       JSON.stringify({ type: 'sub_agent_turn_end', agentName: 'worker', content: 'final answer' }),
     ].join('\n');
 
     expect(createSubAgentTaskStreamText({ kind: 'sub_agent', log: { preview } }, t)).toBe([
-      'worker: partial answer',
       'worker result: final answer',
+      '2 tool calls completed',
     ].join('\n'));
     expect(createSubAgentTaskDetailLines({ kind: 'sub_agent', log: { preview } }, t)).toEqual([
-      'worker: partial answer',
       'worker result: final answer',
+      '2 tool calls completed',
     ]);
     expect(createSubAgentTaskDetailLines({
       kind: 'sub_agent',
@@ -89,9 +95,16 @@ describe('terminal output normalization render wiring', () => {
       log: { preview: JSON.stringify({ type: 'sub_agent_status', agentName: 'worker', status: 'running' }) },
     }, t)).toEqual([
       'worker result: final answer from task snapshot',
-      'worker is running',
     ]);
     expect(createSubAgentTaskDetailLines({ kind: 'shell', log: { preview } }, t)).toEqual([]);
+
+    const lifecyclePreview = [
+      JSON.stringify({ type: 'tool_call', id: 'tool-1', agentName: 'worker', name: 'FileRead' }),
+      JSON.stringify({ type: 'tool_start', id: 'tool-1', agentName: 'worker', name: 'FileRead' }),
+      JSON.stringify({ type: 'tool_end', id: 'tool-1', agentName: 'worker', name: 'FileRead' }),
+    ].join('\n');
+    expect(createSubAgentTaskStreamText({ kind: 'sub_agent', log: { preview: lifecyclePreview } }, t))
+      .toBe('1 tool calls completed');
 
     const longDelta = 'x'.repeat(900);
     expect(createSubAgentTaskStreamText({
@@ -101,16 +114,17 @@ describe('terminal output normalization render wiring', () => {
 
     expect(vpTimelinePaneSource).toContain('export function createSubAgentTaskDetailLines');
     expect(vpTimelinePaneSource).toContain('const resultSummary = compactText(task.result?.summary);');
-    expect(vpTimelinePaneSource).toContain("case 'sub_agent_spawned':");
-    expect(vpTimelinePaneSource).toContain("$t('yeaft.sessionStatus.task.subAgentStartedWithMission'");
     expect(vpTimelinePaneSource).toContain('v-if="task.kind === \'sub_agent\'"');
     expect(vpTimelinePaneSource).toContain('const compactText = (value, maxLength = 360) => {');
     expect(vpTimelinePaneSource).toContain("$t('yeaft.sessionStatus.task.subAgentNoReadableEvents')");
     expect(vpTimelinePaneSource).toContain('{{ taskKindLabel(task) }}');
     expect(vpTimelinePaneSource).toContain("task.status !== 'running'");
-    expect(vpTimelinePaneSource).toContain("case 'text_delta':");
+    expect(vpTimelinePaneSource).toContain("event.type === 'text_delta'");
     expect(vpTimelinePaneSource).toContain('createSubAgentTaskStreamText');
     expect(vpTimelinePaneSource).toContain('const readableText = (value) => {');
+    expect(vpTimelinePaneSource).toContain('toolSummaryLine(toolCallCount, $t)');
+    expect(vpTimelinePaneSource).not.toContain("case 'sub_agent_status':");
+    expect(vpTimelinePaneSource).not.toContain("case 'tool_call':");
     expect(vpTimelinePaneSource).not.toContain("emit('prompt-sub-agent'");
     expect(vpTimelinePaneSource).not.toContain('yeaft-vp-task-prompt-form');
     expect(vpTimelinePaneSource).not.toContain('subAgentPromptError(task)');

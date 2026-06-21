@@ -1144,6 +1144,8 @@ export default {
   'subAgentPanel.running': 'Running',
   'subAgentPanel.completed': 'Completed',
   'subAgentPanel.waitingMessages': 'Waiting for messages...',
+  'subAgentPanel.toolCount': '{count} tools',
+  'subAgentPanel.toolSummary': '{count} tool calls completed',
   'subAgentPanel.empty': 'No sub-agents',
   'subAgentPanel.emptyHint': 'Sub-agents will appear here when Claude delegates tasks',
 
@@ -1438,6 +1440,7 @@ export default {
   'yeaft.sessionStatus.task.subAgentUsage': '{name} used {tokens} tokens',
   'yeaft.sessionStatus.task.subAgentEvent': '{name}: {text}',
   'yeaft.sessionStatus.task.subAgentUserPrompt': 'You: {text}',
+  'yeaft.sessionStatus.task.subAgentToolSummary': '{count} tool calls completed',
   'yeaft.sessionStatus.task.subAgentError': '{name} error: {error}',
   'yeaft.sessionStatus.task.subAgentHitError': '{name} hit an error',
   'yeaft.sessionStatus.task.subAgentNoReadableEvents': 'No readable sub-agent activity yet.',
