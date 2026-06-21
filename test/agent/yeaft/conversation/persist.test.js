@@ -214,7 +214,10 @@ describe('ConversationStore', () => {
 
       const compatStore = new ConversationStore(TEST_DIR);
       expect(compatStore.loadRecent(10).map(m => m.content)).toEqual(['legacy chat']);
-      expect(compatStore.loadRecentBySession('s_fun', 10).map(m => m.content)).toEqual(['legacy session']);
+      // Per-session load paths no longer fall back to the legacy flat dir.
+      // Messages written only under conversation/messages/ are NOT visible
+      // to per-session queries — only chat mode (loadRecent) sees them.
+      expect(compatStore.loadRecentBySession('s_fun', 10).map(m => m.content)).toEqual([]);
     });
 
   describe('appendBatch', () => {
