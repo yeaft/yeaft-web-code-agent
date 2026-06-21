@@ -286,11 +286,19 @@ export function handleMessage(store, msg) {
     // we route it from the top-level switch here. Without this, the debug
     // panel only shows turns that happened after the panel was opened.
     case 'yeaft_debug_history': {
+      const requestId = typeof msg?.requestId === 'string' ? msg.requestId : '';
+      const isDetailFetch = typeof msg?.detailTurnId === 'string' && msg.detailTurnId;
+      if (requestId && !isDetailFetch && store._yeaftDebugHistoryLatestListRequestId && requestId !== store._yeaftDebugHistoryLatestListRequestId) {
+        break;
+      }
       if (store._fetchYeaftDebugHistoryTimer) {
         clearTimeout(store._fetchYeaftDebugHistoryTimer);
         store._fetchYeaftDebugHistoryTimer = null;
       }
       store._yeaftDebugHistoryInFlightKey = null;
+      if (requestId && !isDetailFetch && store._yeaftDebugHistoryLatestListRequestId === requestId) {
+        store._yeaftDebugHistoryLatestListRequestId = null;
+      }
       const loops = hydrateDebugLoopRequests(Array.isArray(msg?.loops) ? msg.loops : []);
       const turns = Array.isArray(msg?.turns) ? msg.turns : [];
       const dreamEvents = Array.isArray(msg?.dreamEvents) ? msg.dreamEvents : [];
@@ -375,7 +383,6 @@ export function handleMessage(store, msg) {
       // its payload arrived later.
       const seenIds = new Set();
       const mergedOrder = [];
-      const isDetailFetch = typeof msg?.detailTurnId === 'string' && msg.detailTurnId;
       const appendTurnId = (tid) => {
         if (!tid || seenIds.has(tid)) return;
         seenIds.add(tid);

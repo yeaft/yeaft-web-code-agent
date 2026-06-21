@@ -212,4 +212,23 @@ describe('YeaftDebugPanel · request history loading model', () => {
     expect(handler).toContain('let that shrink the global debug retention window');
     expect(handler).toMatch(/if \(isDetailFetch\) \{[\s\S]{0,160}store\.yeaftDebugTurnOrder/);
   });
+
+  it('correlates debug history requests and drops stale list responses', () => {
+    const handler = read('web/stores/helpers/messageHandler.js');
+    const serverRelay = read('server/handlers/agent-output.js');
+    expect(storeJs).toContain('requestId,');
+    expect(storeJs).toContain('requestKind');
+    expect(storeJs).toContain('_yeaftDebugHistoryLatestListRequestId');
+    expect(handler).toContain('requestId && !isDetailFetch');
+    expect(handler).toContain('requestId !== store._yeaftDebugHistoryLatestListRequestId');
+    expect(serverRelay).toContain('requestId: msg.requestId');
+    expect(serverRelay).toContain('search: msg.search');
+  });
+
+  it('keeps debug search i18n keys unique', () => {
+    const en = read('web/i18n/en.js');
+    const zh = read('web/i18n/zh-CN.js');
+    expect(en.match(/'yeaft\.debugSearchPlaceholder'/g)).toHaveLength(1);
+    expect(zh.match(/'yeaft\.debugSearchPlaceholder'/g)).toHaveLength(1);
+  });
 });

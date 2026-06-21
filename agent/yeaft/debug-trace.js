@@ -88,6 +88,9 @@ function compileTraceSearchRegex(search) {
     pattern = slashForm[1];
     flags = slashForm[2] || '';
   }
+  if (regexHasUnsafeQuantifiedGroup(pattern)) {
+    throw new Error('Debug search regex contains an unsafe quantified group; refine the pattern');
+  }
   const allowed = new Set(['d', 'g', 'i', 'm', 's', 'u', 'v', 'y']);
   const uniqueFlags = [];
   for (const ch of flags) {
@@ -99,10 +102,38 @@ function compileTraceSearchRegex(search) {
   return new RegExp(pattern, stableFlags);
 }
 
+function regexHasUnsafeQuantifiedGroup(pattern) {
+  const groupBody = String.raw`(?:[^()\\]|\\.|\[[^\]]*\]|\([^()]*\))*`;
+  const nestedQuantifier = new RegExp(String.raw`\(${groupBody}[+*{]${groupBody}\)\s*[+*{]`);
+  const quantifiedAlternation = new RegExp(String.raw`\(${groupBody}\|${groupBody}\)\s*[+*{]`);
+  return nestedQuantifier.test(pattern) || quantifiedAlternation.test(pattern);
+}
+
+function buildTraceSearchDocument(trace) {
+  const loops = Array.isArray(trace?.loops) ? trace.loops : [];
+  const tools = Array.isArray(trace?.tools) ? trace.tools : [];
+  const toolNames = tools.map(t => t?.toolName || t?.name || '').filter(Boolean).join(' ');
+  const loopModels = loops.map(l => l?.model || '').filter(Boolean).join(' ');
+  const stopReasons = loops.map(l => l?.stopReason || '').filter(Boolean).join(' ');
+  return [
+    trace?.requestId,
+    trace?.traceId,
+    trace?.messageId,
+    trace?.sessionId,
+    trace?.vpId,
+    trace?.threadId,
+    trace?.mode,
+    trace?.userPrompt,
+    loopModels,
+    stopReasons,
+    toolNames,
+  ].filter(v => v != null && v !== '').map(String).join('\n').slice(0, 20_000);
+}
+
 function traceMatchesRegex(trace, regex) {
   if (!regex) return true;
   try {
-    return regex.test(JSON.stringify(trace));
+    return regex.test(buildTraceSearchDocument(trace));
   } catch {
     return false;
   }

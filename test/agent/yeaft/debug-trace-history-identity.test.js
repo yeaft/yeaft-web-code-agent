@@ -172,6 +172,27 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
 
     expect(() => t.fetchRecentDebugHistory({ search: '[' })).toThrow(/Invalid regular expression/);
     expect(() => t.fetchRecentDebugHistory({ search: '/x/q' })).toThrow(/Invalid debug search regex flag: q/);
+    expect(() => t.fetchRecentDebugHistory({ search: '(a+)+$' })).toThrow(/unsafe quantified group/);
+    expect(() => t.fetchRecentDebugHistory({ search: '(a|aa)+$' })).toThrow(/unsafe quantified group/);
+  });
+
+  it('does not run regex search against full raw request JSON', () => {
+    const t = openTrace();
+    const row = t.startTurn({ traceId: 'raw-only-request', turnNumber: 1, sessionId: 's1', userPrompt: 'ordinary prompt' });
+    t.endTurn(row, {
+      responseText: 'done',
+      rawRequest: {
+        url: 'https://llm.example/v1/responses',
+        body: { messages: [{ role: 'user', content: 'needle-only-in-raw-request' }] },
+      },
+    });
+
+    const byRawPayload = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, indexOnly: true, search: 'needle-only-in-raw-request' });
+    expect(byRawPayload.turns).toHaveLength(0);
+
+    const bySummary = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, indexOnly: true, search: 'ordinary prompt' });
+    expect(bySummary.turns).toHaveLength(1);
+    expect(bySummary.turns[0]).toMatchObject({ turnId: 'raw-only-request' });
   });
 
   it('stores cumulative rawRequest as base plus structural message deltas instead of repeating full requests', () => {

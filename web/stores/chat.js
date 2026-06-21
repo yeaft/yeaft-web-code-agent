@@ -480,8 +480,8 @@ export const useChatStore = defineStore('chat', {
     yeaftDebugHistoryLimit: DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT,
     yeaftDebugHistoryHasMore: false,
     // Debug-panel toolbar state.
-    // `yeaftDebugSearch` is sent to the agent as a regex so the request log can
-    // find matching traces outside the default 10-row in-memory window.
+    // `yeaftDebugSearch` is sent to the agent as a regex over bounded request
+    // summaries so the request log can find traces outside the 10-row window.
     // `yeaftDebugSessionFilter` is an optional debug-side pin; default null
     // means the request log is global across Sessions.
     yeaftDebugSearch: '',
@@ -1277,6 +1277,9 @@ export const useChatStore = defineStore('chat', {
       const rawLimit = Number.isFinite(limit) && limit > 0 ? limit : this.yeaftDebugHistoryLimit || DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT;
       const requestedLimit = Math.max(1, Math.min(DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT, rawLimit));
       const searchPattern = typeof search === 'string' ? search.trim() : (this.yeaftDebugSearch || '').trim();
+      const isDetailRequest = typeof detailTurnId === 'string' && detailTurnId;
+      const requestKind = isDetailRequest ? 'detail' : 'list';
+      const requestId = `dbg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
       const requestKey = JSON.stringify({
         agentId: this.currentAgent,
         groupId: groupId || null,
@@ -1284,16 +1287,19 @@ export const useChatStore = defineStore('chat', {
         dreamLimit: Number.isFinite(dreamLimit) && dreamLimit > 0 ? dreamLimit : 5,
         indexOnly: !!indexOnly,
         detailTurnId: detailTurnId || null,
-        search: detailTurnId ? '' : searchPattern,
+        search: isDetailRequest ? '' : searchPattern,
       });
       if (this._yeaftDebugHistoryInFlightKey === requestKey) return;
       this._yeaftDebugHistoryInFlightKey = requestKey;
+      if (!isDetailRequest) this._yeaftDebugHistoryLatestListRequestId = requestId;
       this.yeaftDebugHistoryLimit = requestedLimit;
       this.yeaftDebugHistoryLoading = true;
       this.yeaftDebugHistoryError = null;
       const payload = {
         type: 'yeaft_fetch_debug_history',
         agentId: this.currentAgent,
+        requestId,
+        requestKind,
         limit: requestedLimit,
         dreamLimit: Number.isFinite(dreamLimit) && dreamLimit > 0 ? dreamLimit : 5,
       };
@@ -1309,6 +1315,9 @@ export const useChatStore = defineStore('chat', {
           this.yeaftDebugHistoryError = 'Debug history is unavailable right now. Try again after the agent reconnects.';
         }
         this._yeaftDebugHistoryInFlightKey = null;
+        if (!isDetailRequest && this._yeaftDebugHistoryLatestListRequestId === requestId) {
+          this._yeaftDebugHistoryLatestListRequestId = null;
+        }
         this._fetchYeaftDebugHistoryTimer = null;
       }, 10_000);
     },
@@ -3091,8 +3100,8 @@ export const useChatStore = defineStore('chat', {
       return null;
     },
     // Search query for the debug panel toolbar. The request log sends this to
-    // the agent as a regex so results are not limited to the currently loaded
-    // 10-row window. Not persisted — search is a transient exploration tool.
+    // the agent as a regex over bounded request summaries, so results are not
+    // limited to the currently loaded 10-row window. Not persisted.
     setYeaftDebugSearch(query) {
       this.yeaftDebugSearch = typeof query === 'string' ? query : '';
       if (this._yeaftDebugSearchTimer) clearTimeout(this._yeaftDebugSearchTimer);
@@ -3325,6 +3334,12 @@ export const useChatStore = defineStore('chat', {
         clearTimeout(this._yeaftDebugSearchTimer);
         this._yeaftDebugSearchTimer = null;
       }
+      if (this._fetchYeaftDebugHistoryTimer) {
+        clearTimeout(this._fetchYeaftDebugHistoryTimer);
+        this._fetchYeaftDebugHistoryTimer = null;
+      }
+      this._yeaftDebugHistoryInFlightKey = null;
+      this._yeaftDebugHistoryLatestListRequestId = null;
       this.yeaftReflectionCards = {};
       this.yeaftSubAgentCards = {};
       // VP-block redesign (2026-05-08): per-turn detail drawer retired.
