@@ -87,6 +87,16 @@ describe('YeaftDebugPanel · token breakdown + timestamp', () => {
     expect(block).toContain('tabular-nums');
   });
 
+  it('renders regex search for the global request log', () => {
+    expect(panel).toContain(`v-model="searchQuery"`);
+    expect(panel).toContain(`$t('yeaft.debugSearchPlaceholder')`);
+    expect(panel).toContain(`$t('yeaft.debugSearchHint')`);
+    expect(panel).toContain('search: this.searchQuery');
+    expect(storeJs).toContain('searchPattern');
+    expect(storeJs).toContain('payload.search = searchPattern');
+    expect(storeJs).not.toContain('turnMatchesSearch');
+  });
+
   it('renders request log turns and loops as two-line summary rows', () => {
     expect(panel).toContain('class="yeaft-debug-turn-content"');
     expect(panel).toContain('class="yeaft-debug-turn-primary"');

@@ -1028,6 +1028,13 @@
   font-size: 13px;
 }
 
+.yeaft-debug-empty-requests {
+  align-items: stretch;
+  justify-content: flex-start;
+  flex-direction: column;
+  padding: 4px 12px 16px;
+}
+
 /* No card chrome, no hairlines — turns separate by spacing alone, per the
    project "no horizontal divider" design rule. The header gets a hover bg
    for affordance; that's enough. */
@@ -2781,6 +2788,23 @@
 
 .yeaft-debug-search {
   min-width: 160px;
+}
+
+.yeaft-debug-request-toolbar {
+  padding-left: 0;
+  padding-right: 0;
+  border-bottom: 0;
+}
+
+.yeaft-debug-search-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.yeaft-debug-error {
+  color: var(--error);
+  font-size: 12px;
+  padding: 4px 0;
 }
 
 .yeaft-debug-group-select {

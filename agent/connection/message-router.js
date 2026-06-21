@@ -676,10 +676,9 @@ export async function handleMessage(msg) {
       await handleYeaftFetchToolStats(msg);
       break;
 
-    // fix-vp-multi-thread (bug 4): hydrate the Yeaft debug panel from
-    // the persistent SQLite trace. Without this, the panel only shows
-    // turns that happened after the panel was opened — every previous
-    // turn is invisible.
+    // Hydrate the Yeaft debug panel from the persistent file-backed trace.
+    // Without this, the panel only shows turns that happened after it was
+    // opened — every previous turn is invisible.
     case 'yeaft_fetch_debug_history':
     case 'unify_fetch_debug_history':
       await handleYeaftFetchDebugHistory(msg);

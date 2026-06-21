@@ -34,6 +34,7 @@ const MAX_INLINE_VALUE_BYTES = 1024 * 1024;
 const MAX_RAW_REQUEST_BYTES = 2 * 1024 * 1024;
 const TRACE_FLUSH_INTERVAL_MS = 5_000;
 const TRACE_FLUSH_DIRTY_LOOPS = 10;
+const MAX_SEARCH_PATTERN_CHARS = 300;
 
 function isPlainObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value);
@@ -71,6 +72,39 @@ function readJson(filePath) {
     return JSON.parse(readFileSync(filePath, 'utf8'));
   } catch {
     return null;
+  }
+}
+
+function compileTraceSearchRegex(search) {
+  const raw = typeof search === 'string' ? search.trim() : '';
+  if (!raw) return null;
+  if (raw.length > MAX_SEARCH_PATTERN_CHARS) {
+    throw new Error(`Debug search regex is too long; max ${MAX_SEARCH_PATTERN_CHARS} characters`);
+  }
+  let pattern = raw;
+  let flags = 'i';
+  const slashForm = raw.match(/^\/(.*)\/([a-z]*)$/);
+  if (slashForm) {
+    pattern = slashForm[1];
+    flags = slashForm[2] || '';
+  }
+  const allowed = new Set(['d', 'g', 'i', 'm', 's', 'u', 'v', 'y']);
+  const uniqueFlags = [];
+  for (const ch of flags) {
+    if (!allowed.has(ch)) throw new Error(`Invalid debug search regex flag: ${ch}`);
+    if (!uniqueFlags.includes(ch)) uniqueFlags.push(ch);
+  }
+  if (!slashForm && !uniqueFlags.includes('i')) uniqueFlags.push('i');
+  const stableFlags = uniqueFlags.filter(ch => ch !== 'g' && ch !== 'y').join('');
+  return new RegExp(pattern, stableFlags);
+}
+
+function traceMatchesRegex(trace, regex) {
+  if (!regex) return true;
+  try {
+    return regex.test(JSON.stringify(trace));
+  } catch {
+    return false;
   }
 }
 
@@ -696,12 +730,14 @@ export class DebugTrace {
       .flatMap(({ trace }) => traceToLegacyRows(trace));
   }
 
-  fetchRecentDebugHistory({ limit = MAX_HISTORY_LIMIT, dreamLimit = 5, sessionId = null, threadId = null, indexOnly = false, detailTurnId = null } = {}) {
+  fetchRecentDebugHistory({ limit = MAX_HISTORY_LIMIT, dreamLimit = 5, sessionId = null, threadId = null, indexOnly = false, detailTurnId = null, search = '' } = {}) {
     this.#flushPendingSync();
     const lim = Math.max(1, Math.min(MAX_HISTORY_LIMIT, Number(limit) || MAX_HISTORY_LIMIT));
     const requestedDetailTurnId = typeof detailTurnId === 'string' && detailTurnId ? detailTurnId : null;
+    const searchRegex = requestedDetailTurnId ? null : compileTraceSearchRegex(search);
     const traces = this.#traceSummaries(sessionId)
       .filter(({ trace }) => !threadId || trace.threadId === threadId)
+      .filter(({ trace }) => requestedDetailTurnId || traceMatchesRegex(trace, searchRegex))
       .map(({ trace }) => trace);
     const dreamEvents = this.#readDreamEvents({ sessionId, dreamLimit });
     if (requestedDetailTurnId) {
