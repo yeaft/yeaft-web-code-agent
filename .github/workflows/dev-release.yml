@@ -22,6 +22,8 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  # Legacy image name for deployments that still pull the pre-rename package.
+  LEGACY_IMAGE_NAME: ${{ github.repository_owner }}/claude-web-chat
 
 jobs:
   # Resolve tag/commit for both push and workflow_dispatch triggers.
@@ -145,5 +147,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev
+            ${{ env.REGISTRY }}/${{ env.LEGACY_IMAGE_NAME }}:dev
           build-args: BUILD_VERSION=${{ needs.validate-tag.outputs.tag }}
