@@ -1244,6 +1244,10 @@
   font-size: 13px;
 }
 
+.llm-inline-status.is-warning {
+  color: var(--warn-text);
+}
+
 .llm-inline-status.is-error {
   color: var(--error);
 }
