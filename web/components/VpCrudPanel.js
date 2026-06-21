@@ -25,14 +25,14 @@ export default {
       <div v-if="view === 'list'" class="vp-crud-body vp-crud-list">
         <div v-if="vpList.length === 0" class="vp-crud-empty">
           <span class="vp-crud-empty-text">{{ $t('yeaft.vp.crud.empty') }}</span>
-          <button class="sp-btn sp-btn-primary vp-crud-primary-btn" type="button" @click="startCreate">
+          <button class="sp-btn sp-btn-primary" type="button" @click="startCreate">
             {{ $t('yeaft.vp.createFirst') }}
           </button>
         </div>
 
         <template v-else>
           <div class="vp-crud-list-toolbar">
-            <button class="sp-btn sp-btn-primary vp-crud-primary-btn" type="button" @click="startCreate">
+            <button class="sp-btn sp-btn-primary" type="button" @click="startCreate">
               {{ $t('yeaft.vp.crud.addNew') }}
             </button>
           </div>
@@ -131,7 +131,7 @@ export default {
           <button
             v-if="detail && !detail.isStock"
             type="button"
-            class="sp-btn sp-btn-primary vp-crud-primary-btn"
+            class="sp-btn sp-btn-primary"
             @click="editFromDetail"
             :disabled="busy"
           >
@@ -226,7 +226,7 @@ export default {
           <button type="button" class="vp-crud-link-btn" @click="returnToList" :disabled="busy">
             {{ $t('yeaft.vp.crud.form.cancel') }}
           </button>
-          <button type="submit" class="sp-btn sp-btn-primary vp-crud-primary-btn" :disabled="!canSubmit">
+          <button type="submit" class="sp-btn sp-btn-primary" :disabled="!canSubmit">
             {{ busy ? $t('yeaft.vp.crud.saving') : $t('yeaft.vp.crud.form.submit') }}
           </button>
         </div>

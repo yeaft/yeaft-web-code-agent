@@ -312,25 +312,12 @@
   white-space: nowrap;
 }
 
-.settings-pane-yeaft .vp-crud-primary-btn,
 .settings-pane-yeaft .vp-crud-link-btn,
 .settings-pane-yeaft .search-btn-primary,
 .settings-pane-yeaft .search-btn-secondary,
 .settings-pane-yeaft .search-link-btn {
   border-radius: 10px;
   font-family: inherit;
-}
-
-.settings-pane-yeaft .vp-crud-primary-btn {
-  background: var(--accent-blue);
-  color: var(--accent-fg);
-  border-color: var(--accent-blue);
-}
-
-.settings-pane-yeaft .vp-crud-primary-btn:hover:not(:disabled) {
-  background: var(--accent-blue-hover);
-  border-color: var(--accent-blue-hover);
-  opacity: 1;
 }
 
 .settings-pane-yeaft .search-btn-primary {

@@ -206,7 +206,8 @@ describe('Settings panel source', () => {
     expect(vpCrudPanelSource).toContain('class="vp-crud-card-main"');
     expect(vpCrudPanelSource).toContain('class="vp-crud-card-title-row"');
     expect(vpCrudPanelSource).toContain('class="vp-crud-card-name"');
-    expect(vpCrudPanelSource).toContain('sp-btn sp-btn-primary vp-crud-primary-btn');
+    expect(vpCrudPanelSource).toContain('sp-btn sp-btn-primary');
+    expect(vpCrudPanelSource).not.toContain('vp-crud-primary-btn');
     expect(vpCrudPanelSource).not.toContain('class="vp-crud-card-avatar"');
     expect(vpCrudPanelSource).not.toContain('class="vp-crud-card-subline"');
     expect(vpCrudPanelSource).not.toContain('@{{ vp.vpId }}');
@@ -218,6 +219,7 @@ describe('Settings panel source', () => {
     expect(settingsCss).toContain('min-height: 28px;');
     expect(settingsCss).toMatch(/\.settings-pane-yeaft \.vp-crud-card\s*\{[\s\S]*?background:\s*transparent;[\s\S]*?border:\s*0;[\s\S]*?border-radius:\s*0;/);
     expect(settingsCss).toMatch(/\.settings-pane-yeaft \.vp-crud-card-name\s*\{[\s\S]*?flex:\s*1 1 auto;[\s\S]*?min-width:\s*0;[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?white-space:\s*nowrap;/);
-    expect(settingsCss).toMatch(/\.settings-pane-yeaft \.vp-crud-primary-btn\s*\{[\s\S]*?background:\s*var\(--accent-blue\);[\s\S]*?border-color:\s*var\(--accent-blue\);/);
+    expect(settingsCss).not.toMatch(/\.settings-pane-yeaft \.vp-crud-primary-btn\b/);
+    expect(settingsCss).not.toMatch(/\.settings-pane-yeaft \.vp-crud-primary-btn[\s\S]*?background:\s*var\(--accent-blue\)/);
   });
 });
