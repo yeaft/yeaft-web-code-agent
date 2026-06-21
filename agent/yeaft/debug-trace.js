@@ -1,364 +1,676 @@
 /**
- * debug-trace.js — SQLite-backed debug trace for Yeaft
+ * debug-trace.js — file-backed debug trace for Yeaft
  *
- * Records every LLM turn, tool call, and event for debugging and analytics.
- * When disabled, uses NullTrace (same interface, zero overhead).
+ * Stores bounded request traces on disk without SQLite. Each request owns one
+ * compact JSON file under the session's debug folder:
+ *   <yeaftDir>/sessions/<sessionId>/debug/requests/<requestKey>/trace.json
  *
- * Reference: server/db/connection.js — Database(path), pragma WAL
+ * The file keeps one base request snapshot plus per-loop deltas. This avoids
+ * 100-200 tiny loop files and avoids repeating the whole cumulative message
+ * array for every loop. Debug history remains best-effort: failures are logged
+ * and dropped, never allowed to stop the agent.
  */
 
-import { DatabaseSync } from 'node:sqlite';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'fs';
+import { rename as renameAsync, writeFile as writeFileAsync } from 'fs/promises';
+import { basename, dirname, extname, join } from 'path';
 import { randomUUID } from 'crypto';
-import { statSync } from 'fs';
 
-/** Schema DDL — 3 tables + indexes */
-const SCHEMA = `
-  CREATE TABLE IF NOT EXISTS trace_turns (
-    id TEXT PRIMARY KEY,
-    trace_id TEXT NOT NULL,
-    message_id TEXT,
-    mode TEXT,
-    turn_number INTEGER,
-    model TEXT,
-    input_tokens INTEGER,
-    output_tokens INTEGER,
-    cache_read_tokens INTEGER DEFAULT 0,
-    cache_write_tokens INTEGER DEFAULT 0,
-    stop_reason TEXT,
-    latency_ms INTEGER,
-    response_text TEXT,
-    started_at INTEGER NOT NULL,
-    ended_at INTEGER,
-    group_id TEXT,
-    vp_id TEXT,
-    thread_id TEXT,
-    system_prompt TEXT,
-    messages_json TEXT,
-    tool_calls_json TEXT,
-    usage_json TEXT,
-    ttfb_ms INTEGER,
-    raw_request TEXT,
-    raw_response TEXT,
-    user_prompt TEXT
-  );
+const TRACE_VERSION = 2;
+const REQUEST_RETENTION = 10;
+const MAX_HISTORY_LIMIT = 10;
+const MAX_DREAM_EVENTS = 100;
+const MAX_TEXT_BYTES = 1024 * 1024;
+const MAX_TOOL_INPUT = 10 * 1024;
+const MAX_INLINE_VALUE_BYTES = 1024 * 1024;
+const MAX_RAW_REQUEST_BYTES = 2 * 1024 * 1024;
+const TRACE_FLUSH_DELAY_MS = 150;
 
-  CREATE TABLE IF NOT EXISTS trace_tools (
-    id TEXT PRIMARY KEY,
-    turn_id TEXT NOT NULL,
-    tool_name TEXT NOT NULL,
-    tool_input TEXT,
-    tool_output TEXT,
-    tool_call_id TEXT,
-    duration_ms INTEGER,
-    is_error INTEGER DEFAULT 0,
-    created_at INTEGER NOT NULL,
-    FOREIGN KEY (turn_id) REFERENCES trace_turns(id)
-  );
+function isPlainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value);
+}
 
-  CREATE TABLE IF NOT EXISTS trace_events (
-    id TEXT PRIMARY KEY,
-    trace_id TEXT NOT NULL,
-    event_type TEXT NOT NULL,
-    event_data TEXT,
-    created_at INTEGER NOT NULL
-  );
+function safeDirComponent(value, fallback = 'unknown') {
+  const raw = String(value || '').trim();
+  if (!raw) return fallback;
+  return raw.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || fallback;
+}
 
-  CREATE INDEX IF NOT EXISTS idx_turns_trace_id ON trace_turns(trace_id);
-  CREATE INDEX IF NOT EXISTS idx_turns_message_id ON trace_turns(message_id);
-  CREATE INDEX IF NOT EXISTS idx_turns_started_at ON trace_turns(started_at);
-  CREATE INDEX IF NOT EXISTS idx_turns_model ON trace_turns(model);
-  CREATE INDEX IF NOT EXISTS idx_tools_turn_id ON trace_tools(turn_id);
-  CREATE INDEX IF NOT EXISTS idx_tools_name ON trace_tools(tool_name);
-  CREATE INDEX IF NOT EXISTS idx_events_trace_id ON trace_events(trace_id);
-  CREATE INDEX IF NOT EXISTS idx_events_type ON trace_events(event_type);
-`;
+function fileTraceRoot(inputPath) {
+  const raw = String(inputPath || '').trim();
+  if (!raw) return null;
+  // Back-compat: callers and tests historically pass a concrete debug.db
+  // path. Do NOT collapse that to dirname(raw), or unrelated temp DB paths all
+  // share /tmp/debug and traces bleed across tests/sessions. Explicit dirPath
+  // callers pass the Yeaft root and get session-adjacent paths.
+  return extname(basename(raw)) ? `${raw}.files` : raw;
+}
 
-/**
- * Indexes that reference columns added by the v0.1.x fix-vp-multi-thread
- * migration. Must be executed AFTER `migrateAddColumn` for those columns
- * — running them inside the main SCHEMA block would fail on an old DB
- * whose `trace_turns` table predates `group_id` / `vp_id` / `thread_id`
- * (`CREATE TABLE IF NOT EXISTS` is a no-op when the table already
- * exists, so the columns are never added by SCHEMA alone).
- */
-const POST_MIGRATION_INDEXES = `
-  CREATE INDEX IF NOT EXISTS idx_turns_group_id ON trace_turns(group_id);
-  CREATE INDEX IF NOT EXISTS idx_turns_vp_id ON trace_turns(vp_id);
-  CREATE INDEX IF NOT EXISTS idx_turns_thread_id ON trace_turns(thread_id);
-`;
+function ensureDir(dir) {
+  mkdirSync(dir, { recursive: true });
+}
 
-/**
- * Idempotent column-adds for pre-existing trace databases. `ALTER TABLE …
- * ADD COLUMN` throws if the column already exists, so we wrap each call.
- * Mirrors the columns introduced above so older DBs upgrade in place.
- */
-function migrateAddColumn(db, table, column, type) {
+function atomicWriteJson(filePath, value) {
+  ensureDir(dirname(filePath));
+  const tmp = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  writeFileSync(tmp, JSON.stringify(value), 'utf8');
+  renameSync(tmp, filePath);
+}
+
+async function atomicWriteJsonAsync(filePath, value) {
+  ensureDir(dirname(filePath));
+  const tmp = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  await writeFileAsync(tmp, JSON.stringify(value), 'utf8');
+  await renameAsync(tmp, filePath);
+}
+
+function readJson(filePath) {
   try {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
-  } catch (err) {
-    if (!String(err?.message || err).match(/duplicate column name/i)) {
-      throw err;
-    }
-  }
-}
-
-/** Max tool input size stored inline. Tool output is persisted raw. */
-const MAX_TOOL_INPUT = 10240;
-
-/**
- * Max per-loop payload (system prompt, messages JSON, raw request /
- * response, response text) stored per row. Larger than MAX_TOOL_INPUT
- * because real-world LLM exchanges (system prompt + 30K-token message
- * trail + raw response) routinely cross 10KB. 256KB lets us replay the
- * panel verbatim for the most recent traces without bloating the DB.
- */
-const MAX_LOOP_PAYLOAD = 256 * 1024;
-
-/**
- * Truncate a string to a max length, appending "... [truncated]" if needed.
- * @param {string|null|undefined} str
- * @param {number} max
- * @returns {string|null}
- */
-function truncate(str, max) {
-  if (!str) return str ?? null;
-  if (str.length <= max) return str;
-  return str.slice(0, max) + '... [truncated]';
-}
-
-function truncatedJsonSentinel(originalBytes) {
-  return {
-    __truncated: true,
-    originalBytes,
-    maxBytes: MAX_LOOP_PAYLOAD,
-  };
-}
-
-function truncateJsonValue(value) {
-  if (value == null) return value;
-  if (typeof value === 'string') return truncate(value, MAX_LOOP_PAYLOAD);
-  try {
-    const s = JSON.stringify(value);
-    if (s.length <= MAX_LOOP_PAYLOAD) return value;
-    return truncatedJsonSentinel(s.length);
+    return JSON.parse(readFileSync(filePath, 'utf8'));
   } catch {
     return null;
   }
 }
 
-function boundDreamEventData(eventType, eventData) {
-  if (eventType !== 'dream_loop' || !eventData || typeof eventData !== 'object') return eventData;
+function truncateText(value, maxBytes = MAX_TEXT_BYTES) {
+  if (value == null) return value ?? null;
+  const str = String(value);
+  if (Buffer.byteLength(str, 'utf8') <= maxBytes) return str;
+  let out = str.slice(0, maxBytes);
+  while (Buffer.byteLength(out, 'utf8') > maxBytes && out.length > 0) out = out.slice(0, -1);
+  return `${out}\n... [truncated to ${maxBytes} bytes]`;
+}
+
+function cloneJsonValue(value) {
+  if (value == null) return value;
+  try { return JSON.parse(JSON.stringify(value)); }
+  catch { return null; }
+}
+
+function safeJsonValue(value, maxBytes = MAX_INLINE_VALUE_BYTES) {
+  if (value == null) return value;
+  try {
+    const json = JSON.stringify(value);
+    if (Buffer.byteLength(json, 'utf8') <= maxBytes) return JSON.parse(json);
+    return {
+      __truncated: true,
+      originalBytes: Buffer.byteLength(json, 'utf8'),
+      maxBytes,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeUsage(usage = {}, fallback = {}) {
+  const inputTokens = Number.isFinite(Number(usage?.inputTokens)) ? Number(usage.inputTokens) : Number(fallback.inputTokens || 0);
+  const outputTokens = Number.isFinite(Number(usage?.outputTokens)) ? Number(usage.outputTokens) : Number(fallback.outputTokens || 0);
+  const cacheReadTokens = Number.isFinite(Number(usage?.cacheReadTokens)) ? Number(usage.cacheReadTokens) : Number(fallback.cacheReadTokens || 0);
+  const cacheWriteTokens = Number.isFinite(Number(usage?.cacheWriteTokens)) ? Number(usage.cacheWriteTokens) : Number(fallback.cacheWriteTokens || 0);
+  const totalInputTokens = Number.isFinite(Number(usage?.totalInputTokens))
+    ? Number(usage.totalInputTokens)
+    : inputTokens + cacheReadTokens + cacheWriteTokens;
   return {
-    ...eventData,
-    systemPrompt: truncateJsonValue(eventData.systemPrompt),
-    messages: truncateJsonValue(eventData.messages),
-    response: truncateJsonValue(eventData.response),
-    rawRequest: truncateJsonValue(eventData.rawRequest),
-    rawResponse: truncateJsonValue(eventData.rawResponse),
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    totalInputTokens,
+    totalTokens: Number.isFinite(Number(usage?.totalTokens))
+      ? Number(usage.totalTokens)
+      : totalInputTokens + outputTokens,
   };
 }
 
-/**
- * DebugTrace — SQLite-backed debug trace.
- */
+function stableEqual(a, b) {
+  try { return JSON.stringify(a) === JSON.stringify(b); }
+  catch { return false; }
+}
+
+function jsonByteLength(value) {
+  try { return Buffer.byteLength(JSON.stringify(value), 'utf8'); }
+  catch { return Infinity; }
+}
+
+function rawRequestSentinel(reason, value = null, maxBytes = MAX_RAW_REQUEST_BYTES) {
+  const preview = typeof value === 'string'
+    ? truncateText(value, Math.min(64 * 1024, maxBytes))
+    : null;
+  const originalBytes = value == null ? null : jsonByteLength(value);
+  return {
+    __truncated: true,
+    reason,
+    ...(originalBytes != null ? { originalBytes } : {}),
+    maxBytes,
+    ...(preview ? { preview } : {}),
+  };
+}
+
+function boundRawValue(value, reason = 'raw_request_budget') {
+  if (value == null) return value;
+  const cloned = typeof value === 'string' ? value : cloneJsonValue(value);
+  if (cloned == null) return null;
+  if (jsonByteLength(cloned) <= MAX_RAW_REQUEST_BYTES) return cloned;
+  return rawRequestSentinel(reason, value);
+}
+
+function buildRawRequestBase(value) {
+  if (value == null) return null;
+  if (typeof value === 'string') return truncateText(value, MAX_RAW_REQUEST_BYTES);
+  if (!isPlainObject(value)) return boundRawValue(value);
+  const base = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (key === 'body' && isPlainObject(item)) {
+      const body = {};
+      for (const [bodyKey, bodyValue] of Object.entries(item)) {
+        body[bodyKey] = boundRawValue(bodyValue, `raw_request_body_${bodyKey}_budget`);
+      }
+      base.body = body;
+    } else {
+      base[key] = boundRawValue(item, `raw_request_${key}_budget`);
+    }
+  }
+  return base;
+}
+
+function buildRawMessagesDelta(previousMessages, nextMessages) {
+  if (!Array.isArray(previousMessages) || !Array.isArray(nextMessages)) return null;
+  const prefix = messagesPrefixLength(previousMessages, nextMessages);
+  if (prefix === previousMessages.length && prefix <= nextMessages.length) {
+    return { messagesFrom: prefix, messagesAppend: boundRawValue(nextMessages.slice(prefix), 'raw_request_messages_append_budget') };
+  }
+  return { messages: boundRawValue(nextMessages, 'raw_request_messages_budget') };
+}
+
+function rawComparableRequest(value) {
+  if (value == null) return null;
+  if (!isPlainObject(value)) return value;
+  const out = { ...value };
+  if (isPlainObject(value.body)) out.body = { ...value.body };
+  return out;
+}
+
+function buildRawRequestDelta(previous, next) {
+  if (next == null) return previous == null ? null : { replacement: null };
+  if (previous == null) return { base: buildRawRequestBase(next) };
+  const comparablePrevious = rawComparableRequest(previous);
+  const comparableNext = rawComparableRequest(next);
+  if (typeof comparablePrevious === 'string' || typeof comparableNext === 'string') {
+    return comparablePrevious === comparableNext ? null : { replacement: rawRequestSentinel('raw_request_string_replaced', comparableNext) };
+  }
+  if (!isPlainObject(comparablePrevious) || !isPlainObject(comparableNext)) {
+    return stableEqual(comparablePrevious, comparableNext) ? null : { replacement: rawRequestSentinel('raw_request_replaced') };
+  }
+
+  const delta = { set: {}, body: {} };
+  for (const key of Object.keys(comparableNext)) {
+    if (key === 'body') continue;
+    if (!stableEqual(comparablePrevious[key], comparableNext[key])) delta.set[key] = boundRawValue(comparableNext[key], `raw_request_${key}_budget`);
+  }
+  for (const key of Object.keys(comparablePrevious)) {
+    if (key !== 'body' && !Object.prototype.hasOwnProperty.call(comparableNext, key)) delta.set[key] = null;
+  }
+
+  const prevBody = isPlainObject(comparablePrevious.body) ? comparablePrevious.body : null;
+  const nextBody = isPlainObject(comparableNext.body) ? comparableNext.body : null;
+  if (prevBody && nextBody) {
+    for (const key of Object.keys(nextBody)) {
+      if (key === 'messages') continue;
+      if (!stableEqual(prevBody[key], nextBody[key])) delta.body[key] = boundRawValue(nextBody[key], `raw_request_body_${key}_budget`);
+    }
+    for (const key of Object.keys(prevBody)) {
+      if (key !== 'messages' && !Object.prototype.hasOwnProperty.call(nextBody, key)) delta.body[key] = null;
+    }
+    const msgDelta = buildRawMessagesDelta(prevBody.messages, nextBody.messages);
+    if (msgDelta) Object.assign(delta.body, msgDelta);
+  } else if (!stableEqual(previous.body, next.body)) {
+    delta.set.body = rawRequestSentinel('raw_request_body_replaced');
+  }
+
+  if (Object.keys(delta.set).length === 0) delete delta.set;
+  if (Object.keys(delta.body).length === 0) delete delta.body;
+  if (!delta.set && !delta.body) return null;
+  if (jsonByteLength(delta) > MAX_RAW_REQUEST_BYTES) {
+    return { replacement: rawRequestSentinel('raw_request_delta_budget') };
+  }
+  return delta;
+}
+
+function applyRawRequestDelta(previous, delta) {
+  if (!delta) return previous ?? null;
+  if (Object.prototype.hasOwnProperty.call(delta, 'base')) return cloneJsonValue(delta.base) ?? delta.base ?? null;
+  if (Object.prototype.hasOwnProperty.call(delta, 'replacement')) return cloneJsonValue(delta.replacement) ?? delta.replacement ?? null;
+  const next = isPlainObject(previous) ? cloneJsonValue(previous) || {} : {};
+  if (isPlainObject(delta.set)) {
+    for (const [key, value] of Object.entries(delta.set)) next[key] = cloneJsonValue(value) ?? value;
+  }
+  if (isPlainObject(delta.body)) {
+    const body = isPlainObject(next.body) ? { ...next.body } : {};
+    for (const [key, value] of Object.entries(delta.body)) {
+      if (key === 'messagesFrom' || key === 'messagesAppend' || key === 'messages') continue;
+      body[key] = cloneJsonValue(value) ?? value;
+    }
+    if (Array.isArray(delta.body.messages)) {
+      body.messages = cloneJsonValue(delta.body.messages) || [];
+    } else if (Array.isArray(delta.body.messagesAppend)) {
+      const from = Number.isFinite(Number(delta.body.messagesFrom)) ? Number(delta.body.messagesFrom) : (Array.isArray(body.messages) ? body.messages.length : 0);
+      body.messages = (Array.isArray(body.messages) ? body.messages.slice(0, from) : []).concat(cloneJsonValue(delta.body.messagesAppend) || []);
+    }
+    next.body = body;
+  }
+  return next;
+}
+
+function messagesPrefixLength(prevMessages, nextMessages) {
+  if (!Array.isArray(prevMessages) || !Array.isArray(nextMessages)) return 0;
+  const max = Math.min(prevMessages.length, nextMessages.length);
+  let i = 0;
+  for (; i < max; i++) {
+    if (!stableEqual(prevMessages[i], nextMessages[i])) break;
+  }
+  return i;
+}
+
+function buildRequestSnapshot(info = {}) {
+  return {
+    systemPrompt: truncateText(info.systemPrompt || '', MAX_TEXT_BYTES),
+    messages: Array.isArray(info.messages) ? cloneJsonValue(info.messages) : [],
+    rawRequest: info.rawRequest ?? null,
+  };
+}
+
+function buildRequestDelta(previous, next) {
+  if (!previous) {
+    return {
+      base: true,
+      systemPrompt: next.systemPrompt || '',
+      messages: Array.isArray(next.messages) ? next.messages : [],
+    };
+  }
+  const delta = {};
+  if ((next.systemPrompt || '') !== (previous.systemPrompt || '')) {
+    delta.systemPrompt = next.systemPrompt || '';
+  }
+  const prevMessages = Array.isArray(previous.messages) ? previous.messages : [];
+  const nextMessages = Array.isArray(next.messages) ? next.messages : [];
+  const prefix = messagesPrefixLength(prevMessages, nextMessages);
+  if (prefix === prevMessages.length && prefix <= nextMessages.length) {
+    const appended = nextMessages.slice(prefix);
+    delta.messagesFrom = prefix;
+    delta.messagesAppend = appended;
+  } else {
+    delta.messages = nextMessages;
+  }
+  const rawRequestDelta = buildRawRequestDelta(previous.rawRequest, next.rawRequest);
+  if (rawRequestDelta) delta.rawRequestDelta = rawRequestDelta;
+  return delta;
+}
+
+function applyRequestDelta(previous, delta = {}) {
+  const base = previous || { systemPrompt: '', messages: [], rawRequest: null };
+  const next = {
+    systemPrompt: base.systemPrompt || '',
+    messages: Array.isArray(base.messages) ? [...base.messages] : [],
+    rawRequest: base.rawRequest ?? null,
+  };
+  if (delta.base) {
+    return {
+      systemPrompt: delta.systemPrompt || '',
+      messages: Array.isArray(delta.messages) ? delta.messages : [],
+      rawRequest: base.rawRequest ?? null,
+    };
+  }
+  if (typeof delta.systemPrompt === 'string') next.systemPrompt = delta.systemPrompt;
+  if (Array.isArray(delta.messages)) {
+    next.messages = delta.messages;
+  } else if (Array.isArray(delta.messagesAppend)) {
+    const from = Number.isFinite(Number(delta.messagesFrom)) ? Number(delta.messagesFrom) : next.messages.length;
+    next.messages = next.messages.slice(0, from).concat(delta.messagesAppend);
+  }
+  if (Object.prototype.hasOwnProperty.call(delta, 'rawRequestDelta')) next.rawRequest = applyRawRequestDelta(next.rawRequest, delta.rawRequestDelta);
+  return next;
+}
+
+function sessionRequestsDir(rootDir, sessionId) {
+  if (sessionId) return join(rootDir, 'sessions', safeDirComponent(sessionId), 'debug', 'requests');
+  return join(rootDir, 'debug', 'requests');
+}
+
+function requestFilePath(requestDir) {
+  return join(requestDir, 'trace.json');
+}
+
+function tracePathFor(rootDir, sessionId, requestKey) {
+  return requestFilePath(join(sessionRequestsDir(rootDir, sessionId), safeDirComponent(requestKey, 'request')));
+}
+
+function summarizeTrace(trace, detailsLoaded = false) {
+  const loops = Array.isArray(trace?.loops) ? trace.loops : [];
+  const usage = loops.reduce((acc, loop) => {
+    const u = normalizeUsage(loop?.usage || {});
+    acc.totalMs += Number(loop?.latencyMs || 0);
+    acc.totalTokens += u.totalTokens || 0;
+    acc.summaryInputTokens += u.totalInputTokens || 0;
+    acc.summaryOutputTokens += u.outputTokens || 0;
+    return acc;
+  }, { totalMs: 0, totalTokens: 0, summaryInputTokens: 0, summaryOutputTokens: 0 });
+  return {
+    turnId: trace?.requestId || trace?.traceId || '',
+    userPrompt: trace?.userPrompt || '',
+    sessionId: trace?.sessionId || null,
+    vpId: trace?.vpId || null,
+    threadId: trace?.threadId || null,
+    openedAt: trace?.openedAt || 0,
+    closedAt: trace?.closedAt || null,
+    totalMs: usage.totalMs,
+    totalTokens: usage.totalTokens,
+    summaryInputTokens: usage.summaryInputTokens,
+    summaryOutputTokens: usage.summaryOutputTokens,
+    loopCount: loops.length,
+    memoryLoaded: null,
+    memoryAdjust: null,
+    tools: Array.isArray(trace?.tools) ? trace.tools.map(t => ({
+      loopNumber: t.loopNumber || 0,
+      callId: t.toolCallId || t.id || null,
+      traceToolId: t.id || null,
+      name: t.toolName || t.name || '?',
+      toolOutput: t.toolOutput == null ? null : String(t.toolOutput),
+      durationMs: t.durationMs || 0,
+      isError: !!t.isError,
+    })) : [],
+    detailsLoaded,
+    requestBase: trace?.baseRequest || null,
+  };
+}
+
+function expandTrace(trace) {
+  const turnsById = new Map([[trace.requestId || trace.traceId, summarizeTrace(trace, true)]]);
+  let snapshot = null;
+  const loops = [];
+  for (const loop of Array.isArray(trace?.loops) ? trace.loops : []) {
+    snapshot = applyRequestDelta(snapshot || trace.baseRequest || null, loop.requestDelta || {});
+    const usage = normalizeUsage(loop?.usage || {});
+    loops.push({
+      turnId: trace.requestId || trace.traceId,
+      loopInstanceId: loop.loopInstanceId || loop.turnRowId || null,
+      loopNumber: loop.loopNumber || 0,
+      model: loop.model || null,
+      systemPrompt: snapshot.systemPrompt || '',
+      messages: Array.isArray(snapshot.messages) ? snapshot.messages : [],
+      response: loop.response || '',
+      toolCalls: Array.isArray(loop.toolCalls) ? loop.toolCalls : [],
+      usage,
+      latencyMs: loop.latencyMs || 0,
+      ttfbMs: loop.ttfbMs || null,
+      stopReason: loop.stopReason || null,
+      at: loop.at || null,
+      rawRequest: snapshot.rawRequest ?? null,
+      rawResponse: loop.rawResponse ?? null,
+      requestDelta: loop.requestDelta || {},
+      requestBase: trace.baseRequest || null,
+      sessionId: trace.sessionId || null,
+      vpId: trace.vpId || null,
+      threadId: trace.threadId || null,
+    });
+  }
+  return { loops, turns: Array.from(turnsById.values()) };
+}
+
+function traceToLegacyRows(trace) {
+  let snapshot = null;
+  return (Array.isArray(trace?.loops) ? trace.loops : []).map((loop) => {
+    snapshot = applyRequestDelta(snapshot || trace.baseRequest || null, loop.requestDelta || {});
+    const u = normalizeUsage(loop?.usage || {});
+    return {
+      id: loop.turnRowId || loop.loopInstanceId || randomUUID(),
+      trace_id: trace.traceId || trace.requestId,
+      message_id: trace.messageId || null,
+      mode: trace.mode || null,
+      turn_number: loop.loopNumber || 0,
+      model: loop.model || null,
+      input_tokens: u.inputTokens || 0,
+      output_tokens: u.outputTokens || 0,
+      cache_read_tokens: u.cacheReadTokens || 0,
+      cache_write_tokens: u.cacheWriteTokens || 0,
+      stop_reason: loop.stopReason || null,
+      latency_ms: loop.latencyMs || 0,
+      response_text: loop.response || '',
+      started_at: loop.startedAt || trace.openedAt || 0,
+      ended_at: loop.at || trace.closedAt || null,
+      group_id: trace.sessionId || null,
+      vp_id: trace.vpId || null,
+      thread_id: trace.threadId || null,
+      system_prompt: snapshot.systemPrompt || '',
+      messages_json: JSON.stringify(snapshot.messages || []),
+      tool_calls_json: JSON.stringify(loop.toolCalls || []),
+      usage_json: JSON.stringify(u),
+      ttfb_ms: loop.ttfbMs || null,
+      raw_request: typeof snapshot.rawRequest === 'string' ? snapshot.rawRequest : JSON.stringify(snapshot.rawRequest ?? null),
+      raw_response: typeof loop.rawResponse === 'string' ? loop.rawResponse : JSON.stringify(loop.rawResponse ?? null),
+      user_prompt: trace.userPrompt || '',
+    };
+  });
+}
+
+function traceToolToLegacy(trace, tool) {
+  return {
+    id: tool.id || randomUUID(),
+    turn_id: tool.turnRowId || null,
+    tool_name: tool.toolName || tool.name || '?',
+    tool_input: tool.toolInput == null ? null : String(tool.toolInput),
+    tool_output: tool.toolOutput == null ? null : String(tool.toolOutput),
+    tool_call_id: tool.toolCallId || null,
+    duration_ms: tool.durationMs || 0,
+    is_error: tool.isError ? 1 : 0,
+    created_at: tool.createdAt || trace.openedAt || 0,
+  };
+}
+
+function collectTraceFiles(rootDir, sessionId = null) {
+  const files = [];
+  const addFromRequestsDir = (requestsDir) => {
+    let entries = [];
+    try { entries = readdirSync(requestsDir, { withFileTypes: true }); }
+    catch { return; }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const file = requestFilePath(join(requestsDir, entry.name));
+      if (existsSync(file)) files.push(file);
+    }
+  };
+  if (sessionId) {
+    addFromRequestsDir(sessionRequestsDir(rootDir, sessionId));
+    return files;
+  }
+  addFromRequestsDir(sessionRequestsDir(rootDir, null));
+  const sessionsRoot = join(rootDir, 'sessions');
+  let sessionEntries = [];
+  try { sessionEntries = readdirSync(sessionsRoot, { withFileTypes: true }); }
+  catch { return files; }
+  for (const entry of sessionEntries) {
+    if (!entry.isDirectory()) continue;
+    addFromRequestsDir(join(sessionsRoot, entry.name, 'debug', 'requests'));
+  }
+  return files;
+}
+
+function readTraceSummaries(rootDir, sessionId = null) {
+  const traces = [];
+  for (const file of collectTraceFiles(rootDir, sessionId)) {
+    const trace = readJson(file);
+    if (!trace || !trace.requestId) continue;
+    traces.push({ trace, file, openedAt: Number(trace.openedAt || 0) });
+  }
+  traces.sort((a, b) => ((a.openedAt || 0) - (b.openedAt || 0)) || String(a.trace?.requestKey || a.file).localeCompare(String(b.trace?.requestKey || b.file)));
+  return traces;
+}
+
+function countDirFiles(rootDir) {
+  let files = 0;
+  let bytes = 0;
+  const walk = (dir) => {
+    let entries = [];
+    try { entries = readdirSync(dir, { withFileTypes: true }); }
+    catch { return; }
+    for (const entry of entries) {
+      const p = join(dir, entry.name);
+      if (entry.isDirectory()) walk(p);
+      else {
+        files += 1;
+        try { bytes += statSync(p).size; } catch { /* ignore */ }
+      }
+    }
+  };
+  walk(rootDir);
+  return { files, bytes };
+}
+
 export class DebugTrace {
-  /** @type {import('node:sqlite').DatabaseSync} */
-  #db;
-
   /** @type {string} */
-  #dbPath;
-
-  // Prepared statements (created lazily)
-  #stmts = {};
+  #rootDir;
+  /** @type {Map<string, { requestKey: string, sessionId: string|null, traceId: string, loopNumber: number }>} */
+  #turnIndex = new Map();
+  /** @type {Map<string, object>} */
+  #requestCache = new Map();
+  /** @type {Map<string, object>} */
+  #pendingWrites = new Map();
+  /** @type {Map<string, NodeJS.Timeout>} */
+  #flushTimers = new Map();
+  /** @type {number} */
+  #sequence = 0;
 
   /**
-   * @param {string} dbPath — Path to the SQLite database file.
+   * @param {string} tracePath — Back-compatible path. If it looks like a DB
+   * file, traces are stored in a sibling `debug/` directory.
    */
-  constructor(dbPath) {
-    this.#dbPath = dbPath;
-    this.#db = new DatabaseSync(dbPath);
-    // INCREMENTAL auto-vacuum lets cleanup() return freed pages to the OS via
-    // `PRAGMA incremental_vacuum` instead of leaving the file at its historical
-    // peak. SQLite only honours an auto_vacuum *change* before the first table
-    // is created (a fresh DB) — on a pre-existing store it is a silent no-op, so
-    // existing databases keep their default `auto_vacuum=NONE` and are
-    // unaffected (they only shrink under a manual compact()/VACUUM). Databases
-    // created from this version on are self-trimming. Must precede SCHEMA.
-    this.#db.exec('PRAGMA auto_vacuum = INCREMENTAL');
-    this.#db.exec('PRAGMA journal_mode = WAL');
-    this.#db.exec('PRAGMA foreign_keys = ON');
-    this.#db.exec(SCHEMA);
-    // Forward-compat: a DB created by an older version of the bridge
-    // will be missing the group/vp/thread + per-loop snapshot columns.
-    // Add them on open; no-op for fresh DBs (column already exists
-    // from SCHEMA above).
-    migrateAddColumn(this.#db, 'trace_turns', 'group_id', 'TEXT');
-    migrateAddColumn(this.#db, 'trace_turns', 'vp_id', 'TEXT');
-    migrateAddColumn(this.#db, 'trace_turns', 'thread_id', 'TEXT');
-    migrateAddColumn(this.#db, 'trace_turns', 'system_prompt', 'TEXT');
-    migrateAddColumn(this.#db, 'trace_turns', 'messages_json', 'TEXT');
-    migrateAddColumn(this.#db, 'trace_turns', 'tool_calls_json', 'TEXT');
-    migrateAddColumn(this.#db, 'trace_turns', 'usage_json', 'TEXT');
-    migrateAddColumn(this.#db, 'trace_turns', 'ttfb_ms', 'INTEGER');
-    migrateAddColumn(this.#db, 'trace_turns', 'raw_request', 'TEXT');
-    migrateAddColumn(this.#db, 'trace_turns', 'raw_response', 'TEXT');
-    // C2 fix: explicit `user_prompt` column. Deriving the prompt from
-    // `messages_json` is unsafe because every loop after turn 1 in a
-    // multi-loop tool-call cycle persists the *cumulative* conversation
-    // snapshot — `messages.find(role==='user')` would return turn 1's
-    // text for every subsequent turn, mislabeling every Turn header.
-    migrateAddColumn(this.#db, 'trace_turns', 'user_prompt', 'TEXT');
-    migrateAddColumn(this.#db, 'trace_tools', 'tool_call_id', 'TEXT');
-    // Indexes on the just-added columns. Must run AFTER the ALTER TABLEs
-    // — running them inside SCHEMA's CREATE INDEX IF NOT EXISTS block
-    // would fail with "no such column: group_id" on a pre-bugfix DB.
-    this.#db.exec(POST_MIGRATION_INDEXES);
+  constructor(tracePath) {
+    const rootDir = fileTraceRoot(tracePath);
+    if (!rootDir) throw new Error('DebugTrace requires a storage path');
+    this.#rootDir = rootDir;
+    ensureDir(rootDir);
   }
 
-  // ─── Write API ───────────────────────────────────────────────
-
-  /**
-   * Start a new turn.
-   * @param {{ traceId: string, messageId?: string, mode?: string, turnNumber?: number, sessionId?: string, vpId?: string, threadId?: string, userPrompt?: string }} opts
-   * @returns {string} — turnId
-   */
-  startTurn({ traceId, messageId = null, mode = null, turnNumber = null, sessionId = null, vpId = null, threadId = null, userPrompt = null }) {
-    const id = randomUUID();
+  startTurn({ traceId, messageId = null, mode = null, turnNumber = null, sessionId = null, vpId = null, threadId = null, userPrompt = null } = {}) {
+    const turnRowId = randomUUID();
     const now = Date.now();
-    this.#prepare('insertTurn', `
-      INSERT INTO trace_turns (id, trace_id, message_id, mode, turn_number, started_at, group_id, vp_id, thread_id, user_prompt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, traceId, messageId, mode, turnNumber, now, sessionId, vpId, threadId, truncate(userPrompt, MAX_LOOP_PAYLOAD));
-    return id;
-  }
-
-  /**
-   * End a turn with model response info.
-   * @param {string} turnId
-   * @param {{ model?: string, inputTokens?: number, outputTokens?: number, cacheReadTokens?: number, cacheWriteTokens?: number, stopReason?: string, latencyMs?: number, responseText?: string, systemPrompt?: string, messages?: unknown, toolCalls?: unknown, usage?: unknown, ttfbMs?: number, rawRequest?: unknown, rawResponse?: unknown }} info
-   */
-  endTurn(turnId, {
-    model = null,
-    inputTokens = null,
-    outputTokens = null,
-    cacheReadTokens = 0,
-    cacheWriteTokens = 0,
-    stopReason = null,
-    latencyMs = null,
-    responseText = null,
-    systemPrompt = null,
-    messages = null,
-    toolCalls = null,
-    usage = null,
-    ttfbMs = null,
-    rawRequest = null,
-    rawResponse = null,
-  } = {}) {
-    const now = Date.now();
-    // JSON-stringify the structured fields so they round-trip through
-    // SQLite as TEXT. JSON serialisation might fail (cyclic structure /
-    // BigInt) — guard with try/catch and persist null on failure so a
-    // single bad message can never tank the whole turn record.
-    //
-    // I2 fix: if the serialised JSON exceeds MAX_LOOP_PAYLOAD, the naïve
-    // `truncate(s, MAX)` would append `... [truncated]` mid-string and
-    // make the row's JSON unparseable. The reader's `parseJsonSafe` would
-    // then silently return null and the panel would render the loop with
-    // empty messages / toolCalls / usage. Persist a structured sentinel
-    // instead so the panel can render a "[truncated, N bytes]" notice.
-    const safeStringify = (v) => {
-      if (v == null) return null;
-      try {
-        const s = JSON.stringify(v);
-        if (s.length <= MAX_LOOP_PAYLOAD) return s;
-        return JSON.stringify(truncatedJsonSentinel(s.length));
-      } catch { return null; }
-    };
-    // For raw request/response, accept either a pre-stringified blob
-    // (treat as opaque text — truncation here is fine because
-    // parseJsonSafe is not used on raw_*) or a structured object (route
-    // through safeStringify which preserves JSON validity).
-    const stringifyRaw = (v) => {
-      if (v == null) return null;
-      if (typeof v === 'string') return truncate(v, MAX_LOOP_PAYLOAD);
-      return safeStringify(v);
-    };
-    this.#prepare('endTurn', `
-      UPDATE trace_turns SET
-        model = ?, input_tokens = ?, output_tokens = ?,
-        cache_read_tokens = ?, cache_write_tokens = ?,
-        stop_reason = ?, latency_ms = ?, response_text = ?, ended_at = ?,
-        system_prompt = ?, messages_json = ?, tool_calls_json = ?,
-        usage_json = ?, ttfb_ms = ?, raw_request = ?, raw_response = ?
-      WHERE id = ?
-    `).run(
-      model, inputTokens, outputTokens,
-      cacheReadTokens, cacheWriteTokens,
-      stopReason, latencyMs, truncate(responseText, MAX_LOOP_PAYLOAD),
+    const request = this.#getOrCreateRequest({
+      traceId: traceId || turnRowId,
+      turnNumber: Number(turnNumber || 0),
+      messageId,
+      mode,
+      sessionId,
+      vpId,
+      threadId,
+      userPrompt,
       now,
-      truncate(systemPrompt, MAX_LOOP_PAYLOAD),
-      safeStringify(messages),
-      safeStringify(toolCalls),
-      safeStringify(usage),
-      ttfbMs,
-      stringifyRaw(rawRequest),
-      stringifyRaw(rawResponse),
-      turnId,
-    );
+      turnRowId,
+    });
+    this.#turnIndex.set(turnRowId, {
+      requestKey: request.requestKey,
+      sessionId: request.sessionId || null,
+      traceId: request.traceId,
+      loopNumber: Number(turnNumber || 0),
+    });
+    return turnRowId;
   }
 
-  /**
-   * Log a tool call within a turn.
-   * @param {string} turnId
-   * @param {{ toolName: string, toolCallId?: string|null, toolInput?: string, toolOutput?: string, durationMs?: number, isError?: boolean }} info
-   * @returns {string} — tool record id
-   */
-  logTool(turnId, {
-    toolName,
-    toolCallId = null,
-    toolInput = null,
-    toolOutput = null,
-    durationMs = null,
-    isError = false,
-  }) {
+  endTurn(turnId, info = {}) {
+    const ctx = this.#turnIndex.get(turnId);
+    if (!ctx) return;
+    const trace = this.#loadRequest(ctx.sessionId, ctx.requestKey);
+    if (!trace) return;
+    const loopNumber = ctx.loopNumber || Number(info.turnNumber || 0);
+    const snapshot = buildRequestSnapshot(info);
+    const previousSnapshot = trace._lastSnapshot || this.#reconstructLastSnapshot(trace);
+    if (!trace.baseRequest) {
+      const rawRequestBaseDelta = buildRawRequestDelta(null, snapshot.rawRequest);
+      trace.baseRequest = { ...snapshot, rawRequest: applyRawRequestDelta(null, rawRequestBaseDelta) };
+    }
+    const loopIndex = (trace.loops || []).findIndex(l => l.turnRowId === turnId);
+    const loop = {
+      loopInstanceId: turnId,
+      turnRowId: turnId,
+      loopNumber,
+      startedAt: trace.openedAt || Date.now(),
+      model: info.model || null,
+      response: truncateText(info.responseText || '', MAX_TEXT_BYTES),
+      toolCalls: cloneJsonValue(Array.isArray(info.toolCalls) ? info.toolCalls : []),
+      usage: normalizeUsage(info.usage || {}, {
+        inputTokens: info.inputTokens || 0,
+        outputTokens: info.outputTokens || 0,
+        cacheReadTokens: info.cacheReadTokens || 0,
+        cacheWriteTokens: info.cacheWriteTokens || 0,
+      }),
+      latencyMs: Number(info.latencyMs || 0),
+      ttfbMs: Number.isFinite(Number(info.ttfbMs)) ? Number(info.ttfbMs) : null,
+      stopReason: info.stopReason || null,
+      at: Date.now(),
+      rawResponse: typeof info.rawResponse === 'string'
+        ? truncateText(info.rawResponse, MAX_TEXT_BYTES)
+        : safeJsonValue(info.rawResponse),
+      requestDelta: buildRequestDelta(previousSnapshot, snapshot),
+    };
+    if (loopIndex >= 0) trace.loops[loopIndex] = loop;
+    else trace.loops.push(loop);
+    trace.loops.sort((a, b) => (a.loopNumber || 0) - (b.loopNumber || 0) || String(a.turnRowId || '').localeCompare(String(b.turnRowId || '')));
+    trace.closedAt = loop.at;
+    trace.updatedAt = loop.at;
+    trace.active = info.stopReason ? !['end_turn', 'error', 'aborted'].includes(String(info.stopReason)) : false;
+    trace._lastSnapshot = snapshot;
+    if (!trace.active) this.#scheduleSave(trace);
+  }
+
+  logTool(turnId, { toolName, toolCallId = null, toolInput = null, toolOutput = null, durationMs = null, isError = false } = {}) {
     const id = randomUUID();
-    const now = Date.now();
-    this.#prepare('insertTool', `
-      INSERT INTO trace_tools (id, turn_id, tool_name, tool_input, tool_output, tool_call_id, duration_ms, is_error, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      id, turnId, toolName,
-      truncate(toolInput, MAX_TOOL_INPUT),
-      toolOutput == null ? null : String(toolOutput),
+    const ctx = this.#turnIndex.get(turnId);
+    if (!ctx) return id;
+    const trace = this.#loadRequest(ctx.sessionId, ctx.requestKey);
+    if (!trace) return id;
+    if (!Array.isArray(trace.tools)) trace.tools = [];
+    trace.tools.push({
+      id,
+      turnRowId: turnId,
+      loopNumber: ctx.loopNumber || 0,
+      toolName: toolName || '?',
       toolCallId,
-      durationMs, isError ? 1 : 0, now,
-    );
+      toolInput: truncateText(toolInput == null ? null : String(toolInput), MAX_TOOL_INPUT),
+      toolOutput: truncateText(toolOutput == null ? null : String(toolOutput), MAX_TEXT_BYTES),
+      durationMs: Number(durationMs || 0),
+      isError: !!isError,
+      createdAt: Date.now(),
+    });
+    trace.updatedAt = Date.now();
+    if (!trace.active) this.#scheduleSave(trace);
     return id;
   }
 
-  /**
-   * Log a freeform event.
-   * @param {{ traceId: string, eventType: string, eventData?: unknown }} info
-   * @returns {string} — event id
-   */
-  logEvent({ traceId, eventType, eventData = null }) {
+  logEvent({ traceId, eventType, eventData = null } = {}) {
     const id = randomUUID();
-    const now = Date.now();
-    const boundedData = boundDreamEventData(eventType, eventData);
-    const data = boundedData != null ? JSON.stringify(boundedData) : null;
-    this.#prepare('insertEvent', `
-      INSERT INTO trace_events (id, trace_id, event_type, event_data, created_at)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(id, traceId, eventType, data, now);
+    const file = join(this.#rootDir, 'events.json');
+    const existingEvents = readJson(file);
+    const events = Array.isArray(existingEvents) ? existingEvents : [];
+    events.push({
+      id,
+      traceId: traceId || String(eventType || 'event'),
+      eventType: eventType || 'event',
+      eventData: safeJsonValue(eventData),
+      createdAt: Date.now(),
+    });
+    const trimmed = events.slice(-MAX_DREAM_EVENTS);
+    try { atomicWriteJson(file, trimmed); }
+    catch (err) { console.warn('[Yeaft] debug trace event write failed:', err?.message || err); }
     return id;
   }
 
-  /**
-   * Compatibility helper used by older engine/dream call sites.
-   * @param {string} eventType
-   * @param {unknown} eventData
-   * @returns {string}
-   */
   event(eventType, eventData = null) {
     const traceId = (eventData && typeof eventData === 'object' && (eventData.turnId || eventData.runId))
       ? String(eventData.turnId || eventData.runId)
@@ -366,470 +678,323 @@ export class DebugTrace {
     return this.logEvent({ traceId, eventType, eventData });
   }
 
-  // ─── Read API ────────────────────────────────────────────────
-
-  /**
-   * Query all data for a specific message.
-   * @param {string} messageId
-   * @returns {{ turns: object[], tools: object[], events: object[] }}
-   */
   queryByMessage(messageId) {
-    const turns = this.#prepare('turnsByMessage', `
-      SELECT * FROM trace_turns WHERE message_id = ? ORDER BY started_at
-    `).all(messageId);
-    return this.#expandTurns(turns);
+    this.#flushPendingSync();
+    const traces = this.#traceSummaries()
+      .filter(({ trace }) => trace.messageId === messageId)
+      .map(({ trace }) => trace);
+    return this.#expandLegacy(traces);
   }
 
-  /**
-   * Query all data for a trace.
-   * @param {string} traceId
-   * @returns {{ turns: object[], tools: object[], events: object[] }}
-   */
   queryByTrace(traceId) {
-    const turns = this.#prepare('turnsByTrace', `
-      SELECT * FROM trace_turns WHERE trace_id = ? ORDER BY started_at
-    `).all(traceId);
-    const events = this.#prepare('eventsByTrace', `
-      SELECT * FROM trace_events WHERE trace_id = ? ORDER BY created_at
-    `).all(traceId);
-    const turnIds = turns.map(t => t.id);
-    const tools = turnIds.length > 0
-      ? this.#db.prepare(
-          `SELECT * FROM trace_tools WHERE turn_id IN (${turnIds.map(() => '?').join(',')}) ORDER BY created_at`
-        ).all(...turnIds)
-      : [];
-    return { turns, tools, events };
+    this.#flushPendingSync();
+    const traces = this.#traceSummaries()
+      .filter(({ trace }) => trace.traceId === traceId || trace.requestId === traceId)
+      .map(({ trace }) => trace);
+    return this.#expandLegacy(traces);
   }
 
-  /**
-   * Query recent turns.
-   * @param {number} [limit=20]
-   * @returns {object[]}
-   */
   queryRecent(limit = 20) {
-    return this.#prepare('recentTurns', `
-      SELECT * FROM trace_turns ORDER BY started_at DESC LIMIT ?
-    `).all(limit);
+    this.#flushPendingSync();
+    const lim = Math.max(1, Math.min(MAX_HISTORY_LIMIT, Number(limit) || MAX_HISTORY_LIMIT));
+    return this.#traceSummaries()
+      .slice(-lim)
+      .reverse()
+      .flatMap(({ trace }) => traceToLegacyRows(trace));
   }
 
-  /**
-   * Fetch debug history for the YeaftDebugPanel.
-   *
-   * Default mode returns recent loop details for backward compatibility.
-   * `indexOnly` returns all matching request summaries without loop payloads
-   * so the panel can list every past request cheaply. `limit` is intentionally
-   * ignored in index-only mode; the returned `limit` only reports the requested
-   * retention window used by older/detail paths. `detailTurnId` returns the
-   * full loop/tool payload for one request on demand.
-   *
-   * @param {{ limit?: number, dreamLimit?: number, sessionId?: string|null, threadId?: string|null, indexOnly?: boolean, detailTurnId?: string|null }} [opts]
-   * @returns {{ loops: object[], turns: object[], dreamEvents: object[], hasMore?: boolean, indexOnly?: boolean, detailTurnId?: string|null }}
-   */
-  fetchRecentDebugHistory({ limit = 100, dreamLimit = 5, sessionId = null, threadId = null, indexOnly = false, detailTurnId = null } = {}) {
-    const lim = Math.max(1, Math.min(500, Number(limit) || 100));
-    const dreamLim = Number.isFinite(Number(dreamLimit))
-      ? Math.max(0, Math.min(50, Number(dreamLimit)))
-      : 5;
+  fetchRecentDebugHistory({ limit = MAX_HISTORY_LIMIT, dreamLimit = 5, sessionId = null, threadId = null, indexOnly = false, detailTurnId = null } = {}) {
+    this.#flushPendingSync();
+    const lim = Math.max(1, Math.min(MAX_HISTORY_LIMIT, Number(limit) || MAX_HISTORY_LIMIT));
     const requestedDetailTurnId = typeof detailTurnId === 'string' && detailTurnId ? detailTurnId : null;
-    const parseJsonSafe = (s) => {
-      if (s == null) return null;
-      try { return JSON.parse(s); }
-      catch { return null; }
-    };
-    const normalizeUsage = (usage, row) => {
-      const inputTokens = Number.isFinite(Number(usage?.inputTokens)) ? Number(usage.inputTokens) : (row.input_tokens || 0);
-      const outputTokens = Number.isFinite(Number(usage?.outputTokens)) ? Number(usage.outputTokens) : (row.output_tokens || 0);
-      const cacheReadTokens = Number.isFinite(Number(usage?.cacheReadTokens)) ? Number(usage.cacheReadTokens) : (row.cache_read_tokens || 0);
-      const cacheWriteTokens = Number.isFinite(Number(usage?.cacheWriteTokens)) ? Number(usage.cacheWriteTokens) : (row.cache_write_tokens || 0);
-      const totalInputTokens = Number.isFinite(Number(usage?.totalInputTokens))
-        ? Number(usage.totalInputTokens)
-        : inputTokens + cacheReadTokens + cacheWriteTokens;
-      return {
-        inputTokens,
-        outputTokens,
-        cacheReadTokens,
-        cacheWriteTokens,
-        totalInputTokens,
-        totalTokens: Number.isFinite(Number(usage?.totalTokens))
-          ? Number(usage.totalTokens)
-          : totalInputTokens + outputTokens,
-      };
-    };
-    const scopedWhere = [];
-    const scopedArgs = [];
-    if (sessionId) { scopedWhere.push('group_id = ?'); scopedArgs.push(sessionId); }
-    if (threadId) { scopedWhere.push('thread_id = ?'); scopedArgs.push(threadId); }
-    const whereSql = scopedWhere.length ? `WHERE ${scopedWhere.join(' AND ')}` : '';
-
-    const dreamEvents = [];
-    if (dreamLim > 0) {
-      const eventRows = this.#db.prepare(`
-        SELECT * FROM trace_events
-        WHERE event_type IN ('dream_progress', 'dream_loop', 'dream_turn_open', 'dream_turn_close', 'dream_run')
-        ORDER BY created_at DESC, rowid DESC LIMIT ?
-      `).all(Math.max(dreamLim * 5, dreamLim));
-      for (const er of eventRows) {
-        const data = parseJsonSafe(er.event_data) || {};
-        const evtGroupId = typeof data.sessionId === 'string' && data.sessionId ? data.sessionId : null;
-        const target = typeof data.target === 'string' ? data.target : '';
-        if (sessionId) {
-          const isBroadcast = !evtGroupId && !target;
-          const isThisGroup = evtGroupId === sessionId || target === `sessions/${sessionId}`;
-          if (!isBroadcast && !isThisGroup) continue;
-        }
-        dreamEvents.push({
-          type: data.type || (er.event_type === 'dream_progress' ? 'dream_progress' : er.event_type),
-          ...data,
-          at: er.created_at,
-          ts: data.ts || data.at || er.created_at,
-        });
-        if (dreamEvents.length >= dreamLim) break;
-      }
-      dreamEvents.reverse();
-    }
-
-    const duplicateLoopTraceIdsForRows = (rows) => {
-      const duplicateLoopTraceIds = new Set();
-      const seenLoopKeys = new Set();
-      for (const r of rows) {
-        const traceId = r.trace_id || r.id;
-        const key = `${traceId}#${r.turn_number || 0}`;
-        if (seenLoopKeys.has(key)) duplicateLoopTraceIds.add(traceId);
-        else seenLoopKeys.add(key);
-      }
-      return duplicateLoopTraceIds;
-    };
-    const detailRequestedByRowId = (rows) => {
-      if (!requestedDetailTurnId || rows.length !== 1) return false;
-      const row = rows[0];
-      return row?.id === requestedDetailTurnId && row?.trace_id !== requestedDetailTurnId;
-    };
-    const summarizeRows = (rows, duplicateLoopTraceIds = duplicateLoopTraceIdsForRows(rows), forceRowId = false) => {
-      const turnKeyForRow = (r) => {
-        if (forceRowId) return r.id || r.trace_id;
-        const baseTurnId = r.trace_id || r.id;
-        return duplicateLoopTraceIds.has(baseTurnId) ? (r.id || baseTurnId) : baseTurnId;
-      };
-      const turnsById = new Map();
-      for (const r of rows) {
-        const hydratedTurnId = turnKeyForRow(r);
-        const parsedUsage = parseJsonSafe(r.usage_json);
-        const usage = normalizeUsage(parsedUsage, r);
-        if (!turnsById.has(hydratedTurnId)) {
-          turnsById.set(hydratedTurnId, {
-            turnId: hydratedTurnId,
-            userPrompt: r.user_prompt || '',
-            sessionId: r.group_id || null,
-            vpId: r.vp_id || null,
-            threadId: r.thread_id || null,
-            openedAt: r.started_at || 0,
-            closedAt: r.ended_at || null,
-            totalMs: 0,
-            totalTokens: 0,
-            summaryInputTokens: 0,
-            summaryOutputTokens: 0,
-            loopCount: 0,
-            memoryLoaded: null,
-            memoryAdjust: null,
-            tools: [],
-            detailsLoaded: false,
-          });
-        }
-        const t = turnsById.get(hydratedTurnId);
-        t.loopCount += 1;
-        t.totalMs += r.latency_ms || 0;
-        t.totalTokens += usage.totalTokens || 0;
-        t.summaryInputTokens += usage.totalInputTokens || 0;
-        t.summaryOutputTokens += usage.outputTokens || 0;
-        if (r.started_at && (!t.openedAt || r.started_at < t.openedAt)) t.openedAt = r.started_at;
-        if (r.ended_at && (!t.closedAt || r.ended_at > t.closedAt)) t.closedAt = r.ended_at;
-        if (!t.userPrompt && r.user_prompt) t.userPrompt = r.user_prompt;
-      }
-      return Array.from(turnsById.values()).sort((a, b) => (a.openedAt || 0) - (b.openedAt || 0));
-    };
-    const expandRows = (rows) => {
-      const duplicateLoopTraceIds = duplicateLoopTraceIdsForRows(rows);
-      const forceRowId = detailRequestedByRowId(rows);
-      const turnKeyForRow = (r) => {
-        if (forceRowId) return r.id || r.trace_id;
-        const baseTurnId = r.trace_id || r.id;
-        return duplicateLoopTraceIds.has(baseTurnId) ? (r.id || baseTurnId) : baseTurnId;
-      };
-      const loopInstanceIdForRow = (r) => {
-        const baseTurnId = r.trace_id || r.id;
-        return forceRowId || duplicateLoopTraceIds.has(baseTurnId) ? (r.id || `${baseTurnId}#${r.turn_number || 0}`) : null;
-      };
-      const turnsById = new Map(summarizeRows(rows, duplicateLoopTraceIds, forceRowId).map((t) => [t.turnId, { ...t, detailsLoaded: true }]));
-      const loops = rows.map((r) => {
-        const parsedMessages = parseJsonSafe(r.messages_json) || [];
-        const parsedUsage = parseJsonSafe(r.usage_json);
-        const hydratedTurnId = turnKeyForRow(r);
-        const loopInstanceId = loopInstanceIdForRow(r);
-        return {
-          turnId: hydratedTurnId,
-          ...(loopInstanceId ? { loopInstanceId } : {}),
-          loopNumber: r.turn_number || 0,
-          model: r.model || null,
-          systemPrompt: r.system_prompt || '',
-          messages: parsedMessages,
-          response: r.response_text || '',
-          toolCalls: parseJsonSafe(r.tool_calls_json) || [],
-          usage: normalizeUsage(parsedUsage, r),
-          latencyMs: r.latency_ms || 0,
-          ttfbMs: r.ttfb_ms || null,
-          stopReason: r.stop_reason || null,
-          rawRequest: r.raw_request || null,
-          rawResponse: r.raw_response || null,
-          sessionId: r.group_id || null,
-          vpId: r.vp_id || null,
-          threadId: r.thread_id || null,
-        };
-      });
-      const turnIds = rows.map(r => r.id);
-      const tools = turnIds.length > 0
-        ? this.#db.prepare(
-            `SELECT * FROM trace_tools WHERE turn_id IN (${turnIds.map(() => '?').join(',')}) ORDER BY created_at`
-          ).all(...turnIds)
-        : [];
-      for (const tool of tools) {
-        const owner = rows.find(r => r.id === tool.turn_id);
-        if (!owner) continue;
-        const t = turnsById.get(turnKeyForRow(owner));
-        if (!t) continue;
-        t.tools.push({
-          loopNumber: owner.turn_number || 0,
-          callId: tool.tool_call_id || tool.id,
-          traceToolId: tool.id,
-          name: tool.tool_name,
-          toolOutput: tool.tool_output == null ? null : String(tool.tool_output),
-          durationMs: tool.duration_ms || 0,
-          isError: !!tool.is_error,
-        });
-      }
-      return { loops, turns: Array.from(turnsById.values()).sort((a, b) => (a.openedAt || 0) - (b.openedAt || 0)) };
-    };
-
+    const traces = this.#traceSummaries(sessionId)
+      .filter(({ trace }) => !threadId || trace.threadId === threadId)
+      .map(({ trace }) => trace);
+    const dreamEvents = this.#readDreamEvents({ sessionId, dreamLimit });
     if (requestedDetailTurnId) {
-      const detailWhere = [`(trace_id = ? OR id = ?)`];
-      const detailArgs = [requestedDetailTurnId, requestedDetailTurnId];
-      if (sessionId) { detailWhere.push('group_id = ?'); detailArgs.push(sessionId); }
-      if (threadId) { detailWhere.push('thread_id = ?'); detailArgs.push(threadId); }
-      detailArgs.push(5000);
-      const rows = this.#db.prepare(`
-        SELECT * FROM trace_turns
-        WHERE ${detailWhere.join(' AND ')}
-        ORDER BY started_at ASC, turn_number ASC, rowid ASC
-        LIMIT ?
-      `).all(...detailArgs);
-      const expanded = expandRows(rows);
-      return { ...expanded, dreamEvents, hasMore: false, limit: rows.length, indexOnly: false, detailTurnId: requestedDetailTurnId };
+      const trace = traces.find(t => t.requestId === requestedDetailTurnId || t.traceId === requestedDetailTurnId);
+      if (!trace) return { loops: [], turns: [], dreamEvents, hasMore: false, limit: 0, indexOnly: false, detailTurnId: requestedDetailTurnId };
+      const expanded = expandTrace(trace);
+      return { ...expanded, dreamEvents, hasMore: false, limit: expanded.loops.length, indexOnly: false, detailTurnId: requestedDetailTurnId };
     }
-
+    const selected = traces.slice(-lim);
     if (indexOnly) {
-      const rows = this.#db.prepare(`
-        SELECT id, trace_id, message_id, mode, turn_number, model,
-               input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-               stop_reason, latency_ms, started_at, ended_at, group_id, vp_id,
-               thread_id, usage_json, user_prompt
-        FROM trace_turns
-        ${whereSql}
-        ORDER BY started_at ASC, turn_number ASC, rowid ASC
-      `).all(...scopedArgs);
-      return { loops: [], turns: summarizeRows(rows), dreamEvents, hasMore: false, limit: lim, indexOnly: true };
+      return {
+        loops: [],
+        turns: selected.map(trace => summarizeTrace(trace, false)),
+        dreamEvents,
+        hasMore: traces.length > selected.length,
+        limit: lim,
+        indexOnly: true,
+      };
     }
-
-    const args = [...scopedArgs, lim + 1];
-    const fetchedRows = this.#db.prepare(`
-      SELECT * FROM trace_turns
-      ${whereSql}
-      ORDER BY started_at DESC
-      LIMIT ?
-    `).all(...args);
-    const hasMore = fetchedRows.length > lim;
-    const rows = (hasMore ? fetchedRows.slice(0, lim) : fetchedRows).reverse();
-    const expanded = expandRows(rows);
-    return { ...expanded, dreamEvents, hasMore, limit: lim, indexOnly: false };
+    const expanded = selected.reduce((acc, trace) => {
+      const item = expandTrace(trace);
+      acc.loops.push(...item.loops);
+      acc.turns.push(...item.turns);
+      return acc;
+    }, { loops: [], turns: [] });
+    return { ...expanded, dreamEvents, hasMore: traces.length > selected.length, limit: lim, indexOnly: false };
   }
 
-  /**
-   * Query tool calls with optional filters.
-   * @param {{ name?: string, since?: number }} [filters={}]
-   * @returns {object[]}
-   */
   queryTools({ name = null, since = null } = {}) {
-    if (name && since) {
-      return this.#prepare('toolsByNameSince', `
-        SELECT * FROM trace_tools WHERE tool_name = ? AND created_at >= ? ORDER BY created_at DESC
-      `).all(name, since);
+    this.#flushPendingSync();
+    const tools = [];
+    for (const { trace } of this.#traceSummaries()) {
+      for (const tool of Array.isArray(trace.tools) ? trace.tools : []) {
+        const row = traceToolToLegacy(trace, tool);
+        if (name && row.tool_name !== name) continue;
+        if (since && row.created_at < since) continue;
+        tools.push(row);
+      }
     }
-    if (name) {
-      return this.#prepare('toolsByName', `
-        SELECT * FROM trace_tools WHERE tool_name = ? ORDER BY created_at DESC
-      `).all(name);
-    }
-    if (since) {
-      return this.#prepare('toolsSince', `
-        SELECT * FROM trace_tools WHERE created_at >= ? ORDER BY created_at DESC
-      `).all(since);
-    }
-    return this.#prepare('allTools', `
-      SELECT * FROM trace_tools ORDER BY created_at DESC LIMIT 100
-    `).all();
+    tools.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+    return tools.slice(0, 100);
   }
 
-  /**
-   * Full-text search across response_text and tool_output.
-   * @param {string} keyword
-   * @returns {object[]}
-   */
   search(keyword) {
-    const like = `%${keyword}%`;
-    return this.#prepare('search', `
-      SELECT DISTINCT t.* FROM trace_turns t
-      LEFT JOIN trace_tools tt ON tt.turn_id = t.id
-      WHERE t.response_text LIKE ? OR tt.tool_output LIKE ?
-      ORDER BY t.started_at DESC LIMIT 50
-    `).all(like, like);
+    this.#flushPendingSync();
+    const needle = String(keyword || '').toLowerCase();
+    if (!needle) return [];
+    return this.#traceSummaries()
+      .filter(({ trace }) => JSON.stringify(trace).toLowerCase().includes(needle))
+      .slice(-50)
+      .reverse()
+      .flatMap(({ trace }) => traceToLegacyRows(trace));
   }
 
-  /**
-   * Get trace statistics.
-   * @returns {{ turnCount: number, toolCount: number, eventCount: number, dbSizeBytes: number }}
-   */
   stats() {
-    const turnCount = Number(this.#db.prepare('SELECT COUNT(*) as c FROM trace_turns').get().c);
-    const toolCount = Number(this.#db.prepare('SELECT COUNT(*) as c FROM trace_tools').get().c);
-    const eventCount = Number(this.#db.prepare('SELECT COUNT(*) as c FROM trace_events').get().c);
-    let dbSizeBytes = 0;
-    try {
-      dbSizeBytes = statSync(this.#dbPath).size;
-    } catch { /* ignore */ }
-    return { turnCount, toolCount, eventCount, dbSizeBytes };
+    this.#flushPendingSync();
+    const traces = this.#traceSummaries().map(({ trace }) => trace);
+    const turnCount = traces.reduce((n, trace) => n + (Array.isArray(trace.loops) ? trace.loops.length : 0), 0);
+    const toolCount = traces.reduce((n, trace) => n + (Array.isArray(trace.tools) ? trace.tools.length : 0), 0);
+    const events = readJson(join(this.#rootDir, 'events.json'));
+    const eventCount = Array.isArray(events) ? events.length : 0;
+    const { bytes } = countDirFiles(this.#rootDir);
+    return { turnCount, toolCount, eventCount, dbSizeBytes: bytes, fileSizeBytes: bytes, requestCount: traces.length };
   }
 
-  // ─── Maintenance ─────────────────────────────────────────────
-
-  /**
-   * Delete trajectory data older than retentionDays, then mark the freed pages
-   * reclaimable.
-   *
-   * The always-on trace stamps every turn with the cumulative request/response
-   * snapshot, so each long-session row is MB-scale and the file grows fast
-   * (a real deployment hit 5GB in 15 days). A plain DELETE marks pages free but
-   * leaves the file at its peak size; `PRAGMA incremental_vacuum` moves those
-   * pages onto the freelist for return to the OS — but only when the DB was
-   * created with `auto_vacuum=INCREMENTAL` (see constructor). On a legacy
-   * `auto_vacuum=NONE` store the vacuum is a harmless no-op, so this is safe to
-   * call unconditionally. Note: in WAL mode the on-disk file truncates at the
-   * next checkpoint (the running agent's automatic checkpoints handle this), so
-   * the page_count drops here but the file size catches up shortly after.
-   *
-   * @param {number} [retentionDays=10]
-   * @returns {{ deletedTurns: number, deletedTools: number, deletedEvents: number }}
-   */
-  cleanup(retentionDays = 10) {
-    const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
-    const deletedTools = Number(this.#db.prepare(`
-      DELETE FROM trace_tools WHERE turn_id IN (
-        SELECT id FROM trace_turns WHERE started_at < ?
-      )
-    `).run(cutoff).changes);
-    const deletedTurns = Number(this.#db.prepare(`
-      DELETE FROM trace_turns WHERE started_at < ?
-    `).run(cutoff).changes);
-    const deletedEvents = Number(this.#db.prepare(`
-      DELETE FROM trace_events WHERE created_at < ?
-    `).run(cutoff).changes);
-    // Reclaim freed pages (no-op on legacy auto_vacuum=NONE DBs). Wrapped so a
-    // vacuum failure can never mask a successful delete, but surfaced as a warn
-    // because this is the one operation the whole disk-growth fix relies on — a
-    // silent persistent failure would look exactly like "the fix works".
-    if (deletedTurns || deletedTools || deletedEvents) {
-      try { this.#db.exec('PRAGMA incremental_vacuum'); }
-      catch (err) { console.warn('[Yeaft] trace incremental_vacuum failed:', err?.message || err); }
-    }
-    return { deletedTurns, deletedTools, deletedEvents };
+  cleanup(retention = REQUEST_RETENTION) {
+    this.#flushPendingSync();
+    const keep = Math.max(1, Math.min(REQUEST_RETENTION, Number(retention) || REQUEST_RETENTION));
+    const before = readTraceSummaries(this.#rootDir).length;
+    this.#pruneAll(keep);
+    const after = readTraceSummaries(this.#rootDir).length;
+    return { deletedTurns: Math.max(0, before - after), deletedTools: 0, deletedEvents: 0, deletedRequests: Math.max(0, before - after) };
   }
 
-  /**
-   * One-shot full compaction (VACUUM). Rebuilds the entire database file,
-   * reclaiming all free space AND converting a legacy `auto_vacuum=NONE` store
-   * to INCREMENTAL going forward. This is a HEAVY operation: it locks the DB
-   * and needs temporary scratch space up to the current file size, so it is
-   * NOT called automatically on session load — invoke it deliberately (e.g.
-   * from the `yeaft --trace` CLI) when an oversized legacy debug.db needs to be
-   * shrunk in place.
-   * @returns {{ before: number, after: number }} file size in bytes
-   */
   compact() {
-    let before = 0;
-    try { before = statSync(this.#dbPath).size; } catch { /* ignore */ }
-    this.#db.exec('PRAGMA auto_vacuum = INCREMENTAL');
-    this.#db.exec('VACUUM');
-    // In WAL mode VACUUM writes the rebuilt (smaller) DB into the -wal file;
-    // the main .db file does not shrink until a checkpoint folds the WAL back
-    // in. TRUNCATE checkpoints and resets the WAL so the on-disk size we report
-    // (and the user sees) reflects the reclaimed space immediately.
-    try { this.#db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch { /* best-effort */ }
-    let after = 0;
-    try { after = statSync(this.#dbPath).size; } catch { /* ignore */ }
+    this.#flushPendingSync();
+    const before = countDirFiles(this.#rootDir).bytes;
+    this.cleanup(REQUEST_RETENTION);
+    const after = countDirFiles(this.#rootDir).bytes;
     return { before, after };
   }
 
-  /** Delete all trace data. */
   purge() {
-    this.#db.exec('DELETE FROM trace_tools');
-    this.#db.exec('DELETE FROM trace_turns');
-    this.#db.exec('DELETE FROM trace_events');
+    this.#flushPendingSync();
+    try { rmSync(this.#rootDir, { recursive: true, force: true }); }
+    catch { /* ignore */ }
+    ensureDir(this.#rootDir);
+    this.#turnIndex.clear();
+    this.#requestCache.clear();
   }
 
-  /** Close the database connection. */
-  close() {
-    this.#db.close();
-  }
+  close() { this.#flushPendingSync(); }
 
-  // ─── Internal ────────────────────────────────────────────────
-
-  /**
-   * Get or create a prepared statement.
-   * @param {string} key
-   * @param {string} sql
-   * @returns {import('node:sqlite').StatementSync}
-   */
-  #prepare(key, sql) {
-    if (!this.#stmts[key]) {
-      this.#stmts[key] = this.#db.prepare(sql);
+  #getOrCreateRequest({ traceId, turnNumber, messageId, mode, sessionId, vpId, threadId, userPrompt, now, turnRowId }) {
+    const normalizedSessionId = sessionId || null;
+    let all = null;
+    const isUsableExisting = (t) => (
+      t?.sessionId === normalizedSessionId
+      && t?.traceId === traceId
+      && !(turnNumber === 1 && (t.loops || []).some(l => l.loopNumber === 1))
+    );
+    const newestTrace = (items) => items
+      .filter(isUsableExisting)
+      .sort((a, b) => ((a.openedAt || 0) - (b.openedAt || 0)) || String(a.requestKey || '').localeCompare(String(b.requestKey || '')))
+      .at(-1) || null;
+    let existing = newestTrace(Array.from(this.#requestCache.values()));
+    if (!existing) {
+      all = this.#traceSummaries(normalizedSessionId).map(({ trace }) => trace);
+      existing = newestTrace(all);
     }
-    return this.#stmts[key];
+    if (existing) {
+      existing.updatedAt = now;
+      this.#requestCache.set(existing.requestKey, existing);
+      return existing;
+    }
+    const seq = (this.#sequence = (this.#sequence + 1) % 1_000_000);
+    const requestKey = `${String(now).padStart(13, '0')}-${String(seq).padStart(6, '0')}-${safeDirComponent(traceId || turnRowId, 'request')}-${turnRowId.slice(0, 8)}`;
+    const requestId = turnNumber === 1 && all.some(t => t.traceId === traceId) ? turnRowId : traceId;
+    const trace = {
+      version: TRACE_VERSION,
+      requestKey,
+      requestId,
+      traceId,
+      messageId,
+      mode,
+      sessionId: normalizedSessionId,
+      vpId: vpId || null,
+      threadId: threadId || null,
+      userPrompt: truncateText(userPrompt || '', MAX_TEXT_BYTES),
+      openedAt: now,
+      closedAt: null,
+      updatedAt: now,
+      active: true,
+      baseRequest: null,
+      loops: [],
+      tools: [],
+    };
+    this.#requestCache.set(requestKey, trace);
+    return trace;
   }
 
-  /**
-   * Expand turns with their tools.
-   * @param {object[]} turns
-   * @returns {{ turns: object[], tools: object[], events: object[] }}
-   */
-  #expandTurns(turns) {
-    const turnIds = turns.map(t => t.id);
-    const tools = turnIds.length > 0
-      ? this.#db.prepare(
-          `SELECT * FROM trace_tools WHERE turn_id IN (${turnIds.map(() => '?').join(',')}) ORDER BY created_at`
-        ).all(...turnIds)
-      : [];
-    // Events need trace_ids from turns
-    const traceIds = [...new Set(turns.map(t => t.trace_id))];
-    const events = traceIds.length > 0
-      ? this.#db.prepare(
-          `SELECT * FROM trace_events WHERE trace_id IN (${traceIds.map(() => '?').join(',')}) ORDER BY created_at`
-        ).all(...traceIds)
-      : [];
+  #loadRequest(sessionId, requestKey) {
+    const cached = this.#requestCache.get(requestKey);
+    if (cached) return cached;
+    const file = tracePathFor(this.#rootDir, sessionId, requestKey);
+    const trace = readJson(file);
+    if (trace) this.#requestCache.set(requestKey, trace);
+    return trace;
+  }
+
+  #traceSummaries(sessionId = null) {
+    const byKey = new Map(readTraceSummaries(this.#rootDir, sessionId).map(item => [item.trace.requestKey, item]));
+    for (const trace of this.#requestCache.values()) {
+      if (sessionId && trace.sessionId !== sessionId) continue;
+      if (!trace?.requestId || !trace?.requestKey) continue;
+      byKey.set(trace.requestKey, {
+        trace,
+        file: this.#traceFile(trace),
+        openedAt: Number(trace.openedAt || 0),
+      });
+    }
+    return Array.from(byKey.values())
+      .sort((a, b) => ((a.openedAt || 0) - (b.openedAt || 0)) || String(a.trace?.requestKey || a.file).localeCompare(String(b.trace?.requestKey || b.file)));
+  }
+
+  #traceWriteKey(trace) {
+    return `${trace.sessionId || ''}::${trace.requestKey}`;
+  }
+
+  #traceFile(trace) {
+    return tracePathFor(this.#rootDir, trace.sessionId || null, trace.requestKey);
+  }
+
+  #serializableTrace(trace) {
+    const toWrite = { ...trace };
+    delete toWrite._lastSnapshot;
+    return toWrite;
+  }
+
+  #scheduleSave(trace) {
+    if (!trace?.requestKey) return;
+    const key = this.#traceWriteKey(trace);
+    this.#pendingWrites.set(key, trace);
+    this.#requestCache.set(trace.requestKey, trace);
+    if (this.#flushTimers.has(key)) return;
+    const timer = setTimeout(() => this.#flushOneAsync(key), TRACE_FLUSH_DELAY_MS);
+    this.#flushTimers.set(key, timer);
+  }
+
+  async #flushOneAsync(key) {
+    const timer = this.#flushTimers.get(key);
+    if (timer) clearTimeout(timer);
+    this.#flushTimers.delete(key);
+    const trace = this.#pendingWrites.get(key);
+    if (!trace) return;
+    this.#pendingWrites.delete(key);
+    try {
+      await atomicWriteJsonAsync(this.#traceFile(trace), this.#serializableTrace(trace));
+      this.#pruneSession(trace.sessionId || null, REQUEST_RETENTION);
+    } catch (err) {
+      console.warn('[Yeaft] debug trace write failed:', err?.message || err);
+    }
+  }
+
+  #flushPendingSync() {
+    const entries = Array.from(this.#pendingWrites.entries());
+    if (entries.length === 0) return;
+    for (const [key, trace] of entries) {
+      const timer = this.#flushTimers.get(key);
+      if (timer) clearTimeout(timer);
+      this.#flushTimers.delete(key);
+      this.#pendingWrites.delete(key);
+      try {
+        atomicWriteJson(this.#traceFile(trace), this.#serializableTrace(trace));
+      } catch (err) {
+        console.warn('[Yeaft] debug trace write failed:', err?.message || err);
+      }
+    }
+    this.#pruneAll(REQUEST_RETENTION);
+  }
+
+  #reconstructLastSnapshot(trace) {
+    let snapshot = null;
+    for (const loop of Array.isArray(trace?.loops) ? trace.loops : []) {
+      snapshot = applyRequestDelta(snapshot || trace.baseRequest || null, loop.requestDelta || {});
+    }
+    return snapshot;
+  }
+
+  #readDreamEvents({ sessionId = null, dreamLimit = 5 } = {}) {
+    const limit = Number.isFinite(Number(dreamLimit)) ? Math.max(0, Math.min(50, Number(dreamLimit))) : 5;
+    if (limit <= 0) return [];
+    const storedEvents = readJson(join(this.#rootDir, 'events.json'));
+    const events = Array.isArray(storedEvents) ? storedEvents : [];
+    const out = [];
+    for (const event of events.slice().reverse()) {
+      const data = isPlainObject(event.eventData) ? event.eventData : {};
+      if (sessionId) {
+        const evtSessionId = typeof data.sessionId === 'string' && data.sessionId ? data.sessionId : null;
+        const target = typeof data.target === 'string' ? data.target : '';
+        const isBroadcast = !evtSessionId && !target;
+        const isThisSession = evtSessionId === sessionId || target === `sessions/${sessionId}` || target === `group/${sessionId}`;
+        if (!isBroadcast && !isThisSession) continue;
+      }
+      out.push({
+        type: data.type || event.eventType || 'event',
+        ...data,
+        at: event.createdAt,
+        ts: data.ts || data.at || event.createdAt,
+      });
+      if (out.length >= limit) break;
+    }
+    return out.reverse();
+  }
+
+  #pruneAll(keep) {
+    const sessions = new Set([null]);
+    for (const { trace } of this.#traceSummaries()) sessions.add(trace.sessionId || null);
+    for (const sid of sessions) this.#pruneSession(sid, keep);
+  }
+
+  #pruneSession(sessionId, keep = REQUEST_RETENTION) {
+    const traces = this.#traceSummaries(sessionId);
+    const activeCutoff = Date.now() - 6 * 60 * 60 * 1000;
+    const protectedItems = traces.filter(item => item.trace?.active && Number(item.trace?.updatedAt || 0) >= activeCutoff);
+    const pruneCandidates = traces.filter(item => !protectedItems.includes(item));
+    const stale = pruneCandidates.slice(0, Math.max(0, traces.length - protectedItems.length - keep));
+    for (const item of stale) {
+      try { rmSync(dirname(item.file), { recursive: true, force: true }); }
+      catch { /* ignore */ }
+      this.#requestCache.delete(item.trace.requestKey);
+    }
+  }
+
+  #expandLegacy(traces) {
+    const turns = [];
+    const tools = [];
+    const events = [];
+    for (const trace of traces) {
+      turns.push(...traceToLegacyRows(trace));
+      for (const tool of Array.isArray(trace.tools) ? trace.tools : []) tools.push(traceToolToLegacy(trace, tool));
+    }
     return { turns, tools, events };
   }
 }
 
-/**
- * NullTrace — No-op implementation with the same interface.
- * Used when debug is disabled. Zero overhead.
- */
 export class NullTrace {
   startTurn() { return 'null'; }
   endTurn() {}
@@ -841,22 +1006,16 @@ export class NullTrace {
   queryRecent() { return []; }
   queryTools() { return []; }
   search() { return []; }
-  stats() { return { turnCount: 0, toolCount: 0, eventCount: 0, dbSizeBytes: 0 }; }
-  cleanup() { return { deletedTurns: 0, deletedTools: 0, deletedEvents: 0 }; }
+  stats() { return { turnCount: 0, toolCount: 0, eventCount: 0, dbSizeBytes: 0, fileSizeBytes: 0, requestCount: 0 }; }
+  cleanup() { return { deletedTurns: 0, deletedTools: 0, deletedEvents: 0, deletedRequests: 0 }; }
   compact() { return { before: 0, after: 0 }; }
   purge() {}
   close() {}
   fetchRecentDebugHistory() { return { loops: [], turns: [], dreamEvents: [] }; }
 }
 
-/**
- * Create a DebugTrace or NullTrace based on config.
- * @param {{ enabled: boolean, dbPath?: string }} opts
- * @returns {DebugTrace | NullTrace}
- */
-export function createTrace({ enabled, dbPath }) {
-  if (!enabled || !dbPath) {
-    return new NullTrace();
-  }
-  return new DebugTrace(dbPath);
+export function createTrace({ enabled, dbPath, dirPath }) {
+  const path = dirPath || dbPath;
+  if (!enabled || !path) return new NullTrace();
+  return new DebugTrace(path);
 }

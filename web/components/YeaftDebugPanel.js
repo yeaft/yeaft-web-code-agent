@@ -28,8 +28,8 @@
 import { buildDreamDebugItems, filterDreamDebugItems, previewText } from './dream-debug-model.js';
 import { splitTokenBreakdown, apportionToBuckets, formatClockTime } from './yeaft-debug-helpers.js';
 
-const INITIAL_REQUEST_HISTORY_LIMIT = 5000;
-const REQUEST_HISTORY_STEP = 5000;
+const INITIAL_REQUEST_HISTORY_LIMIT = 10;
+const REQUEST_HISTORY_STEP = 10;
 
 export default {
   name: 'YeaftDebugPanel',

@@ -1,6 +1,5 @@
 import { describe, expect, it, afterEach } from 'vitest';
-import { DatabaseSync } from 'node:sqlite';
-import { rmSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -14,6 +13,7 @@ function cleanup(path) {
   for (const suffix of ['', '-wal', '-shm']) {
     try { rmSync(`${path}${suffix}`, { force: true }); } catch { /* ignore */ }
   }
+  try { rmSync(`${path}.files`, { recursive: true, force: true }); } catch { /* ignore */ }
 }
 
 function openTrace() {
@@ -58,8 +58,12 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
 
     const index = t.fetchRecentDebugHistory({ limit: 1, dreamLimit: 0, sessionId: 's1', indexOnly: true });
     expect(index.loops).toHaveLength(0);
-    expect(index.turns.map(turn => turn.turnId)).toEqual(['long-request', 'other-request']);
-    expect(index.turns.find(turn => turn.turnId === 'long-request')).toMatchObject({
+    expect(index.turns.map(turn => turn.turnId)).toEqual(['other-request']);
+    expect(index.hasMore).toBe(true);
+
+    const fullIndex = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, sessionId: 's1', indexOnly: true });
+    expect(fullIndex.turns.map(turn => turn.turnId)).toEqual(['long-request', 'other-request']);
+    expect(fullIndex.turns.find(turn => turn.turnId === 'long-request')).toMatchObject({
       loopCount: 60,
       detailsLoaded: false,
       userPrompt: 'long work',
@@ -109,5 +113,65 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
       expect(detail.turns[0].userPrompt).toBe(indexedTurn.userPrompt);
       expect(detail.loops).toHaveLength(1);
     }
+  });
+
+  it('attaches later loops to the newest split request when a trace id is reused', () => {
+    const t = openTrace();
+    const oldFirst = t.startTurn({ traceId: 'reused-trace', turnNumber: 1, sessionId: 's1', userPrompt: 'old request' });
+    t.endTurn(oldFirst, { responseText: 'old loop 1', messages: [{ role: 'user', content: 'old request' }] });
+
+    const newFirst = t.startTurn({ traceId: 'reused-trace', turnNumber: 1, sessionId: 's1', userPrompt: 'new request' });
+    t.endTurn(newFirst, { responseText: 'new loop 1', messages: [{ role: 'user', content: 'new request' }] });
+    const newSecond = t.startTurn({ traceId: 'reused-trace', turnNumber: 2, sessionId: 's1', userPrompt: 'new request' });
+    t.endTurn(newSecond, {
+      responseText: 'new loop 2',
+      messages: [
+        { role: 'user', content: 'new request' },
+        { role: 'assistant', content: 'new loop 1' },
+      ],
+    });
+
+    const index = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, sessionId: 's1', indexOnly: true });
+    const oldTurn = index.turns.find(turn => turn.userPrompt === 'old request');
+    const newTurn = index.turns.find(turn => turn.userPrompt === 'new request');
+    expect(oldTurn).toMatchObject({ loopCount: 1 });
+    expect(newTurn).toMatchObject({ loopCount: 2 });
+
+    const newDetail = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, sessionId: 's1', detailTurnId: newTurn.turnId });
+    expect(newDetail.loops.map(loop => loop.response)).toEqual(['new loop 1', 'new loop 2']);
+  });
+
+  it('stores cumulative rawRequest as base plus structural message deltas instead of repeating full requests', () => {
+    const t = openTrace();
+    const messages = [];
+    for (let i = 1; i <= 20; i++) {
+      messages.push({ role: 'user', content: `message ${i} ${'x'.repeat(200)}` });
+      const row = t.startTurn({ traceId: 'raw-delta-request', turnNumber: i, sessionId: 's1', userPrompt: 'raw delta' });
+      t.endTurn(row, {
+        responseText: `loop ${i}`,
+        stopReason: i === 20 ? 'end_turn' : 'tool_use',
+        messages: messages.map(m => ({ ...m })),
+        rawRequest: {
+          url: 'https://llm.example/v1/messages',
+          method: 'POST',
+          headers: { authorization: '***' },
+          body: {
+            model: 'm',
+            max_tokens: 1000,
+            messages: messages.map(m => ({ ...m })),
+          },
+        },
+      });
+    }
+    t.close();
+
+    const requestsDir = join(`${dbPath}.files`, 'sessions', 's1', 'debug', 'requests');
+    const requestDirs = readdirSync(requestsDir);
+    const traceJson = JSON.parse(readFileSync(join(requestsDir, requestDirs[0], 'trace.json'), 'utf8'));
+    expect(traceJson.baseRequest.rawRequest.body.messages).toHaveLength(1);
+    expect(traceJson.loops[1].requestDelta.rawRequestDelta.body).toMatchObject({ messagesFrom: 1 });
+    expect(traceJson.loops[19].requestDelta.rawRequestDelta.body).toMatchObject({ messagesFrom: 19 });
+    expect(JSON.stringify(traceJson.loops[19].requestDelta)).not.toContain('message 1');
+    expect(readFileSync(join(requestsDir, requestDirs[0], 'trace.json'), 'utf8').length).toBeLessThan(50_000);
   });
 });

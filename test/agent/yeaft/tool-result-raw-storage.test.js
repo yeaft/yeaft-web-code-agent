@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { unlinkSync } from 'node:fs';
+import { rmSync, unlinkSync } from 'node:fs';
 import { Engine } from '../../../agent/yeaft/engine.js';
 import { DebugTrace, NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { trimSnapshotForBudget } from '../../../agent/yeaft/history-compact.js';
@@ -123,6 +123,7 @@ describe('tool result raw storage boundaries', () => {
       for (const suffix of ['', '-wal', '-shm']) {
         try { unlinkSync(dbPath + suffix); } catch { /* ignore */ }
       }
+      try { rmSync(`${dbPath}.files`, { recursive: true, force: true }); } catch { /* ignore */ }
     }
   });
 
