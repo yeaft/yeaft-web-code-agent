@@ -308,31 +308,35 @@ export default {
             class="yeaft-vp-task-item"
             :class="{ 'is-expanded': expandedTasks[task.id], 'is-terminal': task.status !== 'running', 'is-running': task.status === 'running' }"
           >
-            <button type="button" class="yeaft-vp-task-summary" @click="toggleTaskExpanded(task.id)">
-              <span class="yeaft-vp-task-dot" aria-hidden="true"></span>
-              <span class="yeaft-vp-task-main">
-                <span class="yeaft-vp-task-title">{{ task.title || task.id }}</span>
-                <span class="yeaft-vp-task-meta">{{ taskOwnerName(task) }} · {{ formatTaskTime(task.startedAt) }}</span>
-              </span>
+            <div class="yeaft-vp-task-summary">
+              <button type="button" class="yeaft-vp-task-toggle" @click="toggleTaskExpanded(task.id)">
+                <span class="yeaft-vp-task-dot" aria-hidden="true"></span>
+                <span class="yeaft-vp-task-main">
+                  <span class="yeaft-vp-task-title">{{ task.title || task.id }}</span>
+                  <code v-if="shellTaskCommand(task)" class="yeaft-vp-task-command">{{ shellTaskCommand(task) }}</code>
+                  <span class="yeaft-vp-task-meta">{{ taskOwnerName(task) }} · {{ formatTaskTime(task.startedAt) }}</span>
+                </span>
+              </button>
               <span class="yeaft-vp-task-kind">{{ taskKindLabel(task) }}</span>
-              <svg class="yeaft-vp-task-chevron" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M9 18l6-6-6-6"/>
-              </svg>
-            </button>
-            <div v-if="expandedTasks[task.id]" class="yeaft-vp-task-detail">
-              <div v-if="shellTaskCommand(task)" class="yeaft-vp-task-command">
-                <span class="yeaft-vp-task-command-label">{{ $t('yeaft.sessionStatus.task.command') }}</span>
-                <code>{{ shellTaskCommand(task) }}</code>
-              </div>
               <button
                 v-if="isTaskCancellable(task)"
                 type="button"
                 class="yeaft-vp-task-cancel"
                 :disabled="isTaskStopping(task)"
+                :title="isTaskStopping(task) ? $t('yeaft.sessionStatus.task.stopping') : $t('yeaft.sessionStatus.task.stop')"
                 @click.stop="$emit('cancel-task', task)"
               >
-                {{ isTaskStopping(task) ? $t('yeaft.sessionStatus.task.stopping') : $t('yeaft.sessionStatus.task.stop') }}
+                <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>
+                </svg>
               </button>
+              <button type="button" class="yeaft-vp-task-chevron-btn" @click="toggleTaskExpanded(task.id)" :aria-label="$t('yeaft.vpTimeline.expand')">
+                <svg class="yeaft-vp-task-chevron" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M9 18l6-6-6-6"/>
+                </svg>
+              </button>
+            </div>
+            <div v-if="expandedTasks[task.id]" class="yeaft-vp-task-detail">
               <div v-if="task.kind === 'sub_agent'" class="yeaft-vp-task-sub-agent-panel">
                 <TerminalOutput
                   v-if="subAgentTaskStreamText(task)"

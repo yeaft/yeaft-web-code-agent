@@ -92,7 +92,7 @@ describe('Yeaft UI action polish', () => {
     expect(timelineSource).toContain('stoppingTasksById: { type: Object');
     expect(timelineSource).toContain("'cancel-task'");
     expect(timelineSource).toContain('shellTaskCommand(task)');
-    expect(timelineSource).toContain("$t('yeaft.sessionStatus.task.command')");
+    expect(timelineSource).toContain('<code v-if="shellTaskCommand(task)" class="yeaft-vp-task-command">{{ shellTaskCommand(task) }}</code>');
     expect(timelineSource).toContain("$emit('cancel-task', task)");
     expect(timelineSource).toContain('isTaskCancellable(task)');
     expect(timelineSource).toContain("task?.kind === 'shell' && task?.status === 'running' && !!task?.runtime?.pid");

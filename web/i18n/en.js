@@ -1468,6 +1468,7 @@ export default {
   'yeaft.vpTimeline.abort': 'Abort',
   'yeaft.vpTimeline.edit': 'Edit VP',
   'yeaft.vpTimeline.mention': 'Click to @-mention this VP',
+  'yeaft.vpTimeline.expand': 'Toggle task details',
 
   // (2026-05-13) Tool Usage Stats drawer.
   'yeaft.toolStats.title': 'Tool Usage Stats',
