@@ -1030,10 +1030,7 @@ export class ConversationStore {
    */
   loadOlderBySession(sessionId, beforeSeq, turnsLimit = DEFAULT_RECENT_TURNS) {
     if (!sessionId) return { messages: [], oldestSeq: null, hasMore: false };
-    const hot = this.#loadSessionHotMessages(sessionId);
-    const cold = this.#loadSessionColdMessages(sessionId);
-    // Cold ids strictly < hot ids by construction → chronological concat.
-    const all = [...cold, ...hot];
+    const all = this.#loadSessionMessages(sessionId);
     const cutoff = Number.isFinite(beforeSeq) ? beforeSeq : Infinity;
     const prefix = all.filter(m => m && m.sessionId === sessionId
       && !isHiddenConversationRow(m)
@@ -1072,28 +1069,28 @@ export class ConversationStore {
     if (!sessionId || !(turnsLimit > 0)) return { messages: [], oldestSeq: null, hasMore: false };
 
     const cutoff = Number.isFinite(beforeSeq) ? beforeSeq : Infinity;
-    // Perf: when the session has its own dedicated message directories, skip
-    // the legacy flat conversation/ dirs.  See #hasSessionOwnMessages.
-    const skipLegacy = this.#hasSessionOwnMessages(sessionId);
-    const dirs = [
-      ...this.#sessionMessageDirs('messages', sessionId),
-      ...(skipLegacy ? [] : [this.#legacyMsgDir]),
-      ...this.#sessionMessageDirs('cold', sessionId),
-      ...(skipLegacy ? [] : [this.#legacyColdDir]),
-    ];
-    const page = this.#loadVisibleWindowBySession(
-      dirs,
-      sessionId,
-      cutoff,
-      turnsLimit
-    );
+    const all = this.#loadSessionMessages(sessionId);
+    const visible = all.filter(m => m && m.sessionId === sessionId
+      && !isHiddenConversationRow(m)
+      && (m.role === 'user' || m.role === 'assistant')
+      && parseSeqFromId(m.id) < cutoff);
 
-    // Visible history is for UI replay, not LLM context. The visible loader
-    // already excludes tool-result rows, so running pairSanitize here can
-    // incorrectly treat tool-using assistant replies as orphaned tool arcs and
-    // drop/trim VP messages. Strip tool-call metadata instead and keep the
-    // user-visible assistant text for the conversation pane.
-    const messages = page.messages.map(m => {
+    if (visible.length === 0) return { messages: [], oldestSeq: null, hasMore: false };
+
+    const sliced = sliceLastNTurns(visible, turnsLimit);
+
+    // Turn-based hasMore: an EARLIER turn boundary was dropped.
+    const oldestSlicedSeq = sliced.length ? parseSeqFromId(sliced[0].id) : NaN;
+    const oldestVisibleSeq = parseSeqFromId(visible[0].id);
+    const hasMore = sliced.length > 0
+      && Number.isFinite(oldestSlicedSeq)
+      && Number.isFinite(oldestVisibleSeq)
+      && oldestSlicedSeq > oldestVisibleSeq;
+
+    // Visible history is for UI replay, not LLM context. Strip tool-call
+    // metadata — don't run pairSanitize (it can incorrectly drop assistant
+    // messages that reference tool calls stripped from the UI).
+    const messages = sliced.map(m => {
       if (m && m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
         const { toolCalls, ...rest } = m;
         return { ...rest, toolSummaryCount: toolCalls.length };
@@ -1105,7 +1102,7 @@ export class ConversationStore {
     return {
       messages,
       oldestSeq: Number.isFinite(oldestSeq) ? oldestSeq : null,
-      hasMore: page.hasMore,
+      hasMore,
     };
   }
 
@@ -1124,9 +1121,7 @@ export class ConversationStore {
     const limit = Number.isFinite(opts.limit) && opts.limit > 0 ? opts.limit : 500;
     const cutoff = Number.isFinite(afterSeq) && afterSeq >= 0 ? afterSeq : null;
     if (cutoff === null) return { messages: [], latestSeq: null };
-    const hot = this.#loadSessionHotMessages(sessionId);
-    const cold = this.#loadSessionColdMessages(sessionId);
-    const all = [...cold, ...hot].sort(compareMessagesBySeq);
+    const all = this.#loadSessionMessages(sessionId);
     const after = all.filter((m) => {
       if (!m || m.sessionId !== sessionId) return false;
       if (isHiddenConversationRow(m)) return false;
@@ -1678,33 +1673,6 @@ export class ConversationStore {
     return dirs;
   }
 
-  /**
-   * Returns true when `sessionId` has at least one dedicated message directory
-   * (sessions/ or groups/) that contains .md files. When this is true the
-   * session was created under the per-session layout and ALL its messages live
-   * in those directories — the legacy flat `conversation/messages/` directory
-   * can be skipped entirely, avoiding an O(all-sessions) scan on every load.
-   *
-   * @param {string} sessionId
-   * @returns {boolean}
-   */
-  #hasSessionOwnMessages(sessionId) {
-    if (!sessionId) return false;
-    for (const kind of ['messages', 'cold']) {
-      const dirs = [
-        join(this.#sessionConversationDir(sessionId), kind),
-        join(this.#legacySessionConversationDir(sessionId), kind),
-      ];
-      for (const dir of dirs) {
-        if (!existsSync(dir)) continue;
-        try {
-          if (readdirSync(dir).some(f => f.endsWith('.md'))) return true;
-        } catch (_) { /* permission error — treat as not found */ }
-      }
-    }
-    return false;
-  }
-
   #sessionMessageDirs(kind, sessionId = null) {
     if (sessionId) {
       const dirs = [
@@ -1738,35 +1706,13 @@ export class ConversationStore {
   }
 
   #loadSessionHotMessages(sessionId = null) {
-    const fromDedicated = this.#sessionMessageDirs('messages', sessionId)
-      .flatMap(dir => this.#loadFromDir(dir, Infinity));
-    // When the session has its own dedicated message directories we can skip
-    // the legacy flat dir — all of this session's messages live in dedicated
-    // dirs and scanning ~/.yeaft/conversation/messages/ (which may hold
-    // thousands of files from other sessions) is pure waste.
-    if (sessionId && this.#hasSessionOwnMessages(sessionId)) {
-      return fromDedicated.sort(compareMessagesBySeq);
-    }
-    return [
-      ...this.#loadFromDir(this.#legacyMsgDir, Infinity).filter(m => m?.sessionId),
-      ...fromDedicated,
-    ].sort(compareMessagesBySeq);
-  }
-
-  #loadSessionColdMessages(sessionId = null) {
-    const fromDedicated = this.#sessionMessageDirs('cold', sessionId)
-      .flatMap(dir => this.#loadFromDir(dir, Infinity));
-    if (sessionId && this.#hasSessionOwnMessages(sessionId)) {
-      return fromDedicated.sort(compareMessagesBySeq);
-    }
-    return [
-      ...this.#loadFromDir(this.#legacyColdDir, Infinity).filter(m => m?.sessionId),
-      ...fromDedicated,
-    ].sort(compareMessagesBySeq);
+    return this.#sessionMessageDirs('messages', sessionId)
+      .flatMap(dir => this.#loadFromDir(dir, Infinity))
+      .sort(compareMessagesBySeq);
   }
 
   #loadSessionMessages(sessionId = null) {
-    return [...this.#loadSessionColdMessages(sessionId), ...this.#loadSessionHotMessages(sessionId)].sort(compareMessagesBySeq);
+    return this.#loadSessionHotMessages(sessionId);
   }
 
   #loadAllMessages() {
