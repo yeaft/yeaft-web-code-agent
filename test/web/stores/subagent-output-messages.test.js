@@ -71,12 +71,17 @@ describe('sub-agent output messages', () => {
     store.handleYeaftOutput({
       conversationId: 'conv-a',
       sessionId: 'session-a',
-      event: { type: 'sub_agent_event', agentId: 'sub-1', payload: { type: 'tool_call', name: 'FileRead', agentName: 'worker' } },
+      event: { type: 'sub_agent_event', agentId: 'sub-1', payload: { type: 'tool_call', id: 'tool-1', name: 'FileRead', agentName: 'worker' } },
     });
     store.handleYeaftOutput({
       conversationId: 'conv-a',
       sessionId: 'session-a',
-      event: { type: 'sub_agent_event', agentId: 'sub-1', payload: { type: 'tool_end', name: 'FileRead', agentName: 'worker' } },
+      event: { type: 'sub_agent_event', agentId: 'sub-1', payload: { type: 'tool_start', id: 'tool-1', name: 'FileRead', agentName: 'worker' } },
+    });
+    store.handleYeaftOutput({
+      conversationId: 'conv-a',
+      sessionId: 'session-a',
+      event: { type: 'sub_agent_event', agentId: 'sub-1', payload: { type: 'tool_end', id: 'tool-1', name: 'FileRead', agentName: 'worker' } },
     });
     store.handleYeaftOutput({
       conversationId: 'conv-a',

@@ -71,8 +71,9 @@ describe('terminal output normalization render wiring', () => {
     );
     const preview = [
       JSON.stringify({ type: 'sub_agent_status', agentName: 'worker', status: 'running' }),
-      JSON.stringify({ type: 'tool_call', agentName: 'worker', name: 'FileRead' }),
-      JSON.stringify({ type: 'tool_end', agentName: 'worker', name: 'FileRead' }),
+      JSON.stringify({ type: 'tool_call', id: 'tool-1', agentName: 'worker', name: 'FileRead' }),
+      JSON.stringify({ type: 'tool_start', id: 'tool-1', agentName: 'worker', name: 'FileRead' }),
+      JSON.stringify({ type: 'tool_end', id: 'tool-1', agentName: 'worker', name: 'FileRead' }),
       JSON.stringify({ type: 'text_delta', agentName: 'worker', text: 'partial ' }),
       JSON.stringify({ type: 'text_delta', agentName: 'worker', text: 'answer' }),
       JSON.stringify({ type: 'tool_call', agentName: 'worker', name: 'Bash' }),
@@ -96,6 +97,14 @@ describe('terminal output normalization render wiring', () => {
       'worker result: final answer from task snapshot',
     ]);
     expect(createSubAgentTaskDetailLines({ kind: 'shell', log: { preview } }, t)).toEqual([]);
+
+    const lifecyclePreview = [
+      JSON.stringify({ type: 'tool_call', id: 'tool-1', agentName: 'worker', name: 'FileRead' }),
+      JSON.stringify({ type: 'tool_start', id: 'tool-1', agentName: 'worker', name: 'FileRead' }),
+      JSON.stringify({ type: 'tool_end', id: 'tool-1', agentName: 'worker', name: 'FileRead' }),
+    ].join('\n');
+    expect(createSubAgentTaskStreamText({ kind: 'sub_agent', log: { preview: lifecyclePreview } }, t))
+      .toBe('1 tool calls completed');
 
     const longDelta = 'x'.repeat(900);
     expect(createSubAgentTaskStreamText({

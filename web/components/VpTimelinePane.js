@@ -74,7 +74,7 @@ export function createSubAgentTaskStreamText(task, translate) {
       deltaText += event.text || event.content || event.delta || '';
       continue;
     }
-    if (event.type === 'tool_start' || event.type === 'tool_use' || event.type === 'tool_call') {
+    if (event.type === 'tool_use' || event.type === 'tool_call') {
       toolCallCount += 1;
       continue;
     }

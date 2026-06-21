@@ -2044,10 +2044,11 @@ export const useChatStore = defineStore('chat', {
               // deltas; ignore them here so the card doesn't present a
               // partial streamed answer as the final result.
               break;
-            case 'tool_start':
             case 'tool_use':
             case 'tool_call':
               next.toolCallCount = Number(next.toolCallCount || 0) + 1;
+              break;
+            case 'tool_start':
               break;
             case 'tool_result':
             case 'tool_end':
