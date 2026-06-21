@@ -68,12 +68,12 @@ export default {
             </div>
 
             <div class="llm-field-row">
-              <div class="llm-field llm-field-name">
+              <div class="llm-field">
                 <label class="llm-field-label">{{ $t('settings.llm.providerName') }}</label>
                 <input type="text" class="sp-input" v-model="provider.name"
                   :placeholder="$t('settings.llm.providerNamePlaceholder')" @input="markDirty" />
               </div>
-              <div v-if="!isManagedProvider(provider)" class="llm-field llm-field-protocol">
+              <div v-if="!isManagedProvider(provider)" class="llm-field">
                 <label class="llm-field-label">{{ $t('settings.llm.protocol') }}</label>
                 <div class="sp-custom-select" :class="{ open: openDropdown === 'protocol-' + idx }" v-click-outside="() => closeDropdown('protocol-' + idx)">
                   <button class="sp-custom-select-trigger" @click="toggleDropdown('protocol-' + idx)">

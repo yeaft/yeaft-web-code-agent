@@ -1244,10 +1244,6 @@
   font-size: 13px;
 }
 
-.llm-inline-status.is-warning {
-  color: var(--text-secondary);
-}
-
 .llm-inline-status.is-error {
   color: var(--error);
 }
@@ -1525,7 +1521,7 @@
   font-size: 11px;
 }
 
-.sp-btn-link {
+.llm-preset-modal .sp-btn-link {
   padding: 2px 4px;
   border: none;
   background: none;
@@ -1534,7 +1530,7 @@
   cursor: pointer;
 }
 
-.sp-btn-link:hover {
+.llm-preset-modal .sp-btn-link:hover {
   text-decoration: underline;
 }
 

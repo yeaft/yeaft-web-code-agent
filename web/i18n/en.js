@@ -793,7 +793,6 @@ export default {
   'settings.llm.save': 'Save Changes',
   'settings.llm.saving': 'Saving...',
   'settings.llm.saved': 'Configuration saved',
-  'settings.llm.saveFailed': 'Failed to save configuration',
   'settings.llm.unsavedChanges': 'You have unsaved changes',
   'settings.llm.confirmRemoveProvider': 'Remove this provider?',
   'settings.llm.setupTitle': 'Connect a model',

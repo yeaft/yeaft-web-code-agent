@@ -790,7 +790,6 @@ export default {
   'settings.llm.save': '保存更改',
   'settings.llm.saving': '保存中...',
   'settings.llm.saved': '配置已保存',
-  'settings.llm.saveFailed': '保存配置失败',
   'settings.llm.unsavedChanges': '有未保存的更改',
   'settings.llm.confirmRemoveProvider': '确定移除此服务商？',
   'settings.llm.setupTitle': '连接模型',
