@@ -217,7 +217,6 @@
   padding: 0;
 }
 
-.settings-pane-yeaft .vp-crud-card,
 .settings-pane-yeaft .search-usage-card,
 .settings-pane-yeaft .mcp-server-row,
 .settings-pane-yeaft .mcp-empty,
@@ -231,56 +230,40 @@
 }
 
 .settings-pane-yeaft .vp-crud-list-toolbar {
-  margin-bottom: 10px;
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 
 .settings-pane-yeaft .vp-crud-card-grid {
-  gap: 8px;
+  gap: 2px;
 }
 
 .settings-pane-yeaft .vp-crud-card {
   min-height: 0;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  padding: 6px 0;
   gap: 12px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
 }
 
 .settings-pane-yeaft .vp-crud-card-main {
   display: flex;
   align-items: center;
-  gap: 10px;
   min-width: 0;
   flex: 1 1 auto;
 }
 
-.settings-pane-yeaft .vp-crud-card-avatar {
-  flex: 0 0 30px;
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: color-mix(in srgb, currentColor 12%, transparent);
-  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.settings-pane-yeaft .vp-crud-card-meta {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.settings-pane-yeaft .vp-crud-card-title-row,
-.settings-pane-yeaft .vp-crud-card-subline {
+.settings-pane-yeaft .vp-crud-card-meta,
+.settings-pane-yeaft .vp-crud-card-title-row {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .settings-pane-yeaft .vp-crud-card-name {
@@ -289,8 +272,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--text-primary);
   font-size: 13px;
-  line-height: 1.25;
+  font-weight: 500;
+  line-height: 1.2;
 }
 
 .settings-pane-yeaft .vp-crud-card-name span {
@@ -298,27 +283,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.settings-pane-yeaft .vp-crud-card-id,
-.settings-pane-yeaft .vp-crud-card-role {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.settings-pane-yeaft .vp-crud-card-id {
-  flex: 0 1 auto;
-  font-size: 11px;
-  line-height: 1.25;
-}
-
-.settings-pane-yeaft .vp-crud-card-role {
-  flex: 1 1 auto;
-  margin-top: 0;
-  font-size: 12px;
-  line-height: 1.25;
 }
 
 .settings-pane-yeaft .vp-crud-stock-badge {
@@ -337,13 +301,15 @@
   align-items: center;
   justify-content: flex-end;
   flex: 0 0 auto;
+  flex-wrap: nowrap;
 }
 
 .settings-pane-yeaft .vp-crud-card-actions .vp-crud-link-btn {
-  min-height: 30px;
-  padding: 6px 10px;
+  min-height: 28px;
+  padding: 5px 9px;
   font-size: 12px;
   line-height: 1;
+  white-space: nowrap;
 }
 
 .settings-pane-yeaft .vp-crud-primary-btn,
@@ -355,14 +321,24 @@
   font-family: inherit;
 }
 
-.settings-pane-yeaft .vp-crud-primary-btn,
+.settings-pane-yeaft .vp-crud-primary-btn {
+  background: var(--accent-blue);
+  color: var(--accent-fg);
+  border-color: var(--accent-blue);
+}
+
+.settings-pane-yeaft .vp-crud-primary-btn:hover:not(:disabled) {
+  background: var(--accent-blue-hover);
+  border-color: var(--accent-blue-hover);
+  opacity: 1;
+}
+
 .settings-pane-yeaft .search-btn-primary {
   background: var(--accent);
   color: var(--accent-fg);
   border: 1px solid var(--accent);
 }
 
-.settings-pane-yeaft .vp-crud-primary-btn:hover:not(:disabled),
 .settings-pane-yeaft .search-btn-primary:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
@@ -983,8 +959,7 @@
 
   .sp-row,
   .search-key-row,
-  .mcp-server-row,
-  .vp-crud-card {
+  .mcp-server-row {
     align-items: stretch;
     flex-direction: column;
   }
@@ -993,28 +968,17 @@
   .sp-invite-create-row,
   .settings-section-actions,
   .mcp-server-actions,
-  .vp-crud-card-actions,
   .vp-crud-form-actions {
     flex-wrap: wrap;
   }
 
   .settings-pane-yeaft .vp-crud-card {
     gap: 8px;
-    padding: 10px;
-  }
-
-  .settings-pane-yeaft .vp-crud-card-main,
-  .settings-pane-yeaft .vp-crud-card-actions {
-    width: 100%;
-  }
-
-  .settings-pane-yeaft .vp-crud-card-actions {
-    justify-content: flex-start;
+    padding: 6px 0;
   }
 
   .settings-pane-yeaft .vp-crud-card-actions .vp-crud-link-btn {
-    flex: 1 1 auto;
-    padding: 7px 8px;
+    padding: 5px 8px;
   }
 
   .sp-language-options {
