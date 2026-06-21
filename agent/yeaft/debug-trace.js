@@ -26,7 +26,7 @@ import { randomUUID } from 'crypto';
 
 const TRACE_VERSION = 2;
 const REQUEST_RETENTION = 10;
-const MAX_HISTORY_LIMIT = 10;
+const MAX_HISTORY_LIMIT = 5;
 const MAX_DREAM_EVENTS = 100;
 const MAX_TEXT_BYTES = 1024 * 1024;
 const MAX_TOOL_INPUT = 10 * 1024;

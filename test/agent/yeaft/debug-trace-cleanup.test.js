@@ -45,7 +45,7 @@ afterEach(() => {
 });
 
 describe('DebugTrace file retention', () => {
-  it('stores session traces beside session data and keeps only the newest 10 requests', () => {
+  it('stores session traces beside session data while returning only the newest 5 requests to the UI', () => {
     for (let i = 0; i < 12; i++) {
       const turnId = trace.startTurn({ traceId: `request-${i}`, turnNumber: 1, sessionId: 's1', userPrompt: `prompt ${i}` });
       trace.endTurn(turnId, {
@@ -59,21 +59,22 @@ describe('DebugTrace file retention', () => {
     trace.close();
     expect(sessionRequestDirs('s1')).toHaveLength(10);
     const history = trace.fetchRecentDebugHistory({ sessionId: 's1', limit: 10, dreamLimit: 0, indexOnly: true });
-    expect(history.turns).toHaveLength(10);
-    expect(history.turns.map(t => t.turnId)).toEqual(Array.from({ length: 10 }, (_, i) => `request-${i + 2}`));
+    expect(history.turns).toHaveLength(5);
+    expect(history.limit).toBe(5);
+    expect(history.turns.map(t => t.turnId)).toEqual(Array.from({ length: 5 }, (_, i) => `request-${i + 7}`));
   });
 
-  it('bounds index fetches to 10 even when callers ask for more', () => {
+  it('bounds index fetches to 5 even when callers ask for more', () => {
     for (let i = 0; i < 20; i++) {
       const turnId = trace.startTurn({ traceId: `bounded-${i}`, turnNumber: 1, sessionId: 's2', userPrompt: `p${i}` });
       trace.endTurn(turnId, { messages: [{ role: 'user', content: `p${i}` }], responseText: 'ok' });
     }
 
     const history = trace.fetchRecentDebugHistory({ sessionId: 's2', limit: 999, dreamLimit: 0, indexOnly: true });
-    expect(history.turns).toHaveLength(10);
-    expect(history.limit).toBe(10);
-    expect(history.turns[0].turnId).toBe('bounded-10');
-    expect(history.turns[9].turnId).toBe('bounded-19');
+    expect(history.turns).toHaveLength(5);
+    expect(history.limit).toBe(5);
+    expect(history.turns[0].turnId).toBe('bounded-15');
+    expect(history.turns[4].turnId).toBe('bounded-19');
   });
 
   it('buffers active loop writes until the dirty loop threshold, timer, or final close', () => {

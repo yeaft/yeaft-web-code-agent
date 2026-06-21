@@ -140,12 +140,14 @@ function resolveYeaftConversationIdForSession(state, sessionId = null) {
 }
 
 // Debug history is request-bounded on disk. The panel loads the newest
-// 10 requests globally by default. A single request can legitimately run
-// 100-200 loops, so the live in-memory loop cap must not be smaller than that or the
-// panel will miss loops while the request is still streaming. 2000 covers the
-// worst expected 10-request window while staying finite.
-const MAX_YEAFT_DEBUG_LOOPS = 2000;
-const DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT = 10;
+// 5 requests globally by default and search results are clamped to the same
+// window so the debug channel cannot flood the WebSocket while the agent is
+// busy. A single request can legitimately run 100-200 loops, so the live
+// in-memory loop cap must not be smaller than that or the panel will miss loops
+// while the request is still streaming. 1000 covers the expected 5-request
+// window while staying finite.
+const MAX_YEAFT_DEBUG_LOOPS = 1000;
+const DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT = 5;
 
 // PR feat-dream-debug-panel-full: per-scope ring buffer cap for dream
 // events. Bounds the yeaftDreamEvents map so long-running sessions
@@ -481,7 +483,7 @@ export const useChatStore = defineStore('chat', {
     yeaftDebugHistoryHasMore: false,
     // Debug-panel toolbar state.
     // `yeaftDebugSearch` is sent to the agent as a regex over bounded request
-    // summaries so the request log can find traces outside the 10-row window.
+    // summaries so the request log can find traces outside the 5-row window.
     // `yeaftDebugSessionFilter` is an optional debug-side pin; default null
     // means the request log is global across Sessions.
     yeaftDebugSearch: '',
@@ -808,8 +810,8 @@ export const useChatStore = defineStore('chat', {
         // turn is still in flight those fields are 0, so the header shows
         // "0L 0ms 0 tok". Worse, the template falls back to
         // `turn.loops.length` for the L count, but the global loop ring is
-        // capped at MAX_YEAFT_DEBUG_LOOPS (=50) for live detail payloads,
-        // so a long in-flight turn can otherwise pin the header at "50L".
+        // capped at MAX_YEAFT_DEBUG_LOOPS for live detail payloads,
+        // so a long in-flight turn can otherwise pin the header at that cap.
         // For old turns hydrated from SQLite
         // whose `turn_close` was never persisted, the row stays "0L" forever.
         //
@@ -3098,7 +3100,7 @@ export const useChatStore = defineStore('chat', {
     },
     // Search query for the debug panel toolbar. The request log sends this to
     // the agent as a regex over bounded request summaries, so results are not
-    // limited to the currently loaded 10-row window. Not persisted.
+    // limited to the currently loaded 5-row window. Not persisted.
     setYeaftDebugSearch(query) {
       this.yeaftDebugSearch = typeof query === 'string' ? query : '';
       if (this._yeaftDebugSearchTimer) clearTimeout(this._yeaftDebugSearchTimer);
