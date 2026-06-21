@@ -85,18 +85,8 @@ export default {
                 <li class="welcome-setup-step">
                   <span class="welcome-setup-step-number">2</span>
                   <div class="welcome-setup-step-body">
-                    <div class="welcome-setup-step-title">{{ $t('welcome.setupCopilotTitle') }}</div>
-                    <p class="welcome-setup-step-desc">{{ $t('welcome.setupCopilotDesc') }}</p>
-                    <div class="welcome-command-row">
-                      <code>{{ welcomeLlmCommand }}</code>
-                      <button type="button" class="welcome-copy-btn" @click="copyWelcomeCommand(welcomeLlmCommand)">{{ $t('common.copy') }}</button>
-                    </div>
-                  </div>
-                </li>
-                <li class="welcome-setup-step">
-                  <span class="welcome-setup-step-number">3</span>
-                  <div class="welcome-setup-step-body">
                     <div class="welcome-setup-step-title">{{ $t('welcome.setupRunTitle') }}</div>
+                    <p class="welcome-setup-step-desc">{{ $t('welcome.setupRunDesc') }}</p>
                     <p class="welcome-setup-step-desc" v-if="welcomeSetupLoading">{{ $t('welcome.setupSecretLoading') }}</p>
                     <p class="welcome-setup-step-desc welcome-setup-error" v-else-if="welcomeSetupError">{{ $t('welcome.setupSecretError') }}</p>
                     <div class="welcome-command-row" v-if="welcomeServiceCommand">
@@ -106,6 +96,17 @@ export default {
                     <button v-else type="button" class="welcome-btn setup-agent-btn" @click="$emit('open-settings')">
                       {{ $t('welcome.openSecuritySettings') }}
                     </button>
+                  </div>
+                </li>
+                <li class="welcome-setup-step">
+                  <span class="welcome-setup-step-number">3</span>
+                  <div class="welcome-setup-step-body">
+                    <div class="welcome-setup-step-title">{{ $t('welcome.setupCopilotTitle') }}</div>
+                    <p class="welcome-setup-step-desc">{{ $t('welcome.setupCopilotDesc') }}</p>
+                    <div class="welcome-command-row">
+                      <code>{{ welcomeLlmCommand }}</code>
+                      <button type="button" class="welcome-copy-btn" @click="copyWelcomeCommand(welcomeLlmCommand)">{{ $t('common.copy') }}</button>
+                    </div>
                   </div>
                 </li>
               </ol>

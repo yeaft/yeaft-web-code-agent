@@ -3,6 +3,7 @@
  * Routes install/uninstall/start/stop/restart/status/logs to the correct platform module.
  */
 import { existsSync } from 'fs';
+import { join } from 'path';
 import { platform } from 'os';
 import {
   getConfigDir, getLogDir, getConfigPath,
@@ -10,6 +11,7 @@ import {
   parseServiceArgs, validateConfig, getInstanceIdFromArgs, getDefaultYeaftDir
 } from './config.js';
 import { initYeaftDir } from '../yeaft/init.js';
+import { DEFAULT_GITHUB_COPILOT_MODEL, tryAutoConfigureGitHubCopilot } from '../llm-config-cli.js';
 import { getSystemdServicePath, linuxInstall, linuxUninstall, linuxStart, linuxStop, linuxRestart, linuxStatus, linuxLogs } from './linux.js';
 import { getLaunchdPlistPath, macInstall, macUninstall, macStart, macStop, macRestart, macStatus, macLogs } from './macos.js';
 import { winInstall, winUninstall, winStart, winStop, winRestart, winStatus, winLogs } from './windows.js';
@@ -35,6 +37,19 @@ export {
 
 const os = platform();
 
+export async function autoConfigureGitHubCopilotIfAvailable(yeaftDir, options = {}) {
+  const result = await tryAutoConfigureGitHubCopilot(join(yeaftDir, 'config.json'), options);
+  if (result.configured) {
+    console.log(`Configured GitHub Copilot provider automatically with ${DEFAULT_GITHUB_COPILOT_MODEL}.`);
+    if (result.discovery?.warning) console.log(`Warning: ${result.discovery.warning}`);
+  } else if (result.reason === 'already-configured') {
+    console.log('LLM config already exists; skipped automatic GitHub Copilot setup.');
+  } else if (result.reason === 'invalid-config') {
+    console.log('Existing LLM config is invalid; skipped automatic GitHub Copilot setup.');
+  }
+  return result;
+}
+
 function ensureInstalled(instanceId) {
   if (os === 'linux') {
     if (!existsSync(getSystemdServicePath(instanceId))) {
@@ -50,7 +65,7 @@ function ensureInstalled(instanceId) {
   // Windows check is done inside individual functions
 }
 
-export function install(args) {
+export async function install(args) {
   const config = parseServiceArgs(args);
   validateConfig(config);
   saveServiceConfig(config);
@@ -59,6 +74,9 @@ export function install(args) {
   // so `yeaft` CLI is ready to use immediately after install
   const effectiveYeaftDir = config.yeaftDir || getDefaultYeaftDir(config.instanceId);
   const { dir, created } = initYeaftDir(effectiveYeaftDir);
+  await autoConfigureGitHubCopilotIfAvailable(dir, {
+    allowConfigured: created.includes(join(dir, 'config.json')),
+  });
   if (created.length > 0) {
     console.log(`Initialized ${dir}`);
     console.log(`  Edit ${dir}/config.json to configure LLM providers.`);
