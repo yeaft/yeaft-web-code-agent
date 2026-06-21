@@ -21,7 +21,6 @@ import {
   statSync,
   writeFileSync,
 } from 'fs';
-import { rename as renameAsync, writeFile as writeFileAsync } from 'fs/promises';
 import { basename, dirname, extname, join } from 'path';
 import { randomUUID } from 'crypto';
 
@@ -33,7 +32,8 @@ const MAX_TEXT_BYTES = 1024 * 1024;
 const MAX_TOOL_INPUT = 10 * 1024;
 const MAX_INLINE_VALUE_BYTES = 1024 * 1024;
 const MAX_RAW_REQUEST_BYTES = 2 * 1024 * 1024;
-const TRACE_FLUSH_DELAY_MS = 150;
+const TRACE_FLUSH_INTERVAL_MS = 5_000;
+const TRACE_FLUSH_DIRTY_LOOPS = 10;
 
 function isPlainObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value);
@@ -64,13 +64,6 @@ function atomicWriteJson(filePath, value) {
   const tmp = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
   writeFileSync(tmp, JSON.stringify(value), 'utf8');
   renameSync(tmp, filePath);
-}
-
-async function atomicWriteJsonAsync(filePath, value) {
-  ensureDir(dirname(filePath));
-  const tmp = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
-  await writeFileAsync(tmp, JSON.stringify(value), 'utf8');
-  await renameAsync(tmp, filePath);
 }
 
 function readJson(filePath) {
@@ -541,10 +534,10 @@ export class DebugTrace {
   #turnIndex = new Map();
   /** @type {Map<string, object>} */
   #requestCache = new Map();
-  /** @type {Map<string, object>} */
+  /** @type {Map<string, { trace: object, dirtyLoops: number, firstDirtyAt: number }>} */
   #pendingWrites = new Map();
-  /** @type {Map<string, NodeJS.Timeout>} */
-  #flushTimers = new Map();
+  /** @type {NodeJS.Timeout|null} */
+  #flushTimer = null;
   /** @type {number} */
   #sequence = 0;
 
@@ -626,7 +619,7 @@ export class DebugTrace {
     trace.updatedAt = loop.at;
     trace.active = info.stopReason ? !['end_turn', 'error', 'aborted'].includes(String(info.stopReason)) : false;
     trace._lastSnapshot = snapshot;
-    if (!trace.active) this.#scheduleSave(trace);
+    this.#markDirty(trace, { dirtyLoops: 1, force: !trace.active });
   }
 
   logTool(turnId, { toolName, toolCallId = null, toolInput = null, toolOutput = null, durationMs = null, isError = false } = {}) {
@@ -649,7 +642,7 @@ export class DebugTrace {
       createdAt: Date.now(),
     });
     trace.updatedAt = Date.now();
-    if (!trace.active) this.#scheduleSave(trace);
+    this.#markDirty(trace, { dirtyLoops: 0, force: !trace.active });
     return id;
   }
 
@@ -888,39 +881,44 @@ export class DebugTrace {
     return toWrite;
   }
 
-  #scheduleSave(trace) {
+  #markDirty(trace, { dirtyLoops = 0, force = false } = {}) {
     if (!trace?.requestKey) return;
     const key = this.#traceWriteKey(trace);
-    this.#pendingWrites.set(key, trace);
+    const existing = this.#pendingWrites.get(key);
+    const now = Date.now();
+    const item = existing || { trace, dirtyLoops: 0, firstDirtyAt: now };
+    item.trace = trace;
+    item.dirtyLoops += Math.max(0, Number(dirtyLoops) || 0);
+    this.#pendingWrites.set(key, item);
     this.#requestCache.set(trace.requestKey, trace);
-    if (this.#flushTimers.has(key)) return;
-    const timer = setTimeout(() => this.#flushOneAsync(key), TRACE_FLUSH_DELAY_MS);
-    this.#flushTimers.set(key, timer);
+
+    if (force || item.dirtyLoops >= TRACE_FLUSH_DIRTY_LOOPS) {
+      this.#flushPendingSync();
+      return;
+    }
+    this.#scheduleFlushTimer(now);
   }
 
-  async #flushOneAsync(key) {
-    const timer = this.#flushTimers.get(key);
-    if (timer) clearTimeout(timer);
-    this.#flushTimers.delete(key);
-    const trace = this.#pendingWrites.get(key);
-    if (!trace) return;
-    this.#pendingWrites.delete(key);
-    try {
-      await atomicWriteJsonAsync(this.#traceFile(trace), this.#serializableTrace(trace));
-      this.#pruneSession(trace.sessionId || null, REQUEST_RETENTION);
-    } catch (err) {
-      console.warn('[Yeaft] debug trace write failed:', err?.message || err);
-    }
+  #scheduleFlushTimer(now = Date.now()) {
+    if (this.#flushTimer || this.#pendingWrites.size === 0) return;
+    const oldestDirtyAt = Math.min(...Array.from(this.#pendingWrites.values()).map(item => item.firstDirtyAt || now));
+    const dueIn = Math.max(0, TRACE_FLUSH_INTERVAL_MS - (now - oldestDirtyAt));
+    this.#flushTimer = setTimeout(() => {
+      this.#flushTimer = null;
+      this.#flushPendingSync();
+    }, dueIn);
+    if (typeof this.#flushTimer.unref === 'function') this.#flushTimer.unref();
   }
 
   #flushPendingSync() {
-    const entries = Array.from(this.#pendingWrites.entries());
+    if (this.#flushTimer) {
+      clearTimeout(this.#flushTimer);
+      this.#flushTimer = null;
+    }
+    const entries = Array.from(this.#pendingWrites.values());
     if (entries.length === 0) return;
-    for (const [key, trace] of entries) {
-      const timer = this.#flushTimers.get(key);
-      if (timer) clearTimeout(timer);
-      this.#flushTimers.delete(key);
-      this.#pendingWrites.delete(key);
+    this.#pendingWrites.clear();
+    for (const { trace } of entries) {
       try {
         atomicWriteJson(this.#traceFile(trace), this.#serializableTrace(trace));
       } catch (err) {

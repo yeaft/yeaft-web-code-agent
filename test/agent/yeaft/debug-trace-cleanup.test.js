@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, readdirSync, rmSync } from 'fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { existsSync, readFileSync, readdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -15,10 +15,20 @@ function makeTrace() {
   return trace;
 }
 
+function sessionRequestsDir(sessionId) {
+  return join(rootDir, 'sessions', sessionId, 'debug', 'requests');
+}
+
 function sessionRequestDirs(sessionId) {
-  const dir = join(rootDir, 'sessions', sessionId, 'debug', 'requests');
+  const dir = sessionRequestsDir(sessionId);
   if (!existsSync(dir)) return [];
   return readdirSync(dir, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name).sort();
+}
+
+function readOnlyTraceFile(sessionId) {
+  const dirs = sessionRequestDirs(sessionId);
+  expect(dirs).toHaveLength(1);
+  return JSON.parse(readFileSync(join(sessionRequestsDir(sessionId), dirs[0], 'trace.json'), 'utf8'));
 }
 
 beforeEach(() => {
@@ -30,6 +40,8 @@ afterEach(() => {
   rmSync(rootDir, { recursive: true, force: true });
   trace = null;
   rootDir = null;
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe('DebugTrace file retention', () => {
@@ -62,6 +74,61 @@ describe('DebugTrace file retention', () => {
     expect(history.limit).toBe(10);
     expect(history.turns[0].turnId).toBe('bounded-10');
     expect(history.turns[9].turnId).toBe('bounded-19');
+  });
+
+  it('buffers active loop writes until the dirty loop threshold, timer, or final close', () => {
+    vi.useFakeTimers();
+    let now = 1_700_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+    for (let i = 1; i <= 9; i++) {
+      const turnId = trace.startTurn({ traceId: 'buffered-request', turnNumber: i, sessionId: 's-buffer', userPrompt: 'buffer work' });
+      trace.endTurn(turnId, {
+        responseText: `loop ${i}`,
+        stopReason: 'tool_use',
+        messages: [{ role: 'user', content: 'buffer work' }],
+      });
+      now += 100;
+    }
+
+    expect(sessionRequestDirs('s-buffer')).toHaveLength(0);
+
+    const tenth = trace.startTurn({ traceId: 'buffered-request', turnNumber: 10, sessionId: 's-buffer', userPrompt: 'buffer work' });
+    trace.endTurn(tenth, {
+      responseText: 'loop 10',
+      stopReason: 'tool_use',
+      messages: [{ role: 'user', content: 'buffer work' }],
+    });
+
+    let stored = readOnlyTraceFile('s-buffer');
+    expect(stored.loops).toHaveLength(10);
+
+    const eleventh = trace.startTurn({ traceId: 'buffered-request', turnNumber: 11, sessionId: 's-buffer', userPrompt: 'buffer work' });
+    trace.endTurn(eleventh, {
+      responseText: 'loop 11',
+      stopReason: 'tool_use',
+      messages: [{ role: 'user', content: 'buffer work' }],
+    });
+    stored = readOnlyTraceFile('s-buffer');
+    expect(stored.loops).toHaveLength(10);
+
+    now += 5_000;
+    vi.advanceTimersByTime(5_000);
+    stored = readOnlyTraceFile('s-buffer');
+    expect(stored.loops).toHaveLength(11);
+
+    const twelfth = trace.startTurn({ traceId: 'buffered-request', turnNumber: 12, sessionId: 's-buffer', userPrompt: 'buffer work' });
+    trace.endTurn(twelfth, {
+      responseText: 'loop 12',
+      stopReason: 'tool_use',
+      messages: [{ role: 'user', content: 'buffer work' }],
+    });
+    stored = readOnlyTraceFile('s-buffer');
+    expect(stored.loops).toHaveLength(11);
+
+    trace.close();
+    stored = readOnlyTraceFile('s-buffer');
+    expect(stored.loops).toHaveLength(12);
   });
 
   it('stores one file per request and reconstructs loop requests from base plus deltas', () => {
