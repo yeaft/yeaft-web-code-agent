@@ -782,17 +782,12 @@ describe('ConversationStore', () => {
     });
   });
 
-  // ─── skip-legacy optimization: when a session has its own dedicated
-  //     message directories, the legacy flat conversation/messages/ dir
-  //     must be skipped to avoid scanning thousands of files from other
-  //     sessions on every history load (perf regression guard).
-  describe('skip-legacy optimisation', () => {
-    /**
-     * Write a raw .md message file directly into the legacy flat dir
-     * `conversation/messages/`, bypassing the `append()` path which
-     * always routes to per-session dirs.  This simulates a legacy
-     * install that predates the per-session conversation layout.
-     */
+  // ─── Legacy flat dir regression guard: the legacy
+  //     conversation/messages/ and conversation/cold/ flat directories
+  //     are NEVER scanned when loading session history.  All session
+  //     messages now live exclusively in per-session directories, and
+  //     scanning the flat dirs would be a pure-performance regression.
+  describe('legacy dir is never scanned', () => {
     function writeLegacyMessage(baseDir, seq, sessionId, role, content) {
       const msgDir = join(baseDir, 'conversation', 'messages');
       mkdirSync(msgDir, { recursive: true });
@@ -810,82 +805,64 @@ ${content}`;
       writeFileSync(join(msgDir, `${id}.md`), raw, { encoding: 'utf8', mode: 0o644 });
     }
 
-    it('skips legacy flat dir when session has its own dedicated messages', () => {
+    it('never reads from the legacy flat messages/ dir', () => {
       const store = new ConversationStore(TEST_DIR);
 
-      // Put a message for grp_opt in the legacy flat dir.
-      writeLegacyMessage(TEST_DIR, 1, 'grp_opt', 'user', 'legacy msg');
+      // Write a message into the legacy flat dir.
+      writeLegacyMessage(TEST_DIR, 1, 'grp_never', 'user', 'legacy msg');
 
-      // Also put the session's own message via append (goes to sessions/ dir).
-      store.append({ role: 'user', content: 'dedicated msg', sessionId: 'grp_opt' });
+      // Also write the session's own message via append (dedicated dir).
+      store.append({ role: 'user', content: 'dedicated msg', sessionId: 'grp_never' });
 
-      // The dedicated-dir message must appear; the legacy one must NOT
-      // because #hasSessionOwnMessages returns true and the legacy scan
-      // is skipped.
-      const recent = store.loadRecentBySession('grp_opt', 50);
+      // Legacy message must NOT appear — flat dir is never scanned.
+      const recent = store.loadRecentBySession('grp_never', 50);
       expect(recent.map(m => m.content)).toEqual(['dedicated msg']);
 
-      // Visible loader must also skip legacy.
-      const visible = store.loadVisibleBySession('grp_opt', null, 10);
+      const visible = store.loadVisibleBySession('grp_never', null, 10);
       expect(visible.messages.map(m => m.content)).toEqual(['dedicated msg']);
+
+      const older = store.loadOlderBySession('grp_never', null, 10);
+      expect(older.messages.map(m => m.content)).toEqual(['dedicated msg']);
+
+      const appended = store.append({ role: 'user', content: 'delta', sessionId: 'grp_never' });
+      const seq = Number(appended.id.replace(/^m/, ''));
+      const delta = store.loadAfterSeqByGroup('grp_never', seq - 2);
+      expect(delta.messages.map(m => m.content)).toEqual(['dedicated msg', 'delta']);
     });
 
-    it('still scans legacy flat dir when session has NO dedicated dirs', () => {
+    it('session with no dedicated dirs returns empty (no legacy fallback)', () => {
       const store = new ConversationStore(TEST_DIR);
       writeLegacyMessage(TEST_DIR, 1, 'grp_legacy_only', 'user', 'legacy-only msg');
 
-      // No dedicated dir at all — must fall back to legacy scan.
+      // No dedicated dir at all → no legacy fallback → empty.
       const recent = store.loadRecentBySession('grp_legacy_only', 50);
-      expect(recent.map(m => m.content)).toEqual(['legacy-only msg']);
+      expect(recent).toEqual([]);
 
       const visible = store.loadVisibleBySession('grp_legacy_only', null, 10);
-      expect(visible.messages.map(m => m.content)).toEqual(['legacy-only msg']);
+      expect(visible.messages).toEqual([]);
+
+      const page = store.loadOlderBySession('grp_legacy_only', null, 10);
+      expect(page.messages).toEqual([]);
     });
 
-    it('loadOlderBySession also skips legacy when session has own dirs', () => {
+    it('loadVisibleBySession respects turn window without legacy interference', () => {
       const store = new ConversationStore(TEST_DIR);
-      writeLegacyMessage(TEST_DIR, 1, 'grp_page', 'user', 'legacy');
-      store.append({ role: 'user', content: 'page1', sessionId: 'grp_page' });
+      writeLegacyMessage(TEST_DIR, 1, 'grp_window', 'user', 'legacy');
 
-      const page = store.loadOlderBySession('grp_page', null, 10);
-      expect(page.messages.map(m => m.content)).toEqual(['page1']);
-    });
+      // Write 3 dedicated user turns.
+      store.append({ role: 'user', content: 'turn0', sessionId: 'grp_window' });
+      store.append({ role: 'assistant', content: 'reply0', sessionId: 'grp_window' });
+      store.append({ role: 'user', content: 'turn1', sessionId: 'grp_window' });
+      store.append({ role: 'assistant', content: 'reply1', sessionId: 'grp_window' });
+      store.append({ role: 'user', content: 'turn2', sessionId: 'grp_window' });
+      store.append({ role: 'assistant', content: 'reply2', sessionId: 'grp_window' });
 
-    it('loadAfterSeqByGroup also skips legacy when session has own dirs', () => {
-      const store = new ConversationStore(TEST_DIR);
-      writeLegacyMessage(TEST_DIR, 1, 'grp_delta', 'user', 'legacy');
-      const appended = store.append({ role: 'user', content: 'delta1', sessionId: 'grp_delta' });
-      const seq = Number(appended.id.replace(/^m/, ''));
-
-      const delta = store.loadAfterSeqByGroup('grp_delta', seq - 1);
-      expect(delta.messages.map(m => m.content)).toEqual(['delta1']);
-    });
-
-    it('cold legacy dir is scanned when session has no cold dedicated dir', () => {
-      const store = new ConversationStore(TEST_DIR);
-
-      // Put a message in the legacy *cold* dir (not hot).
-      const coldDir = join(TEST_DIR, 'conversation', 'cold');
-      mkdirSync(coldDir, { recursive: true });
-      const raw = `---
-id: m0099
-role: user
-time: 2026-06-21T10:00:00Z
-threadId: main
-sessionId: grp_cold_legacy
-tokens_est: 5
----
-
-cold-only msg`;
-      writeFileSync(join(coldDir, 'm0099.md'), raw, { encoding: 'utf8', mode: 0o644 });
-
-      // Session has hot dedicated msgs but zero cold dedicated msgs.
-      // #hasSessionOwnMessages checks both hot and cold; the hot dir
-      // exists so the legacy cold scan is also skipped.
-      store.append({ role: 'user', content: 'hot msg', sessionId: 'grp_cold_legacy' });
-
-      const recent = store.loadRecentBySession('grp_cold_legacy', 50);
-      expect(recent.map(m => m.content)).toEqual(['hot msg']);
+      // Limit to 2 turns — only turn1 and turn2 should appear.
+      const visible = store.loadVisibleBySession('grp_window', null, 2);
+      expect(visible.messages.map(m => m.content)).toEqual([
+        'turn1', 'reply1', 'turn2', 'reply2',
+      ]);
+      expect(visible.hasMore).toBe(true);
     });
   });
 });
