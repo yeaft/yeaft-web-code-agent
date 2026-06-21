@@ -17,6 +17,11 @@ export const VALID_STATES = new Set([
 ]);
 
 const RUNNING_STATES = new Set(['typing', 'thinking', 'streaming', 'tool']);
+
+export function isVpStatusRunning(state) {
+  return RUNNING_STATES.has(state || 'idle');
+}
+
 const STATE_PRIORITY = ['tool', 'streaming', 'thinking', 'typing', 'error', 'idle'];
 const MAX_RETAINED_THREADS_PER_VP = 20;
 const COMPLETED_TTL_MS = 30 * 60 * 1000;
@@ -52,7 +57,7 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
       }
     }
 
-    const runningThreadCount = rows.filter(r => RUNNING_STATES.has(r.state)).length;
+    const runningThreadCount = rows.filter(r => isVpStatusRunning(r.state)).length;
     const latest = rows[0] || null;
     return {
       sessionId: sessionId || null,
@@ -83,14 +88,14 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
     }
     const cutoff = now() - COMPLETED_TTL_MS;
     for (const [key, row] of rows) {
-      if (RUNNING_STATES.has(row.state)) continue;
+      if (isVpStatusRunning(row.state)) continue;
       if ((row.updatedAt || row.since || 0) < cutoff) threads.delete(key);
     }
     const remaining = rows
       .filter(([key]) => threads.has(key))
       .sort((a, b) => (b[1].updatedAt || b[1].since || 0) - (a[1].updatedAt || a[1].since || 0));
     for (const [key, row] of remaining.slice(MAX_RETAINED_THREADS_PER_VP)) {
-      if (!RUNNING_STATES.has(row.state)) threads.delete(key);
+      if (!isVpStatusRunning(row.state)) threads.delete(key);
     }
   }
 

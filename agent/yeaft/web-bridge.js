@@ -66,7 +66,7 @@ import { isHiddenConversationRow } from './conversation/internal-control.js';
 import { sliceLastNTurns } from './turn-utils.js';
 import { pairSanitize } from './pair-sanitize.js';
 import { filterSnapshotForVp } from './snapshot-filter.js';
-import { createVpStatusBroker } from './vp-status-broker.js';
+import { createVpStatusBroker, isVpStatusRunning } from './vp-status-broker.js';
 import { classifyThread as defaultClassifyThread, fallbackTitle } from './vp/thread-classifier.js';
 import { listMcpServers, upsertMcpServer, removeMcpServer } from './config-api.js';
 import { buildMcpFlattenedTools } from './tools/mcp-tools.js';
@@ -1851,7 +1851,7 @@ function decorateSessionsWithRuntimeState(sessions) {
     const sessionId = status?.sessionId || status?.groupId || null;
     if (!sessionId) continue;
     const state = status.state || 'idle';
-    const running = !['idle', 'offline', 'completed', 'failed', 'aborted'].includes(state);
+    const running = isVpStatusRunning(state);
     const updatedAt = status.updatedAt || status.since || Date.now();
     const prev = bySession.get(sessionId) || { running: false, runningVpCount: 0, latestActivityAt: 0 };
     if (running) prev.runningVpCount += 1;
@@ -5296,6 +5296,13 @@ export const __testHooks = {
     vpAborts.clear();
     vpInboxes.clear();
   },
+  resetVpStatusBroker() {
+    if (vpStatusBroker) vpStatusBroker.reset();
+  },
+  seedVpStatus(status) {
+    return getVpStatusBroker().transition(status);
+  },
+  decorateSessionsWithRuntimeState,
   seedQueuedVpTurn({ sessionId = 'session-test', vpId = 'vp-test', threadId = 'main', turnId = 'turn-test' } = {}) {
     const key = threadKey(sessionId, vpId, threadId);
     const inbox = vpInboxes.get(key) || [];
