@@ -1,5 +1,12 @@
 import { useAuthStore } from '../stores/auth.js';
 import { isMobile, isInAlipay, isInWeChat } from '../utils/device.js';
+import {
+  getAgentInstallCommand,
+  getAgentLlmCommand,
+  getAgentName,
+  getAgentServiceCommand,
+  getServerWsUrl,
+} from '../utils/agentSetup.js';
 import DashboardTab from './DashboardTab.js';
 import VpCrudPanel from './VpCrudPanel.js';
 import SearchSettingsTab from './SearchSettingsTab.js';
@@ -540,33 +547,26 @@ export default {
       return this.agentSecret ? this.$t('settings.security.resetKey') : this.$t('settings.security.generateKey');
     },
     agentName() {
-      const p = this.profile;
-      const base = (p && (p.username || p.displayName)) || 'agent';
-      let h = 0x811c9dc5;
-      for (let i = 0; i < base.length; i++) {
-        h ^= base.charCodeAt(i);
-        h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
-      }
-      const id = h.toString(16).padStart(8, '0').slice(0, 6);
-      const safe = String(base).replace(/[^A-Za-z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || 'agent';
-      return `${safe}-${id}`;
+      return getAgentName(this.profile);
     },
     agentInstanceId() {
       return this.agentName;
     },
     serverWsUrl() {
-      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      return `${protocol}//${location.host}`;
+      return getServerWsUrl(location);
     },
     agentInstallCommand() {
-      return 'npm install -g @yeaft/webchat-agent';
+      return getAgentInstallCommand();
     },
     agentServiceCommand() {
-      if (!this.agentSecret) return '';
-      return `yeaft-agent install --instance ${this.agentInstanceId} --server ${this.serverWsUrl} --secret ${this.agentSecret} --name ${this.agentName}`;
+      return getAgentServiceCommand({
+        profile: this.profile,
+        agentSecret: this.agentSecret,
+        serverWsUrl: this.serverWsUrl,
+      });
     },
     agentLlmCommand() {
-      return 'yeaft-agent llm use github-copilot --model gpt-5.5';
+      return getAgentLlmCommand();
     },
     ssoProviderRows() {
       const auth = this.authStore;

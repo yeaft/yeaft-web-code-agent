@@ -21,6 +21,10 @@ const sidebarAgentHeaderSource = readFileSync(
   new URL('../../../web/components/SidebarAgentHeader.js', import.meta.url),
   'utf8',
 );
+const messageListSource = readFileSync(
+  new URL('../../../web/components/MessageList.js', import.meta.url),
+  'utf8',
+);
 const sidebarCss = readFileSync(
   new URL('../../../web/styles/sidebar.css', import.meta.url),
   'utf8',
@@ -29,6 +33,7 @@ const stylesIndexSource = readFileSync(
   new URL('../../../web/styles/index.css', import.meta.url),
   'utf8',
 );
+const agentSetupSource = readFileSync(new URL('../../../web/utils/agentSetup.js', import.meta.url), 'utf8');
 const enSource = readFileSync(new URL('../../../web/i18n/en.js', import.meta.url), 'utf8');
 const zhSource = readFileSync(new URL('../../../web/i18n/zh-CN.js', import.meta.url), 'utf8');
 
@@ -72,14 +77,16 @@ describe('Settings panel source', () => {
   });
 
   it('keeps Agent setup commands next to the Security secret', () => {
-    expect(settingsPanelSource).toMatch(/--server\s/);
+    expect(settingsPanelSource).toContain("from '../utils/agentSetup.js'");
     expect(settingsPanelSource).toContain('agentServiceCommand()');
     expect(settingsPanelSource).toContain('agentInstallCommand()');
     expect(settingsPanelSource).toContain('agentLlmCommand()');
     expect(settingsPanelSource).toContain('serverWsUrl()');
     expect(settingsPanelSource).toContain('agentName()');
     expect(settingsPanelSource).toContain('agentInstanceId()');
-    expect(settingsPanelSource).toContain('--instance ${this.agentInstanceId}');
+    expect(settingsPanelSource).toContain('getAgentServiceCommand({');
+    expect(agentSetupSource).toMatch(/--server\s/);
+    expect(agentSetupSource).toContain('--instance ${agentName}');
     expect(settingsPanelSource).toContain('settings.security.agentSetupCommands');
     expect(settingsPanelSource).toContain('settings.security.agentCmdInstall');
     expect(settingsPanelSource).toContain('settings.security.agentCmdService');
@@ -116,6 +123,27 @@ describe('Settings panel source', () => {
 
     expect(settingsCss).toContain('.sp-cmd-placeholder');
     expect(settingsCss).not.toContain('.llm-agent-install');
+  });
+
+  it('shows setup commands directly on the no-Agent homepage', () => {
+    expect(messageListSource).toContain('class="welcome-setup-card"');
+    expect(messageListSource).toContain("fetch('/api/user/agent-secret'");
+    expect(messageListSource).toContain("fetch('/api/user/profile'");
+    expect(messageListSource).toContain('welcomeInstallCommand');
+    expect(messageListSource).toContain('welcomeLlmCommand');
+    expect(messageListSource).toContain('welcomeServiceCommand');
+    expect(messageListSource).not.toContain('class="welcome-empty"');
+    expect(messageListSource).not.toContain("{{ $t('welcome.noAgent') }}");
+
+    expect(sidebarCss).toContain('.welcome-setup-card');
+    expect(sidebarCss).toContain('.welcome-command-row code');
+    expect(sidebarCss).toContain('background: var(--bg-sidebar);');
+    expect(sidebarCss).not.toContain('.welcome-setup-card {\n  width: min(720px, 88vw);\n  margin: 0 auto;\n  padding: 24px;\n  background: #');
+
+    expect(enSource).toContain("'welcome.setupTitle': 'Connect your first Yeaft Agent'");
+    expect(enSource).toContain("'welcome.setupSecretLoading': 'Preparing your Agent secret...'");
+    expect(zhSource).toContain("'welcome.setupTitle': '连接你的第一个 Yeaft Agent'");
+    expect(zhSource).toContain("'welcome.setupSecretLoading': '正在准备 Agent secret...'");
   });
 
   it('keeps shared sidebar agent dropdown styles after removing git.css', () => {
