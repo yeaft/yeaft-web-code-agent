@@ -259,4 +259,69 @@ describe('tool result raw storage boundaries', () => {
     expect(replayToolMessage.content).not.toBe(raw);
     expect(replayToolMessage.content).toContain('[truncated: tool_result returned');
   });
+
+  it('keeps partial tool-call history when a VP turn stops after tools', () => {
+    const sessionId = `session_partial_tool_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    __testAppendTurnToSessionHistory(
+      sessionId,
+      'main',
+      'vp-linus',
+      ['run first tool'],
+      ['I will inspect.'],
+      [{ id: 'call_1', name: 'FileRead', input: { file_path: 'a.md' } }],
+      [{ role: 'tool', toolCallId: 'call_1', content: 'file contents', isError: false }],
+      [],
+      { turnId: 'turn_partial', partial: true },
+    );
+
+    const partial = __testGroupHistory(sessionId);
+    expect(partial).toHaveLength(3);
+    expect(partial[1]).toMatchObject({
+      role: 'assistant',
+      _runtimeTurnId: 'turn_partial',
+      _partialTurn: true,
+      toolCalls: [{ id: 'call_1', name: 'FileRead', input: { file_path: 'a.md' } }],
+    });
+    expect(partial[2]).toMatchObject({
+      role: 'tool',
+      toolCallId: 'call_1',
+      content: 'file contents',
+      _partialTurn: true,
+    });
+  });
+
+  it('replaces partial tool-call history with the final same-turn history', () => {
+    const sessionId = `session_partial_replace_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const turnId = 'turn_replace';
+    __testAppendTurnToSessionHistory(
+      sessionId,
+      'main',
+      'vp-linus',
+      ['run tool'],
+      [],
+      [{ id: 'call_1', name: 'Glob', input: { pattern: '**/*.js' } }],
+      [{ role: 'tool', toolCallId: 'call_1', content: 'partial result', isError: false }],
+      [],
+      { turnId, partial: true },
+    );
+    __testAppendTurnToSessionHistory(
+      sessionId,
+      'main',
+      'vp-linus',
+      ['run tool'],
+      ['done'],
+      [{ id: 'call_1', name: 'Glob', input: { pattern: '**/*.js' } }],
+      [{ role: 'tool', toolCallId: 'call_1', content: 'final result', isError: false }],
+      [],
+      { turnId },
+    );
+
+    const history = __testGroupHistory(sessionId);
+    expect(history).toHaveLength(3);
+    expect(history[0]).toMatchObject({ role: 'user', content: 'run tool', _runtimeTurnId: turnId });
+    expect(history[1]).toMatchObject({ role: 'assistant', content: 'done', _runtimeTurnId: turnId });
+    expect(history[1]._partialTurn).toBeUndefined();
+    expect(history[2]).toMatchObject({ role: 'tool', toolCallId: 'call_1', content: 'final result' });
+    expect(history[2]._partialTurn).toBeUndefined();
+  });
 });
