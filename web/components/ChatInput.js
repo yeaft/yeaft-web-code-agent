@@ -16,7 +16,9 @@ export default {
     /** External processing flag. Controls stop button visibility. */
     showStop: { type: Boolean, default: false },
     /** Explicit Chat conversation this input controls. Defaults to the active view conversation. */
-    conversationId: { type: String, default: null }
+    conversationId: { type: String, default: null },
+    /** Explicit draft scope. Use this when one conversation contains multiple logical inputs. */
+    draftKey: { type: String, default: null }
   },
   template: `
     <footer class="input-area" ref="inputAreaRef">
@@ -253,24 +255,29 @@ export default {
       Vue.nextTick(() => inputRef.value?.focus());
     };
 
+    const effectiveDraftKey = Vue.computed(() => {
+      return props.draftKey || props.conversationId || store.currentConversation || null;
+    });
+
     // 恢复当前会话的草稿
-    if (store.currentConversation && store.inputDrafts[store.currentConversation]) {
-      inputText.value = store.inputDrafts[store.currentConversation];
+    if (effectiveDraftKey.value && store.inputDrafts[effectiveDraftKey.value]) {
+      inputText.value = store.inputDrafts[effectiveDraftKey.value];
     }
 
     // 监听输入变化，保存草稿到 store
     Vue.watch(inputText, (val) => {
-      if (store.currentConversation) {
+      const key = effectiveDraftKey.value;
+      if (key) {
         if (val) {
-          store.inputDrafts[store.currentConversation] = val;
+          store.inputDrafts[key] = val;
         } else {
-          delete store.inputDrafts[store.currentConversation];
+          delete store.inputDrafts[key];
         }
       }
     });
 
     // 切换会话时恢复/保存草稿
-    Vue.watch(() => store.currentConversation, (newId, oldId) => {
+    Vue.watch(effectiveDraftKey, (newId, oldId) => {
       if (oldId && inputText.value) {
         store.inputDrafts[oldId] = inputText.value;
       }
@@ -316,7 +323,7 @@ export default {
       const dynamic = (convId && store.slashCommandsMap[convId])
         || (agentId && store.slashCommandsMap[`agent:${agentId}`])
         || [];
-      const commands = dynamic.length > 0 ? dynamic : DEFAULT_SLASH_COMMANDS;
+      const commands = [...new Set([...DEFAULT_SLASH_COMMANDS, ...dynamic])];
       return commands.map(cmd => cmd.startsWith('/') ? cmd : '/' + cmd);
     });
 
@@ -558,7 +565,7 @@ export default {
 
         attachments.value = [];
         inputText.value = '';
-        delete store.inputDrafts[store.currentConversation];
+        if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
         if (inputRef.value) inputRef.value.style.height = 'auto';
         return;
       }
@@ -569,7 +576,7 @@ export default {
         store.enterBtwMode();
         if (question) store.sendBtwQuestion(question);
         inputText.value = '';
-        delete store.inputDrafts[store.currentConversation];
+        if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
         if (inputRef.value) inputRef.value.style.height = 'auto';
         return;
       }
@@ -578,7 +585,7 @@ export default {
       if (store.btwMode) {
         store.sendBtwQuestion(trimmed);
         inputText.value = '';
-        delete store.inputDrafts[store.currentConversation];
+        if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
         if (inputRef.value) inputRef.value.style.height = 'auto';
         return;
       }
@@ -622,7 +629,7 @@ export default {
         });
         attachments.value = [];
         inputText.value = '';
-        delete store.inputDrafts[store.currentConversation];
+        if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
         if (inputRef.value) inputRef.value.style.height = 'auto';
         return;
       }
@@ -633,7 +640,7 @@ export default {
       attachments.value = [];
       inputText.value = '';
       store.expertSelections = [];
-      delete store.inputDrafts[store.currentConversation];
+      if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
 
       if (inputRef.value) {
         inputRef.value.style.height = 'auto';

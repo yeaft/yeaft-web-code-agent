@@ -290,6 +290,7 @@ export default {
           v-if="!showSettings && !showOnboardingGuide"
           ref="chatInputRef"
           :conversation-id="store.yeaftConversationId"
+          :draft-key="yeaftInputDraftKey"
           :send-fn="sendMessage"
           :cancel-fn="cancelYeaft"
           :show-stop="isProcessing"
@@ -400,6 +401,12 @@ export default {
     // of ChatInput (review fix — Fowler C2, PR #763).
     const chatInputRef = Vue.ref(null);
     const pageRef = Vue.ref(null);
+    const yeaftInputDraftKey = Vue.computed(() => {
+      const agentId = store.currentAgent || 'agent';
+      const gs = sessionsStore();
+      const sessionId = store.yeaftActiveSessionFilter || gs?.activeSessionId || 'session';
+      return `yeaft:${agentId}:${sessionId}`;
+    });
     let mobileViewportRaf = null;
     let mobileViewportRecoverTimer = null;
 
@@ -1247,6 +1254,7 @@ export default {
       settingsInitialTab,
       settingsInitialEditVpId,
       chatInputRef,
+      yeaftInputDraftKey,
       openSettings,
       isMobile,
       isNarrowDetail,

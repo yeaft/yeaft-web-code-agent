@@ -95,6 +95,36 @@ const RETRY_DEFAULTS = Object.freeze({
   jitterRatio: 0.25,
 });
 
+const EXPLICIT_SKILL_COMMAND_RE = /^\/skill:([^\s]+)(\s+|$)/;
+
+function parseExplicitSkillCommand(prompt) {
+  if (typeof prompt !== 'string') {
+    return { skillName: null, cleanedPrompt: prompt };
+  }
+  const match = prompt.match(EXPLICIT_SKILL_COMMAND_RE);
+  if (!match) {
+    return { skillName: null, cleanedPrompt: prompt };
+  }
+  return {
+    skillName: match[1],
+    cleanedPrompt: prompt.slice(match[0].length),
+  };
+}
+
+function stripLeadingSkillCommandFromPromptParts(promptParts) {
+  if (!Array.isArray(promptParts) || promptParts.length === 0) return promptParts;
+  let stripped = false;
+  return promptParts.map(part => {
+    if (stripped || !part || part.type !== 'text' || typeof part.text !== 'string') {
+      return part;
+    }
+    const parsed = parseExplicitSkillCommand(part.text);
+    if (!parsed.skillName) return part;
+    stripped = true;
+    return { ...part, text: parsed.cleanedPrompt };
+  });
+}
+
 function resolveRetryPolicy(config) {
   const raw = config?.llmRetry || {};
   const num = (v, d) => (Number.isFinite(v) && v >= 0 ? v : d);
@@ -932,13 +962,21 @@ export class Engine {
    * @param {string} [args.sessionAnnouncement]
    * @param {string} [args.projectDoc] — resolved CLAUDE.md / AGENTS.md text (already truncated)
    * @param {object} [args.taskCtx] — legacy task-context sub-block (optional)
+   * @param {string} [args.explicitSkillName] — leading /skill:<name> command, if present
    * @returns {string}
    */
-  #buildSystemPrompt({ prompt, memoryInjection, vpPersona, activeScope, sessionAnnouncement, projectDoc, taskCtx, activeTasks } = {}) {
-    // Get relevant skill content if SkillManager is wired
+  #buildSystemPrompt({ prompt, memoryInjection, vpPersona, activeScope, sessionAnnouncement, projectDoc, taskCtx, activeTasks, explicitSkillName } = {}) {
+    // Get relevant skill content if SkillManager is wired. A leading
+    // /skill:<name> is explicit, not relevance matching: load that skill by
+    // name or inject a visible prompt warning when the command is unknown.
     let skillContent = '';
-    if (this.#skillManager && prompt) {
-      skillContent = this.#skillManager.getRelevantPromptContent(prompt);
+    if (this.#skillManager) {
+      if (explicitSkillName) {
+        skillContent = this.#skillManager.getPromptContent(explicitSkillName)
+          || `## Skill command error\n\nRequested skill "${explicitSkillName}" was not found. Continue without that skill and tell the user it is unavailable.`;
+      } else if (prompt) {
+        skillContent = this.#skillManager.getRelevantPromptContent(prompt);
+      }
     }
 
     // Get tool names from the appropriate source
@@ -1583,7 +1621,11 @@ export class Engine {
     // the merge, so an invalid caller value (e.g. 'ULTRA') does not shadow a
     // valid prompt prefix.
     const parsed = parseEffortPrefix(prompt);
-    const effectivePrompt = parsed.cleanedPrompt;
+    const parsedSkill = parseExplicitSkillCommand(parsed.cleanedPrompt);
+    const effectivePrompt = parsedSkill.cleanedPrompt;
+    const effectivePromptParts = parsedSkill.skillName
+      ? stripLeadingSkillCommandFromPromptParts(promptParts)
+      : promptParts;
     const configuredEffort = normalizeEffort(this.#config?.modelEffort);
     const effectiveUserEffort = normalizeEffort(userEffort) || parsed.effort || configuredEffort || null;
     const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
@@ -1623,7 +1665,7 @@ export class Engine {
 
     try {
       this.#currentThreadId = threadId || MAIN_THREAD_ID;
-      yield* this.#runQuery({ prompt: effectivePrompt, promptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, sessionTopics, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted, getCurrentTodos, setCurrentTodos, threadId: this.#currentThreadId, drainPendingUserMessages, collabToolPolicy: effectiveCollabToolPolicy });
+      yield* this.#runQuery({ prompt: effectivePrompt, promptParts: effectivePromptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, sessionTopics, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted, getCurrentTodos, setCurrentTodos, threadId: this.#currentThreadId, drainPendingUserMessages, collabToolPolicy: effectiveCollabToolPolicy, explicitSkillName: parsedSkill.skillName });
     } finally {
       if (signal) {
         try { signal.removeEventListener('abort', onExternalAbort); } catch { /* ignore */ }
@@ -1667,7 +1709,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, sessionTopics = null, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null, collabToolPolicy = null }) {
+  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, sessionTopics = null, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null, collabToolPolicy = null, explicitSkillName = null }) {
 
     const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
       ? collabToolPolicy
@@ -1783,6 +1825,7 @@ export class Engine {
       sessionAnnouncement,
       projectDoc,
       activeTasks,
+      explicitSkillName,
     });
 
     // ─── HARD INVARIANT: Compact ≠ Dream (read DESIGN-COMPACT-VS-DREAM.md) ─
