@@ -206,6 +206,7 @@ function serializeMessage(msg) {
   // routing can filter/replay by thread without rescanning JSON blobs.
   // Defaults to 'main' for legacy messages (see migrate-messages-threadid.js).
   fm.push(`threadId: ${msg.threadId || 'main'}`);
+  if (msg.turnId) fm.push(`turnId: ${msg.turnId}`);
   // task-313: when a thread is merged into another, the messages keep
   // their original thread id in `sourceThreadId` so the UI can still
   // render a small "#source" pill next to each bubble.
@@ -334,6 +335,7 @@ export function parseMessage(raw) {
       case 'isError': msg.isError = value === 'true'; break;
       case 'tokens_est': msg.tokens_est = parseInt(value, 10); break;
       case 'threadId': msg.threadId = value; break;
+      case 'turnId': msg.turnId = value; break;
       case 'sourceThreadId': msg.sourceThreadId = value; break;
       case 'sessionId': msg.sessionId = value; break;
       case 'chatId': msg.chatId = value; break;

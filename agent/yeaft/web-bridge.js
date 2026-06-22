@@ -712,7 +712,7 @@ function projectPersistedToHistoryEntry(m) {
   const entry = { role: m.role, content: m.role === 'tool' ? m.content : __testNormalizePersistedVisibleContent(m.content) };
   if (m.id) entry.id = m.id;
   entry.threadId = m.threadId || m.turnId || 'main';
-  entry.turnId = m.turnId || entry.threadId;
+  if (m.turnId) entry.turnId = m.turnId;
   if (m.sessionId) entry.sessionId = m.sessionId;
   if (m.clientMessageId) entry.clientMessageId = m.clientMessageId;
   if (m.speakerVpId) entry.speakerVpId = m.speakerVpId;
@@ -816,7 +816,7 @@ function projectVisibleHistoryChunkMessages(messages = []) {
       sessionId: m.sessionId || null,
       ...(m.clientMessageId ? { clientMessageId: m.clientMessageId } : {}),
       threadId: m.threadId || m.turnId || 'main',
-      turnId: m.turnId || m.threadId || 'main',
+      ...(m.turnId ? { turnId: m.turnId } : {}),
       ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(m.attachments) } : {}),
       ...(m.speakerVpId ? { speakerVpId: m.speakerVpId } : {}),
       ...(Number.isFinite(m.toolSummaryCount) && m.toolSummaryCount > 0
@@ -3696,6 +3696,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         // would render the user's prompt N times.
         userAlreadyPersisted: true,
         threadId,
+        vpTurnId: turnId,
         drainPendingUserMessages: () => {
           if (!thread || !Array.isArray(thread.pendingQueries) || thread.pendingQueries.length === 0) return [];
           return thread.pendingQueries.splice(0);

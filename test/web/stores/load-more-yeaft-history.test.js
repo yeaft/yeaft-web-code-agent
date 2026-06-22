@@ -496,7 +496,7 @@ describe('handleYeaftHistoryChunk', () => {
     }));
   });
 
-  it('merges persisted assistant history into a matching active stream without a stable id', () => {
+  it('merges persisted assistant history into a matching active stream only with the same turnId', () => {
     const store = mkStore({
       yeaftActiveSessionFilter: 'g1',
       messagesMap: {
@@ -508,6 +508,7 @@ describe('handleYeaftHistoryChunk', () => {
           vpId: 'vp-linus',
           speakerVpId: 'vp-linus',
           threadId: 'thread-1',
+          turnId: 'turn-active-1',
           isStreaming: true,
           timestamp: new Date('2026-05-01T10:00:00.000Z').getTime(),
         }],
@@ -525,6 +526,7 @@ describe('handleYeaftHistoryChunk', () => {
         sessionId: 'g1',
         speakerVpId: 'vp-linus',
         threadId: 'thread-1',
+        turnId: 'turn-active-1',
         ts: '2026-05-01T10:00:01.000Z',
       }],
       latestSeq: 101,
@@ -539,6 +541,106 @@ describe('handleYeaftHistoryChunk', () => {
       isStreaming: false,
       speakerVpId: 'vp-linus',
       threadId: 'thread-1',
+      turnId: 'turn-active-1',
+      _hasPersistedTurnId: true,
+    }));
+  });
+
+  it('does not merge prefix-matching assistant history from a different turn', () => {
+    const store = mkStore({
+      yeaftActiveSessionFilter: 'g1',
+      messagesMap: {
+        'yeaft-1': [{
+          id: 'stream-1',
+          type: 'assistant',
+          content: 'Sure, I can',
+          sessionId: 'g1',
+          vpId: 'vp-linus',
+          speakerVpId: 'vp-linus',
+          threadId: 'thread-1',
+          turnId: 'turn-active-1',
+          isStreaming: true,
+          timestamp: new Date('2026-05-01T10:00:00.000Z').getTime(),
+        }],
+      },
+    });
+
+    handleYeaftHistoryChunk(store, {
+      conversationId: 'yeaft-1',
+      sessionId: 'g1',
+      mode: 'delta',
+      messages: [{
+        id: 'm0102',
+        role: 'assistant',
+        content: 'Sure, I can help with the old request.',
+        sessionId: 'g1',
+        speakerVpId: 'vp-linus',
+        threadId: 'thread-1',
+        turnId: 'turn-old-1',
+        ts: '2026-05-01T10:00:01.000Z',
+      }],
+      latestSeq: 102,
+    });
+
+    const assistants = store.messagesMap['yeaft-1'].filter(m => m.type === 'assistant');
+    expect(assistants).toHaveLength(2);
+    expect(assistants[0]).toEqual(expect.objectContaining({
+      id: 'stream-1',
+      content: 'Sure, I can',
+      turnId: 'turn-active-1',
+      isStreaming: true,
+    }));
+    expect(assistants[1]).toEqual(expect.objectContaining({
+      id: 'm0102',
+      messageId: 'm0102',
+      content: 'Sure, I can help with the old request.',
+      turnId: 'turn-old-1',
+      _hasPersistedTurnId: true,
+      isStreaming: false,
+    }));
+  });
+
+  it('does not prefix-merge assistant history that lacks persisted turnId', () => {
+    const store = mkStore({
+      yeaftActiveSessionFilter: 'g1',
+      messagesMap: {
+        'yeaft-1': [{
+          id: 'stream-1',
+          type: 'assistant',
+          content: '好的，我来',
+          sessionId: 'g1',
+          vpId: 'vp-linus',
+          speakerVpId: 'vp-linus',
+          threadId: 'thread-1',
+          turnId: 'turn-active-1',
+          isStreaming: true,
+          timestamp: new Date('2026-05-01T10:00:00.000Z').getTime(),
+        }],
+      },
+    });
+
+    handleYeaftHistoryChunk(store, {
+      conversationId: 'yeaft-1',
+      sessionId: 'g1',
+      mode: 'delta',
+      messages: [{
+        id: 'm0103',
+        role: 'assistant',
+        content: '好的，我来处理旧消息。',
+        sessionId: 'g1',
+        speakerVpId: 'vp-linus',
+        threadId: 'thread-1',
+        ts: '2026-05-01T10:00:01.000Z',
+      }],
+      latestSeq: 103,
+    });
+
+    const assistants = store.messagesMap['yeaft-1'].filter(m => m.type === 'assistant');
+    expect(assistants).toHaveLength(2);
+    expect(assistants.map(m => m.id)).toEqual(['stream-1', 'm0103']);
+    expect(assistants[1]).toEqual(expect.objectContaining({
+      turnId: 'm0103',
+      _hasPersistedTurnId: false,
     }));
   });
 
@@ -560,7 +662,16 @@ describe('handleYeaftHistoryChunk', () => {
 
     expect(store.messagesMap['yeaft-1']).toEqual([
       expect.objectContaining({ id: 'u-1', messageId: 'u-1', type: 'user', sessionId: 'g1', turnId: 'u-1' }),
-      expect.objectContaining({ id: 'a-1', messageId: 'a-1', type: 'assistant', sessionId: 'g1', turnId: 'a-1', vpId: 'vp-linus', speakerVpId: 'vp-linus' }),
+      expect.objectContaining({
+        id: 'a-1',
+        messageId: 'a-1',
+        type: 'assistant',
+        sessionId: 'g1',
+        turnId: 'a-1',
+        _hasPersistedTurnId: false,
+        vpId: 'vp-linus',
+        speakerVpId: 'vp-linus',
+      }),
     ]);
   });
 

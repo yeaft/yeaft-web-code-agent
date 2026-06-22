@@ -65,6 +65,7 @@ export async function runStopHooks(context) {
     // history replay can route messages back into the originating group.
     sessionId,
     threadId,
+    turnId,
     // Group VP attribution: persist the engine-bound VP id on assistant/tool
     // rows so history replay can route replies back to the same visible VP.
     vpId,
@@ -167,6 +168,9 @@ export async function runStopHooks(context) {
         // Bug 6: stamp sessionId / threadId so replay can re-route by group.
         if (sessionId) record.sessionId = sessionId;
         if (threadId) record.threadId = threadId;
+        if (turnId && (msg.role === 'assistant' || msg.role === 'tool')) {
+          record.turnId = turnId;
+        }
         if (vpId && (msg.role === 'assistant' || msg.role === 'tool')) {
           record.speakerVpId = vpId;
         }

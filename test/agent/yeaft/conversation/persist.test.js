@@ -113,6 +113,27 @@ Hello`;
     expect(msg.content).toBe('Hello');
   });
 
+  it('should parse turnId for persisted Yeaft assistant rows', () => {
+    const raw = `---
+id: m0043
+role: assistant
+time: 2026-05-12T09:00:00Z
+threadId: main
+turnId: vp_turn_123
+sessionId: session_demo
+tokens_est: 4
+---
+
+Reply`;
+
+    const msg = parseMessage(raw);
+    expect(msg.role).toBe('assistant');
+    expect(msg.threadId).toBe('main');
+    expect(msg.turnId).toBe('vp_turn_123');
+    expect(msg.sessionId).toBe('session_demo');
+    expect(msg.content).toBe('Reply');
+  });
+
   // Issue B (PR v0.1.755): forwarded messages persist as ASSISTANT role
   // with speakerVpId stamped to the originating VP, so the history-replay
   // path emits yeaft_output type='assistant' (not type='user'). Verify
@@ -181,6 +202,22 @@ describe('ConversationStore', () => {
       const loaded = store.loadRecentBySession('session_client_id', 10);
       expect(loaded).toHaveLength(1);
       expect(loaded[0].clientMessageId).toBe('u_local_456');
+    });
+
+    it('should persist turnId metadata for Yeaft assistant stream correlation', () => {
+      store.append({
+        role: 'assistant',
+        content: 'Turn-bound assistant reply',
+        sessionId: 'session_turn_id',
+        threadId: 'main',
+        turnId: 'vp_turn_456',
+      });
+
+      const loaded = store.loadRecentBySession('session_turn_id', 10);
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0].threadId).toBe('main');
+      expect(loaded[0].turnId).toBe('vp_turn_456');
+      expect(loaded[0].content).toBe('Turn-bound assistant reply');
     });
 
     it('should persist visible task lifecycle metadata', () => {

@@ -74,6 +74,11 @@ function sameAssistantHistoryRow(existing, incoming) {
   if (existingThread && incomingThread && existingThread !== incomingThread) return false;
 
   if (!existing.isStreaming) return false;
+  if (incoming._hasPersistedTurnId === false) return false;
+
+  const existingTurnId = existing.turnId || '';
+  const incomingTurnId = incoming.turnId || '';
+  if (!existingTurnId || !incomingTurnId || existingTurnId !== incomingTurnId) return false;
 
   const existingText = typeof existing.content === 'string' ? existing.content : '';
   const incomingText = typeof incoming.content === 'string' ? incoming.content : '';
@@ -585,6 +590,7 @@ export function handleYeaftHistoryChunk(store, msg) {
       const rowSessionId = m.sessionId ?? m.groupId ?? msgSessionId ?? null;
       const speakerVpId = resolveHistorySpeakerVpId(m, rowSessionId);
       const timestamp = normalizeHistoryTimestamp(m);
+      const hasPersistedTurnId = !!m.turnId;
       const turnId = m.turnId || messageId;
       const assistantContent = typeof m.content === 'string' ? m.content : (m.content || '');
       if (typeof assistantContent !== 'string' || assistantContent.trim()) {
@@ -595,6 +601,7 @@ export function handleYeaftHistoryChunk(store, msg) {
           timestamp,
           sessionId: rowSessionId,
           turnId,
+          _hasPersistedTurnId: hasPersistedTurnId,
           ...(speakerVpId ? { vpId: speakerVpId, speakerVpId } : {}),
           isStreaming: false,
           isHistory: true,
