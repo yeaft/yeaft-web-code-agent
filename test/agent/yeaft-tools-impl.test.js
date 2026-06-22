@@ -109,6 +109,30 @@ describe('index.js tool registration', () => {
     expect(names).toContain('FileRead');
     expect(names).toContain('Grep');
   });
+
+  it('limits only RouteForward for single-VP sessions and keeps multi-VP tools full', async () => {
+    const { createFullRegistry, allTools } = await import(`${TOOLS_DIR}/index.js`);
+    const { COLLAB_TOOL_POLICY } = await import(`${TOOLS_DIR}/registry.js`);
+    const registry = createFullRegistry();
+
+    const singleVpDefs = registry.getToolDefs('en', { collabToolPolicy: COLLAB_TOOL_POLICY.SINGLE_VP });
+    const singleVpNames = singleVpDefs.map(t => t.name);
+    expect(singleVpNames).not.toContain('RouteForward');
+    expect(registry.isAllowed('RouteForward', { collabToolPolicy: COLLAB_TOOL_POLICY.SINGLE_VP })).toBe(false);
+
+    for (const toolName of ['Bash', 'ListTasks', 'ReadTaskLog', 'CancelTask', 'SpawnAgent', 'PromptAgent', 'WaitAgent', 'CloseAgent', 'ListAgents']) {
+      expect(singleVpNames).toContain(toolName);
+      expect(registry.isAllowed(toolName, { collabToolPolicy: COLLAB_TOOL_POLICY.SINGLE_VP })).toBe(true);
+    }
+
+    const multiVpDefs = registry.getToolDefs('en', { collabToolPolicy: COLLAB_TOOL_POLICY.MULTI_VP });
+    const multiVpNames = multiVpDefs.map(t => t.name);
+    expect(multiVpNames).toHaveLength(allTools.length);
+    for (const toolName of ['RouteForward', 'Bash', 'ListTasks', 'ReadTaskLog', 'CancelTask', 'SpawnAgent', 'PromptAgent', 'WaitAgent', 'CloseAgent', 'ListAgents']) {
+      expect(multiVpNames).toContain(toolName);
+      expect(registry.isAllowed(toolName, { collabToolPolicy: COLLAB_TOOL_POLICY.MULTI_VP })).toBe(true);
+    }
+  });
 });
 
 // ──────────────────────────────────────────────

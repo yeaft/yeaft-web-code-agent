@@ -12,8 +12,11 @@
 import { formatSize } from '../archive/tool-results.js';
 
 /**
- * Collaboration tools are mutually exclusive per Yeaft group shape:
- * single-VP groups use sub-agents; multi-VP groups use VP-to-VP forwarding.
+ * Collaboration policy for Yeaft Session shape.
+ *
+ * Single-VP Sessions have no peer to forward to, so RouteForward is hidden.
+ * Multi-VP Sessions keep the full tool surface: VPs may forward to peers and
+ * may still launch background tasks or sub-agents when that is the right tool.
  * Keep the policy names close to the tool registry so LLM exposure and
  * execution gating use the same source of truth.
  */
@@ -21,14 +24,6 @@ export const COLLAB_TOOL_POLICY = Object.freeze({
   SINGLE_VP: 'single-vp',
   MULTI_VP: 'multi-vp',
 });
-
-export const SUB_AGENT_TOOL_NAMES = Object.freeze([
-  'SpawnAgent',
-  'PromptAgent',
-  'WaitAgent',
-  'CloseAgent',
-  'ListAgents',
-]);
 
 export const FORWARD_TOOL_NAMES = Object.freeze(['RouteForward']);
 
@@ -261,8 +256,7 @@ export function normalizeCollabToolPolicy(policy) {
 export function isToolHiddenByCollabPolicy(toolName, policy) {
   const normalized = normalizeCollabToolPolicy(policy);
   if (!normalized) return false;
-  if (normalized === COLLAB_TOOL_POLICY.SINGLE_VP) return FORWARD_TOOL_NAMES.includes(toolName);
-  return SUB_AGENT_TOOL_NAMES.includes(toolName);
+  return normalized === COLLAB_TOOL_POLICY.SINGLE_VP && FORWARD_TOOL_NAMES.includes(toolName);
 }
 
 export class ToolRegistry {
