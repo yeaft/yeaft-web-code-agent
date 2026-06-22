@@ -164,6 +164,41 @@ async function sendDreamSnapshotForSession(sessionId, extra = {}) {
   return snapshot;
 }
 
+function scheduleYeaftLoadHistoryMetadataReplay(sessionId) {
+  const replaySession = session;
+  const replayConversationId = yeaftConversationId;
+  setTimeout(() => {
+    try {
+      if (!replaySession) return;
+      refreshLiveSessionConfig();
+      hydrateYeaftStatusFromSession(replaySession, { reason: 'history_load', emitEvent: true });
+      sendSessionEvent({
+        type: 'session_ready',
+        conversationId: replayConversationId,
+        model: replaySession.config.primaryModel || replaySession.config.model,
+        modelEffort: replaySession.config.modelEffort || null,
+        availableModels: replaySession.config.availableModels || [],
+        skills: replaySession.status.skills,
+        mcpServers: replaySession.status.mcpServers,
+        tools: replaySession.status.tools,
+        yeaftDir: ctx.CONFIG?.yeaftDir || null,
+        tasks: replaySession.taskManager ? replaySession.taskManager.listActiveTasks() : [],
+      });
+      sendSessionSnapshotBroadcast();
+      if (sessionId && session === replaySession) {
+        sendDreamSnapshotForSession(sessionId, { trigger: 'load_history' }).catch(() => null);
+      }
+      try {
+        getVpStatusBroker().broadcastSnapshot();
+      } catch (err) {
+        console.warn('[Yeaft] vp-status snapshot broadcast (replay) failed:', err?.message || err);
+      }
+    } catch (err) {
+      console.warn('[Yeaft] load-history metadata replay failed:', err?.message || err);
+    }
+  }, 0);
+}
+
 
 /**
  * Single in-flight AbortController for legacy 1:1 chat. A new 1:1 user message
@@ -4972,9 +5007,6 @@ export async function handleYeaftLoadHistory(msg) {
     });
     installYeaftRuntimeBridge(session);
 
-    refreshLiveSessionConfig();
-    hydrateYeaftStatusFromSession(session, { reason: 'history_load', emitEvent: true });
-
     // Per-group history hydrates lazily via getOrCreateSessionHistory.
     // When the load-history call carries a sessionId, force-refresh THAT
     // group's tape so the next user message sees on-disk state. When
@@ -4984,8 +5016,6 @@ export async function handleYeaftLoadHistory(msg) {
   } else {
     replayHistoryFromStore();
     historyAlreadyReplayed = true;
-    refreshLiveSessionConfig();
-    hydrateYeaftStatusFromSession(session, { reason: 'history_load', emitEvent: true });
   }
 
   if (sessionId) {
@@ -4995,31 +5025,11 @@ export async function handleYeaftLoadHistory(msg) {
     setGroupHistory(sessionId, hydrateGroupHistory(sessionId));
   }
 
-  // Always replay session_ready so refresh / reconnect rebuilds UI state.
-  sendSessionEvent({
-    type: 'session_ready',
-    conversationId: yeaftConversationId,
-    model: session.config.primaryModel || session.config.model,
-    modelEffort: session.config.modelEffort || null,
-    availableModels: session.config.availableModels || [],
-    skills: session.status.skills,
-    mcpServers: session.status.mcpServers,
-    tools: session.status.tools,
-    yeaftDir: ctx.CONFIG?.yeaftDir || null,
-    tasks: session.taskManager ? session.taskManager.listActiveTasks() : [],
-  });
-  sendSessionSnapshotBroadcast();
-  if (sessionId) {
-    await sendDreamSnapshotForSession(sessionId, { trigger: 'load_history' }).catch(() => null);
-  }
-  // vp-status: replay the authoritative table on reconnect so a refreshed
-  // frontend doesn't have to wait for the next transition to learn each
-  // VP's current state.
-  try {
-    getVpStatusBroker().broadcastSnapshot();
-  } catch (err) {
-    console.warn('[Yeaft] vp-status snapshot broadcast (replay) failed:', err?.message || err);
-  }
+  // Always replay session_ready so refresh / reconnect rebuilds UI state, but
+  // never make the history response wait for bulky metadata snapshots. The
+  // first visible chunk has already been sent above; defer metadata to the next
+  // tick so the browser can paint messages before VP/session/dream snapshots.
+  scheduleYeaftLoadHistoryMetadataReplay(sessionId);
 
   if (historyAlreadyReplayed) return;
 
