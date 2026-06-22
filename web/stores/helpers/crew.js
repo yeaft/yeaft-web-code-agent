@@ -53,7 +53,11 @@ export function listCrewSessions(store) {
 export function handleCrewSessionsList(store, msg) {
   if (!store.crewModeEnabled) return;
   const sessions = Array.isArray(msg.sessions) ? msg.sessions : [];
-  const agentId = msg.agentId || store.currentAgent;
+  // The crew_sessions_list reply carries no top-level agentId; the list was
+  // requested keyed on the active agent (see listCrewSessions), so these rows
+  // belong to store.currentAgent.
+  const agentId = store.currentAgent;
+  if (!agentId) return;
   const agent = store.agents.find(a => a.id === agentId);
   const listedIds = new Set();
 
@@ -80,10 +84,6 @@ export function handleCrewSessionsList(store, msg) {
     }
   }
 
-  store.crewSessionListIdsByAgent = {
-    ...(store.crewSessionListIdsByAgent || {}),
-    [agentId]: Array.from(listedIds)
-  };
   store.conversations = store.conversations.filter(conv => {
     if (conv.type !== 'crew') return true;
     if (conv.agentId !== agentId) return true;

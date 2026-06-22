@@ -394,7 +394,6 @@ export const useChatStore = defineStore('chat', {
     // Crew (multi-agent) 状态 — 按 sessionId 存储，融入 conversation 体系
     // =====================
     crewSessions: {},             // { [sessionId]: { id, projectDir, sharedDir, roles, decisionMaker } }
-    crewSessionListIdsByAgent: {}, // { [agentId]: sessionId[] } latest explicit Crew list snapshot
     crewMessagesMap: {},          // { [sessionId]: messages[] }
     crewOlderMessages: {},       // { [sessionId]: { hasMore, nextShard, loading } }
     crewStatuses: {},             // { [sessionId]: { status, currentRole, round, costUsd, activeRoles } }

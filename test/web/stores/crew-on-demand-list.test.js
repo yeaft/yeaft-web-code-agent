@@ -45,7 +45,6 @@ describe('Crew on-demand session list', () => {
 
     handleCrewSessionsList(store, {
       type: 'crew_sessions_list',
-      agentId: AGENT_ID,
       sessions: [{
         sessionId: 'crew_old_running',
         projectDir: '/repo',
@@ -71,7 +70,6 @@ describe('Crew on-demand session list', () => {
 
     handleCrewSessionsList(store, {
       type: 'crew_sessions_list',
-      agentId: AGENT_ID,
       sessions: [
         { sessionId: 'crew_keep', projectDir: '/repo/a', status: 'stopped', active: false, createdAt: 1 },
         { sessionId: 'crew_prune', projectDir: '/repo/b', status: 'stopped', active: false, createdAt: 2 }
@@ -84,11 +82,26 @@ describe('Crew on-demand session list', () => {
 
     handleCrewSessionsList(store, {
       type: 'crew_sessions_list',
-      agentId: AGENT_ID,
       sessions: [
         { sessionId: 'crew_keep', projectDir: '/repo/a', status: 'stopped', active: false, createdAt: 1 }
       ]
     });
     expect(store.conversations.map(c => c.id)).toEqual(['crew_keep']);
+  });
+
+  it('skips the list request and ignores snapshots while crew mode is disabled', () => {
+    const store = makeStore();
+    store.crewModeEnabled = false;
+
+    // listCrewSessions must not emit a request when crew mode is off.
+    store.listCrewSessions();
+    expect(store.sent).toEqual([]);
+
+    // A late snapshot arriving after crew was turned off must be ignored.
+    handleCrewSessionsList(store, {
+      type: 'crew_sessions_list',
+      sessions: [{ sessionId: 'crew_x', projectDir: '/repo', status: 'stopped', active: false, createdAt: 1 }]
+    });
+    expect(store.conversations.find(c => c.id === 'crew_x')).toBeUndefined();
   });
 });
