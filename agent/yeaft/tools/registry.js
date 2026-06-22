@@ -12,23 +12,15 @@
 import { formatSize } from '../archive/tool-results.js';
 
 /**
- * Collaboration tools are mutually exclusive per Yeaft group shape:
- * single-VP groups use sub-agents; multi-VP groups use VP-to-VP forwarding.
- * Keep the policy names close to the tool registry so LLM exposure and
- * execution gating use the same source of truth.
+ * Collaboration tools are gated only where the session shape makes a tool
+ * invalid. Single-VP sessions cannot forward to peers because no peers exist.
+ * Multi-VP sessions keep the full tool surface, including background tasks and
+ * sub-agents, and additionally expose VP-to-VP forwarding.
  */
 export const COLLAB_TOOL_POLICY = Object.freeze({
   SINGLE_VP: 'single-vp',
   MULTI_VP: 'multi-vp',
 });
-
-export const SUB_AGENT_TOOL_NAMES = Object.freeze([
-  'SpawnAgent',
-  'PromptAgent',
-  'WaitAgent',
-  'CloseAgent',
-  'ListAgents',
-]);
 
 export const FORWARD_TOOL_NAMES = Object.freeze(['RouteForward']);
 
@@ -261,8 +253,7 @@ export function normalizeCollabToolPolicy(policy) {
 export function isToolHiddenByCollabPolicy(toolName, policy) {
   const normalized = normalizeCollabToolPolicy(policy);
   if (!normalized) return false;
-  if (normalized === COLLAB_TOOL_POLICY.SINGLE_VP) return FORWARD_TOOL_NAMES.includes(toolName);
-  return SUB_AGENT_TOOL_NAMES.includes(toolName);
+  return normalized === COLLAB_TOOL_POLICY.SINGLE_VP && FORWARD_TOOL_NAMES.includes(toolName);
 }
 
 export class ToolRegistry {
@@ -350,8 +341,9 @@ export class ToolRegistry {
 
   /**
    * Get tool definitions for the LLM adapter.
-   * Returns all registered tools unless a collaboration policy hides one of
-   * the mutually-exclusive orchestration tool families.
+   * Returns all registered tools unless the current session shape makes a
+   * specific collaboration tool invalid, such as RouteForward in single-VP
+   * sessions.
    * @param {string} [language='en']
    * @param {{ collabToolPolicy?: string }} [opts]
    * @returns {{ name: string, description: string, parameters: object }[]}
