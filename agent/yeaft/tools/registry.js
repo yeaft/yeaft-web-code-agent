@@ -341,8 +341,9 @@ export class ToolRegistry {
 
   /**
    * Get tool definitions for the LLM adapter.
-   * Returns all registered tools unless a collaboration policy hides one of
-   * the mutually-exclusive orchestration tool families.
+   * Returns all registered tools unless the current session shape makes a
+   * specific collaboration tool invalid, such as RouteForward in single-VP
+   * sessions.
    * @param {string} [language='en']
    * @param {{ collabToolPolicy?: string }} [opts]
    * @returns {{ name: string, description: string, parameters: object }[]}
