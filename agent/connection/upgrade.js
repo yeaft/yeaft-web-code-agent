@@ -2,10 +2,9 @@ import { execFile, execFileSync, spawn } from 'child_process';
 import { writeFileSync, mkdirSync, existsSync, cpSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { platform } from 'os';
+import { platform, homedir } from 'os';
 import ctx from '../context.js';
-import { getConfigDir, getServiceName, getPm2AppName, DEFAULT_INSTANCE_ID } from '../service.js';
-import { getLaunchdPlistPath } from '../service/macos.js';
+import { getConfigDir, getServiceName, getPm2AppName, getLaunchdPlistPath, DEFAULT_INSTANCE_ID } from '../service.js';
 import { sendToServer } from './buffer.js';
 import { stopAgentHeartbeat } from './heartbeat.js';
 
@@ -18,7 +17,7 @@ import { stopAgentHeartbeat } from './heartbeat.js';
  * systemd unit `yeaft-agent@server-e7a9eb` is never restarted, leaving the
  * agent permanently offline after a UI-triggered upgrade.
  */
-function resolveInstanceId() {
+export function resolveInstanceId() {
   return ctx.CONFIG?.instanceId || process.env.YEAFT_AGENT_INSTANCE || DEFAULT_INSTANCE_ID;
 }
 
@@ -371,11 +370,12 @@ function spawnWindowsUpgradeScript(pkgName, installDir, isGlobalInstall, latestV
 /**
  * Build the Unix (systemd/launchd) upgrade shell script as a string.
  *
- * Pure function — no side effects, no spawning — so the generated unit names
- * can be asserted in unit tests. The service-manager target is resolved from
- * `instanceId` via the shared helpers (`getServiceName` / `getLaunchdPlistPath`),
- * so a named instance restarts `yeaft-agent@<id>` instead of the bare
- * `yeaft-agent` default.
+ * Side-effect-free apart from reading the environment FS (`existsSync` to
+ * detect which service manager is installed) — and crucially it does NOT
+ * spawn, so the generated unit names can be asserted in unit tests. The
+ * service-manager target is resolved from `instanceId` via the shared helpers
+ * (`getServiceName` / `getLaunchdPlistPath`), so a named instance restarts
+ * `yeaft-agent@<id>` instead of the bare `yeaft-agent` default.
  *
  * @param {object} opts
  * @param {string} opts.pkgName        npm package name
@@ -386,7 +386,6 @@ function spawnWindowsUpgradeScript(pkgName, installDir, isGlobalInstall, latestV
  * @param {string} opts.npmPath        absolute npm path
  * @param {string} opts.safePath       PATH with nodeBinDir prepended
  * @param {string} opts.instanceId     local service instance id
- * @param {string} opts.home           HOME dir (for service-manager detection)
  * @param {boolean} opts.isDarwin      whether the platform is macOS
  * @returns {string} the upgrade.sh contents
  */
@@ -399,12 +398,11 @@ export function buildUnixUpgradeScript({
   npmPath,
   safePath,
   instanceId = DEFAULT_INSTANCE_ID,
-  home = process.env.HOME || '',
   isDarwin = platform() === 'darwin',
 }) {
   const shPath = join(configDir, 'upgrade.sh');
   const serviceName = getServiceName(instanceId);
-  const systemdUnitPath = join(home, '.config', 'systemd', 'user', `${serviceName}.service`);
+  const systemdUnitPath = join(homedir(), '.config', 'systemd', 'user', `${serviceName}.service`);
   const isSystemd = existsSync(systemdUnitPath);
   const plistPath = getLaunchdPlistPath(instanceId);
   const isLaunchd = isDarwin && existsSync(plistPath);

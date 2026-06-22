@@ -29,14 +29,15 @@ vi.mock('fs', async (importOriginal) => {
     ...actual,
     existsSync: vi.fn((p) => {
       const path = String(p);
-      if (path.includes('/systemd/user/')) return serviceManager === 'systemd';
-      if (path.includes('/LaunchAgents/')) return serviceManager === 'launchd';
+      if (path.includes('/systemd/user/')) return serviceManager === 'systemd' || serviceManager === 'both';
+      if (path.includes('/LaunchAgents/')) return serviceManager === 'launchd' || serviceManager === 'both';
       return false;
     }),
   };
 });
 
-const { buildUnixUpgradeScript } = await import('../../agent/connection/upgrade.js');
+const { buildUnixUpgradeScript, resolveInstanceId } = await import('../../agent/connection/upgrade.js');
+const { default: ctx } = await import('../../agent/context.js');
 
 const BASE = {
   pkgName: '@yeaft/webchat-agent',
@@ -46,7 +47,6 @@ const BASE = {
   configDir: `${HOME}/.config/yeaft-agent/instances/server-e7a9eb`,
   npmPath: '/usr/bin/npm',
   safePath: '/usr/bin:/bin',
-  home: HOME,
 };
 
 describe('buildUnixUpgradeScript — instance-aware service restart', () => {
@@ -102,5 +102,49 @@ describe('buildUnixUpgradeScript — instance-aware service restart', () => {
     expect(script).toContain('"$NPM" install -g "$PKG"');
     expect(script).toContain('PID=4242');
     expect(script).toMatch(/^#!\/bin\/bash/);
+  });
+
+  it('prefers systemd when both managers somehow look present', () => {
+    // existsSync answers true for BOTH families this once; the systemd branch
+    // must win and no launchctl line should leak into the script.
+    serviceManager = 'both';
+    const script = buildUnixUpgradeScript({
+      ...BASE,
+      instanceId: 'server-e7a9eb',
+      isDarwin: true,
+    });
+    expect(script).toContain('systemctl --user start "yeaft-agent@server-e7a9eb"');
+    expect(script).not.toContain('launchctl');
+  });
+});
+
+describe('resolveInstanceId — pinned instance resolution', () => {
+  const OLD_ENV = { ...process.env };
+  const OLD_CONFIG = ctx.CONFIG;
+
+  beforeEach(() => {
+    process.env = { ...OLD_ENV };
+    delete process.env.YEAFT_AGENT_INSTANCE;
+    ctx.CONFIG = null;
+  });
+  afterEach(() => {
+    process.env = { ...OLD_ENV };
+    ctx.CONFIG = OLD_CONFIG;
+  });
+
+  it('prefers ctx.CONFIG.instanceId (the validated single source of truth)', () => {
+    ctx.CONFIG = { instanceId: 'server-e7a9eb' };
+    process.env.YEAFT_AGENT_INSTANCE = 'env-loser';
+    expect(resolveInstanceId()).toBe('server-e7a9eb');
+  });
+
+  it('falls back to YEAFT_AGENT_INSTANCE when CONFIG is not yet loaded', () => {
+    ctx.CONFIG = null;
+    process.env.YEAFT_AGENT_INSTANCE = 'from-env';
+    expect(resolveInstanceId()).toBe('from-env');
+  });
+
+  it('falls back to the default instance when nothing is set', () => {
+    expect(resolveInstanceId()).toBe('default');
   });
 });
