@@ -18,6 +18,7 @@ import {
   readStreamChunkWithIdleTimeout,
   redactRawRequest,
   safeHeaders,
+  SseLineBuffer,
 } from './adapter.js';
 import {
   normalizeEffort,
@@ -302,7 +303,12 @@ export class AnthropicAdapter extends LLMAdapter {
     // Parse SSE stream
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = '';
+    // Incremental O(n) line splitter (see SseLineBuffer): the old
+    // `buffer += chunk; buffer.split('\n')` pattern went quadratic on a
+    // multi-MiB un-terminated line and froze the event loop long enough to
+    // starve the WS heartbeat. The buffer also caps a single newline-less
+    // line and throws a retryable error on a malformed stream.
+    const sseLines = new SseLineBuffer();
     // task-327d: index-keyed per-block state. Anthropic streams content
     // blocks sequentially today, but the protocol exposes `event.index`
     // precisely because that's not guaranteed. Dispatch in
@@ -333,10 +339,8 @@ export class AnthropicAdapter extends LLMAdapter {
         if (done) break;
 
         const chunkText = decoder.decode(value, { stream: true });
-        buffer += chunkText;
         rawSseBodyChunks.push(chunkText);
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || ''; // Keep incomplete line
+        const lines = sseLines.push(chunkText);
 
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
