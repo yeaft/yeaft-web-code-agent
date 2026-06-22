@@ -61,7 +61,7 @@ describe('Yeaft debug history stale response guard', () => {
     expect(store._yeaftDebugHistoryLatestListRequestId).toBe('req-b');
   });
 
-  it('defensively caps list responses to the newest 5 turns', () => {
+  it('defensively caps default list responses to the newest single turn', () => {
     const store = makeDebugStore();
     store.yeaftDebugTurnsById = { stale: { turnId: 'stale', userPrompt: 'old cached row' } };
     store.yeaftDebugTurnOrder = ['stale'];
@@ -78,11 +78,30 @@ describe('Yeaft debug history stale response guard', () => {
       indexOnly: false,
     });
 
-    expect(store.yeaftDebugTurnOrder).toEqual(['turn-3', 'turn-4', 'turn-5', 'turn-6', 'turn-7']);
-    expect(Object.keys(store.yeaftDebugTurnsById)).toEqual(['turn-3', 'turn-4', 'turn-5', 'turn-6', 'turn-7']);
-    expect(store.yeaftDebugLoops.map(loop => loop.turnId)).toEqual(['turn-3', 'turn-4', 'turn-5', 'turn-6', 'turn-7']);
-    expect(store.yeaftDebugHistoryLimit).toBe(5);
+    expect(store.yeaftDebugTurnOrder).toEqual(['turn-7']);
+    expect(Object.keys(store.yeaftDebugTurnsById)).toEqual(['turn-7']);
+    expect(store.yeaftDebugLoops.map(loop => loop.turnId)).toEqual(['turn-7']);
+    expect(store.yeaftDebugHistoryLimit).toBe(1);
     expect(store.yeaftDebugHistoryHasMore).toBe(true);
+  });
+
+  it('keeps search responses capped to five turns', () => {
+    const store = makeDebugStore();
+    const turns = Array.from({ length: 8 }, (_, i) => ({ turnId: `turn-${i}`, userPrompt: `prompt ${i}` }));
+
+    handleMessage(store, {
+      type: 'yeaft_debug_history',
+      requestId: 'req-b',
+      requestKind: 'list',
+      search: 'prompt',
+      turns,
+      loops: [],
+      limit: 999,
+      indexOnly: true,
+    });
+
+    expect(store.yeaftDebugTurnOrder).toEqual(['turn-3', 'turn-4', 'turn-5', 'turn-6', 'turn-7']);
+    expect(store.yeaftDebugHistoryLimit).toBe(5);
   });
 
   it('allows detail responses to bypass the list/search request id guard', () => {

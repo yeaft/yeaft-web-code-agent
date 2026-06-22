@@ -28,7 +28,8 @@
 import { buildDreamDebugItems, filterDreamDebugItems, previewText } from './dream-debug-model.js';
 import { splitTokenBreakdown, apportionToBuckets, formatClockTime } from './yeaft-debug-helpers.js';
 
-const INITIAL_REQUEST_HISTORY_LIMIT = 5;
+const INITIAL_REQUEST_HISTORY_LIMIT = 1;
+const SEARCH_REQUEST_HISTORY_LIMIT = 5;
 
 export default {
   name: 'YeaftDebugPanel',
@@ -956,11 +957,12 @@ export default {
     },
     loadRequestHistory() {
       if (!this.store || typeof this.store.loadYeaftDebugHistory !== 'function') return;
+      const search = String(this.searchQuery || '').trim();
       this.store.loadYeaftDebugHistory({
-        limit: INITIAL_REQUEST_HISTORY_LIMIT,
+        limit: search ? SEARCH_REQUEST_HISTORY_LIMIT : INITIAL_REQUEST_HISTORY_LIMIT,
         dreamLimit: 5,
         indexOnly: true,
-        search: this.searchQuery,
+        search,
       });
     },
     refreshToolStats() {

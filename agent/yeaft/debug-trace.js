@@ -35,6 +35,8 @@ const MAX_RAW_REQUEST_BYTES = 2 * 1024 * 1024;
 const TRACE_FLUSH_INTERVAL_MS = 5_000;
 const TRACE_FLUSH_DIRTY_LOOPS = 10;
 const MAX_SEARCH_PATTERN_CHARS = 300;
+const DEBUG_INDEX_VERSION = 1;
+const DEBUG_INDEX_MAX_ENTRIES = 2000;
 
 function isPlainObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value);
@@ -411,6 +413,67 @@ function tracePathFor(rootDir, sessionId, requestKey) {
   return requestFilePath(join(sessionRequestsDir(rootDir, sessionId), safeDirComponent(requestKey, 'request')));
 }
 
+function debugIndexPath(rootDir) {
+  return join(rootDir, 'debug', 'index.json');
+}
+
+function buildTraceIndexEntry(trace) {
+  const summary = summarizeTrace(trace, false);
+  return {
+    version: DEBUG_INDEX_VERSION,
+    requestKey: trace?.requestKey || '',
+    requestId: trace?.requestId || trace?.traceId || '',
+    traceId: trace?.traceId || null,
+    messageId: trace?.messageId || null,
+    sessionId: trace?.sessionId || null,
+    vpId: trace?.vpId || null,
+    threadId: trace?.threadId || null,
+    mode: trace?.mode || null,
+    userPrompt: trace?.userPrompt || '',
+    openedAt: trace?.openedAt || 0,
+    closedAt: trace?.closedAt || null,
+    updatedAt: trace?.updatedAt || trace?.closedAt || trace?.openedAt || 0,
+    active: !!trace?.active,
+    loopCount: summary.loopCount || 0,
+    toolCount: Array.isArray(trace?.tools) ? trace.tools.length : 0,
+    totalMs: summary.totalMs || 0,
+    totalTokens: summary.totalTokens || 0,
+    summaryInputTokens: summary.summaryInputTokens || 0,
+    summaryOutputTokens: summary.summaryOutputTokens || 0,
+    searchDocument: buildTraceSearchDocument(trace),
+  };
+}
+
+function indexEntryToTurn(entry) {
+  return {
+    turnId: entry?.requestId || entry?.traceId || '',
+    userPrompt: entry?.userPrompt || '',
+    sessionId: entry?.sessionId || null,
+    vpId: entry?.vpId || null,
+    threadId: entry?.threadId || null,
+    openedAt: entry?.openedAt || 0,
+    closedAt: entry?.closedAt || null,
+    totalMs: entry?.totalMs || 0,
+    totalTokens: entry?.totalTokens || 0,
+    summaryInputTokens: entry?.summaryInputTokens || 0,
+    summaryOutputTokens: entry?.summaryOutputTokens || 0,
+    loopCount: entry?.loopCount || 0,
+    memoryLoaded: null,
+    memoryAdjust: null,
+    tools: [],
+    detailsLoaded: false,
+    requestBase: null,
+  };
+}
+
+function normalizeDebugIndex(value) {
+  if (Array.isArray(value)) return { version: DEBUG_INDEX_VERSION, entries: value };
+  if (value && typeof value === 'object' && Array.isArray(value.entries)) {
+    return { version: DEBUG_INDEX_VERSION, entries: value.entries };
+  }
+  return { version: DEBUG_INDEX_VERSION, entries: [] };
+}
+
 function summarizeTrace(trace, detailsLoaded = false) {
   const loops = Array.isArray(trace?.loops) ? trace.loops : [];
   const usage = loops.reduce((acc, loop) => {
@@ -572,6 +635,31 @@ function readTraceSummaries(rootDir, sessionId = null) {
   return traces;
 }
 
+function sortDebugIndexEntries(entries) {
+  return entries.sort((a, b) => ((a.openedAt || 0) - (b.openedAt || 0)) || String(a.requestKey || '').localeCompare(String(b.requestKey || '')));
+}
+
+function debugIndexEntryKey(entry) {
+  if (!entry) return '';
+  return entry.requestKey || `${entry.sessionId || ''}::${entry.requestId || entry.traceId || ''}`;
+}
+
+function filterDebugIndexEntries(entries, { sessionId = null, threadId = null, searchRegex = null } = {}) {
+  return entries.filter((entry) => {
+    if (!entry || !entry.requestId) return false;
+    if (sessionId && entry.sessionId !== sessionId) return false;
+    if (threadId && entry.threadId !== threadId) return false;
+    if (searchRegex) {
+      try {
+        if (!searchRegex.test(String(entry.searchDocument || ''))) return false;
+      } catch {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
 function countDirFiles(rootDir) {
   let files = 0;
   let bytes = 0;
@@ -601,6 +689,8 @@ export class DebugTrace {
   #requestCache = new Map();
   /** @type {Map<string, { trace: object, dirtyLoops: number, firstDirtyAt: number }>} */
   #pendingWrites = new Map();
+  /** @type {Map<string, object>} */
+  #pendingIndexEntries = new Map();
   /** @type {NodeJS.Timeout|null} */
   #flushTimer = null;
   /** @type {number} */
@@ -766,11 +856,24 @@ export class DebugTrace {
     const lim = Math.max(1, Math.min(MAX_HISTORY_LIMIT, Number(limit) || MAX_HISTORY_LIMIT));
     const requestedDetailTurnId = typeof detailTurnId === 'string' && detailTurnId ? detailTurnId : null;
     const searchRegex = requestedDetailTurnId ? null : compileTraceSearchRegex(search);
+    const dreamEvents = this.#readDreamEvents({ sessionId, dreamLimit });
+    if (indexOnly && !requestedDetailTurnId) {
+      const entries = this.#readDebugIndex({ rebuildIfMissing: true });
+      const filtered = filterDebugIndexEntries(entries, { sessionId, threadId, searchRegex });
+      const selectedEntries = filtered.slice(-lim);
+      return {
+        loops: [],
+        turns: selectedEntries.map(indexEntryToTurn),
+        dreamEvents,
+        hasMore: filtered.length > selectedEntries.length,
+        limit: lim,
+        indexOnly: true,
+      };
+    }
     const traces = this.#traceSummaries(sessionId)
       .filter(({ trace }) => !threadId || trace.threadId === threadId)
       .filter(({ trace }) => requestedDetailTurnId || traceMatchesRegex(trace, searchRegex))
       .map(({ trace }) => trace);
-    const dreamEvents = this.#readDreamEvents({ sessionId, dreamLimit });
     if (requestedDetailTurnId) {
       const trace = traces.find(t => t.requestId === requestedDetailTurnId || t.traceId === requestedDetailTurnId);
       if (!trace) return { loops: [], turns: [], dreamEvents, hasMore: false, limit: 0, indexOnly: false, detailTurnId: requestedDetailTurnId };
@@ -778,16 +881,6 @@ export class DebugTrace {
       return { ...expanded, dreamEvents, hasMore: false, limit: expanded.loops.length, indexOnly: false, detailTurnId: requestedDetailTurnId };
     }
     const selected = traces.slice(-lim);
-    if (indexOnly) {
-      return {
-        loops: [],
-        turns: selected.map(trace => summarizeTrace(trace, false)),
-        dreamEvents,
-        hasMore: traces.length > selected.length,
-        limit: lim,
-        indexOnly: true,
-      };
-    }
     const expanded = selected.reduce((acc, trace) => {
       const item = expandTrace(trace);
       acc.loops.push(...item.loops);
@@ -858,6 +951,7 @@ export class DebugTrace {
     ensureDir(this.#rootDir);
     this.#turnIndex.clear();
     this.#requestCache.clear();
+    this.#pendingIndexEntries.clear();
   }
 
   close() { this.#flushPendingSync(); }
@@ -942,6 +1036,57 @@ export class DebugTrace {
     return tracePathFor(this.#rootDir, trace.sessionId || null, trace.requestKey);
   }
 
+  #debugIndexFile() {
+    return debugIndexPath(this.#rootDir);
+  }
+
+  #readDebugIndex({ rebuildIfMissing = false } = {}) {
+    let index = normalizeDebugIndex(readJson(this.#debugIndexFile()));
+    if (rebuildIfMissing) {
+      const nextByKey = new Map();
+      for (const entry of index.entries) {
+        const key = debugIndexEntryKey(entry);
+        if (key && entry?.requestId) nextByKey.set(key, entry);
+      }
+      let changed = nextByKey.size !== index.entries.filter(entry => entry && entry.requestId).length;
+      for (const { trace } of this.#traceSummaries()) {
+        const entry = buildTraceIndexEntry(trace);
+        const key = debugIndexEntryKey(entry);
+        if (!key || nextByKey.has(key)) continue;
+        nextByKey.set(key, entry);
+        changed = true;
+      }
+      if (changed) {
+        index = { version: DEBUG_INDEX_VERSION, updatedAt: Date.now(), entries: sortDebugIndexEntries(Array.from(nextByKey.values())).slice(-DEBUG_INDEX_MAX_ENTRIES) };
+        try { atomicWriteJson(this.#debugIndexFile(), index); }
+        catch (err) { console.warn('[Yeaft] debug index rebuild failed:', err?.message || err); }
+      } else {
+        index = { version: DEBUG_INDEX_VERSION, entries: Array.from(nextByKey.values()) };
+      }
+    }
+    return sortDebugIndexEntries(index.entries.filter(entry => entry && entry.requestId));
+  }
+
+  #flushDebugIndexSync() {
+    if (this.#pendingIndexEntries.size === 0) return;
+    const nextByKey = new Map();
+    for (const entry of this.#readDebugIndex({ rebuildIfMissing: true })) {
+      const key = debugIndexEntryKey(entry);
+      if (key) nextByKey.set(key, entry);
+    }
+    for (const entry of this.#pendingIndexEntries.values()) {
+      const key = debugIndexEntryKey(entry);
+      if (key) nextByKey.set(key, entry);
+    }
+    const entries = sortDebugIndexEntries(Array.from(nextByKey.values())).slice(-DEBUG_INDEX_MAX_ENTRIES);
+    try {
+      atomicWriteJson(this.#debugIndexFile(), { version: DEBUG_INDEX_VERSION, updatedAt: Date.now(), entries });
+      this.#pendingIndexEntries.clear();
+    } catch (err) {
+      console.warn('[Yeaft] debug index write failed:', err?.message || err);
+    }
+  }
+
   #serializableTrace(trace) {
     const toWrite = { ...trace };
     delete toWrite._lastSnapshot;
@@ -960,16 +1105,22 @@ export class DebugTrace {
     this.#requestCache.set(trace.requestKey, trace);
 
     if (force || item.dirtyLoops >= TRACE_FLUSH_DIRTY_LOOPS) {
-      this.#flushPendingSync();
+      this.#scheduleFlushTimer(now, 0);
       return;
     }
     this.#scheduleFlushTimer(now);
   }
 
-  #scheduleFlushTimer(now = Date.now()) {
-    if (this.#flushTimer || this.#pendingWrites.size === 0) return;
+  #scheduleFlushTimer(now = Date.now(), dueInOverride = null) {
+    if (this.#pendingWrites.size === 0) return;
+    const hasImmediateRequest = Number.isFinite(Number(dueInOverride)) && Number(dueInOverride) <= 0;
+    if (this.#flushTimer) {
+      if (!hasImmediateRequest) return;
+      clearTimeout(this.#flushTimer);
+      this.#flushTimer = null;
+    }
     const oldestDirtyAt = Math.min(...Array.from(this.#pendingWrites.values()).map(item => item.firstDirtyAt || now));
-    const dueIn = Math.max(0, TRACE_FLUSH_INTERVAL_MS - (now - oldestDirtyAt));
+    const dueIn = hasImmediateRequest ? 0 : Math.max(0, TRACE_FLUSH_INTERVAL_MS - (now - oldestDirtyAt));
     this.#flushTimer = setTimeout(() => {
       this.#flushTimer = null;
       this.#flushPendingSync();
@@ -988,10 +1139,12 @@ export class DebugTrace {
     for (const { trace } of entries) {
       try {
         atomicWriteJson(this.#traceFile(trace), this.#serializableTrace(trace));
+        this.#pendingIndexEntries.set(this.#traceWriteKey(trace), buildTraceIndexEntry(trace));
       } catch (err) {
         console.warn('[Yeaft] debug trace write failed:', err?.message || err);
       }
     }
+    this.#flushDebugIndexSync();
     this.#pruneAll(REQUEST_RETENTION);
   }
 
@@ -1046,6 +1199,12 @@ export class DebugTrace {
       catch { /* ignore */ }
       this.#requestCache.delete(item.trace.requestKey);
     }
+    if (stale.length > 0) {
+      const staleKeys = new Set(stale.map(item => item.trace?.requestKey).filter(Boolean));
+      const entries = this.#readDebugIndex().filter(entry => !staleKeys.has(entry.requestKey));
+      try { atomicWriteJson(this.#debugIndexFile(), { version: DEBUG_INDEX_VERSION, updatedAt: Date.now(), entries }); }
+      catch (err) { console.warn('[Yeaft] debug index prune failed:', err?.message || err); }
+    }
   }
 
   #expandLegacy(traces) {
@@ -1076,7 +1235,7 @@ export class NullTrace {
   compact() { return { before: 0, after: 0 }; }
   purge() {}
   close() {}
-  fetchRecentDebugHistory() { return { loops: [], turns: [], dreamEvents: [] }; }
+  fetchRecentDebugHistory() { return { loops: [], turns: [], dreamEvents: [], indexOnly: false }; }
 }
 
 export function createTrace({ enabled, dbPath, dirPath }) {
