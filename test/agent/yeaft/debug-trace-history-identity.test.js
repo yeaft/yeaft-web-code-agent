@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from 'vitest';
-import { readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -141,6 +141,26 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
     expect(newDetail.loops.map(loop => loop.response)).toEqual(['new loop 1', 'new loop 2']);
   });
 
+  it('maintains a shared debug index for lightweight search across sessions', () => {
+    const t = openTrace();
+    const alpha = t.startTurn({ traceId: 'indexed-alpha', turnNumber: 1, sessionId: 's1', vpId: 'linus', userPrompt: 'fix debug panel' });
+    t.endTurn(alpha, { responseText: 'done', toolCalls: [{ name: 'Bash', input: { command: 'npm test' } }] });
+    const beta = t.startTurn({ traceId: 'indexed-beta', turnNumber: 1, sessionId: 's2', vpId: 'martin', userPrompt: 'review release flow' });
+    t.endTurn(beta, { responseText: 'approved' });
+    t.close();
+
+    const indexFile = join(`${dbPath}.files`, 'debug', 'index.json');
+    expect(existsSync(indexFile)).toBe(true);
+    const index = JSON.parse(readFileSync(indexFile, 'utf8'));
+    expect(index.entries.map(entry => entry.requestId)).toEqual(['indexed-alpha', 'indexed-beta']);
+    expect(index.entries[0].searchDocument).toContain('fix debug panel');
+
+    const global = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, indexOnly: true, search: 'release\\s+flow' });
+    expect(global.turns).toHaveLength(1);
+    expect(global.turns[0]).toMatchObject({ turnId: 'indexed-beta', sessionId: 's2', detailsLoaded: false });
+    expect(global.loops).toHaveLength(0);
+  });
+
   it('searches recent debug history with a regex across sessions', () => {
     const t = openTrace();
     const alpha = t.startTurn({ traceId: 'alpha-request', turnNumber: 1, sessionId: 's1', vpId: 'linus', userPrompt: 'fix debug panel' });
@@ -189,6 +209,65 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
     expect(() => t.fetchRecentDebugHistory({ search: '/x/q' })).toThrow(/Invalid debug search regex flag: q/);
     expect(() => t.fetchRecentDebugHistory({ search: '(a+)+$' })).toThrow(/unsafe quantified group/);
     expect(() => t.fetchRecentDebugHistory({ search: '(a|aa)+$' })).toThrow(/unsafe quantified group/);
+  });
+
+  it('rebuilds the debug index from existing trace files when the index is missing', () => {
+    const t = openTrace();
+    const row = t.startTurn({ traceId: 'rebuild-me', turnNumber: 1, sessionId: 's1', userPrompt: 'rebuild index needle' });
+    t.endTurn(row, { responseText: 'done' });
+    t.close();
+
+    const indexFile = join(`${dbPath}.files`, 'debug', 'index.json');
+    rmSync(indexFile, { force: true });
+    expect(existsSync(indexFile)).toBe(false);
+
+    const result = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, indexOnly: true, search: 'rebuild index needle' });
+    expect(result.turns).toHaveLength(1);
+    expect(result.turns[0].turnId).toBe('rebuild-me');
+    expect(existsSync(indexFile)).toBe(true);
+  });
+
+  it('merges trace files into a non-empty partial debug index', () => {
+    const t = openTrace();
+    const oldRow = t.startTurn({ traceId: 'old-trace', turnNumber: 1, sessionId: 's1', userPrompt: 'old partial index needle' });
+    t.endTurn(oldRow, { responseText: 'old done' });
+    const newRow = t.startTurn({ traceId: 'new-trace', turnNumber: 1, sessionId: 's1', userPrompt: 'new indexed row' });
+    t.endTurn(newRow, { responseText: 'new done' });
+    t.close();
+
+    const indexFile = join(`${dbPath}.files`, 'debug', 'index.json');
+    const currentIndex = JSON.parse(readFileSync(indexFile, 'utf8'));
+    writeFileSync(indexFile, JSON.stringify({ ...currentIndex, entries: currentIndex.entries.filter(entry => entry.requestId === 'new-trace') }), 'utf8');
+
+    const oldResult = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, indexOnly: true, search: 'old partial index needle' });
+    expect(oldResult.turns.map(turn => turn.turnId)).toEqual(['old-trace']);
+
+    const repairedIndex = JSON.parse(readFileSync(indexFile, 'utf8'));
+    expect(repairedIndex.entries.map(entry => entry.requestId)).toEqual(['old-trace', 'new-trace']);
+  });
+
+  it('keeps pending debug index entries when an index write fails and retries later', () => {
+    const t = openTrace();
+    const first = t.startTurn({ traceId: 'write-fail-first', turnNumber: 1, sessionId: 's1', userPrompt: 'first pending write' });
+    t.endTurn(first, { responseText: 'done' });
+    t.close();
+
+    const indexFile = join(`${dbPath}.files`, 'debug', 'index.json');
+    rmSync(indexFile, { force: true });
+    mkdirSync(indexFile, { recursive: true });
+
+    const second = t.startTurn({ traceId: 'write-fail-second', turnNumber: 1, sessionId: 's1', userPrompt: 'second pending write' });
+    t.endTurn(second, { responseText: 'done' });
+    t.close();
+    expect(existsSync(join(indexFile, 'trace.json'))).toBe(false);
+
+    rmSync(indexFile, { recursive: true, force: true });
+    const third = t.startTurn({ traceId: 'write-fail-third', turnNumber: 1, sessionId: 's1', userPrompt: 'third pending write' });
+    t.endTurn(third, { responseText: 'done' });
+    t.close();
+
+    const repairedIndex = JSON.parse(readFileSync(indexFile, 'utf8'));
+    expect(repairedIndex.entries.map(entry => entry.requestId)).toEqual(['write-fail-first', 'write-fail-second', 'write-fail-third']);
   });
 
   it('does not run regex search against full raw request JSON', () => {

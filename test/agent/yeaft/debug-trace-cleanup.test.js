@@ -101,6 +101,7 @@ describe('DebugTrace file retention', () => {
       messages: [{ role: 'user', content: 'buffer work' }],
     });
 
+    vi.advanceTimersByTime(0);
     let stored = readOnlyTraceFile('s-buffer');
     expect(stored.loops).toHaveLength(10);
 

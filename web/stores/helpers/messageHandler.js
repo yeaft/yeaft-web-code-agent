@@ -32,7 +32,8 @@ function defaultAgentLlmConfig(msg = {}) {
   };
 }
 
-const DEBUG_HISTORY_LIST_LIMIT = 5;
+const DEBUG_HISTORY_DEFAULT_LIMIT = 1;
+const DEBUG_HISTORY_SEARCH_LIMIT = 5;
 
 function cloneDebugValue(value) {
   if (value == null) return value;
@@ -299,7 +300,8 @@ export function handleMessage(store, msg) {
       }
       store._yeaftDebugHistoryInFlightKey = null;
       const rawTurns = Array.isArray(msg?.turns) ? msg.turns : [];
-      const turns = isDetailFetch ? rawTurns : rawTurns.slice(-DEBUG_HISTORY_LIST_LIMIT);
+      const listLimit = msg?.search ? DEBUG_HISTORY_SEARCH_LIMIT : DEBUG_HISTORY_DEFAULT_LIMIT;
+      const turns = isDetailFetch ? rawTurns : rawTurns.slice(-listLimit);
       const turnIds = new Set(turns.map(turn => turn?.turnId).filter(Boolean));
       const rawLoops = hydrateDebugLoopRequests(Array.isArray(msg?.loops) ? msg.loops : []);
       const loops = isDetailFetch ? rawLoops : rawLoops.filter(loop => !loop?.turnId || turnIds.has(loop.turnId));
@@ -309,7 +311,7 @@ export function handleMessage(store, msg) {
       // let that shrink the global debug retention window after the index
       // loader deliberately raised it to keep long expanded requests stable.
       if (!msg?.detailTurnId && Number.isFinite(msg?.limit) && msg.limit > 0) {
-        store.yeaftDebugHistoryLimit = Math.min(DEBUG_HISTORY_LIST_LIMIT, msg.limit);
+        store.yeaftDebugHistoryLimit = Math.min(listLimit, msg.limit);
       }
       // Merge detail fetches into existing in-memory state, but treat list
       // fetches/searches as a bounded replacement window. That keeps the debug
@@ -395,7 +397,7 @@ export function handleMessage(store, msg) {
       } else {
         for (const turn of turns) appendTurnId(turn?.turnId);
       }
-      store.yeaftDebugTurnOrder = isDetailFetch ? mergedOrder : mergedOrder.slice(-DEBUG_HISTORY_LIST_LIMIT);
+      store.yeaftDebugTurnOrder = isDetailFetch ? mergedOrder : mergedOrder.slice(-listLimit);
       for (const evt of dreamEvents) {
         if (!evt) continue;
         let scope = null;
