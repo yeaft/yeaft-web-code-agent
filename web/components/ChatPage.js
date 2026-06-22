@@ -710,6 +710,7 @@ export default {
       // If crew was just turned off while user was viewing it, snap back
       // to the Chat tab so the panel body stays in sync with the tab strip.
       if (!enabled && this.sidebarTab === 'crew') this.sidebarTab = 'chat';
+      if (enabled) this.store.listCrewSessions();
     },
   },
   methods: {

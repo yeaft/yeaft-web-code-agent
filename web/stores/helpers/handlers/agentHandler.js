@@ -235,6 +235,8 @@ export function handleAgentList(store, msg) {
       if (allServerConvIds.has(conv.id)) return true; // still in server list
       // Don't remove conversations the user is currently viewing
       if (store.activeConversations.includes(conv.id)) return true;
+      // Crew history rows are loaded on demand through crew_sessions_list, not routine agent_list snapshots.
+      if (conv.type === 'crew' && store.crewModeEnabled && conv.crewListLoaded) return true;
       // Session's agent is in the agent_list but session is not → stale, remove
       if (conv.agentId && listedAgentIds.has(conv.agentId)) {
         // Respect recently-deleted guard (prevent flicker on close → agent_list race)

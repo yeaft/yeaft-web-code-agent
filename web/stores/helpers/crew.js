@@ -33,16 +33,63 @@ function markCrewToolsCompleted(messages, role) {
 }
 
 export function enterCrewMode(store) {
+  const wasEnabled = store.crewModeEnabled;
+  if (!wasEnabled) {
+    store.setCrewModeEnabled(true);
+  }
   store.crewConfigMode = 'create';
   store.crewConfigOpen = true;
-  store.listCrewSessions();
+  if (wasEnabled) store.listCrewSessions();
 }
 
 export function listCrewSessions(store) {
-  if (!store.currentAgent) return;
+  if (!store.currentAgent || !store.crewModeEnabled) return;
   store.sendWsMessage({
     type: 'list_crew_sessions',
     agentId: store.currentAgent
+  });
+}
+
+export function handleCrewSessionsList(store, msg) {
+  if (!store.crewModeEnabled) return;
+  const sessions = Array.isArray(msg.sessions) ? msg.sessions : [];
+  const agentId = msg.agentId || store.currentAgent;
+  const agent = store.agents.find(a => a.id === agentId);
+  const listedIds = new Set();
+
+  for (const session of sessions) {
+    if (!session?.sessionId) continue;
+    listedIds.add(session.sessionId);
+    const active = session.active === true;
+    const next = {
+      id: session.sessionId,
+      agentId,
+      agentName: agent?.name || agentId,
+      workDir: session.projectDir,
+      createdAt: session.createdAt || session.updatedAt || Date.now(),
+      processing: active && session.status === 'running',
+      type: 'crew',
+      name: session.name || '',
+      crewListLoaded: true
+    };
+    const conv = store.conversations.find(c => c.id === session.sessionId);
+    if (conv) {
+      Object.assign(conv, next);
+    } else {
+      store.conversations.push(next);
+    }
+  }
+
+  store.crewSessionListIdsByAgent = {
+    ...(store.crewSessionListIdsByAgent || {}),
+    [agentId]: Array.from(listedIds)
+  };
+  store.conversations = store.conversations.filter(conv => {
+    if (conv.type !== 'crew') return true;
+    if (conv.agentId !== agentId) return true;
+    if (!conv.crewListLoaded) return true;
+    if (store.activeConversations.includes(conv.id)) return true;
+    return listedIds.has(conv.id);
   });
 }
 

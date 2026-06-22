@@ -67,6 +67,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       // 前端可能附带 conversationIds（server 重启后恢复场景）
       if (msg.conversationIds?.length > 0 && client.userId) {
         for (const convId of msg.conversationIds) {
+          if (convId?.startsWith('crew_')) continue;
           const dbSession = sessionDb.get(convId);
           if (!dbSession) continue;
           if (dbSession.user_id && dbSession.user_id !== client.userId && !CONFIG.skipAuth) continue;
@@ -93,12 +94,14 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           });
         }
       }
-      // Restore all active sessions for this user from DB (cross-client sync)
+      // Restore all active Chat sessions for this user from DB (cross-client sync).
+      // Crew sessions stay opt-in and are loaded only through explicit Crew actions.
       if (client.userId) {
         const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
         const cutoff = Date.now() - TWO_DAYS_MS;
         const activeSessions = sessionDb.getActiveByUser(client.userId);
         for (const dbSession of activeSessions) {
+          if (dbSession.id?.startsWith('crew_')) continue;
           // Pinned sessions never auto-expire
           if (dbSession.is_pinned) {
             // Still need to restore pinned sessions to agent memory

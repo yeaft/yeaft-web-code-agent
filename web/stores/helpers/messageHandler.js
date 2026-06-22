@@ -8,7 +8,7 @@ import { decodeKey } from '../../utils/encryption.js';
 import { t } from '../../utils/i18n.js';
 import { stopProcessingWatchdog, startLegacyWatchdog } from './watchdog.js';
 import { clearSessionLoading } from './session.js';
-import { clearRefreshTimeout } from './crew.js';
+import { clearRefreshTimeout, handleCrewSessionsList } from './crew.js';
 import { handleAgentList, handleAgentSelected } from './handlers/agentHandler.js';
 import {
   handleConversationCreated,
@@ -580,6 +580,7 @@ export function handleMessage(store, msg) {
       break;
 
     case 'crew_sessions_list':
+      handleCrewSessionsList(store, msg);
       break;
 
     case 'crew_exists_result':
