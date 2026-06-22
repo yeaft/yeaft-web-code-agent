@@ -552,6 +552,7 @@ export const useChatStore = defineStore('chat', {
     // addMessageToConversation / appendToAssistant can route by turnId.
     _currentYeaftVpId: null,
     _currentYeaftTurnId: null,
+    _currentYeaftThreadId: null,
     // Feature system fully removed 2026-05-13; per-VP turns are folded
     // by VpTurnBlock keyed off vpId + message id.
 
@@ -1365,6 +1366,7 @@ export const useChatStore = defineStore('chat', {
         const localMsg = {
           id: clientMessageId,
           messageId: clientMessageId,
+          clientMessageId,
           type: 'user',
           content: effectiveText,
           sessionId: groupId,
@@ -1531,9 +1533,11 @@ export const useChatStore = defineStore('chat', {
           const prevGroup = this._currentYeaftSessionId;
           const prevVpId = this._currentYeaftVpId;
           const prevTurnId = this._currentYeaftTurnId;
+          const prevThreadId = this._currentYeaftThreadId;
           if (msgSessionId != null) this._currentYeaftSessionId = msgSessionId;
           if (msg.vpId) this._currentYeaftVpId = msg.vpId;
           if (msg.turnId) this._currentYeaftTurnId = msg.turnId;
+          if (msg.threadId) this._currentYeaftThreadId = msg.threadId;
           // (2026-05-13) featureId stamping removed along with the Feature system.
           try {
             const shouldPruneWindow = this.currentView === 'yeaft'
@@ -1563,6 +1567,7 @@ export const useChatStore = defineStore('chat', {
             this._currentYeaftSessionId = prevGroup;
             this._currentYeaftVpId = prevVpId;
             this._currentYeaftTurnId = prevTurnId;
+            this._currentYeaftThreadId = prevThreadId;
           }
         }
         return;

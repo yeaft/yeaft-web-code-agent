@@ -416,6 +416,132 @@ describe('handleYeaftHistoryChunk', () => {
   });
 
 
+  it('accepts inactive-session chunks so active turns survive session switches', () => {
+    const store = mkStore({
+      yeaftActiveSessionFilter: 'session-B',
+      yeaftLoadingMoreHistory: false,
+      yeaftSessionHistoryState: {
+        'session-A': { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
+        'session-B': { loaded: true, loading: false, hasMore: true, oldestSeq: 9, count: 1 },
+      },
+      messagesMap: { 'yeaft-1': [{ id: 'b1', type: 'user', content: 'B visible', sessionId: 'session-B', timestamp: 1 }] },
+    });
+
+    handleYeaftHistoryChunk(store, {
+      conversationId: 'yeaft-1',
+      sessionId: 'session-A',
+      mode: 'delta',
+      messages: [
+        { id: 'a1', role: 'user', content: 'A active prompt', sessionId: 'session-A', ts: '2026-05-01T10:00:00.000Z' },
+        { id: 'a2', role: 'assistant', content: 'A active reply', sessionId: 'session-A', ts: '2026-05-01T10:00:01.000Z' },
+      ],
+      latestSeq: 2,
+    });
+
+    expect(store.messagesMap['yeaft-1'].filter(m => m.sessionId === 'session-A').map(m => m.content)).toEqual([
+      'A active prompt',
+      'A active reply',
+    ]);
+    expect(store.yeaftSessionHistoryState['session-A']).toEqual(expect.objectContaining({
+      loaded: true,
+      loading: false,
+      latestSeq: 2,
+    }));
+    expect(store.yeaftLoadingMoreHistory).toBe(false);
+    expect(store.yeaftHasMoreHistory).toBe(true);
+    expect(store.yeaftOldestLoadedSeq).toBe(100);
+  });
+
+  it('merges persisted user history with its optimistic client row', () => {
+    const store = mkStore({
+      yeaftActiveSessionFilter: 'g1',
+      messagesMap: {
+        'yeaft-1': [
+          {
+            id: 'u_local_1',
+            messageId: 'u_local_1',
+            clientMessageId: 'u_local_1',
+            type: 'user',
+            content: 'same prompt',
+            sessionId: 'g1',
+            turnId: 'u_local_1',
+            timestamp: new Date('2026-05-01T10:00:00.000Z').getTime(),
+          },
+        ],
+      },
+    });
+
+    handleYeaftHistoryChunk(store, {
+      conversationId: 'yeaft-1',
+      sessionId: 'g1',
+      mode: 'delta',
+      messages: [{
+        id: 'm0100',
+        role: 'user',
+        content: 'same prompt',
+        sessionId: 'g1',
+        clientMessageId: 'u_local_1',
+        ts: '2026-05-01T10:00:01.000Z',
+      }],
+      latestSeq: 100,
+    });
+
+    const users = store.messagesMap['yeaft-1'].filter(m => m.type === 'user');
+    expect(users).toHaveLength(1);
+    expect(users[0]).toEqual(expect.objectContaining({
+      id: 'm0100',
+      messageId: 'm0100',
+      clientMessageId: 'u_local_1',
+      content: 'same prompt',
+    }));
+  });
+
+  it('merges persisted assistant history into a matching active stream without a stable id', () => {
+    const store = mkStore({
+      yeaftActiveSessionFilter: 'g1',
+      messagesMap: {
+        'yeaft-1': [{
+          id: 'stream-1',
+          type: 'assistant',
+          content: 'partial answer',
+          sessionId: 'g1',
+          vpId: 'vp-linus',
+          speakerVpId: 'vp-linus',
+          threadId: 'thread-1',
+          isStreaming: true,
+          timestamp: new Date('2026-05-01T10:00:00.000Z').getTime(),
+        }],
+      },
+    });
+
+    handleYeaftHistoryChunk(store, {
+      conversationId: 'yeaft-1',
+      sessionId: 'g1',
+      mode: 'delta',
+      messages: [{
+        id: 'm0101',
+        role: 'assistant',
+        content: 'partial answer completed',
+        sessionId: 'g1',
+        speakerVpId: 'vp-linus',
+        threadId: 'thread-1',
+        ts: '2026-05-01T10:00:01.000Z',
+      }],
+      latestSeq: 101,
+    });
+
+    const assistants = store.messagesMap['yeaft-1'].filter(m => m.type === 'assistant');
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]).toEqual(expect.objectContaining({
+      id: 'm0101',
+      messageId: 'm0101',
+      content: 'partial answer completed',
+      isStreaming: false,
+      speakerVpId: 'vp-linus',
+      threadId: 'thread-1',
+    }));
+  });
+
   it('preserves stable ids and assistant speaker attribution from older history rows', () => {
     const store = mkStore({
       yeaftActiveSessionFilter: 'g1',
@@ -440,28 +566,28 @@ describe('handleYeaftHistoryChunk', () => {
 
   it('keeps session-scoped cursor state isolated when accepting matching chunks', () => {
     const store = mkStore({
-      yeaftActiveSessionFilter: 'group-A',
+      yeaftActiveSessionFilter: 'session-A',
       yeaftSessionHistoryState: {
-        'group-B': { loaded: true, loading: false, hasMore: true, oldestSeq: 77, count: 2 },
+        'session-B': { loaded: true, loading: false, hasMore: true, oldestSeq: 77, count: 2 },
       },
       messagesMap: { 'yeaft-1': [] },
     });
     handleYeaftHistoryChunk(store, {
       conversationId: 'yeaft-1',
-      sessionId: 'group-A',
-      messages: [{ id: 'a-old', role: 'user', content: 'A-old', sessionId: 'group-A' }],
+      sessionId: 'session-A',
+      messages: [{ id: 'a-old', role: 'user', content: 'A-old', sessionId: 'session-A' }],
       oldestSeq: 11,
       hasMore: false,
     });
 
-    expect(store.yeaftSessionHistoryState['group-A']).toEqual(expect.objectContaining({
+    expect(store.yeaftSessionHistoryState['session-A']).toEqual(expect.objectContaining({
       loaded: true,
       loading: false,
       hasMore: false,
       oldestSeq: 11,
       count: 1,
     }));
-    expect(store.yeaftSessionHistoryState['group-B']).toEqual(expect.objectContaining({
+    expect(store.yeaftSessionHistoryState['session-B']).toEqual(expect.objectContaining({
       hasMore: true,
       oldestSeq: 77,
     }));
@@ -552,22 +678,22 @@ describe('handleYeaftHistoryChunk', () => {
 
   it('keeps chronological order and dedupes rows when older session history overlaps cached rows', () => {
     const store = mkStore({
-      yeaftActiveSessionFilter: 'group-A',
+      yeaftActiveSessionFilter: 'session-A',
       messagesMap: {
         'yeaft-1': [
-          { id: 'm0003', messageId: 'm0003', type: 'user', content: 'newer-q', sessionId: 'group-A' },
-          { id: 'm0004', messageId: 'm0004', type: 'assistant', content: 'newer-a', sessionId: 'group-A', speakerVpId: 'vp-ada' },
+          { id: 'm0003', messageId: 'm0003', type: 'user', content: 'newer-q', sessionId: 'session-A' },
+          { id: 'm0004', messageId: 'm0004', type: 'assistant', content: 'newer-a', sessionId: 'session-A', speakerVpId: 'vp-ada' },
         ],
       },
     });
 
     handleYeaftHistoryChunk(store, {
       conversationId: 'yeaft-1',
-      sessionId: 'group-A',
+      sessionId: 'session-A',
       messages: [
-        { id: 'm0001', role: 'user', content: 'oldest-q', sessionId: 'group-A' },
-        { id: 'm0002', role: 'assistant', content: 'oldest-a', sessionId: 'group-A', speakerVpId: 'vp-linus' },
-        { id: 'm0003', role: 'user', content: 'newer-q', sessionId: 'group-A' },
+        { id: 'm0001', role: 'user', content: 'oldest-q', sessionId: 'session-A' },
+        { id: 'm0002', role: 'assistant', content: 'oldest-a', sessionId: 'session-A', speakerVpId: 'vp-linus' },
+        { id: 'm0003', role: 'user', content: 'newer-q', sessionId: 'session-A' },
       ],
       oldestSeq: 1,
       hasMore: false,
@@ -611,49 +737,50 @@ describe('handleYeaftHistoryChunk', () => {
     expect(store.yeaftHasMoreHistory).toBe(false);
   });
 
-  it('drops stale chunks whose sessionId no longer matches the active filter (race-with-session-switch)', () => {
+  it('accepts chunks whose sessionId no longer matches the active filter (race-with-session-switch)', () => {
     // Sequence: user is in session A, "Load older" fires while looking at A,
-    // user switches to B before the chunk arrives. The B switch already
-    // cleared messagesMap[convId] and reset the cursor; we must NOT
-    // splice A's history into B's view when A's chunk finally lands.
+    // user switches to B before the chunk arrives. Rows are session-stamped,
+    // so accepting A's chunk preserves A's cache without making B's filtered
+    // view show A rows.
     const store = mkStore({
-      yeaftActiveSessionFilter: 'group-B',
+      yeaftActiveSessionFilter: 'session-B',
       yeaftLoadingMoreHistory: true,           // spinner up from the A click
       messagesMap: {
         'yeaft-1': [
-          { type: 'user', content: 'B-msg', sessionId: 'group-B' },
+          { type: 'user', content: 'B-msg', sessionId: 'session-B' },
         ],
       },
     });
     handleYeaftHistoryChunk(store, {
       conversationId: 'yeaft-1',
-      sessionId: 'group-A',                    // stale: chunk is for the OLD session
+      sessionId: 'session-A',                    // stale: chunk is for the OLD session
       messages: [
-        { id: 'm0001', role: 'user',      content: 'A-old-q', sessionId: 'group-A' },
-        { id: 'm0002', role: 'assistant', content: 'A-old-a', sessionId: 'group-A' },
+        { id: 'm0001', role: 'user',      content: 'A-old-q', sessionId: 'session-A' },
+        { id: 'm0002', role: 'assistant', content: 'A-old-a', sessionId: 'session-A' },
       ],
       oldestSeq: 1,
       hasMore: true,
     });
-    // No prepend — session B's stream is untouched.
-    expect(store.messagesMap['yeaft-1'].map(m => m.content)).toEqual(['B-msg']);
-    // Spinner is cleared regardless so the UI doesn't get stuck.
+    expect(store.messagesMap['yeaft-1'].filter(m => m.sessionId === 'session-B').map(m => m.content)).toEqual(['B-msg']);
+    expect(store.messagesMap['yeaft-1'].filter(m => m.sessionId === 'session-A').map(m => m.content)).toEqual(['A-old-q', 'A-old-a']);
+    expect(store.yeaftSessionHistoryState['session-A']).toEqual(expect.objectContaining({ loading: false, hasMore: true, oldestSeq: 1 }));
+    // Spinner mirrors only the active Session.
     expect(store.yeaftLoadingMoreHistory).toBe(false);
-    // Cursor not corrupted by session A's data.
+    // Active cursor not corrupted by session A's data.
     expect(store.yeaftOldestLoadedSeq).toBe(100);
   });
 
-  it('drops stale chunks with an empty-string sessionId instead of treating them as unscoped history', () => {
+  it('accepts inactive empty-string sessionId chunks without treating them as active unscoped history', () => {
     const store = mkStore({
-      yeaftActiveSessionFilter: 'group-B',
+      yeaftActiveSessionFilter: 'session-B',
       yeaftLoadingMoreHistory: true,
       yeaftSessionHistoryState: {
         '': { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
-        'group-B': { loaded: true, loading: false, hasMore: true, oldestSeq: 100, count: 1 },
+        'session-B': { loaded: true, loading: false, hasMore: true, oldestSeq: 100, count: 1 },
       },
       messagesMap: {
         'yeaft-1': [
-          { type: 'user', content: 'B-msg', sessionId: 'group-B' },
+          { type: 'user', content: 'B-msg', sessionId: 'session-B' },
         ],
       },
     });
@@ -668,9 +795,10 @@ describe('handleYeaftHistoryChunk', () => {
       hasMore: true,
     });
 
-    expect(store.messagesMap['yeaft-1'].map(m => m.content)).toEqual(['B-msg']);
+    expect(store.messagesMap['yeaft-1'].filter(m => m.sessionId === 'session-B').map(m => m.content)).toEqual(['B-msg']);
+    expect(store.messagesMap['yeaft-1'].filter(m => m.sessionId === '').map(m => m.content)).toEqual(['empty-scope-q']);
     expect(store.yeaftLoadingMoreHistory).toBe(false);
-    expect(store.yeaftSessionHistoryState['']).toEqual(expect.objectContaining({ loading: false }));
+    expect(store.yeaftSessionHistoryState['']).toEqual(expect.objectContaining({ loading: false, hasMore: true }));
     expect(store.yeaftSessionHistoryState.__all__).toBeUndefined();
     expect(store.yeaftOldestLoadedSeq).toBe(100);
   });
@@ -702,14 +830,14 @@ describe('handleYeaftHistoryChunk', () => {
 
   it('accepts a chunk whose sessionId matches the active filter', () => {
     const store = mkStore({
-      yeaftActiveSessionFilter: 'group-A',
+      yeaftActiveSessionFilter: 'session-A',
       messagesMap: { 'yeaft-1': [] },
     });
     handleYeaftHistoryChunk(store, {
       conversationId: 'yeaft-1',
-      sessionId: 'group-A',
+      sessionId: 'session-A',
       messages: [
-        { id: 'm0001', role: 'user', content: 'A-old-q', sessionId: 'group-A' },
+        { id: 'm0001', role: 'user', content: 'A-old-q', sessionId: 'session-A' },
       ],
       oldestSeq: 1,
       hasMore: false,
@@ -720,20 +848,20 @@ describe('handleYeaftHistoryChunk', () => {
 
   it('does not render legacy task-result or system-note rows from older history chunks', () => {
     const store = mkStore({
-      yeaftActiveSessionFilter: 'group-A',
+      yeaftActiveSessionFilter: 'session-A',
       messagesMap: { 'yeaft-1': [] },
     });
     handleYeaftHistoryChunk(store, {
       conversationId: 'yeaft-1',
-      sessionId: 'group-A',
+      sessionId: 'session-A',
       messages: [
-        { id: 'm0001', role: 'user', content: 'visible q', sessionId: 'group-A' },
-        { id: 'm0002', role: 'user', content: '<task-result id="task_1" kind="shell" status="succeeded">\nlogTail:\n  PASS\n</task-result>', sessionId: 'group-A' },
-        { id: 'm0003', role: 'user', content: '[system note] You have called ReadTaskLog with the same arguments 3 times. Previous result: {...}', sessionId: 'group-A' },
-        { id: 'm0004', role: 'assistant', content: 'visible a', sessionId: 'group-A', speakerVpId: 'vp-a' },
-        { id: 'm0005', role: 'user', content: 'please explain <task-result> tags', sessionId: 'group-A' },
-        { id: 'm0006', role: 'user', content: 'In docs, <task-result> means XML-ish markup here', sessionId: 'group-A' },
-        { id: 'm0007', role: 'user', content: '[system note] this is just prose, not a tool-folding warning', sessionId: 'group-A' },
+        { id: 'm0001', role: 'user', content: 'visible q', sessionId: 'session-A' },
+        { id: 'm0002', role: 'user', content: '<task-result id="task_1" kind="shell" status="succeeded">\nlogTail:\n  PASS\n</task-result>', sessionId: 'session-A' },
+        { id: 'm0003', role: 'user', content: '[system note] You have called ReadTaskLog with the same arguments 3 times. Previous result: {...}', sessionId: 'session-A' },
+        { id: 'm0004', role: 'assistant', content: 'visible a', sessionId: 'session-A', speakerVpId: 'vp-a' },
+        { id: 'm0005', role: 'user', content: 'please explain <task-result> tags', sessionId: 'session-A' },
+        { id: 'm0006', role: 'user', content: 'In docs, <task-result> means XML-ish markup here', sessionId: 'session-A' },
+        { id: 'm0007', role: 'user', content: '[system note] this is just prose, not a tool-folding warning', sessionId: 'session-A' },
       ],
       oldestSeq: 1,
       hasMore: false,
@@ -868,23 +996,23 @@ describe('loadMoreYeaftHistory — action gates', () => {
 describe('setActiveSessionFilter — session-scoped conversation cache', () => {
   it('does not clear the shared Yeaft message stream when switching sessions', () => {
     const store = mkStore({
-      yeaftActiveSessionFilter: 'group-A',
+      yeaftActiveSessionFilter: 'session-A',
       messagesMap: {
         'yeaft-1': [
-          { id: 'a1', type: 'user', content: 'A before', sessionId: 'group-A' },
-          { id: 'b1', type: 'user', content: 'B before', sessionId: 'group-B' },
+          { id: 'a1', type: 'user', content: 'A before', sessionId: 'session-A' },
+          { id: 'b1', type: 'user', content: 'B before', sessionId: 'session-B' },
         ],
       },
       yeaftSessionHistoryState: {
-        'group-A': { loaded: true, loading: false, hasMore: true, oldestSeq: 10, count: 1 },
-        'group-B': { loaded: true, loading: false, hasMore: false, oldestSeq: 20, count: 1 },
+        'session-A': { loaded: true, loading: false, hasMore: true, oldestSeq: 10, count: 1 },
+        'session-B': { loaded: true, loading: false, hasMore: false, oldestSeq: 20, count: 1 },
       },
     });
 
     const beforeA = visibleMessages(store).map(m => m.id);
-    setActiveSessionFilter.call(store, 'group-B');
+    setActiveSessionFilter.call(store, 'session-B');
     const afterB = visibleMessages(store).map(m => m.id);
-    setActiveSessionFilter.call(store, 'group-A');
+    setActiveSessionFilter.call(store, 'session-A');
     const afterA = visibleMessages(store).map(m => m.id);
 
     expect(beforeA).toEqual(['a1']);
@@ -898,12 +1026,12 @@ describe('setActiveSessionFilter — session-scoped conversation cache', () => {
 
   it('hydrates only a session without cached rows or loaded history metadata', () => {
     const store = mkStore({
-      yeaftActiveSessionFilter: 'group-A',
+      yeaftActiveSessionFilter: 'session-A',
       messagesMap: {
-        'yeaft-1': [{ id: 'a1', type: 'user', content: 'A before', sessionId: 'group-A' }],
+        'yeaft-1': [{ id: 'a1', type: 'user', content: 'A before', sessionId: 'session-A' }],
       },
       yeaftSessionHistoryState: {
-        'group-A': { loaded: true, loading: false, hasMore: false, oldestSeq: null, count: 1 },
+        'session-A': { loaded: true, loading: false, hasMore: false, oldestSeq: null, count: 1 },
       },
     });
 
@@ -917,47 +1045,47 @@ describe('setActiveSessionFilter — session-scoped conversation cache', () => {
 
   it('switches to a cached session instantly and requests only a silent delta when latestSeq exists', () => {
     const store = mkStore({
-      yeaftActiveSessionFilter: 'group-A',
+      yeaftActiveSessionFilter: 'session-A',
       yeaftSessionHistoryState: {
-        'group-B': { loaded: true, loading: false, hasMore: true, oldestSeq: 10, latestSeq: 42, count: 2 },
+        'session-B': { loaded: true, loading: false, hasMore: true, oldestSeq: 10, latestSeq: 42, count: 2 },
       },
-      messagesMap: { 'yeaft-1': [{ id: 'b1', type: 'user', content: 'B cached', sessionId: 'group-B' }] },
+      messagesMap: { 'yeaft-1': [{ id: 'b1', type: 'user', content: 'B cached', sessionId: 'session-B' }] },
     });
 
-    setActiveSessionFilter.call(store, 'group-B');
+    setActiveSessionFilter.call(store, 'session-B');
 
     expect(visibleMessages(store).map(m => m.id)).toEqual(['b1']);
     expect(store.yeaftLoadingMoreHistory).toBe(false);
-    expect(store.yeaftSessionHistoryState['group-B']).toEqual(expect.objectContaining({
+    expect(store.yeaftSessionHistoryState['session-B']).toEqual(expect.objectContaining({
       loaded: true,
       loading: false,
       syncingAfterSeq: 42,
     }));
-    expect(store._sent).toEqual([{ type: 'yeaft_load_history', agentId: 'agent-1', sessionId: 'group-B', afterSeq: 42 }]);
+    expect(store._sent).toEqual([{ type: 'yeaft_load_history', agentId: 'agent-1', sessionId: 'session-B', afterSeq: 42 }]);
   });
 
   it('keeps selected session and pending history state isolated across sessions', () => {
     const store = mkStore({
-      yeaftActiveSessionFilter: 'group-A',
+      yeaftActiveSessionFilter: 'session-A',
       yeaftLoadingMoreHistory: false,
       yeaftSessionHistoryState: {
-        'group-A': { loaded: true, loading: false, hasMore: true, oldestSeq: 101, count: 2 },
-        'group-B': { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
+        'session-A': { loaded: true, loading: false, hasMore: true, oldestSeq: 101, count: 2 },
+        'session-B': { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
       },
       messagesMap: {
         'yeaft-1': [
-          { id: 'a1', type: 'assistant', content: 'A', sessionId: 'group-A', speakerVpId: 'vp-a' },
-          { id: 'b1', type: 'assistant', content: 'B', sessionId: 'group-B', speakerVpId: 'vp-b' },
+          { id: 'a1', type: 'assistant', content: 'A', sessionId: 'session-A', speakerVpId: 'vp-a' },
+          { id: 'b1', type: 'assistant', content: 'B', sessionId: 'session-B', speakerVpId: 'vp-b' },
         ],
       },
     });
 
-    setActiveSessionFilter.call(store, 'group-B');
+    setActiveSessionFilter.call(store, 'session-B');
     expect(visibleMessages(store).map(m => m.id)).toEqual(['b1']);
     expect(store.yeaftLoadingMoreHistory).toBe(true);
     expect(store.yeaftOldestLoadedSeq).toBeNull();
 
-    setActiveSessionFilter.call(store, 'group-A');
+    setActiveSessionFilter.call(store, 'session-A');
     expect(visibleMessages(store).map(m => m.id)).toEqual(['a1']);
     expect(store.yeaftLoadingMoreHistory).toBe(false);
     expect(store.yeaftHasMoreHistory).toBe(true);

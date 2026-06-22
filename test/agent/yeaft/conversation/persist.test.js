@@ -94,6 +94,25 @@ Response text`;
     expect(msg.turnNumber).toBe(3);
   });
 
+  it('should parse clientMessageId for optimistic Yeaft user rows', () => {
+    const raw = `---
+id: m0041
+role: user
+time: 2026-05-12T09:00:00Z
+sessionId: session_demo
+clientMessageId: u_local_123
+tokens_est: 4
+---
+
+Hello`;
+
+    const msg = parseMessage(raw);
+    expect(msg.role).toBe('user');
+    expect(msg.sessionId).toBe('session_demo');
+    expect(msg.clientMessageId).toBe('u_local_123');
+    expect(msg.content).toBe('Hello');
+  });
+
   // Issue B (PR v0.1.755): forwarded messages persist as ASSISTANT role
   // with speakerVpId stamped to the originating VP, so the history-replay
   // path emits yeaft_output type='assistant' (not type='user'). Verify
@@ -149,6 +168,19 @@ describe('ConversationStore', () => {
 
       const filePath = join(TEST_DIR, 'chat', 'messages', 'm0001.md');
       expect(existsSync(filePath)).toBe(true);
+    });
+
+    it('should persist clientMessageId metadata for Yeaft user echo dedupe', () => {
+      store.append({
+        role: 'user',
+        content: 'Hello from UI',
+        sessionId: 'session_client_id',
+        clientMessageId: 'u_local_456',
+      });
+
+      const loaded = store.loadRecentBySession('session_client_id', 10);
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0].clientMessageId).toBe('u_local_456');
     });
 
     it('should persist visible task lifecycle metadata', () => {

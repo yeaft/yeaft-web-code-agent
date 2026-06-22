@@ -83,6 +83,37 @@ describe('Yeaft history replay message dedupe', () => {
     });
   });
 
+  it('keeps the optimistic client id stable while merging persisted user fields', () => {
+    const localUser = {
+      id: 'u_local_1',
+      messageId: 'u_local_1',
+      clientMessageId: 'u_local_1',
+      type: 'user',
+      content: 'hi',
+      turnId: 'u_local_1',
+    };
+    const persistedUser = {
+      id: 'm0001',
+      messageId: 'm0001',
+      clientMessageId: 'u_local_1',
+      type: 'user',
+      content: 'hi',
+      sessionId: 'sess-1',
+      turnId: 'thread-1',
+    };
+
+    const merged = mergeMessagesByStableId([localUser], [persistedUser]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({
+      id: 'u_local_1',
+      messageId: 'u_local_1',
+      clientMessageId: 'u_local_1',
+      sessionId: 'sess-1',
+      turnId: 'u_local_1',
+    });
+  });
+
   it('merges local placeholder and agent conversation rows by stable id', () => {
     const localUser = { id: '000001-user', messageId: '000001-user', type: 'user', content: 'hi' };
     const agentUser = { id: '000001-user', messageId: '000001-user', type: 'user', content: 'hi', sessionId: 'sess-1' };

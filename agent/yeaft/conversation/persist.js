@@ -216,6 +216,7 @@ function serializeMessage(msg) {
   // shows an empty pane.
   if (msg.sessionId) fm.push(`sessionId: ${msg.sessionId}`);
   if (msg.chatId) fm.push(`chatId: ${msg.chatId}`);
+  if (msg.clientMessageId) fm.push(`clientMessageId: ${msg.clientMessageId}`);
   // Session attribution: when a VP authors an assistant turn (either
   // its own reply or a route_forward injection from another VP), stamp
   // the speaker so the UI can render the message on the correct VP track.
@@ -336,6 +337,7 @@ export function parseMessage(raw) {
       case 'sourceThreadId': msg.sourceThreadId = value; break;
       case 'sessionId': msg.sessionId = value; break;
       case 'chatId': msg.chatId = value; break;
+      case 'clientMessageId': msg.clientMessageId = value; break;
       case 'speakerVpId': msg.speakerVpId = value; break;
       case 'attachmentsB64':
         try {

@@ -84,10 +84,25 @@ function explicitMessageId(msg) {
 
 function mergeMessageFields(existing, incoming) {
   if (!existing || !incoming) return existing;
+  const existingIsLocalYeaftUser = existing.type === 'user'
+    && typeof existing.id === 'string'
+    && existing.id === existing.clientMessageId;
   for (const [key, value] of Object.entries(incoming)) {
     if (value === undefined || value === null) continue;
     if (key === 'isStreaming') {
       if (existing.isStreaming && value === false) existing.isStreaming = false;
+      continue;
+    }
+    if (key === 'id' || key === 'messageId') {
+      if (existingIsLocalYeaftUser && incoming.clientMessageId === existing.clientMessageId && incoming.messageId && incoming.messageId !== existing.clientMessageId) {
+        continue;
+      }
+      if (existing[key] === undefined || existing[key] === null || existing[key] === '') {
+        existing[key] = value;
+      }
+      continue;
+    }
+    if (key === 'turnId' && existingIsLocalYeaftUser && existing.turnId === existing.clientMessageId) {
       continue;
     }
     if (key === 'content' && typeof value === 'string') {
@@ -110,15 +125,24 @@ function mergeMessageFields(existing, incoming) {
 export function mergeMessagesByStableId(baseMessages = [], incomingMessages = []) {
   const merged = [];
   const byId = new Map();
+  const userByClientId = new Map();
   for (const msg of [...baseMessages, ...incomingMessages]) {
     if (!msg) continue;
     const stableId = explicitMessageId(msg);
+    const clientMessageId = msg.type === 'user' && msg.clientMessageId ? String(msg.clientMessageId) : null;
     if (stableId && byId.has(stableId)) {
       mergeMessageFields(byId.get(stableId), msg);
       continue;
     }
+    if (clientMessageId && userByClientId.has(clientMessageId)) {
+      const existing = userByClientId.get(clientMessageId);
+      mergeMessageFields(existing, msg);
+      if (stableId && !byId.has(stableId)) byId.set(stableId, existing);
+      continue;
+    }
     merged.push(msg);
     if (stableId) byId.set(stableId, msg);
+    if (clientMessageId) userByClientId.set(clientMessageId, msg);
   }
   return merged;
 }
@@ -148,6 +172,7 @@ function mergeAssistantTextByStableId(store, conversationId, opts, text) {
   if (opts.sessionId && !existing.sessionId) existing.sessionId = opts.sessionId;
   if (opts.vpId && !existing.vpId) existing.vpId = opts.vpId;
   if (opts.turnId && !existing.turnId) existing.turnId = opts.turnId;
+  if (opts.threadId && !existing.threadId) existing.threadId = opts.threadId;
   if (!existing.content) {
     existing.content = text;
   } else if (typeof existing.content === 'string') {
@@ -262,6 +287,7 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
       ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
       ...(opts.vpId ? { vpId: opts.vpId } : {}),
       ...(opts.turnId ? { turnId: opts.turnId } : {}),
+      ...(opts.threadId ? { threadId: opts.threadId } : {}),
       type: 'assistant',
       content: text,
       isStreaming: true,
@@ -285,6 +311,10 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
       ...(opts.id ? { id: opts.id, messageId: opts.id } : {}),
       ...(opts.ts ? { ts: opts.ts } : {}),
       ...(opts.timestamp ? { timestamp: opts.timestamp } : {}),
+      ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+      ...(opts.vpId ? { vpId: opts.vpId } : {}),
+      ...(opts.turnId ? { turnId: opts.turnId } : {}),
+      ...(opts.threadId ? { threadId: opts.threadId } : {}),
       type: 'assistant',
       content: text,
       isStreaming: true,
