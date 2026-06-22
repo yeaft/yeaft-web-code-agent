@@ -21,6 +21,14 @@ export function shouldCloseYeaftVpTurn(currentTurn, msg) {
   const msgSpeaker = messageVpOwner(msg);
   if (curSpeaker && msgSpeaker && curSpeaker !== msgSpeaker) return true;
 
+  // Persisted history can contain several runtime turnIds for one visible
+  // user turn: partial writes, abort/retry, and tool-loop continuation all
+  // stamp their own delivery id. The user row is the visible boundary in
+  // history; splitting same-speaker historical rows by runtime turnId creates
+  // duplicate-looking VP blocks for one semantic turn. Keep the strict turnId
+  // boundary for live rows, where it prevents concurrent VP streams merging.
+  if (currentTurn.isHistory && msg.isHistory) return false;
+
   const curTurnId = cleanId(currentTurn.turnId);
   const msgTurnId = cleanId(msg.turnId);
   if (curTurnId && msgTurnId && curTurnId !== msgTurnId) return true;
