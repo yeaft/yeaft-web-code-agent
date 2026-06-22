@@ -14,6 +14,7 @@ import * as yeaftViewHelpers from './helpers/yeaft-view.js';
 import { incVpTyping, decVpTyping } from './helpers/vp-typing.js';
 import { selectActiveConversationId } from './helpers/active-conv.js';
 import { trimDebugRetention } from './helpers/debug-retention.js';
+import { createPerfTraceId, recordPerfTrace, measureNextPaint } from './helpers/perfTrace.js';
 import {
   getDefaultYeaftVisibleTurns,
   getYeaftWindowLoadStepTurns,
@@ -372,6 +373,10 @@ export const useChatStore = defineStore('chat', {
     // (after add/remove/reload on any client). Shape:
     //   yeaftMcpServers: [{ name, command, args, env }, ...]
     //   yeaftMcpRuntime: { connected, toolCount, perServer: [{ name, ready, toolCount }] }
+    _perfTraceQueue: [],
+    _perfTraceFlushTimer: null,
+    yeaftPerfTraceByMessageId: {},
+    yeaftPerfTraceByTurnId: {},
     yeaftMcpServers: [],
     yeaftMcpRuntime: { connected: false, toolCount: 0, perServer: [] },
     yeaftMcpLoading: false,
@@ -1390,6 +1395,23 @@ export const useChatStore = defineStore('chat', {
       if (!text?.trim() && !hasAttachments) return;
       const effectiveText = text?.trim() ? text : '(attached files)';
       const clientMessageId = `u_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+      const perfTraceId = createPerfTraceId();
+      this.yeaftPerfTraceByMessageId = {
+        ...(this.yeaftPerfTraceByMessageId || {}),
+        [clientMessageId]: perfTraceId,
+      };
+      recordPerfTrace(this, {
+        traceId: perfTraceId,
+        phase: 'send.prepare',
+        agentId: targetAgentId,
+        sessionId: groupId,
+        turnId: clientMessageId,
+        messageType: 'yeaft_session_send',
+        detail: {
+          mentionCount: Array.isArray(mentions) ? mentions.length : 0,
+          attachmentCount: safeAttachments.length,
+        },
+      });
       const activeYeaftConvId = resolveYeaftConversationIdForSession(this, groupId);
       if (activeYeaftConvId) {
         const localMsg = {
@@ -1439,6 +1461,7 @@ export const useChatStore = defineStore('chat', {
         sessionId: groupId,
         text: effectiveText,
         mentions: Array.isArray(mentions) ? mentions : [],
+        perfTraceId,
       };
       if (safeAttachments.length > 0) {
         // Wire-side: only the fields the server resolver needs. The
@@ -1450,6 +1473,15 @@ export const useChatStore = defineStore('chat', {
           isImage: !!a.isImage,
         }));
       }
+      recordPerfTrace(this, {
+        traceId: perfTraceId,
+        phase: 'send.websocket_send',
+        agentId: targetAgentId,
+        sessionId: groupId,
+        turnId: clientMessageId,
+        messageType: wsMsg.type,
+        bytes: JSON.stringify(wsMsg).length,
+      });
       this.sendWsMessage(wsMsg);
     },
 
@@ -1521,6 +1553,24 @@ export const useChatStore = defineStore('chat', {
     },
     handleYeaftOutput(msg) {
       if (!msg) return;
+      if (msg.perfTraceId) {
+        recordPerfTrace(this, {
+          traceId: msg.perfTraceId,
+          phase: 'receive.yeaft_output',
+          agentId: msg.agentId || null,
+          sessionId: msg.sessionId || null,
+          vpId: msg.vpId || null,
+          turnId: msg.turnId || null,
+          threadId: msg.threadId || null,
+          messageType: msg.data?.type || msg.event?.type || msg.type,
+        });
+        if (msg.turnId) {
+          this.yeaftPerfTraceByTurnId = {
+            ...(this.yeaftPerfTraceByTurnId || {}),
+            [msg.turnId]: msg.perfTraceId,
+          };
+        }
+      }
 
       // ── Assistant output frame data: dispatch through the shared pipeline ──
       if (msg.data) {
@@ -1573,7 +1623,31 @@ export const useChatStore = defineStore('chat', {
               && msgSessionId
               && (!this.yeaftActiveSessionFilter || msgSessionId === this.yeaftActiveSessionFilter);
             if (shouldPruneWindow) this.pruneYeaftMessageWindow(this.yeaftActiveSessionFilter ? msgSessionId : null);
+            const renderStart = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
             this.handleAssistantOutputFrame(conversationId, msg.data);
+            if (msg.perfTraceId) {
+              const renderEnd = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
+              recordPerfTrace(this, {
+                traceId: msg.perfTraceId,
+                phase: 'store.apply_output',
+                agentId: msg.agentId || null,
+                sessionId: msgSessionId || null,
+                vpId: msg.vpId || null,
+                turnId: msg.turnId || null,
+                threadId: msg.threadId || null,
+                messageType: msg.data?.type || null,
+                durationMs: renderEnd - renderStart,
+              });
+              measureNextPaint(this, {
+                traceId: msg.perfTraceId,
+                agentId: msg.agentId || null,
+                sessionId: msgSessionId || null,
+                vpId: msg.vpId || null,
+                turnId: msg.turnId || null,
+                threadId: msg.threadId || null,
+                messageType: msg.data?.type || null,
+              });
+            }
             // Advance the delta cursor on every live user/assistant
             // message arrival so the next re-entry of this session can
             // request afterSeq instead of replaying the recent window.

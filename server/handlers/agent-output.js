@@ -3,6 +3,7 @@ import { messageDb, yeaftSessionDb } from '../database.js';
 import { broadcastAgentList, forwardToClients, sendToWebClient } from '../ws-utils.js';
 import { trackMessage, webClients, previewFiles } from '../context.js';
 import { CONFIG } from '../config.js';
+import { recordPerfTraceEvent } from '../perf-trace.js';
 
 
 export function decorateYeaftSessionsWithPinned(agentId, sessions) {
@@ -394,6 +395,22 @@ export async function handleAgentOutput(agentId, agent, msg) {
         agent.yeaftStatus = msg.event;
         await broadcastAgentList();
       }
+      if (msg.perfTraceId) {
+        recordPerfTraceEvent({
+          traceId: msg.perfTraceId,
+          source: 'server',
+          phase: 'relay.agent_output_received',
+          at: Date.now(),
+          userId: agent.ownerId || null,
+          agentId,
+          sessionId: msg.sessionId || null,
+          vpId: msg.vpId || null,
+          turnId: msg.turnId || null,
+          threadId: msg.threadId || null,
+          messageType: data?.type || msg.event?.type || msg.type,
+          bytes: Buffer.byteLength(JSON.stringify(msg)),
+        });
+      }
       // Forward Yeaft Session output to all authenticated clients of this agent's owner.
       // Payload carries { conversationId, data } (assistant output frame) or { event } (metadata).
       //
@@ -423,6 +440,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
           await sendToWebClient(c, {
             type: 'yeaft_output',
             conversationId: msg.conversationId,
+            ...(msg.perfTraceId != null ? { perfTraceId: msg.perfTraceId } : {}),
             // Stamp the source agent so the web sessions store can keep
             // per-agent rosters (cross-agent listing in the unified
             // sidebar). Older web bundles ignore the extra field.
@@ -434,6 +452,21 @@ export async function handleAgentOutput(agentId, agent, msg) {
             data,
             event: msg.event,
           });
+          if (msg.perfTraceId) {
+            recordPerfTraceEvent({
+              traceId: msg.perfTraceId,
+              source: 'server',
+              phase: 'relay.forward_to_web',
+              at: Date.now(),
+              userId: c.userId || null,
+              agentId,
+              sessionId: msg.sessionId || null,
+              vpId: msg.vpId || null,
+              turnId: msg.turnId || null,
+              threadId: msg.threadId || null,
+              messageType: data?.type || msg.event?.type || msg.type,
+            });
+          }
         }
       }
       break;

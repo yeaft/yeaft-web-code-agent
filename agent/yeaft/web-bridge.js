@@ -72,6 +72,7 @@ import { listMcpServers, upsertMcpServer, removeMcpServer } from './config-api.j
 import { buildMcpFlattenedTools } from './tools/mcp-tools.js';
 import { getAgentRegistry, agentBelongsToScope } from './tools/agent.js';
 import { isPromptableAgentStatus } from './sub-agent/status.js';
+import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 
 const SKILL_COMMAND_PREFIX = 'skill:';
 
@@ -1271,6 +1272,17 @@ function getOrCreateSessionContext(sessionId, sessionHandle) {
  * @param {object} envelope — coordinator envelope `{sessionId, taskId, msg, trigger}`
  */
 function enqueueForVp(sessionId, vpId, envelope) {
+  const perfTraceId = envelope?._perfTraceId || envelope?.perfTraceId || null;
+  if (perfTraceId) {
+    recordAgentPerfTrace(ctx.CONFIG, {
+      traceId: perfTraceId,
+      phase: 'vp.enqueue',
+      sessionId,
+      vpId,
+      turnId: envelope?.msg?.id || null,
+      messageType: envelope?.trigger || 'user',
+    });
+  }
   const routePromise = routeEnvelopeToVpThread(sessionId, vpId, envelope);
   registerRoutePromise(envelope?.msg?.id, routePromise);
 }
@@ -1360,6 +1372,7 @@ function scheduleTaskResultReentry(event) {
 }
 
 async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
+  const routeStart = perfNowMs();
   const { text, prompt, promptParts } = buildVpPromptPayload(vpId, envelope);
   const runningThreads = getRunningThreads(sessionId, vpId);
   let thread = null;
@@ -1404,6 +1417,19 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
   if (!thread) return null;
   rememberThreadMessage(thread, envelope?.msg);
   const turnId = `${randomUUID().slice(0, 8)}:${vpId}`;
+  const perfTraceId = envelope?._perfTraceId || envelope?.perfTraceId || null;
+  if (perfTraceId) {
+    recordAgentPerfTrace(ctx.CONFIG, {
+      traceId: perfTraceId,
+      phase: 'vp.route_thread',
+      durationMs: perfNowMs() - routeStart,
+      sessionId,
+      vpId,
+      turnId,
+      threadId: thread.threadId,
+      detail: { related, runningThreadCount: runningThreads.length },
+    });
+  }
 
   if (related) {
     const content = promptParts || prompt;
@@ -1717,11 +1743,12 @@ function resolveGroupDefaultVpId(sessionId) {
   }
 }
 
-function sendSessionOutputFrame(data, { sessionId, chatId, vpId, turnId, threadId } = {}) {
+function sendSessionOutputFrame(data, { sessionId, chatId, vpId, turnId, threadId, perfTraceId } = {}) {
   const resolvedVpId = vpId || (sessionId ? resolveGroupDefaultVpId(sessionId) : null);
   sendToServer({
     type: 'yeaft_output',
     conversationId: yeaftConversationId,
+    ...(perfTraceId ? { perfTraceId } : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(chatId ? { chatId } : {}),
     ...(resolvedVpId ? { vpId: resolvedVpId } : {}),
@@ -1763,10 +1790,11 @@ function broadcastSkillSlashCommands(sessionLike) {
 }
 
 /** Send a Yeaft Session metadata event over the legacy-compatible envelope. */
-function sendSessionEvent(event, { sessionId, chatId, vpId, turnId, threadId } = {}) {
+function sendSessionEvent(event, { sessionId, chatId, vpId, turnId, threadId, perfTraceId } = {}) {
   sendToServer({
     type: 'yeaft_output',
     conversationId: yeaftConversationId,
+    ...(perfTraceId ? { perfTraceId } : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(chatId ? { chatId } : {}),
     ...(vpId ? { vpId } : {}),
@@ -3033,6 +3061,33 @@ export async function handleYeaftSessionSend(msg) {
   const sessionId = (typeof msg.sessionId === 'string' && msg.sessionId.trim())
     ? msg.sessionId.trim()
     : 'grp_default';
+  const perfTraceId = typeof msg.perfTraceId === 'string' && msg.perfTraceId.trim()
+    ? msg.perfTraceId.trim()
+    : null;
+  const perfStart = perfNowMs();
+  const tracePerf = (phase, extra = {}) => {
+    if (!perfTraceId) return;
+    recordAgentPerfTrace(ctx.CONFIG, {
+      traceId: perfTraceId,
+      phase,
+      sessionId,
+      messageType: msg.type,
+      ...extra,
+    });
+  };
+  const traceDuration = (phase, start, extra = {}) => {
+    tracePerf(phase, {
+      durationMs: perfNowMs() - start,
+      ...extra,
+    });
+  };
+  tracePerf('session_send.received', {
+    turnId: typeof msg.id === 'string' ? msg.id : null,
+    detail: {
+      mentionCount: mentions.length,
+      attachmentCount: Array.isArray(msg.files) ? msg.files.length : 0,
+    },
+  });
 
   // Entry gate: if a compact is in flight from the previous turn IN
   // THIS GROUP, wait for it to finish before reading the group's
@@ -3043,7 +3098,9 @@ export async function handleYeaftSessionSend(msg) {
   // a session has loaded (or in test paths that never call
   // `ensureSessionLoaded`) it may be unavailable; skip gracefully.
   if (session?.compactor) {
+    const compactWaitStart = perfNowMs();
     await session.compactor.awaitInFlight(sessionId);
+    traceDuration('session_send.await_compactor', compactWaitStart);
   }
 
   // yeaftDir is a hard prerequisite for both session boot and group seeding;
@@ -3059,13 +3116,16 @@ export async function handleYeaftSessionSend(msg) {
     return;
   }
 
+  const ensureSessionStart = perfNowMs();
   await ensureSessionLoaded();
+  traceDuration('session_send.ensure_session_loaded', ensureSessionStart);
 
   // Open the session. The default `grp_default` no longer self-seeds
   // here — session creation happens up-front via `handleYeaftCreateSession`,
   // so a missing dir surfaces a clear error rather than masking it.
   let sessionHandle = null;
   let sessionRoot = null;
+  const openSessionStart = perfNowMs();
   try {
     const groupYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
     sessionRoot = sessionsRoot(groupYeaftDir);
@@ -3084,6 +3144,8 @@ export async function handleYeaftSessionSend(msg) {
   } catch (err) {
     console.warn('[Yeaft] yeaft_session_chat: session open failed', err?.message || err);
   }
+
+  traceDuration('session_send.open_session', openSessionStart, { ok: !!sessionHandle });
 
   if (!sessionHandle) {
     sendSessionOutputFrame({
@@ -3156,6 +3218,7 @@ export async function handleYeaftSessionSend(msg) {
   // driver receives.
   const inboundFiles = Array.isArray(msg.files) ? msg.files : [];
   let attachmentBundle = { promptAttachments: [], promptSuffix: '', promptParts: [], failed: [] };
+  const attachmentsStart = perfNowMs();
   if (inboundFiles.length > 0) {
     try {
       attachmentBundle = persistYeaftAttachments(inboundFiles, { subdir: sessionId });
@@ -3176,11 +3239,19 @@ export async function handleYeaftSessionSend(msg) {
     }, { sessionId });
   }
   const persistedAttachments = attachmentsForPersistence(attachmentBundle.promptAttachments);
+  traceDuration('session_send.attachments', attachmentsStart, {
+    detail: {
+      inputFileCount: inboundFiles.length,
+      persistedFileCount: persistedAttachments.length,
+      failedFileCount: Array.isArray(attachmentBundle.failed) ? attachmentBundle.failed.length : 0,
+    },
+  });
 
   // Ingest user text. The coordinator persists, applies mention/fanout
   // rules, and calls deliver() (== enqueueForVp) for each chosen VP —
   // which both (a) emits vp_typing_start and (b) ensures a driver runs.
   let report;
+  const ingestStart = perfNowMs();
   try {
     report = coord.ingest({
       id: typeof msg.id === 'string' && msg.id ? msg.id : undefined,
@@ -3198,6 +3269,7 @@ export async function handleYeaftSessionSend(msg) {
       // back to disk on every fan-out target. NOT persisted.
       _promptParts: attachmentBundle.promptParts,
       _promptSuffix: attachmentBundle.promptSuffix,
+      _perfTraceId: perfTraceId,
     });
   } catch (err) {
     console.warn('[Yeaft] yeaft_session_chat: coord.ingest failed', err?.message || err);
@@ -3208,6 +3280,14 @@ export async function handleYeaftSessionSend(msg) {
     sendSessionOutputFrame({ type: 'result', result_text: '' }, { sessionId });
     return;
   }
+
+  traceDuration('session_send.coordinator_ingest', ingestStart, {
+    turnId: report?.message?.id || null,
+    detail: {
+      dispatchedCount: Array.isArray(report?.dispatched) ? report.dispatched.length : 0,
+      fallback: typeof report?.fallback === 'string' ? report.fallback : null,
+    },
+  });
 
   // Thread ownership is resolved inside enqueueForVp()/routeEnvelopeToVpThread
   // before persistence. Do not write a canonical 'main' user row here: a
@@ -3233,7 +3313,15 @@ export async function handleYeaftSessionSend(msg) {
   // Wait only for routing/classification promises spawned by this message.
   // Do not wait for every driver in the group: unrelated older threads may keep
   // running for minutes and must not hold this request lifecycle hostage.
+  const routeWaitStart = perfNowMs();
   await waitForRoutePromises(report?.message?.id);
+  traceDuration('session_send.wait_route_promises', routeWaitStart, {
+    turnId: report?.message?.id || null,
+  });
+  traceDuration('session_send.handler_total', perfStart, {
+    turnId: report?.message?.id || null,
+    ok: true,
+  });
 
   // Post-turn compaction. Fire-and-forget — does NOT block the response
   // path. The Compactor's own precheck (`shouldCompactHistory`) decides
@@ -3602,7 +3690,24 @@ async function raceWithEscalation(inner, { deadlineMs, onEscalate }) {
 async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId = 'main', thread = null, turnId, envelope: inboundEnvelope, vpAbort, baseSnapshot }) {
   if (!prompt?.trim()) return;
 
-  const envelope = { sessionId, vpId, threadId, turnId };
+  const perfTraceId = typeof inboundEnvelope?._perfTraceId === 'string' && inboundEnvelope._perfTraceId.trim()
+    ? inboundEnvelope._perfTraceId.trim()
+    : (typeof inboundEnvelope?.perfTraceId === 'string' && inboundEnvelope.perfTraceId.trim()
+      ? inboundEnvelope.perfTraceId.trim()
+      : null);
+  const envelope = { sessionId, vpId, threadId, turnId, ...(perfTraceId ? { perfTraceId } : {}) };
+  const vpTurnPerfStart = perfNowMs();
+  if (perfTraceId) {
+    recordAgentPerfTrace(ctx.CONFIG, {
+      traceId: perfTraceId,
+      phase: 'vp.turn_start',
+      sessionId,
+      vpId,
+      turnId,
+      threadId,
+      detail: { promptBytes: Buffer.byteLength(prompt || '') },
+    });
+  }
 
   // Per-message turn lifecycle: track start ts + which terminal reason
   // we'll emit. `emitVpTurnEnd` is idempotent (route_forward emits inside
@@ -3713,10 +3818,25 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       // the second-line defense (history-compact only fires above 30K
       // tokens — small chats with many turns still bloat the messages
       // array). See `trimSnapshotForBudget` doc-block for policy.
+      const trimStart = perfNowMs();
       const trimmedMessages = trimSnapshotForBudget(baseSnapshot, {
         messageTokenBudget: session?.config?.messageTokenBudget,
         language: session?.config?.language,
       });
+      if (perfTraceId) {
+        recordAgentPerfTrace(ctx.CONFIG, {
+          traceId: perfTraceId,
+          phase: 'vp.trim_snapshot',
+          durationMs: perfNowMs() - trimStart,
+          sessionId,
+          vpId,
+          turnId,
+          threadId,
+          detail: { beforeMessages: baseSnapshot.length, afterMessages: trimmedMessages.length },
+        });
+      }
+      const engineStart = perfNowMs();
+      let firstEngineEvent = false;
       for await (const event of vpEngine.query({
         prompt,
         promptParts,
@@ -3738,8 +3858,32 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         },
         ...queryOpts,
       })) {
+        if (perfTraceId && !firstEngineEvent) {
+          firstEngineEvent = true;
+          recordAgentPerfTrace(ctx.CONFIG, {
+            traceId: perfTraceId,
+            phase: 'vp.engine_first_event',
+            durationMs: perfNowMs() - engineStart,
+            sessionId,
+            vpId,
+            turnId,
+            threadId,
+            messageType: event?.type || null,
+          });
+        }
         resetQueryTimer();
         handleEngineEvent(event, handlerCtx);
+      }
+      if (perfTraceId) {
+        recordAgentPerfTrace(ctx.CONFIG, {
+          traceId: perfTraceId,
+          phase: 'vp.engine_complete',
+          durationMs: perfNowMs() - engineStart,
+          sessionId,
+          vpId,
+          turnId,
+          threadId,
+        });
       }
 
       flushStreamTextBatch(handlerCtx, envelope, { resetImmediate: true });
@@ -3750,7 +3894,24 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       // the target VP turn; otherwise UI replay can show a trailing handoff
       // block after the target response.
       const visiblePrompts = inboundIsInternal ? appendedUserPrompts : [prompt, ...appendedUserPrompts];
+      const appendHistoryStart = perfNowMs();
       appendTurnToSessionHistory(sessionId, threadId, vpId, visiblePrompts, assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum, { turnId });
+      if (perfTraceId) {
+        recordAgentPerfTrace(ctx.CONFIG, {
+          traceId: perfTraceId,
+          phase: 'vp.append_history',
+          durationMs: perfNowMs() - appendHistoryStart,
+          sessionId,
+          vpId,
+          turnId,
+          threadId,
+          detail: {
+            assistantBytes: Buffer.byteLength(assistantTextParts.join('')),
+            toolCallCount: toolCallsAccum.length,
+            toolResultCount: toolResultsAccum.length,
+          },
+        });
+      }
 
       sendSessionOutputFrame({
         type: 'assistant',
@@ -3780,6 +3941,19 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       return;
     }
 
+    if (perfTraceId) {
+      recordAgentPerfTrace(ctx.CONFIG, {
+        traceId: perfTraceId,
+        phase: 'vp.turn_error',
+        durationMs: perfNowMs() - vpTurnPerfStart,
+        sessionId,
+        vpId,
+        turnId,
+        threadId,
+        ok: false,
+        detail: { message: err?.message || String(err) },
+      });
+    }
     console.error('[Yeaft] query error:', err);
     turnEndReason = 'errored';
     turnEndDetail = { message: err?.message || String(err) };
@@ -3857,6 +4031,19 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
     if (thread) {
       thread.status = 'idle';
       thread.updatedAt = Date.now();
+    }
+    if (perfTraceId) {
+      recordAgentPerfTrace(ctx.CONFIG, {
+        traceId: perfTraceId,
+        phase: 'vp.turn_total',
+        durationMs: perfNowMs() - vpTurnPerfStart,
+        sessionId,
+        vpId,
+        turnId,
+        threadId,
+        ok: turnEndReason !== 'errored',
+        detail: { reason: turnEndReason },
+      });
     }
   }
 }

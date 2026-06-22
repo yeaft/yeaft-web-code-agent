@@ -7,6 +7,7 @@ import {
   broadcastAgentList, verifyConversationOwnership, verifyAgentOwnership
 } from '../ws-utils.js';
 import { routeSessionPin } from './session-pin-router.js';
+import { recordPerfTraceEvent } from '../perf-trace.js';
 
 function emptyYeaftToolStats(reason = '') {
   const payload = {
@@ -807,6 +808,19 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
     }
 
+    case 'perf_trace_events': {
+      if (Array.isArray(msg.events)) {
+        for (const event of msg.events.slice(0, 100)) {
+          recordPerfTraceEvent({
+            ...event,
+            source: 'web',
+            userId: client.userId || null,
+          });
+        }
+      }
+      break;
+    }
+
     case 'yeaft_load_history':
     case 'unify_load_history': {
       const histAgentId = msg.agentId || client.currentAgent;
@@ -940,6 +954,18 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       if (typeof msg.type === 'string' && (msg.type.startsWith('yeaft_') || msg.type.startsWith('unify_'))) {
         const relayType = msg.type.startsWith('unify_') ? `yeaft_${msg.type.slice('unify_'.length)}` : msg.type;
         const relayAgentId = msg.agentId || client.currentAgent;
+        if (msg.perfTraceId) {
+          recordPerfTraceEvent({
+            traceId: msg.perfTraceId,
+            source: 'server',
+            phase: 'relay.resolve_agent',
+            at: Date.now(),
+            userId: client.userId || null,
+            agentId: relayAgentId || null,
+            sessionId: msg.sessionId || null,
+            messageType: relayType,
+          });
+        }
         if (!relayAgentId) {
           if (relayType === 'yeaft_fetch_tool_stats') {
             await sendToWebClient(client, emptyYeaftToolStats('No agent selected.'));
@@ -1016,6 +1042,19 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           delete rest.attachments;
         }
 
+        if (rest.perfTraceId) {
+          recordPerfTraceEvent({
+            traceId: rest.perfTraceId,
+            source: 'server',
+            phase: 'relay.forward_to_agent',
+            at: Date.now(),
+            userId: client.userId || null,
+            agentId: relayAgentId,
+            sessionId: rest.sessionId || null,
+            messageType: rest.type,
+            bytes: Buffer.byteLength(JSON.stringify(rest)),
+          });
+        }
         await forwardToAgent(relayAgentId, rest);
         return true;
       }
