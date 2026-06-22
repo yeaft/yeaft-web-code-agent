@@ -38,17 +38,36 @@ export class AcpClient {
     stdout.on('close', () => this._handleClose());
   }
 
-  /** Send a JSONRPC request and await its response. */
-  request(method, params) {
+  /**
+   * Send a JSONRPC request and await its response.
+   * @param {string} method
+   * @param {any} params
+   * @param {object} [opts]
+   * @param {number} [opts.timeoutMs]  reject if no response arrives within this
+   *   window. Omit for no timeout (e.g. session/prompt, which can legitimately
+   *   run for minutes). Use it on the boot handshake so a wedged CLI surfaces an
+   *   error instead of hanging the session forever.
+   */
+  request(method, params, opts = {}) {
     if (this._closed) return Promise.reject(new Error('acp client closed'));
     const id = this._nextId++;
     const payload = { jsonrpc: '2.0', id, method, params };
     return new Promise((resolve, reject) => {
-      this._pending.set(id, { resolve, reject });
+      let timer = null;
+      if (opts.timeoutMs > 0) {
+        timer = setTimeout(() => {
+          if (!this._pending.has(id)) return;
+          this._pending.delete(id);
+          reject(new Error(`acp request '${method}' timed out after ${opts.timeoutMs}ms`));
+        }, opts.timeoutMs);
+        if (typeof timer.unref === 'function') timer.unref();
+      }
+      this._pending.set(id, { resolve, reject, timer });
       try {
         this._stdin.write(JSON.stringify(payload) + '\n');
       } catch (err) {
         this._pending.delete(id);
+        if (timer) clearTimeout(timer);
         reject(err);
       }
     });
@@ -67,7 +86,8 @@ export class AcpClient {
     if (this._closed) return;
     this._closed = true;
     const err = new Error(reason || 'acp client closed');
-    for (const { reject } of this._pending.values()) {
+    for (const { reject, timer } of this._pending.values()) {
+      if (timer) clearTimeout(timer);
       try { reject(err); } catch { /* noop */ }
     }
     this._pending.clear();
@@ -97,6 +117,7 @@ export class AcpClient {
       const slot = this._pending.get(msg.id);
       if (!slot) return; // stale
       this._pending.delete(msg.id);
+      if (slot.timer) clearTimeout(slot.timer);
       if (msg.error) slot.reject(Object.assign(new Error(msg.error.message || 'acp error'), { code: msg.error.code, data: msg.error.data }));
       else slot.resolve(msg.result);
       return;

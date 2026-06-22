@@ -126,6 +126,12 @@ export default {
 
       <!-- Messages when in conversation -->
       <div v-else class="messages">
+        <!-- Connecting banner: non-Claude provider session booting in background -->
+        <div v-if="store.isConversationConnecting(store.currentConversation)" class="typing-status-banner typing-status-banner-connecting">
+          <span class="typing-status-text typing-status-compact">
+            <span class="spinner-mini"></span> {{ $t('chat.connecting') }}
+          </span>
+        </div>
         <!-- Waiting status banner (shown above messages, not overlapping cat animation) -->
         <div v-if="waitingStatus && waitingStatus !== 'normal'" class="typing-status-banner" :class="'typing-status-banner-' + waitingStatus">
           <span v-if="waitingStatus === 'disconnected'" class="typing-status-text typing-status-error">

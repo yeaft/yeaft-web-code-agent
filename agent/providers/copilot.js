@@ -25,6 +25,11 @@ const COPILOT_BIN = process.env.COPILOT_BIN || 'copilot';
 // YOLO is now opt-in only; per-conv allowAllTools is the normal channel.
 const YOLO = process.env.COPILOT_YOLO === '1';
 const ACP_PROTOCOL_VERSION = 1;
+// Boot handshake (initialize / session/new / session/load) timeout. A wedged or
+// mis-installed CLI would otherwise leave the request pending forever — and with
+// deferred boot that means a session that never finishes connecting. session/prompt
+// is deliberately NOT bounded: a turn can legitimately run for minutes.
+const BOOT_REQUEST_TIMEOUT_MS = 120_000;
 
 export function resolveCopilotLaunchOptions({ cwd, env = process.env, platform = osPlatform(), bin = COPILOT_BIN } = {}) {
   const isWindows = platform === 'win32';
@@ -78,25 +83,65 @@ export async function start(opts) {
     allowAllTools,
     capabilities,
     initialized: false,
+    _bootPromise: null,  // in-flight _bootAcp() promise; coalesces concurrent boots
     pendingPermissions: new Map(),  // requestId → { resolve, reject } for ask-user round-trip
     usage: { inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheCreation: 0, totalCostUsd: 0 },
   };
   ctx.conversations.set(conversationId, state);
 
-  // Best-effort start; failures emit a result envelope and leave state in place
-  // so the next sendInput retries.
+  const resumeSessionId = opts.resumeSessionId || null;
+
+  // deferBoot: return immediately without awaiting the ACP handshake. The slow
+  // part — spawn `copilot --acp` → initialize → session/new — would otherwise
+  // block the caller (session create/resume) from emitting conversation_created,
+  // so the sidebar row only appears after the whole handshake (~tens of seconds
+  // on a cold CLI). With deferBoot the row shows instantly and the boot runs in
+  // the background; the first sendInput joins the same in-flight boot via
+  // _ensureBooted instead of spawning a second child.
+  if (opts.deferBoot) {
+    _ensureBooted(state, resumeSessionId).catch((err) => _emitBootError(state, err));
+    return state;
+  }
+
+  // Foreground boot (self-heal paths that must have a live session before
+  // dispatching the very next action). Best-effort; failures emit a result
+  // envelope and leave state in place so the next sendInput retries.
   try {
-    await _bootAcp(state, opts.resumeSessionId || null);
+    await _ensureBooted(state, resumeSessionId);
   } catch (err) {
-    sendOutput(conversationId, {
-      type: 'result',
-      subtype: 'error',
-      session_id: state.sessionId,
-      is_error: true,
-      error: `copilot ACP init failed: ${err?.message || err}. Run \`copilot login\` and ensure CLI >= 1.0.59.`,
-    });
+    _emitBootError(state, err);
   }
   return state;
+}
+
+function _emitBootError(state, err) {
+  sendOutput(state.conversationId, {
+    type: 'result',
+    subtype: 'error',
+    session_id: state.sessionId,
+    is_error: true,
+    error: `copilot ACP init failed: ${err?.message || err}. Run \`copilot login\` and ensure CLI >= 1.0.59.`,
+  });
+}
+
+/**
+ * Ensure the ACP child + session are up, coalescing concurrent callers onto a
+ * single in-flight boot. A backgrounded start() (deferBoot) and an early
+ * sendInput therefore share ONE boot instead of spawning two children. Throws
+ * if the boot fails; the in-flight promise is cleared either way so the next
+ * call retries from scratch.
+ */
+async function _ensureBooted(state, resumeSessionId) {
+  if (state.initialized && state.acpClient) return;
+  if (state._bootPromise) return state._bootPromise;
+  state._bootPromise = (async () => {
+    try {
+      await _bootAcp(state, resumeSessionId);
+    } finally {
+      state._bootPromise = null;
+    }
+  })();
+  return state._bootPromise;
 }
 
 async function _bootAcp(state, resumeSessionId) {
@@ -139,6 +184,7 @@ async function _bootAcp(state, resumeSessionId) {
     state.copilotChild = null;
     state.acpClient = null;
     state.initialized = false;
+    state._bootPromise = null;
   });
 
   client = new AcpClient({
@@ -160,7 +206,7 @@ async function _bootAcp(state, resumeSessionId) {
   const initResp = await client.request('initialize', {
     protocolVersion: ACP_PROTOCOL_VERSION,
     clientCapabilities: {},
-  });
+  }, { timeoutMs: BOOT_REQUEST_TIMEOUT_MS });
   state.acpCapabilities = initResp?.agentCapabilities || {};
   state.initialized = true;
 
@@ -170,7 +216,7 @@ async function _bootAcp(state, resumeSessionId) {
       sessionId: resumeSessionId,
       cwd: state.workDir,
       mcpServers: [],
-    });
+    }, { timeoutMs: BOOT_REQUEST_TIMEOUT_MS });
     state.sessionId = resumeSessionId;
     state.claudeSessionId = resumeSessionId;
     if (Array.isArray(r?.modes?.availableModes)) state.acpModes = r.modes.availableModes;
@@ -189,7 +235,7 @@ async function _bootAcp(state, resumeSessionId) {
     const r = await client.request('session/new', {
       cwd: state.workDir,
       mcpServers: [],
-    });
+    }, { timeoutMs: BOOT_REQUEST_TIMEOUT_MS });
     state.sessionId = r?.sessionId || randomUUID();
     state.claudeSessionId = state.sessionId;
     if (Array.isArray(r?.modes?.availableModes)) state.acpModes = r.modes.availableModes;
@@ -217,9 +263,11 @@ export async function sendInput(state, prompt, opts = {}) {
   if (!conversationId) throw new Error('copilot: conversationId required');
 
   // Ensure ACP child + session are up; reboot if a prior crash dropped them.
+  // _ensureBooted coalesces onto a backgrounded deferBoot still in flight, so a
+  // fast first message doesn't spawn a second child.
   if (!state.initialized || !state.acpClient) {
     try {
-      await _bootAcp(state, state.sessionId || null);
+      await _ensureBooted(state, state.sessionId || null);
     } catch (err) {
       _sendTurnError(state, `copilot ACP reinit failed: ${err?.message || err}`);
       _completeTurn(state, conversationId);
@@ -323,6 +371,7 @@ export function dispose(state, reason = 'disposed') {
     state.copilotChild = null;
   }
   state.initialized = false;
+  state._bootPromise = null;
   state.turnActive = false;
 }
 

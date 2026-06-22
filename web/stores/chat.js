@@ -941,6 +941,14 @@ export const useChatStore = defineStore('chat', {
     isConversationProcessing: (state) => (conversationId) => {
       return !!state.processingConversations[conversationId];
     },
+    // True while a non-Claude provider session boots in the background (between
+    // conversation_created and its system_init / error frame). Drives the
+    // "connecting" indicator so a deferred boot doesn't look idle.
+    isConversationConnecting: (state) => (conversationId) => {
+      if (!conversationId) return false;
+      const conv = state.conversations.find(c => c.id === conversationId);
+      return !!conv?.connecting;
+    },
     isConversationCompacting: (state) => (conversationId) => {
       if (!conversationId) return false;
       return state.compactStatus?.conversationId === conversationId
