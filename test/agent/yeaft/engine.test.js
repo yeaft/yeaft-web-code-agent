@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, rmSync, mkdtempSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { Engine } from '../../../agent/yeaft/engine.js';
+import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
 import { AmsRegistry } from '../../../agent/yeaft/memory/ams-registry.js';
 import { writeSummary } from '../../../agent/yeaft/memory/store.js';
 import { NullTrace, DebugTrace } from '../../../agent/yeaft/debug-trace.js';
@@ -203,6 +204,51 @@ describe('Engine', () => {
       const turnEnd = events.find(e => e.type === 'turn_end');
       expect(turnEnd.stopReason).toBe('end_turn');
       expect(turnEnd.turnNumber).toBe(1);
+    });
+
+    it('persists assistant rows with the caller-provided VP turn id', async () => {
+      const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-vp-turn-id-'));
+      try {
+        const conversationStore = new ConversationStore(join(yeaftDir, 'conversation'));
+        mockAdapter.pushResponse([
+          { type: 'text_delta', text: 'persisted reply' },
+          { type: 'usage', inputTokens: 8, outputTokens: 3 },
+          { type: 'stop', stopReason: 'end_turn' },
+        ]);
+
+        const engine = new Engine({
+          adapter: mockAdapter,
+          trace,
+          config: { model: 'test-model', maxOutputTokens: 1024 },
+          conversationStore,
+          yeaftDir,
+          vpId: 'vp-linus',
+        });
+
+        const events = [];
+        for await (const event of engine.query({
+          prompt: 'hello',
+          sessionId: 'session-turn-id',
+          threadId: 'main',
+          vpTurnId: 'vp-turn-ui-1',
+          userAlreadyPersisted: true,
+        })) {
+          events.push(event);
+        }
+
+        expect(events.map(e => e.type)).toContain('turn_end');
+        const loaded = conversationStore.loadRecentBySession('session-turn-id', 10);
+        expect(loaded).toHaveLength(1);
+        expect(loaded[0]).toMatchObject({
+          role: 'assistant',
+          content: 'persisted reply',
+          threadId: 'main',
+          turnId: 'vp-turn-ui-1',
+          speakerVpId: 'vp-linus',
+        });
+      } finally {
+        rmSync(yeaftDir, { recursive: true, force: true });
+      }
     });
 
     it('loads Dream session summary into the system prompt Memory section and debug event', async () => {
