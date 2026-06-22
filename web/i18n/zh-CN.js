@@ -428,6 +428,7 @@ export default {
 
   // ============ Typing Health ============
   'chat.waiting.disconnected': '连接已断开',
+  'chat.connecting': '正在连接 provider 会话...',
   'chat.waiting.compacting': '正在压缩上下文...',
   'chat.waiting.agentOffline': 'Agent 已离线',
   'chat.waiting.sessionLost': 'Session 已丢失，已刷新，等待最新信息...',

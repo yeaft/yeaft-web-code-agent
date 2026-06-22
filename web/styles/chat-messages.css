@@ -303,6 +303,11 @@
   border: 1px solid rgba(91, 155, 213, 0.2);
 }
 
+.typing-status-banner-connecting {
+  background: color-mix(in srgb, var(--accent-blue) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 20%, transparent);
+}
+
 .typing-status-banner-session-lost,
 .typing-status-banner-cli-exited {
   background: rgba(229, 124, 35, 0.08);

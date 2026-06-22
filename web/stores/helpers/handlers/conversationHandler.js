@@ -168,6 +168,11 @@ export function handleConversationCreated(store, msg) {
   clearSessionLoading(store);
   const createdAgent = store.agents.find(a => a.id === msg.agentId);
   store.conversations = store.conversations.filter(c => c.id !== msg.conversationId);
+  // Non-Claude providers (e.g. Copilot) boot their backend session in the
+  // background — the agent emits conversation_created immediately, then a
+  // system_init envelope once the ACP handshake finishes. Mark the row as
+  // connecting until then so the UI shows progress instead of looking idle.
+  const createdProvider = msg.provider || 'claude-code';
   store.conversations.push({
     id: msg.conversationId,
     agentId: msg.agentId,
@@ -176,8 +181,9 @@ export function handleConversationCreated(store, msg) {
     claudeSessionId: null,
     createdAt: Date.now(),
     processing: false,
+    connecting: createdProvider !== 'claude-code',
     type: 'chat',
-    provider: msg.provider || 'claude-code',
+    provider: createdProvider,
     capabilities: msg.capabilities || null,
     disallowedTools: msg.disallowedTools ?? null
   });
@@ -229,6 +235,7 @@ export function handleConversationResumed(store, msg) {
     claudeSessionId: msg.claudeSessionId,
     createdAt: Date.now(),
     processing: false,
+    connecting: (msg.provider || 'claude-code') !== 'claude-code',
     type: 'chat',
     provider: msg.provider || 'claude-code',
     capabilities: msg.capabilities || null,

@@ -464,6 +464,7 @@ export default {
 
   // ============ Typing Health ============
   'chat.waiting.disconnected': 'Connection lost',
+  'chat.connecting': 'Connecting to provider session...',
   'chat.waiting.compacting': 'Compacting context...',
   'chat.waiting.agentOffline': 'Agent offline',
   'chat.waiting.sessionLost': 'Session lost, refreshed, waiting for update...',

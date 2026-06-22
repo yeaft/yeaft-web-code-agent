@@ -369,6 +369,11 @@ export async function createConversation(msg) {
     });
   } else {
     // Non-Claude providers own their own state construction.
+    // deferBoot: don't block conversation_created on the provider's slow boot
+    // (Copilot's ACP handshake spawns a CLI and can take tens of seconds). The
+    // sidebar row must appear immediately; boot runs in the background and the
+    // first sendInput joins the same in-flight boot. Mirrors the Claude path,
+    // which prestarts in the background below.
     const driver = getProvider(provider);
     const state = await driver.start({
       conversationId,
@@ -377,6 +382,7 @@ export async function createConversation(msg) {
       userId,
       username,
       providerOptions: msg.providerOptions || {},
+      deferBoot: true,
     });
     state.disallowedTools = disallowedTools || null;
   }
@@ -495,6 +501,9 @@ export async function resumeConversation(msg) {
   // Non-Claude providers: re-init state via driver so sessionId/providerName are set correctly.
   if (provider !== 'claude-code') {
     const driver = getProvider(provider);
+    // deferBoot: same reasoning as createConversation — emit conversation_resumed
+    // immediately so the row shows, and boot the provider session in the
+    // background instead of blocking restore on the ACP handshake.
     const state = await driver.start({
       conversationId,
       workDir: effectiveWorkDir,
@@ -502,6 +511,7 @@ export async function resumeConversation(msg) {
       userId,
       username,
       providerOptions: msg.providerOptions || priorProviderOptions || {},
+      deferBoot: true,
     });
     state.disallowedTools = disallowedTools || null;
   }

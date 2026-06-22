@@ -56,6 +56,10 @@ export function handleAssistantOutputFrame(store, conversationId, data) {
 
   if (data.type === 'system') {
     if (data.subtype === 'init') {
+      // Backend session is up (e.g. Copilot's ACP handshake finished) — clear
+      // the connecting flag set when the row was created with a deferred boot.
+      const conv = store.conversations.find(c => c.id === conversationId);
+      if (conv && conv.connecting) conv.connecting = false;
       return;
     }
     if (data.message) {
@@ -307,6 +311,12 @@ export function handleAssistantOutputFrame(store, conversationId, data) {
     // ★ result 表示当前 turn 已完成，立即清除 processing 状态
     delete store.processingConversations[conversationId];
     stopProcessingWatchdog(store, conversationId);
+
+    // A terminal result also resolves the connecting state: either the backend
+    // session booted (init already cleared it) or boot failed and surfaced this
+    // error frame — either way the row is no longer "connecting".
+    const resultConv = store.conversations.find(c => c.id === conversationId);
+    if (resultConv && resultConv.connecting) resultConv.connecting = false;
 
     // Clear per-VP turn tracking if this result belongs to a specific turnId.
     // `result` is the terminal frame for this VP turn. `vp_turn_end` normally
