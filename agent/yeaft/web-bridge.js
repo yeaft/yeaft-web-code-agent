@@ -2577,6 +2577,23 @@ function handleEngineEvent(event, hctx) {
           isError: !!event.isError,
         });
       }
+      if (hctx.sessionId && hctx.turnId && !hctx.skipPartialHistory) {
+        const appendedPrompts = Array.isArray(hctx.appendedUserPrompts) ? hctx.appendedUserPrompts : [];
+        const prompts = hctx.includeInitialPrompt && typeof hctx.prompt === 'string'
+          ? [hctx.prompt, ...appendedPrompts]
+          : appendedPrompts;
+        appendTurnToSessionHistory(
+          hctx.sessionId,
+          hctx.threadId || event.threadId || 'main',
+          hctx.vpId,
+          prompts,
+          hctx.assistantTextParts || [],
+          hctx.toolCallsAccum || [],
+          hctx.toolResultsAccum || [],
+          hctx.thinkingBlocksAccum || [],
+          { turnId: hctx.turnId, partial: true },
+        );
+      }
       sendSessionOutputFrame({
         type: 'user',
         tool_use_result: [{
@@ -3598,6 +3615,9 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       vpEngine = getOrCreateVpEngine(sessionId, vpId, threadId);
       if (thread) thread.engine = vpEngine;
 
+      const inboundInjectedBy = inboundEnvelope?.msg?.meta?.injectedBy;
+      const inboundIsInternal = inboundInjectedBy === 'route_forward' || inboundInjectedBy === 'task_result';
+
       handlerCtx = {
         assistantTextParts,
         toolCallsAccum,
@@ -3610,6 +3630,9 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         threadId,
         thread,
         appendedUserPrompts,
+        prompt,
+        includeInitialPrompt: !inboundIsInternal,
+        skipPartialHistory: false,
         markTurnEnd,
       };
       // Always trim the snapshot before passing to engine.query. This is
@@ -3651,10 +3674,8 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       // the source VP's tool action. Do not append it as a visible prompt for
       // the target VP turn; otherwise UI replay can show a trailing handoff
       // block after the target response.
-      const inboundInjectedBy = inboundEnvelope?.msg?.meta?.injectedBy;
-      const inboundIsInternal = inboundInjectedBy === 'route_forward' || inboundInjectedBy === 'task_result';
       const visiblePrompts = inboundIsInternal ? appendedUserPrompts : [prompt, ...appendedUserPrompts];
-      appendTurnToSessionHistory(sessionId, threadId, vpId, visiblePrompts, assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum);
+      appendTurnToSessionHistory(sessionId, threadId, vpId, visiblePrompts, assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum, { turnId });
 
       sendSessionOutputFrame({
         type: 'assistant',
@@ -3766,8 +3787,9 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
 }
 
 /**
- * Atomically append a completed VP-turn's messages to the GROUP'S
- * conversation history. Called once at turn end (not during streaming).
+ * Atomically append a completed or partial VP-turn's messages to the GROUP'S
+ * conversation history. Partial writes are replaced by the final write when
+ * the same runtime turn completes.
  *
  * Note: this does NOT see the engine's collapsed form — it appends the
  * raw user prompt(s) + the per-VP assistant text + tool results. Related
@@ -3779,15 +3801,20 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
  * a session, this in-memory tape carries the un-collapsed form — which
  * is fine because each VP turn's `engine.query` re-collapses on the fly.
  */
-function appendTurnToSessionHistory(sessionId, threadId, vpId, prompts, assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum) {
-  if (!sessionId) return;
-  const history = getOrCreateSessionHistory(sessionId);
+function buildTurnHistoryEntries(threadId, vpId, prompts, assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum, opts = {}) {
+  const entries = [];
+  const runtimeTurnId = typeof opts.turnId === 'string' && opts.turnId ? opts.turnId : null;
+  const markEntry = (entry) => {
+    if (runtimeTurnId) entry._runtimeTurnId = runtimeTurnId;
+    if (opts.partial) entry._partialTurn = true;
+    return entry;
+  };
   const promptList = Array.isArray(prompts) ? prompts : [prompts];
   for (const prompt of promptList) {
     if (typeof prompt === 'string' && prompt.trim()) {
       // user rows intentionally carry NO speakerVpId — every VP in the
       // session should see the prompt in their history.
-      history.push({ role: 'user', content: prompt, threadId: threadId || 'main' });
+      entries.push(markEntry({ role: 'user', content: prompt, threadId: threadId || 'main' }));
     }
   }
 
@@ -3821,7 +3848,7 @@ function appendTurnToSessionHistory(sessionId, threadId, vpId, prompts, assistan
           : { thinking: tb.thinking, signature: tb.signature }
       ));
     }
-    history.push(assistantMsg);
+    entries.push(markEntry(assistantMsg));
 
     for (const tr of toolResultsAccum) {
       const toolMsg = {
@@ -3832,8 +3859,30 @@ function appendTurnToSessionHistory(sessionId, threadId, vpId, prompts, assistan
         threadId: threadId || 'main',
       };
       if (vpId) toolMsg.speakerVpId = vpId;
-      history.push(toolMsg);
+      entries.push(markEntry(toolMsg));
     }
+  }
+  return entries;
+}
+
+function appendTurnToSessionHistory(sessionId, threadId, vpId, prompts, assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum, opts = {}) {
+  if (!sessionId) return;
+  const history = getOrCreateSessionHistory(sessionId);
+  const nextEntries = buildTurnHistoryEntries(threadId, vpId, prompts, assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum, opts);
+  if (nextEntries.length === 0) return;
+  const runtimeTurnId = typeof opts.turnId === 'string' && opts.turnId ? opts.turnId : null;
+  if (runtimeTurnId) {
+    let insertAt = history.length;
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i]?._runtimeTurnId === runtimeTurnId) {
+        insertAt = i;
+        history.splice(i, 1);
+      }
+    }
+    if (insertAt > history.length) insertAt = history.length;
+    history.splice(insertAt, 0, ...nextEntries);
+  } else {
+    history.push(...nextEntries);
   }
 }
 
