@@ -1195,7 +1195,14 @@ export const useChatStore = defineStore('chat', {
         : null;
       const needSessionReady = forceSessionReady || !this.yeaftSessionReady || !this.yeaftModel || !this.yeaftStatus;
       const latestSeq = Number.isFinite(sessionState?.latestSeq) ? sessionState.latestSeq : null;
-      const needHistoryReplay = !!activeSessionId && !sessionState?.loaded && !sessionState?.loading;
+      const hasCachedSessionRows = !!activeSessionId
+        && !!this.yeaftConversationId
+        && Array.isArray(this.messagesMap?.[this.yeaftConversationId])
+        && this.messagesMap[this.yeaftConversationId].some(row => row && (row.sessionId ?? row.groupId ?? null) === activeSessionId);
+      const needHistoryReplay = !!activeSessionId
+        && !sessionState?.loading
+        && !sessionState?.loaded
+        && !hasCachedSessionRows;
       const needHistoryCatchUp = !!activeSessionId
         && msgHelpers.shouldCatchUpLoadedYeaftSession(sessionState, catchUpHistory);
       if (!needSessionReady && !needHistoryReplay && !needHistoryCatchUp) return false;
@@ -1218,6 +1225,20 @@ export const useChatStore = defineStore('chat', {
           [activeSessionId]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
         };
         this.yeaftLoadingMoreHistory = true;
+      } else if (activeSessionId && hasCachedSessionRows && !sessionState?.loaded) {
+        this.yeaftSessionHistoryState = {
+          ...this.yeaftSessionHistoryState,
+          [activeSessionId]: {
+            ...(sessionState || {}),
+            loaded: true,
+            loading: false,
+            hasMore: !!sessionState?.hasMore,
+            oldestSeq: Number.isFinite(sessionState?.oldestSeq) ? sessionState.oldestSeq : null,
+            count: sessionState?.count || 0,
+            latestSeq,
+          },
+        };
+        this.yeaftLoadingMoreHistory = false;
       } else if (activeSessionId && needHistoryCatchUp) {
         this.yeaftSessionHistoryState = {
           ...this.yeaftSessionHistoryState,
@@ -1681,9 +1702,13 @@ export const useChatStore = defineStore('chat', {
           // `currentAgent` is the fallback. Falling through `||` covers
           // single- and multi-agent deployments alike.
           const subscribeAgentId = msg.agentId || this.currentAgent || null;
-          this.sendWsMessage(subscribeAgentId
-            ? { type: 'yeaft_vp_subscribe', agentId: subscribeAgentId }
-            : { type: 'yeaft_vp_subscribe' });
+          const subscribeKey = subscribeAgentId || '__current__';
+          if (this._yeaftVpSubscribedAgentKey !== subscribeKey) {
+            this._yeaftVpSubscribedAgentKey = subscribeKey;
+            this.sendWsMessage(subscribeAgentId
+              ? { type: 'yeaft_vp_subscribe', agentId: subscribeAgentId }
+              : { type: 'yeaft_vp_subscribe' });
+          }
           break;
         }
 

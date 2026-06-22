@@ -107,7 +107,42 @@ describe('Yeaft load-history first paint', () => {
 
       const historyLoadedEvents = sent.filter(m => m.event?.type === 'history_loaded');
       expect(historyLoadedEvents).toHaveLength(1);
+      expect(sent.some(m => m.event?.type === 'session_ready' && !m.event.partial)).toBe(false);
+      await new Promise(resolve => setTimeout(resolve, 0));
       expect(sent.some(m => m.event?.type === 'session_ready' && !m.event.partial)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('metadata-only load does not emit an empty recent history chunk', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-metadata-only-'));
+    try {
+      ctx.CONFIG = { yeaftDir: dir };
+      const store = new ConversationStore(dir);
+      store.appendBatch([
+        { role: 'user', content: 'cached q', sessionId: 'session-fast' },
+        { role: 'assistant', content: 'cached a', sessionId: 'session-fast', speakerVpId: 'vp-linus' },
+      ]);
+
+      const pending = handleYeaftLoadHistory({ sessionId: 'session-fast', limit: 0 });
+      await flushMicrotasks();
+
+      expect(sent.some(m => m.type === 'yeaft_history_chunk')).toBe(false);
+      expect(sent.some(m => m.event?.type === 'history_loaded')).toBe(false);
+
+      resolveLoadSession({
+        conversationStore: store,
+        config: { model: 'test-model', availableModels: [] },
+        status: { skills: 0, mcpServers: [], tools: 0 },
+        taskManager: { listActiveTasks: () => [] },
+      });
+      await pending;
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(sent.some(m => m.type === 'yeaft_history_chunk')).toBe(false);
+      expect(sent.some(m => m.event?.type === 'history_loaded')).toBe(false);
+      expect(sent.some(m => m.event?.type === 'session_ready')).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -250,8 +285,11 @@ describe('Yeaft load-history first paint', () => {
       await handleYeaftLoadHistory({ sessionId: 'session-fast', limit: 1 });
 
       const firstHistoryIndex = sent.findIndex(m => m.type === 'yeaft_history_chunk' && m.mode === 'recent');
-      const sessionReadyIndex = sent.findIndex(m => m.event?.type === 'session_ready');
+      let sessionReadyIndex = sent.findIndex(m => m.event?.type === 'session_ready');
       expect(firstHistoryIndex).toBeGreaterThanOrEqual(0);
+      expect(sessionReadyIndex).toBe(-1);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      sessionReadyIndex = sent.findIndex(m => m.event?.type === 'session_ready');
       expect(sessionReadyIndex).toBeGreaterThan(firstHistoryIndex);
       expect(sent[firstHistoryIndex].messages.map(m => m.content)).toEqual([
         'ready recent user',

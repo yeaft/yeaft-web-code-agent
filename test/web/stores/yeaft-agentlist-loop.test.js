@@ -65,6 +65,9 @@ function makeStore() {
   store.yeaftSessionHistoryState = {
     [SESSION_ID]: { loaded: true, loading: false, hasMore: false, oldestSeq: 1, count: 3, latestSeq: 42 },
   };
+  store.messagesMap = {
+    'yeaft-1': [{ id: 'm0042', messageId: 'm0042', type: 'user', content: 'cached', sessionId: SESSION_ID }],
+  };
   return store;
 }
 
@@ -128,9 +131,61 @@ describe('Yeaft agent_list does not loop history catch-up', () => {
     expect(loadHistoryCount(store)).toBe(1);
   });
 
-  it('still bootstraps metadata when session_ready state is missing (no catch-up needed)', () => {
+  it('still bootstraps metadata when session_ready state is missing without replaying cached history', () => {
     const store = makeStore();
     // Status not yet loaded → needSessionReady path; but no reconnect flag.
+    store.yeaftSessionReady = false;
+    store.yeaftModel = null;
+    store.yeaftStatus = null;
+    store.yeaftSessionHistoryState = {};
+
+    handleAgentList(store, agentListMsg());
+
+    const loads = store.sent.filter(m => m.type === 'yeaft_load_history');
+    // Cached rows already exist in the pane, so this is metadata-only. Replaying
+    // the recent window again would make routine agent_list/status refreshes
+    // produce duplicate history traffic and visible flicker.
+    expect(loads).toHaveLength(1);
+    expect(loads[0].afterSeq).toBeUndefined();
+    expect(loads[0].limit).toBe(0);
+    expect(store.yeaftSessionHistoryState[SESSION_ID]).toEqual(expect.objectContaining({
+      loaded: true,
+      loading: false,
+    }));
+  });
+
+  it('keeps cached rows when metadata-only bootstrap returns session_ready only', () => {
+    const store = makeStore();
+    store.yeaftSessionReady = false;
+    store.yeaftModel = null;
+    store.yeaftStatus = null;
+    store.yeaftSessionHistoryState = {};
+
+    handleAgentList(store, agentListMsg());
+    const before = store.messagesMap['yeaft-1'].map(m => m.id);
+
+    store.handleYeaftOutput({
+      conversationId: 'yeaft-1',
+      agentId: AGENT_ID,
+      event: {
+        type: 'session_ready',
+        conversationId: 'yeaft-1',
+        model: 'sonnet',
+        availableModels: [],
+        skills: [],
+        mcpServers: [],
+        tools: [],
+      },
+    });
+
+    expect(store.messagesMap['yeaft-1'].map(m => m.id)).toEqual(before);
+    expect(store.messagesMap['yeaft-1'].filter(m => m.sessionId === SESSION_ID)).toHaveLength(1);
+  });
+
+  it('does replay recent history when there is no cached pane row', () => {
+    const store = makeStore();
+    store.yeaftSessionHistoryState = {};
+    store.messagesMap = { 'yeaft-1': [] };
     store.yeaftSessionReady = false;
     store.yeaftModel = null;
     store.yeaftStatus = null;
@@ -138,10 +193,8 @@ describe('Yeaft agent_list does not loop history catch-up', () => {
     handleAgentList(store, agentListMsg());
 
     const loads = store.sent.filter(m => m.type === 'yeaft_load_history');
-    // One metadata-only request (limit:0), NOT a history catch-up (no afterSeq).
     expect(loads).toHaveLength(1);
-    expect(loads[0].afterSeq).toBeUndefined();
-    expect(loads[0].limit).toBe(0);
+    expect(loads[0]).toMatchObject({ type: 'yeaft_load_history', sessionId: SESSION_ID, limit: 5 });
   });
 });
 
