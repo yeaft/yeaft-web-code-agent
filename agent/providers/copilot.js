@@ -99,7 +99,11 @@ export async function start(opts) {
   // the background; the first sendInput joins the same in-flight boot via
   // _ensureBooted instead of spawning a second child.
   if (opts.deferBoot) {
-    _ensureBooted(state, resumeSessionId).catch((err) => _emitBootError(state, err));
+    _ensureBooted(state, resumeSessionId).catch((err) => {
+      // _emitBootError writes to the WebSocket; if that itself throws (server
+      // gone) there's nothing more to do — don't turn it into an unhandled rejection.
+      try { _emitBootError(state, err); } catch { /* noop */ }
+    });
     return state;
   }
 
@@ -132,16 +136,25 @@ function _emitBootError(state, err) {
  * call retries from scratch.
  */
 async function _ensureBooted(state, resumeSessionId) {
-  if (state.initialized && state.acpClient) return;
+  // Readiness requires a sessionId too, not just `initialized`. `initialized`
+  // flips true right after the `initialize` response but BEFORE session/new
+  // establishes state.sessionId — a message arriving in that window would
+  // otherwise prompt with sessionId:null and lose the turn. Gating on sessionId
+  // keeps callers coalesced onto the in-flight boot until the session exists.
+  if (state.initialized && state.acpClient && state.sessionId) return;
   if (state._bootPromise) return state._bootPromise;
-  state._bootPromise = (async () => {
+  const p = (async () => {
     try {
       await _bootAcp(state, resumeSessionId);
     } finally {
-      state._bootPromise = null;
+      // Only clear if we're still the current boot — a crash-close (which nulls
+      // _bootPromise) followed by a fresh boot must not have its promise wiped
+      // by this stale finally.
+      if (state._bootPromise === p) state._bootPromise = null;
     }
   })();
-  return state._bootPromise;
+  state._bootPromise = p;
+  return p;
 }
 
 async function _bootAcp(state, resumeSessionId) {
@@ -170,6 +183,10 @@ async function _bootAcp(state, resumeSessionId) {
     if (client) client.close(message);
   });
   child.on('close', (code) => {
+    // Ignore a late close from a child that's already been replaced (e.g. a
+    // reboot spawned a new one) or torn down — otherwise this would clobber the
+    // live boot's acpClient/_bootPromise and orphan the new child.
+    if (state.copilotChild !== child) return;
     if (state.turnActive) {
       const tail = stderrBuf.trim().slice(-2000);
       _sendTurnError(state, tail || `copilot exited mid-turn (code ${code})`);
@@ -264,8 +281,10 @@ export async function sendInput(state, prompt, opts = {}) {
 
   // Ensure ACP child + session are up; reboot if a prior crash dropped them.
   // _ensureBooted coalesces onto a backgrounded deferBoot still in flight, so a
-  // fast first message doesn't spawn a second child.
-  if (!state.initialized || !state.acpClient) {
+  // fast first message doesn't spawn a second child. Gate on sessionId too: a
+  // message can land after `initialize` but before session/new, when initialized
+  // is already true but sessionId is still null.
+  if (!state.initialized || !state.acpClient || !state.sessionId) {
     try {
       await _ensureBooted(state, state.sessionId || null);
     } catch (err) {

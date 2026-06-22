@@ -20,13 +20,33 @@ class FakeWritable extends EventEmitter {
 function releaseAll() {
   while (pendingResponses.length) {
     const { child, id, method } = pendingResponses.shift();
-    let result = null;
-    if (method === 'initialize') result = { agentCapabilities: { loadSession: true } };
-    else if (method === 'session/new') result = { sessionId: 'copilot-session-1', models: { availableModels: [] } };
-    else if (method === 'session/load') result = { models: { availableModels: [] } };
-    else if (method === 'session/prompt') result = { stopReason: 'end_turn' };
-    child.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`);
+    respondTo(child, id, method);
   }
+}
+
+function respondTo(child, id, method) {
+  let result = null;
+  if (method === 'initialize') result = { agentCapabilities: { loadSession: true } };
+  else if (method === 'session/new') result = { sessionId: 'copilot-session-1', models: { availableModels: [] } };
+  else if (method === 'session/load') result = { models: { availableModels: [] } };
+  else if (method === 'session/prompt') result = { stopReason: 'end_turn' };
+  child.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`);
+}
+
+// Release only the queued responses for a specific method, leaving the rest of
+// the handshake pending. Lets a test sit inside the initialize→session/new window.
+async function releaseMethod(method) {
+  const keep = [];
+  for (const entry of pendingResponses.splice(0)) {
+    if (entry.method === method) respondTo(entry.child, entry.id, entry.method);
+    else keep.push(entry);
+  }
+  pendingResponses.push(...keep);
+  await flush();
+}
+
+function methodsQueued() {
+  return pendingResponses.map((p) => p.method);
 }
 
 // The ACP handshake is sequential (initialize → await → session/new), so each
@@ -127,5 +147,53 @@ describe('Copilot deferred boot', () => {
       conversationId: 'conv-race',
       data: expect.objectContaining({ type: 'result', subtype: 'success' }),
     }));
+  });
+
+  it('does NOT prompt with a null sessionId when a message arrives in the initialize→session/new window', async () => {
+    ctx.CONFIG = { debug: false };
+    ctx.sendToServer = vi.fn();
+
+    const writes = [];
+    const origWrite = FakeWritable.prototype.write;
+    // Capture every JSON-RPC frame the provider writes to the child.
+    FakeWritable.prototype.write = function (chunk) {
+      writes.push(JSON.parse(String(chunk)));
+      return origWrite.call(this, chunk);
+    };
+
+    try {
+      const state = await copilot.start({
+        conversationId: 'conv-window',
+        workDir: '/tmp/project',
+        providerOptions: { allowAllTools: true },
+        deferBoot: true,
+      });
+
+      // Sit inside the window: initialize answered, session/new still pending.
+      await releaseMethod('initialize');
+      expect(methodsQueued()).toContain('session/new');
+      expect(state.sessionId).toBeNull(); // fresh session id not assigned yet
+
+      // User fires their first message right now.
+      const sendPromise = copilot.sendInput(state, 'first message', {});
+      await flush();
+
+      // It must NOT have dispatched session/prompt yet — sessionId is still null,
+      // so a prompt here would carry sessionId:null and the turn would be lost.
+      // sendInput must wait for the in-flight boot to finish establishing the session.
+      const earlyPrompt = writes.find((w) => w.method === 'session/prompt');
+      expect(earlyPrompt).toBeUndefined();
+
+      // Finish the handshake; now the prompt may go out — with a real sessionId.
+      await drainHandshake();
+      await sendPromise;
+
+      const promptFrame = writes.find((w) => w.method === 'session/prompt');
+      expect(promptFrame).toBeTruthy();
+      expect(promptFrame.params.sessionId).toBe('copilot-session-1');
+      expect(spawns).toHaveLength(1);
+    } finally {
+      FakeWritable.prototype.write = origWrite;
+    }
   });
 });
