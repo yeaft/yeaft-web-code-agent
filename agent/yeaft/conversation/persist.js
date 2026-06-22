@@ -206,6 +206,7 @@ function serializeMessage(msg) {
   // routing can filter/replay by thread without rescanning JSON blobs.
   // Defaults to 'main' for legacy messages (see migrate-messages-threadid.js).
   fm.push(`threadId: ${msg.threadId || 'main'}`);
+  if (msg.turnId) fm.push(`turnId: ${msg.turnId}`);
   // task-313: when a thread is merged into another, the messages keep
   // their original thread id in `sourceThreadId` so the UI can still
   // render a small "#source" pill next to each bubble.
@@ -216,6 +217,7 @@ function serializeMessage(msg) {
   // shows an empty pane.
   if (msg.sessionId) fm.push(`sessionId: ${msg.sessionId}`);
   if (msg.chatId) fm.push(`chatId: ${msg.chatId}`);
+  if (msg.clientMessageId) fm.push(`clientMessageId: ${msg.clientMessageId}`);
   // Session attribution: when a VP authors an assistant turn (either
   // its own reply or a route_forward injection from another VP), stamp
   // the speaker so the UI can render the message on the correct VP track.
@@ -333,9 +335,11 @@ export function parseMessage(raw) {
       case 'isError': msg.isError = value === 'true'; break;
       case 'tokens_est': msg.tokens_est = parseInt(value, 10); break;
       case 'threadId': msg.threadId = value; break;
+      case 'turnId': msg.turnId = value; break;
       case 'sourceThreadId': msg.sourceThreadId = value; break;
       case 'sessionId': msg.sessionId = value; break;
       case 'chatId': msg.chatId = value; break;
+      case 'clientMessageId': msg.clientMessageId = value; break;
       case 'speakerVpId': msg.speakerVpId = value; break;
       case 'attachmentsB64':
         try {

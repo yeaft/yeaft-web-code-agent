@@ -712,8 +712,9 @@ function projectPersistedToHistoryEntry(m) {
   const entry = { role: m.role, content: m.role === 'tool' ? m.content : __testNormalizePersistedVisibleContent(m.content) };
   if (m.id) entry.id = m.id;
   entry.threadId = m.threadId || m.turnId || 'main';
-  entry.turnId = m.turnId || entry.threadId;
+  if (m.turnId) entry.turnId = m.turnId;
   if (m.sessionId) entry.sessionId = m.sessionId;
+  if (m.clientMessageId) entry.clientMessageId = m.clientMessageId;
   if (m.speakerVpId) entry.speakerVpId = m.speakerVpId;
   if (m.toolCallId) entry.toolCallId = m.toolCallId;
   if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
@@ -813,8 +814,9 @@ function projectVisibleHistoryChunkMessages(messages = []) {
       content: m.content,
       ts: m.ts || null,
       sessionId: m.sessionId || null,
+      ...(m.clientMessageId ? { clientMessageId: m.clientMessageId } : {}),
       threadId: m.threadId || m.turnId || 'main',
-      turnId: m.turnId || m.threadId || 'main',
+      ...(m.turnId ? { turnId: m.turnId } : {}),
       ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(m.attachments) } : {}),
       ...(m.speakerVpId ? { speakerVpId: m.speakerVpId } : {}),
       ...(Number.isFinite(m.toolSummaryCount) && m.toolSummaryCount > 0
@@ -1392,6 +1394,7 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
       attachments: Array.isArray(envelope?.msg?.meta?.attachments) ? envelope.msg.meta.attachments : [],
       internal: isInternalAppend,
       ts: envelope?.msg?.ts || null,
+      clientMessageId: envelope?.msg?.meta?.clientMessageId || null,
     });
     thread.updatedAt = Date.now();
     try {
@@ -1489,6 +1492,7 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
             attachments: Array.isArray(meta.attachments) ? meta.attachments : [],
             internal: isInternal,
             ts: envelope?.msg?.ts || null,
+            clientMessageId: meta.clientMessageId || null,
           });
         }
       } catch { /* never crash WS pipeline */ }
@@ -3152,6 +3156,7 @@ export async function handleYeaftSessionSend(msg) {
         mentions,
         // Persisted form (no base64) — safe for jsonl-log.
         attachments: persistedAttachments,
+        clientMessageId: typeof msg.id === 'string' && msg.id ? msg.id : null,
       },
       // Live form — adapters need the base64 image blocks; runVpTurn
       // reads `_promptParts` off the envelope rather than going
@@ -3691,6 +3696,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         // would render the user's prompt N times.
         userAlreadyPersisted: true,
         threadId,
+        vpTurnId: turnId,
         drainPendingUserMessages: () => {
           if (!thread || !Array.isArray(thread.pendingQueries) || thread.pendingQueries.length === 0) return [];
           return thread.pendingQueries.splice(0);
@@ -3945,11 +3951,11 @@ function appendTurnToSessionHistory(sessionId, threadId, vpId, prompts, assistan
  * refresh replay can render chips without leaking image source data into
  * the message body.
  *
- * @param {{ msgId:string, text:string, sessionId:string, role?:string, speakerVpId?:string|null, attachments?:Array<object>, internal?:boolean, ts?:string|null }} args
+ * @param {{ msgId:string, text:string, sessionId:string, role?:string, speakerVpId?:string|null, attachments?:Array<object>, internal?:boolean, ts?:string|null, clientMessageId?:string|null }} args
  * @returns {boolean} true if this call wrote the row, false if a prior
  *   call already wrote it (dedup hit).
  */
-function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = 'main', role, speakerVpId, attachments, internal = false, ts = null }) {
+function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = 'main', role, speakerVpId, attachments, internal = false, ts = null, clientMessageId = null }) {
   if (!session?.conversationStore) return false;
   // No msgId means no dedup key — caller is responsible for guarding.
   // Both call sites already do (`if (envMsgId && text)` and
@@ -3993,6 +3999,9 @@ function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = '
       threadId: threadId || 'main',
     };
     if (sessionId) record.sessionId = sessionId;
+    if (persistRole === 'user' && clientMessageId && typeof clientMessageId === 'string') {
+      record.clientMessageId = clientMessageId;
+    }
     // Stamp speakerVpId so the UI's loadHistory replay can route the row
     // to the correct VP block. Only meaningful when role='assistant'; for
     // a real user message we leave it unset (the UI's user track is

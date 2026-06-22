@@ -60,21 +60,60 @@ function sortYeaftRowsByTimestamp(rows) {
   rows.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 }
 
+function sameAssistantHistoryRow(existing, incoming) {
+  if (!existing || !incoming) return false;
+  if (existing.type !== 'assistant' || incoming.type !== 'assistant') return false;
+  if ((existing.sessionId ?? null) !== (incoming.sessionId ?? null)) return false;
+
+  const existingSpeaker = existing.speakerVpId || existing.vpId || '';
+  const incomingSpeaker = incoming.speakerVpId || incoming.vpId || '';
+  if (existingSpeaker && incomingSpeaker && existingSpeaker !== incomingSpeaker) return false;
+
+  const existingThread = existing.threadId || '';
+  const incomingThread = incoming.threadId || '';
+  if (existingThread && incomingThread && existingThread !== incomingThread) return false;
+
+  const canMergeLiveLocalRow = existing.isStreaming || existing.isHistory !== true;
+  if (!canMergeLiveLocalRow) return false;
+  if (incoming._hasPersistedTurnId !== true) return false;
+
+  const existingTurnId = existing.turnId || '';
+  const incomingTurnId = incoming.turnId || '';
+  if (!existingTurnId || !incomingTurnId || existingTurnId !== incomingTurnId) return false;
+
+  const existingText = typeof existing.content === 'string' ? existing.content : '';
+  const incomingText = typeof incoming.content === 'string' ? incoming.content : '';
+  return !!existingText && !!incomingText && (incomingText.startsWith(existingText) || existingText.startsWith(incomingText));
+}
+
 function upsertYeaftHistoryRows(existingRows, incomingRows) {
   const indexById = new Map();
+  const userIndexByClientId = new Map();
   existingRows.forEach((row, index) => {
     const id = stableHistoryRowId(row);
     if (id) indexById.set(id, index);
+    if (row?.type === 'user' && row.clientMessageId) userIndexByClientId.set(row.clientMessageId, index);
   });
 
   let inserted = 0;
   for (const row of incomingRows) {
     const id = stableHistoryRowId(row);
-    if (id && indexById.has(id)) {
-      const index = indexById.get(id);
+    let index = id && indexById.has(id) ? indexById.get(id) : null;
+    if (index === null && row?.type === 'user' && row.clientMessageId && userIndexByClientId.has(row.clientMessageId)) {
+      index = userIndexByClientId.get(row.clientMessageId);
+    }
+    if (index === null && row?.type === 'assistant') {
+      index = existingRows.findIndex(existing => sameAssistantHistoryRow(existing, row));
+    }
+    if (index !== null && index >= 0) {
+      const existingId = stableHistoryRowId(existingRows[index]);
       existingRows[index] = { ...existingRows[index], ...row };
+      if (id) indexById.set(id, index);
+      if (existingId && existingId !== id && indexById.get(existingId) === index) indexById.delete(existingId);
+      if (row?.type === 'user' && row.clientMessageId) userIndexByClientId.set(row.clientMessageId, index);
     } else {
       if (id) indexById.set(id, existingRows.length);
+      if (row?.type === 'user' && row.clientMessageId) userIndexByClientId.set(row.clientMessageId, existingRows.length);
       existingRows.push(row);
       inserted += 1;
     }
@@ -500,30 +539,12 @@ export function handleYeaftHistoryChunk(store, msg) {
     store.yeaftLoadingMoreHistory = false;
     return;
   }
-  // Stale-chunk guard: between the request fly-out and this chunk landing,
-  // the user may have switched sessions (or a session lifecycle event —
-  // create / archive / delete — may have flipped `activeSessionId` under
-  // us). Drop on the floor; the active session's spinner/cursor is keyed
-  // separately so accepting this chunk would cross-pollute session history.
-  // The chunk's sessionId is authoritative — it's stamped by the agent
-  // from the request sessionId, not from messagesMap state.
-  const activeFilter = store.yeaftActiveSessionFilter ?? null;
-  const hasChunkGroup = msgSessionId != null;
-  if (hasChunkGroup && activeFilter && msgSessionId !== activeFilter) {
-    const staleKey = msgSessionId ?? '__all__';
-    if (store.yeaftSessionHistoryState) {
-      store.yeaftSessionHistoryState = {
-        ...store.yeaftSessionHistoryState,
-        [staleKey]: {
-          ...(store.yeaftSessionHistoryState[staleKey] || {}),
-          loading: false,
-          syncingAfterSeq: null,
-        },
-      };
-    }
-    store.yeaftLoadingMoreHistory = false;
-    return;
-  }
+  // The chunk's sessionId is authoritative — it is stamped by the agent
+  // from the request sessionId, not inferred from the currently selected row.
+  // Accept chunks even when the user has switched to another Session: rows are
+  // session-stamped below, and the global spinner/cursor mirrors only the
+  // active Session at the end of this handler. Dropping inactive chunks loses
+  // active-turn messages when their history/delta replay races a sidebar click.
   if (!store.messagesMap[convId]) store.messagesMap[convId] = [];
 
   const mode = msg.mode === 'recent' || msg.mode === 'delta' ? msg.mode : 'older';
@@ -545,6 +566,7 @@ export function handleYeaftHistoryChunk(store, msg) {
     if (m._reflection || m.internal || m.systemOnly || m.systemOnlyMessage) continue;
     if (isInternalControlHistoryContent(m.content)) continue;
     const stableId = m.id || m.messageId || null;
+    const clientMessageId = m.clientMessageId || null;
     if (stableId && seenIds.has(stableId)) continue;
     if (stableId && mode !== 'recent' && existingIds.has(stableId)) continue;
     if (stableId) seenIds.add(stableId);
@@ -559,6 +581,7 @@ export function handleYeaftHistoryChunk(store, msg) {
         timestamp: normalizeHistoryTimestamp(m),
         sessionId: rowSessionId,
         turnId: m.turnId || messageId,
+        ...(clientMessageId ? { clientMessageId } : {}),
         ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: m.attachments } : {}),
         isStreaming: false,
       });
@@ -568,6 +591,7 @@ export function handleYeaftHistoryChunk(store, msg) {
       const rowSessionId = m.sessionId ?? m.groupId ?? msgSessionId ?? null;
       const speakerVpId = resolveHistorySpeakerVpId(m, rowSessionId);
       const timestamp = normalizeHistoryTimestamp(m);
+      const hasPersistedTurnId = !!m.turnId;
       const turnId = m.turnId || messageId;
       const assistantContent = typeof m.content === 'string' ? m.content : (m.content || '');
       if (typeof assistantContent !== 'string' || assistantContent.trim()) {
@@ -578,6 +602,7 @@ export function handleYeaftHistoryChunk(store, msg) {
           timestamp,
           sessionId: rowSessionId,
           turnId,
+          _hasPersistedTurnId: hasPersistedTurnId,
           ...(speakerVpId ? { vpId: speakerVpId, speakerVpId } : {}),
           isStreaming: false,
           isHistory: true,
@@ -618,8 +643,8 @@ export function handleYeaftHistoryChunk(store, msg) {
     }
   }
 
-  const groupKey = msgSessionId ?? '__all__';
-  const prevState = store.yeaftSessionHistoryState?.[groupKey] || {};
+  const sessionKey = msgSessionId ?? '__all__';
+  const prevState = store.yeaftSessionHistoryState?.[sessionKey] || {};
   const nextLatest = (typeof msg.latestSeq === 'number') ? msg.latestSeq : (prevState.latestSeq ?? null);
   const nextState = mode === 'delta'
     ? {
@@ -642,15 +667,18 @@ export function handleYeaftHistoryChunk(store, msg) {
   if (store.yeaftSessionHistoryState) {
     store.yeaftSessionHistoryState = {
       ...store.yeaftSessionHistoryState,
-      [groupKey]: nextState,
+      [sessionKey]: nextState,
     };
   }
   const activeKey = store.yeaftActiveSessionFilter ?? '__all__';
-  if (groupKey === activeKey) {
+  if (sessionKey === activeKey) {
     store.yeaftHasMoreHistory = nextState.hasMore;
     if (typeof msg.oldestSeq === 'number') {
       store.yeaftOldestLoadedSeq = msg.oldestSeq;
     }
     store.yeaftLoadingMoreHistory = false;
+  } else if (store.yeaftLoadingMoreHistory && sessionKey !== activeKey) {
+    const activeState = store.yeaftSessionHistoryState?.[activeKey] || null;
+    store.yeaftLoadingMoreHistory = !!activeState?.loading;
   }
 }

@@ -91,6 +91,7 @@ export function handleAssistantOutputFrame(store, conversationId, data) {
         sessionId: store._currentYeaftSessionId || null,
         vpId: store._currentYeaftVpId || null,
         turnId: store._currentYeaftTurnId || null,
+        threadId: store._currentYeaftThreadId || null,
       });
       return;
     }
@@ -110,6 +111,7 @@ export function handleAssistantOutputFrame(store, conversationId, data) {
           sessionId: store._currentYeaftSessionId || null,
           vpId: store._currentYeaftVpId || null,
           turnId: store._currentYeaftTurnId || null,
+          threadId: store._currentYeaftThreadId || null,
         });
       } else if (block.type === 'tool_summary') {
         store.addMessageToConversation(conversationId, {
@@ -121,6 +123,7 @@ export function handleAssistantOutputFrame(store, conversationId, data) {
           sessionId: store._currentYeaftSessionId || null,
           vpId: store._currentYeaftVpId || null,
           turnId: store._currentYeaftTurnId || null,
+          threadId: store._currentYeaftThreadId || null,
         });
       } else if (block.type === 'tool_use') {
         // Finish any in-progress streaming so typing dots reappear during tool execution.
@@ -148,7 +151,11 @@ export function handleAssistantOutputFrame(store, conversationId, data) {
           toolId: block.id || block.tool_use_id || null,
           toolName: block.name,
           toolInput: block.input,
-          startTime: Date.now()
+          startTime: Date.now(),
+          sessionId: store._currentYeaftSessionId || null,
+          vpId: store._currentYeaftVpId || null,
+          turnId: store._currentYeaftTurnId || null,
+          threadId: store._currentYeaftThreadId || null,
         });
       }
     }
