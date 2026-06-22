@@ -109,6 +109,50 @@ describe('index.js tool registration', () => {
     expect(names).toContain('FileRead');
     expect(names).toContain('Grep');
   });
+
+  it('collaboration policy only hides VP forwarding for single-VP sessions', async () => {
+    const { createFullRegistry } = await import(`${TOOLS_DIR}/index.js`);
+    const { COLLAB_TOOL_POLICY } = await import(`${TOOLS_DIR}/registry.js`);
+    const registry = createFullRegistry();
+
+    const singleVpNames = registry.getToolDefs('en', {
+      collabToolPolicy: COLLAB_TOOL_POLICY.SINGLE_VP,
+    }).map(tool => tool.name);
+    expect(singleVpNames).not.toContain('RouteForward');
+    expect(singleVpNames).toContain('Bash');
+    expect(singleVpNames).toContain('ListTasks');
+    expect(singleVpNames).toContain('ReadTaskLog');
+    expect(singleVpNames).toContain('CancelTask');
+    expect(singleVpNames).toContain('SpawnAgent');
+    expect(singleVpNames).toContain('PromptAgent');
+    expect(singleVpNames).toContain('WaitAgent');
+    expect(singleVpNames).toContain('CloseAgent');
+    expect(singleVpNames).toContain('ListAgents');
+
+    const multiVpNames = registry.getToolDefs('en', {
+      collabToolPolicy: COLLAB_TOOL_POLICY.MULTI_VP,
+    }).map(tool => tool.name);
+    expect(multiVpNames).toContain('RouteForward');
+    expect(multiVpNames).toContain('Bash');
+    expect(multiVpNames).toContain('ListTasks');
+    expect(multiVpNames).toContain('ReadTaskLog');
+    expect(multiVpNames).toContain('CancelTask');
+    expect(multiVpNames).toContain('SpawnAgent');
+    expect(multiVpNames).toContain('PromptAgent');
+    expect(multiVpNames).toContain('WaitAgent');
+    expect(multiVpNames).toContain('CloseAgent');
+    expect(multiVpNames).toContain('ListAgents');
+
+    expect(registry.isAllowed('RouteForward', {
+      collabToolPolicy: COLLAB_TOOL_POLICY.SINGLE_VP,
+    })).toBe(false);
+    expect(registry.isAllowed('SpawnAgent', {
+      collabToolPolicy: COLLAB_TOOL_POLICY.MULTI_VP,
+    })).toBe(true);
+    expect(registry.isAllowed('Bash', {
+      collabToolPolicy: COLLAB_TOOL_POLICY.MULTI_VP,
+    })).toBe(true);
+  });
 });
 
 // ──────────────────────────────────────────────
