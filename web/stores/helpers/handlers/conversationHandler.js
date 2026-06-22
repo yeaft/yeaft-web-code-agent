@@ -122,6 +122,26 @@ function upsertYeaftHistoryRows(existingRows, incomingRows) {
   return inserted;
 }
 
+function rowSessionId(row) {
+  return row ? (row.sessionId ?? row.groupId ?? null) : null;
+}
+
+function replaceYeaftRecentHistoryRows(existingRows, incomingRows, sessionId) {
+  const newestIncomingTs = incomingRows.reduce((max, row) => Math.max(max, row?.timestamp || 0), 0);
+  const preserved = existingRows.filter((row) => {
+    if (!row) return false;
+    if (sessionId != null && rowSessionId(row) !== sessionId) return true;
+    if (row.isStreaming) return true;
+    // A manual refresh can race a just-sent local row that is newer than the
+    // persisted recent window. Keep that live tail; the next delta/recent load
+    // will merge it by stable id once the agent has flushed it to disk.
+    return newestIncomingTs > 0 && (row.timestamp || 0) > newestIncomingTs;
+  });
+  existingRows.splice(0, existingRows.length, ...preserved);
+  upsertYeaftHistoryRows(existingRows, incomingRows);
+  return incomingRows.length;
+}
+
 function isInternalControlHistoryContent(content) {
   if (typeof content !== 'string') return false;
   const text = content.trimStart();
@@ -628,7 +648,9 @@ export function handleYeaftHistoryChunk(store, msg) {
   }
 
   let insertedRows = 0;
-  if (formatted.length > 0) {
+  if (mode === 'recent') {
+    insertedRows = replaceYeaftRecentHistoryRows(store.messagesMap[convId], formatted, msgSessionId ?? null);
+  } else if (formatted.length > 0) {
     if (mode === 'older') {
       store.messagesMap[convId].splice(0, 0, ...formatted);
       insertedRows = formatted.length;
