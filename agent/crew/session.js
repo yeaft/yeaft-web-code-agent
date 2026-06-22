@@ -325,18 +325,20 @@ export async function handleListCrewSessions(msg) {
     ? index.filter(e => !e.agentId || e.agentId === agentId)
     : index;
 
-  for (const entry of filtered) {
+  const sessions = filtered.map(entry => {
     const active = crewSessions.get(entry.sessionId);
-    if (active) {
-      entry.status = active.status;
-    }
-  }
+    return {
+      ...entry,
+      active: !!active,
+      status: active ? active.status : 'stopped'
+    };
+  });
 
   ctx.sendToServer({
     type: 'crew_sessions_list',
     requestId,
     _requestClientId,
-    sessions: filtered
+    sessions
   });
 }
 

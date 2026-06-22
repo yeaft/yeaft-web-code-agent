@@ -5,7 +5,7 @@ import ctx from './context.js';
 import { query } from './sdk/index.js';
 import { loadSessionHistory } from './history.js';
 import { startClaudeQuery } from './claude.js';
-import { crewSessions, loadCrewIndex } from './crew.js';
+import { crewSessions } from './crew.js';
 import { getProvider, DEFAULT_PROVIDER, isValidProvider } from './providers/index.js';
 
 // 不支持的斜杠命令（真正需要交互式 CLI 的命令）
@@ -283,7 +283,7 @@ export function parseSlashCommand(message) {
   return { type: null, message };
 }
 
-// 发送 conversation 列表（含活跃 crew sessions + 索引中已停止的 crew sessions）
+// 发送 conversation 列表（仅含活跃 crew sessions；历史 Crew 索引按需通过 list_crew_sessions 加载）
 export async function sendConversationList() {
   const list = [];
   for (const [id, state] of ctx.conversations) {
@@ -305,10 +305,9 @@ export async function sendConversationList() {
     };
     list.push(entry);
   }
-  // 追加活跃 crew sessions
-  const activeCrewIds = new Set();
+  // 追加活跃 crew sessions。历史 Crew 索引可能触发磁盘读取，保持按需加载，
+  // 由显式 list_crew_sessions 请求处理，避免普通 Chat/Yeaft 列表提前加载 Crew。
   for (const [id, session] of crewSessions) {
-    activeCrewIds.add(id);
     list.push({
       id,
       workDir: session.projectDir,
@@ -318,25 +317,6 @@ export async function sendConversationList() {
       username: session.username,
       type: 'crew',
     });
-  }
-  // 追加索引中已停止的 crew sessions（不重复）
-  try {
-    const index = await loadCrewIndex();
-    for (const entry of index) {
-      if (!activeCrewIds.has(entry.sessionId)) {
-        list.push({
-          id: entry.sessionId,
-          workDir: entry.projectDir,
-          createdAt: entry.createdAt,
-          processing: false,
-          userId: entry.userId,
-          username: entry.username,
-          type: 'crew'
-        });
-      }
-    }
-  } catch (e) {
-    console.warn('[sendConversationList] Failed to load crew index:', e.message);
   }
   ctx.sendToServer({
     type: 'conversation_list',

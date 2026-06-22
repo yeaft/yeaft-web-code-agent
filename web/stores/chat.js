@@ -231,9 +231,8 @@ export const useChatStore = defineStore('chat', {
     locale: localStorage.getItem('locale') || 'zh-CN',
     // Crew mode is opt-in via Settings → General. When disabled, the
     // sidebar collapses to a single full-width Chat tab, matching the
-    // visual structure of the Yeaft sidebar. Default: enabled (preserves
-    // existing behavior for current users).
-    crewModeEnabled: localStorage.getItem('crewModeEnabled') !== 'false',
+    // visual structure of the Yeaft sidebar. Default: disabled.
+    crewModeEnabled: localStorage.getItem('crewModeEnabled') === 'true',
     // Per-conversation 执行状态追踪：conversationId -> { currentTool, toolHistory, lastActivity }
     executionStatusMap: {},
     // Per-conversation session health: conversationId -> { status: 'agent-offline'|'session-lost'|'cli-exited' }
