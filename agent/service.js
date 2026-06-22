@@ -25,6 +25,7 @@ export {
   getServiceName,
   getPm2AppName,
   getLaunchdLabel,
+  getLaunchdPlistPath,
   getDefaultYeaftDir,
   install,
   uninstall,

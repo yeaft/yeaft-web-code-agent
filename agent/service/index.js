@@ -34,6 +34,9 @@ export {
   getLaunchdLabel,
   getDefaultYeaftDir,
 } from './config.js';
+// Re-export the launchd plist-path resolver so consumers (e.g. the upgrade
+// flow) reach it via the service barrel instead of deep-importing macos.js.
+export { getLaunchdPlistPath } from './macos.js';
 
 const os = platform();
 
