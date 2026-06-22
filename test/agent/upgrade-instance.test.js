@@ -104,6 +104,42 @@ describe('buildUnixUpgradeScript — instance-aware service restart', () => {
     expect(script).toMatch(/^#!\/bin\/bash/);
   });
 
+  it('pins XDG_RUNTIME_DIR / DBUS so detached `systemctl --user` can reach the user manager', () => {
+    // Root cause of the post-upgrade "stays offline" bug: the detached shell
+    // may not inherit XDG_RUNTIME_DIR, so `systemctl --user` fails to connect
+    // to the bus and the restart silently never runs. The script must pin
+    // per-user defaults (keeping any inherited value).
+    const script = buildUnixUpgradeScript({ ...BASE, instanceId: 'server-e7a9eb' });
+    expect(script).toContain('export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$YEAFT_UID}"');
+    expect(script).toContain('export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$YEAFT_UID/bus}"');
+    // Env pin must precede the systemctl calls that depend on it.
+    expect(script.indexOf('XDG_RUNTIME_DIR')).toBeLessThan(script.indexOf('systemctl --user stop'));
+  });
+
+  it('logs and retries a failed systemd restart instead of failing silently', () => {
+    const script = buildUnixUpgradeScript({ ...BASE, instanceId: 'server-e7a9eb' });
+    // start wrapped in if/else so a failure is observable in the log...
+    expect(script).toMatch(/if systemctl --user start "yeaft-agent@server-e7a9eb"; then/);
+    expect(script).toContain('retrying after reload');
+    // ...and a terminal failure tells the operator exactly how to recover.
+    expect(script).toContain('Manual start required: systemctl --user start yeaft-agent@server-e7a9eb');
+  });
+
+  it('does NOT leak systemd env/restart scaffolding into the launchd branch', () => {
+    serviceManager = 'launchd';
+    const script = buildUnixUpgradeScript({
+      ...BASE,
+      instanceId: 'server-e7a9eb',
+      isDarwin: true,
+    });
+    // launchd reaches its manager via Mach bootstrap, not these env vars —
+    // injecting them would be dead weight and risks masking real issues.
+    expect(script).not.toContain('XDG_RUNTIME_DIR');
+    expect(script).not.toContain('DBUS_SESSION_BUS_ADDRESS');
+    expect(script).not.toContain('systemctl');
+    expect(script).not.toContain('retrying after reload');
+  });
+
   it('prefers systemd when both managers somehow look present', () => {
     // existsSync answers true for BOTH families this once; the systemd branch
     // must win and no launchctl line should leak into the script.
@@ -115,6 +151,50 @@ describe('buildUnixUpgradeScript — instance-aware service restart', () => {
     });
     expect(script).toContain('systemctl --user start "yeaft-agent@server-e7a9eb"');
     expect(script).not.toContain('launchctl');
+  });
+});
+
+// String-containment asserts can't catch a dropped `fi` or an unbalanced quote.
+// Run the generated script through `bash -n` (parse only, never execute) so the
+// added if/else restart scaffolding is held to "syntactically valid", not just
+// "contains the right substrings". Platform-independent: bash -n needs no
+// systemd/launchd present.
+describe('buildUnixUpgradeScript — generated shell is syntactically valid', () => {
+  const realFs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { execFileSync } = require('node:child_process');
+
+  let hasBash = true;
+  try { execFileSync('bash', ['-c', 'true']); } catch { hasBash = false; }
+
+  const check = (script) => {
+    const file = path.join(os.tmpdir(), `yeaft-upgrade-bashn-${process.pid}-${Math.floor(performance.now())}.sh`);
+    realFs.writeFileSync(file, script);
+    try {
+      execFileSync('bash', ['-n', file]); // throws on syntax error
+    } finally {
+      realFs.rmSync(file, { force: true });
+    }
+  };
+
+  beforeEach(() => { serviceManager = 'systemd'; });
+
+  it.skipIf(!hasBash)('systemd branch (named instance) parses cleanly', () => {
+    expect(() => check(buildUnixUpgradeScript({ ...BASE, instanceId: 'server-e7a9eb' }))).not.toThrow();
+  });
+
+  it.skipIf(!hasBash)('systemd branch (default instance) parses cleanly', () => {
+    expect(() => check(buildUnixUpgradeScript({ ...BASE, instanceId: 'default' }))).not.toThrow();
+  });
+
+  it.skipIf(!hasBash)('launchd branch parses cleanly', () => {
+    serviceManager = 'launchd';
+    expect(() => check(buildUnixUpgradeScript({ ...BASE, instanceId: 'server-e7a9eb', isDarwin: true }))).not.toThrow();
+  });
+
+  it.skipIf(!hasBash)('local (non-global) install variant parses cleanly', () => {
+    expect(() => check(buildUnixUpgradeScript({ ...BASE, instanceId: 'server-e7a9eb', isGlobalInstall: false }))).not.toThrow();
   });
 });
 
