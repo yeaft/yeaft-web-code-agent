@@ -265,6 +265,36 @@ describe('handleYeaftHistoryChunk', () => {
     expect(arr[0].sessionId).toBe('g1');
   });
 
+  it('documents why metadata-only must not send an empty recent chunk', () => {
+    const store = mkStore({
+      yeaftActiveSessionFilter: 'g1',
+      messagesMap: {
+        'yeaft-1': [
+          { id: 'cached-q', type: 'user', content: 'cached q', sessionId: 'g1', timestamp: 10 },
+          { id: 'cached-a', type: 'assistant', content: 'cached a', sessionId: 'g1', timestamp: 11 },
+        ],
+      },
+      yeaftSessionHistoryState: {
+        g1: { loaded: true, loading: false, hasMore: false, oldestSeq: 10, latestSeq: 11, count: 2 },
+      },
+    });
+
+    handleYeaftHistoryChunk(store, {
+      conversationId: 'yeaft-1',
+      sessionId: 'g1',
+      mode: 'recent',
+      messages: [],
+      oldestSeq: null,
+      latestSeq: null,
+      hasMore: false,
+    });
+
+    // Empty `recent` is destructive by design: it means "the authoritative
+    // recent window is empty", not "metadata-only". Therefore the backend must
+    // not emit this shape for `limit:0` bootstraps.
+    expect(store.messagesMap['yeaft-1'].filter(m => m.sessionId === 'g1')).toEqual([]);
+  });
+
   it('replaces stale recent bootstrap rows without blanking live session tail', () => {
     const store = mkStore({
       yeaftActiveSessionFilter: 'g1',

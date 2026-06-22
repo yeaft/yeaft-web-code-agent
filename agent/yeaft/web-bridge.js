@@ -4854,6 +4854,7 @@ export function handleYeaftModelSwitch(msg) {
  */
 export async function handleYeaftLoadHistory(msg) {
   const sessionId = (msg && typeof msg.sessionId === 'string' && msg.sessionId) || null;
+  const metadataOnly = msg && Number.isFinite(msg.limit) && msg.limit <= 0;
   // `lim` is now expressed in TURNS, not raw messages. `loadRecent` and
   // `loadRecentBySession` use turn-based slicing so the cut never lands
   // mid-tool-arc. Pass `undefined` to use the persistence-layer default
@@ -4863,6 +4864,7 @@ export async function handleYeaftLoadHistory(msg) {
   let historyAlreadyReplayed = false;
 
   const replayHistoryFromStore = () => {
+    if (metadataOnly) return;
     // Delta path: caller knows the latest seq (or message id) it has cached
     // and wants only the messages that arrived after that cursor. Returns
     // mode:'delta' so the frontend can append+dedupe instead of replacing
@@ -4994,7 +4996,7 @@ export async function handleYeaftLoadHistory(msg) {
         afterSeq,
       });
       sendSessionEvent({ type: 'history_loaded', mode: 'delta', count: projectedMessages.length, sessionId, latestSeq: delta.latestSeq, afterSeq });
-    } else {
+    } else if (!metadataOnly) {
       emitVisibleHistoryReplay({ store: coldStore, sessionId, limit, mode: 'recent' });
     }
     historyAlreadyReplayed = true;

@@ -154,6 +154,34 @@ describe('Yeaft agent_list does not loop history catch-up', () => {
     }));
   });
 
+  it('keeps cached rows when metadata-only bootstrap returns session_ready only', () => {
+    const store = makeStore();
+    store.yeaftSessionReady = false;
+    store.yeaftModel = null;
+    store.yeaftStatus = null;
+    store.yeaftSessionHistoryState = {};
+
+    handleAgentList(store, agentListMsg());
+    const before = store.messagesMap['yeaft-1'].map(m => m.id);
+
+    store.handleYeaftOutput({
+      conversationId: 'yeaft-1',
+      agentId: AGENT_ID,
+      event: {
+        type: 'session_ready',
+        conversationId: 'yeaft-1',
+        model: 'sonnet',
+        availableModels: [],
+        skills: [],
+        mcpServers: [],
+        tools: [],
+      },
+    });
+
+    expect(store.messagesMap['yeaft-1'].map(m => m.id)).toEqual(before);
+    expect(store.messagesMap['yeaft-1'].filter(m => m.sessionId === SESSION_ID)).toHaveLength(1);
+  });
+
   it('does replay recent history when there is no cached pane row', () => {
     const store = makeStore();
     store.yeaftSessionHistoryState = {};
