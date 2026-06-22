@@ -4827,6 +4827,110 @@ export async function handleYeaftLoadHistory(msg) {
     sessionId ? store.loadRecentBySession(sessionId, lim) : store.loadRecent(lim);
   let historyAlreadyReplayed = false;
 
+  const replayHistoryFromStore = () => {
+    // Delta path: caller knows the latest seq (or message id) it has cached
+    // and wants only the messages that arrived after that cursor. Returns
+    // mode:'delta' so the frontend can append+dedupe instead of replacing
+    // the pane.
+    const afterSeqRaw = (msg && Number.isFinite(msg.afterSeq)) ? msg.afterSeq : null;
+    const afterMessageId = (msg && typeof msg.afterMessageId === 'string') ? msg.afterMessageId : null;
+    let afterSeq = afterSeqRaw;
+    if (afterSeq === null && afterMessageId && typeof session.conversationStore.getMessageSeqById === 'function') {
+      afterSeq = session.conversationStore.getMessageSeqById(afterMessageId);
+    }
+    if (sessionId && afterSeq !== null && typeof session.conversationStore.loadAfterSeqByGroup === 'function') {
+      const delta = session.conversationStore.loadAfterSeqByGroup(sessionId, afterSeq);
+      const projectedMessages = emitHistoryChunk({
+        sessionId,
+        messages: delta.messages,
+        mode: 'delta',
+        latestSeq: delta.latestSeq,
+        afterSeq,
+      });
+      sendSessionEvent({
+        type: 'history_loaded',
+        mode: 'delta',
+        count: projectedMessages.length,
+        sessionId,
+        latestSeq: delta.latestSeq,
+        afterSeq,
+      });
+      return;
+    }
+
+    // `msg.limit` is the replay-scrollback request from the frontend (UI
+    // history pane, not engine context). Keep the bootstrap window small so
+    // opening a group can paint the latest messages quickly; older rows are
+    // paged via `yeaft_load_more_history` when the user scrolls upward.
+    const limit = (typeof msg.limit === 'number') ? msg.limit : 10;
+    const visiblePage = sessionId
+      ? loadVisibleGroupHistoryPage(session.conversationStore, sessionId, limit)
+      : { messages: limit > 0 ? pickRecent(session.conversationStore, limit) : [], oldestSeq: null, hasMore: false };
+    // Legacy compact.md is a non-group fallback only. For group replay, reading
+    // it makes every group show "has compact" once any legacy/non-scoped compact
+    // exists, even when this group has no scoped summary.
+    const compactSummary = sessionId ? '' : session.conversationStore.readCompactSummary();
+    const replayEntries = sessionId
+      ? visiblePage.messages
+      : visiblePage.messages
+        .map(projectPersistedToVisibleHistoryEntry)
+        .filter(Boolean);
+
+    let latestSeq = null;
+    if (replayEntries.length > 0 && typeof session.conversationStore.getMessageSeqById === 'function') {
+      const last = replayEntries[replayEntries.length - 1];
+      if (last && last.id) latestSeq = session.conversationStore.getMessageSeqById(last.id);
+    }
+
+    if (sessionId) {
+      emitHistoryChunk({
+        sessionId,
+        messages: replayEntries,
+        mode: 'recent',
+        oldestSeq: visiblePage.oldestSeq,
+        hasMore: visiblePage.hasMore,
+        latestSeq,
+        turns: limit,
+      });
+    } else {
+      emitLegacyHistoryOutputFrames(replayEntries);
+    }
+
+    // Compute the pagination cursor for the bootstrap load so the frontend
+    // knows whether a "Load older messages" hint should be shown and where
+    // to start the next page. For group history, this is computed from the
+    // visible projected page, not raw persisted rows, so reflection/internal
+    // tail rows cannot consume the bootstrap window or create false hasMore.
+    let hasMore = false;
+    let oldestSeq = null;
+    if (sessionId) {
+      hasMore = visiblePage.hasMore;
+      oldestSeq = visiblePage.oldestSeq;
+    }
+
+    // hasCompactSummary used to read a single session-global file, so it was
+    // always true once ANY group/VP in the session had compacted. For group
+    // replay, only scoped per-(group, vp) summaries count; legacy compact.md is
+    // reserved for non-group / pre-scoped 1:1 callers.
+    let hasCompactSummaryFlag = !!compactSummary;
+    if (sessionId && typeof session.conversationStore.hasAnyCompactSummaryForSession === 'function') {
+      hasCompactSummaryFlag = session.conversationStore.hasAnyCompactSummaryForSession(sessionId);
+    }
+
+    sendSessionEvent({
+      type: 'history_loaded',
+      mode: 'recent',
+      count: replayEntries.length,
+      hasCompactSummary: hasCompactSummaryFlag,
+      totalHot: session.conversationStore.countHot(),
+      totalCold: session.conversationStore.countCold(),
+      sessionId,
+      hasMore,
+      oldestSeq,
+      latestSeq,
+    });
+  };
+
   if (!session) {
     const yeaftDir = ctx.CONFIG?.yeaftDir || DEFAULT_YEAFT_DIR;
     const afterSeqRaw = (msg && Number.isFinite(msg.afterSeq)) ? msg.afterSeq : null;
@@ -4878,6 +4982,8 @@ export async function handleYeaftLoadHistory(msg) {
     // hydration handles it.
     if (sessionId) setGroupHistory(sessionId, hydrateGroupHistory(sessionId));
   } else {
+    replayHistoryFromStore();
+    historyAlreadyReplayed = true;
     refreshLiveSessionConfig();
     hydrateYeaftStatusFromSession(session, { reason: 'history_load', emitEvent: true });
   }
@@ -4917,107 +5023,7 @@ export async function handleYeaftLoadHistory(msg) {
 
   if (historyAlreadyReplayed) return;
 
-  // Delta path: caller knows the latest seq (or message id) it has cached
-  // and wants only the messages that arrived after that cursor. Returns
-  // early with mode:'delta' so the frontend can append+dedupe instead of
-  // replacing the pane.
-  const afterSeqRaw = (msg && Number.isFinite(msg.afterSeq)) ? msg.afterSeq : null;
-  const afterMessageId = (msg && typeof msg.afterMessageId === 'string') ? msg.afterMessageId : null;
-  let afterSeq = afterSeqRaw;
-  if (afterSeq === null && afterMessageId && typeof session.conversationStore.getMessageSeqById === 'function') {
-    afterSeq = session.conversationStore.getMessageSeqById(afterMessageId);
-  }
-  if (sessionId && afterSeq !== null && typeof session.conversationStore.loadAfterSeqByGroup === 'function') {
-    const delta = session.conversationStore.loadAfterSeqByGroup(sessionId, afterSeq);
-    const projectedMessages = emitHistoryChunk({
-      sessionId,
-      messages: delta.messages,
-      mode: 'delta',
-      latestSeq: delta.latestSeq,
-      afterSeq,
-    });
-    sendSessionEvent({
-      type: 'history_loaded',
-      mode: 'delta',
-      count: projectedMessages.length,
-      sessionId,
-      latestSeq: delta.latestSeq,
-      afterSeq,
-    });
-    return;
-  }
-
-  // `msg.limit` is the replay-scrollback request from the frontend (UI
-  // history pane, not engine context). Keep the bootstrap window small so
-  // opening a group can paint the latest messages quickly; older rows are
-  // paged via `yeaft_load_more_history` when the user scrolls upward.
-  const limit = (typeof msg.limit === 'number') ? msg.limit : 10;
-  const visiblePage = sessionId
-    ? loadVisibleGroupHistoryPage(session.conversationStore, sessionId, limit)
-    : { messages: limit > 0 ? pickRecent(session.conversationStore, limit) : [], oldestSeq: null, hasMore: false };
-  // Legacy compact.md is a non-group fallback only. For group replay, reading
-  // it makes every group show "has compact" once any legacy/non-scoped compact
-  // exists, even when this group has no scoped summary.
-  const compactSummary = sessionId ? '' : session.conversationStore.readCompactSummary();
-  const replayEntries = sessionId
-    ? visiblePage.messages
-    : visiblePage.messages
-      .map(projectPersistedToVisibleHistoryEntry)
-      .filter(Boolean);
-
-  let latestSeq = null;
-  if (replayEntries.length > 0 && typeof session.conversationStore.getMessageSeqById === 'function') {
-    const last = replayEntries[replayEntries.length - 1];
-    if (last && last.id) latestSeq = session.conversationStore.getMessageSeqById(last.id);
-  }
-
-  if (sessionId) {
-    emitHistoryChunk({
-      sessionId,
-      messages: replayEntries,
-      mode: 'recent',
-      oldestSeq: visiblePage.oldestSeq,
-      hasMore: visiblePage.hasMore,
-      latestSeq,
-      turns: limit,
-    });
-  } else {
-    emitLegacyHistoryOutputFrames(replayEntries);
-  }
-
-  // Compute the pagination cursor for the bootstrap load so the frontend
-  // knows whether a "Load older messages" hint should be shown and where
-  // to start the next page. For group history, this is computed from the
-  // visible projected page, not raw persisted rows, so reflection/internal
-  // tail rows cannot consume the bootstrap window or create false hasMore.
-  let hasMore = false;
-  let oldestSeq = null;
-  if (sessionId) {
-    hasMore = visiblePage.hasMore;
-    oldestSeq = visiblePage.oldestSeq;
-  }
-
-  // hasCompactSummary used to read a single session-global file, so it was
-  // always true once ANY group/VP in the session had compacted. For group
-  // replay, only scoped per-(group, vp) summaries count; legacy compact.md is
-  // reserved for non-group / pre-scoped 1:1 callers.
-  let hasCompactSummaryFlag = !!compactSummary;
-  if (sessionId && typeof session.conversationStore.hasAnyCompactSummaryForSession === 'function') {
-    hasCompactSummaryFlag = session.conversationStore.hasAnyCompactSummaryForSession(sessionId);
-  }
-
-  sendSessionEvent({
-    type: 'history_loaded',
-    mode: 'recent',
-    count: replayEntries.length,
-    hasCompactSummary: hasCompactSummaryFlag,
-    totalHot: session.conversationStore.countHot(),
-    totalCold: session.conversationStore.countCold(),
-    sessionId,
-    hasMore,
-    oldestSeq,
-    latestSeq,
-  });
+  replayHistoryFromStore();
 }
 
 /**

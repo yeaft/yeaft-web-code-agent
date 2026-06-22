@@ -265,12 +265,13 @@ describe('handleYeaftHistoryChunk', () => {
     expect(arr[0].sessionId).toBe('g1');
   });
 
-  it('merges batched recent bootstrap chunks without deleting live session rows', () => {
+  it('replaces stale recent bootstrap rows without blanking live session tail', () => {
     const store = mkStore({
       yeaftActiveSessionFilter: 'g1',
       messagesMap: {
         'yeaft-1': [
           { id: 'm0100', type: 'user', content: 'stale-q', sessionId: 'g1', timestamp: new Date('2026-05-01T09:59:59.000Z').getTime() },
+          { id: 'stale-old', type: 'assistant', content: 'old stale row', sessionId: 'g1', timestamp: new Date('2026-05-01T09:59:30.000Z').getTime() },
           { id: 'live-user', type: 'user', content: 'live user', sessionId: 'g1', timestamp: new Date('2026-05-01T10:00:02.000Z').getTime() },
           { id: 'live-assistant', type: 'assistant', content: 'streaming', sessionId: 'g1', timestamp: new Date('2026-05-01T10:00:03.000Z').getTime(), isStreaming: true },
           { id: 'keep-g2', type: 'user', content: 'other session', sessionId: 'g2', timestamp: new Date('2026-05-01T09:59:58.000Z').getTime() },
@@ -294,6 +295,7 @@ describe('handleYeaftHistoryChunk', () => {
     const g1Ids = store.messagesMap['yeaft-1'].filter(m => m.sessionId === 'g1').map(m => m.id);
     expect(g1Ids).toEqual(['m0100', 'm0101', 'live-user', 'live-assistant']);
     expect(store.messagesMap['yeaft-1'].map(m => m.id)).toContain('keep-g2');
+    expect(store.messagesMap['yeaft-1'].map(m => m.id)).not.toContain('stale-old');
     expect(store.messagesMap['yeaft-1'].find(m => m.id === 'm0100')?.content).toBe('fresh-q');
     expect(store.messagesMap['yeaft-1'].find(m => m.id === 'live-assistant')?.isStreaming).toBe(true);
     expect(store.yeaftSessionHistoryState.g1).toEqual(expect.objectContaining({

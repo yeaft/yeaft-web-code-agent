@@ -3990,15 +3990,12 @@ export const useChatStore = defineStore('chat', {
       const convId = this.yeaftConversationId;
 
       // Manual reload means "show me the persisted pane again", not a delta.
-      // Drop only the active Yeaft session rows from the shared conversation
-      // map; other sessions stay cached so switching remains instant.
-      if (convId && Array.isArray(this.messagesMap[convId])) {
-        if (sessionId) {
-          this.messagesMap[convId] = this.messagesMap[convId].filter(m => (m?.sessionId ?? m?.groupId) !== sessionId);
-        } else {
-          this.messagesMap[convId] = [];
-        }
-      }
+      // Do not blank the pane before the reply arrives: load-history also
+      // replays metadata (session_ready/status/VP snapshots), and those can be
+      // slower than the disk read. The `recent` history chunk atomically
+      // replaces this session's persisted rows when it lands, preserving any
+      // live streaming row and preventing the refresh button from showing an
+      // empty conversation during the round trip.
 
       const { [sessionKey]: _oldState, ...rest } = this.yeaftSessionHistoryState || {};
       this.yeaftSessionHistoryState = {

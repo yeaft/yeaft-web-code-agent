@@ -5,6 +5,7 @@ import { encrypt, decrypt, isEncrypted } from '../encryption.js';
 // 需要在断连期间缓冲的消息类型（CLI / Session 输出相关的关键消息）
 export const BUFFERABLE_TYPES = new Set([
   'claude_output', 'yeaft_output', 'yeaft_session_output', 'session_output',
+  'yeaft_history_chunk',
   'turn_completed', 'conversation_closed',
   'session_id_update', 'compact_status', 'slash_commands_update',
   'background_task_started', 'background_task_output',

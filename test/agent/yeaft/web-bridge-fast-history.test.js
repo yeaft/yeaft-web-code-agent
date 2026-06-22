@@ -223,6 +223,46 @@ describe('Yeaft load-history first paint', () => {
     }
   });
 
+  it('ready-session recent replay emits history before metadata snapshots', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-ready-recent-first-'));
+    try {
+      const store = new ConversationStore(dir);
+      store.append({
+        role: 'user',
+        content: 'ready recent user',
+        sessionId: 'session-fast',
+        time: '2026-06-20T03:00:00.000Z',
+      });
+      store.append({
+        role: 'assistant',
+        content: 'ready recent assistant',
+        sessionId: 'session-fast',
+        speakerVpId: 'vp-linus',
+        time: '2026-06-20T03:00:01.000Z',
+      });
+      __testSetSession({
+        conversationStore: store,
+        config: { model: 'test-model', availableModels: [] },
+        status: { skills: 0, mcpServers: [], tools: 0 },
+        taskManager: { listActiveTasks: () => [] },
+      });
+
+      await handleYeaftLoadHistory({ sessionId: 'session-fast', limit: 1 });
+
+      const firstHistoryIndex = sent.findIndex(m => m.type === 'yeaft_history_chunk' && m.mode === 'recent');
+      const sessionReadyIndex = sent.findIndex(m => m.event?.type === 'session_ready');
+      expect(firstHistoryIndex).toBeGreaterThanOrEqual(0);
+      expect(sessionReadyIndex).toBeGreaterThan(firstHistoryIndex);
+      expect(sent[firstHistoryIndex].messages.map(m => m.content)).toEqual([
+        'ready recent user',
+        'ready recent assistant',
+      ]);
+    } finally {
+      __testSetSession(null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('ready-session delta replay uses the same projected frame shape', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'yeaft-delta-ready-'));
     try {
