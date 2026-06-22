@@ -4,11 +4,23 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { platform } from 'os';
 import ctx from '../context.js';
-import { getConfigDir } from '../service.js';
+import { getConfigDir, getServiceName, getPm2AppName, DEFAULT_INSTANCE_ID } from '../service.js';
+import { getLaunchdPlistPath } from '../service/macos.js';
 import { sendToServer } from './buffer.js';
 import { stopAgentHeartbeat } from './heartbeat.js';
 
-const PM2_APP_NAME = 'yeaft-agent';
+/**
+ * Resolve the local service instance id for this running agent. Each agent
+ * process is pinned to one instance (set in index.js from
+ * YEAFT_AGENT_INSTANCE / config), so the upgrade flow must target THAT
+ * instance's service unit — not the bare `yeaft-agent` default. Without this,
+ * a named instance (e.g. `server-e7a9eb`) installs the new package but its
+ * systemd unit `yeaft-agent@server-e7a9eb` is never restarted, leaving the
+ * agent permanently offline after a UI-triggered upgrade.
+ */
+function resolveInstanceId() {
+  return ctx.CONFIG?.instanceId || process.env.YEAFT_AGENT_INSTANCE || DEFAULT_INSTANCE_ID;
+}
 
 // Derive absolute paths for npm/pm2 from current node executable.
 // In launchd/systemd environments, PATH may not include nvm/node dirs,
@@ -203,11 +215,12 @@ export async function handleUpgradeAgent() {
     });
 
     const isWindows = platform() === 'win32';
+    const instanceId = resolveInstanceId();
 
     if (isWindows) {
-      spawnWindowsUpgradeScript(pkgName, installDir, isGlobalInstall, latestVersion);
+      spawnWindowsUpgradeScript(pkgName, installDir, isGlobalInstall, latestVersion, instanceId);
     } else {
-      spawnUnixUpgradeScript(pkgName, installDir, isGlobalInstall, latestVersion);
+      spawnUnixUpgradeScript(pkgName, installDir, isGlobalInstall, latestVersion, instanceId);
     }
 
     // On PM2: delete the app BEFORE exiting so PM2 won't auto-restart the old version.
@@ -215,7 +228,7 @@ export async function handleUpgradeAgent() {
     const isPm2 = !!process.env.pm_id;
     if (isPm2) {
       try {
-        execFileSync(pm2Path, ['delete', PM2_APP_NAME], { stdio: 'pipe', env: safeEnv, ...shellOpt });
+        execFileSync(pm2Path, ['delete', getPm2AppName(instanceId)], { stdio: 'pipe', env: safeEnv, ...shellOpt });
         console.log(`[Agent] PM2 app deleted to prevent auto-restart during upgrade`);
       } catch {
         console.log(`[Agent] PM2 delete skipped (app may not be registered)`);
@@ -230,9 +243,9 @@ export async function handleUpgradeAgent() {
   }
 }
 
-function spawnWindowsUpgradeScript(pkgName, installDir, isGlobalInstall, latestVersion) {
+function spawnWindowsUpgradeScript(pkgName, installDir, isGlobalInstall, latestVersion, instanceId = DEFAULT_INSTANCE_ID) {
   const pid = process.pid;
-  const configDir = getConfigDir();
+  const configDir = getConfigDir(instanceId);
   mkdirSync(configDir, { recursive: true });
   const logDir = join(configDir, 'logs');
   mkdirSync(logDir, { recursive: true });
@@ -355,13 +368,46 @@ function spawnWindowsUpgradeScript(pkgName, installDir, isGlobalInstall, latestV
   sendToServer({ type: 'upgrade_agent_ack', success: true, version: latestVersion, pendingRestart: true });
 }
 
-function spawnUnixUpgradeScript(pkgName, installDir, isGlobalInstall, latestVersion) {
-  const pid = process.pid;
-  const configDir = getConfigDir();
-  mkdirSync(configDir, { recursive: true });
+/**
+ * Build the Unix (systemd/launchd) upgrade shell script as a string.
+ *
+ * Pure function — no side effects, no spawning — so the generated unit names
+ * can be asserted in unit tests. The service-manager target is resolved from
+ * `instanceId` via the shared helpers (`getServiceName` / `getLaunchdPlistPath`),
+ * so a named instance restarts `yeaft-agent@<id>` instead of the bare
+ * `yeaft-agent` default.
+ *
+ * @param {object} opts
+ * @param {string} opts.pkgName        npm package name
+ * @param {string} opts.installDir     install dir (local install) — used as cwd
+ * @param {boolean} opts.isGlobalInstall  global vs local npm install
+ * @param {number} opts.pid            pid of the exiting agent to wait on
+ * @param {string} opts.configDir      instance config dir (holds logs/upgrade.log)
+ * @param {string} opts.npmPath        absolute npm path
+ * @param {string} opts.safePath       PATH with nodeBinDir prepended
+ * @param {string} opts.instanceId     local service instance id
+ * @param {string} opts.home           HOME dir (for service-manager detection)
+ * @param {boolean} opts.isDarwin      whether the platform is macOS
+ * @returns {string} the upgrade.sh contents
+ */
+export function buildUnixUpgradeScript({
+  pkgName,
+  installDir,
+  isGlobalInstall,
+  pid,
+  configDir,
+  npmPath,
+  safePath,
+  instanceId = DEFAULT_INSTANCE_ID,
+  home = process.env.HOME || '',
+  isDarwin = platform() === 'darwin',
+}) {
   const shPath = join(configDir, 'upgrade.sh');
-  const isSystemd = existsSync(join(process.env.HOME || '', '.config', 'systemd', 'user', 'yeaft-agent.service'));
-  const isLaunchd = platform() === 'darwin' && existsSync(join(process.env.HOME || '', 'Library', 'LaunchAgents', 'com.yeaft.agent.plist'));
+  const serviceName = getServiceName(instanceId);
+  const systemdUnitPath = join(home, '.config', 'systemd', 'user', `${serviceName}.service`);
+  const isSystemd = existsSync(systemdUnitPath);
+  const plistPath = getLaunchdPlistPath(instanceId);
+  const isLaunchd = isDarwin && existsSync(plistPath);
   const cwd = isGlobalInstall ? undefined : installDir;
 
   const shLines = [
@@ -395,12 +441,11 @@ function spawnUnixUpgradeScript(pkgName, installDir, isGlobalInstall, latestVers
   if (isSystemd) {
     shLines.push(
       '# Stop systemd service to prevent restart loop',
-      'systemctl --user stop yeaft-agent 2>/dev/null',
+      `systemctl --user stop "${serviceName}" 2>/dev/null`,
       'sleep 1',
       '',
     );
   } else if (isLaunchd) {
-    const plistPath = join(process.env.HOME || '', 'Library', 'LaunchAgents', 'com.yeaft.agent.plist');
     shLines.push(
       '# Unload launchd service to prevent restart loop',
       `launchctl unload "${plistPath}" 2>/dev/null`,
@@ -430,11 +475,10 @@ function spawnUnixUpgradeScript(pkgName, installDir, isGlobalInstall, latestVers
   if (isSystemd) {
     shLines.push(
       '# Restart systemd service',
-      'systemctl --user start yeaft-agent',
+      `systemctl --user start "${serviceName}"`,
       'echo "[Upgrade] Service restarted via systemd"',
     );
   } else if (isLaunchd) {
-    const plistPath = join(process.env.HOME || '', 'Library', 'LaunchAgents', 'com.yeaft.agent.plist');
     shLines.push(
       '# Reload launchd service',
       `launchctl load "${plistPath}"`,
@@ -445,7 +489,26 @@ function spawnUnixUpgradeScript(pkgName, installDir, isGlobalInstall, latestVers
   // 清理脚本自身
   shLines.push('', `rm -f "${shPath}"`);
 
-  writeFileSync(shPath, shLines.join('\n'), { mode: 0o755 });
+  return shLines.join('\n');
+}
+
+function spawnUnixUpgradeScript(pkgName, installDir, isGlobalInstall, latestVersion, instanceId = DEFAULT_INSTANCE_ID) {
+  const configDir = getConfigDir(instanceId);
+  mkdirSync(configDir, { recursive: true });
+  const shPath = join(configDir, 'upgrade.sh');
+
+  const script = buildUnixUpgradeScript({
+    pkgName,
+    installDir,
+    isGlobalInstall,
+    pid: process.pid,
+    configDir,
+    npmPath,
+    safePath,
+    instanceId,
+  });
+
+  writeFileSync(shPath, script, { mode: 0o755 });
   const child = spawn('bash', [shPath], {
     detached: true,
     stdio: 'ignore',
