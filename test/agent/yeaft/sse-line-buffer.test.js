@@ -133,7 +133,8 @@ describe('SseLineBuffer — malformed-stream cap', () => {
       thrown = e;
     }
     expect(thrown).toBeInstanceOf(LLMServerError);
-    expect(thrown.retryable).toBe(true);
+    // engine.js retries on `instanceof LLMServerError`, so the class itself is
+    // the retryable contract — no separate `.retryable` flag on the throw path.
     expect(thrown.message).toMatch(/exceeded .* bytes without a newline/);
   });
 

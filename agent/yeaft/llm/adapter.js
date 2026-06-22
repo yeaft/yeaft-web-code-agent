@@ -140,12 +140,18 @@ export const DEFAULT_SSE_MAX_LINE_BYTES = 64 * 1024 * 1024;
  * `ws.on('pong')` handler. The agent then sees "No pong" and terminates its
  * own healthy connection.
  *
- * This buffer scans only the newly-appended region for `\n` (via `indexOf`
- * from a saved offset), so total work is linear in bytes received regardless
- * of how a line is chunked. It also enforces `maxLineBytes`: a single line
- * that exceeds the cap with no terminator is treated as a malformed stream
- * and surfaced via `onOverflow` (the adapter converts it to a retryable
- * server error) rather than accumulated without bound.
+ * This buffer scans only each newly-arrived chunk for `\n` and holds the
+ * still-incomplete trailing line as an array of fragments (joined only when a
+ * newline finally completes it), so total work is linear in bytes received
+ * regardless of how a line is chunked. It also enforces `maxLineBytes`: a
+ * single line that exceeds the cap with no terminator is treated as a
+ * malformed stream — `push()` throws a retryable LLMServerError (which the
+ * adapter's stream loop propagates through classifyFetchError) rather than
+ * accumulating without bound.
+ *
+ * Note: the cap is measured in JS string `.length` (UTF-16 code units), not
+ * exact UTF-8 bytes. It is a coarse upper-bound guard against unbounded
+ * growth, not a precise byte accountant.
  */
 export class SseLineBuffer {
   /** @param {{ maxLineBytes?: number }} [opts] */
@@ -204,12 +210,13 @@ export class SseLineBuffer {
       this._frags.push(tail);
       this._pendingLen += tail.length;
       if (this._pendingLen > this.maxLineBytes) {
-        const err = new LLMServerError(
+        // LLMServerError is retryable by class (engine.js retries on
+        // `instanceof LLMServerError`), matching the sibling throws in the
+        // adapters — no `.retryable` flag needed on the throw path.
+        throw new LLMServerError(
           `SSE line exceeded ${this.maxLineBytes} bytes without a newline — treating as malformed stream`,
           0,
         );
-        err.retryable = true;
-        throw err;
       }
     }
     return lines;
