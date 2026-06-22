@@ -546,6 +546,57 @@ describe('handleYeaftHistoryChunk', () => {
     }));
   });
 
+  it('merges persisted assistant history into a completed live-local row with the same turnId', () => {
+    const store = mkStore({
+      yeaftActiveSessionFilter: 'g1',
+      messagesMap: {
+        'yeaft-1': [{
+          id: 'local-random-assistant-id',
+          type: 'assistant',
+          content: 'completed live answer',
+          sessionId: 'g1',
+          vpId: 'vp-linus',
+          speakerVpId: 'vp-linus',
+          threadId: 'thread-1',
+          turnId: 'turn-completed-1',
+          isStreaming: false,
+          timestamp: new Date('2026-05-01T10:00:00.000Z').getTime(),
+        }],
+      },
+    });
+
+    handleYeaftHistoryChunk(store, {
+      conversationId: 'yeaft-1',
+      sessionId: 'g1',
+      mode: 'delta',
+      messages: [{
+        id: 'm0104',
+        role: 'assistant',
+        content: 'completed live answer with persisted suffix',
+        sessionId: 'g1',
+        speakerVpId: 'vp-linus',
+        threadId: 'thread-1',
+        turnId: 'turn-completed-1',
+        ts: '2026-05-01T10:00:01.000Z',
+      }],
+      latestSeq: 104,
+    });
+
+    const assistants = store.messagesMap['yeaft-1'].filter(m => m.type === 'assistant');
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]).toEqual(expect.objectContaining({
+      id: 'm0104',
+      messageId: 'm0104',
+      content: 'completed live answer with persisted suffix',
+      isStreaming: false,
+      isHistory: true,
+      speakerVpId: 'vp-linus',
+      threadId: 'thread-1',
+      turnId: 'turn-completed-1',
+      _hasPersistedTurnId: true,
+    }));
+  });
+
   it('does not merge prefix-matching assistant history from a different turn', () => {
     const store = mkStore({
       yeaftActiveSessionFilter: 'g1',

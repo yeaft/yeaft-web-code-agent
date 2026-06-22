@@ -73,8 +73,9 @@ function sameAssistantHistoryRow(existing, incoming) {
   const incomingThread = incoming.threadId || '';
   if (existingThread && incomingThread && existingThread !== incomingThread) return false;
 
-  if (!existing.isStreaming) return false;
-  if (incoming._hasPersistedTurnId === false) return false;
+  const canMergeLiveLocalRow = existing.isStreaming || existing.isHistory !== true;
+  if (!canMergeLiveLocalRow) return false;
+  if (incoming._hasPersistedTurnId !== true) return false;
 
   const existingTurnId = existing.turnId || '';
   const incomingTurnId = incoming.turnId || '';
