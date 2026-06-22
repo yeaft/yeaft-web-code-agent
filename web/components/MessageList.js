@@ -837,6 +837,7 @@ export default {
           id: 'turn_' + turnCounter,
           textContent: '',
           isStreaming: false,
+          isHistory: false,
           todoMsg: null,
           toolMsgs: [],
           toolSummaryCount: 0,
@@ -904,6 +905,7 @@ export default {
           closeTurnIfTurnBoundaryChanged(msg);
           if (!currentTurn) startTurn();
           latchSpeakerFromMsg(msg);
+          if (msg.isHistory) currentTurn.isHistory = true;
           currentTurn.toolSummaryCount += Number(msg.count || msg.omittedCount || 0) || 0;
           currentTurn.messages.push(msg);
           continue;
@@ -917,6 +919,9 @@ export default {
           }
           if (msg.isStreaming) {
             currentTurn.isStreaming = true;
+          }
+          if (msg.isHistory) {
+            currentTurn.isHistory = true;
           }
           // task-314: remember the persisted message id for this turn so a
           // "Fork from here" click can tell the agent which message to cut
@@ -949,6 +954,7 @@ export default {
             toolResult: msg.toolResult || null
           };
 
+          if (msg.isHistory) currentTurn.isHistory = true;
           if (msg.toolName === 'TodoWrite') {
             currentTurn.todoMsg = toolEntry;
           } else if (msg.toolName === 'AskUserQuestion') {
@@ -964,6 +970,7 @@ export default {
           closeTurnIfTurnBoundaryChanged(msg);
           if (!currentTurn) startTurn();
           latchSpeakerFromMsg(msg);
+          if (msg.isHistory) currentTurn.isHistory = true;
           currentTurn.imageMsgs.push(msg);
           currentTurn.messages.push(msg);
           continue;
