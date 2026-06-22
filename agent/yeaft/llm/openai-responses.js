@@ -37,6 +37,7 @@ import {
   readStreamChunkWithIdleTimeout,
   redactRawRequest,
   safeHeaders,
+  SseLineBuffer,
 } from './adapter.js';
 import {
   normalizeEffort,
@@ -315,7 +316,12 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = '';
+    // Incremental O(n) line splitter (see SseLineBuffer): the old
+    // `buffer += chunk; buffer.split('\n')` pattern went quadratic on a
+    // multi-MiB un-terminated line and froze the event loop long enough to
+    // starve the WS heartbeat. The buffer also caps a single newline-less
+    // line and throws a retryable error on a malformed stream.
+    const sseLines = new SseLineBuffer();
 
     /** Accumulate tool call arguments by output_index.
      *  Value: { callId, name, arguments } */
@@ -342,12 +348,11 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
         });
         if (done) break;
         const chunkText = decoder.decode(value, { stream: true });
-        buffer += chunkText;
         rawSseBodyChunks.push(chunkText);
 
-        // SSE events are separated by blank lines; split on \n
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+        // SSE events are separated by blank lines; SseLineBuffer yields each
+        // completed line (newline stripped) in O(n) total.
+        const lines = sseLines.push(chunkText);
 
         for (const rawLine of lines) {
           const line = rawLine.trimEnd();

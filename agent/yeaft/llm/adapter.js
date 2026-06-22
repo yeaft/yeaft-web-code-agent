@@ -118,6 +118,117 @@ export class LLMAbortError extends Error {
 }
 
 /**
+ * Default cap on a single un-terminated SSE line. A well-formed SSE stream
+ * terminates every `data:` line with `\n`, so the live buffer never exceeds
+ * one event. A malfunctioning gateway can instead emit a multi-megabyte run
+ * with no newline; without a cap, the buffer grows unbounded and (before the
+ * incremental scan below) the parse went quadratic, freezing the event loop
+ * long enough to starve the WS heartbeat and drop the agent offline. 64 MiB
+ * is far above any legitimate single SSE event yet bounds the damage.
+ */
+export const DEFAULT_SSE_MAX_LINE_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Incremental, O(n) line splitter for SSE byte streams.
+ *
+ * The previous per-adapter pattern was `buffer += chunk; lines =
+ * buffer.split('\n'); buffer = lines.pop()`. When a single line spans many
+ * chunks (no `\n` yet), each chunk re-scanned and re-split the entire growing
+ * buffer — O(n²) total, which on a multi-MiB un-terminated line blocks the
+ * main thread for tens of seconds to minutes (measured: ~35 s at 40 MiB),
+ * freezing every event-loop task including the heartbeat `setInterval` and the
+ * `ws.on('pong')` handler. The agent then sees "No pong" and terminates its
+ * own healthy connection.
+ *
+ * This buffer scans only each newly-arrived chunk for `\n` and holds the
+ * still-incomplete trailing line as an array of fragments (joined only when a
+ * newline finally completes it), so total work is linear in bytes received
+ * regardless of how a line is chunked. It also enforces `maxLineBytes`: a
+ * single line that exceeds the cap with no terminator is treated as a
+ * malformed stream — `push()` throws a retryable LLMServerError (which the
+ * adapter's stream loop propagates through classifyFetchError) rather than
+ * accumulating without bound.
+ *
+ * Note: the cap is measured in JS string `.length` (UTF-16 code units), not
+ * exact UTF-8 bytes. It is a coarse upper-bound guard against unbounded
+ * growth, not a precise byte accountant.
+ */
+export class SseLineBuffer {
+  /** @param {{ maxLineBytes?: number }} [opts] */
+  constructor({ maxLineBytes = DEFAULT_SSE_MAX_LINE_BYTES } = {}) {
+    this.maxLineBytes = Number.isFinite(maxLineBytes) && maxLineBytes > 0
+      ? Math.floor(maxLineBytes)
+      : DEFAULT_SSE_MAX_LINE_BYTES;
+    /**
+     * Fragments of the current (incomplete) line, in arrival order. Kept as an
+     * array — NOT a concatenated string — because `string += chunk` reallocates
+     * and copies the whole growing tail every call, which is itself O(n²) on a
+     * long un-terminated line even with an incremental newline scan. Pushing a
+     * fragment is O(1); we only `join` when a newline actually completes a line.
+     * @type {string[]}
+     */
+    this._frags = [];
+    /** Running byte length of `_frags` — avoids re-summing to enforce the cap. */
+    this._pendingLen = 0;
+  }
+
+  /**
+   * Append a chunk and return every newly-completed line (newline stripped),
+   * in order. The trailing incomplete line stays buffered for the next call.
+   * Lines may be empty strings (SSE uses blank lines as event separators);
+   * callers filter as needed.
+   *
+   * @param {string} chunk
+   * @returns {string[]}
+   * @throws {LLMServerError} when an un-terminated line exceeds `maxLineBytes`
+   */
+  push(chunk) {
+    if (!chunk) return [];
+    const lines = [];
+    let start = 0;
+    // Scan only THIS chunk for newlines. Bytes before the first newline finish
+    // the buffered partial line; bytes between newlines are whole lines; bytes
+    // after the last newline become the new partial. Work is linear in chunk
+    // length, and the buffered tail is never concatenated until a newline lands.
+    let nl;
+    while ((nl = chunk.indexOf('\n', start)) !== -1) {
+      const segment = chunk.slice(start, nl);
+      if (this._frags.length > 0) {
+        this._frags.push(segment);
+        lines.push(this._frags.join(''));
+        this._frags = [];
+        this._pendingLen = 0;
+      } else {
+        lines.push(segment);
+      }
+      start = nl + 1;
+    }
+    // Trailing fragment after the last newline (or the whole chunk if none):
+    // buffer it as an O(1) push rather than a string concat.
+    if (start < chunk.length) {
+      const tail = start === 0 ? chunk : chunk.slice(start);
+      this._frags.push(tail);
+      this._pendingLen += tail.length;
+      if (this._pendingLen > this.maxLineBytes) {
+        // LLMServerError is retryable by class (engine.js retries on
+        // `instanceof LLMServerError`), matching the sibling throws in the
+        // adapters — no `.retryable` flag needed on the throw path.
+        throw new LLMServerError(
+          `SSE line exceeded ${this.maxLineBytes} bytes without a newline — treating as malformed stream`,
+          0,
+        );
+      }
+    }
+    return lines;
+  }
+
+  /** The unconsumed trailing partial line (no newline yet). */
+  get pending() {
+    return this._frags.length === 1 ? this._frags[0] : this._frags.join('');
+  }
+}
+
+/**
  * Read one chunk from a Fetch stream with a silence timeout. This is not a
  * total request deadline: every received chunk gets a fresh budget. A caller
  * abort still wins and is classified as LLMAbortError; only an idle stream is
