@@ -37,9 +37,9 @@ export const DEFAULT_SLASH_COMMANDS = Object.keys(BUILTIN_DESCRIPTIONS);
  */
 export function getCommandGroup(cmd) {
   if (BUILTIN_NAMES.has(cmd)) return 'builtin';
-  // Plugin commands contain ":" in name, e.g. /yeaft-skills:sprint, /update-config
+  // Skill commands include both plugin-style names and Yeaft-native skill:<name>.
   const bare = cmd.startsWith('/') ? cmd.slice(1) : cmd;
-  if (bare.includes(':')) return 'skill';
+  if (bare.startsWith('skill:') || bare.includes(':')) return 'skill';
   // Other non-builtin commands (e.g. /update-config, /simplify) — treat as project skills
   return 'project';
 }

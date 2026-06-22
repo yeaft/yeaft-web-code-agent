@@ -73,6 +73,8 @@ import { buildMcpFlattenedTools } from './tools/mcp-tools.js';
 import { getAgentRegistry, agentBelongsToScope } from './tools/agent.js';
 import { isPromptableAgentStatus } from './sub-agent/status.js';
 
+const SKILL_COMMAND_PREFIX = 'skill:';
+
 /** @type {import('./session.js').Session | null} */
 let session = null;
 
@@ -1687,6 +1689,37 @@ function sendSessionOutputFrame(data, { sessionId, chatId, vpId, turnId, threadI
     ...(turnId ? { turnId } : {}),
     ...(threadId ? { threadId } : {}),
     data,
+  });
+}
+
+export function buildSkillSlashCommands(skillManager) {
+  if (!skillManager || typeof skillManager.list !== 'function') return { commands: [], descriptions: {} };
+  const commands = [];
+  const descriptions = {};
+  for (const skill of skillManager.list()) {
+    if (!skill?.name || typeof skill.name !== 'string') continue;
+    const commandName = `${SKILL_COMMAND_PREFIX}${skill.name}`;
+    commands.push(commandName);
+    descriptions[commandName] = skill.description || skill.trigger || 'Load Yeaft skill';
+  }
+  commands.sort((a, b) => a.localeCompare(b));
+  return { commands, descriptions };
+}
+
+function broadcastSkillSlashCommands(sessionLike) {
+  const { commands, descriptions } = buildSkillSlashCommands(sessionLike?.skillManager);
+  const slashCommands = [...new Set([...(ctx.slashCommands || []), ...commands])];
+  const slashCommandDescriptions = {
+    ...(ctx.slashCommandDescriptions || {}),
+    ...descriptions,
+  };
+  ctx.slashCommands = slashCommands;
+  ctx.slashCommandDescriptions = slashCommandDescriptions;
+  sendToServer({
+    type: 'slash_commands_update',
+    conversationId: '__preload__',
+    slashCommands,
+    slashCommandDescriptions,
   });
 }
 
@@ -3358,6 +3391,7 @@ async function ensureSessionLoaded() {
 
   yeaftConversationId = `yeaft-${Date.now()}`;
   hydrateYeaftStatusFromSession(session, { reason: 'session_ready', emitEvent: true });
+  broadcastSkillSlashCommands(session);
 
   // Per-group history is hydrated lazily on first `getOrCreateSessionHistory`
   // — there's no global "all conversations" tape any more.
