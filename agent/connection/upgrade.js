@@ -380,8 +380,13 @@ function spawnWindowsUpgradeScript(pkgName, installDir, isGlobalInstall, latestV
  * On systemd the script pins XDG_RUNTIME_DIR / DBUS_SESSION_BUS_ADDRESS (the
  * detached upgrade shell may not inherit them, and `systemctl --user` needs
  * them to reach the user manager) and logs + retries a failed restart instead
- * of failing silently. launchd / PM2 reach their managers without these env
- * vars, so those branches are unchanged.
+ * of failing silently.
+ *
+ * The env-pin is systemd-specific: launchd reaches its manager via the
+ * inherited Mach bootstrap port and PM2 via a fixed named pipe, so neither
+ * needs these vars. NOTE this is only about the *env* asymmetry — the launchd
+ * branch does NOT yet have the same restart-failure logging/retry hardening;
+ * that resilience gap is deferred, not "launchd is already safe".
  *
  * @param {object} opts
  * @param {string} opts.pkgName        npm package name
@@ -452,8 +457,9 @@ export function buildUnixUpgradeScript({
       // stop and the restart silently no-op, stranding the agent offline after
       // upgrade. Pin per-user defaults (keeping any inherited value) before the
       // first systemctl call so the whole sequence can reach the manager.
-      'export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"',
-      'export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"',
+      'YEAFT_UID="$(id -u)"',
+      'export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$YEAFT_UID}"',
+      'export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$YEAFT_UID/bus}"',
       '',
       '# Stop systemd service to prevent restart loop',
       `systemctl --user stop "${serviceName}" 2>/dev/null`,
@@ -497,7 +503,7 @@ export function buildUnixUpgradeScript({
       'else',
       '  START_RC=$?',
       `  echo "[Upgrade] systemctl start failed (rc=$START_RC); retrying after reload..."`,
-      '  systemctl --user daemon-reload 2>&1 || true',
+      '  systemctl --user daemon-reload || true',
       '  sleep 2',
       `  if systemctl --user start "${serviceName}"; then`,
       '    echo "[Upgrade] Service restarted via systemd (after retry)"',
@@ -522,7 +528,9 @@ export function buildUnixUpgradeScript({
 
 function spawnUnixUpgradeScript(pkgName, installDir, isGlobalInstall, latestVersion, instanceId = DEFAULT_INSTANCE_ID) {
   const configDir = getConfigDir(instanceId);
-  mkdirSync(configDir, { recursive: true });
+  // Create logs/ too: the generated script's `exec > "$LOGFILE" 2>&1` aborts
+  // the whole upgrade silently if that directory is missing.
+  mkdirSync(join(configDir, 'logs'), { recursive: true });
   const shPath = join(configDir, 'upgrade.sh');
 
   const script = buildUnixUpgradeScript({

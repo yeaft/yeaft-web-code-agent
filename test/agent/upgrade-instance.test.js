@@ -110,8 +110,8 @@ describe('buildUnixUpgradeScript — instance-aware service restart', () => {
     // to the bus and the restart silently never runs. The script must pin
     // per-user defaults (keeping any inherited value).
     const script = buildUnixUpgradeScript({ ...BASE, instanceId: 'server-e7a9eb' });
-    expect(script).toContain('export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"');
-    expect(script).toContain('export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"');
+    expect(script).toContain('export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$YEAFT_UID}"');
+    expect(script).toContain('export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$YEAFT_UID/bus}"');
     // Env pin must precede the systemctl calls that depend on it.
     expect(script.indexOf('XDG_RUNTIME_DIR')).toBeLessThan(script.indexOf('systemctl --user stop'));
   });
@@ -151,6 +151,50 @@ describe('buildUnixUpgradeScript — instance-aware service restart', () => {
     });
     expect(script).toContain('systemctl --user start "yeaft-agent@server-e7a9eb"');
     expect(script).not.toContain('launchctl');
+  });
+});
+
+// String-containment asserts can't catch a dropped `fi` or an unbalanced quote.
+// Run the generated script through `bash -n` (parse only, never execute) so the
+// added if/else restart scaffolding is held to "syntactically valid", not just
+// "contains the right substrings". Platform-independent: bash -n needs no
+// systemd/launchd present.
+describe('buildUnixUpgradeScript — generated shell is syntactically valid', () => {
+  const realFs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { execFileSync } = require('node:child_process');
+
+  let hasBash = true;
+  try { execFileSync('bash', ['-c', 'true']); } catch { hasBash = false; }
+
+  const check = (script) => {
+    const file = path.join(os.tmpdir(), `yeaft-upgrade-bashn-${process.pid}-${Math.floor(performance.now())}.sh`);
+    realFs.writeFileSync(file, script);
+    try {
+      execFileSync('bash', ['-n', file]); // throws on syntax error
+    } finally {
+      realFs.rmSync(file, { force: true });
+    }
+  };
+
+  beforeEach(() => { serviceManager = 'systemd'; });
+
+  it.skipIf(!hasBash)('systemd branch (named instance) parses cleanly', () => {
+    expect(() => check(buildUnixUpgradeScript({ ...BASE, instanceId: 'server-e7a9eb' }))).not.toThrow();
+  });
+
+  it.skipIf(!hasBash)('systemd branch (default instance) parses cleanly', () => {
+    expect(() => check(buildUnixUpgradeScript({ ...BASE, instanceId: 'default' }))).not.toThrow();
+  });
+
+  it.skipIf(!hasBash)('launchd branch parses cleanly', () => {
+    serviceManager = 'launchd';
+    expect(() => check(buildUnixUpgradeScript({ ...BASE, instanceId: 'server-e7a9eb', isDarwin: true }))).not.toThrow();
+  });
+
+  it.skipIf(!hasBash)('local (non-global) install variant parses cleanly', () => {
+    expect(() => check(buildUnixUpgradeScript({ ...BASE, instanceId: 'server-e7a9eb', isGlobalInstall: false }))).not.toThrow();
   });
 });
 
