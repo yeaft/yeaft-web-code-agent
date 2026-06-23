@@ -81,6 +81,7 @@ class MCPServerConnection extends EventEmitter {
         this.#process = spawn(this.config.command, this.config.args || [], {
           stdio: ['pipe', 'pipe', 'pipe'],
           env: { ...process.env, ...this.config.env },
+          windowsHide: true,
         });
 
         this.#process.stdout.on('data', (data) => {

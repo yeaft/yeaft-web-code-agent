@@ -27,7 +27,7 @@ export async function initWorktrees(projectDir, roles) {
   // 获取 git 已知的 worktree 列表
   let knownWorktrees = new Set();
   try {
-    const { stdout } = await execFile('git', ['worktree', 'list', '--porcelain'], { cwd: projectDir });
+    const { stdout } = await execFile('git', ['worktree', 'list', '--porcelain'], { cwd: projectDir, windowsHide: true });
     for (const line of stdout.split('\n')) {
       if (line.startsWith('worktree ')) {
         knownWorktrees.add(line.slice('worktree '.length).trim());
@@ -66,13 +66,13 @@ export async function initWorktrees(projectDir, roles) {
     try {
       // 创建分支（如果不存在）
       try {
-        await execFile('git', ['branch', branch], { cwd: projectDir });
+        await execFile('git', ['branch', branch], { cwd: projectDir, windowsHide: true });
       } catch {
         // 分支已存在，忽略
       }
 
       // 创建 worktree
-      await execFile('git', ['worktree', 'add', wtDir, branch], { cwd: projectDir });
+      await execFile('git', ['worktree', 'add', wtDir, branch], { cwd: projectDir, windowsHide: true });
       console.log(`[Crew] Created worktree: ${wtDir} on branch ${branch}`);
       worktreeMap.set(idx, wtDir);
     } catch (e) {
@@ -104,14 +104,14 @@ export async function cleanupWorktrees(projectDir) {
       const branch = `crew/${entry}`;
 
       try {
-        await execFile('git', ['worktree', 'remove', wtDir, '--force'], { cwd: projectDir });
+        await execFile('git', ['worktree', 'remove', wtDir, '--force'], { cwd: projectDir, windowsHide: true });
         console.log(`[Crew] Removed worktree: ${wtDir}`);
       } catch (e) {
         console.warn(`[Crew] Failed to remove worktree ${wtDir}:`, e.message);
       }
 
       try {
-        await execFile('git', ['branch', '-D', branch], { cwd: projectDir });
+        await execFile('git', ['branch', '-D', branch], { cwd: projectDir, windowsHide: true });
         console.log(`[Crew] Deleted branch: ${branch}`);
       } catch (e) {
         console.warn(`[Crew] Failed to delete branch ${branch}:`, e.message);
