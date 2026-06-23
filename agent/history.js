@@ -2,6 +2,7 @@ import { homedir } from 'os';
 import { existsSync, readFileSync, readdirSync, statSync, openSync, readSync, closeSync, fstatSync } from 'fs';
 import { join } from 'path';
 import ctx from './context.js';
+import { normalizeClaudeMessage } from './sdk/message-normalize.js';
 import { getProvider, DEFAULT_PROVIDER } from './providers/index.js';
 
 // Claude 项目目录
@@ -227,7 +228,7 @@ function readTailMessages(filePath, limit) {
         const line = lines[i];
         if (!line || !line.trim()) continue;
         try {
-          const data = JSON.parse(line);
+          const data = normalizeClaudeMessage(JSON.parse(line));
           if (data.type === 'user' || data.type === 'assistant') {
             collected.push(data);
             if (collected.length >= limit) break;
@@ -241,7 +242,7 @@ function readTailMessages(filePath, limit) {
       const headLine = carry.toString('utf-8').trim();
       if (headLine) {
         try {
-          const data = JSON.parse(headLine);
+          const data = normalizeClaudeMessage(JSON.parse(headLine));
           if (data.type === 'user' || data.type === 'assistant') {
             collected.push(data);
           }
@@ -287,7 +288,7 @@ export function loadSessionHistory(workDir, claudeSessionId, limit = 500) {
 
     for (const line of lines) {
       try {
-        const data = JSON.parse(line);
+        const data = normalizeClaudeMessage(JSON.parse(line));
         if (data.type === 'user' || data.type === 'assistant') {
           messages.push(data);
         }

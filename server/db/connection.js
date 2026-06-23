@@ -586,6 +586,10 @@ export const stmts = {
     DELETE FROM messages WHERE session_id = ?
   `),
 
+  deleteMessagesAfterId: db.prepare(`
+    DELETE FROM messages WHERE session_id = ? AND id > ?
+  `),
+
   updateMessageMetadata: db.prepare(`
     UPDATE messages SET metadata = ? WHERE id = ?
   `),

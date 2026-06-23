@@ -202,6 +202,7 @@ export function createDbOperations(db) {
     getMessagesBeforeId: db.prepare('SELECT * FROM messages WHERE session_id = ? AND id < ? ORDER BY id DESC LIMIT ?'),
     getMessageCount: db.prepare('SELECT COUNT(*) as count FROM messages WHERE session_id = ?'),
     deleteMessagesBySession: db.prepare('DELETE FROM messages WHERE session_id = ?'),
+    deleteMessagesAfterId: db.prepare('DELETE FROM messages WHERE session_id = ? AND id > ?'),
     updateMessageMetadata: db.prepare('UPDATE messages SET metadata = ? WHERE id = ?'),
     getRecentUserMessageIds: db.prepare('SELECT id FROM messages WHERE session_id = ? AND role = \'user\' ORDER BY id DESC LIMIT ?'),
     getMessagesFromId: db.prepare('SELECT * FROM messages WHERE session_id = ? AND id >= ? ORDER BY id ASC'),
@@ -391,9 +392,65 @@ export function createDbOperations(db) {
           : (Array.isArray(content) ? content.map(b => b.text || '').join('') : JSON.stringify(content));
       }
 
+      function rowsFromHistory(msgs) {
+        const rows = [];
+        let lastTs = 0;
+        for (const msg of msgs) {
+          const rawTs = msg.timestamp ? new Date(msg.timestamp).getTime() : 0;
+          const ts = rawTs > lastTs ? rawTs : lastTs + 1;
+          lastTs = ts;
+
+          if (msg.type === 'user') {
+            const text = extractUserText(msg);
+            if (text) rows.push({ role: 'user', content: text, messageType: 'user', toolName: null, toolInput: null, ts });
+          } else if (msg.type === 'assistant') {
+            const content = msg.message?.content;
+            if (!content || !Array.isArray(content)) continue;
+            for (const block of content) {
+              if (block.type === 'text' && block.text) {
+                rows.push({ role: 'assistant', content: block.text, messageType: 'assistant', toolName: null, toolInput: null, ts });
+              } else if (block.type === 'tool_use') {
+                const toolInput = JSON.stringify(block.input || {});
+                rows.push({ role: 'assistant', content: toolInput, messageType: 'tool_use', toolName: block.name, toolInput, ts });
+              }
+            }
+          }
+        }
+        return rows;
+      }
+
+      function rowSignature(row) {
+        return [row.role, row.content, row.messageType, row.toolName || '', row.toolInput || ''].join('\0');
+      }
+
+      function dbRowSignature(row) {
+        return [row.role, row.content, row.message_type, row.tool_name || '', row.tool_input || ''].join('\0');
+      }
+
+      function rowsMatchDbRows(dbRows, historyRows) {
+        if (dbRows.length !== historyRows.length) return false;
+        for (let i = 0; i < historyRows.length; i++) {
+          if (dbRowSignature(dbRows[i]) !== rowSignature(historyRows[i])) return false;
+        }
+        return true;
+      }
+
+      function historyRowsContainToolUse(rows) {
+        return rows.some(row => row.messageType === 'tool_use');
+      }
+
+      function tailLooksLikeStaleToolAction(dbRows) {
+        return dbRows.some(row => {
+          if (row.role !== 'assistant' || row.message_type !== 'assistant') return false;
+          const text = String(row.content || '').trimStart();
+          return /^(call|tool_call|function_call|server_tool_use)(?:\r?\n|$)/.test(text);
+        });
+      }
+
       let msgsToInsert = historyMessages;
       const lastUserMsg = this.getLastUserMessage(sessionId);
       let needsRebuild = false;
+      let replaceTailAfterId = null;
 
       if (lastUserMsg) {
         const tsRange = stmts.getTimestampRange.get(sessionId);
@@ -424,8 +481,19 @@ export function createDbOperations(db) {
             for (let i = anchorIndex + 1; i < historyMessages.length; i++) {
               if (historyMessages[i].type === 'user') { nextTurnStart = i; break; }
             }
-            if (nextTurnStart === -1) return 0;
-            msgsToInsert = historyMessages.slice(nextTurnStart);
+            if (nextTurnStart === -1) {
+              const tailMessages = historyMessages.slice(anchorIndex + 1);
+              const desiredTailRows = rowsFromHistory(tailMessages);
+              if (desiredTailRows.length === 0) return 0;
+              if (!historyRowsContainToolUse(desiredTailRows)) return 0;
+              const currentTailRows = stmts.getMessagesAfterId.all(sessionId, lastUserMsg.id);
+              if (rowsMatchDbRows(currentTailRows, desiredTailRows)) return 0;
+              if (!tailLooksLikeStaleToolAction(currentTailRows)) return 0;
+              replaceTailAfterId = lastUserMsg.id;
+              msgsToInsert = tailMessages;
+            } else {
+              msgsToInsert = historyMessages.slice(nextTurnStart);
+            }
           }
         }
       }
@@ -436,39 +504,15 @@ export function createDbOperations(db) {
           if (needsRebuild) {
             stmts.deleteMessagesBySession.run(sessionId);
             stmts.markSessionTsRebuilt.run(Date.now(), sessionId);
+          } else if (replaceTailAfterId != null) {
+            stmts.deleteMessagesAfterId.run(sessionId, replaceTailAfterId);
           }
-          let count = 0;
-          let lastTs = 0;
-          for (const msg of msgs) {
-            const rawTs = msg.timestamp ? new Date(msg.timestamp).getTime() : 0;
-            const ts = rawTs > lastTs ? rawTs : lastTs + 1;
-            lastTs = ts;
-
-            if (msg.type === 'user') {
-              const text = extractUserText(msg);
-              if (text) {
-                stmts.insertMessage.run(sessionId, 'user', text, 'user', null, null, ts, null);
-                count++;
-              }
-            } else if (msg.type === 'assistant') {
-              const content = msg.message?.content;
-              if (!content || !Array.isArray(content)) continue;
-              for (const block of content) {
-                if (block.type === 'text' && block.text) {
-                  stmts.insertMessage.run(sessionId, 'assistant', block.text, 'assistant', null, null, ts, null);
-                  count++;
-                } else if (block.type === 'tool_use') {
-                  stmts.insertMessage.run(
-                    sessionId, 'assistant', JSON.stringify(block.input || {}),
-                    'tool_use', block.name, JSON.stringify(block.input || {}), ts, null
-                  );
-                  count++;
-                }
-              }
-            }
+          const rows = rowsFromHistory(msgs);
+          for (const row of rows) {
+            stmts.insertMessage.run(sessionId, row.role, row.content, row.messageType, row.toolName, row.toolInput, row.ts, null);
           }
           db.exec('COMMIT');
-          return count;
+          return rows.length;
         } catch (err) {
           try { db.exec('ROLLBACK'); } catch {}
           throw err;
