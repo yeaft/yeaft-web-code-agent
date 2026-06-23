@@ -12,6 +12,12 @@ import { execFileSync } from 'child_process';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
 
+const HIDDEN_PROCESS_OPTIONS = { windowsHide: true };
+
+function gitExecFileSync(args, options = {}) {
+  return execFileSync('git', args, { ...options, ...HIDDEN_PROCESS_OPTIONS });
+}
+
 export default defineTool({
   name: 'ExitWorktree',
   description: {
@@ -84,7 +90,7 @@ unless discard_changes is set to true.`,
       // Check for uncommitted changes
       if (!input.discard_changes) {
         try {
-          const status = execFileSync('git', ['status', '--porcelain'], {
+          const status = gitExecFileSync(['status', '--porcelain'], {
             cwd: worktreePath,
             encoding: 'utf8',
             stdio: ['pipe', 'pipe', 'pipe'],
@@ -104,7 +110,7 @@ unless discard_changes is set to true.`,
       // Get branch name before removal
       let branchName = null;
       try {
-        branchName = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+        branchName = gitExecFileSync(['rev-parse', '--abbrev-ref', 'HEAD'], {
           cwd: worktreePath,
           encoding: 'utf8',
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -115,7 +121,7 @@ unless discard_changes is set to true.`,
 
       // Remove worktree. Use argv form so Windows paths with spaces or drive
       // letters are passed to git unchanged.
-      execFileSync('git', ['worktree', 'remove', ...(input.discard_changes ? ['--force'] : []), worktreePath], {
+      gitExecFileSync(['worktree', 'remove', ...(input.discard_changes ? ['--force'] : []), worktreePath], {
         cwd: mainCwd,
         stdio: 'pipe',
       });
@@ -123,7 +129,7 @@ unless discard_changes is set to true.`,
       // Remove the branch if it was a yeaft worktree branch
       if (branchName && branchName.startsWith('yeaft-wt/')) {
         try {
-          execFileSync('git', ['branch', '-D', branchName], {
+          gitExecFileSync(['branch', '-D', branchName], {
             cwd: mainCwd,
             stdio: 'pipe',
           });

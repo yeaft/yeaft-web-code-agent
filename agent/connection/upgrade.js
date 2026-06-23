@@ -32,7 +32,7 @@ const isWin = platform() === 'win32';
 // macOS/Linux: use absolute path — launchd/systemd have minimal PATH.
 const npmPath = isWin ? 'npm' : join(nodeBinDir, 'npm');
 const pm2Path = isWin ? 'pm2' : join(nodeBinDir, 'pm2');
-const shellOpt = isWin ? { shell: true } : {};
+const shellOpt = isWin ? { shell: true, windowsHide: true } : {};
 
 // Ensure PATH includes nodeBinDir so that `#!/usr/bin/env node` shebangs
 // can locate node in launchd/systemd environments with minimal PATH.
