@@ -71,9 +71,73 @@ export const messageDb = {
         || text.includes('This session is being continued from a previous conversation');
     }
 
+    function rowsFromHistory(msgs) {
+      const rows = [];
+      let lastTs = 0;
+      for (const msg of msgs) {
+        const rawTs = msg.timestamp ? new Date(msg.timestamp).getTime() : 0;
+        const ts = rawTs > lastTs ? rawTs : lastTs + 1;
+        lastTs = ts;
+
+        if (msg.type === 'user') {
+          const text = extractUserText(msg);
+          if (!text || isCompactSummary(text)) continue;
+          rows.push({ role: 'user', content: text, messageType: 'user', toolName: null, toolInput: null, ts });
+        } else if (msg.type === 'assistant') {
+          const content = msg.message?.content;
+          if (!content || !Array.isArray(content)) continue;
+          for (const block of content) {
+            if (block.type === 'text' && block.text) {
+              rows.push({ role: 'assistant', content: block.text, messageType: 'assistant', toolName: null, toolInput: null, ts });
+            } else if (block.type === 'tool_use') {
+              const toolInput = JSON.stringify(block.input || {});
+              rows.push({
+                role: 'assistant',
+                content: toolInput,
+                messageType: 'tool_use',
+                toolName: block.name,
+                toolInput,
+                ts,
+              });
+            }
+          }
+        }
+      }
+      return rows;
+    }
+
+    function rowSignature(row) {
+      return [row.role, row.content, row.messageType, row.toolName || '', row.toolInput || ''].join('\0');
+    }
+
+    function dbRowSignature(row) {
+      return [row.role, row.content, row.message_type, row.tool_name || '', row.tool_input || ''].join('\0');
+    }
+
+    function rowsMatchDbRows(dbRows, historyRows) {
+      if (dbRows.length !== historyRows.length) return false;
+      for (let i = 0; i < historyRows.length; i++) {
+        if (dbRowSignature(dbRows[i]) !== rowSignature(historyRows[i])) return false;
+      }
+      return true;
+    }
+
+    function historyRowsContainToolUse(rows) {
+      return rows.some(row => row.messageType === 'tool_use');
+    }
+
+    function tailLooksLikeStaleToolAction(dbRows) {
+      return dbRows.some(row => {
+        if (row.role !== 'assistant' || row.message_type !== 'assistant') return false;
+        const text = String(row.content || '').trimStart();
+        return /^(call|tool_call|function_call|server_tool_use)(?:\r?\n|$)/.test(text);
+      });
+    }
+
     let msgsToInsert = historyMessages;
     const lastUserMsg = this.getLastUserMessage(sessionId);
     let needsRebuild = false;
+    let replaceTailAfterId = null;
 
     if (lastUserMsg) {
       const tsRange = stmts.getTimestampRange.get(sessionId);
@@ -127,10 +191,23 @@ export const messageDb = {
           }
 
           if (nextTurnStart === -1) {
-            return 0;
+            // The active/latest turn has no following user anchor. Older code returned
+            // here, so a tail that had been stored with a stale Claude Code shape
+            // (for example raw `call`/id/argument text rows) could never heal on
+            // refresh. Compare the persisted tail after the last user row with the
+            // normalized JSONL tail; replace it only when it differs.
+            const tailMessages = historyMessages.slice(anchorIndex + 1);
+            const desiredTailRows = rowsFromHistory(tailMessages);
+            if (desiredTailRows.length === 0) return 0;
+            if (!historyRowsContainToolUse(desiredTailRows)) return 0;
+            const currentTailRows = stmts.getMessagesAfterId.all(sessionId, lastUserMsg.id);
+            if (rowsMatchDbRows(currentTailRows, desiredTailRows)) return 0;
+            if (!tailLooksLikeStaleToolAction(currentTailRows)) return 0;
+            replaceTailAfterId = lastUserMsg.id;
+            msgsToInsert = tailMessages;
+          } else {
+            msgsToInsert = historyMessages.slice(nextTurnStart);
           }
-
-          msgsToInsert = historyMessages.slice(nextTurnStart);
         }
       }
     }
@@ -144,43 +221,24 @@ export const messageDb = {
         // rebuild loops forever on every future resume" failure mode that
         // motivated this entire change.
         stmts.markSessionTsRebuilt.run(Date.now(), sessionId);
+      } else if (replaceTailAfterId != null) {
+        stmts.deleteMessagesAfterId.run(sessionId, replaceTailAfterId);
       }
 
-      let count = 0;
-      let lastTs = 0;
-      for (const msg of msgs) {
-        const rawTs = msg.timestamp ? new Date(msg.timestamp).getTime() : 0;
-        const ts = rawTs > lastTs ? rawTs : lastTs + 1;
-        lastTs = ts;
-
-        if (msg.type === 'user') {
-          const text = extractUserText(msg);
-          if (text) {
-            if (isCompactSummary(text)) {
-              console.log(`[bulkAddHistory] Skipping compact summary message (${text.length} chars) for ${sessionId}`);
-              continue;
-            }
-            stmts.insertMessage.run(sessionId, 'user', text, 'user', null, null, ts, null);
-            count++;
-          }
-        } else if (msg.type === 'assistant') {
-          const content = msg.message?.content;
-          if (!content || !Array.isArray(content)) continue;
-          for (const block of content) {
-            if (block.type === 'text' && block.text) {
-              stmts.insertMessage.run(sessionId, 'assistant', block.text, 'assistant', null, null, ts, null);
-              count++;
-            } else if (block.type === 'tool_use') {
-              stmts.insertMessage.run(
-                sessionId, 'assistant', JSON.stringify(block.input || {}),
-                'tool_use', block.name, JSON.stringify(block.input || {}), ts, null
-              );
-              count++;
-            }
-          }
-        }
+      const rows = rowsFromHistory(msgs);
+      for (const row of rows) {
+        stmts.insertMessage.run(
+          sessionId,
+          row.role,
+          row.content,
+          row.messageType,
+          row.toolName,
+          row.toolInput,
+          row.ts,
+          null
+        );
       }
-      return count;
+      return rows.length;
     });
     return insertMany(msgsToInsert);
   },

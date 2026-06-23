@@ -7,6 +7,7 @@ import { spawn } from 'child_process';
 import { createInterface } from 'readline';
 import { Stream } from './stream.js';
 import { AbortError } from './types.js';
+import { normalizeClaudeMessage, shouldForwardTextDeltaForBlockType } from './message-normalize.js';
 import { getCleanEnv, logDebug, streamToStdin, resolveClaudeCommand } from './utils.js';
 
 
@@ -82,6 +83,7 @@ export class Query {
     // Track whether we've forwarded text deltas for the current assistant turn.
     // When true, the next complete `assistant` message's text blocks are redundant.
     let hasStreamedTextDeltas = false;
+    const streamBlockTypes = new Map();
 
     try {
       for await (const line of rl) {
@@ -114,36 +116,52 @@ export class Query {
               const event = message.event;
               if (!event) continue;
 
-              // content_block_delta with text_delta → convert to assistant message for streaming
-              if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text) {
-                hasStreamedTextDeltas = true;
-                this.inputStream.enqueue({
-                  type: 'assistant',
-                  message: {
-                    role: 'assistant',
-                    content: [{ type: 'text', text: event.delta.text }]
-                  }
-                });
+              if (event.type === 'content_block_start') {
+                streamBlockTypes.set(event.index, event.content_block?.type || null);
+                continue;
               }
-              // All other stream events (message_start, content_block_start,
-              // input_json_delta, content_block_stop, message_stop) are ignored.
-              // tool_use is handled via the complete assistant message.
+              if (event.type === 'content_block_stop') {
+                streamBlockTypes.delete(event.index);
+                continue;
+              }
+              // content_block_delta with text_delta → convert to assistant message for streaming,
+              // but only while the active block is actually text. Some Claude Code builds
+              // expose tool-call assembly as text-looking deltas; forwarding those leaks
+              // raw `call`, transient ids, and JSON arguments into the chat transcript.
+              if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text) {
+                const blockType = streamBlockTypes.get(event.index);
+                if (shouldForwardTextDeltaForBlockType(blockType)) {
+                  hasStreamedTextDeltas = true;
+                  this.inputStream.enqueue({
+                    type: 'assistant',
+                    message: {
+                      role: 'assistant',
+                      content: [{ type: 'text', text: event.delta.text }]
+                    }
+                  });
+                }
+              }
+              // All other stream events (message_start, input_json_delta,
+              // message_stop) are ignored. Tool use is handled via the complete
+              // assistant message after block normalization below.
               continue;
             }
+
+            const normalizedMessage = normalizeClaudeMessage(message);
 
             // Deduplicate: when a complete assistant message arrives after we've
             // already streamed text deltas, strip the text blocks (already sent).
             // Keep tool_use blocks which are NOT sent incrementally.
-            if (message.type === 'assistant' && hasStreamedTextDeltas) {
+            if (normalizedMessage.type === 'assistant' && hasStreamedTextDeltas) {
               hasStreamedTextDeltas = false; // Reset for next assistant turn
 
-              const content = message.message?.content;
+              const content = normalizedMessage.message?.content;
               if (Array.isArray(content)) {
                 const nonTextBlocks = content.filter(b => b.type !== 'text');
                 if (nonTextBlocks.length > 0) {
                   // Forward only tool_use blocks (text already sent via deltas)
-                  message.message.content = nonTextBlocks;
-                  this.inputStream.enqueue(message);
+                  normalizedMessage.message.content = nonTextBlocks;
+                  this.inputStream.enqueue(normalizedMessage);
                 } else {
                   // Pure text message fully streamed — send finish-streaming signal
                   // so frontend clears isStreaming and typing dots can reappear
@@ -165,11 +183,12 @@ export class Query {
 
             // Reset delta tracking on non-assistant messages
             // (e.g., user, result, system — a new turn boundary)
-            if (message.type !== 'assistant') {
+            if (normalizedMessage.type !== 'assistant') {
               hasStreamedTextDeltas = false;
+              streamBlockTypes.clear();
             }
 
-            this.inputStream.enqueue(message);
+            this.inputStream.enqueue(normalizedMessage);
           } catch (e) {
             logDebug(`Non-JSON line: ${line.substring(0, 100)}`);
           }

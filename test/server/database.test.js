@@ -676,6 +676,104 @@ describe('messageDb — bulkAddHistory', () => {
     expect(messageDb.getCount(sid)).toBe(2);
   });
 
+  it('should keep a live DB tail when Claude history has not flushed assistant rows yet', () => {
+    const sid = createSession();
+    const base = Date.now();
+    messageDb.add(sid, 'user', 'run long command', 'user');
+    messageDb.add(sid, 'assistant', 'streamed live output', 'assistant');
+
+    const history = [
+      makeHistoryUserMsg('run long command', base),
+    ];
+
+    const count = messageDb.bulkAddHistory(sid, history);
+    expect(count).toBe(0);
+
+    const msgs = messageDb.getBySession(sid);
+    expect(msgs).toHaveLength(2);
+    expect(msgs[1].content).toBe('streamed live output');
+  });
+
+  it('should not overwrite a non-stale live DB tail just because history differs', () => {
+    const sid = createSession();
+    const base = Date.now();
+    messageDb.add(sid, 'user', 'run long command', 'user');
+    messageDb.add(sid, 'assistant', 'live partial answer', 'assistant');
+
+    const history = [
+      makeHistoryUserMsg('run long command', base),
+      makeHistoryAssistantMsg('older flushed answer', base + 1000),
+    ];
+
+    const count = messageDb.bulkAddHistory(sid, history);
+    expect(count).toBe(0);
+
+    const msgs = messageDb.getBySession(sid);
+    expect(msgs).toHaveLength(2);
+    expect(msgs[1].content).toBe('live partial answer');
+  });
+
+  it('should keep a live DB tail that starts with call when history tail is text-only', () => {
+    const sid = createSession();
+    const base = Date.now();
+    messageDb.add(sid, 'user', 'draft reply', 'user');
+    messageDb.add(sid, 'assistant', 'call me when the deployment finishes', 'assistant');
+
+    const history = [
+      makeHistoryUserMsg('draft reply', base),
+      makeHistoryAssistantMsg('older flushed text', base + 1000),
+    ];
+
+    const count = messageDb.bulkAddHistory(sid, history);
+    expect(count).toBe(0);
+
+    const msgs = messageDb.getBySession(sid);
+    expect(msgs).toHaveLength(2);
+    expect(msgs[1].message_type).toBe('assistant');
+    expect(msgs[1].content).toBe('call me when the deployment finishes');
+  });
+
+  it('should repair a stale DB tail after the last user anchor', () => {
+    const sid = createSession();
+    const base = Date.now();
+    messageDb.add(sid, 'user', 'run git status', 'user');
+    messageDb.add(sid, 'assistant', 'call\n\nbnjbapmna\n\ncd Q:/M365/Sydney && git status', 'assistant');
+
+    const history = [
+      makeHistoryUserMsg('run git status', base),
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'bnjbapmna',
+              name: 'Bash',
+              input: {
+                command: 'cd Q:/M365/Sydney && git status',
+                description: 'Check git branch, status, and recent commits',
+              },
+            },
+          ],
+        },
+        timestamp: new Date(base + 1000).toISOString(),
+      },
+    ];
+
+    const count = messageDb.bulkAddHistory(sid, history);
+    expect(count).toBe(1);
+
+    const msgs = messageDb.getBySession(sid);
+    expect(msgs).toHaveLength(2);
+    expect(msgs[1].message_type).toBe('tool_use');
+    expect(msgs[1].tool_name).toBe('Bash');
+    expect(msgs[1].content).not.toContain('call');
+    expect(JSON.parse(msgs[1].tool_input)).toEqual({
+      command: 'cd Q:/M365/Sydney && git status',
+      description: 'Check git branch, status, and recent commits',
+    });
+  });
+
   it('should append all when anchor not found in history', () => {
     const sid = createSession();
     const base = Date.now();
@@ -768,5 +866,42 @@ describe('messageDb — bulkAddHistory', () => {
     expect(msgs[1].message_type).toBe('assistant');
     expect(msgs[2].message_type).toBe('tool_use');
     expect(msgs[2].tool_name).toBe('Bash');
+  });
+
+  it('should handle normalized call-shaped Claude tool actions in assistant messages', () => {
+    const sid = createSession();
+    const base = Date.now();
+    const history = [
+      makeHistoryUserMsg('run git status', base),
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'Checking.' },
+            {
+              type: 'tool_use',
+              id: 'bnjbapmna',
+              name: 'Bash',
+              input: {
+                command: 'git branch --show-current',
+                description: 'Check git branch',
+              },
+            },
+          ]
+        },
+        timestamp: new Date(base + 1000).toISOString()
+      },
+    ];
+
+    const count = messageDb.bulkAddHistory(sid, history);
+    expect(count).toBe(3);
+
+    const msgs = messageDb.getBySession(sid);
+    expect(msgs[2].message_type).toBe('tool_use');
+    expect(msgs[2].tool_name).toBe('Bash');
+    expect(JSON.parse(msgs[2].tool_input)).toEqual({
+      command: 'git branch --show-current',
+      description: 'Check git branch',
+    });
   });
 });
