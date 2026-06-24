@@ -3,6 +3,7 @@ import AskCard from './AskCard.js';
 import VpSpeakerHeader from './VpSpeakerHeader.js';
 import { normalizeTerminalOutput } from '../utils/terminal-output.js';
 import { getTodoDisplayState } from '../utils/todo-display-state.js';
+import { renderMermaidIn } from '../utils/markdown.js';
 
 export default {
   name: 'AssistantTurn',
@@ -431,6 +432,7 @@ export default {
             block.dataset.highlighted = 'true';
           });
         }
+        renderMermaidIn(turnRef.value);
       });
     });
 
@@ -442,6 +444,7 @@ export default {
             block.dataset.highlighted = 'true';
           });
         }
+        renderMermaidIn(turnRef.value);
       });
     });
 

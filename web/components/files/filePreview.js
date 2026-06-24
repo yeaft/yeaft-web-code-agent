@@ -2,13 +2,13 @@
  * filePreview — File preview composable for FilesTab.
  * Manages Markdown preview/rendering, Mermaid diagrams, Office/PDF/Image preview.
  */
+import { renderMermaidIn } from '../../utils/markdown.js';
 import { isMarkdownFile } from './fileEditor.js';
 
 export function createFilePreview(activeFile, { editorContainer, createEditor, t }) {
   const mdPreviewMode = Vue.ref(true);
   const mdPreviewRef = Vue.ref(null);
   const officePreviewContainer = Vue.ref(null);
-  let mermaidInitialized = false;
 
   const isActiveMarkdown = Vue.computed(() => {
     const f = activeFile.value;
@@ -29,36 +29,11 @@ export function createFilePreview(activeFile, { editorContainer, createEditor, t
   });
 
   function initMermaid() {
-    if (mermaidInitialized || typeof mermaid === 'undefined') return;
-    try {
-      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default';
-      mermaid.initialize({ startOnLoad: false, theme });
-      mermaidInitialized = true;
-    } catch (e) {
-      console.error('Mermaid init error:', e);
-    }
+    renderMermaidIn(mdPreviewRef.value);
   }
 
   async function renderMermaidBlocks() {
-    const container = mdPreviewRef.value;
-    if (!container || typeof mermaid === 'undefined') return;
-    initMermaid();
-    const codeBlocks = container.querySelectorAll('pre code.language-mermaid');
-    for (let i = 0; i < codeBlocks.length; i++) {
-      const codeEl = codeBlocks[i];
-      const pre = codeEl.parentElement;
-      const code = codeEl.textContent;
-      try {
-        const id = 'mermaid-' + Date.now() + '-' + i;
-        const { svg } = await mermaid.render(id, code);
-        const div = document.createElement('div');
-        div.className = 'mermaid-rendered';
-        div.innerHTML = svg;
-        pre.replaceWith(div);
-      } catch (e) {
-        console.warn('Mermaid render error:', e);
-      }
-    }
+    await renderMermaidIn(mdPreviewRef.value);
   }
 
   function switchToMdEdit() {
