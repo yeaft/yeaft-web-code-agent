@@ -480,11 +480,26 @@ export async function handleAgentOutput(agentId, agent, msg) {
       // authenticated clients. Distinct from `yeaft_output` because the
       // frontend needs to PREPEND these older messages above the current
       // history (whereas yeaft_output flows through an append pipeline).
+      if (msg.perfTraceId) {
+        recordPerfTraceEvent({
+          traceId: msg.perfTraceId,
+          source: 'server',
+          phase: 'relay.agent_output_received',
+          at: Date.now(),
+          userId: agent.ownerId || null,
+          agentId,
+          sessionId: msg.sessionId || null,
+          messageType: msg.type,
+          bytes: Buffer.byteLength(JSON.stringify(msg)),
+          detail: { mode: msg.mode || 'older', count: messages.length },
+        });
+      }
       for (const [cId, c] of webClients) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
           await sendToWebClient(c, {
             type: 'yeaft_history_chunk',
             conversationId: msg.conversationId,
+            ...(msg.perfTraceId != null ? { perfTraceId: msg.perfTraceId } : {}),
             ...(msg.sessionId != null ? { sessionId: msg.sessionId } : {}),
             messages,
             mode: msg.mode || 'older',
@@ -494,6 +509,18 @@ export async function handleAgentOutput(agentId, agent, msg) {
             afterSeq: msg.afterSeq ?? null,
             turns: msg.turns ?? null,
           });
+          if (msg.perfTraceId) {
+            recordPerfTraceEvent({
+              traceId: msg.perfTraceId,
+              source: 'server',
+              phase: 'relay.forward_to_web',
+              at: Date.now(),
+              userId: c.userId || null,
+              agentId,
+              sessionId: msg.sessionId || null,
+              messageType: msg.type,
+            });
+          }
         }
       }
       break;
