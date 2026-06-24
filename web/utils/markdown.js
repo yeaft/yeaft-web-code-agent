@@ -4,6 +4,8 @@
  */
 
 let _configured = false;
+let _mermaidInitializedTheme = null;
+let _mermaidRenderSeq = 0;
 
 export function configureMarked() {
   if (_configured || typeof marked === 'undefined') return;
@@ -42,6 +44,45 @@ export function addCodeBlockCopyButtons(html) {
 export function wrapTables(html) {
   return html.replace(/<table>([\s\S]*?)<\/table>/g,
     (match) => `<div class="table-scroll-wrapper">${match}</div>`);
+}
+
+export function initMermaid() {
+  if (typeof mermaid === 'undefined') return false;
+  const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default';
+  if (_mermaidInitializedTheme === theme) return true;
+  try {
+    mermaid.initialize({ startOnLoad: false, theme, securityLevel: 'strict' });
+    _mermaidInitializedTheme = theme;
+    return true;
+  } catch (e) {
+    console.error('Mermaid init error:', e);
+    return false;
+  }
+}
+
+export async function renderMermaidIn(container) {
+  if (!container || !initMermaid()) return;
+  const codeBlocks = container.querySelectorAll('pre code.language-mermaid:not([data-mermaid-error])');
+  for (const codeEl of codeBlocks) {
+    const pre = codeEl.closest('pre');
+    if (!pre || pre.dataset.mermaidRendered === 'true') continue;
+    const wrapper = pre.closest('.code-block-wrapper');
+    const code = codeEl.textContent || '';
+    if (!code.trim()) continue;
+    pre.dataset.mermaidRendered = 'true';
+    try {
+      const id = `mermaid-${Date.now()}-${_mermaidRenderSeq++}`;
+      const { svg } = await mermaid.render(id, code);
+      const div = document.createElement('div');
+      div.className = 'mermaid-rendered';
+      div.innerHTML = svg;
+      (wrapper || pre).replaceWith(div);
+    } catch (e) {
+      pre.dataset.mermaidRendered = 'false';
+      codeEl.dataset.mermaidError = 'true';
+      console.warn('Mermaid render error:', e);
+    }
+  }
 }
 
 export function simpleMarkdownFallback(text) {
@@ -143,4 +184,9 @@ export function renderMarkdown(text) {
  */
 export function clearMarkdownCache() {
   _mdCache.clear();
+}
+
+export function resetMermaidForTests() {
+  _mermaidInitializedTheme = null;
+  _mermaidRenderSeq = 0;
 }

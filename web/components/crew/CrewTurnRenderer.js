@@ -8,7 +8,7 @@
  *   expandedTurns   — reactive map for tool expansion state
  *   icons           — icon SVG strings
  */
-import { renderMarkdown, stripRouteBlocks } from '../../utils/markdown.js';
+import { renderMarkdown, renderMermaidIn, stripRouteBlocks } from '../../utils/markdown.js';
 import { openImagePreview } from '../../utils/imagePreview.js';
 import {
   formatTime, shortName, getRoleStyle as getRoleStyleFn, getImageUrl
@@ -148,6 +148,12 @@ export default {
       </div>
     </div>
   `,
+  mounted() {
+    this.$nextTick(() => renderMermaidIn(this.$el));
+  },
+  updated() {
+    this.$nextTick(() => renderMermaidIn(this.$el));
+  },
   computed: {
     askToolMsg() {
       if (this.turn.type !== 'turn') return null;
