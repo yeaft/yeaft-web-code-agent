@@ -136,20 +136,19 @@ const DREAM_PROMPT_CASES = [
 ];
 
 describe('worker prompt language selection', () => {
-  it('renders old seeded Omni bodies as the selected localized authored soul', () => {
+  it('does not use prompt-time legacy stock migration for old Omni bodies', () => {
     const prompt = workerPrompt('zh-CN');
 
     expect(prompt).toContain('# 全能助手');
     expect(prompt).not.toContain('# 全能助手 — 全能助手');
     expect(prompt).toContain('## 灵魂');
     expect(prompt).not.toContain('## Soul');
-    expect(prompt).toContain('你是 Omni。你始终看着整个会话的形状');
+    expect(prompt).toContain('You are Omni Assistant / 全能助手');
+    expect(prompt).toContain('Language policy / 语言策略');
+    expect(prompt).toContain('Core capabilities / 核心能力');
+    expect(prompt).not.toContain('你是 Omni。你始终看着整个会话的形状');
     expect(prompt).toContain('## 任务回复');
     expect(prompt).toContain('完成后只汇报改了什么、验证了什么、风险或下一步');
-    expect(prompt).not.toContain('You are Omni Assistant / 全能助手');
-    expect(prompt).not.toContain('Language policy');
-    expect(prompt).not.toContain('Core capabilities');
-    expect(prompt).not.toContain('Prefer Chinese');
     expect(prompt).not.toContain('### 人物特点');
     expect(prompt).not.toContain('### Traits');
     expect(prompt).not.toContain('VP soul');
@@ -192,10 +191,15 @@ describe('worker prompt language selection', () => {
   });
 
   it('keeps English prompts English for English configuration', () => {
-    const prompt = workerPrompt('en');
+    const prompt = buildWorkerPrompt({
+      language: 'en',
+      includeShape: true,
+      toolNames: ['FileRead'],
+      vpPersona: DEFAULT_VPS.find(vp => vp.vpId === 'omni'),
+    });
 
-    expect(prompt).toContain('# Omni Assistant');
-    expect(prompt).not.toContain('# Omni Assistant — All-Purpose Assistant');
+    expect(prompt).toContain('# Omni');
+    expect(prompt).not.toContain('# Omni — Requirement and Flow Lead');
     expect(prompt).toContain('## Soul');
     expect(prompt).toContain('You are Omni. You keep the whole session in view');
     expect(prompt).not.toContain('You are Omni Assistant / 全能助手');

@@ -9,24 +9,30 @@
  * (b) a forced overwrite that would clobber their hand edits.
  *
  * This module runs on every agent start alongside `seedDefaultVps` and does
- * two minimal, additive things:
+ * three safe stock-maintenance things:
  *
  *   1. **Top-up missing stock VPs**. If a vpId from `DEFAULT_VPS` is not
  *      on disk, `createVp()` it. This keeps product-owned defaults such as
  *      Omni and the expanded role roster visible in session/member pickers.
  *
- *   2. **Backfill the `area` frontmatter line** on existing seeded VPs whose
- *      role.md predates the area field. The body is left BYTE-IDENTICAL —
- *      we splice a single `area: <bucket>` line into the YAML frontmatter
- *      and write nothing else. If the user has authored their own `area`,
- *      we keep theirs.
+ *   2. **Backfill missing stock frontmatter** (`area`, `nameZh`, `roleZh`) on
+ *      existing seeded VPs whose role.md predates those fields. The persona body
+ *      is left BYTE-IDENTICAL for these metadata backfills. If the user has
+ *      authored their own value, we keep theirs.
+ *
+ *   3. **Migrate exact historical stock bodies to canonical localized bodies**.
+ *      This is intentionally a write-time migration, not a prompt-rendering
+ *      fallback: once top-up sees an old shipped Omni/Linus/etc. body, role.md is
+ *      rewritten to the current `<!-- lang:en -->` / `<!-- lang:zh -->` stock
+ *      persona. User-edited bodies are not touched.
  *
  * Hard rules:
- *   - **Never** overwrite a VP that is on disk. The user might have edited
- *     persona/role/traits; that is their truth, not ours.
- *   - **Keep stock defaults available.** If a shipped stock VP is missing,
- *     recreate it, but never overwrite an on-disk VP. The session/member picker
- *     depends on these product-owned defaults being present.
+ *   - **Never** overwrite a user-edited VP. A persona body is only rewritten when
+ *     it exactly matches a historical body shipped by us.
+ *   - **Keep stock defaults canonical and available.** If a shipped stock VP is
+ *     missing, recreate it. If it exists with an old exact stock body, rewrite
+ *     that body to the current canonical localized body. The session/member
+ *     picker depends on these product-owned defaults being present and current.
  *   - Best-effort: any failure is logged, never thrown.
  *
  * Pre-ledger deletion caveat: on the very first top-up against an existing
@@ -47,8 +53,9 @@
  *     }
  *   }
  *
- * The hash is reserved for future "the default persona changed; offer the
- * user a migration" semantics. We do not auto-upgrade today.
+ * The hash tracks the canonical stock persona currently written by top-up. Exact
+ * historical stock bodies are auto-migrated to this canonical localized body;
+ * user-edited bodies are deliberately left alone.
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'fs';
@@ -231,7 +238,7 @@ function replaceRoleBody(source, body) {
   return `${match[1]}${String(body || '').trim()}\n`;
 }
 
-function backfillLocalizedPersonaBody(source, vp) {
+export function backfillLocalizedPersonaBody(source, vp) {
   const body = roleBodyOf(source).trim();
   const nextBody = typeof vp.persona === 'string' ? vp.persona.trim() : '';
   if (!body || !nextBody || body === nextBody) return null;
@@ -301,9 +308,9 @@ export function topUpDefaultVps(libDir = DEFAULT_VP_LIB_DIR) {
     const inLedger = Object.prototype.hasOwnProperty.call(versions.seeded, vpId);
 
     if (onDisk) {
-      // Already there — never overwrite. Possibly backfill `area` /
-      // `nameZh`. Each backfill is independent: a role.md with `area`
-      // already set but no `nameZh` should still get `nameZh`.
+      // Already there — preserve user-authored content, but keep shipped stock
+      // defaults canonical. Metadata backfills only add missing frontmatter;
+      // persona migration only rewrites exact historical stock bodies.
       skippedExisting.push(vpId);
       let currentSrc = null;
       const rolePath = join(libDir, vpId, 'role.md');
@@ -388,6 +395,7 @@ export function topUpDefaultVps(libDir = DEFAULT_VP_LIB_DIR) {
             if (patched != null && patched !== src) {
               writeFileSync(rolePath, patched, 'utf-8');
               currentSrc = patched;
+              versions.seeded[vpId] = personaHash(vp.persona);
               personaBackfilled.push(vpId);
             }
           }
