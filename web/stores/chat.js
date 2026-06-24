@@ -305,6 +305,7 @@ export const useChatStore = defineStore('chat', {
     // session_ready replay. Group history requests are de-duped separately by
     // yeaftSessionHistoryState[groupId].loading.
     yeaftBootstrapMetaLoadingKey: null,
+    yeaftHistoryPerfTraceBySession: {},
     // One-shot marker: set true by the websocket onclose handler on a real
     // disconnect, consumed by handleAgentList to run a single Yeaft history
     // catch-up after the socket comes back. Without this gate the catch-up
@@ -1258,6 +1259,30 @@ export const useChatStore = defineStore('chat', {
       };
       if (needHistoryCatchUp) payload.afterSeq = latestSeq;
       else payload.limit = needHistoryReplay ? YEAFT_RECENT_TURNS : 0;
+      const perfTraceId = createPerfTraceId();
+      payload.perfTraceId = perfTraceId;
+      const historyMode = needHistoryCatchUp ? 'delta' : (needHistoryReplay ? 'recent' : 'metadata');
+      if (activeSessionId) {
+        this.yeaftHistoryPerfTraceBySession = {
+          ...(this.yeaftHistoryPerfTraceBySession || {}),
+          [activeSessionId]: perfTraceId,
+        };
+      }
+      recordPerfTrace(this, {
+        traceId: perfTraceId,
+        phase: 'history.request_send',
+        agentId: targetAgentId,
+        sessionId: activeSessionId,
+        messageType: payload.type,
+        bytes: JSON.stringify(payload).length,
+        detail: {
+          mode: historyMode,
+          limit: payload.limit ?? null,
+          afterSeq: payload.afterSeq ?? null,
+          hasCachedSessionRows,
+          needSessionReady,
+        },
+      });
       this.sendWsMessage(payload);
       return true;
     },
@@ -2190,6 +2215,17 @@ export const useChatStore = defineStore('chat', {
         }
 
         case 'history_loaded':
+          if (msg.perfTraceId || (event.sessionId && this.yeaftHistoryPerfTraceBySession?.[event.sessionId])) {
+            const traceId = msg.perfTraceId || this.yeaftHistoryPerfTraceBySession[event.sessionId];
+            recordPerfTrace(this, {
+              traceId,
+              phase: 'history.loaded_event',
+              agentId: msg.agentId || null,
+              sessionId: event.sessionId || null,
+              messageType: event.type,
+              detail: { mode: event.mode || 'recent', count: event.count || 0, hasMore: !!event.hasMore },
+            });
+          }
           // History messages already rendered via assistant output frame data path.
           // This event just signals completion + carries cursors:
           //   mode:'recent' (default) — full pane replay; stamp oldestSeq /
@@ -4113,12 +4149,28 @@ export const useChatStore = defineStore('chat', {
       this.yeaftOldestLoadedSeq = null;
       this.yeaftLoadingMoreHistory = true;
 
-      this.sendWsMessage({
+      const perfTraceId = createPerfTraceId();
+      this.yeaftHistoryPerfTraceBySession = {
+        ...(this.yeaftHistoryPerfTraceBySession || {}),
+        [sessionKey]: perfTraceId,
+      };
+      const payload = {
         type: 'yeaft_load_history',
         agentId: targetAgentId,
         limit: YEAFT_RECENT_TURNS,
         sessionId,
+        perfTraceId,
+      };
+      recordPerfTrace(this, {
+        traceId: perfTraceId,
+        phase: 'history.request_send',
+        agentId: targetAgentId,
+        sessionId,
+        messageType: payload.type,
+        bytes: JSON.stringify(payload).length,
+        detail: { mode: 'manual-reload', limit: YEAFT_RECENT_TURNS },
       });
+      this.sendWsMessage(payload);
       return true;
     },
 
@@ -4140,13 +4192,29 @@ export const useChatStore = defineStore('chat', {
           loading: true,
         },
       };
-      this.sendWsMessage({
+      const perfTraceId = createPerfTraceId();
+      this.yeaftHistoryPerfTraceBySession = {
+        ...(this.yeaftHistoryPerfTraceBySession || {}),
+        [sessionKey]: perfTraceId,
+      };
+      const payload = {
         type: 'yeaft_load_more_history',
         agentId: targetAgentId,
         sessionId,
         beforeSeq: this.yeaftOldestLoadedSeq,
         turns: 10,
+        perfTraceId,
+      };
+      recordPerfTrace(this, {
+        traceId: perfTraceId,
+        phase: 'history_more.request_send',
+        agentId: targetAgentId,
+        sessionId,
+        messageType: payload.type,
+        bytes: JSON.stringify(payload).length,
+        detail: { beforeSeq: payload.beforeSeq, turns: payload.turns },
       });
+      this.sendWsMessage(payload);
     },
 
 

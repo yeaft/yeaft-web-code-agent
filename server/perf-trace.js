@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync } from 'fs';
+import { appendFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -10,6 +10,8 @@ const MAX_QUEUE_SIZE = 5000;
 const MAX_STRING_LENGTH = 512;
 const DEFAULT_FLUSH_INTERVAL_MS = 1000;
 const DEFAULT_TRACE_DIR = join(__dirname, 'data', 'perf-traces');
+const DEFAULT_RETENTION_DAYS = 3;
+let lastCleanupDay = null;
 
 let flushTimer = null;
 const queue = [];
@@ -20,6 +22,28 @@ function enabled() {
 
 function traceDir() {
   return process.env.PERF_TRACE_DIR || DEFAULT_TRACE_DIR;
+}
+
+function retentionDays() {
+  const raw = Number(process.env.PERF_TRACE_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_RETENTION_DAYS;
+}
+
+function cleanupOldTraceFiles(dir) {
+  const day = new Date().toISOString().slice(0, 10);
+  if (lastCleanupDay === day) return;
+  lastCleanupDay = day;
+  const cutoff = Date.now() - retentionDays() * 24 * 60 * 60 * 1000;
+  try {
+    for (const file of readdirSync(dir)) {
+      const match = file.match(/^(\d{4}-\d{2}-\d{2})\.jsonl$/);
+      if (!match) continue;
+      const ts = Date.parse(`${match[1]}T00:00:00.000Z`);
+      if (Number.isFinite(ts) && ts < cutoff) rmSync(join(dir, file), { force: true });
+    }
+  } catch {
+    // best-effort; trace writes must never break relay
+  }
 }
 
 function nowWall() {
@@ -105,6 +129,7 @@ export function flushPerfTraceEvents() {
   const day = new Date().toISOString().slice(0, 10);
   const dir = traceDir();
   mkdirSync(dir, { recursive: true });
+  cleanupOldTraceFiles(dir);
   const file = join(dir, `${day}.jsonl`);
   appendFileSync(file, batch.map(row => JSON.stringify(row)).join('\n') + '\n');
   return batch.length;
@@ -123,4 +148,5 @@ export const __perfTraceForTest = {
   sanitizeValue,
   queue,
   traceDir,
+  cleanupOldTraceFiles,
 };

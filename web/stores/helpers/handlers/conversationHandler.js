@@ -8,6 +8,7 @@ import { sameUserMessage } from '../dedup.js';
 import { maxDbMessageId } from '../messages.js';
 import { summarizeHistoricalToolMessages } from '../tool-window.js';
 import { t } from '../../../utils/i18n.js';
+import { recordPerfTrace, measureNextPaint } from '../perfTrace.js';
 
 /** Filter out empty user messages — tool_result artifacts stored as empty user records in DB */
 function filterEmptyUserMessages(messages) {
@@ -555,6 +556,17 @@ export function handleSyncMessagesResult(store, msg) {
  */
 export function handleYeaftHistoryChunk(store, msg) {
   const msgSessionId = msg.sessionId != null ? msg.sessionId : msg.groupId;
+  if (msg.perfTraceId) {
+    recordPerfTrace(store, {
+      traceId: msg.perfTraceId,
+      phase: 'history.chunk_received',
+      agentId: msg.agentId || null,
+      sessionId: msgSessionId || null,
+      messageType: msg.type,
+      bytes: (() => { try { return JSON.stringify(msg).length; } catch { return null; } })(),
+      detail: { mode: msg.mode || 'older', rawCount: Array.isArray(msg.messages) ? msg.messages.length : 0 },
+    });
+  }
   const sessionAgentId = msgSessionId && store.yeaftSessionAgentById
     ? store.yeaftSessionAgentById[msgSessionId]
     : null;
@@ -700,6 +712,24 @@ export function handleYeaftHistoryChunk(store, msg) {
     };
   }
   const activeKey = store.yeaftActiveSessionFilter ?? '__all__';
+  if (msg.perfTraceId) {
+    recordPerfTrace(store, {
+      traceId: msg.perfTraceId,
+      phase: 'history.chunk_applied',
+      agentId: msg.agentId || null,
+      sessionId: msgSessionId || null,
+      messageType: msg.type,
+      detail: { mode, formattedCount: formatted.length, insertedRows, acceptedHistoryMessages },
+    });
+    measureNextPaint(store, {
+      traceId: msg.perfTraceId,
+      phase: 'history.next_paint',
+      agentId: msg.agentId || null,
+      sessionId: msgSessionId || null,
+      messageType: msg.type,
+      detail: { mode, insertedRows },
+    });
+  }
   if (sessionKey === activeKey) {
     store.yeaftHasMoreHistory = nextState.hasMore;
     if (typeof msg.oldestSeq === 'number') {

@@ -824,19 +824,46 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
     case 'yeaft_load_history':
     case 'unify_load_history': {
       const histAgentId = msg.agentId || client.currentAgent;
+      if (msg.perfTraceId) {
+        recordPerfTraceEvent({
+          traceId: msg.perfTraceId,
+          source: 'server',
+          phase: 'relay.resolve_agent',
+          at: Date.now(),
+          userId: client.userId || null,
+          agentId: histAgentId || null,
+          sessionId: msg.sessionId || null,
+          messageType: 'yeaft_load_history',
+        });
+      }
       if (!histAgentId) return;
       if (!await checkAgentAccess(histAgentId)) return;
       // Forward the catch-up cursor (afterSeq / afterMessageId) verbatim when
       // present. Without it the agent never takes the cheap delta path and
       // falls back to a full recent-history replay on every reconnect
       // catch-up — re-sending the whole pane instead of an empty delta.
-      await forwardToAgent(histAgentId, {
+      const forwarded = {
         type: 'yeaft_load_history',
         limit: msg.limit,
         sessionId: msg.sessionId || null,
+        ...(typeof msg.perfTraceId === 'string' ? { perfTraceId: msg.perfTraceId } : {}),
         ...(Number.isFinite(msg.afterSeq) ? { afterSeq: msg.afterSeq } : {}),
         ...(typeof msg.afterMessageId === 'string' ? { afterMessageId: msg.afterMessageId } : {}),
-      });
+      };
+      if (forwarded.perfTraceId) {
+        recordPerfTraceEvent({
+          traceId: forwarded.perfTraceId,
+          source: 'server',
+          phase: 'relay.forward_to_agent',
+          at: Date.now(),
+          userId: client.userId || null,
+          agentId: histAgentId,
+          sessionId: forwarded.sessionId,
+          messageType: forwarded.type,
+          bytes: Buffer.byteLength(JSON.stringify(forwarded)),
+        });
+      }
+      await forwardToAgent(histAgentId, forwarded);
       break;
     }
 
@@ -850,6 +877,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         sessionId: msg.sessionId || null,
         beforeSeq: typeof msg.beforeSeq === 'number' ? msg.beforeSeq : null,
         turns: typeof msg.turns === 'number' ? msg.turns : 20,
+        ...(typeof msg.perfTraceId === 'string' ? { perfTraceId: msg.perfTraceId } : {}),
       });
       break;
     }

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdirSync, rmSync, mkdtempSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, mkdtempSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { Engine } from '../../../agent/yeaft/engine.js';
@@ -73,6 +73,50 @@ describe('Engine', () => {
       });
       expect(engine.traceId).toBeTruthy();
       expect(typeof engine.traceId).toBe('string');
+    });
+  });
+
+  describe('perf trace', () => {
+    it('records LLM request lifecycle events when an inbound perf trace id is present', async () => {
+      const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-perf-'));
+      try {
+        mockAdapter.pushResponse([
+          { type: 'text_delta', text: 'ok' },
+          { type: 'stop', stopReason: 'end_turn' },
+        ]);
+        const engine = new Engine({
+          adapter: mockAdapter,
+          trace,
+          config: { model: 'test-model', maxOutputTokens: 1024, yeaftDir },
+          yeaftDir,
+          sessionId: 'sess-1',
+          vpId: 'vp-1',
+        });
+
+        for await (const _event of engine.query({
+          prompt: 'hello',
+          inboundEnvelope: { _perfTraceId: 'pt-engine-1' },
+          sessionId: 'sess-1',
+          threadId: 'thr-1',
+          vpTurnId: 'turn-1',
+        })) {
+          // consume
+        }
+
+        const day = new Date().toISOString().slice(0, 10);
+        const rows = readFileSync(join(yeaftDir, 'perf-traces', `${day}.jsonl`), 'utf8')
+          .trim()
+          .split('\n')
+          .map(line => JSON.parse(line));
+        expect(rows.map(row => row.phase)).toEqual(expect.arrayContaining([
+          'llm.request_start',
+          'llm.first_event',
+          'llm.request_complete',
+        ]));
+        expect(rows.every(row => row.traceId === 'pt-engine-1')).toBe(true);
+      } finally {
+        rmSync(yeaftDir, { recursive: true, force: true });
+      }
     });
   });
 
