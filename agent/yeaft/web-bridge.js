@@ -863,6 +863,9 @@ function projectVisibleHistoryChunkMessages(messages = []) {
 
 function emitHistoryChunk({ sessionId, messages, mode = 'older', oldestSeq = null, hasMore = false, latestSeq = null, afterSeq = null, turns = null }) {
   const projectedMessages = projectVisibleHistoryChunkMessages(messages);
+  if (mode === 'delta' && projectedMessages.length === 0) {
+    return projectedMessages;
+  }
   sendToServer({
     type: 'yeaft_history_chunk',
     conversationId: yeaftConversationId,

@@ -555,6 +555,9 @@ export function handleSyncMessagesResult(store, msg) {
  */
 export function handleYeaftHistoryChunk(store, msg) {
   const msgSessionId = msg.sessionId != null ? msg.sessionId : msg.groupId;
+  const mode = msg.mode === 'recent' || msg.mode === 'delta' ? msg.mode : 'older';
+  const incomingMessages = Array.isArray(msg.messages) ? msg.messages : [];
+
   const sessionAgentId = msgSessionId && store.yeaftSessionAgentById
     ? store.yeaftSessionAgentById[msgSessionId]
     : null;
@@ -574,8 +577,6 @@ export function handleYeaftHistoryChunk(store, msg) {
   // active-turn messages when their history/delta replay races a sidebar click.
   if (!store.messagesMap[convId]) store.messagesMap[convId] = [];
 
-  const mode = msg.mode === 'recent' || msg.mode === 'delta' ? msg.mode : 'older';
-
   // Same visible projection as handleYeaftLoadHistory's bootstrap replay:
   // only user / assistant text rows. Reflection, internal, and system-only
   // records may be persisted as role=user, but they are not user-authored UI
@@ -588,7 +589,7 @@ export function handleYeaftHistoryChunk(store, msg) {
   const seenIds = new Set();
   const formatted = [];
   let acceptedHistoryMessages = 0;
-  for (const m of (msg.messages || [])) {
+  for (const m of incomingMessages) {
     if (!m) continue;
     if (m._reflection || m.internal || m.systemOnly || m.systemOnlyMessage) continue;
     if (isInternalControlHistoryContent(m.content)) continue;
