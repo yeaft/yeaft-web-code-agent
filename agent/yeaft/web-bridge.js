@@ -4831,7 +4831,7 @@ export async function handleYeaftFetchDebugHistory(msg = {}) {
   let hasMore = false;
   try {
     if (session?.trace && typeof session.trace.fetchRecentDebugHistory === 'function') {
-      const out = session.trace.fetchRecentDebugHistory({ limit, dreamLimit, sessionId, threadId, indexOnly, detailTurnId, search });
+      const out = await session.trace.fetchRecentDebugHistory({ limit, dreamLimit, sessionId, threadId, indexOnly, detailTurnId, search });
       loops = Array.isArray(out?.loops) ? out.loops : [];
       turns = Array.isArray(out?.turns) ? out.turns : [];
       dreamEvents = Array.isArray(out?.dreamEvents) ? out.dreamEvents : [];
