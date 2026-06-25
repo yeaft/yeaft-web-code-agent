@@ -329,7 +329,7 @@ export async function handleMessage(msg) {
       break;
 
     case 'restart_agent':
-      handleRestartAgent();
+      await handleRestartAgent();
       break;
 
     case 'upgrade_agent':

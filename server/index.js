@@ -15,7 +15,7 @@ import { registerProxyRoutes, handleProxyWebSocketUpgrade } from './proxy.js';
 import { handleAgentConnection } from './ws-agent.js';
 import { handleWebConnection } from './ws-client.js';
 import { sendToWebClient } from './ws-utils.js';
-import { markAgentHeartbeatPing, shouldTerminateAgentHeartbeat } from './heartbeat-policy.js';
+import { markAgentHeartbeatPing, markAgentHeartbeatStall, shouldTerminateAgentHeartbeat } from './heartbeat-policy.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -63,14 +63,24 @@ const wss = new WebSocketServer({
 const AGENT_HEARTBEAT_INTERVAL = 30000;
 const CLIENT_HEARTBEAT_INTERVAL = 90000;
 
+let lastAgentHeartbeatTickAt = Date.now();
 setInterval(() => {
+  const now = Date.now();
+  const timerDriftMs = Math.max(0, now - lastAgentHeartbeatTickAt - AGENT_HEARTBEAT_INTERVAL);
+  lastAgentHeartbeatTickAt = now;
+
   for (const [agentId, agent] of agents) {
-    if (shouldTerminateAgentHeartbeat(agent)) {
+    if (timerDriftMs > 5000) {
+      markAgentHeartbeatStall(agent, timerDriftMs, now);
+      console.warn(`[Heartbeat] Server event loop delayed agent heartbeat by ${Math.round(timerDriftMs)}ms; deferring termination for ${agentId}`);
+    }
+
+    if (shouldTerminateAgentHeartbeat(agent, now, undefined, { timerDriftMs })) {
       console.log(`[Heartbeat] Agent ${agentId} not responding, terminating`);
       agent.ws.terminate();
       continue;
     }
-    markAgentHeartbeatPing(agent);
+    markAgentHeartbeatPing(agent, now);
     agent.ws.ping();
   }
 }, AGENT_HEARTBEAT_INTERVAL);

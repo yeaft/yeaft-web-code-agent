@@ -44,4 +44,13 @@ describe('agent heartbeat policy', () => {
     expect(shouldTerminateAgentHeartbeat(agent, 59000)).toBe(false);
     expect(shouldTerminateAgentHeartbeat(agent, 62000)).toBe(true);
   });
+
+  it('does not terminate during a measured server event-loop stall', async () => {
+    const { markAgentHeartbeatSeen, shouldTerminateAgentHeartbeat } = await loadPolicyWithEnv('60000');
+    const agent = {};
+    markAgentHeartbeatSeen(agent, 1000);
+
+    expect(shouldTerminateAgentHeartbeat(agent, 120000, undefined, { timerDriftMs: 65000 })).toBe(false);
+    expect(shouldTerminateAgentHeartbeat(agent, 120000, undefined, { timerDriftMs: 0 })).toBe(true);
+  });
 });

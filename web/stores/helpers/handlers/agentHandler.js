@@ -93,7 +93,13 @@ export function restoreLastViewedConversation(store, agentSetup) {
  * Handle agent_list message: sync conversations, proxy ports, reconnection.
  */
 export function handleAgentList(store, msg) {
+  const previousAgents = Array.isArray(store.agents) ? store.agents : [];
+  const hadAgentList = store._hasHandledAgentList === true;
+  const previousCurrentAgentId = store.currentAgent || null;
+  const previousCurrentAgentOnline = !!(previousCurrentAgentId
+    && previousAgents.some(a => a && a.id === previousCurrentAgentId && a.online));
   store.agents = msg.agents;
+  store._hasHandledAgentList = true;
 
   // Agent-restart detection. When the agent PROCESS restarts (deploy/update
   // or crash), the web↔server websocket never drops, so the onclose-based
@@ -304,9 +310,17 @@ export function handleAgentList(store, msg) {
   if (store.currentAgent) {
     const agent = msg.agents.find(a => a.id === store.currentAgent && a.online);
     if (agent) {
-      console.log('[Reconnect] Agent online, restoring selection:', store.currentAgent);
+      const reconnectEdge = !!store._yeaftReconnectCatchUpPending;
+      const agentCameOnline = hadAgentList && !previousCurrentAgentOnline;
+      const shouldRestoreAgent = reconnectEdge || agentCameOnline;
       store.currentAgentInfo = agent;
-      store.sendWsMessage({ type: 'select_agent', agentId: store.currentAgent, silent: true });
+
+      if (shouldRestoreAgent) {
+        store._offlineConversationRestoreKey = null;
+        console.log('[Reconnect] Agent online, restoring selection:', store.currentAgent);
+        store.sendWsMessage({ type: 'select_agent', agentId: store.currentAgent, silent: true });
+      }
+
       if (store.currentView === 'yeaft' && typeof store.requestYeaftSessionBootstrap === 'function') {
         // Only catch up history on a GENUINE reconnect/restart. agent_list
         // arrives frequently (status flips, turn_completed, latency pings);
@@ -318,7 +332,6 @@ export function handleAgentList(store, msg) {
         // the websocket onclose handler (server/network drop) OR the
         // agent-restart detection at the top of this function (agent process
         // updated/restarted — the socket stays up, so onclose never fires).
-        const reconnectEdge = !!store._yeaftReconnectCatchUpPending;
         store._yeaftReconnectCatchUpPending = false;
         // A real reconnect/restart edge needs a fresh session_ready too: the
         // restarted agent has a new engine + conversationId, so the cached
@@ -328,8 +341,13 @@ export function handleAgentList(store, msg) {
         // subscription re-primes — not just the history delta.
         const needsYeaftSessionReady = reconnectEdge
           || !store.yeaftSessionReady || !store.yeaftModel || !store.yeaftStatus;
-        store.requestYeaftSessionBootstrap({ forceSessionReady: needsYeaftSessionReady, catchUpHistory: reconnectEdge });
+        if (needsYeaftSessionReady || reconnectEdge) {
+          store.requestYeaftSessionBootstrap({ forceSessionReady: needsYeaftSessionReady, catchUpHistory: reconnectEdge });
+        }
       }
+
+      if (!shouldRestoreAgent) return;
+
       if (store.currentConversation) {
         const conv = store.conversations.find(c => c.id === store.currentConversation);
         store.sendWsMessage({ type: 'select_conversation', conversationId: store.currentConversation });
@@ -349,14 +367,10 @@ export function handleAgentList(store, msg) {
             });
           }
         } else {
-          // Unlike the Yeaft catch-up above (gated behind
-          // _yeaftReconnectCatchUpPending), this Chat-mode sync runs on
-          // every agent_list by design: sync_messages{afterMessageId} is a
-          // client-idempotent edge-triggered request (server returns only
-          // rows after a stable id, deduped on arrival), so repeating it on
-          // routine broadcasts is harmless. The Yeaft history catch-up is
-          // level-triggered (shouldCatchUpLoadedYeaftSession re-arms after
-          // each history_loaded), which is why only it needs the latch.
+          // Chat-mode missed-message sync is useful after a real reconnect, but
+          // doing it on every routine agent_list creates a request loop:
+          // broadcastAgentList -> select/sync/refresh -> agent status update ->
+          // broadcastAgentList. Keep it edge-triggered like Yeaft catch-up.
           const currentMsgs = store.messagesMap[store.currentConversation] || [];
           if (currentMsgs.length > 0) {
             const lastMessageId = currentMsgs[currentMsgs.length - 1]?.id;
@@ -390,15 +404,14 @@ export function handleAgentList(store, msg) {
       // seconds), we still need to restore `client.currentConversation`
       // on the server. The server's `select_conversation` handler only
       // does an ownership check + writes that field — it does NOT touch
-      // any agent. Without this, a user sending a message in the
-      // intervening window hits `chat handler -> No conversation
-      // selected -> error`, and (because that error is classified
-      // system-transient) the typing indicator spins forever while the
-      // chat is silently dropped. The full resume path (sync_messages,
-      // refresh_conversation) still waits for the agent to come online
-      // via the `if (agent)` branch above on the next `agent_list`.
-      console.log('[Reconnect] Agent not online yet, restoring conversation context only:', store.currentAgent);
-      if (store.currentConversation) {
+      // any agent. But do this only once per offline edge; routine absent
+      // agent_list frames must not keep sending websocket requests.
+      const offlineRestoreKey = `${store.currentAgent || ''}:${store.currentConversation || ''}`;
+      const shouldRestoreOfflineContext = !!store.currentConversation
+        && (!hadAgentList || previousCurrentAgentOnline || store._offlineConversationRestoreKey !== offlineRestoreKey);
+      if (shouldRestoreOfflineContext) {
+        console.log('[Reconnect] Agent not online yet, restoring conversation context only:', store.currentAgent);
+        store._offlineConversationRestoreKey = offlineRestoreKey;
         store.sendWsMessage({ type: 'select_conversation', conversationId: store.currentConversation });
       }
       return;
