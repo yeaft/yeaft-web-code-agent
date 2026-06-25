@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { Engine } from '../../../agent/yeaft/engine.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
-import { buildMergedSkillSlashCommands, buildSkillSlashCommands } from '../../../agent/yeaft/web-bridge.js';
+import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
+import { buildMergedSkillSlashCommands, buildSkillSlashCommands, __testHooks } from '../../../agent/yeaft/web-bridge.js';
 
 class RecordingAdapter {
   constructor() {
@@ -15,7 +16,33 @@ class RecordingAdapter {
   }
 }
 
+function makeMcpManager(toolName, calls = []) {
+  let disconnected = false;
+  return {
+    listTools() {
+      return disconnected ? [] : [{
+        name: `${toolName}Server__${toolName}`,
+        server: `${toolName}Server`,
+        description: `${toolName} project tool`,
+        inputSchema: { type: 'object', properties: {} },
+      }];
+    },
+    async callTool(fullName, input) {
+      calls.push({ fullName, input });
+      return { content: [{ type: 'text', text: `${toolName} ok` }] };
+    },
+    async disconnectAll() {
+      disconnected = true;
+    },
+  };
+}
+
 describe('Yeaft skill slash commands', () => {
+  afterEach(async () => {
+    __testHooks.setSessionForTest(null);
+    await __testHooks.shutdownProjectRuntimes();
+  });
+
   it('builds slash commands from loaded skill metadata', () => {
     const { commands, descriptions } = buildSkillSlashCommands({
       list: () => [
@@ -72,6 +99,61 @@ describe('Yeaft skill slash commands', () => {
       role: 'user',
       content: 'please review this',
     });
+  });
+
+  it('reactivates cached project MCP tools on A-B-A workDir switches', async () => {
+    const registry = new ToolRegistry();
+    const calls = [];
+    const sessionLike = {
+      toolRegistry: registry,
+      skillManager: { list: () => [] },
+      yeaftDir: '/tmp/yeaft-test',
+    };
+    __testHooks.setSessionForTest(sessionLike);
+    __testHooks.seedProjectRuntime('/tmp/project-a', {
+      skillManager: { list: () => [] },
+      mcpManager: makeMcpManager('a', calls),
+    });
+    __testHooks.seedProjectRuntime('/tmp/project-b', {
+      skillManager: { list: () => [] },
+      mcpManager: makeMcpManager('b', calls),
+    });
+
+    await __testHooks.loadProjectRuntime('/tmp/project-a');
+    expect(registry.names.filter(name => name.startsWith('mcp__'))).toEqual(['mcp__aServer__a']);
+
+    await __testHooks.loadProjectRuntime('/tmp/project-b');
+    expect(registry.names.filter(name => name.startsWith('mcp__'))).toEqual(['mcp__bServer__b']);
+
+    await __testHooks.loadProjectRuntime('/tmp/project-a');
+    expect(registry.names.filter(name => name.startsWith('mcp__'))).toEqual(['mcp__aServer__a']);
+
+    await registry.execute('mcp__aServer__a', { value: 1 }, {});
+    expect(calls).toEqual([{ fullName: 'aServer__a', input: { value: 1 } }]);
+  });
+
+  it('disconnects cached project MCP managers when project runtimes shut down', async () => {
+    const disconnected = [];
+    __testHooks.seedProjectRuntime('/tmp/project-a', {
+      skillManager: { list: () => [] },
+      mcpManager: {
+        listTools: () => [],
+        async disconnectAll() { disconnected.push('a'); },
+      },
+    });
+    __testHooks.seedProjectRuntime('/tmp/project-b', {
+      skillManager: { list: () => [] },
+      mcpManager: {
+        listTools: () => [],
+        async disconnectAll() { disconnected.push('b'); },
+      },
+    });
+
+    expect(__testHooks.projectRuntimeCount()).toBe(2);
+    await __testHooks.shutdownProjectRuntimes();
+
+    expect(disconnected.sort()).toEqual(['a', 'b']);
+    expect(__testHooks.projectRuntimeCount()).toBe(0);
   });
 
   it('reports unknown explicit skill commands in the system prompt', async () => {

@@ -416,6 +416,46 @@ const routePromisesByMsgId = new Map();
 /** @type {Map<string, { workDir: string, skillManager: import('./skills.js').SkillManager, mcpManager: import('./mcp.js').MCPManager, mcpStatus: object, mcpConfig: object, status: { skills: number, mcpServers: string[], mcpFailed: object[], mcpSkipped: object[], tools: number } }>} */
 const projectRuntimes = new Map();
 
+function replaceSessionMcpTools(mcpManager) {
+  if (!session?.toolRegistry || typeof session.toolRegistry.replaceMcpTools !== 'function') {
+    return { removed: 0, added: 0, skipped: true };
+  }
+  try {
+    const result = session.toolRegistry.replaceMcpTools(mcpManager, buildMcpFlattenedTools);
+    return { ...result, skipped: false };
+  } catch (err) {
+    console.warn('[Yeaft] hot-swap MCP tools failed:', err?.message || err);
+    return { removed: 0, added: 0, skipped: true, error: err?.message || String(err) };
+  }
+}
+
+function activateProjectRuntime(runtime) {
+  if (!runtime) return null;
+  const swap = replaceSessionMcpTools(runtime.mcpManager);
+  for (const eng of vpEngines.values()) {
+    try {
+      eng.setRuntimeManagers?.({
+        skillManager: runtime.skillManager,
+        mcpManager: runtime.mcpManager,
+      });
+    } catch { /* best-effort runtime retarget */ }
+  }
+  runtime.status = {
+    ...runtime.status,
+    tools: session?.toolRegistry?.size || runtime.status?.tools || 0,
+  };
+  broadcastSkillSlashCommands(session, [runtime.skillManager]);
+  return swap;
+}
+
+async function shutdownProjectRuntimes() {
+  const runtimes = Array.from(projectRuntimes.values());
+  projectRuntimes.clear();
+  await Promise.all(runtimes.map(async (runtime) => {
+    try { await runtime?.mcpManager?.disconnectAll?.(); } catch { /* best-effort shutdown */ }
+  }));
+}
+
 function getVpThreadMap(sessionId, vpId) {
   const key = vpKey(sessionId, vpId);
   let map = vpThreads.get(key);
@@ -1722,6 +1762,7 @@ export async function __testDrainVpDrivers() {
  * a half-aborted controller writing to a now-cleared map.
  */
 export async function __testResetVpState() {
+  await shutdownProjectRuntimes();
   for (const ctrl of vpAborts.values()) {
     try { if (!ctrl.signal.aborted) ctrl.abort(); } catch { /* */ }
   }
@@ -1738,7 +1779,6 @@ export async function __testResetVpState() {
   asyncTaskOwners.clear();
   vpAborts.clear();
   sessionContexts.clear();
-  projectRuntimes.clear();
   vpCurrentTodos.clear();
   threadClassifier = defaultClassifyThread;
   // Per-group compact in-flight + pending state lives on the session's
@@ -1834,7 +1874,7 @@ async function loadProjectRuntime(workDir) {
   const key = projectRuntimeKey(normalizedWorkDir);
   const cached = projectRuntimes.get(key);
   if (cached) {
-    broadcastSkillSlashCommands(session, [cached.skillManager]);
+    activateProjectRuntime(cached);
     return cached;
   }
 
@@ -1849,15 +1889,6 @@ async function loadProjectRuntime(workDir) {
   if (mcpConfig.servers.length > 0) {
     mcpStatus = await mcpManager.connectAll(mcpConfig.servers);
   }
-  if (session.toolRegistry && typeof session.toolRegistry.replaceMcpTools === 'function') {
-    session.toolRegistry.replaceMcpTools({ listTools: () => [] }, buildMcpFlattenedTools);
-  }
-  const flattened = buildMcpFlattenedTools(mcpManager);
-  for (const tool of flattened) {
-    try { session.toolRegistry.register(tool); } catch (err) {
-      console.warn('[Yeaft] project MCP tool register failed:', err?.message || err);
-    }
-  }
   const runtime = {
     workDir: normalizedWorkDir,
     skillManager,
@@ -1869,11 +1900,11 @@ async function loadProjectRuntime(workDir) {
       mcpServers: mcpStatus.connected,
       mcpFailed: mcpStatus.failed,
       mcpSkipped: mcpConfig.skipped || [],
-      tools: session.toolRegistry.size,
+      tools: session.toolRegistry?.size || 0,
     },
   };
   projectRuntimes.set(key, runtime);
-  broadcastSkillSlashCommands(session, [skillManager]);
+  activateProjectRuntime(runtime);
   return runtime;
 }
 
@@ -1896,7 +1927,7 @@ function mergedStatusForProjectRuntime(runtime) {
     mcpServers: [...new Set([...(session.status.mcpServers || []), ...(runtime.status.mcpServers || [])])],
     mcpFailed: [...(session.status.mcpFailed || []), ...(runtime.status.mcpFailed || [])],
     mcpSkipped: [...(session.status.mcpSkipped || []), ...(runtime.status.mcpSkipped || [])],
-    tools: session.toolRegistry?.size || Math.max(Number(session.status.tools) || 0, Number(runtime.status.tools) || 0),
+    tools: Math.max(Number(session.status.tools) || 0, Number(runtime.status.tools) || 0),
   };
 }
 
@@ -5481,6 +5512,7 @@ export async function handleYeaftLoadMoreHistory(msg) {
  * session, then re-initialises so the frontend gets fresh config.
  */
 export async function resetYeaftSession() {
+  await shutdownProjectRuntimes();
   if (currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
     try { currentAbortCtrl.abort(); } catch { /* ignore */ }
   }
@@ -5516,7 +5548,6 @@ export async function resetYeaftSession() {
   vpEngines.clear();
   asyncTaskOwners.clear();
   sessionContexts.clear();
-  projectRuntimes.clear();
   vpCurrentTodos.clear();
   threadClassifier = defaultClassifyThread;
   // History-dedup cache is keyed by per-session coordinator msg ids;
@@ -5626,16 +5657,7 @@ function mcpRuntimeSnapshot() {
  * pick up the change.
  */
 function hotSwapMcpTools() {
-  if (!session?.toolRegistry || typeof session.toolRegistry.replaceMcpTools !== 'function') {
-    return { removed: 0, added: 0, skipped: true };
-  }
-  try {
-    const result = session.toolRegistry.replaceMcpTools(session.mcpManager, buildMcpFlattenedTools);
-    return { ...result, skipped: false };
-  } catch (err) {
-    console.warn('[Yeaft] hot-swap MCP tools failed:', err?.message || err);
-    return { removed: 0, added: 0, skipped: true, error: err?.message || String(err) };
-  }
+  return replaceSessionMcpTools(session?.mcpManager);
 }
 
 /**
@@ -5694,7 +5716,7 @@ export async function handleYeaftMcpAdd(msg = {}) {
     }
   }
 
-  const swap = hotSwapMcpTools();
+  const swap = replaceSessionMcpTools(session?.mcpManager);
 
   sendToServer({
     type: 'yeaft_mcp_add_result',
@@ -5731,7 +5753,7 @@ export async function handleYeaftMcpRemove(msg = {}) {
     }
   }
 
-  const swap = hotSwapMcpTools();
+  const swap = replaceSessionMcpTools(session?.mcpManager);
 
   sendToServer({
     type: 'yeaft_mcp_remove_result',
@@ -5789,7 +5811,7 @@ export async function handleYeaftMcpReload(msg = {}) {
     console.warn('[Yeaft] MCP reload failed:', err?.message || err);
   }
 
-  const swap = hotSwapMcpTools();
+  const swap = replaceSessionMcpTools(session?.mcpManager);
 
   sendToServer({
     type: 'yeaft_mcp_reload_result',
@@ -5823,6 +5845,28 @@ export const __testHooks = {
     return getVpStatusBroker().transition(status);
   },
   decorateSessionsWithRuntimeState,
+  async loadProjectRuntime(workDir) {
+    return loadProjectRuntime(workDir);
+  },
+  seedProjectRuntime(workDir, runtime) {
+    const normalizedWorkDir = normalizeSessionWorkDir(workDir);
+    const seeded = {
+      workDir: normalizedWorkDir,
+      skillManager: runtime?.skillManager || { list: () => [] },
+      mcpManager: runtime?.mcpManager || { listTools: () => [], disconnectAll: async () => {} },
+      mcpStatus: runtime?.mcpStatus || { connected: [], failed: [] },
+      mcpConfig: runtime?.mcpConfig || { servers: [], skipped: [] },
+      status: runtime?.status || { skills: 0, mcpServers: [], mcpFailed: [], mcpSkipped: [], tools: 0 },
+    };
+    projectRuntimes.set(projectRuntimeKey(normalizedWorkDir), seeded);
+    return seeded;
+  },
+  async shutdownProjectRuntimes() {
+    return shutdownProjectRuntimes();
+  },
+  projectRuntimeCount() {
+    return projectRuntimes.size;
+  },
   seedQueuedVpTurn({ sessionId = 'session-test', vpId = 'vp-test', threadId = 'main', turnId = 'turn-test' } = {}) {
     const key = threadKey(sessionId, vpId, threadId);
     const inbox = vpInboxes.get(key) || [];
