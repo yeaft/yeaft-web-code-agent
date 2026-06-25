@@ -90,7 +90,14 @@ class MCPServerConnection extends EventEmitter {
         });
 
         this.#process.stderr.on('data', (data) => {
-          this.emit('error', new Error(`[${this.#name}] stderr: ${data.toString().trim()}`));
+          const text = data.toString().trim();
+          if (!text) return;
+          const err = new Error(`[${this.#name}] stderr: ${text}`);
+          if (this.listenerCount('error') > 0) {
+            this.emit('error', err);
+          } else {
+            console.warn(`[MCP] ${err.message}`);
+          }
         });
 
         this.#process.on('close', (code) => {
