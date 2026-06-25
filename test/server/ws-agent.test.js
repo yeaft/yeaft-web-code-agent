@@ -1077,7 +1077,7 @@ describe('CONV_EXEMPT_TYPES — workbench responses must bypass conversation-id 
     'proxy_response_end', 'proxy_ports_update', 'proxy_ws_opened', 'proxy_ws_message',
     'proxy_ws_closed', 'proxy_ws_error', 'restart_agent_ack', 'upgrade_agent_ack',
     'directory_listing', 'folders_list', 'yeaft_output', 'yeaft_session_output', 'session_output',
-    'yeaft_history_chunk',
+    'yeaft_history_chunk', 'slash_commands_update',
     'file_content', 'file_saved', 'file_op_result', 'file_search_result',
     'git_status_result', 'git_diff_result', 'git_op_result'
   ]);
@@ -1135,6 +1135,18 @@ describe('CONV_EXEMPT_TYPES — workbench responses must bypass conversation-id 
       sessionId: 'session-1',
       mode: 'recent',
       messages: [{ id: 'm0001', role: 'user', content: 'visible history' }],
+    };
+    expect(isDropped(agent, msg)).toBe(false);
+  });
+
+  it('passes slash command updates for unknown Yeaft virtual conversationIds', () => {
+    const agent = createMockAgent();
+    const msg = {
+      type: 'slash_commands_update',
+      conversationId: 'yeaft-1762400000000',
+      agentId: 'agent-1',
+      slashCommands: ['yeaft-skills:sprint'],
+      slashCommandDescriptions: { 'yeaft-skills:sprint': 'Sprint skill' },
     };
     expect(isDropped(agent, msg)).toBe(false);
   });

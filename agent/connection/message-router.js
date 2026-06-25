@@ -68,6 +68,8 @@ export async function handleMessage(msg) {
         reconnectInterval: ctx.CONFIG.reconnectInterval
         // 不保存 agentSecret 到配置文件（安全考虑）
       });
+      ctx.AGENT_ID = msg.agentId;
+      ctx.agentId = msg.agentId;
       console.log(`Registered as agent: ${msg.agentId} (name: ${ctx.CONFIG.agentName})`);
 
       // Check server-pushed upgrade notification
