@@ -79,6 +79,7 @@ import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 const LEGACY_SKILL_COMMAND_PREFIX = 'skill:';
 const YEAFT_SKILL_COMMAND_PREFIX = 'yeaft-skills:';
 const PROJECT_SKILL_TIERS = new Set(['project', 'project-claude', 'project-codex']);
+const BASE_RUNTIME_KEY = '__base__';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -424,6 +425,9 @@ const vpThreads = new Map();
 const routePromisesByMsgId = new Map();
 /** @type {Map<string, { workDir: string, skillManager: import('./skills.js').SkillManager, mcpManager: import('./mcp.js').MCPManager, mcpStatus: object, mcpConfig: object, status: { skills: number, mcpServers: string[], mcpFailed: object[], mcpSkipped: object[], tools: number } }>} */
 const projectRuntimes = new Map();
+/** @type {Map<string, Promise<any>>} */
+const baseRuntimeLoadPromises = new Map();
+let activeRuntimeKey = BASE_RUNTIME_KEY;
 
 function replaceSessionMcpTools(mcpManager) {
   if (!session?.toolRegistry || typeof session.toolRegistry.replaceMcpTools !== 'function') {
@@ -439,6 +443,9 @@ function replaceSessionMcpTools(mcpManager) {
 }
 
 function retargetVpEngines({ skillManager, mcpManager }) {
+  try {
+    session?.engine?.setRuntimeManagers?.({ skillManager, mcpManager });
+  } catch { /* best-effort default-engine retarget */ }
   for (const eng of vpEngines.values()) {
     try {
       eng.setRuntimeManagers?.({ skillManager, mcpManager });
@@ -447,17 +454,26 @@ function retargetVpEngines({ skillManager, mcpManager }) {
 }
 
 function activateBaseRuntime() {
+  activeRuntimeKey = BASE_RUNTIME_KEY;
   const swap = replaceSessionMcpTools(session?.mcpManager);
   retargetVpEngines({
     skillManager: session?.skillManager || null,
     mcpManager: session?.mcpManager || null,
   });
+  const status = session?.status || null;
+  if (status) {
+    status.skills = session?.skillManager?.size || 0;
+    status.mcpServers = Array.isArray(status.mcpServers) ? status.mcpServers : [];
+    status.mcpFailed = Array.isArray(status.mcpFailed) ? status.mcpFailed : [];
+    status.tools = session?.toolRegistry?.size || status.tools || 0;
+  }
   broadcastSkillSlashCommands(session);
   return swap;
 }
 
 function activateProjectRuntime(runtime) {
   if (!runtime) return activateBaseRuntime();
+  activeRuntimeKey = projectRuntimeKey(runtime.workDir);
   const swap = replaceSessionMcpTools(runtime.mcpManager);
   retargetVpEngines({
     skillManager: runtime.skillManager,
@@ -475,6 +491,7 @@ async function shutdownProjectRuntimes() {
   const runtimes = Array.from(projectRuntimes.values());
   projectRuntimes.clear();
   projectRuntimeLoadPromises.clear();
+  baseRuntimeLoadPromises.clear();
   await Promise.all(runtimes.map(async (runtime) => {
     try { await runtime?.mcpManager?.disconnectAll?.(); } catch { /* best-effort shutdown */ }
   }));
@@ -1966,6 +1983,63 @@ function broadcastSkillSlashCommands(sessionLike, extraSkillManagers = []) {
     slashCommands,
     slashCommandDescriptions,
   });
+}
+
+async function loadBaseRuntime() {
+  if (!session) return null;
+  const yeaftDir = ctx.CONFIG?.yeaftDir || session.yeaftDir || DEFAULT_YEAFT_DIR;
+  const skillManager = createSkillManager(yeaftDir, process.cwd());
+  session.skillManager = skillManager;
+
+  const mcpConfig = loadMCPConfig(yeaftDir, undefined, process.cwd());
+  const mcpManager = new MCPManager();
+  session.mcpManager = mcpManager;
+  let mcpStatus = { connected: [], failed: [] };
+
+  if (session.status) {
+    session.status.skills = skillManager.size;
+    session.status.mcpServers = [];
+    session.status.mcpFailed = [];
+    session.status.mcpSkipped = mcpConfig.skipped || [];
+    session.status.tools = session.toolRegistry?.size || session.status.tools || 0;
+  }
+  if (activeRuntimeKey === BASE_RUNTIME_KEY) {
+    activateBaseRuntime();
+  } else {
+    broadcastSkillSlashCommands(session);
+  }
+  hydrateYeaftStatusFromSession(session, { reason: 'base_runtime_skills', emitEvent: true });
+
+  if (mcpConfig.servers.length > 0) {
+    mcpStatus = await mcpManager.connectAll(mcpConfig.servers);
+    session.mcpManager = mcpManager;
+    if (session.status) {
+      session.status.mcpServers = mcpStatus.connected;
+      session.status.mcpFailed = mcpStatus.failed;
+      session.status.mcpSkipped = mcpConfig.skipped || [];
+    }
+    if (activeRuntimeKey === BASE_RUNTIME_KEY) {
+      activateBaseRuntime();
+    }
+    hydrateYeaftStatusFromSession(session, { reason: 'base_runtime_mcp', emitEvent: true });
+    try { broadcastMcpUpdated({ reason: 'base-runtime-load' }); } catch { /* best-effort */ }
+  }
+
+  return { skillManager, mcpManager, mcpStatus, mcpConfig };
+}
+
+function scheduleBaseRuntimeLoad() {
+  if (!session) return null;
+  if (baseRuntimeLoadPromises.has(BASE_RUNTIME_KEY)) return baseRuntimeLoadPromises.get(BASE_RUNTIME_KEY);
+  const promise = new Promise(resolve => setTimeout(resolve, 0))
+    .then(() => loadBaseRuntime())
+    .catch((err) => {
+      console.warn('[Yeaft] async base runtime load failed:', err?.message || err);
+      return null;
+    })
+    .finally(() => { baseRuntimeLoadPromises.delete(BASE_RUNTIME_KEY); });
+  baseRuntimeLoadPromises.set(BASE_RUNTIME_KEY, promise);
+  return promise;
 }
 
 async function loadProjectRuntime(workDir) {
@@ -3809,8 +3883,8 @@ async function ensureSessionLoaded(opts = {}) {
     session = await loadSession({
       ...(yeaftDir && { dir: yeaftDir }),
       ...(normalizedWorkDir && { workDir: normalizedWorkDir }),
-      skipMCP: false,
-      skipSkills: false,
+      skipMCP: true,
+      skipSkills: true,
       serverMode: true,
     });
 
@@ -3841,6 +3915,7 @@ async function ensureSessionLoaded(opts = {}) {
     }
 
     ensureYeaftConversationId();
+    scheduleBaseRuntimeLoad();
     const bootProjectRuntime = normalizedWorkDir ? projectRuntimes.get(projectRuntimeKey(normalizedWorkDir)) || null : null;
     if (normalizedWorkDir && !bootProjectRuntime) {
       scheduleProjectRuntimeLoad(normalizedWorkDir);
@@ -5772,13 +5847,14 @@ export async function resetYeaftSession() {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     session = await loadSession({
       ...(yeaftDir && { dir: yeaftDir }),
-      skipMCP: false,
-      skipSkills: false,
+      skipMCP: true,
+      skipSkills: true,
       serverMode: true,
     });
     installYeaftRuntimeBridge(session);
 
     yeaftConversationId = `yeaft-${Date.now()}`;
+    scheduleBaseRuntimeLoad();
     hydrateYeaftStatusFromSession(session, { reason: 'reset', emitEvent: true });
     broadcastSkillSlashCommands(session);
 

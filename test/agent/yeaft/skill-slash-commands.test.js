@@ -277,6 +277,44 @@ describe('Yeaft skill slash commands', () => {
     await started;
   });
 
+  it('does not block cold session boot on slow base MCP startup', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'yeaft-cold-slow-mcp-'));
+    const yeaftDir = join(root, 'yeaft');
+    const sessionId = 'sess_cold_slow';
+    mkdirSync(join(yeaftDir, 'sessions', sessionId), { recursive: true });
+    writeFileSync(join(yeaftDir, 'sessions', sessionId, 'session.json'), JSON.stringify({
+      id: sessionId,
+      name: 'Cold Slow MCP',
+      roster: ['dev'],
+      defaultVpId: 'dev',
+      createdAt: new Date().toISOString(),
+    }));
+    mkdirSync(join(yeaftDir, 'virtual-persons', 'dev'), { recursive: true });
+    writeFileSync(join(yeaftDir, 'virtual-persons', 'dev', 'role.md'), '---\nid: dev\nname: Dev\nrole: Developer\n---\nDeveloper persona\n');
+    writeFileSync(join(yeaftDir, 'config.json'), JSON.stringify({
+      providers: [{ name: 'test', baseUrl: 'http://localhost.invalid/v1', apiKey: 'test', protocol: 'openai-responses', models: ['test-model'] }],
+      primaryModel: 'test/test-model',
+      model: 'test/test-model',
+      maxOutputTokens: 1024,
+      language: 'en',
+      mcpServers: [{
+        name: 'slow',
+        command: process.execPath,
+        args: ['-e', 'setInterval(() => {}, 1000)'],
+      }],
+    }));
+
+    ctx.CONFIG = { yeaftDir };
+    const started = __testHooks.runYeaftSessionSendForTest({ sessionId, text: 'hello', id: 'msg-cold-slow' });
+    await new Promise(resolve => setTimeout(resolve, 120));
+
+    const sessionReady = ctx.messageBuffer.find(msg => msg?.type === 'yeaft_output' && msg.event?.type === 'session_ready');
+    expect(sessionReady).toBeTruthy();
+    const turnStart = ctx.messageBuffer.find(msg => msg?.type === 'yeaft_output' && msg.event?.type === 'vp_turn_start');
+    expect(turnStart).toBeTruthy();
+    await started;
+  });
+
   it('stamps the registered agent id on preloaded skill commands', async () => {
     ctx.AGENT_ID = 'agent-123';
     ctx.CONFIG = { yeaftDir: '/tmp/yeaft-test', workDir: '/tmp/project-a' };
