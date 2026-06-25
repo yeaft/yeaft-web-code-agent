@@ -1,4 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { mkdtempSync, writeFileSync, mkdirSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { Engine } from '../../../agent/yeaft/engine.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
@@ -78,9 +81,37 @@ describe('Yeaft skill slash commands', () => {
     expect(descriptions['skill:review-code']).toBe('Project review');
   });
 
-  it.each(['/yeaft-skills:review-code please review this', '/skill:review-code please review this'])('injects an explicitly selected skill and strips %s before streaming', async (prompt) => {
+
+  it('shows project-tier skills as bare slash commands and globals as yeaft-skills commands', () => {
+    const { commands, descriptions } = buildMergedSkillSlashCommands([
+      { list: () => [{ name: 'global-review', description: 'Global review', tier: 'user' }] },
+      { list: () => [{ name: 'project-review', description: 'Project review', tier: 'project' }] },
+    ]);
+
+    expect(commands).toEqual(['project-review', 'yeaft-skills:global-review']);
+    expect(descriptions['project-review']).toBe('Project review');
+    expect(descriptions['yeaft-skills:project-review']).toBe('Project review');
+    expect(descriptions['skill:project-review']).toBe('Project review');
+    expect(descriptions['yeaft-skills:global-review']).toBe('Global review');
+  });
+
+  it('lets a project-tier override replace a global skill command shape', () => {
+    const { commands, descriptions } = buildMergedSkillSlashCommands([
+      { list: () => [{ name: 'review-code', description: 'Global review', tier: 'user' }] },
+      { list: () => [{ name: 'review-code', description: 'Project review', tier: 'project-claude' }] },
+    ]);
+
+    expect(commands).toEqual(['review-code']);
+    expect(descriptions['review-code']).toBe('Project review');
+    expect(descriptions['yeaft-skills:review-code']).toBe('Project review');
+  });
+
+  it.each(['/yeaft-skills:review-code please review this', '/skill:review-code please review this', '/review-code please review this'])('injects an explicitly selected skill and strips %s before streaming', async (prompt) => {
     const adapter = new RecordingAdapter();
     const skillManager = {
+      has(name) {
+        return name === 'review-code';
+      },
       getPromptContent(name) {
         return name === 'review-code' ? '## Skill: review-code\n\nReview instructions' : '';
       },
@@ -182,6 +213,106 @@ describe('Yeaft skill slash commands', () => {
     expect(ctx.slashCommands).toContain('yeaft-skills:base-skill');
     expect(ctx.slashCommands).not.toContain('yeaft-skills:project-skill');
     expect(ctx.slashCommands).not.toContain('skill:base-skill');
+  });
+
+  it('does not block a VP turn on slow project MCP startup', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'yeaft-slow-mcp-'));
+    const yeaftDir = join(root, 'yeaft');
+    const workDir = join(root, 'project');
+    mkdirSync(join(yeaftDir, 'sessions', 'sess_slow'), { recursive: true });
+    writeFileSync(join(yeaftDir, 'sessions', 'sess_slow', 'session.json'), JSON.stringify({
+      id: 'sess_slow',
+      name: 'Slow MCP',
+      roster: ['dev'],
+      defaultVpId: 'dev',
+      workDir,
+      createdAt: new Date().toISOString(),
+    }));
+    mkdirSync(join(yeaftDir, 'virtual-persons', 'dev'), { recursive: true });
+    writeFileSync(join(yeaftDir, 'virtual-persons', 'dev', 'role.md'), '---\nid: dev\nname: Dev\nrole: Developer\n---\nDeveloper persona\n');
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(join(workDir, '.mcp.json'), JSON.stringify({
+      mcpServers: {
+        slow: {
+          command: process.execPath,
+          args: ['-e', 'setInterval(() => {}, 1000)'],
+        },
+      },
+    }));
+
+    const adapter = new RecordingAdapter();
+    ctx.CONFIG = {
+      yeaftDir,
+      model: 'test-model',
+      primaryModel: 'test-model',
+      maxOutputTokens: 1024,
+      language: 'en',
+      providers: [],
+      availableModels: [],
+    };
+    const sessionLike = {
+      adapter,
+      trace: new NullTrace(),
+      config: { model: 'test-model', primaryModel: 'test-model', maxOutputTokens: 1024, language: 'en', providers: [], availableModels: [] },
+      conversationStore: { loadRecentBySession: () => [], readCompactSummary: () => '', append: () => ({}) },
+      memoryIndex: null,
+      amsRegistry: null,
+      toolRegistry: new ToolRegistry(),
+      skillManager: { list: () => [], getRelevantPromptContent: () => '' },
+      mcpManager: makeMcpManager('base'),
+      yeaftDir,
+      taskManager: { renderActiveTasksForPrompt: () => '', listActiveTasks: () => [] },
+      toolStats: null,
+      compactor: { awaitInFlight: async () => {}, scheduleAfterTurn: () => {} },
+      status: { skills: 0, mcpServers: [], tools: 0 },
+    };
+    __testHooks.setSessionForTest(sessionLike);
+    const meta = { id: 'sess_slow', name: 'Slow MCP', roster: ['dev'], defaultVpId: 'dev', workDir };
+    __testHooks.seedSessionContext('sess_slow', meta);
+
+    const started = __testHooks.runYeaftSessionSendForTest({ sessionId: 'sess_slow', text: 'hello', id: 'msg-slow' });
+    await new Promise(resolve => setTimeout(resolve, 80));
+
+    expect(adapter.calls).toHaveLength(1);
+    await started;
+  });
+
+  it('does not block cold session boot on slow base MCP startup', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'yeaft-cold-slow-mcp-'));
+    const yeaftDir = join(root, 'yeaft');
+    const sessionId = 'sess_cold_slow';
+    mkdirSync(join(yeaftDir, 'sessions', sessionId), { recursive: true });
+    writeFileSync(join(yeaftDir, 'sessions', sessionId, 'session.json'), JSON.stringify({
+      id: sessionId,
+      name: 'Cold Slow MCP',
+      roster: ['dev'],
+      defaultVpId: 'dev',
+      createdAt: new Date().toISOString(),
+    }));
+    mkdirSync(join(yeaftDir, 'virtual-persons', 'dev'), { recursive: true });
+    writeFileSync(join(yeaftDir, 'virtual-persons', 'dev', 'role.md'), '---\nid: dev\nname: Dev\nrole: Developer\n---\nDeveloper persona\n');
+    writeFileSync(join(yeaftDir, 'config.json'), JSON.stringify({
+      providers: [{ name: 'test', baseUrl: 'http://localhost.invalid/v1', apiKey: 'test', protocol: 'openai-responses', models: ['test-model'] }],
+      primaryModel: 'test/test-model',
+      model: 'test/test-model',
+      maxOutputTokens: 1024,
+      language: 'en',
+      mcpServers: [{
+        name: 'slow',
+        command: process.execPath,
+        args: ['-e', 'setInterval(() => {}, 1000)'],
+      }],
+    }));
+
+    ctx.CONFIG = { yeaftDir };
+    const started = __testHooks.runYeaftSessionSendForTest({ sessionId, text: 'hello', id: 'msg-cold-slow' });
+    await new Promise(resolve => setTimeout(resolve, 120));
+
+    const sessionReady = ctx.messageBuffer.find(msg => msg?.type === 'yeaft_output' && msg.event?.type === 'session_ready');
+    expect(sessionReady).toBeTruthy();
+    const turnStart = ctx.messageBuffer.find(msg => msg?.type === 'yeaft_output' && msg.event?.type === 'vp_turn_start');
+    expect(turnStart).toBeTruthy();
+    await started;
   });
 
   it('stamps the registered agent id on preloaded skill commands', async () => {

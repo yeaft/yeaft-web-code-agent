@@ -5,6 +5,7 @@ describe('slash command utilities', () => {
   it('groups Yeaft skill commands as skills', () => {
     expect(getCommandGroup('/yeaft-skills:review-code')).toBe('skill');
     expect(getCommandGroup('/skill:review-code')).toBe('skill');
+    expect(getCommandGroup('/project-review')).toBe('project');
   });
 
   it('uses dynamic descriptions for Yeaft skill commands', () => {
