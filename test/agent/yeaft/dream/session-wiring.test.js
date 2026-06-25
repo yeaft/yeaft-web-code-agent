@@ -177,6 +177,27 @@ describe('buildRunDreamOpts session conversation wiring', () => {
     expect(memory).not.toContain('tags: [recent, experience, workflow]');
   });
 
+  it('writes current session memory.md even when extractor returns no permanent segments', async () => {
+    const llm = async (req) => {
+      if (req.pass === 'extract-segments') return '[]';
+      return '[]';
+    };
+
+    const result = await extractAndWriteMemorySegments({
+      root: join(testDir, 'memory'),
+      sessionId: 's-recent-only',
+      messages: [{ id: 'm1', role: 'user', body: 'manual dream should still leave inspectable current context.' }],
+      targets: ['sessions/s-recent-only'],
+      llm,
+      nowIso: () => '2026-06-12T00:00:00.000Z',
+    });
+
+    expect(result).toEqual(expect.objectContaining({ scopes: 1, segments: 1, errors: [] }));
+    const memory = readFileSync(join(testDir, 'memory', 'sessions', 's-recent-only', 'memory.md'), 'utf8');
+    expect(memory).toContain('Recent session details from the latest Dream pass');
+    expect(memory).toContain('manual dream should still leave inspectable current context');
+  });
+
   it('keeps reusable session experience separate from current detail', async () => {
     const llm = async (req) => {
       if (req.pass === 'extract-segments') {

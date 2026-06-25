@@ -4821,6 +4821,12 @@ export function __testAppendTurnToSessionHistory(...args) {
  * Backwards-compat: when neither field is set, defaults to `vpId='default'`
  * which matches the pre-v0.1.754 behavior.
  */
+function resolveDreamTriggerSessionId(msg = {}) {
+  return typeof msg.sessionId === 'string' && msg.sessionId
+    ? msg.sessionId
+    : (typeof msg.groupId === 'string' && msg.groupId ? msg.groupId : null);
+}
+
 export function normalizeDreamResult(result) {
   const sessions = Array.isArray(result?.sessions) ? result.sessions : [];
   const targets = Array.isArray(result?.targets) ? result.targets : [];
@@ -4869,7 +4875,7 @@ export async function handleYeaftDreamTrigger(msg = {}) {
   // route the error event back to the right row and the per-group
   // "Run dream now" button would stay stuck on "Running…" forever
   // (review feedback from PR #757).
-  const sessionId = typeof msg.sessionId === 'string' && msg.sessionId ? msg.sessionId : null;
+  const sessionId = resolveDreamTriggerSessionId(msg);
   const vpId = !sessionId ? (msg.vpId || 'default') : null;
   const tag = sessionId ? { sessionId } : { vpId };
 
@@ -5924,6 +5930,7 @@ export const __testHooks = {
     return getVpStatusBroker().transition(status);
   },
   decorateSessionsWithRuntimeState,
+  resolveDreamTriggerSessionId,
   async loadProjectRuntime(workDir) {
     return loadProjectRuntime(workDir);
   },
