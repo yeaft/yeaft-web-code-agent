@@ -316,9 +316,12 @@ export default {
     const selectedIndex = Vue.ref(0);
 
     // 获取可用的 slash commands（确保都有 / 前缀）
-    // 优先读取当前 conversation 的 commands，fallback 到 agent 级别，再 fallback 到默认列表
+    // Custom-send contexts (Yeaft) pass their logical conversationId explicitly;
+    // `store.currentConversation` can still point at the previous Chat pane until
+    // session_ready migrates the placeholder. Prefer the prop so Yeaft `/` sees
+    // agent-level skill commands immediately.
     const availableCommands = Vue.computed(() => {
-      const convId = store.currentConversation;
+      const convId = props.conversationId || store.activeConversationId || store.currentConversation;
       const agentId = store.currentAgent;
       const dynamic = (convId && store.slashCommandsMap[convId])
         || (agentId && store.slashCommandsMap[`agent:${agentId}`])

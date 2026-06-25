@@ -621,11 +621,18 @@ export function handleMessage(store, msg) {
 
     case 'slash_commands_update':
       if (msg.slashCommands && msg.slashCommands.length > 0) {
+        const slashCommands = [...new Set(msg.slashCommands)];
         if (msg.conversationId) {
-          store.slashCommandsMap[msg.conversationId] = msg.slashCommands;
+          store.slashCommandsMap[msg.conversationId] = slashCommands;
+          if (store.currentView === 'yeaft' && store.yeaftConversationId) {
+            store.slashCommandsMap[store.yeaftConversationId] = slashCommands;
+          }
         }
         if (msg.agentId) {
-          store.slashCommandsMap[`agent:${msg.agentId}`] = msg.slashCommands;
+          store.slashCommandsMap[`agent:${msg.agentId}`] = slashCommands;
+          if (store.currentView === 'yeaft' && store.yeaftConversationId) {
+            store.slashCommandsMap[store.yeaftConversationId] = slashCommands;
+          }
         }
       }
       // Merge command descriptions (cumulative — new descriptions extend existing)

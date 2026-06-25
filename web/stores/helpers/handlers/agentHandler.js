@@ -451,7 +451,11 @@ export function handleAgentSelected(store, msg) {
   if (msg.slashCommands && msg.slashCommands.length > 0) {
     // Store as agent-level default, used as fallback when a conversation
     // hasn't reported its own slashCommands yet
-    store.slashCommandsMap[`agent:${msg.agentId}`] = msg.slashCommands;
+    const slashCommands = [...new Set(msg.slashCommands)];
+    store.slashCommandsMap[`agent:${msg.agentId}`] = slashCommands;
+    if (store.currentView === 'yeaft' && store.yeaftConversationId) {
+      store.slashCommandsMap[store.yeaftConversationId] = slashCommands;
+    }
   }
   // Merge command descriptions
   if (msg.slashCommandDescriptions) {

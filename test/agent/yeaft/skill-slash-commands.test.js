@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Engine } from '../../../agent/yeaft/engine.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
-import { buildSkillSlashCommands } from '../../../agent/yeaft/web-bridge.js';
+import { buildMergedSkillSlashCommands, buildSkillSlashCommands } from '../../../agent/yeaft/web-bridge.js';
 
 class RecordingAdapter {
   constructor() {
@@ -30,6 +30,16 @@ describe('Yeaft skill slash commands', () => {
       'skill:review-code': 'Review code',
       'skill:sprint': 'plan work',
     });
+  });
+
+  it('merges global and project skill commands without duplicates', () => {
+    const { commands, descriptions } = buildMergedSkillSlashCommands([
+      { list: () => [{ name: 'review-code', description: 'Global review' }, { name: 'plan', description: 'Plan' }] },
+      { list: () => [{ name: 'review-code', description: 'Project review' }, { name: 'ship', description: 'Ship' }, { name: '', description: 'bad' }] },
+    ]);
+
+    expect(commands).toEqual(['skill:plan', 'skill:review-code', 'skill:ship']);
+    expect(descriptions['skill:review-code']).toBe('Project review');
   });
 
   it('injects an explicitly selected skill and strips the command before streaming', async () => {
