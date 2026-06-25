@@ -1,4 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { mkdtempSync, writeFileSync, mkdirSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { Engine } from '../../../agent/yeaft/engine.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
@@ -210,6 +213,68 @@ describe('Yeaft skill slash commands', () => {
     expect(ctx.slashCommands).toContain('yeaft-skills:base-skill');
     expect(ctx.slashCommands).not.toContain('yeaft-skills:project-skill');
     expect(ctx.slashCommands).not.toContain('skill:base-skill');
+  });
+
+  it('does not block a VP turn on slow project MCP startup', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'yeaft-slow-mcp-'));
+    const yeaftDir = join(root, 'yeaft');
+    const workDir = join(root, 'project');
+    mkdirSync(join(yeaftDir, 'sessions', 'sess_slow'), { recursive: true });
+    writeFileSync(join(yeaftDir, 'sessions', 'sess_slow', 'session.json'), JSON.stringify({
+      id: 'sess_slow',
+      name: 'Slow MCP',
+      roster: ['dev'],
+      defaultVpId: 'dev',
+      workDir,
+      createdAt: new Date().toISOString(),
+    }));
+    mkdirSync(join(yeaftDir, 'virtual-persons', 'dev'), { recursive: true });
+    writeFileSync(join(yeaftDir, 'virtual-persons', 'dev', 'role.md'), '---\nid: dev\nname: Dev\nrole: Developer\n---\nDeveloper persona\n');
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(join(workDir, '.mcp.json'), JSON.stringify({
+      mcpServers: {
+        slow: {
+          command: process.execPath,
+          args: ['-e', 'setInterval(() => {}, 1000)'],
+        },
+      },
+    }));
+
+    const adapter = new RecordingAdapter();
+    ctx.CONFIG = {
+      yeaftDir,
+      model: 'test-model',
+      primaryModel: 'test-model',
+      maxOutputTokens: 1024,
+      language: 'en',
+      providers: [],
+      availableModels: [],
+    };
+    const sessionLike = {
+      adapter,
+      trace: new NullTrace(),
+      config: { model: 'test-model', primaryModel: 'test-model', maxOutputTokens: 1024, language: 'en', providers: [], availableModels: [] },
+      conversationStore: { loadRecentBySession: () => [], readCompactSummary: () => '', append: () => ({}) },
+      memoryIndex: null,
+      amsRegistry: null,
+      toolRegistry: new ToolRegistry(),
+      skillManager: { list: () => [], getRelevantPromptContent: () => '' },
+      mcpManager: makeMcpManager('base'),
+      yeaftDir,
+      taskManager: { renderActiveTasksForPrompt: () => '', listActiveTasks: () => [] },
+      toolStats: null,
+      compactor: { awaitInFlight: async () => {}, scheduleAfterTurn: () => {} },
+      status: { skills: 0, mcpServers: [], tools: 0 },
+    };
+    __testHooks.setSessionForTest(sessionLike);
+    const meta = { id: 'sess_slow', name: 'Slow MCP', roster: ['dev'], defaultVpId: 'dev', workDir };
+    __testHooks.seedSessionContext('sess_slow', meta);
+
+    const started = __testHooks.runYeaftSessionSendForTest({ sessionId: 'sess_slow', text: 'hello', id: 'msg-slow' });
+    await new Promise(resolve => setTimeout(resolve, 80));
+
+    expect(adapter.calls).toHaveLength(1);
+    await started;
   });
 
   it('stamps the registered agent id on preloaded skill commands', async () => {

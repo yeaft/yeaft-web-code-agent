@@ -2055,6 +2055,24 @@ async function ensureProjectRuntimeForSessionMeta(sessionMeta) {
   }
 }
 
+function getProjectRuntimeForTurn(sessionMeta) {
+  const workDir = normalizeSessionWorkDir(sessionMeta?.workDir);
+  if (!workDir) {
+    activateBaseRuntime();
+    return null;
+  }
+  const cached = projectRuntimes.get(projectRuntimeKey(workDir)) || null;
+  if (cached) {
+    activateProjectRuntime(cached);
+    return cached;
+  }
+  scheduleProjectRuntimeLoad(workDir);
+  // Do not let a previous workDir's MCP tools leak into this turn while the
+  // requested project runtime is still loading in the background.
+  activateBaseRuntime();
+  return null;
+}
+
 function mergedStatusForProjectRuntime(runtime) {
   if (!session?.status || !runtime?.status) return session?.status || { skills: 0, mcpServers: [], tools: 0 };
   return {
@@ -3325,7 +3343,7 @@ function handleEngineEvent(event, hctx) {
  *   - No legacy "no-session" fallback paths — they were the source of the
  *     router_unavailable bug fixed in v0.1.671.
  */
-export async function handleYeaftSessionSend(msg) {
+async function runYeaftSessionSend(msg) {
   if (!msg || typeof msg !== 'object') return;
   const { text } = msg;
   // PR #721: image-only send is allowed — text may be empty when the
@@ -3394,10 +3412,10 @@ export async function handleYeaftSessionSend(msg) {
     return;
   }
 
-  // Open the session metadata first so a workDir-backed Session can load its
-  // project-tier skills and MCP before the first engine turn. The runtime boot
-  // below uses the same workDir; if metadata is missing we still boot the agent
-  // runtime for a useful error response, then fail on the session open check.
+  // Open the session metadata first so a workDir-backed Session can schedule
+  // project runtime loading without blocking the user-message hot path. If
+  // metadata is missing we still boot the agent runtime for a useful error
+  // response, then fail on the session open check.
   let sessionHandle = null;
   let sessionRoot = null;
   let sessionMetaForRuntime = null;
@@ -4122,7 +4140,9 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         envelope: inboundEnvelope,
         threadId,
       });
-      const projectRuntime = await ensureProjectRuntimeForSessionMeta(sessionCoordinator?.group?.getMeta?.());
+      let turnSessionMeta = null;
+      try { turnSessionMeta = sessionCoordinator?.group?.getMeta?.() || null; } catch { turnSessionMeta = null; }
+      const projectRuntime = getProjectRuntimeForTurn(turnSessionMeta);
 
       vpEngine = getOrCreateVpEngine(sessionId, vpId, threadId);
       if (projectRuntime) {
@@ -5220,6 +5240,10 @@ export async function handleYeaftFetchDebugHistory(msg = {}) {
   });
 }
 
+export async function handleYeaftSessionSend(msg) {
+  return runYeaftSessionSend(msg);
+}
+
 export function handleYeaftSubAgentPrompt(msg) {
   const sessionId = typeof msg?.sessionId === 'string' ? msg.sessionId.trim() : '';
   const taskId = typeof msg?.taskId === 'string' ? msg.taskId.trim() : '';
@@ -6009,6 +6033,9 @@ export const __testHooks = {
   loadVisibleGroupHistoryPage,
   persistInboundMessageOnceByMsgId,
   buildPendingRescueEnvelope,
+  runYeaftSessionSendForTest(msg) {
+    return runYeaftSessionSend(msg);
+  },
   setSessionForTest(nextSession) {
     session = nextSession || null;
     sessionLoadPromise = null;
@@ -6038,6 +6065,30 @@ export const __testHooks = {
   resolveDreamTriggerSessionId,
   async loadProjectRuntime(workDir) {
     return loadProjectRuntime(workDir);
+  },
+  seedSessionContext(sessionId, meta) {
+    const group = {
+      getMeta() { return structuredClone(meta); },
+      appendMessage(record) {
+        return {
+          ...record,
+          id: record?.id || `msg-${Date.now()}`,
+          ts: record?.ts || new Date().toISOString(),
+          role: record?.role || (record?.from === 'user' ? 'user' : 'assistant'),
+          meta: record?.meta || {},
+        };
+      },
+    };
+    const coord = createCoordinator(group, {
+      deliver: (vpId, envelope) => enqueueForVp(sessionId, vpId, envelope),
+    });
+    const entry = makeGroupContextStub();
+    entry.coord = coord;
+    entry.router = createRouter({ coordinator: coord });
+    entry.sessionHandle = group;
+    entry.historyHydrated = true;
+    sessionContexts.set(sessionId, entry);
+    return entry;
   },
   seedProjectRuntime(workDir, runtime) {
     const normalizedWorkDir = normalizeSessionWorkDir(workDir);
