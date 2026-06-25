@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import ctx from '../context.js';
+import { shouldReconnectForHeartbeat } from './heartbeat-policy.js';
 
 export function startAgentHeartbeat() {
   stopAgentHeartbeat();
@@ -16,8 +17,9 @@ export function startAgentHeartbeat() {
     if (!ctx.ws || ctx.ws.readyState !== WebSocket.OPEN) return;
 
     // 检查上次 pong 是否超时
-    const sincePong = Date.now() - ctx.lastPongAt;
-    if (sincePong > 45000) {
+    const now = Date.now();
+    const sincePong = now - ctx.lastPongAt;
+    if (shouldReconnectForHeartbeat(ctx.lastPongAt, now)) {
       console.warn(`[Heartbeat] No pong for ${Math.round(sincePong / 1000)}s, reconnecting...`);
       ctx.ws.terminate();
       return;

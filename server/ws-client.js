@@ -7,7 +7,7 @@ import { userDb } from './database.js';
 import { agents, webClients, trackRequest } from './context.js';
 import {
   parseMessage, sendToWebClient, sendToAgent,
-  broadcastAgentList, verifyAgentOwnership
+  broadcastAgentList, resolveAgentAccessError
 } from './ws-utils.js';
 import { handleClientConversation } from './handlers/client-conversation.js';
 import { handleClientWorkbench } from './handlers/client-workbench.js';
@@ -190,18 +190,17 @@ async function handleWebMessage(clientId, msg) {
     return;
   }
 
-  // Helper: check agent access (ownership)
+  // Helper: check agent access (ownership + availability)
   const checkAgentAccess = async (agentId) => {
-    if (!agentId) {
-      await sendToWebClient(client, { type: 'error', message: 'Agent not found' });
-      return false;
-    }
-    if (!verifyAgentOwnership(agentId, client.userId, client.role)) {
+    const error = resolveAgentAccessError(agentId, client.userId, client.role);
+    if (!error) return true;
+    if (error === 'Agent access denied') {
       console.warn(`[Security] User ${client.userId} denied access to agent ${agentId}`);
-      await sendToWebClient(client, { type: 'error', message: 'Agent access denied' });
-      return false;
+    } else {
+      console.warn(`[WS] Agent unavailable for user ${client.userId}: ${agentId || '(none)'}`);
     }
-    return true;
+    await sendToWebClient(client, { type: 'error', message: error });
+    return false;
   };
 
   // Dispatch to handler sub-modules
