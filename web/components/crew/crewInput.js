@@ -2,7 +2,7 @@
  * crewInput — Composable factory for input handling, @-mention, slash-command autocomplete, file upload, message sending.
  */
 
-import { DEFAULT_SLASH_COMMANDS, getCommandDescription, buildGroupedCommands } from '../../utils/slash-commands.js';
+import { DEFAULT_SLASH_COMMANDS, getCommandDescription, buildGroupedCommands, mergeSlashCommands, resolveDynamicSlashCommands } from '../../utils/slash-commands.js';
 
 export function createCrewInput(store, authStore, { getInputRef, getFileInputRef, getCurrentPendingAsk, getConversationId }) {
   const inputText = Vue.ref('');
@@ -41,10 +41,8 @@ export function createCrewInput(store, authStore, { getInputRef, getFileInputRef
   const availableCommands = Vue.computed(() => {
     const convId = getConversationId ? getConversationId() : store.currentConversation;
     const agentId = store.currentAgent;
-    const dynamic = (convId && store.slashCommandsMap[convId])
-      || (agentId && store.slashCommandsMap[`agent:${agentId}`])
-      || [];
-    const commands = dynamic.length > 0 ? dynamic : DEFAULT_SLASH_COMMANDS;
+    const dynamic = resolveDynamicSlashCommands(store, convId, agentId);
+    const commands = mergeSlashCommands(DEFAULT_SLASH_COMMANDS, dynamic);
     return commands.map(cmd => cmd.startsWith('/') ? cmd : '/' + cmd);
   });
 
