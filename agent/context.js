@@ -28,6 +28,11 @@ export default {
   pendingAuthTempId: null,
   agentHeartbeatTimer: null,
   lastPongAt: 0,
+  lastHeartbeatTickAt: 0,
+  lastHeartbeatStallAt: 0,
+  lastHeartbeatStallMs: 0,
+  outboundSendQueue: [],
+  outboundSendQueueActive: false,
   // 断连期间的消息缓冲队列（重连后 flush）
   messageBuffer: [],
   messageBufferMaxSize: 5000, // 防止内存无限增长
