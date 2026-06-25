@@ -1,4 +1,4 @@
-import { renderMarkdown } from '../utils/markdown.js';
+import { renderMarkdown, renderMermaidIn } from '../utils/markdown.js';
 
 export default {
   name: 'SubAgentPanel',
@@ -95,7 +95,10 @@ export default {
         }
       }
     };
-    Vue.onMounted(() => document.addEventListener('keydown', onKeydown));
+    Vue.onMounted(() => {
+      document.addEventListener('keydown', onKeydown);
+      Vue.nextTick(() => renderMermaidIn(messagesRef.value));
+    });
     Vue.onUnmounted(() => document.removeEventListener('keydown', onKeydown));
 
     const allSubagents = Vue.computed(() => store.currentSubagents);
@@ -146,17 +149,27 @@ export default {
       return renderMarkdown(content);
     };
 
-    // Auto-scroll to bottom when new messages arrive
+    const subagentMessageSignature = Vue.computed(() => {
+      return activeMessages.value
+        .map((msg) => `${msg.type || ''}:${msg.content || ''}`)
+        .join('\u0000');
+    });
+
+    const renderActiveMessages = () => {
+      Vue.nextTick(() => {
+        const el = messagesRef.value;
+        if (el) {
+          renderMermaidIn(el);
+          el.scrollTop = el.scrollHeight;
+        }
+      });
+    };
+
+    // Auto-scroll and render diagrams when switching agents, receiving new
+    // messages, or updating streaming text in-place.
     Vue.watch(
-      () => activeMessages.value.length,
-      () => {
-        Vue.nextTick(() => {
-          const el = messagesRef.value;
-          if (el) {
-            el.scrollTop = el.scrollHeight;
-          }
-        });
-      }
+      () => [store.activeSubagentId, activeMessages.value.length, subagentMessageSignature.value],
+      renderActiveMessages
     );
 
     return {

@@ -8,6 +8,7 @@ import { sameUserMessage } from '../dedup.js';
 import { maxDbMessageId } from '../messages.js';
 import { summarizeHistoricalToolMessages } from '../tool-window.js';
 import { t } from '../../../utils/i18n.js';
+import { recordPerfTrace, measureNextPaint } from '../perfTrace.js';
 
 /** Filter out empty user messages — tool_result artifacts stored as empty user records in DB */
 function filterEmptyUserMessages(messages) {
@@ -558,6 +559,17 @@ export function handleYeaftHistoryChunk(store, msg) {
   const mode = msg.mode === 'recent' || msg.mode === 'delta' ? msg.mode : 'older';
   const incomingMessages = Array.isArray(msg.messages) ? msg.messages : [];
 
+  if (msg.perfTraceId) {
+    recordPerfTrace(store, {
+      traceId: msg.perfTraceId,
+      phase: 'history.chunk_received',
+      agentId: msg.agentId || null,
+      sessionId: msgSessionId || null,
+      messageType: msg.type,
+      bytes: (() => { try { return JSON.stringify(msg).length; } catch { return null; } })(),
+      detail: { mode, rawCount: incomingMessages.length },
+    });
+  }
   const sessionAgentId = msgSessionId && store.yeaftSessionAgentById
     ? store.yeaftSessionAgentById[msgSessionId]
     : null;
@@ -701,6 +713,24 @@ export function handleYeaftHistoryChunk(store, msg) {
     };
   }
   const activeKey = store.yeaftActiveSessionFilter ?? '__all__';
+  if (msg.perfTraceId) {
+    recordPerfTrace(store, {
+      traceId: msg.perfTraceId,
+      phase: 'history.chunk_applied',
+      agentId: msg.agentId || null,
+      sessionId: msgSessionId || null,
+      messageType: msg.type,
+      detail: { mode, formattedCount: formatted.length, insertedRows, acceptedHistoryMessages },
+    });
+    measureNextPaint(store, {
+      traceId: msg.perfTraceId,
+      phase: 'history.next_paint',
+      agentId: msg.agentId || null,
+      sessionId: msgSessionId || null,
+      messageType: msg.type,
+      detail: { mode, insertedRows },
+    });
+  }
   if (sessionKey === activeKey) {
     store.yeaftHasMoreHistory = nextState.hasMore;
     if (typeof msg.oldestSeq === 'number') {

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -50,6 +50,20 @@ describe('server perf trace normalization', () => {
     });
     expect(row.detail).toEqual({ attachmentCount: 2 });
     expect(typeof row.createdAt).toBe('string');
+  });
+
+  it('removes jsonl files older than the retention window', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-server-perf-retention-'));
+    try {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, '2000-01-01.jsonl'), '{}\n');
+      writeFileSync(join(dir, new Date().toISOString().slice(0, 10) + '.jsonl'), '{}\n');
+      __perfTraceForTest.cleanupOldTraceFiles(dir);
+      expect(existsSync(join(dir, '2000-01-01.jsonl'))).toBe(false);
+      expect(existsSync(join(dir, new Date().toISOString().slice(0, 10) + '.jsonl'))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('writes queued events to server-local jsonl', () => {

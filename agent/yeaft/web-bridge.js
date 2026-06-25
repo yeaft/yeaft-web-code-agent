@@ -861,7 +861,7 @@ function projectVisibleHistoryChunkMessages(messages = []) {
     }));
 }
 
-function emitHistoryChunk({ sessionId, messages, mode = 'older', oldestSeq = null, hasMore = false, latestSeq = null, afterSeq = null, turns = null }) {
+function emitHistoryChunk({ sessionId, messages, mode = 'older', oldestSeq = null, hasMore = false, latestSeq = null, afterSeq = null, turns = null, perfTraceId = null }) {
   const projectedMessages = projectVisibleHistoryChunkMessages(messages);
   if (mode === 'delta' && projectedMessages.length === 0) {
     return projectedMessages;
@@ -869,6 +869,7 @@ function emitHistoryChunk({ sessionId, messages, mode = 'older', oldestSeq = nul
   sendToServer({
     type: 'yeaft_history_chunk',
     conversationId: yeaftConversationId,
+    ...(perfTraceId ? { perfTraceId } : {}),
     sessionId,
     mode,
     messages: projectedMessages,
@@ -924,7 +925,7 @@ function emitLegacyHistoryOutputFrames(replayEntries) {
   }
 }
 
-function emitVisibleHistoryReplay({ store, sessionId, limit, beforeSeq = null, mode = 'recent' }) {
+function emitVisibleHistoryReplay({ store, sessionId, limit, beforeSeq = null, mode = 'recent', perfTraceId = null }) {
   const visiblePage = sessionId
     ? loadVisibleGroupHistoryPage(store, sessionId, limit, beforeSeq)
     : { messages: limit > 0 ? (store.loadRecent?.(limit) || []) : [], oldestSeq: null, hasMore: false };
@@ -946,6 +947,7 @@ function emitVisibleHistoryReplay({ store, sessionId, limit, beforeSeq = null, m
       hasMore: visiblePage.hasMore,
       latestSeq: Number.isFinite(latestSeq) ? latestSeq : null,
       turns: limit,
+      perfTraceId,
     });
     sendSessionEvent({
       type: 'history_loaded',
@@ -955,7 +957,7 @@ function emitVisibleHistoryReplay({ store, sessionId, limit, beforeSeq = null, m
       hasMore: visiblePage.hasMore,
       oldestSeq: visiblePage.oldestSeq,
       latestSeq: Number.isFinite(latestSeq) ? latestSeq : null,
-    });
+    }, perfTraceId ? { sessionId, perfTraceId } : undefined);
     return;
   }
 
@@ -972,7 +974,7 @@ function emitVisibleHistoryReplay({ store, sessionId, limit, beforeSeq = null, m
     hasMore: visiblePage.hasMore,
     oldestSeq: visiblePage.oldestSeq,
     latestSeq: Number.isFinite(latestSeq) ? latestSeq : null,
-  });
+  }, perfTraceId ? { sessionId, perfTraceId } : undefined);
 }
 
 /**
@@ -5044,6 +5046,27 @@ export function handleYeaftModelSwitch(msg) {
  */
 export async function handleYeaftLoadHistory(msg) {
   const sessionId = (msg && typeof msg.sessionId === 'string' && msg.sessionId) || null;
+  const perfTraceId = typeof msg?.perfTraceId === 'string' && msg.perfTraceId.trim() ? msg.perfTraceId.trim() : null;
+  const perfStart = perfNowMs();
+  const tracePerf = (phase, extra = {}) => {
+    if (!perfTraceId) return;
+    recordAgentPerfTrace(ctx.CONFIG, {
+      traceId: perfTraceId,
+      phase,
+      sessionId,
+      messageType: msg?.type || 'yeaft_load_history',
+      ...extra,
+    });
+  };
+  const traceDuration = (phase, start, extra = {}) => tracePerf(phase, { durationMs: perfNowMs() - start, ...extra });
+  tracePerf('history.received', {
+    detail: {
+      limit: Number.isFinite(msg?.limit) ? msg.limit : null,
+      afterSeq: Number.isFinite(msg?.afterSeq) ? msg.afterSeq : null,
+      metadataOnly: !!(msg && Number.isFinite(msg.limit) && msg.limit <= 0),
+      sessionLoaded: !!session,
+    },
+  });
   const metadataOnly = msg && Number.isFinite(msg.limit) && msg.limit <= 0;
   // `lim` is now expressed in TURNS, not raw messages. `loadRecent` and
   // `loadRecentBySession` use turn-based slicing so the cut never lands
@@ -5066,14 +5089,19 @@ export async function handleYeaftLoadHistory(msg) {
       afterSeq = session.conversationStore.getMessageSeqById(afterMessageId);
     }
     if (sessionId && afterSeq !== null && typeof session.conversationStore.loadAfterSeqByGroup === 'function') {
+      const loadStart = perfNowMs();
       const delta = session.conversationStore.loadAfterSeqByGroup(sessionId, afterSeq);
+      traceDuration('history.store_load_delta', loadStart, { detail: { count: delta.messages?.length || 0, afterSeq } });
+      const emitStart = perfNowMs();
       const projectedMessages = emitHistoryChunk({
         sessionId,
         messages: delta.messages,
         mode: 'delta',
         latestSeq: delta.latestSeq,
         afterSeq,
+        perfTraceId,
       });
+      traceDuration('history.emit_chunk', emitStart, { detail: { mode: 'delta', count: projectedMessages.length } });
       sendSessionEvent({
         type: 'history_loaded',
         mode: 'delta',
@@ -5081,7 +5109,7 @@ export async function handleYeaftLoadHistory(msg) {
         sessionId,
         latestSeq: delta.latestSeq,
         afterSeq,
-      });
+      }, perfTraceId ? { sessionId, perfTraceId } : undefined);
       return;
     }
 
@@ -5090,9 +5118,11 @@ export async function handleYeaftLoadHistory(msg) {
     // opening a group can paint the latest messages quickly; older rows are
     // paged via `yeaft_load_more_history` when the user scrolls upward.
     const limit = (typeof msg.limit === 'number') ? msg.limit : 10;
+    const loadStart = perfNowMs();
     const visiblePage = sessionId
       ? loadVisibleGroupHistoryPage(session.conversationStore, sessionId, limit)
       : { messages: limit > 0 ? pickRecent(session.conversationStore, limit) : [], oldestSeq: null, hasMore: false };
+    traceDuration('history.store_load_recent', loadStart, { detail: { rawCount: visiblePage.messages?.length || 0, limit } });
     // Legacy compact.md is a non-group fallback only. For group replay, reading
     // it makes every group show "has compact" once any legacy/non-scoped compact
     // exists, even when this group has no scoped summary.
@@ -5110,6 +5140,7 @@ export async function handleYeaftLoadHistory(msg) {
     }
 
     if (sessionId) {
+      const emitStart = perfNowMs();
       emitHistoryChunk({
         sessionId,
         messages: replayEntries,
@@ -5118,7 +5149,9 @@ export async function handleYeaftLoadHistory(msg) {
         hasMore: visiblePage.hasMore,
         latestSeq,
         turns: limit,
+        perfTraceId,
       });
+      traceDuration('history.emit_chunk', emitStart, { detail: { mode: 'recent', count: replayEntries.length } });
     } else {
       emitLegacyHistoryOutputFrames(replayEntries);
     }
@@ -5155,7 +5188,7 @@ export async function handleYeaftLoadHistory(msg) {
       hasMore,
       oldestSeq,
       latestSeq,
-    });
+    }, perfTraceId ? { sessionId, perfTraceId } : undefined);
   };
 
   if (!session) {
@@ -5169,34 +5202,45 @@ export async function handleYeaftLoadHistory(msg) {
     // skill scans, memory index sync). The conversation markdown store is the
     // source of truth and can be opened cheaply, so replay the visible message
     // window immediately, then finish loadSession below for actual turns.
+    const coldStoreStart = perfNowMs();
     const coldStore = new ConversationStore(yeaftDir);
+    traceDuration('history.cold_store_open', coldStoreStart);
     if (sessionId && (afterSeqRaw !== null || afterMessageId)) {
       let afterSeq = afterSeqRaw;
       if (afterSeq === null && afterMessageId && typeof coldStore.getMessageSeqById === 'function') {
         afterSeq = coldStore.getMessageSeqById(afterMessageId);
       }
+      const loadStart = perfNowMs();
       const delta = afterSeq !== null && typeof coldStore.loadAfterSeqByGroup === 'function'
         ? coldStore.loadAfterSeqByGroup(sessionId, afterSeq)
         : { messages: [], latestSeq: null };
+      traceDuration('history.store_load_delta', loadStart, { detail: { count: delta.messages?.length || 0, afterSeq, cold: true } });
+      const emitStart = perfNowMs();
       const projectedMessages = emitHistoryChunk({
         sessionId,
         messages: delta.messages,
         mode: 'delta',
         latestSeq: delta.latestSeq,
         afterSeq,
+        perfTraceId,
       });
-      sendSessionEvent({ type: 'history_loaded', mode: 'delta', count: projectedMessages.length, sessionId, latestSeq: delta.latestSeq, afterSeq });
+      traceDuration('history.emit_chunk', emitStart, { detail: { mode: 'delta', count: projectedMessages.length, cold: true } });
+      sendSessionEvent({ type: 'history_loaded', mode: 'delta', count: projectedMessages.length, sessionId, latestSeq: delta.latestSeq, afterSeq }, perfTraceId ? { sessionId, perfTraceId } : undefined);
     } else if (!metadataOnly) {
-      emitVisibleHistoryReplay({ store: coldStore, sessionId, limit, mode: 'recent' });
+      const replayStart = perfNowMs();
+      emitVisibleHistoryReplay({ store: coldStore, sessionId, limit, mode: 'recent', perfTraceId });
+      traceDuration('history.cold_replay', replayStart, { detail: { mode: 'recent', limit } });
     }
     historyAlreadyReplayed = true;
 
+    const bootStart = perfNowMs();
     session = await loadSession({
       dir: yeaftDir,
       skipMCP: false,
       skipSkills: false,
       serverMode: true,
     });
+    traceDuration('history.load_session_runtime', bootStart);
     installYeaftRuntimeBridge(session);
 
     // Per-group history hydrates lazily via getOrCreateSessionHistory.
@@ -5204,9 +5248,15 @@ export async function handleYeaftLoadHistory(msg) {
     // group's tape so the next user message sees on-disk state. When
     // it doesn't (legacy callers), do nothing — the per-group lazy
     // hydration handles it.
-    if (sessionId) setGroupHistory(sessionId, hydrateGroupHistory(sessionId));
+    if (sessionId) {
+      const hydrateStart = perfNowMs();
+      setGroupHistory(sessionId, hydrateGroupHistory(sessionId));
+      traceDuration('history.hydrate_group_history', hydrateStart);
+    }
   } else {
+    const replayStart = perfNowMs();
     replayHistoryFromStore();
+    traceDuration('history.replay_from_store', replayStart);
     historyAlreadyReplayed = true;
   }
 
@@ -5214,7 +5264,9 @@ export async function handleYeaftLoadHistory(msg) {
     // Re-entering an existing session with a (possibly new) group filter:
     // re-seed THIS group's history from disk so it doesn't carry stale
     // in-memory state into the next turn's context.
+    const hydrateStart = perfNowMs();
     setGroupHistory(sessionId, hydrateGroupHistory(sessionId));
+    traceDuration('history.hydrate_group_history_final', hydrateStart);
   }
 
   // Always replay session_ready so refresh / reconnect rebuilds UI state, but
@@ -5223,9 +5275,15 @@ export async function handleYeaftLoadHistory(msg) {
   // tick so the browser can paint messages before VP/session/dream snapshots.
   scheduleYeaftLoadHistoryMetadataReplay(sessionId);
 
-  if (historyAlreadyReplayed) return;
+  if (historyAlreadyReplayed) {
+    traceDuration('history.handler_total', perfStart, { ok: true });
+    return;
+  }
 
+  const replayStart = perfNowMs();
   replayHistoryFromStore();
+  traceDuration('history.replay_from_store', replayStart);
+  traceDuration('history.handler_total', perfStart, { ok: true });
 }
 
 /**
@@ -5243,8 +5301,17 @@ export async function handleYeaftLoadHistory(msg) {
  */
 export async function handleYeaftLoadMoreHistory(msg) {
   const sessionId = (msg && typeof msg.sessionId === 'string' && msg.sessionId) || null;
+  const perfTraceId = typeof msg?.perfTraceId === 'string' && msg.perfTraceId.trim() ? msg.perfTraceId.trim() : null;
+  const perfStart = perfNowMs();
+  const tracePerf = (phase, extra = {}) => {
+    if (!perfTraceId) return;
+    recordAgentPerfTrace(ctx.CONFIG, { traceId: perfTraceId, phase, sessionId, messageType: msg?.type || 'yeaft_load_more_history', ...extra });
+  };
+  const traceDuration = (phase, start, extra = {}) => tracePerf(phase, { durationMs: perfNowMs() - start, ...extra });
+  tracePerf('history_more.received');
   if (!session || !sessionId) {
-    emitHistoryChunk({ sessionId, messages: [], mode: 'older', oldestSeq: null, hasMore: false });
+    emitHistoryChunk({ sessionId, messages: [], mode: 'older', oldestSeq: null, hasMore: false, perfTraceId });
+    traceDuration('history_more.handler_total', perfStart, { ok: false, detail: { missingSession: !session, missingSessionId: !sessionId } });
     return;
   }
 
@@ -5253,16 +5320,20 @@ export async function handleYeaftLoadMoreHistory(msg) {
 
   let result;
   try {
+    const loadStart = perfNowMs();
     result = loadVisibleGroupHistoryPage(session.conversationStore, sessionId, turns, beforeSeq);
+    traceDuration('history_more.store_load', loadStart, { detail: { count: result.messages?.length || 0, beforeSeq, turns } });
   } catch (err) {
     console.error('[Yeaft] loadOlderBySession failed:', err.message);
     result = { messages: [], oldestSeq: null, hasMore: false };
+    tracePerf('history_more.store_error', { ok: false, detail: { errorName: err?.name || null, errorMessage: err?.message || String(err) } });
   }
 
   // Wire shape mirrors handleYeaftLoadHistory's projection: only visible
   // user / assistant text rows. Internal reflection/system-only rows stay
   // server-side, and stable ids + speaker attribution ride with each row
   // so older-history prepend renders exactly like refresh replay.
+  const emitStart = perfNowMs();
   emitHistoryChunk({
     sessionId,
     messages: result.messages || [],
@@ -5270,7 +5341,10 @@ export async function handleYeaftLoadMoreHistory(msg) {
     oldestSeq: result.oldestSeq,
     hasMore: !!result.hasMore,
     turns,
+    perfTraceId,
   });
+  traceDuration('history_more.emit_chunk', emitStart, { detail: { count: result.messages?.length || 0 } });
+  traceDuration('history_more.handler_total', perfStart, { ok: true });
 }
 
 /**
