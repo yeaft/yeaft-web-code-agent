@@ -81,6 +81,13 @@ const SKILL_COMMAND_PREFIX = 'skill:';
 /** @type {import('./session.js').Session | null} */
 let session = null;
 
+/**
+ * Single-flight runtime boot. History replay must not wait for this promise on
+ * cold load; message send still awaits it through ensureSessionLoaded().
+ * @type {Promise<import('./session.js').Session> | null}
+ */
+let sessionLoadPromise = null;
+
 let threadClassifier = defaultClassifyThread;
 
 function applyLiveLanguage(language) {
@@ -1160,6 +1167,7 @@ export function __testGroupHistory(sessionId) {
  */
 export function __testSetSession(sessionLike) {
   session = sessionLike;
+  sessionLoadPromise = null;
   if (!sessionLike) yeaftConversationId = null;
 }
 
@@ -3315,7 +3323,7 @@ export async function handleYeaftSessionSend(msg) {
   traceDuration('session_send.open_session', openSessionStart, { ok: !!sessionHandle });
 
   const ensureSessionStart = perfNowMs();
-  await ensureSessionLoaded();
+  await ensureSessionLoaded({ sessionMeta: sessionMetaForRuntime, perfTraceId });
   await ensureProjectRuntimeForSessionMeta(sessionMetaForRuntime);
   traceDuration('session_send.ensure_session_loaded', ensureSessionStart);
 
@@ -3666,78 +3674,123 @@ export function buildVpQueryOpts({ vpId, sessionCoordinator, sessionId, envelope
 }
 
 /**
- * Lazy session boot. Idempotent: subsequent calls are no-ops once `session`
- * is set. Emits `session_ready` on first init so the frontend can finalize
- * its handshake.
+ * Lazy session boot. Idempotent: concurrent callers share one in-flight promise.
+ * Emits `session_ready` on first init so the frontend can finalize its handshake.
+ *
+ * @param {{ workDir?: string, sessionId?: string|null, sessionMeta?: object, perfTraceId?: string|null, messageType?: string }} [opts]
+ * @returns {Promise<import('./session.js').Session>}
  */
-async function ensureSessionLoaded() {
-  if (session) return;
+async function ensureSessionLoaded(opts = {}) {
+  if (session) return session;
+  if (sessionLoadPromise) return sessionLoadPromise;
 
-  const yeaftDir = ctx.CONFIG?.yeaftDir;
-  session = await loadSession({
-    ...(yeaftDir && { dir: yeaftDir }),
-    skipMCP: false,
-    skipSkills: false,
-    serverMode: true,
-  });
+  sessionLoadPromise = (async () => {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const normalizedWorkDir = normalizeSessionWorkDir(opts?.workDir || opts?.sessionMeta?.workDir);
+    session = await loadSession({
+      ...(yeaftDir && { dir: yeaftDir }),
+      ...(normalizedWorkDir && { workDir: normalizedWorkDir }),
+      skipMCP: false,
+      skipSkills: false,
+      serverMode: true,
+    });
 
-  installYeaftRuntimeBridge(session);
+    installYeaftRuntimeBridge(session);
 
-  try {
-    if (session.engine && typeof session.engine.setSubAgentEventSink === 'function') {
-      session.engine.setSubAgentEventSink((agentId, evt) => {
-        try {
-          sendSessionEvent({ type: 'sub_agent_event', agentId, payload: evt });
-        } catch { /* ignore */ }
-      });
-    }
-  } catch (err) {
-    console.warn('[Yeaft] setSubAgentEventSink wiring failed:', err?.message || err);
-  }
-
-  // Bug 8: clean up legacy `.archived-*` group dirs at boot.
-  try {
-    if (yeaftDir) {
-      const removed = purgeArchivedSessions(yeaftDir);
-      if (removed && removed.length > 0) {
-        console.log(`[Yeaft] purged ${removed.length} legacy .archived group dir(s)`);
+    try {
+      if (session.engine && typeof session.engine.setSubAgentEventSink === 'function') {
+        session.engine.setSubAgentEventSink((agentId, evt) => {
+          try {
+            sendSessionEvent({ type: 'sub_agent_event', agentId, payload: evt });
+          } catch { /* ignore */ }
+        });
       }
+    } catch (err) {
+      console.warn('[Yeaft] setSubAgentEventSink wiring failed:', err?.message || err);
     }
-  } catch (err) {
-    console.warn('[Yeaft] purgeArchivedSessions failed:', err?.message || err);
-  }
 
-  yeaftConversationId = `yeaft-${Date.now()}`;
-  const bootProjectRuntime = workDir ? await ensureProjectRuntimeForSessionMeta({ workDir }) : null;
-  const bootStatus = mergedStatusForProjectRuntime(bootProjectRuntime);
-  hydrateYeaftStatusFromSession({ ...session, status: bootStatus }, { reason: 'session_ready', emitEvent: true });
-  broadcastSkillSlashCommands(session, bootProjectRuntime ? [bootProjectRuntime.skillManager] : []);
+    // Bug 8: clean up legacy `.archived-*` group dirs at boot.
+    try {
+      if (yeaftDir) {
+        const removed = purgeArchivedSessions(yeaftDir);
+        if (removed && removed.length > 0) {
+          console.log(`[Yeaft] purged ${removed.length} legacy .archived group dir(s)`);
+        }
+      }
+    } catch (err) {
+      console.warn('[Yeaft] purgeArchivedSessions failed:', err?.message || err);
+    }
 
-  // Per-group history is hydrated lazily on first `getOrCreateSessionHistory`
-  // — there's no global "all conversations" tape any more.
+    ensureYeaftConversationId();
+    const bootProjectRuntime = normalizedWorkDir ? await ensureProjectRuntimeForSessionMeta({ workDir: normalizedWorkDir }) : null;
+    const bootStatus = mergedStatusForProjectRuntime(bootProjectRuntime);
+    hydrateYeaftStatusFromSession({ ...session, status: bootStatus }, { reason: 'session_ready', emitEvent: true });
+    broadcastSkillSlashCommands(session, bootProjectRuntime ? [bootProjectRuntime.skillManager] : []);
 
-  sendSessionEvent({
-    type: 'session_ready',
-    conversationId: yeaftConversationId,
-    model: session.config.primaryModel || session.config.model,
-    modelEffort: session.config.modelEffort || null,
-    availableModels: session.config.availableModels || [],
-    skills: bootStatus.skills,
-    mcpServers: bootStatus.mcpServers,
-    tools: bootStatus.tools,
-    yeaftDir: ctx.CONFIG?.yeaftDir || null,
-    tasks: session.taskManager ? session.taskManager.listActiveTasks() : [],
-  });
-  sendSessionSnapshotBroadcast();
-  // vp-status: rebuild frontend status table from authoritative agent
-  // memory. Sent unconditionally so reconnect/refresh paths get the same
-  // bootstrap as first-load (the broker dedup logic makes a redundant
-  // snapshot harmless).
+    // Per-group history is hydrated lazily on first `getOrCreateSessionHistory`
+    // — there's no global "all conversations" tape any more.
+
+    sendSessionEvent({
+      type: 'session_ready',
+      conversationId: yeaftConversationId,
+      model: session.config.primaryModel || session.config.model,
+      modelEffort: session.config.modelEffort || null,
+      availableModels: session.config.availableModels || [],
+      skills: bootStatus.skills,
+      mcpServers: bootStatus.mcpServers,
+      tools: bootStatus.tools,
+      yeaftDir: ctx.CONFIG?.yeaftDir || null,
+      tasks: session.taskManager ? session.taskManager.listActiveTasks() : [],
+    }, opts?.perfTraceId ? { sessionId: opts?.sessionMeta?.id || opts?.sessionId || null, perfTraceId: opts.perfTraceId } : undefined);
+    sendSessionSnapshotBroadcast();
+    // vp-status: rebuild frontend status table from authoritative agent
+    // memory. Sent unconditionally so reconnect/refresh paths get the same
+    // bootstrap as first-load (the broker dedup logic makes a redundant
+    // snapshot harmless).
+    try {
+      getVpStatusBroker().broadcastSnapshot();
+    } catch (err) {
+      console.warn('[Yeaft] vp-status snapshot broadcast failed:', err?.message || err);
+    }
+
+    return session;
+  })();
+
   try {
-    getVpStatusBroker().broadcastSnapshot();
+    return await sessionLoadPromise;
   } catch (err) {
-    console.warn('[Yeaft] vp-status snapshot broadcast failed:', err?.message || err);
+    session = null;
+    throw err;
+  } finally {
+    sessionLoadPromise = null;
   }
+}
+
+function startSessionLoadInBackground({ sessionId = null, sessionMeta = null, perfTraceId = null, traceDuration = null, tracePerf = null, phase = 'history.load_session_runtime' } = {}) {
+  if (session) return null;
+  const start = perfNowMs();
+  const promise = ensureSessionLoaded({ sessionId, sessionMeta, perfTraceId })
+    .then(async (loaded) => {
+      if (typeof traceDuration === 'function') traceDuration(phase, start, { detail: { background: true } });
+      if (sessionId && loaded?.conversationStore) {
+        const hydrateStart = perfNowMs();
+        setGroupHistory(sessionId, hydrateGroupHistory(sessionId));
+        if (typeof traceDuration === 'function') traceDuration('history.hydrate_group_history', hydrateStart, { detail: { background: true } });
+        sendDreamSnapshotForSession(sessionId, { trigger: 'load_history' }).catch(() => null);
+      }
+      return loaded;
+    })
+    .catch((err) => {
+      if (typeof tracePerf === 'function') {
+        tracePerf('history.load_session_runtime_error', {
+          ok: false,
+          detail: { background: true, errorName: err?.name || null, errorMessage: err?.message || String(err) },
+        });
+      }
+      console.warn('[Yeaft] background session load failed:', err?.message || err);
+      return null;
+    });
+  return promise;
 }
 
 /**
@@ -5423,28 +5476,11 @@ export async function handleYeaftLoadHistory(msg) {
         sessionMetaForRuntime = loadSessionMeta(metaDir);
       } catch { /* best-effort metadata hint */ }
     }
-    const bootStart = perfNowMs();
-    session = await loadSession({
-      dir: yeaftDir,
-      ...(normalizeSessionWorkDir(sessionMetaForRuntime?.workDir) && { workDir: normalizeSessionWorkDir(sessionMetaForRuntime.workDir) }),
-      skipMCP: false,
-      skipSkills: false,
-      serverMode: true,
-    });
-    traceDuration('history.load_session_runtime', bootStart);
-    installYeaftRuntimeBridge(session);
-    await ensureProjectRuntimeForSessionMeta(sessionMetaForRuntime);
-
-    // Per-group history hydrates lazily via getOrCreateSessionHistory.
-    // When the load-history call carries a sessionId, force-refresh THAT
-    // group's tape so the next user message sees on-disk state. When
-    // it doesn't (legacy callers), do nothing — the per-group lazy
-    // hydration handles it.
-    if (sessionId) {
-      const hydrateStart = perfNowMs();
-      setGroupHistory(sessionId, hydrateGroupHistory(sessionId));
-      traceDuration('history.hydrate_group_history', hydrateStart);
-    }
+    // Full runtime boot can be expensive (memory FTS sync, skills, MCP, dream
+    // boot checks). It is not needed to render persisted history, so keep this
+    // request short and let message-send await the same single-flight boot when
+    // the user actually submits a turn.
+    startSessionLoadInBackground({ sessionId, sessionMeta: sessionMetaForRuntime, perfTraceId, traceDuration, tracePerf });
   } else {
     const replayStart = perfNowMs();
     replayHistoryFromStore();
@@ -5452,10 +5488,12 @@ export async function handleYeaftLoadHistory(msg) {
     historyAlreadyReplayed = true;
   }
 
-  if (sessionId) {
+  if (session && sessionId) {
     // Re-entering an existing session with a (possibly new) group filter:
     // re-seed THIS group's history from disk so it doesn't carry stale
-    // in-memory state into the next turn's context.
+    // in-memory state into the next turn's context. Do not mark it hydrated
+    // before the runtime exists; that would cache an empty tape and starve the
+    // next user turn of persisted context.
     const hydrateStart = perfNowMs();
     setGroupHistory(sessionId, hydrateGroupHistory(sessionId));
     traceDuration('history.hydrate_group_history_final', hydrateStart);
@@ -5465,7 +5503,7 @@ export async function handleYeaftLoadHistory(msg) {
   // never make the history response wait for bulky metadata snapshots. The
   // first visible chunk has already been sent above; defer metadata to the next
   // tick so the browser can paint messages before VP/session/dream snapshots.
-  scheduleYeaftLoadHistoryMetadataReplay(sessionId);
+  if (session) scheduleYeaftLoadHistoryMetadataReplay(sessionId);
 
   if (historyAlreadyReplayed) {
     traceDuration('history.handler_total', perfStart, { ok: true });
@@ -5863,6 +5901,7 @@ export const __testHooks = {
   buildPendingRescueEnvelope,
   setSessionForTest(nextSession) {
     session = nextSession || null;
+    sessionLoadPromise = null;
   },
   resetAbortState() {
     turnAbortCtrls.clear();

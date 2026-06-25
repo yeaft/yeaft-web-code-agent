@@ -97,17 +97,19 @@ describe('Yeaft load-history first paint', () => {
       });
       expect(sent.filter(m => m.type === 'yeaft_output' && m.data)).toHaveLength(0);
 
+      await pending;
+      const historyLoadedEvents = sent.filter(m => m.event?.type === 'history_loaded');
+      expect(historyLoadedEvents).toHaveLength(1);
+      expect(sent.some(m => m.event?.type === 'session_ready' && !m.event.partial)).toBe(false);
+
       resolveLoadSession({
         conversationStore: store,
         config: { model: 'test-model', availableModels: [] },
         status: { skills: 0, mcpServers: [], tools: 0 },
         taskManager: { listActiveTasks: () => [] },
       });
-      await pending;
+      await flushMicrotasks();
 
-      const historyLoadedEvents = sent.filter(m => m.event?.type === 'history_loaded');
-      expect(historyLoadedEvents).toHaveLength(1);
-      expect(sent.some(m => m.event?.type === 'session_ready' && !m.event.partial)).toBe(false);
       await new Promise(resolve => setTimeout(resolve, 0));
       expect(sent.some(m => m.event?.type === 'session_ready' && !m.event.partial)).toBe(true);
     } finally {
@@ -131,13 +133,16 @@ describe('Yeaft load-history first paint', () => {
       expect(sent.some(m => m.type === 'yeaft_history_chunk')).toBe(false);
       expect(sent.some(m => m.event?.type === 'history_loaded')).toBe(false);
 
+      await pending;
+      expect(sent.some(m => m.event?.type === 'session_ready')).toBe(false);
+
       resolveLoadSession({
         conversationStore: store,
         config: { model: 'test-model', availableModels: [] },
         status: { skills: 0, mcpServers: [], tools: 0 },
         taskManager: { listActiveTasks: () => [] },
       });
-      await pending;
+      await flushMicrotasks();
       await new Promise(resolve => setTimeout(resolve, 0));
 
       expect(sent.some(m => m.type === 'yeaft_history_chunk')).toBe(false);
@@ -246,13 +251,15 @@ describe('Yeaft load-history first paint', () => {
         sessionId: 'session-fast',
       });
 
+      await pending;
+
       resolveLoadSession({
         conversationStore: store,
         config: { model: 'test-model', availableModels: [] },
         status: { skills: 0, mcpServers: [], tools: 0 },
         taskManager: { listActiveTasks: () => [] },
       });
-      await pending;
+      await flushMicrotasks();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -290,13 +297,15 @@ describe('Yeaft load-history first paint', () => {
       });
       expect(event.latestSeq).toBeGreaterThan(event.afterSeq);
 
+      await pending;
+
       resolveLoadSession({
         conversationStore: store,
         config: { model: 'test-model', availableModels: [] },
         status: { skills: 0, mcpServers: [], tools: 0 },
         taskManager: { listActiveTasks: () => [] },
       });
-      await pending;
+      await flushMicrotasks();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
