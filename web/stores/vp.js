@@ -315,14 +315,14 @@ export const useVpStore = defineStore('vp', {
     /**
      * Per-group manual dream trigger (added v0.1.754 to give users a
      * way to kick the dream scheduler after seeing the Resident layer
-     * stuck on a group's bootstrap seed). Sends
-     * `{ type: 'yeaft_dream_trigger', groupId }` over WS; the agent's
-     * `handleYeaftDreamTrigger` routes to `triggerDreamForScopes(['group/X'])`
-     * so unrelated groups are not processed. Status flows back via
+     * stuck on a session bootstrap seed). Sends
+     * `{ type: 'yeaft_dream_trigger', sessionId }` over WS; the agent's
+     * `handleYeaftDreamTrigger` routes to `triggerDreamForScopes(['sessions/X'])`
+     * so unrelated sessions are not processed. Status flows back via
      * yeaft_dream_status / yeaft_dream_result events tagged with
-     * `groupId` instead of `vpId`.
+     * `sessionId` instead of `vpId`.
      *
-     * @param {string} groupId
+     * @param {string} groupId legacy in-store argument name for sessionId
      */
     triggerGroupDream(groupId) {
       if (!groupId) return;
@@ -359,7 +359,7 @@ export const useVpStore = defineStore('vp', {
         });
         return;
       }
-      const frame = { type: 'yeaft_dream_trigger', groupId };
+      const frame = { type: 'yeaft_dream_trigger', sessionId: groupId };
       // Route by the session's owning agent (dream is session-scoped). Falls
       // back to currentAgent; server also defaults to client.currentAgent.
       const dreamAgentId = typeof chat.agentIdForSession === 'function'
