@@ -6,7 +6,7 @@ import { Engine } from '../../../agent/yeaft/engine.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import ctx from '../../../agent/context.js';
-import { buildMergedSkillSlashCommands, buildSkillSlashCommands, __testGetOrCreateVpEngine, __testResetVpState, __testHooks } from '../../../agent/yeaft/web-bridge.js';
+import { buildMergedSkillSlashCommands, buildSkillSlashCommands, __testDrainVpDrivers, __testGetOrCreateVpEngine, __testResetVpState, __testHooks } from '../../../agent/yeaft/web-bridge.js';
 
 class RecordingAdapter {
   constructor() {
@@ -271,10 +271,10 @@ describe('Yeaft skill slash commands', () => {
     __testHooks.seedSessionContext('sess_slow', meta);
 
     const started = __testHooks.runYeaftSessionSendForTest({ sessionId: 'sess_slow', text: 'hello', id: 'msg-slow' });
-    await new Promise(resolve => setTimeout(resolve, 80));
+    await started;
+    await __testDrainVpDrivers();
 
     expect(adapter.calls).toHaveLength(1);
-    await started;
   });
 
   it('does not block cold session boot on slow base MCP startup', async () => {
