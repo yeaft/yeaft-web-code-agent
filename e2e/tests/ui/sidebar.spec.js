@@ -4,7 +4,7 @@ import { expect } from '@playwright/test';
 test.describe('侧边栏交互', () => {
   /** Helper: create a conversation via modal */
   async function createConversation(chatPage) {
-    await chatPage.click('.sidebar-nav-item:not(.crew-nav-item)');
+    await chatPage.click('.sidebar-nav-item');
     await chatPage.waitForSelector('.modal-overlay', { timeout: 5000 });
     await chatPage.waitForFunction(() => {
       const sel = document.querySelector('.resume-select');

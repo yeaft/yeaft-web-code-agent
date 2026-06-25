@@ -58,7 +58,6 @@ Switch the sidebar tab bar to **Yeaft**, then use `+` to create a Session:
 - **Have Copilot Enterprise or want ACP permission prompts / Copilot model catalog** → Copilot Mode.
 - **Want PM + Dev + Reviewer to reason in parallel with long-term memory** → Yeaft Code Agent.
 - **Want to compare Anthropic, OpenAI, Copilot, or a proxy on the same task** → Yeaft Code Agent with multiple VPs.
-- **Want a structured Claude Code based feature team** → Crew Mode.
 
 Next:
 

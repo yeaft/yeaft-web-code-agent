@@ -3,11 +3,7 @@
  *
  * task-330c lint guard:
  *   ⚠️ DO NOT introduce greedy `text.replace(/---ROUTE---[\s\S]*$/g, '')`
- *      style strips on routed message payloads. Crew ROUTE stripping is
- *      owned EXCLUSIVELY by `agent/crew/routing.js` `parseRoutes()` which
- *      returns `{routes, displayBody}` with exact ranges removed. A second
- *      strip here would re-process already-cleaned text and risks both
- *      double-strip artefacts and the trailing-prose bug fixed by task-328.
+ *      style strips on routed message payloads.
  */
 import ctx from '../context.js';
 import { decodeKey } from '../encryption.js';
@@ -26,12 +22,6 @@ import {
   sendConversationList, handleBtwQuestion, preloadSlashCommands,
   handlePingSession
 } from '../conversation.js';
-import {
-  createCrewSession, handleCrewHumanInput, handleCrewControl,
-  addRoleToSession, removeRoleFromSession,
-  handleListCrewSessions, handleCheckCrewExists, handleDeleteCrewDir, resumeCrewSession, removeFromCrewIndex,
-  handleLoadCrewHistory, handleCheckCrewContext
-} from '../crew.js';
 import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
@@ -116,10 +106,6 @@ export async function handleMessage(msg) {
 
     case 'request_slash_commands':
       preloadSlashCommands().catch(() => {});
-      break;
-
-    case 'check_crew_context':
-      handleCheckCrewContext(msg);
       break;
 
     case 'resume_conversation':
@@ -262,55 +248,6 @@ export async function handleMessage(msg) {
       handleAskUserAnswer(msg);
       break;
 
-    // Crew (multi-agent) messages
-    case 'create_crew_session':
-      await createCrewSession(msg);
-      break;
-
-    case 'crew_human_input':
-      await handleCrewHumanInput(msg);
-      break;
-
-    case 'crew_control':
-      await handleCrewControl(msg);
-      break;
-
-    case 'crew_add_role':
-      await addRoleToSession(msg);
-      break;
-
-    case 'crew_remove_role':
-      await removeRoleFromSession(msg);
-      break;
-
-    case 'list_crew_sessions':
-      await handleListCrewSessions(msg);
-      break;
-
-    case 'check_crew_exists':
-      await handleCheckCrewExists(msg);
-      break;
-
-    case 'delete_crew_dir':
-      await handleDeleteCrewDir(msg);
-      break;
-
-    case 'resume_crew_session':
-      await resumeCrewSession(msg);
-      break;
-
-    case 'delete_crew_session':
-      await removeFromCrewIndex(msg.sessionId);
-      (await import('../conversation.js')).sendConversationList();
-      break;
-
-    case 'update_crew_session':
-      await (await import('../crew.js')).handleUpdateCrewSession(msg);
-      break;
-
-    case 'crew_load_history':
-      await handleLoadCrewHistory(msg);
-      break;
 
     // Port proxy
     case 'proxy_request':

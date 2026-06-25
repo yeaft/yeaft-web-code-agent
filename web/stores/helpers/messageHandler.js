@@ -8,7 +8,6 @@ import { decodeKey } from '../../utils/encryption.js';
 import { t } from '../../utils/i18n.js';
 import { stopProcessingWatchdog, startLegacyWatchdog } from './watchdog.js';
 import { clearSessionLoading } from './session.js';
-import { clearRefreshTimeout, handleCrewSessionsList } from './crew.js';
 import { handleAgentList, handleAgentSelected } from './handlers/agentHandler.js';
 import {
   handleConversationCreated,
@@ -577,22 +576,6 @@ export function handleMessage(store, msg) {
       }
       break;
 
-    case 'crew_context_result':
-      window.dispatchEvent(new CustomEvent('crew-context-result', { detail: msg }));
-      break;
-
-    case 'crew_sessions_list':
-      handleCrewSessionsList(store, msg);
-      break;
-
-    case 'crew_exists_result':
-      store.crewExistsResult = {
-        exists: msg.exists,
-        projectDir: msg.projectDir,
-        sessionInfo: msg.sessionInfo || null,
-        requestId: msg.requestId
-      };
-      break;
 
     case 'conversation_refresh':
       handleConversationRefresh(store, msg);
@@ -733,26 +716,6 @@ export function handleMessage(store, msg) {
               msgs[i].askRequestId = msg.requestId;
               msgs[i].askQuestions = msg.questions;
               return true;
-            }
-          }
-          // Crew mode: msg.conversationId IS the crew session id
-          // (agent/crew/role-query.js:178 passes session.id into
-          // handleAskUserQuestion, which forwards it verbatim as the
-          // conversationId on the ask_user_question event). So we look
-          // up the exact session bucket — NEVER iterate all sessions,
-          // which would randomly attach the question to the wrong crew
-          // (the bug: crew A asks, crew B shows the card, crew A stays
-          // stuck with a disabled card forever).
-          if (store.crewMessagesMap) {
-            const crewMsgs = store.crewMessagesMap[msg.conversationId];
-            if (Array.isArray(crewMsgs)) {
-              for (let i = crewMsgs.length - 1; i >= 0; i--) {
-                if (crewMsgs[i].type === 'tool' && crewMsgs[i].toolName === 'AskUserQuestion' && !crewMsgs[i].askRequestId) {
-                  crewMsgs[i].askRequestId = msg.requestId;
-                  crewMsgs[i].askQuestions = msg.questions;
-                  return true;
-                }
-              }
             }
           }
           return false;
@@ -971,30 +934,6 @@ export function handleMessage(store, msg) {
       }
       break;
 
-    // Crew (multi-agent) messages
-    case 'crew_session_created':
-    case 'crew_session_restored':
-    case 'crew_output':
-    case 'crew_status':
-    case 'crew_routing':
-    case 'crew_turn_completed':
-    case 'crew_human_needed':
-    case 'crew_message_queued':
-    case 'crew_image':
-    case 'crew_role_added':
-    case 'crew_role_removed':
-    case 'crew_session_cleared':
-    case 'crew_role_error':
-    case 'crew_history_loaded':
-      store.handleCrewOutput(msg);
-      break;
-
-    // Crew session restore failed — reset refreshingSession flag
-    case 'crew_session_restore_failed':
-      console.warn('[Crew] Session restore failed:', msg.message);
-      store.setRefreshingSession(msg.sessionId, false);
-      clearRefreshTimeout(msg.sessionId);
-      break;
 
     // /btw mode streaming
     case 'btw_stream':

@@ -246,7 +246,6 @@ export function addMessageToConversation(store, conversationId, msg) {
   applyLiveToolWindow(store.messagesMap[conversationId]);
   // Bug 1: keep messages sorted by timestamp so history loaded out-of-order
   // (e.g. from different sessions) still displays chronologically.
-  // Only sort Yeaft conversations; crew conversations need insertion order.
   if (conversationId === store.yeaftConversationId) {
     store.messagesMap[conversationId].sort((a, b) => a.timestamp - b.timestamp);
   }

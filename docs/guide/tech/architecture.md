@@ -5,7 +5,6 @@ Yeaft is a **three-layer architecture** multi-provider AI collaboration platform
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │                       Web Client (Vue 3)                        │
-│   ChatPage  /  YeaftPage  /  Crew / Workbench / Settings        │
 │             Shared MessageList pipeline (backend-agnostic)      │
 └──────────────────────────────┬─────────────────────────────────┘
                                │ WebSocket (encrypted)
@@ -29,7 +28,6 @@ Yeaft is a **three-layer architecture** multi-provider AI collaboration platform
 │  │  spawn external CLI    │  │  ─ 30+ tools                     │ │
 │  └─────────────────────┘  └──────────────────────────────────┘ │
 │  ┌─────────────────────────────────────────────────────────┐  │
-│  │  Crew multi-role subsystem (own wire type, cross-worktree) │  │
 │  └─────────────────────────────────────────────────────────┘  │
 │  ┌─────────────────────────────────────────────────────────┐  │
 │  │  Workbench: terminal / git / files / port-proxy           │  │
@@ -85,14 +83,12 @@ claude-web-chat/
 │   │   └── ...
 │   ├── claude.js            # Legacy Claude Chat path (kept)
 │   ├── conversation.js      # Chat session lifecycle
-│   ├── crew/                # Crew multi-role subsystem
 │   ├── sdk/                 # Claude CLI stream-json SDK
 │   ├── terminal.js          # PTY terminal (node-pty)
 │   └── workbench/           # Git + file operations
 ├── web/                     # Vue 3 frontend
 │   ├── app.js               # Vue app entry
 │   ├── build.js             # esbuild production build
-│   ├── components/          # Vue components (ChatPage / YeaftPage / Crew / Workbench)
 │   ├── stores/              # Pinia state stores
 │   ├── styles/              # CSS (dark / light theme)
 │   ├── i18n/                # en / zh-CN translations

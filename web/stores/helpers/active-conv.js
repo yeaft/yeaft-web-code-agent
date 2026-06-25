@@ -11,7 +11,7 @@
  *      booting Pinia / Vue.
  *
  * Bug fixed: chat-mode WebSocket handlers (conversation_resumed,
- * conversation_selected, agent_list restore, crew session restore)
+ * conversation_selected and agent_list restore)
  * unconditionally write `state.activeConversations` regardless of
  * `currentView`. When the user is sitting on the Yeaft page, that
  * background clobber used to be observable through every getter that
@@ -19,7 +19,7 @@
  * Yeaft view and VP typing badges silently disappeared.
  *
  * The fix: in Yeaft view, source from `state.yeaftConversationId`
- * instead. Crew and Chat keep the existing behaviour.
+ * instead. Chat keeps the existing behaviour.
  */
 
 /**
@@ -45,8 +45,6 @@ export function selectActiveConversationId(state) {
       : null;
     return agentConversationId || state.yeaftConversationId || null;
   }
-  // Chat and Crew share `activeConversations[0]`. Crew runs alongside
-  // chat in the same conversation list, so the same selector serves
-  // both.
+  // Chat uses `activeConversations[0]`.
   return state.activeConversations[0] || null;
 }

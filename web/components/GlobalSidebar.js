@@ -21,13 +21,6 @@ export default {
         >
           <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
         </button>
-        <button
-          class="gs-icon-btn"
-          @click="newCrew"
-          :title="$t('splitScreen.newCrew')"
-        >
-          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-        </button>
         <div class="gs-divider"></div>
         <button
           class="gs-icon-btn"
@@ -101,11 +94,6 @@ export default {
       store.splitConvModalOpen = true;
     }
 
-    function newCrew() {
-      const emptyPane = store.splitPanes.find(p => !p.conversationId);
-      store._pendingPaneId = emptyPane?.id || store.splitPanes[0]?.id || null;
-      store.enterCrewMode();
-    }
 
     function mergePanes() {
       // Save current split layout before exiting
@@ -125,7 +113,6 @@ export default {
       onlineAgentCount,
       connectionLabel,
       newChat,
-      newCrew,
       mergePanes
     };
   }

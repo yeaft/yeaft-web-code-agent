@@ -314,11 +314,6 @@ export function handleConversationDeleted(store, msg) {
   delete store.executionStatusMap[msg.conversationId];
   // 清理 subagent 数据
   delete store.subagents[msg.conversationId];
-  // 清理 crew 数据
-  delete store.crewSessions?.[msg.conversationId];
-  delete store.crewMessagesMap?.[msg.conversationId];
-  delete store.crewOlderMessages?.[msg.conversationId];
-  delete store.crewStatuses?.[msg.conversationId];
   window.dispatchEvent(new CustomEvent('conversation-deleted', { detail: { conversationId: msg.conversationId } }));
   // Remove from activeConversations if present
   const delIdx = store.activeConversations.indexOf(msg.conversationId);

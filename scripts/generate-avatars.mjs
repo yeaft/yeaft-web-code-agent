@@ -18,7 +18,7 @@
  * existing 12-color palette ring so per-VP color identity is preserved.
  *
  * Style choice: DiceBear `personas` — illustrated head-and-shoulders, the
- * most "Crew / IM thread" looking style in the collection. Seed = vpId
+ * most IM-thread looking style in the collection. Seed = vpId
  * keeps output stable across runs.
  *
  * Licensing: DiceBear core is MIT, the `personas` style is licensed CC-BY 4.0

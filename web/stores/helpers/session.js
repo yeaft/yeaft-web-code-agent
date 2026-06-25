@@ -78,28 +78,11 @@ export function autoRestoreConversation(store, conversationId) {
   const conv = store.conversations.find(c => c.id === conversationId);
   if (!conv) return;
 
-  // For crew conversations, initialize crewMessagesMap BEFORE setting activeConversations
-  if (conv.type === 'crew') {
-    if (!store.crewMessagesMap[conversationId]) {
-      store.crewMessagesMap[conversationId] = [];
-    }
-    store.messagesMap[conversationId] = [];
-  }
 
   store.activeConversations = [conversationId];
   store.currentWorkDir = conv.workDir;
 
-  if (conv.type === 'crew') {
-    // Crew conversations: resume crew session to load messages
-    const hasCrewMessages = store.crewMessagesMap[conversationId].length > 0;
-    if (!hasCrewMessages) {
-      store.sendWsMessage({
-        type: 'resume_crew_session',
-        sessionId: conversationId,
-        agentId: conv.agentId || store.currentAgent
-      });
-    }
-  } else if (store.messagesMap[conversationId]?.length > 0) {
+  if (store.messagesMap[conversationId]?.length > 0) {
     // Messages already in messagesMap, nothing to do
     console.log('[AutoRestore] Restored from messagesMap:', store.messagesMap[conversationId].length, 'messages');
   } else if (conv.claudeSessionId) {
@@ -164,9 +147,7 @@ export function restorePanels(store) {
     .map(p => ({
       id: p.id,
       conversationId: (p.conversationId && convIds.has(p.conversationId)) ? p.conversationId : null,
-      crewPanelVisible: p.crewPanelVisible || { roles: true, features: true },
-      activeRightPanel: p.activeRightPanel || null,
-      crewMobilePanel: p.crewMobilePanel || null
+      activeRightPanel: p.activeRightPanel || null
     }));
 
   if (validPanels.length < 2) {
@@ -186,22 +167,8 @@ export function restorePanels(store) {
       if (!store.messagesMap[panel.conversationId]) {
         store.messagesMap[panel.conversationId] = [];
       }
-      const conv = store.conversations.find(c => c.id === panel.conversationId);
-      if (conv?.type === 'crew') {
-        // Crew conversations: init crew messages + resume session
-        if (!store.crewMessagesMap[panel.conversationId]) {
-          store.crewMessagesMap[panel.conversationId] = [];
-        }
-        store.sendWsMessage({
-          type: 'resume_crew_session',
-          sessionId: panel.conversationId,
-          agentId: conv.agentId || store.currentAgent
-        });
-      } else {
-        // Chat conversations: sync recent messages
-        if (!store.messagesMap[panel.conversationId].length) {
-          store.sendWsMessage({ type: 'sync_messages', conversationId: panel.conversationId, turns: 5 });
-        }
+      if (!store.messagesMap[panel.conversationId].length) {
+        store.sendWsMessage({ type: 'sync_messages', conversationId: panel.conversationId, turns: 5 });
       }
     }
   }

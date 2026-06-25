@@ -12,10 +12,7 @@
  *
  * task-330c lint guard:
  *   ⚠️ DO NOT introduce greedy `text.replace(/---ROUTE---[\s\S]*$/g, '')`
- *      style strips on incoming/outgoing message bodies. Crew ROUTE
- *      stripping is owned EXCLUSIVELY by `agent/crew/routing.js`
- *      `parseRoutes()` which returns `{routes, displayBody}` with exact
- *      ranges removed.
+ *      style strips on incoming/outgoing message bodies.
  */
 
 import { delimiter, join } from 'node:path';
@@ -3591,7 +3588,7 @@ async function runYeaftSessionSend(msg) {
 
   // ── Attachments (images + files) ───────────────────────────────
   // Server has already resolved fileId → { name, mimeType, data:base64,
-  // isImage } via the same path crew uses (client-conversation.js relay
+  // isImage } via the client-conversation.js relay
   // for `yeaft_*`). We persist files to disk under the agent's CWD so
   // file-tools (file-read / bash) can pick them up with relative paths,
   // and we build per-image content blocks for the LLM call. The

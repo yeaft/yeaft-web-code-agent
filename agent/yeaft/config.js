@@ -434,7 +434,7 @@ export function loadConfig(overrides = {}) {
     projectDocMaxBytes: overrides.projectDocMaxBytes ?? jsonConfig.projectDocMaxBytes ?? DEFAULTS.projectDocMaxBytes,
 
     // task-318: Yeaft runtime caps. `yeaft` is a nested section so we
-    // don't pollute the flat config namespace used by chat/crew code.
+    // don't pollute the flat config namespace used by chat code.
     yeaft: normaliseYeaftSection(jsonConfig.yeaft),
 
     // Legacy fields (null when using config.json)

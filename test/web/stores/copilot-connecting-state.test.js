@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 // Handlers transitively import stores that read Pinia/localStorage globals from
 // the browser build. Provide minimal shims before importing (same pattern as
-// crew-on-demand-list.test.js).
 globalThis.Pinia = globalThis.Pinia || {};
 globalThis.Pinia.defineStore = globalThis.Pinia.defineStore || ((_id, options) => () => options);
 globalThis.window = globalThis.window || globalThis;

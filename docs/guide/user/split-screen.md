@@ -59,7 +59,6 @@ Mobile doesn't support split — screens are too narrow, single-panel forced. Sp
 
 - **Comparative review** — two Copilot sessions running different models on the same task, compare outputs
 - **Long-task monitoring** — one panel runs a long task (refactor), another panel keeps discussing
-- **Multi-project parallel** — Project A's Crew + Project B's Yeaft Code Agent + Project C's Claude Chat
 - **Cross-Agent** — one panel connected to Agent X, another to Agent Y
 
 ## Performance notes

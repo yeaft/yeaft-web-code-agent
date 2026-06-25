@@ -59,10 +59,8 @@ Allowed initial `runtimeFamily` values:
 Allowed initial `surfaceType` values:
 
 - `chat`: one user-facing conversation.
-- `crew`: coordinated role/team collaboration.
 - `group`: multi-VP group conversation.
 
-The values are lowercase wire contracts. UI labels may render them as `Claude Code`, `Yeaft`, `Chat`, `Crew`, and `Group`, but persisted records and message payloads should use the lowercase values above unless a later migration RFC changes them.
 
 These dimensions must not collapse into one enum. For example, `runtimeFamily: "yeaft"` with `surfaceType: "chat"` is not the same kind of value as `runtimeFamily: "claude-code"` with `surfaceType: "chat"`; the first field chooses the runtime family and the second chooses the session surface.
 
@@ -248,7 +246,6 @@ PR1 should not merge unless:
 
 Martin should review PR0 against these gates:
 
-1. Provider/runtime family and surface/session type remain separate dimensions: Claude Code vs Yeaft; Chat/Crew/Group.
 2. Yeaft Chat starts as the single-user successor/alias of old Yeaft, not a behavior rewrite.
 3. Alias-first is mandatory; no physical `agent/yeaft` rename in PR0/PR1.
 4. `Engine.query()` is reused through a session wrapper; Engine does not learn WS/UI/project-root concerns.

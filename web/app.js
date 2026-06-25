@@ -11,7 +11,6 @@ import ChatPage from './components/ChatPage.js';
 import YeaftPage from './components/YeaftPage.js';
 import SplitPane from './components/SplitPane.js';
 import ToolLine from './components/ToolLine.js';
-import CrewConfigPanel from './components/CrewConfigPanel.js';
 
 // Make stores globally available for components
 window.Pinia = {
@@ -21,7 +20,7 @@ window.Pinia = {
 };
 
 const App = {
-  components: { LoginPage, ChatPage, YeaftPage, CrewConfigPanel },
+  components: { LoginPage, ChatPage, YeaftPage },
   template: `
     <LoginPage v-if="!authStore.isAuthenticated" />
     <template v-else>

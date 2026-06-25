@@ -41,9 +41,7 @@ features:
     details: AI expert team in a side panel — pick a team, get multi-perspective advice without interrupting the main chat.
     link: /guide/user/expert-panel
   - icon: 👷
-    title: Crew Multi-Role
     details: PM / dev / reviewer / tester running features in parallel — ROUTE protocol, kanban board, cross-worktree execution.
-    link: /guide/user/crew
   - icon: 🛠️
     title: Workbench
     details: Terminal / Git / files / port proxy — the agent machine's dev environment piped right into the browser.

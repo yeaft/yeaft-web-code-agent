@@ -11,7 +11,6 @@ import {
 } from './ws-utils.js';
 import { handleClientConversation } from './handlers/client-conversation.js';
 import { handleClientWorkbench } from './handlers/client-workbench.js';
-import { handleClientCrew } from './handlers/client-crew.js';
 import { handleClientMisc } from './handlers/client-misc.js';
 import { recordPerfTraceEvent } from './perf-trace.js';
 
@@ -206,6 +205,5 @@ async function handleWebMessage(clientId, msg) {
   // Dispatch to handler sub-modules
   if (await handleClientConversation(clientId, client, msg, checkAgentAccess)) return;
   if (await handleClientWorkbench(clientId, client, msg, checkAgentAccess)) return;
-  if (await handleClientCrew(clientId, client, msg, checkAgentAccess)) return;
   if (await handleClientMisc(clientId, client, msg, checkAgentAccess)) return;
 }

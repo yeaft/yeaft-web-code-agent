@@ -1,13 +1,12 @@
 /**
  * ToolLine — Shared tool call display component
- * Used by both CrewChatView and MessageItem
+ * Used by MessageItem
  *
  * Props:
  *   toolName   — String, tool name (Read, Edit, Bash, etc.)
  *   toolInput  — Object, tool input parameters
  *   toolResult — Any, tool result content (optional)
  *   hasResult  — Boolean, whether result has arrived
- *   compact    — Boolean, compact mode for crew view
  *   startTime  — Number, timestamp when tool execution started (optional)
  */
 import { formatRouteForwardToolLine } from '../utils/route-forward-display.js';
@@ -28,7 +27,7 @@ export default {
   },
   emits: ['update:expanded'],
   template: `
-    <div class="crew-msg-tool">
+    <div>
       <div class="tool-line" :class="{ expandable: hasExpandableContent, expanded: isExpanded, completed: hasResult, running: !hasResult }" @click="toggle">
         <span class="tool-line-icon">{{ getToolIcon(toolName) }}</span>
         <span class="tool-line-text">{{ getToolOneLine(toolName, toolInput) }}</span>

@@ -9,7 +9,6 @@ import {
 } from './ws-utils.js';
 import { handleAgentConversation } from './handlers/agent-conversation.js';
 import { handleAgentOutput } from './handlers/agent-output.js';
-import { handleAgentCrew } from './handlers/agent-crew.js';
 import { handleAgentFileTerminal } from './handlers/agent-file-terminal.js';
 import { handleAgentSync } from './handlers/agent-sync.js';
 import { recordPerfTraceEvent } from './perf-trace.js';
@@ -289,7 +288,7 @@ async function handleAgentMessage(agentId, msg) {
   if (!agent) return;
 
   // Security: 需要 conversationId 的消息类型，验证该 conversation 属于此 agent.
-  // The conversation-id check only authorizes Chat/Crew flows where the
+  // The conversation-id check only authorizes Chat flows where the
   // conversationId IS the ownership key. Workbench responses and Yeaft
   // events use `_requestUserId` for ownership (enforced in
   // `forwardToClients`), so they bypass this gate. See PR #772.
@@ -313,7 +312,6 @@ async function handleAgentMessage(agentId, msg) {
   // Dispatch to handler sub-modules
   if (await handleAgentConversation(agentId, agent, msg)) return;
   if (await handleAgentOutput(agentId, agent, msg)) return;
-  if (await handleAgentCrew(agentId, agent, msg)) return;
   if (await handleAgentFileTerminal(agentId, agent, msg)) return;
   if (await handleAgentSync(agentId, agent, msg)) return;
 }

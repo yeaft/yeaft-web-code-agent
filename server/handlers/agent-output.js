@@ -232,7 +232,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
           }
         }
       } else {
-        // Per-conversation or per-crew-session update. Stamp agentId too so
+        // Per-conversation update. Stamp agentId too so
         // Yeaft's temporary/local conversation id cannot hide the agent-level
         // fallback command list in the web store.
         await forwardToClients(agentId, msg.conversationId, {

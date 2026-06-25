@@ -9,7 +9,6 @@ import * as handlerHelpers from './helpers/messageHandler.js';
 import * as convHelpers from './helpers/conversation.js';
 import * as sessionHelpers from './helpers/session.js';
 import * as watchdogHelpers from './helpers/watchdog.js';
-import * as crewHelpers from './helpers/crew.js';
 import * as yeaftViewHelpers from './helpers/yeaft-view.js';
 import { incVpTyping, decVpTyping } from './helpers/vp-typing.js';
 import { selectActiveConversationId } from './helpers/active-conv.js';
@@ -235,7 +234,7 @@ export const useChatStore = defineStore('chat', {
     // Crew mode is opt-in via Settings → General. When disabled, the
     // sidebar collapses to a single full-width Chat tab, matching the
     // visual structure of the Yeaft sidebar. Default: disabled.
-    crewModeEnabled: localStorage.getItem('crewModeEnabled') === 'true',
+    crewModeEnabled: false,
     // Per-conversation 执行状态追踪：conversationId -> { currentTool, toolHistory, lastActivity }
     executionStatusMap: {},
     // Per-conversation session health: conversationId -> { status: 'agent-offline'|'session-lost'|'cli-exited' }
@@ -4274,6 +4273,17 @@ export const useChatStore = defineStore('chat', {
     _resetProcessingWatchdog(conversationId) { watchdogHelpers.resetProcessingWatchdog(this, conversationId); },
     _stopProcessingWatchdog(conversationId) { watchdogHelpers.stopProcessingWatchdog(this, conversationId); },
 
+    startRefreshTimeout(convId) {
+      const target = convId || this.currentConversation;
+      if (!target) return;
+      if (!this._refreshTimeouts) this._refreshTimeouts = {};
+      if (this._refreshTimeouts[target]) clearTimeout(this._refreshTimeouts[target]);
+      this._refreshTimeouts[target] = setTimeout(() => {
+        this.setRefreshingSession(target, false);
+        delete this._refreshTimeouts[target];
+      }, 10000);
+    },
+
     // =====================
     // UI helpers
     // =====================
@@ -4286,10 +4296,6 @@ export const useChatStore = defineStore('chat', {
       document.documentElement.classList.toggle('light', this.theme === 'light');
     },
 
-    setCrewModeEnabled(enabled) {
-      this.crewModeEnabled = !!enabled;
-      localStorage.setItem('crewModeEnabled', this.crewModeEnabled ? 'true' : 'false');
-    },
 
     initTheme() {
       document.documentElement.setAttribute('data-theme', this.theme);
@@ -4489,22 +4495,6 @@ export const useChatStore = defineStore('chat', {
       this.workbenchMaximized = !this.workbenchMaximized;
     },
 
-    // =====================
-    // Crew (multi-agent) actions
-    // =====================
-    enterCrewMode() { crewHelpers.enterCrewMode(this); },
-    listCrewSessions() { crewHelpers.listCrewSessions(this); },
-    checkCrewExists(projectDir, agentId) { crewHelpers.checkCrewExists(this, projectDir, agentId); },
-    deleteCrewDir(projectDir, agentId) { crewHelpers.deleteCrewDir(this, projectDir, agentId); },
-    openCrewConfig() { crewHelpers.openCrewConfig(this); },
-    createCrewSession(config) { crewHelpers.createCrewSession(this, config); },
-    resumeCrewSession(sessionId, agentId) { crewHelpers.resumeCrewSession(this, sessionId, agentId); },
-    loadCrewHistory(sessionId) { return crewHelpers.loadCrewHistory(this, sessionId); },
-    sendCrewMessage(content, targetRole = null, attachments = undefined, conversationId = undefined) { crewHelpers.sendCrewMessage(this, content, targetRole, attachments, conversationId); },
-    sendCrewControl(action, targetRole = null, conversationId = undefined) { crewHelpers.sendCrewControl(this, action, targetRole, conversationId); },
-    addCrewRole(role, conversationId = undefined) { crewHelpers.addCrewRole(this, role, conversationId); },
-    removeCrewRole(roleName, conversationId = undefined) { crewHelpers.removeCrewRole(this, roleName, conversationId); },
-    renameCrewSession(sessionId, name) { crewHelpers.renameCrewSession(this, sessionId, name); },
     renameChatSession(convId, title) {
       if (title && title.trim()) {
         this.customConversationTitles[convId] = title.trim();
@@ -4522,8 +4512,6 @@ export const useChatStore = defineStore('chat', {
         });
       }
     },
-    handleCrewOutput(msg) { crewHelpers.handleCrewOutput(this, msg); },
-    startRefreshTimeout(convId) { crewHelpers.startRefreshTimeout(this, convId); },
 
     openFileInExplorer(filePath) {
       if (!this.currentConversation) return;

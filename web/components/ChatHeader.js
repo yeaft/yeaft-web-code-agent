@@ -26,7 +26,7 @@ export default {
         </svg>
         <span class="compact-message">{{ statusBannerMessage }}</span>
       </div>
-      <div class="header-right" v-if="effectiveConvId && !isCrew">
+      <div class="header-right" v-if="effectiveConvId">
         <!-- Page reload — always visible top-right, full window.location.reload() -->
         <button class="header-action-btn" @click="reloadPage" :title="$t('chatHeader.reloadPage')">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -36,14 +36,14 @@ export default {
         <span class="context-usage-hint" v-if="contextUsage" :class="contextColorClass" :title="contextLabel">
           {{ contextUsage.percentage }}%
         </span>
-        <!-- Expert panel button — hidden in Crew mode -->
+        <!-- Expert panel button -->
         <button class="header-action-btn" :class="{ active: effectiveRightPanel === 'subagents' }" @click="toggleSubAgentPanel" :title="$t('chatHeader.subAgentPanel')" v-if="runningSubagentCount > 0 || effectiveRightPanel === 'subagents'">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
           </svg>
           <span class="subagent-count-badge" v-if="runningSubagentCount > 0">{{ runningSubagentCount }}</span>
         </button>
-        <button class="header-action-btn" :class="{ active: effectiveRightPanel === 'experts' }" @click="toggleExpertPanel" :title="$t('chatHeader.expertPanel')" v-if="!isCrew && canExpert">
+        <button class="header-action-btn" :class="{ active: effectiveRightPanel === 'experts' }" @click="toggleExpertPanel" :title="$t('chatHeader.expertPanel')" v-if="canExpert">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
           </svg>
@@ -107,46 +107,6 @@ export default {
           <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
       </div>
-      <div class="crew-header-actions" v-if="isCrew">
-        <button class="crew-header-nav-btn" @click="reloadPage" :title="$t('chatHeader.reloadPage')">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="23 20 23 14 17 14"/><polyline points="1 4 1 10 7 10"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-          </svg>
-        </button>
-        <button v-if="isCrew" class="crew-header-nav-btn"
-                :class="{ active: isCrewPanelActive('roles') }"
-                @click="onCrewPanelToggle('roles')">
-          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-          <span v-if="hasStreamingRoles" class="active-dot"></span>
-        </button>
-        <button class="crew-header-nav-btn"
-                :class="{ active: isCrewPanelActive('features') }"
-                @click="onCrewPanelToggle('features')">
-          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 12h2v5H7zm4-3h2v8h-2zm4-3h2v11h-2z"/></svg>
-          <span v-if="crewInProgress > 0" class="nav-badge">{{ crewInProgress }}</span>
-        </button>
-        <button class="crew-header-nav-btn"
-                :class="{ 'btn-loading': isRefreshing }"
-                @click="refreshSession"
-                :disabled="isRefreshing"
-                :title="$t('chatHeader.refresh')">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-          </svg>
-        </button>
-        <button class="crew-header-nav-btn"
-                @click="openCrewEdit"
-                :title="$t('chatHeader.editCrew')">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-          </svg>
-        </button>
-        <!-- Close pane button (split mode only) -->
-        <button class="crew-header-nav-btn" v-if="showClosePane" @click="$emit('close-pane')" :title="$t('splitScreen.closePane')">
-          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-        </button>
-      </div>
     </header>
   `,
   setup(props) {
@@ -156,13 +116,6 @@ export default {
     // ★ Core: effectiveConvId — prop takes priority over store.currentConversation
     const effectiveConvId = Vue.computed(() => {
       return props.conversationId || store.currentConversation;
-    });
-
-    // ★ Local isCrew check — replaces store.currentConversationIsCrew
-    const isCrew = Vue.computed(() => {
-      if (!effectiveConvId.value) return false;
-      const conv = store.conversations.find(c => c.id === effectiveConvId.value);
-      return conv?.type === 'crew';
     });
 
     // Provider-aware capability gates. Drivers self-declare what they support;
@@ -193,12 +146,6 @@ export default {
     const headerTitle = Vue.computed(() => {
       if (!effectiveConvId.value) {
         return 'Yeaft';
-      }
-
-      // Crew conversation — use renamed session name if available
-      if (isCrew.value) {
-        const conv = store.conversations.find(c => c.id === effectiveConvId.value);
-        return conv?.name || 'Crew Session';
       }
 
       const title = store.getConversationTitle(effectiveConvId.value);
@@ -287,16 +234,8 @@ export default {
       return `Context: ${used}k / ${total}k`;
     });
 
-    // Crew header: roles streaming dot
-    const hasStreamingRoles = Vue.computed(() => {
-      const activeRoles = store.currentCrewStatus?.activeRoles;
-      return activeRoles && activeRoles.length > 0;
-    });
-
     // Per-conversation refresh state (split-pane safe)
     const isRefreshing = Vue.computed(() => store.isRefreshingSession(effectiveConvId.value));
-    // Per-conversation crew in-progress count (split-pane safe)
-    const crewInProgress = Vue.computed(() => store.getCrewInProgressCount(effectiveConvId.value));
 
     const isCompacting = Vue.computed(() => {
       return store.compactStatus?.status === 'compacting'
@@ -322,26 +261,17 @@ export default {
       if (store.isRefreshingSession(effectiveConvId.value) || !effectiveConvId.value) return;
       store.setRefreshingSession(effectiveConvId.value, true);
       store.startRefreshTimeout(effectiveConvId.value);
-      if (isCrew.value) {
-        // Crew: resume session to reload roles + messages
-        store.sendWsMessage({
-          type: 'resume_crew_session',
-          sessionId: effectiveConvId.value,
-          agentId: store.currentAgent
-        });
-      } else {
-        // Mid-turn: keep the in-memory partial so streaming text isn't
-        // wiped. sync_messages_result dedups by dbMessageId (orphans are
-        // reconciled by content). Idle: blank for a clean reload.
-        if (!store.processingConversations[effectiveConvId.value]) {
-          store.messagesMap[effectiveConvId.value] = [];
-        }
-        store.sendWsMessage({
-          type: 'sync_messages',
-          conversationId: effectiveConvId.value,
-          turns: 5
-        });
+      // Mid-turn: keep the in-memory partial so streaming text isn't wiped.
+      // sync_messages_result dedups by dbMessageId (orphans are reconciled by
+      // content). Idle: blank for a clean reload.
+      if (!store.processingConversations[effectiveConvId.value]) {
+        store.messagesMap[effectiveConvId.value] = [];
       }
+      store.sendWsMessage({
+        type: 'sync_messages',
+        conversationId: effectiveConvId.value,
+        turns: 5
+      });
     };
 
     const compactContext = () => {
@@ -363,29 +293,12 @@ export default {
       store.sendMessage('/clear');
     };
 
-    const openCrewEdit = () => {
-      store.openCrewConfig();
-    };
 
     // ★ Pane-local panel state: reads from pane in split mode, global store otherwise
     const effectiveRightPanel = Vue.computed(() => {
       return store.getPaneRightPanel(props.paneId);
     });
 
-    const onCrewPanelToggle = (panel) => {
-      if (window.innerWidth < 768 || store.isSplitMode) {
-        store.toggleCrewMobilePanel(panel, props.paneId);
-      } else {
-        store.toggleCrewPanel(panel, props.paneId);
-      }
-    };
-
-    const isCrewPanelActive = (panel) => {
-      if (window.innerWidth < 768 || store.isSplitMode) {
-        return store.getPaneMobilePanel(props.paneId) === panel;
-      }
-      return store.getPanelVisible(props.paneId)[panel];
-    };
 
     // MCP panel
     const mcpBtnRef = Vue.ref(null);
@@ -440,6 +353,6 @@ export default {
       document.removeEventListener('click', closeMcpOnOutsideClick);
     });
 
-    return { store, effectiveConvId, effectiveRightPanel, isCrew, isClaudeCode, canCompact, canClear, canExpert, canMcp, headerTitle, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isRefreshing, crewInProgress, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleSubAgentPanel, runningSubagentCount };
+    return { store, effectiveConvId, effectiveRightPanel, isClaudeCode, canCompact, canClear, canExpert, canMcp, headerTitle, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, isRefreshing, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleSubAgentPanel, runningSubagentCount };
   }
 };

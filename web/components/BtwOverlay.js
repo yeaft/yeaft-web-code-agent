@@ -2,7 +2,7 @@
  * BtwOverlay — Inline multi-turn /btw conversation panel.
  * Renders as a flex child above ChatInput when store.btwMode is true.
  * Shows multi-turn messages list with streaming support.
- * Esc key closes the panel (handled by ChatInput/crewInput).
+ * Esc key closes the panel (handled by ChatInput).
  */
 
 export default {
