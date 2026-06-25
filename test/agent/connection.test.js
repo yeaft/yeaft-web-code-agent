@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { MockWebSocket, WS_OPEN, WS_CLOSED } from '../helpers/mockWs.js';
+import { shouldReconnectForHeartbeat } from '../../agent/connection/heartbeat-policy.js';
 
 /**
  * Tests for agent connection lifecycle patterns (connection.js).
@@ -118,14 +119,11 @@ describe('Agent Connection Lifecycle', () => {
       expect(lastPongAt).toBeGreaterThan(0);
     });
 
-    it('should detect connection loss if no pong received', () => {
-      const lastPongAt = Date.now() - 60000; // 60 seconds ago
-      const HEARTBEAT_INTERVAL = 30000;
-      const HEARTBEAT_TIMEOUT = 45000;
+    it('should tolerate one missed 30s pong before reconnecting', () => {
+      const lastPongAt = 1000;
 
-      const timeSinceLastPong = Date.now() - lastPongAt;
-      const isStale = timeSinceLastPong > HEARTBEAT_TIMEOUT;
-      expect(isStale).toBe(true);
+      expect(shouldReconnectForHeartbeat(lastPongAt, 61000)).toBe(false);
+      expect(shouldReconnectForHeartbeat(lastPongAt, 182000)).toBe(true);
     });
   });
 

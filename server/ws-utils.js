@@ -229,6 +229,15 @@ export function verifyAgentOwnership(agentId, userId, role = null) {
   return false;
 }
 
+export function resolveAgentAccessError(agentId, userId, role = null) {
+  if (!agentId) return 'Agent not found';
+  const agent = agents.get(agentId);
+  if (!agent) return 'Agent not found or offline';
+  if (!verifyAgentOwnership(agentId, userId, role)) return 'Agent access denied';
+  if (agent.ws?.readyState !== WebSocket.OPEN) return 'Agent not found or offline';
+  return null;
+}
+
 // 转发消息给拥有该会话的用户的所有客户端
 export async function forwardToClients(agentId, conversationId, msg) {
   // ★ Security: 从 agent.conversations 获取会话的 userId
