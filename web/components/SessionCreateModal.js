@@ -514,6 +514,11 @@ export default {
       this.form.vpIds = [];
       this.form.defaultVpId = null;
       this.vpPickerTouched = false;
+      // If the VP library is already hydrated for this agent, subscribing is
+      // intentionally skipped and vpListSignature will not change. Re-apply the
+      // default immediately so a cold modal does not get stuck on "no VP" after
+      // the async agent roster seeds form.agentId.
+      this.applyDefaultSelection();
       // Reset scanned-from-disk state; workDir + agent both contribute
       // to which sessions are visible.
       this.scannedSessions = [];
