@@ -44,13 +44,55 @@ describe('agent connection buffer', () => {
     ctx.outboundSendQueueActive = false;
     ctx.messageBuffer = [];
 
-    await sendToServer({ type: 'first' });
-    await sendToServer({ type: 'second' });
+    const first = sendToServer({ type: 'first' });
+    const second = sendToServer({ type: 'second' });
 
     expect(sent).toEqual([]);
     await waitImmediate();
     expect(sent.map(msg => msg.type)).toEqual(['first']);
     await waitImmediate();
     expect(sent.map(msg => msg.type)).toEqual(['first', 'second']);
+    await expect(first).resolves.toBe('sent');
+    await expect(second).resolves.toBe('sent');
+  });
+
+  it('keeps sendToServer awaitable until the queued frame is sent', async () => {
+    const sent = [];
+    let resolved = false;
+    ctx.ws = {
+      readyState: 1,
+      send(payload) {
+        sent.push(JSON.parse(payload));
+      },
+    };
+    ctx.sessionKey = null;
+    ctx.serverEncryptionRequired = false;
+    ctx.outboundSendQueue = [];
+    ctx.outboundSendQueueActive = false;
+    ctx.messageBuffer = [];
+
+    const pending = sendToServer({ type: 'turn_completed' }).then(outcome => {
+      resolved = true;
+      return outcome;
+    });
+
+    expect(resolved).toBe(false);
+    expect(sent).toEqual([]);
+
+    await expect(pending).resolves.toBe('sent');
+    expect(resolved).toBe(true);
+    expect(sent.map(msg => msg.type)).toEqual(['turn_completed']);
+  });
+
+  it('resolves buffered messages without waiting for reconnect flush', async () => {
+    ctx.ws = null;
+    ctx.sessionKey = null;
+    ctx.serverEncryptionRequired = false;
+    ctx.outboundSendQueue = [];
+    ctx.outboundSendQueueActive = false;
+    ctx.messageBuffer = [];
+
+    await expect(sendToServer({ type: 'turn_completed' })).resolves.toBe('buffered');
+    expect(ctx.messageBuffer.map(msg => msg.type)).toEqual(['turn_completed']);
   });
 });

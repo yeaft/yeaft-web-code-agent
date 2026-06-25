@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { MockWebSocket, WS_OPEN, WS_CLOSED } from '../helpers/mockWs.js';
 import { shouldReconnectForHeartbeat } from '../../agent/connection/heartbeat-policy.js';
 
@@ -421,5 +421,58 @@ describe('Upgrade Install Mode Detection', () => {
       expect(batLines).not.toContain('call pm2 stop yeaft-agent 2>NUL');
       expect(batLines.length).toBe(1);
     });
+  });
+});
+
+
+describe('Critical control frame flushes', () => {
+  it('keeps restart acknowledgements awaitable before cleanup can close the socket', async () => {
+    const ctx = (await import('../../agent/context.js')).default;
+    const { handleMessage } = await import('../../agent/connection/message-router.js');
+    const original = {
+      ws: ctx.ws,
+      sessionKey: ctx.sessionKey,
+      serverEncryptionRequired: ctx.serverEncryptionRequired,
+      outboundSendQueue: ctx.outboundSendQueue,
+      outboundSendQueueActive: ctx.outboundSendQueueActive,
+      messageBuffer: ctx.messageBuffer,
+      conversations: ctx.conversations,
+      terminals: ctx.terminals,
+      reconnectTimer: ctx.reconnectTimer,
+    };
+    const sent = [];
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(() => 0);
+    try {
+      ctx.ws = {
+        readyState: WS_OPEN,
+        send(payload) {
+          sent.push(JSON.parse(payload));
+        },
+        removeAllListeners() {},
+        close() {},
+      };
+      ctx.sessionKey = null;
+      ctx.serverEncryptionRequired = false;
+      ctx.outboundSendQueue = [];
+      ctx.outboundSendQueueActive = false;
+      ctx.messageBuffer = [];
+      ctx.conversations = new Map();
+      ctx.terminals = new Map();
+      ctx.reconnectTimer = null;
+
+      await handleMessage({ type: 'restart_agent' });
+      expect(sent.map(msg => msg.type)).toContain('restart_agent_ack');
+    } finally {
+      setTimeoutSpy.mockRestore();
+      ctx.ws = original.ws;
+      ctx.sessionKey = original.sessionKey;
+      ctx.serverEncryptionRequired = original.serverEncryptionRequired;
+      ctx.outboundSendQueue = original.outboundSendQueue;
+      ctx.outboundSendQueueActive = original.outboundSendQueueActive;
+      ctx.messageBuffer = original.messageBuffer;
+      ctx.conversations = original.conversations;
+      ctx.terminals = original.terminals;
+      ctx.reconnectTimer = original.reconnectTimer;
+    }
   });
 });

@@ -19,12 +19,12 @@ export const BUFFERABLE_TYPES = new Set([
 function bufferMessage(msg, reason) {
   if (!BUFFERABLE_TYPES.has(msg.type)) {
     console.warn(`[WS] Cannot send message, WebSocket not open: ${msg.type}`);
-    return;
+    return 'dropped';
   }
   if (ctx.messageBuffer.length < ctx.messageBufferMaxSize) {
     ctx.messageBuffer.push(msg);
     console.log(`[WS] ${reason}, buffered: ${msg.type} (queue: ${ctx.messageBuffer.length})`);
-    return;
+    return 'buffered';
   }
   // Buffer full: drop oldest non-status messages to make room
   const dropIdx = ctx.messageBuffer.findIndex(m => m.type !== 'crew_status' && m.type !== 'turn_completed');
@@ -32,15 +32,15 @@ function bufferMessage(msg, reason) {
     ctx.messageBuffer.splice(dropIdx, 1);
     ctx.messageBuffer.push(msg);
     console.warn(`[WS] Buffer full, dropped oldest to make room for: ${msg.type}`);
-  } else {
-    console.warn(`[WS] Buffer full (${ctx.messageBufferMaxSize}), dropping: ${msg.type}`);
+    return 'buffered';
   }
+  console.warn(`[WS] Buffer full (${ctx.messageBufferMaxSize}), dropping: ${msg.type}`);
+  return 'dropped';
 }
 
 async function sendNow(msg) {
   if (!ctx.ws || ctx.ws.readyState !== WebSocket.OPEN) {
-    bufferMessage(msg, 'Disconnected');
-    return;
+    return bufferMessage(msg, 'Disconnected');
   }
 
   // feat-ws-plaintext-negotiation: encrypt only when the server has
@@ -53,6 +53,7 @@ async function sendNow(msg) {
   } else {
     ctx.ws.send(JSON.stringify(msg));
   }
+  return 'sent';
 }
 
 function scheduleOutboundDrain() {
@@ -61,12 +62,15 @@ function scheduleOutboundDrain() {
   setImmediate(async () => {
     try {
       while (ctx.outboundSendQueue.length > 0) {
-        const msg = ctx.outboundSendQueue.shift();
+        const item = ctx.outboundSendQueue.shift();
+        const msg = item?.msg ?? item;
         try {
-          await sendNow(msg);
+          const outcome = await sendNow(msg);
+          item?.resolve?.(outcome);
         } catch (e) {
           console.error(`[WS] Error sending message ${msg?.type}:`, e.message);
-          if (msg) bufferMessage(msg, 'Send failed');
+          const outcome = msg ? bufferMessage(msg, 'Send failed') : 'dropped';
+          item?.resolve?.(outcome);
         }
         // Yield between frames so ping/pong, inbound control messages and UI
         // events cannot be starved by a reconnect flush or a burst of tool output.
@@ -83,11 +87,13 @@ function scheduleOutboundDrain() {
 // 断连时对关键消息类型进行缓冲，重连后自动 flush
 export async function sendToServer(msg) {
   if (!ctx.ws || ctx.ws.readyState !== WebSocket.OPEN) {
-    bufferMessage(msg, 'Disconnected');
-    return;
+    return bufferMessage(msg, 'Disconnected');
   }
-  ctx.outboundSendQueue.push(msg);
+  const promise = new Promise((resolve, reject) => {
+    ctx.outboundSendQueue.push({ msg, resolve, reject });
+  });
   scheduleOutboundDrain();
+  return promise;
 }
 
 // Flush 断连期间缓冲的消息
