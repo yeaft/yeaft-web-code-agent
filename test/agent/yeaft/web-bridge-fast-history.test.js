@@ -269,16 +269,26 @@ describe('Yeaft load-history first paint', () => {
         sessionId: 'session-fast',
         time: '2026-06-20T01:00:00.000Z',
       });
+      const hidden = store.append({
+        role: 'user',
+        content: '[system note] You have called ListAgents with the same arguments 3 times. Previous result: {...}',
+        sessionId: 'session-fast',
+        time: '2026-06-20T01:00:01.000Z',
+      });
 
       const pending = handleYeaftLoadHistory({ sessionId: 'session-fast', afterSeq: Number(anchor.id.slice(1)) });
       await flushMicrotasks();
 
       expect(sent.some(m => m.type === 'yeaft_history_chunk' && m.mode === 'delta')).toBe(false);
-      expect(sent.find(m => m.event?.type === 'history_loaded')?.event).toMatchObject({
+      const event = sent.find(m => m.event?.type === 'history_loaded')?.event;
+      expect(event).toMatchObject({
         mode: 'delta',
         count: 0,
         sessionId: 'session-fast',
+        latestSeq: Number(hidden.id.slice(1)),
+        afterSeq: Number(anchor.id.slice(1)),
       });
+      expect(event.latestSeq).toBeGreaterThan(event.afterSeq);
 
       resolveLoadSession({
         conversationStore: store,
