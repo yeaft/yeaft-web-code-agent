@@ -6,17 +6,6 @@ import { loadPersonas } from '../../../agent/yeaft/personas.js';
 import { render as renderDreamPrompt } from '../../../agent/yeaft/dream/prompts/index.js';
 import { DEFAULT_VPS } from '../../../agent/yeaft/vp/seed-defaults.js';
 
-const SEEDED_OMNI_PERSONA = `You are Omni Assistant / 全能助手, a cross-domain, execution-focused general AI partner.
-
-Language policy / 语言策略:
-- Prefer Chinese when the user writes in Chinese; prefer English when the user writes in English.
-- If the conversation is bilingual, mirror the user's latest language unless they ask otherwise.
-
-Core capabilities / 核心能力:
-- Cross-domain synthesis: handle writing, coding, product thinking, research, planning, analysis, learning, translation, troubleshooting, and creative work without forcing the user to pick a specialist first.
-- Strong execution: when a task needs action, clarify only the blocking unknowns, make a short plan, use available tools, produce the deliverable, and verify the result.`;
-
-
 function listMarkdownFiles(dir) {
   const out = [];
   for (const entry of readdirSync(dir)) {
@@ -38,17 +27,18 @@ function langSection(source, lang) {
 }
 
 function workerPrompt(language) {
+  const stockOmni = DEFAULT_VPS.find(vp => vp.vpId === 'omni');
   return buildWorkerPrompt({
     language,
     includeShape: true,
     toolNames: ['FileRead'],
     vpPersona: {
       vpId: 'omni',
-      displayName: 'Omni Assistant',
+      displayName: 'Omni',
       displayNameZh: '全能助手',
-      role: 'All-Purpose Assistant',
-      roleZh: '全能助手',
-      persona: SEEDED_OMNI_PERSONA,
+      role: 'Requirement and Flow Lead',
+      roleZh: '需求与流程负责人',
+      persona: stockOmni.persona,
     },
   });
 }
@@ -136,34 +126,68 @@ const DREAM_PROMPT_CASES = [
 ];
 
 describe('worker prompt language selection', () => {
-  it('does not use prompt-time legacy stock migration for old Omni bodies', () => {
-    const prompt = workerPrompt('zh-CN');
+  it('renders localized seeded Omni souls by the selected runtime language', () => {
+    const stockOmni = DEFAULT_VPS.find(vp => vp.vpId === 'omni');
+    expect(stockOmni.legacyPersonas).toEqual([]);
+    const zhPrompt = buildWorkerPrompt({
+      language: 'zh-CN',
+      includeShape: true,
+      toolNames: ['FileRead'],
+      vpPersona: {
+        vpId: 'omni',
+        displayName: 'Omni',
+        displayNameZh: '全能助手',
+        role: 'Requirement and Flow Lead',
+        roleZh: '需求与流程负责人',
+        persona: stockOmni.persona,
+      },
+    });
+    const enPrompt = buildWorkerPrompt({
+      language: 'en',
+      includeShape: false,
+      toolNames: ['FileRead'],
+      vpPersona: {
+        vpId: 'omni',
+        displayName: 'Omni',
+        displayNameZh: '全能助手',
+        role: 'Requirement and Flow Lead',
+        roleZh: '需求与流程负责人',
+        persona: stockOmni.persona,
+      },
+    });
 
-    expect(prompt).toContain('# 全能助手');
-    expect(prompt).not.toContain('# 全能助手 — 全能助手');
-    expect(prompt).toContain('## 灵魂');
-    expect(prompt).not.toContain('## Soul');
-    expect(prompt).toContain('You are Omni Assistant / 全能助手');
-    expect(prompt).toContain('Language policy / 语言策略');
-    expect(prompt).toContain('Core capabilities / 核心能力');
-    expect(prompt).not.toContain('你是 Omni。你始终看着整个会话的形状');
-    expect(prompt).toContain('## 任务回复');
-    expect(prompt).toContain('完成后只汇报改了什么、验证了什么、风险或下一步');
-    expect(prompt).not.toContain('### 人物特点');
-    expect(prompt).not.toContain('### Traits');
-    expect(prompt).not.toContain('VP soul');
-    expect(prompt).not.toContain('VP 灵魂');
-    expect(prompt).not.toContain('session member');
-    expect(prompt).not.toContain('Task Scope');
-    expect(prompt).not.toContain('Turn Scope');
-    expect(prompt).not.toContain('tool traces');
-    expect(prompt).not.toContain('inbound envelope');
-    expect(prompt).not.toContain('Prompt 结构');
-    expect(prompt).toContain('# 提示词结构（执行者）');
-    expect(prompt).toContain('会话成员的灵魂，以及用户、当前会话、当前会话成员');
-    expect(prompt).toContain('当前任务的摘要');
-    expect(prompt).toContain('工具调用轨迹');
-    expect(prompt).toContain('入站转交消息');
+    expect(zhPrompt).toContain('# 全能助手');
+    expect(zhPrompt).not.toContain('# 全能助手 — 全能助手');
+    expect(zhPrompt).toContain('## 灵魂');
+    expect(zhPrompt).not.toContain('## Soul');
+    expect(zhPrompt).toContain('你是 Omni。你始终看着整个会话的形状');
+    expect(zhPrompt).not.toContain('You are Omni. You keep the whole session in view');
+    expect(zhPrompt).toContain('## 任务回复');
+    expect(zhPrompt).toContain('完成后只汇报改了什么、验证了什么、风险或下一步');
+    expect(zhPrompt).not.toContain('You are Omni Assistant / 全能助手');
+    expect(zhPrompt).not.toContain('Language policy');
+    expect(zhPrompt).not.toContain('Core capabilities');
+    expect(zhPrompt).not.toContain('Prefer Chinese');
+    expect(zhPrompt).not.toContain('### 人物特点');
+    expect(zhPrompt).not.toContain('### Traits');
+    expect(zhPrompt).not.toContain('VP soul');
+    expect(zhPrompt).not.toContain('VP 灵魂');
+    expect(zhPrompt).not.toContain('session member');
+    expect(zhPrompt).not.toContain('Task Scope');
+    expect(zhPrompt).not.toContain('Turn Scope');
+    expect(zhPrompt).not.toContain('tool traces');
+    expect(zhPrompt).not.toContain('inbound envelope');
+    expect(zhPrompt).not.toContain('Prompt 结构');
+    expect(zhPrompt).toContain('# 提示词结构（执行者）');
+    expect(zhPrompt).toContain('会话成员的灵魂，以及用户、当前会话、当前会话成员');
+    expect(zhPrompt).toContain('当前任务的摘要');
+    expect(zhPrompt).toContain('工具调用轨迹');
+    expect(zhPrompt).toContain('入站转交消息');
+
+    expect(enPrompt).toContain('# Omni');
+    expect(enPrompt).toContain('## Soul');
+    expect(enPrompt).toContain('You are Omni. You keep the whole session in view');
+    expect(enPrompt).not.toContain('你是 Omni。你始终看着整个会话的形状');
   });
 
   it('does not render legacy stock fallback labels for English-only stock roles in Chinese', () => {

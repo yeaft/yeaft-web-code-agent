@@ -104,6 +104,7 @@ describe('DebugTrace file retention', () => {
     // The write itself is async (chained); flush() awaits it landing on disk.
     await trace.flush();
 
+    vi.advanceTimersByTime(0);
     let stored = readOnlyTraceFile('s-buffer');
     expect(stored.loops).toHaveLength(10);
 

@@ -40,8 +40,8 @@ if (typeof globalThis.Pinia.defineStore !== 'function') {
 
 const { default: SessionCreateModal } = await import('../../web/components/SessionCreateModal.js');
 
-const { seedAgentDefault, loadRestoreCandidates } = SessionCreateModal.methods;
-const { folderAggregates, agentSessions, agentSignature } = SessionCreateModal.computed;
+const { seedAgentDefault, loadRestoreCandidates, applyDefaultSelection } = SessionCreateModal.methods;
+const { folderAggregates, agentSessions, agentSignature, vpListSignature } = SessionCreateModal.computed;
 
 describe('SessionCreateModal — seedAgentDefault', () => {
   it('seeds form.agentId once agents hydrate (cold-load: empty at mount)', () => {
@@ -156,6 +156,61 @@ describe('SessionCreateModal — agentSignature watcher key (offline detection)'
     };
     seedAgentDefault.call(ctx); // what the watcher calls
     expect(ctx.form.agentId).toBe('laptop');
+  });
+});
+
+describe('SessionCreateModal — default VP selection', () => {
+  function mkVpCtx(vpList, extra = {}) {
+    return {
+      vpPickerTouched: false,
+      form: { vpIds: [], defaultVpId: null },
+      vpList,
+      ...extra,
+    };
+  }
+
+  it('preselects Omni as the roster and default VP when available', () => {
+    const ctx = mkVpCtx([
+      { vpId: 'linus' },
+      { vpId: 'omni' },
+      { vpId: 'martin' },
+    ]);
+    applyDefaultSelection.call(ctx);
+    expect(ctx.form.vpIds).toEqual(['omni']);
+    expect(ctx.form.defaultVpId).toBe('omni');
+  });
+
+  it('falls back to the first VP only when Omni is unavailable', () => {
+    const ctx = mkVpCtx([{ vpId: 'linus' }, { vpId: 'martin' }]);
+    applyDefaultSelection.call(ctx);
+    expect(ctx.form.vpIds).toEqual(['linus']);
+    expect(ctx.form.defaultVpId).toBe('linus');
+  });
+
+  it('repairs a stale pre-hydration selection to Omni when the target library changes', () => {
+    const ctx = mkVpCtx(
+      [{ vpId: 'alpha' }, { vpId: 'omni' }],
+      { form: { vpIds: ['linus'], defaultVpId: 'linus' } },
+    );
+    applyDefaultSelection.call(ctx);
+    expect(ctx.form.vpIds).toEqual(['omni']);
+    expect(ctx.form.defaultVpId).toBe('omni');
+  });
+
+  it('does not override a manually touched picker', () => {
+    const ctx = mkVpCtx(
+      [{ vpId: 'linus' }, { vpId: 'omni' }],
+      { vpPickerTouched: true, form: { vpIds: ['linus'], defaultVpId: 'linus' } },
+    );
+    applyDefaultSelection.call(ctx);
+    expect(ctx.form.vpIds).toEqual(['linus']);
+    expect(ctx.form.defaultVpId).toBe('linus');
+  });
+
+  it('uses VP identities for the watcher signature, so same-length agent libraries re-evaluate defaults', () => {
+    const before = vpListSignature.call({ vpList: [{ vpId: 'linus' }, { vpId: 'martin' }] });
+    const after = vpListSignature.call({ vpList: [{ vpId: 'alpha' }, { vpId: 'omni' }] });
+    expect(before).not.toBe(after);
   });
 });
 

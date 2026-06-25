@@ -91,7 +91,7 @@ describe('YeaftDebugPanel · token breakdown + timestamp', () => {
     expect(panel).toContain(`v-model="searchQuery"`);
     expect(panel).toContain(`$t('yeaft.debugSearchPlaceholder')`);
     expect(panel).toContain(`$t('yeaft.debugSearchHint')`);
-    expect(panel).toContain('search: this.searchQuery');
+    expect(panel).toContain('search,');
     expect(storeJs).toContain('searchPattern');
     expect(storeJs).toContain('payload.search = searchPattern');
     expect(storeJs).not.toContain('turnMatchesSearch');
@@ -195,12 +195,16 @@ describe('YeaftDebugPanel · request history loading model', () => {
   const storeJs = read('web/stores/chat.js');
   const bridge = read('agent/yeaft/web-bridge.js');
 
-  it('loads request indexes first, caps the request list to 5, and fetches details on expansion', () => {
-    expect(panel).toContain('const INITIAL_REQUEST_HISTORY_LIMIT = 5');
+  it('loads one request index first, uses a small search window, and fetches details on expansion', () => {
+    expect(panel).toContain('const INITIAL_REQUEST_HISTORY_LIMIT = 1');
+    expect(panel).toContain('const SEARCH_REQUEST_HISTORY_LIMIT = 5');
     expect(panel).toContain('indexOnly: true');
     expect(panel).toContain('detailTurnId: turnId');
-    expect(storeJs).toContain('const DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT = 5');
-    expect(read('web/stores/helpers/messageHandler.js')).toContain('const DEBUG_HISTORY_LIST_LIMIT = 5');
+    expect(storeJs).toContain('const DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT = 1');
+    expect(storeJs).toContain('const SEARCH_YEAFT_DEBUG_HISTORY_LIMIT = 5');
+    const handler = read('web/stores/helpers/messageHandler.js');
+    expect(handler).toContain('const DEBUG_HISTORY_DEFAULT_LIMIT = 1');
+    expect(handler).toContain('const DEBUG_HISTORY_SEARCH_LIMIT = 5');
     expect(storeJs).toContain('indexOnly = false, detailTurnId = null');
     expect(storeJs).toContain('payload.indexOnly = true');
     expect(storeJs).toContain('payload.detailTurnId = detailTurnId');

@@ -140,15 +140,16 @@ function resolveYeaftConversationIdForSession(state, sessionId = null) {
   return agentConversationId || state?.yeaftConversationId || null;
 }
 
-// Debug history is request-bounded on disk. The panel loads the newest
-// 5 requests globally by default and search results are clamped to the same
-// window so the debug channel cannot flood the WebSocket while the agent is
-// busy. A single request can legitimately run 100-200 loops, so the live
+// Debug history is request-bounded on disk. The panel loads only the newest
+// request globally by default; search can ask the agent-side index for a small
+// result window, and details are fetched one request at a time on expansion.
+// A single request can legitimately run 100-200 loops, so the live
 // in-memory loop cap must not be smaller than that or the panel will miss loops
 // while the request is still streaming. 1000 covers the expected 5-request
 // window while staying finite.
 const MAX_YEAFT_DEBUG_LOOPS = 1000;
-const DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT = 5;
+const DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT = 1;
+const SEARCH_YEAFT_DEBUG_HISTORY_LIMIT = 5;
 
 // PR feat-dream-debug-panel-full: per-scope ring buffer cap for dream
 // events. Bounds the yeaftDreamEvents map so long-running sessions
@@ -1336,10 +1337,11 @@ export const useChatStore = defineStore('chat', {
      */
     loadYeaftDebugHistory({ groupId, limit, dreamLimit, indexOnly = false, detailTurnId = null, search = undefined } = {}) {
       if (!this.currentAgent) return;
-      const rawLimit = Number.isFinite(limit) && limit > 0 ? limit : this.yeaftDebugHistoryLimit || DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT;
-      const requestedLimit = Math.max(1, Math.min(DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT, rawLimit));
       const searchPattern = typeof search === 'string' ? search.trim() : (this.yeaftDebugSearch || '').trim();
       const isDetailRequest = typeof detailTurnId === 'string' && detailTurnId;
+      const maxListLimit = searchPattern && !isDetailRequest ? SEARCH_YEAFT_DEBUG_HISTORY_LIMIT : DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT;
+      const rawLimit = Number.isFinite(limit) && limit > 0 ? limit : this.yeaftDebugHistoryLimit || maxListLimit;
+      const requestedLimit = Math.max(1, Math.min(maxListLimit, rawLimit));
       const requestKind = isDetailRequest ? 'detail' : 'list';
       const requestId = `dbg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
       const requestKey = JSON.stringify({
@@ -3245,7 +3247,7 @@ export const useChatStore = defineStore('chat', {
         this.yeaftDebugTurnsById = {};
         this.yeaftDebugTurnOrder = [];
         this.loadYeaftDebugHistory({
-          limit: DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT,
+          limit: this.yeaftDebugSearch.trim() ? SEARCH_YEAFT_DEBUG_HISTORY_LIMIT : DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT,
           dreamLimit: 5,
           indexOnly: true,
           search: this.yeaftDebugSearch,
