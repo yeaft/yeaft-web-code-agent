@@ -51,6 +51,7 @@ describe('terminal output normalization render wiring', () => {
     expect(taskLogBlock).not.toContain('border:');
     expect(yeaftCssSource).toContain('@keyframes yeaft-task-running-pulse');
     expect(yeaftCssSource).toContain('max-height: min(52vh, 520px);');
+    expect(yeaftCssSource).toContain('overscroll-behavior: contain;');
     expect(yeaftCssSource).not.toContain('.yeaft-vp-task-prompt-form');
     expect(variablesCssSource).toContain('.terminal-fg-green { color: var(--terminal-fg-green); }');
     expect(variablesCssSource).toContain('.terminal-bg-cyan { background-color: var(--terminal-bg-cyan); }');
