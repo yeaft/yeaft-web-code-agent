@@ -1449,6 +1449,7 @@ export default {
   'yeaft.sessionStatus.task.promptSend': 'Send',
   'yeaft.sessionStatus.task.promptSending': 'Sending…',
   'yeaft.sessionStatus.task.promptFailed': 'Failed to send prompt.',
+  'yeaft.sessionStatus.task.title': 'Task',
   'yeaft.sessionStatus.task.command': 'Command',
   'yeaft.sessionStatus.task.stop': 'Stop task',
   'yeaft.sessionStatus.task.stopping': 'Stopping…',
