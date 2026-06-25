@@ -1305,21 +1305,21 @@ describe('Engine', () => {
       }
 
       // Check debug trace recorded the turns
-      const stats = dbTrace.stats();
+      const stats = await dbTrace.stats();
       expect(stats.turnCount).toBe(2);
       expect(stats.toolCount).toBe(1);
 
       // Check turn details
-      const recent = dbTrace.queryRecent(10);
+      const recent = await dbTrace.queryRecent(10);
       expect(recent).toHaveLength(2);
 
       // Check tool details
-      const tools = dbTrace.queryTools({ name: 'search' });
+      const tools = await dbTrace.queryTools({ name: 'search' });
       expect(tools).toHaveLength(1);
       expect(tools[0].tool_name).toBe('search');
       expect(tools[0].tool_output).toBe('results');
 
-      dbTrace.close();
+      await dbTrace.close();
     });
   });
 
