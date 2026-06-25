@@ -212,6 +212,28 @@ describe('SessionCreateModal — default VP selection', () => {
     const after = vpListSignature.call({ vpList: [{ vpId: 'alpha' }, { vpId: 'omni' }] });
     expect(before).not.toBe(after);
   });
+
+  it('re-applies Omni immediately after async agent seeding when the VP list was already hydrated', () => {
+    const calls = [];
+    const ctx = {
+      form: { agentId: 'server', vpIds: [], defaultVpId: null, workDir: '' },
+      vpPickerTouched: false,
+      vpList: [{ vpId: 'linus' }, { vpId: 'omni' }],
+      scannedSessions: ['stale'],
+      restoreError: 'stale error',
+      subscribeVpsFor(agentId) { calls.push(['subscribe', agentId]); },
+      applyDefaultSelection,
+      loadRestoreCandidates() { calls.push(['scan']); },
+    };
+
+    SessionCreateModal.watch['form.agentId'].call(ctx, 'server', null);
+
+    expect(calls).toEqual([['subscribe', 'server']]);
+    expect(ctx.form.vpIds).toEqual(['omni']);
+    expect(ctx.form.defaultVpId).toBe('omni');
+    expect(ctx.scannedSessions).toEqual([]);
+    expect(ctx.restoreError).toBe('');
+  });
 });
 
 describe('SessionCreateModal — folder list scoped to selected agent', () => {
