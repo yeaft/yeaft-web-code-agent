@@ -363,12 +363,9 @@ export async function loadSession(options = {}) {
   }
 
   // ─── 6. Load skills ────────────────────────────────────
-  // Project tier root for skills + MCP project assets. Per-session/per-group
-  // workdirs override at tool-execution time via ToolContext.cwd; for the
-  // SYSTEM-PROMPT skill set and the project MCP servers we use the agent
-  // process cwd, the common case when an agent is launched inside a project
-  // the user wants project-tier assets for. Shared so skills (.claude/skills,
-  // .yeaft/skills) and MCP (.mcp.json) resolve from the same root.
+  // Project tier root for skills + MCP project assets. Per-session workDir
+  // overlays are loaded by web-bridge once it knows the selected Session meta;
+  // the base runtime still uses the agent process cwd for global/default status.
   const projectTierRoot = process.cwd();
 
   let skillManager;

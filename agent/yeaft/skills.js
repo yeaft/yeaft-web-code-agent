@@ -53,7 +53,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync, writeFileSync, unlinkSync, mkdirSync, statSync } from 'fs';
-import { join, basename, sep, dirname, resolve } from 'path';
+import { join, basename, sep, dirname, resolve, delimiter } from 'path';
 import { platform, homedir } from 'os';
 import { fileURLToPath } from 'url';
 
@@ -758,19 +758,23 @@ export function createSkillManager(yeaftDir, workDir) {
   const claudeUserDir = home ? join(home, '.claude', 'skills') : null;
   const codexUserDir = home ? join(home, '.codex', 'skills') : null;
   const userDir = join(yeaftDir, 'skills');
-  const claudeProjectDir = workDir ? join(workDir, '.claude', 'skills') : null;
-  const codexProjectDir = workDir ? join(workDir, '.agents', 'skills') : null;
-  const projectDir = workDir ? join(workDir, '.yeaft', 'skills') : null;
+  const projectRoots = [...new Set(String(workDir || '')
+    .split(delimiter)
+    .map(p => p.trim())
+    .filter(Boolean))];
+  const claudeProjectDirs = projectRoots.map(root => join(root, '.claude', 'skills'));
+  const codexProjectDirs = projectRoots.map(root => join(root, '.agents', 'skills'));
+  const projectDirs = projectRoots.map(root => join(root, '.yeaft', 'skills'));
 
-  const dirs = [bundled, claudeUserDir, codexUserDir, userDir, claudeProjectDir, codexProjectDir, projectDir].filter(Boolean);
+  const dirs = [bundled, claudeUserDir, codexUserDir, userDir, ...claudeProjectDirs, ...codexProjectDirs, ...projectDirs].filter(Boolean);
   const tierByDir = {};
   if (bundled) tierByDir[bundled] = 'bundled';
   if (claudeUserDir) tierByDir[claudeUserDir] = 'user-claude';
   if (codexUserDir) tierByDir[codexUserDir] = 'user-codex';
   tierByDir[userDir] = 'user';
-  if (claudeProjectDir) tierByDir[claudeProjectDir] = 'project-claude';
-  if (codexProjectDir) tierByDir[codexProjectDir] = 'project-codex';
-  if (projectDir) tierByDir[projectDir] = 'project';
+  for (const dir of claudeProjectDirs) tierByDir[dir] = 'project-claude';
+  for (const dir of codexProjectDirs) tierByDir[dir] = 'project-codex';
+  for (const dir of projectDirs) tierByDir[dir] = 'project';
 
   const ignorePathsByDir = {};
   if (claudeUserDir && bundled && pathIsInside(bundled, claudeUserDir)) {

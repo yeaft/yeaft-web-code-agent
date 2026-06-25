@@ -704,6 +704,22 @@ export class Engine {
   }
 
   /**
+   * Hot-swap runtime managers for a project-bound Session. The ToolRegistry is
+   * shared at the bridge/session layer; these references only decide which
+   * skills are injected and which MCP manager flattened tools call through.
+   *
+   * @param {{ skillManager?: import('./skills.js').SkillManager, mcpManager?: import('./mcp.js').MCPManager }} managers
+   */
+  setRuntimeManagers(managers = {}) {
+    if (Object.prototype.hasOwnProperty.call(managers, 'skillManager')) {
+      this.#skillManager = managers.skillManager || null;
+    }
+    if (Object.prototype.hasOwnProperty.call(managers, 'mcpManager')) {
+      this.#mcpManager = managers.mcpManager || null;
+    }
+  }
+
+  /**
    * Unregister a tool.
    *
    * @param {string} name
