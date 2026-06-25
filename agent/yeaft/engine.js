@@ -34,6 +34,7 @@ import { readSummary as readScopeSummary } from './memory/store.js';
 import { runAdjust } from './memory/adjust.js';
 import { isVpSeedBackfillStub } from './memory/seed-backfill.js';
 import { runStopHooks } from './stop-hooks.js';
+import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 // Default thread marker for legacy / non-group flows. Group VP runtime may
 // pass a real threadId per (sessionId, vpId, threadId) engine instance.
 const MAIN_THREAD_ID = 'main';
@@ -95,7 +96,10 @@ const RETRY_DEFAULTS = Object.freeze({
   jitterRatio: 0.25,
 });
 
-const EXPLICIT_SKILL_COMMAND_RE = /^\/skill:([^\s]+)(\s+|$)/;
+// Accept the Yeaft-native alias and the Claude Code plugin-style command.
+// Autocomplete prefers /yeaft-skills:<name>; /skill:<name> remains supported
+// for older clients and typed history.
+const EXPLICIT_SKILL_COMMAND_RE = /^\/(?:skill|yeaft-skills):([^\s]+)(\s+|$)/;
 
 function parseExplicitSkillCommand(prompt) {
   if (typeof prompt !== 'string') {
@@ -700,6 +704,22 @@ export class Engine {
   setLanguage(lang) {
     if (typeof lang !== 'string' || !lang) return;
     this.#config.language = lang;
+  }
+
+  /**
+   * Hot-swap runtime managers for a project-bound Session. The ToolRegistry is
+   * shared at the bridge/session layer; these references only decide which
+   * skills are injected and which MCP manager flattened tools call through.
+   *
+   * @param {{ skillManager?: import('./skills.js').SkillManager, mcpManager?: import('./mcp.js').MCPManager }} managers
+   */
+  setRuntimeManagers(managers = {}) {
+    if (Object.prototype.hasOwnProperty.call(managers, 'skillManager')) {
+      this.#skillManager = managers.skillManager || null;
+    }
+    if (Object.prototype.hasOwnProperty.call(managers, 'mcpManager')) {
+      this.#mcpManager = managers.mcpManager || null;
+    }
   }
 
   /**
@@ -1720,6 +1740,22 @@ export class Engine {
     const runtimeThreadId = (typeof threadId === 'string' && threadId.trim())
       ? threadId.trim()
       : MAIN_THREAD_ID;
+    const perfTraceId = typeof inboundEnvelope?._perfTraceId === 'string' && inboundEnvelope._perfTraceId.trim()
+      ? inboundEnvelope._perfTraceId.trim()
+      : (typeof inboundEnvelope?.perfTraceId === 'string' && inboundEnvelope.perfTraceId.trim() ? inboundEnvelope.perfTraceId.trim() : null);
+    const traceRequest = (phase, extra = {}) => {
+      if (!perfTraceId) return;
+      recordAgentPerfTrace(this.#config, {
+        traceId: perfTraceId,
+        phase,
+        sessionId: runtimeSessionId || null,
+        vpId: this.#vpId || senderVpId || null,
+        turnId: vpTurnId || null,
+        threadId: runtimeThreadId,
+        messageType: 'llm_request',
+        ...extra,
+      });
+    };
 
     // ─── Pre-query: FTS5 Memory Recall + AMS snapshot ─────
     // Memory has a SINGLE render outlet now (DESIGN-PROMPT §3 ③):
@@ -2088,6 +2124,16 @@ export class Engine {
       });
 
       const startTime = Date.now();
+      const requestPerfStart = perfNowMs();
+      let firstEventTraced = false;
+      traceRequest('llm.request_start', {
+        detail: {
+          model: currentModel,
+          loop: turnNumber,
+          messageCount: conversationMessages.length,
+          toolDefCount: toolDefs.length,
+        },
+      });
       let ttfbMs = null;  // Time to first token
       let responseText = '';
       const toolCalls = [];
@@ -2288,6 +2334,13 @@ export class Engine {
           if (signal?.aborted) {
             throw new LLMAbortError();
           }
+          if (!firstEventTraced) {
+            firstEventTraced = true;
+            traceRequest('llm.first_event', {
+              durationMs: perfNowMs() - requestPerfStart,
+              detail: { eventType: event.type, model: currentModel },
+            });
+          }
           switch (event.type) {
             case 'text_delta':
               if (ttfbMs === null) ttfbMs = Date.now() - startTime;
@@ -2360,6 +2413,16 @@ export class Engine {
             }
           }
         }
+        traceRequest('llm.request_complete', {
+          durationMs: perfNowMs() - requestPerfStart,
+          ok: true,
+          detail: {
+            model: currentModel,
+            stopReason,
+            inputTokens: totalUsage.inputTokens,
+            outputTokens: totalUsage.outputTokens,
+          },
+        });
         // Stream completed without throwing — reset the retry counter so
         // the next turn starts with a clean budget. In-band adapter errors
         // are converted to throws above so they share the real error path.
@@ -2402,6 +2465,16 @@ export class Engine {
           || err?.name === 'LLMAbortError'
           || (signal?.aborted && /abort/i.test(err?.message || ''));
         if (earlyIsAbort || signal?.aborted) {
+          traceRequest('llm.request_abort', {
+            durationMs: perfNowMs() - requestPerfStart,
+            ok: false,
+            detail: {
+              model: currentModel,
+              abortReason: this.#abortReason || 'external',
+              errorName: err?.name || null,
+              signalAborted: !!signal?.aborted,
+            },
+          });
           endAttemptTrace('aborted');
           yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber, threadId };
           yield { type: 'turn_end', turnNumber, stopReason: 'aborted', threadId };
@@ -2417,6 +2490,18 @@ export class Engine {
             continue;
           }
         }
+
+        traceRequest('llm.request_error', {
+          durationMs: perfNowMs() - requestPerfStart,
+          ok: false,
+          detail: {
+            model: currentModel,
+            errorName: err?.name || null,
+            statusCode: err?.statusCode ?? null,
+            retryable: err instanceof LLMRateLimitError || err instanceof LLMServerError,
+            message: String(err?.message || '').slice(0, 200),
+          },
+        });
 
         const earlyIsRateLimit = err instanceof LLMRateLimitError;
         const earlyIsTransient = err instanceof LLMServerError;

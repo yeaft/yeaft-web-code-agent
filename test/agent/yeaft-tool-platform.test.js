@@ -109,9 +109,11 @@ describe('Yeaft tool runtime platform compatibility', () => {
     const enter = readFileSync(join(repoRoot, 'agent/yeaft/tools/enter-worktree.js'), 'utf8');
     const exit = readFileSync(join(repoRoot, 'agent/yeaft/tools/exit-worktree.js'), 'utf8');
 
-    expect(enter).toContain("execFileSync('git', ['rev-parse', '--git-dir']");
-    expect(enter).toContain("execFileSync('git', ['worktree', 'add'");
-    expect(exit).toContain("execFileSync('git', ['worktree', 'remove'");
+    expect(enter).toContain('windowsHide: true');
+    expect(exit).toContain('windowsHide: true');
+    expect(enter).toContain("gitExecFileSync(['rev-parse', '--git-dir']");
+    expect(enter).toContain("gitExecFileSync(['worktree', 'add'");
+    expect(exit).toContain("gitExecFileSync(['worktree', 'remove'");
     expect(enter).not.toContain('git worktree add -b');
     expect(exit).not.toContain('git worktree remove "');
   });

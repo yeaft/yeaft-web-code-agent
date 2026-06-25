@@ -7,7 +7,11 @@ const sendToWebClient = vi.fn(async (client, msg) => {
 vi.mock('../../server/ws-utils.js', () => ({
   sendToWebClient,
   broadcastAgentList: vi.fn(),
-  forwardToClients: vi.fn(),
+  forwardToClients: vi.fn(async (_agentId, _conversationId, msg) => {
+    for (const [, client] of webClients) {
+      if (client.authenticated) await sendToWebClient(client, msg);
+    }
+  }),
 }));
 
 vi.mock('../../server/database.js', () => ({
@@ -57,6 +61,32 @@ describe('Yeaft Session output relay aliases', () => {
       vpId: 'vp-1',
       data,
       event: undefined,
+    }]);
+  });
+
+  it('stamps agentId on per-conversation slash command updates', async () => {
+    CONFIG.skipAuth = false;
+    webClients.set('owner-client', {
+      authenticated: true,
+      userId: 'owner-1',
+      sent: [],
+    });
+    const agent = { ownerId: 'owner-1', slashCommandDescriptions: {} };
+
+    await handleAgentOutput('agent-1', agent, {
+      type: 'slash_commands_update',
+      conversationId: 'yeaft-1',
+      slashCommands: ['yeaft-skills:code-review'],
+      slashCommandDescriptions: { 'yeaft-skills:code-review': 'Code review' },
+    });
+
+    expect(agent.slashCommands).toEqual(['yeaft-skills:code-review']);
+    expect(webClients.get('owner-client').sent).toEqual([{
+      type: 'slash_commands_update',
+      agentId: 'agent-1',
+      conversationId: 'yeaft-1',
+      slashCommands: ['yeaft-skills:code-review'],
+      slashCommandDescriptions: { 'yeaft-skills:code-review': 'Code review' },
     }]);
   });
 });

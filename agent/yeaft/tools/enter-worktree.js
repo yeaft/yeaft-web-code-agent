@@ -14,6 +14,12 @@ import { existsSync, mkdirSync } from 'fs';
 import { join, resolve } from 'path';
 import { randomUUID } from 'crypto';
 
+const HIDDEN_PROCESS_OPTIONS = { windowsHide: true };
+
+function gitExecFileSync(args, options = {}) {
+  return execFileSync('git', args, { ...options, ...HIDDEN_PROCESS_OPTIONS });
+}
+
 export default defineTool({
   name: 'EnterWorktree',
   description: {
@@ -61,7 +67,7 @@ Worktree 创建在 .yeaft/worktrees/ 中，基于 HEAD 创建新分支。返回 
 
     // Verify we're in a git repo
     try {
-      execFileSync('git', ['rev-parse', '--git-dir'], { cwd, stdio: 'pipe' });
+      gitExecFileSync(['rev-parse', '--git-dir'], { cwd, stdio: 'pipe' });
     } catch {
       return JSON.stringify({ error: 'Not in a git repository' });
     }
@@ -93,7 +99,7 @@ Worktree 创建在 .yeaft/worktrees/ 中，基于 HEAD 创建新分支。返回 
     try {
       // Create worktree with new branch. Use execFileSync args instead of
       // shell quoting so Windows drive letters and spaces in paths survive.
-      execFileSync('git', ['worktree', 'add', '-b', branchName, worktreeDir, baseRef], { cwd, stdio: 'pipe' });
+      gitExecFileSync(['worktree', 'add', '-b', branchName, worktreeDir, baseRef], { cwd, stdio: 'pipe' });
 
       return JSON.stringify({
         success: true,

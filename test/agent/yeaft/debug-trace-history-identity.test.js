@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -23,22 +23,22 @@ function openTrace() {
   return trace;
 }
 
-afterEach(() => {
-  try { trace?.close(); } catch { /* ignore */ }
+afterEach(async () => {
+  try { await trace?.close(); } catch { /* ignore */ }
   trace = null;
   cleanup(dbPath);
   dbPath = null;
 });
 
 describe('DebugTrace.fetchRecentDebugHistory identity', () => {
-  it('keeps healthy multi-loop turns grouped by trace id', () => {
+  it('keeps healthy multi-loop turns grouped by trace id', async () => {
     const t = openTrace();
     const first = t.startTurn({ traceId: 'query-1', turnNumber: 1, sessionId: 's1', userPrompt: 'do work' });
     t.endTurn(first, { responseText: 'tool please', usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 } });
     const second = t.startTurn({ traceId: 'query-1', turnNumber: 2, sessionId: 's1', userPrompt: 'do work' });
     t.endTurn(second, { responseText: 'done', usage: { inputTokens: 11, outputTokens: 3, totalTokens: 14 } });
 
-    const history = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, sessionId: 's1' });
+    const history = await t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, sessionId: 's1' });
 
     expect(history.turns).toHaveLength(1);
     expect(history.turns[0].turnId).toBe('query-1');
@@ -47,7 +47,7 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
     expect(history.loops.map((loop) => loop.loopNumber)).toEqual([1, 2]);
   });
 
-  it('index-only history lists requests without shipping loop detail, and detail fetch returns every loop', () => {
+  it('index-only history lists requests without shipping loop detail, and detail fetch returns every loop', async () => {
     const t = openTrace();
     for (let i = 1; i <= 60; i++) {
       const row = t.startTurn({ traceId: 'long-request', turnNumber: i, sessionId: 's1', userPrompt: 'long work' });
@@ -56,12 +56,12 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
     const other = t.startTurn({ traceId: 'other-request', turnNumber: 1, sessionId: 's1', userPrompt: 'other work' });
     t.endTurn(other, { responseText: 'other', usage: { inputTokens: 3, outputTokens: 1, totalTokens: 4 } });
 
-    const index = t.fetchRecentDebugHistory({ limit: 1, dreamLimit: 0, sessionId: 's1', indexOnly: true });
+    const index = await t.fetchRecentDebugHistory({ limit: 1, dreamLimit: 0, sessionId: 's1', indexOnly: true });
     expect(index.loops).toHaveLength(0);
     expect(index.turns.map(turn => turn.turnId)).toEqual(['other-request']);
     expect(index.hasMore).toBe(true);
 
-    const fullIndex = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, sessionId: 's1', indexOnly: true });
+    const fullIndex = await t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, sessionId: 's1', indexOnly: true });
     expect(fullIndex.turns.map(turn => turn.turnId)).toEqual(['long-request', 'other-request']);
     expect(fullIndex.turns.find(turn => turn.turnId === 'long-request')).toMatchObject({
       loopCount: 60,
@@ -69,14 +69,14 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
       userPrompt: 'long work',
     });
 
-    const detail = t.fetchRecentDebugHistory({ limit: 1, dreamLimit: 0, sessionId: 's1', detailTurnId: 'long-request' });
+    const detail = await t.fetchRecentDebugHistory({ limit: 1, dreamLimit: 0, sessionId: 's1', detailTurnId: 'long-request' });
     expect(detail.turns).toHaveLength(1);
     expect(detail.turns[0]).toMatchObject({ turnId: 'long-request', loopCount: 60, detailsLoaded: true });
     expect(detail.loops).toHaveLength(60);
     expect(detail.loops.map(loop => loop.loopNumber)).toEqual(Array.from({ length: 60 }, (_, i) => i + 1));
   });
 
-  it('splits legacy duplicate Loop 1 rows so separate requests do not share stale assistant text', () => {
+  it('splits legacy duplicate Loop 1 rows so separate requests do not share stale assistant text', async () => {
     const t = openTrace();
     const first = t.startTurn({ traceId: 'engine-instance-legacy', turnNumber: 1, sessionId: 's1', userPrompt: 'old request' });
     t.logTool(first, { toolName: 'old-tool', toolCallId: 'old-call', toolOutput: 'old tool output', durationMs: 12 });
@@ -85,7 +85,7 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
     t.logTool(second, { toolName: 'new-tool', toolCallId: 'new-call', toolOutput: 'new tool output', durationMs: 34 });
     t.endTurn(second, { responseText: 'new assistant text', usage: { inputTokens: 6, outputTokens: 2, totalTokens: 8 } });
 
-    const history = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, sessionId: 's1' });
+    const history = await t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, sessionId: 's1' });
 
     expect(history.turns).toHaveLength(2);
     expect(new Set(history.turns.map((turn) => turn.turnId)).size).toBe(2);
@@ -105,9 +105,9 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
       expect(turn.tools[0].toolOutput).toBe(`${expectedPrefix} tool output`);
     }
 
-    const index = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, sessionId: 's1', indexOnly: true });
+    const index = await t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, sessionId: 's1', indexOnly: true });
     for (const indexedTurn of index.turns) {
-      const detail = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, sessionId: 's1', detailTurnId: indexedTurn.turnId });
+      const detail = await t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, sessionId: 's1', detailTurnId: indexedTurn.turnId });
       expect(detail.turns).toHaveLength(1);
       expect(detail.turns[0].turnId).toBe(indexedTurn.turnId);
       expect(detail.turns[0].userPrompt).toBe(indexedTurn.userPrompt);
@@ -115,7 +115,7 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
     }
   });
 
-  it('attaches later loops to the newest split request when a trace id is reused', () => {
+  it('attaches later loops to the newest split request when a trace id is reused', async () => {
     const t = openTrace();
     const oldFirst = t.startTurn({ traceId: 'reused-trace', turnNumber: 1, sessionId: 's1', userPrompt: 'old request' });
     t.endTurn(oldFirst, { responseText: 'old loop 1', messages: [{ role: 'user', content: 'old request' }] });
@@ -131,37 +131,17 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
       ],
     });
 
-    const index = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, sessionId: 's1', indexOnly: true });
+    const index = await t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, sessionId: 's1', indexOnly: true });
     const oldTurn = index.turns.find(turn => turn.userPrompt === 'old request');
     const newTurn = index.turns.find(turn => turn.userPrompt === 'new request');
     expect(oldTurn).toMatchObject({ loopCount: 1 });
     expect(newTurn).toMatchObject({ loopCount: 2 });
 
-    const newDetail = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, sessionId: 's1', detailTurnId: newTurn.turnId });
+    const newDetail = await t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, sessionId: 's1', detailTurnId: newTurn.turnId });
     expect(newDetail.loops.map(loop => loop.response)).toEqual(['new loop 1', 'new loop 2']);
   });
 
-  it('maintains a shared debug index for lightweight search across sessions', () => {
-    const t = openTrace();
-    const alpha = t.startTurn({ traceId: 'indexed-alpha', turnNumber: 1, sessionId: 's1', vpId: 'linus', userPrompt: 'fix debug panel' });
-    t.endTurn(alpha, { responseText: 'done', toolCalls: [{ name: 'Bash', input: { command: 'npm test' } }] });
-    const beta = t.startTurn({ traceId: 'indexed-beta', turnNumber: 1, sessionId: 's2', vpId: 'martin', userPrompt: 'review release flow' });
-    t.endTurn(beta, { responseText: 'approved' });
-    t.close();
-
-    const indexFile = join(`${dbPath}.files`, 'debug', 'index.json');
-    expect(existsSync(indexFile)).toBe(true);
-    const index = JSON.parse(readFileSync(indexFile, 'utf8'));
-    expect(index.entries.map(entry => entry.requestId)).toEqual(['indexed-alpha', 'indexed-beta']);
-    expect(index.entries[0].searchDocument).toContain('fix debug panel');
-
-    const global = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, indexOnly: true, search: 'release\\s+flow' });
-    expect(global.turns).toHaveLength(1);
-    expect(global.turns[0]).toMatchObject({ turnId: 'indexed-beta', sessionId: 's2', detailsLoaded: false });
-    expect(global.loops).toHaveLength(0);
-  });
-
-  it('searches recent debug history with a regex across sessions', () => {
+  it('searches recent debug history with a regex across sessions', async () => {
     const t = openTrace();
     const alpha = t.startTurn({ traceId: 'alpha-request', turnNumber: 1, sessionId: 's1', vpId: 'linus', userPrompt: 'fix debug panel' });
     t.endTurn(alpha, {
@@ -176,23 +156,23 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
       rawRequest: { url: 'https://llm.example/v1/responses', body: { model: 'm' } },
     });
 
-    const global = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, indexOnly: true, search: 'release\\s+flow' });
+    const global = await t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, indexOnly: true, search: 'release\\s+flow' });
     expect(global.turns).toHaveLength(1);
     expect(global.turns[0]).toMatchObject({ turnId: 'beta-request', sessionId: 's2' });
 
-    const slashForm = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, indexOnly: true, search: '/debug panel/i' });
+    const slashForm = await t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, indexOnly: true, search: '/debug panel/i' });
     expect(slashForm.turns).toHaveLength(1);
     expect(slashForm.turns[0]).toMatchObject({ turnId: 'alpha-request', sessionId: 's1' });
   });
 
-  it('caps search result history to the newest 5 matching requests', () => {
+  it('caps search result history to the newest 5 matching requests', async () => {
     const t = openTrace();
     for (let i = 0; i < 8; i++) {
       const row = t.startTurn({ traceId: `search-match-${i}`, turnNumber: 1, sessionId: 's1', userPrompt: `debug overflow match ${i}` });
       t.endTurn(row, { responseText: 'done' });
     }
 
-    const results = t.fetchRecentDebugHistory({ limit: 999, dreamLimit: 0, indexOnly: true, search: 'debug overflow match' });
+    const results = await t.fetchRecentDebugHistory({ limit: 999, dreamLimit: 0, indexOnly: true, search: 'debug overflow match' });
 
     expect(results.turns).toHaveLength(5);
     expect(results.limit).toBe(5);
@@ -200,77 +180,18 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
     expect(results.turns.map(turn => turn.turnId)).toEqual(['search-match-3', 'search-match-4', 'search-match-5', 'search-match-6', 'search-match-7']);
   });
 
-  it('reports invalid debug history regexes instead of silently falling back', () => {
+  it('reports invalid debug history regexes instead of silently falling back', async () => {
     const t = openTrace();
     const row = t.startTurn({ traceId: 'bad-regex-check', turnNumber: 1, sessionId: 's1', userPrompt: 'work' });
     t.endTurn(row, { responseText: 'done' });
 
-    expect(() => t.fetchRecentDebugHistory({ search: '[' })).toThrow(/Invalid regular expression/);
-    expect(() => t.fetchRecentDebugHistory({ search: '/x/q' })).toThrow(/Invalid debug search regex flag: q/);
-    expect(() => t.fetchRecentDebugHistory({ search: '(a+)+$' })).toThrow(/unsafe quantified group/);
-    expect(() => t.fetchRecentDebugHistory({ search: '(a|aa)+$' })).toThrow(/unsafe quantified group/);
+    await expect(t.fetchRecentDebugHistory({ search: '[' })).rejects.toThrow(/Invalid regular expression/);
+    await expect(t.fetchRecentDebugHistory({ search: '/x/q' })).rejects.toThrow(/Invalid debug search regex flag: q/);
+    await expect(t.fetchRecentDebugHistory({ search: '(a+)+$' })).rejects.toThrow(/unsafe quantified group/);
+    await expect(t.fetchRecentDebugHistory({ search: '(a|aa)+$' })).rejects.toThrow(/unsafe quantified group/);
   });
 
-  it('rebuilds the debug index from existing trace files when the index is missing', () => {
-    const t = openTrace();
-    const row = t.startTurn({ traceId: 'rebuild-me', turnNumber: 1, sessionId: 's1', userPrompt: 'rebuild index needle' });
-    t.endTurn(row, { responseText: 'done' });
-    t.close();
-
-    const indexFile = join(`${dbPath}.files`, 'debug', 'index.json');
-    rmSync(indexFile, { force: true });
-    expect(existsSync(indexFile)).toBe(false);
-
-    const result = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, indexOnly: true, search: 'rebuild index needle' });
-    expect(result.turns).toHaveLength(1);
-    expect(result.turns[0].turnId).toBe('rebuild-me');
-    expect(existsSync(indexFile)).toBe(true);
-  });
-
-  it('merges trace files into a non-empty partial debug index', () => {
-    const t = openTrace();
-    const oldRow = t.startTurn({ traceId: 'old-trace', turnNumber: 1, sessionId: 's1', userPrompt: 'old partial index needle' });
-    t.endTurn(oldRow, { responseText: 'old done' });
-    const newRow = t.startTurn({ traceId: 'new-trace', turnNumber: 1, sessionId: 's1', userPrompt: 'new indexed row' });
-    t.endTurn(newRow, { responseText: 'new done' });
-    t.close();
-
-    const indexFile = join(`${dbPath}.files`, 'debug', 'index.json');
-    const currentIndex = JSON.parse(readFileSync(indexFile, 'utf8'));
-    writeFileSync(indexFile, JSON.stringify({ ...currentIndex, entries: currentIndex.entries.filter(entry => entry.requestId === 'new-trace') }), 'utf8');
-
-    const oldResult = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, indexOnly: true, search: 'old partial index needle' });
-    expect(oldResult.turns.map(turn => turn.turnId)).toEqual(['old-trace']);
-
-    const repairedIndex = JSON.parse(readFileSync(indexFile, 'utf8'));
-    expect(repairedIndex.entries.map(entry => entry.requestId)).toEqual(['old-trace', 'new-trace']);
-  });
-
-  it('keeps pending debug index entries when an index write fails and retries later', () => {
-    const t = openTrace();
-    const first = t.startTurn({ traceId: 'write-fail-first', turnNumber: 1, sessionId: 's1', userPrompt: 'first pending write' });
-    t.endTurn(first, { responseText: 'done' });
-    t.close();
-
-    const indexFile = join(`${dbPath}.files`, 'debug', 'index.json');
-    rmSync(indexFile, { force: true });
-    mkdirSync(indexFile, { recursive: true });
-
-    const second = t.startTurn({ traceId: 'write-fail-second', turnNumber: 1, sessionId: 's1', userPrompt: 'second pending write' });
-    t.endTurn(second, { responseText: 'done' });
-    t.close();
-    expect(existsSync(join(indexFile, 'trace.json'))).toBe(false);
-
-    rmSync(indexFile, { recursive: true, force: true });
-    const third = t.startTurn({ traceId: 'write-fail-third', turnNumber: 1, sessionId: 's1', userPrompt: 'third pending write' });
-    t.endTurn(third, { responseText: 'done' });
-    t.close();
-
-    const repairedIndex = JSON.parse(readFileSync(indexFile, 'utf8'));
-    expect(repairedIndex.entries.map(entry => entry.requestId)).toEqual(['write-fail-first', 'write-fail-second', 'write-fail-third']);
-  });
-
-  it('does not run regex search against full raw request JSON', () => {
+  it('does not run regex search against full raw request JSON', async () => {
     const t = openTrace();
     const row = t.startTurn({ traceId: 'raw-only-request', turnNumber: 1, sessionId: 's1', userPrompt: 'ordinary prompt' });
     t.endTurn(row, {
@@ -281,15 +202,15 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
       },
     });
 
-    const byRawPayload = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, indexOnly: true, search: 'needle-only-in-raw-request' });
+    const byRawPayload = await t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, indexOnly: true, search: 'needle-only-in-raw-request' });
     expect(byRawPayload.turns).toHaveLength(0);
 
-    const bySummary = t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, indexOnly: true, search: 'ordinary prompt' });
+    const bySummary = await t.fetchRecentDebugHistory({ limit: 10, dreamLimit: 0, indexOnly: true, search: 'ordinary prompt' });
     expect(bySummary.turns).toHaveLength(1);
     expect(bySummary.turns[0]).toMatchObject({ turnId: 'raw-only-request' });
   });
 
-  it('stores cumulative rawRequest as base plus structural message deltas instead of repeating full requests', () => {
+  it('stores cumulative rawRequest as base plus structural message deltas instead of repeating full requests', async () => {
     const t = openTrace();
     const messages = [];
     for (let i = 1; i <= 20; i++) {
@@ -311,7 +232,7 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
         },
       });
     }
-    t.close();
+    await t.close();
 
     const requestsDir = join(`${dbPath}.files`, 'sessions', 's1', 'debug', 'requests');
     const requestDirs = readdirSync(requestsDir);

@@ -15,6 +15,7 @@ import { registerProxyRoutes, handleProxyWebSocketUpgrade } from './proxy.js';
 import { handleAgentConnection } from './ws-agent.js';
 import { handleWebConnection } from './ws-client.js';
 import { sendToWebClient } from './ws-utils.js';
+import { markAgentHeartbeatPing, shouldTerminateAgentHeartbeat } from './heartbeat-policy.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -64,13 +65,12 @@ const CLIENT_HEARTBEAT_INTERVAL = 90000;
 
 setInterval(() => {
   for (const [agentId, agent] of agents) {
-    if (agent.isAlive === false) {
+    if (shouldTerminateAgentHeartbeat(agent)) {
       console.log(`[Heartbeat] Agent ${agentId} not responding, terminating`);
       agent.ws.terminate();
       continue;
     }
-    agent.isAlive = false;
-    agent.pingSentAt = Date.now();
+    markAgentHeartbeatPing(agent);
     agent.ws.ping();
   }
 }, AGENT_HEARTBEAT_INTERVAL);

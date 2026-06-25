@@ -45,6 +45,7 @@ function runCommand(command, { cwd, timeout, signal, runtimePlatform }) {
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: !platform.isWindows,
+      windowsHide: true,
     });
 
     let stdout = '';

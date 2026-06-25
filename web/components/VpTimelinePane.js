@@ -299,7 +299,12 @@ export default {
             :class="{ 'is-expanded': expandedTasks[task.id], 'is-terminal': task.status !== 'running', 'is-running': task.status === 'running' }"
           >
             <div class="yeaft-vp-task-summary">
-              <button type="button" class="yeaft-vp-task-toggle" @click="toggleTaskExpanded(task.id)">
+              <button
+                type="button"
+                class="yeaft-vp-task-toggle"
+                :title="taskSummaryTitle(task)"
+                @click="toggleTaskExpanded(task.id)"
+              >
                 <span class="yeaft-vp-task-dot" aria-hidden="true"></span>
                 <span class="yeaft-vp-task-main">
                   <span class="yeaft-vp-task-title">{{ task.title || task.id }}</span>
@@ -441,6 +446,14 @@ export default {
       const command = task?.runtime?.command;
       return typeof command === 'string' ? command.trim() : '';
     };
+    const taskSummaryTitle = (task) => {
+      const lines = [];
+      const title = task?.title || task?.id || '';
+      const command = shellTaskCommand(task);
+      if (title) lines.push(`${$t('yeaft.sessionStatus.task.title')}: ${title}`);
+      if (command) lines.push(`${$t('yeaft.sessionStatus.task.command')}: ${command}`);
+      return lines.join('\n');
+    };
     const taskStopKey = (task) => `${task?.sessionId || ''}::${task?.id || ''}`;
     const isTaskCancellable = (task) => task?.kind === 'shell' && task?.status === 'running' && !!task?.runtime?.pid;
     const isTaskStopping = (task) => !!(task?.id && props.stoppingTasksById?.[taskStopKey(task)]);
@@ -492,6 +505,7 @@ export default {
       formatTaskTime,
       taskKindLabel,
       shellTaskCommand,
+      taskSummaryTitle,
       isTaskCancellable,
       isTaskStopping,
       taskDetailLines,

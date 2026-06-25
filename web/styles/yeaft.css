@@ -4300,6 +4300,7 @@
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.5;
+  min-height: 0;
 }
 
 .yeaft-vp-task-sub-agent-panel,
@@ -4391,11 +4392,17 @@
 .yeaft-vp-task-log,
 .yeaft-vp-task-log-empty {
   max-height: min(52vh, 520px);
-  overflow: auto;
   margin: 0;
   padding: 0;
   background: transparent;
   color: var(--text-secondary);
+}
+
+.yeaft-vp-task-log {
+  display: block;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
 }
 
 .yeaft-vp-task-log {

@@ -30,7 +30,7 @@ const BINARY_EXTS = new Set([
  */
 function hasRipgrep() {
   return new Promise((resolve) => {
-    const proc = spawn('rg', ['--version'], { stdio: 'pipe' });
+    const proc = spawn('rg', ['--version'], { stdio: 'pipe', windowsHide: true });
     proc.on('close', (code) => resolve(code === 0));
     proc.on('error', () => resolve(false));
   });
@@ -60,7 +60,7 @@ function runRipgrep(pattern, searchPath, options) {
     if (options.multiline) args.push('-U', '--multiline-dotall');
     args.push('--max-count', String(options.maxResults || 500));
 
-    const proc = spawn('rg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn('rg', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let stdout = '';
     let stderr = '';
 

@@ -229,10 +229,12 @@ export async function loadSession(options = {}) {
     dirPath: yeaftDir,
   });
   // Hard cap debug history to the most recent 10 requests per Session. Trace
-  // failures are best-effort and must never stop the agent loop.
-  try { trace.cleanup?.(10); } catch (err) {
+  // failures are best-effort and must never stop the agent loop. cleanup() is
+  // now async (it hydrates the in-memory index, then prunes); run it
+  // fire-and-forget so session load never blocks on the startup disk scan.
+  Promise.resolve(trace.cleanup?.(10)).catch((err) => {
     console.warn('[Yeaft] trace.cleanup failed:', err?.message || err);
-  }
+  });
 
   // ─── 4. Create LLM adapter ────────────────────────────
   const adapter = await createLLMAdapter(config);
@@ -363,12 +365,9 @@ export async function loadSession(options = {}) {
   }
 
   // ─── 6. Load skills ────────────────────────────────────
-  // Project tier root for skills + MCP project assets. Per-session/per-group
-  // workdirs override at tool-execution time via ToolContext.cwd; for the
-  // SYSTEM-PROMPT skill set and the project MCP servers we use the agent
-  // process cwd, the common case when an agent is launched inside a project
-  // the user wants project-tier assets for. Shared so skills (.claude/skills,
-  // .yeaft/skills) and MCP (.mcp.json) resolve from the same root.
+  // Project tier root for skills + MCP project assets. Per-session workDir
+  // overlays are loaded by web-bridge once it knows the selected Session meta;
+  // the base runtime still uses the agent process cwd for global/default status.
   const projectTierRoot = process.cwd();
 
   let skillManager;
@@ -565,7 +564,7 @@ export async function loadSession(options = {}) {
       // Best-effort cleanup
     }
     try {
-      trace.close();
+      await trace.close();
     } catch {
       // Trace might not have close() (NullTrace)
     }

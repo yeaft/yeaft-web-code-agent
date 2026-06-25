@@ -98,7 +98,7 @@ describe('tool result raw storage boundaries', () => {
   });
 
 
-  it('persists debug trace tool output raw beyond 10KiB', () => {
+  it('persists debug trace tool output raw beyond 10KiB', async () => {
     const dbPath = join(tmpdir(), `yeaft-tool-raw-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.db`);
     const raw = 'r'.repeat(12 * 1024);
     const trace = new DebugTrace(dbPath);
@@ -113,13 +113,13 @@ describe('tool result raw storage boundaries', () => {
         isError: false,
       });
 
-      const { tools } = trace.queryByTrace('trace_raw_tool');
+      const { tools } = await trace.queryByTrace('trace_raw_tool');
       const row = tools.find(t => t.id === toolTraceId);
       expect(row.tool_output).toBe(raw);
       expect(row.tool_output).not.toContain('[truncated]');
       expect(row.tool_call_id).toBe('call_raw');
     } finally {
-      trace.close();
+      await trace.close();
       for (const suffix of ['', '-wal', '-shm']) {
         try { unlinkSync(dbPath + suffix); } catch { /* ignore */ }
       }

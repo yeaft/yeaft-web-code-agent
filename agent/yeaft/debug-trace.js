@@ -11,16 +11,7 @@
  * and dropped, never allowed to stop the agent.
  */
 
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'fs';
+import { promises as fsp } from 'fs';
 import { basename, dirname, extname, join } from 'path';
 import { randomUUID } from 'crypto';
 
@@ -35,8 +26,6 @@ const MAX_RAW_REQUEST_BYTES = 2 * 1024 * 1024;
 const TRACE_FLUSH_INTERVAL_MS = 5_000;
 const TRACE_FLUSH_DIRTY_LOOPS = 10;
 const MAX_SEARCH_PATTERN_CHARS = 300;
-const DEBUG_INDEX_VERSION = 1;
-const DEBUG_INDEX_MAX_ENTRIES = 2000;
 
 function isPlainObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value);
@@ -58,20 +47,20 @@ function fileTraceRoot(inputPath) {
   return extname(basename(raw)) ? `${raw}.files` : raw;
 }
 
-function ensureDir(dir) {
-  mkdirSync(dir, { recursive: true });
+async function ensureDir(dir) {
+  await fsp.mkdir(dir, { recursive: true });
 }
 
-function atomicWriteJson(filePath, value) {
-  ensureDir(dirname(filePath));
-  const tmp = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
-  writeFileSync(tmp, JSON.stringify(value), 'utf8');
-  renameSync(tmp, filePath);
+async function atomicWriteText(filePath, text) {
+  await ensureDir(dirname(filePath));
+  const tmp = `${filePath}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
+  await fsp.writeFile(tmp, text, 'utf8');
+  await fsp.rename(tmp, filePath);
 }
 
-function readJson(filePath) {
+async function readJson(filePath) {
   try {
-    return JSON.parse(readFileSync(filePath, 'utf8'));
+    return JSON.parse(await fsp.readFile(filePath, 'utf8'));
   } catch {
     return null;
   }
@@ -413,67 +402,6 @@ function tracePathFor(rootDir, sessionId, requestKey) {
   return requestFilePath(join(sessionRequestsDir(rootDir, sessionId), safeDirComponent(requestKey, 'request')));
 }
 
-function debugIndexPath(rootDir) {
-  return join(rootDir, 'debug', 'index.json');
-}
-
-function buildTraceIndexEntry(trace) {
-  const summary = summarizeTrace(trace, false);
-  return {
-    version: DEBUG_INDEX_VERSION,
-    requestKey: trace?.requestKey || '',
-    requestId: trace?.requestId || trace?.traceId || '',
-    traceId: trace?.traceId || null,
-    messageId: trace?.messageId || null,
-    sessionId: trace?.sessionId || null,
-    vpId: trace?.vpId || null,
-    threadId: trace?.threadId || null,
-    mode: trace?.mode || null,
-    userPrompt: trace?.userPrompt || '',
-    openedAt: trace?.openedAt || 0,
-    closedAt: trace?.closedAt || null,
-    updatedAt: trace?.updatedAt || trace?.closedAt || trace?.openedAt || 0,
-    active: !!trace?.active,
-    loopCount: summary.loopCount || 0,
-    toolCount: Array.isArray(trace?.tools) ? trace.tools.length : 0,
-    totalMs: summary.totalMs || 0,
-    totalTokens: summary.totalTokens || 0,
-    summaryInputTokens: summary.summaryInputTokens || 0,
-    summaryOutputTokens: summary.summaryOutputTokens || 0,
-    searchDocument: buildTraceSearchDocument(trace),
-  };
-}
-
-function indexEntryToTurn(entry) {
-  return {
-    turnId: entry?.requestId || entry?.traceId || '',
-    userPrompt: entry?.userPrompt || '',
-    sessionId: entry?.sessionId || null,
-    vpId: entry?.vpId || null,
-    threadId: entry?.threadId || null,
-    openedAt: entry?.openedAt || 0,
-    closedAt: entry?.closedAt || null,
-    totalMs: entry?.totalMs || 0,
-    totalTokens: entry?.totalTokens || 0,
-    summaryInputTokens: entry?.summaryInputTokens || 0,
-    summaryOutputTokens: entry?.summaryOutputTokens || 0,
-    loopCount: entry?.loopCount || 0,
-    memoryLoaded: null,
-    memoryAdjust: null,
-    tools: [],
-    detailsLoaded: false,
-    requestBase: null,
-  };
-}
-
-function normalizeDebugIndex(value) {
-  if (Array.isArray(value)) return { version: DEBUG_INDEX_VERSION, entries: value };
-  if (value && typeof value === 'object' && Array.isArray(value.entries)) {
-    return { version: DEBUG_INDEX_VERSION, entries: value.entries };
-  }
-  return { version: DEBUG_INDEX_VERSION, entries: [] };
-}
-
 function summarizeTrace(trace, detailsLoaded = false) {
   const loops = Array.isArray(trace?.loops) ? trace.loops : [];
   const usage = loops.reduce((acc, loop) => {
@@ -596,38 +524,40 @@ function traceToolToLegacy(trace, tool) {
   };
 }
 
-function collectTraceFiles(rootDir, sessionId = null) {
+async function readdirSafe(dir) {
+  try { return await fsp.readdir(dir, { withFileTypes: true }); }
+  catch { return []; }
+}
+
+async function collectTraceFiles(rootDir, sessionId = null) {
   const files = [];
-  const addFromRequestsDir = (requestsDir) => {
-    let entries = [];
-    try { entries = readdirSync(requestsDir, { withFileTypes: true }); }
-    catch { return; }
-    for (const entry of entries) {
+  const addFromRequestsDir = async (requestsDir) => {
+    for (const entry of await readdirSafe(requestsDir)) {
       if (!entry.isDirectory()) continue;
       const file = requestFilePath(join(requestsDir, entry.name));
-      if (existsSync(file)) files.push(file);
+      try {
+        await fsp.access(file);
+        files.push(file);
+      } catch { /* trace.json not yet written for this request dir */ }
     }
   };
   if (sessionId) {
-    addFromRequestsDir(sessionRequestsDir(rootDir, sessionId));
+    await addFromRequestsDir(sessionRequestsDir(rootDir, sessionId));
     return files;
   }
-  addFromRequestsDir(sessionRequestsDir(rootDir, null));
+  await addFromRequestsDir(sessionRequestsDir(rootDir, null));
   const sessionsRoot = join(rootDir, 'sessions');
-  let sessionEntries = [];
-  try { sessionEntries = readdirSync(sessionsRoot, { withFileTypes: true }); }
-  catch { return files; }
-  for (const entry of sessionEntries) {
+  for (const entry of await readdirSafe(sessionsRoot)) {
     if (!entry.isDirectory()) continue;
-    addFromRequestsDir(join(sessionsRoot, entry.name, 'debug', 'requests'));
+    await addFromRequestsDir(join(sessionsRoot, entry.name, 'debug', 'requests'));
   }
   return files;
 }
 
-function readTraceSummaries(rootDir, sessionId = null) {
+async function readTraceSummaries(rootDir, sessionId = null) {
   const traces = [];
-  for (const file of collectTraceFiles(rootDir, sessionId)) {
-    const trace = readJson(file);
+  for (const file of await collectTraceFiles(rootDir, sessionId)) {
+    const trace = await readJson(file);
     if (!trace || !trace.requestId) continue;
     traces.push({ trace, file, openedAt: Number(trace.openedAt || 0) });
   }
@@ -635,48 +565,20 @@ function readTraceSummaries(rootDir, sessionId = null) {
   return traces;
 }
 
-function sortDebugIndexEntries(entries) {
-  return entries.sort((a, b) => ((a.openedAt || 0) - (b.openedAt || 0)) || String(a.requestKey || '').localeCompare(String(b.requestKey || '')));
-}
-
-function debugIndexEntryKey(entry) {
-  if (!entry) return '';
-  return entry.requestKey || `${entry.sessionId || ''}::${entry.requestId || entry.traceId || ''}`;
-}
-
-function filterDebugIndexEntries(entries, { sessionId = null, threadId = null, searchRegex = null } = {}) {
-  return entries.filter((entry) => {
-    if (!entry || !entry.requestId) return false;
-    if (sessionId && entry.sessionId !== sessionId) return false;
-    if (threadId && entry.threadId !== threadId) return false;
-    if (searchRegex) {
-      try {
-        if (!searchRegex.test(String(entry.searchDocument || ''))) return false;
-      } catch {
-        return false;
-      }
-    }
-    return true;
-  });
-}
-
-function countDirFiles(rootDir) {
+async function countDirFiles(rootDir) {
   let files = 0;
   let bytes = 0;
-  const walk = (dir) => {
-    let entries = [];
-    try { entries = readdirSync(dir, { withFileTypes: true }); }
-    catch { return; }
-    for (const entry of entries) {
+  const walk = async (dir) => {
+    for (const entry of await readdirSafe(dir)) {
       const p = join(dir, entry.name);
-      if (entry.isDirectory()) walk(p);
+      if (entry.isDirectory()) await walk(p);
       else {
         files += 1;
-        try { bytes += statSync(p).size; } catch { /* ignore */ }
+        try { bytes += (await fsp.stat(p)).size; } catch { /* ignore */ }
       }
     }
   };
-  walk(rootDir);
+  await walk(rootDir);
   return { files, bytes };
 }
 
@@ -689,12 +591,42 @@ export class DebugTrace {
   #requestCache = new Map();
   /** @type {Map<string, { trace: object, dirtyLoops: number, firstDirtyAt: number }>} */
   #pendingWrites = new Map();
-  /** @type {Map<string, object>} */
-  #pendingIndexEntries = new Map();
   /** @type {NodeJS.Timeout|null} */
   #flushTimer = null;
   /** @type {number} */
   #sequence = 0;
+  /**
+   * In-memory dream/event ring (authoritative copy; persisted async).
+   * @type {Array<object>}
+   */
+  #events = [];
+  /** @type {boolean} */
+  #eventsDirty = false;
+  /**
+   * Whether the on-disk events.json has been folded into #events yet. The
+   * events ring must merge prior-run history exactly once before any flush
+   * overwrites the file, or a live append landing before first hydrate would
+   * silently destroy cross-restart dream history.
+   * @type {boolean}
+   */
+  #eventsHydrated = false;
+  /** @type {NodeJS.Timeout|null} */
+  #eventFlushTimer = null;
+  /**
+   * One-time hydrate guard. Reads/maintenance load every on-disk trace into
+   * #requestCache exactly once; afterwards every query is served from memory
+   * with zero disk reads. The write path never hydrates — it only appends.
+   * @type {boolean}
+   */
+  #hydrated = false;
+  /** @type {Promise<void>|null} */
+  #hydratePromise = null;
+  /**
+   * Serializes async flushes so two overlapping flushes never interleave
+   * writes to the same trace file. close()/purge() await this to drain.
+   * @type {Promise<void>}
+   */
+  #flushChain = Promise.resolve();
 
   /**
    * @param {string} tracePath — Back-compatible path. If it looks like a DB
@@ -704,7 +636,9 @@ export class DebugTrace {
     const rootDir = fileTraceRoot(tracePath);
     if (!rootDir) throw new Error('DebugTrace requires a storage path');
     this.#rootDir = rootDir;
-    ensureDir(rootDir);
+    // Best-effort, fire-and-forget: atomicWriteText re-ensures the request
+    // subdir before every write, so a missed mkdir here is harmless.
+    ensureDir(rootDir).catch(() => {});
   }
 
   startTurn({ traceId, messageId = null, mode = null, turnNumber = null, sessionId = null, vpId = null, threadId = null, userPrompt = null } = {}) {
@@ -803,19 +737,20 @@ export class DebugTrace {
 
   logEvent({ traceId, eventType, eventData = null } = {}) {
     const id = randomUUID();
-    const file = join(this.#rootDir, 'events.json');
-    const existingEvents = readJson(file);
-    const events = Array.isArray(existingEvents) ? existingEvents : [];
-    events.push({
+    // In-memory authoritative ring; persisted async (fire-and-forget). The
+    // dream/event sink runs on the engine hot path, so it must not block on a
+    // synchronous read-modify-write of events.json.
+    this.#events.push({
       id,
       traceId: traceId || String(eventType || 'event'),
       eventType: eventType || 'event',
       eventData: safeJsonValue(eventData),
       createdAt: Date.now(),
     });
-    const trimmed = events.slice(-MAX_DREAM_EVENTS);
-    try { atomicWriteJson(file, trimmed); }
-    catch (err) { console.warn('[Yeaft] debug trace event write failed:', err?.message || err); }
+    if (this.#events.length > MAX_DREAM_EVENTS) {
+      this.#events = this.#events.slice(-MAX_DREAM_EVENTS);
+    }
+    this.#scheduleEventFlush();
     return id;
   }
 
@@ -826,24 +761,27 @@ export class DebugTrace {
     return this.logEvent({ traceId, eventType, eventData });
   }
 
-  queryByMessage(messageId) {
-    this.#flushPendingSync();
+  async queryByMessage(messageId) {
+    await this.#ensureHydrated();
+    await this.#drainWrites();
     const traces = this.#traceSummaries()
       .filter(({ trace }) => trace.messageId === messageId)
       .map(({ trace }) => trace);
     return this.#expandLegacy(traces);
   }
 
-  queryByTrace(traceId) {
-    this.#flushPendingSync();
+  async queryByTrace(traceId) {
+    await this.#ensureHydrated();
+    await this.#drainWrites();
     const traces = this.#traceSummaries()
       .filter(({ trace }) => trace.traceId === traceId || trace.requestId === traceId)
       .map(({ trace }) => trace);
     return this.#expandLegacy(traces);
   }
 
-  queryRecent(limit = 20) {
-    this.#flushPendingSync();
+  async queryRecent(limit = 20) {
+    await this.#ensureHydrated();
+    await this.#drainWrites();
     const lim = Math.max(1, Math.min(MAX_HISTORY_LIMIT, Number(limit) || MAX_HISTORY_LIMIT));
     return this.#traceSummaries()
       .slice(-lim)
@@ -851,29 +789,17 @@ export class DebugTrace {
       .flatMap(({ trace }) => traceToLegacyRows(trace));
   }
 
-  fetchRecentDebugHistory({ limit = MAX_HISTORY_LIMIT, dreamLimit = 5, sessionId = null, threadId = null, indexOnly = false, detailTurnId = null, search = '' } = {}) {
-    this.#flushPendingSync();
+  async fetchRecentDebugHistory({ limit = MAX_HISTORY_LIMIT, dreamLimit = 5, sessionId = null, threadId = null, indexOnly = false, detailTurnId = null, search = '' } = {}) {
+    await this.#ensureHydrated();
+    await this.#drainWrites();
     const lim = Math.max(1, Math.min(MAX_HISTORY_LIMIT, Number(limit) || MAX_HISTORY_LIMIT));
     const requestedDetailTurnId = typeof detailTurnId === 'string' && detailTurnId ? detailTurnId : null;
     const searchRegex = requestedDetailTurnId ? null : compileTraceSearchRegex(search);
-    const dreamEvents = this.#readDreamEvents({ sessionId, dreamLimit });
-    if (indexOnly && !requestedDetailTurnId) {
-      const entries = this.#readDebugIndex({ rebuildIfMissing: true });
-      const filtered = filterDebugIndexEntries(entries, { sessionId, threadId, searchRegex });
-      const selectedEntries = filtered.slice(-lim);
-      return {
-        loops: [],
-        turns: selectedEntries.map(indexEntryToTurn),
-        dreamEvents,
-        hasMore: filtered.length > selectedEntries.length,
-        limit: lim,
-        indexOnly: true,
-      };
-    }
     const traces = this.#traceSummaries(sessionId)
       .filter(({ trace }) => !threadId || trace.threadId === threadId)
       .filter(({ trace }) => requestedDetailTurnId || traceMatchesRegex(trace, searchRegex))
       .map(({ trace }) => trace);
+    const dreamEvents = this.#readDreamEvents({ sessionId, dreamLimit });
     if (requestedDetailTurnId) {
       const trace = traces.find(t => t.requestId === requestedDetailTurnId || t.traceId === requestedDetailTurnId);
       if (!trace) return { loops: [], turns: [], dreamEvents, hasMore: false, limit: 0, indexOnly: false, detailTurnId: requestedDetailTurnId };
@@ -881,6 +807,16 @@ export class DebugTrace {
       return { ...expanded, dreamEvents, hasMore: false, limit: expanded.loops.length, indexOnly: false, detailTurnId: requestedDetailTurnId };
     }
     const selected = traces.slice(-lim);
+    if (indexOnly) {
+      return {
+        loops: [],
+        turns: selected.map(trace => summarizeTrace(trace, false)),
+        dreamEvents,
+        hasMore: traces.length > selected.length,
+        limit: lim,
+        indexOnly: true,
+      };
+    }
     const expanded = selected.reduce((acc, trace) => {
       const item = expandTrace(trace);
       acc.loops.push(...item.loops);
@@ -890,8 +826,9 @@ export class DebugTrace {
     return { ...expanded, dreamEvents, hasMore: traces.length > selected.length, limit: lim, indexOnly: false };
   }
 
-  queryTools({ name = null, since = null } = {}) {
-    this.#flushPendingSync();
+  async queryTools({ name = null, since = null } = {}) {
+    await this.#ensureHydrated();
+    await this.#drainWrites();
     const tools = [];
     for (const { trace } of this.#traceSummaries()) {
       for (const tool of Array.isArray(trace.tools) ? trace.tools : []) {
@@ -905,8 +842,9 @@ export class DebugTrace {
     return tools.slice(0, 100);
   }
 
-  search(keyword) {
-    this.#flushPendingSync();
+  async search(keyword) {
+    await this.#ensureHydrated();
+    await this.#drainWrites();
     const needle = String(keyword || '').toLowerCase();
     if (!needle) return [];
     return this.#traceSummaries()
@@ -916,63 +854,79 @@ export class DebugTrace {
       .flatMap(({ trace }) => traceToLegacyRows(trace));
   }
 
-  stats() {
-    this.#flushPendingSync();
+  async stats() {
+    await this.#ensureHydrated();
+    await this.#drainWrites();
     const traces = this.#traceSummaries().map(({ trace }) => trace);
     const turnCount = traces.reduce((n, trace) => n + (Array.isArray(trace.loops) ? trace.loops.length : 0), 0);
     const toolCount = traces.reduce((n, trace) => n + (Array.isArray(trace.tools) ? trace.tools.length : 0), 0);
-    const events = readJson(join(this.#rootDir, 'events.json'));
-    const eventCount = Array.isArray(events) ? events.length : 0;
-    const { bytes } = countDirFiles(this.#rootDir);
+    const eventCount = this.#events.length;
+    const { bytes } = await countDirFiles(this.#rootDir);
     return { turnCount, toolCount, eventCount, dbSizeBytes: bytes, fileSizeBytes: bytes, requestCount: traces.length };
   }
 
-  cleanup(retention = REQUEST_RETENTION) {
-    this.#flushPendingSync();
+  async cleanup(retention = REQUEST_RETENTION) {
+    await this.#ensureHydrated();
+    await this.#drainWrites();
     const keep = Math.max(1, Math.min(REQUEST_RETENTION, Number(retention) || REQUEST_RETENTION));
-    const before = readTraceSummaries(this.#rootDir).length;
-    this.#pruneAll(keep);
-    const after = readTraceSummaries(this.#rootDir).length;
+    const before = this.#traceSummaries().length;
+    await this.#pruneAll(keep);
+    const after = this.#traceSummaries().length;
     return { deletedTurns: Math.max(0, before - after), deletedTools: 0, deletedEvents: 0, deletedRequests: Math.max(0, before - after) };
   }
 
-  compact() {
-    this.#flushPendingSync();
-    const before = countDirFiles(this.#rootDir).bytes;
-    this.cleanup(REQUEST_RETENTION);
-    const after = countDirFiles(this.#rootDir).bytes;
+  async compact() {
+    await this.#ensureHydrated();
+    const before = (await countDirFiles(this.#rootDir)).bytes;
+    await this.cleanup(REQUEST_RETENTION);
+    const after = (await countDirFiles(this.#rootDir)).bytes;
     return { before, after };
   }
 
-  purge() {
-    this.#flushPendingSync();
-    try { rmSync(this.#rootDir, { recursive: true, force: true }); }
+  async purge() {
+    await this.#drainWrites();
+    try { await fsp.rm(this.#rootDir, { recursive: true, force: true }); }
     catch { /* ignore */ }
-    ensureDir(this.#rootDir);
+    await ensureDir(this.#rootDir);
     this.#turnIndex.clear();
     this.#requestCache.clear();
-    this.#pendingIndexEntries.clear();
+    this.#events = [];
+    this.#hydrated = false;
+    this.#hydratePromise = null;
+    this.#eventsHydrated = false;
   }
 
-  close() { this.#flushPendingSync(); }
+  async close() {
+    // #drainWrites() flushes pending writes itself; no separate #flushPending().
+    await this.#drainWrites();
+  }
+
+  /**
+   * Force all buffered trace + event writes to disk and await them. Unlike
+   * close() this does not tear down state, so the instance keeps accepting
+   * writes. Useful when a caller needs durability at a checkpoint.
+   */
+  async flush() {
+    await this.#drainWrites();
+  }
 
   #getOrCreateRequest({ traceId, turnNumber, messageId, mode, sessionId, vpId, threadId, userPrompt, now, turnRowId }) {
     const normalizedSessionId = sessionId || null;
-    let all = null;
     const isUsableExisting = (t) => (
       t?.sessionId === normalizedSessionId
       && t?.traceId === traceId
       && !(turnNumber === 1 && (t.loops || []).some(l => l.loopNumber === 1))
     );
-    const newestTrace = (items) => items
+    // Cache-only: the write path must NEVER touch disk (that was the O(N^2)
+    // event-loop stall). Every trace created in this process lives in
+    // #requestCache; same-traceId reuse and the legacy-duplicate-Loop-1 split
+    // both only concern traces opened in THIS run.
+    const sameSession = Array.from(this.#requestCache.values())
+      .filter(t => (t?.sessionId || null) === normalizedSessionId);
+    const existing = sameSession
       .filter(isUsableExisting)
       .sort((a, b) => ((a.openedAt || 0) - (b.openedAt || 0)) || String(a.requestKey || '').localeCompare(String(b.requestKey || '')))
       .at(-1) || null;
-    let existing = newestTrace(Array.from(this.#requestCache.values()));
-    if (!existing) {
-      all = this.#traceSummaries(normalizedSessionId).map(({ trace }) => trace);
-      existing = newestTrace(all);
-    }
     if (existing) {
       existing.updatedAt = now;
       this.#requestCache.set(existing.requestKey, existing);
@@ -980,7 +934,7 @@ export class DebugTrace {
     }
     const seq = (this.#sequence = (this.#sequence + 1) % 1_000_000);
     const requestKey = `${String(now).padStart(13, '0')}-${String(seq).padStart(6, '0')}-${safeDirComponent(traceId || turnRowId, 'request')}-${turnRowId.slice(0, 8)}`;
-    const requestId = turnNumber === 1 && all.some(t => t.traceId === traceId) ? turnRowId : traceId;
+    const requestId = turnNumber === 1 && sameSession.some(t => t.traceId === traceId) ? turnRowId : traceId;
     const trace = {
       version: TRACE_VERSION,
       requestKey,
@@ -1005,27 +959,80 @@ export class DebugTrace {
   }
 
   #loadRequest(sessionId, requestKey) {
-    const cached = this.#requestCache.get(requestKey);
-    if (cached) return cached;
-    const file = tracePathFor(this.#rootDir, sessionId, requestKey);
-    const trace = readJson(file);
-    if (trace) this.#requestCache.set(requestKey, trace);
-    return trace;
+    // Cache-only by design: endTurn/logTool always run in the same turn that
+    // startTurn minted the trace, so it is already resident. Never read disk
+    // on the write path — that is the stall we are eliminating.
+    return this.#requestCache.get(requestKey) || null;
   }
 
   #traceSummaries(sessionId = null) {
-    const byKey = new Map(readTraceSummaries(this.#rootDir, sessionId).map(item => [item.trace.requestKey, item]));
+    // Cache-only: #ensureHydrated() has already merged every on-disk trace
+    // into #requestCache exactly once, so we never touch disk here. This is
+    // what turns the old O(N^2) per-query rescan into an in-memory filter.
+    const out = [];
     for (const trace of this.#requestCache.values()) {
       if (sessionId && trace.sessionId !== sessionId) continue;
       if (!trace?.requestId || !trace?.requestKey) continue;
-      byKey.set(trace.requestKey, {
+      out.push({
         trace,
         file: this.#traceFile(trace),
         openedAt: Number(trace.openedAt || 0),
       });
     }
-    return Array.from(byKey.values())
-      .sort((a, b) => ((a.openedAt || 0) - (b.openedAt || 0)) || String(a.trace?.requestKey || a.file).localeCompare(String(b.trace?.requestKey || b.file)));
+    return out.sort((a, b) => ((a.openedAt || 0) - (b.openedAt || 0)) || String(a.trace?.requestKey || a.file).localeCompare(String(b.trace?.requestKey || b.file)));
+  }
+
+  /**
+   * Load every on-disk trace into #requestCache exactly once. Live entries
+   * (created by this process) always win over their disk copy — a flush may
+   * be mid-flight, and the in-memory trace is the newer truth. Idempotent and
+   * concurrency-safe: overlapping callers await the same promise.
+   *
+   * Footprint trade-off (deliberate): this pins every session's full trace
+   * payload (systemPrompt + cumulative messages + rawRequest, each already
+   * byte-bounded) in #requestCache for the instance's lifetime — O(retention ×
+   * total sessions) memory instead of the old O(N²) per-query CPU rescan that
+   * stalled the event loop. Retention (10/session) and the byte caps keep it
+   * bounded, and the web path uses a single module-level instance. Follow-up if
+   * footprint ever bites: hydrate per queried sessionId, or keep only a
+   * lightweight summary resident and lazy-load full payloads on detailTurnId.
+   */
+  async #ensureHydrated() {
+    if (this.#hydrated) return;
+    if (this.#hydratePromise) return this.#hydratePromise;
+    this.#hydratePromise = (async () => {
+      const [summaries, storedEvents] = await Promise.all([
+        readTraceSummaries(this.#rootDir),
+        readJson(join(this.#rootDir, 'events.json')),
+      ]);
+      for (const { trace } of summaries) {
+        if (!trace?.requestKey) continue;
+        // Never clobber a live in-memory trace with its older disk snapshot.
+        if (!this.#requestCache.has(trace.requestKey)) {
+          this.#requestCache.set(trace.requestKey, trace);
+        }
+      }
+      if (Array.isArray(storedEvents)) this.#mergeStoredEvents(storedEvents);
+      this.#hydrated = true;
+      this.#hydratePromise = null;
+    })();
+    return this.#hydratePromise;
+  }
+
+  /**
+   * Fold on-disk events into the in-memory ring by id, preserving live order
+   * and bounding to MAX_DREAM_EVENTS. Unseen disk records are prepended (they
+   * are older); a live append therefore never erases prior-run history. Sets
+   * #eventsHydrated so this runs at most once.
+   */
+  #mergeStoredEvents(stored) {
+    if (this.#eventsHydrated) return;
+    this.#eventsHydrated = true;
+    if (!Array.isArray(stored) || stored.length === 0) return;
+    const seen = new Set(this.#events.map(e => e?.id).filter(Boolean));
+    const older = stored.filter(e => e && (!e.id || !seen.has(e.id)));
+    if (older.length === 0) return;
+    this.#events = [...older, ...this.#events].slice(-MAX_DREAM_EVENTS);
   }
 
   #traceWriteKey(trace) {
@@ -1034,57 +1041,6 @@ export class DebugTrace {
 
   #traceFile(trace) {
     return tracePathFor(this.#rootDir, trace.sessionId || null, trace.requestKey);
-  }
-
-  #debugIndexFile() {
-    return debugIndexPath(this.#rootDir);
-  }
-
-  #readDebugIndex({ rebuildIfMissing = false } = {}) {
-    let index = normalizeDebugIndex(readJson(this.#debugIndexFile()));
-    if (rebuildIfMissing) {
-      const nextByKey = new Map();
-      for (const entry of index.entries) {
-        const key = debugIndexEntryKey(entry);
-        if (key && entry?.requestId) nextByKey.set(key, entry);
-      }
-      let changed = nextByKey.size !== index.entries.filter(entry => entry && entry.requestId).length;
-      for (const { trace } of this.#traceSummaries()) {
-        const entry = buildTraceIndexEntry(trace);
-        const key = debugIndexEntryKey(entry);
-        if (!key || nextByKey.has(key)) continue;
-        nextByKey.set(key, entry);
-        changed = true;
-      }
-      if (changed) {
-        index = { version: DEBUG_INDEX_VERSION, updatedAt: Date.now(), entries: sortDebugIndexEntries(Array.from(nextByKey.values())).slice(-DEBUG_INDEX_MAX_ENTRIES) };
-        try { atomicWriteJson(this.#debugIndexFile(), index); }
-        catch (err) { console.warn('[Yeaft] debug index rebuild failed:', err?.message || err); }
-      } else {
-        index = { version: DEBUG_INDEX_VERSION, entries: Array.from(nextByKey.values()) };
-      }
-    }
-    return sortDebugIndexEntries(index.entries.filter(entry => entry && entry.requestId));
-  }
-
-  #flushDebugIndexSync() {
-    if (this.#pendingIndexEntries.size === 0) return;
-    const nextByKey = new Map();
-    for (const entry of this.#readDebugIndex({ rebuildIfMissing: true })) {
-      const key = debugIndexEntryKey(entry);
-      if (key) nextByKey.set(key, entry);
-    }
-    for (const entry of this.#pendingIndexEntries.values()) {
-      const key = debugIndexEntryKey(entry);
-      if (key) nextByKey.set(key, entry);
-    }
-    const entries = sortDebugIndexEntries(Array.from(nextByKey.values())).slice(-DEBUG_INDEX_MAX_ENTRIES);
-    try {
-      atomicWriteJson(this.#debugIndexFile(), { version: DEBUG_INDEX_VERSION, updatedAt: Date.now(), entries });
-      this.#pendingIndexEntries.clear();
-    } catch (err) {
-      console.warn('[Yeaft] debug index write failed:', err?.message || err);
-    }
   }
 
   #serializableTrace(trace) {
@@ -1105,47 +1061,120 @@ export class DebugTrace {
     this.#requestCache.set(trace.requestKey, trace);
 
     if (force || item.dirtyLoops >= TRACE_FLUSH_DIRTY_LOOPS) {
-      this.#scheduleFlushTimer(now, 0);
+      this.#flushPending();
       return;
     }
     this.#scheduleFlushTimer(now);
   }
 
-  #scheduleFlushTimer(now = Date.now(), dueInOverride = null) {
-    if (this.#pendingWrites.size === 0) return;
-    const hasImmediateRequest = Number.isFinite(Number(dueInOverride)) && Number(dueInOverride) <= 0;
-    if (this.#flushTimer) {
-      if (!hasImmediateRequest) return;
-      clearTimeout(this.#flushTimer);
-      this.#flushTimer = null;
-    }
+  #scheduleFlushTimer(now = Date.now()) {
+    if (this.#flushTimer || this.#pendingWrites.size === 0) return;
     const oldestDirtyAt = Math.min(...Array.from(this.#pendingWrites.values()).map(item => item.firstDirtyAt || now));
-    const dueIn = hasImmediateRequest ? 0 : Math.max(0, TRACE_FLUSH_INTERVAL_MS - (now - oldestDirtyAt));
+    const dueIn = Math.max(0, TRACE_FLUSH_INTERVAL_MS - (now - oldestDirtyAt));
     this.#flushTimer = setTimeout(() => {
       this.#flushTimer = null;
-      this.#flushPendingSync();
+      this.#flushPending();
     }, dueIn);
     if (typeof this.#flushTimer.unref === 'function') this.#flushTimer.unref();
   }
 
-  #flushPendingSync() {
+  #scheduleEventFlush() {
+    this.#eventsDirty = true;
+    if (this.#eventFlushTimer) return;
+    this.#eventFlushTimer = setTimeout(() => {
+      this.#eventFlushTimer = null;
+      this.#flushEvents();
+    }, TRACE_FLUSH_INTERVAL_MS);
+    if (typeof this.#eventFlushTimer.unref === 'function') this.#eventFlushTimer.unref();
+  }
+
+  /**
+   * Drain pending trace writes synchronously-from-the-caller's-view: snapshot
+   * each dirty trace to a JSON STRING now (so later in-place mutation of the
+   * live `loops` array can't tear the payload), then chain the async writes
+   * onto #flushChain. Returns nothing; callers that need durability await
+   * #drainWrites().
+   */
+  #flushPending() {
     if (this.#flushTimer) {
       clearTimeout(this.#flushTimer);
       this.#flushTimer = null;
     }
     const entries = Array.from(this.#pendingWrites.values());
-    if (entries.length === 0) return;
-    this.#pendingWrites.clear();
-    for (const { trace } of entries) {
-      try {
-        atomicWriteJson(this.#traceFile(trace), this.#serializableTrace(trace));
-        this.#pendingIndexEntries.set(this.#traceWriteKey(trace), buildTraceIndexEntry(trace));
-      } catch (err) {
-        console.warn('[Yeaft] debug trace write failed:', err?.message || err);
-      }
+    if (entries.length === 0) {
+      this.#flushEvents();
+      return;
     }
-    this.#flushDebugIndexSync();
-    this.#pruneAll(REQUEST_RETENTION);
+    this.#pendingWrites.clear();
+    // Capture point-in-time payloads synchronously (so later in-place mutation
+    // of the live `loops` array can't tear a payload), but remember each
+    // request key: a prune chained ahead of this write may evict the request
+    // before the write runs, and we must NOT resurrect a pruned trace on disk.
+    const jobs = entries.map(({ trace }) => ({
+      requestKey: trace.requestKey,
+      file: this.#traceFile(trace),
+      text: JSON.stringify(this.#serializableTrace(trace)),
+    }));
+    this.#chain(async () => {
+      for (const { requestKey, file, text } of jobs) {
+        // Skip if an earlier chained prune already evicted this request.
+        if (!this.#requestCache.has(requestKey)) continue;
+        try { await atomicWriteText(file, text); }
+        catch (err) { console.warn('[Yeaft] debug trace write failed:', err?.message || err); }
+      }
+      try { await this.#pruneAll(REQUEST_RETENTION); }
+      catch (err) { console.warn('[Yeaft] debug trace prune failed:', err?.message || err); }
+    });
+    this.#flushEvents();
+  }
+
+  /**
+   * Append `task` to the single-writer flush mutex. Each link is isolated:
+   * a rejected predecessor can NEVER skip a later task (the classic
+   * `chain = chain.then(task)` footgun, where one rejection poisons every
+   * subsequent `.then(onFulfilled)` and silently stops all future writes).
+   * Here we always `await prev` inside a swallowing try/catch before running
+   * `task`, so the chain stays alive for the instance's lifetime.
+   */
+  #chain(task) {
+    const prev = this.#flushChain;
+    this.#flushChain = (async () => {
+      try { await prev; } catch { /* predecessor errors already logged */ }
+      await task();
+    })();
+    return this.#flushChain;
+  }
+
+  #flushEvents() {
+    if (!this.#eventsDirty) return;
+    this.#eventsDirty = false;
+    if (this.#eventFlushTimer) {
+      clearTimeout(this.#eventFlushTimer);
+      this.#eventFlushTimer = null;
+    }
+    const file = join(this.#rootDir, 'events.json');
+    this.#chain(async () => {
+      // Fold in any prior-run events we haven't loaded yet BEFORE overwriting,
+      // so a write that beats #ensureHydrated can't drop cross-restart history.
+      if (!this.#eventsHydrated) {
+        this.#mergeStoredEvents(await readJson(file));
+      }
+      const text = JSON.stringify(this.#events.slice(-MAX_DREAM_EVENTS));
+      try { await atomicWriteText(file, text); }
+      catch (err) { console.warn('[Yeaft] debug trace event write failed:', err?.message || err); }
+    });
+  }
+
+  /** Await every scheduled write (and prune) to settle. Used by close()/queries. */
+  async #drainWrites() {
+    this.#flushPending();
+    let prev = null;
+    // The chain can grow while we await (a query's flush appends more); loop
+    // until it stabilises so close() is a true barrier.
+    while (this.#flushChain !== prev) {
+      prev = this.#flushChain;
+      try { await prev; } catch { /* per-write errors already logged */ }
+    }
   }
 
   #reconstructLastSnapshot(trace) {
@@ -1159,8 +1188,8 @@ export class DebugTrace {
   #readDreamEvents({ sessionId = null, dreamLimit = 5 } = {}) {
     const limit = Number.isFinite(Number(dreamLimit)) ? Math.max(0, Math.min(50, Number(dreamLimit))) : 5;
     if (limit <= 0) return [];
-    const storedEvents = readJson(join(this.#rootDir, 'events.json'));
-    const events = Array.isArray(storedEvents) ? storedEvents : [];
+    // In-memory ring (hydrated once); no disk read on the query path.
+    const events = this.#events;
     const out = [];
     for (const event of events.slice().reverse()) {
       const data = isPlainObject(event.eventData) ? event.eventData : {};
@@ -1182,28 +1211,25 @@ export class DebugTrace {
     return out.reverse();
   }
 
-  #pruneAll(keep) {
+  async #pruneAll(keep) {
+    // Cache-only enumeration; rm the pruned request dirs async. No disk scan.
     const sessions = new Set([null]);
-    for (const { trace } of this.#traceSummaries()) sessions.add(trace.sessionId || null);
-    for (const sid of sessions) this.#pruneSession(sid, keep);
+    for (const trace of this.#requestCache.values()) sessions.add(trace.sessionId || null);
+    for (const sid of sessions) await this.#pruneSession(sid, keep);
   }
 
-  #pruneSession(sessionId, keep = REQUEST_RETENTION) {
+  async #pruneSession(sessionId, keep = REQUEST_RETENTION) {
     const traces = this.#traceSummaries(sessionId);
     const activeCutoff = Date.now() - 6 * 60 * 60 * 1000;
     const protectedItems = traces.filter(item => item.trace?.active && Number(item.trace?.updatedAt || 0) >= activeCutoff);
     const pruneCandidates = traces.filter(item => !protectedItems.includes(item));
     const stale = pruneCandidates.slice(0, Math.max(0, traces.length - protectedItems.length - keep));
     for (const item of stale) {
-      try { rmSync(dirname(item.file), { recursive: true, force: true }); }
-      catch { /* ignore */ }
+      // Drop from cache first so subsequent queries never resurface it, even
+      // if the async rm is still in flight or fails.
       this.#requestCache.delete(item.trace.requestKey);
-    }
-    if (stale.length > 0) {
-      const staleKeys = new Set(stale.map(item => item.trace?.requestKey).filter(Boolean));
-      const entries = this.#readDebugIndex().filter(entry => !staleKeys.has(entry.requestKey));
-      try { atomicWriteJson(this.#debugIndexFile(), { version: DEBUG_INDEX_VERSION, updatedAt: Date.now(), entries }); }
-      catch (err) { console.warn('[Yeaft] debug index prune failed:', err?.message || err); }
+      try { await fsp.rm(dirname(item.file), { recursive: true, force: true }); }
+      catch { /* ignore */ }
     }
   }
 
@@ -1225,17 +1251,18 @@ export class NullTrace {
   logTool() { return 'null'; }
   logEvent() { return 'null'; }
   event() { return 'null'; }
-  queryByMessage() { return { turns: [], tools: [], events: [] }; }
-  queryByTrace() { return { turns: [], tools: [], events: [] }; }
-  queryRecent() { return []; }
-  queryTools() { return []; }
-  search() { return []; }
-  stats() { return { turnCount: 0, toolCount: 0, eventCount: 0, dbSizeBytes: 0, fileSizeBytes: 0, requestCount: 0 }; }
-  cleanup() { return { deletedTurns: 0, deletedTools: 0, deletedEvents: 0, deletedRequests: 0 }; }
-  compact() { return { before: 0, after: 0 }; }
-  purge() {}
-  close() {}
-  fetchRecentDebugHistory() { return { loops: [], turns: [], dreamEvents: [], indexOnly: false }; }
+  async queryByMessage() { return { turns: [], tools: [], events: [] }; }
+  async queryByTrace() { return { turns: [], tools: [], events: [] }; }
+  async queryRecent() { return []; }
+  async queryTools() { return []; }
+  async search() { return []; }
+  async stats() { return { turnCount: 0, toolCount: 0, eventCount: 0, dbSizeBytes: 0, fileSizeBytes: 0, requestCount: 0 }; }
+  async cleanup() { return { deletedTurns: 0, deletedTools: 0, deletedEvents: 0, deletedRequests: 0 }; }
+  async compact() { return { before: 0, after: 0 }; }
+  async purge() {}
+  async close() {}
+  async flush() {}
+  async fetchRecentDebugHistory() { return { loops: [], turns: [], dreamEvents: [] }; }
 }
 
 export function createTrace({ enabled, dbPath, dirPath }) {

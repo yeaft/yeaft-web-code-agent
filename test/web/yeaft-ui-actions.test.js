@@ -92,6 +92,8 @@ describe('Yeaft UI action polish', () => {
     expect(timelineSource).toContain('stoppingTasksById: { type: Object');
     expect(timelineSource).toContain("'cancel-task'");
     expect(timelineSource).toContain('shellTaskCommand(task)');
+    expect(timelineSource).toContain('taskSummaryTitle(task)');
+    expect(timelineSource).toContain(':title="taskSummaryTitle(task)"');
     expect(timelineSource).toContain('<code v-if="shellTaskCommand(task)" class="yeaft-vp-task-command">{{ shellTaskCommand(task) }}</code>');
     expect(timelineSource).toContain("$emit('cancel-task', task)");
     expect(timelineSource).toContain('isTaskCancellable(task)');
@@ -109,8 +111,10 @@ describe('Yeaft UI action polish', () => {
     expect(chatStoreSource).toContain("type: 'yeaft_task_cancel'");
     expect(chatStoreSource).toContain("case 'yeaft_task_cancel_result':");
 
+    expect(enI18n).toContain("'yeaft.sessionStatus.task.title': 'Task'");
     expect(enI18n).toContain("'yeaft.sessionStatus.task.command': 'Command'");
     expect(enI18n).toContain("'yeaft.sessionStatus.task.stop': 'Stop task'");
+    expect(zhI18n).toContain("'yeaft.sessionStatus.task.title': '任务'");
     expect(zhI18n).toContain("'yeaft.sessionStatus.task.command': '命令'");
     expect(zhI18n).toContain("'yeaft.sessionStatus.task.stop': '停止任务'");
     expect(yeaftCss).toContain('.yeaft-vp-task-command');

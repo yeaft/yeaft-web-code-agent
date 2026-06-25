@@ -30,6 +30,26 @@ export const SYSTEM_SKILL_NAMES = BUILTIN_NAMES;
 // Default slash commands list (used before Claude SDK returns dynamic list)
 export const DEFAULT_SLASH_COMMANDS = Object.keys(BUILTIN_DESCRIPTIONS);
 
+export function mergeSlashCommands(...lists) {
+  const merged = [];
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const cmd of list) {
+      if (typeof cmd !== 'string' || !cmd) continue;
+      if (!merged.includes(cmd)) merged.push(cmd);
+    }
+  }
+  return merged;
+}
+
+export function resolveDynamicSlashCommands(store, conversationId, agentId) {
+  return mergeSlashCommands(
+    conversationId ? store?.slashCommandsMap?.[conversationId] : null,
+    agentId ? store?.slashCommandsMap?.[`agent:${agentId}`] : null,
+    store?.slashCommandsMap?.__preload__
+  );
+}
+
 /**
  * Determine the group for a slash command.
  * @param {string} cmd - Command with / prefix, e.g. "/yeaft-skills:sprint"

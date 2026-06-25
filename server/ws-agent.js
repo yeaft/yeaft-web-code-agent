@@ -12,6 +12,8 @@ import { handleAgentOutput } from './handlers/agent-output.js';
 import { handleAgentCrew } from './handlers/agent-crew.js';
 import { handleAgentFileTerminal } from './handlers/agent-file-terminal.js';
 import { handleAgentSync } from './handlers/agent-sync.js';
+import { recordPerfTraceEvent } from './perf-trace.js';
+import { markAgentHeartbeatSeen } from './heartbeat-policy.js';
 
 /**
  * Build the internal Map key for an agent.
@@ -41,9 +43,25 @@ export function handleAgentConnection(ws, url) {
         console.error(`[Agent] No agent found for id: ${clientAgentId}`);
         return;
       }
+      markAgentHeartbeatSeen(agent);
       const msg = await parseMessage(data, agent.sessionKey);
       if (msg) {
         console.log(`[Agent] Received message from ${clientAgentId}: ${msg.type}`);
+        if (msg.perfTraceId) {
+          recordPerfTraceEvent({
+            traceId: msg.perfTraceId,
+            source: 'server',
+            phase: 'websocket.agent_received',
+            at: Date.now(),
+            agentId: clientAgentId,
+            sessionId: msg.sessionId || null,
+            vpId: msg.vpId || null,
+            turnId: msg.turnId || null,
+            threadId: msg.threadId || null,
+            messageType: msg.type,
+            bytes: data.length || 0,
+          });
+        }
         handleAgentMessage(clientAgentId, msg);
       } else {
         console.error(`[Agent] Failed to parse message from ${clientAgentId}`);
@@ -122,9 +140,25 @@ export function handleAgentConnection(ws, url) {
         console.error(`[Agent] No agent found for id: ${resolvedAgentId}`);
         return;
       }
+      markAgentHeartbeatSeen(agent);
       const msg = await parseMessage(data, agent.sessionKey);
       if (msg) {
         console.log(`[Agent] Received message from ${resolvedAgentId}: ${msg.type}`);
+        if (msg.perfTraceId) {
+          recordPerfTraceEvent({
+            traceId: msg.perfTraceId,
+            source: 'server',
+            phase: 'websocket.agent_received',
+            at: Date.now(),
+            agentId: resolvedAgentId,
+            sessionId: msg.sessionId || null,
+            vpId: msg.vpId || null,
+            turnId: msg.turnId || null,
+            threadId: msg.threadId || null,
+            messageType: msg.type,
+            bytes: data.length || 0,
+          });
+        }
         handleAgentMessage(resolvedAgentId, msg);
       } else {
         console.error(`[Agent] Failed to parse message from ${resolvedAgentId}`);
@@ -195,6 +229,7 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
     conversations,
     sessionKey,
     isAlive: true,
+    lastSeenAt: Date.now(),
     capabilities: effectiveCapabilities,
     proxyPorts,
     slashCommands,
@@ -221,7 +256,7 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
   ws.on('pong', () => {
     const agent = agents.get(agentId);
     if (agent) {
-      agent.isAlive = true;
+      markAgentHeartbeatSeen(agent);
       if (agent.pingSentAt) {
         agent.latency = Date.now() - agent.pingSentAt;
         agent.pingSentAt = null;

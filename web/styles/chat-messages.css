@@ -1269,6 +1269,26 @@
   margin-top: 0;
 }
 
+.mermaid-rendered {
+  max-width: 100%;
+  margin: 1em 0;
+  padding: 16px;
+  overflow-x: auto;
+  background: var(--bg-main);
+  border-radius: 8px;
+}
+
+.mermaid-rendered:first-child {
+  margin-top: 0;
+}
+
+.mermaid-rendered svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
 .code-block-header {
   display: flex;
   justify-content: space-between;

@@ -7,12 +7,13 @@ import { userDb } from './database.js';
 import { agents, webClients, trackRequest } from './context.js';
 import {
   parseMessage, sendToWebClient, sendToAgent,
-  broadcastAgentList, verifyAgentOwnership
+  broadcastAgentList, resolveAgentAccessError
 } from './ws-utils.js';
 import { handleClientConversation } from './handlers/client-conversation.js';
 import { handleClientWorkbench } from './handlers/client-workbench.js';
 import { handleClientCrew } from './handlers/client-crew.js';
 import { handleClientMisc } from './handlers/client-misc.js';
+import { recordPerfTraceEvent } from './perf-trace.js';
 
 export function handleWebConnection(ws, url) {
   const clientId = randomUUID();
@@ -108,6 +109,19 @@ export function handleWebConnection(ws, url) {
     if (msg.type !== 'ping') {
       trackRequest(client?.userId, data.length || 0);
     }
+    if (msg.perfTraceId) {
+      recordPerfTraceEvent({
+        traceId: msg.perfTraceId,
+        source: 'server',
+        phase: 'websocket.web_received',
+        at: Date.now(),
+        userId: client?.userId || null,
+        agentId: msg.agentId || client?.currentAgent || null,
+        sessionId: msg.sessionId || null,
+        messageType: msg.type,
+        bytes: data.length || 0,
+      });
+    }
     handleWebMessage(clientId, msg);
   });
 
@@ -176,18 +190,17 @@ async function handleWebMessage(clientId, msg) {
     return;
   }
 
-  // Helper: check agent access (ownership)
+  // Helper: check agent access (ownership + availability)
   const checkAgentAccess = async (agentId) => {
-    if (!agentId) {
-      await sendToWebClient(client, { type: 'error', message: 'Agent not found' });
-      return false;
-    }
-    if (!verifyAgentOwnership(agentId, client.userId, client.role)) {
+    const error = resolveAgentAccessError(agentId, client.userId, client.role);
+    if (!error) return true;
+    if (error === 'Agent access denied') {
       console.warn(`[Security] User ${client.userId} denied access to agent ${agentId}`);
-      await sendToWebClient(client, { type: 'error', message: 'Agent access denied' });
-      return false;
+    } else {
+      console.warn(`[WS] Agent unavailable for user ${client.userId}: ${agentId || '(none)'}`);
     }
-    return true;
+    await sendToWebClient(client, { type: 'error', message: error });
+    return false;
   };
 
   // Dispatch to handler sub-modules

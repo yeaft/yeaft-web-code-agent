@@ -215,7 +215,12 @@ describe('worker prompt language selection', () => {
   });
 
   it('keeps English prompts English for English configuration', () => {
-    const prompt = workerPrompt('en');
+    const prompt = buildWorkerPrompt({
+      language: 'en',
+      includeShape: true,
+      toolNames: ['FileRead'],
+      vpPersona: DEFAULT_VPS.find(vp => vp.vpId === 'omni'),
+    });
 
     expect(prompt).toContain('# Omni');
     expect(prompt).not.toContain('# Omni — Requirement and Flow Lead');

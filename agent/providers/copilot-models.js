@@ -99,7 +99,7 @@ function _probeAcpModels() {
       if (err) reject(err); else resolve(models || []);
     };
     try {
-      child = spawn('copilot', ['--acp'], { stdio: ['pipe', 'pipe', 'pipe'] });
+      child = spawn('copilot', ['--acp'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     } catch (e) { return reject(e); }
     const timer = setTimeout(() => finish(new Error('ACP probe timeout')), PROBE_TIMEOUT_MS);
     child.on('error', (e) => finish(e));

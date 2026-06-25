@@ -1445,6 +1445,7 @@ export default {
   'yeaft.sessionStatus.task.promptSend': '发送',
   'yeaft.sessionStatus.task.promptSending': '发送中…',
   'yeaft.sessionStatus.task.promptFailed': '发送失败。',
+  'yeaft.sessionStatus.task.title': '任务',
   'yeaft.sessionStatus.task.command': '命令',
   'yeaft.sessionStatus.task.stop': '停止任务',
   'yeaft.sessionStatus.task.stopping': '停止中…',

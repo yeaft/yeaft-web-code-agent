@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { buildWorkerPrompt } from '../../../agent/yeaft/prompts.js';
 import { buildRoleMd } from '../../../agent/yeaft/vp/vp-crud.js';
 import { DEFAULT_VPS } from '../../../agent/yeaft/vp/seed-defaults.js';
+import { personaHash } from '../../../agent/yeaft/vp/vp-store.js';
 import { topUpDefaultVps } from '../../../agent/yeaft/vp/seed-topup.js';
 
 function tempDir() {
@@ -128,6 +129,7 @@ Core capabilities / 核心能力:
     const adaRole = readFileSync(join(libDir, 'ada', 'role.md'), 'utf-8');
     const omniRole = readFileSync(join(libDir, 'omni', 'role.md'), 'utf-8');
     const martinRole = readFileSync(join(libDir, 'martin', 'role.md'), 'utf-8');
+    const seedVersions = JSON.parse(readFileSync(join(libDir, '.seeded-versions.json'), 'utf-8'));
 
     expect(result.personaBackfilled).toContain('linus');
     expect(result.personaBackfilled).toContain('ada');
@@ -139,10 +141,13 @@ Core capabilities / 核心能力:
     expect(linusRole).not.toContain('人物特点');
     expect(adaRole).toContain('你是阿达·洛芙莱斯');
     expect(adaRole).not.toContain('Core capabilities:');
+    expect(omniRole).toContain('<!-- lang:en -->');
+    expect(omniRole).toContain('<!-- lang:zh -->');
     expect(omniRole).toContain('你是 Omni。你始终看着整个会话的形状');
     expect(omniRole).not.toContain('You are Omni Assistant / 全能助手');
     expect(omniRole).not.toContain('Language policy / 语言策略');
     expect(omniRole).not.toContain('Core capabilities / 核心能力');
+    expect(seedVersions.seeded.omni).toBe(personaHash(omni.persona));
     expect(martinRole).not.toContain('<!-- lang:zh -->');
     expect(martinRole).toContain('User edit.');
   });

@@ -18,7 +18,7 @@
  *      ranges removed.
  */
 
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { COLLAB_TOOL_POLICY } from './tools/registry.js';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -26,7 +26,9 @@ import { DEFAULT_YEAFT_DIR } from './init.js';
 import { buildDreamOutputSnapshot } from './dream/output-snapshot.js';
 import { Engine } from './engine.js';
 import { loadSession } from './session.js';
-import { loadConfig } from './config.js';
+import { loadConfig, loadMCPConfig } from './config.js';
+import { createSkillManager } from './skills.js';
+import { MCPManager } from './mcp.js';
 import { sendToServer } from '../connection/buffer.js';
 import ctx from '../context.js';
 import { hydrateYeaftStatusFromSession } from './status-cache.js';
@@ -72,11 +74,20 @@ import { listMcpServers, upsertMcpServer, removeMcpServer } from './config-api.j
 import { buildMcpFlattenedTools } from './tools/mcp-tools.js';
 import { getAgentRegistry, agentBelongsToScope } from './tools/agent.js';
 import { isPromptableAgentStatus } from './sub-agent/status.js';
+import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 
-const SKILL_COMMAND_PREFIX = 'skill:';
+const LEGACY_SKILL_COMMAND_PREFIX = 'skill:';
+const YEAFT_SKILL_COMMAND_PREFIX = 'yeaft-skills:';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
+
+/**
+ * Single-flight runtime boot. History replay must not wait for this promise on
+ * cold load; message send still awaits it through ensureSessionLoaded().
+ * @type {Promise<import('./session.js').Session> | null}
+ */
+let sessionLoadPromise = null;
 
 let threadClassifier = defaultClassifyThread;
 
@@ -167,20 +178,29 @@ async function sendDreamSnapshotForSession(sessionId, extra = {}) {
 function scheduleYeaftLoadHistoryMetadataReplay(sessionId) {
   const replaySession = session;
   const replayConversationId = yeaftConversationId;
-  setTimeout(() => {
+  setTimeout(async () => {
     try {
       if (!replaySession) return;
       refreshLiveSessionConfig();
-      hydrateYeaftStatusFromSession(replaySession, { reason: 'history_load', emitEvent: true });
+      let projectRuntime = null;
+      if (sessionId) {
+        try {
+          const groupYeaftDir = resolveSessionYeaftDir(ctx.CONFIG?.yeaftDir || DEFAULT_YEAFT_DIR, sessionId);
+          const meta = loadSessionMeta(join(sessionsRoot(groupYeaftDir), sessionId));
+          projectRuntime = await ensureProjectRuntimeForSessionMeta(meta);
+        } catch { /* best-effort project metadata */ }
+      }
+      const status = mergedStatusForProjectRuntime(projectRuntime);
+      hydrateYeaftStatusFromSession({ ...replaySession, status }, { reason: 'history_load', emitEvent: true });
       sendSessionEvent({
         type: 'session_ready',
         conversationId: replayConversationId,
         model: replaySession.config.primaryModel || replaySession.config.model,
         modelEffort: replaySession.config.modelEffort || null,
         availableModels: replaySession.config.availableModels || [],
-        skills: replaySession.status.skills,
-        mcpServers: replaySession.status.mcpServers,
-        tools: replaySession.status.tools,
+        skills: status.skills,
+        mcpServers: status.mcpServers,
+        tools: status.tools,
         yeaftDir: ctx.CONFIG?.yeaftDir || null,
         tasks: replaySession.taskManager ? replaySession.taskManager.listActiveTasks() : [],
       });
@@ -384,6 +404,14 @@ function threadKey(sessionId, vpId, threadId) {
   return `${sessionId}::${vpId}::${threadId || 'main'}`;
 }
 
+function normalizeSessionWorkDir(workDir) {
+  return typeof workDir === 'string' && workDir.trim() ? workDir.trim() : '';
+}
+
+function projectRuntimeKey(workDir) {
+  return normalizeSessionWorkDir(workDir) || '__agent_cwd__';
+}
+
 function createThreadId() {
   return `thr_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`;
 }
@@ -393,6 +421,62 @@ const RUNNING_THREAD_STATES = new Set(['queued', 'typing', 'thinking', 'streamin
 const vpThreads = new Map();
 /** @type {Map<string, Set<Promise<string|null>>>} */
 const routePromisesByMsgId = new Map();
+/** @type {Map<string, { workDir: string, skillManager: import('./skills.js').SkillManager, mcpManager: import('./mcp.js').MCPManager, mcpStatus: object, mcpConfig: object, status: { skills: number, mcpServers: string[], mcpFailed: object[], mcpSkipped: object[], tools: number } }>} */
+const projectRuntimes = new Map();
+
+function replaceSessionMcpTools(mcpManager) {
+  if (!session?.toolRegistry || typeof session.toolRegistry.replaceMcpTools !== 'function') {
+    return { removed: 0, added: 0, skipped: true };
+  }
+  try {
+    const result = session.toolRegistry.replaceMcpTools(mcpManager, buildMcpFlattenedTools);
+    return { ...result, skipped: false };
+  } catch (err) {
+    console.warn('[Yeaft] hot-swap MCP tools failed:', err?.message || err);
+    return { removed: 0, added: 0, skipped: true, error: err?.message || String(err) };
+  }
+}
+
+function retargetVpEngines({ skillManager, mcpManager }) {
+  for (const eng of vpEngines.values()) {
+    try {
+      eng.setRuntimeManagers?.({ skillManager, mcpManager });
+    } catch { /* best-effort runtime retarget */ }
+  }
+}
+
+function activateBaseRuntime() {
+  const swap = replaceSessionMcpTools(session?.mcpManager);
+  retargetVpEngines({
+    skillManager: session?.skillManager || null,
+    mcpManager: session?.mcpManager || null,
+  });
+  broadcastSkillSlashCommands(session);
+  return swap;
+}
+
+function activateProjectRuntime(runtime) {
+  if (!runtime) return activateBaseRuntime();
+  const swap = replaceSessionMcpTools(runtime.mcpManager);
+  retargetVpEngines({
+    skillManager: runtime.skillManager,
+    mcpManager: runtime.mcpManager,
+  });
+  runtime.status = {
+    ...runtime.status,
+    tools: session?.toolRegistry?.size || runtime.status?.tools || 0,
+  };
+  broadcastSkillSlashCommands(session, [runtime.skillManager]);
+  return swap;
+}
+
+async function shutdownProjectRuntimes() {
+  const runtimes = Array.from(projectRuntimes.values());
+  projectRuntimes.clear();
+  await Promise.all(runtimes.map(async (runtime) => {
+    try { await runtime?.mcpManager?.disconnectAll?.(); } catch { /* best-effort shutdown */ }
+  }));
+}
 
 function getVpThreadMap(sessionId, vpId) {
   const key = vpKey(sessionId, vpId);
@@ -574,7 +658,8 @@ function invalidateGroupContext(sessionId) {
   // Engines are NOT torn down here on purpose. They hold subordinate
   // state (AMS adjustments) that should survive a meta change and a
   // closed sessionHandle — they don't reach the on-disk group meta
-  // directly. They *are* dropped on `resetYeaftSession`.
+  // directly. Project runtime managers are hot-swapped before each turn.
+  // They *are* dropped on `resetYeaftSession`.
 }
 
 /**
@@ -860,11 +945,15 @@ function projectVisibleHistoryChunkMessages(messages = []) {
     }));
 }
 
-function emitHistoryChunk({ sessionId, messages, mode = 'older', oldestSeq = null, hasMore = false, latestSeq = null, afterSeq = null, turns = null }) {
+function emitHistoryChunk({ sessionId, messages, mode = 'older', oldestSeq = null, hasMore = false, latestSeq = null, afterSeq = null, turns = null, perfTraceId = null }) {
   const projectedMessages = projectVisibleHistoryChunkMessages(messages);
+  if (mode === 'delta' && projectedMessages.length === 0) {
+    return projectedMessages;
+  }
   sendToServer({
     type: 'yeaft_history_chunk',
     conversationId: yeaftConversationId,
+    ...(perfTraceId ? { perfTraceId } : {}),
     sessionId,
     mode,
     messages: projectedMessages,
@@ -920,7 +1009,7 @@ function emitLegacyHistoryOutputFrames(replayEntries) {
   }
 }
 
-function emitVisibleHistoryReplay({ store, sessionId, limit, beforeSeq = null, mode = 'recent' }) {
+function emitVisibleHistoryReplay({ store, sessionId, limit, beforeSeq = null, mode = 'recent', perfTraceId = null }) {
   const visiblePage = sessionId
     ? loadVisibleGroupHistoryPage(store, sessionId, limit, beforeSeq)
     : { messages: limit > 0 ? (store.loadRecent?.(limit) || []) : [], oldestSeq: null, hasMore: false };
@@ -942,6 +1031,7 @@ function emitVisibleHistoryReplay({ store, sessionId, limit, beforeSeq = null, m
       hasMore: visiblePage.hasMore,
       latestSeq: Number.isFinite(latestSeq) ? latestSeq : null,
       turns: limit,
+      perfTraceId,
     });
     sendSessionEvent({
       type: 'history_loaded',
@@ -951,7 +1041,7 @@ function emitVisibleHistoryReplay({ store, sessionId, limit, beforeSeq = null, m
       hasMore: visiblePage.hasMore,
       oldestSeq: visiblePage.oldestSeq,
       latestSeq: Number.isFinite(latestSeq) ? latestSeq : null,
-    });
+    }, perfTraceId ? { sessionId, perfTraceId } : undefined);
     return;
   }
 
@@ -968,7 +1058,7 @@ function emitVisibleHistoryReplay({ store, sessionId, limit, beforeSeq = null, m
     hasMore: visiblePage.hasMore,
     oldestSeq: visiblePage.oldestSeq,
     latestSeq: Number.isFinite(latestSeq) ? latestSeq : null,
-  });
+  }, perfTraceId ? { sessionId, perfTraceId } : undefined);
 }
 
 /**
@@ -1078,6 +1168,7 @@ export function __testGroupHistory(sessionId) {
  */
 export function __testSetSession(sessionLike) {
   session = sessionLike;
+  sessionLoadPromise = null;
   if (!sessionLike) yeaftConversationId = null;
 }
 
@@ -1271,6 +1362,17 @@ function getOrCreateSessionContext(sessionId, sessionHandle) {
  * @param {object} envelope — coordinator envelope `{sessionId, taskId, msg, trigger}`
  */
 function enqueueForVp(sessionId, vpId, envelope) {
+  const perfTraceId = envelope?._perfTraceId || envelope?.perfTraceId || null;
+  if (perfTraceId) {
+    recordAgentPerfTrace(ctx.CONFIG, {
+      traceId: perfTraceId,
+      phase: 'vp.enqueue',
+      sessionId,
+      vpId,
+      turnId: envelope?.msg?.id || null,
+      messageType: envelope?.trigger || 'user',
+    });
+  }
   const routePromise = routeEnvelopeToVpThread(sessionId, vpId, envelope);
   registerRoutePromise(envelope?.msg?.id, routePromise);
 }
@@ -1360,6 +1462,7 @@ function scheduleTaskResultReentry(event) {
 }
 
 async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
+  const routeStart = perfNowMs();
   const { text, prompt, promptParts } = buildVpPromptPayload(vpId, envelope);
   const runningThreads = getRunningThreads(sessionId, vpId);
   let thread = null;
@@ -1404,6 +1507,19 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
   if (!thread) return null;
   rememberThreadMessage(thread, envelope?.msg);
   const turnId = `${randomUUID().slice(0, 8)}:${vpId}`;
+  const perfTraceId = envelope?._perfTraceId || envelope?.perfTraceId || null;
+  if (perfTraceId) {
+    recordAgentPerfTrace(ctx.CONFIG, {
+      traceId: perfTraceId,
+      phase: 'vp.route_thread',
+      durationMs: perfNowMs() - routeStart,
+      sessionId,
+      vpId,
+      turnId,
+      threadId: thread.threadId,
+      detail: { related, runningThreadCount: runningThreads.length },
+    });
+  }
 
   if (related) {
     const content = promptParts || prompt;
@@ -1672,6 +1788,7 @@ export async function __testDrainVpDrivers() {
  * a half-aborted controller writing to a now-cleared map.
  */
 export async function __testResetVpState() {
+  await shutdownProjectRuntimes();
   for (const ctrl of vpAborts.values()) {
     try { if (!ctrl.signal.aborted) ctrl.abort(); } catch { /* */ }
   }
@@ -1717,11 +1834,12 @@ function resolveGroupDefaultVpId(sessionId) {
   }
 }
 
-function sendSessionOutputFrame(data, { sessionId, chatId, vpId, turnId, threadId } = {}) {
+function sendSessionOutputFrame(data, { sessionId, chatId, vpId, turnId, threadId, perfTraceId } = {}) {
   const resolvedVpId = vpId || (sessionId ? resolveGroupDefaultVpId(sessionId) : null);
   sendToServer({
     type: 'yeaft_output',
     conversationId: yeaftConversationId,
+    ...(perfTraceId ? { perfTraceId } : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(chatId ? { chatId } : {}),
     ...(resolvedVpId ? { vpId: resolvedVpId } : {}),
@@ -1737,36 +1855,131 @@ export function buildSkillSlashCommands(skillManager) {
   const descriptions = {};
   for (const skill of skillManager.list()) {
     if (!skill?.name || typeof skill.name !== 'string') continue;
-    const commandName = `${SKILL_COMMAND_PREFIX}${skill.name}`;
+    const commandName = `${YEAFT_SKILL_COMMAND_PREFIX}${skill.name}`;
     commands.push(commandName);
     descriptions[commandName] = skill.description || skill.trigger || 'Load Yeaft skill';
+
+    // Legacy alias for older typed commands and persisted drafts. Do not add it
+    // to the visible command list; autocomplete should show the same plugin-style
+    // names users see in Claude Code, e.g. /yeaft-skills:code-review.
+    const legacyCommandName = `${LEGACY_SKILL_COMMAND_PREFIX}${skill.name}`;
+    descriptions[legacyCommandName] = descriptions[commandName];
   }
   commands.sort((a, b) => a.localeCompare(b));
   return { commands, descriptions };
 }
 
-function broadcastSkillSlashCommands(sessionLike) {
-  const { commands, descriptions } = buildSkillSlashCommands(sessionLike?.skillManager);
-  const slashCommands = [...new Set([...(ctx.slashCommands || []), ...commands])];
-  const slashCommandDescriptions = {
-    ...(ctx.slashCommandDescriptions || {}),
-    ...descriptions,
-  };
+export function buildMergedSkillSlashCommands(skillManagers = []) {
+  const commands = [];
+  const descriptions = {};
+  for (const manager of skillManagers) {
+    const built = buildSkillSlashCommands(manager);
+    for (const cmd of built.commands) commands.push(cmd);
+    Object.assign(descriptions, built.descriptions);
+  }
+  return { commands: [...new Set(commands)].sort((a, b) => a.localeCompare(b)), descriptions };
+}
+
+function broadcastSkillSlashCommands(sessionLike, extraSkillManagers = []) {
+  const managers = [sessionLike?.skillManager, ...extraSkillManagers].filter(Boolean);
+  const { commands, descriptions } = buildMergedSkillSlashCommands(managers);
+  const isYeaftSkillCommand = (cmd) => typeof cmd === 'string'
+    && (cmd.startsWith(LEGACY_SKILL_COMMAND_PREFIX) || cmd.startsWith(YEAFT_SKILL_COMMAND_PREFIX));
+  const nonSkillCommands = (ctx.slashCommands || []).filter(cmd => !isYeaftSkillCommand(cmd));
+  const slashCommands = [...new Set([...nonSkillCommands, ...commands])];
+  const slashCommandDescriptions = Object.fromEntries(
+    Object.entries(ctx.slashCommandDescriptions || {})
+      .filter(([cmd]) => !isYeaftSkillCommand(cmd))
+  );
+  Object.assign(slashCommandDescriptions, descriptions);
   ctx.slashCommands = slashCommands;
   ctx.slashCommandDescriptions = slashCommandDescriptions;
   sendToServer({
     type: 'slash_commands_update',
-    conversationId: '__preload__',
+    agentId: ctx.AGENT_ID || ctx.agentId || null,
+    conversationId: yeaftConversationId || '__preload__',
     slashCommands,
     slashCommandDescriptions,
   });
 }
 
+async function loadProjectRuntime(workDir) {
+  if (!session) return null;
+  const normalizedWorkDir = normalizeSessionWorkDir(workDir);
+  if (!normalizedWorkDir) {
+    activateBaseRuntime();
+    return null;
+  }
+  const key = projectRuntimeKey(normalizedWorkDir);
+  const cached = projectRuntimes.get(key);
+  if (cached) {
+    activateProjectRuntime(cached);
+    return cached;
+  }
+
+  const yeaftDir = ctx.CONFIG?.yeaftDir || session.yeaftDir || DEFAULT_YEAFT_DIR;
+  const skillRoots = normalizedWorkDir && normalizedWorkDir !== process.cwd()
+    ? `${process.cwd()}${delimiter}${normalizedWorkDir}`
+    : normalizedWorkDir;
+  const skillManager = createSkillManager(yeaftDir, skillRoots);
+  const mcpConfig = loadMCPConfig(yeaftDir, undefined, normalizedWorkDir);
+  const mcpManager = new MCPManager();
+  let mcpStatus = { connected: [], failed: [] };
+  if (mcpConfig.servers.length > 0) {
+    mcpStatus = await mcpManager.connectAll(mcpConfig.servers);
+  }
+  const runtime = {
+    workDir: normalizedWorkDir,
+    skillManager,
+    mcpManager,
+    mcpStatus,
+    mcpConfig,
+    status: {
+      skills: skillManager.size,
+      mcpServers: mcpStatus.connected,
+      mcpFailed: mcpStatus.failed,
+      mcpSkipped: mcpConfig.skipped || [],
+      tools: session.toolRegistry?.size || 0,
+    },
+  };
+  projectRuntimes.set(key, runtime);
+  activateProjectRuntime(runtime);
+  return runtime;
+}
+
+async function ensureProjectRuntimeForSessionMeta(sessionMeta) {
+  const workDir = normalizeSessionWorkDir(sessionMeta?.workDir);
+  if (!workDir) {
+    activateBaseRuntime();
+    return null;
+  }
+  try {
+    return await loadProjectRuntime(workDir);
+  } catch (err) {
+    console.warn('[Yeaft] project runtime load failed for %s: %s', workDir, err?.message || err);
+    activateBaseRuntime();
+    return null;
+  }
+}
+
+function mergedStatusForProjectRuntime(runtime) {
+  if (!session?.status || !runtime?.status) return session?.status || { skills: 0, mcpServers: [], tools: 0 };
+  return {
+    ...session.status,
+    skills: Math.max(Number(session.status.skills) || 0, Number(runtime.status.skills) || 0),
+    mcpServers: [...new Set([...(session.status.mcpServers || []), ...(runtime.status.mcpServers || [])])],
+    mcpFailed: [...(session.status.mcpFailed || []), ...(runtime.status.mcpFailed || [])],
+    mcpSkipped: [...(session.status.mcpSkipped || []), ...(runtime.status.mcpSkipped || [])],
+    tools: Math.max(Number(session.status.tools) || 0, Number(runtime.status.tools) || 0),
+  };
+}
+
 /** Send a Yeaft Session metadata event over the legacy-compatible envelope. */
-function sendSessionEvent(event, { sessionId, chatId, vpId, turnId, threadId } = {}) {
+function sendSessionEvent(event, { sessionId, chatId, vpId, turnId, threadId, perfTraceId } = {}) {
   sendToServer({
     type: 'yeaft_output',
     conversationId: yeaftConversationId,
+    ...(perfTraceId ? { perfTraceId } : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(chatId ? { chatId } : {}),
     ...(vpId ? { vpId } : {}),
@@ -3033,6 +3246,33 @@ export async function handleYeaftSessionSend(msg) {
   const sessionId = (typeof msg.sessionId === 'string' && msg.sessionId.trim())
     ? msg.sessionId.trim()
     : 'grp_default';
+  const perfTraceId = typeof msg.perfTraceId === 'string' && msg.perfTraceId.trim()
+    ? msg.perfTraceId.trim()
+    : null;
+  const perfStart = perfNowMs();
+  const tracePerf = (phase, extra = {}) => {
+    if (!perfTraceId) return;
+    recordAgentPerfTrace(ctx.CONFIG, {
+      traceId: perfTraceId,
+      phase,
+      sessionId,
+      messageType: msg.type,
+      ...extra,
+    });
+  };
+  const traceDuration = (phase, start, extra = {}) => {
+    tracePerf(phase, {
+      durationMs: perfNowMs() - start,
+      ...extra,
+    });
+  };
+  tracePerf('session_send.received', {
+    turnId: typeof msg.id === 'string' ? msg.id : null,
+    detail: {
+      mentionCount: mentions.length,
+      attachmentCount: Array.isArray(msg.files) ? msg.files.length : 0,
+    },
+  });
 
   // Entry gate: if a compact is in flight from the previous turn IN
   // THIS GROUP, wait for it to finish before reading the group's
@@ -3043,7 +3283,9 @@ export async function handleYeaftSessionSend(msg) {
   // a session has loaded (or in test paths that never call
   // `ensureSessionLoaded`) it may be unavailable; skip gracefully.
   if (session?.compactor) {
+    const compactWaitStart = perfNowMs();
     await session.compactor.awaitInFlight(sessionId);
+    traceDuration('session_send.await_compactor', compactWaitStart);
   }
 
   // yeaftDir is a hard prerequisite for both session boot and group seeding;
@@ -3059,19 +3301,21 @@ export async function handleYeaftSessionSend(msg) {
     return;
   }
 
-  await ensureSessionLoaded();
-
-  // Open the session. The default `grp_default` no longer self-seeds
-  // here — session creation happens up-front via `handleYeaftCreateSession`,
-  // so a missing dir surfaces a clear error rather than masking it.
+  // Open the session metadata first so a workDir-backed Session can load its
+  // project-tier skills and MCP before the first engine turn. The runtime boot
+  // below uses the same workDir; if metadata is missing we still boot the agent
+  // runtime for a useful error response, then fail on the session open check.
   let sessionHandle = null;
   let sessionRoot = null;
+  let sessionMetaForRuntime = null;
+  const openSessionStart = perfNowMs();
   try {
     const groupYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
     sessionRoot = sessionsRoot(groupYeaftDir);
     const dir = join(sessionRoot, sessionId);
     if (existsSync(dir) && loadSessionMeta(dir)) {
       sessionHandle = openSession(sessionRoot, sessionId);
+      sessionMetaForRuntime = sessionHandle.getMeta();
     } else {
       // fix-yeaft-session-server-persistence: the `grp_default` on-the-
       // fly seed used to manufacture a missing session here. That
@@ -3084,6 +3328,13 @@ export async function handleYeaftSessionSend(msg) {
   } catch (err) {
     console.warn('[Yeaft] yeaft_session_chat: session open failed', err?.message || err);
   }
+  traceDuration('session_send.open_session', openSessionStart, { ok: !!sessionHandle });
+
+  const ensureSessionStart = perfNowMs();
+  await ensureSessionLoaded({ sessionMeta: sessionMetaForRuntime, perfTraceId });
+  await ensureProjectRuntimeForSessionMeta(sessionMetaForRuntime);
+  traceDuration('session_send.ensure_session_loaded', ensureSessionStart);
+
 
   if (!sessionHandle) {
     sendSessionOutputFrame({
@@ -3156,6 +3407,7 @@ export async function handleYeaftSessionSend(msg) {
   // driver receives.
   const inboundFiles = Array.isArray(msg.files) ? msg.files : [];
   let attachmentBundle = { promptAttachments: [], promptSuffix: '', promptParts: [], failed: [] };
+  const attachmentsStart = perfNowMs();
   if (inboundFiles.length > 0) {
     try {
       attachmentBundle = persistYeaftAttachments(inboundFiles, { subdir: sessionId });
@@ -3176,11 +3428,19 @@ export async function handleYeaftSessionSend(msg) {
     }, { sessionId });
   }
   const persistedAttachments = attachmentsForPersistence(attachmentBundle.promptAttachments);
+  traceDuration('session_send.attachments', attachmentsStart, {
+    detail: {
+      inputFileCount: inboundFiles.length,
+      persistedFileCount: persistedAttachments.length,
+      failedFileCount: Array.isArray(attachmentBundle.failed) ? attachmentBundle.failed.length : 0,
+    },
+  });
 
   // Ingest user text. The coordinator persists, applies mention/fanout
   // rules, and calls deliver() (== enqueueForVp) for each chosen VP —
   // which both (a) emits vp_typing_start and (b) ensures a driver runs.
   let report;
+  const ingestStart = perfNowMs();
   try {
     report = coord.ingest({
       id: typeof msg.id === 'string' && msg.id ? msg.id : undefined,
@@ -3198,6 +3458,7 @@ export async function handleYeaftSessionSend(msg) {
       // back to disk on every fan-out target. NOT persisted.
       _promptParts: attachmentBundle.promptParts,
       _promptSuffix: attachmentBundle.promptSuffix,
+      _perfTraceId: perfTraceId,
     });
   } catch (err) {
     console.warn('[Yeaft] yeaft_session_chat: coord.ingest failed', err?.message || err);
@@ -3208,6 +3469,14 @@ export async function handleYeaftSessionSend(msg) {
     sendSessionOutputFrame({ type: 'result', result_text: '' }, { sessionId });
     return;
   }
+
+  traceDuration('session_send.coordinator_ingest', ingestStart, {
+    turnId: report?.message?.id || null,
+    detail: {
+      dispatchedCount: Array.isArray(report?.dispatched) ? report.dispatched.length : 0,
+      fallback: typeof report?.fallback === 'string' ? report.fallback : null,
+    },
+  });
 
   // Thread ownership is resolved inside enqueueForVp()/routeEnvelopeToVpThread
   // before persistence. Do not write a canonical 'main' user row here: a
@@ -3233,7 +3502,15 @@ export async function handleYeaftSessionSend(msg) {
   // Wait only for routing/classification promises spawned by this message.
   // Do not wait for every driver in the group: unrelated older threads may keep
   // running for minutes and must not hold this request lifecycle hostage.
+  const routeWaitStart = perfNowMs();
   await waitForRoutePromises(report?.message?.id);
+  traceDuration('session_send.wait_route_promises', routeWaitStart, {
+    turnId: report?.message?.id || null,
+  });
+  traceDuration('session_send.handler_total', perfStart, {
+    turnId: report?.message?.id || null,
+    ok: true,
+  });
 
   // Post-turn compaction. Fire-and-forget — does NOT block the response
   // path. The Compactor's own precheck (`shouldCompactHistory`) decides
@@ -3405,76 +3682,123 @@ export function buildVpQueryOpts({ vpId, sessionCoordinator, sessionId, envelope
 }
 
 /**
- * Lazy session boot. Idempotent: subsequent calls are no-ops once `session`
- * is set. Emits `session_ready` on first init so the frontend can finalize
- * its handshake.
+ * Lazy session boot. Idempotent: concurrent callers share one in-flight promise.
+ * Emits `session_ready` on first init so the frontend can finalize its handshake.
+ *
+ * @param {{ workDir?: string, sessionId?: string|null, sessionMeta?: object, perfTraceId?: string|null, messageType?: string }} [opts]
+ * @returns {Promise<import('./session.js').Session>}
  */
-async function ensureSessionLoaded() {
-  if (session) return;
+async function ensureSessionLoaded(opts = {}) {
+  if (session) return session;
+  if (sessionLoadPromise) return sessionLoadPromise;
 
-  const yeaftDir = ctx.CONFIG?.yeaftDir;
-  session = await loadSession({
-    ...(yeaftDir && { dir: yeaftDir }),
-    skipMCP: false,
-    skipSkills: false,
-    serverMode: true,
-  });
+  sessionLoadPromise = (async () => {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const normalizedWorkDir = normalizeSessionWorkDir(opts?.workDir || opts?.sessionMeta?.workDir);
+    session = await loadSession({
+      ...(yeaftDir && { dir: yeaftDir }),
+      ...(normalizedWorkDir && { workDir: normalizedWorkDir }),
+      skipMCP: false,
+      skipSkills: false,
+      serverMode: true,
+    });
 
-  installYeaftRuntimeBridge(session);
+    installYeaftRuntimeBridge(session);
 
-  try {
-    if (session.engine && typeof session.engine.setSubAgentEventSink === 'function') {
-      session.engine.setSubAgentEventSink((agentId, evt) => {
-        try {
-          sendSessionEvent({ type: 'sub_agent_event', agentId, payload: evt });
-        } catch { /* ignore */ }
-      });
-    }
-  } catch (err) {
-    console.warn('[Yeaft] setSubAgentEventSink wiring failed:', err?.message || err);
-  }
-
-  // Bug 8: clean up legacy `.archived-*` group dirs at boot.
-  try {
-    if (yeaftDir) {
-      const removed = purgeArchivedSessions(yeaftDir);
-      if (removed && removed.length > 0) {
-        console.log(`[Yeaft] purged ${removed.length} legacy .archived group dir(s)`);
+    try {
+      if (session.engine && typeof session.engine.setSubAgentEventSink === 'function') {
+        session.engine.setSubAgentEventSink((agentId, evt) => {
+          try {
+            sendSessionEvent({ type: 'sub_agent_event', agentId, payload: evt });
+          } catch { /* ignore */ }
+        });
       }
+    } catch (err) {
+      console.warn('[Yeaft] setSubAgentEventSink wiring failed:', err?.message || err);
     }
-  } catch (err) {
-    console.warn('[Yeaft] purgeArchivedSessions failed:', err?.message || err);
-  }
 
-  yeaftConversationId = `yeaft-${Date.now()}`;
-  hydrateYeaftStatusFromSession(session, { reason: 'session_ready', emitEvent: true });
-  broadcastSkillSlashCommands(session);
+    // Bug 8: clean up legacy `.archived-*` group dirs at boot.
+    try {
+      if (yeaftDir) {
+        const removed = purgeArchivedSessions(yeaftDir);
+        if (removed && removed.length > 0) {
+          console.log(`[Yeaft] purged ${removed.length} legacy .archived group dir(s)`);
+        }
+      }
+    } catch (err) {
+      console.warn('[Yeaft] purgeArchivedSessions failed:', err?.message || err);
+    }
 
-  // Per-group history is hydrated lazily on first `getOrCreateSessionHistory`
-  // — there's no global "all conversations" tape any more.
+    ensureYeaftConversationId();
+    const bootProjectRuntime = normalizedWorkDir ? await ensureProjectRuntimeForSessionMeta({ workDir: normalizedWorkDir }) : null;
+    const bootStatus = mergedStatusForProjectRuntime(bootProjectRuntime);
+    hydrateYeaftStatusFromSession({ ...session, status: bootStatus }, { reason: 'session_ready', emitEvent: true });
+    broadcastSkillSlashCommands(session, bootProjectRuntime ? [bootProjectRuntime.skillManager] : []);
 
-  sendSessionEvent({
-    type: 'session_ready',
-    conversationId: yeaftConversationId,
-    model: session.config.primaryModel || session.config.model,
-    modelEffort: session.config.modelEffort || null,
-    availableModels: session.config.availableModels || [],
-    skills: session.status.skills,
-    mcpServers: session.status.mcpServers,
-    tools: session.status.tools,
-    yeaftDir: ctx.CONFIG?.yeaftDir || null,
-    tasks: session.taskManager ? session.taskManager.listActiveTasks() : [],
-  });
-  sendSessionSnapshotBroadcast();
-  // vp-status: rebuild frontend status table from authoritative agent
-  // memory. Sent unconditionally so reconnect/refresh paths get the same
-  // bootstrap as first-load (the broker dedup logic makes a redundant
-  // snapshot harmless).
+    // Per-group history is hydrated lazily on first `getOrCreateSessionHistory`
+    // — there's no global "all conversations" tape any more.
+
+    sendSessionEvent({
+      type: 'session_ready',
+      conversationId: yeaftConversationId,
+      model: session.config.primaryModel || session.config.model,
+      modelEffort: session.config.modelEffort || null,
+      availableModels: session.config.availableModels || [],
+      skills: bootStatus.skills,
+      mcpServers: bootStatus.mcpServers,
+      tools: bootStatus.tools,
+      yeaftDir: ctx.CONFIG?.yeaftDir || null,
+      tasks: session.taskManager ? session.taskManager.listActiveTasks() : [],
+    }, opts?.perfTraceId ? { sessionId: opts?.sessionMeta?.id || opts?.sessionId || null, perfTraceId: opts.perfTraceId } : undefined);
+    sendSessionSnapshotBroadcast();
+    // vp-status: rebuild frontend status table from authoritative agent
+    // memory. Sent unconditionally so reconnect/refresh paths get the same
+    // bootstrap as first-load (the broker dedup logic makes a redundant
+    // snapshot harmless).
+    try {
+      getVpStatusBroker().broadcastSnapshot();
+    } catch (err) {
+      console.warn('[Yeaft] vp-status snapshot broadcast failed:', err?.message || err);
+    }
+
+    return session;
+  })();
+
   try {
-    getVpStatusBroker().broadcastSnapshot();
+    return await sessionLoadPromise;
   } catch (err) {
-    console.warn('[Yeaft] vp-status snapshot broadcast failed:', err?.message || err);
+    session = null;
+    throw err;
+  } finally {
+    sessionLoadPromise = null;
   }
+}
+
+function startSessionLoadInBackground({ sessionId = null, sessionMeta = null, perfTraceId = null, traceDuration = null, tracePerf = null, phase = 'history.load_session_runtime' } = {}) {
+  if (session) return null;
+  const start = perfNowMs();
+  const promise = ensureSessionLoaded({ sessionId, sessionMeta, perfTraceId })
+    .then(async (loaded) => {
+      if (typeof traceDuration === 'function') traceDuration(phase, start, { detail: { background: true } });
+      if (sessionId && loaded?.conversationStore) {
+        const hydrateStart = perfNowMs();
+        setGroupHistory(sessionId, hydrateGroupHistory(sessionId));
+        if (typeof traceDuration === 'function') traceDuration('history.hydrate_group_history', hydrateStart, { detail: { background: true } });
+        sendDreamSnapshotForSession(sessionId, { trigger: 'load_history' }).catch(() => null);
+      }
+      return loaded;
+    })
+    .catch((err) => {
+      if (typeof tracePerf === 'function') {
+        tracePerf('history.load_session_runtime_error', {
+          ok: false,
+          detail: { background: true, errorName: err?.name || null, errorMessage: err?.message || String(err) },
+        });
+      }
+      console.warn('[Yeaft] background session load failed:', err?.message || err);
+      return null;
+    });
+  return promise;
 }
 
 /**
@@ -3602,7 +3926,24 @@ async function raceWithEscalation(inner, { deadlineMs, onEscalate }) {
 async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId = 'main', thread = null, turnId, envelope: inboundEnvelope, vpAbort, baseSnapshot }) {
   if (!prompt?.trim()) return;
 
-  const envelope = { sessionId, vpId, threadId, turnId };
+  const perfTraceId = typeof inboundEnvelope?._perfTraceId === 'string' && inboundEnvelope._perfTraceId.trim()
+    ? inboundEnvelope._perfTraceId.trim()
+    : (typeof inboundEnvelope?.perfTraceId === 'string' && inboundEnvelope.perfTraceId.trim()
+      ? inboundEnvelope.perfTraceId.trim()
+      : null);
+  const envelope = { sessionId, vpId, threadId, turnId, ...(perfTraceId ? { perfTraceId } : {}) };
+  const vpTurnPerfStart = perfNowMs();
+  if (perfTraceId) {
+    recordAgentPerfTrace(ctx.CONFIG, {
+      traceId: perfTraceId,
+      phase: 'vp.turn_start',
+      sessionId,
+      vpId,
+      turnId,
+      threadId,
+      detail: { promptBytes: Buffer.byteLength(prompt || '') },
+    });
+  }
 
   // Per-message turn lifecycle: track start ts + which terminal reason
   // we'll emit. `emitVpTurnEnd` is idempotent (route_forward emits inside
@@ -3685,8 +4026,20 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         envelope: inboundEnvelope,
         threadId,
       });
+      const projectRuntime = await ensureProjectRuntimeForSessionMeta(sessionCoordinator?.group?.getMeta?.());
 
       vpEngine = getOrCreateVpEngine(sessionId, vpId, threadId);
+      if (projectRuntime) {
+        vpEngine.setRuntimeManagers?.({
+          skillManager: projectRuntime.skillManager,
+          mcpManager: projectRuntime.mcpManager,
+        });
+      } else {
+        vpEngine.setRuntimeManagers?.({
+          skillManager: session?.skillManager || null,
+          mcpManager: session?.mcpManager || null,
+        });
+      }
       if (thread) thread.engine = vpEngine;
 
       const inboundInjectedBy = inboundEnvelope?.msg?.meta?.injectedBy;
@@ -3713,10 +4066,25 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       // the second-line defense (history-compact only fires above 30K
       // tokens — small chats with many turns still bloat the messages
       // array). See `trimSnapshotForBudget` doc-block for policy.
+      const trimStart = perfNowMs();
       const trimmedMessages = trimSnapshotForBudget(baseSnapshot, {
         messageTokenBudget: session?.config?.messageTokenBudget,
         language: session?.config?.language,
       });
+      if (perfTraceId) {
+        recordAgentPerfTrace(ctx.CONFIG, {
+          traceId: perfTraceId,
+          phase: 'vp.trim_snapshot',
+          durationMs: perfNowMs() - trimStart,
+          sessionId,
+          vpId,
+          turnId,
+          threadId,
+          detail: { beforeMessages: baseSnapshot.length, afterMessages: trimmedMessages.length },
+        });
+      }
+      const engineStart = perfNowMs();
+      let firstEngineEvent = false;
       for await (const event of vpEngine.query({
         prompt,
         promptParts,
@@ -3738,8 +4106,32 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         },
         ...queryOpts,
       })) {
+        if (perfTraceId && !firstEngineEvent) {
+          firstEngineEvent = true;
+          recordAgentPerfTrace(ctx.CONFIG, {
+            traceId: perfTraceId,
+            phase: 'vp.engine_first_event',
+            durationMs: perfNowMs() - engineStart,
+            sessionId,
+            vpId,
+            turnId,
+            threadId,
+            messageType: event?.type || null,
+          });
+        }
         resetQueryTimer();
         handleEngineEvent(event, handlerCtx);
+      }
+      if (perfTraceId) {
+        recordAgentPerfTrace(ctx.CONFIG, {
+          traceId: perfTraceId,
+          phase: 'vp.engine_complete',
+          durationMs: perfNowMs() - engineStart,
+          sessionId,
+          vpId,
+          turnId,
+          threadId,
+        });
       }
 
       flushStreamTextBatch(handlerCtx, envelope, { resetImmediate: true });
@@ -3750,7 +4142,24 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       // the target VP turn; otherwise UI replay can show a trailing handoff
       // block after the target response.
       const visiblePrompts = inboundIsInternal ? appendedUserPrompts : [prompt, ...appendedUserPrompts];
+      const appendHistoryStart = perfNowMs();
       appendTurnToSessionHistory(sessionId, threadId, vpId, visiblePrompts, assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum, { turnId });
+      if (perfTraceId) {
+        recordAgentPerfTrace(ctx.CONFIG, {
+          traceId: perfTraceId,
+          phase: 'vp.append_history',
+          durationMs: perfNowMs() - appendHistoryStart,
+          sessionId,
+          vpId,
+          turnId,
+          threadId,
+          detail: {
+            assistantBytes: Buffer.byteLength(assistantTextParts.join('')),
+            toolCallCount: toolCallsAccum.length,
+            toolResultCount: toolResultsAccum.length,
+          },
+        });
+      }
 
       sendSessionOutputFrame({
         type: 'assistant',
@@ -3780,6 +4189,19 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       return;
     }
 
+    if (perfTraceId) {
+      recordAgentPerfTrace(ctx.CONFIG, {
+        traceId: perfTraceId,
+        phase: 'vp.turn_error',
+        durationMs: perfNowMs() - vpTurnPerfStart,
+        sessionId,
+        vpId,
+        turnId,
+        threadId,
+        ok: false,
+        detail: { message: err?.message || String(err) },
+      });
+    }
     console.error('[Yeaft] query error:', err);
     turnEndReason = 'errored';
     turnEndDetail = { message: err?.message || String(err) };
@@ -3857,6 +4279,19 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
     if (thread) {
       thread.status = 'idle';
       thread.updatedAt = Date.now();
+    }
+    if (perfTraceId) {
+      recordAgentPerfTrace(ctx.CONFIG, {
+        traceId: perfTraceId,
+        phase: 'vp.turn_total',
+        durationMs: perfNowMs() - vpTurnPerfStart,
+        sessionId,
+        vpId,
+        turnId,
+        threadId,
+        ok: turnEndReason !== 'errored',
+        detail: { reason: turnEndReason },
+      });
     }
   }
 }
@@ -4386,6 +4821,12 @@ export function __testAppendTurnToSessionHistory(...args) {
  * Backwards-compat: when neither field is set, defaults to `vpId='default'`
  * which matches the pre-v0.1.754 behavior.
  */
+function resolveDreamTriggerSessionId(msg = {}) {
+  return typeof msg.sessionId === 'string' && msg.sessionId
+    ? msg.sessionId
+    : (typeof msg.groupId === 'string' && msg.groupId ? msg.groupId : null);
+}
+
 export function normalizeDreamResult(result) {
   const sessions = Array.isArray(result?.sessions) ? result.sessions : [];
   const targets = Array.isArray(result?.targets) ? result.targets : [];
@@ -4434,7 +4875,7 @@ export async function handleYeaftDreamTrigger(msg = {}) {
   // route the error event back to the right row and the per-group
   // "Run dream now" button would stay stuck on "Running…" forever
   // (review feedback from PR #757).
-  const sessionId = typeof msg.sessionId === 'string' && msg.sessionId ? msg.sessionId : null;
+  const sessionId = resolveDreamTriggerSessionId(msg);
   const vpId = !sessionId ? (msg.vpId || 'default') : null;
   const tag = sessionId ? { sessionId } : { vpId };
 
@@ -4642,7 +5083,7 @@ export async function handleYeaftFetchDebugHistory(msg = {}) {
   let hasMore = false;
   try {
     if (session?.trace && typeof session.trace.fetchRecentDebugHistory === 'function') {
-      const out = session.trace.fetchRecentDebugHistory({ limit, dreamLimit, sessionId, threadId, indexOnly, detailTurnId, search });
+      const out = await session.trace.fetchRecentDebugHistory({ limit, dreamLimit, sessionId, threadId, indexOnly, detailTurnId, search });
       loops = Array.isArray(out?.loops) ? out.loops : [];
       turns = Array.isArray(out?.turns) ? out.turns : [];
       dreamEvents = Array.isArray(out?.dreamEvents) ? out.dreamEvents : [];
@@ -4854,6 +5295,27 @@ export function handleYeaftModelSwitch(msg) {
  */
 export async function handleYeaftLoadHistory(msg) {
   const sessionId = (msg && typeof msg.sessionId === 'string' && msg.sessionId) || null;
+  const perfTraceId = typeof msg?.perfTraceId === 'string' && msg.perfTraceId.trim() ? msg.perfTraceId.trim() : null;
+  const perfStart = perfNowMs();
+  const tracePerf = (phase, extra = {}) => {
+    if (!perfTraceId) return;
+    recordAgentPerfTrace(ctx.CONFIG, {
+      traceId: perfTraceId,
+      phase,
+      sessionId,
+      messageType: msg?.type || 'yeaft_load_history',
+      ...extra,
+    });
+  };
+  const traceDuration = (phase, start, extra = {}) => tracePerf(phase, { durationMs: perfNowMs() - start, ...extra });
+  tracePerf('history.received', {
+    detail: {
+      limit: Number.isFinite(msg?.limit) ? msg.limit : null,
+      afterSeq: Number.isFinite(msg?.afterSeq) ? msg.afterSeq : null,
+      metadataOnly: !!(msg && Number.isFinite(msg.limit) && msg.limit <= 0),
+      sessionLoaded: !!session,
+    },
+  });
   const metadataOnly = msg && Number.isFinite(msg.limit) && msg.limit <= 0;
   // `lim` is now expressed in TURNS, not raw messages. `loadRecent` and
   // `loadRecentBySession` use turn-based slicing so the cut never lands
@@ -4876,14 +5338,19 @@ export async function handleYeaftLoadHistory(msg) {
       afterSeq = session.conversationStore.getMessageSeqById(afterMessageId);
     }
     if (sessionId && afterSeq !== null && typeof session.conversationStore.loadAfterSeqByGroup === 'function') {
+      const loadStart = perfNowMs();
       const delta = session.conversationStore.loadAfterSeqByGroup(sessionId, afterSeq);
+      traceDuration('history.store_load_delta', loadStart, { detail: { count: delta.messages?.length || 0, afterSeq } });
+      const emitStart = perfNowMs();
       const projectedMessages = emitHistoryChunk({
         sessionId,
         messages: delta.messages,
         mode: 'delta',
         latestSeq: delta.latestSeq,
         afterSeq,
+        perfTraceId,
       });
+      traceDuration('history.emit_chunk', emitStart, { detail: { mode: 'delta', count: projectedMessages.length } });
       sendSessionEvent({
         type: 'history_loaded',
         mode: 'delta',
@@ -4891,7 +5358,7 @@ export async function handleYeaftLoadHistory(msg) {
         sessionId,
         latestSeq: delta.latestSeq,
         afterSeq,
-      });
+      }, perfTraceId ? { sessionId, perfTraceId } : undefined);
       return;
     }
 
@@ -4900,9 +5367,11 @@ export async function handleYeaftLoadHistory(msg) {
     // opening a group can paint the latest messages quickly; older rows are
     // paged via `yeaft_load_more_history` when the user scrolls upward.
     const limit = (typeof msg.limit === 'number') ? msg.limit : 10;
+    const loadStart = perfNowMs();
     const visiblePage = sessionId
       ? loadVisibleGroupHistoryPage(session.conversationStore, sessionId, limit)
       : { messages: limit > 0 ? pickRecent(session.conversationStore, limit) : [], oldestSeq: null, hasMore: false };
+    traceDuration('history.store_load_recent', loadStart, { detail: { rawCount: visiblePage.messages?.length || 0, limit } });
     // Legacy compact.md is a non-group fallback only. For group replay, reading
     // it makes every group show "has compact" once any legacy/non-scoped compact
     // exists, even when this group has no scoped summary.
@@ -4920,6 +5389,7 @@ export async function handleYeaftLoadHistory(msg) {
     }
 
     if (sessionId) {
+      const emitStart = perfNowMs();
       emitHistoryChunk({
         sessionId,
         messages: replayEntries,
@@ -4928,7 +5398,9 @@ export async function handleYeaftLoadHistory(msg) {
         hasMore: visiblePage.hasMore,
         latestSeq,
         turns: limit,
+        perfTraceId,
       });
+      traceDuration('history.emit_chunk', emitStart, { detail: { mode: 'recent', count: replayEntries.length } });
     } else {
       emitLegacyHistoryOutputFrames(replayEntries);
     }
@@ -4965,7 +5437,7 @@ export async function handleYeaftLoadHistory(msg) {
       hasMore,
       oldestSeq,
       latestSeq,
-    });
+    }, perfTraceId ? { sessionId, perfTraceId } : undefined);
   };
 
   if (!session) {
@@ -4979,63 +5451,83 @@ export async function handleYeaftLoadHistory(msg) {
     // skill scans, memory index sync). The conversation markdown store is the
     // source of truth and can be opened cheaply, so replay the visible message
     // window immediately, then finish loadSession below for actual turns.
+    const coldStoreStart = perfNowMs();
     const coldStore = new ConversationStore(yeaftDir);
+    traceDuration('history.cold_store_open', coldStoreStart);
     if (sessionId && (afterSeqRaw !== null || afterMessageId)) {
       let afterSeq = afterSeqRaw;
       if (afterSeq === null && afterMessageId && typeof coldStore.getMessageSeqById === 'function') {
         afterSeq = coldStore.getMessageSeqById(afterMessageId);
       }
+      const loadStart = perfNowMs();
       const delta = afterSeq !== null && typeof coldStore.loadAfterSeqByGroup === 'function'
         ? coldStore.loadAfterSeqByGroup(sessionId, afterSeq)
         : { messages: [], latestSeq: null };
+      traceDuration('history.store_load_delta', loadStart, { detail: { count: delta.messages?.length || 0, afterSeq, cold: true } });
+      const emitStart = perfNowMs();
       const projectedMessages = emitHistoryChunk({
         sessionId,
         messages: delta.messages,
         mode: 'delta',
         latestSeq: delta.latestSeq,
         afterSeq,
+        perfTraceId,
       });
-      sendSessionEvent({ type: 'history_loaded', mode: 'delta', count: projectedMessages.length, sessionId, latestSeq: delta.latestSeq, afterSeq });
+      traceDuration('history.emit_chunk', emitStart, { detail: { mode: 'delta', count: projectedMessages.length, cold: true } });
+      sendSessionEvent({ type: 'history_loaded', mode: 'delta', count: projectedMessages.length, sessionId, latestSeq: delta.latestSeq, afterSeq }, perfTraceId ? { sessionId, perfTraceId } : undefined);
     } else if (!metadataOnly) {
-      emitVisibleHistoryReplay({ store: coldStore, sessionId, limit, mode: 'recent' });
+      const replayStart = perfNowMs();
+      emitVisibleHistoryReplay({ store: coldStore, sessionId, limit, mode: 'recent', perfTraceId });
+      traceDuration('history.cold_replay', replayStart, { detail: { mode: 'recent', limit } });
     }
     historyAlreadyReplayed = true;
 
-    session = await loadSession({
-      dir: yeaftDir,
-      skipMCP: false,
-      skipSkills: false,
-      serverMode: true,
-    });
-    installYeaftRuntimeBridge(session);
-
-    // Per-group history hydrates lazily via getOrCreateSessionHistory.
-    // When the load-history call carries a sessionId, force-refresh THAT
-    // group's tape so the next user message sees on-disk state. When
-    // it doesn't (legacy callers), do nothing — the per-group lazy
-    // hydration handles it.
-    if (sessionId) setGroupHistory(sessionId, hydrateGroupHistory(sessionId));
+    let sessionMetaForRuntime = null;
+    if (sessionId) {
+      try {
+        const groupYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
+        const metaDir = join(sessionsRoot(groupYeaftDir), sessionId);
+        sessionMetaForRuntime = loadSessionMeta(metaDir);
+      } catch { /* best-effort metadata hint */ }
+    }
+    // Full runtime boot can be expensive (memory FTS sync, skills, MCP, dream
+    // boot checks). It is not needed to render persisted history, so keep this
+    // request short and let message-send await the same single-flight boot when
+    // the user actually submits a turn.
+    startSessionLoadInBackground({ sessionId, sessionMeta: sessionMetaForRuntime, perfTraceId, traceDuration, tracePerf });
   } else {
+    const replayStart = perfNowMs();
     replayHistoryFromStore();
+    traceDuration('history.replay_from_store', replayStart);
     historyAlreadyReplayed = true;
   }
 
-  if (sessionId) {
+  if (session && sessionId) {
     // Re-entering an existing session with a (possibly new) group filter:
     // re-seed THIS group's history from disk so it doesn't carry stale
-    // in-memory state into the next turn's context.
+    // in-memory state into the next turn's context. Do not mark it hydrated
+    // before the runtime exists; that would cache an empty tape and starve the
+    // next user turn of persisted context.
+    const hydrateStart = perfNowMs();
     setGroupHistory(sessionId, hydrateGroupHistory(sessionId));
+    traceDuration('history.hydrate_group_history_final', hydrateStart);
   }
 
   // Always replay session_ready so refresh / reconnect rebuilds UI state, but
   // never make the history response wait for bulky metadata snapshots. The
   // first visible chunk has already been sent above; defer metadata to the next
   // tick so the browser can paint messages before VP/session/dream snapshots.
-  scheduleYeaftLoadHistoryMetadataReplay(sessionId);
+  if (session) scheduleYeaftLoadHistoryMetadataReplay(sessionId);
 
-  if (historyAlreadyReplayed) return;
+  if (historyAlreadyReplayed) {
+    traceDuration('history.handler_total', perfStart, { ok: true });
+    return;
+  }
 
+  const replayStart = perfNowMs();
   replayHistoryFromStore();
+  traceDuration('history.replay_from_store', replayStart);
+  traceDuration('history.handler_total', perfStart, { ok: true });
 }
 
 /**
@@ -5053,8 +5545,17 @@ export async function handleYeaftLoadHistory(msg) {
  */
 export async function handleYeaftLoadMoreHistory(msg) {
   const sessionId = (msg && typeof msg.sessionId === 'string' && msg.sessionId) || null;
+  const perfTraceId = typeof msg?.perfTraceId === 'string' && msg.perfTraceId.trim() ? msg.perfTraceId.trim() : null;
+  const perfStart = perfNowMs();
+  const tracePerf = (phase, extra = {}) => {
+    if (!perfTraceId) return;
+    recordAgentPerfTrace(ctx.CONFIG, { traceId: perfTraceId, phase, sessionId, messageType: msg?.type || 'yeaft_load_more_history', ...extra });
+  };
+  const traceDuration = (phase, start, extra = {}) => tracePerf(phase, { durationMs: perfNowMs() - start, ...extra });
+  tracePerf('history_more.received');
   if (!session || !sessionId) {
-    emitHistoryChunk({ sessionId, messages: [], mode: 'older', oldestSeq: null, hasMore: false });
+    emitHistoryChunk({ sessionId, messages: [], mode: 'older', oldestSeq: null, hasMore: false, perfTraceId });
+    traceDuration('history_more.handler_total', perfStart, { ok: false, detail: { missingSession: !session, missingSessionId: !sessionId } });
     return;
   }
 
@@ -5063,16 +5564,20 @@ export async function handleYeaftLoadMoreHistory(msg) {
 
   let result;
   try {
+    const loadStart = perfNowMs();
     result = loadVisibleGroupHistoryPage(session.conversationStore, sessionId, turns, beforeSeq);
+    traceDuration('history_more.store_load', loadStart, { detail: { count: result.messages?.length || 0, beforeSeq, turns } });
   } catch (err) {
     console.error('[Yeaft] loadOlderBySession failed:', err.message);
     result = { messages: [], oldestSeq: null, hasMore: false };
+    tracePerf('history_more.store_error', { ok: false, detail: { errorName: err?.name || null, errorMessage: err?.message || String(err) } });
   }
 
   // Wire shape mirrors handleYeaftLoadHistory's projection: only visible
   // user / assistant text rows. Internal reflection/system-only rows stay
   // server-side, and stable ids + speaker attribution ride with each row
   // so older-history prepend renders exactly like refresh replay.
+  const emitStart = perfNowMs();
   emitHistoryChunk({
     sessionId,
     messages: result.messages || [],
@@ -5080,7 +5585,10 @@ export async function handleYeaftLoadMoreHistory(msg) {
     oldestSeq: result.oldestSeq,
     hasMore: !!result.hasMore,
     turns,
+    perfTraceId,
   });
+  traceDuration('history_more.emit_chunk', emitStart, { detail: { count: result.messages?.length || 0 } });
+  traceDuration('history_more.handler_total', perfStart, { ok: true });
 }
 
 /**
@@ -5088,6 +5596,7 @@ export async function handleYeaftLoadMoreHistory(msg) {
  * session, then re-initialises so the frontend gets fresh config.
  */
 export async function resetYeaftSession() {
+  await shutdownProjectRuntimes();
   if (currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
     try { currentAbortCtrl.abort(); } catch { /* ignore */ }
   }
@@ -5151,6 +5660,7 @@ export async function resetYeaftSession() {
 
     yeaftConversationId = `yeaft-${Date.now()}`;
     hydrateYeaftStatusFromSession(session, { reason: 'reset', emitEvent: true });
+    broadcastSkillSlashCommands(session);
 
     // Per-group history hydrates lazily via getOrCreateSessionHistory on
     // first read. Nothing to seed here.
@@ -5231,16 +5741,7 @@ function mcpRuntimeSnapshot() {
  * pick up the change.
  */
 function hotSwapMcpTools() {
-  if (!session?.toolRegistry || typeof session.toolRegistry.replaceMcpTools !== 'function') {
-    return { removed: 0, added: 0, skipped: true };
-  }
-  try {
-    const result = session.toolRegistry.replaceMcpTools(session.mcpManager, buildMcpFlattenedTools);
-    return { ...result, skipped: false };
-  } catch (err) {
-    console.warn('[Yeaft] hot-swap MCP tools failed:', err?.message || err);
-    return { removed: 0, added: 0, skipped: true, error: err?.message || String(err) };
-  }
+  return replaceSessionMcpTools(session?.mcpManager);
 }
 
 /**
@@ -5299,7 +5800,7 @@ export async function handleYeaftMcpAdd(msg = {}) {
     }
   }
 
-  const swap = hotSwapMcpTools();
+  const swap = replaceSessionMcpTools(session?.mcpManager);
 
   sendToServer({
     type: 'yeaft_mcp_add_result',
@@ -5336,7 +5837,7 @@ export async function handleYeaftMcpRemove(msg = {}) {
     }
   }
 
-  const swap = hotSwapMcpTools();
+  const swap = replaceSessionMcpTools(session?.mcpManager);
 
   sendToServer({
     type: 'yeaft_mcp_remove_result',
@@ -5394,7 +5895,7 @@ export async function handleYeaftMcpReload(msg = {}) {
     console.warn('[Yeaft] MCP reload failed:', err?.message || err);
   }
 
-  const swap = hotSwapMcpTools();
+  const swap = replaceSessionMcpTools(session?.mcpManager);
 
   sendToServer({
     type: 'yeaft_mcp_reload_result',
@@ -5414,6 +5915,7 @@ export const __testHooks = {
   buildPendingRescueEnvelope,
   setSessionForTest(nextSession) {
     session = nextSession || null;
+    sessionLoadPromise = null;
   },
   resetAbortState() {
     turnAbortCtrls.clear();
@@ -5428,6 +5930,29 @@ export const __testHooks = {
     return getVpStatusBroker().transition(status);
   },
   decorateSessionsWithRuntimeState,
+  resolveDreamTriggerSessionId,
+  async loadProjectRuntime(workDir) {
+    return loadProjectRuntime(workDir);
+  },
+  seedProjectRuntime(workDir, runtime) {
+    const normalizedWorkDir = normalizeSessionWorkDir(workDir);
+    const seeded = {
+      workDir: normalizedWorkDir,
+      skillManager: runtime?.skillManager || { list: () => [] },
+      mcpManager: runtime?.mcpManager || { listTools: () => [], disconnectAll: async () => {} },
+      mcpStatus: runtime?.mcpStatus || { connected: [], failed: [] },
+      mcpConfig: runtime?.mcpConfig || { servers: [], skipped: [] },
+      status: runtime?.status || { skills: 0, mcpServers: [], mcpFailed: [], mcpSkipped: [], tools: 0 },
+    };
+    projectRuntimes.set(projectRuntimeKey(normalizedWorkDir), seeded);
+    return seeded;
+  },
+  async shutdownProjectRuntimes() {
+    return shutdownProjectRuntimes();
+  },
+  projectRuntimeCount() {
+    return projectRuntimes.size;
+  },
   seedQueuedVpTurn({ sessionId = 'session-test', vpId = 'vp-test', threadId = 'main', turnId = 'turn-test' } = {}) {
     const key = threadKey(sessionId, vpId, threadId);
     const inbox = vpInboxes.get(key) || [];

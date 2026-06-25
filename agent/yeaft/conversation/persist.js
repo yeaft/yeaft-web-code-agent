@@ -1115,6 +1115,13 @@ export class ConversationStore {
    * Used by the web client to fetch "everything new since my latest known
    * message" when re-entering a session — the delta path.
    *
+   * `latestSeq` is the newest seq the client may safely keep as its tail
+   * cursor. When no visible rows changed after `afterSeq`, keep the cursor at
+   * least at `afterSeq` so an empty delta still completes the in-flight sync
+   * without downgrading the client to a cursor-less loaded state. Hidden rows
+   * are also allowed to advance this cursor because they were scanned and
+   * intentionally omitted from UI replay.
+   *
    * @param {string} sessionId
    * @param {number|null} afterSeq — exclusive lower bound
    * @param {{ limit?: number }} [opts]
@@ -1125,16 +1132,20 @@ export class ConversationStore {
     const limit = Number.isFinite(opts.limit) && opts.limit > 0 ? opts.limit : 500;
     const cutoff = Number.isFinite(afterSeq) && afterSeq >= 0 ? afterSeq : null;
     if (cutoff === null) return { messages: [], latestSeq: null };
-    const all = this.#loadSessionMessages(sessionId);
-    const after = all.filter((m) => {
+    const rawAfter = this.#loadSessionMessages(sessionId).filter((m) => {
       if (!m || m.sessionId !== sessionId) return false;
-      if (isHiddenConversationRow(m)) return false;
       const seq = parseSeqFromId(m.id);
       return Number.isFinite(seq) && seq > cutoff;
     });
+    const newestScannedSeq = rawAfter.slice(0, limit).reduce((max, m) => {
+      const seq = parseSeqFromId(m?.id);
+      return Number.isFinite(seq) && seq > max ? seq : max;
+    }, cutoff);
+    const after = rawAfter.filter(m => !isHiddenConversationRow(m));
     const sliced = pairSanitize(after.slice(0, limit));
     const lastSeq = sliced.length ? parseSeqFromId(sliced[sliced.length - 1].id) : null;
-    return { messages: sliced, latestSeq: Number.isFinite(lastSeq) ? lastSeq : null };
+    const latestSeq = Number.isFinite(lastSeq) ? Math.max(lastSeq, newestScannedSeq) : newestScannedSeq;
+    return { messages: sliced, latestSeq };
   }
 
   /**

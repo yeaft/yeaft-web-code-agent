@@ -7,6 +7,7 @@ import {
   broadcastAgentList, verifyConversationOwnership, verifyAgentOwnership
 } from '../ws-utils.js';
 import { routeSessionPin } from './session-pin-router.js';
+import { recordPerfTraceEvent } from '../perf-trace.js';
 
 function emptyYeaftToolStats(reason = '') {
   const payload = {
@@ -807,22 +808,62 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
     }
 
+    case 'perf_trace_events': {
+      if (Array.isArray(msg.events)) {
+        for (const event of msg.events.slice(0, 100)) {
+          recordPerfTraceEvent({
+            ...event,
+            source: 'web',
+            userId: client.userId || null,
+          });
+        }
+      }
+      break;
+    }
+
     case 'yeaft_load_history':
     case 'unify_load_history': {
       const histAgentId = msg.agentId || client.currentAgent;
+      if (msg.perfTraceId) {
+        recordPerfTraceEvent({
+          traceId: msg.perfTraceId,
+          source: 'server',
+          phase: 'relay.resolve_agent',
+          at: Date.now(),
+          userId: client.userId || null,
+          agentId: histAgentId || null,
+          sessionId: msg.sessionId || null,
+          messageType: 'yeaft_load_history',
+        });
+      }
       if (!histAgentId) return;
       if (!await checkAgentAccess(histAgentId)) return;
       // Forward the catch-up cursor (afterSeq / afterMessageId) verbatim when
       // present. Without it the agent never takes the cheap delta path and
       // falls back to a full recent-history replay on every reconnect
       // catch-up — re-sending the whole pane instead of an empty delta.
-      await forwardToAgent(histAgentId, {
+      const forwarded = {
         type: 'yeaft_load_history',
         limit: msg.limit,
         sessionId: msg.sessionId || null,
+        ...(typeof msg.perfTraceId === 'string' ? { perfTraceId: msg.perfTraceId } : {}),
         ...(Number.isFinite(msg.afterSeq) ? { afterSeq: msg.afterSeq } : {}),
         ...(typeof msg.afterMessageId === 'string' ? { afterMessageId: msg.afterMessageId } : {}),
-      });
+      };
+      if (forwarded.perfTraceId) {
+        recordPerfTraceEvent({
+          traceId: forwarded.perfTraceId,
+          source: 'server',
+          phase: 'relay.forward_to_agent',
+          at: Date.now(),
+          userId: client.userId || null,
+          agentId: histAgentId,
+          sessionId: forwarded.sessionId,
+          messageType: forwarded.type,
+          bytes: Buffer.byteLength(JSON.stringify(forwarded)),
+        });
+      }
+      await forwardToAgent(histAgentId, forwarded);
       break;
     }
 
@@ -836,6 +877,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         sessionId: msg.sessionId || null,
         beforeSeq: typeof msg.beforeSeq === 'number' ? msg.beforeSeq : null,
         turns: typeof msg.turns === 'number' ? msg.turns : 20,
+        ...(typeof msg.perfTraceId === 'string' ? { perfTraceId: msg.perfTraceId } : {}),
       });
       break;
     }
@@ -940,6 +982,18 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       if (typeof msg.type === 'string' && (msg.type.startsWith('yeaft_') || msg.type.startsWith('unify_'))) {
         const relayType = msg.type.startsWith('unify_') ? `yeaft_${msg.type.slice('unify_'.length)}` : msg.type;
         const relayAgentId = msg.agentId || client.currentAgent;
+        if (msg.perfTraceId) {
+          recordPerfTraceEvent({
+            traceId: msg.perfTraceId,
+            source: 'server',
+            phase: 'relay.resolve_agent',
+            at: Date.now(),
+            userId: client.userId || null,
+            agentId: relayAgentId || null,
+            sessionId: msg.sessionId || null,
+            messageType: relayType,
+          });
+        }
         if (!relayAgentId) {
           if (relayType === 'yeaft_fetch_tool_stats') {
             await sendToWebClient(client, emptyYeaftToolStats('No agent selected.'));
@@ -1016,6 +1070,19 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           delete rest.attachments;
         }
 
+        if (rest.perfTraceId) {
+          recordPerfTraceEvent({
+            traceId: rest.perfTraceId,
+            source: 'server',
+            phase: 'relay.forward_to_agent',
+            at: Date.now(),
+            userId: client.userId || null,
+            agentId: relayAgentId,
+            sessionId: rest.sessionId || null,
+            messageType: rest.type,
+            bytes: Buffer.byteLength(JSON.stringify(rest)),
+          });
+        }
         await forwardToAgent(relayAgentId, rest);
         return true;
       }

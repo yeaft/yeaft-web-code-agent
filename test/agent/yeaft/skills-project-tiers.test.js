@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { delimiter, join } from 'path';
 import { createSkillManager } from '../../../agent/yeaft/skills.js';
 
 // Project-tier skill loading: <workDir>/.claude/skills (Claude Code assets)
@@ -128,6 +128,25 @@ describe('createSkillManager — project .claude/skills tier', () => {
     expect(manager.list().find(s => s.name === 'claude-only').tier).toBe('project-claude');
     expect(manager.list().find(s => s.name === 'codex-only').tier).toBe('project-codex');
     expect(manager.list().find(s => s.name === 'yeaft-only').tier).toBe('project');
+  });
+
+  it('loads project skills from multiple roots in priority order', () => {
+    const agentCwd = mkdtempSync(join(tmpdir(), 'yeaft-tier-agent-cwd-'));
+    try {
+      writeSkill(agentCwd, '.claude/skills', 'agent-cwd-only', 'From agent cwd.');
+      writeSkill(workDir, '.yeaft/skills', 'session-only', 'From session workdir.');
+      writeSkill(agentCwd, '.yeaft/skills', 'shared', 'Agent cwd version.');
+      writeSkill(workDir, '.yeaft/skills', 'shared', 'Session workdir version.');
+
+      const manager = createSkillManager(yeaftDir, `${agentCwd}${delimiter}${workDir}`);
+      const names = manager.list().map(s => s.name).sort();
+      expect(names).toContain('agent-cwd-only');
+      expect(names).toContain('session-only');
+      const shared = manager.list().find(s => s.name === 'shared');
+      expect(shared.description).toBe('Session workdir version.');
+    } finally {
+      rmSync(agentCwd, { recursive: true, force: true });
+    }
   });
 });
 

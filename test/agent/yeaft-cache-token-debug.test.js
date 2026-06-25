@@ -98,7 +98,7 @@ describe('Yeaft cache token debug accounting', () => {
         totalTokens: 1227,
       });
 
-      const history = trace.fetchRecentDebugHistory({ limit: 10 });
+      const history = await trace.fetchRecentDebugHistory({ limit: 10 });
       expect(history.loops).toHaveLength(1);
       expect(history.loops[0].usage).toMatchObject({
         inputTokens: 20,
@@ -110,7 +110,7 @@ describe('Yeaft cache token debug accounting', () => {
       });
       expect(history.turns[0].totalTokens).toBe(1227);
     } finally {
-      trace.close();
+      await trace.close();
     }
   });
 
@@ -141,7 +141,7 @@ describe('Yeaft cache token debug accounting', () => {
         totalTokens: 125,
       });
 
-      const history = trace.fetchRecentDebugHistory({ limit: 10 });
+      const history = await trace.fetchRecentDebugHistory({ limit: 10 });
       expect(history.loops).toHaveLength(1);
       expect(history.loops[0].usage).toMatchObject({
         inputTokens: 100,
@@ -153,7 +153,7 @@ describe('Yeaft cache token debug accounting', () => {
       });
       expect(history.turns[0].totalTokens).toBe(125);
     } finally {
-      trace.close();
+      await trace.close();
     }
   });
 
@@ -184,12 +184,12 @@ describe('Yeaft cache token debug accounting', () => {
         totalTokens: 125,
       });
     } finally {
-      trace.close();
+      await trace.close();
     }
   });
 
 
-  it('reports whether older debug history exists', () => {
+  it('reports whether older debug history exists', async () => {
     const trace = new DebugTrace(tempDbPath());
     try {
       for (let i = 0; i < 3; i += 1) {
@@ -202,17 +202,17 @@ describe('Yeaft cache token debug accounting', () => {
         });
       }
 
-      const firstPage = trace.fetchRecentDebugHistory({ limit: 2 });
+      const firstPage = await trace.fetchRecentDebugHistory({ limit: 2 });
       expect(firstPage.loops).toHaveLength(2);
       expect(firstPage.turns).toHaveLength(2);
       expect(firstPage.hasMore).toBe(true);
       expect(firstPage.limit).toBe(2);
 
-      const fullPage = trace.fetchRecentDebugHistory({ limit: 3 });
+      const fullPage = await trace.fetchRecentDebugHistory({ limit: 3 });
       expect(fullPage.loops).toHaveLength(3);
       expect(fullPage.hasMore).toBe(false);
     } finally {
-      trace.close();
+      await trace.close();
     }
   });
 });

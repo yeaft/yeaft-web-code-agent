@@ -26,7 +26,6 @@ import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getRuntimePlatformInfo, renderRuntimePlatformPrompt } from './runtime-platform.js';
-import { DEFAULT_VPS } from './vp/seed-defaults.js';
 
 // ─── Template Loading (one-time at startup) ──────────────────────
 
@@ -463,50 +462,17 @@ function selectVpPersonaName(vpPersona, effectiveLang) {
   return typeof vpPersona.displayName === 'string' ? vpPersona.displayName.trim() : '';
 }
 
-function normalizePersonaBodyForMatch(value) {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function selectMigratedStockPersonaBody(vpPersona, body, effectiveLang) {
-  const vpId = typeof vpPersona?.vpId === 'string' ? vpPersona.vpId.trim() : '';
-  const persistedBody = normalizePersonaBodyForMatch(body);
-  if (!vpId || !persistedBody) return null;
-
-  const stock = DEFAULT_VPS.find(vp => vp.vpId === vpId);
-  if (!stock) return null;
-
-  const acceptedBodies = [
-    stock.legacyPersonaEn,
-    stock.legacyPersona,
-    stock.personaEn,
-    ...(Array.isArray(stock.legacyPersonas) ? stock.legacyPersonas : []),
-  ]
-    .map(normalizePersonaBodyForMatch)
-    .filter(Boolean);
-
-  if (!acceptedBodies.includes(persistedBody)) return null;
-  const selected = effectiveLang === 'zh' ? stock.personaZh : stock.personaEn;
-  return normalizePersonaBodyForMatch(selected) || null;
-}
-
 function selectVpPersonaBody(vpPersona, effectiveLang) {
   const body = typeof vpPersona.persona === 'string' ? vpPersona.persona.trim() : '';
 
-  // role.md persona is the canonical soul. Exact stock legacy bodies are mapped
-  // to the current authored source so old seeded role.md files do not leak
-  // bilingual/English souls into localized system prompts before top-up runs.
-  if (body) {
-    const migratedStockBody = selectMigratedStockPersonaBody(vpPersona, body, effectiveLang);
-    if (migratedStockBody) return migratedStockBody;
-
-    if (body.includes('<!-- lang:')) {
-      const selected = extractExactLangSection(body, effectiveLang);
-      return selected !== null ? selected : body;
-    }
-    return body;
+  // role.md is the canonical soul source. Stock legacy migration belongs in
+  // seed-topup, not in prompt rendering; prompt rendering should only select
+  // authored language sections when they are present.
+  if (body && body.includes('<!-- lang:')) {
+    const selected = extractExactLangSection(body, effectiveLang);
+    return selected !== null ? selected : body;
   }
-
-  return '';
+  return body;
 }
 
 

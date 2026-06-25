@@ -116,7 +116,7 @@ function parseArgs(argv) {
 
 // ─── Trace query handler ───────────────────────────────────────
 
-function handleTraceQuery(args, config) {
+async function handleTraceQuery(args, config) {
   const traceDir = config.dir;
   let trace;
   try {
@@ -128,7 +128,7 @@ function handleTraceQuery(args, config) {
   try {
     switch (args.trace) {
       case 'stats': {
-        const s = trace.stats();
+        const s = await trace.stats();
         console.log('Debug Trace Statistics:');
         console.log(`  Turns:    ${s.turnCount}`);
         console.log(`  Tools:    ${s.toolCount}`);
@@ -137,7 +137,7 @@ function handleTraceQuery(args, config) {
         break;
       }
       case 'recent': {
-        const turns = trace.queryRecent(20);
+        const turns = await trace.queryRecent(20);
         if (turns.length === 0) {
           console.log('No recent turns.');
         } else {
@@ -154,7 +154,7 @@ function handleTraceQuery(args, config) {
         if (!args.traceArg) {
           throw new Error('Usage: --trace search <keyword>');
         }
-        const results = trace.search(args.traceArg);
+        const results = await trace.search(args.traceArg);
         console.log(`Found ${results.length} turns matching "${args.traceArg}":`);
         for (const t of results) {
           const time = new Date(t.started_at).toLocaleString();
@@ -164,7 +164,7 @@ function handleTraceQuery(args, config) {
         break;
       }
       case 'tools': {
-        const tools = trace.queryTools({ name: args.traceArg });
+        const tools = await trace.queryTools({ name: args.traceArg });
         console.log(`Found ${tools.length} tool calls${args.traceArg ? ` for "${args.traceArg}"` : ''}:`);
         for (const t of tools.slice(0, 20)) {
           const time = new Date(t.created_at).toLocaleString();
@@ -174,10 +174,10 @@ function handleTraceQuery(args, config) {
         break;
       }
       case 'compact': {
-        const s = trace.stats();
+        const s = await trace.stats();
         console.log(`Compacting debug trace files (${(s.dbSizeBytes / 1048576).toFixed(1)} MB, ${s.turnCount} turns)...`);
         console.log('This prunes old request folders and may take a moment. Do not interrupt.');
-        const { before, after } = trace.compact();
+        const { before, after } = await trace.compact();
         const saved = Math.max(0, before - after);
         console.log(`Done. ${(before / 1048576).toFixed(1)} MB → ${(after / 1048576).toFixed(1)} MB (reclaimed ${(saved / 1048576).toFixed(1)} MB).`);
         break;
@@ -186,7 +186,7 @@ function handleTraceQuery(args, config) {
         throw new Error(`Unknown trace command: ${args.trace}. Available: stats, recent, search <keyword>, tools [name], compact`);
     }
   } finally {
-    trace.close();
+    await trace.close();
   }
 }
 
@@ -383,7 +383,7 @@ async function runREPL(config, args) {
         case 'trace': {
           const subcmd = cmdArgs[0] || 'stats';
           try {
-            handleTraceQuery({ trace: subcmd, traceArg: cmdArgs[1] }, session.config);
+            await handleTraceQuery({ trace: subcmd, traceArg: cmdArgs[1] }, session.config);
           } catch (e) {
             console.error(`Trace error: ${e.message}`);
           }
@@ -454,7 +454,7 @@ async function runREPL(config, args) {
           break;
 
         case 'stats': {
-          const s = trace.stats();
+          const s = await trace.stats();
           console.log(`Session stats:`);
           console.log(`  Debug: ${session.config.debug}`);
           console.log(`  Turns: ${s.turnCount}`);
@@ -799,7 +799,7 @@ async function main() {
 
   // Handle --trace queries (no LLM needed, no session needed)
   if (args.trace) {
-    handleTraceQuery(args, config);
+    await handleTraceQuery(args, config);
     return;
   }
 
