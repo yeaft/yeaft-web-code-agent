@@ -113,4 +113,31 @@ describe('DebugTrace async + in-memory index performance', () => {
     expect(detail.turns).toHaveLength(1);
     expect(detail.loops).toHaveLength(1);
   });
+
+  it('does not destroy prior-run dream events when an event flush beats first hydrate', async () => {
+    freshRoot();
+    // Run 1: persist some dream events to disk.
+    const first = new DebugTrace(root);
+    first.event('dream_progress', { sessionId: 's1', phase: 'start', n: 1 });
+    first.event('dream_progress', { sessionId: 's1', phase: 'done', n: 2 });
+    await first.close();
+
+    // Run 2 (fresh instance, cold): a new event fires and its flush lands
+    // BEFORE any read triggers #ensureHydrated. Pre-fix the all-or-nothing
+    // hydrate skipped disk (ring non-empty) and the flush overwrote history.
+    const second = new DebugTrace(root);
+    second.event('dream_progress', { sessionId: 's1', phase: 'start', n: 3 });
+    await second.flush(); // force the event flush through before any query
+
+    const history = await second.fetchRecentDebugHistory({ sessionId: 's1', dreamLimit: 50, limit: 5 });
+    const ns = history.dreamEvents.map(e => e.n).sort((a, b) => a - b);
+    // All three survive: the two prior-run events were merged, not clobbered.
+    expect(ns).toEqual([1, 2, 3]);
+
+    // And the merge is durable on disk for a third reader.
+    await second.close();
+    const third = new DebugTrace(root);
+    const after = await third.fetchRecentDebugHistory({ sessionId: 's1', dreamLimit: 50, limit: 5 });
+    expect(after.dreamEvents.map(e => e.n).sort((a, b) => a - b)).toEqual([1, 2, 3]);
+  });
 });

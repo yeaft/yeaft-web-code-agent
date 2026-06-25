@@ -58,10 +58,6 @@ async function atomicWriteText(filePath, text) {
   await fsp.rename(tmp, filePath);
 }
 
-async function atomicWriteJson(filePath, value) {
-  await atomicWriteText(filePath, JSON.stringify(value));
-}
-
 async function readJson(filePath) {
   try {
     return JSON.parse(await fsp.readFile(filePath, 'utf8'));
@@ -606,6 +602,14 @@ export class DebugTrace {
   #events = [];
   /** @type {boolean} */
   #eventsDirty = false;
+  /**
+   * Whether the on-disk events.json has been folded into #events yet. The
+   * events ring must merge prior-run history exactly once before any flush
+   * overwrites the file, or a live append landing before first hydrate would
+   * silently destroy cross-restart dream history.
+   * @type {boolean}
+   */
+  #eventsHydrated = false;
   /** @type {NodeJS.Timeout|null} */
   #eventFlushTimer = null;
   /**
@@ -632,7 +636,7 @@ export class DebugTrace {
     const rootDir = fileTraceRoot(tracePath);
     if (!rootDir) throw new Error('DebugTrace requires a storage path');
     this.#rootDir = rootDir;
-    // Best-effort, fire-and-forget: atomicWriteJson re-ensures the request
+    // Best-effort, fire-and-forget: atomicWriteText re-ensures the request
     // subdir before every write, so a missed mkdir here is harmless.
     ensureDir(rootDir).catch(() => {});
   }
@@ -889,10 +893,11 @@ export class DebugTrace {
     this.#events = [];
     this.#hydrated = false;
     this.#hydratePromise = null;
+    this.#eventsHydrated = false;
   }
 
   async close() {
-    this.#flushPending();
+    // #drainWrites() flushes pending writes itself; no separate #flushPending().
     await this.#drainWrites();
   }
 
@@ -982,6 +987,15 @@ export class DebugTrace {
    * (created by this process) always win over their disk copy — a flush may
    * be mid-flight, and the in-memory trace is the newer truth. Idempotent and
    * concurrency-safe: overlapping callers await the same promise.
+   *
+   * Footprint trade-off (deliberate): this pins every session's full trace
+   * payload (systemPrompt + cumulative messages + rawRequest, each already
+   * byte-bounded) in #requestCache for the instance's lifetime — O(retention ×
+   * total sessions) memory instead of the old O(N²) per-query CPU rescan that
+   * stalled the event loop. Retention (10/session) and the byte caps keep it
+   * bounded, and the web path uses a single module-level instance. Follow-up if
+   * footprint ever bites: hydrate per queried sessionId, or keep only a
+   * lightweight summary resident and lazy-load full payloads on detailTurnId.
    */
   async #ensureHydrated() {
     if (this.#hydrated) return;
@@ -998,13 +1012,27 @@ export class DebugTrace {
           this.#requestCache.set(trace.requestKey, trace);
         }
       }
-      if (this.#events.length === 0 && Array.isArray(storedEvents)) {
-        this.#events = storedEvents.slice(-MAX_DREAM_EVENTS);
-      }
+      if (Array.isArray(storedEvents)) this.#mergeStoredEvents(storedEvents);
       this.#hydrated = true;
       this.#hydratePromise = null;
     })();
     return this.#hydratePromise;
+  }
+
+  /**
+   * Fold on-disk events into the in-memory ring by id, preserving live order
+   * and bounding to MAX_DREAM_EVENTS. Unseen disk records are prepended (they
+   * are older); a live append therefore never erases prior-run history. Sets
+   * #eventsHydrated so this runs at most once.
+   */
+  #mergeStoredEvents(stored) {
+    if (this.#eventsHydrated) return;
+    this.#eventsHydrated = true;
+    if (!Array.isArray(stored) || stored.length === 0) return;
+    const seen = new Set(this.#events.map(e => e?.id).filter(Boolean));
+    const older = stored.filter(e => e && (!e.id || !seen.has(e.id)));
+    if (older.length === 0) return;
+    this.#events = [...older, ...this.#events].slice(-MAX_DREAM_EVENTS);
   }
 
   #traceWriteKey(trace) {
@@ -1087,16 +1115,34 @@ export class DebugTrace {
       file: this.#traceFile(trace),
       text: JSON.stringify(this.#serializableTrace(trace)),
     }));
-    this.#flushChain = this.#flushChain.then(async () => {
+    this.#chain(async () => {
       for (const { requestKey, file, text } of jobs) {
         // Skip if an earlier chained prune already evicted this request.
         if (!this.#requestCache.has(requestKey)) continue;
         try { await atomicWriteText(file, text); }
         catch (err) { console.warn('[Yeaft] debug trace write failed:', err?.message || err); }
       }
-      await this.#pruneAll(REQUEST_RETENTION);
+      try { await this.#pruneAll(REQUEST_RETENTION); }
+      catch (err) { console.warn('[Yeaft] debug trace prune failed:', err?.message || err); }
     });
     this.#flushEvents();
+  }
+
+  /**
+   * Append `task` to the single-writer flush mutex. Each link is isolated:
+   * a rejected predecessor can NEVER skip a later task (the classic
+   * `chain = chain.then(task)` footgun, where one rejection poisons every
+   * subsequent `.then(onFulfilled)` and silently stops all future writes).
+   * Here we always `await prev` inside a swallowing try/catch before running
+   * `task`, so the chain stays alive for the instance's lifetime.
+   */
+  #chain(task) {
+    const prev = this.#flushChain;
+    this.#flushChain = (async () => {
+      try { await prev; } catch { /* predecessor errors already logged */ }
+      await task();
+    })();
+    return this.#flushChain;
   }
 
   #flushEvents() {
@@ -1106,9 +1152,14 @@ export class DebugTrace {
       clearTimeout(this.#eventFlushTimer);
       this.#eventFlushTimer = null;
     }
-    const text = JSON.stringify(this.#events.slice(-MAX_DREAM_EVENTS));
     const file = join(this.#rootDir, 'events.json');
-    this.#flushChain = this.#flushChain.then(async () => {
+    this.#chain(async () => {
+      // Fold in any prior-run events we haven't loaded yet BEFORE overwriting,
+      // so a write that beats #ensureHydrated can't drop cross-restart history.
+      if (!this.#eventsHydrated) {
+        this.#mergeStoredEvents(await readJson(file));
+      }
+      const text = JSON.stringify(this.#events.slice(-MAX_DREAM_EVENTS));
       try { await atomicWriteText(file, text); }
       catch (err) { console.warn('[Yeaft] debug trace event write failed:', err?.message || err); }
     });
