@@ -363,6 +363,9 @@ export default {
       return null;
     },
     vpList() { return this.vpStore?.vpList || []; },
+    vpListSignature() {
+      return (this.vpList || []).map(vp => vp && vp.vpId).filter(Boolean).join(',');
+    },
     vpLibraryEmpty() {
       const s = this.vpStore;
       if (!s) return false;
@@ -482,7 +485,10 @@ export default {
   },
   watch: {
     // Re-apply default selection once vpList hydrates after mount.
-    'vpList.length'() { this.applyDefaultSelection(); },
+    // Watch the VP identity signature, not only length: switching agents can
+    // return the same number of VPs in a different library. The create UI must
+    // still prefer the generalist Omni VP whenever that target library has it.
+    vpListSignature() { this.applyDefaultSelection(); },
     // The agent list arrives over the WebSocket, so on a cold page load it
     // can be empty at mount() — leaving form.agentId null. A <select>
     // bound to a null model still *visually* shows its first <option>
@@ -734,11 +740,19 @@ export default {
     },
     applyDefaultSelection() {
       if (this.vpPickerTouched) return;
-      if (this.form.vpIds.length > 0) return;
       const list = this.vpList || [];
       if (list.length === 0) return;
-      const hasOmni = list.some(vp => vp && vp.vpId === OMNI_VP_ID);
-      const pick = hasOmni ? OMNI_VP_ID : list[0].vpId;
+      const ids = list.map(vp => vp && vp.vpId).filter(Boolean);
+      if (ids.length === 0) return;
+      const currentIds = Array.isArray(this.form.vpIds) ? this.form.vpIds : [];
+      const currentValid = currentIds.filter(id => ids.includes(id));
+      const currentDefaultValid = this.form.defaultVpId && currentValid.includes(this.form.defaultVpId);
+      if (currentValid.length > 0 && currentDefaultValid) {
+        if (currentValid.length !== currentIds.length) this.form.vpIds = currentValid;
+        return;
+      }
+
+      const pick = ids.includes(OMNI_VP_ID) ? OMNI_VP_ID : (currentValid[0] || ids[0]);
       this.form.vpIds = [pick];
       this.form.defaultVpId = pick;
     },

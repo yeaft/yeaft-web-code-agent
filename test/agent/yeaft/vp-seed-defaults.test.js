@@ -111,9 +111,16 @@ describe('default VP souls', () => {
     mkdirSync(join(libDir, 'martin'), { recursive: true });
     mkdirSync(join(libDir, 'ada'), { recursive: true });
     mkdirSync(join(libDir, 'omni'), { recursive: true });
+    const obsoleteOmniAssistantPersona = `You are Omni Assistant / 全能助手, a cross-domain, execution-focused general AI partner.
+
+Language policy / 语言策略:
+- Prefer Chinese when the user writes in Chinese; prefer English when the user writes in English.
+
+Core capabilities / 核心能力:
+- Cross-domain synthesis: handle writing, coding, product thinking, research, planning, analysis, learning, translation, troubleshooting, and creative work without forcing the user to pick a specialist first.`;
     writeFileSync(join(libDir, 'linus', 'role.md'), buildRoleMd({ ...linus, persona: linus.legacyPersonaEn, roleZh: '' }), 'utf-8');
     writeFileSync(join(libDir, 'ada', 'role.md'), buildRoleMd({ ...ada, persona: ada.legacyPersona, roleZh: '' }), 'utf-8');
-    writeFileSync(join(libDir, 'omni', 'role.md'), buildRoleMd({ ...omni, persona: omni.legacyPersonas[0], roleZh: '' }), 'utf-8');
+    writeFileSync(join(libDir, 'omni', 'role.md'), buildRoleMd({ ...omni, persona: obsoleteOmniAssistantPersona, roleZh: '' }), 'utf-8');
     writeFileSync(join(libDir, 'martin', 'role.md'), buildRoleMd({ ...martin, persona: `${martin.legacyPersonaEn}\n\nUser edit.`, roleZh: '' }), 'utf-8');
 
     const result = topUpDefaultVps(libDir);

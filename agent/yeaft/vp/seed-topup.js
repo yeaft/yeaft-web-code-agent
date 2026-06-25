@@ -245,8 +245,16 @@ function backfillLocalizedPersonaBody(source, vp) {
     .filter(value => typeof value === 'string' && value.trim())
     .map(value => value.trim());
 
-  if (!acceptedOldBodies.includes(body)) return null;
+  if (!acceptedOldBodies.includes(body) && !isObsoleteOmniAssistantBody(vp, body)) return null;
   return replaceRoleBody(source, nextBody);
+}
+
+function isObsoleteOmniAssistantBody(vp, body) {
+  if (!vp || vp.vpId !== 'omni') return false;
+  const text = String(body || '').trim();
+  return text.startsWith('You are Omni Assistant / 全能助手,')
+    && text.includes('Language policy / 语言策略:')
+    && text.includes('Core capabilities / 核心能力:');
 }
 
 /**
