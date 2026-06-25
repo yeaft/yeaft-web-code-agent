@@ -76,7 +76,8 @@ import { getAgentRegistry, agentBelongsToScope } from './tools/agent.js';
 import { isPromptableAgentStatus } from './sub-agent/status.js';
 import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 
-const SKILL_COMMAND_PREFIX = 'skill:';
+const LEGACY_SKILL_COMMAND_PREFIX = 'skill:';
+const YEAFT_SKILL_COMMAND_PREFIX = 'yeaft-skills:';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -1854,9 +1855,15 @@ export function buildSkillSlashCommands(skillManager) {
   const descriptions = {};
   for (const skill of skillManager.list()) {
     if (!skill?.name || typeof skill.name !== 'string') continue;
-    const commandName = `${SKILL_COMMAND_PREFIX}${skill.name}`;
+    const commandName = `${YEAFT_SKILL_COMMAND_PREFIX}${skill.name}`;
     commands.push(commandName);
     descriptions[commandName] = skill.description || skill.trigger || 'Load Yeaft skill';
+
+    // Legacy alias for older typed commands and persisted drafts. Do not add it
+    // to the visible command list; autocomplete should show the same plugin-style
+    // names users see in Claude Code, e.g. /yeaft-skills:code-review.
+    const legacyCommandName = `${LEGACY_SKILL_COMMAND_PREFIX}${skill.name}`;
+    descriptions[legacyCommandName] = descriptions[commandName];
   }
   commands.sort((a, b) => a.localeCompare(b));
   return { commands, descriptions };
@@ -1876,12 +1883,13 @@ export function buildMergedSkillSlashCommands(skillManagers = []) {
 function broadcastSkillSlashCommands(sessionLike, extraSkillManagers = []) {
   const managers = [sessionLike?.skillManager, ...extraSkillManagers].filter(Boolean);
   const { commands, descriptions } = buildMergedSkillSlashCommands(managers);
-  const nonSkillCommands = (ctx.slashCommands || [])
-    .filter(cmd => !(typeof cmd === 'string' && cmd.startsWith(SKILL_COMMAND_PREFIX)));
+  const isYeaftSkillCommand = (cmd) => typeof cmd === 'string'
+    && (cmd.startsWith(LEGACY_SKILL_COMMAND_PREFIX) || cmd.startsWith(YEAFT_SKILL_COMMAND_PREFIX));
+  const nonSkillCommands = (ctx.slashCommands || []).filter(cmd => !isYeaftSkillCommand(cmd));
   const slashCommands = [...new Set([...nonSkillCommands, ...commands])];
   const slashCommandDescriptions = Object.fromEntries(
     Object.entries(ctx.slashCommandDescriptions || {})
-      .filter(([cmd]) => !(typeof cmd === 'string' && cmd.startsWith(SKILL_COMMAND_PREFIX)))
+      .filter(([cmd]) => !isYeaftSkillCommand(cmd))
   );
   Object.assign(slashCommandDescriptions, descriptions);
   ctx.slashCommands = slashCommands;

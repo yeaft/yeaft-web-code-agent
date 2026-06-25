@@ -96,7 +96,10 @@ const RETRY_DEFAULTS = Object.freeze({
   jitterRatio: 0.25,
 });
 
-const EXPLICIT_SKILL_COMMAND_RE = /^\/skill:([^\s]+)(\s+|$)/;
+// Accept the Yeaft-native alias and the Claude Code plugin-style command.
+// Autocomplete prefers /yeaft-skills:<name>; /skill:<name> remains supported
+// for older clients and typed history.
+const EXPLICIT_SKILL_COMMAND_RE = /^\/(?:skill|yeaft-skills):([^\s]+)(\s+|$)/;
 
 function parseExplicitSkillCommand(prompt) {
   if (typeof prompt !== 'string') {

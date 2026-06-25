@@ -160,14 +160,14 @@ describe('Yeaft agent_list does not loop history catch-up', () => {
       type: 'slash_commands_update',
       conversationId: '__preload__',
       agentId: AGENT_ID,
-      slashCommands: ['skill:project-review', 'skill:project-review'],
-      slashCommandDescriptions: { 'skill:project-review': 'Review this project' },
+      slashCommands: ['yeaft-skills:project-review', 'yeaft-skills:project-review'],
+      slashCommandDescriptions: { 'yeaft-skills:project-review': 'Review this project' },
     });
 
-    expect(store.slashCommandsMap['__preload__']).toEqual(['skill:project-review']);
-    expect(store.slashCommandsMap[`agent:${AGENT_ID}`]).toEqual(['skill:project-review']);
-    expect(store.slashCommandsMap['yeaft-1']).toEqual(['skill:project-review']);
-    expect(store.slashCommandDescriptions['skill:project-review']).toBe('Review this project');
+    expect(store.slashCommandsMap['__preload__']).toEqual(['yeaft-skills:project-review']);
+    expect(store.slashCommandsMap[`agent:${AGENT_ID}`]).toEqual(['yeaft-skills:project-review']);
+    expect(store.slashCommandsMap['yeaft-1']).toEqual(['yeaft-skills:project-review']);
+    expect(store.slashCommandDescriptions['yeaft-skills:project-review']).toBe('Review this project');
   });
 
   it('keeps cached rows when metadata-only bootstrap returns session_ready only', () => {

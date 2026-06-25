@@ -55,9 +55,11 @@ describe('Yeaft skill slash commands', () => {
       ],
     });
 
-    expect(commands).toEqual(['skill:review-code', 'skill:sprint']);
+    expect(commands).toEqual(['yeaft-skills:review-code', 'yeaft-skills:sprint']);
     expect(descriptions).toEqual({
+      'yeaft-skills:review-code': 'Review code',
       'skill:review-code': 'Review code',
+      'yeaft-skills:sprint': 'plan work',
       'skill:sprint': 'plan work',
     });
   });
@@ -68,11 +70,12 @@ describe('Yeaft skill slash commands', () => {
       { list: () => [{ name: 'review-code', description: 'Project review' }, { name: 'ship', description: 'Ship' }, { name: '', description: 'bad' }] },
     ]);
 
-    expect(commands).toEqual(['skill:plan', 'skill:review-code', 'skill:ship']);
+    expect(commands).toEqual(['yeaft-skills:plan', 'yeaft-skills:review-code', 'yeaft-skills:ship']);
+    expect(descriptions['yeaft-skills:review-code']).toBe('Project review');
     expect(descriptions['skill:review-code']).toBe('Project review');
   });
 
-  it('injects an explicitly selected skill and strips the command before streaming', async () => {
+  it.each(['/yeaft-skills:review-code please review this', '/skill:review-code please review this'])('injects an explicitly selected skill and strips %s before streaming', async (prompt) => {
     const adapter = new RecordingAdapter();
     const skillManager = {
       getPromptContent(name) {
@@ -90,7 +93,7 @@ describe('Yeaft skill slash commands', () => {
     });
 
     const events = [];
-    for await (const event of engine.query({ prompt: '/skill:review-code please review this' })) {
+    for await (const event of engine.query({ prompt })) {
       events.push(event);
     }
 
@@ -173,8 +176,9 @@ describe('Yeaft skill slash commands', () => {
 
     await registry.execute('mcp__baseServer__base', { value: 2 }, {});
     expect(calls).toEqual([{ fullName: 'baseServer__base', input: { value: 2 } }]);
-    expect(ctx.slashCommands).toContain('skill:base-skill');
-    expect(ctx.slashCommands).not.toContain('skill:project-skill');
+    expect(ctx.slashCommands).toContain('yeaft-skills:base-skill');
+    expect(ctx.slashCommands).not.toContain('yeaft-skills:project-skill');
+    expect(ctx.slashCommands).not.toContain('skill:base-skill');
   });
 
   it('disconnects cached project MCP managers when project runtimes shut down', async () => {
@@ -201,7 +205,7 @@ describe('Yeaft skill slash commands', () => {
     expect(__testHooks.projectRuntimeCount()).toBe(0);
   });
 
-  it('reports unknown explicit skill commands in the system prompt', async () => {
+  it.each(['/yeaft-skills:missing do work', '/skill:missing do work'])('reports unknown explicit skill command %s in the system prompt', async (prompt) => {
     const adapter = new RecordingAdapter();
     const skillManager = {
       getPromptContent() { return ''; },
@@ -214,7 +218,7 @@ describe('Yeaft skill slash commands', () => {
       skillManager,
     });
 
-    for await (const _event of engine.query({ prompt: '/skill:missing do work' })) {
+    for await (const _event of engine.query({ prompt })) {
       // Drain stream.
     }
 
