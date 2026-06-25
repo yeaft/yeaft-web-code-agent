@@ -64,9 +64,9 @@ function cleanupAndExit(exitCode) {
   }, 500);
 }
 
-export function handleRestartAgent() {
+export async function handleRestartAgent() {
   console.log('[Agent] Restart requested, shutting down for PM2/systemd restart...');
-  sendToServer({ type: 'restart_agent_ack' });
+  await sendToServer({ type: 'restart_agent_ack' });
   cleanupAndExit(1);
 }
 
@@ -162,7 +162,7 @@ export async function handleUpgradeAgent() {
     });
     if (latestVersion === ctx.agentVersion) {
       console.log(`[Agent] Already at latest version (${ctx.agentVersion}), skipping upgrade.`);
-      sendToServer({ type: 'upgrade_agent_ack', success: true, alreadyLatest: true, version: ctx.agentVersion });
+      await sendToServer({ type: 'upgrade_agent_ack', success: true, alreadyLatest: true, version: ctx.agentVersion });
       return;
     }
 
@@ -175,7 +175,7 @@ export async function handleUpgradeAgent() {
     if (requiredNode && !nodeRangeSatisfied(currentNode, requiredNode)) {
       const msg = `Node ${currentNode} does not satisfy required ${requiredNode} for ${pkgName}@${latestVersion}`;
       console.warn(`[Agent] Upgrade aborted: ${msg}`);
-      sendToServer({
+      await sendToServer({
         type: 'upgrade_agent_ack',
         success: false,
         reason: 'node_incompatible',
@@ -197,7 +197,7 @@ export async function handleUpgradeAgent() {
     if (!isNpmInstall) {
       // 源码运行不支持远程升级（代码在 git repo 中，需要手动 git pull）
       console.log('[Agent] Source-based install detected, remote upgrade not supported.');
-      sendToServer({ type: 'upgrade_agent_ack', success: false, error: 'Source-based install: please use git pull to upgrade' });
+      await sendToServer({ type: 'upgrade_agent_ack', success: false, error: 'Source-based install: please use git pull to upgrade' });
       return;
     }
 
@@ -217,9 +217,9 @@ export async function handleUpgradeAgent() {
     const instanceId = resolveInstanceId();
 
     if (isWindows) {
-      spawnWindowsUpgradeScript(pkgName, installDir, isGlobalInstall, latestVersion, instanceId);
+      await spawnWindowsUpgradeScript(pkgName, installDir, isGlobalInstall, latestVersion, instanceId);
     } else {
-      spawnUnixUpgradeScript(pkgName, installDir, isGlobalInstall, latestVersion, instanceId);
+      await spawnUnixUpgradeScript(pkgName, installDir, isGlobalInstall, latestVersion, instanceId);
     }
 
     // On PM2: delete the app BEFORE exiting so PM2 won't auto-restart the old version.
@@ -238,11 +238,11 @@ export async function handleUpgradeAgent() {
     cleanupAndExit(0);
   } catch (e) {
     console.error('[Agent] Upgrade failed:', e.message);
-    sendToServer({ type: 'upgrade_agent_ack', success: false, error: e.message });
+    await sendToServer({ type: 'upgrade_agent_ack', success: false, error: e.message });
   }
 }
 
-function spawnWindowsUpgradeScript(pkgName, installDir, isGlobalInstall, latestVersion, instanceId = DEFAULT_INSTANCE_ID) {
+async function spawnWindowsUpgradeScript(pkgName, installDir, isGlobalInstall, latestVersion, instanceId = DEFAULT_INSTANCE_ID) {
   const pid = process.pid;
   const configDir = getConfigDir(instanceId);
   mkdirSync(configDir, { recursive: true });
@@ -364,7 +364,7 @@ function spawnWindowsUpgradeScript(pkgName, installDir, isGlobalInstall, latestV
   }).unref();
 
   console.log(`[Agent] Spawned upgrade via VBScript (PID wait for ${pid}, pm2=${isPm2}, dir=${installDir}): ${batPath}`);
-  sendToServer({ type: 'upgrade_agent_ack', success: true, version: latestVersion, pendingRestart: true });
+  await sendToServer({ type: 'upgrade_agent_ack', success: true, version: latestVersion, pendingRestart: true });
 }
 
 /**
@@ -526,7 +526,7 @@ export function buildUnixUpgradeScript({
   return shLines.join('\n');
 }
 
-function spawnUnixUpgradeScript(pkgName, installDir, isGlobalInstall, latestVersion, instanceId = DEFAULT_INSTANCE_ID) {
+async function spawnUnixUpgradeScript(pkgName, installDir, isGlobalInstall, latestVersion, instanceId = DEFAULT_INSTANCE_ID) {
   const configDir = getConfigDir(instanceId);
   // Create logs/ too: the generated script's `exec > "$LOGFILE" 2>&1` aborts
   // the whole upgrade silently if that directory is missing.
@@ -551,5 +551,5 @@ function spawnUnixUpgradeScript(pkgName, installDir, isGlobalInstall, latestVers
   });
   child.unref();
   console.log(`[Agent] Spawned upgrade script: ${shPath}`);
-  sendToServer({ type: 'upgrade_agent_ack', success: true, version: latestVersion, pendingRestart: true });
+  await sendToServer({ type: 'upgrade_agent_ack', success: true, version: latestVersion, pendingRestart: true });
 }

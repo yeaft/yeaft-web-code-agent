@@ -114,6 +114,54 @@ describe('Yeaft agent_list does not loop history catch-up', () => {
     expect(store.sent.some(m => m.type === 'yeaft_vp_subscribe')).toBe(false);
   });
 
+  it('does not resend select/sync/refresh on routine agent_list broadcasts', () => {
+    const store = makeStore();
+    store.currentConversation = 'chat-1';
+    store.conversations = [{ id: 'chat-1', type: 'chat', agentId: AGENT_ID }];
+    store.messagesMap = { 'chat-1': [{ id: 'm1', type: 'user', content: 'cached' }] };
+
+    for (let i = 0; i < 5; i++) handleAgentList(store, agentListMsg());
+
+    expect(store.sent.filter(m => m.type === 'select_agent')).toHaveLength(0);
+    expect(store.sent.filter(m => m.type === 'select_conversation')).toHaveLength(0);
+    expect(store.sent.filter(m => m.type === 'sync_messages')).toHaveLength(0);
+    expect(store.sent.filter(m => m.type === 'refresh_conversation')).toHaveLength(0);
+  });
+
+  it('resends select/sync/refresh once when the current agent comes back online', () => {
+    const store = makeStore();
+    store.currentConversation = 'chat-1';
+    store.conversations = [{ id: 'chat-1', type: 'chat', agentId: AGENT_ID }];
+    store.messagesMap = { 'chat-1': [{ id: 'm1', type: 'user', content: 'cached' }] };
+
+    handleAgentList(store, agentListMsg());
+    handleAgentList(store, { type: 'agent_list', agents: [] });
+    handleAgentList(store, agentListMsg());
+    handleAgentList(store, agentListMsg());
+
+    expect(store.sent.filter(m => m.type === 'select_agent')).toHaveLength(1);
+    // One offline context restore while the agent is absent, then one real
+    // conversation restore when it comes back online. Further routine frames do
+    // not add more.
+    expect(store.sent.filter(m => m.type === 'select_conversation')).toHaveLength(2);
+    expect(store.sent.filter(m => m.type === 'sync_messages')).toHaveLength(1);
+    expect(store.sent.filter(m => m.type === 'refresh_conversation')).toHaveLength(1);
+  });
+
+  it('restores offline conversation context only once while the agent is absent', () => {
+    const store = makeStore();
+    store.currentConversation = 'chat-1';
+    store.conversations = [{ id: 'chat-1', type: 'chat', agentId: AGENT_ID }];
+    store.messagesMap = { 'chat-1': [{ id: 'm1', type: 'user', content: 'cached' }] };
+
+    handleAgentList(store, agentListMsg());
+    for (let i = 0; i < 5; i++) handleAgentList(store, { type: 'agent_list', agents: [] });
+
+    expect(store.sent.filter(m => m.type === 'select_conversation')).toHaveLength(1);
+    expect(store.sent.filter(m => m.type === 'sync_messages')).toHaveLength(0);
+    expect(store.sent.filter(m => m.type === 'refresh_conversation')).toHaveLength(0);
+  });
+
   it('runs exactly ONE catch-up after a genuine reconnect, then stops', () => {
     const store = makeStore();
     // Websocket onclose set this one-shot flag on a real drop.
