@@ -711,8 +711,12 @@ export class Engine {
    * @param {{ skillManager?: import('./skills.js').SkillManager, mcpManager?: import('./mcp.js').MCPManager }} managers
    */
   setRuntimeManagers(managers = {}) {
-    if (managers.skillManager) this.#skillManager = managers.skillManager;
-    if (managers.mcpManager) this.#mcpManager = managers.mcpManager;
+    if (Object.prototype.hasOwnProperty.call(managers, 'skillManager')) {
+      this.#skillManager = managers.skillManager || null;
+    }
+    if (Object.prototype.hasOwnProperty.call(managers, 'mcpManager')) {
+      this.#mcpManager = managers.mcpManager || null;
+    }
   }
 
   /**

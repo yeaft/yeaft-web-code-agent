@@ -2,7 +2,8 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { Engine } from '../../../agent/yeaft/engine.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
-import { buildMergedSkillSlashCommands, buildSkillSlashCommands, __testHooks } from '../../../agent/yeaft/web-bridge.js';
+import ctx from '../../../agent/context.js';
+import { buildMergedSkillSlashCommands, buildSkillSlashCommands, __testGetOrCreateVpEngine, __testResetVpState, __testHooks } from '../../../agent/yeaft/web-bridge.js';
 
 class RecordingAdapter {
   constructor() {
@@ -39,8 +40,10 @@ function makeMcpManager(toolName, calls = []) {
 
 describe('Yeaft skill slash commands', () => {
   afterEach(async () => {
+    await __testResetVpState();
     __testHooks.setSessionForTest(null);
-    await __testHooks.shutdownProjectRuntimes();
+    ctx.slashCommands = [];
+    ctx.slashCommandDescriptions = {};
   });
 
   it('builds slash commands from loaded skill metadata', () => {
@@ -130,6 +133,48 @@ describe('Yeaft skill slash commands', () => {
 
     await registry.execute('mcp__aServer__a', { value: 1 }, {});
     expect(calls).toEqual([{ fullName: 'aServer__a', input: { value: 1 } }]);
+  });
+
+  it('reactivates base MCP tools and engine managers when switching from project to no-workDir', async () => {
+    const registry = new ToolRegistry();
+    const calls = [];
+    const baseSkillManager = { list: () => [{ name: 'base-skill', description: 'Base skill' }] };
+    const projectSkillManager = { list: () => [{ name: 'project-skill', description: 'Project skill' }] };
+    const sessionLike = {
+      adapter: new RecordingAdapter(),
+      trace: new NullTrace(),
+      config: { model: 'test-model', maxOutputTokens: 1024, language: 'en' },
+      conversationStore: { loadRecentBySession: () => [], readCompactSummary: () => '' },
+      memoryIndex: null,
+      amsRegistry: null,
+      toolRegistry: registry,
+      skillManager: baseSkillManager,
+      mcpManager: makeMcpManager('base', calls),
+      yeaftDir: '/tmp/yeaft-test',
+      taskManager: { renderActiveTasksForPrompt: () => '' },
+      toolStats: null,
+    };
+    __testHooks.setSessionForTest(sessionLike);
+    __testHooks.seedProjectRuntime('/tmp/project-a', {
+      skillManager: projectSkillManager,
+      mcpManager: makeMcpManager('project', calls),
+    });
+
+    const engine = __testGetOrCreateVpEngine('session-a', 'vp-a', 'main');
+    await __testHooks.loadProjectRuntime('/tmp/project-a');
+    expect(registry.names.filter(name => name.startsWith('mcp__'))).toEqual(['mcp__projectServer__project']);
+    expect(engine.skillManager).toBe(projectSkillManager);
+    expect(engine.mcpManager).not.toBe(sessionLike.mcpManager);
+
+    await __testHooks.loadProjectRuntime('');
+    expect(registry.names.filter(name => name.startsWith('mcp__'))).toEqual(['mcp__baseServer__base']);
+    expect(engine.skillManager).toBe(baseSkillManager);
+    expect(engine.mcpManager).toBe(sessionLike.mcpManager);
+
+    await registry.execute('mcp__baseServer__base', { value: 2 }, {});
+    expect(calls).toEqual([{ fullName: 'baseServer__base', input: { value: 2 } }]);
+    expect(ctx.slashCommands).toContain('skill:base-skill');
+    expect(ctx.slashCommands).not.toContain('skill:project-skill');
   });
 
   it('disconnects cached project MCP managers when project runtimes shut down', async () => {

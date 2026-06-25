@@ -429,17 +429,31 @@ function replaceSessionMcpTools(mcpManager) {
   }
 }
 
-function activateProjectRuntime(runtime) {
-  if (!runtime) return null;
-  const swap = replaceSessionMcpTools(runtime.mcpManager);
+function retargetVpEngines({ skillManager, mcpManager }) {
   for (const eng of vpEngines.values()) {
     try {
-      eng.setRuntimeManagers?.({
-        skillManager: runtime.skillManager,
-        mcpManager: runtime.mcpManager,
-      });
+      eng.setRuntimeManagers?.({ skillManager, mcpManager });
     } catch { /* best-effort runtime retarget */ }
   }
+}
+
+function activateBaseRuntime() {
+  const swap = replaceSessionMcpTools(session?.mcpManager);
+  retargetVpEngines({
+    skillManager: session?.skillManager || null,
+    mcpManager: session?.mcpManager || null,
+  });
+  broadcastSkillSlashCommands(session);
+  return swap;
+}
+
+function activateProjectRuntime(runtime) {
+  if (!runtime) return activateBaseRuntime();
+  const swap = replaceSessionMcpTools(runtime.mcpManager);
+  retargetVpEngines({
+    skillManager: runtime.skillManager,
+    mcpManager: runtime.mcpManager,
+  });
   runtime.status = {
     ...runtime.status,
     tools: session?.toolRegistry?.size || runtime.status?.tools || 0,
@@ -1851,11 +1865,14 @@ export function buildMergedSkillSlashCommands(skillManagers = []) {
 function broadcastSkillSlashCommands(sessionLike, extraSkillManagers = []) {
   const managers = [sessionLike?.skillManager, ...extraSkillManagers].filter(Boolean);
   const { commands, descriptions } = buildMergedSkillSlashCommands(managers);
-  const slashCommands = [...new Set([...(ctx.slashCommands || []), ...commands])];
-  const slashCommandDescriptions = {
-    ...(ctx.slashCommandDescriptions || {}),
-    ...descriptions,
-  };
+  const nonSkillCommands = (ctx.slashCommands || [])
+    .filter(cmd => !(typeof cmd === 'string' && cmd.startsWith(SKILL_COMMAND_PREFIX)));
+  const slashCommands = [...new Set([...nonSkillCommands, ...commands])];
+  const slashCommandDescriptions = Object.fromEntries(
+    Object.entries(ctx.slashCommandDescriptions || {})
+      .filter(([cmd]) => !(typeof cmd === 'string' && cmd.startsWith(SKILL_COMMAND_PREFIX)))
+  );
+  Object.assign(slashCommandDescriptions, descriptions);
   ctx.slashCommands = slashCommands;
   ctx.slashCommandDescriptions = slashCommandDescriptions;
   sendToServer({
@@ -1870,7 +1887,10 @@ function broadcastSkillSlashCommands(sessionLike, extraSkillManagers = []) {
 async function loadProjectRuntime(workDir) {
   if (!session) return null;
   const normalizedWorkDir = normalizeSessionWorkDir(workDir);
-  if (!normalizedWorkDir) return null;
+  if (!normalizedWorkDir) {
+    activateBaseRuntime();
+    return null;
+  }
   const key = projectRuntimeKey(normalizedWorkDir);
   const cached = projectRuntimes.get(key);
   if (cached) {
@@ -1910,11 +1930,15 @@ async function loadProjectRuntime(workDir) {
 
 async function ensureProjectRuntimeForSessionMeta(sessionMeta) {
   const workDir = normalizeSessionWorkDir(sessionMeta?.workDir);
-  if (!workDir) return null;
+  if (!workDir) {
+    activateBaseRuntime();
+    return null;
+  }
   try {
     return await loadProjectRuntime(workDir);
   } catch (err) {
     console.warn('[Yeaft] project runtime load failed for %s: %s', workDir, err?.message || err);
+    activateBaseRuntime();
     return null;
   }
 }
@@ -3945,6 +3969,11 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         vpEngine.setRuntimeManagers?.({
           skillManager: projectRuntime.skillManager,
           mcpManager: projectRuntime.mcpManager,
+        });
+      } else {
+        vpEngine.setRuntimeManagers?.({
+          skillManager: session?.skillManager || null,
+          mcpManager: session?.mcpManager || null,
         });
       }
       if (thread) thread.engine = vpEngine;
