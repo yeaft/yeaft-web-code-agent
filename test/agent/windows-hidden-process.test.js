@@ -127,6 +127,20 @@ describe('Windows hidden non-interactive process launches', () => {
     });
   });
 
+  it('does not crash the agent when an MCP server writes stderr without an error listener', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await createMCPManager({
+        mcp_servers: [{ name: 'noisy', command: 'node', args: ['noisy-mcp.js'] }],
+      });
+
+      expect(() => spawns[0].stderr.emit('data', Buffer.from('startup warning\n'))).not.toThrow();
+      expect(warn).toHaveBeenCalledWith('[MCP] [noisy] stderr: startup warning');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('hides one-shot Copilot ACP model probes', async () => {
     const models = await listCopilotModels({ force: true });
 
