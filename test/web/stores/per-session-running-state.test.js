@@ -114,6 +114,61 @@ describe('per-session running state', () => {
     expect(store.isYeaftSessionProcessing('session-a')).toBe(false);
   });
 
+  it('keeps Yeaft input in stop mode when broker status is running before vp_turn_start', () => {
+    const store = freshStore();
+    store.currentView = 'yeaft';
+    store.yeaftActiveSessionFilter = 'session-a';
+
+    store.handleYeaftOutput({ event: {
+      type: 'vp_status_changed',
+      sessionId: 'session-a',
+      vpId: 'vp-a',
+      state: 'typing',
+      turnId: 'queued-turn-a',
+      since: 10,
+    } });
+
+    expect(store.activeVpTurns).toEqual({});
+    expect(store.isYeaftSessionProcessing('session-a')).toBe(true);
+    expect(store.isProcessing).toBe(true);
+
+    store.handleYeaftOutput({ event: {
+      type: 'vp_status_changed',
+      sessionId: 'session-a',
+      vpId: 'vp-a',
+      state: 'idle',
+      turnId: null,
+      since: 20,
+    } });
+
+    expect(store.isYeaftSessionProcessing('session-a')).toBe(false);
+    expect(store.isProcessing).toBe(false);
+  });
+
+  it('keeps Yeaft input in stop mode from a running VP status snapshot', () => {
+    const store = freshStore();
+    store.currentView = 'yeaft';
+    store.yeaftActiveSessionFilter = 'session-a';
+
+    store.handleYeaftOutput({ event: {
+      type: 'vp_status_snapshot',
+      sessionId: 'session-a',
+      statuses: [{ sessionId: 'session-a', vpId: 'vp-a', state: 'tool', turnId: 'turn-a', since: 10 }],
+    } });
+
+    expect(store.isYeaftSessionProcessing('session-a')).toBe(true);
+    expect(store.isProcessing).toBe(true);
+
+    store.handleYeaftOutput({ event: {
+      type: 'vp_status_snapshot',
+      sessionId: 'session-a',
+      statuses: [{ sessionId: 'session-a', vpId: 'vp-a', state: 'idle', turnId: null, since: 20 }],
+    } });
+
+    expect(store.isYeaftSessionProcessing('session-a')).toBe(false);
+    expect(store.isProcessing).toBe(false);
+  });
+
   it('clears Yeaft session running state on terminal result when metadata end is missed', () => {
     const store = freshStore();
     store.currentView = 'yeaft';
@@ -123,6 +178,9 @@ describe('per-session running state', () => {
     store.yeaftProcessingSessions = { 'session-a': true };
     store.activeVpTurns = {
       'turn-a': { sessionId: 'session-a', vpId: 'vp-a', startedAt: 1 },
+    };
+    store.vpStatuses = {
+      'session-a::vp-a': { sessionId: 'session-a', vpId: 'vp-a', state: 'streaming', turnId: 'turn-a' },
     };
 
     store.handleYeaftOutput({
@@ -134,6 +192,7 @@ describe('per-session running state', () => {
     });
 
     expect(store.activeVpTurns['turn-a']).toBeUndefined();
+    expect(store.vpStatuses['session-a::vp-a']).toEqual(expect.objectContaining({ state: 'idle', turnId: null }));
     expect(store.processingConversations['yeaft-conv']).toBeUndefined();
     expect(store.isYeaftSessionProcessing('session-a')).toBe(false);
     expect(store.isProcessing).toBe(false);

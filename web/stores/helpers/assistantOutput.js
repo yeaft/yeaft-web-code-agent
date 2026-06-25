@@ -329,6 +329,25 @@ export function handleAssistantOutputFrame(store, conversationId, data) {
       if (!completedYeaftSessionId && _removed?.sessionId) completedYeaftSessionId = _removed.sessionId;
       store.activeVpTurns = rest;
     }
+    if (completedYeaftSessionId && store._currentYeaftVpId && store.vpStatuses) {
+      const completedTurnId = store._currentYeaftTurnId || null;
+      const nextStatuses = { ...(store.vpStatuses || {}) };
+      let statusMutated = false;
+      for (const [key, status] of Object.entries(nextStatuses)) {
+        if (!status || status.vpId !== store._currentYeaftVpId) continue;
+        const statusSessionId = status.sessionId || status.groupId || null;
+        if (statusSessionId !== completedYeaftSessionId) continue;
+        if (completedTurnId && status.turnId && status.turnId !== completedTurnId) continue;
+        nextStatuses[key] = {
+          ...status,
+          state: 'idle',
+          turnId: null,
+          since: Date.now(),
+        };
+        statusMutated = true;
+      }
+      if (statusMutated) store.vpStatuses = nextStatuses;
+    }
     if (completedYeaftSessionId && typeof store.clearYeaftSessionProcessingIfIdle === 'function') {
       store.clearYeaftSessionProcessingIfIdle(completedYeaftSessionId);
     }

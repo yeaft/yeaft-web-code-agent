@@ -42,6 +42,7 @@ const vpStatusKey = (groupId, vpId) => `${groupId || ''}::${vpId}`;
 const YEAFT_RECENT_TURNS = 5;
 const YEAFT_RECENT_TERMINAL_TASK_LIMIT = 8;
 const YEAFT_TERMINAL_TASK_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'orphaned']);
+const YEAFT_RUNNING_VP_STATES = new Set(['typing', 'thinking', 'streaming', 'tool']);
 
 // Yeaft message ids are `NNNNNN-…` where NNNNNN is the zero-padded seq.
 // Pull the seq out so the store can stamp / advance its delta cursor on
@@ -883,6 +884,11 @@ export const useChatStore = defineStore('chat', {
         for (const info of Object.values(state.activeVpTurns || {})) {
           if (info?.sessionId === sessionId) return true;
         }
+        for (const status of Object.values(state.vpStatuses || {})) {
+          const statusSessionId = status?.sessionId || status?.groupId || null;
+          if (statusSessionId !== sessionId) continue;
+          if (YEAFT_RUNNING_VP_STATES.has(status?.state)) return true;
+        }
         return false;
       }
       return state.currentConversation ? !!state.processingConversations[state.currentConversation] : false;
@@ -966,6 +972,11 @@ export const useChatStore = defineStore('chat', {
       if (state.yeaftProcessingSessions?.[sessionId]) return true;
       for (const info of Object.values(state.activeVpTurns || {})) {
         if (info?.sessionId === sessionId) return true;
+      }
+      for (const status of Object.values(state.vpStatuses || {})) {
+        const statusSessionId = status?.sessionId || status?.groupId || null;
+        if (statusSessionId !== sessionId) continue;
+        if (YEAFT_RUNNING_VP_STATES.has(status?.state)) return true;
       }
       return false;
     },
@@ -2593,6 +2604,14 @@ export const useChatStore = defineStore('chat', {
             ...this.vpStatuses,
             [k]: nextStatus,
           };
+          if (sessionId && YEAFT_RUNNING_VP_STATES.has(event.state)) {
+            this.yeaftProcessingSessions = {
+              ...this.yeaftProcessingSessions,
+              [sessionId]: true,
+            };
+          } else if (sessionId) {
+            this.clearYeaftSessionProcessingIfIdle(sessionId);
+          }
           this.restoreActiveYeaftSessionFromStatuses([nextStatus]);
           break;
         }
@@ -3947,10 +3966,17 @@ export const useChatStore = defineStore('chat', {
         console.warn('[chat] failed to persist pinnedSessions:', e?.message || e);
       }
     },
-    clearYeaftSessionProcessingIfIdle(sessionId) {
+    clearYeaftSessionProcessingIfIdle(sessionId, { ignoreStatuses = false } = {}) {
       if (!sessionId) return;
       const hasActiveTurn = Object.values(this.activeVpTurns || {}).some((info) => info?.sessionId === sessionId);
       if (hasActiveTurn) return;
+      if (!ignoreStatuses) {
+        const hasRunningStatus = Object.values(this.vpStatuses || {}).some((status) => {
+          const statusSessionId = status?.sessionId || status?.groupId || null;
+          return statusSessionId === sessionId && YEAFT_RUNNING_VP_STATES.has(status?.state);
+        });
+        if (hasRunningStatus) return;
+      }
       const { [sessionId]: _removed, ...rest } = this.yeaftProcessingSessions || {};
       this.yeaftProcessingSessions = rest;
     },
