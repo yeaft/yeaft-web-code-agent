@@ -78,6 +78,7 @@ import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 
 const LEGACY_SKILL_COMMAND_PREFIX = 'skill:';
 const YEAFT_SKILL_COMMAND_PREFIX = 'yeaft-skills:';
+const PROJECT_SKILL_TIERS = new Set(['project', 'project-claude', 'project-codex']);
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -473,6 +474,7 @@ function activateProjectRuntime(runtime) {
 async function shutdownProjectRuntimes() {
   const runtimes = Array.from(projectRuntimes.values());
   projectRuntimes.clear();
+  projectRuntimeLoadPromises.clear();
   await Promise.all(runtimes.map(async (runtime) => {
     try { await runtime?.mcpManager?.disconnectAll?.(); } catch { /* best-effort shutdown */ }
   }));
@@ -728,6 +730,9 @@ let yeaftConversationId = null;
  *  creates/replaces the virtual Yeaft conversation id so `/` autocomplete never
  *  falls back to built-ins while full Session metadata is still loading. */
 let lastYeaftSlashCommandSnapshot = null;
+let lastYeaftGeneratedSlashCommands = new Set();
+/** @type {Map<string, Promise<any>>} */
+const projectRuntimeLoadPromises = new Map();
 
 /** task-334-followup-batch-b: stored unsubscribe fn from VP subscribe,
  *  called on session reset to prevent stale subscriber leaks. */
@@ -1859,35 +1864,42 @@ function sendSessionOutputFrame(data, { sessionId, chatId, vpId, turnId, threadI
   });
 }
 
+function isProjectSkill(skill) {
+  return PROJECT_SKILL_TIERS.has(String(skill?.tier || '').trim());
+}
+
 export function buildSkillSlashCommands(skillManager) {
   if (!skillManager || typeof skillManager.list !== 'function') return { commands: [], descriptions: {} };
   const commands = [];
   const descriptions = {};
   for (const skill of skillManager.list()) {
     if (!skill?.name || typeof skill.name !== 'string') continue;
-    const commandName = `${YEAFT_SKILL_COMMAND_PREFIX}${skill.name}`;
+    const description = skill.description || skill.trigger || 'Load Yeaft skill';
+    const commandName = isProjectSkill(skill)
+      ? skill.name
+      : `${YEAFT_SKILL_COMMAND_PREFIX}${skill.name}`;
     commands.push(commandName);
-    descriptions[commandName] = skill.description || skill.trigger || 'Load Yeaft skill';
+    descriptions[commandName] = description;
 
-    // Legacy alias for older typed commands and persisted drafts. Do not add it
-    // to the visible command list; autocomplete should show the same plugin-style
-    // names users see in Claude Code, e.g. /yeaft-skills:code-review.
-    const legacyCommandName = `${LEGACY_SKILL_COMMAND_PREFIX}${skill.name}`;
-    descriptions[legacyCommandName] = descriptions[commandName];
+    // Accepted aliases for typed history and compatibility. They are not added
+    // to the visible list unless they are the tier-appropriate display command.
+    descriptions[`${LEGACY_SKILL_COMMAND_PREFIX}${skill.name}`] = description;
+    descriptions[`${YEAFT_SKILL_COMMAND_PREFIX}${skill.name}`] = description;
   }
   commands.sort((a, b) => a.localeCompare(b));
   return { commands, descriptions };
 }
 
 export function buildMergedSkillSlashCommands(skillManagers = []) {
-  const commands = [];
-  const descriptions = {};
+  const byName = new Map();
   for (const manager of skillManagers) {
-    const built = buildSkillSlashCommands(manager);
-    for (const cmd of built.commands) commands.push(cmd);
-    Object.assign(descriptions, built.descriptions);
+    if (!manager || typeof manager.list !== 'function') continue;
+    for (const skill of manager.list()) {
+      if (!skill?.name || typeof skill.name !== 'string') continue;
+      byName.set(skill.name, skill);
+    }
   }
-  return { commands: [...new Set(commands)].sort((a, b) => a.localeCompare(b)), descriptions };
+  return buildSkillSlashCommands({ list: () => [...byName.values()] });
 }
 
 function sendSkillSlashCommandsUpdate({ conversationId, slashCommands, slashCommandDescriptions }) {
@@ -1909,7 +1921,7 @@ function replayCachedSkillSlashCommandsToYeaftConversation() {
   });
 }
 
-export function preloadYeaftSkillSlashCommands() {
+function loadAndBroadcastYeaftSkillSlashCommands() {
   const yeaftDir = ctx.CONFIG?.yeaftDir || DEFAULT_YEAFT_DIR;
   const roots = [process.cwd()];
   const configuredWorkDir = typeof ctx.CONFIG?.workDir === 'string' ? ctx.CONFIG.workDir.trim() : '';
@@ -1923,11 +1935,21 @@ export function preloadYeaftSkillSlashCommands() {
   };
 }
 
+export function preloadYeaftSkillSlashCommands() {
+  setTimeout(() => {
+    try { loadAndBroadcastYeaftSkillSlashCommands(); }
+    catch (err) { console.warn('[Yeaft] async skill slash preload failed:', err?.message || err); }
+  }, 0);
+  return { scheduled: true };
+}
+
 function broadcastSkillSlashCommands(sessionLike, extraSkillManagers = []) {
   const managers = [sessionLike?.skillManager, ...extraSkillManagers].filter(Boolean);
   const { commands, descriptions } = buildMergedSkillSlashCommands(managers);
   const isYeaftSkillCommand = (cmd) => typeof cmd === 'string'
-    && (cmd.startsWith(LEGACY_SKILL_COMMAND_PREFIX) || cmd.startsWith(YEAFT_SKILL_COMMAND_PREFIX));
+    && (lastYeaftGeneratedSlashCommands.has(cmd)
+      || cmd.startsWith(LEGACY_SKILL_COMMAND_PREFIX)
+      || cmd.startsWith(YEAFT_SKILL_COMMAND_PREFIX));
   const nonSkillCommands = (ctx.slashCommands || []).filter(cmd => !isYeaftSkillCommand(cmd));
   const slashCommands = [...new Set([...nonSkillCommands, ...commands])];
   const slashCommandDescriptions = Object.fromEntries(
@@ -1937,6 +1959,7 @@ function broadcastSkillSlashCommands(sessionLike, extraSkillManagers = []) {
   Object.assign(slashCommandDescriptions, descriptions);
   ctx.slashCommands = slashCommands;
   ctx.slashCommandDescriptions = slashCommandDescriptions;
+  lastYeaftGeneratedSlashCommands = new Set(commands);
   lastYeaftSlashCommandSnapshot = { slashCommands, slashCommandDescriptions };
   sendSkillSlashCommandsUpdate({
     conversationId: yeaftConversationId || '__preload__',
@@ -1967,9 +1990,6 @@ async function loadProjectRuntime(workDir) {
   const mcpConfig = loadMCPConfig(yeaftDir, undefined, normalizedWorkDir);
   const mcpManager = new MCPManager();
   let mcpStatus = { connected: [], failed: [] };
-  if (mcpConfig.servers.length > 0) {
-    mcpStatus = await mcpManager.connectAll(mcpConfig.servers);
-  }
   const runtime = {
     workDir: normalizedWorkDir,
     skillManager,
@@ -1985,8 +2005,39 @@ async function loadProjectRuntime(workDir) {
     },
   };
   projectRuntimes.set(key, runtime);
+  // Skill metadata is available after the filesystem scan; publish it before
+  // any MCP server startup so autocomplete does not wait on external processes.
   activateProjectRuntime(runtime);
+  if (mcpConfig.servers.length > 0) {
+    mcpStatus = await mcpManager.connectAll(mcpConfig.servers);
+    runtime.mcpStatus = mcpStatus;
+    runtime.status = {
+      ...runtime.status,
+      mcpServers: mcpStatus.connected,
+      mcpFailed: mcpStatus.failed,
+      mcpSkipped: mcpConfig.skipped || [],
+      tools: session.toolRegistry?.size || 0,
+    };
+    activateProjectRuntime(runtime);
+  }
   return runtime;
+}
+
+
+function scheduleProjectRuntimeLoad(workDir) {
+  const normalizedWorkDir = normalizeSessionWorkDir(workDir);
+  if (!normalizedWorkDir || !session) return null;
+  const key = projectRuntimeKey(normalizedWorkDir);
+  if (projectRuntimes.has(key)) return projectRuntimes.get(key);
+  if (projectRuntimeLoadPromises.has(key)) return projectRuntimeLoadPromises.get(key);
+  const promise = loadProjectRuntime(normalizedWorkDir)
+    .catch((err) => {
+      console.warn('[Yeaft] async project runtime load failed for %s: %s', normalizedWorkDir, err?.message || err);
+      return null;
+    })
+    .finally(() => { projectRuntimeLoadPromises.delete(key); });
+  projectRuntimeLoadPromises.set(key, promise);
+  return promise;
 }
 
 async function ensureProjectRuntimeForSessionMeta(sessionMeta) {
@@ -3374,7 +3425,7 @@ export async function handleYeaftSessionSend(msg) {
 
   const ensureSessionStart = perfNowMs();
   await ensureSessionLoaded({ sessionMeta: sessionMetaForRuntime, perfTraceId });
-  await ensureProjectRuntimeForSessionMeta(sessionMetaForRuntime);
+  scheduleProjectRuntimeLoad(sessionMetaForRuntime?.workDir);
   traceDuration('session_send.ensure_session_loaded', ensureSessionStart);
 
 
@@ -3772,7 +3823,10 @@ async function ensureSessionLoaded(opts = {}) {
     }
 
     ensureYeaftConversationId();
-    const bootProjectRuntime = normalizedWorkDir ? await ensureProjectRuntimeForSessionMeta({ workDir: normalizedWorkDir }) : null;
+    const bootProjectRuntime = normalizedWorkDir ? projectRuntimes.get(projectRuntimeKey(normalizedWorkDir)) || null : null;
+    if (normalizedWorkDir && !bootProjectRuntime) {
+      scheduleProjectRuntimeLoad(normalizedWorkDir);
+    }
     const bootStatus = mergedStatusForProjectRuntime(bootProjectRuntime);
     hydrateYeaftStatusFromSession({ ...session, status: bootStatus }, { reason: 'session_ready', emitEvent: true });
     broadcastSkillSlashCommands(session, bootProjectRuntime ? [bootProjectRuntime.skillManager] : []);
@@ -5964,6 +6018,9 @@ export const __testHooks = {
   },
   preloadYeaftSkillSlashCommandsForTest() {
     return broadcastSkillSlashCommands(session);
+  },
+  loadAndBroadcastYeaftSkillSlashCommandsForTest() {
+    return loadAndBroadcastYeaftSkillSlashCommands();
   },
   resetAbortState() {
     turnAbortCtrls.clear();

@@ -100,19 +100,27 @@ const RETRY_DEFAULTS = Object.freeze({
 // Autocomplete prefers /yeaft-skills:<name>; /skill:<name> remains supported
 // for older clients and typed history.
 const EXPLICIT_SKILL_COMMAND_RE = /^\/(?:skill|yeaft-skills):([^\s]+)(\s+|$)/;
+const BARE_SKILL_COMMAND_RE = /^\/([A-Za-z0-9][A-Za-z0-9_.-]*)(\s+|$)/;
 
-function parseExplicitSkillCommand(prompt) {
+function parseExplicitSkillCommand(prompt, skillManager) {
   if (typeof prompt !== 'string') {
     return { skillName: null, cleanedPrompt: prompt };
   }
   const match = prompt.match(EXPLICIT_SKILL_COMMAND_RE);
-  if (!match) {
-    return { skillName: null, cleanedPrompt: prompt };
+  if (match) {
+    return {
+      skillName: match[1],
+      cleanedPrompt: prompt.slice(match[0].length),
+    };
   }
-  return {
-    skillName: match[1],
-    cleanedPrompt: prompt.slice(match[0].length),
-  };
+  const bareMatch = prompt.match(BARE_SKILL_COMMAND_RE);
+  if (bareMatch && typeof skillManager?.has === 'function' && skillManager.has(bareMatch[1])) {
+    return {
+      skillName: bareMatch[1],
+      cleanedPrompt: prompt.slice(bareMatch[0].length),
+    };
+  }
+  return { skillName: null, cleanedPrompt: prompt };
 }
 
 function stripLeadingSkillCommandFromPromptParts(promptParts) {
@@ -1641,7 +1649,7 @@ export class Engine {
     // the merge, so an invalid caller value (e.g. 'ULTRA') does not shadow a
     // valid prompt prefix.
     const parsed = parseEffortPrefix(prompt);
-    const parsedSkill = parseExplicitSkillCommand(parsed.cleanedPrompt);
+    const parsedSkill = parseExplicitSkillCommand(parsed.cleanedPrompt, this.#skillManager);
     const effectivePrompt = parsedSkill.cleanedPrompt;
     const effectivePromptParts = parsedSkill.skillName
       ? stripLeadingSkillCommandFromPromptParts(promptParts)

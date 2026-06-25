@@ -78,9 +78,37 @@ describe('Yeaft skill slash commands', () => {
     expect(descriptions['skill:review-code']).toBe('Project review');
   });
 
-  it.each(['/yeaft-skills:review-code please review this', '/skill:review-code please review this'])('injects an explicitly selected skill and strips %s before streaming', async (prompt) => {
+
+  it('shows project-tier skills as bare slash commands and globals as yeaft-skills commands', () => {
+    const { commands, descriptions } = buildMergedSkillSlashCommands([
+      { list: () => [{ name: 'global-review', description: 'Global review', tier: 'user' }] },
+      { list: () => [{ name: 'project-review', description: 'Project review', tier: 'project' }] },
+    ]);
+
+    expect(commands).toEqual(['project-review', 'yeaft-skills:global-review']);
+    expect(descriptions['project-review']).toBe('Project review');
+    expect(descriptions['yeaft-skills:project-review']).toBe('Project review');
+    expect(descriptions['skill:project-review']).toBe('Project review');
+    expect(descriptions['yeaft-skills:global-review']).toBe('Global review');
+  });
+
+  it('lets a project-tier override replace a global skill command shape', () => {
+    const { commands, descriptions } = buildMergedSkillSlashCommands([
+      { list: () => [{ name: 'review-code', description: 'Global review', tier: 'user' }] },
+      { list: () => [{ name: 'review-code', description: 'Project review', tier: 'project-claude' }] },
+    ]);
+
+    expect(commands).toEqual(['review-code']);
+    expect(descriptions['review-code']).toBe('Project review');
+    expect(descriptions['yeaft-skills:review-code']).toBe('Project review');
+  });
+
+  it.each(['/yeaft-skills:review-code please review this', '/skill:review-code please review this', '/review-code please review this'])('injects an explicitly selected skill and strips %s before streaming', async (prompt) => {
     const adapter = new RecordingAdapter();
     const skillManager = {
+      has(name) {
+        return name === 'review-code';
+      },
       getPromptContent(name) {
         return name === 'review-code' ? '## Skill: review-code\n\nReview instructions' : '';
       },
