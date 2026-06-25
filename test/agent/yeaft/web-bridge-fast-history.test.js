@@ -258,6 +258,50 @@ describe('Yeaft load-history first paint', () => {
     }
   });
 
+  it('does not emit an empty delta chunk when no rows changed after the cursor', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-empty-delta-'));
+    try {
+      ctx.CONFIG = { yeaftDir: dir };
+      const store = new ConversationStore(dir);
+      const anchor = store.append({
+        role: 'user',
+        content: 'already seen',
+        sessionId: 'session-fast',
+        time: '2026-06-20T01:00:00.000Z',
+      });
+      const hidden = store.append({
+        role: 'user',
+        content: '[system note] You have called ListAgents with the same arguments 3 times. Previous result: {...}',
+        sessionId: 'session-fast',
+        time: '2026-06-20T01:00:01.000Z',
+      });
+
+      const pending = handleYeaftLoadHistory({ sessionId: 'session-fast', afterSeq: Number(anchor.id.slice(1)) });
+      await flushMicrotasks();
+
+      expect(sent.some(m => m.type === 'yeaft_history_chunk' && m.mode === 'delta')).toBe(false);
+      const event = sent.find(m => m.event?.type === 'history_loaded')?.event;
+      expect(event).toMatchObject({
+        mode: 'delta',
+        count: 0,
+        sessionId: 'session-fast',
+        latestSeq: Number(hidden.id.slice(1)),
+        afterSeq: Number(anchor.id.slice(1)),
+      });
+      expect(event.latestSeq).toBeGreaterThan(event.afterSeq);
+
+      resolveLoadSession({
+        conversationStore: store,
+        config: { model: 'test-model', availableModels: [] },
+        status: { skills: 0, mcpServers: [], tools: 0 },
+        taskManager: { listActiveTasks: () => [] },
+      });
+      await pending;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('ready-session recent replay emits history before metadata snapshots', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'yeaft-ready-recent-first-'));
     try {

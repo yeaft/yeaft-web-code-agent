@@ -402,6 +402,49 @@ describe('handleYeaftHistoryChunk', () => {
     expect(store.yeaftLoadingMoreHistory).toBe(false);
   });
 
+  it('clears an empty delta sync without moving older-history cursors', () => {
+    const store = mkStore({
+      yeaftActiveSessionFilter: 'g1',
+      yeaftHasMoreHistory: true,
+      yeaftOldestLoadedSeq: 50,
+      yeaftSessionHistoryState: {
+        g1: {
+          loaded: true,
+          loading: false,
+          hasMore: true,
+          oldestSeq: 50,
+          latestSeq: 100,
+          syncingAfterSeq: 100,
+          count: 2,
+        },
+      },
+      messagesMap: { 'yeaft-1': [{ id: 'm0100', type: 'user', content: 'cached', sessionId: 'g1', timestamp: 100 }] },
+    });
+
+    handleYeaftHistoryChunk(store, {
+      conversationId: 'yeaft-1',
+      sessionId: 'g1',
+      mode: 'delta',
+      messages: [],
+      latestSeq: 100,
+      afterSeq: 100,
+    });
+
+    expect(store.messagesMap['yeaft-1'].map(m => m.id)).toEqual(['m0100']);
+    expect(store.yeaftSessionHistoryState.g1).toEqual(expect.objectContaining({
+      hasMore: true,
+      oldestSeq: 50,
+      latestSeq: 100,
+      syncingAfterSeq: null,
+      count: 2,
+      loaded: true,
+      loading: false,
+    }));
+    expect(store.yeaftHasMoreHistory).toBe(true);
+    expect(store.yeaftOldestLoadedSeq).toBe(50);
+    expect(store.yeaftLoadingMoreHistory).toBe(false);
+  });
+
   it('accepts legacy groupId field on a chunk for deploy-window compat', () => {
     // Old agents may still emit `groupId` instead of `sessionId` on the
     // wire envelope and per-row stamp. The handler must accept both and
