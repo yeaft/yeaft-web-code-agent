@@ -44,6 +44,7 @@ describe('Yeaft skill slash commands', () => {
     __testHooks.setSessionForTest(null);
     ctx.slashCommands = [];
     ctx.slashCommandDescriptions = {};
+    ctx.messageBuffer = [];
   });
 
   it('builds slash commands from loaded skill metadata', () => {
@@ -179,6 +180,33 @@ describe('Yeaft skill slash commands', () => {
     expect(ctx.slashCommands).toContain('yeaft-skills:base-skill');
     expect(ctx.slashCommands).not.toContain('yeaft-skills:project-skill');
     expect(ctx.slashCommands).not.toContain('skill:base-skill');
+  });
+
+  it('replays cached Yeaft skill commands after the virtual conversation id is created', async () => {
+    const sessionLike = {
+      toolRegistry: new ToolRegistry(),
+      skillManager: { list: () => [{ name: 'user-skill', description: 'User skill from ~/.yeaft' }] },
+      mcpManager: makeMcpManager('base'),
+      yeaftDir: '/tmp/yeaft-test',
+    };
+    __testHooks.setSessionForTest(sessionLike);
+
+    __testHooks.preloadYeaftSkillSlashCommandsForTest();
+    const preload = ctx.messageBuffer.at(-1);
+    expect(preload).toMatchObject({
+      type: 'slash_commands_update',
+      conversationId: '__preload__',
+      slashCommands: ['yeaft-skills:user-skill'],
+    });
+
+    const conversationId = __testHooks.ensureYeaftConversationIdForTest();
+    expect(conversationId).toMatch(/^yeaft-/);
+    const replay = ctx.messageBuffer.at(-1);
+    expect(replay).toMatchObject({
+      type: 'slash_commands_update',
+      conversationId,
+      slashCommands: ['yeaft-skills:user-skill'],
+    });
   });
 
   it('disconnects cached project MCP managers when project runtimes shut down', async () => {

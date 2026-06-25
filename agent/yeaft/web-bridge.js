@@ -724,6 +724,11 @@ const ESCALATE_AFTER_ABORT_MS = 15_000;
 /** Virtual conversationId for the Yeaft session */
 let yeaftConversationId = null;
 
+/** Last agent-level Yeaft slash command payload. Replayed after the web side
+ *  creates/replaces the virtual Yeaft conversation id so `/` autocomplete never
+ *  falls back to built-ins while full Session metadata is still loading. */
+let lastYeaftSlashCommandSnapshot = null;
+
 /** task-334-followup-batch-b: stored unsubscribe fn from VP subscribe,
  *  called on session reset to prevent stale subscriber leaks. */
 let _vpUnsubscribe = null;
@@ -920,7 +925,10 @@ function loadVisibleGroupHistoryPage(store, sessionId, limit, beforeSeq = null) 
 }
 
 function ensureYeaftConversationId() {
-  if (!yeaftConversationId) yeaftConversationId = `yeaft-${Date.now()}`;
+  if (!yeaftConversationId) {
+    yeaftConversationId = `yeaft-${Date.now()}`;
+    replayCachedSkillSlashCommandsToYeaftConversation();
+  }
   return yeaftConversationId;
 }
 
@@ -1807,6 +1815,8 @@ export async function __testResetVpState() {
   sessionContexts.clear();
   vpCurrentTodos.clear();
   threadClassifier = defaultClassifyThread;
+  yeaftConversationId = null;
+  lastYeaftSlashCommandSnapshot = null;
   // Per-group compact in-flight + pending state lives on the session's
   // Compactor. Clear it so a follow-on test doesn't see ghost in-flight
   // promises from a prior run.
@@ -1880,6 +1890,39 @@ export function buildMergedSkillSlashCommands(skillManagers = []) {
   return { commands: [...new Set(commands)].sort((a, b) => a.localeCompare(b)), descriptions };
 }
 
+function sendSkillSlashCommandsUpdate({ conversationId, slashCommands, slashCommandDescriptions }) {
+  sendToServer({
+    type: 'slash_commands_update',
+    agentId: ctx.AGENT_ID || ctx.agentId || null,
+    conversationId,
+    slashCommands,
+    slashCommandDescriptions,
+  });
+}
+
+function replayCachedSkillSlashCommandsToYeaftConversation() {
+  if (!yeaftConversationId || !lastYeaftSlashCommandSnapshot) return;
+  sendSkillSlashCommandsUpdate({
+    conversationId: yeaftConversationId,
+    slashCommands: lastYeaftSlashCommandSnapshot.slashCommands,
+    slashCommandDescriptions: lastYeaftSlashCommandSnapshot.slashCommandDescriptions,
+  });
+}
+
+export function preloadYeaftSkillSlashCommands() {
+  const yeaftDir = ctx.CONFIG?.yeaftDir || DEFAULT_YEAFT_DIR;
+  const roots = [process.cwd()];
+  const configuredWorkDir = typeof ctx.CONFIG?.workDir === 'string' ? ctx.CONFIG.workDir.trim() : '';
+  if (configuredWorkDir && configuredWorkDir !== process.cwd()) roots.push(configuredWorkDir);
+  const skillManager = createSkillManager(yeaftDir, roots.join(delimiter));
+  broadcastSkillSlashCommands({ skillManager });
+  return {
+    skills: skillManager.size,
+    slashCommands: ctx.slashCommands,
+    slashCommandDescriptions: ctx.slashCommandDescriptions,
+  };
+}
+
 function broadcastSkillSlashCommands(sessionLike, extraSkillManagers = []) {
   const managers = [sessionLike?.skillManager, ...extraSkillManagers].filter(Boolean);
   const { commands, descriptions } = buildMergedSkillSlashCommands(managers);
@@ -1894,9 +1937,8 @@ function broadcastSkillSlashCommands(sessionLike, extraSkillManagers = []) {
   Object.assign(slashCommandDescriptions, descriptions);
   ctx.slashCommands = slashCommands;
   ctx.slashCommandDescriptions = slashCommandDescriptions;
-  sendToServer({
-    type: 'slash_commands_update',
-    agentId: ctx.AGENT_ID || ctx.agentId || null,
+  lastYeaftSlashCommandSnapshot = { slashCommands, slashCommandDescriptions };
+  sendSkillSlashCommandsUpdate({
     conversationId: yeaftConversationId || '__preload__',
     slashCommands,
     slashCommandDescriptions,
@@ -5916,6 +5958,12 @@ export const __testHooks = {
   setSessionForTest(nextSession) {
     session = nextSession || null;
     sessionLoadPromise = null;
+  },
+  ensureYeaftConversationIdForTest() {
+    return ensureYeaftConversationId();
+  },
+  preloadYeaftSkillSlashCommandsForTest() {
+    return broadcastSkillSlashCommands(session);
   },
   resetAbortState() {
     turnAbortCtrls.clear();
