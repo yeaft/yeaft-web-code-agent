@@ -3894,7 +3894,7 @@ async function ensureSessionLoaded(opts = {}) {
       workDir: normalizedWorkDir,
     });
     session = await loadSession({
-      ...(sessionYeaftDir && { dir: sessionYeaftDir }),
+      ...(yeaftDir && { dir: yeaftDir }),
       ...(normalizedWorkDir && { workDir: normalizedWorkDir }),
       skipMCP: true,
       skipSkills: true,

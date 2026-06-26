@@ -1426,7 +1426,7 @@ export class ConversationStore {
    * @returns {number}
    */
   hotTokens() {
-    const messages = this.loadAll();
+    const messages = this.#loadHotMessages();
     return messages.reduce((sum, m) => sum + (m.tokens_est || estimateTokens(m.content || '')), 0);
   }
 
@@ -2183,6 +2183,18 @@ export class ConversationStore {
       ...this.#sessionMessageDirs('cold').flatMap(dir => this.#loadFromDir(dir, Infinity)),
       ...this.#sessionMessageDirs('messages').flatMap(dir => this.#loadFromDir(dir, Infinity)),
     ].sort(compareMessagesBySeq);
+  }
+
+  #loadHotMessages() {
+    return [
+      ...this.#loadFromDir(this.#legacyMsgDir, Infinity),
+      ...this.#loadFromDir(this.#chatMsgDir, Infinity),
+      ...this.#readSegmentRows(this.#chatDir),
+      ...this.#sessionConversationDirs({ primaryOnly: true }).flatMap(dir => this.#readSegmentRows(dir)),
+      ...this.#sessionMessageDirs('messages').flatMap(dir => this.#loadFromDir(dir, Infinity)),
+    ]
+      .filter(m => m && m.cold !== true)
+      .sort(compareMessagesBySeq);
   }
 
   #countFilesInDirs(dirs) {

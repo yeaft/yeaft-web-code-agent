@@ -156,7 +156,7 @@ describe('Yeaft load-history first paint', () => {
       const chunk = sent.find(m => m.type === 'yeaft_history_chunk' && m.mode === 'recent');
       expect(chunk.messages.map(m => m.content)).toEqual(['workdir q', 'workdir a']);
       expect(loadSession).toHaveBeenCalledTimes(1);
-      expect(loadSession.mock.calls[0][0]).toMatchObject({ dir: workYeaftDir, workDir });
+      expect(loadSession.mock.calls[0][0]).toMatchObject({ dir, workDir });
 
       await pending;
       resolveLoadSession({

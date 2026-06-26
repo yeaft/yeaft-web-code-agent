@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../../../agent/yeaft/config.js';
+import { loadSession } from '../../../agent/yeaft/session.js';
 import { loadSessionConfig, resolveSessionConfig, saveSessionConfig } from '../../../agent/yeaft/sessions/session-config.js';
 
 let dir = null;
@@ -68,4 +69,35 @@ describe('Yeaft session-scoped model config', () => {
     expect(config.model).toBe('github-copilot/gpt-5.5');
     expect(effective.model).toBe('github-copilot/gpt-5.5');
   });
+
+  it('loads runtime config from agent root while storing workDir session data under project .yeaft', async () => {
+    const root = makeDir();
+    const workDir = mkdtempSync(join(tmpdir(), 'yeaft-session-config-workdir-'));
+    writeFileSync(join(root, 'config.json'), JSON.stringify({
+      providers: [
+        { name: 'global-provider', baseUrl: 'http://global.example/v1', apiKey: 'test', protocol: 'openai-responses', models: ['gpt-5'] },
+      ],
+      primaryModel: 'global-provider/gpt-5',
+      language: 'zh',
+    }, null, 2));
+
+    let session = null;
+    try {
+      session = await loadSession({ dir: root, workDir, skipMCP: true, skipSkills: true });
+      expect(session.config.dir).toBe(root);
+      expect(session.config.primaryModel).toBe('global-provider/gpt-5');
+      expect(session.config.providers?.[0]?.name).toBe('global-provider');
+      expect(session.yeaftDir).toBe(join(workDir, '.yeaft'));
+      expect(session.skillManager.skillsDir).toBe(join(root, 'skills'));
+
+      session.conversationStore.append({ role: 'user', content: 'workdir-backed message', sessionId: 'session_cfg' });
+      const segmentPath = join(workDir, '.yeaft', 'sessions', 'session_cfg', 'conversation', 'segments', '000001.jsonl');
+      expect(existsSync(segmentPath)).toBe(true);
+      expect(readFileSync(segmentPath, 'utf8')).toContain('workdir-backed message');
+    } finally {
+      await session?.shutdown?.();
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
 });

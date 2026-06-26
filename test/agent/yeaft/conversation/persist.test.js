@@ -906,6 +906,19 @@ legacy session`, { encoding: 'utf8' });
       expect(tokens).toBeGreaterThan(0);
       expect(tokens).toBe(75); // 25 + 50
     });
+
+    it('should exclude archived JSONL rows from hot token pressure', () => {
+      const cold = store.append({ role: 'user', content: 'cold', sessionId: 'session_tokens', tokens_est: 25 });
+      store.append({ role: 'assistant', content: 'hot', sessionId: 'session_tokens', tokens_est: 1 });
+
+      expect(store.hotTokens()).toBe(26);
+      store.moveToCold(cold.id);
+
+      expect(store.countHot()).toBe(1);
+      expect(store.countCold()).toBe(1);
+      expect(store.hotTokens()).toBe(1);
+      expect(store.loadAllBySession('session_tokens').map(m => m.content)).toEqual(['cold', 'hot']);
+    });
   });
 
   describe('updateIndex', () => {
