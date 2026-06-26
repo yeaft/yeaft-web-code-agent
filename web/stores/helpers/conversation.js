@@ -175,9 +175,13 @@ export function selectConversation(store, conversationId, agentId) {
         afterMessageId: lastSeenDbId
       });
     } else {
-      // No cache, or cache is all unflushed partials → cold-load 5 turns.
-      store.messagesMap[conversationId] = [];
-      setSessionLoading(store, true, t('chat.session.loadingHistory'));
+      // No persisted cursor yet. If there are optimistic/unflushed messages in
+      // memory, keep them visible while asking for the persisted recent page;
+      // clearing here makes a quick switch away/back look like data loss.
+      if (!cachedMessages || cachedMessages.length === 0) {
+        store.messagesMap[conversationId] = [];
+        setSessionLoading(store, true, t('chat.session.loadingHistory'));
+      }
       store.sendWsMessage({
         type: 'sync_messages',
         conversationId,

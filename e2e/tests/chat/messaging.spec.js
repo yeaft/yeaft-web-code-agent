@@ -16,8 +16,8 @@ import { expect } from '@playwright/test';
 async function createConversationAndGetId(chatPage, mockAgent) {
   const beforeCount = await chatPage.locator('.session-item').count();
 
-  // Click "New Conversation" in sidebar nav
-  await chatPage.locator('.sidebar-nav .sidebar-nav-item').first().click();
+  // Click "New Conversation" in the Chat session tab
+  await chatPage.locator('.session-tab-add-btn').click();
   await expect(chatPage.locator('.modal.resume-modal')).toBeVisible({ timeout: 5000 });
 
   // Click create button
