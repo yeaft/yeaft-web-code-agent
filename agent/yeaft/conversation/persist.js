@@ -57,6 +57,13 @@ import { isHiddenConversationRow } from './internal-control.js';
  */
 let DEFAULT_RECENT_TURNS = 20;
 
+// Circuit breaker for newest-to-oldest session scans. This bounds event-loop
+// starvation when the newest transcript tail is dense with hidden/internal or
+// otherwise non-turn rows and no user boundary is found quickly.
+const RECENT_SESSION_SCAN_BASE_CAP = 64;
+const RECENT_SESSION_SCAN_PER_TURN_CAP = 4;
+const RECENT_SESSION_SCAN_MAX_CAP = 256;
+
 /** Read the current default cold-start replay window (turn count). */
 export function getDefaultRecentTurnsLimit() {
   return DEFAULT_RECENT_TURNS;
@@ -176,6 +183,11 @@ function canonicalUserTurnContent(content) {
     .join('\n')
     .trim();
   return text ? stripVpMentionPrefix(text) : null;
+}
+
+function recentSessionScanCap(turnsLimit) {
+  const turns = Number.isFinite(turnsLimit) && turnsLimit > 0 ? Math.ceil(turnsLimit) : DEFAULT_RECENT_TURNS;
+  return Math.min(RECENT_SESSION_SCAN_MAX_CAP, RECENT_SESSION_SCAN_BASE_CAP + turns * RECENT_SESSION_SCAN_PER_TURN_CAP);
 }
 
 // ─── Frontmatter helpers ─────────────────────────────────────
@@ -1072,7 +1084,7 @@ export class ConversationStore {
       roles: new Set(['user', 'assistant']),
       stripAssistantToolCalls: true,
     });
-    if (page.messages.length === 0) return { messages: [], oldestSeq: null, hasMore: false };
+    if (page.messages.length === 0) return { messages: [], oldestSeq: null, hasMore: page.truncated };
 
     const oldestSeq = page.messages.length ? parseSeqFromId(page.messages[0].id) : null;
     return {
@@ -1715,17 +1727,47 @@ export class ConversationStore {
 
   #loadRecentSessionWindow(sessionId, turnsLimit, { beforeSeq = Infinity, roles = null, stripAssistantToolCalls = false } = {}) {
     const kept = [];
+    const pendingBoundaryRows = [];
     let turnsFromEnd = 0;
     let openCanonical = null;
+    let boundaryCanonical = null;
     let truncated = false;
+    let parsed = 0;
+    const scanCap = recentSessionScanCap(turnsLimit);
+
+    const project = (m) => {
+      if (roles && !roles.has(m.role)) return null;
+      if (stripAssistantToolCalls && m.role === 'assistant') {
+        const { toolCalls, ...rest } = m;
+        if (!rest.content && !rest.attachments && (!Array.isArray(toolCalls) || toolCalls.length === 0)) return null;
+        if (Array.isArray(toolCalls) && toolCalls.length > 0) return { ...rest, toolSummaryCount: toolCalls.length };
+        return rest;
+      }
+      return m;
+    };
+    const keep = (m) => {
+      const projected = project(m);
+      if (projected) kept.push(projected);
+    };
+    const queueBoundaryRow = (m) => {
+      const projected = project(m);
+      if (projected) pendingBoundaryRows.push(projected);
+    };
 
     // Do not materialize the whole session transcript just to paint or hydrate
     // the recent context window. Large Yeaft sessions can have thousands of
     // markdown rows; parsing all of them is synchronous and can starve websocket
     // heartbeat long enough for the agent to look dead. Walk newest-to-oldest
-    // and stop once we have the requested turn window plus proof that an older
-    // turn exists.
+    // and stop after the requested turn window is complete. Hidden/internal and
+    // non-turn rows are not allowed to force an unbounded scan; a hard parse cap
+    // conservatively marks the page truncated.
     for (const entry of this.#sessionFileEntries('messages', sessionId, { beforeSeq, desc: true })) {
+      if (parsed >= scanCap) {
+        truncated = true;
+        break;
+      }
+      parsed += 1;
+
       let m;
       try {
         m = this.readMessageFile(entry.path);
@@ -1734,13 +1776,38 @@ export class ConversationStore {
         throw err;
       }
       if (!m || m.sessionId !== sessionId) continue;
-      if (isHiddenConversationRow(m)) continue;
+
+      const boundaryComplete = turnsFromEnd >= turnsLimit;
+      if (isHiddenConversationRow(m)) {
+        if (boundaryComplete) {
+          truncated = true;
+          break;
+        }
+        continue;
+      }
+
+      if (boundaryComplete) {
+        if (m.role === 'user') {
+          const canonical = canonicalUserTurnContent(m.content);
+          if (canonical != null && canonical === boundaryCanonical) {
+            kept.push(...pendingBoundaryRows.splice(0));
+            keep(m);
+            continue;
+          }
+        } else {
+          queueBoundaryRow(m);
+          continue;
+        }
+        truncated = true;
+        break;
+      }
 
       if (m.role === 'user') {
         const canonical = canonicalUserTurnContent(m.content);
         if (canonical != null && canonical !== openCanonical) {
           turnsFromEnd += 1;
           openCanonical = canonical;
+          if (turnsFromEnd === turnsLimit) boundaryCanonical = canonical;
           if (turnsFromEnd > turnsLimit) {
             truncated = true;
             break;
@@ -1748,17 +1815,14 @@ export class ConversationStore {
         }
       }
 
-      if (roles && !roles.has(m.role)) continue;
-      if (stripAssistantToolCalls && m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
-        const { toolCalls, ...rest } = m;
-        kept.push({ ...rest, toolSummaryCount: toolCalls.length });
-      } else {
-        kept.push(m);
-      }
+      keep(m);
     }
 
     kept.reverse();
-    return { messages: sliceLastNTurns(kept, turnsLimit), truncated };
+    return {
+      messages: turnsFromEnd > 0 ? sliceLastNTurns(kept, turnsLimit) : kept,
+      truncated,
+    };
   }
 
   #sessionFileEntries(kind, sessionId, { beforeSeq = Infinity, afterSeq = -Infinity, desc = false } = {}) {

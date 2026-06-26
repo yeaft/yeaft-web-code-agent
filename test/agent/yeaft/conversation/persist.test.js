@@ -561,6 +561,75 @@ describe('ConversationStore', () => {
       expect(readCounts.count).toBeLessThan(10);
     });
 
+    it('loadVisibleBySession stops on dense hidden rows after the requested turn', () => {
+      store.append({ role: 'user', content: 'old q', sessionId: 'grp_a' });
+      store.append({ role: 'assistant', content: 'old a', sessionId: 'grp_a' });
+      for (let i = 0; i < 1000; i++) {
+        store.append({ role: 'user', content: `[system note] You have called Bash with the same arguments ${i + 1} times. Previous result: {...}`, sessionId: 'grp_a' });
+      }
+      store.append({ role: 'user', content: 'latest q', sessionId: 'grp_a' });
+      store.append({ role: 'assistant', content: 'latest a', sessionId: 'grp_a' });
+
+      const readCounts = { count: 0 };
+      const original = store.readMessageFile;
+      store.readMessageFile = (...args) => {
+        readCounts.count += 1;
+        return original.call(store, ...args);
+      };
+      const page = store.loadVisibleBySession('grp_a', null, 1);
+
+      expect(page.messages.map(m => m.content)).toEqual(['latest q', 'latest a']);
+      expect(page.hasMore).toBe(true);
+      expect(readCounts.count).toBeLessThan(80);
+    });
+
+    it('loadVisibleBySession hard-caps dense empty assistant rows after the requested turn', () => {
+      store.append({ role: 'user', content: 'old q', sessionId: 'grp_a' });
+      store.append({ role: 'assistant', content: 'old a', sessionId: 'grp_a' });
+      for (let i = 0; i < 1000; i++) {
+        store.append({ role: 'assistant', content: '', sessionId: 'grp_a', speakerVpId: 'vp-linus' });
+      }
+      store.append({ role: 'user', content: 'latest q', sessionId: 'grp_a' });
+      store.append({ role: 'assistant', content: 'latest a', sessionId: 'grp_a' });
+
+      const readCounts = { count: 0 };
+      const original = store.readMessageFile;
+      store.readMessageFile = (...args) => {
+        readCounts.count += 1;
+        return original.call(store, ...args);
+      };
+      const page = store.loadVisibleBySession('grp_a', null, 1);
+
+      expect(page.messages.map(m => m.content)).toEqual(['latest q', 'latest a']);
+      expect(page.hasMore).toBe(true);
+      expect(readCounts.count).toBeLessThan(80);
+    });
+
+    it('loadVisibleBySession hits the hard cap when the newest tail has no turn boundary', () => {
+      store.append({ role: 'user', content: 'old q', sessionId: 'grp_a' });
+      store.append({ role: 'assistant', content: 'old a', sessionId: 'grp_a' });
+      for (let i = 0; i < 1000; i++) {
+        store.append({ role: 'assistant', content: '', sessionId: 'grp_a', speakerVpId: 'vp-linus' });
+      }
+
+      const readCounts = { count: 0 };
+      const original = store.readMessageFile;
+      store.readMessageFile = (...args) => {
+        readCounts.count += 1;
+        return original.call(store, ...args);
+      };
+      const page = store.loadVisibleBySession('grp_a', null, 1);
+
+      expect(page.messages).toEqual([]);
+      expect(page.hasMore).toBe(true);
+      expect(readCounts.count).toBeLessThan(80);
+
+      readCounts.count = 0;
+      const engineRows = store.loadRecentBySession('grp_a', 1);
+      expect(engineRows).toHaveLength(68);
+      expect(readCounts.count).toBeLessThan(80);
+    });
+
     it('returns [] for empty/null sessionId without throwing', () => {
       store.append({ role: 'user', content: 'X', sessionId: 'grp_a' });
       expect(store.loadRecentBySession(null, 10)).toEqual([]);
