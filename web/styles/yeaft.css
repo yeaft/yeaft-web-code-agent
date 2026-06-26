@@ -3171,7 +3171,7 @@
   min-width: 0;
 }
 /* Row collapsed to a single line: name + inline status, mirroring
-   Crew's compact role card. */
+   the compact role card. */
 .yeaft-vp-timeline-row {
   display: flex;
   align-items: center;
@@ -3264,7 +3264,7 @@
   border-radius: 4px;
   color: var(--text-muted);
   cursor: pointer;
-  /* Hover-revealed (Crew parity). Edit button is hidden at rest; the
+  /* Hover-revealed (interaction parity). Edit button is hidden at rest; the
      abort sibling overrides this below because it MUST be visible the
      moment the v-if turns true (a stop button you can't see isn't a
      stop button). */
@@ -3318,7 +3318,7 @@
 }
 
 /* Streaming/typing/thinking/tool breathing animation on the row name.
-   Crew uses an identical 3 s ease-in-out infinite cycle. All four
+   Uses an identical 3 s ease-in-out infinite cycle. All four
    "in-flight" labels share the same animation so a turn that switches
    thinking → streaming → tool visually reads as one continuous
    activity instead of stop-start. */

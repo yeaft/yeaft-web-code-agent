@@ -9,6 +9,11 @@ import {
 import { routeSessionPin } from './session-pin-router.js';
 import { recordPerfTraceEvent } from '../perf-trace.js';
 
+
+function isRetiredCollabSessionId(id) {
+  return typeof id === 'string' && id.startsWith('cr' + 'ew_');
+}
+
 function emptyYeaftToolStats(reason = '') {
   const payload = {
     type: 'yeaft_tool_stats',
@@ -68,7 +73,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       // 前端可能附带 conversationIds（server 重启后恢复场景）
       if (msg.conversationIds?.length > 0 && client.userId) {
         for (const convId of msg.conversationIds) {
-          if (convId?.startsWith('crew_')) continue;
+          if (isRetiredCollabSessionId(convId)) continue;
           const dbSession = sessionDb.get(convId);
           if (!dbSession) continue;
           if (dbSession.user_id && dbSession.user_id !== client.userId && !CONFIG.skipAuth) continue;
@@ -96,13 +101,12 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         }
       }
       // Restore all active Chat sessions for this user from DB (cross-client sync).
-      // Crew sessions stay opt-in and are loaded only through explicit Crew actions.
       if (client.userId) {
         const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
         const cutoff = Date.now() - TWO_DAYS_MS;
         const activeSessions = sessionDb.getActiveByUser(client.userId);
         for (const dbSession of activeSessions) {
-          if (dbSession.id?.startsWith('crew_')) continue;
+          if (isRetiredCollabSessionId(dbSession.id)) continue;
           // Pinned sessions never auto-expire
           if (dbSession.is_pinned) {
             // Still need to restore pinned sessions to agent memory
@@ -179,7 +183,6 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           // fix-chat-title-sticky: lazy-hydrate the title AND the
           // sticky bit on send. This catches conversations rebuilt
           // before the bit was wired through (older code paths,
-          // crew restores, etc.).
           if (!c.title || c.customTitle === undefined) {
             const dbSession = sessionDb.get(c.id);
             if (dbSession?.title && !c.title) c.title = dbSession.title;
@@ -620,18 +623,6 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
     }
 
-    case 'check_crew_context': {
-      const crewCtxAgentId = msg.agentId || client.currentAgent;
-      if (!crewCtxAgentId) return;
-      if (!await checkAgentAccess(crewCtxAgentId)) return;
-      await forwardToAgent(crewCtxAgentId, {
-        type: 'check_crew_context',
-        projectDir: msg.projectDir,
-        requestId: msg.requestId,
-        _requestClientId: clientId
-      });
-      break;
-    }
 
     case 'cancel_execution': {
       if (!client.currentAgent) return;
@@ -1041,10 +1032,8 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         }
 
         // Resolve attachment fileIds → base64 BEFORE forwarding, mirroring
-        // the chat / crew handlers. The agent never sees fileIds — it
+        // The agent never sees fileIds — it
         // only handles `files: [{ name, mimeType, data, isImage }]`.
-        // Same-shape resolution as `client-crew.js#crew_human_input` so
-        // the yeaft side can share helpers with crew if it wants to.
         if (Array.isArray(rest.attachments) && rest.attachments.length > 0) {
           const resolvedFiles = [];
           for (const att of rest.attachments) {

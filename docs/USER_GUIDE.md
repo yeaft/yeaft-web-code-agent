@@ -23,7 +23,6 @@ The previous monolithic USER_GUIDE has been broken up into smaller, dedicated ch
 | Chat Mode (Claude Code) | [Chat (Claude Code)](./guide/user/chat-mode.md) |
 | Copilot Mode | [Copilot Mode](./guide/user/copilot-mode.md) (NEW) |
 | Yeaft Code Agent | [Yeaft Code Agent](./guide/user/yeaft-group.md) (NEW) |
-| Crew Mode | [Crew (Multi-Role)](./guide/user/crew.md) |
 | Expert Panel | [Expert Panel](./guide/user/expert-panel.md) |
 | Split Screen | [Split Screen](./guide/user/split-screen.md) |
 

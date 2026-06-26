@@ -4,13 +4,13 @@ import { expect } from '@playwright/test';
 test.describe('侧边栏交互', () => {
   /** Helper: create a conversation via modal */
   async function createConversation(chatPage) {
-    await chatPage.click('.sidebar-nav-item:not(.crew-nav-item)');
+    await chatPage.locator('.session-tab-add-btn').click();
     await chatPage.waitForSelector('.modal-overlay', { timeout: 5000 });
     await chatPage.waitForFunction(() => {
       const sel = document.querySelector('.resume-select');
       return sel && sel.options.length > 1;
     }, { timeout: 5000 });
-    await chatPage.locator('.resume-select').selectOption({ index: 1 });
+    await chatPage.locator('.resume-select').first().selectOption({ index: 1 });
     await chatPage.click('.modern-btn');
     await chatPage.waitForSelector('.session-item.active', { timeout: 5000 });
   }
@@ -73,7 +73,8 @@ test.describe('侧边栏交互', () => {
     chatPage.on('dialog', dialog => dialog.accept());
 
     await chatPage.locator('.session-item.active').hover();
-    await chatPage.locator('.session-item.active .session-delete-btn').click();
+    await chatPage.locator('.session-item.active .session-dots-btn').click();
+    await chatPage.locator('.session-menu-item.danger').click();
     await expect(chatPage.locator('.session-item')).toHaveCount(after - 1, { timeout: 5000 });
   });
 });

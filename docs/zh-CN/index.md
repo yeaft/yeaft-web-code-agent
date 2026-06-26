@@ -40,10 +40,6 @@ features:
     title: 帮帮团（Expert Panel）
     details: AI 专家团队侧边面板辅助主对话 — 选团队，获取多视角建议，不打断主线。
     link: /zh-CN/guide/user/expert-panel
-  - icon: 👷
-    title: Crew 多角色协作
-    details: PM / 开发 / 审查 / 测试并行跑 feature — ROUTE 协议路由、kanban 看板、跨 worktree 并行。
-    link: /zh-CN/guide/user/crew
   - icon: 🛠️
     title: Workbench 工作台
     details: 终端 / Git / 文件 / 端口代理一站式 — Agent 机器上的开发环境直接接到浏览器。

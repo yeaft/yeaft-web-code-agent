@@ -16,7 +16,6 @@ Open `http://localhost:3456` — dev mode skips authentication.
 ## Project Structure
 
 - `server/` — Central WebSocket server (Express + ws)
-- `agent/` — Worker machine agent (runs the native Yeaft Code Agent engine, Claude/Copilot CLI providers, Crew coordination, and workbench backends)
 - `web/` — Vue 3 frontend (no build step in dev)
 - `test/` — Vitest unit & integration tests
 - `e2e/` — Playwright end-to-end tests
@@ -46,7 +45,6 @@ Bundles `web/` into `web/dist/` via esbuild. Docker builds do this automatically
 
 > **RED RULE — read before you ever run `git tag`.**
 > **Version tags (`v1.0.X`) and release tags (`release-v1.0.X`) MUST only be
-> created on commits that are on `main`. Developers (including AI crew
 > `dev-*` roles) MUST NOT tag from a feature / worktree branch.**
 
 ### Why this matters
@@ -91,7 +89,6 @@ Do **not** push feature branches directly to `main` (`HEAD:main`, `<branch>:main
   provide the non-bypassable layer — the local hook is a convenience,
   not the authoritative enforcement.
 
-### Checklist for AI dev roles (crew `dev-*`)
 
 Before any `git commit`:
 

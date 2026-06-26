@@ -5,7 +5,6 @@ Yeaft 是一个**三层架构**的多 provider AI 协作平台：
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │                       Web Client (Vue 3)                        │
-│   ChatPage  /  YeaftPage  /  Crew / Workbench / Settings        │
 │              统一的 MessageList 渲染管线（不区分后端）          │
 └──────────────────────────────┬─────────────────────────────────┘
                                │ WebSocket（加密）
@@ -29,7 +28,6 @@ Yeaft 是一个**三层架构**的多 provider AI 协作平台：
 │  │  spawn 外部 CLI 子进程 │  │  ─ 30+ 工具                       │ │
 │  └─────────────────────┘  └──────────────────────────────────┘ │
 │  ┌─────────────────────────────────────────────────────────┐  │
-│  │  Crew 多角色子系统（独立 wire type，跨 worktree）          │  │
 │  └─────────────────────────────────────────────────────────┘  │
 │  ┌─────────────────────────────────────────────────────────┐  │
 │  │  Workbench：terminal / git / files / port-proxy           │  │
@@ -85,14 +83,12 @@ claude-web-chat/
 │   │   └── ...
 │   ├── claude.js            # Claude Chat 旧路径（仍保留）
 │   ├── conversation.js      # Chat session 生命周期
-│   ├── crew/                # Crew 多角色子系统
 │   ├── sdk/                 # Claude CLI stream-json SDK
 │   ├── terminal.js          # PTY 终端（node-pty）
 │   └── workbench/           # Git + 文件操作
 ├── web/                     # Vue 3 前端
 │   ├── app.js               # Vue 应用入口
 │   ├── build.js             # esbuild 生产构建
-│   ├── components/          # Vue 组件（ChatPage / YeaftPage / Crew / Workbench）
 │   ├── stores/              # Pinia 状态管理
 │   ├── styles/              # CSS（深色 / 浅色主题）
 │   ├── i18n/                # en / zh-CN 翻译

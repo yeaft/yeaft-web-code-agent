@@ -123,5 +123,4 @@ exceeds its hard ceiling. Wire it into CI when the budget stops moving.
 - `agent/yeaft/prompts.js` — `buildSystemPrompt()` implementation
 - `agent/yeaft/templates/*.md` — per-section static content
 - `agent/yeaft/memory/preflow.js` — FTS recall feeding section 6
-- `.crew/context/features/task-332-spec.md` — recovered task-270 spec (pre-F2 baseline)
 - `scripts/dump-prompt.js` — budget measurement tool

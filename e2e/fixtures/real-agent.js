@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 
-const PROJECT_ROOT = '/home/azureuser/projects/claude-web-chat';
+const PROJECT_ROOT = process.env.E2E_PROJECT_ROOT || process.cwd();
 
 export class RealAgent {
   constructor(serverUrl, workDir = '/tmp/smoke-test-workdir') {

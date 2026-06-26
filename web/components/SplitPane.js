@@ -10,13 +10,12 @@ import ChatHeader from './ChatHeader.js';
 import MessageItem from './MessageItem.js';
 import AssistantTurn from './AssistantTurn.js';
 import ChatInput from './ChatInput.js';
-import CrewChatView from './CrewChatView.js';
 import ExpertPanel from './ExpertPanel.js';
 import SubAgentPanel from './SubAgentPanel.js';
 
 export default {
   name: 'SplitPane',
-  components: { ChatHeader, MessageItem, AssistantTurn, ChatInput, CrewChatView, ExpertPanel, SubAgentPanel },
+  components: { ChatHeader, MessageItem, AssistantTurn, ChatInput, ExpertPanel, SubAgentPanel },
   props: {
     paneId: { type: String, required: true },
     paneIndex: { type: Number, default: 0 },
@@ -33,11 +32,6 @@ export default {
       />
 
       <template v-if="conversationId">
-        <!-- Crew mode -->
-        <CrewChatView v-if="isCrew" :conversationId="conversationId" :paneId="paneId" />
-
-        <!-- Chat mode -->
-        <template v-else>
           <div class="chat-body" :class="{ 'expert-panel-open': paneRightPanel }">
             <div class="chat-body-main">
               <!-- Inline message list (avoids modifying MessageList.js) -->
@@ -229,7 +223,6 @@ export default {
               @close="closePanePanel"
             />
           </div>
-        </template>
       </template>
 
       <!-- Empty state: no conversation selected -->
@@ -258,12 +251,6 @@ export default {
       return panel?.conversationId || null;
     });
 
-    // Is this a crew conversation?
-    const isCrew = Vue.computed(() => {
-      if (!conversationId.value) return false;
-      const conv = store.conversations.find(c => c.id === conversationId.value);
-      return conv?.type === 'crew';
-    });
 
     // Messages for this panel
     const messages = Vue.computed(() => {
@@ -747,7 +734,6 @@ export default {
       containerRef,
       isActivePanel,
       conversationId,
-      isCrew,
       messages,
       isProcessing,
       showTypingDots,

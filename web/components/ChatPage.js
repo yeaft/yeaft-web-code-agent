@@ -3,8 +3,6 @@ import MessageList from './MessageList.js';
 import ChatInput from './ChatInput.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
 import SettingsPanel from './SettingsPanel.js';
-import CrewConfigPanel from './CrewConfigPanel.js';
-import CrewChatView from './CrewChatView.js';
 import ExpertPanel from './ExpertPanel.js';
 import SubAgentPanel from './SubAgentPanel.js';
 import BtwOverlay from './BtwOverlay.js';
@@ -19,7 +17,7 @@ import { useAuthStore } from '../stores/auth.js';
 
 export default {
   name: 'ChatPage',
-  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarModeToggle, SidebarAgentHeader },
+  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, SettingsPanel, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarModeToggle, SidebarAgentHeader },
   template: `
     <div class="chat-page" :class="{ 'show-sidebar': showMobileSidebar }">
 
@@ -43,9 +41,6 @@ export default {
           </button>
           <button class="collapsed-icon-btn" @click="openConversationModal" :disabled="onlineAgentCount === 0" :title="$t('chat.sidebar.newConv')">
             <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-          </button>
-          <button class="collapsed-icon-btn" @click="newCrewSession" title="Crew">
-            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
           </button>
           <div class="collapsed-spacer"></div>
           <button class="collapsed-icon-btn" @click="store.toggleTheme()" :title="store.theme === 'dark' ? $t('chat.sidebar.lightMode') : $t('chat.sidebar.darkMode')">
@@ -111,19 +106,11 @@ export default {
 
         <!-- Session Tab Bar -->
         <div class="session-tab-bar">
-          <div class="session-tab" :class="{ active: sidebarTab === 'chat' || !store.crewModeEnabled, 'session-tab-solo': !store.crewModeEnabled }" @click="sidebarTab = 'chat'">
+          <div class="session-tab active session-tab-solo">
             <svg class="session-tab-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
             <span>Chat</span>
             <span class="session-tab-count" v-if="chatSessionCount > 0">{{ chatSessionCount }}</span>
             <button class="session-tab-add-btn" @click.stop="onlineAgentCount > 0 && openConversationModal()" :class="{ disabled: onlineAgentCount === 0 }" :title="$t('chat.sidebar.newConv')">
-              <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-            </button>
-          </div>
-          <div v-if="store.crewModeEnabled" class="session-tab" :class="{ active: sidebarTab === 'crew' }" @click="sidebarTab = 'crew'">
-            <svg class="session-tab-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-            <span>Crew</span>
-            <span class="session-tab-count" v-if="crewSessionCount > 0">{{ crewSessionCount }}</span>
-            <button class="session-tab-add-btn" @click.stop="newCrewSession" :title="$t('chat.sidebar.newCrew')">
               <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
             </button>
           </div>
@@ -240,116 +227,6 @@ export default {
               </div>
             </div>
 
-          <!-- Crew Sessions (visible when crew tab active) -->
-          <div class="session-panel-list" v-show="sidebarTab === 'crew'">
-              <div
-                v-for="conv in pinnedCrewConversations"
-                :key="conv.id"
-                class="session-item session-item-crew"
-                :class="{ active: conv.id === store.currentConversation, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false }"
-                @click="editingCrewId !== conv.id && onSessionClick(conv)"
-              >
-                <div class="session-item-header">
-                  <span class="session-pin-icon"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg></span>
-                  <div class="title" :title="getConversationFullTitle(conv)">
-                    <span v-if="store.isConversationProcessing(conv.id)" class="processing-dot"></span>
-                    <span v-else-if="store.isSplitMode && store.isInAnyPanel(conv.id)" class="pane-active-dot"></span>
-                    <svg class="crew-conv-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-                    <input
-                      v-if="editingCrewId === conv.id"
-                      ref="crewRenameInput"
-                      class="crew-rename-input"
-                      v-model="editingCrewName"
-                      @keydown.enter="commitCrewRename"
-                      @keydown.escape="cancelCrewRename"
-                      @blur="commitCrewRename"
-                      @click.stop
-                    />
-                    <span
-                      v-else
-                      class="crew-title-text"
-                      @dblclick.stop="startCrewRename(conv)"
-                    >{{ getCrewTitle(conv) }}</span>
-                  </div>
-                  <span class="session-time">{{ getConversationTime(conv) }}</span>
-                  <button class="session-dots-btn" :class="{ 'menu-open': activeSessionMenu === conv.id }" @click.stop="toggleSessionMenu(conv.id)">
-                    <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
-                  </button>
-                  <div class="session-menu" v-if="activeSessionMenu === conv.id" @click.stop>
-                    <button class="session-menu-item" @click.stop="store.togglePin(conv.id); closeSessionMenu()">
-                      <svg viewBox="0 0 24 24"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
-                      {{ $t('chat.sidebar.unpin') }}
-                    </button>
-                    <button class="session-menu-item split-to-panel-item" v-if="!store.isInAnyPanel(conv.id)" @click.stop="splitToPanel(conv.id); closeSessionMenu()">
-                      <svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
-                      {{ $t('splitScreen.splitToPanel') }}
-                    </button>
-                    <button class="session-menu-item danger" @click.stop="closeSession(conv.id, conv.agentId); closeSessionMenu()">
-                      <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-                      {{ $t('chat.sidebar.closeConv') }}
-                    </button>
-                  </div>
-                </div>
-                <div class="session-info">
-                  <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
-                  <span class="session-agent" v-if="conv.agentName">{{ conv.agentName }}</span>
-                  <span class="session-agent" v-if="conv.provider && conv.provider !== 'claude-code'">· {{ providerLabel(conv.provider) }}</span>
-                </div>
-              </div>
-              <div
-                v-for="conv in unpinnedCrewConversations"
-                :key="conv.id"
-                class="session-item session-item-crew"
-                :class="{ active: conv.id === store.currentConversation, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false }"
-                @click="editingCrewId !== conv.id && onSessionClick(conv)"
-              >
-                <div class="session-item-header">
-                  <div class="title" :title="getConversationFullTitle(conv)">
-                    <span v-if="store.isConversationProcessing(conv.id)" class="processing-dot"></span>
-                    <span v-else-if="store.isSplitMode && store.isInAnyPanel(conv.id)" class="pane-active-dot"></span>
-                    <svg class="crew-conv-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-                    <input
-                      v-if="editingCrewId === conv.id"
-                      ref="crewRenameInput"
-                      class="crew-rename-input"
-                      v-model="editingCrewName"
-                      @keydown.enter="commitCrewRename"
-                      @keydown.escape="cancelCrewRename"
-                      @blur="commitCrewRename"
-                      @click.stop
-                    />
-                    <span
-                      v-else
-                      class="crew-title-text"
-                      @dblclick.stop="startCrewRename(conv)"
-                    >{{ getCrewTitle(conv) }}</span>
-                  </div>
-                  <span class="session-time">{{ getConversationTime(conv) }}</span>
-                  <button class="session-dots-btn" :class="{ 'menu-open': activeSessionMenu === conv.id }" @click.stop="toggleSessionMenu(conv.id)">
-                    <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
-                  </button>
-                  <div class="session-menu" v-if="activeSessionMenu === conv.id" @click.stop>
-                    <button class="session-menu-item" @click.stop="store.togglePin(conv.id); closeSessionMenu()">
-                      <svg viewBox="0 0 24 24"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
-                      {{ $t('chat.sidebar.pin') }}
-                    </button>
-                    <button class="session-menu-item split-to-panel-item" v-if="!store.isInAnyPanel(conv.id)" @click.stop="splitToPanel(conv.id); closeSessionMenu()">
-                      <svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
-                      {{ $t('splitScreen.splitToPanel') }}
-                    </button>
-                    <button class="session-menu-item danger" @click.stop="closeSession(conv.id, conv.agentId); closeSessionMenu()">
-                      <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-                      {{ $t('chat.sidebar.closeConv') }}
-                    </button>
-                  </div>
-                </div>
-                <div class="session-info">
-                  <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
-                  <span class="session-agent" v-if="conv.agentName">{{ conv.agentName }}</span>
-                  <span class="session-agent" v-if="conv.provider && conv.provider !== 'claude-code'">· {{ providerLabel(conv.provider) }}</span>
-                </div>
-              </div>
-          </div>
         </div>
         <div class="sidebar-bottom">
           <button class="sidebar-nav-item" @click="showSettingsPanel = true">
@@ -368,13 +245,6 @@ export default {
 
       <!-- Single-panel Main Chat Area -->
       <main v-if="!store.isSplitMode" class="main-content" :class="{ 'workbench-active': canUseWorkbench && store.workbenchExpanded, 'workbench-maximized': canUseWorkbench && store.workbenchMaximized && store.workbenchExpanded }">
-        <!-- Crew Conversation -->
-        <template v-if="isCurrentCrewConversation">
-          <ChatHeader @toggle-sidebar="showMobileSidebar = !showMobileSidebar" />
-          <CrewChatView />
-        </template>
-        <!-- Normal Chat Mode -->
-        <template v-else>
           <ChatHeader @toggle-sidebar="showMobileSidebar = !showMobileSidebar" />
           <div class="chat-body" :class="{ 'expert-panel-open': store.activeRightPanel }">
             <div class="chat-body-main">
@@ -418,18 +288,6 @@ export default {
       <!-- Settings (floating modal) -->
       <SettingsPanel :visible="showSettingsPanel" @close="showSettingsPanel = false" />
 
-      <!-- Crew Config Panel -->
-      <CrewConfigPanel
-        v-if="store.crewConfigOpen"
-        ref="crewPanel"
-        :mode="store.crewConfigMode"
-        :session="store.currentCrewSession"
-        :status="store.currentCrewStatus"
-        :defaultWorkDir="store.currentAgentInfo?.workDir || ''"
-        @close="store.crewConfigOpen = false"
-        @start="startCrewSession"
-        @browse="openCrewFolderPicker"
-      />
 
 
       <!-- Unified Conversation Modal (New + Resume) -->
@@ -628,11 +486,8 @@ export default {
       folderPickerTarget: '', // 'convModal'
       serverVersion: '',
       chatGroupCollapsed: false,
-      crewGroupCollapsed: false,
       sidebarTab: 'chat',
       // Inline rename state
-      editingCrewId: null,
-      editingCrewName: '',
       editingChatId: null,
       editingChatName: '',
       activeSessionMenu: null
@@ -669,48 +524,21 @@ export default {
     onlineAgentCount() {
       return this.onlineAgents.length;
     },
-    crewCapableAgentCount() {
-      return this.store.agents.filter(a => a.online && a.capabilities?.includes('crew')).length;
-    },
-    isCurrentCrewConversation() {
-      return this.store.currentConversationIsCrew;
-    },
     isMobileView() {
       return this.windowWidth < 640;
     },
-    crewConversations() {
-      return this.sortByActivity(this.store.conversations.filter(c => c.type === 'crew' && c.agentOnline !== false));
-    },
     normalConversations() {
-      return this.sortByActivity(this.store.conversations.filter(c => c.type !== 'crew' && c.agentOnline !== false));
+      return this.sortByActivity(this.store.conversations.filter(c => c.agentOnline !== false));
     },
     pinnedChatConversations() {
-      const pinned = this.store.conversations.filter(c => c.type !== 'crew' && c.agentOnline !== false && this.store.isSessionPinned(c.id));
+      const pinned = this.store.conversations.filter(c => c.agentOnline !== false && this.store.isSessionPinned(c.id));
       return this.sortByActivity(pinned);
     },
     unpinnedChatConversations() {
-      return this.sortByActivity(this.store.conversations.filter(c => c.type !== 'crew' && c.agentOnline !== false && !this.store.isSessionPinned(c.id)));
-    },
-    pinnedCrewConversations() {
-      const pinned = this.store.conversations.filter(c => c.type === 'crew' && c.agentOnline !== false && this.store.isSessionPinned(c.id));
-      return this.sortByActivity(pinned);
-    },
-    unpinnedCrewConversations() {
-      return this.sortByActivity(this.store.conversations.filter(c => c.type === 'crew' && c.agentOnline !== false && !this.store.isSessionPinned(c.id)));
+      return this.sortByActivity(this.store.conversations.filter(c => c.agentOnline !== false && !this.store.isSessionPinned(c.id)));
     },
     chatSessionCount() {
-      return this.store.conversations.filter(c => c.type !== 'crew' && c.agentOnline !== false).length;
-    },
-    crewSessionCount() {
-      return this.store.conversations.filter(c => c.type === 'crew' && c.agentOnline !== false).length;
-    }
-  },
-  watch: {
-    'store.crewModeEnabled'(enabled) {
-      // If crew was just turned off while user was viewing it, snap back
-      // to the Chat tab so the panel body stays in sync with the tab strip.
-      if (!enabled && this.sidebarTab === 'crew') this.sidebarTab = 'chat';
-      if (enabled) this.store.listCrewSessions();
+      return this.store.conversations.filter(c => c.agentOnline !== false).length;
     },
   },
   methods: {
@@ -723,44 +551,6 @@ export default {
     },
     sortByActivity(conversations) {
       return sortSessionsByActivity(conversations);
-    },
-    // Crew mode methods
-    newCrewSession() {
-      this.sidebarTab = 'crew';
-      this.store.enterCrewMode();
-    },
-    startCrewSession(config) {
-      this.store.createCrewSession(config);
-    },
-    openCrewFolderPicker() {
-      const crewPanel = this.$refs.crewPanel;
-      const agentId = crewPanel?.selectedAgent;
-      if (!agentId) return;
-      this.folderPickerTarget = 'crew';
-      this.folderPickerOpen = true;
-      this.folderPickerSelected = '';
-      this.folderPickerLoading = true;
-      const agent = this.store.agents.find(a => a.id === agentId);
-      const defaultDir = crewPanel?.projectDir || agent?.workDir || '';
-      this.folderPickerPath = defaultDir;
-      this.folderPickerEntries = [];
-      const sendRequest = () => {
-        this.store.sendWsMessage({
-          type: 'list_directory',
-          conversationId: '_workdir_picker',
-          agentId: agentId,
-          dirPath: defaultDir,
-          workDir: agent?.workDir || ''
-        });
-      };
-      sendRequest();
-      if (this._folderPickerTimer) clearTimeout(this._folderPickerTimer);
-      this._folderPickerTimer = setTimeout(() => {
-        if (this.folderPickerLoading && this.folderPickerOpen) {
-          console.log('[FolderPicker] Retrying crew directory request for:', defaultDir);
-          sendRequest();
-        }
-      }, 5000);
     },
 
     openConversationModal() {
@@ -919,23 +709,7 @@ export default {
       this.store.closeSession(conversationId, agentId);
     },
     deleteConversation(conversationId, agentId) {
-      const conv = this.store.conversations.find(c => c.id === conversationId);
-      const confirmMsg = conv?.type === 'crew' ? '终止并关闭此 Crew Session？' : this.$t('chat.delete.confirm');
-      if (confirm(confirmMsg)) {
-        // Crew conversation 需要先终止 session
-        if (conv?.type === 'crew' && this.store.crewSessions[conversationId]) {
-          this.store.sendWsMessage({
-            type: 'crew_control',
-            sessionId: conversationId,
-            action: 'stop_all',
-            agentId
-          });
-          // 清理 crew 数据
-          delete this.store.crewSessions[conversationId];
-          delete this.store.crewMessagesMap[conversationId];
-          delete this.store.crewOlderMessages[conversationId];
-          delete this.store.crewStatuses[conversationId];
-        }
+      if (confirm(this.$t('chat.delete.confirm'))) {
         this.store.deleteConversation(conversationId, agentId);
       }
     },
@@ -952,46 +726,11 @@ export default {
       return conv.id.slice(0, 8) + '...';
     },
     getConversationFullTitle(conv) {
-      if (conv.type === 'crew') {
-        return conv.name || 'Crew Session';
-      }
       const cachedTitle = this.store.getConversationTitle(conv.id);
       if (cachedTitle && cachedTitle.length > 30) {
         return cachedTitle;
       }
       return undefined;
-    },
-    getCrewTitle(conv) {
-      return conv.name || 'Crew Session';
-    },
-    startCrewRename(conv) {
-      this.editingCrewId = conv.id;
-      this.editingCrewName = conv.name || '';
-      this.$nextTick(() => {
-        const input = this.$refs.crewRenameInput;
-        if (input) {
-          const el = Array.isArray(input) ? input[0] : input;
-          el.focus();
-          el.select();
-        }
-      });
-    },
-    commitCrewRename() {
-      if (!this.editingCrewId) return;
-      const sessionId = this.editingCrewId;
-      const name = this.editingCrewName.trim() || 'Crew Session';
-      this.editingCrewId = null;
-      this.editingCrewName = '';
-      // Find current name to avoid unnecessary WS call
-      const conv = this.store.conversations.find(c => c.id === sessionId);
-      const currentName = conv?.name || '';
-      if (name !== currentName) {
-        this.store.renameCrewSession(sessionId, name === 'Crew Session' ? '' : name);
-      }
-    },
-    cancelCrewRename() {
-      this.editingCrewId = null;
-      this.editingCrewName = '';
     },
     startChatRename(conv) {
       this.editingChatId = conv.id;
@@ -1114,10 +853,7 @@ export default {
       }, 5000);
     },
     loadFolderPickerDir(dirPath) {
-      let agentId = this.convModalAgent;
-      if (this.folderPickerTarget === 'crew') {
-        agentId = this.$refs.crewPanel?.selectedAgent;
-      }
+      const agentId = this.convModalAgent;
       if (!agentId) return;
       this.folderPickerLoading = true;
       this.folderPickerSelected = '';
@@ -1186,15 +922,6 @@ export default {
       if (this.folderPickerSelected) {
         const sep = path.includes('\\') ? '\\' : '/';
         path = path.replace(/[/\\]$/, '') + sep + this.folderPickerSelected;
-      }
-      if (this.folderPickerTarget === 'crew') {
-        const crewPanel = this.$refs.crewPanel;
-        if (crewPanel) {
-          crewPanel.projectDir = path;
-          crewPanel.onWorkDirChange();
-        }
-        this.folderPickerOpen = false;
-        return;
       }
       this.convModalWorkDir = path;
       this.selectedResumeSession = null;

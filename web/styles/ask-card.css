@@ -1,4 +1,4 @@
-/* AskCard shared styles — expired state + Crew compact mode */
+/* AskCard shared styles — expired state + compact mode */
 
 /* Expired state */
 .ask-card.ask-expired {
@@ -18,7 +18,7 @@
   color: var(--text-secondary);
 }
 
-/* Crew compact mode */
+/* Compact mode */
 .ask-card.ask-compact {
   max-width: 480px;
   padding: 14px 16px;

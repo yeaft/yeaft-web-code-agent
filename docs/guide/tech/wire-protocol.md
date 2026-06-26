@@ -60,7 +60,6 @@ Yeaft's server / agent / web client talk over **WebSocket**. Every message is a 
 | `session_ready` | `conversationId, sessionId, ...` | Session started |
 | `agent_status` | `state, ...` | Agent heartbeat |
 | `ask_user_question` | `requestId, prompt, choices?` | Tool requests user input |
-| `crew_output` | `sessionId, role, data` | Crew subsystem output |
 | `llm_config` / `mcp_servers_list` / `yeaft_settings` | ... | Various settings query responses |
 
 ### claude_output `data` field (core)

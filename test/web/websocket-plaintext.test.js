@@ -238,7 +238,6 @@ describe('Yeaft-incompatible message guard is independent of encryption flag', (
   const YEAFT_INCOMPATIBLE_TYPES = new Set([
     'sync_messages', 'refresh_conversation', 'select_conversation',
     'cancel_execution', 'update_conversation_settings', 'ask_user_answer',
-    'resume_crew_session'
   ]);
 
   it('still short-circuits yeaft-incompatible types in yeaft view regardless of plaintext flag', () => {

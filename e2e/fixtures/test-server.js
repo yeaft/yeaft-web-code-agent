@@ -2,7 +2,7 @@ import { test as base } from '@playwright/test';
 import { spawn } from 'child_process';
 import { MockAgent } from './mock-agent.js';
 
-const PROJECT_ROOT = '/home/azureuser/projects/claude-web-chat';
+const PROJECT_ROOT = process.env.E2E_PROJECT_ROOT || process.cwd();
 
 class TestServer {
   constructor(port) {

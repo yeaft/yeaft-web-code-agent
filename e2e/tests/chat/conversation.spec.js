@@ -16,8 +16,8 @@ import { expect } from '@playwright/test';
 async function createConversation(chatPage, mockAgent) {
   const beforeCount = await chatPage.locator('.session-item').count();
 
-  // Click "New Conversation" in sidebar nav
-  await chatPage.locator('.sidebar-nav .sidebar-nav-item').first().click();
+  // Click "New Conversation" in the Chat session tab
+  await chatPage.locator('.session-tab-add-btn').click();
 
   // Wait for the conversation modal to appear
   await expect(chatPage.locator('.modal.resume-modal')).toBeVisible({ timeout: 5000 });
@@ -44,10 +44,10 @@ test.describe('Conversation Management', () => {
   });
 
   test('should select agent in conversation modal', async ({ chatPage, mockAgent }) => {
-    await chatPage.locator('.sidebar-nav .sidebar-nav-item').first().click();
+    await chatPage.locator('.session-tab-add-btn').click();
     await expect(chatPage.locator('.modal.resume-modal')).toBeVisible({ timeout: 5000 });
 
-    const agentSelect = chatPage.locator('.resume-modal .resume-select');
+    const agentSelect = chatPage.locator('.resume-modal .resume-select').first();
     await expect(agentSelect).toBeVisible();
 
     const options = agentSelect.locator('option');
@@ -82,9 +82,10 @@ test.describe('Conversation Management', () => {
     const activeItem = chatPage.locator('.session-item.active');
     await activeItem.hover();
 
-    const deleteBtn = activeItem.locator('.session-delete-btn');
-    await expect(deleteBtn).toBeVisible({ timeout: 3000 });
-    await deleteBtn.click();
+    const menuButton = activeItem.locator('.session-dots-btn');
+    await expect(menuButton).toBeVisible({ timeout: 3000 });
+    await menuButton.click();
+    await chatPage.locator('.session-menu-item.danger').click();
 
     await expect(chatPage.locator('.session-item')).toHaveCount(initialCount, { timeout: 10000 });
   });

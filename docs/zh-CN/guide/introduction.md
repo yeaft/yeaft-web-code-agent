@@ -40,14 +40,6 @@ AI 专家团队侧边面板辅助你的对话。
 - Chip 风格切换团队
 - 与主对话并行，不打断
 
-### 👷 Crew 多角色协作
-PM / 开发 / 审查 / 测试 / 架构师 / 设计师并行跑 feature。
-- ROUTE 协议在角色间路由
-- Feature 看板 + kanban 状态
-- 跨 worktree 并行执行
-- ask-user 卡片中断要决策
-
-![Crew Features](/images/zh-CN/crew-features.jpg)
 
 ### 🖥️ 分屏 + Workbench
 - **分屏**：最多 3 个面板同时显示不同会话

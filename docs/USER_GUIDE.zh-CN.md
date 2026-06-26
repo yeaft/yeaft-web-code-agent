@@ -23,7 +23,6 @@
 | Chat 模式（Claude Code） | [Chat（Claude Code）](./guide/user/chat-mode.md) |
 | Copilot 模式 | [Copilot 模式](./guide/user/copilot-mode.md)（新增） |
 | Yeaft Code Agent | [Yeaft Code Agent](./guide/user/yeaft-group.md)（新增） |
-| Crew 模式 | [Crew（多角色协作）](./guide/user/crew.md) |
 | 帮帮团 | [帮帮团](./guide/user/expert-panel.md) |
 | 分屏模式 | [分屏模式](./guide/user/split-screen.md) |
 

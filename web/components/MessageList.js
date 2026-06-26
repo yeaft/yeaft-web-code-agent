@@ -637,7 +637,7 @@ export default {
 
     // Issue C (2026-05-12) — IM-style dual-column layout gate.
     // The user explicitly scoped this to Yeaft Session conversations only:
-    // 1:1 chat and crew are unchanged. Yeaft view + an active Session renders
+    // 1:1 chat is unchanged. Yeaft view + an active Session renders
     // user messages as right-side bubbles (UserTurnBlock) and VP turns on the
     // left (existing VpTurnBlock). Outside a Session, user messages fall
     // through to the legacy centered MessageItem.

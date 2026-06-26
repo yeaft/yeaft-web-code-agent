@@ -1,11 +1,10 @@
 /**
  * AskCard — Shared interactive card for AskUserQuestion tool.
- * Used by both Chat mode (AssistantTurn) and Crew mode (CrewTurnRenderer).
+ * Used by Chat mode (AssistantTurn).
  *
  * Props:
  *   askMsg   — the ask message object (askRequestId, askQuestions, toolInput, askAnswered, selectedAnswers)
- *   compact  — use compact layout for Crew mode (optional, default false)
- *
+ *  *
  * Events:
  *   submit(requestId, answers) — user submitted answers
  */

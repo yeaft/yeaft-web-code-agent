@@ -1,7 +1,7 @@
 /* ===========================================================================
    YeaftSidebar
    The session list reuses .session-* classes from sidebar.css for parity with
-   the Chat/Crew sidebars. Only the header row, scroll wrapper, and bottom
+   the Chat sidebar. Only the header row, scroll wrapper, and bottom
    nav overrides live here — everything else is shared.
    No horizontal dividers — groups separated by padding only.
    =========================================================================== */

@@ -448,7 +448,7 @@ export default {
       });
     });
 
-    // Image helpers (reuse crew pattern)
+    // Image helpers
     const getImageUrl = (msg) => {
       if (!msg.fileId) return '';
       const token = msg.previewToken || '';
@@ -540,9 +540,7 @@ export default {
       getImageUrl,
       handleImageError,
       openImagePreview,
-      displayedTodos,
-      toolExpandedValue,
-      updateToolExpanded
+      displayedTodos
     };
   }
 };

@@ -1,6 +1,5 @@
 /**
  * Shared Markdown rendering utilities
- * Extracted from MessageItem.js for reuse in CrewChatView
  */
 
 let _configured = false;
@@ -107,9 +106,8 @@ export function simpleMarkdownFallback(text) {
 /**
  * Strip ROUTE/TASKS blocks from raw role text.
  *
- * task-328 — extracted as a dedicated export so consumers (e.g. the Crew
- * turn renderer) can mirror the agent-side parser's `displayBody` semantics
- * before piping content through markdown rendering. Behaviour:
+ * task-328 — extracted as a dedicated export so consumers can strip
+ * structural routing blocks before piping content through markdown rendering. Behaviour:
  *
  *   1. Closed ROUTE / TASKS blocks — tolerate END variants
  *      (END_ROUTE / END ROUTE / END-ROUTE / ENDROUTE / END / END:).
@@ -148,8 +146,7 @@ const _MD_CACHE_MAX = 2000;
 
 export function renderMarkdown(text) {
   if (!text || typeof text !== 'string') return '';
-  // task-328: defensive strip — Crew renderer normally pre-cleans via
-  // `stripRouteBlocks`, but other callers (Chat / Yeaft) and streaming
+  // task-328: defensive strip. Other callers (Chat / Yeaft) and streaming
   // bursts may still arrive with raw ROUTE/TASKS markers. The strip is
   // bounded so post-ROUTE prose is preserved.
   text = stripRouteBlocks(text);

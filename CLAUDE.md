@@ -12,7 +12,6 @@
 agent/           — Node.js Agent（运行在用户机器上，通过 WebSocket 连接 server）
   claude.js      — Claude CLI 封装（Claude Chat 旧模式）
   conversation.js — Claude Chat 会话管理
-  crew.js / crew/ — Crew 多 Agent 子系统
   sdk/           — Claude SDK 封装（query / stream / utils）
   connection/    — WebSocket 连接、消息路由、心跳
   yeaft/         — Yeaft 引擎（自包含 AI 引擎，不依赖 Claude CLI）
@@ -34,11 +33,8 @@ test/            — Vitest 测试
 - 支持多 session：侧栏列出多个 chat session
 - Agent 作为桥：web -> server -> agent -> Claude CLI -> agent -> server -> web
 
-### Crew 模式
 - 多 Agent 团队协作（PM、dev、reviewer、tester、designer、architect）
-- 角色定义在 `.crew/roles/*/CLAUDE.md`
 - 角色间通过 `---ROUTE---` 协议路由消息
-- 通过 `.crew/context/features/` 和 `.crew/context/kanban.md` 跟踪 feature
 
 ### Yeaft Code Agent / Session
 - **唯一编排单元** — Yeaft 原生 Code Agent 里所有对话都是 Session；没有 "chat mode" / "group mode" 之分
@@ -212,7 +208,6 @@ mcp.js     — MCPManager：连接 MCP server，桥接其工具
 - **组件**：`web/components/*.js` — `ChatPage`、`YeaftPage`（Yeaft 主页）、`YeaftSidebar`、`SettingsPanel`、`MessageList`、`ChatInput`、`SessionCreateModal`、`SessionSettingsModal`、`SessionInviteModal`、`VpDetailView`、`VpTurnBlock` 等
 - **状态**：`web/stores/chat.js` 是唯一的 Pinia store
 - **渲染**：Claude Chat 和 Yeaft 复用同一套 MessageList / AssistantTurn 管线
-- **侧栏**：tab bar（session-tab-bar）含 Chat / Crew / Yeaft 入口
 - **样式**：纯 CSS 放在 `web/styles/`，token 都集中在 `variables.css`
 - **i18n**：内置 i18n，用 `$t()` 调用（en / zh-CN）
 
@@ -398,7 +393,6 @@ Web 客户端 -> ws "yeaft_session_send" -> Server -> ws agent
 
 ### 3. 配置 / 设置弹窗：**固定外壳尺寸**（CRITICAL）
 
-设置类弹窗（settings、LLM 配置、Crew 配置等）必须给 **外壳一个固定的宽高比例**，切 tab 时 tab 内容滚动，**外壳尺寸不变**。
 
 - ❌ 错的做法：每个 tab 是 `height: auto`，切换时弹窗整体跳动，按钮位置漂移。
 - ✅ 对的做法：
@@ -421,8 +415,6 @@ Web 客户端 -> ws "yeaft_session_send" -> Server -> ws agent
 
 ### 5. Yeaft UI 特别规则（保留旧规则）
 
-- **不要水平分割线 / 边框**：Yeaft 页面 sidebar 区段、sidebar header、topbar、detail panel header 上**不**用 `border-bottom` / `border-top`。用 padding / margin 制造视觉分组，而不是画线。和 Claude Chat、Crew 的干净观感保持一致。
-- **侧栏样式一致**：Yeaft 侧栏视觉上必须和 Claude Chat / Crew 侧栏一致 — 不画 section 边框、不写带下边框的大写 label、就是干净的分组 + padding。
 
 ### 6. "如果需要说明书才能用，就是设计失败"
 
