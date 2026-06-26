@@ -1,29 +1,23 @@
 /**
  * persist.js — Conversation message persistence
  *
- * Each message is stored as a .md file with YAML frontmatter in
- * ~/.yeaft/chat/messages/ or ~/.yeaft/sessions/<sessionId>/conversation/messages/. Design: zero JSON, all Markdown.
+ * Hot conversation messages are stored as JSONL segments with a small JSON index
+ * under ~/.yeaft/chat/ or ~/.yeaft/sessions/<sessionId>/conversation/.
+ * Older per-message Markdown
+ * files are read as a legacy fallback only.
  *
  * Vocabulary note: the primary on-disk layout uses `sessions/<id>/`. Older
  * installs may still have transcript files under `groups/<id>/`; those are
  * read as a legacy fallback only. Every API surface above the disk layer
  * uses "session" vocabulary.
  *
- * Message format:
- *   ---
- *   id: m0355
- *   role: user
- *   time: 2026-04-09T14:35:00Z
- *   mode: chat
- *   model: claude-sonnet-4-20250514
- *   tokens_est: 230
- *   ---
- *   Message content here...
+ * Segment format: one JSON object per line, keyed by global monotonic `seq` /
+ * `id` (`m0001`, `m0002`, ...).
  *
  * Reference: yeaft-yeaft-core-systems.md §4.1, yeaft-yeaft-brainstorm-v5.1.md
  */
 
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync, statSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync, statSync, appendFileSync } from 'fs';
 import { join, basename } from 'path';
 import { isPermissionError } from '../init.js';
 import { pairSanitize } from '../pair-sanitize.js';
@@ -63,6 +57,58 @@ let DEFAULT_RECENT_TURNS = 20;
 const RECENT_SESSION_SCAN_BASE_CAP = 64;
 const RECENT_SESSION_SCAN_PER_TURN_CAP = 4;
 const RECENT_SESSION_SCAN_MAX_CAP = 256;
+
+
+const SEGMENT_INDEX_FILE = 'index.json';
+const SEGMENT_DIR = 'segments';
+const SEGMENT_TARGET_BYTES = 1024 * 1024;
+const SEGMENT_FIRST_NAME = '000001.jsonl';
+
+function emptySegmentIndex() {
+  return {
+    version: 1,
+    nextSeq: 1,
+    totalMessages: 0,
+    lastMessageId: null,
+    activeSegment: SEGMENT_FIRST_NAME,
+    segments: [],
+  };
+}
+
+function seqId(seq) {
+  return `m${String(seq).padStart(4, '0')}`;
+}
+
+function normalizeSegmentRecord(msg) {
+  if (!msg || typeof msg !== 'object') return null;
+  const seq = Number.isFinite(msg.seq) ? msg.seq : parseSeqFromId(msg.id);
+  if (!Number.isFinite(seq)) return null;
+  const out = { ...msg, seq, id: msg.id || seqId(seq) };
+  return out;
+}
+
+function segmentNameForNumber(n) {
+  return `${String(n).padStart(6, '0')}.jsonl`;
+}
+
+function nextSegmentName(name) {
+  const m = String(name || '').match(/^(\d+)\.jsonl$/);
+  const n = m ? parseInt(m[1], 10) + 1 : 1;
+  return segmentNameForNumber(n);
+}
+
+function parseJsonLine(line) {
+  if (!line || !line.trim()) return null;
+  try { return normalizeSegmentRecord(JSON.parse(line)); }
+  catch { return null; }
+}
+
+function parseSegmentOrMarkdown(raw) {
+  if (!raw) return null;
+  const msg = parseJsonLine(raw);
+  if (msg) return msg;
+  return parseMessage(raw);
+}
 
 /** Read the current default cold-start replay window (turn count). */
 export function getDefaultRecentTurnsLimit() {
@@ -441,6 +487,209 @@ export function parseMessage(raw) {
   return msg;
 }
 
+
+class SegmentStore {
+  constructor(rootDir) {
+    this.rootDir = rootDir;
+    this.segmentDir = join(rootDir, SEGMENT_DIR);
+    this.indexPath = join(rootDir, SEGMENT_INDEX_FILE);
+    this.index = null;
+  }
+
+  ensure() {
+    if (!existsSync(this.rootDir)) mkdirSync(this.rootDir, { recursive: true, mode: 0o755 });
+    if (!existsSync(this.segmentDir)) mkdirSync(this.segmentDir, { recursive: true, mode: 0o755 });
+  }
+
+  hasData() {
+    if (existsSync(this.indexPath)) return true;
+    if (!existsSync(this.segmentDir)) return false;
+    try { return readdirSync(this.segmentDir).some(f => f.endsWith('.jsonl')); }
+    catch (err) { if (isPermissionError(err)) return false; throw err; }
+  }
+
+  loadIndex() {
+    if (this.index) return this.index;
+    let idx = null;
+    if (existsSync(this.indexPath)) {
+      try {
+        const parsed = JSON.parse(readFileSync(this.indexPath, 'utf8') || '{}');
+        if (parsed && typeof parsed === 'object') idx = parsed;
+      } catch {
+        idx = null;
+      }
+    }
+    this.index = this.#normalizeIndex(idx || this.#rebuildIndex());
+    if (!existsSync(this.indexPath) && this.hasData()) this.saveIndex();
+    return this.index;
+  }
+
+  saveIndex() {
+    this.ensure();
+    writeFileSync(this.indexPath, `${JSON.stringify(this.index || emptySegmentIndex(), null, 2)}\n`, { encoding: 'utf8', mode: 0o644 });
+  }
+
+  append(msg) {
+    this.ensure();
+    const idx = this.loadIndex();
+    let segment = idx.segments[idx.segments.length - 1] || null;
+    let active = segment?.file || idx.activeSegment || SEGMENT_FIRST_NAME;
+    let activePath = join(this.segmentDir, active);
+    const currentSize = existsSync(activePath) ? statSync(activePath).size : 0;
+    if (currentSize >= SEGMENT_TARGET_BYTES && segment && segment.count > 0) {
+      active = nextSegmentName(active);
+      activePath = join(this.segmentDir, active);
+      segment = null;
+    }
+    const line = `${JSON.stringify(msg)}\n`;
+    appendFileSync(activePath, line, { encoding: 'utf8', mode: 0o644 });
+
+    const seq = parseSeqFromId(msg.id);
+    if (!segment || segment.file !== active) {
+      segment = { file: active, firstSeq: seq, lastSeq: seq, count: 0, bytes: 0 };
+      idx.segments.push(segment);
+    }
+    segment.firstSeq = Number.isFinite(segment.firstSeq) ? Math.min(segment.firstSeq, seq) : seq;
+    segment.lastSeq = Number.isFinite(segment.lastSeq) ? Math.max(segment.lastSeq, seq) : seq;
+    segment.count = (segment.count || 0) + 1;
+    segment.bytes = (segment.bytes || currentSize) + Buffer.byteLength(line);
+    idx.activeSegment = active;
+    idx.totalMessages = (idx.totalMessages || 0) + 1;
+    idx.lastMessageId = msg.id || null;
+    idx.nextSeq = Math.max(Number(idx.nextSeq) || 1, seq + 1);
+    this.saveIndex();
+  }
+
+  readAll({ beforeSeq = Infinity, afterSeq = -Infinity, desc = false, includeCold = false } = {}) {
+    if (!this.hasData()) return [];
+    const idx = this.loadIndex();
+    const segments = (idx.segments || [])
+      .filter(seg => this.#segmentMayContain(seg, beforeSeq, afterSeq))
+      .slice()
+      .sort((a, b) => desc ? (b.lastSeq || 0) - (a.lastSeq || 0) : (a.firstSeq || 0) - (b.firstSeq || 0));
+    const out = [];
+    for (const seg of segments) {
+      const rows = this.#readSegment(seg.file, { beforeSeq, afterSeq, desc, includeCold });
+      out.push(...rows);
+    }
+    return desc ? out.sort((a, b) => parseSeqFromId(b.id) - parseSeqFromId(a.id)) : out.sort(compareMessagesBySeq);
+  }
+
+  *scan({ beforeSeq = Infinity, afterSeq = -Infinity, desc = false, includeCold = false } = {}) {
+    if (!this.hasData()) return;
+    const idx = this.loadIndex();
+    const segments = (idx.segments || [])
+      .filter(seg => this.#segmentMayContain(seg, beforeSeq, afterSeq))
+      .slice()
+      .sort((a, b) => desc ? (b.lastSeq || 0) - (a.lastSeq || 0) : (a.firstSeq || 0) - (b.firstSeq || 0));
+    for (const seg of segments) {
+      for (const row of this.#readSegment(seg.file, { beforeSeq, afterSeq, desc, includeCold })) yield row;
+    }
+  }
+
+  count(kind = 'hot') {
+    if (!this.hasData()) return 0;
+    if (kind === 'all') {
+      const idx = this.loadIndex();
+      return Number(idx.totalMessages) || (idx.segments || []).reduce((sum, seg) => sum + (Number(seg.count) || 0), 0);
+    }
+    const rows = this.readAll({ includeCold: true });
+    if (kind === 'cold') return rows.filter(m => m && m.cold === true).length;
+    return rows.filter(m => m && m.cold !== true).length;
+  }
+
+  replaceAll(rows) {
+    this.clear();
+    for (const msg of (rows || []).filter(Boolean).sort(compareMessagesBySeq)) this.append(msg);
+  }
+
+  markCold(id) {
+    if (!id || !this.hasData()) return 0;
+    const rows = this.readAll({ includeCold: true });
+    let changed = 0;
+    for (const msg of rows) {
+      if (msg?.id === id && msg.cold !== true) {
+        msg.cold = true;
+        changed += 1;
+      }
+    }
+    if (changed > 0) this.replaceAll(rows);
+    return changed;
+  }
+
+  clear() {
+    if (existsSync(this.segmentDir)) {
+      for (const f of readdirSync(this.segmentDir)) {
+        if (f.endsWith('.jsonl')) unlinkSync(join(this.segmentDir, f));
+      }
+    }
+    if (existsSync(this.indexPath)) unlinkSync(this.indexPath);
+    this.index = emptySegmentIndex();
+  }
+
+  #normalizeIndex(idx) {
+    const out = { ...emptySegmentIndex(), ...(idx || {}) };
+    out.segments = Array.isArray(out.segments) ? out.segments.filter(s => s && s.file) : [];
+    out.segments.sort((a, b) => (Number(a.firstSeq) || 0) - (Number(b.firstSeq) || 0));
+    const maxSeq = out.segments.reduce((max, seg) => Math.max(max, Number(seg.lastSeq) || 0), 0);
+    out.nextSeq = Math.max(Number(out.nextSeq) || 1, maxSeq + 1);
+    out.activeSegment = out.activeSegment || out.segments[out.segments.length - 1]?.file || SEGMENT_FIRST_NAME;
+    out.totalMessages = Number(out.totalMessages) || out.segments.reduce((sum, seg) => sum + (Number(seg.count) || 0), 0);
+    return out;
+  }
+
+  #rebuildIndex() {
+    const idx = emptySegmentIndex();
+    if (!existsSync(this.segmentDir)) return idx;
+    const files = readdirSync(this.segmentDir).filter(f => f.endsWith('.jsonl')).sort();
+    for (const file of files) {
+      const rows = this.#readSegment(file, { includeCold: true });
+      if (rows.length === 0) continue;
+      const seqs = rows.map(r => parseSeqFromId(r.id)).filter(Number.isFinite);
+      const path = join(this.segmentDir, file);
+      const seg = {
+        file,
+        firstSeq: Math.min(...seqs),
+        lastSeq: Math.max(...seqs),
+        count: rows.length,
+        bytes: existsSync(path) ? statSync(path).size : 0,
+      };
+      idx.segments.push(seg);
+      idx.totalMessages += rows.length;
+      idx.lastMessageId = rows[rows.length - 1]?.id || idx.lastMessageId;
+      idx.nextSeq = Math.max(idx.nextSeq, seg.lastSeq + 1);
+      idx.activeSegment = file;
+    }
+    return idx;
+  }
+
+  #segmentMayContain(seg, beforeSeq, afterSeq) {
+    const first = Number(seg.firstSeq);
+    const last = Number(seg.lastSeq);
+    if (Number.isFinite(beforeSeq) && Number.isFinite(first) && first >= beforeSeq) return false;
+    if (Number.isFinite(afterSeq) && Number.isFinite(last) && last <= afterSeq) return false;
+    return true;
+  }
+
+  #readSegment(file, { beforeSeq = Infinity, afterSeq = -Infinity, desc = false, includeCold = false } = {}) {
+    const path = join(this.segmentDir, file);
+    if (!existsSync(path)) return [];
+    const raw = readFileSync(path, 'utf8');
+    const rows = [];
+    for (const line of raw.split('\n')) {
+      const msg = parseJsonLine(line);
+      if (!msg) continue;
+      const seq = parseSeqFromId(msg.id);
+      if (Number.isFinite(beforeSeq) && seq >= beforeSeq) continue;
+      if (Number.isFinite(afterSeq) && seq <= afterSeq) continue;
+      if (!includeCold && msg.cold === true) continue;
+      rows.push(msg);
+    }
+    rows.sort(compareMessagesBySeq);
+    return desc ? rows.reverse() : rows;
+  }
+}
+
 // ─── ConversationStore ───────────────────────────────────────
 
 /**
@@ -448,15 +697,14 @@ export function parseMessage(raw) {
  *
  * Directory layout:
  *   chat/            — one-to-one chat mode history
- *     index.md
+ *     index.json
+ *     segments/
  *     compact.md
- *     messages/
- *     cold/
  *     blobs/
  *   sessions/<sessionId>/conversation/
+ *     index.json
+ *     segments/
  *     compact/
- *     messages/
- *     cold/
  *     blobs/
  *
  * Legacy compatibility: ~/.yeaft/conversation is read as an old mixed store,
@@ -517,7 +765,7 @@ export class ConversationStore {
     // errors). Per-session conversation directories are created lazily once a
     // sessionId is known. Legacy directories are never created by new versions.
     for (const d of [
-      this.#chatDir, join(this.#chatDir, 'blobs'), this.#chatMsgDir, this.#chatColdDir,
+      this.#chatDir, join(this.#chatDir, 'blobs'), join(this.#chatDir, SEGMENT_DIR), this.#chatMsgDir, this.#chatColdDir,
       this.#sessionsDir,
     ]) {
       try {
@@ -553,9 +801,8 @@ export class ConversationStore {
       tokens_est: msg.tokens_est || estimateTokens(msg.content || ''),
     };
 
-    const filePath = join(this.#messageDirFor(fullMsg), `${id}.md`);
     try {
-      writeFileSync(filePath, serializeMessage(fullMsg), { encoding: 'utf8', mode: 0o644 });
+      this.#segmentStoreFor(fullMsg, { create: true }).append(fullMsg);
     } catch (err) {
       if (isPermissionError(err)) {
         if (!_permissionWarned) {
@@ -588,6 +835,10 @@ export class ConversationStore {
    * @param {string} id — message id (e.g. "m0355")
    */
   moveToCold(id) {
+    for (const dir of [this.#chatDir, ...this.#sessionConversationDirs({ primaryOnly: true })]) {
+      const moved = this.#segmentStoreForConversationDir(dir).markCold(id);
+      if (moved > 0) return;
+    }
     for (const [hotDir, coldDir] of this.#hotColdDirPairs({ includeLegacy: false })) {
       const src = join(hotDir, `${id}.md`);
       const dst = join(coldDir, `${id}.md`);
@@ -827,7 +1078,10 @@ export class ConversationStore {
         }
       }
     }
-    // Reset compact files in the new chat/group stores. Legacy
+    for (const dir of [this.#chatDir, ...this.#sessionConversationDirs({ primaryOnly: true })]) {
+      this.#segmentStoreForConversationDir(dir).clear();
+    }
+    // Reset compact files in the new chat/session stores. Legacy
     // ~/.yeaft/conversation is intentionally left untouched.
     for (const path of [this.#compactPath]) {
       if (!existsSync(path)) continue;
@@ -1039,11 +1293,9 @@ export class ConversationStore {
    */
   loadOlderBySession(sessionId, beforeSeq, turnsLimit = DEFAULT_RECENT_TURNS) {
     if (!sessionId) return { messages: [], oldestSeq: null, hasMore: false };
-    const all = this.#loadSessionMessages(sessionId);
     const cutoff = Number.isFinite(beforeSeq) ? beforeSeq : Infinity;
-    const prefix = all.filter(m => m && m.sessionId === sessionId
-      && !isHiddenConversationRow(m)
-      && parseSeqFromId(m.id) < cutoff);
+    const prefix = this.#readSessionRows(sessionId, { beforeSeq: cutoff })
+      .filter(m => m && m.sessionId === sessionId && !isHiddenConversationRow(m));
     if (prefix.length === 0) return { messages: [], oldestSeq: null, hasMore: false };
     const sliced = pairSanitize(sliceLastNTurns(prefix, turnsLimit));
     // Turn-based hasMore: there's an EARLIER turn boundary we didn't keep.
@@ -1117,14 +1369,7 @@ export class ConversationStore {
     if (cutoff === null) return { messages: [], latestSeq: null };
     const after = [];
     let newestScannedSeq = cutoff;
-    for (const entry of this.#sessionFileEntries('messages', sessionId, { afterSeq: cutoff, desc: false })) {
-      let m;
-      try {
-        m = this.readMessageFile(entry.path);
-      } catch (err) {
-        if (isPermissionError(err)) continue;
-        throw err;
-      }
+    for (const m of this.#iterateSessionRows(sessionId, { afterSeq: cutoff, desc: false })) {
       if (!m || m.sessionId !== sessionId) continue;
       const seq = parseSeqFromId(m.id);
       if (Number.isFinite(seq) && seq > newestScannedSeq) newestScannedSeq = seq;
@@ -1156,7 +1401,13 @@ export class ConversationStore {
    * @returns {number}
    */
   countHot() {
-    return this.#countFilesInDirs([this.#chatMsgDir, ...this.#sessionMessageDirs('messages'), this.#legacyMsgDir]);
+    let total = this.#countSegmentMessages([this.#chatDir, ...this.#sessionConversationDirs({ primaryOnly: true })]);
+    const markdownDirs = [this.#legacyMsgDir];
+    if (!this.#segmentStoreForConversationDir(this.#chatDir).hasData()) markdownDirs.push(this.#chatMsgDir);
+    for (const dir of this.#sessionConversationDirs()) {
+      if (!this.#segmentStoreForConversationDir(dir).hasData()) markdownDirs.push(join(dir, 'messages'));
+    }
+    return total + this.#countFilesInDirs(markdownDirs);
   }
 
   /**
@@ -1165,7 +1416,8 @@ export class ConversationStore {
    * @returns {number}
    */
   countCold() {
-    return this.#countFilesInDirs([this.#chatColdDir, ...this.#sessionMessageDirs('cold'), this.#legacyColdDir]);
+    return this.#countSegmentMessages([this.#chatDir, ...this.#sessionConversationDirs({ primaryOnly: true })], 'cold')
+      + this.#countFilesInDirs([this.#chatColdDir, ...this.#sessionMessageDirs('cold'), this.#legacyColdDir]);
   }
 
   /**
@@ -1221,7 +1473,13 @@ export class ConversationStore {
   deleteByGroup(sessionId) {
     if (!sessionId) return 0;
     let removed = 0;
-    for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#sessionMessageDirs('messages'), ...this.#sessionMessageDirs('cold'), this.#legacyMsgDir, this.#legacyColdDir]) {
+    const primaryDir = this.#sessionConversationDir(sessionId);
+    const segmentStore = this.#segmentStoreForConversationDir(primaryDir);
+    if (segmentStore.hasData()) {
+      removed += segmentStore.count('all');
+      segmentStore.clear();
+    }
+    for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#sessionMessageDirs('messages', sessionId), ...this.#sessionMessageDirs('cold', sessionId)]) {
       if (!existsSync(dir)) continue;
       let files;
       try {
@@ -1250,7 +1508,6 @@ export class ConversationStore {
         }
       }
     }
-    // Invalidate cached next-seq — countHot/loadAll will re-scan.
     this.#nextSeq = null;
     return removed;
   }
@@ -1279,6 +1536,33 @@ export class ConversationStore {
     let scanned = 0;
     let removed = 0;
     const orphans = [];
+
+    const scanMsg = (msg, locator) => {
+      if (!msg) return false;
+      scanned += 1;
+      const isOrphan = !msg.sessionId || !keep.has(msg.sessionId);
+      if (!isOrphan) return false;
+      orphans.push(locator);
+      return true;
+    };
+
+    for (const dir of [this.#chatDir, ...this.#sessionConversationDirs({ primaryOnly: true })]) {
+      const store = this.#segmentStoreForConversationDir(dir);
+      if (!store.hasData()) continue;
+      const rows = store.readAll({ includeCold: true });
+      let keepRows = [];
+      let dirty = false;
+      for (const msg of rows) {
+        const orphan = scanMsg(msg, `${dir}/${SEGMENT_DIR}/${msg.id || 'unknown'}`);
+        if (orphan) dirty = true;
+        else keepRows.push(msg);
+      }
+      if (dirty && !dryRun) {
+        store.replaceAll(keepRows);
+        removed += rows.length - keepRows.length;
+      }
+    }
+
     for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#sessionMessageDirs('messages'), ...this.#sessionMessageDirs('cold'), this.#legacyMsgDir, this.#legacyColdDir]) {
       if (!existsSync(dir)) continue;
       let files;
@@ -1298,11 +1582,7 @@ export class ConversationStore {
           throw err;
         }
         const msg = parseMessage(raw);
-        if (!msg) continue;
-        scanned += 1;
-        const isOrphan = !msg.sessionId || !keep.has(msg.sessionId);
-        if (!isOrphan) continue;
-        orphans.push(path);
+        if (!scanMsg(msg, path)) continue;
         if (dryRun) continue;
         try {
           unlinkSync(path);
@@ -1333,6 +1613,25 @@ export class ConversationStore {
   reassignThread(sourceId, targetId) {
     if (!sourceId || !targetId || sourceId === targetId) return 0;
     let rewritten = 0;
+
+    for (const dir of [this.#chatDir, ...this.#sessionConversationDirs({ primaryOnly: true })]) {
+      const store = this.#segmentStoreForConversationDir(dir);
+      if (!store.hasData()) continue;
+      const rows = store.readAll();
+      let dirty = false;
+      for (const msg of rows) {
+        if (!msg || msg.threadId !== sourceId) continue;
+        if (!msg.sourceThreadId) msg.sourceThreadId = sourceId;
+        msg.threadId = targetId;
+        rewritten += 1;
+        dirty = true;
+      }
+      if (dirty) {
+        store.clear();
+        for (const msg of rows) store.append(msg);
+      }
+    }
+
     for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#sessionMessageDirs('messages'), ...this.#sessionMessageDirs('cold'), this.#legacyMsgDir, this.#legacyColdDir]) {
       if (!existsSync(dir)) continue;
       let files;
@@ -1353,7 +1652,6 @@ export class ConversationStore {
         }
         const msg = parseMessage(raw);
         if (!msg || msg.threadId !== sourceId) continue;
-        // Preserve original thread id for UI pill; only stamp once.
         if (!msg.sourceThreadId) msg.sourceThreadId = sourceId;
         msg.threadId = targetId;
         try {
@@ -1410,19 +1708,9 @@ export class ConversationStore {
       throw err;
     }
 
-    // Collect source-thread candidate files from both hot + cold dirs.
+    // Collect source-thread candidate rows from segmented storage and legacy Markdown dirs.
+    const sourceRows = this.#loadAllMessages().filter(m => m && m.threadId === sourceId);
     const candidates = [];
-    for (const dir of [this.#chatColdDir, this.#chatMsgDir, ...this.#sessionMessageDirs('cold'), ...this.#sessionMessageDirs('messages'), this.#legacyColdDir, this.#legacyMsgDir]) {
-      if (!existsSync(dir)) continue;
-      let files;
-      try {
-        files = readdirSync(dir).filter(f => f.endsWith('.md'));
-      } catch (err) {
-        if (isPermissionError(err)) continue;
-        throw err;
-      }
-      for (const f of files) candidates.push(join(dir, f));
-    }
     // Also pick up any already-forked sub-thread dir (chain fork).
     const sourceSubDir = this.#threadMsgDir(sourceId);
     if (existsSync(sourceSubDir)) {
@@ -1434,11 +1722,7 @@ export class ConversationStore {
         if (!isPermissionError(err)) throw err;
       }
     }
-    // Sort by the "m{NNNN}" basename. For chain-fork, sub-thread ids also
-    // restart at m0001 so sorting by basename alone is ambiguous across
-    // dirs; but a given source thread stores messages in exactly ONE place
-    // (either legacy flat dir OR its sub-dir — see below), so ties never
-    // arise. Sorting by (path, seq) is still well-defined.
+    sourceRows.sort(compareMessagesBySeq);
     candidates.sort((a, b) => {
       const ma = a.match(/m(\d+)\.md$/);
       const mb = b.match(/m(\d+)\.md$/);
@@ -1450,25 +1734,13 @@ export class ConversationStore {
     const cutoffSeq = parseInt(cutoffMatch[1], 10);
 
     let copied = 0;
-    for (const path of candidates) {
-      const fileMatch = path.match(/m(\d+)\.md$/);
-      if (!fileMatch) continue;
-      const seq = parseInt(fileMatch[1], 10);
-      if (seq > cutoffSeq) continue; // do not break — sub-thread dir mixed in may interleave
-      let raw;
-      try {
-        raw = readFileSync(path, 'utf8');
-      } catch (err) {
-        if (isPermissionError(err)) continue;
-        throw err;
-      }
-      const msg = parseMessage(raw);
-      if (!msg || msg.threadId !== sourceId) continue;
-      // Mint a fresh per-thread id restarting at m0001 under the target
-      // thread's own namespace.
+    const copyMsg = (msg) => {
+      if (!msg || msg.threadId !== sourceId) return;
+      const seq = parseSeqFromId(msg.id);
+      if (!Number.isFinite(seq) || seq > cutoffSeq) return;
       const nextSeq = this.#getNextThreadSeq(targetId);
       const newId = `m${String(nextSeq).padStart(4, '0')}`;
-      const { id: _id, ...rest } = msg;
+      const { id: _id, seq: _seq, ...rest } = msg;
       const copy = {
         ...rest,
         id: newId,
@@ -1478,10 +1750,18 @@ export class ConversationStore {
         tokens_est: rest.tokens_est || estimateTokens(rest.content || ''),
       };
       const filePath = join(targetDir, `${newId}.md`);
+      writeFileSync(filePath, serializeMessage(copy), { encoding: 'utf8', mode: 0o644 });
+      this.#nextSeqByThread.set(targetId, nextSeq + 1);
+      copied += 1;
+    };
+    for (const msg of sourceRows) {
+      try { copyMsg(msg); }
+      catch (err) { if (isPermissionError(err)) continue; throw err; }
+    }
+    for (const path of candidates) {
       try {
-        writeFileSync(filePath, serializeMessage(copy), { encoding: 'utf8', mode: 0o644 });
-        this.#nextSeqByThread.set(targetId, nextSeq + 1);
-        copied += 1;
+        const msg = parseMessage(readFileSync(path, 'utf8'));
+        copyMsg(msg);
       } catch (err) {
         if (isPermissionError(err)) continue;
         throw err;
@@ -1517,8 +1797,10 @@ export class ConversationStore {
       }
       return out;
     }
-    // Legacy: messages live in the flat dir stamped with threadId.
-    const collected = [];
+    // Legacy plus segmented root: messages live in the flat/session stores stamped with threadId.
+    const collected = this.#loadAllMessages()
+      .filter(msg => msg && msg.threadId === threadId)
+      .map(msg => ({ msg, f: `${msg.id || ''}.md` }));
     for (const dir of [this.#chatColdDir, this.#chatMsgDir, ...this.#sessionMessageDirs('cold'), ...this.#sessionMessageDirs('messages'), this.#legacyColdDir, this.#legacyMsgDir]) {
       if (!existsSync(dir)) continue;
       for (const f of readdirSync(dir).filter(x => x.endsWith('.md'))) {
@@ -1537,12 +1819,6 @@ export class ConversationStore {
       return (parseInt(ma?.[1] || '0', 10)) - (parseInt(mb?.[1] || '0', 10));
     });
     return collected.map(x => x.msg);
-  }
-
-  #messageDirFor(msg) {
-    if (msg?.chatId) return join(this.#chatConversationDir(msg.chatId, { create: true }), 'messages');
-    if (!msg?.sessionId) return this.#chatMsgDir;
-    return join(this.#sessionConversationDir(msg.sessionId, { create: true }), 'messages');
   }
 
   #chatConversationDir(chatId, { create = false } = {}) {
@@ -1610,6 +1886,7 @@ export class ConversationStore {
   loadRecentByChat(chatId, turnsLimit = DEFAULT_RECENT_TURNS) {
     if (!chatId) return [];
     const all = [
+      ...this.#readSegmentRows(this.#chatConversationDir(chatId)),
       ...this.#chatMessageDirs('messages', chatId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
       ...this.#chatMessageDirs('cold', chatId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
     ].sort(compareMessagesBySeq);
@@ -1622,6 +1899,7 @@ export class ConversationStore {
   loadChatHistoryForVp(chatId, vpId) {
     if (!chatId || !vpId) return [];
     const all = [
+      ...this.#readSegmentRows(this.#chatConversationDir(chatId)),
       ...this.#chatMessageDirs('messages', chatId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
       ...this.#chatMessageDirs('cold', chatId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
     ].sort(compareMessagesBySeq);
@@ -1651,15 +1929,28 @@ export class ConversationStore {
   }
 
   #ensureConversationDirs(dir) {
-    for (const d of [dir, join(dir, 'blobs'), join(dir, 'messages'), join(dir, 'cold'), join(dir, 'compact')]) {
+    for (const d of [dir, join(dir, 'blobs'), join(dir, SEGMENT_DIR), join(dir, 'messages'), join(dir, 'cold'), join(dir, 'compact')]) {
       if (!existsSync(d)) mkdirSync(d, { recursive: true, mode: 0o755 });
     }
   }
 
-  #sessionConversationDirs() {
+  #segmentStoreFor(msg, { create = false } = {}) {
+    let dir;
+    if (msg?.chatId) dir = this.#chatConversationDir(msg.chatId, { create });
+    else if (msg?.sessionId) dir = this.#sessionConversationDir(msg.sessionId, { create });
+    else dir = this.#chatDir;
+    return new SegmentStore(dir);
+  }
+
+  #segmentStoreForConversationDir(dir) {
+    return new SegmentStore(dir);
+  }
+
+
+  #sessionConversationDirs({ primaryOnly = false } = {}) {
     const dirs = [];
     const seen = new Set();
-    for (const root of [this.#sessionsDir, this.#legacySessionsDir]) {
+    for (const root of (primaryOnly ? [this.#sessionsDir] : [this.#sessionsDir, this.#legacySessionsDir])) {
       if (!existsSync(root)) continue;
       for (const name of readdirSync(root)) {
         const sessionDir = join(root, name);
@@ -1705,15 +1996,18 @@ export class ConversationStore {
     // mode compatibility, only import legacy records that are not stamped with
     // a sessionId, so group mode cannot bleed into chat.
     return [
+      ...this.#readSegmentRows(this.#chatDir).filter(m => !m?.sessionId),
       ...this.#loadFromDir(this.#legacyMsgDir, Infinity).filter(m => !m?.sessionId),
       ...this.#loadFromDir(this.#chatMsgDir, Infinity),
     ].sort(compareMessagesBySeq);
   }
 
   #loadSessionHotMessages(sessionId = null) {
-    return this.#sessionMessageDirs('messages', sessionId)
-      .flatMap(dir => this.#loadFromDir(dir, Infinity))
-      .sort(compareMessagesBySeq);
+    if (sessionId) return this.#readSessionRows(sessionId);
+    return [
+      ...this.#sessionConversationDirs({ primaryOnly: true }).flatMap(dir => this.#readSegmentRows(dir)),
+      ...this.#sessionMessageDirs('messages', null).flatMap(dir => this.#loadFromDir(dir, Infinity)),
+    ].sort(compareMessagesBySeq);
   }
 
   #loadSessionMessages(sessionId = null) {
@@ -1760,20 +2054,13 @@ export class ConversationStore {
     // and stop after the requested turn window is complete. Hidden/internal and
     // non-turn rows are not allowed to force an unbounded scan; a hard parse cap
     // conservatively marks the page truncated.
-    for (const entry of this.#sessionFileEntries('messages', sessionId, { beforeSeq, desc: true })) {
+    for (const m of this.#iterateSessionRows(sessionId, { beforeSeq, desc: true })) {
       if (parsed >= scanCap) {
         truncated = true;
         break;
       }
       parsed += 1;
 
-      let m;
-      try {
-        m = this.readMessageFile(entry.path);
-      } catch (err) {
-        if (isPermissionError(err)) continue;
-        throw err;
-      }
       if (!m || m.sessionId !== sessionId) continue;
 
       const boundaryComplete = turnsFromEnd >= turnsLimit;
@@ -1824,6 +2111,35 @@ export class ConversationStore {
     };
   }
 
+  #readSegmentRows(conversationDir, opts = {}) {
+    return this.#segmentStoreForConversationDir(conversationDir).readAll(opts);
+  }
+
+  *#iterateSessionRows(sessionId, opts = {}) {
+    const primaryDir = this.#sessionConversationDir(sessionId);
+    const segmentStore = this.#segmentStoreForConversationDir(primaryDir);
+    yield* segmentStore.scan(opts);
+    for (const entry of this.#sessionFileEntries('messages', sessionId, opts)) {
+      try {
+        const msg = this.readMessageFile(entry.path);
+        if (msg) yield msg;
+      } catch (err) {
+        if (isPermissionError(err)) continue;
+        throw err;
+      }
+    }
+  }
+
+  #readSessionRows(sessionId, opts = {}) {
+    return Array.from(this.#iterateSessionRows(sessionId, opts)).sort(compareMessagesBySeq);
+  }
+
+  #countSegmentMessages(conversationDirs, kind = 'hot') {
+    let total = 0;
+    for (const dir of conversationDirs) total += this.#segmentStoreForConversationDir(dir).count(kind);
+    return total;
+  }
+
   #sessionFileEntries(kind, sessionId, { beforeSeq = Infinity, afterSeq = -Infinity, desc = false } = {}) {
     const entries = [];
     for (const dir of this.#sessionMessageDirs(kind, sessionId)) {
@@ -1853,6 +2169,8 @@ export class ConversationStore {
       ...this.#loadFromDir(this.#legacyMsgDir, Infinity),
       ...this.#loadFromDir(this.#chatColdDir, Infinity),
       ...this.#loadFromDir(this.#chatMsgDir, Infinity),
+      ...this.#readSegmentRows(this.#chatDir, { includeCold: true }),
+      ...this.#sessionConversationDirs({ primaryOnly: true }).flatMap(dir => this.#readSegmentRows(dir, { includeCold: true })),
       ...this.#sessionMessageDirs('cold').flatMap(dir => this.#loadFromDir(dir, Infinity)),
       ...this.#sessionMessageDirs('messages').flatMap(dir => this.#loadFromDir(dir, Infinity)),
     ].sort(compareMessagesBySeq);
@@ -1922,7 +2240,7 @@ export class ConversationStore {
     const messages = [];
     for (const file of selected) {
       const raw = readFileSync(join(dir, file), 'utf8');
-      const parsed = parseMessage(raw);
+      const parsed = parseSegmentOrMarkdown(raw);
       if (parsed) messages.push(parsed);
     }
 
@@ -1937,6 +2255,13 @@ export class ConversationStore {
     if (this.#nextSeq != null) return this.#nextSeq;
 
     let maxSeq = 0;
+    for (const dir of [this.#chatDir, ...this.#sessionConversationDirs({ primaryOnly: true })]) {
+      const store = this.#segmentStoreForConversationDir(dir);
+      if (store.hasData()) {
+        const idx = store.loadIndex();
+        maxSeq = Math.max(maxSeq, (Number(idx.nextSeq) || 1) - 1);
+      }
+    }
     for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#sessionMessageDirs('messages'), ...this.#sessionMessageDirs('cold'), this.#legacyMsgDir, this.#legacyColdDir]) {
       if (!existsSync(dir)) continue;
       for (const file of readdirSync(dir)) {
