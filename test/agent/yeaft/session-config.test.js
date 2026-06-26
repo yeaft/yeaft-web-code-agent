@@ -5,17 +5,23 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../../../agent/yeaft/config.js';
 import { loadSession } from '../../../agent/yeaft/session.js';
 import { loadSessionConfig, resolveSessionConfig, saveSessionConfig } from '../../../agent/yeaft/sessions/session-config.js';
+import { createSession } from '../../../agent/yeaft/sessions/session-store.js';
+import { registerSessionWorkDir, sessionsRoot } from '../../../agent/yeaft/sessions/session-crud.js';
 
-let dir = null;
+const roots = [];
+
+function tempRoot(prefix) {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  roots.push(root);
+  return root;
+}
 
 function makeDir() {
-  dir = mkdtempSync(join(tmpdir(), 'yeaft-session-config-'));
-  return dir;
+  return tempRoot('yeaft-session-config-');
 }
 
 afterEach(() => {
-  if (dir) rmSync(dir, { recursive: true, force: true });
-  dir = null;
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe('Yeaft session-scoped model config', () => {
@@ -52,6 +58,34 @@ describe('Yeaft session-scoped model config', () => {
 
     expect(effective.model).toBe('proxy/gpt-5');
     expect(effective.primaryModel).toBe('proxy/gpt-5');
+  });
+
+  it('prefers a registered workDir Session config over an agent-local stale Session directory', () => {
+    const root = makeDir();
+    const workDir = tempRoot('yeaft-session-config-workdir-');
+    const sessionId = 'session-workdir-first';
+
+    createSession(sessionsRoot(root), {
+      id: sessionId,
+      name: 'Stale agent-local session',
+      roster: [],
+      defaultVpId: null,
+    }).close();
+    createSession(sessionsRoot(join(workDir, '.yeaft')), {
+      id: sessionId,
+      name: 'Project session',
+      roster: [],
+      defaultVpId: null,
+      workDir,
+    }).close();
+    registerSessionWorkDir(root, sessionId, workDir);
+
+    saveSessionConfig(root, sessionId, { model: 'project/claude-sonnet', modelEffort: 'high' });
+    writeFileSync(join(root, 'sessions', sessionId, 'config.json'), `${JSON.stringify({ model: 'agent/gpt-5', modelEffort: 'low' }, null, 2)}\n`);
+
+    const config = loadSessionConfig(root, sessionId);
+
+    expect(config).toEqual({ model: 'project/claude-sonnet', modelEffort: 'high' });
   });
 
   it('uses the first available model as an effective default when primaryModel is absent', () => {
