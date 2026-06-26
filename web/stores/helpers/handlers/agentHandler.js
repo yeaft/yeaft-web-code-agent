@@ -360,7 +360,7 @@ export function handleAgentList(store, msg) {
           type: 'refresh_conversation',
           conversationId: store.currentConversation
         });
-      
+
       } else if (!store.recoveryDismissed) {
         console.log('[Reconnect] currentConversation null, attempting restore');
         restoreLastViewedConversation(store);
