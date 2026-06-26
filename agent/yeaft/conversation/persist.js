@@ -27,7 +27,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rename
 import { join, basename } from 'path';
 import { isPermissionError } from '../init.js';
 import { pairSanitize } from '../pair-sanitize.js';
-import { countTurns, indexOfNthTurnFromEnd, sliceLastNTurns, stripVpMentionPrefix } from '../turn-utils.js';
+import { sliceLastNTurns, stripVpMentionPrefix } from '../turn-utils.js';
 import { isHiddenConversationRow } from './internal-control.js';
 
 /**
@@ -56,6 +56,13 @@ import { isHiddenConversationRow } from './internal-control.js';
  * runtime overrides. The reader function makes that always-correct.
  */
 let DEFAULT_RECENT_TURNS = 20;
+
+// Circuit breaker for newest-to-oldest session scans. This bounds event-loop
+// starvation when the newest transcript tail is dense with hidden/internal or
+// otherwise non-turn rows and no user boundary is found quickly.
+const RECENT_SESSION_SCAN_BASE_CAP = 64;
+const RECENT_SESSION_SCAN_PER_TURN_CAP = 4;
+const RECENT_SESSION_SCAN_MAX_CAP = 256;
 
 /** Read the current default cold-start replay window (turn count). */
 export function getDefaultRecentTurnsLimit() {
@@ -114,20 +121,18 @@ export function __resetTruncationWarned() {
  *
  * @param {string} sessionId
  * @param {string} storeDir
- * @param {number} totalTurns      — turns available on disk
- * @param {number} returnedTurns   — turns the load returned
+ * @param {number} recentTurnsLimit — configured recent-turn window
  * @param {boolean} hasCompactSummary
  */
-function maybeWarnHistoryTruncated(sessionId, storeDir, totalTurns, returnedTurns, hasCompactSummary) {
+function maybeWarnHistoryTruncated(sessionId, storeDir, recentTurnsLimit, hasCompactSummary) {
   if (!sessionId || !storeDir) return;
-  if (returnedTurns >= totalTurns) return;
   if (hasCompactSummary) return;
   const key = `${storeDir}::${sessionId}`;
   if (_truncationWarned.has(key)) return;
   _truncationWarned.add(key);
   // eslint-disable-next-line no-console
   console.warn(
-    `[Yeaft] history for session ${sessionId} truncated to ${returnedTurns} of ${totalTurns} turns (recentTurnsLimit=${DEFAULT_RECENT_TURNS}); ` +
+    `[Yeaft] history for session ${sessionId} truncated to ${recentTurnsLimit} recent turns (recentTurnsLimit=${DEFAULT_RECENT_TURNS}); ` +
     `no compact summary exists, so older context is dropped. ` +
     `Raise yeaft.recentTurnsLimit in ~/.yeaft/config.json if this is a problem.`
   );
@@ -177,6 +182,11 @@ function canonicalUserTurnContent(content) {
     .join('\n')
     .trim();
   return text ? stripVpMentionPrefix(text) : null;
+}
+
+function recentSessionScanCap(turnsLimit) {
+  const turns = Number.isFinite(turnsLimit) && turnsLimit > 0 ? Math.ceil(turnsLimit) : DEFAULT_RECENT_TURNS;
+  return Math.min(RECENT_SESSION_SCAN_MAX_CAP, RECENT_SESSION_SCAN_BASE_CAP + turns * RECENT_SESSION_SCAN_PER_TURN_CAP);
 }
 
 // ─── Frontmatter helpers ─────────────────────────────────────
@@ -889,13 +899,10 @@ export class ConversationStore {
    * boundary cuts are pair-safe by construction, but if a hand-edited
    * store somehow contains pre-existing orphans we drop them anyway.
    *
-   * Implementation note: filters AFTER reading the most recent files
-   * because the on-disk order is global by sequence id. We over-read by
-   * loading every hot file and slicing the tail of the FILTERED set so
-   * `turnsLimit` reflects "N most recent turns in this group", not "N
-   * most recent messages on disk that happen to be in this group". For
-   * typical inboxes (≤ a few thousand hot messages) this is cheap; if
-   * it ever becomes a hot path we add a per-group on-disk index.
+   * Implementation note: this walks session files newest-to-oldest and stops
+   * once it has the requested turn window plus proof of an older turn. Do not
+   * replace this with `#loadSessionMessages()`; that full synchronous parse is
+   * exactly what can starve websocket heartbeat on large sessions.
    *
    * @param {string} sessionId — required; null/empty returns []
    * @param {number} [turnsLimit=DEFAULT_RECENT_TURNS]
@@ -903,24 +910,22 @@ export class ConversationStore {
    */
   loadRecentBySession(sessionId, turnsLimit = DEFAULT_RECENT_TURNS) {
     if (!sessionId) return [];
-    const all = this.#loadSessionMessages(sessionId);
-    const filtered = all.filter(m => m && m.sessionId === sessionId && !isHiddenConversationRow(m));
-    if (turnsLimit === Infinity || turnsLimit < 0) return pairSanitize(filtered);
-    const sliced = sliceLastNTurns(filtered, turnsLimit);
-    // Warn once per (sessionId, storeDir) when truncation drops turns
-    // that no compact summary covers — the user is silently losing
-    // older context otherwise. Cheap check: countTurns is O(N) over
-    // already-loaded messages; we only run it when the slice actually
-    // returned fewer rows than the full filtered set.
-    if (sliced.length < filtered.length) {
-      const totalTurns = countTurns(filtered);
-      const returnedTurns = countTurns(sliced);
-      if (returnedTurns < totalTurns) {
-        const hasCompact = this.hasAnyCompactSummaryForSession(sessionId);
-        maybeWarnHistoryTruncated(sessionId, this.#dir, totalTurns, returnedTurns, hasCompact);
-      }
+    if (turnsLimit === Infinity || turnsLimit < 0) {
+      const all = this.#loadSessionMessages(sessionId);
+      const filtered = all.filter(m => m && m.sessionId === sessionId && !isHiddenConversationRow(m));
+      return pairSanitize(filtered);
     }
-    return pairSanitize(sliced);
+    if (!(turnsLimit > 0)) return [];
+
+    const { messages, truncated } = this.#loadRecentSessionWindow(sessionId, turnsLimit, {
+      roles: null,
+      stripAssistantToolCalls: false,
+    });
+    if (truncated) {
+      const hasCompact = this.hasAnyCompactSummaryForSession(sessionId);
+      maybeWarnHistoryTruncated(sessionId, this.#dir, turnsLimit, hasCompact);
+    }
+    return pairSanitize(messages);
   }
 
   /**
@@ -1073,40 +1078,18 @@ export class ConversationStore {
     if (!sessionId || !(turnsLimit > 0)) return { messages: [], oldestSeq: null, hasMore: false };
 
     const cutoff = Number.isFinite(beforeSeq) ? beforeSeq : Infinity;
-    const all = this.#loadSessionMessages(sessionId);
-    const visible = all.filter(m => m && m.sessionId === sessionId
-      && !isHiddenConversationRow(m)
-      && (m.role === 'user' || m.role === 'assistant')
-      && parseSeqFromId(m.id) < cutoff);
-
-    if (visible.length === 0) return { messages: [], oldestSeq: null, hasMore: false };
-
-    const sliced = sliceLastNTurns(visible, turnsLimit);
-
-    // Turn-based hasMore: an EARLIER turn boundary was dropped.
-    const oldestSlicedSeq = sliced.length ? parseSeqFromId(sliced[0].id) : NaN;
-    const oldestVisibleSeq = parseSeqFromId(visible[0].id);
-    const hasMore = sliced.length > 0
-      && Number.isFinite(oldestSlicedSeq)
-      && Number.isFinite(oldestVisibleSeq)
-      && oldestSlicedSeq > oldestVisibleSeq;
-
-    // Visible history is for UI replay, not LLM context. Strip tool-call
-    // metadata — don't run pairSanitize (it can incorrectly drop assistant
-    // messages that reference tool calls stripped from the UI).
-    const messages = sliced.map(m => {
-      if (m && m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
-        const { toolCalls, ...rest } = m;
-        return { ...rest, toolSummaryCount: toolCalls.length };
-      }
-      return m;
+    const page = this.#loadRecentSessionWindow(sessionId, turnsLimit, {
+      beforeSeq: cutoff,
+      roles: new Set(['user', 'assistant']),
+      stripAssistantToolCalls: true,
     });
-    const oldestSeq = messages.length ? parseSeqFromId(messages[0].id) : null;
+    if (page.messages.length === 0) return { messages: [], oldestSeq: null, hasMore: page.truncated };
 
+    const oldestSeq = page.messages.length ? parseSeqFromId(page.messages[0].id) : null;
     return {
-      messages,
+      messages: page.messages,
       oldestSeq: Number.isFinite(oldestSeq) ? oldestSeq : null,
-      hasMore,
+      hasMore: page.truncated,
     };
   }
 
@@ -1132,16 +1115,23 @@ export class ConversationStore {
     const limit = Number.isFinite(opts.limit) && opts.limit > 0 ? opts.limit : 500;
     const cutoff = Number.isFinite(afterSeq) && afterSeq >= 0 ? afterSeq : null;
     if (cutoff === null) return { messages: [], latestSeq: null };
-    const rawAfter = this.#loadSessionMessages(sessionId).filter((m) => {
-      if (!m || m.sessionId !== sessionId) return false;
+    const after = [];
+    let newestScannedSeq = cutoff;
+    for (const entry of this.#sessionFileEntries('messages', sessionId, { afterSeq: cutoff, desc: false })) {
+      let m;
+      try {
+        m = this.readMessageFile(entry.path);
+      } catch (err) {
+        if (isPermissionError(err)) continue;
+        throw err;
+      }
+      if (!m || m.sessionId !== sessionId) continue;
       const seq = parseSeqFromId(m.id);
-      return Number.isFinite(seq) && seq > cutoff;
-    });
-    const newestScannedSeq = rawAfter.slice(0, limit).reduce((max, m) => {
-      const seq = parseSeqFromId(m?.id);
-      return Number.isFinite(seq) && seq > max ? seq : max;
-    }, cutoff);
-    const after = rawAfter.filter(m => !isHiddenConversationRow(m));
+      if (Number.isFinite(seq) && seq > newestScannedSeq) newestScannedSeq = seq;
+      if (isHiddenConversationRow(m)) continue;
+      after.push(m);
+      if (after.length >= limit) break;
+    }
     const sliced = pairSanitize(after.slice(0, limit));
     const lastSeq = sliced.length ? parseSeqFromId(sliced[sliced.length - 1].id) : null;
     const latestSeq = Number.isFinite(lastSeq) ? Math.max(lastSeq, newestScannedSeq) : newestScannedSeq;
@@ -1728,6 +1718,133 @@ export class ConversationStore {
 
   #loadSessionMessages(sessionId = null) {
     return this.#loadSessionHotMessages(sessionId);
+  }
+
+  readMessageFile(path) {
+    return parseMessage(readFileSync(path, 'utf8'));
+  }
+
+  #loadRecentSessionWindow(sessionId, turnsLimit, { beforeSeq = Infinity, roles = null, stripAssistantToolCalls = false } = {}) {
+    const kept = [];
+    const pendingBoundaryRows = [];
+    let turnsFromEnd = 0;
+    let openCanonical = null;
+    let boundaryCanonical = null;
+    let truncated = false;
+    let parsed = 0;
+    const scanCap = recentSessionScanCap(turnsLimit);
+
+    const project = (m) => {
+      if (roles && !roles.has(m.role)) return null;
+      if (stripAssistantToolCalls && m.role === 'assistant') {
+        const { toolCalls, ...rest } = m;
+        if (!rest.content && !rest.attachments && (!Array.isArray(toolCalls) || toolCalls.length === 0)) return null;
+        if (Array.isArray(toolCalls) && toolCalls.length > 0) return { ...rest, toolSummaryCount: toolCalls.length };
+        return rest;
+      }
+      return m;
+    };
+    const keep = (m) => {
+      const projected = project(m);
+      if (projected) kept.push(projected);
+    };
+    const queueBoundaryRow = (m) => {
+      const projected = project(m);
+      if (projected) pendingBoundaryRows.push(projected);
+    };
+
+    // Do not materialize the whole session transcript just to paint or hydrate
+    // the recent context window. Large Yeaft sessions can have thousands of
+    // markdown rows; parsing all of them is synchronous and can starve websocket
+    // heartbeat long enough for the agent to look dead. Walk newest-to-oldest
+    // and stop after the requested turn window is complete. Hidden/internal and
+    // non-turn rows are not allowed to force an unbounded scan; a hard parse cap
+    // conservatively marks the page truncated.
+    for (const entry of this.#sessionFileEntries('messages', sessionId, { beforeSeq, desc: true })) {
+      if (parsed >= scanCap) {
+        truncated = true;
+        break;
+      }
+      parsed += 1;
+
+      let m;
+      try {
+        m = this.readMessageFile(entry.path);
+      } catch (err) {
+        if (isPermissionError(err)) continue;
+        throw err;
+      }
+      if (!m || m.sessionId !== sessionId) continue;
+
+      const boundaryComplete = turnsFromEnd >= turnsLimit;
+      if (isHiddenConversationRow(m)) {
+        if (boundaryComplete) {
+          truncated = true;
+          break;
+        }
+        continue;
+      }
+
+      if (boundaryComplete) {
+        if (m.role === 'user') {
+          const canonical = canonicalUserTurnContent(m.content);
+          if (canonical != null && canonical === boundaryCanonical) {
+            kept.push(...pendingBoundaryRows.splice(0));
+            keep(m);
+            continue;
+          }
+        } else {
+          queueBoundaryRow(m);
+          continue;
+        }
+        truncated = true;
+        break;
+      }
+
+      if (m.role === 'user') {
+        const canonical = canonicalUserTurnContent(m.content);
+        if (canonical != null && canonical !== openCanonical) {
+          turnsFromEnd += 1;
+          openCanonical = canonical;
+          if (turnsFromEnd === turnsLimit) boundaryCanonical = canonical;
+          if (turnsFromEnd > turnsLimit) {
+            truncated = true;
+            break;
+          }
+        }
+      }
+
+      keep(m);
+    }
+
+    kept.reverse();
+    return {
+      messages: turnsFromEnd > 0 ? sliceLastNTurns(kept, turnsLimit) : kept,
+      truncated,
+    };
+  }
+
+  #sessionFileEntries(kind, sessionId, { beforeSeq = Infinity, afterSeq = -Infinity, desc = false } = {}) {
+    const entries = [];
+    for (const dir of this.#sessionMessageDirs(kind, sessionId)) {
+      let files;
+      try {
+        files = readdirSync(dir).filter(f => f.endsWith('.md'));
+      } catch (err) {
+        if (isPermissionError(err)) continue;
+        throw err;
+      }
+      for (const file of files) {
+        const seqMatch = file.match(/^m(\d+)\.md$/);
+        const seq = seqMatch ? parseInt(seqMatch[1], 10) : NaN;
+        if (!Number.isFinite(seq)) continue;
+        if (Number.isFinite(beforeSeq) && seq >= beforeSeq) continue;
+        if (Number.isFinite(afterSeq) && seq <= afterSeq) continue;
+        entries.push({ path: join(dir, file), seq });
+      }
+    }
+    entries.sort((a, b) => desc ? b.seq - a.seq : a.seq - b.seq);
+    return entries;
   }
 
   #loadAllMessages() {

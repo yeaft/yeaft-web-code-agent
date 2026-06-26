@@ -5626,8 +5626,6 @@ export async function handleYeaftLoadHistory(msg) {
       mode: 'recent',
       count: replayEntries.length,
       hasCompactSummary: hasCompactSummaryFlag,
-      totalHot: session.conversationStore.countHot(),
-      totalCold: session.conversationStore.countCold(),
       sessionId,
       hasMore,
       oldestSeq,
