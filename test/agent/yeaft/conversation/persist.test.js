@@ -507,7 +507,7 @@ describe('ConversationStore', () => {
       expect(page.hasMore).toBe(false);
     });
 
-    it('loadVisibleBySession stops after the requested recent turn window', () => {
+    it('recent session readers stop after the requested turn window', () => {
       const readCounts = { count: 0 };
       for (let i = 0; i < 500; i++) {
         store.append({ role: 'user', content: `old ${i}`, sessionId: 'grp_a' });
@@ -516,15 +516,48 @@ describe('ConversationStore', () => {
       store.append({ role: 'user', content: 'latest q', sessionId: 'grp_a' });
       store.append({ role: 'assistant', content: 'latest a', sessionId: 'grp_a' });
 
-      const original = store.__debugReadMessageFileForTest;
-      store.__debugReadMessageFileForTest = (...args) => {
+      const original = store.readMessageFile;
+      store.readMessageFile = (...args) => {
         readCounts.count += 1;
         return original.call(store, ...args);
       };
-      const page = store.loadVisibleBySession('grp_a', null, 1);
+      const visible = store.loadVisibleBySession('grp_a', null, 1);
+      const readsAfterVisible = readCounts.count;
+      const recent = store.loadRecentBySession('grp_a', 1);
 
-      expect(page.messages.map(m => m.content)).toEqual(['latest q', 'latest a']);
-      expect(page.hasMore).toBe(true);
+      expect(visible.messages.map(m => m.content)).toEqual(['latest q', 'latest a']);
+      expect(visible.hasMore).toBe(true);
+      expect(recent.map(m => m.content)).toEqual(['latest q', 'latest a']);
+      expect(readsAfterVisible).toBeLessThan(10);
+      expect(readCounts.count - readsAfterVisible).toBeLessThan(10);
+    });
+
+    it('loadRecentBySession preserves full tool pairs in the bounded engine window', () => {
+      for (let i = 0; i < 200; i++) {
+        store.append({ role: 'user', content: `old ${i}`, sessionId: 'grp_a' });
+        store.append({ role: 'assistant', content: `old answer ${i}`, sessionId: 'grp_a' });
+      }
+      store.append({ role: 'user', content: 'latest q', sessionId: 'grp_a' });
+      store.append({
+        role: 'assistant',
+        content: 'running tool',
+        sessionId: 'grp_a',
+        toolCalls: [{ id: 'toolu_1', name: 'Bash', input: { command: 'echo ok' } }],
+      });
+      store.append({ role: 'tool', content: 'ok', sessionId: 'grp_a', toolCallId: 'toolu_1' });
+      store.append({ role: 'assistant', content: 'latest a', sessionId: 'grp_a' });
+
+      const readCounts = { count: 0 };
+      const original = store.readMessageFile;
+      store.readMessageFile = (...args) => {
+        readCounts.count += 1;
+        return original.call(store, ...args);
+      };
+
+      const recent = store.loadRecentBySession('grp_a', 1);
+      expect(recent.map(m => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant']);
+      expect(recent[1].toolCalls).toHaveLength(1);
+      expect(recent[2].toolCallId).toBe('toolu_1');
       expect(readCounts.count).toBeLessThan(10);
     });
 

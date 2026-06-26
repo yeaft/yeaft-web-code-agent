@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -28,6 +29,14 @@ function flushMicrotasks() {
 }
 
 describe('Yeaft load-history first paint', () => {
+  beforeEach(() => {
+    __testSetSession(null);
+    sent.length = 0;
+    loadSession.mockClear();
+    resolveLoadSession = null;
+    ctx.CONFIG = null;
+  });
+
   afterEach(() => {
     __testSetSession(null);
     sent.length = 0;
@@ -113,6 +122,46 @@ describe('Yeaft load-history first paint', () => {
       await new Promise(resolve => setTimeout(resolve, 0));
       expect(sent.some(m => m.event?.type === 'session_ready' && !m.event.partial)).toBe(true);
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('loaded runtime history hydration uses the bounded recent window', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-runtime-history-'));
+    try {
+      ctx.CONFIG = { yeaftDir: dir };
+      const store = new ConversationStore(dir);
+      for (let i = 0; i < 500; i++) {
+        store.append({ role: 'user', content: `old ${i}`, sessionId: 'session-fast' });
+        store.append({ role: 'assistant', content: `old answer ${i}`, sessionId: 'session-fast', speakerVpId: 'vp-linus' });
+      }
+      store.append({ role: 'user', content: 'latest q', sessionId: 'session-fast' });
+      store.append({ role: 'assistant', content: 'latest a', sessionId: 'session-fast', speakerVpId: 'vp-linus' });
+
+      const readCounts = { count: 0 };
+      const original = store.readMessageFile;
+      store.readMessageFile = (...args) => {
+        readCounts.count += 1;
+        return original.call(store, ...args);
+      };
+      __testSetSession({
+        conversationStore: store,
+        config: { model: 'test-model', availableModels: [] },
+        status: { skills: 0, mcpServers: [], tools: 0 },
+        taskManager: { listActiveTasks: () => [] },
+      });
+
+      await handleYeaftLoadHistory({ sessionId: 'session-fast', limit: 1 });
+      const chunk = sent.find(m => m.type === 'yeaft_history_chunk');
+      expect(chunk.messages.map(m => m.content)).toEqual(['latest q', 'latest a']);
+      expect(__testHooks.loadVisibleGroupHistoryPage({
+        loadVisibleBySession: (...args) => store.loadVisibleBySession(...args),
+      }, 'session-fast', 1).messages.map(m => m.content)).toEqual(['latest q', 'latest a']);
+      // One bounded UI replay (limit: 1) plus one bounded runtime hydrate
+      // (default recentTurnsLimit) is fine; parsing the whole 1002-row session is not.
+      expect(readCounts.count).toBeLessThan(80);
+    } finally {
+      __testSetSession(null);
       rmSync(dir, { recursive: true, force: true });
     }
   });

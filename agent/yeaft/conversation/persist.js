@@ -27,7 +27,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rename
 import { join, basename } from 'path';
 import { isPermissionError } from '../init.js';
 import { pairSanitize } from '../pair-sanitize.js';
-import { countTurns, indexOfNthTurnFromEnd, sliceLastNTurns, stripVpMentionPrefix } from '../turn-utils.js';
+import { sliceLastNTurns, stripVpMentionPrefix } from '../turn-utils.js';
 import { isHiddenConversationRow } from './internal-control.js';
 
 /**
@@ -115,19 +115,18 @@ export function __resetTruncationWarned() {
  * @param {string} sessionId
  * @param {string} storeDir
  * @param {number} totalTurns      — turns available on disk
- * @param {number} returnedTurns   — turns the load returned
+ * @param {number} recentTurnsLimit — configured recent-turn window
  * @param {boolean} hasCompactSummary
  */
-function maybeWarnHistoryTruncated(sessionId, storeDir, totalTurns, returnedTurns, hasCompactSummary) {
+function maybeWarnHistoryTruncated(sessionId, storeDir, recentTurnsLimit, hasCompactSummary) {
   if (!sessionId || !storeDir) return;
-  if (returnedTurns >= totalTurns) return;
   if (hasCompactSummary) return;
   const key = `${storeDir}::${sessionId}`;
   if (_truncationWarned.has(key)) return;
   _truncationWarned.add(key);
   // eslint-disable-next-line no-console
   console.warn(
-    `[Yeaft] history for session ${sessionId} truncated to ${returnedTurns} of ${totalTurns} turns (recentTurnsLimit=${DEFAULT_RECENT_TURNS}); ` +
+    `[Yeaft] history for session ${sessionId} truncated to ${recentTurnsLimit} recent turns (recentTurnsLimit=${DEFAULT_RECENT_TURNS}); ` +
     `no compact summary exists, so older context is dropped. ` +
     `Raise yeaft.recentTurnsLimit in ~/.yeaft/config.json if this is a problem.`
   );
@@ -889,13 +888,10 @@ export class ConversationStore {
    * boundary cuts are pair-safe by construction, but if a hand-edited
    * store somehow contains pre-existing orphans we drop them anyway.
    *
-   * Implementation note: filters AFTER reading the most recent files
-   * because the on-disk order is global by sequence id. We over-read by
-   * loading every hot file and slicing the tail of the FILTERED set so
-   * `turnsLimit` reflects "N most recent turns in this group", not "N
-   * most recent messages on disk that happen to be in this group". For
-   * typical inboxes (≤ a few thousand hot messages) this is cheap; if
-   * it ever becomes a hot path we add a per-group on-disk index.
+   * Implementation note: this walks session files newest-to-oldest and stops
+   * once it has the requested turn window plus proof of an older turn. Do not
+   * replace this with `#loadSessionMessages()`; that full synchronous parse is
+   * exactly what can starve websocket heartbeat on large sessions.
    *
    * @param {string} sessionId — required; null/empty returns []
    * @param {number} [turnsLimit=DEFAULT_RECENT_TURNS]
@@ -903,24 +899,22 @@ export class ConversationStore {
    */
   loadRecentBySession(sessionId, turnsLimit = DEFAULT_RECENT_TURNS) {
     if (!sessionId) return [];
-    const all = this.#loadSessionMessages(sessionId);
-    const filtered = all.filter(m => m && m.sessionId === sessionId && !isHiddenConversationRow(m));
-    if (turnsLimit === Infinity || turnsLimit < 0) return pairSanitize(filtered);
-    const sliced = sliceLastNTurns(filtered, turnsLimit);
-    // Warn once per (sessionId, storeDir) when truncation drops turns
-    // that no compact summary covers — the user is silently losing
-    // older context otherwise. Cheap check: countTurns is O(N) over
-    // already-loaded messages; we only run it when the slice actually
-    // returned fewer rows than the full filtered set.
-    if (sliced.length < filtered.length) {
-      const totalTurns = countTurns(filtered);
-      const returnedTurns = countTurns(sliced);
-      if (returnedTurns < totalTurns) {
-        const hasCompact = this.hasAnyCompactSummaryForSession(sessionId);
-        maybeWarnHistoryTruncated(sessionId, this.#dir, totalTurns, returnedTurns, hasCompact);
-      }
+    if (turnsLimit === Infinity || turnsLimit < 0) {
+      const all = this.#loadSessionMessages(sessionId);
+      const filtered = all.filter(m => m && m.sessionId === sessionId && !isHiddenConversationRow(m));
+      return pairSanitize(filtered);
     }
-    return pairSanitize(sliced);
+    if (!(turnsLimit > 0)) return [];
+
+    const { messages, truncated } = this.#loadRecentSessionWindow(sessionId, turnsLimit, {
+      roles: null,
+      stripAssistantToolCalls: false,
+    });
+    if (truncated) {
+      const hasCompact = this.hasAnyCompactSummaryForSession(sessionId);
+      maybeWarnHistoryTruncated(sessionId, this.#dir, turnsLimit, hasCompact);
+    }
+    return pairSanitize(messages);
   }
 
   /**
@@ -1073,75 +1067,18 @@ export class ConversationStore {
     if (!sessionId || !(turnsLimit > 0)) return { messages: [], oldestSeq: null, hasMore: false };
 
     const cutoff = Number.isFinite(beforeSeq) ? beforeSeq : Infinity;
-    const visible = [];
-    let turnsFromEnd = 0;
-    let openCanonical = null;
-    let hasMore = false;
-
-    // Do not materialize the whole session transcript just to paint the first
-    // screen. Large Yeaft sessions can have thousands of markdown rows; parsing
-    // all of them is synchronous and can starve websocket heartbeat long enough
-    // for the agent to look dead. Walk newest-to-oldest and stop once we have
-    // the requested turn window plus proof that an older turn exists.
-    for (const entry of this.#sessionFileEntries('messages', sessionId, { beforeSeq: cutoff, desc: true })) {
-      let m;
-      try {
-        m = this.__debugReadMessageFileForTest(entry.path);
-      } catch (err) {
-        if (isPermissionError(err)) continue;
-        throw err;
-      }
-      if (!m || m.sessionId !== sessionId) continue;
-      if (isHiddenConversationRow(m)) continue;
-      if (m.role !== 'user' && m.role !== 'assistant') continue;
-
-      if (m.role === 'user') {
-        const canonical = canonicalUserTurnContent(m.content);
-        if (canonical != null && canonical !== openCanonical) {
-          turnsFromEnd += 1;
-          openCanonical = canonical;
-          if (turnsFromEnd > turnsLimit) {
-            hasMore = true;
-            visible.push(m);
-            break;
-          }
-        }
-      }
-      visible.push(m);
-    }
-
-    visible.reverse();
-
-    if (visible.length === 0) return { messages: [], oldestSeq: null, hasMore: false };
-
-    const sliced = sliceLastNTurns(visible, turnsLimit);
-
-    // Turn-based hasMore: an EARLIER turn boundary was dropped.
-    const oldestSlicedSeq = sliced.length ? parseSeqFromId(sliced[0].id) : NaN;
-    if (!hasMore) {
-      const oldestVisibleSeq = parseSeqFromId(visible[0].id);
-      hasMore = sliced.length > 0
-        && Number.isFinite(oldestSlicedSeq)
-        && Number.isFinite(oldestVisibleSeq)
-        && oldestSlicedSeq > oldestVisibleSeq;
-    }
-
-    // Visible history is for UI replay, not LLM context. Strip tool-call
-    // metadata — don't run pairSanitize (it can incorrectly drop assistant
-    // messages that reference tool calls stripped from the UI).
-    const messages = sliced.map(m => {
-      if (m && m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
-        const { toolCalls, ...rest } = m;
-        return { ...rest, toolSummaryCount: toolCalls.length };
-      }
-      return m;
+    const page = this.#loadRecentSessionWindow(sessionId, turnsLimit, {
+      beforeSeq: cutoff,
+      roles: new Set(['user', 'assistant']),
+      stripAssistantToolCalls: true,
     });
-    const oldestSeq = messages.length ? parseSeqFromId(messages[0].id) : null;
+    if (page.messages.length === 0) return { messages: [], oldestSeq: null, hasMore: false };
 
+    const oldestSeq = page.messages.length ? parseSeqFromId(page.messages[0].id) : null;
     return {
-      messages,
+      messages: page.messages,
       oldestSeq: Number.isFinite(oldestSeq) ? oldestSeq : null,
-      hasMore,
+      hasMore: page.truncated,
     };
   }
 
@@ -1172,7 +1109,7 @@ export class ConversationStore {
     for (const entry of this.#sessionFileEntries('messages', sessionId, { afterSeq: cutoff, desc: false })) {
       let m;
       try {
-        m = this.__debugReadMessageFileForTest(entry.path);
+        m = this.readMessageFile(entry.path);
       } catch (err) {
         if (isPermissionError(err)) continue;
         throw err;
@@ -1772,8 +1709,56 @@ export class ConversationStore {
     return this.#loadSessionHotMessages(sessionId);
   }
 
-  __debugReadMessageFileForTest(path) {
+  readMessageFile(path) {
     return parseMessage(readFileSync(path, 'utf8'));
+  }
+
+  #loadRecentSessionWindow(sessionId, turnsLimit, { beforeSeq = Infinity, roles = null, stripAssistantToolCalls = false } = {}) {
+    const kept = [];
+    let turnsFromEnd = 0;
+    let openCanonical = null;
+    let truncated = false;
+
+    // Do not materialize the whole session transcript just to paint or hydrate
+    // the recent context window. Large Yeaft sessions can have thousands of
+    // markdown rows; parsing all of them is synchronous and can starve websocket
+    // heartbeat long enough for the agent to look dead. Walk newest-to-oldest
+    // and stop once we have the requested turn window plus proof that an older
+    // turn exists.
+    for (const entry of this.#sessionFileEntries('messages', sessionId, { beforeSeq, desc: true })) {
+      let m;
+      try {
+        m = this.readMessageFile(entry.path);
+      } catch (err) {
+        if (isPermissionError(err)) continue;
+        throw err;
+      }
+      if (!m || m.sessionId !== sessionId) continue;
+      if (isHiddenConversationRow(m)) continue;
+
+      if (m.role === 'user') {
+        const canonical = canonicalUserTurnContent(m.content);
+        if (canonical != null && canonical !== openCanonical) {
+          turnsFromEnd += 1;
+          openCanonical = canonical;
+          if (turnsFromEnd > turnsLimit) {
+            truncated = true;
+            break;
+          }
+        }
+      }
+
+      if (roles && !roles.has(m.role)) continue;
+      if (stripAssistantToolCalls && m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
+        const { toolCalls, ...rest } = m;
+        kept.push({ ...rest, toolSummaryCount: toolCalls.length });
+      } else {
+        kept.push(m);
+      }
+    }
+
+    kept.reverse();
+    return { messages: sliceLastNTurns(kept, turnsLimit), truncated };
   }
 
   #sessionFileEntries(kind, sessionId, { beforeSeq = Infinity, afterSeq = -Infinity, desc = false } = {}) {
