@@ -864,6 +864,22 @@ legacy session`, { encoding: 'utf8' });
     });
   });
 
+  describe('JSONL cold rows', () => {
+    it('keeps archived session rows readable while excluding them from hot counts', () => {
+      const user = store.append({ role: 'user', content: 'cold question', sessionId: 'session_cold', threadId: 'main' });
+      store.append({ role: 'assistant', content: 'hot answer', sessionId: 'session_cold', speakerVpId: 'vp-linus', threadId: 'main' });
+
+      store.moveToCold(user.id);
+
+      expect(store.countHot()).toBe(1);
+      expect(store.countCold()).toBe(1);
+      expect(store.loadAllBySession('session_cold').map(m => m.content)).toEqual(['cold question', 'hot answer']);
+      expect(store.loadOlderBySession('session_cold', null, 10).messages.map(m => m.content)).toEqual(['cold question', 'hot answer']);
+      expect(store.loadVisibleBySession('session_cold', null, 10).messages.map(m => m.content)).toEqual(['cold question', 'hot answer']);
+      expect(store.loadSessionHistoryForVp('session_cold', 'vp-linus').map(m => m.content)).toEqual(['cold question', 'hot answer']);
+    });
+  });
+
   describe('countHot / countCold', () => {
     it('should count messages correctly', () => {
       expect(store.countHot()).toBe(0);

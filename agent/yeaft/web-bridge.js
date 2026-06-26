@@ -53,6 +53,7 @@ import {
   scanWorkdirSessions,
   restoreSessionToRegistry,
   readWorkDirRegistry,
+  yeaftDirForWorkDir,
 } from './sessions/session-crud.js';
 import { openSession, loadSessionMeta } from './sessions/session-store.js';
 import { loadSessionConfig, resolveSessionConfig, SessionConfigError } from './sessions/session-config.js';
@@ -412,6 +413,13 @@ function normalizeSessionWorkDir(workDir) {
 
 function projectRuntimeKey(workDir) {
   return normalizeSessionWorkDir(workDir) || '__agent_cwd__';
+}
+
+function resolveStoreYeaftDirForSession(defaultYeaftDir, { sessionId = null, sessionMeta = null, workDir = '' } = {}) {
+  const normalizedWorkDir = normalizeSessionWorkDir(workDir || sessionMeta?.workDir);
+  if (normalizedWorkDir) return yeaftDirForWorkDir(normalizedWorkDir);
+  if (sessionId) return resolveSessionYeaftDir(defaultYeaftDir, sessionId);
+  return defaultYeaftDir;
 }
 
 function createThreadId() {
@@ -3880,8 +3888,13 @@ async function ensureSessionLoaded(opts = {}) {
   sessionLoadPromise = (async () => {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const normalizedWorkDir = normalizeSessionWorkDir(opts?.workDir || opts?.sessionMeta?.workDir);
+    const sessionYeaftDir = resolveStoreYeaftDirForSession(yeaftDir, {
+      sessionId: opts?.sessionId || opts?.sessionMeta?.id || null,
+      sessionMeta: opts?.sessionMeta || null,
+      workDir: normalizedWorkDir,
+    });
     session = await loadSession({
-      ...(yeaftDir && { dir: yeaftDir }),
+      ...(sessionYeaftDir && { dir: sessionYeaftDir }),
       ...(normalizedWorkDir && { workDir: normalizedWorkDir }),
       skipMCP: true,
       skipSkills: true,
@@ -5640,12 +5653,22 @@ export async function handleYeaftLoadHistory(msg) {
     const limit = (typeof msg.limit === 'number') ? msg.limit : 10;
     ensureYeaftConversationId();
 
+    let sessionMetaForRuntime = null;
+    let sessionYeaftDir = yeaftDir;
+    if (sessionId) {
+      try {
+        sessionYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
+        const metaDir = join(sessionsRoot(sessionYeaftDir), sessionId);
+        sessionMetaForRuntime = loadSessionMeta(metaDir);
+      } catch { /* best-effort metadata hint */ }
+    }
+
     // First paint must not wait for full Yeaft runtime boot (MCP connects,
-    // skill scans, memory index sync). The conversation markdown store is the
+    // skill scans, memory index sync). The conversation segment store is the
     // source of truth and can be opened cheaply, so replay the visible message
     // window immediately, then finish loadSession below for actual turns.
     const coldStoreStart = perfNowMs();
-    const coldStore = new ConversationStore(yeaftDir);
+    const coldStore = new ConversationStore(sessionYeaftDir);
     traceDuration('history.cold_store_open', coldStoreStart);
     if (sessionId && (afterSeqRaw !== null || afterMessageId)) {
       let afterSeq = afterSeqRaw;
@@ -5675,14 +5698,6 @@ export async function handleYeaftLoadHistory(msg) {
     }
     historyAlreadyReplayed = true;
 
-    let sessionMetaForRuntime = null;
-    if (sessionId) {
-      try {
-        const groupYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
-        const metaDir = join(sessionsRoot(groupYeaftDir), sessionId);
-        sessionMetaForRuntime = loadSessionMeta(metaDir);
-      } catch { /* best-effort metadata hint */ }
-    }
     // Full runtime boot can be expensive (memory FTS sync, skills, MCP, dream
     // boot checks). It is not needed to render persisted history, so keep this
     // request short and let message-send await the same single-flight boot when

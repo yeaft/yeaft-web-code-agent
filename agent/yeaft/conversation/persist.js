@@ -1970,15 +1970,19 @@ export class ConversationStore {
   }
 
   #sessionMessageDirs(kind, sessionId = null) {
+    const kinds = kind === 'all' ? ['cold', 'messages'] : [kind];
     if (sessionId) {
-      const dirs = [
-        join(this.#sessionConversationDir(sessionId), kind),
-        join(this.#legacySessionConversationDir(sessionId), kind),
-      ];
+      const dirs = [];
+      for (const k of kinds) {
+        dirs.push(
+          join(this.#sessionConversationDir(sessionId), k),
+          join(this.#legacySessionConversationDir(sessionId), k),
+        );
+      }
       return dirs.filter(dir => existsSync(dir));
     }
     return this.#sessionConversationDirs()
-      .map(dir => join(dir, kind))
+      .flatMap(dir => kinds.map(k => join(dir, k)))
       .filter(dir => existsSync(dir));
   }
 
@@ -2118,8 +2122,8 @@ export class ConversationStore {
   *#iterateSessionRows(sessionId, opts = {}) {
     const primaryDir = this.#sessionConversationDir(sessionId);
     const segmentStore = this.#segmentStoreForConversationDir(primaryDir);
-    yield* segmentStore.scan(opts);
-    for (const entry of this.#sessionFileEntries('messages', sessionId, opts)) {
+    yield* segmentStore.scan({ includeCold: true, ...opts });
+    for (const entry of this.#sessionFileEntries('all', sessionId, opts)) {
       try {
         const msg = this.readMessageFile(entry.path);
         if (msg) yield msg;
@@ -2142,6 +2146,7 @@ export class ConversationStore {
 
   #sessionFileEntries(kind, sessionId, { beforeSeq = Infinity, afterSeq = -Infinity, desc = false } = {}) {
     const entries = [];
+    const kindOrder = kind === 'all' ? { cold: 0, messages: 1 } : null;
     for (const dir of this.#sessionMessageDirs(kind, sessionId)) {
       let files;
       try {
@@ -2156,10 +2161,14 @@ export class ConversationStore {
         if (!Number.isFinite(seq)) continue;
         if (Number.isFinite(beforeSeq) && seq >= beforeSeq) continue;
         if (Number.isFinite(afterSeq) && seq <= afterSeq) continue;
-        entries.push({ path: join(dir, file), seq });
+        const kindRank = kindOrder ? kindOrder[basename(dir)] ?? 0 : 0;
+        entries.push({ path: join(dir, file), seq, kindRank });
       }
     }
-    entries.sort((a, b) => desc ? b.seq - a.seq : a.seq - b.seq);
+    entries.sort((a, b) => {
+      if (a.seq !== b.seq) return desc ? b.seq - a.seq : a.seq - b.seq;
+      return desc ? b.kindRank - a.kindRank : a.kindRank - b.kindRank;
+    });
     return entries;
   }
 

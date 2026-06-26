@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { beforeEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -123,6 +123,53 @@ describe('Yeaft load-history first paint', () => {
       expect(sent.some(m => m.event?.type === 'session_ready' && !m.event.partial)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('cold-start history uses the workDir-backed session store before runtime boot', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-workdir-history-default-'));
+    const workDir = mkdtempSync(join(tmpdir(), 'yeaft-workdir-history-project-'));
+    try {
+      const sessionId = 'session-workdir';
+      const workYeaftDir = join(workDir, '.yeaft');
+      const sessionDir = join(workYeaftDir, 'sessions', sessionId);
+      mkdirSync(sessionDir, { recursive: true });
+      writeFileSync(join(sessionDir, 'session.json'), `${JSON.stringify({
+        id: sessionId,
+        name: 'WorkDir Session',
+        roster: ['omni'],
+        defaultVpId: 'omni',
+        workDir,
+        createdAt: '2026-06-26T00:00:00.000Z',
+      }, null, 2)}\n`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'group-workdirs.json'), `${JSON.stringify({ [sessionId]: workDir }, null, 2)}\n`);
+
+      ctx.CONFIG = { yeaftDir: dir };
+      const store = new ConversationStore(workYeaftDir);
+      store.append({ role: 'user', content: 'workdir q', sessionId, time: '2026-06-26T01:00:00.000Z' });
+      store.append({ role: 'assistant', content: 'workdir a', sessionId, speakerVpId: 'vp-linus', time: '2026-06-26T01:00:01.000Z' });
+
+      const pending = handleYeaftLoadHistory({ sessionId, limit: 1 });
+      await flushMicrotasks();
+
+      const chunk = sent.find(m => m.type === 'yeaft_history_chunk' && m.mode === 'recent');
+      expect(chunk.messages.map(m => m.content)).toEqual(['workdir q', 'workdir a']);
+      expect(loadSession).toHaveBeenCalledTimes(1);
+      expect(loadSession.mock.calls[0][0]).toMatchObject({ dir: workYeaftDir, workDir });
+
+      await pending;
+      resolveLoadSession({
+        conversationStore: store,
+        config: { model: 'test-model', availableModels: [] },
+        status: { skills: 0, mcpServers: [], tools: 0 },
+        taskManager: { listActiveTasks: () => [] },
+      });
+      await flushMicrotasks();
+      await new Promise(resolve => setTimeout(resolve, 0));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(workDir, { recursive: true, force: true });
     }
   });
 

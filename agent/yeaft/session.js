@@ -45,7 +45,7 @@ import { TaskManager } from './tasks/manager.js';
 // resumes with the same onDemand/recent membership it had on
 // disconnect. Engine.#runQuery uses the registry to populate the
 // AMS each turn and to run `memory/adjust.js` post-turn.
-import { ensureDefaultSessionIfEmpty } from './sessions/session-crud.js';
+import { ensureDefaultSessionIfEmpty, yeaftDirForWorkDir } from './sessions/session-crud.js';
 import { seedDefaultVps } from './vp/seed-defaults.js';
 import { topUpDefaultVps } from './vp/seed-topup.js';
 import { archiveLegacyScopes } from './memory/seed-backfill.js';
@@ -71,6 +71,7 @@ const DEFAULT_COMPACT_TRIGGER_RATIO = 0.7;
 /**
  * @typedef {Object} SessionOptions
  * @property {string} [dir] — Yeaft data directory override (default: ~/.yeaft)
+ * @property {string} [workDir] — Session workDir; when provided, the Yeaft store lives under <workDir>/.yeaft
  * @property {string} [model] — Model override
  * @property {string} [language] — Language override ('en' | 'zh')
  * @property {boolean} [debug] — Debug mode override
@@ -136,6 +137,7 @@ function prepareToolStatsDir(yeaftDir) {
 export async function loadSession(options = {}) {
   const {
     dir,
+    workDir,
     model,
     language,
     debug,
@@ -155,7 +157,8 @@ export async function loadSession(options = {}) {
   if (language) overrides.language = language;
   if (debug !== undefined) overrides.debug = debug;
 
-  const yeaftDir = overrides.dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
+  const sessionWorkDir = typeof workDir === 'string' && workDir.trim() ? workDir.trim() : '';
+  const yeaftDir = sessionWorkDir ? yeaftDirForWorkDir(sessionWorkDir) : (overrides.dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR);
   const initResult = initYeaftDir(yeaftDir);
   overrides.dir = yeaftDir;
 
