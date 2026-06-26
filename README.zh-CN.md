@@ -92,17 +92,6 @@ AI 专家团队辅助对话 — 选择一个团队（如写作、交易），在
 - 与正常对话并行，不打断聊天流程
 
 
-多角色 AI 团队协作，PM、开发者、审查者、测试者等角色协同完成 Feature 开发。
-
-- 角色间通过 ROUTE 协议自动任务路由
-- Feature 进度追踪面板，实时状态显示（streaming 呼吸灯动画）
-- 决策者消息在主流中直接显示，按角色分组
-- 多 Agent 跨 worktree 并行执行
-- Feature 完成检测，有新活动时自动重新激活
-- AskUserQuestion 交互卡片 — Agent 可在任务进行中向用户请求决策
-- Typing Indicator 事件驱动健康监控（Agent 离线 / Session 丢失 / 正在压缩）
-
-
 
 ### 仪表板（Admin Dashboard）
 

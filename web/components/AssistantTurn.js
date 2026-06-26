@@ -540,9 +540,7 @@ export default {
       getImageUrl,
       handleImageError,
       openImagePreview,
-      displayedTodos,
-      toolExpandedValue,
-      updateToolExpanded
+      displayedTodos
     };
   }
 };

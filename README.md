@@ -92,17 +92,6 @@ AI expert teams that assist your conversations — select a team (e.g. Writing, 
 - Works alongside normal chat without interrupting the flow
 
 
-Multi-role AI team collaboration with PM, Developer, Reviewer, and Tester roles working together on features.
-
-- Automated task routing between roles via ROUTE protocol
-- Feature progress tracking panel with real-time status (streaming pulse animation)
-- Role-based message grouping with decision-maker messages in main stream
-- Parallel multi-agent execution across multiple worktrees
-- Feature completion detection with auto-reactivation on new activity
-- AskUserQuestion interactive cards — agents can prompt the user for decisions mid-task
-- Typing indicator with event-driven health monitoring (agent offline / session lost / compacting)
-
-
 
 ### Admin Dashboard
 

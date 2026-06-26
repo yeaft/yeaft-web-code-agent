@@ -139,15 +139,6 @@ export function selectConversation(store, conversationId, agentId) {
     conversationId
   });
 
-  if (conv?.type === 'crew') {
-    // Crew conversations use crewMessagesMap, not messagesMap.
-    // Initialize crewMessagesMap entry BEFORE setting activeConversations,
-    // so that currentCrewMessages getter tracks the correct reactive property.
-    if (!store.crewMessagesMap[conversationId]) {
-      store.crewMessagesMap[conversationId] = [];
-    }
-    store.messagesMap[conversationId] = [];
-  }
 
   // Split mode aware — don't nuke other panes' conversations
   if (store.panels.length > 1) {
@@ -161,17 +152,6 @@ export function selectConversation(store, conversationId, agentId) {
     store.currentWorkDir = conv.workDir;
   }
 
-  if (conv?.type === 'crew') {
-    // If crew messages are empty, trigger resume to load them from server.
-    const hasCrewMessages = store.crewMessagesMap[conversationId].length > 0;
-    if (!hasCrewMessages) {
-      store.sendWsMessage({
-        type: 'resume_crew_session',
-        sessionId: conversationId,
-        agentId: conv.agentId || store.currentAgent
-      });
-    }
-  } else {
     // perf-chat-session-switch-cache: when this conv was loaded before,
     // reuse messagesMap as-is and ask the server only for the delta
     // since max(dbMessageId). Old code unconditionally blew the cache
@@ -204,7 +184,6 @@ export function selectConversation(store, conversationId, agentId) {
         turns: 5
       });
     }
-  }
   // ★ Bug #4 / perf-chat-session-switch-cache: pagination state.
   //
   // Reset loadingMoreMessages unconditionally — any in-flight load-more
@@ -276,24 +255,6 @@ export function toggleConversationMcp(store, serverName, enabled) {
 export function closeSession(store, conversationId, agentId) {
   const conv = store.conversations.find(c => c.id === conversationId);
 
-  // Crew sessions: stop all roles + mark hidden on agent side + clean crew data
-  if (conv?.type === 'crew' && store.crewSessions[conversationId]) {
-    store.sendWsMessage({
-      type: 'crew_control',
-      sessionId: conversationId,
-      action: 'stop_all',
-      agentId
-    });
-    // Mark session as hidden on agent side so it won't reappear after page refresh
-    store.sendWsMessage({
-      type: 'delete_crew_session',
-      sessionId: conversationId
-    });
-    delete store.crewSessions[conversationId];
-    delete store.crewMessagesMap[conversationId];
-    delete store.crewOlderMessages[conversationId];
-    delete store.crewStatuses[conversationId];
-  }
 
   // Mark as recently deleted to prevent handleAgentList from re-adding it
   if (!store._recentlyDeletedSessions) store._recentlyDeletedSessions = {};
@@ -323,7 +284,7 @@ export function closeSession(store, conversationId, agentId) {
     }
   }
 
-  // Clear from splitPanes if present
+  // Clear from split panels if present
   for (const pane of store.panels) {
     if (pane.conversationId === conversationId) {
       pane.conversationId = null;
@@ -354,20 +315,6 @@ export function closeSession(store, conversationId, agentId) {
 }
 
 export function deleteConversation(store, conversationId, agentId) {
-  // 清理 crew 数据（不管 server 是否响应）
-  const conv = store.conversations.find(c => c.id === conversationId);
-  if (conv?.type === 'crew') {
-    delete store.crewSessions?.[conversationId];
-    delete store.crewMessagesMap?.[conversationId];
-    delete store.crewOlderMessages?.[conversationId];
-    delete store.crewStatuses?.[conversationId];
-    // Remove from agent's crew index so it won't reappear
-    store.sendWsMessage({
-      type: 'delete_crew_session',
-      sessionId: conversationId,
-      agentId: agentId || store.currentAgent
-    });
-  }
 
   // Mark as recently deleted to prevent handleAgentList from re-adding it
   if (!store._recentlyDeletedSessions) store._recentlyDeletedSessions = {};
@@ -386,7 +333,7 @@ export function deleteConversation(store, conversationId, agentId) {
     }
   }
 
-  // Clear from splitPanes if present
+  // Clear from split panels if present
   for (const pane of store.panels) {
     if (pane.conversationId === conversationId) {
       pane.conversationId = null;
@@ -560,7 +507,6 @@ export function answerUserQuestion(store, requestId, answers, conversationId) {
     answers
   });
   // Find the AskUserQuestion tool-use message by askRequestId and mark it answered
-  // Check both Chat messages and Crew messages
   const chatMsgs = store.messagesMap[convId] || [];
   const chatMsg = chatMsgs.find(m =>
     m.type === 'tool-use' && m.toolName === 'AskUserQuestion' && m.askRequestId === requestId
@@ -569,17 +515,7 @@ export function answerUserQuestion(store, requestId, answers, conversationId) {
     chatMsg.askAnswered = true;
     chatMsg.selectedAnswers = answers;
   }
-  // Also check Crew messages for the current conversation
-  const crewMsgs = store.crewMessagesMap?.[convId];
-  if (crewMsgs) {
-    const crewMsg = crewMsgs.find(m =>
-      m.type === 'tool' && m.toolName === 'AskUserQuestion' && m.askRequestId === requestId
-    );
-    if (crewMsg) {
-      crewMsg.askAnswered = true;
-      crewMsg.selectedAnswers = answers;
-    }
-  }
+
   // 立刻进入 processing 状态，显示"思考中"指示器
   if (convId && !store.processingConversations[convId]) {
     store.processingConversations[convId] = true;

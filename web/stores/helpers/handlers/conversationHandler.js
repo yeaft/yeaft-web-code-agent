@@ -326,7 +326,7 @@ export function handleConversationDeleted(store, msg) {
       });
     }
   }
-  // Clear from splitPanes if present
+  // Clear from split panels if present
   for (const pane of store.panels) {
     if (pane.conversationId === msg.conversationId) {
       pane.conversationId = null;

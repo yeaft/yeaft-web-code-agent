@@ -8,7 +8,7 @@ import { sortSessionsByActivity } from '../stores/helpers/session-order.js';
  *   Right: new Chat and close pane buttons
  *
  * Session dropdown: absolute-positioned list of Chat sessions.
- * Click a session → setPaneConversation(paneId, convId).
+ * Click a session → setPanelConversation(paneId, convId).
  */
 export default {
   name: 'PaneTopBar',
@@ -153,7 +153,7 @@ export default {
 
     function onSessionClick(conv) {
       if (conv.agentOnline === false) return;
-      store.setPaneConversation(props.paneId, conv.id);
+      store.setPanelConversation(props.paneId, conv.id);
       dropdownOpen.value = false;
     }
 
