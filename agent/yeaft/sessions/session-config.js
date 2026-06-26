@@ -3,6 +3,8 @@
  *
  * Each session may carry its header-selected model override in `config.json` at
  *   ~/.yeaft/sessions/<sessionId>/config.json
+ * or, for workDir-backed sessions:
+ *   <workDir>/.yeaft/sessions/<sessionId>/config.json
  *
  * v1 schema (intentionally tiny — extend via additive keys only):
  *   {
