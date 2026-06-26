@@ -121,7 +121,6 @@ export function __resetTruncationWarned() {
  *
  * @param {string} sessionId
  * @param {string} storeDir
- * @param {number} totalTurns      — turns available on disk
  * @param {number} recentTurnsLimit — configured recent-turn window
  * @param {boolean} hasCompactSummary
  */
