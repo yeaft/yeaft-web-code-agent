@@ -507,6 +507,27 @@ describe('ConversationStore', () => {
       expect(page.hasMore).toBe(false);
     });
 
+    it('loadVisibleBySession stops after the requested recent turn window', () => {
+      const readCounts = { count: 0 };
+      for (let i = 0; i < 500; i++) {
+        store.append({ role: 'user', content: `old ${i}`, sessionId: 'grp_a' });
+        store.append({ role: 'assistant', content: `old answer ${i}`, sessionId: 'grp_a' });
+      }
+      store.append({ role: 'user', content: 'latest q', sessionId: 'grp_a' });
+      store.append({ role: 'assistant', content: 'latest a', sessionId: 'grp_a' });
+
+      const original = store.__debugReadMessageFileForTest;
+      store.__debugReadMessageFileForTest = (...args) => {
+        readCounts.count += 1;
+        return original.call(store, ...args);
+      };
+      const page = store.loadVisibleBySession('grp_a', null, 1);
+
+      expect(page.messages.map(m => m.content)).toEqual(['latest q', 'latest a']);
+      expect(page.hasMore).toBe(true);
+      expect(readCounts.count).toBeLessThan(10);
+    });
+
     it('returns [] for empty/null sessionId without throwing', () => {
       store.append({ role: 'user', content: 'X', sessionId: 'grp_a' });
       expect(store.loadRecentBySession(null, 10)).toEqual([]);

@@ -1073,11 +1073,44 @@ export class ConversationStore {
     if (!sessionId || !(turnsLimit > 0)) return { messages: [], oldestSeq: null, hasMore: false };
 
     const cutoff = Number.isFinite(beforeSeq) ? beforeSeq : Infinity;
-    const all = this.#loadSessionMessages(sessionId);
-    const visible = all.filter(m => m && m.sessionId === sessionId
-      && !isHiddenConversationRow(m)
-      && (m.role === 'user' || m.role === 'assistant')
-      && parseSeqFromId(m.id) < cutoff);
+    const visible = [];
+    let turnsFromEnd = 0;
+    let openCanonical = null;
+    let hasMore = false;
+
+    // Do not materialize the whole session transcript just to paint the first
+    // screen. Large Yeaft sessions can have thousands of markdown rows; parsing
+    // all of them is synchronous and can starve websocket heartbeat long enough
+    // for the agent to look dead. Walk newest-to-oldest and stop once we have
+    // the requested turn window plus proof that an older turn exists.
+    for (const entry of this.#sessionFileEntries('messages', sessionId, { beforeSeq: cutoff, desc: true })) {
+      let m;
+      try {
+        m = this.__debugReadMessageFileForTest(entry.path);
+      } catch (err) {
+        if (isPermissionError(err)) continue;
+        throw err;
+      }
+      if (!m || m.sessionId !== sessionId) continue;
+      if (isHiddenConversationRow(m)) continue;
+      if (m.role !== 'user' && m.role !== 'assistant') continue;
+
+      if (m.role === 'user') {
+        const canonical = canonicalUserTurnContent(m.content);
+        if (canonical != null && canonical !== openCanonical) {
+          turnsFromEnd += 1;
+          openCanonical = canonical;
+          if (turnsFromEnd > turnsLimit) {
+            hasMore = true;
+            visible.push(m);
+            break;
+          }
+        }
+      }
+      visible.push(m);
+    }
+
+    visible.reverse();
 
     if (visible.length === 0) return { messages: [], oldestSeq: null, hasMore: false };
 
@@ -1085,11 +1118,13 @@ export class ConversationStore {
 
     // Turn-based hasMore: an EARLIER turn boundary was dropped.
     const oldestSlicedSeq = sliced.length ? parseSeqFromId(sliced[0].id) : NaN;
-    const oldestVisibleSeq = parseSeqFromId(visible[0].id);
-    const hasMore = sliced.length > 0
-      && Number.isFinite(oldestSlicedSeq)
-      && Number.isFinite(oldestVisibleSeq)
-      && oldestSlicedSeq > oldestVisibleSeq;
+    if (!hasMore) {
+      const oldestVisibleSeq = parseSeqFromId(visible[0].id);
+      hasMore = sliced.length > 0
+        && Number.isFinite(oldestSlicedSeq)
+        && Number.isFinite(oldestVisibleSeq)
+        && oldestSlicedSeq > oldestVisibleSeq;
+    }
 
     // Visible history is for UI replay, not LLM context. Strip tool-call
     // metadata — don't run pairSanitize (it can incorrectly drop assistant
@@ -1132,16 +1167,23 @@ export class ConversationStore {
     const limit = Number.isFinite(opts.limit) && opts.limit > 0 ? opts.limit : 500;
     const cutoff = Number.isFinite(afterSeq) && afterSeq >= 0 ? afterSeq : null;
     if (cutoff === null) return { messages: [], latestSeq: null };
-    const rawAfter = this.#loadSessionMessages(sessionId).filter((m) => {
-      if (!m || m.sessionId !== sessionId) return false;
+    const after = [];
+    let newestScannedSeq = cutoff;
+    for (const entry of this.#sessionFileEntries('messages', sessionId, { afterSeq: cutoff, desc: false })) {
+      let m;
+      try {
+        m = this.__debugReadMessageFileForTest(entry.path);
+      } catch (err) {
+        if (isPermissionError(err)) continue;
+        throw err;
+      }
+      if (!m || m.sessionId !== sessionId) continue;
       const seq = parseSeqFromId(m.id);
-      return Number.isFinite(seq) && seq > cutoff;
-    });
-    const newestScannedSeq = rawAfter.slice(0, limit).reduce((max, m) => {
-      const seq = parseSeqFromId(m?.id);
-      return Number.isFinite(seq) && seq > max ? seq : max;
-    }, cutoff);
-    const after = rawAfter.filter(m => !isHiddenConversationRow(m));
+      if (Number.isFinite(seq) && seq > newestScannedSeq) newestScannedSeq = seq;
+      if (isHiddenConversationRow(m)) continue;
+      after.push(m);
+      if (after.length >= limit) break;
+    }
     const sliced = pairSanitize(after.slice(0, limit));
     const lastSeq = sliced.length ? parseSeqFromId(sliced[sliced.length - 1].id) : null;
     const latestSeq = Number.isFinite(lastSeq) ? Math.max(lastSeq, newestScannedSeq) : newestScannedSeq;
@@ -1728,6 +1770,33 @@ export class ConversationStore {
 
   #loadSessionMessages(sessionId = null) {
     return this.#loadSessionHotMessages(sessionId);
+  }
+
+  __debugReadMessageFileForTest(path) {
+    return parseMessage(readFileSync(path, 'utf8'));
+  }
+
+  #sessionFileEntries(kind, sessionId, { beforeSeq = Infinity, afterSeq = -Infinity, desc = false } = {}) {
+    const entries = [];
+    for (const dir of this.#sessionMessageDirs(kind, sessionId)) {
+      let files;
+      try {
+        files = readdirSync(dir).filter(f => f.endsWith('.md'));
+      } catch (err) {
+        if (isPermissionError(err)) continue;
+        throw err;
+      }
+      for (const file of files) {
+        const seqMatch = file.match(/^m(\d+)\.md$/);
+        const seq = seqMatch ? parseInt(seqMatch[1], 10) : NaN;
+        if (!Number.isFinite(seq)) continue;
+        if (Number.isFinite(beforeSeq) && seq >= beforeSeq) continue;
+        if (Number.isFinite(afterSeq) && seq <= afterSeq) continue;
+        entries.push({ path: join(dir, file), seq });
+      }
+    }
+    entries.sort((a, b) => desc ? b.seq - a.seq : a.seq - b.seq);
+    return entries;
   }
 
   #loadAllMessages() {
