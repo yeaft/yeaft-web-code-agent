@@ -3,15 +3,11 @@ import { expect } from '@playwright/test';
 
 /** Helper: open modal, select agent, create conversation */
 async function createConversation(chatPage) {
-  await chatPage.click('.sidebar-nav-item');
-  await chatPage.waitForSelector('.modal-overlay', { timeout: 5000 });
-  await chatPage.waitForFunction(() => {
-    const sel = document.querySelector('.resume-select');
-    return sel && sel.options.length > 1;
-  }, { timeout: 5000 });
-  await chatPage.locator('.resume-select').selectOption({ index: 1 });
-  await chatPage.click('.modern-btn');
-  await chatPage.waitForSelector('.session-item.active', { timeout: 5000 });
+  await chatPage.locator('.session-tab-add-btn').click();
+  await expect(chatPage.locator('.modal.resume-modal')).toBeVisible({ timeout: 5000 });
+  await chatPage.locator('.resume-modal-footer .modern-btn').click();
+  await expect(chatPage.locator('.modal.resume-modal')).not.toBeVisible({ timeout: 5000 });
+  await expect(chatPage.locator('.session-item.active')).toBeVisible({ timeout: 5000 });
 }
 
 test.describe('Markdown 渲染', () => {
