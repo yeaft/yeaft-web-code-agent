@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
+import ctx from '../../../agent/context.js';
 import { loadConfig } from '../../../agent/yeaft/config.js';
 import { loadSession } from '../../../agent/yeaft/session.js';
 import { __testResolveVpEffectiveConfig, __testSetSession } from '../../../agent/yeaft/web-bridge.js';
@@ -10,6 +11,7 @@ import { createSession } from '../../../agent/yeaft/sessions/session-store.js';
 import { registerSessionWorkDir, sessionsRoot, snapshotSessions, updateSessionConfig } from '../../../agent/yeaft/sessions/session-crud.js';
 
 const roots = [];
+const originalConfig = ctx.CONFIG;
 
 function tempRoot(prefix) {
   const root = mkdtempSync(join(tmpdir(), prefix));
@@ -41,6 +43,8 @@ function createRegisteredWorkDirSession(root, workDir, sessionId = 'session-work
 }
 
 afterEach(() => {
+  ctx.CONFIG = originalConfig;
+  __testSetSession(null);
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -137,26 +141,50 @@ describe('Yeaft session-scoped model config', () => {
       .toEqual({ model: 'agent/gpt-5', modelEffort: 'low' });
   });
 
-  it('uses the workDir-backed session root for VP engine model overrides', () => {
+  it('uses the agent-local root resolver for VP engine model overrides', () => {
     const root = makeDir();
     const workDir = tempRoot('yeaft-session-config-workdir-');
     const { projectYeaftDir, sessionId } = createRegisteredWorkDirSession(root, workDir, 'session-workdir-engine');
     writeFileSync(join(root, 'sessions', sessionId, 'config.json'), `${JSON.stringify({ model: 'agent/gpt-5', modelEffort: 'low' }, null, 2)}\n`);
     writeFileSync(join(projectYeaftDir, 'sessions', sessionId, 'config.json'), `${JSON.stringify({ model: 'project/claude-sonnet', modelEffort: 'high' }, null, 2)}\n`);
+    ctx.CONFIG = { yeaftDir: root };
+    __testSetSession({
+      yeaftDir: projectYeaftDir,
+      config: { model: 'agent/default', primaryModel: 'agent/default', modelEffort: 'medium' },
+      conversationStore: { loadRecentBySession: () => [] },
+    });
 
-    try {
-      __testSetSession({
-        yeaftDir: projectYeaftDir,
-        config: { model: 'agent/default', primaryModel: 'agent/default', modelEffort: 'medium' },
-        conversationStore: { loadRecentBySession: () => [] },
-      });
-      const effective = __testResolveVpEffectiveConfig(sessionId);
-      expect(effective.model).toBe('project/claude-sonnet');
-      expect(effective.primaryModel).toBe('project/claude-sonnet');
-      expect(effective.modelEffort).toBe('high');
-    } finally {
-      __testSetSession(null);
-    }
+    const effective = __testResolveVpEffectiveConfig(sessionId);
+
+    expect(effective.model).toBe('project/claude-sonnet');
+    expect(effective.primaryModel).toBe('project/claude-sonnet');
+    expect(effective.modelEffort).toBe('high');
+  });
+
+  it('keeps agent-local overrides available after a workDir-backed runtime booted first', () => {
+    const root = makeDir();
+    const workDir = tempRoot('yeaft-session-config-workdir-');
+    const { projectYeaftDir } = createRegisteredWorkDirSession(root, workDir, 'session-workdir-first-runtime');
+    const agentLocalSessionId = 'session-agent-local-after-workdir';
+    createSession(sessionsRoot(root), {
+      id: agentLocalSessionId,
+      name: 'Agent-local session',
+      roster: [],
+      defaultVpId: null,
+    }).close();
+    saveSessionConfig(root, agentLocalSessionId, { model: 'agent/local-sonnet', modelEffort: 'minimal' });
+    ctx.CONFIG = { yeaftDir: root };
+    __testSetSession({
+      yeaftDir: projectYeaftDir,
+      config: { model: 'agent/default', primaryModel: 'agent/default', modelEffort: 'medium' },
+      conversationStore: { loadRecentBySession: () => [] },
+    });
+
+    const effective = __testResolveVpEffectiveConfig(agentLocalSessionId);
+
+    expect(effective.model).toBe('agent/local-sonnet');
+    expect(effective.primaryModel).toBe('agent/local-sonnet');
+    expect(effective.modelEffort).toBe('minimal');
   });
 
   it('loads runtime config from agent root while storing workDir session data under project .yeaft', async () => {

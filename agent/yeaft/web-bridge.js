@@ -1192,7 +1192,7 @@ export function __testGroupHistory(sessionId) {
 
 export function __testResolveVpEffectiveConfig(sessionId) {
   if (!session) return null;
-  const sessionConfigRoot = session.yeaftDir || ctx.CONFIG?.yeaftDir;
+  const sessionConfigRoot = ctx.CONFIG?.yeaftDir || session.yeaftDir;
   return resolveSessionConfig(session.config, loadSessionConfig(sessionConfigRoot, sessionId));
 }
 
@@ -1300,12 +1300,11 @@ function getOrCreateVpEngine(sessionId, vpId, threadId = 'main') {
   if (eng) return eng;
   if (!session) throw new Error('getOrCreateVpEngine: session not loaded');
   // Per-session config overlay (v1: model only). Falls back to the
-  // session's user-level config when no override is set. Use the runtime's
-  // storage root, not the agent-local config dir: workDir-backed sessions keep
-  // config.json under <workDir>/.yeaft/sessions/<id>/, and loading from the
-  // wrong root makes first turns use the wrong model until the user manually
-  // switches models.
-  const sessionConfigRoot = session.yeaftDir || ctx.CONFIG?.yeaftDir;
+  // session's user-level config when no override is set. Prefer the agent-local
+  // config root: sessionConfigPath() resolves registered workDir-backed
+  // sessions from there, while still allowing a later agent-local session in
+  // the same bridge runtime to read its own override after a workDir-first boot.
+  const sessionConfigRoot = ctx.CONFIG?.yeaftDir || session.yeaftDir;
   const groupCfg = loadSessionConfig(sessionConfigRoot, sessionId);
   const effectiveConfig = resolveSessionConfig(session.config, groupCfg);
   eng = new Engine({
