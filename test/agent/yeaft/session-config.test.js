@@ -7,7 +7,7 @@ import { loadSession } from '../../../agent/yeaft/session.js';
 import { __testResolveVpEffectiveConfig, __testSetSession } from '../../../agent/yeaft/web-bridge.js';
 import { loadSessionConfig, resolveSessionConfig, saveSessionConfig } from '../../../agent/yeaft/sessions/session-config.js';
 import { createSession } from '../../../agent/yeaft/sessions/session-store.js';
-import { registerSessionWorkDir, sessionsRoot } from '../../../agent/yeaft/sessions/session-crud.js';
+import { registerSessionWorkDir, sessionsRoot, snapshotSessions, updateSessionConfig } from '../../../agent/yeaft/sessions/session-crud.js';
 
 const roots = [];
 
@@ -19,6 +19,25 @@ function tempRoot(prefix) {
 
 function makeDir() {
   return tempRoot('yeaft-session-config-');
+}
+
+function createRegisteredWorkDirSession(root, workDir, sessionId = 'session-workdir-config') {
+  const projectYeaftDir = join(workDir, '.yeaft');
+  createSession(sessionsRoot(root), {
+    id: sessionId,
+    name: 'Stale agent-local session',
+    roster: [],
+    defaultVpId: null,
+  }).close();
+  createSession(sessionsRoot(projectYeaftDir), {
+    id: sessionId,
+    name: 'Project session',
+    roster: [],
+    defaultVpId: null,
+    workDir,
+  }).close();
+  registerSessionWorkDir(root, sessionId, workDir);
+  return { projectYeaftDir, sessionId };
 }
 
 afterEach(() => {
@@ -64,22 +83,7 @@ describe('Yeaft session-scoped model config', () => {
   it('prefers a registered workDir Session config over an agent-local stale Session directory', () => {
     const root = makeDir();
     const workDir = tempRoot('yeaft-session-config-workdir-');
-    const sessionId = 'session-workdir-first';
-
-    createSession(sessionsRoot(root), {
-      id: sessionId,
-      name: 'Stale agent-local session',
-      roster: [],
-      defaultVpId: null,
-    }).close();
-    createSession(sessionsRoot(join(workDir, '.yeaft')), {
-      id: sessionId,
-      name: 'Project session',
-      roster: [],
-      defaultVpId: null,
-      workDir,
-    }).close();
-    registerSessionWorkDir(root, sessionId, workDir);
+    const { sessionId } = createRegisteredWorkDirSession(root, workDir, 'session-workdir-first');
 
     saveSessionConfig(root, sessionId, { model: 'project/claude-sonnet', modelEffort: 'high' });
     writeFileSync(join(root, 'sessions', sessionId, 'config.json'), `${JSON.stringify({ model: 'agent/gpt-5', modelEffort: 'low' }, null, 2)}\n`);
@@ -105,13 +109,38 @@ describe('Yeaft session-scoped model config', () => {
     expect(effective.model).toBe('github-copilot/gpt-5.5');
   });
 
+  it('includes workDir-backed session config in snapshots', () => {
+    const root = makeDir();
+    const workDir = tempRoot('yeaft-session-config-workdir-');
+    const { sessionId } = createRegisteredWorkDirSession(root, workDir, 'session-workdir-snapshot');
+    writeFileSync(join(root, 'sessions', sessionId, 'config.json'), `${JSON.stringify({ model: 'agent/gpt-5', modelEffort: 'low' }, null, 2)}\n`);
+    updateSessionConfig(root, sessionId, { model: 'project/claude-sonnet', modelEffort: 'high' });
+
+    const row = snapshotSessions(root).find(s => s.id === sessionId);
+
+    expect(row?.config).toEqual({ model: 'project/claude-sonnet', modelEffort: 'high' });
+  });
+
+  it('writes workDir-backed session config through the agent-local root resolver', () => {
+    const root = makeDir();
+    const workDir = tempRoot('yeaft-session-config-workdir-');
+    const { projectYeaftDir, sessionId } = createRegisteredWorkDirSession(root, workDir, 'session-workdir-update');
+    writeFileSync(join(root, 'sessions', sessionId, 'config.json'), `${JSON.stringify({ model: 'agent/gpt-5', modelEffort: 'low' }, null, 2)}\n`);
+
+    const saved = updateSessionConfig(root, sessionId, { model: 'project/claude-haiku', modelEffort: 'max' });
+
+    expect(saved).toEqual({ model: 'project/claude-haiku', modelEffort: 'max' });
+    expect(loadSessionConfig(root, sessionId)).toEqual({ model: 'project/claude-haiku', modelEffort: 'max' });
+    expect(JSON.parse(readFileSync(join(projectYeaftDir, 'sessions', sessionId, 'config.json'), 'utf8')))
+      .toEqual({ model: 'project/claude-haiku', modelEffort: 'max' });
+    expect(JSON.parse(readFileSync(join(root, 'sessions', sessionId, 'config.json'), 'utf8')))
+      .toEqual({ model: 'agent/gpt-5', modelEffort: 'low' });
+  });
+
   it('uses the workDir-backed session root for VP engine model overrides', () => {
     const root = makeDir();
     const workDir = tempRoot('yeaft-session-config-workdir-');
-    const projectYeaftDir = join(workDir, '.yeaft');
-    const sessionId = 'session-workdir-engine';
-    mkdirSync(join(root, 'sessions', sessionId), { recursive: true });
-    mkdirSync(join(projectYeaftDir, 'sessions', sessionId), { recursive: true });
+    const { projectYeaftDir, sessionId } = createRegisteredWorkDirSession(root, workDir, 'session-workdir-engine');
     writeFileSync(join(root, 'sessions', sessionId, 'config.json'), `${JSON.stringify({ model: 'agent/gpt-5', modelEffort: 'low' }, null, 2)}\n`);
     writeFileSync(join(projectYeaftDir, 'sessions', sessionId, 'config.json'), `${JSON.stringify({ model: 'project/claude-sonnet', modelEffort: 'high' }, null, 2)}\n`);
 
