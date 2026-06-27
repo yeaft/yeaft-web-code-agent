@@ -31,7 +31,7 @@ describe('Yeaft conversation layout', () => {
     const zh = read('web/i18n/zh-CN.js');
 
     expect(source).toContain('class="yeaft-onboarding"');
-    expect(source).toContain("v-if=\"!showSettings && !store.yeaftActiveVpDetailId && showOnboardingGuide\"");
+    expect(source).toContain("v-if=\"!showSettings && showOnboardingGuide\"");
     expect(source).toContain('<ChatInput\n          v-if="!showSettings && !showOnboardingGuide"');
     expect(source).toContain('const showOnboardingGuide = Vue.computed(() => {');
     expect(source).toContain('shouldShowYeaftOnboardingGuide({');

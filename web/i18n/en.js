@@ -1181,8 +1181,6 @@ export default {
   'yeaft.vp.status.tool': 'using {name}',
   'yeaft.vp.status.done': 'done · {count} tools',
   'yeaft.vp.status.aborted': 'aborted',
-  'yeaft.vp.detail.info': 'Info',
-  'yeaft.vp.detail.close': 'Close',
 
   // ============ Yeaft VP CRUD (task-334-ui-g) ============
   'yeaft.vp.crud.title': 'VP Library',
@@ -1239,34 +1237,6 @@ export default {
   'yeaft.vp.idError.stock_readonly': 'Stock VPs cannot be edited or deleted.',
   'yeaft.vp.idError.unknown': 'An unexpected error occurred. Please try again.',
 
-  // ============ Yeaft VP Detail View (task-334-ui-c) ============
-  'yeaft.vp.detail.title': 'VP Detail',
-  'yeaft.vp.detail.back': 'Back to VP Library',
-  'yeaft.vp.detail.backAria': 'Return to VP Library (Esc)',
-  'yeaft.vp.detail.role': 'Role',
-  'yeaft.vp.detail.traits': 'Traits',
-  'yeaft.vp.detail.modelHint': 'Model Hint',
-  'yeaft.vp.detail.persona': 'Persona',
-  'yeaft.vp.detail.personaEmpty': '(no persona body loaded)',
-  'yeaft.vp.detail.activity': 'Recent Activity',
-  'yeaft.vp.detail.activityEmpty': 'No recent messages from this VP.',
-  'yeaft.vp.detail.activityPrivate': 'Task-private messages — coming soon.',
-  'yeaft.vp.detail.editHint': 'Edit via VP Library → CRUD (task-334-ui-g).',
-  'yeaft.vp.detail.personaHashAria': 'Persona content hash {hash}',
-  'yeaft.vp.detail.notFound': 'VP not found — it may have been removed.',
-  'yeaft.vp.detail.traitsEmpty': '(no traits)',
-  'yeaft.vp.detail.modelHintEmpty': '(default)',
-
-  // R6 G3 — dream activity status bar in VpDetailView.
-  'yeaft.vp.dream.aria': 'Dream activity',
-  'yeaft.vp.dream.runNow': 'Run dream now',
-  'yeaft.vp.dream.runNowAria': 'Manually trigger a dream cycle for this VP',
-  'yeaft.vp.dream.never': 'No dream cycle has run yet.',
-  'yeaft.vp.dream.running': 'Dream cycle running…',
-  'yeaft.vp.dream.lastRun': 'Last dream {relative} · {merged} memories merged',
-  'yeaft.vp.dream.skipped': 'Last dream skipped (nothing to merge).',
-  'yeaft.vp.dream.errored': 'Last dream {relative} · failed',
-  'yeaft.vp.dream.failed': 'Dream failed: {error}',
 
   // ============ Yeaft VP Live-diff Reasons (task-334-ui-c / O4) ============
   // Friendly messages surfaced when vp_updated / vp_removed events arrive.

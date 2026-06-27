@@ -1178,8 +1178,6 @@ export default {
   'yeaft.vp.status.tool': '正在使用 {name}',
   'yeaft.vp.status.done': '完成 · {count} 个工具',
   'yeaft.vp.status.aborted': '已中止',
-  'yeaft.vp.detail.info': '信息',
-  'yeaft.vp.detail.close': '关闭',
 
   // ============ Yeaft VP 增删改查 (task-334-ui-g) ============
   'yeaft.vp.crud.title': '角色库',
@@ -1236,34 +1234,6 @@ export default {
   'yeaft.vp.idError.stock_readonly': '预装 VP 不能编辑或删除。',
   'yeaft.vp.idError.unknown': '发生未知错误，请重试。',
 
-  // ============ Yeaft VP 详情页 (task-334-ui-c) ============
-  'yeaft.vp.detail.title': '角色详情',
-  'yeaft.vp.detail.back': '返回角色库',
-  'yeaft.vp.detail.backAria': '返回角色库（Esc）',
-  'yeaft.vp.detail.role': '角色',
-  'yeaft.vp.detail.traits': '特征',
-  'yeaft.vp.detail.modelHint': '模型偏好',
-  'yeaft.vp.detail.persona': '人设',
-  'yeaft.vp.detail.personaEmpty': '（未载入人设正文）',
-  'yeaft.vp.detail.activity': '最近活动',
-  'yeaft.vp.detail.activityEmpty': '该角色暂无最近消息。',
-  'yeaft.vp.detail.activityPrivate': '任务私信 — 即将推出。',
-  'yeaft.vp.detail.editHint': '在「角色库 → 编辑」中修改（task-334-ui-g）。',
-  'yeaft.vp.detail.personaHashAria': '人设内容哈希 {hash}',
-  'yeaft.vp.detail.notFound': '未找到该角色 — 可能已被移除。',
-  'yeaft.vp.detail.traitsEmpty': '（无特征）',
-  'yeaft.vp.detail.modelHintEmpty': '（默认）',
-
-  // R6 G3 — 梦境活动状态栏
-  'yeaft.vp.dream.aria': '梦境活动',
-  'yeaft.vp.dream.runNow': '立即运行梦境',
-  'yeaft.vp.dream.runNowAria': '为该角色手动触发一次梦境周期',
-  'yeaft.vp.dream.never': '尚未运行过梦境周期。',
-  'yeaft.vp.dream.running': '梦境周期运行中…',
-  'yeaft.vp.dream.lastRun': '上次梦境 {relative} · 合并 {merged} 条记忆',
-  'yeaft.vp.dream.skipped': '上次梦境被跳过（无可合并内容）。',
-  'yeaft.vp.dream.errored': '上次梦境 {relative} · 失败',
-  'yeaft.vp.dream.failed': '梦境失败：{error}',
 
   // ============ Yeaft VP live-diff 事件原因 (task-334-ui-c / O4) ============
   // vp_updated / vp_removed 事件到达时显示给用户的人话文案。

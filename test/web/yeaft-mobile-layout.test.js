@@ -164,7 +164,6 @@ describe('Yeaft mobile layout CSS', () => {
     const vpCss = read('styles/yeaft-vp.css');
     const vpMobile = mediaBlock(vpCss, '(max-width: 640px)', '.vp-turn-block-main-header');
     expect(vpMobile).toContain('.vp-turn-block-main-header');
-    expect(vpMobile).toContain('.vp-detail-dream-row');
     expect(vpMobile).toContain('flex-wrap: wrap');
   });
 });
