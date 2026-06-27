@@ -357,14 +357,52 @@ async function spawnWindowsUpgradeScript(pkgName, installDir, isGlobalInstall, l
   ];
   writeFileSync(vbsPath, vbsLines.join('\r\n'));
 
-  spawn('wscript.exe', [vbsPath], {
+  const launcher = await launchWindowsUpgradeScript({ vbsPath, batPath });
+
+  console.log(`[Agent] Spawned upgrade via ${launcher} (PID wait for ${pid}, pm2=${isPm2}, dir=${installDir}): ${batPath}`);
+  await sendToServer({ type: 'upgrade_agent_ack', success: true, version: latestVersion, pendingRestart: true });
+}
+
+function spawnDetached(command, args, options) {
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawn(command, args, options);
+    } catch (e) {
+      reject(e);
+      return;
+    }
+
+    const onError = (e) => reject(e);
+    child.once('error', onError);
+    child.once('spawn', () => {
+      child.removeListener('error', onError);
+      child.unref();
+      resolve();
+    });
+  });
+}
+
+function quoteCmdPath(path) {
+  return `"${String(path).replace(/"/g, '""')}"`;
+}
+
+export async function launchWindowsUpgradeScript({ vbsPath, batPath }) {
+  const detachedOptions = {
     detached: true,
     stdio: 'ignore',
     windowsHide: true,
-  }).unref();
+  };
 
-  console.log(`[Agent] Spawned upgrade via VBScript (PID wait for ${pid}, pm2=${isPm2}, dir=${installDir}): ${batPath}`);
-  await sendToServer({ type: 'upgrade_agent_ack', success: true, version: latestVersion, pendingRestart: true });
+  try {
+    await spawnDetached('wscript.exe', [vbsPath], detachedOptions);
+    return 'VBScript';
+  } catch (e) {
+    console.warn(`[Agent] wscript.exe upgrade launcher failed (${e.message}); falling back to cmd.exe`);
+  }
+
+  await spawnDetached('cmd.exe', ['/d', '/s', '/c', quoteCmdPath(batPath)], detachedOptions);
+  return 'cmd.exe';
 }
 
 /**
