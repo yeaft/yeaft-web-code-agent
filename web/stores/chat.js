@@ -594,12 +594,6 @@ export const useChatStore = defineStore('chat', {
     // hydration from SSR / rehydration doesn't trip on a non-Map value.
     _vpCrudPending: null,
 
-    // ★ task-334-ui-c: VP detail view. When non-null, YeaftPage switches
-    // the center pane to the VpDetailView component (mirrors the
-    // task-315 pattern). Esc / breadcrumb back clears. Stays null in
-    // legacy 1:1 mode — only entered by clicking a VpAvatar/VpBadge in
-    // a VP-speaker-headed turn or a VP library row.
-    yeaftActiveVpDetailId: null,
 
     // VP-block redesign (2026-05-08): the per-turn detail drawer
     // (`yeaftOpenVpTurnDetail`) was retired alongside VpQuickCard /
@@ -2642,8 +2636,8 @@ export const useChatStore = defineStore('chat', {
         // agent/yeaft/web-bridge.js handleYeaftDreamTrigger.
         // yeaft_dream_status carries { vpId, status: 'running' } during the
         // run; yeaft_dream_result carries { vpId, success, mergedCount, ... }
-        // when finished. Both flow into vpStore.dreamStatus[vpId] so the
-        // VpDetailView status bar can update without polling.
+        // when finished. Both flow into vpStore.dreamStatus[vpId] so inline
+        // status surfaces can update without polling.
         case 'yeaft_dream_status': {
           const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
           if (vp) vp.applyDreamStatus(event);
@@ -3177,14 +3171,6 @@ export const useChatStore = defineStore('chat', {
         }
         this.sendWsMessage(payload);
       }
-    },
-    // ★ task-334-ui-c: VP detail view entry / exit.
-    enterVpDetailView(vpId) {
-      if (!vpId) return;
-      this.yeaftActiveVpDetailId = String(vpId);
-    },
-    leaveVpDetailView() {
-      this.yeaftActiveVpDetailId = null;
     },
     // H2.f.6: setYeaftFeatureReplyThreadId / setYeaftJumpTarget /
     // clearYeaftJumpTarget actions removed.
