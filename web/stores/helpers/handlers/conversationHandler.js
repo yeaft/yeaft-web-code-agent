@@ -127,12 +127,25 @@ function rowSessionId(row) {
   return row ? (row.sessionId ?? row.groupId ?? null) : null;
 }
 
+function isOptimisticYeaftUserRow(row) {
+  if (!row || row.type !== 'user' || !row.clientMessageId) return false;
+  const id = stableHistoryRowId(row);
+  // sendYeaftSessionMessage creates the local row with id/messageId equal to
+  // clientMessageId. Once persisted history echoes it back, id/messageId become
+  // the durable message id while clientMessageId remains only a dedup key.
+  return id === row.clientMessageId;
+}
+
 function replaceYeaftRecentHistoryRows(existingRows, incomingRows, sessionId) {
   const newestIncomingTs = incomingRows.reduce((max, row) => Math.max(max, row?.timestamp || 0), 0);
   const preserved = existingRows.filter((row) => {
     if (!row) return false;
     if (sessionId != null && rowSessionId(row) !== sessionId) return true;
     if (row.isStreaming) return true;
+    // A recent-history reply can race a just-sent optimistic user row. Do not
+    // delete that accepted input merely because the persisted window has not
+    // flushed it yet or the server clock is ahead of the browser clock.
+    if (isOptimisticYeaftUserRow(row)) return true;
     // A manual refresh can race a just-sent local row that is newer than the
     // persisted recent window. Keep that live tail; the next delta/recent load
     // will merge it by stable id once the agent has flushed it to disk.
