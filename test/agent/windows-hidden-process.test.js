@@ -31,7 +31,10 @@ vi.mock('child_process', () => ({
     child.stdin = new FakeWritable();
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
-    child.kill = vi.fn();
+    child.kill = vi.fn(() => {
+      queueMicrotask(() => child.emit('close', null));
+      return true;
+    });
     child.command = command;
     child.args = args;
     child.options = options;
@@ -63,10 +66,15 @@ const bashTool = (await import('../../agent/yeaft/tools/bash.js')).default;
 const grepTool = (await import('../../agent/yeaft/tools/grep.js')).default;
 const enterWorktreeTool = (await import('../../agent/yeaft/tools/enter-worktree.js')).default;
 const exitWorktreeTool = (await import('../../agent/yeaft/tools/exit-worktree.js')).default;
-const { createMCPManager } = await import('../../agent/yeaft/mcp.js');
+const {
+  createMCPManager,
+  __mcpConnectionPoolSizeForTests,
+  __resetMcpConnectionPoolForTests,
+} = await import('../../agent/yeaft/mcp.js');
 const { listCopilotModels, _resetCopilotModelsCacheForTests } = await import('../../agent/providers/copilot-models.js');
 
-afterEach(() => {
+afterEach(async () => {
+  await __resetMcpConnectionPoolForTests();
   spawns.length = 0;
   execFileSyncCalls.length = 0;
   _resetCopilotModelsCacheForTests();
@@ -125,6 +133,27 @@ describe('Windows hidden non-interactive process launches', () => {
       args: ['fake-mcp.js'],
       options: expect.objectContaining({ windowsHide: true }),
     });
+  });
+
+  it('reuses stdio MCP server processes for identical configs until the last manager disconnects', async () => {
+    const config = { mcp_servers: [{ name: 'fake', command: 'node', args: ['fake-mcp.js'], env: { B: '2', A: '1' } }] };
+    const first = await createMCPManager(config);
+    const second = await createMCPManager({
+      mcp_servers: [{ name: 'fake', command: 'node', args: ['fake-mcp.js'], env: { A: '1', B: '2' } }],
+    });
+
+    expect(spawns).toHaveLength(1);
+    expect(__mcpConnectionPoolSizeForTests()).toBe(1);
+    expect(first.status()).toEqual([{ name: 'fake', ready: true, toolCount: 0 }]);
+    expect(second.status()).toEqual([{ name: 'fake', ready: true, toolCount: 0 }]);
+
+    await first.disconnectAll();
+    expect(spawns[0].kill).not.toHaveBeenCalled();
+    expect(__mcpConnectionPoolSizeForTests()).toBe(1);
+
+    await second.disconnectAll();
+    expect(spawns[0].kill).toHaveBeenCalledWith('SIGTERM');
+    expect(__mcpConnectionPoolSizeForTests()).toBe(0);
   });
 
   it('does not crash the agent when an MCP server writes stderr without an error listener', async () => {

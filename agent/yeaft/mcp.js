@@ -34,6 +34,71 @@ const DEFAULT_TIMEOUT_MS = 30000;
 /** Server startup timeout (10 seconds). */
 const STARTUP_TIMEOUT_MS = 10000;
 
+// ─── Process-level connection pool ────────────────────────────
+
+/** @type {Map<string, { connection: MCPServerConnection, refs: number, startPromise: Promise<void> }>} */
+const mcpConnectionPool = new Map();
+
+function stableEnv(env = {}) {
+  return Object.fromEntries(
+    Object.entries(env || {})
+      .filter(([, value]) => value !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b))
+  );
+}
+
+function mcpConnectionKey(config) {
+  return JSON.stringify({
+    name: config.name,
+    command: config.command,
+    args: Array.isArray(config.args) ? config.args : [],
+    env: stableEnv(config.env),
+  });
+}
+
+async function acquireMcpConnection(serverConfig) {
+  const key = mcpConnectionKey(serverConfig);
+  let entry = mcpConnectionPool.get(key);
+  if (!entry) {
+    const connection = new MCPServerConnection(serverConfig.name, serverConfig);
+    entry = {
+      connection,
+      refs: 0,
+      startPromise: connection.start(),
+    };
+    connection.once('close', () => {
+      if (mcpConnectionPool.get(key) === entry) {
+        mcpConnectionPool.delete(key);
+      }
+    });
+    mcpConnectionPool.set(key, entry);
+  }
+
+  entry.refs += 1;
+  try {
+    await entry.startPromise;
+    return { key, connection: entry.connection };
+  } catch (err) {
+    entry.refs -= 1;
+    if (entry.refs <= 0 && mcpConnectionPool.get(key) === entry) {
+      mcpConnectionPool.delete(key);
+    }
+    throw err;
+  }
+}
+
+async function releaseMcpConnection(key, connection) {
+  const entry = mcpConnectionPool.get(key);
+  if (!entry || entry.connection !== connection) {
+    await connection.stop();
+    return;
+  }
+  entry.refs -= 1;
+  if (entry.refs > 0) return;
+  mcpConnectionPool.delete(key);
+  await connection.stop();
+}
+
 // ─── MCP Server Connection ─────────────────────────────────
 
 /**
@@ -46,6 +111,7 @@ class MCPServerConnection extends EventEmitter {
   #pendingRequests;
   #tools;
   #ready;
+  #closed;
   #buffer;
 
   /**
@@ -59,6 +125,7 @@ class MCPServerConnection extends EventEmitter {
     this.#pendingRequests = new Map();
     this.#tools = [];
     this.#ready = false;
+    this.#closed = false;
     this.#buffer = '';
     this.config = config;
   }
@@ -102,6 +169,7 @@ class MCPServerConnection extends EventEmitter {
 
         this.#process.on('close', (code) => {
           this.#ready = false;
+          this.#closed = true;
           this.emit('close', code);
           // Reject all pending requests
           for (const [, { reject: rej }] of this.#pendingRequests) {
@@ -252,9 +320,16 @@ class MCPServerConnection extends EventEmitter {
     if (this.#process) {
       this.#ready = false;
       this.#process.kill('SIGTERM');
-      // Wait a bit then force kill
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      if (this.#process && !this.#process.killed) {
+      // Wait a bit then force kill. Test fakes do not emit close, so cap the
+      // wait at 2s and do not require a close event for cleanup to finish.
+      await Promise.race([
+        new Promise(resolve => {
+          if (this.#closed) return resolve();
+          this.#process.once('close', resolve);
+        }),
+        new Promise(resolve => setTimeout(resolve, 2000)),
+      ]);
+      if (this.#process && !this.#process.killed && !this.#closed) {
         this.#process.kill('SIGKILL');
       }
       this.#process = null;
@@ -268,7 +343,7 @@ class MCPServerConnection extends EventEmitter {
  * MCPManager — manages multiple MCP server connections.
  */
 export class MCPManager {
-  /** @type {Map<string, MCPServerConnection>} */
+  /** @type {Map<string, { key: string, connection: MCPServerConnection }>} */
   #servers = new Map();
 
   /** @type {Map<string, object>} */
@@ -288,10 +363,10 @@ export class MCPManager {
       await this.disconnect(name);
     }
 
-    const connection = new MCPServerConnection(name, serverConfig);
-    await connection.start();
+    const pooled = await acquireMcpConnection(serverConfig);
+    const connection = pooled.connection;
 
-    this.#servers.set(name, connection);
+    this.#servers.set(name, pooled);
 
     // Index tools
     for (const tool of connection.tools) {
@@ -329,14 +404,15 @@ export class MCPManager {
    * @param {string} name — server name
    */
   async disconnect(name) {
-    const connection = this.#servers.get(name);
-    if (connection) {
+    const entry = this.#servers.get(name);
+    if (entry) {
+      const connection = entry.connection;
       // Remove tools from index
       for (const tool of connection.tools) {
         this.#toolIndex.delete(tool.name);
       }
-      await connection.stop();
       this.#servers.delete(name);
+      await releaseMcpConnection(entry.key, connection);
     }
   }
 
@@ -400,7 +476,7 @@ export class MCPManager {
    * @returns {{ name: string, ready: boolean, toolCount: number }[]}
    */
   status() {
-    return [...this.#servers.entries()].map(([name, conn]) => ({
+    return [...this.#servers.entries()].map(([name, { connection: conn }]) => ({
       name,
       ready: conn.ready,
       toolCount: conn.tools.length,
@@ -438,4 +514,15 @@ export async function createMCPManager(config) {
   }
 
   return manager;
+}
+
+export async function __resetMcpConnectionPoolForTests({ stop = true } = {}) {
+  const entries = [...mcpConnectionPool.values()];
+  mcpConnectionPool.clear();
+  if (!stop) return;
+  await Promise.all(entries.map(entry => entry.connection.stop().catch(() => {})));
+}
+
+export function __mcpConnectionPoolSizeForTests() {
+  return mcpConnectionPool.size;
 }
