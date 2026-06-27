@@ -7,6 +7,7 @@ import {
   mergeMessagesByStableId,
   shouldCatchUpLoadedYeaftSession,
   shouldForceHydrateActiveYeaftSession,
+  shouldReplayYeaftSessionHistory,
 } from '../../../web/stores/helpers/messages.js';
 
 function mkStore() {
@@ -174,5 +175,28 @@ describe('Yeaft history replay message dedupe', () => {
       loading: false,
       latestSeq: null,
     }, true)).toBe(false);
+  });
+
+  it('forces a recent replay for explicit session hydrate even when stale rows are cached', () => {
+    expect(shouldReplayYeaftSessionHistory({
+      sessionState: { loaded: false, loading: false },
+      hasCachedSessionRows: true,
+      force: false,
+    })).toBe(false);
+    expect(shouldReplayYeaftSessionHistory({
+      sessionState: { loaded: false, loading: false },
+      hasCachedSessionRows: true,
+      force: true,
+    })).toBe(true);
+    expect(shouldReplayYeaftSessionHistory({
+      sessionState: { loaded: true, loading: false },
+      hasCachedSessionRows: true,
+      force: true,
+    })).toBe(false);
+    expect(shouldReplayYeaftSessionHistory({
+      sessionState: { loaded: false, loading: true },
+      hasCachedSessionRows: true,
+      force: true,
+    })).toBe(false);
   });
 });

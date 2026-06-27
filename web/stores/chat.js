@@ -1132,7 +1132,7 @@ export const useChatStore = defineStore('chat', {
       // a redundant second catch-up on the next routine agent_list.
       this._yeaftReconnectCatchUpPending = false;
       this.loadOpenedYeaftSessionsForConnectedAgents(null, { force: true });
-      this.requestYeaftSessionBootstrap({ forceSessionReady: true, catchUpHistory: true });
+      this.requestYeaftSessionBootstrap({ forceSessionReady: true, catchUpHistory: true, forceHistoryReplay: true });
     },
 
     loadOpenedYeaftSessionsForConnectedAgents(agentIds = null, { force = false } = {}) {
@@ -1156,7 +1156,7 @@ export const useChatStore = defineStore('chat', {
       return requested;
     },
 
-    requestYeaftSessionBootstrap({ forceSessionReady = false, catchUpHistory = false } = {}) {
+    requestYeaftSessionBootstrap({ forceSessionReady = false, catchUpHistory = false, forceHistoryReplay = false } = {}) {
       if (!this.currentAgent) return;
       const activeSessionId = resolveActiveYeaftSessionId(this);
       const sessionState = activeSessionId
@@ -1169,10 +1169,13 @@ export const useChatStore = defineStore('chat', {
         && Array.isArray(this.messagesMap?.[this.yeaftConversationId])
         && this.messagesMap[this.yeaftConversationId].some(row => row && (row.sessionId ?? row.groupId ?? null) === activeSessionId);
       const needHistoryReplay = !!activeSessionId
-        && !sessionState?.loading
-        && !sessionState?.loaded
-        && !hasCachedSessionRows;
+        && msgHelpers.shouldReplayYeaftSessionHistory({
+          sessionState,
+          hasCachedSessionRows,
+          force: !!forceHistoryReplay,
+        });
       const needHistoryCatchUp = !!activeSessionId
+        && !needHistoryReplay
         && msgHelpers.shouldCatchUpLoadedYeaftSession(sessionState, catchUpHistory);
       if (!needSessionReady && !needHistoryReplay && !needHistoryCatchUp) return false;
       // Route session-scoped history through the single resolver (sessions
@@ -3125,12 +3128,17 @@ export const useChatStore = defineStore('chat', {
           sessionId: next,
         };
         const hasLoadedWindow = !!savedState?.loaded;
-        if (latestSeq !== null) {
+        const shouldReplayRecent = msgHelpers.shouldReplayYeaftSessionHistory({
+          sessionState: savedState,
+          hasCachedSessionRows: false,
+          force,
+        });
+        if (!shouldReplayRecent && latestSeq !== null) {
           payload.afterSeq = latestSeq;
         } else {
           payload.limit = YEAFT_RECENT_TURNS;
         }
-        if (hasLoadedWindow && latestSeq === null) {
+        if (!shouldReplayRecent && hasLoadedWindow && latestSeq === null) {
           this.yeaftSessionHistoryState = {
             ...this.yeaftSessionHistoryState,
             [sessionKey]: {
@@ -3143,7 +3151,7 @@ export const useChatStore = defineStore('chat', {
           this.yeaftLoadingMoreHistory = false;
           return;
         }
-        if (hasLoadedWindow) {
+        if (!shouldReplayRecent && hasLoadedWindow) {
           if (savedState?.syncingAfterSeq === latestSeq) return;
           this.yeaftSessionHistoryState = {
             ...this.yeaftSessionHistoryState,
@@ -3164,7 +3172,7 @@ export const useChatStore = defineStore('chat', {
               loaded: false,
               loading: true,
               syncingAfterSeq: null,
-              latestSeq,
+              latestSeq: shouldReplayRecent ? null : latestSeq,
             },
           };
           this.yeaftLoadingMoreHistory = true;
