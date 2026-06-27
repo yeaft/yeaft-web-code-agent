@@ -159,6 +159,13 @@ export function shouldCatchUpLoadedYeaftSession(sessionState, catchUpHistory) {
     && Number.isFinite(sessionState?.latestSeq);
 }
 
+export function shouldReplayYeaftSessionHistory({ sessionState, hasCachedSessionRows, force = false } = {}) {
+  if (sessionState?.loading) return false;
+  if (force) return !sessionState?.loaded;
+  if (sessionState?.loaded) return false;
+  return !hasCachedSessionRows;
+}
+
 function mergeAssistantTextByStableId(store, conversationId, opts, text) {
   const stableId = opts?.id ? String(opts.id) : null;
   if (!stableId) return false;

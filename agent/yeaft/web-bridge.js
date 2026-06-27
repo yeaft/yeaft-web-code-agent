@@ -1190,6 +1190,12 @@ export function __testGroupHistory(sessionId) {
   return getOrCreateSessionHistory(sessionId);
 }
 
+export function __testResolveVpEffectiveConfig(sessionId) {
+  if (!session) return null;
+  const sessionConfigRoot = session.yeaftDir || ctx.CONFIG?.yeaftDir;
+  return resolveSessionConfig(session.config, loadSessionConfig(sessionConfigRoot, sessionId));
+}
+
 /**
  * Test-only: install a minimal `session` so `hydrateGroupHistory` can
  * read from a real `ConversationStore`. Pass `null` to clear.
@@ -1293,11 +1299,14 @@ function getOrCreateVpEngine(sessionId, vpId, threadId = 'main') {
   let eng = vpEngines.get(key);
   if (eng) return eng;
   if (!session) throw new Error('getOrCreateVpEngine: session not loaded');
-  // Per-group config overlay (v1: model only). Falls back to the
-  // session's user-level config when no override is set. The resolver
-  // never mutates session.config — it returns a new object.
-  const yeaftDir = ctx.CONFIG?.yeaftDir || session.yeaftDir;
-  const groupCfg = loadSessionConfig(yeaftDir, sessionId);
+  // Per-session config overlay (v1: model only). Falls back to the
+  // session's user-level config when no override is set. Use the runtime's
+  // storage root, not the agent-local config dir: workDir-backed sessions keep
+  // config.json under <workDir>/.yeaft/sessions/<id>/, and loading from the
+  // wrong root makes first turns use the wrong model until the user manually
+  // switches models.
+  const sessionConfigRoot = session.yeaftDir || ctx.CONFIG?.yeaftDir;
+  const groupCfg = loadSessionConfig(sessionConfigRoot, sessionId);
   const effectiveConfig = resolveSessionConfig(session.config, groupCfg);
   eng = new Engine({
     adapter: session.adapter,

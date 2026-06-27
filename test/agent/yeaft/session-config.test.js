@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../../../agent/yeaft/config.js';
 import { loadSession } from '../../../agent/yeaft/session.js';
+import { __testResolveVpEffectiveConfig, __testSetSession } from '../../../agent/yeaft/web-bridge.js';
 import { loadSessionConfig, resolveSessionConfig, saveSessionConfig } from '../../../agent/yeaft/sessions/session-config.js';
 import { createSession } from '../../../agent/yeaft/sessions/session-store.js';
 import { registerSessionWorkDir, sessionsRoot } from '../../../agent/yeaft/sessions/session-crud.js';
@@ -102,6 +103,31 @@ describe('Yeaft session-scoped model config', () => {
     expect(config.primaryModel).toBe(null);
     expect(config.model).toBe('github-copilot/gpt-5.5');
     expect(effective.model).toBe('github-copilot/gpt-5.5');
+  });
+
+  it('uses the workDir-backed session root for VP engine model overrides', () => {
+    const root = makeDir();
+    const workDir = tempRoot('yeaft-session-config-workdir-');
+    const projectYeaftDir = join(workDir, '.yeaft');
+    const sessionId = 'session-workdir-engine';
+    mkdirSync(join(root, 'sessions', sessionId), { recursive: true });
+    mkdirSync(join(projectYeaftDir, 'sessions', sessionId), { recursive: true });
+    writeFileSync(join(root, 'sessions', sessionId, 'config.json'), `${JSON.stringify({ model: 'agent/gpt-5', modelEffort: 'low' }, null, 2)}\n`);
+    writeFileSync(join(projectYeaftDir, 'sessions', sessionId, 'config.json'), `${JSON.stringify({ model: 'project/claude-sonnet', modelEffort: 'high' }, null, 2)}\n`);
+
+    try {
+      __testSetSession({
+        yeaftDir: projectYeaftDir,
+        config: { model: 'agent/default', primaryModel: 'agent/default', modelEffort: 'medium' },
+        conversationStore: { loadRecentBySession: () => [] },
+      });
+      const effective = __testResolveVpEffectiveConfig(sessionId);
+      expect(effective.model).toBe('project/claude-sonnet');
+      expect(effective.primaryModel).toBe('project/claude-sonnet');
+      expect(effective.modelEffort).toBe('high');
+    } finally {
+      __testSetSession(null);
+    }
   });
 
   it('loads runtime config from agent root while storing workDir session data under project .yeaft', async () => {
