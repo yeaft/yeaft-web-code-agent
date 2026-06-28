@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import ctx from '../../../agent/context.js';
 import { loadConfig } from '../../../agent/yeaft/config.js';
+import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { loadSession } from '../../../agent/yeaft/session.js';
-import { __testResolveVpEffectiveConfig, __testSetSession } from '../../../agent/yeaft/web-bridge.js';
+import { __testGetOrCreateVpEngine, __testResolveVpEffectiveConfig, __testSetSession } from '../../../agent/yeaft/web-bridge.js';
 import { loadSessionConfig, resolveSessionConfig, saveSessionConfig } from '../../../agent/yeaft/sessions/session-config.js';
 import { createSession } from '../../../agent/yeaft/sessions/session-store.js';
 import { registerSessionWorkDir, sessionsRoot, snapshotSessions, updateSessionConfig } from '../../../agent/yeaft/sessions/session-crud.js';
@@ -159,6 +160,41 @@ describe('Yeaft session-scoped model config', () => {
     expect(effective.model).toBe('project/claude-sonnet');
     expect(effective.primaryModel).toBe('project/claude-sonnet');
     expect(effective.modelEffort).toBe('high');
+  });
+
+  it('rebuilds a cached VP engine when the session model config changes on disk', () => {
+    const root = makeDir();
+    const sessionId = 'session-engine-refresh';
+    mkdirSync(join(root, 'sessions', sessionId), { recursive: true });
+    writeFileSync(join(root, 'sessions', sessionId, 'session.json'), `${JSON.stringify({ id: sessionId, name: 'Engine refresh', roster: ['vp-a'], defaultVpId: 'vp-a' }, null, 2)}\n`);
+    ctx.CONFIG = { yeaftDir: root };
+    __testSetSession({
+      yeaftDir: root,
+      adapter: { stream: async function* () {}, call: async () => ({ text: '', usage: {} }) },
+      trace: new NullTrace(),
+      config: { model: 'agent/default', primaryModel: 'agent/default', modelEffort: 'medium', dir: root },
+      conversationStore: { loadRecentBySession: () => [], readCompactSummary: () => '' },
+      memoryIndex: null,
+      amsRegistry: null,
+      toolRegistry: null,
+      skillManager: null,
+      mcpManager: null,
+      taskManager: { renderActiveTasksForPrompt: () => '' },
+      toolStats: null,
+    });
+    saveSessionConfig(root, sessionId, { model: 'project/claude-sonnet', modelEffort: 'high' });
+    const first = __testGetOrCreateVpEngine(sessionId, 'vp-a', 'main');
+    saveSessionConfig(root, sessionId, { model: 'project/gpt-5', modelEffort: 'max' });
+
+    const second = __testGetOrCreateVpEngine(sessionId, 'vp-a', 'main');
+    const effective = __testResolveVpEffectiveConfig(sessionId);
+
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    expect(second).not.toBe(first);
+    expect(effective.model).toBe('project/gpt-5');
+    expect(effective.primaryModel).toBe('project/gpt-5');
+    expect(effective.modelEffort).toBe('max');
   });
 
   it('keeps agent-local overrides available after a workDir-backed runtime booted first', () => {

@@ -91,6 +91,10 @@ let sessionLoadPromise = null;
 
 let threadClassifier = defaultClassifyThread;
 
+function liveConfigRoot() {
+  return session?.config?.dir || ctx.CONFIG?.yeaftDir || session?.yeaftDir;
+}
+
 function applyLiveLanguage(language) {
   if (!language || typeof language !== 'string') return;
   if (session?.config && typeof session.config === 'object') {
@@ -105,7 +109,7 @@ function applyLiveLanguage(language) {
 function refreshLiveSessionConfig() {
   if (!session) return;
   try {
-    const freshConfig = loadConfig({ dir: session.yeaftDir || ctx.CONFIG?.yeaftDir });
+    const freshConfig = loadConfig({ dir: liveConfigRoot() });
     const freshModels = Array.isArray(freshConfig.availableModels) ? freshConfig.availableModels : [];
     session.config.availableModels = freshModels;
     if (freshConfig.language) {
@@ -317,6 +321,8 @@ const vpInboxes = new Map();
 const vpDrivers = new Map();
 /** @type {Map<string, import('./engine.js').Engine>} */
 const vpEngines = new Map();
+/** @type {Map<string, string>} */
+const vpEngineConfigKeys = new Map();
 /** @type {Map<string, AbortController>} */
 const vpAborts = new Map();
 
@@ -402,6 +408,17 @@ function vpKey(sessionId, vpId) {
 
 function threadKey(sessionId, vpId, threadId) {
   return `${sessionId}::${vpId}::${threadId || 'main'}`;
+}
+
+function engineConfigKey(config) {
+  return JSON.stringify({
+    model: config?.model || '',
+    primaryModel: config?.primaryModel || '',
+    modelEffort: config?.modelEffort || '',
+    fastModel: config?.fastModel || '',
+    fastModelId: config?.fastModelId || '',
+    fallbackModel: config?.fallbackModel || '',
+  });
 }
 
 function normalizeSessionWorkDir(workDir) {
@@ -1192,7 +1209,7 @@ export function __testGroupHistory(sessionId) {
 
 export function __testResolveVpEffectiveConfig(sessionId) {
   if (!session) return null;
-  const sessionConfigRoot = ctx.CONFIG?.yeaftDir || session.yeaftDir;
+  const sessionConfigRoot = liveConfigRoot();
   return resolveSessionConfig(session.config, loadSessionConfig(sessionConfigRoot, sessionId));
 }
 
@@ -1296,17 +1313,23 @@ function isPermissionErrorMsg(msg) {
  */
 function getOrCreateVpEngine(sessionId, vpId, threadId = 'main') {
   const key = threadKey(sessionId, vpId, threadId);
-  let eng = vpEngines.get(key);
-  if (eng) return eng;
   if (!session) throw new Error('getOrCreateVpEngine: session not loaded');
   // Per-session config overlay (v1: model only). Falls back to the
   // session's user-level config when no override is set. Prefer the agent-local
   // config root: sessionConfigPath() resolves registered workDir-backed
   // sessions from there, while still allowing a later agent-local session in
   // the same bridge runtime to read its own override after a workDir-first boot.
-  const sessionConfigRoot = ctx.CONFIG?.yeaftDir || session.yeaftDir;
+  const sessionConfigRoot = liveConfigRoot();
   const groupCfg = loadSessionConfig(sessionConfigRoot, sessionId);
   const effectiveConfig = resolveSessionConfig(session.config, groupCfg);
+  const configKey = engineConfigKey(effectiveConfig);
+  let eng = vpEngines.get(key);
+  if (eng && vpEngineConfigKeys.get(key) === configKey) return eng;
+  if (eng) {
+    try { eng.abort?.('config_changed'); } catch { /* best-effort */ }
+    vpEngines.delete(key);
+    vpEngineConfigKeys.delete(key);
+  }
   eng = new Engine({
     adapter: session.adapter,
     trace: session.trace,
@@ -1342,6 +1365,7 @@ function getOrCreateVpEngine(sessionId, vpId, threadId = 'main') {
     }
   } catch { /* coordinator is best-effort plumbing, never block engine creation */ }
   vpEngines.set(key, eng);
+  vpEngineConfigKeys.set(key, configKey);
   return eng;
 }
 
@@ -1845,6 +1869,7 @@ export async function __testResetVpState() {
   vpInboxes.clear();
   vpDrivers.clear();
   vpEngines.clear();
+  vpEngineConfigKeys.clear();
   asyncTaskOwners.clear();
   vpAborts.clear();
   sessionContexts.clear();
@@ -2573,7 +2598,10 @@ export function handleYeaftUpdateSessionConfig(msg) {
     // Drop cached engines so the next VP turn rebuilds with the new model.
     const prefix = `${sessionId}::`;
     for (const k of Array.from(vpEngines.keys())) {
-      if (k.startsWith(prefix)) vpEngines.delete(k);
+      if (k.startsWith(prefix)) {
+        vpEngines.delete(k);
+        vpEngineConfigKeys.delete(k);
+      }
     }
     invalidateGroupContext(sessionId);
     sendSessionCrudResult({ op: 'update_config', requestId, ok: true, sessionId, config: savedConfig });
@@ -2630,7 +2658,10 @@ export function handleYeaftDeleteSession(msg) {
     invalidateGroupContext(sessionId);
     const prefix = `${sessionId}::`;
     for (const k of Array.from(vpEngines.keys())) {
-      if (k.startsWith(prefix)) vpEngines.delete(k);
+      if (k.startsWith(prefix)) {
+        vpEngines.delete(k);
+        vpEngineConfigKeys.delete(k);
+      }
     }
     sendSessionCrudResult({
       op: 'delete',
@@ -2675,7 +2706,10 @@ export function handleYeaftSessionRemoveMember(msg) {
     // added back they should start with fresh per-thread state.
     const removedPrefix = `${sessionId}::${vpId}::`;
     for (const key of Array.from(vpEngines.keys())) {
-      if (key.startsWith(removedPrefix)) vpEngines.delete(key);
+      if (key.startsWith(removedPrefix)) {
+        vpEngines.delete(key);
+        vpEngineConfigKeys.delete(key);
+      }
     }
     sendSessionCrudResult({ op: 'remove_member', requestId, ok: true, session: group });
     sendSessionRosterChanged(group);
@@ -5487,6 +5521,7 @@ export function handleYeaftModelSwitch(msg) {
   // Engines would otherwise keep the old effective config and drop newly
   // selected effort values until process restart.
   vpEngines.clear();
+  vpEngineConfigKeys.clear();
   asyncTaskOwners.clear();
 
   sendSessionEvent({
@@ -5843,6 +5878,7 @@ export async function resetYeaftSession() {
   vpInboxes.clear();
   vpDrivers.clear();
   vpEngines.clear();
+  vpEngineConfigKeys.clear();
   asyncTaskOwners.clear();
   sessionContexts.clear();
   vpCurrentTodos.clear();
