@@ -72,6 +72,49 @@ describe('buildRunDreamOpts session conversation wiring', () => {
     ]);
   });
 
+  it('reads session JSONL audit logs when conversation markdown is absent', async () => {
+    writeSessionJsonlMessage(testDir, 's-jsonl', {
+      id: 'u_01',
+      ts: '2026-06-12T00:00:00.000Z',
+      from: 'user',
+      role: 'user',
+      text: 'Dream must read the session JSONL audit log.',
+    });
+    writeSessionJsonlMessage(testDir, 's-jsonl', {
+      id: 'msg_02',
+      ts: '2026-06-12T00:01:00.000Z',
+      from: 'linus',
+      role: 'assistant',
+      text: 'JSONL assistant rows should preserve VP attribution.',
+    });
+
+    const opts = buildRunDreamOpts(fakeSession(testDir));
+
+    await expect(opts.listSessions()).resolves.toEqual(['s-jsonl']);
+    await expect(opts.countMessages('s-jsonl')).resolves.toBe(2);
+    await expect(opts.loadSessionDiff('s-jsonl', 'u_01')).resolves.toEqual([
+      { id: 'msg_02', role: 'assistant', body: 'JSONL assistant rows should preserve VP attribution.', vpId: 'linus' },
+    ]);
+  });
+
+  it('reads ConversationStore JSONL segments when markdown projection is absent', async () => {
+    writeConversationSegmentJsonlMessage(testDir, 's-segments', {
+      id: 'm0001',
+      time: '2026-06-12T00:00:00.000Z',
+      sessionId: 's-segments',
+      role: 'user',
+      content: 'ConversationStore JSONL rows are Dream input.',
+    });
+
+    const opts = buildRunDreamOpts(fakeSession(testDir));
+
+    await expect(opts.listSessions()).resolves.toEqual(['s-segments']);
+    await expect(opts.countMessages('s-segments')).resolves.toBe(1);
+    await expect(opts.loadSessionDiff('s-segments', null)).resolves.toEqual([
+      { id: 'm0001', role: 'user', body: 'ConversationStore JSONL rows are Dream input.' },
+    ]);
+  });
+
   it('lets runDream process sessions from session conversation messages instead of empty-running', async () => {
     writeSessionMessage(testDir, 's-live', 'm0001', 'user', 'remember that I prefer concise answers');
     writeSessionMessage(testDir, 's-live', 'm0002', 'assistant', 'I will keep the answer concise', { speakerVpId: 'vp-linus' });
@@ -352,4 +395,16 @@ function writeSessionMessage(root, sessionId, id, role, content, extra = {}, kin
     '---',
   ].join('\n');
   writeFileSync(join(dir, `${id}.md`), `${frontmatter}\n${content}\n`);
+}
+
+function writeSessionJsonlMessage(root, sessionId, row) {
+  const dir = join(root, 'sessions', sessionId, 'messages');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, '000001.jsonl'), `${JSON.stringify(row)}\n`, { flag: 'a' });
+}
+
+function writeConversationSegmentJsonlMessage(root, sessionId, row) {
+  const dir = join(root, 'sessions', sessionId, 'conversation', 'segments');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, '000001.jsonl'), `${JSON.stringify(row)}\n`, { flag: 'a' });
 }
