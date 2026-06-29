@@ -38,6 +38,7 @@ import {
   existsSync,
   renameSync,
   rmSync,
+  cpSync,
   readdirSync,
   statSync,
   mkdirSync,
@@ -156,101 +157,94 @@ export function unregisterSessionWorkDir(defaultYeaftDir, sessionId) {
 }
 
 /**
- * Scan the `.yeaft/sessions/` directory under `workDir` and return every
- * session meta we can read. Read-only: never touches the registry.
+ * One-way compatibility migration for sessions previously stored under a
+ * project `.yeaft/sessions` tree. New reads/writes never use that location, but
+ * older installs may still have their only `session.json` + conversation jsonl
+ * there and a `group-workdirs.json` registry entry pointing to it.
  *
- * Each returned record carries `workDir` (the normalized path we scanned).
- * This utility deliberately does NOT decorate `alreadyRegistered` — that
- * cross-references the central workdir registry, which is a separate
- * concern owned by the handler / caller (see
- * `handleYeaftScanWorkdirSessions`). Keeping the utility layer-pure makes
- * it usable from contexts that don't have / don't care about the registry
- * (e.g. CLI tools, future per-workdir snapshots).
+ * We copy missing session directories into the user-level root and never
+ * overwrite an existing user-level session. The old project directory is left in
+ * place as a safety backup; subsequent runtime paths ignore it.
  *
- * Returns `[]` for missing dir / empty dir / unreadable dir — never throws.
- * Sort is `createdAt` descending (most-recent first) because the restore
- * UI typically cares about "the session I made yesterday".
+ * @param {string} yeaftDir user-level Yeaft root
+ * @returns {{migrated:string[], skipped:string[], errors:Array<{sessionId:string,error:string}>}}
+ */
+export function migrateRegisteredWorkDirSessions(yeaftDir) {
+  const result = { migrated: [], skipped: [], errors: [] };
+  if (!yeaftDir) return result;
+  const registry = readWorkDirRegistry(yeaftDir);
+  const userRoot = sessionsRoot(yeaftDir);
+  for (const [sessionId, workDir] of Object.entries(registry)) {
+    const normalized = normalizeWorkDir(workDir);
+    if (!sessionId || !normalized) continue;
+    const sourceDir = join(sessionsRoot(yeaftDirForWorkDir(normalized)), sessionId);
+    const targetDir = join(userRoot, sessionId);
+    let tmpDir = null;
+    try {
+      if (existsSync(targetDir)) {
+        const targetMeta = loadSessionMeta(targetDir);
+        if (targetMeta) {
+          result.skipped.push(sessionId);
+        } else {
+          result.errors.push({ sessionId, error: 'target session directory exists but session metadata is invalid' });
+        }
+        continue;
+      }
+      const sourceMeta = existsSync(sourceDir) ? loadSessionMeta(sourceDir) : null;
+      if (!sourceMeta) {
+        result.skipped.push(sessionId);
+        continue;
+      }
+      mkdirSync(userRoot, { recursive: true });
+      tmpDir = join(userRoot, `.migrating-${sessionId}-${randomBytes(6).toString('hex')}`);
+      cpSync(sourceDir, tmpDir, { recursive: true, errorOnExist: true });
+      const copiedMeta = loadSessionMeta(tmpDir);
+      if (!copiedMeta || copiedMeta.id !== sessionId) {
+        throw new Error('copied session metadata failed validation');
+      }
+      renameSync(tmpDir, targetDir);
+      tmpDir = null;
+      result.migrated.push(sessionId);
+    } catch (err) {
+      if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+      result.errors.push({ sessionId, error: err?.message || String(err) });
+    }
+  }
+  return result;
+}
+
+/**
+ * Workdir Session storage was retired: Session metadata/roster/config/history
+ * live under the agent-local Yeaft root (`~/.yeaft/sessions`), not under a
+ * project `.yeaft/sessions` tree. Keep this helper as a compatibility no-op for
+ * older UI flows that may still ask to scan a workdir.
  *
  * @param {string} workDir — the working directory to scan.
  * @returns {Array<object>}
  */
 export function scanWorkdirSessions(workDir) {
-  const normalized = normalizeWorkDir(workDir);
-  if (!normalized) return [];
-  const groupYeaftDir = yeaftDirForWorkDir(normalized);
-  const root = sessionsRoot(groupYeaftDir);
-  if (!existsSync(root)) return [];
-  const out = [];
-  let entries;
-  try {
-    entries = readdirSync(root);
-  } catch {
-    return [];
-  }
-  for (const name of entries) {
-    if (name.startsWith('.')) continue; // skip .archived-* and dotfiles
-    const dir = join(root, name);
-    try { if (!statSync(dir).isDirectory()) continue; } catch { continue; }
-    const meta = loadSessionMeta(dir);
-    if (!meta) continue;
-    out.push({
-      ...meta,
-      workDir: normalized,
-    });
-  }
-  return out.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  return [];
 }
 
 /**
- * Register `(sessionId, workDir)` in the central registry so the next
- * `snapshotSessions()` includes this session.
- *
- * Validates that `<workDir>/.yeaft/sessions/<sessionId>/session.json`
- * exists and is parseable, with legacy `group.json` as a read fallback.
- * Throws:
- *  - `not_found`   — the session dir is not on disk at this workdir
- *  - `corrupt_meta` — the dir exists but session metadata is missing /
- *                    unreadable / can't be parsed. Surfaced as a distinct
- *                    code so the UI can tell the user "the file is broken"
- *                    instead of "you picked the wrong workdir" (review
- *                    finding I1).
- *
- * Idempotent: if the same `(sessionId, workDir)` is already registered,
- * we still rewrite the entry (with the normalized path) and return the
- * fresh meta — no error.
+ * Compatibility shim for the retired workdir-restore flow. Session metadata is
+ * no longer accepted from project `.yeaft/sessions`; users should create or load
+ * Sessions from the user-level `~/.yeaft/sessions` store.
  *
  * @param {string} defaultYeaftDir
  * @param {string} sessionId
  * @param {string} workDir
- * @returns {object} the session meta, with `workDir` set to the normalized path.
+ * @returns {object}
  */
 export function restoreSessionToRegistry(defaultYeaftDir, sessionId, workDir) {
   if (!sessionId) throw new SessionCrudError('invalid_session_id', null);
-  const normalized = normalizeWorkDir(workDir);
-  if (!normalized) throw new SessionCrudError('invalid_workdir', sessionId);
-  const groupYeaftDir = yeaftDirForWorkDir(normalized);
-  const dir = join(sessionsRoot(groupYeaftDir), sessionId);
-  if (!existsSync(dir)) throw new SessionCrudError('not_found', sessionId);
-  const meta = loadSessionMeta(dir);
-  if (!meta) throw new SessionCrudError('corrupt_meta', sessionId, `session metadata missing or unreadable at ${dir} (expected session.json or legacy group.json)`);
-  registerSessionWorkDir(defaultYeaftDir, sessionId, normalized);
-  return { ...meta, workDir: normalized };
+  throw new SessionCrudError('not_found', sessionId, 'workdir Session restore is retired; Sessions are stored under the user-level Yeaft folder');
 }
 
 export function resolveSessionYeaftDir(defaultYeaftDir, sessionId) {
-  if (!defaultYeaftDir || !sessionId) return defaultYeaftDir;
-
-  const registry = readWorkDirRegistry(defaultYeaftDir);
-  const workDir = normalizeWorkDir(registry[sessionId]);
-  if (workDir) {
-    const candidate = yeaftDirForWorkDir(workDir);
-    const candidateDir = join(sessionsRoot(candidate), sessionId);
-    if (existsSync(candidateDir) && loadSessionMeta(candidateDir)) return candidate;
-  }
-
-  const defaultSessionDir = join(sessionsRoot(defaultYeaftDir), sessionId);
-  if (existsSync(defaultSessionDir) && loadSessionMeta(defaultSessionDir)) return defaultYeaftDir;
-
+  // Legacy helper retained for old call sites. Session storage now always
+  // resolves to the agent-local root; project `.yeaft` is only for project
+  // assets such as skills/MCP, never Session data.
   return defaultYeaftDir;
 }
 
@@ -328,8 +322,7 @@ export function ensureDefaultSessionIfEmpty(yeaftDir, options = {}) {
 export function createSessionFromSpec(yeaftDir, spec, options = {}) {
   const input = spec || {};
   const normalizedWorkDir = normalizeWorkDir(input.workDir);
-  const groupYeaftDir = normalizedWorkDir ? yeaftDirForWorkDir(normalizedWorkDir) : yeaftDir;
-  const memoryRoot = options.memoryRoot || (groupYeaftDir ? join(groupYeaftDir, 'memory') : DEFAULT_MEMORY_ROOT);
+  const memoryRoot = options.memoryRoot || (yeaftDir ? join(yeaftDir, 'memory') : DEFAULT_MEMORY_ROOT);
   const libDir = options.libDir || DEFAULT_VP_LIB_DIR;
   const name = String(input.name || '').trim();
   if (!name) throw new SessionCrudError('invalid_name', null, 'group name required');
@@ -355,7 +348,7 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
   if (!defaultVpId) defaultVpId = roster[0] || null;
 
   const id = makeSessionId(name);
-  const root = sessionsRoot(groupYeaftDir);
+  const root = sessionsRoot(yeaftDir);
   if (existsSync(join(root, id))) {
     // Extremely unlikely (ulid suffix), but surface deterministically.
     throw new SessionCrudError('duplicate', id);
@@ -456,8 +449,7 @@ export function updateSessionConfig(yeaftDir, sessionId, partial) {
  * own second-confirm modal (acceptance #4 in task-334-slice-specs.md 334m).
  */
 export function archiveSession(yeaftDir, sessionId) {
-  const groupYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
-  const root = sessionsRoot(groupYeaftDir);
+  const root = sessionsRoot(yeaftDir);
   const srcDir = join(root, sessionId);
   // Idempotent — nothing on disk, nothing to archive. Workdir-registry is
   // still cleared in case it points at a stale row.
@@ -487,9 +479,8 @@ export function archiveSession(yeaftDir, sessionId) {
  * delete cleans up legacy state too.
  */
 export function deleteSession(yeaftDir, sessionId, options = {}) {
-  const groupYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
-  const memoryRoot = options.memoryRoot || (groupYeaftDir ? join(groupYeaftDir, 'memory') : DEFAULT_MEMORY_ROOT);
-  const root = sessionsRoot(groupYeaftDir);
+  const memoryRoot = options.memoryRoot || (yeaftDir ? join(yeaftDir, 'memory') : DEFAULT_MEMORY_ROOT);
+  const root = sessionsRoot(yeaftDir);
   const srcDir = join(root, sessionId);
   const liveExists = existsSync(srcDir) && !!loadSessionMeta(srcDir);
 
@@ -610,8 +601,7 @@ export function setSessionDefaultVp(yeaftDir, sessionId, vpId) {
 }
 
 export function requireSession(yeaftDir, sessionId) {
-  const groupYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
-  const root = sessionsRoot(groupYeaftDir);
+  const root = sessionsRoot(yeaftDir);
   const dir = join(root, sessionId);
   if (!existsSync(dir) || !loadSessionMeta(dir)) {
     throw new SessionCrudError('not_found', sessionId);
@@ -627,10 +617,8 @@ export function snapshotSessions(yeaftDir) {
   }
   const registry = readWorkDirRegistry(yeaftDir);
   for (const [sessionId, workDir] of Object.entries(registry)) {
-    const groupYeaftDir = yeaftDirForWorkDir(workDir);
-    const dir = join(sessionsRoot(groupYeaftDir), sessionId);
-    const meta = existsSync(dir) ? loadSessionMeta(dir) : null;
-    if (meta) byId.set(meta.id, meta);
+    const meta = byId.get(sessionId);
+    if (meta && !meta.workDir) meta.workDir = normalizeWorkDir(workDir);
   }
   // Attach per-group config overrides (v1: just `model`). Frontend can
   // render the effective model without re-querying.
