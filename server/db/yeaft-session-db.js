@@ -56,6 +56,7 @@ function mapRow(row) {
     // that field name during DB hydration.
     isPinned: row.is_pinned === 1,
     pinned: row.is_pinned === 1,
+    sortOrder: Number.isFinite(row.sort_order) ? row.sort_order : null,
   };
 }
 
@@ -157,6 +158,29 @@ export const yeaftSessionDb = {
    */
   setPinned(id, pinned) {
     stmts.setYeaftSessionPinned.run(pinned ? 1 : 0, Date.now(), id);
+  },
+
+  setOrderForAgent(userId, agentId, sessionIds) {
+    if (!userId || !agentId || !Array.isArray(sessionIds)) return false;
+    const owned = new Set(
+      stmts.getYeaftSessionsByAgent.all(agentId)
+        .filter(row => row && row.user_id === userId)
+        .map(row => row.id),
+    );
+    const seen = new Set();
+    const ordered = [];
+    for (const rawId of sessionIds) {
+      const id = typeof rawId === 'string' ? rawId : String(rawId || '');
+      if (!id || seen.has(id) || !owned.has(id)) continue;
+      seen.add(id);
+      ordered.push(id);
+    }
+    if (ordered.length === 0) return false;
+    const now = Date.now();
+    ordered.forEach((id, index) => {
+      stmts.setYeaftSessionSortOrder.run(index, now, id, userId, agentId);
+    });
+    return true;
   },
 
   /**

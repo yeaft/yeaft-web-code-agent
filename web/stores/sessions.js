@@ -14,7 +14,51 @@
  * `activeSessionId` is a pure UI pointer (which session the main pane shows).
  */
 
-import { sortSessionsByActivity } from './helpers/session-order.js';
+import { compareSessionsByActivity } from './helpers/session-order.js';
+
+const MANUAL_SESSION_ORDER_KEY = 'yeaft-session-order-by-agent';
+
+function readManualSessionOrder() {
+  try {
+    if (typeof localStorage === 'undefined') return {};
+    const parsed = JSON.parse(localStorage.getItem(MANUAL_SESSION_ORDER_KEY) || '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_) { return {}; }
+}
+
+function writeManualSessionOrder(value) {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(MANUAL_SESSION_ORDER_KEY, JSON.stringify(value && typeof value === 'object' ? value : {}));
+    }
+  } catch (_) {}
+}
+
+function normalizeOrderList(ids) {
+  const out = [];
+  const seen = new Set();
+  for (const rawId of Array.isArray(ids) ? ids : []) {
+    const id = typeof rawId === 'string' ? rawId : String(rawId || '');
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+function applyManualOrder(ids, orderedIds) {
+  const current = normalizeOrderList(ids);
+  const currentSet = new Set(current);
+  const ordered = normalizeOrderList(orderedIds).filter(id => currentSet.has(id));
+  const orderedSet = new Set(ordered);
+  return [...ordered, ...current.filter(id => !orderedSet.has(id))];
+}
+
+export const __test__ = {
+  MANUAL_SESSION_ORDER_KEY,
+  normalizeOrderList,
+  applyManualOrder,
+};
 
 const { defineStore } = Pinia;
 
@@ -89,8 +133,8 @@ export const useSessionsStore = defineStore('sessions', {
     sessionList(state) {
       const all = state.sessionOrder.map(id => state.sessions[id]).filter(Boolean);
       // Selection is a pure UI pointer. It must not change list order.
-      // Global pinned sessions are grouped first; both groups sort by real
-      // activity time descending on initial load/refresh and after true updates.
+      // Global pinned sessions are grouped first; manual sortOrder wins inside
+      // each group, then activity time is used for rows without manual order.
       const chat = _getChatStoreSafe();
       const pinnedIds = (chat && Array.isArray(chat.pinnedSessions))
         ? new Set(chat.pinnedSessions)
@@ -107,7 +151,13 @@ export const useSessionsStore = defineStore('sessions', {
         if (pinnedIds.has(s.id) || s.pinned) pinned.push(s);
         else unpinned.push(s);
       }
-      return [...sortSessionsByActivity(pinned), ...sortSessionsByActivity(unpinned)];
+      const sortRows = (rows) => [...rows].sort((a, b) => {
+        const aManual = Number.isFinite(a?.sortOrder) ? a.sortOrder : Number.MAX_SAFE_INTEGER;
+        const bManual = Number.isFinite(b?.sortOrder) ? b.sortOrder : Number.MAX_SAFE_INTEGER;
+        if (aManual !== bManual) return aManual - bManual;
+        return compareSessionsByActivity(a, b);
+      });
+      return [...sortRows(pinned), ...sortRows(unpinned)];
     },
     sessionCount(state) {
       return state.sessionOrder.length;
@@ -207,7 +257,19 @@ export const useSessionsStore = defineStore('sessions', {
           }
         }
         this.sessions = nextMap;
-        this.sessionOrder = [...preserved, ...appended];
+        let nextOrder = [...preserved, ...appended];
+        if (agentId) {
+          const manualByAgent = readManualSessionOrder();
+          const manualOrder = normalizeOrderList(manualByAgent[agentId]);
+          nextOrder = applyManualOrder(nextOrder, manualOrder);
+          const manualIndex = new Map(manualOrder.map((id, index) => [id, index]));
+          for (const id of nextOrder) {
+            if (nextMap[id] && manualIndex.has(id)) {
+              nextMap[id] = { ...nextMap[id], sortOrder: manualIndex.get(id) };
+            }
+          }
+        }
+        this.sessionOrder = nextOrder;
       }
       this.lastSnapshotAt = Date.now();
       // fix-yeaft-session-server-persistence: prefer the user's
@@ -378,6 +440,26 @@ export const useSessionsStore = defineStore('sessions', {
       }
     },
 
+    reorderSessionsForAgent(agentId, orderedIds) {
+      if (!agentId) return [];
+      const idsForAgent = this.sessionOrder.filter(id => this.sessions[id]?.agentId === agentId);
+      const nextForAgent = applyManualOrder(idsForAgent, orderedIds);
+      if (nextForAgent.length === 0) return [];
+      const nextByAgent = new Map(nextForAgent.map((id, index) => [id, index]));
+      const remaining = this.sessionOrder.filter(id => this.sessions[id]?.agentId !== agentId);
+      const insertAt = this.sessionOrder.findIndex(id => this.sessions[id]?.agentId === agentId);
+      this.sessionOrder = insertAt < 0
+        ? remaining.concat(nextForAgent)
+        : [...remaining.slice(0, insertAt), ...nextForAgent, ...remaining.slice(insertAt)];
+      for (const id of nextForAgent) {
+        this.sessions[id] = { ...this.sessions[id], sortOrder: nextByAgent.get(id) };
+      }
+      const manualByAgent = readManualSessionOrder();
+      manualByAgent[agentId] = nextForAgent;
+      writeManualSessionOrder(manualByAgent);
+      return nextForAgent;
+    },
+
     /**
      * Apply the server-confirmed pin state for one Yeaft session row.
      * The chat store still owns the cross-provider `pinnedSessions` cache;
@@ -429,6 +511,7 @@ export const useSessionsStore = defineStore('sessions', {
         // it onto the normalized row so applySnapshot can sync into
         // chatStore.pinnedSessions in one pass.
         pinned: isPinnedRow(s, fallbackPinned),
+        sortOrder: Number.isFinite(s.sortOrder) ? s.sortOrder : null,
       };
     },
   },

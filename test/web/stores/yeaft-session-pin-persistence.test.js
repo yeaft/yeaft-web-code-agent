@@ -412,6 +412,32 @@ it('restores a running opened Yeaft session from the connected-agent list snapsh
   expect(ids(store.sessionList)[0]).toBe('running-session');
 });
 
+it('persists manual Yeaft session order locally and re-applies it across snapshots', () => {
+  const store = useSessionsStore();
+
+  store.applySnapshot([
+    { id: 'session-a', name: 'A', updatedAt: 300 },
+    { id: 'session-b', name: 'B', updatedAt: 200 },
+    { id: 'session-c', name: 'C', updatedAt: 100 },
+  ], 'agent-1');
+
+  const ordered = store.reorderSessionsForAgent('agent-1', ['session-c', 'session-a', 'session-b']);
+
+  expect(ordered).toEqual(['session-c', 'session-a', 'session-b']);
+  expect(ids(store.sessionList)).toEqual(['session-c', 'session-a', 'session-b']);
+  expect(JSON.parse(localStorageData.get('yeaft-session-order-by-agent'))).toEqual({
+    'agent-1': ['session-c', 'session-a', 'session-b'],
+  });
+
+  store.applySnapshot([
+    { id: 'session-a', name: 'A', updatedAt: 300 },
+    { id: 'session-b', name: 'B', updatedAt: 200 },
+    { id: 'session-c', name: 'C', updatedAt: 100 },
+  ], 'agent-1');
+
+  expect(ids(store.sessionList)).toEqual(['session-c', 'session-a', 'session-b']);
+});
+
 it('treats explicit pinned false from the server as authoritative on reload', () => {
   const store = useSessionsStore();
   chatStore.pinnedSessions = ['session-a'];

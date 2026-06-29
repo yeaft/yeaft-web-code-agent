@@ -44,6 +44,19 @@
   position: relative;
 }
 
+.yeaft-sidebar .yeaft-session-draggable {
+  user-select: none;
+}
+
+.yeaft-sidebar .yeaft-session-draggable.dragging {
+  opacity: 0.55;
+}
+
+.yeaft-sidebar .yeaft-session-draggable.drag-over {
+  background: var(--sidebar-hover);
+  box-shadow: inset 3px 0 0 var(--accent-blue);
+}
+
 /* Bottom settings row ------------------------------------------------------ */
 .yeaft-sidebar .sidebar-bottom {
   padding: 8px;

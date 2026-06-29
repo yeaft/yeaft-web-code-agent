@@ -5,7 +5,8 @@ import { sessionActivityTime } from './session-order.js';
  *
  * Selection is only marked as metadata. It never affects order, otherwise
  * switching sessions makes the list jump. Pinned sessions stay above normal
- * sessions; both groups are sorted by real session activity time descending.
+ * sessions. Manual sort order wins when present; otherwise rows fall back to
+ * real session activity time descending.
  */
 
 /**
@@ -36,12 +37,14 @@ export function buildYeaftSidebarSessionList({ sessions, activeSessionId, pinned
       pinned: pinnedIndex.has(id) || !!session.pinned,
       active: id === activeId,
       processing: !!session.running || !!session.active || !!session.isRunning || !!session.isActive,
+      _manualOrder: Number.isFinite(session.sortOrder) ? session.sortOrder : Number.MAX_SAFE_INTEGER,
       _activityTime: sessionActivityTime(session),
     });
   }
 
   rows.sort((a, b) => {
     if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+    if (a._manualOrder !== b._manualOrder) return a._manualOrder - b._manualOrder;
     if (a._activityTime !== b._activityTime) return b._activityTime - a._activityTime;
 
     const aIndex = pinnedIndex.has(a.id) ? pinnedIndex.get(a.id) : Number.MAX_SAFE_INTEGER;
@@ -50,5 +53,5 @@ export function buildYeaftSidebarSessionList({ sessions, activeSessionId, pinned
     return a.id.localeCompare(b.id);
   });
 
-  return rows.map(({ _activityTime, ...row }) => row);
+  return rows.map(({ _manualOrder, _activityTime, ...row }) => row);
 }

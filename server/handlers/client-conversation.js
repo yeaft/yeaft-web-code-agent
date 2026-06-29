@@ -323,6 +323,29 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       });
       break;
 
+    case 'reorder_yeaft_sessions': {
+      const agentId = typeof msg.agentId === 'string' ? msg.agentId : '';
+      if (!agentId || !Array.isArray(msg.sessionIds)) break;
+      if (!verifyAgentOwnership(agentId, client.userId, client.role)) {
+        console.warn(`[Server] Unauthorized yeaft session reorder by ${client.userId} for agent ${agentId}`);
+        break;
+      }
+      let ok = false;
+      try {
+        ok = yeaftSessionDb.setOrderForAgent(client.userId, agentId, msg.sessionIds);
+      } catch (e) {
+        console.warn(`[Server] yeaftSessionDb.setOrderForAgent failed for ${agentId}:`, e?.message || e);
+      }
+      await sendToWebClient(client, {
+        type: 'session_crud_result',
+        op: 'reorder',
+        requestId: msg.requestId,
+        agentId,
+        ok,
+      });
+      break;
+    }
+
     case 'pin_session':
     case 'unpin_session': {
       // fix-yeaft-session-list-and-menu: yeaft sessions live in a
