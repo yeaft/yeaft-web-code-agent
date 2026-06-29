@@ -45,12 +45,11 @@ import {
   removeMember,
   setSessionDefaultVp,
   snapshotSessions,
-  resolveSessionYeaftDir,
   sessionsRoot,
   scanWorkdirSessions,
   restoreSessionToRegistry,
   readWorkDirRegistry,
-  yeaftDirForWorkDir,
+  migrateRegisteredWorkDirSessions,
 } from './sessions/session-crud.js';
 import { openSession, loadSessionMeta } from './sessions/session-store.js';
 import { loadSessionConfig, resolveSessionConfig, SessionConfigError } from './sessions/session-config.js';
@@ -189,8 +188,8 @@ function scheduleYeaftLoadHistoryMetadataReplay(sessionId) {
       let projectRuntime = null;
       if (sessionId) {
         try {
-          const groupYeaftDir = resolveSessionYeaftDir(ctx.CONFIG?.yeaftDir || DEFAULT_YEAFT_DIR, sessionId);
-          const meta = loadSessionMeta(join(sessionsRoot(groupYeaftDir), sessionId));
+          const metaRoot = ctx.CONFIG?.yeaftDir || DEFAULT_YEAFT_DIR;
+          const meta = loadSessionMeta(join(sessionsRoot(metaRoot), sessionId));
           projectRuntime = await ensureProjectRuntimeForSessionMeta(meta);
         } catch { /* best-effort project metadata */ }
       }
@@ -427,13 +426,6 @@ function normalizeSessionWorkDir(workDir) {
 
 function projectRuntimeKey(workDir) {
   return normalizeSessionWorkDir(workDir) || '__agent_cwd__';
-}
-
-function resolveStoreYeaftDirForSession(defaultYeaftDir, { sessionId = null, sessionMeta = null, workDir = '' } = {}) {
-  const normalizedWorkDir = normalizeSessionWorkDir(workDir || sessionMeta?.workDir);
-  if (normalizedWorkDir) return yeaftDirForWorkDir(normalizedWorkDir);
-  if (sessionId) return resolveSessionYeaftDir(defaultYeaftDir, sessionId);
-  return defaultYeaftDir;
 }
 
 function createThreadId() {
@@ -1315,10 +1307,8 @@ function getOrCreateVpEngine(sessionId, vpId, threadId = 'main') {
   const key = threadKey(sessionId, vpId, threadId);
   if (!session) throw new Error('getOrCreateVpEngine: session not loaded');
   // Per-session config overlay (v1: model only). Falls back to the
-  // session's user-level config when no override is set. Prefer the agent-local
-  // config root: sessionConfigPath() resolves registered workDir-backed
-  // sessions from there, while still allowing a later agent-local session in
-  // the same bridge runtime to read its own override after a workDir-first boot.
+  // session's user-level config when no override is set. Session config is
+  // always resolved from the agent-local root; project `.yeaft` is ignored.
   const sessionConfigRoot = liveConfigRoot();
   const groupCfg = loadSessionConfig(sessionConfigRoot, sessionId);
   const effectiveConfig = resolveSessionConfig(session.config, groupCfg);
@@ -2465,14 +2455,10 @@ export function handleYeaftCreateSession(msg) {
 }
 
 /**
- * `yeaft_scan_workdir_sessions` — read-only probe: list every yeaft
- * session physically present under `<workDir>/.yeaft/sessions/` along with
- * an `alreadyRegistered` flag (so the restore UI can disable sessions
- * already visible in the sidebar). Never mutates the registry; never
- * throws on missing/empty directories.
- *
- * Pairs with `handleYeaftRestoreSession` for the "Restore session from a
- * workdir" flow — see plan rosy-snuggling-waterfall.md.
+ * `yeaft_scan_workdir_sessions` — compatibility endpoint for the retired
+ * workdir Session scan flow. Session data now lives under the user-level
+ * `~/.yeaft/sessions`; project `.yeaft` is reserved for project assets such as
+ * skills and MCP config.
  */
 export function handleYeaftScanWorkdirSessions(msg) {
   const requestId = msg && msg.requestId;
@@ -2480,11 +2466,8 @@ export function handleYeaftScanWorkdirSessions(msg) {
     const workDir = String(msg && msg.workDir || '').trim();
     if (!workDir) throw new SessionCrudError('invalid_workdir', null, 'workDir required');
     const yeaftDir = ctx.CONFIG?.yeaftDir;
-    // scanWorkdirSessions is a layer-pure utility — it doesn't read the
-    // central workdir registry. The handler is the right layer to fold in
-    // `alreadyRegistered` because that flag couples the per-workdir scan
-    // to a specific agent's registry (the same scan from a CLI tool or
-    // a different agent would compare against a different registry).
+    // scanWorkdirSessions is now a compatibility no-op because Session data is
+    // user-level only. Keep the decoration shape stable for older clients.
     const sessions = scanWorkdirSessions(workDir);
     const registry = readWorkDirRegistry(yeaftDir);
     const decorated = sessions.map(s => ({
@@ -3533,8 +3516,8 @@ async function runYeaftSessionSend(msg) {
     return;
   }
 
-  // Open the session metadata first so a workDir-backed Session can schedule
-  // project runtime loading without blocking the user-message hot path. If
+  // Open the user-level session metadata first so project runtime loading can
+  // use the stored workDir without blocking the user-message hot path. If
   // metadata is missing we still boot the agent runtime for a useful error
   // response, then fail on the session open check.
   let sessionHandle = null;
@@ -3542,8 +3525,7 @@ async function runYeaftSessionSend(msg) {
   let sessionMetaForRuntime = null;
   const openSessionStart = perfNowMs();
   try {
-    const groupYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
-    sessionRoot = sessionsRoot(groupYeaftDir);
+    sessionRoot = sessionsRoot(yeaftDir);
     const dir = join(sessionRoot, sessionId);
     if (existsSync(dir) && loadSessionMeta(dir)) {
       sessionHandle = openSession(sessionRoot, sessionId);
@@ -3564,6 +3546,17 @@ async function runYeaftSessionSend(msg) {
 
   const ensureSessionStart = perfNowMs();
   await ensureSessionLoaded({ sessionMeta: sessionMetaForRuntime, perfTraceId });
+  if (!sessionHandle) {
+    try {
+      const dir = join(sessionRoot, sessionId);
+      if (existsSync(dir) && loadSessionMeta(dir)) {
+        sessionHandle = openSession(sessionRoot, sessionId);
+        sessionMetaForRuntime = sessionHandle.getMeta();
+      }
+    } catch (err) {
+      console.warn('[Yeaft] yeaft_session_chat: migrated session reopen failed', err?.message || err);
+    }
+  }
   scheduleProjectRuntimeLoad(sessionMetaForRuntime?.workDir);
   traceDuration('session_send.ensure_session_loaded', ensureSessionStart);
 
@@ -3927,11 +3920,6 @@ async function ensureSessionLoaded(opts = {}) {
   sessionLoadPromise = (async () => {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const normalizedWorkDir = normalizeSessionWorkDir(opts?.workDir || opts?.sessionMeta?.workDir);
-    const sessionYeaftDir = resolveStoreYeaftDirForSession(yeaftDir, {
-      sessionId: opts?.sessionId || opts?.sessionMeta?.id || null,
-      sessionMeta: opts?.sessionMeta || null,
-      workDir: normalizedWorkDir,
-    });
     session = await loadSession({
       ...(yeaftDir && { dir: yeaftDir }),
       ...(normalizedWorkDir && { workDir: normalizedWorkDir }),
@@ -5694,13 +5682,15 @@ export async function handleYeaftLoadHistory(msg) {
     ensureYeaftConversationId();
 
     let sessionMetaForRuntime = null;
-    let sessionYeaftDir = yeaftDir;
+    const historyYeaftDir = yeaftDir;
     if (sessionId) {
       try {
-        sessionYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
-        const metaDir = join(sessionsRoot(sessionYeaftDir), sessionId);
+        migrateRegisteredWorkDirSessions(yeaftDir);
+        const metaDir = join(sessionsRoot(yeaftDir), sessionId);
         sessionMetaForRuntime = loadSessionMeta(metaDir);
-      } catch { /* best-effort metadata hint */ }
+      } catch (err) {
+        console.warn('[Yeaft] load_history project-store migration failed:', err?.message || err);
+      }
     }
 
     // First paint must not wait for full Yeaft runtime boot (MCP connects,
@@ -5708,7 +5698,7 @@ export async function handleYeaftLoadHistory(msg) {
     // source of truth and can be opened cheaply, so replay the visible message
     // window immediately, then finish loadSession below for actual turns.
     const coldStoreStart = perfNowMs();
-    const coldStore = new ConversationStore(sessionYeaftDir);
+    const coldStore = new ConversationStore(historyYeaftDir);
     traceDuration('history.cold_store_open', coldStoreStart);
     if (sessionId && (afterSeqRaw !== null || afterMessageId)) {
       let afterSeq = afterSeqRaw;

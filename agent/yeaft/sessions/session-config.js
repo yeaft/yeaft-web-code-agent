@@ -1,10 +1,11 @@
 /**
  * session-config.js — Per-session selected model override state.
  *
- * Each session may carry its header-selected model override in `config.json` at
+ * Each session carries its header-selected model override in `config.json` at
  *   ~/.yeaft/sessions/<sessionId>/config.json
- * or, for workDir-backed sessions:
- *   <workDir>/.yeaft/sessions/<sessionId>/config.json
+ *
+ * Session config is user-level state. Project `.yeaft` directories may provide
+ * project assets such as skills/MCP config, but must not own Session config.
  *
  * v1 schema (intentionally tiny — extend via additive keys only):
  *   {
@@ -24,7 +25,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { writeAtomic } from '../storage/index.js';
-import { sessionsRoot, resolveSessionYeaftDir } from './session-crud.js';
+import { sessionsRoot } from './session-crud.js';
 
 const CONFIG_FILE = 'config.json';
 
@@ -41,14 +42,12 @@ export class SessionConfigError extends Error {
 }
 
 /**
- * Resolve the on-disk path for a session's config.json. Honours the
- * per-session workDir registry so sessions bound to a project directory
- * keep their config alongside the session metadata.
+ * Resolve the on-disk path for a session's config.json. Always uses the
+ * agent-local Yeaft root (`~/.yeaft` in production), not a project `.yeaft`.
  */
 export function sessionConfigPath(yeaftDir, sessionId) {
   if (!yeaftDir) return null;
-  const sessionYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
-  return join(sessionsRoot(sessionYeaftDir), sessionId, CONFIG_FILE);
+  return join(sessionsRoot(yeaftDir), sessionId, CONFIG_FILE);
 }
 
 /**
