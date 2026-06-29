@@ -51,7 +51,7 @@ describe('assistant/session output aliases', () => {
 
     handleMessage(store, { type: 'session_pinned', conversationId: 'session-1', pinned: true });
 
-    expect(store.setSessionPinned).toHaveBeenCalledWith('session-1', true);
+    expect(store.setSessionPinned).toHaveBeenCalledWith('session-1', true, {});
     expect(applyPinState).not.toHaveBeenCalled();
   });
 

@@ -347,6 +347,7 @@ export default {
       <SessionSettingsModal
         v-if="groupSettingsOpen && groupSettingsId"
         :group-id="groupSettingsId"
+        :agent-id="groupSettingsAgentId"
         :initial-section="groupSettingsSection"
         :initial-edit-vp-id="groupSettingsEditVpId"
         @close="closeGroupSettings"
@@ -1030,6 +1031,7 @@ export default {
     // target any Session and any pane.
     const groupSettingsOpen = Vue.ref(false);
     const groupSettingsId = Vue.ref(null);
+    const groupSettingsAgentId = Vue.ref(null);
     const groupSettingsSection = Vue.ref('session');
     const groupSettingsEditVpId = Vue.ref('');
     const openSessionSettings = (payload = {}) => {
@@ -1042,6 +1044,7 @@ export default {
       const section = editVpId ? 'members' : ((payload && payload.section) || 'session');
       if (!sessionId) return;
       groupSettingsId.value = sessionId;
+      groupSettingsAgentId.value = (payload && payload.agentId) || null;
       groupSettingsSection.value = section;
       groupSettingsEditVpId.value = editVpId;
       groupSettingsOpen.value = true;
@@ -1054,6 +1057,7 @@ export default {
     const closeGroupSettings = () => {
       groupSettingsOpen.value = false;
       groupSettingsId.value = null;
+      groupSettingsAgentId.value = null;
       groupSettingsEditVpId.value = '';
     };
     // task-vp-customize: GroupSettings → "Open VP Library" shortcut. We
@@ -1287,6 +1291,7 @@ export default {
       // task-fix-group-member-editor → unified group settings modal.
       groupSettingsOpen,
       groupSettingsId,
+      groupSettingsAgentId,
       groupSettingsSection,
       groupSettingsEditVpId,
       openSessionSettings,

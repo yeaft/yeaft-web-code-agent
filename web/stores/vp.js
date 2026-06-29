@@ -324,7 +324,7 @@ export const useVpStore = defineStore('vp', {
      *
      * @param {string} groupId legacy in-store argument name for sessionId
      */
-    triggerGroupDream(groupId) {
+    triggerGroupDream(groupId, meta = {}) {
       if (!groupId) return;
       this.groupDreamStatus = {
         ...this.groupDreamStatus,
@@ -362,9 +362,11 @@ export const useVpStore = defineStore('vp', {
       const frame = { type: 'yeaft_dream_trigger', sessionId: groupId };
       // Route by the session's owning agent (dream is session-scoped). Falls
       // back to currentAgent; server also defaults to client.currentAgent.
-      const dreamAgentId = typeof chat.agentIdForSession === 'function'
-        ? chat.agentIdForSession(groupId)
-        : chat.currentAgent;
+      const dreamAgentId = meta && meta.agentId
+        ? meta.agentId
+        : (typeof chat.agentIdForSession === 'function'
+          ? chat.agentIdForSession(groupId)
+          : chat.currentAgent);
       if (dreamAgentId) frame.agentId = dreamAgentId;
       const sent = chat.sendWsMessage(frame);
       if (sent === false) {

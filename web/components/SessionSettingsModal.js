@@ -35,6 +35,7 @@ export default {
   emits: ['close', 'open-vp-library'],
   props: {
     groupId: { type: String, required: true },
+    agentId: { type: String, default: null },
     initialSection: {
       type: String,
       default: SESSION_SETTINGS_SECTION,
@@ -75,7 +76,11 @@ export default {
     },
     group() {
       const gs = this.sessionsStore;
-      return gs && typeof gs.sessionById === 'function' ? gs.sessionById(this.groupId, this.chat?.currentAgent || null) : null;
+      const agentId = this.agentId || this.chat?.currentAgent || null;
+      return gs && typeof gs.sessionById === 'function' ? gs.sessionById(this.groupId, agentId) : null;
+    },
+    targetAgentId() {
+      return this.agentId || this.group?.agentId || this.chat?.currentAgent || null;
     },
     groupDisplayName() {
       const g = this.group;
@@ -218,7 +223,7 @@ export default {
         const res = await this.chat.sessionCrudRequest('update', {
           sessionId: this.groupId,
           patch: { announcement: this.announcementDraft },
-        });
+        }, { agentId: this.targetAgentId });
         if (!res || !res.ok) {
           const code = (res && res.error && res.error.code) || 'unknown';
           const message = (res && res.error && res.error.message) || code;
@@ -238,7 +243,7 @@ export default {
         const res = await this.chat.sessionCrudRequest('rename', {
           sessionId: this.groupId,
           name: next,
-        });
+        }, { agentId: this.targetAgentId });
         if (!res || !res.ok) {
           const code = (res && res.error && res.error.code) || 'unknown';
           const message = (res && res.error && res.error.message) || code;
@@ -264,7 +269,7 @@ export default {
       this.membersError = '';
       try {
         const op = checked ? 'add_member' : 'remove_member';
-        const res = await this.chat.sessionCrudRequest(op, { sessionId: this.groupId, vpId });
+        const res = await this.chat.sessionCrudRequest(op, { sessionId: this.groupId, vpId }, { agentId: this.targetAgentId });
         if (!res || !res.ok) {
           const code = (res && res.error && res.error.code) || 'unknown';
           const message = (res && res.error && res.error.message) || code;
@@ -275,7 +280,7 @@ export default {
           // retries hide bugs in the agent's roster mutator.
           const defRes = await this.chat.sessionCrudRequest('set_default_vp', {
             sessionId: this.groupId, vpId,
-          });
+          }, { agentId: this.targetAgentId });
           if (defRes && !defRes.ok) {
             const code2 = (defRes.error && defRes.error.code) || 'unknown';
             const message2 = (defRes.error && defRes.error.message) || code2;
@@ -293,7 +298,7 @@ export default {
       try {
         const res = await this.chat.sessionCrudRequest('set_default_vp', {
           sessionId: this.groupId, vpId,
-        });
+        }, { agentId: this.targetAgentId });
         if (!res || !res.ok) {
           const code = (res && res.error && res.error.code) || 'unknown';
           const message = (res && res.error && res.error.message) || code;
@@ -310,7 +315,7 @@ export default {
     // and lands in `vpStore.groupDreamStatus`.
     runDream() {
       if (!this.vpStore || this.dreamRunning) return;
-      this.vpStore.triggerGroupDream(this.groupId);
+      this.vpStore.triggerGroupDream(this.groupId, { agentId: this.targetAgentId });
     },
     formatDreamTimestamp(ms) {
       if (!ms) return '';
@@ -322,7 +327,7 @@ export default {
       this.deleteBusy = true;
       this.deleteError = '';
       try {
-        const res = await this.chat.sessionCrudRequest('delete', { sessionId: this.groupId });
+        const res = await this.chat.sessionCrudRequest('delete', { sessionId: this.groupId }, { agentId: this.targetAgentId });
         if (!res || !res.ok) {
           const code = (res && res.error && res.error.code) || 'unknown';
           const message = (res && res.error && res.error.message) || code;

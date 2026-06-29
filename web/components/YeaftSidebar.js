@@ -121,16 +121,16 @@ export default {
                   <button
                     type="button"
                     class="session-dots-btn"
-                    :class="{ 'menu-open': groupMenu.open && groupMenu.groupId === s.id }"
+                    :class="{ 'menu-open': groupMenu.open && groupMenu.groupId === sessionDragKey(s.raw) }"
                     :title="$t('yeaft.session.moreActions')"
                     :aria-label="$t('yeaft.session.moreActions')"
                     aria-haspopup="menu"
-                    :aria-expanded="groupMenu.open && groupMenu.groupId === s.id ? 'true' : 'false'"
+                    :aria-expanded="groupMenu.open && groupMenu.groupId === sessionDragKey(s.raw) ? 'true' : 'false'"
                     @click.stop="openGroupMenu(s.raw, $event)"
                   >
                     <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
                   </button>
-                  <div v-if="groupMenu.open && groupMenu.groupId === s.id" class="session-menu" role="menu" @click.stop>
+                  <div v-if="groupMenu.open && groupMenu.groupId === sessionDragKey(s.raw)" class="session-menu" role="menu" @click.stop>
                     <button type="button" role="menuitem" class="session-menu-item" @click="onTogglePin(s.raw)">
                       {{ isSessionPinned(s) ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin') }}
                     </button>
@@ -486,7 +486,7 @@ export default {
     // maps them to Session. YeaftPage owns the modal lifecycle.
     openGroupSettings(g, section = 'members') {
       if (!g || !g.id) return;
-      this.$emit('open-group-settings', { sessionId: g.id, section });
+      this.$emit('open-group-settings', { sessionId: g.id, agentId: g.agentId || null, section });
     },
     // Convenience wrapper used by the kebab menu items: closes the menu
     // first so the unified modal opens cleanly without the kebab still
@@ -506,7 +506,9 @@ export default {
     // enough for the menu label if a partial refresh races the shared cache.
     isSessionPinned(sessionOrId) {
       const id = sessionOrId && typeof sessionOrId === 'object' ? sessionOrId.id : sessionOrId;
-      const rowPinned = !!(sessionOrId && typeof sessionOrId === 'object' && sessionOrId.pinned);
+      const hasRowPin = !!(sessionOrId && typeof sessionOrId === 'object' && Object.prototype.hasOwnProperty.call(sessionOrId, 'pinned'));
+      const rowPinned = !!(hasRowPin && sessionOrId.pinned);
+      if (hasRowPin && sessionOrId.agentId) return rowPinned;
       const fn = this.chatStore && this.chatStore.isSessionPinned;
       return rowPinned || (typeof fn === 'function' ? !!fn.call(this.chatStore, id) : false);
     },
@@ -522,6 +524,7 @@ export default {
           agentId: g.agentId || this.store?.currentAgent || null,
           sessionName: g.name || g.title || g.id,
           workDir: g.workDir || '',
+          pinned: !!g.pinned,
         });
       }
     },
@@ -533,7 +536,7 @@ export default {
       this.groupMenu = { open: false, groupId: null };
       if (!g || !g.id) return;
       const fn = this.chatStore && this.chatStore.sessionCrudRequest;
-      if (typeof fn === 'function') fn.call(this.chatStore, 'archive', { sessionId: g.id });
+      if (typeof fn === 'function') fn.call(this.chatStore, 'archive', { sessionId: g.id }, { agentId: g.agentId || null });
     },
     groupDisplayName(g) {
       if (!g) return '';
@@ -572,11 +575,13 @@ export default {
     openGroupMenu(g, evt) {
       if (!g || !g.id) return;
       // Toggle when clicking the same row again.
-      if (this.groupMenu.open && this.groupMenu.groupId === g.id) {
+      const menuKey = this.sessionDragKey(g);
+      if (!menuKey) return;
+      if (this.groupMenu.open && this.groupMenu.groupId === menuKey) {
         this.groupMenu = { open: false, groupId: null };
         return;
       }
-      this.groupMenu = { open: true, groupId: g.id };
+      this.groupMenu = { open: true, groupId: menuKey };
       // Close on next outside click.
       const close = (ev) => {
         if (ev && ev.target && ev.target.closest && ev.target.closest('.session-menu')) return;

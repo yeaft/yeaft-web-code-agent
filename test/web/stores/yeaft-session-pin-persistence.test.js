@@ -38,6 +38,9 @@ const chatStore = {
   currentView: 'chat',
   yeaftActiveSessionFilter: null,
   pinnedSessions: [],
+  currentAgent: 'agent-a',
+  yeaftSessionAgentById: {},
+  sendWsMessage: vi.fn(),
   setActiveSessionFilter: vi.fn(function setActiveSessionFilter(sessionId) {
     this.yeaftActiveSessionFilter = sessionId || null;
   }),
@@ -58,7 +61,9 @@ globalThis.window = {
 };
 
 const { useSessionsStore } = await import('../../../web/stores/sessions.js');
+window.Pinia.useSessionsStore = useSessionsStore;
 const { default: YeaftSidebar } = await import('../../../web/components/YeaftSidebar.js');
+const { default: SessionSettingsModal } = await import('../../../web/components/SessionSettingsModal.js');
 
 function ids(rows) {
   return rows.map(row => row.id);
@@ -67,8 +72,11 @@ function ids(rows) {
 beforeEach(() => {
   localStorageData.clear();
   chatStore.currentView = 'chat';
+  chatStore.currentAgent = 'agent-a';
   chatStore.yeaftActiveSessionFilter = null;
+  chatStore.yeaftSessionAgentById = {};
   chatStore.pinnedSessions = [];
+  chatStore.sendWsMessage.mockClear();
   chatStore.setActiveSessionFilter.mockClear();
   const store = useSessionsStore();
   store.sessions = {};
@@ -297,6 +305,7 @@ it('sends Yeaft pin metadata so the server can persist before DB hydration', () 
     agentId: 'agent-a',
     sessionName: 'Pinned Session',
     workDir: '/repo',
+    pinned: false,
   } ]]);
 });
 
@@ -547,6 +556,141 @@ it('keeps duplicate session ids from different agents as separate rows', () => {
   store.applyPinState('session_default', true, 'agent-b');
   expect(store.sessionById('session_default', 'agent-a')?.pinned).toBe(false);
   expect(store.sessionById('session_default', 'agent-b')?.pinned).toBe(true);
+});
+
+
+it('routes duplicate-id pin actions to the clicked agent row', async () => {
+  const sessions = useSessionsStore();
+  sessions.applySnapshot([
+    { id: 'session_default', name: 'Default A', pinned: true },
+  ], 'agent-a');
+  sessions.applySnapshot([
+    { id: 'session_default', name: 'Default B', pinned: false },
+  ], 'agent-b');
+
+  const store = useChatStore();
+  const sent = [];
+  store.currentAgent = 'agent-a';
+  store.pinnedSessions = ['session_default'];
+  store.sendWsMessage = (msg) => sent.push(msg);
+
+  store.togglePin('session_default', {
+    sessionKind: 'yeaft',
+    agentId: 'agent-b',
+    sessionName: 'Default B',
+    workDir: '/repo-b',
+  });
+
+  expect(sent).toEqual([{
+    type: 'pin_session',
+    conversationId: 'session_default',
+    sessionKind: 'yeaft',
+    agentId: 'agent-b',
+    sessionName: 'Default B',
+    workDir: '/repo-b',
+  }]);
+  expect(sessions.sessionById('session_default', 'agent-a')?.pinned).toBe(true);
+  expect(sessions.sessionById('session_default', 'agent-b')?.pinned).toBe(true);
+
+  store.togglePin('session_default', {
+    sessionKind: 'yeaft',
+    agentId: 'agent-b',
+    sessionName: 'Default B',
+    workDir: '/repo-b',
+  });
+
+  expect(sent[1]).toMatchObject({
+    type: 'unpin_session',
+    conversationId: 'session_default',
+    agentId: 'agent-b',
+  });
+  expect(sessions.sessionById('session_default', 'agent-a')?.pinned).toBe(true);
+  expect(sessions.sessionById('session_default', 'agent-b')?.pinned).toBe(false);
+});
+
+it('passes clicked agent id through YeaftSidebar row actions', () => {
+  const calls = [];
+  const emits = [];
+  const component = {
+    groupMenu: { open: true, groupId: 'session_default' },
+    store: { currentAgent: 'agent-a' },
+    chatStore: {
+      togglePin(...args) { calls.push(['pin', ...args]); },
+      sessionCrudRequest(...args) { calls.push(['crud', ...args]); },
+    },
+    $emit(...args) { emits.push(args); },
+  };
+  const row = { id: 'session_default', agentId: 'agent-b', name: 'Default B', workDir: '/repo-b' };
+
+  YeaftSidebar.methods.onTogglePin.call(component, row);
+  YeaftSidebar.methods.onRemoveFromList.call(component, row);
+  YeaftSidebar.methods.openGroupSettings.call(component, row, 'session');
+
+  expect(calls[0]).toEqual(['pin', 'session_default', {
+    sessionKind: 'yeaft',
+    agentId: 'agent-b',
+    sessionName: 'Default B',
+    workDir: '/repo-b',
+    pinned: false,
+  }]);
+  expect(calls[1]).toEqual(['crud', 'archive', { sessionId: 'session_default' }, { agentId: 'agent-b' }]);
+  expect(emits).toEqual([['open-group-settings', { sessionId: 'session_default', agentId: 'agent-b', section: 'session' }]]);
+});
+
+it('opens duplicate-id settings against the selected agent row and routes mutations to that agent', async () => {
+  const sessions = useSessionsStore();
+  sessions.applySnapshot([
+    { id: 'session_default', name: 'Default A', announcement: 'A' },
+  ], 'agent-a');
+  sessions.applySnapshot([
+    { id: 'session_default', name: 'Default B', announcement: 'B' },
+  ], 'agent-b');
+  const requests = [];
+  const modal = {
+    groupId: 'session_default',
+    agentId: 'agent-b',
+    chat: {
+      currentAgent: 'agent-a',
+      sessionCrudRequest(op, data, opts) {
+        requests.push({ op, data, opts });
+        return Promise.resolve({ ok: true });
+      },
+    },
+    sessionsStore: sessions,
+    announcementDraft: 'next',
+    announcementBusy: false,
+    announcementError: '',
+    renameDraft: 'Renamed B',
+    renameBusy: false,
+    renameError: '',
+    membersBusy: false,
+    membersError: '',
+    deleteBusy: false,
+    deleteError: '',
+    deleteConfirmText: 'Default B',
+    requestClose: vi.fn(),
+    $t: (_key, params) => params?.message || params?.error || '',
+  };
+  Object.defineProperty(modal, 'group', { get: () => SessionSettingsModal.computed.group.call(modal) });
+  Object.defineProperty(modal, 'targetAgentId', { get: () => SessionSettingsModal.computed.targetAgentId.call(modal) });
+  Object.defineProperty(modal, 'groupDisplayName', { get: () => SessionSettingsModal.computed.groupDisplayName.call(modal) });
+  Object.defineProperty(modal, 'defaultVpId', { get: () => SessionSettingsModal.computed.defaultVpId.call(modal) });
+  Object.defineProperty(modal, 'deleteConfirmReady', { get: () => SessionSettingsModal.computed.deleteConfirmReady.call(modal) });
+
+  expect(modal.group.name).toBe('Default B');
+
+  await SessionSettingsModal.methods.saveAnnouncement.call(modal);
+  await SessionSettingsModal.methods.saveRename.call(modal);
+  await SessionSettingsModal.methods.toggleMember.call(modal, 'linus', true);
+  await SessionSettingsModal.methods.confirmDelete.call(modal);
+
+  expect(requests).toEqual([
+    { op: 'update', data: { sessionId: 'session_default', patch: { announcement: 'next' } }, opts: { agentId: 'agent-b' } },
+    { op: 'rename', data: { sessionId: 'session_default', name: 'Renamed B' }, opts: { agentId: 'agent-b' } },
+    { op: 'add_member', data: { sessionId: 'session_default', vpId: 'linus' }, opts: { agentId: 'agent-b' } },
+    { op: 'set_default_vp', data: { sessionId: 'session_default', vpId: 'linus' }, opts: { agentId: 'agent-b' } },
+    { op: 'delete', data: { sessionId: 'session_default' }, opts: { agentId: 'agent-b' } },
+  ]);
 });
 
 it('treats explicit pinned false from the server as authoritative on reload', () => {
