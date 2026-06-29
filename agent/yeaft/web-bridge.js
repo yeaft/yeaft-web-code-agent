@@ -12,10 +12,7 @@
  *
  * task-330c lint guard:
  *   ⚠️ DO NOT introduce greedy `text.replace(/---ROUTE---[\s\S]*$/g, '')`
- *      style strips on incoming/outgoing message bodies. Crew ROUTE
- *      stripping is owned EXCLUSIVELY by `agent/crew/routing.js`
- *      `parseRoutes()` which returns `{routes, displayBody}` with exact
- *      ranges removed.
+ *      style strips on incoming/outgoing message bodies.
  */
 
 import { delimiter, join } from 'node:path';
@@ -53,6 +50,7 @@ import {
   scanWorkdirSessions,
   restoreSessionToRegistry,
   readWorkDirRegistry,
+  yeaftDirForWorkDir,
 } from './sessions/session-crud.js';
 import { openSession, loadSessionMeta } from './sessions/session-store.js';
 import { loadSessionConfig, resolveSessionConfig, SessionConfigError } from './sessions/session-config.js';
@@ -78,6 +76,8 @@ import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 
 const LEGACY_SKILL_COMMAND_PREFIX = 'skill:';
 const YEAFT_SKILL_COMMAND_PREFIX = 'yeaft-skills:';
+const PROJECT_SKILL_TIERS = new Set(['project', 'project-claude', 'project-codex']);
+const BASE_RUNTIME_KEY = '__base__';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -90,6 +90,10 @@ let session = null;
 let sessionLoadPromise = null;
 
 let threadClassifier = defaultClassifyThread;
+
+function liveConfigRoot() {
+  return session?.config?.dir || ctx.CONFIG?.yeaftDir || session?.yeaftDir;
+}
 
 function applyLiveLanguage(language) {
   if (!language || typeof language !== 'string') return;
@@ -105,7 +109,7 @@ function applyLiveLanguage(language) {
 function refreshLiveSessionConfig() {
   if (!session) return;
   try {
-    const freshConfig = loadConfig({ dir: session.yeaftDir || ctx.CONFIG?.yeaftDir });
+    const freshConfig = loadConfig({ dir: liveConfigRoot() });
     const freshModels = Array.isArray(freshConfig.availableModels) ? freshConfig.availableModels : [];
     session.config.availableModels = freshModels;
     if (freshConfig.language) {
@@ -317,6 +321,8 @@ const vpInboxes = new Map();
 const vpDrivers = new Map();
 /** @type {Map<string, import('./engine.js').Engine>} */
 const vpEngines = new Map();
+/** @type {Map<string, string>} */
+const vpEngineConfigKeys = new Map();
 /** @type {Map<string, AbortController>} */
 const vpAborts = new Map();
 
@@ -404,12 +410,30 @@ function threadKey(sessionId, vpId, threadId) {
   return `${sessionId}::${vpId}::${threadId || 'main'}`;
 }
 
+function engineConfigKey(config) {
+  return JSON.stringify({
+    model: config?.model || '',
+    primaryModel: config?.primaryModel || '',
+    modelEffort: config?.modelEffort || '',
+    fastModel: config?.fastModel || '',
+    fastModelId: config?.fastModelId || '',
+    fallbackModel: config?.fallbackModel || '',
+  });
+}
+
 function normalizeSessionWorkDir(workDir) {
   return typeof workDir === 'string' && workDir.trim() ? workDir.trim() : '';
 }
 
 function projectRuntimeKey(workDir) {
   return normalizeSessionWorkDir(workDir) || '__agent_cwd__';
+}
+
+function resolveStoreYeaftDirForSession(defaultYeaftDir, { sessionId = null, sessionMeta = null, workDir = '' } = {}) {
+  const normalizedWorkDir = normalizeSessionWorkDir(workDir || sessionMeta?.workDir);
+  if (normalizedWorkDir) return yeaftDirForWorkDir(normalizedWorkDir);
+  if (sessionId) return resolveSessionYeaftDir(defaultYeaftDir, sessionId);
+  return defaultYeaftDir;
 }
 
 function createThreadId() {
@@ -423,6 +447,9 @@ const vpThreads = new Map();
 const routePromisesByMsgId = new Map();
 /** @type {Map<string, { workDir: string, skillManager: import('./skills.js').SkillManager, mcpManager: import('./mcp.js').MCPManager, mcpStatus: object, mcpConfig: object, status: { skills: number, mcpServers: string[], mcpFailed: object[], mcpSkipped: object[], tools: number } }>} */
 const projectRuntimes = new Map();
+/** @type {Map<string, Promise<any>>} */
+const baseRuntimeLoadPromises = new Map();
+let activeRuntimeKey = BASE_RUNTIME_KEY;
 
 function replaceSessionMcpTools(mcpManager) {
   if (!session?.toolRegistry || typeof session.toolRegistry.replaceMcpTools !== 'function') {
@@ -438,6 +465,9 @@ function replaceSessionMcpTools(mcpManager) {
 }
 
 function retargetVpEngines({ skillManager, mcpManager }) {
+  try {
+    session?.engine?.setRuntimeManagers?.({ skillManager, mcpManager });
+  } catch { /* best-effort default-engine retarget */ }
   for (const eng of vpEngines.values()) {
     try {
       eng.setRuntimeManagers?.({ skillManager, mcpManager });
@@ -446,17 +476,26 @@ function retargetVpEngines({ skillManager, mcpManager }) {
 }
 
 function activateBaseRuntime() {
+  activeRuntimeKey = BASE_RUNTIME_KEY;
   const swap = replaceSessionMcpTools(session?.mcpManager);
   retargetVpEngines({
     skillManager: session?.skillManager || null,
     mcpManager: session?.mcpManager || null,
   });
+  const status = session?.status || null;
+  if (status) {
+    status.skills = session?.skillManager?.size || 0;
+    status.mcpServers = Array.isArray(status.mcpServers) ? status.mcpServers : [];
+    status.mcpFailed = Array.isArray(status.mcpFailed) ? status.mcpFailed : [];
+    status.tools = session?.toolRegistry?.size || status.tools || 0;
+  }
   broadcastSkillSlashCommands(session);
   return swap;
 }
 
 function activateProjectRuntime(runtime) {
   if (!runtime) return activateBaseRuntime();
+  activeRuntimeKey = projectRuntimeKey(runtime.workDir);
   const swap = replaceSessionMcpTools(runtime.mcpManager);
   retargetVpEngines({
     skillManager: runtime.skillManager,
@@ -473,6 +512,8 @@ function activateProjectRuntime(runtime) {
 async function shutdownProjectRuntimes() {
   const runtimes = Array.from(projectRuntimes.values());
   projectRuntimes.clear();
+  projectRuntimeLoadPromises.clear();
+  baseRuntimeLoadPromises.clear();
   await Promise.all(runtimes.map(async (runtime) => {
     try { await runtime?.mcpManager?.disconnectAll?.(); } catch { /* best-effort shutdown */ }
   }));
@@ -724,6 +765,14 @@ const ESCALATE_AFTER_ABORT_MS = 15_000;
 /** Virtual conversationId for the Yeaft session */
 let yeaftConversationId = null;
 
+/** Last agent-level Yeaft slash command payload. Replayed after the web side
+ *  creates/replaces the virtual Yeaft conversation id so `/` autocomplete never
+ *  falls back to built-ins while full Session metadata is still loading. */
+let lastYeaftSlashCommandSnapshot = null;
+let lastYeaftGeneratedSlashCommands = new Set();
+/** @type {Map<string, Promise<any>>} */
+const projectRuntimeLoadPromises = new Map();
+
 /** task-334-followup-batch-b: stored unsubscribe fn from VP subscribe,
  *  called on session reset to prevent stale subscriber leaks. */
 let _vpUnsubscribe = null;
@@ -920,7 +969,10 @@ function loadVisibleGroupHistoryPage(store, sessionId, limit, beforeSeq = null) 
 }
 
 function ensureYeaftConversationId() {
-  if (!yeaftConversationId) yeaftConversationId = `yeaft-${Date.now()}`;
+  if (!yeaftConversationId) {
+    yeaftConversationId = `yeaft-${Date.now()}`;
+    replayCachedSkillSlashCommandsToYeaftConversation();
+  }
   return yeaftConversationId;
 }
 
@@ -1155,6 +1207,12 @@ export function __testGroupHistory(sessionId) {
   return getOrCreateSessionHistory(sessionId);
 }
 
+export function __testResolveVpEffectiveConfig(sessionId) {
+  if (!session) return null;
+  const sessionConfigRoot = liveConfigRoot();
+  return resolveSessionConfig(session.config, loadSessionConfig(sessionConfigRoot, sessionId));
+}
+
 /**
  * Test-only: install a minimal `session` so `hydrateGroupHistory` can
  * read from a real `ConversationStore`. Pass `null` to clear.
@@ -1255,15 +1313,23 @@ function isPermissionErrorMsg(msg) {
  */
 function getOrCreateVpEngine(sessionId, vpId, threadId = 'main') {
   const key = threadKey(sessionId, vpId, threadId);
-  let eng = vpEngines.get(key);
-  if (eng) return eng;
   if (!session) throw new Error('getOrCreateVpEngine: session not loaded');
-  // Per-group config overlay (v1: model only). Falls back to the
-  // session's user-level config when no override is set. The resolver
-  // never mutates session.config — it returns a new object.
-  const yeaftDir = ctx.CONFIG?.yeaftDir || session.yeaftDir;
-  const groupCfg = loadSessionConfig(yeaftDir, sessionId);
+  // Per-session config overlay (v1: model only). Falls back to the
+  // session's user-level config when no override is set. Prefer the agent-local
+  // config root: sessionConfigPath() resolves registered workDir-backed
+  // sessions from there, while still allowing a later agent-local session in
+  // the same bridge runtime to read its own override after a workDir-first boot.
+  const sessionConfigRoot = liveConfigRoot();
+  const groupCfg = loadSessionConfig(sessionConfigRoot, sessionId);
   const effectiveConfig = resolveSessionConfig(session.config, groupCfg);
+  const configKey = engineConfigKey(effectiveConfig);
+  let eng = vpEngines.get(key);
+  if (eng && vpEngineConfigKeys.get(key) === configKey) return eng;
+  if (eng) {
+    try { eng.abort?.('config_changed'); } catch { /* best-effort */ }
+    vpEngines.delete(key);
+    vpEngineConfigKeys.delete(key);
+  }
   eng = new Engine({
     adapter: session.adapter,
     trace: session.trace,
@@ -1299,6 +1365,7 @@ function getOrCreateVpEngine(sessionId, vpId, threadId = 'main') {
     }
   } catch { /* coordinator is best-effort plumbing, never block engine creation */ }
   vpEngines.set(key, eng);
+  vpEngineConfigKeys.set(key, configKey);
   return eng;
 }
 
@@ -1802,11 +1869,14 @@ export async function __testResetVpState() {
   vpInboxes.clear();
   vpDrivers.clear();
   vpEngines.clear();
+  vpEngineConfigKeys.clear();
   asyncTaskOwners.clear();
   vpAborts.clear();
   sessionContexts.clear();
   vpCurrentTodos.clear();
   threadClassifier = defaultClassifyThread;
+  yeaftConversationId = null;
+  lastYeaftSlashCommandSnapshot = null;
   // Per-group compact in-flight + pending state lives on the session's
   // Compactor. Clear it so a follow-on test doesn't see ghost in-flight
   // promises from a prior run.
@@ -1849,42 +1919,92 @@ function sendSessionOutputFrame(data, { sessionId, chatId, vpId, turnId, threadI
   });
 }
 
+function isProjectSkill(skill) {
+  return PROJECT_SKILL_TIERS.has(String(skill?.tier || '').trim());
+}
+
 export function buildSkillSlashCommands(skillManager) {
   if (!skillManager || typeof skillManager.list !== 'function') return { commands: [], descriptions: {} };
   const commands = [];
   const descriptions = {};
   for (const skill of skillManager.list()) {
     if (!skill?.name || typeof skill.name !== 'string') continue;
-    const commandName = `${YEAFT_SKILL_COMMAND_PREFIX}${skill.name}`;
+    const description = skill.description || skill.trigger || 'Load Yeaft skill';
+    const commandName = isProjectSkill(skill)
+      ? skill.name
+      : `${YEAFT_SKILL_COMMAND_PREFIX}${skill.name}`;
     commands.push(commandName);
-    descriptions[commandName] = skill.description || skill.trigger || 'Load Yeaft skill';
+    descriptions[commandName] = description;
 
-    // Legacy alias for older typed commands and persisted drafts. Do not add it
-    // to the visible command list; autocomplete should show the same plugin-style
-    // names users see in Claude Code, e.g. /yeaft-skills:code-review.
-    const legacyCommandName = `${LEGACY_SKILL_COMMAND_PREFIX}${skill.name}`;
-    descriptions[legacyCommandName] = descriptions[commandName];
+    // Accepted aliases for typed history and compatibility. They are not added
+    // to the visible list unless they are the tier-appropriate display command.
+    descriptions[`${LEGACY_SKILL_COMMAND_PREFIX}${skill.name}`] = description;
+    descriptions[`${YEAFT_SKILL_COMMAND_PREFIX}${skill.name}`] = description;
   }
   commands.sort((a, b) => a.localeCompare(b));
   return { commands, descriptions };
 }
 
 export function buildMergedSkillSlashCommands(skillManagers = []) {
-  const commands = [];
-  const descriptions = {};
+  const byName = new Map();
   for (const manager of skillManagers) {
-    const built = buildSkillSlashCommands(manager);
-    for (const cmd of built.commands) commands.push(cmd);
-    Object.assign(descriptions, built.descriptions);
+    if (!manager || typeof manager.list !== 'function') continue;
+    for (const skill of manager.list()) {
+      if (!skill?.name || typeof skill.name !== 'string') continue;
+      byName.set(skill.name, skill);
+    }
   }
-  return { commands: [...new Set(commands)].sort((a, b) => a.localeCompare(b)), descriptions };
+  return buildSkillSlashCommands({ list: () => [...byName.values()] });
+}
+
+function sendSkillSlashCommandsUpdate({ conversationId, slashCommands, slashCommandDescriptions }) {
+  sendToServer({
+    type: 'slash_commands_update',
+    agentId: ctx.AGENT_ID || ctx.agentId || null,
+    conversationId,
+    slashCommands,
+    slashCommandDescriptions,
+  });
+}
+
+function replayCachedSkillSlashCommandsToYeaftConversation() {
+  if (!yeaftConversationId || !lastYeaftSlashCommandSnapshot) return;
+  sendSkillSlashCommandsUpdate({
+    conversationId: yeaftConversationId,
+    slashCommands: lastYeaftSlashCommandSnapshot.slashCommands,
+    slashCommandDescriptions: lastYeaftSlashCommandSnapshot.slashCommandDescriptions,
+  });
+}
+
+function loadAndBroadcastYeaftSkillSlashCommands() {
+  const yeaftDir = ctx.CONFIG?.yeaftDir || DEFAULT_YEAFT_DIR;
+  const roots = [process.cwd()];
+  const configuredWorkDir = typeof ctx.CONFIG?.workDir === 'string' ? ctx.CONFIG.workDir.trim() : '';
+  if (configuredWorkDir && configuredWorkDir !== process.cwd()) roots.push(configuredWorkDir);
+  const skillManager = createSkillManager(yeaftDir, roots.join(delimiter));
+  broadcastSkillSlashCommands({ skillManager });
+  return {
+    skills: skillManager.size,
+    slashCommands: ctx.slashCommands,
+    slashCommandDescriptions: ctx.slashCommandDescriptions,
+  };
+}
+
+export function preloadYeaftSkillSlashCommands() {
+  setTimeout(() => {
+    try { loadAndBroadcastYeaftSkillSlashCommands(); }
+    catch (err) { console.warn('[Yeaft] async skill slash preload failed:', err?.message || err); }
+  }, 0);
+  return { scheduled: true };
 }
 
 function broadcastSkillSlashCommands(sessionLike, extraSkillManagers = []) {
   const managers = [sessionLike?.skillManager, ...extraSkillManagers].filter(Boolean);
   const { commands, descriptions } = buildMergedSkillSlashCommands(managers);
   const isYeaftSkillCommand = (cmd) => typeof cmd === 'string'
-    && (cmd.startsWith(LEGACY_SKILL_COMMAND_PREFIX) || cmd.startsWith(YEAFT_SKILL_COMMAND_PREFIX));
+    && (lastYeaftGeneratedSlashCommands.has(cmd)
+      || cmd.startsWith(LEGACY_SKILL_COMMAND_PREFIX)
+      || cmd.startsWith(YEAFT_SKILL_COMMAND_PREFIX));
   const nonSkillCommands = (ctx.slashCommands || []).filter(cmd => !isYeaftSkillCommand(cmd));
   const slashCommands = [...new Set([...nonSkillCommands, ...commands])];
   const slashCommandDescriptions = Object.fromEntries(
@@ -1894,13 +2014,70 @@ function broadcastSkillSlashCommands(sessionLike, extraSkillManagers = []) {
   Object.assign(slashCommandDescriptions, descriptions);
   ctx.slashCommands = slashCommands;
   ctx.slashCommandDescriptions = slashCommandDescriptions;
-  sendToServer({
-    type: 'slash_commands_update',
-    agentId: ctx.AGENT_ID || ctx.agentId || null,
+  lastYeaftGeneratedSlashCommands = new Set(commands);
+  lastYeaftSlashCommandSnapshot = { slashCommands, slashCommandDescriptions };
+  sendSkillSlashCommandsUpdate({
     conversationId: yeaftConversationId || '__preload__',
     slashCommands,
     slashCommandDescriptions,
   });
+}
+
+async function loadBaseRuntime() {
+  if (!session) return null;
+  const yeaftDir = ctx.CONFIG?.yeaftDir || session.yeaftDir || DEFAULT_YEAFT_DIR;
+  const skillManager = createSkillManager(yeaftDir, process.cwd());
+  session.skillManager = skillManager;
+
+  const mcpConfig = loadMCPConfig(yeaftDir, undefined, process.cwd());
+  const mcpManager = new MCPManager();
+  session.mcpManager = mcpManager;
+  let mcpStatus = { connected: [], failed: [] };
+
+  if (session.status) {
+    session.status.skills = skillManager.size;
+    session.status.mcpServers = [];
+    session.status.mcpFailed = [];
+    session.status.mcpSkipped = mcpConfig.skipped || [];
+    session.status.tools = session.toolRegistry?.size || session.status.tools || 0;
+  }
+  if (activeRuntimeKey === BASE_RUNTIME_KEY) {
+    activateBaseRuntime();
+  } else {
+    broadcastSkillSlashCommands(session);
+  }
+  hydrateYeaftStatusFromSession(session, { reason: 'base_runtime_skills', emitEvent: true });
+
+  if (mcpConfig.servers.length > 0) {
+    mcpStatus = await mcpManager.connectAll(mcpConfig.servers);
+    session.mcpManager = mcpManager;
+    if (session.status) {
+      session.status.mcpServers = mcpStatus.connected;
+      session.status.mcpFailed = mcpStatus.failed;
+      session.status.mcpSkipped = mcpConfig.skipped || [];
+    }
+    if (activeRuntimeKey === BASE_RUNTIME_KEY) {
+      activateBaseRuntime();
+    }
+    hydrateYeaftStatusFromSession(session, { reason: 'base_runtime_mcp', emitEvent: true });
+    try { broadcastMcpUpdated({ reason: 'base-runtime-load' }); } catch { /* best-effort */ }
+  }
+
+  return { skillManager, mcpManager, mcpStatus, mcpConfig };
+}
+
+function scheduleBaseRuntimeLoad() {
+  if (!session) return null;
+  if (baseRuntimeLoadPromises.has(BASE_RUNTIME_KEY)) return baseRuntimeLoadPromises.get(BASE_RUNTIME_KEY);
+  const promise = new Promise(resolve => setTimeout(resolve, 0))
+    .then(() => loadBaseRuntime())
+    .catch((err) => {
+      console.warn('[Yeaft] async base runtime load failed:', err?.message || err);
+      return null;
+    })
+    .finally(() => { baseRuntimeLoadPromises.delete(BASE_RUNTIME_KEY); });
+  baseRuntimeLoadPromises.set(BASE_RUNTIME_KEY, promise);
+  return promise;
 }
 
 async function loadProjectRuntime(workDir) {
@@ -1925,9 +2102,6 @@ async function loadProjectRuntime(workDir) {
   const mcpConfig = loadMCPConfig(yeaftDir, undefined, normalizedWorkDir);
   const mcpManager = new MCPManager();
   let mcpStatus = { connected: [], failed: [] };
-  if (mcpConfig.servers.length > 0) {
-    mcpStatus = await mcpManager.connectAll(mcpConfig.servers);
-  }
   const runtime = {
     workDir: normalizedWorkDir,
     skillManager,
@@ -1943,8 +2117,39 @@ async function loadProjectRuntime(workDir) {
     },
   };
   projectRuntimes.set(key, runtime);
+  // Skill metadata is available after the filesystem scan; publish it before
+  // any MCP server startup so autocomplete does not wait on external processes.
   activateProjectRuntime(runtime);
+  if (mcpConfig.servers.length > 0) {
+    mcpStatus = await mcpManager.connectAll(mcpConfig.servers);
+    runtime.mcpStatus = mcpStatus;
+    runtime.status = {
+      ...runtime.status,
+      mcpServers: mcpStatus.connected,
+      mcpFailed: mcpStatus.failed,
+      mcpSkipped: mcpConfig.skipped || [],
+      tools: session.toolRegistry?.size || 0,
+    };
+    activateProjectRuntime(runtime);
+  }
   return runtime;
+}
+
+
+function scheduleProjectRuntimeLoad(workDir) {
+  const normalizedWorkDir = normalizeSessionWorkDir(workDir);
+  if (!normalizedWorkDir || !session) return null;
+  const key = projectRuntimeKey(normalizedWorkDir);
+  if (projectRuntimes.has(key)) return projectRuntimes.get(key);
+  if (projectRuntimeLoadPromises.has(key)) return projectRuntimeLoadPromises.get(key);
+  const promise = loadProjectRuntime(normalizedWorkDir)
+    .catch((err) => {
+      console.warn('[Yeaft] async project runtime load failed for %s: %s', normalizedWorkDir, err?.message || err);
+      return null;
+    })
+    .finally(() => { projectRuntimeLoadPromises.delete(key); });
+  projectRuntimeLoadPromises.set(key, promise);
+  return promise;
 }
 
 async function ensureProjectRuntimeForSessionMeta(sessionMeta) {
@@ -1960,6 +2165,24 @@ async function ensureProjectRuntimeForSessionMeta(sessionMeta) {
     activateBaseRuntime();
     return null;
   }
+}
+
+function getProjectRuntimeForTurn(sessionMeta) {
+  const workDir = normalizeSessionWorkDir(sessionMeta?.workDir);
+  if (!workDir) {
+    activateBaseRuntime();
+    return null;
+  }
+  const cached = projectRuntimes.get(projectRuntimeKey(workDir)) || null;
+  if (cached) {
+    activateProjectRuntime(cached);
+    return cached;
+  }
+  scheduleProjectRuntimeLoad(workDir);
+  // Do not let a previous workDir's MCP tools leak into this turn while the
+  // requested project runtime is still loading in the background.
+  activateBaseRuntime();
+  return null;
 }
 
 function mergedStatusForProjectRuntime(runtime) {
@@ -2375,7 +2598,10 @@ export function handleYeaftUpdateSessionConfig(msg) {
     // Drop cached engines so the next VP turn rebuilds with the new model.
     const prefix = `${sessionId}::`;
     for (const k of Array.from(vpEngines.keys())) {
-      if (k.startsWith(prefix)) vpEngines.delete(k);
+      if (k.startsWith(prefix)) {
+        vpEngines.delete(k);
+        vpEngineConfigKeys.delete(k);
+      }
     }
     invalidateGroupContext(sessionId);
     sendSessionCrudResult({ op: 'update_config', requestId, ok: true, sessionId, config: savedConfig });
@@ -2432,7 +2658,10 @@ export function handleYeaftDeleteSession(msg) {
     invalidateGroupContext(sessionId);
     const prefix = `${sessionId}::`;
     for (const k of Array.from(vpEngines.keys())) {
-      if (k.startsWith(prefix)) vpEngines.delete(k);
+      if (k.startsWith(prefix)) {
+        vpEngines.delete(k);
+        vpEngineConfigKeys.delete(k);
+      }
     }
     sendSessionCrudResult({
       op: 'delete',
@@ -2477,7 +2706,10 @@ export function handleYeaftSessionRemoveMember(msg) {
     // added back they should start with fresh per-thread state.
     const removedPrefix = `${sessionId}::${vpId}::`;
     for (const key of Array.from(vpEngines.keys())) {
-      if (key.startsWith(removedPrefix)) vpEngines.delete(key);
+      if (key.startsWith(removedPrefix)) {
+        vpEngines.delete(key);
+        vpEngineConfigKeys.delete(key);
+      }
     }
     sendSessionCrudResult({ op: 'remove_member', requestId, ok: true, session: group });
     sendSessionRosterChanged(group);
@@ -3232,7 +3464,7 @@ function handleEngineEvent(event, hctx) {
  *   - No legacy "no-session" fallback paths — they were the source of the
  *     router_unavailable bug fixed in v0.1.671.
  */
-export async function handleYeaftSessionSend(msg) {
+async function runYeaftSessionSend(msg) {
   if (!msg || typeof msg !== 'object') return;
   const { text } = msg;
   // PR #721: image-only send is allowed — text may be empty when the
@@ -3301,10 +3533,10 @@ export async function handleYeaftSessionSend(msg) {
     return;
   }
 
-  // Open the session metadata first so a workDir-backed Session can load its
-  // project-tier skills and MCP before the first engine turn. The runtime boot
-  // below uses the same workDir; if metadata is missing we still boot the agent
-  // runtime for a useful error response, then fail on the session open check.
+  // Open the session metadata first so a workDir-backed Session can schedule
+  // project runtime loading without blocking the user-message hot path. If
+  // metadata is missing we still boot the agent runtime for a useful error
+  // response, then fail on the session open check.
   let sessionHandle = null;
   let sessionRoot = null;
   let sessionMetaForRuntime = null;
@@ -3332,7 +3564,7 @@ export async function handleYeaftSessionSend(msg) {
 
   const ensureSessionStart = perfNowMs();
   await ensureSessionLoaded({ sessionMeta: sessionMetaForRuntime, perfTraceId });
-  await ensureProjectRuntimeForSessionMeta(sessionMetaForRuntime);
+  scheduleProjectRuntimeLoad(sessionMetaForRuntime?.workDir);
   traceDuration('session_send.ensure_session_loaded', ensureSessionStart);
 
 
@@ -3398,7 +3630,7 @@ export async function handleYeaftSessionSend(msg) {
 
   // ── Attachments (images + files) ───────────────────────────────
   // Server has already resolved fileId → { name, mimeType, data:base64,
-  // isImage } via the same path crew uses (client-conversation.js relay
+  // isImage } via the client-conversation.js relay
   // for `yeaft_*`). We persist files to disk under the agent's CWD so
   // file-tools (file-read / bash) can pick them up with relative paths,
   // and we build per-image content blocks for the LLM call. The
@@ -3695,11 +3927,16 @@ async function ensureSessionLoaded(opts = {}) {
   sessionLoadPromise = (async () => {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const normalizedWorkDir = normalizeSessionWorkDir(opts?.workDir || opts?.sessionMeta?.workDir);
+    const sessionYeaftDir = resolveStoreYeaftDirForSession(yeaftDir, {
+      sessionId: opts?.sessionId || opts?.sessionMeta?.id || null,
+      sessionMeta: opts?.sessionMeta || null,
+      workDir: normalizedWorkDir,
+    });
     session = await loadSession({
       ...(yeaftDir && { dir: yeaftDir }),
       ...(normalizedWorkDir && { workDir: normalizedWorkDir }),
-      skipMCP: false,
-      skipSkills: false,
+      skipMCP: true,
+      skipSkills: true,
       serverMode: true,
     });
 
@@ -3730,7 +3967,11 @@ async function ensureSessionLoaded(opts = {}) {
     }
 
     ensureYeaftConversationId();
-    const bootProjectRuntime = normalizedWorkDir ? await ensureProjectRuntimeForSessionMeta({ workDir: normalizedWorkDir }) : null;
+    scheduleBaseRuntimeLoad();
+    const bootProjectRuntime = normalizedWorkDir ? projectRuntimes.get(projectRuntimeKey(normalizedWorkDir)) || null : null;
+    if (normalizedWorkDir && !bootProjectRuntime) {
+      scheduleProjectRuntimeLoad(normalizedWorkDir);
+    }
     const bootStatus = mergedStatusForProjectRuntime(bootProjectRuntime);
     hydrateYeaftStatusFromSession({ ...session, status: bootStatus }, { reason: 'session_ready', emitEvent: true });
     broadcastSkillSlashCommands(session, bootProjectRuntime ? [bootProjectRuntime.skillManager] : []);
@@ -4026,7 +4267,9 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         envelope: inboundEnvelope,
         threadId,
       });
-      const projectRuntime = await ensureProjectRuntimeForSessionMeta(sessionCoordinator?.group?.getMeta?.());
+      let turnSessionMeta = null;
+      try { turnSessionMeta = sessionCoordinator?.group?.getMeta?.() || null; } catch { turnSessionMeta = null; }
+      const projectRuntime = getProjectRuntimeForTurn(turnSessionMeta);
 
       vpEngine = getOrCreateVpEngine(sessionId, vpId, threadId);
       if (projectRuntime) {
@@ -5124,6 +5367,10 @@ export async function handleYeaftFetchDebugHistory(msg = {}) {
   });
 }
 
+export async function handleYeaftSessionSend(msg) {
+  return runYeaftSessionSend(msg);
+}
+
 export function handleYeaftSubAgentPrompt(msg) {
   const sessionId = typeof msg?.sessionId === 'string' ? msg.sessionId.trim() : '';
   const taskId = typeof msg?.taskId === 'string' ? msg.taskId.trim() : '';
@@ -5274,6 +5521,7 @@ export function handleYeaftModelSwitch(msg) {
   // Engines would otherwise keep the old effective config and drop newly
   // selected effort values until process restart.
   vpEngines.clear();
+  vpEngineConfigKeys.clear();
   asyncTaskOwners.clear();
 
   sendSessionEvent({
@@ -5431,8 +5679,6 @@ export async function handleYeaftLoadHistory(msg) {
       mode: 'recent',
       count: replayEntries.length,
       hasCompactSummary: hasCompactSummaryFlag,
-      totalHot: session.conversationStore.countHot(),
-      totalCold: session.conversationStore.countCold(),
       sessionId,
       hasMore,
       oldestSeq,
@@ -5447,12 +5693,22 @@ export async function handleYeaftLoadHistory(msg) {
     const limit = (typeof msg.limit === 'number') ? msg.limit : 10;
     ensureYeaftConversationId();
 
+    let sessionMetaForRuntime = null;
+    let sessionYeaftDir = yeaftDir;
+    if (sessionId) {
+      try {
+        sessionYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
+        const metaDir = join(sessionsRoot(sessionYeaftDir), sessionId);
+        sessionMetaForRuntime = loadSessionMeta(metaDir);
+      } catch { /* best-effort metadata hint */ }
+    }
+
     // First paint must not wait for full Yeaft runtime boot (MCP connects,
-    // skill scans, memory index sync). The conversation markdown store is the
+    // skill scans, memory index sync). The conversation segment store is the
     // source of truth and can be opened cheaply, so replay the visible message
     // window immediately, then finish loadSession below for actual turns.
     const coldStoreStart = perfNowMs();
-    const coldStore = new ConversationStore(yeaftDir);
+    const coldStore = new ConversationStore(sessionYeaftDir);
     traceDuration('history.cold_store_open', coldStoreStart);
     if (sessionId && (afterSeqRaw !== null || afterMessageId)) {
       let afterSeq = afterSeqRaw;
@@ -5482,14 +5738,6 @@ export async function handleYeaftLoadHistory(msg) {
     }
     historyAlreadyReplayed = true;
 
-    let sessionMetaForRuntime = null;
-    if (sessionId) {
-      try {
-        const groupYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
-        const metaDir = join(sessionsRoot(groupYeaftDir), sessionId);
-        sessionMetaForRuntime = loadSessionMeta(metaDir);
-      } catch { /* best-effort metadata hint */ }
-    }
     // Full runtime boot can be expensive (memory FTS sync, skills, MCP, dream
     // boot checks). It is not needed to render persisted history, so keep this
     // request short and let message-send await the same single-flight boot when
@@ -5630,6 +5878,7 @@ export async function resetYeaftSession() {
   vpInboxes.clear();
   vpDrivers.clear();
   vpEngines.clear();
+  vpEngineConfigKeys.clear();
   asyncTaskOwners.clear();
   sessionContexts.clear();
   vpCurrentTodos.clear();
@@ -5652,13 +5901,14 @@ export async function resetYeaftSession() {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     session = await loadSession({
       ...(yeaftDir && { dir: yeaftDir }),
-      skipMCP: false,
-      skipSkills: false,
+      skipMCP: true,
+      skipSkills: true,
       serverMode: true,
     });
     installYeaftRuntimeBridge(session);
 
     yeaftConversationId = `yeaft-${Date.now()}`;
+    scheduleBaseRuntimeLoad();
     hydrateYeaftStatusFromSession(session, { reason: 'reset', emitEvent: true });
     broadcastSkillSlashCommands(session);
 
@@ -5913,9 +6163,21 @@ export const __testHooks = {
   loadVisibleGroupHistoryPage,
   persistInboundMessageOnceByMsgId,
   buildPendingRescueEnvelope,
+  runYeaftSessionSendForTest(msg) {
+    return runYeaftSessionSend(msg);
+  },
   setSessionForTest(nextSession) {
     session = nextSession || null;
     sessionLoadPromise = null;
+  },
+  ensureYeaftConversationIdForTest() {
+    return ensureYeaftConversationId();
+  },
+  preloadYeaftSkillSlashCommandsForTest() {
+    return broadcastSkillSlashCommands(session);
+  },
+  loadAndBroadcastYeaftSkillSlashCommandsForTest() {
+    return loadAndBroadcastYeaftSkillSlashCommands();
   },
   resetAbortState() {
     turnAbortCtrls.clear();
@@ -5933,6 +6195,30 @@ export const __testHooks = {
   resolveDreamTriggerSessionId,
   async loadProjectRuntime(workDir) {
     return loadProjectRuntime(workDir);
+  },
+  seedSessionContext(sessionId, meta) {
+    const group = {
+      getMeta() { return structuredClone(meta); },
+      appendMessage(record) {
+        return {
+          ...record,
+          id: record?.id || `msg-${Date.now()}`,
+          ts: record?.ts || new Date().toISOString(),
+          role: record?.role || (record?.from === 'user' ? 'user' : 'assistant'),
+          meta: record?.meta || {},
+        };
+      },
+    };
+    const coord = createCoordinator(group, {
+      deliver: (vpId, envelope) => enqueueForVp(sessionId, vpId, envelope),
+    });
+    const entry = makeGroupContextStub();
+    entry.coord = coord;
+    entry.router = createRouter({ coordinator: coord });
+    entry.sessionHandle = group;
+    entry.historyHydrated = true;
+    sessionContexts.set(sessionId, entry);
+    return entry;
   },
   seedProjectRuntime(workDir, runtime) {
     const normalizedWorkDir = normalizeSessionWorkDir(workDir);

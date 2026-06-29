@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { beforeEach } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -28,6 +29,14 @@ function flushMicrotasks() {
 }
 
 describe('Yeaft load-history first paint', () => {
+  beforeEach(() => {
+    __testSetSession(null);
+    sent.length = 0;
+    loadSession.mockClear();
+    resolveLoadSession = null;
+    ctx.CONFIG = null;
+  });
+
   afterEach(() => {
     __testSetSession(null);
     sent.length = 0;
@@ -113,6 +122,93 @@ describe('Yeaft load-history first paint', () => {
       await new Promise(resolve => setTimeout(resolve, 0));
       expect(sent.some(m => m.event?.type === 'session_ready' && !m.event.partial)).toBe(true);
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('cold-start history uses the workDir-backed session store before runtime boot', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-workdir-history-default-'));
+    const workDir = mkdtempSync(join(tmpdir(), 'yeaft-workdir-history-project-'));
+    try {
+      const sessionId = 'session-workdir';
+      const workYeaftDir = join(workDir, '.yeaft');
+      const sessionDir = join(workYeaftDir, 'sessions', sessionId);
+      mkdirSync(sessionDir, { recursive: true });
+      writeFileSync(join(sessionDir, 'session.json'), `${JSON.stringify({
+        id: sessionId,
+        name: 'WorkDir Session',
+        roster: ['omni'],
+        defaultVpId: 'omni',
+        workDir,
+        createdAt: '2026-06-26T00:00:00.000Z',
+      }, null, 2)}\n`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'group-workdirs.json'), `${JSON.stringify({ [sessionId]: workDir }, null, 2)}\n`);
+
+      ctx.CONFIG = { yeaftDir: dir };
+      const store = new ConversationStore(workYeaftDir);
+      store.append({ role: 'user', content: 'workdir q', sessionId, time: '2026-06-26T01:00:00.000Z' });
+      store.append({ role: 'assistant', content: 'workdir a', sessionId, speakerVpId: 'vp-linus', time: '2026-06-26T01:00:01.000Z' });
+
+      const pending = handleYeaftLoadHistory({ sessionId, limit: 1 });
+      await flushMicrotasks();
+
+      const chunk = sent.find(m => m.type === 'yeaft_history_chunk' && m.mode === 'recent');
+      expect(chunk.messages.map(m => m.content)).toEqual(['workdir q', 'workdir a']);
+      expect(loadSession).toHaveBeenCalledTimes(1);
+      expect(loadSession.mock.calls[0][0]).toMatchObject({ dir, workDir });
+
+      await pending;
+      resolveLoadSession({
+        conversationStore: store,
+        config: { model: 'test-model', availableModels: [] },
+        status: { skills: 0, mcpServers: [], tools: 0 },
+        taskManager: { listActiveTasks: () => [] },
+      });
+      await flushMicrotasks();
+      await new Promise(resolve => setTimeout(resolve, 0));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('loaded runtime history hydration uses the bounded recent window', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-runtime-history-'));
+    try {
+      ctx.CONFIG = { yeaftDir: dir };
+      const store = new ConversationStore(dir);
+      for (let i = 0; i < 500; i++) {
+        store.append({ role: 'user', content: `old ${i}`, sessionId: 'session-fast' });
+        store.append({ role: 'assistant', content: `old answer ${i}`, sessionId: 'session-fast', speakerVpId: 'vp-linus' });
+      }
+      store.append({ role: 'user', content: 'latest q', sessionId: 'session-fast' });
+      store.append({ role: 'assistant', content: 'latest a', sessionId: 'session-fast', speakerVpId: 'vp-linus' });
+
+      const readCounts = { count: 0 };
+      const original = store.readMessageFile;
+      store.readMessageFile = (...args) => {
+        readCounts.count += 1;
+        return original.call(store, ...args);
+      };
+      __testSetSession({
+        conversationStore: store,
+        config: { model: 'test-model', availableModels: [] },
+        status: { skills: 0, mcpServers: [], tools: 0 },
+        taskManager: { listActiveTasks: () => [] },
+      });
+
+      await handleYeaftLoadHistory({ sessionId: 'session-fast', limit: 1 });
+      const chunk = sent.find(m => m.type === 'yeaft_history_chunk');
+      expect(chunk.messages.map(m => m.content)).toEqual(['latest q', 'latest a']);
+      expect(__testHooks.loadVisibleGroupHistoryPage({
+        loadVisibleBySession: (...args) => store.loadVisibleBySession(...args),
+      }, 'session-fast', 1).messages.map(m => m.content)).toEqual(['latest q', 'latest a']);
+      // One bounded UI replay (limit: 1) plus one bounded runtime hydrate
+      // (default recentTurnsLimit) is fine; parsing the whole 1002-row session is not.
+      expect(readCounts.count).toBeLessThan(80);
+    } finally {
+      __testSetSession(null);
       rmSync(dir, { recursive: true, force: true });
     }
   });

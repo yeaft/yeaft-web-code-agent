@@ -45,7 +45,7 @@ import { TaskManager } from './tasks/manager.js';
 // resumes with the same onDemand/recent membership it had on
 // disconnect. Engine.#runQuery uses the registry to populate the
 // AMS each turn and to run `memory/adjust.js` post-turn.
-import { ensureDefaultSessionIfEmpty } from './sessions/session-crud.js';
+import { ensureDefaultSessionIfEmpty, yeaftDirForWorkDir } from './sessions/session-crud.js';
 import { seedDefaultVps } from './vp/seed-defaults.js';
 import { topUpDefaultVps } from './vp/seed-topup.js';
 import { archiveLegacyScopes } from './memory/seed-backfill.js';
@@ -71,6 +71,7 @@ const DEFAULT_COMPACT_TRIGGER_RATIO = 0.7;
 /**
  * @typedef {Object} SessionOptions
  * @property {string} [dir] — Yeaft data directory override (default: ~/.yeaft)
+ * @property {string} [workDir] — Session workDir; when provided, storage lives under <workDir>/.yeaft while config still comes from dir/defaults
  * @property {string} [model] — Model override
  * @property {string} [language] — Language override ('en' | 'zh')
  * @property {boolean} [debug] — Debug mode override
@@ -136,6 +137,7 @@ function prepareToolStatsDir(yeaftDir) {
 export async function loadSession(options = {}) {
   const {
     dir,
+    workDir,
     model,
     language,
     debug,
@@ -146,21 +148,29 @@ export async function loadSession(options = {}) {
     serverMode = false,
   } = options;
 
-  // ─── 1. Determine yeaftDir + ensure directory structure ──
-  //        Must happen BEFORE loadConfig so that first-run
-  //        generates a default config.json that loadConfig can read.
+  // ─── 1. Determine config + store directories ─────────────
+  //        Must happen BEFORE loadConfig so that first-run generates a
+  //        default config.json that loadConfig can read. workDir-backed
+  //        Sessions store conversation/session data under <workDir>/.yeaft,
+  //        but runtime config still comes from the agent-local configDir.
   const overrides = { ...configOverrides };
   if (dir) overrides.dir = dir;
   if (model) overrides.model = model;
   if (language) overrides.language = language;
   if (debug !== undefined) overrides.debug = debug;
 
-  const yeaftDir = overrides.dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
-  const initResult = initYeaftDir(yeaftDir);
-  overrides.dir = yeaftDir;
+  const sessionWorkDir = typeof workDir === 'string' && workDir.trim() ? workDir.trim() : '';
+  const configDir = overrides.dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
+  const yeaftDir = sessionWorkDir ? yeaftDirForWorkDir(sessionWorkDir) : configDir;
+  const configInitResult = initYeaftDir(configDir);
+  const storeInitResult = yeaftDir === configDir ? configInitResult : initYeaftDir(yeaftDir);
+  overrides.dir = configDir;
 
-  // Log any warnings from directory initialization
-  for (const w of initResult.warnings) {
+  // Log any warnings from directory initialization.
+  const initWarnings = yeaftDir === configDir
+    ? configInitResult.warnings
+    : [...configInitResult.warnings, ...storeInitResult.warnings];
+  for (const w of initWarnings) {
     console.warn(`[Yeaft] ${w}`);
   }
 
@@ -212,7 +222,7 @@ export async function loadSession(options = {}) {
   // ─── 2a. Permission pre-check ─────────────────────────
   //         If the data dir is not writable, mark session as read-only.
   //         Persistence (conversation, memory, dream) is skipped in this mode.
-  if (!initResult.writable) {
+  if (!storeInitResult.writable) {
     config._readOnly = true;
     console.warn(`[Yeaft] ${yeaftDir} is not writable — running in read-only mode`);
   }
@@ -365,24 +375,23 @@ export async function loadSession(options = {}) {
   }
 
   // ─── 6. Load skills ────────────────────────────────────
-  // Project tier root for skills + MCP project assets. Per-session workDir
-  // overlays are loaded by web-bridge once it knows the selected Session meta;
-  // the base runtime still uses the agent process cwd for global/default status.
-  const projectTierRoot = process.cwd();
+  // User/global runtime assets still come from configDir. workDir, when
+  // present, is only a project tier overlay plus the storage root.
+  const projectTierRoot = sessionWorkDir || process.cwd();
 
   let skillManager;
   if (skipSkills) {
     // Pass the literal user-tier dir (matches the normal branch's tier 2)
     // so any save/remove calls land in the same place users expect. New
     // `SkillManager` API takes literal scan dirs — no auto-suffix of /skills.
-    skillManager = new SkillManager(join(yeaftDir, 'skills'));
+    skillManager = new SkillManager(join(configDir, 'skills'));
     // Don't call .load() — empty skill manager
   } else {
-    skillManager = createSkillManager(yeaftDir, projectTierRoot);
+    skillManager = createSkillManager(configDir, projectTierRoot);
   }
 
   // ─── 7. Connect MCP servers ────────────────────────────
-  const mcpConfig = loadMCPConfig(yeaftDir, undefined, projectTierRoot);
+  const mcpConfig = loadMCPConfig(configDir, undefined, projectTierRoot);
   const mcpManager = new MCPManager();
   let mcpStatus = { connected: [], failed: [] };
 

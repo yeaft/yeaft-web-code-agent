@@ -91,21 +91,7 @@ AI expert teams that assist your conversations — select a team (e.g. Writing, 
 - Team selection via chip-style tabs
 - Works alongside normal chat without interrupting the flow
 
-### Crew (Multi-Agent Collaboration)
 
-Multi-role AI team collaboration with PM, Developer, Reviewer, and Tester roles working together on features.
-
-- Automated task routing between roles via ROUTE protocol
-- Feature progress tracking panel with real-time status (streaming pulse animation)
-- Role-based message grouping with decision-maker messages in main stream
-- Parallel multi-agent execution across multiple worktrees
-- Feature completion detection with auto-reactivation on new activity
-- AskUserQuestion interactive cards — agents can prompt the user for decisions mid-task
-- Typing indicator with event-driven health monitoring (agent offline / session lost / compacting)
-
-![Crew Features](docs/images/crew-features.jpg)
-
-![Crew Feature Detail](docs/images/crew-feature-detail.jpg)
 
 ### Admin Dashboard
 
@@ -413,14 +399,12 @@ yeaft-web-code-agent/
 │   │   └── tools/       # 30+ built-in tools
 │   ├── claude.js        # Legacy Claude CLI process management
 │   ├── conversation.js  # Chat session lifecycle & slash commands
-│   ├── crew/            # Multi-agent Crew coordination (13 modules)
 │   ├── sdk/             # Claude CLI stream-json SDK
 │   ├── terminal.js      # PTY terminal (node-pty)
 │   └── workbench/       # Git + file operations
 ├── web/                 # Vue 3 frontend
 │   ├── app.js           # Vue app entry
 │   ├── build.js         # Production build (esbuild)
-│   ├── components/      # Vue components (25 top-level + crew/ sub-dir)
 │   ├── stores/          # Pinia stores + helpers
 │   ├── styles/          # CSS (23 stylesheets, dark/light theme)
 │   ├── i18n/            # Translations (en, zh-CN)

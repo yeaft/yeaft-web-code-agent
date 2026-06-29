@@ -352,6 +352,23 @@ describe('HistorySearch tool', () => {
     const result = JSON.parse(await tool.execute({ keyword: 'test' }, {}));
     expect(result.error).toBeTruthy();
   });
+
+  it('finds messages written to JSONL segments', async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'yeaft-history-search-'));
+    try {
+      const { ConversationStore } = await import('../../agent/yeaft/conversation/persist.js');
+      const mod = await import(`${TOOLS_DIR}/history-search.js`);
+      const tool = mod.default;
+      const store = new ConversationStore(tmpDir);
+      store.append({ role: 'user', content: 'segment-only search needle', sessionId: 'session_search' });
+
+      const result = JSON.parse(await tool.execute({ keyword: 'needle' }, { yeaftDir: tmpDir }));
+      expect(result.totalResults).toBe(1);
+      expect(result.results[0]).toMatchObject({ role: 'user', content: 'segment-only search needle' });
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ──────────────────────────────────────────────

@@ -17,7 +17,6 @@ Quick reference for keyboard shortcuts in the Yeaft Web UI.
 | **Enter** | Send |
 | **Shift+Enter** | New line |
 | **/** | Open slash command autocomplete (Claude Code only) |
-| **@** | Open mention autocomplete (Crew role / Yeaft VP) |
 | **Ctrl+V** (Cmd+V) | Paste text or image (image becomes an attachment) |
 | **↑** | Recall last sent message (draft restore) |
 

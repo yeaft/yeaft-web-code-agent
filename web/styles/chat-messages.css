@@ -2719,6 +2719,10 @@
   color: var(--text-primary);
 }
 
+.todo-item.stopped {
+  color: var(--text-muted);
+}
+
 .todo-checkbox {
   width: 16px;
   height: 16px;

@@ -9,7 +9,6 @@ import * as handlerHelpers from './helpers/messageHandler.js';
 import * as convHelpers from './helpers/conversation.js';
 import * as sessionHelpers from './helpers/session.js';
 import * as watchdogHelpers from './helpers/watchdog.js';
-import * as crewHelpers from './helpers/crew.js';
 import * as yeaftViewHelpers from './helpers/yeaft-view.js';
 import { incVpTyping, decVpTyping } from './helpers/vp-typing.js';
 import { selectActiveConversationId } from './helpers/active-conv.js';
@@ -42,6 +41,7 @@ const vpStatusKey = (groupId, vpId) => `${groupId || ''}::${vpId}`;
 const YEAFT_RECENT_TURNS = 5;
 const YEAFT_RECENT_TERMINAL_TASK_LIMIT = 8;
 const YEAFT_TERMINAL_TASK_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'orphaned']);
+const YEAFT_RUNNING_VP_STATES = new Set(['typing', 'thinking', 'streaming', 'tool']);
 
 // Yeaft message ids are `NNNNNN-…` where NNNNNN is the zero-padded seq.
 // Pull the seq out so the store can stamp / advance its delta cursor on
@@ -231,10 +231,6 @@ export const useChatStore = defineStore('chat', {
     theme: localStorage.getItem('theme') || (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'),
     themeFollowSystem: !localStorage.getItem('theme'),
     locale: localStorage.getItem('locale') || 'zh-CN',
-    // Crew mode is opt-in via Settings → General. When disabled, the
-    // sidebar collapses to a single full-width Chat tab, matching the
-    // visual structure of the Yeaft sidebar. Default: disabled.
-    crewModeEnabled: localStorage.getItem('crewModeEnabled') === 'true',
     // Per-conversation 执行状态追踪：conversationId -> { currentTool, toolHistory, lastActivity }
     executionStatusMap: {},
     // Per-conversation session health: conversationId -> { status: 'agent-offline'|'session-lost'|'cli-exited' }
@@ -396,23 +392,6 @@ export const useChatStore = defineStore('chat', {
     conversationMcpServerTools: {},
     // MCP 面板是否展开
     mcpPanelOpen: false,
-
-    // =====================
-    // Crew (multi-agent) 状态 — 按 sessionId 存储，融入 conversation 体系
-    // =====================
-    crewSessions: {},             // { [sessionId]: { id, projectDir, sharedDir, roles, decisionMaker } }
-    crewMessagesMap: {},          // { [sessionId]: messages[] }
-    crewOlderMessages: {},       // { [sessionId]: { hasMore, nextShard, loading } }
-    crewStatuses: {},             // { [sessionId]: { status, currentRole, round, costUsd, activeRoles } }
-    crewNotifications: [],        // [{ id, fromRole, fromIcon, fromName, toRole, toIcon, toName, taskId, taskTitle, timestamp }]
-    crewExistsResult: null,       // check_crew_exists 结果: { exists, projectDir, sessionInfo }
-    splitConvModalOpen: false,    // 分屏模式下新建会话 modal 是否打开
-    crewConfigOpen: false,        // crew 配置面板是否打开
-    crewConfigMode: 'create',    // 'create' | 'edit'
-    crewMobilePanel: null,       // null | 'roles' | 'features' — 移动端 Drawer 状态
-    crewPanelVisible: { roles: false, features: true }, // 桌面端面板可见性
-    crewInProgressCount: 0,      // legacy global fallback for non-split mode
-    crewInProgressCountMap: {},   // per-conversation: { [convId]: number }
 
     // =====================
     // Expert Panel (帮帮团) 状态
@@ -615,12 +594,6 @@ export const useChatStore = defineStore('chat', {
     // hydration from SSR / rehydration doesn't trip on a non-Map value.
     _vpCrudPending: null,
 
-    // ★ task-334-ui-c: VP detail view. When non-null, YeaftPage switches
-    // the center pane to the VpDetailView component (mirrors the
-    // task-315 pattern). Esc / breadcrumb back clears. Stays null in
-    // legacy 1:1 mode — only entered by clicking a VpAvatar/VpBadge in
-    // a VP-speaker-headed turn or a VP library row.
-    yeaftActiveVpDetailId: null,
 
     // VP-block redesign (2026-05-08): the per-turn detail drawer
     // (`yeaftOpenVpTurnDetail`) was retired alongside VpQuickCard /
@@ -872,7 +845,7 @@ export const useChatStore = defineStore('chat', {
     // ★ Split-screen: whether in split-screen mode (2+ panels)
     isSplitMode: (state) => state.panels.length > 1,
     // 当前页面/session 是否在处理中。
-    // Chat/Crew use the active conversation id; Yeaft must be scoped to the
+    // Chat uses the active conversation id; Yeaft must be scoped to the
     // selected Session because one virtual Yeaft conversation contains many
     // Sessions and VP turns can overlap across them.
     isProcessing: (state) => {
@@ -882,6 +855,11 @@ export const useChatStore = defineStore('chat', {
         if (state.yeaftProcessingSessions?.[sessionId]) return true;
         for (const info of Object.values(state.activeVpTurns || {})) {
           if (info?.sessionId === sessionId) return true;
+        }
+        for (const status of Object.values(state.vpStatuses || {})) {
+          const statusSessionId = status?.sessionId || status?.groupId || null;
+          if (statusSessionId !== sessionId) continue;
+          if (YEAFT_RUNNING_VP_STATES.has(status?.state)) return true;
         }
         return false;
       }
@@ -967,6 +945,11 @@ export const useChatStore = defineStore('chat', {
       for (const info of Object.values(state.activeVpTurns || {})) {
         if (info?.sessionId === sessionId) return true;
       }
+      for (const status of Object.values(state.vpStatuses || {})) {
+        const statusSessionId = status?.sessionId || status?.groupId || null;
+        if (statusSessionId !== sessionId) continue;
+        if (YEAFT_RUNNING_VP_STATES.has(status?.state)) return true;
+      }
       return false;
     },
     // 是否显示恢复提示
@@ -1007,31 +990,10 @@ export const useChatStore = defineStore('chat', {
     selectedTaskInfo: () => {
       return null;
     },
-    // 当前 conversation 是否是 Crew
-    currentConversationIsCrew: (state) => {
-      if (!state.currentConversation) return false;
-      const conv = state.conversations.find(c => c.id === state.currentConversation);
-      return conv?.type === 'crew';
-    },
     // 当前 conversation 的 MCP servers 列表
     currentMcpServers: (state) => {
       if (!state.currentConversation) return EMPTY_ARRAY;
       return state.conversationMcpServers[state.currentConversation] || EMPTY_ARRAY;
-    },
-    // 当前 Crew session 信息
-    currentCrewSession: (state) => {
-      if (!state.currentConversation) return null;
-      return state.crewSessions[state.currentConversation] || null;
-    },
-    // 当前 Crew 状态
-    currentCrewStatus: (state) => {
-      if (!state.currentConversation) return null;
-      return state.crewStatuses[state.currentConversation] || null;
-    },
-    // 当前 Crew 消息列表
-    currentCrewMessages: (state) => {
-      if (!state.currentConversation) return EMPTY_ARRAY;
-      return state.crewMessagesMap[state.currentConversation] || EMPTY_ARRAY;
     }
   },
 
@@ -1170,7 +1132,7 @@ export const useChatStore = defineStore('chat', {
       // a redundant second catch-up on the next routine agent_list.
       this._yeaftReconnectCatchUpPending = false;
       this.loadOpenedYeaftSessionsForConnectedAgents(null, { force: true });
-      this.requestYeaftSessionBootstrap({ forceSessionReady: true, catchUpHistory: true });
+      this.requestYeaftSessionBootstrap({ forceSessionReady: true, catchUpHistory: true, forceHistoryReplay: true });
     },
 
     loadOpenedYeaftSessionsForConnectedAgents(agentIds = null, { force = false } = {}) {
@@ -1194,7 +1156,7 @@ export const useChatStore = defineStore('chat', {
       return requested;
     },
 
-    requestYeaftSessionBootstrap({ forceSessionReady = false, catchUpHistory = false } = {}) {
+    requestYeaftSessionBootstrap({ forceSessionReady = false, catchUpHistory = false, forceHistoryReplay = false } = {}) {
       if (!this.currentAgent) return;
       const activeSessionId = resolveActiveYeaftSessionId(this);
       const sessionState = activeSessionId
@@ -1207,10 +1169,13 @@ export const useChatStore = defineStore('chat', {
         && Array.isArray(this.messagesMap?.[this.yeaftConversationId])
         && this.messagesMap[this.yeaftConversationId].some(row => row && (row.sessionId ?? row.groupId ?? null) === activeSessionId);
       const needHistoryReplay = !!activeSessionId
-        && !sessionState?.loading
-        && !sessionState?.loaded
-        && !hasCachedSessionRows;
+        && msgHelpers.shouldReplayYeaftSessionHistory({
+          sessionState,
+          hasCachedSessionRows,
+          force: !!forceHistoryReplay,
+        });
       const needHistoryCatchUp = !!activeSessionId
+        && !needHistoryReplay
         && msgHelpers.shouldCatchUpLoadedYeaftSession(sessionState, catchUpHistory);
       if (!needSessionReady && !needHistoryReplay && !needHistoryCatchUp) return false;
       // Route session-scoped history through the single resolver (sessions
@@ -2593,6 +2558,14 @@ export const useChatStore = defineStore('chat', {
             ...this.vpStatuses,
             [k]: nextStatus,
           };
+          if (sessionId && YEAFT_RUNNING_VP_STATES.has(event.state)) {
+            this.yeaftProcessingSessions = {
+              ...this.yeaftProcessingSessions,
+              [sessionId]: true,
+            };
+          } else if (sessionId) {
+            this.clearYeaftSessionProcessingIfIdle(sessionId);
+          }
           this.restoreActiveYeaftSessionFromStatuses([nextStatus]);
           break;
         }
@@ -2666,8 +2639,8 @@ export const useChatStore = defineStore('chat', {
         // agent/yeaft/web-bridge.js handleYeaftDreamTrigger.
         // yeaft_dream_status carries { vpId, status: 'running' } during the
         // run; yeaft_dream_result carries { vpId, success, mergedCount, ... }
-        // when finished. Both flow into vpStore.dreamStatus[vpId] so the
-        // VpDetailView status bar can update without polling.
+        // when finished. Both flow into vpStore.dreamStatus[vpId] so inline
+        // status surfaces can update without polling.
         case 'yeaft_dream_status': {
           const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
           if (vp) vp.applyDreamStatus(event);
@@ -3155,12 +3128,17 @@ export const useChatStore = defineStore('chat', {
           sessionId: next,
         };
         const hasLoadedWindow = !!savedState?.loaded;
-        if (latestSeq !== null) {
+        const shouldReplayRecent = msgHelpers.shouldReplayYeaftSessionHistory({
+          sessionState: savedState,
+          hasCachedSessionRows: false,
+          force,
+        });
+        if (!shouldReplayRecent && latestSeq !== null) {
           payload.afterSeq = latestSeq;
         } else {
           payload.limit = YEAFT_RECENT_TURNS;
         }
-        if (hasLoadedWindow && latestSeq === null) {
+        if (!shouldReplayRecent && hasLoadedWindow && latestSeq === null) {
           this.yeaftSessionHistoryState = {
             ...this.yeaftSessionHistoryState,
             [sessionKey]: {
@@ -3173,7 +3151,7 @@ export const useChatStore = defineStore('chat', {
           this.yeaftLoadingMoreHistory = false;
           return;
         }
-        if (hasLoadedWindow) {
+        if (!shouldReplayRecent && hasLoadedWindow) {
           if (savedState?.syncingAfterSeq === latestSeq) return;
           this.yeaftSessionHistoryState = {
             ...this.yeaftSessionHistoryState,
@@ -3194,21 +3172,13 @@ export const useChatStore = defineStore('chat', {
               loaded: false,
               loading: true,
               syncingAfterSeq: null,
-              latestSeq,
+              latestSeq: shouldReplayRecent ? null : latestSeq,
             },
           };
           this.yeaftLoadingMoreHistory = true;
         }
         this.sendWsMessage(payload);
       }
-    },
-    // ★ task-334-ui-c: VP detail view entry / exit.
-    enterVpDetailView(vpId) {
-      if (!vpId) return;
-      this.yeaftActiveVpDetailId = String(vpId);
-    },
-    leaveVpDetailView() {
-      this.yeaftActiveVpDetailId = null;
     },
     // H2.f.6: setYeaftFeatureReplyThreadId / setYeaftJumpTarget /
     // clearYeaftJumpTarget actions removed.
@@ -3495,23 +3465,6 @@ export const useChatStore = defineStore('chat', {
       }
     },
 
-    // =====================
-    // Crew panel toggle
-    // =====================
-    toggleCrewMobilePanel(panel, paneId = null) {
-      if (paneId && this.isSplitMode) {
-        const pane = this.panels.find(p => p.id === paneId);
-        if (pane) { pane.crewMobilePanel = pane.crewMobilePanel === panel ? null : panel; return; }
-      }
-      this.crewMobilePanel = this.crewMobilePanel === panel ? null : panel;
-    },
-    toggleCrewPanel(panel, paneId = null) {
-      if (paneId && this.isSplitMode) {
-        const pane = this.panels.find(p => p.id === paneId);
-        if (pane) { pane.crewPanelVisible[panel] = !pane.crewPanelVisible[panel]; return; }
-      }
-      this.crewPanelVisible[panel] = !this.crewPanelVisible[panel];
-    },
     togglePaneRightPanel(panelType, paneId = null) {
       if (paneId && this.isSplitMode) {
         const pane = this.panels.find(p => p.id === paneId);
@@ -3519,33 +3472,12 @@ export const useChatStore = defineStore('chat', {
       }
       this.activeRightPanel = this.activeRightPanel === panelType ? null : panelType;
     },
-    getPanelVisible(paneId) {
-      if (paneId && this.isSplitMode) {
-        const pane = this.panels.find(p => p.id === paneId);
-        if (pane) return pane.crewPanelVisible;
-      }
-      return this.crewPanelVisible;
-    },
-    getPaneMobilePanel(paneId) {
-      if (paneId && this.isSplitMode) {
-        const pane = this.panels.find(p => p.id === paneId);
-        if (pane) return pane.crewMobilePanel;
-      }
-      return this.crewMobilePanel;
-    },
     getPaneRightPanel(paneId) {
       if (paneId && this.isSplitMode) {
         const pane = this.panels.find(p => p.id === paneId);
         if (pane) return pane.activeRightPanel;
       }
       return this.activeRightPanel;
-    },
-    setPaneMobilePanel(paneId, value) {
-      if (paneId && this.isSplitMode) {
-        const pane = this.panels.find(p => p.id === paneId);
-        if (pane) { pane.crewMobilePanel = value; return; }
-      }
-      this.crewMobilePanel = value;
     },
     setPaneRightPanel(paneId, value) {
       if (paneId && this.isSplitMode) {
@@ -3555,17 +3487,6 @@ export const useChatStore = defineStore('chat', {
       this.activeRightPanel = value;
     },
 
-    // =====================
-    // Per-conversation crew state (split-pane safe)
-    // =====================
-    getCrewInProgressCount(convId) {
-      if (convId) return this.crewInProgressCountMap[convId] || 0;
-      return this.crewInProgressCount;
-    },
-    setCrewInProgressCount(convId, value) {
-      if (convId) { this.crewInProgressCountMap[convId] = value; }
-      this.crewInProgressCount = value;
-    },
     isRefreshingSession(convId) {
       if (convId) return !!this.refreshingSessionMap[convId];
       return this.refreshingSession;
@@ -3710,9 +3631,7 @@ export const useChatStore = defineStore('chat', {
         id,
         conversationId,
         // Panel-local state (split mode only; non-split reads global store)
-        crewPanelVisible: { roles: false, features: true },
-        activeRightPanel: null,
-        crewMobilePanel: null
+        activeRightPanel: null
       });
       if (this.panels.length === 0) {
         // Entering split mode: try to restore previous split layout
@@ -3737,17 +3656,10 @@ export const useChatStore = defineStore('chat', {
                   if (panel.conversationId && !this.activeConversations.includes(panel.conversationId)) {
                     this.activeConversations.push(panel.conversationId);
                   }
-                  // Load messages for crew/chat conversations that aren't cached
+                  // Load messages for chat conversations that aren't cached
                   if (panel.conversationId && !this.messagesMap[panel.conversationId]) {
                     this.messagesMap[panel.conversationId] = [];
-                    const conv = this.conversations.find(c => c.id === panel.conversationId);
-                    if (conv?.type === 'crew') {
-                      if (!this.crewMessagesMap[panel.conversationId]) {
-                        this.crewMessagesMap[panel.conversationId] = [];
-                      }
-                    } else {
-                      this.sendWsMessage({ type: 'sync_messages', conversationId: panel.conversationId, turns: 5 });
-                    }
+                    this.sendWsMessage({ type: 'sync_messages', conversationId: panel.conversationId, turns: 5 });
                   }
                 }
                 localStorage.removeItem('splitPanesSaved');
@@ -3813,9 +3725,7 @@ export const useChatStore = defineStore('chat', {
       const makePanelState = (id, convId) => ({
         id,
         conversationId: convId,
-        crewPanelVisible: { roles: false, features: true },
-        activeRightPanel: null,
-        crewMobilePanel: null
+        activeRightPanel: null
       });
       if (this.panels.length === 0) {
         // Not in split mode yet — enter split mode
@@ -3841,14 +3751,7 @@ export const useChatStore = defineStore('chat', {
       // Ensure messagesMap entry exists
       if (!this.messagesMap[conversationId]) {
         this.messagesMap[conversationId] = [];
-        const conv = this.conversations.find(c => c.id === conversationId);
-        if (conv?.type === 'crew') {
-          if (!this.crewMessagesMap[conversationId]) {
-            this.crewMessagesMap[conversationId] = [];
-          }
-        } else {
-          this.sendWsMessage({ type: 'sync_messages', conversationId, turns: 5 });
-        }
+        this.sendWsMessage({ type: 'sync_messages', conversationId, turns: 5 });
       }
       this.saveOpenSessions();
     },
@@ -3947,10 +3850,17 @@ export const useChatStore = defineStore('chat', {
         console.warn('[chat] failed to persist pinnedSessions:', e?.message || e);
       }
     },
-    clearYeaftSessionProcessingIfIdle(sessionId) {
+    clearYeaftSessionProcessingIfIdle(sessionId, { ignoreStatuses = false } = {}) {
       if (!sessionId) return;
       const hasActiveTurn = Object.values(this.activeVpTurns || {}).some((info) => info?.sessionId === sessionId);
       if (hasActiveTurn) return;
+      if (!ignoreStatuses) {
+        const hasRunningStatus = Object.values(this.vpStatuses || {}).some((status) => {
+          const statusSessionId = status?.sessionId || status?.groupId || null;
+          return statusSessionId === sessionId && YEAFT_RUNNING_VP_STATES.has(status?.state);
+        });
+        if (hasRunningStatus) return;
+      }
       const { [sessionId]: _removed, ...rest } = this.yeaftProcessingSessions || {};
       this.yeaftProcessingSessions = rest;
     },
@@ -4248,6 +4158,17 @@ export const useChatStore = defineStore('chat', {
     _resetProcessingWatchdog(conversationId) { watchdogHelpers.resetProcessingWatchdog(this, conversationId); },
     _stopProcessingWatchdog(conversationId) { watchdogHelpers.stopProcessingWatchdog(this, conversationId); },
 
+    startRefreshTimeout(convId) {
+      const target = convId || this.currentConversation;
+      if (!target) return;
+      if (!this._refreshTimeouts) this._refreshTimeouts = {};
+      if (this._refreshTimeouts[target]) clearTimeout(this._refreshTimeouts[target]);
+      this._refreshTimeouts[target] = setTimeout(() => {
+        this.setRefreshingSession(target, false);
+        delete this._refreshTimeouts[target];
+      }, 10000);
+    },
+
     // =====================
     // UI helpers
     // =====================
@@ -4260,10 +4181,6 @@ export const useChatStore = defineStore('chat', {
       document.documentElement.classList.toggle('light', this.theme === 'light');
     },
 
-    setCrewModeEnabled(enabled) {
-      this.crewModeEnabled = !!enabled;
-      localStorage.setItem('crewModeEnabled', this.crewModeEnabled ? 'true' : 'false');
-    },
 
     initTheme() {
       document.documentElement.setAttribute('data-theme', this.theme);
@@ -4463,22 +4380,6 @@ export const useChatStore = defineStore('chat', {
       this.workbenchMaximized = !this.workbenchMaximized;
     },
 
-    // =====================
-    // Crew (multi-agent) actions
-    // =====================
-    enterCrewMode() { crewHelpers.enterCrewMode(this); },
-    listCrewSessions() { crewHelpers.listCrewSessions(this); },
-    checkCrewExists(projectDir, agentId) { crewHelpers.checkCrewExists(this, projectDir, agentId); },
-    deleteCrewDir(projectDir, agentId) { crewHelpers.deleteCrewDir(this, projectDir, agentId); },
-    openCrewConfig() { crewHelpers.openCrewConfig(this); },
-    createCrewSession(config) { crewHelpers.createCrewSession(this, config); },
-    resumeCrewSession(sessionId, agentId) { crewHelpers.resumeCrewSession(this, sessionId, agentId); },
-    loadCrewHistory(sessionId) { return crewHelpers.loadCrewHistory(this, sessionId); },
-    sendCrewMessage(content, targetRole = null, attachments = undefined, conversationId = undefined) { crewHelpers.sendCrewMessage(this, content, targetRole, attachments, conversationId); },
-    sendCrewControl(action, targetRole = null, conversationId = undefined) { crewHelpers.sendCrewControl(this, action, targetRole, conversationId); },
-    addCrewRole(role, conversationId = undefined) { crewHelpers.addCrewRole(this, role, conversationId); },
-    removeCrewRole(roleName, conversationId = undefined) { crewHelpers.removeCrewRole(this, roleName, conversationId); },
-    renameCrewSession(sessionId, name) { crewHelpers.renameCrewSession(this, sessionId, name); },
     renameChatSession(convId, title) {
       if (title && title.trim()) {
         this.customConversationTitles[convId] = title.trim();
@@ -4496,8 +4397,6 @@ export const useChatStore = defineStore('chat', {
         });
       }
     },
-    handleCrewOutput(msg) { crewHelpers.handleCrewOutput(this, msg); },
-    startRefreshTimeout(convId) { crewHelpers.startRefreshTimeout(this, convId); },
 
     openFileInExplorer(filePath) {
       if (!this.currentConversation) return;

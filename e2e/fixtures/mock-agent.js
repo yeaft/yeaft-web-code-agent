@@ -12,7 +12,7 @@ export class MockAgent {
   }
 
   async connect() {
-    const wsUrl = `${this.serverUrl.replace('http', 'ws')}?type=agent&name=${this.agentName}&workDir=/tmp/test&capabilities=terminal,file_editor,crew`;
+    const wsUrl = `${this.serverUrl.replace('http', 'ws')}?type=agent&name=${this.agentName}&workDir=/tmp/test&capabilities=terminal,file_editor`;
     this.ws = new WebSocket(wsUrl);
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('MockAgent connect timeout')), 5000);
@@ -35,14 +35,7 @@ export class MockAgent {
             username: msg.username
           });
         }
-        // Auto-respond to check_crew_exists
-        if (msg.type === 'check_crew_exists') {
-          this.send({
-            type: 'crew_exists_result',
-            exists: false,
-            projectDir: msg.projectDir
-          });
-        }
+
         // Auto-respond to delete_conversation
         if (msg.type === 'delete_conversation') {
           this.conversations.delete(msg.conversationId);

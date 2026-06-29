@@ -75,8 +75,8 @@ export default {
       </div>
 
       <div class="us-scroll us-scroll-flush">
-        <!-- Parity with Chat/Crew sidebar: session-tab-bar (single Chat tab,
-             no Crew) + session-item rows reusing sidebar.css classes. -->
+        <!-- Parity with Chat sidebar: session-tab-bar (single Chat tab,
+             session-item rows reusing sidebar.css classes. -->
         <div class="session-tab-bar">
           <div class="session-tab session-tab-solo active">
             <svg class="session-tab-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>

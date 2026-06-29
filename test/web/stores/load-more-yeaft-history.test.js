@@ -339,6 +339,47 @@ describe('handleYeaftHistoryChunk', () => {
     expect(store.yeaftLoadingMoreHistory).toBe(false);
   });
 
+  it('keeps optimistic sends visible when a recent history reply races them', () => {
+    const store = mkStore({
+      yeaftActiveSessionFilter: 'g1',
+      messagesMap: {
+        'yeaft-1': [
+          {
+            id: 'u_local_race',
+            messageId: 'u_local_race',
+            clientMessageId: 'u_local_race',
+            type: 'user',
+            content: 'send while history is loading',
+            sessionId: 'g1',
+            turnId: 'u_local_race',
+            timestamp: new Date('2026-05-01T09:59:59.000Z').getTime(),
+          },
+        ],
+      },
+    });
+
+    handleYeaftHistoryChunk(store, {
+      conversationId: 'yeaft-1',
+      sessionId: 'g1',
+      mode: 'recent',
+      messages: [
+        { id: 'm0200', role: 'user', content: 'persisted q', sessionId: 'g1', ts: '2026-05-01T10:00:00.000Z' },
+        { id: 'm0201', role: 'assistant', content: 'persisted a', sessionId: 'g1', ts: '2026-05-01T10:00:01.000Z' },
+      ],
+      oldestSeq: 200,
+      latestSeq: 201,
+      hasMore: false,
+    });
+
+    const rows = store.messagesMap['yeaft-1'].filter(m => m.sessionId === 'g1');
+    expect(rows.map(m => m.id)).toEqual(['u_local_race', 'm0200', 'm0201']);
+    expect(rows.find(m => m.id === 'u_local_race')).toEqual(expect.objectContaining({
+      clientMessageId: 'u_local_race',
+      content: 'send while history is loading',
+    }));
+    expect(store.yeaftLoadingMoreHistory).toBe(false);
+  });
+
   it('synthesizes only a tool-summary row for tool-only assistant history', () => {
     const store = mkStore({
       yeaftActiveSessionFilter: 'g1',

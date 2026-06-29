@@ -47,7 +47,6 @@ export async function handleAgentConversation(agentId, agent, msg) {
           if (conv.processing !== undefined) existing.processing = conv.processing;
           // Agent 主动上报了这个 conversation，清除 DB 恢复标记
           delete existing.fromDb;
-          // 保留 crew 相关字段
           if (conv.type) existing.type = conv.type;
           // Security: 不信任 agent 上报的 userId/username，保留 server 端已有值
           if (!existing.userId) {
@@ -328,7 +327,6 @@ export async function handleAgentConversation(agentId, agent, msg) {
     case 'history_sessions_list':
     case 'folders_list':
     case 'models_list':
-    case 'crew_context_result':
       console.log(`[${msg.type}] Received from agent ${agentId}, forwarding to clients...`);
       console.log(`[${msg.type}] count: folders=${msg.folders?.length || 0} models=${msg.models?.length || 0} sessions=${msg.sessions?.length || 0}`);
       await notifyConversationUpdate(agentId, msg);

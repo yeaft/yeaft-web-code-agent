@@ -23,6 +23,8 @@
 
 import { defaultRegistry } from './registry.js';
 import { VpLoader } from './vp-loader.js';
+import { seedDefaultVps } from './seed-defaults.js';
+import { topUpDefaultVps } from './seed-topup.js';
 import { STOCK_VP_IDS } from './stock-ids.js';
 
 /** Process-singleton VpLoader; lazily started on first subscribe. */
@@ -170,6 +172,9 @@ function ensureLoader(registry = defaultRegistry, options = {}) {
     captureState(registry);
     return { loader: null, fresh: true };
   }
+  const seedDir = desiredDir || undefined;
+  try { seedDefaultVps(seedDir); } catch { /* best-effort; subscribe must not crash */ }
+  try { topUpDefaultVps(seedDir); } catch { /* best-effort; subscribe must not crash */ }
   try {
     _loader = new VpLoader({
       ...(desiredDir ? { dir: desiredDir } : {}),

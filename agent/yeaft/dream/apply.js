@@ -47,6 +47,67 @@ function applySystem(language) {
     : 'You are the Apply stage of a dream pipeline. You rewrite a single scope\'s memory.md and summary.md based on recent session conversations. Reply with strict JSON only — no prose, no fences.';
 }
 
+function isPrimarySessionTarget(target) {
+  return /^sessions\/[^/]+$/.test(String(target || ''));
+}
+
+function ensurePrimarySessionOutput({ target, memoryMd, summaryMd, sources, language }) {
+  if (!isPrimarySessionTarget(target)) return { memoryMd, summaryMd };
+  let memory = typeof memoryMd === 'string' ? memoryMd : '';
+  let summary = typeof summaryMd === 'string' ? summaryMd : '';
+  if (memory.trim() && summary.trim()) return { memoryMd: memory, summaryMd: summary };
+
+  const zh = String(language || '').toLowerCase().startsWith('zh');
+  const lines = sourceMessageLines(sources).slice(0, 6);
+  const fallbackSummary = summaryFromMemory(memory) || summaryFromLines(lines, zh);
+  if (!memory.trim()) {
+    memory = fallbackMemory(lines, zh);
+  }
+  if (!summary.trim()) {
+    summary = fallbackSummary;
+  }
+  return { memoryMd: memory, summaryMd: summary };
+}
+
+function sourceMessageLines(sources) {
+  const out = [];
+  for (const src of Array.isArray(sources) ? sources : []) {
+    for (const m of Array.isArray(src?.diff) ? src.diff : []) {
+      const body = truncateMessage(m?.body || m?.content || '');
+      if (!body) continue;
+      out.push(`${m?.role || 'message'}${m?.vpId ? `/${m.vpId}` : ''}: ${body}`);
+    }
+  }
+  return out;
+}
+
+function fallbackMemory(lines, zh) {
+  const title = zh ? '# 记忆' : '# Memory';
+  const lead = zh
+    ? '最近一次 Dream 运行保留了当前 session 上下文：'
+    : 'Latest Dream pass preserved current session context:';
+  const body = lines.length > 0
+    ? lines.map(line => `- ${line}`).join('\n')
+    : (zh ? '- 最近一次 Dream 运行没有可展开的消息内容。' : '- Latest Dream pass had no expandable message content.');
+  return `${title}\n\n${lead}\n${body}\n`;
+}
+
+function summaryFromMemory(memory) {
+  const line = String(memory || '')
+    .split(/\r?\n/)
+    .map(s => s.replace(/^#+\s*/, '').replace(/^[-*]\s*/, '').trim())
+    .find(Boolean);
+  return line ? line.slice(0, 500) : '';
+}
+
+function summaryFromLines(lines, zh) {
+  const first = lines.find(Boolean);
+  if (!first) return zh
+    ? '最近一次 Dream 运行已记录当前 session 上下文。'
+    : 'Latest Dream pass recorded the current session context.';
+  return (zh ? '最近一次 Dream 运行记录了当前 session 上下文：' : 'Latest Dream pass recorded current session context: ') + first.slice(0, 360);
+}
+
 /**
  * Build the UPDATE prompt body. Accepts the current scope state +
  * one or more `(sessionId, diff)` source blocks.
@@ -219,8 +280,15 @@ export async function applyMergedTarget(merged, opts) {
     if (!parsed || typeof parsed.memory_md !== 'string') {
       throw malformedJsonError(`apply: CREATE returned malformed JSON for ${merged.target}`, raw);
     }
-    memoryMd = parsed.memory_md;
-    summaryMd = typeof parsed.summary_md === 'string' ? parsed.summary_md : '';
+    const ensured = ensurePrimarySessionOutput({
+      target: merged.target,
+      memoryMd: parsed.memory_md,
+      summaryMd: typeof parsed.summary_md === 'string' ? parsed.summary_md : '',
+      sources: merged.sources,
+      language: opts.language,
+    });
+    memoryMd = ensured.memoryMd;
+    summaryMd = ensured.summaryMd;
     batchesUsed = 1;
   } else {
     // UPDATE — possibly batched.
@@ -248,8 +316,15 @@ export async function applyMergedTarget(merged, opts) {
       if (!parsed || typeof parsed.memory_md !== 'string') {
         throw malformedJsonError(`apply: UPDATE batch ${i} returned malformed JSON for ${merged.target}`, raw);
       }
-      memoryMd = parsed.memory_md;
-      if (typeof parsed.summary_md === 'string') summaryMd = parsed.summary_md;
+      const ensured = ensurePrimarySessionOutput({
+        target: merged.target,
+        memoryMd: parsed.memory_md,
+        summaryMd: typeof parsed.summary_md === 'string' ? parsed.summary_md : summaryMd,
+        sources: batch,
+        language: opts.language,
+      });
+      memoryMd = ensured.memoryMd;
+      summaryMd = ensured.summaryMd;
     }
     batchesUsed = batches.length;
   }

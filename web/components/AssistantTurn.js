@@ -39,7 +39,7 @@ export default {
       default: ''
     }
   },
-  emits: ['open-vp-detail', 'update-actions-expanded', 'update-tool-expanded'],
+  emits: ['update-actions-expanded', 'update-tool-expanded'],
   template: `
     <div class="assistant-turn" ref="turnRef" :class="{ streaming: turn.isStreaming, 'has-vp-speaker': !!turn.speakerVpId }">
       <!-- 0. task-334-ui-b: VP speaker header — only when a speakerVpId is
@@ -53,7 +53,6 @@ export default {
         :state-cause="turn.speakerStateCause || ''"
         :turn-id="turn.turnId || ''"
         :show-stop="turn.isStreaming && !!turn.turnId"
-        @open-detail="onOpenVpDetail"
         @stop-turn="onStopTurn"
       />
 
@@ -448,7 +447,7 @@ export default {
       });
     });
 
-    // Image helpers (reuse crew pattern)
+    // Image helpers
     const getImageUrl = (msg) => {
       if (!msg.fileId) return '';
       const token = msg.previewToken || '';
@@ -463,21 +462,6 @@ export default {
       window.open(url, '_blank');
     };
 
-    // task-334-ui-c: forward VP speaker click → parent (MessageList →
-    // YeaftPage → chatStore.enterVpDetailView). Kept opt-in via the
-    // speaker header's `clickable` path so legacy 1:1 turns are unaffected.
-    const onOpenVpDetail = (vpId) => {
-      if (!vpId) return;
-      // Emit for MessageList/YeaftPage to handle; fall back to direct store
-      // call if the enclosing page did not wire the listener.
-      try {
-        if (typeof store.enterVpDetailView === 'function') {
-          store.enterVpDetailView(vpId);
-        }
-      } catch (e) {
-        console.error('[AssistantTurn] enterVpDetailView failed:', e);
-      }
-    };
 
     const onStopTurn = (turnId) => {
       if (!turnId) return;
@@ -515,7 +499,6 @@ export default {
     });
 
     return {
-      onOpenVpDetail,
       onStopTurn,
       turnTime,
       turnTimeFull,
@@ -540,9 +523,7 @@ export default {
       getImageUrl,
       handleImageError,
       openImagePreview,
-      displayedTodos,
-      toolExpandedValue,
-      updateToolExpanded
+      displayedTodos
     };
   }
 };

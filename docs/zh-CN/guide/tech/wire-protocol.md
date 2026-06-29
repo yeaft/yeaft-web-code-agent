@@ -60,7 +60,6 @@ Yeaft 的 server / agent / web client 之间通过 **WebSocket** 通信，所有
 | `session_ready` | `conversationId, sessionId, ...` | Session 启动完成 |
 | `agent_status` | `state, ...` | Agent 心跳状态 |
 | `ask_user_question` | `requestId, prompt, choices?` | 工具请求用户输入 |
-| `crew_output` | `sessionId, role, data` | Crew 子系统输出 |
 | `llm_config` / `mcp_servers_list` / `yeaft_settings` | ... | 各种 settings 查询响应 |
 
 ### claude_output `data` 字段（核心）

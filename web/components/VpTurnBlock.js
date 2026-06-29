@@ -53,7 +53,6 @@ export default {
             v-if="displayName"
             class="vp-turn-block-name"
             :style="speakerNameStyle"
-            @click.stop="onAvatarClick"
           >{{ displayName }}</span>
           <span
             v-if="displayName && startedTimeText"
@@ -104,11 +103,6 @@ export default {
   setup(props) {
     const store = useChatStore();
     const vpStore = useVpStore();
-    const onAvatarClick = () => {
-      const vpId = props.turn && props.turn.speakerVpId;
-      if (!vpId) return;
-      store.enterVpDetailView(vpId);
-    };
 
     const displayName = Vue.computed(() => {
       const vpId = props.turn && props.turn.speakerVpId;
@@ -174,7 +168,6 @@ export default {
     });
 
     return {
-      onAvatarClick,
       onStopTurn,
       isTyping,
       showStop,

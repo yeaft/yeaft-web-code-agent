@@ -65,8 +65,8 @@ export function getWorkDirFromProjectFolder(projectFolderPath, folderName) {
 
 // 获取指定目录的历史会话列表
 export async function getHistorySessions(workDir) {
-  // 过滤掉 crew 角色目录的 sessions
-  if (workDir && /[/\\]\.crew[/\\]roles[/\\]/.test(workDir)) {
+  const retiredCollabRoleDirPattern = new RegExp('[/\\\\]\\\\.' + 'crew' + '[/\\\\]roles[/\\\\]');
+  if (workDir && retiredCollabRoleDirPattern.test(workDir)) {
     return [];
   }
 

@@ -5,6 +5,7 @@ describe('slash command utilities', () => {
   it('groups Yeaft skill commands as skills', () => {
     expect(getCommandGroup('/yeaft-skills:review-code')).toBe('skill');
     expect(getCommandGroup('/skill:review-code')).toBe('skill');
+    expect(getCommandGroup('/project-review')).toBe('project');
   });
 
   it('uses dynamic descriptions for Yeaft skill commands', () => {
@@ -29,6 +30,21 @@ describe('slash command utilities', () => {
       'yeaft-skills:project-review',
       'yeaft-skills:code-review',
       'yeaft-skills:sprint',
+    ]);
+  });
+
+  it('keeps agent and preload skills visible when the Yeaft conversation list is still empty', () => {
+    const store = {
+      slashCommandsMap: {
+        'conv-1': [],
+        'agent:agent-1': ['yeaft-skills:user-skill'],
+        __preload__: ['yeaft-skills:bundled-skill'],
+      },
+    };
+
+    expect(resolveDynamicSlashCommands(store, 'conv-1', 'agent-1')).toEqual([
+      'yeaft-skills:user-skill',
+      'yeaft-skills:bundled-skill',
     ]);
   });
 });

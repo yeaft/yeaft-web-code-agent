@@ -16,7 +16,7 @@
  *     synthesized [Uploaded files] suffix) for the LLM call.
  *
  * Inputs (`files`) come from the server-side resolver in
- * `client-conversation.js` / `client-crew.js`: each entry is
+ * `client-conversation.js`: each entry is
  * `{ name, mimeType, data: <base64>, isImage }` — the `pendingFiles`
  * `fileId` was already consumed by the server before `forwardToAgent`.
  *
@@ -33,7 +33,7 @@
  *     Field name is `media_type` (snake_case) to match the Anthropic
  *     Messages API spec — Anthropic adapter forwards user-content blocks
  *     verbatim, so the on-the-wire form must already be correct here.
- *     `crew/routing.js` / `workbench/transfer.js` emit the same shape.
+ *     `workbench/transfer.js` emits the same shape.
  *   - `failed`: list of `{ name, error }` for entries that could not
  *     be persisted (disk full, bad base64, ...). The caller surfaces
  *     this so the UI can tell the user *which* file blew up rather

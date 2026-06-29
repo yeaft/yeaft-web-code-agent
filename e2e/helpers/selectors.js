@@ -25,8 +25,5 @@ export const selectors = {
   proxyAddBtn:    '.proxy-add-btn',
   proxyToggle:    '.proxy-toggle',
 
-  // Crew
-  crewButton:     '[data-testid="crew-button"]',
-  crewChatView:   '.crew-chat-view',
-  crewMessageItem:'.crew-msg'
+
 };

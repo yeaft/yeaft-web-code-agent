@@ -91,21 +91,7 @@ AI 专家团队辅助对话 — 选择一个团队（如写作、交易），在
 - Chip 风格标签切换团队
 - 与正常对话并行，不打断聊天流程
 
-### Crew（多角色协作）
 
-多角色 AI 团队协作，PM、开发者、审查者、测试者等角色协同完成 Feature 开发。
-
-- 角色间通过 ROUTE 协议自动任务路由
-- Feature 进度追踪面板，实时状态显示（streaming 呼吸灯动画）
-- 决策者消息在主流中直接显示，按角色分组
-- 多 Agent 跨 worktree 并行执行
-- Feature 完成检测，有新活动时自动重新激活
-- AskUserQuestion 交互卡片 — Agent 可在任务进行中向用户请求决策
-- Typing Indicator 事件驱动健康监控（Agent 离线 / Session 丢失 / 正在压缩）
-
-![Crew Features](docs/images/zh-CN/crew-features.jpg)
-
-![Crew Feature Detail](docs/images/zh-CN/crew-feature-detail.jpg)
 
 ### 仪表板（Admin Dashboard）
 
@@ -480,14 +466,12 @@ yeaft-web-code-agent/
 │   │   └── tools/       # 30+ 内置工具
 │   ├── claude.js        # Legacy Claude CLI 进程管理
 │   ├── conversation.js  # 会话生命周期与斜杠命令
-│   ├── crew/            # 多角色 Crew 协调（13 个模块）
 │   ├── sdk/             # Claude CLI stream-json SDK
 │   ├── terminal.js      # PTY 终端 (node-pty)
 │   └── workbench/       # Git + 文件操作
 ├── web/                 # Vue 3 前端
 │   ├── app.js           # Vue 应用入口
 │   ├── build.js         # 生产构建脚本（esbuild）
-│   ├── components/      # Vue 组件（25 个顶级 + crew/ 子目录）
 │   ├── stores/          # Pinia 状态管理 + helpers
 │   ├── styles/          # CSS（23 个样式表，深色/浅色主题）
 │   ├── i18n/            # 国际化翻译（en、zh-CN）

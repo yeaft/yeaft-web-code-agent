@@ -11,7 +11,7 @@ import { test as base, expect } from '@playwright/test';
 import { spawn, execSync } from 'child_process';
 import fs from 'fs';
 
-const PROJECT_ROOT = '/home/azureuser/projects/claude-web-chat';
+const PROJECT_ROOT = process.env.E2E_PROJECT_ROOT || process.cwd();
 
 class AuthTestServer {
   constructor(port) {

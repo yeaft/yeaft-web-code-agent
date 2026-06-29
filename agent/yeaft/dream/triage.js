@@ -263,15 +263,24 @@ export function parseJsonSafe(raw) {
   if (typeof raw !== 'string') return null;
   let s = raw.trim();
   // Strip markdown fences if present.
-  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(s);
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(s);
   if (fenced) s = fenced[1].trim();
   try { return JSON.parse(s); }
-  catch { /* try to recover the first {...} block */ }
-  const start = s.indexOf('{');
-  const end = s.lastIndexOf('}');
-  if (start >= 0 && end > start) {
-    try { return JSON.parse(s.slice(start, end + 1)); }
-    catch { return null; }
+  catch { /* try to recover the first JSON block */ }
+
+  const objectStart = s.indexOf('{');
+  const objectEnd = s.lastIndexOf('}');
+  const arrayStart = s.indexOf('[');
+  const arrayEnd = s.lastIndexOf(']');
+  const candidates = [
+    { start: objectStart, end: objectEnd },
+    { start: arrayStart, end: arrayEnd },
+  ].filter(c => c.start >= 0 && c.end > c.start)
+    .sort((a, b) => a.start - b.start);
+
+  for (const c of candidates) {
+    try { return JSON.parse(s.slice(c.start, c.end + 1)); }
+    catch { /* try next candidate */ }
   }
   return null;
 }

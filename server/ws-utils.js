@@ -105,12 +105,10 @@ export async function broadcastAgentList() {
             // the DB whenever it's missing, so pre-fix in-memory
             // convInfo objects (and any future rebuild path that
             // forgets) still produce a correct broadcast.
-            if (!c.title || (c.type === 'crew' && !c.name) || c.customTitle === undefined) {
+            if (!c.title || c.customTitle === undefined) {
               const dbSession = sessionDb.get(c.id);
               if (dbSession?.title) {
                 c.title = c.title || dbSession.title;
-                // Crew sessions store name as title in DB
-                if (c.type === 'crew' && !c.name) c.name = dbSession.title;
               }
               if (dbSession) {
                 c.pinned = !!dbSession.is_pinned;
@@ -143,11 +141,10 @@ export async function sendConversationList(clientId, agentId) {
       // fix-chat-title-sticky: same lazy-hydrate as broadcastAgentList —
       // ensure `customTitle` is reliably set on the wire so the
       // per-message auto-title gate stays honest after restart / sync.
-      if (!c.title || (c.type === 'crew' && !c.name) || c.customTitle === undefined) {
+      if (!c.title || c.customTitle === undefined) {
         const dbSession = sessionDb.get(c.id);
         if (dbSession?.title) {
           c.title = c.title || dbSession.title;
-          if (c.type === 'crew' && !c.name) c.name = dbSession.title;
         }
         if (dbSession) {
           c.pinned = !!dbSession.is_pinned;
@@ -169,8 +166,8 @@ export async function sendConversationList(clientId, agentId) {
 
 // 通知会话更新给相关客户端
 export async function notifyConversationUpdate(agentId, msg) {
-  // 对于 folders_list、history_sessions_list、crew_sessions_list，优先定向发送给请求者
-  if (msg.type === 'folders_list' || msg.type === 'history_sessions_list' || msg.type === 'crew_sessions_list' || msg.type === 'crew_exists_result' || msg.type === 'models_list') {
+  // 对于 folders_list、history_sessions_list，优先定向发送给请求者
+  if (msg.type === 'folders_list' || msg.type === 'history_sessions_list' || msg.type === 'models_list') {
     const targetClientId = msg._requestClientId;
     if (targetClientId) {
       const targetClient = webClients.get(targetClientId);

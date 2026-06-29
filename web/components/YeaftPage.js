@@ -2,7 +2,6 @@ import ChatInput from './ChatInput.js';
 import MessageList from './MessageList.js';
 import SettingsPanel from './SettingsPanel.js';
 import YeaftSidebar from './YeaftSidebar.js';
-import VpDetailView from './VpDetailView.js';
 import SessionInviteModal from './SessionInviteModal.js';
 import SessionCreateModal from './SessionCreateModal.js';
 import SessionSettingsModal from './SessionSettingsModal.js';
@@ -35,7 +34,7 @@ export function visibleSessionStatusTasks(taskMap) {
 
 export default {
   name: 'YeaftPage',
-  components: { ChatInput, MessageList, SettingsPanel, YeaftSidebar, VpDetailView, SessionInviteModal, SessionCreateModal, SessionSettingsModal, WorkbenchPanel, YeaftDebugPanel, VpTimelinePane, YeaftSessionActions, LlmTab },
+  components: { ChatInput, MessageList, SettingsPanel, YeaftSidebar, SessionInviteModal, SessionCreateModal, SessionSettingsModal, WorkbenchPanel, YeaftDebugPanel, VpTimelinePane, YeaftSessionActions, LlmTab },
   template: `
     <div class="yeaft-page" ref="pageRef">
       <!-- Mobile sidebar overlay -->
@@ -60,8 +59,7 @@ export default {
            sibling to the RIGHT of this main column so the visual order is
            [conversation][Session status][debug], with debug always far right. -->
       <div class="yeaft-main" :class="{ 'workbench-active': canUseWorkbench && store.workbenchExpanded, 'workbench-maximized': canUseWorkbench && store.workbenchMaximized && store.workbenchExpanded }">
-        <!-- Center column: topbar + (settings | VpDetailView | empty-hero |
-             MessageList) + ChatInput. -->
+        <!-- Center column: topbar + (settings | empty-hero | MessageList) + ChatInput. -->
         <div class="yeaft-main-center">
         <!-- Conversation Header -->
         <div class="yeaft-topbar">
@@ -159,22 +157,11 @@ export default {
              Clicking a sidebar task still highlights it but the main pane
              stays on the conversation stream. -->
 
-        <!-- task-334-ui-c: VP Detail View replaces the message list when
-             a VP badge / library row has been clicked. Takes precedence
-             over the task-detail view so clicking a VP inside a task
-             pane feels like a drill-down. Esc returns to previous layer
-             via the shared keydown cascade. -->
-        <VpDetailView
-          v-if="!showSettings && store.yeaftActiveVpDetailId"
-          :vp-id="store.yeaftActiveVpDetailId"
-          @back="exitVpDetailView"
-        />
-
         <!-- No-session onboarding — when there is no Session, the bottom input
              cannot send anywhere. Replace the chat chrome with setup guidance
              instead of inviting the user to type into a dead input. -->
         <section
-          v-if="!showSettings && !store.yeaftActiveVpDetailId && showOnboardingGuide"
+          v-if="!showSettings && showOnboardingGuide"
           class="yeaft-onboarding"
           :aria-label="$t('yeaft.onboarding.ariaLabel')"
         >
@@ -253,7 +240,7 @@ export default {
              next step instead of a blank canvas. The modal still pops on
              top for groups the user hasn't dismissed yet. -->
         <div
-          v-if="!showSettings && !store.yeaftActiveVpDetailId && !showOnboardingGuide && isActiveGroupEmpty"
+          v-if="!showSettings && !showOnboardingGuide && isActiveGroupEmpty"
           class="yeaft-empty-group-hero"
         >
           <div class="yeaft-empty-group-hero__icon" aria-hidden="true">
@@ -267,7 +254,7 @@ export default {
             {{ $t('yeaft.session.empty.cta') }}
           </button>
         </div>
-        <MessageList v-if="!showSettings && !store.yeaftActiveVpDetailId && !showOnboardingGuide && !isActiveGroupEmpty" />
+        <MessageList v-if="!showSettings && !showOnboardingGuide && !isActiveGroupEmpty" />
 
         <!-- Settings Panel -->
         <SettingsPanel v-if="showSettings" :visible="showSettings" :initial-tab="'yeaft'" :initial-sub-tab="settingsInitialTab" :initial-edit-vp-id="settingsInitialEditVpId" @close="showSettings = false" />
@@ -471,8 +458,6 @@ export default {
       const id = g && g.id ? g.id : null;
       if (!id) return;
       store.setActiveSessionFilter(id);
-      // Also leave the VP detail view so the main stream is visible.
-      if (store.yeaftActiveVpDetailId) store.leaveVpDetailView();
       if (isMobile.value) sidebarCollapsed.value = true;
     };
 
@@ -484,10 +469,6 @@ export default {
       // handler retained as a defensive no-op for any straggler emit.
     };
 
-    // task-334-ui-c: exit the VP-detail view back to prior layer.
-    const exitVpDetailView = () => {
-      store.leaveVpDetailView();
-    };
 
     // task-yeaft-remove-sidebar-search (2026-05-08): the sidebar search
     // box was retired, so the Esc-to-refocus handler that paired with
@@ -629,17 +610,13 @@ export default {
       else if (typeof media.removeListener === 'function') media.removeListener(onResize);
     };
 
-    // Esc handling — exit the VP detail view if it's open. (Task-detail
-    // layer was deleted alongside yeaftActiveFeatureDetailId; only the
-    // vp-detail layer remains.)
+    // Esc handling — close transient controls. Detail drill-down layers were
+    // removed; the center pane always stays on the Session stream.
     const onKeyDown = (e) => {
       if (e.key !== 'Escape') return;
       if (modelDropdownOpen.value) {
         closeModelDropdown();
         return;
-      }
-      if (store.yeaftActiveVpDetailId) {
-        store.leaveVpDetailView();
       }
     };
 
@@ -1196,7 +1173,6 @@ export default {
 
     const onEditVpFromTimeline = (vpId) => {
       if (!vpId) return;
-      if (store.yeaftActiveVpDetailId) store.leaveVpDetailView();
       const sessionId = activeSessionIdForSettings();
       if (!sessionId) return;
       openSessionSettings({ sessionId, section: 'members', editVpId: vpId });
@@ -1287,7 +1263,6 @@ export default {
       sidebarV2Enabled,
       onSelectGroupV2,
       onSelectChat,
-      exitVpDetailView,
       // task-340: workbench capability gate
       canUseWorkbench,
       // task-334m: invite modal bindings.

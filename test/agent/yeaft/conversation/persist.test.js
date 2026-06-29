@@ -187,8 +187,9 @@ describe('ConversationStore', () => {
       expect(msg.time).toBeTruthy();
       expect(msg.tokens_est).toBeGreaterThan(0);
 
-      const filePath = join(TEST_DIR, 'chat', 'messages', 'm0001.md');
-      expect(existsSync(filePath)).toBe(true);
+      const segmentPath = join(TEST_DIR, 'chat', 'segments', '000001.jsonl');
+      expect(existsSync(segmentPath)).toBe(true);
+      expect(readFileSync(segmentPath, 'utf8')).toContain('\"content\":\"Hello\"');
     });
 
     it('should persist clientMessageId metadata for Yeaft user echo dedupe', () => {
@@ -252,13 +253,30 @@ describe('ConversationStore', () => {
       expect(loaded[0].mode).toBe('work');
       expect(loaded[0].model).toBe('gpt-5');
     });
+
+
+    it('stores many messages in a single JSONL segment with an index', () => {
+      for (let i = 0; i < 25; i += 1) {
+        store.append({ role: 'user', content: `msg-${i}`, sessionId: 'session_segmented' });
+      }
+
+      const segmentPath = join(TEST_DIR, 'sessions', 'session_segmented', 'conversation', 'segments', '000001.jsonl');
+      const indexPath = join(TEST_DIR, 'sessions', 'session_segmented', 'conversation', 'index.json');
+      expect(existsSync(segmentPath)).toBe(true);
+      expect(existsSync(indexPath)).toBe(true);
+      expect(readFileSync(segmentPath, 'utf8').trim().split('\n')).toHaveLength(25);
+      const index = JSON.parse(readFileSync(indexPath, 'utf8'));
+      expect(index.totalMessages).toBe(25);
+      expect(index.nextSeq).toBe(26);
+      expect(index.segments).toHaveLength(1);
+    });
   });
 
 
     it("should write session messages under that session's conversation history", () => {
       const msg = store.append({ role: 'user', content: 'Hello session', sessionId: 's_fun' });
       expect(msg.id).toBe('m0001');
-      expect(existsSync(join(TEST_DIR, 'sessions', 's_fun', 'conversation', 'messages', 'm0001.md'))).toBe(true);
+      expect(existsSync(join(TEST_DIR, 'sessions', 's_fun', 'conversation', 'segments', '000001.jsonl'))).toBe(true);
       expect(existsSync(join(TEST_DIR, 'groups', 's_fun', 'conversation', 'messages', 'm0001.md'))).toBe(false);
       expect(existsSync(join(TEST_DIR, 'chat', 'messages', 'm0001.md'))).toBe(false);
       expect(store.loadRecent(10)).toEqual([]);
@@ -268,24 +286,29 @@ describe('ConversationStore', () => {
     it('should read legacy conversation paths without mixing chat and session records', () => {
       const legacyMessages = join(TEST_DIR, 'conversation', 'messages');
       mkdirSync(legacyMessages, { recursive: true });
-      const chatStore = new ConversationStore(TEST_DIR);
-      const chatMsg = chatStore.append({ role: 'user', content: 'legacy chat' });
-      const sessionMsg = chatStore.append({ role: 'user', content: 'legacy session', sessionId: 's_fun' });
-      // Move freshly-written records into the legacy layout to simulate an
-      // existing user profile from versions before ~/.yeaft/chat and
-      // per-session conversation directories were split.
-      const chatRaw = readFileSync(join(TEST_DIR, 'chat', 'messages', `${chatMsg.id}.md`), 'utf8');
-      const sessionRaw = readFileSync(join(TEST_DIR, 'sessions', 's_fun', 'conversation', 'messages', `${sessionMsg.id}.md`), 'utf8');
-      rmSync(join(TEST_DIR, 'chat', 'messages', `${chatMsg.id}.md`));
-      rmSync(join(TEST_DIR, 'sessions', 's_fun', 'conversation', 'messages', `${sessionMsg.id}.md`));
-      writeFileSync(join(legacyMessages, `${chatMsg.id}.md`), chatRaw);
-      writeFileSync(join(legacyMessages, `${sessionMsg.id}.md`), sessionRaw);
+      writeFileSync(join(legacyMessages, 'm0001.md'), `---
+id: m0001
+role: user
+time: 2026-06-26T00:00:00Z
+threadId: main
+tokens_est: 3
+---
+
+legacy chat`, { encoding: 'utf8' });
+      writeFileSync(join(legacyMessages, 'm0002.md'), `---
+id: m0002
+role: user
+time: 2026-06-26T00:00:01Z
+threadId: main
+sessionId: s_fun
+tokens_est: 4
+---
+
+legacy session`, { encoding: 'utf8' });
 
       const compatStore = new ConversationStore(TEST_DIR);
       expect(compatStore.loadRecent(10).map(m => m.content)).toEqual(['legacy chat']);
       // Per-session load paths no longer fall back to the legacy flat dir.
-      // Messages written only under conversation/messages/ are NOT visible
-      // to per-session queries — only chat mode (loadRecent) sees them.
       expect(compatStore.loadRecentBySession('s_fun', 10).map(m => m.content)).toEqual([]);
     });
 
@@ -507,6 +530,129 @@ describe('ConversationStore', () => {
       expect(page.hasMore).toBe(false);
     });
 
+    it('recent session readers stop after the requested turn window', () => {
+      const readCounts = { count: 0 };
+      for (let i = 0; i < 500; i++) {
+        store.append({ role: 'user', content: `old ${i}`, sessionId: 'grp_a' });
+        store.append({ role: 'assistant', content: `old answer ${i}`, sessionId: 'grp_a' });
+      }
+      store.append({ role: 'user', content: 'latest q', sessionId: 'grp_a' });
+      store.append({ role: 'assistant', content: 'latest a', sessionId: 'grp_a' });
+
+      const original = store.readMessageFile;
+      store.readMessageFile = (...args) => {
+        readCounts.count += 1;
+        return original.call(store, ...args);
+      };
+      const visible = store.loadVisibleBySession('grp_a', null, 1);
+      const readsAfterVisible = readCounts.count;
+      const recent = store.loadRecentBySession('grp_a', 1);
+
+      expect(visible.messages.map(m => m.content)).toEqual(['latest q', 'latest a']);
+      expect(visible.hasMore).toBe(true);
+      expect(recent.map(m => m.content)).toEqual(['latest q', 'latest a']);
+      expect(readsAfterVisible).toBeLessThan(10);
+      expect(readCounts.count - readsAfterVisible).toBeLessThan(10);
+    });
+
+    it('loadRecentBySession preserves full tool pairs in the bounded engine window', () => {
+      for (let i = 0; i < 200; i++) {
+        store.append({ role: 'user', content: `old ${i}`, sessionId: 'grp_a' });
+        store.append({ role: 'assistant', content: `old answer ${i}`, sessionId: 'grp_a' });
+      }
+      store.append({ role: 'user', content: 'latest q', sessionId: 'grp_a' });
+      store.append({
+        role: 'assistant',
+        content: 'running tool',
+        sessionId: 'grp_a',
+        toolCalls: [{ id: 'toolu_1', name: 'Bash', input: { command: 'echo ok' } }],
+      });
+      store.append({ role: 'tool', content: 'ok', sessionId: 'grp_a', toolCallId: 'toolu_1' });
+      store.append({ role: 'assistant', content: 'latest a', sessionId: 'grp_a' });
+
+      const readCounts = { count: 0 };
+      const original = store.readMessageFile;
+      store.readMessageFile = (...args) => {
+        readCounts.count += 1;
+        return original.call(store, ...args);
+      };
+
+      const recent = store.loadRecentBySession('grp_a', 1);
+      expect(recent.map(m => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant']);
+      expect(recent[1].toolCalls).toHaveLength(1);
+      expect(recent[2].toolCallId).toBe('toolu_1');
+      expect(readCounts.count).toBeLessThan(10);
+    });
+
+    it('loadVisibleBySession stops on dense hidden rows after the requested turn', () => {
+      store.append({ role: 'user', content: 'old q', sessionId: 'grp_a' });
+      store.append({ role: 'assistant', content: 'old a', sessionId: 'grp_a' });
+      for (let i = 0; i < 1000; i++) {
+        store.append({ role: 'user', content: `[system note] You have called Bash with the same arguments ${i + 1} times. Previous result: {...}`, sessionId: 'grp_a' });
+      }
+      store.append({ role: 'user', content: 'latest q', sessionId: 'grp_a' });
+      store.append({ role: 'assistant', content: 'latest a', sessionId: 'grp_a' });
+
+      const readCounts = { count: 0 };
+      const original = store.readMessageFile;
+      store.readMessageFile = (...args) => {
+        readCounts.count += 1;
+        return original.call(store, ...args);
+      };
+      const page = store.loadVisibleBySession('grp_a', null, 1);
+
+      expect(page.messages.map(m => m.content)).toEqual(['latest q', 'latest a']);
+      expect(page.hasMore).toBe(true);
+      expect(readCounts.count).toBeLessThan(80);
+    });
+
+    it('loadVisibleBySession hard-caps dense empty assistant rows after the requested turn', () => {
+      store.append({ role: 'user', content: 'old q', sessionId: 'grp_a' });
+      store.append({ role: 'assistant', content: 'old a', sessionId: 'grp_a' });
+      for (let i = 0; i < 1000; i++) {
+        store.append({ role: 'assistant', content: '', sessionId: 'grp_a', speakerVpId: 'vp-linus' });
+      }
+      store.append({ role: 'user', content: 'latest q', sessionId: 'grp_a' });
+      store.append({ role: 'assistant', content: 'latest a', sessionId: 'grp_a' });
+
+      const readCounts = { count: 0 };
+      const original = store.readMessageFile;
+      store.readMessageFile = (...args) => {
+        readCounts.count += 1;
+        return original.call(store, ...args);
+      };
+      const page = store.loadVisibleBySession('grp_a', null, 1);
+
+      expect(page.messages.map(m => m.content)).toEqual(['latest q', 'latest a']);
+      expect(page.hasMore).toBe(true);
+      expect(readCounts.count).toBeLessThan(80);
+    });
+
+    it('loadVisibleBySession hits the hard cap when the newest tail has no turn boundary', () => {
+      store.append({ role: 'user', content: 'old q', sessionId: 'grp_a' });
+      store.append({ role: 'assistant', content: 'old a', sessionId: 'grp_a' });
+      for (let i = 0; i < 1000; i++) {
+        store.append({ role: 'assistant', content: '', sessionId: 'grp_a', speakerVpId: 'vp-linus' });
+      }
+
+      const readCounts = { count: 0 };
+      const original = store.readMessageFile;
+      store.readMessageFile = (...args) => {
+        readCounts.count += 1;
+        return original.call(store, ...args);
+      };
+      const page = store.loadVisibleBySession('grp_a', null, 1);
+
+      expect(page.messages).toEqual([]);
+      expect(page.hasMore).toBe(true);
+      expect(readCounts.count).toBeLessThan(80);
+
+      readCounts.count = 0;
+      const engineRows = store.loadRecentBySession('grp_a', 1);
+      expect(engineRows).toHaveLength(68);
+      expect(readCounts.count).toBeLessThan(80);
+    });
+
     it('returns [] for empty/null sessionId without throwing', () => {
       store.append({ role: 'user', content: 'X', sessionId: 'grp_a' });
       expect(store.loadRecentBySession(null, 10)).toEqual([]);
@@ -540,8 +686,8 @@ describe('ConversationStore', () => {
       expect(store.loadAll().map(m => m.content).sort()).toEqual(['B1', 'untagged']);
       expect(existsSync(join(TEST_DIR, 'chat', 'messages', 'm0001.md'))).toBe(false);
       expect(existsSync(join(TEST_DIR, 'chat', 'messages', 'm0002.md'))).toBe(false);
-      expect(existsSync(join(TEST_DIR, 'sessions', 'grp_b', 'conversation', 'messages', 'm0003.md'))).toBe(true);
-      expect(existsSync(join(TEST_DIR, 'chat', 'messages', 'm0004.md'))).toBe(true);
+      expect(store.loadRecentBySession('grp_b', 10).map(m => m.content)).toEqual(['B1']);
+      expect(store.loadRecent(10).map(m => m.content)).toEqual(['untagged']);
     });
 
     it('also removes matching messages that have been moved to cold', () => {
@@ -673,7 +819,7 @@ describe('ConversationStore', () => {
 
       // Verify file moved
       expect(existsSync(join(TEST_DIR, 'chat', 'messages', 'm0001.md'))).toBe(false);
-      expect(existsSync(join(TEST_DIR, 'chat', 'cold', 'm0001.md'))).toBe(true);
+      expect(store.countCold()).toBe(coldBefore + 1);
     });
 
     it('should handle non-existent message gracefully', () => {
@@ -718,6 +864,22 @@ describe('ConversationStore', () => {
     });
   });
 
+  describe('JSONL cold rows', () => {
+    it('keeps archived session rows readable while excluding them from hot counts', () => {
+      const user = store.append({ role: 'user', content: 'cold question', sessionId: 'session_cold', threadId: 'main' });
+      store.append({ role: 'assistant', content: 'hot answer', sessionId: 'session_cold', speakerVpId: 'vp-linus', threadId: 'main' });
+
+      store.moveToCold(user.id);
+
+      expect(store.countHot()).toBe(1);
+      expect(store.countCold()).toBe(1);
+      expect(store.loadAllBySession('session_cold').map(m => m.content)).toEqual(['cold question', 'hot answer']);
+      expect(store.loadOlderBySession('session_cold', null, 10).messages.map(m => m.content)).toEqual(['cold question', 'hot answer']);
+      expect(store.loadVisibleBySession('session_cold', null, 10).messages.map(m => m.content)).toEqual(['cold question', 'hot answer']);
+      expect(store.loadSessionHistoryForVp('session_cold', 'vp-linus').map(m => m.content)).toEqual(['cold question', 'hot answer']);
+    });
+  });
+
   describe('countHot / countCold', () => {
     it('should count messages correctly', () => {
       expect(store.countHot()).toBe(0);
@@ -743,6 +905,19 @@ describe('ConversationStore', () => {
       const tokens = store.hotTokens();
       expect(tokens).toBeGreaterThan(0);
       expect(tokens).toBe(75); // 25 + 50
+    });
+
+    it('should exclude archived JSONL rows from hot token pressure', () => {
+      const cold = store.append({ role: 'user', content: 'cold', sessionId: 'session_tokens', tokens_est: 25 });
+      store.append({ role: 'assistant', content: 'hot', sessionId: 'session_tokens', tokens_est: 1 });
+
+      expect(store.hotTokens()).toBe(26);
+      store.moveToCold(cold.id);
+
+      expect(store.countHot()).toBe(1);
+      expect(store.countCold()).toBe(1);
+      expect(store.hotTokens()).toBe(1);
+      expect(store.loadAllBySession('session_tokens').map(m => m.content)).toEqual(['cold', 'hot']);
     });
   });
 

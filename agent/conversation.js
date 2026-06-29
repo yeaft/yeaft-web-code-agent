@@ -5,7 +5,6 @@ import ctx from './context.js';
 import { query } from './sdk/index.js';
 import { loadSessionHistory } from './history.js';
 import { startClaudeQuery } from './claude.js';
-import { crewSessions } from './crew.js';
 import { getProvider, DEFAULT_PROVIDER, isValidProvider } from './providers/index.js';
 
 // 不支持的斜杠命令（真正需要交互式 CLI 的命令）
@@ -191,7 +190,7 @@ function prestartClaude(conversationId, workDir, resumeSessionId) {
  *
  * @param {string} [workDir] - Project directory (default: agent workDir)
  * @param {string} [targetId] - conversationId to key the update to
- *                               ('__preload__' for agent-level, or crewSessionId)
+ *                               ('__preload__' for agent-level)
  */
 export async function preloadSlashCommands(workDir, targetId = '__preload__') {
   const effectiveWorkDir = workDir || ctx.CONFIG.workDir;
@@ -283,7 +282,7 @@ export function parseSlashCommand(message) {
   return { type: null, message };
 }
 
-// 发送 conversation 列表（仅含活跃 crew sessions；历史 Crew 索引按需通过 list_crew_sessions 加载）
+// 发送 conversation 列表。
 export async function sendConversationList() {
   const list = [];
   for (const [id, state] of ctx.conversations) {
@@ -304,19 +303,6 @@ export async function sendConversationList() {
       capabilities: providerCaps || undefined,
     };
     list.push(entry);
-  }
-  // 追加活跃 crew sessions。历史 Crew 索引可能触发磁盘读取，保持按需加载，
-  // 由显式 list_crew_sessions 请求处理，避免普通 Chat/Yeaft 列表提前加载 Crew。
-  for (const [id, session] of crewSessions) {
-    list.push({
-      id,
-      workDir: session.projectDir,
-      createdAt: session.createdAt,
-      processing: session.status === 'running',
-      userId: session.userId,
-      username: session.username,
-      type: 'crew',
-    });
   }
   ctx.sendToServer({
     type: 'conversation_list',
@@ -1046,19 +1032,16 @@ export function handleAskUserAnswer(msg) {
 }
 
 /**
- * Handle /btw side question — supports multi-turn and Crew mode.
+ * Handle /btw side question.
  *
  * Multi-turn: First question forks the session (forkSession: true).
  * Subsequent questions resume the forked session (no fork).
  * The forked session ID is captured from system init and returned in btw_done.
- *
- * Crew mode: If conversationId is a crew session, use the decision maker's
- * claudeSessionId as the base for forking.
  */
 export async function handleBtwQuestion(msg) {
   const { conversationId, question, btwSessionId } = msg;
 
-  // 1. Find the base session — Chat or Crew decision maker
+  // 1. Find the base chat session.
   let baseSessionId = null;
   let workDir = null;
 
@@ -1066,17 +1049,6 @@ export async function handleBtwQuestion(msg) {
   if (chatState?.claudeSessionId) {
     baseSessionId = chatState.claudeSessionId;
     workDir = chatState.workDir;
-  } else {
-    // Crew mode: find decision maker's session
-    const crewSession = crewSessions.get(conversationId);
-    if (crewSession) {
-      const dmName = crewSession.decisionMaker;
-      const dmState = dmName ? crewSession.roleStates.get(dmName) : null;
-      if (dmState?.claudeSessionId) {
-        baseSessionId = dmState.claudeSessionId;
-        workDir = crewSession.projectDir;
-      }
-    }
   }
 
   if (!baseSessionId) {

@@ -239,8 +239,6 @@ export function restoreSessionToRegistry(defaultYeaftDir, sessionId, workDir) {
 
 export function resolveSessionYeaftDir(defaultYeaftDir, sessionId) {
   if (!defaultYeaftDir || !sessionId) return defaultYeaftDir;
-  const defaultGroupDir = join(sessionsRoot(defaultYeaftDir), sessionId);
-  if (existsSync(defaultGroupDir) && loadSessionMeta(defaultGroupDir)) return defaultYeaftDir;
 
   const registry = readWorkDirRegistry(defaultYeaftDir);
   const workDir = normalizeWorkDir(registry[sessionId]);
@@ -249,6 +247,9 @@ export function resolveSessionYeaftDir(defaultYeaftDir, sessionId) {
     const candidateDir = join(sessionsRoot(candidate), sessionId);
     if (existsSync(candidateDir) && loadSessionMeta(candidateDir)) return candidate;
   }
+
+  const defaultSessionDir = join(sessionsRoot(defaultYeaftDir), sessionId);
+  if (existsSync(defaultSessionDir) && loadSessionMeta(defaultSessionDir)) return defaultYeaftDir;
 
   return defaultYeaftDir;
 }

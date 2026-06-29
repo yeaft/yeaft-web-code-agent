@@ -26,7 +26,7 @@ import { useChatStore } from '../stores/chat.js';
 export default {
   name: 'VpSpeakerHeader',
   components: { VpBadge },
-  emits: ['open-detail', 'stop-turn'],
+  emits: ['stop-turn'],
   props: {
     vpId: { type: String, required: true },
     timestamp: { type: Number, default: 0 },
@@ -40,9 +40,7 @@ export default {
         :vp-id="vpId"
         :size="24"
         :show-subtitle="true"
-        :clickable="true"
         :typing="isTyping"
-        @open-detail="$emit('open-detail', $event)"
       />
       <span
         v-if="stateCause"

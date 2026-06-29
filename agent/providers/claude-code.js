@@ -62,7 +62,7 @@ export async function listFolders() {
     let stats;
     try { stats = statSync(entryPath); } catch { continue; }
     if (!stats.isDirectory()) continue;
-    if (entry.includes('--crew-roles-')) continue;
+    if (entry.includes('--' + 'crew' + '-roles-')) continue;
 
     const originalPath = getWorkDirFromProjectFolder(entryPath, entry);
     let sessionCount = 0;

@@ -63,29 +63,19 @@ export function restoreLastViewedConversation(store, agentSetup) {
   }
 
   // 设置 conversation 状态
-  // For crew conversations, initialize crewMessagesMap BEFORE setting activeConversations
-  if (conv.type === 'crew' && !store.crewMessagesMap[lastViewed]) {
-    store.crewMessagesMap[lastViewed] = [];
-  }
   store.activeConversations = [lastViewed];
   store.currentWorkDir = conv.workDir;
   store.messagesMap[lastViewed] = [];
   store.sendWsMessage({ type: 'select_conversation', conversationId: lastViewed });
 
-  if (conv.type === 'crew') {
-    store.sendWsMessage({
-      type: 'resume_crew_session',
-      sessionId: lastViewed,
-      agentId
-    });
-  } else {
-    store.sendWsMessage({
-      type: 'sync_messages',
-      conversationId: lastViewed,
-      turns: 5
-    });
-    store.sendWsMessage({ type: 'refresh_conversation', conversationId: lastViewed });
-  }
+
+  store.sendWsMessage({
+    type: 'sync_messages',
+    conversationId: lastViewed,
+    turns: 5
+  });
+  store.sendWsMessage({ type: 'refresh_conversation', conversationId: lastViewed });
+
   return true;
 }
 
@@ -219,7 +209,6 @@ export function handleAgentList(store, msg) {
         existing.agentName = serverConv.agentName;
         existing.agentOnline = true;
         if (serverConv.type) existing.type = serverConv.type;
-        // Preserve crew session name from server; keep existing if server has none
         if (serverConv.name !== undefined) existing.name = serverConv.name;
       } else {
         // Skip sessions recently deleted by the user (race condition guard)
@@ -241,8 +230,6 @@ export function handleAgentList(store, msg) {
       if (allServerConvIds.has(conv.id)) return true; // still in server list
       // Don't remove conversations the user is currently viewing
       if (store.activeConversations.includes(conv.id)) return true;
-      // Crew history rows are loaded on demand through crew_sessions_list, not routine agent_list snapshots.
-      if (conv.type === 'crew' && store.crewModeEnabled && conv.crewListLoaded) return true;
       // Session's agent is in the agent_list but session is not → stale, remove
       if (conv.agentId && listedAgentIds.has(conv.agentId)) {
         // Respect recently-deleted guard (prevent flicker on close → agent_list race)
@@ -264,11 +251,8 @@ export function handleAgentList(store, msg) {
     });
 
     for (const serverConv of allServerConvs) {
-      const isStaleCrewProcessing = serverConv.processing && serverConv.type === 'crew'
-        && !store.crewSessions?.[serverConv.id];
       if (serverConv.processing && !isRecentlyClosed(store, serverConv.id)
-          && !store._turnCompletedConvs?.has(serverConv.id)
-          && !isStaleCrewProcessing) {
+          && !store._turnCompletedConvs?.has(serverConv.id)) {
         store.processingConversations[serverConv.id] = true;
       } else if (store.processingConversations[serverConv.id]) {
         delete store.processingConversations[serverConv.id];
@@ -351,47 +335,32 @@ export function handleAgentList(store, msg) {
       if (store.currentConversation) {
         const conv = store.conversations.find(c => c.id === store.currentConversation);
         store.sendWsMessage({ type: 'select_conversation', conversationId: store.currentConversation });
-        if (conv?.type === 'crew') {
-          // ★ Only send resume_crew_session when the local session is NOT already
-          // active with messages. During normal operation, agent_list arrives
-          // frequently (after every status change) and re-sending resume would
-          // trigger crew_session_restored which replaces crewMessagesMap,
-          // wiping the local human message and making the typing indicator disappear.
-          const crewMsgs = store.crewMessagesMap[store.currentConversation];
-          if (!crewMsgs || crewMsgs.length === 0) {
-            console.log('[Reconnect] Crew conversation detected, resuming crew session:', store.currentConversation);
-            store.sendWsMessage({
-              type: 'resume_crew_session',
-              sessionId: store.currentConversation,
-              agentId: store.currentAgent
-            });
-          }
-        } else {
-          // Chat-mode missed-message sync is useful after a real reconnect, but
-          // doing it on every routine agent_list creates a request loop:
-          // broadcastAgentList -> select/sync/refresh -> agent status update ->
-          // broadcastAgentList. Keep it edge-triggered like Yeaft catch-up.
-          const currentMsgs = store.messagesMap[store.currentConversation] || [];
-          if (currentMsgs.length > 0) {
-            const lastMessageId = currentMsgs[currentMsgs.length - 1]?.id;
-            console.log('[Reconnect] Requesting missed messages after:', lastMessageId);
-            store.sendWsMessage({
-              type: 'sync_messages',
-              conversationId: store.currentConversation,
-              afterMessageId: lastMessageId
-            });
-          } else {
-            store.sendWsMessage({
-              type: 'sync_messages',
-              conversationId: store.currentConversation,
-              turns: 5
-            });
-          }
+
+        // Chat-mode missed-message sync is useful after a real reconnect, but
+        // doing it on every routine agent_list creates a request loop:
+        // broadcastAgentList -> select/sync/refresh -> agent status update ->
+        // broadcastAgentList. Keep it edge-triggered like Yeaft catch-up.
+        const currentMsgs = store.messagesMap[store.currentConversation] || [];
+        if (currentMsgs.length > 0) {
+          const lastMessageId = currentMsgs[currentMsgs.length - 1]?.id;
+          console.log('[Reconnect] Requesting missed messages after:', lastMessageId);
           store.sendWsMessage({
-            type: 'refresh_conversation',
-            conversationId: store.currentConversation
+            type: 'sync_messages',
+            conversationId: store.currentConversation,
+            afterMessageId: lastMessageId
+          });
+        } else {
+          store.sendWsMessage({
+            type: 'sync_messages',
+            conversationId: store.currentConversation,
+            turns: 5
           });
         }
+        store.sendWsMessage({
+          type: 'refresh_conversation',
+          conversationId: store.currentConversation
+        });
+
       } else if (!store.recoveryDismissed) {
         console.log('[Reconnect] currentConversation null, attempting restore');
         restoreLastViewedConversation(store);
@@ -569,15 +538,7 @@ export function handleAgentSelected(store, msg) {
       type: 'select_conversation',
       conversationId: store.currentConversation
     });
-    // ★ Crew session needs resume to restore roles after server restart
-    if (currentConv?.type === 'crew') {
-      console.log('[Reconnect] Crew conversation detected in agent_selected, resuming:', store.currentConversation);
-      store.sendWsMessage({
-        type: 'resume_crew_session',
-        sessionId: store.currentConversation,
-        agentId: msg.agentId
-      });
-    }
+
   } else {
     store.activeConversations = [];
     store.currentWorkDir = msg.workDir;

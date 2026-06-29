@@ -145,7 +145,7 @@ function listConversationSessions(roots) {
     for (const name of readdirSync(root)) {
       if (name.startsWith('.')) continue;
       try {
-        const dir = sessionConversationDir(root, name);
+        const dir = sessionDir(root, name);
         if (!hasReadableMessages(dir)) continue;
         out.add(name);
       } catch {
@@ -158,9 +158,10 @@ function listConversationSessions(roots) {
 }
 
 /**
- * Load hot and cold conversation messages for one Yeaft Session. This mirrors
- * ConversationStore's session history source: `conversation/cold` plus
- * `conversation/messages`, deduped by id and sorted by message sequence.
+ * Load persisted conversation messages for one Yeaft Session. Supports both
+ * projections currently present on disk:
+ *   - ConversationStore markdown/jsonl under `conversation/`
+ *   - Session append-only audit log under `messages/*.jsonl`
  *
  * @param {string[]} roots session transcript roots in priority order
  * @param {string} sessionId
@@ -169,19 +170,26 @@ function listConversationSessions(roots) {
 function loadSessionConversationMessages(roots, sessionId) {
   const byId = new Map();
   for (const root of roots) {
-    const dir = sessionConversationDir(root, sessionId);
-    for (const m of loadConversationDirMessages(dir)) {
+    const dir = sessionDir(root, sessionId);
+    for (const m of loadSessionDiskMessages(dir, sessionId)) {
       if (!byId.has(m.id)) byId.set(m.id, m);
     }
   }
   return [...byId.values()].sort(compareMessagesBySeq);
 }
 
-function sessionConversationDir(root, sessionId) {
-  return join(root, safeDirComponent(sessionId), 'conversation');
+function sessionDir(root, sessionId) {
+  return join(root, safeDirComponent(sessionId));
 }
 
-function hasReadableMessages(conversationDir) {
+function hasReadableMessages(dir) {
+  const conversationDir = join(dir, 'conversation');
+  if (hasMarkdownMessages(conversationDir)) return true;
+  if (hasJsonlMessages(join(conversationDir, 'segments'))) return true;
+  return hasJsonlMessages(join(dir, 'messages'));
+}
+
+function hasMarkdownMessages(conversationDir) {
   return ['messages', 'cold'].some(kind => {
     const dir = join(conversationDir, kind);
     try {
@@ -192,8 +200,31 @@ function hasReadableMessages(conversationDir) {
   });
 }
 
+function hasJsonlMessages(dir) {
+  try {
+    return statSync(dir).isDirectory() && readdirSync(dir).some(f => f.endsWith('.jsonl'));
+  } catch {
+    return false;
+  }
+}
+
+function loadSessionDiskMessages(dir, sessionId) {
+  const conversationDir = join(dir, 'conversation');
+  return [
+    // Prefer the canonical ConversationStore projection when it exists: it has
+    // normalized role/content/tool metadata. The session append-only audit log
+    // is still load-bearing for sessions created before/while conversation rows
+    // were being migrated to JSONL.
+    ...loadConversationDirMessages(conversationDir),
+    ...loadSessionJsonlMessages(join(dir, 'messages'), sessionId),
+  ];
+}
+
 function loadConversationDirMessages(conversationDir) {
-  return ['cold', 'messages'].flatMap(kind => loadMessageDir(join(conversationDir, kind)));
+  return [
+    ...['cold', 'messages'].flatMap(kind => loadMessageDir(join(conversationDir, kind))),
+    ...loadConversationJsonlMessages(join(conversationDir, 'segments')),
+  ];
 }
 
 function loadMessageDir(dir) {
@@ -205,6 +236,73 @@ function loadMessageDir(dir) {
       catch { return null; }
     })
     .filter(m => m && m.id);
+}
+
+function loadConversationJsonlMessages(dir) {
+  return loadJsonlDir(dir, normalizeConversationJsonlMessage);
+}
+
+function loadSessionJsonlMessages(dir, sessionId) {
+  return loadJsonlDir(dir, row => normalizeSessionJsonlMessage(row, sessionId));
+}
+
+function loadJsonlDir(dir, normalize) {
+  if (!existsSync(dir)) return [];
+  let files = [];
+  try {
+    files = readdirSync(dir).filter(f => f.endsWith('.jsonl')).sort();
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const file of files) {
+    let raw = '';
+    try { raw = readFileSync(join(dir, file), 'utf8'); } catch { continue; }
+    for (const line of raw.split('\n')) {
+      if (!line) continue;
+      try {
+        const msg = normalize(JSON.parse(line));
+        if (msg && msg.id) out.push(msg);
+      } catch {
+        // Skip corrupt rows; one bad JSONL line must not make Dream blind.
+      }
+    }
+  }
+  return out;
+}
+
+function normalizeConversationJsonlMessage(row) {
+  if (!row || typeof row !== 'object' || !row.id) return null;
+  return {
+    id: row.id,
+    role: row.role || 'assistant',
+    content: stringifyMessageBody(row.content ?? row.text ?? ''),
+    time: row.time || row.ts || '',
+    sessionId: row.sessionId || null,
+    speakerVpId: row.speakerVpId || null,
+  };
+}
+
+function normalizeSessionJsonlMessage(row, sessionId) {
+  if (!row || typeof row !== 'object' || !row.id) return null;
+  const role = row.role || (row.from === 'user' ? 'user' : 'assistant');
+  const speakerVpId = role === 'assistant'
+    ? (row.speakerVpId || row.meta?.senderVpId || (row.from && row.from !== 'user' ? row.from : null))
+    : null;
+  return {
+    id: row.id,
+    role,
+    content: stringifyMessageBody(row.content ?? row.text ?? ''),
+    time: row.time || row.ts || '',
+    sessionId,
+    speakerVpId,
+  };
+}
+
+function stringifyMessageBody(value) {
+  if (typeof value === 'string') return value;
+  if (value == null) return '';
+  try { return JSON.stringify(value); } catch { return String(value); }
 }
 
 function compareMessagesBySeq(a, b) {

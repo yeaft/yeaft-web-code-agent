@@ -40,14 +40,6 @@ AI expert teams in a side panel that assist your main conversation.
 - Chip-style team switcher
 - Runs alongside main chat without interrupting
 
-### 👷 Crew Multi-Role
-PM / dev / reviewer / tester / architect / designer running features in parallel.
-- ROUTE protocol routes between roles
-- Feature board + kanban status
-- Parallel execution across worktrees
-- ask-user cards interrupt for decisions
-
-![Crew Features](/images/crew-features.jpg)
 
 ### 🖥️ Split Screen + Workbench
 - **Split screen**: up to 3 panels showing different sessions at once

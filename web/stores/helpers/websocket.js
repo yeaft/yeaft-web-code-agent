@@ -29,7 +29,6 @@ const YEAFT_INCOMPATIBLE_TYPES = new Set([
   'cancel_execution',
   'update_conversation_settings',
   'ask_user_answer',
-  'resume_crew_session',
 ]);
 
 export function sendWsMessage(store, msg) {

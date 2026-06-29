@@ -9,11 +9,7 @@ export const BUFFERABLE_TYPES = new Set([
   'turn_completed', 'conversation_closed',
   'session_id_update', 'compact_status', 'slash_commands_update',
   'background_task_started', 'background_task_output',
-  'subagent_started', 'subagent_message', 'subagent_completed',
-  'crew_output', 'crew_status', 'crew_turn_completed',
-  'crew_session_created', 'crew_session_restored', 'crew_human_needed',
-  'crew_role_added', 'crew_role_removed',
-  'crew_role_compact', 'crew_context_usage'
+  'subagent_started', 'subagent_message', 'subagent_completed'
 ]);
 
 function bufferMessage(msg, reason) {
@@ -27,7 +23,7 @@ function bufferMessage(msg, reason) {
     return 'buffered';
   }
   // Buffer full: drop oldest non-status messages to make room
-  const dropIdx = ctx.messageBuffer.findIndex(m => m.type !== 'crew_status' && m.type !== 'turn_completed');
+  const dropIdx = ctx.messageBuffer.findIndex(m => m.type !== 'turn_completed');
   if (dropIdx >= 0) {
     ctx.messageBuffer.splice(dropIdx, 1);
     ctx.messageBuffer.push(msg);

@@ -144,7 +144,7 @@ export const useVpStore = defineStore('vp', {
      *     lastResult: object|null,   // raw payload for success
      *     lastError: string|null,    // error message
      *   }
-     * VpDetailView reads this for the dream status bar + "Run now" CTA.
+     * Inline status surfaces read this for dream activity without polling.
      * @type {Record<string, object>}
      */
     dreamStatus: {},

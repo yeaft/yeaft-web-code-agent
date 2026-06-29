@@ -580,7 +580,7 @@
 }
 
 /* Single-tab variant (used by Yeaft sidebar, and by Chat sidebar when
-   Crew mode is disabled in Settings). The bar spans full width and
+   The bar spans full width and
    drops the active underline + bottom divider — there's nothing to
    pick between, so the selection affordance only adds noise. */
 .session-tab-bar:has(> .session-tab-solo) {
@@ -1028,30 +1028,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* Crew session inline rename */
-.crew-title-text {
-  cursor: default;
-}
-
-.crew-rename-input {
-  width: 100%;
-  background: transparent;
-  border: none;
-  border-bottom: 1px solid var(--accent-blue, #3b82f6);
-  outline: none;
-  color: var(--text-primary);
-  font-size: 15px;
-  font-family: inherit;
-  padding: 0 0 1px;
-  margin: 0;
-  line-height: inherit;
-}
-
-.crew-rename-input::selection {
-  background: var(--accent-blue, #3b82f6);
-  color: white;
 }
 
 .new-chat-btn:disabled {

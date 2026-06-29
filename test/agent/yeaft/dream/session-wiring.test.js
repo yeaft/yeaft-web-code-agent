@@ -6,6 +6,8 @@ import { buildRunDreamOpts } from '../../../../agent/yeaft/dream/session-wiring.
 import { runDream } from '../../../../agent/yeaft/dream/runner.js';
 import { extractAndWriteMemorySegments } from '../../../../agent/yeaft/dream/segment-extract.js';
 import { readScope } from '../../../../agent/yeaft/memory/segment-store.js';
+import { readSummary } from '../../../../agent/yeaft/memory/store.js';
+import { buildDreamOutputSnapshot } from '../../../../agent/yeaft/dream/output-snapshot.js';
 
 let testDir;
 
@@ -70,6 +72,49 @@ describe('buildRunDreamOpts session conversation wiring', () => {
     ]);
   });
 
+  it('reads session JSONL audit logs when conversation markdown is absent', async () => {
+    writeSessionJsonlMessage(testDir, 's-jsonl', {
+      id: 'u_01',
+      ts: '2026-06-12T00:00:00.000Z',
+      from: 'user',
+      role: 'user',
+      text: 'Dream must read the session JSONL audit log.',
+    });
+    writeSessionJsonlMessage(testDir, 's-jsonl', {
+      id: 'msg_02',
+      ts: '2026-06-12T00:01:00.000Z',
+      from: 'linus',
+      role: 'assistant',
+      text: 'JSONL assistant rows should preserve VP attribution.',
+    });
+
+    const opts = buildRunDreamOpts(fakeSession(testDir));
+
+    await expect(opts.listSessions()).resolves.toEqual(['s-jsonl']);
+    await expect(opts.countMessages('s-jsonl')).resolves.toBe(2);
+    await expect(opts.loadSessionDiff('s-jsonl', 'u_01')).resolves.toEqual([
+      { id: 'msg_02', role: 'assistant', body: 'JSONL assistant rows should preserve VP attribution.', vpId: 'linus' },
+    ]);
+  });
+
+  it('reads ConversationStore JSONL segments when markdown projection is absent', async () => {
+    writeConversationSegmentJsonlMessage(testDir, 's-segments', {
+      id: 'm0001',
+      time: '2026-06-12T00:00:00.000Z',
+      sessionId: 's-segments',
+      role: 'user',
+      content: 'ConversationStore JSONL rows are Dream input.',
+    });
+
+    const opts = buildRunDreamOpts(fakeSession(testDir));
+
+    await expect(opts.listSessions()).resolves.toEqual(['s-segments']);
+    await expect(opts.countMessages('s-segments')).resolves.toBe(1);
+    await expect(opts.loadSessionDiff('s-segments', null)).resolves.toEqual([
+      { id: 'm0001', role: 'user', body: 'ConversationStore JSONL rows are Dream input.' },
+    ]);
+  });
+
   it('lets runDream process sessions from session conversation messages instead of empty-running', async () => {
     writeSessionMessage(testDir, 's-live', 'm0001', 'user', 'remember that I prefer concise answers');
     writeSessionMessage(testDir, 's-live', 'm0002', 'assistant', 'I will keep the answer concise', { speakerVpId: 'vp-linus' });
@@ -96,6 +141,19 @@ describe('buildRunDreamOpts session conversation wiring', () => {
     expect(sessionMemory).toContain('kind: decision');
     expect(sessionMemory).toContain('Dream processed the session conversation');
     expect(sessionMemory).toContain('tags: [recent, current]');
+    const summary = await readSummary(
+      { kind: 'session', id: 's-live' },
+      { root: join(testDir, 'memory'), language: 'en' },
+    );
+    expect(summary).toContain('Dream processed the session conversation');
+
+    const snapshot = await buildDreamOutputSnapshot({ yeaftDir: testDir }, 's-live');
+    expect(snapshot).toEqual(expect.objectContaining({
+      scope: 'sessions/s-live',
+      hasOutput: true,
+      memoryText: expect.stringContaining('Dream processed the session conversation'),
+      summaryText: expect.stringContaining('Dream processed the session conversation'),
+    }));
     expect(events).toContainEqual(expect.objectContaining({ phase: 'done', sessions: 1 }));
   });
 
@@ -119,6 +177,51 @@ describe('buildRunDreamOpts session conversation wiring', () => {
     expect(omniMemory).toContain('Dream processed the session conversation');
     expect(martinMemory).toContain('Dream processed the session conversation');
     expect(topicMemory).toContain('Dream processed the session conversation');
+  });
+
+  it('fills primary session memory and summary when apply returns empty strings', async () => {
+    writeSessionMessage(testDir, 's-empty-apply', 'm0001', 'user', 'Dream output must still feed the next system prompt.');
+
+    const result = await runDream({
+      ...buildRunDreamOpts(fakeSession(testDir)),
+      manual: true,
+      llm: async (req) => {
+        if (req.pass === 'triage-pass1') return JSON.stringify({ topics: [], user_profile_signals: false });
+        if (req.pass === 'extract-segments') return '[]';
+        return JSON.stringify({ memory_md: '', summary_md: '' });
+      },
+      nowIso: () => '2026-06-12T00:00:00.000Z',
+    });
+
+    expect(result.targets).toContainEqual(expect.objectContaining({ target: 'sessions/s-empty-apply', status: 'done' }));
+    const memory = readFileSync(join(testDir, 'memory', 'sessions', 's-empty-apply', 'memory.md'), 'utf8');
+    const summary = await readSummary(
+      { kind: 'session', id: 's-empty-apply' },
+      { root: join(testDir, 'memory'), language: 'en' },
+    );
+    expect(memory).toContain('Dream output must still feed the next system prompt');
+    expect(summary).toContain('Dream output must still feed the next system prompt');
+  });
+
+  it('parses fenced JSON arrays during segment extraction', async () => {
+    const result = await extractAndWriteMemorySegments({
+      root: join(testDir, 'memory'),
+      sessionId: 's-fenced-array',
+      messages: [{ id: 'm1', role: 'user', body: 'Dream should preserve fenced JSON array output.' }],
+      targets: ['sessions/s-fenced-array'],
+      llm: async (req) => {
+        if (req.pass === 'extract-segments') {
+          return '```json\n[{"kind":"decision","tags":["dream"],"sourceMessages":["m1"],"body":"Fenced array segment survived parsing."}]\n```';
+        }
+        return '[]';
+      },
+      nowIso: () => '2026-06-12T00:00:00.000Z',
+    });
+
+    expect(result).toEqual(expect.objectContaining({ scopes: expect.any(Number), segments: expect.any(Number) }));
+    expect(result.scopes).toBeGreaterThan(0);
+    const memory = readFileSync(join(testDir, 'memory', 'sessions', 's-fenced-array', 'memory.md'), 'utf8');
+    expect(memory).toContain('Fenced array segment survived parsing');
   });
 
   it('isolates malformed segment extraction to one scope and continues others', async () => {
@@ -292,4 +395,16 @@ function writeSessionMessage(root, sessionId, id, role, content, extra = {}, kin
     '---',
   ].join('\n');
   writeFileSync(join(dir, `${id}.md`), `${frontmatter}\n${content}\n`);
+}
+
+function writeSessionJsonlMessage(root, sessionId, row) {
+  const dir = join(root, 'sessions', sessionId, 'messages');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, '000001.jsonl'), `${JSON.stringify(row)}\n`, { flag: 'a' });
+}
+
+function writeConversationSegmentJsonlMessage(root, sessionId, row) {
+  const dir = join(root, 'sessions', sessionId, 'conversation', 'segments');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, '000001.jsonl'), `${JSON.stringify(row)}\n`, { flag: 'a' });
 }

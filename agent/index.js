@@ -121,12 +121,6 @@ async function detectCapabilities() {
   const pty = await loadNodePty();
   if (pty) capabilities.push('terminal');
 
-  // Crew mode requires Claude CLI
-  try {
-    const { getDefaultClaudeCodePath } = await import('./sdk/utils.js');
-    const claudePath = getDefaultClaudeCodePath();
-    if (claudePath) capabilities.push('crew');
-  } catch {}
 
   console.log(`[Capabilities] Detected: ${capabilities.join(', ')}`);
   return capabilities;

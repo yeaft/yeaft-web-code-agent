@@ -21,7 +21,6 @@ COPY web/stores ./stores/
 COPY web/styles ./styles/
 COPY web/utils ./utils/
 COPY web/i18n ./i18n/
-COPY web/crew-templates ./crew-templates/
 
 # Build frontend (bundles all JS/CSS into single files + gzip)
 RUN npm run build
