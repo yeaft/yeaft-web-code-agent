@@ -13,7 +13,7 @@ import { createSkillManager } from '../../../agent/yeaft/skills.js';
 
 let yeaftDir;        // user tier root (~/.yeaft analog)
 let workDir;         // project tier root
-let homeDir;         // isolated HOME for borrowed ~/.claude / ~/.codex assets
+let homeDir;         // isolated HOME for ~/.claude / ~/.codex assets
 let emptyBundledDir; // isolated empty bundled dir
 let previousBundledDir;
 let previousHome;
@@ -53,28 +53,20 @@ afterEach(() => {
   rmSync(emptyBundledDir, { recursive: true, force: true });
 });
 
-describe('createSkillManager — borrowed user skill tiers', () => {
-  it('loads user-level Claude Code skills from ~/.claude/skills', () => {
-    writeSkill(homeDir, '.claude/skills', 'claude-user', 'From user Claude Code assets.');
+describe('createSkillManager — default user skill tiers', () => {
+  it('does not load unrelated user-level Claude or Codex skills by default', () => {
+    writeSkill(homeDir, '.claude/skills/trade', 'trade', 'Unrelated Claude Code plugin.');
+    writeSkill(homeDir, '.claude/skills/yeaft-skills-write', 'yeaft-skills-write', 'Skill-authoring plugin.');
+    writeSkill(homeDir, '.codex/skills', 'codex-user', 'Unrelated Codex asset.');
 
     const manager = createSkillManager(yeaftDir, workDir);
-    const skill = manager.list().find(s => s.name === 'claude-user');
-    expect(skill).toBeTruthy();
-    expect(skill.tier).toBe('user-claude');
+    const names = manager.list().map(s => s.name);
+    expect(names).not.toContain('trade');
+    expect(names).not.toContain('yeaft-skills-write');
+    expect(names).not.toContain('codex-user');
   });
 
-  it('loads user-level Codex skills from ~/.codex/skills', () => {
-    writeSkill(homeDir, '.codex/skills', 'codex-user', 'From user Codex assets.');
-
-    const manager = createSkillManager(yeaftDir, workDir);
-    const skill = manager.list().find(s => s.name === 'codex-user');
-    expect(skill).toBeTruthy();
-    expect(skill.tier).toBe('user-codex');
-  });
-
-  it('keeps ~/.yeaft/skills as the writable user tier over borrowed user skills', () => {
-    writeSkill(homeDir, '.claude/skills', 'shared', 'Claude user version.');
-    writeSkill(homeDir, '.codex/skills', 'shared', 'Codex user version.');
+  it('keeps ~/.yeaft/skills as the writable user tier', () => {
     writeSkill(yeaftDir, 'skills', 'shared', 'Yeaft user version.');
 
     const manager = createSkillManager(yeaftDir, workDir);
@@ -84,17 +76,19 @@ describe('createSkillManager — borrowed user skill tiers', () => {
     expect(manager.skillsDir).toBe(join(yeaftDir, 'skills'));
   });
 
-  it('does not re-scan Yeaft bundled plugin skills as borrowed Claude user skills', () => {
+  it('loads the explicit Yeaft bundled plugin but not sibling Claude user plugins', () => {
     rmSync(emptyBundledDir, { recursive: true, force: true });
     const bundledDir = join(homeDir, '.claude', 'skills', 'yeaft-skills', 'skills');
     process.env.YEAFT_SKILLS_BUNDLED_DIR = bundledDir;
     writeSkill(homeDir, '.claude/skills/yeaft-skills/skills', 'foo', 'Bundled plugin skill.');
+    writeSkill(homeDir, '.claude/skills/trade', 'trade', 'Unrelated Claude Code plugin.');
 
     const manager = createSkillManager(yeaftDir, workDir);
     const skill = manager.list().find(s => s.name === 'foo');
     expect(skill).toBeTruthy();
     expect(skill.tier).toBe('bundled');
     expect(skill.description).toBe('Bundled plugin skill.');
+    expect(manager.list().find(s => s.name === 'trade')).toBeFalsy();
   });
 });
 
@@ -173,9 +167,7 @@ describe('createSkillManager — tier priority (deterministic)', () => {
     expect(shared.description).toBe('Claude version.');
   });
 
-  it('full chain: borrowed user < user < project-claude < project-codex < project', () => {
-    writeSkill(homeDir, '.claude/skills', 'shared', 'Claude user version.');
-    writeSkill(homeDir, '.codex/skills', 'shared', 'Codex user version.');
+  it('full chain: user < project-claude < project-codex < project', () => {
     writeSkill(yeaftDir, 'skills', 'shared', 'User version.');
     writeSkill(workDir, '.claude/skills', 'shared', 'Claude project version.');
     writeSkill(workDir, '.agents/skills', 'shared', 'Codex project version.');
