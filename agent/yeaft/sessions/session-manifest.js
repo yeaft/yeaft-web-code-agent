@@ -131,6 +131,8 @@ export function ensureSessionsManifest(yeaftDir, options) {
 
   let migrated = 0;
   let skipped = 0;
+  const migratedIds = [];
+  const skippedIds = [];
   const registry = options.registry && typeof options.registry === 'object' ? options.registry : {};
   for (const [sessionId, workDir] of Object.entries(registry)) {
     if (!sessionId || !workDir) continue;
@@ -141,13 +143,25 @@ export function ensureSessionsManifest(yeaftDir, options) {
     const meta = existsSync(sourceDir) ? loadSessionMeta(sourceDir) : null;
     if (!meta) {
       skipped += 1;
+      skippedIds.push(sessionId);
       continue;
     }
     if (existsSync(destDir)) {
-      rmSync(destDir, { recursive: true, force: true });
+      if (loadSessionMeta(destDir)) {
+        skipped += 1;
+        skippedIds.push(sessionId);
+        if (typeof options.unregisterSessionWorkDir === 'function') {
+          options.unregisterSessionWorkDir(sessionId);
+        }
+        continue;
+      }
+      skipped += 1;
+      skippedIds.push(sessionId);
+      continue;
     }
     cpSync(sourceDir, destDir, { recursive: true, errorOnExist: false });
     migrated += 1;
+    migratedIds.push(sessionId);
     if (typeof options.copySessionExtras === 'function') {
       options.copySessionExtras(projectYeaftDir, sessionId);
     }
@@ -157,7 +171,7 @@ export function ensureSessionsManifest(yeaftDir, options) {
   }
 
   const manifest = writeSessionsManifest(yeaftDir, buildManifestFromLocalSessions(yeaftDir, root));
-  return { created: true, migrated, skipped, manifest };
+  return { created: true, migrated, skipped, migratedIds, skippedIds, manifest };
 }
 
 export function addOrUpdateManifestSession(yeaftDir, meta, dir) {

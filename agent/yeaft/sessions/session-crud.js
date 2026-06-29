@@ -186,6 +186,38 @@ function copySessionExtras(sourceYeaftDir, destYeaftDir, sessionId) {
 }
 
 /**
+ * One-way compatibility migration for sessions previously stored under a
+ * project `.yeaft/sessions` tree. New steady-state discovery uses
+ * `sessions-manifest.json`; this helper bootstraps that manifest once and
+ * reports what happened for boot logs/tests.
+ *
+ * @param {string} yeaftDir user-level Yeaft root
+ * @returns {{migrated:string[], skipped:string[], errors:Array<{sessionId:string,error:string}>}}
+ */
+export function migrateRegisteredWorkDirSessions(yeaftDir) {
+  const result = { migrated: [], skipped: [], errors: [] };
+  if (!yeaftDir || hasSessionManifest(yeaftDir)) return result;
+
+  const invalidTargets = new Set();
+  const registry = readWorkDirRegistry(yeaftDir);
+  for (const [sessionId, workDir] of Object.entries(registry)) {
+    const normalized = normalizeWorkDir(workDir);
+    if (!sessionId || !normalized) continue;
+    const targetDir = join(sessionsRoot(yeaftDir), sessionId);
+    if (existsSync(targetDir) && !loadSessionMeta(targetDir)) {
+      invalidTargets.add(sessionId);
+      result.errors.push({ sessionId, error: 'target session directory exists but session metadata is invalid' });
+    }
+  }
+
+  const bootstrap = ensureSessionManifestReady(yeaftDir);
+  result.migrated = Array.isArray(bootstrap.migratedIds) ? bootstrap.migratedIds.slice() : [];
+  result.skipped = (Array.isArray(bootstrap.skippedIds) ? bootstrap.skippedIds : [])
+    .filter(sessionId => !invalidTargets.has(sessionId));
+  return result;
+}
+
+/**
  * Scan the `.yeaft/sessions/` directory under `workDir` and return every
  * session meta we can read. Read-only: never touches the registry.
  *

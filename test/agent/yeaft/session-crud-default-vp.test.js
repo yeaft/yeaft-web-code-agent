@@ -5,9 +5,11 @@ import { tmpdir } from 'os';
 import {
   createSessionFromSpec,
   ensureDefaultSessionIfEmpty,
+  migrateRegisteredWorkDirSessions,
   readWorkDirRegistry,
   resolveSessionYeaftDir,
   restoreSessionToRegistry,
+  sessionsRoot,
   snapshotSessions,
 } from '../../../agent/yeaft/sessions/session-crud.js';
 import { createSession } from '../../../agent/yeaft/sessions/session-store.js';
@@ -110,6 +112,55 @@ describe('session CRUD default VP selection', () => {
     expect(readWorkDirRegistry(yeaftDir)[session.id]).toBeUndefined();
     expect(loadSessionsManifest(yeaftDir).sessions.find(row => row.id === session.id)?.path)
       .toBe(join(yeaftDir, 'sessions', session.id));
+  });
+
+  it('migrates registered project .yeaft sessions into the user-level root', () => {
+    const yeaftDir = tempRoot('yeaft-session-crud-');
+    const workDir = tempRoot('yeaft-session-workdir-');
+    const projectYeaftDir = join(workDir, '.yeaft');
+    const sessionId = 'session_project_legacy';
+    createSession(sessionsRoot(projectYeaftDir), {
+      id: sessionId,
+      name: 'Legacy project session',
+      roster: ['omni'],
+      defaultVpId: 'omni',
+      workDir,
+    }).close();
+    writeFileSync(join(yeaftDir, 'group-workdirs.json'), `${JSON.stringify({ [sessionId]: workDir }, null, 2)}\n`);
+
+    const result = migrateRegisteredWorkDirSessions(yeaftDir);
+
+    expect(result.migrated).toEqual([sessionId]);
+    const migratedFile = join(yeaftDir, 'sessions', sessionId, 'session.json');
+    expect(existsSync(migratedFile)).toBe(true);
+    const persisted = JSON.parse(readFileSync(migratedFile, 'utf8'));
+    expect(persisted).toMatchObject({ id: sessionId, roster: ['omni'], workDir });
+    expect(existsSync(join(projectYeaftDir, 'sessions', sessionId, 'session.json'))).toBe(true);
+    expect(loadSessionsManifest(yeaftDir).sessions.find(row => row.id === sessionId)?.path)
+      .toBe(join(yeaftDir, 'sessions', sessionId));
+  });
+
+  it('does not skip an invalid existing user-level migration target silently', () => {
+    const yeaftDir = tempRoot('yeaft-session-crud-');
+    const workDir = tempRoot('yeaft-session-workdir-');
+    const projectYeaftDir = join(workDir, '.yeaft');
+    const sessionId = 'session_project_legacy_invalid_target';
+    createSession(sessionsRoot(projectYeaftDir), {
+      id: sessionId,
+      name: 'Legacy project session',
+      roster: ['omni'],
+      defaultVpId: 'omni',
+      workDir,
+    }).close();
+    mkdirSync(join(yeaftDir, 'sessions', sessionId), { recursive: true });
+    writeFileSync(join(yeaftDir, 'sessions', sessionId, 'session.json'), '{ invalid json');
+    writeFileSync(join(yeaftDir, 'group-workdirs.json'), `${JSON.stringify({ [sessionId]: workDir }, null, 2)}\n`);
+
+    const result = migrateRegisteredWorkDirSessions(yeaftDir);
+
+    expect(result.migrated).toEqual([]);
+    expect(result.skipped).toEqual([]);
+    expect(result.errors).toEqual([{ sessionId, error: 'target session directory exists but session metadata is invalid' }]);
   });
 
   it('prefers omni as the default VP when seeding the first default session', () => {
