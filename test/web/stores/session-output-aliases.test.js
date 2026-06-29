@@ -66,6 +66,6 @@ describe('assistant/session output aliases', () => {
 
     handleMessage(store, { type: 'session_pinned', conversationId: 'session-1', pinned: false });
 
-    expect(applyPinState).toHaveBeenCalledWith('session-1', false);
+    expect(applyPinState).toHaveBeenCalledWith('session-1', false, null);
   });
 });

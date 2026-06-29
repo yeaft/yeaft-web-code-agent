@@ -630,8 +630,8 @@ export default {
       const gs = sessionsStore();
       if (!gs) return null;
       const filterId = store.yeaftActiveSessionFilter || null;
-      if (filterId && gs.sessions[filterId]) return filterId;
-      if (gs.activeSessionId && gs.sessions[gs.activeSessionId]) return gs.activeSessionId;
+      if (filterId && typeof gs.sessionById === 'function' && gs.sessionById(filterId, store.currentAgent || null)) return filterId;
+      if (gs.activeSessionId && typeof gs.sessionById === 'function' && gs.sessionById(gs.activeSessionId, store.currentAgent || null)) return gs.activeSessionId;
       return null;
     });
 

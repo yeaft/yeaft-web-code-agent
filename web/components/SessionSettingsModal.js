@@ -75,7 +75,7 @@ export default {
     },
     group() {
       const gs = this.sessionsStore;
-      return gs && gs.sessions ? (gs.sessions[this.groupId] || null) : null;
+      return gs && typeof gs.sessionById === 'function' ? gs.sessionById(this.groupId, this.chat?.currentAgent || null) : null;
     },
     groupDisplayName() {
       const g = this.group;

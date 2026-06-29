@@ -593,7 +593,7 @@ export function handleMessage(store, msg) {
           try {
             const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
             if (gs && typeof gs.applyPinState === 'function') {
-              gs.applyPinState(msg.conversationId, !!msg.pinned);
+              gs.applyPinState(msg.conversationId, !!msg.pinned, store.yeaftSessionAgentById?.[msg.conversationId] || store.currentAgent || null);
             }
           } catch (_) { /* no sessions store in tests */ }
         }

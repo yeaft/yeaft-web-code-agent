@@ -101,7 +101,7 @@ function getSessionsStore() {
 function resolveAgentIdForSession(state, sessionId) {
   if (sessionId) {
     const gs = getSessionsStore();
-    const sess = gs && typeof gs.sessionById === 'function' ? gs.sessionById(sessionId) : null;
+    const sess = gs && typeof gs.sessionById === 'function' ? gs.sessionById(sessionId, state?.currentAgent || null) : null;
     if (sess && sess.agentId) return sess.agentId;
     const mapped = state?.yeaftSessionAgentById ? state.yeaftSessionAgentById[sessionId] : null;
     if (mapped) return mapped;
@@ -3780,7 +3780,7 @@ export const useChatStore = defineStore('chat', {
       // don't exist in that map.
       try {
         const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
-        if (gs && typeof gs.applyPinState === 'function') gs.applyPinState(sessionId, !!pinned);
+        if (gs && typeof gs.applyPinState === 'function') gs.applyPinState(sessionId, !!pinned, this.yeaftSessionAgentById?.[sessionId] || this.currentAgent || null);
       } catch (_) { /* no sessions store in some tests */ }
     },
     togglePin(sessionId, meta = {}) {

@@ -732,9 +732,15 @@ export default {
       const gs = sessionsStore();
       if (!gs || !gs.sessions) return null;
       const filterId = store.yeaftActiveSessionFilter || null;
-      if (filterId && gs.sessions[filterId]) return gs.sessions[filterId];
-      if (gs.activeSessionId && gs.sessions[gs.activeSessionId]) return gs.sessions[gs.activeSessionId];
-      return gs.sessions['grp_default'] || null;
+      if (filterId && typeof gs.sessionById === 'function') {
+        const row = gs.sessionById(filterId, store.currentAgent || null);
+        if (row) return row;
+      }
+      if (gs.activeSessionId && typeof gs.sessionById === 'function') {
+        const row = gs.sessionById(gs.activeSessionId, store.currentAgent || null);
+        if (row) return row;
+      }
+      return typeof gs.sessionById === 'function' ? gs.sessionById('grp_default', store.currentAgent || null) : null;
     });
 
     const activeSessionIdForSettings = () => resolveActiveSessionIdForSettings({

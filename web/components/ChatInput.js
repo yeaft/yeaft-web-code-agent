@@ -244,7 +244,10 @@ export default {
     const mentionVpCandidates = Vue.computed(() => {
       if (!sessionsStore) return vpStore.vpList || [];
       const activeSessionId = store.yeaftActiveSessionFilter || sessionsStore.activeSessionId || null;
-      return selectMentionCandidates(vpStore.vpList, sessionsStore.sessions?.[activeSessionId]);
+      const activeSession = typeof sessionsStore.sessionById === 'function'
+        ? sessionsStore.sessionById(activeSessionId, store.currentAgent || null)
+        : sessionsStore.sessions?.[activeSessionId];
+      return selectMentionCandidates(vpStore.vpList, activeSession);
     });
 
     const selectVpMention = (vp) => {
