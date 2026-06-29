@@ -258,13 +258,35 @@ export function restoreSessionToRegistry(defaultYeaftDir, sessionId, workDir) {
   if (!sessionId) throw new SessionCrudError('invalid_session_id', null);
   const normalized = normalizeWorkDir(workDir);
   if (!normalized) throw new SessionCrudError('invalid_workdir', sessionId);
-  const groupYeaftDir = yeaftDirForWorkDir(normalized);
-  const dir = join(sessionsRoot(groupYeaftDir), sessionId);
-  if (!existsSync(dir)) throw new SessionCrudError('not_found', sessionId);
-  const meta = loadSessionMeta(dir);
-  if (!meta) throw new SessionCrudError('corrupt_meta', sessionId, `session metadata missing or unreadable at ${dir} (expected session.json or legacy group.json)`);
-  registerSessionWorkDir(defaultYeaftDir, sessionId, normalized);
-  return { ...meta, workDir: normalized };
+  const projectYeaftDir = yeaftDirForWorkDir(normalized);
+  const sourceDir = join(sessionsRoot(projectYeaftDir), sessionId);
+  if (!existsSync(sourceDir)) throw new SessionCrudError('not_found', sessionId);
+  const meta = loadSessionMeta(sourceDir);
+  if (!meta) throw new SessionCrudError('corrupt_meta', sessionId, `session metadata missing or unreadable at ${sourceDir} (expected session.json or legacy group.json)`);
+
+  ensureSessionManifestReady(defaultYeaftDir);
+  const root = sessionsRoot(defaultYeaftDir);
+  const destDir = join(root, sessionId);
+  const manifestDir = resolveManifestSessionDir(defaultYeaftDir, sessionId);
+  if (existsSync(destDir)) {
+    const existing = loadSessionMeta(destDir);
+    if (existing && manifestDir === destDir) return { ...existing, workDir: existing.workDir || normalized };
+    throw new SessionCrudError('duplicate', sessionId, `session already exists at ${destDir}`);
+  }
+
+  mkdirSync(root, { recursive: true });
+  cpSync(sourceDir, destDir, { recursive: true, errorOnExist: true });
+  const importedMeta = { ...meta, workDir: normalized };
+  const handle = openSession(root, sessionId);
+  try {
+    handle.saveMeta(importedMeta);
+  } finally {
+    handle.close();
+  }
+  copySessionExtras(projectYeaftDir, defaultYeaftDir, sessionId);
+  addOrUpdateManifestSession(defaultYeaftDir, importedMeta, destDir);
+  unregisterSessionWorkDir(defaultYeaftDir, sessionId);
+  return importedMeta;
 }
 
 export function resolveSessionYeaftDir(defaultYeaftDir, sessionId) {

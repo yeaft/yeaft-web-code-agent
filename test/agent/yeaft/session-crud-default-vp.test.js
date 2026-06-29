@@ -7,6 +7,7 @@ import {
   ensureDefaultSessionIfEmpty,
   readWorkDirRegistry,
   resolveSessionYeaftDir,
+  restoreSessionToRegistry,
   snapshotSessions,
 } from '../../../agent/yeaft/sessions/session-crud.js';
 import { createSession } from '../../../agent/yeaft/sessions/session-store.js';
@@ -179,5 +180,38 @@ describe('session CRUD default VP selection', () => {
     expect(existsSync(join(yeaftDir, 'sessions', hiddenId))).toBe(false);
     expect(resolveSessionYeaftDir(yeaftDir, hiddenId)).toBe(yeaftDir);
     expect(readWorkDirRegistry(yeaftDir)[hiddenId]).toBe(workDir);
+  });
+
+  it('restores a project session into the manifest when the manifest already exists', () => {
+    const yeaftDir = tempRoot('yeaft-session-crud-');
+    const workDir = tempRoot('yeaft-session-workdir-');
+    const localId = 'session_manifest_restore_local';
+    const restoredId = 'session_manifest_restore_project';
+    createSession(join(yeaftDir, 'sessions'), {
+      id: localId,
+      name: 'Manifest local',
+      roster: [],
+      defaultVpId: null,
+    }).close();
+    snapshotSessions(yeaftDir); // creates manifest before restore.
+    createSession(join(workDir, '.yeaft', 'sessions'), {
+      id: restoredId,
+      name: 'Restored project session',
+      roster: ['omni'],
+      defaultVpId: 'omni',
+      workDir,
+    }).close();
+    writeFileWithDirs(join(workDir, '.yeaft', 'memory', 'group', restoredId, 'vp', 'omni', 'summary.md'), 'restored vp memory');
+
+    const restored = restoreSessionToRegistry(yeaftDir, restoredId, workDir);
+    const sessions = snapshotSessions(yeaftDir);
+
+    expect(restored).toMatchObject({ id: restoredId, name: 'Restored project session', workDir });
+    expect(sessions.map(s => s.id).sort()).toEqual([localId, restoredId].sort());
+    expect(existsSync(join(yeaftDir, 'sessions', restoredId, 'session.json'))).toBe(true);
+    expect(readFileSync(join(yeaftDir, 'memory', 'group', restoredId, 'vp', 'omni', 'summary.md'), 'utf8')).toBe('restored vp memory');
+    expect(loadSessionsManifest(yeaftDir).sessions.find(row => row.id === restoredId)?.path)
+      .toBe(join(yeaftDir, 'sessions', restoredId));
+    expect(readWorkDirRegistry(yeaftDir)[restoredId]).toBeUndefined();
   });
 });
