@@ -106,7 +106,7 @@ describe('Yeaft skill slash commands', () => {
     expect(descriptions['yeaft-skills:review-code']).toBe('Project review');
   });
 
-  it.each(['/yeaft-skills:review-code please review this', '/skill:review-code please review this', '/review-code please review this'])('injects an explicitly selected skill and strips %s before streaming', async (prompt) => {
+  it.each(['/review-code please review this', '/yeaft-skills:review-code please review this', '/skill:review-code please review this'])('injects an explicitly selected skill and strips %s before streaming', async (prompt) => {
     const adapter = new RecordingAdapter();
     const skillManager = {
       has(name) {
@@ -211,7 +211,7 @@ describe('Yeaft skill slash commands', () => {
     await registry.execute('mcp__baseServer__base', { value: 2 }, {});
     expect(calls).toEqual([{ fullName: 'baseServer__base', input: { value: 2 } }]);
     expect(ctx.slashCommands).toContain('yeaft-skills:base-skill');
-    expect(ctx.slashCommands).not.toContain('yeaft-skills:project-skill');
+    expect(ctx.slashCommands).not.toContain('project-skill');
     expect(ctx.slashCommands).not.toContain('skill:base-skill');
   });
 
@@ -386,7 +386,30 @@ describe('Yeaft skill slash commands', () => {
     expect(__testHooks.projectRuntimeCount()).toBe(0);
   });
 
-  it.each(['/yeaft-skills:missing do work', '/skill:missing do work'])('reports unknown explicit skill command %s in the system prompt', async (prompt) => {
+  it('does not treat unknown bare slash commands as skills', async () => {
+    const adapter = new RecordingAdapter();
+    const skillManager = {
+      has() { return false; },
+      getPromptContent() { throw new Error('unknown bare command must not load skill content'); },
+      getRelevantPromptContent() { return ''; },
+    };
+    const engine = new Engine({
+      adapter,
+      trace: new NullTrace(),
+      config: { model: 'test-model', maxOutputTokens: 1024, language: 'en' },
+      skillManager,
+    });
+
+    for await (const _event of engine.query({ prompt: '/compact do work' })) {
+      // Drain stream.
+    }
+
+    expect(adapter.calls).toHaveLength(1);
+    expect(adapter.calls[0].system).not.toContain('Requested skill "compact" was not found');
+    expect(adapter.calls[0].messages[0].content).toBe('/compact do work');
+  });
+
+  it.each(['/yeaft-skills:missing do work', '/skill:missing do work'])('reports unknown prefixed skill command %s in the system prompt', async (prompt) => {
     const adapter = new RecordingAdapter();
     const skillManager = {
       getPromptContent() { return ''; },
