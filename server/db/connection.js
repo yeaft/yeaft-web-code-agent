@@ -178,7 +178,8 @@ const yeaftSessionsTable = `
     created_at INTEGER,
     updated_at INTEGER NOT NULL,
     is_archived INTEGER DEFAULT 0,
-    is_pinned INTEGER DEFAULT 0
+    is_pinned INTEGER DEFAULT 0,
+    sort_order INTEGER
   );
 
   CREATE INDEX IF NOT EXISTS idx_yeaft_sessions_user ON yeaft_sessions(user_id);
@@ -197,6 +198,7 @@ const yeaftMigrations = [
   // into chatStore.pinnedSessions on the web so sort logic stays unified
   // between chat and yeaft.
   `ALTER TABLE yeaft_sessions ADD COLUMN is_pinned INTEGER DEFAULT 0`,
+  `ALTER TABLE yeaft_sessions ADD COLUMN sort_order INTEGER`,
 ];
 for (const migration of yeaftMigrations) {
   try { db.exec(migration); } catch (_) { /* column exists */ }
@@ -739,13 +741,13 @@ export const stmts = {
   getYeaftSessionsByUser: db.prepare(`
     SELECT * FROM yeaft_sessions
     WHERE user_id = ? AND is_archived = 0
-    ORDER BY updated_at DESC
+    ORDER BY CASE WHEN sort_order IS NULL THEN 1 ELSE 0 END, sort_order ASC, updated_at DESC
   `),
 
   getYeaftSessionsByAgent: db.prepare(`
     SELECT * FROM yeaft_sessions
     WHERE agent_id = ? AND is_archived = 0
-    ORDER BY updated_at DESC
+    ORDER BY CASE WHEN sort_order IS NULL THEN 1 ELSE 0 END, sort_order ASC, updated_at DESC
   `),
 
   deleteYeaftSession: db.prepare(`
@@ -762,6 +764,12 @@ export const stmts = {
 
   setYeaftSessionPinned: db.prepare(`
     UPDATE yeaft_sessions SET is_pinned = ?, updated_at = ? WHERE id = ?
+  `),
+
+  setYeaftSessionSortOrder: db.prepare(`
+    UPDATE yeaft_sessions
+    SET sort_order = ?, updated_at = ?
+    WHERE id = ? AND user_id = ? AND agent_id = ?
   `),
 
   // Dashboard 聚合

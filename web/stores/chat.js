@@ -2975,6 +2975,7 @@ export const useChatStore = defineStore('chat', {
         add_member: 'yeaft_session_add_member',
         remove_member: 'yeaft_session_remove_member',
         set_default_vp: 'yeaft_session_set_default_vp',
+        reorder: 'reorder_yeaft_sessions',
         // feat-yeaft-session-restore: read-only probe (lists sessions on
         // disk for a workdir) + write (register that workdir → snapshot
         // rebroadcast). Both go via the flat-merge branch below because

@@ -412,6 +412,76 @@ it('restores a running opened Yeaft session from the connected-agent list snapsh
   expect(ids(store.sessionList)[0]).toBe('running-session');
 });
 
+it('persists manual Yeaft session order locally and re-applies it across snapshots', () => {
+  const store = useSessionsStore();
+
+  store.applySnapshot([
+    { id: 'session-a', name: 'A', updatedAt: 300 },
+    { id: 'session-b', name: 'B', updatedAt: 200 },
+    { id: 'session-c', name: 'C', updatedAt: 100 },
+  ], 'agent-1');
+
+  const ordered = store.reorderSessionsForAgent('agent-1', ['session-c', 'session-a', 'session-b']);
+
+  expect(ordered).toEqual(['session-c', 'session-a', 'session-b']);
+  expect(ids(store.sessionList)).toEqual(['session-c', 'session-a', 'session-b']);
+  expect(JSON.parse(localStorageData.get('yeaft-session-order-by-agent'))).toEqual({
+    'agent-1': ['session-c', 'session-a', 'session-b'],
+  });
+
+  store.applySnapshot([
+    { id: 'session-a', name: 'A', updatedAt: 300 },
+    { id: 'session-b', name: 'B', updatedAt: 200 },
+    { id: 'session-c', name: 'C', updatedAt: 100 },
+  ], 'agent-1');
+
+  expect(ids(store.sessionList)).toEqual(['session-c', 'session-a', 'session-b']);
+});
+
+it('keeps foreign agent slots stable when manually reordering one agent', () => {
+  const store = useSessionsStore();
+  store.sessions = {
+    a1: { id: 'a1', agentId: 'agent-a' },
+    b1: { id: 'b1', agentId: 'agent-b' },
+    a2: { id: 'a2', agentId: 'agent-a' },
+    c1: { id: 'c1', agentId: 'agent-c' },
+    a3: { id: 'a3', agentId: 'agent-a' },
+  };
+  store.sessionOrder = ['a1', 'b1', 'a2', 'c1', 'a3'];
+
+  const ordered = store.reorderSessionsForAgent('agent-a', ['a3', 'a1', 'a2']);
+
+  expect(ordered).toEqual(['a3', 'a1', 'a2']);
+  expect(store.sessionOrder).toEqual(['a3', 'b1', 'a1', 'c1', 'a2']);
+  expect(store.sessionOrder).not.toEqual(['a3', 'a1', 'a2', 'b1', 'c1']);
+  expect(JSON.parse(localStorageData.get('yeaft-session-order-by-agent'))).toEqual({
+    'agent-a': ['a3', 'a1', 'a2'],
+  });
+});
+
+it('re-applies persisted manual order without moving foreign agent slots on snapshot refresh', () => {
+  const store = useSessionsStore();
+  localStorageData.set('yeaft-session-order-by-agent', JSON.stringify({
+    'agent-a': ['a3', 'a1', 'a2'],
+  }));
+  store.sessions = {
+    a1: { id: 'a1', agentId: 'agent-a' },
+    b1: { id: 'b1', agentId: 'agent-b' },
+    a2: { id: 'a2', agentId: 'agent-a' },
+    c1: { id: 'c1', agentId: 'agent-c' },
+    a3: { id: 'a3', agentId: 'agent-a' },
+  };
+  store.sessionOrder = ['a1', 'b1', 'a2', 'c1', 'a3'];
+
+  store.applySnapshot([
+    { id: 'a1', name: 'A1' },
+    { id: 'a2', name: 'A2' },
+    { id: 'a3', name: 'A3' },
+  ], 'agent-a');
+
+  expect(store.sessionOrder).toEqual(['a3', 'b1', 'a1', 'c1', 'a2']);
+});
+
 it('treats explicit pinned false from the server as authoritative on reload', () => {
   const store = useSessionsStore();
   chatStore.pinnedSessions = ['session-a'];

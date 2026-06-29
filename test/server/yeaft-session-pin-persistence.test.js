@@ -27,6 +27,7 @@ async function loadYeaftSessionDb(existingRow) {
     upsertYeaftSession: { run: vi.fn() },
     deleteYeaftSession: { run: vi.fn() },
     setYeaftSessionPinned: { run: vi.fn() },
+    setYeaftSessionSortOrder: { run: vi.fn() },
   };
   vi.doMock('../../server/db/connection.js', () => ({ stmts }));
   const { yeaftSessionDb } = await import('../../server/db/yeaft-session-db.js');
@@ -111,6 +112,22 @@ describe('yeaftSessionDb.setPinnedForAgent', () => {
     expect(stmts.setYeaftSessionPinned.run).toHaveBeenCalledWith(1, expect.any(Number), 'session-1');
   });
 
+  it('persists manual order only for sessions owned by the same user and agent', async () => {
+    const { yeaftSessionDb, stmts } = await loadYeaftSessionDb(dbRow({ id: 'session-a', user_id: 'user-1', agent_id: 'agent-1' }));
+    stmts.getYeaftSessionsByAgent.all.mockReturnValue([
+      dbRow({ id: 'session-a', user_id: 'user-1', agent_id: 'agent-1' }),
+      dbRow({ id: 'session-b', user_id: 'user-1', agent_id: 'agent-1' }),
+      dbRow({ id: 'session-foreign', user_id: 'user-2', agent_id: 'agent-1' }),
+    ]);
+
+    const ok = yeaftSessionDb.setOrderForAgent('user-1', 'agent-1', ['session-b', 'session-foreign', 'session-a']);
+
+    expect(ok).toBe(true);
+    expect(stmts.setYeaftSessionSortOrder.run).toHaveBeenCalledTimes(2);
+    expect(stmts.setYeaftSessionSortOrder.run).toHaveBeenNthCalledWith(1, 0, expect.any(Number), 'session-b', 'user-1', 'agent-1');
+    expect(stmts.setYeaftSessionSortOrder.run).toHaveBeenNthCalledWith(2, 1, expect.any(Number), 'session-a', 'user-1', 'agent-1');
+  });
+
   it('reconciles opened-session snapshots without clearing persisted pin state', async () => {
     const { yeaftSessionDb, stmts } = await loadYeaftSessionDb(dbRow({ is_pinned: 1 }));
 
@@ -125,10 +142,10 @@ describe('yeaftSessionDb.setPinnedForAgent', () => {
 });
 
 describe('decorateYeaftSessionsWithPinned', () => {
-  it('decorates agent list snapshots with persisted pinned state', async () => {
+  it('decorates agent list snapshots with persisted pinned state and manual order', async () => {
     const { decorateYeaftSessionsWithPinned, yeaftSessionDb } = await loadDecorator([
-      { id: 'session-1', isPinned: true },
-      { id: 'session-2', isPinned: false },
+      { id: 'session-1', isPinned: true, sortOrder: 1 },
+      { id: 'session-2', isPinned: false, sortOrder: 0 },
     ]);
 
     const out = decorateYeaftSessionsWithPinned('agent-1', [
@@ -138,8 +155,8 @@ describe('decorateYeaftSessionsWithPinned', () => {
 
     expect(yeaftSessionDb.getByAgent).toHaveBeenCalledWith('agent-1');
     expect(out).toEqual([
-      { id: 'session-1', name: 'One', pinned: true, isPinned: true },
-      { id: 'session-2', name: 'Two', pinned: false, isPinned: false },
+      { id: 'session-1', name: 'One', pinned: true, isPinned: true, sortOrder: 1 },
+      { id: 'session-2', name: 'Two', pinned: false, isPinned: false, sortOrder: 0 },
     ]);
   });
 });

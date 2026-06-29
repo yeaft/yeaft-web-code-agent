@@ -86,6 +86,20 @@ describe('Yeaft sidebar session list', () => {
     expect(ids(rows)).toEqual(['s-new-pin', 's-old-pin', 's-new-free', 's-old-free']);
   });
 
+  it('uses persisted manual order before activity time', () => {
+    const rows = buildYeaftSidebarSessionList({
+      sessions: [
+        { id: 's-new', updatedAt: 300, sortOrder: 2 },
+        { id: 's-old', updatedAt: 100, sortOrder: 0 },
+        { id: 's-middle', updatedAt: 200, sortOrder: 1 },
+      ],
+      activeSessionId: null,
+      pinnedSessionIds: [],
+    });
+
+    expect(ids(rows)).toEqual(['s-old', 's-middle', 's-new']);
+  });
+
   it('does not reorder when the active session changes', () => {
     const sessions = [
       { id: 's-new', updatedAt: 300 },
@@ -101,9 +115,12 @@ describe('Yeaft sidebar session list', () => {
   });
 
 
-  it('wires pinned and active metadata into YeaftSidebar visual classes', () => {
+  it('wires pinned, active, and drag metadata into YeaftSidebar visual classes', () => {
     expect(YEAFT_SIDEBAR_SOURCE).toContain('class="session-pin-icon"');
     expect(YEAFT_SIDEBAR_SOURCE).toContain(':class="{ active: s.active, pinned: s.pinned');
+    expect(YEAFT_SIDEBAR_SOURCE).toContain('draggable="true"');
+    expect(YEAFT_SIDEBAR_SOURCE).toContain('@drop.prevent="onSessionDrop(s.raw, $event)"');
+    expect(YEAFT_SIDEBAR_SOURCE).toContain("request.call(this.chatStore, 'reorder'");
   });
 });
 

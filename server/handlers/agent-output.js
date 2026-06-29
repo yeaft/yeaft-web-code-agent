@@ -8,21 +8,27 @@ import { recordPerfTraceEvent } from '../perf-trace.js';
 
 export function decorateYeaftSessionsWithPinned(agentId, sessions) {
   const rawRows = Array.isArray(sessions) ? sessions : [];
-  const pinnedIds = new Set();
+  const rowsById = new Map();
   let authoritative = true;
   try {
     for (const row of yeaftSessionDb.getByAgent(agentId)) {
-      if (row && row.isPinned) pinnedIds.add(row.id);
+      if (row && row.id) rowsById.set(row.id, row);
     }
   } catch (e) {
     authoritative = false;
-    console.warn(`[Server] yeaft pin decorate read failed for agent ${agentId}:`, e?.message || e);
+    console.warn(`[Server] yeaft session metadata decorate read failed for agent ${agentId}:`, e?.message || e);
   }
   if (!authoritative) return rawRows;
   return rawRows.map(s => {
     if (!s || !s.id) return s;
-    const pinned = pinnedIds.has(s.id);
-    return { ...s, pinned, isPinned: pinned };
+    const row = rowsById.get(s.id);
+    const pinned = !!row?.isPinned;
+    return {
+      ...s,
+      pinned,
+      isPinned: pinned,
+      ...(Number.isFinite(row?.sortOrder) ? { sortOrder: row.sortOrder } : {}),
+    };
   });
 }
 

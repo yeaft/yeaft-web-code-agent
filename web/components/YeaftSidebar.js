@@ -100,8 +100,14 @@ export default {
               <div
                 v-for="s in sessionList"
                 :key="s.kind + ':' + s.id"
-                class="session-item"
-                :class="{ active: s.active, pinned: s.pinned, processing: s.processing || isSessionProcessing(s.id) }"
+                class="session-item yeaft-session-draggable"
+                :class="{ active: s.active, pinned: s.pinned, processing: s.processing || isSessionProcessing(s.id), dragging: draggedSessionId === s.id, 'drag-over': dragOverSessionId === s.id }"
+                draggable="true"
+                @dragstart="onSessionDragStart(s.raw, $event)"
+                @dragover.prevent="onSessionDragOver(s.raw, $event)"
+                @dragleave="onSessionDragLeave(s.raw, $event)"
+                @drop.prevent="onSessionDrop(s.raw, $event)"
+                @dragend="onSessionDragEnd"
                 @click="onSelectGroup(s.raw)"
                 @contextmenu.prevent="openGroupMenu(s.raw, $event)"
               >
@@ -193,6 +199,8 @@ export default {
       // and delete modals have been folded into the unified
       // SessionSettingsModal owned by YeaftPage.
       groupMenu: { open: false, groupId: null },
+      draggedSessionId: null,
+      dragOverSessionId: null,
       // task-342: server version shown in sidebar-bottom (mirrors ChatPage).
       serverVersion: '',
       restartingAgents: {},
@@ -405,6 +413,59 @@ export default {
       }
       if (this.sessionsStore) this.sessionsStore.setActive(g.id);
       this.$emit('select-group', g);
+    },
+    onSessionDragStart(g, evt) {
+      if (!g || !g.id) return;
+      this.groupMenu = { open: false, groupId: null };
+      this.draggedSessionId = g.id;
+      this.dragOverSessionId = null;
+      if (evt?.dataTransfer) {
+        evt.dataTransfer.effectAllowed = 'move';
+        evt.dataTransfer.setData('text/plain', g.id);
+      }
+    },
+    onSessionDragOver(g, evt) {
+      if (!g || !g.id || !this.draggedSessionId || g.id === this.draggedSessionId) return;
+      if (!this.canReorderWith(this.draggedSessionId, g.id)) return;
+      this.dragOverSessionId = g.id;
+      if (evt?.dataTransfer) evt.dataTransfer.dropEffect = 'move';
+    },
+    onSessionDragLeave(g, evt) {
+      if (!g || this.dragOverSessionId !== g.id) return;
+      const next = evt?.relatedTarget;
+      if (next && evt?.currentTarget?.contains && evt.currentTarget.contains(next)) return;
+      this.dragOverSessionId = null;
+    },
+    onSessionDrop(g, evt) {
+      const fromId = this.draggedSessionId || evt?.dataTransfer?.getData?.('text/plain') || null;
+      this.draggedSessionId = null;
+      this.dragOverSessionId = null;
+      if (!fromId || !g || !g.id || fromId === g.id) return;
+      this.reorderSessionRows(fromId, g.id);
+    },
+    onSessionDragEnd() {
+      this.draggedSessionId = null;
+      this.dragOverSessionId = null;
+    },
+    canReorderWith(fromId, toId) {
+      const from = this.sessionsStore?.sessions?.[fromId];
+      const to = this.sessionsStore?.sessions?.[toId];
+      return !!(from && to && from.agentId && from.agentId === to.agentId);
+    },
+    reorderSessionRows(fromId, toId) {
+      const rows = this.sessionList.filter(row => row?.raw?.agentId && row.raw.agentId === this.sessionsStore?.sessions?.[fromId]?.agentId);
+      const ids = rows.map(row => row.id);
+      const fromIndex = ids.indexOf(fromId);
+      const toIndex = ids.indexOf(toId);
+      if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+      const [moved] = ids.splice(fromIndex, 1);
+      ids.splice(toIndex, 0, moved);
+      const agentId = this.sessionsStore?.sessions?.[fromId]?.agentId;
+      const ordered = this.sessionsStore?.reorderSessionsForAgent?.(agentId, ids) || ids;
+      const request = this.chatStore?.sessionCrudRequest;
+      if (typeof request === 'function') {
+        request.call(this.chatStore, 'reorder', { agentId, sessionIds: ordered }, { agentId });
+      }
     },
     // Per-row agent badge — mirrors chat session rows.
     sessionAgentName(g) {
