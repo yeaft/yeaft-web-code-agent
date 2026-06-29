@@ -261,11 +261,27 @@ export const useSessionsStore = defineStore('sessions', {
         if (agentId) {
           const manualByAgent = readManualSessionOrder();
           const manualOrder = normalizeOrderList(manualByAgent[agentId]);
-          nextOrder = applyManualOrder(nextOrder, manualOrder);
-          const manualIndex = new Map(manualOrder.map((id, index) => [id, index]));
-          for (const id of nextOrder) {
-            if (nextMap[id] && manualIndex.has(id)) {
-              nextMap[id] = { ...nextMap[id], sortOrder: manualIndex.get(id) };
+          if (manualOrder.length > 0) {
+            const manualSet = new Set(manualOrder);
+            const nextForAgent = applyManualOrder(
+              nextOrder.filter(id => nextMap[id]?.agentId === agentId),
+              manualOrder,
+            );
+            const oldHasAgentSlots = this.sessionOrder.some(id => nextMap[id]?.agentId === agentId);
+            let manualCursor = 0;
+            if (oldHasAgentSlots) {
+              nextOrder = this.sessionOrder
+                .filter(id => nextMap[id])
+                .map((id) => (nextMap[id]?.agentId === agentId ? nextForAgent[manualCursor++] : id))
+                .concat(nextForAgent.slice(manualCursor));
+            } else {
+              nextOrder = nextOrder.map((id) => (nextMap[id]?.agentId === agentId ? nextForAgent[manualCursor++] : id));
+            }
+            const manualIndex = new Map(manualOrder.map((id, index) => [id, index]));
+            for (const id of nextForAgent) {
+              if (nextMap[id] && manualSet.has(id)) {
+                nextMap[id] = { ...nextMap[id], sortOrder: manualIndex.get(id) };
+              }
             }
           }
         }
@@ -446,11 +462,10 @@ export const useSessionsStore = defineStore('sessions', {
       const nextForAgent = applyManualOrder(idsForAgent, orderedIds);
       if (nextForAgent.length === 0) return [];
       const nextByAgent = new Map(nextForAgent.map((id, index) => [id, index]));
-      const remaining = this.sessionOrder.filter(id => this.sessions[id]?.agentId !== agentId);
-      const insertAt = this.sessionOrder.findIndex(id => this.sessions[id]?.agentId === agentId);
-      this.sessionOrder = insertAt < 0
-        ? remaining.concat(nextForAgent)
-        : [...remaining.slice(0, insertAt), ...nextForAgent, ...remaining.slice(insertAt)];
+      let cursor = 0;
+      this.sessionOrder = this.sessionOrder.map((id) => (
+        this.sessions[id]?.agentId === agentId ? nextForAgent[cursor++] : id
+      ));
       for (const id of nextForAgent) {
         this.sessions[id] = { ...this.sessions[id], sortOrder: nextByAgent.get(id) };
       }
