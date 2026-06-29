@@ -57,6 +57,7 @@ import { nextSessionId, validateVpId, isReservedVpId } from './ids.js';
 import { scanVpLibrary, DEFAULT_VP_LIB_DIR } from '../vp/vp-store.js';
 import { seedSummaryIfMissingSync, removeScopeDirSync } from '../memory/store.js';
 import { ensureSessionConfigFile, saveSessionConfig, loadSessionConfig } from './session-config.js';
+import { repairSessionStore } from './recovery.js';
 import {
   addOrUpdateManifestSession,
   ensureSessionsManifest,
@@ -183,6 +184,17 @@ function copySessionExtras(sourceYeaftDir, destYeaftDir, sessionId) {
     mkdirSync(join(dst, '..'), { recursive: true });
     cpSync(src, dst, { recursive: true, errorOnExist: false });
   }
+}
+
+function repairSessionStoreAndManifest(yeaftDir, options = {}) {
+  const repaired = repairSessionStore(yeaftDir, options);
+  ensureSessionManifestReady(yeaftDir);
+  for (const row of repaired.sessions || []) {
+    const dir = join(sessionsRoot(yeaftDir), row.sessionId);
+    const meta = loadSessionMeta(dir);
+    if (meta) addOrUpdateManifestSession(yeaftDir, meta, dir);
+  }
+  return repaired;
 }
 
 /**
@@ -380,7 +392,9 @@ function scanSortedVpIds(libDir) {
 export function ensureDefaultSessionIfEmpty(yeaftDir, options = {}) {
   const libDir = options.libDir || DEFAULT_VP_LIB_DIR;
   const memoryRoot = options.memoryRoot || DEFAULT_MEMORY_ROOT;
-  ensureSessionManifestReady(yeaftDir);
+  repairSessionStoreAndManifest(yeaftDir, {
+    defaultRoster: scanSortedVpIds(libDir),
+  });
   const existing = listManifestSessions(yeaftDir).map(row => row.meta);
   if (existing.length > 0) {
     return { seeded: false, sessionId: existing[0].id };
@@ -718,7 +732,7 @@ export function requireSession(yeaftDir, sessionId) {
 
 /** Convenience: snapshot all non-archived groups for WS broadcast. */
 export function snapshotSessions(yeaftDir) {
-  ensureSessionManifestReady(yeaftDir);
+  repairSessionStoreAndManifest(yeaftDir);
   const byId = new Map();
   for (const row of listManifestSessions(yeaftDir)) {
     byId.set(row.meta.id, row.meta);
