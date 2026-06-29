@@ -56,6 +56,7 @@ import { nextSessionId, validateVpId, isReservedVpId } from './ids.js';
 import { scanVpLibrary, DEFAULT_VP_LIB_DIR } from '../vp/vp-store.js';
 import { seedSummaryIfMissingSync, removeScopeDirSync } from '../memory/store.js';
 import { ensureSessionConfigFile, saveSessionConfig, loadSessionConfig } from './session-config.js';
+import { repairSessionStore } from './recovery.js';
 
 /**
  * Default memory root used when callers don't pass `options.memoryRoot`.
@@ -290,6 +291,9 @@ function scanSortedVpIds(libDir) {
 export function ensureDefaultSessionIfEmpty(yeaftDir, options = {}) {
   const libDir = options.libDir || DEFAULT_VP_LIB_DIR;
   const memoryRoot = options.memoryRoot || DEFAULT_MEMORY_ROOT;
+  repairSessionStore(yeaftDir, {
+    defaultRoster: scanSortedVpIds(libDir),
+  });
   const existing = listSessions(sessionsRoot(yeaftDir));
   if (existing.length > 0) {
     return { seeded: false, sessionId: existing[0].id };
@@ -621,6 +625,7 @@ export function requireSession(yeaftDir, sessionId) {
 
 /** Convenience: snapshot all non-archived groups for WS broadcast. */
 export function snapshotSessions(yeaftDir) {
+  repairSessionStore(yeaftDir);
   const byId = new Map();
   for (const group of listSessions(sessionsRoot(yeaftDir))) {
     byId.set(group.id, group);
