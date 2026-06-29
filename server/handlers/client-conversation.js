@@ -324,23 +324,33 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
 
     case 'reorder_yeaft_sessions': {
+      const globalSessions = Array.isArray(msg.sessions) ? msg.sessions : null;
       const agentId = typeof msg.agentId === 'string' ? msg.agentId : '';
-      if (!agentId || !Array.isArray(msg.sessionIds)) break;
-      if (!verifyAgentOwnership(agentId, client.userId, client.role)) {
+      if (!globalSessions && (!agentId || !Array.isArray(msg.sessionIds))) break;
+      if (globalSessions) {
+        const agentIds = new Set(globalSessions.map(item => item?.agentId).filter(id => typeof id === 'string' && id));
+        const unauthorizedAgentId = [...agentIds].find(id => !verifyAgentOwnership(id, client.userId, client.role));
+        if (unauthorizedAgentId) {
+          console.warn(`[Server] Unauthorized yeaft session reorder by ${client.userId} for agent ${unauthorizedAgentId}`);
+          break;
+        }
+      } else if (!verifyAgentOwnership(agentId, client.userId, client.role)) {
         console.warn(`[Server] Unauthorized yeaft session reorder by ${client.userId} for agent ${agentId}`);
         break;
       }
       let ok = false;
       try {
-        ok = yeaftSessionDb.setOrderForAgent(client.userId, agentId, msg.sessionIds);
+        ok = globalSessions
+          ? yeaftSessionDb.setOrderForUser(client.userId, globalSessions)
+          : yeaftSessionDb.setOrderForAgent(client.userId, agentId, msg.sessionIds);
       } catch (e) {
-        console.warn(`[Server] yeaftSessionDb.setOrderForAgent failed for ${agentId}:`, e?.message || e);
+        console.warn('[Server] yeaftSessionDb reorder failed:', e?.message || e);
       }
       await sendToWebClient(client, {
         type: 'session_crud_result',
         op: 'reorder',
         requestId: msg.requestId,
-        agentId,
+        ...(agentId ? { agentId } : {}),
         ok,
       });
       break;
@@ -380,7 +390,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         } catch (e) {
           console.warn(`[Server] yeaftSessionDb.setPinnedForAgent failed for ${msg.conversationId}:`, e?.message || e);
         }
-        await sendToWebClient(client, { type: 'session_pinned', conversationId: msg.conversationId, pinned: isPinned });
+        await sendToWebClient(client, { type: 'session_pinned', conversationId: msg.conversationId, agentId: explicitYeaftAgentId, pinned: isPinned });
         break;
       }
 

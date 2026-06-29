@@ -34,7 +34,7 @@ export function buildYeaftSidebarSessionList({ sessions, activeSessionId, pinned
       kind: 'session',
       id,
       raw: session,
-      pinned: pinnedIndex.has(id) || !!session.pinned,
+      pinned: !!session.pinned || (!session.agentId && pinnedIndex.has(id)),
       active: id === activeId,
       processing: !!session.running || !!session.active || !!session.isRunning || !!session.isActive,
       _manualOrder: Number.isFinite(session.sortOrder) ? session.sortOrder : Number.MAX_SAFE_INTEGER,

@@ -347,6 +347,7 @@ export default {
       <SessionSettingsModal
         v-if="groupSettingsOpen && groupSettingsId"
         :group-id="groupSettingsId"
+        :agent-id="groupSettingsAgentId"
         :initial-section="groupSettingsSection"
         :initial-edit-vp-id="groupSettingsEditVpId"
         @close="closeGroupSettings"
@@ -732,9 +733,15 @@ export default {
       const gs = sessionsStore();
       if (!gs || !gs.sessions) return null;
       const filterId = store.yeaftActiveSessionFilter || null;
-      if (filterId && gs.sessions[filterId]) return gs.sessions[filterId];
-      if (gs.activeSessionId && gs.sessions[gs.activeSessionId]) return gs.sessions[gs.activeSessionId];
-      return gs.sessions['grp_default'] || null;
+      if (filterId && typeof gs.sessionById === 'function') {
+        const row = gs.sessionById(filterId, store.currentAgent || null);
+        if (row) return row;
+      }
+      if (gs.activeSessionId && typeof gs.sessionById === 'function') {
+        const row = gs.sessionById(gs.activeSessionId, store.currentAgent || null);
+        if (row) return row;
+      }
+      return typeof gs.sessionById === 'function' ? gs.sessionById('grp_default', store.currentAgent || null) : null;
     });
 
     const activeSessionIdForSettings = () => resolveActiveSessionIdForSettings({
@@ -1024,6 +1031,7 @@ export default {
     // target any Session and any pane.
     const groupSettingsOpen = Vue.ref(false);
     const groupSettingsId = Vue.ref(null);
+    const groupSettingsAgentId = Vue.ref(null);
     const groupSettingsSection = Vue.ref('session');
     const groupSettingsEditVpId = Vue.ref('');
     const openSessionSettings = (payload = {}) => {
@@ -1036,6 +1044,7 @@ export default {
       const section = editVpId ? 'members' : ((payload && payload.section) || 'session');
       if (!sessionId) return;
       groupSettingsId.value = sessionId;
+      groupSettingsAgentId.value = (payload && payload.agentId) || null;
       groupSettingsSection.value = section;
       groupSettingsEditVpId.value = editVpId;
       groupSettingsOpen.value = true;
@@ -1048,6 +1057,7 @@ export default {
     const closeGroupSettings = () => {
       groupSettingsOpen.value = false;
       groupSettingsId.value = null;
+      groupSettingsAgentId.value = null;
       groupSettingsEditVpId.value = '';
     };
     // task-vp-customize: GroupSettings → "Open VP Library" shortcut. We
@@ -1281,6 +1291,7 @@ export default {
       // task-fix-group-member-editor → unified group settings modal.
       groupSettingsOpen,
       groupSettingsId,
+      groupSettingsAgentId,
       groupSettingsSection,
       groupSettingsEditVpId,
       openSessionSettings,

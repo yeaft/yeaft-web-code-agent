@@ -99,9 +99,9 @@ export default {
             <template v-if="sessionList.length > 0">
               <div
                 v-for="s in sessionList"
-                :key="s.kind + ':' + s.id"
+                :key="s.kind + ':' + sessionDragKey(s.raw)"
                 class="session-item yeaft-session-draggable"
-                :class="{ active: s.active, pinned: s.pinned, processing: s.processing || isSessionProcessing(s.id), dragging: draggedSessionId === s.id, 'drag-over': dragOverSessionId === s.id }"
+                :class="{ active: s.active, pinned: s.pinned, processing: s.processing || isSessionProcessing(s.id), dragging: draggedSessionKey === sessionDragKey(s.raw), 'drag-over': dragOverSessionKey === sessionDragKey(s.raw) }"
                 draggable="true"
                 @dragstart="onSessionDragStart(s.raw, $event)"
                 @dragover.prevent="onSessionDragOver(s.raw, $event)"
@@ -121,16 +121,16 @@ export default {
                   <button
                     type="button"
                     class="session-dots-btn"
-                    :class="{ 'menu-open': groupMenu.open && groupMenu.groupId === s.id }"
+                    :class="{ 'menu-open': groupMenu.open && groupMenu.groupId === sessionDragKey(s.raw) }"
                     :title="$t('yeaft.session.moreActions')"
                     :aria-label="$t('yeaft.session.moreActions')"
                     aria-haspopup="menu"
-                    :aria-expanded="groupMenu.open && groupMenu.groupId === s.id ? 'true' : 'false'"
+                    :aria-expanded="groupMenu.open && groupMenu.groupId === sessionDragKey(s.raw) ? 'true' : 'false'"
                     @click.stop="openGroupMenu(s.raw, $event)"
                   >
                     <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
                   </button>
-                  <div v-if="groupMenu.open && groupMenu.groupId === s.id" class="session-menu" role="menu" @click.stop>
+                  <div v-if="groupMenu.open && groupMenu.groupId === sessionDragKey(s.raw)" class="session-menu" role="menu" @click.stop>
                     <button type="button" role="menuitem" class="session-menu-item" @click="onTogglePin(s.raw)">
                       {{ isSessionPinned(s) ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin') }}
                     </button>
@@ -199,8 +199,8 @@ export default {
       // and delete modals have been folded into the unified
       // SessionSettingsModal owned by YeaftPage.
       groupMenu: { open: false, groupId: null },
-      draggedSessionId: null,
-      dragOverSessionId: null,
+      draggedSessionKey: null,
+      dragOverSessionKey: null,
       // task-342: server version shown in sidebar-bottom (mirrors ChatPage).
       serverVersion: '',
       restartingAgents: {},
@@ -411,60 +411,59 @@ export default {
           this.chatStore.currentAgent = g.agentId;
         }
       }
-      if (this.sessionsStore) this.sessionsStore.setActive(g.id);
+      if (this.sessionsStore) this.sessionsStore.setActive(g.id, g.agentId || null);
       this.$emit('select-group', g);
     },
+    sessionDragKey(g) {
+      return g && g.agentId && g.id ? `${g.agentId}\u001f${g.id}` : '';
+    },
     onSessionDragStart(g, evt) {
-      if (!g || !g.id) return;
+      const key = this.sessionDragKey(g);
+      if (!key) return;
       this.groupMenu = { open: false, groupId: null };
-      this.draggedSessionId = g.id;
-      this.dragOverSessionId = null;
+      this.draggedSessionKey = key;
+      this.dragOverSessionKey = null;
       if (evt?.dataTransfer) {
         evt.dataTransfer.effectAllowed = 'move';
-        evt.dataTransfer.setData('text/plain', g.id);
+        evt.dataTransfer.setData('text/plain', key);
       }
     },
     onSessionDragOver(g, evt) {
-      if (!g || !g.id || !this.draggedSessionId || g.id === this.draggedSessionId) return;
-      if (!this.canReorderWith(this.draggedSessionId, g.id)) return;
-      this.dragOverSessionId = g.id;
+      const key = this.sessionDragKey(g);
+      if (!key || !this.draggedSessionKey || key === this.draggedSessionKey) return;
+      this.dragOverSessionKey = key;
       if (evt?.dataTransfer) evt.dataTransfer.dropEffect = 'move';
     },
     onSessionDragLeave(g, evt) {
-      if (!g || this.dragOverSessionId !== g.id) return;
+      const key = this.sessionDragKey(g);
+      if (!key || this.dragOverSessionKey !== key) return;
       const next = evt?.relatedTarget;
       if (next && evt?.currentTarget?.contains && evt.currentTarget.contains(next)) return;
-      this.dragOverSessionId = null;
+      this.dragOverSessionKey = null;
     },
     onSessionDrop(g, evt) {
-      const fromId = this.draggedSessionId || evt?.dataTransfer?.getData?.('text/plain') || null;
-      this.draggedSessionId = null;
-      this.dragOverSessionId = null;
-      if (!fromId || !g || !g.id || fromId === g.id) return;
-      this.reorderSessionRows(fromId, g.id);
+      const fromKey = this.draggedSessionKey || evt?.dataTransfer?.getData?.('text/plain') || null;
+      const toKey = this.sessionDragKey(g);
+      this.draggedSessionKey = null;
+      this.dragOverSessionKey = null;
+      if (!fromKey || !toKey || fromKey === toKey) return;
+      this.reorderSessionRows(fromKey, toKey);
     },
     onSessionDragEnd() {
-      this.draggedSessionId = null;
-      this.dragOverSessionId = null;
+      this.draggedSessionKey = null;
+      this.dragOverSessionKey = null;
     },
-    canReorderWith(fromId, toId) {
-      const from = this.sessionsStore?.sessions?.[fromId];
-      const to = this.sessionsStore?.sessions?.[toId];
-      return !!(from && to && from.agentId && from.agentId === to.agentId);
-    },
-    reorderSessionRows(fromId, toId) {
-      const rows = this.sessionList.filter(row => row?.raw?.agentId && row.raw.agentId === this.sessionsStore?.sessions?.[fromId]?.agentId);
-      const ids = rows.map(row => row.id);
-      const fromIndex = ids.indexOf(fromId);
-      const toIndex = ids.indexOf(toId);
+    reorderSessionRows(fromKey, toKey) {
+      const keys = this.sessionList.map(row => this.sessionDragKey(row.raw)).filter(Boolean);
+      const fromIndex = keys.indexOf(fromKey);
+      const toIndex = keys.indexOf(toKey);
       if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
-      const [moved] = ids.splice(fromIndex, 1);
-      ids.splice(toIndex, 0, moved);
-      const agentId = this.sessionsStore?.sessions?.[fromId]?.agentId;
-      const ordered = this.sessionsStore?.reorderSessionsForAgent?.(agentId, ids) || ids;
+      const [moved] = keys.splice(fromIndex, 1);
+      keys.splice(toIndex, 0, moved);
+      const ordered = this.sessionsStore?.reorderSessionsGlobally?.(keys) || [];
       const request = this.chatStore?.sessionCrudRequest;
       if (typeof request === 'function') {
-        request.call(this.chatStore, 'reorder', { agentId, sessionIds: ordered }, { agentId });
+        request.call(this.chatStore, 'reorder', { sessions: ordered });
       }
     },
     // Per-row agent badge — mirrors chat session rows.
@@ -487,7 +486,7 @@ export default {
     // maps them to Session. YeaftPage owns the modal lifecycle.
     openGroupSettings(g, section = 'members') {
       if (!g || !g.id) return;
-      this.$emit('open-group-settings', { sessionId: g.id, section });
+      this.$emit('open-group-settings', { sessionId: g.id, agentId: g.agentId || null, section });
     },
     // Convenience wrapper used by the kebab menu items: closes the menu
     // first so the unified modal opens cleanly without the kebab still
@@ -507,7 +506,9 @@ export default {
     // enough for the menu label if a partial refresh races the shared cache.
     isSessionPinned(sessionOrId) {
       const id = sessionOrId && typeof sessionOrId === 'object' ? sessionOrId.id : sessionOrId;
-      const rowPinned = !!(sessionOrId && typeof sessionOrId === 'object' && sessionOrId.pinned);
+      const hasRowPin = !!(sessionOrId && typeof sessionOrId === 'object' && Object.prototype.hasOwnProperty.call(sessionOrId, 'pinned'));
+      const rowPinned = !!(hasRowPin && sessionOrId.pinned);
+      if (hasRowPin && sessionOrId.agentId) return rowPinned;
       const fn = this.chatStore && this.chatStore.isSessionPinned;
       return rowPinned || (typeof fn === 'function' ? !!fn.call(this.chatStore, id) : false);
     },
@@ -523,6 +524,7 @@ export default {
           agentId: g.agentId || this.store?.currentAgent || null,
           sessionName: g.name || g.title || g.id,
           workDir: g.workDir || '',
+          pinned: !!g.pinned,
         });
       }
     },
@@ -534,7 +536,7 @@ export default {
       this.groupMenu = { open: false, groupId: null };
       if (!g || !g.id) return;
       const fn = this.chatStore && this.chatStore.sessionCrudRequest;
-      if (typeof fn === 'function') fn.call(this.chatStore, 'archive', { sessionId: g.id });
+      if (typeof fn === 'function') fn.call(this.chatStore, 'archive', { sessionId: g.id }, { agentId: g.agentId || null });
     },
     groupDisplayName(g) {
       if (!g) return '';
@@ -573,11 +575,13 @@ export default {
     openGroupMenu(g, evt) {
       if (!g || !g.id) return;
       // Toggle when clicking the same row again.
-      if (this.groupMenu.open && this.groupMenu.groupId === g.id) {
+      const menuKey = this.sessionDragKey(g);
+      if (!menuKey) return;
+      if (this.groupMenu.open && this.groupMenu.groupId === menuKey) {
         this.groupMenu = { open: false, groupId: null };
         return;
       }
-      this.groupMenu = { open: true, groupId: g.id };
+      this.groupMenu = { open: true, groupId: menuKey };
       // Close on next outside click.
       const close = (ev) => {
         if (ev && ev.target && ev.target.closest && ev.target.closest('.session-menu')) return;
