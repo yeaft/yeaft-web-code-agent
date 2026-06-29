@@ -118,12 +118,12 @@ export function migrateProjectSessionsToUser(projectDir, userYeaftDir = join(hom
 
     if (!dryRun) {
       cpSync(sourceDir, destDir, { recursive: true, errorOnExist: false });
-      copySessionMemory(projectYeaftDir, normalizedUserYeaftDir, sessionId, { overwrite, dryRun, warnings });
+      const copiedMemoryDirs = copySessionMemory(projectYeaftDir, normalizedUserYeaftDir, sessionId, { overwrite, dryRun, warnings });
       unregisterSessionWorkDir(normalizedUserYeaftDir, sessionId);
       markMigrated(destDir, normalizedProjectDir);
       if (deleteSource) {
         rmSync(sourceDir, { recursive: true, force: true });
-        removeSessionMemory(projectYeaftDir, sessionId, warnings);
+        removeCopiedSourceMemory(copiedMemoryDirs, warnings);
         removedSources += 1;
       }
     }
@@ -151,7 +151,9 @@ function copySessionMemory(projectYeaftDir, userYeaftDir, sessionId, { overwrite
   const pairs = [
     [join(projectYeaftDir, 'memory', 'session', sessionId), join(userYeaftDir, 'memory', 'session', sessionId)],
     [join(projectYeaftDir, 'memory', 'sessions', sessionId), join(userYeaftDir, 'memory', 'sessions', sessionId)],
+    [join(projectYeaftDir, 'memory', 'group', sessionId), join(userYeaftDir, 'memory', 'group', sessionId)],
   ];
+  const copied = [];
   for (const [src, dst] of pairs) {
     if (!existsSync(src)) continue;
     if (existsSync(dst)) {
@@ -165,14 +167,13 @@ function copySessionMemory(projectYeaftDir, userYeaftDir, sessionId, { overwrite
       mkdirSync(join(dst, '..'), { recursive: true });
       cpSync(src, dst, { recursive: true, errorOnExist: false });
     }
+    copied.push(src);
   }
+  return copied;
 }
 
-function removeSessionMemory(projectYeaftDir, sessionId, warnings) {
-  for (const dir of [
-    join(projectYeaftDir, 'memory', 'session', sessionId),
-    join(projectYeaftDir, 'memory', 'sessions', sessionId),
-  ]) {
+function removeCopiedSourceMemory(copiedMemoryDirs, warnings) {
+  for (const dir of copiedMemoryDirs) {
     try {
       rmSync(dir, { recursive: true, force: true });
     } catch (err) {
