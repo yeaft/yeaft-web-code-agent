@@ -96,41 +96,48 @@ const RETRY_DEFAULTS = Object.freeze({
   jitterRatio: 0.25,
 });
 
-// Accept the Yeaft-native alias and the Claude Code plugin-style command.
-// Autocomplete prefers /yeaft-skills:<name>; /skill:<name> remains supported
-// for older clients and typed history.
-const EXPLICIT_SKILL_COMMAND_RE = /^\/(?:skill|yeaft-skills):([^\s]+)(\s+|$)/;
+// Accept legacy namespaced commands and Claude Code-style bare skill commands.
+// Project-tier skills are shown as /<skill-name>; /yeaft-skills:<name> and
+// /skill:<name> stay supported for globals, older clients, and typed history.
+const PREFIXED_SKILL_COMMAND_RE = /^\/(?:skill|yeaft-skills):([^\s]+)(\s+|$)/;
 const BARE_SKILL_COMMAND_RE = /^\/([A-Za-z0-9][A-Za-z0-9_.-]*)(\s+|$)/;
+
+function skillManagerHasSkill(skillManager, name) {
+  if (!skillManager || !name) return false;
+  if (typeof skillManager.has === 'function') return !!skillManager.has(name);
+  return false;
+}
 
 function parseExplicitSkillCommand(prompt, skillManager) {
   if (typeof prompt !== 'string') {
     return { skillName: null, cleanedPrompt: prompt };
   }
-  const match = prompt.match(EXPLICIT_SKILL_COMMAND_RE);
-  if (match) {
+  const prefixed = prompt.match(PREFIXED_SKILL_COMMAND_RE);
+  if (prefixed) {
     return {
-      skillName: match[1],
-      cleanedPrompt: prompt.slice(match[0].length),
+      skillName: prefixed[1],
+      cleanedPrompt: prompt.slice(prefixed[0].length),
     };
   }
-  const bareMatch = prompt.match(BARE_SKILL_COMMAND_RE);
-  if (bareMatch && typeof skillManager?.has === 'function' && skillManager.has(bareMatch[1])) {
+
+  const bare = prompt.match(BARE_SKILL_COMMAND_RE);
+  if (bare && skillManagerHasSkill(skillManager, bare[1])) {
     return {
-      skillName: bareMatch[1],
-      cleanedPrompt: prompt.slice(bareMatch[0].length),
+      skillName: bare[1],
+      cleanedPrompt: prompt.slice(bare[0].length),
     };
   }
   return { skillName: null, cleanedPrompt: prompt };
 }
 
-function stripLeadingSkillCommandFromPromptParts(promptParts) {
+function stripLeadingSkillCommandFromPromptParts(promptParts, skillManager) {
   if (!Array.isArray(promptParts) || promptParts.length === 0) return promptParts;
   let stripped = false;
   return promptParts.map(part => {
     if (stripped || !part || part.type !== 'text' || typeof part.text !== 'string') {
       return part;
     }
-    const parsed = parseExplicitSkillCommand(part.text);
+    const parsed = parseExplicitSkillCommand(part.text, skillManager);
     if (!parsed.skillName) return part;
     stripped = true;
     return { ...part, text: parsed.cleanedPrompt };
@@ -1652,7 +1659,7 @@ export class Engine {
     const parsedSkill = parseExplicitSkillCommand(parsed.cleanedPrompt, this.#skillManager);
     const effectivePrompt = parsedSkill.cleanedPrompt;
     const effectivePromptParts = parsedSkill.skillName
-      ? stripLeadingSkillCommandFromPromptParts(promptParts)
+      ? stripLeadingSkillCommandFromPromptParts(promptParts, this.#skillManager)
       : promptParts;
     const configuredEffort = normalizeEffort(this.#config?.modelEffort);
     const effectiveUserEffort = normalizeEffort(userEffort) || parsed.effort || configuredEffort || null;

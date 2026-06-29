@@ -13,15 +13,11 @@
  * Content area:
  *   - workDir empty → folderAggregates from the sessions store (distinct
  *     workDirs across all known sessions, sorted by path).
- *   - workDir set   → `sessionsInDir`: one disk-scanned list of every
- *     yeaft session physically present under `<workDir>/.yeaft/sessions/`.
- *     Each row carries an `inSidebar` flag (true when sessionsStore already
- *     holds it). Clicking dispatches through `selectSession`:
- *       inSidebar=true  → resume only (just pin + fire history)
- *       inSidebar=false → restore (register first, then pin)
- *     Pre-fix this was two stacked panels ("registered" + "on disk"), which
- *     looked like duplicate content to the user. Merged on 2026-06-09 per
- *     user directive: "此目录下所有 yeaft session，用户可以选择恢复".
+ *   - workDir set   → `sessionsInDir`: currently a compatibility-only list;
+ *     Yeaft Session data lives under the agent-local sessions root, while
+ *     workDir is kept for project assets and runtime context. Older restore
+ *     rows may still flow through the same `selectSession` path, but the
+ *     backend no longer treats `<workDir>/.yeaft/sessions/` as canonical.
  *
  * Footer: Create button → `chat.createYeaftSession({...})`. We keep this
  * call path (rather than calling `sessionCrudRequest` directly) because

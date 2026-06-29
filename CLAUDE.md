@@ -106,7 +106,7 @@ credentials/         — 动态凭证（github-copilot 等）
 - Models 项可以是字符串 `"gpt-5"`，也可以是对象 `{ id, protocol?, contextWindow?, maxOutputTokens?, effortOptions? }` 做 per-model 覆盖
 - Protocol 解析顺序：per-model > provider-level > 按 model id 启发式（claude-* → anthropic / gpt-* / o1-4 / chatgpt-* / codex-* / omni-* → openai-responses） > 默认 openai-responses；同一 provider 可同时暴露 Claude 系和 GPT 系 model
 - Token limit 解析顺序：provider model override > `models.dev` catalog（`llm/models-dev.js`）> 内置保守默认；不要把 context window 写死在 UI 或 prompt 里
-- Effort / thinking：`models.js` 记录模型是否支持 Anthropic thinking、Anthropic adaptive thinking 或 OpenAI reasoning；前端模型菜单可选择 `modelEffort`，Session override 存在该 Session 自己的 `config.json`（普通 Session 在 agent-local sessions 目录，workDir-backed Session 在 `<workDir>/.yeaft/sessions/<id>/`），adapter 在请求时翻译成 `thinking` / `output_config.effort` / `reasoning.effort`
+- Effort / thinking：`models.js` 记录模型是否支持 Anthropic thinking、Anthropic adaptive thinking 或 OpenAI reasoning；前端模型菜单可选择 `modelEffort`，Session override 存在该 Session 自己的 `config.json`（位于 agent-local sessions 目录；`workDir` 只作为项目资产 / 运行上下文，不承载 Session 数据），adapter 在请求时翻译成 `thinking` / `output_config.effort` / `reasoning.effort`
 - Anthropic adapter 现在会过滤空文本 user / assistant content，但保留 image/document/tool_result 等非文本 block；不要为了兼容空字符串重新构造无意义文本
 
 ### 记忆系统（agent/yeaft/memory/）— H2-AMS 架构
@@ -270,8 +270,8 @@ Web 客户端 -> ws "yeaft_session_send" -> Server -> ws agent
 - Web 创建入口：`SessionCreateModal` -> `chat.createYeaftSession()` -> `sessionCrudRequest('create')` -> wire `yeaft_create_session`
 - 后端创建入口：`agent/yeaft/sessions/session-crud.js#createSessionFromSpec()`，写 `session.json`，同时初始化 per-session `config.json` 和 memory seed summary
 - VP 默认值边界：前端 roster hydrate 后会优先预选 `omni`；后端也做兜底，但只在调用方 roster 为空或未传时生效。若 VP library 存在 `omni`，创建 `roster: ['omni']` / `defaultVpId: 'omni'`；显式非空 roster 永不被覆盖；VP library 为空时允许空 roster / `defaultVpId: null`
-- `workDir` Session：带 `workDir` 创建时，真实 Session 数据写到 `<workDir>/.yeaft/sessions/<sessionId>/`；agent-local `~/.yeaft/group-workdirs.json` 只作为 registry 记录 `sessionId -> workDir`，用于 sidebar snapshot / restore
-- 恢复入口边界：`yeaft_scan_workdir_sessions` 只读扫描 `<workDir>/.yeaft/sessions/`；`yeaft_restore_session` 才把该 Session 注册回当前 agent 的 registry
+- `workDir` Session：带 `workDir` 创建时，真实 Session 数据仍写到 agent-local `~/.yeaft/sessions/<sessionId>/`；`workDir` 只用于项目级 assets（skills / MCP 等）和运行上下文。agent-local `~/.yeaft/group-workdirs.json` 是兼容 registry，记录 `sessionId -> workDir`，也用于把旧版 `<workDir>/.yeaft/sessions/<sessionId>/` 数据一次性迁移回 user-level root。
+- 恢复入口边界：`yeaft_scan_workdir_sessions` / `yeaft_restore_session` 只保留 wire 兼容；新运行时不再把项目 `.yeaft/sessions` 作为 Session 数据源。
 
 ## 配置
 
