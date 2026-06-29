@@ -342,7 +342,7 @@ export default {
     });
 
     // Grouped commands for rendering: [{ label, items: [{ cmd, desc, flatIndex }], isLast }]
-    const groupedCommands = Vue.computed(() => buildGroupedCommands(flatItems.value));
+    const groupedCommands = Vue.computed(() => buildGroupedCommands(flatItems.value, store.slashCommandDescriptions, availableCommands.value));
 
     // Keep filteredCommands as flat string array for keyboard nav compatibility
     const filteredCommands = Vue.computed(() => flatItems.value.map(item => item.cmd));
