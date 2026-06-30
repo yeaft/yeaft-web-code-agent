@@ -131,6 +131,9 @@ export function buildDreamDebugItems({ latest = {}, snapshots = {}, promptLoads 
   return Array.from(scopes).map((scope) => {
     const snapshot = snapshots?.[scope] || null;
     const latestRun = latest?.[scope] || null;
+    const lastError = snapshot?.lastError || latestRun?.error || null;
+    const status = latestRun?.status
+      || (lastError ? 'error' : (snapshot?.hasOutput ? 'completed' : 'never-ran'));
     const promptLoad = promptLoads?.[scope] || null;
     const scopeEvents = (Array.isArray(events) ? events : []).filter((evt) => evt?.scope === scope);
     const lastEvent = scopeEvents[scopeEvents.length - 1] || null;
@@ -138,16 +141,18 @@ export function buildDreamDebugItems({ latest = {}, snapshots = {}, promptLoads 
     const segments = parseDreamMemorySegments(snapshot?.memoryText || '');
     const sessionId = sessionIdFromScope(scope, snapshot);
     const title = readableTitleForScope(scope, snapshot, sessionTitles);
-    const summaryPreview = previewText(snapshot?.summaryText || snapshot?.memoryText || lastEvent?.detail || '', 180);
+    const errorPreview = lastError ? previewText(lastError.message || lastError.error || lastError.raw || '', 180) : '';
+    const summaryPreview = previewText(errorPreview || snapshot?.summaryText || snapshot?.memoryText || lastEvent?.detail || '', 180);
     return {
       key: scope,
       title,
       scope,
       sessionId,
-      status: latestRun?.status || (snapshot?.hasOutput ? 'completed' : 'never-ran'),
+      status,
       lastAt,
       latestRun,
       snapshot,
+      lastError,
       promptLoad,
       events: scopeEvents,
       segmentCount: segments.length,

@@ -188,6 +188,19 @@ export async function writeDreamError(root, scope, info) {
 }
 
 /**
+ * Clear a scope's last Dream error after a successful pass. Best-effort: a
+ * missing file is fine and I/O failure must not turn success into failure.
+ *
+ * @param {string} root
+ * @param {string} scope
+ * @returns {Promise<void>}
+ */
+export async function clearDreamError(root, scope) {
+  try { await fsp.unlink(join(scopeDirFor(root, scope), ERROR_FILE)); }
+  catch { /* best-effort */ }
+}
+
+/**
  * Read the last dream error JSON for a scope, or null if absent. Used
  * by the debug panel and by tests. Tolerates a malformed file by
  * returning `{ raw: <body>, parseError: <message> }` instead of
