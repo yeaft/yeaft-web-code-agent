@@ -43,6 +43,8 @@ import { join } from 'path';
 import { runDream } from './runner.js';
 import { createDreamScheduler } from './schedule.js';
 import { parseMessage, parseSeqFromId } from '../conversation/persist.js';
+import { loadSessionConfig, resolveSessionConfig } from '../sessions/session-config.js';
+import { listSessions as listSessionMetas } from '../sessions/session-store.js';
 import { readSessionState } from './state.js';
 import { DREAM_NUDGE_AFTER_MESSAGES, DREAM_INTERVAL_HOURS } from './limits.js';
 
@@ -83,7 +85,7 @@ export function buildRunDreamOpts(session, onProgress) {
     segmentIndex: session.memoryIndex || null,
     llm: makeLlm(session),
     listSessions: async () => {
-      try { return listConversationSessions([sessionConversationsRoot, legacySessionConversationsRoot]); }
+      try { return listRegisteredSessions([sessionConversationsRoot, legacySessionConversationsRoot]); }
       catch { return []; }
     },
     countMessages: async (sessionId) => {
@@ -132,15 +134,25 @@ function translateSessionConversationMessage(m) {
 }
 
 /**
- * Enumerate session ids that have persisted conversation messages. `sessions/`
- * is the primary layout; `groups/` is read-only legacy fallback.
+ * Enumerate sessions from authoritative session metadata first, then fall back
+ * to legacy transcript-only directories. Message presence is not used as the
+ * source of truth: a stale/corrupt JSONL index must not make Dream forget that
+ * a Session exists. The runner's .dream-state cursor decides whether there is
+ * anything new to process.
  *
  * @param {string[]} roots session transcript roots in priority order
  * @returns {string[]}
  */
-function listConversationSessions(roots) {
+function listRegisteredSessions(roots) {
   const out = new Set();
-  for (const root of roots) {
+  const [sessionsRoot, ...legacyRoots] = roots;
+  try {
+    for (const meta of listSessionMetas(sessionsRoot)) {
+      if (meta?.id) out.add(meta.id);
+    }
+  } catch { /* fall through to legacy fallback */ }
+
+  for (const root of legacyRoots) {
     if (!existsSync(root)) continue;
     for (const name of readdirSync(root)) {
       if (name.startsWith('.')) continue;
@@ -149,8 +161,8 @@ function listConversationSessions(roots) {
         if (!hasReadableMessages(dir)) continue;
         out.add(name);
       } catch {
-        // Ignore partial or old session directories. Dream only needs sessions
-        // with readable conversation messages.
+        // Ignore partial old directories. Canonical sessions come from
+        // sessions/<id>/session.json above; this branch is read-only legacy.
       }
     }
   }
@@ -210,14 +222,13 @@ function hasJsonlMessages(dir) {
 
 function loadSessionDiskMessages(dir, sessionId) {
   const conversationDir = join(dir, 'conversation');
-  return [
-    // Prefer the canonical ConversationStore projection when it exists: it has
-    // normalized role/content/tool metadata. The session append-only audit log
-    // is still load-bearing for sessions created before/while conversation rows
-    // were being migrated to JSONL.
-    ...loadConversationDirMessages(conversationDir),
-    ...loadSessionJsonlMessages(join(dir, 'messages'), sessionId),
-  ];
+  // Canonical conversation history is the source Dream needs: it contains the
+  // full user/assistant timeline. The session audit log under messages/ is a
+  // fallback for older or partially migrated sessions, not a second source to
+  // union in — otherwise the same user turn can appear twice with different ids.
+  const canonical = loadConversationDirMessages(conversationDir);
+  if (canonical.length > 0) return canonical;
+  return loadSessionJsonlMessages(join(dir, 'messages'), sessionId);
 }
 
 function loadConversationDirMessages(conversationDir) {
@@ -323,9 +334,13 @@ function safeDirComponent(s) {
  * @param {Object} session
  */
 function makeLlm(session) {
-  return async ({ pass, prompt, system }) => {
+  return async ({ pass, prompt, system, sessionId }) => {
     const adapter = session.adapter;
-    const model = session.config?.fastModelId || session.config?.model;
+    const effectiveConfig = resolveDreamSessionConfig(session, sessionId);
+    const model = effectiveConfig?.model || effectiveConfig?.primaryModel;
+    if (!model) {
+      throw new Error(`dream: no session model configured (pass=${pass}, sessionId=${sessionId || 'unknown'})`);
+    }
     if (!adapter || typeof adapter.call !== 'function') {
       throw new Error(`dream: no adapter.call available (pass=${pass})`);
     }
@@ -335,7 +350,7 @@ function makeLlm(session) {
     session._dreamLoopCounter = (session._dreamLoopCounter || 0) + 1;
     const loopNumber = session._dreamLoopCounter;
     const turnId = session._dreamTurnId || 'dream';
-    const effectiveSystem = system || (String(session.config?.language || '').toLowerCase().startsWith('zh')
+    const effectiveSystem = system || (String(effectiveConfig?.language || '').toLowerCase().startsWith('zh')
       ? `你是梦境流水线 — pass: ${pass}。请用中文生成自然语言内容；JSON key 保持英文。`
       : `You are the dream pipeline — pass: ${pass}.`);
 
@@ -344,6 +359,7 @@ function makeLlm(session) {
       system: effectiveSystem,
       messages: [{ role: 'user', content: prompt }],
       maxTokens: 2048,
+      modelEffort: effectiveConfig?.modelEffort || undefined,
     });
 
     // Emit complete loop event (request + response) to the debug panel.
@@ -366,6 +382,7 @@ function makeLlm(session) {
       loopNumber,
       pass,
       model: model || 'unknown',
+      sessionId: sessionId || null,
       systemPrompt: effectiveSystem,
       messages: [{ role: 'user', content: prompt }],
       response: typeof r?.text === 'string' ? r.text : '',
@@ -384,6 +401,15 @@ function makeLlm(session) {
 
     return (r && r.text) ? r.text : '';
   };
+}
+
+
+function resolveDreamSessionConfig(session, sessionId) {
+  const base = session?.config || {};
+  if (!sessionId || !session?.yeaftDir) return { ...base };
+  const sessionConfig = loadSessionConfig(session.yeaftDir, sessionId);
+  if (!sessionConfig || Object.keys(sessionConfig).length === 0) return { ...base };
+  return resolveSessionConfig(base, sessionConfig);
 }
 
 
@@ -646,7 +672,7 @@ export async function bootInitEmptyGroups(args) {
   if (!args || !args.memoryIndex || !args.dreamScheduler) return out;
   const sessionsRoot = join(args.yeaftDir, 'sessions');
   let ids;
-  try { ids = listSessions(sessionsRoot).map(g => g.id); }
+  try { ids = listSessionMetas(sessionsRoot).map(g => g.id); }
   catch { return out; }
   const empty = [];
   for (const gid of ids) {
@@ -656,11 +682,7 @@ export async function bootInitEmptyGroups(args) {
     if (segCount > 0) continue;
     let hasMessages = false;
     try {
-      const h = openSession(sessionsRoot, gid);
-      // Any message at all is enough — pull the first record off the
-      // iterator and stop.
-      const first = h.streamMessages().next();
-      hasMessages = !first.done;
+      hasMessages = loadSessionConversationMessages([sessionsRoot], gid).length > 0;
     } catch { continue; }
     if (!hasMessages) continue;
     empty.push(`sessions/${gid}`);
@@ -716,7 +738,7 @@ export async function bootCatchUpStaleDream(args) {
   const now = args.now ?? Date.now();
 
   let sessionIds;
-  try { sessionIds = listSessions(sessionsRoot).map(g => g.id); }
+  try { sessionIds = listSessionMetas(sessionsRoot).map(g => g.id); }
   catch { return out; }
 
   // Find the newest lastDreamAt across all groups.
@@ -732,9 +754,7 @@ export async function bootCatchUpStaleDream(args) {
     }
     if (!anyTraffic) {
       try {
-        const h = openSession(sessionsRoot, gid);
-        const first = h.streamMessages().next();
-        if (!first.done) anyTraffic = true;
+        if (loadSessionConversationMessages([sessionsRoot], gid).length > 0) anyTraffic = true;
       } catch { /* keep going */ }
     }
   }

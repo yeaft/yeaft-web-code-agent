@@ -1275,9 +1275,13 @@ export default {
                     <span>{{ $t('yeaft.dreamDebug.lastDream') }}</span>
                     <strong>{{ formatTimestamp(activeDreamItem.snapshot && activeDreamItem.snapshot.lastDreamAt) || formatTimestamp(activeDreamItem.lastAt) || '-' }}</strong>
                     <span>{{ $t('yeaft.dreamDebug.messagesCovered') }}</span>
-                    <strong>{{ (activeDreamItem.snapshot && activeDreamItem.snapshot.messageCount) || 0 }}</strong>
+                    <strong>{{ (activeDreamItem.snapshot && activeDreamItem.snapshot.messageCount) || 0 }} / {{ (activeDreamItem.snapshot && activeDreamItem.snapshot.totalMessageCount) || 0 }}</strong>
                     <span>{{ $t('yeaft.dreamDebug.segments') }}</span>
                     <strong>{{ activeDreamItem.segmentCount }}</strong>
+                    <template v-if="activeDreamItem.lastError">
+                      <span>{{ $t('yeaft.dreamDebug.lastError') }}</span>
+                      <strong>{{ activeDreamItem.lastError.message || activeDreamItem.lastError.error || activeDreamItem.lastError.phase || 'unknown' }}</strong>
+                    </template>
                     <span>{{ $t('yeaft.dreamDebug.loadedAt') }}</span>
                     <strong>{{ formatTimestamp(activeDreamItem.snapshot && activeDreamItem.snapshot.loadedAt) || '-' }}</strong>
                   </div>

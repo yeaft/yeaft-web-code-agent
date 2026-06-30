@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import { buildRunDreamOpts } from '../../../../agent/yeaft/dream/session-wiring.js';
 import { runDream } from '../../../../agent/yeaft/dream/runner.js';
 import { extractAndWriteMemorySegments } from '../../../../agent/yeaft/dream/segment-extract.js';
+import { writeDreamError } from '../../../../agent/yeaft/dream/state.js';
 import { readScope } from '../../../../agent/yeaft/memory/segment-store.js';
 import { readSummary } from '../../../../agent/yeaft/memory/store.js';
 import { buildDreamOutputSnapshot } from '../../../../agent/yeaft/dream/output-snapshot.js';
@@ -33,7 +34,8 @@ describe('buildRunDreamOpts session conversation wiring', () => {
 
     const opts = buildRunDreamOpts(fakeSession(testDir));
 
-    await expect(opts.listSessions()).resolves.toEqual(['s-live']);
+    await expect(opts.listSessions()).resolves.toEqual(['s-empty', 's-live']);
+    await expect(opts.countMessages('s-empty')).resolves.toBe(0);
     await expect(opts.countMessages('s-live')).resolves.toBe(2);
     await expect(opts.loadSessionDiff('s-live', 'm0001')).resolves.toEqual([
       { id: 'm0002', role: 'assistant', body: 'noted, I will keep patches small', vpId: 'vp-linus' },
@@ -41,6 +43,17 @@ describe('buildRunDreamOpts session conversation wiring', () => {
     await expect(opts.loadOverlapPreamble('s-live', 'm0002', 1)).resolves.toEqual([
       { id: 'm0001', role: 'user', body: 'remember that I prefer small patches' },
     ]);
+  });
+
+  it('uses session metadata as the authoritative Dream session list', async () => {
+    writeSessionMeta(testDir, 's-registered-empty');
+    writeConversationSegmentJsonlMessage(testDir, 's-registered-with-jsonl', {
+      id: 'm0001', role: 'user', content: 'registered JSONL session', time: '2026-06-12T00:00:00.000Z'
+    });
+
+    const opts = buildRunDreamOpts(fakeSession(testDir));
+
+    await expect(opts.listSessions()).resolves.toEqual(['s-registered-empty', 's-registered-with-jsonl']);
   });
 
   it('reads cold and hot messages as one ordered transcript', async () => {
@@ -115,6 +128,28 @@ describe('buildRunDreamOpts session conversation wiring', () => {
     ]);
   });
 
+  it('prefers canonical conversation JSONL over the session audit log', async () => {
+    writeConversationSegmentJsonlMessage(testDir, 's-both', {
+      id: 'm0001',
+      time: '2026-06-12T00:00:00.000Z',
+      sessionId: 's-both',
+      role: 'user',
+      content: 'canonical conversation row',
+    });
+    writeSessionJsonlMessage(testDir, 's-both', {
+      id: 'u_audit_01',
+      ts: '2026-06-12T00:00:00.000Z',
+      from: 'user',
+      role: 'user',
+      text: 'audit duplicate row',
+    });
+
+    const opts = buildRunDreamOpts(fakeSession(testDir));
+
+    await expect(opts.countMessages('s-both')).resolves.toBe(1);
+    await expect(opts.loadSessionDiff('s-both', null)).resolves.toEqual([{ id: 'm0001', role: 'user', body: 'canonical conversation row' }]);
+  });
+
   it('lets runDream process sessions from session conversation messages instead of empty-running', async () => {
     writeSessionMessage(testDir, 's-live', 'm0001', 'user', 'remember that I prefer concise answers');
     writeSessionMessage(testDir, 's-live', 'm0002', 'assistant', 'I will keep the answer concise', { speakerVpId: 'vp-linus' });
@@ -151,6 +186,8 @@ describe('buildRunDreamOpts session conversation wiring', () => {
     expect(snapshot).toEqual(expect.objectContaining({
       scope: 'sessions/s-live',
       hasOutput: true,
+      lastError: null,
+      totalMessageCount: 2,
       memoryText: expect.stringContaining('Dream processed the session conversation'),
       summaryText: expect.stringContaining('Dream processed the session conversation'),
     }));
@@ -177,6 +214,76 @@ describe('buildRunDreamOpts session conversation wiring', () => {
     expect(omniMemory).toContain('Dream processed the session conversation');
     expect(martinMemory).toContain('Dream processed the session conversation');
     expect(topicMemory).toContain('Dream processed the session conversation');
+  });
+
+  it('calls Dream LLM with the active session model, not fastModel', async () => {
+    writeSessionMessage(testDir, 's-model', 'm0001', 'user', 'Dream should use the active session model.');
+    const calls = [];
+    const result = await runDream({
+      ...buildRunDreamOpts({
+        yeaftDir: testDir,
+        config: {
+          language: 'en',
+          model: 'my-proxy/gpt-5.5',
+          primaryModel: 'my-proxy/gpt-5.5',
+          fastModelId: 'claude-sonnet-4-20250514',
+          modelEffort: 'high',
+        },
+        adapter: { call: async (req) => {
+          calls.push(req);
+          return { text: await fakeDreamLlm(req), usage: {} };
+        } },
+      }),
+      manual: true,
+      nowIso: () => '2026-06-12T00:00:00.000Z',
+    });
+
+    expect(result.targets.some(t => t.status === 'done')).toBe(true);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every(c => c.model === 'my-proxy/gpt-5.5')).toBe(true);
+    expect(calls.every(c => c.modelEffort === 'high')).toBe(true);
+  });
+
+  it('uses per-session config.json for scoped Dream LLM calls', async () => {
+    writeSessionMessage(testDir, 's-session-model', 'm0001', 'user', 'Dream should use the selected Session model.');
+    writeSessionConfig(testDir, 's-session-model', {
+      model: 'my-proxy/gpt-5.5',
+      modelEffort: 'high',
+    });
+    const calls = [];
+    const result = await runDream({
+      ...buildRunDreamOpts({
+        yeaftDir: testDir,
+        config: {
+          language: 'en',
+          model: 'missing-root-model',
+          primaryModel: 'missing-root-model',
+        },
+        adapter: { call: async (req) => {
+          calls.push(req);
+          return { text: await fakeDreamLlm(req), usage: {} };
+        } },
+      }),
+      manual: true,
+      scopeFilter: ['sessions/s-session-model'],
+      nowIso: () => '2026-06-12T00:00:00.000Z',
+    });
+
+    expect(result.targets.some(t => t.status === 'done')).toBe(true);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every(c => c.model === 'my-proxy/gpt-5.5')).toBe(true);
+    expect(calls.every(c => c.modelEffort === 'high')).toBe(true);
+  });
+
+  it('includes the latest Dream error in the debug output snapshot', async () => {
+    writeSessionMeta(testDir, 's-error');
+    await writeDreamError(join(testDir, 'memory'), 'sessions/s-error', {
+      phase: 'triage',
+      message: 'Model "missing-fast-model" not found in any provider.',
+    });
+
+    const snapshot = await buildDreamOutputSnapshot({ yeaftDir: testDir }, 's-error');
+    expect(snapshot.lastError).toEqual(expect.objectContaining({ phase: 'triage', message: expect.stringContaining('missing-fast-model') }));
   });
 
   it('fills primary session memory and summary when apply returns empty strings', async () => {
@@ -383,6 +490,7 @@ async function fakeDreamLlm(req) {
 }
 
 function writeSessionMessage(root, sessionId, id, role, content, extra = {}, kind = 'messages', rootName = 'sessions') {
+  if (rootName === 'sessions') writeSessionMeta(root, sessionId);
   const dir = join(root, rootName, sessionId, 'conversation', kind);
   mkdirSync(dir, { recursive: true });
   const frontmatter = [
@@ -398,13 +506,34 @@ function writeSessionMessage(root, sessionId, id, role, content, extra = {}, kin
 }
 
 function writeSessionJsonlMessage(root, sessionId, row) {
+  writeSessionMeta(root, sessionId);
   const dir = join(root, 'sessions', sessionId, 'messages');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, '000001.jsonl'), `${JSON.stringify(row)}\n`, { flag: 'a' });
 }
 
 function writeConversationSegmentJsonlMessage(root, sessionId, row) {
+  writeSessionMeta(root, sessionId);
   const dir = join(root, 'sessions', sessionId, 'conversation', 'segments');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, '000001.jsonl'), `${JSON.stringify(row)}\n`, { flag: 'a' });
+}
+
+function writeSessionMeta(root, sessionId, extra = {}) {
+  const dir = join(root, 'sessions', sessionId);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'session.json'), JSON.stringify({
+    id: sessionId,
+    name: sessionId,
+    roster: [],
+    defaultVpId: null,
+    createdAt: '2026-06-12T00:00:00.000Z',
+    ...extra,
+  }, null, 2));
+}
+
+function writeSessionConfig(root, sessionId, config) {
+  const dir = join(root, 'sessions', sessionId);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'config.json'), `${JSON.stringify(config, null, 2)}\n`);
 }

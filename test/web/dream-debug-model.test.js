@@ -229,6 +229,23 @@ describe('Dream debug model', () => {
     expect(filterDreamDebugItems(items, 'nope')).toEqual([]);
   });
 
+  it('surfaces persisted Dream errors instead of pretending an empty run succeeded', () => {
+    const items = buildDreamDebugItems({
+      snapshots: {
+        'sessions/session_error': {
+          sessionId: 'session_error',
+          hasOutput: false,
+          lastError: { phase: 'triage', message: 'Model "missing-fast-model" not found in any provider.' },
+        },
+      },
+      sessionTitles: { session_error: 'Broken Dream' },
+    });
+
+    expect(items[0].status).toBe('error');
+    expect(items[0].lastError.message).toContain('missing-fast-model');
+    expect(items[0].summaryPreview).toContain('missing-fast-model');
+  });
+
   it('selects an active Dream item for the detail pane and falls back to the first filtered item', () => {
     const items = buildDreamDebugItems({
       latest: {
