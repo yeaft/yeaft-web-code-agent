@@ -461,6 +461,8 @@ export default {
   'message.loadingMore': 'Loading more messages...',
   'message.loadMore': '↑ Click or scroll up to load more',
   'message.scrollToLatest': '↓ Latest',
+  'message.showResponses': 'Show {count} response(s)',
+  'message.hideResponses': 'Hide response(s)',
 
   // ============ Typing Health ============
   'chat.waiting.disconnected': 'Connection lost',

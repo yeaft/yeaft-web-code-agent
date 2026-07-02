@@ -425,6 +425,8 @@ export default {
   'message.loadingMore': '加载更多消息...',
   'message.loadMore': '↑ 点击或向上滚动加载更多',
   'message.scrollToLatest': '↓ 最新',
+  'message.showResponses': '展开 {count} 条回复',
+  'message.hideResponses': '折叠回复',
 
   // ============ Typing Health ============
   'chat.waiting.disconnected': '连接已断开',
