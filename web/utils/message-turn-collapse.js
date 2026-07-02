@@ -1,10 +1,6 @@
 const DEFAULT_EXPANDED_RECENT_USER_TURNS = 2;
 const RESPONSE_TOGGLE_HEIGHT = 44;
 
-function hasOwn(obj, key) {
-  return Object.prototype.hasOwnProperty.call(obj || {}, key);
-}
-
 export function messageTurnBlockKey(block, index = 0) {
   return String(
     block?.collapseKey
@@ -69,8 +65,10 @@ export function annotateMessageBlocksForResponseCollapse(blocks, collapseStates 
     const responseCollapsible = hasUserPrompt && responseCount > 0 && !hasStreamingResponse;
     const responseCollapseKey = messageTurnBlockKey(block, index);
     const defaultCollapsed = responseCollapsible && !expandedByDefault.has(index);
+    const explicitCollapsed = collapseStates?.[responseCollapseKey];
+    const hasExplicitState = responseCollapseKey in (collapseStates || {});
     const responseCollapsed = responseCollapsible
-      ? (hasOwn(collapseStates, responseCollapseKey) ? !!collapseStates[responseCollapseKey] : defaultCollapsed)
+      ? (hasExplicitState ? !!explicitCollapsed : defaultCollapsed)
       : false;
 
     return {

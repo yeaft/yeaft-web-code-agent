@@ -1,3 +1,4 @@
+import { computed, reactive } from 'vue';
 import { describe, expect, it } from 'vitest';
 import {
   annotateMessageBlocksForResponseCollapse,
@@ -49,6 +50,22 @@ describe('message turn response collapse', () => {
     expect(blocks[0].responseCollapsed).toBe(true);
     expect(blocks[2].responseCollapsible).toBe(false);
     expect(blocks[2].responseCollapsed).toBe(false);
+  });
+
+  it('reacts when an explicit collapse state is added for a previously missing key', () => {
+    const collapseStates = reactive({});
+    const sourceBlocks = [
+      { type: 'message-block', id: 'turn-1', messageId: 'u1', items: [user('u1'), assistant('a1')] },
+    ];
+    const annotated = computed(() => annotateMessageBlocksForResponseCollapse(
+      sourceBlocks,
+      collapseStates,
+      { expandedRecentUserTurns: 0 }
+    ));
+
+    expect(annotated.value[0].responseCollapsed).toBe(true);
+    collapseStates.u1 = false;
+    expect(annotated.value[0].responseCollapsed).toBe(false);
   });
 
   it('uses compact height estimates for collapsed response blocks', () => {
