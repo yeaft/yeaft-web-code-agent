@@ -168,9 +168,7 @@ function normalizeExtractedSegment({ item, scope, now }) {
   if (!body) return null;
   const kind = VALID_KINDS.has(String(item.kind || '')) ? String(item.kind) : 'context';
   const tags = Array.isArray(item.tags) ? item.tags.map(t => String(t).trim()).filter(Boolean) : [];
-  const sourceMessages = Array.isArray(item.sourceMessages)
-    ? item.sourceMessages.map(id => String(id).trim()).filter(Boolean)
-    : [];
+  const sourceMessages = normalizeSourceMessageIds(item.sourceMessages);
   return makeSegment({
     scope,
     kind,
@@ -180,6 +178,23 @@ function normalizeExtractedSegment({ item, scope, now }) {
     updatedAt: now,
     body,
   });
+}
+
+function normalizeSourceMessageIds(value) {
+  if (!Array.isArray(value)) return [];
+  const ids = [];
+  for (const item of value) {
+    if (typeof item === 'string' || typeof item === 'number') {
+      const id = String(item).trim();
+      if (id) ids.push(id);
+      continue;
+    }
+    if (item && typeof item === 'object') {
+      const id = String(item.id || item.messageId || item.uuid || '').trim();
+      if (id) ids.push(id);
+    }
+  }
+  return ids;
 }
 
 function buildRecentSegment({ scope, messages, now }) {

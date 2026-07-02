@@ -85,7 +85,10 @@ describe('buildRunDreamOpts session conversation wiring', () => {
       ts: '2026-06-12T00:01:00.000Z',
       from: 'linus',
       role: 'assistant',
-      text: 'JSONL assistant rows should preserve VP attribution.',
+      content: [
+        { type: 'text', text: 'JSONL assistant rows should preserve VP attribution.' },
+        { type: 'tool_call', name: 'FileRead' },
+      ],
     });
 
     const opts = buildRunDreamOpts(fakeSession(testDir));
@@ -93,7 +96,7 @@ describe('buildRunDreamOpts session conversation wiring', () => {
     await expect(opts.listSessions()).resolves.toEqual(['s-jsonl']);
     await expect(opts.countMessages('s-jsonl')).resolves.toBe(2);
     await expect(opts.loadSessionDiff('s-jsonl', 'u_01')).resolves.toEqual([
-      { id: 'msg_02', role: 'assistant', body: 'JSONL assistant rows should preserve VP attribution.', vpId: 'linus' },
+      { id: 'msg_02', role: 'assistant', body: 'JSONL assistant rows should preserve VP attribution.\n[tool call: FileRead]', vpId: 'linus' },
     ]);
   });
 
@@ -211,7 +214,7 @@ describe('buildRunDreamOpts session conversation wiring', () => {
       targets: ['sessions/s-fenced-array'],
       llm: async (req) => {
         if (req.pass === 'extract-segments') {
-          return '```json\n[{"kind":"decision","tags":["dream"],"sourceMessages":["m1"],"body":"Fenced array segment survived parsing."}]\n```';
+          return '```json\n[{"kind":"decision","tags":["dream"],"sourceMessages":[{"id":"m1","body":"bad object leak"}],"body":"Fenced array segment survived parsing."}]\n```';
         }
         return '[]';
       },
@@ -222,6 +225,8 @@ describe('buildRunDreamOpts session conversation wiring', () => {
     expect(result.scopes).toBeGreaterThan(0);
     const memory = readFileSync(join(testDir, 'memory', 'sessions', 's-fenced-array', 'memory.md'), 'utf8');
     expect(memory).toContain('Fenced array segment survived parsing');
+    expect(memory).toContain('sourceMessages: [m1]');
+    expect(memory).not.toContain('[object Object]');
   });
 
   it('isolates malformed segment extraction to one scope and continues others', async () => {
