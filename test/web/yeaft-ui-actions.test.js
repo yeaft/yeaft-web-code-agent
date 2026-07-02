@@ -84,7 +84,8 @@ describe('Yeaft UI action polish', () => {
     expect(sessionSettingsSource).toContain('group-settings-delete-btn');
     expect(sessionSettingsSource).not.toContain('group-settings-section-danger');
     expect(sessionSettingsSource).not.toContain('group-settings-danger-btn');
-    expect(sidebarSource).toContain("sessionCrudRequest;\n      if (typeof fn === 'function') fn.call(this.chatStore, 'archive', { sessionId: g.id }, { agentId: g.agentId || null });");
+    expect(sidebarSource).toContain('const fn = this.chatStore && this.chatStore.sessionCrudRequest;');
+    expect(sidebarSource).toContain("fn.call(this.chatStore, 'archive', { sessionId: g.id }, { agentId: g.agentId || null });");
     expect(sidebarSource).not.toContain('class="session-menu-item danger" @click="onRemoveFromList');
   });
 

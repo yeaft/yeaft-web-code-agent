@@ -11,7 +11,7 @@ import VpTimelinePane from './VpTimelinePane.js';
 import YeaftSessionActions from './YeaftSessionActions.js';
 import LlmTab from './LlmTab.js';
 import { parseMentions } from '../utils/parseMentions.js';
-import { buildTimelineRows, selectGroupRosterVpList } from '../stores/helpers/vp-timeline.js';
+import { buildTimelineRows, resolveTimelineSession, selectGroupRosterVpList } from '../stores/helpers/vp-timeline.js';
 import { buildModelSelectionRows, getDefaultModelEffort, getSelectableModelEfforts, modelOptionMatchesRef, modelOptionRef, resolveSessionModelEffort, resolveSessionModelRef } from '../utils/modelRefs.js';
 import { shouldShowYeaftOnboardingGuide } from '../utils/yeaftOnboarding.js';
 import { hasUsableYeaftAgent, resolveActiveSessionIdForSettings } from '../utils/yeaftSessionSettings.js';
@@ -1144,7 +1144,7 @@ export default {
       const filter = store.yeaftActiveSessionFilter || gs?.activeSessionId || null;
       if (!filter) return [];
 
-      const group = gs?.sessions?.[filter] ?? null;
+      const group = resolveTimelineSession(gs, filter, store.currentAgent || null);
       const roster = (group && Array.isArray(group.roster)) ? group.roster : [];
       if (roster.length === 0) return [];
       const rosterSet = new Set(roster);

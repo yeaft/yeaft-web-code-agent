@@ -83,6 +83,27 @@ export function selectGroupRosterVpList(roster, library) {
 }
 
 /**
+ * Resolve a Session row for roster display from the Sessions store.
+ *
+ * Multi-agent sidebars key sessions by `agentId + sessionId`, not by the bare
+ * session id. Call the store resolver instead of indexing `sessions[sessionId]`
+ * directly, otherwise the Session status pane renders "no VP" for perfectly
+ * valid Sessions owned by an agent-stamped row.
+ *
+ * @param {object|null|undefined} sessionsStore
+ * @param {string|null|undefined} sessionId
+ * @param {string|null|undefined} agentId
+ * @returns {object|null}
+ */
+export function resolveTimelineSession(sessionsStore, sessionId, agentId = null) {
+  if (!sessionId || !sessionsStore) return null;
+  if (typeof sessionsStore.sessionById === 'function') {
+    return sessionsStore.sessionById(sessionId, agentId || null) || null;
+  }
+  return sessionsStore.sessions?.[sessionId] || null;
+}
+
+/**
  * Decide the status tag for a single vpId given the active store state.
  * Pure: no closures over module state, no Date.now().
  *
