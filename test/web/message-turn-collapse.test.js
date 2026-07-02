@@ -3,6 +3,7 @@ import { computed, reactive } from 'vue';
 import { describe, expect, it } from 'vitest';
 import {
   annotateMessageBlocksForResponseCollapse,
+  collapsedResponsePreviewForMessageBlock,
   estimateCollapsedMessageBlockHeight,
   visibleItemsForMessageBlock,
 } from '../../web/utils/message-turn-collapse.js';
@@ -71,12 +72,27 @@ describe('message turn response collapse', () => {
     expect(annotated.value[0].responseCollapsed).toBe(false);
   });
 
-  it('uses compact height estimates for collapsed response blocks', () => {
+  it('keeps a first-line response preview when a block is collapsed', () => {
+    const [block] = annotateMessageBlocksForResponseCollapse([
+      {
+        type: 'message-block',
+        id: 'turn-1',
+        messageId: 'u1',
+        items: [user('u1'), assistant('a1', { textContent: '\n\n# First visible line\nSecond line' })],
+      },
+    ], {}, { expandedRecentUserTurns: 0 });
+
+    expect(block.responseCollapsed).toBe(true);
+    expect(block.collapsedResponsePreview).toBe('First visible line');
+    expect(collapsedResponsePreviewForMessageBlock(block)).toBe('First visible line');
+  });
+
+  it('uses compact height estimates for collapsed response blocks with a preview row', () => {
     const [block] = annotateMessageBlocksForResponseCollapse([
       { type: 'message-block', id: 'turn-1', messageId: 'u1', items: [user('u1'), assistant('a1')] },
     ], {}, { expandedRecentUserTurns: 0 });
 
-    expect(estimateCollapsedMessageBlockHeight(block, () => 100)).toBe(128);
+    expect(estimateCollapsedMessageBlockHeight(block, () => 100)).toBe(182);
   });
 
   it('renders collapse controls inside the assistant footer actions', () => {
@@ -87,7 +103,11 @@ describe('message turn response collapse', () => {
     expect(assistantTurnSource).toContain('class="response-collapse-btn"');
     expect(assistantTurnSource).toContain("@click=\"$emit('toggle-response-collapse')\"");
     expect(messageListSource).toContain(':response-collapsible="responseToggleBelongsToItem(block, item)"');
+    expect(messageListSource).toContain('class="message-block-collapsed-preview"');
+    expect(messageListSource).toContain('collapsedResponsePreview(block)');
     expect(messageListSource).not.toContain('class="message-turn-collapse-toggle"');
+    expect(cssSource).toContain('.message-block-collapsed-response .message-block-collapse-footer');
+    expect(cssSource).toContain('opacity: 1;');
     expect(cssSource).toContain('.copy-full-btn,\n.response-collapse-btn');
     expect(cssSource).not.toContain('.message-turn-collapse-toggle');
   });

@@ -1,4 +1,5 @@
 const DEFAULT_EXPANDED_RECENT_USER_TURNS = 2;
+const COLLAPSED_RESPONSE_PREVIEW_HEIGHT = 36;
 const RESPONSE_TOGGLE_HEIGHT = 28;
 
 export function messageTurnBlockKey(block, index = 0) {
@@ -33,9 +34,46 @@ export function visibleItemsForMessageBlock(block) {
   return items.filter(item => !isResponseItem(item));
 }
 
-export function responseCountForMessageBlock(block) {
+export function responseItemsForMessageBlock(block) {
   const items = Array.isArray(block?.items) ? block.items : [];
-  return items.filter(isResponseItem).length;
+  return items.filter(isResponseItem);
+}
+
+export function responseCountForMessageBlock(block) {
+  return responseItemsForMessageBlock(block).length;
+}
+
+export function firstResponseItemForMessageBlock(block) {
+  const responses = responseItemsForMessageBlock(block);
+  return responses.length ? responses[0] : null;
+}
+
+export function textContentOfResponseItem(item) {
+  const text = item?.textContent ?? item?.text ?? item?.content ?? item?.message?.content ?? '';
+  if (typeof text === 'string') return text;
+  if (Array.isArray(text)) {
+    return text.map(entry => {
+      if (typeof entry === 'string') return entry;
+      if (entry && entry.type === 'text') return entry.text || '';
+      return '';
+    }).join('');
+  }
+  return text == null ? '' : String(text);
+}
+
+export function collapsedResponsePreviewForMessageBlock(block) {
+  if (!block?.responseCollapsed) return '';
+  const firstResponse = firstResponseItemForMessageBlock(block);
+  const text = textContentOfResponseItem(firstResponse)
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[[^\]]*\]\(([^)]*)\)/g, '')
+    .replace(/[#>*_~\-]+/g, ' ')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .find(Boolean);
+  return text || '';
 }
 
 export function annotateMessageBlocksForResponseCollapse(blocks, collapseStates = {}, options = {}) {
@@ -77,6 +115,7 @@ export function annotateMessageBlocksForResponseCollapse(blocks, collapseStates 
       responseCollapsible,
       responseCollapsed,
       responseCount,
+      collapsedResponsePreview: responseCollapsed ? collapsedResponsePreviewForMessageBlock({ ...block, responseCollapsed }) : '',
       visibleItemCount: visibleItemsForMessageBlock({ ...block, responseCollapsed }).length,
     };
   });
@@ -85,10 +124,12 @@ export function annotateMessageBlocksForResponseCollapse(blocks, collapseStates 
 export function estimateCollapsedMessageBlockHeight(block, estimateItemHeight) {
   if (!block?.responseCollapsed || typeof estimateItemHeight !== 'function') return null;
   const visibleItems = visibleItemsForMessageBlock(block);
-  if (!visibleItems.length) return RESPONSE_TOGGLE_HEIGHT;
+  const previewHeight = collapsedResponsePreviewForMessageBlock(block) ? COLLAPSED_RESPONSE_PREVIEW_HEIGHT : 0;
+  const visibleChildren = visibleItems.length + (previewHeight ? 1 : 0);
+  if (!visibleItems.length) return previewHeight + RESPONSE_TOGGLE_HEIGHT;
   const childrenHeight = visibleItems.reduce((sum, item) => sum + estimateItemHeight(item), 0);
-  const visibleGapHeight = Math.max(0, visibleItems.length - 1) * 18;
-  return childrenHeight + visibleGapHeight + RESPONSE_TOGGLE_HEIGHT;
+  const visibleGapHeight = Math.max(0, visibleChildren - 1) * 18;
+  return childrenHeight + visibleGapHeight + previewHeight + RESPONSE_TOGGLE_HEIGHT;
 }
 
 export { DEFAULT_EXPANDED_RECENT_USER_TURNS };

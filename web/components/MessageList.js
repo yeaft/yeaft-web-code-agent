@@ -17,6 +17,7 @@ import { shouldCloseYeaftVpTurn } from '../stores/helpers/yeaft-turn-boundary.js
 import { estimateVirtualItemHeight } from '../utils/virtual-transcript.js';
 import {
   annotateMessageBlocksForResponseCollapse,
+  collapsedResponsePreviewForMessageBlock,
   estimateCollapsedMessageBlockHeight,
   isResponseItem,
   visibleItemsForMessageBlock,
@@ -244,22 +245,32 @@ export default {
                 :card="card"
               />
             </template>
-            <div v-if="showBlockResponseToggle(block)" class="turn-footer message-block-collapse-footer">
+            <div v-if="showBlockResponseToggle(block)" class="message-block-collapsed-response">
               <button
+                v-if="collapsedResponsePreview(block)"
                 type="button"
-                class="response-collapse-btn"
-                :class="{ 'is-collapsed': block.responseCollapsed }"
+                class="message-block-collapsed-preview"
                 @click="toggleMessageTurnResponse(block)"
                 :title="responseCollapseLabel(block)"
                 :aria-label="responseCollapseLabel(block)"
-                :aria-expanded="String(!block.responseCollapsed)"
-              >
-                <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
-                  <path v-if="block.responseCollapsed" fill="currentColor" d="M7 10l5 5 5-5z"/>
-                  <path v-else fill="currentColor" d="M7 14l5-5 5 5z"/>
-                </svg>
-                <span class="response-collapse-label">{{ responseCollapseLabel(block) }}</span>
-              </button>
+              >{{ collapsedResponsePreview(block) }}</button>
+              <div class="turn-footer message-block-collapse-footer">
+                <button
+                  type="button"
+                  class="response-collapse-btn"
+                  :class="{ 'is-collapsed': block.responseCollapsed }"
+                  @click="toggleMessageTurnResponse(block)"
+                  :title="responseCollapseLabel(block)"
+                  :aria-label="responseCollapseLabel(block)"
+                  :aria-expanded="String(!block.responseCollapsed)"
+                >
+                  <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                    <path v-if="block.responseCollapsed" fill="currentColor" d="M7 10l5 5 5-5z"/>
+                    <path v-else fill="currentColor" d="M7 14l5-5 5 5z"/>
+                  </svg>
+                  <span class="response-collapse-label">{{ responseCollapseLabel(block) }}</span>
+                </button>
+              </div>
             </div>
           </section>
           <template v-else>
@@ -654,6 +665,7 @@ export default {
       return Number.isFinite(collapsedHeight) ? collapsedHeight : estimateVirtualItemHeight(block);
     };
     const visibleItemsForBlock = (block) => visibleItemsForMessageBlock(block);
+    const collapsedResponsePreview = (block) => block?.collapsedResponsePreview || collapsedResponsePreviewForMessageBlock(block);
     const lastResponseItemForBlock = (block) => {
       const items = Array.isArray(block?.items) ? block.items : [];
       for (let i = items.length - 1; i >= 0; i -= 1) {
@@ -1845,6 +1857,7 @@ export default {
       messageBlocks,
       estimateMessageBlockHeight,
       visibleItemsForBlock,
+      collapsedResponsePreview,
       responseToggleBelongsToItem,
       showBlockResponseToggle,
       toggleMessageTurnResponse,
