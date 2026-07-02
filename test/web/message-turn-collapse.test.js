@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { computed, reactive } from 'vue';
 import { describe, expect, it } from 'vitest';
 import {
@@ -13,6 +14,8 @@ function user(id) {
 function assistant(id, extra = {}) {
   return { type: 'assistant-turn', id, textContent: id, ...extra };
 }
+
+const readWebFile = (path) => readFileSync(new URL(`../../web/${path}`, import.meta.url), 'utf8');
 
 describe('message turn response collapse', () => {
   it('keeps the newest two user turns expanded and collapses older responses by default', () => {
@@ -73,6 +76,19 @@ describe('message turn response collapse', () => {
       { type: 'message-block', id: 'turn-1', messageId: 'u1', items: [user('u1'), assistant('a1')] },
     ], {}, { expandedRecentUserTurns: 0 });
 
-    expect(estimateCollapsedMessageBlockHeight(block, () => 100)).toBe(144);
+    expect(estimateCollapsedMessageBlockHeight(block, () => 100)).toBe(128);
+  });
+
+  it('renders collapse controls inside the assistant footer actions', () => {
+    const assistantTurnSource = readWebFile('components/AssistantTurn.js');
+    const messageListSource = readWebFile('components/MessageList.js');
+    const cssSource = readWebFile('styles/chat-messages.css');
+
+    expect(assistantTurnSource).toContain('class="response-collapse-btn"');
+    expect(assistantTurnSource).toContain("@click=\"$emit('toggle-response-collapse')\"");
+    expect(messageListSource).toContain(':response-collapsible="responseToggleBelongsToItem(block, item)"');
+    expect(messageListSource).not.toContain('class="message-turn-collapse-toggle"');
+    expect(cssSource).toContain('.copy-full-btn,\n.response-collapse-btn');
+    expect(cssSource).not.toContain('.message-turn-collapse-toggle');
   });
 });

@@ -37,9 +37,21 @@ export default {
     toolStatePrefix: {
       type: String,
       default: ''
+    },
+    responseCollapsible: {
+      type: Boolean,
+      default: false
+    },
+    responseCollapsed: {
+      type: Boolean,
+      default: false
+    },
+    responseToggleLabel: {
+      type: String,
+      default: ''
     }
   },
-  emits: ['update-actions-expanded', 'update-tool-expanded'],
+  emits: ['update-actions-expanded', 'update-tool-expanded', 'toggle-response-collapse'],
   template: `
     <div class="assistant-turn" ref="turnRef" :class="{ streaming: turn.isStreaming, 'has-vp-speaker': !!turn.speakerVpId }">
       <!-- 0. task-334-ui-b: VP speaker header — only when a speakerVpId is
@@ -140,15 +152,15 @@ export default {
 
       </div>
 
-      <!-- 6. Copy full response button (visible on hover) -->
-      <div class="turn-footer" v-if="turn.textContent && !turn.isStreaming">
+      <!-- 6. Response footer actions (visible on hover) -->
+      <div class="turn-footer" v-if="(turn.textContent || responseCollapsible) && !turn.isStreaming">
         <span
           v-if="turnTime"
           class="turn-time"
           :title="turnTimeFull"
           :aria-label="$t('yeaft.message.timeAria', { time: turnTimeFull })"
         >{{ turnTime }}</span>
-        <button class="screenshot-btn" @click="screenshotContent" :title="screenshotting ? $t('message.screenshotting') : $t('message.screenshot')">
+        <button v-if="turn.textContent" class="screenshot-btn" @click="screenshotContent" :title="screenshotting ? $t('message.screenshotting') : $t('message.screenshot')">
           <svg v-if="!screenshotting" viewBox="0 0 24 24" width="14" height="14">
             <path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
           </svg>
@@ -157,13 +169,13 @@ export default {
           </svg>
           <span class="screenshot-label">{{ screenshotting ? $t('message.screenshotting') : $t('message.screenshot') }}</span>
         </button>
-        <button class="export-md-btn" @click="exportMarkdown" :title="$t('message.exportMd')">
+        <button v-if="turn.textContent" class="export-md-btn" @click="exportMarkdown" :title="$t('message.exportMd')">
           <svg viewBox="0 0 24 24" width="14" height="14">
             <path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
           </svg>
           <span class="export-md-label">{{ $t('message.exportMd') }}</span>
         </button>
-        <button class="copy-full-btn" @click="copyFullResponse" :title="fullCopied ? $t('message.copied') : $t('message.copyAll')">
+        <button v-if="turn.textContent" class="copy-full-btn" @click="copyFullResponse" :title="fullCopied ? $t('message.copied') : $t('message.copyAll')">
           <svg v-if="!fullCopied" viewBox="0 0 24 24" width="14" height="14">
             <path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
           </svg>
@@ -171,6 +183,21 @@ export default {
             <path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
           </svg>
           <span class="copy-full-label">{{ fullCopied ? $t('message.copied') : $t('message.copyAll') }}</span>
+        </button>
+        <button
+          v-if="responseCollapsible"
+          class="response-collapse-btn"
+          :class="{ 'is-collapsed': responseCollapsed }"
+          @click="$emit('toggle-response-collapse')"
+          :title="responseToggleLabel"
+          :aria-label="responseToggleLabel"
+          :aria-expanded="String(!responseCollapsed)"
+        >
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+            <path v-if="responseCollapsed" fill="currentColor" d="M7 10l5 5 5-5z"/>
+            <path v-else fill="currentColor" d="M7 14l5-5 5 5z"/>
+          </svg>
+          <span class="response-collapse-label">{{ responseToggleLabel }}</span>
         </button>
         <!-- H2.f.6: Fork-from-here button removed (single-conversation model). -->
       </div>
