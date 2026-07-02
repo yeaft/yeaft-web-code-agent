@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>LLM provider · Inside Yeaft</title><link rel="stylesheet" href="../assets/slides.css"><script>window.SLIDE_META = { id: 'llm', base: '../' };</script><script src="../assets/slides.js" defer></script></head>
+<body class="lang-en"><div class="deck-shell"><aside class="deck-sidebar" data-sidebar></aside><main class="deck-main"><div class="slide-stage"><section class="slide-page">
+  <div class="slide-kicker">08 · Adapter router</div>
+  <h2><span data-en>Models are routed, not hard-coded</span><span data-zh>模型是路由出来的，不是写死的</span></h2>
+  <div class="two-col">
+    <div class="card"><h3 data-en>Provider config</h3><h3 data-zh>Provider 配置</h3><p data-en>Yeaft reads agent-local providers from ~/.yeaft/config.json: static API keys, dynamic credentials, base URLs, protocol, model overrides, context windows, and effort options.</p><p data-zh>Yeaft 从 ~/.yeaft/config.json 读取 agent-local provider：静态 key、动态凭证、base URL、protocol、模型覆盖、上下文窗口和 effort 选项。</p></div>
+    <div class="card"><h3 data-en>Protocol adapters</h3><h3 data-zh>协议适配器</h3><p data-en>The AdapterRouter maps model IDs to Anthropic Messages or OpenAI Responses protocol, with per-model overrides when one provider exposes mixed model families.</p><p data-zh>AdapterRouter 把模型 ID 映射到 Anthropic Messages 或 OpenAI Responses 协议；同一个 provider 暴露混合模型族时可以做 per-model 覆盖。</p></div>
+  </div>
+  <pre class="code-strip">providers[] → AdapterRouter
+  → protocol: anthropic | openai-responses
+  → model effort / thinking / reasoning
+  → stream text + thinking + tool_calls + usage
+  → retry / fallback model when configured</pre>
+</section></div></main></div><div data-controls></div></body></html>

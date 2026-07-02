@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Orchestrator · Inside Yeaft</title><link rel="stylesheet" href="../assets/slides.css"><script>window.SLIDE_META = { id: 'orchestrator', base: '../' };</script><script src="../assets/slides.js" defer></script></head>
+<body class="lang-en"><div class="deck-shell"><aside class="deck-sidebar" data-sidebar></aside><main class="deck-main"><div class="slide-stage"><section class="slide-page">
+  <div class="slide-kicker">04 · Orchestrator</div>
+  <h2><span data-en>The orchestrator owns the turn</span><span data-zh>Orchestrator 掌控一次 turn</span></h2>
+  <div class="two-col">
+    <div class="card"><h3 data-en>Session coordinator</h3><h3 data-zh>Session coordinator</h3><p data-en>Receives a user turn, resolves the roster, fans out to selected VPs, then streams each VP's engine events back to the Web bridge.</p><p data-zh>接收用户 turn，解析 roster，把任务 fan-out 给选中的 VP，再把每个 VP 的 engine event 流回 Web bridge。</p></div>
+    <div class="card"><h3 data-en>Engine query loop</h3><h3 data-zh>Engine query loop</h3><p data-en>Build messages, call the LLM adapter, execute tools, fold long tool arcs, retry/compact/fallback, and persist the result.</p><p data-zh>构造 messages、调用 LLM adapter、执行工具、折叠长工具弧、重试/compact/fallback，并持久化结果。</p></div>
+  </div>
+  <pre class="code-strip">user turn → session.ingest()
+  → runVpTurn(vp)
+    → preflow: recall + project docs + runtime platform
+    → adapter.stream(messages, tools)
+    → tool registry execute(tool_calls)
+    → folding / continuation / fallback
+    → persist conversation + trace + memory hooks</pre>
+</section></div></main></div><div data-controls></div></body></html>

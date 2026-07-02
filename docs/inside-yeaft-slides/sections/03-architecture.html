@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>High-level architecture · Inside Yeaft</title><link rel="stylesheet" href="../assets/slides.css"><script>window.SLIDE_META = { id: 'architecture', base: '../' };</script><script src="../assets/slides.js" defer></script></head>
+<body class="lang-en"><div class="deck-shell"><aside class="deck-sidebar" data-sidebar></aside><main class="deck-main"><div class="slide-stage"><section class="slide-page">
+  <div class="slide-kicker">03 · System map</div>
+  <h2><span data-en>A code agent is a controlled feedback loop</span><span data-zh>Code Agent 是一个受控反馈循环</span></h2>
+  <div class="flow">
+    <div class="flow-step"><div class="num">01</div><h3>Input</h3><p data-en>User turn, attachments, mentions, selected VP.</p><p data-zh>用户输入、附件、提及对象、选中的 VP。</p></div>
+    <div class="flow-step"><div class="num">02</div><h3>Context</h3><p data-en>Prompt, docs, memory recall, platform facts.</p><p data-zh>Prompt、项目文档、记忆召回、运行平台事实。</p></div>
+    <div class="flow-step"><div class="num">03</div><h3>LLM</h3><p data-en>Adapter router selects provider, model, effort.</p><p data-zh>Adapter router 选择 provider、模型和推理强度。</p></div>
+    <div class="flow-step"><div class="num">04</div><h3>Tools</h3><p data-en>Execute file, shell, web, skills, MCP, sub-agent calls.</p><p data-zh>执行文件、Shell、Web、技能、MCP、子 Agent 等调用。</p></div>
+    <div class="flow-step"><div class="num">05</div><h3>Reflect</h3><p data-en>Fold long arcs, summarize, continue if needed.</p><p data-zh>折叠长工具弧、总结、必要时续写。</p></div>
+    <div class="flow-step"><div class="num">06</div><h3>Persist</h3><p data-en>Conversation, raw outputs, traces, memory updates.</p><p data-zh>持久化对话、原始输出、trace 和记忆更新。</p></div>
+  </div>
+  <div class="diagram">
+    <div class="two-col">
+      <div class="card compact"><h3 data-en>Core plane</h3><h3 data-zh>核心平面</h3><p data-en>Session coordinator, VP runner, engine query loop, tool registry, adapter router.</p><p data-zh>Session coordinator、VP runner、engine query loop、tool registry、adapter router。</p></div>
+      <div class="card compact"><h3 data-en>State plane</h3><h3 data-zh>状态平面</h3><p data-en>Conversation store, Session config, memory scopes, debug traces, background tasks.</p><p data-zh>Conversation store、Session config、memory scopes、debug traces、background tasks。</p></div>
+    </div>
+  </div>
+</section></div></main></div><div data-controls></div></body></html>

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Yeaft in one picture · Inside Yeaft</title><link rel="stylesheet" href="../assets/slides.css"><script>window.SLIDE_META = { id: 'picture', base: '../' };</script><script src="../assets/slides.js" defer></script></head>
+<body class="lang-en"><div class="deck-shell"><aside class="deck-sidebar" data-sidebar></aside><main class="deck-main"><div class="slide-stage"><section class="slide-page">
+  <div class="slide-kicker">02 · Mental model</div>
+  <h2><span data-en>Yeaft in one picture</span><span data-zh>一张图看 Yeaft</span></h2>
+  <p class="lead" data-en>Yeaft is a Web UI plus a native Session engine. The important boundary is not "chat mode versus group mode"; it is one Session containing one or more VPs.</p>
+  <p class="lead" data-zh>Yeaft 是 Web UI 加原生 Session 引擎。关键边界不是“聊天模式 vs 群组模式”，而是一个 Session 里有一个或多个 VP。</p>
+  <div class="diagram">
+    <div class="arch-grid">
+      <div class="node user"><b>User / Web UI</b><span>send task, inspect stream, switch model, manage Session</span></div>
+      <div class="node session"><b>Session</b><span>the only orchestration unit; 1..N VPs</span></div>
+      <div class="node provider"><b>Provider surface</b><span>Claude Code CLI / Copilot CLI can still run behind the UI</span></div>
+      <div class="node vp"><b>VP</b><span>Virtual Person: persona + tools + model + memory scope</span></div>
+      <div class="node primary orchestrator"><b>Native Engine</b><span>query loop, tool calls, folding, continuation, fallback</span></div>
+      <div class="node debug"><b>Debug Trace</b><span>events, raw tool output, adapter traces</span></div>
+      <div class="node context"><b>Context</b><span>prompt templates, project docs, runtime platform</span></div>
+      <div class="node tools"><b>Action Surface</b><span>built-in tools, skills, MCP servers</span></div>
+      <div class="node memory"><b>Memory</b><span>scope-aware recall + active memory set</span></div>
+      <div class="node dream"><b>Dream</b><span>background maintenance and memory consolidation</span></div>
+    </div>
+  </div>
+</section></div></main></div><div data-controls></div></body></html>

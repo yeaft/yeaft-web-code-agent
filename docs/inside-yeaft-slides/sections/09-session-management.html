@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Session management · Inside Yeaft</title><link rel="stylesheet" href="../assets/slides.css"><script>window.SLIDE_META = { id: 'session-management', base: '../' };</script><script src="../assets/slides.js" defer></script></head>
+<body class="lang-en"><div class="deck-shell"><aside class="deck-sidebar" data-sidebar></aside><main class="deck-main"><div class="slide-stage"><section class="slide-page">
+  <div class="slide-kicker">09 · Persistence</div>
+  <h2><span data-en>Session management keeps work durable</span><span data-zh>Session management 让工作可持续</span></h2>
+  <div class="four-col">
+    <div class="card compact"><h3 data-en>Create</h3><h3 data-zh>创建</h3><p data-en>Session spec writes session.json, config.json, roster, default VP, and seed memory.</p><p data-zh>Session spec 写入 session.json、config.json、roster、默认 VP 和种子记忆。</p></div>
+    <div class="card compact"><h3 data-en>Restore</h3><h3 data-zh>恢复</h3><p data-en>Agent-local Session root is the source of truth; workDir is runtime/project context.</p><p data-zh>agent-local Session root 是事实源；workDir 只是运行/项目上下文。</p></div>
+    <div class="card compact"><h3 data-en>Configure</h3><h3 data-zh>配置</h3><p data-en>Per-session model and effort override live with that Session, not global defaults.</p><p data-zh>每个 Session 的模型和 effort 覆盖只属于该 Session，不污染全局默认值。</p></div>
+    <div class="card compact"><h3 data-en>Stream</h3><h3 data-zh>流式输出</h3><p data-en>Engine events are bridged into the existing message rendering pipeline.</p><p data-zh>Engine event 被桥接到已有消息渲染管线。</p></div>
+  </div>
+</section></div></main></div><div data-controls></div></body></html>

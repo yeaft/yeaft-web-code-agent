@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Getting Started with Code Agents - Exploring Code Agents through the Yeaft Project</title>
+  <link rel="stylesheet" href="assets/slides.css">
+  <script>window.SLIDE_META = { id: 'index', base: './' };</script>
+  <script src="assets/slides.js" defer></script>
+</head>
+<body class="lang-en">
+  <div class="deck-shell">
+    <aside class="deck-sidebar" data-sidebar></aside>
+    <main class="deck-main">
+      <div class="slide-stage">
+        <section class="slide-page">
+          <div class="slide-kicker">Yeaft Project · Code Agent Course</div>
+          <div class="hero-grid">
+            <div>
+              <h1><span data-en>Getting Started with <span class="gradient-text">Code Agents</span></span><span data-zh>从 Yeaft 开始理解 <span class="gradient-text">Code Agents</span></span></h1>
+              <p class="lead" data-en>Exploring Code Agents through the Yeaft Project: not a product tour, but a guided decomposition of how a modern code agent thinks, acts, remembers, and debugs itself.</p>
+              <p class="lead" data-zh>通过 Yeaft Project 探索 Code Agent：这不是产品功能巡礼，而是把现代代码 Agent 如何思考、行动、记忆和调试拆开来看。</p>
+              <div class="pill-row">
+                <span class="pill hot">Orchestrator</span>
+                <span class="pill">Context</span>
+                <span class="pill">Tools / Skills / MCP</span>
+                <span class="pill">VP</span>
+                <span class="pill">LLM provider</span>
+                <span class="pill">Debug</span>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-number">First framing</div>
+              <h3 data-en>Yeaft has two surfaces.</h3>
+              <h3 data-zh>Yeaft 有两大类能力。</h3>
+              <p data-en><strong>Provider surface:</strong> run external code-agent providers such as Claude Code CLI or GitHub Copilot CLI behind the same Web UI.</p>
+              <p data-zh><strong>Provider 表面：</strong>把 Claude Code CLI、GitHub Copilot CLI 等外部 code-agent provider 接到同一套 Web UI。</p>
+              <p data-en><strong>Native engine:</strong> Yeaft's own Session-based code-agent engine with VP, memory, tools, multi-provider routing, and inspectable execution.</p>
+              <p data-zh><strong>原生引擎：</strong>Yeaft 自己的 Session 型 Code Agent engine，包含 VP、记忆、工具、多 provider 路由和可观测执行细节。</p>
+              <p data-en>This deck focuses on the native engine, because it exposes the architecture instead of hiding it behind a provider.</p>
+              <p data-zh>这套 slides 会主要讲后者，因为原生引擎把架构暴露出来，而不是把一切藏在 provider 后面。</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+  <div data-controls></div>
+</body>
+</html>

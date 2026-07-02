@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Tools, Skills, MCP · Inside Yeaft</title><link rel="stylesheet" href="../assets/slides.css"><script>window.SLIDE_META = { id: 'tools', base: '../' };</script><script src="../assets/slides.js" defer></script></head>
+<body class="lang-en"><div class="deck-shell"><aside class="deck-sidebar" data-sidebar></aside><main class="deck-main"><div class="slide-stage"><section class="slide-page">
+  <div class="slide-kicker">06 · Action surface</div>
+  <h2><span data-en>Tools, Skills, and MCP are different layers</span><span data-zh>Tools、Skills、MCP 是三层不同能力</span></h2>
+  <div class="three-col">
+    <div class="card"><div class="card-number">Tools</div><h3 data-en>Built-in executable primitives</h3><h3 data-zh>内置可执行原语</h3><p data-en>File read/write/edit, patch, shell, search, web, notebooks, tasks, sub-agents, planning, image viewing, and more. They are registered in Yeaft's ToolRegistry and filtered by mode/config.</p><p data-zh>文件读写编辑、patch、shell、搜索、Web、notebook、后台任务、子 Agent、计划、图片查看等。它们注册在 Yeaft ToolRegistry 中，并按 mode/config 过滤。</p></div>
+    <div class="card"><div class="card-number">Skills</div><h3 data-en>Reusable workflows</h3><h3 data-zh>可复用工作流</h3><p data-en>Local markdown skills under ~/.yeaft/skills/ package domain workflows, references, and templates. The Skill tool lists, searches, and loads them on demand.</p><p data-zh>本地 ~/.yeaft/skills/ 下的 markdown skill 封装领域工作流、参考资料和模板。Skill 工具可以按需列出、搜索和加载。</p></div>
+    <div class="card"><div class="card-number">MCP</div><h3 data-en>External tool bridges</h3><h3 data-zh>外部工具桥接</h3><p data-en>MCP servers extend the action surface without baking every integration into Yeaft. The MCP manager connects servers and exposes their tools through the same call loop.</p><p data-zh>MCP server 扩展行动面，不需要把每个外部集成都写死进 Yeaft。MCP manager 连接 server，并把工具暴露到同一套调用循环里。</p></div>
+  </div>
+  <div class="diagram"><p data-en><strong>Integration pattern:</strong> advertise capability → LLM chooses action → registry/manager executes → raw result is persisted → folded result returns to context.</p><p data-zh><strong>集成模式：</strong>声明能力 → LLM 选择动作 → registry/manager 执行 → 原始结果持久化 → 折叠后的结果回到上下文。</p></div>
+</section></div></main></div><div data-controls></div></body></html>

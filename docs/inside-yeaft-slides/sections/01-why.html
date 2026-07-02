@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Why build Yeaft · Inside Yeaft</title>
+  <link rel="stylesheet" href="../assets/slides.css">
+  <script>window.SLIDE_META = { id: 'why', base: '../' };</script><script src="../assets/slides.js" defer></script>
+</head>
+<body class="lang-en"><div class="deck-shell"><aside class="deck-sidebar" data-sidebar></aside><main class="deck-main"><div class="slide-stage"><section class="slide-page">
+  <div class="slide-kicker">01 · Motivation</div>
+  <h2><span data-en>Why build another code agent?</span><span data-zh>为什么还要自己做 Code Agent？</span></h2>
+  <div class="compare">
+    <div class="card">
+      <div class="card-number">Problem with black-box providers</div>
+      <h3 data-en>Prompt hacks stack up.</h3><h3 data-zh>Prompt hack 越叠越厚。</h3>
+      <p data-en>Claude Code is powerful, but its behavior is shaped by a large hidden prompt stack. Customizing on top of it often means fighting preloaded assumptions, RAI-related policy text, and provider-specific pacing. The result can be slower and harder to steer.</p>
+      <p data-zh>Claude Code 很强，但行为被大量隐藏 prompt 影响。基于它再改，常常是在和预置假设、RAI 相关文本、provider 自己的节奏对抗，结果就是速度慢、方向难控。</p>
+    </div>
+    <div class="card">
+      <div class="card-number">Yeaft's direction</div>
+      <h3 data-en>Make the loop inspectable.</h3><h3 data-zh>把执行循环变得可见。</h3>
+      <p data-en>Yeaft is built so the execution details are visible: what context was injected, which tool ran, how memory was recalled, how output was folded, and where model routing changed.</p>
+      <p data-zh>Yeaft 希望你能看到具体执行细节：注入了什么上下文、跑了哪个工具、记忆如何召回、长工具输出如何折叠、模型路由何时切换。</p>
+    </div>
+  </div>
+  <div class="three-col">
+    <div class="card compact"><h3 data-en>1. Less hidden prompt gravity</h3><h3 data-zh>1. 减少隐藏 prompt 的重力</h3><p data-en>Start from a clean engine prompt, then add only the context the task needs.</p><p data-zh>从更干净的引擎 prompt 出发，只补任务真正需要的上下文。</p></div>
+    <div class="card compact"><h3 data-en>2. More custom context</h3><h3 data-zh>2. 更可定制的上下文</h3><p data-en>Project docs, memory, VP identity, runtime platform, tools, and debug traces are first-class inputs.</p><p data-zh>项目文档、记忆、VP 身份、运行平台、工具和调试 trace 都是一等输入。</p></div>
+    <div class="card compact"><h3 data-en>3. Avoid passive compact</h3><h3 data-zh>3. 避免被动 compact</h3><p data-en>Context compaction should be an explicit strategy, not a surprise loss of working state.</p><p data-zh>上下文压缩应该是显式策略，而不是突然丢失工作状态的被动事件。</p></div>
+  </div>
+</section></div></main></div><div data-controls></div></body></html>
