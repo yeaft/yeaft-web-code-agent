@@ -2,7 +2,7 @@ import { WebSocket } from 'ws';
 import { CONFIG } from './config.js';
 import { encrypt, decrypt, isEncrypted, encodeKey } from './encryption.js';
 import { sessionDb } from './database.js';
-import { agents, webClients, directoryCache, DIR_CACHE_TTL, DIR_CACHE_MAX_SIZE, trackBytesSent } from './context.js';
+import { agents, webClients, directoryCache, DIR_CACHE_TTL, DIR_CACHE_MAX_SIZE, trackMessageBytesSent } from './context.js';
 
 // Send message to web client.
 // feat-ws-plaintext-negotiation: defaults to plaintext when the client
@@ -16,7 +16,7 @@ export async function sendToWebClient(client, msg) {
   // Plaintext path: dev mode OR new client that announced plaintext-ok.
   if (CONFIG.skipAuth || client.encryptOutbound === false) {
     const payload = JSON.stringify(msg);
-    trackBytesSent(client.userId, payload.length);
+    trackMessageBytesSent(client.userId, payload.length, msg.type);
     client.ws.send(payload);
     return;
   }
@@ -30,7 +30,7 @@ export async function sendToWebClient(client, msg) {
   try {
     const encrypted = await encrypt(msg, client.sessionKey);
     const payload = JSON.stringify(encrypted);
-    trackBytesSent(client.userId, payload.length);
+    trackMessageBytesSent(client.userId, payload.length, msg.type);
     if (msg.type === 'file_content') console.log(`[sendToWebClient] file_content encrypted, payload size=${payload.length}, compressed=${encrypted.z}`);
     client.ws.send(payload);
   } catch (e) {

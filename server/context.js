@@ -37,9 +37,29 @@ export const userFileTabs = new Map();
 // fileId → { buffer, mimeType, filename, createdAt, token }
 export const previewFiles = new Map();
 
-// ★ Admin Dashboard: in-memory stats deltas (flushed to DB periodically)
+// Admin dashboard usage stats.
 // userId → { requests, bytesSent, bytesReceived, messages, sessions }
+// `messages` is user turn count. bytesSent/bytesReceived are message traffic
+// only; heartbeat/control frames are deliberately excluded.
 export const userStatsDeltas = new Map();
+
+const HEARTBEAT_MESSAGE_TYPES = new Set([
+  'ping',
+  'pong',
+  'ping_session',
+  'pong_session',
+  'client_hello'
+]);
+
+const OUTBOUND_MESSAGE_TRAFFIC_TYPES = new Set([
+  'claude_output',
+  'yeaft_output',
+  'btw_stream',
+  'btw_done',
+  'btw_error',
+  'context_usage',
+  'ask_user_question'
+]);
 
 /**
  * Get or initialize a stats delta entry for a user.
@@ -53,32 +73,55 @@ function getOrCreateDelta(userId) {
   return delta;
 }
 
-/**
- * Record a WS request received from a user.
- */
-export function trackRequest(userId, bytesReceived) {
-  if (!userId) return;
-  const delta = getOrCreateDelta(userId);
-  delta.requests++;
-  delta.bytesReceived += bytesReceived;
+export function isHeartbeatMessageType(type) {
+  return HEARTBEAT_MESSAGE_TYPES.has(type);
+}
+
+export function isOutboundMessageTraffic(type) {
+  return OUTBOUND_MESSAGE_TRAFFIC_TYPES.has(type);
 }
 
 /**
- * Record bytes sent to a user via WS.
+ * Record a non-heartbeat WS request received from a user. This is kept for
+ * operator diagnostics; dashboard traffic comes from user-turn/message bytes.
  */
-export function trackBytesSent(userId, bytesSent) {
-  if (!userId) return;
+export function trackRequest(userId, bytesReceived, messageType = '') {
+  if (!userId || isHeartbeatMessageType(messageType)) return;
+  const delta = getOrCreateDelta(userId);
+  delta.requests++;
+}
+
+/**
+ * Record outbound message bytes sent to a user via WS.
+ */
+export function trackMessageBytesSent(userId, bytesSent, messageType = '') {
+  if (!userId || !bytesSent || !isOutboundMessageTraffic(messageType)) return;
   const delta = getOrCreateDelta(userId);
   delta.bytesSent += bytesSent;
 }
 
 /**
- * Record a user message (role='user') saved to DB.
+ * Backward-compatible alias. Only message output frames are counted.
  */
-export function trackMessage(userId) {
+export function trackBytesSent(userId, bytesSent, messageType = '') {
+  trackMessageBytesSent(userId, bytesSent, messageType);
+}
+
+/**
+ * Record a user turn and the inbound message payload bytes for it.
+ */
+export function trackUserTurn(userId, bytesReceived = 0) {
   if (!userId) return;
   const delta = getOrCreateDelta(userId);
   delta.messages++;
+  delta.bytesReceived += Math.max(0, Number(bytesReceived) || 0);
+}
+
+/**
+ * Legacy name: a tracked "message" is now a user turn.
+ */
+export function trackMessage(userId, bytesReceived = 0) {
+  trackUserTurn(userId, bytesReceived);
 }
 
 /**
