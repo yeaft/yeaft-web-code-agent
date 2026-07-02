@@ -468,11 +468,34 @@ export default {
       }
     };
 
+    const extensionForMimeType = (mimeType) => {
+      const type = String(mimeType || '').toLowerCase();
+      if (type === 'image/png') return '.png';
+      if (type === 'image/jpeg') return '.jpg';
+      if (type === 'image/gif') return '.gif';
+      if (type === 'image/webp') return '.webp';
+      if (type === 'image/svg+xml') return '.svg';
+      if (type === 'text/plain') return '.txt';
+      if (type === 'application/json') return '.json';
+      return '';
+    };
+
+    const uploadNameForFile = (file, index) => {
+      const existing = typeof file?.name === 'string' ? file.name.trim() : '';
+      if (existing) return existing;
+      const isImage = String(file?.type || '').startsWith('image/');
+      const prefix = isImage ? 'pasted-image' : 'pasted-file';
+      return `${prefix}-${Date.now()}-${index + 1}${extensionForMimeType(file?.type)}`;
+    };
+
     const addFiles = async (files) => {
-      for (const file of files) {
+      const pendingAttachments = [];
+      for (const [index, file] of files.entries()) {
+        const uploadName = uploadNameForFile(file, index);
         const attachment = {
           file,
-          name: file.name,
+          name: uploadName,
+          uploadName,
           preview: null,
           uploading: true,
           fileId: null
@@ -483,13 +506,14 @@ export default {
         }
 
         attachments.value.push(attachment);
+        pendingAttachments.push(attachment);
       }
 
       uploading.value = true;
       try {
         const formData = new FormData();
-        for (const file of files) {
-          formData.append('files', file);
+        for (const attachment of pendingAttachments) {
+          formData.append('files', attachment.file, attachment.uploadName);
         }
 
         const headers = {};
@@ -509,11 +533,12 @@ export default {
         const result = await response.json();
 
         let resultIndex = 0;
-        for (const attachment of attachments.value) {
+        for (const attachment of pendingAttachments) {
           if (attachment.uploading && !attachment.fileId) {
             if (resultIndex < result.files.length) {
               attachment.fileId = result.files[resultIndex].fileId;
               attachment.uploading = false;
+              delete attachment.uploadName;
               resultIndex++;
             }
           }
