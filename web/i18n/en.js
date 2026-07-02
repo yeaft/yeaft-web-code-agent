@@ -463,6 +463,7 @@ export default {
   'message.scrollToLatest': '↓ Latest',
   'message.showResponses': 'Show {count} response(s)',
   'message.hideResponses': 'Hide response(s)',
+  'message.assistant': 'Assistant',
 
   // ============ Typing Health ============
   'chat.waiting.disconnected': 'Connection lost',

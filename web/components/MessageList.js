@@ -247,13 +247,28 @@ export default {
             </template>
             <div v-if="showBlockResponseToggle(block)" class="message-block-collapsed-response">
               <button
-                v-if="collapsedResponsePreview(block)"
                 type="button"
                 class="message-block-collapsed-preview"
                 @click="toggleMessageTurnResponse(block)"
                 :title="responseCollapseLabel(block)"
                 :aria-label="responseCollapseLabel(block)"
-              >{{ collapsedResponsePreview(block) }}</button>
+              >
+                <span class="message-block-collapsed-preview-meta">
+                  <span class="message-block-collapsed-preview-speaker">{{ collapsedResponsePreviewSpeaker(block).name }}</span>
+                  <template v-if="collapsedResponsePreviewSpeaker(block).timeText">
+                    <span class="message-block-collapsed-preview-sep" aria-hidden="true">·</span>
+                    <span
+                      class="message-block-collapsed-preview-time"
+                      :title="collapsedResponsePreviewSpeaker(block).fullTimeText"
+                    >{{ collapsedResponsePreviewSpeaker(block).timeText }}</span>
+                  </template>
+                </span>
+                <span
+                  v-for="(line, index) in collapsedResponsePreviewLines(block)"
+                  :key="index"
+                  class="message-block-collapsed-preview-line"
+                >{{ line }}</span>
+              </button>
               <div class="turn-footer message-block-collapse-footer">
                 <button
                   type="button"
@@ -633,6 +648,9 @@ export default {
   setup() {
     const store = Pinia.useChatStore();
     const authStore = useAuthStore();
+    const vpStore = (typeof window !== 'undefined' && window.Pinia?.useVpStore)
+      ? window.Pinia.useVpStore()
+      : null;
     const t = Vue.inject('t', null);
     const containerRef = Vue.ref(null);
     const assistantTurnActionStates = Vue.reactive({});
@@ -665,7 +683,44 @@ export default {
       return Number.isFinite(collapsedHeight) ? collapsedHeight : estimateVirtualItemHeight(block);
     };
     const visibleItemsForBlock = (block) => visibleItemsForMessageBlock(block);
-    const collapsedResponsePreview = (block) => block?.collapsedResponsePreview || collapsedResponsePreviewForMessageBlock(block);
+    const collapsedResponsePreviewLines = (block) => {
+      const preview = Array.isArray(block?.collapsedResponsePreview)
+        ? block.collapsedResponsePreview
+        : collapsedResponsePreviewForMessageBlock(block);
+      return Array.isArray(preview) ? preview : (preview ? [String(preview)] : []);
+    };
+    const collapsedResponsePreviewSpeaker = (block) => {
+      const firstResponse = Array.isArray(block?.items)
+        ? block.items.find(item => isResponseItem(item))
+        : null;
+      const vpId = firstResponse?.speakerVpId
+        || firstResponse?.vpId
+        || firstResponse?.message?.speakerVpId
+        || firstResponse?.message?.vpId
+        || block?.vpId
+        || '';
+      const name = vpId && vpStore && typeof vpStore.vpLabel === 'function'
+        ? (vpStore.vpLabel(vpId) || vpId)
+        : (vpId || (typeof t === 'function' ? t('message.assistant') : 'Assistant'));
+      const ts = firstResponse?.speakerTimestamp
+        || firstResponse?.timestamp
+        || firstResponse?.createdAt
+        || firstResponse?.message?.timestamp
+        || firstResponse?.message?.createdAt
+        || 0;
+      let timeText = '';
+      let fullTimeText = '';
+      if (ts) {
+        try {
+          const d = new Date(ts);
+          if (!Number.isNaN(d.getTime())) {
+            timeText = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+            fullTimeText = d.toLocaleString();
+          }
+        } catch (_) {}
+      }
+      return { name, timeText, fullTimeText };
+    };
     const lastResponseItemForBlock = (block) => {
       const items = Array.isArray(block?.items) ? block.items : [];
       for (let i = items.length - 1; i >= 0; i -= 1) {
@@ -1857,7 +1912,8 @@ export default {
       messageBlocks,
       estimateMessageBlockHeight,
       visibleItemsForBlock,
-      collapsedResponsePreview,
+      collapsedResponsePreviewLines,
+      collapsedResponsePreviewSpeaker,
       responseToggleBelongsToItem,
       showBlockResponseToggle,
       toggleMessageTurnResponse,

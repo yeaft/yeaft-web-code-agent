@@ -427,6 +427,7 @@ export default {
   'message.scrollToLatest': '↓ 最新',
   'message.showResponses': '展开 {count} 条回复',
   'message.hideResponses': '折叠回复',
+  'message.assistant': '助手',
 
   // ============ Typing Health ============
   'chat.waiting.disconnected': '连接已断开',

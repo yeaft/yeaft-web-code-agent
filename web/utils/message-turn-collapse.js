@@ -1,6 +1,7 @@
 const DEFAULT_EXPANDED_RECENT_USER_TURNS = 2;
-const COLLAPSED_RESPONSE_PREVIEW_HEIGHT = 36;
+const COLLAPSED_RESPONSE_PREVIEW_HEIGHT = 74;
 const RESPONSE_TOGGLE_HEIGHT = 28;
+const COLLAPSED_RESPONSE_PREVIEW_LINE_LIMIT = 2;
 
 export function messageTurnBlockKey(block, index = 0) {
   return String(
@@ -62,9 +63,9 @@ export function textContentOfResponseItem(item) {
 }
 
 export function collapsedResponsePreviewForMessageBlock(block) {
-  if (!block?.responseCollapsed) return '';
+  if (!block?.responseCollapsed) return [];
   const firstResponse = firstResponseItemForMessageBlock(block);
-  const text = textContentOfResponseItem(firstResponse)
+  const lines = textContentOfResponseItem(firstResponse)
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
@@ -72,8 +73,9 @@ export function collapsedResponsePreviewForMessageBlock(block) {
     .replace(/[#>*_~\-]+/g, ' ')
     .split(/\r?\n/)
     .map(line => line.trim())
-    .find(Boolean);
-  return text || '';
+    .filter(Boolean)
+    .slice(0, COLLAPSED_RESPONSE_PREVIEW_LINE_LIMIT);
+  return lines;
 }
 
 export function annotateMessageBlocksForResponseCollapse(blocks, collapseStates = {}, options = {}) {
@@ -115,7 +117,7 @@ export function annotateMessageBlocksForResponseCollapse(blocks, collapseStates 
       responseCollapsible,
       responseCollapsed,
       responseCount,
-      collapsedResponsePreview: responseCollapsed ? collapsedResponsePreviewForMessageBlock({ ...block, responseCollapsed }) : '',
+      collapsedResponsePreview: responseCollapsed ? collapsedResponsePreviewForMessageBlock({ ...block, responseCollapsed }) : [],
       visibleItemCount: visibleItemsForMessageBlock({ ...block, responseCollapsed }).length,
     };
   });
@@ -124,7 +126,7 @@ export function annotateMessageBlocksForResponseCollapse(blocks, collapseStates 
 export function estimateCollapsedMessageBlockHeight(block, estimateItemHeight) {
   if (!block?.responseCollapsed || typeof estimateItemHeight !== 'function') return null;
   const visibleItems = visibleItemsForMessageBlock(block);
-  const previewHeight = collapsedResponsePreviewForMessageBlock(block) ? COLLAPSED_RESPONSE_PREVIEW_HEIGHT : 0;
+  const previewHeight = firstResponseItemForMessageBlock(block) ? COLLAPSED_RESPONSE_PREVIEW_HEIGHT : 0;
   const visibleChildren = visibleItems.length + (previewHeight ? 1 : 0);
   if (!visibleItems.length) return previewHeight + RESPONSE_TOGGLE_HEIGHT;
   const childrenHeight = visibleItems.reduce((sum, item) => sum + estimateItemHeight(item), 0);
