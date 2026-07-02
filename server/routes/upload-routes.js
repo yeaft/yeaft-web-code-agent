@@ -10,6 +10,26 @@ const upload = multer({
   limits: { fileSize: CONFIG.maxFileSize }
 });
 
+export function extensionForMimeType(mimeType) {
+  const type = String(mimeType || '').toLowerCase();
+  if (type === 'image/png') return '.png';
+  if (type === 'image/jpeg') return '.jpg';
+  if (type === 'image/gif') return '.gif';
+  if (type === 'image/webp') return '.webp';
+  if (type === 'image/svg+xml') return '.svg';
+  if (type === 'text/plain') return '.txt';
+  if (type === 'application/json') return '.json';
+  return '';
+}
+
+export function fallbackUploadName(file, index) {
+  const original = typeof file?.originalname === 'string' ? file.originalname.trim() : '';
+  if (original) return original;
+  const isImage = String(file?.mimetype || '').startsWith('image/');
+  const prefix = isImage ? 'pasted-image' : 'uploaded-file';
+  return `${prefix}-${Date.now()}-${index + 1}${extensionForMimeType(file?.mimetype)}`;
+}
+
 // 定期清理超过 10 分钟的文件
 setInterval(() => {
   const now = Date.now();
@@ -40,10 +60,11 @@ export function registerUploadRoutes(app, { requireAuth }) {
     const user = userDb.getOrCreate(req.user.username);
     const userId = user?.id;
 
-    const uploaded = req.files.map(file => {
+    const uploaded = req.files.map((file, index) => {
       const fileId = randomUUID();
+      const name = fallbackUploadName(file, index);
       pendingFiles.set(fileId, {
-        name: file.originalname,
+        name,
         mimeType: file.mimetype,
         buffer: file.buffer,
         uploadedAt: Date.now(),
@@ -51,7 +72,7 @@ export function registerUploadRoutes(app, { requireAuth }) {
       });
       return {
         fileId,
-        name: file.originalname,
+        name,
         mimeType: file.mimetype,
         size: file.size
       };
