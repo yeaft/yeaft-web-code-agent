@@ -1366,6 +1366,44 @@
   justify-content: flex-end;
 }
 
+.message-block-collapsed-response {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.message-block-collapsed-preview {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1.5;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.message-block-collapsed-preview:hover,
+.message-block-collapsed-preview:focus-visible {
+  color: var(--text-primary);
+}
+
+.message-block-collapsed-preview:focus-visible {
+  outline: none;
+}
+
+.message-block-collapsed-response .message-block-collapse-footer {
+  opacity: 1;
+  padding-top: 0;
+}
+
 .copy-full-btn,
 .response-collapse-btn {
   display: flex;
