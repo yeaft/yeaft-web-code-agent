@@ -531,6 +531,34 @@ it('persists manual Yeaft session order globally across agents and re-applies it
   expect(ids(store.sessionList)).toEqual(['b1', 'a2', 'a1']);
 });
 
+it('does not let stale per-agent order override persisted global order on snapshot refresh', () => {
+  const store = useSessionsStore();
+  localStorageData.set('yeaft-session-order-by-agent', JSON.stringify({
+    'agent-a': ['a1', 'a2'],
+  }));
+  localStorageData.set('yeaft-session-order-global', JSON.stringify([
+    'agent-b\u001fb1',
+    'agent-a\u001fa2',
+    'agent-a\u001fa1',
+  ]));
+  store.sessions = {
+    'agent-b\u001fb1': { id: 'b1', agentId: 'agent-b', sortOrder: 0 },
+    'agent-a\u001fa2': { id: 'a2', agentId: 'agent-a', sortOrder: 1 },
+    'agent-a\u001fa1': { id: 'a1', agentId: 'agent-a', sortOrder: 2 },
+  };
+  store.sessionOrder = ['agent-b\u001fb1', 'agent-a\u001fa2', 'agent-a\u001fa1'];
+
+  store.applySnapshot([
+    { id: 'a1', name: 'A1', updatedAt: 300 },
+    { id: 'a2', name: 'A2', updatedAt: 100 },
+  ], 'agent-a');
+
+  expect(store.sessionOrder.map(key => store.sessions[key]?.id)).toEqual(['b1', 'a2', 'a1']);
+  expect(ids(store.sessionList)).toEqual(['b1', 'a2', 'a1']);
+  expect(store.sessionById('a2', 'agent-a')?.sortOrder).toBe(1);
+  expect(store.sessionById('a1', 'agent-a')?.sortOrder).toBe(2);
+});
+
 it('keeps duplicate session ids from different agents as separate rows', () => {
   const store = useSessionsStore();
 

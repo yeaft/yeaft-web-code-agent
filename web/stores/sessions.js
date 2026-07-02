@@ -351,7 +351,11 @@ export const useSessionsStore = defineStore('sessions', {
             }
           }
         }
-        if (agentId) {
+        // Cross-agent drag order is authoritative when present. The old
+        // per-agent cache is kept only for single-agent back-compat; applying
+        // it after global order would rewrite row sortOrder during routine
+        // snapshots and make YeaftSidebar snap back to the old per-agent order.
+        if (agentId && globalManualOrder.length === 0) {
           const manualByAgent = readManualSessionOrder();
           const manualOrder = normalizeOrderList(manualByAgent[agentId]);
           if (manualOrder.length > 0) {
