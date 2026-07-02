@@ -38,7 +38,11 @@ export default {
     turn: { type: Object, required: true },
     conversationId: { type: String, default: null },
     nowMs: { type: Number, default: 0 },
+    responseCollapsible: { type: Boolean, default: false },
+    responseCollapsed: { type: Boolean, default: false },
+    responseToggleLabel: { type: String, default: '' },
   },
+  emits: ['toggle-response-collapse'],
   template: `
     <div class="vp-turn-block"
          :class="{ 'vp-turn-block-streaming': turn.isStreaming }"
@@ -96,6 +100,10 @@ export default {
           :turn="turn"
           :conversation-id="conversationId"
           :hide-speaker-header="true"
+          :response-collapsible="responseCollapsible"
+          :response-collapsed="responseCollapsed"
+          :response-toggle-label="responseToggleLabel"
+          @toggle-response-collapse="$emit('toggle-response-collapse')"
         />
       </div>
     </div>

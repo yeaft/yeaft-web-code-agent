@@ -1,5 +1,5 @@
 const DEFAULT_EXPANDED_RECENT_USER_TURNS = 2;
-const RESPONSE_TOGGLE_HEIGHT = 44;
+const RESPONSE_TOGGLE_HEIGHT = 28;
 
 export function messageTurnBlockKey(block, index = 0) {
   return String(

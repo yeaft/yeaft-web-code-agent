@@ -18,6 +18,7 @@ import { estimateVirtualItemHeight } from '../utils/virtual-transcript.js';
 import {
   annotateMessageBlocksForResponseCollapse,
   estimateCollapsedMessageBlockHeight,
+  isResponseItem,
   visibleItemsForMessageBlock,
 } from '../utils/message-turn-collapse.js';
 // task-757: appendTypingPlaceholders removed from the pipeline.
@@ -210,6 +211,10 @@ export default {
                   v-else-if="item.type === 'assistant-turn' && item.speakerVpId"
                   :turn="item"
                   :now-ms="nowMs"
+                  :response-collapsible="responseToggleBelongsToItem(block, item)"
+                  :response-collapsed="block.responseCollapsed"
+                  :response-toggle-label="responseCollapseLabel(block)"
+                  @toggle-response-collapse="toggleMessageTurnResponse(block)"
                 />
                 <AssistantTurn
                   v-else-if="item.type === 'assistant-turn'"
@@ -217,8 +222,12 @@ export default {
                   :actions-expanded="assistantTurnActionsExpandedFor(item)"
                   :tool-expand-states="toolExpandStates"
                   :tool-state-prefix="turnUiKey(item)"
+                  :response-collapsible="responseToggleBelongsToItem(block, item)"
+                  :response-collapsed="block.responseCollapsed"
+                  :response-toggle-label="responseCollapseLabel(block)"
                   @update-actions-expanded="value => setAssistantTurnActionsExpanded(item, value)"
                   @update-tool-expanded="setToolExpanded"
+                  @toggle-response-collapse="toggleMessageTurnResponse(block)"
                 />
               </div>
         <!-- feat-6af5f9f1 PR A: ReflectionCard mounts removed from the
@@ -235,20 +244,23 @@ export default {
                 :card="card"
               />
             </template>
-            <button
-              v-if="block.responseCollapsible"
-              type="button"
-              class="message-turn-collapse-toggle"
-              :class="{ 'is-collapsed': block.responseCollapsed }"
-              @click="toggleMessageTurnResponse(block)"
-              :aria-expanded="String(!block.responseCollapsed)"
-            >
-              <span>{{ responseCollapseLabel(block) }}</span>
-              <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
-                <path v-if="block.responseCollapsed" fill="currentColor" d="M7 10l5 5 5-5z"/>
-                <path v-else fill="currentColor" d="M7 14l5-5 5 5z"/>
-              </svg>
-            </button>
+            <div v-if="showBlockResponseToggle(block)" class="turn-footer message-block-collapse-footer">
+              <button
+                type="button"
+                class="response-collapse-btn"
+                :class="{ 'is-collapsed': block.responseCollapsed }"
+                @click="toggleMessageTurnResponse(block)"
+                :title="responseCollapseLabel(block)"
+                :aria-label="responseCollapseLabel(block)"
+                :aria-expanded="String(!block.responseCollapsed)"
+              >
+                <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                  <path v-if="block.responseCollapsed" fill="currentColor" d="M7 10l5 5 5-5z"/>
+                  <path v-else fill="currentColor" d="M7 14l5-5 5 5z"/>
+                </svg>
+                <span class="response-collapse-label">{{ responseCollapseLabel(block) }}</span>
+              </button>
+            </div>
           </section>
           <template v-else>
             <div class="msg-row" :data-msg-id="block.id" :class="{ 'msg-flash': block.id === flashMsgId }">
@@ -642,6 +654,21 @@ export default {
       return Number.isFinite(collapsedHeight) ? collapsedHeight : estimateVirtualItemHeight(block);
     };
     const visibleItemsForBlock = (block) => visibleItemsForMessageBlock(block);
+    const lastResponseItemForBlock = (block) => {
+      const items = Array.isArray(block?.items) ? block.items : [];
+      for (let i = items.length - 1; i >= 0; i -= 1) {
+        if (isResponseItem(items[i])) return items[i];
+      }
+      return null;
+    };
+    const responseToggleBelongsToItem = (block, item) => {
+      if (!block?.responseCollapsible || !item) return false;
+      return lastResponseItemForBlock(block) === item;
+    };
+    const showBlockResponseToggle = (block) => !!(
+      block?.responseCollapsible
+      && !visibleItemsForMessageBlock(block).some(item => responseToggleBelongsToItem(block, item))
+    );
     const toggleMessageTurnResponse = (block) => {
       const key = block?.responseCollapseKey;
       if (!key) return;
@@ -1818,6 +1845,8 @@ export default {
       messageBlocks,
       estimateMessageBlockHeight,
       visibleItemsForBlock,
+      responseToggleBelongsToItem,
+      showBlockResponseToggle,
       toggleMessageTurnResponse,
       responseCollapseLabel,
       turnUiKey,
