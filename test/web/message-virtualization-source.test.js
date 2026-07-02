@@ -13,7 +13,7 @@ describe('MessageList virtualization wiring', () => {
     expect(source).toContain('@scroll-state="onVirtualTranscriptScrollState"');
     expect(source).toContain('showInitialMessagesLoading');
     expect(source).toContain('initial-message-loading');
-    expect(source).toContain('the following VP replies into one virtual item');
+    expect(source).toContain('the following AI replies into one virtual item');
     expect(source).toContain('v-if="block.type === \'message-block\'"');
     expect(source).not.toContain('<template v-for="block in messageBlocks"');
   });

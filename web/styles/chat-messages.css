@@ -96,6 +96,39 @@
   flex-shrink: 0;
 }
 
+.message-turn-collapse-toggle {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--bg-sidebar);
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  transition: background 0.15s, color 0.15s;
+}
+
+.message-turn-collapse-toggle:hover,
+.message-turn-collapse-toggle:focus-visible {
+  background: var(--sidebar-hover);
+  color: var(--text-secondary);
+  outline: none;
+}
+
+.message-turn-collapse-toggle.is-collapsed {
+  align-self: flex-end;
+}
+
+.message-turn-collapse-toggle svg {
+  flex-shrink: 0;
+}
+
 /* Turn: Images (screenshots from Claude tools) */
 .turn-images {
   padding: 8px 12px;
