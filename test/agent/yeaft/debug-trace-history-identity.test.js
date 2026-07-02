@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { DebugTrace } from '../../../agent/yeaft/debug-trace.js';
+import { DebugTrace, reconstructDebugRawRequest } from '../../../agent/yeaft/debug-trace.js';
 
 let trace;
 let dbPath;
@@ -237,10 +237,17 @@ describe('DebugTrace.fetchRecentDebugHistory identity', () => {
     const requestsDir = join(`${dbPath}.files`, 'sessions', 's1', 'debug', 'requests');
     const requestDirs = readdirSync(requestsDir);
     const traceJson = JSON.parse(readFileSync(join(requestsDir, requestDirs[0], 'trace.json'), 'utf8'));
-    expect(traceJson.baseRequest.rawRequest.body.messages).toHaveLength(1);
+    expect(traceJson.baseRequest.rawRequest).toBeNull();
+    const firstRequest = reconstructDebugRawRequest(null, traceJson.loops[0].requestDelta);
+    expect(firstRequest.body.messages).toHaveLength(1);
     expect(traceJson.loops[1].requestDelta.rawRequestDelta.body).toMatchObject({ messagesFrom: 1 });
     expect(traceJson.loops[19].requestDelta.rawRequestDelta.body).toMatchObject({ messagesFrom: 19 });
     expect(JSON.stringify(traceJson.loops[19].requestDelta)).not.toContain('message 1');
+    const lastRequest = traceJson.loops.reduce(
+      (request, loop) => reconstructDebugRawRequest(request, loop.requestDelta),
+      null,
+    );
+    expect(lastRequest.body.messages).toHaveLength(20);
     expect(readFileSync(join(requestsDir, requestDirs[0], 'trace.json'), 'utf8').length).toBeLessThan(50_000);
   });
 });

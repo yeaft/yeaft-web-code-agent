@@ -6,7 +6,7 @@ import ctx from '../../../agent/context.js';
 import { loadConfig } from '../../../agent/yeaft/config.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { loadSession } from '../../../agent/yeaft/session.js';
-import { __testGetOrCreateVpEngine, __testResolveVpEffectiveConfig, __testSetSession } from '../../../agent/yeaft/web-bridge.js';
+import { __testGetOrCreateVpEngine, __testHooks, __testResolveVpEffectiveConfig, __testSetSession } from '../../../agent/yeaft/web-bridge.js';
 import { loadSessionConfig, resolveSessionConfig, saveSessionConfig } from '../../../agent/yeaft/sessions/session-config.js';
 import { createSession } from '../../../agent/yeaft/sessions/session-store.js';
 import { registerSessionWorkDir, sessionsRoot, snapshotSessions, updateSessionConfig } from '../../../agent/yeaft/sessions/session-crud.js';
@@ -221,6 +221,14 @@ describe('Yeaft session-scoped model config', () => {
     expect(effective.model).toBe('agent/local-sonnet');
     expect(effective.primaryModel).toBe('agent/local-sonnet');
     expect(effective.modelEffort).toBe('minimal');
+  });
+
+  it('uses a longer silence watchdog for high-reasoning session effort', () => {
+    expect(__testHooks.queryTimeoutMsForSessionConfig({ modelEffort: 'high' })).toBe(300_000);
+    expect(__testHooks.queryTimeoutMsForSessionConfig({ modelEffort: 'xhigh' })).toBe(300_000);
+    expect(__testHooks.queryTimeoutMsForSessionConfig({ modelEffort: 'max' })).toBe(300_000);
+    expect(__testHooks.queryTimeoutMsForSessionConfig({ modelEffort: 'medium' })).toBe(120_000);
+    expect(__testHooks.queryTimeoutMsForSessionConfig({})).toBe(120_000);
   });
 
   it('loads runtime config from agent root while storing message history under the user-level root', async () => {

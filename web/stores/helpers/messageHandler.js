@@ -8,6 +8,7 @@ import { decodeKey } from '../../utils/encryption.js';
 import { t } from '../../utils/i18n.js';
 import { stopProcessingWatchdog, startLegacyWatchdog } from './watchdog.js';
 import { clearSessionLoading } from './session.js';
+import { applyDebugRawRequestDelta } from '../../components/yeaft-debug-helpers.js';
 import { handleAgentList, handleAgentSelected } from './handlers/agentHandler.js';
 import {
   handleConversationCreated,
@@ -40,33 +41,6 @@ function cloneDebugValue(value) {
   catch { return value; }
 }
 
-function applyDebugRawRequestDelta(previous, delta) {
-  if (!delta) return previous ?? null;
-  if (Object.prototype.hasOwnProperty.call(delta, 'base')) return cloneDebugValue(delta.base) ?? null;
-  if (Object.prototype.hasOwnProperty.call(delta, 'replacement')) return cloneDebugValue(delta.replacement) ?? null;
-  const next = previous && typeof previous === 'object' && !Array.isArray(previous)
-    ? cloneDebugValue(previous)
-    : {};
-  if (delta.set && typeof delta.set === 'object') {
-    for (const [key, value] of Object.entries(delta.set)) next[key] = cloneDebugValue(value);
-  }
-  if (delta.body && typeof delta.body === 'object') {
-    const body = next.body && typeof next.body === 'object' && !Array.isArray(next.body) ? { ...next.body } : {};
-    for (const [key, value] of Object.entries(delta.body)) {
-      if (key === 'messages' || key === 'messagesFrom' || key === 'messagesAppend') continue;
-      body[key] = cloneDebugValue(value);
-    }
-    if (Array.isArray(delta.body.messages)) {
-      body.messages = cloneDebugValue(delta.body.messages) || [];
-    } else if (Array.isArray(delta.body.messagesAppend)) {
-      const from = Number.isFinite(Number(delta.body.messagesFrom)) ? Number(delta.body.messagesFrom) : (Array.isArray(body.messages) ? body.messages.length : 0);
-      body.messages = (Array.isArray(body.messages) ? body.messages.slice(0, from) : []).concat(cloneDebugValue(delta.body.messagesAppend) || []);
-    }
-    next.body = body;
-  }
-  return next;
-}
-
 function applyDebugRequestDelta(previous, delta = {}) {
   const base = previous || { systemPrompt: '', messages: [], rawRequest: null };
   const next = {
@@ -75,11 +49,15 @@ function applyDebugRequestDelta(previous, delta = {}) {
     rawRequest: base.rawRequest ?? null,
   };
   if (delta?.base) {
-    return {
+    const nextBase = {
       systemPrompt: delta.systemPrompt || '',
       messages: Array.isArray(delta.messages) ? delta.messages : [],
-      rawRequest: base.rawRequest ?? null,
+      rawRequest: null,
     };
+    if (Object.prototype.hasOwnProperty.call(delta, 'rawRequestDelta')) {
+      nextBase.rawRequest = applyDebugRawRequestDelta(null, delta.rawRequestDelta);
+    }
+    return nextBase;
   }
   if (typeof delta?.systemPrompt === 'string') next.systemPrompt = delta.systemPrompt;
   if (Array.isArray(delta?.messages)) {
@@ -98,13 +76,15 @@ function hydrateDebugLoopRequests(loops = []) {
     if (!loop || !loop.requestDelta) return loop;
     const turnId = loop.turnId || '__unknown__';
     const previous = snapshotsByTurn.get(turnId) || loop.requestBase || null;
+    const rawRequestBase = previous?.rawRequest ?? null;
     const snapshot = applyDebugRequestDelta(previous, loop.requestDelta);
     snapshotsByTurn.set(turnId, snapshot);
     return {
       ...loop,
       systemPrompt: typeof loop.systemPrompt === 'string' && loop.systemPrompt ? loop.systemPrompt : snapshot.systemPrompt,
       messages: Array.isArray(loop.messages) && loop.messages.length > 0 ? loop.messages : snapshot.messages,
-      rawRequest: loop.rawRequest ?? snapshot.rawRequest,
+      rawRequest: loop.rawRequest ?? null,
+      rawRequestBase,
     };
   });
 }
