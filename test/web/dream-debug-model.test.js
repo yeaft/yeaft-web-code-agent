@@ -33,6 +33,15 @@ describe('Dream debug model', () => {
     expect(segments[1].sourceMessages).toEqual(['m3']);
   });
 
+  it('does not render object source-message leaks as [object Object]', () => {
+    const memory = `---\nid: seg_object\nsourceMessages: [{"id":"m1","body":"bad"}, [object Object], m2]\n---\nObject-shaped source metadata should not leak into the UI.`;
+
+    const segments = parseDreamMemorySegments(memory);
+
+    expect(segments[0].sourceMessages).toEqual(['m1', 'm2']);
+    expect(segments[0].sourceMessages.join(', ')).not.toContain('[object Object]');
+  });
+
   it('builds scope items with detail layers and request/response availability', () => {
     const items = buildDreamDebugItems({
       latest: {

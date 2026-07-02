@@ -313,6 +313,24 @@ function normalizeSessionJsonlMessage(row, sessionId) {
 function stringifyMessageBody(value) {
   if (typeof value === 'string') return value;
   if (value == null) return '';
+  if (Array.isArray(value)) return value.map(stringifyMessageBody).filter(Boolean).join('\n');
+  if (typeof value === 'object') {
+    if (typeof value.text === 'string') return value.text;
+    if (typeof value.content === 'string') return value.content;
+    if (typeof value.body === 'string') return value.body;
+    if (typeof value.value === 'string') return value.value;
+    if (Array.isArray(value.content)) return stringifyMessageBody(value.content);
+    if (Array.isArray(value.parts)) return stringifyMessageBody(value.parts);
+    if (Array.isArray(value.blocks)) return stringifyMessageBody(value.blocks);
+    if (value.type && (value.type === 'image' || value.type === 'image_url')) return '[image]';
+    if (value.type && (value.type === 'tool_use' || value.type === 'tool_call')) {
+      const name = value.name || value.toolName || value.function?.name || 'tool';
+      return `[tool call: ${name}]`;
+    }
+    if (value.type && (value.type === 'tool_result' || value.type === 'function_result')) {
+      return stringifyMessageBody(value.result ?? value.output ?? value.content ?? '[tool result]');
+    }
+  }
   try { return JSON.stringify(value); } catch { return String(value); }
 }
 
