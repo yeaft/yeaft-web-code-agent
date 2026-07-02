@@ -8,7 +8,9 @@ import { trimSnapshotForBudget } from '../../../agent/yeaft/history-compact.js';
 import { __testAppendTurnToSessionHistory, __testGroupHistory } from '../../../agent/yeaft/web-bridge.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
-import YeaftDebugPanel from '../../../web/components/YeaftDebugPanel.js';
+
+globalThis.Pinia = globalThis.Pinia || { defineStore: () => () => ({}) };
+const { default: YeaftDebugPanel } = await import('../../../web/components/YeaftDebugPanel.js');
 
 class MockAdapter {
   constructor() {

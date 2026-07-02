@@ -27,6 +27,48 @@
 // bookkeeping. They only operate on the data already in
 // YeaftDebugPanel's `turns` / `loops` props.
 
+function cloneDebugValue(value) {
+  if (value == null) return value;
+  try { return JSON.parse(JSON.stringify(value)); }
+  catch { return value; }
+}
+
+export function applyDebugRawRequestDelta(previous, delta) {
+  if (!delta) return previous ?? null;
+  if (Object.prototype.hasOwnProperty.call(delta, 'base')) return cloneDebugValue(delta.base) ?? null;
+  if (Object.prototype.hasOwnProperty.call(delta, 'replacement')) return cloneDebugValue(delta.replacement) ?? null;
+  const next = previous && typeof previous === 'object' && !Array.isArray(previous)
+    ? cloneDebugValue(previous)
+    : {};
+  if (delta.set && typeof delta.set === 'object') {
+    for (const [key, value] of Object.entries(delta.set)) next[key] = cloneDebugValue(value);
+  }
+  if (delta.body && typeof delta.body === 'object') {
+    const body = next.body && typeof next.body === 'object' && !Array.isArray(next.body) ? { ...next.body } : {};
+    for (const [key, value] of Object.entries(delta.body)) {
+      if (key === 'messages' || key === 'messagesFrom' || key === 'messagesAppend') continue;
+      body[key] = cloneDebugValue(value);
+    }
+    const messageKey = Array.isArray(body.messages) || Object.prototype.hasOwnProperty.call(delta.body, 'messages') ? 'messages' : 'input';
+    if (Array.isArray(delta.body.messages)) {
+      body[messageKey] = cloneDebugValue(delta.body.messages) || [];
+    } else if (Array.isArray(delta.body.messagesAppend)) {
+      const existing = Array.isArray(body[messageKey]) ? body[messageKey] : [];
+      const from = Number.isFinite(Number(delta.body.messagesFrom)) ? Number(delta.body.messagesFrom) : existing.length;
+      body[messageKey] = existing.slice(0, from).concat(cloneDebugValue(delta.body.messagesAppend) || []);
+    }
+    next.body = body;
+  }
+  return next;
+}
+
+export function reconstructDebugRawRequest(baseRawRequest, requestDelta) {
+  if (!requestDelta || !Object.prototype.hasOwnProperty.call(requestDelta, 'rawRequestDelta')) {
+    return baseRawRequest ?? null;
+  }
+  return applyDebugRawRequestDelta(baseRawRequest ?? null, requestDelta.rawRequestDelta);
+}
+
 /**
  * Approximate token count of a string. Mirrors `agent/yeaft/memory/budget.js#approxTokens`
  * — CJK glyph ≈ 1 token, everything else ≈ char / 4. We duplicate the

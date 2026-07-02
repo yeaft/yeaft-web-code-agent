@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import YeaftDebugPanel from '../../web/components/YeaftDebugPanel.js';
+globalThis.Pinia = globalThis.Pinia || { defineStore: () => () => ({}) };
+const { default: YeaftDebugPanel } = await import('../../web/components/YeaftDebugPanel.js');
 
 function callMethod(name, ...args) {
   const methods = YeaftDebugPanel.methods;

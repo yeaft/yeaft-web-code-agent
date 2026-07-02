@@ -232,12 +232,13 @@ function buildRawRequestBase(value) {
 }
 
 function buildRawMessagesDelta(previousMessages, nextMessages) {
-  if (!Array.isArray(previousMessages) || !Array.isArray(nextMessages)) return null;
-  const prefix = messagesPrefixLength(previousMessages, nextMessages);
-  if (prefix === previousMessages.length && prefix <= nextMessages.length) {
+  if (!Array.isArray(nextMessages)) return null;
+  const priorMessages = Array.isArray(previousMessages) ? previousMessages : [];
+  const prefix = messagesPrefixLength(priorMessages, nextMessages);
+  if (prefix === priorMessages.length && prefix <= nextMessages.length) {
     return { messagesFrom: prefix, messagesAppend: boundRawValue(nextMessages.slice(prefix), 'raw_request_messages_append_budget') };
   }
-  return { messages: boundRawValue(nextMessages, 'raw_request_messages_budget') };
+  return { messagesFrom: 0, messagesAppend: boundRawValue(nextMessages, 'raw_request_messages_append_budget') };
 }
 
 function rawComparableRequest(value) {
@@ -273,13 +274,15 @@ function buildRawRequestDelta(previous, next) {
   const nextBody = isPlainObject(comparableNext.body) ? comparableNext.body : null;
   if (prevBody && nextBody) {
     for (const key of Object.keys(nextBody)) {
-      if (key === 'messages') continue;
+      if (key === 'messages' || key === 'input') continue;
       if (!stableEqual(prevBody[key], nextBody[key])) delta.body[key] = boundRawValue(nextBody[key], `raw_request_body_${key}_budget`);
     }
     for (const key of Object.keys(prevBody)) {
-      if (key !== 'messages' && !Object.prototype.hasOwnProperty.call(nextBody, key)) delta.body[key] = null;
+      if (key !== 'messages' && key !== 'input' && !Object.prototype.hasOwnProperty.call(nextBody, key)) delta.body[key] = null;
     }
-    const msgDelta = buildRawMessagesDelta(prevBody.messages, nextBody.messages);
+    const prevMessages = Array.isArray(prevBody.messages) ? prevBody.messages : prevBody.input;
+    const nextMessages = Array.isArray(nextBody.messages) ? nextBody.messages : nextBody.input;
+    const msgDelta = buildRawMessagesDelta(prevMessages, nextMessages);
     if (msgDelta) Object.assign(delta.body, msgDelta);
   } else if (!stableEqual(previous.body, next.body)) {
     delta.set.body = rawRequestSentinel('raw_request_body_replaced');
@@ -294,7 +297,7 @@ function buildRawRequestDelta(previous, next) {
   return delta;
 }
 
-function applyRawRequestDelta(previous, delta) {
+export function applyRawRequestDelta(previous, delta) {
   if (!delta) return previous ?? null;
   if (Object.prototype.hasOwnProperty.call(delta, 'base')) return cloneJsonValue(delta.base) ?? delta.base ?? null;
   if (Object.prototype.hasOwnProperty.call(delta, 'replacement')) return cloneJsonValue(delta.replacement) ?? delta.replacement ?? null;
@@ -308,11 +311,13 @@ function applyRawRequestDelta(previous, delta) {
       if (key === 'messagesFrom' || key === 'messagesAppend' || key === 'messages') continue;
       body[key] = cloneJsonValue(value) ?? value;
     }
+    const messageKey = Array.isArray(body.messages) || Object.prototype.hasOwnProperty.call(delta.body, 'messages') ? 'messages' : 'input';
     if (Array.isArray(delta.body.messages)) {
-      body.messages = cloneJsonValue(delta.body.messages) || [];
+      body[messageKey] = cloneJsonValue(delta.body.messages) || [];
     } else if (Array.isArray(delta.body.messagesAppend)) {
-      const from = Number.isFinite(Number(delta.body.messagesFrom)) ? Number(delta.body.messagesFrom) : (Array.isArray(body.messages) ? body.messages.length : 0);
-      body.messages = (Array.isArray(body.messages) ? body.messages.slice(0, from) : []).concat(cloneJsonValue(delta.body.messagesAppend) || []);
+      const existing = Array.isArray(body[messageKey]) ? body[messageKey] : [];
+      const from = Number.isFinite(Number(delta.body.messagesFrom)) ? Number(delta.body.messagesFrom) : existing.length;
+      body[messageKey] = existing.slice(0, from).concat(cloneJsonValue(delta.body.messagesAppend) || []);
     }
     next.body = body;
   }
@@ -339,11 +344,14 @@ function buildRequestSnapshot(info = {}) {
 
 function buildRequestDelta(previous, next) {
   if (!previous) {
-    return {
+    const delta = {
       base: true,
       systemPrompt: next.systemPrompt || '',
       messages: Array.isArray(next.messages) ? next.messages : [],
     };
+    const rawRequestDelta = buildRawRequestDelta(null, next.rawRequest);
+    if (rawRequestDelta) delta.rawRequestDelta = rawRequestDelta;
+    return delta;
   }
   const delta = {};
   if ((next.systemPrompt || '') !== (previous.systemPrompt || '')) {
@@ -372,11 +380,15 @@ function applyRequestDelta(previous, delta = {}) {
     rawRequest: base.rawRequest ?? null,
   };
   if (delta.base) {
-    return {
+    const nextBase = {
       systemPrompt: delta.systemPrompt || '',
       messages: Array.isArray(delta.messages) ? delta.messages : [],
-      rawRequest: base.rawRequest ?? null,
+      rawRequest: null,
     };
+    if (Object.prototype.hasOwnProperty.call(delta, 'rawRequestDelta')) {
+      nextBase.rawRequest = applyRawRequestDelta(null, delta.rawRequestDelta);
+    }
+    return nextBase;
   }
   if (typeof delta.systemPrompt === 'string') next.systemPrompt = delta.systemPrompt;
   if (Array.isArray(delta.messages)) {
@@ -387,6 +399,13 @@ function applyRequestDelta(previous, delta = {}) {
   }
   if (Object.prototype.hasOwnProperty.call(delta, 'rawRequestDelta')) next.rawRequest = applyRawRequestDelta(next.rawRequest, delta.rawRequestDelta);
   return next;
+}
+
+export function reconstructDebugRawRequest(baseRawRequest, requestDelta) {
+  if (!requestDelta || !Object.prototype.hasOwnProperty.call(requestDelta, 'rawRequestDelta')) {
+    return baseRawRequest ?? null;
+  }
+  return applyRawRequestDelta(baseRawRequest ?? null, requestDelta.rawRequestDelta);
 }
 
 function sessionRequestsDir(rootDir, sessionId) {
@@ -462,7 +481,7 @@ function expandTrace(trace) {
       ttfbMs: loop.ttfbMs || null,
       stopReason: loop.stopReason || null,
       at: loop.at || null,
-      rawRequest: snapshot.rawRequest ?? null,
+      rawRequest: null,
       rawResponse: loop.rawResponse ?? null,
       requestDelta: loop.requestDelta || {},
       requestBase: trace.baseRequest || null,
@@ -503,7 +522,7 @@ function traceToLegacyRows(trace) {
       tool_calls_json: JSON.stringify(loop.toolCalls || []),
       usage_json: JSON.stringify(u),
       ttfb_ms: loop.ttfbMs || null,
-      raw_request: typeof snapshot.rawRequest === 'string' ? snapshot.rawRequest : JSON.stringify(snapshot.rawRequest ?? null),
+      raw_request: null,
       raw_response: typeof loop.rawResponse === 'string' ? loop.rawResponse : JSON.stringify(loop.rawResponse ?? null),
       user_prompt: trace.userPrompt || '',
     };
@@ -674,8 +693,11 @@ export class DebugTrace {
     const snapshot = buildRequestSnapshot(info);
     const previousSnapshot = trace._lastSnapshot || this.#reconstructLastSnapshot(trace);
     if (!trace.baseRequest) {
-      const rawRequestBaseDelta = buildRawRequestDelta(null, snapshot.rawRequest);
-      trace.baseRequest = { ...snapshot, rawRequest: applyRawRequestDelta(null, rawRequestBaseDelta) };
+      trace.baseRequest = {
+        systemPrompt: snapshot.systemPrompt,
+        messages: Array.isArray(snapshot.messages) ? cloneJsonValue(snapshot.messages) : [],
+        rawRequest: null,
+      };
     }
     const loopIndex = (trace.loops || []).findIndex(l => l.turnRowId === turnId);
     const loop = {

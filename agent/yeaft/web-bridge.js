@@ -717,11 +717,33 @@ export function broadcastLanguageChange(language) {
 
 /** Query timeout in ms — abort if LLM doesn't respond within this window */
 const QUERY_TIMEOUT_MS = 120_000;
+const HIGH_REASONING_QUERY_TIMEOUT_MS = 300_000;
+
+function isHighReasoningEffort(effort) {
+  const value = typeof effort === 'string' ? effort.trim().toLowerCase() : '';
+  return value === 'high' || value === 'xhigh' || value === 'max';
+}
+
+function queryTimeoutMsForSessionConfig(config = null) {
+  return isHighReasoningEffort(config?.modelEffort) ? HIGH_REASONING_QUERY_TIMEOUT_MS : QUERY_TIMEOUT_MS;
+}
+
+function queryTimeoutMsForSession(sessionId = null) {
+  if (!sessionId || !session) return queryTimeoutMsForSessionConfig(session?.config);
+  try {
+    return queryTimeoutMsForSessionConfig(resolveSessionConfig(session.config, loadSessionConfig(liveConfigRoot(), sessionId)));
+  } catch {
+    return queryTimeoutMsForSessionConfig(session?.config);
+  }
+}
 
 /**
  * Secondary watchdog grace period (ms).
  *
- * After {@link QUERY_TIMEOUT_MS} of silence the per-VP `vpAbort` is fired.
+ * After the active query timeout of silence the per-VP `vpAbort` is fired.
+ * Normal turns use {@link QUERY_TIMEOUT_MS}; high-reasoning session turns use
+ * {@link HIGH_REASONING_QUERY_TIMEOUT_MS} because large tool-result arcs can
+ * legitimately spend longer before the provider emits the first SSE event.
  * That's enough on its own when adapters / tools cooperate with the
  * AbortSignal — the engine throws `AbortError`, runVpTurn's catch emits
  * `result{stopped:true}`, the driver `finally` emits `vp_typing_end`, and
@@ -741,7 +763,7 @@ const QUERY_TIMEOUT_MS = 120_000;
  *
  * The driver loop wraps `await runVpTurn(...)` in a Promise.race against
  * this grace-window timer. If runVpTurn doesn't return within
- * QUERY_TIMEOUT_MS + ESCALATE_AFTER_ABORT_MS, the driver forces its
+ * active query timeout + ESCALATE_AFTER_ABORT_MS, the driver forces its
  * `finally` block (vp_typing_end + group_message), emits a synthetic
  * `result{stopped:true}` so the frontend leaves its in-flight state,
  * and moves on. The hung tool promise leaks (JS lacks cooperative
@@ -4059,7 +4081,8 @@ function startSessionLoadInBackground({ sessionId = null, sessionMeta = null, pe
  */
 async function runVpTurnWithEscalation(args) {
   const { sessionId, vpId, turnId, threadId, thread } = args;
-  const deadlineMs = QUERY_TIMEOUT_MS + ESCALATE_AFTER_ABORT_MS;
+  const queryTimeoutMs = queryTimeoutMsForSessionConfig(session?.config);
+  const deadlineMs = queryTimeoutMs + ESCALATE_AFTER_ABORT_MS;
   await raceWithEscalation(runVpTurn(args), {
     deadlineMs,
     onEscalate: () => {
@@ -4213,14 +4236,15 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
     }
 
     let queryTimer = null;
+    const queryTimeoutMs = queryTimeoutMsForSessionConfig(session?.config);
     const resetQueryTimer = () => {
       if (queryTimer) clearTimeout(queryTimer);
       queryTimer = setTimeout(() => {
         if (!vpAbort.signal.aborted) {
-          console.error(`[Yeaft] query timeout after ${QUERY_TIMEOUT_MS / 1000}s of silence — aborting VP ${vpId}`);
+          console.error(`[Yeaft] query timeout after ${queryTimeoutMs / 1000}s of silence — aborting VP ${vpId}`);
           try { vpAbort.abort(); } catch { /* best-effort */ }
         }
-      }, QUERY_TIMEOUT_MS);
+      }, queryTimeoutMs);
     };
     resetQueryTimer();
 
@@ -6229,6 +6253,7 @@ export const __testHooks = {
   projectRuntimeCount() {
     return projectRuntimes.size;
   },
+  queryTimeoutMsForSessionConfig,
   seedQueuedVpTurn({ sessionId = 'session-test', vpId = 'vp-test', threadId = 'main', turnId = 'turn-test' } = {}) {
     const key = threadKey(sessionId, vpId, threadId);
     const inbox = vpInboxes.get(key) || [];
