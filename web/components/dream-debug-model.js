@@ -4,9 +4,66 @@ function parseListValue(value) {
   const text = String(value || '').trim();
   if (!text) return [];
   if (text.startsWith('[') && text.endsWith(']')) {
-    return text.slice(1, -1).split(',').map((item) => item.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
+    return splitTopLevelCommas(text.slice(1, -1))
+      .map((item) => item.trim().replace(/^["']|["']$/g, ''))
+      .map((item) => objectListItemId(item))
+      .filter(Boolean);
   }
-  return text.split(',').map((item) => item.trim()).filter(Boolean);
+  return splitTopLevelCommas(text).map((item) => objectListItemId(item.trim())).filter(Boolean);
+}
+
+function splitTopLevelCommas(text) {
+  const parts = [];
+  let cur = '';
+  let depth = 0;
+  let quote = '';
+  let escaped = false;
+  for (const ch of String(text || '')) {
+    if (escaped) {
+      cur += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\' && quote) {
+      cur += ch;
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      cur += ch;
+      if (ch === quote) quote = '';
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      cur += ch;
+      continue;
+    }
+    if (ch === '{' || ch === '[') depth += 1;
+    if ((ch === '}' || ch === ']') && depth > 0) depth -= 1;
+    if (ch === ',' && depth === 0) {
+      if (cur.trim()) parts.push(cur.trim());
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur.trim()) parts.push(cur.trim());
+  return parts;
+}
+
+function objectListItemId(item) {
+  const text = String(item || '').trim();
+  if (!text || text === '[object Object]') return '';
+  if (text.startsWith('{') && text.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(text);
+      return String(parsed.id || parsed.messageId || parsed.uuid || '').trim();
+    } catch {
+      return '';
+    }
+  }
+  return text;
 }
 
 function parseFrontmatter(raw) {
@@ -131,6 +188,9 @@ export function buildDreamDebugItems({ latest = {}, snapshots = {}, promptLoads 
   return Array.from(scopes).map((scope) => {
     const snapshot = snapshots?.[scope] || null;
     const latestRun = latest?.[scope] || null;
+    const lastError = snapshot?.lastError || latestRun?.error || null;
+    const status = latestRun?.status
+      || (lastError ? 'error' : (snapshot?.hasOutput ? 'completed' : 'never-ran'));
     const promptLoad = promptLoads?.[scope] || null;
     const scopeEvents = (Array.isArray(events) ? events : []).filter((evt) => evt?.scope === scope);
     const lastEvent = scopeEvents[scopeEvents.length - 1] || null;
@@ -138,16 +198,18 @@ export function buildDreamDebugItems({ latest = {}, snapshots = {}, promptLoads 
     const segments = parseDreamMemorySegments(snapshot?.memoryText || '');
     const sessionId = sessionIdFromScope(scope, snapshot);
     const title = readableTitleForScope(scope, snapshot, sessionTitles);
-    const summaryPreview = previewText(snapshot?.summaryText || snapshot?.memoryText || lastEvent?.detail || '', 180);
+    const errorPreview = lastError ? previewText(lastError.message || lastError.error || lastError.raw || '', 180) : '';
+    const summaryPreview = previewText(errorPreview || snapshot?.summaryText || snapshot?.memoryText || lastEvent?.detail || '', 180);
     return {
       key: scope,
       title,
       scope,
       sessionId,
-      status: latestRun?.status || (snapshot?.hasOutput ? 'completed' : 'never-ran'),
+      status,
       lastAt,
       latestRun,
       snapshot,
+      lastError,
       promptLoad,
       events: scopeEvents,
       segmentCount: segments.length,

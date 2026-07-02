@@ -37,8 +37,9 @@ function resolveGroupDefaultVpId(groupId) {
       ? pinia.useSessionsStore()
       : null;
     if (!sessionsStore) return null;
+    const chatStore = typeof pinia.useChatStore === 'function' ? pinia.useChatStore() : null;
     const group = typeof sessionsStore.sessionById === 'function'
-      ? sessionsStore.sessionById(groupId)
+      ? sessionsStore.sessionById(groupId, chatStore?.currentAgent || null)
       : (sessionsStore.sessions && sessionsStore.sessions[groupId]);
     const vpId = group && typeof group.defaultVpId === 'string'
       ? group.defaultVpId.trim()

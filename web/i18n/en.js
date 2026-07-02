@@ -227,6 +227,7 @@ export default {
   'yeaft.dreamDebug.noSearchResults': 'No Dream sessions match this search.',
   'yeaft.dreamDebug.noSummary': 'No summary available',
   'yeaft.dreamDebug.segments': 'segments',
+  'yeaft.dreamDebug.lastError': 'Last error',
   'yeaft.dreamDebug.overview': 'Overview',
   'yeaft.dreamDebug.sessionId': 'Session ID',
   'yeaft.dreamDebug.loadedAt': 'Loaded at',

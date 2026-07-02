@@ -227,6 +227,7 @@ export default {
   'yeaft.dreamDebug.noSearchResults': '没有匹配的 Dream Session。',
   'yeaft.dreamDebug.noSummary': '暂无摘要',
   'yeaft.dreamDebug.segments': '段',
+  'yeaft.dreamDebug.lastError': '最近错误',
   'yeaft.dreamDebug.overview': '概览',
   'yeaft.dreamDebug.sessionId': 'Session ID',
   'yeaft.dreamDebug.loadedAt': '加载时间',

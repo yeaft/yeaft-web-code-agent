@@ -33,6 +33,15 @@ describe('Dream debug model', () => {
     expect(segments[1].sourceMessages).toEqual(['m3']);
   });
 
+  it('does not render object source-message leaks as [object Object]', () => {
+    const memory = `---\nid: seg_object\nsourceMessages: [{"id":"m1","body":"bad"}, [object Object], m2]\n---\nObject-shaped source metadata should not leak into the UI.`;
+
+    const segments = parseDreamMemorySegments(memory);
+
+    expect(segments[0].sourceMessages).toEqual(['m1', 'm2']);
+    expect(segments[0].sourceMessages.join(', ')).not.toContain('[object Object]');
+  });
+
   it('builds scope items with detail layers and request/response availability', () => {
     const items = buildDreamDebugItems({
       latest: {
@@ -227,6 +236,23 @@ describe('Dream debug model', () => {
     expect(filterDreamDebugItems(items, 'session_b').map((item) => item.title)).toEqual(['Operations review']);
     expect(filterDreamDebugItems(items, 'tool reliability').map((item) => item.sessionId)).toEqual(['session_b']);
     expect(filterDreamDebugItems(items, 'nope')).toEqual([]);
+  });
+
+  it('surfaces persisted Dream errors instead of pretending an empty run succeeded', () => {
+    const items = buildDreamDebugItems({
+      snapshots: {
+        'sessions/session_error': {
+          sessionId: 'session_error',
+          hasOutput: false,
+          lastError: { phase: 'triage', message: 'Model "missing-fast-model" not found in any provider.' },
+        },
+      },
+      sessionTitles: { session_error: 'Broken Dream' },
+    });
+
+    expect(items[0].status).toBe('error');
+    expect(items[0].lastError.message).toContain('missing-fast-model');
+    expect(items[0].summaryPreview).toContain('missing-fast-model');
   });
 
   it('selects an active Dream item for the detail pane and falls back to the first filtered item', () => {

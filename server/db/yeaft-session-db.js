@@ -33,6 +33,10 @@ function safeJsonStringify(v) {
   catch (_) { return null; }
 }
 
+function sessionOrderKey(agentId, sessionId) {
+  return `${agentId || ''}\u001f${sessionId || ''}`;
+}
+
 function mapRow(row) {
   if (!row) return row;
   return {
@@ -117,7 +121,7 @@ export const yeaftSessionDb = {
       // Treat NULL user_id as foreign too — never cross-delete.
       if (userId && row.user_id !== userId) continue;
       if (!incomingIds.has(row.id)) {
-        stmts.deleteYeaftSession.run(row.id);
+        stmts.deleteYeaftSessionForAgent.run(row.id, userId, agentId);
       }
     }
   },
@@ -136,12 +140,27 @@ export const yeaftSessionDb = {
     return mapRow(stmts.getYeaftSession.get(id));
   },
 
+  getForAgent(userId, agentId, id) {
+    if (!userId || !agentId || !id) return null;
+    return mapRow(stmts.getYeaftSessionForAgent.get(id, userId, agentId));
+  },
+
   delete(id) {
     stmts.deleteYeaftSession.run(id);
   },
 
+  deleteForAgent(userId, agentId, id) {
+    if (!userId || !agentId || !id) return;
+    stmts.deleteYeaftSessionForAgent.run(id, userId, agentId);
+  },
+
   setArchived(id, archived) {
     stmts.setYeaftSessionArchived.run(archived ? 1 : 0, Date.now(), id);
+  },
+
+  setArchivedForAgent(userId, agentId, id, archived) {
+    if (!userId || !agentId || !id) return;
+    stmts.setYeaftSessionArchivedForAgent.run(archived ? 1 : 0, Date.now(), id, userId, agentId);
   },
 
   /**
@@ -158,6 +177,11 @@ export const yeaftSessionDb = {
    */
   setPinned(id, pinned) {
     stmts.setYeaftSessionPinned.run(pinned ? 1 : 0, Date.now(), id);
+  },
+
+  setPinnedForAgentRow(userId, agentId, id, pinned) {
+    if (!userId || !agentId || !id) return;
+    stmts.setYeaftSessionPinnedForAgent.run(pinned ? 1 : 0, Date.now(), id, userId, agentId);
   },
 
   setOrderForAgent(userId, agentId, sessionIds) {
@@ -183,6 +207,33 @@ export const yeaftSessionDb = {
     return true;
   },
 
+  setOrderForUser(userId, sessions) {
+    if (!userId || !Array.isArray(sessions)) return false;
+    const owned = new Set(
+      stmts.getYeaftSessionsByUser.all(userId)
+        .filter(row => row && row.user_id === userId && row.agent_id && row.id)
+        .map(row => sessionOrderKey(row.agent_id, row.id)),
+    );
+    const seen = new Set();
+    const ordered = [];
+    for (const item of sessions) {
+      const agentId = typeof item?.agentId === 'string' ? item.agentId : '';
+      const sessionId = typeof item?.sessionId === 'string'
+        ? item.sessionId
+        : (typeof item?.id === 'string' ? item.id : '');
+      const key = sessionOrderKey(agentId, sessionId);
+      if (!agentId || !sessionId || seen.has(key) || !owned.has(key)) continue;
+      seen.add(key);
+      ordered.push({ agentId, sessionId });
+    }
+    if (ordered.length === 0) return false;
+    const now = Date.now();
+    ordered.forEach(({ agentId, sessionId }, index) => {
+      stmts.setYeaftSessionSortOrder.run(index, now, sessionId, userId, agentId);
+    });
+    return true;
+  },
+
   /**
    * Persist pin state for a Yeaft Session even if the agent snapshot has not
    * reached the server-side shadow table yet. This keeps the UI pin action
@@ -192,15 +243,8 @@ export const yeaftSessionDb = {
   setPinnedForAgent(userId, agentId, session, pinned) {
     const id = typeof session === 'string' ? session : session?.id;
     if (!id || !agentId) return false;
-    const existing = this.get(id);
-    if (existing) {
-      if (existing.userId && userId && existing.userId !== userId) return false;
-      // The current schema keys yeaft_sessions by session id for wire/disk
-      // compatibility. Do not let an agent-scoped pin request mutate another
-      // connected agent's row when both agents report the same session id
-      // (for example the common legacy/default session id).
-      if (existing.agentId && existing.agentId !== agentId) return false;
-    }
+    const existing = this.getForAgent(userId, agentId, id);
+    if (existing && existing.userId && userId && existing.userId !== userId) return false;
     if (!existing) {
       this.upsertFromSnapshot(userId, agentId, {
         ...(session && typeof session === 'object' ? session : {}),
@@ -208,7 +252,7 @@ export const yeaftSessionDb = {
         name: (session && typeof session === 'object' && session.name) ? session.name : id,
       });
     }
-    this.setPinned(id, pinned);
+    this.setPinnedForAgentRow(userId, agentId, id, pinned);
     return true;
   },
 };

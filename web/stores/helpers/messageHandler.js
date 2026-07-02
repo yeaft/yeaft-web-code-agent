@@ -585,15 +585,17 @@ export function handleMessage(store, msg) {
       // Server confirms pin state. Chat applies this optimistically in
       // togglePin(), but Yeaft Session rows also need their own metadata
       // updated so later session-list refreshes and active-session sorting
-      // cannot drop the persisted pin.
+      // cannot drop the persisted pin. The agentId is part of the Yeaft row
+      // identity; duplicate session ids can exist across agents.
       if (msg.conversationId) {
+        const meta = msg.agentId ? { agentId: msg.agentId } : {};
         if (typeof store.setSessionPinned === 'function') {
-          store.setSessionPinned(msg.conversationId, !!msg.pinned);
+          store.setSessionPinned(msg.conversationId, !!msg.pinned, meta);
         } else {
           try {
             const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
             if (gs && typeof gs.applyPinState === 'function') {
-              gs.applyPinState(msg.conversationId, !!msg.pinned);
+              gs.applyPinState(msg.conversationId, !!msg.pinned, msg.agentId || store.yeaftSessionAgentById?.[msg.conversationId] || store.currentAgent || null);
             }
           } catch (_) { /* no sessions store in tests */ }
         }

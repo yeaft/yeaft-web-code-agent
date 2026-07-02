@@ -17,6 +17,7 @@
 import { compareSessionsByActivity } from './helpers/session-order.js';
 
 const MANUAL_SESSION_ORDER_KEY = 'yeaft-session-order-by-agent';
+const MANUAL_SESSION_ORDER_ALL_KEY = 'yeaft-session-order-global';
 
 function readManualSessionOrder() {
   try {
@@ -32,6 +33,62 @@ function writeManualSessionOrder(value) {
       localStorage.setItem(MANUAL_SESSION_ORDER_KEY, JSON.stringify(value && typeof value === 'object' ? value : {}));
     }
   } catch (_) {}
+}
+
+function readManualGlobalSessionOrder() {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    return normalizeOrderList(JSON.parse(localStorage.getItem(MANUAL_SESSION_ORDER_ALL_KEY) || '[]'));
+  } catch (_) { return []; }
+}
+
+function writeManualGlobalSessionOrder(value) {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(MANUAL_SESSION_ORDER_ALL_KEY, JSON.stringify(normalizeOrderList(value)));
+    }
+  } catch (_) {}
+}
+
+function sessionOrderKey(agentId, sessionId) {
+  return `${agentId || ''}\u001f${sessionId || ''}`;
+}
+
+function sessionKeyFromRow(row) {
+  return row && row.agentId && row.id ? sessionOrderKey(row.agentId, row.id) : '';
+}
+
+function storeKeyFor(agentId, sessionId) {
+  if (!sessionId) return '';
+  return agentId ? sessionOrderKey(agentId, sessionId) : String(sessionId);
+}
+
+function normalizeSessionId(value) {
+  return typeof value === 'string' ? value : String(value || '');
+}
+
+function findSessionKey(state, sessionId, agentId = null) {
+  const id = normalizeSessionId(sessionId);
+  if (!id) return '';
+  const directKey = storeKeyFor(agentId, id);
+  if (directKey && state.sessions[directKey]) return directKey;
+  if (state.sessions[id]) return id;
+  if (state.activeSessionKey && state.sessions[state.activeSessionKey]?.id === id) return state.activeSessionKey;
+  const keys = state.sessionOrder.filter(key => state.sessions[key]?.id === id);
+  if (agentId) {
+    const byAgent = keys.find(key => state.sessions[key]?.agentId === agentId);
+    if (byAgent) return byAgent;
+  }
+  const chat = _getChatStoreSafe();
+  if (chat?.currentAgent) {
+    const current = keys.find(key => state.sessions[key]?.agentId === chat.currentAgent);
+    if (current) return current;
+  }
+  return keys[0] || '';
+}
+
+function normalizeActiveKey(state, sessionId, agentId = null) {
+  return findSessionKey(state, sessionId, agentId) || '';
 }
 
 function normalizeOrderList(ids) {
@@ -56,8 +113,10 @@ function applyManualOrder(ids, orderedIds) {
 
 export const __test__ = {
   MANUAL_SESSION_ORDER_KEY,
+  MANUAL_SESSION_ORDER_ALL_KEY,
   normalizeOrderList,
   applyManualOrder,
+  sessionOrderKey,
 };
 
 const { defineStore } = Pinia;
@@ -114,11 +173,13 @@ function _getChatStoreSafe() {
 export const useSessionsStore = defineStore('sessions', {
   state: () => ({
     /** @type {Record<string, object>} */
-    sessions: {},       // keyed by session id
+    sessions: {},       // keyed by agentId + session id when agentId is known
     /** @type {string[]} */
     sessionOrder: [],   // render order (matches snapshot order)
     /** @type {string|null} */
     activeSessionId: null,
+    /** @type {string|null} */
+    activeSessionKey: null,
     lastSnapshotAt: 0,
     /**
      * Most recent CRUD result for the UI to surface as toast/modal error.
@@ -148,7 +209,7 @@ export const useSessionsStore = defineStore('sessions', {
         // Consult the row metadata too. This keeps pinned-first sorting
         // correct immediately after server hydration, before chatStore's
         // shared `pinnedSessions` cache has been reconciled.
-        if (pinnedIds.has(s.id) || s.pinned) pinned.push(s);
+        if (s.pinned || (!s.agentId && pinnedIds.has(s.id))) pinned.push(s);
         else unpinned.push(s);
       }
       const sortRows = (rows) => [...rows].sort((a, b) => {
@@ -157,14 +218,26 @@ export const useSessionsStore = defineStore('sessions', {
         if (aManual !== bManual) return aManual - bManual;
         return compareSessionsByActivity(a, b);
       });
-      return [...sortRows(pinned), ...sortRows(unpinned)];
+      const orderedRows = [...sortRows(pinned), ...sortRows(unpinned)];
+      const globalOrder = readManualGlobalSessionOrder();
+      if (globalOrder.length === 0) return orderedRows;
+      const globalIndex = new Map(globalOrder.map((key, index) => [key, index]));
+      return orderedRows.sort((a, b) => {
+        const aIndex = globalIndex.has(sessionKeyFromRow(a)) ? globalIndex.get(sessionKeyFromRow(a)) : Number.MAX_SAFE_INTEGER;
+        const bIndex = globalIndex.has(sessionKeyFromRow(b)) ? globalIndex.get(sessionKeyFromRow(b)) : Number.MAX_SAFE_INTEGER;
+        if (aIndex !== bIndex) return aIndex - bIndex;
+        return 0;
+      });
     },
     sessionCount(state) {
       return state.sessionOrder.length;
     },
-    sessionById: (state) => (id) => state.sessions[id] || null,
+    sessionById: (state) => (id, agentId = null) => {
+      const key = findSessionKey(state, id, agentId);
+      return key ? (state.sessions[key] || null) : null;
+    },
     activeSession(state) {
-      return state.activeSessionId ? (state.sessions[state.activeSessionId] || null) : null;
+      return state.activeSessionKey ? (state.sessions[state.activeSessionKey] || null) : null;
     },
     hasLoadedSnapshot(state) {
       return state.lastSnapshotAt > 0;
@@ -177,7 +250,7 @@ export const useSessionsStore = defineStore('sessions', {
      * drive the "invite VP" modal on the `no_default_vp` path.
      */
     activeNeedsInvite(state) {
-      const s = state.activeSessionId ? state.sessions[state.activeSessionId] : null;
+      const s = state.activeSessionKey ? state.sessions[state.activeSessionKey] : null;
       if (!s) return false;
       return !s.defaultVpId && (!Array.isArray(s.roster) || s.roster.length === 0);
     },
@@ -209,8 +282,9 @@ export const useSessionsStore = defineStore('sessions', {
         const nextOrder = [];
         for (const s of arr) {
           if (!s || !s.id) continue;
-          nextMap[s.id] = this._normalize(s, null, isPinnedRow(this.sessions[s.id]));
-          nextOrder.push(s.id);
+          const key = storeKeyFor(null, s.id);
+          nextMap[key] = this._normalize(s, null, isPinnedRow(this.sessions[key]));
+          nextOrder.push(key);
         }
         this.sessions = nextMap;
         this.sessionOrder = nextOrder;
@@ -218,17 +292,18 @@ export const useSessionsStore = defineStore('sessions', {
         // Per-agent replacement: drop only rows owned by this agent,
         // then merge in the new ones, preserving snapshot order.
         const nextMap = { ...this.sessions };
-        const incomingIds = new Set();
+        const incomingKeys = new Set();
         for (const s of arr) {
           if (!s || !s.id) continue;
-          incomingIds.add(s.id);
-          nextMap[s.id] = this._normalize(s, agentId, isPinnedRow(this.sessions[s.id]));
+          const key = storeKeyFor(agentId, s.id);
+          incomingKeys.add(key);
+          nextMap[key] = this._normalize(s, agentId, isPinnedRow(this.sessions[key]));
         }
         // Remove this agent's previously-known sessions that aren't in
         // the new snapshot (handles delete / archive).
         for (const id of this.sessionOrder) {
           const prev = this.sessions[id];
-          if (prev && prev.agentId === agentId && !incomingIds.has(id)) {
+          if (prev && prev.agentId === agentId && !incomingKeys.has(id)) {
             delete nextMap[id];
           }
         }
@@ -252,20 +327,39 @@ export const useSessionsStore = defineStore('sessions', {
         const preservedSet = new Set(preserved);
         const appended = [];
         for (const s of arr) {
-          if (s && s.id && nextMap[s.id] && !preservedSet.has(s.id)) {
-            appended.push(s.id);
+          if (!s || !s.id) continue;
+          const key = storeKeyFor(agentId, s.id);
+          if (nextMap[key] && !preservedSet.has(key)) {
+            appended.push(key);
           }
         }
         this.sessions = nextMap;
         let nextOrder = [...preserved, ...appended];
+        const globalManualOrder = readManualGlobalSessionOrder();
+        if (globalManualOrder.length > 0) {
+          const nextIdsByKey = new Map(nextOrder
+            .map(id => [sessionKeyFromRow(nextMap[id]), id])
+            .filter(([key]) => key));
+          const orderedIds = globalManualOrder.map(key => nextIdsByKey.get(key)).filter(Boolean);
+          const orderedSet = new Set(orderedIds);
+          nextOrder = [...orderedIds, ...nextOrder.filter(id => !orderedSet.has(id))];
+          const globalIndex = new Map(globalManualOrder.map((key, index) => [key, index]));
+          for (const id of nextOrder) {
+            const key = sessionKeyFromRow(nextMap[id]);
+            if (key && globalIndex.has(key)) {
+              nextMap[id] = { ...nextMap[id], sortOrder: globalIndex.get(key) };
+            }
+          }
+        }
         if (agentId) {
           const manualByAgent = readManualSessionOrder();
           const manualOrder = normalizeOrderList(manualByAgent[agentId]);
           if (manualOrder.length > 0) {
-            const manualSet = new Set(manualOrder);
+            const manualKeys = manualOrder.map(id => storeKeyFor(agentId, id));
+            const manualSet = new Set(manualKeys);
             const nextForAgent = applyManualOrder(
               nextOrder.filter(id => nextMap[id]?.agentId === agentId),
-              manualOrder,
+              manualKeys,
             );
             const oldHasAgentSlots = this.sessionOrder.some(id => nextMap[id]?.agentId === agentId);
             let manualCursor = 0;
@@ -277,7 +371,7 @@ export const useSessionsStore = defineStore('sessions', {
             } else {
               nextOrder = nextOrder.map((id) => (nextMap[id]?.agentId === agentId ? nextForAgent[manualCursor++] : id));
             }
-            const manualIndex = new Map(manualOrder.map((id, index) => [id, index]));
+            const manualIndex = new Map(manualKeys.map((id, index) => [id, index]));
             for (const id of nextForAgent) {
               if (nextMap[id] && manualSet.has(id)) {
                 nextMap[id] = { ...nextMap[id], sortOrder: manualIndex.get(id) };
@@ -298,18 +392,28 @@ export const useSessionsStore = defineStore('sessions', {
       catch (_) {}
       // Only trust lastViewed when it belongs to this agent's snapshot —
       // cross-agent fallback is the "create-in-B reverts to A" regression.
-      const lastViewedSession = lastViewed ? this.sessions[lastViewed] : null;
+      const lastViewedKey = lastViewed ? findSessionKey(this, lastViewed, agentId) : '';
+      const lastViewedSession = lastViewedKey ? this.sessions[lastViewedKey] : null;
       const lastViewedMatchesAgent = lastViewedSession
         && (!agentId || lastViewedSession.agentId === agentId);
-      const runningSessionId = this.sessionOrder
+      const runningSessionKey = this.sessionOrder
         .filter(id => this.sessions[id] && (!agentId || this.sessions[id].agentId === agentId) && this.sessions[id].running)
         .sort((a, b) => latestActivityValue(this.sessions[b]) - latestActivityValue(this.sessions[a]))[0] || null;
-      const firstVisibleSessionId = this.sessionList[0]?.id || null;
+      const runningSessionId = runningSessionKey ? this.sessions[runningSessionKey]?.id : null;
+      const firstVisibleSession = this.sessionList[0] || null;
+      const firstVisibleSessionId = firstVisibleSession?.id || null;
+      const firstVisibleSessionKey = firstVisibleSessionId ? findSessionKey(this, firstVisibleSessionId, firstVisibleSession?.raw?.agentId || null) : '';
       const fallbackActiveId = runningSessionId || (lastViewedMatchesAgent ? lastViewed : null) || firstVisibleSessionId;
-      if (this.activeSessionId && !this.sessions[this.activeSessionId]) {
+      const fallbackActiveKey = runningSessionKey || (lastViewedMatchesAgent ? lastViewedKey : '') || firstVisibleSessionKey || normalizeActiveKey(this, fallbackActiveId, agentId);
+      const activeAgentId = this.activeSessionKey ? this.sessions[this.activeSessionKey]?.agentId : null;
+      if (this.activeSessionId && !findSessionKey(this, this.activeSessionId, activeAgentId)) {
         this.activeSessionId = fallbackActiveId;
+        this.activeSessionKey = fallbackActiveKey || null;
       } else if (!this.activeSessionId && this.sessionOrder.length > 0) {
         this.activeSessionId = fallbackActiveId;
+        this.activeSessionKey = fallbackActiveKey || null;
+      } else if (this.activeSessionId) {
+        this.activeSessionKey = normalizeActiveKey(this, this.activeSessionId, activeAgentId) || this.activeSessionKey;
       }
       // Sanitize the chat store's parallel filter so a persisted
       // yeaftActiveSessionFilter pointing at a now-deleted session does not
@@ -322,13 +426,13 @@ export const useSessionsStore = defineStore('sessions', {
         if (agentId) {
           const nextSessionAgents = { ...(chat.yeaftSessionAgentById || {}) };
           for (const s of arr) {
-            if (s && s.id) nextSessionAgents[s.id] = agentId;
+            if (s && s.id && !nextSessionAgents[s.id]) nextSessionAgents[s.id] = agentId;
           }
           chat.yeaftSessionAgentById = nextSessionAgents;
         }
         const selectedSessionId = this.activeSessionId || fallbackActiveId;
         let nextFilterId = null;
-        if (chat.yeaftActiveSessionFilter && !this.sessions[chat.yeaftActiveSessionFilter]) {
+        if (chat.yeaftActiveSessionFilter && !findSessionKey(this, chat.yeaftActiveSessionFilter)) {
           nextFilterId = selectedSessionId;
         } else if (!chat.yeaftActiveSessionFilter && selectedSessionId) {
           nextFilterId = selectedSessionId;
@@ -339,6 +443,7 @@ export const useSessionsStore = defineStore('sessions', {
           } else {
             chat.yeaftActiveSessionFilter = nextFilterId;
           }
+          this.activeSessionKey = normalizeActiveKey(this, nextFilterId) || this.activeSessionKey;
         }
       }
       // fix-yeaft-session-list-and-menu: mirror server-decorated pin
@@ -361,11 +466,13 @@ export const useSessionsStore = defineStore('sessions', {
         const pinnedInSnapshot = new Set();
         for (const s of arr) {
           if (!s || !s.id) continue;
-          const row = this.sessions[s.id];
+          const key = storeKeyFor(agentId, s.id);
+          const row = this.sessions[key];
           if (row && row.pinned) pinnedInSnapshot.add(s.id);
         }
         const isOwnedByAgent = (id) => {
-          const row = this.sessions[id];
+          const key = findSessionKey(this, id, agentId);
+          const row = key ? this.sessions[key] : null;
           // Unknown id (chat session or not in this store) → foreign.
           if (!row) return false;
           // Different agent's row → foreign, leave alone.
@@ -380,19 +487,21 @@ export const useSessionsStore = defineStore('sessions', {
       if (!payload) return;
       const sessionId = payload.sessionId || payload.groupId;
       if (!sessionId) return;
-      const prev = this.sessions[sessionId];
+      const agentId = payload.agentId || null;
+      const key = findSessionKey(this, sessionId, agentId) || storeKeyFor(agentId, sessionId);
+      const prev = this.sessions[key];
       if (!prev) {
         const stub = this._normalize({
           id: sessionId,
           name: payload.name || sessionId,
           roster: Array.isArray(payload.roster) ? payload.roster : [],
           defaultVpId: payload.defaultVpId || null,
-        });
-        this.sessions[sessionId] = stub;
-        this.sessionOrder.push(sessionId);
+        }, agentId);
+        this.sessions[key] = stub;
+        this.sessionOrder.push(key);
         return;
       }
-      this.sessions[sessionId] = {
+      this.sessions[key] = {
         ...prev,
         name: payload.name || prev.name,
         roster: Array.isArray(payload.roster) ? payload.roster.slice() : prev.roster,
@@ -414,20 +523,22 @@ export const useSessionsStore = defineStore('sessions', {
       const session = result.session || result.group || null;
       if (result.ok && result.op === 'create' && session && session.id) {
         this.applySnapshotUpsert(session, agentId);
-        this.setActive(session.id);
+        this.setActive(session.id, agentId);
       }
       const opSessionId = result.sessionId || result.groupId;
+      const opKey = opSessionId ? findSessionKey(this, opSessionId, agentId) : '';
       if (result.ok && (result.op === 'archive' || result.op === 'delete') && opSessionId) {
-        delete this.sessions[opSessionId];
-        this.sessionOrder = this.sessionOrder.filter(id => id !== opSessionId);
-        if (this.activeSessionId === opSessionId) {
-          this.activeSessionId = this.sessionOrder[0] || null;
+        if (opKey) delete this.sessions[opKey];
+        this.sessionOrder = this.sessionOrder.filter(id => id !== opKey);
+        if (this.activeSessionKey === opKey || this.activeSessionId === opSessionId) {
+          this.activeSessionKey = this.sessionOrder[0] || null;
+          this.activeSessionId = this.activeSessionKey ? this.sessions[this.activeSessionKey]?.id || null : null;
         }
       }
       if (result.ok && result.op === 'update_config' && opSessionId) {
-        const prev = this.sessions[opSessionId];
+        const prev = opKey ? this.sessions[opKey] : null;
         if (prev) {
-          this.sessions[opSessionId] = {
+          this.sessions[opKey] = {
             ...prev,
             config: result.config && typeof result.config === 'object' ? { ...result.config } : {},
           };
@@ -438,28 +549,32 @@ export const useSessionsStore = defineStore('sessions', {
     /** Insert or merge a single session record. */
     applySnapshotUpsert(session, agentId = null) {
       if (!session || !session.id) return;
-      const existed = !!this.sessions[session.id];
-      const effectiveAgentId = agentId || (this.sessions[session.id] && this.sessions[session.id].agentId) || null;
-      const prev = this.sessions[session.id] || {};
-      this.sessions[session.id] = {
+      const effectiveAgentId = agentId || session.agentId || null;
+      const key = findSessionKey(this, session.id, effectiveAgentId) || storeKeyFor(effectiveAgentId, session.id);
+      const existed = !!this.sessions[key];
+      const prev = this.sessions[key] || {};
+      this.sessions[key] = {
         ...prev,
         ...this._normalize(session, effectiveAgentId, isPinnedRow(prev)),
       };
-      if (!existed) this.sessionOrder.push(session.id);
+      if (!existed) this.sessionOrder.push(key);
     },
 
-    setActive(sessionId) {
-      if (sessionId && this.sessions[sessionId]) {
+    setActive(sessionId, agentId = null) {
+      const key = findSessionKey(this, sessionId, agentId);
+      if (sessionId && key && this.sessions[key]) {
         this.activeSessionId = sessionId;
+        this.activeSessionKey = key;
       } else {
         this.activeSessionId = null;
+        this.activeSessionKey = null;
       }
     },
 
     reorderSessionsForAgent(agentId, orderedIds) {
       if (!agentId) return [];
       const idsForAgent = this.sessionOrder.filter(id => this.sessions[id]?.agentId === agentId);
-      const nextForAgent = applyManualOrder(idsForAgent, orderedIds);
+      const nextForAgent = applyManualOrder(idsForAgent, orderedIds.map(id => storeKeyFor(agentId, id)));
       if (nextForAgent.length === 0) return [];
       const nextByAgent = new Map(nextForAgent.map((id, index) => [id, index]));
       let cursor = 0;
@@ -470,9 +585,37 @@ export const useSessionsStore = defineStore('sessions', {
         this.sessions[id] = { ...this.sessions[id], sortOrder: nextByAgent.get(id) };
       }
       const manualByAgent = readManualSessionOrder();
-      manualByAgent[agentId] = nextForAgent;
+      const nextSessionIds = nextForAgent.map(id => this.sessions[id]?.id).filter(Boolean);
+      manualByAgent[agentId] = nextSessionIds;
       writeManualSessionOrder(manualByAgent);
-      return nextForAgent;
+      return nextSessionIds;
+    },
+
+    reorderSessionsGlobally(orderedKeys) {
+      const currentKeys = this.sessionOrder
+        .map(id => sessionKeyFromRow(this.sessions[id]))
+        .filter(Boolean);
+      const nextKeys = applyManualOrder(currentKeys, orderedKeys);
+      if (nextKeys.length === 0) return [];
+      const idByKey = new Map(this.sessionOrder
+        .map(id => [sessionKeyFromRow(this.sessions[id]), id])
+        .filter(([key]) => key));
+      const nextIds = nextKeys.map(key => idByKey.get(key)).filter(Boolean);
+      const nextIdSet = new Set(nextIds);
+      this.sessionOrder = [...nextIds, ...this.sessionOrder.filter(id => !nextIdSet.has(id))];
+      const keyIndex = new Map(nextKeys.map((key, index) => [key, index]));
+      for (const id of this.sessionOrder) {
+        const key = sessionKeyFromRow(this.sessions[id]);
+        if (key && keyIndex.has(key)) {
+          this.sessions[id] = { ...this.sessions[id], sortOrder: keyIndex.get(key) };
+        }
+      }
+      writeManualGlobalSessionOrder(nextKeys);
+      return nextKeys.map((key) => {
+        const id = idByKey.get(key);
+        const row = id ? this.sessions[id] : null;
+        return row ? { agentId: row.agentId, sessionId: row.id } : null;
+      }).filter(Boolean);
     },
 
     /**
@@ -481,10 +624,11 @@ export const useSessionsStore = defineStore('sessions', {
      * this metadata is the session-list source needed for DB hydration,
      * snapshot reconciliation, and stable pinned-first movement.
      */
-    applyPinState(sessionId, pinned) {
-      if (!sessionId || !this.sessions[sessionId]) return;
-      this.sessions[sessionId] = {
-        ...this.sessions[sessionId],
+    applyPinState(sessionId, pinned, agentId = null) {
+      const key = findSessionKey(this, sessionId, agentId);
+      if (!sessionId || !key || !this.sessions[key]) return;
+      this.sessions[key] = {
+        ...this.sessions[key],
         pinned: !!pinned,
       };
     },

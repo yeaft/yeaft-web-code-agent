@@ -45,7 +45,7 @@ import { TaskManager } from './tasks/manager.js';
 // resumes with the same onDemand/recent membership it had on
 // disconnect. Engine.#runQuery uses the registry to populate the
 // AMS each turn and to run `memory/adjust.js` post-turn.
-import { ensureDefaultSessionIfEmpty, yeaftDirForWorkDir } from './sessions/session-crud.js';
+import { ensureDefaultSessionIfEmpty, migrateRegisteredWorkDirSessions } from './sessions/session-crud.js';
 import { seedDefaultVps } from './vp/seed-defaults.js';
 import { topUpDefaultVps } from './vp/seed-topup.js';
 import { archiveLegacyScopes } from './memory/seed-backfill.js';
@@ -71,7 +71,7 @@ const DEFAULT_COMPACT_TRIGGER_RATIO = 0.7;
 /**
  * @typedef {Object} SessionOptions
  * @property {string} [dir] — Yeaft data directory override (default: ~/.yeaft)
- * @property {string} [workDir] — Session workDir; when provided, storage lives under <workDir>/.yeaft while config still comes from dir/defaults
+ * @property {string} [workDir] — Session workDir; used only for project-tier assets such as skills/MCP, while Session data stays under the user-level dir
  * @property {string} [model] — Model override
  * @property {string} [language] — Language override ('en' | 'zh')
  * @property {boolean} [debug] — Debug mode override
@@ -150,9 +150,10 @@ export async function loadSession(options = {}) {
 
   // ─── 1. Determine config + store directories ─────────────
   //        Must happen BEFORE loadConfig so that first-run generates a
-  //        default config.json that loadConfig can read. workDir-backed
-  //        Sessions store conversation/session data under <workDir>/.yeaft,
-  //        but runtime config still comes from the agent-local configDir.
+  //        default config.json that loadConfig can read. Session data
+  //        (metadata/roster/config/messages/memory/tasks) is agent-user data
+  //        and stays under configDir (`~/.yeaft`). workDir is only a project
+  //        tier for assets such as skills and MCP config.
   const overrides = { ...configOverrides };
   if (dir) overrides.dir = dir;
   if (model) overrides.model = model;
@@ -161,15 +162,13 @@ export async function loadSession(options = {}) {
 
   const sessionWorkDir = typeof workDir === 'string' && workDir.trim() ? workDir.trim() : '';
   const configDir = overrides.dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
-  const yeaftDir = sessionWorkDir ? yeaftDirForWorkDir(sessionWorkDir) : configDir;
+  const yeaftDir = configDir;
   const configInitResult = initYeaftDir(configDir);
-  const storeInitResult = yeaftDir === configDir ? configInitResult : initYeaftDir(yeaftDir);
+  const storeInitResult = configInitResult;
   overrides.dir = configDir;
 
   // Log any warnings from directory initialization.
-  const initWarnings = yeaftDir === configDir
-    ? configInitResult.warnings
-    : [...configInitResult.warnings, ...storeInitResult.warnings];
+  const initWarnings = configInitResult.warnings;
   for (const w of initWarnings) {
     console.warn(`[Yeaft] ${w}`);
   }
@@ -218,6 +217,22 @@ export async function loadSession(options = {}) {
   //         The R6 shard layout is gone — memory writes go through
   //         dream directly. Existing users have already migrated
   //         (state file in ~/.yeaft/.memory-v2-migration.json).
+
+  // ─── 2.3 Project-session migration ─────────────────────
+  //         Session data used to be allowed under `<workDir>/.yeaft/sessions`.
+  //         It is now user-level only (`~/.yeaft/sessions`). Copy any registered
+  //         project-backed sessions into the user root before stores open.
+  try {
+    const migration = migrateRegisteredWorkDirSessions(configDir);
+    if (migration.migrated.length > 0 || migration.errors.length > 0) {
+      console.log(
+        `[Yeaft] session project-store migration: migrated=${migration.migrated.length} ` +
+        `errors=${migration.errors.length}`,
+      );
+    }
+  } catch (err) {
+    console.warn(`[Yeaft] session project-store migration failed: ${err?.message || err}`);
+  }
 
   // ─── 2a. Permission pre-check ─────────────────────────
   //         If the data dir is not writable, mark session as read-only.

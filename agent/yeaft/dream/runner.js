@@ -45,7 +45,7 @@ import { listScopes, readSummary } from '../memory/store.js';
 import {
   DEFAULT_LIMITS,
 } from './limits.js';
-import { readSessionState, writeSessionState, writeDreamError } from './state.js';
+import { clearDreamError, readSessionState, writeSessionState, writeDreamError } from './state.js';
 import { segmentDiff, truncateMessage, estimateMessagesTokens } from './segment.js';
 import { triageGroupSegments } from './triage.js';
 import { mergeByTarget } from './merge.js';
@@ -166,7 +166,7 @@ export async function runDream(opts) {
         sessionId,
         segments,
         topicSummaries,
-        llm: opts.llm,
+        llm: dreamLlmForSession(opts.llm, sessionId),
         onProgress,
         language: opts.language,
       });
@@ -208,13 +208,14 @@ export async function runDream(opts) {
       const r = await applyMergedTarget(merged, {
         root: opts.root,
         ts,
-        llm: opts.llm,
+        llm: dreamLlmForSession(opts.llm, sourceSessionId(merged)),
         limits,
         nowIso: opts.nowIso || (() => nowIso),
         onProgress,
         siblingTopicsFor: opts.siblingTopicsFor,
         language: opts.language,
       });
+      await clearDreamError(opts.root, merged.target);
       targetsReport.push({ ...r, sources: merged.sources.length, status: 'done' });
     } catch (err) {
       targetsReport.push({
@@ -252,11 +253,12 @@ export async function runDream(opts) {
         sessionId: triage.sessionId,
         messages: triage.diff,
         targets,
-        llm: opts.llm,
+        llm: dreamLlmForSession(opts.llm, triage.sessionId),
         language: opts.language,
         nowIso: opts.nowIso || (() => nowIso),
         segmentIndex: opts.segmentIndex || null,
       });
+      await clearDreamError(opts.root, `sessions/${triage.sessionId}`);
       segmentReports.push({ sessionId: triage.sessionId, status: 'done', ...r });
       onProgress({ phase: 'extract-segments', sessionId: triage.sessionId, status: 'done', ...r });
     } catch (err) {
@@ -333,6 +335,10 @@ function deriveSessionFilter(filter) {
     if (m && m[1]) sessions.push(m[1]);
   }
   return sessions.length > 0 ? new Set(sessions) : null;
+}
+
+function dreamLlmForSession(llm, sessionId) {
+  return (req = {}) => llm({ ...req, sessionId: req.sessionId || sessionId || null });
 }
 
 function sourceSessionId(mergedTarget) {

@@ -637,7 +637,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
         if (agent.ownerId && msg) {
           const sessionId = msg.sessionId;
           if (sessionId) {
-            const existing = yeaftSessionDb.get(sessionId);
+            const existing = yeaftSessionDb.getForAgent(agent.ownerId, agentId, sessionId);
             // Roster-delta path is a cache update, not authoritative
             // creation. If we've never seen this row before, skip and
             // wait for the next full snapshot (which carries truthful
@@ -687,7 +687,8 @@ export async function handleAgentOutput(agentId, agent, msg) {
           if (agent.ownerId) yeaftSessionDb.reconcileFromSnapshot(agent.ownerId, agentId, msg.sessions);
           outboundMsg = { ...msg, sessions: decorateYeaftSessionsWithPinned(agentId, msg.sessions) };
         } else if (msg.ok && sessionId && (op === 'delete' || op === 'archive')) {
-          yeaftSessionDb.delete(sessionId);
+          if (op === 'archive') yeaftSessionDb.setArchivedForAgent(agent.ownerId, agentId, sessionId, true);
+          else yeaftSessionDb.deleteForAgent(agent.ownerId, agentId, sessionId);
         }
       } catch (e) {
         console.warn(`[Server] yeaft crud-result persist failed:`, e?.message || e);

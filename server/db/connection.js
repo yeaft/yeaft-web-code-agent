@@ -166,7 +166,7 @@ const migrations = [
 // config overrides — none of which are chat concerns).
 const yeaftSessionsTable = `
   CREATE TABLE IF NOT EXISTS yeaft_sessions (
-    id TEXT PRIMARY KEY,
+    id TEXT NOT NULL,
     user_id TEXT REFERENCES users(id),
     agent_id TEXT NOT NULL,
     name TEXT,
@@ -179,14 +179,56 @@ const yeaftSessionsTable = `
     updated_at INTEGER NOT NULL,
     is_archived INTEGER DEFAULT 0,
     is_pinned INTEGER DEFAULT 0,
-    sort_order INTEGER
+    sort_order INTEGER,
+    PRIMARY KEY (user_id, agent_id, id)
   );
 
   CREATE INDEX IF NOT EXISTS idx_yeaft_sessions_user ON yeaft_sessions(user_id);
   CREATE INDEX IF NOT EXISTS idx_yeaft_sessions_agent ON yeaft_sessions(agent_id);
+  CREATE INDEX IF NOT EXISTS idx_yeaft_sessions_id ON yeaft_sessions(id);
   CREATE INDEX IF NOT EXISTS idx_yeaft_sessions_updated ON yeaft_sessions(updated_at DESC);
 `;
 db.exec(yeaftSessionsTable);
+
+try {
+  const tableInfo = db.prepare(`PRAGMA table_info(yeaft_sessions)`).all();
+  const idColumn = tableInfo.find(col => col && col.name === 'id');
+  if (idColumn && Number(idColumn.pk) === 1) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS yeaft_sessions_composite (
+        id TEXT NOT NULL,
+        user_id TEXT REFERENCES users(id),
+        agent_id TEXT NOT NULL,
+        name TEXT,
+        roster_json TEXT,
+        default_vp_id TEXT,
+        work_dir TEXT,
+        config_json TEXT,
+        announcement TEXT,
+        created_at INTEGER,
+        updated_at INTEGER NOT NULL,
+        is_archived INTEGER DEFAULT 0,
+        is_pinned INTEGER DEFAULT 0,
+        sort_order INTEGER,
+        PRIMARY KEY (user_id, agent_id, id)
+      );
+      INSERT OR REPLACE INTO yeaft_sessions_composite
+        (id, user_id, agent_id, name, roster_json, default_vp_id, work_dir,
+         config_json, announcement, created_at, updated_at, is_archived, is_pinned, sort_order)
+      SELECT id, user_id, agent_id, name, roster_json, default_vp_id, work_dir,
+        config_json, announcement, created_at, updated_at, is_archived, is_pinned, sort_order
+      FROM yeaft_sessions;
+      DROP TABLE yeaft_sessions;
+      ALTER TABLE yeaft_sessions_composite RENAME TO yeaft_sessions;
+      CREATE INDEX IF NOT EXISTS idx_yeaft_sessions_user ON yeaft_sessions(user_id);
+      CREATE INDEX IF NOT EXISTS idx_yeaft_sessions_agent ON yeaft_sessions(agent_id);
+      CREATE INDEX IF NOT EXISTS idx_yeaft_sessions_id ON yeaft_sessions(id);
+      CREATE INDEX IF NOT EXISTS idx_yeaft_sessions_updated ON yeaft_sessions(updated_at DESC);
+    `);
+  }
+} catch (e) {
+  console.warn('[DB] yeaft_sessions composite-key migration failed:', e?.message || e);
+}
 
 // Yeaft session schema additions (separate from `migrations` above so the
 // table existence in the CREATE block above is guaranteed before we try
@@ -720,9 +762,8 @@ export const stmts = {
       (id, user_id, agent_id, name, roster_json, default_vp_id, work_dir,
        config_json, announcement, created_at, updated_at, is_archived)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
+    ON CONFLICT(user_id, agent_id, id) DO UPDATE SET
       user_id = COALESCE(excluded.user_id, user_id),
-      agent_id = excluded.agent_id,
       name = excluded.name,
       roster_json = excluded.roster_json,
       default_vp_id = excluded.default_vp_id,
@@ -735,7 +776,11 @@ export const stmts = {
   `),
 
   getYeaftSession: db.prepare(`
-    SELECT * FROM yeaft_sessions WHERE id = ?
+    SELECT * FROM yeaft_sessions WHERE id = ? ORDER BY updated_at DESC LIMIT 1
+  `),
+
+  getYeaftSessionForAgent: db.prepare(`
+    SELECT * FROM yeaft_sessions WHERE id = ? AND user_id = ? AND agent_id = ?
   `),
 
   getYeaftSessionsByUser: db.prepare(`
@@ -754,6 +799,10 @@ export const stmts = {
     DELETE FROM yeaft_sessions WHERE id = ?
   `),
 
+  deleteYeaftSessionForAgent: db.prepare(`
+    DELETE FROM yeaft_sessions WHERE id = ? AND user_id = ? AND agent_id = ?
+  `),
+
   deleteYeaftSessionsByUser: db.prepare(`
     DELETE FROM yeaft_sessions WHERE user_id = ?
   `),
@@ -762,8 +811,16 @@ export const stmts = {
     UPDATE yeaft_sessions SET is_archived = ?, updated_at = ? WHERE id = ?
   `),
 
+  setYeaftSessionArchivedForAgent: db.prepare(`
+    UPDATE yeaft_sessions SET is_archived = ?, updated_at = ? WHERE id = ? AND user_id = ? AND agent_id = ?
+  `),
+
   setYeaftSessionPinned: db.prepare(`
     UPDATE yeaft_sessions SET is_pinned = ?, updated_at = ? WHERE id = ?
+  `),
+
+  setYeaftSessionPinnedForAgent: db.prepare(`
+    UPDATE yeaft_sessions SET is_pinned = ?, updated_at = ? WHERE id = ? AND user_id = ? AND agent_id = ?
   `),
 
   setYeaftSessionSortOrder: db.prepare(`

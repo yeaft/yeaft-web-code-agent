@@ -38,6 +38,9 @@ const chatStore = {
   currentView: 'chat',
   yeaftActiveSessionFilter: null,
   pinnedSessions: [],
+  currentAgent: 'agent-a',
+  yeaftSessionAgentById: {},
+  sendWsMessage: vi.fn(),
   setActiveSessionFilter: vi.fn(function setActiveSessionFilter(sessionId) {
     this.yeaftActiveSessionFilter = sessionId || null;
   }),
@@ -58,7 +61,9 @@ globalThis.window = {
 };
 
 const { useSessionsStore } = await import('../../../web/stores/sessions.js');
+window.Pinia.useSessionsStore = useSessionsStore;
 const { default: YeaftSidebar } = await import('../../../web/components/YeaftSidebar.js');
+const { default: SessionSettingsModal } = await import('../../../web/components/SessionSettingsModal.js');
 
 function ids(rows) {
   return rows.map(row => row.id);
@@ -67,13 +72,17 @@ function ids(rows) {
 beforeEach(() => {
   localStorageData.clear();
   chatStore.currentView = 'chat';
+  chatStore.currentAgent = 'agent-a';
   chatStore.yeaftActiveSessionFilter = null;
+  chatStore.yeaftSessionAgentById = {};
   chatStore.pinnedSessions = [];
+  chatStore.sendWsMessage.mockClear();
   chatStore.setActiveSessionFilter.mockClear();
   const store = useSessionsStore();
   store.sessions = {};
   store.sessionOrder = [];
   store.activeSessionId = null;
+  store.activeSessionKey = null;
   store.lastSnapshotAt = 0;
   store.lastCrudResult = null;
   store.pending = {};
@@ -89,7 +98,7 @@ describe('Yeaft session pin persistence flow', () => {
       { id: 's-other', name: 'Other', updatedAt: 20 },
     ], 'agent-1');
 
-    expect(store.sessions['s-pinned']).toMatchObject({ pinned: true });
+    expect(store.sessionById('s-pinned', 'agent-1')).toMatchObject({ pinned: true });
     expect(chatStore.pinnedSessions).toEqual(['s-pinned']);
     expect(ids(store.sessionList)).toEqual(['s-pinned', 's-active', 's-other']);
 
@@ -155,7 +164,7 @@ describe('Yeaft session pin persistence flow', () => {
       { id: 's-new', updatedAt: 50 },
     ], 'agent-1');
 
-    expect(store.sessions['s-pinned']).toMatchObject({ pinned: true });
+    expect(store.sessionById('s-pinned', 'agent-1')).toMatchObject({ pinned: true });
     expect(chatStore.pinnedSessions).toEqual(['s-pinned']);
     expect(ids(store.sessionList)).toEqual(['s-pinned', 's-new', 's-active']);
   });
@@ -170,12 +179,12 @@ describe('Yeaft session pin persistence flow', () => {
 
     store.applyPinState('s-b', true);
 
-    expect(store.sessions['s-b']).toMatchObject({ pinned: true });
+    expect(store.sessionById('s-b', 'agent-1')).toMatchObject({ pinned: true });
     expect(ids(store.sessionList)).toEqual(['s-b', 's-a', 's-c']);
 
     store.applyPinState('s-b', false);
 
-    expect(store.sessions['s-b']).toMatchObject({ pinned: false });
+    expect(store.sessionById('s-b', 'agent-1')).toMatchObject({ pinned: false });
     expect(ids(store.sessionList)).toEqual(['s-a', 's-c', 's-b']);
   });
 
@@ -188,7 +197,7 @@ describe('Yeaft session pin persistence flow', () => {
     ], 'agent-1');
 
     expect(ids(store.sessionList)).toEqual(['yeaft-ui', 'yeaft', 'other']);
-    expect(store.sessions['yeaft-ui']).toMatchObject({ pinned: true });
+    expect(store.sessionById('yeaft-ui', 'agent-1')).toMatchObject({ pinned: true });
 
     // This mirrors the real UI path: selecting a row can be followed by a
     // lightweight session upsert/list refresh that does not carry pin fields.
@@ -196,7 +205,7 @@ describe('Yeaft session pin persistence flow', () => {
     store.applySnapshotUpsert({ id: 'yeaft-ui', name: 'Yeaft-UI', updatedAt: 40 }, 'agent-1');
     store.setActive('yeaft');
 
-    expect(store.sessions['yeaft-ui']).toMatchObject({ pinned: true });
+    expect(store.sessionById('yeaft-ui', 'agent-1')).toMatchObject({ pinned: true });
     expect(store.activeSessionId).toBe('yeaft');
     expect(ids(store.sessionList)).toEqual(['yeaft-ui', 'yeaft', 'other']);
   });
@@ -214,7 +223,7 @@ describe('Yeaft session pin persistence flow', () => {
     ], 'agent-1');
     store.setActive('yeaft');
 
-    expect(store.sessions['yeaft-ui']).toMatchObject({ pinned: true });
+    expect(store.sessionById('yeaft-ui', 'agent-1')).toMatchObject({ pinned: true });
     expect(chatStore.pinnedSessions).toEqual(['yeaft-ui']);
     expect(ids(store.sessionList)).toEqual(['yeaft-ui', 'yeaft']);
   });
@@ -267,8 +276,8 @@ it('applies connected-agent list results as session snapshots with persisted pin
     ],
   }, 'agent-b');
 
-  expect(store.sessions['session-a']).toMatchObject({ agentId: 'agent-a', pinned: true });
-  expect(store.sessions['session-c']).toMatchObject({ agentId: 'agent-b', pinned: true });
+  expect(store.sessionById('session-a', 'agent-a')).toMatchObject({ agentId: 'agent-a', pinned: true });
+  expect(store.sessionById('session-c', 'agent-b')).toMatchObject({ agentId: 'agent-b', pinned: true });
   expect(ids(store.sessionList).slice(0, 2).sort()).toEqual(['session-a', 'session-c']);
   expect(ids(store.sessionList)[2]).toBe('session-b');
 });
@@ -296,6 +305,7 @@ it('sends Yeaft pin metadata so the server can persist before DB hydration', () 
     agentId: 'agent-a',
     sessionName: 'Pinned Session',
     workDir: '/repo',
+    pinned: false,
   } ]]);
 });
 
@@ -400,7 +410,7 @@ it('restores a running opened Yeaft session from the connected-agent list snapsh
     { id: 'running-session', name: 'Running', updatedAt: 10, running: true, runningVpCount: 1, latestActivityAt: 99, pinned: true },
   ], 'agent-1');
 
-  expect(store.sessions['running-session']).toMatchObject({
+  expect(store.sessionById('running-session', 'agent-1')).toMatchObject({
     agentId: 'agent-1',
     running: true,
     active: true,
@@ -441,19 +451,19 @@ it('persists manual Yeaft session order locally and re-applies it across snapsho
 it('keeps foreign agent slots stable when manually reordering one agent', () => {
   const store = useSessionsStore();
   store.sessions = {
-    a1: { id: 'a1', agentId: 'agent-a' },
-    b1: { id: 'b1', agentId: 'agent-b' },
-    a2: { id: 'a2', agentId: 'agent-a' },
-    c1: { id: 'c1', agentId: 'agent-c' },
-    a3: { id: 'a3', agentId: 'agent-a' },
+    'agent-a\u001fa1': { id: 'a1', agentId: 'agent-a' },
+    'agent-b\u001fb1': { id: 'b1', agentId: 'agent-b' },
+    'agent-a\u001fa2': { id: 'a2', agentId: 'agent-a' },
+    'agent-c\u001fc1': { id: 'c1', agentId: 'agent-c' },
+    'agent-a\u001fa3': { id: 'a3', agentId: 'agent-a' },
   };
-  store.sessionOrder = ['a1', 'b1', 'a2', 'c1', 'a3'];
+  store.sessionOrder = ['agent-a\u001fa1', 'agent-b\u001fb1', 'agent-a\u001fa2', 'agent-c\u001fc1', 'agent-a\u001fa3'];
 
   const ordered = store.reorderSessionsForAgent('agent-a', ['a3', 'a1', 'a2']);
 
   expect(ordered).toEqual(['a3', 'a1', 'a2']);
-  expect(store.sessionOrder).toEqual(['a3', 'b1', 'a1', 'c1', 'a2']);
-  expect(store.sessionOrder).not.toEqual(['a3', 'a1', 'a2', 'b1', 'c1']);
+  expect(store.sessionOrder.map(key => store.sessions[key]?.id)).toEqual(['a3', 'b1', 'a1', 'c1', 'a2']);
+  expect(store.sessionOrder.map(key => store.sessions[key]?.id)).not.toEqual(['a3', 'a1', 'a2', 'b1', 'c1']);
   expect(JSON.parse(localStorageData.get('yeaft-session-order-by-agent'))).toEqual({
     'agent-a': ['a3', 'a1', 'a2'],
   });
@@ -465,13 +475,13 @@ it('re-applies persisted manual order without moving foreign agent slots on snap
     'agent-a': ['a3', 'a1', 'a2'],
   }));
   store.sessions = {
-    a1: { id: 'a1', agentId: 'agent-a' },
-    b1: { id: 'b1', agentId: 'agent-b' },
-    a2: { id: 'a2', agentId: 'agent-a' },
-    c1: { id: 'c1', agentId: 'agent-c' },
-    a3: { id: 'a3', agentId: 'agent-a' },
+    'agent-a\u001fa1': { id: 'a1', agentId: 'agent-a' },
+    'agent-b\u001fb1': { id: 'b1', agentId: 'agent-b' },
+    'agent-a\u001fa2': { id: 'a2', agentId: 'agent-a' },
+    'agent-c\u001fc1': { id: 'c1', agentId: 'agent-c' },
+    'agent-a\u001fa3': { id: 'a3', agentId: 'agent-a' },
   };
-  store.sessionOrder = ['a1', 'b1', 'a2', 'c1', 'a3'];
+  store.sessionOrder = ['agent-a\u001fa1', 'agent-b\u001fb1', 'agent-a\u001fa2', 'agent-c\u001fc1', 'agent-a\u001fa3'];
 
   store.applySnapshot([
     { id: 'a1', name: 'A1' },
@@ -479,7 +489,208 @@ it('re-applies persisted manual order without moving foreign agent slots on snap
     { id: 'a3', name: 'A3' },
   ], 'agent-a');
 
-  expect(store.sessionOrder).toEqual(['a3', 'b1', 'a1', 'c1', 'a2']);
+  expect(store.sessionOrder.map(key => store.sessions[key]?.id)).toEqual(['a3', 'b1', 'a1', 'c1', 'a2']);
+});
+
+it('persists manual Yeaft session order globally across agents and re-applies it across snapshots', () => {
+  const store = useSessionsStore();
+  store.applySnapshot([
+    { id: 'a1', name: 'A1', updatedAt: 300 },
+    { id: 'a2', name: 'A2', updatedAt: 100 },
+  ], 'agent-a');
+  store.applySnapshot([
+    { id: 'b1', name: 'B1', updatedAt: 200 },
+  ], 'agent-b');
+
+  const ordered = store.reorderSessionsGlobally([
+    'agent-b\u001fb1',
+    'agent-a\u001fa2',
+    'agent-a\u001fa1',
+  ]);
+
+  expect(ordered).toEqual([
+    { agentId: 'agent-b', sessionId: 'b1' },
+    { agentId: 'agent-a', sessionId: 'a2' },
+    { agentId: 'agent-a', sessionId: 'a1' },
+  ]);
+  expect(ids(store.sessionList)).toEqual(['b1', 'a2', 'a1']);
+  expect(JSON.parse(localStorageData.get('yeaft-session-order-global'))).toEqual([
+    'agent-b\u001fb1',
+    'agent-a\u001fa2',
+    'agent-a\u001fa1',
+  ]);
+
+  store.applySnapshot([
+    { id: 'a1', name: 'A1', updatedAt: 300 },
+    { id: 'a2', name: 'A2', updatedAt: 100 },
+  ], 'agent-a');
+  store.applySnapshot([
+    { id: 'b1', name: 'B1', updatedAt: 200 },
+  ], 'agent-b');
+
+  expect(ids(store.sessionList)).toEqual(['b1', 'a2', 'a1']);
+});
+
+it('keeps duplicate session ids from different agents as separate rows', () => {
+  const store = useSessionsStore();
+
+  store.applySnapshot([
+    { id: 'session_default', name: 'Default A', updatedAt: 300 },
+  ], 'agent-a');
+  store.applySnapshot([
+    { id: 'session_default', name: 'Default B', updatedAt: 200 },
+  ], 'agent-b');
+
+  expect(store.sessionOrder).toEqual(['agent-a\u001fsession_default', 'agent-b\u001fsession_default']);
+  expect(store.sessionList.map(row => [row.id, row.name, row.agentId])).toEqual([
+    ['session_default', 'Default A', 'agent-a'],
+    ['session_default', 'Default B', 'agent-b'],
+  ]);
+  expect(store.sessionById('session_default', 'agent-a')?.name).toBe('Default A');
+  expect(store.sessionById('session_default', 'agent-b')?.name).toBe('Default B');
+
+  store.setActive('session_default', 'agent-b');
+  expect(store.activeSessionId).toBe('session_default');
+  expect(store.activeSession?.name).toBe('Default B');
+
+  store.applyPinState('session_default', true, 'agent-b');
+  expect(store.sessionById('session_default', 'agent-a')?.pinned).toBe(false);
+  expect(store.sessionById('session_default', 'agent-b')?.pinned).toBe(true);
+});
+
+
+it('routes duplicate-id pin actions to the clicked agent row', async () => {
+  const sessions = useSessionsStore();
+  sessions.applySnapshot([
+    { id: 'session_default', name: 'Default A', pinned: true },
+  ], 'agent-a');
+  sessions.applySnapshot([
+    { id: 'session_default', name: 'Default B', pinned: false },
+  ], 'agent-b');
+
+  const store = useChatStore();
+  const sent = [];
+  store.currentAgent = 'agent-a';
+  store.pinnedSessions = ['session_default'];
+  store.sendWsMessage = (msg) => sent.push(msg);
+
+  store.togglePin('session_default', {
+    sessionKind: 'yeaft',
+    agentId: 'agent-b',
+    sessionName: 'Default B',
+    workDir: '/repo-b',
+  });
+
+  expect(sent).toEqual([{
+    type: 'pin_session',
+    conversationId: 'session_default',
+    sessionKind: 'yeaft',
+    agentId: 'agent-b',
+    sessionName: 'Default B',
+    workDir: '/repo-b',
+  }]);
+  expect(sessions.sessionById('session_default', 'agent-a')?.pinned).toBe(true);
+  expect(sessions.sessionById('session_default', 'agent-b')?.pinned).toBe(true);
+
+  store.togglePin('session_default', {
+    sessionKind: 'yeaft',
+    agentId: 'agent-b',
+    sessionName: 'Default B',
+    workDir: '/repo-b',
+  });
+
+  expect(sent[1]).toMatchObject({
+    type: 'unpin_session',
+    conversationId: 'session_default',
+    agentId: 'agent-b',
+  });
+  expect(sessions.sessionById('session_default', 'agent-a')?.pinned).toBe(true);
+  expect(sessions.sessionById('session_default', 'agent-b')?.pinned).toBe(false);
+});
+
+it('passes clicked agent id through YeaftSidebar row actions', () => {
+  const calls = [];
+  const emits = [];
+  const component = {
+    groupMenu: { open: true, groupId: 'session_default' },
+    store: { currentAgent: 'agent-a' },
+    chatStore: {
+      togglePin(...args) { calls.push(['pin', ...args]); },
+      sessionCrudRequest(...args) { calls.push(['crud', ...args]); },
+    },
+    $emit(...args) { emits.push(args); },
+  };
+  const row = { id: 'session_default', agentId: 'agent-b', name: 'Default B', workDir: '/repo-b' };
+
+  YeaftSidebar.methods.onTogglePin.call(component, row);
+  YeaftSidebar.methods.onRemoveFromList.call(component, row);
+  YeaftSidebar.methods.openGroupSettings.call(component, row, 'session');
+
+  expect(calls[0]).toEqual(['pin', 'session_default', {
+    sessionKind: 'yeaft',
+    agentId: 'agent-b',
+    sessionName: 'Default B',
+    workDir: '/repo-b',
+    pinned: false,
+  }]);
+  expect(calls[1]).toEqual(['crud', 'archive', { sessionId: 'session_default' }, { agentId: 'agent-b' }]);
+  expect(emits).toEqual([['open-group-settings', { sessionId: 'session_default', agentId: 'agent-b', section: 'session' }]]);
+});
+
+it('opens duplicate-id settings against the selected agent row and routes mutations to that agent', async () => {
+  const sessions = useSessionsStore();
+  sessions.applySnapshot([
+    { id: 'session_default', name: 'Default A', announcement: 'A' },
+  ], 'agent-a');
+  sessions.applySnapshot([
+    { id: 'session_default', name: 'Default B', announcement: 'B' },
+  ], 'agent-b');
+  const requests = [];
+  const modal = {
+    groupId: 'session_default',
+    agentId: 'agent-b',
+    chat: {
+      currentAgent: 'agent-a',
+      sessionCrudRequest(op, data, opts) {
+        requests.push({ op, data, opts });
+        return Promise.resolve({ ok: true });
+      },
+    },
+    sessionsStore: sessions,
+    announcementDraft: 'next',
+    announcementBusy: false,
+    announcementError: '',
+    renameDraft: 'Renamed B',
+    renameBusy: false,
+    renameError: '',
+    membersBusy: false,
+    membersError: '',
+    deleteBusy: false,
+    deleteError: '',
+    deleteConfirmText: 'Default B',
+    requestClose: vi.fn(),
+    $t: (_key, params) => params?.message || params?.error || '',
+  };
+  Object.defineProperty(modal, 'group', { get: () => SessionSettingsModal.computed.group.call(modal) });
+  Object.defineProperty(modal, 'targetAgentId', { get: () => SessionSettingsModal.computed.targetAgentId.call(modal) });
+  Object.defineProperty(modal, 'groupDisplayName', { get: () => SessionSettingsModal.computed.groupDisplayName.call(modal) });
+  Object.defineProperty(modal, 'defaultVpId', { get: () => SessionSettingsModal.computed.defaultVpId.call(modal) });
+  Object.defineProperty(modal, 'deleteConfirmReady', { get: () => SessionSettingsModal.computed.deleteConfirmReady.call(modal) });
+
+  expect(modal.group.name).toBe('Default B');
+
+  await SessionSettingsModal.methods.saveAnnouncement.call(modal);
+  await SessionSettingsModal.methods.saveRename.call(modal);
+  await SessionSettingsModal.methods.toggleMember.call(modal, 'linus', true);
+  await SessionSettingsModal.methods.confirmDelete.call(modal);
+
+  expect(requests).toEqual([
+    { op: 'update', data: { sessionId: 'session_default', patch: { announcement: 'next' } }, opts: { agentId: 'agent-b' } },
+    { op: 'rename', data: { sessionId: 'session_default', name: 'Renamed B' }, opts: { agentId: 'agent-b' } },
+    { op: 'add_member', data: { sessionId: 'session_default', vpId: 'linus' }, opts: { agentId: 'agent-b' } },
+    { op: 'set_default_vp', data: { sessionId: 'session_default', vpId: 'linus' }, opts: { agentId: 'agent-b' } },
+    { op: 'delete', data: { sessionId: 'session_default' }, opts: { agentId: 'agent-b' } },
+  ]);
 });
 
 it('treats explicit pinned false from the server as authoritative on reload', () => {
@@ -489,14 +700,14 @@ it('treats explicit pinned false from the server as authoritative on reload', ()
   store.applySnapshot([
     { id: 'session-a', name: 'A', pinned: true },
   ], 'agent-1');
-  expect(store.sessions['session-a'].pinned).toBe(true);
+  expect(store.sessionById('session-a', 'agent-1').pinned).toBe(true);
   expect(chatStore.pinnedSessions).toContain('session-a');
 
   store.applySnapshot([
     { id: 'session-a', name: 'A', pinned: false },
   ], 'agent-1');
 
-  expect(store.sessions['session-a'].pinned).toBe(false);
+  expect(store.sessionById('session-a', 'agent-1').pinned).toBe(false);
   expect(chatStore.pinnedSessions).not.toContain('session-a');
 });
 

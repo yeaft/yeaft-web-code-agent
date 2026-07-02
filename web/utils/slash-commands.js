@@ -52,15 +52,20 @@ export function resolveDynamicSlashCommands(store, conversationId, agentId) {
 
 /**
  * Determine the group for a slash command.
- * @param {string} cmd - Command with / prefix, e.g. "/yeaft-skills:sprint"
+ * @param {string} cmd - Command with / prefix, e.g. "/review-code"
+ * @param {object} [dynamicDescriptions] - command descriptions keyed by bare name
+ * @param {Set<string>} [dynamicCommandNames] - currently visible dynamic command names, without / prefix
  * @returns {'skill' | 'builtin' | 'project'}
  */
-export function getCommandGroup(cmd) {
+export function getCommandGroup(cmd, dynamicDescriptions = {}, dynamicCommandNames = new Set()) {
   if (BUILTIN_NAMES.has(cmd)) return 'builtin';
-  // Skill commands include both plugin-style names and Yeaft-native skill:<name>.
+  // Skill commands include legacy namespaced aliases and Yeaft's visible bare
+  // skill commands. Bare skills must be part of the current dynamic command
+  // list; descriptions are cumulative across reconnects/workDir switches.
   const bare = cmd.startsWith('/') ? cmd.slice(1) : cmd;
-  if (bare.startsWith('skill:') || bare.includes(':')) return 'skill';
-  // Other non-builtin commands (e.g. /update-config, /simplify) — treat as project skills
+  if (bare.startsWith('skill:') || bare.startsWith('yeaft-skills:')) return 'skill';
+  if (dynamicCommandNames.has(bare) && Object.prototype.hasOwnProperty.call(dynamicDescriptions || {}, bare)) return 'skill';
+  // Other non-builtin commands (e.g. /update-config, /simplify) — treat as project commands.
   return 'project';
 }
 
@@ -112,14 +117,21 @@ const GROUP_ORDER = { skill: 0, project: 1, builtin: 2 };
 /**
  * Build grouped commands for the autocomplete dropdown.
  * @param {Array<{cmd: string, desc: string}>} flatItems
+ * @param {object} [dynamicDescriptions] - command descriptions keyed by bare name
+ * @param {Array<string>} [dynamicCommands] - currently visible dynamic commands
  * @returns {Array<{label: string, items: Array, isLast: boolean}>}
  */
-export function buildGroupedCommands(flatItems) {
+export function buildGroupedCommands(flatItems, dynamicDescriptions = {}, dynamicCommands = []) {
   if (flatItems.length === 0) return [];
 
+  const dynamicCommandNames = new Set(
+    dynamicCommands
+      .filter(cmd => typeof cmd === 'string')
+      .map(cmd => cmd.startsWith('/') ? cmd.slice(1) : cmd)
+  );
   const groups = {};
   flatItems.forEach((item, i) => {
-    const group = getCommandGroup(item.cmd);
+    const group = getCommandGroup(item.cmd, item.descriptions || item.dynamicDescriptions || dynamicDescriptions, dynamicCommandNames);
     if (!groups[group]) groups[group] = [];
     groups[group].push({ ...item, flatIndex: i });
   });

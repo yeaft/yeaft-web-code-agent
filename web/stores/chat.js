@@ -98,10 +98,11 @@ function getSessionsStore() {
  *   3. `currentAgent` — the agent this client is bound to (also what the
  *      server falls back to). Used when no session id is given.
  */
-function resolveAgentIdForSession(state, sessionId) {
+function resolveAgentIdForSession(state, sessionId, explicitAgentId = null) {
+  if (explicitAgentId) return explicitAgentId;
   if (sessionId) {
     const gs = getSessionsStore();
-    const sess = gs && typeof gs.sessionById === 'function' ? gs.sessionById(sessionId) : null;
+    const sess = gs && typeof gs.sessionById === 'function' ? gs.sessionById(sessionId, state?.currentAgent || null) : null;
     if (sess && sess.agentId) return sess.agentId;
     const mapped = state?.yeaftSessionAgentById ? state.yeaftSessionAgentById[sessionId] : null;
     if (mapped) return mapped;
@@ -3761,9 +3762,12 @@ export const useChatStore = defineStore('chat', {
       return this.panels.some(p => p.conversationId === conversationId);
     },
     // ★ Session Pin
-    setSessionPinned(sessionId, pinned) {
+    setSessionPinned(sessionId, pinned, meta = {}) {
       if (!sessionId) return;
-      const isPinned = this.pinnedSessions.includes(sessionId);
+      const agentId = meta && meta.agentId ? meta.agentId : null;
+      const isPinned = agentId
+        ? !!(getSessionsStore()?.sessionById?.(sessionId, agentId)?.pinned)
+        : this.pinnedSessions.includes(sessionId);
       if (pinned && !isPinned) {
         this.pinnedSessions.unshift(sessionId);
       } else if (!pinned && isPinned) {
@@ -3780,15 +3784,19 @@ export const useChatStore = defineStore('chat', {
       // don't exist in that map.
       try {
         const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
-        if (gs && typeof gs.applyPinState === 'function') gs.applyPinState(sessionId, !!pinned);
+        const targetAgentId = resolveAgentIdForSession(this, sessionId, agentId);
+        if (gs && typeof gs.applyPinState === 'function') gs.applyPinState(sessionId, !!pinned, targetAgentId);
       } catch (_) { /* no sessions store in some tests */ }
     },
     togglePin(sessionId, meta = {}) {
-      const isPinned = this.pinnedSessions.includes(sessionId);
+      const agentId = meta && meta.agentId ? meta.agentId : null;
+      const row = agentId ? getSessionsStore()?.sessionById?.(sessionId, agentId) : null;
+      const hasExplicitPinned = meta && Object.prototype.hasOwnProperty.call(meta, 'pinned');
+      const isPinned = row ? !!row.pinned : (hasExplicitPinned ? !!meta.pinned : this.pinnedSessions.includes(sessionId));
       const nextPinned = !isPinned;
       // Optimistic local update; the server `session_pinned` ack reapplies
       // the authoritative state and updates Yeaft session row metadata.
-      this.setSessionPinned(sessionId, nextPinned);
+      this.setSessionPinned(sessionId, nextPinned, { agentId });
       const payload = {
         type: nextPinned ? 'pin_session' : 'unpin_session',
         conversationId: sessionId,

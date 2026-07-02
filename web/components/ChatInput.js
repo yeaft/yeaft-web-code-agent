@@ -244,7 +244,10 @@ export default {
     const mentionVpCandidates = Vue.computed(() => {
       if (!sessionsStore) return vpStore.vpList || [];
       const activeSessionId = store.yeaftActiveSessionFilter || sessionsStore.activeSessionId || null;
-      return selectMentionCandidates(vpStore.vpList, sessionsStore.sessions?.[activeSessionId]);
+      const activeSession = typeof sessionsStore.sessionById === 'function'
+        ? sessionsStore.sessionById(activeSessionId, store.currentAgent || null)
+        : sessionsStore.sessions?.[activeSessionId];
+      return selectMentionCandidates(vpStore.vpList, activeSession);
     });
 
     const selectVpMention = (vp) => {
@@ -342,7 +345,7 @@ export default {
     });
 
     // Grouped commands for rendering: [{ label, items: [{ cmd, desc, flatIndex }], isLast }]
-    const groupedCommands = Vue.computed(() => buildGroupedCommands(flatItems.value));
+    const groupedCommands = Vue.computed(() => buildGroupedCommands(flatItems.value, store.slashCommandDescriptions, availableCommands.value));
 
     // Keep filteredCommands as flat string array for keyboard nav compatibility
     const filteredCommands = Vue.computed(() => flatItems.value.map(item => item.cmd));

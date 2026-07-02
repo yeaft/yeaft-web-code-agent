@@ -93,9 +93,7 @@ export function makeSegment(raw) {
   const tags = Array.isArray(raw.tags)
     ? raw.tags.map(t => String(t).trim()).filter(Boolean)
     : [];
-  const sourceMessages = Array.isArray(raw.sourceMessages)
-    ? raw.sourceMessages.map(t => String(t).trim()).filter(Boolean)
-    : [];
+  const sourceMessages = normalizeSourceMessages(raw.sourceMessages);
 
   const now = new Date().toISOString();
   const createdAt = raw.createdAt || now;
@@ -103,6 +101,23 @@ export function makeSegment(raw) {
   const id = raw.id || computeSegmentId({ scope, kind, body });
 
   return { id, scope, kind, tags, sourceMessages, createdAt, updatedAt, body };
+}
+
+function normalizeSourceMessages(value) {
+  if (!Array.isArray(value)) return [];
+  const out = [];
+  for (const item of value) {
+    if (typeof item === 'string' || typeof item === 'number') {
+      const id = String(item).trim();
+      if (id && id !== '[object Object]') out.push(id);
+      continue;
+    }
+    if (item && typeof item === 'object') {
+      const id = String(item.id || item.messageId || item.uuid || '').trim();
+      if (id) out.push(id);
+    }
+  }
+  return out;
 }
 
 /**
