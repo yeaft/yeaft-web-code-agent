@@ -1,6 +1,43 @@
 import { WebSocket } from 'ws';
 import { userStatsDb } from '../database.js';
-import { agents, webClients } from '../context.js';
+import { agents, webClients, userStatsDeltas } from '../context.js';
+
+const toNumber = (value) => Number(value) || 0;
+
+function mergePendingUserStats(stats) {
+  const byUser = new Map(stats.map(row => [row.user_id, { ...row }]));
+  for (const [userId, delta] of userStatsDeltas) {
+    const row = byUser.get(userId);
+    if (!row) {
+      byUser.set(userId, {
+        user_id: userId,
+        username: userId,
+        display_name: userId,
+        role: 'pro',
+        last_login_at: null,
+        updated_at: Date.now(),
+        message_count: toNumber(delta.messages),
+        session_count: toNumber(delta.sessions),
+        request_count: toNumber(delta.requests),
+        bytes_sent: toNumber(delta.bytesSent),
+        bytes_received: toNumber(delta.bytesReceived),
+      });
+      continue;
+    }
+    row.message_count = toNumber(row.message_count) + toNumber(delta.messages);
+    row.session_count = toNumber(row.session_count) + toNumber(delta.sessions);
+    row.request_count = toNumber(row.request_count) + toNumber(delta.requests);
+    row.bytes_sent = toNumber(row.bytes_sent) + toNumber(delta.bytesSent);
+    row.bytes_received = toNumber(row.bytes_received) + toNumber(delta.bytesReceived);
+  }
+  return Array.from(byUser.values());
+}
+
+function pendingTodayMessages() {
+  let count = 0;
+  for (const delta of userStatsDeltas.values()) count += toNumber(delta.messages);
+  return count;
+}
 
 /**
  * Register admin-only REST API routes for the dashboard.
@@ -28,7 +65,7 @@ export function registerAdminRoutes(app, { requireAuth, requireAdmin }) {
         onlineUsers: onlineUsers.size,
         onlineAgents,
         todayActiveUsers: userStatsDb.getTodayActiveUsers(),
-        todayMessages: userStatsDb.getTodayMessages()
+        todayMessages: userStatsDb.getTodayMessages() + pendingTodayMessages()
       });
     } catch (e) {
       console.error('[Admin] Dashboard error:', e.message);
@@ -41,7 +78,7 @@ export function registerAdminRoutes(app, { requireAuth, requireAdmin }) {
     try {
       const period = req.query.period || 'all';
       const validPeriods = ['today', 'week', 'month', 'all'];
-      const stats = userStatsDb.getByPeriod(validPeriods.includes(period) ? period : 'all');
+      const stats = mergePendingUserStats(userStatsDb.getByPeriod(validPeriods.includes(period) ? period : 'all'));
       res.json(stats.map(s => ({
         userId: s.user_id,
         username: s.username,

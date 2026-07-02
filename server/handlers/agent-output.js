@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { messageDb, yeaftSessionDb } from '../database.js';
 import { broadcastAgentList, forwardToClients, sendToWebClient } from '../ws-utils.js';
-import { trackMessage, webClients, previewFiles } from '../context.js';
+import { webClients, previewFiles } from '../context.js';
 import { CONFIG } from '../config.js';
 import { recordPerfTraceEvent } from '../perf-trace.js';
 
@@ -113,8 +113,8 @@ export async function handleAgentOutput(agentId, agent, msg) {
               if (clientMessageId) {
                 msg.data.clientMessageId = clientMessageId;
               }
-              // Track user message count for stats
-              trackMessage(conv?.userId || agent?.ownerId);
+              // User-turn stats are recorded at the web send boundary so
+              // inbound payload bytes are counted exactly once.
             }
           }
           if (data.type === 'assistant' && data.message?.content) {

@@ -30,7 +30,7 @@ export default {
           </div>
           <div class="db-stat-card">
             <div class="db-stat-value">{{ formatNumber(overview.todayMessages) }}</div>
-            <div class="db-stat-label">{{ $t('settings.dashboard.todayMessages') }}</div>
+            <div class="db-stat-label">{{ $t('settings.dashboard.todayUserTurns') }}</div>
           </div>
         </div>
 
@@ -62,7 +62,7 @@ export default {
                     <span class="db-sort-arrow" v-if="userSort.field === 'username'">{{ userSort.order === 'asc' ? '▲' : '▼' }}</span>
                   </th>
                   <th class="db-cell-num db-th-sort" @click="toggleSort('user', 'messageCount')">
-                    {{ $t('settings.dashboard.messages') }}
+                    {{ $t('settings.dashboard.userTurns') }}
                     <span class="db-sort-arrow" v-if="userSort.field === 'messageCount'">{{ userSort.order === 'asc' ? '▲' : '▼' }}</span>
                   </th>
                   <th class="db-cell-num db-th-sort" @click="toggleSort('user', 'sessionCount')">
@@ -104,7 +104,7 @@ export default {
             <div class="db-user-card" v-for="user in pagedUserStats" :key="'m-' + user.username">
               <div class="db-user-card-name">{{ user.username }}</div>
               <div class="db-user-card-stats">
-                <span>{{ $t('settings.dashboard.messages') }} {{ formatNumber(user.messageCount) }}</span>
+                <span>{{ $t('settings.dashboard.userTurns') }} {{ formatNumber(user.messageCount) }}</span>
                 <span>·</span>
                 <span>{{ $t('settings.dashboard.sessions') }} {{ formatNumber(user.sessionCount) }}</span>
               </div>

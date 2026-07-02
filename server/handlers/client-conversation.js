@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { CONFIG } from '../config.js';
 import { sessionDb, messageDb, userDb, yeaftSessionDb } from '../database.js';
-import { agents, pendingFiles } from '../context.js';
+import { agents, pendingFiles, trackUserTurn } from '../context.js';
 import {
   sendToWebClient, forwardToAgent,
   broadcastAgentList, verifyConversationOwnership, verifyAgentOwnership
@@ -550,6 +550,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       }
 
       if (convInfo) convInfo.processing = true;
+      trackUserTurn(client.userId, Buffer.byteLength(JSON.stringify(msg)));
 
       // 暂存 expertSelections 供 agent-output 保存 user 消息时使用
       if (msg.expertSelections?.length > 0 && convInfo) {
@@ -1059,6 +1060,9 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         // router is the authoritative consumer of the payload shape.
         const { agentId: _discard, ...rest } = msg;
         rest.type = relayType;
+        if (rest.type === 'yeaft_session_send' || rest.type === 'yeaft_session_chat') {
+          trackUserTurn(client.userId, Buffer.byteLength(JSON.stringify(msg)));
+        }
 
         if (rest.type === 'yeaft_session_chat' && !rest.id) {
           rest.id = `u_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
