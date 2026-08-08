@@ -1,6 +1,7 @@
 import { readdir, stat } from 'fs/promises';
 import { join, relative, resolve } from 'path';
 import ctx from '../context.js';
+import { sendWorkbenchResult } from './request-routing.js';
 
 export async function handleFileSearch(msg) {
   const { conversationId, query, _requestUserId } = msg;
@@ -10,7 +11,7 @@ export async function handleFileSearch(msg) {
 
   try {
     if (!query || query.trim().length === 0) {
-      ctx.sendToServer({ type: 'file_search_result', conversationId, _requestUserId, query, results: [] });
+      sendWorkbenchResult(ctx, msg, { type: 'file_search_result', conversationId, _requestUserId, query, results: [] });
       return;
     }
 
@@ -51,7 +52,7 @@ export async function handleFileSearch(msg) {
 
     await walk(resolved, 0);
 
-    ctx.sendToServer({
+    sendWorkbenchResult(ctx, msg, {
       type: 'file_search_result',
       conversationId,
       _requestUserId,
@@ -60,6 +61,6 @@ export async function handleFileSearch(msg) {
       truncated: results.length >= MAX_RESULTS
     });
   } catch (e) {
-    ctx.sendToServer({ type: 'file_search_result', conversationId, _requestUserId, query, results: [], error: e.message });
+    sendWorkbenchResult(ctx, msg, { type: 'file_search_result', conversationId, _requestUserId, query, results: [], error: e.message });
   }
 }

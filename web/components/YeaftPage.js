@@ -645,11 +645,16 @@ export default {
       }, 260);
     };
 
-    // task-340: Workbench capability gate — matches ChatPage.canUseWorkbench
-    // semantics via store.hasCapability. store.workbenchExpanded and
-    // workbenchMaximized are already shared across Chat/Yeaft pages.
+    // Workbench is Agent-owned, not a chat-provider feature. Browser requires
+    // the complete advertised Phase 1 surface before the entry is considered usable.
     const canUseWorkbench = Vue.computed(() =>
-      store.hasCapability('terminal') || store.hasCapability('file_editor')
+      store.hasCapability('terminal')
+      || store.hasCapability('file_editor')
+      || (
+        store.hasCapability('browser_runtime')
+        && store.hasCapability('browser_webrtc')
+        && (store.hasCapability('browser_capture_tab') || store.hasCapability('browser_capture_cdp'))
+      )
     );
 
     // task-341: V2 sidebar is the only sidebar; flag kept as constant

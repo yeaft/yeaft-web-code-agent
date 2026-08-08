@@ -1,130 +1,200 @@
 import { randomUUID } from 'crypto';
-import { previewFiles, webClients } from '../context.js';
+import { CONFIG } from '../config.js';
+import { agents, previewFiles, webClients } from '../context.js';
 import {
-  sendToWebClient, forwardToClients,
-  setCachedDir, invalidateParentDirCache, clearAgentDirCache
+  sendToAgent,
+  sendToWebClient,
+  setCachedDir,
+  invalidateParentDirCache,
+  clearAgentDirCache,
 } from '../ws-utils.js';
+import {
+  currentWorkbenchWorkspaceGeneration,
+  workbenchRouteKeyFromConversationId,
+} from '../workbench-route.js';
+import {
+  consumeWorkbenchRequest,
+  deleteWorkbenchTerminalOwner,
+  getWorkbenchTerminalOwner,
+  registerWorkbenchTerminalOwner,
+} from '../workbench-correlation.js';
+
+function stripAgentRouting(msg) {
+  const {
+    _requestClientId: _ignoredClientId,
+    _requestUserId: _ignoredUserId,
+    _workbenchRequestId: _ignoredRequestId,
+    workbenchRouteKey: _ignoredRouteKey,
+    workbenchWorkspaceGeneration: _ignoredGeneration,
+    ...visible
+  } = msg || {};
+  return visible;
+}
+
+function pendingResponse(agentId, msg, pending) {
+  const { requestId: _agentRequestId, ...visible } = stripAgentRouting(msg);
+  return {
+    ...visible,
+    agentId,
+    conversationId: pending.conversationId,
+    ...(pending.publicRequestId ? { requestId: pending.publicRequestId } : {}),
+    workbenchRouteKey: pending.routeKey,
+    workbenchWorkspaceGeneration: pending.workspaceGeneration,
+  };
+}
+
+async function sendToPendingClient(agentId, msg, pending) {
+  const client = webClients.get(pending?.clientId);
+  if (!client?.authenticated || client.userId !== pending?.userId) return false;
+  await sendToWebClient(client, pendingResponse(agentId, msg, pending));
+  return true;
+}
+
+async function forwardLegacyResponse(agentId, msg) {
+  const visible = { ...stripAgentRouting(msg), agentId };
+  const agent = agents.get(agentId);
+  const conversation = agent?.conversations?.get?.(visible.conversationId);
+  const ownerId = conversation?.userId || agent?.ownerId || null;
+  for (const [, client] of webClients) {
+    if (!client?.authenticated) continue;
+    const allowed = CONFIG.skipAuth
+      || (ownerId ? client.userId === ownerId : client.role === 'admin');
+    if (allowed) await sendToWebClient(client, visible);
+  }
+}
+
+function cacheBinaryPreview(msg) {
+  const fileId = randomUUID();
+  const token = randomUUID();
+  const filename = msg.filePath.split('/').pop() || 'file';
+  previewFiles.set(fileId, {
+    buffer: Buffer.from(msg.content, 'base64'),
+    mimeType: msg.mimeType,
+    filename,
+    createdAt: Date.now(),
+    token,
+  });
+  const { content: _binaryContent, ...projected } = msg;
+  return {
+    ...projected,
+    binary: true,
+    fileId,
+    previewToken: token,
+  };
+}
+
+async function handleTerminalResponse(agentId, msg, routeKey) {
+  const terminalId = msg.terminalId || null;
+  if (msg.type === 'terminal_created') {
+    const pending = consumeWorkbenchRequest({
+      agentId,
+      requestId: msg._workbenchRequestId,
+      responseType: msg.type,
+      routeKey,
+    });
+    if (!pending) {
+      const agentRecord = agents.get(agentId);
+      if (agentRecord && terminalId && msg.workbenchWorkspaceGeneration) {
+        await sendToAgent(agentRecord, {
+          type: 'terminal_close',
+          conversationId: msg.conversationId,
+          terminalId,
+          workbenchRouteKey: routeKey,
+          workbenchWorkspaceGeneration: msg.workbenchWorkspaceGeneration,
+        });
+      }
+      return;
+    }
+    if (pending.routeKey !== routeKey || pending.terminalId !== terminalId) {
+      deleteWorkbenchTerminalOwner(agentId, pending.terminalId);
+      return;
+    }
+    if (msg.success !== false) registerWorkbenchTerminalOwner({ ...pending, terminalId });
+    else deleteWorkbenchTerminalOwner(agentId, terminalId);
+    await sendToPendingClient(agentId, msg, pending);
+    return;
+  }
+
+  // Create errors carry the one-shot create correlation even though a
+  // terminal-id reservation already exists. Consume and release it first.
+  if (msg.type === 'terminal_error' && msg._workbenchRequestId) {
+    const pending = consumeWorkbenchRequest({
+      agentId,
+      requestId: msg._workbenchRequestId,
+      responseType: msg.type,
+      routeKey,
+    });
+    if (pending?.terminalId) deleteWorkbenchTerminalOwner(agentId, pending.terminalId);
+    if (pending?.routeKey === routeKey) await sendToPendingClient(agentId, msg, pending);
+    return;
+  }
+
+  const owner = terminalId ? getWorkbenchTerminalOwner(agentId, terminalId) : null;
+  if (owner) {
+    if (owner.routeKey !== routeKey) return;
+    await sendToPendingClient(agentId, msg, owner);
+    if (msg.type === 'terminal_closed') deleteWorkbenchTerminalOwner(agentId, terminalId);
+  }
+}
+
+async function handleOneShotResponse(agentId, msg, routeKey) {
+  const pending = consumeWorkbenchRequest({
+    agentId,
+    requestId: msg._workbenchRequestId,
+    responseType: msg.type,
+    routeKey,
+  });
+  if (!pending) return;
+  const currentGeneration = currentWorkbenchWorkspaceGeneration({
+    route: pending.route,
+    userId: pending.userId,
+    role: pending.role,
+  });
+  if (!currentGeneration || currentGeneration !== pending.workspaceGeneration) return;
+  const projected = msg.type === 'file_content' && msg.binary
+    ? cacheBinaryPreview(msg)
+    : msg;
+  await sendToPendingClient(agentId, projected, pending);
+}
 
 /**
- * Handle file, terminal, and git messages from agent.
- * Types: terminal_created, terminal_output, terminal_closed, terminal_error,
- *        file_content, file_saved, directory_listing, file_op_result,
- *        git_status_result, git_diff_result, git_op_result, file_search_result
+ * Handle file, terminal, and git messages from an Agent. Route-scoped replies
+ * are delivered only through Server-owned correlations. Agent-supplied client
+ * or user ids never select a browser recipient.
  */
-export async function handleAgentFileTerminal(agentId, agent, msg) {
-  switch (msg.type) {
-    // Terminal messages (forward to web clients)
-    case 'terminal_created':
-    case 'terminal_output':
-    case 'terminal_closed':
-    case 'terminal_error': {
-      const targetClient = msg._requestClientId ? webClients.get(msg._requestClientId) : null;
-      const targetMatchesUser = !msg._requestUserId || targetClient?.userId === msg._requestUserId;
-      if (targetClient?.authenticated && targetMatchesUser) {
-        const { _requestClientId, _requestUserId, ...cleanMsg } = msg;
-        await sendToWebClient(targetClient, cleanMsg);
-        break;
-      }
-      const { _requestClientId, ...fallbackMsg } = msg;
-      await forwardToClients(agentId, msg.conversationId, fallbackMsg);
-      break;
-    }
+export async function handleAgentFileTerminal(agentId, agent, rawMsg) {
+  const msg = rawMsg || {};
+  const routeKey = workbenchRouteKeyFromConversationId(msg.conversationId, agentId);
+  const terminalTypes = new Set([
+    'terminal_created', 'terminal_output', 'terminal_closed', 'terminal_error',
+  ]);
+  const oneShotTypes = new Set([
+    'file_content', 'file_saved', 'directory_listing', 'file_op_result',
+    'git_status_result', 'git_diff_result', 'git_op_result', 'file_search_result',
+  ]);
+  if (!terminalTypes.has(msg.type) && !oneShotTypes.has(msg.type)) return false;
 
-    // File operation messages
-    case 'file_content': {
-      let fwdMsg = { ...msg, agentId };
-      if (msg.binary) {
-        // Binary file: cache on server, forward fileId instead of base64 content
-        const fileId = randomUUID();
-        const token = randomUUID();
-        const filename = msg.filePath.split('/').pop() || 'file';
-        previewFiles.set(fileId, {
-          buffer: Buffer.from(msg.content, 'base64'),
-          mimeType: msg.mimeType,
-          filename,
-          createdAt: Date.now(),
-          token
-        });
-        console.log(`[Server] Cached binary preview: fileId=${fileId}, mime=${msg.mimeType}, path=${msg.filePath}`);
-        fwdMsg = {
-          type: 'file_content',
-          agentId,
-          conversationId: msg.conversationId,
-          requestId: msg.requestId,
-          _requestUserId: msg._requestUserId,
-          _requestClientId: msg._requestClientId,
-          filePath: msg.filePath,
-          requestedFilePath: msg.requestedFilePath,
-          binary: true,
-          fileId,
-          previewToken: token,
-          mimeType: msg.mimeType
-        };
-      } else {
-        console.log(`[Server] Forwarding file_content to clients, conv=${msg.conversationId}, path=${msg.filePath}`);
-      }
-      const targetClient = fwdMsg._requestClientId ? webClients.get(fwdMsg._requestClientId) : null;
-      const targetMatchesUser = !fwdMsg._requestUserId || targetClient?.userId === fwdMsg._requestUserId;
-      if (targetClient?.authenticated && targetMatchesUser) {
-        const { _requestClientId, _requestUserId, ...cleanMsg } = fwdMsg;
-        await sendToWebClient(targetClient, cleanMsg);
-      } else {
-        const { _requestClientId, ...fallbackMsg } = fwdMsg;
-        await forwardToClients(agentId, msg.conversationId, fallbackMsg);
-      }
-      break;
-    }
-
-    case 'file_saved': {
-      // Phase 4: 文件保存后失效父目录缓存
-      invalidateParentDirCache(agentId, msg.filePath);
-      const fwdMsg = { ...msg, agentId };
-      const targetClient = msg._requestClientId ? webClients.get(msg._requestClientId) : null;
-      const targetMatchesUser = !msg._requestUserId || targetClient?.userId === msg._requestUserId;
-      if (targetClient?.authenticated && targetMatchesUser) {
-        const { _requestClientId, _requestUserId, ...cleanMsg } = fwdMsg;
-        await sendToWebClient(targetClient, cleanMsg);
-      } else {
-        const { _requestClientId, ...fallbackMsg } = fwdMsg;
-        await forwardToClients(agentId, msg.conversationId, fallbackMsg);
-      }
-      break;
-    }
-
-    case 'directory_listing': {
-      // Phase 4: 缓存目录列表结果
-      if (msg.dirPath && msg.entries && !msg.error) {
-        setCachedDir(agentId, msg.dirPath, msg.entries);
-      }
-      // 优先定向发送给请求者
-      const dirTargetClientId = msg._requestClientId;
-      if (dirTargetClientId) {
-        const targetClient = webClients.get(dirTargetClientId);
-        if (targetClient?.authenticated) {
-          const { _requestClientId, ...cleanMsg } = msg;
-          await sendToWebClient(targetClient, cleanMsg);
-          break;
-        }
-      }
-      await forwardToClients(agentId, msg.conversationId, msg);
-      break;
-    }
-
-    case 'file_op_result':
-      // Phase 4: 文件创建/删除/移动 — 清空该 agent 的所有目录缓存
-      clearAgentDirCache(agentId);
-      await forwardToClients(agentId, msg.conversationId, msg);
-      break;
-
-    case 'git_status_result':
-    case 'git_diff_result':
-    case 'git_op_result':
-    case 'file_search_result':
-      await forwardToClients(agentId, msg.conversationId, msg);
-      break;
-
-    default:
-      return false; // Not handled
+  if (msg.type === 'file_saved') invalidateParentDirCache(agentId, msg.filePath);
+  if (msg.type === 'file_op_result') clearAgentDirCache(agentId);
+  if (msg.type === 'directory_listing' && msg.dirPath && msg.entries && !msg.error) {
+    setCachedDir(agentId, msg.dirPath, msg.entries);
   }
-  return true; // Handled
+
+  if (routeKey) {
+    if (terminalTypes.has(msg.type)) await handleTerminalResponse(agentId, msg, routeKey);
+    else await handleOneShotResponse(agentId, msg, routeKey);
+    return true;
+  }
+
+  // `_workbench:` is reserved for Server-authored route conversations. An
+  // invalid or cross-Agent value is not a legacy conversation.
+  if (typeof msg.conversationId === 'string' && msg.conversationId.startsWith('_workbench:')) {
+    return true;
+  }
+
+  const projected = msg.type === 'file_content' && msg.binary
+    ? cacheBinaryPreview(msg)
+    : msg;
+  await forwardLegacyResponse(agentId, projected);
+  return true;
 }

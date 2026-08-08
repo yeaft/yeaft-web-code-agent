@@ -2,6 +2,7 @@ import { readFile, writeFile } from 'fs/promises';
 import { join, resolve } from 'path';
 import ctx from '../context.js';
 import { execAsync, resolveAndValidatePath, getGitRoot, validateGitPath } from './utils.js';
+import { sendWorkbenchResult } from './request-routing.js';
 
 export async function handleGitStatus(msg) {
   const { conversationId, _requestUserId } = msg;
@@ -58,7 +59,7 @@ export async function handleGitStatus(msg) {
       files.push({ path: displayPath, indexStatus, workTreeStatus });
     }
 
-    ctx.sendToServer({
+    sendWorkbenchResult(ctx, msg, {
       type: 'git_status_result',
       conversationId,
       _requestUserId,
@@ -70,7 +71,7 @@ export async function handleGitStatus(msg) {
       gitRoot
     });
   } catch (e) {
-    ctx.sendToServer({
+    sendWorkbenchResult(ctx, msg, {
       type: 'git_status_result',
       conversationId,
       _requestUserId,
@@ -88,7 +89,7 @@ export async function handleGitDiff(msg) {
   try {
     // 安全检查：验证 filePath 不包含 shell 注入字符
     if (!filePath || /[`$;|&><!\n\r]/.test(filePath)) {
-      ctx.sendToServer({
+      sendWorkbenchResult(ctx, msg, {
         type: 'git_diff_result',
         conversationId,
         _requestUserId,
@@ -114,7 +115,7 @@ export async function handleGitDiff(msg) {
       const fullPath = resolve(gitRoot, filePath);
       const resolved = resolveAndValidatePath(fullPath, gitRoot);
       const content = await readFile(resolved, 'utf-8');
-      ctx.sendToServer({
+      sendWorkbenchResult(ctx, msg, {
         type: 'git_diff_result',
         conversationId,
         _requestUserId,
@@ -148,7 +149,7 @@ export async function handleGitDiff(msg) {
         windowsHide: true
       });
       if (cachedOut.trim()) {
-        ctx.sendToServer({
+        sendWorkbenchResult(ctx, msg, {
           type: 'git_diff_result',
           conversationId,
           _requestUserId,
@@ -167,7 +168,7 @@ export async function handleGitDiff(msg) {
         windowsHide: true
       });
       if (wtOut.trim()) {
-        ctx.sendToServer({
+        sendWorkbenchResult(ctx, msg, {
           type: 'git_diff_result',
           conversationId,
           _requestUserId,
@@ -179,7 +180,7 @@ export async function handleGitDiff(msg) {
       }
     }
 
-    ctx.sendToServer({
+    sendWorkbenchResult(ctx, msg, {
       type: 'git_diff_result',
       conversationId,
       _requestUserId,
@@ -188,7 +189,7 @@ export async function handleGitDiff(msg) {
       diff: stdout
     });
   } catch (e) {
-    ctx.sendToServer({
+    sendWorkbenchResult(ctx, msg, {
       type: 'git_diff_result',
       conversationId,
       _requestUserId,
@@ -210,15 +211,15 @@ export async function handleGitAdd(msg) {
       await execAsync('git add -A', { cwd: gitRoot, timeout: 10000, windowsHide: true });
     } else {
       if (!validateGitPath(filePath)) {
-        ctx.sendToServer({ type: 'git_op_result', conversationId, _requestUserId, operation: 'add', success: false, error: 'Invalid file path' });
+        sendWorkbenchResult(ctx, msg, { type: 'git_op_result', conversationId, _requestUserId, operation: 'add', success: false, error: 'Invalid file path' });
         return;
       }
       await execAsync(`git add -- "${filePath}"`, { cwd: gitRoot, timeout: 10000, windowsHide: true });
     }
 
-    ctx.sendToServer({ type: 'git_op_result', conversationId, _requestUserId, operation: 'add', success: true, message: addAll ? 'All files staged' : `Staged: ${filePath}` });
+    sendWorkbenchResult(ctx, msg, { type: 'git_op_result', conversationId, _requestUserId, operation: 'add', success: true, message: addAll ? 'All files staged' : `Staged: ${filePath}` });
   } catch (e) {
-    ctx.sendToServer({ type: 'git_op_result', conversationId, _requestUserId, operation: 'add', success: false, error: e.message });
+    sendWorkbenchResult(ctx, msg, { type: 'git_op_result', conversationId, _requestUserId, operation: 'add', success: false, error: e.message });
   }
 }
 
@@ -234,15 +235,15 @@ export async function handleGitReset(msg) {
       await execAsync('git reset HEAD', { cwd: gitRoot, timeout: 10000, windowsHide: true });
     } else {
       if (!validateGitPath(filePath)) {
-        ctx.sendToServer({ type: 'git_op_result', conversationId, _requestUserId, operation: 'reset', success: false, error: 'Invalid file path' });
+        sendWorkbenchResult(ctx, msg, { type: 'git_op_result', conversationId, _requestUserId, operation: 'reset', success: false, error: 'Invalid file path' });
         return;
       }
       await execAsync(`git reset HEAD -- "${filePath}"`, { cwd: gitRoot, timeout: 10000, windowsHide: true });
     }
 
-    ctx.sendToServer({ type: 'git_op_result', conversationId, _requestUserId, operation: 'reset', success: true, message: resetAll ? 'All files unstaged' : `Unstaged: ${filePath}` });
+    sendWorkbenchResult(ctx, msg, { type: 'git_op_result', conversationId, _requestUserId, operation: 'reset', success: true, message: resetAll ? 'All files unstaged' : `Unstaged: ${filePath}` });
   } catch (e) {
-    ctx.sendToServer({ type: 'git_op_result', conversationId, _requestUserId, operation: 'reset', success: false, error: e.message });
+    sendWorkbenchResult(ctx, msg, { type: 'git_op_result', conversationId, _requestUserId, operation: 'reset', success: false, error: e.message });
   }
 }
 
@@ -253,15 +254,15 @@ export async function handleGitRestore(msg) {
 
   try {
     if (!validateGitPath(filePath)) {
-      ctx.sendToServer({ type: 'git_op_result', conversationId, _requestUserId, operation: 'restore', success: false, error: 'Invalid file path' });
+      sendWorkbenchResult(ctx, msg, { type: 'git_op_result', conversationId, _requestUserId, operation: 'restore', success: false, error: 'Invalid file path' });
       return;
     }
 
     const gitRoot = await getGitRoot(workDir);
     await execAsync(`git restore -- "${filePath}"`, { cwd: gitRoot, timeout: 10000, windowsHide: true });
-    ctx.sendToServer({ type: 'git_op_result', conversationId, _requestUserId, operation: 'restore', success: true, message: `Restored: ${filePath}` });
+    sendWorkbenchResult(ctx, msg, { type: 'git_op_result', conversationId, _requestUserId, operation: 'restore', success: true, message: `Restored: ${filePath}` });
   } catch (e) {
-    ctx.sendToServer({ type: 'git_op_result', conversationId, _requestUserId, operation: 'restore', success: false, error: e.message });
+    sendWorkbenchResult(ctx, msg, { type: 'git_op_result', conversationId, _requestUserId, operation: 'restore', success: false, error: e.message });
   }
 }
 
@@ -272,7 +273,7 @@ export async function handleGitCommit(msg) {
 
   try {
     if (!commitMessage || !commitMessage.trim()) {
-      ctx.sendToServer({ type: 'git_op_result', conversationId, _requestUserId, operation: 'commit', success: false, error: 'Commit message is required' });
+      sendWorkbenchResult(ctx, msg, { type: 'git_op_result', conversationId, _requestUserId, operation: 'commit', success: false, error: 'Commit message is required' });
       return;
     }
 
@@ -286,13 +287,13 @@ export async function handleGitCommit(msg) {
       const { stdout } = await execAsync(`git commit -F "${tmpFile}"`, {
         cwd: gitRoot, timeout: 30000, windowsHide: true
       });
-      ctx.sendToServer({ type: 'git_op_result', conversationId, _requestUserId, operation: 'commit', success: true, message: stdout.trim() });
+      sendWorkbenchResult(ctx, msg, { type: 'git_op_result', conversationId, _requestUserId, operation: 'commit', success: true, message: stdout.trim() });
     } finally {
       // Clean up temp file
       try { await writeFile(tmpFile, '', 'utf8'); } catch {}
     }
   } catch (e) {
-    ctx.sendToServer({ type: 'git_op_result', conversationId, _requestUserId, operation: 'commit', success: false, error: e.stderr?.trim() || e.message });
+    sendWorkbenchResult(ctx, msg, { type: 'git_op_result', conversationId, _requestUserId, operation: 'commit', success: false, error: e.stderr?.trim() || e.message });
   }
 }
 
@@ -306,8 +307,8 @@ export async function handleGitPush(msg) {
     const { stdout, stderr } = await execAsync('git push', {
       cwd: gitRoot, timeout: 60000, windowsHide: true
     });
-    ctx.sendToServer({ type: 'git_op_result', conversationId, _requestUserId, operation: 'push', success: true, message: (stdout + '\n' + stderr).trim() || 'Push complete' });
+    sendWorkbenchResult(ctx, msg, { type: 'git_op_result', conversationId, _requestUserId, operation: 'push', success: true, message: (stdout + '\n' + stderr).trim() || 'Push complete' });
   } catch (e) {
-    ctx.sendToServer({ type: 'git_op_result', conversationId, _requestUserId, operation: 'push', success: false, error: e.stderr?.trim() || e.message });
+    sendWorkbenchResult(ctx, msg, { type: 'git_op_result', conversationId, _requestUserId, operation: 'push', success: false, error: e.stderr?.trim() || e.message });
   }
 }

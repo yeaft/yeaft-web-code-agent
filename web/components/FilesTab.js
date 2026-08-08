@@ -8,11 +8,19 @@ import { createQuickOpen } from './files/quickOpen.js';
 import { createFolderPicker } from './files/folderPicker.js';
 import { createFileTabs } from './files/fileTabs.js';
 import { createWsHandler } from './files/wsHandler.js';
+import { createRouteBoundWorkbenchStore } from '../utils/workbench-route.js';
 
 export default {
   name: 'FilesTab',
   props: {
     treeInitiallyVisible: { type: Boolean, default: true },
+    routeKey: { type: String, required: true },
+    runtimeProvider: { type: String, required: true },
+    agentId: { type: String, required: true },
+    sessionId: { type: String, required: true },
+    conversationId: { type: String, required: true },
+    workDir: { type: String, default: '' },
+    workspaceGeneration: { type: String, required: true },
   },
   template: `
     <div class="files-tab file-two-col" :class="{ 'mobile-editor-view': isMobile && mobileView === 'editor', 'tree-collapsed': !treeVisible }" ref="rootEl">
@@ -476,8 +484,9 @@ export default {
     </div>
   `,
   setup(props) {
-    const store = Pinia.useChatStore();
+    const store = createRouteBoundWorkbenchStore(Pinia.useChatStore(), props);
     const t = Vue.inject('t');
+    const capabilityActive = Vue.ref(true);
     const treeVisible = Vue.ref(props.treeInitiallyVisible);
 
     // --- Shared utilities ---
@@ -646,7 +655,9 @@ export default {
       tree, fp, qo, ops,
       mdPreviewMode: preview.mdPreviewMode,
       renderOfficeLocal: preview.renderOfficeLocal,
-      editorContainer, debugStatus: editor.debugStatus
+      editorContainer, debugStatus: editor.debugStatus,
+      routeKey: props.routeKey,
+      workspaceGeneration: props.workspaceGeneration,
     });
 
     // --- Wrapped operation callbacks (pass t at init time) ---
@@ -718,6 +729,7 @@ export default {
 
     // --- Global keyboard shortcuts ---
     const handleGlobalKeydown = (e) => {
+      if (!capabilityActive.value) return;
       const isVisible = rootEl.value && rootEl.value.offsetParent !== null;
       if (!isVisible && !qo.quickOpenVisible.value && !qo.goToLineVisible.value && !find.findBarVisible.value) return;
 
@@ -759,7 +771,7 @@ export default {
     // --- Lifecycle ---
     Vue.onMounted(() => {
       window.addEventListener('workbench-message', ws.handleWorkbenchMessage);
-      window.addEventListener('open-file-in-explorer', ws.handleOpenFile);
+      window.addEventListener('workbench-open-file-in-active-view', ws.handleOpenFile);
       window.addEventListener('conversation-deleted', tabs.handleConversationDeleted);
       window.addEventListener('keydown', handleGlobalKeydown);
       document.addEventListener('click', handleDocumentClick);
@@ -771,9 +783,21 @@ export default {
       }
     });
 
+    Vue.onActivated(() => {
+      capabilityActive.value = true;
+    });
+
+    Vue.onDeactivated(() => {
+      capabilityActive.value = false;
+      qo.closeQuickOpen();
+      qo.closeGoToLine();
+      find.closeFindBar();
+      ops.hideContextMenu();
+    });
+
     Vue.onUnmounted(() => {
       window.removeEventListener('workbench-message', ws.handleWorkbenchMessage);
-      window.removeEventListener('open-file-in-explorer', ws.handleOpenFile);
+      window.removeEventListener('workbench-open-file-in-active-view', ws.handleOpenFile);
       window.removeEventListener('conversation-deleted', tabs.handleConversationDeleted);
       window.removeEventListener('keydown', handleGlobalKeydown);
       document.removeEventListener('click', handleDocumentClick);

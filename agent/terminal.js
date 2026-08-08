@@ -62,19 +62,68 @@ function terminalRoutingFields(source) {
   return {
     ...(source?._requestUserId ? { _requestUserId: source._requestUserId } : {}),
     ...(source?._requestClientId ? { _requestClientId: source._requestClientId } : {}),
+    ...(source?._workbenchRequestId ? { _workbenchRequestId: source._workbenchRequestId } : {}),
+    ...(source?.workbenchRouteKey ? { workbenchRouteKey: source.workbenchRouteKey } : {}),
+    ...(source?.workbenchWorkspaceGeneration
+      ? { workbenchWorkspaceGeneration: source.workbenchWorkspaceGeneration }
+      : {}),
   };
+}
+
+function terminalOwner(source) {
+  return {
+    conversationId: source?.conversationId || '',
+    workbenchRouteKey: source?.workbenchRouteKey || '',
+    workbenchWorkspaceGeneration: source?.workbenchWorkspaceGeneration || '',
+  };
+}
+
+function terminalOwnerMatches(term, msg) {
+  if (!term || !msg) return false;
+  const owner = terminalOwner(term);
+  const request = terminalOwner(msg);
+  if (owner.workbenchRouteKey) {
+    return request.workbenchRouteKey === owner.workbenchRouteKey
+      && request.workbenchWorkspaceGeneration === owner.workbenchWorkspaceGeneration
+      && request.conversationId === owner.conversationId;
+  }
+  return !request.workbenchRouteKey
+    && !request.workbenchWorkspaceGeneration
+    && request.conversationId === owner.conversationId;
+}
+
+function rejectTerminalOwnerMismatch(msg, terminalId) {
+  ctx.sendToServer({
+    type: 'terminal_error',
+    conversationId: msg?.conversationId,
+    terminalId,
+    message: 'Terminal owner mismatch',
+    ...terminalRoutingFields(msg),
+  });
 }
 
 export async function handleTerminalCreate(msg) {
   const { conversationId, cols, rows } = msg;
   const terminalId = msg.terminalId || conversationId;
   const conv = ctx.conversations.get(conversationId);
-  const workDir = conv?.workDir || ctx.CONFIG.workDir;
+  const routeScoped = !!msg.workbenchRouteKey;
+  if (routeScoped && !msg.workbenchWorkspaceGeneration) {
+    rejectTerminalOwnerMismatch(msg, terminalId);
+    return;
+  }
+  const workDir = routeScoped
+    ? (msg.workDir || ctx.CONFIG.workDir)
+    : (conv?.workDir || ctx.CONFIG.workDir);
   const routingFields = terminalRoutingFields(msg);
 
-  // 如果已存在终端，先关闭
+  // A terminal id is an object capability. It may only be replaced by its
+  // immutable owner, never by another Session that guessed the id.
   if (ctx.terminals.has(terminalId)) {
     const existing = ctx.terminals.get(terminalId);
+    if (!terminalOwnerMatches(existing, msg)) {
+      rejectTerminalOwnerMismatch(msg, terminalId);
+      return;
+    }
     if (existing.pty) {
       try { existing.pty.kill(); } catch {}
     }
@@ -82,8 +131,22 @@ export async function handleTerminalCreate(msg) {
     ctx.terminals.delete(terminalId);
   }
 
+  const pendingCreation = {
+    pty: null,
+    pending: true,
+    cancelled: false,
+    conversationId,
+    cols: cols || 80,
+    rows: rows || 24,
+    ...terminalOwner(msg),
+    ...routingFields,
+  };
+  ctx.terminals.set(terminalId, pendingCreation);
+
   const pty = await loadNodePty();
+  if (ctx.terminals.get(terminalId) !== pendingCreation || pendingCreation.cancelled) return;
   if (!pty) {
+    ctx.terminals.delete(terminalId);
     ctx.sendToServer({
       type: 'terminal_error',
       conversationId,
@@ -165,6 +228,10 @@ export async function handleTerminalCreate(msg) {
       });
     });
 
+    if (ctx.terminals.get(terminalId) !== pendingCreation || pendingCreation.cancelled) {
+      try { ptyProcess.kill(); } catch {}
+      return;
+    }
     ctx.terminals.set(terminalId, {
       pty: ptyProcess,
       conversationId,
@@ -172,6 +239,7 @@ export async function handleTerminalCreate(msg) {
       rows: rows || 24,
       buffer: '',
       timer: null,
+      ...terminalOwner(msg),
       ...routingFields,
     });
 
@@ -184,6 +252,7 @@ export async function handleTerminalCreate(msg) {
       ...routingFields,
     });
   } catch (e) {
+    if (ctx.terminals.get(terminalId) === pendingCreation) ctx.terminals.delete(terminalId);
     console.error(`[PTY] Failed to create terminal:`, e.message);
     ctx.sendToServer({
       type: 'terminal_error',
@@ -199,6 +268,10 @@ export function handleTerminalInput(msg) {
   const terminalId = msg.terminalId || msg.conversationId;
   const term = ctx.terminals.get(terminalId);
   if (term?.pty) {
+    if (!terminalOwnerMatches(term, msg)) {
+      rejectTerminalOwnerMismatch(msg, terminalId);
+      return;
+    }
     try {
       term.pty.write(msg.data);
     } catch (e) {
@@ -212,6 +285,10 @@ export function handleTerminalResize(msg) {
   const { cols, rows } = msg;
   const term = ctx.terminals.get(terminalId);
   if (term?.pty && cols > 0 && rows > 0) {
+    if (!terminalOwnerMatches(term, msg)) {
+      rejectTerminalOwnerMismatch(msg, terminalId);
+      return;
+    }
     try {
       term.pty.resize(cols, rows);
       term.cols = cols;
@@ -226,6 +303,21 @@ export function handleTerminalClose(msg) {
   const terminalId = msg.terminalId || msg.conversationId;
   const term = ctx.terminals.get(terminalId);
   if (term) {
+    if (!terminalOwnerMatches(term, msg)) {
+      rejectTerminalOwnerMismatch(msg, terminalId);
+      return;
+    }
+    if (term.pending && !term.pty) {
+      term.cancelled = true;
+      ctx.terminals.delete(terminalId);
+      ctx.sendToServer({
+        type: 'terminal_closed',
+        conversationId: term.conversationId || msg.conversationId,
+        terminalId,
+        ...terminalRoutingFields(term),
+      });
+      return;
+    }
     if (term.pty) {
       try { term.pty.kill(); } catch {}
     }

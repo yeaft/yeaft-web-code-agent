@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { applyClientHello } from '../../server/client-protocol.js';
 import { sendToWebClient } from '../../server/ws-utils.js';
 import { createTestDb, cleanupTestDb, createDbOperations } from '../helpers/testDb.js';
 import { MockWebSocket, createMockAgent, createMockWebClient, WS_OPEN } from '../helpers/mockWs.js';
@@ -79,9 +80,11 @@ describe('server → web : auth_result frame advertises acceptPlaintext', () => 
       role: 'admin',
       acceptPlaintext: true,
       yeaftSessionInventoryComplete: true,
+      workbenchRouteProtocol: 1,
     };
     expect(frame.acceptPlaintext).toBe(true);
     expect(frame.yeaftSessionInventoryComplete).toBe(true);
+    expect(frame.workbenchRouteProtocol).toBe(1);
     // Field still carries sessionKey so old clients keep working.
     expect(frame.sessionKey).toBeTruthy();
   });
@@ -109,6 +112,24 @@ describe('server → web : encryptOutbound default + client_hello flip', () => {
     }
 
     expect(client.encryptOutbound).toBe(false);
+  });
+
+  it('records the Workbench route protocol only from explicit client hello', () => {
+    const client = createMockWebClient();
+    client.workbenchRouteProtocol = 0;
+    const incoming = {
+      type: 'client_hello',
+      plaintextOk: true,
+      workbenchRouteProtocol: 1,
+    };
+    applyClientHello(client, incoming);
+    expect(client.workbenchRouteProtocol).toBe(1);
+
+    const legacyClient = createMockWebClient();
+    legacyClient.workbenchRouteProtocol = 0;
+    const legacyHello = { type: 'client_hello', plaintextOk: true };
+    applyClientHello(legacyClient, legacyHello);
+    expect(legacyClient.workbenchRouteProtocol).toBe(0);
   });
 
   it('does NOT flip if client_hello omits plaintextOk', () => {

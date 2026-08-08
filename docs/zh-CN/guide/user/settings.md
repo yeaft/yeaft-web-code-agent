@@ -62,7 +62,6 @@ yeaft-agent install --server <你的服务器URL> --secret <你的 Agent Key>
 - **🌐 在浏览器打开** — 新 tab 打开代理 URL
 - **📋 复制 URL** — 复制代理 URL
 
-> Workbench 工作台也有同名 tab，两边数据一致。
 
 ## LLM 设置（Yeaft 模式相关）
 

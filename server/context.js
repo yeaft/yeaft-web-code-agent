@@ -29,8 +29,9 @@ export const directoryCache = new Map();
 export const DIR_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 export const DIR_CACHE_MAX_SIZE = 500;
 
-// ★ Phase 5: File Tab state storage
-// key: `${userId}:${agentId}` → { files: [{path}], activeIndex, timestamp }
+// Workbench Files tab state. Route-aware writers use
+// `${userId}:${routeKey}\0${workspaceGeneration}`; legacy pairs keep the
+// historical `${userId}:${agentId}` key.
 export const userFileTabs = new Map();
 
 // Preview file cache for binary file preview (Office/PDF/Image)

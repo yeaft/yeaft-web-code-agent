@@ -1,122 +1,90 @@
 # Workbench 工作台
 
-Workbench 是 Yeaft 集成在聊天界面右侧的**开发工具面板** — 终端、文件浏览器、Git、端口代理，所有跑在 Agent 机器上，**不用你打开 SSH 或 VS Code**。
+Workbench 是 Chat 和 Yeaft Session 右侧的开发工具面板。工具运行在所选 Agent 上，并严格绑定当前 Session 及其工作目录。
 
-适合："我在跟 Claude 讨论代码，想顺手看看输出 / 改个文件 / 跑个测试"。
+## 打开和关闭 Workbench
 
-## 打开 Workbench
+使用 Chat 顶栏或 Yeaft Session 操作区中的 **Workbench** 按钮。
 
-- sidebar header 上的 **Workbench 图标**（面板布局图标）
-- 折叠 sidebar 模式下也有该图标
-- 打开后聊天区域右侧出现 Workbench 面板
-- **最大化** — 占满除 sidebar 外的所有空间
-- **折叠** — 收起来留个边
-- 拖左边缘的**调整手柄**改宽度
+Workbench 首先显示包含四张能力卡的选择页：
 
-> Workbench 的 tabs（terminal / files / git / proxy）取决于 Agent 的 capabilities（`terminal`、`file_editor` 等）。Agent 不支持的 tab 不会显示。
+- **终端** — 在当前 Session 工作目录中运行命令
+- **Git** — 查看仓库状态和代码差异
+- **文件** — 浏览、预览和编辑 Agent 本地文件
+- **浏览器** — Browser Runtime 可用时查看并控制 Agent 本地浏览器
 
-## Terminal 终端
+四张卡始终可见。标记为**当前 Agent 不可用**的卡仍可打开查看可用性说明，但不会启动虚假或残缺的工具。
 
-完整的终端模拟器（xterm.js + PTY），连到 Agent 机器：
+只有用户选择的能力才会启动。关闭当前能力会返回选择页，并把键盘焦点还给原来的能力卡；关闭 Workbench 才会收起整个面板。面板也支持最大化和拖动左侧边缘调整宽度。
 
-- **分屏** — header 上的 ─（水平）/ │（垂直）按钮，可以同时跑多个终端
-- **关闭面板** — × 关闭当前活跃终端面板
-- **自动创建** — Agent 执行 bash 工具调用时**自动创建**一个终端 panel 显示输出
-- 点终端 panel 让它成为活跃（高亮边框）
-- 字体 / 颜色跟随主题
-- 支持所有终端操作：vim、tmux、htop 都能跑
+Workbench 使用规范的 Session route。即使两个 Session 位于同一个 Agent，切换 Session 也会返回选择页，并隔离前一个 Session 的终端、Git 和文件状态。
 
-## Files 文件管理
+## 终端
 
-VS Code 风格的文件浏览器 + 编辑器。
+终端通过 xterm.js 连接 Agent 上的 PTY：
 
-### 文件树（左栏）
-- 层级目录，可展开 / 折叠
-- 文件 / 文件夹有类型图标
-- **搜索** — 顶部输入框按名字过滤
-- **Ctrl+P** — 快速打开文件搜索（fuzzy match）
-- **+ 新建文件** / **新建文件夹** — 工具栏按钮
-- **🗑 删除** / **➡ 移动** — 选文件后操作工具栏
-- **↻ 刷新** — 重新加载目录树
-- **▼ 全部折叠** — 收起所有展开的目录
-- **📂 打开文件夹** — 用文件夹选择器换根目录
-- **拖放上传** — 从桌面拖文件到文件树
+- 在所选 Session 的工作目录中启动
+- 支持水平和垂直分屏
+- 支持 `vim`、`tmux`、`htop` 等常规终端程序
+- 终端状态只属于创建它的 Session route
 
-### 编辑器（右栏，CodeMirror）
-- **多 tab** — 多个文件同时编辑
-- **语法高亮** — 主流语言全支持
-- **查找 / 替换** — Ctrl+F / Ctrl+H
-- **Ctrl+S** 保存（文件写到 Agent 机器）
-- **Office 文档** — doc/docx/xls/xlsx/ppt 可选本地预览或 Office Online 预览（设置里配）
-- **图片预览** — png/jpg/gif/webp 直接预览
-- **PDF 预览** — 内嵌渲染
+使用终端工具栏分屏或关闭终端 pane。使用 Workbench 返回按钮可回到能力选择页，而不收起整个 Workbench。
 
-**字体大小** — Ctrl+滚轮 调整文件树字体。
+## 文件
 
-## Git 版本控制
+文件能力提供类似 VS Code 的文件树、编辑器和预览界面。
 
-可视化 git 状态查看器：
+### 文件树
 
-- **分支显示** — 当前分支 + ↑N 落后 / ↓N 领先 commit 数
-- **Push** — 推到远端（如有 commit 待推）
-- **Pull** — 拉远端更新
-- **Fetch** — 仅拉更新不合并
-- **文件列表**：
-  - 已 staged 改动
-  - 未 staged 改动
-  - Untracked 文件
-  - 每条显示状态标记（M / A / D / R / ?）
-- **Diff 查看器** — side-by-side 或 unified 模式
-- **暂存 / 取消暂存** — 单文件 / 全部
-- **Commit** — 写 commit message + 提交
-- **Branch 切换** — 下拉切换 / 新建分支
-- **工作目录** — 文件夹选择器选哪个 repo
+- 展开和折叠目录
+- 使用 `Ctrl+P` 快速打开文件
+- 新建、删除、移动、复制或上传文件
+- 刷新目录树，或在当前 Session workspace 中选择其他文件夹
 
-> 不支持的：merge conflict 可视化解决（请用 terminal 解决）、interactive rebase
+### 编辑和预览
 
-## Port Proxy 端口代理
+- 多文件编辑和语法高亮
+- 使用 `Ctrl+F` / `Ctrl+H` 查找和替换
+- 使用 `Ctrl+S` 保存到 Agent
+- 预览 Markdown、图片、PDF 和支持的 Office 文档
 
-把 Agent 机器上跑的本地服务暴露到浏览器：
+从聊天消息打开文件引用时，Workbench 会直接进入当前 Session route 对应的文件能力。
 
-- **+ 添加端口** — 填 Agent、host、port、可选标签
-- **开关** — 单条规则启停
-- **🌐 在浏览器打开** — 新 tab 访问代理 URL
-- **📋 复制 URL** — 复制到剪贴板
+## Git
 
-典型用法：
-- Agent 机器上跑 `npm run dev`（监听 :3000） → 加代理 → 浏览器访问
-- Agent 机器跑 Jupyter（:8888） → 代理 → 浏览器访问
-- 远程 DB 管理工具
+Git 显示当前 Session 所选仓库的状态：
 
-> Port Proxy 也在 设置 → 代理 tab 里有相同界面，两边数据一致。
+- 分支及 ahead/behind 状态
+- 已暂存、已修改和未跟踪文件
+- 文件差异
+- 暂存、取消暂存、丢弃、提交和推送
+- 在当前 Session workspace 中选择其他仓库的文件夹选择器
 
-## 跟聊天的协同
+合并冲突和 interactive rebase 请使用终端处理。
 
-Workbench 不是替代聊天，是辅助：
+## 浏览器
 
-- **AI 写文件** → 你打开 Files 看 / 改
-- **AI 跑命令** → 自动 spawn 一个 terminal panel
-- **AI 改了 git 状态** → Git tab 实时刷新
-- **AI 启服务** → 加个 Port Proxy 直接访问
+浏览器保留在选择页中，让能力是否可用清晰可见。当前 Browser Runtime Phase 0 基础实现不会声明可用的 Browser capability，也没有向 Web UI 提供 signaling、查看器或用户输入链路。因此当前 Agent 显示不可用状态，而不是伪造一个嵌入式浏览器。
 
-## 性能建议
-
-- 一次开太多大文件、几个长跑终端、几个 dev server 代理 — 浏览器会卡
-- 关掉不用的 tab / panel 能立刻缓解
-- Files 编辑器加载超大文件（>10MB）会变慢，建议用 terminal 操作
+未来 Agent 只有声明完整的 Browser capability 组合后，Workbench 才会把浏览器标记为可用。
 
 ## 常见问题
 
-**Workbench tab 缺一些**
-- Agent 不支持该 capability — 升级 Agent 或检查 Agent 启动日志
+**某项能力不可用**
 
-**Terminal 打不开 / 一直转圈**
-- Agent 端 PTY 启动失败 — 看 `yeaft-agent logs`
-- 多半是 node-pty 没装好；重装 Agent
+- 确认所选 Agent 是否声明了对应 capability；route-scoped 工具还需要 `workbench_session_routes`
+- 必要时升级 Agent，并检查启动日志
 
-**Files 编辑器保存失败**
-- Agent 端权限问题 — 确认 Agent 用户对该路径有写权限
+**终端打不开**
 
-**Port Proxy 打不开**
-- 目标端口在 Agent 机器上**没在监听** — 先确认服务真的起了
-- Agent 防火墙没放 — 看 server / Agent 错误日志
+- 检查 Agent 日志中的 PTY 启动错误
+- 确认 Agent 安装包含受支持的 PTY 后端
+
+**文件或 Git 指向错误项目**
+
+- 确认当前选中的 Session 及其工作目录
+- 修改 Session metadata 后，关闭并重新打开对应能力
+
+**文件无法保存**
+
+- 确认 Agent 进程用户对目标路径有写权限

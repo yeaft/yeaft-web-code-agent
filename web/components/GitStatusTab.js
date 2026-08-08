@@ -3,9 +3,19 @@ import { highlightCode } from '../utils/syntaxHighlight.js';
 import { parseDiff } from './git/diffParser.js';
 import { createGitOperations } from './git/gitOperations.js';
 import { createFolderPicker } from './git/folderPicker.js';
+import { createRouteBoundWorkbenchStore, isWorkbenchMessageForRoute, workbenchMessageScope } from '../utils/workbench-route.js';
 
 export default {
   name: 'GitStatusTab',
+  props: {
+    routeKey: { type: String, required: true },
+    runtimeProvider: { type: String, required: true },
+    agentId: { type: String, required: true },
+    sessionId: { type: String, required: true },
+    conversationId: { type: String, required: true },
+    workDir: { type: String, default: '' },
+    workspaceGeneration: { type: String, required: true },
+  },
   template: `
     <div class="git-status-tab git-three-col">
       <!-- 左栏: 文件列表 -->
@@ -251,8 +261,8 @@ export default {
         </div>
     </div>
   `,
-  setup() {
-    const store = Pinia.useChatStore();
+  setup(props) {
+    const store = createRouteBoundWorkbenchStore(Pinia.useChatStore(), props);
     const t = Vue.inject('t');
 
     // --- Helpers for VSCode-style file display ---
@@ -416,14 +426,17 @@ export default {
     // --- Handle messages from server ---
     const handleWorkbenchMessage = (event) => {
       const msg = event.detail;
-      if (!msg) return;
+      if (!msg || !isWorkbenchMessageForRoute(msg, props.routeKey, props.workspaceGeneration)) return;
 
       switch (msg.type) {
         case 'directory_listing': {
-          if (picker.handleDirectoryListing(msg)) return;
+          if (workbenchMessageScope(msg, props.routeKey) === 'git-folder-picker') {
+            picker.handleDirectoryListing({ ...msg, conversationId: '_git_folder_picker' });
+          }
           break;
         }
         case 'git_status_result': {
+          if (props.routeKey && workbenchMessageScope(msg, props.routeKey) !== 'main') return;
           gitLoading.value = false;
           if (msg.error) {
             gitError.value = msg.error;
@@ -451,6 +464,7 @@ export default {
           break;
         }
         case 'git_diff_result': {
+          if (props.routeKey && workbenchMessageScope(msg, props.routeKey) !== 'main') return;
           diffLoading.value = false;
           if (msg.error) {
             diffError.value = msg.error;
@@ -464,6 +478,7 @@ export default {
           break;
         }
         case 'git_op_result': {
+          if (props.routeKey && workbenchMessageScope(msg, props.routeKey) !== 'main') return;
           ops.handleGitOpResult(msg, loadGitStatus);
           break;
         }

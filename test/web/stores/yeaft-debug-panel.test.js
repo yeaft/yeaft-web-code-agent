@@ -88,6 +88,7 @@ describe('YeaftDebugPanel store actions', () => {
 
   it('closes debug and releases its cached turn when a file opens Workbench directly', async () => {
     store.currentConversation = 'session-1';
+    store.workbenchRouteProtocolSupported = true;
     store.hasCapability = vi.fn(() => true);
     store.yeaftDebugPanel = {
       open: true,

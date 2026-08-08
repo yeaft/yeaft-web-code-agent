@@ -19,7 +19,7 @@ Agent (Node.js on the code machine)
         │   ├── H2-AMS memory + Dream maintenance
         │   ├── Projects and scoped sibling-Session recall
         │   └── Work Center (WorkItem → Action → Run)
-        └── Workbench (terminal, Git, files, port proxy)
+        └── Workbench launcher (Terminal, Git, Files, Browser availability)
 ```
 
 ## Ownership boundaries
@@ -120,7 +120,7 @@ agent/
     work-center/            WorkItem/Action/Run store, planner, watcher, runner
     sub-agent/              Child-agent execution and notifications
     tasks/                  Background shell task persistence
-  workbench/                Terminal, Git, files, and related services
+  workbench/                Route-scoped Terminal, Git, files, and Browser runtime services
 web/                        Vue 3 Options API + Pinia + static CSS/i18n
 server/                     Express/ws control plane
 test/                       Vitest unit and integration tests

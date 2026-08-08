@@ -526,13 +526,14 @@ describe('agent ctx defaults and upgrade contract', () => {
 describe('agent advertises plaintext-ok capability', () => {
   it('includes plaintext-ok in agent capability list', async () => {
     // Mirror agent/index.js definition.
-    const capabilities = ['background_tasks', 'file_editor', 'ping_session', 'plaintext-ok', 'work_center'];
+    const capabilities = ['background_tasks', 'file_editor', 'ping_session', 'plaintext-ok', 'workbench_session_routes', 'work_center'];
     expect(capabilities).toContain('plaintext-ok');
+    expect(capabilities).toContain('workbench_session_routes');
     expect(capabilities).toContain('work_center');
   });
 
   it('serializes plaintext-ok into the auth-frame capabilities array', () => {
-    const capabilities = ['background_tasks', 'file_editor', 'ping_session', 'plaintext-ok', 'work_center'];
+    const capabilities = ['background_tasks', 'file_editor', 'ping_session', 'plaintext-ok', 'workbench_session_routes', 'work_center'];
     const authFrame = {
       type: 'auth',
       tempId: 'temp_abc',
@@ -541,14 +542,16 @@ describe('agent advertises plaintext-ok capability', () => {
       version: '0.1.999'
     };
     expect(authFrame.capabilities).toContain('plaintext-ok');
+    expect(authFrame.capabilities).toContain('workbench_session_routes');
     expect(authFrame.capabilities).toContain('work_center');
   });
 
   it('serializes plaintext-ok into the URL ?capabilities= query', () => {
-    const capabilities = ['background_tasks', 'file_editor', 'ping_session', 'plaintext-ok', 'work_center'];
+    const capabilities = ['background_tasks', 'file_editor', 'ping_session', 'plaintext-ok', 'workbench_session_routes', 'work_center'];
     const params = new URLSearchParams({ capabilities: capabilities.join(',') });
-    expect(params.get('capabilities')).toBe('background_tasks,file_editor,ping_session,plaintext-ok,work_center');
+    expect(params.get('capabilities')).toBe('background_tasks,file_editor,ping_session,plaintext-ok,workbench_session_routes,work_center');
     expect(params.get('capabilities').split(',')).toContain('plaintext-ok');
+    expect(params.get('capabilities').split(',')).toContain('workbench_session_routes');
     expect(params.get('capabilities').split(',')).toContain('work_center');
   });
 });

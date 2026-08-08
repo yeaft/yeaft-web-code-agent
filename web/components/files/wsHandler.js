@@ -3,6 +3,7 @@
  * Centralizes all workbench-message handling in one place.
  */
 import { getFileType, isMarkdownFile } from './fileEditor.js';
+import { isWorkbenchMessageForRoute, workbenchMessageScope } from '../../utils/workbench-route.js';
 
 export function createWsHandler({
   store, normalizePath, getEffectiveWorkDir,
@@ -18,7 +19,9 @@ export function createWsHandler({
   // File operations
   ops,
   // Preview
-  mdPreviewMode, renderOfficeLocal, editorContainer, debugStatus
+  mdPreviewMode, renderOfficeLocal, editorContainer, debugStatus,
+  routeKey = '',
+  workspaceGeneration = '',
 }) {
   const pendingRevealLines = new Map();
 
@@ -40,14 +43,16 @@ export function createWsHandler({
 
   const handleWorkbenchMessage = (event) => {
     const msg = event.detail;
-    if (!msg) return;
+    if (!msg || !isWorkbenchMessageForRoute(msg, routeKey, workspaceGeneration)) return;
+    const messageScope = workbenchMessageScope(msg, routeKey);
 
     switch (msg.type) {
       case 'directory_listing': {
-        if (msg.conversationId === '_folder_picker') {
+        if (messageScope === 'files-folder-picker') {
           fp.handleFolderPickerListing(msg);
           return;
         }
+        if (routeKey && messageScope !== 'main') return;
         tree.handleDirectoryListing(msg);
         break;
       }
@@ -191,11 +196,12 @@ export function createWsHandler({
       agentId = store.currentAgent,
       conversationId = store.currentConversation,
       workDir = getEffectiveWorkDir(),
+      workbenchRouteKey = routeKey,
       hideTree = false,
       line = null,
     } = event.detail || {};
     const nPath = normalizePath(path);
-    if (!nPath || !agentId || !conversationId) return;
+    if (!nPath || !agentId || !conversationId || (routeKey && workbenchRouteKey !== routeKey)) return;
     if (hideTree && typeof setTreeVisible === 'function') setTreeVisible(false);
     if (Number.isFinite(line) && line > 0) pendingRevealLines.set(nPath, line);
     openFileInTab(nPath, nPath.split('/').pop(), { agentId, conversationId, workDir });

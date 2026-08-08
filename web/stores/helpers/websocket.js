@@ -141,6 +141,7 @@ export function connect(store) {
   store._hasHandledAgentList = false;
   store._hasHandledYeaftSessionHydrate = false;
   store.yeaftSessionInventoryCompleteSupported = null;
+  store.workbenchRouteProtocolSupported = null;
   store.yeaftSessionHydrateRequestId = null;
   store.yeaftSessionHydrateSlices = [];
   store.yeaftSessionHydrateError = null;
@@ -225,7 +226,8 @@ export function connect(store) {
     try {
       socket.send(JSON.stringify({
         type: 'client_hello',
-        plaintextOk: true
+        plaintextOk: true,
+        workbenchRouteProtocol: 1,
       }));
     } catch (e) {
       console.warn('[WS] Failed to send client_hello:', e);
@@ -256,6 +258,7 @@ export function connect(store) {
     store._hasHandledAgentList = false;
     store._hasHandledYeaftSessionHydrate = false;
     store.yeaftSessionInventoryCompleteSupported = null;
+    store.workbenchRouteProtocolSupported = null;
     store.yeaftSessionHydrateRequestId = null;
     store.yeaftSessionHydrateSlices = [];
     store.yeaftSessionHydrateError = null;

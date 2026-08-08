@@ -256,7 +256,7 @@ export default {
 
       <!-- Single-panel Main Chat Area -->
       <main v-else-if="!store.isSplitMode" class="main-content" :class="{ 'workbench-active': canUseWorkbench && store.workbenchExpanded, 'workbench-maximized': canUseWorkbench && store.workbenchMaximized && store.workbenchExpanded }">
-          <ChatHeader @toggle-sidebar="store.toggleSessionSidebar()" />
+          <ChatHeader :can-use-workbench="canUseWorkbench" @toggle-sidebar="store.toggleSessionSidebar()" />
           <div class="chat-body" :class="{ 'expert-panel-open': store.activeRightPanel }">
             <div class="chat-body-main">
               <MessageList

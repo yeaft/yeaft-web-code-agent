@@ -2,6 +2,7 @@ import { agents, userFileTabs } from '../context.js';
 import {
   sendToWebClient, forwardToAgent, broadcastAgentList
 } from '../ws-utils.js';
+import { resolveWorkbenchRequest } from '../workbench-route.js';
 
 // Only Agents that explicitly advertise the package-replacement-safe updater
 // may receive remote upgrade commands. Version thresholds are insufficient:
@@ -73,11 +74,18 @@ export async function handleClientMisc(clientId, client, msg, checkAgentAccess) 
 
     // File Tab 状态保存/恢复
     case 'update_file_tabs': {
-      if (client.userId && client.currentAgent) {
-        const key = `${client.userId}:${client.currentAgent}`;
+      const ftAgentId = msg.agentId || client.currentAgent;
+      if (client.userId && ftAgentId) {
+        if (!await checkAgentAccess(ftAgentId)) break;
+        const resolved = resolveWorkbenchRequest(client, msg, ftAgentId);
+        if (!resolved) break;
+        const identity = resolved.routeKey
+          ? `${resolved.routeKey}\u0000${resolved.workspaceGeneration}`
+          : ftAgentId;
+        const key = `${client.userId}:${identity}`;
         userFileTabs.set(key, {
           files: (msg.openFiles || []).map(f => ({ path: f.path })),
-          activeIndex: msg.activeIndex || 0,
+          activeIndex: Number.isFinite(msg.activeIndex) ? msg.activeIndex : 0,
           timestamp: Date.now()
         });
       }
@@ -88,10 +96,19 @@ export async function handleClientMisc(clientId, client, msg, checkAgentAccess) 
       const ftAgentId = msg.agentId || client.currentAgent;
       if (client.userId && ftAgentId) {
         if (!await checkAgentAccess(ftAgentId)) break;
-        const key = `${client.userId}:${ftAgentId}`;
+        const resolved = resolveWorkbenchRequest(client, msg, ftAgentId);
+        if (!resolved) break;
+        const identity = resolved.routeKey
+          ? `${resolved.routeKey}\u0000${resolved.workspaceGeneration}`
+          : ftAgentId;
+        const key = `${client.userId}:${identity}`;
         const saved = userFileTabs.get(key);
         await sendToWebClient(client, {
           type: 'file_tabs_restored',
+          agentId: ftAgentId,
+          conversationId: resolved.conversationId || msg.conversationId || client.currentConversation,
+          workbenchRouteKey: resolved.routeKey,
+          workbenchWorkspaceGeneration: resolved.workspaceGeneration,
           openFiles: saved?.files || [],
           activeIndex: saved?.activeIndex || 0
         });

@@ -36,6 +36,6 @@ features:
     details: 需要 vendor CLI 行为时继续使用对应 runtime；Browser 只共享导航和可兼容的 event rendering，不掩盖行为差异。
     link: /zh-CN/guide/user/choose-backend
   - title: 本地开发工作区
-    details: 在已连接 Agent 上使用 terminal、Git、files、port proxy、33 个原生工具、Skills、MCP、后台任务和 sub-agent。
+    details: 在已连接 Agent 上启动 route-scoped Terminal、Git、Files、Browser 能力，并使用 33 个原生工具、Skills、MCP、后台任务和 sub-agent。
     link: /zh-CN/guide/user/workbench
 ---

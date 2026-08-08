@@ -18,6 +18,7 @@ export class MockAgent {
     const capabilities = [
       'terminal',
       'file_editor',
+      'workbench_session_routes',
       'work_center',
       'work_center_message_v2',
       'work_item_attachments',

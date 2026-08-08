@@ -47,9 +47,9 @@ Yeaft 支持同时打开 **多个对话面板**（最多 3 个），并排展示
 
 ## 跟 Workbench 的关系
 
-- Workbench（终端 / 文件 / Git）是**独立的右侧工具面板**，不占聊天面板槽位
-- 你可以分 3 个聊天面板 + 同时开 Workbench
-- Workbench 的内容是按当前**活跃面板**对应的 Agent 来加载的（切换活跃面板，Workbench 内容也跟着切）
+- Workbench 是独立的右侧工具面板，不占聊天面板槽位
+- 当前 Web UI 在分屏模式下隐藏 Workbench，避免 Session-scoped 工具状态在不同 pane 之间漂移
+- 退出分屏、回到单面板后才能打开 Workbench 能力选择页
 
 ## 移动端
 

@@ -16,9 +16,11 @@ export const selectors = {
   convList:      '.conversation-list',
 
   // Workbench
-  terminalTab:   '[data-testid="terminal-tab"]',
-  fileTab:       '[data-testid="file-tab"]',
-  gitTab:        '[data-testid="git-tab"]',
+  workbenchLauncher: '.workbench-launcher',
+  terminalCapability: '[data-workbench-capability="terminal"]',
+  fileCapability: '[data-workbench-capability="files"]',
+  gitCapability: '[data-workbench-capability="git"]',
+  browserCapability: '[data-workbench-capability="browser"]',
 
   // Proxy
   proxyPortInput: '.proxy-input-port',

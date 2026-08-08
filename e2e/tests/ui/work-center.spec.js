@@ -1009,27 +1009,6 @@ test.describe('Work Center responsive UI', () => {
     await expect(chatPage.locator('.work-center-conversation-pane')).toBeVisible();
   });
 
-  test('maximizes and restores the Workbench without leaving the main area in the layout', async ({ chatPage, mockAgent }) => {
-    await openWorkCenter(chatPage, mockAgent);
-    await chatPage.setViewportSize({ width: 1440, height: 900 });
-
-    await chatPage.locator('.session-sidebar-shell .sidebar-icon-btn[title="Workbench"]').click();
-    const panel = chatPage.locator('.workbench-panel');
-    const main = chatPage.locator('.work-center-main');
-    await expect(panel).toHaveClass(/expanded/);
-    await expect(main).toBeVisible();
-
-    const maximize = panel.locator('.wb-tab-action').first();
-    await maximize.click();
-    await expect(panel).toHaveClass(/maximized/);
-    await expect(main).toBeHidden();
-
-    await maximize.click();
-    await expect(panel).not.toHaveClass(/maximized/);
-    await expect(panel).toHaveClass(/expanded/);
-    await expect(main).toBeVisible();
-  });
-
   test('uses one composer and changes wire target only after an explicit target choice', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent, [OPEN_ITEM, GENERATION_ITEM]);
     const select = chatPage.locator('.work-center-card', { hasText: OPEN_ITEM.title }).click();

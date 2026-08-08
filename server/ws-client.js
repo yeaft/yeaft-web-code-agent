@@ -6,6 +6,8 @@ import { authenticateRequest } from './auth/request-auth.js';
 import { encodeKey } from './encryption.js';
 import { userDb } from './database.js';
 import { agents, clearYeaftDebugRequestsForClient, webClients, isHeartbeatMessageType, trackRequest } from './context.js';
+import { applyClientHello, WORKBENCH_ROUTE_PROTOCOL } from './client-protocol.js';
+import { clearWorkbenchCorrelationsForClient } from './workbench-correlation.js';
 import {
   parseMessage, sendToWebClient, sendToAgent,
   broadcastAgentList, resolveAgentAccessError
@@ -76,7 +78,9 @@ export function handleWebConnection(ws, url, req = {}) {
     // (= old client, encrypt outbound for back-compat). Flipped to
     // `false` when the client sends `client_hello { plaintextOk: true }`
     // — see early dispatch in handleWebMessage.
-    encryptOutbound: true
+    encryptOutbound: true,
+    // Explicit Workbench protocol negotiation. Zero means legacy Web.
+    workbenchRouteProtocol: 0,
   });
 
   // 心跳响应处理
@@ -103,6 +107,7 @@ export function handleWebConnection(ws, url, req = {}) {
       role,
       acceptPlaintext: true,
       yeaftSessionInventoryComplete: true,
+      workbenchRouteProtocol: WORKBENCH_ROUTE_PROTOCOL,
     }));
     setTimeout(() => broadcastAgentList(), 100);
   } else {
@@ -164,6 +169,18 @@ export function handleWebConnection(ws, url, req = {}) {
     }
     clearWorkCenterRequestsForClient(client);
     clearYeaftDebugRequestsForClient(clientId);
+    const ownedTerminals = clearWorkbenchCorrelationsForClient(clientId);
+    for (const owner of ownedTerminals) {
+      const agent = agents.get(owner.agentId);
+      if (!agent) continue;
+      void sendToAgent(agent, {
+        type: 'terminal_close',
+        terminalId: owner.terminalId,
+        conversationId: owner.conversationId,
+        workbenchRouteKey: owner.routeKey,
+        workbenchWorkspaceGeneration: owner.workspaceGeneration,
+      }).catch(error => console.warn('[Workbench] PTY disconnect cleanup failed:', error.message));
+    }
     webClients.delete(clientId);
     console.log(`Web client disconnected: ${clientId}`);
   });
@@ -195,10 +212,15 @@ async function handleWebMessage(clientId, msg) {
   // Old clients never send this; their per-client `encryptOutbound` flag
   // stays `true` and we keep the ciphertext path.
   if (msg.type === 'client_hello') {
-    if (msg.plaintextOk === true) {
-      client.encryptOutbound = false;
+    const wasEncrypted = client.encryptOutbound;
+    applyClientHello(client, msg);
+    if (wasEncrypted && client.encryptOutbound === false) {
       console.log(`[WS] Client ${clientId} negotiated plaintext mode`);
     }
+    await sendToWebClient(client, {
+      type: 'client_hello_ack',
+      workbenchRouteProtocol: client.workbenchRouteProtocol,
+    });
     return;
   }
 

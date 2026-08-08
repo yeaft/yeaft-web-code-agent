@@ -36,6 +36,6 @@ features:
     details: Keep vendor CLI behavior when you need it. Each runtime is explicit, while the browser shares navigation and compatible event rendering.
     link: /guide/user/choose-backend
   - title: Local development workspace
-    details: Run terminal, Git, files, port proxy, 33 native tools, Skills, MCP, background jobs, and sub-agents on the connected Agent machine.
+    details: Launch route-scoped Terminal, Git, Files, and Browser capabilities alongside 33 native tools, Skills, MCP, background jobs, and sub-agents.
     link: /guide/user/workbench
 ---

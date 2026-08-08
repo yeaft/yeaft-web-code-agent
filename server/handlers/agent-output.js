@@ -53,6 +53,9 @@ function syncYeaftSessionMetadata(agentId, agent, event) {
 
   if (event.type === 'session_list_updated') {
     const rows = Array.isArray(event.sessions) ? event.sessions : [];
+    agent.yeaftSessions = new Map(rows
+      .filter(session => session?.id)
+      .map(session => [session.id, { ...session }]));
     try {
       if (ownerId) {
         reconcileAuthoritativeSessionSnapshot(ownerId, agentId, rows);

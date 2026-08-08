@@ -1,9 +1,19 @@
 import { loadScript, generateTerminalId, collectLeaves, findFirstLeaf, replaceNode, removeNode } from './terminal/paneLayout.js';
+import { createRouteBoundWorkbenchStore, isWorkbenchMessageForRoute, workbenchMessageScope } from '../utils/workbench-route.js';
 import PaneTree from './terminal/PaneTree.js';
 
 export default {
   name: 'TerminalTab',
   components: { PaneTree },
+  props: {
+    routeKey: { type: String, required: true },
+    runtimeProvider: { type: String, required: true },
+    agentId: { type: String, required: true },
+    sessionId: { type: String, required: true },
+    conversationId: { type: String, required: true },
+    workDir: { type: String, default: '' },
+    workspaceGeneration: { type: String, required: true },
+  },
   template: `
     <div class="terminal-tab">
       <div class="terminal-toolbar">
@@ -39,8 +49,8 @@ export default {
       </div>
     </div>
   `,
-  setup() {
-    const store = Pinia.useChatStore();
+  setup(props) {
+    const store = createRouteBoundWorkbenchStore(Pinia.useChatStore(), props);
     const t = Vue.inject('t');
 
     const terminals = Vue.reactive({});
@@ -201,6 +211,7 @@ export default {
           agentId: store.currentAgent,
           conversationId: convId,
           terminalId,
+          workDir: props.workDir,
           cols: info.terminal.cols,
           rows: info.terminal.rows,
           _clientId: store.clientId
@@ -336,7 +347,8 @@ export default {
 
     function handleWorkbenchMessage(event) {
       const msg = event.detail;
-      if (!msg) return;
+      if (!msg || !isWorkbenchMessageForRoute(msg, props.routeKey, props.workspaceGeneration)) return;
+      if (props.routeKey && workbenchMessageScope(msg, props.routeKey) !== 'main') return;
 
       switch (msg.type) {
         case 'terminal_created': {
@@ -435,6 +447,11 @@ export default {
         for (const tid of leaves) {
           const info = terminals[tid];
           if (info) {
+            store.sendWsMessage({
+              type: 'terminal_close',
+              terminalId: tid,
+              _clientId: store.clientId,
+            });
             info.terminal?.dispose();
             delete terminals[tid];
             delete mountRefs[tid];
@@ -445,11 +462,25 @@ export default {
       }
     }
 
+    const capabilityActive = Vue.ref(true);
+
     Vue.onMounted(() => {
       window.addEventListener('workbench-message', handleWorkbenchMessage);
       window.addEventListener('resize', handleResize);
       window.addEventListener('terminal-fit-all', handleFitAll);
       window.addEventListener('conversation-deleted', handleConversationDeleted);
+    });
+
+    Vue.onActivated(() => {
+      capabilityActive.value = true;
+      Vue.nextTick(() => {
+        autoCreateIfNeeded();
+        fitAllPanes();
+      });
+    });
+
+    Vue.onDeactivated(() => {
+      capabilityActive.value = false;
     });
 
     Vue.onUnmounted(() => {
@@ -459,6 +490,11 @@ export default {
       window.removeEventListener('conversation-deleted', handleConversationDeleted);
       clearTimeout(resizeTimer);
       for (const tid of Object.keys(terminals)) {
+        store.sendWsMessage({
+          type: 'terminal_close',
+          terminalId: tid,
+          _clientId: store.clientId,
+        });
         terminals[tid]?.terminal?.dispose();
       }
     });
@@ -468,7 +504,7 @@ export default {
       () => {
         Vue.nextTick(() => {
           const convId = store.currentConversation;
-          if (!convId || !store.workbenchExpanded) return;
+          if (!convId || !store.workbenchExpanded || !capabilityActive.value) return;
           const tabEl = document.querySelector('.terminal-tab');
           if (tabEl && tabEl.offsetParent !== null) {
             autoCreateIfNeeded();
@@ -505,7 +541,7 @@ export default {
     Vue.onMounted(() => {
       const checkVisibility = () => {
         const tabEl = document.querySelector('.terminal-tab');
-        if (tabEl && tabEl.offsetParent !== null) {
+        if (capabilityActive.value && tabEl && tabEl.offsetParent !== null) {
           autoCreateIfNeeded();
           fitAllPanes();
         }

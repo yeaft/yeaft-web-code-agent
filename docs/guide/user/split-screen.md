@@ -47,9 +47,9 @@ State per panel is persisted independently and the **split layout survives page 
 
 ## Relationship to Workbench
 
-- Workbench (terminal / files / Git) is an **independent right-side tool panel**, not a chat panel slot
-- You can have 3 chat panels + Workbench open simultaneously
-- Workbench content tracks the **active panel's Agent** (switching active panel switches Workbench content)
+- Workbench is an independent right-side tool panel, not a chat panel slot
+- The current Web UI hides Workbench while split-screen is active, so Session-scoped tool state cannot drift between panes
+- Return to single-panel mode before opening the Workbench capability launcher
 
 ## Mobile
 

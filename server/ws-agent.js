@@ -15,6 +15,7 @@ import { handleAgentWorkCenter } from './handlers/agent-work-center.js';
 import { handleAgentFileTerminal } from './handlers/agent-file-terminal.js';
 import { handleAgentSync } from './handlers/agent-sync.js';
 import { recordPerfTraceEvent } from './perf-trace.js';
+import { clearWorkbenchCorrelationsForAgent } from './workbench-correlation.js';
 import { markAgentHeartbeatSeen } from './heartbeat-policy.js';
 
 /**
@@ -227,6 +228,7 @@ function handleAgentDisconnect(agentId, agentName, ws) {
   if (!agent || agent.ws !== ws) return;
   // Phase 4: 清理目录缓存
   clearAgentDirCache(agentId);
+  clearWorkbenchCorrelationsForAgent(agentId);
   // Phase 1: 清理同步超时
   if (agent._syncTimeout) {
     clearTimeout(agent._syncTimeout);
@@ -245,6 +247,7 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
   const proxyPorts = (existingAgent?.proxyPorts || []).map(p => ({ ...p, enabled: false }));
   const slashCommands = existingAgent?.slashCommands || [];
   const slashCommandDescriptions = existingAgent?.slashCommandDescriptions || {};
+  const yeaftSessions = existingAgent?.yeaftSessions || new Map();
   if (existingAgent?._syncTimeout) clearTimeout(existingAgent._syncTimeout);
 
   // 兼容旧版 agent：未上报 capabilities 时默认全部开启
@@ -271,6 +274,7 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
     proxyPorts,
     slashCommands,
     slashCommandDescriptions,
+    yeaftSessions,
     status: 'syncing',
     ownerId,
     ownerUsername,

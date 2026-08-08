@@ -62,7 +62,6 @@ Expose Agent-machine local services through your browser (e.g. `localhost:3000` 
 - **🌐 Open in browser** — new tab to the proxy URL
 - **📋 Copy URL**
 
-> The Workbench has the same tab with shared data.
 
 ## LLM settings (Yeaft mode)
 

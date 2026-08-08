@@ -1040,6 +1040,8 @@ describe('Yeaft Session online Agent filtering', () => {
         projects: [{ id: 'legacy-project', name: 'Legacy project', sessionIds: ['same-id'] }],
       },
     });
+    expect(agent.yeaftSessions).toBeInstanceOf(Map);
+    expect(agent.yeaftSessions.get('same-id')).toMatchObject({ id: 'same-id', name: 'Session' });
     expect(reconcileProjectSessions).toHaveBeenCalledWith('user-1', 'agent-a', ['same-id']);
     expect(importLegacyProjects).toHaveBeenCalledWith(
       'user-1',
