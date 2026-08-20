@@ -7319,6 +7319,11 @@ export async function handleYeaftLoadHistoryOutline(msg) {
         _waitForBuild: false,
       });
     } catch (indexError) {
+      console.warn('[Yeaft] Session history outline index unavailable:', {
+        sessionId,
+        code: indexError?.code || 'index_unavailable',
+        message: indexError?.message || String(indexError),
+      });
       sendToServer({
         ...response,
         error: indexError?.code === 'stale_result'

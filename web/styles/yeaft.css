@@ -1022,7 +1022,15 @@
 }
 
 .yeaft-conversation-outline-empty.is-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
   color: var(--error);
+}
+
+.yeaft-conversation-outline-empty.is-error .btn-secondary {
+  color: var(--text-primary);
 }
 
 .msg-row.msg-flash {
