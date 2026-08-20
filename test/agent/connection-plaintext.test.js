@@ -852,6 +852,42 @@ describe('sendToServer: encrypt vs plaintext gate', () => {
     expect(ws.getLastMessage()).toEqual(msg);
   });
 
+  it('allows one bounded connected binary Workbench response above the ordinary queue budget', async () => {
+    const original = {
+      ws: ctx.ws, sessionKey: ctx.sessionKey, serverEncryptionRequired: ctx.serverEncryptionRequired,
+      outboundSendQueue: ctx.outboundSendQueue, outboundSendQueueBytes: ctx.outboundSendQueueBytes,
+      outboundSendQueueMaxBytes: ctx.outboundSendQueueMaxBytes, outboundSendQueueActive: ctx.outboundSendQueueActive,
+      messageBuffer: ctx.messageBuffer, messageBufferBytes: ctx.messageBufferBytes,
+      messageBufferMaxBytes: ctx.messageBufferMaxBytes, messageBufferMaxSize: ctx.messageBufferMaxSize,
+    };
+    try {
+      const sourceBytes = 6 * 1024 * 1024;
+      const binaryMessage = {
+        type: 'file_content',
+        binary: true,
+        content: Buffer.alloc(sourceBytes).toString('base64'),
+      };
+      const ordinaryMessage = { type: 'yeaft_output', payload: { text: 'x'.repeat(9 * 1024 * 1024) } };
+      Object.assign(ctx, {
+        ws: new MockWebSocket(), sessionKey: null, serverEncryptionRequired: false,
+        outboundSendQueue: [], outboundSendQueueBytes: 0, outboundSendQueueMaxBytes: 8 * 1024 * 1024,
+        outboundSendQueueActive: false, messageBuffer: [], messageBufferBytes: 0,
+        messageBufferMaxBytes: 8 * 1024 * 1024, messageBufferMaxSize: 5000,
+      });
+
+      await expect(sendToServer(binaryMessage)).resolves.toBe('sent');
+      expect(ctx.ws.getLastMessage()).toEqual(binaryMessage);
+      await expect(sendToServer(ordinaryMessage)).resolves.toBe('dropped');
+
+      ctx.ws = new MockWebSocket(WS_CLOSED);
+      await expect(sendToServer(binaryMessage)).resolves.toBe('dropped');
+      expect(ctx.messageBuffer).toEqual([]);
+      await expect(sendToServer(ordinaryMessage)).resolves.toBe('dropped');
+    } finally {
+      Object.assign(ctx, original);
+    }
+  });
+
   it('releases sent queue ownership and bounds disconnected payloads by bytes', async () => {
     const original = {
       ws: ctx.ws, sessionKey: ctx.sessionKey, serverEncryptionRequired: ctx.serverEncryptionRequired,

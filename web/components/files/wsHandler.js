@@ -58,21 +58,29 @@ export function createWsHandler({
       }
       case 'file_content': {
         const nFilePath = normalizePath(msg.requestedFilePath || msg.filePath);
+        const pendingDownload = ops.getPendingDownload();
+        const isPendingDownload = pendingDownload
+          && normalizePath(pendingDownload.path || pendingDownload) === nFilePath
+          && (!pendingDownload.requestId || pendingDownload.requestId === msg.requestId);
         const responseTab = openFiles.value.find(f => f.path === nFilePath
           && (!f.agentId || !msg.agentId || f.agentId === msg.agentId)
           && (!f.conversationId || !msg.conversationId || f.conversationId === msg.conversationId));
-        if (!responseTab || (responseTab.requestId && msg.requestId && msg.requestId !== responseTab.requestId)) return;
-        fileLoading.value = false;
+        if (!isPendingDownload
+            && (!responseTab || (responseTab.requestId && msg.requestId && msg.requestId !== responseTab.requestId))) return;
+        if (responseTab) fileLoading.value = false;
         if (msg.error) {
           debugStatus.value = `Error: ${msg.error}`;
-          ops.clearPendingDownload();
-          responseTab.previewLoading = false;
-          responseTab.previewError = msg.error;
+          if (isPendingDownload) ops.clearPendingDownload();
+          if (responseTab) {
+            responseTab.previewLoading = false;
+            responseTab.previewError = msg.error;
+          }
           return;
         }
 
-        // Handle pending download
-        if (ops.getPendingDownload() && normalizePath(ops.getPendingDownload()) === nFilePath) {
+        // A download request deliberately has no editor tab. Handle it before
+        // tab matching so right-click Download works for unopened files too.
+        if (isPendingDownload) {
           ops.clearPendingDownload();
           try {
             if (msg.binary) {

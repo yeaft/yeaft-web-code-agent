@@ -19,6 +19,19 @@ function messageBytes(msg) {
 
 const TERMINAL_TYPES = new Set(['turn_completed', 'conversation_closed']);
 
+// Binary Workbench files are base64-encoded in a single `file_content` frame.
+// Keep the transport allowance explicit and bounded: 32 MiB source data becomes
+// about 42.7 MiB of base64 plus JSON framing. Other traffic keeps the normal
+// queue budget so a large preview cannot make unbounded buffering possible.
+export const MAX_WORKBENCH_BINARY_MESSAGE_BYTES = 48 * 1024 * 1024;
+
+function messageBudget(msg, defaultMaxBytes) {
+  if (msg?.type === 'file_content' && msg.binary) {
+    return Math.max(defaultMaxBytes, MAX_WORKBENCH_BINARY_MESSAGE_BYTES);
+  }
+  return defaultMaxBytes;
+}
+
 function removeBufferedAt(index) {
   const [removed] = ctx.messageBuffer.splice(index, 1);
   ctx.messageBufferBytes = Math.max(0, Number(ctx.messageBufferBytes || 0) - messageBytes(removed));
@@ -36,7 +49,10 @@ function bufferMessage(msg, reason) {
     return 'dropped';
   }
   const bytes = messageBytes(msg);
-  const maxBytes = Math.max(1, Number(ctx.messageBufferMaxBytes) || 8 * 1024 * 1024);
+  const maxBytes = messageBudget(
+    msg,
+    Math.max(1, Number(ctx.messageBufferMaxBytes) || 8 * 1024 * 1024),
+  );
   if (bytes > maxBytes) {
     console.warn(`[WS] Message exceeds disconnected buffer byte budget, dropping: ${msg.type}`);
     return 'dropped';
@@ -97,7 +113,10 @@ function scheduleOutboundDrain() {
 export async function sendToServer(msg) {
   if (!ctx.ws || ctx.ws.readyState !== WebSocket.OPEN) return bufferMessage(msg, 'Disconnected');
   const bytes = messageBytes(msg);
-  const maxBytes = Math.max(1, Number(ctx.outboundSendQueueMaxBytes) || 8 * 1024 * 1024);
+  const maxBytes = messageBudget(
+    msg,
+    Math.max(1, Number(ctx.outboundSendQueueMaxBytes) || 8 * 1024 * 1024),
+  );
   if (bytes > maxBytes) {
     console.warn(`[WS] Outbound message exceeds byte budget, dropping: ${msg.type}`);
     return 'dropped';

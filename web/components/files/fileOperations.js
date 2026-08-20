@@ -250,11 +250,13 @@ export function createFileOperations(store, refs) {
     const entry = contextMenu.entry;
     hideContextMenu();
     if (!entry || entry.type !== 'file') return;
-    pendingDownload = entry.path;
+    const requestId = `file-download-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    pendingDownload = { path: entry.path, requestId };
     store.sendWsMessage({
       type: 'read_file',
       conversationId: store.currentConversation || '_explorer',
       agentId: store.currentAgent,
+      requestId,
       filePath: entry.path,
       workDir: getEffectiveWorkDir(),
       _clientId: store.clientId

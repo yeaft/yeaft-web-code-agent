@@ -6,6 +6,10 @@ import ctx from '../context.js';
 import { resolveAndValidatePath, BINARY_EXTENSIONS } from './utils.js';
 import { sendWorkbenchResult } from './request-routing.js';
 
+// Binary Workbench responses use one base64 WebSocket message. Keep this below
+// the explicit transport allowance in connection/buffer.js (48 MiB JSON).
+export const MAX_WORKBENCH_BINARY_FILE_BYTES = 32 * 1024 * 1024;
+
 export async function handleReadFile(msg) {
   const { conversationId, filePath, requestId, _requestUserId, _requestClientId } = msg;
   console.log('[Agent] handleReadFile received:', { filePath, conversationId, workDir: msg.workDir });
@@ -18,6 +22,10 @@ export async function handleReadFile(msg) {
     const mimeType = BINARY_EXTENSIONS[ext];
 
     if (mimeType) {
+      const fileStats = await stat(resolved);
+      if (fileStats.size > MAX_WORKBENCH_BINARY_FILE_BYTES) {
+        throw new Error(`Binary file exceeds the ${MAX_WORKBENCH_BINARY_FILE_BYTES / (1024 * 1024)} MiB Workbench preview limit`);
+      }
       // Binary file: read as Buffer, send base64
       const buffer = await readFile(resolved);
       console.log('[Agent] Sending binary file_content:', { filePath: resolved, size: buffer.length, mimeType, conversationId });

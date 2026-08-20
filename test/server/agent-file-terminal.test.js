@@ -1241,6 +1241,84 @@ describe('Agent file terminal forwarding', () => {
     expect(sendToWebClient).not.toHaveBeenCalled();
   });
 
+  it('downloads a correlated binary response without requiring an open editor tab', async () => {
+    const { outbound, client } = await registerRouteRequest({
+      type: 'read_file',
+      requestId: 'file-download-1',
+      extra: { filePath: 'docs/diagram.png' },
+    });
+    sendToWebClient.mockClear();
+    await handleAgentFileTerminal('agent-1', {}, {
+      type: 'file_content',
+      conversationId: outbound.conversationId,
+      _workbenchRequestId: outbound._workbenchRequestId,
+      filePath: '/workspace/docs/diagram.png',
+      requestedFilePath: 'docs/diagram.png',
+      content: Buffer.from('image').toString('base64'),
+      binary: true,
+      mimeType: 'image/png',
+    });
+
+    const [, forwarded] = sendToWebClient.mock.calls[0];
+    expect(sendToWebClient.mock.calls[0][0]).toBe(client);
+    const vueDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'Vue');
+    const locationDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'location');
+    const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document');
+    Object.defineProperty(globalThis, 'Vue', { configurable: true, writable: true, value: Vue });
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true, writable: true, value: { protocol: 'https:', host: 'yeaft.test' },
+    });
+    const anchor = { href: '', download: '', click: vi.fn() };
+    const appendChild = vi.fn();
+    const removeChild = vi.fn();
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      writable: true,
+      value: {
+        body: { appendChild, removeChild },
+        createElement: vi.fn(() => anchor),
+      },
+    });
+    const clearPendingDownload = vi.fn();
+    const handle = createWsHandler({
+      store: { currentConversation: 'session-1', currentAgent: 'agent-1' },
+      normalizePath: value => value,
+      getEffectiveWorkDir: () => '/workspace',
+      openFiles: Vue.ref([]),
+      activeFileIndex: Vue.ref(-1),
+      activeFile: Vue.ref(null),
+      fileLoading: Vue.ref(false),
+      fileSaving: Vue.ref(false),
+      saveTabsState: vi.fn(),
+      createEditor: vi.fn(),
+      openFileInTab: vi.fn(),
+      tree: { handleDirectoryListing: vi.fn() },
+      setTreeVisible: vi.fn(),
+      fp: { handleFolderPickerListing: vi.fn() },
+      qo: {},
+      ops: {
+        getPendingDownload: () => ({ path: 'docs/diagram.png', requestId: 'file-download-1' }),
+        clearPendingDownload,
+      },
+      mdPreviewMode: Vue.ref(false),
+      renderOfficeLocal: vi.fn(),
+      editorContainer: Vue.ref(null),
+      debugStatus: Vue.ref(''),
+    }).handleWorkbenchMessage;
+
+    handle(new CustomEvent('workbench-message', { detail: forwarded }));
+    expect(clearPendingDownload).toHaveBeenCalledOnce();
+    expect(anchor.click).toHaveBeenCalledOnce();
+    expect(appendChild).toHaveBeenCalledOnce();
+    expect(removeChild).toHaveBeenCalledOnce();
+    if (documentDescriptor) Object.defineProperty(globalThis, 'document', documentDescriptor);
+    else delete globalThis.document;
+    if (locationDescriptor) Object.defineProperty(globalThis, 'location', locationDescriptor);
+    else delete globalThis.location;
+    if (vueDescriptor) Object.defineProperty(globalThis, 'Vue', vueDescriptor);
+    else delete globalThis.Vue;
+  });
+
   it('preserves the requested path when projecting a correlated binary file response', async () => {
     const { outbound, client } = await registerRouteRequest({
       type: 'read_file',
