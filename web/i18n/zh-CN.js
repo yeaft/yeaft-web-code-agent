@@ -758,7 +758,8 @@ export default {
   'settings.general.telemetryDesc': '在本地批量记录耗时诊断；trace 内容不会发送到服务器。',
   'settings.general.telemetryOn': '开启',
   'settings.general.telemetryOff': '关闭',
-  'settings.general.telemetryRawLimit': 'Provider 原始响应上限（字节）',
+  'settings.general.telemetryRawLimit': 'Provider 原始请求/响应上限（字节）',
+  'settings.general.telemetryTraceTextLimit': 'Debug Prompt 与消息上限（字节）',
 
   // Settings - Invitations
   'settings.invite.create': '创建邀请码',

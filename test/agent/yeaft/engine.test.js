@@ -7548,6 +7548,13 @@ describe('Engine', () => {
             turnNumber: i,
             sessionId: 's-long',
             userPrompt: 'do long work',
+            memoryLoaded: [{
+              id: 'resident:sessions/s-long',
+              layer: 'resident',
+              scope: 'sessions/s-long',
+              body: 'remember this exact resident summary',
+            }],
+            memoryLoadedMeta: { recallLimit: 8, recallCandidates: 1 },
           });
           boundedTrace.endTurn(turnId, {
             responseText: '',
@@ -7604,6 +7611,15 @@ describe('Engine', () => {
         expect(reopenedStats.turnCount).toBeGreaterThanOrEqual(100);
         const detail = await reopened.fetchTurnDebug({ sessionId: 's-long', turnId: 'long-tool-turn' });
         expect(detail.turns).toHaveLength(1);
+        expect(detail.turns[0]).toMatchObject({
+          memoryLoaded: [{
+            id: 'resident:sessions/s-long',
+            layer: 'resident',
+            scope: 'sessions/s-long',
+            body: 'remember this exact resident summary',
+          }],
+          memoryLoadedMeta: { recallLimit: 8, recallCandidates: 1 },
+        });
         expect(detail.loops).toHaveLength(100);
         expect(detail.loops.at(-1)?.loopNumber).toBe(100);
         expect(Buffer.byteLength(JSON.stringify(detail), 'utf8')).toBeLessThan(6 * 1024 * 1024);

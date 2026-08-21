@@ -298,6 +298,15 @@ export default {
                   </div>
                   <div class="sp-actions-row">
                     <input class="sp-input sp-input-small" type="number" min="0" max="4194304" step="65536" v-model.number="telemetryDraft.rawExchangeMaxBytes">
+                  </div>
+                </div>
+                <div v-if="telemetrySettings" class="sp-row sp-row-stack">
+                  <div class="sp-row-left">
+                    <span class="sp-label">{{ $t('settings.general.telemetryTraceTextLimit') }}</span>
+                    <span class="sp-desc">{{ formatBytes(telemetrySettings.traceTextMaxBytes) }}</span>
+                  </div>
+                  <div class="sp-actions-row">
+                    <input class="sp-input sp-input-small" type="number" min="0" max="4194304" step="65536" v-model.number="telemetryDraft.traceTextMaxBytes">
                     <button class="sp-btn sp-btn-muted" @click="saveTelemetry" :disabled="telemetrySaving">{{ $t('common.save') }}</button>
                   </div>
                 </div>

@@ -793,7 +793,8 @@ export default {
   'settings.general.telemetryDesc': 'Buffer local timing diagnostics without sending trace content to the server.',
   'settings.general.telemetryOn': 'On',
   'settings.general.telemetryOff': 'Off',
-  'settings.general.telemetryRawLimit': 'Raw provider response limit (bytes)',
+  'settings.general.telemetryRawLimit': 'Raw provider exchange limit (bytes)',
+  'settings.general.telemetryTraceTextLimit': 'Debug prompt and message limit (bytes)',
 
   // Settings - Invitations
   'settings.invite.create': 'Create Invite Code',

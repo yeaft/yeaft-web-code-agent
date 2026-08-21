@@ -2177,6 +2177,12 @@ export class Engine {
       memoryInjection = amsContext.snapshotBlock;
     }
     const loadedMemoryForDebug = loadedMemoryDebugEntries(amsContext?.snapshot);
+    const loadedMemoryMetaForDebug = {
+      recallLimit: resolveMemoryRecallLimit(this.#config),
+      recallCandidates: Number.isFinite(recallResult?.meta?.hitCount)
+        ? recallResult.meta.hitCount
+        : (recallResult && Array.isArray(recallResult.entries) ? recallResult.entries.length : 0),
+    };
 
     // Diagnostic payload for the Dream debug panel. The full AMS Resident
     // layer can include user and per-VP summaries, but the browser-facing
@@ -2443,12 +2449,7 @@ export class Engine {
         type: 'memory_used',
         turnId: queryTurnId,
         loaded: loadedMemoryForDebug,
-        meta: {
-          recallLimit: resolveMemoryRecallLimit(this.#config),
-          recallCandidates: Number.isFinite(recallResult?.meta?.hitCount)
-            ? recallResult.meta.hitCount
-            : (recallResult && Array.isArray(recallResult.entries) ? recallResult.entries.length : 0),
-        },
+        meta: loadedMemoryMetaForDebug,
       };
     }
 
@@ -2580,6 +2581,10 @@ export class Engine {
         // from `messages.find(role==='user')` would always return turn
         // 1's prompt and mislabel every subsequent Turn header.
         userPrompt: userQuestionPreview,
+        // Persist the exact AMS projection that produced memoryInjection. Live
+        // memory_used events are only progress signals and disappear on reload.
+        memoryLoaded: loadedMemoryForDebug,
+        memoryLoadedMeta: loadedMemoryMetaForDebug,
       });
 
       const startTime = Date.now();

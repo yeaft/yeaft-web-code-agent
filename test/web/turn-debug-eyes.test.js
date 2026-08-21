@@ -171,7 +171,14 @@ describe('handleMessage turn-level panel status', () => {
         sessionId: 'session-1',
         userPrompt: 'Inspect the trace',
         detailsLoaded: true,
-        loopCount: 1,
+        loopCount: 2,
+        memoryLoaded: [{
+          id: 'resident:sessions/session-1',
+          layer: 'resident',
+          scope: 'sessions/session-1',
+          body: 'Persisted memory from the exact request.',
+        }],
+        memoryLoadedMeta: { recallLimit: 8, recallCandidates: 1 },
       }],
       loops: [{
         turnId: 'turn-abc',
@@ -183,6 +190,20 @@ describe('handleMessage turn-level panel status', () => {
         toolCalls: [],
         usage: { inputTokens: 12, outputTokens: 6, totalTokens: 18 },
         latencyMs: 42,
+      }, {
+        turnId: 'turn-abc',
+        loopNumber: 2,
+        model: 'provider/model-a',
+        systemPrompt: 'You are the changed system prompt for loop two.',
+        messages: [
+          { role: 'user', content: 'Inspect the trace' },
+          { role: 'assistant', content: 'The loop detail is present.' },
+          { role: 'user', content: 'Continue after the tool.' },
+        ],
+        response: 'The second loop detail is present.',
+        toolCalls: [],
+        usage: { inputTokens: 20, outputTokens: 7, totalTokens: 27 },
+        latencyMs: 50,
       }],
       dreamEvents: [],
       projection: {
@@ -201,20 +222,28 @@ describe('handleMessage turn-level panel status', () => {
     expect(store.yeaftDebugPanel.status).toBe('ready');
     expect(store.yeaftDebugHistoryProjection).toMatchObject({ truncated: true });
     expect(store.yeaftDebugTurnsById['turn-abc'].loops).toBeUndefined();
-    expect(store.yeaftDebugLoops).toHaveLength(1);
+    expect(store.yeaftDebugTurnsById['turn-abc'].memoryLoaded).toEqual([
+      expect.objectContaining({ body: 'Persisted memory from the exact request.' }),
+    ]);
+    expect(store.yeaftDebugLoops).toHaveLength(2);
     await wrapper.get('.yeaft-debug-turn-header').trigger('click');
     expect(wrapper.get('.yeaft-debug-turn-body').isVisible()).toBe(true);
     expect(wrapper.get('.yeaft-debug-notice').text()).toBe('yeaft.debugHistoryTruncated');
-    expect(wrapper.get('.yeaft-debug-section-title').text()).toBe('yeaft.systemPrompt');
-    await wrapper.get('.yeaft-debug-show-btn').trigger('click');
-    expect(wrapper.get('.yeaft-debug-pre').text()).toBe('You are the traced system prompt.');
-    expect(wrapper.get('.yeaft-debug-loop-num').text()).toBe('Loop 1');
-    expect(wrapper.get('.yeaft-debug-loop-model').text()).toBe('provider/model-a');
+    expect(wrapper.findAll('.yeaft-debug-loop-num').map(node => node.text())).toEqual(['Loop 1', 'Loop 2']);
+    expect(wrapper.findAll('.yeaft-debug-loop-model').map(node => node.text())).toEqual(['provider/model-a', 'provider/model-a']);
 
-    await wrapper.get('.yeaft-debug-loop-header').trigger('click');
-    expect(wrapper.get('.yeaft-debug-loop-body').text()).toContain('yeaft.debugAssistantResponse');
-    await wrapper.get('.yeaft-debug-loop-body .yeaft-debug-show-btn').trigger('click');
-    expect(wrapper.get('.yeaft-debug-loop-body .yeaft-debug-pre').text()).toBe('The loop detail is present.');
+    const loopHeaders = wrapper.findAll('.yeaft-debug-loop-header');
+    await loopHeaders[0].trigger('click');
+    let loopBodies = wrapper.findAll('.yeaft-debug-loop-body');
+    expect(loopBodies[0].text()).toContain('yeaft.systemPrompt');
+    await loopBodies[0].find('.yeaft-debug-show-btn').trigger('click');
+    expect(loopBodies[0].find('.yeaft-debug-pre').text()).toBe('You are the traced system prompt.');
+    expect(loopBodies[0].text()).toContain('yeaft.debugAssistantResponse');
+
+    await loopHeaders[1].trigger('click');
+    loopBodies = wrapper.findAll('.yeaft-debug-loop-body');
+    await loopBodies[1].find('.yeaft-debug-show-btn').trigger('click');
+    expect(loopBodies[1].find('.yeaft-debug-pre').text()).toBe('You are the changed system prompt for loop two.');
     expect(loadYeaftDebugHistory).not.toHaveBeenCalled();
     wrapper.unmount();
   });

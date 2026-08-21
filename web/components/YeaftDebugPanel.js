@@ -1447,19 +1447,6 @@ export default {
             <div v-if="!turn.detailsLoaded && (!turn.loops || turn.loops.length === 0)" class="yeaft-debug-empty">
               {{ $t('yeaft.debugHistoryLoading') }}
             </div>
-            <!-- Turn-level: System prompt (constant within a turn) -->
-            <div class="yeaft-debug-section" v-if="turn.loops && turn.loops.length > 0 && turn.loops[0].systemPrompt">
-              <div class="yeaft-debug-section-row">
-                <span class="yeaft-debug-section-title">{{ $t('yeaft.systemPrompt') }}</span>
-                <span class="yeaft-debug-section-meta">{{ turn.loops[0].systemPrompt.length }} chars</span>
-                <button class="yeaft-debug-copy-btn" @click="copyText(turn.loops[0].systemPrompt, 'system prompt')">copy</button>
-                <button class="yeaft-debug-show-btn" @click="toggleSection(turn.turnId, 'sys')">
-                  {{ isSectionExpanded(turn.turnId, 'sys') ? 'hide' : 'show' }}
-                </button>
-              </div>
-              <pre v-if="isSectionExpanded(turn.turnId, 'sys')" class="yeaft-debug-pre">{{ turn.loops[0].systemPrompt }}</pre>
-            </div>
-
             <!-- Turn-level: Memory loaded -->
             <div class="yeaft-debug-section" v-if="turn.memoryLoaded && turn.memoryLoaded.length > 0">
               <div class="yeaft-debug-section-row">
@@ -1535,6 +1522,21 @@ export default {
               </div>
 
               <div class="yeaft-debug-loop-body" v-if="isLoopExpanded(turn.turnId, loop.loopNumber)">
+                <!-- The system prompt is a provider-loop request field. Skills,
+                     notifications, folding, and other runtime state may change it
+                     between loops, so never label the first prompt as Turn-wide. -->
+                <div class="yeaft-debug-section" v-if="loop.systemPrompt">
+                  <div class="yeaft-debug-section-row">
+                    <span class="yeaft-debug-section-title">{{ $t('yeaft.systemPrompt') }}</span>
+                    <span class="yeaft-debug-section-meta">{{ loop.systemPrompt.length }} chars</span>
+                    <button class="yeaft-debug-copy-btn" @click="copyText(loop.systemPrompt, 'system prompt')">copy</button>
+                    <button class="yeaft-debug-show-btn" @click="toggleSection(turn.turnId, 'sys-' + loop.loopNumber)">
+                      {{ isSectionExpanded(turn.turnId, 'sys-' + loop.loopNumber) ? 'hide' : 'show' }}
+                    </button>
+                  </div>
+                  <pre v-if="isSectionExpanded(turn.turnId, 'sys-' + loop.loopNumber)" class="yeaft-debug-pre">{{ loop.systemPrompt }}</pre>
+                </div>
+
                 <!-- Tools — model calls joined with completed results. -->
                 <div class="yeaft-debug-section" v-if="toolsForLoop(turn, loop).length > 0">
                   <div class="yeaft-debug-section-title">Tools ({{ toolsForLoop(turn, loop).length }})</div>

@@ -754,8 +754,13 @@ function summarizeTrace(trace, detailsLoaded = false) {
     summaryInputTokens: loops.length > 0 ? usage.summaryInputTokens : Number(trace?.summaryInputTokens || 0),
     summaryOutputTokens: loops.length > 0 ? usage.summaryOutputTokens : Number(trace?.summaryOutputTokens || 0),
     loopCount: loops.length > 0 ? loops.length : Number(trace?.loopCount || 0),
-    memoryLoaded: null,
-    memoryAdjust: null,
+    memoryLoaded: Array.isArray(trace?.memoryLoaded) ? cloneJsonValue(trace.memoryLoaded) : null,
+    memoryLoadedMeta: trace?.memoryLoadedMeta && typeof trace.memoryLoadedMeta === 'object'
+      ? cloneJsonValue(trace.memoryLoadedMeta)
+      : null,
+    memoryAdjust: trace?.memoryAdjust && typeof trace.memoryAdjust === 'object'
+      ? cloneJsonValue(trace.memoryAdjust)
+      : null,
     tools: Array.isArray(trace?.tools) ? trace.tools.map(t => ({
       loopNumber: t.loopNumber || 0,
       callId: t.toolCallId || t.id || null,
@@ -910,7 +915,7 @@ export function projectDebugDetailForWire(detail, maxBytes = DEBUG_DETAIL_WIRE_M
   }
   for (const [turnIndex, turn] of (Array.isArray(wire.turns) ? wire.turns : []).entries()) {
     if (!turn || typeof turn !== 'object') continue;
-    for (const field of ['userPrompt', 'memoryLoaded', 'memoryAdjust']) {
+    for (const field of ['userPrompt', 'memoryLoaded', 'memoryLoadedMeta', 'memoryAdjust']) {
       addCandidate(turn, field, `turns[${turnIndex}].${field}`);
     }
     for (const [toolIndex, tool] of (Array.isArray(turn.tools) ? turn.tools : []).entries()) {
@@ -1212,7 +1217,7 @@ export class DebugTrace {
     this.#textMaxBytes = normalizeTextMaxBytes(nextValue, this.#textMaxBytes);
   }
 
-  startTurn({ traceId, messageId = null, mode = null, turnNumber = null, sessionId = null, vpId = null, threadId = null, userPrompt = null } = {}) {
+  startTurn({ traceId, messageId = null, mode = null, turnNumber = null, sessionId = null, vpId = null, threadId = null, userPrompt = null, memoryLoaded = null, memoryLoadedMeta = null } = {}) {
     if (!this.#acceptingWrites) return 'null';
     const turnRowId = randomUUID();
     const now = Date.now();
@@ -1225,6 +1230,8 @@ export class DebugTrace {
       vpId,
       threadId,
       userPrompt,
+      memoryLoaded,
+      memoryLoadedMeta,
       now,
       turnRowId,
     });
@@ -1584,7 +1591,7 @@ export class DebugTrace {
     await this.#drainWrites();
   }
 
-  #getOrCreateRequest({ traceId, turnNumber, messageId, mode, sessionId, vpId, threadId, userPrompt, now, turnRowId }) {
+  #getOrCreateRequest({ traceId, turnNumber, messageId, mode, sessionId, vpId, threadId, userPrompt, memoryLoaded, memoryLoadedMeta, now, turnRowId }) {
     const normalizedSessionId = sessionId || null;
     const isUsableExisting = (t) => (
       t?.sessionId === normalizedSessionId
@@ -1604,6 +1611,12 @@ export class DebugTrace {
       .at(-1) || null;
     if (existing) {
       existing.updatedAt = now;
+      if (!Array.isArray(existing.memoryLoaded) && Array.isArray(memoryLoaded)) {
+        existing.memoryLoaded = cloneJsonValue(memoryLoaded);
+      }
+      if (!existing.memoryLoadedMeta && memoryLoadedMeta && typeof memoryLoadedMeta === 'object') {
+        existing.memoryLoadedMeta = cloneJsonValue(memoryLoadedMeta);
+      }
       this.#requestCache.set(existing.requestKey, existing);
       return existing;
     }
@@ -1621,6 +1634,11 @@ export class DebugTrace {
       vpId: vpId || null,
       threadId: threadId || null,
       userPrompt: truncateText(userPrompt || '', this.#textMaxBytes),
+      memoryLoaded: Array.isArray(memoryLoaded) ? cloneJsonValue(memoryLoaded) : null,
+      memoryLoadedMeta: memoryLoadedMeta && typeof memoryLoadedMeta === 'object'
+        ? cloneJsonValue(memoryLoadedMeta)
+        : null,
+      memoryAdjust: null,
       openedAt: now,
       closedAt: null,
       updatedAt: now,
