@@ -181,6 +181,7 @@ export default {
           @select="selectHistorySearchResult"
           @load-older="loadOlderHistoryOutline"
           @load-more-search="loadMoreHistorySearchResults"
+          @retry="retryHistoryOutline"
           @close="closeHistorySearch"
         />
 
@@ -888,6 +889,13 @@ export default {
       );
     };
     const loadMoreHistorySearchResults = () => store.searchYeaftHistory(store.yeaftHistorySearchState.query, { append: true, senderKey: store.yeaftHistorySearchState.senderKey });
+    const retryHistoryOutline = () => {
+      const searchState = store.yeaftHistorySearchState || {};
+      if (Array.from(String(searchState.query || '').trim()).length > 0 || searchState.senderKey) {
+        return store.searchYeaftHistory(searchState.query || '', { senderKey: searchState.senderKey || '' });
+      }
+      return store.loadYeaftHistoryOutline({ force: true });
+    };
     const previewHistorySearchResult = result => {
       // Warm a bounded anchor window while the user points at a result. Preview
       // stays cache-only; click revalidates the indexed generation before it
@@ -1623,6 +1631,7 @@ export default {
       onHistorySearchQuery,
       loadOlderHistoryOutline,
       loadMoreHistorySearchResults,
+      retryHistoryOutline,
       previewHistorySearchResult,
       selectHistorySearchResult,
       yeaftInputDraftKey,
