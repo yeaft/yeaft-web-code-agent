@@ -10,6 +10,7 @@ export const CORE_TEST_FILES = Object.freeze([
   'test/agent/startup-maintenance.test.js',
   'test/agent/local-runtime-package.test.js',
   'test/agent/router-per-model-protocol.test.js',
+  'test/agent/repo-workflow.test.js',
   'test/agent/sub-agent/sub-agent-reliability.test.js',
   'test/agent/terminal-routing.test.js',
   'test/agent/windows-upgrade-handoff.test.js',

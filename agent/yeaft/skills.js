@@ -1290,8 +1290,8 @@ export function bundledYeaftSkillsDir() {
   // the directory containing agent/, so we walk up from this file.
   try {
     const here = dirname(fileURLToPath(import.meta.url));
-    // here = .../agent/yeaft
-    const agentRoot = join(here, '..', '..');
+    // here = <agent-pkg>/yeaft
+    const agentRoot = join(here, '..');
     candidates.push(join(agentRoot, 'skills'));
   } catch {
     // fileURLToPath can throw on exotic loaders — non-fatal.

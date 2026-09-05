@@ -59,6 +59,7 @@ export const CONDITIONAL_BUILTIN_TOOL_NAMES = new Set([
   'JsRepl',
   'NotebookEdit',
   'ImageGeneration',
+  'RepoWorkflow',
 ]);
 
 const HISTORY_INTENT_RE = /(?:\bhistory\b|\b(?:prior|previous) (?:chat|conversation|discussion)\b|\bprevious(?:ly)? discussed\b|\bwhat did we (?:decide|discuss|say|agree)\b|\b(?:our|the) (?:earlier|last) decision\b|历史|之前(?:的)?(?:对话|讨论|会话|决定)|过去(?:的)?会话|我们(?:之前|上次)(?:决定|讨论|说)了什么)/iu;
@@ -70,6 +71,7 @@ const WORK_ITEM_INTENT_RE = /(?:\bwork ?center\b|\bwork ?item\b|\bdurable tracki
 const REPL_INTENT_RE = /(?:\bjs ?repl\b|\bjavascript (?:calculation|experiment|evaluation)\b|\bcalculate\b|\bdata transform\b|JavaScript (?:计算|实验|求值)|数据转换|快速计算)/iu;
 const NOTEBOOK_INTENT_RE = /(?:\.ipynb\b|\bjupyter\b|\bnotebook (?:cell|file)\b|Jupyter|笔记本单元格)/iu;
 const IMAGE_GENERATION_INTENT_RE = /(?:\b(?:generate|make|design|draw) (?:me |us )?(?:an? |the )?(?:image|picture|logo|icon|illustration|graphic)\b|\bcreate (?:me |us )?(?:an? |the )?(?:illustration|image|picture|logo|icon|graphic)\b|生成(?:一张)?(?:图片|图像|标志|图标|插图)|创建(?:一张)?(?:插图|图片|图像|标志|图标)|画(?:一张)?(?:图|图片|图标))/iu;
+const REPO_WORKFLOW_INTENT_RE = /(?:\b(?:git |github )?(?:worktree|pull request|pr) (?:workflow|review|merge|landing|prepare)\b|\b(?:review|merge|land|prepare) (?:a |the )?(?:github )?(?:pull request|pr)\b|\bhead[- ]match(?:ed)? merge\b|\bmerge (?:and|\+) tag\b|\breview[- ]prep\b|\bye?aft-repo\b|仓库(?:工作流|流程)|准备(?:开发|审查|review) worktree|(?:审查|评审|合并|准备) ?(?:github )?(?:pr|pull request|拉取请求)|合并(?:并|和)?打 tag|精确 head 合并)/iu;
 const MCP_INTENT_RE = /(?:\bmcp\b|model context protocol|模型上下文协议)/iu;
 
 function messageText(message) {
@@ -161,6 +163,7 @@ export function resolveActiveToolNames({
   if (REPL_INTENT_RE.test(intentText)) active.add('JsRepl');
   if (NOTEBOOK_INTENT_RE.test(intentText)) active.add('NotebookEdit');
   if (imageGenerationConfigured && IMAGE_GENERATION_INTENT_RE.test(intentText)) active.add('ImageGeneration');
+  if (REPO_WORKFLOW_INTENT_RE.test(intentText)) active.add('RepoWorkflow');
 
   for (const name of matchedMcpTools(intentText, toolNames)) active.add(name);
 

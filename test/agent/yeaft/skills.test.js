@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  bundledYeaftSkillsDir,
   createManagedProjectSkill,
   createManagedSkill,
   parseSkill,
@@ -334,5 +335,29 @@ describe('managed native Skills', () => {
     const catalog = buildPluginCatalog({ skillManager: manager });
     expect(catalog.skills.filter(item => item.label === 'user')).toHaveLength(1);
     expect(catalog.skillSources.filter(item => item.name === 'user')).toHaveLength(2);
+  });
+});
+
+describe('bundled Agent skills distribution', () => {
+  it('resolves the canonical workflow skill from the published Agent package root', () => {
+    const agentRoot = join(process.cwd(), 'agent');
+    const manifest = JSON.parse(readFileSync(join(agentRoot, 'package.json'), 'utf8'));
+    const skillPath = join(agentRoot, 'skills', 'review-merge-tag', 'SKILL.md');
+    const previousHome = process.env.HOME;
+    const previousOverride = process.env.YEAFT_SKILLS_BUNDLED_DIR;
+    process.env.HOME = tempRoot();
+    delete process.env.YEAFT_SKILLS_BUNDLED_DIR;
+    try {
+      expect(manifest.files).toContain('skills/**/*.md');
+      expect(parseSkill(readFileSync(skillPath, 'utf8'), skillPath)).toMatchObject({
+        name: 'review-merge-tag',
+      });
+      expect(bundledYeaftSkillsDir()).toBe(join(agentRoot, 'skills'));
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousOverride === undefined) delete process.env.YEAFT_SKILLS_BUNDLED_DIR;
+      else process.env.YEAFT_SKILLS_BUNDLED_DIR = previousOverride;
+    }
   });
 });
