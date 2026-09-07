@@ -223,6 +223,9 @@ function createGithubRunner(repo, options = {}) {
       const tagRefspec = args.find(arg => /^[^:]*:refs\/tags\//.test(arg));
       const baseRefspec = args.find(arg => /^[0-9a-f]{40}:refs\/heads\/main$/i.test(arg));
       const deletesTag = tagRefspec?.startsWith(':');
+      if (pushUrlIndex >= 0 && baseRefspec && options.basePushResult) {
+        return options.basePushResult(baseRefspec);
+      }
       if (options.baseReceiveRace && pushUrlIndex >= 0 && baseRefspec) {
         const mappedArgs = [...args];
         mappedArgs[pushUrlIndex] = repo.remote;
@@ -259,6 +262,9 @@ function createGithubRunner(repo, options = {}) {
           });
           if (options.basePushAcceptedThenErrorAndReset) {
             git(repo.root, '--git-dir', repo.remote, 'update-ref', 'refs/heads/main', repo.baseSha, mergeSha);
+            if (options.basePushAcceptedThenErrorAndReset === 'exit-code') {
+              return { stdout: '', stderr: 'connection lost after receive-pack', exitCode: 1 };
+            }
             throw new Error('simulated transport failure after remote base acceptance and ABA reset');
           }
           if (options.basePushAcceptedThenError) {
@@ -1160,9 +1166,9 @@ describe('landRepoWorkflow', () => {
     expect(tagPushes).toHaveLength(1);
   });
 
-  it('keeps an accepted base push followed by a transport error and ABA reset unknown', async () => {
+  it.each([true, 'exit-code'])('keeps an accepted base push followed by transport failure (%s) and ABA reset unknown', async (failureMode) => {
     const repo = createPullRequestRepository();
-    const github = createGithubRunner(repo, { basePushAcceptedThenErrorAndReset: true });
+    const github = createGithubRunner(repo, { basePushAcceptedThenErrorAndReset: failureMode });
 
     let caught;
     try {
@@ -1200,6 +1206,37 @@ describe('landRepoWorkflow', () => {
       code: 'BASE_UPDATE_OUTCOME_UNKNOWN',
     });
     expect(git(repo.root, '--git-dir', repo.remote, 'rev-parse', 'refs/heads/main')).toBe(repo.baseSha);
+  });
+
+  it.each([
+    ['[rejected] (stale info)', false, 'BASE_LEASE_REJECTED', 'rejected'],
+    ['[remote rejected] (pre-receive hook declined)', false, 'BASE_LEASE_REJECTED', 'rejected'],
+    ['[remote failure] (remote failed to report status)', false, 'BASE_UPDATE_OUTCOME_UNKNOWN', 'unknown'],
+    ['[rejected] (stale info)', true, 'BASE_UPDATE_OUTCOME_UNKNOWN', 'unknown'],
+  ])('requires exact-ref porcelain rejection: %s, other ref=%s', async (summary, otherRef, code, status) => {
+    const repo = createPullRequestRepository();
+    const github = createGithubRunner(repo, {
+      basePushResult: refspec => ({
+        stdout: `!\t${otherRef ? refspec.replace('refs/heads/main', 'refs/heads/other') : refspec}\t${summary}`,
+        stderr: 'push failed',
+        exitCode: 1,
+      }),
+    });
+    await expect(landRepoWorkflow({
+      cwd: repo.checkout,
+      pr: 1,
+      baseBranch: 'main',
+      baseSha: repo.baseSha,
+      reviewedHead: repo.headSha,
+      reviewedSnapshot: repo.snapshotSha,
+      tagPrefix: 'v1.0.',
+    }, { run: github.run })).rejects.toMatchObject({
+      code,
+      details: { remoteEffects: { base: { status } } },
+    });
+    expect(git(repo.root, '--git-dir', repo.remote, 'rev-parse', 'refs/heads/main')).toBe(repo.baseSha);
+    expect(git(repo.root, '--git-dir', repo.remote, 'tag')).toBe('');
+    expect(github.calls.filter(call => call.command === 'git' && call.args[0] === 'push')).toHaveLength(1);
   });
 
   it('reports an accepted base push followed by a transport error and concurrent advance as unknown', async () => {

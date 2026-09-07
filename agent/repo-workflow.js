@@ -1161,7 +1161,15 @@ async function pushReviewedSnapshot(run, repository, pushUrl, baseRef, frozenBas
     ], { allowExitCodes: [1] });
     if (pushed.exitCode !== 0) {
       pushFailure = pushed;
-      pushRejected = true;
+      // A non-zero exit can follow remote acceptance (for example a lost
+      // connection). Only a porcelain rejection for this exact destination
+      // proves that Git rejected the write; stderr/exit status alone cannot.
+      pushRejected = String(pushed.stdout || '').split('\n').some(line => {
+        const [flag, refspec, summary] = line.split('\t');
+        return flag === '!'
+          && refspec === `${reviewedSnapshot}:${baseRef}`
+          && /^\[(?:rejected|remote rejected)\](?: |$)/.test(summary || '');
+      });
     }
   } catch (error) {
     pushFailure = error;
