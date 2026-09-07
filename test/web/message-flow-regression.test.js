@@ -1330,6 +1330,73 @@ describe('message flow regressions', () => {
     expect(JSON.stringify(store.yeaftDebugLoops).length).toBeLessThan(2048);
   });
 
+  it('refreshes debug idle timeout for accepted chunks, retries once, and fences close/foreign replies', () => {
+    vi.useFakeTimers();
+    try {
+      const store = useChatStore();
+      store.currentAgent = 'agent-debug';
+      store.sendWsMessage = vi.fn();
+      store.loadYeaftDebugHistory({ detailTurnId: 'turn-chunks' });
+      const first = store.sendWsMessage.mock.calls.at(-1)[0];
+      expect(first.agentId).toBe('agent-debug');
+      const body = JSON.stringify({ type: 'yeaft_debug_history', agentId: first.agentId,
+        requestId: first.requestId, detailTurnId: 'turn-chunks', turns: [], loops: [] });
+      const chunk = (index, agentId = first.agentId) => ({ type: 'yeaft_debug_history_chunk', agentId,
+        requestId: first.requestId, chunkCount: 3, chunkIndex: index,
+        data: index === 0 ? body.slice(0, 20) : index === 1 ? body.slice(20, 40) : body.slice(40) });
+      vi.advanceTimersByTime(20_000);
+      handleMessage(store, chunk(0));
+      vi.advanceTimersByTime(20_000);
+      expect(store.sendWsMessage).toHaveBeenCalledTimes(1);
+      handleMessage(store, chunk(1, 'other-agent'));
+      vi.advanceTimersByTime(10_000);
+      expect(store.sendWsMessage).toHaveBeenCalledTimes(2);
+      const retry = store.sendWsMessage.mock.calls.at(-1)[0];
+      expect(retry.requestId).not.toBe(first.requestId);
+      handleMessage(store, { ...JSON.parse(body), turns: [{ turnId: 'stale' }] });
+      expect(store.yeaftDebugHistoryLoading).toBe(true);
+      vi.advanceTimersByTime(30_000);
+      expect(store.sendWsMessage).toHaveBeenCalledTimes(2);
+      expect(store.yeaftDebugHistoryError).toBe('debug_history_timeout');
+      expect(store._yeaftDebugHistoryPending).toBeNull();
+      store.loadYeaftDebugHistory({ detailTurnId: 'turn-chunks' });
+      const final = store.sendWsMessage.mock.calls.at(-1)[0];
+      store.closeYeaftDebugPanel();
+      handleMessage(store, { ...JSON.parse(body), requestId: final.requestId, turns: [{ turnId: 'closed' }] });
+      vi.advanceTimersByTime(60_000);
+      expect(store.sendWsMessage).toHaveBeenCalledTimes(3);
+      expect(store.yeaftDebugTurnsById.closed).toBeUndefined();
+      expect(store.yeaftDebugHistoryLoading).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('coalesces live debug refresh only for the open Agent/Session/Turn and cancels on close', () => {
+    vi.useFakeTimers();
+    try {
+      const store = useChatStore();
+      store.yeaftDebugHistoryLoading = false;
+      store.yeaftDebugPanel = { open: true, turnId: 'live-turn', agentId: 'live-agent', sessionId: 'live-session', requestId: 'panel-open' };
+      const load = vi.spyOn(store, 'loadYeaftDebugHistory').mockImplementation(() => {});
+      store.scheduleYeaftDebugDetailRefresh({ agentId: 'foreign', sessionId: 'live-session' }, 'live-turn');
+      vi.advanceTimersByTime(600);
+      expect(load).not.toHaveBeenCalled();
+      const identity = { agentId: 'live-agent', sessionId: 'live-session' };
+      store.scheduleYeaftDebugDetailRefresh(identity, 'live-turn');
+      store.scheduleYeaftDebugDetailRefresh(identity, 'live-turn');
+      vi.advanceTimersByTime(500);
+      expect(load).toHaveBeenCalledExactlyOnceWith({ groupId: 'live-session', detailTurnId: 'live-turn' });
+      store.scheduleYeaftDebugDetailRefresh(identity, 'live-turn');
+      store.closeYeaftDebugPanel();
+      vi.advanceTimersByTime(500);
+      expect(load).toHaveBeenCalledTimes(1);
+      load.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('hydrates full persisted debug detail over the same live metadata loop', () => {
     const turnId = 'turn-debug-detail';
     const store = {
@@ -1389,6 +1456,21 @@ describe('message flow regressions', () => {
       rawRequest: fullRawRequest,
       rawResponse: { output: 'full persisted raw response' },
     });
+
+    // Older Agents send structural deltas without a materialized rawRequest.
+    handleMessage(store, {
+      type: 'yeaft_debug_history', requestId: 'detail-request', detailTurnId: turnId,
+      turns: [{ turnId, detailsLoaded: true }],
+      loops: [{ turnId, loopNumber: 1, requestDelta: { rawRequestDelta: { replacement: fullRawRequest } } }],
+    });
+    expect(store.yeaftDebugLoops[0].rawRequest).toEqual(fullRawRequest);
+    handleMessage(store, {
+      type: 'yeaft_debug_history', requestId: 'detail-request', detailTurnId: turnId,
+      turns: [{ turnId, detailsLoaded: true }],
+      loops: [{ turnId, loopNumber: 1, rawRequest: null,
+        requestDelta: { rawRequestDelta: { replacement: fullRawRequest } } }],
+    });
+    expect(store.yeaftDebugLoops[0].rawRequest).toBeNull();
   });
 
   it('keeps same-id streaming updates in one assistant message', () => {

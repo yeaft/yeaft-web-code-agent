@@ -211,6 +211,9 @@ function buildInitialRawRequestDelta(value) {
     delta.set[key] = cloneRawValue(item);
   }
   const body = isPlainObject(value.body) ? value.body : null;
+  if (body && ['input', 'messages'].some(key => Object.hasOwn(body, key) && !Array.isArray(body[key]))) {
+    return { replacement: cloneRawValue(value) };
+  }
   if (body) {
     for (const [key, bodyValue] of Object.entries(body)) {
       if (key === 'messages' || key === 'input') continue;
@@ -261,6 +264,10 @@ function buildRawRequestDelta(previous, next) {
 
   const prevBody = isPlainObject(comparablePrevious.body) ? comparablePrevious.body : null;
   const nextBody = isPlainObject(comparableNext.body) ? comparableNext.body : null;
+  if (prevBody && nextBody && (rawRequestMessageKey(prevBody) !== rawRequestMessageKey(nextBody)
+      || [prevBody, nextBody].some(body => ['input', 'messages'].some(key => Object.hasOwn(body, key) && !Array.isArray(body[key]))))) {
+    return stableEqual(comparablePrevious, comparableNext) ? null : { replacement: cloneRawValue(comparableNext) };
+  }
   if (prevBody && nextBody) {
     for (const key of Object.keys(nextBody)) {
       if (key === 'messages' || key === 'input') continue;
@@ -601,12 +608,12 @@ function summarizeTrace(trace, detailsLoaded = false) {
       callId: t.toolCallId || t.id || null,
       traceToolId: t.id || null,
       name: t.toolName || t.name || '?',
+      toolInput: t.toolInput == null ? null : String(t.toolInput),
       toolOutput: t.toolOutput == null ? null : String(t.toolOutput),
       durationMs: t.durationMs || 0,
       isError: !!t.isError,
     })) : [],
     detailsLoaded,
-    requestBase: trace?.baseRequest || null,
   };
 }
 
@@ -626,8 +633,10 @@ function expandTrace(trace) {
       loopInstanceId: loop.loopInstanceId || loop.turnRowId || null,
       loopNumber: loop.loopNumber || 0,
       model: loop.model || null,
-      systemPrompt: snapshot.systemPrompt || '',
-      messages: Array.isArray(snapshot.messages) ? snapshot.messages : [],
+      // Request snapshots are attached only to the latest loop below. Earlier
+      // loops retain their responses, calls and timing, not repeated history.
+      systemPrompt: '',
+      messages: [],
       response: loop.response || '',
       toolCalls: Array.isArray(loop.toolCalls) ? loop.toolCalls : [],
       usage,
@@ -635,14 +644,18 @@ function expandTrace(trace) {
       ttfbMs: loop.ttfbMs || null,
       stopReason: loop.stopReason || null,
       at: loop.at || null,
-      rawRequest,
+      rawRequest: null,
       rawResponse: loop.rawResponse ?? null,
-      requestDelta: loop.requestDelta || {},
-      requestBase: trace.baseRequest || null,
       sessionId: trace.sessionId || null,
       vpId: trace.vpId || null,
       threadId: trace.threadId || null,
     });
+  }
+  const latest = loops.at(-1);
+  if (latest && snapshot) {
+    latest.systemPrompt = snapshot.systemPrompt || '';
+    latest.messages = Array.isArray(snapshot.messages) ? snapshot.messages : [];
+    latest.rawRequest = rawRequest;
   }
   return { loops, turns: Array.from(turnsById.values()) };
 }

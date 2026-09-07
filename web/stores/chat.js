@@ -3227,13 +3227,46 @@ export const useChatStore = defineStore('chat', {
       if (typeof detailTurnId === 'string' && detailTurnId) payload.detailTurnId = detailTurnId;
       else if (searchPattern) payload.search = searchPattern;
       if (typeof groupId === 'string' && groupId) payload.sessionId = groupId;
+      this._yeaftDebugHistoryPending = { payload, attempt: 0, startedAt: Date.now() };
+      handlerHelpers.clearDebugHistoryChunks(this);
+      this.refreshYeaftDebugHistoryTimeout(requestId);
       this.sendWsMessage(payload);
+    },
+
+    /** Fetch live details only for the explicitly opened Agent/Session/Turn. */
+    scheduleYeaftDebugDetailRefresh(msg, turnId) {
+      const panel = this.yeaftDebugPanel;
+      if (!panel?.open || panel.turnId !== turnId || panel.agentId !== msg.agentId
+          || (panel.sessionId && panel.sessionId !== msg.sessionId)) return;
+      this._yeaftDebugDetailDirty = true;
+      if (this._yeaftDebugDetailRefreshTimer) return;
+      this._yeaftDebugDetailRefreshTimer = setTimeout(() => {
+        this._yeaftDebugDetailRefreshTimer = null;
+        if (!this.yeaftDebugPanel?.open || this.yeaftDebugPanel.requestId !== panel.requestId) return;
+        if (this.yeaftDebugHistoryLoading) return; // Completion schedules the dirty refresh.
+        this._yeaftDebugDetailDirty = false;
+        this.loadYeaftDebugHistory({ groupId: panel.sessionId, detailTurnId: panel.turnId });
+      }, 500);
+    },
+
+    /** Refresh only on an accepted chunk of the current Agent-scoped request. */
+    refreshYeaftDebugHistoryTimeout(requestId) {
+      const pending = this._yeaftDebugHistoryPending;
+      if (!pending || pending.payload.requestId !== requestId) return;
       if (this._fetchYeaftDebugHistoryTimer) clearTimeout(this._fetchYeaftDebugHistoryTimer);
-      // Detail replies may be absent because the Agent is offline, the relay was
-      // interrupted, or the transport rejected an oversized payload. Keep the
-      // store error machine-readable so the panel can localize an accurate,
-      // retryable timeout instead of incorrectly blaming reconnect alone.
       this._fetchYeaftDebugHistoryTimer = setTimeout(() => {
+        if (this._yeaftDebugHistoryPending !== pending) return;
+        if (this.yeaftDebugHistoryLoading && pending.attempt < 1) {
+          pending.attempt += 1;
+          pending.startedAt = Date.now();
+          pending.payload = { ...pending.payload, requestId: `dbg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}` };
+          if (pending.payload.requestKind === 'detail') this._yeaftDebugHistoryLatestDetailRequestId = pending.payload.requestId;
+          else this._yeaftDebugHistoryLatestListRequestId = pending.payload.requestId;
+          handlerHelpers.clearDebugHistoryChunks(this);
+          this.refreshYeaftDebugHistoryTimeout(pending.payload.requestId);
+          this.sendWsMessage(pending.payload);
+          return;
+        }
         if (this.yeaftDebugHistoryLoading) {
           this.yeaftDebugHistoryLoading = false;
           this.yeaftDebugHistoryError = 'debug_history_timeout';
@@ -3247,7 +3280,11 @@ export const useChatStore = defineStore('chat', {
         }
         this._yeaftDebugHistoryInFlightKey = null;
         this._fetchYeaftDebugHistoryTimer = null;
-      }, 10_000);
+        this._yeaftDebugHistoryPending = null;
+        this._yeaftDebugHistoryLatestDetailRequestId = null;
+        this._yeaftDebugHistoryLatestListRequestId = null;
+        handlerHelpers.clearDebugHistoryChunks(this);
+      }, Math.max(0, Math.min(30_000, 300_000 - (Date.now() - pending.startedAt))));
     },
 
     /**
@@ -3295,6 +3332,17 @@ export const useChatStore = defineStore('chat', {
      * browser after the panel is dismissed.
      */
     closeYeaftDebugPanel() {
+      if (this._yeaftDebugDetailRefreshTimer) clearTimeout(this._yeaftDebugDetailRefreshTimer);
+      this._yeaftDebugDetailRefreshTimer = null;
+      this._yeaftDebugDetailDirty = false;
+      if (this._fetchYeaftDebugHistoryTimer) clearTimeout(this._fetchYeaftDebugHistoryTimer);
+      this._fetchYeaftDebugHistoryTimer = null;
+      this._yeaftDebugHistoryPending = null;
+      this._yeaftDebugHistoryInFlightKey = null;
+      this._yeaftDebugHistoryLatestDetailRequestId = null;
+      this._yeaftDebugHistoryLatestListRequestId = null;
+      this.yeaftDebugHistoryLoading = false;
+      handlerHelpers.clearDebugHistoryChunks(this);
       const panel = this.yeaftDebugPanel || {};
       const turnId = panel.turnId || null;
       this.yeaftDebugPanel = {
@@ -5143,6 +5191,7 @@ export const useChatStore = defineStore('chat', {
         }
 
         case 'tool_exec': {
+          this.scheduleYeaftDebugDetailRefresh(msg, event.turnId);
           // feat-6af5f9f1 PR B: pin the tool execution to its turn so the
           // panel can show per-tool timing without scanning loops.messages.
           if (!event.turnId) break;
@@ -5166,6 +5215,7 @@ export const useChatStore = defineStore('chat', {
         }
 
         case 'loop': {
+          this.scheduleYeaftDebugDetailRefresh(msg, event.turnId);
           // feat-6af5f9f1 PR B: replaces `debug_turn`. Each entry is one
           // LLM call; the parent Turn record lives in yeaftDebugTurnsById
           // under loop.turnId.

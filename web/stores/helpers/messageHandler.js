@@ -39,17 +39,27 @@ const DEBUG_HISTORY_SEARCH_LIMIT = 5;
 const LEGACY_YEAFT_SESSION_INVENTORY_QUIET_MS = 500;
 const DEBUG_HISTORY_CHUNK_MAX_BYTES = 512 * 1024;
 const DEBUG_HISTORY_REASSEMBLY_TTL_MS = 30_000;
-const debugHistoryChunks = new Map();
+const debugHistoryChunksByStore = new WeakMap();
+
+export function clearDebugHistoryChunks(store) {
+  debugHistoryChunksByStore.delete(store);
+}
 
 function acceptDebugHistoryChunk(store, msg) {
+  let debugHistoryChunks = debugHistoryChunksByStore.get(store);
+  if (!debugHistoryChunks) {
+    debugHistoryChunks = new Map();
+    debugHistoryChunksByStore.set(store, debugHistoryChunks);
+  }
   const agentId = typeof msg?.agentId === 'string' ? msg.agentId : '';
   const requestId = typeof msg?.requestId === 'string' ? msg.requestId : '';
   const chunkIndex = Number(msg?.chunkIndex);
   const chunkCount = Number(msg?.chunkCount);
   const data = typeof msg?.data === 'string' ? msg.data : null;
   const panelAgentId = store.yeaftDebugPanel?.agentId || null;
-  const expected = store._yeaftDebugHistoryLatestDetailRequestId || store._yeaftDebugHistoryLatestListRequestId;
-  if (!agentId || !requestId || (panelAgentId && agentId !== panelAgentId) || requestId !== expected
+  const pending = store._yeaftDebugHistoryPending?.payload;
+  const expected = pending?.requestId || store._yeaftDebugHistoryLatestDetailRequestId || store._yeaftDebugHistoryLatestListRequestId;
+  if (!agentId || !requestId || (panelAgentId && agentId !== panelAgentId) || (pending && agentId !== pending.agentId) || requestId !== expected
       || !Number.isSafeInteger(chunkIndex) || !Number.isSafeInteger(chunkCount)
       || chunkCount <= 1 || chunkIndex < 0 || chunkIndex >= chunkCount
       || data == null || new TextEncoder().encode(data).byteLength > DEBUG_HISTORY_CHUNK_MAX_BYTES) return null;
@@ -74,6 +84,7 @@ function acceptDebugHistoryChunk(store, msg) {
   state.bytes += bytes;
   state.nextIndex += 1;
   state.expiresAt = now + DEBUG_HISTORY_REASSEMBLY_TTL_MS;
+  store.refreshYeaftDebugHistoryTimeout?.(requestId);
   if (state.nextIndex !== state.chunkCount) return null;
   debugHistoryChunks.delete(key);
   try {
@@ -215,7 +226,7 @@ function hydrateDebugLoopRequests(loops = []) {
       ...loop,
       systemPrompt: typeof loop.systemPrompt === 'string' && loop.systemPrompt ? loop.systemPrompt : snapshot.systemPrompt,
       messages: Array.isArray(loop.messages) && loop.messages.length > 0 ? loop.messages : snapshot.messages,
-      rawRequest: loop.rawRequest ?? null,
+      rawRequest: loop.rawRequest === undefined ? snapshot.rawRequest : loop.rawRequest,
       rawRequestBase,
     };
   });
@@ -548,6 +559,11 @@ export function handleMessage(store, msg) {
         : store._yeaftDebugHistoryLatestListRequestId;
       if (expectedRequestId && requestId !== expectedRequestId) break;
       if (!expectedRequestId && requestId) break;
+      const pending = store._yeaftDebugHistoryPending?.payload;
+      if (pending && (pending.requestId !== requestId || pending.agentId !== msg.agentId
+          || (msg.sessionId && pending.sessionId !== msg.sessionId))) break;
+      store._yeaftDebugHistoryPending = null;
+      clearDebugHistoryChunks(store);
       if (store._fetchYeaftDebugHistoryTimer) {
         clearTimeout(store._fetchYeaftDebugHistoryTimer);
         store._fetchYeaftDebugHistoryTimer = null;
@@ -674,6 +690,10 @@ export function handleMessage(store, msg) {
         ? msg.projection
         : null;
       store.yeaftDebugHistoryFetchedAt = Date.now();
+      if (store._yeaftDebugDetailDirty && !store.yeaftDebugHistoryError) {
+        store.scheduleYeaftDebugDetailRefresh?.({ agentId: store.yeaftDebugPanel?.agentId,
+          sessionId: store.yeaftDebugPanel?.sessionId }, store.yeaftDebugPanel?.turnId);
+      }
       // Turn-level debug panel: a detail fetch that matches the panel's
       // current turn flips status to ready/error. Stale detail responses
       // were already dropped by the requestId guard above.

@@ -244,20 +244,109 @@ describe('handleMessage turn-level panel status', () => {
     expect(wrapper.findAll('.yeaft-debug-loop-num').map(node => node.text())).toEqual(['Loop 1', 'Loop 2']);
     expect(wrapper.findAll('.yeaft-debug-loop-model').map(node => node.text())).toEqual(['provider/model-a', 'provider/model-a']);
 
+    const latestSystem = wrapper.get('.yeaft-debug-latest-system-prompt');
+    await latestSystem.get('.yeaft-debug-show-btn').trigger('click');
+    expect(latestSystem.get('pre').text()).toBe('You are the changed system prompt for loop two.');
+    expect(wrapper.text()).not.toContain('You are the traced system prompt.');
+
     const loopHeaders = wrapper.findAll('.yeaft-debug-loop-header');
     await loopHeaders[0].trigger('click');
-    let loopBodies = wrapper.findAll('.yeaft-debug-loop-body');
-    expect(loopBodies[0].text()).toContain('yeaft.systemPrompt');
-    await loopBodies[0].find('.yeaft-debug-show-btn').trigger('click');
-    expect(loopBodies[0].find('.yeaft-debug-pre').text()).toBe('You are the traced system prompt.');
-    expect(loopBodies[0].text()).toContain('yeaft.debugAssistantResponse');
-
     await loopHeaders[1].trigger('click');
-    loopBodies = wrapper.findAll('.yeaft-debug-loop-body');
+    const loopBodies = wrapper.findAll('.yeaft-debug-loop-body');
+    for (const body of loopBodies) {
+      expect(body.text()).not.toContain('yeaft.systemPrompt');
+      expect(body.text()).not.toContain('copy req');
+      expect(body.text()).toContain('yeaft.debugAssistantResponse');
+    }
     await loopBodies[1].find('.yeaft-debug-show-btn').trigger('click');
-    expect(loopBodies[1].find('.yeaft-debug-pre').text()).toBe('You are the changed system prompt for loop two.');
+    expect(loopBodies[1].find('.yeaft-debug-pre').text()).toBe('The second loop detail is present.');
     expect(loadYeaftDebugHistory).not.toHaveBeenCalled();
     wrapper.unmount();
+  });
+
+  it('shows and copies only the latest request while preserving full per-loop tool details', async () => {
+    const fullResult = 'full tool result\n'.repeat(2000) + 'RESULT_TAIL';
+    const latestBody = { model: 'latest-model', input: [{ role: 'user', content: 'LATEST_BODY' }] };
+    const loops = [1, 2].map(loopNumber => ({
+      turnId: 'turn-abc', loopNumber, model: 'provider/model-a',
+      systemPrompt: loopNumber === 2 ? 'LATEST_SYSTEM' : 'OLD_SYSTEM',
+      rawRequest: { method: 'POST', url: '/responses', headers: { 'x-request-id': 'not-body' }, body: loopNumber === 2 ? latestBody : { input: 'OLD_BODY' } },
+      toolCalls: [{ id: `call-${loopNumber}`, name: 'Read', input: { path: `/file-${loopNumber}` } }],
+      rawResponse: { status: 200 },
+    }));
+    const turn = {
+      turnId: 'turn-abc', detailsLoaded: true, loopCount: 2,
+      tools: loops.map(loop => ({ loopNumber: loop.loopNumber, callId: `call-${loop.loopNumber}`, name: 'Read', toolOutput: fullResult })),
+    };
+    const store = makeStore({
+      yeaftDebugPanel: { open: true, status: 'ready', turnId: 'turn-abc', sessionId: 'session-1' },
+      yeaftDebugTurnsById: { 'turn-abc': turn }, yeaftDebugLoops: loops,
+    });
+    window.Pinia.useChatStore = () => store;
+    const wrapper = mount(YeaftDebugPanel, { global: { mocks: { $t: key => key } } });
+    const copy = vi.spyOn(wrapper.vm, 'copyText').mockImplementation(() => {});
+    await wrapper.get('.yeaft-debug-turn-header').trigger('click');
+    const request = wrapper.get('.yeaft-debug-latest-request');
+    const system = wrapper.get('.yeaft-debug-latest-system-prompt');
+    expect(wrapper.findAll('.yeaft-debug-latest-request')).toHaveLength(1);
+    expect(request.element.parentElement.classList.contains('yeaft-debug-turn-body')).toBe(true);
+    await request.get('.yeaft-debug-show-btn').trigger('click');
+    expect(request.get('pre').text()).toBe(JSON.stringify(latestBody, null, 2));
+    await request.get('.yeaft-debug-copy-btn').trigger('click');
+    expect(copy).toHaveBeenLastCalledWith(JSON.stringify(latestBody, null, 2), 'yeaft.debugLatestRequestBody');
+    await system.get('.yeaft-debug-show-btn').trigger('click');
+    expect(system.get('pre').text()).toBe('LATEST_SYSTEM');
+    await system.get('.yeaft-debug-copy-btn').trigger('click');
+    expect(copy).toHaveBeenLastCalledWith('LATEST_SYSTEM', 'yeaft.debugLatestSystemPrompt');
+    for (const header of wrapper.findAll('.yeaft-debug-loop-header')) await header.trigger('click');
+    for (const [index, body] of wrapper.findAll('.yeaft-debug-loop-body').entries()) {
+      expect(body.text()).not.toContain('copy req');
+      const buttons = body.findAll('.yeaft-debug-tool-row button');
+      await buttons[2].trigger('click');
+      const detail = body.findAll('.yeaft-debug-tool-detail pre');
+      expect(JSON.parse(detail[0].text())).toEqual({ path: `/file-${index + 1}` });
+      expect(detail[1].text()).toBe(fullResult);
+      await buttons[1].trigger('click');
+      expect(copy).toHaveBeenLastCalledWith(fullResult, 'tool output');
+    }
+    await wrapper.get('.yeaft-debug-turn-copy').trigger('click');
+    const markdown = copy.mock.lastCall[0];
+    expect(markdown.match(/LATEST_BODY/g)).toHaveLength(1);
+    expect(markdown.match(/LATEST_SYSTEM/g)).toHaveLength(1);
+    expect(markdown).not.toContain('OLD_BODY');
+    expect(markdown).not.toContain('OLD_SYSTEM');
+    expect(markdown).not.toContain('x-request-id');
+
+    // New projection and explicit null must not recover the previous request,
+    // even when legacy base fields remain on the latest record.
+    store.yeaftDebugLoops[1].rawRequest = null;
+    store.yeaftDebugLoops[1].rawRequestBase = loops[0].rawRequest;
+    store.yeaftDebugLoops[1].systemPrompt = '';
+    await Vue.nextTick();
+    expect(request.find('pre').exists()).toBe(false);
+    expect(request.get('.yeaft-debug-copy-btn').attributes('disabled')).toBeDefined();
+    expect(request.get('.yeaft-debug-show-btn').attributes('disabled')).toBeDefined();
+    expect(request.text()).toContain('yeaft.debugRequestBodyUnavailable');
+    expect(system.get('.yeaft-debug-copy-btn').attributes('disabled')).toBeDefined();
+    expect(system.text()).toContain('yeaft.debugSystemPromptUnavailable');
+    await wrapper.get('.yeaft-debug-turn-copy').trigger('click');
+    expect(copy.mock.lastCall[0]).not.toMatch(/OLD_BODY|LATEST_BODY|OLD_SYSTEM|LATEST_SYSTEM/);
+    wrapper.unmount();
+  });
+
+  it('selects the latest legacy loop without mutating order and respects explicit null', () => {
+    const vm = { ...YeaftDebugPanel.methods };
+    const base = { body: { input: [{ role: 'user', content: 'base' }] } };
+    const latest = {
+      loopNumber: 3, systemPrompt: 'latest', requestBase: { rawRequest: base },
+      requestDelta: { rawRequestDelta: { body: { messagesKey: 'input', messagesFrom: 1, messagesAppend: [{ role: 'user', content: 'append' }] } } },
+    };
+    const turn = { loops: [latest, { loopNumber: 1, rawRequest: { body: 'old' } }] };
+    expect(JSON.parse(vm.latestRequestForTurn(turn).bodyText).input).toHaveLength(2);
+    expect(turn.loops[0]).toBe(latest);
+    latest.rawRequest = null;
+    expect(vm.latestRequestForTurn(turn)).toMatchObject({ loopNumber: 3, bodyText: null, systemPrompt: 'latest' });
+    expect(vm.latestRequestForTurn({ loops: [] })).toBeNull();
   });
 
   it('localizes the retryable timeout diagnostic instead of blaming reconnect alone', async () => {
