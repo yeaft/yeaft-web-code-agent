@@ -1,0 +1,82 @@
+{
+  "voice": "en-US-GuyNeural",
+  "rate": "-5%",
+  "fps": 24,
+  "width": 1920,
+  "height": 1080,
+  "duration": 110.16666666666666,
+  "scenes": [
+    {
+      "slide": 1,
+      "title": "Work from anywhere.",
+      "text": "Work from anywhere. With Yeaft, your location can change without leaving the work behind. Connect to your AI team through a browser.",
+      "voiceDuration": 10.152,
+      "start": 0,
+      "duration": 10.833333333333334,
+      "tempo": 1.0362352941176471
+    },
+    {
+      "slide": 2,
+      "title": "Different devices. The same working context.",
+      "text": "At home, at the office, or on the move, reconnect to the same Agent and Session. The browser is your entry point. Your online Agent provides the working environment.",
+      "voiceDuration": 12.48,
+      "start": 10.833333333333334,
+      "duration": 13.083333333333334,
+      "tempo": 1.0362352941176471
+    },
+    {
+      "slide": 3,
+      "title": "The right role. The next step.",
+      "text": "Bring in the right role for the next step. An investigator finds the cause, an implementer makes the change, and a reviewer challenges it. Explicit handoffs carry the task forward, not a fixed pipeline.",
+      "voiceDuration": 14.04,
+      "start": 23.916666666666668,
+      "duration": 14.583333333333334,
+      "tempo": 1.0362352941176471
+    },
+    {
+      "slide": 4,
+      "title": "Define the roles. Set the working rules.",
+      "text": "Define each role with configurable system prompts. Add shared project rules, so responsibilities, coding conventions, and review expectations travel with the work.",
+      "voiceDuration": 11.472,
+      "start": 38.5,
+      "duration": 12.083333333333334,
+      "tempo": 1.0362352941176471
+    },
+    {
+      "slide": 5,
+      "title": "Beyond chat. A real workbench.",
+      "text": "Go beyond chat with Workbench. Inspect actual files, check command output, and stay close to what the Agent is doing. Delegate the work without losing visibility.",
+      "voiceDuration": 11.952,
+      "start": 50.583333333333336,
+      "duration": 12.541666666666666,
+      "tempo": 1.0362352941176471
+    },
+    {
+      "slide": 6,
+      "title": "From a development goal to execution.",
+      "text": "Give AI a development goal, constraints, and acceptance criteria. For example: fix a bug, add a regression test, and prepare a patch for review, instead of scripting every next prompt.",
+      "voiceDuration": 12.672,
+      "start": 63.125,
+      "duration": 13.25,
+      "tempo": 1.0362352941176471
+    },
+    {
+      "slide": 7,
+      "title": "Keep the task moving. Keep control.",
+      "text": "Work Center keeps the goal, progress, and evidence visible. Let ready work advance on the online Agent. Step in for decisions and evaluate results against acceptance criteria. Work Center is currently in Preview.",
+      "voiceDuration": 16.392,
+      "start": 76.375,
+      "duration": 16.833333333333332,
+      "tempo": 1.0362352941176471
+    },
+    {
+      "slide": 8,
+      "title": "Your AI team. Real work. From anywhere.",
+      "text": "Anywhere access. Clear responsibilities. Real tools. Goal driven execution. Yeaft. Your AI team. Real work. From anywhere.",
+      "voiceDuration": 16.536,
+      "start": 93.20833333333333,
+      "duration": 16.958333333333332,
+      "tempo": 1.0362352941176471
+    }
+  ]
+}

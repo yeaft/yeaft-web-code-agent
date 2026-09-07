@@ -1,0 +1,22 @@
+{
+  "file": "yeaft-work-anywhere-en.mp4",
+  "durationSeconds": 110.19,
+  "resolution": "1920x1080",
+  "fps": 24,
+  "videoCodec": "H.264",
+  "audioCodec": "AAC",
+  "voice": "en-US-GuyNeural (synthetic)",
+  "meanVolumeDb": -24.1,
+  "subtitleCues": 35,
+  "subtitleTimingNonOverlapping": true,
+  "scenes": 8,
+  "fullDecodePassed": true,
+  "bytes": 6506948,
+  "sha256": "8099fba04ea369d88f16957c2ef4cc5e72e695728bbd6c5ce69e716c73e143b7",
+  "sourceDeckCommit": "ebd2745c35d526310a74344ef4a7d284a940282d",
+  "limitations": [
+    "Static slide showcase, not a live interaction recording.",
+    "Synthetic voice; no human listening review performed.",
+    "No background music."
+  ]
+}

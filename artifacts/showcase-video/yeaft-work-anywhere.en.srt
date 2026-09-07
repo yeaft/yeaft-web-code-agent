@@ -1,0 +1,139 @@
+1
+00:00:00,449 --> 00:00:01,737
+Work from anywhere.
+
+2
+00:00:02,521 --> 00:00:05,406
+With Yeaft, your location can change without leaving the
+
+3
+00:00:05,416 --> 00:00:06,298
+work behind.
+
+4
+00:00:07,054 --> 00:00:09,358
+Connect to your AI team through a browser.
+
+5
+00:00:11,282 --> 00:00:14,612
+At home, at the office, or on the move, reconnect to the
+
+6
+00:00:14,622 --> 00:00:16,012
+same Agent and Session.
+
+7
+00:00:16,796 --> 00:00:18,668
+The browser is your entry point.
+
+8
+00:00:19,437 --> 00:00:22,439
+Your online Agent provides the working environment.
+
+9
+00:00:24,366 --> 00:00:26,530
+Bring in the right role for the next step.
+
+10
+00:00:27,289 --> 00:00:30,275
+An investigator finds the cause, an implementer makes the
+
+11
+00:00:30,285 --> 00:00:32,437
+change, and a reviewer challenges it.
+
+12
+00:00:33,219 --> 00:00:37,034
+Explicit handoffs carry the task forward, not a fixed pipeline.
+
+13
+00:00:38,949 --> 00:00:41,990
+Define each role with configurable system prompts.
+
+14
+00:00:42,761 --> 00:00:46,639
+Add shared project rules, so responsibilities, coding conventions,
+
+15
+00:00:46,748 --> 00:00:49,154
+and review expectations travel with the work.
+
+16
+00:00:51,032 --> 00:00:52,930
+Go beyond chat with Workbench.
+
+17
+00:00:53,689 --> 00:00:56,993
+Inspect actual files, check command output, and stay close
+
+18
+00:00:57,003 --> 00:00:58,316
+to what the Agent is doing.
+
+19
+00:00:59,098 --> 00:01:01,681
+Delegate the work without losing visibility.
+
+20
+00:01:03,574 --> 00:01:07,554
+Give AI a development goal, constraints, and acceptance criteria.
+
+21
+00:01:08,326 --> 00:01:11,782
+For example: fix a bug, add a regression test, and prepare
+
+22
+00:01:11,792 --> 00:01:14,921
+a patch for review, instead of scripting every next prompt.
+
+23
+00:01:16,824 --> 00:01:20,347
+Work Center keeps the goal, progress, and evidence visible.
+
+24
+00:01:21,118 --> 00:01:23,651
+Let ready work advance on the online Agent.
+
+25
+00:01:24,407 --> 00:01:27,889
+Step in for decisions and evaluate results against acceptance
+
+26
+00:01:27,899 --> 00:01:28,756
+criteria.
+
+27
+00:01:29,524 --> 00:01:31,765
+Work Center is currently in Preview.
+
+28
+00:01:33,657 --> 00:01:35,009
+Anywhere access.
+
+29
+00:01:35,780 --> 00:01:37,361
+Clear responsibilities.
+
+30
+00:01:38,142 --> 00:01:39,215
+Real tools.
+
+31
+00:01:39,983 --> 00:01:41,703
+Goal driven execution.
+
+32
+00:01:42,472 --> 00:01:43,151
+Yeaft.
+
+33
+00:01:43,907 --> 00:01:45,094
+Your AI team.
+
+34
+00:01:45,862 --> 00:01:46,871
+Real work.
+
+35
+00:01:47,627 --> 00:01:48,725
+From anywhere.
