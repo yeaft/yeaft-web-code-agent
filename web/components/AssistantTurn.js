@@ -442,9 +442,10 @@ export default {
     });
     Vue.onBeforeUnmount(() => window.removeEventListener('workbench-message', handleFileReferenceResolution));
     Vue.watch(
-      [() => props.turn?.isStreaming, fileReferenceSourceSignature],
-      ([streaming], [previousStreaming, previousSignature]) => {
-        if (!streaming && (previousStreaming || fileReferenceSourceSignature.value !== previousSignature)) {
+      [() => props.turn?.isStreaming, fileReferenceSourceSignature, () => store.fileReferenceResolutionContextKey],
+      ([streaming, signature, contextKey], [previousStreaming, previousSignature, previousContextKey]) => {
+        if (!streaming
+            && (previousStreaming || signature !== previousSignature || contextKey !== previousContextKey)) {
           requestFileReferenceResolution();
         }
       },

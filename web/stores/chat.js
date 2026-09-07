@@ -1529,6 +1529,50 @@ export const useChatStore = defineStore('chat', {
       }
       return state.currentWorkDir || state.currentAgentInfo?.workDir || '';
     },
+    fileReferenceResolutionContextKey: (state) => {
+      const route = state.currentView === 'yeaft'
+        ? (() => {
+            const sessionId = resolveActiveYeaftSessionId(state);
+            return sessionId ? {
+              runtimeProvider: 'yeaft',
+              agentId: resolveAgentIdForSession(state, sessionId),
+              sessionId,
+            } : null;
+          })()
+        : (() => {
+            const conversationId = selectActiveConversationId(state);
+            const conversation = state.conversations.find(row => row?.id === conversationId && row.type !== 'yeaft');
+            return conversation ? {
+              runtimeProvider: conversation.provider === 'copilot' ? 'copilot' : 'claude-code',
+              agentId: conversation.agentId || state.currentAgent || null,
+              sessionId: conversationId,
+            } : null;
+          })();
+      const agentId = route?.agentId || state.currentAgent || null;
+      const conversationId = route?.runtimeProvider === 'yeaft'
+        ? resolveYeaftConversationIdForSession(state, route.sessionId, agentId)
+        : state.currentConversation;
+      const canResolve = agentHasCapability(state, agentId, 'file_reference_resolution');
+      if (!agentId || !conversationId || !canResolve) return '';
+      const workDir = state.currentView === 'yeaft'
+        ? getSessionsStore()?.activeSession?.workDir
+          || state.yeaftYeaftDir
+          || state.currentAgentInfo?.workDir
+          || ''
+        : state.currentWorkDir || state.currentAgentInfo?.workDir || '';
+      return JSON.stringify([
+        state.connectionState,
+        state.authenticated,
+        state.workbenchRouteProtocolSupported,
+        route?.runtimeProvider || '',
+        agentId,
+        route?.sessionId || '',
+        conversationId,
+        workDir,
+        agentHasCapability(state, agentId, 'file_editor'),
+        agentHasCapability(state, agentId, 'workbench_session_routes'),
+      ]);
+    },
     // 当前 Agent 的能力列表
     currentAgentCapabilities: (state) => {
       return state.currentAgentInfo?.capabilities || ['terminal', 'file_editor', 'background_tasks'];
@@ -8412,7 +8456,7 @@ export const useChatStore = defineStore('chat', {
         sessionId: route.sessionId,
       } : null;
       const requestId = `file_refs_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-      this.sendWsMessage({
+      const sent = this.sendWsMessage({
         type: 'resolve_file_references',
         requestId,
         references: paths,
@@ -8421,7 +8465,7 @@ export const useChatStore = defineStore('chat', {
         workDir,
         workbenchRoute,
       });
-      return requestId;
+      return sent ? requestId : null;
     },
 
     openFileInExplorer(filePath, { hideTree = false, line = null } = {}) {

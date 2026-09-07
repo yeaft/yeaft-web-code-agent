@@ -949,6 +949,59 @@ describe('message file preview', () => {
     wrapper.unmount();
   });
 
+  it('retries file reference resolution when the active route becomes ready', async () => {
+    const resolveMessageFileReferences = vi.fn()
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce('file-refs-ready');
+    const fileReferenceStore = Vue.reactive({
+      fileReferenceResolutionContextKey: '',
+      answerUserQuestion: vi.fn(),
+      cancelVpTurn: vi.fn(),
+      openFileInExplorer: vi.fn(),
+      resolveMessageFileReferences,
+    });
+    globalThis.Vue = Vue;
+    globalThis.Pinia = {
+      defineStore: () => () => ({}),
+      useChatStore: () => fileReferenceStore,
+    };
+    globalThis.marked = {
+      setOptions: vi.fn(),
+      parse: vi.fn(() => '<p><code>Q:\\M365\\Sydney\\docs\\design-doc.md</code></p>'),
+    };
+    globalThis.hljs = undefined;
+    const { default: AssistantTurn } = await import('../../web/components/AssistantTurn.js');
+    const wrapper = mount(AssistantTurn, {
+      props: {
+        turn: {
+          id: 'turn-file-preview-late-route',
+          textContent: 'Q:\\M365\\Sydney\\docs\\design-doc.md',
+          textSegments: [{
+            key: 'result',
+            content: 'Q:\\M365\\Sydney\\docs\\design-doc.md',
+            kind: 'result',
+          }],
+          toolMsgs: [], imageMsgs: [], todoMsg: null, askMsg: null, isStreaming: false,
+        },
+      },
+      global: {
+        mocks: { $t: key => key },
+        provide: { t: key => key },
+        stubs: { ToolLine: true, AskCard: true, VpSpeakerHeader: true },
+      },
+    });
+
+    expect(resolveMessageFileReferences).toHaveBeenCalledTimes(1);
+    expect(resolveMessageFileReferences).toHaveBeenLastCalledWith(['Q:\\M365\\Sydney\\docs\\design-doc.md']);
+
+    fileReferenceStore.fileReferenceResolutionContextKey = 'connected:agent-1:session-a:/workspace';
+    await Vue.nextTick();
+
+    expect(resolveMessageFileReferences).toHaveBeenCalledTimes(2);
+    expect(resolveMessageFileReferences).toHaveBeenLastCalledWith(['Q:\\M365\\Sydney\\docs\\design-doc.md']);
+    wrapper.unmount();
+  });
+
   it('revalidates file references when completed response content changes', async () => {
     const resolveMessageFileReferences = vi.fn()
       .mockReturnValueOnce('file-refs-old')
