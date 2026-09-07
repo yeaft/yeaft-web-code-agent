@@ -1,9 +1,9 @@
-"""从既有八页 PDF 制作英文配音视频；所有输出只写本脚本目录。
-依赖：imageio-ffmpeg==0.6.0 pymupdf==1.28.2 edge-tts==7.2.8 pillow==12.3.0
-TTS 只发送已公开的产品讲稿到 Microsoft Edge 在线语音服务，不使用付费凭证。
+"""从八页 PDF 制作稳定 4K 演示视频，使用公开讲稿调用 Edge 在线 TTS。
+依赖版本见 README。中间文件只写入本目录 render/；不修改在线服务。
 """
 import argparse
 import asyncio
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -17,148 +17,136 @@ import pymupdf
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent
+WORK = ROOT / 'render'
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
-FPS = 24
-VOICE = 'en-US-GuyNeural'
+FPS, WIDTH, HEIGHT = 30, 3840, 2160
+VOICE = 'en-US-AndrewNeural'
+TRANSITION = 0.6
 SCENES = [
-    ('Work from anywhere.', 'Work from anywhere. With Yeaft, your location can change without leaving the work behind. Connect to your AI team through a browser.'),
-    ('Different devices. The same working context.', 'At home, at the office, or on the move, reconnect to the same Agent and Session. The browser is your entry point. Your online Agent provides the working environment.'),
-    ('The right role. The next step.', 'Bring in the right role for the next step. An investigator finds the cause, an implementer makes the change, and a reviewer challenges it. Explicit handoffs carry the task forward, not a fixed pipeline.'),
-    ('Define the roles. Set the working rules.', 'Define each role with configurable system prompts. Add shared project rules, so responsibilities, coding conventions, and review expectations travel with the work.'),
-    ('Beyond chat. A real workbench.', 'Go beyond chat with Workbench. Inspect actual files, check command output, and stay close to what the Agent is doing. Delegate the work without losing visibility.'),
-    ('From a development goal to execution.', 'Give AI a development goal, constraints, and acceptance criteria. For example: fix a bug, add a regression test, and prepare a patch for review, instead of scripting every next prompt.'),
-    ('Keep the task moving. Keep control.', 'Work Center keeps the goal, progress, and evidence visible. Let ready work advance on the online Agent. Step in for decisions and evaluate results against acceptance criteria. Work Center is currently in Preview.'),
-    ('Your AI team. Real work. From anywhere.', 'Anywhere access. Clear responsibilities. Real tools. Goal driven execution. Yeaft. Your AI team. Real work. From anywhere.'),
+    ('Work from anywhere.', 'Work from anywhere. With Yeaft, you can change location without leaving your work behind. Just open a browser and connect to your AI team.'),
+    ('Different devices. The same working context.', 'At home, at the office, or on the move. Reconnect to the same agent and session. Your browser gives you access. Your online agent keeps the working environment in place.'),
+    ('The right role. The next step.', 'Bring in the right role for each step. An investigator finds the cause. An implementer makes the change. A reviewer checks the result. Clear handoffs move the work forward, without a fixed pipeline.'),
+    ('Define the roles. Set the working rules.', 'Give each role clear instructions. Add shared project rules, so responsibilities, coding standards, and review expectations stay consistent as the work moves between roles.'),
+    ('Beyond chat. A real workbench.', 'Go beyond chat with Workbench. Open the actual files. Check command output. See what your agent is doing, and step in when you need to.'),
+    ('From a development goal to execution.', 'Start with a development goal, clear boundaries, and acceptance criteria. Fix a bug. Add a regression test. Prepare a patch for review. Describe the outcome, rather than every next prompt.'),
+    ('Keep the task moving. Keep control.', 'Work Center keeps your goal, progress, and evidence in view. Let ready work advance while your agent is online. Step in for decisions, and check the results against your criteria. Work Center is in preview.'),
+    ('Your AI team. Real work. From anywhere.', 'Work from anywhere. Clear roles. Real tools. Yeaft. Your AI team, doing real work.'),
 ]
 
 
-def run(args):
-    result = subprocess.run([str(x) for x in args], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+def ff(args):
+    result = subprocess.run([FFMPEG, '-hide_banner', '-loglevel', 'error', '-nostdin', '-y', *map(str, args)], capture_output=True)
     if result.returncode:
         raise RuntimeError(result.stderr.decode(errors='replace')[-5000:])
     return result
 
 
-def ff(args):
-    return run([FFMPEG, '-hide_banner', '-loglevel', 'error', '-nostdin', '-y', *args])
-
-
 def timestamp(value, ass=False):
-    units = round(value * (100 if ass else 1000))
     base = 100 if ass else 1000
-    secs, fraction = divmod(units, base)
+    secs, fraction = divmod(round(value * base), base)
     hours, secs = divmod(secs, 3600)
     mins, secs = divmod(secs, 60)
     return f'{hours}:{mins:02}:{secs:02}.{fraction:02}' if ass else f'{hours:02}:{mins:02}:{secs:02},{fraction:03}'
 
 
 async def prepare(source):
-    work = ROOT / 'render'
-    work.mkdir(exist_ok=True)
-    doc = pymupdf.open(source)
-    assert len(doc) == 8
+    WORK.mkdir(exist_ok=True)
     narration = []
-    for i, (title, text) in enumerate(SCENES, 1):
-        p = doc[i-1]
-        pix = p.get_pixmap(matrix=pymupdf.Matrix(2.5, 2.5), alpha=False)
-        pix.save(str(work / f'slide-{i}.png'))
-        mp3 = work / f'voice-{i}.mp3'
-        boundary = work / f'voice-{i}.json'
-        if not mp3.exists() or not boundary.exists():
-            events = []
-            comm = edge_tts.Communicate(text, VOICE, rate='-5%', boundary='WordBoundary')
-            with mp3.open('wb') as audio:
-                async for chunk in comm.stream():
-                    if chunk['type'] == 'audio':
-                        audio.write(chunk['data'])
-                    elif chunk['type'] == 'WordBoundary':
-                        events.append(chunk)
-            boundary.write_text(json.dumps(events, indent=2))
-        ff(['-i', mp3, '-ac', '1', '-ar', '24000', work / f'voice-{i}.wav'])
-        with wave.open(str(work / f'voice-{i}.wav')) as wav:
-            duration = wav.getnframes() / wav.getframerate()
-        narration.append({'slide':i, 'title':title, 'text':text, 'voiceDuration':duration})
-        print(f'Prepared slide {i}: voice {duration:.2f}s', flush=True)
-    total_voice = sum(x['voiceDuration'] for x in narration)
-    # 以真实音频时长排版；仅必要时轻微加速，禁止截断讲稿。
-    tempo = max(1.0, total_voice / 102.0)
-    if tempo > 1.15:
-        raise RuntimeError('Narration too long: shorten script instead of rushing voice')
-    effective = total_voice / tempo
-    gap = max(0.7, (110.0 - effective) / 8)
-    offset = 0
-    srt = []
-    contacts = []
+    with pymupdf.open(source) as doc:
+        assert len(doc) == 8
+        for i, (title, text) in enumerate(SCENES, 1):
+            page = doc[i-1]
+            # 直接从 PDF 光栅化到最终内容宽度，不进行逐帧缩放。
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(3600 / page.rect.width, 3600 / page.rect.width), alpha=False)
+            image = Image.frombytes('RGB', (pix.width, pix.height), pix.samples)
+            canvas = Image.new('RGB', (WIDTH, HEIGHT), image.getpixel((0, 0)))
+            canvas.paste(image, ((WIDTH-image.width)//2, 0))
+            canvas.save(WORK / f'frame-{i}.png')
+            key = hashlib.sha256((VOICE+'|+0%|'+text).encode()).hexdigest()[:16]
+            mp3, boundary = WORK/f'{key}.mp3', WORK/f'{key}.json'
+            if not mp3.exists() or not boundary.exists():
+                events = []
+                comm = edge_tts.Communicate(text, VOICE, rate='+0%', boundary='WordBoundary')
+                with mp3.open('wb') as audio:
+                    async for chunk in comm.stream():
+                        if chunk['type'] == 'audio':
+                            audio.write(chunk['data'])
+                        elif chunk['type'] == 'WordBoundary':
+                            events.append(chunk)
+                boundary.write_text(json.dumps(events, indent=2))
+            ff(['-i', mp3, '-ac', '1', '-ar', '24000', WORK/f'voice-{i}.wav'])
+            with wave.open(str(WORK/f'voice-{i}.wav')) as wav:
+                duration = wav.getnframes()/wav.getframerate()
+            narration.append(dict(slide=i, title=title, text=text, voiceDuration=duration, boundary=boundary.name))
+            print(f'Prepared slide {i}: {duration:.2f}s', flush=True)
+    total_voice = sum(n['voiceDuration'] for n in narration)
+    gap = max(0.9, (110 - total_voice - 7*TRANSITION)/8)
+    offset, srt, contacts = 0, [], []
     for n in narration:
         i = n['slide']
-        duration = math.ceil((n['voiceDuration'] / tempo + gap) * FPS) / FPS
-        n.update(start=offset, duration=duration, tempo=tempo)
-        events = json.loads((work / f'voice-{i}.json').read_text())
+        duration = math.ceil((n['voiceDuration'] + gap)*FPS)/FPS
+        n.update(start=offset, duration=duration, tempo=1.0)
+        events = json.loads((WORK/n['boundary']).read_text())
         script_words = n['text'].split()
-        assert len(script_words) == len(events), 'Voice word boundaries must match narration'
+        assert len(script_words) == len(events), (i, script_words, events)
         for word, event in zip(script_words, events):
             assert re.sub(r'\W', '', word).lower() == re.sub(r'\W', '', event['text']).lower()
             event['text'] = word
-        cues = []
-        words = []
+        cues, words = [], []
         for index, event in enumerate(events):
             words.append(event)
-            chars = len(' '.join(x['text'] for x in words))
-            if chars >= 56 or re.search(r'[.!?;]$', event['text']) or index == len(events)-1:
-                text = ' '.join(x['text'] for x in words)
-                start = 0.35 + words[0]['offset'] / 1e7 / tempo
-                end = 0.35 + (words[-1]['offset'] + words[-1]['duration']) / 1e7 / tempo
-                next_start = 0.35 + events[index+1]['offset'] / 1e7 / tempo if index+1 < len(events) else duration
-                cues.append((start, min(end + 0.12, next_start - 0.01, duration - 0.15), text))
+            text = ' '.join(x['text'] for x in words)
+            if len(text) >= 54 or re.search(r'[.!?;]$', event['text']) or index == len(events)-1:
+                start = 0.35 + words[0]['offset']/1e7
+                end = 0.35 + (event['offset']+event['duration'])/1e7
+                next_start = 0.35+events[index+1]['offset']/1e7 if index+1 < len(events) else duration
+                cues.append((start, min(end+0.12, next_start-0.01, duration-0.15), text))
                 words = []
-        ass = ['[Script Info]', 'ScriptType: v4.00+', 'PlayResX: 1920', 'PlayResY: 1080', 'WrapStyle: 0', '[V4+ Styles]', 'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding', 'Style: Default,DejaVu Sans,32,&H002B2927,&H002B2927,&H00F7F9FA,&H00F7F9FA,0,0,0,0,100,100,0,0,1,0,0,2,150,150,26,1', '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text']
+        ass = ['[Script Info]', 'ScriptType: v4.00+', f'PlayResX: {WIDTH}', f'PlayResY: {HEIGHT}', 'WrapStyle: 0', '[V4+ Styles]', 'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding', 'Style: Default,DejaVu Sans,64,&H002B2927,&H002B2927,&H00F7F9FA,&H00F7F9FA,0,0,0,0,100,100,0,0,1,0,0,2,240,240,40,1', '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text']
         for start, end, text in cues:
             ass.append(f'Dialogue: 0,{timestamp(start,True)},{timestamp(end,True)},Default,,0,0,0,,{text}')
             srt.append(f'{len(srt)+1}\n{timestamp(offset+start)} --> {timestamp(offset+end)}\n{text}\n')
-        (work / f'slide-{i}.ass').write_text('\n'.join(ass), encoding='utf-8')
-        image = Image.open(work / f'slide-{i}.png').convert('RGB')
-        bg = image.getpixel((0,0))
-        # 留出独立字幕区域，保留原稿页脚与 staged / Preview 声明。
-        canvas = Image.new('RGB',(1920,1080),bg)
-        image.thumbnail((1728,972),Image.Resampling.LANCZOS)
-        canvas.paste(image, ((1920-image.width)//2, 0))
-        canvas.save(work / f'frame-{i}.png')
-        thumb = canvas.copy(); thumb.thumbnail((640,360)); contacts.append(thumb)
-        offset += duration
-    assert offset < 119
-    (ROOT / 'yeaft-work-anywhere.en.srt').write_text('\n'.join(srt), encoding='utf-8')
-    (ROOT / 'timeline.json').write_text(json.dumps({'voice':VOICE,'rate':'-5%','fps':FPS,'width':1920,'height':1080,'duration':offset,'scenes':narration},indent=2))
-    (ROOT / 'narration.en.txt').write_text('\n\n'.join(n['text'] for n in narration))
-    contact = Image.new('RGB',(1280,1440),'white')
-    for j,img in enumerate(contacts): contact.paste(img,((j%2)*640,(j//2)*360))
-    contact.save(ROOT / 'storyboard.jpg',quality=90)
-    print(f'Timeline ready: {offset:.3f}s; voice tempo {tempo:.3f}',flush=True)
+        (WORK/f'slide-{i}.ass').write_text('\n'.join(ass), encoding='utf-8')
+        image = Image.open(WORK/f'frame-{i}.png').convert('RGB')
+        image.thumbnail((640,360)); contacts.append(image)
+        offset += duration + (TRANSITION if i < 8 else 0)
+    assert offset < 119, f'Shorten narration instead of accelerating: {offset:.2f}s'
+    (ROOT/'yeaft-work-anywhere.en.srt').write_text('\n'.join(srt))
+    (ROOT/'timeline.json').write_text(json.dumps(dict(voice=VOICE, rate='+0%', fps=FPS, width=WIDTH, height=HEIGHT, duration=offset, transitionSeconds=TRANSITION, transition='cross dissolve', sourceAudioSampleRate=24000, scenes=narration), indent=2)+'\n')
+    (ROOT/'narration.en.txt').write_text('\n\n'.join(n['text'] for n in narration)+'\n')
+    contact = Image.new('RGB', (1280,1440), 'white')
+    for j, img in enumerate(contacts): contact.paste(img, ((j%2)*640,(j//2)*360))
+    contact.save(ROOT/'storyboard.jpg', quality=93)
+    print(f'Timeline ready: {offset:.3f}s; no speech time stretching', flush=True)
 
 
 def render():
-    work = ROOT / 'render'
-    timeline = json.loads((ROOT / 'timeline.json').read_text())
+    timeline = json.loads((ROOT/'timeline.json').read_text())
+    # 所有片段使用一致的视频和 PCM 音频参数；最终仅编码一次 AAC，避免拼接音频间隙。
+    codec = ['-c:v','libx264','-preset','fast','-tune','stillimage','-crf','14','-threads','2','-pix_fmt','yuv420p','-r',FPS,'-c:a','pcm_s16le','-ar','48000','-ac','2']
+    parts = []
     for n in timeline['scenes']:
-        i,duration = n['slide'],n['duration']
-        frames = round(duration * FPS)
-        # 极轻的推进，不裁掉内容；短淡入淡出避免生硬切页。
-        vf = f"scale=2560:1440,zoompan=z='1+0.012*on/{frames}':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s=1920x1080:fps={FPS},fade=t=in:st=0:d=0.20:color=0xfaf9f7,fade=t=out:st={duration-0.20}:d=0.20:color=0xfaf9f7,ass=slide-{i}.ass,format=yuv420p"
-        ff(['-filter_threads','2','-loop','1','-framerate',str(FPS),'-i',work/f'frame-{i}.png','-i',work/f'voice-{i}.wav','-vf',vf,'-af',f"atempo={n['tempo']},adelay=350,apad",'-t',str(duration),'-c:v','libx264','-preset','fast','-crf','21','-threads','2','-c:a','aac','-b:a','128k','-ar','48000','-ac','2',work/f'part-{i}.mp4'])
-        print(f'Rendered scene {i}/8',flush=True)
-    (work/'concat.txt').write_text('\n'.join(f"file 'part-{i}.mp4'" for i in range(1,9)))
-    ff(['-f','concat','-safe','0','-i',work/'concat.txt','-c','copy','-movflags','+faststart','-metadata','title=Yeaft — Work from anywhere','-metadata','comment=Eight-slide showcase; synthetic English narration; staged demo screenshots',ROOT/'yeaft-work-anywhere-en.mp4'])
-    print('Video complete',flush=True)
+        i = n['slide']
+        target = WORK/f'hold-{i}.mkv'
+        ff(['-filter_threads','2','-loop','1','-framerate',FPS,'-i',WORK/f'frame-{i}.png','-i',WORK/f'voice-{i}.wav','-vf',f'ass={WORK}/slide-{i}.ass','-af','loudnorm=I=-18:TP=-2:LRA=7,adelay=350,apad','-t',n['duration'],*codec,target])
+        parts.append(target.name)
+        if i < 8:
+            target = WORK/f'transition-{i}.mkv'
+            ff(['-filter_complex_threads','1','-loop','1','-framerate',FPS,'-i',WORK/f'frame-{i}.png','-loop','1','-framerate',FPS,'-i',WORK/f'frame-{i+1}.png','-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-filter_complex',f'[0:v][1:v]xfade=transition=fade:duration={TRANSITION}:offset=0,format=yuv420p[v]','-map','[v]','-map','2:a','-t',TRANSITION,*codec,target])
+            parts.append(target.name)
+        print(f'Rendered stable scene {i}/8 and following transition', flush=True)
+    (WORK/'concat.txt').write_text('\n'.join(f"file '{name}'" for name in parts))
+    ff(['-f','concat','-safe','0','-i',WORK/'concat.txt','-c:v','copy','-c:a','aac','-b:a','192k','-movflags','+faststart','-metadata','title=Yeaft — Work from anywhere','-metadata','comment=4K static slides; cross dissolves; synthetic Andrew narration',ROOT/'yeaft-work-anywhere-en.mp4'])
+    print('Video complete', flush=True)
 
 
 if __name__ == '__main__':
-    import os
     parser = argparse.ArgumentParser()
-    parser.add_argument('phase',choices=['prepare','render'])
-    parser.add_argument('--pdf',type=Path)
+    parser.add_argument('phase', choices=['prepare','render'])
+    parser.add_argument('--pdf', type=Path)
     args = parser.parse_args()
     if args.phase == 'prepare':
         if not args.pdf: parser.error('--pdf is required')
         asyncio.run(prepare(args.pdf))
     else:
-        os.chdir(ROOT/'render')
         render()

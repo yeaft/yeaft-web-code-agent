@@ -1,139 +1,155 @@
 1
-00:00:00,449 --> 00:00:01,737
+00:00:00,450 --> 00:00:01,395
 Work from anywhere.
 
 2
-00:00:02,521 --> 00:00:05,406
-With Yeaft, your location can change without leaving the
+00:00:01,700 --> 00:00:04,302
+With Yeaft, you can change location without leaving your
 
 3
-00:00:05,416 --> 00:00:06,298
+00:00:04,312 --> 00:00:05,058
 work behind.
 
 4
-00:00:07,054 --> 00:00:09,358
-Connect to your AI team through a browser.
+00:00:05,350 --> 00:00:07,920
+Just open a browser and connect to your AI team.
 
 5
-00:00:11,282 --> 00:00:14,612
-At home, at the office, or on the move, reconnect to the
+00:00:11,950 --> 00:00:14,582
+At home, at the office, or on the move.
 
 6
-00:00:14,622 --> 00:00:16,012
-same Agent and Session.
+00:00:14,875 --> 00:00:17,182
+Reconnect to the same agent and session.
 
 7
-00:00:16,796 --> 00:00:18,668
-The browser is your entry point.
+00:00:17,475 --> 00:00:19,020
+Your browser gives you access.
 
 8
-00:00:19,437 --> 00:00:22,439
-Your online Agent provides the working environment.
+00:00:19,312 --> 00:00:22,245
+Your online agent keeps the working environment in place.
 
 9
-00:00:24,366 --> 00:00:26,530
-Bring in the right role for the next step.
+00:00:26,296 --> 00:00:28,253
+Bring in the right role for each step.
 
 10
-00:00:27,289 --> 00:00:30,275
-An investigator finds the cause, an implementer makes the
+00:00:28,546 --> 00:00:30,416
+An investigator finds the cause.
 
 11
-00:00:30,285 --> 00:00:32,437
-change, and a reviewer challenges it.
+00:00:30,708 --> 00:00:32,278
+An implementer makes the change.
 
 12
-00:00:33,219 --> 00:00:37,034
-Explicit handoffs carry the task forward, not a fixed pipeline.
+00:00:32,571 --> 00:00:34,128
+A reviewer checks the result.
 
 13
-00:00:38,949 --> 00:00:41,990
-Define each role with configurable system prompts.
+00:00:34,421 --> 00:00:38,053
+Clear handoffs move the work forward, without a fixed pipeline.
 
 14
-00:00:42,761 --> 00:00:46,639
-Add shared project rules, so responsibilities, coding conventions,
+00:00:42,083 --> 00:00:44,228
+Give each role clear instructions.
 
 15
-00:00:46,748 --> 00:00:49,154
-and review expectations travel with the work.
+00:00:44,521 --> 00:00:48,628
+Add shared project rules, so responsibilities, coding standards,
 
 16
-00:00:51,032 --> 00:00:52,930
-Go beyond chat with Workbench.
+00:00:48,746 --> 00:00:52,148
+and review expectations stay consistent as the work moves
 
 17
-00:00:53,689 --> 00:00:56,993
-Inspect actual files, check command output, and stay close
+00:00:52,158 --> 00:00:53,141
+between roles.
 
 18
-00:00:57,003 --> 00:00:58,316
-to what the Agent is doing.
+00:00:57,150 --> 00:00:58,832
+Go beyond chat with Workbench.
 
 19
-00:00:59,098 --> 00:01:01,681
-Delegate the work without losing visibility.
+00:00:59,125 --> 00:01:00,495
+Open the actual files.
 
 20
-00:01:03,574 --> 00:01:07,554
-Give AI a development goal, constraints, and acceptance criteria.
+00:01:00,788 --> 00:01:01,870
+Check command output.
 
 21
-00:01:08,326 --> 00:01:11,782
-For example: fix a bug, add a regression test, and prepare
+00:01:02,175 --> 00:01:04,752
+See what your agent is doing, and step in when you need
 
 22
-00:01:11,792 --> 00:01:14,921
-a patch for review, instead of scripting every next prompt.
+00:01:04,762 --> 00:01:05,095
+to.
 
 23
-00:01:16,824 --> 00:01:20,347
-Work Center keeps the goal, progress, and evidence visible.
+00:01:09,129 --> 00:01:12,607
+Start with a development goal, clear boundaries, and acceptance
 
 24
-00:01:21,118 --> 00:01:23,651
-Let ready work advance on the online Agent.
-
-25
-00:01:24,407 --> 00:01:27,889
-Step in for decisions and evaluate results against acceptance
-
-26
-00:01:27,899 --> 00:01:28,756
+00:01:12,617 --> 00:01:13,349
 criteria.
 
+25
+00:01:13,679 --> 00:01:14,362
+Fix a bug.
+
+26
+00:01:14,654 --> 00:01:15,849
+Add a regression test.
+
 27
-00:01:29,524 --> 00:01:31,765
-Work Center is currently in Preview.
+00:01:16,154 --> 00:01:17,512
+Prepare a patch for review.
 
 28
-00:01:33,657 --> 00:01:35,009
-Anywhere access.
+00:01:17,804 --> 00:01:20,937
+Describe the outcome, rather than every next prompt.
 
 29
-00:01:35,780 --> 00:01:37,361
-Clear responsibilities.
+00:01:24,950 --> 00:01:28,202
+Work Center keeps your goal, progress, and evidence in
 
 30
-00:01:38,142 --> 00:01:39,215
-Real tools.
+00:01:28,212 --> 00:01:28,608
+view.
 
 31
-00:01:39,983 --> 00:01:41,703
-Goal driven execution.
+00:01:28,900 --> 00:01:31,482
+Let ready work advance while your agent is online.
 
 32
-00:01:42,472 --> 00:01:43,151
-Yeaft.
+00:01:31,788 --> 00:01:34,528
+Step in for decisions, and check the results against your
 
 33
-00:01:43,907 --> 00:01:45,094
-Your AI team.
+00:01:34,538 --> 00:01:35,282
+criteria.
 
 34
-00:01:45,862 --> 00:01:46,871
-Real work.
+00:01:35,575 --> 00:01:36,858
+Work Center is in preview.
 
 35
-00:01:47,627 --> 00:01:48,725
-From anywhere.
+00:01:40,883 --> 00:01:41,828
+Work from anywhere.
+
+36
+00:01:42,121 --> 00:01:42,878
+Clear roles.
+
+37
+00:01:43,171 --> 00:01:43,953
+Real tools.
+
+38
+00:01:44,258 --> 00:01:44,716
+Yeaft.
+
+39
+00:01:45,021 --> 00:01:47,141
+Your AI team, doing real work.

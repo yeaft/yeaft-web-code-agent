@@ -1,82 +1,93 @@
 {
-  "voice": "en-US-GuyNeural",
-  "rate": "-5%",
-  "fps": 24,
-  "width": 1920,
-  "height": 1080,
-  "duration": 110.16666666666666,
+  "voice": "en-US-AndrewNeural",
+  "rate": "+0%",
+  "fps": 30,
+  "width": 3840,
+  "height": 2160,
+  "duration": 110.10000000000001,
+  "transitionSeconds": 0.6,
+  "transition": "cross dissolve",
+  "sourceAudioSampleRate": 24000,
   "scenes": [
     {
       "slide": 1,
       "title": "Work from anywhere.",
-      "text": "Work from anywhere. With Yeaft, your location can change without leaving the work behind. Connect to your AI team through a browser.",
-      "voiceDuration": 10.152,
+      "text": "Work from anywhere. With Yeaft, you can change location without leaving your work behind. Just open a browser and connect to your AI team.",
+      "voiceDuration": 7.824,
+      "boundary": "8e1baf438cd40eaa.json",
       "start": 0,
-      "duration": 10.833333333333334,
-      "tempo": 1.0362352941176471
+      "duration": 10.9,
+      "tempo": 1.0
     },
     {
       "slide": 2,
       "title": "Different devices. The same working context.",
-      "text": "At home, at the office, or on the move, reconnect to the same Agent and Session. The browser is your entry point. Your online Agent provides the working environment.",
-      "voiceDuration": 12.48,
-      "start": 10.833333333333334,
-      "duration": 13.083333333333334,
-      "tempo": 1.0362352941176471
+      "text": "At home, at the office, or on the move. Reconnect to the same agent and session. Your browser gives you access. Your online agent keeps the working environment in place.",
+      "voiceDuration": 10.656,
+      "boundary": "ec5de8514eac9918.json",
+      "start": 11.5,
+      "duration": 13.733333333333333,
+      "tempo": 1.0
     },
     {
       "slide": 3,
       "title": "The right role. The next step.",
-      "text": "Bring in the right role for the next step. An investigator finds the cause, an implementer makes the change, and a reviewer challenges it. Explicit handoffs carry the task forward, not a fixed pipeline.",
-      "voiceDuration": 14.04,
-      "start": 23.916666666666668,
-      "duration": 14.583333333333334,
-      "tempo": 1.0362352941176471
+      "text": "Bring in the right role for each step. An investigator finds the cause. An implementer makes the change. A reviewer checks the result. Clear handoffs move the work forward, without a fixed pipeline.",
+      "voiceDuration": 12.12,
+      "boundary": "8880b74bd9d04970.json",
+      "start": 25.833333333333332,
+      "duration": 15.2,
+      "tempo": 1.0
     },
     {
       "slide": 4,
       "title": "Define the roles. Set the working rules.",
-      "text": "Define each role with configurable system prompts. Add shared project rules, so responsibilities, coding conventions, and review expectations travel with the work.",
-      "voiceDuration": 11.472,
-      "start": 38.5,
-      "duration": 12.083333333333334,
-      "tempo": 1.0362352941176471
+      "text": "Give each role clear instructions. Add shared project rules, so responsibilities, coding standards, and review expectations stay consistent as the work moves between roles.",
+      "voiceDuration": 11.4,
+      "boundary": "d1603475146622b5.json",
+      "start": 41.63333333333333,
+      "duration": 14.466666666666667,
+      "tempo": 1.0
     },
     {
       "slide": 5,
       "title": "Beyond chat. A real workbench.",
-      "text": "Go beyond chat with Workbench. Inspect actual files, check command output, and stay close to what the Agent is doing. Delegate the work without losing visibility.",
-      "voiceDuration": 11.952,
-      "start": 50.583333333333336,
-      "duration": 12.541666666666666,
-      "tempo": 1.0362352941176471
+      "text": "Go beyond chat with Workbench. Open the actual files. Check command output. See what your agent is doing, and step in when you need to.",
+      "voiceDuration": 8.304,
+      "boundary": "5b73915bba69631d.json",
+      "start": 56.7,
+      "duration": 11.366666666666667,
+      "tempo": 1.0
     },
     {
       "slide": 6,
       "title": "From a development goal to execution.",
-      "text": "Give AI a development goal, constraints, and acceptance criteria. For example: fix a bug, add a regression test, and prepare a patch for review, instead of scripting every next prompt.",
-      "voiceDuration": 12.672,
-      "start": 63.125,
-      "duration": 13.25,
-      "tempo": 1.0362352941176471
+      "text": "Start with a development goal, clear boundaries, and acceptance criteria. Fix a bug. Add a regression test. Prepare a patch for review. Describe the outcome, rather than every next prompt.",
+      "voiceDuration": 12.168,
+      "boundary": "608ba21fa16fdaef.json",
+      "start": 68.66666666666667,
+      "duration": 15.233333333333333,
+      "tempo": 1.0
     },
     {
       "slide": 7,
       "title": "Keep the task moving. Keep control.",
-      "text": "Work Center keeps the goal, progress, and evidence visible. Let ready work advance on the online Agent. Step in for decisions and evaluate results against acceptance criteria. Work Center is currently in Preview.",
-      "voiceDuration": 16.392,
-      "start": 76.375,
-      "duration": 16.833333333333332,
-      "tempo": 1.0362352941176471
+      "text": "Work Center keeps your goal, progress, and evidence in view. Let ready work advance while your agent is online. Step in for decisions, and check the results against your criteria. Work Center is in preview.",
+      "voiceDuration": 12.264,
+      "boundary": "98a39dc5bfa16151.json",
+      "start": 84.5,
+      "duration": 15.333333333333334,
+      "tempo": 1.0
     },
     {
       "slide": 8,
       "title": "Your AI team. Real work. From anywhere.",
-      "text": "Anywhere access. Clear responsibilities. Real tools. Goal driven execution. Yeaft. Your AI team. Real work. From anywhere.",
-      "voiceDuration": 16.536,
-      "start": 93.20833333333333,
-      "duration": 16.958333333333332,
-      "tempo": 1.0362352941176471
+      "text": "Work from anywhere. Clear roles. Real tools. Yeaft. Your AI team, doing real work.",
+      "voiceDuration": 6.6,
+      "boundary": "37bb90c9fda3a843.json",
+      "start": 100.43333333333334,
+      "duration": 9.666666666666666,
+      "tempo": 1.0
     }
   ]
 }

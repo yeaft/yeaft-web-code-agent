@@ -1,15 +1,15 @@
-Work from anywhere. With Yeaft, your location can change without leaving the work behind. Connect to your AI team through a browser.
+Work from anywhere. With Yeaft, you can change location without leaving your work behind. Just open a browser and connect to your AI team.
 
-At home, at the office, or on the move, reconnect to the same Agent and Session. The browser is your entry point. Your online Agent provides the working environment.
+At home, at the office, or on the move. Reconnect to the same agent and session. Your browser gives you access. Your online agent keeps the working environment in place.
 
-Bring in the right role for the next step. An investigator finds the cause, an implementer makes the change, and a reviewer challenges it. Explicit handoffs carry the task forward, not a fixed pipeline.
+Bring in the right role for each step. An investigator finds the cause. An implementer makes the change. A reviewer checks the result. Clear handoffs move the work forward, without a fixed pipeline.
 
-Define each role with configurable system prompts. Add shared project rules, so responsibilities, coding conventions, and review expectations travel with the work.
+Give each role clear instructions. Add shared project rules, so responsibilities, coding standards, and review expectations stay consistent as the work moves between roles.
 
-Go beyond chat with Workbench. Inspect actual files, check command output, and stay close to what the Agent is doing. Delegate the work without losing visibility.
+Go beyond chat with Workbench. Open the actual files. Check command output. See what your agent is doing, and step in when you need to.
 
-Give AI a development goal, constraints, and acceptance criteria. For example: fix a bug, add a regression test, and prepare a patch for review, instead of scripting every next prompt.
+Start with a development goal, clear boundaries, and acceptance criteria. Fix a bug. Add a regression test. Prepare a patch for review. Describe the outcome, rather than every next prompt.
 
-Work Center keeps the goal, progress, and evidence visible. Let ready work advance on the online Agent. Step in for decisions and evaluate results against acceptance criteria. Work Center is currently in Preview.
+Work Center keeps your goal, progress, and evidence in view. Let ready work advance while your agent is online. Step in for decisions, and check the results against your criteria. Work Center is in preview.
 
-Anywhere access. Clear responsibilities. Real tools. Goal driven execution. Yeaft. Your AI team. Real work. From anywhere.
+Work from anywhere. Clear roles. Real tools. Yeaft. Your AI team, doing real work.

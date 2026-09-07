@@ -4,14 +4,18 @@
 
 ## 交付
 
-- `yeaft-work-anywhere-en.mp4`：1080p、24 fps、H.264 / AAC，英文合成配音与烧录字幕，约 110 秒。
+- `yeaft-work-anywhere-en.mp4`：4K（3840×2160）、30 fps、H.264 CRF 14 / AAC 192 kbps，英文合成配音与烧录字幕，约 110 秒。
 - `yeaft-work-anywhere.en.srt`：独立英文字幕。
 - `narration.en.txt`：英文配音稿。
 - `timeline.json`：按实际音频长度生成的逐页时间轴。
 - `video-preview.jpg`：从最终 MP4 抽取的八页预览。
 - `verification.json`：完整解码、时长、音轨、字幕时间范围与 SHA-256 校验结果。
 
-原稿的 Preview / staged demo / illustrative 标识保留。视频是静态演示稿加轻微镜头推进、淡入淡出与字幕，不是真实软件操作录屏，也不代表开发任务已成功执行。使用 Microsoft Edge `en-US-GuyNeural` 合成英文配音，不添加背景音乐；未经过人工试听，品牌读音仍可按反馈调整。
+原稿的 Preview / staged demo / illustrative 标识保留。新版取消逐帧缩放，页面停留时完全静止；七次换页使用 0.6 秒交叉溶解，不把字幕带入转场。PDF 直接按最终画面内容宽度光栅化，减少文字重采样损失；内嵌截图仍受原图分辨率限制。视频不是真实软件操作录屏，也不代表开发任务已成功执行。
+
+配音改为对话风格的 Microsoft Edge `en-US-AndrewNeural`，重写为短句讲稿，正常语速生成，不做后期时间拉伸。音量按 -18 LUFS 目标归一化。源 TTS 是 24 kHz 压缩语音，输出 AAC 192 kbps 只能减少再编码损失，不会让源音质凭空提高。未经过人工试听，不能保证主观自然度或品牌 Yeaft 的读音；不添加背景音乐。
+
+文件采用质量优先编码，不填充数据凑到 30 MB。静止画面压缩率高，实际大小以校验报告为准。
 
 ## 重建
 
