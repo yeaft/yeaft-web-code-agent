@@ -131,6 +131,13 @@ export function diagnoseAgentLiveness(agent, opts = {}) {
     && msSinceActivity >= thresholdMs;
   return {
     ...liveness,
+    execution: agent?.execution ? {
+      ...agent.execution,
+      recentCalls: agent.execution.recentCalls.map(call => ({ ...call })),
+      remainingToolCalls: Math.max(0, (agent.budget?.max_tool_calls || 0) - agent.execution.toolCalls),
+      limits: agent.budget,
+      progressNote: 'Execution counts and repeated results are diagnostics, not proof of semantic progress or stalling.',
+    } : null,
     msSinceLastEvent: liveness.msSinceLastEvent ?? msSinceActivity,
     stale,
     stalled: stale,

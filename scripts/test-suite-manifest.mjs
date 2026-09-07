@@ -11,6 +11,7 @@ export const CORE_TEST_FILES = Object.freeze([
   'test/agent/local-runtime-package.test.js',
   'test/agent/router-per-model-protocol.test.js',
   'test/agent/sub-agent/sub-agent-reliability.test.js',
+  'test/agent/sub-agent/execution-control.test.js',
   'test/agent/terminal-routing.test.js',
   'test/agent/windows-upgrade-handoff.test.js',
   'test/agent/yeaft/conversation/persist.test.js',

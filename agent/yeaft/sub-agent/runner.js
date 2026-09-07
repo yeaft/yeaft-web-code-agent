@@ -36,7 +36,8 @@
  */
 
 import { Engine } from '../engine.js';
-import { ToolRegistry } from '../tools/registry.js';
+import { SubAgentToolRegistry, resolveSubAgentBudget, createExecutionStats } from './execution-control.js';
+import { getPersona } from '../personas.js';
 import { buildSpawnedPreamble } from './spawned-prompt.js';
 import { STATUS, isTerminalAgentStatus } from './status.js';
 import { createOutputLog } from './output-log.js';
@@ -83,8 +84,17 @@ const LAST_RESULT_MAX_CHARS = 8 * 1024;
  * @param {ToolRegistry|null} parentRegistry
  * @returns {ToolRegistry}
  */
-export function buildChildToolRegistry(parentRegistry) {
-  const child = new ToolRegistry();
+export function buildChildToolRegistry(parentRegistry, { agent = null, stopBudget = null } = {}) {
+  const preset = agent?.personaData || getPersona(agent?.persona);
+  // Implementers retain work tools; read-only roles are a structural allowlist.
+  // Resolve legacy template names (Read) to canonical FileRead before filtering.
+  const allowed = preset && preset.id !== 'implementer'
+    ? new Set([...preset.tools.map(name => parentRegistry?.get(name)?.name || (name === 'Read' ? 'FileRead' : name)), 'DiscoverTools'])
+    : null;
+  const child = new SubAgentToolRegistry({
+    agent, stopBudget,
+    allows: tool => !RESTRICTED_TOOLS.has(tool.name) && (!allowed || allowed.has(tool.name)),
+  });
   if (!parentRegistry || typeof parentRegistry.getAllTools !== 'function') {
     return child;
   }
@@ -149,7 +159,12 @@ export function startSubAgent(agent, deps = {}) {
     // turns must not pollute the user-facing conversation history. The
     // memory stores are shared so memory recall still works for the
     // sub-agent (matches parent VP persona memory).
-    const childRegistry = buildChildToolRegistry(deps.parentToolRegistry);
+    agent.budget = resolveSubAgentBudget(agent.budget, agent.persona);
+    agent.execution = agent.execution || createExecutionStats();
+    const childRegistry = buildChildToolRegistry(deps.parentToolRegistry, {
+      agent,
+      stopBudget: reason => stopForBudget(agent, reason),
+    });
     subEngine = new Engine({
       adapter: deps.adapter,
       trace: deps.trace,
@@ -193,6 +208,9 @@ export function startSubAgent(agent, deps = {}) {
       parentVpId: deps.parentVpId || null,
       agentName: agent.name,
       mission: agent.mission || agent.task || '',
+      expectedOutput: agent.expected_output,
+      presetPrompt: (agent.personaData || getPersona(agent.persona))?.systemPrompt,
+      budget: agent.budget,
       language: deps.language ?? deps.config?.language ?? 'en',
     });
 
@@ -260,10 +278,19 @@ export function startSubAgent(agent, deps = {}) {
 function buildWallTimeBudgetResult(agent, reason) {
   return {
     status: 'budget_exceeded',
-    partial_output: agent.partial_output || agent.lastResult || agent.result || '',
+    partial_output: agent.partial_output || agent.lastResult
+      || (typeof agent.result === 'string' ? agent.result : agent.result?.partial_output) || '',
     reason,
     usage: { ...(agent.usage || {}) },
   };
+}
+
+function stopForBudget(agent, reason) {
+  if (agent.budgetStopReason || isTerminalAgentStatus(agent.status)) return;
+  agent.budgetStopReason = reason;
+  agent.result = buildWallTimeBudgetResult(agent, reason);
+  agent.partial_output = agent.result.partial_output || '';
+  agent.abortController?.abort(reason);
 }
 
 function armWallTimeWatchdog(agent, deps) {
@@ -416,10 +443,15 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
         continue;
       }
 
+      // Partial evidence belongs to this query, never a previous follow-up.
+      agent.partial_output = '';
+      agent.lastResult = '';
+      agent.result = '';
       let assistantText = '';
       let endedNormally = false;
       let streamError = null;
       const turnTokenStart = agent.liveness?.tokenCount || 0;
+      const priorUsageTokens = agent.usage?.tokens || 0;
       let turnUsageTokens = 0;
       try {
         const stream = subEngine.query({
@@ -461,9 +493,16 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
             // child is currently saying, not stale text from the prior
             // turn.
             agent.lastResult = capTail(assistantText, LAST_RESULT_MAX_CHARS);
+            agent.partial_output = agent.lastResult;
           }
           if (evt && evt.type === 'usage') {
-            turnUsageTokens += (evt.inputTokens || 0) + (evt.outputTokens || 0);
+            const cacheTokens = evt.cacheTokensAreIncludedInInput ? 0
+              : (evt.cacheReadTokens || 0) + (evt.cacheWriteTokens || 0);
+            turnUsageTokens += (evt.inputTokens || 0) + (evt.outputTokens || 0) + cacheTokens;
+            agent.usage.tokens = priorUsageTokens + turnUsageTokens;
+            if (agent.budget?.max_tokens && agent.usage.tokens >= agent.budget.max_tokens) {
+              stopForBudget(agent, `max_tokens (${agent.budget.max_tokens}) reached`);
+            }
           }
           if (evt && evt.type === 'error' && evt.error) {
             streamError = evt.error.message || String(evt.error);
@@ -475,10 +514,20 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
           }
         }
       } catch (err) {
-        transitionTerminal(agent, STATUS.FAILED, {
-          error: err && err.message ? err.message : String(err),
-          diagnostic: 'query_error',
-          deps,
+        if (!agent.budgetStopReason) {
+          transitionTerminal(agent, STATUS.FAILED, {
+            error: err && err.message ? err.message : String(err),
+            diagnostic: 'query_error',
+            deps,
+          });
+          return;
+        }
+      }
+
+      if (agent.budgetStopReason) {
+        agent.result = buildWallTimeBudgetResult(agent, agent.budgetStopReason);
+        transitionTerminal(agent, STATUS.COMPLETED, {
+          error: agent.budgetStopReason, diagnostic: 'execution_budget', deps,
         });
         return;
       }
@@ -527,6 +576,8 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
         if (typeof tickAgent === 'function') {
           const textTokenDelta = Math.max(0, (agent.liveness?.tokenCount || 0) - turnTokenStart);
           const tokenDelta = turnUsageTokens > 0 ? turnUsageTokens : textTokenDelta;
+          // Usage events are exposed live; tickAgent adds the turn delta once.
+          agent.usage.tokens = priorUsageTokens;
           tickResult = tickAgent(agent.id, {
             turns: 1,
             tokens: tokenDelta,
@@ -612,14 +663,15 @@ function finalizeTerminal(agent, status, { error, deps } = {}) {
   };
   try { agent.outputLog?.write(evt); } catch { /* ignore */ }
   if (agent.taskId && deps?.taskManager && agent.parentSessionId) {
-    const taskStatus = status === STATUS.COMPLETED ? 'succeeded'
+    const budgetExceeded = agent.result?.status === 'budget_exceeded';
+    const taskStatus = budgetExceeded ? 'failed' : status === STATUS.COMPLETED ? 'succeeded'
       : status === STATUS.CLOSED ? 'cancelled'
         : 'failed';
     try {
       deps.taskManager.completeTask(agent.parentSessionId, agent.taskId, {
         status: taskStatus,
-        error: error || agent.error || null,
-        summary: status === STATUS.COMPLETED
+        error: budgetExceeded ? agent.result.reason : (error || agent.error || null),
+        summary: budgetExceeded ? JSON.stringify(agent.result) : status === STATUS.COMPLETED
           ? (typeof agent.result === 'string' ? agent.result : (agent.lastResult || null))
           : null,
       });
