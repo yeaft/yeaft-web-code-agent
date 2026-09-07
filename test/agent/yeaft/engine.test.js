@@ -8176,9 +8176,11 @@ describe('Engine', () => {
             model: 'gateway-search-model',
             usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 },
             latencyMs: 5,
-            messages: [{ role: 'user', content: 'do long work' }],
+            systemPrompt: `complete system ${i}: ${'system memory 火😀'.repeat(3000)}`,
+            messages: [{ role: 'user', content: `do long work ${i}` }],
+            rawRequest: { body: { input: `latest body ${i}`, model: 'gateway-search-model' } },
           });
-          if (i === 1) boundedTrace.logTool(turnId, { toolName: 'search', toolOutput: 'ok' });
+          if (i === 1) boundedTrace.logTool(turnId, { toolName: 'search', toolInput: JSON.stringify({ query: 'Q'.repeat(100_000) }), toolOutput: 'T'.repeat(200_000) });
         }
         boundedTrace.finalizeQuery('long-tool-turn', { sessionId: 's-long', stopReason: 'end_turn' });
         await boundedTrace.flush();
@@ -8234,6 +8236,16 @@ describe('Engine', () => {
         });
         expect(detail.loops).toHaveLength(100);
         expect(detail.loops.at(-1)?.loopNumber).toBe(100);
+        expect(detail.loops.filter(loop => loop.rawRequest != null)).toHaveLength(1);
+        expect(detail.loops.slice(0, -1).every(loop => loop.systemPrompt === '' && loop.messages.length === 0)).toBe(true);
+        expect(detail.loops.every(loop => !loop.requestBase && !loop.requestDelta)).toBe(true);
+        expect(detail.turns[0]).not.toHaveProperty('requestBase');
+        expect(detail.loops.at(-1)).toMatchObject({
+          systemPrompt: `complete system 100: ${'system memory 火😀'.repeat(3000)}`,
+          messages: [{ role: 'user', content: 'do long work 100' }],
+          rawRequest: { body: { input: 'latest body 100', model: 'gateway-search-model' } },
+        });
+        expect(detail.turns[0].tools[0]).toMatchObject({ toolInput: JSON.stringify({ query: 'Q'.repeat(100_000) }), toolOutput: 'T'.repeat(200_000) });
         expect(detail.loops.every(loop => loop.rawResponse?.body === rawResponse.body)).toBe(true);
         // The obsolete trace text budget still bounds ordinary snapshots above,
         // but cannot truncate provider raw exchange persistence or detail reads.

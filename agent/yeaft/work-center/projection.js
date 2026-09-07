@@ -1263,7 +1263,7 @@ export function projectActionRequestDetail(action, run, history, runs = [run]) {
       at: count(loop.at),
       detailTruncated,
       tools: projectedTools,
-      rawRequest: sanitizeDebugValue(reconstructDebugRawRequest(
+      rawRequest: sanitizeDebugValue(loop.rawRequest ?? reconstructDebugRawRequest(
         loop.rawRequestBase ?? loop.requestBase?.rawRequest ?? null,
         loop.requestDelta || null,
       )),

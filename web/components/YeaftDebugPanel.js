@@ -5,14 +5,14 @@
  * Yeaft engine's per-Turn debug records as:
  *
  *   Turn header  (user prompt + vp + session + totals + [copy turn])
- *     System prompt        [show] [copy]                turn-level
+ *     Latest loop request body / system prompt [show] [copy] turn-level
  *     Memory loaded   [show] [copy]                     turn-level
  *     Memory adjust   [show] [copy]                     turn-level
  *     -- Loop 1   in/out/total tok · ms · tools×N · refl    [chevron]
  *         Tools (N)      one row per tool with [copy in] [copy out]
  *         Reflection T1  [copy]
  *         Assistant text [copy]
- *         [copy req] [copy res]      raw payload — copy-only, never inlined
+ *         [copy res]                raw response — copy-only
  *     -- Loop 2 …
  *
  * Vocabulary (locked in):
@@ -138,7 +138,8 @@ export default {
       const loops = storedLoops.length > 0
         ? storedLoops
         : (Array.isArray(turn.loops) ? turn.loops : []);
-      return [this.decorateTurnTokenBreakdowns({ ...turn, loops })];
+      const detail = { ...turn, loops };
+      return [{ ...this.decorateTurnTokenBreakdowns(detail), latestRequest: this.latestRequestForTurn(detail) }];
     },
     currentTurnId() {
       return (this.store && this.store.yeaftDebugPanel && this.store.yeaftDebugPanel.turnId) || '';
@@ -1051,14 +1052,26 @@ export default {
       }
       this.copyText(JSON.stringify(tool, null, 2), 'tool record');
     },
-    copyRawRequest(loop) {
-      this.copyText(this.rawRequestForLoop(loop), 'raw request');
+    latestRequestForTurn(turn) {
+      // Older Agents may send every request; select by loop identity, never by
+      // payload availability. A missing latest capture must not expose an older one.
+      const loop = (turn.loops || []).reduce((latest, candidate) => {
+        if (!candidate) return latest;
+        return !latest || Number(candidate.loopNumber || 0) >= Number(latest.loopNumber || 0) ? candidate : latest;
+      }, null);
+      if (!loop) return null;
+      const rawRequest = this.rawRequestForLoop(loop);
+      const body = rawRequest?.body;
+      return {
+        loopNumber: loop.loopNumber,
+        bodyText: body == null ? null : (typeof body === 'string' ? body : JSON.stringify(body, null, 2)),
+        systemPrompt: loop.systemPrompt || '',
+      };
     },
     rawRequestForLoop(loop) {
-      // Live loop events already carry the exact auth-redacted adapter payload.
-      // Hydrated history stores the same payload as structural deltas, so only
-      // reconstruct when the direct per-loop capture is absent.
-      if (loop?.rawRequest != null) return loop.rawRequest;
+      // Explicit null means the latest capture is unavailable. Only older
+      // records without this field may use their own structural delta/base.
+      if (loop?.rawRequest !== undefined) return loop.rawRequest;
       return reconstructDebugRawRequest(loop?.rawRequestBase ?? loop?.requestBase?.rawRequest ?? null, loop?.requestDelta || null);
     },
     copyToolOutput(turn, tool) {
@@ -1099,6 +1112,23 @@ export default {
       lines.push(turn.userPrompt || '');
       lines.push('```');
       lines.push('');
+      const latestRequest = this.latestRequestForTurn(turn);
+      if (latestRequest) {
+        lines.push(`## ${this.$t('yeaft.debugLatestRequestBody')} (Loop ${latestRequest.loopNumber})`);
+        lines.push('');
+        if (latestRequest.bodyText != null) {
+          lines.push('```json', latestRequest.bodyText, '```');
+        } else {
+          lines.push(this.$t('yeaft.debugRequestBodyUnavailable'));
+        }
+        lines.push('', `## ${this.$t('yeaft.debugLatestSystemPrompt')} (Loop ${latestRequest.loopNumber})`, '');
+        if (latestRequest.systemPrompt) {
+          lines.push('```text', latestRequest.systemPrompt, '```');
+        } else {
+          lines.push(this.$t('yeaft.debugSystemPromptUnavailable'));
+        }
+        lines.push('');
+      }
       if (turn.memoryLoaded && turn.memoryLoaded.length > 0) {
         lines.push(`## Memory loaded (${turn.memoryLoaded.length})`);
         for (const m of turn.memoryLoaded) {
@@ -1447,6 +1477,34 @@ export default {
             <div v-if="!turn.detailsLoaded && (!turn.loops || turn.loops.length === 0)" class="yeaft-debug-empty">
               {{ $t('yeaft.debugHistoryLoading') }}
             </div>
+            <!-- One request snapshot per Turn, always from the latest Loop. -->
+            <template v-if="turn.latestRequest">
+              <div class="yeaft-debug-section yeaft-debug-latest-request">
+                <div class="yeaft-debug-section-row">
+                  <span class="yeaft-debug-section-title">{{ $t('yeaft.debugLatestRequestBody') }}</span>
+                  <span class="yeaft-debug-section-meta">Loop {{ turn.latestRequest.loopNumber }}</span>
+                  <button type="button" class="yeaft-debug-copy-btn" :disabled="turn.latestRequest.bodyText == null" @click="copyText(turn.latestRequest.bodyText, $t('yeaft.debugLatestRequestBody'))">{{ $t('common.copy') }}</button>
+                  <button type="button" class="yeaft-debug-show-btn" :disabled="turn.latestRequest.bodyText == null" :aria-expanded="isSectionExpanded(turn.turnId, 'latest-request')" @click="toggleSection(turn.turnId, 'latest-request')">
+                    {{ $t(isSectionExpanded(turn.turnId, 'latest-request') ? 'yeaft.debugHideDetails' : 'yeaft.debugShowDetails') }}
+                  </button>
+                </div>
+                <div v-if="turn.latestRequest.bodyText == null" class="yeaft-debug-notice">{{ $t('yeaft.debugRequestBodyUnavailable') }}</div>
+                <pre v-else-if="isSectionExpanded(turn.turnId, 'latest-request')" class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ turn.latestRequest.bodyText }}</pre>
+              </div>
+              <div class="yeaft-debug-section yeaft-debug-latest-system-prompt">
+                <div class="yeaft-debug-section-row">
+                  <span class="yeaft-debug-section-title">{{ $t('yeaft.debugLatestSystemPrompt') }}</span>
+                  <span class="yeaft-debug-section-meta">Loop {{ turn.latestRequest.loopNumber }}</span>
+                  <button type="button" class="yeaft-debug-copy-btn" :disabled="!turn.latestRequest.systemPrompt" @click="copyText(turn.latestRequest.systemPrompt, $t('yeaft.debugLatestSystemPrompt'))">{{ $t('common.copy') }}</button>
+                  <button type="button" class="yeaft-debug-show-btn" :disabled="!turn.latestRequest.systemPrompt" :aria-expanded="isSectionExpanded(turn.turnId, 'latest-system')" @click="toggleSection(turn.turnId, 'latest-system')">
+                    {{ $t(isSectionExpanded(turn.turnId, 'latest-system') ? 'yeaft.debugHideDetails' : 'yeaft.debugShowDetails') }}
+                  </button>
+                </div>
+                <div v-if="!turn.latestRequest.systemPrompt" class="yeaft-debug-notice">{{ $t('yeaft.debugSystemPromptUnavailable') }}</div>
+                <pre v-else-if="isSectionExpanded(turn.turnId, 'latest-system')" class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ turn.latestRequest.systemPrompt }}</pre>
+              </div>
+            </template>
+
             <!-- Turn-level: Memory loaded -->
             <div class="yeaft-debug-section" v-if="turn.memoryLoaded && turn.memoryLoaded.length > 0">
               <div class="yeaft-debug-section-row">
@@ -1522,21 +1580,6 @@ export default {
               </div>
 
               <div class="yeaft-debug-loop-body" v-if="isLoopExpanded(turn.turnId, loop.loopNumber)">
-                <!-- The system prompt is a provider-loop request field. Skills,
-                     notifications, folding, and other runtime state may change it
-                     between loops, so never label the first prompt as Turn-wide. -->
-                <div class="yeaft-debug-section" v-if="loop.systemPrompt">
-                  <div class="yeaft-debug-section-row">
-                    <span class="yeaft-debug-section-title">{{ $t('yeaft.systemPrompt') }}</span>
-                    <span class="yeaft-debug-section-meta">{{ loop.systemPrompt.length }} chars</span>
-                    <button class="yeaft-debug-copy-btn" @click="copyText(loop.systemPrompt, 'system prompt')">copy</button>
-                    <button class="yeaft-debug-show-btn" @click="toggleSection(turn.turnId, 'sys-' + loop.loopNumber)">
-                      {{ isSectionExpanded(turn.turnId, 'sys-' + loop.loopNumber) ? 'hide' : 'show' }}
-                    </button>
-                  </div>
-                  <pre v-if="isSectionExpanded(turn.turnId, 'sys-' + loop.loopNumber)" class="yeaft-debug-pre">{{ loop.systemPrompt }}</pre>
-                </div>
-
                 <!-- Tools — model calls joined with completed results. -->
                 <div class="yeaft-debug-section" v-if="toolsForLoop(turn, loop).length > 0">
                   <div class="yeaft-debug-section-title">Tools ({{ toolsForLoop(turn, loop).length }})</div>
@@ -1589,15 +1632,11 @@ export default {
                   <pre v-if="isSectionExpanded(turn.turnId, 'asst-' + loop.loopNumber)" class="yeaft-debug-pre">{{ assistantResponseForLoop(loop) }}</pre>
                 </div>
 
-                <!-- Raw API request / response — copy-only, never inlined -->
-                <div class="yeaft-debug-section yeaft-debug-raw-row" v-if="rawRequestForLoop(loop) || loop.rawResponse">
+                <!-- Raw API response stays with its Loop. -->
+                <div class="yeaft-debug-section yeaft-debug-raw-row" v-if="loop.rawResponse">
                   <span class="yeaft-debug-section-title">Raw</span>
-                  <button v-if="rawRequestForLoop(loop)" class="yeaft-debug-copy-btn" @click="copyRawRequest(loop)">copy req</button>
-                  <button v-if="loop.rawResponse" class="yeaft-debug-copy-btn" @click="copyText(loop.rawResponse, 'raw response')">copy res</button>
-                  <span class="yeaft-debug-section-meta">
-                    <span v-if="rawRequestForLoop(loop)">{{ rawRequestForLoop(loop).method }} {{ rawRequestForLoop(loop).url }}</span>
-                    <span v-if="loop.rawResponse">· status={{ loop.rawResponse.status }}</span>
-                  </span>
+                  <button class="yeaft-debug-copy-btn" @click="copyText(loop.rawResponse, 'raw response')">copy res</button>
+                  <span class="yeaft-debug-section-meta">status={{ loop.rawResponse.status }}</span>
                 </div>
               </div>
             </div>

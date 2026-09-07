@@ -12,7 +12,39 @@ const contentTypes = {
   '.js': 'text/javascript; charset=utf-8',
 };
 
-function harnessHtml() {
+function debugPanelScript() {
+  return `
+    const store = Vue.reactive({
+      yeaftDebugPanel: { open: true, status: 'ready', turnId: 'debug-turn', sessionId: 'debug-session' },
+      yeaftDebugTurnsById: {
+        'debug-turn': { turnId: 'debug-turn', detailsLoaded: true, loopCount: 2, tools: [
+          { loopNumber: 1, callId: 'tool-1', name: 'Read', toolOutput: 'full result\\n'.repeat(3000) + 'RESULT_TAIL' },
+          { loopNumber: 2, callId: 'tool-2', name: 'Read', toolOutput: 'second result' },
+        ] },
+      },
+      yeaftDebugLoops: [1, 2].map(loopNumber => ({
+        turnId: 'debug-turn', loopNumber, model: 'provider/model',
+        systemPrompt: loopNumber === 2 ? 'LATEST_SYSTEM' : 'OLD_SYSTEM',
+        rawRequest: { body: { input: loopNumber === 2 ? 'LATEST_BODY' + ' long request'.repeat(3000) : 'OLD_BODY' } },
+        toolCalls: [{ id: 'tool-' + loopNumber, name: 'Read', input: { path: '/file-' + loopNumber } }],
+      })),
+    });
+    window.Pinia = { defineStore: () => () => ({}), useChatStore: () => store };
+    const { default: YeaftDebugPanel } = await import('/web/components/YeaftDebugPanel.js');
+    const { default: en } = await import('/web/i18n/en.js');
+    const { default: zh } = await import('/web/i18n/zh-CN.js');
+    const app = Vue.createApp({ components: { YeaftDebugPanel }, template: '<YeaftDebugPanel />' });
+    window.__locale = Vue.reactive({ value: 'en' });
+    app.config.globalProperties.$t = key => (window.__locale.value === 'en' ? en : zh)[key] || key;
+    app.mount('#app');
+    window.__debugStore = store;
+    window.__ready = true;
+  `;
+}
+
+function harnessHtml(debug = false) {
+  if (debug) return harnessHtml()
+    .replace(/<script type="module">[\s\S]*?<\/script>/, () => '<script type="module">' + debugPanelScript() + '</script>');
   return `<!doctype html>
 <html data-theme="light">
 <head>
@@ -26,7 +58,7 @@ function harnessHtml() {
 </head>
 <body>
   <div id="app"></div>
-  <script src="/node_modules/vue/dist/vue.global.js"></script>
+  <script src="/web/vendor/vue.global.prod.js"></script>
   <script type="module">
     window.Pinia = {
       defineStore: () => () => ({}),
@@ -93,9 +125,9 @@ test.beforeAll(async () => {
   });
   server = createServer((request, response) => {
     const pathname = new URL(request.url, 'http://127.0.0.1').pathname;
-    if (pathname === '/__turn-response') {
+    if (pathname === '/__turn-response' || pathname === '/__debug-panel') {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      response.end(harnessHtml());
+      response.end(harnessHtml(pathname === '/__debug-panel'));
       return;
     }
     if (pathname === '/gallery-a.png' || pathname === '/gallery-b.png') {
@@ -142,6 +174,66 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   if (!server) return;
   await new Promise(resolveClose => server.close(resolveClose));
+});
+
+test('debug panel keeps one latest request and full loop tools across themes and mobile', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.message));
+  await page.goto(`${baseUrl}/__debug-panel`);
+  await expect.poll(() => page.evaluate(() => window.__ready === true).then(ready => ready ? 'ready' : pageErrors.join('\n'))).toBe('ready');
+  await page.locator('.yeaft-debug-turn-header').click();
+  const request = page.locator('.yeaft-debug-latest-request');
+  const system = page.locator('.yeaft-debug-latest-system-prompt');
+  await expect(request).toHaveCount(1);
+  await expect(system).toHaveCount(1);
+  await request.getByRole('button', { name: 'show', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(request.locator('pre')).toContainText('LATEST_BODY');
+  await request.getByRole('button', { name: 'Copy', exact: true }).click();
+  expect(JSON.parse(await page.evaluate(() => navigator.clipboard.readText())).input).toMatch(/^LATEST_BODY/);
+  await system.getByRole('button', { name: 'show', exact: true }).click();
+  await system.getByRole('button', { name: 'Copy', exact: true }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('LATEST_SYSTEM');
+  for (const header of await page.locator('.yeaft-debug-loop-header').all()) await header.click();
+  await expect(page.locator('.yeaft-debug-loop-body').getByText('copy req', { exact: true })).toHaveCount(0);
+  for (const row of await page.locator('.yeaft-debug-tool-row').all()) await row.getByRole('button', { name: 'show', exact: true }).click();
+  const result = page.locator('.yeaft-debug-tool-detail').first().locator('pre').last();
+  await expect(result).toContainText('RESULT_TAIL');
+  await expect(page.locator('.yeaft-debug-tool-detail').first().locator('pre').first()).toContainText('/file-1');
+  await page.locator('.yeaft-debug-turn-copy').click();
+  const markdown = await page.evaluate(() => navigator.clipboard.readText());
+  expect(markdown.match(/LATEST_BODY/g)).toHaveLength(1);
+  expect(markdown).not.toMatch(/OLD_BODY|OLD_SYSTEM/);
+
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
+    for (const width of [1280, 320]) {
+      await page.setViewportSize({ width, height: 800 });
+      await expect(request).toBeVisible();
+      await expect(system).toBeVisible();
+      const layout = await request.locator('pre').evaluate(pre => ({
+        clientHeight: pre.clientHeight, scrollHeight: pre.scrollHeight,
+        right: pre.getBoundingClientRect().right,
+        viewport: window.innerWidth,
+        color: getComputedStyle(pre).color,
+        background: getComputedStyle(pre).backgroundColor,
+      }));
+      expect(layout.scrollHeight).toBeGreaterThan(layout.clientHeight);
+      expect(layout.right).toBeLessThanOrEqual(layout.viewport);
+      expect(layout.color).not.toBe(layout.background);
+    }
+  }
+  await page.evaluate(() => {
+    window.__debugStore.yeaftDebugLoops[1].rawRequest = null;
+    window.__debugStore.yeaftDebugLoops[1].systemPrompt = '';
+    window.__locale.value = 'zh';
+  });
+  await expect(request.locator('pre')).toHaveCount(0);
+  await expect(request.getByRole('button', { name: '复制', exact: true })).toBeDisabled();
+  await expect(request).toContainText('最新 Loop 的请求体不可用。');
+  await expect(system).toContainText('最新 Loop 的系统提示不可用。');
+  await expect(result).toContainText('RESULT_TAIL');
 });
 
 test('keeps progress visible and distinct from the final result across themes and mobile', async ({ page }) => {
