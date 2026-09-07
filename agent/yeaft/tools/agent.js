@@ -24,6 +24,7 @@ import { defineTool } from './types.js';
 import { randomUUID } from 'crypto';
 import { getPersona, listPersonaIds } from '../personas.js';
 import { startSubAgent } from '../sub-agent/runner.js';
+import { resolveSubAgentBudget } from '../sub-agent/execution-control.js';
 import { STATUS, isTerminalAgentStatus } from '../sub-agent/status.js';
 import { diagnoseAgentLiveness, makeLiveness } from '../sub-agent/liveness.js';
 import { TASK_RESULT_DELIVERY } from '../tasks/store.js';
@@ -89,11 +90,12 @@ export function validateSpec(input) {
     return { ok: false, error: 'spec must be an object' };
   }
   const { name, task, mission, expected_output, persona, budget } = input;
-  if (!name || typeof name !== 'string') {
+  if (!cleanString(name)) {
     return { ok: false, error: 'name is required' };
   }
-  if (!task && !mission) {
-    return { ok: false, error: 'task or mission is required' };
+  if ([task, mission].some(value => value !== undefined && !cleanString(value))
+      || (!cleanString(task) && !cleanString(mission))) {
+    return { ok: false, error: 'task or mission must be a non-empty string' };
   }
   if (persona && !getPersona(persona)) {
     return {
@@ -108,9 +110,10 @@ export function validateSpec(input) {
     if (typeof budget !== 'object' || budget === null) {
       return { ok: false, error: 'budget must be an object' };
     }
-    for (const k of ['max_tokens', 'max_turns', 'wall_time_ms']) {
-      if (budget[k] !== undefined && (typeof budget[k] !== 'number' || budget[k] <= 0)) {
-        return { ok: false, error: `budget.${k} must be a positive number` };
+    for (const k of ['max_tokens', 'max_turns', 'wall_time_ms', 'max_tool_calls']) {
+      if (budget[k] !== undefined && (!Number.isFinite(budget[k]) || budget[k] <= 0
+          || (['max_turns', 'max_tool_calls'].includes(k) && !Number.isSafeInteger(budget[k])))) {
+        return { ok: false, error: `budget.${k} must be finite and positive (counts must be integers)` };
       }
     }
   }
@@ -122,7 +125,7 @@ export function validateSpec(input) {
       task: task || mission,
       expected_output: expected_output || null,
       persona: persona || null,
-      budget: budget || null,
+      budget: resolveSubAgentBudget(budget, persona),
     },
   };
 }
@@ -221,8 +224,9 @@ export default defineTool({
     en: `Create a sub-agent to work on an independent task in parallel.
 
 Sub-agents run in their own context and can be given a concrete mission
-with an optional expected_output schema. Optional budget limits
-(max_tokens/max_turns/wall_time_ms) act as safety cutoffs only when supplied.
+with an optional expected_output schema. Default safety ceilings: 64 actual tool
+executions (128 for implementer) and 15 minutes; budget overrides each field.
+max_tokens is checked during provider usage; max_turns counts query turns, not tools.
 Pick a preset persona to pre-wire a tool subset and model tier:
   - explorer   : fast, read-only scout (Read/Grep/Glob/ListDir)
   - implementer: builder with full work tools (primary model)
@@ -232,7 +236,8 @@ Pick a preset persona to pre-wire a tool subset and model tier:
 Guidelines:
 - Give a clear, focused mission — what "done" looks like
 - Use expected_output when the return shape matters
-- Add a budget only when you need an explicit safety cutoff
+- Delegate only a bounded independent result; do simple work directly. Set scope, evidence and stopping conditions in mission.
+- Inspect execution counters and partial evidence before extending budgets; do not respawn the same exhausted mission automatically.
 
 Async orchestration:
   1. SpawnAgent  — starts the sub-agent as a background task and returns immediately.
@@ -251,7 +256,8 @@ workflow; use bounded WaitAgent calls and inspect liveness instead of blind loop
     zh: `创建一个子 Agent 并行处理独立任务。
 
 子 Agent 在独立上下文中运行，可给定具体 mission 和可选的 expected_output schema。
-可选的预算限制（max_tokens/max_turns/wall_time_ms）仅在设置后作为安全截止。
+默认安全上限：64 次实际工具执行（implementer 为 128 次）、15 分钟；budget 可逐项覆盖。
+max_tokens 在 provider usage 到达时检查；max_turns 是 query turn 数，不是工具调用数。
 选择预设 persona 来预配置工具子集和模型层级：
   - explorer   : 快速只读侦察（Read/Grep/Glob/ListDir）
   - implementer: 具备完整工作工具的构建者（主模型）
@@ -261,7 +267,8 @@ workflow; use bounded WaitAgent calls and inspect liveness instead of blind loop
 使用指南：
 - 给出清晰聚焦的 mission——"完成"是什么样子
 - 当返回结构重要时使用 expected_output
-- 仅在需要明确安全截止时添加 budget
+- 只委派有界且独立的结果；简单工作直接做。在 mission 中写清范围、证据和停止条件。
+- 扩大预算前检查实际执行计数和已有证据；不要自动重启同一个耗尽预算的任务。
 
 异步编排流程：
   1. SpawnAgent  — 启动子 Agent 作为后台任务并立即返回。
@@ -326,14 +333,18 @@ liveness，不要盲目循环。`
           en: 'Optional turn ceiling; no default limit is applied',
           zh: '可选 turn 上限；默认不设限制',
         } },
+          max_tool_calls: { type: 'integer', minimum: 1, description: {
+          en: 'Actual tool execution ceiling; default 64, or 128 for implementer. Includes parallel and discovered tools.',
+          zh: '实际工具执行上限；默认 64，implementer 为 128；包括并行及发现的工具。',
+        } },
           wall_time_ms: { type: 'number', description: {
-          en: 'Optional elapsed-time ceiling in milliseconds; no default limit is applied',
-          zh: '可选耗时上限（毫秒）；默认不设限制',
+          en: 'Elapsed-time ceiling in milliseconds; default 900000 (15 minutes)',
+          zh: '耗时上限（毫秒）；默认 900000（15 分钟）',
         } },
         },
         description: {
-          en: 'Optional safety limits; no max_tokens/max_turns/wall_time_ms defaults are applied. Exceeding an explicit limit returns { status: "budget_exceeded", partial_output, reason }',
-          zh: '可选安全限制；默认不限制 max_tokens/max_turns/wall_time_ms。超过显式限制会返回 { status: "budget_exceeded", partial_output, reason }',
+          en: 'Override default tool/time safety ceilings; token/turn limits are optional. A cutoff returns { status: "budget_exceeded", partial_output, reason }, not successful completion.',
+          zh: '覆盖默认工具/时间安全上限；token/turn 限制可选。截止时返回 { status: "budget_exceeded", partial_output, reason }，不代表任务成功。',
         },
       },
       cwd: {
