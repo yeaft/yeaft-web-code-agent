@@ -121,7 +121,7 @@ Dream 异步更新 scope 的 `memory.md` / `summary.md` 并同步 FTS；它与�
 
 Skills 有 bundled、user、project tiers；`skills.js` 定义 precedence。MCP 合并 global、external user 和 project 配置。`sessions/project-doc.js` 按任务和路径选择项目文档章节，`projectDocMaxBytes: 0` 可禁用项目文档。
 
-`tools/index.js#createFullRegistry()` 是内置工具入口。后台 shell task 属于 Session 的 TaskManager，默认 `status_only`；`model_reentry` 结果任务可唤回模型，重启后失去控制确认的任务标为 `orphaned`。子 Agent 有独立日志、预算和 terminal state；其 terminal notification 是控制上下文，不是用户原话。VP 间交接使用 `route_forward`，普通输出中的 `@vp` 不触发执行。
+`tools/index.js#createFullRegistry()` 是内置工具入口。后台 shell task 属于 Session 的 TaskManager，默认 `status_only`；`model_reentry` 结果任务可唤回模型，重启后失去控制确认的任务标为 `orphaned`。子 Agent 有独立日志、预算和 terminal state；其 terminal notification 是控制上下文，不是用户原话。
 
 工具超时不代表外部副作用已停止。`managed-cli.js` 可复用或安装用户级辅助 CLI，同时保留 Node fallback，不要求系统包管理器或 `sudo`。
 
@@ -175,7 +175,7 @@ Work Center 是 Agent instance 级的持久目标执行系统，代码位于 `ag
 
 Feature / fix / docs 使用从最新 `origin/main`（`git fetch origin main --tags`）建立的独立 worktree 和 PR，不直接推送 `main`。Commit 使用 Conventional Commits（如 `feat:`、`fix:`、`docs:`）。提交包含与改动面匹配的验证结果；现有 PR 自动 CI 触发关闭，没有 checks 不表示通过。
 
-实现与独立审查的角色分工为 Linus / Martin。交接通过 `route_forward` 携带 PR number、精确 head SHA、验证与风险；Martin 的结论绑定 exact head 和 GitHub merge snapshot，检查 base、mergeability、完整 diff 与相关回归。只有明确允许 merge 后才能合并；head 或 base 漂移后原结论失效。作者账号无法正式 approve 自己的 PR 时，独立结论保留在 PR comment 和交接记录中。
+PR 记录改动目的、验证结果与风险。审查关注完整 diff、兼容性和相关回归，结论对应明确的 head SHA 与合并基线；代码或基线变化后需要重新确认。开发与审查不绑定具体人员、VP 或交接工具。
 
 合并使用 head-match 保护，不使用 `HEAD:main` / `branch:main`。发布与代码修改是分开的操作；tag 仅来自合并后重新 fetch 的 `origin/main`，版本从远端实际 tag 单一递增为 `v1.0.X`，PR merge commit、main、本地 / 远端 tag 指向一致。`v*` workflow 发布 npm Agent 与 `:dev` Docker image；`release-*` 为需要用户明确授权的生产发布。发布闭环后清理本任务 worktree，不清理其他人的分支和文件。
 
