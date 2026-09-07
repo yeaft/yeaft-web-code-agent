@@ -185,7 +185,8 @@ async function handleOneShotResponse(agentId, agent, msg, routeKey) {
     userId: pending.userId,
     role: pending.role,
   });
-  if (!currentGeneration || currentGeneration !== pending.workspaceGeneration) return;
+  if (currentGeneration === null) return;
+  if (currentGeneration && currentGeneration !== pending.workspaceGeneration) return;
   const projected = msg.type === 'file_content' && msg.binary
     ? cacheBinaryPreview(msg)
     : msg;

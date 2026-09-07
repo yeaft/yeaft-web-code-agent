@@ -1434,7 +1434,7 @@ describe('Agent file terminal forwarding', () => {
     expect(sendToWebClient).not.toHaveBeenCalledWith(otherClient, expect.anything());
   });
 
-  it('still rejects route-less directory listing without the pre-Session picker scope', async () => {
+  it('terminates a rejected directory listing without the pre-Session picker scope', async () => {
     const agentId = 'directory-picker-denied-agent';
     const client = routeClient('directory-picker-user', { currentAgent: agentId });
     agents.set(agentId, {
@@ -1456,11 +1456,24 @@ describe('Agent file terminal forwarding', () => {
         conversationId: '_workdir_picker',
         requestId: 'picker-request-2',
         dirPath: '/projects',
+        workbenchRouteKey: 'yeaft:other-agent:missing-session',
+        workbenchWorkspaceGeneration: 'rejected-generation',
       },
       async () => true,
     );
 
     expect(forwardToAgent).not.toHaveBeenCalled();
+    expect(sendToWebClient).toHaveBeenCalledWith(client, {
+      type: 'directory_listing',
+      agentId,
+      conversationId: '_workdir_picker',
+      requestId: 'picker-request-2',
+      workbenchRouteKey: 'yeaft:other-agent:missing-session',
+      workbenchWorkspaceGeneration: 'rejected-generation',
+      dirPath: '/projects',
+      entries: [],
+      error: 'Invalid Workbench Session route',
+    });
     expect(sendToWebClient).toHaveBeenCalledWith(client, {
       type: 'error',
       message: 'Invalid Workbench Session route',
@@ -1599,6 +1612,45 @@ describe('Agent file terminal forwarding', () => {
         _workbenchRequestId: outbound._workbenchRequestId,
       }),
     );
+  });
+
+  it('delivers a response when a Yeaft Session has no canonical workDir', async () => {
+    const routeKey = 'yeaft:fallback-agent:fallback-session';
+    const fallbackGeneration = workbenchWorkspaceGeneration(routeKey, '/agent/yeaft-dir');
+    const { outbound, client } = await registerRouteRequest({
+      type: 'list_directory',
+      agentId: 'fallback-agent',
+      sessionId: 'fallback-session',
+      workDir: '',
+      requestId: 'fallback-directory-request',
+      extra: {
+        dirPath: '/agent/yeaft-dir',
+        workbenchWorkspaceGeneration: fallbackGeneration,
+      },
+    });
+    expect(outbound).toMatchObject({
+      workbenchRouteKey: routeKey,
+      workbenchWorkspaceGeneration: fallbackGeneration,
+    });
+    sendToWebClient.mockClear();
+
+    await handleAgentFileTerminal('fallback-agent', agents.get('fallback-agent'), {
+      type: 'directory_listing',
+      conversationId: outbound.conversationId,
+      _workbenchRequestId: outbound._workbenchRequestId,
+      workbenchWorkspaceGeneration: fallbackGeneration,
+      dirPath: '/agent/yeaft-dir',
+      entries: [],
+    });
+
+    expect(sendToWebClient).toHaveBeenCalledWith(client, expect.objectContaining({
+      type: 'directory_listing',
+      requestId: 'fallback-directory-request',
+      workbenchRouteKey: routeKey,
+      workbenchWorkspaceGeneration: fallbackGeneration,
+      dirPath: '/agent/yeaft-dir',
+      entries: [],
+    }));
   });
 
   it('drops a delayed response after the canonical workspace generation changes', async () => {

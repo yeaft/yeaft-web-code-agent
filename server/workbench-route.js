@@ -120,14 +120,19 @@ function resolveChatRow(client, route) {
  *
  * `legacy: true` preserves old clients that predate route-scoped Workbench.
  */
+/**
+ * Return null when the route is no longer valid, an empty string when the
+ * Session is valid but has no Server-owned cwd, or its canonical generation.
+ */
 export function currentWorkbenchWorkspaceGeneration({ route, userId, role }) {
-  if (!route || !userId) return '';
+  if (!route || !userId) return null;
   const client = { userId, role };
   const row = route.runtimeProvider === 'yeaft'
     ? resolveYeaftRow(client, route)
     : resolveChatRow(client, route);
-  if (!row || row.isArchived) return '';
+  if (!row || row.isArchived) return null;
   const workDir = clean(route.runtimeProvider === 'yeaft' ? row.workDir : row.work_dir, 4096);
+  if (!workDir) return '';
   return workbenchWorkspaceGeneration(workbenchRouteKey(route), workDir);
 }
 
