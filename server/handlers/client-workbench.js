@@ -37,8 +37,20 @@ function isYeaftVirtualConversation(conversationId) {
 }
 
 async function denyWorkbenchRoute(client, msg) {
+  const error = 'Invalid Workbench Session route';
   console.warn(`[Security] Invalid Workbench route for ${msg?.type || 'unknown'}`);
-  await sendToWebClient(client, { type: 'error', message: 'Invalid Workbench Session route' });
+  const response = workbenchFailureResponse({
+    agentId: msg?.agentId || client.currentAgent,
+    msg,
+    resolved: {
+      conversationId: msg?.conversationId,
+      routeKey: msg?.workbenchRouteKey,
+      workspaceGeneration: msg?.workbenchWorkspaceGeneration,
+    },
+    error,
+  });
+  if (response) await sendToWebClient(client, response);
+  await sendToWebClient(client, { type: 'error', message: error });
 }
 
 const AGENT_DIRECTORY_PICKER_CONVERSATION = '_workdir_picker';
@@ -93,10 +105,9 @@ const FILE_OPERATIONS = Object.freeze({
   upload_to_dir: 'upload',
 });
 
-function workbenchTimeoutResponse({ agentId, msg, resolved }) {
+function workbenchFailureResponse({ agentId, msg, resolved, error }) {
   const type = TIMEOUT_RESPONSE_TYPES[msg.type];
   if (!type) return null;
-  const error = 'Workbench request timed out';
   const response = {
     type,
     agentId,
@@ -189,7 +200,12 @@ function correlateWorkbenchRequest({ agentId, clientId, client, msg, resolved, c
     allowLegacyCorrelation: !supportsRequestCorrelation,
     onTimeout: async () => {
       if (!client.authenticated || client.userId !== registration.userId) return;
-      const response = workbenchTimeoutResponse({ agentId, msg, resolved });
+      const response = workbenchFailureResponse({
+        agentId,
+        msg,
+        resolved,
+        error: 'Workbench request timed out',
+      });
       if (response) await sendToWebClient(client, response);
     },
   };
