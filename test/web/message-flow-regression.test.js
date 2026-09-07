@@ -410,6 +410,74 @@ describe('message flow regressions', () => {
     });
   });
 
+  it('changes the file-reference resolution context when route readiness changes', () => {
+    storeFactories.clear();
+    runtimeSessionsStore.sessionList = [{ id: 'session-files', agentId: 'agent-files' }];
+    const store = useChatStore();
+    store.currentView = 'yeaft';
+    store.connectionState = 'connecting';
+    store.authenticated = false;
+    store.workbenchRouteProtocolSupported = false;
+    store.currentAgent = 'agent-files';
+    store.currentAgentInfo = {
+      id: 'agent-files',
+      workDir: '/workspace/files',
+      capabilities: ['file_reference_resolution'],
+    };
+    store.agents = [store.currentAgentInfo];
+    store.yeaftAgentId = 'agent-files';
+    store.yeaftConversationId = 'yeaft-agent-files';
+    store.yeaftConversationIdsByAgent = { 'agent-files': 'yeaft-agent-files' };
+    store.yeaftActiveSessionFilter = 'session-files';
+
+    const connectingKey = store.fileReferenceResolutionContextKey;
+    expect(connectingKey).not.toBe('');
+
+    store.connectionState = 'connected';
+    store.authenticated = true;
+    store.workbenchRouteProtocolSupported = true;
+    store.currentAgentInfo.capabilities.push('file_editor', 'workbench_session_routes');
+    const readyKey = store.fileReferenceResolutionContextKey;
+    expect(readyKey).not.toBe(connectingKey);
+
+    store.yeaftYeaftDir = '/workspace/ready';
+    const workDirKey = store.fileReferenceResolutionContextKey;
+    expect(workDirKey).not.toBe(readyKey);
+
+    runtimeSessionsStore.sessionList.push({ id: 'session-other', agentId: 'agent-files' });
+    store.yeaftActiveSessionFilter = 'session-other';
+    const routeKey = store.fileReferenceResolutionContextKey;
+    expect(routeKey).not.toBe(workDirKey);
+
+    store.currentAgentInfo.capabilities = ['file_editor', 'workbench_session_routes'];
+    expect(store.fileReferenceResolutionContextKey).toBe('');
+  });
+
+  it('does not keep a phantom file-reference request when the socket send fails', () => {
+    storeFactories.clear();
+    runtimeSessionsStore.sessionList = [{ id: 'session-files', agentId: 'agent-files' }];
+    const store = useChatStore();
+    store.currentView = 'yeaft';
+    store.connectionState = 'connected';
+    store.authenticated = true;
+    store.workbenchRouteProtocolSupported = true;
+    store.currentAgent = 'agent-files';
+    store.currentAgentInfo = {
+      id: 'agent-files',
+      workDir: '/workspace/files',
+      capabilities: ['file_editor', 'file_reference_resolution', 'workbench_session_routes'],
+    };
+    store.agents = [store.currentAgentInfo];
+    store.yeaftAgentId = 'agent-files';
+    store.yeaftConversationId = 'yeaft-agent-files';
+    store.yeaftConversationIdsByAgent = { 'agent-files': 'yeaft-agent-files' };
+    store.yeaftActiveSessionFilter = 'session-files';
+    store.sendWsMessage = vi.fn(() => false);
+
+    expect(store.resolveMessageFileReferences(['src/file.js'])).toBeNull();
+    expect(store.sendWsMessage).toHaveBeenCalledOnce();
+  });
+
   it('keeps container upgrade guidance separate from the npm manual-upgrade path', () => {
     for (const messages of [enMessages, zhCNMessages]) {
       const text = messages['chat.agent.containerImageUpgradeRequired'];
