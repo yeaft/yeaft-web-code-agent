@@ -15,7 +15,7 @@ import { mutateAgentConfig } from './config-store.js';
 // layout AND rewrites pre-rename per-message frontmatter (groupId → sessionId).
 // Idempotent via the `.yeaft-migration.done` sentinel file.
 import { migrateSessions } from './migrate/sessions.js';
-import { bundledYeaftSkillsDir } from './skills.js';
+import { bundledYeaftSkillsDirs } from './skills.js';
 
 /**
  * Check if an error is a permission error (EACCES or EPERM).
@@ -353,7 +353,10 @@ function readManifest(filePath) {
  * @returns {{ copied: number, updated: number, preserved: number, skipped: number }}
  */
 export function seedBundledSkills(userSkillsDir, warnings = []) {
-  const bundled = bundledYeaftSkillsDir();
+  // Seed only the highest-priority root. Runtime loading still scans every
+  // bundled root; flattening lower-priority roots into the user tier here
+  // would erase bundled provenance and conflict ordering.
+  const bundled = bundledYeaftSkillsDirs().at(-1);
   if (!bundled) {
     return { copied: 0, updated: 0, preserved: 0, skipped: 0 };
   }

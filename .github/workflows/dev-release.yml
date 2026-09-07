@@ -39,42 +39,29 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Resolve tag and commit
+      - name: Resolve remote tag commit
         id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_SHA: ${{ github.sha }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-            git fetch --tags origin
-            TAG_COMMIT=$(git rev-list -n 1 "refs/tags/${TAG}" 2>/dev/null || true)
-            if [ -z "$TAG_COMMIT" ]; then
-              echo "::error::Tag '${TAG}' not found in this repository."
-              exit 1
-            fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$DISPATCH_TAG"
+            RELEASE_COMMIT=$(sh scripts/verify-dev-release.sh resolve "$TAG")
           else
-            TAG="${{ github.ref_name }}"
-            TAG_COMMIT="${{ github.sha }}"
+            TAG="$REF_NAME"
+            RELEASE_COMMIT=$(git rev-parse --verify "${EVENT_SHA}^{commit}")
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "commit=${TAG_COMMIT}" >> "$GITHUB_OUTPUT"
+          echo "commit=${RELEASE_COMMIT}" >> "$GITHUB_OUTPUT"
 
-      - name: Verify tag commit is on main
-        run: |
-          TAG="${{ steps.resolve.outputs.tag }}"
-          TAG_COMMIT="${{ steps.resolve.outputs.commit }}"
-          echo "Tag: ${TAG}"
-          echo "Commit: ${TAG_COMMIT}"
-
-          if ! git merge-base --is-ancestor "${TAG_COMMIT}" origin/main; then
-            echo ""
-            echo "::error::Tag '${TAG}' points to commit ${TAG_COMMIT} which is NOT on the main branch."
-            echo "::error::Tags MUST only be created from the main branch."
-            echo ""
-            echo "Branches containing this commit:"
-            git branch -r --contains "${TAG_COMMIT}"
-            exit 1
-          fi
-
-          echo "Tag is on main branch."
+      - name: Verify authoritative release refs
+        env:
+          RELEASE_TAG: ${{ steps.resolve.outputs.tag }}
+          RELEASE_COMMIT: ${{ steps.resolve.outputs.commit }}
+        run: sh scripts/verify-dev-release.sh verify "$RELEASE_TAG" "$RELEASE_COMMIT"
 
   test:
     runs-on: ubuntu-latest
@@ -118,10 +105,17 @@ jobs:
         run: npm ci
 
       - name: Set version from tag
+        env:
+          RELEASE_TAG: ${{ needs.validate-tag.outputs.tag }}
         run: |
-          TAG="${{ needs.validate-tag.outputs.tag }}"
-          VERSION=${TAG#v}
-          cd agent && npm version $VERSION --no-git-tag-version --allow-same-version
+          VERSION=${RELEASE_TAG#v}
+          cd agent && npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Revalidate authoritative release refs
+        env:
+          RELEASE_TAG: ${{ needs.validate-tag.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.validate-tag.outputs.commit }}
+        run: sh scripts/verify-dev-release.sh verify "$RELEASE_TAG" "$RELEASE_COMMIT"
 
       - name: Publish to npm
         run: cd agent && npm publish --access public --tag latest
@@ -143,6 +137,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Revalidate authoritative release refs for Server image
+        env:
+          RELEASE_TAG: ${{ needs.validate-tag.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.validate-tag.outputs.commit }}
+        run: sh scripts/verify-dev-release.sh verify "$RELEASE_TAG" "$RELEASE_COMMIT"
+
       - name: Build and push Server image
         uses: docker/build-push-action@v5
         with:
@@ -152,6 +152,12 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev
             ${{ env.REGISTRY }}/${{ env.LEGACY_IMAGE_NAME }}:dev
           build-args: BUILD_VERSION=${{ needs.validate-tag.outputs.tag }}
+
+      - name: Revalidate authoritative release refs for Agent image
+        env:
+          RELEASE_TAG: ${{ needs.validate-tag.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.validate-tag.outputs.commit }}
+        run: sh scripts/verify-dev-release.sh verify "$RELEASE_TAG" "$RELEASE_COMMIT"
 
       - name: Build and push Agent image
         uses: docker/build-push-action@v5

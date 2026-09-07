@@ -28,9 +28,10 @@
  *
  * The standard tier order set up by `createSkillManager` is:
  *
- *   tier 1 (bundled): wherever yeaft-skills is installed on disk — typically
- *           ~/.claude/skills/yeaft-skills/skills/. Read-only — `save()` and
- *           `remove()` never target this tier.
+ *   tier 1 (bundled): all available external yeaft-skills roots plus the Agent
+ *           package's own skills. External roots load first; Agent built-ins
+ *           win bundled-name conflicts. Read-only — `save()` and `remove()`
+ *           never target this tier.
  *   tier 2 (user):    <yeaftDir>/skills (e.g. ~/.yeaft/skills). User edits
  *           land here. `save()` writes here. `init.js` seeds it from tier 1
  *           on first boot so users start with the bundled Yeaft skills.
@@ -1197,8 +1198,9 @@ export class SkillManager {
  * Create a SkillManager wired with the standard layered tier list and load it.
  *
  * Tier order (lowest → highest priority):
- *   1. bundled        — the yeaft-skills package on disk, located via
- *      `bundledYeaftSkillsDir()` (typically ~/.claude/skills/yeaft-skills/skills/).
+ *   1. bundled        — every available bundled root returned by
+ *      `bundledYeaftSkillsDirs()`. External packages add skills, while the
+ *      Agent package loads last so its built-in skills win bundled conflicts.
  *   2. user           — `<yeaftDir>/skills` (e.g. ~/.yeaft/skills). User edits + saves.
  *   3. project-claude — `<workDir>/.claude/skills` when a workDir is provided.
  *      Claude Code project assets, loaded so a project that integrates Claude
@@ -1218,7 +1220,7 @@ export class SkillManager {
  * @returns {SkillManager}
  */
 export function createSkillManager(yeaftDir, workDir, options = {}) {
-  const bundled = bundledYeaftSkillsDir();
+  const bundledDirs = bundledYeaftSkillsDirs();
   const userDir = join(yeaftDir, 'skills');
   const projectRoots = [...new Set(String(workDir || '')
     .split(delimiter)
@@ -1228,9 +1230,9 @@ export function createSkillManager(yeaftDir, workDir, options = {}) {
   const codexProjectDirs = projectRoots.map(root => join(root, '.agents', 'skills'));
   const projectDirs = projectRoots.map(root => join(root, '.yeaft', 'skills'));
 
-  const dirs = [bundled, userDir, ...claudeProjectDirs, ...codexProjectDirs, ...projectDirs].filter(Boolean);
+  const dirs = [...bundledDirs, userDir, ...claudeProjectDirs, ...codexProjectDirs, ...projectDirs];
   const tierByDir = {};
-  if (bundled) tierByDir[bundled] = 'bundled';
+  for (const dir of bundledDirs) tierByDir[dir] = 'bundled';
   tierByDir[userDir] = 'user';
   for (const dir of claudeProjectDirs) tierByDir[dir] = 'project-claude';
   for (const dir of codexProjectDirs) tierByDir[dir] = 'project-codex';
@@ -1256,56 +1258,75 @@ export function createSkillManager(yeaftDir, workDir, options = {}) {
 // ─── Bundled-skills resolver ──────────────────────────────
 
 /**
- * Locate the bundled `yeaft-skills` package on disk.
+ * Locate every available bundled Skill root on disk.
  *
- * Resolution order (first existing directory wins):
- *   1. $YEAFT_SKILLS_BUNDLED_DIR — explicit env override (testing / packaging)
- *   2. ~/.claude/skills/yeaft-skills/skills/    — standard Claude Code plugin layout
- *   3. ~/.claude/plugins/yeaft-skills/skills/   — alternate plugin layout
- *   4. <agent-pkg>/skills/                       — bundled-with-agent fallback so
- *      a future npm release can ship its own skills directory
+ * The returned array is ordered from lowest to highest priority, matching the
+ * `SkillManager` layered-load contract:
+ *   1. ~/.claude/plugins/yeaft-skills/skills/   — alternate plugin layout
+ *   2. ~/.claude/skills/yeaft-skills/skills/    — standard Claude Code layout
+ *   3. $YEAFT_SKILLS_BUNDLED_DIR                 — explicit additional root
+ *   4. <agent-pkg>/skills/                       — authoritative Agent built-ins
  *
- * Returns `null` when none exist — callers must tolerate this (Yeaft still
- * runs; the user just sees no pre-installed bundled skills). Co-located here
- * (rather than in init.js) so both `createSkillManager()` and init.js's seed
- * step can call it without a module cycle.
+ * All existing roots coexist. The Agent package is deliberately last so an
+ * external package or env override cannot shadow safety-critical built-ins.
+ * User and project tiers still load after these roots and retain their existing
+ * higher-priority customization semantics.
  *
- * @returns {string|null}
+ * @returns {string[]}
  */
-export function bundledYeaftSkillsDir() {
+export function bundledYeaftSkillsDirs() {
   const candidates = [];
+  const home = homedir();
+  if (home) {
+    candidates.push(join(home, '.claude', 'plugins', 'yeaft-skills', 'skills'));
+    candidates.push(join(home, '.claude', 'skills', 'yeaft-skills', 'skills'));
+  }
 
   const envOverride = process.env.YEAFT_SKILLS_BUNDLED_DIR;
   if (envOverride && typeof envOverride === 'string' && envOverride.length > 0) {
     candidates.push(envOverride);
   }
 
-  const home = homedir();
-  if (home) {
-    candidates.push(join(home, '.claude', 'skills', 'yeaft-skills', 'skills'));
-    candidates.push(join(home, '.claude', 'plugins', 'yeaft-skills', 'skills'));
-  }
-
-  // Bundled-with-agent fallback: <agent-pkg-root>/skills. The package root is
-  // the directory containing agent/, so we walk up from this file.
+  // Bundled-with-agent root: <agent-pkg>/skills. The package root is the
+  // directory containing yeaft/, so walk up from this file.
   try {
     const here = dirname(fileURLToPath(import.meta.url));
-    // here = .../agent/yeaft
-    const agentRoot = join(here, '..', '..');
-    candidates.push(join(agentRoot, 'skills'));
+    candidates.push(join(here, '..', 'skills'));
   } catch {
     // fileURLToPath can throw on exotic loaders — non-fatal.
   }
 
-  for (const c of candidates) {
+  const roots = [];
+  for (const candidate of candidates) {
+    if (!candidate || roots.includes(candidate)) continue;
     try {
-      if (c && existsSync(c) && statSync(c).isDirectory()) {
-        return c;
+      if (existsSync(candidate) && statSync(candidate).isDirectory()) {
+        roots.push(candidate);
       }
     } catch {
-      // permission errors etc. — try the next candidate.
+      // Permission errors etc. make this candidate unavailable.
     }
   }
+  return roots;
+}
 
-  return null;
+/**
+ * Back-compatible singular resolver with the original first-existing order.
+ * New callers that load Skills must use `bundledYeaftSkillsDirs()` so all
+ * roots coexist.
+ *
+ * @returns {string|null}
+ */
+export function bundledYeaftSkillsDir() {
+  const roots = bundledYeaftSkillsDirs();
+  const envOverride = process.env.YEAFT_SKILLS_BUNDLED_DIR;
+  const home = homedir();
+  const legacyOrder = [
+    envOverride,
+    home ? join(home, '.claude', 'skills', 'yeaft-skills', 'skills') : null,
+    home ? join(home, '.claude', 'plugins', 'yeaft-skills', 'skills') : null,
+  ];
+  return legacyOrder.find(candidate => candidate && roots.includes(candidate))
+    || roots.at(-1)
+    || null;
 }

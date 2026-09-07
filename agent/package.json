@@ -8,6 +8,7 @@
     "yeaft-agent": "cli.js",
     "yeaft-agent-container": "container-cli.js",
     "yeaft": "yeaft/cli.js",
+    "yeaft-repo": "bin/yeaft-repo.js",
     "yeaft-stats": "bin/yeaft-stats.js"
   },
   "scripts": {
@@ -41,6 +42,7 @@
     "docker-entrypoint.sh",
     "yeaft/templates/**/*.md",
     "yeaft/dream/prompts/**/*.md",
+    "skills/**/*.md",
     "browser-runtime/extension/**/*",
     "browser-runtime/*.ps1",
     "local-runtime/**/*"

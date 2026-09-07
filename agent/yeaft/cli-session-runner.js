@@ -250,7 +250,10 @@ export function createCliSessionRunner({
       sessionMembers: meta.roster.slice(),
       sessionAnnouncement: meta.announcement || '',
       vpPersona: personaFactory(vpId, loaded),
-      router: createRouter({ coordinator: scopedCoordinator, guard: routeForwardGuard }),
+      router: createRouter({
+        coordinator: scopedCoordinator,
+        guard: routeForwardGuard,
+      }),
       inboundEnvelope: envelope,
       userAlreadyPersisted: true,
       causalRootId,

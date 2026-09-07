@@ -1416,6 +1416,7 @@ export class Engine {
         ? vpCtx.projectSessionIds.slice()
         : [],
       threadId: vpCtx?.threadId || this.#currentThreadId || MAIN_THREAD_ID,
+      turnId: vpCtx?.turnId || null,
       currentVpId: vpCtx?.senderVpId || this.#vpId || null,
       // task-704b: per-tool-result hard cap derives from this. Threaded
       // from the live model (resolveModel(currentModel)) every turn so
@@ -3847,6 +3848,7 @@ export class Engine {
         projectInstruction,
         projectLabel,
         threadId: runtimeThreadId,
+        turnId: vpTurnId,
         inboundEnvelope,
         taskId,
         taskMembers,

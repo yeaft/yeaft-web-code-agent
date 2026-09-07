@@ -3,7 +3,12 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCoordinator } from '../../../agent/yeaft/sessions/coordinator.js';
-import { createRouter } from '../../../agent/yeaft/routing/router.js';
+import {
+  bindRepoApprovalCapability,
+  consumeRepoApprovalCapability,
+  createRouter,
+  REPO_APPROVAL_TTL_MS,
+} from '../../../agent/yeaft/routing/router.js';
 import { createLoopGuard, MAX_CHAIN_DEPTH } from '../../../agent/yeaft/routing/loop-guard.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { Engine } from '../../../agent/yeaft/engine.js';
@@ -16,14 +21,17 @@ import {
 } from '../../../agent/yeaft/stdio-protocol.js';
 import routeForwardTool from '../../../agent/yeaft/tools/route-forward.js';
 import {
+  __testDrainVpDrivers,
   __testEnqueueForVp,
   __testGetVpThreads,
+  __testResetVpState,
   __testSeedVpThread,
   __testSetVpThreadEngine,
   __testSetSession,
   __testSetThreadClassifier,
   __testWaitForRoutePromises,
   buildVpQueryOpts,
+  handleYeaftAbortTurn,
   visibleInboundThreadId,
   __testHooks,
 } from '../../../agent/yeaft/web-bridge.js';
@@ -62,21 +70,25 @@ describe('route_forward thread ownership', () => {
     expect(routeForwardTool.description.zh).toContain('超过 30 跳');
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await __testResetVpState();
     __testSetSession(null);
     __testSetThreadClassifier(null);
     ctx.CONFIG = originalConfig;
   });
 
-  function makeCoordinator() {
+  function makeCoordinator({
+    roster = ['vp-linus', 'vp-martin'],
+    defaultVpId = roster[0],
+  } = {}) {
     const stored = [];
     const delivered = [];
     const group = {
       getMeta() {
         return {
           id: 'session-route-thread',
-          roster: ['vp-linus', 'vp-martin'],
-          defaultVpId: 'vp-linus',
+          roster,
+          defaultVpId,
         };
       },
       appendMessage(record) {
@@ -95,6 +107,88 @@ describe('route_forward thread ownership', () => {
       },
     });
     return { coordinator, stored, delivered };
+  }
+
+  async function startBlockedApprovalTurn() {
+    const sessionId = 'session-route-thread';
+    const vpId = 'linus';
+    const reviewedHead = 'e'.repeat(40);
+    const reviewedSnapshot = 'f'.repeat(40);
+    const { coordinator, delivered } = makeCoordinator({
+      roster: [vpId, 'martin'],
+      defaultVpId: vpId,
+    });
+    const router = createRouter({ coordinator });
+    expect(router.forward({
+      from: 'martin',
+      to: vpId,
+      text: 'APPROVE exact repository landing tuple',
+      repoApproval: {
+        repository: 'acme/repo',
+        pr: 1677,
+        baseBranch: 'main',
+        baseSha: '1'.repeat(40),
+        reviewedHead,
+        reviewedSnapshot,
+      },
+    }).ok).toBe(true);
+    const envelope = delivered[0].envelope;
+    let probeContext = null;
+    let releaseProbe;
+    const blocked = new Promise(resolve => { releaseProbe = resolve; });
+    let adapterCalls = 0;
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.register({
+      name: 'probe_blocked_approval',
+      description: 'hold an approval turn open',
+      parameters: { type: 'object', properties: {} },
+      execute: async (_input, toolCtx) => {
+        probeContext = toolCtx;
+        await blocked;
+        return 'released';
+      },
+    });
+    __testSetSession({
+      config: { model: 'test-model', maxOutputTokens: 1024, _readOnly: true },
+      conversationStore: {
+        append: record => record,
+        loadRecentBySession: () => [],
+      },
+      toolRegistry,
+      trace: new NullTrace(),
+      adapter: {
+        async *stream() {
+          if (adapterCalls++ === 0) {
+            yield { type: 'tool_call', id: 'probe-blocked-1', name: 'probe_blocked_approval', input: {} };
+            yield { type: 'stop', stopReason: 'tool_use' };
+          } else {
+            yield { type: 'stop', stopReason: 'end_turn' };
+          }
+        },
+        async call() { return { text: '', usage: {} }; },
+      },
+    });
+    __testEnqueueForVp(sessionId, vpId, envelope);
+    await __testWaitForRoutePromises(envelope.msg.id);
+    await vi.waitFor(() => expect(probeContext).not.toBeNull());
+    const expected = {
+      sessionId,
+      recipientVpId: vpId,
+      turnId: probeContext.turnId,
+      repository: 'github.com/acme/repo',
+      pr: 1677,
+      baseBranch: 'main',
+      baseSha: '1'.repeat(40),
+      reviewedHead,
+      reviewedSnapshot,
+    };
+    return {
+      sessionId,
+      vpId,
+      envelope,
+      expected,
+      releaseProbe,
+    };
   }
 
   it('delivers user text with unknown @ tokens to the default VP', () => {
@@ -147,6 +241,197 @@ describe('route_forward thread ownership', () => {
       sourceThreadId: 'thr-source',
     });
     expect(delivered[0].envelope.msg.meta.sourceThreadId).toBe('thr-source');
+  });
+
+  it('rejects repository approval issuance from non-stock reviewer identities', () => {
+    const { coordinator, delivered } = makeCoordinator();
+    const router = createRouter({ coordinator });
+    const repoApproval = {
+      repository: 'acme/repo',
+      pr: 1677,
+      baseBranch: 'main',
+      baseSha: '1'.repeat(40),
+      reviewedHead: 'a'.repeat(40),
+      reviewedSnapshot: 'b'.repeat(40),
+    };
+
+    expect(router.forward({
+      from: 'vp-linus',
+      to: 'vp-martin',
+      text: 'self-asserted approval',
+      repoApproval,
+    })).toMatchObject({ ok: false, error: 'repo_approval_issuer_forbidden' });
+    expect(router.forward({
+      from: 'vp-martin',
+      to: 'vp-linus',
+      text: 'mutable-role lookalike approval',
+      repoApproval,
+    })).toMatchObject({ ok: false, error: 'repo_approval_issuer_forbidden' });
+    expect(delivered).toHaveLength(0);
+  });
+
+  it('carries an opaque one-time repository approval only in the target envelope', () => {
+    const { coordinator, stored, delivered } = makeCoordinator({
+      roster: ['linus', 'martin'],
+      defaultVpId: 'linus',
+    });
+    let nowMs = 1_000;
+    const router = createRouter({ coordinator, now: () => nowMs });
+    const reviewedHead = 'a'.repeat(40);
+    const reviewedSnapshot = 'b'.repeat(40);
+
+    const result = router.forward({
+      from: 'vp-martin',
+      to: 'vp-linus',
+      text: 'APPROVE exact repository landing tuple',
+      repoApproval: {
+        repository: 'Acme/Repo.git',
+        pr: 1677,
+        baseBranch: 'main',
+        baseSha: '1'.repeat(40),
+        reviewedHead,
+        reviewedSnapshot,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, dispatched: ['linus'] });
+    expect(stored).toHaveLength(1);
+    expect(stored[0]._repoApproval).toBeUndefined();
+    expect(JSON.stringify(stored[0])).not.toContain('repoApproval');
+    const capability = delivered[0].envelope._repoApproval;
+    expect(capability).toBeTruthy();
+    expect(JSON.stringify(capability)).toBe('{}');
+    expect(bindRepoApprovalCapability(capability, {
+      sessionId: 'session-route-thread',
+      recipientVpId: 'linus',
+      turnId: 'turn-approved',
+    }, { now: () => nowMs })).toBe(true);
+    expect(consumeRepoApprovalCapability({}, {
+      sessionId: 'session-route-thread',
+      recipientVpId: 'vp-linus',
+      repository: 'acme/repo',
+      pr: 1677,
+      baseBranch: 'main',
+      baseSha: '1'.repeat(40),
+      reviewedHead,
+      reviewedSnapshot,
+    })).toBeNull();
+    expect(consumeRepoApprovalCapability(capability, {
+      sessionId: 'session-route-thread',
+      recipientVpId: 'linus',
+      turnId: 'turn-approved',
+      repository: 'github.com/acme/repo',
+      pr: 1677,
+      baseBranch: 'main',
+      baseSha: '1'.repeat(40),
+      reviewedHead,
+      reviewedSnapshot,
+    }, { now: () => nowMs })).toMatchObject({
+      issuerVpId: 'martin',
+      recipientVpId: 'linus',
+      repository: 'github.com/acme/repo',
+      baseBranch: 'main',
+      baseSha: '1'.repeat(40),
+    });
+    expect(consumeRepoApprovalCapability(capability, {
+      sessionId: 'session-route-thread',
+      recipientVpId: 'vp-linus',
+      repository: 'acme/repo',
+      pr: 1677,
+      baseBranch: 'main',
+      baseSha: '1'.repeat(40),
+      reviewedHead,
+      reviewedSnapshot,
+    })).toBeNull();
+  });
+
+  it('expires repository approvals and consumes wrong-turn attempts', () => {
+    const { coordinator, delivered } = makeCoordinator({
+      roster: ['linus', 'martin'],
+      defaultVpId: 'linus',
+    });
+    let nowMs = 5_000;
+    const router = createRouter({ coordinator, now: () => nowMs });
+    const reviewedHead = 'c'.repeat(40);
+    const reviewedSnapshot = 'd'.repeat(40);
+    const expected = {
+      sessionId: 'session-route-thread',
+      recipientVpId: 'linus',
+      repository: 'github.com/acme/repo',
+      pr: 1677,
+      baseBranch: 'main',
+      baseSha: '1'.repeat(40),
+      reviewedHead,
+      reviewedSnapshot,
+    };
+
+    const issue = () => {
+      expect(router.forward({
+        from: 'vp-martin',
+        to: 'vp-linus',
+        text: 'APPROVE exact repository landing tuple',
+        repoApproval: {
+          repository: 'acme/repo',
+          pr: 1677,
+          baseBranch: 'main',
+          baseSha: '1'.repeat(40),
+          reviewedHead,
+          reviewedSnapshot,
+        },
+      }).ok).toBe(true);
+      return delivered.at(-1).envelope._repoApproval;
+    };
+
+    const wrongTurnCapability = issue();
+    expect(bindRepoApprovalCapability(wrongTurnCapability, {
+      sessionId: expected.sessionId,
+      recipientVpId: expected.recipientVpId,
+      turnId: 'turn-approved',
+    }, { now: () => nowMs })).toBe(true);
+    expect(consumeRepoApprovalCapability(wrongTurnCapability, {
+      ...expected,
+      turnId: 'turn-wrong',
+    }, { now: () => nowMs })).toBeNull();
+    expect(consumeRepoApprovalCapability(wrongTurnCapability, {
+      ...expected,
+      turnId: 'turn-approved',
+    }, { now: () => nowMs })).toBeNull();
+
+    const wrongBaseBranchCapability = issue();
+    expect(bindRepoApprovalCapability(wrongBaseBranchCapability, {
+      sessionId: expected.sessionId,
+      recipientVpId: expected.recipientVpId,
+      turnId: 'turn-wrong-base-branch',
+    }, { now: () => nowMs })).toBe(true);
+    expect(consumeRepoApprovalCapability(wrongBaseBranchCapability, {
+      ...expected,
+      turnId: 'turn-wrong-base-branch',
+      baseBranch: 'release',
+    }, { now: () => nowMs })).toBeNull();
+
+    const wrongBaseShaCapability = issue();
+    expect(bindRepoApprovalCapability(wrongBaseShaCapability, {
+      sessionId: expected.sessionId,
+      recipientVpId: expected.recipientVpId,
+      turnId: 'turn-wrong-base-sha',
+    }, { now: () => nowMs })).toBe(true);
+    expect(consumeRepoApprovalCapability(wrongBaseShaCapability, {
+      ...expected,
+      turnId: 'turn-wrong-base-sha',
+      baseSha: '2'.repeat(40),
+    }, { now: () => nowMs })).toBeNull();
+
+    const expiredCapability = issue();
+    expect(bindRepoApprovalCapability(expiredCapability, {
+      sessionId: expected.sessionId,
+      recipientVpId: expected.recipientVpId,
+      turnId: 'turn-expired',
+    }, { now: () => nowMs })).toBe(true);
+    nowMs += REPO_APPROVAL_TTL_MS + 1;
+    expect(consumeRepoApprovalCapability(expiredCapability, {
+      ...expected,
+      turnId: 'turn-expired',
+    }, { now: () => nowMs })).toBeNull();
   });
 
   it('uses sourceThreadId for visible route_forward rows', () => {
@@ -225,6 +510,142 @@ describe('route_forward thread ownership', () => {
     const targetThread = __testGetVpThreads(sessionId, targetVpId)
       .find(thread => thread.threadId === 'thr-target');
     expect(targetThread?.pendingQueries).toHaveLength(1);
+  });
+
+  it('runs approval envelopes as dedicated exact-turn executions and revokes them on completion', async () => {
+    const sessionId = 'session-route-thread';
+    const vpId = 'linus';
+    const reviewedHead = 'e'.repeat(40);
+    const reviewedSnapshot = 'f'.repeat(40);
+    const { coordinator, delivered } = makeCoordinator({
+      roster: [vpId, 'martin'],
+      defaultVpId: vpId,
+    });
+    const router = createRouter({ coordinator });
+    expect(router.forward({
+      from: 'martin',
+      to: vpId,
+      text: 'APPROVE exact repository landing tuple',
+      repoApproval: {
+        repository: 'acme/repo',
+        pr: 1677,
+        baseBranch: 'main',
+        baseSha: '1'.repeat(40),
+        reviewedHead,
+        reviewedSnapshot,
+      },
+    }).ok).toBe(true);
+    const envelope = delivered[0].envelope;
+    let probeContext = null;
+    let adapterCalls = 0;
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.register({
+      name: 'probe_approval_context',
+      description: 'capture approval context',
+      parameters: { type: 'object', properties: {} },
+      execute: async (_input, toolCtx) => {
+        probeContext = toolCtx;
+        return 'observed';
+      },
+    });
+    const classifier = vi.fn(async () => ({
+      decision: 'related',
+      targetThreadId: 'thr-running',
+      title: 'running work',
+    }));
+    __testSetSession({
+      config: { model: 'test-model', maxOutputTokens: 1024, _readOnly: true },
+      conversationStore: {
+        append: record => record,
+        loadRecentBySession: () => [],
+      },
+      toolRegistry,
+      trace: new NullTrace(),
+      adapter: {
+        async *stream() {
+          if (adapterCalls++ === 0) {
+            yield { type: 'tool_call', id: 'probe-approval-1', name: 'probe_approval_context', input: {} };
+            yield { type: 'stop', stopReason: 'tool_use' };
+          } else {
+            yield { type: 'stop', stopReason: 'end_turn' };
+          }
+        },
+        async call() { return { text: '', usage: {} }; },
+      },
+    });
+    __testSeedVpThread({ sessionId, vpId, threadId: 'thr-running', status: 'typing' });
+    __testSetVpThreadEngine({
+      sessionId,
+      vpId,
+      threadId: 'thr-running',
+      engine: { wakeForPendingUserMessage: () => true },
+    });
+    __testSetThreadClassifier(classifier);
+
+    __testEnqueueForVp(sessionId, vpId, envelope);
+    await __testWaitForRoutePromises(envelope.msg.id);
+    await __testDrainVpDrivers();
+
+    expect(classifier).not.toHaveBeenCalled();
+    expect(probeContext?.inboundEnvelope).toBe(envelope);
+    expect(probeContext?.turnId).toEqual(expect.any(String));
+    expect(probeContext.turnId).not.toBe('');
+    const threads = __testGetVpThreads(sessionId, vpId);
+    expect(threads).toHaveLength(2);
+    expect(threads.find(thread => thread.threadId === 'thr-running')?.pendingQueries).toHaveLength(0);
+    expect(consumeRepoApprovalCapability(envelope._repoApproval, {
+      sessionId,
+      recipientVpId: vpId,
+      turnId: probeContext.turnId,
+      repository: 'github.com/acme/repo',
+      pr: 1677,
+      baseBranch: 'main',
+      baseSha: '1'.repeat(40),
+      reviewedHead,
+      reviewedSnapshot,
+    })).toBeNull();
+  });
+
+  it('revokes an unconsumed approval when its exact turn is aborted', async () => {
+    const runtime = await startBlockedApprovalTurn();
+
+    handleYeaftAbortTurn({
+      sessionId: runtime.sessionId,
+      vpId: runtime.vpId,
+      turnId: runtime.expected.turnId,
+    });
+    expect(consumeRepoApprovalCapability(runtime.envelope._repoApproval, runtime.expected)).toBeNull();
+
+    runtime.releaseProbe();
+    await __testDrainVpDrivers();
+  });
+
+  it('revokes an unconsumed approval when the recipient receives later user input', async () => {
+    const runtime = await startBlockedApprovalTurn();
+    __testSetThreadClassifier(async () => ({
+      decision: 'related',
+      targetThreadId: runtime.expected.turnId.split(':')[0],
+      title: 'approval work',
+    }));
+    const laterMessageId = 'msg-later-user-input';
+
+    __testEnqueueForVp(runtime.sessionId, runtime.vpId, {
+      sessionId: runtime.sessionId,
+      trigger: 'fallback',
+      msg: {
+        id: laterMessageId,
+        from: 'user',
+        role: 'user',
+        text: 'Do something else instead.',
+        meta: {},
+      },
+    });
+    await __testWaitForRoutePromises(laterMessageId);
+    expect(consumeRepoApprovalCapability(runtime.envelope._repoApproval, runtime.expected)).toBeNull();
+
+    runtime.releaseProbe();
+    handleYeaftAbortTurn({ sessionId: runtime.sessionId, vpId: runtime.vpId });
+    await __testDrainVpDrivers();
   });
 
   it('wakes a running thread when user input arrives during a background-task wait', async () => {
@@ -708,12 +1129,14 @@ describe('route_forward thread ownership', () => {
     let linusCalls = 0;
     const toolRegistry = new ToolRegistry();
     let receivedManagedCliReady = null;
+    let receivedTurnId = null;
     toolRegistry.register({
       name: 'probe_managed_cli',
       description: 'probe managed CLI context',
       parameters: { type: 'object', properties: {} },
       execute: async (_input, ctx) => {
         receivedManagedCliReady = ctx.managedCliReady;
+        receivedTurnId = ctx.turnId;
         return 'ready';
       },
     });
@@ -745,6 +1168,7 @@ describe('route_forward thread ownership', () => {
       userAlreadyPersisted: true,
     })) {}
     expect(receivedManagedCliReady).toBe(managedCliReady);
+    expect(receivedTurnId).toBe('turn-proof');
 
     const engineFactory = vi.fn((_loaded, _sessionId, vpId) => {
       engineOptions.push({ vpId, managedCliReady: _loaded.managedCliReady });

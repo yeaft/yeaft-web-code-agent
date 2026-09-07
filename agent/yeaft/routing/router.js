@@ -28,6 +28,122 @@
 import { resolveMemberId } from '../sessions/roster.js';
 import { createLoopGuard, extendCausedBy } from './loop-guard.js';
 
+const repoApprovals = new WeakMap();
+const REPO_APPROVAL_ISSUER_IDS = new Set(['martin']);
+export const REPO_APPROVAL_TTL_MS = 2 * 60 * 1000;
+
+function normalizeId(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeSha(value) {
+  const sha = normalizeId(value).toLowerCase();
+  return /^[0-9a-f]{40}$/.test(sha) ? sha : '';
+}
+
+function normalizeApprovalRepository(value) {
+  const repository = normalizeId(value).replace(/\.git$/i, '');
+  const segments = repository.split('/');
+  if (segments.length === 2) segments.unshift('github.com');
+  if (segments.length !== 3) return '';
+  const [host, owner, name] = segments;
+  const safePart = part => /^[a-z0-9_.-]+$/i.test(part) && part !== '.' && part !== '..';
+  if (!safePart(host) || !safePart(owner) || !safePart(name) || !host.includes('.')) return '';
+  return `${host}/${owner}/${name}`.toLowerCase();
+}
+
+function isRepoApprovalIssuer(vpId) {
+  return REPO_APPROVAL_ISSUER_IDS.has(normalizeId(vpId));
+}
+
+/**
+ * Mint authority only inside the canonical Router path after roster identity
+ * resolution. Keeping this function module-private prevents callers from
+ * turning a claimed issuer string into landing authority.
+ */
+function issueRepoApprovalCapability(input = {}, { now = Date.now } = {}) {
+  const sessionId = normalizeId(input.sessionId);
+  const issuerVpId = normalizeId(input.issuerVpId);
+  const recipientVpId = normalizeId(input.recipientVpId);
+  const repository = normalizeApprovalRepository(input.repository);
+  const pr = Number(input.pr);
+  const baseBranch = normalizeId(input.baseBranch);
+  const baseSha = normalizeSha(input.baseSha);
+  const reviewedHead = normalizeSha(input.reviewedHead);
+  const reviewedSnapshot = normalizeSha(input.reviewedSnapshot);
+  const issuedAt = Number(now());
+  if (!sessionId || !isRepoApprovalIssuer(issuerVpId) || !recipientVpId || issuerVpId === recipientVpId
+    || !repository || !Number.isSafeInteger(pr) || pr <= 0 || !baseBranch || !baseSha
+    || !reviewedHead || !reviewedSnapshot || !Number.isFinite(issuedAt)) {
+    return null;
+  }
+  const capability = Object.freeze(Object.create(null));
+  repoApprovals.set(capability, {
+    sessionId,
+    issuerVpId,
+    recipientVpId,
+    repository,
+    pr,
+    baseBranch,
+    baseSha,
+    reviewedHead,
+    reviewedSnapshot,
+    issuedAt,
+    expiresAt: issuedAt + REPO_APPROVAL_TTL_MS,
+    turnId: null,
+  });
+  return capability;
+}
+
+export function isRepoApprovalCapability(capability) {
+  return Boolean(capability && typeof capability === 'object' && repoApprovals.has(capability));
+}
+
+/** Bind a freshly issued capability to the exact Web execution that received it. */
+export function bindRepoApprovalCapability(capability, expected = {}, { now = Date.now } = {}) {
+  if (!capability || typeof capability !== 'object') return false;
+  const grant = repoApprovals.get(capability);
+  const turnId = normalizeId(expected.turnId);
+  const currentTime = Number(now());
+  if (!grant || !turnId || !Number.isFinite(currentTime)) return false;
+  if (currentTime > grant.expiresAt
+    || grant.turnId
+    || grant.sessionId !== normalizeId(expected.sessionId)
+    || grant.recipientVpId !== normalizeId(expected.recipientVpId)) {
+    repoApprovals.delete(capability);
+    return false;
+  }
+  grant.turnId = turnId;
+  return true;
+}
+
+export function revokeRepoApprovalCapability(capability) {
+  if (!capability || typeof capability !== 'object') return false;
+  return repoApprovals.delete(capability);
+}
+
+/** Consume a capability exactly once and verify its complete landing tuple. */
+export function consumeRepoApprovalCapability(capability, expected = {}, { now = Date.now } = {}) {
+  if (!capability || typeof capability !== 'object') return null;
+  const grant = repoApprovals.get(capability);
+  repoApprovals.delete(capability);
+  if (!grant) return null;
+  const currentTime = Number(now());
+  const matches = Number.isFinite(currentTime)
+    && currentTime <= grant.expiresAt
+    && grant.turnId
+    && grant.turnId === normalizeId(expected.turnId)
+    && grant.sessionId === normalizeId(expected.sessionId)
+    && grant.recipientVpId === normalizeId(expected.recipientVpId)
+    && grant.repository === normalizeApprovalRepository(expected.repository)
+    && grant.pr === Number(expected.pr)
+    && grant.baseBranch === normalizeId(expected.baseBranch)
+    && grant.baseSha === normalizeSha(expected.baseSha)
+    && grant.reviewedHead === normalizeSha(expected.reviewedHead)
+    && grant.reviewedSnapshot === normalizeSha(expected.reviewedSnapshot);
+  return matches ? Object.freeze({ ...grant }) : null;
+}
+
 function routeForwardParentFromEnvelope(envelope) {
   const msg = envelope?.msg;
   const meta = msg?.meta;
@@ -75,7 +191,8 @@ export function createRouter(deps = {}) {
   if (!coordinator || typeof coordinator.ingest !== 'function') {
     throw new Error('createRouter: coordinator (with ingest()) is required');
   }
-  const guard = deps.guard || createLoopGuard({ now: deps.now });
+  const now = typeof deps.now === 'function' ? deps.now : Date.now;
+  const guard = deps.guard || createLoopGuard({ now });
 
   /**
    * Forward a message from a VP to another VP (or @all). Routes through
@@ -122,6 +239,8 @@ export function createRouter(deps = {}) {
     }
     const meta = coordinator.group.getMeta();
     if (!meta) return { ok: false, error: 'group_not_initialised' };
+    const senderVpId = resolveMemberId(meta, from);
+    if (!senderVpId) return { ok: false, error: 'sender_not_in_roster' };
     const claimedVpIds = args.inboundEnvelope?._cliTurnContext?.claimedVpIds;
 
     // Roster membership — `all` is reserved broadcast sentinel handled by
@@ -132,7 +251,7 @@ export function createRouter(deps = {}) {
     if (targetVpId !== 'all' && !targetVpId) {
       return { ok: false, error: 'target_not_in_roster' };
     }
-    if (targetVpId === from) {
+    if (targetVpId === senderVpId) {
       return { ok: false, error: 'self_forward_rejected' };
     }
     if (targetVpId !== 'all' && claimedVpIds?.has?.(targetVpId)) {
@@ -146,6 +265,24 @@ export function createRouter(deps = {}) {
     // spec's intent ("depth of forwards already taken").
     const chain = extendCausedBy(args.inboundEnvelope || null, null);
     const routeForwardParent = routeForwardParentFromEnvelope(args.inboundEnvelope);
+    let repoApproval = null;
+    if (args.repoApproval !== undefined) {
+      if (targetVpId === 'all') {
+        return { ok: false, error: 'repo_approval_requires_single_target' };
+      }
+      if (!isRepoApprovalIssuer(senderVpId)) {
+        return { ok: false, error: 'repo_approval_issuer_forbidden' };
+      }
+      repoApproval = issueRepoApprovalCapability({
+        ...args.repoApproval,
+        sessionId: meta.id,
+        issuerVpId: senderVpId,
+        recipientVpId: targetVpId,
+      }, { now });
+      if (!repoApproval) {
+        return { ok: false, error: 'invalid_repo_approval' };
+      }
+    }
 
     // Loop guard: for broadcast, use 'all' as the target key so one VP
     // spamming @all still gets throttled even if each cycle hits different
@@ -182,6 +319,7 @@ export function createRouter(deps = {}) {
         // of UI replay and future visible history so it doesn't render as a
         // second assistant/user block after the target VP answers.
         internal: true,
+        ...(repoApproval ? { _repoApproval: repoApproval } : {}),
         meta: {
           synthetic: true,
           injectedBy: 'route_forward',

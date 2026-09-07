@@ -3,14 +3,18 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  bundledYeaftSkillsDir,
+  bundledYeaftSkillsDirs,
   createManagedProjectSkill,
   createManagedSkill,
+  createSkillManager,
   parseSkill,
   removeManagedProjectSkill,
   removeManagedSkill,
   SkillManager,
 } from '../../../agent/yeaft/skills.js';
 import { buildPluginCatalog } from '../../../agent/yeaft/plugins.js';
+import { seedBundledSkills } from '../../../agent/yeaft/init.js';
 
 const roots = [];
 
@@ -334,5 +338,126 @@ describe('managed native Skills', () => {
     const catalog = buildPluginCatalog({ skillManager: manager });
     expect(catalog.skills.filter(item => item.label === 'user')).toHaveLength(1);
     expect(catalog.skillSources.filter(item => item.name === 'user')).toHaveLength(2);
+  });
+});
+
+describe('bundled Agent skills distribution', () => {
+  it('resolves the canonical workflow skill from the published Agent package root', () => {
+    const agentRoot = join(process.cwd(), 'agent');
+    const manifest = JSON.parse(readFileSync(join(agentRoot, 'package.json'), 'utf8'));
+    const skillPath = join(agentRoot, 'skills', 'review-merge-tag', 'SKILL.md');
+    const previousHome = process.env.HOME;
+    const previousOverride = process.env.YEAFT_SKILLS_BUNDLED_DIR;
+    process.env.HOME = tempRoot();
+    delete process.env.YEAFT_SKILLS_BUNDLED_DIR;
+    try {
+      expect(manifest.files).toContain('skills/**/*.md');
+      expect(parseSkill(readFileSync(skillPath, 'utf8'), skillPath)).toMatchObject({
+        name: 'review-merge-tag',
+      });
+      expect(bundledYeaftSkillsDirs()).toEqual([join(agentRoot, 'skills')]);
+      expect(bundledYeaftSkillsDir()).toBe(join(agentRoot, 'skills'));
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousOverride === undefined) delete process.env.YEAFT_SKILLS_BUNDLED_DIR;
+      else process.env.YEAFT_SKILLS_BUNDLED_DIR = previousOverride;
+    }
+  });
+
+  it('loads coexisting bundled roots with deterministic bundled, user, and project precedence', () => {
+    const agentRoot = join(process.cwd(), 'agent');
+    const home = tempRoot();
+    const yeaftDir = tempRoot();
+    const workDir = tempRoot();
+    const external = join(home, '.claude', 'skills', 'yeaft-skills', 'skills');
+    write(external, 'external-only/SKILL.md', skill('external-only', '# External'));
+    write(external, 'review-merge-tag/SKILL.md', skill('review-merge-tag', '# Shadowed external'));
+    write(external, 'user-overridden/SKILL.md', skill('user-overridden', '# Bundled user target'));
+    write(external, 'project-overridden/SKILL.md', skill('project-overridden', '# Bundled project target'));
+    write(yeaftDir, 'skills/user-overridden/SKILL.md', skill('user-overridden', '# User override'));
+    write(workDir, '.yeaft/skills/project-overridden/SKILL.md', skill('project-overridden', '# Project override'));
+    const previousHome = process.env.HOME;
+    const previousOverride = process.env.YEAFT_SKILLS_BUNDLED_DIR;
+    process.env.HOME = home;
+    delete process.env.YEAFT_SKILLS_BUNDLED_DIR;
+    try {
+      const manager = createSkillManager(yeaftDir, workDir);
+
+      expect(manager.skillsDirs.slice(0, 2)).toEqual([external, join(agentRoot, 'skills')]);
+      expect(manager.get('external-only')).toMatchObject({ _tier: 'bundled', content: '# External' });
+      expect(manager.get('review-merge-tag')).toMatchObject({
+        _tier: 'bundled',
+        _path: join(agentRoot, 'skills', 'review-merge-tag'),
+      });
+      expect(manager.get('review-merge-tag').content).not.toBe('# Shadowed external');
+      expect(manager.get('user-overridden')).toMatchObject({ _tier: 'user', content: '# User override' });
+      expect(manager.get('project-overridden')).toMatchObject({ _tier: 'project', content: '# Project override' });
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousOverride === undefined) delete process.env.YEAFT_SKILLS_BUNDLED_DIR;
+      else process.env.YEAFT_SKILLS_BUNDLED_DIR = previousOverride;
+    }
+  });
+
+  it('keeps external-only bundled skills runtime-visible after init seeds packaged built-ins', () => {
+    const home = tempRoot();
+    const yeaftDir = tempRoot();
+    const external = join(home, '.claude', 'skills', 'yeaft-skills', 'skills');
+    const userSkillsDir = join(yeaftDir, 'skills');
+    write(external, 'external-only/SKILL.md', skill('external-only', '# External after seed'));
+    const previousHome = process.env.HOME;
+    const previousOverride = process.env.YEAFT_SKILLS_BUNDLED_DIR;
+    process.env.HOME = home;
+    delete process.env.YEAFT_SKILLS_BUNDLED_DIR;
+    try {
+      expect(seedBundledSkills(userSkillsDir).copied).toBeGreaterThan(0);
+      expect(existsSync(join(userSkillsDir, 'external-only', 'SKILL.md'))).toBe(false);
+
+      const manager = createSkillManager(yeaftDir);
+      expect(manager.get('external-only')).toMatchObject({
+        _tier: 'bundled',
+        _path: join(external, 'external-only'),
+        content: '# External after seed',
+      });
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousOverride === undefined) delete process.env.YEAFT_SKILLS_BUNDLED_DIR;
+      else process.env.YEAFT_SKILLS_BUNDLED_DIR = previousOverride;
+    }
+  });
+
+  it('keeps Agent built-ins authoritative over an explicit bundled override', () => {
+    const agentRoot = join(process.cwd(), 'agent');
+    const home = tempRoot();
+    const yeaftDir = tempRoot();
+    const override = tempRoot();
+    write(override, 'review-merge-tag/SKILL.md', skill('review-merge-tag', '# Shadowed override'));
+    write(override, 'override-only/SKILL.md', skill('override-only', '# Override only'));
+    const previousHome = process.env.HOME;
+    const previousOverride = process.env.YEAFT_SKILLS_BUNDLED_DIR;
+    process.env.HOME = home;
+    process.env.YEAFT_SKILLS_BUNDLED_DIR = override;
+    try {
+      const manager = createSkillManager(yeaftDir);
+
+      expect(manager.skillsDirs.slice(0, 2)).toEqual([override, join(agentRoot, 'skills')]);
+      expect(bundledYeaftSkillsDir()).toBe(override);
+      expect(manager.has('override-only')).toBe(true);
+      expect(manager.get('review-merge-tag')._path).toBe(join(agentRoot, 'skills', 'review-merge-tag'));
+      expect(manager.get('review-merge-tag').content).not.toBe('# Shadowed override');
+
+      const seedDir = join(tempRoot(), 'skills');
+      seedBundledSkills(seedDir);
+      expect(readFileSync(join(seedDir, 'review-merge-tag', 'SKILL.md'), 'utf8'))
+        .toBe(readFileSync(join(agentRoot, 'skills', 'review-merge-tag', 'SKILL.md'), 'utf8'));
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousOverride === undefined) delete process.env.YEAFT_SKILLS_BUNDLED_DIR;
+      else process.env.YEAFT_SKILLS_BUNDLED_DIR = previousOverride;
+    }
   });
 });
