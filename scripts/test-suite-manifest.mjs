@@ -91,6 +91,7 @@ export const SANDBOX_TEST_FILES = Object.freeze([
 ]);
 
 export const REVIEWED_TEST_FILES = Object.freeze([
+  'test/showcase-work-anywhere.test.js', // 按需运行的演示成品验证，不进入核心预算。
   ...CORE_TEST_FILES,
   ...SANDBOX_TEST_FILES,
 ]);

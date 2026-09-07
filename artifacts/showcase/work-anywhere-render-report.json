@@ -1,0 +1,47 @@
+{
+  "input_sha256": "ec4db0188ccfee2834abd660efaa5c37c5beb95ecee485f113d4f2655a49fc9e",
+  "renderer": "LibreOffice 7.4.7.2 40(Build:2)",
+  "font": "Liberation Sans",
+  "slide_count": 8,
+  "pdf_pages": 8,
+  "png_pages": 8,
+  "dpi": 144,
+  "page_dimensions": [
+    [
+      1921,
+      1080
+    ],
+    [
+      1921,
+      1080
+    ],
+    [
+      1921,
+      1080
+    ],
+    [
+      1921,
+      1080
+    ],
+    [
+      1921,
+      1080
+    ],
+    [
+      1921,
+      1080
+    ],
+    [
+      1921,
+      1080
+    ],
+    [
+      1921,
+      1080
+    ]
+  ],
+  "contact_sheet": [
+    1360,
+    1728
+  ]
+}

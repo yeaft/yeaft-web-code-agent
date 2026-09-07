@@ -1,0 +1,202 @@
+{
+  "capturedAt": "2026-09-07T03:36:10.174Z",
+  "sourceCommit": "a282ddbd4cc5b2b3780878f90abb383841ec9ca4",
+  "source": "Current worktree web/ modules, real isolated server and MockAgent. No synthetic HTML.",
+  "fixture": "artifacts/showcase/capture-fixture.mjs; clearly marked demo messages and WorkItem, no LLM calls or test results claimed.",
+  "terminal": {
+    "checks": [
+      {
+        "command": "node --check agent/yeaft/session.js",
+        "exitCode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    ],
+    "text": "STAGED INSPECTION DEMO · read-only\r\nReal command result; replayed via demo transport.\r\nSource commit: a282ddbd4cc5\r\nNode v24.15.0\r\n\r\n$ node --check agent/yeaft/session.js\r\n[capture runner] exit code: 0\r\n\r\nScope: JavaScript syntax only. No regression suite or release claimed.\r\n\r\n$ ",
+    "scope": "Actual node --check output; no test suite executed."
+  },
+  "files": [
+    "agent/yeaft/session.js"
+  ],
+  "wireRequests": [
+    "list_directory",
+    "list_directory",
+    "list_directory",
+    "read_file",
+    "terminal_create"
+  ],
+  "screenshots": [
+    {
+      "file": "01-home.png",
+      "width": 1440,
+      "height": 900,
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "cssCrop": {
+        "x": 0,
+        "y": 0,
+        "width": 1440,
+        "height": 900
+      },
+      "deviceScaleFactor": 1,
+      "bytes": 91505,
+      "components": [
+        "web/components/YeaftPage.js",
+        "web/components/SessionSidebar.js"
+      ],
+      "sourceCommit": "a282ddbd4cc5b2b3780878f90abb383841ec9ca4",
+      "provenance": "Real Vue component crop; isolated server; staged data and transport only.",
+      "cropSelector": ".yeaft-page"
+    },
+    {
+      "file": "04-session-conversation.png",
+      "width": 1179,
+      "height": 900,
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "cssCrop": {
+        "x": 260,
+        "y": 0,
+        "width": 1179,
+        "height": 900
+      },
+      "deviceScaleFactor": 1,
+      "bytes": 50523,
+      "components": [
+        "web/components/YeaftPage.js",
+        "web/components/MessageList.js",
+        "web/components/AssistantTurn.js"
+      ],
+      "sourceCommit": "a282ddbd4cc5b2b3780878f90abb383841ec9ca4",
+      "provenance": "Real Vue component crop; isolated server; staged data and transport only.",
+      "cropSelector": ".yeaft-main"
+    },
+    {
+      "file": "04-session-mobile.png",
+      "width": 390,
+      "height": 844,
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "cssCrop": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 844
+      },
+      "deviceScaleFactor": 1,
+      "bytes": 46558,
+      "components": [
+        "web/components/YeaftPage.js",
+        "web/components/MessageList.js",
+        "web/components/AssistantTurn.js"
+      ],
+      "sourceCommit": "a282ddbd4cc5b2b3780878f90abb383841ec9ca4",
+      "provenance": "Real Vue component crop; isolated server; staged data and transport only.",
+      "cropSelector": ".yeaft-main"
+    },
+    {
+      "file": "05-session-roster.png",
+      "width": 1050,
+      "height": 780,
+      "viewport": {
+        "width": 1050,
+        "height": 780
+      },
+      "cssCrop": {
+        "x": 0,
+        "y": 0,
+        "width": 1050,
+        "height": 780
+      },
+      "deviceScaleFactor": 1,
+      "bytes": 92689,
+      "components": [
+        "web/components/VpTimelinePane.js",
+        "web/components/AssistantTurn.js"
+      ],
+      "sourceCommit": "a282ddbd4cc5b2b3780878f90abb383841ec9ca4",
+      "provenance": "Real Vue component crop; isolated server; staged data and transport only.",
+      "cropSelector": ".yeaft-page"
+    },
+    {
+      "file": "08-workbench-files-correct.png",
+      "width": 590,
+      "height": 600,
+      "viewport": {
+        "width": 850,
+        "height": 600
+      },
+      "cssCrop": {
+        "x": 260,
+        "y": 0,
+        "width": 590,
+        "height": 600
+      },
+      "deviceScaleFactor": 1,
+      "bytes": 89694,
+      "components": [
+        "web/components/WorkbenchPanel.js",
+        "web/components/FilesTab.js",
+        "web/components/files/fileTree.js"
+      ],
+      "sourceCommit": "a282ddbd4cc5b2b3780878f90abb383841ec9ca4",
+      "provenance": "Real Vue component crop; isolated server; staged data and transport only.",
+      "cropSelector": ".workbench-panel"
+    },
+    {
+      "file": "08-workbench-terminal-correct.png",
+      "width": 690,
+      "height": 520,
+      "viewport": {
+        "width": 690,
+        "height": 520
+      },
+      "cssCrop": {
+        "x": 0,
+        "y": 0,
+        "width": 690,
+        "height": 520
+      },
+      "deviceScaleFactor": 1,
+      "bytes": 25315,
+      "components": [
+        "web/components/WorkbenchPanel.js",
+        "web/components/TerminalTab.js"
+      ],
+      "sourceCommit": "a282ddbd4cc5b2b3780878f90abb383841ec9ca4",
+      "provenance": "Real Vue component crop; isolated server; staged data and transport only.",
+      "cropSelector": ".workbench-panel"
+    },
+    {
+      "file": "09-work-center-structure.png",
+      "width": 1179,
+      "height": 900,
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "cssCrop": {
+        "x": 260,
+        "y": 0,
+        "width": 1179,
+        "height": 900
+      },
+      "deviceScaleFactor": 1,
+      "bytes": 82937,
+      "components": [
+        "web/components/WorkCenterPage.js",
+        "web/components/WorkCenterActionDetail.js",
+        "agent/yeaft/work-center/projection.js"
+      ],
+      "sourceCommit": "a282ddbd4cc5b2b3780878f90abb383841ec9ca4",
+      "provenance": "Real Vue component crop; isolated server; staged data and transport only.",
+      "cropSelector": ".work-center-main"
+    }
+  ]
+}
