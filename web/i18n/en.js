@@ -1104,7 +1104,7 @@ export default {
   'settings.dashboard.sessions': 'Sessions',
   'settings.dashboard.requests': 'Requests',
   'settings.dashboard.traffic': 'Traffic',
-  'settings.dashboard.lastLogin': 'Last Login',
+  'settings.dashboard.lastTurnCompleted': 'Last Turn Completed',
   'settings.dashboard.status': 'Status',
   'settings.dashboard.latency': 'Latency',
   'settings.dashboard.version': 'Version',

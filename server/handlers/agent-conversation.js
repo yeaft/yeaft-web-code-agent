@@ -1,4 +1,4 @@
-import { sessionDb, messageDb, sessionUiMetadataDb } from '../database.js';
+import { sessionDb, messageDb, sessionUiMetadataDb, userStatsDb } from '../database.js';
 import {
   broadcastAgentList, notifyConversationUpdate, forwardToClients
 } from '../ws-utils.js';
@@ -250,6 +250,7 @@ export async function handleAgentConversation(agentId, agent, msg) {
           console.warn(`[turn_completed] Ignoring duplicate for ${msg.conversationId}`);
           break;
         }
+        userStatsDb.recordTurnCompleted(turnConv?.userId || agent.ownerId, Date.now());
         if (turnConv) {
           turnConv.processing = false;
           if (msg.claudeSessionId) {

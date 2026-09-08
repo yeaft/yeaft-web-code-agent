@@ -99,6 +99,7 @@ db.exec(`
     cache_read_tokens INTEGER DEFAULT 0,
     cache_write_tokens INTEGER DEFAULT 0,
     total_tokens INTEGER DEFAULT 0,
+    last_turn_completed_at INTEGER,
     updated_at INTEGER NOT NULL DEFAULT 0
   );
 
@@ -375,6 +376,7 @@ const migrations = [
   `ALTER TABLE user_stats ADD COLUMN cache_read_tokens INTEGER DEFAULT 0`,
   `ALTER TABLE user_stats ADD COLUMN cache_write_tokens INTEGER DEFAULT 0`,
   `ALTER TABLE user_stats ADD COLUMN total_tokens INTEGER DEFAULT 0`,
+  `ALTER TABLE user_stats ADD COLUMN last_turn_completed_at INTEGER`,
   `ALTER TABLE daily_stats ADD COLUMN input_tokens INTEGER DEFAULT 0`,
   `ALTER TABLE daily_stats ADD COLUMN output_tokens INTEGER DEFAULT 0`,
   `ALTER TABLE daily_stats ADD COLUMN cache_read_tokens INTEGER DEFAULT 0`,
@@ -1235,7 +1237,8 @@ export const stmts = {
   `),
 
   getDailyStatsAll: db.prepare(`
-    SELECT ds.user_id, u.username, u.display_name, u.role, u.last_login_at,
+    SELECT ds.user_id, u.username, u.display_name, u.role,
+      MAX(us.last_turn_completed_at) as last_turn_completed_at,
       SUM(ds.message_count) as message_count, SUM(ds.session_count) as session_count,
       SUM(ds.request_count) as request_count, SUM(ds.bytes_sent) as bytes_sent,
       SUM(ds.bytes_received) as bytes_received,
@@ -1245,6 +1248,7 @@ export const stmts = {
       SUM(ds.total_tokens) as total_tokens
     FROM daily_stats ds
     JOIN users u ON ds.user_id = u.id
+    LEFT JOIN user_stats us ON us.user_id = ds.user_id
     WHERE ds.date >= ?
     GROUP BY ds.user_id
     ORDER BY message_count DESC
@@ -1259,7 +1263,7 @@ export const stmts = {
   `),
 
   getUserStats: db.prepare(`
-    SELECT us.*, u.username, u.display_name, u.role, u.last_login_at
+    SELECT us.*, u.username, u.display_name, u.role
     FROM user_stats us
     JOIN users u ON us.user_id = u.id
     ORDER BY us.message_count DESC
@@ -1267,6 +1271,14 @@ export const stmts = {
 
   getUserStatsById: db.prepare(`
     SELECT * FROM user_stats WHERE user_id = ?
+  `),
+
+  updateLastTurnCompletedAt: db.prepare(`
+    INSERT INTO user_stats (user_id, last_turn_completed_at, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET
+      last_turn_completed_at = MAX(COALESCE(last_turn_completed_at, 0), excluded.last_turn_completed_at),
+      updated_at = MAX(updated_at, excluded.updated_at)
   `),
 
   getAgentMetricWatermark: db.prepare(`

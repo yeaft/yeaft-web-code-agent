@@ -1102,7 +1102,7 @@ export default {
   'settings.dashboard.sessions': '会话数',
   'settings.dashboard.requests': '请求数',
   'settings.dashboard.traffic': '流量',
-  'settings.dashboard.lastLogin': '最后登录',
+  'settings.dashboard.lastTurnCompleted': '最后 Turn 结束时间',
   'settings.dashboard.status': '状态',
   'settings.dashboard.latency': '延迟',
   'settings.dashboard.version': '版本',
