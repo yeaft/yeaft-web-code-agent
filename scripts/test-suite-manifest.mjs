@@ -52,6 +52,7 @@ export const CORE_TEST_FILES = Object.freeze([
   'test/server/server-image-runtime.test.js',
   'test/server/upload-routes.test.js',
   'test/server/user-routes-agent-secret.test.js',
+  'test/server/workbench-preview.test.js',
   'test/server/ws-plaintext-negotiation.test.js',
   'test/server/yeaft-history-search-relay.test.js',
   'test/server/yeaft-asset-store.test.js',

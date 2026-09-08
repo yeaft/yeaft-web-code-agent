@@ -211,7 +211,7 @@ export function createFileTabs(store, {
 
     for (const file of filesToClose) {
       cleanupUndoHistory(file.conversationId || store.currentConversation, file.path);
-      if (file.blobUrl) URL.revokeObjectURL(file.blobUrl);
+      if (file.blobUrl?.startsWith?.('blob:')) URL.revokeObjectURL(file.blobUrl);
     }
     for (const file of filesToClose) {
       const currentIndex = openFiles.value.indexOf(file);

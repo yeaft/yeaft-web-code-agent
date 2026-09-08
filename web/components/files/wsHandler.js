@@ -107,18 +107,16 @@ export function createWsHandler({
           const file = responseTab;
           file.loadError = null;
           if (msg.binary) {
-            const previewBaseUrl = `${location.protocol}//${location.host}/api/preview/${msg.fileId}?token=${msg.previewToken}`;
+            const origin = `${location.protocol}//${location.host}`;
+            const previewBaseUrl = msg.previewUrl
+              ? new URL(msg.previewUrl, origin).href
+              : `${origin}/api/preview/${msg.fileId}?token=${msg.previewToken}`;
             const ft = file.fileType || getFileType(file.name);
             file.fileType = ft;
             if (ft === 'pdf' || ft === 'image') {
-              fetch(previewBaseUrl)
-                .then(r => {
-                  if (!r.ok) throw new Error(`Preview request failed (${r.status})`);
-                  return r.blob();
-                })
-                .then(blob => { file.blobUrl = URL.createObjectURL(blob); })
-                .catch(e => { file.previewError = e.message; })
-                .finally(() => { file.previewLoading = false; });
+              file.blobUrl = previewBaseUrl;
+              file.previewError = null;
+              file.previewLoading = ft === 'image';
             } else if (ft === 'office') {
               const mode = localStorage.getItem('officePreviewMode') || 'local';
               if (mode === 'online') {
