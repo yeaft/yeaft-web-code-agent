@@ -5823,19 +5823,35 @@ describe('message flow regressions', () => {
     expect(exactModal.vm.hiddenSessions).toBeUndefined();
     expect(exactModal.text()).not.toContain('sidebar.sessions.hidden');
 
-    // Hiding only changes the sidebar catalog. The folder result remains a
-    // directly openable current Session and must not send restore/unhide writes.
+    // Hiding only changes the sidebar catalog. Selecting that current Session
+    // from the create/restore modal must reverse the hidden metadata before it
+    // opens the preserved identity. The restored row keeps its renamed catalog
+    // title and emits `created` so the "add Session to Project" entry point can
+    // run its normal move_session callback.
+    hiddenRow.title = 'Inv';
+    exactChatStore.hiddenSessionCatalog = [{ ...hiddenRow, hidden: true }];
     exactModal.vm.scannedSessions = [{
-      id: 'grp_default', name: 'B default', agentId: 'agent-b', workDir: '/repo-b',
+      id: 'grp_default', name: 'Inv', agentId: 'agent-b', workDir: '/repo-b',
     }];
     exactSessionsStore.applySnapshot([], 'agent-b');
     exactChatStore.sendWsMessage.mockClear();
     exactModal.vm.selectSession(exactModal.vm.sessionsInDir[0]);
     expect(exactChatStore.sendWsMessage.mock.calls.map(call => call[0].type)).not.toContain('yeaft_restore_session');
-    expect(exactChatStore.sendWsMessage.mock.calls.map(call => call[0].type)).not.toContain('set_session_ui_metadata');
-    expect(exactChatStore.hiddenSessionCatalog).toEqual([
-      expect.objectContaining({ catalogKey: hiddenRow.catalogKey, hidden: true }),
+    expect(exactChatStore.sendWsMessage.mock.calls.map(call => call[0])).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'set_session_ui_metadata',
+        catalogKey: hiddenRow.catalogKey,
+        routeRef: hiddenRow.routeRef,
+        hidden: false,
+      }),
+    ]));
+    expect(exactChatStore.hiddenSessionCatalog).toEqual([]);
+    expect(exactChatStore.sessionCatalog).toEqual([
+      expect.objectContaining({ catalogKey: hiddenRow.catalogKey, title: 'Inv', hidden: false }),
     ]);
+    expect(exactModal.emitted('created')?.at(-1)?.[0]).toEqual(expect.objectContaining({
+      id: 'grp_default', name: 'Inv', agentId: 'agent-b',
+    }));
 
     exactChatStore.sendWsMessage.mockClear();
     exactChatStore.sendYeaftSessionMessage({ groupId: 'grp_default', text: 'route only to B' });
