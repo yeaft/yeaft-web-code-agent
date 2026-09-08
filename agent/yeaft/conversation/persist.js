@@ -1532,13 +1532,17 @@ export class ConversationStore {
    *
    * @param {string} sessionId — required; null/empty returns []
    * @param {number} [turnsLimit=DEFAULT_RECENT_TURNS]
+   * @param {{includeReflections?: boolean, beforeSeq?: number}} [options]
+   *   beforeSeq anchors the window before a durable user row (exclusive), so
+   *   later queued inputs cannot displace that query's history.
    * @returns {object[]}
    */
-  loadRecentBySession(sessionId, turnsLimit = DEFAULT_RECENT_TURNS, { includeReflections = false } = {}) {
+  loadRecentBySession(sessionId, turnsLimit = DEFAULT_RECENT_TURNS, { includeReflections = false, beforeSeq = Infinity } = {}) {
     if (!sessionId) return [];
     if (turnsLimit === Infinity || turnsLimit < 0) {
       const all = this.#loadSessionMessages(sessionId);
       const filtered = all.filter(m => m && m.sessionId === sessionId
+        && (!Number.isFinite(beforeSeq) || parseSeqFromId(m.id) < beforeSeq)
         && (!isHiddenConversationRow(m) || (includeReflections && m._reflection === true)));
       return pairSanitize(filtered);
     }
@@ -1547,6 +1551,7 @@ export class ConversationStore {
     const { messages, truncated } = this.#loadRecentSessionWindow(sessionId, turnsLimit, {
       roles: null,
       includeReflections,
+      beforeSeq: Number.isFinite(beforeSeq) ? beforeSeq : Infinity,
     });
     if (truncated) {
       maybeWarnHistoryTruncated(sessionId, this.#dir, turnsLimit);

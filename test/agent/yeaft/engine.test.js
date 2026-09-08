@@ -24,6 +24,7 @@ import { flushAgentPerfTrace } from '../../../agent/yeaft/perf-trace.js';
 import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { withUsageAccounting } from '../../../agent/yeaft/llm/usage-accounting.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
+import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
 import { AmsRegistry } from '../../../agent/yeaft/memory/ams-registry.js';
 import { writeContent, writeSummary } from '../../../agent/yeaft/memory/store.js';
 import { NullTrace, DebugTrace, projectDebugDetailForWire } from '../../../agent/yeaft/debug-trace.js';
@@ -2901,6 +2902,7 @@ describe('Engine', () => {
         ]));
         expect(rows.every(row => row.traceId === 'pt-engine-1')).toBe(true);
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -3333,6 +3335,7 @@ describe('Engine', () => {
         expect(events.find(event => event.type === 'error')).toBeTruthy();
         expect(conversationStore.loadRecentBySession('session-prewrite', 10)).toHaveLength(1);
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -3384,6 +3387,7 @@ describe('Engine', () => {
           executionOrigin: 'route_forward',
         })));
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -3430,6 +3434,7 @@ describe('Engine', () => {
         ]);
         expect(persisted[1]).not.toHaveProperty('executionOrigin');
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -3476,6 +3481,7 @@ describe('Engine', () => {
           }),
         ]);
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -3570,6 +3576,7 @@ describe('Engine', () => {
           llmCallCount: 2,
         });
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -3802,6 +3809,7 @@ describe('Engine', () => {
         expect(durable.some(message => Array.isArray(message.toolCalls) && message.toolCalls.length > 0)).toBe(false);
         expect(durable.at(-1)).toMatchObject({ role: 'assistant', content: 'finished after fold' });
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -3880,6 +3888,7 @@ describe('Engine', () => {
         expect(durable.some(message => Array.isArray(message.toolCalls) && message.toolCalls.length > 0)).toBe(false);
         expect(durable.at(-1)).toMatchObject({ role: 'assistant', content: 'second turn finished' });
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -3915,6 +3924,7 @@ describe('Engine', () => {
           { role: 'assistant', content: 'one reply' },
         ]);
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -3961,6 +3971,7 @@ describe('Engine', () => {
           expect.objectContaining({ role: 'assistant', content: 'first part' }),
         ]);
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -4033,11 +4044,12 @@ describe('Engine', () => {
         ]);
         await debugTrace.close();
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
 
-    it('loads query-selected canonical content into the system prompt and debug event', async () => {
+    it('keeps explicitly scoped WorkItem canonical memory compatible', async () => {
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-dream-load-'));
       await writeContent(
         { kind: 'session', id: 'g1' },
@@ -4097,6 +4109,7 @@ describe('Engine', () => {
 
       const events = [];
       for await (const event of engine.query({
+        scenario: 'work-item',
         prompt: 'dream recall test',
         sessionId: 'g1',
         vpPersona: { vpId: 'vp1', name: 'VP One' },
@@ -4130,6 +4143,7 @@ describe('Engine', () => {
         { type: 'stop', stopReason: 'end_turn' },
       ]);
       for await (const _event of engine.query({
+        scenario: 'work-item',
         prompt: 'dream recall test',
         sessionId: 'g1',
         vpPersona: { vpId: 'vp2', name: 'VP Two' },
@@ -4218,6 +4232,7 @@ describe('Engine', () => {
         amsRegistry: new AmsRegistry({ yeaftDir: legacyDir, config: {} }),
       });
       for await (const _event of legacyEngine.query({
+        scenario: 'work-item',
         prompt: 'legacy recall',
         sessionId: 'legacy-session',
         vpPersona: { vpId: 'vp1', name: 'VP One' },
@@ -4280,6 +4295,7 @@ describe('Engine', () => {
 
         const debugEvents = [];
         for await (const event of debugEngine.query({
+          scenario: 'work-item',
           prompt: 'optimize Dream memory relevance',
           sessionId: 'g1',
           vpPersona: { vpId: 'vp1', name: 'VP One' },
@@ -4379,6 +4395,7 @@ describe('Engine', () => {
 
         const events = [];
         for await (const event of engine.query({
+          scenario: 'work-item',
           prompt: '检查 timeout cleanup failure',
           sessionId: 'current-session',
           projectSessionIds: ['sibling-session'],
@@ -4430,6 +4447,7 @@ describe('Engine', () => {
           { type: 'stop', stopReason: 'end_turn' },
         ]);
         for await (const _event of engine.query({
+          scenario: 'work-item',
           prompt: 'Yeaft 设置页',
           sessionId: 'current-session',
           projectSessionIds: ['ui-sibling-session'],
@@ -4475,6 +4493,7 @@ describe('Engine', () => {
           { type: 'stop', stopReason: 'end_turn' },
         ]);
         for await (const _event of engine.query({
+          scenario: 'work-item',
           prompt: 'MCP',
           sessionId: 'current-session',
           projectSessionIds: ['mcp-sibling-session'],
@@ -4521,6 +4540,7 @@ describe('Engine', () => {
         ]);
         const fencedEvents = [];
         for await (const event of engine.query({
+          scenario: 'work-item',
           prompt: 'MCP',
           sessionId: 'current-session',
           projectSessionIds: ['fenced-mcp-sibling'],
@@ -4544,6 +4564,7 @@ describe('Engine', () => {
         ]);
         const indentedUserEvents = [];
         for await (const event of engine.query({
+          scenario: 'work-item',
           prompt: 'MCP',
           sessionId: 'current-session',
           projectSessionIds: [],
@@ -4584,6 +4605,7 @@ describe('Engine', () => {
               taskManager,
             });
             for await (const event of productionCodeEngine.query({
+              scenario: 'work-item',
               prompt: 'MCP',
               sessionId: 'current-session',
               projectSessionIds: [],
@@ -4618,6 +4640,7 @@ describe('Engine', () => {
             taskManager,
           });
           for await (const _event of productionPostgresEngine.query({
+            scenario: 'work-item',
             prompt: 'PostgreSQL',
             sessionId: 'current-session',
             projectSessionIds: [],
@@ -4631,6 +4654,7 @@ describe('Engine', () => {
         expect(postgresSystem).toContain('**user**: # PostgreSQL');
         expect(postgresSystem).toContain('PostgreSQL stores the workspace metadata for this project');
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     }
@@ -5018,6 +5042,7 @@ describe('Engine', () => {
           }),
         ]));
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -6217,17 +6242,18 @@ describe('Engine', () => {
           { type: 'stop', stopReason: 'end_turn' },
         ]);
 
+        const config = {
+          model: 'test-model',
+          maxOutputTokens: 1024,
+          asyncTaskWaitTimeoutMs: 1_000,
+          // Force the initial reflection gate. Restore a real window before
+          // continuation: a one-token window cannot carry completion text.
+          maxContextTokens: 1,
+        };
         const engine = new Engine({
           adapter: mockAdapter,
           trace,
-          config: {
-            model: 'test-model',
-            maxOutputTokens: 1024,
-            asyncTaskWaitTimeoutMs: 1_000,
-            // Session reflection is pressure-gated. Make the 31-call batch
-            // exceed the threshold so this covers the durable T1 path.
-            maxContextTokens: 1,
-          },
+          config,
           conversationStore,
           yeaftDir,
         });
@@ -6236,6 +6262,7 @@ describe('Engine', () => {
           description: 'Produce a foldable tool result.',
           parameters: { type: 'object' },
           execute: async (input, ctx) => {
+            config.maxContextTokens = 128000;
             if (input.index === 0) ctx.registerAsyncTask(taskId);
             return `tool output ${input.index}`;
           },
@@ -6293,6 +6320,7 @@ describe('Engine', () => {
           internal: true,
         });
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -6358,6 +6386,7 @@ describe('Engine', () => {
         expect(Buffer.byteLength(durableToolResult.content, 'utf8')).toBeGreaterThan(TOOL_RESULT_MAX_BYTES);
         expect(events.find(event => event.type === 'tool_result_update')?.content).toBe(completion);
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -7636,6 +7665,7 @@ describe('Engine', () => {
           }),
         ]);
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
 
@@ -8972,7 +9002,7 @@ describe('Engine', () => {
       expect(call.system).not.toContain('\nmembers: vp-omni');
     });
 
-    it('derives current focus only from query-selected canonical topic scopes', async () => {
+    it('does not infer Session focus from Dream topics but preserves explicit WorkItem memory', async () => {
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-topics-'));
       try {
         mkdirSync(join(yeaftDir, 'memory', 'sessions', 'session_active', 'topic', 'dream', 'segments'), { recursive: true });
@@ -9011,9 +9041,20 @@ describe('Engine', () => {
         }
 
         const call = mockAdapter.callLog[0];
-        expect(call.system).toContain('Current focus: Dream memory segment extraction and organization');
+        expect(call.system).not.toContain('Current focus: Dream memory segment extraction and organization');
+        mockAdapter.pushResponse([
+          { type: 'text_delta', text: 'ok' },
+          { type: 'stop', stopReason: 'end_turn' },
+        ]);
+        for await (const _event of engine.query({
+          prompt: 'inspect canonical segments', scenario: 'work-item',
+          sessionId: 'session_active',
+          vpPersona: { vpId: 'vp-linus', displayName: 'Linus' },
+        })) { /* consume */ }
+        expect(mockAdapter.callLog.at(-1).system).toContain('Current focus: Dream memory segment extraction and organization');
         expect(call.system).not.toContain('session_topics: dream/segments');
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });

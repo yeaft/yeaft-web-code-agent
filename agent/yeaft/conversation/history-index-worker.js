@@ -10,6 +10,7 @@ import {
   normalizeLiteralSearch,
 } from './visible-entry.js';
 import { fingerprintConversationSources } from './history-index-state.js';
+import { extractRecallTerms, scoreRecallTurn, RECALL_LIMITS } from './recall-relevance.js';
 
 const INDEX_SCHEMA_VERSION = 2;
 const SHORT_BLOOM_BYTES = 256;
@@ -423,6 +424,155 @@ function queryIndex(request) {
   }
 }
 
+// Candidate discovery and complete-turn reads share one worker operation and
+// immutable index generation. Only bounded metadata is read before byte checks.
+function recallTurns(request) {
+  const db = openDatabase(workerData.databasePath);
+  try {
+    const indexMeta = readMeta(db);
+    const generation = Number(indexMeta.generation) || 0;
+    const terms = extractRecallTerms(request.prompt);
+    const cap = (value, fallback) => Math.min(fallback, Math.max(1, Math.floor(Number(value) || fallback)));
+    const limit = cap(request.limit, 10);
+    const maxTurnRows = cap(request.maxTurnRows, RECALL_LIMITS.maxTurnRows);
+    const maxTurnBytes = cap(request.maxTurnBytes, RECALL_LIMITS.maxTurnBytes);
+    const maxReadBytes = cap(request.maxReadBytes, RECALL_LIMITS.maxReadBytes);
+    const beforeSeq = Number.isFinite(request.beforeSeq) ? request.beforeSeq : Number.MAX_SAFE_INTEGER;
+    const meta = {
+      status: 'ready', reason: 'no_match', terms, indexGeneration: generation,
+      candidateRowsRead: 0, boundaryRowsRead: 0, turnRowsRead: 0, readBytes: 0,
+      skippedOversizedTurns: 0, skippedFencedTurns: 0, candidateCapped: false,
+      limits: { ...RECALL_LIMITS, maxTurnRows, maxTurnBytes, maxReadBytes, limit },
+      ...indexStats(indexMeta),
+    };
+    const sourceBefore = currentSourceToken();
+    if (sourceBefore.fingerprint !== indexMeta.raw_source_fingerprint) {
+      return { turns: [], meta: { ...meta, status: 'not_ready', reason: 'stale_result' } };
+    }
+    const candidates = new Map();
+    const candidateById = db.prepare(`SELECT entry_id,entry_start_seq,entry_end_seq,role
+      FROM entries WHERE rowid=? AND session_id=? AND role IN ('user','assistant') AND entry_end_seq<?`);
+    const addCandidate = row => {
+      if (!row) return;
+      if (candidates.size < RECALL_LIMITS.maxCandidates) candidates.set(row.entry_id, row);
+      else meta.candidateCapped = true;
+    };
+    const shortTerms = terms.filter(term => codePoints(term).length < 3);
+    for (const term of terms.filter(term => codePoints(term).length >= 3)) {
+      const chars = codePoints(normalizeLiteralSearch(term));
+      const grams = [...new Set([chars.slice(0, 3).join(''), chars.slice(-3).join('')])];
+      const match = grams.map(gram => `"${gram.replaceAll('"', '""')}"`).join(' AND ');
+      // Fixed trigram prefix, not exhaustive term search: false positives or
+      // rows rejected by the seq fence can consume all 32 slots. Do not scan
+      // additional postings to fill the result; candidateCapped reports this.
+      const ids = db.prepare('SELECT rowid FROM entry_fts WHERE entry_fts MATCH ? ORDER BY rowid ASC LIMIT ?')
+        .all(match, RECALL_LIMITS.candidatesPerTerm + 1);
+      if (ids.length > RECALL_LIMITS.candidatesPerTerm) meta.candidateCapped = true;
+      for (const { rowid } of ids.slice(0, RECALL_LIMITS.candidatesPerTerm)) {
+        meta.candidateRowsRead += 1;
+        addCandidate(candidateById.get(rowid, workerData.sessionId, beforeSeq));
+      }
+    }
+    // Two-character Chinese words cannot use trigram FTS. Scan only a fixed
+    // newest metadata/bloom prefix, never unbounded text or the source JSONL.
+    if (shortTerms.length) {
+      const rows = db.prepare(`SELECT entry_id,entry_start_seq,entry_end_seq,role,short_bloom
+        FROM entries WHERE session_id=? AND entry_end_seq<?
+        ORDER BY entry_end_seq DESC,entry_id DESC LIMIT ?`)
+        .all(workerData.sessionId, beforeSeq, RECALL_LIMITS.shortTermRows);
+      meta.candidateRowsRead += rows.length;
+      if (rows.length === RECALL_LIMITS.shortTermRows) meta.candidateCapped = true;
+      for (const row of rows) {
+        if (shortTerms.some(term => bloomMayContain(row.short_bloom, normalizeLiteralSearch(term)))) addCandidate(row);
+      }
+    }
+    const previousRows = db.prepare(`SELECT entry_id,entry_start_seq,entry_end_seq,role
+      FROM entries WHERE session_id=? AND entry_end_seq<=?
+      ORDER BY entry_end_seq DESC,entry_id DESC LIMIT ?`);
+    const followingRows = db.prepare(`SELECT entry_id,entry_start_seq,entry_end_seq,role,
+        length(CAST(text_body AS BLOB))+length(CAST(source_message_ids AS BLOB)) AS bytes
+      FROM entries WHERE session_id=? AND entry_end_seq>=?
+      ORDER BY entry_end_seq ASC,entry_id ASC LIMIT ?`);
+    const readEntry = db.prepare('SELECT * FROM entries WHERE session_id=? AND entry_id=?');
+    const seenUsers = new Set();
+    const turns = [];
+    for (const candidate of [...candidates.values()].sort((a, b) => b.entry_end_seq - a.entry_end_seq)) {
+      let user = candidate.role === 'user' ? candidate : null;
+      if (!user) {
+        const remaining = RECALL_LIMITS.maxBoundaryRows - meta.boundaryRowsRead;
+        if (remaining <= 0) { meta.candidateCapped = true; break; }
+        for (const row of previousRows.iterate(workerData.sessionId, candidate.entry_start_seq, remaining)) {
+          meta.boundaryRowsRead += 1;
+          if (row.role === 'user') { user = row; break; }
+        }
+      }
+      if (!user || seenUsers.has(user.entry_id)) continue;
+      seenUsers.add(user.entry_id);
+      if (user.entry_start_seq >= beforeSeq) continue;
+      const rows = [];
+      let complete = true;
+      let bytes = 0;
+      for (const row of followingRows.iterate(workerData.sessionId, user.entry_start_seq, maxTurnRows + 1)) {
+        meta.turnRowsRead += 1;
+        if (row.role === 'user' && row.entry_id !== user.entry_id) break;
+        rows.push(row);
+        bytes += Number(row.bytes) || 0;
+        if (rows.length > maxTurnRows || bytes > maxTurnBytes) {
+          complete = false;
+          meta.skippedOversizedTurns += 1;
+          break;
+        }
+      }
+      if (!complete) continue;
+      if (rows.some(row => row.entry_end_seq >= beforeSeq)) {
+        meta.skippedFencedTurns += 1;
+        continue;
+      }
+      if (meta.readBytes + bytes > maxReadBytes) { meta.candidateCapped = true; continue; }
+      const messages = rows.map(row => {
+        const full = readEntry.get(workerData.sessionId, row.entry_id);
+        const entry = parseEntry(full, generation);
+        return { ...entry, id: entry.entryId, sessionId: workerData.sessionId, content: full.text_body };
+      });
+      meta.readBytes += bytes;
+      turns.push({ id: user.entry_id, userSeq: Number(user.entry_start_seq), messages });
+    }
+    const termDocumentFrequency = Object.create(null);
+    for (const term of terms) termDocumentFrequency[term.toLocaleLowerCase()] = 0;
+    for (const turn of turns) {
+      turn.relevance = scoreRecallTurn(terms, turn.messages.map(message => message.content).join('\n'));
+      for (const term of turn.relevance.matchedTerms) termDocumentFrequency[term.toLocaleLowerCase()] += 1;
+    }
+    const stats = { sampleSize: turns.length, termDocumentFrequency };
+    const rejections = {};
+    for (const turn of turns) {
+      turn.relevance = scoreRecallTurn(terms, turn.messages.map(message => message.content).join('\n'), stats);
+      turn.score = turn.relevance.score;
+      turn.matchedTerms = turn.relevance.matchedTerms;
+      if (!turn.score) rejections[turn.relevance.reason] = (rejections[turn.relevance.reason] || 0) + 1;
+    }
+    const selected = turns.filter(turn => turn.score > 0)
+      .sort((a, b) => b.score - a.score || b.userSeq - a.userSeq).slice(0, limit);
+    if (workerData.testHooksEnabled && request._testBarrier instanceof SharedArrayBuffer) {
+      const barrier = new Int32Array(request._testBarrier);
+      Atomics.store(barrier, 0, 1);
+      Atomics.notify(barrier, 0);
+      while (Atomics.load(barrier, 1) === 0) Atomics.wait(barrier, 1, 0, 100);
+    }
+    const sourceAfter = currentSourceToken();
+    if (sourceBefore.fingerprint !== sourceAfter.fingerprint) {
+      return { turns: [], meta: { ...meta, status: 'not_ready', reason: 'stale_result' } };
+    }
+    return {
+      turns: selected,
+      meta: { ...meta, reason: selected.length ? 'matched' : terms.length ? 'no_match' : 'generic_prompt',
+        ...stats, rejections, sourceFingerprint: sourceAfter.fingerprint },
+    };
+  } finally {
+    db.close();
+  }
+}
+
 function outlineIndex(request) {
   const db = openDatabase(workerData.databasePath);
   try {
@@ -544,6 +694,7 @@ async function run() {
       try {
         let result;
         if (op === 'search') result = queryIndex(payload);
+        else if (op === 'recall-turns') result = recallTurns(payload);
         else if (op === 'outline') result = outlineIndex(payload);
         else if (op === 'validate-anchor') result = validateAnchor(payload);
         else if (op === 'validate-and-read-window') result = validateAndReadWindow(payload);

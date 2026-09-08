@@ -9,6 +9,8 @@
  */
 
 import { estimateTokens } from './conversation/persist.js';
+import { isVisibleConversationRow } from './conversation/internal-control.js';
+import { scoreRecallTurn } from './conversation/recall-relevance.js';
 import { pairSanitize } from './pair-sanitize.js';
 import { truncateToolResultIfNeeded } from './tools/registry.js';
 import { countTurns, indexOfNthTurnFromEnd, sliceLastNTurns } from './turn-utils.js';
@@ -691,6 +693,374 @@ export function trimSnapshotForBudget(snapshot, options = {}) {
     messageTokenBudget,
   });
   return withoutHistorySourceIndexes(enriched);
+}
+
+// Unlike the legacy runtime-cache slicer, provider buckets never infer user
+// identity from text. A repeated question is still a new human turn.
+function bucketSourceIds(message) {
+  return [...new Set([
+    ...(Array.isArray(message?.sourceMessageIds) ? message.sourceMessageIds : []),
+    ...(Array.isArray(message?.entry?.sourceMessageIds) ? message.entry.sourceMessageIds : []),
+    message?._persistedMessageId, message?.id, message?.messageId,
+    message?.anchorMessageId,
+  ].filter(id => typeof id === 'string' && id))];
+}
+
+function bucketUserKeys(message) {
+  const keys = bucketSourceIds(message).map(id => `message:${id}`);
+  if (message?.clientMessageId) keys.push(`client:${message.clientMessageId}`);
+  if (message?.entryId) keys.push(`entry:${message.entryId}`);
+  return keys;
+}
+
+function bucketUserBoundary(message) {
+  if (message?.role !== 'user' || !isVisibleConversationRow(message)) return false;
+  // Anthropic's tool-result carrier is not a human turn boundary.
+  return !Array.isArray(message.content) || message.content.some(part => (
+    typeof part === 'string' || !['tool_result', 'function_call_output'].includes(part?.type)
+  ));
+}
+
+function bucketSequence(message) {
+  for (const value of [message?.userSeq, message?.entryStartSeq, message?.seq]) {
+    if (Number.isFinite(value)) return value;
+  }
+  for (const id of bucketSourceIds(message)) {
+    const match = /^m(\d+)$/.exec(id);
+    if (match) return Number(match[1]);
+  }
+  return null;
+}
+
+function bucketTextMessages(messages) {
+  return stripAllToolNoise(messages.filter(message => (
+    isVisibleConversationRow(message)
+    && (message?.role === 'user' || message?.role === 'assistant')
+  )));
+}
+
+function bucketTurn(messages, index, supplied = {}) {
+  const user = messages.find(bucketUserBoundary);
+  const sourceIds = [...new Set(messages.flatMap(bucketSourceIds))];
+  const keys = [...new Set(messages.filter(bucketUserBoundary).flatMap(bucketUserKeys))];
+  if (supplied.id) keys.push(`turn:${supplied.id}`);
+  if (keys.length === 0 && index != null) keys.push(`snapshot:${index}`);
+  const text = bucketTextMessages(messages);
+  return {
+    ...supplied,
+    id: supplied.id || keys[0] || `snapshot:${index}`,
+    keys,
+    sourceIds,
+    userSeq: Number.isFinite(supplied.userSeq) ? supplied.userSeq : bucketSequence(user),
+    index,
+    messages,
+    text,
+    tokens: estimateMessagesTokens(text),
+  };
+}
+
+function splitBucketTurns(snapshot) {
+  const turns = [];
+  let messages = [];
+  let keys = new Set();
+  let startIndex = 0;
+  for (let index = 0; index < snapshot.length; index += 1) {
+    const message = snapshot[index];
+    if (bucketUserBoundary(message)) {
+      const nextKeys = bucketUserKeys(message);
+      const sameTurn = nextKeys.some(key => keys.has(key));
+      if (messages.length && !sameTurn) {
+        turns.push(bucketTurn(messages, startIndex));
+        messages = [];
+        keys = new Set();
+      }
+      if (!messages.length) startIndex = index;
+      nextKeys.forEach(key => keys.add(key));
+    }
+    // A leading assistant fragment cannot become a complete historical turn.
+    if (messages.length || bucketUserBoundary(message)) messages.push(message);
+  }
+  if (messages.length) turns.push(bucketTurn(messages, startIndex));
+  return turns;
+}
+
+function bucketOverlap(left, right) {
+  const ids = new Set(left.sourceIds);
+  const keys = new Set(left.keys);
+  return right.sourceIds.some(id => ids.has(id)) || right.keys.some(key => keys.has(key));
+}
+
+function bucketCap(value, fallback, maximum = Infinity) {
+  return Number.isFinite(value) && value >= 0
+    ? Math.min(maximum, Math.floor(value)) : fallback;
+}
+
+function scoreBucketTurn(turn, options, stats = {}) {
+  // Relevance belongs to conversation/recall-relevance, not the budget layer.
+  // Indexed candidates already carry scores; raw/evicted turns use injection.
+  const result = typeof options.scoreTurn === 'function'
+    ? options.scoreTurn({
+      id: turn.id, userSeq: turn.userSeq, messages: turn.text,
+      sourceMessageIds: turn.sourceIds,
+    }, options.prompt || '')
+    : Number.isFinite(turn.score)
+      ? { score: turn.score, matchedTerms: turn.matchedTerms }
+      : scoreRecallTurn(options.prompt || '', turn.text.map(message => (
+        typeof message.content === 'string' ? message.content
+          : Array.isArray(message.content) ? message.content.map(part => (
+            typeof part === 'string' ? part : part?.text || ''
+          )).join('\n') : ''
+      )).join('\n'), stats);
+  const score = typeof result === 'number' ? result : result?.score;
+  return {
+    ...turn,
+    score: Number.isFinite(score) && score > 0 && result?.eligible !== false ? score : 0,
+    matchedTerms: Array.isArray(result?.matchedTerms) ? result.matchedTerms : [],
+  };
+}
+
+function bucketBefore(candidate, boundary) {
+  if (!boundary) return true;
+  if (candidate.index != null && boundary.index != null) return candidate.index < boundary.index;
+  return Number.isFinite(candidate.userSeq) && Number.isFinite(boundary.userSeq)
+    && candidate.userSeq < boundary.userSeq;
+}
+
+function describeBucket(turns, messages = turns.flatMap(turn => turn.text)) {
+  return {
+    turnCount: turns.length,
+    turnIds: turns.map(turn => turn.id),
+    sourceMessageIds: [...new Set(turns.flatMap(turn => turn.sourceIds))],
+    tokenCount: estimateMessagesTokens(messages),
+    messageCount: messages.length,
+  };
+}
+
+/**
+ * Recompute provider history from untrimmed candidates; never mutate/cache the
+ * result in the transcript. Past human turns are atomic text units, including
+ * every VP's assistant text. Tools are optional enrichment, newest first.
+ *
+ * The active turn is outside both buckets and consumes the global budget first.
+ * Its opening user row is protected; an oversized active turn alone may be
+ * fitted using the legacy protocol-safe transform. Past turns are never fitted.
+ * External recall must have comparable userSeq/source identities to establish
+ * that it predates recent/current history; unknown chronology fails closed.
+ *
+ * @param {Array<object>} snapshot Untrimmed history plus the active execution.
+ * @param {{ prompt?: string, relatedTurns?: Array<object>, recentTurnCap?: number,
+ * relatedTurnCap?: number, messageTokenBudget?: number, maxMessageCount?: number,
+ * language?: string, currentTurnStartIndex?: number,
+ * scoreTurn?: (turn: object, prompt: string) => (number|object) }} [options]
+ * @returns {{messages: Array<object>, meta: object}}
+ */
+export function buildHistoryBuckets(snapshot, options = {}) {
+  const source = Array.isArray(snapshot) ? snapshot : [];
+  const tokenBudget = bucketCap(options.messageTokenBudget, DEFAULT_MESSAGE_TOKEN_BUDGET);
+  const messageCap = bucketCap(options.maxMessageCount, DEFAULT_RUNTIME_CACHE_MESSAGE_CAP);
+  const recentCap = bucketCap(options.recentTurnCap, 20);
+  const relatedCap = bucketCap(options.relatedTurnCap, 8, 10);
+  const allTurns = splitBucketTurns(source);
+  const currentStart = Number.isInteger(options.currentTurnStartIndex)
+    ? Math.max(0, Math.min(source.length, options.currentTurnStartIndex))
+    : (allTurns.at(-1)?.index ?? source.length);
+  const currentSource = source.slice(currentStart);
+  const currentIdentity = bucketTurn(currentSource, currentStart);
+  let current = [];
+  if (currentSource.length && tokenBudget >= 2 && messageCap > 0) {
+    // Reserve the opening prompt before fitting later active execution units.
+    const first = shrinkMessageToBudget(stripAllToolNoise([currentSource[0]])[0], tokenBudget);
+    if (first && estimateMessageTokens(first) <= tokenBudget) current.push(first);
+    const remainingTokens = tokenBudget - estimateMessagesTokens(current);
+    const remainingRows = messageCap - current.length;
+    if (remainingTokens >= 2 && remainingRows > 0) {
+      // Active execution is not visible historical text: internal completion
+      // notices must reach the next provider call. Fit newest protocol units
+      // directly, without legacy human-turn filtering or text projection.
+      const units = providerUnits(pairSanitize(truncateToolResultsForModel(
+        currentSource.slice(1), { language: options.language },
+      )));
+      const fitted = [];
+      let tokens = remainingTokens;
+      let rows = remainingRows;
+      for (let index = units.length - 1; index >= 0; index -= 1) {
+        const unit = fitProviderUnit(units[index], tokens);
+        const cost = estimateMessagesTokens(unit);
+        if (unit.length > rows || cost > tokens) continue;
+        fitted.unshift(unit);
+        tokens -= cost;
+        rows -= unit.length;
+      }
+      current.push(...fitted.flat());
+    }
+    // The legacy fitter assumes a normal positive budget; at tiny allowances
+    // even an empty row's framing can exceed it. Remove complete tail units.
+    while (estimateMessagesTokens(current) > tokenBudget || current.length > messageCap) {
+      current = pairSanitize(current.slice(0, -1));
+    }
+  }
+  const availableTokens = Math.max(0, tokenBudget - estimateMessagesTokens(current));
+  const availableRows = Math.max(0, messageCap - current.length);
+  let duplicateCount = 0;
+  const past = [];
+  for (const turn of splitBucketTurns(source.slice(0, currentStart))) {
+    if (bucketOverlap(turn, currentIdentity)) {
+      duplicateCount += 1;
+      continue;
+    }
+    const previous = past.findIndex(other => turn.keys.some(key => other.keys.includes(key)));
+    if (previous >= 0) {
+      // Fan-out may return to the same human question after another question.
+      // Keep the first user boundary's position, with all complementary replies
+      // in their source order. Only repeated stable message identities disappear.
+      const original = past[previous];
+      const seen = new Set();
+      const messages = [...original.messages, ...turn.messages].filter(message => {
+        const ids = bucketSourceIds(message);
+        const repeated = ids.length > 0 && ids.every(id => seen.has(id));
+        ids.forEach(id => seen.add(id));
+        return !repeated;
+      });
+      past[previous] = bucketTurn(messages, original.index);
+      duplicateCount += 1;
+    } else past.push(turn);
+  }
+  let candidates = past.map(turn => scoreBucketTurn(turn, options));
+  if (typeof options.scoreTurn !== 'function') {
+    // Evicted in-memory turns pass the same distinctiveness gate as indexed
+    // turns. Otherwise ubiquitous topic words bypass the index rejection.
+    const termDocumentFrequency = Object.create(null);
+    for (const turn of candidates) {
+      for (const term of turn.matchedTerms) {
+        const key = term.toLocaleLowerCase();
+        termDocumentFrequency[key] = (termDocumentFrequency[key] || 0) + 1;
+      }
+    }
+    const stats = { sampleSize: past.length, termDocumentFrequency };
+    candidates = past.map(turn => scoreBucketTurn(turn, options, stats));
+  }
+  for (const entry of Array.isArray(options.relatedTurns) ? options.relatedTurns : []) {
+    if (!Array.isArray(entry?.messages) || !entry.messages.some(bucketUserBoundary)) continue;
+    const turn = bucketTurn(entry.messages, null, entry);
+    if (bucketOverlap(turn, currentIdentity)) { duplicateCount += 1; continue; }
+    const duplicate = candidates.find(other => bucketOverlap(turn, other));
+    if (duplicate) {
+      duplicateCount += 1;
+      // Preserve the complete untrimmed snapshot turn, but retain the index's
+      // qualified score when no raw-turn scorer is installed.
+      if (typeof options.scoreTurn !== 'function' && entry.score > (duplicate.score || 0)) {
+        duplicate.score = entry.score;
+        duplicate.matchedTerms = entry.matchedTerms || [];
+      }
+      continue;
+    }
+    candidates.push(scoreBucketTurn(turn, options));
+  }
+  const eligible = candidates.filter(turn => turn.score > 0 && turn.text.length
+    && (currentSource.length === 0 || bucketBefore(turn, currentIdentity)
+      // A runtime prompt can lack its persisted sequence. An older persisted
+      // past-turn boundary is still a safe fence; never guess from text/time.
+      || (turn.index == null && currentIdentity.userSeq == null && past.length > 0
+        && bucketBefore(turn, past.at(-1)))));
+  // A candidate inside the initial recent cap can become related after budget
+  // eviction. Reserve before picking the final suffix so it can re-enter.
+  const reservable = relatedCap > 0 ? eligible.filter(turn => turn.tokens <= availableTokens
+    && turn.text.length <= availableRows
+    && (recentCap === 0 || !past.length || bucketBefore(turn, past.at(-1)))) : [];
+  const reserve = reservable.length ? Math.floor(availableTokens * 0.25) : 0;
+  const reservedRows = reservable.length
+    ? Math.max(Math.floor(availableRows * 0.25), Math.min(...reservable.map(turn => turn.text.length))) : 0;
+  function selectRecent(limit, rowLimit = availableRows) {
+    const selected = [];
+    let tokens = 0;
+    let rows = 0;
+    for (let index = past.length - 1; index >= 0 && selected.length < recentCap; index -= 1) {
+      const turn = past[index];
+      if (tokens + turn.tokens > limit || rows + turn.text.length > rowLimit) break;
+      selected.unshift(turn);
+      tokens += turn.tokens;
+      rows += turn.text.length;
+    }
+    return selected;
+  }
+  let recent = selectRecent(availableTokens - reserve, availableRows - reservedRows);
+  let remainingTokens = availableTokens - recent.reduce((total, turn) => total + turn.tokens, 0);
+  let remainingRows = availableRows - recent.reduce((total, turn) => total + turn.text.length, 0);
+  const related = [];
+  const ranked = eligible.slice().sort((a, b) => b.score - a.score
+    || (a.userSeq ?? a.index ?? 0) - (b.userSeq ?? b.index ?? 0));
+  for (const turn of ranked) {
+    if (related.length >= relatedCap) break;
+    if (!bucketBefore(turn, recent[0]) || recent.some(other => bucketOverlap(turn, other))
+      || related.some(other => bucketOverlap(turn, other)
+        // Mixed-source turns require a proven order in either direction.
+        // Unknown sequence is not zero; skip rather than invent chronology.
+        || (!bucketBefore(turn, other) && !bucketBefore(other, turn)))) continue;
+    if (turn.tokens > remainingTokens || turn.text.length > remainingRows) continue;
+    related.push(turn);
+    remainingTokens -= turn.tokens;
+    remainingRows -= turn.text.length;
+  }
+  if (!related.length) recent = selectRecent(availableTokens);
+  else {
+    // Pay the actual related cost, not the provisional reserve. Expand the
+    // recent suffix only while every related turn remains strictly older.
+    const expanded = selectRecent(
+      availableTokens - related.reduce((sum, turn) => sum + turn.tokens, 0),
+      availableRows - related.reduce((sum, turn) => sum + turn.text.length, 0),
+    );
+    while (expanded.length > recent.length && related.some(turn => (
+      !bucketBefore(turn, expanded[0]) || bucketOverlap(turn, expanded[0])
+    ))) expanded.shift();
+    if (expanded.length > recent.length) recent = expanded;
+  }
+  related.sort((a, b) => bucketBefore(a, b) ? -1 : bucketBefore(b, a) ? 1 : 0);
+
+  const relatedMessages = related.flatMap(turn => turn.text);
+  const recentText = withHistorySourceIndexes(recent.flatMap(turn => turn.messages)
+    .filter(isVisibleConversationRow));
+  const recentBaseline = bucketTextMessages(recentText);
+  // Enrich only after both complete-text buckets and the active turn are paid.
+  const recentMessages = withoutHistorySourceIndexes(addOptionalRecentToolPairs(
+    recentBaseline,
+    truncateToolResultsForModel(recentText, { language: options.language }),
+    {
+      messageTokenBudget: availableTokens - estimateMessagesTokens(relatedMessages),
+      maxMessageCount: availableRows - relatedMessages.length,
+    },
+  ));
+  const messages = [...relatedMessages.map(message => ({ ...message })), ...recentMessages, ...current];
+  const retained = [...related, ...recent];
+  const droppedTurns = past.filter(turn => !retained.some(other => bucketOverlap(turn, other)
+    || turn === other));
+  return {
+    messages,
+    meta: {
+      recent: describeBucket(recent, recentMessages),
+      related: { ...describeBucket(related), scores: related.map(turn => ({
+        id: turn.id, score: turn.score, matchedTerms: turn.matchedTerms,
+      })) },
+      current: {
+        ...describeBucket(currentSource.length ? [currentIdentity] : [], current),
+        startIndex: currentStart,
+        originalTokenCount: estimateMessagesTokens(currentSource),
+      },
+      budget: {
+        messageTokenBudget: tokenBudget, maxMessageCount: messageCap,
+        recentTurnCap: recentCap, relatedTurnCap: relatedCap,
+        relatedReservedTokens: reserve, availableHistoryTokens: availableTokens,
+        usedTokens: estimateMessagesTokens(messages), usedMessages: messages.length,
+      },
+      dropped: {
+        pastTurnCount: droppedTurns.length,
+        sourceMessageIds: [...new Set(droppedTurns.flatMap(turn => turn.sourceIds))],
+        duplicateTurnCount: duplicateCount,
+        oversizedTurnCount: candidates.filter(turn => turn.tokens > availableTokens
+          || turn.text.length > availableRows).length,
+        unselectedRelatedTurnCount: eligible.length - related.length,
+      },
+    },
+  };
 }
 
 /**
