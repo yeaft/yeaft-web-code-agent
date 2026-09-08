@@ -30,6 +30,13 @@ describe('Dashboard layout', () => {
     expect(css).toContain('.db-detail-tabs');
   });
 
+  it('defaults detailed data to today and shows turn completion instead of login time', () => {
+    expect(component).toContain("statsPeriod: 'today'");
+    expect(component).toContain("agentTimeFilter: 'today'");
+    expect(component).toContain('user.lastTurnCompletedAt');
+    expect(component).not.toContain('user.lastLoginAt');
+  });
+
   it('has complete bilingual copy for the new filters and dimensions', () => {
     for (const key of [
       'settings.dashboard.general',
@@ -38,6 +45,7 @@ describe('Dashboard layout', () => {
       'settings.dashboard.agents',
       'settings.dashboard.activeOnly',
       'settings.dashboard.inactiveOnly',
+      'settings.dashboard.lastTurnCompleted',
     ]) {
       expect(en).toContain(`'${key}':`);
       expect(zh).toContain(`'${key}':`);

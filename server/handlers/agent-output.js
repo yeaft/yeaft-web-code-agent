@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { messageDb, sessionUiMetadataDb, yeaftProjectDb, yeaftSessionDb } from '../database.js';
+import { messageDb, sessionUiMetadataDb, userStatsDb, yeaftProjectDb, yeaftSessionDb } from '../database.js';
 import { transaction } from '../db/connection.js';
 import { broadcastAgentList, broadcastSessionCatalog, forwardToClients, sendToAgent, sendToWebClient } from '../ws-utils.js';
 import { advanceYeaftDebugRequestChunk, consumeYeaftDebugRequest, webClients, previewFiles } from '../context.js';
@@ -571,6 +571,9 @@ export async function handleAgentOutput(agentId, agent, msg) {
       if (event?.type === 'yeaft_status') {
         agent.yeaftStatus = event;
         await broadcastAgentList();
+      }
+      if (event?.type === 'vp_turn_end') {
+        userStatsDb.recordTurnCompleted(agent.ownerId, event.ts || Date.now());
       }
       if (event?.type === 'session_roster_changed' && agent.ownerId && event.sessionId) {
         try {

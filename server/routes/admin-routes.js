@@ -71,7 +71,7 @@ function mergePendingUserStats(stats) {
         username: userId,
         display_name: userId,
         role: 'pro',
-        last_login_at: null,
+        last_turn_completed_at: null,
         updated_at: Date.now(),
         message_count: toNumber(delta.messages),
         session_count: toNumber(delta.sessions),
@@ -159,7 +159,7 @@ export function registerAdminRoutes(app, { requireAuth, requireAdmin }) {
             cache_read_tokens: 0,
             cache_write_tokens: 0,
             total_tokens: 0,
-            last_login_at: user.last_login_at,
+            last_turn_completed_at: null,
             updated_at: user.created_at,
           });
         }
@@ -181,7 +181,7 @@ export function registerAdminRoutes(app, { requireAuth, requireAdmin }) {
         cacheReadTokens: s.cache_read_tokens,
         cacheWriteTokens: s.cache_write_tokens,
         totalTokens: s.total_tokens,
-        lastLoginAt: s.last_login_at,
+        lastTurnCompletedAt: s.last_turn_completed_at,
         updatedAt: s.updated_at
       })));
     } catch (e) {

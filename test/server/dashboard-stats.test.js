@@ -92,7 +92,7 @@ describe('Dashboard user statistics', () => {
       cache_read_tokens: 0,
       cache_write_tokens: 0,
       total_tokens: 0,
-      last_login_at: 123,
+      last_turn_completed_at: 123,
       updated_at: 456,
     }]);
     getAllUsers.mockReturnValue([{
@@ -128,6 +128,7 @@ describe('Dashboard user statistics', () => {
       messageCount: 5,
       requestCount: 5,
       active: true,
+      lastTurnCompletedAt: 123,
     }));
     expect(res.body.every(row => !Object.hasOwn(row, 'sessionCount'))).toBe(true);
     expect(res.body.find(row => row.userId === 'user-2')).toMatchObject({
