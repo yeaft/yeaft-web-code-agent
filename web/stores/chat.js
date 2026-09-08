@@ -8441,10 +8441,16 @@ export const useChatStore = defineStore('chat', {
       const conversationId = route?.runtimeProvider === 'yeaft'
         ? resolveYeaftConversationIdForSession(this, route.sessionId, agentId)
         : this.currentConversation;
-      const supported = agentId && conversationId
+      // Automatic message previews use the same negotiated Session route as
+      // the Workbench. Older Agents may resolve files but cannot accept routes;
+      // never downgrade these background requests to an unscoped conversation.
+      const routeKey = workbenchRouteKey(route);
+      const supported = routeKey && agentId && conversationId
+        && this.workbenchRouteProtocolSupported === true
         && (agentId === this.currentAgent
-          ? this.hasCapability('file_reference_resolution')
-          : agentHasCapability(this, agentId, 'file_reference_resolution'));
+          ? this.hasCapability('file_reference_resolution') && this.hasCapability('workbench_session_routes')
+          : agentHasCapability(this, agentId, 'file_reference_resolution')
+            && agentHasCapability(this, agentId, 'workbench_session_routes'));
       const paths = [...new Set((Array.isArray(references) ? references : [])
         .filter(path => typeof path === 'string' && path.trim())
         .map(path => path.trim()))].slice(0, 32);

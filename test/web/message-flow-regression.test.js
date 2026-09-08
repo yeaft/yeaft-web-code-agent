@@ -387,8 +387,9 @@ describe('message flow regressions', () => {
     store.currentAgentInfo = {
       id: 'agent-files',
       workDir: '/workspace/files',
-      capabilities: ['file_reference_resolution'],
+      capabilities: ['file_reference_resolution', 'workbench_session_routes'],
     };
+    store.workbenchRouteProtocolSupported = true;
     store.yeaftAgentId = 'agent-files';
     store.yeaftConversationId = 'yeaft-agent-files';
     store.yeaftConversationIdsByAgent = { 'agent-files': 'yeaft-agent-files' };
@@ -407,6 +408,38 @@ describe('message flow regressions', () => {
       agentId: 'agent-files',
       conversationId: 'yeaft-agent-files',
       workDir: '/workspace/files',
+    });
+  });
+
+  it.each([
+    ['old Agent', true, ['file_reference_resolution']],
+    ['old Server', false, ['file_reference_resolution', 'workbench_session_routes']],
+    ['reconnecting Server', null, ['file_reference_resolution', 'workbench_session_routes']],
+  ])('does not send automatic file-reference requests to an incompatible %s', (_label, protocol, capabilities) => {
+    storeFactories.clear();
+    runtimeSessionsStore.sessionList = [{ id: 'session-files', agentId: 'agent-files' }];
+    const store = useChatStore();
+    store.currentView = 'yeaft';
+    store.currentAgent = 'agent-files';
+    store.currentAgentInfo = { id: 'agent-files', workDir: '/workspace/files', capabilities };
+    store.agents = [store.currentAgentInfo];
+    store.workbenchRouteProtocolSupported = protocol;
+    store.yeaftAgentId = 'agent-files';
+    store.yeaftConversationIdsByAgent = { 'agent-files': 'yeaft-agent-files' };
+    store.yeaftActiveSessionFilter = 'session-files';
+    store.sendWsMessage = vi.fn(() => true);
+
+    expect(store.resolveMessageFileReferences(['src/file.js'])).toBeNull();
+    expect(store.sendWsMessage).not.toHaveBeenCalled();
+
+    // Capability refresh/reconnect must allow resolution again without clearing
+    // Session caches or asking the user to reload the page.
+    store.workbenchRouteProtocolSupported = true;
+    store.currentAgentInfo.capabilities = ['file_reference_resolution', 'workbench_session_routes'];
+    expect(store.resolveMessageFileReferences(['src/file.js'])).toEqual(expect.any(String));
+    expect(store.sendWsMessage).toHaveBeenCalledOnce();
+    expect(store.sendWsMessage.mock.calls[0][0].workbenchRoute).toEqual({
+      runtimeProvider: 'yeaft', agentId: 'agent-files', sessionId: 'session-files',
     });
   });
 
