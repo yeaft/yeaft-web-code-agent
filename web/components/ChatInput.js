@@ -26,8 +26,6 @@ export default {
     conversationId: { type: String, default: null },
     /** Explicit draft scope. Use this when one conversation contains multiple logical inputs. */
     draftKey: { type: String, default: null },
-    /** Optional Session-only action that opens a Work Center creation draft. */
-    workItemFn: { type: Function, default: null },
     /** Structured Session message quote shown above the composer. */
     quote: { type: Object, default: null }
   },
@@ -175,16 +173,6 @@ export default {
           >
             <svg viewBox="0 0 24 24" width="20" height="20"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></svg>
           </label>
-          <button
-            v-if="workItemFn && !store.btwMode"
-            class="work-item-draft-btn"
-            type="button"
-            @click="workItemFn(inputText.trim())"
-            :title="$t('workCenter.fromSession')"
-            :aria-label="$t('workCenter.fromSession')"
-          >
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 5v2h10V8H7zm0 4v2h7v-2H7zm0 4v2h5v-2H7z"/></svg>
-          </button>
           <span v-if="store.btwMode" class="btw-input-tag">BTW</span>
           <slot name="actions-start"></slot>
         </template>

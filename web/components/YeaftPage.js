@@ -326,7 +326,6 @@ export default {
           :quote="messageQuote"
           :cancel-fn="cancelYeaft"
           :show-stop="isProcessing"
-          :work-item-fn="openWorkItemDraft"
           placeholder-key="yeaft.placeholder"
           @remove-quote="messageQuote = null"
           @quote-consumed="messageQuote = null"
@@ -1015,11 +1014,6 @@ export default {
       if (sessionId) store.cancelYeaftSession(sessionId);
     };
 
-    const openWorkItemDraft = (seedGoal = '') => {
-      const session = topbarGroup.value;
-      if (session) store.enterWorkCenterFromSession(session, seedGoal);
-    };
-
     const toggleSidebar = () => {
       if (isMobile.value) {
         store.toggleSessionSidebar();
@@ -1639,7 +1633,6 @@ export default {
       setMessageQuote,
       editMessageAsNew,
       cancelYeaft,
-      openWorkItemDraft,
       toggleSidebar,
       closeDebug,
       reloadMessages,

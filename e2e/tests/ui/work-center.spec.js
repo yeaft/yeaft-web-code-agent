@@ -2070,7 +2070,8 @@ test.describe('Work Center responsive UI', () => {
       }
     })();
 
-    await chatPage.locator('.sidebar-work-center-header-btn').click();
+    const entered = await chatPage.evaluate(() => window.Pinia.useChatStore().enterWorkCenter());
+    expect(entered).toBe(true);
     const pendingSettings = await settingsRequest;
     await expect(chatPage.locator('.work-center-main')).toBeVisible();
     await chatPage.locator('.work-center-header-create').click();

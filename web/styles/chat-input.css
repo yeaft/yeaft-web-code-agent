@@ -433,29 +433,6 @@
   color: var(--text-primary);
 }
 
-.work-item-draft-btn {
-  flex-shrink: 0;
-  width: 32px;
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.work-item-draft-btn:hover {
-  background: var(--sidebar-hover);
-  color: var(--text-primary);
-}
-
-.work-item-draft-btn svg {
-  fill: currentColor;
-}
-
 .attach-btn svg {
   fill: currentColor;
 }
