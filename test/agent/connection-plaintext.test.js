@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -987,6 +987,198 @@ describe('sendToServer: encrypt vs plaintext gate', () => {
     } finally {
       Object.assign(ctx, original);
     }
+  });
+});
+
+describe('file chunk socket backpressure', () => {
+  class SlowSocket extends MockWebSocket {
+    bufferedAmount = 0;
+    pendingWrites = [];
+
+    // Match Node ws's send(data, options, callback) overload.
+    send(data, options, callback) {
+      super.send(data);
+      const done = typeof options === 'function' ? options : callback;
+      if (!done) return;
+      const bytes = Buffer.byteLength(data);
+      this.bufferedAmount += bytes;
+      this.pendingWrites.push(error => {
+        this.bufferedAmount -= bytes;
+        done(error);
+      });
+      this.emit('write');
+    }
+  }
+
+  const chunk = index => ({ type: 'file_content_chunk', chunkIndex: index, content: 'a'.repeat(1024) });
+  const chat = { type: 'yeaft_output', payload: { text: 'chat must survive' } };
+  const terminal = { type: 'turn_completed', conversationId: 'chat' };
+  const nextTurn = () => new Promise(resolve => setImmediate(resolve));
+  const drainTurns = async () => { for (let i = 0; i < 4; i += 1) await nextTurn(); };
+  let original;
+
+  beforeEach(async () => {
+    await drainTurns();
+    original = Object.fromEntries([
+      'ws', 'sessionKey', 'serverEncryptionRequired', 'outboundSendQueue',
+      'outboundSendQueueBytes', 'outboundSendQueueMaxBytes', 'outboundSendQueueActive',
+      'messageBuffer', 'messageBufferBytes', 'messageBufferMaxBytes', 'messageBufferMaxSize',
+    ].map(key => [key, ctx[key]]));
+    Object.assign(ctx, {
+      ws: new SlowSocket(), sessionKey: null, serverEncryptionRequired: false,
+      outboundSendQueue: [], outboundSendQueueBytes: 0, outboundSendQueueMaxBytes: 8 * 1024 * 1024,
+      outboundSendQueueActive: false, messageBuffer: [], messageBufferBytes: 0,
+      messageBufferMaxBytes: 8 * 1024 * 1024, messageBufferMaxSize: 5000,
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+  });
+
+  afterEach(async () => {
+    // Release a pending write even when an assertion failed, before restoring ctx.
+    ctx.ws?.close?.();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await drainTurns();
+    vi.useRealTimers();
+    Object.assign(ctx, original);
+  });
+
+  it.each([false, true])('waits for each socket callback before producing another chunk (encrypted=%s)', async encrypted => {
+    const socket = ctx.ws;
+    ctx.serverEncryptionRequired = encrypted;
+    ctx.sessionKey = encrypted ? generateSessionKey() : null;
+    const outcomes = [];
+    const firstWrite = new Promise(resolve => socket.once('write', resolve));
+    const transfer = (async () => {
+      for (let index = 0; index < 2; index += 1) outcomes.push(await sendToServer(chunk(index)));
+    })();
+    await firstWrite;
+    const queuedChat = sendToServer(chat);
+    const queuedTerminal = sendToServer(terminal);
+    const queuedPty = sendToServer({ type: 'terminal_output', data: 'pty' });
+    await drainTurns();
+    expect(socket.sentMessages).toHaveLength(1);
+    expect(socket.bufferedAmount).toBeGreaterThan(0);
+    expect(outcomes).toEqual([]);
+    expect(ctx.outboundSendQueue.map(item => item.msg.type)).toEqual([
+      'yeaft_output', 'turn_completed', 'terminal_output',
+    ]);
+    const secondWrite = new Promise(resolve => socket.once('write', resolve));
+    socket.pendingWrites.shift()();
+    await expect(queuedChat).resolves.toBe('sent');
+    await expect(queuedTerminal).resolves.toBe('sent');
+    await expect(queuedPty).resolves.toBe('sent');
+    await secondWrite;
+    await drainTurns();
+    expect(outcomes).toEqual(['sent']);
+    expect(socket.sentMessages).toHaveLength(5);
+    expect(socket.pendingWrites).toHaveLength(1);
+    socket.pendingWrites.shift()();
+    await transfer;
+    await drainTurns();
+    expect(outcomes).toEqual(['sent', 'sent']);
+    expect(socket.bufferedAmount).toBe(0);
+    expect(socket.listenerCount('close')).toBe(0);
+    expect(socket.listenerCount('error')).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(ctx.outboundSendQueueBytes).toBe(0);
+    const { decrypt } = await import('../../agent/encryption.js');
+    const frames = await Promise.all(socket.getSentMessages().map(frame => encrypted ? decrypt(frame, ctx.sessionKey) : frame));
+    expect(frames).toEqual([chunk(0), chat, terminal, { type: 'terminal_output', data: 'pty' }, chunk(1)]);
+  });
+
+  it.each(['close', 'error', 'callback error', 'throw'])('releases a failed chunk on %s and preserves queued chat', async failure => {
+    const socket = ctx.ws;
+    const closeListener = vi.fn();
+    const errorListener = vi.fn();
+    socket.on('close', closeListener);
+    socket.on('error', errorListener);
+    if (failure === 'throw') socket.send = (_data, _callback) => { throw new Error('write failed'); };
+    const write = sendToServer(chunk(0));
+    const queuedChat = sendToServer(chat);
+    const queuedTerminal = sendToServer(terminal);
+    if (failure !== 'throw') {
+      await drainTurns();
+      socket.readyState = WS_CLOSED;
+      if (failure === 'callback error') socket.pendingWrites.shift()(new Error('write failed'));
+      else socket.emit(failure, new Error('connection failed'));
+    } else {
+      // A synchronous send failure must not prevent the remaining queue draining.
+      await write;
+      socket.readyState = WS_CLOSED;
+    }
+    await expect(write).resolves.toBe('dropped');
+    await expect(queuedChat).resolves.toBe('buffered');
+    await expect(queuedTerminal).resolves.toBe('buffered');
+    await drainTurns();
+    expect(ctx.messageBuffer).toEqual([chat, terminal]);
+    expect(ctx.outboundSendQueueActive).toBe(false);
+    expect(socket.listeners('close')).toEqual([closeListener]);
+    expect(socket.listeners('error')).toEqual([errorListener]);
+    expect(vi.getTimerCount()).toBe(0);
+    // A late callback must not revive the failed transfer or clear other messages.
+    socket.pendingWrites.shift()?.();
+    ctx.ws = new MockWebSocket();
+    const { flushMessageBuffer } = await import('../../agent/connection/buffer.js');
+    await flushMessageBuffer();
+    expect(ctx.ws.getSentMessages()).toEqual([chat, terminal]);
+    expect(ctx.messageBufferBytes).toBe(0);
+  });
+
+  it('bounds a missing callback and unblocks chat without producing another chunk', async () => {
+    const socket = ctx.ws;
+    const outcomes = [];
+    const transfer = (async () => {
+      for (let index = 0; index < 2; index += 1) {
+        const outcome = await sendToServer(chunk(index));
+        outcomes.push(outcome);
+        if (outcome === 'dropped') break;
+      }
+    })();
+    await drainTurns();
+    const queuedChat = sendToServer(chat);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(outcomes).toEqual([]);
+    expect(socket.sentMessages).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await transfer;
+    await expect(queuedChat).resolves.toBe('sent');
+    await drainTurns();
+    expect(outcomes).toEqual(['dropped']);
+    expect(socket.getSentMessages()).toEqual([chunk(0), chat]);
+    socket.pendingWrites.shift()();
+    expect(outcomes).toEqual(['dropped']);
+    expect(socket.listenerCount('close')).toBe(0);
+    expect(socket.listenerCount('error')).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(ctx.outboundSendQueueActive).toBe(false);
+  });
+
+  it('fences replaced sockets without a close event, dropping stale chunks but sending queued chat', async () => {
+    const oldSocket = ctx.ws;
+    const first = sendToServer(chunk(0));
+    const stale = sendToServer(chunk(1));
+    const queuedChat = sendToServer(chat);
+    await drainTurns();
+    ctx.ws = new MockWebSocket();
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(first).resolves.toBe('dropped');
+    await expect(stale).resolves.toBe('dropped');
+    await expect(queuedChat).resolves.toBe('sent');
+    await drainTurns();
+    oldSocket.pendingWrites.shift()();
+    expect(oldSocket.getSentMessages()).toEqual([chunk(0)]);
+    expect(ctx.ws.getSentMessages()).toEqual([chat]);
+    expect(oldSocket.listenerCount('close')).toBe(0);
+    expect(oldSocket.listenerCount('error')).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(ctx.outboundSendQueueBytes).toBe(0);
+  });
+
+  it('retains synchronous transport stub compatibility for chunks', async () => {
+    ctx.ws = new MockWebSocket();
+    await expect(sendToServer(chunk(0))).resolves.toBe('sent');
+    expect(ctx.ws.getSentMessages()).toEqual([chunk(0)]);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 
