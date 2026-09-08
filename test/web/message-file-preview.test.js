@@ -328,6 +328,83 @@ describe('Workbench capability launcher', () => {
     wrapper.unmount();
   });
 
+  it.each([
+    ['a width transition', 352],
+    ['a collapsed panel', 32],
+    ['a constrained viewport', 340],
+    ['a maximized panel', 1100],
+  ])('keeps the user width across Session switches after observing %s', async (_state, measuredWidth) => {
+    const savedWidths = new Map([
+      ['yeaft:agent-1:session-a', 600],
+      ['yeaft:agent-1:session-b', 480],
+    ]);
+    const routeKey = route => typeof route === 'string'
+      ? route : `${route.runtimeProvider}:${route.agentId}:${route.sessionId}`;
+    workbenchStore.workbenchPanelWidthForRoute.mockImplementation(route => savedWidths.get(routeKey(route)) ?? null);
+    vi.spyOn(workbenchStore, 'rememberWorkbenchPanelState').mockImplementation((route, width) => {
+      if (Number.isFinite(width) && width > 0) savedWidths.set(routeKey(route), width);
+    });
+    let observeResize;
+    vi.spyOn(globalThis, 'ResizeObserver').mockImplementation(function (callback) {
+      observeResize = callback;
+      return { observe() {}, disconnect() {} };
+    });
+    const onResize = vi.fn();
+    window.addEventListener('workbench-panel-resize', onResize);
+    const wrapper = mountWorkbench();
+    try {
+      await wrapper.get('.resize-handle').trigger('mousedown', { clientX: 700 });
+      document.dispatchEvent(new MouseEvent('mousemove', { clientX: 660 }));
+      document.dispatchEvent(new MouseEvent('mouseup'));
+      await Vue.nextTick();
+      expect(savedWidths.get('yeaft:agent-1:session-a')).toBe(640);
+
+      vi.spyOn(wrapper.get('.workbench-panel').element, 'getBoundingClientRect')
+        .mockReturnValue({ width: measuredWidth });
+      observeResize();
+      await Vue.nextTick();
+      expect(onResize.mock.lastCall[0].detail.width).toBe(measuredWidth);
+      expect(wrapper.get('.workbench-panel').element.style.width).toBe('640px');
+
+      workbenchStore.activeSessionRoute = {
+        runtimeProvider: 'yeaft', agentId: 'agent-1', sessionId: 'session-b',
+      };
+      await Vue.nextTick();
+      expect(savedWidths.get('yeaft:agent-1:session-a')).toBe(640);
+      expect(wrapper.get('.workbench-panel').element.style.width).toBe('480px');
+      observeResize();
+      await Vue.nextTick();
+
+      workbenchStore.activeSessionRoute = {
+        runtimeProvider: 'yeaft', agentId: 'agent-1', sessionId: 'session-a',
+      };
+      await Vue.nextTick();
+      expect(savedWidths.get('yeaft:agent-1:session-b')).toBe(480);
+      expect(wrapper.get('.workbench-panel').element.style.width).toBe('640px');
+    } finally {
+      window.removeEventListener('workbench-panel-resize', onResize);
+      wrapper.unmount();
+    }
+  });
+
+  it('starts a resize from the rendered width without a jump when the layout is constrained', async () => {
+    workbenchStore.workbenchPanelWidthForRoute.mockReturnValue(640);
+    const wrapper = mountWorkbench();
+    try {
+      vi.spyOn(wrapper.get('.workbench-panel').element, 'getBoundingClientRect')
+        .mockReturnValue({ width: 340 });
+      await wrapper.get('.resize-handle').trigger('mousedown', { clientX: 700 });
+      document.dispatchEvent(new MouseEvent('mousemove', { clientX: 660 }));
+      document.dispatchEvent(new MouseEvent('mouseup'));
+      await Vue.nextTick();
+      expect(workbenchStore.rememberWorkbenchPanelState).toHaveBeenLastCalledWith({
+        runtimeProvider: 'yeaft', agentId: 'agent-1', sessionId: 'session-a',
+      }, 380);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
   it('saves the resized width for the active Agent Session route', async () => {
     workbenchStore.workbenchPanelWidthForRoute.mockReturnValue(500);
     const wrapper = mountWorkbench();

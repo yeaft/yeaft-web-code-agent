@@ -374,6 +374,57 @@ test.describe('Workbench', () => {
       .filter(message => [terminalA.terminalId, terminalB.terminalId].includes(message.terminalId)).length).toBe(0);
   });
 
+  for (const theme of ['light', 'dark']) {
+    test(`preserves resized Files width across Session switches and reopen (${theme})`, async ({ chatPage, mockAgent }) => {
+      await chatPage.setViewportSize({ width: 1440, height: 900 });
+      await openYeaftWorkbench(chatPage, mockAgent);
+      await chatPage.evaluate(theme => document.documentElement.setAttribute('data-theme', theme), theme);
+      const panel = chatPage.locator('.workbench-panel');
+      await openCapability(panel, 'files');
+      await expect(panel.locator('.files-tab')).toBeVisible();
+      const handle = panel.locator(':scope > .resize-handle');
+      // Wait for the opening transition before measuring the drag origin.
+      await expect.poll(async () => Math.round((await panel.boundingBox()).width)).toBeGreaterThan(300);
+      await chatPage.waitForTimeout(400);
+      const initial = await panel.boundingBox();
+      const grip = await handle.boundingBox();
+      await chatPage.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+      await chatPage.mouse.down();
+      await chatPage.mouse.move(grip.x + grip.width / 2 - 180, grip.y + grip.height / 2, { steps: 10 });
+      await chatPage.mouse.up();
+      await expect.poll(async () => (await panel.boundingBox()).width).toBeGreaterThan(initial.width + 100);
+      await chatPage.waitForTimeout(400);
+      const resized = (await panel.boundingBox()).width;
+      const switchSession = async (sessionId) => {
+        await chatPage.evaluate(({ agentId, sessionId }) => {
+          const store = window.Pinia.useChatStore();
+          const sessions = window.Pinia.useSessionsStore();
+          sessions.applySnapshot(['workbench-session', 'layout-session-b'].map(id => ({
+            id, name: id, roster: ['omni'], defaultVpId: 'omni', workDir: '/tmp/test',
+          })), agentId);
+          sessions.setActive(sessionId, agentId);
+          store.yeaftSessionAgentById = { ...store.yeaftSessionAgentById, [sessionId]: agentId };
+          store.yeaftActiveSessionFilter = sessionId;
+        }, { agentId: mockAgent.agentId, sessionId });
+      };
+      await switchSession('layout-session-b');
+      await expect(panel).not.toHaveClass(/expanded/);
+      await chatPage.waitForTimeout(400);
+      await switchSession('workbench-session');
+      await expect(panel.locator('.files-tab')).toBeVisible();
+      await expect.poll(async () => Math.abs((await panel.boundingBox()).width - resized)).toBeLessThan(3);
+      await chatPage.getByRole('button', { name: 'Workbench', exact: true }).click();
+      await expect(panel).not.toHaveClass(/expanded/);
+      await chatPage.waitForTimeout(400);
+      await chatPage.getByRole('button', { name: 'Workbench', exact: true }).click();
+      await expect.poll(async () => Math.abs((await panel.boundingBox()).width - resized)).toBeLessThan(3);
+      await chatPage.setViewportSize({ width: 320, height: 640 });
+      await expect.poll(async () => (await panel.boundingBox()).width).toBeLessThanOrEqual(320);
+      await chatPage.setViewportSize({ width: 1440, height: 900 });
+      await expect.poll(async () => Math.abs((await panel.boundingBox()).width - resized)).toBeLessThan(3);
+    });
+  }
+
   test('keeps Browser discoverable without exposing a fake viewer when the Agent capability is absent', async ({ chatPage, mockAgent }) => {
     await openYeaftWorkbench(chatPage, mockAgent);
 

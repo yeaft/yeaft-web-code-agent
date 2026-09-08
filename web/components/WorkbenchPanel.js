@@ -724,10 +724,11 @@ export default {
       { flush: 'sync', immediate: true },
     );
 
-    const syncPanelWidth = () => {
-      const width = Math.round(panelRoot.value?.getBoundingClientRect?.().width || 0);
-      if (width > 0) panelWidth.value = width;
-    };
+    // The rendered width can be an animation frame or constrained by flex/mobile
+    // layout. Never feed it back into the user's route-scoped width preference.
+    const renderedPanelWidth = () => Math.round(
+      panelRoot.value?.getBoundingClientRect?.().width || 0,
+    );
 
     const updateTabOverflow = () => {
       const railWidth = Math.floor(
@@ -805,7 +806,7 @@ export default {
 
     const notifyWorkbenchResize = () => {
       window.dispatchEvent(new CustomEvent('workbench-panel-resize', {
-        detail: { width: panelWidth.value },
+        detail: { width: renderedPanelWidth() },
       }));
     };
 
@@ -836,12 +837,9 @@ export default {
       const resizeContextKey = workbenchContextKey.value;
       const resizeRoute = { ...activeRoute.value };
       isResizing.value = true;
-      if (!hasCustomWidth.value) {
-        const el = e.target.closest('.workbench-panel');
-        if (el) panelWidth.value = el.offsetWidth;
-        hasCustomWidth.value = true;
-      }
-      const startWidth = panelWidth.value;
+      const startWidth = renderedPanelWidth() || panelWidth.value;
+      panelWidth.value = startWidth;
+      hasCustomWidth.value = true;
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
       let resize = null;
@@ -940,13 +938,10 @@ export default {
       document.addEventListener('click', handleDocumentClick);
       if (typeof ResizeObserver !== 'undefined' && panelRoot.value) {
         panelResizeObserver = new ResizeObserver(() => {
-          syncPanelWidth();
           scheduleTabOverflowUpdate();
           notifyWorkbenchResize();
         });
         panelResizeObserver.observe(panelRoot.value);
-      } else {
-        syncPanelWidth();
       }
       window.addEventListener('resize', scheduleTabOverflowUpdate);
       scheduleTabOverflowUpdate();
