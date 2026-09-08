@@ -9,6 +9,7 @@ import { STOCK_VP_IDS } from '../../../agent/yeaft/vp/stock-ids.js';
 import { parseRoleMd } from '../../../agent/yeaft/vp/vp-store.js';
 
 const WRITING_VP_IDS = ['haiyan', 'liufang', 'zhaona'];
+const INDUSTRY_OMNI_VP_IDS = ['software-omni', 'writing-omni', 'short-video-omni', 'quant-omni'];
 const tempRoots = [];
 
 function tempRoot() {
@@ -94,6 +95,58 @@ describe('all-purpose assistant stock seed', () => {
     expect(result.errors).toEqual([]);
     expect(result.personaBackfilled).not.toContain('omni');
     expect(readFileSync(path, 'utf8')).toBe(before);
+  });
+});
+
+describe('industry generalist stock seeds', () => {
+  it('defines four stable bilingual industry identities with extensible guidance', () => {
+    const byId = new Map(DEFAULT_VPS.map(vp => [vp.vpId, vp]));
+    const expected = {
+      'software-omni': { nameZh: '软件全能助手', area: 'engineering', signals: ['not a fixed sequence', '不是固定步骤'] },
+      'writing-omni': { nameZh: '写作全能助手', area: 'writing', signals: ['flexible repertoire', '灵活的创作工具箱'] },
+      'short-video-omni': { nameZh: '短视频全能助手', area: 'arts', signals: ['not a rigid production checklist', '不是僵硬的制作清单'] },
+      'quant-omni': { nameZh: '投资量化全能助手', area: 'business', signals: ['extensible toolkit', '可扩展的工具箱'] },
+    };
+
+    expect(new Set(INDUSTRY_OMNI_VP_IDS).size).toBe(INDUSTRY_OMNI_VP_IDS.length);
+    for (const vpId of INDUSTRY_OMNI_VP_IDS) {
+      const vp = byId.get(vpId);
+      expect(STOCK_VP_IDS.has(vpId)).toBe(true);
+      expect(vp).toMatchObject({
+        vpId,
+        displayNameZh: expected[vpId].nameZh,
+        roleZh: expect.stringContaining('行业全能助手'),
+        area: expected[vpId].area,
+        modelHint: 'primary',
+        description: expect.any(String),
+        descriptionZh: expect.any(String),
+        personaEn: expect.any(String),
+        personaZh: expect.any(String),
+      });
+      expect(vp.persona).toContain('<!-- lang:en -->');
+      expect(vp.persona).toContain('<!-- lang:zh -->');
+      expect(vp.personaEn).toContain(expected[vpId].signals[0]);
+      expect(vp.personaZh).toContain(expected[vpId].signals[1]);
+      expect(vp.personaEn.length).toBeGreaterThan(1500);
+      expect(vp.personaZh.length).toBeGreaterThan(700);
+    }
+  });
+
+  it('seeds the industry generalists and tops them up without changing custom VPs', () => {
+    const emptyLibDir = tempRoot();
+    expect(seedDefaultVps(emptyLibDir)).toMatchObject({ seeded: DEFAULT_VPS.length, skipped: false, errors: [] });
+    for (const vpId of INDUSTRY_OMNI_VP_IDS) {
+      expect(readFileSync(join(emptyLibDir, vpId, 'role.md'), 'utf8')).toContain(`id: ${vpId}`);
+    }
+
+    const existingLibDir = tempRoot();
+    mkdirSync(existingLibDir, { recursive: true });
+    createVp({ vpId: 'user-generalist', displayName: 'User Generalist', role: 'Custom' }, { libDir: existingLibDir });
+    const before = readFileSync(join(existingLibDir, 'user-generalist', 'role.md'), 'utf8');
+    const toppedUp = topUpDefaultVps(existingLibDir);
+    expect(toppedUp.errors).toEqual([]);
+    expect(toppedUp.added).toEqual(expect.arrayContaining(INDUSTRY_OMNI_VP_IDS));
+    expect(readFileSync(join(existingLibDir, 'user-generalist', 'role.md'), 'utf8')).toBe(before);
   });
 });
 
