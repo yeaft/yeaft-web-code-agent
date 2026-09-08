@@ -8,7 +8,7 @@ Yeaft 原生引擎不再在 turn 结束后调用 LLM，把 conversation transcri
 
 - **Transcript**：ConversationStore JSONL 是完整历史的权威来源。
 - **Runtime cache + history window**：Session runtime 只保留 bounded disposable history cache；`agent/yeaft/history-window.js` 在 hydrate/append 后和每次 provider request 前做确定性 turn/token/tool/multimodal 裁剪；不调用 LLM、不写盘、不改 transcript。
-- **Memory/Dream**：长期事实、偏好和决策由 Memory/Dream 管理，通过 AMS Memory outlet 注入 prompt。
+- **Memory/Dream**：长期事实、偏好和决策仍由 Memory/Dream 在后台管理；2026-09-08 起，原生 Session 自动历史上下文改用[当前 Session 原始问答双桶召回](./2026-09-08-session-message-history-recall.md)，不再靠 Dream 内容自动召回。Memory 工具与其他适用路径不受影响，已有 memory 不删除。
 - **Browser**：只展示当前可见窗口，旧 transcript 通过分页和搜索读取。
 
 ## 明确删除的行为

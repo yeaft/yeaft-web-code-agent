@@ -12,7 +12,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
 import { normalizeProviderModels, parseModelRef, serializeModelForPersistence } from './models.js';
-import { normaliseTelemetrySection, normaliseYeaftSection } from './config.js';
+import { clampYeaftField, normaliseTelemetrySection, normaliseYeaftSection } from './config.js';
 import { normaliseBrowserRuntimeSection, validateBrowserRuntimeUpdate } from '../browser-runtime/config.js';
 import { normalizePluginConfig } from './plugins.js';
 import { mutateAgentConfig, readAgentConfigForWrite } from './config-store.js';
@@ -196,7 +196,7 @@ export function updateLlmConfig(update, dir) {
  * stable shape — `normaliseYeaftSection` guarantees that.
  *
  * @param {string} [dir] — Yeaft data directory
- * @returns {{ maxConcurrentThreads: number, autoArchiveIdleDays: number, recentTurnsLimit: number, dream: object } | { error: string }}
+ * @returns {{ maxConcurrentThreads: number, autoArchiveIdleDays: number, recentTurnsLimit: number, relatedTurnsLimit: number, dream: object } | { error: string }}
  */
 export function getYeaftSettings(dir) {
   const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
@@ -215,15 +215,16 @@ export function getYeaftSettings(dir) {
  * Update the Yeaft-section of config.json. Merges into existing config
  * (LLM provider / model fields are untouched) and validates each field:
  * `maxConcurrentThreads` must be 1..50, `autoArchiveIdleDays` must be
- * 1..3650, `recentTurnsLimit` must be 1..500. Dream limits are read-only
+ * 1..3650, `recentTurnsLimit` must be 1..500, `relatedTurnsLimit` must be
+ * 0..10 (0 disables related recall). Dream limits are read-only
  * runtime defaults here; invalid values are rejected
  * outright so the UI sees an error rather than silently reverting — a
  * silent revert would make "I set it to 100 and nothing happened"
  * impossible to debug.
  *
- * @param {{ maxConcurrentThreads?: number, autoArchiveIdleDays?: number, recentTurnsLimit?: number }} update
+ * @param {{ maxConcurrentThreads?: number, autoArchiveIdleDays?: number, recentTurnsLimit?: number, relatedTurnsLimit?: number }} update
  * @param {string} [dir]
- * @returns {{ maxConcurrentThreads: number, autoArchiveIdleDays: number, recentTurnsLimit: number, dream: object } | { error: string }}
+ * @returns {{ maxConcurrentThreads: number, autoArchiveIdleDays: number, recentTurnsLimit: number, relatedTurnsLimit: number, dream: object } | { error: string }}
  */
 export function updateYeaftSettings(update, dir) {
   const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
@@ -252,6 +253,13 @@ export function updateYeaftSettings(update, dir) {
       return { error: 'recentTurnsLimit must be between 1 and 500' };
     }
   }
+  if (update.relatedTurnsLimit !== undefined) {
+    const value = clampYeaftField(update.relatedTurnsLimit, 'relatedTurnsLimit');
+    const n = Number(update.relatedTurnsLimit);
+    if (value === null || n < 0 || n > 10) {
+      return { error: 'relatedTurnsLimit must be between 0 and 10' };
+    }
+  }
 
   try {
     return mutateAgentConfig(root, existing => {
@@ -266,6 +274,9 @@ export function updateYeaftSettings(update, dir) {
         recentTurnsLimit: update.recentTurnsLimit !== undefined
           ? Math.floor(Number(update.recentTurnsLimit))
           : prev.recentTurnsLimit,
+        relatedTurnsLimit: update.relatedTurnsLimit !== undefined
+          ? clampYeaftField(update.relatedTurnsLimit, 'relatedTurnsLimit')
+          : prev.relatedTurnsLimit,
       };
       if (existing.yeaft?.dream && typeof existing.yeaft.dream === 'object') {
         merged.dream = existing.yeaft.dream;

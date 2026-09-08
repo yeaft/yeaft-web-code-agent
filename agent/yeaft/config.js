@@ -54,6 +54,9 @@ const DEFAULTS = {
   // bring back after boot or reconnect. Older transcript remains available
   // through history pagination/search. Range: 1–500.
   yeaftRecentTurnsLimit: 20,
+  // Same-Session related Q&A turns, selected by deterministic full-text rules.
+  // Range: 0–10; 0 disables related recall without changing recent history.
+  yeaftRelatedTurnsLimit: 8,
   // CLAUDE.md / AGENTS.md project-doc cap, in bytes. Mirrors Codex's
   // `project_doc_max_bytes`. 0 disables the feature (no project-doc
   // block is injected). Hand-edited values are NOT clamped — we let
@@ -254,13 +257,14 @@ function isTruthy(val) {
  * bounds via `clampYeaftField`.
  *
  * @param {any} raw — jsonConfig.yeaft (may be undefined / malformed)
- * @returns {{ maxConcurrentThreads: number, autoArchiveIdleDays: number, recentTurnsLimit: number, dream: object }}
+ * @returns {{ maxConcurrentThreads: number, autoArchiveIdleDays: number, recentTurnsLimit: number, relatedTurnsLimit: number, dream: object }}
  */
 export function normaliseYeaftSection(raw) {
   const out = {
     maxConcurrentThreads: DEFAULTS.yeaftMaxConcurrentThreads,
     autoArchiveIdleDays: DEFAULTS.yeaftAutoArchiveIdleDays,
     recentTurnsLimit: DEFAULTS.yeaftRecentTurnsLimit,
+    relatedTurnsLimit: DEFAULTS.yeaftRelatedTurnsLimit,
     dream: { ...DEFAULT_LIMITS },
   };
   if (!raw || typeof raw !== 'object') return out;
@@ -270,6 +274,8 @@ export function normaliseYeaftSection(raw) {
   if (ad !== null) out.autoArchiveIdleDays = ad;
   const rt = clampYeaftField(raw.recentTurnsLimit, 'recentTurnsLimit');
   if (rt !== null) out.recentTurnsLimit = rt;
+  const related = clampYeaftField(raw.relatedTurnsLimit, 'relatedTurnsLimit');
+  if (related !== null) out.relatedTurnsLimit = related;
   const dream = raw.dream;
   if (dream && typeof dream === 'object' && !Array.isArray(dream)) {
     for (const key of Object.keys(DEFAULT_LIMITS)) {
@@ -287,17 +293,20 @@ export function normaliseYeaftSection(raw) {
  * (`normaliseYeaftSection`) and write (`updateYeaftSettings` validation).
  *
  * @param {unknown} v
- * @param {'maxConcurrentThreads'|'autoArchiveIdleDays'|'recentTurnsLimit'} field
+ * @param {'maxConcurrentThreads'|'autoArchiveIdleDays'|'recentTurnsLimit'|'relatedTurnsLimit'} field
  * @returns {number | null}
  */
 export function clampYeaftField(v, field) {
   if (v === null || v === undefined) return null;
+  if (field === 'relatedTurnsLimit' &&
+      (typeof v !== 'number' && typeof v !== 'string' || typeof v === 'string' && !v.trim())) return null;
   const n = Number(v);
   if (!Number.isFinite(n)) return null;
   let lo;
   let hi;
   if (field === 'maxConcurrentThreads') { lo = 1; hi = 50; }
   else if (field === 'recentTurnsLimit') { lo = 1; hi = 500; }
+  else if (field === 'relatedTurnsLimit') { lo = 0; hi = 10; }
   else { lo = 1; hi = 3650; } // autoArchiveIdleDays
   return Math.min(hi, Math.max(lo, Math.floor(n)));
 }

@@ -107,7 +107,7 @@ import { loadSessionConfig, normalizeSessionConfig, resolveSessionConfig, Sessio
 import { updateSessionConfig } from './sessions/session-crud.js';
 import { createCoordinator } from './sessions/coordinator.js';
 import { seedDefaultSession } from './sessions/seed-default.js';
-import { trimHistoryCacheForRuntime, trimSnapshotForBudget } from './history-window.js';
+import { trimHistoryCacheForRuntime } from './history-window.js';
 import { persistYeaftAttachments, attachmentsForPersistence, persistedAttachmentPreviewPayload } from './attachments.js';
 import { normalizeSessionMessageQuote, sessionMessageQuotePrompt } from './session-message-quote.js';
 import { ConversationStore, parseSeqFromId, projectVisibleSessionMessages } from './conversation/persist.js';
@@ -2264,6 +2264,7 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
       related = false;
     } else {
       persistInboundMessageOnceByMsgId({
+        envelope,
         msgId: envelope?.msg?.id,
         text,
         sessionId,
@@ -2364,6 +2365,7 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
           const isInternal = injectedBy === 'route_forward' || injectedBy === 'task_result';
           const senderVpId = isInternal ? (meta.senderVpId || envelope?.msg?.from || null) : null;
           persistInboundMessageOnceByMsgId({
+            envelope,
             msgId: envMsgId,
             text,
             sessionId,
@@ -5672,14 +5674,10 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         markEngineTerminal,
         markTurnEnd,
       };
-      // Always trim the snapshot before passing to engine.query. This is a
-      // deterministic provider-request window; it never calls an LLM or
-      // changes the persisted transcript. See `trimSnapshotForBudget`.
+      // The runtime cache is already bounded. Preserve its candidates here:
+      // Engine allocates recent + related turns together at each provider boundary.
       const trimStart = perfNowMs();
-      const trimmedMessages = trimSnapshotForBudget(baseSnapshot, {
-        messageTokenBudget: session?.config?.messageTokenBudget,
-        language: session?.config?.language,
-      });
+      const trimmedMessages = baseSnapshot;
       if (perfTraceId) {
         recordAgentPerfTrace(ctx.CONFIG, {
           traceId: perfTraceId,
@@ -5707,6 +5705,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         // each write a copy of the user message, and history replay
         // would render the user's prompt N times.
         userAlreadyPersisted: true,
+        currentUserMessage: inboundEnvelope?._persistedUserMessage || null,
         askUser: ({ question, options }, toolCall = null) => new Promise((resolve, reject) => {
           const requestId = `ask_${randomUUID()}`;
           const signal = vpAbort.signal;
@@ -6102,7 +6101,7 @@ function appendTurnToSessionHistory(sessionId, threadId, vpId, prompts, assistan
  * @returns {boolean} true if this call wrote the row, false if a prior
  *   call already wrote it (dedup hit).
  */
-function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = 'main', role, speakerVpId, attachments, quote, internal = false, ts = null, clientMessageId = null }) {
+function persistInboundMessageOnceByMsgId({ envelope = null, msgId, text, sessionId, threadId = 'main', role, speakerVpId, attachments, quote, internal = false, ts = null, clientMessageId = null }) {
   if (!session?.conversationStore) return false;
   // No msgId means no dedup key — caller is responsible for guarding.
   // Both call sites already do (`if (envMsgId && text)` and
@@ -6111,8 +6110,11 @@ function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = '
   // every call would mint a unique id and write a duplicate row, which
   // is the exact bug this helper exists to prevent.
   if (!msgId || typeof msgId !== 'string') return false;
-  const dedupKey = `${msgId}::${threadId || 'main'}`;
-  if (_persistedUserMsgIds.has(dedupKey)) return false;
+  const dedupKey = `${sessionId || ''}::${msgId}::${threadId || 'main'}`;
+  if (_persistedUserMsgIds.has(dedupKey)) {
+    if (envelope) envelope._persistedUserMessage = _persistedInboundRows.get(dedupKey) || null;
+    return false;
+  }
   // Mark BEFORE the empty-text bail. If a later same-id call arrives
   // with non-empty text (e.g. a route_forward injection that the first
   // caller passed in with empty text), the Set must already remember
@@ -6131,6 +6133,7 @@ function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = '
       const v = iter.next();
       if (v.done) break;
       _persistedUserMsgIds.delete(v.value);
+      _persistedInboundRows.delete(v.value);
     }
   }
   try {
@@ -6170,7 +6173,9 @@ function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = '
     if (ts && typeof ts === 'string') {
       record.time = ts;
     }
-    session.conversationStore.append(record);
+    const persisted = session.conversationStore.append(record);
+    _persistedInboundRows.set(dedupKey, persisted);
+    if (envelope) envelope._persistedUserMessage = persisted;
     return true;
   } catch (err) {
     console.warn(
@@ -6186,6 +6191,7 @@ function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = '
  * starts with no stale msg-ids.
  */
 const _persistedUserMsgIds = new Set();
+const _persistedInboundRows = new Map();
 
 /**
  * Abort every in-flight VP turn and clear all queued envelopes across
@@ -7734,6 +7740,7 @@ export async function resetYeaftSession() {
   // History-dedup cache is keyed by per-session coordinator msg ids;
   // a fresh session resets the id space, so clear the cache too.
   _persistedUserMsgIds.clear();
+  _persistedInboundRows.clear();
   // vp-status: nuke the broker table too. Drivers above have just
   // been aborted, so any in-flight `settleIdle` from their outer
   // `finally` blocks is racing this reset. Clearing here makes the

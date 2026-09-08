@@ -33,7 +33,9 @@ import {
   DEFAULT_PROJECT_DOC_MAX_BYTES,
 } from './sessions/project-doc.js';
 import { archiveToolResults } from './archive/tool-results.js';
-import { trimSnapshotForBudget } from './history-window.js';
+import { trimSnapshotForBudget, estimateMessageTokens, buildHistoryBuckets } from './history-window.js';
+import { recallConversationTurns } from './conversation/history-index.js';
+import { parseSeqFromId } from './conversation/persist.js';
 import { isVpForeign, readContent as readScopeContent } from './memory/store.js';
 import { ActiveMemorySet } from './memory/ams.js';
 import { cleanMemoryPromptText } from './memory/prompt-cleanup.js';
@@ -1875,7 +1877,7 @@ export class Engine {
     }
   }
 
-  async *#queryLifecycle({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null } = {}) {
+  async *#queryLifecycle({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       const error = new Error('prompt is required and must be a non-empty string');
       yield {
@@ -1967,7 +1969,7 @@ export class Engine {
     try {
       this.#currentThreadId = threadId || MAIN_THREAD_ID;
       this.#currentCausalRootId = effectiveCausalRootId;
-      yield* this.#runQuery({ prompt: effectivePrompt, promptParts: effectivePromptParts, messages, signal: runSignal, userEffort: explicitUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds, projectInstruction, projectLabel, vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted, causalRootId: effectiveCausalRootId, getCurrentTodos, setCurrentTodos, askUser, threadId: this.#currentThreadId, vpTurnId, drainPendingUserMessages, prepareProviderRequest, startProviderRequest, finishProviderRequest, failProviderRequest, closePendingUserInput, collabToolPolicy: effectiveCollabToolPolicy, explicitSkillName: parsedSkill.skillName, retryLifecycle });
+      yield* this.#runQuery({ prompt: effectivePrompt, promptParts: effectivePromptParts, messages, signal: runSignal, userEffort: explicitUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds, projectInstruction, projectLabel, vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted, currentUserMessage, causalRootId: effectiveCausalRootId, getCurrentTodos, setCurrentTodos, askUser, threadId: this.#currentThreadId, vpTurnId, drainPendingUserMessages, prepareProviderRequest, startProviderRequest, finishProviderRequest, failProviderRequest, closePendingUserInput, collabToolPolicy: effectiveCollabToolPolicy, explicitSkillName: parsedSkill.skillName, retryLifecycle });
     } finally {
       // Closing the async generator at a visible retry boundary means the
       // continuation never reached a provider. Keep it out of history and
@@ -2022,7 +2024,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, explicitSkillName = null, retryLifecycle }) {
+  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, explicitSkillName = null, retryLifecycle }) {
 
     const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
       ? collabToolPolicy
@@ -2079,10 +2081,59 @@ export class Engine {
     // memory pre-flow or provider request can fail. The Web Session bridge
     // already writes one shared user row before multi-VP fan-out, so those
     // callers set userAlreadyPersisted and every VP skips this append.
+    const internalTrigger = !!inboundEnvelope?.msg?.meta?.injectedBy;
+    let persistedQueryUser = currentUserMessage;
     if (!userAlreadyPersisted) {
-      this.#persistConversationMessage({ role: 'user', content: prompt, userAuthored: true }, {
-        sessionId: runtimeSessionId,
-      });
+      persistedQueryUser = this.#persistConversationMessage({
+        role: internalTrigger ? 'assistant' : 'user', content: prompt,
+        ...(internalTrigger ? { internal: true } : { userAuthored: true }),
+      }, { sessionId: runtimeSessionId });
+    }
+    // Native Session history, including internal wakeups, never comes from
+    // Dream. Work Center and scoped child agents keep their memory contracts.
+    const useMessageHistory = scenario !== 'work-item' && !!runtimeSessionId && !vpPersona?.subAgent;
+    const useDreamMemory = scenario === 'work-item' || !!vpPersona?.subAgent
+      || (!runtimeSessionId && !internalTrigger);
+    const recentTurnCap = this.#config.yeaft?.recentTurnsLimit ?? 20;
+    const relatedTurnCap = this.#config.yeaft?.relatedTurnsLimit ?? 8;
+    let relatedHistoryTurns = [];
+    let historyRecallMeta = { source: 'messages', status: 'disabled' };
+    if (useMessageHistory && !internalTrigger && this.#conversationStore?.loadRecentBySession) {
+      // Bounded canonical rows, not the lossy bridge cache. Threads share the
+      // Session transcript; only tool arcs and thinking are VP-private.
+      const clientId = inboundEnvelope?.msg?.meta?.clientMessageId;
+      if (!persistedQueryUser && clientId) {
+        // Compatibility only: bridge callers carry the durable row directly.
+        // A missing identity outside this bounded lookup fails closed below.
+        persistedQueryUser = this.#conversationStore.loadRecentBySession(runtimeSessionId, recentTurnCap + 1)
+          .find(m => m.role === 'user' && m.clientMessageId === clientId);
+      }
+      const beforeSeq = Number.isFinite(persistedQueryUser?.seq)
+        ? persistedQueryUser.seq : parseSeqFromId(persistedQueryUser?.id);
+      if (Number.isFinite(beforeSeq)) {
+        const tail = this.#conversationStore.loadRecentBySession(runtimeSessionId, recentTurnCap, { beforeSeq });
+        messages = tail.filter(m => parseSeqFromId(m.id) < beforeSeq
+          && (m.role !== 'tool' || !queryVpId || m.speakerVpId === queryVpId))
+          .map(m => {
+            if (m.role !== 'assistant' || !queryVpId || m.speakerVpId === queryVpId) return m;
+            const { toolCalls, thinkingBlocks, ...textOnly } = m;
+            return textOnly;
+          });
+        if (relatedTurnCap > 0 && this.#yeaftDir) {
+          try {
+            const recalled = await recallConversationTurns(this.#yeaftDir, runtimeSessionId, prompt, {
+              beforeSeq, limit: relatedTurnCap,
+            });
+            relatedHistoryTurns = recalled.turns || [];
+            historyRecallMeta = { source: 'messages', status: 'ready', ...recalled.meta };
+          } catch (error) {
+            // Cold/stale index degrades to recent history, never a full scan.
+            historyRecallMeta = { source: 'messages', status: error?.code || 'unavailable' };
+          }
+        }
+      } else {
+        historyRecallMeta = { source: 'messages', status: 'missing_current_user_fence' };
+      }
     }
 
     const perfTraceId = typeof inboundEnvelope?._perfTraceId === 'string' && inboundEnvelope._perfTraceId.trim()
@@ -2111,7 +2162,7 @@ export class Engine {
     let memoryInjection = '';
     let recallEntryCount = 0;
 
-    const topicScopesForMemory = await this.#loadSessionTopicScopes(sessionId);
+    const topicScopesForMemory = !useDreamMemory ? [] : await this.#loadSessionTopicScopes(sessionId);
     const projectScopesForMemory = Array.isArray(projectSessionIds)
       ? projectSessionIds.flatMap(id => [
           `sessions/${id}`,
@@ -2119,7 +2170,7 @@ export class Engine {
           `group/${id}`,
         ])
       : [];
-    const recallResult = await this.#recallMemory(prompt, {
+    const recallResult = !useDreamMemory ? { entries: [], meta: {} } : await this.#recallMemory(prompt, {
       sessionId,
       vpId: vpPersona && typeof vpPersona === 'object' && typeof vpPersona.vpId === 'string'
         ? vpPersona.vpId
@@ -2148,7 +2199,7 @@ export class Engine {
 
     // Load canonical content only for scopes selected by ranked FTS records.
     // summary.md remains catalog metadata and never enters the prompt.
-    const summaries = await this.#loadLayerASummaries({
+    const summaries = !useDreamMemory ? {} : await this.#loadLayerASummaries({
       sessionId,
       vpId: vpPersona && typeof vpPersona === 'object' && typeof vpPersona.vpId === 'string'
         ? vpPersona.vpId
@@ -2167,7 +2218,7 @@ export class Engine {
       && typeof vpPersona.vpId === 'string'
       ? vpPersona.vpId
       : (typeof senderVpId === 'string' ? senderVpId : null);
-    const amsContext = this.#prepareAms({
+    const amsContext = !useDreamMemory ? null : this.#prepareAms({
       sessionId,
       ownVpId: ownVpIdForAms,
       summaries,
@@ -2179,7 +2230,8 @@ export class Engine {
     }
     const loadedMemoryForDebug = loadedMemoryDebugEntries(amsContext?.snapshot);
     const loadedMemoryMetaForDebug = {
-      recallLimit: resolveMemoryRecallLimit(this.#config),
+      ...(useMessageHistory ? historyRecallMeta : {}),
+      recallLimit: useMessageHistory ? relatedTurnCap : resolveMemoryRecallLimit(this.#config),
       recallCandidates: Number.isFinite(recallResult?.meta?.hitCount)
         ? recallResult.meta.hitCount
         : (recallResult && Array.isArray(recallResult.entries) ? recallResult.entries.length : 0),
@@ -2356,11 +2408,14 @@ export class Engine {
         : prompt;
     }
     const conversationMessages = [
-      ...trimSnapshotForBudget(messages, {
+      ...(useMessageHistory ? messages : trimSnapshotForBudget(messages, {
         messageTokenBudget: this.#config.messageTokenBudget,
         language: this.#config.language,
-      }),
-      { role: 'user', content: finalUserContent },
+      })),
+      { role: 'user', content: finalUserContent,
+        ...(persistedQueryUser?.id ? { id: persistedQueryUser.id, seq: parseSeqFromId(persistedQueryUser.id) } : {}),
+        ...(persistedQueryUser?.clientMessageId ? { clientMessageId: persistedQueryUser.clientMessageId } : {}),
+      },
     ];
 
     const groupReflectionGate = shouldAllowGroupReflection({
@@ -2784,9 +2839,27 @@ export class Engine {
         // query tape remain complete; no summary is generated and no history
         // rows are rewritten. This also protects later tool-loop requests,
         // not just the initial snapshot assembled by the bridge.
-        const requestHistory = trimSnapshotForBudget(conversationMessages, {
+        const continuationCost = pendingContinuationForRequest
+          ? estimateMessageTokens(pendingContinuationForRequest) : 0;
+        const historyBudget = Math.max(1, Math.min(
+          requestConfig.messageTokenBudget || 32768,
+          Math.floor(currentContextWindow * 0.75) - estimateMessagesTokens(systemPrompt, []),
+        ) - continuationCost);
+        const buckets = useMessageHistory ? buildHistoryBuckets(conversationMessages, {
+          prompt,
+          relatedTurns: relatedHistoryTurns,
+          recentTurnCap: requestConfig.yeaft?.recentTurnsLimit ?? 20,
+          relatedTurnCap: requestConfig.yeaft?.relatedTurnsLimit ?? 8,
+          messageTokenBudget: historyBudget,
+          currentTurnStartIndex: turnStartIdx,
+          language: requestConfig.language,
+        }) : null;
+        const requestHistory = buckets?.messages || trimSnapshotForBudget(conversationMessages, {
           messageTokenBudget: requestConfig.messageTokenBudget,
           language: requestConfig.language,
+        });
+        if (buckets) this.#trace.log?.('history_buckets', {
+          sessionId: runtimeSessionId, turnId: queryTurnId, ...historyRecallMeta, ...buckets.meta,
         });
         let wireMessages = stripMetaForWire(pendingContinuationForRequest
           ? [...requestHistory, pendingContinuationForRequest]

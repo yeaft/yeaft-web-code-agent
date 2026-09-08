@@ -2,6 +2,7 @@ import { Worker } from 'node:worker_threads';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { writeAtomic } from '../storage/atomic.js';
+import { extractRecallTerms, scoreRecallTurn } from './recall-relevance.js';
 import {
   conversationIndexDatabasePath,
   conversationIndexManifestPath,
@@ -11,6 +12,7 @@ import {
 } from './history-index-state.js';
 
 const MAX_REBUILD_RETRIES = 3;
+const RECALL_WAIT_MS = 1_500;
 const MAX_HISTORY_INDEX_MANAGERS = 8;
 const HISTORY_INDEX_IDLE_MS = 5 * 60_000;
 const DESTRUCTIVE_MUTATION_REASONS = new Set([
@@ -103,7 +105,6 @@ class HistoryIndexQueryWorker {
         testHooksEnabled: process.env.NODE_ENV === 'test',
       },
     });
-    this.worker.unref();
     this.worker.on('message', message => {
       if (message?.type === 'fatal') {
         this.#rejectAll(new Error(message.error));
@@ -112,6 +113,7 @@ class HistoryIndexQueryWorker {
       const pending = this.pending.get(message?.requestId);
       if (!pending) return;
       this.pending.delete(message.requestId);
+      if (this.pending.size === 0) this.worker.unref();
       if (message.error) {
         const error = new Error(message.error);
         if (message.code) error.code = message.code;
@@ -122,17 +124,22 @@ class HistoryIndexQueryWorker {
     this.worker.on('exit', code => {
       if (code !== 0) this.#rejectAll(new Error(`history index query worker exited ${code}`));
     });
+    // Installing a message listener refs the MessagePort again. Idle indexes
+    // must not keep one-shot CLI processes alive; only in-flight reads do.
+    this.worker.unref();
   }
 
   #rejectAll(error) {
     for (const pending of this.pending.values()) pending.reject(error);
     this.pending.clear();
+    this.worker.unref();
   }
 
   request(op, payload) {
     const requestId = `history-index-${process.pid}-${++requestCounter}`;
     return new Promise((resolve, reject) => {
       this.pending.set(requestId, { resolve, reject });
+      this.worker.ref();
       this.worker.postMessage({ requestId, op, payload });
     });
   }
@@ -396,10 +403,62 @@ class SessionHistoryIndex {
     throw error;
   }
 
+  // A newly persisted user invalidates even a warm index on every query. Give
+  // rebuilds a bounded opportunity to catch up, without ever trusting an old
+  // prefix (a destructive mutation may have preceded the latest append).
+  // The first cold call starts a background build; subsequent calls join it.
+  async recall(payload) {
+    const deadline = Date.now() + RECALL_WAIT_MS;
+    const notReady = reason => ({ turns: [], meta: { status: 'not_ready', reason } });
+    const withinDeadline = async promise => {
+      let timer;
+      try {
+        return await Promise.race([
+          promise,
+          new Promise((_, reject) => {
+            timer = setTimeout(() => {
+              const error = new Error('history recall readiness deadline exceeded');
+              error.code = 'index_building';
+              reject(error);
+            }, Math.max(0, deadline - Date.now()));
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    // Do not cancel a timed-out build: the next query must be able to make
+    // progress, rather than continually restarting a cold or stale rebuild.
+    if (this.rebuildPromise || this.rebuildTimer) await withinDeadline(this.rebuild());
+    await withinDeadline(this.ensureReady({ allowStale: true, waitForBuild: false }));
+    if (readConversationMutationRevision(this.ownerRoot, 'session', this.sessionId)
+      !== Number(this.activeManifest?.sourceRevision)) {
+      await withinDeadline(this.rebuild());
+    }
+    const worker = this.active;
+    const manifest = this.activeManifest;
+    const revision = readConversationMutationRevision(this.ownerRoot, 'session', this.sessionId);
+    if (revision !== Number(manifest?.sourceRevision)) {
+      this.scheduleRebuild();
+      return notReady('stale_result');
+    }
+    // Never retry a result invalidated during its read. Raw source fingerprints
+    // fence external edits too; revision and generation fence manager races.
+    const result = await withinDeadline(worker.request('recall-turns', payload));
+    if (worker !== this.active || manifest !== this.activeManifest
+      || revision !== readConversationMutationRevision(this.ownerRoot, 'session', this.sessionId)
+      || result.meta?.status === 'not_ready') {
+      this.scheduleRebuild();
+      return notReady('stale_result');
+    }
+    return result;
+  }
+
   async request(op, payload) {
     this.leases += 1;
     this.touch();
     try {
+      if (op === 'recall-turns') return await this.recall(payload);
       const mutation = readConversationMutationInfo(this.ownerRoot, 'session', this.sessionId);
       const allowStale = op === 'outline'
         && !payload?.cursor
@@ -492,6 +551,42 @@ export async function searchConversationIndex(ownerRoot, sessionId, query, opts 
     ...opts,
     _waitForBuild: opts._waitForBuild !== false,
   });
+}
+
+/**
+ * Recall complete visible user/assistant turns from this owner-root Session.
+ * beforeSeq excludes that user turn and all later rows (exclusive seq fence).
+ * limit defaults to 8, capped at 10. maxTurnRows/maxTurnBytes/maxReadBytes may
+ * only lower hard worker caps. Canonical message IDs identify entries; their
+ * sourceMessageIds preserve all persisted identities, including aggregated VP
+ * replies. The first cold call yields not_ready and starts a background build;
+ * later calls wait up to 1500ms for readiness and the worker read, without
+ * cancelling a timed-out build. Mutations during a read yield not_ready.
+ * Discovery is bounded, not exhaustive: each >=3-character term uses the first
+ * 32 trigram candidates (before seq filtering), and shorter terms only inspect
+ * the newest 512 eligible entry metadata rows. A ready/no_match is not proof
+ * that the entire Session lacks a match; meta.candidateCapped exposes caps.
+ */
+export async function recallConversationTurns(ownerRoot, sessionId, prompt, opts = {}) {
+  const terms = extractRecallTerms(prompt);
+  const eligibility = scoreRecallTurn(terms, terms.join(' '));
+  if (!eligibility.score) {
+    return { turns: [], meta: { status: 'ready', reason: eligibility.reason, terms } };
+  }
+  try {
+    return await requestConversationHistoryIndex(ownerRoot, sessionId, 'recall-turns', {
+      prompt: typeof prompt === 'string' ? prompt.slice(0, 4096) : '',
+      beforeSeq: opts.beforeSeq,
+      limit: Math.min(10, Math.max(1, Math.floor(Number(opts.limit) || 8))),
+      maxTurnRows: opts.maxTurnRows,
+      maxTurnBytes: opts.maxTurnBytes,
+      maxReadBytes: opts.maxReadBytes,
+      ...(process.env.NODE_ENV === 'test' ? { _testBarrier: opts._testBarrier } : {}),
+    });
+  } catch (error) {
+    if (!['index_building', 'stale_result', 'source_changed'].includes(error?.code)) throw error;
+    return { turns: [], meta: { status: 'not_ready', reason: error.code, terms } };
+  }
 }
 
 export async function loadConversationOutlineFromIndex(ownerRoot, sessionId, opts = {}) {
