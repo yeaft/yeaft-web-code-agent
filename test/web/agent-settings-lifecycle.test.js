@@ -161,6 +161,74 @@ describe('Agent-scoped settings lifecycle', () => {
     expect(store.agentOperations['agent-a'].upgrade).toMatchObject({ pending: false, error: 'nope' });
   });
 
+  it('upgrades only safe online Agents and settles the batch after terminal outcomes', () => {
+    const store = freshStore();
+    store.agents = [
+      { id: 'agent-a', online: true, version: '1.0.0', capabilities: ['remote_upgrade_safe'] },
+      { id: 'agent-b', online: true, version: '1.0.0', capabilities: ['remote_upgrade_safe'] },
+      { id: 'agent-offline', online: false, version: '1.0.0', capabilities: ['remote_upgrade_safe'] },
+      { id: 'agent-container', online: true, version: '1.0.0', capabilities: ['remote_upgrade_safe', 'container_agent'] },
+      { id: 'agent-legacy', online: true, version: '1.0.0', capabilities: [] },
+    ];
+    const completed = vi.fn();
+    window.addEventListener('agent-upgrade-batch-complete', completed);
+
+    expect(store.getUpgradableAgents().map(agent => agent.id)).toEqual(['agent-a', 'agent-b']);
+    expect(store.upgradeAllAgents()).toBe(2);
+    expect(store.upgradeAllAgents()).toBeNull();
+    expect(store.sendWsMessage.mock.calls.map(([message]) => message.agentId)).toEqual(['agent-a', 'agent-b']);
+    expect(new Set(store.sendWsMessage.mock.calls.map(([message]) => message.requestId)).size).toBe(2);
+    const batchId = store.agentUpgradeBatch.id;
+    expect(store.agentUpgradeBatch).toMatchObject({ pending: true, skippedCount: 3, agentIds: ['agent-a', 'agent-b'] });
+    expect(store.agentOperations['agent-a'].upgrade.batchId).toBe(batchId);
+    expect(store.agentOperations['agent-b'].upgrade.batchId).toBe(batchId);
+
+    handleMessage(store, {
+      type: 'upgrade_agent_ack', agentId: 'agent-a', requestId: 'stale', success: true, alreadyLatest: true,
+    });
+    expect(store.agentUpgradeBatch.results).toEqual({});
+
+    handleMessage(store, {
+      type: 'upgrade_agent_ack', agentId: 'agent-a', requestId: store.agentOperations['agent-a'].upgrade.requestId,
+      success: true, alreadyLatest: true, version: '1.0.0',
+    });
+    expect(store.agentUpgradeBatch.results['agent-a']).toMatchObject({ status: 'already_latest', version: '1.0.0' });
+    expect(store.agentUpgradeBatch.pending).toBe(true);
+    expect(completed).not.toHaveBeenCalled();
+
+    handleMessage(store, {
+      type: 'upgrade_agent_ack', agentId: 'agent-b', requestId: store.agentOperations['agent-b'].upgrade.requestId,
+      success: true,
+    });
+    expect(store.agentOperations['agent-b'].upgrade).toMatchObject({ pending: true, acknowledged: true });
+    handleMessage(store, {
+      type: 'agent_list',
+      agents: store.agents.map(agent => agent.id === 'agent-b' ? { ...agent, version: '1.0.1' } : agent),
+    });
+
+    expect(store.agentUpgradeBatch.pending).toBe(false);
+    expect(store.agentUpgradeBatch.results['agent-b']).toMatchObject({ status: 'upgraded' });
+    expect(completed).toHaveBeenCalledTimes(1);
+    window.removeEventListener('agent-upgrade-batch-complete', completed);
+  });
+
+  it('records a bulk upgrade timeout as a failed terminal result', async () => {
+    const store = freshStore();
+    store.agents = [
+      { id: 'agent-a', online: true, version: '1.0.0', capabilities: ['remote_upgrade_safe'] },
+    ];
+    const completed = vi.fn();
+    window.addEventListener('agent-upgrade-batch-complete', completed);
+
+    expect(store.upgradeAllAgents()).toBe(1);
+    await vi.advanceTimersByTimeAsync(120001);
+
+    expect(store.agentUpgradeBatch).toMatchObject({ pending: false, skippedCount: 0 });
+    expect(store.agentUpgradeBatch.results['agent-a']).toMatchObject({ status: 'failed', error: 'timeout' });
+    expect(completed).toHaveBeenCalledTimes(1);
+    window.removeEventListener('agent-upgrade-batch-complete', completed);
+  });
+
   it('settles a synthesized Dream rejection through the web handler', async () => {
     CONFIG.skipAuth = true;
     const store = freshStore();

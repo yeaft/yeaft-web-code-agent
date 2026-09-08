@@ -870,6 +870,7 @@ export const useChatStore = defineStore('chat', {
     telemetrySettingsByAgent: {},
     telemetryRequestByAgent: {},
     agentOperations: {},
+    agentUpgradeBatch: null,
     agentDreamState: {},
     // Last live Tavily /usage probe.
     //   { plan, used, limit, paygoUsed, paygoLimit } | { error }
@@ -6765,14 +6766,69 @@ export const useChatStore = defineStore('chat', {
       return true;
     },
 
-    upgradeAgent(agentId) {
+    upgradeAgent(agentId, batchId = null) {
       if (!agentId || this.agentOperations?.[agentId]?.upgrade?.pending) return false;
       const agent = this.agents.find(item => item.id === agentId);
       const requestId = `upgrade-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const timer = setTimeout(() => this.finishAgentOperation(agentId, 'upgrade', 'timeout'), 120000);
-      this.agentOperations = { ...this.agentOperations, [agentId]: { ...(this.agentOperations[agentId] || {}), upgrade: { pending: true, acknowledged: false, startedAt: Date.now(), requestId, oldVersion: agent?.version || null, timer, error: null } } };
+      this.agentOperations = { ...this.agentOperations, [agentId]: { ...(this.agentOperations[agentId] || {}), upgrade: { pending: true, acknowledged: false, startedAt: Date.now(), requestId, oldVersion: agent?.version || null, batchId, timer, error: null } } };
       this.sendWsMessage({ type: 'upgrade_agent', agentId, requestId });
       return true;
+    },
+
+    getUpgradableAgents() {
+      return (this.agents || []).filter(agent => (
+        agent?.online
+        && Array.isArray(agent.capabilities)
+        && agent.capabilities.includes('remote_upgrade_safe')
+        && !agent.capabilities.includes('container_agent')
+        && !this.agentOperations?.[agent.id]?.restart?.pending
+        && !this.agentOperations?.[agent.id]?.upgrade?.pending
+      ));
+    },
+
+    upgradeAllAgents() {
+      if (this.agentUpgradeBatch?.pending) return null;
+      const candidates = this.getUpgradableAgents();
+      if (candidates.length === 0) return null;
+      const batch = {
+        id: `upgrade-batch-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        pending: true,
+        startedAt: Date.now(),
+        agentIds: candidates.map(agent => agent.id),
+        skippedCount: Math.max(0, (this.agents || []).length - candidates.length),
+        results: {},
+      };
+      this.agentUpgradeBatch = batch;
+      for (const agent of candidates) {
+        if (!this.upgradeAgent(agent.id, batch.id)) {
+          this.recordAgentUpgradeBatchResult(agent.id, { status: 'failed', error: 'not_started' }, batch.id);
+        }
+      }
+      return batch.agentIds.length;
+    },
+
+    recordAgentUpgradeBatchResult(agentId, result = {}, batchId = null) {
+      const batch = this.agentUpgradeBatch;
+      if (!batch?.pending || (batchId && batch.id !== batchId) || !batch.agentIds.includes(agentId) || batch.results[agentId]) return null;
+      const next = {
+        ...batch,
+        results: {
+          ...batch.results,
+          [agentId]: {
+            status: result.status || 'failed',
+            error: result.error || null,
+            version: result.version || null,
+            reason: result.reason || null,
+          },
+        },
+      };
+      const settled = next.agentIds.every(id => next.results[id]);
+      this.agentUpgradeBatch = settled ? { ...next, pending: false, completedAt: Date.now() } : next;
+      if (settled && typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('agent-upgrade-batch-complete', { detail: this.agentUpgradeBatch }));
+      }
+      return settled ? this.agentUpgradeBatch : null;
     },
 
     finishAgentOperation(agentId, operation, error = null) {
@@ -6780,6 +6836,11 @@ export const useChatStore = defineStore('chat', {
       if (!current) return;
       clearTimeout(current.timer);
       this.agentOperations = { ...this.agentOperations, [agentId]: { ...(this.agentOperations[agentId] || {}), [operation]: { ...current, pending: false, timer: null, error } } };
+      if (operation === 'upgrade' && current.batchId) {
+        this.recordAgentUpgradeBatchResult(agentId, error
+          ? { status: 'failed', error }
+          : { status: 'upgraded' }, current.batchId);
+      }
     },
 
     // ─── Search settings (Tavily backend + key + on-demand quota) ───
