@@ -4,7 +4,7 @@ import VpSpeakerHeader from './VpSpeakerHeader.js';
 import { normalizeTerminalOutput } from '../utils/terminal-output.js';
 import { normalizeRouteForwardDisplay } from '../utils/route-forward-display.js';
 import { getTodoDisplayState } from '../utils/todo-display-state.js';
-import { renderMermaidIn } from '../utils/markdown.js';
+import { configureMarked, renderMermaidIn } from '../utils/markdown.js';
 import { openImagePreview } from '../utils/imagePreview.js';
 import { formatSessionMessageDateTime, quoteFromAssistantTurn } from '../utils/session-message-quote.js';
 import {
@@ -340,20 +340,6 @@ export default {
     };
 
     // Markdown rendering
-    const configureMarked = () => {
-      if (typeof marked !== 'undefined') {
-        marked.setOptions({
-          highlight: function(code, lang) {
-            if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
-              try { return hljs.highlight(code, { language: lang }).value; } catch (e) {}
-            }
-            return code;
-          },
-          breaks: true,
-          gfm: true
-        });
-      }
-    };
     configureMarked();
 
     const renderSegment = (value) => {
