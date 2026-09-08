@@ -24,7 +24,7 @@ const zh = readFileSync(join(root, 'web/i18n/zh-CN.js'), 'utf8');
 
 describe('Agent settings surface', () => {
   it('keeps the original Agent brand trigger and moves settings to the list footer', () => {
-    expect(header).toContain("emits: ['open-agent-settings', 'restart-agent', 'upgrade-agent']");
+    expect(header).toContain("emits: ['open-agent-settings', 'restart-agent', 'upgrade-agent', 'upgrade-all-agents']");
     expect(header).toContain('class="sidebar-brand agent-dropdown-trigger"');
     expect(header).not.toContain('agent-settings-icon-btn');
     expect(header).toContain('class="agent-dropdown-list"');
@@ -48,6 +48,7 @@ describe('Agent settings surface', () => {
     expect(sidebarCss).toMatch(/\.agent-dropdown-item\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*8px minmax\(0, 1fr\) 50px 56px;[^}]*column-gap:\s*8px;/s);
     expect(sidebarCss).toMatch(/\.agent-dropdown-name\s*\{[^}]*min-width:\s*0;[^}]*font-size:\s*14px;[^}]*font-weight:\s*400;/s);
     expect(sidebarCss).toMatch(/\.agent-dropdown-meta\s*\{[^}]*display:\s*block;[^}]*min-width:\s*0;[^}]*text-align:\s*left;/s);
+    expect(sidebarCss).toMatch(/\.agent-dropdown-footer\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;/s);
     expect(sidebarCss).toMatch(/\.agent-dropdown-settings-option\s*\{[^}]*padding:\s*7px 10px 7px 26px;/s);
     expect(sidebarCss).toMatch(/\.agent-dropdown-actions\s*\{[^}]*justify-self:\s*end;[^}]*gap:\s*0;/s);
     expect(sidebarCss).toMatch(/\.agent-dropdown-action-btn\s*\{[^}]*width:\s*28px;[^}]*height:\s*28px;[^}]*flex-shrink:\s*0;/s);
@@ -80,6 +81,40 @@ describe('Agent settings surface', () => {
     wrapper.unmount();
   });
 
+  it('places a guarded bulk-upgrade action after Agent settings', async () => {
+    const wrapper = mount(SidebarAgentHeader, {
+      props: {
+        onlineAgents: [{ id: 'agent-a', name: 'Agent A', online: true }],
+        onlineAgentCount: 1,
+        canUpgradeAll: false,
+      },
+      global: { mocks: { $t: key => key } },
+    });
+
+    await wrapper.get('.agent-dropdown-trigger').trigger('click');
+    const footer = wrapper.get('.agent-dropdown-footer');
+    expect(footer.findAll('button').map(button => button.classes())).toEqual([
+      ['agent-dropdown-settings-option'],
+      ['agent-dropdown-settings-option', 'agent-dropdown-upgrade-all-option'],
+    ]);
+    const upgradeAll = footer.get('.agent-dropdown-upgrade-all-option');
+    expect(upgradeAll.attributes('disabled')).toBeDefined();
+    expect(upgradeAll.text()).toBe('Upgrade all');
+    await upgradeAll.trigger('click');
+    expect(wrapper.emitted('upgrade-all-agents')).toBeUndefined();
+
+    await wrapper.setProps({ canUpgradeAll: true });
+    expect(upgradeAll.attributes('disabled')).toBeUndefined();
+    await upgradeAll.trigger('click');
+    expect(wrapper.emitted('upgrade-all-agents')).toHaveLength(1);
+
+    await wrapper.setProps({ upgradingAll: true });
+    expect(upgradeAll.attributes('disabled')).toBeDefined();
+    expect(upgradeAll.text()).toBe('Upgrading all…');
+    expect(upgradeAll.find('.agent-dropdown-upgrade-all-spinner').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
   it('opens Agent settings from the bottom of the Agent list', async () => {
     const wrapper = mount(SidebarAgentHeader, {
       props: {
@@ -108,11 +143,15 @@ describe('Agent settings surface', () => {
     expect(chatPage).toContain('@open-agent-settings="openAgentSettings(store.currentAgent || null)"');
     expect(chatPage).toContain('@restart-agent="restartAgent"');
     expect(chatPage).toContain('@upgrade-agent="upgradeAgent"');
+    expect(chatPage).toContain('@upgrade-all-agents="upgradeAllAgents"');
+    expect(chatPage).toContain("window.addEventListener('agent-upgrade-batch-complete'");
     expect(yeaftPage).toContain('<AgentSettingsPanel v-if="showAgentSettings"');
     expect(yeaftSidebar).toContain(':online-agents="onlineAgents"');
     expect(yeaftSidebar).toContain('@open-agent-settings="$emit(\'open-agent-settings\')"');
     expect(yeaftSidebar).toContain('@restart-agent="restartAgent"');
     expect(yeaftSidebar).toContain('@upgrade-agent="upgradeAgent"');
+    expect(yeaftSidebar).toContain('@upgrade-all-agents="upgradeAllAgents"');
+    expect(yeaftSidebar).toContain("window.addEventListener('agent-upgrade-batch-complete'");
     expect(yeaftSidebar).not.toContain('pluginCenterOpen }"');
     expect(yeaftSidebar).toContain('class="sidebar-nav-item" :disabled="onlineAgents.length === 0" @click="onOpenPlugins"');
   });

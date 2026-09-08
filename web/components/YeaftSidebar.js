@@ -63,9 +63,12 @@ export default {
             :restarting-agents="restartingAgents"
             :upgrading-agents="upgradingAgents"
             :show-agent-actions="true"
+            :can-upgrade-all="bulkUpgradableAgents.length > 0"
+            :upgrading-all="!!chatStore?.agentUpgradeBatch?.pending"
             @open-agent-settings="$emit('open-agent-settings')"
             @restart-agent="restartAgent"
             @upgrade-agent="upgradeAgent"
+            @upgrade-all-agents="upgradeAllAgents"
           />
           <div class="sidebar-header-actions">
             <SidebarModeToggle v-if="!chatStore || !chatStore.sessionCatalogLoaded" view="yeaft" @flip="onModeFlip" />
@@ -263,7 +266,8 @@ export default {
       this.openGroupSettings({ id: pending.sessionId, agentId: pending.agentId }, pending.section || 'session');
     }
     this._agentUpgradeAckHandler = (event) => {
-      const { success, error, alreadyLatest, version, reason, currentNode, requiredNode } = event.detail || {};
+      const { success, error, alreadyLatest, version, reason, currentNode, requiredNode, batchId } = event.detail || {};
+      if (batchId) return;
       if (!success) {
         if (reason === 'node_incompatible') {
           alertDialog(this.$t('chat.agent.nodeIncompatible', {
@@ -282,10 +286,17 @@ export default {
         alertDialog(this.$t('chat.agent.alreadyLatest', { version: version || '' }));
       }
     };
-    if (typeof window !== 'undefined') window.addEventListener('agent-upgrade-ack', this._agentUpgradeAckHandler);
+    this._agentUpgradeBatchHandler = (event) => this.showAgentUpgradeBatchSummary(event.detail || {});
+    if (typeof window !== 'undefined') {
+      window.addEventListener('agent-upgrade-ack', this._agentUpgradeAckHandler);
+      window.addEventListener('agent-upgrade-batch-complete', this._agentUpgradeBatchHandler);
+    }
   },
   beforeUnmount() {
-    if (typeof window !== 'undefined') window.removeEventListener('agent-upgrade-ack', this._agentUpgradeAckHandler);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('agent-upgrade-ack', this._agentUpgradeAckHandler);
+      window.removeEventListener('agent-upgrade-batch-complete', this._agentUpgradeBatchHandler);
+    }
   },
   computed: {
     // Resolve the Pinia store lazily. Guarded so unit tests that mount
@@ -338,6 +349,10 @@ export default {
     },
     upgradingAgents() {
       return Object.fromEntries(Object.entries(this.chatStore?.agentOperations || {}).filter(([, value]) => value.upgrade?.pending));
+    },
+    bulkUpgradableAgents() {
+      const s = this.chatStore || this.store;
+      return typeof s?.getUpgradableAgents === 'function' ? s.getUpgradableAgents() : [];
     },
     chatStore() {
       // Needed for `sessionCrudRequest` and the Yeaft session pin menu.
@@ -452,6 +467,21 @@ export default {
       const name = agent?.name || agentId;
       if (!await confirmDialog(this.$t('chat.agent.upgradeConfirm', { name }))) return;
       s.upgradeAgent(agentId);
+    },
+    async upgradeAllAgents() {
+      const s = this.chatStore || this.store;
+      const candidates = this.bulkUpgradableAgents;
+      if (!s || candidates.length === 0) return;
+      const skipped = Math.max(0, (s.agents || []).length - candidates.length);
+      if (!await confirmDialog(this.$t('chat.agent.upgradeAllConfirm', { count: candidates.length, skipped }))) return;
+      s.upgradeAllAgents();
+    },
+    showAgentUpgradeBatchSummary(batch) {
+      const results = Object.values(batch?.results || {});
+      const upgraded = results.filter(result => result.status === 'upgraded').length;
+      const latest = results.filter(result => result.status === 'already_latest').length;
+      const failed = results.filter(result => result.status === 'failed').length;
+      alertDialog(this.$t('chat.agent.upgradeAllSummary', { upgraded, latest, failed, skipped: batch?.skippedCount || 0 }));
     },
     // task-334m: session-create + selection handlers.
     onGroupCreated(_group) {

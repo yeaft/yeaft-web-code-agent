@@ -65,9 +65,12 @@ export default {
               :restarting-agents="restartingAgents"
               :upgrading-agents="upgradingAgents"
               :show-agent-actions="true"
+              :can-upgrade-all="bulkUpgradableAgents.length > 0"
+              :upgrading-all="!!store.agentUpgradeBatch?.pending"
               @open-agent-settings="openAgentSettings(store.currentAgent || null)"
               @restart-agent="restartAgent"
               @upgrade-agent="upgradeAgent"
+              @upgrade-all-agents="upgradeAllAgents"
             />
             <div class="sidebar-header-actions">
               <SidebarModeToggle
@@ -531,6 +534,9 @@ export default {
     upgradingAgents() {
       return Object.fromEntries(Object.entries(this.store.agentOperations || {}).filter(([, value]) => value.upgrade?.pending));
     },
+    bulkUpgradableAgents() {
+      return typeof this.store.getUpgradableAgents === 'function' ? this.store.getUpgradableAgents() : [];
+    },
     providerOptions() {
       return [
         { value: 'claude-code', label: this.$t('provider.claudeCode') },
@@ -959,6 +965,20 @@ export default {
       if (!await confirmDialog(this.$t('chat.agent.upgradeConfirm', { name }))) return;
       this.store.upgradeAgent(agentId);
     },
+    async upgradeAllAgents() {
+      const candidates = this.bulkUpgradableAgents;
+      if (candidates.length === 0) return;
+      const skipped = Math.max(0, (this.store.agents || []).length - candidates.length);
+      if (!await confirmDialog(this.$t('chat.agent.upgradeAllConfirm', { count: candidates.length, skipped }))) return;
+      this.store.upgradeAllAgents();
+    },
+    showAgentUpgradeBatchSummary(batch) {
+      const results = Object.values(batch?.results || {});
+      const upgraded = results.filter(result => result.status === 'upgraded').length;
+      const latest = results.filter(result => result.status === 'already_latest').length;
+      const failed = results.filter(result => result.status === 'failed').length;
+      alertDialog(this.$t('chat.agent.upgradeAllSummary', { upgraded, latest, failed, skipped: batch?.skippedCount || 0 }));
+    },
     // Folder picker methods
     closeFolderPicker() {
       this.folderPickerOpen = false;
@@ -1128,7 +1148,8 @@ export default {
     fetch('/api/version').then(r => r.json()).then(d => { this.serverVersion = d.version; }).catch(() => {});
 
     this._agentUpgradeAckHandler = (event) => {
-      const { success, error, alreadyLatest, version, reason, currentNode, requiredNode } = event.detail || {};
+      const { success, error, alreadyLatest, version, reason, currentNode, requiredNode, batchId } = event.detail || {};
+      if (batchId) return;
       if (!success) {
         if (reason === 'node_incompatible') {
           alertDialog(this.$t('chat.agent.nodeIncompatible', {
@@ -1147,13 +1168,16 @@ export default {
         alertDialog(this.$t('chat.agent.alreadyLatest', { version: version || '' }));
       }
     };
+    this._agentUpgradeBatchHandler = (event) => this.showAgentUpgradeBatchSummary(event.detail || {});
     window.addEventListener('agent-upgrade-ack', this._agentUpgradeAckHandler);
+    window.addEventListener('agent-upgrade-batch-complete', this._agentUpgradeBatchHandler);
   },
   beforeUnmount() {
     document.removeEventListener('click', this._clickOutsideHandler);
     window.removeEventListener('resize', this.handleResize);
     window.removeEventListener('workbench-message', this.handleFolderPickerMessage);
     window.removeEventListener('agent-upgrade-ack', this._agentUpgradeAckHandler);
+    window.removeEventListener('agent-upgrade-batch-complete', this._agentUpgradeBatchHandler);
     if (this._folderPickerTimer) clearTimeout(this._folderPickerTimer);
   }
 };
