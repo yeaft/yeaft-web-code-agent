@@ -61,6 +61,7 @@
 .workbench-panel {
   width: 0;
   min-width: 0;
+  min-height: 0;
   background: var(--bg-workbench);
   border-left: 1px solid var(--border-color);
   display: flex;
@@ -158,8 +159,9 @@
 /* Workbench Content */
 .workbench-content {
   display: flex;
+  flex: 1;
   flex-direction: column;
-  height: 100%;
+  min-height: 0;
 }
 
 /* Workbench item navigation */

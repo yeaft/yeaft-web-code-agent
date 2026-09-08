@@ -1245,6 +1245,9 @@ describe('message file preview', () => {
     expect(yeaftPage.indexOf('<WorkbenchPanel')).toBeGreaterThan(yeaftPage.indexOf('<div class="yeaft-main"'));
     const yeaftCss = readWeb('styles/yeaft.css');
     expect(yeaftCss).toMatch(/\.yeaft-main\.workbench-maximized\s*\{[^}]*display:\s*none;/s);
+    expect(yeaftCss).toMatch(/\.yeaft-main\s*\{[^}]*min-height:\s*0;/s);
+    expect(workbenchCss).toMatch(/\.workbench-panel\s*\{[^}]*min-height:\s*0;/s);
+    expect(workbenchCss).toMatch(/\.workbench-content\s*\{[^}]*flex:\s*1;[^}]*min-height:\s*0;/s);
     expect(yeaftCss).not.toContain('.yeaft-main.workbench-maximized > .yeaft-main-center');
     expect(yeaftSidebar).not.toContain('@click="onToggleWorkbench"');
   });
