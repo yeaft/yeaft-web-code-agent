@@ -79,9 +79,6 @@ export default {
                 :disabled="onlineAgentCount === 0"
                 @flip="onModeFlip"
               />
-              <button class="sidebar-icon-btn sidebar-work-center-header-btn" :class="{ active: store.workCenterOpen }" :disabled="workCenterAgents.length === 0" @click="openWorkCenter()" :title="$t('workCenter.title')" :aria-label="$t('workCenter.title')">
-                <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path fill="currentColor" d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 5v2h10V8H7zm0 4v2h7v-2H7zm0 4v2h5v-2H7z"/></svg>
-              </button>
               <button class="sidebar-icon-btn" @click="onSidebarCollapse" :title="$t('chat.sidebar.collapse')">
                 <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h13v-2H3v2zm0-5h10v-2H3v2zm0-7v2h13V6H3zm18 9.59L17.42 12 21 8.41 19.59 7l-5 5 5 5L21 15.59z"/></svg>
               </button>
@@ -564,9 +561,6 @@ export default {
     onlineAgentCount() {
       return this.onlineAgents.length;
     },
-    workCenterAgents() {
-      return this.onlineAgents.filter(agent => Array.isArray(agent.capabilities) && agent.capabilities.includes('work_center'));
-    },
     isMobileView() {
       return this.windowWidth <= 768;
     },
@@ -658,12 +652,6 @@ export default {
         const message = result?.error?.message || result?.error?.code || 'unknown';
         await alertDialog(this.$t('sidebar.projects.assignFailed', { name: project.name, message }));
       }
-    },
-    openWorkCenter(agentId = null) {
-      const target = this.workCenterAgents.find(agent => agent.id === agentId)
-        || this.workCenterAgents.find(agent => agent.id === this.store.workCenterAgentId)
-        || this.workCenterAgents[0];
-      if (target) this.store.enterWorkCenter(target.id);
     },
     onUnifiedSessionAction({ action, row, title, sessions } = {}) {
       if (!row?.routeRef) return;

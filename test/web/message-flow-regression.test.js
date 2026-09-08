@@ -2684,7 +2684,7 @@ describe('message flow regressions', () => {
     expect(fallbackWorkCenter.get('.sidebar-work-center-trigger').attributes('disabled')).toBeDefined();
     expect(fallbackWorkCenter.get('.sidebar-work-center-icon path').attributes('d'))
       .toBe('M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 5v2h10V8H7zm0 4v2h7v-2H7zm0 4v2h5v-2H7z');
-    expect(component).toContain('M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 5v2h10V8H7zm0 4v2h7v-2H7zm0 4v2h5v-2H7z');
+    expect(component).not.toContain('M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 5v2h10V8H7zm0 4v2h7v-2H7zm0 4v2h5v-2H7z');
     await fallbackWorkCenter.get('.sidebar-work-center-trigger').trigger('click');
     expect(fallbackWorkCenter.emitted('open')).toBeUndefined();
     fallbackWorkCenter.unmount();
@@ -2818,8 +2818,7 @@ describe('message flow regressions', () => {
       runtimeProvider: 'copilot',
       routeRef: { runtimeProvider: 'copilot', agentId: 'agent-a', sessionId: 'legacy-chat' },
     }));
-    await chatPage.get('.sidebar-work-center-header-btn').trigger('click');
-    expect(parentStore.enterWorkCenter).toHaveBeenCalledWith('agent-a');
+    expect(chatPage.find('.sidebar-work-center-header-btn').exists()).toBe(false);
     chatPage.unmount();
 
     parentStore.currentView = 'yeaft';
@@ -2899,17 +2898,19 @@ describe('message flow regressions', () => {
     expect(chatPageSource).toContain('@create="onUnifiedCreate"');
     expect(chatPageSource).toContain('@create-in-project="onUnifiedCreateInProject"');
     expect(chatPageSource).not.toContain('</template>\n      </main>');
-    expect(chatPageSource).toContain('sidebar-work-center-header-btn');
+    expect(chatPageSource).not.toContain('sidebar-work-center-header-btn');
+    expect(chatPageSource).not.toContain('workCenterAgents');
+    expect(chatPageSource).not.toContain('openWorkCenter');
     expect(yeaftSidebarSource).toContain(':is-session-unread="isCatalogSessionUnread"');
     expect(chatPageSource).toContain('@action="onUnifiedSessionAction"');
     expect(yeaftSidebarSource).toContain('@action="onUnifiedSessionAction"');
     expect(yeaftSidebarSource).toContain('@create="onUnifiedCreate"');
     expect(yeaftSidebarSource).toContain('@create-in-project="onUnifiedCreateInProject"');
-    expect(yeaftSidebarSource).toContain('sidebar-work-center-header-btn');
+    expect(yeaftSidebarSource).not.toContain('sidebar-work-center-header-btn');
     const workItemIconPath = 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 5v2h10V8H7zm0 4v2h7v-2H7zm0 4v2h5v-2H7z';
-    expect(component).toContain(workItemIconPath);
-    expect(chatPageSource).toContain(workItemIconPath);
-    expect(yeaftSidebarSource).toContain(workItemIconPath);
+    expect(component).not.toContain(workItemIconPath);
+    expect(chatPageSource).not.toContain(workItemIconPath);
+    expect(yeaftSidebarSource).not.toContain(workItemIconPath);
     expect(chatPageSource).toContain(':project-store="store"');
     expect(chatPageSource).toContain(':active-route="store.activeSessionRoute"');
     expect(yeaftSidebarSource).toContain(':project-store="chatStore"');

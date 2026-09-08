@@ -697,24 +697,6 @@
   height: 16px;
 }
 
-.sidebar-work-center-header-btn {
-  width: 36px;
-  height: 36px;
-  margin-right: 2px;
-  color: var(--text-primary);
-}
-
-.sidebar-work-center-header-btn:hover:not(:disabled),
-.sidebar-work-center-header-btn.active {
-  background: var(--session-active);
-  color: var(--accent-blue);
-}
-
-.sidebar-work-center-header-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
 .sidebar-session-results {
   flex: 1 1 auto;
   min-height: 0;
