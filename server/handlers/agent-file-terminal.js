@@ -26,6 +26,7 @@ import {
 } from '../workbench-correlation.js';
 import { appendFileContentChunk, discardFileContentAssembly } from '../file-content-assembly.js';
 import { cachePreviewFile, MAX_PREVIEW_FILE_BYTES } from '../preview-files.js';
+import { createWorkbenchPreview } from '../workbench-preview.js';
 
 function stripAgentRouting(msg) {
   const {
@@ -52,6 +53,10 @@ function pendingResponse(agentId, msg, pending) {
 }
 
 async function sendToPendingClient(agentId, msg, pending) {
+  if (pending?.onResponse) {
+    await pending.onResponse(msg);
+    return true;
+  }
   const client = webClients.get(pending?.clientId);
   if (!client?.authenticated || client.userId !== pending?.userId) return false;
   await sendToWebClient(client, pendingResponse(agentId, msg, pending));
@@ -93,7 +98,7 @@ async function forwardLegacyResponse(agentId, msg) {
   }
 }
 
-function cacheBinaryPreview(msg, suppliedBuffer = null) {
+function cacheBinaryPreview(msg, suppliedBuffer = null, pending = null) {
   const buffer = suppliedBuffer || Buffer.from(msg.content || '', 'base64');
   if (buffer.length > MAX_PREVIEW_FILE_BYTES) return {
     ...msg,
@@ -104,7 +109,8 @@ function cacheBinaryPreview(msg, suppliedBuffer = null) {
     errorDetails: { sizeBytes: buffer.length, limitBytes: MAX_PREVIEW_FILE_BYTES },
   };
   const fileId = randomUUID();
-  const token = randomUUID();
+  const stableToken = createWorkbenchPreview(fileId, pending, msg.filePath);
+  const token = stableToken || randomUUID();
   const filename = msg.filePath.split('/').pop() || 'file';
   if (!cachePreviewFile(fileId, {
     buffer,
@@ -112,7 +118,7 @@ function cacheBinaryPreview(msg, suppliedBuffer = null) {
     filename,
     createdAt: Date.now(),
     token,
-  })) return {
+  }) && !stableToken) return {
     ...msg,
     binary: false,
     content: '',
@@ -216,6 +222,7 @@ async function handleFileContentChunk(agentId, agent, msg, routeKey) {
   });
   if (!pending || pending.requestType !== 'read_file') return;
   if (!hasCurrentWorkspaceGeneration(pending)) {
+    await pending.onResponse?.({ error: 'Preview workspace is no longer available' });
     discardFileContentAssembly(agentId, msg._workbenchRequestId);
     consumeWorkbenchRequest({
       agentId,
@@ -259,7 +266,9 @@ async function handleFileContentChunk(agentId, agent, msg, routeKey) {
   delete completed.chunkIndex;
   delete completed.chunkCount;
   delete completed.totalBytes;
-  await sendToPendingClient(agentId, cacheBinaryPreview(completed, result.buffer), consumed);
+  await sendToPendingClient(agentId, consumed.onResponse
+    ? { ...completed, buffer: result.buffer }
+    : cacheBinaryPreview(completed, result.buffer, consumed), consumed);
 }
 
 async function handleOneShotResponse(agentId, agent, msg, routeKey) {
@@ -273,10 +282,12 @@ async function handleOneShotResponse(agentId, agent, msg, routeKey) {
     userId: pending.userId,
     role: pending.role,
   });
-  if (currentGeneration === null) return;
-  if (currentGeneration && currentGeneration !== pending.workspaceGeneration) return;
-  const projected = msg.type === 'file_content' && msg.binary
-    ? cacheBinaryPreview(msg)
+  if (currentGeneration === null || (currentGeneration && currentGeneration !== pending.workspaceGeneration)) {
+    await pending.onResponse?.({ error: 'Preview workspace is no longer available' });
+    return;
+  }
+  const projected = msg.type === 'file_content' && msg.binary && !pending.onResponse
+    ? cacheBinaryPreview(msg, null, pending)
     : msg;
   await sendToPendingClient(agentId, projected, pending);
 }

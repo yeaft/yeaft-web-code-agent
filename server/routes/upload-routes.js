@@ -5,6 +5,7 @@ import { userDb } from '../database.js';
 import { pendingFiles, previewFiles } from '../context.js';
 import { PREVIEW_FILE_TTL_MS, prunePreviewFiles } from '../preview-files.js';
 import { yeaftAssetStore } from '../yeaft-asset-store.js';
+import { readWorkbenchPreview } from '../workbench-preview.js';
 
 // 文件上传配置 (存储在内存中)
 const upload = multer({
@@ -78,8 +79,16 @@ export function registerUploadRoutes(app, { requireAuth }) {
     res.json({ files: uploaded });
   });
 
-  app.get('/api/preview/:fileId', (req, res) => {
-    const file = previewFiles.get(req.params.fileId);
+  app.get('/api/preview/:fileId', async (req, res) => {
+    let file;
+    try {
+      file = typeof req.query.token === 'string' && req.query.token.startsWith('wb1.')
+        ? await readWorkbenchPreview(req.params.fileId, req.query.token)
+        : previewFiles.get(req.params.fileId);
+    } catch (error) {
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(error.status || 502).send(error.status ? error.message : 'Preview read failed');
+    }
     if (!file) return res.status(404).send('File not found or expired');
     if (file.token && req.query.token !== file.token) {
       return res.status(403).send('Forbidden');
