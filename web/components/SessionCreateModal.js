@@ -1012,8 +1012,9 @@ export default {
     },
     selectFolder(path) { this.form.workDir = path; },
     /**
-     * Current manifest Sessions resume directly, even when hidden from the
-     * sidebar. Only workDir-local legacy rows require the import operation.
+     * Current manifest Sessions resume directly. If catalog metadata hides the
+     * exact Agent + Session row, selecting it also restores sidebar visibility.
+     * Only workDir-local legacy rows require the import operation.
      */
     selectSession(session) {
       if (!session || !session.id) return;
@@ -1040,6 +1041,15 @@ export default {
       if (!session || !session.id) return;
       const chat = this.chat;
       const owner = session.agentId || this.form.agentId || null;
+      const hiddenRow = (chat?.hiddenSessionCatalog || []).find(row => (
+        row?.runtimeProvider === 'yeaft'
+        && row?.routeRef?.agentId === owner
+        && row?.routeRef?.sessionId === session.id
+      ));
+      if (hiddenRow && chat?.restoreCatalogSession?.(hiddenRow) !== true) {
+        this.restoreError = this.$t('yeaft.restore.modal.restoreError', { message: 'catalog unavailable' });
+        return;
+      }
       // 1. Cross-agent route — if the session belongs to a different
       //    agent than the one currently selected, switch first so any
       //    subsequent CRUD/messaging hits the owning agent. Mirrors
@@ -1058,6 +1068,7 @@ export default {
       if (chat && typeof chat.setActiveSessionFilter === 'function') {
         chat.setActiveSessionFilter(session.id, { agentId: owner, force: true });
       }
+      this.$emit('created', { ...session, ...(owner ? { agentId: owner } : {}) });
       this.$emit('close');
     },
     // Outside-click handler for the collapsible VP roster popup.
