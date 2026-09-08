@@ -710,6 +710,7 @@ describe('agent capability advertisement', () => {
       'workbench_session_routes',
       'workbench_request_correlation',
       'workbench_terminal_cleanup_fence',
+      'workbench_file_content_chunks',
       'yeaft_plugins',
     ]) {
       expect(source).toContain(`'${capability}'`);
@@ -728,14 +729,20 @@ describe('agent received `registered` flips serverEncryptionRequired', () => {
       pendingAuthTempId: ctx.pendingAuthTempId,
       CONFIG: ctx.CONFIG,
       agentCapabilities: ctx.agentCapabilities,
+      serverCapabilities: ctx.serverCapabilities,
       outboundSendQueue: ctx.outboundSendQueue,
       outboundSendQueueActive: ctx.outboundSendQueueActive,
     };
     try {
       resetConnectionTransport();
       expect(ctx.serverEncryptionRequired).toBe(true);
-      applyRegisteredTransport({ type: 'registered', acceptPlaintext: true });
+      applyRegisteredTransport({
+        type: 'registered',
+        acceptPlaintext: true,
+        serverCapabilities: ['workbench_file_content_chunks'],
+      });
       expect(ctx.serverEncryptionRequired).toBe(false);
+      expect(ctx.serverCapabilities.has('workbench_file_content_chunks')).toBe(true);
 
       const legacyKey = generateSessionKey();
       class ConnectSocket extends MockWebSocket {

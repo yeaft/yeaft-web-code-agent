@@ -7,6 +7,55 @@ import { resolveAndValidatePath, BINARY_EXTENSIONS } from './utils.js';
 import { sendWorkbenchResult } from './request-routing.js';
 
 export const MAX_WORKBENCH_PREVIEW_BYTES = 20 * 1024 * 1024;
+export const WORKBENCH_FILE_CHUNK_BYTES = 1024 * 1024;
+
+async function reportFileTransferDropped(msg, base) {
+  const errorResult = {
+    ...base,
+    type: 'file_content',
+    content: '',
+    binary: false,
+    error: 'File transfer was dropped before it could be delivered.',
+    errorCode: 'FILE_TRANSFER_DROPPED',
+  };
+  return sendWorkbenchResult(ctx, msg, errorResult);
+}
+
+async function sendBinaryFile(msg, base, buffer, mimeType) {
+  const supportsChunks = ctx.serverCapabilities?.has?.('workbench_file_content_chunks')
+    && ctx.agentCapabilities?.includes?.('workbench_file_content_chunks')
+    && msg._workbenchRequestId;
+  if (!supportsChunks || buffer.length <= WORKBENCH_FILE_CHUNK_BYTES) {
+    const outcome = await sendWorkbenchResult(ctx, msg, {
+      ...base,
+      type: 'file_content',
+      content: buffer.toString('base64'),
+      binary: true,
+      mimeType,
+    });
+    if (outcome === 'dropped') await reportFileTransferDropped(msg, base);
+    return;
+  }
+
+  const chunkCount = Math.ceil(buffer.length / WORKBENCH_FILE_CHUNK_BYTES);
+  for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+    const start = chunkIndex * WORKBENCH_FILE_CHUNK_BYTES;
+    const outcome = await sendWorkbenchResult(ctx, msg, {
+      ...base,
+      type: 'file_content_chunk',
+      binary: true,
+      mimeType,
+      chunkIndex,
+      chunkCount,
+      totalBytes: buffer.length,
+      content: buffer.subarray(start, start + WORKBENCH_FILE_CHUNK_BYTES).toString('base64'),
+    });
+    if (outcome === 'dropped') {
+      await reportFileTransferDropped(msg, base);
+      return;
+    }
+  }
+}
 
 export async function handleReadFile(msg) {
   const { conversationId, filePath, requestId, _requestUserId, _requestClientId } = msg;
@@ -21,8 +70,8 @@ export async function handleReadFile(msg) {
 
     if (mimeType) {
       const fileStat = await stat(resolved);
-      if (!msg.download && fileStat.size > MAX_WORKBENCH_PREVIEW_BYTES) {
-        const error = new Error(`File is too large to preview (${(fileStat.size / 1024 / 1024).toFixed(1)} MB). The preview limit is 20 MB.`);
+      if (fileStat.size > MAX_WORKBENCH_PREVIEW_BYTES) {
+        const error = new Error(`File is too large to transfer (${(fileStat.size / 1024 / 1024).toFixed(1)} MB). The file limit is 20 MB.`);
         error.code = 'FILE_PREVIEW_TOO_LARGE';
         error.details = {
           sizeBytes: fileStat.size,
@@ -30,22 +79,16 @@ export async function handleReadFile(msg) {
         };
         throw error;
       }
-      // Binary file: read as Buffer, send base64. Downloads bypass only the
-      // rendering limit; the WebSocket transport still enforces its own cap.
       const buffer = await readFile(resolved);
       console.log('[Agent] Sending binary file_content:', { filePath: resolved, size: buffer.length, mimeType, conversationId });
-      sendWorkbenchResult(ctx, msg, {
-        type: 'file_content',
+      await sendBinaryFile(msg, {
         conversationId,
         requestId,
         _requestUserId,
         _requestClientId,
         filePath: resolved,
         requestedFilePath: filePath,
-        content: buffer.toString('base64'),
-        binary: true,
-        mimeType
-      });
+      }, buffer, mimeType);
     } else {
       // Text file: read as utf-8
       const content = await readFile(resolved, 'utf-8');

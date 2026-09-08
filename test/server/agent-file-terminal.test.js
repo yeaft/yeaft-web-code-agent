@@ -6,6 +6,7 @@ import * as Vue from 'vue';
 import { createWsHandler } from '../../web/components/files/wsHandler.js';
 import { createFileTabs } from '../../web/components/files/fileTabs.js';
 import { createFilePreview } from '../../web/components/files/filePreview.js';
+import { updateImagePreviewState } from '../../web/components/FilesTab.js';
 import { resolveDialog, useDialogState } from '../../web/utils/dialog.js';
 import ctx from '../../agent/context.js';
 import { CONFIG } from '../../server/config.js';
@@ -65,6 +66,7 @@ const {
   __testResetWorkbenchCorrelations,
   getWorkbenchTerminalOwner,
 } = await import('../../server/workbench-correlation.js');
+const { __testResetFileContentAssemblies } = await import('../../server/file-content-assembly.js');
 const {
   workbenchRouteKey,
   workbenchWorkspaceGeneration,
@@ -229,6 +231,7 @@ describe('Agent file terminal forwarding', () => {
     sendToWebClient.mockClear();
     sendToAgent.mockClear();
     __testResetWorkbenchCorrelations();
+    __testResetFileContentAssemblies();
     agents.clear();
     previewFiles.clear();
     userFileTabs.clear();
@@ -1319,7 +1322,7 @@ describe('Agent file terminal forwarding', () => {
         requestId: 'preview-large',
         requestedFilePath: 'large.png',
         errorCode: 'FILE_PREVIEW_TOO_LARGE',
-        error: expect.stringContaining('preview limit is 20 MB'),
+        error: expect.stringContaining('file limit is 20 MB'),
         errorDetails: {
           sizeBytes: MAX_WORKBENCH_PREVIEW_BYTES + 1,
           limitBytes: MAX_WORKBENCH_PREVIEW_BYTES,
@@ -1329,6 +1332,144 @@ describe('Agent file terminal forwarding', () => {
     } finally {
       ctx.CONFIG = previousConfig;
       ctx.sendToServer = previousSend;
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts exactly 20 MB and sends it as twenty bounded chunks', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'yeaft-file-limit-'));
+    const imagePath = join(workDir, 'limit.png');
+    const chunks = [];
+    const previousConfig = ctx.CONFIG;
+    const previousSend = ctx.sendToServer;
+    const previousAgentCapabilities = ctx.agentCapabilities;
+    const previousServerCapabilities = ctx.serverCapabilities;
+    writeFileSync(imagePath, Buffer.alloc(1));
+    truncateSync(imagePath, MAX_WORKBENCH_PREVIEW_BYTES);
+    ctx.CONFIG = { workDir };
+    ctx.agentCapabilities = ['workbench_file_content_chunks'];
+    ctx.serverCapabilities = new Set(['workbench_file_content_chunks']);
+    ctx.sendToServer = async msg => {
+      chunks.push({
+        type: msg.type,
+        chunkIndex: msg.chunkIndex,
+        chunkCount: msg.chunkCount,
+        totalBytes: msg.totalBytes,
+        decodedBytes: Buffer.byteLength(msg.content, 'base64'),
+      });
+      return 'sent';
+    };
+    try {
+      await handleReadFile({
+        conversationId: '_explorer',
+        requestId: 'preview-limit',
+        _workbenchRequestId: 'internal-limit',
+        workbenchRouteKey: 'route-key',
+        workbenchWorkspaceGeneration: 'generation-1',
+        workDir,
+        filePath: 'limit.png',
+      });
+      expect(chunks).toHaveLength(20);
+      expect(chunks.map(chunk => chunk.chunkIndex)).toEqual(Array.from({ length: 20 }, (_, index) => index));
+      expect(chunks.every(chunk => chunk.type === 'file_content_chunk')).toBe(true);
+      expect(chunks.every(chunk => chunk.chunkCount === 20)).toBe(true);
+      expect(chunks.every(chunk => chunk.totalBytes === MAX_WORKBENCH_PREVIEW_BYTES)).toBe(true);
+      expect(chunks.every(chunk => chunk.decodedBytes === 1024 * 1024)).toBe(true);
+    } finally {
+      ctx.CONFIG = previousConfig;
+      ctx.sendToServer = previousSend;
+      ctx.agentCapabilities = previousAgentCapabilities;
+      ctx.serverCapabilities = previousServerCapabilities;
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('chunks correlated binary files after Agent and Server capability negotiation', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'yeaft-file-chunks-'));
+    const imagePath = join(workDir, 'large.png');
+    const image = Buffer.alloc(1024 * 1024 + 17, 0x5a);
+    const sent = [];
+    const previousConfig = ctx.CONFIG;
+    const previousSend = ctx.sendToServer;
+    const previousAgentCapabilities = ctx.agentCapabilities;
+    const previousServerCapabilities = ctx.serverCapabilities;
+    writeFileSync(imagePath, image);
+    ctx.CONFIG = { workDir };
+    ctx.agentCapabilities = ['workbench_file_content_chunks'];
+    ctx.serverCapabilities = new Set(['workbench_file_content_chunks']);
+    ctx.sendToServer = async msg => {
+      sent.push(msg);
+      return 'sent';
+    };
+    try {
+      await handleReadFile({
+        conversationId: '_explorer',
+        requestId: 'preview-chunked',
+        _workbenchRequestId: 'internal-chunked',
+        workbenchRouteKey: 'route-key',
+        workbenchWorkspaceGeneration: 'generation-1',
+        workDir,
+        filePath: 'large.png',
+      });
+      expect(sent).toHaveLength(2);
+      expect(sent.map(message => message.type)).toEqual([
+        'file_content_chunk',
+        'file_content_chunk',
+      ]);
+      expect(sent.map(message => message.chunkIndex)).toEqual([0, 1]);
+      expect(sent.every(message => message.chunkCount === 2)).toBe(true);
+      expect(sent.every(message => message.totalBytes === image.length)).toBe(true);
+      expect(Buffer.from(sent[0].content, 'base64')).toEqual(image.subarray(0, 1024 * 1024));
+      expect(Buffer.from(sent[1].content, 'base64')).toEqual(image.subarray(1024 * 1024));
+      expect(sent.every(message => message._workbenchRequestId === 'internal-chunked')).toBe(true);
+      expect(sent.every(message => message.workbenchRouteKey === 'route-key')).toBe(true);
+      expect(sent.every(message => message.workbenchWorkspaceGeneration === 'generation-1')).toBe(true);
+    } finally {
+      ctx.CONFIG = previousConfig;
+      ctx.sendToServer = previousSend;
+      ctx.agentCapabilities = previousAgentCapabilities;
+      ctx.serverCapabilities = previousServerCapabilities;
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports an explicit transfer error when a legacy single-frame response is dropped', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'yeaft-file-legacy-drop-'));
+    const imagePath = join(workDir, 'large.png');
+    const sent = [];
+    const previousConfig = ctx.CONFIG;
+    const previousSend = ctx.sendToServer;
+    const previousAgentCapabilities = ctx.agentCapabilities;
+    const previousServerCapabilities = ctx.serverCapabilities;
+    writeFileSync(imagePath, Buffer.alloc(1024 * 1024 + 1, 0x31));
+    ctx.CONFIG = { workDir };
+    ctx.agentCapabilities = ['workbench_file_content_chunks'];
+    ctx.serverCapabilities = new Set();
+    ctx.sendToServer = async msg => {
+      sent.push(msg);
+      return sent.length === 1 ? 'dropped' : 'sent';
+    };
+    try {
+      await handleReadFile({
+        conversationId: '_explorer',
+        requestId: 'preview-legacy-drop',
+        _workbenchRequestId: 'internal-legacy-drop',
+        workDir,
+        filePath: 'large.png',
+      });
+      expect(sent).toHaveLength(2);
+      expect(sent[0]).toMatchObject({ type: 'file_content', binary: true });
+      expect(sent[1]).toMatchObject({
+        type: 'file_content',
+        binary: false,
+        errorCode: 'FILE_TRANSFER_DROPPED',
+      });
+      expect(sent[1].content).toBe('');
+    } finally {
+      ctx.CONFIG = previousConfig;
+      ctx.sendToServer = previousSend;
+      ctx.agentCapabilities = previousAgentCapabilities;
+      ctx.serverCapabilities = previousServerCapabilities;
       rmSync(workDir, { recursive: true, force: true });
     }
   });
@@ -2299,6 +2440,102 @@ describe('Agent file terminal forwarding', () => {
     expect(sendToWebClient).not.toHaveBeenCalled();
   });
 
+  it('reassembles correlated binary chunks into a token-protected HTTP preview', async () => {
+    const { outbound, client } = await registerRouteRequest({
+      type: 'read_file',
+      requestId: 'chunked-file-request',
+      extra: { filePath: 'docs/large.png' },
+    });
+    const first = Buffer.alloc(1024 * 1024, 0x61);
+    const second = Buffer.from('tail');
+    const common = {
+      conversationId: outbound.conversationId,
+      _workbenchRequestId: outbound._workbenchRequestId,
+      workbenchRouteKey: outbound.workbenchRouteKey,
+      workbenchWorkspaceGeneration: outbound.workbenchWorkspaceGeneration,
+      filePath: '/workspace/docs/large.png',
+      requestedFilePath: 'docs/large.png',
+      binary: true,
+      mimeType: 'image/png',
+      chunkCount: 2,
+      totalBytes: first.length + second.length,
+    };
+    sendToWebClient.mockClear();
+    await handleAgentFileTerminal('agent-1', {}, {
+      ...common,
+      type: 'file_content_chunk',
+      chunkIndex: 0,
+      content: first.toString('base64'),
+    });
+    expect(sendToWebClient).not.toHaveBeenCalled();
+
+    await handleAgentFileTerminal('agent-1', {}, {
+      ...common,
+      type: 'file_content_chunk',
+      chunkIndex: 1,
+      content: second.toString('base64'),
+    });
+
+    expect(sendToWebClient).toHaveBeenCalledOnce();
+    expect(sendToWebClient.mock.calls[0][0]).toBe(client);
+    const forwarded = sendToWebClient.mock.calls[0][1];
+    expect(forwarded).toMatchObject({
+      type: 'file_content',
+      requestId: 'chunked-file-request',
+      requestedFilePath: 'docs/large.png',
+      binary: true,
+      mimeType: 'image/png',
+      previewUrl: expect.stringMatching(/^\/api\/preview\//),
+    });
+    expect(forwarded).not.toHaveProperty('content');
+    expect(previewFiles.get(forwarded.fileId)?.buffer).toEqual(Buffer.concat([first, second]));
+    expect(forwarded.previewUrl).toContain(`token=${forwarded.previewToken}`);
+  });
+
+  it('fails closed and consumes the correlation when binary chunks arrive out of order', async () => {
+    const { outbound } = await registerRouteRequest({
+      type: 'read_file',
+      requestId: 'invalid-chunk-request',
+      extra: { filePath: 'docs/broken.png' },
+    });
+    const common = {
+      conversationId: outbound.conversationId,
+      _workbenchRequestId: outbound._workbenchRequestId,
+      workbenchRouteKey: outbound.workbenchRouteKey,
+      workbenchWorkspaceGeneration: outbound.workbenchWorkspaceGeneration,
+      filePath: '/workspace/docs/broken.png',
+      requestedFilePath: 'docs/broken.png',
+      binary: true,
+      mimeType: 'image/png',
+      chunkCount: 2,
+      totalBytes: 1024 * 1024 + 1,
+    };
+    sendToWebClient.mockClear();
+    await handleAgentFileTerminal('agent-1', {}, {
+      ...common,
+      type: 'file_content_chunk',
+      chunkIndex: 1,
+      content: Buffer.from('x').toString('base64'),
+    });
+    expect(sendToWebClient).toHaveBeenCalledOnce();
+    expect(sendToWebClient.mock.calls[0][1]).toMatchObject({
+      type: 'file_content',
+      requestId: 'invalid-chunk-request',
+      binary: false,
+      errorCode: 'FILE_TRANSFER_INVALID',
+    });
+    expect(previewFiles.size).toBe(0);
+
+    sendToWebClient.mockClear();
+    await handleAgentFileTerminal('agent-1', {}, {
+      ...common,
+      type: 'file_content_chunk',
+      chunkIndex: 0,
+      content: Buffer.alloc(1024 * 1024).toString('base64'),
+    });
+    expect(sendToWebClient).not.toHaveBeenCalled();
+  });
+
   it('preserves the requested path when projecting a correlated binary file response', async () => {
     const { outbound, client } = await registerRouteRequest({
       type: 'read_file',
@@ -2383,7 +2620,6 @@ describe('Agent file terminal forwarding', () => {
         : key,
     }).handleWorkbenchMessage;
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, blob: async () => new Blob(['image']) });
-    const createObjectUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:preview');
 
     handle(new CustomEvent('workbench-message', { detail: { ...forwarded, agentId: 'agent-2' } }));
     handle(new CustomEvent('workbench-message', { detail: { ...forwarded, conversationId: 'session-2' } }));
@@ -2392,12 +2628,31 @@ describe('Agent file terminal forwarding', () => {
     expect(relativeTab.previewLoading).toBe(true);
 
     handle(new CustomEvent('workbench-message', { detail: forwarded }));
-    await vi.waitFor(() => expect(relativeTab.blobUrl).toBe('blob:preview'));
-    expect(relativeTab.previewLoading).toBe(false);
+    expect(relativeTab.blobUrl).toBe(`https://yeaft.test${forwarded.previewUrl}`);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(relativeTab.previewLoading).toBe(true);
     expect(wrongOwnerTab.blobUrl).toBeNull();
     expect(wrongOwnerTab.previewLoading).toBe(true);
+
+    expect(updateImagePreviewState(relativeTab, {
+      currentTarget: { src: relativeTab.blobUrl },
+    })).toBe(true);
+    expect(relativeTab.previewLoading).toBe(false);
+    expect(relativeTab.previewError).toBeNull();
+
+    relativeTab.blobUrl = 'https://yeaft.test/api/preview/new?token=new';
+    relativeTab.previewLoading = true;
+    expect(updateImagePreviewState(relativeTab, {
+      currentTarget: { src: `https://yeaft.test${forwarded.previewUrl}` },
+    }, 'stale failure')).toBe(false);
+    expect(relativeTab.previewLoading).toBe(true);
+    expect(relativeTab.previewError).toBeNull();
+    expect(updateImagePreviewState(relativeTab, {
+      currentTarget: { src: relativeTab.blobUrl },
+    }, 'preview failed')).toBe(true);
+    expect(relativeTab.previewLoading).toBe(false);
+    expect(relativeTab.previewError).toBe('preview failed');
     fetchSpy.mockRestore();
-    createObjectUrl.mockRestore();
   });
 
   it('keeps a local Office preview loading until its fetch and render complete', async () => {

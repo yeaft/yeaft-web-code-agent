@@ -3,6 +3,7 @@ import multer from 'multer';
 import { CONFIG } from '../config.js';
 import { userDb } from '../database.js';
 import { pendingFiles, previewFiles } from '../context.js';
+import { PREVIEW_FILE_TTL_MS, prunePreviewFiles } from '../preview-files.js';
 import { yeaftAssetStore } from '../yeaft-asset-store.js';
 
 // 文件上传配置 (存储在内存中)
@@ -41,13 +42,8 @@ setInterval(() => {
   }
 }, 60 * 1000);
 
-// Cleanup expired preview files every 60s (10 min TTL)
-setInterval(() => {
-  const cutoff = Date.now() - 10 * 60 * 1000;
-  for (const [id, f] of previewFiles) {
-    if (f.createdAt < cutoff) previewFiles.delete(id);
-  }
-}, 60 * 1000);
+// Cleanup expired preview files every 60s.
+setInterval(() => prunePreviewFiles(), Math.min(60 * 1000, PREVIEW_FILE_TTL_MS));
 
 /**
  * Register file upload and preview routes.

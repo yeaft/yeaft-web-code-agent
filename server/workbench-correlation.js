@@ -162,6 +162,15 @@ function consumePending(key, pending) {
   return pending;
 }
 
+export function peekWorkbenchRequest({ agentId, requestId, responseType, routeKey = null }) {
+  if (!agentId || !requestId || !responseType) return null;
+  prune();
+  const pending = pendingRequests.get(requestKey(agentId, requestId));
+  if (!pending || !pending.expectedResponseTypes.has(responseType)) return null;
+  if (routeKey && pending.routeKey !== routeKey) return null;
+  return pending;
+}
+
 export function consumeWorkbenchRequest({ agentId, requestId, responseType, routeKey = null }) {
   if (!agentId || !requestId || !responseType) return null;
   prune();

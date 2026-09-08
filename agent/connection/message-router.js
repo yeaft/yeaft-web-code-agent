@@ -82,6 +82,7 @@ export async function applyLlmConfigUpdate(msg, dependencies = {}) {
 }
 
 export function applyRegisteredTransport(msg) {
+  ctx.serverCapabilities = new Set(Array.isArray(msg.serverCapabilities) ? msg.serverCapabilities : []);
   if (msg.sessionKey) {
     ctx.sessionKey = decodeKey(msg.sessionKey);
     console.log('Encryption enabled');

@@ -20,6 +20,7 @@ export default {
   CONFIG: null,
   managedCliReady: Promise.resolve([]),
   agentCapabilities: [],
+  serverCapabilities: new Set(),
   browserRuntime: null,
   // Agent 级别的 slash commands 缓存（所有 conversation 共用）
   slashCommands: [],

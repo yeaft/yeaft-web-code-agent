@@ -9,7 +9,7 @@ export function workbenchRequestRouting(source) {
 }
 
 export function sendWorkbenchResult(ctx, request, result) {
-  ctx.sendToServer({
+  return ctx.sendToServer({
     ...result,
     ...workbenchRequestRouting(request),
   });

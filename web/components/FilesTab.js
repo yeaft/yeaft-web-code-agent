@@ -14,6 +14,19 @@ import {
   workbenchWorkspaceGeneration,
 } from '../utils/workbench-route.js';
 
+export function updateImagePreviewState(file, event, errorMessage = '') {
+  const eventSrc = event?.currentTarget?.src || event?.target?.src;
+  if (!file?.blobUrl || !eventSrc) return false;
+  let expectedSrc = file.blobUrl;
+  try {
+    expectedSrc = new URL(file.blobUrl, `${location.protocol}//${location.host}`).href;
+  } catch {}
+  if (eventSrc !== expectedSrc) return false;
+  file.previewLoading = false;
+  file.previewError = errorMessage || null;
+  return true;
+}
+
 export function createFileCloseEventHandlers({ liveStore, props, tabs, isDisposed }) {
   const isCurrentEvent = event => (
     event.detail?.routeKey === props.routeKey
@@ -372,8 +385,17 @@ export default {
           <!-- 图片预览 -->
           <div v-else-if="activeFile.fileType === 'image'" class="file-preview-container">
             <div v-if="activeFile.previewError" class="preview-error">{{ activeFile.previewError }}</div>
-            <div v-else-if="activeFile.previewLoading || !activeFile.blobUrl" class="preview-loading"><span class="spinner-mini"></span> {{ $t('files.loadingPreview') }}</div>
-            <img v-else :src="activeFile.blobUrl" class="file-preview-image" />
+            <template v-else>
+              <div v-if="activeFile.previewLoading || !activeFile.blobUrl" class="preview-loading"><span class="spinner-mini"></span> {{ $t('files.loadingPreview') }}</div>
+              <img
+                v-if="activeFile.blobUrl"
+                v-show="!activeFile.previewLoading"
+                :src="activeFile.blobUrl"
+                class="file-preview-image"
+                @load="onImagePreviewLoad(activeFile, $event)"
+                @error="onImagePreviewError(activeFile, $event)"
+              />
+            </template>
           </div>
         </template>
       </div>
@@ -561,6 +583,10 @@ export default {
       if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
       return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     };
+    const onImagePreviewLoad = (file, event) => updateImagePreviewState(file, event);
+    const onImagePreviewError = (file, event) => (
+      updateImagePreviewState(file, event, t('files.previewLoadFailed'))
+    );
 
     // --- DOM refs ---
     const rootEl = Vue.ref(null);
@@ -989,6 +1015,7 @@ export default {
       folderPickerSelectItem: fp.folderPickerSelectItem, folderPickerEnter: fp.folderPickerEnter,
       confirmFolderPicker: fp.confirmFolderPicker,
       getFileIcon: () => '', getFileIconHtml, getFolderIcon, formatSize,
+      onImagePreviewLoad, onImagePreviewError,
       refresh: tree.refresh, placeholderPath: Vue.computed(() => {
         const dir = getEffectiveWorkDir();
         return dir ? t('files.workDir', { dir }) : t('files.enterDirPath');

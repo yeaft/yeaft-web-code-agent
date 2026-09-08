@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { CONFIG } from '../config.js';
-import { agents, previewFiles, webClients } from '../context.js';
+import { agents, webClients } from '../context.js';
 import {
   sendToAgent,
   sendToWebClient,
@@ -17,12 +17,15 @@ import {
 import {
   consumeLegacyWorkbenchRequest,
   consumeWorkbenchRequest,
+  peekWorkbenchRequest,
   deleteWorkbenchTerminalOwner,
   getWorkbenchTerminalOwner,
   isLegacyWorkbenchRequestQuarantined,
   registerWorkbenchTerminalOwner,
   workbenchTerminalCleanupMessage,
 } from '../workbench-correlation.js';
+import { appendFileContentChunk, discardFileContentAssembly } from '../file-content-assembly.js';
+import { cachePreviewFile, MAX_PREVIEW_FILE_BYTES } from '../preview-files.js';
 
 function stripAgentRouting(msg) {
   const {
@@ -90,23 +93,39 @@ async function forwardLegacyResponse(agentId, msg) {
   }
 }
 
-function cacheBinaryPreview(msg) {
+function cacheBinaryPreview(msg, suppliedBuffer = null) {
+  const buffer = suppliedBuffer || Buffer.from(msg.content || '', 'base64');
+  if (buffer.length > MAX_PREVIEW_FILE_BYTES) return {
+    ...msg,
+    binary: false,
+    content: '',
+    error: 'File exceeds the 20 MB transfer limit.',
+    errorCode: 'FILE_PREVIEW_TOO_LARGE',
+    errorDetails: { sizeBytes: buffer.length, limitBytes: MAX_PREVIEW_FILE_BYTES },
+  };
   const fileId = randomUUID();
   const token = randomUUID();
   const filename = msg.filePath.split('/').pop() || 'file';
-  previewFiles.set(fileId, {
-    buffer: Buffer.from(msg.content, 'base64'),
+  if (!cachePreviewFile(fileId, {
+    buffer,
     mimeType: msg.mimeType,
     filename,
     createdAt: Date.now(),
     token,
-  });
+  })) return {
+    ...msg,
+    binary: false,
+    content: '',
+    error: 'Preview cache is at capacity.',
+    errorCode: 'FILE_PREVIEW_CACHE_FULL',
+  };
   const { content: _binaryContent, ...projected } = msg;
   return {
     ...projected,
     binary: true,
     fileId,
     previewToken: token,
+    previewUrl: `/api/preview/${fileId}?token=${encodeURIComponent(token)}`,
   };
 }
 
@@ -177,7 +196,76 @@ async function handleAgentDirectoryPickerResponse(agentId, msg) {
   await sendToPendingClient(agentId, msg, pending);
 }
 
+function hasCurrentWorkspaceGeneration(pending) {
+  const currentGeneration = currentWorkbenchWorkspaceGeneration({
+    route: pending.route,
+    userId: pending.userId,
+    role: pending.role,
+  });
+  return currentGeneration !== null
+    && (!currentGeneration || currentGeneration === pending.workspaceGeneration);
+}
+
+async function handleFileContentChunk(agentId, agent, msg, routeKey) {
+  if (!msg._workbenchRequestId) return;
+  const pending = peekWorkbenchRequest({
+    agentId,
+    requestId: msg._workbenchRequestId,
+    responseType: 'file_content',
+    routeKey,
+  });
+  if (!pending || pending.requestType !== 'read_file') return;
+  if (!hasCurrentWorkspaceGeneration(pending)) {
+    discardFileContentAssembly(agentId, msg._workbenchRequestId);
+    consumeWorkbenchRequest({
+      agentId,
+      requestId: msg._workbenchRequestId,
+      responseType: 'file_content',
+      routeKey,
+    });
+    return;
+  }
+  const result = appendFileContentChunk(agentId, msg);
+  if (result.status === 'pending') return;
+  const consumed = consumeWorkbenchRequest({
+    agentId,
+    requestId: msg._workbenchRequestId,
+    responseType: 'file_content',
+    routeKey,
+  });
+  if (!consumed) return;
+  if (result.status !== 'complete') {
+    discardFileContentAssembly(agentId, msg._workbenchRequestId);
+    const errorCode = result.status === 'capacity'
+      ? 'FILE_PREVIEW_CACHE_FULL'
+      : 'FILE_TRANSFER_INVALID';
+    await sendToPendingClient(agentId, {
+      ...msg,
+      type: 'file_content',
+      binary: false,
+      content: '',
+      error: result.status === 'capacity'
+        ? 'Preview transfer capacity was exceeded.'
+        : 'Preview transfer was incomplete or invalid.',
+      errorCode,
+    }, consumed);
+    return;
+  }
+  const completed = {
+    ...msg,
+    type: 'file_content',
+    content: '',
+  };
+  delete completed.chunkIndex;
+  delete completed.chunkCount;
+  delete completed.totalBytes;
+  await sendToPendingClient(agentId, cacheBinaryPreview(completed, result.buffer), consumed);
+}
+
 async function handleOneShotResponse(agentId, agent, msg, routeKey) {
+  if (msg.type === 'file_content' && msg._workbenchRequestId) {
+    discardFileContentAssembly(agentId, msg._workbenchRequestId);
+  }
   const pending = consumeRouteResponse(agentId, agent, msg, routeKey);
   if (!pending) return;
   const currentGeneration = currentWorkbenchWorkspaceGeneration({
@@ -205,7 +293,7 @@ export async function handleAgentFileTerminal(agentId, agent, rawMsg) {
     'terminal_created', 'terminal_output', 'terminal_closed', 'terminal_error',
   ]);
   const oneShotTypes = new Set([
-    'file_content', 'file_references_resolved', 'file_saved', 'directory_listing', 'file_op_result',
+    'file_content', 'file_content_chunk', 'file_references_resolved', 'file_saved', 'directory_listing', 'file_op_result',
     'git_status_result', 'git_diff_result', 'git_op_result', 'file_search_result',
   ]);
   if (!terminalTypes.has(msg.type) && !oneShotTypes.has(msg.type)) return false;
@@ -218,6 +306,7 @@ export async function handleAgentFileTerminal(agentId, agent, rawMsg) {
 
   if (routeKey) {
     if (terminalTypes.has(msg.type)) await handleTerminalResponse(agentId, agent, msg, routeKey);
+    else if (msg.type === 'file_content_chunk') await handleFileContentChunk(agentId, agent, msg, routeKey);
     else await handleOneShotResponse(agentId, agent, msg, routeKey);
     return true;
   }
