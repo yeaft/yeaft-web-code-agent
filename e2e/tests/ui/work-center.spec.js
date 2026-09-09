@@ -21,6 +21,7 @@ const WORK_CENTER_SETTINGS = {
       test: 'Test the change', review: 'Review independently', integrate: 'Integrate the changes',
       document: 'Document the result',
       operate: 'Operate safely', deliver: 'Deliver the result', write: 'Write the content',
+      create_vp: 'Create the requested VP',
       custom: 'Complete the custom Action',
     },
     workflows: [{
@@ -492,30 +493,28 @@ async function layoutMetrics(page) {
   });
 }
 
-async function resizeWorkbenchForMainWidth(page, targetWidth) {
-  await page.waitForTimeout(350);
+async function resizeViewportForMainWidth(page, targetWidth) {
+  const main = page.locator('.work-center-main');
+  // Resize the real viewport, retaining the sidebar's actual contribution.
+  // Work Center no longer exposes a Workbench resize handle.
   for (let attempt = 0; attempt < 4; attempt++) {
-    const resized = await page.evaluate(width => {
-      const handle = document.querySelector('.workbench-panel .resize-handle');
-      const main = document.querySelector('.work-center-main');
-      if (!handle || !main) return null;
-      const currentWidth = main.getBoundingClientRect().width;
-      if (Math.abs(currentWidth - width) <= 0.25) return currentWidth;
-      const handleBox = handle.getBoundingClientRect();
-      const startX = handleBox.x + handleBox.width / 2;
-      const targetX = startX + currentWidth - width;
-      handle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: startX }));
-      document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: targetX }));
-      document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: targetX }));
-      return currentWidth;
-    }, targetWidth);
-    if (resized == null) throw new Error('Workbench resize geometry is unavailable');
-    await page.waitForTimeout(350);
-    const actualWidth = await page.locator('.work-center-main').evaluate(element => element.getBoundingClientRect().width);
+    const currentWidth = await main.evaluate(element => element.getBoundingClientRect().width);
+    const viewport = page.viewportSize();
+    await page.setViewportSize({
+      ...viewport,
+      width: Math.round(viewport.width + targetWidth - currentWidth),
+    });
+    await main.evaluate(async () => {
+      await Promise.all(document.getAnimations()
+        .filter(animation => Number.isFinite(animation.effect?.getComputedTiming().endTime))
+        .map(animation => animation.finished.catch(() => {})));
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    });
+    const actualWidth = await main.evaluate(element => element.getBoundingClientRect().width);
     if (Math.abs(actualWidth - targetWidth) <= 0.25) return actualWidth;
   }
-  const actualWidth = await page.locator('.work-center-main').evaluate(element => element.getBoundingClientRect().width);
-  throw new Error(`Workbench resize did not converge: expected ${targetWidth}px, received ${actualWidth}px`);
+  await expect.poll(() => main.evaluate(element => element.getBoundingClientRect().width))
+    .toBeCloseTo(targetWidth, 1);
 }
 
 async function chooseWorkCenterTarget(page, target, label) {
@@ -841,7 +840,7 @@ test.describe('Work Center responsive UI', () => {
     }
   });
 
-  test('switches to drilldown when the Workbench reduces the actual Work Center width', async ({ chatPage, mockAgent }) => {
+  test('switches to drilldown when viewport resizing reduces the actual Work Center width', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent);
     await chatPage.setViewportSize({ width: 1600, height: 900 });
     const select = chatPage.locator('.work-center-card').click();
@@ -852,8 +851,7 @@ test.describe('Work Center responsive UI', () => {
     await expect(chatPage.locator('.work-center-detail')).toBeVisible();
     await expect(chatPage.locator('.work-center-action-detail-pane')).toBeHidden();
 
-    await chatPage.locator('.session-sidebar-shell .sidebar-icon-btn[title="Workbench"]').click();
-    await expect(chatPage.locator('.workbench-panel')).toHaveClass(/expanded/);
+    await resizeViewportForMainWidth(chatPage, 1024);
     await expect(chatPage.locator('.work-center-list')).toBeHidden();
     await expect(chatPage.locator('.work-center-detail')).toBeVisible();
     await expect(chatPage.locator('.work-center-action-detail-pane')).toBeHidden();
@@ -863,7 +861,7 @@ test.describe('Work Center responsive UI', () => {
     expect(metrics.bodyScrollWidth).toBeLessThanOrEqual(metrics.bodyClientWidth + 1);
   });
 
-  test('switches cleanly across the container breakpoint when the Workbench is dragged wider', async ({ chatPage, mockAgent }) => {
+  test('switches cleanly across the container breakpoint when the viewport is resized', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent);
     await chatPage.setViewportSize({ width: 1920, height: 900 });
     const select = chatPage.locator('.work-center-card').click();
@@ -874,10 +872,7 @@ test.describe('Work Center responsive UI', () => {
     await chatPage.locator('.work-center-action-summary').click();
     const actionPane = chatPage.locator('.work-center-action-detail-pane');
     await expect(actionPane).toBeVisible();
-    await chatPage.locator('.session-sidebar-shell .sidebar-icon-btn[title="Workbench"]').click();
-    await expect(chatPage.locator('.workbench-panel')).toHaveClass(/expanded/);
-
-    await resizeWorkbenchForMainWidth(chatPage, 1280);
+    await resizeViewportForMainWidth(chatPage, 1280);
     let metrics = await layoutMetrics(chatPage);
     expect(metrics.main.width).toBeGreaterThan(1250);
     await expect(chatPage.locator('.work-center-list')).toBeHidden();
@@ -899,7 +894,7 @@ test.describe('Work Center responsive UI', () => {
       attachmentChip: '.work-center-attachment-chip',
     });
 
-    await resizeWorkbenchForMainWidth(chatPage, 1200);
+    await resizeViewportForMainWidth(chatPage, 1200);
     metrics = await layoutMetrics(chatPage);
     expect(metrics.main.width).toBeGreaterThan(1160);
     expect(metrics.main.width).toBeLessThanOrEqual(1250);
@@ -922,13 +917,13 @@ test.describe('Work Center responsive UI', () => {
       attachmentChip: '.work-center-attachment-chip',
     });
 
-    await resizeWorkbenchForMainWidth(chatPage, 1025);
+    await resizeViewportForMainWidth(chatPage, 1025);
     metrics = await layoutMetrics(chatPage);
     expect(metrics.main.width).toBeGreaterThan(1024);
     await expect(chatPage.locator('.work-center-conversation-pane')).toBeVisible();
     await expect(actionPane).toBeVisible();
 
-    await resizeWorkbenchForMainWidth(chatPage, 1024);
+    await resizeViewportForMainWidth(chatPage, 1024);
     metrics = await layoutMetrics(chatPage);
     expect(metrics.main.width).toBeLessThanOrEqual(1024);
     await expect(chatPage.locator('.work-center-conversation-pane')).toBeHidden();
@@ -956,7 +951,8 @@ test.describe('Work Center responsive UI', () => {
     const targetMenu = chatPage.locator('.work-center-composer-target-menu');
     const targetList = targetMenu.locator('.modern-select-list');
     await expect(targetMenu).toBeVisible();
-    await chatPage.waitForTimeout(180);
+    await expect(targetMenu).not.toHaveClass(/ms-pop-enter-(?:from|active|to)/);
+    await expect.poll(() => targetMenu.evaluate(element => getComputedStyle(element).transform)).toBe('none');
     const targetMenuHeight = await targetMenu.evaluate(element => element.getBoundingClientRect().height);
     for (let index = 0; index < 8; index += 1) {
       await targetList.evaluate((element, step) => {
@@ -1773,7 +1769,6 @@ test.describe('Work Center responsive UI', () => {
     });
     expect(stopColors.actual).toBe(stopColors.expected);
 
-    chatPage.once('dialog', dialog => dialog.accept());
     const cancelResponses = (async () => {
       const operations = [];
       while (!operations.some(request => request.op === 'cancel')
@@ -1787,6 +1782,11 @@ test.describe('Work Center responsive UI', () => {
       return operations;
     })();
     await stop.click();
+    const confirmation = chatPage.getByRole('dialog').filter({
+      hasText: 'Stop this work item and its unfinished Actions?',
+    });
+    await expect(confirmation).toBeVisible();
+    await confirmation.getByRole('button', { name: 'OK', exact: true }).click();
     const cancelOps = await cancelResponses;
     expect(cancelOps.some(request => request.op === 'list')).toBe(true);
     expect(cancelOps.find(request => request.op === 'cancel').payload).toEqual({ id: OPEN_ITEM.id });
@@ -2111,6 +2111,7 @@ test.describe('Work Center responsive UI', () => {
       type: 'directory_listing',
       conversationId: directoryRequest.conversationId,
       requestId: directoryRequest.requestId,
+      _workbenchRequestId: directoryRequest._workbenchRequestId,
       dirPath: '/tmp/test',
       entries: [
         { name: 'project-alpha', type: 'directory' },
@@ -2169,6 +2170,8 @@ test.describe('Work Center responsive UI', () => {
     });
     await chatPage.locator('.work-center-header-actions .work-center-icon-button').first().click();
     await settingsRequest;
+    // Opening the modal starts its own load after the page-level settings load.
+    await respondToWorkCenterOp(mockAgent, 'get_settings', WORK_CENTER_SETTINGS);
     const modal = chatPage.locator('.work-center-settings-card');
     await expect(modal).toBeVisible();
     const box = await modal.boundingBox();
@@ -2181,7 +2184,8 @@ test.describe('Work Center responsive UI', () => {
     await chatPage.getByRole('button', { name: 'Models', exact: true }).click();
     const modelStages = chatPage.locator('.work-center-model-stage');
     await expect(modelStages).toHaveCount(expectedModelPolicyCount());
-    const coordinatorStage = modelStages.nth(1);
+    const coordinatorStage = modelStages.filter({ has: chatPage.locator('strong', { hasText: /^Coordinator$/ }) });
+    await expect(coordinatorStage).toHaveCount(1);
     const modelStage = modelStages.last();
     await expect(modelStage).toContainText('Fallback for all Actions');
     const effort = modelStage.locator('.work-center-model-effort');
@@ -2205,6 +2209,7 @@ test.describe('Work Center responsive UI', () => {
     await expect(coordinatorStage.locator('select').nth(1)).toHaveValue('provider/review');
     await expect(coordinatorStage.locator('.work-center-model-effort select')).toHaveValue('medium');
 
+    const expectedCoordinatorPolicy = { mode: 'specific', model: 'provider/review', effort: 'medium' };
     const saveResponse = respondUntilOperation(mockAgent, 'update_settings', {
       list: { items: [OPEN_ITEM], watcher: { enabled: true } },
       get_settings: WORK_CENTER_SETTINGS,
@@ -2217,7 +2222,8 @@ test.describe('Work Center responsive UI', () => {
     const saveRequest = await saveResponse;
     expect(saveRequest.payload.settings).toMatchObject({ revision: 7 });
     expect(saveRequest.payload.settings.coordinatorModelPolicy)
-      .toEqual(WORK_CENTER_SETTINGS.settings.coordinatorModelPolicy);
+      .toEqual(expectedCoordinatorPolicy);
+    expect(saveRequest.payload.settings.modelPolicy.mode).toBe('inherit');
     await respondToWorkCenterOp(
       mockAgent, 'list', { items: [OPEN_ITEM], watcher: { enabled: true } }, [OPEN_ITEM],
     );
@@ -2231,7 +2237,7 @@ test.describe('Work Center responsive UI', () => {
       };
     }, mockAgent.agentId)).toEqual({
       revision: 8,
-      coordinatorModelPolicy: WORK_CENTER_SETTINGS.settings.coordinatorModelPolicy,
+      coordinatorModelPolicy: expectedCoordinatorPolicy,
     });
   });
 
@@ -2336,11 +2342,11 @@ test.describe('Work Center responsive UI', () => {
     await expect(modal.getByRole('button', { name: 'General', exact: true })).toHaveCount(0);
   });
 
-  test('creates from a goal contract and leaves planning to AI triage', async ({ chatPage, mockAgent }) => {
+  test('creates from a goal contract and leaves planning to the Coordinator', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent);
     await chatPage.locator('.work-center-header-create').click();
-    await expect(chatPage.locator('.work-center-plan-preview')).toContainText('AI-planned execution');
-    await expect(chatPage.locator('.work-center-plan-preview')).toContainText('Triage chooses the task type');
+    await expect(chatPage.locator('.work-center-plan-preview')).toContainText('Coordinator-driven execution');
+    await expect(chatPage.locator('.work-center-plan-preview')).toContainText('The Coordinator chooses the next Actions and executors from the current evidence');
     await expect(chatPage.locator('.work-center-plan-stages')).toHaveCount(0);
 
     await chatPage.locator('.work-center-modal').getByRole('textbox', { name: /Requirement/ })

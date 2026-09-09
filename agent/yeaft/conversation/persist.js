@@ -351,8 +351,10 @@ export function projectVisibleSessionMessages(messages) {
   }
 
   const visible = [];
-  for (const row of rows) {
-    if (!row || (row.role !== 'user' && row.role !== 'assistant')) continue;
+  for (const sourceRow of rows) {
+    if (!sourceRow || (sourceRow.role !== 'user' && sourceRow.role !== 'assistant')) continue;
+    // Public history never owns provider-private continuation payloads.
+    const { providerState, thinkingBlocks, ...row } = sourceRow;
     if (!isVisibleConversationRow(row)) continue;
     if (row.role !== 'assistant' || !Array.isArray(row.toolCalls) || row.toolCalls.length === 0) {
       if (row.role === 'assistant' && !row.content && !row.attachments && !row.images
@@ -502,19 +504,18 @@ function serializeMessage(msg) {
   // bytes that don't need to be human-readable. Without this round-trip
   // the next Anthropic request 400s with "content[].thinking in the
   // thinking mode must be passed back to the API".
-  if (msg.thinkingBlocks && msg.thinkingBlocks.length > 0) {
+  if (msg.providerState) fm.push(`providerStateB64: ${Buffer.from(JSON.stringify(msg.providerState)).toString('base64')}`);
+  if (!msg.providerState && msg.thinkingBlocks && msg.thinkingBlocks.length > 0) {
     fm.push(`thinkingBlocks:`);
     for (const tb of msg.thinkingBlocks) {
-      if (!tb || typeof tb.signature !== 'string' || !tb.signature) continue;
+      if (!tb) continue;
       if (tb.redacted) {
         if (typeof tb.data !== 'string') continue;
         const dataB64 = Buffer.from(tb.data, 'utf8').toString('base64');
-        const signatureB64 = Buffer.from(tb.signature, 'utf8').toString('base64');
         fm.push(`  - redacted: true`);
         fm.push(`    dataB64: ${dataB64}`);
-        fm.push(`    signatureB64: ${signatureB64}`);
       } else {
-        if (typeof tb.thinking !== 'string') continue;
+        if (typeof tb.thinking !== 'string' || typeof tb.signature !== 'string' || !tb.signature) continue;
         const thinkingB64 = Buffer.from(tb.thinking, 'utf8').toString('base64');
         const signatureB64 = Buffer.from(tb.signature, 'utf8').toString('base64');
         fm.push(`  - thinkingB64: ${thinkingB64}`);
@@ -646,7 +647,11 @@ export function parseMessage(raw) {
   }
 
   // task-327d: parse thinkingBlocks (mirror of toolCalls parser above)
-  if (frontmatter.includes('thinkingBlocks:')) {
+  const stateMatch = frontmatter.match(/^providerStateB64: (.+)$/m);
+  if (stateMatch) {
+    try { msg.providerState = JSON.parse(Buffer.from(stateMatch[1], 'base64').toString('utf8')); } catch { /* legacy invalid row */ }
+  }
+  if (!msg.providerState && frontmatter.includes('thinkingBlocks:')) {
     const thinkingBlocks = [];
     const tbMatch = frontmatter.match(/thinkingBlocks:\n((?:\s+-\s+[\s\S]*?)(?=\n\w|$))/);
     if (tbMatch) {
@@ -672,7 +677,7 @@ export function parseMessage(raw) {
         }
         // Both fields required — an unsigned block would 400 on replay.
         if (tb.redacted) {
-          if (typeof tb.data === 'string' && typeof tb.signature === 'string' && tb.signature) {
+          if (typeof tb.data === 'string') {
             thinkingBlocks.push(tb);
           }
         } else if (typeof tb.thinking === 'string' && typeof tb.signature === 'string' && tb.signature) {
@@ -1621,6 +1626,7 @@ export class ConversationStore {
           const copy = { ...m };
           delete copy.toolCalls;
           delete copy.thinkingBlocks;
+          delete copy.providerState;
           out.push(copy);
         }
         continue;

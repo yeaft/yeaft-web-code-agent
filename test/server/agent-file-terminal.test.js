@@ -1419,8 +1419,10 @@ describe('Agent file terminal forwarding', () => {
       expect(sent.map(message => message.chunkIndex)).toEqual([0, 1]);
       expect(sent.every(message => message.chunkCount === 2)).toBe(true);
       expect(sent.every(message => message.totalBytes === image.length)).toBe(true);
-      expect(Buffer.from(sent[0].content, 'base64')).toEqual(image.subarray(0, 1024 * 1024));
-      expect(Buffer.from(sent[1].content, 'base64')).toEqual(image.subarray(1024 * 1024));
+      // Compare every byte without the per-element overhead of deep equality
+      // on a MiB-sized typed array (which can exhaust the test's time budget).
+      expect(Buffer.from(sent[0].content, 'base64').equals(image.subarray(0, 1024 * 1024))).toBe(true);
+      expect(Buffer.from(sent[1].content, 'base64').equals(image.subarray(1024 * 1024))).toBe(true);
       expect(sent.every(message => message._workbenchRequestId === 'internal-chunked')).toBe(true);
       expect(sent.every(message => message.workbenchRouteKey === 'route-key')).toBe(true);
       expect(sent.every(message => message.workbenchWorkspaceGeneration === 'generation-1')).toBe(true);
@@ -2488,7 +2490,7 @@ describe('Agent file terminal forwarding', () => {
       previewUrl: expect.stringMatching(/^\/api\/preview\//),
     });
     expect(forwarded).not.toHaveProperty('content');
-    expect(previewFiles.get(forwarded.fileId)?.buffer).toEqual(Buffer.concat([first, second]));
+    expect(previewFiles.get(forwarded.fileId)?.buffer?.equals(Buffer.concat([first, second]))).toBe(true);
     expect(forwarded.previewUrl).toContain(`token=${forwarded.previewToken}`);
   });
 

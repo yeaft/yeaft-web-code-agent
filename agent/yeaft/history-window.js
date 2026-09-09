@@ -1,3 +1,4 @@
+import { providerProjectionDigest, providerStateBytes, MAX_PROVIDER_STATE_BYTES, ProviderStateError } from './llm/provider-state.js';
 /**
  * history-window.js — deterministic history shaping for provider requests.
  *
@@ -157,7 +158,19 @@ export function estimateContentTokens(content) {
 export function estimateMessageTokens(message) {
   if (!message || typeof message !== 'object') return 0;
   let total = 2 + estimateContentTokens(message.content);
-  total += estimateThinkingBlocksTokens(message.thinkingBlocks);
+  // Responses ciphertext has a byte budget, not a text-token cost. Anthropic
+  // thinking is plaintext and must be charged, without recounting the native
+  // text/tool items already represented by content/toolCalls below.
+  if (message.providerState && providerStateBytes(message.providerState) > MAX_PROVIDER_STATE_BYTES) {
+    throw new ProviderStateError('state exceeds byte budget');
+  }
+  if (message.providerState?.protocol === 'anthropic') {
+    const thinking = (message.providerState.items || [])
+      .filter(item => ['thinking', 'redacted_thinking'].includes(item?.type));
+    if (thinking.length > 0) total += estimateContentTokens(thinking);
+  } else if (!message.providerState) {
+    total += estimateThinkingBlocksTokens(message.thinkingBlocks);
+  }
   if (Array.isArray(message.toolCalls)) {
     for (const toolCall of message.toolCalls) {
       total += 4;
@@ -242,6 +255,7 @@ export function stripToolNoiseFromOlderTurns(messages, options = {}) {
     const next = { ...message };
     if (Array.isArray(next.toolCalls)) delete next.toolCalls;
     if (Array.isArray(next.thinkingBlocks)) delete next.thinkingBlocks;
+    delete next.providerState;
     if (Array.isArray(next.content)) next.content = stripToolContentParts(next.content);
     if (next.role === 'assistant' && !hasContentAfterToolStrip(next.content)) continue;
     if (next.role === 'user' && Array.isArray(next.content) && next.content.length === 0) continue;
@@ -257,6 +271,7 @@ function stripAllToolNoise(messages) {
     const next = { ...message };
     if (Array.isArray(next.toolCalls)) delete next.toolCalls;
     if (Array.isArray(next.thinkingBlocks)) delete next.thinkingBlocks;
+    delete next.providerState;
     if (Array.isArray(next.content)) next.content = stripToolContentParts(next.content);
     if (next.role === 'assistant' && !hasContentAfterToolStrip(next.content)) continue;
     if (next.role === 'user' && Array.isArray(next.content) && next.content.length === 0) continue;
@@ -374,6 +389,7 @@ function dropEmptyAssistantRows(messages) {
     if (!message || message.role !== 'assistant') return true;
     return hasProviderContent(message.content)
       || (Array.isArray(message.toolCalls) && message.toolCalls.length > 0)
+      || Boolean(message.providerState)
       || (Array.isArray(message.thinkingBlocks) && message.thinkingBlocks.length > 0);
   });
 }
@@ -420,6 +436,13 @@ function shrinkMessageToBudget(message, tokenBudget) {
   // the durable transcript remains untouched.
   if (estimateMessageTokens(next) > tokenBudget && Array.isArray(next.toolCalls)) {
     delete next.toolCalls;
+  }
+  if (next.providerState && providerProjectionDigest(next) !== next.providerState.projectionDigest) {
+    // Modified assistant projections must never resurrect removed text/calls.
+    const signed = next.providerState.protocol === 'anthropic'
+      && next.providerState.items?.some(item => ['thinking', 'redacted_thinking'].includes(item?.type));
+    delete next.providerState;
+    if (signed) delete next.toolCalls;
   }
   return next;
 }
@@ -608,6 +631,16 @@ function enrichTextBaselineWithTools(textBaseline, toolSource, selectedCallIds) 
       const selectedParts = source.content.filter(part => selectedIds.has(toolContentPartCallId(part)));
       owner.content = [...baselineContent, ...selectedParts];
     }
+    if (source.providerState) {
+      if (providerProjectionDigest(owner) === source.providerState.projectionDigest) {
+        owner.providerState = source.providerState;
+      } else {
+        delete owner.providerState;
+        // A changed text baseline or call subset cannot replay this signed
+        // turn. Leave its text-only baseline and let pairing drop the results.
+        if (hasSignedProviderThinking(source)) continue;
+      }
+    }
     messagesBySourceIndex.set(sourceIndex, owner);
   }
 
@@ -627,19 +660,41 @@ function preservesTextBaseline(textBaseline, enriched) {
   });
 }
 
+function hasSignedProviderThinking(message) {
+  return message.providerState?.protocol === 'anthropic'
+    && message.providerState.items?.some(item => ['thinking', 'redacted_thinking'].includes(item?.type));
+}
+
+function completeToolCallGroups(messages) {
+  const completeIds = new Set(completeToolCallIds(messages));
+  const groups = [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== 'assistant' || !Array.isArray(message.toolCalls)) continue;
+    const ids = message.toolCalls.map(call => call?.id);
+    if (hasSignedProviderThinking(message)) {
+      // A signed assistant projection binds every call, including their order.
+      // A missing result makes the whole group ineligible, not a smaller turn.
+      if (ids.length > 0 && ids.every(id => completeIds.has(id))) groups.push(ids);
+    } else {
+      groups.push(...ids.reverse().filter(id => completeIds.has(id)).map(id => [id]));
+    }
+  }
+  return groups;
+}
+
 function addOptionalRecentToolPairs(textBaseline, toolSource, options) {
   const selectedCallIds = new Set();
   let out = pairSanitize(textBaseline);
-  for (const callId of completeToolCallIds(toolSource)) {
-    const trialIds = new Set(selectedCallIds);
-    trialIds.add(callId);
+  for (const callIds of completeToolCallGroups(toolSource)) {
+    const trialIds = new Set([...selectedCallIds, ...callIds]);
     const trial = enrichTextBaselineWithTools(textBaseline, toolSource, trialIds);
     if (trial.length > options.maxMessageCount) continue;
     const fitted = fitMessagesToBudget(trial, options.messageTokenBudget);
     const fittedCallIds = new Set(completeToolCallIds(fitted));
     if (![...trialIds].every(id => fittedCallIds.has(id))) continue;
     if (!preservesTextBaseline(textBaseline, fitted)) continue;
-    selectedCallIds.add(callId);
+    for (const callId of callIds) selectedCallIds.add(callId);
     out = fitted;
   }
   return out;

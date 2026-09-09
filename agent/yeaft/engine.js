@@ -44,7 +44,8 @@ import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 // Default thread marker for legacy / non-group flows. Group VP runtime may
 // pass a real threadId per (sessionId, vpId, threadId) engine instance.
 const MAIN_THREAD_ID = 'main';
-import { pickEffort, parseEffortPrefix } from './effort.js';
+import { pickEffort, parseEffortPrefix, snapshotEffortDecision } from './effort.js';
+import { bindProviderState } from './llm/provider-state.js';
 import { DEFAULT_CONTEXT_WINDOW, normalizeEffort, resolveContextWindow, resolveModel } from './models.js';
 import { lookupModelLimitSync } from './llm/models-dev.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
@@ -92,7 +93,8 @@ const MAX_CONTINUE_TURNS = 3;
  * network, or subprocess reads. Only tools whose metadata explicitly declares
  * both read-only and concurrency-safe execution enter this lane.
  */
-const MAX_CONCURRENT_READ_ONLY_TOOLS = 4;
+// Safe shared tools run together within the finite provider batch. Unsafe tools
+// form exclusive barriers; resource-specific limits belong to the owning tool.
 
 /** Maximum silence while a visible turn waits for a result-producing task. */
 const DEFAULT_ASYNC_TASK_WAIT_TIMEOUT_MS = 120_000;
@@ -1392,6 +1394,8 @@ export class Engine {
   #buildToolContext(signal, vpCtx) {
     return {
       signal,
+      effortDecision: snapshotEffortDecision(vpCtx?.effortDecision),
+      requestIdentity: vpCtx?.requestIdentity,
       yeaftDir: this.#yeaftDir,
       managedCliReady: this.#managedCliReady,
       runtimePlatform: getRuntimePlatformInfo(),
@@ -1591,6 +1595,7 @@ export class Engine {
     if (message.toolCallId) record.toolCallId = message.toolCallId;
     if (Array.isArray(message.toolCalls) && message.toolCalls.length > 0) record.toolCalls = message.toolCalls;
     if (Array.isArray(message.thinkingBlocks) && message.thinkingBlocks.length > 0) record.thinkingBlocks = message.thinkingBlocks;
+    if (message.providerState) record.providerState = message.providerState;
     if (message.isError) record.isError = true;
     if (message.imageAssetAnchor) record.imageAssetAnchor = true;
     if (message._reflection) record._reflection = true;
@@ -1625,7 +1630,7 @@ export class Engine {
       : message.content != null;
     const hasToolCalls = Array.isArray(message.toolCalls) && message.toolCalls.length > 0;
     const hasThinking = Array.isArray(message.thinkingBlocks) && message.thinkingBlocks.length > 0;
-    if (!hasContent && !hasToolCalls && !hasThinking && message.role !== 'tool') return null;
+    if (!hasContent && !hasToolCalls && !hasThinking && !message.providerState && message.role !== 'tool') return null;
     return this.#conversationStore.append(this.#conversationRecord(message, context));
   }
 
@@ -1877,7 +1882,7 @@ export class Engine {
     }
   }
 
-  async *#queryLifecycle({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null } = {}) {
+  async *#queryLifecycle({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       const error = new Error('prompt is required and must be a non-empty string');
       yield {
@@ -1969,7 +1974,7 @@ export class Engine {
     try {
       this.#currentThreadId = threadId || MAIN_THREAD_ID;
       this.#currentCausalRootId = effectiveCausalRootId;
-      yield* this.#runQuery({ prompt: effectivePrompt, promptParts: effectivePromptParts, messages, signal: runSignal, userEffort: explicitUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds, projectInstruction, projectLabel, vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted, currentUserMessage, causalRootId: effectiveCausalRootId, getCurrentTodos, setCurrentTodos, askUser, threadId: this.#currentThreadId, vpTurnId, drainPendingUserMessages, prepareProviderRequest, startProviderRequest, finishProviderRequest, failProviderRequest, closePendingUserInput, collabToolPolicy: effectiveCollabToolPolicy, explicitSkillName: parsedSkill.skillName, retryLifecycle });
+      yield* this.#runQuery({ prompt: effectivePrompt, promptParts: effectivePromptParts, messages, signal: runSignal, userEffort: explicitUserEffort, scenario, isSubAgent, parentEffortDecision, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds, projectInstruction, projectLabel, vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted, currentUserMessage, causalRootId: effectiveCausalRootId, getCurrentTodos, setCurrentTodos, askUser, threadId: this.#currentThreadId, vpTurnId, drainPendingUserMessages, prepareProviderRequest, startProviderRequest, finishProviderRequest, failProviderRequest, closePendingUserInput, collabToolPolicy: effectiveCollabToolPolicy, explicitSkillName: parsedSkill.skillName, retryLifecycle });
     } finally {
       // Closing the async generator at a visible retry boundary means the
       // continuation never reached a provider. Keep it out of history and
@@ -2024,7 +2029,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, explicitSkillName = null, retryLifecycle }) {
+  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, explicitSkillName = null, retryLifecycle }) {
 
     const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
       ? collabToolPolicy
@@ -2049,6 +2054,15 @@ export class Engine {
     // standalone/CLI callers pass it per query.
     this.#sessionId = runtimeSessionId || null;
     this.#currentThreadId = runtimeThreadId;
+    const requestIdentity = Object.freeze({
+      instanceScope: this.#yeaftDir || '',
+      ownerScope: this.#yeaftDir ? 'instance-local-owner' : '',
+      sessionId: runtimeSessionId || this.#chatId || '',
+      vpId: this.#vpId || senderVpId || vpPersona?.vpId || 'default',
+      threadId: runtimeThreadId,
+    });
+    const effortConstraint = isSubAgent || scenario === 'sub_agent' || vpPersona?.subAgent
+      ? Object.freeze({ parentDecision: snapshotEffortDecision(parentEffortDecision) }) : null;
     const queryStartedAt = Date.now();
     const userQuestionPreview = String(prompt || '').slice(0, 200);
     const queryVpId = vpPersona && typeof vpPersona === 'object'
@@ -2276,7 +2290,7 @@ export class Engine {
       envelope: inboundEnvelope || null,
     };
 
-    const projectDocSource = this.#getProjectDocBlock(workDir);
+    let projectDocSource = this.#getProjectDocBlock(workDir);
     let projectDocLoadedPathHints = [];
     let projectDocContext = selectProjectDocContext(projectDocSource, {
       prompt,
@@ -2675,7 +2689,9 @@ export class Engine {
         });
       };
       const toolCalls = [];
-      const thinkingBlocks = []; // task-327d: collected from adapter for round-trip
+      const thinkingBlocks = []; // Legacy adapter compatibility only.
+      let providerState = null;
+      let requestEffortDecision = snapshotEffortDecision();
       let stopReason = 'end_turn';
       const totalUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cacheInputDeltaTokens: 0 };
       // Raw provider exchange is diagnostic source data, not model context or
@@ -2796,7 +2812,7 @@ export class Engine {
         // routerPlan, the VP's role default, and the global config all
         // outrank the scenario picker for `'high'|'max'`. UI/userEffort
         // is already honoured by pickEffort (highest precedence).
-        if (vpPersona && vpPersona.vpId) {
+        if (!requestUserEffort && vpPersona && vpPersona.vpId) {
           const priorPlan = extractPriorPlan(conversationMessages, vpPersona.vpId);
           const thinkingCfg = (this.#config && this.#config.thinking) || {};
           // PR-I: live routerPlan.thinking — when the dispatcher passes
@@ -2969,6 +2985,10 @@ export class Engine {
           tools: toolDefs.length > 0 ? toolDefs : undefined,
           maxTokens: requestConfig.maxOutputTokens || 16384,
           effort: resolvedEffort,
+          effortConstraint,
+          requestIdentity,
+          onEffortDecision: decision => { requestEffortDecision = snapshotEffortDecision(decision); },
+          onProviderDiagnostics: info => traceRequest('llm.capabilities', { detail: info }),
           effortSource: requestUserEffort ? 'user' : 'auto',
           signal,
           onRawExchange: captureRawExchange,
@@ -3029,6 +3049,9 @@ export class Engine {
               responseText += event.text;
               yield event;
               break;
+            case 'provider_state':
+              providerState = event.providerState;
+              break;
             case 'thinking_delta':
               yield event;
               break;
@@ -3066,6 +3089,9 @@ export class Engine {
               const cacheInputDeltaTokens = event.cacheTokensAreIncludedInInput ? 0 : cacheReadTokens + cacheWriteTokens;
               totalUsage.inputTokens += inputTokens;
               totalUsage.outputTokens += outputTokens;
+              if (Number.isFinite(event.reasoningTokens) && event.reasoningTokens >= 0) {
+                totalUsage.reasoningTokens = (totalUsage.reasoningTokens || 0) + event.reasoningTokens;
+              }
               totalUsage.cacheReadTokens += cacheReadTokens;
               totalUsage.cacheWriteTokens += cacheWriteTokens;
               totalUsage.cacheInputDeltaTokens += cacheInputDeltaTokens;
@@ -3162,6 +3188,7 @@ export class Engine {
             usage: {
               inputTokens: totalUsage.inputTokens || 0,
               outputTokens: totalUsage.outputTokens || 0,
+              ...(totalUsage.reasoningTokens !== undefined ? { reasoningTokens: totalUsage.reasoningTokens } : {}),
               cacheReadTokens: totalUsage.cacheReadTokens || 0,
               cacheWriteTokens: totalUsage.cacheWriteTokens || 0,
               totalInputTokens: (totalUsage.inputTokens || 0) + (totalUsage.cacheInputDeltaTokens || 0),
@@ -3408,6 +3435,7 @@ export class Engine {
           usage: {
             inputTokens: totalUsage.inputTokens || 0,
             outputTokens: totalUsage.outputTokens || 0,
+            ...(totalUsage.reasoningTokens !== undefined ? { reasoningTokens: totalUsage.reasoningTokens } : {}),
             cacheReadTokens: totalUsage.cacheReadTokens || 0,
             cacheWriteTokens: totalUsage.cacheWriteTokens || 0,
             totalInputTokens: (totalUsage.inputTokens || 0) + (totalUsage.cacheInputDeltaTokens || 0),
@@ -3434,6 +3462,7 @@ export class Engine {
           usage: {
             inputTokens: totalUsage.inputTokens || 0,
             outputTokens: errLoopOutputTokens,
+            ...(totalUsage.reasoningTokens !== undefined ? { reasoningTokens: totalUsage.reasoningTokens } : {}),
             cacheReadTokens: totalUsage.cacheReadTokens || 0,
             cacheWriteTokens: totalUsage.cacheWriteTokens || 0,
             totalInputTokens: errLoopInputTokens,
@@ -3511,6 +3540,7 @@ export class Engine {
         usage: {
           inputTokens: totalUsage.inputTokens || 0,
           outputTokens: totalUsage.outputTokens || 0,
+          ...(totalUsage.reasoningTokens !== undefined ? { reasoningTokens: totalUsage.reasoningTokens } : {}),
           cacheReadTokens: totalUsage.cacheReadTokens || 0,
           cacheWriteTokens: totalUsage.cacheWriteTokens || 0,
           totalInputTokens: turnInputTokens,
@@ -3533,13 +3563,10 @@ export class Engine {
           input: tc.input,
         }));
       }
-      if (thinkingBlocks.length > 0) {
-        assistantMsg.thinkingBlocks = thinkingBlocks.map(tb => (
-          tb.redacted
-            ? { redacted: true, data: tb.data, signature: tb.signature }
-            : { thinking: tb.thinking, signature: tb.signature }
-        ));
-      }
+      const boundProviderState = bindProviderState(providerState, assistantMsg);
+      if (boundProviderState) assistantMsg.providerState = boundProviderState;
+      // New private reasoning is persisted only with verified provider ownership;
+      // never downgrade it to the origin-free legacy thinkingBlocks format.
       if (vpPersona && vpPersona.vpId) {
         const planForThisVp = (vpPlan && typeof vpPlan === 'object'
           && typeof vpPlan.vpId === 'string' && vpPlan.vpId === vpPersona.vpId)
@@ -3609,6 +3636,7 @@ export class Engine {
         usage: {
           inputTokens: totalUsage.inputTokens || 0,
           outputTokens: loopOutputTokens,
+          ...(totalUsage.reasoningTokens !== undefined ? { reasoningTokens: totalUsage.reasoningTokens } : {}),
           cacheReadTokens: totalUsage.cacheReadTokens || 0,
           cacheWriteTokens: totalUsage.cacheWriteTokens || 0,
           totalInputTokens: loopInputTokens,
@@ -3914,6 +3942,8 @@ export class Engine {
       // We re-create the closure each iteration because endTurnRequested
       // is a per-query local (reset implicitly at the top of #runQuery).
       const toolCtx = this.#buildToolContext(signal, {
+        effortDecision: snapshotEffortDecision(requestEffortDecision),
+        requestIdentity,
         router,
         senderVpId,
         sessionId: runtimeSessionId,
@@ -4094,9 +4124,8 @@ export class Engine {
             && duplicatePolicyForCall(tc) !== 'suppress'
             && !mayMutateWorkspaceAfterReturn(this, tc.name, tc.input)) {
           const parallelCalls = [];
-          const segmentCacheKeys = new Set();
           for (let candidateIndex = toolCallIndex;
-            candidateIndex < toolCalls.length && parallelCalls.length < MAX_CONCURRENT_READ_ONLY_TOOLS;
+            candidateIndex < toolCalls.length;
             candidateIndex += 1) {
             const candidate = toolCalls[candidateIndex];
             if (!toolAllowedForRequest(candidate)
@@ -4105,20 +4134,26 @@ export class Engine {
                 || mayMutateWorkspaceAfterReturn(this, candidate.name, candidate.input)) break;
             const candidateKey = `${candidate.name}\u001f${argsHashOf(candidate.input)}`;
             const candidateCacheable = isCacheableTool(this, candidate.name, candidate.input);
-            // Keep identical cacheable reads on the serial commit path so the
-            // second call reuses the first result instead of duplicating I/O.
-            if (candidateCacheable
-                && (readOnlyToolResults.has(candidateKey) || segmentCacheKeys.has(candidateKey))) break;
+            // Already committed reads reuse their result on the commit path.
+            if (!readOnlyToolReuseDisabled && candidateCacheable
+                && readOnlyToolResults.has(candidateKey)) break;
             parallelCalls.push(candidate);
-            if (candidateCacheable) segmentCacheKeys.add(candidateKey);
           }
 
           if (parallelCalls.length > 1) {
             const executions = [];
+            const inFlightReads = new Map();
             for (const call of parallelCalls) {
-              if (signal?.aborted) {
-                abortedDuringTools = true;
+              if (signal?.aborted || toolBatchBarrier) {
+                if (signal?.aborted) abortedDuringTools = true;
                 break;
+              }
+              const cacheKey = `${call.name}\u001f${argsHashOf(call.input)}`;
+              const cacheable = !readOnlyToolReuseDisabled && isCacheableTool(this, call.name, call.input);
+              const sharedExecution = cacheable ? inFlightReads.get(cacheKey) : null;
+              if (sharedExecution) {
+                executions.push(sharedExecution.then(result => ({ ...result, call, shared: true })));
+                continue;
               }
               announcedParallelToolCalls.add(call.id);
               yield {
@@ -4132,7 +4167,8 @@ export class Engine {
                 abortedDuringTools = true;
                 break;
               }
-              executions.push((async () => {
+              if (toolBatchBarrier) break;
+              const execution = (async () => {
                 const startedAt = Date.now();
                 const callContext = toolContextForCall(call);
                 const toolErrorOutput = this.#toolRegistry
@@ -4146,7 +4182,9 @@ export class Engine {
                 } catch (error) {
                   return { call, startedAt, durationMs: Date.now() - startedAt, error, toolErrorOutput };
                 }
-              })());
+              })();
+              executions.push(execution);
+              if (cacheable) inFlightReads.set(cacheKey, execution);
             }
             const completed = await Promise.all(executions);
             for (const execution of completed) {
@@ -4203,7 +4241,12 @@ export class Engine {
         const missingProjectDocScopes = hasTool && !readOnlyTool
           ? projectDocWriteScopesNeedingReload(projectDocContext, toolProjectDocPathHints)
           : new Set();
-        const needsProjectDocReload = missingProjectDocScopes.size > 0;
+        // A changed rule source was not present in the request that generated
+        // this write, even when its scope label is unchanged. Never replay it.
+        const freshProjectDocSource = hasTool && !readOnlyTool
+          ? this.#getProjectDocBlock(workDir) : projectDocSource;
+        const projectDocSourceChanged = freshProjectDocSource !== projectDocSource;
+        const needsProjectDocReload = missingProjectDocScopes.size > 0 || projectDocSourceChanged;
 
         if (abortSkipped) {
           output = `Skipped ${tc.name} because the turn was aborted before this tool started.`;
@@ -4246,6 +4289,7 @@ export class Engine {
           isError = true;
           yield { type: 'tool_end', id: tc.id, name: tc.name, output, isError: true, threadId: this.currentThreadId };
         } else if (needsProjectDocReload) {
+          projectDocSource = freshProjectDocSource;
           projectDocLoadedPathHints = [...new Set([
             ...projectDocLoadedPathHints,
             ...toolProjectDocPathHints,
@@ -4392,6 +4436,15 @@ export class Engine {
 
         currentToolCallForAsyncTask = null;
 
+        // Record concrete inputs, never tool/file prose. Apply only after the
+        // whole batch: a read cannot authorize a same-response write whose
+        // model has not yet received the newly selected rules.
+        if (hasTool && readOnlyTool && !skipped && !isError) {
+          projectDocLoadedPathHints = [...new Set([
+            ...projectDocLoadedPathHints, ...toolProjectDocPathHints,
+          ])].slice(-128);
+        }
+
         if (!skipped && !duplicateCallSuppressed && !isError && !reusedReadOnlyResult
             && duplicateCallPolicy !== 'allow') {
           const nextDuplicateCount = successfulDuplicateCount + 1;
@@ -4517,6 +4570,19 @@ export class Engine {
           queryToolCount += 1;
         }
         if (fatalToolError) throw fatalToolError;
+      }
+
+      // Preload rules for observed read paths before the next provider input.
+      // No tool from the just-completed response can benefit retroactively.
+      projectDocSource = this.#getProjectDocBlock(workDir);
+      const nextProjectDocContext = selectProjectDocContext(projectDocSource, {
+        prompt, messages, pathHints: projectDocLoadedPathHints,
+        forcedScopes: [...projectDocContext.selectedScopes],
+        language: this.#config.language || 'en',
+      });
+      if (nextProjectDocContext.text !== projectDocContext.text) {
+        projectDocContext = nextProjectDocContext;
+        systemPrompt = buildCurrentSystemPrompt();
       }
 
       // PR-L: flush any duplicate-call reminders queued during the batch.

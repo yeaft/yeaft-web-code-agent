@@ -63,7 +63,11 @@ test.describe('Yeaft composer menus', () => {
 
     await modelMenu.locator('.yeaft-model-config-option').click();
 
-    await expect(page.locator('.yeaft-llm-config-overlay')).toBeVisible();
+    const settings = page.getByRole('dialog', { name: 'Agent settings', exact: true });
+    await expect(settings).toBeVisible();
+    await expect(settings.getByRole('button', { name: 'LLM configuration', exact: true })).toHaveClass(/active/);
+    await expect(settings.getByRole('combobox', { name: 'Agent', exact: true })).toContainText('Composer menu agent');
+    await expect(settings.locator('.agent-settings-llm .llm-tab')).toBeVisible();
     await expect(modelMenu).toHaveCount(0);
   });
 });

@@ -334,7 +334,9 @@ export function handleConversationResumed(store, msg) {
   const resumedAgent = store.agents.find(a => a.id === msg.agentId);
   store.conversations = store.conversations.filter(c =>
     c.id !== msg.conversationId &&
-    !(c.claudeSessionId && c.claudeSessionId === msg.claudeSessionId)
+    !(c.claudeSessionId && c.claudeSessionId === msg.claudeSessionId &&
+      c.agentId === msg.agentId &&
+      (c.provider || 'claude-code') === (msg.provider || 'claude-code'))
   );
   store.conversations.push({
     id: msg.conversationId,

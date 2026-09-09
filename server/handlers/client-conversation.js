@@ -509,7 +509,6 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         await sendToWebClient(client, { type: 'error', message: 'Agent is still syncing, please wait...' });
         return;
       }
-      client.currentAgent = resumeAgentId;
       // fix-copilot-provider-persist: the web's auto-restore / recovery
       // resume paths (web/stores/helpers/session.js) send no provider, and
       // the agent's resume handler defaults an absent provider to
@@ -518,7 +517,34 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       // 'claude-code'} and the persist path would CLOBBER the stored
       // 'copilot' binding — reintroducing the bug, permanently. Inject the
       // persisted provider so a provider-less resume keeps the real one.
-      const resumeProvider = msg.provider || sessionDb.get(msg.conversationId)?.provider || undefined;
+      const persistedResume = msg.conversationId ? sessionDb.get(msg.conversationId) : null;
+      const liveResume = resumeAgent.conversations?.get(msg.conversationId);
+      const resumeProvider = msg.provider || persistedResume?.provider || liveResume?.provider || 'claude-code';
+      // A supplied Web ID may only be reused within its existing identity.
+      // Check both persisted and live rows before forwarding any destructive resume.
+      const bindings = [];
+      if (persistedResume) bindings.push({
+        agentId: persistedResume.agent_id,
+        userId: persistedResume.user_id || agents.get(persistedResume.agent_id)?.ownerId,
+        provider: persistedResume.provider,
+      });
+      if (msg.conversationId) {
+        for (const [agentId, agent] of agents) {
+          const conversation = agent.conversations?.get(msg.conversationId);
+          if (conversation) bindings.push({
+            agentId,
+            userId: conversation.userId || agent.ownerId,
+            provider: conversation.provider || persistedResume?.provider,
+          });
+        }
+      }
+      if (bindings.some(binding => binding.agentId !== resumeAgentId ||
+        (binding.provider || 'claude-code') !== resumeProvider ||
+        (!CONFIG.skipAuth && binding.userId !== client.userId))) {
+        await sendToWebClient(client, { type: 'error', message: 'Permission denied' });
+        return;
+      }
+      client.currentAgent = resumeAgentId;
       await forwardToAgent(resumeAgentId, {
         type: 'resume_conversation',
         conversationId: msg.conversationId || randomUUID(),

@@ -512,6 +512,16 @@ test.describe('侧边栏交互', () => {
     expect(after).toBeGreaterThanOrEqual(1);
     const created = mockAgent._receivedMessages.filter(m => m.type === 'create_conversation').at(-1);
     expect(created?.conversationId).toBeTruthy();
+    // Publish the native identity binding as the real CLI provider does.
+    const cliSessionId = `cli-${created.conversationId}`;
+    mockAgent.send({
+      type: 'session_id_update',
+      conversationId: created.conversationId,
+      claudeSessionId: cliSessionId,
+    });
+    await expect.poll(() => chatPage.evaluate(id => (
+      window.Pinia.useChatStore().conversations.find(conv => conv.id === id)?.claudeSessionId
+    ), created.conversationId)).toBe(cliSessionId);
 
     const activeItem = chatPage.locator('.session-item.active');
     const removeButton = activeItem.locator('.session-quick-action:has(.session-remove-icon)');
@@ -522,10 +532,39 @@ test.describe('侧边栏交互', () => {
     expect(mockAgent._receivedMessages.filter(m => m.type === 'delete_conversation'
       && m.conversationId === created.conversationId)).toHaveLength(0);
 
+    // Resume history is Agent-owned; only retained conversations can be recovered.
+    mockAgent._messageHandlers.push(message => {
+      if (message.type === 'resume_conversation') {
+        if (message.claudeSessionId !== cliSessionId) return;
+        const retained = mockAgent.conversations.get(created.conversationId);
+        if (!retained) return;
+        mockAgent.send({
+          type: 'conversation_resumed',
+          conversationId: message.conversationId,
+          claudeSessionId: message.claudeSessionId,
+          workDir: retained.workDir,
+          provider: message.provider,
+          historyMessages: [],
+        });
+        return;
+      }
+      if (message.type !== 'list_history_sessions') return;
+      mockAgent.send({
+        type: 'history_sessions_list',
+        requestId: message.requestId,
+        sessions: [...mockAgent.conversations.entries()]
+          .filter(([, session]) => session.workDir === message.workDir)
+          .filter(([id]) => id === created.conversationId)
+          .map(([, session]) => ({ ...session, sessionId: cliSessionId })),
+      });
+    });
     await chatPage.locator('.sidebar-primary-action').click();
     await expect(chatPage.locator('.yeaft-session-create-modal')).toBeVisible();
+    await chatPage.locator('.yeaft-session-create-modal').getByRole('combobox', { name: 'Provider', exact: true }).click();
+    await chatPage.getByRole('option', { name: 'Claude Code', exact: true }).click();
+    await chatPage.locator('.yeaft-session-create-modal .workdir-input-group input').fill(created.workDir);
     const hiddenSession = chatPage.locator('.yeaft-session-create-modal .resume-list-item', {
-      hasText: created.conversationId.slice(0, 8),
+      hasText: cliSessionId.slice(0, 8),
     });
     await expect(hiddenSession).toBeVisible();
     await hiddenSession.click();

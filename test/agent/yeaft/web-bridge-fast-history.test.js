@@ -25,6 +25,7 @@ vi.mock('../../../agent/yeaft/status-cache.js', () => ({
 const ctx = (await import('../../../agent/context.js')).default;
 const { ConversationStore } = await import('../../../agent/yeaft/conversation/persist.js');
 const { AnthropicAdapter } = await import('../../../agent/yeaft/llm/anthropic.js');
+const { createProviderContext, createProviderState } = await import('../../../agent/yeaft/llm/provider-state.js');
 const { trimSnapshotForBudget } = await import('../../../agent/yeaft/history-window.js');
 const { pairSanitize } = await import('../../../agent/yeaft/pair-sanitize.js');
 const { filterSnapshotForVp } = await import('../../../agent/yeaft/snapshot-filter.js');
@@ -992,7 +993,13 @@ describe('Yeaft load-history first paint', () => {
     const calls = [];
     try {
       const store = new ConversationStore(dir);
-      const thinkingBlocks = [{ thinking: 'restart-safe reasoning', signature: 'restart-signature' }];
+      const requestIdentity = { instanceScope: dir, ownerScope: 'fixture', sessionId: 'session-signed', vpId: 'vp-linus', threadId: 'main' };
+      const providerContext = createProviderContext({ protocol: 'anthropic', baseUrl: 'https://anthropic.test',
+        credentialScopeId: 'fixture-account', model: 'claude-sonnet-4.5', capabilities: { nativeReasoningState: true } });
+      const providerState = createProviderState({ context: providerContext, identity: requestIdentity, items: [
+        { type: 'thinking', thinking: 'restart-safe reasoning', signature: 'restart-signature' },
+        { type: 'tool_use', id: 'call-signed', name: 'Inspect', input: { path: 'README.md' } },
+      ] });
       store.append({ role: 'user', content: 'use the tool', sessionId: 'session-signed', turnId: 'turn-signed' });
       store.append({
         role: 'assistant',
@@ -1001,7 +1008,7 @@ describe('Yeaft load-history first paint', () => {
         turnId: 'turn-signed',
         speakerVpId: 'vp-linus',
         toolCalls: [{ id: 'call-signed', name: 'Inspect', input: { path: 'README.md' } }],
-        thinkingBlocks,
+        providerState,
       });
       store.append({
         role: 'tool',
@@ -1026,7 +1033,7 @@ describe('Yeaft load-history first paint', () => {
         expect.objectContaining({
           role: 'assistant',
           toolCalls: [{ id: 'call-signed', name: 'Inspect', input: { path: 'README.md' } }],
-          thinkingBlocks,
+          providerState,
         }),
         expect.objectContaining({ role: 'tool', toolCallId: 'call-signed' }),
       ]));
@@ -1042,7 +1049,7 @@ describe('Yeaft load-history first paint', () => {
         };
       });
       const adapter = new AnthropicAdapter({ apiKey: 'key', baseUrl: 'https://anthropic.test' });
-      await adapter.call({ model: 'claude-sonnet-4.5', system: '', messages: ownerSnapshot });
+      await adapter.call({ model: 'claude-sonnet-4.5', system: '', messages: ownerSnapshot, requestIdentity, providerContext });
       const assistantWire = calls[0].body.messages.find(message => message.role === 'assistant');
       expect(assistantWire.content).toEqual([
         { type: 'thinking', thinking: 'restart-safe reasoning', signature: 'restart-signature' },

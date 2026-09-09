@@ -116,7 +116,71 @@ globalThis.Pinia = {
   useSessionsStore: () => runtimeSessionsStore,
 };
 const { useChatStore } = await import('../../web/stores/chat.js');
-const { answerUserQuestion } = await import('../../web/stores/helpers/conversation.js');
+const { answerUserQuestion, resumeConversation } = await import('../../web/stores/helpers/conversation.js');
+
+describe('CLI resume identity', () => {
+  it.each(['claude-code', 'copilot'])('keeps other Agent/provider rows on a %s resume response', provider => {
+    const store = {
+      agents: [{ id: 'agent-a' }, { id: 'agent-b' }],
+      conversations: [
+        { id: 'other-agent', agentId: 'agent-b', provider, claudeSessionId: 'cli-id' },
+        { id: 'other-provider', agentId: 'agent-a', provider: provider === 'copilot' ? 'claude-code' : 'copilot', claudeSessionId: 'cli-id' },
+        { id: 'stale', agentId: 'agent-a', provider: provider === 'claude-code' ? undefined : provider, claudeSessionId: 'cli-id' },
+      ],
+      panels: [], messagesMap: {}, chatSessionState: {},
+      sendWsMessage: vi.fn(), addMessage: vi.fn(), saveOpenSessions: vi.fn(),
+    };
+    handleConversationResumed(store, {
+      conversationId: 'web-id', agentId: 'agent-a', provider,
+      claudeSessionId: 'cli-id', workDir: '/repo', dbMessages: [],
+    });
+    expect(store.conversations.map(row => row.id)).toEqual(['other-agent', 'other-provider', 'web-id']);
+    expect(store.sendWsMessage).toHaveBeenCalledWith({ type: 'select_conversation', conversationId: 'web-id' });
+  });
+
+  it.each(['claude-code', 'copilot'])('retains the hidden Web identity for %s on the selected Agent', provider => {
+    vi.useFakeTimers();
+    try {
+      const row = {
+        catalogKey: 'chat:web-id',
+        routeRef: { runtimeProvider: provider, agentId: 'agent-a', sessionId: 'web-id' },
+      };
+      const store = {
+        currentAgent: 'agent-a',
+        conversations: [
+          { id: 'other-agent', agentId: 'agent-b', provider, claudeSessionId: 'cli-id' },
+          { id: 'other-provider', agentId: 'agent-a', provider: provider === 'copilot' ? 'claude-code' : 'copilot', claudeSessionId: 'cli-id' },
+          { id: 'web-id', agentId: 'agent-a', provider, claudeSessionId: 'cli-id' },
+        ],
+        hiddenSessionCatalog: [row],
+        restoreCatalogSession: vi.fn(() => true),
+        sendWsMessage: vi.fn(),
+      };
+      resumeConversation(store, 'cli-id', '/repo', null, { provider });
+      expect(store.restoreCatalogSession).toHaveBeenCalledWith(row);
+      expect(store.sendWsMessage).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'resume_conversation', conversationId: 'web-id', claudeSessionId: 'cli-id', agentId: 'agent-a', provider,
+      }));
+
+      store.restoreCatalogSession.mockReturnValue(false);
+      store.sendWsMessage.mockClear();
+      resumeConversation(store, 'cli-id', '/repo', null, { provider });
+      expect(store.sendWsMessage).not.toHaveBeenCalled();
+
+      store.hiddenSessionCatalog = [];
+      resumeConversation(store, 'cli-id', '/repo', null, { provider });
+      expect(store.sendWsMessage).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'web-id' }));
+
+      store.sendWsMessage.mockClear();
+      resumeConversation(store, 'unknown-cli-id', '/repo', null, { provider });
+      expect(store.sendWsMessage).toHaveBeenCalledWith(expect.objectContaining({ claudeSessionId: 'unknown-cli-id' }));
+      expect(store.sendWsMessage.mock.calls[0][0]).not.toHaveProperty('conversationId');
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+});
 const { default: AssistantTurn } = await import('../../web/components/AssistantTurn.js');
 const { default: MessageItem } = await import('../../web/components/MessageItem.js');
 const { useSessionsStore } = await import('../../web/stores/sessions.js');

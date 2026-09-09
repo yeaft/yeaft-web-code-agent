@@ -87,15 +87,6 @@ export async function handleAgentConversation(agentId, agent, msg) {
 
     case 'conversation_created':
     case 'conversation_resumed': {
-      // 清理同 claudeSessionId 的旧条目（避免重复恢复同一个 session 累积）
-      if (msg.type === 'conversation_resumed' && msg.claudeSessionId) {
-        for (const [id, conv] of agent.conversations) {
-          if (id !== msg.conversationId && conv.claudeSessionId === msg.claudeSessionId) {
-            agent.conversations.delete(id);
-          }
-        }
-      }
-
       // fix-session-dup: if this conv is currently held in another
       // agent's in-memory Map (e.g. user resumed it against a
       // different machine after the original agent went offline),
@@ -140,6 +131,17 @@ export async function handleAgentConversation(agentId, agent, msg) {
       // independently safe.
       const reportedProvider = (msg.provider && msg.provider !== 'claude-code') ? msg.provider : null;
       const resolvedProvider = reportedProvider || existingConvData?.provider || dbSessionData?.provider || null;
+
+      // CLI IDs are scoped to this Agent, provider and owner, not globally unique.
+      if (msg.type === 'conversation_resumed' && msg.claudeSessionId) {
+        for (const [id, conv] of agent.conversations) {
+          if (id !== msg.conversationId && conv.claudeSessionId === msg.claudeSessionId &&
+            (conv.provider || 'claude-code') === (resolvedProvider || 'claude-code') &&
+            (conv.userId || agent.ownerId || null) === trustedUserId) {
+            agent.conversations.delete(id);
+          }
+        }
+      }
 
       agent.conversations.set(msg.conversationId, {
         id: msg.conversationId,

@@ -44,11 +44,12 @@ import { utf8PrefixWithinBytes } from '../utf8.js';
  * @typedef {{ type: 'thinking_delta', text: string }} ThinkingDeltaEvent
  * @typedef {{ type: 'thinking_block_end', thinking: string, signature: string }} ThinkingBlockEndEvent
  * @typedef {{ type: 'tool_call', id: string, name: string, input: object }} ToolCallEvent
- * @typedef {{ type: 'usage', inputTokens: number, outputTokens: number, cacheReadTokens?: number, cacheWriteTokens?: number, cacheTokensAreIncludedInInput?: boolean }} UsageEvent
+ * @typedef {{ type: 'provider_state', providerState: object, providerStateBytes: number }} ProviderStateEvent Internal only; never forward to UI/search.
+ * @typedef {{ type: 'usage', inputTokens: number, outputTokens: number, reasoningTokens?: number, cacheReadTokens?: number, cacheWriteTokens?: number, cacheTokensAreIncludedInInput?: boolean }} UsageEvent
  * @typedef {{ type: 'stop', stopReason: 'end_turn' | 'tool_use' | 'max_tokens' }} StopEvent
  * @typedef {{ type: 'error', error: Error, retryable: boolean }} ErrorEvent
  *
- * @typedef {TextDeltaEvent | ThinkingDeltaEvent | ThinkingBlockEndEvent | ToolCallEvent | UsageEvent | StopEvent | ErrorEvent} StreamEvent
+ * @typedef {TextDeltaEvent | ThinkingDeltaEvent | ThinkingBlockEndEvent | ProviderStateEvent | ToolCallEvent | UsageEvent | StopEvent | ErrorEvent} StreamEvent
  */
 
 // ─── Unified Message Types ─────────────────────────────────────

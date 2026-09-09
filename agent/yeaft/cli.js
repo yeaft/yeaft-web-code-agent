@@ -388,6 +388,7 @@ async function runREPL(config, args) {
     content: m.content,
     ...(m.toolCallId && { toolCallId: m.toolCallId }),
     ...(m.toolCalls && { toolCalls: m.toolCalls }),
+    ...(m.providerState && { providerState: m.providerState }),
     ...(Array.isArray(m.thinkingBlocks) && m.thinkingBlocks.length > 0
       ? { thinkingBlocks: m.thinkingBlocks.map(block => ({ ...block })) }
       : {}),
@@ -908,6 +909,7 @@ async function runStreamJson(config, args) {
     content: message.content,
     ...(message.toolCallId && { toolCallId: message.toolCallId }),
     ...(message.toolCalls && { toolCalls: message.toolCalls }),
+    ...(message.providerState && { providerState: message.providerState }),
     ...(Array.isArray(message.thinkingBlocks) && message.thinkingBlocks.length > 0
       ? { thinkingBlocks: message.thinkingBlocks.map(block => ({ ...block })) }
       : {}),
@@ -1263,6 +1265,7 @@ async function runOnce(config, args) {
       content: m.content,
       ...(m.toolCallId && { toolCallId: m.toolCallId }),
       ...(m.toolCalls && { toolCalls: m.toolCalls }),
+      ...(m.providerState && { providerState: m.providerState }),
       ...(Array.isArray(m.thinkingBlocks) && m.thinkingBlocks.length > 0
         ? { thinkingBlocks: m.thinkingBlocks.map(block => ({ ...block })) }
         : {}),
