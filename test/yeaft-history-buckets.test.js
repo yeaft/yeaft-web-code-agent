@@ -181,14 +181,22 @@ describe('dual-bucket provider history', () => {
     }
   });
 
-  it('keeps recent as a continuous suffix even when an intervening turn is too large', () => {
-    const result = run([...turn(10), ...turn(20, 'huge', 'x'.repeat(10000)), ...turn(30)], {
-      messageTokenBudget: 100,
+  it('fits oversized recent text instead of letting one turn evict a 20-turn window', () => {
+    const twenty = run(Array.from({ length: 20 }, (_, index) => (
+      turn(index * 10, `question ${index}`, 'x'.repeat(index === 18 ? 100000 : 200))
+    )).flat(), { messageTokenBudget: 500 });
+    expect(twenty.meta.recent.turnCount).toBe(20);
+    expect(users(twenty)).toHaveLength(21);
+    expect(twenty.meta.budget.usedTokens).toBeLessThanOrEqual(500);
+  });
+
+  it('never exceeds the hard message cap while considering a 20-turn text window', () => {
+    const result = run(Array.from({ length: 20 }, (_, index) => turn(index * 10)).flat(), {
+      maxMessageCount: 21,
     });
-    expect(users(result)).toEqual(['m30', 'm10000']);
-    expect(result.meta.recent.turnCount).toBe(1);
-    const oversizedLatest = run([...turn(10), ...turn(20, 'huge', 'x'.repeat(10000))], { messageTokenBudget: 100 });
-    expect(oversizedLatest.meta.recent.turnCount).toBe(0);
+    expect(result.messages).toHaveLength(21);
+    expect(result.meta.budget.usedMessages).toBe(21);
+    expect(result.meta.recent.turnCount).toBe(10);
   });
 
   it('makes tool replay optional and paired without evicting complete text from either bucket', () => {
@@ -207,6 +215,51 @@ describe('dual-bucket provider history', () => {
     const roomy = run(past.map(row => row.role === 'tool' ? { ...row, content: 'ok' } : row));
     expect(roomy.messages.some(row => row.role === 'tool')).toBe(true);
     expect(hasOrphanPairs(roomy.messages)).toBe(false);
+  });
+
+  it('keeps 20 text turns but replays tool protocol from only the newest 3 turns', () => {
+    const past = Array.from({ length: 20 }, (_, index) => {
+      const base = index * 10;
+      return [
+        { id: `m${base}`, seq: base, role: 'user', content: `question ${index}` },
+        { id: `m${base + 1}`, seq: base + 1, role: 'assistant', content: `checking ${index}`,
+          toolCalls: [{ id: `call-${index}`, name: 'Read', input: {} }] },
+        { id: `m${base + 2}`, seq: base + 2, role: 'tool', toolCallId: `call-${index}`,
+          content: index === 16 ? `OUTSIDE_TOOL_WINDOW_${'x'.repeat(50000)}` : `result ${index}` },
+        { id: `m${base + 3}`, seq: base + 3, role: 'assistant', content: `answer ${index}` },
+      ];
+    }).flat();
+    const result = run(past);
+    const replayedCalls = result.messages.flatMap(row => row.toolCalls || []).map(call => call.id);
+    const replayedResults = result.messages.filter(row => row.role === 'tool').map(row => row.toolCallId);
+
+    expect(result.meta.recent.turnCount).toBe(20);
+    expect(users(result)).toHaveLength(21);
+    expect(replayedCalls).toEqual(['call-17', 'call-18', 'call-19']);
+    expect(replayedResults).toEqual(['call-17', 'call-18', 'call-19']);
+    expect(JSON.stringify(result.messages)).not.toContain('OUTSIDE_TOOL_WINDOW');
+    expect(hasOrphanPairs(result.messages)).toBe(false);
+  });
+
+  it('keeps fitted tool calls attached to their original assistant owners', () => {
+    const past = Array.from({ length: 20 }, (_, index) => {
+      const base = index * 10;
+      return [
+        { id: `m${base}`, seq: base, role: 'user', content: `question ${index}` },
+        { id: `m${base + 1}`, seq: base + 1, role: 'assistant', content: `owner ${index} ${'x'.repeat(200)}`,
+          toolCalls: [{ id: `call-${index}`, name: 'Read', input: {} }] },
+        { id: `m${base + 2}`, seq: base + 2, role: 'tool', toolCallId: `call-${index}`, content: `result ${index}` },
+        { id: `m${base + 3}`, seq: base + 3, role: 'assistant', content: `answer ${index}` },
+      ];
+    }).flat();
+    const result = run(past, { messageTokenBudget: 3000 });
+    const owners = result.messages.filter(row => Array.isArray(row.toolCalls));
+
+    expect(result.meta.recent.turnCount).toBe(20);
+    expect(owners.map(row => [row.content.split(' ')[1], row.toolCalls[0].id])).toEqual([
+      ['17', 'call-17'], ['18', 'call-18'], ['19', 'call-19'],
+    ]);
+    expect(hasOrphanPairs(result.messages)).toBe(false);
   });
 
   it('keeps active internal completion and reflection controls without recalling old controls', () => {
