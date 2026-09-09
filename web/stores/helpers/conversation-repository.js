@@ -51,12 +51,46 @@ function rowOrder(row) {
   const time = Number.isFinite(timestamp) && timestamp > 0
     ? timestamp
     : (durable ? -Infinity : Infinity);
-  // Equal known times keep projection order even when only part of a streamed
-  // response has become durable. A persistence seq must not move its tool rows.
+  // Resolve known-time ties as blocks below, not with a pairwise seq fallback
+  // (which would be non-transitive when an overlay lies between durable rows).
   return [time, Number.isFinite(time) ? 0 : (Number.isFinite(seq) ? seq : -1)];
 }
 
-/** Sort the visible projection in place, preserving arrival order for equal keys. */
+/** Order equal-time durable anchors within each Session, carrying trailing overlays. */
+function sortTimestampTies(rows, start, end) {
+  const blocks = [];
+  const bySession = new Map();
+  for (let index = start; index < end; index += 1) {
+    const row = rows[index];
+    const sessionId = rowSessionId(row);
+    const seq = isDurableYeaftHistoryRow(row) ? yeaftHistoryRowSeq(row) : null;
+    const previous = blocks[blocks.length - 1];
+    if (!Number.isFinite(seq) && previous?.sessionId === sessionId) {
+      previous.rows.push(row);
+      continue;
+    }
+    const block = { sessionId, seq, rows: [row] };
+    blocks.push(block);
+    if (Number.isFinite(seq)) {
+      if (!bySession.has(sessionId)) bySession.set(sessionId, []);
+      bySession.get(sessionId).push(block);
+    }
+  }
+  for (const group of bySession.values()) group.sort((left, right) => left.seq - right.seq);
+  const cursors = new Map();
+  let index = start;
+  for (const block of blocks) {
+    let ordered = block;
+    if (Number.isFinite(block.seq)) {
+      const cursor = cursors.get(block.sessionId) || 0;
+      ordered = bySession.get(block.sessionId)[cursor];
+      cursors.set(block.sessionId, cursor + 1);
+    }
+    for (const row of ordered.rows) rows[index++] = row;
+  }
+}
+
+/** Sort the visible projection in place; equal-time overlays stay with their anchor. */
 export function sortYeaftConversationRows(rows) {
   rows.sort((left, right) => {
     const leftOrder = rowOrder(left);
@@ -66,6 +100,13 @@ export function sortYeaftConversationRows(rows) {
     }
     return 0;
   });
+  for (let start = 0; start < rows.length;) {
+    const time = rowOrder(rows[start])[0];
+    let end = start + 1;
+    while (end < rows.length && rowOrder(rows[end])[0] === time) end += 1;
+    if (Number.isFinite(time) && end - start > 1) sortTimestampTies(rows, start, end);
+    start = end;
+  }
   return rows;
 }
 

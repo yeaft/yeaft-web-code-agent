@@ -342,6 +342,37 @@ describe('Conversation Repository', () => {
       rows: [{ id: 'live-2', seq: 21, type: 'assistant', content: 'working still', timestamp: 200, sessionId: 'session-a', isHistory: true, isStreaming: false }],
     });
     expect(projection.filter(row => row.timestamp === 200).map(row => row.id)).toEqual(['live-2', 'tool-2']);
+
+    // Same-millisecond page boundaries and out-of-order deltas still follow
+    // transcript seq. Tools follow their preceding text, not a durable slot.
+    for (const mode of ['older', 'delta']) {
+      repository.replaceProjection('yeaft-1', []);
+      const durable = (seq, type = 'assistant', sessionId = 'session-a') => ({
+        id: `${sessionId}-m${seq}`, seq, type, content: `row ${seq}`,
+        timestamp: 500, sessionId, isHistory: true,
+      });
+      repository.upsertOverlay({ conversationId: 'yeaft-1', row: {
+        id: 'optimistic', type: 'user', timestamp: 500, sessionId: 'session-a',
+      } });
+      repository.commitDurable({ conversationId: 'yeaft-1', mode: 'recent', rows: [durable(21)] });
+      repository.upsertOverlay({ conversationId: 'yeaft-1', row: {
+        id: 'tool', type: 'tool-use', timestamp: 500, sessionId: 'session-a',
+      } });
+      repository.commitDurable({ conversationId: 'yeaft-1', mode, rows: [durable(20, 'user')] });
+      expect(projection.map(row => row.id)).toEqual(['optimistic', 'session-a-m20', 'session-a-m21', 'tool']);
+      repository.commitDurable({ conversationId: 'yeaft-1', mode, rows: [durable(23), durable(22)] });
+      expect(projection.map(row => row.id)).toEqual([
+        'optimistic', 'session-a-m20', 'session-a-m21', 'tool', 'session-a-m22', 'session-a-m23',
+      ]);
+      // Another Session's seq is not comparable, and repeated projection
+      // rebuilds must be idempotent with tools between durable rows.
+      repository.commitDurable({ conversationId: 'yeaft-1', rows: [durable(1, 'user', 'session-b')] });
+      const expected = projection.map(row => row.id);
+      for (let repeat = 0; repeat < 3; repeat += 1) {
+        repository.replaceProjection('yeaft-1', [...projection]);
+        expect(projection.map(row => row.id)).toEqual(expected);
+      }
+    }
   });
 
   it('keeps newer overlays while replacing a mismatched durable generation', () => {
