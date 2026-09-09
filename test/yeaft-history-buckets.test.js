@@ -190,6 +190,15 @@ describe('dual-bucket provider history', () => {
     expect(twenty.meta.budget.usedTokens).toBeLessThanOrEqual(500);
   });
 
+  it('never exceeds the hard message cap while considering a 20-turn text window', () => {
+    const result = run(Array.from({ length: 20 }, (_, index) => turn(index * 10)).flat(), {
+      maxMessageCount: 21,
+    });
+    expect(result.messages).toHaveLength(21);
+    expect(result.meta.budget.usedMessages).toBe(21);
+    expect(result.meta.recent.turnCount).toBe(10);
+  });
+
   it('makes tool replay optional and paired without evicting complete text from either bucket', () => {
     const past = [
       ...turn(10),
@@ -229,6 +238,27 @@ describe('dual-bucket provider history', () => {
     expect(replayedCalls).toEqual(['call-17', 'call-18', 'call-19']);
     expect(replayedResults).toEqual(['call-17', 'call-18', 'call-19']);
     expect(JSON.stringify(result.messages)).not.toContain('OUTSIDE_TOOL_WINDOW');
+    expect(hasOrphanPairs(result.messages)).toBe(false);
+  });
+
+  it('keeps fitted tool calls attached to their original assistant owners', () => {
+    const past = Array.from({ length: 20 }, (_, index) => {
+      const base = index * 10;
+      return [
+        { id: `m${base}`, seq: base, role: 'user', content: `question ${index}` },
+        { id: `m${base + 1}`, seq: base + 1, role: 'assistant', content: `owner ${index} ${'x'.repeat(200)}`,
+          toolCalls: [{ id: `call-${index}`, name: 'Read', input: {} }] },
+        { id: `m${base + 2}`, seq: base + 2, role: 'tool', toolCallId: `call-${index}`, content: `result ${index}` },
+        { id: `m${base + 3}`, seq: base + 3, role: 'assistant', content: `answer ${index}` },
+      ];
+    }).flat();
+    const result = run(past, { messageTokenBudget: 3000 });
+    const owners = result.messages.filter(row => Array.isArray(row.toolCalls));
+
+    expect(result.meta.recent.turnCount).toBe(20);
+    expect(owners.map(row => [row.content.split(' ')[1], row.toolCalls[0].id])).toEqual([
+      ['17', 'call-17'], ['18', 'call-18'], ['19', 'call-19'],
+    ]);
     expect(hasOrphanPairs(result.messages)).toBe(false);
   });
 

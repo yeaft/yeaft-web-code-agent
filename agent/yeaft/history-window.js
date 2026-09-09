@@ -566,10 +566,11 @@ function truncateToolResultsForModel(messages, options = {}) {
 
 const HISTORY_SOURCE_INDEX = Symbol('historySourceIndex');
 
-function withHistorySourceIndexes(messages) {
+function withHistorySourceIndexes(messages, offset = 0) {
   return messages.map((message, index) => (
     message && typeof message === 'object'
-      ? { ...message, [HISTORY_SOURCE_INDEX]: index }
+      ? { ...message, [HISTORY_SOURCE_INDEX]: Number.isInteger(message[HISTORY_SOURCE_INDEX])
+        ? message[HISTORY_SOURCE_INDEX] : offset + index }
       : message
   ));
 }
@@ -796,12 +797,13 @@ function bucketTextMessages(messages) {
 }
 
 function bucketTurn(messages, index, supplied = {}) {
-  const user = messages.find(bucketUserBoundary);
-  const sourceIds = [...new Set(messages.flatMap(bucketSourceIds))];
-  const keys = [...new Set(messages.filter(bucketUserBoundary).flatMap(bucketUserKeys))];
+  const indexedMessages = withHistorySourceIndexes(messages, index ?? 0);
+  const user = indexedMessages.find(bucketUserBoundary);
+  const sourceIds = [...new Set(indexedMessages.flatMap(bucketSourceIds))];
+  const keys = [...new Set(indexedMessages.filter(bucketUserBoundary).flatMap(bucketUserKeys))];
   if (supplied.id) keys.push(`turn:${supplied.id}`);
   if (keys.length === 0 && index != null) keys.push(`snapshot:${index}`);
-  const text = bucketTextMessages(messages);
+  const text = bucketTextMessages(indexedMessages);
   return {
     ...supplied,
     id: supplied.id || keys[0] || `snapshot:${index}`,
@@ -809,7 +811,7 @@ function bucketTurn(messages, index, supplied = {}) {
     sourceIds,
     userSeq: Number.isFinite(supplied.userSeq) ? supplied.userSeq : bucketSequence(user),
     index,
-    messages,
+    messages: indexedMessages,
     text,
     tokens: estimateMessagesTokens(text),
   };
@@ -1046,7 +1048,8 @@ export function buildHistoryBuckets(snapshot, options = {}) {
     const candidates = past.slice(-recentCap);
     if (!candidates.length || limit <= 0 || rowLimit <= 0) return [];
     const preserveBoundaries = candidates.length >= MINIMUM_RECENT_PROVIDER_TURNS
-      && rowLimit >= candidates.length && limit >= candidates.length * 2;
+      && rowLimit >= candidates.reduce((sum, turn) => sum + turn.text.length, 0)
+      && limit >= candidates.length * 2;
     if (!preserveBoundaries) {
       const selected = [];
       let tokens = 0;
@@ -1063,14 +1066,17 @@ export function buildHistoryBuckets(snapshot, options = {}) {
 
     const selected = [];
     let tokens = Math.floor(limit);
+    let rows = Math.floor(rowLimit);
     for (const turn of candidates) {
       const remainingTurns = candidates.length - selected.length;
+      if (rows < remainingTurns) break;
       const allowance = Math.max(2, Math.floor(tokens / remainingTurns));
       const fitted = fitRecentTurn(turn, allowance);
-      if (!fitted.length) continue;
+      if (!fitted.length || fitted.length > rows - (remainingTurns - 1)) continue;
       const used = estimateMessagesTokens(fitted);
       selected.push({ ...turn, text: fitted, tokens: used });
       tokens -= used;
+      rows -= fitted.length;
     }
     return selected;
   }
@@ -1108,14 +1114,12 @@ export function buildHistoryBuckets(snapshot, options = {}) {
   related.sort((a, b) => bucketBefore(a, b) ? -1 : bucketBefore(b, a) ? 1 : 0);
 
   const relatedMessages = related.flatMap(turn => turn.text);
-  const recentText = withHistorySourceIndexes(recent.flatMap(turn => turn.messages)
-    .filter(isVisibleConversationRow));
+  const recentText = recent.flatMap(turn => turn.messages)
+    .filter(isVisibleConversationRow);
   const recentWasFitted = recent.some(turn => turn.text !== turn.messages
     && (turn.text.length !== bucketTextMessages(turn.messages).length
       || turn.tokens !== estimateMessagesTokens(bucketTextMessages(turn.messages))));
-  const recentBaseline = recentWasFitted
-    ? withHistorySourceIndexes(recent.flatMap(turn => turn.text))
-    : bucketTextMessages(recentText);
+  const recentBaseline = recent.flatMap(turn => recentWasFitted ? turn.text : bucketTextMessages(turn.messages));
   // Enrich only after both complete-text buckets and the active turn are paid.
   // Tool protocol is useful only for immediate continuity; unlike visible text,
   // it never reaches farther back than the configured recent tool window.
