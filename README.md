@@ -44,6 +44,10 @@ Some internal wire types and storage paths retain historical names such as `grou
 
 The Web UI also includes a terminal, Git status/diff, file browser/editor, port proxy, split-screen CLI conversations, an Expert Panel for Claude Code conversations, usage administration, light/dark themes, and English/Chinese localization.
 
+### Math in Markdown messages
+
+Markdown messages render LaTeX formulas locally with KaTeX: use `$E=mc^2$` or `\(E=mc^2\)` inline, and `$$...$$` or `\[...\]` for display equations (including multiple lines). Code spans and code blocks stay literal. Unsupported formulas remain readable source text; long equations scroll horizontally on narrow screens. This supports KaTeX's math syntax, not complete LaTeX documents, and requires no runtime CDN.
+
 ## Current native Yeaft capabilities
 
 ### Sessions and Projects

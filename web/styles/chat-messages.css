@@ -1198,6 +1198,34 @@
   font-size: 14px;
 }
 
+/* KaTeX inherits the theme's text color. Only the formula scrolls on mobile. */
+.math-display {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin: 0.7em 0;
+}
+
+.math-display .katex-display {
+  margin: 0;
+  padding: 0.2em 0;
+  text-align: left;
+}
+
+.math-inline {
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  vertical-align: middle;
+}
+
+.math-fallback {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .markdown-body h1,
 .markdown-body h2,
 .markdown-body h3,
