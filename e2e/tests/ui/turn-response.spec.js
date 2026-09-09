@@ -206,6 +206,13 @@ test('debug panel keeps one latest request and full loop tools across themes and
   expect(markdown.match(/LATEST_BODY/g)).toHaveLength(1);
   expect(markdown).not.toMatch(/OLD_BODY|OLD_SYSTEM/);
 
+  await page.evaluate(() => {
+    window.__debugStore.yeaftDebugLoops.push({ turnId: 'debug-turn', loopNumber: 3 });
+  });
+  await expect(request.locator('pre')).toContainText('LATEST_BODY');
+  await expect(request.locator('.yeaft-debug-section-meta')).toHaveText('Loop 2');
+  await expect(system.locator('.yeaft-debug-section-meta')).toHaveText('Loop 2');
+
   for (const theme of ['light', 'dark']) {
     await page.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
     for (const width of [1280, 320]) {
@@ -226,13 +233,25 @@ test('debug panel keeps one latest request and full loop tools across themes and
   }
   await page.evaluate(() => {
     window.__debugStore.yeaftDebugLoops[1].rawRequest = null;
-    window.__debugStore.yeaftDebugLoops[1].systemPrompt = '';
     window.__locale.value = 'zh';
+  });
+  await expect(request.locator('pre')).toContainText('OLD_BODY');
+  await expect(request).toContainText('最近可用请求体');
+  await expect(request.locator('.yeaft-debug-section-meta')).toHaveText('Loop 1');
+  await expect(system.locator('pre')).toHaveText('LATEST_SYSTEM');
+  await expect(system.locator('.yeaft-debug-section-meta')).toHaveText('Loop 2');
+  await request.getByRole('button', { name: '复制', exact: true }).click();
+  expect(JSON.parse(await page.evaluate(() => navigator.clipboard.readText())).input).toBe('OLD_BODY');
+  await page.evaluate(() => {
+    for (const loop of window.__debugStore.yeaftDebugLoops) {
+      loop.rawRequest = null;
+      loop.systemPrompt = '';
+    }
   });
   await expect(request.locator('pre')).toHaveCount(0);
   await expect(request.getByRole('button', { name: '复制', exact: true })).toBeDisabled();
-  await expect(request).toContainText('最新 Loop 的请求体不可用。');
-  await expect(system).toContainText('最新 Loop 的系统提示不可用。');
+  await expect(request).toContainText('此 Turn 暂无可用请求体。');
+  await expect(system).toContainText('此 Turn 暂无可用系统提示。');
   await expect(result).toContainText('RESULT_TAIL');
 });
 

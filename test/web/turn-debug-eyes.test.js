@@ -317,12 +317,35 @@ describe('handleMessage turn-level panel status', () => {
     expect(markdown).not.toContain('OLD_SYSTEM');
     expect(markdown).not.toContain('x-request-id');
 
-    // New projection and explicit null must not recover the previous request,
-    // even when legacy base fields remain on the latest record.
+    // Progress metadata arriving after hydration must not hide loaded data.
+    store.yeaftDebugLoops.push({ turnId: 'turn-abc', loopNumber: 3 });
+    await Vue.nextTick();
+    expect(request.get('pre').text()).toContain('LATEST_BODY');
+    expect(request.get('.yeaft-debug-section-meta').text()).toBe('Loop 2');
+    expect(system.get('pre').text()).toBe('LATEST_SYSTEM');
+
+    // Each field falls back independently and keeps its own source Loop.
     store.yeaftDebugLoops[1].rawRequest = null;
-    store.yeaftDebugLoops[1].rawRequestBase = loops[0].rawRequest;
+    store.yeaftDebugLoops[1].rawRequestBase = { body: 'MUST_NOT_INHERIT' };
+    await Vue.nextTick();
+    expect(request.get('pre').text()).toContain('OLD_BODY');
+    expect(request.get('.yeaft-debug-section-meta').text()).toBe('Loop 1');
+    expect(system.get('.yeaft-debug-section-meta').text()).toBe('Loop 2');
+    await wrapper.get('.yeaft-debug-turn-copy').trigger('click');
+    expect(copy.mock.lastCall[0]).toContain('yeaft.debugLatestRequestBody (Loop 1)');
+    expect(copy.mock.lastCall[0]).toContain('yeaft.debugLatestSystemPrompt (Loop 2)');
+    expect(copy.mock.lastCall[0]).not.toContain('MUST_NOT_INHERIT');
     store.yeaftDebugLoops[1].systemPrompt = '';
     await Vue.nextTick();
+    expect(system.get('pre').text()).toBe('OLD_SYSTEM');
+    expect(system.get('.yeaft-debug-section-meta').text()).toBe('Loop 1');
+
+    // Only genuinely empty turns show unavailable and disable the actions.
+    store.yeaftDebugLoops[0].rawRequest = null;
+    store.yeaftDebugLoops[0].systemPrompt = '';
+    await Vue.nextTick();
+    expect(request.find('.yeaft-debug-section-meta').exists()).toBe(false);
+    expect(system.find('.yeaft-debug-section-meta').exists()).toBe(false);
     expect(request.find('pre').exists()).toBe(false);
     expect(request.get('.yeaft-debug-copy-btn').attributes('disabled')).toBeDefined();
     expect(request.get('.yeaft-debug-show-btn').attributes('disabled')).toBeDefined();
@@ -345,7 +368,7 @@ describe('handleMessage turn-level panel status', () => {
     expect(JSON.parse(vm.latestRequestForTurn(turn).bodyText).input).toHaveLength(2);
     expect(turn.loops[0]).toBe(latest);
     latest.rawRequest = null;
-    expect(vm.latestRequestForTurn(turn)).toMatchObject({ loopNumber: 3, bodyText: null, systemPrompt: 'latest' });
+    expect(vm.latestRequestForTurn(turn)).toMatchObject({ bodyLoopNumber: 1, bodyText: 'old', systemPromptLoopNumber: 3, systemPrompt: 'latest' });
     expect(vm.latestRequestForTurn({ loops: [] })).toBeNull();
   });
 
