@@ -303,6 +303,45 @@ describe('Conversation Repository', () => {
       expect.objectContaining({ id: 'm0011', content: 'partial complete', isStreaming: false }),
     ]);
     expect(repository.snapshot('yeaft-1', 'session-a').overlayRows).toEqual([]);
+
+    // A later durable assistant response must not jump above its still-local
+    // user prompt, nor above earlier streaming text or tools from this turn.
+    repository.replaceProjection('yeaft-1', []);
+    const liveRows = [
+      { id: 'client-2', messageId: 'client-2', clientMessageId: 'client-2', type: 'user', content: 'question', timestamp: 100 },
+      { id: 'live-2', type: 'assistant', content: 'working', turnId: 'turn-2', timestamp: 200, isStreaming: true },
+      { id: 'tool-2', type: 'tool-use', toolName: 'Bash', timestamp: 200 },
+    ].map(row => ({ ...row, sessionId: 'session-a' }));
+    for (const row of liveRows) repository.upsertOverlay({ conversationId: 'yeaft-1', row });
+    const projection = store.messagesMap['yeaft-1'];
+    repository.commitDurable({
+      conversationId: 'yeaft-1', sessionId: 'session-a', mode: 'delta',
+      rows: [{ id: 'm0022', seq: 22, type: 'assistant', content: 'later response', timestamp: 300, sessionId: 'session-a', isHistory: true }],
+    });
+    expect(projection.map(row => row.id)).toEqual(['client-2', 'live-2', 'tool-2', 'm0022']);
+    repository.appendOverlayText({ conversationId: 'yeaft-1', sessionId: 'session-a', turnId: 'turn-2', text: ' still' });
+    expect(projection[1].content).toBe('working still');
+    expect(projection[1].timestamp).toBe(200);
+    repository.commitDurable({
+      conversationId: 'yeaft-1', sessionId: 'session-a', mode: 'delta',
+      rows: [{ id: 'm0020', messageId: 'm0020', seq: 20, clientMessageId: 'client-2', type: 'user', content: 'question', timestamp: 100, sessionId: 'session-a', isHistory: true }],
+    });
+    expect(store.messagesMap['yeaft-1']).toBe(projection);
+    expect(projection.map(row => row.id)).toEqual(['m0020', 'live-2', 'tool-2', 'm0022']);
+
+    // Out-of-order live arrivals also sort by time; equal-time sibling rows
+    // remain stable instead of changing position on each projection rebuild.
+    repository.upsertOverlay({ conversationId: 'yeaft-1', row: { id: 'late-arrival', type: 'assistant', timestamp: 150, isStreaming: true } });
+    repository.replaceProjection('yeaft-1', [...projection]);
+    expect(projection.map(row => row.id)).toEqual(['m0020', 'late-arrival', 'live-2', 'tool-2', 'm0022']);
+    repository.upsertOverlay({ conversationId: 'yeaft-1', row: { id: '999-local', type: 'user', timestamp: 400 } });
+    repository.upsertOverlay({ conversationId: 'yeaft-1', row: { id: '100-local', type: 'user', timestamp: 400 } });
+    expect(projection.slice(-2).map(row => row.id)).toEqual(['999-local', '100-local']);
+    repository.commitDurable({
+      conversationId: 'yeaft-1', sessionId: 'session-a', mode: 'delta',
+      rows: [{ id: 'live-2', seq: 21, type: 'assistant', content: 'working still', timestamp: 200, sessionId: 'session-a', isHistory: true, isStreaming: false }],
+    });
+    expect(projection.filter(row => row.timestamp === 200).map(row => row.id)).toEqual(['live-2', 'tool-2']);
   });
 
   it('keeps newer overlays while replacing a mismatched durable generation', () => {
@@ -920,7 +959,7 @@ describe('Yeaft conversation loading state', () => {
     });
 
     const rows = store.messagesMap['yeaft-1'].filter(m => m.sessionId === 'g1');
-    expect(rows.map(m => m.id)).toEqual(['m0200', 'm0201', 'u_local_race']);
+    expect(rows.map(m => m.id)).toEqual(['u_local_race', 'm0200', 'm0201']);
     expect(rows.find(m => m.id === 'u_local_race')).toEqual(expect.objectContaining({
       clientMessageId: 'u_local_race',
       content: 'send while history is loading',
@@ -1506,7 +1545,8 @@ describe('Yeaft conversation loading state', () => {
 
     const assistants = store.messagesMap['yeaft-1'].filter(m => m.type === 'assistant');
     expect(assistants).toHaveLength(2);
-    expect(assistants[0]).toEqual(expect.objectContaining({
+    expect(assistants.map(m => m.id)).toEqual(['stream-1', 'm0102']);
+    expect(assistants[1]).toEqual(expect.objectContaining({
       id: 'm0102',
       messageId: 'm0102',
       content: 'Sure, I can help with the old request.',
@@ -1514,7 +1554,7 @@ describe('Yeaft conversation loading state', () => {
       _hasPersistedTurnId: true,
       isStreaming: false,
     }));
-    expect(assistants[1]).toEqual(expect.objectContaining({
+    expect(assistants[0]).toEqual(expect.objectContaining({
       id: 'stream-1',
       content: 'Sure, I can',
       turnId: 'turn-active-1',
@@ -1559,8 +1599,8 @@ describe('Yeaft conversation loading state', () => {
 
     const assistants = store.messagesMap['yeaft-1'].filter(m => m.type === 'assistant');
     expect(assistants).toHaveLength(2);
-    expect(assistants.map(m => m.id)).toEqual(['m0103', 'stream-1']);
-    expect(assistants[0]).toEqual(expect.objectContaining({
+    expect(assistants.map(m => m.id)).toEqual(['stream-1', 'm0103']);
+    expect(assistants[1]).toEqual(expect.objectContaining({
       turnId: 'm0103',
       _hasPersistedTurnId: false,
     }));
@@ -2661,6 +2701,37 @@ describe('setActiveSessionFilter — session-scoped conversation cache', () => {
     expect(store._sent).toEqual([]);
     expect(store.yeaftHasMoreHistory).toBe(true);
     expect(store.yeaftOldestLoadedSeq).toBe(10);
+
+    // Return to an active Session after history has overtaken its optimistic
+    // prompt. Recent replay and later persistence must not pin the prompt last.
+    store.messagesMap['yeaft-1'] = [
+      { id: 'client-A', messageId: 'client-A', clientMessageId: 'client-A', type: 'user', content: 'A question', sessionId: 'session-A', timestamp: 100 },
+      { id: 'b1', type: 'user', content: 'B before', sessionId: 'session-B', timestamp: 150 },
+    ];
+    setActiveSessionFilter.call(store, 'session-B');
+    handleYeaftHistoryChunk(store, {
+      conversationId: 'yeaft-1', agentId: 'agent-1', sessionId: 'session-A', mode: 'recent',
+      messages: [{ id: 'm0020', seq: 20, role: 'assistant', content: 'A progress', sessionId: 'session-A', ts: 200 }],
+      hasMore: false,
+    });
+    expect(visibleMessages(store).map(row => row.content)).toEqual(['B before']);
+    setActiveSessionFilter.call(store, 'session-A');
+    expect(visibleMessages(store).map(row => row.content)).toEqual(['A question', 'A progress']);
+    store.conversationRepository.upsertOverlay({
+      conversationId: 'yeaft-1',
+      row: { id: 'stream-A', type: 'assistant', content: 'A continuing', sessionId: 'session-A', turnId: 'turn-A', timestamp: 300, isStreaming: true },
+    });
+    handleYeaftHistoryChunk(store, {
+      conversationId: 'yeaft-1', agentId: 'agent-1', sessionId: 'session-A', mode: 'recent',
+      messages: [
+        { id: 'm0019', seq: 19, role: 'user', clientMessageId: 'client-A', content: 'A question', sessionId: 'session-A', ts: 100 },
+        { id: 'm0020', seq: 20, role: 'assistant', content: 'A progress', sessionId: 'session-A', ts: 200 },
+      ],
+      hasMore: false,
+    });
+    setActiveSessionFilter.call(store, 'session-B');
+    setActiveSessionFilter.call(store, 'session-A');
+    expect(visibleMessages(store).map(row => row.content)).toEqual(['A question', 'A progress', 'A continuing']);
   });
 
   it('hydrates only a session without cached rows or loaded history metadata', () => {

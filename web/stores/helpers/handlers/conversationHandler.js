@@ -104,37 +104,6 @@ function normalizeHistoryRowIdentity(row, agentId = null) {
   return row;
 }
 
-function isLiveYeaftHistoryRow(row) {
-  if (!row || row.isHistory === true) return false;
-  if (row.isStreaming || isOptimisticYeaftUserRow(row)) return true;
-  // Recent refresh preserves local rows newer than its persisted window. Those
-  // rows may predate clientMessageId stamping, but they still carry a local
-  // timestamp and no durable seq.
-  return !Number.isFinite(row.seq) && Number.isFinite(row.timestamp);
-}
-
-function yeaftHistorySortKey(row) {
-  const live = isLiveYeaftHistoryRow(row);
-  const seq = Number.isFinite(row?.seq) ? row.seq : null;
-  const timestamp = Number.isFinite(row?.timestamp) ? row.timestamp : 0;
-  // Use one lexicographic key for every row. Persisted rows with timestamps are
-  // chronological across storage generations. When timestamps are absent, the
-  // legacy rank sorts before sequenced storage; the live rank is always last.
-  if (live) return [2, timestamp, seq ?? 0];
-  return [1, timestamp, seq ?? -1];
-}
-
-export function __testSortYeaftRowsBySequence(rows) {
-  rows.sort((a, b) => {
-    const aKey = yeaftHistorySortKey(a);
-    const bKey = yeaftHistorySortKey(b);
-    for (let index = 0; index < aKey.length; index += 1) {
-      if (aKey[index] !== bKey[index]) return aKey[index] - bKey[index];
-    }
-    return 0;
-  });
-}
-
 function rowSessionId(row) {
   return row ? (row.sessionId ?? row.groupId ?? null) : null;
 }

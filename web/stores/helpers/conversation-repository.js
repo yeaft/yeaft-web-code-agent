@@ -42,21 +42,23 @@ function mergeRow(existing, incoming) {
 
 function rowOrder(row) {
   const durable = isDurableYeaftHistoryRow(row);
-  const seq = yeaftHistoryRowSeq(row);
-  const timestamp = Number(row?.timestamp) || 0;
-  // Match the visible-history contract: durable rows are chronological across
-  // transcript generations, seq breaks ties within one generation, and live
-  // overlays stay after the committed history window.
-  return [durable ? 0 : 1, timestamp, Number.isFinite(seq) ? seq : -1];
+  // Numeric local IDs are not transcript sequence numbers.
+  const seq = durable ? yeaftHistoryRowSeq(row) : null;
+  const timestamp = Number(row?.timestamp);
+  // Persistence is not chronology: an optimistic user row may precede an
+  // already-persisted assistant response. Only timestamp-less legacy history
+  // and live rows use a head/tail fallback; known times always interleave.
+  const time = Number.isFinite(timestamp) && timestamp > 0
+    ? timestamp
+    : (durable ? -Infinity : Infinity);
+  // Equal known times keep projection order even when only part of a streamed
+  // response has become durable. A persistence seq must not move its tool rows.
+  return [time, Number.isFinite(time) ? 0 : (Number.isFinite(seq) ? seq : -1)];
 }
 
-function sortRows(rows) {
+/** Sort the visible projection in place, preserving arrival order for equal keys. */
+export function sortYeaftConversationRows(rows) {
   rows.sort((left, right) => {
-    const leftDurable = isDurableYeaftHistoryRow(left);
-    const rightDurable = isDurableYeaftHistoryRow(right);
-    // Preserve arrival order within the live overlay. Multiple legacy rows can
-    // share one millisecond timestamp and still require stable sibling keys.
-    if (!leftDurable && !rightDurable) return 0;
     const leftOrder = rowOrder(left);
     const rightOrder = rowOrder(right);
     for (let index = 0; index < leftOrder.length; index += 1) {
@@ -159,25 +161,17 @@ export class ConversationRepository {
         insertedRows += 1;
       }
     }
-    sortRows(projection);
+    sortYeaftConversationRows(projection);
     return { insertedRows, inserted, preservedEmpty: false };
   }
 
   upsertOverlay({ conversationId, row } = {}) {
     if (!conversationId || !row) return null;
-    if (isDurableYeaftHistoryRow(row)) {
-      const projection = this.rows(conversationId);
-      const existing = findMatchingRow(projection, row);
-      if (existing) return mergeRow(existing, row);
-      projection.push(row);
-      sortRows(projection);
-      return row;
-    }
     const projection = this.rows(conversationId);
     const existing = findMatchingRow(projection, row);
     if (existing) mergeRow(existing, row);
     else projection.push(row);
-    sortRows(projection);
+    sortYeaftConversationRows(projection);
     return existing || row;
   }
 
@@ -198,7 +192,7 @@ export class ConversationRepository {
   replaceProjection(conversationId, rows = []) {
     const projection = this.rows(conversationId);
     projection.splice(0, projection.length, ...(Array.isArray(rows) ? rows : []));
-    sortRows(projection);
+    sortYeaftConversationRows(projection);
     return projection;
   }
 
