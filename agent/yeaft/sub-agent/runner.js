@@ -221,10 +221,12 @@ export function startSubAgent(agent, deps = {}) {
       deps.parentVpPersona && typeof deps.parentVpPersona === 'object'
         ? { ...deps.parentVpPersona }
         : {};
-    baseVpPersona.persona =
-      [(baseVpPersona.persona || '').trim(), preamble.trim()]
-        .filter(Boolean)
-        .join('\n\n');
+    // Keep the spawned-agent contract outside the inherited VP soul. Stock
+    // souls can contain bilingual section markers, and persona rendering selects
+    // one language section before provider dispatch; appending the preamble to
+    // that source can therefore discard the child identity and mission. The
+    // prompt renderer appends this runtime-only block after soul selection.
+    baseVpPersona.runtimePreamble = preamble.trim();
     if (!baseVpPersona.displayName || !String(baseVpPersona.displayName).trim()) {
       baseVpPersona.displayName = `${deps.parentName || 'Parent'}/${agent.name || 'sub-agent'}`;
     }

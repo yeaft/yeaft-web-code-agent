@@ -2614,6 +2614,17 @@ describe('Yeaft session-scoped model config', () => {
   });
 
 
+  it('does not initialize the Dream scheduler while the runtime path is disabled', async () => {
+    const root = makeDir();
+    let session = null;
+    try {
+      session = await loadSession({ dir: root, skipMCP: true, skipSkills: true });
+      expect(session.dreamScheduler).toBeNull();
+    } finally {
+      await session?.shutdown?.();
+    }
+  });
+
   it('omits the Work Center producer tool by default and restores it when explicitly enabled', async () => {
     const root = makeDir();
     let disabledSession = null;

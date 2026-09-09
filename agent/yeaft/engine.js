@@ -2103,11 +2103,16 @@ export class Engine {
         ...(internalTrigger ? { internal: true } : { userAuthored: true }),
       }, { sessionId: runtimeSessionId });
     }
-    // Native Session history, including internal wakeups, never comes from
-    // Dream. Work Center and scoped child agents keep their memory contracts.
+    // Native Session history, including internal wakeups, comes from the
+    // canonical message transcript. Dream memory loading is temporarily
+    // disabled for every scenario (including Work Center and child agents)
+    // while message-history recall is evaluated as its replacement. Keep the
+    // downstream memory pipeline intact behind this single switch so it can be
+    // restored without migrating or deleting persisted memory data.
     const useMessageHistory = scenario !== 'work-item' && !!runtimeSessionId && !vpPersona?.subAgent;
-    const useDreamMemory = scenario === 'work-item' || !!vpPersona?.subAgent
-      || (!runtimeSessionId && !internalTrigger);
+    // const useDreamMemory = scenario === 'work-item' || !!vpPersona?.subAgent
+    //   || (!runtimeSessionId && !internalTrigger);
+    const useDreamMemory = false;
     const recentTurnCap = this.#config.yeaft?.recentTurnsLimit ?? 20;
     const relatedTurnCap = this.#config.yeaft?.relatedTurnsLimit ?? 8;
     let relatedHistoryTurns = [];

@@ -4049,7 +4049,65 @@ describe('Engine', () => {
       }
     });
 
-    it('keeps explicitly scoped WorkItem canonical memory compatible', async () => {
+    it('does not load Dream memory for WorkItem turns while the runtime path is disabled', async () => {
+      const search = vi.fn(() => [{
+        id: 'disabled-memory', scope: 'sessions/g1', kind: 'context',
+        tags: ['canonical-content'], sourceMessages: [], body: 'MUST_NOT_REACH_PROMPT', rank: -1,
+        createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
+      }]);
+      mockAdapter.pushResponse([
+        { type: 'text_delta', text: 'ok' },
+        { type: 'stop', stopReason: 'end_turn' },
+      ]);
+      const engine = new Engine({
+        adapter: mockAdapter,
+        trace,
+        config: { model: 'claude-test', maxOutputTokens: 2048, language: 'en' },
+        memoryIndex: { search },
+      });
+
+      const events = [];
+      for await (const event of engine.query({
+        scenario: 'work-item', prompt: 'do not recall memory', sessionId: 'g1',
+        vpPersona: { vpId: 'vp1', name: 'VP One' },
+      })) events.push(event);
+
+      expect(search).not.toHaveBeenCalled();
+      expect(mockAdapter.callLog[0].system).not.toContain('MUST_NOT_REACH_PROMPT');
+      expect(events.some(event => event.type === 'memory_used')).toBe(false);
+      expect(events.some(event => event.type === 'dream_memory_loaded')).toBe(false);
+    });
+
+    it('does not load Dream memory for child-agent turns', async () => {
+      const search = vi.fn(() => [{
+        id: 'disabled-child-memory', scope: 'sessions/g1/vp/child', kind: 'context',
+        tags: ['canonical-content'], sourceMessages: [], body: 'CHILD_MEMORY_MUST_NOT_REACH_PROMPT', rank: -1,
+        createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
+      }]);
+      mockAdapter.pushResponse([
+        { type: 'text_delta', text: 'ok' },
+        { type: 'stop', stopReason: 'end_turn' },
+      ]);
+      const engine = new Engine({
+        adapter: mockAdapter,
+        trace,
+        config: { model: 'claude-test', maxOutputTokens: 2048, language: 'en' },
+        memoryIndex: { search },
+      });
+
+      const events = [];
+      for await (const event of engine.query({
+        prompt: 'child agent must not recall memory', sessionId: 'g1',
+        vpPersona: { vpId: 'child', name: 'Child Agent', subAgent: true },
+      })) events.push(event);
+
+      expect(search).not.toHaveBeenCalled();
+      expect(mockAdapter.callLog[0].system).not.toContain('CHILD_MEMORY_MUST_NOT_REACH_PROMPT');
+      expect(events.some(event => event.type === 'memory_used')).toBe(false);
+      expect(events.some(event => event.type === 'dream_memory_loaded')).toBe(false);
+    });
+
+    it.skip('keeps explicitly scoped WorkItem canonical memory compatible while Dream loading is disabled', async () => {
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-dream-load-'));
       await writeContent(
         { kind: 'session', id: 'g1' },
@@ -9055,7 +9113,7 @@ describe('Engine', () => {
       expect(call.system).not.toContain('\nmembers: vp-omni');
     });
 
-    it('does not infer Session focus from Dream topics but preserves explicit WorkItem memory', async () => {
+    it('does not infer Session focus from Dream topics for Session or WorkItem turns', async () => {
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-topics-'));
       try {
         mkdirSync(join(yeaftDir, 'memory', 'sessions', 'session_active', 'topic', 'dream', 'segments'), { recursive: true });
@@ -9104,7 +9162,7 @@ describe('Engine', () => {
           sessionId: 'session_active',
           vpPersona: { vpId: 'vp-linus', displayName: 'Linus' },
         })) { /* consume */ }
-        expect(mockAdapter.callLog.at(-1).system).toContain('Current focus: Dream memory segment extraction and organization');
+        expect(mockAdapter.callLog.at(-1).system).not.toContain('Current focus: Dream memory segment extraction and organization');
         expect(call.system).not.toContain('session_topics: dream/segments');
       } finally {
         await closeConversationHistoryIndexes();
@@ -9226,6 +9284,19 @@ describe('Engine', () => {
         projectInstruction: '发布前执行统一验证。',
         toolNames: ['TodoWrite', 'PromptAgent'],
       });
+
+      const bilingualChildSystem = buildSystemPrompt({
+        language: 'en',
+        vpPersona: {
+          displayName: 'Parent/child',
+          persona: '<!-- lang:en -->\nParent soul\n<!-- lang:zh -->\n父角色灵魂',
+          runtimePreamble: '## You are a sub-agent\n\nMission: return the child result.',
+        },
+      });
+      expect(bilingualChildSystem).toContain('Parent soul');
+      expect(bilingualChildSystem).not.toContain('父角色灵魂');
+      expect(bilingualChildSystem).toContain('## You are a sub-agent');
+      expect(bilingualChildSystem).toContain('Mission: return the child result.');
 
       expect(enSystem).toContain('[Project Instruction]');
       expect(enSystem).toContain('The current Session belongs to Project Yeaft (project-123). The unified instruction for this Project is:');

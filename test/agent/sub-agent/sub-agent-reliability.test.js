@@ -535,8 +535,8 @@ describe('wait-agent envelope shape', () => {
       expect(adapter.streamCalls).toHaveLength(1);
       expect(adapter.streamCalls[0].system).toContain('OLD PROJECT INSTRUCTION MUST DISAPPEAR');
       expect(adapter.streamCalls[0].system).not.toContain('Old sibling experience should be visible');
-      expect(adapter.streamCalls[0].system).toContain('Sub-agent recall must survive the single AMS render outlet.');
-      expect(scopeFilters[0]).toContain('sessions/old-sibling');
+      expect(adapter.streamCalls[0].system).not.toContain('Sub-agent recall must survive the single AMS render outlet.');
+      expect(scopeFilters).toEqual([]);
 
       const updated = JSON.parse(await sendMessage.execute({
         agent_id: agent.id,
@@ -556,8 +556,7 @@ describe('wait-agent envelope shape', () => {
       expect(adapter.streamCalls[1].system).not.toContain('New sibling experience should replace the old Project context.');
       expect(adapter.streamCalls[1].system).not.toContain('Old sibling experience should be visible');
       expect(adapter.streamCalls[1].system).not.toContain('OLD PROJECT INSTRUCTION MUST DISAPPEAR');
-      expect(scopeFilters[1]).toContain('sessions/new-sibling');
-      expect(scopeFilters[1]).not.toContain('sessions/old-sibling');
+      expect(scopeFilters).toEqual([]);
 
       const cleared = JSON.parse(await sendMessage.execute({
         agent_id: agent.id,
@@ -577,8 +576,7 @@ describe('wait-agent envelope shape', () => {
       expect(adapter.streamCalls[2].system).not.toContain('NEW PROJECT INSTRUCTION');
       expect(adapter.streamCalls[2].system).not.toContain('Old sibling experience should be visible');
       expect(adapter.streamCalls[2].system).not.toContain('New sibling experience should replace');
-      expect(scopeFilters[2]).not.toContain('sessions/old-sibling');
-      expect(scopeFilters[2]).not.toContain('sessions/new-sibling');
+      expect(scopeFilters).toEqual([]);
     } finally {
       await closeAgent.execute({ agent_id: agent.id }, ownerContext);
       await new Promise(resolve => setTimeout(resolve, 80));

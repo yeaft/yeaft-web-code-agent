@@ -532,6 +532,8 @@ function renderVpPersona(vpPersona, lang, effectiveLang = 'en') {
   const name = selectVpPersonaName(vpPersona, effectiveLang);
   if (!name) return '';
   const body = selectVpPersonaBody(vpPersona, effectiveLang);
+  const runtimePreamble = typeof vpPersona.runtimePreamble === 'string'
+    ? vpPersona.runtimePreamble.trim() : '';
 
   // Persona is the IDENTITY layer (not an overlay). Do not prepend a
   // generic assistant identity here: the VP soul body is the source of truth.
@@ -540,6 +542,7 @@ function renderVpPersona(vpPersona, lang, effectiveLang = 'en') {
   const soulHeading = effectiveLang === 'zh' ? '## 灵魂' : '## Soul';
   const lines = [`# ${name}`, '', soulHeading];
   if (body) lines.push('', body);
+  if (runtimePreamble) lines.push('', runtimePreamble);
   return lines.join('\n');
 }
 
