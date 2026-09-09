@@ -8113,6 +8113,67 @@ describe('Engine', () => {
   });
 
   describe('debug trace integration', () => {
+    it.each([
+      { name: 'null latest capture with a newer prompt', rawLoops: [1, 2], promptLoops: [1, 3] },
+      { name: 'empty latest prompt with a newer capture', rawLoops: [1, 3], promptLoops: [1, 2] },
+      { name: 'prompt available without any capture', rawLoops: [], promptLoops: [1, 2] },
+      { name: 'capture available without any prompt', rawLoops: [1, 2], promptLoops: [] },
+      { name: 'no available snapshots', rawLoops: [], promptLoops: [] },
+      { name: 'latest snapshots after a capture gap', rawLoops: [1, 4], promptLoops: [1, 4] },
+    ])('keeps bounded snapshots on their source loops: $name', async ({ rawLoops, promptLoops }) => {
+      const traceRoot = mkdtempSync(join(tmpdir(), 'yeaft-trace-available-'));
+      const writer = new DebugTrace(traceRoot);
+      let reader;
+      const sessionId = 'available-session';
+      const traceId = 'available-turn';
+      const loopIds = [];
+      const requestFor = loopNumber => ({
+        body: { model: 'test-model', input: [{ role: 'user', content: `request ${loopNumber}` }] },
+      });
+      const messagesFor = loopNumber => [{ role: 'user', content: `messages ${loopNumber}` }];
+      const assertSnapshots = (detail) => {
+        expect(detail.loops).toHaveLength(4);
+        for (const [index, loop] of detail.loops.entries()) {
+          const loopNumber = index + 1;
+          expect(loop).toMatchObject({
+            loopInstanceId: loopIds[index],
+            loopNumber,
+            rawRequest: loopNumber === rawLoops.at(-1) ? requestFor(loopNumber) : null,
+            systemPrompt: loopNumber === promptLoops.at(-1) ? `prompt ${loopNumber}` : '',
+            messages: loopNumber === 4 ? messagesFor(4) : [],
+          });
+          expect(loop).not.toHaveProperty('requestBase');
+          expect(loop).not.toHaveProperty('requestDelta');
+        }
+        expect(detail.loops.filter(loop => loop.rawRequest != null)).toHaveLength(rawLoops.length ? 1 : 0);
+        expect(detail.loops.filter(loop => loop.systemPrompt)).toHaveLength(promptLoops.length ? 1 : 0);
+      };
+
+      try {
+        for (let loopNumber = 1; loopNumber <= 4; loopNumber += 1) {
+          const turnId = writer.startTurn({ traceId, sessionId, turnNumber: loopNumber });
+          loopIds.push(turnId);
+          writer.endTurn(turnId, {
+            rawRequest: rawLoops.includes(loopNumber) ? requestFor(loopNumber) : null,
+            systemPrompt: promptLoops.includes(loopNumber) ? `prompt ${loopNumber}` : '',
+            messages: messagesFor(loopNumber),
+            stopReason: loopNumber === 4 ? 'end_turn' : 'tool_use',
+          });
+        }
+        await writer.flush();
+        assertSnapshots(await writer.fetchTurnDebug({ sessionId, turnId: traceId }));
+        writer.finalizeQuery(traceId, { sessionId, stopReason: 'end_turn' });
+        await writer.close();
+
+        reader = new DebugTrace(traceRoot);
+        assertSnapshots(await reader.fetchTurnDebug({ sessionId, turnId: traceId }));
+      } finally {
+        await reader?.close();
+        await writer.close();
+        rmSync(traceRoot, { recursive: true, force: true });
+      }
+    });
+
     it('should record turns and tools in debug trace', async () => {
       const dbTrace = new DebugTrace(TEST_DB);
 

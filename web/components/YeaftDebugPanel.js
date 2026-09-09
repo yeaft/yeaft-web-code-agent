@@ -1053,23 +1053,39 @@ export default {
       this.copyText(JSON.stringify(tool, null, 2), 'tool record');
     },
     latestRequestForTurn(turn) {
-      // Older Agents may send every request; select by loop identity, never by
-      // payload availability. A missing latest capture must not expose an older one.
-      const loop = (turn.loops || []).reduce((latest, candidate) => {
-        if (!candidate) return latest;
-        return !latest || Number(candidate.loopNumber || 0) >= Number(latest.loopNumber || 0) ? candidate : latest;
-      }, null);
-      if (!loop) return null;
-      const rawRequest = this.rawRequestForLoop(loop);
-      const body = rawRequest?.body;
+      // Live progress can outrun detail hydration. Select each available field
+      // independently within this Turn and label its real source, rather than
+      // hiding a loaded snapshot behind a newer metadata-only loop.
+      const loops = (turn.loops || []).filter(Boolean)
+        .slice().sort((a, b) => Number(b.loopNumber || 0) - Number(a.loopNumber || 0));
+      if (!loops.length) return null;
+      let body = null;
+      let bodyLoopNumber = null;
+      let systemPrompt = '';
+      let systemPromptLoopNumber = null;
+      for (const loop of loops) {
+        if (body == null) {
+          const candidate = this.rawRequestForLoop(loop)?.body;
+          if (candidate != null) {
+            body = candidate;
+            bodyLoopNumber = loop.loopNumber;
+          }
+        }
+        if (!systemPrompt && loop.systemPrompt) {
+          systemPrompt = loop.systemPrompt;
+          systemPromptLoopNumber = loop.loopNumber;
+        }
+        if (body != null && systemPrompt) break;
+      }
       return {
-        loopNumber: loop.loopNumber,
+        bodyLoopNumber,
+        systemPromptLoopNumber,
         bodyText: body == null ? null : (typeof body === 'string' ? body : JSON.stringify(body, null, 2)),
-        systemPrompt: loop.systemPrompt || '',
+        systemPrompt,
       };
     },
     rawRequestForLoop(loop) {
-      // Explicit null means the latest capture is unavailable. Only older
+      // Explicit null means this loop's capture is unavailable. Only older
       // records without this field may use their own structural delta/base.
       if (loop?.rawRequest !== undefined) return loop.rawRequest;
       return reconstructDebugRawRequest(loop?.rawRequestBase ?? loop?.requestBase?.rawRequest ?? null, loop?.requestDelta || null);
@@ -1114,14 +1130,14 @@ export default {
       lines.push('');
       const latestRequest = this.latestRequestForTurn(turn);
       if (latestRequest) {
-        lines.push(`## ${this.$t('yeaft.debugLatestRequestBody')} (Loop ${latestRequest.loopNumber})`);
+        lines.push(`## ${this.$t('yeaft.debugLatestRequestBody')}${latestRequest.bodyLoopNumber != null ? ` (Loop ${latestRequest.bodyLoopNumber})` : ''}`);
         lines.push('');
         if (latestRequest.bodyText != null) {
           lines.push('```json', latestRequest.bodyText, '```');
         } else {
           lines.push(this.$t('yeaft.debugRequestBodyUnavailable'));
         }
-        lines.push('', `## ${this.$t('yeaft.debugLatestSystemPrompt')} (Loop ${latestRequest.loopNumber})`, '');
+        lines.push('', `## ${this.$t('yeaft.debugLatestSystemPrompt')}${latestRequest.systemPromptLoopNumber != null ? ` (Loop ${latestRequest.systemPromptLoopNumber})` : ''}`, '');
         if (latestRequest.systemPrompt) {
           lines.push('```text', latestRequest.systemPrompt, '```');
         } else {
@@ -1482,7 +1498,7 @@ export default {
               <div class="yeaft-debug-section yeaft-debug-latest-request">
                 <div class="yeaft-debug-section-row">
                   <span class="yeaft-debug-section-title">{{ $t('yeaft.debugLatestRequestBody') }}</span>
-                  <span class="yeaft-debug-section-meta">Loop {{ turn.latestRequest.loopNumber }}</span>
+                  <span v-if="turn.latestRequest.bodyLoopNumber != null" class="yeaft-debug-section-meta">Loop {{ turn.latestRequest.bodyLoopNumber }}</span>
                   <button type="button" class="yeaft-debug-copy-btn" :disabled="turn.latestRequest.bodyText == null" @click="copyText(turn.latestRequest.bodyText, $t('yeaft.debugLatestRequestBody'))">{{ $t('common.copy') }}</button>
                   <button type="button" class="yeaft-debug-show-btn" :disabled="turn.latestRequest.bodyText == null" :aria-expanded="isSectionExpanded(turn.turnId, 'latest-request')" @click="toggleSection(turn.turnId, 'latest-request')">
                     {{ $t(isSectionExpanded(turn.turnId, 'latest-request') ? 'yeaft.debugHideDetails' : 'yeaft.debugShowDetails') }}
@@ -1494,7 +1510,7 @@ export default {
               <div class="yeaft-debug-section yeaft-debug-latest-system-prompt">
                 <div class="yeaft-debug-section-row">
                   <span class="yeaft-debug-section-title">{{ $t('yeaft.debugLatestSystemPrompt') }}</span>
-                  <span class="yeaft-debug-section-meta">Loop {{ turn.latestRequest.loopNumber }}</span>
+                  <span v-if="turn.latestRequest.systemPromptLoopNumber != null" class="yeaft-debug-section-meta">Loop {{ turn.latestRequest.systemPromptLoopNumber }}</span>
                   <button type="button" class="yeaft-debug-copy-btn" :disabled="!turn.latestRequest.systemPrompt" @click="copyText(turn.latestRequest.systemPrompt, $t('yeaft.debugLatestSystemPrompt'))">{{ $t('common.copy') }}</button>
                   <button type="button" class="yeaft-debug-show-btn" :disabled="!turn.latestRequest.systemPrompt" :aria-expanded="isSectionExpanded(turn.turnId, 'latest-system')" @click="toggleSection(turn.turnId, 'latest-system')">
                     {{ $t(isSectionExpanded(turn.turnId, 'latest-system') ? 'yeaft.debugHideDetails' : 'yeaft.debugShowDetails') }}

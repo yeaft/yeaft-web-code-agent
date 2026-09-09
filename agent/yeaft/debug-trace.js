@@ -621,6 +621,8 @@ function expandTrace(trace) {
   const turnsById = new Map([[trace.requestId || trace.traceId, summarizeTrace(trace, true)]]);
   let snapshot = null;
   let rawRequest = trace?.baseRequest?.rawRequest ?? null;
+  let latestRawRequestLoop = null;
+  let latestSystemPromptLoop = null;
   const loops = [];
   for (const loop of Array.isArray(trace?.loops) ? trace.loops : []) {
     snapshot = applyRequestDelta(snapshot || trace.baseRequest || null, loop.requestDelta || {});
@@ -633,8 +635,8 @@ function expandTrace(trace) {
       loopInstanceId: loop.loopInstanceId || loop.turnRowId || null,
       loopNumber: loop.loopNumber || 0,
       model: loop.model || null,
-      // Request snapshots are attached only to the latest loop below. Earlier
-      // loops retain their responses, calls and timing, not repeated history.
+      // Keep only the latest available raw request and system prompt, each on
+      // its actual source loop. Messages remain limited to the final loop.
       systemPrompt: '',
       messages: [],
       response: loop.response || '',
@@ -650,12 +652,21 @@ function expandTrace(trace) {
       vpId: trace.vpId || null,
       threadId: trace.threadId || null,
     });
+    const current = loops.at(-1);
+    if (rawRequest != null) {
+      if (latestRawRequestLoop) latestRawRequestLoop.rawRequest = null;
+      current.rawRequest = rawRequest;
+      latestRawRequestLoop = current;
+    }
+    if (snapshot.systemPrompt) {
+      if (latestSystemPromptLoop) latestSystemPromptLoop.systemPrompt = '';
+      current.systemPrompt = snapshot.systemPrompt;
+      latestSystemPromptLoop = current;
+    }
   }
   const latest = loops.at(-1);
   if (latest && snapshot) {
-    latest.systemPrompt = snapshot.systemPrompt || '';
     latest.messages = Array.isArray(snapshot.messages) ? snapshot.messages : [];
-    latest.rawRequest = rawRequest;
   }
   return { loops, turns: Array.from(turnsById.values()) };
 }
