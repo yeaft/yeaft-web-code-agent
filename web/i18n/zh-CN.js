@@ -1,7 +1,14 @@
 /**
  * Chinese (Simplified) translations — zh-CN
  */
+import { zhCN as quickSend } from './quick-send.js';
+import { zhCN as userShortcuts } from './user-shortcuts.js';
+
 export default {
+  ...quickSend,
+  ...userShortcuts,
+  'quickSend.composer.label': '快捷发送',
+  'quickSend.composer.send': '快捷发送 {number}：{name}',
   // ============ Common ============
   'common.loading': '加载中...',
   'common.confirm': '确定',

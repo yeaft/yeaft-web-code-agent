@@ -11,12 +11,60 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
-import { normalizeProviderModels, parseModelRef, serializeModelForPersistence } from './models.js';
+import { getModelEffortOptions, normalizeEffort, normalizeProviderModels, parseModelRef, resolveMaxOutputTokens, serializeModelForPersistence } from './models.js';
+import { inferProtocolFromModelId } from './llm/router.js';
 import { clampYeaftField, normaliseTelemetrySection, normaliseYeaftSection } from './config.js';
 import { normaliseBrowserRuntimeSection, validateBrowserRuntimeUpdate } from '../browser-runtime/config.js';
 import { normalizePluginConfig } from './plugins.js';
 import { mutateAgentConfig, readAgentConfigForWrite } from './config-store.js';
-import { isGitHubCopilotProvider, serializeKnownProviderForPersistence } from './llm/known-providers.js';
+import { isGitHubCopilotProvider, normalizeKnownProviderForRuntime, serializeKnownProviderForPersistence } from './llm/known-providers.js';
+
+/** Agent-owned model catalog, with the same protocol/capability resolution as runtime. */
+function quickSendModels(config) {
+  return (Array.isArray(config.providers) ? config.providers : []).flatMap(raw => {
+    const provider = normalizeKnownProviderForRuntime(raw);
+    return normalizeProviderModels(provider).map(model => ({
+      id: model.id,
+      ref: provider.name ? `${provider.name}/${model.id}` : model.id,
+      provider: provider.name,
+      label: model.id,
+      effortOptions: getModelEffortOptions(model.id, {
+        ...model,
+        protocol: model.protocol || provider.protocol || inferProtocolFromModelId(model.id) || 'openai-responses',
+      }),
+      maxOutput: resolveMaxOutputTokens(model.id, { modelInfo: model }),
+    }));
+  });
+}
+
+/** Validate inside mutateAgentConfig's lock, against the resulting provider catalog. */
+function validateQuickSends(value, config) {
+  if (!Array.isArray(value) || value.length > 5) throw new Error('quickSends must be an array of at most 5 items');
+  const models = quickSendModels(config);
+  const ids = new Set();
+  return value.map(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('Each quick send must be an object');
+    const id = typeof item.id === 'string' ? item.id.trim() : '';
+    const name = typeof item.name === 'string' ? item.name.trim() : '';
+    if (!id || id.length > 128 || ids.has(id)) throw new Error('Quick send id must be unique and 1–128 characters');
+    if (!name || name.length > 80) throw new Error('Quick send name must be 1–80 characters');
+    ids.add(id);
+    const ref = typeof item.model === 'string' ? item.model.trim() : '';
+    const matches = models.filter(model => model.ref === ref);
+    const candidates = matches.length ? matches : models.filter(model => model.id === ref);
+    if (candidates.length !== 1) throw new Error(`Quick send model must exist and be unambiguous: ${ref}`);
+    const model = candidates[0];
+    const effort = item.effort ?? null;
+    if (effort !== null && (!normalizeEffort(effort) || !model.effortOptions.includes(effort))) {
+      throw new Error(`Quick send effort is not available for ${model.ref}`);
+    }
+    const maxOutputTokens = item.maxOutputTokens ?? null;
+    if (maxOutputTokens !== null && (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens <= 0 || maxOutputTokens > model.maxOutput)) {
+      throw new Error(`Quick send maxOutputTokens must be a positive integer no greater than ${model.maxOutput}`);
+    }
+    return { id, name, model: model.ref, effort, maxOutputTokens };
+  });
+}
 
 /**
  * Read config.json before any public mutation. A missing file is a valid
@@ -44,7 +92,7 @@ function readLocalLlmConfig(dir) {
   const configPath = join(root, 'config.json');
 
   if (!existsSync(configPath)) {
-    return { providers: [], primaryModel: null, fastModel: null, language: 'en', needsSetup: true };
+    return { providers: [], primaryModel: null, fastModel: null, language: 'en', quickSends: [], availableModels: [], needsSetup: true };
   }
 
   const raw = readFileSync(configPath, 'utf8');
@@ -56,6 +104,8 @@ function readLocalLlmConfig(dir) {
     fastModel: json.fastModel || null,
     language: json.language || 'en',
     debug: json.debug === true,
+    quickSends: Array.isArray(json.quickSends) ? json.quickSends : [],
+    availableModels: quickSendModels(json),
     needsSetup: providers.length === 0 || providers.every(p => p.apiKey === 'proxy' || p.apiKey === '' || (!p.apiKey && !p.credentialProvider)),
   };
 }
@@ -169,6 +219,7 @@ export function updateLlmConfig(update, dir) {
       if (update.providers !== undefined) normalizeManagedModelDefaults(existing);
       if (update.language !== undefined) existing.language = update.language;
       if (update.debug !== undefined) existing.debug = update.debug === true;
+      if (update.quickSends !== undefined) existing.quickSends = validateQuickSends(update.quickSends, existing);
 
       const agentConfig = {
         providers: Array.isArray(existing.providers) ? existing.providers : [],
@@ -176,6 +227,8 @@ export function updateLlmConfig(update, dir) {
         fastModel: existing.fastModel || null,
         language: existing.language || 'en',
         debug: existing.debug === true,
+        quickSends: Array.isArray(existing.quickSends) ? existing.quickSends : [],
+        availableModels: quickSendModels(existing),
       };
       return {
         ...agentConfig,

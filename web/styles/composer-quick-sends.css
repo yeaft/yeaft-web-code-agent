@@ -1,0 +1,50 @@
+.composer-quick-sends {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: var(--chat-composer-control-gap);
+  min-width: 0;
+}
+
+.composer-quick-send.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 42px;
+  height: var(--chat-composer-control-size);
+  padding: 0 6px;
+  border-radius: var(--chat-composer-radius);
+  color: var(--text-secondary);
+}
+
+.composer-quick-send-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+}
+
+.composer-quick-send-number {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.composer-quick-send:not(:disabled):hover {
+  color: var(--accent-color);
+  background: var(--bg-hover);
+}
+
+.composer-quick-send:disabled { opacity: 0.4; cursor: not-allowed; }
+
+@media (max-width: 767px) {
+  .chat-composer-actions:has(.composer-quick-sends) { flex-wrap: wrap; }
+  .composer-quick-sends {
+    order: -1;
+    flex: 0 0 100%;
+    overflow-x: auto;
+  }
+}

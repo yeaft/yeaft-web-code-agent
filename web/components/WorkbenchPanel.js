@@ -478,6 +478,16 @@ export default {
       return true;
     };
 
+    const handleOpenCapability = event => {
+      const detail = event.detail;
+      if (!detail || detail.routeKey !== activeRouteKey.value
+        || !['terminal', 'files', 'git'].includes(detail.capabilityId)
+        || !capabilityCards.value.some(item => item.id === detail.capabilityId && item.available)) return;
+      if (!openCapability(detail.capabilityId)) return;
+      store.openWorkbench();
+      detail.accepted = true;
+    };
+
     const confirmFilesCapabilityClose = ({ routeKey, workspaceGeneration }) => new Promise(resolve => {
       window.dispatchEvent(new CustomEvent('workbench-close-files-capability', {
         detail: { routeKey, workspaceGeneration, resolve },
@@ -934,6 +944,7 @@ export default {
 
     Vue.onMounted(() => {
       window.addEventListener('open-file-in-explorer', handleOpenFile);
+      window.addEventListener('workbench-open-capability', handleOpenCapability);
       window.addEventListener('workbench-file-items-changed', handleFileItemsChanged);
       document.addEventListener('click', handleDocumentClick);
       if (typeof ResizeObserver !== 'undefined' && panelRoot.value) {
@@ -956,6 +967,7 @@ export default {
     Vue.onUnmounted(() => {
       cancelActiveResize();
       window.removeEventListener('open-file-in-explorer', handleOpenFile);
+      window.removeEventListener('workbench-open-capability', handleOpenCapability);
       window.removeEventListener('workbench-file-items-changed', handleFileItemsChanged);
       document.removeEventListener('click', handleDocumentClick);
       window.removeEventListener('resize', scheduleTabOverflowUpdate);

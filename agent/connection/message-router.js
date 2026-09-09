@@ -393,7 +393,7 @@ export async function handleMessage(msg) {
     // LLM configuration (read/write this agent's ~/.yeaft/config.json)
     case 'get_llm_config': {
       const config = getLlmConfig(ctx.CONFIG?.yeaftDir);
-      sendToServer({ type: 'llm_config', ...config });
+      sendToServer({ type: 'llm_config', requestId: msg.requestId, ...config });
       break;
     }
 

@@ -1,0 +1,19 @@
+.quick-send-settings { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.quick-send-settings-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.quick-send-settings-heading h4 { margin: 0 0 8px; }
+.quick-send-settings p { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
+.quick-send-settings-heading p, .quick-send-empty, .quick-send-entry small { color: var(--text-muted); }
+.quick-send-entry { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; min-width: 0; margin: 0; padding: 16px 0; border: 0; }
+.quick-send-entry legend { padding: 0; font-weight: 600; }
+.quick-send-entry label, .quick-send-field { display: flex; flex-direction: column; min-width: 0; gap: 7px; }
+.quick-send-entry input, .quick-send-entry select { box-sizing: border-box; width: 100%; min-width: 0; padding: 8px 10px; color: var(--text-primary); background: var(--bg-input); border: 1px solid var(--border-color); border-radius: 8px; font: inherit; }
+.quick-send-entry .modern-select { width: 100%; min-width: 0; }
+.quick-send-remove { justify-self: start; }
+.quick-send-settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.quick-send-settings-actions .btn-primary { margin-left: auto; }
+.quick-send-settings-actions > span { color: var(--text-muted); font-size: 12px; }
+.quick-send-settings :disabled { cursor: not-allowed; opacity: .6; }
+@media (max-width: 600px) {
+  .quick-send-entry { grid-template-columns: minmax(0, 1fr); }
+  .quick-send-settings-heading { flex-wrap: wrap; }
+}

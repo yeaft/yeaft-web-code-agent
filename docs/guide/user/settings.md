@@ -10,6 +10,16 @@ Open via the **⚙ gear** at the bottom of the sidebar. Settings live in a **fix
   - **Local render** — built-in viewer, no network
   - **Office Online** — Microsoft's online viewer; requires the Agent file URL to be reachable from the public Internet
 
+### Custom shortcuts and quick sends
+
+**General → Custom shortcuts** controls personal key bindings and the **Show quick sends** toggle. Both visibility and bindings start disabled/unassigned. Preferences are isolated by signed-in user in this browser, not synchronized across devices.
+
+Create up to five presets under **Agent settings → Quick send**. Each preset stores its name, model, effort and maximum output tokens in that Agent instance's `config.json`. Optional blank values use runtime defaults. Each Agent has its own model catalog and presets.
+
+When enabled, native Yeaft Session Composers show numbered send buttons between attachments and model controls on desktop, or in a separate row on mobile. They send the current draft, attachments and quote with settings for that message only; Session defaults and ordinary Enter sending are unchanged. CLI Chat and Work Center do not show these buttons.
+
+Suggested bindings (assign them manually): terminal `Ctrl/⌘+Shift+Y`, files `Ctrl/⌘+Shift+O`, Git workbench `Ctrl/⌘+Shift+G`, new Session `Ctrl/⌘+Shift+U`, and quick-send slots `Alt/Option+Shift+1…5`. Known browser/application conflicts such as `Ctrl+T` and `Ctrl+F` are rejected; operating systems and extensions may reserve additional combinations. Global actions avoid inputs, editors, terminals and dialogs. Quick-send bindings only operate in the Composer and ignore IME composition and key repeat.
+
 ## Account
 
 - **Username** — login name (read-only)
