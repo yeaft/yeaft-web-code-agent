@@ -355,22 +355,25 @@ describe('Conversation Repository', () => {
         id: 'optimistic', type: 'user', timestamp: 500, sessionId: 'session-a',
       } });
       repository.commitDurable({ conversationId: 'yeaft-1', mode: 'recent', rows: [durable(21)] });
+      repository.commitDurable({ conversationId: 'yeaft-1', rows: [durable(1, 'user', 'session-b')] });
       repository.upsertOverlay({ conversationId: 'yeaft-1', row: {
         id: 'tool', type: 'tool-use', timestamp: 500, sessionId: 'session-a',
       } });
       repository.commitDurable({ conversationId: 'yeaft-1', mode, rows: [durable(20, 'user')] });
-      expect(projection.map(row => row.id)).toEqual(['optimistic', 'session-a-m20', 'session-a-m21', 'tool']);
+      const sessionRows = () => projection.filter(row => row.sessionId === 'session-a');
+      expect(sessionRows().map(row => row.id)).toEqual(['optimistic', 'session-a-m20', 'session-a-m21', 'tool']);
       repository.commitDurable({ conversationId: 'yeaft-1', mode, rows: [durable(23), durable(22)] });
-      expect(projection.map(row => row.id)).toEqual([
+      expect(sessionRows().map(row => row.id)).toEqual([
         'optimistic', 'session-a-m20', 'session-a-m21', 'tool', 'session-a-m22', 'session-a-m23',
       ]);
-      // Another Session's seq is not comparable, and repeated projection
-      // rebuilds must be idempotent with tools between durable rows.
-      repository.commitDurable({ conversationId: 'yeaft-1', rows: [durable(1, 'user', 'session-b')] });
+      // Another Session must not sever the text/tool association. Rebuilding
+      // the projection preserves object references as well as ordering.
       const expected = projection.map(row => row.id);
+      const references = [...projection];
       for (let repeat = 0; repeat < 3; repeat += 1) {
         repository.replaceProjection('yeaft-1', [...projection]);
         expect(projection.map(row => row.id)).toEqual(expected);
+        projection.forEach((row, index) => expect(row).toBe(references[index]));
       }
     }
   });

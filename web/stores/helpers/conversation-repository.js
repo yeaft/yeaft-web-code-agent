@@ -60,17 +60,20 @@ function rowOrder(row) {
 function sortTimestampTies(rows, start, end) {
   const blocks = [];
   const bySession = new Map();
+  const previousBySession = new Map();
   for (let index = start; index < end; index += 1) {
     const row = rows[index];
     const sessionId = rowSessionId(row);
     const seq = isDurableYeaftHistoryRow(row) ? yeaftHistoryRowSeq(row) : null;
-    const previous = blocks[blocks.length - 1];
-    if (!Number.isFinite(seq) && previous?.sessionId === sessionId) {
+    // Interleaved Sessions must not sever a text/tool association.
+    const previous = previousBySession.get(sessionId);
+    if (!Number.isFinite(seq) && previous) {
       previous.rows.push(row);
       continue;
     }
     const block = { sessionId, seq, rows: [row] };
     blocks.push(block);
+    previousBySession.set(sessionId, block);
     if (Number.isFinite(seq)) {
       if (!bySession.has(sessionId)) bySession.set(sessionId, []);
       bySession.get(sessionId).push(block);
