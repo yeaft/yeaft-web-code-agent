@@ -8,6 +8,7 @@
 import { defineTool } from './types.js';
 import { agentBelongsToCaller, getAgentRegistry } from './agent.js';
 import { enqueueSubAgentPrompt } from '../sub-agent/prompt-queue.js';
+import { captureParentEffortDecision } from '../effort.js';
 import { isTerminalAgentStatus, isPromptableAgentStatus, STATUS, describeAgentStatus } from '../sub-agent/status.js';
 
 export default defineTool({
@@ -117,6 +118,7 @@ stale/stalled，否则必须使用更大的有界 timeout 再次调用 WaitAgent
     // Queue as a pending prompt the driver will pull. This wakes the
     // driver out of its idle wait and starts a new turn.
     enqueueSubAgentPrompt(agent, message, {
+      parentEffortDecision: captureParentEffortDecision(ctx),
       projectSessionIds: ctx?.parentEngineDeps?.projectSessionIds,
       projectLabel: ctx?.parentEngineDeps?.projectLabel,
       projectInstruction: ctx?.parentEngineDeps?.projectInstruction,

@@ -54,8 +54,9 @@ function recordMessageScan(telemetry) {
 }
 
 function withSource(msg, source) {
+  const { providerState, thinkingBlocks, ...publicMessage } = msg;
   return {
-    ...msg,
+    ...publicMessage,
     content: searchableContent(msg),
     sessionId: msg.sessionId || source.sessionId || null,
     historySource: source.kind,

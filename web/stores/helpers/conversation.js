@@ -6,6 +6,7 @@ import { ensureConnected } from './websocket.js';
 import { markAllToolsCompleted } from './handlers/conversationHandler.js';
 import { t } from '../../utils/i18n.js';
 import { EXPERT_ROLES, buildClientExpertMessage } from '../../utils/expert-roles.js';
+import { normalizeChatRuntimeProvider } from './session-catalog.js';
 
 function agentIdsForYeaftConversation(store, conversationId) {
   if (!conversationId || !store?.yeaftConversationIdsByAgent) return [];
@@ -105,10 +106,28 @@ export function resumeConversation(store, claudeSessionId, workDir, agentId = nu
     disallowedTools = disallowedToolsOrOptions;
     if (maybeOptions && typeof maybeOptions === 'object') options = maybeOptions;
   }
+  // CLI history IDs are not Web conversation IDs. Reuse the existing Web
+  // identity on this Agent/provider so resume keeps its catalog metadata and
+  // persisted messages instead of creating a duplicate sidebar row.
+  const provider = normalizeChatRuntimeProvider(options.provider);
+  const existing = (store.conversations || []).find(conv => (
+    conv.type !== 'yeaft'
+    && conv.agentId === targetAgent
+    && normalizeChatRuntimeProvider(conv.provider) === provider
+    && conv.claudeSessionId === claudeSessionId
+  ));
+  const hiddenRow = existing && (store.hiddenSessionCatalog || []).find(row => (
+    row.routeRef?.agentId === targetAgent
+    && row.routeRef?.runtimeProvider === provider
+    && row.routeRef?.sessionId === existing.id
+  ));
+  if (hiddenRow && store.restoreCatalogSession(hiddenRow) !== true) return;
+
   setSessionLoading(store, true, t('chat.session.loadingHistory'));
   const msg = {
     type: 'resume_conversation',
     agentId: targetAgent,
+    ...(existing ? { conversationId: existing.id } : {}),
     claudeSessionId,
     workDir: workDir || store.currentAgentWorkDir
   };

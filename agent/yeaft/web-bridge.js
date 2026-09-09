@@ -1442,14 +1442,13 @@ function projectPersistedToHistoryEntry(m, { includeReflections = false } = {}) 
   // in the runtime history owner so a restart does not create a tool arc with
   // its required thinking prefix missing. `filterSnapshotForVp` strips these
   // blocks from other VPs before any provider request.
-  if (Array.isArray(m.thinkingBlocks) && m.thinkingBlocks.length > 0) {
+  if (m.providerState) entry.providerState = m.providerState;
+  if (!m.providerState && Array.isArray(m.thinkingBlocks) && m.thinkingBlocks.length > 0) {
     const thinkingBlocks = m.thinkingBlocks
       .filter(tb => tb
-        && typeof tb.signature === 'string'
-        && tb.signature
         && (tb.redacted === true
           ? typeof tb.data === 'string'
-          : typeof tb.thinking === 'string'))
+          : typeof tb.thinking === 'string' && typeof tb.signature === 'string' && tb.signature))
       .map(tb => tb.redacted === true
         ? { redacted: true, data: tb.data, signature: tb.signature }
         : { thinking: tb.thinking, signature: tb.signature });
@@ -1462,13 +1461,14 @@ function projectPersistedToHistoryEntry(m, { includeReflections = false } = {}) 
   if (Array.isArray(m.attachments) && m.attachments.length > 0) entry.attachments = m.attachments;
   if (m.quote && typeof m.quote === 'object') entry.quote = m.quote;
   if (Array.isArray(m.todos)) entry.todos = m.todos;
-  if ((entry.role === 'user' || entry.role === 'assistant') && !entry.content && !entry.attachments && !entry.images && !entry.toolCalls && !entry.thinkingBlocks && !entry.todos && !entry.askUserResults) return null;
+  if ((entry.role === 'user' || entry.role === 'assistant') && !entry.content && !entry.attachments && !entry.images && !entry.toolCalls && !entry.thinkingBlocks && !entry.providerState && !entry.todos && !entry.askUserResults) return null;
   return entry;
 }
 
 function projectPersistedToVisibleHistoryEntry(m) {
   if (!isVisibleConversationRow(m)) return null;
   const entry = projectPersistedToHistoryEntry(m);
+  if (entry) { delete entry.providerState; delete entry.thinkingBlocks; }
   return entry && (entry.role === 'user' || entry.role === 'assistant') ? entry : null;
 }
 

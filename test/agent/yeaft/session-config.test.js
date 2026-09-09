@@ -2078,6 +2078,7 @@ describe('Yeaft session-scoped model config', () => {
     });
     expect(bridgeAgent.pendingPrompts[0]).toEqual({
       prompt: 'use current Project context',
+      parentEffortDecision: expect.objectContaining({ effective: null, source: 'unknown', wireMode: 'omitted' }),
       projectSessionIds: ['session-b'],
       projectLabel: `Beta (${beta.id})`,
       projectInstruction: 'Use the shared release checklist.',
@@ -2093,6 +2094,7 @@ describe('Yeaft session-scoped model config', () => {
     });
     expect(bridgeAgent.pendingPrompts[1]).toEqual({
       prompt: 'clear Project context',
+      parentEffortDecision: expect.objectContaining({ effective: null, source: 'unknown', wireMode: 'omitted' }),
       projectSessionIds: [],
       projectLabel: '',
       projectInstruction: '',

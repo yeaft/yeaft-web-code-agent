@@ -36,6 +36,7 @@
  */
 
 import { Engine } from '../engine.js';
+import { snapshotEffortDecision } from '../effort.js';
 import { SubAgentToolRegistry, resolveSubAgentBudget, createExecutionStats } from './execution-control.js';
 import { getPersona } from '../personas.js';
 import { buildSpawnedPreamble } from './spawned-prompt.js';
@@ -150,6 +151,8 @@ export function startSubAgent(agent, deps = {}) {
   if (!agent || typeof agent !== 'object') return;
   if (agent.__driverStarted) return; // idempotent
   agent.__driverStarted = true;
+  // Re-freeze restored JSON snapshots; never consult live parent config here.
+  agent.parentEffortDecision = snapshotEffortDecision(agent.parentEffortDecision);
 
   let subEngine = null;
   let outputLog = null;
@@ -200,7 +203,7 @@ export function startSubAgent(agent, deps = {}) {
     if (agent.taskId && deps.taskManager && agent.parentSessionId) {
       try { deps.taskManager.setTaskLogPath(agent.parentSessionId, agent.taskId, agent.outputFile); } catch { /* ignore */ }
     }
-    outputLog.write({ type: 'sub_agent_spawned', agentId: agent.id, agentName: agent.name, mission: agent.mission || agent.task || '' });
+    outputLog.write({ type: 'sub_agent_spawned', agentId: agent.id, agentName: agent.name, mission: agent.mission || agent.task || '', parentEffortDecision: agent.parentEffortDecision });
 
     // Compose the system-prompt-overlay we want injected.
     const preamble = buildSpawnedPreamble({
@@ -357,6 +360,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
     if (typeof entry === 'string') {
       return {
         prompt: entry,
+        parentEffortDecision: snapshotEffortDecision(agent.parentEffortDecision),
         projectSessionIds: Array.isArray(deps.projectSessionIds)
           ? deps.projectSessionIds.slice()
           : [],
@@ -371,6 +375,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
     if (!entry || typeof entry !== 'object' || typeof entry.prompt !== 'string') return null;
     return {
       prompt: entry.prompt,
+      parentEffortDecision: snapshotEffortDecision(entry.parentEffortDecision ?? agent.parentEffortDecision),
       projectSessionIds: Array.isArray(entry.projectSessionIds)
         ? entry.projectSessionIds.slice()
         : [],
@@ -389,6 +394,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
     if (agent.mission && !agent.__missionSeeded) {
       agent.pendingPrompts.push({
         prompt: agent.mission,
+        parentEffortDecision: agent.parentEffortDecision,
         projectSessionIds: Array.isArray(deps.projectSessionIds)
           ? deps.projectSessionIds.slice()
           : [],
@@ -454,13 +460,18 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
       const priorUsageTokens = agent.usage?.tokens || 0;
       let turnUsageTokens = 0;
       try {
+        agent.activeParentEffortDecision = queuedPrompt.parentEffortDecision;
+        emit({ type: 'sub_agent_effort_snapshot', parentEffortDecision: queuedPrompt.parentEffortDecision });
         const stream = subEngine.query({
           prompt: queuedPrompt.prompt,
           messages: agent.engineMessages,
           signal: agent.abortController?.signal,
-          scenario: 'chat',
+          scenario: 'sub_agent',
+          isSubAgent: true,
+          parentEffortDecision: queuedPrompt.parentEffortDecision,
           vpPersona,
           sessionId: agent.parentSessionId || deps.parentSessionId || null,
+          threadId: agent.id,
           // SpawnAgent records the caller-provided cwd on the agent. Thread it
           // into the child Engine just like a parent query's workDir so child
           // file tools resolve relative paths in the requested workspace.

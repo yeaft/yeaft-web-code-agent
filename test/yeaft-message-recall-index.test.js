@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,10 +16,15 @@ const warm = (id = sessionId) => searchConversationIndex(root, id, '', { limit: 
 const recall = (prompt, opts) => recallConversationTurns(root, sessionId, prompt, opts);
 
 beforeEach(() => {
+  // Functional assertions await real worker I/O, not a 1500ms startup race
+  // under suite load. Deadline/barrier cases below opt back into real timers.
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   root = mkdtempSync(join(tmpdir(), 'yeaft-message-recall-'));
   store = new ConversationStore(root);
 });
 afterEach(async () => {
+  // Worker retirement uses real timers, including after a failed assertion.
+  vi.useRealTimers();
   await closeConversationHistoryIndexes();
   rmSync(root, { recursive: true, force: true });
 });
@@ -205,6 +210,7 @@ describe('complete Session turn recall', () => {
     const manager = [...__historyIndexForTest.managers.values()].find(item => item.ownerRoot === root);
     // Hold a real query worker so rebuilding must wait for its outstanding
     // request during graceful generation retirement (normally nearly instant).
+    vi.useRealTimers();
     const barrier = new SharedArrayBuffer(8);
     const view = new Int32Array(barrier);
     const held = manager.active.request('recall-turns', { prompt: 'cedar migration', _testBarrier: barrier });
@@ -275,6 +281,7 @@ describe('complete Session turn recall', () => {
     append('user', 'cedar migration');
     const assistant = append('assistant', 'old answer');
     await warm();
+    vi.useRealTimers();
     const barrier = new SharedArrayBuffer(8);
     const view = new Int32Array(barrier);
     const pending = recall('cedar migration', { _testBarrier: barrier });

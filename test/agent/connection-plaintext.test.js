@@ -50,6 +50,9 @@ import {
   validateInstanceId,
 } from '../../agent/service/config.js';
 import { shouldLoadLegacyLocalConfig as shouldLoadLegacyLocalConfigFromService } from '../../agent/service.js';
+// Import CLI helpers without booting a real Agent (including asynchronous
+// browser probes that would otherwise leak timers into the socket tests).
+vi.mock('../../agent/index.js', () => ({}));
 import { handleLocalCommand } from '../../agent/cli.js';
 import { applyRegisteredTransport, handleMessage } from '../../agent/connection/message-router.js';
 import { buildUnixUpgradeScript, handleUpgradeAgent } from '../../agent/connection/upgrade.js';
@@ -88,6 +91,44 @@ async function sendToServerUnderTest(ctxLike, msg) {
 }
 
 describe('agent ctx defaults and upgrade contract', () => {
+  it.each(['claude-code', 'copilot'])('isolates %s resume cleanup by provider and owner', async provider => {
+    const { resumeConversation } = await import('../../agent/conversation.js');
+    const { getProvider } = await import('../../agent/providers/index.js');
+    const claude = await import('../../agent/claude.js');
+    const driver = getProvider(provider);
+    const original = { conversations: ctx.conversations, CONFIG: ctx.CONFIG, sendToServer: ctx.sendToServer, mcpServers: ctx.mcpServers };
+    const otherProvider = provider === 'copilot' ? 'claude-code' : 'copilot';
+    const sibling = { providerName: otherProvider, claudeSessionId: 'cli-id', userId: 'user-1' };
+    const foreignOwner = { providerName: provider, claudeSessionId: 'cli-id', userId: 'user-2' };
+    const dispose = typeof driver.dispose === 'function' ? vi.spyOn(driver, 'dispose').mockImplementation(() => {}) : null;
+    const abort = vi.fn();
+    const history = vi.spyOn(driver, 'loadHistory').mockResolvedValue([]);
+    const prestart = vi.spyOn(claude, 'startClaudeQuery').mockResolvedValue(undefined);
+    const start = provider === 'copilot' ? vi.spyOn(driver, 'start').mockImplementation(async options => {
+      const state = { providerName: provider, claudeSessionId: options.resumeSessionId, userId: options.userId };
+      ctx.conversations.set(options.conversationId, state);
+      return state;
+    }) : null;
+    try {
+      Object.assign(ctx, {
+        CONFIG: { workDir: '/repo' }, mcpServers: [], sendToServer: vi.fn(),
+        conversations: new Map([
+          ['other-provider', sibling], ['other-owner', foreignOwner],
+          ['stale', { providerName: provider === 'claude-code' ? undefined : provider, claudeSessionId: 'cli-id', userId: 'user-1', abortController: { abort } }],
+        ]),
+      });
+      await resumeConversation({ conversationId: 'web-id', claudeSessionId: 'cli-id', provider, userId: 'user-1' });
+      expect([...ctx.conversations.keys()]).toEqual(['other-provider', 'other-owner', 'web-id']);
+      expect(ctx.conversations.get('other-provider')).toBe(sibling);
+      expect(ctx.conversations.get('other-owner')).toBe(foreignOwner);
+      expect(dispose || abort).toHaveBeenCalledTimes(1);
+      expect(ctx.sendToServer).toHaveBeenCalledWith(expect.objectContaining({ type: 'conversation_resumed', conversationId: 'web-id', provider }));
+    } finally {
+      start?.mockRestore(); prestart.mockRestore(); history.mockRestore(); dispose?.mockRestore();
+      Object.assign(ctx, original);
+    }
+  });
+
   it('rejects Work Center relay requests while the feature is disabled', async () => {
     const previousWebSocket = globalThis.WebSocket;
     const original = {

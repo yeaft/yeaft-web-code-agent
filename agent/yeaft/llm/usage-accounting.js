@@ -30,6 +30,8 @@ export function normalizeTokenUsage(usage = {}) {
     outputTokens,
     cacheReadTokens,
     cacheWriteTokens,
+    ...(typeof usage.reasoningTokens === 'number' && Number.isFinite(usage.reasoningTokens) && usage.reasoningTokens >= 0
+      ? { reasoningTokens: usage.reasoningTokens } : {}),
     totalTokens: explicitTotal || inputTokens + outputTokens + cacheInputTokens,
   };
 }
@@ -41,6 +43,7 @@ function addUsage(total, usage) {
   total.cacheReadTokens += normalized.cacheReadTokens;
   total.cacheWriteTokens += normalized.cacheWriteTokens;
   total.totalTokens += normalized.totalTokens;
+  if (normalized.reasoningTokens !== undefined) total.reasoningTokens = (total.reasoningTokens || 0) + normalized.reasoningTokens;
 }
 
 /**

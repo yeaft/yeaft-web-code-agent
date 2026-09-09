@@ -117,8 +117,9 @@ test.describe('Login Flow', () => {
     await page.fill('input[autocomplete="current-password"]', 'wrongpassword');
     await page.locator('.login-container button').first().click();
 
-    await expect(page.locator('.login-container .error')).toBeVisible({ timeout: 5000 });
-    await expect(page.locator('.login-container .error')).toContainText(/invalid|error|failed/i);
+    await expect(page.locator('.login-container .error').filter({
+      hasText: 'Invalid username or password',
+    })).toBeVisible({ timeout: 5000 });
     await expect(page.locator('.login-page')).toBeVisible();
   });
 
@@ -128,7 +129,9 @@ test.describe('Login Flow', () => {
 
     await page.locator('.login-container button').first().click();
 
-    await expect(page.locator('.login-container .error')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('.login-container .error').filter({
+      hasText: 'Please enter your username',
+    })).toBeVisible({ timeout: 5000 });
     await expect(page.locator('.login-page')).toBeVisible();
   });
 

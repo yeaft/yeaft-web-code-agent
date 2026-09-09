@@ -1,14 +1,7 @@
 import { test } from '../../fixtures/test-server.js';
 import { expect } from '@playwright/test';
 
-/** Helper: open modal, select agent, create conversation */
-async function createConversation(chatPage) {
-  await chatPage.locator('.session-tab-add-btn').click();
-  await expect(chatPage.locator('.modal.resume-modal')).toBeVisible({ timeout: 5000 });
-  await chatPage.locator('.resume-modal-footer .modern-btn').click();
-  await expect(chatPage.locator('.modal.resume-modal')).not.toBeVisible({ timeout: 5000 });
-  await expect(chatPage.locator('.session-item.active')).toBeVisible({ timeout: 5000 });
-}
+import { createConversation } from '../../helpers/conversation.js';
 
 test.describe('Markdown 渲染', () => {
   /** Helper: create conv, send user message, mock agent replies with markdown */

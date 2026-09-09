@@ -5657,8 +5657,8 @@ describe('Engine', () => {
   });
 
   describe('multiple tool calls in one turn', () => {
-    it('runs explicitly safe read-only tools with a bounded parallel lane and commits in call order', async () => {
-      const calls = Array.from({ length: 5 }, (_, index) => ({
+    it('runs twelve explicitly safe reads together and commits in call order', async () => {
+      const calls = Array.from({ length: 12 }, (_, index) => ({
         type: 'tool_call',
         id: `parallel-read-${index + 1}`,
         name: 'parallel_read',
@@ -5687,8 +5687,8 @@ describe('Engine', () => {
         async execute({ index }) {
           active += 1;
           maxActive = Math.max(maxActive, active);
-          if (active === 4) releaseFirstWave();
-          if (index < 4) await firstWave;
+          if (active === 12) releaseFirstWave();
+          await firstWave;
           active -= 1;
           return `result-${index + 1}`;
         },
@@ -5701,22 +5701,14 @@ describe('Engine', () => {
       });
 
       const events = [];
-      for await (const event of engine.query({ prompt: 'read five independent inputs' })) events.push(event);
+      for await (const event of engine.query({ prompt: 'read twelve independent inputs' })) events.push(event);
 
-      expect(maxActive).toBe(4);
+      expect(maxActive).toBe(12);
       expect(events
         .filter(event => event.type === 'tool_start' || event.type === 'tool_end')
         .map(event => `${event.type}:${event.id}`)).toEqual([
-        'tool_start:parallel-read-1',
-        'tool_start:parallel-read-2',
-        'tool_start:parallel-read-3',
-        'tool_start:parallel-read-4',
-        'tool_end:parallel-read-1',
-        'tool_end:parallel-read-2',
-        'tool_end:parallel-read-3',
-        'tool_end:parallel-read-4',
-        'tool_start:parallel-read-5',
-        'tool_end:parallel-read-5',
+        ...calls.map(call => `tool_start:${call.id}`),
+        ...calls.map(call => `tool_end:${call.id}`),
       ]);
       expect(mockAdapter.callLog[1].messages
         .filter(message => message.role === 'tool')

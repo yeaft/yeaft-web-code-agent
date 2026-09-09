@@ -28,6 +28,7 @@ import { resolveSubAgentBudget } from '../sub-agent/execution-control.js';
 import { STATUS, isTerminalAgentStatus } from '../sub-agent/status.js';
 import { diagnoseAgentLiveness, makeLiveness } from '../sub-agent/liveness.js';
 import { TASK_RESULT_DELIVERY } from '../tasks/store.js';
+import { captureParentEffortDecision } from '../effort.js';
 
 /** In-memory sub-agent registry. */
 const agents = new Map();
@@ -407,6 +408,8 @@ liveness，不要盲目循环。`
       expected_output: spec.expected_output,
       persona: spec.persona,
       personaData: persona || null,
+      // Capture at the tool boundary, before fire-and-forget startup can yield.
+      parentEffortDecision: captureParentEffortDecision(ctx),
       budget: spec.budget,
       cwd: cwd || ctx?.cwd || process.cwd(),
       status: STATUS.CREATED,
