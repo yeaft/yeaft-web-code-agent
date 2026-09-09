@@ -190,8 +190,8 @@ const { default: ChatPage } = await import('../../web/components/ChatPage.js');
 const { default: YeaftSidebar } = await import('../../web/components/YeaftSidebar.js');
 const { default: WorkCenterPage } = await import('../../web/components/WorkCenterPage.js');
 const { default: PluginCenterPage } = await import('../../web/components/PluginCenterPage.js');
+const { sortYeaftConversationRows } = await import('../../web/stores/helpers/conversation-repository.js');
 const {
-  __testSortYeaftRowsBySequence,
   handleConversationCreated,
   handleConversationResumed,
   handleSyncMessagesResult,
@@ -6843,7 +6843,7 @@ describe('message flow regressions', () => {
     // A refresh can merge persisted rows from different storage generations.
     // Sequence is comparable only when both rows have it: a newly persisted row
     // must not jump above older legacy history merely because the legacy row has
-    // no m#### id, and a live optimistic tail must remain last.
+    // no m#### id. Live optimistic rows must use the same chronology.
     store.messagesMap[bridgeConversationId] = [{
       id: optimisticId,
       messageId: optimisticId,
@@ -6933,11 +6933,11 @@ describe('message flow regressions', () => {
     ];
     for (const rows of permutations) {
       const sorted = rows.map(row => ({ ...row }));
-      __testSortYeaftRowsBySequence(sorted);
+      sortYeaftConversationRows(sorted);
       expect(sorted.map(row => row.content)).toEqual([
+        'live permutation',
         'legacy permutation',
         'sequenced permutation',
-        'live permutation',
       ]);
     }
 

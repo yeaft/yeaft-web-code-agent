@@ -1170,6 +1170,7 @@ describe('Yeaft history outline state', () => {
     store.messagesMap['conv-a'] = [{
       id: 'progress-before-tool',
       type: 'assistant',
+      timestamp: Date.now() - 1,
       content: 'Inspecting files',
       sessionId: 'same',
       turnId: 'turn-tool',
