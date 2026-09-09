@@ -372,10 +372,16 @@ test('keeps progress visible and distinct from the final result across themes an
   await thumbnails.first().click();
   const preview = page.locator('.image-preview-overlay');
   await expect(preview).toBeVisible();
-  await expect(preview.locator('.image-preview-img')).toHaveAttribute('src', '/gallery-a.png');
+  const previewImage = preview.locator('.image-preview-img');
+  await expect(previewImage).toHaveAttribute('src', '/gallery-a.png');
   await expect(preview.locator('.image-preview-position')).toHaveText('Image 1 of 2');
+  await previewImage.hover({ position: { x: 300, y: 200 } });
+  await page.mouse.wheel(0, -100);
+  await expect.poll(() => previewImage.evaluate(image => image.style.transform)).toContain('scale(1.25)');
+  await expect(previewImage).toHaveClass(/is-zoomed/);
   await preview.locator('.image-preview-next').click();
-  await expect(preview.locator('.image-preview-img')).toHaveAttribute('src', '/gallery-b.png');
+  await expect(previewImage).toHaveAttribute('src', '/gallery-b.png');
+  await expect(previewImage).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 0, 0)');
   await expect(preview.locator('.image-preview-position')).toHaveText('Image 2 of 2');
   await page.keyboard.press('ArrowLeft');
   await expect(preview.locator('.image-preview-img')).toHaveAttribute('src', '/gallery-a.png');
