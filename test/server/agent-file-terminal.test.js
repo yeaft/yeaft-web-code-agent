@@ -104,6 +104,7 @@ async function registerRouteRequest({
   clientId = 'client-1',
   userId = 'user-1',
   workDir = '/workspace/session-1',
+  agentWorkDir = '',
   requestId = null,
   extra = {},
   agentCapabilities = null,
@@ -112,6 +113,7 @@ async function registerRouteRequest({
   const client = routeClient(userId, { currentAgent: agentId });
   webClients.set(clientId, client);
   installRouteAgent(agentId, [{ id: sessionId, workDir, userId }]);
+  agents.get(agentId).workDir = agentWorkDir;
   if (Array.isArray(agentCapabilities)) agents.get(agentId).capabilities = [...agentCapabilities];
   forwardToAgent.mockClear();
   const handled = await handleClientWorkbench(
@@ -2399,6 +2401,65 @@ describe('Agent file terminal forwarding', () => {
     }));
     expect(sendToWebClient.mock.calls[0][0]).toBe(second.client);
     expect(sendToWebClient.mock.calls[0][0]).not.toBe(first.client);
+  });
+
+  it.each(['', '   ', '/session/explicit'])('resolves history file references with canonical cwd %j', async workDir => {
+    const expectedWorkDir = workDir.trim() || '/agent/default';
+    const { outbound, client } = await registerRouteRequest({
+      type: 'resolve_file_references',
+      workDir,
+      agentWorkDir: '/agent/default',
+      requestId: 'old-session-refs',
+      extra: { workDir: '/browser/untrusted', references: ['README.md'] },
+    });
+    expect(outbound).toMatchObject({
+      workDir: expectedWorkDir,
+      workbenchWorkspaceGeneration: workbenchWorkspaceGeneration('yeaft:agent-1:session-1', expectedWorkDir),
+    });
+    sendToWebClient.mockClear();
+    await handleAgentFileTerminal('agent-1', agents.get('agent-1'), {
+      type: 'file_references_resolved',
+      conversationId: outbound.conversationId,
+      _workbenchRequestId: outbound._workbenchRequestId,
+      references: [{ requestedPath: 'README.md', resolvedPath: 'README.md' }],
+    });
+    expect(sendToWebClient).toHaveBeenCalledExactlyOnceWith(client, expect.objectContaining({
+      type: 'file_references_resolved', requestId: 'old-session-refs',
+    }));
+  });
+
+  it('drops a delayed fallback response when the Agent default directory changes', async () => {
+    const { outbound } = await registerRouteRequest({
+      type: 'resolve_file_references', workDir: '', agentWorkDir: '/agent/before',
+      requestId: 'default-change', extra: { references: ['README.md'] },
+    });
+    agents.get('agent-1').workDir = '/agent/after';
+    sendToWebClient.mockClear();
+    await handleAgentFileTerminal('agent-1', agents.get('agent-1'), {
+      type: 'file_references_resolved', conversationId: outbound.conversationId,
+      _workbenchRequestId: outbound._workbenchRequestId, references: [],
+    });
+    expect(sendToWebClient).not.toHaveBeenCalled();
+  });
+
+  it.each(['missing', 'archived', 'no-default'])('isolates rejected %s history file previews from chat', async kind => {
+    const client = routeClient('user-1', { currentAgent: 'agent-1' });
+    installRouteAgent('agent-1', kind === 'missing' ? [] : [{
+      id: 'session-1', userId: 'user-1', workDir: '', isArchived: kind === 'archived',
+    }]);
+    agents.get('agent-1').workDir = kind === 'no-default' ? '' : '/agent/default';
+    forwardToAgent.mockClear();
+    sendToWebClient.mockClear();
+    await handleClientWorkbench('client-1', client, {
+      type: 'resolve_file_references', agentId: 'agent-1', requestId: 'denied-refs',
+      workDir: '/browser/untrusted', references: ['README.md'],
+      workbenchRoute: { runtimeProvider: 'yeaft', agentId: 'agent-1', sessionId: 'session-1' },
+    }, async () => true);
+    expect(forwardToAgent).not.toHaveBeenCalled();
+    expect(sendToWebClient).toHaveBeenCalledExactlyOnceWith(client, expect.objectContaining({
+      type: 'file_references_resolved', requestId: 'denied-refs', references: [],
+      error: 'Invalid Workbench Session route',
+    }));
   });
 
   it('keeps resolved file references correlated to the requesting browser and route', async () => {

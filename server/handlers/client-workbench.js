@@ -50,6 +50,10 @@ async function denyWorkbenchRoute(client, msg) {
     error,
   });
   if (response) await sendToWebClient(client, response);
+  // History file-link previews are background requests, not failed chat turns.
+  // Their correlated result already terminates the request without polluting
+  // the conversation (or stopping an unrelated streaming answer).
+  if (msg?.type === 'resolve_file_references' && response) return;
   await sendToWebClient(client, { type: 'error', message: error });
 }
 
@@ -321,7 +325,9 @@ export async function handleClientWorkbench(clientId, client, msg, checkAgentAcc
         client,
         msg,
         resolved,
-        canonical: canonicalWorkbenchMessage(msg, { ...resolved, conversationId: fileConvId }),
+        canonical: canonicalWorkbenchMessage(msg, { ...resolved, conversationId: fileConvId }, {
+          canonicalWorkDir: !resolved.legacy && msg.type === 'resolve_file_references',
+        }),
       });
       break;
     }

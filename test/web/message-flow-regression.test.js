@@ -507,6 +507,25 @@ describe('message flow regressions', () => {
     });
   });
 
+  it('uses the owning Agent default for an empty Session cwd, never another Agent or runtime data', () => {
+    storeFactories.clear();
+    runtimeSessionsStore.sessionList = [{ id: 'session-files', agentId: 'agent-files', workDir: '  ' }];
+    const store = useChatStore();
+    store.currentView = 'yeaft';
+    store.currentAgent = 'other-agent';
+    store.currentAgentInfo = { id: 'other-agent', workDir: '/other/workspace' };
+    store.agents = [{ id: 'agent-files', workDir: '/workspace/default', capabilities: ['file_reference_resolution'] }];
+    store.yeaftActiveSessionFilter = 'session-files';
+    store.yeaftSessionAgentById = { 'session-files': 'agent-files' };
+    store.yeaftYeaftDir = '/instance/runtime-data';
+    expect(store.effectiveWorkDir).toBe('/workspace/default');
+    runtimeSessionsStore.sessionList[0].workDir = '/workspace/session';
+    expect(store.effectiveWorkDir).toBe('/workspace/session');
+    runtimeSessionsStore.sessionList[0].workDir = '';
+    store.agents = [];
+    expect(store.effectiveWorkDir).toBe('');
+  });
+
   it('changes the file-reference resolution context when route readiness changes', () => {
     storeFactories.clear();
     runtimeSessionsStore.sessionList = [{ id: 'session-files', agentId: 'agent-files' }];
@@ -537,7 +556,10 @@ describe('message flow regressions', () => {
     const readyKey = store.fileReferenceResolutionContextKey;
     expect(readyKey).not.toBe(connectingKey);
 
-    store.yeaftYeaftDir = '/workspace/ready';
+    store.yeaftYeaftDir = '/instance/runtime-data';
+    expect(store.effectiveWorkDir).toBe('/workspace/files');
+    expect(store.fileReferenceResolutionContextKey).toBe(readyKey);
+    store.currentAgentInfo.workDir = '/workspace/ready';
     const workDirKey = store.fileReferenceResolutionContextKey;
     expect(workDirKey).not.toBe(readyKey);
 

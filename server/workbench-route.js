@@ -97,6 +97,15 @@ function resolveYeaftRow(client, route) {
     || null;
 }
 
+// Resolve defaults only after Session ownership has been checked. An empty
+// legacy Session cwd inherits the Agent's advertised execution directory,
+// never the browser's cwd or the Server process cwd.
+function resolveSessionWorkDir(row, route) {
+  if (!row) return '';
+  return clean(route.runtimeProvider === 'yeaft' ? row.workDir : row.work_dir, 4096)
+    || clean(agents.get(route.agentId)?.workDir, 4096);
+}
+
 function resolveChatRow(client, route) {
   const row = sessionDb.get(route.sessionId);
   if (!row || row.agent_id !== route.agentId) return null;
@@ -131,7 +140,7 @@ export function currentWorkbenchWorkspaceGeneration({ route, userId, role }) {
     ? resolveYeaftRow(client, route)
     : resolveChatRow(client, route);
   if (!row || row.isArchived) return null;
-  const workDir = clean(route.runtimeProvider === 'yeaft' ? row.workDir : row.work_dir, 4096);
+  const workDir = resolveSessionWorkDir(row, route);
   if (!workDir) return '';
   return workbenchWorkspaceGeneration(workbenchRouteKey(route), workDir);
 }
@@ -175,9 +184,7 @@ export function resolveWorkbenchRequest(client, msg, targetAgentId, { allowMissi
     if (msg.conversationId === '_folder_picker') scope = 'files-folder-picker';
     else if (msg.conversationId === '_git_folder_picker') scope = 'git-folder-picker';
   }
-  const sessionWorkDir = clean(row
-    ? (route.runtimeProvider === 'yeaft' ? row.workDir : row.work_dir)
-    : '', 4096);
+  const sessionWorkDir = resolveSessionWorkDir(row, route);
   const workspaceGeneration = sessionWorkDir
     ? workbenchWorkspaceGeneration(routeKey, sessionWorkDir)
     : clean(msg.workbenchWorkspaceGeneration, 1600);

@@ -479,6 +479,17 @@ function resolveAgentIdForSession(state, sessionId, explicitAgentId = null) {
   return state?.currentAgent || null;
 }
 
+function resolveYeaftWorkbenchWorkDir(state) {
+  const sessionId = resolveActiveYeaftSessionId(state);
+  const agentId = resolveAgentIdForSession(state, sessionId);
+  const session = getSessionsStore()?.sessionById?.(sessionId, agentId);
+  const agent = state.currentAgentInfo?.id === agentId
+    ? state.currentAgentInfo
+    : state.agents?.find(row => row?.id === agentId);
+  const cleanWorkDir = value => typeof value === 'string' ? value.trim() : '';
+  return cleanWorkDir(session?.workDir) || cleanWorkDir(agent?.workDir);
+}
+
 function isAgentVersionAtLeast(version, minimum) {
   const parse = value => String(value || '').replace(/^v/, '').split('.').slice(0, 3).map(part => Number.parseInt(part, 10));
   const current = parse(version);
@@ -1508,25 +1519,11 @@ export const useChatStore = defineStore('chat', {
     // Chat mode: the conversation's project dir (`currentWorkDir`) takes
     // precedence, falling back to the agent's cwd. Preserves prior behavior.
     //
-    // Yeaft mode: the Chat agent's cwd is the wrong default — it leaks
-    // whichever Chat conversation the user last opened into the group's
-    // workbench. Precedence:
-    //   1. active group's own workDir (groups don't carry one on main yet,
-    //      but the lookup is wired so the day they do, no consumer changes
-    //      are needed),
-    //   2. agent's ~/.yeaft home, advertised via session_ready.yeaftDir,
-    //   3. agent cwd as a final fallback if session_ready hasn't landed.
-    //
-    // Until `yeaftSessionReady`, we still return the fallback chain rather
-    // than '' so first-paint Files/Git RPCs don't hit a no-op — a brief
-    // flicker is preferable to a blank workbench during the ~1 tick gap.
+    // Yeaft mode matches Server route resolution: Session cwd, then its
+    // owning Agent's execution cwd. yeaftDir owns runtime data, not code.
     effectiveWorkDir: (state) => {
       if (state.currentView === 'yeaft') {
-        const groupWorkDir = getSessionsStore()?.activeSession?.workDir;
-        return groupWorkDir
-          || state.yeaftYeaftDir
-          || state.currentAgentInfo?.workDir
-          || '';
+        return resolveYeaftWorkbenchWorkDir(state);
       }
       return state.currentWorkDir || state.currentAgentInfo?.workDir || '';
     },
@@ -1556,10 +1553,7 @@ export const useChatStore = defineStore('chat', {
       const canResolve = agentHasCapability(state, agentId, 'file_reference_resolution');
       if (!agentId || !conversationId || !canResolve) return '';
       const workDir = state.currentView === 'yeaft'
-        ? getSessionsStore()?.activeSession?.workDir
-          || state.yeaftYeaftDir
-          || state.currentAgentInfo?.workDir
-          || ''
+        ? resolveYeaftWorkbenchWorkDir(state)
         : state.currentWorkDir || state.currentAgentInfo?.workDir || '';
       return JSON.stringify([
         state.connectionState,
