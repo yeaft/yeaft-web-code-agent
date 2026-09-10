@@ -60,6 +60,7 @@ test.describe('Yeaft composer menus', () => {
         await page.setViewportSize({ width, height: 800 });
         await openYeaftComposer(page, serverUrl);
         await expect(page.locator('.composer-send-modes')).toHaveCount(0);
+        await expect(page.locator('.composer-send-mode-trigger')).toHaveCount(0);
         await page.evaluate(async theme => {
           document.documentElement.setAttribute('data-theme', theme);
           const store = window.Pinia.useChatStore();

@@ -44,6 +44,7 @@ describe('Agent quick-send Composer', () => {
   it('defaults hidden; opt-in adds a send-mode menu beside the ordinary send button', async () => {
     await create();
     expect(wrapper.find('.composer-send-modes').exists()).toBe(false);
+    expect(wrapper.find('.composer-send-mode-trigger').exists()).toBe(false);
     preferences.value.showQuickSends = true;
     await Vue.nextTick();
     expect(store.sendWsMessage).toHaveBeenCalledWith({ type: 'get_llm_config', agentId: 'a1' });
@@ -91,6 +92,7 @@ describe('Agent quick-send Composer', () => {
     store.currentAgent = 'a2';
     await Vue.nextTick();
     expect(wrapper.find('.composer-send-modes').exists()).toBe(false);
+    expect(wrapper.find('.composer-send-mode-trigger').exists()).toBe(false);
     await wrapper.get('textarea').trigger('keydown', { key: 'e', ctrlKey: true });
     expect(sendFn).toHaveBeenCalledTimes(1);
   });
