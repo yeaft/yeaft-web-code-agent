@@ -25,7 +25,7 @@
  * @param {'en'|'zh'} [args.language='en']
  * @returns {string} preamble block (already ## headed, ready to concat)
  */
-export function buildSpawnedPreamble({ parentName, parentVpId, agentName, mission, expectedOutput, presetPrompt, budget, language = 'en' } = {}) {
+export function buildSpawnedPreamble({ parentName, parentVpId, agentName, mission, expectedOutput, presetPrompt, budget, allowTools = [], language = 'en' } = {}) {
   // Resolve template markers before embedding: the outer VP renderer treats
   // markers as sections of the whole soul and would drop the parent + contract.
   const locale = language === 'zh' || language === 'zh-CN' ? 'zh' : 'en';
@@ -35,8 +35,9 @@ export function buildSpawnedPreamble({ parentName, parentVpId, agentName, missio
     : presetPrompt;
   const contract = [
     rolePrompt || '',
+    `## Tool authority\nDefault persona tools plus explicit parent grants: ${JSON.stringify(allowTools)}. Parent grants override a default read-only role only within the mission's scope. Bash permits arbitrary shell/writes; it is not a sandbox. You cannot grant yourself tools or budget; report blockers to the parent. UpdateAgent is parent-only.`,
     expectedOutput ? `## expected_output\nReturn the requested structure; mark unverified facts and blockers honestly.\n${JSON.stringify(expectedOutput)}` : '',
-    budget ? `## Execution budget\n${JSON.stringify(budget)}\nLimits are ceilings, not targets. Stop once the mission is answered. Return partial findings before exhausting the budget; do not automatically restart the same work.` : '',
+    budget ? `## Execution budget\n${JSON.stringify(budget)}\nLimits are ceilings, not targets. Complete the assigned result, then stop; do not stop with a plan or promise to continue. If a tool or prerequisite is unavailable, return the evidence and blocker instead of searching for unavailable capabilities. Near the tool limit, prioritize a supported conclusion. At the limit, one tool-free report may be requested within the remaining time/token budget; do not automatically restart the work.` : '',
   ].filter(Boolean).join('\n\n');
   const m = [(mission || '').trim(), contract].filter(Boolean).join('\n\n');
   if (language === 'zh') {

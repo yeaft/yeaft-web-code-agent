@@ -9,6 +9,7 @@ import { SubAgentToolRegistry, resolveSubAgentBudget } from '../../../agent/yeaf
 import { validateSpec, getAgentRegistry } from '../../../agent/yeaft/tools/agent.js';
 import { diagnoseAgentLiveness } from '../../../agent/yeaft/sub-agent/liveness.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
+import { Engine } from '../../../agent/yeaft/engine.js';
 
 function record(budget = {}) {
   return { id: 'execution-test', name: 'test', mission: 'Find evidence', status: 'created',
@@ -53,7 +54,7 @@ describe('sub-agent execution control', () => {
   it('reserves parallel calls atomically, preserves raw output and reports repetitions without claiming progress', async () => {
     const agent = record({ max_tool_calls: 3 });
     let calls = 0;
-    const child = new SubAgentToolRegistry({ agent, stopBudget: reason => agent.abortController.abort(reason) });
+    const child = new SubAgentToolRegistry({ agent });
     child.register(readTool(async () => { calls++; return 'same'; }));
     const results = await Promise.allSettled(Array.from({ length: 8 }, () => child.execute('Read', {})));
     expect(calls).toBe(3);
@@ -63,6 +64,35 @@ describe('sub-agent execution control', () => {
     expect(snapshot.execution.remainingToolCalls).toBe(0);
     expect(snapshot.execution.progressNote).toContain('not proof');
     expect(snapshot.stalled).toBe(false);
+    expect(agent.abortController.signal.aborted).toBe(false);
+    expect(child.prepareProviderRequest()).toMatchObject({ finalize: true, maxOutputTokens: 4096 });
+  });
+
+  it('does not apply the child reporting hook to a parent Engine', async () => {
+    let calls = 0;
+    const registry = new ToolRegistry().register(readTool(async () => { calls++; return 'evidence'; }));
+    registry.prepareProviderRequest = () => { throw new Error('child-only policy'); };
+    let requests = 0;
+    const adapter = {
+      async *stream() {
+        if (++requests === 1) {
+          yield { type: 'tool_call', id: 'parent-read', name: 'Read', input: {} };
+          yield { type: 'stop', stopReason: 'tool_use' };
+        } else {
+          yield { type: 'text_delta', text: 'parent result' };
+          yield { type: 'stop', stopReason: 'end_turn' };
+        }
+      },
+      async call() { return { text: 'ok', usage: {} }; },
+    };
+    const engine = new Engine({ adapter, trace: new NullTrace(), toolRegistry: registry,
+      config: { model: 'test', maxOutputTokens: 1024, _readOnly: true } });
+    const events = [];
+    for await (const event of engine.query({ prompt: 'read evidence', messages: [] })) events.push(event);
+    expect(calls).toBe(1);
+    expect(requests).toBe(2);
+    expect(events.some(event => event.type === 'error')).toBe(false);
+    expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toHaveLength(1);
   });
 
   it('does not dispatch any new tool after cancellation', async () => {
@@ -110,41 +140,100 @@ describe('sub-agent execution control', () => {
     }
   });
 
-  it.each(['tools', 'tokens', 'empty'])('stops an actual Engine tool loop at the %s boundary and preserves the contract', async mode => {
+  it.each(['tools', 'tokens', 'empty', 'error', 'truncated', 'parallel', 'report-tokens', 'wall-time'])('finishes an actual Engine at the %s boundary without losing evidence', async mode => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yeaft-execution-'));
-    const agent = record(mode === 'tokens' ? { max_tokens: 10 } : { max_tool_calls: 2 });
+    const agent = record({ max_tool_calls: 2,
+      ...(['tokens', 'report-tokens'].includes(mode) ? { max_tokens: 10 } : {}),
+      ...(mode === 'wall-time' ? { wall_time_ms: 1500 } : {}),
+    });
     agent.persona = 'explorer';
     agent.expected_output = { type: 'object', properties: { evidence: { type: 'string' } } };
     getAgentRegistry().set(agent.id, agent);
     let calls = 0;
-    let requests = 0;
-    let system = '';
+    const requests = [];
+    const events = [];
+    const completions = [];
+    agent.taskId = 'task-budget';
+    agent.parentSessionId = 'session-budget';
+    const taskManager = {
+      renderActiveTasksForPrompt() { return ''; },
+      refreshTaskLog() {},
+      completeTask(sessionId, taskId, result) { completions.push({ sessionId, taskId, ...result }); },
+    };
     const adapter = {
       async *stream(params) {
-        requests++;
-        system = params.system;
-        if (mode !== 'empty') yield { type: 'text_delta', text: 'partial evidence' };
+        requests.push(JSON.parse(JSON.stringify({ system: params.system, messages: params.messages,
+          tools: params.tools, maxTokens: params.maxTokens })));
+        const reporting = agent.budgetReportStarted;
+        if (reporting) {
+          if (mode === 'error') {
+            yield { type: 'error', error: new Error('report unavailable'), retryable: true };
+            return;
+          }
+          if (mode === 'wall-time') {
+            while (!params.signal.aborted) await new Promise(r => setTimeout(r, 10));
+            throw new Error('deadline');
+          }
+          if (mode !== 'empty') yield { type: 'text_delta', text: 'FINAL: evidence-1 and evidence-2; unchecked scope remains.' };
+          if (mode === 'report-tokens') yield { type: 'usage', inputTokens: 8, outputTokens: 3 };
+          // A noncompliant adapter cannot restart investigation or persist an orphan call.
+          yield { type: 'tool_call', id: 'unsolicited', name: 'FileRead', input: {} };
+          yield { type: 'stop', stopReason: mode === 'truncated' ? 'max_tokens' : 'end_turn' };
+          return;
+        }
+        if (mode !== 'empty') yield { type: 'text_delta', text: 'progress; ' };
         if (mode === 'tokens') yield { type: 'usage', inputTokens: 8, outputTokens: 3 };
-        yield { type: 'tool_call', id: `call-${requests}`, name: 'FileRead', input: { offset: requests } };
+        for (let i = 0; i < (mode === 'parallel' ? 5 : 1); i++) {
+          yield { type: 'tool_call', id: `call-${requests.length}-${i}`, name: 'FileRead', input: { offset: requests.length + i } };
+        }
         yield { type: 'stop', stopReason: 'tool_use' };
       },
       async call() { return { text: 'ok', usage: {} }; },
     };
     try {
-      startSubAgent(agent, { adapter, config: { model: 'test', maxOutputTokens: 1024, _readOnly: true },
-        trace: new NullTrace(), parentToolRegistry: new ToolRegistry().register(readTool(async () => { calls++; return `evidence-${calls}`; })),
+      startSubAgent(agent, { adapter, config: { model: 'test', maxOutputTokens: 8192, _readOnly: true },
+        trace: new NullTrace(), parentToolRegistry: new ToolRegistry().register(readTool(async () => {
+          const number = ++calls;
+          await new Promise(r => setTimeout(r, 5));
+          return `evidence-${number}`;
+        })), taskManager, parentSessionId: agent.parentSessionId, onEvent: (_id, event) => events.push(event),
         parentVpPersona: { persona: 'PARENT SOUL' }, subAgentLogDir: dir, yeaftDir: dir });
       await waitForCleanup(agent);
       expect(calls).toBe(mode === 'tokens' ? 0 : 2);
+      expect(requests).toHaveLength(mode === 'tokens' ? 1 : mode === 'parallel' ? 2 : 3);
       expect(agent.result.status).toBe('budget_exceeded');
-      expect(agent.result.reason).toContain(mode === 'tokens' ? 'max_tokens' : 'max_tool_calls');
-      expect(agent.result.partial_output).toBe(mode === 'empty' ? '' : agent.lastResult);
-      if (mode !== 'empty') expect(agent.result.partial_output).toContain('partial evidence');
+      expect(completions).toHaveLength(1);
+      expect(completions[0]).toMatchObject({ sessionId: 'session-budget', taskId: 'task-budget', status: 'failed' });
+      expect(JSON.parse(completions[0].summary)).toEqual(agent.result);
+      expect(agent.result.reason).toContain(['tokens', 'report-tokens'].includes(mode) ? 'max_tokens'
+        : mode === 'wall-time' ? 'wall_time_ms' : 'max_tool_calls');
+      if (mode === 'empty') expect(agent.result.partial_output).toContain('No final report');
+      else if (mode === 'error' || mode === 'tokens' || mode === 'wall-time') {
+        expect(agent.result.partial_output).toContain('progress;');
+      } else expect(agent.result.partial_output).toContain('FINAL: evidence-1 and evidence-2');
+      if (!['tokens', 'report-tokens', 'wall-time'].includes(mode)) {
+        expect(agent.result.reporting).toMatchObject({ attempted: true, received: !['empty', 'error'].includes(mode) });
+        if (mode === 'error') expect(agent.result.reporting.error).toContain('report unavailable');
+        else if (mode !== 'empty') expect(agent.result.partial_output).not.toContain('progress;');
+      }
+      if (mode !== 'tokens') {
+        const last = requests.at(-1);
+        expect(last.tools || []).toHaveLength(0);
+        expect(last.maxTokens).toBeLessThanOrEqual(4096);
+        expect(last.system).toContain('single reserved reporting response');
+        expect(last.messages.filter(m => m.role === 'tool').map(m => m.content))
+          .toEqual(expect.arrayContaining(['evidence-1', 'evidence-2']));
+        expect(events.some(e => e.type === 'tool_call' && e.id === 'unsolicited')).toBe(false);
+      }
       expect(agent.subEngine).toBe(null);
-      expect(system).toContain('expected_output');
-      expect(system).toContain('PARENT SOUL');
-      expect(system).toContain('Explorer Persona');
-      if (mode === 'tokens') expect(agent.result.usage.tokens).toBe(11);
+      expect(requests[0].system).toContain('expected_output');
+      expect(requests[0].system).toContain('PARENT SOUL');
+      expect(requests[0].system).toContain('Explorer Persona');
+      if (['tokens', 'report-tokens'].includes(mode)) expect(agent.result.usage.tokens).toBe(11);
+      expect(events.filter(e => e.type === 'turn_end' && e.terminal)).toHaveLength(1);
+      const log = fs.readFileSync(agent.outputFile, 'utf8');
+      expect(log).toContain(agent.result.reason);
+      if (!['empty', 'error', 'tokens', 'wall-time'].includes(mode)) expect(log).toContain('FINAL: evidence-1');
     } finally {
       agent.abortController.abort('cleanup');
       getAgentRegistry().delete(agent.id);
