@@ -999,10 +999,15 @@ export default {
               ? message.llmCallCount
               : count
           ), 0);
-          const liveLlmCallCount = currentTurn.turnId
-            ? store.yeaftDebugTurnsById?.[currentTurn.turnId]?.loopCount
-            : 0;
-          currentTurn.llmCallCount = Math.max(persistedLlmCallCount, liveLlmCallCount || 0);
+          const liveTurnMeta = currentTurn.turnId
+            ? store.yeaftDebugTurnsById?.[currentTurn.turnId]
+            : null;
+          currentTurn.llmCallCount = Math.max(persistedLlmCallCount, liveTurnMeta?.loopCount || 0);
+          const persistedResponseMeta = [...currentTurn.messages].reverse().find(message => (
+            message?.type === 'assistant' && (message.model || message.effort)
+          ));
+          currentTurn.model = liveTurnMeta?.model || persistedResponseMeta?.model || null;
+          currentTurn.effort = liveTurnMeta?.effort || persistedResponseMeta?.effort || null;
           // Has the VP produced anything the user/group can see?
           // Tools are NOT user-visible content — they're internal
           // activity. A route_forward call shows up as a tool chip

@@ -1,8 +1,8 @@
 export const en = {
   'userShortcuts.title': 'Keyboard shortcuts',
   'userShortcuts.scope': 'These are your user preferences, stored only in this browser for this account. They do not sync across devices.',
-  'userShortcuts.showQuickSends': 'Show quick-send buttons',
-  'userShortcuts.quickSendHelp': 'Button text and content are configured in Agent settings. Quick-send shortcuts only work while the message composer is focused.',
+  'userShortcuts.showQuickSends': 'Enable quick-send shortcuts',
+  'userShortcuts.quickSendHelp': 'Preset names and request settings are configured in Agent settings. Quick-send shortcuts only work while the message composer is focused.',
   'userShortcuts.help': 'Shortcuts use simple Alt + key defaults. Click a binding to replace it, or clear it to disable the action. Escape cancels; Tab moves on. Global actions do not run in dialogs, inputs, editors or terminals.',
   'userShortcuts.suggestion': 'Suggestion: {binding}',
   'userShortcuts.recording': 'Press a shortcut…',
@@ -30,8 +30,8 @@ export const en = {
 export const zhCN = {
   'userShortcuts.title': '键盘快捷键',
   'userShortcuts.scope': '这是你的用户偏好，按当前账号仅保存在此浏览器中，不跨设备同步。',
-  'userShortcuts.showQuickSends': '显示快捷发送按钮',
-  'userShortcuts.quickSendHelp': '按钮文字与内容在 Agent 设置中配置。快捷发送按键仅在消息输入框获得焦点时生效。',
+  'userShortcuts.showQuickSends': '启用快捷发送快捷键',
+  'userShortcuts.quickSendHelp': '预设名称与请求参数在 Agent 设置中配置。快捷发送按键仅在消息输入框获得焦点时生效。',
   'userShortcuts.help': '默认使用简单的 Alt + 单键。点击绑定按钮可替换，清除后可停用该操作。Escape 取消，Tab 移至下一项。全局动作不抢占弹窗、输入框、编辑器或终端的按键。',
   'userShortcuts.suggestion': '推荐：{binding}',
   'userShortcuts.recording': '请按下组合键…',

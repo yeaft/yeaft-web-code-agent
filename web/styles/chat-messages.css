@@ -1527,8 +1527,22 @@
   align-items: center;
   justify-content: flex-end;
   padding: 2px 8px 4px;
+  gap: 8px;
   opacity: 0;
   transition: opacity 0.15s;
+}
+
+.turn-response-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-right: auto;
+}
+
+.turn-model-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .assistant-turn:hover .turn-footer,

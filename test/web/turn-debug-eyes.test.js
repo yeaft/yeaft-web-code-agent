@@ -86,16 +86,32 @@ describe('VpTurnBlock debug action', () => {
     expect(wrapper.find('.vp-turn-block-actions').exists()).toBe(false);
   });
 
-  it('shows the provider-call count on a finished response', () => {
+  it('shows the response model and effort before the provider-call count', () => {
+    const translate = (key, vars) => {
+      if (key === 'yeaft.message.llmCalls') return `${vars.count} LLM calls`;
+      if (key === 'yeaft.modelMenu.effort.high') return 'High';
+      return key;
+    };
     const wrapper = mount(VpTurnBlock, {
-      props: { turn: makeTurn({ llmCallCount: 3 }) },
+      props: {
+        turn: makeTurn({
+          model: 'provider/model-v2',
+          effort: 'high',
+          llmCallCount: 3,
+        }),
+      },
       global: {
-        mocks: { $t: (key, vars) => key === 'yeaft.message.llmCalls' ? `${vars.count} LLM calls` : key },
-        provide: { t: key => key },
+        mocks: { $t: translate },
+        provide: { t: translate },
       },
     });
 
-    expect(wrapper.find('.turn-footer').text()).toContain('3 LLM calls');
+    const footerText = wrapper.find('.turn-footer').text();
+    expect(footerText).toContain('provider/model-v2 · High');
+    expect(footerText).toContain('3 LLM calls');
+    expect(footerText.indexOf('provider/model-v2 · High')).toBeLessThan(
+      footerText.indexOf('3 LLM calls')
+    );
   });
 
   it('does not render the debug action while the turn is streaming', () => {

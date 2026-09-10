@@ -411,6 +411,8 @@ function serializeMessage(msg) {
 
   if (msg.mode) fm.push(`mode: ${msg.mode}`);
   if (msg.model) fm.push(`model: ${msg.model}`);
+  if (msg.effort) fm.push(`effort: ${msg.effort}`);
+  if (Number.isInteger(msg.llmCallCount) && msg.llmCallCount > 0) fm.push(`llmCallCount: ${msg.llmCallCount}`);
   if (msg.turnNumber != null) fm.push(`turnNumber: ${msg.turnNumber}`);
   if (msg.toolCallId) fm.push(`toolCallId: ${msg.toolCallId}`);
   if (msg.eventType) fm.push(`eventType: ${msg.eventType}`);
@@ -560,6 +562,8 @@ export function parseMessage(raw) {
       case 'time': msg.time = value; break;
       case 'mode': msg.mode = value; break;
       case 'model': msg.model = value; break;
+      case 'effort': msg.effort = value; break;
+      case 'llmCallCount': msg.llmCallCount = parseInt(value, 10); break;
       case 'turnNumber': msg.turnNumber = parseInt(value, 10); break;
       case 'toolCallId': msg.toolCallId = value; break;
       case 'eventType': msg.eventType = value; break;

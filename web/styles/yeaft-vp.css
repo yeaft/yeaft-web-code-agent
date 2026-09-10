@@ -668,7 +668,6 @@
 .turn-time {
   font-size: 11px;
   color: var(--text-secondary);
-  margin-right: auto;
   opacity: 0.8;
   pointer-events: none;
   user-select: none;

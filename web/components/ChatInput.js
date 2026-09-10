@@ -9,12 +9,11 @@ import VpMentionAutocomplete, {
   vpMentionOptionId,
 } from './VpMentionAutocomplete.js';
 import MessageComposer from './MessageComposer.js';
-import QuickSendButtons from './QuickSendButtons.js';
 import { useUserShortcuts, matchShortcut } from '../utils/user-shortcuts.js';
 
 export default {
   name: 'ChatInput',
-  components: { MessageComposer, QuickSendButtons, VpMentionAutocomplete },
+  components: { MessageComposer, VpMentionAutocomplete },
   props: {
     /** Custom send function: (text, attachmentInfos) => void. Overrides store.sendMessage. */
     sendFn: { type: Function, default: null },
@@ -182,8 +181,6 @@ export default {
         </template>
         <template #end-actions-before>
           <slot name="actions-end-before"></slot>
-          <QuickSendButtons v-if="quickSends.length" :items="quickSends"
-            :bindings="shortcutPreferences.bindings" :disabled="!canQuickSend" @send="sendQuick" />
         </template>
       </MessageComposer>
     </footer>

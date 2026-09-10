@@ -76,25 +76,13 @@ test.describe('Yeaft composer menus', () => {
             })),
           } };
         }, theme);
-        const trigger = page.locator('.composer-send-mode-trigger');
-        await expect(trigger).toBeDisabled();
+        await expect(page.locator('.composer-send-modes')).toHaveCount(0);
+        await expect(page.locator('.composer-send-mode-trigger')).toHaveCount(0);
+        await expect(page.locator('.composer-send-mode-menu')).toHaveCount(0);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         const input = page.locator('.yeaft-session-input textarea');
         await input.fill('quick message');
-        await expect(trigger).toBeEnabled();
-        const triggerBox = await trigger.boundingBox();
-        const sendBox = await page.locator('.yeaft-session-input .send-btn:not(.stop-btn)').boundingBox();
-        expect(triggerBox.x + triggerBox.width).toBeLessThanOrEqual(sendBox.x + 2);
-        await trigger.click();
-        const options = page.locator('.composer-send-mode-option');
-        await expect(options).toHaveCount(5);
-        await expect(options.first()).toContainText('Preset 1');
-        await expect(options.first()).toContainText('Alt+1');
-        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-        await options.last().focus();
-        await expect(options.last()).toBeFocused();
         await page.screenshot({ path: testInfo.outputPath(`quick-sends-${theme}-${width}.png`) });
-        await page.keyboard.press('Escape');
-        await page.locator('body').click({ position: { x: 1, y: 1 } });
         await input.focus();
         await page.keyboard.press('Alt+Digit1');
         await expect(input).toHaveValue('');
@@ -102,7 +90,10 @@ test.describe('Yeaft composer menus', () => {
         expect(wire.quickSend).toEqual({ model: 'my-proxy/gpt-5.6-sol', effort: 'medium', maxOutputTokens: 2048 });
         await page.evaluate(() => { window.Pinia.useChatStore().connectionState = 'reconnecting'; });
         await input.fill('retained while offline');
-        await expect(trigger).toBeDisabled();
+        await input.focus();
+        await page.keyboard.press('Alt+Digit1');
+        await expect(input).toHaveValue('retained while offline');
+        await expect.poll(() => page.evaluate(() => window.__quickSendWire.filter(msg => msg.type === 'yeaft_session_send').length)).toBe(1);
       });
     }
   }
