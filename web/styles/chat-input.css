@@ -508,6 +508,14 @@
     display: none;
   }
 
+  .mobile-quick-send-button:first-child {
+    margin-inline-start: auto;
+  }
+
+  .mobile-quick-send-button:last-child {
+    margin-inline-end: auto;
+  }
+
   .mobile-quick-send-button {
     min-width: 0;
     max-width: min(62vw, 220px);
