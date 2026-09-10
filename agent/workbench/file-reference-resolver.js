@@ -1,5 +1,5 @@
-import { readdir, stat } from 'node:fs/promises';
-import { basename, join, relative, resolve } from 'node:path';
+import { readdir, realpath, stat } from 'node:fs/promises';
+import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { platform } from 'node:os';
 import ctx from '../context.js';
 import { resolveAndValidatePath } from './utils.js';
@@ -10,13 +10,26 @@ const MAX_SCANNED_ENTRIES = 5000;
 const MAX_DEPTH = 10;
 const SKIP_DIRS = new Set(['.git', 'node_modules', '__pycache__', '.next', '.nuxt', 'dist', 'build', '.cache', 'bin', 'obj']);
 
-async function isFile(path) {
-  try { return (await stat(path)).isFile(); } catch { return false; }
-}
-
 function comparable(value) {
   const normalized = String(value || '').replaceAll('\\', '/');
   return platform() === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function isInsideWorkspace(root, candidate) {
+  const relativePath = relative(root, candidate);
+  return relativePath === '' || (relativePath !== '..'
+    && !relativePath.startsWith(`..${platform() === 'win32' ? '\\' : '/'}`)
+    && !isAbsolute(relativePath));
+}
+
+async function canonicalWorkspaceFile(candidate, canonicalRoot) {
+  try {
+    const canonicalPath = await realpath(candidate);
+    if (!isInsideWorkspace(canonicalRoot, canonicalPath) || !(await stat(canonicalPath)).isFile()) return null;
+    return canonicalPath;
+  } catch {
+    return null;
+  }
 }
 
 async function findUniqueBasenames(workDir, requestedPaths, {
@@ -67,24 +80,30 @@ export async function resolveFileReferences(references, workDir, scanOptions) {
   const unique = [...new Set((Array.isArray(references) ? references : [])
     .map(value => typeof value === 'string' ? value.trim() : '')
     .filter(Boolean))].slice(0, MAX_REFERENCES);
-  const exactMatches = await Promise.all(unique.map(async requestedPath => {
-    const exactPath = resolveAndValidatePath(requestedPath, workDir);
-    return await isFile(exactPath) ? exactPath : null;
-  }));
-  const unresolved = unique.filter((_path, index) => !exactMatches[index]);
-  const basenameScan = await findUniqueBasenames(workDir, unresolved, scanOptions);
   const root = resolve(workDir);
+  const canonicalRoot = await realpath(root);
+  const exactCandidates = unique.map(requestedPath => resolveAndValidatePath(requestedPath, root));
+  const exactMatches = await Promise.all(exactCandidates.map(exactPath => (
+    canonicalWorkspaceFile(exactPath, canonicalRoot)
+  )));
+  const unresolved = unique.filter((_path, index) => (
+    !exactMatches[index] && isInsideWorkspace(root, exactCandidates[index])
+  ));
+  const basenameScan = await findUniqueBasenames(root, unresolved, scanOptions);
 
-  return unique.flatMap((requestedPath, index) => {
+  const resolvedEntries = await Promise.all(unique.map(async (requestedPath, index) => {
     const matches = basenameScan.matches.get(comparable(basename(requestedPath))) || [];
-    const fallbackPath = basenameScan.complete && matches.length === 1 ? matches[0] : null;
+    const fallbackPath = basenameScan.complete && matches.length === 1
+      ? await canonicalWorkspaceFile(matches[0], canonicalRoot)
+      : null;
     const matchedPath = exactMatches[index] || fallbackPath;
-    if (!matchedPath) return [];
-    return [{
+    if (!matchedPath) return null;
+    return {
       requestedPath,
-      resolvedPath: relative(root, matchedPath).replaceAll('\\', '/') || basename(matchedPath),
-    }];
-  });
+      resolvedPath: relative(canonicalRoot, matchedPath).replaceAll('\\', '/') || basename(matchedPath),
+    };
+  }));
+  return resolvedEntries.filter(Boolean);
 }
 
 export async function handleResolveFileReferences(msg) {

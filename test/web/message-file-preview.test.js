@@ -10,8 +10,10 @@ import {
 import * as Vue from 'vue';
 import {
   collectMessageFileReferences,
+  collectMessageImageReferences,
   decorateMessageFileReferences,
   resolveMessageFileReference,
+  resolveMessageImageFileReference,
 } from '../../web/utils/message-file-reference.js';
 
 const readWeb = path => readFileSync(resolve(process.cwd(), 'web', path), 'utf8');
@@ -897,6 +899,11 @@ describe('message file preview', () => {
     expect(resolveMessageFileReference('https://example.test/design-doc.md')).toBeNull();
     expect(resolveMessageFileReference('#section')).toBeNull();
     expect(resolveMessageFileReference('/api/files/readme.md')).toBeNull();
+    expect(resolveMessageImageFileReference('/assistant.png', '/workspace')).toBeNull();
+    expect(resolveMessageImageFileReference('/web/images/assistant.png', '/workspace')).toBeNull();
+    expect(resolveMessageImageFileReference('/workspace/screens/result.png', '/workspace')).toEqual({
+      path: '/workspace/screens/result.png', line: null,
+    });
   });
 
   it('rejects Git refs and versions without blocking recognizable extensionless files', () => {
@@ -914,6 +921,23 @@ describe('message file preview', () => {
     expect(resolveMessageFileReference('Dockerfile')).toEqual({ path: 'Dockerfile', line: null });
     expect(resolveMessageFileReference('docs/README')).toEqual({ path: 'docs/README', line: null });
     expect(resolveMessageFileReference('.gitignore')).toEqual({ path: '.gitignore', line: null });
+  });
+
+  it('holds local Markdown images until an authorized preview URL is available', () => {
+    const source = '<p><img src="/workspace/screens/result.png" alt="result"> <img src="https://example.test/remote.png"></p>';
+    expect(collectMessageImageReferences(source, '/workspace')).toEqual(['/workspace/screens/result.png']);
+    expect(collectMessageFileReferences(source, '/workspace')).toEqual(['/workspace/screens/result.png']);
+
+    const pending = decorateMessageFileReferences(source, new Map(), new Map(), '/workspace');
+    expect(pending).not.toContain('src="/workspace/screens/result.png"');
+    expect(pending).toContain('data-local-image-path="/workspace/screens/result.png"');
+    expect(pending).toContain('src="https://example.test/remote.png"');
+
+    const resolved = decorateMessageFileReferences(source, new Map(), new Map([
+      ['/workspace/screens/result.png', '/api/preview/image-1?token=secret'],
+    ]), '/workspace');
+    expect(resolved).toContain('src="/api/preview/image-1?token=secret"');
+    expect(resolved).toContain('data-local-image-path="/workspace/screens/result.png"');
   });
 
   it('collects and decorates Agent-confirmed file paths in ordinary response text', () => {
@@ -1023,6 +1047,100 @@ describe('message file preview', () => {
 
     await wrapper.get('a[href="https://example.test"]').trigger('click');
     expect(openFileInExplorer).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it('maps a local response image through resolution and a route-scoped preview read', async () => {
+    const resolveMessageFileReferences = vi.fn(() => 'resolve-image');
+    const requestMessageImagePreview = vi.fn(() => 'read-image');
+    const fileReferenceStore = Vue.reactive({
+      effectiveWorkDir: '/workspace',
+      fileReferenceResolutionContextKey: 'connected:agent-1:session-a:/workspace',
+      answerUserQuestion: vi.fn(), cancelVpTurn: vi.fn(), openFileInExplorer: vi.fn(),
+      resolveMessageFileReferences, requestMessageImagePreview,
+    });
+    globalThis.Vue = Vue;
+    globalThis.Pinia = {
+      defineStore: () => () => ({}),
+      useChatStore: () => fileReferenceStore,
+    };
+    globalThis.marked = {
+      setOptions: vi.fn(),
+      parse: vi.fn(() => '<p><img src="/workspace/screens/result.png" alt="result"></p>'),
+    };
+    globalThis.hljs = undefined;
+    const { default: AssistantTurn } = await import('../../web/components/AssistantTurn.js');
+    const wrapper = mount(AssistantTurn, {
+      props: {
+        turn: {
+          id: 'turn-local-image', textContent: 'image',
+          textSegments: [{ key: 'result', content: 'image', kind: 'result' }],
+          toolMsgs: [], imageMsgs: [], todoMsg: null, askMsg: null, isStreaming: false,
+        },
+      },
+      global: {
+        mocks: { $t: key => key }, provide: { t: key => key },
+        stubs: { ToolLine: true, AskCard: true, VpSpeakerHeader: true },
+      },
+    });
+
+    expect(resolveMessageFileReferences).toHaveBeenCalledWith(['/workspace/screens/result.png']);
+    expect(wrapper.find('.turn-text img').exists()).toBe(false);
+    window.dispatchEvent(new CustomEvent('workbench-message', { detail: {
+      type: 'file_references_resolved', requestId: 'resolve-image',
+      references: [{ requestedPath: '/workspace/screens/result.png', resolvedPath: 'screens/result.png' }],
+    } }));
+    await Vue.nextTick();
+    expect(requestMessageImagePreview).toHaveBeenCalledWith('screens/result.png');
+    expect(wrapper.find('.turn-text img').exists()).toBe(false);
+
+    window.dispatchEvent(new CustomEvent('workbench-message', { detail: {
+      type: 'file_content', requestId: 'read-image', binary: true,
+      previewUrl: '/api/preview/image-1?token=secret',
+    } }));
+    await Vue.nextTick();
+    expect(wrapper.get('.turn-text img').attributes('src')).toBe('/api/preview/image-1?token=secret');
+    wrapper.unmount();
+  });
+
+  it('opens a linked Markdown image without navigating its parent anchor', async () => {
+    globalThis.Vue = Vue;
+    globalThis.Pinia = {
+      defineStore: () => () => ({}),
+      useChatStore: () => ({
+        effectiveWorkDir: '/workspace', fileReferenceResolutionContextKey: '',
+        answerUserQuestion: vi.fn(), cancelVpTurn: vi.fn(),
+        resolveMessageFileReferences: vi.fn(() => null), openFileInExplorer: vi.fn(),
+      }),
+    };
+    globalThis.marked = {
+      setOptions: vi.fn(),
+      parse: vi.fn(() => '<p><a href="https://example.test"><img src="https://cdn.test/image.png" alt="linked"></a></p>'),
+    };
+    globalThis.hljs = undefined;
+    const { default: AssistantTurn } = await import('../../web/components/AssistantTurn.js');
+    const wrapper = mount(AssistantTurn, {
+      props: {
+        turn: {
+          id: 'turn-linked-image', textContent: 'image',
+          textSegments: [{ key: 'result', content: 'image', kind: 'result' }],
+          toolMsgs: [], imageMsgs: [], todoMsg: null, askMsg: null, isStreaming: false,
+        },
+      },
+      global: {
+        mocks: { $t: key => key }, provide: { t: key => key },
+        stubs: { ToolLine: true, AskCard: true, VpSpeakerHeader: true },
+      },
+    });
+    const bubbled = vi.fn();
+    wrapper.element.addEventListener('click', bubbled);
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true });
+    wrapper.get('.turn-text img').element.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+    expect(bubbled).not.toHaveBeenCalled();
+    expect(document.body.querySelector('.image-preview-overlay')).not.toBeNull();
+    document.body.querySelector('.image-preview-close').click();
+    document.body.querySelector('.image-preview-overlay')?.dispatchEvent(new Event('transitionend'));
     wrapper.unmount();
   });
 

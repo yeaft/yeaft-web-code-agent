@@ -8,6 +8,7 @@ import { createQuickOpen } from './files/quickOpen.js';
 import { createFolderPicker } from './files/folderPicker.js';
 import { createFileTabs } from './files/fileTabs.js';
 import { createWsHandler } from './files/wsHandler.js';
+import { openImagePreview } from '../utils/imagePreview.js';
 import {
   createRouteBoundWorkbenchStore,
   workbenchRouteKey,
@@ -121,7 +122,7 @@ export default {
         </button>
       </div>
       <!-- 左栏: 层级目录树 -->
-      <div class="file-col-tree" :class="{ 'drop-active': externalDropActive }" :style="{ flex: '0 0 ' + treePanelWidth + 'px', transition: isTreeResizing ? 'none' : undefined, fontSize: fontSize + 'px' }" @wheel.ctrl.prevent="onWheel"
+      <div class="file-col-tree" :class="{ 'drop-active': externalDropActive }" :style="{ flex: '0 0 ' + treePanelWidth + 'px', transition: isTreeResizing ? 'none' : undefined, fontSize: fontSize + 'px' }" @wheel.ctrl="onWheel"
         @dragover.prevent="onTreeDragOver($event)"
         @dragleave="onTreeDragLeave($event)"
         @drop.prevent="onTreeDrop($event)"
@@ -267,7 +268,7 @@ export default {
       </div>
 
       <!-- 右栏: 文件编辑器（带标签页） -->
-      <div class="file-col-content" v-if="openFiles.length > 0" @wheel.ctrl.prevent="onWheel">
+      <div class="file-col-content" v-if="openFiles.length > 0" @wheel.ctrl="onWheel">
         <!-- Mobile back navigation bar -->
         <div class="mobile-file-back-bar" v-if="isMobile">
           <button class="mobile-back-btn" @click="mobileGoBack">
@@ -293,9 +294,11 @@ export default {
               <button type="button" class="file-action-btn file-action-text" :class="{ active: mdPreviewMode }" @click="mdPreviewMode = true">{{ $t('files.preview') }}</button>
               <button type="button" class="file-action-btn file-action-text" :class="{ active: !mdPreviewMode }" @click="switchToMdEdit">{{ $t('files.edit') }}</button>
             </template>
-            <button type="button" class="zoom-btn" @click="zoomOut" :title="$t('git.zoomOut')">−</button>
-            <span class="zoom-label">{{ fontSize }}</span>
-            <button type="button" class="zoom-btn" @click="zoomIn" :title="$t('git.zoomIn')">+</button>
+            <template v-if="isTextZoomAvailable">
+              <button type="button" class="zoom-btn" @click="zoomOut" :title="$t('git.zoomOut')">−</button>
+              <span class="zoom-label">{{ fontSize }}</span>
+              <button type="button" class="zoom-btn" @click="zoomIn" :title="$t('git.zoomIn')">+</button>
+            </template>
             <button type="button" class="file-action-btn" :class="{ active: activeFile.isDirty }" @click="saveFile" :disabled="!activeFile.isDirty || fileSaving" :title="$t('common.save') + ' (Ctrl+S)'">
               <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M17 3H5c-1.11 0-2 .89-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/></svg>
             </button>
@@ -387,14 +390,22 @@ export default {
             <div v-if="activeFile.previewError" class="preview-error">{{ activeFile.previewError }}</div>
             <template v-else>
               <div v-if="activeFile.previewLoading || !activeFile.blobUrl" class="preview-loading"><span class="spinner-mini"></span> {{ $t('files.loadingPreview') }}</div>
-              <img
+              <button
                 v-if="activeFile.blobUrl"
                 v-show="!activeFile.previewLoading"
-                :src="activeFile.blobUrl"
-                class="file-preview-image"
-                @load="onImagePreviewLoad(activeFile, $event)"
-                @error="onImagePreviewError(activeFile, $event)"
-              />
+                type="button"
+                class="file-preview-image-button"
+                @click="openActiveImagePreview($event.currentTarget)"
+                :title="$t('message.imagePreview')"
+              >
+                <img
+                  :src="activeFile.blobUrl"
+                  :alt="activeFile.name"
+                  class="file-preview-image"
+                  @load="onImagePreviewLoad(activeFile, $event)"
+                  @error="onImagePreviewError(activeFile, $event)"
+                />
+              </button>
             </template>
           </div>
         </template>
@@ -587,6 +598,18 @@ export default {
     const onImagePreviewError = (file, event) => (
       updateImagePreviewState(file, event, t('files.previewLoadFailed'))
     );
+    const openActiveImagePreview = trigger => {
+      const file = tabs.activeFile.value;
+      if (!file?.blobUrl) return;
+      openImagePreview(file.blobUrl, {
+        alt: file.name || t('message.imagePreview'),
+        closeLabel: t('common.close'),
+        zoomOutLabel: t('message.zoomOut'),
+        zoomInLabel: t('message.zoomIn'),
+        resetZoomLabel: t('message.resetZoom'),
+        trigger,
+      });
+    };
 
     // --- DOM refs ---
     const rootEl = Vue.ref(null);
@@ -610,7 +633,15 @@ export default {
     };
     const zoomIn = () => setFontSize(fontSize.value + 1);
     const zoomOut = () => setFontSize(fontSize.value - 1);
-    const onWheel = (e) => { e.deltaY < 0 ? zoomIn() : zoomOut(); };
+    const isTextZoomAvailable = Vue.computed(() => {
+      const file = tabs?.activeFile.value;
+      return !!file && (!file.fileType || file.fileType === 'text');
+    });
+    const onWheel = (e) => {
+      if (!isTextZoomAvailable.value) return;
+      e.preventDefault();
+      e.deltaY < 0 ? zoomIn() : zoomOut();
+    };
 
     // --- Resizable tree panel ---
     const treePanelWidth = Vue.ref(parseInt(localStorage.getItem('filePanelWidth')) || 220);
@@ -949,7 +980,7 @@ export default {
       store, debugStatus: editor.debugStatus, rootEl,
       treeVisible,
       isMobile, mobileView, mobileGoBack,
-      fontSize, zoomIn, zoomOut, onWheel,
+      fontSize, zoomIn, zoomOut, isTextZoomAvailable, onWheel, openActiveImagePreview,
       treePath: tree.treePath, treeRootPath: tree.treeRootPath,
       treeNodes: tree.treeNodes, flattenedTree: tree.flattenedTree,
       editingTreePath: tree.editingTreePath, treePathInputRef: tree.treePathInputRef,
