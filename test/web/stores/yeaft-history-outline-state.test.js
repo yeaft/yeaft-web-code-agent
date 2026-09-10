@@ -219,6 +219,53 @@ describe('Yeaft history outline state', () => {
     })).toBe(false);
   });
 
+  it('appends a second 20-result user-message page with the prior cursor', () => {
+    const store = primeStore();
+    store.currentAgentInfo.capabilities.push('session_history_search');
+    store.agents[0].capabilities.push('session_history_search');
+
+    expect(store.searchYeaftHistory('', { senderKey: 'user' })).toBe(true);
+    const firstRequest = store._sent.at(-1);
+    const firstPage = Array.from({ length: 20 }, (_, index) => indexedHistoryResult({
+      entryId: `entry-m${40 - index}`,
+      messageId: `m${40 - index}`,
+      seq: 40 - index,
+      entryStartSeq: 40 - index,
+      sourceMessageIds: [`m${40 - index}`],
+    }));
+    expect(store.handleYeaftHistorySearchResult({
+      agentId: 'agent-a', sessionId: 'same', requestId: firstRequest.requestId,
+      query: '', senderKey: 'user', results: firstPage, hasMore: true,
+      nextCursor: { beforeSeq: 21, beforeEntryId: 'entry-m21' },
+    })).toBe(true);
+
+    expect(store.searchYeaftHistory('', { senderKey: 'user', append: true })).toBe(true);
+    const secondRequest = store._sent.at(-1);
+    expect(secondRequest).toMatchObject({
+      query: '', senderKey: 'user',
+      cursor: { beforeSeq: 21, beforeEntryId: 'entry-m21' },
+    });
+    expect(store.yeaftHistorySearchState.results).toHaveLength(20);
+    expect(store.yeaftHistorySearchState.loading).toBe(true);
+
+    const secondPage = Array.from({ length: 20 }, (_, index) => indexedHistoryResult({
+      entryId: `entry-m${20 - index}`,
+      messageId: `m${20 - index}`,
+      seq: 20 - index,
+      entryStartSeq: 20 - index,
+      sourceMessageIds: [`m${20 - index}`],
+    }));
+    expect(store.handleYeaftHistorySearchResult({
+      agentId: 'agent-a', sessionId: 'same', requestId: secondRequest.requestId,
+      query: '', senderKey: 'user', results: secondPage, hasMore: false,
+    })).toBe(true);
+    expect(store.yeaftHistorySearchState.results).toHaveLength(40);
+    expect(store.yeaftHistorySearchState.results.map(result => result.messageId)).toEqual([
+      ...firstPage.map(result => result.messageId),
+      ...secondPage.map(result => result.messageId),
+    ]);
+  });
+
   it('reloads an outdated search locator before revealing an uncached message', async () => {
     const store = primeStore();
     store.currentAgentInfo.capabilities.push('session_history_search', 'session_history_window_prefetch');
