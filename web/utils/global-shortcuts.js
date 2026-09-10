@@ -1,14 +1,15 @@
 import { matchShortcut } from './user-shortcuts.js';
 import { workbenchRouteKey } from './workbench-route.js';
 
-export const GLOBAL_SHORTCUT_ACTIONS = Object.freeze(['terminal', 'files', 'git', 'newSession']);
+export const GLOBAL_SHORTCUT_ACTIONS = Object.freeze(['terminal', 'files', 'git', 'newSession', 'closeWorkbench']);
 
 /** Match the actual mounted workbench surface, protocol and exact active Agent route. */
 export function isGlobalShortcutAvailable(action, store, auth) {
   if (!GLOBAL_SHORTCUT_ACTIONS.includes(action) || !auth?.isAuthenticated
     || !['yeaft', 'chat'].includes(store.currentView)
-    || store.connectionState !== 'connected' || !store.authenticated
     || store.workCenterOpen || store.pluginCenterOpen) return false;
+  if (action === 'closeWorkbench') return store.workbenchExpanded === true;
+  if (store.connectionState !== 'connected' || !store.authenticated) return false;
   const agent = store.agents?.find(item => item.id === store.currentAgent);
   if (!agent?.online) return false;
   if (action === 'newSession') return true;

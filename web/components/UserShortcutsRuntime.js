@@ -26,6 +26,11 @@ export default {
         sessionCreateOpen.value = true;
         return true;
       }
+      if (action === 'closeWorkbench') {
+        if (!store.workbenchExpanded) return false;
+        store.toggleWorkbench();
+        return true;
+      }
       // The mounted WorkbenchPanel acknowledges the exact route synchronously.
       const detail = { capabilityId: action, routeKey: workbenchRouteKey(store.activeSessionRoute), accepted: false };
       window.dispatchEvent(new CustomEvent('workbench-open-capability', { detail }));

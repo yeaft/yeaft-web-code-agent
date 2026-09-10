@@ -59,13 +59,14 @@ test.describe('Yeaft composer menus', () => {
       test(`quick sends: ${theme}, ${width}px`, async ({ page, serverUrl }, testInfo) => {
         await page.setViewportSize({ width, height: 800 });
         await openYeaftComposer(page, serverUrl);
-        await expect(page.locator('.composer-quick-send')).toHaveCount(0);
+        await expect(page.locator('.composer-send-modes')).toHaveCount(0);
+        await expect(page.locator('.composer-send-mode-trigger')).toHaveCount(0);
         await page.evaluate(async theme => {
           document.documentElement.setAttribute('data-theme', theme);
           const store = window.Pinia.useChatStore();
           const { useUserShortcuts } = await import('/utils/user-shortcuts.js');
           const shortcuts = useUserShortcuts();
-          const result = shortcuts.save({ showQuickSends: true, bindings: { quickSend1: 'Alt+Shift+1' } });
+          const result = shortcuts.save({ showQuickSends: true });
           if (!result.ok) throw new Error(JSON.stringify(result));
           store.sendWsMessage = msg => { (window.__quickSendWire ||= []).push(msg); };
           store.llmConfig[store.currentAgent] = { loaded: true, agentConfig: {
@@ -75,33 +76,80 @@ test.describe('Yeaft composer menus', () => {
             })),
           } };
         }, theme);
-        const buttons = page.locator('.composer-quick-send');
-        await expect(buttons).toHaveCount(5);
-        await expect(buttons.first()).toBeDisabled();
+        const trigger = page.locator('.composer-send-mode-trigger');
+        await expect(trigger).toBeDisabled();
         const input = page.locator('.yeaft-session-input textarea');
         await input.fill('quick message');
-        await expect(buttons.first()).toBeEnabled();
-        const quickBox = await page.locator('.composer-quick-sends').boundingBox();
-        const attachBox = await page.locator('.yeaft-session-input .attach-btn').boundingBox();
-        const modelBox = await page.locator('.yeaft-composer-model').boundingBox();
-        if (width === 320) {
-          expect(quickBox.y + quickBox.height).toBeLessThanOrEqual(attachBox.y + 2);
-        } else {
-          expect(quickBox.x).toBeGreaterThan(attachBox.x);
-          expect(quickBox.x + quickBox.width).toBeLessThanOrEqual(modelBox.x + 2);
-        }
+        await expect(trigger).toBeEnabled();
+        const triggerBox = await trigger.boundingBox();
+        const sendBox = await page.locator('.yeaft-session-input .send-btn:not(.stop-btn)').boundingBox();
+        expect(triggerBox.x + triggerBox.width).toBeLessThanOrEqual(sendBox.x + 2);
+        await trigger.click();
+        const options = page.locator('.composer-send-mode-option');
+        await expect(options).toHaveCount(5);
+        await expect(options.first()).toContainText('Preset 1');
+        await expect(options.first()).toContainText('Alt+1');
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-        await buttons.last().focus();
-        await expect(buttons.last()).toBeFocused();
+        await options.last().focus();
+        await expect(options.last()).toBeFocused();
         await page.screenshot({ path: testInfo.outputPath(`quick-sends-${theme}-${width}.png`) });
+        await page.keyboard.press('Escape');
+        await page.locator('body').click({ position: { x: 1, y: 1 } });
         await input.focus();
-        await page.keyboard.press('Alt+Shift+Digit1');
+        await page.keyboard.press('Alt+Digit1');
         await expect(input).toHaveValue('');
         const wire = await page.evaluate(() => window.__quickSendWire.find(msg => msg.type === 'yeaft_session_send'));
         expect(wire.quickSend).toEqual({ model: 'my-proxy/gpt-5.6-sol', effort: 'medium', maxOutputTokens: 2048 });
         await page.evaluate(() => { window.Pinia.useChatStore().connectionState = 'reconnecting'; });
         await input.fill('retained while offline');
-        await expect(buttons.first()).toBeDisabled();
+        await expect(trigger).toBeDisabled();
+      });
+    }
+  }
+
+  for (const theme of ['light', 'dark']) {
+    for (const width of [320, 900, 1280]) {
+      test(`quick-send settings: ${theme}, ${width}px`, async ({ page, serverUrl }, testInfo) => {
+        await page.setViewportSize({ width, height: 800 });
+        await openYeaftComposer(page, serverUrl);
+        await page.evaluate(theme => {
+          document.documentElement.setAttribute('data-theme', theme);
+          const store = window.Pinia.useChatStore();
+          store.ws = { readyState: 1 };
+          const respond = message => queueMicrotask(() => {
+            store.llmConfig[message.agentId] = { requestId: message.requestId, loaded: true, agentConfig: {
+              availableModels: [{ id: 'gpt-5.6-sol', provider: 'my-proxy', ref: 'my-proxy/gpt-5.6-sol', label: 'gpt-5.6-sol', maxOutput: 65536, effortOptions: ['low', 'medium', 'high'] }],
+              quickSends: Array.from({ length: 5 }, (_, i) => ({ id: `q${i}`, name: `Preset ${i + 1}`, model: 'my-proxy/gpt-5.6-sol', effort: 'medium', maxOutputTokens: 2048 })),
+            } };
+          });
+          store.sendWsMessage = message => {
+            if (message.type === 'get_llm_config') respond(message);
+          };
+        }, theme);
+        const statusClose = page.locator('.yeaft-session-status-close:visible');
+        if (await statusClose.isVisible()) await statusClose.click();
+        if (width === 320) await page.locator('.yeaft-topbar-sidebar-toggle').click();
+        await page.locator('.agent-dropdown-trigger:visible').click();
+        await page.locator('.agent-dropdown-settings-option:visible').first().click();
+        const settings = page.getByRole('dialog', { name: 'Agent settings', exact: true });
+        await settings.getByRole('button', { name: 'Quick send', exact: true }).click();
+        const entries = settings.locator('.quick-send-entry');
+        await expect(entries).toHaveCount(5);
+        await expect(entries.first().locator('.modern-select')).toHaveCount(2);
+        await entries.first().locator('.quick-send-effort .modern-select-trigger').click();
+        await expect(page.locator('.modern-select-menu')).toBeVisible();
+        await page.keyboard.press('Escape');
+        expect(await settings.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+        const firstBox = await entries.first().boundingBox();
+        const nameBox = await entries.first().locator('.quick-send-name').boundingBox();
+        const modelBox = await entries.first().locator('.quick-send-model').boundingBox();
+        if (width >= 1280) {
+          expect(Math.abs(nameBox.y - modelBox.y)).toBeLessThan(3);
+          expect(firstBox.height).toBeLessThan(90);
+        } else {
+          expect(modelBox.y).toBeGreaterThanOrEqual(nameBox.y);
+        }
+        await page.screenshot({ path: testInfo.outputPath(`quick-send-settings-${theme}-${width}.png`) });
       });
     }
   }

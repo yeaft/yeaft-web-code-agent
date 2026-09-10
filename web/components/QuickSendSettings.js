@@ -24,6 +24,12 @@ export default {
     modelOptions() {
       return this.models.map(model => ({ value: modelOptionRef(model), label: model.label || model.id, badge: model.provider }));
     },
+    effortOptions() {
+      return item => [
+        { value: '', label: this.$t('quickSend.default') },
+        ...this.effortsFor(item).map(effort => ({ value: effort, label: effort })),
+      ];
+    },
   },
   watch: {
     agentId: {
@@ -104,6 +110,7 @@ export default {
       if (!this.effortsFor(item).includes(item.effort)) item.effort = null;
       this.changed();
     },
+    changeEffort(item, effort) { item.effort = effort || null; this.changed(); },
     setMaxOutput(item, value) { item.maxOutputTokens = value === '' ? null : Number(value); this.changed(); },
     validate() {
       if (this.draft.length > MAX_QUICK_SENDS) return this.$t('quickSend.limit');
@@ -137,24 +144,24 @@ export default {
       <p v-if="message" role="status">{{ message }}</p>
       <p v-if="loaded && !draft.length" class="quick-send-empty">{{ $t('quickSend.empty') }}</p>
       <fieldset v-for="(item, index) in draft" :key="item.id" class="quick-send-entry" :disabled="disabled">
-        <legend>{{ $t('quickSend.entry', { index: index + 1 }) }}</legend>
-        <label><span>{{ $t('quickSend.name') }}</span><input v-model="item.name" maxlength="80" @input="changed"></label>
-        <div class="quick-send-field"><span>{{ $t('quickSend.model') }}</span>
+        <legend><span class="quick-send-index">{{ index + 1 }}</span><span class="quick-send-entry-label">{{ $t('quickSend.entry', { index: index + 1 }) }}</span></legend>
+        <label class="quick-send-name"><span>{{ $t('quickSend.name') }}</span><input v-model="item.name" maxlength="80" @input="changed"></label>
+        <div class="quick-send-field quick-send-model"><span>{{ $t('quickSend.model') }}</span>
           <ModernSelect :model-value="item.model" :options="modelOptions" :aria-label="$t('quickSend.model')"
             :placeholder="$t('quickSend.chooseModel')" :empty-text="$t('quickSend.noModels')" searchable :disabled="disabled" @update:model-value="changeModel(item, $event)" />
         </div>
-        <label><span>{{ $t('quickSend.effort') }}</span>
-          <select v-model="item.effort" :disabled="!effortsFor(item).length" @change="changed">
-            <option :value="null">{{ $t('quickSend.default') }}</option>
-            <option v-for="effort in effortsFor(item)" :key="effort" :value="effort">{{ effort }}</option>
-          </select>
-        </label>
-        <label><span>{{ $t('quickSend.maxOutputTokens') }}</span>
+        <div class="quick-send-field quick-send-effort"><span>{{ $t('quickSend.effort') }}</span>
+          <ModernSelect :model-value="item.effort || ''" :options="effortOptions(item)" :aria-label="$t('quickSend.effort')"
+            :disabled="disabled || !effortsFor(item).length" @update:model-value="changeEffort(item, $event)" />
+        </div>
+        <label class="quick-send-output"><span>{{ $t('quickSend.maxOutputTokens') }}</span>
           <input type="number" min="1" step="1" :max="modelFor(item)?.maxOutput" :value="item.maxOutputTokens"
-            :placeholder="$t('quickSend.default')" @input="setMaxOutput(item, $event.target.value)">
-          <small v-if="modelFor(item)?.maxOutput">{{ $t('quickSend.outputLimit', { max: modelFor(item).maxOutput }) }}</small>
+            :placeholder="$t('quickSend.default')" :title="modelFor(item)?.maxOutput ? $t('quickSend.outputLimit', { max: modelFor(item).maxOutput }) : ''"
+            @input="setMaxOutput(item, $event.target.value)">
         </label>
-        <button class="btn-ghost quick-send-remove" type="button" @click="remove(index)">{{ $t('quickSend.remove') }}</button>
+        <button class="btn-ghost quick-send-remove" type="button" :aria-label="$t('quickSend.remove')" :title="$t('quickSend.remove')" @click="remove(index)">
+          <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M5 5l10 10M15 5 5 15"/></svg>
+        </button>
       </fieldset>
       <footer class="quick-send-settings-actions">
         <button class="btn-secondary" type="button" :disabled="disabled || draft.length >= 5" @click="add">{{ $t('quickSend.add') }}</button>

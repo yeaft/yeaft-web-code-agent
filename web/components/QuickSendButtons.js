@@ -7,24 +7,56 @@ export default {
     disabled: { type: Boolean, default: false },
   },
   emits: ['send'],
-  methods: {
-    description(item, index) {
-      const shortcut = this.bindings[`quickSend${index + 1}`];
-      return [item.name, item.model, item.effort, item.maxOutputTokens, shortcut].filter(Boolean).join(' · ');
-    },
+  setup(props, { emit }) {
+    const open = Vue.ref(false);
+    const root = Vue.ref(null);
+    const detail = item => [item.model, item.effort, item.maxOutputTokens].filter(Boolean).join(' · ');
+    const description = (item, index) => {
+      const shortcut = props.bindings[`quickSend${index + 1}`];
+      return [item.name, detail(item), shortcut].filter(Boolean).join(' · ');
+    };
+    const choose = item => {
+      open.value = false;
+      emit('send', item);
+    };
+    const closeOutside = event => {
+      if (open.value && !root.value?.contains(event.target)) open.value = false;
+    };
+    const onKeydown = event => {
+      if (event.key !== 'Escape' || !open.value) return;
+      event.preventDefault();
+      open.value = false;
+      Vue.nextTick(() => root.value?.querySelector('.composer-send-mode-trigger')?.focus());
+    };
+    Vue.onMounted(() => {
+      document.addEventListener('mousedown', closeOutside);
+      document.addEventListener('keydown', onKeydown);
+    });
+    Vue.onBeforeUnmount(() => {
+      document.removeEventListener('mousedown', closeOutside);
+      document.removeEventListener('keydown', onKeydown);
+    });
+    return { open, root, detail, description, choose };
   },
   template: `
-    <div v-if="items.length" class="composer-quick-sends" role="group" :aria-label="$t('quickSend.composer.label')">
-      <button v-for="(item, index) in items" :key="item.id" type="button"
-        class="btn-ghost composer-quick-send" :disabled="disabled"
-        :title="description(item, index)"
-        :aria-label="$t('quickSend.composer.send', { number: index + 1, name: item.name }) + ' · ' + description(item, index)"
-        @click="$emit('send', item)">
-        <span class="composer-quick-send-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="14" height="14"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m7 12 5-5 5 5M12 7v10"/></svg>
-        </span>
-        <span class="composer-quick-send-number">{{ index + 1 }}</span>
+    <div v-if="items.length" ref="root" class="composer-send-modes">
+      <button type="button" class="composer-send-mode-trigger" :disabled="disabled"
+        :title="$t('quickSend.composer.label')" :aria-label="$t('quickSend.composer.label')"
+        aria-haspopup="menu" :aria-expanded="open ? 'true' : 'false'" @click="open = !open">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path fill="currentColor" d="M5.25 7.5 10 12.25 14.75 7.5z"/></svg>
       </button>
+      <div v-if="open" class="composer-send-mode-menu" role="menu">
+        <div class="composer-send-mode-heading">{{ $t('quickSend.composer.label') }}</div>
+        <button v-for="(item, index) in items" :key="item.id" type="button" role="menuitem"
+          class="composer-send-mode-option" :title="description(item, index)" @click="choose(item)">
+          <span class="composer-send-mode-number">{{ index + 1 }}</span>
+          <span class="composer-send-mode-copy">
+            <span class="composer-send-mode-name">{{ item.name }}</span>
+            <span class="composer-send-mode-detail">{{ detail(item) }}</span>
+          </span>
+          <span v-if="bindings['quickSend' + (index + 1)]" class="composer-send-mode-shortcut">{{ bindings['quickSend' + (index + 1)] }}</span>
+        </button>
+      </div>
     </div>
   `,
 };
