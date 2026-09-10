@@ -461,7 +461,9 @@ export function answerUserQuestion(store, requestId, answers, conversationId) {
     m.type === 'tool-use' && m.toolName === 'AskUserQuestion' && m.askRequestId === requestId
   );
   const isYeaftPrompt = store.currentView === 'yeaft' || !!chatMsg?.sessionId;
-  if (isYeaftPrompt && chatMsg?.askPending) return;
+  if (isYeaftPrompt && (!chatMsg || chatMsg.askAnswered || chatMsg.askExpired)) return false;
+  // A resend is explicit and bounded; lack of acknowledgement is not failure.
+  if (isYeaftPrompt && chatMsg.askPending && Date.now() - (chatMsg.askSubmittedAt || 0) < 15_000) return false;
   const sessionId = chatMsg?.sessionId || store.yeaftActiveSessionFilter || null;
   const cardAgentId = typeof chatMsg?.agentId === 'string' && chatMsg.agentId
     ? chatMsg.agentId
@@ -507,16 +509,17 @@ export function answerUserQuestion(store, requestId, answers, conversationId) {
     chatMsg.askAnswered = true;
     chatMsg.selectedAnswers = answers;
   } else if (chatMsg && sent !== false) {
-    // Keep the submitted answer visible until the Agent sends the terminal
-    // `ask_user_answered`/`ask_user_expired` event. A timer here creates a
-    // false failure state: a slow provider or reconnect clears the optimistic
-    // marker while the request is still live, so the same question reopens.
     chatMsg.askPending = true;
     chatMsg.pendingAnswers = answers;
+    chatMsg.askSubmittedAt = Date.now();
+    chatMsg.askError = null;
+  } else if (chatMsg) {
+    chatMsg.askError = 'send_failed';
   }
 
-  // 立刻进入 processing 状态，显示"思考中"指示器
-  if (sent !== false && convId && !store.processingConversations[convId]) {
+  // A browser send is not Agent acceptance. Native prompts remain in their
+  // current execution state until the Agent confirms/continues the turn.
+  if (!isYeaftPrompt && sent !== false && convId && !store.processingConversations[convId]) {
     store.processingConversations[convId] = true;
     if (store._closedAt?.[convId]) {
       delete store._closedAt[convId];

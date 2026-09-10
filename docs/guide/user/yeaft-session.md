@@ -71,6 +71,14 @@ The Yeaft page provides:
 
 Debug output can contain project text and tool results. It is for the current owner and should not be exported or shared casually.
 
+### Answer AskUser questions
+
+A VP's `AskUser` call appears as an interactive card. You can switch Sessions and return to answer while the request remains active on the Agent.
+
+- Submitting shows “Waiting for Agent confirmation,” not success. The success summary appears only after an Agent acknowledgement or persisted answer history arrives.
+- If confirmation has not arrived after 15 seconds, check the connection and use **Resend answer**. A resend retains the original question identity and does not complete the same question twice.
+- An unavailable Agent produces a retryable notice. If the question expired, execution was cancelled, or an Agent restart lost the waiting request, ask the VP to pose the question again. Resending does not revive an ended turn.
+
 ## Organize Sessions with Projects
 
 Projects are user-visible groups in the unified sidebar. You can:

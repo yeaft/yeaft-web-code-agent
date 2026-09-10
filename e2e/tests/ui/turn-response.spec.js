@@ -42,7 +42,37 @@ function debugPanelScript() {
   `;
 }
 
+function askUserScript() {
+  return `
+    window.Pinia = { defineStore: () => () => ({}) };
+    const { default: AskCard } = await import('/web/components/AskCard.js');
+    const { answerUserQuestion } = await import('/web/stores/helpers/conversation.js');
+    const { default: en } = await import('/web/i18n/en.js');
+    const { default: zh } = await import('/web/i18n/zh-CN.js');
+    const row = Vue.reactive({ type: 'tool-use', toolName: 'AskUserQuestion',
+      toolId: 'call-ask', askRequestId: 'ask-browser', sessionId: 'session-original',
+      vpId: 'vp-ask', turnId: 'turn-ask', threadId: 'branch-ask', agentId: 'agent-ask',
+      askQuestions: [{ question: 'Continue after switching Sessions?', options: [{ label: 'Yes' }] }] });
+    window.__sent = [];
+    const store = { currentAgent: 'other-agent', yeaftActiveSessionFilter: 'other-session',
+      messagesMap: { 'yeaft-browser': [row] }, processingConversations: {},
+      sendWsMessage: frame => { window.__sent.push(frame); return true; } };
+    const visible = Vue.ref(true);
+    const app = Vue.createApp({ components: { AskCard },
+      setup() { return { row, visible,
+        submit: (id, answers) => answerUserQuestion(store, id, answers, 'yeaft-browser') }; },
+      template: '<button class="btn-secondary" @click="visible = !visible">Switch Session</button><AskCard v-if="visible" :ask-msg="row" @submit="submit" />' });
+    window.__locale = Vue.reactive({ value: 'en' });
+    app.config.globalProperties.$t = key => (window.__locale.value === 'en' ? en : zh)[key] || key;
+    app.mount('#app');
+    window.__ask = row;
+    window.__ready = true;
+  `;
+}
+
 function harnessHtml(debug = false) {
+  if (debug === 'ask') return harnessHtml()
+    .replace(/<script type="module">[\s\S]*?<\/script>/, () => '<script type="module">' + askUserScript() + '</script>');
   if (debug) return harnessHtml()
     .replace(/<script type="module">[\s\S]*?<\/script>/, () => '<script type="module">' + debugPanelScript() + '</script>');
   return `<!doctype html>
@@ -125,9 +155,9 @@ test.beforeAll(async () => {
   });
   server = createServer((request, response) => {
     const pathname = new URL(request.url, 'http://127.0.0.1').pathname;
-    if (pathname === '/__turn-response' || pathname === '/__debug-panel') {
+    if (pathname === '/__turn-response' || pathname === '/__debug-panel' || pathname === '/__ask-user') {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      response.end(harnessHtml(pathname === '/__debug-panel'));
+      response.end(harnessHtml(pathname === '/__ask-user' ? 'ask' : pathname === '/__debug-panel'));
       return;
     }
     if (pathname === '/gallery-a.png' || pathname === '/gallery-b.png') {
@@ -174,6 +204,56 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   if (!server) return;
   await new Promise(resolveClose => server.close(resolveClose));
+});
+
+test('AskUser waits for confirmation after Session switching and allows an explicit retry', async ({ page }) => {
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.message));
+  await page.clock.install();
+  await page.goto(`${baseUrl}/__ask-user`);
+  await expect.poll(() => page.evaluate(() => window.__ready === true).then(ready => ready ? 'ready' : pageErrors.join('\n'))).toBe('ready');
+  const switchSession = page.getByRole('button', { name: 'Switch Session' });
+  await switchSession.click();
+  await page.clock.fastForward(3 * 60_000);
+  await switchSession.click();
+  await page.getByRole('button', { name: 'Yes', exact: true }).click();
+  await page.getByRole('button', { name: 'Submit Answer' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.ask-summary')).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText('Waiting for Agent confirmation');
+  expect(await page.evaluate(() => window.__sent[0])).toMatchObject({
+    type: 'yeaft_ask_user_answer', agentId: 'agent-ask', sessionId: 'session-original', threadId: 'branch-ask',
+  });
+  await switchSession.click();
+  await page.clock.fastForward(16_000);
+  await switchSession.click();
+  await expect(page.getByRole('status')).toContainText('No confirmation yet');
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
+    for (const width of [1280, 320]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.evaluate(() => { window.__ask.pendingAnswers = { q: 'Long answer '.repeat(70) }; });
+      await expect(page.getByRole('button', { name: 'Resend answer' })).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    }
+  }
+  await page.getByRole('button', { name: 'Resend answer' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('status')).toContainText('Waiting for Agent confirmation');
+  expect(await page.evaluate(() => window.__sent.length)).toBe(2);
+  await page.evaluate(() => {
+    window.__locale.value = 'zh';
+    window.__ask.askPending = false;
+    window.__ask.askRequestId = null;
+    window.__ask.askExpired = true;
+    window.__ask.askError = 'unavailable';
+  });
+  await expect(page.locator('.ask-expired-hint')).toContainText('已失效');
+  await expect(page.getByRole('button', { name: 'Yes', exact: true })).toBeDisabled();
+  await expect(page.locator('.ask-summary')).toHaveCount(0);
+  await page.evaluate(() => { window.__ask.askExpired = false; window.__ask.askAnswered = true; window.__ask.selectedAnswers = { q: 'Yes' }; });
+  await expect(page.locator('.ask-summary')).toContainText('Yes');
+  expect(pageErrors).toEqual([]);
 });
 
 test('debug panel keeps one latest request and full loop tools across themes and mobile', async ({ page, context }) => {

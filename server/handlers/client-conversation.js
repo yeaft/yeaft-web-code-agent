@@ -68,6 +68,25 @@ function emptyYeaftManagedSkillResult(error = null) {
   };
 }
 
+async function sendAskUserAgentUnavailable(client, msg, agentId) {
+  await sendToWebClient(client, {
+    type: 'yeaft_output',
+    agentId: agentId || null,
+    requestId: msg.requestId || null,
+    conversationId: msg.conversationId ?? null,
+    ...(msg.sessionId != null ? { sessionId: msg.sessionId } : {}),
+    ...(msg.vpId != null ? { vpId: msg.vpId } : {}),
+    ...(msg.turnId != null ? { turnId: msg.turnId } : {}),
+    ...(msg.threadId != null ? { threadId: msg.threadId } : {}),
+    event: {
+      type: 'ask_user_answer_rejected',
+      requestId: msg.requestId || null,
+      toolCallId: msg.toolCallId || null,
+      reason: 'agent_unavailable',
+    },
+  });
+}
+
 async function sendVpSnapshotError(client, msg, error) {
   await sendToWebClient(client, {
     type: 'yeaft_output',
@@ -1663,7 +1682,9 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           });
         }
         if (!relayAgentId) {
-          if (relayType === 'yeaft_fetch_tool_stats') {
+          if (relayType === 'yeaft_ask_user_answer') {
+            await sendAskUserAgentUnavailable(client, msg, relayAgentId);
+          } else if (relayType === 'yeaft_fetch_tool_stats') {
             await sendToWebClient(client, emptyYeaftToolStats('No agent selected.'));
           } else if (relayType === 'yeaft_dream_trigger') {
             await sendToWebClient(client, skippedYeaftDreamResult(msg, 'no-agent-selected'));
@@ -1678,7 +1699,9 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           return true; // swallow silently for legacy fire-and-forget messages
         }
         if (!await checkAgentAccess(relayAgentId)) {
-          if (relayType === 'yeaft_fetch_tool_stats') {
+          if (relayType === 'yeaft_ask_user_answer') {
+            await sendAskUserAgentUnavailable(client, msg, relayAgentId);
+          } else if (relayType === 'yeaft_fetch_tool_stats') {
             await sendToWebClient(client, emptyYeaftToolStats('Agent is not available.'));
           } else if (relayType === 'yeaft_dream_trigger') {
             await sendToWebClient(client, skippedYeaftDreamResult(msg, 'agent-not-available'));
@@ -1707,6 +1730,10 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         }
         const relayAgent = agents.get(relayAgentId);
         if (!relayAgent || relayAgent.ws?.readyState !== 1) {
+          if (relayType === 'yeaft_ask_user_answer') {
+            await sendAskUserAgentUnavailable(client, msg, relayAgentId);
+            return true;
+          }
           if (relayType === 'yeaft_fetch_tool_stats') {
             await sendToWebClient(client, emptyYeaftToolStats('Agent is offline.'));
             return true;
@@ -1728,6 +1755,15 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         // router is the authoritative consumer of the payload shape.
         const { agentId: _discard, ...rest } = msg;
         rest.type = relayType;
+        if (relayType === 'yeaft_ask_user_answer') {
+          rest._requestClientId = clientId;
+          let dispatched = false;
+          try {
+            dispatched = await forwardToAgent(relayAgentId, rest);
+          } catch { /* the submitting card needs a correlated failure, not a generic error */ }
+          if (!dispatched) await sendAskUserAgentUnavailable(client, msg, relayAgentId);
+          return true;
+        }
         // Direct catalog replies are request-scoped. Carry the browser client
         // identity through the Agent so another owner tab cannot accidentally
         // consume a response for this picker request.

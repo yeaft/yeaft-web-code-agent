@@ -609,7 +609,7 @@ describe('message flow regressions', () => {
     }
   });
 
-  it('keeps a submitted AskUser answer through replay until the Agent confirms it', () => {
+  it('restores AskUser routing and keeps submission distinct from confirmation across remount and retries', async () => {
     vi.useFakeTimers();
     try {
       const conversationId = 'yeaft-ask-replay';
@@ -639,12 +639,71 @@ describe('message flow regressions', () => {
       const sendWsMessage = vi.fn(() => true);
       store.sendWsMessage = sendWsMessage;
 
-      answerUserQuestion(store, 'ask-replay', { 'Continue?': 'Yes' }, conversationId);
-      expect(store.messagesMap[conversationId][0]).toMatchObject({
-        askPending: true,
-        pendingAnswers: { 'Continue?': 'Yes' },
-        askRequestId: 'ask-replay',
-      });
+      const { default: AskCard } = await import('../../web/components/AskCard.js');
+      const row = store.messagesMap[conversationId][0];
+      // A replay after Session switching must hydrate history's missing thread.
+      delete row.threadId;
+      row.isHistory = true;
+      row.hasResult = true;
+      const envelope = { type: 'yeaft_output', agentId: 'agent-ask', conversationId, sessionId,
+        vpId: 'vp-ask', turnId: 'turn-ask', threadId: 'branch-ask' };
+      store.handleYeaftOutput({ ...envelope, event: {
+        type: 'ask_user_question', replay: true, requestId: 'ask-replay', toolCallId: 'call-ask-replay',
+        questions: row.askQuestions,
+      } });
+      expect(row).toMatchObject({ threadId: 'branch-ask', agentId: 'agent-ask', hasResult: false, isHistory: false });
+      // Another turn on the shared Agent conversation must not expire this prompt.
+      for (const sibling of [
+        { sessionId: 'other-session' },
+        { vpId: 'other-vp' },
+        { turnId: 'other-turn' },
+        { threadId: 'other-thread' },
+      ]) {
+        store.handleYeaftOutput({ ...envelope, ...sibling, data: { type: 'result' } });
+        expect(row).toMatchObject({ hasResult: false, askRequestId: 'ask-replay' });
+        expect(row.askExpired).not.toBe(true);
+      }
+      // The selected Session is not the question's routing identity.
+      store.yeaftActiveSessionFilter = 'other-session';
+      store.processingConversations = {};
+      vi.advanceTimersByTime(3 * 60_000);
+      const mountCard = () => mount(AskCard, { props: { askMsg: row,
+        onSubmit: (id, answers) => answerUserQuestion(store, id, answers, conversationId) },
+        global: { mocks: { $t: key => enMessages[key] || key } } });
+      let card = mountCard();
+      try {
+        sendWsMessage.mockReturnValueOnce(false);
+        await card.get('.ask-opt').trigger('click');
+        await card.get('.ask-submit').trigger('click');
+        expect(card.get('[role="alert"]').text()).toContain('not sent');
+        expect(row.askPending).not.toBe(true);
+        await card.get('.ask-submit').trigger('click');
+        expect(sendWsMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+          sessionId, agentId: 'agent-ask', threadId: 'branch-ask', turnId: 'turn-ask',
+        }));
+        expect(store.processingConversations[conversationId]).not.toBe(true);
+        expect(card.find('.ask-summary').exists()).toBe(false);
+        expect(card.get('[role="status"]').text()).toContain('Waiting for Agent confirmation');
+        expect(row).toMatchObject({ askPending: true, pendingAnswers: { 'Continue?': 'Yes' } });
+        card.unmount();
+        card = mountCard();
+        expect(card.find('.ask-summary').exists()).toBe(false);
+        expect(card.find('.btn-secondary').exists()).toBe(false);
+        vi.advanceTimersByTime(15_001);
+        await Vue.nextTick();
+        expect(card.get('[role="status"]').text()).toContain('No confirmation yet');
+        await card.get('.btn-secondary').trigger('click');
+        expect(sendWsMessage).toHaveBeenCalledTimes(3);
+        expect(card.find('.btn-secondary').exists()).toBe(false);
+        store.handleYeaftOutput({ ...envelope, event: { type: 'ask_user_answer_rejected',
+          requestId: 'ask-replay', toolCallId: 'call-ask-replay', reason: 'agent_unavailable' } });
+        await Vue.nextTick();
+        expect(card.get('[role="status"]').text()).toContain('Agent is unavailable');
+        await card.get('.btn-secondary').trigger('click');
+        expect(sendWsMessage).toHaveBeenCalledTimes(4);
+      } finally {
+        card.unmount();
+      }
 
       vi.advanceTimersByTime(10_001);
       expect(store.messagesMap[conversationId][0]).toMatchObject({
@@ -660,7 +719,7 @@ describe('message flow regressions', () => {
         sessionId,
         vpId: 'vp-ask',
         turnId: 'turn-ask',
-        threadId: 'main',
+        threadId: 'branch-ask',
         event: {
           type: 'ask_user_question',
           requestId: 'ask-replay',
@@ -683,7 +742,7 @@ describe('message flow regressions', () => {
         sessionId,
         vpId: 'vp-ask',
         turnId: 'turn-ask',
-        threadId: 'main',
+        threadId: 'branch-ask',
         event: {
           type: 'ask_user_answered',
           requestId: 'ask-replay',
@@ -698,7 +757,27 @@ describe('message flow regressions', () => {
         askPending: false,
         askRequestId: null,
       });
+      const confirmedCard = mountCard();
+      expect(confirmedCard.get('.ask-summary').text()).toContain('Yes');
+      confirmedCard.unmount();
+      // A stale rejection must not undo a confirmed answer.
+      store.handleYeaftOutput({ ...envelope, event: { type: 'ask_user_answer_rejected',
+        requestId: 'ask-replay', toolCallId: 'call-ask-replay', reason: 'unavailable' } });
+      expect(row.askAnswered).toBe(true);
+      for (const reason of ['unavailable', 'identity_mismatch']) {
+        Object.assign(row, { askAnswered: false, selectedAnswers: null, askPending: true,
+          askRequestId: 'ask-rejected', pendingAnswers: { 'Continue?': 'Yes' } });
+        store.handleYeaftOutput({ ...envelope, event: { type: 'ask_user_answer_rejected',
+          requestId: 'ask-rejected', toolCallId: 'call-ask-replay', reason } });
+        expect(row).toMatchObject({ askExpired: true, askPending: false, askError: reason, askRequestId: null });
+        const expiredCard = mountCard();
+        expect(expiredCard.find('.ask-summary').exists()).toBe(false);
+        expect(expiredCard.get('.ask-expired-hint').text()).toMatch(/expired|no longer matches/);
+        expiredCard.unmount();
+        row.askExpired = false;
+      }
     } finally {
+      vi.clearAllTimers();
       vi.useRealTimers();
     }
   });

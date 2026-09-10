@@ -382,6 +382,16 @@ function hasPendingToolCall(state, conversationId, sessionId) {
 }
 
 function applyAskUserTerminal(row, event) {
+  if (event.type === 'ask_user_answer_rejected' && (row.askAnswered || row.askExpired)) return;
+  // Relay/network errors are retryable, unlike an unavailable request. Keep
+  // the submitted answer and request identity so it can be resent explicitly.
+  if (event.type === 'ask_user_answer_rejected' && event.reason === 'agent_unavailable') {
+    row.askError = 'agent_unavailable';
+    row.askSubmittedAt = 0;
+    return;
+  }
+  row.askError = event.type === 'ask_user_answer_rejected' ? event.reason || 'unavailable' : null;
+  row.askSubmittedAt = null;
   if (event.type === 'ask_user_answered') {
     row.askAnswered = true;
     row.selectedAnswers = event.answers || {};
@@ -4907,6 +4917,12 @@ export const useChatStore = defineStore('chat', {
               existingRow.toolName = 'AskUserQuestion';
               if (event.toolCallId && !existingRow.toolId) existingRow.toolId = event.toolCallId;
               existingRow.agentId = identity.agentId || existingRow.agentId || null;
+              // History rows may lack routing fields. Hydrate from the live
+              // request, not the currently selected Session/thread.
+              for (const field of ['sessionId', 'vpId', 'turnId', 'threadId']) {
+                if (identity[field]) existingRow[field] = identity[field];
+              }
+              existingRow.hasResult = false;
               existingRow.askRequestId = event.requestId;
               existingRow.askQuestions = event.questions || [];
               existingRow.askCreatedAt = event.createdAt || null;
@@ -4958,6 +4974,7 @@ export const useChatStore = defineStore('chat', {
         }
 
         case 'ask_user_answered':
+        case 'ask_user_answer_rejected':
         case 'ask_user_expired': {
           const conversationId = resolveYeaftEnvelopeConversationId(this, msg.agentId || null, msg.conversationId);
           if (!conversationId || !event.requestId) break;

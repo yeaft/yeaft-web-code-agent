@@ -2022,6 +2022,28 @@
   text-overflow: ellipsis;
 }
 
+.ask-pending {
+  border-left-color: var(--border-color);
+}
+
+.ask-pending-answer {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.ask-pending .btn-secondary {
+  margin-top: 10px;
+}
+
+.ask-card-wrapper {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ask-card .ask-expired-hint {
+  overflow-wrap: anywhere;
+}
+
 .ask-icon-row {
   display: flex;
   align-items: center;

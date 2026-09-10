@@ -413,6 +413,46 @@ describe('Yeaft Session online Agent filtering', () => {
     }]);
     expect(forwardToAgent).not.toHaveBeenCalledWith('missing-agent', expect.anything());
 
+    const answerIdentity = {
+      requestId: 'ask-offline', sessionId: 'session-original', vpId: 'vp-original',
+      turnId: 'turn-original', threadId: 'thread-original',
+      toolCallId: 'call-original', conversationId: 'conversation-original',
+    };
+    for (const failure of ['no-agent', 'denied', 'missing', 'closed', 'false', 'throw']) {
+      const answerClient = { userId: 'user-1', currentAgent: 'agent-other', sent: [] };
+      if (failure === 'no-agent') answerClient.currentAgent = null;
+      agents.set('ask-agent', { ws: { readyState: failure === 'closed' ? 3 : 1 }, ownerId: 'user-1' });
+      const agentId = failure === 'no-agent' ? null : failure === 'missing' ? 'missing-agent' : 'ask-agent';
+      forwardToAgent.mockClear();
+      if (failure === 'false') forwardToAgent.mockResolvedValueOnce(false);
+      if (failure === 'throw') forwardToAgent.mockRejectedValueOnce(new Error('send failed'));
+      await handleClientConversation('client-answer', answerClient, {
+        type: 'yeaft_ask_user_answer', ...answerIdentity, agentId, answers: { Continue: 'Yes' },
+      }, async () => failure !== 'denied');
+      expect(answerClient.sent).toEqual([{
+        type: 'yeaft_output', agentId, requestId: answerIdentity.requestId,
+        conversationId: answerIdentity.conversationId, sessionId: answerIdentity.sessionId,
+        vpId: answerIdentity.vpId, turnId: answerIdentity.turnId, threadId: answerIdentity.threadId,
+        event: {
+          type: 'ask_user_answer_rejected', requestId: answerIdentity.requestId,
+          toolCallId: answerIdentity.toolCallId, reason: 'agent_unavailable',
+        },
+      }]);
+      expect(sendToWebClient).toHaveBeenLastCalledWith(answerClient, answerClient.sent[0]);
+      if (failure !== 'false' && failure !== 'throw') expect(forwardToAgent).not.toHaveBeenCalled();
+    }
+    const answerClient = { userId: 'user-1', currentAgent: 'agent-other', sent: [] };
+    forwardToAgent.mockClear();
+    await handleClientConversation('client-answer', answerClient, {
+      type: 'unify_ask_user_answer', ...answerIdentity, agentId: 'ask-agent',
+      answers: { Continue: 'Yes' }, _requestClientId: 'spoofed-client',
+    }, allow);
+    expect(answerClient.sent).toEqual([]);
+    expect(forwardToAgent).toHaveBeenCalledWith('ask-agent', {
+      type: 'yeaft_ask_user_answer', ...answerIdentity, answers: { Continue: 'Yes' },
+      _requestClientId: 'client-answer',
+    });
+
     client.sent = [];
     await handleClientConversation('client-1', client, {
       type: 'select_agent', agentId: 'agent-online', requestId: 'agent-select-1',
