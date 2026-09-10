@@ -149,6 +149,7 @@ export default {
           <KeepAlive :max="8">
             <WorkbenchCapabilityHost
               v-if="activeRouteKey"
+              v-show="activeToolCapability"
               :key="workbenchContextKey"
               :active-capability="activeToolCapability"
               :retained-capabilities="routeHostState.openCapabilities"

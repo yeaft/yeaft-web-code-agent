@@ -1205,6 +1205,7 @@ describe('message file preview', () => {
     expect(filesCss).toMatch(/\.file-col-content\s*\{[^}]*overflow:\s*hidden;[^}]*min-height:\s*0;/s);
     expect(filesCss).toMatch(/\.file-editor-container \.CodeMirror-scroll\s*\{[^}]*overflow:\s*scroll !important;[^}]*scrollbar-gutter:\s*stable;/s);
     expect(workbench).toContain('<WorkbenchCapabilityHost');
+    expect(workbench).toMatch(/<WorkbenchCapabilityHost\s+v-if="activeRouteKey"\s+v-show="activeToolCapability"/);
     expect(capabilityHost).toContain("activeCapability ? 'capability-' + activeCapability : ''");
     expect(workbenchCss).toMatch(/\.workbench-capability-host\s*\{[^}]*min-height:\s*0;[^}]*overflow:\s*hidden;/s);
     const terminalTab = readWeb('components/TerminalTab.js');
