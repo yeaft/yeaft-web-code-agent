@@ -39,6 +39,7 @@ import { Engine } from '../engine.js';
 import { snapshotEffortDecision } from '../effort.js';
 import { SubAgentToolRegistry, resolveSubAgentBudget, createExecutionStats } from './execution-control.js';
 import { getPersona } from '../personas.js';
+import { RESTRICTED_TOOLS, createChildToolPolicy } from './tool-access.js';
 import { buildSpawnedPreamble } from './spawned-prompt.js';
 import { STATUS, isTerminalAgentStatus } from './status.js';
 import { createOutputLog } from './output-log.js';
@@ -59,19 +60,6 @@ async function loadTickAgent() {
   return _tickAgent;
 }
 
-const RESTRICTED_TOOLS = new Set([
-  'SpawnAgent',
-  'Agent',          // legacy alias
-  'PromptAgent',
-  'SendMessage',    // legacy alias
-  'WaitAgent',
-  'CloseAgent',
-  'ListAgents',
-  'RouteForward',
-  'AskUser',
-  'CreateWorkItem',
-]);
-
 /** How long an idle sub-agent may wait for a follow-up before the watchdog reaps it. */
 const IDLE_ABANDON_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -86,23 +74,10 @@ const LAST_RESULT_MAX_CHARS = 8 * 1024;
  * @returns {ToolRegistry}
  */
 export function buildChildToolRegistry(parentRegistry, { agent = null } = {}) {
-  const preset = agent?.personaData || getPersona(agent?.persona);
-  // Implementers retain work tools; read-only roles are a structural allowlist.
-  // Resolve legacy template names (Read) to canonical FileRead before filtering.
-  const allowed = preset && preset.id !== 'implementer'
-    ? new Set([...preset.tools.map(name => parentRegistry?.get(name)?.name || (name === 'Read' ? 'FileRead' : name)), 'DiscoverTools'])
-    : null;
-  const child = new SubAgentToolRegistry({
-    agent,
-    allows: tool => !RESTRICTED_TOOLS.has(tool.name) && (!allowed || allowed.has(tool.name)),
-  });
-  if (!parentRegistry || typeof parentRegistry.getAllTools !== 'function') {
-    return child;
-  }
-  for (const t of parentRegistry.getAllTools()) {
-    if (RESTRICTED_TOOLS.has(t.name)) continue;
-    child.register(t);
-  }
+  const policy = createChildToolPolicy(parentRegistry, agent);
+  const child = new SubAgentToolRegistry({ agent, allows: policy.allows });
+  policy.refresh(child);
+  if (agent) agent.refreshToolPolicy = () => policy.refresh(child);
   return child;
 }
 
@@ -211,6 +186,7 @@ export function startSubAgent(agent, deps = {}) {
       expectedOutput: agent.expected_output,
       presetPrompt: (agent.personaData || getPersona(agent.persona))?.systemPrompt,
       budget: agent.budget,
+      allowTools: agent.allowTools || [],
       language: deps.language ?? deps.config?.language ?? 'en',
     });
 
@@ -259,6 +235,7 @@ export function startSubAgent(agent, deps = {}) {
     agent.outputFile = null;
     agent.subEngine = null;
     agent.subVpPersona = null;
+    agent.refreshToolPolicy = null;
     agent.__driverStarted = false;
     throw err;
   }
@@ -304,7 +281,13 @@ function armWallTimeWatchdog(agent, deps) {
   const remainingMs = Math.max(0, startedAt + wallTimeMs - Date.now());
   const timer = setTimeout(() => {
     if (isTerminalAgentStatus(agent.status)) return;
-    const reason = `wall_time_ms (${wallTimeMs}) exceeded`;
+    // Node timers above 2^31-1 overflow to 1ms. Large explicit ceilings are
+    // chunked without changing the original deadline.
+    if (Date.now() < startedAt + agent.budget.wall_time_ms) {
+      agent.rearmWallTimeWatchdog?.();
+      return;
+    }
+    const reason = `wall_time_ms (${agent.budget.wall_time_ms}) exceeded`;
     agent.result = buildWallTimeBudgetResult(agent, reason);
     agent.partial_output = agent.result.partial_output || '';
     if (agent.abortController && !agent.abortController.signal.aborted) {
@@ -315,14 +298,19 @@ function armWallTimeWatchdog(agent, deps) {
       diagnostic: 'wall_time_watchdog',
       deps,
     });
-  }, remainingMs);
+  }, Math.min(remainingMs, 2 ** 31 - 1));
   timer.unref?.();
   return timer;
 }
 
 async function driveSubAgent(agent, subEngine, vpPersona, deps) {
   const onEvent = typeof deps.onEvent === 'function' ? deps.onEvent : null;
-  const wallTimeWatchdog = armWallTimeWatchdog(agent, deps);
+  let wallTimeWatchdog = null;
+  agent.rearmWallTimeWatchdog = () => {
+    if (wallTimeWatchdog) clearTimeout(wallTimeWatchdog);
+    wallTimeWatchdog = armWallTimeWatchdog(agent, deps);
+  };
+  agent.rearmWallTimeWatchdog();
   const idleAbandonMs = typeof deps.idleAbandonMs === 'number' && deps.idleAbandonMs > 0
     ? deps.idleAbandonMs : IDLE_ABANDON_MS;
 
@@ -527,7 +515,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
         }
       } catch (err) {
         streamError = err && err.message ? err.message : String(err);
-        if (!agent.budgetStopReason && !agent.toolBudgetReason) {
+        if (!agent.budgetStopReason && !agent.toolBudgetReason && !agent.executionBudgetReason) {
           transitionTerminal(agent, STATUS.FAILED, {
             error: err && err.message ? err.message : String(err),
             diagnostic: 'query_error',
@@ -547,18 +535,19 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
 
       if (isTerminalAgentStatus(agent.status)) return;
 
-      if (agent.toolBudgetReason) {
+      if (agent.executionBudgetReason || agent.toolBudgetReason) {
         // A report is evidence, not proof that the assigned review completed.
         // Prefer its complete text over the concatenated progress preview.
         const partial = budgetReportText.trim() || assistantText.trim();
         agent.partial_output = partial || 'No final report was produced before the tool limit. The investigation is incomplete; inspect the execution log before retrying.';
-        agent.result = buildWallTimeBudgetResult(agent, agent.toolBudgetReason);
+        const reason = agent.executionBudgetReason || agent.toolBudgetReason;
+        agent.result = buildWallTimeBudgetResult(agent, reason);
         agent.result.reporting = { attempted: !!agent.budgetReportStarted, received: !!budgetReportText.trim() };
         if (streamError) agent.result.reporting.error = streamError;
         agent.usage.turns += 1;
         agent.result.usage = { ...agent.usage };
         transitionTerminal(agent, STATUS.COMPLETED, {
-          error: agent.toolBudgetReason, diagnostic: 'execution_budget_report', deps,
+          error: reason, diagnostic: 'execution_budget_report', deps,
         });
         return;
       }
@@ -642,6 +631,8 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
     }
   } finally {
     if (wallTimeWatchdog) clearTimeout(wallTimeWatchdog);
+    agent.rearmWallTimeWatchdog = null;
+    agent.refreshToolPolicy = null;
     // Always clean up driver-owned resources. We intentionally do NOT
     // unset agent.result / agent.lastResult / agent.liveness / agent.
     // outputFile — those are observable by the parent after termination.

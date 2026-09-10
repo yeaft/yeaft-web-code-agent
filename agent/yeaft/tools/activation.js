@@ -31,6 +31,7 @@ export const BACKGROUND_TASK_TOOL_NAMES = Object.freeze([
 ]);
 
 export const SUB_AGENT_MANAGEMENT_TOOL_NAMES = Object.freeze([
+  'UpdateAgent',
   'PromptAgent',
   'WaitAgent',
   'CloseAgent',
@@ -45,6 +46,7 @@ export const CONDITIONAL_BUILTIN_TOOL_NAMES = new Set([
   'ReadTaskLog',
   'CancelTask',
   'SpawnAgent',
+  'UpdateAgent',
   'PromptAgent',
   'WaitAgent',
   'CloseAgent',

@@ -14,8 +14,11 @@
  *     budget?: {
  *       max_tokens?: number,
  *       max_turns?: number,
+ *       max_tool_calls?: number,
+ *       max_llm_calls?: number,
  *       wall_time_ms?: number
  *     },
+ *     allow_tools?: string[],          // extra parent tool grants beyond persona defaults
  *     cwd?: string
  *   }
  */
@@ -24,7 +27,8 @@ import { defineTool } from './types.js';
 import { randomUUID } from 'crypto';
 import { getPersona, listPersonaIds } from '../personas.js';
 import { startSubAgent } from '../sub-agent/runner.js';
-import { resolveSubAgentBudget } from '../sub-agent/execution-control.js';
+import { resolveSubAgentBudget, validateBudget } from '../sub-agent/execution-control.js';
+import { validateToolGrants } from '../sub-agent/tool-access.js';
 import { STATUS, isTerminalAgentStatus } from '../sub-agent/status.js';
 import { diagnoseAgentLiveness, makeLiveness } from '../sub-agent/liveness.js';
 import { TASK_RESULT_DELIVERY } from '../tasks/store.js';
@@ -108,15 +112,8 @@ export function validateSpec(input) {
     return { ok: false, error: 'expected_output must be a JSON schema object' };
   }
   if (budget !== undefined) {
-    if (typeof budget !== 'object' || budget === null) {
-      return { ok: false, error: 'budget must be an object' };
-    }
-    for (const k of ['max_tokens', 'max_turns', 'wall_time_ms', 'max_tool_calls']) {
-      if (budget[k] !== undefined && (!Number.isFinite(budget[k]) || budget[k] <= 0
-          || (['max_turns', 'max_tool_calls'].includes(k) && !Number.isSafeInteger(budget[k])))) {
-        return { ok: false, error: `budget.${k} must be finite and positive (counts must be integers)` };
-      }
-    }
+    const error = validateBudget(budget);
+    if (error) return { ok: false, error };
   }
   return {
     ok: true,
@@ -239,8 +236,8 @@ Guidelines:
 - Use expected_output when the return shape matters
 - Delegate one clear result with the workspace/base and completion evidence. Let the child choose its steps; do simple work directly. Split unrelated goals, not individual reads.
 - Usually omit budget: defaults are safety ceilings, not targets. Do not impose a tiny tool limit on a multi-file review. Tool exhaustion reserves one tool-free handoff within the remaining time/token limits; unfinished work stays budget_exceeded.
-- Check that the persona has the required tools (reviewer has GitRead, not Bash). If blocked, return evidence and the blocker instead of hunting for unavailable capabilities or repeatedly retrying.
-- Inspect execution counters and partial evidence before extending budgets; do not respawn the same exhausted mission automatically.
+- Persona tools are defaults, not task boundaries: reviewer has GitRead; grant Bash or write tools explicitly via allow_tools only when needed. Bash is not a read-only sandbox; isolate concurrent writable tasks.
+- Use UpdateAgent to adjust a live child's time/tool/LLM ceilings or extra grants after inspecting evidence; counters and context are retained. Do not extend stalled work blindly or respawn the same exhausted mission automatically.
 
 Async orchestration:
   1. SpawnAgent  — starts the sub-agent as a background task and returns immediately.
@@ -272,8 +269,8 @@ max_tokens 在 provider usage 到达时检查；max_turns 是 query turn 数，�
 - 当返回结构重要时使用 expected_output
 - 一次只委派一个明确结果，提供工作目录/基线和完成证据，让子 Agent 自主选择步骤；简单工作直接做。拆分不相关目标，不要拆成逐个读取任务。
 - 通常省略 budget：默认值是安全上限，不是执行目标。不要给多文件 review 人为设置极小的工具额度。工具耗尽后会在剩余时间/token预算内留一次无工具交付机会，未完成仍返回 budget_exceeded。
-- 确认 persona 具备必要工具（reviewer 有 GitRead，没有 Bash）；能力受阻时交付已有证据和阻塞点，不反复寻找不可用能力或重试。
-- 扩大预算前检查实际执行计数和已有证据；不要自动重启同一个耗尽预算的任务。
+- Persona 是默认工具集，不是任务死边界：reviewer 有 GitRead；按需用 allow_tools 显式授予 Bash/写工具。Bash 并非只读沙箱；并行写任务应隔离 workspace。
+- 检查已有证据后，用 UpdateAgent 原地调整活跃子任务的时间/工具/LLM 上限或额外授权，保留计数与上下文；不要盲目扩额停滞任务，也不要自动重启同一个耗尽任务。
 
 异步编排流程：
   1. SpawnAgent  — 启动子 Agent 作为后台任务并立即返回。
@@ -338,6 +335,10 @@ liveness，不要盲目循环。`
           en: 'Optional turn ceiling; no default limit is applied',
           zh: '可选 turn 上限；默认不设限制',
         } },
+          max_llm_calls: { type: 'integer', minimum: 1, description: {
+          en: 'Optional actual Engine provider-dispatch ceiling (including retries); distinct from query turns. One extra tool-free reporting request is reserved and separately counted.',
+          zh: '可选实际 Engine 模型请求上限（含重试），不同于 query turn；另保留并单独统计一次无工具报告请求。',
+        } },
           max_tool_calls: { type: 'integer', minimum: 1, description: {
           en: 'Actual tool execution ceiling; default 64, or 128 for implementer. Includes parallel and discovered tools.',
           zh: '实际工具执行上限；默认 64，implementer 为 128；包括并行及发现的工具。',
@@ -350,6 +351,13 @@ liveness，不要盲目循环。`
         description: {
           en: 'Override default tool/time safety ceilings; token/turn limits are optional. A cutoff returns { status: "budget_exceeded", partial_output, reason }, not successful completion.',
           zh: '覆盖默认工具/时间安全上限；token/turn 限制可选。截止时返回 { status: "budget_exceeded", partial_output, reason }，不代表任务成功。',
+        },
+      },
+      allow_tools: {
+        type: 'array', items: { type: 'string' }, maxItems: 32,
+        description: {
+          en: 'Explicit extra parent tools beyond persona defaults (e.g. Bash, FileEdit). Bash permits arbitrary shell/writes, not a read-only sandbox. Grant only necessary tools and isolate writable workspaces; child orchestration stays forbidden.',
+          zh: '在 persona 默认工具之外显式授予父级工具（如 Bash、FileEdit）。Bash 可执行任意 Shell/写入，并非只读沙箱。仅授予必要工具并隔离写入 workspace；子级编排仍禁止。',
         },
       },
       cwd: {
@@ -383,6 +391,8 @@ liveness，不要盲目循环。`
       return JSON.stringify({ next_steps: ERROR_NEXT_STEPS, error: validation.error });
     }
     const spec = validation.spec;
+    const grants = validateToolGrants(input.allow_tools === undefined ? [] : input.allow_tools, ctx?.parentEngineDeps?.parentToolRegistry);
+    if (!grants.ok) return JSON.stringify({ next_steps: ERROR_NEXT_STEPS, error: grants.error });
     const { name, cwd } = input;
     const callerScope = getCallerAgentScope(ctx);
 
@@ -415,6 +425,7 @@ liveness，不要盲目循环。`
       // Capture at the tool boundary, before fire-and-forget startup can yield.
       parentEffortDecision: captureParentEffortDecision(ctx),
       budget: spec.budget,
+      allowTools: grants.tools,
       cwd: cwd || ctx?.cwd || process.cwd(),
       status: STATUS.CREATED,
       messages: [],
@@ -503,6 +514,7 @@ liveness，不要盲目循环。`
       name,
       persona: spec.persona || null,
       budget: spec.budget || null,
+      allow_tools: agent.allowTools,
       status: agent.status,
       outputFile: agent.outputFile || null,
       taskId: agent.taskId || null,

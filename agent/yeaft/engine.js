@@ -3067,7 +3067,12 @@ export class Engine {
           retryLifecycle.pendingContinuation = null;
           continuationCommitted = true;
         };
+        let childDispatchReserved = false;
         const commitDispatch = () => {
+          if (isSubAgent && !childDispatchReserved) {
+            this.#toolRegistry?.reserveProviderRequest?.({ reporting: !!executionPolicy?.finalize });
+            childDispatchReserved = true;
+          }
           if (!activeProviderRequest && typeof prepareProviderRequest === 'function') {
             activeProviderRequest = prepareProviderRequest({
               turnNumber,

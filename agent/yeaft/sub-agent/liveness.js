@@ -135,7 +135,15 @@ export function diagnoseAgentLiveness(agent, opts = {}) {
       ...agent.execution,
       recentCalls: agent.execution.recentCalls.map(call => ({ ...call })),
       remainingToolCalls: Math.max(0, (agent.budget?.max_tool_calls || 0) - agent.execution.toolCalls),
-      limits: agent.budget,
+      limits: { ...agent.budget },
+      llmCalls: agent.usage?.llmCalls || 0,
+      reportingLlmCalls: agent.usage?.reportingLlmCalls || 0,
+      remainingLlmCalls: agent.budget?.max_llm_calls === undefined ? null
+        : Math.max(0, agent.budget.max_llm_calls - (agent.usage?.llmCalls || 0)),
+      remainingWallTimeMs: agent.budget?.wall_time_ms === undefined ? null
+        : Math.max(0, agent.budget.wall_time_ms - (now - (agent.usage?.startedAt || now))),
+      allowTools: [...(agent.allowTools || [])],
+      controlRevision: agent.controlRevision || 0,
       progressNote: 'Execution counts and repeated results are diagnostics, not proof of semantic progress or stalling.',
     } : null,
     msSinceLastEvent: liveness.msSinceLastEvent ?? msSinceActivity,

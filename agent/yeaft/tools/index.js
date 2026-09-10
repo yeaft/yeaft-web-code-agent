@@ -48,6 +48,7 @@ import cancelTask from './cancel-task.js';
 
 // --- P1 Agent tools ---
 import agentTool from './agent.js';
+import updateAgent from './update-agent.js';
 import sendMessage from './send-message.js';
 import waitAgent from './wait-agent.js';
 import closeAgent from './close-agent.js';
@@ -117,6 +118,7 @@ export const allTools = [
 
   // P1 Agent
   agentTool,
+  updateAgent,
   sendMessage,
   waitAgent,
   closeAgent,
