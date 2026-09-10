@@ -7174,7 +7174,7 @@ export async function handleYeaftLoadHistory(msg) {
   // `lim` is now expressed in TURNS, not raw messages. `loadRecent` and
   // `loadRecentBySession` use turn-based slicing so the cut never lands
   // mid-tool-arc. Pass `undefined` to use the persistence-layer default
-  // (DEFAULT_RECENT_TURNS = 20 turns).
+  // (DEFAULT_RECENT_TURNS = 10 turns).
   const pickRecent = (store, lim) =>
     sessionId ? store.loadRecentBySession(sessionId, lim) : store.loadRecent(lim);
   let historyAlreadyReplayed = false;

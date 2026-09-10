@@ -180,7 +180,7 @@ export async function loadSession(options = {}) {
   if (typeof dreamEnabled === 'boolean') config.dream.enabled = dreamEnabled;
 
   // Propagate the (clamped) cold-start replay window to the conversation
-  // store. The default is 20 turns; a user wanting more recall after a
+  // store. The default is 10 turns; a user wanting more recall after a
   // fresh boot sets `yeaft.recentTurnsLimit` in ~/.yeaft/config.json.
   // Called once per session boot — subsequent boots overwrite the
   // module-level default safely (single-process model).

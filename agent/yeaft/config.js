@@ -53,7 +53,7 @@ const DEFAULTS = {
   // ConversationStore.loadRecentBySession / loadSessionHistoryForVp
   // bring back after boot or reconnect. Older transcript remains available
   // through history pagination/search. Range: 1–500.
-  yeaftRecentTurnsLimit: 20,
+  yeaftRecentTurnsLimit: 10,
   // Same-Session related Q&A turns, selected by deterministic full-text rules.
   // Range: 0–5; 0 disables related recall without changing recent history.
   yeaftRelatedTurnsLimit: 5,

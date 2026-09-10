@@ -38,7 +38,7 @@ describe('deterministic provider history window', () => {
     expect(fitted.meta.estimatedTokens).toBeLessThanOrEqual(100_000);
   });
 
-  it('drops recent history below five turns instead of throwing an internal budget error', () => {
+  it('compresses the three-turn recent floor instead of throwing an internal budget error', () => {
     const history = Array.from({ length: 5 }, (_, index) => [
       { role: 'user', content: `question ${index}` },
       { role: 'assistant', content: 'x'.repeat(2_000) },
@@ -49,7 +49,10 @@ describe('deterministic provider history window', () => {
       messageTokenBudget: 600,
     });
 
-    expect(result.meta.recent.turnCount).toBeLessThan(5);
+    expect(result.meta.recent.turnCount).toBe(3);
+    expect(result.meta.budget.minimumRecentTurns).toBe(3);
+    expect(result.meta.budget.compressedRecentFloor).toBe(true);
+    expect(result.meta.budget.effectiveKeepToolTurns).toBe(1);
     expect(result.messages.at(-1)).toEqual(current);
   });
 
