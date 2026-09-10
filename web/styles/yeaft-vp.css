@@ -726,8 +726,7 @@
   text-decoration: underline;
 }
 .vp-turn-block-time,
-.vp-turn-block-sep,
-.vp-turn-block-elapsed {
+.vp-turn-block-sep {
   font-size: 11px;
   white-space: nowrap;
   flex-shrink: 0;
@@ -741,7 +740,13 @@
   color: var(--text-tertiary, var(--text-secondary, #9ca3af));
   user-select: none;
 }
+/* The duration is the live, most informative part of the header, so it reads
+   one step larger and heavier than the absolute start time next to it. */
 .vp-turn-block-elapsed {
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
   font-variant-numeric: tabular-nums;
   color: var(--text-tertiary, var(--text-secondary, #9ca3af));
 }

@@ -144,6 +144,29 @@ describe('VpTurnBlock debug action', () => {
     expect(wrapper.find('.vp-turn-block-elapsed').attributes('aria-live')).toBe('off');
   });
 
+  it('spells out duration units instead of a colon clock next to the start time', () => {
+    const cases = [
+      [0, '0s'],
+      [3_400, '3s'],
+      [59_900, '59s'],
+      [60_000, '1m0s'],
+      [310_000, '5m10s'],
+      [3_600_000, '1h0m0s'],
+      [3_661_000, '1h1m1s'],
+    ];
+    for (const [totalMs, expected] of cases) {
+      const wrapper = mount(VpTurnBlock, {
+        props: {
+          turn: makeTurn({ isActive: false, isStreaming: false, totalMs }),
+          nowMs: 99_000,
+        },
+        global: { mocks: { $t: key => key }, provide: { t: key => key } },
+      });
+      expect(wrapper.find('.vp-turn-block-elapsed').text()).toBe(expected);
+      wrapper.unmount();
+    }
+  });
+
   it('does not render the debug action while the turn is streaming', () => {
     const wrapper = mount(VpTurnBlock, {
       props: { turn: makeTurn({ isStreaming: true }) },
