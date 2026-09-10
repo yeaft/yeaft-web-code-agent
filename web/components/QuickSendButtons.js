@@ -10,9 +10,10 @@ export default {
   setup(props, { emit }) {
     const open = Vue.ref(false);
     const root = Vue.ref(null);
+    const detail = item => [item.model, item.effort, item.maxOutputTokens].filter(Boolean).join(' · ');
     const description = (item, index) => {
       const shortcut = props.bindings[`quickSend${index + 1}`];
-      return [item.model, item.effort, item.maxOutputTokens, shortcut].filter(Boolean).join(' · ');
+      return [item.name, detail(item), shortcut].filter(Boolean).join(' · ');
     };
     const choose = item => {
       open.value = false;
@@ -35,7 +36,7 @@ export default {
       document.removeEventListener('mousedown', closeOutside);
       document.removeEventListener('keydown', onKeydown);
     });
-    return { open, root, description, choose };
+    return { open, root, detail, description, choose };
   },
   template: `
     <div v-if="items.length" ref="root" class="composer-send-modes">
@@ -51,7 +52,7 @@ export default {
           <span class="composer-send-mode-number">{{ index + 1 }}</span>
           <span class="composer-send-mode-copy">
             <span class="composer-send-mode-name">{{ item.name }}</span>
-            <span class="composer-send-mode-detail">{{ description(item, index) }}</span>
+            <span class="composer-send-mode-detail">{{ detail(item) }}</span>
           </span>
           <span v-if="bindings['quickSend' + (index + 1)]" class="composer-send-mode-shortcut">{{ bindings['quickSend' + (index + 1)] }}</span>
         </button>

@@ -18,7 +18,7 @@ Create up to five presets under **Agent settings → Quick send**. Each preset s
 
 When enabled, native Yeaft Session Composers add a small mode selector beside the ordinary send button. Open it to send the current draft, attachments and quote with one preset, or use that preset's shortcut directly. Session defaults and ordinary Enter sending are unchanged. CLI Chat and Work Center do not show this selector.
 
-Defaults: terminal `Alt/Option+T`, files `Alt/Option+O`, Git workbench `Alt/Option+G`, new Session `Alt/Option+N`, and quick-send slots `Alt/Option+1…5`. Known browser/application conflicts such as `Ctrl+T` and `Ctrl+F` are rejected; operating systems and extensions may reserve additional combinations. Global actions avoid inputs, editors, terminals and dialogs. Quick-send bindings only operate in the Composer and ignore IME composition and key repeat.
+Defaults: terminal `Alt/Option+T`, files `Alt/Option+O`, Git workbench `Alt/Option+G`, new Session `Alt/Option+N`, close an open workbench `Alt/Option+W`, and quick-send slots `Alt/Option+1…5`. Known browser/application conflicts such as `Ctrl+T` and `Ctrl+F` are rejected; operating systems and extensions may reserve additional combinations. Global actions avoid inputs, editors, terminals and dialogs. Quick-send bindings only operate in the Composer and ignore IME composition and key repeat.
 
 ## Account
 

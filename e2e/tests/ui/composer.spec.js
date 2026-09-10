@@ -107,9 +107,9 @@ test.describe('Yeaft composer menus', () => {
     }
   }
 
-  test('quick-send settings stay compact and styled across themes and widths', async ({ page, serverUrl }, testInfo) => {
-    for (const theme of ['light', 'dark']) {
-      for (const width of [320, 900, 1280]) {
+  for (const theme of ['light', 'dark']) {
+    for (const width of [320, 900, 1280]) {
+      test(`quick-send settings: ${theme}, ${width}px`, async ({ page, serverUrl }, testInfo) => {
         await page.setViewportSize({ width, height: 800 });
         await openYeaftComposer(page, serverUrl);
         await page.evaluate(theme => {
@@ -150,10 +150,9 @@ test.describe('Yeaft composer menus', () => {
           expect(modelBox.y).toBeGreaterThanOrEqual(nameBox.y);
         }
         await page.screenshot({ path: testInfo.outputPath(`quick-send-settings-${theme}-${width}.png`) });
-        await settings.getByRole('button', { name: 'Close', exact: true }).click();
-      }
+      });
     }
-  });
+  }
 
   test('opens LLM configuration from the model menu', async ({ page, serverUrl }) => {
     await openYeaftComposer(page, serverUrl);

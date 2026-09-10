@@ -44,6 +44,8 @@ beforeEach(() => {
     currentAgent: 'agent-a', currentAgentInfo: { id: 'agent-a' },
     agents: [{ id: 'agent-a', online: true, capabilities: ['terminal', 'file_editor', 'workbench_session_routes'] }],
     activeSessionRoute: { runtimeProvider: 'yeaft', agentId: 'agent-a', sessionId: 'session-a' },
+    workbenchExpanded: false,
+    toggleWorkbench() { this.workbenchExpanded = !this.workbenchExpanded; },
     workbenchRouteProtocolSupported: true, hasCapability: () => true,
   });
   vi.stubGlobal('Pinia', { useAuthStore: () => globals.auth, useChatStore: () => store });
@@ -76,7 +78,7 @@ describe('owner-scoped user shortcuts', () => {
     expect(shared()).toBe(useUserShortcuts());
     expect(shared().preferences.value).toEqual(defaultUserShortcuts());
     expect(shared().preferences.value.bindings).toEqual({
-      terminal: 'Alt+T', files: 'Alt+O', git: 'Alt+G', newSession: 'Alt+N',
+      terminal: 'Alt+T', files: 'Alt+O', git: 'Alt+G', newSession: 'Alt+N', closeWorkbench: 'Alt+W',
       quickSend1: 'Alt+1', quickSend2: 'Alt+2', quickSend3: 'Alt+3', quickSend4: 'Alt+4', quickSend5: 'Alt+5',
     });
   });
@@ -110,9 +112,16 @@ describe('owner-scoped user shortcuts', () => {
       terminal: '', files: 'Ctrl+Shift+O', git: 'ctrl+shift+o', newSession: 'Alt+X', quickSend1: 'Alt+Shift+1',
     } }));
     expect(create().preferences.value.bindings).toEqual({
-      terminal: '', files: 'Alt+O', git: '', newSession: 'Alt+X',
+      terminal: '', files: 'Alt+O', git: '', newSession: 'Alt+X', closeWorkbench: 'Alt+W',
       quickSend1: 'Alt+1', quickSend2: 'Alt+2', quickSend3: 'Alt+3', quickSend4: 'Alt+4', quickSend5: 'Alt+5',
     });
+  });
+  it('does not replace an existing v2 binding when a new action defaults to the same key', () => {
+    localStorage.setItem('yeaft:user-shortcuts:v2:owner-a', JSON.stringify({ bindings: {
+      terminal: 'Alt+W', files: 'Alt+O', git: 'Alt+G', newSession: 'Alt+N',
+      quickSend1: 'Alt+1', quickSend2: 'Alt+2', quickSend3: 'Alt+3', quickSend4: 'Alt+4', quickSend5: 'Alt+5',
+    } }));
+    expect(create().preferences.value.bindings).toMatchObject({ terminal: 'Alt+W', closeWorkbench: '' });
   });
 });
 
@@ -150,6 +159,12 @@ describe('keyboard validation and matching', () => {
 describe('global action availability and focus ownership', () => {
   it('requires online exact route capabilities and the mounted view', () => {
     for (const action of ['terminal', 'files', 'git', 'newSession']) expect(isGlobalShortcutAvailable(action, store, globals.auth)).toBe(true);
+    expect(isGlobalShortcutAvailable('closeWorkbench', store, globals.auth)).toBe(false);
+    store.workbenchExpanded = true;
+    expect(isGlobalShortcutAvailable('closeWorkbench', store, globals.auth)).toBe(true);
+    expect(isGlobalShortcutAvailable('closeWorkbench', { ...store, connectionState: 'reconnecting', authenticated: false,
+      agents: [{ id: 'agent-a', online: false }] }, globals.auth)).toBe(true);
+    store.workbenchExpanded = false;
     expect(isGlobalShortcutAvailable('quickSend1', store, globals.auth)).toBe(false);
     const variants = [
       { connectionState: 'reconnecting' }, { authenticated: false }, { currentView: 'settings' },
@@ -216,6 +231,13 @@ describe('General settings and App runtime integration', () => {
       const event = key('Ctrl+Shift+Y'); document.dispatchEvent(event);
       expect(event.defaultPrevented).toBe(true);
       expect(accept.mock.calls[0][0].detail).toMatchObject({ capabilityId: 'terminal', routeKey: 'yeaft:agent-a:session-a' });
+      store.workbenchExpanded = true;
+      const close = key('Alt+W'); document.dispatchEvent(close);
+      expect(close.defaultPrevented).toBe(true);
+      expect(store.workbenchExpanded).toBe(false);
+      const closed = key('Alt+W'); document.dispatchEvent(closed);
+      expect(closed.defaultPrevented).toBe(false);
+      expect(store.workbenchExpanded).toBe(false);
       document.dispatchEvent(key('Ctrl+Shift+U'));
       await Vue.nextTick();
       expect(wrapper.find('[role="dialog"]').text()).toBe('agent-a');

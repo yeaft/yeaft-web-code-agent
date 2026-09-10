@@ -6,9 +6,10 @@ export default {
     const { preferences, ownerId, save, reset } = useUserShortcuts();
     const recording = Vue.ref('');
     const error = Vue.ref(null);
-    const suggestions = Object.fromEntries(SHORTCUT_ACTIONS.map((action, index) => [
-      action, index < 4 ? `Alt+${['T', 'O', 'G', 'N'][index]}` : `Alt+${index - 3}`,
-    ]));
+    const suggestions = {
+      terminal: 'Alt+T', files: 'Alt+O', git: 'Alt+G', newSession: 'Alt+N', closeWorkbench: 'Alt+W',
+      quickSend1: 'Alt+1', quickSend2: 'Alt+2', quickSend3: 'Alt+3', quickSend4: 'Alt+4', quickSend5: 'Alt+5',
+    };
     Vue.watch(ownerId, () => { recording.value = ''; error.value = null; }, { flush: 'sync' });
     function persist(patch, action = '') {
       const result = save(patch);

@@ -1,7 +1,7 @@
 import { useAuthStore } from '../stores/auth.js';
 
 export const SHORTCUT_ACTIONS = Object.freeze([
-  'terminal', 'files', 'git', 'newSession',
+  'terminal', 'files', 'git', 'newSession', 'closeWorkbench',
   'quickSend1', 'quickSend2', 'quickSend3', 'quickSend4', 'quickSend5',
 ]);
 const STORAGE_PREFIX = 'yeaft:user-shortcuts:v2:';
@@ -9,7 +9,7 @@ const LEGACY_STORAGE_PREFIX = 'yeaft:user-shortcuts:v1:';
 const MODIFIERS = ['Ctrl', 'Meta', 'Alt', 'Shift'];
 const instances = new WeakMap();
 const DEFAULT_BINDINGS = Object.freeze({
-  terminal: 'Alt+T', files: 'Alt+O', git: 'Alt+G', newSession: 'Alt+N',
+  terminal: 'Alt+T', files: 'Alt+O', git: 'Alt+G', newSession: 'Alt+N', closeWorkbench: 'Alt+W',
   quickSend1: 'Alt+1', quickSend2: 'Alt+2', quickSend3: 'Alt+3', quickSend4: 'Alt+4', quickSend5: 'Alt+5',
 });
 const LEGACY_RECOMMENDED_BINDINGS = Object.freeze({
@@ -89,6 +89,12 @@ function sanitizePreferences(value, { migrateLegacy = false } = {}) {
   const result = defaultUserShortcuts();
   if (!value || typeof value !== 'object') return result;
   result.showQuickSends = value.showQuickSends === true;
+  const inputBindings = value.bindings && typeof value.bindings === 'object' ? value.bindings : {};
+  const explicitBindings = new Set(Object.values(inputBindings).map(normalizeShortcut).filter(Boolean));
+  for (const action of SHORTCUT_ACTIONS) {
+    if (!Object.prototype.hasOwnProperty.call(inputBindings, action)
+      && explicitBindings.has(DEFAULT_BINDINGS[action])) result.bindings[action] = '';
+  }
   const seenInputBindings = new Set();
   for (const action of SHORTCUT_ACTIONS) {
     if (!Object.prototype.hasOwnProperty.call(value.bindings || {}, action)) continue;
