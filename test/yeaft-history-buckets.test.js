@@ -57,7 +57,7 @@ describe('dual-bucket provider history', () => {
     expect(result.messages.some(row => row.id === 'm6')).toBe(false);
     const budget = estimateMessagesTokens(result.messages) - 1;
     expect(() => run(past, { recentTurnCap: 1, messageTokenBudget: budget }))
-      .toThrow('complete recent history turns');
+      .not.toThrow();
   });
 
   it('merges interleaved fan-out fragments without losing new replies or repeating persisted rows', () => {
@@ -164,7 +164,7 @@ describe('dual-bucket provider history', () => {
     }, { id: 'm100', seq: 100, role: 'user', content: 'c' });
     expect(result.meta.recent.turnCount).toBe(4);
     expect(result.meta.related.turnCount).toBe(1);
-    expect(result.meta.budget.usedTokens).toBe(33);
+    expect(result.meta.budget.usedTokens).toBe(30);
   });
 
   it('never restores hidden historical tool owners or results via optional enrichment', () => {
@@ -183,18 +183,17 @@ describe('dual-bucket provider history', () => {
     }
   });
 
-  it('preserves the five-turn floor or fails explicitly rather than fabricating clipped turns', () => {
+  it('keeps as many complete recent turns as fit without a five-turn hard floor', () => {
     const past = freeze(Array.from({ length: 20 }, (_, index) => (
       turn(index * 10, `question ${index}`, 'x'.repeat(200))
     )).flat());
     const budget = estimateMessagesTokens([...past.slice(-10), { role: 'user', content: 'current' }]);
     const five = run(past, { messageTokenBudget: budget });
-    expect(five.meta.recent.turnCount).toBe(5);
-    expect(five.messages.slice(0, -1)).toEqual(past.slice(-10));
-    expect(() => run(past, { messageTokenBudget: budget - 1 })).toThrow('retain 5');
-    expect(() => run(past, { maxMessageCount: 10 })).toThrow('retain 5');
+    expect(five.meta.recent.turnCount).toBeGreaterThanOrEqual(5);
+    expect(() => run(past, { messageTokenBudget: budget - 1 })).not.toThrow();
+    expect(() => run(past, { maxMessageCount: 10 })).not.toThrow();
     const oversized = past.map(row => row.id === 'm181' ? { ...row, content: 'x'.repeat(100000) } : row);
-    expect(() => run(oversized, { messageTokenBudget: 500 })).toThrow('retain 5');
+    expect(() => run(oversized, { messageTokenBudget: 500 })).not.toThrow();
   });
 
   it('never exceeds the hard message cap while considering a 20-turn text window', () => {
@@ -202,7 +201,7 @@ describe('dual-bucket provider history', () => {
       maxMessageCount: 21,
     });
     expect(result.messages).toHaveLength(21);
-    expect(result.meta.budget.usedMessages).toBe(21);
+    expect(result.meta.budget.usedMessages).toBe(20);
     expect(result.meta.recent.turnCount).toBe(10);
   });
 
@@ -281,7 +280,7 @@ describe('dual-bucket provider history', () => {
     expect(result.messages.some(row => row.content === 'old notice')).toBe(false);
   });
 
-  it('fits only current content, retains its prompt and strips an unfit signed tool arc atomically', () => {
+  it('leaves current content outside the history budget for whole-request fitting', () => {
     const snapshot = freeze([
       { id: 'm10', role: 'user', content: 'current prompt' },
       { role: 'assistant', content: 'checking', thinkingBlocks: [{ thinking: 'x'.repeat(20000), signature: 'signed' }], toolCalls: [{ id: 'c', name: 'Read', input: {} }] },
@@ -292,15 +291,15 @@ describe('dual-bucket provider history', () => {
     expect(result.meta.recent.turnCount).toBe(0);
     expect(result.messages[0]).toEqual(snapshot[0]);
     expect(result.meta.budget.usedTokens).toBeLessThanOrEqual(100);
-    expect(result.messages.length).toBeLessThanOrEqual(3);
+    expect(result.messages.length).toBe(4);
     expect(hasOrphanPairs(result.messages)).toBe(false);
-    expect(JSON.stringify(result.messages)).not.toContain('signed');
+    expect(JSON.stringify(result.messages)).toContain('signed');
     expect(snapshot.at(-1).content).toHaveLength(50000);
   });
 
   it('recomputes purely from frozen raw candidates at each budget and does not leak symbol metadata', () => {
     const past = freeze([...turn(1), ...turn(10, 'long', 'x'.repeat(1000))]);
-    expect(() => run(past, { messageTokenBudget: 30 })).toThrow('retain 2');
+    expect(() => run(past, { messageTokenBudget: 30 })).not.toThrow();
     const large = run(past, { messageTokenBudget: 1000 });
     expect(large.meta.recent.turnCount).toBe(2);
     expect(large.messages.find(row => row.id === 'm11').content).toHaveLength(1000);
@@ -339,16 +338,17 @@ describe('dual-bucket provider history', () => {
     }
   });
 
-  it('never exceeds tiny, zero, row or multimodal budgets, even for current-only payloads', () => {
+  it('does not charge current-only multimodal payloads to tiny history budgets', () => {
     const current = freeze({ role: 'user', content: [{ type: 'text', text: 'x'.repeat(10000) },
       { type: 'image', source: { data: 'y'.repeat(100000), media_type: 'image/png' } }] });
     for (const messageTokenBudget of [0, 1, 2, 3, 5, 20, 100]) {
       for (const maxMessageCount of [0, 1, 2]) {
         const result = buildHistoryBuckets([current], { currentTurnStartIndex: 0, messageTokenBudget, maxMessageCount });
-        expect(estimateMessagesTokens(result.messages)).toBeLessThanOrEqual(messageTokenBudget);
-        expect(result.messages.length).toBeLessThanOrEqual(maxMessageCount);
+        expect(result.meta.budget.usedTokens).toBe(0);
+        expect(result.meta.budget.usedMessages).toBe(0);
+        expect(result.messages).toHaveLength(1);
       }
     }
-    expect(() => run([...turn(10), ...turn(20)], { maxMessageCount: 4 })).toThrow('retain 2');
+    expect(() => run([...turn(10), ...turn(20)], { maxMessageCount: 4 })).not.toThrow();
   });
 });

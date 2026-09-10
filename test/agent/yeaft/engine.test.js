@@ -3758,15 +3758,12 @@ describe('Engine', () => {
           text: 'durable reflection summary',
           usage: { inputTokens: 10, outputTokens: 5 },
         });
-        adapter.pushResponse([
-          ...Array.from({ length: 30 }, (_, index) => ({
-            type: 'tool_call',
-            id: `call_fold_${index}`,
-            name: 'fold_tool',
-            input: { index },
-          })),
-          { type: 'stop', stopReason: 'tool_use' },
-        ]);
+        for (let index = 0; index < 30; index += 1) {
+          adapter.pushResponse([
+            { type: 'tool_call', id: `call_fold_${index}`, name: 'fold_tool', input: { index } },
+            { type: 'stop', stopReason: 'tool_use' },
+          ]);
+        }
         adapter.pushResponse([
           { type: 'text_delta', text: 'finished after fold' },
           { type: 'stop', stopReason: 'end_turn' },
@@ -3786,7 +3783,7 @@ describe('Engine', () => {
         });
 
         for await (const _event of engine.query({
-          prompt: 'run thirty tools',
+          prompt: 'run thirty tool loops',
           sessionId: 'session-t1-fold',
           causalRootId: 'root-t1-fold',
         })) {
@@ -3870,12 +3867,11 @@ describe('Engine', () => {
           sessionId: 'session-t2-fold',
           causalRootId: 'root-t2-current',
         })) secondEvents.push(event);
-        // This deliberately tiny context cannot hold the system plus even
-        // one complete past turn. Do not silently call the provider without it.
-        expect(secondEvents.find(event => event.type === 'error')?.error?.code)
-          .toBe('HISTORY_RECENT_BUDGET_EXCEEDED');
+        // A tiny history/request budget degrades by dropping old rows; the
+        // configured recent-turn count is not a hard request-success floor.
+        expect(secondEvents.find(event => event.type === 'error')).toBeUndefined();
         expect(secondEvents.filter(event => event.type === 'turn_end' && event.terminal)).toHaveLength(1);
-        expect(adapter.callLog).toHaveLength(2);
+        expect(adapter.callLog).toHaveLength(3);
 
         const restarted = new ConversationStore(yeaftDir);
         const durable = restarted.loadRecentBySession(
@@ -3891,7 +3887,7 @@ describe('Engine', () => {
         ]);
         expect(durable.some(message => message.role === 'tool')).toBe(false);
         expect(durable.some(message => Array.isArray(message.toolCalls) && message.toolCalls.length > 0)).toBe(false);
-        expect(durable.some(message => message.content === 'second turn finished')).toBe(false);
+        expect(durable.some(message => message.content === 'second turn finished')).toBe(true);
         expect(durable.some(message => message.role === 'user' && message.content === 'continue after t2')).toBe(true);
       } finally {
         await closeConversationHistoryIndexes();
@@ -6283,10 +6279,12 @@ describe('Engine', () => {
           name: 'FoldHelper',
           input: { index },
         });
-        mockAdapter.pushResponse([
-          ...Array.from({ length: 31 }, (_, index) => makeToolCall(index)),
-          { type: 'stop', stopReason: 'tool_use' },
-        ]);
+        for (let index = 0; index < 30; index += 1) {
+          mockAdapter.pushResponse([
+            makeToolCall(index),
+            { type: 'stop', stopReason: 'tool_use' },
+          ]);
+        }
         // T1 reflection uses adapter.call(), which is recorded between the
         // initial tool stream and the continuation stream.
         mockAdapter.pushResponse([
@@ -6337,10 +6335,10 @@ describe('Engine', () => {
         }
 
         expect(completionAccepted).toBe(true);
-        // stream #1, the synchronous T1 reflector call, stream #2 (which
-        // waits), then stream #3 carrying the continuation note.
-        expect(mockAdapter.callLog).toHaveLength(4);
-        const continuationMessages = mockAdapter.callLog[3].messages;
+        // 30 tool loops, the synchronous T1 reflector call, one wait response,
+        // then the request carrying the continuation note.
+        expect(mockAdapter.callLog).toHaveLength(33);
+        const continuationMessages = mockAdapter.callLog.at(-1).messages;
         // The provider transcript retains the original folded tool result as
         // historical context, but the late completion itself must be injected
         // only as a continuation note rather than a reconstructed raw arc.
@@ -7011,14 +7009,16 @@ describe('Engine', () => {
       expect(turnEnds[0].stopReason).toBe('error');
     });
 
-    it('surfaces context overflow without a summary call or retry loop', async () => {
+    it('shrinks and retries provider context overflow without a compact LLM call', async () => {
       const { LLMContextError } = await import('../../../agent/yeaft/llm/adapter.js');
       let streamCalls = 0;
       let summaryCalls = 0;
       const adapter = {
         async *stream() {
           streamCalls += 1;
-          throw new LLMContextError('context window exceeded');
+          if (streamCalls === 1) throw new LLMContextError('context window exceeded');
+          yield { type: 'text_delta', text: 'recovered' };
+          yield { type: 'stop', stopReason: 'end_turn' };
         },
         async call() {
           summaryCalls += 1;
@@ -7037,11 +7037,48 @@ describe('Engine', () => {
       const events = [];
       for await (const event of engine.query({ prompt: 'hello' })) events.push(event);
 
-      expect(streamCalls).toBe(1);
+      expect(streamCalls).toBe(2);
       expect(summaryCalls).toBe(0);
       expect(events.some(event => event.type === 'consolidate')).toBe(false);
-      expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+      expect(events.filter(event => event.type === 'error')).toHaveLength(0);
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'llm_retry', reason: 'context_overflow_recovery',
+      }));
       expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toHaveLength(1);
+    });
+
+    it('continues after partial output on context overflow without redisplaying it', async () => {
+      const { LLMContextError } = await import('../../../agent/yeaft/llm/adapter.js');
+      const requests = [];
+      const adapter = {
+        async *stream(params) {
+          requests.push(params);
+          if (requests.length === 1) {
+            yield { type: 'text_delta', text: 'partial answer' };
+            throw new LLMContextError('context window exceeded after output');
+          }
+          yield { type: 'text_delta', text: ' resumed answer' };
+          yield { type: 'stop', stopReason: 'end_turn' };
+        },
+      };
+      const engine = new Engine({
+        adapter,
+        trace,
+        config: { model: 'test-model', maxOutputTokens: 1024 },
+        conversationStore: { append() { return null; } },
+      });
+
+      const events = [];
+      for await (const event of engine.query({ prompt: 'hello' })) events.push(event);
+
+      expect(requests).toHaveLength(2);
+      expect(events.filter(event => event.type === 'text_delta').map(event => event.text))
+        .toEqual(['partial answer', ' resumed answer']);
+      expect(requests[1].messages.filter(message =>
+        message.role === 'assistant' && message.content === 'partial answer')).toHaveLength(1);
+      expect(requests[1].messages.at(-1).role).toBe('user');
+      expect(requests[1].messages.at(-1).content).not.toBe('hello');
+      expect(events.filter(event => event.type === 'error')).toHaveLength(0);
     });
 
     it('marks rate-limit and server errors retryable without retries', async () => {

@@ -43,7 +43,7 @@ Yeaft 原生 Session 的自动历史上下文由两个桶组成：**优先争取
 
 自动相关召回只接受当前 Agent 数据根、当前 Session 的来源。即使同属一个 Project，也不自动混入兄弟 Session；Project instruction 与工具显式历史搜索的职责不变。
 
-检索文本与相关桶投影不含工具输出、tool call 参数、internal / reflection / thinking 内容、后台控制通知或其他伪装成用户消息的内部记录。相关桶只带 user + assistant 正文；最近桶及当前执行所需的工具配对由既有 history-window 契约另行处理，并继续计入预算。
+检索文本与相关桶投影不含工具输出、tool call 参数、internal / reflection / thinking 内容、后台控制通知或其他伪装成用户消息的内部记录。相关桶只带 user + assistant 正文；最近桶的历史工具配对由既有 history-window 契约处理。当前 turn 不计入历史预算，而在完整请求窗口校验中处理。
 
 最近历史以当前用户的持久序号为 exclusive 上界直接读取完整 turn，而不是从磁盘最新窗口读取后再过滤；因此排队期间新增的用户输入不会挤掉本轮之前的最近 20 个 turn。Provider reader 不复用 UI bootstrap 的 144 行分页截断，按稳定用户身份计数，工具行再多也不当成多个 turn；每扫描 64 行让出事件循环，扫描超过 32768 行或 64 MiB 时明确报读取上限，不静默发送残缺窗口。Web bridge 传递已持久化用户行；旧调用仅能在有界窗口内按 clientMessageId 找回身份，找不到时不猜测序号、不启用索引召回。
 
@@ -51,13 +51,13 @@ Yeaft 原生 Session 的自动历史上下文由两个桶组成：**优先争取
 
 ## 统一 token 预算与重算
 
-1. 在同一个消息/token 总预算内先安置当前执行内容，得到历史可用余额。
-2. 先从最新端安置最近历史完整正文，默认争取 20 turn，按 token 和 message 预算连续缩减至至少 5 turn（历史不足 5 则保留全部）。不能跳过中间大 turn 去拼不连续窗口，不能截断正文来凑数；无法容纳底线时返回 `HISTORY_RECENT_BUDGET_EXCEEDED`，不发 provider 请求。
+1. 默认 32768 token 的历史预算只分配给当前 turn 之前的消息；当前 turn 不占用该预算。
+2. 先从最新端安置最近历史完整正文，默认争取 20 turn，并按 token 和 message 预算从旧到新连续降级。最近 turn 数不是请求成功的硬门槛；不足 5 turn 时继续丢弃旧历史，不抛内部预算错误。
 3. 不再为相关桶预留 25%。用最终 recent 以外的候选构建 related，按相关度挑选完整 turn，仅使用最近正文支付后的余额，最多 5 个。
 4. 最终 wire 顺序为 related（内部按时间升序）→ recent（连续时间升序）→ 当前执行。召回不能挤占最近正文，不能与 recent/current 的来源重叠。
 5. 不能先把初始“最近 20 个”永久排除出候选：某个 turn 因 token 预算从 recent 掉出后，只要符合来源、时序和相关门槛，仍可进入 related。
 6. 历史问答以完整正文 turn 为预算单位。单个过大的相关 turn 整体跳过，继续考察其他候选；不能截断回答来凑够条数。超出索引读取边界的 turn 也不使用不完整片段。
-7. 两桶与当前 turn 合并后仍受统一 token / message 上限约束；只有最近 3 个历史 turn 的工具配对可用剩余预算回放，相关桶不带工具。当前执行中的工具结果单独保护。每次 provider request 都重新按实际剩余容量构造临时窗口，不借摘要模型隐藏溢出。
+7. 两桶与当前 turn 合并后，完整请求按实际模型窗口另行校验，计入 system、tool schemas、历史、当前 turn 与 output reserve；只有最近 3 个历史 turn 的工具配对可用历史余额回放，相关桶不带工具。每次 provider request 都重新构造临时窗口，必要时整组淘汰旧工具协议单元，query 内不调用摘要模型。
 
 因此，“20 + 5”不保证每次实际携带 25 个历史 turn，也不保证极大问答一定能召回。
 

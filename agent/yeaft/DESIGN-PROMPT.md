@@ -187,7 +187,7 @@ messages: [
 
 ### 4.3 旧 Conversation Summary
 
-已退役。`compact.md`、`conversation/compact/*.md` 和 `<conversation_summary>` 不再由 Yeaft 读取、写入或注入。旧文件可留待后续非 LLM 清理，但不能进入 prompt。
+旧的 query 内 compact 已退役。`compact.md`、`conversation/compact/*.md` 和 `<conversation_summary>` 不再由 Yeaft 读取、写入或注入。达到模型窗口 80% 后生成的异步 post compact 使用独立的 `conversation/post-compact/*.json` 派生 artifact，并仅在下一轮已完成时作为 prior-conversation context 注入；它不替换本节所述旧格式，也不覆盖 transcript。
 
 ---
 

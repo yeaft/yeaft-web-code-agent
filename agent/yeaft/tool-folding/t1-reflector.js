@@ -1,8 +1,9 @@
 /**
  * t1-reflector.js — V7 in-turn (synchronous) reflection (PR-L).
  *
- * Triggered when the current turn has accumulated TOOL_BATCH_SIZE (30) tool
- * results and the engine is about to loop back into adapter.stream(). Calls
+ * Triggered after each interval of 30 completed tool loops, immediately before
+ * the engine loops back into adapter.stream(). Parallel calls returned in one
+ * assistant tool-use batch count as one loop. Calls
  * the PRIMARY model — never the fast model — to generate a markdown
  * reflection over the batch.
  *

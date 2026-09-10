@@ -109,15 +109,15 @@ describe('Engine canonical message recall integration', () => {
     expect(trace.log.mock.calls.find(([name]) => name === 'history_buckets')[1].recent.turnCount).toBe(20);
   });
 
-  it('does not call the provider if the five-turn text floor cannot fit', async () => {
+  it('calls the provider with degraded history when five recent turns cannot fit', async () => {
     for (let i = 0; i < 20; i++) {
       append('user', `Question ${i}`);
       append('assistant', 'x'.repeat(2000));
     }
     const events = [];
     for await (const event of createEngine({ messageTokenBudget: 500 }).query({ sessionId, prompt: 'next' })) events.push(event);
-    expect(adapter.calls).toHaveLength(0);
-    expect(events.some(e => e.type === 'error' && /retain 5/.test(e.message || e.error))).toBe(true);
+    expect(adapter.calls).toHaveLength(1);
+    expect(events.some(e => e.type === 'error')).toBe(false);
     expect(events.filter(e => e.type === 'turn_end' && e.terminal)).toHaveLength(1);
   });
 
@@ -188,7 +188,7 @@ describe('Engine canonical message recall integration', () => {
     const metas = trace.log.mock.calls.filter(([name]) => name === 'history_buckets').map(([, meta]) => meta);
     expect(metas).toHaveLength(2);
     expect(metas[1].current.originalTokenCount).toBeGreaterThan(metas[0].current.originalTokenCount);
-    expect(metas[1].budget.availableHistoryTokens).toBeLessThan(metas[0].budget.availableHistoryTokens);
+    expect(metas[1].budget.availableHistoryTokens).toBe(metas[0].budget.availableHistoryTokens);
     expect(adapter.calls[1].messages.find(m => m.role === 'tool')).toMatchObject({
       toolCallId: 'live-tool', content: 'LIVE_RESULT '.repeat(200),
     });
