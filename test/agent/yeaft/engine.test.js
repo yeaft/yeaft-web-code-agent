@@ -19,7 +19,7 @@ import { cleanMemoryPromptText, filterMemoryPromptTextForPrompt, filterRelatedSe
 import { makeSegment, serializeSegments } from '../../../agent/yeaft/memory/segment.js';
 import { readCanonicalContentRecord, readScope } from '../../../agent/yeaft/memory/segment-store.js';
 import { syncAll, syncScope } from '../../../agent/yeaft/memory/segment-sync.js';
-import { Engine, buildResidentEntries, selectCanonicalMemoryScopes, selectResidentTopicScopes, selectRelatedSessionIds } from '../../../agent/yeaft/engine.js';
+import { Engine, buildResidentEntries, estimateProviderInputBreakdown, selectCanonicalMemoryScopes, selectResidentTopicScopes, selectRelatedSessionIds } from '../../../agent/yeaft/engine.js';
 import { flushAgentPerfTrace } from '../../../agent/yeaft/perf-trace.js';
 import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { withUsageAccounting } from '../../../agent/yeaft/llm/usage-accounting.js';
@@ -2511,6 +2511,48 @@ describe('Engine memory prompt hygiene', () => {
 });
 
 describe('Engine', () => {
+  describe('provider input token diagnostics', () => {
+    it('splits the final request at the history boundary and includes tool schemas', () => {
+      const breakdown = estimateProviderInputBreakdown({
+        systemPrompt: 'system instructions',
+        messages: [
+          { role: 'user', content: 'older question' },
+          { role: 'assistant', content: 'older answer' },
+          { role: 'user', content: 'current question' },
+        ],
+        historyMessageCount: 2,
+        toolDefs: [{ name: 'Read', description: 'Read a file', parameters: { type: 'object' } }],
+      });
+
+      expect(breakdown.systemPromptTokens).toBeGreaterThan(0);
+      expect(breakdown.historyMessageTokens).toBeGreaterThan(0);
+      expect(breakdown.toolDefinitionTokens).toBeGreaterThan(0);
+      expect(breakdown.currentTurnTokens).toBeGreaterThan(0);
+      expect(breakdown.totalEstimatedTokens).toBe(
+        breakdown.systemPromptTokens
+        + breakdown.historyMessageTokens
+        + breakdown.toolDefinitionTokens
+        + breakdown.currentTurnTokens,
+      );
+    });
+
+    it('clamps invalid history boundaries without inventing input', () => {
+      expect(estimateProviderInputBreakdown()).toEqual({
+        systemPromptTokens: 0,
+        historyMessageTokens: 0,
+        toolDefinitionTokens: 0,
+        currentTurnTokens: 0,
+        totalEstimatedTokens: 0,
+      });
+      const breakdown = estimateProviderInputBreakdown({
+        messages: [{ role: 'user', content: 'current' }],
+        historyMessageCount: 99,
+      });
+      expect(breakdown.historyMessageTokens).toBeGreaterThan(0);
+      expect(breakdown.currentTurnTokens).toBe(0);
+    });
+  });
+
   describe('constructor', () => {
     it('bounds signed thinking and object tool output in the actual Engine adapter request', async () => {
       const adapter = new MockAdapter();
@@ -8289,6 +8331,13 @@ describe('Engine', () => {
         body: { model: 'test-model', input: [{ role: 'user', content: `request ${loopNumber}` }] },
       });
       const messagesFor = loopNumber => [{ role: 'user', content: `messages ${loopNumber}` }];
+      const breakdownFor = loopNumber => ({
+        systemPromptTokens: loopNumber,
+        historyMessageTokens: loopNumber + 1,
+        toolDefinitionTokens: loopNumber + 2,
+        currentTurnTokens: loopNumber + 3,
+        totalEstimatedTokens: (loopNumber * 4) + 6,
+      });
       const assertSnapshots = (detail) => {
         expect(detail.loops).toHaveLength(4);
         for (const [index, loop] of detail.loops.entries()) {
@@ -8299,6 +8348,7 @@ describe('Engine', () => {
             rawRequest: loopNumber === rawLoops.at(-1) ? requestFor(loopNumber) : null,
             systemPrompt: loopNumber === promptLoops.at(-1) ? `prompt ${loopNumber}` : '',
             messages: loopNumber === 4 ? messagesFor(4) : [],
+            requestInputBreakdown: breakdownFor(loopNumber),
           });
           expect(loop).not.toHaveProperty('requestBase');
           expect(loop).not.toHaveProperty('requestDelta');
@@ -8315,6 +8365,7 @@ describe('Engine', () => {
             rawRequest: rawLoops.includes(loopNumber) ? requestFor(loopNumber) : null,
             systemPrompt: promptLoops.includes(loopNumber) ? `prompt ${loopNumber}` : '',
             messages: messagesFor(loopNumber),
+            requestInputBreakdown: breakdownFor(loopNumber),
             stopReason: loopNumber === 4 ? 'end_turn' : 'tool_use',
           });
         }
@@ -8642,6 +8693,7 @@ describe('Engine', () => {
           expect(legacyStats).toMatchObject({ turnCount: 2, toolCount: 0, requestCount: 1 });
           const legacyDetail = await legacyReader.fetchTurnDebug({ sessionId: 'legacy-session', turnId: 'legacy-turn' });
           expect(legacyDetail.loops.map(loop => loop.response)).toEqual(['legacy-1', 'legacy-2']);
+          expect(legacyDetail.loops.every(loop => loop.requestInputBreakdown == null)).toBe(true);
           const rawPayloadSearch = await legacyReader.fetchRecentDebugHistory({
             sessionId: 'legacy-session',
             indexOnly: true,

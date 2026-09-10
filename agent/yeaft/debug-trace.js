@@ -332,10 +332,27 @@ function messagesPrefixLength(prevMessages, nextMessages) {
   return i;
 }
 
+function normalizeRequestInputBreakdown(value) {
+  if (!value || typeof value !== 'object') return null;
+  const normalized = {};
+  for (const key of [
+    'systemPromptTokens',
+    'historyMessageTokens',
+    'toolDefinitionTokens',
+    'currentTurnTokens',
+    'totalEstimatedTokens',
+  ]) {
+    const number = Number(value[key]);
+    normalized[key] = Number.isFinite(number) && number >= 0 ? Math.floor(number) : 0;
+  }
+  return normalized;
+}
+
 function buildRequestSnapshot(info = {}) {
   return {
     systemPrompt: String(info.systemPrompt || ''),
     messages: Array.isArray(info.messages) ? cloneJsonValue(info.messages) : [],
+    requestInputBreakdown: normalizeRequestInputBreakdown(info.requestInputBreakdown),
     rawRequest: info.rawRequest ?? null,
   };
 }
@@ -346,6 +363,7 @@ function buildRequestDelta(previous, next) {
       base: true,
       systemPrompt: next.systemPrompt || '',
       messages: Array.isArray(next.messages) ? next.messages : [],
+      requestInputBreakdown: next.requestInputBreakdown || null,
     };
     const rawRequestDelta = buildRawRequestDelta(null, next.rawRequest);
     if (rawRequestDelta) delta.rawRequestDelta = rawRequestDelta;
@@ -354,6 +372,9 @@ function buildRequestDelta(previous, next) {
   const delta = {};
   if ((next.systemPrompt || '') !== (previous.systemPrompt || '')) {
     delta.systemPrompt = next.systemPrompt || '';
+  }
+  if (!stableEqual(next.requestInputBreakdown || null, previous.requestInputBreakdown || null)) {
+    delta.requestInputBreakdown = next.requestInputBreakdown || null;
   }
   const prevMessages = Array.isArray(previous.messages) ? previous.messages : [];
   const nextMessages = Array.isArray(next.messages) ? next.messages : [];
@@ -371,16 +392,18 @@ function buildRequestDelta(previous, next) {
 }
 
 function applyRequestDelta(previous, delta = {}) {
-  const base = previous || { systemPrompt: '', messages: [], rawRequest: null };
+  const base = previous || { systemPrompt: '', messages: [], requestInputBreakdown: null, rawRequest: null };
   const next = {
     systemPrompt: base.systemPrompt || '',
     messages: Array.isArray(base.messages) ? [...base.messages] : [],
+    requestInputBreakdown: normalizeRequestInputBreakdown(base.requestInputBreakdown),
     rawRequest: base.rawRequest ?? null,
   };
   if (delta.base) {
     const nextBase = {
       systemPrompt: delta.systemPrompt || '',
       messages: Array.isArray(delta.messages) ? delta.messages : [],
+      requestInputBreakdown: normalizeRequestInputBreakdown(delta.requestInputBreakdown),
       rawRequest: Object.prototype.hasOwnProperty.call(delta, 'rawRequest') ? delta.rawRequest : null,
     };
     if (Object.prototype.hasOwnProperty.call(delta, 'rawRequestDelta')) {
@@ -389,6 +412,9 @@ function applyRequestDelta(previous, delta = {}) {
     return nextBase;
   }
   if (typeof delta.systemPrompt === 'string') next.systemPrompt = delta.systemPrompt;
+  if (Object.prototype.hasOwnProperty.call(delta, 'requestInputBreakdown')) {
+    next.requestInputBreakdown = normalizeRequestInputBreakdown(delta.requestInputBreakdown);
+  }
   if (Array.isArray(delta.messages)) {
     next.messages = delta.messages;
   } else if (Array.isArray(delta.messagesAppend)) {
@@ -639,6 +665,7 @@ function expandTrace(trace) {
       // its actual source loop. Messages remain limited to the final loop.
       systemPrompt: '',
       messages: [],
+      requestInputBreakdown: snapshot.requestInputBreakdown || null,
       response: loop.response || '',
       toolCalls: Array.isArray(loop.toolCalls) ? loop.toolCalls : [],
       usage,
@@ -966,6 +993,7 @@ export class DebugTrace {
       trace.baseRequest = {
         systemPrompt: snapshot.systemPrompt,
         messages: Array.isArray(snapshot.messages) ? cloneJsonValue(snapshot.messages) : [],
+        requestInputBreakdown: snapshot.requestInputBreakdown,
         rawRequest: snapshot.rawRequest ?? null,
       };
     }
