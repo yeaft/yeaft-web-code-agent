@@ -48,9 +48,13 @@ describe('Agent quick-send Composer', () => {
     preferences.value.showQuickSends = true;
     await Vue.nextTick();
     expect(store.sendWsMessage).toHaveBeenCalledWith({ type: 'get_llm_config', agentId: 'a1' });
+    expect(wrapper.find('.mobile-quick-send-bar').exists()).toBe(false);
+    await wrapper.get('textarea').trigger('focus');
     const bar = wrapper.get('.mobile-quick-send-bar');
     expect(bar.attributes('role')).toBe('toolbar');
     expect(bar.get('.mobile-quick-send-button').text()).toBe('Fast');
+    await wrapper.get('textarea').trigger('blur');
+    expect(wrapper.find('.mobile-quick-send-bar').exists()).toBe(false);
     expect(wrapper.find('.composer-send-mode-trigger').exists()).toBe(false);
     expect(wrapper.find('.composer-send-mode-menu').exists()).toBe(false);
   });
@@ -59,7 +63,9 @@ describe('Agent quick-send Composer', () => {
     preferences.value.showQuickSends = true;
     const sendFn = vi.fn();
     await create({ sendFn });
+    await wrapper.get('textarea').trigger('focus');
     await wrapper.get('textarea').setValue('touch send');
+    await wrapper.get('.mobile-quick-send-button').trigger('pointerdown');
     await wrapper.get('.mobile-quick-send-button').trigger('click');
     expect(sendFn).toHaveBeenCalledWith('touch send', undefined, null,
       { model: 'p/fast', effort: 'low', maxOutputTokens: 2048 });

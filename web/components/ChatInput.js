@@ -100,7 +100,7 @@ export default {
         class="file-input-hidden"
       />
       <div
-        v-if="quickSends.length"
+        v-if="quickSends.length && inputFocused"
         class="mobile-quick-send-bar"
         role="toolbar"
         :aria-label="$t('quickSend.composer.label')"
@@ -113,6 +113,7 @@ export default {
           :disabled="!canQuickSend"
           :title="preset.name"
           :aria-label="$t('quickSend.composer.send', { number: index + 1, name: preset.name })"
+          @pointerdown.prevent
           @click="sendQuick(preset)"
         >
           <span>{{ preset.name }}</span>
@@ -136,6 +137,7 @@ export default {
         @input="handleInput"
         @keydown="handleKeydown"
         @paste="handlePaste"
+        @focus="inputFocused = true"
         @blur="onBlur"
         @send="send"
         @stop="cancelExecution"
@@ -211,6 +213,7 @@ export default {
     // task-338-F4: resolve groups store for Yeaft group-chat dispatch routing.
     const sessionsStore = (Pinia.useSessionsStore ? Pinia.useSessionsStore() : null);
     const inputText = Vue.ref('');
+    const inputFocused = Vue.ref(false);
     const messageComposerRef = Vue.ref(null);
     const inputRef = Vue.computed(() => messageComposerRef.value?.getTextarea?.() || null);
     const componentUid = Vue.getCurrentInstance()?.uid ?? 0;
@@ -558,6 +561,7 @@ export default {
     };
 
     const onBlur = () => {
+      inputFocused.value = false;
       // 延迟关闭以允许 mousedown 事件触发
       setTimeout(() => {
         showAutocomplete.value = false;
@@ -951,6 +955,7 @@ export default {
     return {
       store,
       inputText,
+      inputFocused,
       inputRef,
       messageComposerRef,
       inputAreaRef,
