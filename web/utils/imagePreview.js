@@ -9,10 +9,15 @@ function normalizeGalleryEntry(entry, fallbackAlt) {
   };
 }
 
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 4;
+const ZOOM_STEP = 0.25;
+
 /**
  * Opens a full-screen image preview overlay.
  * Click the backdrop or press Escape to close. Multi-image galleries support
- * previous/next controls and the Left/Right arrow keys.
+ * previous/next controls and the Left/Right arrow keys. Scroll over the image
+ * to zoom around the pointer; +, -, and 0 are keyboard alternatives.
  */
 export function openImagePreview(src, {
   alt = 'Preview',
@@ -48,12 +53,68 @@ export function openImagePreview(src, {
   img.className = 'image-preview-img';
   img.draggable = false;
 
-  const closeButton = document.createElement('button');
-  closeButton.type = 'button';
-  closeButton.className = 'image-preview-close';
-  closeButton.setAttribute('aria-label', closeLabel);
-  closeButton.setAttribute('title', closeLabel);
-  closeButton.textContent = '×';
+  const createButton = (className, label, content) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = className;
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
+    button.textContent = content;
+    return button;
+  };
+
+  const closeButton = createButton('image-preview-close', closeLabel, '×');
+
+  let scale = 1;
+  let panX = 0;
+  let panY = 0;
+  let dragState = null;
+
+  const clampPan = () => {
+    if (scale <= 1) {
+      panX = 0;
+      panY = 0;
+      return;
+    }
+    const maxX = Math.max(0, ((img.offsetWidth * scale) - overlay.clientWidth) / 2);
+    const maxY = Math.max(0, ((img.offsetHeight * scale) - overlay.clientHeight) / 2);
+    panX = Math.max(-maxX, Math.min(maxX, panX));
+    panY = Math.max(-maxY, Math.min(maxY, panY));
+  };
+
+  const updateZoom = () => {
+    clampPan();
+    img.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+    img.classList.toggle('is-zoomed', scale > 1);
+  };
+
+  const setZoom = (nextScale, anchor = null) => {
+    const previousScale = scale;
+    scale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, nextScale));
+    if (scale <= 1) {
+      panX = 0;
+      panY = 0;
+    } else if (anchor
+      && Number.isFinite(anchor.clientX)
+      && Number.isFinite(anchor.clientY)
+      && previousScale > 0
+      && scale !== previousScale) {
+      const overlayRect = overlay.getBoundingClientRect();
+      const anchorX = anchor.clientX - (overlayRect.left + overlayRect.width / 2);
+      const anchorY = anchor.clientY - (overlayRect.top + overlayRect.height / 2);
+      const ratio = scale / previousScale;
+      panX = anchorX - ((anchorX - panX) * ratio);
+      panY = anchorY - ((anchorY - panY) * ratio);
+    }
+    updateZoom();
+  };
+
+  const resetZoom = () => {
+    scale = 1;
+    panX = 0;
+    panY = 0;
+    updateZoom();
+  };
 
   let previousButton = null;
   let nextButton = null;
@@ -88,6 +149,7 @@ export function openImagePreview(src, {
         ? positionLabel(currentIndex + 1, entries.length)
         : `${currentIndex + 1} / ${entries.length}`;
     }
+    resetZoom();
   };
   const move = (delta) => {
     currentIndex = (currentIndex + delta + entries.length) % entries.length;
@@ -121,6 +183,7 @@ export function openImagePreview(src, {
     overlay.addEventListener('transitionend', remove, { once: true });
     fallbackTimer = setTimeout(remove, 250);
     document.removeEventListener('keydown', onKey);
+    window.removeEventListener('resize', updateZoom);
     if (trigger?.isConnected && typeof trigger.focus === 'function') trigger.focus();
   };
 
@@ -129,6 +192,21 @@ export function openImagePreview(src, {
     if (event.key === 'Escape') {
       event.preventDefault();
       close();
+      return;
+    }
+    if (event.key === '+' || event.key === '=') {
+      event.preventDefault();
+      setZoom(scale + ZOOM_STEP);
+      return;
+    }
+    if (event.key === '-' || event.key === '_') {
+      event.preventDefault();
+      setZoom(scale - ZOOM_STEP);
+      return;
+    }
+    if (event.key === '0') {
+      event.preventDefault();
+      resetZoom();
       return;
     }
     if (entries.length > 1 && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
@@ -150,10 +228,38 @@ export function openImagePreview(src, {
   closeButton.addEventListener('click', close);
   previousButton?.addEventListener('click', () => move(-1));
   nextButton?.addEventListener('click', () => move(1));
+  img.addEventListener('load', updateZoom);
+  img.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    const direction = event.deltaY < 0 ? 1 : -1;
+    setZoom(scale + (direction * ZOOM_STEP), event);
+  }, { passive: false });
+  img.addEventListener('pointerdown', (event) => {
+    if (scale <= 1 || event.button !== 0) return;
+    event.preventDefault();
+    dragState = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, panX, panY };
+    img.classList.add('is-dragging');
+    img.setPointerCapture?.(event.pointerId);
+  });
+  img.addEventListener('pointermove', (event) => {
+    if (!dragState || dragState.pointerId !== event.pointerId) return;
+    panX = dragState.panX + event.clientX - dragState.x;
+    panY = dragState.panY + event.clientY - dragState.y;
+    updateZoom();
+  });
+  const endDrag = (event) => {
+    if (!dragState || dragState.pointerId !== event.pointerId) return;
+    img.releasePointerCapture?.(event.pointerId);
+    dragState = null;
+    img.classList.remove('is-dragging');
+  };
+  img.addEventListener('pointerup', endDrag);
+  img.addEventListener('pointercancel', endDrag);
   overlay.addEventListener('click', (event) => {
     if (event.target === overlay) close();
   });
 
   document.addEventListener('keydown', onKey);
+  window.addEventListener('resize', updateZoom);
   return overlay;
 }
