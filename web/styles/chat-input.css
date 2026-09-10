@@ -484,8 +484,83 @@
   height: 16px;
 }
 
+.mobile-quick-send-bar {
+  display: none;
+}
+
 /* Mobile: more bottom padding for input area */
 @media (max-width: 768px) {
+  .mobile-quick-send-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: var(--session-content-width);
+    margin: 0 auto 8px;
+    padding: 2px 1px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .mobile-quick-send-bar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mobile-quick-send-button {
+    min-width: 0;
+    max-width: min(62vw, 220px);
+    min-height: 34px;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 7px 13px;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: var(--bg-input-wrapper);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.2;
+    cursor: pointer;
+    transition: border-color 0.15s, background-color 0.15s, color 0.15s, transform 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .mobile-quick-send-button > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-quick-send-button:hover:not(:disabled),
+  .mobile-quick-send-button:focus-visible {
+    border-color: var(--focus-ring);
+    background: var(--sidebar-hover);
+    color: var(--text-primary);
+  }
+
+  .mobile-quick-send-button:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 1px;
+  }
+
+  .mobile-quick-send-button:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+
+  .mobile-quick-send-button:disabled {
+    color: var(--text-muted);
+    background: var(--bg-input-wrapper);
+    box-shadow: none;
+    cursor: not-allowed;
+    opacity: 0.58;
+  }
+
   .input-area {
     padding-bottom: calc(32px + env(safe-area-inset-bottom, 0px));
   }

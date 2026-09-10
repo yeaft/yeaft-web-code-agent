@@ -99,6 +99,25 @@ export default {
         accept="image/*,text/*,.pdf,.doc,.docx,.xls,.xlsx,.json,.md,.py,.js,.ts,.css,.html"
         class="file-input-hidden"
       />
+      <div
+        v-if="quickSends.length"
+        class="mobile-quick-send-bar"
+        role="toolbar"
+        :aria-label="$t('quickSend.composer.label')"
+      >
+        <button
+          v-for="(preset, index) in quickSends"
+          :key="preset.id || index"
+          type="button"
+          class="mobile-quick-send-button"
+          :disabled="!canQuickSend"
+          :title="preset.name"
+          :aria-label="$t('quickSend.composer.send', { number: index + 1, name: preset.name })"
+          @click="sendQuick(preset)"
+        >
+          <span>{{ preset.name }}</span>
+        </button>
+      </div>
       <MessageComposer
         ref="messageComposerRef"
         v-model="inputText"

@@ -82,20 +82,38 @@ test.describe('Yeaft composer menus', () => {
         await expect(page.locator('.composer-send-modes')).toHaveCount(0);
         await expect(page.locator('.composer-send-mode-trigger')).toHaveCount(0);
         await expect(page.locator('.composer-send-mode-menu')).toHaveCount(0);
+        const quickBar = page.locator('.mobile-quick-send-bar');
+        const quickButtons = quickBar.locator('.mobile-quick-send-button');
+        if (width === 320) {
+          await expect(quickBar).toBeVisible();
+          await expect(quickButtons).toHaveCount(5);
+          await expect(quickButtons.first()).toHaveText('Preset 1 with a long descriptive name');
+        } else {
+          await expect(quickBar).toBeHidden();
+        }
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         const input = page.locator('.yeaft-session-input textarea');
         await input.fill('quick message');
         await page.screenshot({ path: testInfo.outputPath(`quick-sends-${theme}-${width}.png`) });
-        await input.focus();
-        await expect(input).toBeFocused();
-        await page.keyboard.press('Alt+Digit1');
+        if (width === 320) {
+          await quickButtons.first().click();
+        } else {
+          await input.focus();
+          await expect(input).toBeFocused();
+          await page.keyboard.press('Alt+Digit1');
+        }
         await expect(input).toHaveValue('');
         const wire = await page.evaluate(() => window.__quickSendWire.find(msg => msg.type === 'yeaft_session_send'));
         expect(wire.quickSend).toEqual({ model: 'my-proxy/gpt-5.6-sol', effort: 'medium', maxOutputTokens: 2048 });
         await page.evaluate(() => { window.Pinia.useChatStore().connectionState = 'reconnecting'; });
         await input.fill('retained while offline');
-        await input.focus();
-        await page.keyboard.press('Alt+Digit1');
+        if (width === 320) {
+          await expect(quickButtons.first()).toBeDisabled();
+          await quickButtons.first().click({ force: true });
+        } else {
+          await input.focus();
+          await page.keyboard.press('Alt+Digit1');
+        }
         await expect(input).toHaveValue('retained while offline');
         await expect.poll(() => page.evaluate(() => window.__quickSendWire.filter(msg => msg.type === 'yeaft_session_send').length)).toBe(1);
       });
