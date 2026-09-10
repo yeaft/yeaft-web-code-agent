@@ -272,6 +272,40 @@ export function apportionToBuckets(realTotal, estMessage, estTool) {
 }
 
 /**
+ * Apportion a provider-reported input total across the four request sections
+ * estimated by the engine. Largest-remainder allocation keeps integer buckets
+ * deterministic and guarantees that their sum equals the provider total.
+ */
+export function apportionRequestInput(realTotal, estimate) {
+  const total = Math.max(0, Math.floor(Number(realTotal) || 0));
+  const source = estimate && typeof estimate === 'object' ? estimate : {};
+  const entries = [
+    ['systemPrompt', Math.max(0, Number(source.systemPromptTokens) || 0)],
+    ['historyMessages', Math.max(0, Number(source.historyMessageTokens) || 0)],
+    ['tools', Math.max(0, Number(source.toolDefinitionTokens) || 0)],
+    ['currentTurn', Math.max(0, Number(source.currentTurnTokens) || 0)],
+  ];
+  const estimatedTotal = entries.reduce((sum, [, value]) => sum + value, 0);
+  const result = { systemPrompt: 0, historyMessages: 0, tools: 0, currentTurn: 0 };
+  if (total === 0) return result;
+  if (estimatedTotal === 0) {
+    result.currentTurn = total;
+    return result;
+  }
+
+  const shares = entries.map(([key, value], index) => {
+    const exact = (value / estimatedTotal) * total;
+    const floor = Math.floor(exact);
+    result[key] = floor;
+    return { key, index, fraction: exact - floor };
+  });
+  let remainder = total - Object.values(result).reduce((sum, value) => sum + value, 0);
+  shares.sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+  for (let i = 0; i < remainder; i++) result[shares[i % shares.length].key] += 1;
+  return result;
+}
+
+/**
  * Format an epoch ms (number) or ISO string (string) into `HH:MM:SS`
  * using the user's local timezone, 24-hour clock. Returns '' on any
  * parse failure so the template can render a hyphen instead.

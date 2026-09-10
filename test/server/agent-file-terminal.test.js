@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as Vue from 'vue';
@@ -156,6 +156,30 @@ describe('Agent file reference resolution', () => {
     }
   });
 
+  it('confines automatic response references to the canonical workspace', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'yeaft-file-references-root-'));
+    const outside = mkdtempSync(join(tmpdir(), 'yeaft-file-references-outside-'));
+    try {
+      const fs = await import('node:fs/promises');
+      await fs.mkdir(join(root, 'images'), { recursive: true });
+      await fs.writeFile(join(root, 'images', 'inside.png'), 'inside');
+      await fs.writeFile(join(outside, 'outside.png'), 'outside');
+      symlinkSync(join(outside, 'outside.png'), join(root, 'images', 'escaped.png'));
+
+      await expect(resolveFileReferences([
+        join(root, 'images', 'inside.png'),
+        join(outside, 'outside.png'),
+        'images/escaped.png',
+        '../outside.png',
+      ], root)).resolves.toEqual([
+        { requestedPath: join(root, 'images', 'inside.png'), resolvedPath: 'images/inside.png' },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it('does not claim basename uniqueness when the entry budget truncates traversal', async () => {
     const root = mkdtempSync(join(tmpdir(), 'yeaft-file-references-budget-'));
     try {
@@ -245,6 +269,25 @@ describe('Agent file terminal forwarding', () => {
     for (const userId of createdUsers.splice(0)) userDb.deleteUser(userId);
   });
 
+  it('fails closed when a client requests automatic image preview from an old Agent', async () => {
+    const { client } = await registerRouteRequest({
+      type: 'read_file',
+      requestId: 'old-agent-image',
+      extra: { filePath: 'screens/result.png', responseImagePreview: true },
+      agentCapabilities: ['workbench_session_routes', 'workbench_request_correlation'],
+    });
+    expect(forwardToAgent).not.toHaveBeenCalled();
+    expect(sendToWebClient).toHaveBeenCalledWith(client, expect.objectContaining({
+      type: 'file_content', requestId: 'old-agent-image', agentId: 'agent-1',
+      conversationId: '_workbench:yeaft:agent-1:session-1',
+      workbenchRouteKey: 'yeaft:agent-1:session-1',
+      workbenchWorkspaceGeneration: workbenchWorkspaceGeneration(
+        'yeaft:agent-1:session-1', '/workspace/session-1',
+      ),
+      error: 'Response image preview is not supported by this Agent',
+    }));
+  });
+
   it('authorizes a Yeaft Workbench route and replaces browser cwd with canonical Session metadata', async () => {
     const suffix = `${process.pid}-${Date.now()}`;
     const user = userDb.getOrCreate(`workbench-user-${suffix}`);
@@ -262,7 +305,7 @@ describe('Agent file terminal forwarding', () => {
     });
     try {
       agents.set(agentId, {
-        capabilities: ['workbench_session_routes', 'workbench_request_correlation'],
+        capabilities: ['workbench_session_routes', 'workbench_request_correlation', 'response_image_preview'],
       });
       const handled = await handleClientWorkbench(
         'client-route',
@@ -303,6 +346,24 @@ describe('Agent file terminal forwarding', () => {
       expect(forwardToAgent.mock.calls[0][1]).not.toHaveProperty('_requestUserId');
       expect(forwardToAgent.mock.calls[0][1]).not.toHaveProperty('_requestClientId');
       expect(forwardToAgent.mock.calls[0][1].workDir).not.toBe('/browser/forged');
+
+      forwardToAgent.mockClear();
+      await handleClientWorkbench(
+        'client-route',
+        {
+          userId, role: 'pro', currentAgent: agentId,
+          currentConversation: 'shared-yeaft-conversation', workbenchRouteProtocol: 1,
+        },
+        {
+          type: 'read_file', responseImagePreview: true, filePath: 'screens/result.png',
+          agentId, workDir: '/browser/forged', workbenchRoute: route,
+        },
+        async requestedAgentId => requestedAgentId === agentId,
+      );
+      expect(forwardToAgent).toHaveBeenCalledWith(agentId, expect.objectContaining({
+        type: 'read_file', responseImagePreview: true,
+        workDir: canonicalWorkDir, filePath: 'screens/result.png',
+      }));
 
       forwardToAgent.mockClear();
       await handleClientWorkbench(
@@ -1300,6 +1361,38 @@ describe('Agent file terminal forwarding', () => {
 
     tabs.saveFile();
     expect(sent.filter(msg => msg.type === 'write_file')).toHaveLength(3);
+  });
+
+  it('revalidates automatic response image reads inside the canonical workspace', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'yeaft-response-image-root-'));
+    const outside = mkdtempSync(join(tmpdir(), 'yeaft-response-image-outside-'));
+    const sent = [];
+    const previousConfig = ctx.CONFIG;
+    const previousSend = ctx.sendToServer;
+    writeFileSync(join(workDir, 'inside.png'), Buffer.from('inside'));
+    writeFileSync(join(workDir, 'note.txt'), 'text');
+    writeFileSync(join(outside, 'outside.png'), Buffer.from('outside'));
+    symlinkSync(join(outside, 'outside.png'), join(workDir, 'escaped.png'));
+    ctx.CONFIG = { workDir };
+    ctx.sendToServer = msg => sent.push(msg);
+    try {
+      for (const [requestId, filePath] of [
+        ['inside', 'inside.png'], ['escaped', 'escaped.png'], ['text', 'note.txt'],
+      ]) {
+        await handleReadFile({
+          conversationId: '_explorer', requestId, workDir, filePath,
+          responseImagePreview: true,
+        });
+      }
+      expect(sent[0]).toMatchObject({ requestId: 'inside', binary: true, mimeType: 'image/png' });
+      expect(sent[1]).toMatchObject({ requestId: 'escaped', error: 'Response image is outside the active workspace.' });
+      expect(sent[2]).toMatchObject({ requestId: 'text', error: 'Response preview only supports image files.' });
+    } finally {
+      ctx.CONFIG = previousConfig;
+      ctx.sendToServer = previousSend;
+      rmSync(workDir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   it('rejects binary previews over 20 MB before reading file content', async () => {

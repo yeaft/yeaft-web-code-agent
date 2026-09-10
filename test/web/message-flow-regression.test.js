@@ -475,6 +475,33 @@ describe('message flow regressions', () => {
     });
   });
 
+  it('sends response image reads through the active Session route', () => {
+    storeFactories.clear();
+    runtimeSessionsStore.sessionList = [{ id: 'session-files', agentId: 'agent-files' }];
+    const store = useChatStore();
+    store.currentView = 'yeaft';
+    store.currentAgent = 'agent-files';
+    store.currentAgentInfo = {
+      id: 'agent-files', workDir: '/workspace/files',
+      capabilities: ['file_editor', 'workbench_session_routes', 'response_image_preview'],
+    };
+    store.workbenchRouteProtocolSupported = true;
+    store.yeaftAgentId = 'agent-files';
+    store.yeaftConversationId = 'yeaft-agent-files';
+    store.yeaftConversationIdsByAgent = { 'agent-files': 'yeaft-agent-files' };
+    store.yeaftActiveSessionFilter = 'session-files';
+    store.sendWsMessage = vi.fn(() => true);
+
+    expect(store.requestMessageImagePreview('screens/result.png')).toEqual(expect.any(String));
+    expect(store.sendWsMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'read_file', responseImagePreview: true, filePath: 'screens/result.png',
+      agentId: 'agent-files', conversationId: 'yeaft-agent-files', workDir: '/workspace/files',
+      workbenchRoute: {
+        runtimeProvider: 'yeaft', agentId: 'agent-files', sessionId: 'session-files',
+      },
+    }));
+  });
+
   it.each([
     ['old Agent', true, ['file_reference_resolution']],
     ['old Server', false, ['file_reference_resolution', 'workbench_session_routes']],
@@ -1992,7 +2019,9 @@ describe('message flow regressions', () => {
     const previewImage = previewOverlay.querySelector('.image-preview-img');
     expect(previewImage.getAttribute('src')).toBe('/preview-a.png');
     expect(previewOverlay.querySelector('.image-preview-position').textContent).toBe('1 / 3');
-    expect(previewOverlay.querySelector('.image-preview-zoom-controls')).toBeNull();
+    const zoomControls = previewOverlay.querySelector('.image-preview-zoom-controls');
+    expect(zoomControls).not.toBeNull();
+    expect(zoomControls.querySelector('.image-preview-zoom-reset').textContent).toBe('100%');
     Object.defineProperties(previewOverlay, {
       clientWidth: { configurable: true, value: 800 },
       clientHeight: { configurable: true, value: 600 },
@@ -2013,8 +2042,13 @@ describe('message flow regressions', () => {
     });
     previewImage.dispatchEvent(zoomEvent);
     expect(zoomEvent.defaultPrevented).toBe(true);
+    expect(zoomControls.querySelector('.image-preview-zoom-reset').textContent).toBe('125%');
     expect(previewImage.style.transform).toBe('translate(-50px, 0px) scale(1.25)');
     expect(previewImage.classList.contains('is-zoomed')).toBe(true);
+    zoomControls.querySelector('.image-preview-zoom-reset').click();
+    expect(zoomControls.querySelector('.image-preview-zoom-reset').textContent).toBe('100%');
+    zoomControls.querySelectorAll('.image-preview-zoom-button')[1].click();
+    expect(zoomControls.querySelector('.image-preview-zoom-reset').textContent).toBe('125%');
     previewOverlay.querySelector('.image-preview-next').click();
     expect(previewImage.getAttribute('src')).toBe('/preview-b.png');
     expect(previewImage.style.transform).toBe('translate(0px, 0px) scale(1)');

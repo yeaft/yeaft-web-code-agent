@@ -5,6 +5,7 @@ const LINE_HASH = /#L(\d+)(?:C\d+)?$/i;
 const LINE_SUFFIX = /:(\d+)(?::\d+)?$/;
 const VERSION_BASENAME = /^v?\d+(?:\.\d+){1,}(?:[-+][A-Za-z\d.-]+)?$/i;
 const ARCHIVE_EXTENSION = /\.(?:7z|bz2?|gz|rar|tar|tgz|xz|zip|zst)$/i;
+const RASTER_IMAGE_EXTENSION = /\.(?:png|jpe?g|gif|webp|bmp|ico)$/i;
 const KNOWN_EXTENSIONLESS_FILE = /^(?:README|LICENSE|CHANGELOG|CONTRIBUTING|Dockerfile|Makefile)(?:[-_.][A-Za-z\d-]+)?$/i;
 const TEXT_TOKEN = /(?:file:\/\/\/|[A-Za-z]:[\\/]|(?:\.{1,2}|~)?[\\/])?[A-Za-z\d_.@+-]+(?:[\\/][A-Za-z\d_.@+-]+)*(?:#L\d+(?:C\d+)?|:\d+(?::\d+)?)?/gi;
 const PROTECTED_HTML = /(<pre\b[^>]*>[\s\S]*?<\/pre>|<a\b[^>]*>[\s\S]*?<\/a>|<code\b[^>]*>[\s\S]*?<\/code>)|(<[^>]+>)|([^<]+)/gi;
@@ -67,7 +68,30 @@ function collectTextFileReferences(text, references) {
   }
 }
 
-export function collectMessageFileReferences(html) {
+export function resolveMessageImageFileReference(src, workDir = '') {
+  if (typeof src !== 'string') return null;
+  const value = decodeHtml(src.trim());
+  if (!value || /^\/\//.test(value) || /^\/(?:api|assets)(?:\/|$)/i.test(value)) return null;
+  if (value.startsWith('/') && !/^file:\/\//i.test(value)) {
+    const candidate = value.split(/[?#]/, 1)[0].replaceAll('\\', '/');
+    const workspace = String(workDir || '').replaceAll('\\', '/').replace(/\/+$/, '');
+    if (!workspace || (candidate !== workspace && !candidate.startsWith(`${workspace}/`))) return null;
+  }
+  const reference = resolveMessageFileReference(value);
+  return reference && RASTER_IMAGE_EXTENSION.test(reference.path) ? reference : null;
+}
+
+export function collectMessageImageReferences(html, workDir = '') {
+  if (typeof html !== 'string' || !html) return [];
+  const references = new Set();
+  for (const match of html.matchAll(/<img\b[^>]*?src=(['"])(.*?)\1[^>]*>/gi)) {
+    const reference = resolveMessageImageFileReference(match[2], workDir);
+    if (reference) references.add(reference.path);
+  }
+  return [...references];
+}
+
+export function collectMessageFileReferences(html, workDir = '') {
   if (typeof html !== 'string' || !html) return [];
   const references = new Set();
   html.replace(PROTECTED_HTML, (_match, protectedElement, tag, text) => {
@@ -87,6 +111,7 @@ export function collectMessageFileReferences(html) {
     if (!tag) collectTextFileReferences(text, references);
     return '';
   });
+  for (const path of collectMessageImageReferences(html, workDir)) references.add(path);
   return [...references];
 }
 
@@ -104,12 +129,25 @@ function decorateTextFileReferences(text, resolved) {
 
 /** Render only Agent-confirmed references as file links. Unconfirmed Markdown
  * file anchors are downgraded to plain text; inline code remains inline code. */
-export function decorateMessageFileReferences(html, resolvedReferences = {}) {
+export function decorateMessageFileReferences(html, resolvedReferences = {}, resolvedImageUrls = {}, workDir = '') {
   if (typeof html !== 'string' || !html) return html || '';
   const resolved = resolvedReferences instanceof Map
     ? resolvedReferences
     : new Map(Object.entries(resolvedReferences || {}));
-  const anchors = html.replace(/<a\s+([^>]*?href=(['"])(.*?)\2[^>]*)>([\s\S]*?)<\/a>/gi,
+  const imageUrls = resolvedImageUrls instanceof Map
+    ? resolvedImageUrls
+    : new Map(Object.entries(resolvedImageUrls || {}));
+  const images = html.replace(/<img\b([^>]*?)src=(['"])(.*?)\2([^>]*)>/gi,
+    (match, before, quote, src, after) => {
+      const reference = resolveMessageImageFileReference(src, workDir);
+      if (!reference) return match;
+      const previewUrl = imageUrls.get(reference.path);
+      if (!previewUrl) {
+        return `<span class="message-local-image-pending" data-local-image-path="${escapeAttribute(reference.path)}"></span>`;
+      }
+      return `<img${before}src="${escapeAttribute(previewUrl)}"${after} data-local-image-path="${escapeAttribute(reference.path)}">`;
+    });
+  const anchors = images.replace(/<a\s+([^>]*?href=(['"])(.*?)\2[^>]*)>([\s\S]*?)<\/a>/gi,
     (match, _attrs, _quote, href, label) => {
       const reference = resolveMessageFileReference(href);
       if (!reference) return match;

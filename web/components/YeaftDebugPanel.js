@@ -26,7 +26,7 @@
  *   - turn   [copy turn]              → markdown summary
  */
 import { buildDreamDebugItems, filterDreamDebugItems, previewText } from './dream-debug-model.js';
-import { splitTokenBreakdown, apportionToBuckets, formatClockTime, reconstructDebugRawRequest } from './yeaft-debug-helpers.js';
+import { splitTokenBreakdown, apportionToBuckets, apportionRequestInput, formatClockTime, reconstructDebugRawRequest } from './yeaft-debug-helpers.js';
 
 const INITIAL_REQUEST_HISTORY_LIMIT = 1;
 const SEARCH_REQUEST_HISTORY_LIMIT = 5;
@@ -732,10 +732,17 @@ export default {
       const realOut = Math.max(0, Number(u.outputTokens) || 0);
       const realTotal = Math.max(0, this.usageTotalTokens(u) || (realIn + realOut));
       const inSplit = apportionToBuckets(realIn, est.inputMessageTokens, est.inputToolTokens);
+      const requestSplit = loop.requestInputBreakdown
+        ? apportionRequestInput(realIn, loop.requestInputBreakdown)
+        : null;
       const outSplit = apportionToBuckets(realOut, est.outputMessageTokens, est.outputToolTokens);
       return {
         inputMessage: inSplit.message,
         inputTool: inSplit.tool,
+        inputSystemPrompt: requestSplit?.systemPrompt ?? null,
+        inputHistoryMessages: requestSplit?.historyMessages ?? null,
+        inputToolDefinitions: requestSplit?.tools ?? null,
+        inputCurrentTurn: requestSplit?.currentTurn ?? null,
         outputMessage: outSplit.message,
         outputTool: outSplit.tool,
         inputTotal: realIn,
@@ -812,6 +819,22 @@ export default {
       const t = Number(total) || 0;
       if (t <= 0 || p <= 0) return '0%';
       return `${Math.round((p / t) * 100)}%`;
+    },
+    hasRequestInputBreakdown(b) {
+      return b?.inputSystemPrompt != null
+        && b?.inputHistoryMessages != null
+        && b?.inputToolDefinitions != null
+        && b?.inputCurrentTurn != null;
+    },
+    requestInputBreakdownTitle(b) {
+      const x = b || {};
+      return this.$t('yeaft.debugInputTokenBreakdown', {
+        total: Number(x.inputTotal) || 0,
+        system: Number(x.inputSystemPrompt) || 0,
+        history: Number(x.inputHistoryMessages) || 0,
+        tools: Number(x.inputToolDefinitions) || 0,
+        current: Number(x.inputCurrentTurn) || 0,
+      });
     },
     tokenBreakdownTitle(b) {
       const x = b || {};
@@ -1584,8 +1607,14 @@ export default {
                     <span class="yeaft-debug-loop-total" :title="formatUsageBreakdown(loop.usage)">{{ formatTokens(usageTotalTokens(loop.usage)) }} tok</span>
                     <span
                       class="yeaft-debug-loop-token"
-                      :title="'input total ' + loop.tokenBreakdown.inputTotal + ' = message ' + loop.tokenBreakdown.inputMessage + ' + tool ' + loop.tokenBreakdown.inputTool + ' (estimated split)'"
+                      :title="hasRequestInputBreakdown(loop.tokenBreakdown) ? requestInputBreakdownTitle(loop.tokenBreakdown) : ('input total ' + loop.tokenBreakdown.inputTotal + ' = message ' + loop.tokenBreakdown.inputMessage + ' + tool ' + loop.tokenBreakdown.inputTool + ' (estimated split)')"
                     >in {{ formatTokens(usageTotalInputTokens(loop.usage)) }}</span>
+                    <template v-if="hasRequestInputBreakdown(loop.tokenBreakdown)">
+                      <span class="yeaft-debug-loop-token" :title="requestInputBreakdownTitle(loop.tokenBreakdown)">{{ $t('yeaft.debugInputSystemShort') }} {{ formatTokens(loop.tokenBreakdown.inputSystemPrompt) }}</span>
+                      <span class="yeaft-debug-loop-token" :title="requestInputBreakdownTitle(loop.tokenBreakdown)">{{ $t('yeaft.debugInputHistoryShort') }} {{ formatTokens(loop.tokenBreakdown.inputHistoryMessages) }}</span>
+                      <span class="yeaft-debug-loop-token" :title="requestInputBreakdownTitle(loop.tokenBreakdown)">{{ $t('yeaft.debugInputToolsShort') }} {{ formatTokens(loop.tokenBreakdown.inputToolDefinitions) }}</span>
+                      <span class="yeaft-debug-loop-token" :title="requestInputBreakdownTitle(loop.tokenBreakdown)">{{ $t('yeaft.debugInputCurrentShort') }} {{ formatTokens(loop.tokenBreakdown.inputCurrentTurn) }}</span>
+                    </template>
                     <span
                       class="yeaft-debug-loop-token"
                       :title="'output total ' + loop.tokenBreakdown.outputTotal + ' = message ' + loop.tokenBreakdown.outputMessage + ' + tool ' + loop.tokenBreakdown.outputTool + ' (estimated split)'"
