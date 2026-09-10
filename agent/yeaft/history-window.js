@@ -1106,7 +1106,13 @@ export function fitProviderRequestToContext(messages, options = {}) {
   const messageBudget = Math.max(0, contextWindow - staticTokens);
   const split = Math.max(0, Math.min(source.length,
     Number.isInteger(options.historyMessageCount) ? options.historyMessageCount : 0));
-  const messageCap = bucketCap(options.maxMessageCount, DEFAULT_RUNTIME_CACHE_MESSAGE_CAP);
+  // The runtime cache's 256-row cap is a history-storage concern, not a model
+  // request limit. Current-turn tool loops may legitimately exceed it while
+  // remaining inside the model window. Only enforce a cap when the caller
+  // explicitly supplies one.
+  const messageCap = options.maxMessageCount === undefined
+    ? Number.MAX_SAFE_INTEGER
+    : bucketCap(options.maxMessageCount, Number.MAX_SAFE_INTEGER);
   const historySource = source.slice(0, split);
   const currentSource = source.slice(split);
 

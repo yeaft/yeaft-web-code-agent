@@ -2909,10 +2909,9 @@ export class Engine {
         // query tape remain complete; no summary is generated and no history
         // rows are rewritten. This also protects later tool-loop requests,
         // not just the initial snapshot assembled by the bridge.
-        const continuationCost = pendingContinuationForRequest
-          ? estimateMessageTokens(pendingContinuationForRequest) : 0;
-        const historyBudget = Math.max(0,
-          (requestConfig.messageTokenBudget || 32768) - continuationCost);
+        // Retry continuation is part of the active turn. Like the opening user
+        // row and tool-loop traffic, it must not consume the 32K history budget.
+        const historyBudget = Math.max(0, requestConfig.messageTokenBudget || 32768);
         const buckets = useMessageHistory ? buildHistoryBuckets(conversationMessages, {
           prompt,
           relatedTurns: relatedHistoryTurns,

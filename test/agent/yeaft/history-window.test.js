@@ -96,6 +96,23 @@ describe('deterministic provider history window', () => {
     expect(results).toEqual(owners);
   });
 
+  it('does not apply the history cache row cap to an in-window current turn', () => {
+    const messages = [
+      { role: 'user', content: 'current request' },
+      ...Array.from({ length: 300 }, (_, index) => ({
+        role: 'assistant', content: `progress ${index}`,
+      })),
+    ];
+    const fitted = fitProviderRequestToContext(messages, {
+      contextWindow: 100_000,
+      outputReserve: 1_000,
+      historyMessageCount: 0,
+    });
+
+    expect(fitted.messages).toHaveLength(messages.length);
+    expect(fitted.meta.droppedCurrentMessages).toBe(0);
+  });
+
   it('counts signed thinking blocks and JSON-serialized function outputs', () => {
     const thinking = {
       thinking: 'x'.repeat(100_000),
