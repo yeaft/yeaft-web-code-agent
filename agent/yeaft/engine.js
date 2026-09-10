@@ -2836,6 +2836,12 @@ export class Engine {
         else discoveredToolNames.delete(name);
       }
       toolDefs = this.#getToolDefs(effectiveCollabToolPolicy, activeToolNames);
+      // Only a child registry supplies this policy. Budget exhaustion closes
+      // investigation, not the evidence-bearing conversation: reserve one
+      // tool-free response for a useful handoff, under the existing signal.
+      const executionPolicy = isSubAgent
+        ? this.#toolRegistry?.prepareProviderRequest?.() : null;
+      if (executionPolicy?.finalize) toolDefs = [];
       ({ resolvedSkillContent, resolvedSkills, skillResolutionError } = resolveSkillPromptState({
         skillManager: this.#skillManager,
         prompt,
@@ -2853,6 +2859,7 @@ export class Engine {
       reportedSkillNames = currentSkillNames;
       reportedSkillError = skillResolutionError;
       systemPrompt = buildCurrentSystemPrompt();
+      if (executionPolicy?.prompt) systemPrompt += `\n\n${executionPolicy.prompt}`;
 
       try {
         // Resolve effort per provider request so a saved Session effort takes
@@ -2966,6 +2973,7 @@ export class Engine {
         const requestMaxOutputTokens = Math.max(1, Math.min(
           requestConfig.maxOutputTokens || resolveMaxOutputTokens(currentModel, requestConfig),
           resolveMaxOutputTokens(currentModel, requestConfig),
+          executionPolicy?.maxOutputTokens || Infinity,
         ));
         const toolSchemaTokens = toolDefs.length > 0
           ? approxTokens(JSON.stringify(toolDefs)) : 0;
@@ -3166,6 +3174,9 @@ export class Engine {
               }
               break;
             case 'tool_call':
+              // No dispatch or orphan protocol rows during the reserved report,
+              // even if an adapter ignores the absence of tool definitions.
+              if (executionPolicy?.finalize) break;
               if (toolCalls.length === 0) {
                 traceRequest('llm.first_tool_call', {
                   durationMs: perfNowMs() - requestPerfStart,
@@ -3409,7 +3420,7 @@ export class Engine {
         // the caller. Replaying that request would publish a duplicate call and
         // leave ambiguous execution ownership, so only pre-tool failures are
         // eligible for transparent retry or model fallback.
-        const canReplayProviderRequest = toolCalls.length === 0;
+        const canReplayProviderRequest = toolCalls.length === 0 && !executionPolicy?.finalize;
         if (earlyIsContextOverflow && canReplayProviderRequest
           && contextOverflowRecoveryAttempts < 3) {
           contextOverflowRecoveryAttempts += 1;
@@ -3807,6 +3818,14 @@ export class Engine {
       // Private router metadata is stripped only at the next wire boundary.
       conversationMessages.push(assistantMsg);
       fullResponseText += responseText;
+
+      // The reporting allowance is exactly one provider response, not another
+      // investigation loop. Ignore unsolicited calls even from a noncompliant
+      // adapter, and never auto-continue a truncated reporting response.
+      if (executionPolicy?.finalize) {
+        yield { type: 'turn_end', turnNumber, stopReason: 'budget_report', threadId, terminal: true };
+        break;
+      }
 
       // ─── Handle max_tokens → auto-continue ────────────
       // A suppressed call leaves a synthetic reminder as the latest user

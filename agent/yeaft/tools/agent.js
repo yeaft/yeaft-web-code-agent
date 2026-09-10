@@ -237,7 +237,9 @@ Pick a preset persona to pre-wire a tool subset and model tier:
 Guidelines:
 - Give a clear, focused mission — what "done" looks like
 - Use expected_output when the return shape matters
-- Delegate only a bounded independent result; do simple work directly. Set scope, evidence and stopping conditions in mission.
+- Delegate one clear result with the workspace/base and completion evidence. Let the child choose its steps; do simple work directly. Split unrelated goals, not individual reads.
+- Usually omit budget: defaults are safety ceilings, not targets. Do not impose a tiny tool limit on a multi-file review. Tool exhaustion reserves one tool-free handoff within the remaining time/token limits; unfinished work stays budget_exceeded.
+- Check that the persona has the required tools (reviewer has GitRead, not Bash). If blocked, return evidence and the blocker instead of hunting for unavailable capabilities or repeatedly retrying.
 - Inspect execution counters and partial evidence before extending budgets; do not respawn the same exhausted mission automatically.
 
 Async orchestration:
@@ -268,7 +270,9 @@ max_tokens 在 provider usage 到达时检查；max_turns 是 query turn 数，�
 使用指南：
 - 给出清晰聚焦的 mission——"完成"是什么样子
 - 当返回结构重要时使用 expected_output
-- 只委派有界且独立的结果；简单工作直接做。在 mission 中写清范围、证据和停止条件。
+- 一次只委派一个明确结果，提供工作目录/基线和完成证据，让子 Agent 自主选择步骤；简单工作直接做。拆分不相关目标，不要拆成逐个读取任务。
+- 通常省略 budget：默认值是安全上限，不是执行目标。不要给多文件 review 人为设置极小的工具额度。工具耗尽后会在剩余时间/token预算内留一次无工具交付机会，未完成仍返回 budget_exceeded。
+- 确认 persona 具备必要工具（reviewer 有 GitRead，没有 Bash）；能力受阻时交付已有证据和阻塞点，不反复寻找不可用能力或重试。
 - 扩大预算前检查实际执行计数和已有证据；不要自动重启同一个耗尽预算的任务。
 
 异步编排流程：

@@ -85,7 +85,7 @@ const LAST_RESULT_MAX_CHARS = 8 * 1024;
  * @param {ToolRegistry|null} parentRegistry
  * @returns {ToolRegistry}
  */
-export function buildChildToolRegistry(parentRegistry, { agent = null, stopBudget = null } = {}) {
+export function buildChildToolRegistry(parentRegistry, { agent = null } = {}) {
   const preset = agent?.personaData || getPersona(agent?.persona);
   // Implementers retain work tools; read-only roles are a structural allowlist.
   // Resolve legacy template names (Read) to canonical FileRead before filtering.
@@ -93,7 +93,7 @@ export function buildChildToolRegistry(parentRegistry, { agent = null, stopBudge
     ? new Set([...preset.tools.map(name => parentRegistry?.get(name)?.name || (name === 'Read' ? 'FileRead' : name)), 'DiscoverTools'])
     : null;
   const child = new SubAgentToolRegistry({
-    agent, stopBudget,
+    agent,
     allows: tool => !RESTRICTED_TOOLS.has(tool.name) && (!allowed || allowed.has(tool.name)),
   });
   if (!parentRegistry || typeof parentRegistry.getAllTools !== 'function') {
@@ -164,10 +164,7 @@ export function startSubAgent(agent, deps = {}) {
     // sub-agent (matches parent VP persona memory).
     agent.budget = resolveSubAgentBudget(agent.budget, agent.persona);
     agent.execution = agent.execution || createExecutionStats();
-    const childRegistry = buildChildToolRegistry(deps.parentToolRegistry, {
-      agent,
-      stopBudget: reason => stopForBudget(agent, reason),
-    });
+    const childRegistry = buildChildToolRegistry(deps.parentToolRegistry, { agent });
     subEngine = new Engine({
       adapter: deps.adapter,
       trace: deps.trace,
@@ -456,6 +453,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
       agent.lastResult = '';
       agent.result = '';
       let assistantText = '';
+      let budgetReportText = '';
       let endedNormally = false;
       let streamError = null;
       const turnTokenStart = agent.liveness?.tokenCount || 0;
@@ -501,6 +499,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
 
           if (evt && evt.type === 'text_delta' && typeof evt.text === 'string') {
             assistantText += evt.text;
+            if (agent.budgetReportStarted) budgetReportText += evt.text;
             // Mid-stream visibility: keep lastResult fresh so a parent
             // calling WaitAgent during a long generation sees what the
             // child is currently saying, not stale text from the prior
@@ -527,7 +526,8 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
           }
         }
       } catch (err) {
-        if (!agent.budgetStopReason) {
+        streamError = err && err.message ? err.message : String(err);
+        if (!agent.budgetStopReason && !agent.toolBudgetReason) {
           transitionTerminal(agent, STATUS.FAILED, {
             error: err && err.message ? err.message : String(err),
             diagnostic: 'query_error',
@@ -541,6 +541,24 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
         agent.result = buildWallTimeBudgetResult(agent, agent.budgetStopReason);
         transitionTerminal(agent, STATUS.COMPLETED, {
           error: agent.budgetStopReason, diagnostic: 'execution_budget', deps,
+        });
+        return;
+      }
+
+      if (isTerminalAgentStatus(agent.status)) return;
+
+      if (agent.toolBudgetReason) {
+        // A report is evidence, not proof that the assigned review completed.
+        // Prefer its complete text over the concatenated progress preview.
+        const partial = budgetReportText.trim() || assistantText.trim();
+        agent.partial_output = partial || 'No final report was produced before the tool limit. The investigation is incomplete; inspect the execution log before retrying.';
+        agent.result = buildWallTimeBudgetResult(agent, agent.toolBudgetReason);
+        agent.result.reporting = { attempted: !!agent.budgetReportStarted, received: !!budgetReportText.trim() };
+        if (streamError) agent.result.reporting.error = streamError;
+        agent.usage.turns += 1;
+        agent.result.usage = { ...agent.usage };
+        transitionTerminal(agent, STATUS.COMPLETED, {
+          error: agent.toolBudgetReason, diagnostic: 'execution_budget_report', deps,
         });
         return;
       }

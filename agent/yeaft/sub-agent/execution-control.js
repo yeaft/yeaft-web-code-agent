@@ -25,17 +25,36 @@ function fingerprint(value) {
  * Parent Active Tool Set checks remain independent and must not be bypassed.
  */
 export class SubAgentToolRegistry extends ToolRegistry {
-  constructor({ allows = () => true, agent = null, stopBudget = null } = {}) {
+  constructor({ allows = () => true, agent = null } = {}) {
     super();
     this.allows = allows;
     this.agent = agent;
-    this.stopBudget = stopBudget;
     this.recentFingerprints = [];
   }
 
   register(tool) {
     if (this.allows(tool)) super.register(tool);
     return this;
+  }
+
+  /** Provider-boundary guidance: leave the original tool results untouched. */
+  prepareProviderRequest() {
+    const agent = this.agent;
+    if (!agent) return null;
+    const stats = agent.execution || createExecutionStats();
+    const limit = agent.budget?.max_tool_calls;
+    if (limit && stats.toolCalls >= limit) {
+      agent.toolBudgetReason ||= `max_tool_calls (${limit}) reached`;
+      agent.budgetReportStarted = true;
+      return {
+        finalize: true,
+        maxOutputTokens: 4096,
+        prompt: `[Sub-agent execution limit] Investigation has stopped after ${stats.toolCalls} tool executions. No more tools are available. Use the evidence already in this conversation to return your final handoff now: conclusion, supported findings, actual verification, and any unexamined scope or blockers. Do not claim a complete review if checks remain unfinished. This is the single reserved reporting response; do not plan further work.`,
+      };
+    }
+    return stats.warning ? {
+      prompt: `[Sub-agent execution budget] ${stats.toolCalls}/${limit} tools used. Finish the assigned result using existing evidence where possible. Investigate only essential remaining unknowns, then return a conclusion.`,
+    } : null;
   }
 
   async execute(name, input, ctx = {}) {
@@ -50,9 +69,10 @@ export class SubAgentToolRegistry extends ToolRegistry {
     const stats = agent.execution || (agent.execution = createExecutionStats());
     const limit = agent.budget?.max_tool_calls;
     if (limit !== undefined && stats.toolCalls >= limit) {
-      const reason = `max_tool_calls (${limit}) reached; return partial evidence to the parent before extending scope`;
-      this.stopBudget?.(reason);
-      throw new Error(reason);
+      // Fence dispatch without aborting already reserved parallel calls. The
+      // next provider boundary gets one tool-free response with their evidence.
+      agent.toolBudgetReason ||= `max_tool_calls (${limit}) reached`;
+      throw new Error(`${agent.toolBudgetReason}; no further tools may execute. Return findings from the available evidence.`);
     }
     stats.toolCalls += 1;
     agent.usage ||= { tokens: 0, turns: 0, startedAt: Date.now() };

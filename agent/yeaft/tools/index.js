@@ -33,6 +33,7 @@ import discoverTools from './discover-tools.js';
 
 // --- P0 File tools ---
 import bash from './bash.js';
+import gitRead from './git-read.js';
 import fileRead from './file-read.js';
 import fileWrite from './file-write.js';
 import fileEdit from './file-edit.js';
@@ -101,6 +102,7 @@ export const allTools = [
 
   // P0 File
   bash,
+  gitRead,
   fileRead,
   fileWrite,
   fileEdit,
