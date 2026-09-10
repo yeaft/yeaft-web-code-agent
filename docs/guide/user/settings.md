@@ -16,7 +16,7 @@ Open via the **⚙ gear** at the bottom of the sidebar. Settings live in a **fix
 
 Create up to five presets under **Agent settings → Quick send**. Each preset stores its name, model, effort and maximum output tokens in that Agent instance's `config.json`. Blank effort uses the runtime default. Blank maximum output tokens uses the selected model's resolved output limit, not the Session's previous model budget; enter a positive integer to use a smaller budget. The request is always capped to the actual model's output limit, including fallback retries. Each Agent has its own model catalog and presets.
 
-When enabled, native Yeaft Session Composers show numbered send buttons between attachments and model controls on desktop, or in a separate row on mobile. They send the current draft, attachments and quote with settings for that message only; Session defaults and ordinary Enter sending are unchanged. CLI Chat and Work Center do not show these buttons.
+When enabled, native Yeaft Session Composers add a small mode selector beside the ordinary send button. Open it to send the current draft, attachments and quote with one preset, or use that preset's shortcut directly. Session defaults and ordinary Enter sending are unchanged. CLI Chat and Work Center do not show this selector.
 
 Defaults: terminal `Alt/Option+T`, files `Alt/Option+O`, Git workbench `Alt/Option+G`, new Session `Alt/Option+N`, and quick-send slots `Alt/Option+1…5`. Known browser/application conflicts such as `Ctrl+T` and `Ctrl+F` are rejected; operating systems and extensions may reserve additional combinations. Global actions avoid inputs, editors, terminals and dialogs. Quick-send bindings only operate in the Composer and ignore IME composition and key repeat.
 

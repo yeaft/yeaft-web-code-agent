@@ -25,10 +25,9 @@
   gap: 8px;
   min-width: 0;
   margin: 0;
-  padding: 10px;
-  border: 1px solid var(--border-light);
-  border-radius: 12px;
-  background: var(--surface-1);
+  padding: 8px 2px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border-light);
 }
 
 .quick-send-entry legend {

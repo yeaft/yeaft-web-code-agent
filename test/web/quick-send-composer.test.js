@@ -41,18 +41,16 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); vi.restoreAllMocks(); });
 
 describe('Agent quick-send Composer', () => {
-  it('defaults hidden; opt-in shows numbered buttons between attachment and model', async () => {
+  it('defaults hidden; opt-in adds a send-mode menu beside the ordinary send button', async () => {
     await create();
-    expect(wrapper.find('.composer-quick-sends').exists()).toBe(false);
+    expect(wrapper.find('.composer-send-modes').exists()).toBe(false);
     preferences.value.showQuickSends = true;
     await Vue.nextTick();
     expect(store.sendWsMessage).toHaveBeenCalledWith({ type: 'get_llm_config', agentId: 'a1' });
-    const button = wrapper.get('.composer-quick-send');
-    expect(button.text()).toBe('1');
-    expect(button.attributes('title')).toContain('p/fast');
-    expect(button.attributes('disabled')).toBeDefined();
-    expect(wrapper.get('.attach-btn').element.compareDocumentPosition(button.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(button.element.compareDocumentPosition(wrapper.get('.model-slot').element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const trigger = wrapper.get('.composer-send-mode-trigger');
+    expect(trigger.attributes('disabled')).toBeDefined();
+    expect(wrapper.get('.model-slot').element.compareDocumentPosition(trigger.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(trigger.element.compareDocumentPosition(wrapper.get('.send-btn:not(.composer-send-mode-trigger)').element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('sends one-shot settings with quote, then ordinary Enter has no override', async () => {
@@ -61,7 +59,15 @@ describe('Agent quick-send Composer', () => {
     const quote = { author: 'User', content: 'earlier' };
     await create({ sendFn, quote });
     await wrapper.get('textarea').setValue('hello');
-    await wrapper.get('.composer-quick-send').trigger('click');
+    await wrapper.get('.composer-send-mode-trigger').trigger('click');
+    const option = wrapper.get('.composer-send-mode-option');
+    expect(option.text()).toContain('Fast');
+    expect(option.text()).toContain('Ctrl+E');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await Vue.nextTick();
+    expect(wrapper.find('.composer-send-mode-menu').exists()).toBe(false);
+    await wrapper.get('.composer-send-mode-trigger').trigger('click');
+    await wrapper.get('.composer-send-mode-option').trigger('click');
     expect(sendFn).toHaveBeenLastCalledWith('hello', undefined, quote,
       { model: 'p/fast', effort: 'low', maxOutputTokens: 2048 });
     expect(wrapper.get('textarea').element.value).toBe('');
@@ -84,7 +90,7 @@ describe('Agent quick-send Composer', () => {
     expect(sendFn).toHaveBeenCalledTimes(1);
     store.currentAgent = 'a2';
     await Vue.nextTick();
-    expect(wrapper.find('.composer-quick-send').exists()).toBe(false);
+    expect(wrapper.find('.composer-send-modes').exists()).toBe(false);
     await wrapper.get('textarea').trigger('keydown', { key: 'e', ctrlKey: true });
     expect(sendFn).toHaveBeenCalledTimes(1);
   });
