@@ -111,6 +111,13 @@ test.describe('Yeaft composer menus', () => {
           await input.press('Alt+Digit1');
         }
         await expect(input).toHaveValue('');
+        if (width === 320) {
+          await expect(input).not.toBeFocused();
+          await expect(quickBar).toBeHidden();
+          await expect(page.locator('.yeaft-session-input .input-wrapper')).not.toHaveCSS('box-shadow', /rgb/);
+        } else {
+          await expect(input).toBeFocused();
+        }
         const wire = await page.evaluate(() => window.__quickSendWire.find(msg => msg.type === 'yeaft_session_send'));
         expect(wire.quickSend).toEqual({ model: 'my-proxy/gpt-5.6-sol', effort: 'medium', maxOutputTokens: 2048 });
         await page.evaluate(() => { window.Pinia.useChatStore().connectionState = 'reconnecting'; });
@@ -168,6 +175,36 @@ test.describe('Yeaft composer menus', () => {
       await expect(quickBar).toBeHidden();
     });
   }
+
+  test('mobile ordinary send exits the Composer input state', async ({ page, serverUrl }) => {
+    await page.setViewportSize({ width: 320, height: 800 });
+    await openYeaftComposer(page, serverUrl);
+    await page.evaluate(async () => {
+      const store = window.Pinia.useChatStore();
+      const { useUserShortcuts } = await import('/utils/user-shortcuts.js');
+      const result = useUserShortcuts().save({ showQuickSends: true });
+      if (!result.ok) throw new Error(JSON.stringify(result));
+      store.sendWsMessage = message => { (window.__ordinarySendWire ||= []).push(message); };
+      store.llmConfig[store.currentAgent] = { loaded: true, agentConfig: {
+        quickSends: [{ id: 'fast', name: 'Fast', model: 'my-proxy/gpt-5.6-sol', effort: 'medium' }],
+      } };
+    });
+
+    const input = page.locator('.yeaft-session-input textarea');
+    const quickBar = page.locator('.mobile-quick-send-bar');
+    const composer = page.locator('.yeaft-session-input .input-wrapper');
+    await input.fill('ordinary mobile message');
+    await expect(quickBar).toBeVisible();
+    await input.press('Enter');
+
+    await expect(input).toHaveValue('');
+    await expect(input).not.toBeFocused();
+    await expect(quickBar).toBeHidden();
+    await expect(composer).not.toHaveCSS('box-shadow', /rgb/);
+    const wire = await page.evaluate(() => window.__ordinarySendWire.find(message => message.type === 'yeaft_session_send'));
+    expect(wire.text).toBe('ordinary mobile message');
+    expect(wire.quickSend).toBeUndefined();
+  });
 
   for (const theme of ['light', 'dark']) {
     for (const width of [320, 900, 1280]) {

@@ -38,7 +38,7 @@ beforeEach(() => {
   };
   window.Pinia = globalThis.Pinia;
 });
-afterEach(() => { wrapper?.unmount(); vi.restoreAllMocks(); });
+afterEach(() => { wrapper?.unmount(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('Agent quick-send Composer', () => {
   it('loads presets after opt-in and projects their names into the mobile toolbar', async () => {
@@ -59,17 +59,37 @@ describe('Agent quick-send Composer', () => {
     expect(wrapper.find('.composer-send-mode-menu').exists()).toBe(false);
   });
 
-  it('sends one-shot settings when the mobile preset button is clicked', async () => {
+  it('exits the mobile input state after the preset send is accepted', async () => {
     preferences.value.showQuickSends = true;
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
     const sendFn = vi.fn();
     await create({ sendFn });
-    await wrapper.get('textarea').trigger('focus');
-    await wrapper.get('textarea').setValue('touch send');
+    const input = wrapper.get('textarea');
+    const blur = vi.spyOn(input.element, 'blur');
+    await input.trigger('focus');
+    await input.setValue('touch send');
     await wrapper.get('.mobile-quick-send-button').trigger('pointerdown');
     await wrapper.get('.mobile-quick-send-button').trigger('click');
     expect(sendFn).toHaveBeenCalledWith('touch send', undefined, null,
       { model: 'p/fast', effort: 'low', maxOutputTokens: 2048 });
-    expect(wrapper.get('textarea').element.value).toBe('');
+    expect(input.element.value).toBe('');
+    expect(blur).toHaveBeenCalledOnce();
+    expect(wrapper.find('.mobile-quick-send-bar').exists()).toBe(false);
+  });
+
+  it('keeps the mobile input state when a send is rejected', async () => {
+    preferences.value.showQuickSends = true;
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
+    const sendFn = vi.fn(() => false);
+    await create({ sendFn });
+    const input = wrapper.get('textarea');
+    const blur = vi.spyOn(input.element, 'blur');
+    await input.trigger('focus');
+    await input.setValue('keep editing');
+    await wrapper.get('.mobile-quick-send-button').trigger('click');
+    expect(input.element.value).toBe('keep editing');
+    expect(blur).not.toHaveBeenCalled();
+    expect(wrapper.find('.mobile-quick-send-bar').exists()).toBe(true);
   });
 
   it('sends one-shot settings by shortcut with quote, then ordinary Enter has no override', async () => {
