@@ -1436,19 +1436,14 @@ export class Engine {
       // VP-aware tool). Undefined when running in non-group / no-VP flows.
       router: vpCtx?.router,
       senderVpId: vpCtx?.senderVpId,
-      // Active VP persona — surfaced so tools like `StartPlan` can read
-      // the optional `planInstruction` override without re-reading
-      // role.md. Mirrors the symmetry already present in
-      // `parentEngineDeps.parentVpPersona` below — sub-agents inherit it
-      // through the parent deps; tools at this level read it directly.
+      // Active VP persona for VP-aware tools and inherited sub-agent context.
       // Null in non-VP / test contexts.
       vpPersona: vpCtx?.vpPersona || null,
       inboundEnvelope: vpCtx?.inboundEnvelope,
       taskId: vpCtx?.taskId,
       taskMembers: vpCtx?.taskMembers,
-      // TodoWrite per-VP cache hooks. Threaded from web-bridge so each
-      // VP keeps its own todo list (see todo-write.js, web-bridge.js).
-      // Null in non-VP / test contexts — tools tolerate missing slots.
+      // Legacy todo cache hooks retained for embedding callers and replay.
+      // Native checklist tools are no longer registered.
       getCurrentTodos: vpCtx?.getCurrentTodos || null,
       setCurrentTodos: vpCtx?.setCurrentTodos || null,
       askUser: typeof vpCtx?.askUser === 'function'
@@ -2573,12 +2568,6 @@ export class Engine {
     // control to other VPs cleanly. Reset to null at the top of every
     // outer-loop iteration so the flag never carries across turns.
     let endTurnRequested = null;
-    // StartPlan is a control tool. If the model emits only the checklist after
-    // it, there is no new workspace fact to interpret: persist the plan and
-    // close the turn instead of spending another provider request on a
-    // TodoWrite-only control round. A later user turn can continue the first
-    // pending step; a batch that includes a real work tool always continues.
-    let planBootstrapPending = false;
 
     // LLM retry bookkeeping (rate-limit / 5xx / transient network errors).
     // Counts CONSECUTIVE retryable failures on the same turn — reset to 0
@@ -4651,9 +4640,6 @@ export class Engine {
           reusedCallId: reusedReadOnlyCallId,
         });
 
-        if (!skipped && !duplicateCallSuppressed && !reusedReadOnlyResult && tc.name === 'StartPlan') {
-          planBootstrapPending = true;
-        }
         if (!skipped && !duplicateCallSuppressed && !reusedReadOnlyResult
             && !readOnlyToolReuseDisabled && cacheableTool) {
           readOnlyToolResults.set(duplicateKey, {
@@ -4747,36 +4733,6 @@ export class Engine {
         };
         break;
       }
-
-      // A plan bootstrap that produced only a TodoWrite has no executable work
-      // to feed back to the provider. Close it here. This is intentionally
-      // narrow: StartPlan + TodoWrite is a valid planning result, but a batch
-      // containing any other tool must continue so the model can inspect its
-      // result before deciding what to do next.
-      const onlyPlanControls = planBootstrapPending
-        && toolCalls.length > 0
-        && toolCalls.every(call => call.name === 'StartPlan' || call.name === 'TodoWrite')
-        && toolCalls.some(call => call.name === 'TodoWrite')
-        && !toolBatchBarrier
-        && !endTurnRequested
-        && !abortedDuringTools
-        && !signal?.aborted;
-      if (onlyPlanControls) {
-        const hasPendingStep = toolCalls
-          .filter(call => call.name === 'TodoWrite')
-          .some(call => Array.isArray(call.input?.todos)
-            && call.input.todos.some(todo => todo?.status === 'pending' || todo?.status === 'in_progress'));
-        yield {
-          type: 'turn_end',
-          turnNumber,
-          stopReason: 'plan_recorded',
-          detail: { nextStep: hasPendingStep ? 'pending_work_tools' : 'none', toolCount: toolCalls.length },
-          threadId,
-          terminal: true,
-        };
-        break;
-      }
-      planBootstrapPending = false;
 
       // A batch barrier deliberately returns control to the provider. Any
       // handoff requested by an earlier call belongs to the invalidated plan

@@ -48,6 +48,14 @@ Session metadata 和 history 位于所属 Agent 的 Yeaft 目录。`workDir` 是
 
 选择多个 VP 时，Yeaft 只持久化一条 canonical user message，然后 fan-out 到独立 VP engine。每个 VP 有自己的 persona 和 memory view，流式输出自己的回复，并使用当前 Session 允许的工具；共享 timeline 会保留 speaker identity。
 
+## 规划与进度
+
+原生引擎已禁用 `TodoWrite` 和 `StartPlan`，不再为展示清单而要求模型反复更新步骤或额外调用规划工具。工具注册表和 `DiscoverTools` 都不提供这两项能力。
+
+你仍可要求 VP“先调查并给出方案，不要修改代码”，通过普通回复讨论目标、约束、风险和验证方法。当前没有单独的 Plan Mode 开关；这类对话要求不等于文件系统只读沙箱。
+
+旧 Session 中的 checklist 仍可回放；Claude Code / Copilot CLI 自身的工具行为不受影响。需要跨 turn 的持久任务状态与验收时，使用 [Work Center](./work-center.md)。用户自定义的 Project 指令、VP soul 和 `planInstruction` 数据不会被自动改写；如果自定义指令仍强制要求调用旧工具，应自行更新。
+
 ## Handoff 与 sub-agent
 
 多 VP 协作是显式的：
