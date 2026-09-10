@@ -82,6 +82,67 @@ test.describe('Conversation Management', () => {
     }
   });
 
+  for (const [theme, width] of [['light', 1280], ['dark', 320]]) {
+    test(`keeps real Session sends above streamed replies (${theme}, ${width}px)`, async ({ chatPage, mockAgent }) => {
+      await chatPage.setViewportSize({ width, height: 800 });
+      await chatPage.evaluate(({ agentId, theme }) => {
+        const store = window.Pinia.useChatStore();
+        const sessions = window.Pinia.useSessionsStore();
+        sessions.applySnapshot(['live-A', 'live-B'].map(id => ({ id, name: id, roster: ['omni'], defaultVpId: 'omni' })), agentId);
+        sessions.setActive('live-A', agentId);
+        store.currentAgent = agentId;
+        store._hasHandledAgentList = true;
+        store._hasHandledYeaftSessionHydrate = true;
+        store.yeaftSessionHydrateError = null;
+        store.yeaftHistoryLoadError = null;
+        store.yeaftSessionAgentById = { 'live-A': agentId, 'live-B': agentId };
+        store.yeaftConversationId = 'live-order-conversation';
+        store.yeaftConversationIdsByAgent = { [agentId]: 'live-order-conversation' };
+        store.messagesMap['live-order-conversation'] = [];
+        store.activeConversations = ['live-order-conversation'];
+        store.yeaftActiveSessionFilter = 'live-A';
+        store.currentView = 'yeaft';
+        document.documentElement.dataset.theme = theme;
+        window.__switchLiveSession = id => {
+          sessions.setActive(id, agentId);
+          store.setActiveSessionFilter(id, { agentId });
+        };
+      }, { agentId: mockAgent.agentId, theme });
+      const rows = chatPage.locator('.message.user, .assistant-turn');
+      const prompts = ['Please tag the merge', 'Then check the workflow'];
+      const replies = ['I will verify main and push the tag', 'Checking the workflow'];
+      for (let round = 0; round < prompts.length; round += 1) {
+        // Use the actual composer, not a hand-made timestamped user fixture.
+        await chatPage.locator('.yeaft-session-input textarea').fill(prompts[round]);
+        await chatPage.locator('.yeaft-session-input').getByRole('button', { name: 'Send', exact: true }).click();
+        await expect.poll(() => mockAgent._receivedMessages.some(message => (
+          message.type === 'yeaft_session_send' && message.text === prompts[round]
+        ))).toBe(true);
+        await expect(rows.last()).toContainText(prompts[round]);
+        await chatPage.evaluate(({ agentId, round, reply }) => {
+          const store = window.Pinia.useChatStore();
+          for (const text of [reply.slice(0, 8), reply.slice(8)]) {
+            store.handleYeaftOutput({
+              agentId, conversationId: 'live-order-conversation', sessionId: 'live-A',
+              vpId: 'omni', turnId: `turn-${round}`,
+              data: { type: 'assistant', message: { id: `reply-${round}`, content: text }, ts: Date.now() },
+            });
+          }
+        }, { agentId: mockAgent.agentId, round, reply: replies[round] });
+        await expect(rows).toHaveCount((round + 1) * 2);
+        await expect(rows.nth(round * 2)).toContainText(prompts[round]);
+        await expect(rows.last()).toContainText(replies[round]);
+        // Session switching cannot hide this failure by forcing a full reload.
+        await chatPage.evaluate(() => window.__switchLiveSession('live-B'));
+        await expect(rows).toHaveCount(0);
+        await chatPage.evaluate(() => window.__switchLiveSession('live-A'));
+        await expect(rows.last()).toContainText(replies[round]);
+      }
+      const boxes = await rows.evaluateAll(elements => elements.map(row => row.getBoundingClientRect().top));
+      expect(boxes).toEqual([...boxes].sort((a, b) => a - b));
+    });
+  }
+
   test('should create a new conversation via modal', async ({ chatPage, mockAgent }) => {
     const initialCount = await chatPage.locator('.session-item').count();
 

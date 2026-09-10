@@ -3456,7 +3456,8 @@ export const useChatStore = defineStore('chat', {
       const hasAttachments = safeAttachments.length > 0;
       if (!text?.trim() && !hasAttachments) return;
       const effectiveText = text?.trim() ? text : '(attached files)';
-      const clientMessageId = `u_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+      const sentAt = Date.now();
+      const clientMessageId = `u_${sentAt.toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
       const perfTraceId = createPerfTraceId();
       this.yeaftPerfTraceByMessageId = {
         ...(this.yeaftPerfTraceByMessageId || {}),
@@ -3485,6 +3486,10 @@ export const useChatStore = defineStore('chat', {
           uiKey: yeaftOptimisticMessageIdentity(targetAgentId, groupId, clientMessageId),
           type: 'user',
           content: effectiveText,
+          // This direct repository write bypasses addMessageToConversation's
+          // timestamp normalization. Anchor the optimistic row at send time so
+          // timestamped replies cannot sort before it while history is pending.
+          timestamp: sentAt,
           sessionId: groupId,
           // Use the client message id as the optimistic local turn id so
           // the row has a stable message-block key until server frames arrive.
