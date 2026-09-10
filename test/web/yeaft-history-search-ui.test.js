@@ -94,6 +94,7 @@ describe('Yeaft conversation outline UI', () => {
     expect(shouldDismissHistorySearch(targetIn('.yeaft-search-btn'))).toBe(false);
     expect(shouldDismissHistorySearch(targetIn(''))).toBe(true);
     expect(shouldDismissHistorySearch(null)).toBe(true);
+    expect(shouldDismissHistorySearch(targetIn(''), [{ matches: selector => selector.includes('.yeaft-conversation-outline') }])).toBe(false);
     expect(page).toContain("document.addEventListener('click', closeHistorySearchOutside)");
     expect(page).toContain("document.removeEventListener('click', closeHistorySearchOutside)");
   });
