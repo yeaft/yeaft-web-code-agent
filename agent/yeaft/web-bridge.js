@@ -160,7 +160,8 @@ const SKILL_RELOAD_INTERVAL_MS = 2_000;
  * loads the Session.
  * @type {Map<string, {
  *   resolve:Function,
- *   reject?:Function,
+ *   reject:Function,
+ *   conversationId:string|null,
  *   sessionId:string,
  *   vpId:string,
  *   threadId:string,
@@ -176,6 +177,9 @@ const SKILL_RELOAD_INTERVAL_MS = 2_000;
  *   onAbort?:Function,
  * }>} */
 const pendingUserPrompts = new Map();
+// Instance-local retry receipts, never persisted with Session runtime data.
+const terminalUserPrompts = new Map();
+const MAX_TERMINAL_USER_PROMPTS = 256;
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -3036,10 +3040,10 @@ function mergedStatusForProjectRuntime(runtime, ownerSession = session) {
 }
 
 /** Send a Yeaft Session metadata event over the legacy-compatible envelope. */
-function sendSessionEvent(event, { sessionId, chatId, vpId, turnId, threadId, requestId, requestClientId, perfTraceId } = {}) {
+function sendSessionEvent(event, { sessionId, chatId, vpId, turnId, threadId, requestId, requestClientId, perfTraceId, conversationId = yeaftConversationId } = {}) {
   sendToServer({
     type: 'yeaft_output',
-    conversationId: yeaftConversationId,
+    conversationId,
     ...(perfTraceId ? { perfTraceId } : {}),
     ...(requestId ? { requestId } : {}),
     ...(requestClientId ? { _requestClientId: requestClientId } : {}),
@@ -3085,26 +3089,52 @@ function replayPendingUserPrompts(sessionId) {
   }
 }
 
-function settlePendingUserPrompt(requestId, pending, { answers = null, timedOut = false } = {}) {
+function registerPendingUserPrompt(requestId, pending) {
+  pending.onAbort = () => settlePendingUserPrompt(requestId, pending, { aborted: true });
+  pending.timer = setTimeout(() => {
+    settlePendingUserPrompt(requestId, pending, { timedOut: true });
+  }, Math.max(0, pending.expiresAt - Date.now()));
+  pending.timer.unref?.();
+  pendingUserPrompts.set(requestId, pending);
+  if (pending.signal?.aborted) pending.onAbort();
+  else pending.signal?.addEventListener('abort', pending.onAbort, { once: true });
+}
+
+function settlePendingUserPrompt(requestId, pending, { answers = null, timedOut = false, aborted = false } = {}) {
   if (pendingUserPrompts.get(requestId) !== pending) return false;
   pendingUserPrompts.delete(requestId);
   if (pending.timer) clearTimeout(pending.timer);
   if (pending.signal && pending.onAbort) {
     try { pending.signal.removeEventListener('abort', pending.onAbort); } catch { /* ignore */ }
   }
-  try { pending.resumeQueryTimer?.(); } catch { /* best-effort */ }
-  sendSessionEvent({
-    type: timedOut ? 'ask_user_expired' : 'ask_user_answered',
+  if (!aborted) {
+    try { pending.resumeQueryTimer?.(); } catch { /* best-effort */ }
+  }
+  const expired = timedOut || aborted;
+  const event = {
+    type: expired ? 'ask_user_expired' : 'ask_user_answered',
     requestId,
     toolCallId: pending.toolCallId || null,
-    ...(timedOut ? { expiredAt: Date.now() } : { answers: answers || {} }),
-  }, {
+    ...(expired ? { expiredAt: Date.now() } : { answers: answers || {} }),
+  };
+  const identity = {
+    requestId,
+    toolCallId: pending.toolCallId,
+    conversationId: pending.conversationId,
     sessionId: pending.sessionId,
     vpId: pending.vpId,
     threadId: pending.threadId,
     turnId: pending.turnId,
-  });
-  pending.resolve(timedOut ? { __yeaftTimedOut: true } : (answers || {}));
+  };
+  terminalUserPrompts.set(requestId, { identity, event });
+  while (terminalUserPrompts.size > MAX_TERMINAL_USER_PROMPTS) {
+    terminalUserPrompts.delete(terminalUserPrompts.keys().next().value);
+  }
+  // Like prompt replay, live settlement belongs to the current projection,
+  // not the conversation generation captured when the question was created.
+  sendSessionEvent(event, { ...identity, conversationId: yeaftConversationId || pending.conversationId });
+  if (aborted) pending.reject(new Error('aborted'));
+  else pending.resolve(timedOut ? { __yeaftTimedOut: true } : (answers || {}));
   return true;
 }
 
@@ -5720,6 +5750,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
           const pending = {
             resolve,
             reject,
+            conversationId: yeaftConversationId,
             sessionId,
             vpId,
             threadId,
@@ -5734,20 +5765,8 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
             signal,
             onAbort: null,
           };
-          const onAbort = () => {
-            if (pendingUserPrompts.get(requestId) !== pending) return;
-            pendingUserPrompts.delete(requestId);
-            if (pending.timer) clearTimeout(pending.timer);
-            reject(new Error('aborted'));
-          };
-          pending.onAbort = onAbort;
-          pending.timer = setTimeout(() => {
-            settlePendingUserPrompt(requestId, pending, { timedOut: true });
-          }, ASK_USER_TIMEOUT_MS);
-          if (typeof pending.timer.unref === 'function') pending.timer.unref();
-          pendingUserPrompts.set(requestId, pending);
-          signal.addEventListener('abort', onAbort, { once: true });
-          sendPendingUserPrompt(requestId, pending);
+          registerPendingUserPrompt(requestId, pending);
+          if (pendingUserPrompts.has(requestId)) sendPendingUserPrompt(requestId, pending);
         }),
         threadId,
         vpTurnId: turnId,
@@ -6829,16 +6848,42 @@ export async function handleYeaftFetchDebugHistory(msg = {}) {
 }
 
 /** Resolve a pending Yeaft AskUser prompt from the web UI. */
-export function handleYeaftAskUserAnswer(msg) {
+export function handleYeaftAskUserAnswer(msg = {}) {
   const requestId = typeof msg?.requestId === 'string' ? msg.requestId : '';
+  const rejectAnswer = reason => {
+    // Echo only submitted identity: never expose the actual pending scope.
+    sendSessionEvent({
+      type: 'ask_user_answer_rejected', requestId,
+      toolCallId: msg?.toolCallId || null, reason,
+    }, {
+      requestId, requestClientId: msg?._requestClientId,
+      conversationId: msg?.conversationId ?? null,
+      sessionId: msg?.sessionId, vpId: msg?.vpId,
+      turnId: msg?.turnId, threadId: msg?.threadId,
+    });
+    return false;
+  };
   const pending = pendingUserPrompts.get(requestId);
-  if (!pending) return false;
-  if (msg.sessionId && msg.sessionId !== pending.sessionId) return false;
-  if (msg.vpId && msg.vpId !== pending.vpId) return false;
-  if (msg.turnId && msg.turnId !== pending.turnId) return false;
-  if (msg.threadId && msg.threadId !== pending.threadId) return false;
-  if (msg.toolCallId && msg.toolCallId !== pending.toolCallId) return false;
-
+  const terminal = terminalUserPrompts.get(requestId);
+  const identity = pending || terminal?.identity;
+  if (!identity) return rejectAnswer('unavailable');
+  // Retain legacy optional identity matching. conversationId is a projection
+  // generation, not Session ownership; it can change after a reconnect.
+  for (const field of ['sessionId', 'vpId', 'turnId', 'threadId', 'toolCallId']) {
+    if (msg[field] && msg[field] !== identity[field]) return rejectAnswer('identity_mismatch');
+  }
+  if (!pending) {
+    sendSessionEvent(terminal.event, {
+      ...terminal.identity,
+      conversationId: msg.conversationId ?? terminal.identity.conversationId,
+      requestClientId: msg._requestClientId,
+    });
+    return terminal.event.type === 'ask_user_answered' ? true : rejectAnswer('unavailable');
+  }
+  if (pending.expiresAt <= Date.now()) {
+    settlePendingUserPrompt(requestId, pending, { timedOut: true });
+    return rejectAnswer('unavailable');
+  }
   return settlePendingUserPrompt(requestId, pending, { answers: msg.answers || {} });
 }
 
@@ -8211,11 +8256,10 @@ export const __testHooks = {
     vpAborts.clear();
     vpInboxes.clear();
   },
-  seedPendingUserPrompt({ requestId = 'ask-test', sessionId = 'session-test', vpId = 'vp-test', threadId = 'main', turnId = 'turn-test', toolCallId = 'call-test', question = 'Continue?', options = [], createdAt = Date.now(), expiresAt = Date.now() + ASK_USER_TIMEOUT_MS } = {}) {
-    let resolved;
-    const promise = new Promise(resolve => { resolved = resolve; });
-    pendingUserPrompts.set(requestId, { resolve: resolved, sessionId, vpId, threadId, turnId, toolCallId, question, options, createdAt, expiresAt, timer: null });
-    return promise;
+  seedPendingUserPrompt({ requestId = 'ask-test', sessionId = 'session-test', vpId = 'vp-test', threadId = 'main', turnId = 'turn-test', toolCallId = 'call-test', conversationId = yeaftConversationId, question = 'Continue?', options = [], createdAt = Date.now(), expiresAt = Date.now() + ASK_USER_TIMEOUT_MS, signal = null } = {}) {
+    return new Promise((resolve, reject) => {
+      registerPendingUserPrompt(requestId, { resolve, reject, conversationId, sessionId, vpId, threadId, turnId, toolCallId, question, options, createdAt, expiresAt, signal });
+    });
   },
   replayPendingUserPrompts,
   settlePendingUserPromptForTest(requestId, opts = {}) {
@@ -8225,8 +8269,10 @@ export const __testHooks = {
   resetPendingUserPrompts() {
     for (const pending of pendingUserPrompts.values()) {
       if (pending.timer) clearTimeout(pending.timer);
+      if (pending.onAbort) pending.signal?.removeEventListener('abort', pending.onAbort);
     }
     pendingUserPrompts.clear();
+    terminalUserPrompts.clear();
   },
   resetVpStatusBroker() {
     if (vpStatusBroker) vpStatusBroker.reset();

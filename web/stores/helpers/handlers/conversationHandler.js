@@ -227,15 +227,23 @@ function promoteVisibleYeaftHistoryConversation(store, msg, sessionId, conversat
   store.activeConversations = [conversationId];
 }
 
-/** Mark all pending tool-use messages as completed for a conversation */
-export function markAllToolsCompleted(store, convId) {
+/** Complete pending tools, optionally scoped to one native Session turn. */
+export function markAllToolsCompleted(store, convId, scope = null) {
   const msgs = store.messagesMap[convId] || [];
   for (const msg of msgs) {
+    // Native Sessions share one Agent conversation; another turn's terminal
+    // frame has no authority to expire this turn's waiting AskUser request.
+    if (scope && Object.entries(scope).some(([field, value]) => value && msg[field] !== value)) continue;
     if (msg.type === 'tool-use' && !msg.hasResult) {
       msg.hasResult = true;
       // Expire unanswered AskUserQuestion cards so they show expired state
       if (msg.toolName === 'AskUserQuestion' && !msg.askAnswered && !msg.selectedAnswers) {
         msg.isHistory = true;
+        msg.askExpired = true;
+        msg.askPending = false;
+        msg.pendingAnswers = null;
+        msg.askSubmittedAt = null;
+        msg.askError = null;
         msg.askRequestId = null;
       }
     }
@@ -768,6 +776,8 @@ function applyAskUserHistoryResult(row, result, questions) {
   row.askPending = false;
   row.pendingAnswers = null;
   row.askSubmitGeneration = null;
+  row.askSubmittedAt = null;
+  row.askError = null;
   row.hasResult = true;
   row.isHistory = true;
   if (result.status === 'answered') {
@@ -915,6 +925,7 @@ function formatYeaftHistoryMessages(incomingMessages, msgSessionId, mode, existi
           startTime: timestamp || 0,
           sessionId: rowSessionId,
           turnId,
+          ...(m.threadId ? { threadId: m.threadId } : {}),
           ...executionOriginMeta,
           ...(speakerVpId ? { vpId: speakerVpId, speakerVpId } : {}),
           isStreaming: false,

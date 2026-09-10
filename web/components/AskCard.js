@@ -17,7 +17,7 @@ export default {
   emits: ['submit'],
   template: `
     <div class="ask-card-wrapper">
-      <!-- Collapsed summary after submission; history later confirms the answer. -->
+      <!-- Only an Agent acknowledgement or durable history confirms success. -->
       <div v-if="isAnswered" class="ask-summary">
         <span class="ask-summary-icon">✓</span>
         <span class="ask-summary-text">{{ summaryText }}</span>
@@ -45,8 +45,18 @@ export default {
           </div>
         </div>
         <div class="ask-expired-hint">
-          <span>{{ $t('message.askExpired') }}</span>
+          <span>{{ $t(errorKey || 'message.askExpired') }}</span>
         </div>
+      </div>
+
+      <!-- Submission is not success: keep the answer visible with an explicit retry. -->
+      <div v-else-if="askMsg.askPending" class="ask-card ask-pending" :class="{ 'ask-compact': compact }">
+        <div class="ask-pending-answer">{{ summaryText }}</div>
+        <div class="ask-waiting-hint" role="status" aria-live="polite">
+          <span v-if="!canRetry" class="ask-waiting-spinner"></span>
+          {{ $t(errorKey || (canRetry ? 'message.askUnconfirmed' : 'message.askSubmitting')) }}
+        </div>
+        <button v-if="canRetry" class="btn-secondary" @click="retryAnswers">{{ $t('message.askRetry') }}</button>
       </div>
 
       <!-- Full interactive card -->
@@ -86,6 +96,7 @@ export default {
             />
           </div>
         </div>
+        <div v-if="errorKey" class="ask-expired-hint" role="alert">{{ $t(errorKey) }}</div>
         <div class="ask-actions" v-if="askMsg.askRequestId">
           <button class="ask-submit" @click="submitAnswers" :disabled="!hasAnySelection">
             <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
@@ -102,10 +113,35 @@ export default {
   setup(props, { emit }) {
     const selectedOptions = Vue.reactive({});
     const customAnswers = Vue.reactive({});
+    const now = Vue.ref(Date.now());
+    let retryTimer = null;
+    Vue.watch(() => [props.askMsg.askPending, props.askMsg.askSubmittedAt], () => {
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = null;
+      now.value = Date.now();
+      if (props.askMsg.askPending) {
+        const delay = Math.max(0, (props.askMsg.askSubmittedAt || 0) + 15_000 - now.value);
+        if (delay) retryTimer = setTimeout(() => { now.value = Date.now(); }, delay);
+      }
+    }, { immediate: true });
+    Vue.onBeforeUnmount(() => { if (retryTimer) clearTimeout(retryTimer); });
+    const canRetry = Vue.computed(() => !!props.askMsg.askPending
+      && now.value >= (props.askMsg.askSubmittedAt || 0) + 15_000);
+    const errorKey = Vue.computed(() => ({
+      send_failed: 'message.askSendFailed',
+      agent_unavailable: 'message.askAgentUnavailable',
+      identity_mismatch: 'message.askIdentityMismatch',
+      unavailable: 'message.askExpired',
+    })[props.askMsg.askError] || null);
+    const retryAnswers = () => {
+      if (canRetry.value && props.askMsg.askRequestId && props.askMsg.pendingAnswers) {
+        emit('submit', props.askMsg.askRequestId, props.askMsg.pendingAnswers);
+      }
+    };
 
     const isAnswered = Vue.computed(() => {
       const ask = props.askMsg;
-      return ask && (!!ask.askAnswered || !!ask.selectedAnswers || !!ask.askPending);
+      return ask && (!!ask.askAnswered || !!ask.selectedAnswers);
     });
 
     const isExpired = Vue.computed(() => {
@@ -192,6 +228,9 @@ export default {
     return {
       isAnswered,
       isExpired,
+      canRetry,
+      retryAnswers,
+      errorKey,
       questions,
       isOptionSelected,
       selectOption,
