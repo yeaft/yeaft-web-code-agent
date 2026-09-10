@@ -33,7 +33,13 @@ import {
   DEFAULT_PROJECT_DOC_MAX_BYTES,
 } from './sessions/project-doc.js';
 import { archiveToolResults } from './archive/tool-results.js';
-import { trimSnapshotForBudget, estimateMessageTokens, buildHistoryBuckets, fitProviderRequestToContext } from './history-window.js';
+import {
+  trimSnapshotForBudget,
+  estimateMessageTokens,
+  estimateMessagesTokens as estimateHistoryMessagesTokens,
+  buildHistoryBuckets,
+  fitProviderRequestToContext,
+} from './history-window.js';
 import { recallConversationTurns } from './conversation/history-index.js';
 import { parseSeqFromId } from './conversation/persist.js';
 import { isVpForeign, readContent as readScopeContent } from './memory/store.js';
@@ -411,6 +417,41 @@ export function estimateMessagesTokens(system, messages) {
     }
   }
   return total;
+}
+
+/**
+ * Estimate the input composition of the exact provider request copy. These are
+ * diagnostic estimates only; provider usage remains authoritative for billing.
+ * `historyMessageCount` is the final post-fit boundary between historical rows
+ * and current-turn rows.
+ *
+ * @param {{ systemPrompt?:string, messages?:Array<object>, historyMessageCount?:number, toolDefs?:Array<object> }} input
+ * @returns {{systemPromptTokens:number, historyMessageTokens:number, toolDefinitionTokens:number, currentTurnTokens:number, totalEstimatedTokens:number}}
+ */
+export function estimateProviderInputBreakdown({
+  systemPrompt = '',
+  messages = [],
+  historyMessageCount = 0,
+  toolDefs = [],
+} = {}) {
+  const source = Array.isArray(messages) ? messages : [];
+  const split = Math.max(0, Math.min(
+    source.length,
+    Number.isInteger(historyMessageCount) ? historyMessageCount : 0,
+  ));
+  const systemPromptTokens = approxTokens(typeof systemPrompt === 'string' ? systemPrompt : '');
+  const historyMessageTokens = estimateHistoryMessagesTokens(source.slice(0, split));
+  const currentTurnTokens = estimateHistoryMessagesTokens(source.slice(split));
+  const toolDefinitionTokens = Array.isArray(toolDefs) && toolDefs.length > 0
+    ? approxTokens(JSON.stringify(toolDefs))
+    : 0;
+  return {
+    systemPromptTokens,
+    historyMessageTokens,
+    toolDefinitionTokens,
+    currentTurnTokens,
+    totalEstimatedTokens: systemPromptTokens + historyMessageTokens + toolDefinitionTokens + currentTurnTokens,
+  };
 }
 
 export const GROUP_CONTEXT_PRESSURE_RATIO = 0.8;
@@ -2814,6 +2855,8 @@ export class Engine {
       reportedSkillError = skillResolutionError;
       systemPrompt = buildCurrentSystemPrompt();
       if (executionPolicy?.prompt) systemPrompt += `\n\n${executionPolicy.prompt}`;
+      let requestDebugMessages = [];
+      let requestInputBreakdown = null;
 
       try {
         // Resolve effort per provider request so a saved Session effort takes
@@ -2941,6 +2984,7 @@ export class Engine {
           language: requestConfig.language,
         });
         wireMessages = fittedRequest.messages;
+        historyMessageCount = fittedRequest.meta.historyMessagesAfter;
         if (fittedRequest.meta.droppedHistoryMessages > 0
           || fittedRequest.meta.droppedCurrentMessages > 0
           || providerContextScale < 1) {
@@ -2995,6 +3039,17 @@ export class Engine {
             } catch { /* best-effort */ }
           }
         }
+
+        // Freeze diagnostics only after every provider-only trim/sweep has
+        // completed, so debug describes the exact request copy rather than the
+        // durable transcript or an earlier preflight candidate.
+        requestDebugMessages = wireMessages.map(mapDebugMessage);
+        requestInputBreakdown = estimateProviderInputBreakdown({
+          systemPrompt,
+          messages: wireMessages,
+          historyMessageCount: Math.min(historyMessageCount, wireMessages.length),
+          toolDefs,
+        });
 
         // Capture only the provider route before the visible boundary. The
         // returned async iterable must not make a request or write durable
@@ -3281,7 +3336,8 @@ export class Engine {
             latencyMs,
             responseText,
             systemPrompt,
-            messages: conversationMessages.map(mapDebugMessage),
+            messages: requestDebugMessages,
+            requestInputBreakdown,
             toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
             usage: {
               inputTokens: totalUsage.inputTokens || 0,
@@ -3549,7 +3605,8 @@ export class Engine {
           // error path too — failure traces are the most valuable for
           // hydration.
           systemPrompt,
-          messages: conversationMessages.map(mapDebugMessage),
+          messages: requestDebugMessages,
+          requestInputBreakdown,
           toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
           usage: {
             inputTokens: totalUsage.inputTokens || 0,
@@ -3575,7 +3632,8 @@ export class Engine {
           loopNumber: turnNumber,
           model: currentModel,
           systemPrompt,
-          messages: conversationMessages.map(mapDebugMessage),
+          messages: requestDebugMessages,
+          requestInputBreakdown,
           response: responseText || `Error: ${err.message}`,
           toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
           usage: {
@@ -3654,7 +3712,8 @@ export class Engine {
         // in-memory — without these columns the user can never see
         // history from before the panel was opened.
         systemPrompt,
-        messages: conversationMessages.map(mapDebugMessage),
+        messages: requestDebugMessages,
+        requestInputBreakdown,
         toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
         usage: {
           inputTokens: totalUsage.inputTokens || 0,
@@ -3749,7 +3808,8 @@ export class Engine {
         loopNumber: turnNumber,
         model: currentModel,
         systemPrompt,
-        messages: conversationMessages.map(mapDebugMessage),
+        messages: requestDebugMessages,
+        requestInputBreakdown,
         response: responseText,
         toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
         usage: {

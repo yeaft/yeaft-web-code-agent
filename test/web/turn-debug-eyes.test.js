@@ -42,6 +42,7 @@ window.Pinia = globalThis.Pinia;
 
 const { default: VpTurnBlock } = await import('../../web/components/VpTurnBlock.js');
 const { default: YeaftDebugPanel } = await import('../../web/components/YeaftDebugPanel.js');
+const { apportionRequestInput } = await import('../../web/components/yeaft-debug-helpers.js');
 const { handleMessage } = await import('../../web/stores/helpers/messageHandler.js');
 
 function makeTurn(overrides = {}) {
@@ -154,6 +155,28 @@ describe('VpTurnBlock debug action', () => {
   });
 });
 
+describe('request input token breakdown', () => {
+  it('apportions the provider input total exactly across four request sections', () => {
+    const split = apportionRequestInput(101, {
+      systemPromptTokens: 10,
+      historyMessageTokens: 20,
+      toolDefinitionTokens: 30,
+      currentTurnTokens: 40,
+    });
+    expect(split).toEqual({ systemPrompt: 10, historyMessages: 20, tools: 30, currentTurn: 41 });
+    expect(Object.values(split).reduce((sum, value) => sum + value, 0)).toBe(101);
+  });
+
+  it('attributes an unclassified legacy total to the current turn', () => {
+    expect(apportionRequestInput(17, null)).toEqual({
+      systemPrompt: 0,
+      historyMessages: 0,
+      tools: 0,
+      currentTurn: 17,
+    });
+  });
+});
+
 describe('handleMessage turn-level panel status', () => {
   function makeStore(overrides = {}) {
     return Vue.reactive({
@@ -217,6 +240,13 @@ describe('handleMessage turn-level panel status', () => {
         response: 'The loop detail is present.',
         toolCalls: [],
         usage: { inputTokens: 12, outputTokens: 6, totalTokens: 18 },
+        requestInputBreakdown: {
+          systemPromptTokens: 4,
+          historyMessageTokens: 3,
+          toolDefinitionTokens: 2,
+          currentTurnTokens: 3,
+          totalEstimatedTokens: 12,
+        },
         latencyMs: 42,
       }, {
         turnId: 'turn-abc',
@@ -231,6 +261,13 @@ describe('handleMessage turn-level panel status', () => {
         response: 'The second loop detail is present.',
         toolCalls: [],
         usage: { inputTokens: 20, outputTokens: 7, totalTokens: 27 },
+        requestInputBreakdown: {
+          systemPromptTokens: 5,
+          historyMessageTokens: 6,
+          toolDefinitionTokens: 4,
+          currentTurnTokens: 5,
+          totalEstimatedTokens: 20,
+        },
         latencyMs: 50,
       }],
       dreamEvents: [],
@@ -259,6 +296,11 @@ describe('handleMessage turn-level panel status', () => {
     expect(wrapper.get('.yeaft-debug-notice').text()).toBe('yeaft.debugHistoryTruncated');
     expect(wrapper.findAll('.yeaft-debug-loop-num').map(node => node.text())).toEqual(['Loop 1', 'Loop 2']);
     expect(wrapper.findAll('.yeaft-debug-loop-model').map(node => node.text())).toEqual(['provider/model-a', 'provider/model-a']);
+    const secondLoopHeader = wrapper.findAll('.yeaft-debug-loop-header')[1];
+    expect(secondLoopHeader.text()).toContain('yeaft.debugInputSystemShort 5');
+    expect(secondLoopHeader.text()).toContain('yeaft.debugInputHistoryShort 6');
+    expect(secondLoopHeader.text()).toContain('yeaft.debugInputToolsShort 4');
+    expect(secondLoopHeader.text()).toContain('yeaft.debugInputCurrentShort 5');
 
     const latestSystem = wrapper.get('.yeaft-debug-latest-system-prompt');
     await latestSystem.get('.yeaft-debug-show-btn').trigger('click');
