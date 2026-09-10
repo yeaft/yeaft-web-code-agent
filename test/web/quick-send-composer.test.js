@@ -41,16 +41,29 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); vi.restoreAllMocks(); });
 
 describe('Agent quick-send Composer', () => {
-  it('never renders a send-mode menu and only loads presets after shortcut opt-in', async () => {
+  it('loads presets after opt-in and projects their names into the mobile toolbar', async () => {
     await create();
-    expect(wrapper.find('.composer-send-modes').exists()).toBe(false);
-    expect(wrapper.find('.composer-send-mode-trigger').exists()).toBe(false);
+    expect(wrapper.find('.mobile-quick-send-bar').exists()).toBe(false);
+    expect(wrapper.find('.mobile-quick-send-button').exists()).toBe(false);
     preferences.value.showQuickSends = true;
     await Vue.nextTick();
     expect(store.sendWsMessage).toHaveBeenCalledWith({ type: 'get_llm_config', agentId: 'a1' });
-    expect(wrapper.find('.composer-send-modes').exists()).toBe(false);
+    const bar = wrapper.get('.mobile-quick-send-bar');
+    expect(bar.attributes('role')).toBe('toolbar');
+    expect(bar.get('.mobile-quick-send-button').text()).toBe('Fast');
     expect(wrapper.find('.composer-send-mode-trigger').exists()).toBe(false);
     expect(wrapper.find('.composer-send-mode-menu').exists()).toBe(false);
+  });
+
+  it('sends one-shot settings when the mobile preset button is clicked', async () => {
+    preferences.value.showQuickSends = true;
+    const sendFn = vi.fn();
+    await create({ sendFn });
+    await wrapper.get('textarea').setValue('touch send');
+    await wrapper.get('.mobile-quick-send-button').trigger('click');
+    expect(sendFn).toHaveBeenCalledWith('touch send', undefined, null,
+      { model: 'p/fast', effort: 'low', maxOutputTokens: 2048 });
+    expect(wrapper.get('textarea').element.value).toBe('');
   });
 
   it('sends one-shot settings by shortcut with quote, then ordinary Enter has no override', async () => {
