@@ -55,8 +55,8 @@ const DEFAULTS = {
   // through history pagination/search. Range: 1–500.
   yeaftRecentTurnsLimit: 20,
   // Same-Session related Q&A turns, selected by deterministic full-text rules.
-  // Range: 0–10; 0 disables related recall without changing recent history.
-  yeaftRelatedTurnsLimit: 8,
+  // Range: 0–5; 0 disables related recall without changing recent history.
+  yeaftRelatedTurnsLimit: 5,
   // CLAUDE.md / AGENTS.md project-doc cap, in bytes. Mirrors Codex's
   // `project_doc_max_bytes`. 0 disables the feature (no project-doc
   // block is injected). Hand-edited values are NOT clamped — we let
@@ -306,7 +306,7 @@ export function clampYeaftField(v, field) {
   let hi;
   if (field === 'maxConcurrentThreads') { lo = 1; hi = 50; }
   else if (field === 'recentTurnsLimit') { lo = 1; hi = 500; }
-  else if (field === 'relatedTurnsLimit') { lo = 0; hi = 10; }
+  else if (field === 'relatedTurnsLimit') { lo = 0; hi = 5; }
   else { lo = 1; hi = 3650; } // autoArchiveIdleDays
   return Math.min(hi, Math.max(lo, Math.floor(n)));
 }

@@ -56,9 +56,8 @@ describe('dual-bucket provider history', () => {
       .toEqual(['A step', 'B reply', 'A final']);
     expect(result.messages.some(row => row.id === 'm6')).toBe(false);
     const budget = estimateMessagesTokens(result.messages) - 1;
-    const small = run(past, { recentTurnCap: 1, messageTokenBudget: budget });
-    expect(small.meta.recent.turnCount).toBe(0);
-    expect(users(small)).toEqual(['m10000']);
+    expect(() => run(past, { recentTurnCap: 1, messageTokenBudget: budget }))
+      .toThrow('complete recent history turns');
   });
 
   it('merges interleaved fan-out fragments without losing new replies or repeating persisted rows', () => {
@@ -119,15 +118,18 @@ describe('dual-bucket provider history', () => {
     expect(result.messages.at(-1)._persistedMessageId).toBe('m50');
   });
 
-  it('evicts whole recent turns and recalls a qualified evicted turn, ordered before the suffix', () => {
-    const past = [turn(10, 'target', 'a'.repeat(40)), turn(20, 'other', 'b'.repeat(160)), turn(30, 'latest', 'c'.repeat(40))].flat();
-    const scoreTurn = candidate => ({ score: candidate.messages[0].content === 'target' ? 10 : 0, matchedTerms: ['target'] });
-    const result = run(past, { messageTokenBudget: 80, scoreTurn, prompt: 'target', recentTurnCap: 3 });
-    expect(result.meta.related.turnCount).toBe(1);
-    expect(result.meta.recent.turnCount).toBe(1);
-    expect(users(result)).toEqual(['m10', 'm30', 'm10000']);
-    expect(result.messages.find(row => row.id === 'm11').content).toBe('a'.repeat(40));
-    expect(result.meta.budget.usedTokens).toBeLessThanOrEqual(80);
+  it('gives recent text priority over related history and reduces only the oldest suffix end', () => {
+    const past = Array.from({ length: 20 }, (_, i) => turn(i * 10, `question ${i}`, 'x'.repeat(80))).flat();
+    const budget = estimateMessagesTokens([...past.slice(-14), { role: 'user', content: 'current' }]);
+    const result = run(past, { messageTokenBudget: budget, relatedTurns: [
+      { id: 'old', userSeq: -10, score: 100, messages: turn(-10, 'related', 'short') },
+    ] });
+    expect(result.meta.recent.turnCount).toBe(7);
+    expect(result.meta.related.turnCount).toBe(0);
+    expect(users(result)).toEqual([...Array.from({ length: 7 }, (_, i) => `m${(i + 13) * 10}`), 'm10000']);
+    expect(result.messages.slice(0, -1)).toEqual(past.slice(-14));
+    expect(result.meta.budget.usedTokens).toBeLessThanOrEqual(budget);
+    expect(result.meta.budget.relatedReservedTokens).toBe(0);
   });
 
   it('selects related by score but outputs by chronology, rejecting newer and unknown chronology', () => {
@@ -143,13 +145,13 @@ describe('dual-bucket provider history', () => {
     expect(users(result)).toEqual(['m10', 'm20', 'm80', 'm10000']);
   });
 
-  it('caps related turns at ten and skips oversized candidates rather than truncating text', () => {
+  it('caps related turns at five and skips oversized candidates rather than truncating text', () => {
     const relatedTurns = Array.from({ length: 15 }, (_, i) => ({
       id: `r${i}`, userSeq: i * 10, messages: turn(i * 10), score: i + 1,
     }));
     relatedTurns.unshift({ id: 'huge', userSeq: -1, messages: turn(-1, 'huge', 'x'.repeat(100000)), score: 100 });
     const result = run(turn(900), { relatedTurns, relatedTurnCap: 50, messageTokenBudget: 1000 });
-    expect(result.meta.related.turnCount).toBe(10);
+    expect(result.meta.related.turnCount).toBe(5);
     expect(result.meta.related.turnIds).not.toContain('huge');
     expect(result.meta.dropped.oversizedTurnCount).toBe(1);
     expect(result.meta.budget.usedTokens).toBeLessThanOrEqual(1000);
@@ -181,13 +183,18 @@ describe('dual-bucket provider history', () => {
     }
   });
 
-  it('fits oversized recent text instead of letting one turn evict a 20-turn window', () => {
-    const twenty = run(Array.from({ length: 20 }, (_, index) => (
-      turn(index * 10, `question ${index}`, 'x'.repeat(index === 18 ? 100000 : 200))
-    )).flat(), { messageTokenBudget: 500 });
-    expect(twenty.meta.recent.turnCount).toBe(20);
-    expect(users(twenty)).toHaveLength(21);
-    expect(twenty.meta.budget.usedTokens).toBeLessThanOrEqual(500);
+  it('preserves the five-turn floor or fails explicitly rather than fabricating clipped turns', () => {
+    const past = freeze(Array.from({ length: 20 }, (_, index) => (
+      turn(index * 10, `question ${index}`, 'x'.repeat(200))
+    )).flat());
+    const budget = estimateMessagesTokens([...past.slice(-10), { role: 'user', content: 'current' }]);
+    const five = run(past, { messageTokenBudget: budget });
+    expect(five.meta.recent.turnCount).toBe(5);
+    expect(five.messages.slice(0, -1)).toEqual(past.slice(-10));
+    expect(() => run(past, { messageTokenBudget: budget - 1 })).toThrow('retain 5');
+    expect(() => run(past, { maxMessageCount: 10 })).toThrow('retain 5');
+    const oversized = past.map(row => row.id === 'm181' ? { ...row, content: 'x'.repeat(100000) } : row);
+    expect(() => run(oversized, { messageTokenBudget: 500 })).toThrow('retain 5');
   });
 
   it('never exceeds the hard message cap while considering a 20-turn text window', () => {
@@ -217,11 +224,11 @@ describe('dual-bucket provider history', () => {
     expect(hasOrphanPairs(roomy.messages)).toBe(false);
   });
 
-  it('keeps 20 text turns but replays tool protocol from only the newest 3 turns', () => {
+  it.each([false, true])('keeps 20 text turns but only the newest 3 tool turns (repeated prompt: %s)', repeated => {
     const past = Array.from({ length: 20 }, (_, index) => {
       const base = index * 10;
       return [
-        { id: `m${base}`, seq: base, role: 'user', content: `question ${index}` },
+        { id: `m${base}`, seq: base, role: 'user', content: repeated ? 'same question' : `question ${index}` },
         { id: `m${base + 1}`, seq: base + 1, role: 'assistant', content: `checking ${index}`,
           toolCalls: [{ id: `call-${index}`, name: 'Read', input: {} }] },
         { id: `m${base + 2}`, seq: base + 2, role: 'tool', toolCallId: `call-${index}`,
@@ -276,15 +283,14 @@ describe('dual-bucket provider history', () => {
 
   it('fits only current content, retains its prompt and strips an unfit signed tool arc atomically', () => {
     const snapshot = freeze([
-      ...turn(1),
       { id: 'm10', role: 'user', content: 'current prompt' },
       { role: 'assistant', content: 'checking', thinkingBlocks: [{ thinking: 'x'.repeat(20000), signature: 'signed' }], toolCalls: [{ id: 'c', name: 'Read', input: {} }] },
       { role: 'tool', toolCallId: 'c', content: { data: 'y'.repeat(50000) } },
       { role: 'assistant', content: 'z'.repeat(50000) },
     ]);
-    const result = buildHistoryBuckets(snapshot, { currentTurnStartIndex: 2, messageTokenBudget: 100, maxMessageCount: 3 });
+    const result = buildHistoryBuckets(snapshot, { currentTurnStartIndex: 0, messageTokenBudget: 100, maxMessageCount: 3 });
     expect(result.meta.recent.turnCount).toBe(0);
-    expect(result.messages[0]).toEqual(snapshot[2]);
+    expect(result.messages[0]).toEqual(snapshot[0]);
     expect(result.meta.budget.usedTokens).toBeLessThanOrEqual(100);
     expect(result.messages.length).toBeLessThanOrEqual(3);
     expect(hasOrphanPairs(result.messages)).toBe(false);
@@ -294,9 +300,8 @@ describe('dual-bucket provider history', () => {
 
   it('recomputes purely from frozen raw candidates at each budget and does not leak symbol metadata', () => {
     const past = freeze([...turn(1), ...turn(10, 'long', 'x'.repeat(1000))]);
-    const small = run(past, { messageTokenBudget: 30 });
+    expect(() => run(past, { messageTokenBudget: 30 })).toThrow('retain 2');
     const large = run(past, { messageTokenBudget: 1000 });
-    expect(small.meta.recent.turnCount).toBe(0);
     expect(large.meta.recent.turnCount).toBe(2);
     expect(large.messages.find(row => row.id === 'm11').content).toHaveLength(1000);
     expect(large.messages.every(row => Object.getOwnPropertySymbols(row).length === 0)).toBe(true);
@@ -306,7 +311,7 @@ describe('dual-bucket provider history', () => {
   it('shares conservative relevance for evicted raw turns and fences an unpersisted current prompt via past history', () => {
     const past = [...turn(10, 'CacheRouter reconnect fence', 'a'.repeat(40)),
       ...turn(20, 'other', 'b'.repeat(160)), ...turn(30, 'latest', 'c'.repeat(40))];
-    const recalled = run(past, { prompt: 'CacheRouter reconnect', messageTokenBudget: 95 });
+    const recalled = run(past, { prompt: 'CacheRouter reconnect', messageTokenBudget: 95, recentTurnCap: 1 });
     expect(recalled.meta.related.turnCount).toBe(1);
     expect(recalled.meta.related.sourceMessageIds).toContain('m10');
     const result = run(turn(100), { relatedTurns: [{ id: 'r', userSeq: 10, score: 10, messages: turn(10) }] },
@@ -316,7 +321,7 @@ describe('dual-bucket provider history', () => {
       maxMessageCount: 5,
       relatedTurns: [{ id: 'r', userSeq: 10, score: 10, messages: turn(10) }],
     });
-    expect(users(rows)).toEqual(['m10', 'm200', 'm10000']);
+    expect(users(rows)).toEqual(['m100', 'm200', 'm10000']);
     const newestOnly = run(turn(10, 'CacheRouter reconnect'), {
       prompt: 'CacheRouter reconnect', maxMessageCount: 3,
     });
@@ -344,6 +349,6 @@ describe('dual-bucket provider history', () => {
         expect(result.messages.length).toBeLessThanOrEqual(maxMessageCount);
       }
     }
-    expect(run([...turn(10), ...turn(20)], { maxMessageCount: 4 }).meta.recent.turnCount).toBe(1);
+    expect(() => run([...turn(10), ...turn(20)], { maxMessageCount: 4 })).toThrow('retain 2');
   });
 });

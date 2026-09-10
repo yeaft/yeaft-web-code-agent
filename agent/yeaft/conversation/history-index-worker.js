@@ -10,7 +10,7 @@ import {
   normalizeLiteralSearch,
 } from './visible-entry.js';
 import { fingerprintConversationSources } from './history-index-state.js';
-import { extractRecallTerms, scoreRecallTurn, RECALL_LIMITS } from './recall-relevance.js';
+import { extractRecallTerms, scoreRecallTurn, normalizeRecallLimit, RECALL_LIMITS } from './recall-relevance.js';
 
 const INDEX_SCHEMA_VERSION = 2;
 const SHORT_BLOOM_BYTES = 256;
@@ -433,7 +433,7 @@ function recallTurns(request) {
     const generation = Number(indexMeta.generation) || 0;
     const terms = extractRecallTerms(request.prompt);
     const cap = (value, fallback) => Math.min(fallback, Math.max(1, Math.floor(Number(value) || fallback)));
-    const limit = cap(request.limit, 10);
+    const limit = normalizeRecallLimit(request.limit);
     const maxTurnRows = cap(request.maxTurnRows, RECALL_LIMITS.maxTurnRows);
     const maxTurnBytes = cap(request.maxTurnBytes, RECALL_LIMITS.maxTurnBytes);
     const maxReadBytes = cap(request.maxReadBytes, RECALL_LIMITS.maxReadBytes);
@@ -445,6 +445,7 @@ function recallTurns(request) {
       limits: { ...RECALL_LIMITS, maxTurnRows, maxTurnBytes, maxReadBytes, limit },
       ...indexStats(indexMeta),
     };
+    if (limit === 0) return { turns: [], meta: { ...meta, status: 'disabled', reason: 'disabled' } };
     const sourceBefore = currentSourceToken();
     if (sourceBefore.fingerprint !== indexMeta.raw_source_fingerprint) {
       return { turns: [], meta: { ...meta, status: 'not_ready', reason: 'stale_result' } };

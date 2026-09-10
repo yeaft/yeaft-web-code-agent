@@ -27,7 +27,7 @@ export const DEFAULT_RUNTIME_CACHE_TURN_CAP = 25;
 export const DEFAULT_RUNTIME_CACHE_TOKEN_BUDGET = 32768;
 export const DEFAULT_RUNTIME_CACHE_MESSAGE_CAP = 256;
 
-const MINIMUM_RECENT_PROVIDER_TURNS = 20;
+const MINIMUM_RECENT_PROVIDER_TURNS = 5;
 const IMAGE_PART_TOKEN_COST = 1024;
 const DOCUMENT_PART_TOKEN_COST = 2048;
 const CONTENT_PART_FRAME_TOKENS = 2;
@@ -900,9 +900,10 @@ function describeBucket(turns, messages = turns.flatMap(turn => turn.text)) {
  * configured recent window fits; tools are optional enrichment, newest first.
  *
  * The active turn is outside both buckets and consumes the global budget first.
- * Its opening user row is protected. Oversized recent text is fitted only in the
- * disposable provider copy so one large turn cannot evict the rest of the recent
- * window. Related recall remains optional and complete. External recall must have
+ * Its opening user row is protected. Recent text stays complete: reduce the
+ * oldest end of the suffix down to five turns (or all available for a new
+ * Session); fail closed if that floor cannot fit. Related recall only uses
+ * remaining budget and stays optional and complete. External recall must have
  * comparable userSeq/source identities to establish
  * that it predates recent/current history; unknown chronology fails closed.
  *
@@ -918,7 +919,7 @@ export function buildHistoryBuckets(snapshot, options = {}) {
   const tokenBudget = bucketCap(options.messageTokenBudget, DEFAULT_MESSAGE_TOKEN_BUDGET);
   const messageCap = bucketCap(options.maxMessageCount, DEFAULT_RUNTIME_CACHE_MESSAGE_CAP);
   const recentCap = bucketCap(options.recentTurnCap, 20);
-  const relatedCap = bucketCap(options.relatedTurnCap, 8, 10);
+  const relatedCap = bucketCap(options.relatedTurnCap, 5, 5);
   const keepToolTurns = bucketCap(options.keepToolTurns, DEFAULT_KEEP_TOOL_TURNS);
   const allTurns = splitBucketTurns(source);
   const currentStart = Number.isInteger(options.currentTurnStartIndex)
@@ -1022,65 +1023,26 @@ export function buildHistoryBuckets(snapshot, options = {}) {
       // past-turn boundary is still a safe fence; never guess from text/time.
       || (turn.index == null && currentIdentity.userSeq == null && past.length > 0
         && bucketBefore(turn, past.at(-1)))));
-  // A candidate inside the initial recent cap can become related after budget
-  // eviction. Reserve before picking the final suffix so it can re-enter.
-  const reservable = relatedCap > 0 ? eligible.filter(turn => turn.tokens <= availableTokens
-    && turn.text.length <= availableRows
-    && (recentCap === 0 || !past.length || bucketBefore(turn, past.at(-1)))) : [];
-  const reserve = reservable.length ? Math.floor(availableTokens * 0.25) : 0;
-  const reservedRows = reservable.length
-    ? Math.max(Math.floor(availableRows * 0.25), Math.min(...reservable.map(turn => turn.text.length))) : 0;
-  function fitRecentTurn(turn, tokenLimit) {
-    if (turn.tokens <= tokenLimit) return turn.text;
-    const fitted = [];
-    let tokens = tokenLimit;
-    for (let index = 0; index < turn.text.length; index += 1) {
-      const remainingRows = turn.text.length - index;
-      const allowance = Math.max(2, Math.floor(tokens / remainingRows));
-      const message = shrinkMessageToBudget(turn.text[index], allowance);
-      const rows = dropEmptyAssistantRows([message]);
-      fitted.push(...rows);
-      tokens -= estimateMessagesTokens(rows);
-    }
-    return fitted;
+  // Recent text has first claim on history budget. Drop whole oldest turns,
+  // never reserve space for recall or truncate text to manufacture turn counts.
+  const recent = [];
+  let recentTokens = 0;
+  let recentRows = 0;
+  const recentCandidates = recentCap > 0 ? past.slice(-recentCap) : [];
+  for (let index = recentCandidates.length - 1; index >= 0; index -= 1) {
+    const turn = recentCandidates[index];
+    if (recentTokens + turn.tokens > availableTokens
+      || recentRows + turn.text.length > availableRows) break;
+    recent.unshift(turn);
+    recentTokens += turn.tokens;
+    recentRows += turn.text.length;
   }
-  function selectRecent(limit, rowLimit = availableRows) {
-    const candidates = past.slice(-recentCap);
-    if (!candidates.length || limit <= 0 || rowLimit <= 0) return [];
-    const preserveBoundaries = candidates.length >= MINIMUM_RECENT_PROVIDER_TURNS
-      && rowLimit >= candidates.reduce((sum, turn) => sum + turn.text.length, 0)
-      && limit >= candidates.length * 2;
-    if (!preserveBoundaries) {
-      const selected = [];
-      let tokens = 0;
-      let rows = 0;
-      for (let index = candidates.length - 1; index >= 0; index -= 1) {
-        const turn = candidates[index];
-        if (tokens + turn.tokens > limit || rows + turn.text.length > rowLimit) break;
-        selected.unshift(turn);
-        tokens += turn.tokens;
-        rows += turn.text.length;
-      }
-      return selected;
-    }
-
-    const selected = [];
-    let tokens = Math.floor(limit);
-    let rows = Math.floor(rowLimit);
-    for (const turn of candidates) {
-      const remainingTurns = candidates.length - selected.length;
-      if (rows < remainingTurns) break;
-      const allowance = Math.max(2, Math.floor(tokens / remainingTurns));
-      const fitted = fitRecentTurn(turn, allowance);
-      if (!fitted.length || fitted.length > rows - (remainingTurns - 1)) continue;
-      const used = estimateMessagesTokens(fitted);
-      selected.push({ ...turn, text: fitted, tokens: used });
-      tokens -= used;
-      rows -= fitted.length;
-    }
-    return selected;
+  const minimumRecent = Math.min(MINIMUM_RECENT_PROVIDER_TURNS, recentCandidates.length);
+  if (recent.length < minimumRecent) {
+    const error = new Error(`Context budget cannot retain ${minimumRecent} complete recent history turns`);
+    error.code = 'HISTORY_RECENT_BUDGET_EXCEEDED';
+    throw error;
   }
-  let recent = selectRecent(availableTokens - reserve, availableRows - reservedRows);
   let remainingTokens = availableTokens - recent.reduce((total, turn) => total + turn.tokens, 0);
   let remainingRows = availableRows - recent.reduce((total, turn) => total + turn.text.length, 0);
   const related = [];
@@ -1098,34 +1060,15 @@ export function buildHistoryBuckets(snapshot, options = {}) {
     remainingTokens -= turn.tokens;
     remainingRows -= turn.text.length;
   }
-  if (!related.length) recent = selectRecent(availableTokens);
-  else {
-    // Pay the actual related cost, not the provisional reserve. Expand the
-    // recent suffix only while every related turn remains strictly older.
-    const expanded = selectRecent(
-      availableTokens - related.reduce((sum, turn) => sum + turn.tokens, 0),
-      availableRows - related.reduce((sum, turn) => sum + turn.text.length, 0),
-    );
-    while (expanded.length > recent.length && related.some(turn => (
-      !bucketBefore(turn, expanded[0]) || bucketOverlap(turn, expanded[0])
-    ))) expanded.shift();
-    if (expanded.length > recent.length) recent = expanded;
-  }
   related.sort((a, b) => bucketBefore(a, b) ? -1 : bucketBefore(b, a) ? 1 : 0);
 
   const relatedMessages = related.flatMap(turn => turn.text);
-  const recentText = recent.flatMap(turn => turn.messages)
-    .filter(isVisibleConversationRow);
-  const recentWasFitted = recent.some(turn => turn.text !== turn.messages
-    && (turn.text.length !== bucketTextMessages(turn.messages).length
-      || turn.tokens !== estimateMessagesTokens(bucketTextMessages(turn.messages))));
-  const recentBaseline = recent.flatMap(turn => recentWasFitted ? turn.text : bucketTextMessages(turn.messages));
+  const recentBaseline = recent.flatMap(turn => turn.text);
   // Enrich only after both complete-text buckets and the active turn are paid.
   // Tool protocol is useful only for immediate continuity; unlike visible text,
   // it never reaches farther back than the configured recent tool window.
-  const toolCutIndex = indexOfNthTurnFromEnd(recentText, keepToolTurns);
   const recentToolSource = keepToolTurns > 0
-    ? recentText.slice(toolCutIndex < 0 ? 0 : toolCutIndex)
+    ? recent.slice(-keepToolTurns).flatMap(turn => turn.messages).filter(isVisibleConversationRow)
     : [];
   const recentMessages = withoutHistorySourceIndexes(addOptionalRecentToolPairs(
     recentBaseline,
@@ -1154,7 +1097,8 @@ export function buildHistoryBuckets(snapshot, options = {}) {
       budget: {
         messageTokenBudget: tokenBudget, maxMessageCount: messageCap,
         recentTurnCap: recentCap, relatedTurnCap: relatedCap,
-        relatedReservedTokens: reserve, availableHistoryTokens: availableTokens,
+        minimumRecentTurns: minimumRecent,
+        relatedReservedTokens: 0, availableHistoryTokens: availableTokens,
         usedTokens: estimateMessagesTokens(messages), usedMessages: messages.length,
       },
       dropped: {

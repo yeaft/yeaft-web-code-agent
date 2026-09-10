@@ -269,7 +269,7 @@ export function getYeaftSettings(dir) {
  * (LLM provider / model fields are untouched) and validates each field:
  * `maxConcurrentThreads` must be 1..50, `autoArchiveIdleDays` must be
  * 1..3650, `recentTurnsLimit` must be 1..500, `relatedTurnsLimit` must be
- * 0..10 (0 disables related recall). Dream limits are read-only
+ * 0..5 (0 disables related recall). Dream limits are read-only
  * runtime defaults here; invalid values are rejected
  * outright so the UI sees an error rather than silently reverting — a
  * silent revert would make "I set it to 100 and nothing happened"
@@ -309,8 +309,8 @@ export function updateYeaftSettings(update, dir) {
   if (update.relatedTurnsLimit !== undefined) {
     const value = clampYeaftField(update.relatedTurnsLimit, 'relatedTurnsLimit');
     const n = Number(update.relatedTurnsLimit);
-    if (value === null || n < 0 || n > 10) {
-      return { error: 'relatedTurnsLimit must be between 0 and 10' };
+    if (value === null || n < 0 || n > 5) {
+      return { error: 'relatedTurnsLimit must be between 0 and 5' };
     }
   }
 

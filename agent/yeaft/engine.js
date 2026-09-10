@@ -2113,8 +2113,8 @@ export class Engine {
     // const useDreamMemory = scenario === 'work-item' || !!vpPersona?.subAgent
     //   || (!runtimeSessionId && !internalTrigger);
     const useDreamMemory = false;
-    const recentTurnCap = this.#config.yeaft?.recentTurnsLimit ?? 20;
-    const relatedTurnCap = this.#config.yeaft?.relatedTurnsLimit ?? 8;
+    const recentTurnCap = Math.max(20, this.#config.yeaft?.recentTurnsLimit ?? 20);
+    const relatedTurnCap = Math.min(5, this.#config.yeaft?.relatedTurnsLimit ?? 5);
     let relatedHistoryTurns = [];
     let historyRecallMeta = { source: 'messages', status: 'disabled' };
     if (useMessageHistory && !internalTrigger && this.#conversationStore?.loadRecentBySession) {
@@ -2130,7 +2130,9 @@ export class Engine {
       const beforeSeq = Number.isFinite(persistedQueryUser?.seq)
         ? persistedQueryUser.seq : parseSeqFromId(persistedQueryUser?.id);
       if (Number.isFinite(beforeSeq)) {
-        const tail = this.#conversationStore.loadRecentBySession(runtimeSessionId, recentTurnCap, { beforeSeq });
+        const loadHistory = this.#conversationStore.loadProviderHistoryBySession
+          || this.#conversationStore.loadRecentBySession;
+        const tail = await loadHistory.call(this.#conversationStore, runtimeSessionId, recentTurnCap, { beforeSeq });
         messages = tail.filter(m => parseSeqFromId(m.id) < beforeSeq
           && (m.role !== 'tool' || !queryVpId || m.speakerVpId === queryVpId))
           .map(m => {
@@ -2884,8 +2886,8 @@ export class Engine {
         const buckets = useMessageHistory ? buildHistoryBuckets(conversationMessages, {
           prompt,
           relatedTurns: relatedHistoryTurns,
-          recentTurnCap: requestConfig.yeaft?.recentTurnsLimit ?? 20,
-          relatedTurnCap: requestConfig.yeaft?.relatedTurnsLimit ?? 8,
+          recentTurnCap: Math.max(20, requestConfig.yeaft?.recentTurnsLimit ?? 20),
+          relatedTurnCap: Math.min(5, requestConfig.yeaft?.relatedTurnsLimit ?? 5),
           messageTokenBudget: historyBudget,
           currentTurnStartIndex: turnStartIdx,
           language: requestConfig.language,
