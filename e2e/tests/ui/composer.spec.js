@@ -149,6 +149,56 @@ test.describe('Yeaft composer menus', () => {
     }
   }
 
+  test('keeps history search open while appending a second result page', async ({ page, serverUrl }) => {
+    await openYeaftComposer(page, serverUrl);
+    await page.evaluate(() => {
+      const store = window.Pinia.useChatStore();
+      const capabilities = ['session_history_outline', 'session_history_search'];
+      store.currentAgentInfo = { ...store.currentAgentInfo, capabilities };
+      store.agents = store.agents.map(agent => (
+        agent.id === store.currentAgent ? { ...agent, capabilities } : agent
+      ));
+      let pageNumber = 0;
+      store.sendWsMessage = message => {
+        if (message.type !== 'yeaft_search_history') return;
+        const currentPage = pageNumber++;
+        const upper = currentPage === 0 ? 40 : 20;
+        const results = Array.from({ length: 20 }, (_, index) => {
+          const number = upper - index;
+          return {
+            entryId: `entry-m${number}`,
+            messageId: `m${number}`,
+            seq: number,
+            entryStartSeq: number,
+            role: 'user',
+            snippet: `historical prompt ${number}`,
+            timestamp: new Date(2026, 8, 1, 0, number).toISOString(),
+          };
+        });
+        setTimeout(() => store.handleYeaftHistorySearchResult({
+          agentId: message.agentId,
+          sessionId: message.sessionId,
+          requestId: message.requestId,
+          query: message.query,
+          senderKey: message.senderKey,
+          results,
+          hasMore: currentPage === 0,
+          nextCursor: currentPage === 0 ? { beforeSeq: 21, beforeEntryId: 'entry-m21' } : null,
+        }), 0);
+      };
+    });
+
+    await page.locator('.yeaft-search-btn').click();
+    const outline = page.locator('.yeaft-conversation-outline');
+    await expect(outline).toBeVisible();
+    await expect(outline.locator('[role="option"]')).toHaveCount(20);
+    await outline.locator('.yeaft-conversation-outline-more').click();
+
+    await expect(outline).toBeVisible();
+    await expect(outline.locator('[role="option"]')).toHaveCount(40);
+    await expect(outline.locator('.yeaft-conversation-outline-count')).toHaveText('40');
+  });
+
   test('opens LLM configuration from the model menu', async ({ page, serverUrl }) => {
     await openYeaftComposer(page, serverUrl);
 

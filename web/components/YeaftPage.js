@@ -865,7 +865,8 @@ export default {
       else openHistorySearch();
     };
     const closeHistorySearchOutside = (event) => {
-      if (historySearchOpen.value && shouldDismissHistorySearch(event.target)) closeHistorySearch();
+      const eventPath = typeof event.composedPath === 'function' ? event.composedPath() : [];
+      if (historySearchOpen.value && shouldDismissHistorySearch(event.target, eventPath)) closeHistorySearch();
     };
     const onHistorySearchQuery = (query) => {
       historySearchQuery.value = query;
