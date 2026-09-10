@@ -79,9 +79,46 @@ describe('Engine canonical message recall integration', () => {
     const meta = trace.log.mock.calls.find(([name]) => name === 'history_buckets')[1];
     expect(meta.recent.turnCount).toBe(20);
     expect(meta.related.turnCount).toBe(1);
-    expect(meta.budget.relatedTurnCap).toBe(8);
+    expect(meta.budget.relatedTurnCap).toBe(5);
     expect(store.loadAllBySession(sessionId).slice(0, before.length)).toEqual(before);
     expect(store.loadAllBySession(sessionId).filter(m => m.role === 'user' && m.content === current.content)).toHaveLength(2);
+  });
+
+  it('recovers 20 chronological turns behind a tool-heavy tail, replaying only the newest 3 tool turns', async () => {
+    for (let turn = 0; turn < 24; turn++) {
+      append('user', `Recent question ${turn}`, { clientMessageId: `q${turn}` });
+      for (let call = 0; call < 5; call++) {
+        const id = `c${turn}-${call}`;
+        append('assistant', '', { toolCalls: [{ id, name: 'Read', input: {} }] });
+        append('tool', 'result', { toolCallId: id });
+      }
+      append('assistant', `Recent answer ${turn}`);
+    }
+    const current = append('user', 'current');
+    await run(createEngine({ yeaft: { recentTurnsLimit: 1, relatedTurnsLimit: 0 } }), {
+      prompt: 'current', userAlreadyPersisted: true, currentUserMessage: current,
+      messages: [{ role: 'assistant', content: 'incomplete bootstrap tail' }],
+    });
+    const call = adapter.calls[0];
+    expect(call.messages.filter(m => m.role === 'user').map(m => m.content)).toEqual([
+      ...Array.from({ length: 20 }, (_, i) => `Recent question ${i + 4}`), 'current',
+    ]);
+    expect(call.messages.filter(m => m.role === 'tool').map(m => m.toolCallId)).toEqual(
+      [21, 22, 23].flatMap(turn => Array.from({ length: 5 }, (_, i) => `c${turn}-${i}`)),
+    );
+    expect(trace.log.mock.calls.find(([name]) => name === 'history_buckets')[1].recent.turnCount).toBe(20);
+  });
+
+  it('does not call the provider if the five-turn text floor cannot fit', async () => {
+    for (let i = 0; i < 20; i++) {
+      append('user', `Question ${i}`);
+      append('assistant', 'x'.repeat(2000));
+    }
+    const events = [];
+    for await (const event of createEngine({ messageTokenBudget: 500 }).query({ sessionId, prompt: 'next' })) events.push(event);
+    expect(adapter.calls).toHaveLength(0);
+    expect(events.some(e => e.type === 'error' && /retain 5/.test(e.message || e.error))).toBe(true);
+    expect(events.filter(e => e.type === 'turn_end' && e.terminal)).toHaveLength(1);
   });
 
   it('uses the client identity fallback, not equal prompt text, to fence the canonical tail', async () => {

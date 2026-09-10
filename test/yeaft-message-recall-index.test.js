@@ -51,7 +51,7 @@ describe('complete Session turn recall', () => {
     expect(turn.id).toBe(turn.messages[0].id);
     expect(turn.score).toBeGreaterThan(0);
     expect(turn.matchedTerms).toEqual(['cedar', 'migration']);
-    expect(result.meta).toMatchObject({ status: 'ready', reason: 'matched', limits: { limit: 8 } });
+    expect(result.meta).toMatchObject({ status: 'ready', reason: 'matched', limits: { limit: 5 } });
     expect(turn.messages.every(message => !Object.hasOwn(message, 'snippet'))).toBe(true);
   });
 
@@ -109,6 +109,59 @@ describe('complete Session turn recall', () => {
     })).toMatchObject({ score: 0, reason: 'low_distinctiveness' });
   });
 
+  it('rejects English/Chinese generic overlap and identifier-only weak coverage without filling a quota', async () => {
+    append('user', 'Service configuration error: retry_budget');
+    append('assistant', '服务配置错误，先检查系统状态');
+    await warm();
+    for (const prompt of ['service configuration error', '服务配置错误', 'serviceStatus config-update', 'service.config follow-up', '服务_配置',
+      'retry_budget quartz rollout', 'retry_budget 缓存 失效 策略']) {
+      expect((await recall(prompt)).turns).toEqual([]);
+    }
+    expect(scoreRecallTurn('retry_budget quartz rollout', 'retry_budget')).toMatchObject({ score: 0, reason: 'low_coverage' });
+    expect(scoreRecallTurn('cedar migration rollout', 'cedar migration')).toMatchObject({ score: 0, reason: 'low_score' });
+    expect(scoreRecallTurn('retry_budget', 'retry_budget', {
+      sampleSize: 10, termDocumentFrequency: { retry_budget: 8 },
+    })).toMatchObject({ score: 0, reason: 'low_distinctiveness' });
+    expect(scoreRecallTurn('cedar migration', 'cedar migration', {
+      sampleSize: 10, termDocumentFrequency: { cedar: 6, migration: 8 },
+    })).toMatchObject({ score: 0, reason: 'low_distinctiveness' });
+    expect(scoreRecallTurn('cedar migration', 'cedar migration', {
+      sampleSize: 10, termDocumentFrequency: { cedar: 5, migration: 8 },
+    }).score).toBeGreaterThan(0);
+  });
+
+  it('allows precise paths and issue IDs but not prefixes, generic identifiers or low-coverage anchors', async () => {
+    for (const term of ['src/cache.js', '/tmp/cache.js', './src/cache.js', '../src/cache.js', 'BUG-42', 'session_abc12345']) {
+      expect(extractRecallTerms(`Check ${term}`)).toEqual([term]);
+      expect(scoreRecallTurn(term, `Updated ${term}.`, {
+        sampleSize: 10, termDocumentFrequency: { [term.toLowerCase()]: 10 },
+      }).score).toBeGreaterThan(0);
+      expect(scoreRecallTurn(term, `${term}.backup ${term}0 prefix_${term}`).score).toBe(0);
+      expect(scoreRecallTurn(`${term} quartz rollout`, term)).toMatchObject({ score: 0, reason: 'low_coverage' });
+    }
+    for (let i = 0; i < 9; i += 1) {
+      append('user', 'Fix src/cache.js for BUG-42');
+      append('assistant', `Detailed answer ${i}`);
+    }
+    await warm();
+    expect((await recall('src/cache.js')).turns).toHaveLength(5);
+    expect((await recall('BUG-42', { limit: 10 })).turns).toHaveLength(5);
+    expect((await recall('BUG-42', { limit: 2 })).turns).toHaveLength(2);
+    const manager = [...__historyIndexForTest.managers.values()].find(item => item.ownerRoot === root);
+    expect((await manager.active.request('recall-turns', { prompt: 'BUG-42', limit: 99 })).turns).toHaveLength(5);
+    expect(await manager.active.request('recall-turns', { prompt: 'BUG-42', limit: 0 })).toMatchObject({
+      turns: [], meta: { status: 'disabled', readBytes: 0, candidateRowsRead: 0 },
+    });
+  });
+
+  it('honors zero before initializing an index, including numeric strings', async () => {
+    append('user', 'BUG-42');
+    for (const limit of [0, '0', -1]) {
+      expect(await recall('BUG-42', { limit })).toMatchObject({ turns: [], meta: { status: 'disabled' } });
+    }
+    expect([...__historyIndexForTest.managers.values()].some(item => item.ownerRoot === root)).toBe(false);
+  });
+
   it('applies an exclusive seq fence and skips rather than truncates a straddling turn', async () => {
     const first = append('user', 'cedar migration');
     const reply = append('assistant', 'cedar migration answer');
@@ -125,26 +178,26 @@ describe('complete Session turn recall', () => {
   });
 
   it('skips whole oversized turns under row, byte and request budgets; clamps limits', async () => {
-    append('user', 'recall_marker');
+    append('user', 'RECALL-318');
     append('assistant', `oversized ${'x'.repeat(RECALL_LIMITS.maxTurnBytes + 1)}`);
-    append('user', 'recall_marker');
+    append('user', 'RECALL-318');
     for (let i = 0; i < RECALL_LIMITS.maxTurnRows; i += 1) append('assistant', `row ${i}`);
     for (let i = 0; i < 12; i += 1) {
-      append('user', 'recall_marker');
+      append('user', 'RECALL-318');
       append('assistant', `bounded answer ${i}`);
     }
     await warm();
-    const result = await recall('recall_marker', { limit: 999 });
-    expect(result.turns).toHaveLength(10);
+    const result = await recall('RECALL-318', { limit: 999 });
+    expect(result.turns).toHaveLength(5);
     expect(result.meta.skippedOversizedTurns).toBe(2);
     expect(result.meta.readBytes).toBeLessThanOrEqual(RECALL_LIMITS.maxReadBytes);
     expect(result.turns.every(turn => turn.messages.length === 2)).toBe(true);
-    const tiny = await recall('recall_marker', { maxTurnBytes: 10 });
+    const tiny = await recall('RECALL-318', { maxTurnBytes: 10 });
     expect(tiny.turns).toEqual([]);
     expect(tiny.meta.readBytes).toBe(0);
-    const oneRow = await recall('recall_marker', { maxTurnRows: 1 });
+    const oneRow = await recall('RECALL-318', { maxTurnRows: 1 });
     expect(oneRow.turns).toEqual([]);
-    const small = await recall('recall_marker', { maxReadBytes: 100 });
+    const small = await recall('RECALL-318', { maxReadBytes: 100 });
     expect(small.meta.readBytes).toBeLessThanOrEqual(100);
     expect(small.turns.every(turn => turn.messages.length === 2)).toBe(true);
   });
@@ -252,7 +305,8 @@ describe('complete Session turn recall', () => {
     expect(bounded.meta.boundaryRowsRead).toBeLessThanOrEqual(RECALL_LIMITS.maxBoundaryRows);
     expect(bounded.meta.turnRowsRead).toBeLessThanOrEqual(RECALL_LIMITS.maxCandidates * (RECALL_LIMITS.maxTurnRows + 1));
     expect(bounded.meta.readBytes).toBeLessThanOrEqual(RECALL_LIMITS.maxReadBytes);
-    expect(bounded.turns).toHaveLength(8);
+    expect(bounded.turns).toHaveLength(0);
+    expect(bounded.meta.rejections.low_distinctiveness).toBeGreaterThan(0);
   });
 
   it('reports bounded discovery, not exhaustive recall, for trigram prefixes and two-character Chinese terms', async () => {

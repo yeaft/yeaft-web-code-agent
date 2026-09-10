@@ -92,6 +92,7 @@ model 项可以是裸字符串（`"gpt-5"`），也可以是对象：
   "maxConcurrentThreads": 6,
   "autoArchiveIdleDays":  30,
   "recentTurnsLimit":     20,
+  "relatedTurnsLimit":    5,
   "multiVp": { "enabled": true },
   "dream":   { "DREAM_INTERVAL_HOURS": 1, "MIN_NEW_PER_GROUP": 20, "MAX_DREAM_PROMPT_CHARS": 96000 }
 }
@@ -101,7 +102,8 @@ model 项可以是裸字符串（`"gpt-5"`），也可以是对象：
 | --- | --- | --- | --- | --- |
 | `maxConcurrentThreads` | `number` | `6` | `1–50` | ThreadEngineRegistry 并发上限；含常驻的 `main` thread |
 | `autoArchiveIdleDays` | `number` | `30` | `1–3650` | thread 自动归档的空闲天数 |
-| `recentTurnsLimit` | `number` | `20` | `1–500` | 启动/重连后的冷启回放窗口；更早 transcript 仍可通过历史分页/搜索获取 |
+| `recentTurnsLimit` | `number` | `20` | `1–500` | 保留冷启回放配置兼容；provider 争取至少最近 20 turn，预算不足时缩减但不低于 5（新 Session 不足 5 则保留全部），连底线也装不下时明确报错 |
+| `relatedTurnsLimit` | `number` | `5` | `0–5` | 当前 Session 自动相关召回上限；只选明显相关的完整问答，实际可为 0–5 个 turn。0 关闭召回；旧值 8/10 读取时收敛到 5 |
 | `multiVp.enabled` | `boolean` | `false` | — | 为兼容保留的 legacy feature flag；当前 Session UI 不把它作为 mode gate |
 | `dream.*` | object | 见 [dream/limits.js](https://github.com/yeaft/yeaft-web-code-agent/blob/main/agent/yeaft/dream/limits.js) | — | 任何 `DEFAULT_LIMITS` 里的 UPPER_CASE 常量都可覆盖 |
 

@@ -1565,6 +1565,43 @@ export class ConversationStore {
   }
 
   /**
+   * Provider-only chronological history. UI pages deliberately cap raw rows;
+   * that cap is not a turn limit and must not truncate a tool-heavy query's
+   * context. Yield between bounded scan batches; never mutate the transcript.
+   * Stable user identities, not equal prompt text, define human turns.
+   * @returns {Promise<object[]>} Complete past turns before the durable user fence.
+   */
+  async loadProviderHistoryBySession(sessionId, turnsLimit = 20, { beforeSeq = Infinity } = {}) {
+    if (!sessionId || !(turnsLimit > 0)) return [];
+    const kept = [];
+    const pending = [];
+    const identities = new Set();
+    let scanned = 0;
+    let bytes = 0;
+    for (const row of this.#iterateSessionRows(sessionId, { beforeSeq, desc: true })) {
+      scanned += 1;
+      bytes += Buffer.byteLength(JSON.stringify(row));
+      if (scanned > 32768 || bytes > 64 * 1024 * 1024) {
+        const error = new Error('Recent history scan limit reached before completing the requested turn window');
+        error.code = 'HISTORY_RECENT_SCAN_LIMIT';
+        throw error;
+      }
+      if (scanned % 64 === 0) await new Promise(resolve => setImmediate(resolve));
+      if (!row || row.sessionId !== sessionId || isHiddenConversationRow(row)) continue;
+      if (row.role === 'user') {
+        const identity = row.clientMessageId ? `client:${row.clientMessageId}` : `message:${row.id}`;
+        identities.add(identity);
+        kept.push(...pending.splice(0), row);
+        // The requested oldest user closes the reverse scan. Do not read the
+        // previous turn's tool tail just to discover one more user boundary.
+        if (identities.size >= turnsLimit) break;
+      } else pending.push(row);
+    }
+    // Pending rows without their opening user are not a complete past turn.
+    return pairSanitize(kept.reverse());
+  }
+
+  /**
    * Load every hot message stamped with `sessionId`.
    *
    * @param {string} sessionId

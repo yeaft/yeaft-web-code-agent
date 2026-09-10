@@ -1953,6 +1953,49 @@ legacy session`, { encoding: 'utf8' });
       expect(readCounts.count).toBeLessThan(10);
     });
 
+    it('loads 20 provider turns across dense tool arcs without changing the bounded UI reader', async () => {
+      for (let turn = 0; turn < 24; turn++) {
+        store.append({ role: 'user', content: 'same question', sessionId: 'grp_a', clientMessageId: `q${turn}` });
+        for (let call = 0; call < 8; call++) {
+          const id = `c${turn}-${call}`;
+          store.append({ role: 'assistant', content: '', sessionId: 'grp_a',
+            toolCalls: [{ id, name: 'Read', input: {} }] });
+          store.append({ role: 'tool', content: 'result', sessionId: 'grp_a', toolCallId: id });
+        }
+        store.append({ role: 'assistant', content: `answer ${turn}`, sessionId: 'grp_a' });
+      }
+      const current = store.append({ role: 'user', content: 'current', sessionId: 'grp_a' });
+      store.append({ role: 'user', content: 'queued future', sessionId: 'grp_a' });
+      const beforeSeq = Number(current.id.slice(1));
+      let yielded = false;
+      setImmediate(() => { yielded = true; });
+      const history = await store.loadProviderHistoryBySession('grp_a', 20, { beforeSeq });
+      expect(yielded).toBe(true);
+      expect(history.filter(m => m.role === 'user').map(m => m.clientMessageId))
+        .toEqual(Array.from({ length: 20 }, (_, i) => `q${i + 4}`));
+      expect(history.filter(m => m.role === 'tool')).toHaveLength(20 * 8);
+      expect(history.at(-1).content).toBe('answer 23');
+      expect(store.loadRecentBySession('grp_a', 20, { beforeSeq }).filter(m => m.role === 'user').length).toBeLessThan(20);
+    });
+
+    it('stops at the requested oldest user without reading the previous dense turn', async () => {
+      const sessionId = 'provider-window-boundary';
+      const directory = join(TEST_DIR, 'sessions', sessionId, 'conversation', 'messages');
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, 'm1.md'), '---\nid: m1\nrole: assistant\nsessionId: provider-window-boundary\n---\nold dense turn');
+      for (let i = 0; i < 20; i++) {
+        const id = `m${i + 2}`;
+        writeFileSync(join(directory, `${id}.md`), `---\nid: ${id}\nrole: user\nsessionId: ${sessionId}\n---\nquestion ${i}`);
+      }
+      const original = store.readMessageFile;
+      store.readMessageFile = function(path, ...args) {
+        if (path.endsWith('/m1.md')) throw new Error('must not read the excluded turn');
+        return original.call(this, path, ...args);
+      };
+      const rows = await store.loadProviderHistoryBySession(sessionId, 20);
+      expect(rows.map(row => row.id)).toEqual(Array.from({ length: 20 }, (_, i) => `m${i + 2}`));
+    });
+
     it('projects persisted AskUser answers without exposing ordinary tool results', () => {
       store.append({ role: 'user', content: 'latest q', sessionId: 'grp_a' });
       store.append({

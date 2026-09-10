@@ -3814,7 +3814,7 @@ describe('Engine', () => {
       }
     });
 
-    it('persists a T2 carry-forward reflection and hides the original tool arc after restart', async () => {
+    it('persists a T2 carry-forward reflection even when the next request cannot retain recent history', async () => {
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-t2-fold-persist-'));
       try {
         const conversationStore = new ConversationStore(yeaftDir);
@@ -3863,14 +3863,19 @@ describe('Engine', () => {
         }
         await Promise.resolve();
         const firstTurn = conversationStore.loadRecentBySession('session-t2-fold', Infinity);
-        for await (const _event of engine.query({
+        const secondEvents = [];
+        for await (const event of engine.query({
           prompt: 'continue after t2',
           messages: firstTurn,
           sessionId: 'session-t2-fold',
           causalRootId: 'root-t2-current',
-        })) {
-          // consume
-        }
+        })) secondEvents.push(event);
+        // This deliberately tiny context cannot hold the system plus even
+        // one complete past turn. Do not silently call the provider without it.
+        expect(secondEvents.find(event => event.type === 'error')?.error?.code)
+          .toBe('HISTORY_RECENT_BUDGET_EXCEEDED');
+        expect(secondEvents.filter(event => event.type === 'turn_end' && event.terminal)).toHaveLength(1);
+        expect(adapter.callLog).toHaveLength(2);
 
         const restarted = new ConversationStore(yeaftDir);
         const durable = restarted.loadRecentBySession(
@@ -3886,7 +3891,8 @@ describe('Engine', () => {
         ]);
         expect(durable.some(message => message.role === 'tool')).toBe(false);
         expect(durable.some(message => Array.isArray(message.toolCalls) && message.toolCalls.length > 0)).toBe(false);
-        expect(durable.at(-1)).toMatchObject({ role: 'assistant', content: 'second turn finished' });
+        expect(durable.some(message => message.content === 'second turn finished')).toBe(false);
+        expect(durable.some(message => message.role === 'user' && message.content === 'continue after t2')).toBe(true);
       } finally {
         await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });

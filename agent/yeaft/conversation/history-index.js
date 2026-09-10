@@ -2,7 +2,7 @@ import { Worker } from 'node:worker_threads';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { writeAtomic } from '../storage/atomic.js';
-import { extractRecallTerms, scoreRecallTurn } from './recall-relevance.js';
+import { extractRecallTerms, scoreRecallTurn, normalizeRecallLimit } from './recall-relevance.js';
 import {
   conversationIndexDatabasePath,
   conversationIndexManifestPath,
@@ -556,8 +556,8 @@ export async function searchConversationIndex(ownerRoot, sessionId, query, opts 
 /**
  * Recall complete visible user/assistant turns from this owner-root Session.
  * beforeSeq excludes that user turn and all later rows (exclusive seq fence).
- * limit defaults to 8, capped at 10. maxTurnRows/maxTurnBytes/maxReadBytes may
- * only lower hard worker caps. Canonical message IDs identify entries; their
+ * limit defaults to 5, capped at 5; 0 disables recall.
+ * maxTurnRows/maxTurnBytes/maxReadBytes may only lower hard worker caps. Canonical message IDs identify entries; their
  * sourceMessageIds preserve all persisted identities, including aggregated VP
  * replies. The first cold call yields not_ready and starts a background build;
  * later calls wait up to 1500ms for readiness and the worker read, without
@@ -569,6 +569,8 @@ export async function searchConversationIndex(ownerRoot, sessionId, query, opts 
  */
 export async function recallConversationTurns(ownerRoot, sessionId, prompt, opts = {}) {
   const terms = extractRecallTerms(prompt);
+  const limit = normalizeRecallLimit(opts.limit);
+  if (limit === 0) return { turns: [], meta: { status: 'disabled', reason: 'disabled', terms } };
   const eligibility = scoreRecallTurn(terms, terms.join(' '));
   if (!eligibility.score) {
     return { turns: [], meta: { status: 'ready', reason: eligibility.reason, terms } };
@@ -577,7 +579,7 @@ export async function recallConversationTurns(ownerRoot, sessionId, prompt, opts
     return await requestConversationHistoryIndex(ownerRoot, sessionId, 'recall-turns', {
       prompt: typeof prompt === 'string' ? prompt.slice(0, 4096) : '',
       beforeSeq: opts.beforeSeq,
-      limit: Math.min(10, Math.max(1, Math.floor(Number(opts.limit) || 8))),
+      limit,
       maxTurnRows: opts.maxTurnRows,
       maxTurnBytes: opts.maxTurnBytes,
       maxReadBytes: opts.maxReadBytes,

@@ -92,6 +92,7 @@ Anything else on a model entry is silently ignored. UI affordances like display 
   "maxConcurrentThreads": 6,
   "autoArchiveIdleDays":  30,
   "recentTurnsLimit":     20,
+  "relatedTurnsLimit":    5,
   "multiVp": { "enabled": true },
   "dream":   { "DREAM_INTERVAL_HOURS": 1, "MIN_NEW_PER_GROUP": 20, "MAX_DREAM_PROMPT_CHARS": 96000 }
 }
@@ -101,7 +102,8 @@ Anything else on a model entry is silently ignored. UI affordances like display 
 | --- | --- | --- | --- | --- |
 | `maxConcurrentThreads` | `number` | `6` | `1–50` | Concurrent ThreadEngineRegistry cap; includes the always-on `main` thread |
 | `autoArchiveIdleDays` | `number` | `30` | `1–3650` | Idle days before a thread is auto-archived |
-| `recentTurnsLimit` | `number` | `20` | `1–500` | Cold-start replay window after boot/reconnect; older transcript remains available through history pagination/search |
+| `recentTurnsLimit` | `number` | `20` | `1–500` | Compatible cold-start replay setting. Provider history targets at least 20 latest turns, shrinking under budget pressure to no fewer than 5 (or all available for a new Session); if that floor cannot fit, the request fails explicitly |
+| `relatedTurnsLimit` | `number` | `5` | `0–5` | Same-Session automatic related-turn cap; only clearly relevant full turns are included (0–5 actual turns). Set 0 to disable; older 8/10 values read as 5 |
 | `multiVp.enabled` | `boolean` | `false` | — | Legacy feature flag retained for compatibility; the current Session UI does not use it as a mode gate |
 | `dream.*` | object | see [dream/limits.js](https://github.com/yeaft/yeaft-web-code-agent/blob/main/agent/yeaft/dream/limits.js) | — | Overrides any UPPER_CASE constant in `DEFAULT_LIMITS` |
 
