@@ -760,25 +760,6 @@ function legacyProjectContext(yeaftDir, sessionId) {
   }, sessionId);
 }
 
-function buildProjectSharedBlock(projectContext, summaries = '') {
-  const context = normalizeProjectContext(projectContext, null);
-  const body = typeof summaries === 'string' ? summaries.trim() : '';
-  if (!context?.projectId && !body) return '';
-  const lines = ['[Project Shared Context]'];
-  if (context?.projectId) {
-    const label = context.projectName
-      ? `${context.projectName} (${context.projectId})`
-      : context.projectId;
-    lines.push(`Project: ${label}`);
-    lines.push('Sharing boundary: sibling Sessions in this Project on this Agent only.');
-  } else {
-    lines.push('Sharing boundary: sibling Sessions in the same Project on this Agent only.');
-  }
-  lines.push('Read-only memory summaries preserve each source Session identity.');
-  if (body) lines.push('', body);
-  return lines.join('\n');
-}
-
 function vpKey(sessionId, vpId) {
   return `${sessionId}::${vpId}`;
 }
@@ -5721,16 +5702,9 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
           ? `${projectContext.projectName} (${projectContext.projectId})`
           : (projectContext?.projectId || '');
         queryOpts.projectInstruction = projectContext?.projectInstruction || '';
-        // Related Session summaries now enter through Engine's single AMS
-        // memory outlet. Keep this announcement limited to Project identity and
-        // sharing boundaries so parent VP prompts do not duplicate the same prose
-        // that sub-agents receive through memory.
-        const sharedBlock = buildProjectSharedBlock(projectContext);
-        if (sharedBlock) {
-          queryOpts.sessionAnnouncement = queryOpts.sessionAnnouncement
-            ? `${queryOpts.sessionAnnouncement}\n\n${sharedBlock}`
-            : sharedBlock;
-        }
+        // Project sibling identity remains available to Engine memory recall via
+        // projectSessionIds. Do not mirror internal sharing metadata into the
+        // user-authored Session announcement shown to the model.
       }
       let turnSessionMeta = null;
       try { turnSessionMeta = sessionCoordinator?.group?.getMeta?.() || null; } catch { turnSessionMeta = null; }
@@ -8238,7 +8212,6 @@ export function handleYeaftMcpReload(msg = {}) {
 export const __testHooks = {
   loadProjects,
   sharedProjectContext,
-  buildProjectSharedBlock,
   normalizeProjectContext,
   handleProjectContextSyncForTest(msg) {
     handleYeaftProjectContextSync(msg);

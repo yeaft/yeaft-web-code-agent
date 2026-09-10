@@ -71,7 +71,7 @@ The Web path uses `web-bridge.js`. The direct `yeaft` CLI uses the transport-neu
 - the single interactive `mode-unified.md` contract;
 - Dream or plan instructions when those operations run;
 - the selected persona and VP metadata;
-- runtime platform/tool guidance;
+- runtime platform metadata;
 - project docs and Project instruction;
 - the rendered H2-AMS memory block;
 - optional harness-level instructions.

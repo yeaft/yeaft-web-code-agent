@@ -27,11 +27,10 @@ const BINARY_EXTS = new Set([
 /** Max file size to read (10 MB). */
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
-/** Default number of lines to read. Aligned with the "large file = >3000
- *  lines" rule in templates/{base,common-rules,tool-guidance}.md so a
- *  ≤3000-line file is returned in one call (no silent truncation that
- *  would trigger a follow-up `offset:3000` call — that's exactly the
- *  round-trip this tool's prompt guidance promises to avoid). */
+/** Default number of lines to read. Aligned with the FileRead tool schema's
+ *  "large file = >3000 lines" rule so a ≤3000-line file is returned in one
+ *  call (no silent truncation that would trigger a follow-up `offset:3000`
+ *  call — exactly the round-trip the tool guidance avoids). */
 const DEFAULT_LIMIT = 3000;
 
 /** Keep raw output close to the model-facing 32 KiB budget while leaving

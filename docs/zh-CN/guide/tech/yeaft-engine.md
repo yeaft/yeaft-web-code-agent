@@ -71,7 +71,7 @@ Web path 使用 `web-bridge.js`。直接运行的 `yeaft` CLI 使用 transport-n
 - 唯一的 interactive `mode-unified.md` contract；
 - Dream 或 plan operation 的专用 instruction；
 - selected persona 与 VP metadata；
-- runtime platform/tool guidance；
+- runtime platform metadata；
 - project docs 与 Project instruction；
 - 渲染后的 H2-AMS memory block；
 - 可选 harness-level instruction。

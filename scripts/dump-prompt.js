@@ -39,8 +39,6 @@ const CEILINGS_TOKENS = {
   identity: 1500,
   date: 30,
   mode: 1200,
-  toolList: 600,
-  toolGuidance: 1000,
   skills: 1500,
   memory: 2000,
   total: 8000,
@@ -161,24 +159,21 @@ function approxTokens(s) {
  * mode-only delta by diffing the requested mode against the alternate.
  *
  */
-function measureSections({ mode, language, memoryInjection, skillContent, toolNames }) {
+function measureSections({ mode, language, memoryInjection, skillContent }) {
   const core = buildSystemPrompt({ language, mode });
-  const withTools = buildSystemPrompt({ language, mode, toolNames });
-  const withSkill = buildSystemPrompt({ language, mode, toolNames, skillContent });
-  const withMemory = buildSystemPrompt({ language, mode, toolNames, skillContent, memoryInjection });
+  const withSkill = buildSystemPrompt({ language, mode, skillContent });
+  const withMemory = buildSystemPrompt({ language, mode, skillContent, memoryInjection });
   const full = withMemory;
 
   const altMode = mode === 'dream' ? 'unified' : 'dream';
   const coreAlt = buildSystemPrompt({ language, mode: altMode });
   const modeDeltaVsAlt = core.length - coreAlt.length;
 
-  const toolsDelta = withTools.length - core.length;
-  const skillDelta = withSkill.length - withTools.length;
+  const skillDelta = withSkill.length - core.length;
   const memoryDelta = withMemory.length - withSkill.length;
   return {
     core: { chars: core.length, tokens: approxTokens(core), note: 'identity + date + mode template' },
     modeVsAlt: { chars: modeDeltaVsAlt, tokens: approxTokens('x'.repeat(Math.max(0, Math.abs(modeDeltaVsAlt)))), altMode },
-    toolsBlock: { chars: toolsDelta, tokens: approxTokens('x'.repeat(Math.max(0, toolsDelta))) },
     skills: { chars: skillDelta, tokens: approxTokens('x'.repeat(Math.max(0, skillDelta))) },
     memory: { chars: memoryDelta, tokens: approxTokens('x'.repeat(Math.max(0, memoryDelta))) },
     totalChars: full.length,
@@ -193,28 +188,9 @@ function main() {
   const args = parseArgs(process.argv);
   if (args.help) { printHelp(); return; }
 
-  // Representative tool names — approximately the set a loaded Yeaft
-  // session sees after createFullRegistry(). We hardcode the count +
-  // names so the dump is reproducible without touching the live
-  // registry (keeps the script side-effect-free).
-  const toolNames = [
-    'AskUser', 'MemoryRead', 'MemoryWrite', 'memory_search', 'memory_query',
-    'WebSearch', 'WebFetch', 'HistorySearch', 'Bash', 'FileRead', 'FileWrite',
-    'FileEdit', 'Glob', 'Grep', 'ListDir', 'apply_patch', 'SpawnAgent',
-    'PromptAgent', 'WaitAgent', 'CloseAgent', 'ListAgents', 'TaskCreate',
-    'TaskUpdate', 'TaskList', 'TaskGet', 'TaskProgress', 'TaskMemory',
-    'FollowupTask', 'UpdatePlan', 'SpawnThread', 'SwitchThread',
-    'ListThreads', 'AttachThreadToTask', 'SpawnTask', 'ReadThreadSummary',
-    'ReadThreadRecent', 'jsRepl', 'jsReplReset', 'NotebookEdit',
-    'ImageGeneration', 'ViewImage',
-    'WriteStdin', 'EnterWorktree', 'ExitWorktree', 'Skill',
-    'mcp_list_tools', 'mcp_call_tool',
-  ];
-
   const measureInput = {
     mode: args.mode,
     language: args.language,
-    toolNames,
     memoryInjection: args.includeMemory ? SAMPLE_MEMORY_INJECTION : undefined,
     skillContent: args.includeSkill ? SAMPLE_SKILL_CONTENT : undefined,
   };
@@ -223,13 +199,9 @@ function main() {
 
   // Budget check
   const coreCeiling = CEILINGS_TOKENS.identity + CEILINGS_TOKENS.date + CEILINGS_TOKENS.mode;
-  const toolsCeiling = CEILINGS_TOKENS.toolList + CEILINGS_TOKENS.toolGuidance;
   const breaches = [];
   if (stats.core.tokens > coreCeiling) {
     breaches.push({ section: 'core (identity+date+mode)', tokens: stats.core.tokens, ceiling: coreCeiling });
-  }
-  if (stats.toolsBlock.tokens > toolsCeiling) {
-    breaches.push({ section: 'tools(list+guidance)', tokens: stats.toolsBlock.tokens, ceiling: toolsCeiling });
   }
   if (stats.skills.tokens > CEILINGS_TOKENS.skills) {
     breaches.push({ section: 'skills', tokens: stats.skills.tokens, ceiling: CEILINGS_TOKENS.skills });
@@ -253,7 +225,6 @@ function main() {
       sections: {
         core: stats.core,
         modeVsAlt: stats.modeVsAlt,
-        toolsBlock: stats.toolsBlock,
         skills: stats.skills,
         memory: stats.memory,
       },
@@ -283,7 +254,6 @@ function main() {
     };
     process.stdout.write(row('core (id+date+mode)', stats.core, coreCeiling));
     process.stdout.write(`    └ mode delta vs ${stats.modeVsAlt.altMode}: ${stats.modeVsAlt.chars >= 0 ? '+' : ''}${stats.modeVsAlt.chars} chars (${stats.modeVsAlt.tokens} tok)\n`);
-    process.stdout.write(row('tools (list+guidance)', stats.toolsBlock, toolsCeiling));
     process.stdout.write(row('skills', stats.skills, CEILINGS_TOKENS.skills));
     process.stdout.write(row('memory', stats.memory, CEILINGS_TOKENS.memory));
     process.stdout.write(`\n  TOTAL                  ${String(stats.totalTokens).padStart(5)} tok / ${CEILINGS_TOKENS.total} ceiling  (${Math.round(stats.totalTokens / CEILINGS_TOKENS.total * 100)}% used)\n`);

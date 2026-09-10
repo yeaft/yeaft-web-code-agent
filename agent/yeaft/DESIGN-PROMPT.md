@@ -31,7 +31,7 @@
 │  ① Identity            — 我是谁                          │
 │  ② Rules               — 我怎么干活                      │
 │  ③ Memory              — 我脑子里都记着啥（AMS 单出口）   │
-│  ④ Active Scope        — 我现在处在哪个范围             │
+│  ④ Routing             — 多 VP 时我该转发给谁           │
 └─────────────────────────────────────────────────────────┘
 
 messages: [
@@ -40,7 +40,7 @@ messages: [
 ]
 ```
 
-**System prompt** 装"我是谁 / 规则 / 我知道什么 / 我现在在哪"。
+**System prompt** 装“我是谁 / 规则 / 我知道什么 / 多 VP 路由契约”。
 **Messages** 装"我们说过什么"。
 历史窗口只影响当前 provider request，不生成或持久化 LLM 摘要。
 
@@ -58,7 +58,7 @@ messages: [
 
 - Group announcement（CLAUDE.md 风格的群级共享前缀）
 - Mode unified template（mode-unified.md）
-- Tool 列表 + tool-guidance.md
+- Tool schema（由 provider tools 数组独立承载，不重复写入 system prompt）
 - Skills 内容（按用户 prompt 相关性挑选）
 - 通用规则（commonRules：输出格式、代码编辑、搜索、前端约定）
 
@@ -135,33 +135,13 @@ const memoryBlock = ams.renderForPrompt();  // 唯一渲染出口
 
 层间溢出可借调：Resident 用不完时让给 OnDemand。
 
-### ④ Active Scope — 我现在处在哪个范围
+### ④ Routing — 多 VP 转发契约
 
-> 不归 AMS。这是**确定性、结构化的小块**，告诉 LLM 当前轮次的作用域信息。
+> 不归 AMS。只有 Session 存在其他可转发 VP 时才渲染 `## multi_vp_routing`。
 
-**结构**（每行一项；**只装 ID + 极短标题**，不装长内容）：
+该块只包含当前 VP、可转发 VP 和 `route_forward` 的必要行为契约。Session ID、推断 topic、inbound envelope 与活跃任务属于运行时 bookkeeping，不再镜像到 system prompt。
 
-```
-## Active Scope
-feature: <featureId> "<title>"     ← 当前 feature（如果有；可为空）
-group:   <groupId>                 ← 当前 group
-vp:      <vpId>                    ← 当前发言 VP
-envelope: <inbound routing info>   ← 谁 @ 我了 / 上一跳是谁
-```
-
-**关键约束**：
-- Feature 是 scope，**不是块**。`feature/<id>` 是 memory 的一个 scope，长期内容（决策、状态、历史）走 AMS 召回；Active Scope 只标记"我现在处在哪个 feature 里"
-- 大多数轮次 Active Scope 就 1-2 行
-- 预算：~1-3K tokens（基本不会触发 cap）
-
-**当前字段映射**：
-
-| Active Scope 字段 | 当前代码字段来源 |
-|---|---|
-| `feature` | `inboundEnvelope.featureId` |
-| `group` | `groupId` |
-| `vp` | `vpPersona.vpId` 或 `senderVpId` |
-| `envelope` | `inboundEnvelope` 的简化摘要（routing info） |
+单 VP Session 不渲染该块；多 VP Session 的身份与成员来自 `vpPersona.vpId`（或 sender VP）和 Session roster。
 
 ---
 
@@ -206,15 +186,12 @@ messages: [
 
 **当前现状**：T4 不存在。结果：feature scope 只能靠用户/工具显式创建，自动归集机制缺失，AMS 的 `feature/<id>` scope 多半为空。
 
-**暂定方案**（v1 不实现）：
-- Active Scope 的 `feature` 字段允许为 `null`
-- 所有 feature 创建/分配依赖**外部显式触发**（用户说"开个 feature 叫 X"、工具显式调用）
-
 **未来方向**（记录方向，不动）：
-- Post-turn 跑一个轻量 LLM 判定："这轮属于已有的某个 feature 吗 / 该新开 feature 吗 / 不属于任何 feature？"
-- 归属已有：下轮 Active Scope 带 featureId
-- 新开：创建 `feature/<newId>/` scope + 初始 `summary.md`
+- Post-turn 跑一个轻量 LLM 判定：“这轮属于已有的某个 feature 吗 / 该新开 feature 吗 / 不属于任何 feature？”
+- 新开时创建 `feature/<newId>/` scope + 初始 `summary.md`
 - **节流**：不是每轮都跑——只在满足某些信号时触发（用户消息长度 > 阈值、含特定动词、显式 `@feature`）
+
+该状态属于 Memory scope 元数据，不要求恢复已删除的通用 Active Scope prompt 块。
 
 ---
 
@@ -237,7 +214,7 @@ messages: [
 | **P1** | budget = `min(100K, ctx × 0.20)` | 低（纯参数） | budget 提升，AMS 容量翻倍 |
 | **P2** | 删除三处重复渲染（违反 #1, #2, #4），统一走 AMS | 低 | ~35K |
 | **P3** | 删除磁盘级 LLM conversation summary，改为 deterministic history window | 低 | 删除摘要调用、磁盘写入和 prompt 注入 |
-| **P4** | 把散落的 feature/vp/group/envelope 字段整理成统一的 Active Scope 块 | 中（命名 + 字段收紧） | 概念清晰，少量节省 |
+| **P4** | 删除通用 Active Scope 展示，仅保留多 VP routing block | 低（展示收紧） | 减少无动作价值的元数据 |
 | **P5** | T4 Scope Tagging 占位（接口/字段，不实现逻辑） | 低 | 0（仅留口子） |
 
 每个 Phase 之前先跑 `npx vitest run` 锁基线，每个 PR 自带相应测试。
@@ -258,10 +235,10 @@ messages: [
 | 区块 | 预算 |
 |---|---|
 | ① Identity | ~3K |
-| ② Rules（announcement/mode/tools/guidance/skills/commonRules）| ~25K |
+| ② Rules（announcement/mode/skills/runtime）| ~10K；tools 由 provider schema 独立承载 |
 | ③ Memory（AMS 单出口，hard budget = 40K） | ≤ 40K |
-| ④ Active Scope | ~3K |
-| **system 小计** | **≤ 71K** |
+| ④ Routing | 多 VP 时的小型确定性块 |
+| **system 小计** | **≤ 55K** |
 | messages（deterministic history window，受 messageTokenBudget 控） | ~25K |
 | **总输入** | **≤ 96K** |
 
@@ -281,11 +258,11 @@ messages: [
 |---|---|---|
 | **Memory** | system prompt ③ 大类，AMS 出口 | ❌ "上下文"、"context"、"working memory" |
 | **AMS** | Active Memory Set，三层缓存（Resident/Recent/OnDemand） | ❌ "memory cache"、"recall layer" |
-| **Active Scope** | system prompt ④ 大类，结构化作用域信息 | ❌ "context block"、"working context"、"task ctx" |
+| **Routing** | system prompt ④ 大类，仅在多 VP Session 中提供真实转发契约 | ❌ 通用 session context、task summary |
 | **Messages** | 对话时间线，发给 LLM 的 messages 数组 | ❌ 把 provider history window 当成持久化摘要；只说 transcript / history window |
 | **History window** | 当前 provider request 的确定性 transcript 副本裁剪 | ❌ 持久化 LLM summary、history summary |
 | **Layer-A Summaries** | user/group/vp 三个 scope 的 `summary.md` 文本 | 仅在描述数据来源时使用；prompt 渲染时它们走 AMS Resident |
-| **Feature** | 一个 scope 类型 (`feature/<id>`)；同时也是 Active Scope 的一个字段 | ❌ "task"（task 是另一回事） |
+| **Feature** | 一个 Memory scope 类型 (`feature/<id>`) | ❌ "task"（task 是另一回事） |
 
 ---
 
