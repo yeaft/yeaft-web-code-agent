@@ -3423,13 +3423,17 @@ export const useChatStore = defineStore('chat', {
      *                               isImage?:boolean,mimeType?:string}>,
      *           quote?:object}} payload
      */
-    sendYeaftSessionMessage({ groupId, text, mentions, attachments, quote }) {
+    sendYeaftSessionMessage({ groupId, text, mentions, attachments, quote, quickSend }) {
       // Route by the session's owning agent, not a page-level pointer. A
       // cross-agent click or a late session_ready replay used to leave the
       // old `yeaftAgentId` pointing at a different agent, so the send hit an
       // agent that has no such session on disk → "Session not found".
       const targetAgentId = resolveAgentIdForSession(this, groupId);
-      if (!groupId || !targetAgentId) return;
+      if (!groupId || !targetAgentId) return false;
+      // Presets originate from the visible Agent. Reject a stale cross-Agent send
+      // rather than applying another instance's model catalog to this Session.
+      if (quickSend && (targetAgentId !== this.currentAgent || this.connectionState !== 'connected'
+        || !this.agents?.some(agent => agent.id === targetAgentId && agent.online))) return false;
       const safeAttachments = Array.isArray(attachments)
         ? attachments.filter((a) => a && a.fileId)
         : [];
@@ -3520,6 +3524,11 @@ export const useChatStore = defineStore('chat', {
         text: effectiveText,
         mentions: Array.isArray(mentions) ? mentions : [],
         perfTraceId,
+        ...(quickSend ? { quickSend: {
+          model: quickSend.model,
+          effort: quickSend.effort ?? null,
+          maxOutputTokens: quickSend.maxOutputTokens ?? null,
+        } } : {}),
         ...(safeQuote ? { quote: safeQuote } : {}),
       };
       if (safeAttachments.length > 0) {

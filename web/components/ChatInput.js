@@ -9,13 +9,17 @@ import VpMentionAutocomplete, {
   vpMentionOptionId,
 } from './VpMentionAutocomplete.js';
 import MessageComposer from './MessageComposer.js';
+import QuickSendButtons from './QuickSendButtons.js';
+import { useUserShortcuts, matchShortcut } from '../utils/user-shortcuts.js';
 
 export default {
   name: 'ChatInput',
-  components: { MessageComposer, VpMentionAutocomplete },
+  components: { MessageComposer, QuickSendButtons, VpMentionAutocomplete },
   props: {
     /** Custom send function: (text, attachmentInfos) => void. Overrides store.sendMessage. */
     sendFn: { type: Function, default: null },
+    /** Explicit opt-in: CLI / Work Center do not support native per-turn model overrides. */
+    quickSendEnabled: { type: Boolean, default: false },
     /** Custom cancel/stop function. Overrides store.cancelExecution. */
     cancelFn: { type: Function, default: null },
     /** i18n key for placeholder text. Defaults to 'chatInput.placeholder'. */
@@ -175,6 +179,10 @@ export default {
           </label>
           <span v-if="store.btwMode" class="btw-input-tag">BTW</span>
           <slot name="actions-start"></slot>
+        </template>
+        <template #quick-actions>
+          <QuickSendButtons v-if="quickSends.length" :items="quickSends"
+            :bindings="shortcutPreferences.bindings" :disabled="!canQuickSend" @send="sendQuick" />
         </template>
         <template #end-actions-before>
           <slot name="actions-end-before"></slot>
@@ -465,6 +473,28 @@ export default {
       return hasContent && store.currentAgent && store.currentConversation && notUploading;
     });
 
+    const { preferences: shortcutPreferences } = useUserShortcuts();
+    const quickSends = Vue.computed(() => {
+      if (!props.quickSendEnabled || !shortcutPreferences.value.showQuickSends || store.btwMode) return [];
+      const config = store.llmConfig?.[store.currentAgent];
+      if (!config?.loaded || config.error) return [];
+      const items = config.agentConfig?.quickSends || config.effectiveConfig?.quickSends || [];
+      return Array.isArray(items) ? items.slice(0, 5) : [];
+    });
+    const canQuickSend = Vue.computed(() => canSend.value && store.connectionState === 'connected'
+      && store.agents?.some(agent => agent.id === store.currentAgent && agent.online));
+    Vue.watch(() => [props.quickSendEnabled, shortcutPreferences.value.showQuickSends,
+      store.currentAgent, store.connectionState, store.agents?.find(agent => agent.id === store.currentAgent)?.online],
+    ([enabled, visible, agentId, connection, online]) => {
+      if (enabled && visible && agentId && connection === 'connected' && online) {
+        store.sendWsMessage({ type: 'get_llm_config', agentId });
+      }
+    }, { immediate: true });
+    const sendQuick = (preset) => {
+      if (!canQuickSend.value || !quickSends.value.includes(preset)) return;
+      send({ model: preset.model, effort: preset.effort ?? null, maxOutputTokens: preset.maxOutputTokens ?? null });
+    };
+
     const autoResize = () => messageComposerRef.value?.autoResize?.();
 
     const resetTextareaSize = () => messageComposerRef.value?.resetTextareaSize?.();
@@ -673,8 +703,10 @@ export default {
       });
     };
 
-    const send = () => {
+    const send = (quickSend = null) => {
       if (!canSend.value) return;
+      // Vue's ordinary send event has no preset; never treat a DOM event as configuration.
+      if (!quickSend || typeof quickSend.model !== 'string') quickSend = null;
 
       showAutocomplete.value = false;
       showExpertAutocomplete.value = false;
@@ -695,8 +727,10 @@ export default {
           }));
 
         const attachmentPayload = attachmentInfos.length > 0 ? attachmentInfos : undefined;
-        if (props.quote) props.sendFn(trimmed, attachmentPayload, props.quote);
-        else props.sendFn(trimmed, attachmentPayload);
+        const accepted = quickSend
+          ? props.sendFn(trimmed, attachmentPayload, props.quote, quickSend)
+          : props.quote ? props.sendFn(trimmed, attachmentPayload, props.quote) : props.sendFn(trimmed, attachmentPayload);
+        if (accepted === false) return;
 
         attachments.value = [];
         if (props.quote) emit('quote-consumed');
@@ -785,6 +819,15 @@ export default {
       // IME owns every key while composing. Safari can report isComposing=false
       // for the confirmation keydown but keeps the standard process keyCode.
       if (e.isComposing || e.keyCode === 229) return;
+      if (!e.defaultPrevented && props.quickSendEnabled && shortcutPreferences.value.showQuickSends) {
+        const slot = [1, 2, 3, 4, 5].find(number => matchShortcut(e, shortcutPreferences.value.bindings[`quickSend${number}`]));
+        if (slot) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!e.repeat && quickSends.value[slot - 1]) sendQuick(quickSends.value[slot - 1]);
+          return;
+        }
+      }
 
       // Esc exits btw mode
       if (e.key === 'Escape' && store.btwMode) {
@@ -901,6 +944,10 @@ export default {
       attachments,
       uploading,
       canSend,
+      quickSends,
+      canQuickSend,
+      shortcutPreferences,
+      sendQuick,
       isCompacting,
       isStopVisible,
       effectivePlaceholderKey,

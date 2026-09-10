@@ -18,12 +18,13 @@ import DashboardTab from './DashboardTab.js';
 import VpCrudPanel from './VpCrudPanel.js';
 import SearchSettingsTab from './SearchSettingsTab.js';
 import McpTab from './McpTab.js';
+import UserShortcutsSettings from './UserShortcutsSettings.js';
 import { loadSandboxState } from '../utils/sandbox-api.js';
 import { confirmDialog } from '../utils/dialog.js';
 
 export default {
   name: 'SettingsPanel',
-  components: { DashboardTab, VpCrudPanel, SearchSettingsTab, McpTab },
+  components: { DashboardTab, VpCrudPanel, SearchSettingsTab, McpTab, UserShortcutsSettings },
   props: {
     visible: Boolean,
     initialTab: { type: String, default: '' },
@@ -313,6 +314,7 @@ export default {
                   </div>
                 </div>
               </div>
+              <UserShortcutsSettings />
             </div>
 
             <!-- Managed Sandbox -->

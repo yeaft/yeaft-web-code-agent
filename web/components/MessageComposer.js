@@ -129,6 +129,7 @@ export default {
       </div>
       <div class="chat-composer-actions">
         <div class="chat-composer-actions-start"><slot name="start-actions"></slot></div>
+        <slot name="quick-actions"></slot>
         <div class="chat-composer-actions-end">
           <slot name="end-actions-before"></slot>
           <button

@@ -1,7 +1,14 @@
 /**
  * English translations — en
  */
+import { en as quickSend } from './quick-send.js';
+import { en as userShortcuts } from './user-shortcuts.js';
+
 export default {
+  ...quickSend,
+  ...userShortcuts,
+  'quickSend.composer.label': 'Quick send',
+  'quickSend.composer.send': 'Quick send {number}: {name}',
   // ============ Common ============
   'common.loading': 'Loading...',
   'common.confirm': 'OK',

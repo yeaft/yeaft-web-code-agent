@@ -46,7 +46,7 @@ import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 const MAIN_THREAD_ID = 'main';
 import { pickEffort, parseEffortPrefix, snapshotEffortDecision } from './effort.js';
 import { bindProviderState } from './llm/provider-state.js';
-import { DEFAULT_CONTEXT_WINDOW, normalizeEffort, resolveContextWindow, resolveModel } from './models.js';
+import { DEFAULT_CONTEXT_WINDOW, getModelInfo, normalizeEffort, parseModelRef, resolveContextWindow, resolveMaxOutputTokens, resolveModel } from './models.js';
 import { lookupModelLimitSync } from './llm/models-dev.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
@@ -1882,7 +1882,7 @@ export class Engine {
     }
   }
 
-  async *#queryLifecycle({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null } = {}) {
+  async *#queryLifecycle({ prompt, promptParts = null, messages = [], signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       const error = new Error('prompt is required and must be a non-empty string');
       yield {
@@ -1974,7 +1974,7 @@ export class Engine {
     try {
       this.#currentThreadId = threadId || MAIN_THREAD_ID;
       this.#currentCausalRootId = effectiveCausalRootId;
-      yield* this.#runQuery({ prompt: effectivePrompt, promptParts: effectivePromptParts, messages, signal: runSignal, userEffort: explicitUserEffort, scenario, isSubAgent, parentEffortDecision, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds, projectInstruction, projectLabel, vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted, currentUserMessage, causalRootId: effectiveCausalRootId, getCurrentTodos, setCurrentTodos, askUser, threadId: this.#currentThreadId, vpTurnId, drainPendingUserMessages, prepareProviderRequest, startProviderRequest, finishProviderRequest, failProviderRequest, closePendingUserInput, collabToolPolicy: effectiveCollabToolPolicy, explicitSkillName: parsedSkill.skillName, retryLifecycle });
+      yield* this.#runQuery({ prompt: effectivePrompt, promptParts: effectivePromptParts, messages, signal: runSignal, turnConfig: turnConfig ? { model: turnConfig.model, effort: turnConfig.effort, maxOutputTokens: turnConfig.maxOutputTokens } : null, userEffort: explicitUserEffort, scenario, isSubAgent, parentEffortDecision, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds, projectInstruction, projectLabel, vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted, currentUserMessage, causalRootId: effectiveCausalRootId, getCurrentTodos, setCurrentTodos, askUser, threadId: this.#currentThreadId, vpTurnId, drainPendingUserMessages, prepareProviderRequest, startProviderRequest, finishProviderRequest, failProviderRequest, closePendingUserInput, collabToolPolicy: effectiveCollabToolPolicy, explicitSkillName: parsedSkill.skillName, retryLifecycle });
     } finally {
       // Closing the async generator at a visible retry boundary means the
       // continuation never reached a provider. Keep it out of history and
@@ -2029,7 +2029,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, explicitSkillName = null, retryLifecycle }) {
+  async *#runQuery({ prompt, promptParts = null, messages, signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, explicitSkillName = null, retryLifecycle }) {
 
     const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
       ? collabToolPolicy
@@ -2555,7 +2555,7 @@ export class Engine {
     // `refreshConfig()` may publish a new Session model while a stream or a
     // tool is running. Apply it only before the next provider request; the
     // current request keeps the snapshot captured below.
-    let currentModel = this.#config.model;
+    let currentModel = turnConfig?.model || this.#config.model;
     let primaryModelAtLastBoundary = currentModel;
     let cumulativeInputTokens = 0;
     let cumulativeOutputTokens = 0;
@@ -2600,7 +2600,7 @@ export class Engine {
       // Keep a retry fallback selected by this query; replacing it here would
       // turn an exhausted primary into an endless retry loop.
       if (currentModel === primaryModelAtLastBoundary) {
-        const refreshedPrimaryModel = this.#config.model;
+        const refreshedPrimaryModel = turnConfig?.model || this.#config.model;
         if (refreshedPrimaryModel !== primaryModelAtLastBoundary) {
           currentModel = refreshedPrimaryModel;
           primaryModelAtLastBoundary = refreshedPrimaryModel;
@@ -2612,6 +2612,21 @@ export class Engine {
       // this request. Fallback retries intentionally retain their selected
       // model, but still use the current policy and configured effort.
       const requestConfig = { ...this.#config };
+      // Overlay only the request snapshot. Never publish temporary settings via
+      // refreshConfig or mutate the shared config / AdapterRouter catalog.
+      if (turnConfig) {
+        requestConfig.model = currentModel;
+        const entry = requestConfig.availableModels?.find(model => model.ref === currentModel);
+        requestConfig.modelInfo = getModelInfo(parseModelRef(currentModel).modelId, entry) || null;
+        if (turnConfig.effort != null) requestConfig.modelEffort = turnConfig.effort;
+        // Blank means the selected model's default cap, not the Session's
+        // previous model budget. Re-resolve at every boundary (including fallback
+        // retries / catalog refresh), without leaking the old global ceiling.
+        const outputLimit = resolveMaxOutputTokens(parseModelRef(currentModel).modelId, {
+          modelInfo: requestConfig.modelInfo,
+        });
+        requestConfig.maxOutputTokens = Math.min(turnConfig.maxOutputTokens ?? outputLimit, outputLimit);
+      }
       // Capture the matching provider catalog in the same synchronous boundary
       // as config/model. Preflight may yield user/task events before the stream
       // is built, but one request must never mix two refresh revisions.
@@ -2808,7 +2823,7 @@ export class Engine {
         // effect at the next loop. A caller override or `/effort` prefix stays
         // fixed for this query and still wins over live Session config.
         const configuredEffort = normalizeEffort(requestConfig.modelEffort);
-        const requestUserEffort = userEffort || configuredEffort || null;
+        const requestUserEffort = normalizeEffort(turnConfig?.effort) || userEffort || configuredEffort || null;
         let resolvedEffort = pickEffort({ scenario, toolLoopTurns, userEffort: requestUserEffort });
 
         // DESIGN.md §9.16: thinking-mode precedence chain. When a VP

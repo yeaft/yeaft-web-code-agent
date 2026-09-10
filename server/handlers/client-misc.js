@@ -244,7 +244,7 @@ export async function handleClientMisc(clientId, client, msg, checkAgentAccess) 
       const llmAgentId = msg.agentId || client.currentAgent;
       if (!llmAgentId) break;
       if (!await checkAgentAccess(llmAgentId)) break;
-      await forwardToAgent(llmAgentId, { type: 'get_llm_config' });
+      await forwardToAgent(llmAgentId, { type: 'get_llm_config', requestId: msg.requestId });
       break;
     }
 

@@ -323,6 +323,7 @@ export default {
           :conversation-id="store.yeaftConversationId"
           :draft-key="yeaftInputDraftKey"
           :send-fn="sendMessage"
+          quick-send-enabled
           :quote="messageQuote"
           :cancel-fn="cancelYeaft"
           :show-stop="isProcessing"
@@ -968,7 +969,7 @@ export default {
       store.leaveYeaft();
     };
 
-    const sendMessage = (text, attachmentInfos, quote) => {
+    const sendMessage = (text, attachmentInfos, quote, quickSend = null) => {
       // task-334m: Pre-check `no_default_vp` before the WS round-trip.
       // If the active group has no roster + no defaultVpId, surface the
       // invite modal instead of sending a message that would round-trip
@@ -977,7 +978,7 @@ export default {
       if (gs && gs.activeNeedsInvite) {
         const g = gs.activeSession;
         if (g) inviteDismissedFor.delete(g.id); // force show
-        return;
+        return false;
       }
       // Yeaft is conceptually a single conversation backed by a group.
       // The main pane filter is the authoritative group currently on screen;
@@ -991,7 +992,7 @@ export default {
       // store helper strips `fileId` shape for the wire and keeps the
       // preview/name/mimeType on the local message render.
       const attachments = Array.isArray(attachmentInfos) ? attachmentInfos : undefined;
-      store.sendYeaftSessionMessage({ groupId, text, mentions, attachments, quote });
+      return store.sendYeaftSessionMessage({ groupId, text, mentions, attachments, quote, ...(quickSend ? { quickSend } : {}) });
     };
 
     const setMessageQuote = (quote) => {

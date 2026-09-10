@@ -24,6 +24,7 @@ import { buildDreamOutputSnapshot } from './dream/output-snapshot.js';
 import { Engine } from './engine.js';
 import { loadSession } from './session.js';
 import { loadAgentMCPConfig, loadConfig, loadMCPConfig } from './config.js';
+import { resolveMaxOutputTokens } from './models.js';
 import {
   createManagedProjectSkill,
   createManagedSkill,
@@ -2238,7 +2239,9 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
     });
   }
 
-  if (related) {
+  // An append shares the running query's request config. A quick send owns
+  // a separate query, so retain its envelope in this thread's normal inbox.
+  if (related && !envelope?._turnConfig) {
     const content = promptParts || prompt;
     const injectedBy = envelope?.msg?.meta?.injectedBy;
     const isInternalAppend = injectedBy === 'route_forward' || injectedBy === 'task_result';
@@ -4744,6 +4747,27 @@ function handleEngineEvent(event, hctx) {
  *   - No legacy "no-session" fallback paths — they were the source of the
  *     router_unavailable bug fixed in v0.1.671.
  */
+/** Validate a one-message override against the loaded Agent catalog, never Session config. */
+export function validateQuickSend(value, config) {
+  if (value === undefined) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('quickSend must be an object');
+  }
+  const { model, effort, maxOutputTokens } = value;
+  const entry = typeof model === 'string' && model.includes('/')
+    ? config?.availableModels?.find(candidate => candidate.ref === model)
+    : null;
+  if (!entry) throw new Error('quickSend.model must name an available provider/model');
+  if (effort !== null && (typeof effort !== 'string' || !entry.effortOptions?.includes(effort))) {
+    throw new Error('quickSend.effort is not supported by the selected model');
+  }
+  if (maxOutputTokens !== null && (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 1
+      || maxOutputTokens > resolveMaxOutputTokens(entry.id, { modelInfo: entry }))) {
+    throw new Error('quickSend.maxOutputTokens must be null or a positive integer within the model output limit');
+  }
+  return { model, effort, maxOutputTokens };
+}
+
 async function runYeaftSessionSend(msg) {
   if (!msg || typeof msg !== 'object') return;
   const { text } = msg;
@@ -4797,6 +4821,20 @@ async function runYeaftSessionSend(msg) {
       message: { content: [{ type: 'text', text: '⚠️ Yeaft session error: no yeaft directory configured.' }] },
     }, { sessionId });
     sendSessionOutputFrame({ type: 'result', result_text: '' }, { sessionId });
+    return;
+  }
+
+  // Reject malformed overrides before boot, roster changes, attachment writes,
+  // or coordinator persistence. The error includes the client id for retry.
+  let turnConfig = null;
+  try {
+    if (msg.quickSend !== undefined) {
+      turnConfig = validateQuickSend(msg.quickSend, loadConfig({ dir: yeaftDir }));
+    }
+  } catch (err) {
+    sendSessionOutputFrame({ type: 'error', code: 'invalid_quick_send',
+      message: err.message, clientMessageId: msg.id || null }, { sessionId });
+    sendSessionOutputFrame({ type: 'result', result_text: '', is_error: true }, { sessionId });
     return;
   }
 
@@ -4981,6 +5019,7 @@ async function runYeaftSessionSend(msg) {
       // Live form — adapters need the base64 image blocks; runVpTurn
       // reads `_promptParts` off the envelope rather than going
       // back to disk on every fan-out target. NOT persisted.
+      _turnConfig: turnConfig,
       _promptParts: attachmentBundle.promptParts,
       _promptSuffix: attachmentBundle.promptSuffix,
       _perfTraceId: perfTraceId,
@@ -5166,6 +5205,12 @@ export function buildVpQueryOpts({ vpId, sessionCoordinator, sessionId, envelope
   // envelope inside router.forward.
   if (envelope && typeof envelope === 'object') {
     out.inboundEnvelope = envelope;
+    // Only direct delivery of this user message inherits quick-send settings.
+    // RouteForward and background reentry keep the recipient's own defaults.
+    if (envelope._turnConfig && !envelope.msg?.meta?.injectedBy
+        && (envelope.msg?.role === 'user' || envelope.msg?.from === 'user')) {
+      out.turnConfig = { ...envelope._turnConfig };
+    }
   }
   // TodoWrite per-thread isolation. Bind closures that read/write a slot
   // keyed by `${sessionId}::${vpId}::${threadId}` so concurrent threads for
