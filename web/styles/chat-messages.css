@@ -1845,8 +1845,20 @@
   max-height: 90vh;
   object-fit: contain;
   border-radius: 8px;
-  cursor: default;
+  cursor: zoom-in;
   box-shadow: var(--modal-shadow);
+  transform-origin: center;
+  touch-action: none;
+  user-select: none;
+  will-change: transform;
+}
+
+.image-preview-img.is-zoomed {
+  cursor: grab;
+}
+
+.image-preview-img.is-zoomed.is-dragging {
+  cursor: grabbing;
 }
 
 .image-preview-close,

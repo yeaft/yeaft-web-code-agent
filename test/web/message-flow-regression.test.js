@@ -1863,10 +1863,35 @@ describe('message flow regressions', () => {
       initialIndex: 0,
       trigger: previewTrigger,
     });
-    expect(previewOverlay.querySelector('.image-preview-img').getAttribute('src')).toBe('/preview-a.png');
+    const previewImage = previewOverlay.querySelector('.image-preview-img');
+    expect(previewImage.getAttribute('src')).toBe('/preview-a.png');
     expect(previewOverlay.querySelector('.image-preview-position').textContent).toBe('1 / 3');
+    expect(previewOverlay.querySelector('.image-preview-zoom-controls')).toBeNull();
+    Object.defineProperties(previewOverlay, {
+      clientWidth: { configurable: true, value: 800 },
+      clientHeight: { configurable: true, value: 600 },
+    });
+    Object.defineProperties(previewImage, {
+      offsetWidth: { configurable: true, value: 800 },
+      offsetHeight: { configurable: true, value: 600 },
+    });
+    previewOverlay.getBoundingClientRect = () => ({ left: 0, top: 0, width: 800, height: 600 });
+    const zoomEvent = new WheelEvent('wheel', {
+      deltaY: -100,
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperties(zoomEvent, {
+      clientX: { configurable: true, value: 600 },
+      clientY: { configurable: true, value: 300 },
+    });
+    previewImage.dispatchEvent(zoomEvent);
+    expect(zoomEvent.defaultPrevented).toBe(true);
+    expect(previewImage.style.transform).toBe('translate(-50px, 0px) scale(1.25)');
+    expect(previewImage.classList.contains('is-zoomed')).toBe(true);
     previewOverlay.querySelector('.image-preview-next').click();
-    expect(previewOverlay.querySelector('.image-preview-img').getAttribute('src')).toBe('/preview-b.png');
+    expect(previewImage.getAttribute('src')).toBe('/preview-b.png');
+    expect(previewImage.style.transform).toBe('translate(0px, 0px) scale(1)');
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
     expect(previewOverlay.querySelector('.image-preview-img').getAttribute('src')).toBe('/preview-a.png');
     previewOverlay.querySelector('.image-preview-previous').click();
