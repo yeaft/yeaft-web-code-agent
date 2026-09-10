@@ -46,7 +46,7 @@ import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 const MAIN_THREAD_ID = 'main';
 import { pickEffort, parseEffortPrefix, snapshotEffortDecision } from './effort.js';
 import { bindProviderState } from './llm/provider-state.js';
-import { DEFAULT_CONTEXT_WINDOW, getModelInfo, normalizeEffort, parseModelRef, resolveContextWindow, resolveModel } from './models.js';
+import { DEFAULT_CONTEXT_WINDOW, getModelInfo, normalizeEffort, parseModelRef, resolveContextWindow, resolveMaxOutputTokens, resolveModel } from './models.js';
 import { lookupModelLimitSync } from './llm/models-dev.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
@@ -2619,7 +2619,13 @@ export class Engine {
         const entry = requestConfig.availableModels?.find(model => model.ref === currentModel);
         requestConfig.modelInfo = getModelInfo(parseModelRef(currentModel).modelId, entry) || null;
         if (turnConfig.effort != null) requestConfig.modelEffort = turnConfig.effort;
-        if (turnConfig.maxOutputTokens != null) requestConfig.maxOutputTokens = turnConfig.maxOutputTokens;
+        // Blank means the selected model's default cap, not the Session's
+        // previous model budget. Re-resolve at every boundary (including fallback
+        // retries / catalog refresh), without leaking the old global ceiling.
+        const outputLimit = resolveMaxOutputTokens(parseModelRef(currentModel).modelId, {
+          modelInfo: requestConfig.modelInfo,
+        });
+        requestConfig.maxOutputTokens = Math.min(turnConfig.maxOutputTokens ?? outputLimit, outputLimit);
       }
       // Capture the matching provider catalog in the same synchronous boundary
       // as config/model. Preflight may yield user/task events before the stream

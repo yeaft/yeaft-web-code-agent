@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Engine } from '../../../agent/yeaft/engine.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
+import { resolveMaxOutputTokens } from '../../../agent/yeaft/models.js';
 import { createCoordinator } from '../../../agent/yeaft/sessions/coordinator.js';
 import {
   validateQuickSend, buildVpQueryOpts, __testSetSession, __testResetVpState,
@@ -63,6 +64,64 @@ describe('quick send ingestion', () => {
 });
 
 describe('query-local configuration', () => {
+  it.each([
+    { sessionOutput: 65536, output: null, expected: 4096 },
+    { sessionOutput: 1024, output: null, expected: 4096 },
+    { sessionOutput: 65536, output: 2048, expected: 2048 },
+    { sessionOutput: 65536, output: 4096, expected: 4096 },
+  ])('resolves selected-model output independently of Session defaults: %j', async ({ sessionOutput, output, expected }) => {
+    const localConfig = { ...config, maxOutputTokens: sessionOutput };
+    const override = validateQuickSend({ ...quickSend, maxOutputTokens: output }, localConfig);
+    const requests = [];
+    const engine = new Engine({ config: localConfig, trace: new NullTrace(), adapter: {
+      async *stream(params) {
+        requests.push(params);
+        yield { type: 'stop', stopReason: 'end_turn' };
+      },
+    } });
+    await drain(engine, { prompt: 'quick', turnConfig: override });
+    await drain(engine, { prompt: 'ordinary' });
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).toMatchObject({ model: quickSend.model, maxTokens: expected });
+    expect(requests[1]).toMatchObject({ model: config.model, maxTokens: sessionOutput });
+    expect(localConfig.maxOutputTokens).toBe(sessionOutput);
+    expect(override.maxOutputTokens).toBe(output);
+  });
+
+  it('rechecks the selected model cap after a live catalog change during tool use', async () => {
+    const localConfig = { ...config, availableModels: config.availableModels.map(entry => ({ ...entry })) };
+    const requests = [];
+    const engine = new Engine({ config: localConfig, trace: new NullTrace(), adapter: {
+      async *stream(params) {
+        requests.push(params);
+        if (requests.length === 1) {
+          yield { type: 'tool_call', id: 'cap-change', name: 'change_cap', input: {} };
+          yield { type: 'stop', stopReason: 'tool_use' };
+        } else yield { type: 'stop', stopReason: 'end_turn' };
+      },
+    } });
+    engine.registerTool({ name: 'change_cap', description: 'change cap', parameters: {}, execute: async () => {
+      localConfig.availableModels[0].maxOutput = 512;
+      return 'ok';
+    } });
+    await drain(engine, { prompt: 'quick', turnConfig: quickSend });
+    expect(requests.map(request => request.maxTokens)).toEqual([2048, 512]);
+    expect(localConfig.maxOutputTokens).toBe(1024);
+  });
+
+  it('uses the shared model default when the selected catalog entry has no output limit', async () => {
+    const model = 'custom/unknown-quick-output-model';
+    const localConfig = { ...config, maxOutputTokens: 65536,
+      availableModels: [{ ref: model, id: 'unknown-quick-output-model', contextWindow: 32000 }] };
+    const requests = [];
+    const engine = new Engine({ config: localConfig, trace: new NullTrace(), adapter: {
+      async *stream(params) { requests.push(params); yield { type: 'stop', stopReason: 'end_turn' }; },
+    } });
+    await drain(engine, { prompt: 'quick', turnConfig: validateQuickSend({ model, effort: null, maxOutputTokens: null }, localConfig) });
+    expect(requests[0].maxTokens).toBe(resolveMaxOutputTokens('unknown-quick-output-model', null));
+    expect(localConfig.maxOutputTokens).toBe(65536);
+  });
+
   it('applies all fields to each tool-loop request and restores config on the next query', async () => {
     const requests = [];
     const engine = new Engine({ config, trace: new NullTrace(), adapter: {

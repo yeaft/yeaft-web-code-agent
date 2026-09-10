@@ -14,7 +14,7 @@ Open via the **⚙ gear** at the bottom of the sidebar. Settings live in a **fix
 
 **General → Custom shortcuts** controls personal key bindings and the **Show quick sends** toggle. Both visibility and bindings start disabled/unassigned. Preferences are isolated by signed-in user in this browser, not synchronized across devices.
 
-Create up to five presets under **Agent settings → Quick send**. Each preset stores its name, model, effort and maximum output tokens in that Agent instance's `config.json`. Optional blank values use runtime defaults. Each Agent has its own model catalog and presets.
+Create up to five presets under **Agent settings → Quick send**. Each preset stores its name, model, effort and maximum output tokens in that Agent instance's `config.json`. Blank effort uses the runtime default. Blank maximum output tokens uses the selected model's resolved output limit, not the Session's previous model budget; enter a positive integer to use a smaller budget. The request is always capped to the actual model's output limit, including fallback retries. Each Agent has its own model catalog and presets.
 
 When enabled, native Yeaft Session Composers show numbered send buttons between attachments and model controls on desktop, or in a separate row on mobile. They send the current draft, attachments and quote with settings for that message only; Session defaults and ordinary Enter sending are unchanged. CLI Chat and Work Center do not show these buttons.
 
