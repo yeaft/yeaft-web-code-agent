@@ -827,6 +827,20 @@ class SegmentStore {
       : out.sort(compareMessagesBySeq);
   }
 
+  /**
+   * Read physical rows without applying reflection tombstones. Session cloning
+   * needs the complete durable transcript, including rows hidden by folding.
+   */
+  readAllRaw({ includeCold = false } = {}) {
+    if (!this.hasData()) return [];
+    const idx = this.loadIndex();
+    return (idx.segments || [])
+      .slice()
+      .sort((a, b) => (a.firstSeq || 0) - (b.firstSeq || 0))
+      .flatMap(segment => this.#readSegment(segment.file, { includeCold }))
+      .sort(compareMessagesBySeq);
+  }
+
   *scan({ beforeSeq = Infinity, afterSeq = -Infinity, desc = false, includeCold = false, scanStats = null } = {}) {
     if (!this.hasData()) return;
     const idx = this.loadIndex();
@@ -1613,6 +1627,81 @@ export class ConversationStore {
    */
   loadAllBySession(sessionId) {
     return this.loadRecentBySession(sessionId, Infinity);
+  }
+
+  /**
+   * Copy the complete durable transcript to a new Session identity.
+   *
+   * Unlike visible history readers, this includes cold rows, internal rows,
+   * reflections, and the rows hidden by reflection tombstones. New persisted
+   * message ids are allocated in original order. References that point to a
+   * copied persisted message are remapped; external/client/tool identities are
+   * intentionally preserved.
+   *
+   * @returns {{ copiedCount: number, idMap: Map<string, string> }}
+   */
+  copySession(sourceSessionId, targetSessionId) {
+    if (!sourceSessionId || !targetSessionId || sourceSessionId === targetSessionId) {
+      return { copiedCount: 0, idMap: new Map() };
+    }
+    const primary = this.#segmentStoreForConversationDir(this.#sessionConversationDir(sourceSessionId));
+    const segmentedRows = primary.readAllRaw({ includeCold: true });
+    const legacyRows = this.#sessionFileEntries('all', sourceSessionId)
+      .map(entry => {
+        try { return this.readMessageFile(entry.path); } catch (err) {
+          if (isPermissionError(err)) return null;
+          throw err;
+        }
+      })
+      .filter(Boolean);
+    // Migration can temporarily leave the same durable row in both the legacy
+    // markdown layout and the segment store. Preserve legacy-only rows, but let
+    // the canonical segment copy win when both contain the same persisted id.
+    const rowsById = new Map();
+    for (const row of [...legacyRows, ...segmentedRows]) {
+      if (row?.sessionId !== sourceSessionId || typeof row.id !== 'string' || !row.id) continue;
+      rowsById.set(row.id, row);
+    }
+    const rows = [...rowsById.values()].sort(compareMessagesBySeq);
+    if (rows.length === 0) return { copiedCount: 0, idMap: new Map() };
+
+    const firstSeq = this.#getNextSeq();
+    const idMap = new Map(rows.map((row, index) => [
+      row.id,
+      `m${String(firstSeq + index).padStart(4, '0')}`,
+    ]));
+    const remapId = id => idMap.get(id) || id;
+    const copies = rows.map(row => {
+      const copy = { ...row, sessionId: targetSessionId };
+      delete copy.id;
+      if (idMap.has(row.causalRootId)) copy.causalRootId = remapId(row.causalRootId);
+      if (Array.isArray(row.foldedMessageIds)) {
+        copy.foldedMessageIds = row.foldedMessageIds.map(remapId);
+      }
+      if (Array.isArray(row.sourceMessageIds)) {
+        copy.sourceMessageIds = row.sourceMessageIds.map(remapId);
+      }
+      if (row.cold === true) delete copy.cold;
+      return copy;
+    });
+    const written = this.appendBatch(copies);
+    for (let index = 0; index < written.length; index += 1) {
+      if (rows[index].cold === true) this.moveToCold(written[index].id);
+    }
+
+    // append() intentionally treats permission failures as best-effort for live
+    // chat. A Session copy cannot: reporting success with a partial transcript
+    // would make the new Session irrecoverably incomplete. Verify the target's
+    // physical rows before the higher-level CRUD operation commits the clone.
+    const target = this.#segmentStoreForConversationDir(this.#sessionConversationDir(targetSessionId));
+    const persistedIds = new Set(target.readAllRaw({ includeCold: true }).map(row => row.id));
+    const expectedIds = [...idMap.values()];
+    if (written.length !== rows.length
+        || persistedIds.size !== expectedIds.length
+        || expectedIds.some(id => !persistedIds.has(id))) {
+      throw new Error(`Session transcript copy incomplete: expected ${rows.length}, persisted ${persistedIds.size}`);
+    }
+    return { copiedCount: written.length, idMap };
   }
 
   /**

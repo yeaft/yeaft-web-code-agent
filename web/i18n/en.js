@@ -1550,6 +1550,8 @@ export default {
   'yeaft.session.delete': 'Delete',
   'yeaft.session.deleteConfirm': 'Delete "{name}"? This permanently removes the session and all its data — this cannot be undone.',
   'yeaft.session.rename': 'Rename',
+  'yeaft.session.copyCurrent': 'Copy from current session',
+  'yeaft.session.copyFailed': 'Could not copy the session: {message}',
   // fix-yeaft-session-list-and-menu: sidebar ⋯ menu now mirrors chat
   // (pin / open settings / remove). Real delete stays in the settings
   // modal's Delete session page (uses `yeaft.session.delete*` above).
@@ -1582,6 +1584,7 @@ export default {
   'yeaft.session.error.invalid_name': 'Session name cannot be empty.',
   'yeaft.session.error.duplicate': 'A session with this id already exists.',
   'yeaft.session.error.not_found': 'Session not found.',
+  'yeaft.session.error.session_running': 'Wait for the current response to finish before copying this session.',
   'yeaft.session.error.default_not_in_roster': 'The default VP must be in the roster.',
   'yeaft.session.error.no_default_vp': 'This session has no members. Add a VP from the library to start chatting.',
   'yeaft.session.error.reserved': 'One of the selected ids is reserved (all, user, system, everyone).',

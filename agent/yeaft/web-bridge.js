@@ -86,6 +86,7 @@ import {
 import {
   SessionCrudError,
   createSessionFromSpec,
+  copySession,
   renameSession,
   updateSessionAnnouncement,
   archiveSession,
@@ -3696,6 +3697,28 @@ export function handleYeaftCreateSession(msg) {
     sendSessionSnapshotBroadcast();
   } catch (err) {
     sendSessionCrudResult({ op: 'create', requestId, ok: false, error: sessionErrorPayload(err) });
+  }
+}
+
+export function handleYeaftCopySession(msg) {
+  const requestId = msg && msg.requestId;
+  const sessionId = msg && (msg.sessionId || msg.groupId);
+  try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const source = decorateSessionsWithRuntimeState(snapshotSessions(yeaftDir))
+      .find(session => session?.id === sessionId);
+    if (!source) throw new SessionCrudError('not_found', sessionId);
+    if (source.running) throw new SessionCrudError('session_running', sessionId, 'Cannot copy a running Session');
+    const session = copySession(yeaftDir, sessionId, {
+      ...configuredVpPaths(),
+      name: msg && msg.name,
+    });
+    recordAgentSessionCreated();
+    session.config = loadSessionConfig(yeaftDir, session.id);
+    sendSessionCrudResult({ op: 'copy', requestId, ok: true, session });
+    sendSessionSnapshotBroadcast();
+  } catch (err) {
+    sendSessionCrudResult({ op: 'copy', requestId, ok: false, error: sessionErrorPayload(err) });
   }
 }
 

@@ -503,7 +503,7 @@ export default {
       this.sessionCreateOpen = false;
       this.sessionCreateProject = null;
     },
-    onUnifiedSessionAction({ action, row, title, sessions } = {}) {
+    async onUnifiedSessionAction({ action, row, title, sessions } = {}) {
       if (!row?.routeRef) return;
       const s = this.chatStore || this.store;
       const { runtimeProvider, agentId, sessionId } = row.routeRef;
@@ -513,6 +513,15 @@ export default {
         s?.reorderCatalogSessions?.(sessions);
       } else if (action === 'pin') {
         s?.toggleCatalogSessionPin?.(row);
+      } else if (runtimeProvider === 'yeaft' && action === 'copy') {
+        const result = await s?.copyCatalogSession?.(row);
+        if (!result?.ok) {
+          const code = result?.error?.code || 'unknown';
+          const key = `yeaft.session.error.${code}`;
+          const translated = this.$t(key);
+          const message = translated === key ? (result?.error?.message || code) : translated;
+          await alertDialog(this.$t('yeaft.session.copyFailed', { message }));
+        }
       } else if (runtimeProvider === 'yeaft' && action === 'settings') {
         this.openGroupSettings({ id: sessionId, agentId }, 'session');
       } else if (action === 'remove') {

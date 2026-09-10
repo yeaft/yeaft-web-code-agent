@@ -6075,6 +6075,72 @@ describe('message flow regressions', () => {
     wrapper.unmount();
   });
 
+  it('copies only the active Yeaft Session and opens the returned identity', async () => {
+    storeFactories.clear();
+    const store = useChatStore();
+    store.sessionCrudRequest = vi.fn(async () => ({
+      ok: true,
+      op: 'copy',
+      session: { id: 'copied-session', name: 'Source copy', agentId: 'agent-a' },
+    }));
+    store.openCatalogSession = vi.fn(() => true);
+    const row = {
+      catalogKey: 'yeaft:agent-a:source-session',
+      runtimeProvider: 'yeaft',
+      routeRef: { runtimeProvider: 'yeaft', agentId: 'agent-a', sessionId: 'source-session' },
+      title: 'Source',
+      availability: 'online',
+    };
+
+    await expect(store.copyCatalogSession(row)).resolves.toMatchObject({ ok: true, op: 'copy' });
+    expect(store.sessionCrudRequest).toHaveBeenCalledWith(
+      'copy',
+      { sessionId: 'source-session' },
+      { agentId: 'agent-a' },
+    );
+    expect(store.openCatalogSession).toHaveBeenCalledWith({
+      catalogKey: 'yeaft:agent-a:copied-session',
+      routeRef: { runtimeProvider: 'yeaft', agentId: 'agent-a', sessionId: 'copied-session' },
+    });
+
+    const sessions = useSessionsStore();
+    sessions.applyCrudResult({
+      ok: true,
+      op: 'copy',
+      session: { id: 'copied-session', name: 'Source copy' },
+    }, 'agent-a');
+    expect(sessions.sessionById('copied-session', 'agent-a')).toMatchObject({ name: 'Source copy' });
+    expect(sessions.activeSessionKey).toBe('agent-a\u001fcopied-session');
+
+    const sidebar = mount(UnifiedSessionList, {
+      attachTo: document.body,
+      props: {
+        sessions: [row],
+        activeRoute: row.routeRef,
+        agents: [{ id: 'agent-a', name: 'Agent A', online: true }],
+      },
+      global: { mocks: { $t: key => key } },
+    });
+    await sidebar.get('.session-dots-btn').trigger('click');
+    const menuItems = [...document.body.querySelectorAll('.session-menu-floating .session-menu-item')];
+    const copyAction = menuItems.find(item => item.textContent === 'yeaft.session.copyCurrent');
+    expect(copyAction).toBeTruthy();
+    copyAction.click();
+    await Vue.nextTick();
+    expect(sidebar.emitted('action').at(-1)[0]).toMatchObject({
+      action: 'copy',
+      row: { catalogKey: row.catalogKey },
+    });
+
+    await sidebar.setProps({
+      activeRoute: { runtimeProvider: 'yeaft', agentId: 'agent-a', sessionId: 'other-session' },
+    });
+    await sidebar.get('.session-dots-btn').trigger('click');
+    expect([...document.body.querySelectorAll('.session-menu-floating .session-menu-item')]
+      .some(item => item.textContent === 'yeaft.session.copyCurrent')).toBe(false);
+    sidebar.unmount();
+  });
+
   it('refreshes repeated catalog clicks without clearing cached Session messages', () => {
     storeFactories.clear();
     runtimeSessionsStore.sessionList = [

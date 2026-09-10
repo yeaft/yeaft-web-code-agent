@@ -441,6 +441,78 @@ describe('ConversationStore', () => {
     });
 
 
+    it('copies the complete durable Session transcript with independent message ids', () => {
+      const sourceSessionId = 'session_copy_source';
+      const targetSessionId = 'session_copy_target';
+      const user = store.append({
+        role: 'user',
+        content: 'original question',
+        sessionId: sourceSessionId,
+        clientMessageId: 'client-stable',
+      });
+      const assistant = store.append({
+        role: 'assistant',
+        content: 'original answer',
+        sessionId: sourceSessionId,
+        causalRootId: user.id,
+        sourceMessageIds: [user.id, 'external-message-id'],
+        toolCalls: [{ id: 'tool-call-stable', name: 'Read', input: {} }],
+      });
+      const reflection = store.foldMessages([user, assistant], {
+        role: 'assistant',
+        content: 'folded summary',
+        sessionId: sourceSessionId,
+        _reflection: true,
+        causalRootId: user.id,
+      });
+      store.moveToCold(user.id);
+
+      // A migration crash can leave an older markdown copy beside segments.
+      // It must not create a duplicate in the cloned transcript.
+      const legacyDir = join(TEST_DIR, 'sessions', sourceSessionId, 'conversation', 'messages');
+      mkdirSync(legacyDir, { recursive: true });
+      writeFileSync(join(legacyDir, `${assistant.id}.md`), `---\nid: ${assistant.id}\nrole: assistant\nsessionId: ${sourceSessionId}\n---\nstale duplicate`);
+
+      const { copiedCount, idMap } = store.copySession(sourceSessionId, targetSessionId);
+      expect(copiedCount).toBe(3);
+      expect(idMap.size).toBe(3);
+      const copiedRows = new ConversationStore(TEST_DIR)
+        .copySession(targetSessionId, 'session_copy_probe');
+      expect(copiedRows.copiedCount).toBe(3);
+
+      const targetSegment = join(TEST_DIR, 'sessions', targetSessionId, 'conversation', 'segments', '000001.jsonl');
+      const physicalRows = readFileSync(targetSegment, 'utf8').trim().split('\n').map(JSON.parse);
+      expect(physicalRows.map(row => row.content)).toEqual([
+        'original question',
+        'original answer',
+        'folded summary',
+      ]);
+      expect(physicalRows.map(row => row.id)).toEqual([
+        idMap.get(user.id),
+        idMap.get(assistant.id),
+        idMap.get(reflection.id),
+      ]);
+      expect(physicalRows[0]).toMatchObject({
+        sessionId: targetSessionId,
+        clientMessageId: 'client-stable',
+        cold: true,
+      });
+      expect(physicalRows[1]).toMatchObject({
+        sessionId: targetSessionId,
+        causalRootId: idMap.get(user.id),
+        sourceMessageIds: [idMap.get(user.id), 'external-message-id'],
+        toolCalls: [{ id: 'tool-call-stable', name: 'Read', input: {} }],
+      });
+      expect(physicalRows[2]).toMatchObject({
+        sessionId: targetSessionId,
+        _reflection: true,
+        causalRootId: idMap.get(user.id),
+        foldedMessageIds: [idMap.get(user.id), idMap.get(assistant.id)],
+      });
+      expect(store.loadRecentBySession(sourceSessionId, 10).map(row => row.id))
+        .not.toContain(idMap.get(reflection.id));
+    });
+
     it('stores many messages in a single JSONL segment with an index', () => {
       for (let i = 0; i < 25; i += 1) {
         store.append({ role: 'user', content: `msg-${i}`, sessionId: 'session_segmented' });
