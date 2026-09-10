@@ -72,10 +72,13 @@ const render = component => {
 };
 
 describe('owner-scoped user shortcuts', () => {
-  it('defaults to hidden and unbound; shares one reactive state for the current auth store', () => {
+  it('defaults to hidden with simple Alt bindings; shares one reactive state for the current auth store', () => {
     expect(shared()).toBe(useUserShortcuts());
     expect(shared().preferences.value).toEqual(defaultUserShortcuts());
-    expect(Object.values(shared().preferences.value.bindings)).toEqual(Array(9).fill(''));
+    expect(shared().preferences.value.bindings).toEqual({
+      terminal: 'Alt+T', files: 'Alt+O', git: 'Alt+G', newSession: 'Alt+N',
+      quickSend1: 'Alt+1', quickSend2: 'Alt+2', quickSend3: 'Alt+3', quickSend4: 'Alt+4', quickSend5: 'Alt+5',
+    });
   });
   it('isolates owners synchronously, clears logout state, and restores only the returning owner', () => {
     const state = create();
@@ -89,7 +92,7 @@ describe('owner-scoped user shortcuts', () => {
     globals.auth.userId = 'owner-a';
     globals.auth.isAuthenticated = true;
     expect(state.preferences.value.showQuickSends).toBe(true);
-    expect(state.preferences.value.bindings).toMatchObject({ terminal: 'Ctrl+Shift+Y', files: '' });
+    expect(state.preferences.value.bindings).toMatchObject({ terminal: 'Ctrl+Shift+Y', files: 'Alt+O' });
     expect(localStorage.length).toBe(2);
   });
   it('validates saves, resets everything, and reports unavailable browser storage without changing state', () => {
@@ -102,11 +105,14 @@ describe('owner-scoped user shortcuts', () => {
     expect(failing.save({ showQuickSends: true })).toEqual({ ok: false, error: 'storage' });
     expect(failing.preferences.value.showQuickSends).toBe(false);
   });
-  it('sanitizes corrupted stored data and drops reserved/duplicate bindings', () => {
+  it('migrates old recommendations while preserving explicit clears and custom bindings', () => {
     localStorage.setItem('yeaft:user-shortcuts:v1:owner-a', JSON.stringify({ bindings: {
-      terminal: 'Ctrl+T', files: 'Ctrl+Shift+O', git: 'ctrl+shift+o', quickSend1: 'Alt+Shift+1',
+      terminal: '', files: 'Ctrl+Shift+O', git: 'ctrl+shift+o', newSession: 'Alt+X', quickSend1: 'Alt+Shift+1',
     } }));
-    expect(create().preferences.value.bindings).toMatchObject({ terminal: '', files: 'Ctrl+Shift+O', git: '', quickSend1: 'Alt+Shift+1' });
+    expect(create().preferences.value.bindings).toEqual({
+      terminal: '', files: 'Alt+O', git: '', newSession: 'Alt+X',
+      quickSend1: 'Alt+1', quickSend2: 'Alt+2', quickSend3: 'Alt+3', quickSend4: 'Alt+4', quickSend5: 'Alt+5',
+    });
   });
 });
 

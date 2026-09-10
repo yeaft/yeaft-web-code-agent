@@ -6,9 +6,8 @@ export default {
     const { preferences, ownerId, save, reset } = useUserShortcuts();
     const recording = Vue.ref('');
     const error = Vue.ref(null);
-    const command = /Mac|iPhone|iPad/.test(globalThis.navigator?.platform || '') ? 'Meta' : 'Ctrl';
     const suggestions = Object.fromEntries(SHORTCUT_ACTIONS.map((action, index) => [
-      action, index < 4 ? `${command}+Shift+${['Y', 'O', 'G', 'U'][index]}` : `Alt+Shift+${index - 3}`,
+      action, index < 4 ? `Alt+${['T', 'O', 'G', 'N'][index]}` : `Alt+${index - 3}`,
     ]));
     Vue.watch(ownerId, () => { recording.value = ''; error.value = null; }, { flush: 'sync' });
     function persist(patch, action = '') {

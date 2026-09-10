@@ -2,49 +2,75 @@
   display: flex;
   align-items: center;
   flex: 0 0 auto;
-  gap: var(--chat-composer-control-gap);
+  gap: 6px;
   min-width: 0;
 }
 
-.composer-quick-send.btn-ghost {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  min-width: 42px;
+.composer-quick-send.send-btn {
+  position: relative;
+  width: var(--chat-composer-control-size);
+  min-width: var(--chat-composer-control-size);
   height: var(--chat-composer-control-size);
-  padding: 0 6px;
-  border-radius: var(--chat-composer-radius);
-  color: var(--text-secondary);
+  padding: 0;
+  color: var(--accent-fg);
+  box-shadow: none;
 }
 
-.composer-quick-send-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--border-color);
-  border-radius: 50%;
+.composer-quick-send.send-btn svg {
+  width: 16px;
+  height: 16px;
 }
 
 .composer-quick-send-number {
-  font-size: 11px;
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border: 2px solid var(--bg-input-wrapper);
+  border-radius: 999px;
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
 }
 
-.composer-quick-send:not(:disabled):hover {
-  color: var(--accent-color);
-  background: var(--bg-hover);
+.composer-quick-send-1.send-btn { background: var(--quick-send-1); }
+.composer-quick-send-2.send-btn { background: var(--quick-send-2); }
+.composer-quick-send-3.send-btn { background: var(--quick-send-3); }
+.composer-quick-send-4.send-btn { background: var(--quick-send-4); }
+.composer-quick-send-5.send-btn { background: var(--quick-send-5); }
+
+.composer-quick-send-1.send-btn:hover:not(:disabled) { background: var(--quick-send-1-hover); }
+.composer-quick-send-2.send-btn:hover:not(:disabled) { background: var(--quick-send-2-hover); }
+.composer-quick-send-3.send-btn:hover:not(:disabled) { background: var(--quick-send-3-hover); }
+.composer-quick-send-4.send-btn:hover:not(:disabled) { background: var(--quick-send-4-hover); }
+.composer-quick-send-5.send-btn:hover:not(:disabled) { background: var(--quick-send-5-hover); }
+
+.composer-quick-send.send-btn:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
 }
 
-.composer-quick-send:disabled { opacity: 0.4; cursor: not-allowed; }
+.composer-quick-send.send-btn:disabled {
+  background: var(--border-color);
+  color: var(--text-muted);
+  opacity: .55;
+}
 
 @media (max-width: 767px) {
   .chat-composer-actions:has(.composer-quick-sends) { flex-wrap: wrap; }
   .composer-quick-sends {
     order: -1;
     flex: 0 0 100%;
+    padding: 2px 2px 4px;
     overflow-x: auto;
+    overflow-y: hidden;
   }
 }

@@ -16,13 +16,11 @@ export default {
   template: `
     <div v-if="items.length" class="composer-quick-sends" role="group" :aria-label="$t('quickSend.composer.label')">
       <button v-for="(item, index) in items" :key="item.id" type="button"
-        class="btn-ghost composer-quick-send" :disabled="disabled"
+        class="send-btn composer-quick-send" :class="'composer-quick-send-' + ((index % 5) + 1)" :disabled="disabled"
         :title="description(item, index)"
         :aria-label="$t('quickSend.composer.send', { number: index + 1, name: item.name }) + ' · ' + description(item, index)"
         @click="$emit('send', item)">
-        <span class="composer-quick-send-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="14" height="14"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m7 12 5-5 5 5M12 7v10"/></svg>
-        </span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m7 12 5-5 5 5M12 7v10"/></svg>
         <span class="composer-quick-send-number">{{ index + 1 }}</span>
       </button>
     </div>

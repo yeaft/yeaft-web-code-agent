@@ -4,12 +4,25 @@ export const SHORTCUT_ACTIONS = Object.freeze([
   'terminal', 'files', 'git', 'newSession',
   'quickSend1', 'quickSend2', 'quickSend3', 'quickSend4', 'quickSend5',
 ]);
-const STORAGE_PREFIX = 'yeaft:user-shortcuts:v1:';
+const STORAGE_PREFIX = 'yeaft:user-shortcuts:v2:';
+const LEGACY_STORAGE_PREFIX = 'yeaft:user-shortcuts:v1:';
 const MODIFIERS = ['Ctrl', 'Meta', 'Alt', 'Shift'];
 const instances = new WeakMap();
+const DEFAULT_BINDINGS = Object.freeze({
+  terminal: 'Alt+T', files: 'Alt+O', git: 'Alt+G', newSession: 'Alt+N',
+  quickSend1: 'Alt+1', quickSend2: 'Alt+2', quickSend3: 'Alt+3', quickSend4: 'Alt+4', quickSend5: 'Alt+5',
+});
+const LEGACY_RECOMMENDED_BINDINGS = Object.freeze({
+  terminal: ['Ctrl+Shift+Y', 'Meta+Shift+Y'],
+  files: ['Ctrl+Shift+O', 'Meta+Shift+O'],
+  git: ['Ctrl+Shift+G', 'Meta+Shift+G'],
+  newSession: ['Ctrl+Shift+U', 'Meta+Shift+U'],
+  quickSend1: ['Alt+Shift+1'], quickSend2: ['Alt+Shift+2'], quickSend3: ['Alt+Shift+3'],
+  quickSend4: ['Alt+Shift+4'], quickSend5: ['Alt+Shift+5'],
+});
 
 export function defaultUserShortcuts() {
-  return { showQuickSends: false, bindings: Object.fromEntries(SHORTCUT_ACTIONS.map(action => [action, ''])) };
+  return { showQuickSends: false, bindings: { ...DEFAULT_BINDINGS } };
 }
 
 /** Bindings are explicit modifiers plus a physical letter/digit key, e.g. Ctrl+Shift+Y. */
@@ -72,12 +85,24 @@ export function matchShortcut(event, binding) {
   return result.valid && !!result.binding && shortcutFromEvent(event) === result.binding;
 }
 
-function sanitizePreferences(value) {
+function sanitizePreferences(value, { migrateLegacy = false } = {}) {
   const result = defaultUserShortcuts();
-  result.showQuickSends = value?.showQuickSends === true;
+  if (!value || typeof value !== 'object') return result;
+  result.showQuickSends = value.showQuickSends === true;
+  const seenInputBindings = new Set();
   for (const action of SHORTCUT_ACTIONS) {
-    const validation = validateShortcut(value?.bindings?.[action] || '', result.bindings, action);
-    if (validation.valid) result.bindings[action] = validation.binding;
+    if (!Object.prototype.hasOwnProperty.call(value.bindings || {}, action)) continue;
+    const normalizedInput = normalizeShortcut(value.bindings[action]);
+    if (normalizedInput && seenInputBindings.has(normalizedInput)) {
+      result.bindings[action] = '';
+      continue;
+    }
+    if (normalizedInput) seenInputBindings.add(normalizedInput);
+    const validation = validateShortcut(value.bindings[action], result.bindings, action);
+    const binding = validation.valid ? validation.binding : '';
+    result.bindings[action] = migrateLegacy && LEGACY_RECOMMENDED_BINDINGS[action]?.includes(binding)
+      ? DEFAULT_BINDINGS[action]
+      : binding;
   }
   return result;
 }
@@ -95,7 +120,17 @@ export function createUserShortcutsState(auth, { storage = () => globalThis.loca
     owner => {
       ownerId.value = owner;
       let value = null;
-      try { if (owner) value = JSON.parse(storage()?.getItem(STORAGE_PREFIX + encodeURIComponent(owner)) || 'null'); } catch (_) {}
+      try {
+        if (owner) {
+          const target = storage();
+          const suffix = encodeURIComponent(owner);
+          const current = target?.getItem(STORAGE_PREFIX + suffix);
+          const legacy = target?.getItem(LEGACY_STORAGE_PREFIX + suffix);
+          value = JSON.parse(current || legacy || 'null');
+          preferences.value = sanitizePreferences(value, { migrateLegacy: !current && !!legacy });
+          return;
+        }
+      } catch (_) {}
       preferences.value = sanitizePreferences(value);
     },
     { immediate: true, flush: 'sync' },
