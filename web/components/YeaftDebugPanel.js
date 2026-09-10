@@ -821,7 +821,10 @@ export default {
       return `${Math.round((p / t) * 100)}%`;
     },
     hasRequestInputBreakdown(b) {
-      return Number.isFinite(Number(b?.inputSystemPrompt));
+      return b?.inputSystemPrompt != null
+        && b?.inputHistoryMessages != null
+        && b?.inputToolDefinitions != null
+        && b?.inputCurrentTurn != null;
     },
     requestInputBreakdownTitle(b) {
       const x = b || {};

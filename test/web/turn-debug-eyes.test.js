@@ -175,6 +175,51 @@ describe('request input token breakdown', () => {
       currentTurn: 17,
     });
   });
+
+  it('uses the full provider input total whether cache tokens are separate or already included', () => {
+    const estimate = {
+      systemPromptTokens: 1,
+      historyMessageTokens: 1,
+      toolDefinitionTokens: 1,
+      currentTurnTokens: 1,
+    };
+    const usageTotalInputTokens = YeaftDebugPanel.methods.usageTotalInputTokens;
+    const separateTotal = usageTotalInputTokens({
+      inputTokens: 20,
+      cacheReadTokens: 60,
+      cacheWriteTokens: 20,
+    });
+    const includedTotal = usageTotalInputTokens({
+      inputTokens: 100,
+      cacheReadTokens: 60,
+      cacheWriteTokens: 20,
+      totalInputTokens: 100,
+    });
+    expect(separateTotal).toBe(100);
+    expect(includedTotal).toBe(100);
+    expect(apportionRequestInput(separateTotal, estimate)).toEqual({
+      systemPrompt: 25,
+      historyMessages: 25,
+      tools: 25,
+      currentTurn: 25,
+    });
+    expect(apportionRequestInput(includedTotal, estimate)).toEqual({
+      systemPrompt: 25,
+      historyMessages: 25,
+      tools: 25,
+      currentTurn: 25,
+    });
+  });
+
+  it('does not claim a four-section breakdown for legacy traces', () => {
+    expect(YeaftDebugPanel.methods.hasRequestInputBreakdown({
+      inputSystemPrompt: null,
+      inputHistoryMessages: null,
+      inputToolDefinitions: null,
+      inputCurrentTurn: null,
+      inputTotal: 17,
+    })).toBe(false);
+  });
 });
 
 describe('handleMessage turn-level panel status', () => {
