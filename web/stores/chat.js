@@ -5178,6 +5178,8 @@ export const useChatStore = defineStore('chat', {
               totalMs: event.totalMs || 0,
               totalTokens: event.totalTokens || 0,
               loopCount: event.loopCount || prev.loopCount || 0,
+              ...(typeof event.model === 'string' && event.model ? { model: event.model } : {}),
+              ...(typeof event.effort === 'string' && event.effort ? { effort: event.effort } : {}),
             },
           };
           break;

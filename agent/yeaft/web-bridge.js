@@ -1426,6 +1426,8 @@ function projectPersistedToHistoryEntry(m, { includeReflections = false } = {}) 
   if (m.imageAssetAnchor) entry.imageAssetAnchor = true;
   if (m.responseKind === 'progress' || m.responseKind === 'result') entry.responseKind = m.responseKind;
   if (Number.isInteger(m.llmCallCount) && m.llmCallCount > 0) entry.llmCallCount = m.llmCallCount;
+  if (typeof m.model === 'string' && m.model) entry.model = m.model;
+  if (typeof m.effort === 'string' && m.effort) entry.effort = m.effort;
   if (m.incomplete === true) entry.incomplete = true;
   if (typeof m.stopReason === 'string' && m.stopReason) entry.stopReason = m.stopReason;
   if (m.sessionId) entry.sessionId = m.sessionId;
@@ -1567,6 +1569,8 @@ function projectVisibleHistoryChunkMessages(messages = []) {
       ...(m.speakerVpId ? { speakerVpId: m.speakerVpId } : {}),
       ...(m.responseKind === 'progress' || m.responseKind === 'result' ? { responseKind: m.responseKind } : {}),
       ...(Number.isInteger(m.llmCallCount) && m.llmCallCount > 0 ? { llmCallCount: m.llmCallCount } : {}),
+      ...(typeof m.model === 'string' && m.model ? { model: m.model } : {}),
+      ...(typeof m.effort === 'string' && m.effort ? { effort: m.effort } : {}),
       ...(m.incomplete === true ? { incomplete: true } : {}),
       ...(typeof m.stopReason === 'string' && m.stopReason ? { stopReason: m.stopReason } : {}),
       ...(Array.isArray(m.todos) ? { todos: m.todos } : {}),
@@ -4562,6 +4566,8 @@ function handleEngineEvent(event, hctx) {
         totalMs: event.totalMs,
         totalTokens: event.totalTokens,
         loopCount: event.loopCount,
+        ...(typeof event.model === 'string' && event.model ? { model: event.model } : {}),
+        ...(typeof event.effort === 'string' && event.effort ? { effort: event.effort } : {}),
         ts: Date.now(),
       }, envelope);
       break;

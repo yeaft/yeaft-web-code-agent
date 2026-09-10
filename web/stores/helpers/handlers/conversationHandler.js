@@ -882,6 +882,8 @@ function formatYeaftHistoryMessages(incomingMessages, msgSessionId, mode, existi
           ...(speakerVpId ? { vpId: speakerVpId, speakerVpId } : {}),
           ...(m.responseKind === 'progress' || m.responseKind === 'result' ? { responseKind: m.responseKind } : {}),
           ...(Number.isInteger(m.llmCallCount) && m.llmCallCount > 0 ? { llmCallCount: m.llmCallCount } : {}),
+          ...(typeof m.model === 'string' && m.model ? { model: m.model } : {}),
+          ...(typeof m.effort === 'string' && m.effort ? { effort: m.effort } : {}),
           ...(m.incomplete === true ? { incomplete: true } : {}),
           ...(typeof m.stopReason === 'string' && m.stopReason ? { stopReason: m.stopReason } : {}),
           isStreaming: false,

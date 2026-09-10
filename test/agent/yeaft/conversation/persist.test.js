@@ -119,6 +119,25 @@ Hello`;
     expect(msg.content).toBe('Hello');
   });
 
+  it('round-trips assistant response model metadata', () => {
+    const store = new ConversationStore(TEST_DIR);
+    store.append({
+      role: 'assistant',
+      content: 'Completed',
+      sessionId: 'session_response_meta',
+      model: 'provider/model-v2',
+      effort: 'high',
+      llmCallCount: 3,
+    });
+
+    const [loaded] = new ConversationStore(TEST_DIR).loadAllBySession('session_response_meta');
+    expect(loaded).toMatchObject({
+      model: 'provider/model-v2',
+      effort: 'high',
+      llmCallCount: 3,
+    });
+  });
+
   it('round-trips Session message quote metadata', () => {
     const store = new ConversationStore(TEST_DIR);
     store.append({

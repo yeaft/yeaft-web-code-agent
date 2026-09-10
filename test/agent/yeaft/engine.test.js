@@ -3501,7 +3501,7 @@ describe('Engine', () => {
         const engine = new Engine({
           adapter: mockAdapter,
           trace,
-          config: { model: 'test-model', maxOutputTokens: 1024 },
+          config: { model: 'test-model', modelEffort: 'high', maxOutputTokens: 1024 },
           conversationStore,
           yeaftDir,
           vpId: 'vp-linus',
@@ -3528,6 +3528,8 @@ describe('Engine', () => {
           turnId: 'vp-turn-tool',
           responseKind: 'progress',
           llmCallCount: 2,
+          model: 'test-model',
+          effort: 'high',
         });
         expect(persisted[2]).toMatchObject({
           toolCallId: 'call_incremental',
@@ -7316,6 +7318,10 @@ describe('Engine', () => {
       }));
       expect(events.filter(e => e.type === 'error')).toHaveLength(0);
       expect(events).toContainEqual(expect.objectContaining({ type: 'text_delta', text: 'fallback ok' }));
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'turn_close',
+        model: 'fallback-model',
+      }));
 
       // A retry after visible text must continue from the accepted prefix on a
       // fresh request instead of replaying the original prompt and duplicating

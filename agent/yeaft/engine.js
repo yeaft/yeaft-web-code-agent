@@ -2577,6 +2577,8 @@ export class Engine {
     let displayImageAnchorMessage = null;
     let lastPersistedAssistantMessage = null;
     let lastPersistedAssistantTextMessage = null;
+    let lastSuccessfulModel = null;
+    let lastSuccessfulEffort = null;
     // `refreshConfig()` may publish a new Session model while a stream or a
     // tool is running. Apply it only before the next provider request; the
     // current request keeps the snapshot captured below.
@@ -3282,6 +3284,11 @@ export class Engine {
           contextTokens: peakContextTokens,
           contextWindow: peakContextWindow,
         };
+        // This request completed normally. Preserve the actual model and the
+        // adapter-resolved effort so the visible response can identify the last
+        // successful provider call (including fallback-model switches).
+        lastSuccessfulModel = currentModel;
+        lastSuccessfulEffort = requestEffortDecision.effective || resolvedEffort || null;
         // Stream completed without throwing — reset the retry counter so
         // the next turn starts with a clean budget. In-band adapter errors
         // are converted to throws above so they share the real error path.
@@ -4974,13 +4981,15 @@ export class Engine {
       // Loop back to call adapter again with tool results
     }
 
-    // Store the final provider-call count on the response row itself. Debug
-    // events are transient; the response card must retain the count after a
-    // reload without inventing a second counter.
+    // Store final provider metadata on the response row itself. Debug events
+    // are transient; the response card must retain the last successful model,
+    // effort, and call count after a reload.
     const llmCountMessage = lastPersistedAssistantTextMessage || lastPersistedAssistantMessage;
     if (llmCountMessage && typeof this.#conversationStore?.update === 'function') {
       const updated = this.#conversationStore.update(llmCountMessage, {
         llmCallCount: turnNumber,
+        ...(lastSuccessfulModel ? { model: lastSuccessfulModel } : {}),
+        ...(lastSuccessfulEffort ? { effort: lastSuccessfulEffort } : {}),
       });
       if (updated?.id === lastPersistedAssistantTextMessage?.id) lastPersistedAssistantTextMessage = updated;
       if (updated?.id === lastPersistedAssistantMessage?.id) lastPersistedAssistantMessage = updated;
@@ -4997,6 +5006,8 @@ export class Engine {
       totalMs: Date.now() - queryStartedAt,
       totalTokens: cumulativeInputTokens + cumulativeOutputTokens,
       loopCount: turnNumber,
+      ...(lastSuccessfulModel ? { model: lastSuccessfulModel } : {}),
+      ...(lastSuccessfulEffort ? { effort: lastSuccessfulEffort } : {}),
     };
 
     // The visible response is complete at the yield above. Only when the

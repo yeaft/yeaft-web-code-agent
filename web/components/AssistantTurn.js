@@ -200,13 +200,19 @@ export default {
 
       <!-- 6. Response footer actions (visible on hover) -->
       <div class="turn-footer" v-if="(turn.textContent || responseCollapsible || showDebugAction || (sessionActions && (turn.todoMsg || turn.toolMsgs?.length))) && !turn.isStreaming">
-        <span
-          v-if="turnTime && !turn.speakerVpId"
-          class="turn-time"
-          :title="turnTimeFull"
-          :aria-label="$t('yeaft.message.timeAria', { time: turnTimeFull })"
-        >{{ turnTime }}</span>
-        <span v-if="turn.llmCallCount > 0" class="turn-time">{{ $t(turn.llmCallCount === 1 ? 'yeaft.message.llmCall' : 'yeaft.message.llmCalls', { count: turn.llmCallCount }) }}</span>
+        <div
+          v-if="(turnTime && !turn.speakerVpId) || responseModelMeta || turn.llmCallCount > 0"
+          class="turn-response-meta"
+        >
+          <span
+            v-if="turnTime && !turn.speakerVpId"
+            class="turn-time"
+            :title="turnTimeFull"
+            :aria-label="$t('yeaft.message.timeAria', { time: turnTimeFull })"
+          >{{ turnTime }}</span>
+          <span v-if="responseModelMeta" class="turn-time turn-model-meta" :title="responseModelMeta">{{ responseModelMeta }}</span>
+          <span v-if="turn.llmCallCount > 0" class="turn-time">{{ $t(turn.llmCallCount === 1 ? 'yeaft.message.llmCall' : 'yeaft.message.llmCalls', { count: turn.llmCallCount }) }}</span>
+        </div>
         <button
           v-if="showDebugAction"
           type="button"
@@ -666,12 +672,19 @@ export default {
       props.turn,
       props.quoteAuthor || t('message.assistant')
     ));
+    const responseModelMeta = Vue.computed(() => {
+      const model = typeof props.turn?.model === 'string' ? props.turn.model.trim() : '';
+      const effort = typeof props.turn?.effort === 'string' ? props.turn.effort.trim() : '';
+      const effortLabel = effort ? t(`yeaft.modelMenu.effort.${effort}`) : '';
+      return [model, effortLabel].filter(Boolean).join(' · ');
+    });
 
     return {
       onStopTurn,
       turnTime,
       turnTimeFull,
       assistantQuote,
+      responseModelMeta,
       copied,
       fullCopied,
       expanded,
