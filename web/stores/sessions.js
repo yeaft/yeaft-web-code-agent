@@ -693,7 +693,7 @@ export const useSessionsStore = defineStore('sessions', {
       if (result.ok && result.op === 'list' && Array.isArray(result.sessions)) {
         this.applySnapshot(result.sessions, mutationAgentId);
       }
-      if (result.ok && (result.op === 'create' || result.op === 'restore') && session && session.id) {
+      if (result.ok && (result.op === 'create' || result.op === 'copy' || result.op === 'restore') && session && session.id) {
         const key = this.applySnapshotUpsert(session, mutationAgentId);
         if (key) this.setActive(session.id, mutationAgentId);
       }

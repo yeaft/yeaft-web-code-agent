@@ -1547,6 +1547,8 @@ export default {
   'yeaft.session.deleteConfirm': '删除「{name}」？将永久删除该会话及其所有数据，此操作不可撤销。',
   'yeaft.session.deletingEllipsis': '删除中…',
   'yeaft.session.rename': '重命名',
+  'yeaft.session.copyCurrent': '从当前会话复制',
+  'yeaft.session.copyFailed': '无法复制会话：{message}',
   // fix-yeaft-session-list-and-menu: 侧栏 ⋯ 菜单和 chat 对齐
   // （置顶 / 设置 / 移除）。真删保留在设置 modal 的删除会话页
   // （仍走上面的 `yeaft.session.delete*` 一组 key）。
@@ -1579,6 +1581,7 @@ export default {
   'yeaft.session.error.invalid_name': '会话名称不能为空。',
   'yeaft.session.error.duplicate': '该会话 id 已存在。',
   'yeaft.session.error.not_found': '未找到该会话。',
+  'yeaft.session.error.session_running': '请等待当前回复完成后再复制该会话。',
   'yeaft.session.error.default_not_in_roster': '默认 VP 必须在成员列表中。',
   'yeaft.session.error.no_default_vp': '该会话没有成员，请从角色库添加 VP 以开始对话。',
   'yeaft.session.error.reserved': '所选 id 中包含保留名（all / user / system / everyone）。',

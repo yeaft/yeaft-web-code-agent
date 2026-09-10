@@ -31,15 +31,16 @@ import {
 import { buildPluginCatalog, createPluginSkillManager } from '../../../agent/yeaft/plugins.js';
 import { loadSession } from '../../../agent/yeaft/session.js';
 import { MCPManager } from '../../../agent/yeaft/mcp.js';
-import { __testGetOrCreateVpEngine, __testHooks, __testLoadPluginCatalogMcpConfig, __testResetVpState, __testResolveVpEffectiveConfig, __testSetSession, handleYeaftCreateSession, handleYeaftLoadHistoryOutline, handleYeaftManagedSkill, handleYeaftSubAgentPrompt, handleYeaftTaskCancel, handleYeaftUpdateSessionConfig, handleYeaftVpSubscribe, refreshLiveSessionConfig } from '../../../agent/yeaft/web-bridge.js';
+import { __testGetOrCreateVpEngine, __testHooks, __testLoadPluginCatalogMcpConfig, __testResetVpState, __testResolveVpEffectiveConfig, __testSetSession, handleYeaftCopySession, handleYeaftCreateSession, handleYeaftLoadHistoryOutline, handleYeaftManagedSkill, handleYeaftSubAgentPrompt, handleYeaftTaskCancel, handleYeaftUpdateSessionConfig, handleYeaftVpSubscribe, refreshLiveSessionConfig } from '../../../agent/yeaft/web-bridge.js';
 import { _resetAgentRegistry, getAgentRegistry } from '../../../agent/yeaft/tools/agent.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
+import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
 import { loadSessionConfig, normalizeSessionConfig, resolveSessionConfig, saveSessionConfig } from '../../../agent/yeaft/sessions/session-config.js';
 import { createSession } from '../../../agent/yeaft/sessions/session-store.js';
 import { isMultiVpEnabled, setMultiVpEnabled } from '../../../agent/yeaft/sessions/feature-flag.js';
 import { DEFAULT_VPS } from '../../../agent/yeaft/vp/seed-defaults.js';
-import { registerSessionWorkDir, renameSession, sessionsRoot, snapshotSessions, updateSessionConfig } from '../../../agent/yeaft/sessions/session-crud.js';
+import { copySession, registerSessionWorkDir, renameSession, sessionsRoot, snapshotSessions, updateSessionConfig } from '../../../agent/yeaft/sessions/session-crud.js';
 import {
   createProject,
   deleteProject,
@@ -650,6 +651,100 @@ describe('Yeaft session-scoped model config', () => {
       code: 'DREAM_OUTPUT_TRUNCATED',
       message: 'Dream update response exceeded the 8192-token output limit',
     });
+  });
+
+  it('copies Session metadata, config, and durable messages to an independent identity', () => {
+    const root = makeDir();
+    const workDir = join(root, 'workspace');
+    mkdirSync(workDir, { recursive: true });
+    const source = createSession(sessionsRoot(root), {
+      id: 'copy-source',
+      name: 'Source',
+      roster: [],
+      defaultVpId: null,
+      announcement: 'Keep this context',
+      workDir,
+    });
+    source.close();
+    saveSessionConfig(root, 'copy-source', {
+      model: 'github-copilot/gpt-5.5',
+      modelEffort: 'high',
+    });
+    const conversation = new ConversationStore(root);
+    conversation.append({ role: 'user', content: 'Question', sessionId: 'copy-source' });
+    conversation.append({ role: 'assistant', content: 'Answer', sessionId: 'copy-source' });
+
+    const copied = copySession(root, 'copy-source', { libDir: join(root, 'virtual-persons') });
+
+    expect(copied).toMatchObject({
+      name: 'Source copy',
+      roster: [],
+      defaultVpId: null,
+      announcement: 'Keep this context',
+      workDir,
+      copiedMessageCount: 2,
+    });
+    expect(copied.id).not.toBe('copy-source');
+    expect(loadSessionConfig(root, copied.id)).toEqual({
+      model: 'github-copilot/gpt-5.5',
+      modelEffort: 'high',
+    });
+    expect(conversation.loadAllBySession('copy-source').map(row => row.content)).toEqual(['Question', 'Answer']);
+    const copiedMessages = conversation.loadAllBySession(copied.id);
+    expect(copiedMessages.map(row => row.content)).toEqual(['Question', 'Answer']);
+    expect(copiedMessages.every(row => row.sessionId === copied.id)).toBe(true);
+  });
+
+  it('removes the partial Session when transcript copying fails', () => {
+    const root = makeDir();
+    createSession(sessionsRoot(root), {
+      id: 'copy-failure-source',
+      name: 'Failure source',
+      roster: [],
+      defaultVpId: null,
+    }).close();
+    const copyTranscript = vi.spyOn(ConversationStore.prototype, 'copySession')
+      .mockImplementationOnce(() => { throw new Error('copy transcript failed'); });
+
+    try {
+      expect(() => copySession(root, 'copy-failure-source', {
+        libDir: join(root, 'virtual-persons'),
+      })).toThrow('copy transcript failed');
+    } finally {
+      copyTranscript.mockRestore();
+    }
+
+    expect(snapshotSessions(root).map(row => row.id)).toEqual(['copy-failure-source']);
+  });
+
+  it('rejects copying a running Session before creating a partial copy', () => {
+    const root = makeDir();
+    createSession(sessionsRoot(root), {
+      id: 'copy-running',
+      name: 'Running source',
+      roster: ['omni'],
+      defaultVpId: 'omni',
+    }).close();
+    ctx.CONFIG = { ...(originalConfig || {}), yeaftDir: root };
+    __testHooks.seedVpStatus({
+      sessionId: 'copy-running',
+      vpId: 'omni',
+      state: 'streaming',
+      turnId: 'turn-running',
+    });
+
+    const responseStart = ctx.messageBuffer.length;
+    handleYeaftCopySession({ requestId: 'copy-running-request', sessionId: 'copy-running' });
+    const response = ctx.messageBuffer.slice(responseStart)
+      .map(frame => frame.event)
+      .find(event => event?.type === 'session_crud_result' && event.requestId === 'copy-running-request');
+
+    expect(response).toMatchObject({
+      op: 'copy',
+      ok: false,
+      error: { code: 'session_running' },
+    });
+    expect(snapshotSessions(root).map(row => row.id)).toEqual(['copy-running']);
   });
 
   it('creates an empty-roster Session from the active Agent instance VP library', () => {

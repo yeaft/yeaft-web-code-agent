@@ -6512,6 +6512,7 @@ export const useChatStore = defineStore('chat', {
       const typeMap = {
         list: 'yeaft_list_sessions',
         create: 'yeaft_create_session',
+        copy: 'yeaft_copy_session',
         rename: 'yeaft_rename_session',
         update: 'yeaft_update_session',
         update_config: 'yeaft_update_session_config',
@@ -7342,6 +7343,26 @@ export const useChatStore = defineStore('chat', {
         return false;
       }
       return true;
+    },
+    async copyCatalogSession(row) {
+      const route = row?.routeRef;
+      if (route?.runtimeProvider !== 'yeaft' || !route.agentId || !route.sessionId) {
+        return { ok: false, op: 'copy', error: { code: 'bad_route', message: 'Yeaft Session route required' } };
+      }
+      const result = await this.sessionCrudRequest('copy', {
+        sessionId: route.sessionId,
+      }, { agentId: route.agentId });
+      if (!result?.ok || !result.session?.id) return result;
+      const copiedRoute = {
+        runtimeProvider: 'yeaft',
+        agentId: result.session.agentId || route.agentId,
+        sessionId: result.session.id,
+      };
+      this.openCatalogSession({
+        catalogKey: yeaftCatalogKey(copiedRoute.agentId, copiedRoute.sessionId),
+        routeRef: copiedRoute,
+      });
+      return result;
     },
     reorderCatalogSessions(rows) {
       if (!Array.isArray(rows) || rows.length === 0

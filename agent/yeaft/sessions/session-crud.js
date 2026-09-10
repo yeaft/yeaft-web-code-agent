@@ -63,6 +63,7 @@ import {
 } from '../conversation/history-index-state.js';
 import { retireConversationHistoryIndex } from '../conversation/history-index.js';
 import { ensureSessionConfigFile, saveSessionConfig, loadSessionConfig } from './session-config.js';
+import { ConversationStore } from '../conversation/persist.js';
 import { repairSessionStore } from './recovery.js';
 import {
   addOrUpdateManifestSession,
@@ -529,8 +530,13 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
   if (!name) throw new SessionCrudError('invalid_name', null, 'group name required');
 
   const callerRoster = Array.isArray(input.roster) ? input.roster.slice() : [];
-  const fallbackVpId = callerRoster.length > 0 ? null : preferDefaultVp(scanSortedVpIds(libDir));
-  const roster = callerRoster.length > 0 ? callerRoster : (fallbackVpId ? [fallbackVpId] : []);
+  const preserveEmptyRoster = options.preserveEmptyRoster === true && Array.isArray(input.roster);
+  const fallbackVpId = callerRoster.length > 0 || preserveEmptyRoster
+    ? null
+    : preferDefaultVp(scanSortedVpIds(libDir));
+  const roster = callerRoster.length > 0 || preserveEmptyRoster
+    ? callerRoster
+    : (fallbackVpId ? [fallbackVpId] : []);
   // Validate every member up-front so we fail before touching fs.
   for (const vpId of roster) {
     if (isReservedVpId(vpId)) {
@@ -591,6 +597,62 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
   }
 
   return meta;
+}
+
+/**
+ * Create an independent Session from an existing Session's durable state.
+ * Project membership and server-owned asset storage intentionally remain with
+ * their existing owners; message payloads and their references are preserved.
+ */
+export function copySession(yeaftDir, sourceSessionId, options = {}) {
+  const sourceYeaftDir = resolveSessionYeaftDir(yeaftDir, sourceSessionId);
+  const source = requireSession(sourceYeaftDir, sourceSessionId);
+  let sourceMeta;
+  try {
+    sourceMeta = source.getMeta();
+  } finally {
+    source.close();
+  }
+
+  const requestedName = String(options.name || '').trim();
+  const name = requestedName || `${sourceMeta.name} copy`;
+  const sourceConfig = loadSessionConfig(sourceYeaftDir, sourceSessionId);
+  const copied = createSessionFromSpec(sourceYeaftDir, {
+    name,
+    roster: Array.isArray(sourceMeta.roster) ? sourceMeta.roster : [],
+    defaultVpId: sourceMeta.defaultVpId || null,
+    workDir: sourceMeta.workDir || '',
+  }, { ...options, preserveEmptyRoster: true });
+
+  try {
+    // Unlike ordinary Session creation, cloning is transactional: silently
+    // dropping a source override would make the copy behave differently.
+    saveSessionConfig(sourceYeaftDir, copied.id, sourceConfig);
+    const target = requireSession(sourceYeaftDir, copied.id);
+    try {
+      const targetMeta = target.getMeta();
+      target.saveMeta({
+        ...targetMeta,
+        announcement: sourceMeta.announcement || '',
+        metadataUpdatedAt: new Date().toISOString(),
+      });
+    } finally {
+      target.close();
+    }
+
+    const transcript = new ConversationStore(sourceYeaftDir);
+    const { copiedCount } = transcript.copySession(sourceSessionId, copied.id);
+    return { ...requireSessionMeta(sourceYeaftDir, copied.id), copiedMessageCount: copiedCount };
+  } catch (error) {
+    // A partial clone must never appear as a successful copy.
+    deleteSession(sourceYeaftDir, copied.id, options);
+    throw error;
+  }
+}
+
+function requireSessionMeta(yeaftDir, sessionId) {
+  const handle = requireSession(yeaftDir, sessionId);
+  try { return handle.getMeta(); } finally { handle.close(); }
 }
 
 /**
