@@ -506,6 +506,71 @@ test.describe('侧边栏交互', () => {
     await expect(chatPage.locator('.session-item.active')).toHaveCount(1);
   });
 
+  test('从当前 Yeaft Session 复制完整会话并打开副本', async ({ chatPage, mockAgent }) => {
+    const sourceId = 'copy-source';
+    const copiedId = 'copy-target';
+    const source = {
+      catalogKey: `yeaft:${mockAgent.agentId}:${sourceId}`,
+      runtimeProvider: 'yeaft',
+      routeRef: { runtimeProvider: 'yeaft', agentId: mockAgent.agentId, sessionId: sourceId },
+      title: 'Copy source',
+      availability: 'online',
+      createdAt: '2026-09-10T00:00:00.000Z',
+      metadataUpdatedAt: '2026-09-10T00:00:00.000Z',
+    };
+    await chatPage.evaluate((row) => {
+      const store = window.Pinia.useChatStore();
+      store.applySessionCatalogSnapshot([row], []);
+      store.openCatalogSession(row);
+    }, source);
+
+    const sourceRow = chatPage.locator('.session-item', { hasText: 'Copy source' });
+    await expect(sourceRow).toHaveClass(/active/);
+    await sourceRow.hover();
+    await sourceRow.locator('.session-dots-btn').click();
+    const copyItem = chatPage.locator('.session-menu-floating .session-menu-item', {
+      hasText: 'Copy from current session',
+    });
+    await expect(copyItem).toBeVisible();
+
+    const requestPromise = mockAgent.waitForMessage('yeaft_copy_session');
+    await copyItem.click();
+    const request = await requestPromise;
+    expect(request.sessionId).toBe(sourceId);
+    expect(request.requestId).toBeTruthy();
+
+    mockAgent.send({
+      type: 'yeaft_output',
+      event: {
+        type: 'session_crud_result',
+        op: 'copy',
+        requestId: request.requestId,
+        ok: true,
+        session: {
+          id: copiedId,
+          name: 'Copy source copy',
+          roster: [],
+          defaultVpId: null,
+          announcement: '',
+          workDir: '/tmp/test',
+          createdAt: '2026-09-10T00:01:00.000Z',
+          metadataUpdatedAt: '2026-09-10T00:01:00.000Z',
+        },
+      },
+    });
+
+    await expect.poll(() => chatPage.evaluate(() => {
+      const store = window.Pinia.useChatStore();
+      return {
+        activeCatalogKey: store.activeCatalogKey,
+        activeSessionId: window.Pinia.useSessionsStore().activeSessionId,
+      };
+    })).toEqual({
+      activeCatalogKey: `yeaft:${mockAgent.agentId}:${copiedId}`,
+      activeSessionId: copiedId,
+    });
+  });
+
   test('移除会话：侧栏图标只隐藏会话而不删除数据', async ({ chatPage, mockAgent }) => {
     await createConversation(chatPage);
     const after = await chatPage.locator('.session-item').count();

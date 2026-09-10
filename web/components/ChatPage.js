@@ -653,7 +653,7 @@ export default {
         await alertDialog(this.$t('sidebar.projects.assignFailed', { name: project.name, message }));
       }
     },
-    onUnifiedSessionAction({ action, row, title, sessions } = {}) {
+    async onUnifiedSessionAction({ action, row, title, sessions } = {}) {
       if (!row?.routeRef) return;
       const { runtimeProvider, agentId, sessionId } = row.routeRef;
       if (action === 'rename') {
@@ -664,6 +664,15 @@ export default {
         this.store.toggleCatalogSessionPin(row);
       } else if (action === 'remove') {
         this.store.hideCatalogSession(row);
+      } else if (runtimeProvider === 'yeaft' && action === 'copy') {
+        const result = await this.store.copyCatalogSession(row);
+        if (!result?.ok) {
+          const code = result?.error?.code || 'unknown';
+          const key = `yeaft.session.error.${code}`;
+          const translated = this.$t(key);
+          const message = translated === key ? (result?.error?.message || code) : translated;
+          await alertDialog(this.$t('yeaft.session.copyFailed', { message }));
+        }
       } else if (runtimeProvider === 'yeaft' && action === 'settings') {
         this.store.pendingUnifiedSessionSettings = { sessionId, agentId, section: 'session' };
         this.store.openCatalogSession(row);
