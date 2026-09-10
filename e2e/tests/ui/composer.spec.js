@@ -76,6 +76,9 @@ test.describe('Yeaft composer menus', () => {
             })),
           } };
         }, theme);
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(
+          () => requestAnimationFrame(resolve)
+        )));
         await expect(page.locator('.composer-send-modes')).toHaveCount(0);
         await expect(page.locator('.composer-send-mode-trigger')).toHaveCount(0);
         await expect(page.locator('.composer-send-mode-menu')).toHaveCount(0);
@@ -84,6 +87,7 @@ test.describe('Yeaft composer menus', () => {
         await input.fill('quick message');
         await page.screenshot({ path: testInfo.outputPath(`quick-sends-${theme}-${width}.png`) });
         await input.focus();
+        await expect(input).toBeFocused();
         await page.keyboard.press('Alt+Digit1');
         await expect(input).toHaveValue('');
         const wire = await page.evaluate(() => window.__quickSendWire.find(msg => msg.type === 'yeaft_session_send'));
