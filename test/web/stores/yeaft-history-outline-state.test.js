@@ -758,6 +758,29 @@ describe('Yeaft history outline state', () => {
     });
   });
 
+  it('creates a fresh fenced request when the user retries a failed outline', () => {
+    const store = primeStore();
+    const key = yeaftHistoryIdentityKey('agent-a', 'same');
+    expect(store.loadYeaftHistoryOutline()).toBe(true);
+    const failedRequest = store._sent.at(-1);
+    expect(store.handleYeaftHistoryOutline({
+      type: 'yeaft_history_outline', agentId: 'agent-a', sessionId: 'same',
+      requestId: failedRequest.requestId, results: [], error: 'index_unavailable',
+    })).toBe(true);
+
+    expect(store.loadYeaftHistoryOutline({ force: true })).toBe(true);
+    const retryRequest = store._sent.at(-1);
+    expect(retryRequest.requestId).not.toBe(failedRequest.requestId);
+    expect(store.yeaftHistoryOutlineBySession[key]).toMatchObject({
+      requestId: retryRequest.requestId, loading: true, retryAttempt: 0, error: null,
+    });
+    expect(store.handleYeaftHistoryOutline({
+      type: 'yeaft_history_outline', agentId: 'agent-a', sessionId: 'same',
+      requestId: failedRequest.requestId, results: [{ messageId: 'stale' }],
+    })).toBe(false);
+    expect(store.yeaftHistoryOutlineBySession[key].requestId).toBe(retryRequest.requestId);
+  });
+
   it('surfaces non-retryable outline failures immediately', () => {
     const store = primeStore();
     expect(store.loadYeaftHistoryOutline()).toBe(true);

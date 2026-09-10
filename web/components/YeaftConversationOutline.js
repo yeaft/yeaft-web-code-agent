@@ -44,7 +44,7 @@ export default {
     searchState: { type: Object, required: true },
     activeMessageId: { type: String, default: null },
   },
-  emits: ['query', 'select', 'move', 'preview', 'load-older', 'load-more-search', 'close'],
+  emits: ['query', 'select', 'move', 'preview', 'load-older', 'load-more-search', 'retry', 'close'],
   template: `
     <section id="yeaft-conversation-outline" class="yeaft-conversation-outline" :aria-label="$t('yeaft.outline.label')">
       <div class="yeaft-conversation-outline-header">
@@ -75,7 +75,10 @@ export default {
         role="listbox"
         @scroll="onScroll"
       >
-        <div v-if="errorKey" class="yeaft-conversation-outline-empty is-error">{{ $t(errorKey) }}</div>
+        <div v-if="errorKey" class="yeaft-conversation-outline-empty is-error" role="alert">
+          <span>{{ $t(errorKey) }}</span>
+          <button v-if="canRetry" type="button" class="btn-secondary" @click="$emit('retry')">{{ $t('common.retry') }}</button>
+        </div>
         <div v-else-if="!visibleResults.length && !isLoading" class="yeaft-conversation-outline-empty">{{ $t(isSearching ? 'yeaft.outline.noMatches' : 'yeaft.outline.empty') }}</div>
         <button
           v-for="(result, index) in visibleResults"
@@ -127,16 +130,24 @@ export default {
       return index >= 0 ? index : 0;
     });
     const isLoading = Vue.computed(() => isSearching.value ? props.searchState.loading : props.outlineState.loading);
+    const activeError = Vue.computed(() => (
+      isSearching.value ? props.searchState.error : props.outlineState.error
+    ));
     const countLabel = Vue.computed(() => {
+      if (activeError.value) return '—';
       if (isSearching.value) return `${props.searchState.results.length}${props.searchState.hasMore ? '+' : ''}`;
       const total = props.outlineState.totalCount;
       return Number.isFinite(total) ? String(total) : String(props.outlineState.results.length || '');
     });
     const errorKey = Vue.computed(() => {
-      const error = isSearching.value ? props.searchState.error : props.outlineState.error;
+      const error = activeError.value;
       if (!error) return '';
-      return error === 'unsupported' ? 'yeaft.outline.unsupported' : 'yeaft.outline.error';
+      if (error === 'unsupported') return 'yeaft.outline.unsupported';
+      if (error === 'timeout') return 'yeaft.outline.timeout';
+      if (error === 'index_unavailable') return 'yeaft.outline.indexUnavailable';
+      return 'yeaft.outline.error';
     });
+    const canRetry = Vue.computed(() => !!activeError.value && activeError.value !== 'unsupported');
     const focus = () => Vue.nextTick(() => {
       inputRef.value?.focus?.();
       if (listRef.value) listRef.value.scrollTop = 0;
@@ -187,6 +198,6 @@ export default {
     });
     expose({ focus, restoreOlderScroll });
     Vue.onMounted(focus);
-    return { inputRef, listRef, isSearching, visibleResults, activeIndex, isLoading, countLabel, errorKey, focus, loadOlder, onScroll, onKeyDown, previewResult, formatOutlineTime, historyResultIdentity };
+    return { inputRef, listRef, isSearching, visibleResults, activeIndex, isLoading, countLabel, errorKey, canRetry, focus, loadOlder, onScroll, onKeyDown, previewResult, formatOutlineTime, historyResultIdentity };
   },
 };
