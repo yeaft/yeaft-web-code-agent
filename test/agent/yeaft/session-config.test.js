@@ -2133,16 +2133,6 @@ describe('Yeaft session-scoped model config', () => {
       && frame.event.success === true
       && frame.event.task?.status === 'cancelled')).toBe(true);
 
-    expect(__testHooks.buildProjectSharedBlock({
-      projectId: beta.id,
-      projectName: 'Beta',
-      sessionIds: [],
-    })).toContain(`Project: Beta (${beta.id})`);
-    expect(__testHooks.buildProjectSharedBlock({
-      projectId: beta.id,
-      projectName: 'Beta',
-      sessionIds: ['session-b'],
-    }, '[Session session-b]\n共享发布决策')).toContain('this Project on this Agent only');
     expect(await __testHooks.sharedProjectContext(root, 'session-outside', {
       language: 'zh',
       sessionIds: ['session-b'],
@@ -2436,7 +2426,7 @@ describe('Yeaft session-scoped model config', () => {
       toolRegistry: registry,
       skillManager: null,
       mcpManager: { disconnectAll: async () => {}, status: () => [] },
-      taskManager: { renderActiveTasksForPrompt: () => '' },
+      taskManager: {},
       toolStats: null,
       status: { skills: 0, mcpServers: [], mcpFailed: [], tools: 1 },
     });
@@ -2523,7 +2513,7 @@ describe('Yeaft session-scoped model config', () => {
       toolRegistry: null,
       skillManager: null,
       mcpManager: null,
-      taskManager: { renderActiveTasksForPrompt: () => '' },
+      taskManager: {},
       toolStats: null,
     });
 
@@ -2599,7 +2589,7 @@ describe('Yeaft session-scoped model config', () => {
       toolRegistry: null,
       skillManager: null,
       mcpManager: null,
-      taskManager: { renderActiveTasksForPrompt: () => '' },
+      taskManager: {},
       toolStats: null,
     });
 

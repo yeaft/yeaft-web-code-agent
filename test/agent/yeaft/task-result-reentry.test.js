@@ -118,7 +118,6 @@ function makeTaskManagerStub({ yeaftDir }) {
     completeTask(sessionId, taskId, opts) { return persisted.completeTask(sessionId, taskId, opts); },
     getTask(sessionId, taskId) { return persisted.getTask(sessionId, taskId); },
     listActiveTasks() { return persisted.listActiveTasks(); },
-    renderActiveTasksForPrompt() { return ''; },
   };
 }
 
@@ -236,7 +235,7 @@ describe('task result re-entry', () => {
 
     expect(adapter.streamCalls).toHaveLength(1);
     const system = adapter.streamCalls[0].system;
-    expect(system).toContain('- background command (background command, running)');
+    expect(system).not.toContain('- background command (background command, running)');
     expect(system).not.toContain('echo');
     expect(system).not.toContain('explicit-shell-secret');
     expect(system).not.toContain(command);
@@ -332,7 +331,7 @@ describe('task result re-entry', () => {
     expect(parentAdapter.streamCalls).toHaveLength(1);
     const system = parentAdapter.streamCalls[0].system;
     for (const [name] of missions) {
-      expect(system).toContain(`- sub-agent ${name} (sub-agent, running)`);
+      expect(system).not.toContain(`- sub-agent ${name} (sub-agent, running)`);
     }
     for (const [, mission] of missions) expect(system).not.toContain(mission);
     expect(system).not.toContain('make-secret');
@@ -353,7 +352,7 @@ describe('task result re-entry', () => {
     expect(spawnedAgents.some(({ agentId }) => getAgentRegistry().get(agentId)?.__driverStarted)).toBe(false);
   }
 
-  it('keeps prompt labels safe while preserving persistent task result delivery', async () => {
+  it('keeps active task details out of prompts while preserving persistent result delivery', async () => {
     await verifyShellTaskTitleSafety();
     rmSync(tempDir, { recursive: true, force: true });
     tempDir = null;
