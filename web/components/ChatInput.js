@@ -512,6 +512,24 @@ export default {
       send({ model: preset.model, effort: preset.effort ?? null, maxOutputTokens: preset.maxOutputTokens ?? null });
     };
 
+    const isMobileViewport = () => {
+      if (typeof window === 'undefined') return false;
+      try {
+        return typeof window.matchMedia === 'function'
+          ? window.matchMedia('(max-width: 768px)').matches
+          : Number(window.innerWidth) <= 768;
+      } catch (_) {
+        return false;
+      }
+    };
+    const exitMobileInput = () => {
+      if (!isMobileViewport()) return;
+      inputRef.value?.blur();
+      const activeElement = globalThis.document?.activeElement;
+      if (activeElement?.closest?.('[data-message-composer]')) activeElement.blur?.();
+      inputFocused.value = false;
+    };
+
     const autoResize = () => messageComposerRef.value?.autoResize?.();
 
     const resetTextareaSize = () => messageComposerRef.value?.resetTextareaSize?.();
@@ -755,6 +773,7 @@ export default {
         inputText.value = '';
         if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
         resetTextareaSize();
+        exitMobileInput();
         return;
       }
 
@@ -766,6 +785,7 @@ export default {
         inputText.value = '';
         if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
         resetTextareaSize();
+        exitMobileInput();
         return;
       }
 
@@ -775,6 +795,7 @@ export default {
         inputText.value = '';
         if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
         resetTextareaSize();
+        exitMobileInput();
         return;
       }
 
@@ -819,6 +840,7 @@ export default {
         inputText.value = '';
         if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
         resetTextareaSize();
+        exitMobileInput();
         return;
       }
 
@@ -831,6 +853,7 @@ export default {
       if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
 
       resetTextareaSize();
+      exitMobileInput();
     };
 
     const handleKeydown = (e) => {
