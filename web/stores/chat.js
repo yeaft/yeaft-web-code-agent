@@ -1576,6 +1576,7 @@ export const useChatStore = defineStore('chat', {
         workDir,
         agentHasCapability(state, agentId, 'file_editor'),
         agentHasCapability(state, agentId, 'workbench_session_routes'),
+        agentHasCapability(state, agentId, 'response_image_preview'),
       ]);
     },
     // 当前 Agent 的能力列表
@@ -8591,6 +8592,41 @@ export const useChatStore = defineStore('chat', {
         conversationId,
         workDir,
         workbenchRoute,
+      });
+      return sent ? requestId : null;
+    },
+
+    requestMessageImagePreview(filePath) {
+      const route = this.activeSessionRoute;
+      const agentId = route?.agentId || this.currentAgent || null;
+      const conversationId = route?.runtimeProvider === 'yeaft'
+        ? resolveYeaftConversationIdForSession(this, route.sessionId, agentId)
+        : this.currentConversation;
+      const routeKey = workbenchRouteKey(route);
+      const supported = routeKey && agentId && conversationId
+        && this.workbenchRouteProtocolSupported === true
+        && (agentId === this.currentAgent
+          ? this.hasCapability('file_editor') && this.hasCapability('workbench_session_routes')
+            && this.hasCapability('response_image_preview')
+          : agentHasCapability(this, agentId, 'file_editor')
+            && agentHasCapability(this, agentId, 'workbench_session_routes')
+            && agentHasCapability(this, agentId, 'response_image_preview'));
+      const path = typeof filePath === 'string' ? filePath.trim() : '';
+      if (!supported || !path) return null;
+      const requestId = `message_image_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+      const sent = this.sendWsMessage({
+        type: 'read_file',
+        requestId,
+        filePath: path,
+        responseImagePreview: true,
+        agentId,
+        conversationId,
+        workDir: this.effectiveWorkDir || '',
+        workbenchRoute: {
+          runtimeProvider: route.runtimeProvider,
+          agentId: route.agentId,
+          sessionId: route.sessionId,
+        },
       });
       return sent ? requestId : null;
     },

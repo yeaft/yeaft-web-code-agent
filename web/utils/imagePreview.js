@@ -25,6 +25,9 @@ export function openImagePreview(src, {
   previousLabel = 'Previous image',
   nextLabel = 'Next image',
   positionLabel = (current, total) => `${current} / ${total}`,
+  zoomOutLabel = 'Zoom out',
+  zoomInLabel = 'Zoom in',
+  resetZoomLabel = 'Reset zoom',
   gallery = null,
   initialIndex = null,
   trigger = null,
@@ -64,6 +67,12 @@ export function openImagePreview(src, {
   };
 
   const closeButton = createButton('image-preview-close', closeLabel, '×');
+  const zoomControls = document.createElement('div');
+  zoomControls.className = 'image-preview-zoom-controls';
+  const zoomOutButton = createButton('image-preview-zoom-button', zoomOutLabel, '−');
+  const zoomLabel = createButton('image-preview-zoom-reset', resetZoomLabel, '100%');
+  const zoomInButton = createButton('image-preview-zoom-button', zoomInLabel, '+');
+  zoomControls.append(zoomOutButton, zoomLabel, zoomInButton);
 
   let scale = 1;
   let panX = 0;
@@ -86,6 +95,9 @@ export function openImagePreview(src, {
     clampPan();
     img.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
     img.classList.toggle('is-zoomed', scale > 1);
+    zoomLabel.textContent = `${Math.round(scale * 100)}%`;
+    zoomOutButton.disabled = scale <= MIN_ZOOM;
+    zoomInButton.disabled = scale >= MAX_ZOOM;
   };
 
   const setZoom = (nextScale, anchor = null) => {
@@ -161,7 +173,7 @@ export function openImagePreview(src, {
   if (previousButton && nextButton && position) {
     overlay.append(previousButton, nextButton, position);
   }
-  overlay.append(closeButton);
+  overlay.append(closeButton, zoomControls);
   document.body.appendChild(overlay);
 
   // Force reflow then add visible class for transition.
@@ -187,7 +199,10 @@ export function openImagePreview(src, {
     if (trigger?.isConnected && typeof trigger.focus === 'function') trigger.focus();
   };
 
-  const focusableControls = [previousButton, nextButton, closeButton].filter(Boolean);
+  const focusableControls = () => (
+    [previousButton, nextButton, zoomOutButton, zoomLabel, zoomInButton, closeButton]
+      .filter(control => control && !control.disabled)
+  );
   const onKey = (event) => {
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -216,16 +231,20 @@ export function openImagePreview(src, {
     }
     if (event.key === 'Tab') {
       event.preventDefault();
-      const activeIndex = focusableControls.indexOf(document.activeElement);
+      const controls = focusableControls();
+      const activeIndex = controls.indexOf(document.activeElement);
       const direction = event.shiftKey ? -1 : 1;
       const nextIndex = activeIndex < 0
         ? 0
-        : (activeIndex + direction + focusableControls.length) % focusableControls.length;
-      focusableControls[nextIndex].focus();
+        : (activeIndex + direction + controls.length) % controls.length;
+      controls[nextIndex]?.focus();
     }
   };
 
   closeButton.addEventListener('click', close);
+  zoomOutButton.addEventListener('click', () => setZoom(scale - ZOOM_STEP));
+  zoomLabel.addEventListener('click', resetZoom);
+  zoomInButton.addEventListener('click', () => setZoom(scale + ZOOM_STEP));
   previousButton?.addEventListener('click', () => move(-1));
   nextButton?.addEventListener('click', () => move(1));
   img.addEventListener('load', updateZoom);

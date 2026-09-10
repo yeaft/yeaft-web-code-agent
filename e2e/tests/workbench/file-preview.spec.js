@@ -121,6 +121,14 @@ function mountPreviewHarness() {
         openFiles, activeFileIndex, activeFile, fileOpFeedback: ops.fileOpFeedback,
         onImagePreviewLoad: (file, event) => updateImagePreviewState(file, event),
         onImagePreviewError: (file, event) => updateImagePreviewState(file, event, t('files.previewLoadFailed')),
+        openActiveImagePreview: trigger => {
+          if (!activeFile.value?.blobUrl) return;
+          openImagePreview(activeFile.value.blobUrl, {
+            alt: activeFile.value.name,
+            closeLabel: 'Close', zoomOutLabel: 'Zoom out',
+            zoomInLabel: 'Zoom in', resetZoomLabel: 'Reset image zoom', trigger,
+          });
+        },
       };
     },
   });
@@ -132,6 +140,7 @@ const HTML = `<!doctype html><html lang="en"><head><meta name="viewport" content
 <link rel="stylesheet" href="/web/styles/variables.css">
 <link rel="stylesheet" href="/web/styles/files.css">
 <link rel="stylesheet" href="/web/styles/workbench.css">
+<link rel="stylesheet" href="/web/styles/chat-messages.css">
 <style>
   .preview-test-shell { height: 100dvh; display: flex; flex-direction: column; background: var(--bg-workbench); color: var(--text-primary); }
   .preview-test-shell nav { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px; }
@@ -142,6 +151,7 @@ const HTML = `<!doctype html><html lang="en"><head><meta name="viewport" content
 import FilesTab, { updateImagePreviewState } from '/web/components/FilesTab.js';
 import { createWsHandler } from '/web/components/files/wsHandler.js';
 import { createFileOperations } from '/web/components/files/fileOperations.js';
+import { openImagePreview } from '/web/utils/imagePreview.js';
 import translations from '/web/i18n/en.js';
 (${mountPreviewHarness.toString()})();
 </script></body></html>`;
@@ -339,6 +349,21 @@ for (const theme of ['light', 'dark']) {
         await expect(page.locator('.spinner-mini, .file-preview-image')).toHaveCount(0);
         expect(previewServer.requests.filter(url => url.startsWith('/api/preview/'))).toEqual([]);
         await expectFitsViewport(page);
+      });
+
+      test('opens the shared viewer with visible zoom and reset controls', async ({ page }) => {
+        await openImage(page, 'small');
+        await expectDecoded(page, 32);
+        await page.locator('.file-preview-image-button').click();
+        const overlay = page.locator('.image-preview-overlay');
+        await expect(overlay).toBeVisible();
+        await expect(overlay.locator('.image-preview-zoom-reset')).toHaveText('100%');
+        await overlay.getByRole('button', { name: 'Zoom in' }).click();
+        await expect(overlay.locator('.image-preview-zoom-reset')).toHaveText('125%');
+        await overlay.getByRole('button', { name: 'Reset image zoom' }).click();
+        await expect(overlay.locator('.image-preview-zoom-reset')).toHaveText('100%');
+        await overlay.getByRole('button', { name: 'Close' }).click();
+        await expect(overlay).toBeHidden();
       });
 
       test('a separate failed download for the open path does not poison preview state', async ({ page }) => {

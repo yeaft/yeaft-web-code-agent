@@ -1,6 +1,6 @@
-import { readFile, writeFile, readdir, stat, unlink, rename, mkdir, rm, copyFile, cp } from 'fs/promises';
+import { readFile, realpath, writeFile, readdir, stat, unlink, rename, mkdir, rm, copyFile, cp } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, basename, dirname, extname } from 'path';
+import { join, basename, dirname, extname, isAbsolute, relative, resolve } from 'path';
 import { platform } from 'os';
 import ctx from '../context.js';
 import { resolveAndValidatePath, BINARY_EXTENSIONS } from './utils.js';
@@ -8,6 +8,19 @@ import { sendWorkbenchResult } from './request-routing.js';
 
 export const MAX_WORKBENCH_PREVIEW_BYTES = 20 * 1024 * 1024;
 export const WORKBENCH_FILE_CHUNK_BYTES = 1024 * 1024;
+
+async function validateResponseImagePath(filePath, workDir) {
+  const canonicalRoot = await realpath(resolve(workDir));
+  const canonicalFile = await realpath(resolveAndValidatePath(filePath, canonicalRoot));
+  const relativePath = relative(canonicalRoot, canonicalFile);
+  const outside = relativePath === '..'
+    || relativePath.startsWith(`..${platform() === 'win32' ? '\\' : '/'}`)
+    || isAbsolute(relativePath);
+  if (outside) throw new Error('Response image is outside the active workspace.');
+  const mimeType = BINARY_EXTENSIONS[extname(canonicalFile).toLowerCase()];
+  if (!mimeType?.startsWith('image/')) throw new Error('Response preview only supports image files.');
+  return canonicalFile;
+}
 
 async function reportFileTransferDropped(msg, base) {
   const errorResult = {
@@ -64,7 +77,9 @@ export async function handleReadFile(msg) {
   const workDir = msg.workDir || conv?.workDir || ctx.CONFIG.workDir;
 
   try {
-    const resolved = resolveAndValidatePath(filePath, workDir);
+    const resolved = msg.responseImagePreview
+      ? await validateResponseImagePath(filePath, workDir)
+      : resolveAndValidatePath(filePath, workDir);
     const ext = extname(resolved).toLowerCase();
     const mimeType = BINARY_EXTENSIONS[ext];
 

@@ -1925,15 +1925,61 @@
   transform: translateX(-50%);
 }
 
+.image-preview-zoom-controls {
+  position: absolute;
+  top: var(--image-preview-control-offset);
+  left: 50%;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: var(--image-preview-control-radius);
+  background: var(--bg-main);
+  box-shadow: var(--modal-shadow);
+  transform: translateX(-50%);
+}
+
+.image-preview-zoom-button,
+.image-preview-zoom-reset {
+  height: var(--image-preview-control-size);
+  padding: 0 12px;
+  border: 0;
+  border-right: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.image-preview-zoom-reset {
+  min-width: 68px;
+}
+
+.image-preview-zoom-button:last-child {
+  border-right: 0;
+}
+
+.image-preview-zoom-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .image-preview-close:hover,
 .image-preview-close:focus-visible,
 .image-preview-navigation:hover,
-.image-preview-navigation:focus-visible {
+.image-preview-navigation:focus-visible,
+.image-preview-zoom-button:hover:not(:disabled),
+.image-preview-zoom-button:focus-visible,
+.image-preview-zoom-reset:hover,
+.image-preview-zoom-reset:focus-visible {
   background: var(--sidebar-hover);
 }
 
 .image-preview-close:focus-visible,
-.image-preview-navigation:focus-visible {
+.image-preview-navigation:focus-visible,
+.image-preview-zoom-button:focus-visible,
+.image-preview-zoom-reset:focus-visible {
   outline: var(--image-preview-focus-ring-width) solid var(--accent-blue);
   outline-offset: var(--image-preview-focus-ring-offset);
 }
@@ -1942,6 +1988,15 @@
   .image-preview-img {
     max-width: calc(100vw - 2 * var(--image-preview-mobile-gutter));
     max-height: calc(100vh - var(--image-preview-mobile-reserved-height));
+  }
+
+  .image-preview-zoom-controls {
+    top: auto;
+    bottom: var(--image-preview-control-offset);
+  }
+
+  .image-preview-position {
+    bottom: calc(var(--image-preview-control-offset) + var(--image-preview-control-size) + 12px);
   }
 }
 

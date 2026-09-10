@@ -170,7 +170,7 @@ function canonicalWorkbenchMessage(msg, resolved, { canonicalWorkDir = false } =
     ...clientFields,
     agentId: resolved.agentId,
     conversationId: resolved.conversationId,
-    workDir: canonicalWorkDir ? resolved.workDir : resolved.requestedWorkDir,
+    workDir: (canonicalWorkDir || msg?.responseImagePreview) ? resolved.workDir : resolved.requestedWorkDir,
     workbenchRoute: resolved.route,
     workbenchRouteKey: resolved.routeKey,
     workbenchWorkspaceGeneration: resolved.workspaceGeneration,
@@ -318,6 +318,16 @@ export async function handleClientWorkbench(clientId, client, msg, checkAgentAcc
         return;
       }
       const fileConvId = resolved.conversationId || msg.conversationId || client.currentConversation || '_explorer';
+      if (msg.responseImagePreview
+          && !agents.get(fileAgentId)?.capabilities?.includes?.('response_image_preview')) {
+        await sendToWebClient(client, workbenchFailureResponse({
+          agentId: fileAgentId,
+          msg,
+          resolved: { ...resolved, conversationId: fileConvId },
+          error: 'Response image preview is not supported by this Agent',
+        }));
+        return;
+      }
       console.log(`[Server] Forwarding ${msg.type} to agent ${fileAgentId}, conv=${fileConvId}${msg.filePath ? `, path=${msg.filePath}` : ''}`);
       await forwardCorrelatedWorkbenchRequest({
         agentId: fileAgentId,

@@ -9,8 +9,10 @@ import { openImagePreview } from '../utils/imagePreview.js';
 import { formatSessionMessageDateTime, quoteFromAssistantTurn } from '../utils/session-message-quote.js';
 import {
   collectMessageFileReferences,
+  collectMessageImageReferences,
   decorateMessageFileReferences,
   resolveMessageFileReference,
+  resolveMessageImageFileReference,
 } from '../utils/message-file-reference.js';
 
 export default {
@@ -280,7 +282,10 @@ export default {
     const turnRef = Vue.ref(null);
     const failedImages = Vue.reactive(new Set());
     const resolvedFileReferences = Vue.reactive(new Map());
+    const resolvedMessageImageUrls = Vue.reactive(new Map());
+    const pendingMessageImageReads = new Map();
     let fileReferenceRequestId = null;
+    let fileReferenceRequestContextKey = '';
     const t = Vue.inject('t');
 
     // AskUserQuestion — delegate to AskCard component
@@ -370,6 +375,8 @@ export default {
           return decorateMessageFileReferences(
             wrapTables(addCodeBlockCopyButtons(html)),
             resolvedFileReferences,
+            resolvedMessageImageUrls,
+            store.effectiveWorkDir || '',
           );
         }
       } catch (e) {
@@ -379,6 +386,23 @@ export default {
     };
 
     const onMarkdownClick = (event) => {
+      const image = event.target?.closest?.('img');
+      if (image && event.currentTarget?.contains?.(image)) {
+        const src = image.getAttribute('src');
+        if (src) {
+          event.preventDefault();
+          event.stopPropagation();
+          openImagePreview(src, {
+            alt: image.getAttribute('alt') || t('message.imagePreview'),
+            closeLabel: t('common.close'),
+            zoomOutLabel: t('message.zoomOut'),
+            zoomInLabel: t('message.zoomIn'),
+            resetZoomLabel: t('message.resetZoom'),
+            trigger: image,
+          });
+        }
+        return;
+      }
       const anchor = event.target?.closest?.('a[href]');
       if (!anchor || !event.currentTarget?.contains?.(anchor)) return;
       const reference = resolveMessageFileReference(anchor.getAttribute('href'));
@@ -400,32 +424,68 @@ export default {
     const progressSegments = Vue.computed(() => textSegments.value.filter(segment => segment.kind !== 'result'));
     const resultSegments = Vue.computed(() => textSegments.value.filter(segment => segment.kind === 'result'));
 
-    const fileReferenceSourceSignature = Vue.computed(() => textSegments.value.map(segment => {
-      if (typeof segment?.content === 'string') return segment.content;
-      return segment?.content == null ? '' : JSON.stringify(segment.content);
-    }).join('\u0000'));
+    const fileReferenceSourceSignature = Vue.computed(() => [
+      ...textSegments.value.map(segment => {
+        if (typeof segment?.content === 'string') return segment.content;
+        return segment?.content == null ? '' : JSON.stringify(segment.content);
+      }),
+      ...(Array.isArray(props.turn?.imageMsgs)
+        ? props.turn.imageMsgs.map(image => image?.src || image?.fileId || '')
+        : []),
+    ].join('\u0000'));
+    const localImagePaths = new Set();
     const requestFileReferenceResolution = () => {
       if (props.turn?.isStreaming) return;
       const references = new Set();
+      localImagePaths.clear();
       for (const segment of textSegments.value) {
         if (!segment?.content || typeof marked === 'undefined') continue;
         try {
           const html = marked.parse(typeof segment.content === 'string' ? segment.content : String(segment.content));
-          for (const path of collectMessageFileReferences(html)) references.add(path);
+          const workDir = store.effectiveWorkDir || '';
+          for (const path of collectMessageFileReferences(html, workDir)) references.add(path);
+          for (const path of collectMessageImageReferences(html, workDir)) localImagePaths.add(path);
         } catch (_) {}
       }
+      for (const image of Array.isArray(props.turn?.imageMsgs) ? props.turn.imageMsgs : []) {
+        const reference = resolveMessageImageFileReference(image?.src, store.effectiveWorkDir || '');
+        if (reference) {
+          references.add(reference.path);
+          localImagePaths.add(reference.path);
+        }
+      }
       resolvedFileReferences.clear();
+      resolvedMessageImageUrls.clear();
+      pendingMessageImageReads.clear();
+      fileReferenceRequestContextKey = store.fileReferenceResolutionContextKey || '';
       fileReferenceRequestId = store.resolveMessageFileReferences?.([...references]) || null;
     };
     const handleFileReferenceResolution = event => {
       const msg = event.detail;
+      if (msg?.type === 'file_content') {
+        const pending = pendingMessageImageReads.get(msg.requestId);
+        if (!pending) return;
+        pendingMessageImageReads.delete(msg.requestId);
+        if (pending.contextKey !== (store.fileReferenceResolutionContextKey || '')) return;
+        if (!msg.error && msg.binary && msg.previewUrl) {
+          resolvedMessageImageUrls.set(pending.requestedPath, msg.previewUrl);
+        }
+        return;
+      }
       if (!fileReferenceRequestId || msg?.type !== 'file_references_resolved'
           || msg.requestId !== fileReferenceRequestId) return;
       fileReferenceRequestId = null;
+      if ((store.fileReferenceResolutionContextKey || '') !== fileReferenceRequestContextKey) return;
       resolvedFileReferences.clear();
       for (const entry of msg.references || []) {
-        if (entry?.requestedPath && entry?.resolvedPath) {
-          resolvedFileReferences.set(entry.requestedPath, entry.resolvedPath);
+        if (!entry?.requestedPath || !entry?.resolvedPath) continue;
+        resolvedFileReferences.set(entry.requestedPath, entry.resolvedPath);
+        if (localImagePaths.has(entry.requestedPath)) {
+          const requestId = store.requestMessageImagePreview?.(entry.resolvedPath);
+          if (requestId) pendingMessageImageReads.set(requestId, {
+            requestedPath: entry.requestedPath,
+            contextKey: fileReferenceRequestContextKey,
+          });
         }
       }
     };
@@ -433,7 +493,10 @@ export default {
       window.addEventListener('workbench-message', handleFileReferenceResolution);
       requestFileReferenceResolution();
     });
-    Vue.onBeforeUnmount(() => window.removeEventListener('workbench-message', handleFileReferenceResolution));
+    Vue.onBeforeUnmount(() => {
+      window.removeEventListener('workbench-message', handleFileReferenceResolution);
+      pendingMessageImageReads.clear();
+    });
     Vue.watch(
       [() => props.turn?.isStreaming, fileReferenceSourceSignature, () => store.fileReferenceResolutionContextKey],
       ([streaming, signature, contextKey], [previousStreaming, previousSignature, previousContextKey]) => {
@@ -605,7 +668,10 @@ export default {
 
     // Image helpers
     const imageSrc = (msg) => {
-      if (msg?.src) return msg.src;
+      if (msg?.src) {
+        const reference = resolveMessageImageFileReference(msg.src, store.effectiveWorkDir || '');
+        return reference ? (resolvedMessageImageUrls.get(reference.path) || '') : msg.src;
+      }
       if (!msg?.fileId) return '';
       const token = msg.previewToken || '';
       return `/api/preview/${msg.fileId}?token=${token}`;
@@ -632,6 +698,9 @@ export default {
       openImagePreview(images[initialIndex].src, {
         alt: images[initialIndex].alt,
         closeLabel: t('common.close'),
+        zoomOutLabel: t('message.zoomOut'),
+        zoomInLabel: t('message.zoomIn'),
+        resetZoomLabel: t('message.resetZoom'),
         previousLabel: t('message.previousImage'),
         nextLabel: t('message.nextImage'),
         positionLabel: (current, total) => t('message.imagePosition', { current, total }),
