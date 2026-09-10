@@ -127,9 +127,16 @@ test.describe('Workbench', () => {
     await openYeaftWorkbench(chatPage, mockAgent);
 
     const panel = chatPage.locator('.workbench-panel');
-    await expect(panel.locator('.workbench-launcher')).toBeVisible();
+    const launcher = panel.locator('.workbench-launcher');
+    await expect(launcher).toBeVisible();
     await expect(panel.locator('.workbench-capability-card')).toHaveCount(4);
     await expect(panel.locator('.workbench-item-tab')).toHaveCount(0);
+    await expect(panel.locator('.workbench-capability-host')).toBeHidden();
+    expect(await launcher.evaluate(element => {
+      const launcherRect = element.getBoundingClientRect();
+      const panelRect = element.closest('.workbench-panel').getBoundingClientRect();
+      return Math.abs(launcherRect.bottom - panelRect.bottom) <= 1;
+    })).toBe(true);
     await openCapabilityLauncher(panel);
     await expect(panel.locator('.workbench-add-menu-item')).toHaveCount(4);
     await expect(capability(panel, 'terminal')).toBeVisible();
@@ -140,6 +147,17 @@ test.describe('Workbench', () => {
     await expect.poll(() => mockAgent.messages().filter(message => [
       'terminal_create', 'git_status', 'list_directory', 'restore_file_tabs',
     ].includes(message.type)).length).toBe(0);
+
+    await capability(panel, 'git').click();
+    await expect(panel.locator('.git-status-tab')).toBeVisible();
+    await closeActiveWorkbenchItem(panel);
+    await expect(launcher).toBeVisible();
+    await expect(panel.locator('.workbench-capability-host')).toBeHidden();
+    expect(await launcher.evaluate(element => {
+      const launcherRect = element.getBoundingClientRect();
+      const panelRect = element.closest('.workbench-panel').getBoundingClientRect();
+      return Math.abs(launcherRect.bottom - panelRect.bottom) <= 1;
+    })).toBe(true);
   });
 
   test('keeps open-file controls reachable with overflowing tabs and supports batch close actions', async ({ chatPage, mockAgent }) => {
@@ -669,6 +687,26 @@ test.describe('Workbench', () => {
     await openYeaftWorkbench(chatPage, mockAgent);
 
     const panel = chatPage.locator('.workbench-panel');
+    const launcher = panel.locator('.workbench-launcher');
+    await expect(launcher).toBeVisible();
+    await expect(panel.locator('.workbench-capability-card')).toHaveCount(4);
+    await expect(panel.locator('.workbench-capability-host')).toBeHidden();
+    const launcherGeometry = await launcher.evaluate(element => {
+      const launcherRect = element.getBoundingClientRect();
+      const panelRect = element.closest('.workbench-panel').getBoundingClientRect();
+      return {
+        fillsPanel: Math.abs(launcherRect.bottom - panelRect.bottom) <= 1,
+        scrollable: element.scrollHeight > element.clientHeight,
+        noHorizontalOverflow: element.scrollWidth <= element.clientWidth + 1,
+      };
+    });
+    expect(launcherGeometry).toEqual({
+      fillsPanel: true,
+      scrollable: true,
+      noHorizontalOverflow: true,
+    });
+    await expect(panel.locator('.workbench-capability-card').last()).toBeVisible();
+
     await openCapabilityLauncher(panel);
     const panelBox = await panel.boundingBox();
     expect(panelBox).not.toBeNull();
