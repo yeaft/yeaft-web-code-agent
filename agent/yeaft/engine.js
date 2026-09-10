@@ -4986,13 +4986,19 @@ export class Engine {
       // Loop back to call adapter again with tool results
     }
 
+    const totalMs = Date.now() - queryStartedAt;
+    const totalTokens = cumulativeInputTokens + cumulativeOutputTokens;
     // Store final provider metadata on the response row itself. Debug events
-    // are transient; the response card must retain the last successful model,
-    // effort, and call count after a reload.
+    // are transient; the response card must retain model, call count, token
+    // usage, and duration after a reload.
     const llmCountMessage = lastPersistedAssistantTextMessage || lastPersistedAssistantMessage;
     if (llmCountMessage && typeof this.#conversationStore?.update === 'function') {
       const updated = this.#conversationStore.update(llmCountMessage, {
         llmCallCount: turnNumber,
+        inputTokens: cumulativeInputTokens,
+        outputTokens: cumulativeOutputTokens,
+        totalTokens,
+        totalMs,
         ...(lastSuccessfulModel ? { model: lastSuccessfulModel } : {}),
         ...(lastSuccessfulEffort ? { effort: lastSuccessfulEffort } : {}),
       });
@@ -5008,8 +5014,10 @@ export class Engine {
       type: 'turn_close',
       turnId: queryTurnId,
       threadId,
-      totalMs: Date.now() - queryStartedAt,
-      totalTokens: cumulativeInputTokens + cumulativeOutputTokens,
+      totalMs,
+      inputTokens: cumulativeInputTokens,
+      outputTokens: cumulativeOutputTokens,
+      totalTokens,
       loopCount: turnNumber,
       ...(lastSuccessfulModel ? { model: lastSuccessfulModel } : {}),
       ...(lastSuccessfulEffort ? { effort: lastSuccessfulEffort } : {}),

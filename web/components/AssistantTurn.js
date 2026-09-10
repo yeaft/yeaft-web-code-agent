@@ -201,7 +201,7 @@ export default {
       <!-- 6. Response footer actions (visible on hover) -->
       <div class="turn-footer" v-if="(turn.textContent || responseCollapsible || showDebugAction || (sessionActions && (turn.todoMsg || turn.toolMsgs?.length))) && !turn.isStreaming">
         <div
-          v-if="(turnTime && !turn.speakerVpId) || responseModelMeta || turn.llmCallCount > 0"
+          v-if="(turnTime && !turn.speakerVpId) || responseModelMeta || turn.llmCallCount > 0 || responseTokenMeta"
           class="turn-response-meta"
         >
           <span
@@ -212,6 +212,7 @@ export default {
           >{{ turnTime }}</span>
           <span v-if="responseModelMeta" class="turn-time turn-model-meta" :title="responseModelMeta">{{ responseModelMeta }}</span>
           <span v-if="turn.llmCallCount > 0" class="turn-time">{{ $t(turn.llmCallCount === 1 ? 'yeaft.message.llmCall' : 'yeaft.message.llmCalls', { count: turn.llmCallCount }) }}</span>
+          <span v-if="responseTokenMeta" class="turn-time turn-token-meta" :title="responseTokenMeta">{{ responseTokenMeta }}</span>
         </div>
         <button
           v-if="showDebugAction"
@@ -673,10 +674,24 @@ export default {
       props.quoteAuthor || t('message.assistant')
     ));
     const responseModelMeta = Vue.computed(() => {
-      const model = typeof props.turn?.model === 'string' ? props.turn.model.trim() : '';
-      const effort = typeof props.turn?.effort === 'string' ? props.turn.effort.trim() : '';
-      const effortLabel = effort ? t(`yeaft.modelMenu.effort.${effort}`) : '';
-      return [model, effortLabel].filter(Boolean).join(' · ');
+      const configuredModel = typeof props.turn?.model === 'string' ? props.turn.model.trim() : '';
+      if (!configuredModel) return '';
+      const slashIndex = configuredModel.lastIndexOf('/');
+      return slashIndex >= 0 ? configuredModel.slice(slashIndex + 1) : configuredModel;
+    });
+    const responseTokenMeta = Vue.computed(() => {
+      const input = Number.isFinite(props.turn?.inputTokens) ? Math.max(0, Math.round(props.turn.inputTokens)) : null;
+      const output = Number.isFinite(props.turn?.outputTokens) ? Math.max(0, Math.round(props.turn.outputTokens)) : null;
+      const total = Number.isFinite(props.turn?.totalTokens)
+        ? Math.max(0, Math.round(props.turn.totalTokens))
+        : (input != null && output != null ? input + output : null);
+      if (total == null || input == null || output == null || (total === 0 && input === 0 && output === 0)) return '';
+      const formatTokenCount = value => new Intl.NumberFormat().format(value);
+      return t('yeaft.message.tokenUsage', {
+        total: formatTokenCount(total),
+        input: formatTokenCount(input),
+        output: formatTokenCount(output),
+      });
     });
 
     return {
@@ -685,6 +700,7 @@ export default {
       turnTimeFull,
       assistantQuote,
       responseModelMeta,
+      responseTokenMeta,
       copied,
       fullCopied,
       expanded,

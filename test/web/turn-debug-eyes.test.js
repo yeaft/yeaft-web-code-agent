@@ -87,10 +87,10 @@ describe('VpTurnBlock debug action', () => {
     expect(wrapper.find('.vp-turn-block-actions').exists()).toBe(false);
   });
 
-  it('shows the response model and effort before the provider-call count', () => {
-    const translate = (key, vars) => {
+  it('shows only the model name before calls and desktop token metadata', () => {
+    const translate = (key, vars = {}) => {
       if (key === 'yeaft.message.llmCalls') return `${vars.count} LLM calls`;
-      if (key === 'yeaft.modelMenu.effort.high') return 'High';
+      if (key === 'yeaft.message.tokenUsage') return `Total ${vars.total} · Input ${vars.input} · Output ${vars.output}`;
       return key;
     };
     const wrapper = mount(VpTurnBlock, {
@@ -99,6 +99,9 @@ describe('VpTurnBlock debug action', () => {
           model: 'provider/model-v2',
           effort: 'high',
           llmCallCount: 3,
+          inputTokens: 1200,
+          outputTokens: 34,
+          totalTokens: 1234,
         }),
       },
       global: {
@@ -108,11 +111,38 @@ describe('VpTurnBlock debug action', () => {
     });
 
     const footerText = wrapper.find('.turn-footer').text();
-    expect(footerText).toContain('provider/model-v2 · High');
+    expect(footerText).toContain('model-v2');
+    expect(footerText).not.toContain('provider/');
+    expect(footerText).not.toContain('High');
     expect(footerText).toContain('3 LLM calls');
-    expect(footerText.indexOf('provider/model-v2 · High')).toBeLessThan(
-      footerText.indexOf('3 LLM calls')
-    );
+    expect(footerText).toContain('Total 1,234 · Input 1,200 · Output 34');
+    expect(footerText.indexOf('model-v2')).toBeLessThan(footerText.indexOf('3 LLM calls'));
+    expect(wrapper.find('.turn-token-meta').exists()).toBe(true);
+  });
+
+  it('keeps elapsed time running through tool execution and freezes on completion', async () => {
+    const turn = makeTurn({
+      isStreaming: false,
+      isActive: true,
+      startedAt: 1_000,
+      totalMs: null,
+    });
+    const wrapper = mount(VpTurnBlock, {
+      props: { turn, nowMs: 4_900 },
+      global: { mocks: { $t: key => key }, provide: { t: key => key } },
+    });
+
+    expect(wrapper.find('.vp-turn-block-elapsed').text()).toBe('3s');
+    expect(wrapper.find('.vp-turn-block-elapsed').classes()).toContain('is-live');
+    expect(wrapper.find('.vp-turn-block-elapsed').attributes('aria-live')).toBe('polite');
+
+    await wrapper.setProps({
+      turn: { ...turn, isActive: false, totalMs: 5_200 },
+      nowMs: 99_000,
+    });
+    expect(wrapper.find('.vp-turn-block-elapsed').text()).toBe('5s');
+    expect(wrapper.find('.vp-turn-block-elapsed').classes()).not.toContain('is-live');
+    expect(wrapper.find('.vp-turn-block-elapsed').attributes('aria-live')).toBe('off');
   });
 
   it('does not render the debug action while the turn is streaming', () => {
