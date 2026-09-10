@@ -380,7 +380,7 @@ async function runREPL(config, args) {
 
   // Load persisted conversation as initial messages. `loadRecent` is now
   // turn-based (one user round-trip = one turn; multi-VP fan-out collapses
-  // into one turn). 20 turns is the bootstrap window. Provider requests
+  // into one turn). 10 turns is the bootstrap window. Provider requests
   // apply deterministic history-window trimming; persisted history stays
   // authoritative and no LLM conversation summary is generated.
   let conversationMessages = conversationStore.loadRecent().map(m => ({

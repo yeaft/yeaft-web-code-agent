@@ -72,19 +72,19 @@ describe('Engine canonical message recall integration', () => {
     const call = adapter.calls[0];
     expect(texts(call)).toEqual([
       old.content, 'Old retry_budget answer, complete and useful.',
-      ...Array.from({ length: 20 }, (_, i) => [`Recent question ${i + 5}`, `Recent answer ${i + 5}`]).flat(),
+      ...Array.from({ length: 10 }, (_, i) => [`Recent question ${i + 15}`, `Recent answer ${i + 15}`]).flat(),
       current.content,
     ]);
     expect(call.messages.filter(m => m.content === current.content)).toHaveLength(2);
     const meta = trace.log.mock.calls.find(([name]) => name === 'history_buckets')[1];
-    expect(meta.recent.turnCount).toBe(20);
+    expect(meta.recent.turnCount).toBe(10);
     expect(meta.related.turnCount).toBe(1);
     expect(meta.budget.relatedTurnCap).toBe(5);
     expect(store.loadAllBySession(sessionId).slice(0, before.length)).toEqual(before);
     expect(store.loadAllBySession(sessionId).filter(m => m.role === 'user' && m.content === current.content)).toHaveLength(2);
   });
 
-  it('recovers 20 chronological turns behind a tool-heavy tail, replaying only the newest 3 tool turns', async () => {
+  it('recovers 10 chronological turns behind a tool-heavy tail, replaying only the newest 3 tool turns', async () => {
     for (let turn = 0; turn < 24; turn++) {
       append('user', `Recent question ${turn}`, { clientMessageId: `q${turn}` });
       for (let call = 0; call < 5; call++) {
@@ -101,15 +101,15 @@ describe('Engine canonical message recall integration', () => {
     });
     const call = adapter.calls[0];
     expect(call.messages.filter(m => m.role === 'user').map(m => m.content)).toEqual([
-      ...Array.from({ length: 20 }, (_, i) => `Recent question ${i + 4}`), 'current',
+      ...Array.from({ length: 10 }, (_, i) => `Recent question ${i + 14}`), 'current',
     ]);
     expect(call.messages.filter(m => m.role === 'tool').map(m => m.toolCallId)).toEqual(
       [21, 22, 23].flatMap(turn => Array.from({ length: 5 }, (_, i) => `c${turn}-${i}`)),
     );
-    expect(trace.log.mock.calls.find(([name]) => name === 'history_buckets')[1].recent.turnCount).toBe(20);
+    expect(trace.log.mock.calls.find(([name]) => name === 'history_buckets')[1].recent.turnCount).toBe(10);
   });
 
-  it('calls the provider with degraded history when five recent turns cannot fit', async () => {
+  it('calls the provider with compressed history when three recent turns cannot fit completely', async () => {
     for (let i = 0; i < 20; i++) {
       append('user', `Question ${i}`);
       append('assistant', 'x'.repeat(2000));
@@ -134,18 +134,18 @@ describe('Engine canonical message recall integration', () => {
     expect(texts(adapter.calls[0]).filter(text => text === current.content)).toHaveLength(2);
   });
 
-  it.each([1, 25])('anchors 20 recent turns before current input despite %i queued future turns', async futureCount => {
+  it.each([1, 25])('anchors 10 recent turns before current input despite %i queued future turns', async futureCount => {
     seed(20);
     const current = append('user', 'Revisit retry_budget', { clientMessageId: 'queued-current' });
     for (let i = 0; i < futureCount; i += 1) {
       append('user', `Future question ${i}`);
       append('assistant', `Future answer ${i}`);
     }
-    await run(createEngine({ yeaft: { recentTurnsLimit: 20, relatedTurnsLimit: 0 } }), {
+    await run(createEngine({ yeaft: { recentTurnsLimit: 10, relatedTurnsLimit: 0 } }), {
       userAlreadyPersisted: true, currentUserMessage: current,
     });
     expect(texts(adapter.calls[0])).toEqual([
-      ...Array.from({ length: 20 }, (_, i) => [`Recent question ${i}`, `Recent answer ${i}`]).flat(),
+      ...Array.from({ length: 10 }, (_, i) => [`Recent question ${i + 10}`, `Recent answer ${i + 10}`]).flat(),
       current.content,
     ]);
   });

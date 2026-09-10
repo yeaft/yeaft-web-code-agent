@@ -22,12 +22,12 @@ function freeze(value) {
 }
 
 describe('dual-bucket provider history', () => {
-  it('keeps 20 past turns by default, separately protecting the current turn', () => {
+  it('keeps 10 past turns by default, separately protecting the current turn', () => {
     const past = Array.from({ length: 25 }, (_, i) => turn(i * 10)).flat();
     const result = run(past);
-    expect(result.meta.recent.turnCount).toBe(20);
+    expect(result.meta.recent.turnCount).toBe(10);
     expect(result.meta.related.turnCount).toBe(0);
-    expect(users(result)).toEqual([...Array.from({ length: 20 }, (_, i) => `m${(i + 5) * 10}`), 'm10000']);
+    expect(users(result)).toEqual([...Array.from({ length: 10 }, (_, i) => `m${(i + 15) * 10}`), 'm10000']);
     expect(result.meta.current.startIndex).toBe(past.length);
     expect(typeof trimSnapshotForBudget).toBe('function');
   });
@@ -183,7 +183,7 @@ describe('dual-bucket provider history', () => {
     }
   });
 
-  it('keeps as many complete recent turns as fit without a five-turn hard floor', () => {
+  it('keeps as many complete recent turns as fit before the three-turn compression floor', () => {
     const past = freeze(Array.from({ length: 20 }, (_, index) => (
       turn(index * 10, `question ${index}`, 'x'.repeat(200))
     )).flat());
@@ -196,13 +196,40 @@ describe('dual-bucket provider history', () => {
     expect(() => run(oversized, { messageTokenBudget: 500 })).not.toThrow();
   });
 
-  it('never exceeds the hard message cap while considering a 20-turn text window', () => {
+  it('never exceeds the hard message cap while considering a 10-turn text window', () => {
     const result = run(Array.from({ length: 20 }, (_, index) => turn(index * 10)).flat(), {
       maxMessageCount: 21,
     });
     expect(result.messages).toHaveLength(21);
     expect(result.meta.budget.usedMessages).toBe(20);
     expect(result.meta.recent.turnCount).toBe(10);
+  });
+
+  it('compresses the three-turn floor, drops recall and keeps tools only from the newest turn', () => {
+    const past = Array.from({ length: 6 }, (_, index) => {
+      const base = index * 10;
+      return [
+        { id: `m${base}`, seq: base, role: 'user', content: `question ${index}` },
+        { id: `m${base + 1}`, seq: base + 1, role: 'assistant', content: `checking ${index} ${'x'.repeat(1000)}`,
+          toolCalls: [{ id: `call-${index}`, name: 'Read', input: {} }] },
+        { id: `m${base + 2}`, seq: base + 2, role: 'tool', toolCallId: `call-${index}`, content: `result ${index}` },
+        { id: `m${base + 3}`, seq: base + 3, role: 'assistant', content: `answer ${index} ${'y'.repeat(1000)}` },
+      ];
+    }).flat();
+    const result = run(past, {
+      prompt: 'CacheRouter reconnect',
+      messageTokenBudget: 200,
+      relatedTurns: [{ id: 'related', userSeq: -10, score: 100, messages: turn(-10, 'CacheRouter reconnect') }],
+    });
+    const replayed = result.messages.flatMap(row => row.toolCalls || []).map(call => call.id);
+
+    expect(result.meta.recent.turnCount).toBe(3);
+    expect(result.meta.related.turnCount).toBe(0);
+    expect(result.meta.budget.minimumRecentTurns).toBe(3);
+    expect(result.meta.budget.compressedRecentFloor).toBe(true);
+    expect(result.meta.budget.effectiveKeepToolTurns).toBe(1);
+    expect(replayed.every(id => id === 'call-5')).toBe(true);
+    expect(hasOrphanPairs(result.messages)).toBe(false);
   });
 
   it('makes tool replay optional and paired without evicting complete text from either bucket', () => {
@@ -223,7 +250,7 @@ describe('dual-bucket provider history', () => {
     expect(hasOrphanPairs(roomy.messages)).toBe(false);
   });
 
-  it.each([false, true])('keeps 20 text turns but only the newest 3 tool turns (repeated prompt: %s)', repeated => {
+  it.each([false, true])('keeps 10 text turns but only the newest 3 tool turns (repeated prompt: %s)', repeated => {
     const past = Array.from({ length: 20 }, (_, index) => {
       const base = index * 10;
       return [
@@ -239,8 +266,8 @@ describe('dual-bucket provider history', () => {
     const replayedCalls = result.messages.flatMap(row => row.toolCalls || []).map(call => call.id);
     const replayedResults = result.messages.filter(row => row.role === 'tool').map(row => row.toolCallId);
 
-    expect(result.meta.recent.turnCount).toBe(20);
-    expect(users(result)).toHaveLength(21);
+    expect(result.meta.recent.turnCount).toBe(10);
+    expect(users(result)).toHaveLength(11);
     expect(replayedCalls).toEqual(['call-17', 'call-18', 'call-19']);
     expect(replayedResults).toEqual(['call-17', 'call-18', 'call-19']);
     expect(JSON.stringify(result.messages)).not.toContain('OUTSIDE_TOOL_WINDOW');
@@ -261,7 +288,7 @@ describe('dual-bucket provider history', () => {
     const result = run(past, { messageTokenBudget: 3000 });
     const owners = result.messages.filter(row => Array.isArray(row.toolCalls));
 
-    expect(result.meta.recent.turnCount).toBe(20);
+    expect(result.meta.recent.turnCount).toBe(10);
     expect(owners.map(row => [row.content.split(' ')[1], row.toolCalls[0].id])).toEqual([
       ['17', 'call-17'], ['18', 'call-18'], ['19', 'call-19'],
     ]);

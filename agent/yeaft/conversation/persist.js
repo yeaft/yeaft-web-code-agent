@@ -42,7 +42,7 @@ import { markConversationDirty } from './history-index-state.js';
  * Chat-Completions adapter. Turn-based slicing always cuts at a user-
  * message boundary, which is pair-safe by construction.
  *
- * 20 turns is the bootstrap window the user signed off on (2026-05-01).
+ * 10 turns is the default bootstrap window.
  * It is the cold-start replay window after a fresh boot or reconnect. Runtime
  * provider requests apply a separate deterministic history-window transform;
  * no LLM summary is required for recovery.
@@ -57,7 +57,7 @@ import { markConversationDirty } from './history-index-state.js';
  * at module load (`const cap = DEFAULT_RECENT_TURNS`) would not see
  * runtime overrides. The reader function makes that always-correct.
  */
-let DEFAULT_RECENT_TURNS = 20;
+let DEFAULT_RECENT_TURNS = 10;
 
 // Circuit breaker for newest-to-oldest session scans. This bounds event-loop
 // starvation when the newest transcript tail is dense with hidden/internal or

@@ -2132,7 +2132,7 @@ export class Engine {
     // const useDreamMemory = scenario === 'work-item' || !!vpPersona?.subAgent
     //   || (!runtimeSessionId && !internalTrigger);
     const useDreamMemory = false;
-    const recentTurnCap = Math.max(20, this.#config.yeaft?.recentTurnsLimit ?? 20);
+    const recentTurnCap = Math.max(10, this.#config.yeaft?.recentTurnsLimit ?? 10);
     const relatedTurnCap = Math.min(5, this.#config.yeaft?.relatedTurnsLimit ?? 5);
     let relatedHistoryTurns = [];
     let historyRecallMeta = { source: 'messages', status: 'disabled' };
@@ -2915,7 +2915,7 @@ export class Engine {
         const buckets = useMessageHistory ? buildHistoryBuckets(conversationMessages, {
           prompt,
           relatedTurns: relatedHistoryTurns,
-          recentTurnCap: Math.max(20, requestConfig.yeaft?.recentTurnsLimit ?? 20),
+          recentTurnCap: Math.max(10, requestConfig.yeaft?.recentTurnsLimit ?? 10),
           relatedTurnCap: Math.min(5, requestConfig.yeaft?.relatedTurnsLimit ?? 5),
           messageTokenBudget: historyBudget,
           currentTurnStartIndex: turnStartIdx,

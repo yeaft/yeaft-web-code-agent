@@ -18,12 +18,12 @@ afterEach(() => {
 });
 
 describe('Yeaft history bucket settings', () => {
-  it('defaults to 20 recent and 5 related turns for absent and legacy config', () => {
+  it('defaults to 10 recent and 5 related turns for absent and legacy config', () => {
     const root = tempRoot();
     const expected = {
       maxConcurrentThreads: 6,
       autoArchiveIdleDays: 30,
-      recentTurnsLimit: 20,
+      recentTurnsLimit: 10,
       relatedTurnsLimit: 5,
       dream: { ...DEFAULT_LIMITS },
     };
@@ -59,7 +59,7 @@ describe('Yeaft history bucket settings', () => {
     writeFileSync(configPath, JSON.stringify({ primaryModel: 'proxy/model', yeaft: { dream } }));
     for (const [value, expected] of [[5, 5], [1, 1], [4.9, 4], ['4', 4], ['0', 0], [0, 0]]) {
       expect(updateYeaftSettings({ relatedTurnsLimit: value }, root)).toEqual({
-        maxConcurrentThreads: 6, autoArchiveIdleDays: 30, recentTurnsLimit: 20, relatedTurnsLimit: expected, dream,
+        maxConcurrentThreads: 6, autoArchiveIdleDays: 30, recentTurnsLimit: 10, relatedTurnsLimit: expected, dream,
       });
       expect(JSON.parse(readFileSync(configPath, 'utf8')).yeaft.relatedTurnsLimit).toBe(expected);
       expect(getYeaftSettings(root).relatedTurnsLimit).toBe(expected);
@@ -102,7 +102,7 @@ describe('Yeaft history bucket settings', () => {
   it('persists the default related limit when an old client creates the settings section', () => {
     const root = tempRoot();
     expect(updateYeaftSettings({ maxConcurrentThreads: 2 }, root)).toEqual({
-      maxConcurrentThreads: 2, autoArchiveIdleDays: 30, recentTurnsLimit: 20, relatedTurnsLimit: 5,
+      maxConcurrentThreads: 2, autoArchiveIdleDays: 30, recentTurnsLimit: 10, relatedTurnsLimit: 5,
     });
     expect(JSON.parse(readFileSync(join(root, 'config.json'), 'utf8')).yeaft.relatedTurnsLimit).toBe(5);
   });
