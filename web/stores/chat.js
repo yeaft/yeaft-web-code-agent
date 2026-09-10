@@ -5151,6 +5151,8 @@ export const useChatStore = defineStore('chat', {
             openedAt: event.at || Date.now(),
             closedAt: null,
             totalMs: 0,
+            inputTokens: 0,
+            outputTokens: 0,
             totalTokens: 0,
             loopCount: 0,
             memoryLoaded: null,
@@ -5160,6 +5162,14 @@ export const useChatStore = defineStore('chat', {
             detailsLoaded: true,
           };
           this.yeaftDebugTurnsById = { ...this.yeaftDebugTurnsById, [event.turnId]: turn };
+          const activeTurnKey = yeaftTurnStateKey(this, msg.agentId || null, event.turnId);
+          const activeTurn = this.activeVpTurns?.[activeTurnKey];
+          if (activeTurn && Number.isFinite(event.at)) {
+            this.activeVpTurns = {
+              ...this.activeVpTurns,
+              [activeTurnKey]: { ...activeTurn, startedAt: event.at },
+            };
+          }
           if (!this.yeaftDebugTurnOrder.includes(event.turnId)) {
             this.yeaftDebugTurnOrder = [...this.yeaftDebugTurnOrder, event.turnId];
           }
@@ -5175,8 +5185,10 @@ export const useChatStore = defineStore('chat', {
             [event.turnId]: {
               ...prev,
               closedAt: Date.now(),
-              totalMs: event.totalMs || 0,
-              totalTokens: event.totalTokens || 0,
+              ...(Number.isFinite(event.totalMs) ? { totalMs: event.totalMs } : {}),
+              ...(Number.isFinite(event.inputTokens) ? { inputTokens: event.inputTokens } : {}),
+              ...(Number.isFinite(event.outputTokens) ? { outputTokens: event.outputTokens } : {}),
+              ...(Number.isFinite(event.totalTokens) ? { totalTokens: event.totalTokens } : {}),
               loopCount: event.loopCount || prev.loopCount || 0,
               ...(typeof event.model === 'string' && event.model ? { model: event.model } : {}),
               ...(typeof event.effort === 'string' && event.effort ? { effort: event.effort } : {}),

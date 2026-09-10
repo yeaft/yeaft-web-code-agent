@@ -22,9 +22,9 @@
  *                  textContent, toolMsgs, todoMsg, askMsg, imageMsgs,
  *                  turnId, atMessageId, etc.
  *   conversationId — optional; passed through to AssistantTurn.
- *   nowMs        — required when streaming; the page-shared live timestamp
- *                  used to compute the elapsed counter. Updated ~1Hz by
- *                  MessageList while any turn is streaming.
+ *   nowMs        — required while active; the page-shared live timestamp used
+ *                  to compute the elapsed counter. Updated ~1Hz by MessageList
+ *                  while any VP turn is running, including tool execution.
  */
 import AssistantTurn from './AssistantTurn.js';
 import { useChatStore } from '../stores/chat.js';
@@ -73,15 +73,7 @@ export default {
             class="vp-turn-block-time"
             :title="startedTimeFullText"
           >{{ startedTimeText }}</span>
-          <template v-if="turn.isStreaming && retryText">
-            <span
-              v-if="displayName || startedTimeText"
-              class="vp-turn-block-sep"
-              aria-hidden="true"
-            >·</span>
-            <span class="vp-turn-block-elapsed" aria-live="polite">{{ retryText }}</span>
-          </template>
-          <template v-else-if="turn.isStreaming && elapsedText">
+          <template v-if="elapsedText">
             <span
               v-if="displayName || startedTimeText"
               class="vp-turn-block-sep"
@@ -89,9 +81,14 @@ export default {
             >·</span>
             <span
               class="vp-turn-block-elapsed"
+              :class="{ 'is-live': turn.isActive }"
               :title="$t ? $t('yeaft.vp.turnBlock.elapsedTitle') : 'Elapsed time'"
-              aria-live="polite"
+              :aria-live="turn.isActive ? 'polite' : 'off'"
             >{{ elapsedText }}</span>
+          </template>
+          <template v-if="turn.isStreaming && retryText">
+            <span class="vp-turn-block-sep" aria-hidden="true">·</span>
+            <span class="vp-turn-block-elapsed" aria-live="polite">{{ retryText }}</span>
           </template>
           <span class="vp-turn-block-spacer"></span>
           <button
@@ -193,11 +190,15 @@ export default {
     });
 
     const elapsedText = Vue.computed(() => {
-      const ts = props.turn.speakerTimestamp;
-      if (!ts || !props.nowMs) return '';
-      const ms = props.nowMs - ts;
-      if (ms < 0) return '';
-      return formatElapsed(ms);
+      if (!props.turn) return '';
+      if (Number.isFinite(props.turn.totalMs) && !props.turn.isActive) {
+        return formatElapsed(props.turn.totalMs);
+      }
+      const startedAt = Number.isFinite(props.turn.startedAt) && props.turn.startedAt > 0
+        ? props.turn.startedAt
+        : props.turn.speakerTimestamp;
+      if (!startedAt || !props.nowMs || !props.turn.isActive) return '';
+      return formatElapsed(props.nowMs - startedAt);
     });
 
     const retryText = Vue.computed(() => {

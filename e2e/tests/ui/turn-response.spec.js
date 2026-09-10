@@ -115,14 +115,22 @@ function harnessHtml(debug = false) {
         { key: 'progress', content: '[Inspect files](#details)', kind: 'progress', explicitKind: true, isStreaming: false },
         { key: 'result', content: '## 改动', kind: 'result', explicitKind: true, isStreaming: false },
       ],
-      toolMsgs: [], imageMsgs: [],
+      toolMsgs: [{
+        toolName: 'FileRead', toolInput: { file_path: 'README.md' },
+        toolResult: 'read complete', hasResult: true, startTime: Date.now() - 500,
+      }], imageMsgs: [],
       todoMsg: { toolInput: { todos: [{ content: 'Verify spacing', status: 'pending' }] } },
       askMsg: null, messages: [], isStreaming: false, isActive: false,
+      speakerVpId: 'vp-ui', speakerTimestamp: Date.now() - 15_000,
+      startedAt: Date.now() - 15_000, totalMs: 15_000,
+      model: 'provider/model-v2', effort: 'high', llmCallCount: 3,
+      inputTokens: 1_200, outputTokens: 34, totalTokens: 1_234,
     });
+    const nowMs = Vue.ref(Date.now());
     const app = Vue.createApp({
       components: { VpTurnBlock },
-      setup() { return { turn }; },
-      template: '<VpTurnBlock :turn="turn" />',
+      setup() { return { turn, nowMs }; },
+      template: '<VpTurnBlock :turn="turn" :now-ms="nowMs" display-name-override="Yeaft" :interactive-speaker="false" />',
     });
     const translate = (key, params = {}) => {
       const labels = {
@@ -132,12 +140,15 @@ function harnessHtml(debug = false) {
         'message.nextImage': 'Next image',
       };
       if (key === 'message.imagePosition') return 'Image ' + params.current + ' of ' + params.total;
+      if (key === 'yeaft.message.llmCalls') return params.count + ' LLM calls';
+      if (key === 'yeaft.message.tokenUsage') return 'Total ' + params.total + ' · Input ' + params.input + ' · Output ' + params.output;
       return labels[key] || key;
     };
     app.config.globalProperties.$t = translate;
     app.provide('t', translate);
     app.mount('#app');
     window.__turn = turn;
+    window.__nowMs = nowMs;
     window.__finalizeTurnResponseSegments = finalizeTurnResponseSegments;
     window.__ready = true;
   </script>
@@ -351,6 +362,16 @@ test('keeps progress visible and distinct from the final result across themes an
   await expect(result.locator('h2')).toHaveText('改动');
   await expect(page.locator('.turn-response-progress')).toBeVisible();
   await expect(todos).toBeVisible();
+  const tool = page.locator('.turn-actions');
+  const elapsed = page.locator('.vp-turn-block-elapsed').first();
+  const footer = page.locator('.turn-footer');
+  await expect(tool).toBeVisible();
+  await expect(elapsed).toHaveText('15s');
+  await expect(footer).toContainText('model-v2');
+  await expect(footer).not.toContainText('provider/');
+  await expect(footer).not.toContainText('high');
+  await expect(footer).toContainText('3 LLM calls');
+  await expect(page.locator('.turn-token-meta')).toContainText('Total 1,234 · Input 1,200 · Output 34');
 
   await page.evaluate(() => {
     const contradictoryMessage = {
@@ -408,13 +429,31 @@ test('keeps progress visible and distinct from the final result across themes an
   expect(layout.progressPaddingLeft).toBe(0);
 
   await page.evaluate(() => {
+    window.__turn.totalMs = null;
+    window.__turn.startedAt = Date.now() - 21_000;
     window.__turn.isActive = true;
+    window.__turn.isStreaming = false;
+    window.__turn.toolMsgs[0].hasResult = false;
+    window.__turn.toolMsgs[0].toolResult = null;
+    window.__turn.toolMsgs[0].startTime = Date.now();
+    window.__nowMs.value = Date.now();
   });
-  await expect(progress).toBeVisible();
-  await expect(progressList).toBeVisible();
+  await expect(elapsed).toHaveText(/2[01]s/);
+  await expect(elapsed).toHaveClass(/is-live/);
+  await page.evaluate(() => {
+    window.__nowMs.value += 2_000;
+  });
+  await expect(elapsed).toHaveText(/2[23]s/);
   await page.evaluate(() => {
     window.__turn.isActive = false;
+    window.__turn.totalMs = 21_000;
+    window.__turn.toolMsgs[0].hasResult = true;
+    window.__turn.toolMsgs[0].toolResult = 'read complete';
   });
+  await expect(elapsed).toHaveText('21s');
+  await page.waitForTimeout(1_100);
+  await expect(elapsed).toHaveText('21s');
+  await expect(elapsed).not.toHaveClass(/is-live/);
   await expect(progress).toBeVisible();
   await expect(progressList).toBeVisible();
 
@@ -429,15 +468,39 @@ test('keeps progress visible and distinct from the final result across themes an
     expect(colors.result).not.toBe(colors.background);
   }
 
-  await page.setViewportSize({ width: 430, height: 800 });
+  await page.setViewportSize({ width: 320, height: 800 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   expect(await readLayout()).toMatchObject({
     todoBorderTopWidth: '0px',
     todoPaddingLeft: 16,
     todoPaddingRight: 16,
   });
+  const mobileGeometry = await page.evaluate(() => {
+    const content = document.querySelector('.turn-content');
+    const toolRow = document.querySelector('.turn-actions');
+    const contentRect = content.getBoundingClientRect();
+    const toolRect = toolRow.getBoundingClientRect();
+    const contentStyle = getComputedStyle(content);
+    return {
+      contentLeft: contentRect.left,
+      contentRight: contentRect.right,
+      toolLeft: toolRect.left,
+      toolRight: toolRect.right,
+      contentPaddingLeft: parseFloat(contentStyle.paddingLeft),
+      contentPaddingRight: parseFloat(contentStyle.paddingRight),
+    };
+  });
+  expect(mobileGeometry.contentLeft).toBeCloseTo(mobileGeometry.toolLeft, 0);
+  expect(mobileGeometry.contentRight).toBeCloseTo(mobileGeometry.toolRight, 0);
+  expect(mobileGeometry.contentPaddingLeft).toBe(mobileGeometry.contentPaddingRight);
+  await expect(page.locator('.turn-token-meta')).toBeHidden();
+  await expect(footer).toContainText('model-v2');
+  await expect(footer).toContainText('3 LLM calls');
   await expect(result.locator('h2')).toBeVisible();
 
+  // The gallery interaction below retains its original tablet-size pointer
+  // geometry; the response layout itself has already been verified at 320px.
+  await page.setViewportSize({ width: 430, height: 800 });
   await page.evaluate(() => {
     window.__turn.imageMsgs = [
       { id: 'gallery-a', src: '/gallery-a.png', filename: 'Gallery A' },

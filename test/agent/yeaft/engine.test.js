@@ -4049,6 +4049,14 @@ describe('Engine', () => {
           type: 'turn_open',
           turnId: 'vp-turn-ui-1',
         }));
+        expect(events).toContainEqual(expect.objectContaining({
+          type: 'turn_close',
+          turnId: 'vp-turn-ui-1',
+          inputTokens: 8,
+          outputTokens: 3,
+          totalTokens: 11,
+          totalMs: expect.any(Number),
+        }));
         expect(events.map(e => e.type)).toContain('turn_end');
         const loaded = conversationStore.loadRecentBySession('session-turn-id', 10);
         expect(loaded).toHaveLength(1);

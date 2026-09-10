@@ -1473,6 +1473,53 @@ describe('message flow regressions', () => {
     expect(store.listWorkItems).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps live response timing and final token metadata on the same turn identity', () => {
+    storeFactories.clear();
+    const store = useChatStore();
+    const agentId = 'agent-response-meta';
+    const sessionId = 'session-response-meta';
+    const turnId = 'turn-response-meta';
+
+    store.currentView = 'yeaft';
+    store.currentAgent = agentId;
+    store.activeVpTurns = {};
+    store.yeaftDebugTurnsById = {};
+    store.yeaftDebugTurnOrder = [];
+
+    store.handleYeaftOutput({
+      agentId,
+      event: { type: 'vp_turn_start', sessionId, vpId: 'omni', turnId, ts: 1_000 },
+    });
+    expect(Object.values(store.activeVpTurns)).toContainEqual(expect.objectContaining({
+      agentId, sessionId, turnId, startedAt: 1_000,
+    }));
+
+    store.handleYeaftOutput({
+      agentId,
+      event: { type: 'turn_open', sessionId, vpId: 'omni', turnId, at: 1_200 },
+    });
+    expect(Object.values(store.activeVpTurns)).toContainEqual(expect.objectContaining({
+      turnId, startedAt: 1_200,
+    }));
+
+    store.handleYeaftOutput({
+      agentId,
+      event: {
+        type: 'turn_close', sessionId, vpId: 'omni', turnId,
+        totalMs: 5_234, inputTokens: 1_200, outputTokens: 34, totalTokens: 1_234,
+        loopCount: 3, model: 'provider/model-v2',
+      },
+    });
+    expect(store.yeaftDebugTurnsById[turnId]).toMatchObject({
+      totalMs: 5_234,
+      inputTokens: 1_200,
+      outputTokens: 34,
+      totalTokens: 1_234,
+      loopCount: 3,
+      model: 'provider/model-v2',
+    });
+  });
+
   it('prunes completed Yeaft resident turns at terminal metadata boundaries', async () => {
     const { useChatStore } = await import('../../web/stores/chat.js');
     const store = useChatStore();

@@ -413,6 +413,9 @@ function serializeMessage(msg) {
   if (msg.model) fm.push(`model: ${msg.model}`);
   if (msg.effort) fm.push(`effort: ${msg.effort}`);
   if (Number.isInteger(msg.llmCallCount) && msg.llmCallCount > 0) fm.push(`llmCallCount: ${msg.llmCallCount}`);
+  for (const key of ['inputTokens', 'outputTokens', 'totalTokens', 'totalMs']) {
+    if (Number.isFinite(msg[key]) && msg[key] >= 0) fm.push(`${key}: ${Math.round(msg[key])}`);
+  }
   if (msg.turnNumber != null) fm.push(`turnNumber: ${msg.turnNumber}`);
   if (msg.toolCallId) fm.push(`toolCallId: ${msg.toolCallId}`);
   if (msg.eventType) fm.push(`eventType: ${msg.eventType}`);
@@ -564,6 +567,10 @@ export function parseMessage(raw) {
       case 'model': msg.model = value; break;
       case 'effort': msg.effort = value; break;
       case 'llmCallCount': msg.llmCallCount = parseInt(value, 10); break;
+      case 'inputTokens': msg.inputTokens = parseInt(value, 10); break;
+      case 'outputTokens': msg.outputTokens = parseInt(value, 10); break;
+      case 'totalTokens': msg.totalTokens = parseInt(value, 10); break;
+      case 'totalMs': msg.totalMs = parseInt(value, 10); break;
       case 'turnNumber': msg.turnNumber = parseInt(value, 10); break;
       case 'toolCallId': msg.toolCallId = value; break;
       case 'eventType': msg.eventType = value; break;

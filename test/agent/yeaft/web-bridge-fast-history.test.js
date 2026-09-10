@@ -365,6 +365,10 @@ describe('Yeaft load-history first paint', () => {
       sessionId: 'session-fast',
       responseKind: 'progress',
       llmCallCount: 3,
+      inputTokens: 1200,
+      outputTokens: 34,
+      totalTokens: 1234,
+      totalMs: 5234,
       model: 'provider/model-v2',
       effort: 'high',
       toolCalls: [
@@ -379,6 +383,10 @@ describe('Yeaft load-history first paint', () => {
       toolCalls: [{ id: 'bash', name: 'Bash', input: { command: 'true' } }],
       responseKind: 'progress',
       llmCallCount: 3,
+      inputTokens: 1200,
+      outputTokens: 34,
+      totalTokens: 1234,
+      totalMs: 5234,
       model: 'provider/model-v2',
       effort: 'high',
     });

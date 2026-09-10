@@ -1408,6 +1408,9 @@ function projectPersistedToHistoryEntry(m, { includeReflections = false } = {}) 
   if (m.imageAssetAnchor) entry.imageAssetAnchor = true;
   if (m.responseKind === 'progress' || m.responseKind === 'result') entry.responseKind = m.responseKind;
   if (Number.isInteger(m.llmCallCount) && m.llmCallCount > 0) entry.llmCallCount = m.llmCallCount;
+  for (const key of ['inputTokens', 'outputTokens', 'totalTokens', 'totalMs']) {
+    if (Number.isFinite(m[key]) && m[key] >= 0) entry[key] = m[key];
+  }
   if (typeof m.model === 'string' && m.model) entry.model = m.model;
   if (typeof m.effort === 'string' && m.effort) entry.effort = m.effort;
   if (m.incomplete === true) entry.incomplete = true;
@@ -1551,6 +1554,10 @@ function projectVisibleHistoryChunkMessages(messages = []) {
       ...(m.speakerVpId ? { speakerVpId: m.speakerVpId } : {}),
       ...(m.responseKind === 'progress' || m.responseKind === 'result' ? { responseKind: m.responseKind } : {}),
       ...(Number.isInteger(m.llmCallCount) && m.llmCallCount > 0 ? { llmCallCount: m.llmCallCount } : {}),
+      ...(Number.isFinite(m.inputTokens) && m.inputTokens >= 0 ? { inputTokens: m.inputTokens } : {}),
+      ...(Number.isFinite(m.outputTokens) && m.outputTokens >= 0 ? { outputTokens: m.outputTokens } : {}),
+      ...(Number.isFinite(m.totalTokens) && m.totalTokens >= 0 ? { totalTokens: m.totalTokens } : {}),
+      ...(Number.isFinite(m.totalMs) && m.totalMs >= 0 ? { totalMs: m.totalMs } : {}),
       ...(typeof m.model === 'string' && m.model ? { model: m.model } : {}),
       ...(typeof m.effort === 'string' && m.effort ? { effort: m.effort } : {}),
       ...(m.incomplete === true ? { incomplete: true } : {}),
@@ -4568,6 +4575,8 @@ function handleEngineEvent(event, hctx) {
         turnId: event.turnId,
         threadId: event.threadId,
         totalMs: event.totalMs,
+        inputTokens: event.inputTokens,
+        outputTokens: event.outputTokens,
         totalTokens: event.totalTokens,
         loopCount: event.loopCount,
         ...(typeof event.model === 'string' && event.model ? { model: event.model } : {}),
@@ -5660,7 +5669,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
     resetQueryTimer();
 
     // Emit turn_start so frontend can create the message block.
-    sendSessionEvent({ type: 'vp_turn_start', vpId, threadId, turnId, sessionId, title: thread?.title || '' }, envelope);
+    sendSessionEvent({ type: 'vp_turn_start', vpId, threadId, turnId, sessionId, title: thread?.title || '', ts: turnStartAt }, envelope);
     // vp-status: LLM call about to start, no text/tool yet → 'thinking'.
     try {
       getVpStatusBroker().transition({ sessionId, vpId, threadId, title: thread?.title || '', state: 'thinking', turnId, messageCount: thread?.messageIds?.length || 0 });
