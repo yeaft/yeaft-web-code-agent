@@ -52,8 +52,6 @@ import {
   projectDocWriteScopesNeedingReload,
   selectProjectDocContext,
 } from '../../../agent/yeaft/sessions/project-doc.js';
-import todoWriteTool from '../../../agent/yeaft/tools/todo-write.js';
-import startPlanTool from '../../../agent/yeaft/tools/start-plan.js';
 import {
   cleanupManagedCliRuntimePaths,
   ensureManagedCliTools,
@@ -149,14 +147,16 @@ describe('active tool exposure and scoped prompts', () => {
     const toolNames = registry.getToolNames();
     const baseline = resolveActiveToolNames({ toolNames, prompt: 'Explain this code.' });
 
-    expect(toolNames).toContain('StartPlan');
+    for (const name of ['StartPlan', 'TodoWrite']) {
+      expect(toolNames).not.toContain(name);
+      expect(baseline.has(name)).toBe(false);
+    }
     expect([...baseline]).toEqual(expect.arrayContaining([
       'WebSearch',
       'WebFetch',
       'ViewImage',
       'EnterWorktree',
       'ExitWorktree',
-      'TodoWrite',
       'FileRead',
       'FileEdit',
       'Bash',
@@ -225,6 +225,37 @@ describe('active tool exposure and scoped prompts', () => {
       'CloseAgent',
       'ListAgents',
     ]));
+  });
+
+  it('cannot rediscover retired checklist tools even when explicitly requested', async () => {
+    mockAdapter.pushResponse([
+      { type: 'tool_call', id: 'discover-plan', name: 'DiscoverTools', input: { query: 'TodoWrite StartPlan planning checklist' } },
+      { type: 'stop', stopReason: 'tool_use' },
+    ]);
+    mockAdapter.pushResponse([
+      { type: 'text_delta', text: 'I can discuss an approach without a checklist tool.' },
+      { type: 'stop', stopReason: 'end_turn' },
+    ]);
+    const registry = createFullRegistry();
+    const engine = new Engine({
+      adapter: mockAdapter,
+      trace,
+      config: { model: 'test-model', maxOutputTokens: 1024 },
+      toolRegistry: registry,
+    });
+    const events = [];
+    for await (const event of engine.query({ prompt: 'Use TodoWrite and StartPlan to plan this task.' })) events.push(event);
+    const discovery = events.find(event => event.type === 'tool_end' && event.name === 'DiscoverTools');
+    expect(discovery).toMatchObject({ isError: false });
+    const discoveredNames = JSON.parse(discovery.output).tools.map(tool => tool.name);
+    for (const name of ['StartPlan', 'TodoWrite']) {
+      expect(discoveredNames).not.toContain(name);
+      expect(registry.getToolNames()).not.toContain(name);
+      for (const call of mockAdapter.callLog) {
+        expect(call.tools.map(tool => tool.name)).not.toContain(name);
+        expect(call.system).not.toContain(name);
+      }
+    }
   });
 
   it('discovers conditional and flattened MCP capabilities without lexical reachability gaps', async () => {
@@ -686,7 +717,8 @@ describe('active tool exposure and scoped prompts', () => {
     expect(concise).toContain('never replace the current turn\'s task');
     expect(concise).not.toContain('Available tools:');
     expect(concise).not.toContain('For non-trivial multi-step work');
-    expect(planned).toContain('For non-trivial multi-step work');
+    expect(planned).toEqual(buildSystemPrompt({ language: 'en', toolNames: ['FileRead'] }));
+    expect(planned).not.toMatch(/StartPlan|TodoWrite/);
     expect(planned).not.toContain('Available tools: FileRead');
   });
 
@@ -5980,9 +6012,9 @@ describe('Engine', () => {
       expect(mockAdapter.callLog[2].messages.at(-1).content).toContain('file contents');
     }
 
-    it('reuses identical deterministic reads and ends a plan-only control batch', async () => {
-      await verifyIdenticalReadReuse();
-      mockAdapter = new MockAdapter();
+    it('reuses identical deterministic reads', verifyIdenticalReadReuse);
+
+    it('rejects retired checklist calls and continues work instead of ending at plan_recorded', async () => {
       mockAdapter.pushResponse([
         { type: 'tool_call', id: 'plan-1', name: 'StartPlan', input: { topic: 'inspect the issue' } },
         { type: 'tool_call', id: 'todo-1', name: 'TodoWrite', input: {
@@ -5990,32 +6022,53 @@ describe('Engine', () => {
         } },
         { type: 'stop', stopReason: 'tool_use' },
       ]);
+      mockAdapter.pushResponse([
+        { type: 'tool_call', id: 'read-1', name: 'read', input: {} },
+        { type: 'stop', stopReason: 'tool_use' },
+      ]);
+      mockAdapter.pushResponse([
+        { type: 'text_delta', text: 'Inspected the issue without a checklist.' },
+        { type: 'stop', stopReason: 'end_turn' },
+      ]);
 
+      const registry = createFullRegistry();
+      for (const name of ['StartPlan', 'TodoWrite']) {
+        await expect(registry.execute(name, {})).rejects.toThrow(`Unknown tool: ${name}`);
+      }
       const engine = new Engine({
         adapter: mockAdapter,
         trace,
         config: { model: 'test-model', maxOutputTokens: 1024 },
+        toolRegistry: registry,
       });
-      engine.registerTool({
-        name: 'StartPlan',
-        description: 'Start plan',
+      const read = vi.fn(async () => 'file contents');
+      registry.register(defineTool({
+        name: 'read',
+        description: 'Read',
         parameters: { type: 'object' },
         isReadOnly: () => true,
-        execute: async () => 'plan instruction',
-      });
-      engine.registerTool({
-        name: 'TodoWrite',
-        description: 'Write todos',
-        parameters: { type: 'object' },
-        isReadOnly: () => true,
-        execute: async () => '{"success":true}',
-      });
+        execute: read,
+      }));
 
       const events = [];
       for await (const event of engine.query({ prompt: 'inspect the issue' })) events.push(event);
 
-      expect(mockAdapter.callLog).toHaveLength(1);
-      expect(events.find(event => event.type === 'turn_end' && event.stopReason === 'plan_recorded')).toMatchObject({ terminal: true });
+      expect(mockAdapter.callLog).toHaveLength(3);
+      expect(read).toHaveBeenCalledTimes(1);
+      for (const name of ['StartPlan', 'TodoWrite']) {
+        expect(events.find(event => event.type === 'tool_end' && event.name === name)).toMatchObject({ isError: true });
+        for (const call of mockAdapter.callLog) {
+          expect(call.tools.map(tool => tool.name)).not.toContain(name);
+        }
+      }
+      expect(mockAdapter.callLog[1].messages.filter(message => message.role === 'tool'))
+        .toEqual(expect.arrayContaining([
+          expect.objectContaining({ toolCallId: 'plan-1', isError: true }),
+          expect.objectContaining({ toolCallId: 'todo-1', isError: true }),
+        ]));
+      expect(events.some(event => event.stopReason === 'plan_recorded')).toBe(false);
+      expect(events.filter(event => event.type === 'turn_end' && event.terminal).at(-1))
+        .toMatchObject({ stopReason: 'end_turn' });
     });
 
     it('invalidates cached reads before successful and failed workspace mutations', async () => {
@@ -9364,52 +9417,22 @@ describe('Engine', () => {
       expect(enSystem).toContain('Accuracy first: start with the smallest targeted call');
       expect(enSystem).toContain('only when every call is already necessary');
       expect(enSystem).toContain('Otherwise run them sequentially');
-      expect(enSystem).toContain('do not speculative-batch the investigation');
-      expect(enSystem).toContain('write a brief visible plan');
-      expect(enSystem).toContain('or stop after planning unless user input genuinely blocks the first step');
+      expect(enSystem).not.toMatch(/TodoWrite|StartPlan|write a brief visible plan/);
       expect(enSystem).toContain('After PromptAgent queues follow-up work, call WaitAgent in the same parent turn');
       expect(enSystem).toContain('Relay the reply or continue the dependent work');
       expect(zhSystem).toContain('当前 Session 隶属于 Project Yeaft（project-123）。当前 Project 的统一 instruction 是：');
       expect(zhSystem).toContain('发布前执行统一验证。');
       expect(zhSystem).toContain('准确性优先：先用能解决当前未知的最小定向调用');
       expect(zhSystem).toContain('否则串行执行');
-      expect(zhSystem).toContain('不要推测性批量展开调查');
-      expect(zhSystem).toContain('先写简短可见计划');
-      expect(zhSystem).toContain('只有用户信息确实阻塞第一步时才在规划后停下');
+      expect(zhSystem).not.toMatch(/TodoWrite|StartPlan|先写简短可见计划/);
       expect(zhSystem).toContain('PromptAgent 排队后续工作后，必须在同一个父级 turn 调用 WaitAgent');
       expect(zhSystem).toContain('随后转述结果或继续依赖该结果的工作');
 
-      expect(todoWriteTool.description.en).toContain('PLAN WITHOUT AN EXTRA MODEL ROUND');
-      expect(todoWriteTool.description.en).toContain('do not call a separate planning-mode tool first');
-      expect(todoWriteTool.description.zh).toContain('不要浪费额外模型回合进入规划模式');
-      expect(todoWriteTool.description.zh).toContain('不要先调用单独的规划模式工具');
-      expect(todoWriteTool.description.en).toContain('BATCH WITH WORK');
-      expect(todoWriteTool.description.en).toContain('necessity, argument-independence, and safety-independence test');
-      expect(todoWriteTool.description.en).toContain('Do not speculative-batch an investigation');
-      expect(todoWriteTool.description.en).toContain('only after evidence');
-      expect(todoWriteTool.description.en).toContain('make unnecessary');
-      expect(todoWriteTool.description.en).toContain('standalone TodoWrite remains valid');
-      expect(todoWriteTool.description.zh).toContain('和工作工具合批');
-      expect(todoWriteTool.description.zh).toContain('必要性、参数独立性和安全独立性检查');
-      expect(todoWriteTool.description.zh).toContain('不要推测性批量展开调查');
-      expect(todoWriteTool.description.zh).toContain('只有已有证据时');
-      expect(todoWriteTool.description.zh).toContain('TodoWrite 仍可单独调用');
-
-      const enPlan = await startPlanTool.execute(
-        { topic: 'Batch plan setup with its first investigation' },
-        { config: { language: 'en' }, vpPersona: {} },
-      );
-      const zhPlan = await startPlanTool.execute(
-        { topic: '把计划建立和第一批调查工具合批' },
-        { config: { language: 'zh-CN' }, vpPersona: {} },
-      );
-
-      expect(enPlan).toContain('only when that call is already necessary and its arguments and safety do not depend on another result');
-      expect(enPlan).toContain('do not speculative-batch the investigation');
-      expect(enPlan).toContain('Stop after the plan only when the first step must ask the user');
-      expect(zhPlan).toContain('只有第一个工作工具调用已经确定有必要');
-      expect(zhPlan).toContain('不要推测性批量展开调查');
-      expect(zhPlan).toContain('只有第一步必须询问用户时才在计划后停下');
+      for (const language of ['en', 'zh']) {
+        const customInstruction = 'Discuss the plan first; legacy notes mention TodoWrite and StartPlan.';
+        expect(buildSystemPrompt({ language, projectInstruction: customInstruction }))
+          .toContain(customInstruction);
+      }
 
       const enToolDefs = Object.fromEntries(createFullRegistry().getToolDefs('en')
         .map(tool => [tool.name, tool.description]));

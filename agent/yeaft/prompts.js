@@ -150,10 +150,6 @@ const RAW_TEMPLATES = {
   harnessRouterShape: readTemplate('harness/router-shape.md', { required: false }),
   // Phase 3b — coordinator harness rule for inter-VP forwarding.
   harnessRouterHandoff: readTemplate('harness/router-handoff.md', { required: false }),
-  // task — StartPlan tool fallback. The `StartPlan` tool reads this when
-  // a VP has no `planInstruction` of its own. Required so a misconfigured
-  // install fails fast instead of injecting an empty plan instruction.
-  planInstruction: readTemplate('plan-instruction.md'),
 };
 
 /**
@@ -166,23 +162,6 @@ function getTemplate(key, language) {
   const raw = RAW_TEMPLATES[key];
   if (!raw) return '';
   return extractLangSection(raw, language);
-}
-
-/**
- * Default planning-instruction text returned by the `StartPlan` tool when
- * the active VP has no `planInstruction` override on its role.md frontmatter.
- *
- * Pulled from `templates/plan-instruction.md`. Marked required at load time
- * so a missing template fails fast on agent boot — preferable to silently
- * shipping an empty plan instruction to the LLM.
- *
- * @param {string} [language='en'] — 'en' / 'zh' (uses lang-section markers
- *                                   if the template carries them; falls
- *                                   back to the whole body otherwise).
- * @returns {string}
- */
-export function getDefaultPlanInstruction(language = 'en') {
-  return getTemplate('planInstruction', normalizePromptLanguage(language));
 }
 
 // ─── Prompt Templates (hardcoded fallbacks) ──────────────────────
@@ -469,11 +448,6 @@ const TOOL_GUIDANCE_GROUPS = Object.freeze([
     tools: ['Bash'],
     en: 'Use non-interactive, deterministic shell commands, set reasonable timeouts, quote paths with spaces, and do not run destructive operations without authorization.',
     zh: 'Shell 命令保持非交互、确定性并设置合理 timeout；包含空格的路径要引用，未经授权不要执行破坏性操作。',
-  },
-  {
-    tools: ['TodoWrite'],
-    en: 'For non-trivial multi-step work, write a brief visible plan and call `TodoWrite` in the same assistant response as the first necessary work-tool call only when its arguments and safety do not depend on another result. Start with the smallest such call; do not speculative-batch the investigation or stop after planning unless user input genuinely blocks the first step.',
-    zh: '非平凡多步骤任务先写简短可见计划。只有第一个工作工具调用已经确定有必要，且其参数和安全性都不依赖其他结果时，才在同一个 assistant response 中把它与 `TodoWrite` 一起发出；先执行满足条件的最小调用，不要推测性批量展开调查。只有用户信息确实阻塞第一步时才在规划后停下。',
   },
   {
     tools: ['SpawnAgent', 'PromptAgent', 'WaitAgent', 'CloseAgent', 'ListAgents'],

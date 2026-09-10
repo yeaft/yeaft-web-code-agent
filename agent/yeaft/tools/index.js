@@ -57,9 +57,7 @@ import listAgents from './list-agents.js';
 // --- P1 Routing tools (task-334d) ---
 import routeForward from './route-forward.js';
 
-// --- P1 Progress tracking ---
-import todoWrite from './todo-write.js';
-import startPlan from './start-plan.js';
+// --- P1 Durable work ---
 import createWorkItem from './create-work-item.js';
 
 // H2.f.4: user-facing thread tools (spawnThread/switchThread/listThreads/...)
@@ -69,9 +67,8 @@ import createWorkItem from './create-work-item.js';
 // Feature tools (FeatureCreate/Update/List/Get/Progress/Memory + Followup
 // + UpdatePlan + feature_summary_post) and the FeatureArc auto-creation
 // system were removed in 2026-05-13 — they were defined but never used in
-// production, contributing ~2900 lines of dead code. The TodoWrite tool
-// above replaces them as the actual progress-tracking surface the LLM
-// uses for multi-step tasks.
+// production, contributing ~2900 lines of dead code. Native checklist tools
+// are also retired; durable execution belongs to Work Center.
 
 // --- P2 Auxiliary tools ---
 // task-333b L1 delete: ToolSearch and WriteStdin removed — the function-call
@@ -127,9 +124,7 @@ export const allTools = [
   // P1 Routing (task-334d)
   routeForward,
 
-  // P1 Progress tracking
-  todoWrite,
-  startPlan,
+  // P1 Durable work
   createWorkItem,
 
   // P2 Auxiliary
