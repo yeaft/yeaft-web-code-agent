@@ -7,9 +7,95 @@ import {
   estimateContentTokens,
   stripToolNoiseFromOlderTurns,
   trimSnapshotForBudget,
+  buildHistoryBuckets,
+  fitProviderRequestToContext,
 } from '../../../agent/yeaft/history-window.js';
 
 describe('deterministic provider history window', () => {
+  it('keeps a current turn larger than 32K when the model request still fits', () => {
+    const history = [
+      { role: 'user', content: 'old question' },
+      { role: 'assistant', content: 'h'.repeat(160_000) },
+    ];
+    const current = { role: 'user', content: 'c'.repeat(140_000) };
+    const buckets = buildHistoryBuckets([...history, current], {
+      currentTurnStartIndex: history.length,
+      messageTokenBudget: 32_768,
+    });
+
+    expect(estimateMessageTokens(current)).toBeGreaterThan(32_768);
+    expect(buckets.messages.at(-1).content).toBe(current.content);
+    expect(buckets.meta.budget.usedTokens).toBeLessThanOrEqual(32_768);
+
+    const fitted = fitProviderRequestToContext(buckets.messages, {
+      contextWindow: 100_000,
+      systemTokens: 1_000,
+      toolSchemaTokens: 1_000,
+      outputReserve: 8_000,
+      historyMessageCount: buckets.messages.length - buckets.meta.current.messageCount,
+    });
+    expect(fitted.messages.at(-1).content).toBe(current.content);
+    expect(fitted.meta.estimatedTokens).toBeLessThanOrEqual(100_000);
+  });
+
+  it('drops recent history below five turns instead of throwing an internal budget error', () => {
+    const history = Array.from({ length: 5 }, (_, index) => [
+      { role: 'user', content: `question ${index}` },
+      { role: 'assistant', content: 'x'.repeat(2_000) },
+    ]).flat();
+    const current = { role: 'user', content: 'current' };
+    const result = buildHistoryBuckets([...history, current], {
+      currentTurnStartIndex: history.length,
+      messageTokenBudget: 600,
+    });
+
+    expect(result.meta.recent.turnCount).toBeLessThan(5);
+    expect(result.messages.at(-1)).toEqual(current);
+  });
+
+  it('uses different whole-request limits for different model windows', () => {
+    const messages = [
+      { role: 'user', content: 'old' },
+      { role: 'assistant', content: 'x'.repeat(80_000) },
+      { role: 'user', content: 'current' },
+    ];
+    const small = fitProviderRequestToContext(messages, {
+      contextWindow: 12_000, outputReserve: 2_000, historyMessageCount: 2,
+    });
+    const large = fitProviderRequestToContext(messages, {
+      contextWindow: 40_000, outputReserve: 2_000, historyMessageCount: 2,
+    });
+    expect(small.messages.length).toBeLessThan(large.messages.length);
+    expect(small.meta.contextWindow).toBe(12_000);
+    expect(large.meta.contextWindow).toBe(40_000);
+  });
+
+  it('drops current tool protocol as paired units without mutating the source', () => {
+    const messages = [
+      { role: 'user', content: 'current request' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'old', name: 'read', input: {} }] },
+      { role: 'tool', toolCallId: 'old', content: 'old result' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'new', name: 'read', input: {} }] },
+      { role: 'tool', toolCallId: 'new', content: 'new result' },
+    ];
+    const original = structuredClone(messages);
+    const fitted = fitProviderRequestToContext(messages, {
+      contextWindow: 10_000,
+      outputReserve: 100,
+      historyMessageCount: 0,
+      maxMessageCount: 3,
+    });
+
+    expect(messages).toEqual(original);
+    expect(fitted.messages).toHaveLength(3);
+    const owners = new Set(fitted.messages.flatMap(message =>
+      message.toolCalls?.map(call => call.id) || []));
+    const results = new Set(fitted.messages.filter(message => message.role === 'tool')
+      .map(message => message.toolCallId));
+    expect(owners).toEqual(new Set(['new']));
+    expect(results).toEqual(owners);
+  });
+
   it('counts signed thinking blocks and JSON-serialized function outputs', () => {
     const thinking = {
       thinking: 'x'.repeat(100_000),

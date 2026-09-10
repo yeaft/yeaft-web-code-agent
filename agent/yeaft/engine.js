@@ -9,7 +9,7 @@
  *   5. If tool_calls → execute tools → append results → goto 3
  *   6. Persist each completed message at its durability boundary
  *   7. If max_tokens → auto-continue (up to maxContinueTurns)
- *   8. On LLMContextError → fail the turn; no summary or hidden maintenance call
+ *   8. On LLMContextError → shrink the request copy and retry without replaying tools
  *   9. On retryable error with fallbackModel → switch model → retry
  *
  * Pattern derived from Claude Code's query loop (src/query.ts).
@@ -22,7 +22,7 @@ import { promises as fsp } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { getRuntimePlatformInfo } from './runtime-platform.js';
-import { LLMAbortError, LLMAuthError, LLMPolicyError, LLMRateLimitError, LLMServerError, LLMStreamIdleTimeoutError } from './llm/adapter.js';
+import { LLMAbortError, LLMAuthError, LLMContextError, LLMPolicyError, LLMRateLimitError, LLMServerError, LLMStreamIdleTimeoutError } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes, memoryScopeLabel } from './sessions/pre-flow.js';
 import {
   readProjectDoc,
@@ -33,7 +33,7 @@ import {
   DEFAULT_PROJECT_DOC_MAX_BYTES,
 } from './sessions/project-doc.js';
 import { archiveToolResults } from './archive/tool-results.js';
-import { trimSnapshotForBudget, estimateMessageTokens, buildHistoryBuckets } from './history-window.js';
+import { trimSnapshotForBudget, estimateMessageTokens, buildHistoryBuckets, fitProviderRequestToContext } from './history-window.js';
 import { recallConversationTurns } from './conversation/history-index.js';
 import { parseSeqFromId } from './conversation/persist.js';
 import { isVpForeign, readContent as readScopeContent } from './memory/store.js';
@@ -46,6 +46,14 @@ import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 const MAIN_THREAD_ID = 'main';
 import { pickEffort, parseEffortPrefix, snapshotEffortDecision } from './effort.js';
 import { bindProviderState } from './llm/provider-state.js';
+import {
+  POST_COMPACT_CONTEXT_RATIO,
+  generatePostCompact,
+  loadPostCompact,
+  postCompactPath,
+  removePostCompactIfSource,
+  savePostCompact,
+} from './post-compact.js';
 import { DEFAULT_CONTEXT_WINDOW, getModelInfo, normalizeEffort, parseModelRef, resolveContextWindow, resolveMaxOutputTokens, resolveModel } from './models.js';
 import { lookupModelLimitSync } from './llm/models-dev.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
@@ -59,7 +67,7 @@ import { createPluginSkillManager } from './plugins.js';
 import { extractDisplayImages, stripDisplayImageData } from './image-assets.js';
 import { acknowledgePendingNotifications, formatNotificationsForPrompt, peekPendingNotifications } from './sub-agent/notifications.js';
 import {
-  TOOL_BATCH_SIZE,
+  TOOL_LOOP_REFLECTION_INTERVAL,
   TURN_SUMMARY_THRESHOLD,
   DUP_TOOL_THRESHOLD,
   ExecLog,
@@ -80,7 +88,7 @@ import {
  * conversations (user report: Yeaft loop errored at the cap). The engine
  * now runs until the LLM itself returns stopReason='end_turn' or a
  * non-retryable error surfaces. Real runaway loops are still bounded by:
- *   • provider rate limits / context window (LLMContextError is surfaced)
+ *   • provider rate limits / context recovery exhaustion
  *   • user-initiated abort (AbortController / cancel)
  *   • MAX_CONTINUE_TURNS for the max_tokens auto-continue path
  */
@@ -722,12 +730,17 @@ export class Engine {
    *     prior turn's history is rewritten with the reflection. If still
    *     pending, the engine falls back to the exec-log stub.
    *   • `#reflectedTurns` — Set<turnNumber>; ensures T1 fires at most
-   *     once per turn (when toolCount crosses TOOL_BATCH_SIZE).
+   *     once per reflection interval measured in tool loops.
    */
   #execLog = null;
   #pendingT2 = new Map();
   #reflectedTurns = new Set();
   #__queryCounter = 0;
+
+  /** Derived post-response summaries, keyed by Session/VP/thread scope. */
+  #postCompactSummaries = new Map();
+  #postCompactLoaded = new Set();
+  #postCompactRevisions = new Map();
 
   /** @type {string} */
   #currentThreadId = MAIN_THREAD_ID;
@@ -2069,6 +2082,12 @@ export class Engine {
       && typeof vpPersona.vpId === 'string'
       ? vpPersona.vpId
       : (typeof senderVpId === 'string' ? senderVpId : null);
+    const postCompactScope = this.#postCompactScope({
+      sessionId: runtimeSessionId,
+      vpId: queryVpId,
+      threadId: runtimeThreadId,
+    });
+    const postCompactState = await this.#beginPostCompactScope(postCompactScope);
     // Exact read-only tool results are safe to reuse within one query only
     // when no intervening mutation can have changed the workspace. The map is
     // intentionally local to this query; cross-turn reuse belongs to the
@@ -2248,6 +2267,10 @@ export class Engine {
     });
     if (amsContext && amsContext.snapshotBlock) {
       memoryInjection = amsContext.snapshotBlock;
+    }
+    if (postCompactState.summary) {
+      const block = `## Prior conversation compact\n${postCompactState.summary}`;
+      memoryInjection = memoryInjection ? `${memoryInjection}\n\n${block}` : block;
     }
     const loadedMemoryForDebug = loadedMemoryDebugEntries(amsContext?.snapshot);
     const loadedMemoryMetaForDebug = {
@@ -2475,18 +2498,18 @@ export class Engine {
     // `turnStartIdx` is where the current user message lives; the arc
     // we may collapse spans (arcStartIdx .. last assistant/tool).
     //
-    // Periodic-T1 fix: T1 must fire EVERY TOOL_BATCH_SIZE (30) tool
-    // calls, not just the first batch. So instead of a one-shot boolean,
+    // Periodic T1 fires every 30 tool loops, not every 30 calls. A single
+    // provider batch can contain many parallel calls but is still one loop.
     // track:
-    //   • `lastT1AtToolCount` — toolCount snapshot at the last T1
+    //   • `lastT1AtLoopCount` — tool-loop snapshot at the last T1
     //     ATTEMPT (success OR error). Trigger when
-    //     `queryToolCount - lastT1AtToolCount >= TOOL_BATCH_SIZE`.
+    //     `completedToolLoops - lastT1AtLoopCount >= interval`.
     //   • `arcStartIdx` — first index of the current (uncollapsed)
     //     tool arc. Initialised to turnStartIdx + 1; reset after each
     //     successful T1 collapse to `conversationMessages.length`
     //     (i.e. the slot the next assistant message will land in).
     //   • `t1CollapsesDone` — count of T1 firings that ACTUALLY
-    //     rewrote history. Distinct from `lastT1AtToolCount` because
+    //     rewrote history. Distinct from `lastT1AtLoopCount` because
     //     the catch block bumps the latter to back off after a
     //     transient reflector error WITHOUT having collapsed
     //     anything. The T2 schedule check below is gated on this
@@ -2494,7 +2517,7 @@ export class Engine {
     //     fall back at end_turn").
     const turnStartIdx = conversationMessages.length - 1;
     let queryToolCount = 0;
-    let lastT1AtToolCount = 0;
+    let lastT1AtLoopCount = 0;
     let arcStartIdx = turnStartIdx + 1;
     let t1CollapsesDone = 0;
     // Duplicate policy is scoped to one user query. Only successful, real
@@ -2561,6 +2584,10 @@ export class Engine {
     let primaryModelAtLastBoundary = currentModel;
     let cumulativeInputTokens = 0;
     let cumulativeOutputTokens = 0;
+    let maxContextOccupancyRatio = 0;
+    let peakContextTokens = 0;
+    let peakContextWindow = 0;
+    let postCompactCandidate = null;
     let activeProviderRequest = null;
     // Skill events describe the selection injected into each provider request.
     // The first request must report its initial selection; later loops report
@@ -2592,6 +2619,11 @@ export class Engine {
     let consecutiveRetryableErrors = 0;
     let consecutiveForbiddenErrors = 0;
     let contentPolicyRecoveryAttempts = 0;
+    let contextOverflowRecoveryAttempts = 0;
+    // A provider can know about framing/tokenizer overhead that our monotonic
+    // estimator cannot. Each real overflow retries the same unexecuted request
+    // with a smaller provider-only window; no transcript row is rewritten.
+    let providerContextScale = 1;
 
     while (true) {
       turnNumber++;
@@ -2879,10 +2911,8 @@ export class Engine {
         // not just the initial snapshot assembled by the bridge.
         const continuationCost = pendingContinuationForRequest
           ? estimateMessageTokens(pendingContinuationForRequest) : 0;
-        const historyBudget = Math.max(1, Math.min(
-          requestConfig.messageTokenBudget || 32768,
-          Math.floor(currentContextWindow * 0.75) - estimateMessagesTokens(systemPrompt, []),
-        ) - continuationCost);
+        const historyBudget = Math.max(0,
+          (requestConfig.messageTokenBudget || 32768) - continuationCost);
         const buckets = useMessageHistory ? buildHistoryBuckets(conversationMessages, {
           prompt,
           relatedTurns: relatedHistoryTurns,
@@ -2892,10 +2922,18 @@ export class Engine {
           currentTurnStartIndex: turnStartIdx,
           language: requestConfig.language,
         }) : null;
-        const requestHistory = buckets?.messages || trimSnapshotForBudget(conversationMessages, {
-          messageTokenBudget: requestConfig.messageTokenBudget,
-          language: requestConfig.language,
-        });
+        let historyMessageCount;
+        const requestHistory = buckets?.messages || (() => {
+          const historical = trimSnapshotForBudget(conversationMessages.slice(0, turnStartIdx), {
+            messageTokenBudget: historyBudget,
+            language: requestConfig.language,
+          });
+          historyMessageCount = historical.length;
+          return [...historical, ...conversationMessages.slice(turnStartIdx)];
+        })();
+        if (buckets) {
+          historyMessageCount = requestHistory.length - (buckets.meta?.current?.messageCount || 0);
+        }
         if (buckets) this.#trace.log?.('history_buckets', {
           sessionId: runtimeSessionId, turnId: queryTurnId, ...historyRecallMeta, ...buckets.meta,
         });
@@ -2917,6 +2955,39 @@ export class Engine {
             // repeat this best-effort archive lookup without losing history.
             wireMessages = swept.nextMessages;
           } catch { /* best-effort */ }
+        }
+
+        // Final request boundary: account for every component against the
+        // actual model window. The 32K budget above applies only to historical
+        // rows; current-turn rows are paid here together with system, schemas,
+        // and the model-specific output reserve. This runs on every tool-loop
+        // request and again with tighter headroom after a provider overflow.
+        const requestMaxOutputTokens = Math.max(1, Math.min(
+          requestConfig.maxOutputTokens || resolveMaxOutputTokens(currentModel, requestConfig),
+          resolveMaxOutputTokens(currentModel, requestConfig),
+        ));
+        const toolSchemaTokens = toolDefs.length > 0
+          ? approxTokens(JSON.stringify(toolDefs)) : 0;
+        const fittedRequest = fitProviderRequestToContext(wireMessages, {
+          contextWindow: Math.max(1, Math.floor(currentContextWindow * providerContextScale)),
+          systemTokens: estimateMessagesTokens(systemPrompt, []),
+          toolSchemaTokens,
+          outputReserve: requestMaxOutputTokens,
+          historyMessageCount,
+          historyTokenBudget: historyBudget,
+          language: requestConfig.language,
+        });
+        wireMessages = fittedRequest.messages;
+        if (fittedRequest.meta.droppedHistoryMessages > 0
+          || fittedRequest.meta.droppedCurrentMessages > 0
+          || providerContextScale < 1) {
+          this.#trace.log?.('request_context_trim', {
+            sessionId: runtimeSessionId,
+            turnId: queryTurnId,
+            model: currentModel,
+            recoveryAttempt: contextOverflowRecoveryAttempts,
+            ...fittedRequest.meta,
+          });
         }
 
         // task-704b: pre-flight total-token guard. Even with the per-tool
@@ -3005,7 +3076,7 @@ export class Engine {
           system: systemPrompt,
           messages: wireMessages,
           tools: toolDefs.length > 0 ? toolDefs : undefined,
-          maxTokens: requestConfig.maxOutputTokens || 16384,
+          maxTokens: requestMaxOutputTokens,
           effort: resolvedEffort,
           effortConstraint,
           requestIdentity,
@@ -3183,6 +3254,35 @@ export class Engine {
             responseTextBytes: Buffer.byteLength(responseText, 'utf8'),
           },
         });
+        const requestContextOccupancy = (totalUsage.inputTokens || 0)
+          + (totalUsage.cacheInputDeltaTokens || 0)
+          + (totalUsage.outputTokens || 0);
+        const requestContextOccupancyRatio = requestContextOccupancy / currentContextWindow;
+        if (requestContextOccupancyRatio >= maxContextOccupancyRatio) {
+          maxContextOccupancyRatio = requestContextOccupancyRatio;
+          peakContextTokens = requestContextOccupancy;
+          peakContextWindow = currentContextWindow;
+        }
+        // Trigger from the peak request, but summarize the latest provider
+        // state so an earlier, fuller tool loop cannot omit later reflection,
+        // tool results, or the final answer from the derived artifact.
+        postCompactCandidate = {
+          scope: postCompactScope,
+          revision: postCompactState.revision,
+          sessionId: runtimeSessionId,
+          turnId: queryTurnId,
+          model: currentModel,
+          config: requestConfig,
+          adapter: requestAdapter,
+          messages: [
+            ...wireMessages.map(message => ({ ...message })),
+            ...(toolCalls.length === 0 && responseText
+              ? [{ role: 'assistant', content: responseText }]
+              : []),
+          ],
+          contextTokens: peakContextTokens,
+          contextWindow: peakContextWindow,
+        };
         // Stream completed without throwing — reset the retry counter so
         // the next turn starts with a clean budget. In-band adapter errors
         // are converted to throws above so they share the real error path.
@@ -3298,11 +3398,32 @@ export class Engine {
         const earlyIsRateLimit = err instanceof LLMRateLimitError;
         const earlyIsTransient = err instanceof LLMServerError;
         const earlyIsContentPolicy = err instanceof LLMPolicyError;
+        const earlyIsContextOverflow = err instanceof LLMContextError;
         // A completed tool_call has already crossed the streaming boundary to
         // the caller. Replaying that request would publish a duplicate call and
         // leave ambiguous execution ownership, so only pre-tool failures are
         // eligible for transparent retry or model fallback.
         const canReplayProviderRequest = toolCalls.length === 0;
+        if (earlyIsContextOverflow && canReplayProviderRequest
+          && contextOverflowRecoveryAttempts < 3) {
+          contextOverflowRecoveryAttempts += 1;
+          providerContextScale *= 0.75;
+          endAttemptTrace('context_overflow_retry');
+          if (responseText) prepareRetryContinuation();
+          yield {
+            type: 'llm_retry',
+            attempt: contextOverflowRecoveryAttempts,
+            maxRetries: 3,
+            delayMs: 0,
+            reason: 'context_overflow_recovery',
+            recoveryMode: responseText ? 'continue' : 'restart',
+            errorName: err.name,
+            statusCode: err.statusCode ?? null,
+            message: 'Provider rejected the context; retrying with a smaller request copy.',
+          };
+          yield { type: 'turn_end', turnNumber, stopReason: 'llm_retry', threadId };
+          continue;
+        }
         if (earlyIsContentPolicy && canReplayProviderRequest && contentPolicyRecoveryAttempts === 0) {
           contentPolicyRecoveryAttempts = 1;
           endAttemptTrace('llm_retry');
@@ -3896,8 +4017,8 @@ export class Engine {
         // `#applyPendingT2Reflections` carries the result forward.
         //
         // Periodic-T1 fix: gate on `t1CollapsesDone === 0`, NOT
-        // `lastT1AtToolCount === 0`. The catch block of T1 bumps
-        // `lastT1AtToolCount` after a reflector error to avoid
+        // `lastT1AtLoopCount === 0`. The catch block of T1 advances
+        // `lastT1AtLoopCount` after a reflector error to avoid
         // tight-loop retries — but no collapse happened, so T2 should
         // still be allowed to fall back at end_turn. Fowler-review
         // critical finding.
@@ -4697,29 +4818,28 @@ export class Engine {
         break;
       }
 
-      // PR-L: T1 in-turn (synchronous) reflection. Fires once per
-      // adapter loop iteration where ≥ TOOL_BATCH_SIZE (30) tool
-      // calls have accumulated since the last T1 firing — not just
-      // the first batch of the query(). Generates a markdown reflection
+      // PR-L: T1 in-turn (synchronous) reflection. Fires every 30 completed
+      // tool loops. A provider response containing many parallel tool calls is
+      // one loop, not many. Generates a markdown reflection
       // over the assistant+tool arc since the last T1 firing (or
       // since the user prompt for the first batch) and rewrites that
       // range to a SINGLE synthetic user message before the next
       // adapter.stream() runs.
       //
       // Loop semantics:
-      //   - First batch: arcStartIdx = turnStartIdx + 1, fires when
-      //     queryToolCount reaches TOOL_BATCH_SIZE.
-      //   - Each subsequent batch: arcStartIdx is updated to the slot
+      //   - First interval: arcStartIdx = turnStartIdx + 1.
+      //   - Each subsequent interval: arcStartIdx is updated to the slot
       //     right after the just-inserted reflection message; fires
-      //     again whenever TOOL_BATCH_SIZE more tools have run since
-      //     lastT1AtToolCount.
-      //   - The dedup Set key includes `lastT1AtToolCount` so each
-      //     batch within the same query gets a distinct entry — without
+      //     again whenever 30 more tool loops have completed.
+      //   - The dedup Set key includes the loop count so each interval
+      //     within the same query gets a distinct entry — without
       //     this the second batch would be silently skipped.
-      const t1BatchDue = queryToolCount - lastT1AtToolCount >= TOOL_BATCH_SIZE;
-      if (groupReflectionAllowed && t1BatchDue && !toolBatchBarrier
+      const completedToolLoops = toolLoopTurns + 1;
+      const t1BatchDue = completedToolLoops - lastT1AtLoopCount
+        >= TOOL_LOOP_REFLECTION_INTERVAL;
+      if (t1BatchDue && !toolBatchBarrier
           && !abortedDuringTools && !signal?.aborted) {
-        const t1DedupKey = `${queryNumber}:t1:${queryToolCount}`;
+        const t1DedupKey = `${queryNumber}:t1-loop:${completedToolLoops}`;
         if (this.#reflectedTurns.has(t1DedupKey)) {
           // Defensive: should never hit since t1BatchDue gates re-entry
           // and queryNumber namespaces queries. Kept as belt-and-
@@ -4787,10 +4907,10 @@ export class Engine {
           // immediately after it, i.e. at conversationMessages.length
           // (the next assistant message will land here).
           arcStartIdx = conversationMessages.length;
-          lastT1AtToolCount = queryToolCount;
+          lastT1AtLoopCount = completedToolLoops;
           // Bump the success counter — used by the T2 schedule check
           // to decide whether T2 still has work to do at end_turn.
-          // Distinct from lastT1AtToolCount which the catch block
+          // Distinct from lastT1AtLoopCount which the catch block
           // also bumps (but without rewriting history).
           t1CollapsesDone += 1;
           yield {
@@ -4820,9 +4940,9 @@ export class Engine {
             status: 'error',
             error: err && err.message || String(err),
           };
-          // Advance lastT1AtToolCount past this batch so we don't
+          // Advance lastT1AtLoopCount past this interval so we don't
           // tight-loop on a hiccuping reflector. The next attempt is
-          // TOOL_BATCH_SIZE tools from now, not immediately. arcStartIdx is
+          // another 30 tool loops from now, not immediately. arcStartIdx is
           // left alone because history wasn't rewritten — the tail still
           // begins where it did. The trade-off: the next batch's
           // reflection will cover the tools that just failed too,
@@ -4831,7 +4951,7 @@ export class Engine {
           // We do NOT bump t1CollapsesDone — see the variable's
           // declaration comment. This keeps the T2 fallback path live
           // when every T1 attempt has errored.
-          lastT1AtToolCount = queryToolCount;
+          lastT1AtLoopCount = completedToolLoops;
         }
         }
       }
@@ -4879,6 +4999,76 @@ export class Engine {
       totalTokens: cumulativeInputTokens + cumulativeOutputTokens,
       loopCount: turnNumber,
     };
+
+    // The visible response is complete at the yield above. Only when the
+    // consumer resumes past that boundary do we inspect pressure and launch
+    // best-effort post compact. It never blocks this turn or the next one.
+    if (postCompactCandidate
+      && maxContextOccupancyRatio >= POST_COMPACT_CONTEXT_RATIO) {
+      this.#schedulePostCompact(postCompactCandidate);
+    }
+  }
+
+  #postCompactScope({ sessionId, vpId, threadId }) {
+    if (!this.#yeaftDir || !sessionId) return null;
+    const path = postCompactPath(this.#yeaftDir, { sessionId, vpId, threadId });
+    return { key: path, path };
+  }
+
+  async #beginPostCompactScope(scope) {
+    if (!scope) return { revision: 0, summary: '' };
+    const revision = (this.#postCompactRevisions.get(scope.key) || 0) + 1;
+    this.#postCompactRevisions.set(scope.key, revision);
+    if (!this.#postCompactLoaded.has(scope.key)) {
+      this.#postCompactLoaded.add(scope.key);
+      const artifact = await loadPostCompact(scope.path);
+      if (artifact) this.#postCompactSummaries.set(scope.key, artifact);
+    }
+    return {
+      revision,
+      summary: this.#postCompactSummaries.get(scope.key)?.summary || '',
+    };
+  }
+
+  #schedulePostCompact(candidate) {
+    const { scope, revision } = candidate;
+    if (!scope || this.#postCompactRevisions.get(scope.key) !== revision) return;
+    const compactMaxTokens = Math.max(512, Math.min(4096,
+      resolveMaxOutputTokens(candidate.model, candidate.config)));
+    const task = async () => {
+      try {
+        const summary = await generatePostCompact({
+          adapter: candidate.adapter,
+          model: candidate.model,
+          messages: candidate.messages,
+          maxTokens: compactMaxTokens,
+        });
+        const current = () => this.#postCompactRevisions.get(scope.key) === revision;
+        if (!current()) return;
+        const artifact = {
+          summary,
+          model: candidate.model,
+          sourceTurnId: candidate.turnId,
+          sourceRevision: revision,
+          sourceContextTokens: candidate.contextTokens,
+          contextWindow: candidate.contextWindow,
+          createdAt: new Date().toISOString(),
+        };
+        if (await savePostCompact(scope.path, artifact, current)) {
+          if (current()) this.#postCompactSummaries.set(scope.key, artifact);
+          else await removePostCompactIfSource(scope.path, candidate.turnId);
+        }
+      } catch (error) {
+        // A response already reached the user. Compact failure is diagnostic
+        // only and must not create a late error event.
+        this.#trace.log?.('post_compact_failed', {
+          sessionId: candidate.sessionId,
+          turnId: candidate.turnId,
+          message: String(error?.message || error).slice(0, 200),
+        });
+      }
+    };
+    void task();
   }
 
   /**

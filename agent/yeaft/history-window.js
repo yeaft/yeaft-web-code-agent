@@ -27,7 +27,6 @@ export const DEFAULT_RUNTIME_CACHE_TURN_CAP = 25;
 export const DEFAULT_RUNTIME_CACHE_TOKEN_BUDGET = 32768;
 export const DEFAULT_RUNTIME_CACHE_MESSAGE_CAP = 256;
 
-const MINIMUM_RECENT_PROVIDER_TURNS = 5;
 const IMAGE_PART_TOKEN_COST = 1024;
 const DOCUMENT_PART_TOKEN_COST = 2048;
 const CONTENT_PART_FRAME_TOKENS = 2;
@@ -899,11 +898,11 @@ function describeBucket(turns, messages = turns.flatMap(turn => turn.text)) {
  * result in the transcript. Past human turn boundaries are retained when the
  * configured recent window fits; tools are optional enrichment, newest first.
  *
- * The active turn is outside both buckets and consumes the global budget first.
- * Its opening user row is protected. Recent text stays complete: reduce the
- * oldest end of the suffix down to five turns (or all available for a new
- * Session); fail closed if that floor cannot fit. Related recall only uses
- * remaining budget and stays optional and complete. External recall must have
+ * The active turn is outside both buckets and outside the history budget. Its
+ * opening user row is protected by the later whole-request fitter. Recent text
+ * stays complete when it fits, but a configured turn count is never a hard
+ * request-success floor. Related recall only uses remaining history budget and
+ * stays optional and complete. External recall must have
  * comparable userSeq/source identities to establish
  * that it predates recent/current history; unknown chronology fails closed.
  *
@@ -927,41 +926,16 @@ export function buildHistoryBuckets(snapshot, options = {}) {
     : (allTurns.at(-1)?.index ?? source.length);
   const currentSource = source.slice(currentStart);
   const currentIdentity = bucketTurn(currentSource, currentStart);
-  let current = [];
-  if (currentSource.length && tokenBudget >= 2 && messageCap > 0) {
-    // Reserve the opening prompt before fitting later active execution units.
-    const first = shrinkMessageToBudget(stripAllToolNoise([currentSource[0]])[0], tokenBudget);
-    if (first && estimateMessageTokens(first) <= tokenBudget) current.push(first);
-    const remainingTokens = tokenBudget - estimateMessagesTokens(current);
-    const remainingRows = messageCap - current.length;
-    if (remainingTokens >= 2 && remainingRows > 0) {
-      // Active execution is not visible historical text: internal completion
-      // notices must reach the next provider call. Fit newest protocol units
-      // directly, without legacy human-turn filtering or text projection.
-      const units = providerUnits(pairSanitize(truncateToolResultsForModel(
-        currentSource.slice(1), { language: options.language },
-      )));
-      const fitted = [];
-      let tokens = remainingTokens;
-      let rows = remainingRows;
-      for (let index = units.length - 1; index >= 0; index -= 1) {
-        const unit = fitProviderUnit(units[index], tokens);
-        const cost = estimateMessagesTokens(unit);
-        if (unit.length > rows || cost > tokens) continue;
-        fitted.unshift(unit);
-        tokens -= cost;
-        rows -= unit.length;
-      }
-      current.push(...fitted.flat());
-    }
-    // The legacy fitter assumes a normal positive budget; at tiny allowances
-    // even an empty row's framing can exceed it. Remove complete tail units.
-    while (estimateMessagesTokens(current) > tokenBudget || current.length > messageCap) {
-      current = pairSanitize(current.slice(0, -1));
-    }
-  }
-  const availableTokens = Math.max(0, tokenBudget - estimateMessagesTokens(current));
-  const availableRows = Math.max(0, messageCap - current.length);
+  // The 32K/default budget owns only rows before currentStart. Keep the active
+  // turn intact here; whole-request fitting runs at every provider boundary and
+  // uses the actual model context window. Tool bodies may still receive their
+  // normal deterministic per-result truncation, without touching the durable
+  // transcript or charging that copy against history.
+  const current = pairSanitize(truncateToolResultsForModel(
+    currentSource.map(message => ({ ...message })), { language: options.language },
+  ));
+  const availableTokens = tokenBudget;
+  const availableRows = messageCap;
   let duplicateCount = 0;
   const past = [];
   for (const turn of splitBucketTurns(source.slice(0, currentStart))) {
@@ -1037,12 +1011,6 @@ export function buildHistoryBuckets(snapshot, options = {}) {
     recentTokens += turn.tokens;
     recentRows += turn.text.length;
   }
-  const minimumRecent = Math.min(MINIMUM_RECENT_PROVIDER_TURNS, recentCandidates.length);
-  if (recent.length < minimumRecent) {
-    const error = new Error(`Context budget cannot retain ${minimumRecent} complete recent history turns`);
-    error.code = 'HISTORY_RECENT_BUDGET_EXCEEDED';
-    throw error;
-  }
   let remainingTokens = availableTokens - recent.reduce((total, turn) => total + turn.tokens, 0);
   let remainingRows = availableRows - recent.reduce((total, turn) => total + turn.text.length, 0);
   const related = [];
@@ -1097,9 +1065,12 @@ export function buildHistoryBuckets(snapshot, options = {}) {
       budget: {
         messageTokenBudget: tokenBudget, maxMessageCount: messageCap,
         recentTurnCap: recentCap, relatedTurnCap: relatedCap,
-        minimumRecentTurns: minimumRecent,
+        minimumRecentTurns: 0,
         relatedReservedTokens: 0, availableHistoryTokens: availableTokens,
-        usedTokens: estimateMessagesTokens(messages), usedMessages: messages.length,
+        usedTokens: estimateMessagesTokens([...relatedMessages, ...recentMessages]),
+        usedMessages: relatedMessages.length + recentMessages.length,
+        requestTokensBeforeWholeRequestFit: estimateMessagesTokens(messages),
+        requestMessagesBeforeWholeRequestFit: messages.length,
       },
       dropped: {
         pastTurnCount: droppedTurns.length,
@@ -1109,6 +1080,91 @@ export function buildHistoryBuckets(snapshot, options = {}) {
           || turn.text.length > availableRows).length,
         unselectedRelatedTurnCount: eligible.length - related.length,
       },
+    },
+  };
+}
+
+/**
+ * Fit one provider-request copy to the actual model window. The caller tells
+ * us where current-turn rows begin; only the prefix is subject to the history
+ * budget. If the complete request is still too large, old history disappears
+ * first, followed by the oldest disposable current-turn protocol units. The
+ * source array and durable transcript are never mutated.
+ *
+ * @param {Array<object>} messages
+ * @param {{ contextWindow:number, systemTokens?:number, toolSchemaTokens?:number,
+ * outputReserve?:number, historyMessageCount?:number, historyTokenBudget?:number,
+ * maxMessageCount?:number, language?:string }} options
+ * @returns {{messages:Array<object>, meta:object}}
+ */
+export function fitProviderRequestToContext(messages, options = {}) {
+  const source = Array.isArray(messages) ? messages : [];
+  const contextWindow = bucketCap(options.contextWindow, 0);
+  const staticTokens = bucketCap(options.systemTokens, 0)
+    + bucketCap(options.toolSchemaTokens, 0)
+    + bucketCap(options.outputReserve, 0);
+  const messageBudget = Math.max(0, contextWindow - staticTokens);
+  const split = Math.max(0, Math.min(source.length,
+    Number.isInteger(options.historyMessageCount) ? options.historyMessageCount : 0));
+  const messageCap = bucketCap(options.maxMessageCount, DEFAULT_RUNTIME_CACHE_MESSAGE_CAP);
+  const historySource = source.slice(0, split);
+  const currentSource = source.slice(split);
+
+  let current = pairSanitize(truncateToolResultsForModel(
+    currentSource.map(message => ({ ...message })), { language: options.language },
+  ));
+  if (estimateMessagesTokens(current) > messageBudget || current.length > messageCap) {
+    const fitted = [];
+    if (current.length > 0 && messageBudget >= 2 && messageCap > 0) {
+      const first = shrinkMessageToBudget(stripAllToolNoise([current[0]])[0], messageBudget);
+      if (first && estimateMessageTokens(first) <= messageBudget) fitted.push(first);
+      let tokens = messageBudget - estimateMessagesTokens(fitted);
+      let rows = messageCap - fitted.length;
+      const units = providerUnits(pairSanitize(current.slice(1)));
+      const tail = [];
+      for (let index = units.length - 1; index >= 0; index -= 1) {
+        const unit = fitProviderUnit(units[index], tokens);
+        const cost = estimateMessagesTokens(unit);
+        if (unit.length > rows || cost > tokens) continue;
+        tail.unshift(unit);
+        tokens -= cost;
+        rows -= unit.length;
+      }
+      fitted.push(...tail.flat());
+    }
+    current = pairSanitize(fitted);
+  }
+
+  const configuredHistoryBudget = bucketCap(
+    options.historyTokenBudget, DEFAULT_MESSAGE_TOKEN_BUDGET,
+  );
+  const remainingTokens = Math.max(0, Math.min(
+    configuredHistoryBudget,
+    messageBudget - estimateMessagesTokens(current),
+  ));
+  const remainingRows = Math.max(0, messageCap - current.length);
+  const history = remainingTokens >= 2 && remainingRows > 0
+    ? trimSnapshotForBudget(historySource, {
+        messageTokenBudget: remainingTokens,
+        maxMessageCount: remainingRows,
+        recentTurnCap: Number.MAX_SAFE_INTEGER,
+        language: options.language,
+      })
+    : [];
+  const fittedMessages = [...history, ...current];
+  return {
+    messages: fittedMessages,
+    meta: {
+      contextWindow,
+      staticTokens,
+      messageBudget,
+      estimatedTokens: staticTokens + estimateMessagesTokens(fittedMessages),
+      historyMessagesBefore: historySource.length,
+      historyMessagesAfter: history.length,
+      currentMessagesBefore: currentSource.length,
+      currentMessagesAfter: current.length,
+      droppedHistoryMessages: historySource.length - history.length,
+      droppedCurrentMessages: currentSource.length - current.length,
     },
   };
 }
