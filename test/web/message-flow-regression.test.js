@@ -6352,6 +6352,74 @@ describe('message flow regressions', () => {
     expect(store.yeaftActiveTasksBySession['agent-b\u001fsession-b']).toBeUndefined();
   });
 
+  it('orders real optimistic sends before live replies and preserves order through history reconciliation', () => {
+    storeFactories.clear();
+    vi.useFakeTimers();
+    const sentAt = Date.parse('2026-09-10T14:34:00Z');
+    vi.setSystemTime(sentAt);
+    runtimeSessionsStore.sessionList = [{ id: 'live-order', agentId: 'agent-a' }];
+    runtimeSessionsStore.setActive('live-order', 'agent-a');
+    const store = useChatStore();
+    store.sendWsMessage = vi.fn(() => true);
+    store.currentView = 'yeaft';
+    store.currentAgent = 'agent-a';
+    store.yeaftActiveSessionFilter = 'live-order';
+    store.yeaftSessionAgentById = { 'live-order': 'agent-a' };
+    store.yeaftConversationId = 'live-order-conversation';
+    store.yeaftConversationIdsByAgent = { 'agent-a': 'live-order-conversation' };
+    store.activeConversations = ['live-order-conversation'];
+    const output = (id, text) => store.handleYeaftOutput({
+      agentId: 'agent-a', conversationId: 'live-order-conversation', sessionId: 'live-order',
+      vpId: 'omni', turnId: `turn-${id}`,
+      data: { type: 'assistant', message: { id, content: text }, ts: Date.now() },
+    });
+    const rows = () => store.messagesMap['live-order-conversation'];
+    try {
+      // Do not seed timestamped fixtures: exercise the production send action.
+      store.sendYeaftSessionMessage({ groupId: 'live-order', text: 'Please tag the merge' });
+      const user = rows()[0];
+      const uiKey = user.uiKey;
+      vi.setSystemTime(sentAt + 1000);
+      output('reply-one', 'I will verify main');
+      output('reply-one', ' and push the tag');
+      expect(rows().map(row => row.content)).toEqual([
+        'Please tag the merge', 'I will verify main and push the tag',
+      ]);
+      expect(user.timestamp).toBe(sentAt);
+
+      vi.setSystemTime(sentAt + 2000);
+      store.sendYeaftSessionMessage({ groupId: 'live-order', text: 'Then check the workflow' });
+      const secondUser = rows().at(-1);
+      vi.setSystemTime(sentAt + 3000);
+      output('reply-two', 'Checking the workflow');
+      expect(rows().map(row => row.type)).toEqual(['user', 'assistant', 'user', 'assistant']);
+      expect(secondUser.timestamp).toBe(sentAt + 2000);
+
+      // A delayed persisted echo replaces the first optimistic identity/time,
+      // keeps its UI key, and does not move either pending user row to the tail.
+      const request = store.beginYeaftHistoryLoad({ agentId: 'agent-a', sessionId: 'live-order', mode: 'recent' });
+      store.handleMessage({
+        type: 'yeaft_history_chunk', agentId: 'agent-a', conversationId: 'live-order-conversation',
+        sessionId: 'live-order', requestId: request.requestId, mode: 'recent',
+        messages: [{
+          id: 'm0001', seq: 1, role: 'user', content: user.content,
+          clientMessageId: user.clientMessageId, sessionId: 'live-order', ts: sentAt + 100,
+        }],
+        oldestSeq: 1, latestSeq: 1, hasMore: false,
+      });
+      expect(rows()).toHaveLength(4);
+      expect(rows()[0]).toMatchObject({ messageId: 'm0001', uiKey, timestamp: sentAt + 100 });
+      expect(rows().map(row => row.type)).toEqual(['user', 'assistant', 'user', 'assistant']);
+      expect(rows().at(-1).content).toBe('Checking the workflow');
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      storeFactories.clear();
+      runtimeSessionsStore.sessionList = [];
+      runtimeSessionsStore.setActive(null, null);
+    }
+  });
+
   it('keeps background Yeaft output routed while promoting the visible local conversation', () => {
     storeFactories.clear();
     runtimeSessionsStore.sessionList = [
