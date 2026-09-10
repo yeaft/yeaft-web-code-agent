@@ -704,22 +704,23 @@ describe('active tool exposure and scoped prompts', () => {
     expect([...inferProjectDocScopes({ pathHints: ['web/stores/chat.js'] })]).toContain('web');
   });
 
-  it('uses stable core plus active guidance without repeating the tool catalogue', () => {
-    const concise = buildSystemPrompt({ language: 'en', toolNames: ['WebSearch', 'FileRead'] });
-    const planned = buildSystemPrompt({ language: 'en', toolNames: ['FileRead', 'StartPlan', 'TodoWrite'] });
+  it('uses the stable core without repeating tool schemas or runtime guidance', () => {
+    const system = buildSystemPrompt({ language: 'en' });
+    const retiredTools = buildSystemPrompt({
+      language: 'en',
+      toolNames: ['FileRead', 'StartPlan', 'TodoWrite'],
+    });
 
-    expect(concise).toContain('Session Participant');
-    expect(concise).toContain('Active Tool Guidance');
-    expect(concise).toContain('Read existing files before editing');
-    expect(concise).toContain('do not revert changes you did not make');
-    expect(concise).toContain('Do not amend commits unless the user explicitly asks');
-    expect(concise).toContain('Do not use `git reset --hard` or `git clean -f` without user approval');
-    expect(concise).toContain('never replace the current turn\'s task');
-    expect(concise).not.toContain('Available tools:');
-    expect(concise).not.toContain('For non-trivial multi-step work');
-    expect(planned).toEqual(buildSystemPrompt({ language: 'en', toolNames: ['FileRead'] }));
-    expect(planned).not.toMatch(/StartPlan|TodoWrite/);
-    expect(planned).not.toContain('Available tools: FileRead');
+    expect(system).toContain('Session Participant');
+    expect(system).toContain('do not revert changes you did not make');
+    expect(system).toContain('Do not amend commits unless the user explicitly asks');
+    expect(system).toContain('Do not use `git reset --hard` or `git clean -f` without user approval');
+    expect(system).toContain('never replace the current turn\'s task');
+    expect(system).not.toContain('Active Tool Guidance');
+    expect(system).not.toContain('Available tools:');
+    expect(system).not.toContain('For non-trivial multi-step work');
+    expect(retiredTools).toEqual(buildSystemPrompt({ language: 'en', toolNames: ['FileRead'] }));
+    expect(retiredTools).not.toMatch(/StartPlan|TodoWrite/);
   });
 
   it('preserves image generation configuration through the authoritative loader', () => {
@@ -759,7 +760,6 @@ describe('active tool exposure and scoped prompts', () => {
     }
     const taskManager = {
       listActiveTasks: () => [...activeTasks],
-      renderActiveTasksForPrompt: () => activeTasks.length > 0 ? 'task_live is running' : '',
     };
     mockAdapter.pushResponse([
       { type: 'tool_call', id: 'start_bg', name: 'Bash', input: { command: 'npm start', background: true } },
@@ -784,7 +784,8 @@ describe('active tool exposure and scoped prompts', () => {
       'ReadTaskLog',
       'CancelTask',
     ]));
-    expect(mockAdapter.callLog[1].system).toContain('task_live is running');
+    expect(mockAdapter.callLog[1].system).not.toContain('task_live is running');
+    expect(mockAdapter.callLog[1].system).not.toContain('Possibly Relevant Tasks');
   });
 
   it('reloads unclassified and Bash write rules before executing against a large project doc', async () => {
@@ -4506,8 +4507,8 @@ describe('Engine', () => {
         expect(system).not.toContain('m174797 assistant/linus');
         expect(system).not.toContain('m174798 tool:');
         expect(system).not.toContain('### 相关记忆');
-        expect(system).toContain('## 可能相关的任务');
-        expect(system).toContain('- 子 Agent timeout-reviewer (子 Agent，运行中)');
+        expect(system).not.toContain('## 可能相关的任务');
+        expect(system).not.toContain('timeout-reviewer');
         expect(system).not.toContain('Review timeout recovery and verify Engine continuation');
         expect(system).not.toContain('<active_tasks>');
         expect(system).not.toContain('/private/sub-agent/events.jsonl');
@@ -4937,7 +4938,6 @@ describe('Engine', () => {
           getTask() {
             return { status: 'running', updatedAt: new Date().toISOString() };
           },
-          renderActiveTasksForPrompt() { return ''; },
         },
         sessionId: 'session-active-task',
       });
@@ -4998,7 +4998,6 @@ describe('Engine', () => {
               ? { status: 'running', updatedAt: new Date(0).toISOString() }
               : { status: 'running', updatedAt: new Date().toISOString() };
           },
-          renderActiveTasksForPrompt() { return ''; },
         },
         sessionId: 'session-mixed-tasks',
       });
@@ -5418,7 +5417,6 @@ describe('Engine', () => {
       });
       const startedTasks = [];
       const bashTaskManager = {
-        renderActiveTasksForPrompt: () => '',
         startShellTask: input => {
           startedTasks.push(input);
           return { id: 'task_after_timeout', status: 'running', log: { path: '/tmp/task.log' } };
@@ -9180,7 +9178,7 @@ describe('Engine', () => {
   });
 
   describe('active scope in system prompt', () => {
-    it('should render session id and session members without current member or group label', async () => {
+    it('omits bookkeeping metadata while retaining multi-VP routing', async () => {
       mockAdapter.pushResponse([
         { type: 'text_delta', text: 'ok' },
         { type: 'stop', stopReason: 'end_turn' },
@@ -9203,16 +9201,12 @@ describe('Engine', () => {
       }
 
       const call = mockAdapter.callLog[0];
-      expect(call.system).toContain('## Current session context');
-      expect(call.system).toContain('Session ID: session_active');
-      expect(call.system).not.toContain('session_member:');
-      expect(call.system).not.toContain('session_members:');
-      expect(call.system).not.toContain('session_topics:');
-      expect(call.system).toContain('Session members: vp-omni, vp-martin, vp-linus');
+      expect(call.system).not.toContain('## Current session context');
+      expect(call.system).not.toContain('Session ID: session_active');
       expect(call.system).not.toContain('Current focus:');
-      expect(call.system).not.toContain('group: session_active');
-      expect(call.system).not.toContain('\nvp: vp-linus');
-      expect(call.system).not.toContain('\nmembers: vp-omni');
+      expect(call.system).toContain('## multi_vp_routing');
+      expect(call.system).toContain('Current VP: vp-linus');
+      expect(call.system).toContain('Forwardable VPs: vp-omni, vp-martin');
     });
 
     it('does not infer Session focus from Dream topics for Session or WorkItem turns', async () => {
@@ -9321,7 +9315,7 @@ describe('Engine', () => {
       expect(call.system).not.toContain('核心原则');
     }
 
-    it('uses English and Chinese system prompts with configured tool guidance', async () => {
+    it('uses localized system prompts without duplicating tool schemas', async () => {
       await verifyEnglishSystemPrompt();
       mockAdapter = new MockAdapter();
       mockAdapter.pushResponse([
@@ -9376,7 +9370,6 @@ describe('Engine', () => {
 
       const enSystem = buildSystemPrompt({
         language: 'en',
-        toolNames: ['TodoWrite', 'PromptAgent'],
         projectLabel: 'Yeaft (project-123)',
         projectInstruction: 'Run the shared Project verification before release.',
       });
@@ -9384,7 +9377,6 @@ describe('Engine', () => {
         language: 'zh',
         projectLabel: 'Yeaft（project-123）',
         projectInstruction: '发布前执行统一验证。',
-        toolNames: ['TodoWrite', 'PromptAgent'],
       });
 
       const bilingualChildSystem = buildSystemPrompt({
@@ -9414,19 +9406,16 @@ describe('Engine', () => {
       })).toContain('当前 Session 隶属于当前 Project。当前 Project 的统一 instruction 是：');
       expect(buildSystemPrompt({ language: 'en', projectInstruction: '   ' }))
         .not.toContain('[Project Instruction]');
-      expect(enSystem).toContain('Accuracy first: start with the smallest targeted call');
-      expect(enSystem).toContain('only when every call is already necessary');
-      expect(enSystem).toContain('Otherwise run them sequentially');
+      expect(enSystem).not.toContain('Active Tool Guidance');
+      expect(enSystem).not.toContain('Accuracy first: start with the smallest targeted call');
+      expect(enSystem).not.toContain('After PromptAgent queues follow-up work');
       expect(enSystem).not.toMatch(/TodoWrite|StartPlan|write a brief visible plan/);
-      expect(enSystem).toContain('After PromptAgent queues follow-up work, call WaitAgent in the same parent turn');
-      expect(enSystem).toContain('Relay the reply or continue the dependent work');
       expect(zhSystem).toContain('当前 Session 隶属于 Project Yeaft（project-123）。当前 Project 的统一 instruction 是：');
       expect(zhSystem).toContain('发布前执行统一验证。');
-      expect(zhSystem).toContain('准确性优先：先用能解决当前未知的最小定向调用');
-      expect(zhSystem).toContain('否则串行执行');
+      expect(zhSystem).not.toContain('当前工具指引');
+      expect(zhSystem).not.toContain('准确性优先：先用能解决当前未知的最小定向调用');
+      expect(zhSystem).not.toContain('PromptAgent 排队后续工作后');
       expect(zhSystem).not.toMatch(/TodoWrite|StartPlan|先写简短可见计划/);
-      expect(zhSystem).toContain('PromptAgent 排队后续工作后，必须在同一个父级 turn 调用 WaitAgent');
-      expect(zhSystem).toContain('随后转述结果或继续依赖该结果的工作');
 
       for (const language of ['en', 'zh']) {
         const customInstruction = 'Discuss the plan first; legacy notes mention TodoWrite and StartPlan.';

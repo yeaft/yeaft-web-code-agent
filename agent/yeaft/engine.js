@@ -1250,8 +1250,8 @@ export class Engine {
   }
 
   /**
-   * Build the system prompt with the AMS-rendered Memory block, the
-   * Active Scope block, and skill content. The legacy multi-path
+   * Build the system prompt with the AMS-rendered Memory block, routing
+   * metadata, and skill content. The legacy multi-path
    * Memory injection (FTS-formatted + AMS snapshot + Layer-A summaries +
    * userProfile + coreMemory) was retired in DESIGN-PROMPT v1; callers
    * now thread a single `memoryInjection` string composed upstream from
@@ -1260,8 +1260,7 @@ export class Engine {
    * Routes through `buildWorkerPrompt`, which:
    *   - Lays in the persona-as-identity block (or Yeaft identity fallback)
    *   - Adds the Memory section (passed in as `memoryInjection`)
-   *   - Adds the structured Active Scope block (`activeScope`)
-   *   - Forwards optional `taskCtx` for the legacy task-context sub-block
+   *   - Adds multi-VP routing metadata from `activeScope` when applicable
    *
    * @param {object} args
    * @param {string} args.prompt — user prompt (for skill relevance matching)
@@ -1273,11 +1272,10 @@ export class Engine {
    * @param {string} [args.projectLabel] — current Project name and id for prompt attribution
    * @param {string} [args.workCenterInstructions] — frozen Agent-level Work Center policy
    * @param {string} [args.projectDoc] — resolved CLAUDE.md / AGENTS.md text (already truncated)
-   * @param {object} [args.taskCtx] — legacy task-context sub-block (optional)
    * @param {string} [args.explicitSkillName] — leading /skill:<name> command, if present
    * @returns {string}
    */
-  #buildSystemPrompt({ prompt, memoryInjection, vpPersona, activeScope, sessionAnnouncement, projectInstruction, projectLabel, workCenterInstructions, projectDoc, taskCtx, activeTasks, collabToolPolicy = null, activeToolNames = null, promptNotices = [], explicitSkillName, resolvedSkillContent = null } = {}) {
+  #buildSystemPrompt({ prompt, memoryInjection, vpPersona, activeScope, sessionAnnouncement, projectInstruction, projectLabel, workCenterInstructions, projectDoc, promptNotices = [], explicitSkillName, resolvedSkillContent = null } = {}) {
     // #runQuery resolves Skill selection at each provider-request boundary so
     // a live Plugin policy change cannot leave stale content in the next prompt.
     // Keep the local fallback for internal callers that do not need selection
@@ -1292,21 +1290,8 @@ export class Engine {
       }
     }
 
-    // Prompt guidance must describe the same canonical capability
-    // intersection that reaches provider schemas and execution.
-    const registeredToolNames = this.#toolRegistry
-      ? this.#toolRegistry.getToolNames({
-          plugins: this.#config?.plugins,
-          collabToolPolicy,
-        })
-      : Array.from(this.#tools.keys());
-    const toolNames = activeToolNames instanceof Set
-      ? registeredToolNames.filter(name => activeToolNames.has(name))
-      : registeredToolNames;
-
     return buildWorkerPrompt({
       language: this.#config.language || 'en',
-      toolNames,
       memoryInjection,
       skillContent,
       vpPersona,
@@ -1317,8 +1302,6 @@ export class Engine {
       workCenterInstructions,
       projectDoc,
       runtimePlatform: getRuntimePlatformInfo(),
-      taskCtx,
-      activeTasks,
       promptNotices,
       // Worker-shape harness is descriptive metadata for human inspection;
       // production prompts skip it to save tokens. Re-enable via env when
@@ -2301,18 +2284,13 @@ export class Engine {
         }))
       : [];
 
-    // ─── Active Scope (DESIGN-PROMPT §3 ④) ──────────────────────
-    // Structured per-turn scope summary: session + vp + members + envelope routing
-    // info. Long-form scope content lives in AMS — this block carries
-    // only IDs + tiny labels. (Feature scope retired 2026-05-13.)
-    const activeSessionTopics = topicScopesForResident
-      .map(scope => scope.replace(/^sessions\/[^/]+\/topic\//, ''));
+    // ─── Multi-VP routing scope ──────────────────────────────────
+    // Only identity and peer membership affect the routing contract rendered in
+    // the system prompt. Session bookkeeping and inferred topics remain in their
+    // owning runtime/memory paths instead of being mirrored into prompt metadata.
     const activeScope = {
-      sessionId: sessionId || '',
-      sessionMember: ownVpIdForAms || '',
+      vpId: ownVpIdForAms || '',
       sessionMembers: Array.isArray(sessionMembers) ? sessionMembers : [],
-      sessionTopics: activeSessionTopics,
-      envelope: inboundEnvelope || null,
     };
 
     let projectDocSource = this.#getProjectDocBlock(workDir);
@@ -2327,11 +2305,6 @@ export class Engine {
       && typeof this.#taskManager.listActiveTasks === 'function'
       ? this.#taskManager.listActiveTasks(runtimeSessionId)
       : [];
-    let activeTasks = this.#taskManager
-      ? this.#taskManager.renderActiveTasksForPrompt(runtimeSessionId, {
-          language: this.#config.language || 'en',
-        })
-      : '';
     const registeredToolNames = this.#toolRegistry
       ? this.#toolRegistry.getToolNames({
           collabToolPolicy: effectiveCollabToolPolicy,
@@ -2402,9 +2375,6 @@ export class Engine {
       projectLabel,
       workCenterInstructions,
       projectDoc: projectDocContext.text,
-      activeTasks,
-      collabToolPolicy: effectiveCollabToolPolicy,
-      activeToolNames,
       promptNotices,
       explicitSkillName,
       resolvedSkillContent,
@@ -2814,11 +2784,6 @@ export class Engine {
         && typeof this.#taskManager.listActiveTasks === 'function'
         ? this.#taskManager.listActiveTasks(runtimeSessionId)
         : [];
-      activeTasks = this.#taskManager
-        ? this.#taskManager.renderActiveTasksForPrompt(runtimeSessionId, {
-            language: this.#config.language || 'en',
-          })
-        : '';
       activeToolNames = resolveCurrentActiveToolNames();
       for (const name of [...discoveredToolNames]) {
         if (this.#toolRegistry?.has(name)) activeToolNames?.add(name);
