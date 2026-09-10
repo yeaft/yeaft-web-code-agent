@@ -3130,6 +3130,19 @@
 
 /* Mobile: keep necessary code blocks readable without turning replies into huge cards. */
 @media (max-width: 640px) {
+  /* Remove the prose-only desktop copy-action reservation so assistant text
+     uses the same left/right width as tool rows. The absolutely positioned
+     copy action remains available without affecting content geometry. */
+  .turn-content {
+    padding-right: 0;
+  }
+
+  /* Token detail is intentionally desktop-only; model and call count remain
+     compact enough for the mobile response footer. */
+  .turn-token-meta {
+    display: none;
+  }
+
   .code-block-wrapper {
     margin: 0.75em 0;
     border-radius: 6px;

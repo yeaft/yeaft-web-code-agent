@@ -744,9 +744,10 @@
 .vp-turn-block-elapsed {
   font-variant-numeric: tabular-nums;
   color: var(--text-tertiary, var(--text-secondary, #9ca3af));
-  /* Subtle 2s opacity pulse so the live ticker reads as "active" without
-     being loud. Independent of the 1Hz nowMs ref — the ref drives the
-     numeric updates, this animation just gives the digits a heartbeat. */
+}
+/* Subtle 2s opacity pulse marks only the live ticker. Completed durations are
+   visually stable as well as numerically frozen. */
+.vp-turn-block-elapsed.is-live {
   animation: vp-turn-elapsed-pulse 2s ease-in-out infinite;
 }
 @keyframes vp-turn-elapsed-pulse {

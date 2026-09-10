@@ -128,6 +128,10 @@ Hello`;
       model: 'provider/model-v2',
       effort: 'high',
       llmCallCount: 3,
+      inputTokens: 1200,
+      outputTokens: 34,
+      totalTokens: 1234,
+      totalMs: 5234,
     });
 
     const [loaded] = new ConversationStore(TEST_DIR).loadAllBySession('session_response_meta');
@@ -135,6 +139,10 @@ Hello`;
       model: 'provider/model-v2',
       effort: 'high',
       llmCallCount: 3,
+      inputTokens: 1200,
+      outputTokens: 34,
+      totalTokens: 1234,
+      totalMs: 5234,
     });
   });
 

@@ -1523,6 +1523,7 @@ export default {
   'yeaft.message.timeAria': 'Sent at {time}',
   'yeaft.message.llmCall': '{count} LLM call',
   'yeaft.message.llmCalls': '{count} LLM calls',
+  'yeaft.message.tokenUsage': 'Total {total} · Input {input} · Output {output}',
 
   // ============ Yeaft IM-style human row (Issue C, 2026-05-12) ============
   // Aria label / tooltip for the right-side user avatar in Yeaft group view.

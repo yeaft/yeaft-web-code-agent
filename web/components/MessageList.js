@@ -988,11 +988,15 @@ export default {
 
       const finishTurn = () => {
         if (currentTurn) {
-          currentTurn.isActive = !!(currentTurn.turnId && Object.values(store.activeVpTurns || {}).some((row) => (
-            ((row?.turnId || null) === currentTurn.turnId
-              || (!row?.turnId && store.activeVpTurns?.[currentTurn.turnId] === row))
-            && (!store.currentAgent || !row?.agentId || row.agentId === store.currentAgent)
-          )));
+          const activeTurnMeta = currentTurn.turnId
+            ? Object.values(store.activeVpTurns || {}).find((row) => (
+              ((row?.turnId || null) === currentTurn.turnId
+                || (!row?.turnId && store.activeVpTurns?.[currentTurn.turnId] === row))
+              && (!store.currentAgent || !row?.agentId || row.agentId === store.currentAgent)
+            )) || null
+            : null;
+          currentTurn.isActive = !!activeTurnMeta;
+          if (Number.isFinite(activeTurnMeta?.startedAt)) currentTurn.startedAt = activeTurnMeta.startedAt;
           finalizeTurnResponseSegments(currentTurn);
           const persistedLlmCallCount = currentTurn.messages.reduce((count, message) => (
             Number.isInteger(message?.llmCallCount) && message.llmCallCount > count
@@ -1004,10 +1008,25 @@ export default {
             : null;
           currentTurn.llmCallCount = Math.max(persistedLlmCallCount, liveTurnMeta?.loopCount || 0);
           const persistedResponseMeta = [...currentTurn.messages].reverse().find(message => (
-            message?.type === 'assistant' && (message.model || message.effort)
+            message?.type === 'assistant'
+            && (message.model || message.effort
+              || Number.isFinite(message.inputTokens)
+              || Number.isFinite(message.outputTokens)
+              || Number.isFinite(message.totalTokens)
+              || Number.isFinite(message.totalMs)
+              || Number.isFinite(message.turnDurationMs))
           ));
           currentTurn.model = liveTurnMeta?.model || persistedResponseMeta?.model || null;
           currentTurn.effort = liveTurnMeta?.effort || persistedResponseMeta?.effort || null;
+          for (const key of ['inputTokens', 'outputTokens', 'totalTokens']) {
+            const liveValue = liveTurnMeta?.[key];
+            const persistedValue = persistedResponseMeta?.[key];
+            if (Number.isFinite(liveValue)) currentTurn[key] = liveValue;
+            else if (Number.isFinite(persistedValue)) currentTurn[key] = persistedValue;
+          }
+          if (Number.isFinite(liveTurnMeta?.totalMs)) currentTurn.totalMs = liveTurnMeta.totalMs;
+          else if (Number.isFinite(persistedResponseMeta?.totalMs)) currentTurn.totalMs = persistedResponseMeta.totalMs;
+          else if (Number.isFinite(persistedResponseMeta?.turnDurationMs)) currentTurn.totalMs = persistedResponseMeta.turnDurationMs;
           // Has the VP produced anything the user/group can see?
           // Tools are NOT user-visible content — they're internal
           // activity. A route_forward call shows up as a tool chip
@@ -1112,6 +1131,11 @@ export default {
           speakerTimestamp: 0,
           speakerStateCause: '',
           showSpeakerHeader: false,
+          startedAt: 0,
+          totalMs: null,
+          inputTokens: null,
+          outputTokens: null,
+          totalTokens: null,
           turnId: null,
         };
       };
@@ -1389,8 +1413,20 @@ export default {
     const SCROLL_THRESHOLD = virtualTranscriptDefaults.bottomThreshold;
     let loadMoreArmed = true;
 
-    const hasStreamingMessage = Vue.computed(() => {
-      return store.messages.some(m => m.isStreaming);
+    const hasStreamingMessage = Vue.computed(() => (
+      store.messages.some(m => m.isStreaming)
+    ));
+
+    // Text streaming can pause while a VP executes tools. Keep the response
+    // duration clock tied to the active turn lifecycle instead of changing the
+    // existing typing-dots semantics of `hasStreamingMessage`.
+    const hasRunningVpTurn = Vue.computed(() => {
+      const currentAgentId = store.currentAgent || null;
+      const currentSessionId = store.yeaftActiveSessionFilter || store.activeYeaftSessionId || null;
+      return Object.values(store.activeVpTurns || {}).some(turn => (
+        (!currentAgentId || !turn?.agentId || turn.agentId === currentAgentId)
+        && (!currentSessionId || !turn?.sessionId || turn.sessionId === currentSessionId)
+      ));
     });
 
     const showInitialMessagesLoading = Vue.computed(() => {
@@ -1425,10 +1461,10 @@ export default {
     // pseudo-turn synth in `turnGroups` reads `store.vpsTypingInCurrentConv`
     // directly, so we no longer need a separate computed here.
 
-    // VP-block redesign Phase 3: a single page-shared "now" ref that
-    // ticks once per second WHILE any turn is streaming. VpTurnBlock
-    // reads it via prop to compute its live elapsed counter. We tick
-    // only during streaming to avoid wasted re-renders when idle.
+    // VP-block redesign Phase 3: a single page-shared "now" ref that ticks
+    // once per second while any VP turn is active, including pauses in text
+    // streaming during tool execution. VpTurnBlock reads it via prop to compute
+    // the live elapsed counter; idle transcripts do not keep a timer running.
     //
     // Why one shared ref (not one per VpTurnBlock instance): a multi-VP
     // group can have 5+ in-flight turns simultaneously; per-component
@@ -1450,9 +1486,9 @@ export default {
       }
     };
     Vue.watch(
-      hasStreamingMessage,
-      (streaming) => {
-        if (streaming) {
+      hasRunningVpTurn,
+      (running) => {
+        if (running) {
           // Take an immediate sample so the "started 0s ago" reads
           // accurately on the first paint, not after the next 1s tick.
           nowMs.value = Date.now();
