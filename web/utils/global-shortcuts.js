@@ -23,7 +23,15 @@ export function isGlobalShortcutAvailable(action, store, auth) {
     && agent.capabilities?.includes(capability) === true;
 }
 
-const PROTECTED_FOCUS = 'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], .monaco-editor, .cm-editor, .CodeMirror, .xterm, .terminal-container, iframe';
+// Raw key sinks own every keystroke while focused: xterm reads Ctrl+B as readline
+// backward-char, and Monaco/CodeMirror plus rich-text editors bind their own
+// chords. An app shortcut must never steal from these, in the composer or out.
+const RAW_KEY_SINKS = '[contenteditable]:not([contenteditable="false"]), .monaco-editor, .cm-editor, .CodeMirror, .xterm, .terminal-container, iframe';
+// Other text fields keep the keyboard so typing never trips an action.
+const TEXT_ENTRY = 'input, textarea, select, [role="textbox"]';
+// The message composer is the app's primary keyboard surface, so Workbench and
+// session actions must stay reachable while it owns focus.
+const MESSAGE_COMPOSER = '[data-message-composer]';
 const MODALS = '[aria-modal="true"], [role="dialog"], dialog[open], .modal-overlay, .settings-overlay, .agent-settings-overlay';
 
 function isVisible(element, doc) {
@@ -37,7 +45,9 @@ function isVisible(element, doc) {
 
 export function isGlobalShortcutFocusBlocked(event, doc = globalThis.document) {
   const targets = [event?.target, doc?.activeElement, ...(event?.composedPath?.() || [])];
-  if (targets.some(target => target?.isContentEditable || target?.closest?.(PROTECTED_FOCUS))) return true;
+  if (targets.some(target => target?.closest?.(RAW_KEY_SINKS))) return true;
+  const inComposer = targets.some(target => target?.closest?.(MESSAGE_COMPOSER));
+  if (!inComposer && targets.some(target => target?.closest?.(TEXT_ENTRY))) return true;
   return [...(doc?.querySelectorAll(MODALS) || [])].some(element => isVisible(element, doc));
 }
 
