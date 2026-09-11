@@ -454,7 +454,7 @@ async function handleAgentMessage(agentId, msg, ws) {
     'proxy_ws_closed', 'proxy_ws_error', 'restart_agent_ack', 'upgrade_agent_ack',
     'directory_listing', 'folders_list', 'models_list', 'yeaft_output', 'yeaft_session_output', 'session_output', 'yeaft_asset_put',
     'yeaft_history_chunk', 'yeaft_history_outline', 'yeaft_history_search_result', 'yeaft_history_window', 'slash_commands_update', 'agent_metrics',
-    'file_content', 'file_content_chunk', 'file_saved', 'file_op_result', 'file_search_result',
+    'file_content', 'file_content_chunk', 'video_metadata', 'video_chunk', 'file_saved', 'file_op_result', 'file_search_result',
     'git_status_result', 'git_diff_result', 'git_op_result',
     'terminal_created', 'terminal_output', 'terminal_closed', 'terminal_error',
     'agent_capabilities_updated', 'browser_runtime_status_result', 'browser_runtime_install_progress', 'browser_runtime_error',

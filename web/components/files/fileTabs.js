@@ -145,7 +145,7 @@ export function createFileTabs(store, {
     const openedFile = openFiles.value[activeFileIndex.value];
     if (openedFile) openedFile.requestId = requestId;
     store.sendWsMessage({
-      type: 'read_file',
+      type: fileType === 'video' ? 'video_metadata' : 'read_file',
       conversationId,
       agentId,
       requestId,

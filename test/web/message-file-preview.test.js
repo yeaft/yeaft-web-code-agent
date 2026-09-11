@@ -544,6 +544,7 @@ describe('Workbench capability launcher', () => {
       'directory_listing',
       'file_search_result',
       'file_tabs_restored',
+      'video_metadata',
     ]) {
       expect(isWorkbenchMessageForRoute({
         type,

@@ -752,6 +752,7 @@ describe('agent capability advertisement', () => {
       'workbench_request_correlation',
       'workbench_terminal_cleanup_fence',
       'workbench_file_content_chunks',
+      'workbench_video_stream',
       'yeaft_plugins',
     ]) {
       expect(source).toContain(`'${capability}'`);
@@ -1052,6 +1053,7 @@ describe('file chunk socket backpressure', () => {
   }
 
   const chunk = index => ({ type: 'file_content_chunk', chunkIndex: index, content: 'a'.repeat(1024) });
+  const videoChunk = index => ({ type: 'video_chunk', start: index * 1024, content: 'v'.repeat(1024) });
   const chat = { type: 'yeaft_output', payload: { text: 'chat must survive' } };
   const terminal = { type: 'turn_completed', conversationId: 'chat' };
   const nextTurn = () => new Promise(resolve => setImmediate(resolve));
@@ -1081,6 +1083,30 @@ describe('file chunk socket backpressure', () => {
     await drainTurns();
     vi.useRealTimers();
     Object.assign(ctx, original);
+  });
+
+  it('keeps video byte ranges connection-scoped and waits for socket backpressure', async () => {
+    const socket = ctx.ws;
+    const firstWrite = new Promise(resolve => socket.once('write', resolve));
+    const write = sendToServer(videoChunk(0));
+    await firstWrite;
+    expect(socket.sentMessages).toHaveLength(1);
+    expect(socket.bufferedAmount).toBeGreaterThan(0);
+    socket.pendingWrites.shift()();
+    await expect(write).resolves.toBe('sent');
+    expect(socket.bufferedAmount).toBe(0);
+
+    const staleSocket = socket;
+    ctx.ws = new SlowSocket();
+    ctx.outboundSendQueue.push({
+      msg: videoChunk(1), bytes: 1024, socket: staleSocket,
+      resolve: vi.fn(), reject: vi.fn(),
+    });
+    ctx.outboundSendQueueBytes = 1024;
+    const queuedChat = sendToServer(chat);
+    await drainTurns();
+    expect(ctx.ws.getSentMessages()).toEqual([chat]);
+    await expect(queuedChat).resolves.toBe('sent');
   });
 
   it.each([false, true])('waits for each socket callback before producing another chunk (encrypted=%s)', async encrypted => {

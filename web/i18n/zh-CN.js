@@ -1297,6 +1297,8 @@ export default {
   'files.loadingPreview': '加载预览中...',
   'files.previewTooLarge': '该文件大小为 {size} MB，超过 {limit} MB 的预览与下载上限。',
   'files.previewLoadFailed': '图片预览加载失败。',
+  'files.videoPreviewLoadFailed': '视频无法播放，当前浏览器可能不支持该视频编码。',
+  'files.videoStreamUnavailable': '当前 Agent 或 Session 不支持视频流式播放。',
   'files.preview': '预览',
   'files.edit': '编辑',
   'files.pptxNotSupported': 'PPTX 本地预览暂不支持，请在设置中切换为 Office Online 模式。',

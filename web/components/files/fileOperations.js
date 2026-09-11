@@ -1,4 +1,5 @@
 import { confirmDialog } from '../../utils/dialog.js';
+import { getFileType } from './fileEditor.js';
 
 /**
  * fileOperations — file CRUD operations composable for FilesTab.
@@ -246,14 +247,12 @@ export function createFileOperations(store, refs) {
     deleteSingleFile(entry, t);
   };
 
-  const ctxDownload = () => {
-    const entry = contextMenu.entry;
-    hideContextMenu();
-    if (!entry || entry.type !== 'file') return;
+  const downloadFile = entry => {
+    if (!entry?.path) return;
     const requestId = `file-download-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     pendingDownloads.set(requestId, entry.path);
     store.sendWsMessage({
-      type: 'read_file',
+      type: getFileType(entry.path) === 'video' ? 'video_metadata' : 'read_file',
       conversationId: store.currentConversation || '_explorer',
       agentId: store.currentAgent,
       requestId,
@@ -262,6 +261,13 @@ export function createFileOperations(store, refs) {
       workDir: getEffectiveWorkDir(),
       _clientId: store.clientId
     });
+  };
+
+  const ctxDownload = () => {
+    const entry = contextMenu.entry;
+    hideContextMenu();
+    if (!entry || entry.type !== 'file') return;
+    downloadFile(entry);
   };
 
   // Drag & Drop
@@ -429,7 +435,7 @@ export function createFileOperations(store, refs) {
     deleteSingleFile, deleteSelected,
     openMoveDialog, confirmMove,
     showContextMenu, hideContextMenu,
-    ctxRename, confirmRename, ctxCopy, ctxMoveTo, ctxDelete, ctxDownload,
+    ctxRename, confirmRename, ctxCopy, ctxMoveTo, ctxDelete, ctxDownload, downloadFile,
     onDragStart, onDragOver, onDragLeave, onDrop,
     onTreeDragOver, onTreeDragLeave, onTreeDrop, handleExternalFileDrop,
     handleFileOpResult, takePendingDownload,

@@ -232,7 +232,7 @@ export function handleWebConnection(ws, url, req = {}) {
 const WORKBENCH_TYPES = new Set([
   ...CLIENT_BROWSER_TYPES,
   'terminal_create', 'terminal_input', 'terminal_resize', 'terminal_close',
-  'read_file', 'resolve_file_references', 'write_file', 'create_file', 'delete_files', 'move_files', 'copy_files', 'upload_to_dir', 'file_search',
+  'read_file', 'video_metadata', 'resolve_file_references', 'write_file', 'create_file', 'delete_files', 'move_files', 'copy_files', 'upload_to_dir', 'file_search',
   'git_status', 'git_diff', 'git_add', 'git_reset', 'git_restore', 'git_commit', 'git_push',
   'proxy_update_ports', 'update_file_tabs', 'restore_file_tabs'
 ]);

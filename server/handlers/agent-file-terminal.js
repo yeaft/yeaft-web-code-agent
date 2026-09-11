@@ -26,7 +26,7 @@ import {
 } from '../workbench-correlation.js';
 import { appendFileContentChunk, discardFileContentAssembly } from '../file-content-assembly.js';
 import { cachePreviewFile, MAX_PREVIEW_FILE_BYTES } from '../preview-files.js';
-import { createWorkbenchPreview } from '../workbench-preview.js';
+import { createWorkbenchPreview, createWorkbenchVideo } from '../workbench-preview.js';
 
 function stripAgentRouting(msg) {
   const {
@@ -286,9 +286,27 @@ async function handleOneShotResponse(agentId, agent, msg, routeKey) {
     await pending.onResponse?.({ error: 'Preview workspace is no longer available' });
     return;
   }
-  const projected = msg.type === 'file_content' && msg.binary && !pending.onResponse
-    ? cacheBinaryPreview(msg, null, pending)
-    : msg;
+  let projected = msg;
+  if (msg.type === 'file_content' && msg.binary && !pending.onResponse) {
+    projected = cacheBinaryPreview(msg, null, pending);
+  } else if (msg.type === 'video_metadata' && !msg.error && !pending.onResponse) {
+    const fileId = randomUUID();
+    const token = createWorkbenchVideo(fileId, pending, msg);
+    const { mtimeMs: _mtimeMs, ...publicMetadata } = msg;
+    projected = token ? {
+      ...publicMetadata,
+      filePath: msg.requestedFilePath || msg.filePath,
+      videoStream: true,
+      fileId,
+      previewToken: token,
+      previewUrl: `/api/preview/${fileId}?token=${encodeURIComponent(token)}`,
+    } : {
+      ...publicMetadata,
+      filePath: msg.requestedFilePath || msg.filePath,
+      error: 'Video stream is unavailable for this Session.',
+      errorCode: 'VIDEO_STREAM_UNAVAILABLE',
+    };
+  }
   await sendToPendingClient(agentId, projected, pending);
 }
 
@@ -304,7 +322,7 @@ export async function handleAgentFileTerminal(agentId, agent, rawMsg) {
     'terminal_created', 'terminal_output', 'terminal_closed', 'terminal_error',
   ]);
   const oneShotTypes = new Set([
-    'file_content', 'file_content_chunk', 'file_references_resolved', 'file_saved', 'directory_listing', 'file_op_result',
+    'file_content', 'file_content_chunk', 'video_metadata', 'video_chunk', 'file_references_resolved', 'file_saved', 'directory_listing', 'file_op_result',
     'git_status_result', 'git_diff_result', 'git_op_result', 'file_search_result',
   ]);
   if (!terminalTypes.has(msg.type) && !oneShotTypes.has(msg.type)) return false;

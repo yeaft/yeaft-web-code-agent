@@ -1299,6 +1299,8 @@ export default {
   'files.loadingPreview': 'Loading preview...',
   'files.previewTooLarge': 'This file is {size} MB and exceeds the {limit} MB preview and download limit.',
   'files.previewLoadFailed': 'The image preview could not be loaded.',
+  'files.videoPreviewLoadFailed': 'The video could not be played. Its codec may not be supported by this browser.',
+  'files.videoStreamUnavailable': 'Video streaming is unavailable for this Agent or Session.',
   'files.preview': 'Preview',
   'files.edit': 'Edit',
   'files.pptxNotSupported': 'PPTX local preview is not supported. Please switch to Office Online mode in Settings.',
