@@ -29,8 +29,12 @@ function createTree() {
   return { tree, sendWsMessage };
 }
 
-function listing(dirPath, entries) {
-  return { type: 'directory_listing', dirPath, entries };
+function listing(dirPath, entries, requestId = undefined) {
+  return { type: 'directory_listing', dirPath, entries, ...(requestId ? { requestId } : {}) };
+}
+
+function responseFor(message, entries, error = undefined) {
+  return { ...listing(message.dirPath, entries, message.requestId), error };
 }
 
 describe('Files tree refresh', () => {
@@ -86,14 +90,16 @@ describe('Files tree refresh', () => {
     sendWsMessage.mockClear();
 
     tree.refresh();
-    tree.handleDirectoryListing(listing('/workspace', [
+    const refreshRequests = Object.fromEntries(sendWsMessage.mock.calls
+      .map(([message]) => [message.dirPath, message]));
+    tree.handleDirectoryListing(responseFor(refreshRequests['/workspace'], [
       { name: 'kept', type: 'directory' },
     ]));
     // The stale child can answer after its parent has already removed it.
-    tree.handleDirectoryListing(listing('/workspace/removed', [
+    tree.handleDirectoryListing(responseFor(refreshRequests['/workspace/removed'], [
       { name: 'late.txt', type: 'file' },
     ]));
-    tree.handleDirectoryListing(listing('/workspace/kept', [
+    tree.handleDirectoryListing(responseFor(refreshRequests['/workspace/kept'], [
       { name: 'fresh.txt', type: 'file' },
     ]));
 
@@ -126,6 +132,90 @@ describe('Files tree refresh', () => {
     });
 
     expect(tree.treeNodes['/workspace/removed']).toBeUndefined();
+    expect(tree.flattenedTree.value).toEqual([]);
+  });
+
+  it('ignores an older same-directory response after a newer refresh completes', () => {
+    const { tree, sendWsMessage } = createTree();
+    tree.handleDirectoryListing(listing('/workspace', [
+      { name: 'src', type: 'directory' },
+    ]));
+    tree.handleDirectoryListing(listing('/workspace/src', [
+      { name: 'initial.js', type: 'file' },
+    ]));
+
+    sendWsMessage.mockClear();
+    tree.refresh();
+    const firstSrcRequest = sendWsMessage.mock.calls.map(([message]) => message)
+      .find(message => message.dirPath === '/workspace/src');
+    tree.refresh();
+    const secondSrcRequest = sendWsMessage.mock.calls.map(([message]) => message)
+      .filter(message => message.dirPath === '/workspace/src').at(-1);
+
+    tree.handleDirectoryListing(responseFor(secondSrcRequest, [
+      { name: 'new.js', type: 'file' },
+    ]));
+    tree.handleDirectoryListing(responseFor(firstSrcRequest, [
+      { name: 'old.js', type: 'file' },
+    ]));
+
+    expect(tree.treeNodes['/workspace/src'].entries.map(entry => entry.name)).toEqual(['new.js']);
+  });
+
+  it('ignores a stale missing response after the directory was recreated', () => {
+    const { tree, sendWsMessage } = createTree();
+    tree.handleDirectoryListing(listing('/workspace', [
+      { name: 'src', type: 'directory' },
+    ]));
+    tree.handleDirectoryListing(listing('/workspace/src', [
+      { name: 'initial.js', type: 'file' },
+    ]));
+
+    sendWsMessage.mockClear();
+    tree.refresh();
+    const oldSrcRequest = sendWsMessage.mock.calls.map(([message]) => message)
+      .find(message => message.dirPath === '/workspace/src');
+    tree.refresh();
+    const newSrcRequest = sendWsMessage.mock.calls.map(([message]) => message)
+      .filter(message => message.dirPath === '/workspace/src').at(-1);
+
+    tree.handleDirectoryListing(responseFor(newSrcRequest, [
+      { name: 'recreated.js', type: 'file' },
+    ]));
+    tree.handleDirectoryListing(responseFor(
+      oldSrcRequest,
+      [],
+      'ENOENT: no such file or directory',
+    ));
+
+    expect(tree.treeNodes['/workspace/src']).toBeDefined();
+    expect(tree.treeNodes['/workspace/src'].entries.map(entry => entry.name)).toEqual(['recreated.js']);
+  });
+
+  it('clears stale entries when the selected root no longer exists', () => {
+    const { tree, sendWsMessage } = createTree();
+    tree.handleDirectoryListing(listing('/workspace', [
+      { name: 'src', type: 'directory' },
+      { name: 'README.md', type: 'file' },
+    ]));
+    tree.handleDirectoryListing(listing('/workspace/src', [
+      { name: 'old.js', type: 'file' },
+    ]));
+
+    sendWsMessage.mockClear();
+    tree.refresh();
+    const rootRequest = sendWsMessage.mock.calls.map(([message]) => message)
+      .find(message => message.dirPath === '/workspace');
+    tree.handleDirectoryListing(responseFor(
+      rootRequest,
+      [],
+      'ENOENT: no such file or directory',
+    ));
+
+    expect(tree.treeNodes['/workspace']).toMatchObject({
+      entries: [], expanded: true, loaded: true, loading: false,
+    });
+    expect(tree.treeNodes['/workspace/src']).toBeUndefined();
     expect(tree.flattenedTree.value).toEqual([]);
   });
 });
