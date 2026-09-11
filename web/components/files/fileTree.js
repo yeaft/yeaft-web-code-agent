@@ -7,6 +7,14 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
   const treePath = Vue.ref('');
   const treeRootPath = Vue.ref('');
   const treeNodes = Vue.reactive({});
+  const latestDirectoryRequestIds = new Map();
+  let directoryRequestSequence = 0;
+
+  const nextDirectoryRequestId = (dirPath) => {
+    const requestId = `files-tree-${++directoryRequestSequence}`;
+    latestDirectoryRequestIds.set(dirPath, requestId);
+    return requestId;
+  };
 
   // VS Code style header state
   const editingTreePath = Vue.ref(false);
@@ -62,6 +70,7 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
       type: 'list_directory',
       conversationId: store.currentConversation || '_explorer',
       agentId: store.currentAgent,
+      requestId: nextDirectoryRequestId(nDir),
       dirPath: dirPath,
       workDir: getEffectiveWorkDir(),
       _clientId: store.clientId
@@ -74,11 +83,13 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
     const nDir = normalizePath(dir);
     treeRootPath.value = nDir;
     Object.keys(treeNodes).forEach(k => delete treeNodes[k]);
+    latestDirectoryRequestIds.clear();
     treeNodes[nDir] = { entries: [], expanded: true, loaded: false, loading: true };
     store.sendWsMessage({
       type: 'list_directory',
       conversationId: store.currentConversation || '_explorer',
       agentId: store.currentAgent,
+      requestId: nextDirectoryRequestId(nDir),
       dirPath: dir,
       workDir: getEffectiveWorkDir(),
       _clientId: store.clientId
@@ -139,10 +150,62 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
     lastClickedIndex.value = clickedIndex;
   };
 
+  const removeTreeSubtree = (dirPath) => {
+    const prefix = `${dirPath.replace(/\/$/, '')}/`;
+    for (const path of Object.keys(treeNodes)) {
+      if (path === dirPath || path.startsWith(prefix)) delete treeNodes[path];
+    }
+    for (const path of latestDirectoryRequestIds.keys()) {
+      if (path === dirPath || path.startsWith(prefix)) latestDirectoryRequestIds.delete(path);
+    }
+    for (const node of Object.values(treeNodes)) {
+      if (node?.entries) node.entries = node.entries.filter(entry => entry.path !== dirPath);
+    }
+  };
+
+  const isMissingDirectoryError = (error) => (
+    typeof error === 'string' && /(?:ENOENT|not\s+(?:exist|found)|no such file)/i.test(error)
+  );
+
+  const isDirectoryInCurrentTree = (dirPath) => {
+    if (dirPath === treeRootPath.value) return true;
+    return Object.values(treeNodes).some(node => node?.entries?.some(entry => (
+      entry.type === 'directory' && entry.path === dirPath
+    )));
+  };
+
   const handleDirectoryListing = (msg) => {
     const nDirPath = normalizePath(msg.dirPath);
+    const latestRequestId = latestDirectoryRequestIds.get(nDirPath);
+    // The Agent echoes requestId. Once this client has issued a request for a
+    // path, only its latest response may mutate that node. This also fences an
+    // old ENOENT after the same directory has been recreated and refreshed.
+    if ((latestRequestId && msg.requestId !== latestRequestId)
+      || (!latestRequestId && msg.requestId)) return;
+    if (latestRequestId) latestDirectoryRequestIds.delete(nDirPath);
+
+    // A parent refresh may remove an expanded directory while its own listing
+    // is still in flight. Ignore that late response instead of resurrecting an
+    // invisible stale node that would be requested again on the next refresh.
+    if (!isDirectoryInCurrentTree(nDirPath)) {
+      removeTreeSubtree(nDirPath);
+      return;
+    }
     if (msg.error) {
-      if (treeNodes[nDirPath]) {
+      if (isMissingDirectoryError(msg.error)) {
+        if (nDirPath === treeRootPath.value) {
+          for (const entry of treeNodes[nDirPath]?.entries || []) {
+            if (entry.type === 'directory') removeTreeSubtree(entry.path);
+          }
+          if (treeNodes[nDirPath]) {
+            treeNodes[nDirPath].entries = [];
+            treeNodes[nDirPath].loaded = true;
+            treeNodes[nDirPath].loading = false;
+          }
+        } else {
+          removeTreeSubtree(nDirPath);
+        }
+      } else if (treeNodes[nDirPath]) {
         treeNodes[nDirPath].loading = false;
       }
       return;
@@ -156,6 +219,15 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
       ...e,
       path: basePath + '/' + e.name
     }));
+
+    const nextDirectoryPaths = new Set(
+      enriched.filter(entry => entry.type === 'directory').map(entry => entry.path),
+    );
+    for (const previousEntry of treeNodes[nDirPath]?.entries || []) {
+      if (previousEntry.type === 'directory' && !nextDirectoryPaths.has(previousEntry.path)) {
+        removeTreeSubtree(previousEntry.path);
+      }
+    }
 
     if (!treeNodes[nDirPath]) {
       treeNodes[nDirPath] = { entries: enriched, expanded: true, loaded: true, loading: false };
@@ -172,6 +244,7 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
 
   const clearTreeNodes = () => {
     Object.keys(treeNodes).forEach(k => delete treeNodes[k]);
+    latestDirectoryRequestIds.clear();
   };
 
   const initFileBrowser = () => {
@@ -186,8 +259,21 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
   };
 
   const refresh = () => {
-    if (treeRootPath.value) {
-      loadTreeDirectory(treeRootPath.value);
+    if (!treeRootPath.value) return;
+
+    // Refresh every directory that is currently open instead of rebuilding the
+    // tree from the root. Existing nodes keep their expanded state while fresh
+    // listings arrive. If a directory disappeared, its parent listing or an
+    // explicit not-found response removes that subtree without affecting the
+    // rest of the refresh.
+    const expandedPaths = Object.entries(treeNodes)
+      .filter(([, node]) => node?.expanded)
+      .map(([path]) => path);
+    if (!expandedPaths.includes(treeRootPath.value)) {
+      expandedPaths.unshift(treeRootPath.value);
+    }
+    for (const path of expandedPaths) {
+      loadTreeDirectory(path);
     }
   };
 

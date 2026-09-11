@@ -161,7 +161,7 @@ export default {
               <button class="vscode-action-btn" @click="showNewFileDialog('directory')" :title="$t('files.newFolder')">
                 <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-1 8h-3v3h-2v-3h-3v-2h3V9h2v3h3v2z"/></svg>
               </button>
-              <button class="vscode-action-btn" @click="loadRootDirectory" :title="$t('common.refresh')">
+              <button class="vscode-action-btn" @click="refresh" :title="$t('common.refresh')">
                 <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
               </button>
               <button class="vscode-action-btn" @click="openFolderPicker" :title="$t('files.openFolder')">
