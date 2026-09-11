@@ -139,10 +139,40 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
     lastClickedIndex.value = clickedIndex;
   };
 
+  const removeTreeSubtree = (dirPath) => {
+    const prefix = `${dirPath.replace(/\/$/, '')}/`;
+    for (const path of Object.keys(treeNodes)) {
+      if (path === dirPath || path.startsWith(prefix)) delete treeNodes[path];
+    }
+    for (const node of Object.values(treeNodes)) {
+      if (node?.entries) node.entries = node.entries.filter(entry => entry.path !== dirPath);
+    }
+  };
+
+  const isMissingDirectoryError = (error) => (
+    typeof error === 'string' && /(?:ENOENT|not\s+(?:exist|found)|no such file)/i.test(error)
+  );
+
+  const isDirectoryInCurrentTree = (dirPath) => {
+    if (dirPath === treeRootPath.value) return true;
+    return Object.values(treeNodes).some(node => node?.entries?.some(entry => (
+      entry.type === 'directory' && entry.path === dirPath
+    )));
+  };
+
   const handleDirectoryListing = (msg) => {
     const nDirPath = normalizePath(msg.dirPath);
+    // A parent refresh may remove an expanded directory while its own listing
+    // is still in flight. Ignore that late response instead of resurrecting an
+    // invisible stale node that would be requested again on the next refresh.
+    if (!isDirectoryInCurrentTree(nDirPath)) {
+      removeTreeSubtree(nDirPath);
+      return;
+    }
     if (msg.error) {
-      if (treeNodes[nDirPath]) {
+      if (nDirPath !== treeRootPath.value && isMissingDirectoryError(msg.error)) {
+        removeTreeSubtree(nDirPath);
+      } else if (treeNodes[nDirPath]) {
         treeNodes[nDirPath].loading = false;
       }
       return;
@@ -156,6 +186,15 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
       ...e,
       path: basePath + '/' + e.name
     }));
+
+    const nextDirectoryPaths = new Set(
+      enriched.filter(entry => entry.type === 'directory').map(entry => entry.path),
+    );
+    for (const previousEntry of treeNodes[nDirPath]?.entries || []) {
+      if (previousEntry.type === 'directory' && !nextDirectoryPaths.has(previousEntry.path)) {
+        removeTreeSubtree(previousEntry.path);
+      }
+    }
 
     if (!treeNodes[nDirPath]) {
       treeNodes[nDirPath] = { entries: enriched, expanded: true, loaded: true, loading: false };
@@ -186,8 +225,21 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
   };
 
   const refresh = () => {
-    if (treeRootPath.value) {
-      loadTreeDirectory(treeRootPath.value);
+    if (!treeRootPath.value) return;
+
+    // Refresh every directory that is currently open instead of rebuilding the
+    // tree from the root. Existing nodes keep their expanded state while fresh
+    // listings arrive. If a directory disappeared, its parent listing or an
+    // explicit not-found response removes that subtree without affecting the
+    // rest of the refresh.
+    const expandedPaths = Object.entries(treeNodes)
+      .filter(([, node]) => node?.expanded)
+      .map(([path]) => path);
+    if (!expandedPaths.includes(treeRootPath.value)) {
+      expandedPaths.unshift(treeRootPath.value);
+    }
+    for (const path of expandedPaths) {
+      loadTreeDirectory(path);
     }
   };
 

@@ -392,6 +392,85 @@ test.describe('Workbench', () => {
       .filter(message => [terminalA.terminalId, terminalB.terminalId].includes(message.terminalId)).length).toBe(0);
   });
 
+  test('preserves expanded folders on refresh and removes a folder that disappeared', async ({ chatPage, mockAgent }) => {
+    await openYeaftWorkbench(chatPage, mockAgent);
+    const panel = chatPage.locator('.workbench-panel');
+    await openCapability(panel, 'files');
+    await expect(panel.locator('.files-tab')).toBeVisible();
+
+    const replyListing = (request, entries, error = undefined) => {
+      mockAgent.send({
+        ...request,
+        type: 'directory_listing',
+        entries,
+        error,
+      });
+    };
+    const rootRequest = await mockAgent.waitForMessage('list_directory');
+    replyListing(rootRequest, [
+      { name: 'src', type: 'directory' },
+      { name: 'README.md', type: 'file', size: 64 },
+    ]);
+
+    const srcRow = panel.locator('.tree-item', { hasText: 'src' });
+    await expect(srcRow).toBeVisible();
+    await srcRow.click();
+    const srcRequest = await mockAgent.waitForMessage('list_directory');
+    replyListing(srcRequest, [
+      { name: 'components', type: 'directory' },
+      { name: 'index.js', type: 'file', size: 32 },
+    ]);
+
+    const componentsRow = panel.locator('.tree-item', { hasText: 'components' });
+    await expect(componentsRow).toBeVisible();
+    await componentsRow.click();
+    const componentsRequest = await mockAgent.waitForMessage('list_directory');
+    replyListing(componentsRequest, [{ name: 'App.js', type: 'file', size: 128 }]);
+    await expect(panel.locator('.tree-item', { hasText: 'App.js' })).toBeVisible();
+
+    const refreshButton = panel.getByRole('button', { name: 'Refresh' });
+    let listRequestCount = mockAgent.messages('list_directory').length;
+    await refreshButton.click();
+    await expect.poll(() => mockAgent.messages('list_directory').length).toBe(listRequestCount + 3);
+    const firstRefresh = mockAgent.messages('list_directory').slice(listRequestCount);
+    const firstByPath = Object.fromEntries(firstRefresh.map(request => [request.dirPath, request]));
+    expect(Object.keys(firstByPath).sort()).toEqual(['/tmp/test', '/tmp/test/src', '/tmp/test/src/components']);
+    // Respond out of order: open child state must survive until its parents arrive.
+    replyListing(firstByPath['/tmp/test/src/components'], [{ name: 'App.js', type: 'file', size: 128 }]);
+    replyListing(firstByPath['/tmp/test/src'], [
+      { name: 'components', type: 'directory' },
+      { name: 'index.js', type: 'file', size: 32 },
+    ]);
+    replyListing(firstByPath['/tmp/test'], [
+      { name: 'src', type: 'directory' },
+      { name: 'README.md', type: 'file', size: 64 },
+    ]);
+    await expect(srcRow).toHaveClass(/tree-expanded/);
+    await expect(componentsRow).toHaveClass(/tree-expanded/);
+    await expect(panel.locator('.tree-item', { hasText: 'App.js' })).toBeVisible();
+
+    listRequestCount = mockAgent.messages('list_directory').length;
+    await refreshButton.click();
+    await expect.poll(() => mockAgent.messages('list_directory').length).toBe(listRequestCount + 3);
+    const secondRefresh = mockAgent.messages('list_directory').slice(listRequestCount);
+    const secondByPath = Object.fromEntries(secondRefresh.map(request => [request.dirPath, request]));
+    replyListing(secondByPath['/tmp/test'], [
+      { name: 'src', type: 'directory' },
+      { name: 'README.md', type: 'file', size: 64 },
+    ]);
+    replyListing(secondByPath['/tmp/test/src'], [
+      { name: 'index.js', type: 'file', size: 32 },
+      { name: 'new.js', type: 'file', size: 48 },
+    ]);
+    // The now-missing child can still finish after its parent removed it.
+    replyListing(secondByPath['/tmp/test/src/components'], [], 'Directory does not exist');
+
+    await expect(srcRow).toHaveClass(/tree-expanded/);
+    await expect(panel.locator('.tree-item', { hasText: 'new.js' })).toBeVisible();
+    await expect(panel.locator('.tree-item', { hasText: 'components' })).toHaveCount(0);
+    await expect(panel.locator('.tree-item', { hasText: 'App.js' })).toHaveCount(0);
+  });
+
   for (const theme of ['light', 'dark']) {
     test(`preserves resized Files width across Session switches and reopen (${theme})`, async ({ chatPage, mockAgent }) => {
       await chatPage.setViewportSize({ width: 1440, height: 900 });
