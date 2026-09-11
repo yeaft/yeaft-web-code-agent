@@ -2024,7 +2024,14 @@
     grid-row: 1;
   }
 
-  /* Yeaft conversation: narrower padding on mobile */
+  /* Yeaft conversation: narrower padding on mobile. Some Android WebViews
+     allocate a classic vertical scrollbar inside the scrolling box. Reserving
+     its gutter on both inline edges keeps the response column optically and
+     geometrically centered while preserving overflow behavior. */
+  .yeaft-page .chat-container {
+    scrollbar-gutter: stable both-edges;
+  }
+
   .yeaft-page .messages {
     max-width: 100%;
     padding: 0 10px;

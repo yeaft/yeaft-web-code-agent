@@ -468,16 +468,34 @@ test('keeps progress visible and distinct from the final result across themes an
     expect(colors.result).not.toBe(colors.background);
   }
 
-  await page.setViewportSize({ width: 320, height: 800 });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
-  expect(await readLayout()).toMatchObject({
-    todoBorderTopWidth: '0px',
-    todoPaddingLeft: 16,
-    todoPaddingRight: 16,
+  await page.setViewportSize({ width: 720, height: 800 });
+  expect(await page.locator('.turn-content').evaluate(element => (
+    parseFloat(getComputedStyle(element).paddingRight)
+  ))).toBe(40);
+
+  await page.evaluate(() => {
+    document.body.style.padding = '0';
+    const app = document.querySelector('#app');
+    app.classList.add('chat-container');
+    Object.assign(app.style, { width: '100%', maxWidth: 'none', height: '400px', margin: '0' });
+    const shell = document.createElement('div');
+    shell.className = 'yeaft-page';
+    app.before(shell);
+    shell.append(app);
+    const turn = app.querySelector(':scope > .vp-turn-block');
+    const messages = document.createElement('div');
+    messages.className = 'messages';
+    turn.before(messages);
+    messages.append(turn);
+    const overflow = document.createElement('div');
+    overflow.style.height = '800px';
+    messages.append(overflow);
   });
-  const mobileGeometry = await page.evaluate(() => {
+  const readMobileGeometry = () => page.evaluate(() => {
+    const scroller = document.querySelector('.chat-container');
     const content = document.querySelector('.turn-content');
     const toolRow = document.querySelector('.turn-actions');
+    const scrollerRect = scroller.getBoundingClientRect();
     const contentRect = content.getBoundingClientRect();
     const toolRect = toolRow.getBoundingClientRect();
     const contentStyle = getComputedStyle(content);
@@ -488,11 +506,26 @@ test('keeps progress visible and distinct from the final result across themes an
       toolRight: toolRect.right,
       contentPaddingLeft: parseFloat(contentStyle.paddingLeft),
       contentPaddingRight: parseFloat(contentStyle.paddingRight),
+      responseLeftGutter: contentRect.left - scrollerRect.left + parseFloat(contentStyle.paddingLeft),
+      responseRightGutter: scrollerRect.right - contentRect.right + parseFloat(contentStyle.paddingRight),
+      scrollbarGutter: getComputedStyle(scroller).scrollbarGutter,
     };
   });
-  expect(mobileGeometry.contentLeft).toBeCloseTo(mobileGeometry.toolLeft, 0);
-  expect(mobileGeometry.contentRight).toBeCloseTo(mobileGeometry.toolRight, 0);
-  expect(mobileGeometry.contentPaddingLeft).toBe(mobileGeometry.contentPaddingRight);
+  for (const width of [720, 320]) {
+    await page.setViewportSize({ width, height: 800 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    const mobileGeometry = await readMobileGeometry();
+    expect(mobileGeometry.contentLeft).toBeCloseTo(mobileGeometry.toolLeft, 0);
+    expect(mobileGeometry.contentRight).toBeCloseTo(mobileGeometry.toolRight, 0);
+    expect(mobileGeometry.contentPaddingLeft).toBe(mobileGeometry.contentPaddingRight);
+    expect(mobileGeometry.scrollbarGutter).toBe('stable both-edges');
+    expect(mobileGeometry.responseLeftGutter).toBeCloseTo(mobileGeometry.responseRightGutter, 0);
+  }
+  expect(await readLayout()).toMatchObject({
+    todoBorderTopWidth: '0px',
+    todoPaddingLeft: 16,
+    todoPaddingRight: 16,
+  });
   await expect(page.locator('.turn-token-meta')).toBeHidden();
   await expect(footer).toContainText('model-v2');
   await expect(footer).toContainText('3 LLM calls');
