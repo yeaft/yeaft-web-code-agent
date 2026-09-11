@@ -317,6 +317,54 @@ test.describe('Yeaft composer menus', () => {
     await expect(outline.locator('.yeaft-conversation-outline-count')).toHaveText('40');
   });
 
+  test('runs workbench shortcuts while the composer owns focus', async ({ page, serverUrl }) => {
+    await openYeaftComposer(page, serverUrl);
+    await page.evaluate(() => {
+      const store = window.Pinia.useChatStore();
+      const agent = {
+        id: 'composer-menu-agent',
+        name: 'Composer menu agent',
+        online: true,
+        status: 'ready',
+        capabilities: ['terminal', 'file_editor', 'workbench_session_routes'],
+      };
+      store.agents = [agent];
+      store.currentAgent = agent.id;
+      store.currentAgentInfo = agent;
+      store.workbenchRouteProtocolSupported = true;
+    });
+
+    const composer = page.locator('[data-message-composer] textarea');
+    await expect(composer).toBeVisible();
+    const panel = page.locator('.workbench-panel');
+    await expect(panel).not.toHaveClass(/expanded/);
+
+    // The whole point of the fix: Alt+O must open Workbench Files from the composer.
+    await composer.click();
+    await expect(composer).toBeFocused();
+    await page.keyboard.press('Alt+O');
+    await expect(panel).toHaveClass(/expanded/);
+    await expect(page.locator('.workbench-panel-close')).toBeVisible();
+
+    // Closing is the same document-level path, so it must work from the composer too.
+    await composer.click();
+    await expect(composer).toBeFocused();
+    await page.keyboard.press('Alt+W');
+    await expect(panel).not.toHaveClass(/expanded/);
+
+    // The same chord must not fire while an ordinary text field owns focus.
+    await page.evaluate(() => {
+      const field = document.createElement('input');
+      field.setAttribute('aria-label', 'unrelated search');
+      document.body.append(field);
+      field.focus();
+    });
+    const field = page.getByLabel('unrelated search');
+    await expect(field).toBeFocused();
+    await page.keyboard.press('Alt+O');
+    await expect(panel).not.toHaveClass(/expanded/);
+  });
+
   test('opens LLM configuration from the model menu', async ({ page, serverUrl }) => {
     await openYeaftComposer(page, serverUrl);
     await page.evaluate(() => {

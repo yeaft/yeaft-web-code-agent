@@ -186,6 +186,22 @@ describe('global action availability and focus ownership', () => {
     document.body.append(element);
     expect(isGlobalShortcutFocusBlocked({ target: element })).toBe(true);
   });
+  it('keeps the message composer reachable for global actions and still guards raw key sinks', () => {
+    const composer = document.createElement('div');
+    composer.setAttribute('data-message-composer', '');
+    const textarea = document.createElement('textarea');
+    const editor = document.createElement('div');
+    editor.className = 'monaco-editor';
+    composer.append(textarea, editor);
+    const search = document.createElement('input');
+    document.body.append(composer, search);
+    expect(isGlobalShortcutFocusBlocked({ target: textarea })).toBe(false);
+    expect(isGlobalShortcutFocusBlocked({ target: composer })).toBe(false);
+    // Editors inside the composer still own their chords.
+    expect(isGlobalShortcutFocusBlocked({ target: editor })).toBe(true);
+    // Unrelated text fields are untouched.
+    expect(isGlobalShortcutFocusBlocked({ target: search })).toBe(true);
+  });
   it('blocks visible modals but not hidden settings, and never dispatches quick sends', () => {
     const modal = document.createElement('div'); modal.className = 'settings-overlay'; document.body.append(modal);
     expect(isGlobalShortcutFocusBlocked(key('Ctrl+Shift+Y'))).toBe(true);
@@ -244,6 +260,30 @@ describe('General settings and App runtime integration', () => {
       globals.auth.userId = 'owner-b';
       await Vue.nextTick();
       expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    } finally { window.removeEventListener('workbench-open-capability', accept); }
+  });
+  it('runs workbench actions while the composer owns focus and leaves other fields alone', () => {
+    shared().save({ bindings: { files: 'Alt+O' } });
+    const composer = document.createElement('div');
+    composer.setAttribute('data-message-composer', '');
+    const textarea = document.createElement('textarea');
+    composer.append(textarea);
+    const search = document.createElement('input');
+    document.body.append(composer, search);
+    textarea.focus();
+    render(UserShortcutsRuntime);
+    const accept = vi.fn(event => { event.detail.accepted = true; });
+    window.addEventListener('workbench-open-capability', accept);
+    try {
+      const event = key('Alt+O');
+      textarea.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      expect(accept.mock.calls[0][0].detail).toMatchObject({ capabilityId: 'files', routeKey: 'yeaft:agent-a:session-a' });
+      const blocked = key('Alt+O');
+      search.focus();
+      search.dispatchEvent(blocked);
+      expect(blocked.defaultPrevented).toBe(false);
+      expect(accept).toHaveBeenCalledTimes(1);
     } finally { window.removeEventListener('workbench-open-capability', accept); }
   });
   it('keeps bilingual keys aligned and wires the workbench listener with cleanup', () => {
