@@ -682,7 +682,7 @@ test.describe('Workbench', () => {
     }
   });
 
-  test('uses one launcher column at 320px without horizontal overflow', async ({ chatPage, mockAgent }) => {
+  test('fits all four launcher entries in one 320px column without scrolling', async ({ chatPage, mockAgent }) => {
     await chatPage.setViewportSize({ width: 320, height: 720 });
     await openYeaftWorkbench(chatPage, mockAgent);
 
@@ -696,16 +696,26 @@ test.describe('Workbench', () => {
       const panelRect = element.closest('.workbench-panel').getBoundingClientRect();
       return {
         fillsPanel: Math.abs(launcherRect.bottom - panelRect.bottom) <= 1,
+        // Four entries are the whole chooser; a phone viewport must show them
+        // without a scroll step the user has to discover.
         scrollable: element.scrollHeight > element.clientHeight,
         noHorizontalOverflow: element.scrollWidth <= element.clientWidth + 1,
       };
     });
     expect(launcherGeometry).toEqual({
       fillsPanel: true,
-      scrollable: true,
+      scrollable: false,
       noHorizontalOverflow: true,
     });
-    await expect(panel.locator('.workbench-capability-card').last()).toBeVisible();
+    // Every entry, including the last, must be fully inside the viewport.
+    const cards = panel.locator('.workbench-capability-card');
+    const cardCount = await cards.count();
+    for (let index = 0; index < cardCount; index += 1) {
+      const cardBox = await cards.nth(index).boundingBox();
+      expect(cardBox).not.toBeNull();
+      expect(cardBox.y).toBeGreaterThanOrEqual(0);
+      expect(cardBox.y + cardBox.height).toBeLessThanOrEqual(720);
+    }
 
     await openCapabilityLauncher(panel);
     const panelBox = await panel.boundingBox();

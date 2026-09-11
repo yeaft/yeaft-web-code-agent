@@ -362,12 +362,12 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 28px;
+  padding: 24px 28px;
 }
 
 .workbench-launcher-intro {
   max-width: 560px;
-  margin-bottom: 24px;
+  margin-bottom: 16px;
 }
 
 .workbench-launcher-intro h2,
@@ -390,22 +390,25 @@
 .workbench-capability-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
+/* Cards are content-sized rows, not fixed 132px tiles: four choices must fit
+   a phone viewport without scrolling, and the chooser is a list of four
+   entries, not a hero grid. */
 .workbench-capability-card {
   min-width: 0;
-  min-height: 132px;
-  padding: 18px;
+  padding: 12px 14px;
   border: 1px solid var(--border-color);
   border-radius: 10px;
   background: var(--bg-main);
   color: var(--text-primary);
   cursor: pointer;
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) auto;
-  gap: 10px 12px;
+  grid-template-columns: 30px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: start;
+  gap: 6px 10px;
   text-align: left;
   transition: border-color 0.15s, background 0.15s, transform 0.15s;
 }
@@ -421,9 +424,9 @@
 }
 
 .workbench-capability-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
   background: var(--session-active);
   color: var(--text-primary);
   display: flex;
@@ -433,26 +436,26 @@
 }
 
 .workbench-capability-icon svg {
-  width: 20px;
-  height: 20px;
+  width: 17px;
+  height: 17px;
 }
 
 .workbench-capability-copy {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 3px;
 }
 
 .workbench-capability-name {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .workbench-capability-description {
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.45;
 }
 
 .workbench-capability-status {
@@ -525,9 +528,9 @@
 }
 
 .workbench-capability-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
   background: var(--session-active);
   color: var(--text-primary);
   display: flex;
@@ -537,26 +540,26 @@
 }
 
 .workbench-capability-icon svg {
-  width: 20px;
-  height: 20px;
+  width: 17px;
+  height: 17px;
 }
 
 .workbench-capability-copy {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 3px;
 }
 
 .workbench-capability-name {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .workbench-capability-description {
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.45;
 }
 
 .workbench-capability-status {
@@ -569,6 +572,62 @@
 
 .workbench-capability-status.available {
   color: var(--success);
+}
+
+/* Phone layout: the chooser is four entries with no icon hero treatment, so
+   all four fit one screen instead of scrolling a short list. Declared after
+   the base launcher rules above so the compact values win. */
+@media (max-width: 768px) {
+  .workbench-launcher {
+    padding: 14px;
+  }
+
+  .workbench-launcher-intro {
+    margin-bottom: 10px;
+  }
+
+  .workbench-launcher-intro h2 {
+    font-size: 17px;
+  }
+
+  .workbench-launcher-intro p {
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .workbench-capability-grid {
+    gap: 6px;
+  }
+
+  .workbench-capability-card {
+    padding: 9px 12px;
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 4px 10px;
+  }
+
+  .workbench-capability-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+  }
+
+  .workbench-capability-icon svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .workbench-capability-name {
+    font-size: 13px;
+  }
+
+  .workbench-capability-description {
+    font-size: 11.5px;
+  }
+
+  .workbench-capability-status {
+    font-size: 10.5px;
+  }
 }
 
 .workbench-capability-empty {

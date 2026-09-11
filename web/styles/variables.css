@@ -324,9 +324,12 @@ select option:checked {
   --bg-assistant-msg: transparent;
   --bg-input: #2a2a28;
   --bg-input-wrapper: #2a2a28;
-  --text-primary: #d8d5d0;
-  --text-secondary: #a09d98;
-  --text-muted: #777572;
+  /* Dark text contrast, raised ~10% over the previous warm grays. The old
+     --text-muted (#777572) sat at 3.8:1 against --bg-main, below the 4.5:1
+     body-text floor, so metadata/timestamps read as washed out. */
+  --text-primary: #e6e4e0;
+  --text-secondary: #b0ada8;
+  --text-muted: #8a8783;
   --border-color: #363330;
   --border-light: #2a2826;
   --accent: #d8d5d0;
