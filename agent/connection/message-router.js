@@ -10,7 +10,7 @@ import { decodeKey } from '../encryption.js';
 import { handleTerminalCreate, handleTerminalInput, handleTerminalResize, handleTerminalClose } from '../terminal.js';
 import { handleProxyHttpRequest, handleProxyWsOpen, handleProxyWsMessage, handleProxyWsClose } from '../proxy.js';
 import {
-  handleReadFile, handleWriteFile, handleListDirectory,
+  handleReadFile, handleVideoMetadata, handleVideoChunk, handleWriteFile, handleListDirectory,
   handleGitStatus, handleGitDiff, handleGitAdd, handleGitReset, handleGitRestore, handleGitCommit, handleGitPush,
   handleFileSearch, handleResolveFileReferences, handleCreateFile, handleDeleteFiles, handleMoveFiles, handleCopyFiles, handleUploadToDir, handleTransferFiles
 } from '../workbench.js';
@@ -249,6 +249,14 @@ export async function handleMessage(msg) {
     // File operation messages
     case 'read_file':
       await handleReadFile(msg);
+      break;
+
+    case 'video_metadata':
+      await handleVideoMetadata(msg);
+      break;
+
+    case 'video_chunk':
+      await handleVideoChunk(msg);
       break;
 
     case 'write_file':

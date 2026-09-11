@@ -59,7 +59,7 @@ function bufferMessage(msg, reason) {
 
 const FILE_CHUNK_SEND_TIMEOUT_MS = 10_000;
 
-function sendFileChunk(socket, data) {
+function sendTransferChunk(socket, data) {
   // Production uses Node ws; retain compatibility with synchronous, one-argument
   // transport stubs without treating a real ws.send() return as a flushed write.
   if (!(socket instanceof WebSocket) && socket.send.length < 2) {
@@ -104,14 +104,14 @@ async function sendNow(msg, queuedSocket) {
   const socket = ctx.ws;
   if (!socket || socket.readyState !== WebSocket.OPEN) return bufferMessage(msg, 'Disconnected');
   // File transfers are request/connection scoped, unlike replayable chat output.
-  if (msg.type === 'file_content_chunk' && queuedSocket !== socket) return 'dropped';
+  if (['file_content_chunk', 'video_chunk'].includes(msg.type) && queuedSocket !== socket) return 'dropped';
   const payload = ctx.serverEncryptionRequired && ctx.sessionKey
     ? await encrypt(msg, ctx.sessionKey) : msg;
   if (socket !== ctx.ws || socket.readyState !== WebSocket.OPEN) {
     return bufferMessage(msg, 'Connection changed');
   }
   const data = JSON.stringify(payload);
-  if (msg.type === 'file_content_chunk') return sendFileChunk(socket, data);
+  if (['file_content_chunk', 'video_chunk'].includes(msg.type)) return sendTransferChunk(socket, data);
   socket.send(data);
   return 'sent';
 }
@@ -161,7 +161,8 @@ export async function sendToServer(msg) {
     return 'dropped';
   }
   const promise = new Promise((resolve, reject) => {
-    ctx.outboundSendQueue.push({ msg, bytes, resolve, reject, socket: msg.type === 'file_content_chunk' ? ctx.ws : null });
+    const connectionScoped = ['file_content_chunk', 'video_chunk'].includes(msg.type);
+    ctx.outboundSendQueue.push({ msg, bytes, resolve, reject, socket: connectionScoped ? ctx.ws : null });
     ctx.outboundSendQueueBytes = Number(ctx.outboundSendQueueBytes || 0) + bytes;
   });
   scheduleOutboundDrain();

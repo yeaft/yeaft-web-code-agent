@@ -15,7 +15,7 @@ import {
   workbenchWorkspaceGeneration,
 } from '../utils/workbench-route.js';
 
-export function updateImagePreviewState(file, event, errorMessage = '') {
+export function updateMediaPreviewState(file, event, errorMessage = '') {
   const eventSrc = event?.currentTarget?.src || event?.target?.src;
   if (!file?.blobUrl || !eventSrc) return false;
   let expectedSrc = file.blobUrl;
@@ -27,6 +27,9 @@ export function updateImagePreviewState(file, event, errorMessage = '') {
   file.previewError = errorMessage || null;
   return true;
 }
+
+// Compatibility export for image-specific callers and tests.
+export const updateImagePreviewState = updateMediaPreviewState;
 
 export function createFileCloseEventHandlers({ liveStore, props, tabs, isDisposed }) {
   const isCurrentEvent = event => (
@@ -299,6 +302,12 @@ export default {
               <span class="zoom-label">{{ fontSize }}</span>
               <button type="button" class="zoom-btn" @click="zoomIn" :title="$t('git.zoomIn')">+</button>
             </template>
+            <button
+              v-if="activeFile.fileType === 'video'"
+              type="button"
+              class="file-action-btn file-action-text"
+              @click="downloadActiveFile"
+            >{{ $t('files.download') }}</button>
             <button type="button" class="file-action-btn" :class="{ active: activeFile.isDirty }" @click="saveFile" :disabled="!activeFile.isDirty || fileSaving" :title="$t('common.save') + ' (Ctrl+S)'">
               <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M17 3H5c-1.11 0-2 .89-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/></svg>
             </button>
@@ -406,6 +415,25 @@ export default {
                   @error="onImagePreviewError(activeFile, $event)"
                 />
               </button>
+            </template>
+          </div>
+          <!-- 视频预览 -->
+          <div v-else-if="activeFile.fileType === 'video'" class="file-preview-container file-preview-video-container">
+            <div v-if="activeFile.previewError" class="preview-error">{{ activeFile.previewError }}</div>
+            <template v-else>
+              <div v-if="activeFile.previewLoading || !activeFile.blobUrl" class="preview-loading"><span class="spinner-mini"></span> {{ $t('files.loadingPreview') }}</div>
+              <video
+                v-if="activeFile.blobUrl"
+                v-show="!activeFile.previewLoading"
+                :src="activeFile.blobUrl"
+                :aria-label="activeFile.name"
+                class="file-preview-video"
+                controls
+                preload="metadata"
+                playsinline
+                @loadedmetadata="onVideoPreviewLoad(activeFile, $event)"
+                @error="onVideoPreviewError(activeFile, $event)"
+              ></video>
             </template>
           </div>
         </template>
@@ -594,9 +622,13 @@ export default {
       if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
       return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     };
-    const onImagePreviewLoad = (file, event) => updateImagePreviewState(file, event);
+    const onImagePreviewLoad = (file, event) => updateMediaPreviewState(file, event);
     const onImagePreviewError = (file, event) => (
-      updateImagePreviewState(file, event, t('files.previewLoadFailed'))
+      updateMediaPreviewState(file, event, t('files.previewLoadFailed'))
+    );
+    const onVideoPreviewLoad = (file, event) => updateMediaPreviewState(file, event);
+    const onVideoPreviewError = (file, event) => (
+      updateMediaPreviewState(file, event, t('files.videoPreviewLoadFailed'))
     );
     const openActiveImagePreview = trigger => {
       const file = tabs.activeFile.value;
@@ -785,6 +817,10 @@ export default {
     const onDrop = (event, entry) => ops.onDrop(event, entry, ops.handleExternalFileDrop);
     const onTreeDrop = (event) => ops.onTreeDrop(event, tree.treeRootPath.value, ops.handleExternalFileDrop);
     const goToLineConfirm = () => qo.goToLineConfirm(tabs.activeFile);
+    const downloadActiveFile = () => {
+      const file = tabs.activeFile.value;
+      if (file) ops.downloadFile({ path: file.path, type: 'file' });
+    };
 
     // --- Watchers ---
     Vue.watch(() => store.currentAgent, () => {
@@ -1032,7 +1068,7 @@ export default {
       contextMenu: ops.contextMenu, showContextMenu: ops.showContextMenu,
       hideContextMenu: ops.hideContextMenu,
       ctxRename: ops.ctxRename, ctxCopy: ops.ctxCopy, ctxMoveTo: ops.ctxMoveTo,
-      ctxDelete, ctxDownload: ops.ctxDownload,
+      ctxDelete, ctxDownload: ops.ctxDownload, downloadActiveFile,
       renameDialogVisible: ops.renameDialogVisible, renameNewName: ops.renameNewName,
       renameInput: ops.renameInput, confirmRename: ops.confirmRename,
       dragState: ops.dragState, externalDropActive: ops.externalDropActive,
@@ -1046,7 +1082,7 @@ export default {
       folderPickerSelectItem: fp.folderPickerSelectItem, folderPickerEnter: fp.folderPickerEnter,
       confirmFolderPicker: fp.confirmFolderPicker,
       getFileIcon: () => '', getFileIconHtml, getFolderIcon, formatSize,
-      onImagePreviewLoad, onImagePreviewError,
+      onImagePreviewLoad, onImagePreviewError, onVideoPreviewLoad, onVideoPreviewError,
       refresh: tree.refresh, placeholderPath: Vue.computed(() => {
         const dir = getEffectiveWorkDir();
         return dir ? t('files.workDir', { dir }) : t('files.enterDirPath');

@@ -48,6 +48,47 @@ export function createWsHandler({
     const messageScope = workbenchMessageScope(msg, routeKey);
 
     switch (msg.type) {
+      case 'video_metadata': {
+        const nFilePath = normalizePath(msg.requestedFilePath || msg.filePath);
+        const downloadPath = ops.takePendingDownload(msg.requestId);
+        if (downloadPath) {
+          if (msg.error || !msg.videoStream || !msg.previewUrl) {
+            ops.showFileOpFeedback?.(false, msg.error || t('files.videoStreamUnavailable'));
+            return;
+          }
+          const downloadName = normalizePath(downloadPath).split('/').pop() || 'video';
+          const a = document.createElement('a');
+          const downloadUrl = new URL(msg.previewUrl, `${location.protocol}//${location.host}`);
+          downloadUrl.searchParams.set('download', '1');
+          a.href = downloadUrl.href;
+          a.download = downloadName;
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
+          return;
+        }
+        const responseTab = openFiles.value.find(f => f.path === nFilePath
+          && (!f.agentId || !msg.agentId || f.agentId === msg.agentId)
+          && (!f.conversationId || !msg.conversationId || f.conversationId === msg.conversationId));
+        if (!responseTab || (responseTab.requestId && msg.requestId && msg.requestId !== responseTab.requestId)) return;
+        responseTab.loading = false;
+        if (msg.error) {
+          responseTab.loadError = msg.error;
+          responseTab.previewLoading = false;
+          responseTab.previewError = msg.error;
+          return;
+        }
+        if (!msg.videoStream || !msg.previewUrl) {
+          responseTab.loadError = t('files.videoStreamUnavailable');
+          responseTab.previewLoading = false;
+          responseTab.previewError = responseTab.loadError;
+          return;
+        }
+        responseTab.fileType = 'video';
+        responseTab.blobUrl = new URL(msg.previewUrl, `${location.protocol}//${location.host}`).href;
+        responseTab.previewLoading = true;
+        responseTab.previewError = null;
+        saveTabsState(store.currentConversation);
+        break;
+      }
       case 'directory_listing': {
         if (messageScope === 'files-folder-picker') {
           fp.handleFolderPickerListing(msg);
@@ -217,7 +258,7 @@ export function createWsHandler({
               loading: true, loadError: null
             });
             store.sendWsMessage({
-              type: 'read_file',
+              type: fileType === 'video' ? 'video_metadata' : 'read_file',
               conversationId,
               agentId,
               requestId,

@@ -1113,6 +1113,7 @@ export function handleMessage(store, msg) {
     case 'terminal_closed':
     case 'terminal_error':
     case 'file_content':
+    case 'video_metadata':
     case 'file_references_resolved':
     case 'file_saved':
     case 'directory_listing':

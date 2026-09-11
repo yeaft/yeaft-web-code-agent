@@ -6,13 +6,16 @@ import * as Vue from 'vue';
 import { createWsHandler } from '../../web/components/files/wsHandler.js';
 import { createFileTabs } from '../../web/components/files/fileTabs.js';
 import { createFilePreview } from '../../web/components/files/filePreview.js';
-import { updateImagePreviewState } from '../../web/components/FilesTab.js';
+import { getFileType } from '../../web/components/files/fileEditor.js';
+import { updateImagePreviewState, updateMediaPreviewState } from '../../web/components/FilesTab.js';
 import { resolveDialog, useDialogState } from '../../web/utils/dialog.js';
 import ctx from '../../agent/context.js';
 import { CONFIG } from '../../server/config.js';
 import { userDb, yeaftSessionDb } from '../../server/database.js';
 import {
   handleReadFile,
+  handleVideoMetadata,
+  handleVideoChunk,
   handleWriteFile,
   MAX_WORKBENCH_PREVIEW_BYTES,
 } from '../../agent/workbench/file-ops.js';
@@ -708,6 +711,28 @@ describe('Agent file terminal forwarding', () => {
     }
   });
 
+  it('requests video metadata instead of transferring a video through read_file', () => {
+    globalThis.Vue = Vue;
+    const sendWsMessage = vi.fn();
+    const tabs = createFileTabs({
+      currentAgent: 'agent-a', currentConversation: 'conversation-a', sendWsMessage,
+    }, {
+      normalizePath: value => value, getEffectiveWorkDir: () => '/workspace',
+      editorContainer: Vue.ref({}), createEditor: vi.fn(), destroyEditor: vi.fn(),
+      clearFindMarkers: vi.fn(), saveCurrentUndoHistory: vi.fn(), saveAllUndoHistory: vi.fn(),
+      cleanupUndoHistory: vi.fn(), deleteConversationHistory: vi.fn(), mdPreviewMode: Vue.ref(false),
+      renderOfficeLocal: vi.fn(), performFind: vi.fn(), findBarVisible: Vue.ref(false),
+      findQuery: Vue.ref(''), t: key => key,
+    });
+    tabs.openFileInTab('media/demo.mp4', 'demo.mp4', {
+      agentId: 'agent-a', conversationId: 'conversation-a', workDir: '/workspace',
+    });
+    expect(tabs.activeFile.value).toMatchObject({ fileType: 'video', previewLoading: true });
+    expect(sendWsMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: 'video_metadata', filePath: 'media/demo.mp4', workDir: '/workspace',
+    }));
+  });
+
   it('closes file tabs in batches while preserving the nearest active tab', async () => {
     globalThis.Vue = Vue;
     const createEditor = vi.fn();
@@ -1392,6 +1417,57 @@ describe('Agent file terminal forwarding', () => {
       ctx.sendToServer = previousSend;
       rmSync(workDir, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('streams video metadata and bounded byte ranges without the 20 MB preview limit', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'yeaft-video-stream-'));
+    const videoPath = join(workDir, 'large.mp4');
+    const sent = [];
+    const previousConfig = ctx.CONFIG;
+    const previousSend = ctx.sendToServer;
+    writeFileSync(videoPath, Buffer.from('0123456789'));
+    const largeSize = MAX_WORKBENCH_PREVIEW_BYTES + 17;
+    truncateSync(videoPath, largeSize);
+    ctx.CONFIG = { workDir };
+    ctx.sendToServer = msg => sent.push(msg);
+    try {
+      await handleReadFile({
+        conversationId: '_explorer', requestId: 'legacy-video-read', workDir, filePath: 'large.mp4',
+      });
+      expect(sent[0]).toMatchObject({
+        type: 'file_content', requestId: 'legacy-video-read', errorCode: 'VIDEO_STREAM_REQUIRED',
+      });
+
+      await handleVideoMetadata({
+        conversationId: '_explorer', requestId: 'video-meta', workDir, filePath: 'large.mp4',
+      });
+      expect(sent[1]).toMatchObject({
+        type: 'video_metadata', requestId: 'video-meta', filePath: videoPath,
+        requestedFilePath: 'large.mp4', size: largeSize, mimeType: 'video/mp4',
+      });
+      expect(sent[1]).not.toHaveProperty('content');
+
+      await handleVideoChunk({
+        conversationId: '_explorer', requestId: 'video-range', workDir, filePath: 'large.mp4',
+        start: 2, end: 6, expectedSize: largeSize, expectedMtimeMs: sent[1].mtimeMs,
+      });
+      expect(sent[2]).toMatchObject({
+        type: 'video_chunk', requestId: 'video-range', start: 2, end: 6,
+        size: largeSize, mimeType: 'video/mp4', content: Buffer.from('23456').toString('base64'),
+      });
+
+      await handleVideoChunk({
+        conversationId: '_explorer', requestId: 'oversized-range', workDir, filePath: 'large.mp4',
+        start: 0, end: (1024 * 1024), expectedSize: largeSize, expectedMtimeMs: sent[1].mtimeMs,
+      });
+      expect(sent[3]).toMatchObject({
+        type: 'video_chunk', requestId: 'oversized-range', errorCode: 'VIDEO_RANGE_TOO_LARGE',
+      });
+    } finally {
+      ctx.CONFIG = previousConfig;
+      ctx.sendToServer = previousSend;
+      rmSync(workDir, { recursive: true, force: true });
     }
   });
 
@@ -2692,6 +2768,55 @@ describe('Agent file terminal forwarding', () => {
     expect(sendToWebClient).not.toHaveBeenCalled();
   });
 
+  it('classifies browser video containers separately from text and binary previews', () => {
+    for (const name of ['clip.mp4', 'clip.m4v', 'clip.webm', 'clip.ogv', 'clip.ogg', 'clip.mov']) {
+      expect(getFileType(name)).toBe('video');
+    }
+    expect(getFileType('clip.mp3')).toBe('text');
+    expect(getFileType('clip.mp4.txt')).toBe('text');
+  });
+
+  it('projects video metadata as a route-bound stream URL and fails closed for old Agents', async () => {
+    const supported = [
+      'terminal', 'file_editor', 'workbench_session_routes',
+      'workbench_request_correlation', 'workbench_video_stream',
+    ];
+    const { outbound, client } = await registerRouteRequest({
+      type: 'video_metadata', requestId: 'video-request-1',
+      extra: { filePath: 'media/demo.mp4' }, agentCapabilities: supported,
+    });
+    expect(outbound).toMatchObject({
+      type: 'video_metadata', filePath: 'media/demo.mp4', workDir: '/workspace/session-1',
+    });
+    sendToWebClient.mockClear();
+    await handleAgentFileTerminal('agent-1', {}, {
+      type: 'video_metadata', conversationId: outbound.conversationId,
+      _workbenchRequestId: outbound._workbenchRequestId,
+      filePath: '/workspace/session-1/media/demo.mp4', requestedFilePath: 'media/demo.mp4',
+      size: 100 * 1024 * 1024, mtimeMs: 1234, mimeType: 'video/mp4',
+    });
+    const [, projected] = sendToWebClient.mock.calls[0];
+    expect(sendToWebClient.mock.calls[0][0]).toBe(client);
+    expect(projected).toMatchObject({
+      type: 'video_metadata', requestId: 'video-request-1', filePath: 'media/demo.mp4',
+      size: 100 * 1024 * 1024, mimeType: 'video/mp4', videoStream: true,
+    });
+    expect(projected.previewUrl).toMatch(/^\/api\/preview\/.+token=wbv1\./);
+    expect(projected).not.toHaveProperty('mtimeMs');
+
+    sendToWebClient.mockClear();
+    await registerRouteRequest({
+      type: 'video_metadata', requestId: 'video-old-agent',
+      extra: { filePath: 'media/demo.mp4' },
+      agentCapabilities: ['file_editor', 'workbench_session_routes', 'workbench_request_correlation'],
+    });
+    expect(forwardToAgent).not.toHaveBeenCalled();
+    expect(sendToWebClient).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      type: 'video_metadata', requestId: 'video-old-agent',
+      error: 'Video streaming is not supported by this Agent',
+    }));
+  });
+
   it('preserves the requested path when projecting a correlated binary file response', async () => {
     const { outbound, client } = await registerRouteRequest({
       type: 'read_file',
@@ -2809,6 +2934,44 @@ describe('Agent file terminal forwarding', () => {
     expect(relativeTab.previewLoading).toBe(false);
     expect(relativeTab.previewError).toBe('preview failed');
     fetchSpy.mockRestore();
+  });
+
+  it('maps video metadata to a streamed preview URL and fences stale media events', () => {
+    globalThis.Vue = Vue;
+    globalThis.location = { protocol: 'https:', host: 'yeaft.test' };
+    const videoTab = {
+      path: 'media/demo.mp4', name: 'demo.mp4', fileType: 'video', agentId: 'agent-1',
+      conversationId: 'session-1', requestId: 'video-request', loading: true,
+      previewLoading: true, previewError: null, blobUrl: null,
+    };
+    const openFiles = Vue.ref([videoTab]);
+    const handle = createWsHandler({
+      store: { currentConversation: 'session-1', currentAgent: 'agent-1' },
+      normalizePath: value => value, getEffectiveWorkDir: () => '/workspace', openFiles,
+      activeFileIndex: Vue.ref(0), activeFile: Vue.computed(() => videoTab), fileSaving: Vue.ref(false),
+      saveTabsState: vi.fn(), createEditor: vi.fn(), openFileInTab: vi.fn(),
+      tree: {}, setTreeVisible: vi.fn(), fp: {}, qo: {}, ops: { takePendingDownload: () => null },
+      mdPreviewMode: Vue.ref(false), renderOfficeLocal: vi.fn(), editorContainer: Vue.ref(null),
+      t: key => key,
+    }).handleWorkbenchMessage;
+    handle(new CustomEvent('workbench-message', { detail: {
+      type: 'video_metadata', agentId: 'agent-1', conversationId: 'session-1',
+      requestId: 'video-request', requestedFilePath: 'media/demo.mp4', videoStream: true,
+      previewUrl: '/api/preview/video-1?token=wbv1.secret', size: 50 * 1024 * 1024,
+    } }));
+    expect(videoTab).toMatchObject({
+      loading: false, fileType: 'video', previewLoading: true,
+      blobUrl: 'https://yeaft.test/api/preview/video-1?token=wbv1.secret',
+    });
+    expect(updateMediaPreviewState(videoTab, {
+      currentTarget: { src: videoTab.blobUrl },
+    })).toBe(true);
+    expect(videoTab.previewLoading).toBe(false);
+    videoTab.blobUrl = 'https://yeaft.test/api/preview/video-2?token=wbv1.new';
+    expect(updateMediaPreviewState(videoTab, {
+      currentTarget: { src: 'https://yeaft.test/api/preview/video-1?token=wbv1.secret' },
+    }, 'stale error')).toBe(false);
+    expect(videoTab.previewError).toBeNull();
   });
 
   it('keeps a local Office preview loading until its fetch and render complete', async () => {
