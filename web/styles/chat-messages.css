@@ -3183,15 +3183,17 @@
   box-shadow: 0 2px 8px rgba(0,0,0,0.25);
 }
 
-/* Mobile: keep necessary code blocks readable without turning replies into huge cards. */
-@media (max-width: 640px) {
-  /* Remove the prose-only desktop copy-action reservation so assistant text
-     uses the same left/right width as tool rows. The absolutely positioned
-     copy action remains available without affecting content geometry. */
+/* The Yeaft mobile shell starts at 768px. Remove the desktop copy-action
+   reservation at that same breakpoint so 641–768px phone viewports do not
+   leave an extra 40px of whitespace on the response's right edge. */
+@media (max-width: 768px) {
   .turn-content {
     padding-right: 0;
   }
+}
 
+/* Mobile: keep necessary code blocks readable without turning replies into huge cards. */
+@media (max-width: 640px) {
   /* Token detail is intentionally desktop-only; model and call count remain
      compact enough for the mobile response footer. */
   .turn-token-meta {
