@@ -468,6 +468,11 @@ test('keeps progress visible and distinct from the final result across themes an
     expect(colors.result).not.toBe(colors.background);
   }
 
+  await page.setViewportSize({ width: 720, height: 800 });
+  expect(await page.locator('.turn-content').evaluate(element => (
+    parseFloat(getComputedStyle(element).paddingRight)
+  ))).toBe(40);
+
   await page.evaluate(() => {
     document.body.style.padding = '0';
     const app = document.querySelector('#app');

@@ -3185,15 +3185,21 @@
 
 /* The Yeaft mobile shell starts at 768px. Remove the desktop copy-action
    reservation at that same breakpoint so 641–768px phone viewports do not
-   leave an extra 40px of whitespace on the response's right edge. */
+   leave an extra 40px of whitespace on the response's right edge. Keep the
+   wider breakpoint scoped to Yeaft so CLI Chat retains its existing layout. */
 @media (max-width: 768px) {
-  .turn-content {
+  .yeaft-page .turn-content {
     padding-right: 0;
   }
 }
 
 /* Mobile: keep necessary code blocks readable without turning replies into huge cards. */
 @media (max-width: 640px) {
+  /* Preserve the existing narrow-screen behavior for every chat surface. */
+  .turn-content {
+    padding-right: 0;
+  }
+
   /* Token detail is intentionally desktop-only; model and call count remain
      compact enough for the mobile response footer. */
   .turn-token-meta {
