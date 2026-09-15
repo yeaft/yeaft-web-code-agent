@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { describe, expect, it, afterEach } from 'vitest';
 import { openSession } from '../../../agent/yeaft/sessions/session-store.js';
 import { repairSessionStore } from '../../../agent/yeaft/sessions/recovery.js';
-import { createSessionFromSpec, scanWorkdirSessions, snapshotSessions } from '../../../agent/yeaft/sessions/session-crud.js';
+import { createSessionFromSpec, scanWorkdirSessions, snapshotSessions, updateSessionWorkDir } from '../../../agent/yeaft/sessions/session-crud.js';
 
 const roots = [];
 
@@ -41,6 +41,35 @@ describe('Session disk recovery', () => {
       expect.objectContaining({ id: matching.id, workDir }),
     ]);
     expect(rows[0]).not.toHaveProperty('legacyImport');
+  });
+
+  it('updates workDir in Session metadata and the canonical manifest without moving history', () => {
+    const root = tempRoot();
+    const firstWorkDir = join(root, 'workspace-before');
+    const nextWorkDir = join(root, 'workspace-after');
+    mkdirSync(firstWorkDir, { recursive: true });
+    mkdirSync(nextWorkDir, { recursive: true });
+    const created = createSessionFromSpec(root, {
+      name: 'Movable', workDir: firstWorkDir, roster: [],
+    }, { libDir: join(root, 'empty-vps') });
+    const sessionDir = join(root, 'sessions', created.id);
+
+    const updated = updateSessionWorkDir(root, created.id, nextWorkDir);
+
+    expect(updated).toMatchObject({ id: created.id, workDir: nextWorkDir, workspaceKey: nextWorkDir });
+    expect(existsSync(sessionDir)).toBe(true);
+    expect(JSON.parse(readFileSync(join(sessionDir, 'session.json'), 'utf8')))
+      .toMatchObject({ workDir: nextWorkDir, workspaceKey: nextWorkDir });
+    const manifest = JSON.parse(readFileSync(join(root, 'sessions-manifest.json'), 'utf8'));
+    expect(manifest.sessions.find(row => row.id === created.id))
+      .toMatchObject({ path: sessionDir, workDir: nextWorkDir, workspaceKey: nextWorkDir });
+    expect(scanWorkdirSessions(firstWorkDir, root)).toEqual([]);
+    expect(scanWorkdirSessions(nextWorkDir, root)).toEqual([
+      expect.objectContaining({ id: created.id, workDir: nextWorkDir }),
+    ]);
+
+    const cleared = updateSessionWorkDir(root, created.id, '');
+    expect(cleared).toMatchObject({ workDir: '', workspaceKey: '' });
   });
 
   it('rebuilds missing metadata from markdown-only session dirs without creating audit transcripts', () => {

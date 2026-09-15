@@ -506,8 +506,9 @@ test.describe('侧边栏交互', () => {
     await expect(chatPage.locator('.session-item.active')).toHaveCount(1);
   });
 
-  test('从当前 Yeaft Session 复制完整会话并打开副本', async ({ chatPage, mockAgent }) => {
+  test('从非当前 Yeaft Session 复制完整会话并打开副本', async ({ chatPage, mockAgent }) => {
     const sourceId = 'copy-source';
+    const currentId = 'copy-current';
     const copiedId = 'copy-target';
     const source = {
       catalogKey: `yeaft:${mockAgent.agentId}:${sourceId}`,
@@ -518,18 +519,35 @@ test.describe('侧边栏交互', () => {
       createdAt: '2026-09-10T00:00:00.000Z',
       metadataUpdatedAt: '2026-09-10T00:00:00.000Z',
     };
-    await chatPage.evaluate((row) => {
+    const current = {
+      ...source,
+      catalogKey: `yeaft:${mockAgent.agentId}:${currentId}`,
+      routeRef: { runtimeProvider: 'yeaft', agentId: mockAgent.agentId, sessionId: currentId },
+      title: 'Current session',
+      createdAt: '2026-09-10T00:00:01.000Z',
+    };
+    await chatPage.evaluate(({ agentId, rows, currentId }) => {
+      const sessionStore = window.Pinia.useSessionsStore();
+      sessionStore.applySnapshot(rows.map(row => ({
+        id: row.routeRef.sessionId,
+        name: row.title,
+        workDir: row.workDir || '',
+        roster: ['omni'],
+        defaultVpId: 'omni',
+        createdAt: row.createdAt,
+        metadataUpdatedAt: row.metadataUpdatedAt,
+      })), agentId);
       const store = window.Pinia.useChatStore();
-      store.applySessionCatalogSnapshot([row], []);
-      store.openCatalogSession(row);
-    }, source);
+      store.applySessionCatalogSnapshot(rows, []);
+      store.openCatalogSession(rows.find(row => row.routeRef.sessionId === currentId));
+    }, { agentId: mockAgent.agentId, rows: [source, current], currentId });
 
     const sourceRow = chatPage.locator('.session-item', { hasText: 'Copy source' });
-    await expect(sourceRow).toHaveClass(/active/);
+    await expect(sourceRow).not.toHaveClass(/active/);
     await sourceRow.hover();
     await sourceRow.locator('.session-dots-btn').click();
     const copyItem = chatPage.locator('.session-menu-floating .session-menu-item', {
-      hasText: 'Fork current session',
+      hasText: 'Copy session',
     });
     await expect(copyItem).toBeVisible();
 
@@ -568,6 +586,81 @@ test.describe('侧边栏交互', () => {
     })).toEqual({
       activeCatalogKey: `yeaft:${mockAgent.agentId}:${copiedId}`,
       activeSessionId: copiedId,
+    });
+  });
+
+  test('会话设置可以修改 workDir 并保持当前会话不变', async ({ chatPage, mockAgent }) => {
+    const settingsId = 'settings-source';
+    const currentId = 'settings-current';
+    const settingsSession = {
+      id: settingsId,
+      name: 'Settings source',
+      roster: ['omni'],
+      defaultVpId: 'omni',
+      announcement: '',
+      workDir: '/workspace/before',
+      createdAt: '2026-09-10T00:00:00.000Z',
+      metadataUpdatedAt: '2026-09-10T00:00:00.000Z',
+    };
+    const currentSession = {
+      ...settingsSession,
+      id: currentId,
+      name: 'Current settings session',
+      workDir: '/workspace/current',
+      createdAt: '2026-09-10T00:00:01.000Z',
+    };
+    await chatPage.evaluate(({ agentId, sessions, currentId }) => {
+      const sessionStore = window.Pinia.useSessionsStore();
+      sessionStore.applySnapshot(sessions, agentId);
+      const rows = sessions.map(session => ({
+        catalogKey: `yeaft:${agentId}:${session.id}`,
+        runtimeProvider: 'yeaft',
+        routeRef: { runtimeProvider: 'yeaft', agentId, sessionId: session.id },
+        title: session.name,
+        availability: 'online',
+        workDir: session.workDir,
+        createdAt: session.createdAt,
+        metadataUpdatedAt: session.metadataUpdatedAt,
+      }));
+      const store = window.Pinia.useChatStore();
+      store.applySessionCatalogSnapshot(rows, []);
+      store.openCatalogSession(rows.find(row => row.routeRef.sessionId === currentId));
+    }, { agentId: mockAgent.agentId, sessions: [settingsSession, currentSession], currentId });
+
+    const settingsRow = chatPage.locator('.session-item', { hasText: 'Settings source' });
+    await expect(settingsRow).not.toHaveClass(/active/);
+    await settingsRow.hover();
+    await settingsRow.locator('.session-dots-btn').click();
+    await chatPage.locator('.session-menu-floating .session-menu-item', { hasText: 'Settings' }).click();
+
+    const modal = chatPage.locator('.group-settings-modal');
+    await expect(modal).toBeVisible();
+    const input = modal.locator('#session-settings-workdir');
+    await expect(input).toHaveValue('/workspace/before');
+    await input.fill('/workspace/after');
+    const requestPromise = mockAgent.waitForMessage('yeaft_update_session');
+    await modal.getByRole('button', { name: 'Save directory' }).click();
+    const request = await requestPromise;
+    expect(request).toMatchObject({
+      sessionId: settingsId,
+      patch: { workDir: '/workspace/after' },
+    });
+    mockAgent.send({
+      type: 'yeaft_output',
+      event: {
+        type: 'session_crud_result',
+        op: 'update',
+        requestId: request.requestId,
+        ok: true,
+        session: { ...settingsSession, workDir: '/workspace/after' },
+      },
+    });
+    await expect.poll(() => chatPage.evaluate(({ agentId, sessionId }) => ({
+      workDir: window.Pinia.useSessionsStore().sessionById(sessionId, agentId)?.workDir,
+      activeSessionId: window.Pinia.useSessionsStore().activeSessionId,
+    }), { agentId: mockAgent.agentId, sessionId: settingsId })).toEqual({
+      workDir: '/workspace/after',
+      activeSessionId: currentId,
     });
   });
 

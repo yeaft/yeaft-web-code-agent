@@ -161,7 +161,7 @@ export default {
             :show-fork="!!forkSessionRow"
             :fork-disabled="!!forkUnavailableReason"
             :fork-pending="!!store.sessionForkPendingKey"
-            :fork-title="forkUnavailableReason ? $t('yeaft.session.error.' + forkUnavailableReason) : $t('yeaft.session.forkCurrent')"
+            :fork-title="forkUnavailableReason ? $t('yeaft.session.error.' + forkUnavailableReason) : $t('yeaft.session.copy')"
             @fork-session="forkCurrentSession"
             :search-open="historySearchOpen"
             :loading-more-history="store.yeaftManualHistoryRefreshLoading"
@@ -1064,7 +1064,7 @@ export default {
         const key = `yeaft.session.error.${code}`;
         const translated = $t(key);
         const message = translated === key ? (result?.error?.message || code) : translated;
-        await alertDialog($t('yeaft.session.forkFailed', { message }));
+        await alertDialog($t('yeaft.session.copyFailed', { message }));
       }
     };
 

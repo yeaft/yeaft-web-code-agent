@@ -1594,6 +1594,10 @@ describe('Yeaft load-history first paint', () => {
           sessionId: 'session-live',
           patch: { announcement: 'after' },
         }],
+        [handleYeaftUpdateSession, {
+          sessionId: 'session-live',
+          patch: { workDir: join(dir, 'next-workspace') },
+        }],
         [handleYeaftSessionAddMember, { sessionId: 'session-live', vpId: 'martin' }],
         [handleYeaftSessionSetDefaultVp, { sessionId: 'session-live', vpId: 'martin' }],
       ];
