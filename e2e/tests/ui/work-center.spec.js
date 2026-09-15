@@ -2402,6 +2402,18 @@ test.describe('Work Center responsive UI', () => {
     await expect(progress).toContainText('Not yet verified');
     await expect(chatPage.locator('.work-center-content-panel')).not.toBeVisible();
 
+    // A bounded legacy projection may omit the only unmet row. Counts remain authoritative.
+    await chatPage.evaluate(agentId => {
+      const item = window.Pinia.useChatStore().workCenterDetailByAgent[agentId];
+      item.goalProgress = { ...item.goalProgress, completedCriteriaCount: 100, totalCriteriaCount: 101,
+        remainingCriteria: [], omittedCriteriaCount: 1,
+        criteria: [{ criterion: 'Visible passed criterion', status: 'passed', evidenceRunIds: [] }] };
+    }, mockAgent.agentId);
+    await expect(progress).toContainText('100 / 101 criteria verified');
+    await expect(progress).toContainText('1 remaining');
+    await expect(progress).not.toContainText('All criteria verified');
+    await expect(progress).toContainText('1 more criteria omitted');
+
     // Older Agents must not acquire a fabricated goal percentage from Action counts.
     await chatPage.evaluate(({ agentId, detail }) => {
       window.Pinia.useChatStore().workCenterDetailByAgent[agentId] = detail;
