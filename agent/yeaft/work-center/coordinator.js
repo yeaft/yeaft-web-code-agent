@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { resolveMaxOutputTokens } from '../models.js';
+import { callCoordinatorWithResourceControl } from './resource-control.js';
 import { normalizeSessionMessageQuote, sessionMessageQuotePrompt } from '../session-message-quote.js';
 import {
   LLMAuthError,
@@ -8,8 +9,9 @@ import {
   LLMServerError,
 } from '../llm/adapter.js';
 import { resolveWorkItemModel, selectWorkItemVp } from './assignment.js';
-import { normalizeContractPatch } from './completion-contract.js';
+import { assertCoordinatorContractAuthority, normalizeContractPatch } from './completion-contract.js';
 import { normalizeOutputs } from './evidence.js';
+import { deriveGoalProgress } from './goal-state.js';
 import {
   normalizeDynamicActionClosures,
   prepareDynamicActionMutation,
@@ -19,6 +21,7 @@ import { applyCoordinatorReplan } from './plan-mutation.js';
 import { buildWorkItemAttachmentContext } from './attachments.js';
 import { sanitizeDiagnosticText } from './debug-projection.js';
 import { generatedActionGraphRules } from './workflow.js';
+import { workItemCapabilityContext } from './capabilities.js';
 
 const COORDINATOR_MAX_REPLY_CHARS = 8_000;
 const COORDINATOR_MAX_INSTRUCTION_CHARS = 8_000;
@@ -184,7 +187,7 @@ const COORDINATOR_SYSTEM_PROMPT = `You are the Work Center Coordinator. The user
 
 Your responsibilities:
 - Explain the current WorkItem state and blockers in plain language.
-- Keep the WorkItem title, goal, acceptance criteria, and unfinished Action graph aligned with the user's latest intent.
+- Change title, goal, acceptance criteria, or delivery target only in an explicit user-originated refinement turn. Automatic advance/recovery must preserve the user contract and address its gaps, never relax it.
 - Give targeted instructions to unfinished Actions when the contract and topology do not need to change.
 - Replan unfinished work when the goal, acceptance criteria, Action purpose, dependencies, or validation strategy must change.
 - Preserve completed Action history. Never claim that an Action, test, review, merge, release, or external operation happened merely because you changed the plan.
@@ -237,14 +240,17 @@ Return exactly one JSON object and no surrounding prose:
 
 Rules:
 - answer: explain state only. Never use it for an automatic advance trigger.
+- Never mutate title, goal, acceptanceCriteria, or deliveryTarget during automatic advance/recovery. contractPatch is allowed only for explicit user-originated refinement, never to make existing evidence pass. For an older WorkItem with no acceptance criteria, request_human to establish its completion condition before commissioning new work.
 - create_actions: create 1..8 currently runnable Actions. Every Action needs type, objective, approach, expectedOutcome, capability, candidateVpIds, assignmentReason, sourceActionIds, workspaceMode, and optional maxAttempts/separateFromActionTypes. sourceActionIds are context/audit references, never scheduling dependencies. Do not include dependsOnActionIds, dependsOnStageIds, stages, or a graph.
-- If no existing VP can execute a required capability, create one create_vp Action assigned to the existing VP best suited to author that specialist. After it completes, create the original Action with the new VP id. Never fail or retry the original Action merely because its capability label has no match.
+- A missing skill/capability label is not a missing execution capability. Prefer an existing VP with a task-specific brief. Missing tools, credentials, or authorization require request_human; never expand roles as a workaround. create_vp is only appropriate when creating a persistent role is itself an explicit user deliverable.
 - closeActions may accompany create_actions. Each entry is {"actionId":"failed or waiting durable Action id","reason":"why it is no longer required"}. Close only work made obsolete by replacement evidence or a clarified contract. Closed Actions remain audit history, are never acceptance evidence, and do not block completion.
 - guide_actions: target 1..8 unfinished non-running Actions by durable actionId.
-- request_human: use when external information or a user decision is genuinely required. Before creating mutating or delivery Actions, ask whether the delivery boundary is files only, PR, or merge when the contract does not already say. After the user answers, persist it with contractPatch.deliveryTarget = workspace_files | pull_request | merge before creating more Actions.
+- request_human: use when external information or a user decision is genuinely required. Before creating mutating or delivery Actions, ask whether the delivery boundary is a response/report, workspace files, PR, or merge when the contract does not already say. After the user answers, persist it with contractPatch.deliveryTarget = response | workspace_files | pull_request | merge before creating more Actions.
 - complete: only when every acceptance criterion has canonical completed Run evidence and there are no unfinished Actions after applying optional closeActions. Include summary, ordered acceptanceResults with evidenceRunIds, evidenceRunIds, and residualRisks. Reuse structured outputs already present on canonical Runs; do not create repetitive evidence-packaging Actions.
 - Preserve completed and closed Action history. Never claim tests, review, merge, release, or external effects without canonical Run evidence.
-- Action templates are reusable capabilities, not a prescribed workflow. Create the smallest useful Action boundary, not tool-call-sized work.
+- Action templates are reusable capabilities, not a prescribed workflow. A simple Action includes its local tools and necessary tests; do not impose research/design/implement/test/review/deliver stages.
+- Read goalProgress.remainingCriteria, delivery, and blockers first. Resource limits are shared by coordination and all execution, including retries; reserve enough for verification and delivery. Never create a new Action or role merely to evade an exhausted attempt limit. Each new Action must close a concrete current gap. Prefer optional goalRefs: {"criteria":["exact unmet criterion"],"blockerActionIds":["current blocker Action id"],"delivery":false}, plus rationale explaining why this work changes the observed state. Repeating an objective requires goalRefs and a concrete new rationale; do not package already sufficient evidence.
+- response delivery is a substantive answer/report in a canonical completed Run summary with evidence and valid checks; do not invent a file, PR, or extra delivery Action.
 - Never return destructive cancellation. The user owns the explicit cancel control.`;
 
 function coordinatorSystemPrompt(language, detail) {
@@ -438,6 +444,8 @@ export function normalizeCoordinatorResponse(value, detail, options = {}) {
   const source = parsed?.decision && typeof parsed.decision === 'object' && !Array.isArray(parsed.decision)
     ? parsed.decision
     : {};
+  const automatic = options.automatic === true || (options.recovery === true && options.userOriginated !== true);
+  assertCoordinatorContractAuthority(source.contractPatch, !automatic && options.userOriginated !== false);
   const dynamic = isDynamicWorkItem(detail);
   const allowedKinds = dynamic
     ? (options.automatic === true
@@ -474,9 +482,6 @@ export function normalizeCoordinatorResponse(value, detail, options = {}) {
     };
   }
   if (kind === 'request_human') {
-    if (options.automatic === true && source.contractPatch?.deliveryTarget) {
-      throw new Error('Automatic Work Center Coordinator delivery target changes are forbidden');
-    }
     const contractPatch = dynamic ? normalizeContractPatch(source.contractPatch) : null;
     return {
       reply,
@@ -505,9 +510,6 @@ export function normalizeCoordinatorResponse(value, detail, options = {}) {
     };
   }
   if (dynamic && kind === 'create_actions') {
-    if (options.automatic === true && source.contractPatch?.deliveryTarget) {
-      throw new Error('Automatic Work Center Coordinator delivery target changes are forbidden');
-    }
     const contractPatch = normalizeContractPatch(source.contractPatch);
     if (requiresDeliveryBoundaryDecision(detail, source.actions)) {
       throw new Error('Work Center delivery target is unconfirmed; the delivery boundary requires request_human before creating mutating or delivery Actions');
@@ -530,6 +532,7 @@ export function normalizeCoordinatorResponse(value, detail, options = {}) {
         actions: detail.actions || [],
         decision,
         availableVpIds: options.availableVpIds,
+        automatic,
       }),
     };
   }
@@ -583,7 +586,7 @@ function finalizedCriteria(detail, contractPatch) {
   return criteria;
 }
 
-function coordinatorSnapshot(detail) {
+export function coordinatorSnapshot(detail) {
   const runs = Array.isArray(detail.runs) ? detail.runs : [];
   const canonicalRunByAction = new Map();
   for (const action of detail.actions || []) {
@@ -655,8 +658,25 @@ function coordinatorSnapshot(detail) {
     throw new Error('Active Actions cannot be represented within the Coordinator snapshot budget');
   }
 
+  const progress = deriveGoalProgress(detail);
+  const goalProgress = {
+    contractRevision: progress.contractRevision,
+    completedCriteriaCount: progress.completedCriteriaCount,
+    totalCriteriaCount: progress.totalCriteriaCount,
+    remainingCriteria: boundedJsonArray(progress.remainingCriteria.map(value => truncateUtf8(value, 768)), 2 * 1024),
+    delivery: { ...progress.delivery, evidenceRunIds: progress.delivery.evidenceRunIds.slice(0, 24) },
+    criteria: boundedJsonArray(progress.criteria.map(item => ({ ...item,
+      criterion: truncateUtf8(item.criterion, 768), evidenceRunIds: item.evidenceRunIds.slice(0, 24),
+      ...(item.conflictingRunIds ? { conflictingRunIds: item.conflictingRunIds.slice(0, 24) } : {}),
+    })), 2 * 1024),
+    blockers: boundedJsonArray(progress.blockers.map(item => ({ ...item, reason: truncateUtf8(item.reason, 384) })), 1 * 1024),
+  };
+  goalProgress.omittedCriteriaCount = progress.criteria.length - goalProgress.criteria.length;
+  goalProgress.omittedRemainingCriteriaCount = progress.remainingCriteria.length - goalProgress.remainingCriteria.length;
+  goalProgress.omittedBlockerCount = progress.blockers.length - goalProgress.blockers.length;
   return {
     workItem,
+    goalProgress,
     actions,
     omittedCompletedActionCount: Math.max(0, completed.length - actions.filter(action => ['completed', 'closed'].includes(action.status)).length),
     conversation: coordinatorHistory(detail.messages),
@@ -772,7 +792,8 @@ export class WorkItemCoordinator {
       : detail?.actions?.find(candidate => (
           candidate.id === detail.currentActionId && candidate.status === 'failed'
         ));
-    if (!detail || ['done', 'cancelled'].includes(detail.status) || action?.status !== 'failed') return null;
+    if (!detail || ['done', 'cancelled'].includes(detail.status) || action?.status !== 'failed'
+        || !this.store.canAutomaticallyCoordinate(id)) return null;
     const started = this.store.beginCoordinatorTurn(id, '', {
       revision: detail.revision,
       planRevision: detail.planRevision,
@@ -896,7 +917,10 @@ export class WorkItemCoordinator {
           try {
             let result;
             try {
-              const latestMessage = `Current WorkItem snapshot:\n${snapshotText}\n\n${recovery ? 'Automatic failure recovery trigger' : 'Latest user message'}:\n${text}${attachmentContext.promptBlock}${correction}`;
+              const capabilities = JSON.stringify(workItemCapabilityContext(vps, {
+                hasAttachments: started.detail.attachments?.length > 0,
+              }));
+              const latestMessage = `Available execution capabilities (role metadata is descriptive, not authorization):\n${capabilities}\n\nCurrent WorkItem snapshot:\n${snapshotText}\n\n${recovery ? 'Automatic failure recovery trigger' : 'Latest user message'}:\n${text}${attachmentContext.promptBlock}${correction}`;
               const content = attachmentContext.promptParts.length > 0
                 ? [{ type: 'text', text: latestMessage }, ...attachmentContext.promptParts]
                 : latestMessage;
@@ -925,15 +949,9 @@ export class WorkItemCoordinator {
                 result = providerTurn.response;
               } else {
                 result = await Promise.race([
-                runtime.adapter.call({
+                callCoordinatorWithResourceControl(runtime.adapter, this.store, providerTurn, claim, {
                   ...requestBody,
                   signal: abortController.signal,
-                  onRequestStart: () => {
-                    if (!this.store.dispatchCoordinatorProviderTurn(providerTurn.id, claim)) {
-                      abortController.abort('work_center_coordinator_dispatch_fence_lost');
-                      throw new Error('Coordinator provider turn lost its dispatch fence');
-                    }
-                  },
                 }).then(response => {
                   const persisted = this.store.respondCoordinatorProviderTurn(
                     providerTurn.id, providerTurn.requestHash, response, claim,
@@ -956,6 +974,7 @@ export class WorkItemCoordinator {
             normalized = normalizeCoordinatorResponse(result?.text, started.detail, {
               recovery,
               automatic: started.fence.automatic === true,
+              userOriginated: started.fence.userOriginated === true,
               recoveryActionId: started.fence.recovery?.actionId || null,
               availableVpIds: vps.map(vp => vp.id),
             });
@@ -1037,12 +1056,14 @@ export class WorkItemCoordinator {
         : recovery ? 'coordinator.recovery_completed' : 'coordinator.turn_completed', detail);
       return detail;
     } catch (error) {
+      if (providerTurn) this.store.settleCoordinatorRequest(providerTurn.id, null, false);
       if (providerTurn?.status === 'responded') {
         this.store.rejectCoordinatorProviderTurn(providerTurn.id, error, started.fence.claim);
       }
       const detail = this.store.failCoordinatorTurn(started.turnId, error, {
         ...started.fence,
         speaker,
+        interrupted: abortController.signal.aborted || this.shuttingDown,
       });
       if (detail) {
         options.onUpdate?.('coordinator.turn_failed', detail);

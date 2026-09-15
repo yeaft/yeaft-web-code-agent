@@ -2,7 +2,7 @@
 
 Work Center 是 Yeaft 的 Agent-level durable task system。当目标必须跨越一次交互 turn、需要角色隔离或审查、可能等待人工输入，或者需要在浏览器断开/Agent 重启后恢复时，应使用 Work Center。
 
-![展示 WorkItem conversation 与 Action graph 的 Work Center](/images/zh-CN/work-center.png)
+![展示 WorkItem conversation 与 Actions 的 Work Center](/images/zh-CN/work-center.png)
 
 ## 心智模型
 
@@ -10,12 +10,12 @@ Work Center 是 Yeaft 的 Agent-level durable task system。当目标必须跨�
 WorkItem
   ├── contract：goal、acceptance criteria、workDir、attachments、memory policy
   ├── Coordinator conversation
-  └── Action graph
+  └── 按需创建的 Actions
         └── Run attempts：VP/model/tool snapshot、messages、usage、evidence
 ```
 
 - **WorkItem** 是持久目标，也是面向用户的 conversation owner。
-- **Action** 是一个具体规划步骤，包含 objective、approach、expected result、dependencies、assignment policy、model policy 和 workspace policy。
+- **Action** 是有实际依据的工作单元，包含 objective、approach、expected result、执行者/model 选择和 workspace policy。Action 服务于目标，其数量不代表任务完成度。
 - **Run** 是执行 Action 的一次有 fence 的尝试。它的 identity 会阻止迟到或陈旧输出修改更新后的 attempt。
 - **Event** 是 append-only 审计证据。当前状态来自 canonical WorkItem/Action/Run row，而不是通过 replay UI event 推导。
 
@@ -31,35 +31,69 @@ Work Center 不是 Session。它可以从 Session 创建并保留 origin link，
 2. working directory；
 3. 可选文件（已支持的图片、PDF 或文本类 attachment）；
 4. 是否复用符合条件的历史 memory；
-5. 是否立即开始执行。
+5. 交付目标（或选择交付前询问）；
+6. 是否立即开始执行。
 
 从 Session 创建时，runtime 会强制写入来源 Session；model input 不能替换这个 identity。
 
 ## 规划与执行
 
-新 WorkItem 默认使用 AI planning：
+新 WorkItem 使用动态协调。创建时未单列验收条件，就直接以用户目标作为最低验收条件。Coordinator 根据当前事实，只创建下一步真正必要的 Action；自动推进不能修改目标或验收标准，只有用户明确补充时才能调整契约。不强制走 triage → implement → test → review → deliver 固定流水线。简单研究可能只需一个 Action；代码修改则可能根据证据与风险，需要独立实现、验证或集成。
 
-1. Triage Action 检查合同与 repository context。
-2. Triage 提交一个具体 WorkItem type，以及 1..8 个 task-specific Action。
-3. Controller 校验 ID、dependency、workspace mode、cycle 和 final acceptance gate。
-4. Scheduler claim ready Action，并选择符合条件的 VP。
-5. 每个 Run 复用现有 Yeaft engine 执行，且必须提交 structured outcome。
-6. Completed evidence 解锁依赖 Action；只有 final gate 成功后 WorkItem 才进入 `done`。
+每个 Run 复用现有 Yeaft engine，并提交结构化 outcome。Coordinator 据此判断需要继续工作、请求人工回答，还是完成任务。`sourceActionIds` 记录输入结果的来源，不是预建的依赖图。
 
-Graph 必须只有一个 final acceptance gate：通常是 `deliver` Action；如果不需要交付操作，则可以是一个 terminal approved `review`。其他所有 Action 都必须是它的传递依赖。
+### 看目标进度，而不是活动数量
+
+Agent 提供 `goalProgress` 时，WorkItem 详情展示 **已验证验收条件数 / 总数**、剩余数量、每项条件的已验证/未通过/待验证状态、阻塞原因，以及独立的交付状态。未通过和待验证的条目就是剩余工作；展开**证据 Run**可查看来源 Run 标识。浏览器展示 Agent 的证据投影，不按已完成 Action 数量、耗时或模型估计推算完成度。
+
+所有验收条件已验证不等于已经交付。当前有效的 canonical Run 证据必须同时支持验收条件和所选交付目标。陈旧或矛盾证据会使条件保持待验证或未通过。旧 Agent 没有此投影时保留普通验收列表，不凭空显示百分比。
+
+目标、证据进度、交付结果和 Coordinator 对话沿用同一滚动流。**Actions** 仅在需要查看执行细节时展开，不作为主要的任务进度展示。
+
+### 选择完成边界
+
+| 交付目标 | 交付内容 |
+| --- | --- |
+| **回复**（`response`） | 有 canonical Run 证据和验收检查支持的实质答复，例如解释、调查结论或建议；不要求文件、PR 或 commit。 |
+| **工作目录中的文件**（`workspace_files`） | 工作目录中有 canonical 记录的文件产物。 |
+| **创建拉取请求**（`pull_request`） | 有 canonical 记录的 PR 产物，仍须遵守仓库评审策略。 |
+| **合并已批准的拉取请求**（`merge`） | 有 canonical 记录的 commit 产物，仍须遵守批准与合并策略。 |
+| **交付前询问我** | 完成前必须先确认交付边界。 |
+
+Agent 提供 `finalResult.responses` 时，**交付回复**显示保留的答复，可展开查看 Run 来源与证据。普通对话回复或执行者说“做完了”不等于交付回复。选择代码目标不授予绕过评审、发布、部署或更改权限的许可。
+
+### 旧数据与设计方向
+
+旧 WorkItem 仍可沿用 workflow snapshot、依赖和 final gate 规则；这些记录继续可读，但不定义新的任务优先交互。证据进度与回复交付依赖相应 Agent 投影。设计文档中的更深层证据跳转和更广泛自主能力，不应被视为这些字段已经实现的功能。
+
+## 资源预算与显式恢复
+
+提供资源控制的 WorkItem 会在目标详情显示**资源预算**：全生命周期请求与 token 预算占用的已用 / 上限、本地化停止原因，以及可展开的**消耗明细与限额**，分别列出 Coordinator 与 Actions。已报告 token 是已知用量；预留包含在途和未知用量，已经计入预算占用，不要再次相加。未知用量不等于免费。
+
+默认限额为：**累计 200 次请求**、**累计 2,000,000 token**、**每个 Run 40 次请求**、**每个 Action 全生命周期 3 次尝试**、**Coordinator 累计 3 次失败**。Action 尝试还受原始上限与显式追加额度约束，详情列出已用 / 有效上限。请求数包含重试和辅助调用。取消、重启、某次成功或新 generation 都不清零累计消耗。
+
+Token 准入在派发前按输入与最大输出估算，收到完整 reported usage 后用真实报告结算；未知或部分结果继续保守占用。这是**估算准入，不是硬性费用上限或账单保证**：真实用量可能超过估算，已经派发的请求无法撤回。历史用量缺失时无法重建完整账单。
+
+资源停止后的继续方式：
+
+1. 检查停止原因与限额。需要更多资源时选择**追加预算**。
+2. 填写正安全整数的**增量**，未修改字段留空，检查后选择**确认追加预算**。追加 Action 尝试次数会应用于此 WorkItem 的**所有当前及未来 Action**。
+3. 追加**不会**恢复执行、清除停止原因或清零用量。准备好后单独选择**恢复工作项**。Run 请求限额停止可以在不增加每 Run 上限的情况下恢复为新的 Run。
+
+操作使用最新执行管理版本，与目标合约版本分离。遇到错误或版本冲突时，界面刷新状态并要求用户重新明确确认，不会自动重试修改。刷新失败或重新连接后，在刷新确认前禁用修改。模型指令、retry、watcher 开关及目标编辑均不能增加预算或解除资源停止。未提供该投影的旧 Agent 保留原有用量展示。
 
 ## 并发与 workspace policy
 
-Work Center 最多按 `maxConcurrentActions` 并发执行彼此独立的 ready Action（默认 3，可配置 1..12）。Dependency、workspace policy 和 repository state 仍会约束实际并发。
+Work Center 最多按 `maxConcurrentActions` 并发执行彼此独立的 ready Action（默认 3，可配置 1..12）。Workspace 冲突、repository state 和旧 workflow dependency 仍会约束实际并发。
 
 | Workspace mode | 含义 |
 | --- | --- |
 | `read` | Planner/reviewer 的合同，表示 Action 不修改 files、Git state、services 或 external systems；它不是通用 OS sandbox。 |
 | `shared` | 在 canonical working directory 执行；需要时串行化共享写操作。 |
 | `isolated-write` | 在独立 Git worktree 执行彼此独立的代码修改。 |
-| `integrate` | 合并声明的 isolated-write dependency；发生冲突时停止并交由明确处理。 |
+| `integrate` | 合并声明来源中的 isolated-write 结果；发生冲突时停止并交由明确处理。 |
 
-如果 AI planning 使用 `isolated-write`，graph 必须包含且只包含一个 integrate Action，并直接依赖每个 isolated-write Action；下游工作使用 integration result。
+隔离修改必须先集成，才能支持 canonical workspace 中的交付。动态协调按需创建此工作；旧 AI-planned graph 仍保留单一集成门禁规则。
 
 ## VP 与 model assignment
 
@@ -82,9 +116,9 @@ WorkItem 主对话默认面向 **Coordinator**，用于：
 - 修改 goal / acceptance criteria 并请求 replan；
 - 恢复 Coordinator 可见的问题。
 
-Coordinator 没有 file、shell 或 external side-effect tool。它的 structured decision 只能解释、指导 Action，或 replan 未完成工作。
+Coordinator 没有 file、shell 或 external side-effect tool。它通过 structured decision 协调 Action、更新合同、请求人工输入，或在证据满足合同时完成 WorkItem。
 
-当当前 Action 需要修正 context 或回答时，可以在 composer 明确选择它。Waiting/failed Action recovery 受 Action ID、revision、generation 和当前 Run state fence 保护。Action detail 展示连续 conversation，Execution tab 则按需加载保留的 request/loop/tool evidence。
+当当前 Action 需要修正 context 或回答时，可以在 composer 明确选择它。Waiting/failed Action recovery 受 Action ID、revision、generation 和当前 Run state fence 保护。Action detail 展示连续 conversation；保留的执行数据按需加载，不混入主要目标视图。
 
 ## Outcome 与 recovery
 
@@ -119,7 +153,7 @@ Execution evidence 可以包含 summary、acceptance check、file/test reference
 
 - 它不是无限制的 autonomous deployment service。
 - `read` workspace policy 不是 kernel-level sandbox。
-- 一个 Action completed 不足以让 WorkItem done；final acceptance gate 必须通过。
+- 一个 Action completed 不足以让 WorkItem done；当前证据必须支持目标验收条件和交付边界，旧 workflow 还保留 final gate。
 - `turn_end` 不是 Action completion；executor 必须提交 structured outcome contract。
 - Work Center memory 永远不能获得高于当前合同与 safety rule 的权限。
 - Session 与 WorkItem 不共享一份 transcript，也不是同一个 memory owner。

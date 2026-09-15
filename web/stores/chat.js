@@ -48,7 +48,7 @@ import {
 import {
   applyWorkItemSummary,
   isWorkItemDetailResponseStale,
-  isWorkItemDetailStale,
+  mergeWorkItemDetail,
   mergeActionMessages,
   normalizeWorkCenterActionGeneration,
   workCenterActionMessageKey,
@@ -2074,8 +2074,17 @@ export const useChatStore = defineStore('chat', {
           && this._workCenterListQueryByAgent[target] === queryKey
           && this.workCenterAgentId === target;
         if (requestStillCurrent) {
-          let mergedItems = items;
           const events = this._workCenterListEventsByAgent[target] || {};
+          const currentById = new Map((this.workCenterItemsByAgent[target] || []).map(item => [item.id, item]));
+          // A list response can carry an older resource projection even when it
+          // was requested after the last event. Fence matching rows, not only
+          // events that arrived while this request was pending.
+          let mergedItems = items.flatMap(item => {
+            const cached = events[item.id]?.summary;
+            const previous = applyWorkItemSummary(cached ? [cached] : [], currentById.get(item.id));
+            const accepted = applyWorkItemSummary(previous, item)[0];
+            return this.workItemMatchesBoardQuery(accepted, normalizedFilters) ? [accepted] : [];
+          });
           for (const entry of Object.values(events)) {
             if (Number(entry?.generation) <= eventGeneration || entry?.queryKey !== queryKey) continue;
             mergedItems = this.applyWorkItemBoardSummary(
@@ -2130,13 +2139,16 @@ export const useChatStore = defineStore('chat', {
               || currentPage?.nextCursor !== cursor
               || this.workCenterAgentId !== target) return [];
           let merged = [...(this.workCenterItemsByAgent[target] || [])];
+          const events = this._workCenterListEventsByAgent[target] || {};
           for (const item of Array.isArray(data?.items) ? data.items : []) {
             if (this.workItemDeleted(target, item?.id)) continue;
             const index = merged.findIndex(current => current.id === item.id);
-            if (index < 0) merged.push(item);
-            else merged[index] = applyWorkItemSummary([merged[index]], item)[0];
+            const cached = events[item.id]?.summary;
+            const previous = applyWorkItemSummary(cached ? [cached] : [], index < 0 ? null : merged[index]);
+            const accepted = applyWorkItemSummary(previous, item)[0];
+            if (index >= 0) merged.splice(index, 1);
+            if (this.workItemMatchesBoardQuery(accepted, filters)) merged.splice(index < 0 ? merged.length : index, 0, accepted);
           }
-          const events = this._workCenterListEventsByAgent[target] || {};
           for (const entry of Object.values(events)) {
             if (Number(entry?.generation) <= eventGeneration || entry?.queryKey !== queryKey) continue;
             merged = this.applyWorkItemBoardSummary(merged, entry.summary, filters);
@@ -2208,8 +2220,9 @@ export const useChatStore = defineStore('chat', {
       if (generation != null
           && Number(this._workCenterDetailRequestGenerationByAgent[agentId] || 0) !== generation) return false;
       const current = this.workCenterDetailByAgent[agentId];
-      if (current?.id === detail?.id && isWorkItemDetailStale(detail, current)) return false;
-      this.workCenterDetailByAgent = { ...this.workCenterDetailByAgent, [agentId]: detail };
+      const accepted = mergeWorkItemDetail(current, detail);
+      if (current && accepted === current) return false;
+      this.workCenterDetailByAgent = { ...this.workCenterDetailByAgent, [agentId]: accepted };
       return true;
     },
     async getWorkItem(id, agentId = null) {
@@ -2502,10 +2515,20 @@ export const useChatStore = defineStore('chat', {
       this.commitWorkCenterDetail(target, detail, generation);
       return detail;
     },
-    async resumeWorkItem(id, revision, agentId = null) {
+    async resumeWorkItem(id, revision, agentId = null, executionControlRevision = undefined) {
       const target = agentId || this.workCenterAgentId || this.currentAgent;
       const generation = this.beginWorkCenterDetailWrite(target);
-      const detail = await this.workCenterRequest('resume', { id, revision }, target);
+      const payload = { id, revision };
+      if (executionControlRevision != null) payload.executionControlRevision = executionControlRevision;
+      const detail = await this.workCenterRequest('resume', payload, target);
+      await this.listWorkItems(target, this._workCenterListFiltersByAgent[target] || {});
+      this.commitWorkCenterDetail(target, detail, generation);
+      return detail;
+    },
+    async extendWorkItemBudget(id, executionControlRevision, additions, agentId = null) {
+      const target = agentId || this.workCenterAgentId || this.currentAgent;
+      const generation = this.beginWorkCenterDetailWrite(target);
+      const detail = await this.workCenterRequest('extend_budget', { id, executionControlRevision, additions }, target);
       await this.listWorkItems(target, this._workCenterListFiltersByAgent[target] || {});
       this.commitWorkCenterDetail(target, detail, generation);
       return detail;
@@ -2608,11 +2631,12 @@ export const useChatStore = defineStore('chat', {
         && Number(current.revision) === Number(revision)
         && currentAction
         && Number(currentAction.generation) === Number(actionGeneration);
+      const accepted = mergeWorkItemDetail(current, detail);
       if (this._workCenterActionInputGenerationByAgent[target] === generation
         && requestStillCurrent
-        && !isWorkItemDetailResponseStale(detail, current)) {
-        this.workCenterDetailByAgent = { ...this.workCenterDetailByAgent, [target]: detail };
-        return detail;
+        && !isWorkItemDetailResponseStale(accepted, current)) {
+        this.workCenterDetailByAgent = { ...this.workCenterDetailByAgent, [target]: accepted };
+        return accepted;
       }
       return current?.id === id ? current : detail;
     },

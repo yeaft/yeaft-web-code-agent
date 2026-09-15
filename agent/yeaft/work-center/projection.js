@@ -162,6 +162,15 @@ function sumExecutionStats(values) {
   }, emptyExecutionStats());
 }
 
+function combinedExecutionStats(detail) {
+  const stats = Array.isArray(detail.runs) ? sumExecutionStats(detail.runs) : executionStats(detail.executionStats);
+  if (detail.executionControl?.usage) {
+    const usage = executionStats(detail.executionControl.usage);
+    for (const key of Object.keys(usage)) if (!['loopCount', 'toolCount'].includes(key)) stats[key] = usage[key];
+  }
+  return stats;
+}
+
 function actionGeneration(value) {
   return Math.max(1, count(value) || 1);
 }
@@ -765,6 +774,7 @@ function enforceWorkItemBrowserDtoBudget(value, options = {}) {
     status: truncateUtf8(workItem.status, 256),
     currentActionId: truncateUtf8(workItem.currentActionId, 4 * 1024) || null,
     executionStats: workItem.executionStats,
+    executionControl: workItem.executionControl,
     actionCount: count(workItem.actionCount),
     actions: Array.isArray(workItem.actions) ? [] : undefined,
     actionStats: Array.isArray(workItem.actionStats) ? [] : undefined,
@@ -896,6 +906,39 @@ function workItemFailureReason(detail) {
  * Authenticated browser detail DTO. Raw execution records stay Agent-local;
  * the browser receives only aggregate execution stats plus the explicit user-facing response.
  */
+function projectGoalProgress(progress) {
+  if (!progress || !Array.isArray(progress.criteria)) return null;
+  const ids = value => Array.isArray(value) ? value.slice(0, 64).map(id => truncateUtf8(String(id), 256)) : [];
+  const prioritized = [...progress.criteria.filter(item => item.status !== 'passed'),
+    ...progress.criteria.filter(item => item.status === 'passed')];
+  const criteria = prioritized.slice(0, 100).map(item => ({
+    criterion: truncateUtf8(item.criterion || '', 1024),
+    status: ['passed', 'failed'].includes(item.status) ? item.status : 'unmet',
+    evidenceRunIds: ids(item.evidenceRunIds),
+    ...(item.conflictingRunIds ? { conflictingRunIds: ids(item.conflictingRunIds) } : {}),
+  }));
+  return {
+    contractRevision: count(progress.contractRevision), criteria,
+    completedCriteriaCount: count(progress.completedCriteriaCount),
+    totalCriteriaCount: count(progress.totalCriteriaCount),
+    remainingCriteriaCount: Math.max(0, count(progress.totalCriteriaCount) - count(progress.completedCriteriaCount)),
+    omittedCriteriaCount: Math.max(0, progress.criteria.length - criteria.length),
+    remainingCriteria: criteria.filter(item => item.status !== 'passed').map(item => item.criterion),
+    evidenceRunIds: ids(progress.evidenceRunIds),
+    blockers: (progress.blockers || []).slice(0, 64).map(blocker => ({
+      actionId: truncateUtf8(blocker.actionId || '', 256),
+      status: blocker.status === 'failed' ? 'failed' : 'waiting',
+      reason: sanitizeDiagnosticText(blocker.reason || '', MAX_ACTION_DIAGNOSTIC_CHARS),
+    })),
+    delivery: {
+      target: ['response', 'workspace_files', 'pull_request', 'merge'].includes(progress.delivery?.target)
+        ? progress.delivery.target : null,
+      status: progress.delivery?.status === 'passed' ? 'passed' : 'unmet',
+      evidenceRunIds: ids(progress.delivery?.evidenceRunIds),
+    },
+  };
+}
+
 export function projectWorkItemDetail(detail, options = {}) {
   if (!detail) return null;
   const liveActionId = bodyActionId(detail);
@@ -949,6 +992,12 @@ export function projectWorkItemDetail(detail, options = {}) {
               runId: truncateUtf8(rawOutput?.runId || '', 256) || null,
             };
           }).filter(output => output?.kind && output.label && output.ref) : [],
+      responses: Array.isArray(detail.finalResult.responses)
+        ? detail.finalResult.responses.slice(0, 24).map(response => ({
+            runId: truncateUtf8(response?.runId || '', 256),
+            summary: truncateUtf8(response?.summary || '', 8 * 1024),
+            evidence: projectCanonicalEvidence(response?.evidence),
+          })) : [],
       residualRisks: Array.isArray(detail.finalResult.residualRisks)
         ? detail.finalResult.residualRisks
           .map(risk => truncateUtf8(risk, MAX_ACTION_MESSAGE_CHARS)).slice(0, 24) : [],
@@ -956,6 +1005,7 @@ export function projectWorkItemDetail(detail, options = {}) {
     title: detail.title,
     goal: detail.goal,
     acceptanceCriteria: Array.isArray(detail.acceptanceCriteria) ? detail.acceptanceCriteria : [],
+    goalProgress: projectGoalProgress(detail.goalProgress),
     workflowTemplate: detail.workflowTemplate,
     workItemType: detail.workflowSnapshot?.workItemType || detail.workItemType || null,
     planningMode: detail.workflowSnapshot?.planningMode || detail.planningMode || 'static',
@@ -967,11 +1017,10 @@ export function projectWorkItemDetail(detail, options = {}) {
     attentionActionIds: Array.isArray(detail.attentionActionIds) ? detail.attentionActionIds : undefined,
     mainline,
     currentActionId: detail.currentActionId || null,
-    executionStats: Array.isArray(detail.runs)
-      ? sumExecutionStats(detail.runs)
-      : executionStats(detail.executionStats),
+    executionControl: detail.executionControl,
+    executionStats: combinedExecutionStats(detail),
     reuseMemory: detail.reuseMemory !== false,
-    deliveryTarget: ['workspace_files', 'pull_request', 'merge'].includes(detail.deliveryTarget)
+    deliveryTarget: ['response', 'workspace_files', 'pull_request', 'merge'].includes(detail.deliveryTarget)
       ? detail.deliveryTarget : null,
     waitingReason: sanitizeDiagnosticText(waitingReason(detail), MAX_ACTION_DIAGNOSTIC_CHARS),
     failureReason: workItemFailureReason(detail),
@@ -1059,7 +1108,8 @@ export function projectWorkItemSummary(detail) {
         ? detail.actionStats.map(action => ({ ...action })) : [],
       actionCount: count(detail.actionCount),
       completedActionCount: count(detail.completedActionCount),
-      executionStats: executionStats(detail.executionStats),
+      executionStats: combinedExecutionStats(detail),
+      executionControl: detail.executionControl,
       origin: detail.origin?.sessionId ? { sessionId: detail.origin.sessionId } : null,
       linkedSessionIds: Array.isArray(detail.linkedSessionIds) ? detail.linkedSessionIds : [],
       attachmentCount: Array.isArray(detail.attachments) ? detail.attachments.length : 0,
@@ -1094,9 +1144,8 @@ export function projectWorkItemSummary(detail) {
     currentActionId: detail.currentActionId || null,
     actionCount: detail.actions.filter(item => !['superseded', 'cancelled'].includes(item?.status)).length,
     completedActionCount: detail.actions.filter(item => item?.status === 'completed').length,
-    executionStats: Array.isArray(detail.runs)
-      ? sumExecutionStats(detail.runs)
-      : executionStats(detail.executionStats),
+    executionControl: detail.executionControl,
+    executionStats: combinedExecutionStats(detail),
     failureReason: workItemFailureReason(detail),
 
     currentAction: projectCurrentActionSummary(action, projectedAction),

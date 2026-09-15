@@ -1,31 +1,30 @@
 # Work Center
 
-Work Center 是 Yeaft 的 Agent 级持久工作管理能力。它把需要跨 turn、跨 Session、角色接力或后台恢复的目标保存为 `WorkItem`，再由 Watcher 认领当前 `Action`，复用现有 Yeaft Engine 执行。
+Work Center 是 Yeaft 的 Agent 级持久目标执行系统。`WorkItem` 保存目标、验收条件、交付边界与对话；`Action` 是当前需要的工作单元；`Run` 是一次带身份隔离的执行尝试。
 
-## 当前实现边界（待迁移）
+## 当前实现与兼容边界
 
-本节描述当前主线实现，不是目标领域合同。目标设计以[会话式执行模型设计](./conversation-model-design.md)为准。
+- WorkItem 属于 Agent，保存在 `<yeaftDir>/work-center/`；Session 只作为来源与关联入口，不共享 transcript 或生命周期。
+- 新任务由 Coordinator 根据当前事实动态创建必要的 Action，不要求预建阶段、依赖图或固定数量的角色接力。`sourceActionIds` 表达结果来源。
+- Runner 复用现有 Yeaft Engine；Run 必须提交结构化 outcome，turn 结束不能自动变成任务完成。
+- Workspace 冲突限制实际并发；`isolated-write` 使用 Git worktree，需要集成其结果。`read` 分类不是 OS sandbox。
+- 旧 workflow snapshot、依赖和 final gate 仍是兼容合同，不代表新的产品必须继续围绕 Action graph 展示。
+- Session 后台作业 `agent/yeaft/tasks/` 与 WorkItem 是不同系统。
 
-- WorkItem 由 Agent 拥有，保存在 Agent 本地 `<yeaftDir>/work-center/`。
-- Session 只作为来源和关联入口，不拥有 WorkItem 生命周期。
-- 现有 `agent/yeaft/tasks/` 继续表示 Session 后台作业；WorkItem 不复用这套存储或状态。
-- 一个 WorkItem 同时只有一个 current Action；Workflow 是有序阶段列表，支持增删、排序和 review 退回，不实现任意 DAG 或多 Action 并行。
-- Watcher 只负责认领、租约和触发；状态推进只由 Workflow Controller 完成。
-- Runner 是现有 Yeaft Engine 的薄适配层，不实现第二套模型循环。
+## 任务优先的用户路径
 
-## 文档
+1. 从 Work Center 或 Session 创建目标，选择 workspace 与交付目标。
+2. 创建时若没有单列验收条件，直接以用户目标作为最低验收条件。Coordinator 只为当前缺口创建 Action；修改目标、验收或交付边界必须来自用户的明确补充，不能在自动推进时扩大或降低标准。
+3. Run 提交 outcome、证据与验收检查；Coordinator 据此继续、请求人工输入或完成任务。
+4. Agent 提供 `goalProgress` 时，详情展示已验证条件数、剩余条件、阻塞与独立交付状态；浏览器不把 Action 数量当作目标完成度。旧 Agent 保留普通验收列表。
+5. `response` 交付有证据支持的答复，不强制生成代码产物；`workspace_files`、`pull_request`、`merge` 分别要求对应的文件、PR、commit 证据，仍遵守权限与评审策略。
+6. Agent 提供 `finalResult.responses` 时，详情显示答复及可展开的 Run 来源/证据。主对话保持主要入口，Actions 按需查看。
 
-1. [会话式执行模型设计](./conversation-model-design.md)（目标设计，等待独立设计复审）
-2. [架构与数据流](./architecture.md)（当前实现）
-3. [数据和状态合同](./domain-contract.md)（当前实现）
-4. [Wire API](./wire-api.md)（当前实现）
-5. [交付阶段与验证](./delivery-plan.md)（当前实现）
+## 文档状态
 
-## V1 用户路径
+- [用户指南（中文）](../zh-CN/guide/user/work-center.md) / [User guide](../guide/user/work-center.md)：当前交互、证据进度与兼容行为。
+- [会话式执行模型设计](./conversation-model-design.md)：设计背景与演进方向，不是所有能力均已上线的声明。
+- [架构与数据流](./architecture.md)、[领域合同](./domain-contract.md)、[Wire API](./wire-api.md)：含旧实现合同；动态协调与投影以当前源码为准。
+- [交付阶段与验证](./delivery-plan.md)：历史分阶段计划，不是当前功能清单。
 
-1. 用户从 Work Center 创建工作项，或从 Session 把一个长期任务转为工作项。
-2. Triage Action 补全目标、验收条件和执行上下文。
-3. WorkItem 创建时固化 Workflow policy snapshot；Watcher 原子认领 ready Action，从当前 Agent 的 VP 池按 auto/pool/fixed 策略选择执行者并启动 Run。
-4. Run 通过结构化终态提交 `completed`、`waiting`、`retryable` 或 `failed`。
-5. Controller 生成下一 Action，直到 deliver 完成并把 WorkItem 标为 done。
-6. 全局 Work Center 展示所选 Agent 的工作项；Session 以后可按 origin/link 投影相关工作项。
+证据进度和回复展示依赖 Agent 提供相应 wire 投影。本次界面不新增自动部署、任意工具隔离或深层证据导航能力；不能把设计方向当作交付承诺。

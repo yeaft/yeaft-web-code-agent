@@ -2,12 +2,14 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { WorkCenterResourceControl, WorkCenterResourceStopError } from './resource-control.js';
 import { normalizeEvidence, normalizeOutputs } from './evidence.js';
-import { normalizeContractPatch } from './completion-contract.js';
+import { currentGoalRuns, deriveGoalProgress, hasContradictoryEvidence, validGoalChecks } from './goal-state.js';
+import { assertCoordinatorContractAuthority, normalizeContractPatch } from './completion-contract.js';
 import { normalizeActionCheckpoint } from './action-checkpoint.js';
 import { currentActionInputEventIds, runMatchesActionIdentity } from './action-identity.js';
 import { isDynamicWorkItem, usesLegacyGraph } from './execution-mode.js';
-import { normalizeDynamicCompletion } from './dynamic-coordination.js';
+import { normalizeDynamicCompletion, normalizeDynamicGoalRefs } from './dynamic-coordination.js';
 import { canonicalActionInstruction, withoutActionInputContext } from './workflow.js';
 import {
   WORK_CENTER_SCHEMA_VERSION,
@@ -815,11 +817,28 @@ export class WorkItemStore {
     this.db.exec('PRAGMA synchronous = NORMAL;');
     this.db.exec('PRAGMA foreign_keys = ON;');
     this.#initSchema();
+    this.resourceControl = new WorkCenterResourceControl(this);
     this.recoverCoordinatorMailbox();
     this.recoverCoordinatorProviderTurns();
     this.recoverOperations();
     this.recoverEngineTurns();
     this.recoverInterruptedCoordinatorTurns();
+  }
+
+  getExecutionControl(id) { return this.resourceControl.atomic(() => this.resourceControl.snapshot(id)); }
+  isExecutionStopped(id) { return this.resourceControl.stopped(id); }
+  reserveWorkItemRequest(request) { return this.resourceControl.reserve(request); }
+  settleCoordinatorRequest(id, usage, complete = true) { return this.resourceControl.atomic(() => this.resourceControl.settleCoordinator(id, usage, complete)); }
+  settleWorkItemRequest(id, usage, complete = true) { return this.resourceControl.settle(id, usage, complete); }
+  extendExecutionBudget(id, revision, additions) { return this.resourceControl.extend(id, revision, additions); }
+  stopExecution(id, code, details) { return this.resourceControl.stop(id, code, details); }
+  canAutomaticallyCoordinate(id, { userMessage = false } = {}) {
+    const row = this.db.prepare('SELECT status FROM work_items WHERE id = ?').get(id);
+    if (!row || ['done', 'cancelled'].includes(row.status) || this.isExecutionStopped(id)) return false;
+    const control = this.getExecutionControl(id);
+    // A failed Action may be closed without retrying it. Enforce lifetime
+    // attempts at Action claim, not before a Coordinator can inspect its result.
+    return userMessage || this.now() >= control.retryAfter;
   }
 
   #initSchema() {
@@ -1353,6 +1372,8 @@ export class WorkItemStore {
 
   claimCoordinatorTurn(workItemId, turnId, owner, leaseMs = 60_000) {
     return withTransaction(this.db, () => {
+      const assistant = this.getWorkItem(workItemId)?.messages?.find(message => message.turnId === turnId && message.role === 'assistant');
+      if (!this.canAutomaticallyCoordinate(workItemId, { userMessage: !assistant?.automatic && !assistant?.recovery })) return null;
       const now = this.now();
       const row = this.db.prepare(`SELECT * FROM coordinator_mailbox_entries
         WHERE work_item_id = ? AND json_extract(payload, '$.turnId') = ?
@@ -1405,6 +1426,7 @@ export class WorkItemStore {
 
   claimCoordinatorMailbox(workItemId, owner, leaseMs = 60_000) {
     return withTransaction(this.db, () => {
+      if (!this.canAutomaticallyCoordinate(workItemId)) return null;
       const now = this.now();
       const row = this.db.prepare(`SELECT * FROM coordinator_mailbox_entries
         WHERE work_item_id = ? AND (status = 'pending'
@@ -1536,7 +1558,7 @@ export class WorkItemStore {
   }
 
   #activeCoordinatorMailboxClaim(coordinatorTurnId, claim = {}) {
-    if (!claim.mailboxId || !claim.ownerBootId || !Number.isInteger(Number(claim.claimEpoch))) return null;
+    if (!claim?.mailboxId || !claim.ownerBootId || !Number.isInteger(Number(claim.claimEpoch))) return null;
     return this.db.prepare(`SELECT * FROM coordinator_mailbox_entries WHERE id = ? AND status = 'claimed'
       AND claim_owner = ? AND claim_epoch = ? AND lease_expires_at > ?
       AND json_extract(payload, '$.turnId') = ?`).get(
@@ -1566,10 +1588,29 @@ export class WorkItemStore {
     return row ? this.#mapCoordinatorProviderTurn(row) : null;
   }
 
+  isActiveCoordinatorProviderTurn(id, claim = {}) {
+    const turn = this.getCoordinatorProviderTurn(id);
+    if (!turn || turn.status !== 'dispatching' || turn.claimOwner !== claim.ownerBootId
+        || turn.claimEpoch !== Number(claim.claimEpoch)
+        || !this.#activeCoordinatorMailboxClaim(turn.coordinatorTurnId, claim)
+        || this.isExecutionStopped(turn.workItemId)) return false;
+    const item = this.getWorkItem(turn.workItemId);
+    return !!item && !['done', 'cancelled'].includes(item.status);
+  }
+
   dispatchCoordinatorProviderTurn(id, claim = {}) {
     return withTransaction(this.db, () => {
       const existing = this.getCoordinatorProviderTurn(id);
-      if (!existing || !this.#activeCoordinatorMailboxClaim(existing.coordinatorTurnId, claim)) return null;
+      if (!existing || !['prepared', 'dispatching'].includes(existing.status)
+          || !this.#activeCoordinatorMailboxClaim(existing.coordinatorTurnId, claim)) return null;
+      const reservation = this.reserveWorkItemRequest({
+        id: existing.status === 'prepared' ? id : `${id}:retry:${randomUUID()}`, workItemId: existing.workItemId,
+        kind: 'coordinator', request: existing.requestBody });
+      if (!reservation.allowed) return null;
+      if (existing.status === 'dispatching') {
+        for (const earlier of this.resourceControl.coordinatorRequestIds(id).slice(1)) this.settleWorkItemRequest(earlier, null, false);
+        return existing;
+      }
       const now = this.now();
       const changed = this.db.prepare(`UPDATE coordinator_provider_turns SET status = 'dispatching',
         dispatched_at = ?, updated_at = ? WHERE id = ? AND status = 'prepared'
@@ -1593,6 +1634,7 @@ export class WorkItemStore {
         stringify(response), responseHash, now, now, id, requestHash,
         claim.ownerBootId, Number(claim.claimEpoch),
       );
+      if (Number(changed.changes) === 1) this.resourceControl.settleCoordinator(id, response?.usage);
       return Number(changed.changes) === 1 ? this.getCoordinatorProviderTurn(id) : null;
     });
   }
@@ -2133,6 +2175,7 @@ export class WorkItemStore {
       const turn = this.getEngineTurn(turnId);
       if (!turn || turn.ownerBootId !== ownerBootId || turn.leaseEpoch !== leaseEpoch) return null;
       if (!this.#activeRunRow(turn.runId, ownerBootId, leaseEpoch, true)) return null;
+      if (this.isExecutionStopped(turn.workItemId)) return null;
       if (turn.status === 'dispatching') return turn;
       if (turn.status !== 'prepared') return null;
       const now = this.now();
@@ -3114,7 +3157,7 @@ export class WorkItemStore {
     }
     return workItems.map(workItem => {
       const actions = actionsByWorkItem.get(workItem.id) || [];
-      return graphExecutionState({ ...workItem, actions, runs: runsByWorkItem.get(workItem.id) || [] }, actions);
+      return graphExecutionState({ ...workItem, executionControl: this.getExecutionControl(workItem.id), actions, runs: runsByWorkItem.get(workItem.id) || [] }, actions);
     });
   }
 
@@ -3123,11 +3166,13 @@ export class WorkItemStore {
     if (!workItem) return null;
     const detail = {
       ...workItem,
+      executionControl: this.getExecutionControl(id),
       actions: this.db.prepare('SELECT * FROM actions WHERE work_item_id = ? ORDER BY sequence').all(id).map(mapAction),
       runs: this.db.prepare('SELECT * FROM runs WHERE work_item_id = ? ORDER BY started_at DESC').all(id).map(mapRun),
       planConflicts: this.listPlanConflicts(id),
       events: this.db.prepare('SELECT * FROM events WHERE work_item_id = ? ORDER BY id DESC LIMIT 500').all(id).map(mapEvent),
     };
+    detail.goalProgress = deriveGoalProgress(detail);
     return graphExecutionState(detail, detail.actions);
   }
 
@@ -3212,7 +3257,7 @@ export class WorkItemStore {
       );
       if (!mailbox) return null;
       const workItem = this.getWorkItem(mailbox.work_item_id);
-      if (!isDynamicWorkItem(workItem) || ['done', 'cancelled'].includes(workItem.status)) return null;
+      if (!isDynamicWorkItem(workItem) || !this.canAutomaticallyCoordinate(workItem.id)) return null;
       const latest = (workItem.messages || []).at(-1);
       if (latest?.role === 'assistant' && latest.status === 'thinking') return null;
       const now = this.now();
@@ -3304,6 +3349,7 @@ export class WorkItemStore {
       }
       const workItem = this.getWorkItem(id);
       if (!workItem) return null;
+      if (this.isExecutionStopped(id)) throw new WorkCenterResourceStopError(this.getExecutionControl(id).stopReason);
       if (['done', 'cancelled'].includes(workItem.status)) {
         throw new Error(`WorkItem in ${workItem.status} cannot accept Coordinator messages`);
       }
@@ -3436,6 +3482,7 @@ export class WorkItemStore {
       if (!this.#activeCoordinatorMailboxClaim(turnId, claim)) return null;
       const workItem = this.getWorkItem(expected.workItemId);
       if (!workItem) return null;
+      if (this.isExecutionStopped(workItem.id)) throw new WorkCenterResourceStopError(this.getExecutionControl(workItem.id).stopReason);
       if (workItem.revision !== expected.revision
           || workItem.planRevision !== expected.planRevision
           || workItem.ledgerRevision !== expected.ledgerRevision
@@ -3454,6 +3501,13 @@ export class WorkItemStore {
       }
       const recovery = coordinatorRecoveryIdentity(persistedRecovery);
       const decision = result?.decision || {};
+      const userOriginated = messages[assistantIndex]?.userOriginated === true
+        && messages[assistantIndex]?.automatic !== true;
+      assertCoordinatorContractAuthority(decision.contractPatch, userOriginated);
+      assertCoordinatorContractAuthority(result?.mutation?.contractPatch, userOriginated);
+      if (expected.userOriginated === true && !userOriginated) {
+        throw new Error('Coordinator user-originated authority does not match the persisted turn');
+      }
       const now = this.now();
       const activeActions = this.db.prepare(`SELECT * FROM actions WHERE work_item_id = ?
         AND status NOT IN ('completed', 'closed', 'superseded', 'cancelled') ORDER BY sequence`).all(workItem.id).map(mapAction);
@@ -3542,17 +3596,17 @@ export class WorkItemStore {
             type: 'coordinator-guidance', role: 'user', summary: instruction, evidence: [],
           }];
           const nextAction = {
-            ...action, context, generation: action.generation + 1,
+            ...action, context, generation: action.generation + 1, contractRevision: workItem.revision,
           };
           nextAction.instruction = canonicalActionInstruction(workItem, nextAction, context);
           const specHash = actionSpecHash(nextAction);
           const changed = this.db.prepare(`UPDATE actions SET status = 'ready', attempt = 0,
             current_run_id = NULL, lease_epoch = lease_epoch + ?, context = ?, instruction = ?,
-            generation = generation + 1, spec_hash = ?, identity_history = ?, result_run_id = NULL,
+            generation = generation + 1, contract_revision = ?, spec_hash = ?, identity_history = ?, result_run_id = NULL,
             workspace = NULL, updated_at = ? WHERE id = ? AND generation = ?
             AND status NOT IN ('completed', 'superseded', 'cancelled')`).run(
             action.status === 'running' ? 1 : 0,
-            stringify(context), nextAction.instruction, specHash,
+            stringify(context), nextAction.instruction, nextAction.contractRevision, specHash,
             stringify(actionIdentityHistory(action, nextAction.generation, specHash)),
             now, action.id, action.generation,
           );
@@ -3684,20 +3738,22 @@ export class WorkItemStore {
     turnId, result, expected, workItem, messages, assistantIndex, activeActions, now,
   }) {
     const decision = result?.decision || {};
-    if (expected.automatic === true && result?.mutation?.contractPatch?.deliveryTarget) {
-      throw new Error('Automatic Work Center Coordinator delivery target changes are forbidden');
+    const decisionPatch = normalizeContractPatch(decision.contractPatch);
+    const mutationPatch = normalizeContractPatch(result?.mutation?.contractPatch);
+    if (JSON.stringify(decisionPatch) !== JSON.stringify(mutationPatch) && mutationPatch) {
+      throw new Error('Coordinator mutation contractPatch must match the user-originated decision');
     }
-    if (decision.contractPatch?.deliveryTarget && expected.userOriginated !== true) {
-      throw new Error('WorkItem delivery target confirmation requires a user-originated Coordinator turn');
+    if (decisionPatch && !['create_actions', 'request_human'].includes(decision.kind)) {
+      throw new Error('Contract refinement requires create_actions or request_human');
     }
-    if (decision.contractPatch?.deliveryTarget && decision.kind !== 'request_human') {
+    if (decisionPatch?.deliveryTarget && decision.kind !== 'request_human') {
       throw new Error('WorkItem delivery target confirmation requires a user-originated request_human decision');
     }
     let affectedActionIds = [];
     let nextStatus = workItem.status;
     let currentActionId = workItem.currentActionId;
     let finalResult = null;
-    const contractPatch = normalizeContractPatch(decision.contractPatch);
+    const contractPatch = decisionPatch;
     if (decision.kind === 'create_actions'
         && !workItem.deliveryTarget
         && (result?.mutation?.createdActions || []).some(action => (
@@ -3705,11 +3761,18 @@ export class WorkItemStore {
         ))) {
       throw new Error('WorkItem delivery target must be confirmed before creating mutating or delivery Actions');
     }
-    if (contractPatch) {
-      if (contractPatch.title) workItem.title = contractPatch.title;
-      if (contractPatch.goal) workItem.goal = contractPatch.goal;
-      if (contractPatch.acceptanceCriteria) workItem.acceptanceCriteria = contractPatch.acceptanceCriteria;
-      if (contractPatch.deliveryTarget) workItem.deliveryTarget = contractPatch.deliveryTarget;
+    const refined = { ...workItem, ...(contractPatch || {}) };
+    const contractChanged = ['title', 'goal', 'deliveryTarget', 'acceptanceCriteria']
+      .some(key => JSON.stringify(refined[key]) !== JSON.stringify(workItem[key]));
+    if (contractChanged) {
+      this.#invalidateExecution(workItem, 'superseded', 'superseded', 'User refined the WorkItem contract', now);
+      this.db.prepare(`UPDATE work_items SET title = ?, goal = ?, acceptance_criteria = ?,
+        delivery_target = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ?`).run(
+        refined.title, refined.goal, stringify(refined.acceptanceCriteria), refined.deliveryTarget,
+        now, workItem.id, workItem.revision,
+      );
+      workItem = this.getWorkItem(workItem.id);
+      activeActions = [];
     }
 
     if (decision.kind === 'create_actions') {
@@ -3720,7 +3783,11 @@ export class WorkItemStore {
       if (!mutation || !Array.isArray(mutation.createdActions) || mutation.createdActions.length === 0) {
         throw new Error('Dynamic Coordinator Action creation is missing a validated mutation');
       }
-      for (const closure of mutation.closeActions || []) {
+      const goalDetail = this.getWorkItemDetail(workItem.id);
+      for (const candidate of mutation.createdActions) {
+        normalizeDynamicGoalRefs(candidate.brief?.goalRefs, goalDetail, goalDetail.actions);
+      }
+      for (const closure of (contractChanged ? [] : mutation.closeActions || [])) {
         const action = activeActions.find(candidate => candidate.id === closure.actionId);
         if (!action || !['waiting', 'failed'].includes(action.status)) {
           throw new Error('Dynamic Coordinator close target changed before apply');
@@ -3738,7 +3805,7 @@ export class WorkItemStore {
           actionGeneration: action.generation,
         });
       }
-      for (const actionId of mutation.supersedeActionIds || []) {
+      for (const actionId of (contractChanged ? [] : mutation.supersedeActionIds || [])) {
         const action = activeActions.find(candidate => candidate.id === actionId);
         if (!action || !['ready', 'waiting', 'failed'].includes(action.status)) {
           throw new Error('Dynamic Coordinator supersede target changed before apply');
@@ -3749,18 +3816,11 @@ export class WorkItemStore {
           AND status IN ('ready', 'waiting', 'failed')`).run(now, action.id, action.generation);
         if (Number(changed.changes) !== 1) throw new Error('Dynamic Coordinator lost an Action fence');
       }
-      const patch = mutation.contractPatch || null;
-      const title = patch?.title ?? workItem.title;
-      const goal = patch?.goal ?? workItem.goal;
-      const criteria = patch?.acceptanceCriteria ?? workItem.acceptanceCriteria;
-      const contractChanged = title !== workItem.title || goal !== workItem.goal
-        || JSON.stringify(criteria) !== JSON.stringify(workItem.acceptanceCriteria);
       const snapshot = { ...workItem.workflowSnapshot, workItemType: mutation.workItemType };
-      const changedPlan = this.db.prepare(`UPDATE work_items SET title = ?, goal = ?,
-        acceptance_criteria = ?, workflow_snapshot = ?, revision = revision + ?,
+      const changedPlan = this.db.prepare(`UPDATE work_items SET workflow_snapshot = ?,
         plan_revision = plan_revision + 1, updated_at = ? WHERE id = ? AND revision = ?
         AND plan_revision = ? AND ledger_revision = ? AND coordinator_revision = ?`).run(
-        title, goal, stringify(criteria), stringify(snapshot), contractChanged ? 1 : 0,
+        stringify(snapshot),
         now, workItem.id, workItem.revision, workItem.planRevision,
         workItem.ledgerRevision, workItem.coordinatorRevision,
       );
@@ -3788,14 +3848,14 @@ export class WorkItemStore {
         const context = [...withoutActionInputContext(action.context), {
           type: 'coordinator-guidance', role: 'user', summary: guidance, evidence: [],
         }];
-        const candidate = { ...action, context, generation: action.generation + 1 };
+        const candidate = { ...action, context, generation: action.generation + 1, contractRevision: workItem.revision };
         candidate.instruction = canonicalActionInstruction(workItem, candidate, context);
         const specHash = actionSpecHash(candidate);
         const changed = this.db.prepare(`UPDATE actions SET status = 'ready', attempt = 0,
           current_run_id = NULL, context = ?, instruction = ?, generation = generation + 1,
-          spec_hash = ?, identity_history = ?, result_run_id = NULL, workspace = NULL, updated_at = ?
+          contract_revision = ?, spec_hash = ?, identity_history = ?, result_run_id = NULL, workspace = NULL, updated_at = ?
           WHERE id = ? AND generation = ? AND status IN ('ready', 'waiting', 'failed')`).run(
-          stringify(context), candidate.instruction, specHash,
+          stringify(context), candidate.instruction, candidate.contractRevision, specHash,
           stringify(actionIdentityHistory(action, candidate.generation, specHash)),
           now, action.id, action.generation,
         );
@@ -3838,12 +3898,10 @@ export class WorkItemStore {
         throw new Error('WorkItem has an unsafe blocking Operation and cannot complete');
       }
       finalResult = normalizeDynamicCompletion(decision.completion, workItem.acceptanceCriteria);
-      const canonicalRuns = new Map(this.db.prepare(`SELECT r.* FROM runs r JOIN actions a ON a.id = r.action_id
-        WHERE r.work_item_id = ? AND r.status = 'completed' AND a.result_run_id = r.id`).all(workItem.id)
-        .map(row => {
-          const run = mapRun(row);
-          return [run.id, run];
-        }));
+      const detail = this.getWorkItemDetail(workItem.id);
+      const progress = deriveGoalProgress(detail);
+      const canonicalRuns = new Map(currentGoalRuns(detail)
+        .filter(run => run.status === 'completed').map(run => [run.id, run]));
       const criteria = Array.isArray(workItem.acceptanceCriteria) ? workItem.acceptanceCriteria : [];
       for (const runId of finalResult.evidenceRunIds) {
         const run = canonicalRuns.get(runId);
@@ -3851,17 +3909,18 @@ export class WorkItemStore {
         if (run.evidence.length === 0) {
           throw new Error(`Completion evidence Run has no concrete evidence: ${runId}`);
         }
-        if (!Array.isArray(run.acceptanceChecks) || run.acceptanceChecks.length !== criteria.length
-            || run.acceptanceChecks.some((check, index) => (
-              check?.criterion !== criteria[index] || !check?.status || !String(check?.evidence || '').trim()
-            ))) {
+        if (!validGoalChecks(run, criteria)) {
           throw new Error(`Completion evidence Run has incomplete acceptance checks: ${runId}`);
+        }
+        if (hasContradictoryEvidence(run)) {
+          throw new Error(`Completion evidence Run has contradictory evidence: ${runId}`);
         }
       }
       finalResult.outputs = [];
       const seenOutputs = new Set();
       for (const runId of finalResult.evidenceRunIds) {
         for (const output of canonicalRuns.get(runId)?.outputs || []) {
+          if (['failed', 'error', 'pending'].includes(output.status)) continue;
           const key = `${output.kind}\u0000${output.ref}`;
           if (seenOutputs.has(key)) continue;
           seenOutputs.add(key);
@@ -3873,16 +3932,27 @@ export class WorkItemStore {
         pull_request: 'pr',
         merge: 'commit',
       }[workItem.deliveryTarget];
-      if (!requiredOutputKind) {
+      if (!requiredOutputKind && workItem.deliveryTarget !== 'response') {
         throw new Error('WorkItem delivery target must be confirmed before completion');
       }
-      if (!finalResult.outputs.some(output => output.kind === requiredOutputKind)) {
+      if (requiredOutputKind && !finalResult.outputs.some(output => output.kind === requiredOutputKind)) {
         throw new Error(`WorkItem completion requires a canonical ${requiredOutputKind} output for delivery target ${workItem.deliveryTarget}`);
+      }
+      if (!finalResult.evidenceRunIds.some(runId => progress.delivery.evidenceRunIds.includes(runId))) {
+        throw new Error('Completion delivery requires current canonical evidence after the latest workspace change');
+      }
+      if (workItem.deliveryTarget === 'response') {
+        finalResult.responses = finalResult.evidenceRunIds
+          .filter(runId => progress.delivery.evidenceRunIds.includes(runId))
+          .map(runId => ({ runId, summary: canonicalRuns.get(runId).summary, evidence: canonicalRuns.get(runId).evidence }));
+        if (!finalResult.responses.length) throw new Error('Response delivery requires a canonical completed Run summary with evidence and valid checks');
+      }
+      if (progress.remainingCriteria.length) {
+        throw new Error('Completion has unmet or contradictory current goal criteria');
       }
       for (const [index, acceptanceResult] of finalResult.acceptanceResults.entries()) {
         const provesCriterion = acceptanceResult.evidenceRunIds.some(runId => (
-          canonicalRuns.get(runId)?.acceptanceChecks?.[index]?.criterion === criteria[index]
-          && canonicalRuns.get(runId)?.acceptanceChecks?.[index]?.status === 'passed'
+          progress.criteria[index].evidenceRunIds.includes(runId)
         ));
         if (!provesCriterion) {
           throw new Error(`Completion criterion lacks a passing canonical Run check: ${criteria[index]}`);
@@ -3915,12 +3985,12 @@ export class WorkItemStore {
     const changed = this.db.prepare(`UPDATE work_items SET messages = ?,
       coordinator_revision = coordinator_revision + 1, status = ?, current_action_id = ?,
       current_run_id = NULL, final_result = COALESCE(final_result, ?), title = ?, goal = ?,
-      acceptance_criteria = ?, delivery_target = ?, revision = revision + ?, updated_at = ?
+      acceptance_criteria = ?, delivery_target = ?, updated_at = ?
       WHERE id = ? AND coordinator_revision = ? AND revision = ? AND plan_revision = ?
       AND ledger_revision = ? AND status NOT IN ('done', 'cancelled')`).run(
       stringify(messages), nextStatus, currentActionId, finalResult ? stringify(finalResult) : null,
       workItem.title, workItem.goal, stringify(workItem.acceptanceCriteria), workItem.deliveryTarget,
-      contractPatch ? 1 : 0, now, workItem.id, current.coordinatorRevision, current.revision,
+      now, workItem.id, current.coordinatorRevision, current.revision,
       current.planRevision, current.ledgerRevision,
     );
     if (Number(changed.changes) !== 1) throw new Error('Dynamic Coordinator completion lost its turn fence');
@@ -3958,7 +4028,9 @@ export class WorkItemStore {
         messages[index],
         `coordinator:turn:${turnId}:assistant`,
       );
-      const dynamicAutomatic = isDynamicWorkItem(workItem) && expected.automatic === true;
+      if (!expected.interrupted) this.resourceControl.coordinatorFailed(workItem.id, turnId);
+      const dynamicAutomatic = isDynamicWorkItem(workItem) && expected.automatic === true
+        && !this.isExecutionStopped(workItem.id);
       if (dynamicAutomatic) {
         if (!this.releaseCoordinatorMailboxClaim(
           claim.mailboxId, claim.ownerBootId, claim.claimEpoch,
@@ -4226,15 +4298,36 @@ export class WorkItemStore {
     });
   }
 
-  resumeWorkItemAtomic(id, expectedRevision, makeInitialAction) {
+  resumeWorkItemAtomic(id, expectedRevision, makeInitialAction, executionControlRevision) {
     return withTransaction(this.db, () => {
       const workItem = this.getWorkItem(id);
       if (!workItem) return null;
       if (!Number.isInteger(expectedRevision) || workItem.revision !== expectedRevision) {
         throw new Error('WorkItem changed before it was resumed; refresh and try again');
       }
-      if (workItem.status !== 'cancelled') {
+      const stopped = this.isExecutionStopped(id);
+      if (workItem.status !== 'cancelled' && !stopped) {
         throw new Error(`WorkItem in ${workItem.status} cannot be resumed`);
+      }
+      this.resourceControl.resume(id, executionControlRevision);
+      // Resume changes the execution epoch, never the goal contract. Retire old
+      // Coordinator claims so recovery cannot apply pre-stop guidance later.
+      const nowResumed = this.now();
+      const messages = (workItem.messages || []).map(message => {
+        if (message.role !== 'assistant' || message.status !== 'thinking') return message;
+        const retired = { ...message, status: 'failed', error: 'Explicit user resume superseded this Coordinator turn', updatedAt: nowResumed };
+        this.#appendConversationEntry(id, retired, `coordinator:turn:${message.turnId}:assistant`);
+        this.db.prepare(`UPDATE coordinator_mailbox_entries SET status = 'cancelled',
+          claim_owner = NULL, lease_expires_at = NULL, updated_at = ?
+          WHERE work_item_id = ? AND json_extract(payload, '$.turnId') = ? AND status IN ('pending', 'claimed')`)
+          .run(nowResumed, id, message.turnId);
+        return retired;
+      });
+      this.db.prepare(`UPDATE work_items SET coordinator_revision = coordinator_revision + 1,
+        messages = ?, updated_at = ? WHERE id = ?`).run(stringify(messages), nowResumed, id);
+      if (stopped) {
+        this.#invalidateExecution(workItem, 'cancelled', 'cancelled', 'Explicit user resume', this.now());
+        this.db.prepare("UPDATE work_items SET status = 'cancelled' WHERE id = ?").run(id);
       }
 
       const now = this.now();
@@ -4259,7 +4352,7 @@ export class WorkItemStore {
         }
         this.enqueueCoordinatorMailbox(id, 'work_item_resumed', {
           trigger: { workItemId: id, revision: expectedRevision },
-        }, `dynamic:resume:${id}:${expectedRevision}`);
+        }, `dynamic:resume:${id}:${this.getExecutionControl(id).revision}`);
         this.appendEvent(id, 'work_item.resumed', {
           supersededActionIds: cancelledActions.map(action => action.id),
         });
@@ -4554,7 +4647,9 @@ export class WorkItemStore {
               )
           )
         ORDER BY a.updated_at ASC, a.sequence ASC`).all();
-      const row = rows.find(candidate => !this.#hasBlockingOperation(candidate.work_item_id, candidate.id));
+      const row = rows.find(candidate => !this.isExecutionStopped(candidate.work_item_id)
+        && !this.#hasBlockingOperation(candidate.work_item_id, candidate.id)
+        && this.resourceControl.canAttempt(mapAction(candidate)));
       if (!row) return null;
       const now = this.now();
       let action = mapAction(row);
@@ -4654,7 +4749,7 @@ export class WorkItemStore {
     if (!row) return null;
     const workItem = this.getWorkItem(row.work_item_id);
     if (usesLegacyGraph(workItem) || isDynamicWorkItem(workItem)) return row;
-    return workItem?.status === 'running' && workItem.currentActionId === row.action_id
+    return (workItem?.status === 'running' || this.isExecutionStopped(workItem?.id)) && workItem.currentActionId === row.action_id
       && workItem.currentRunId === row.id ? row : null;
   }
 
@@ -4735,15 +4830,19 @@ export class WorkItemStore {
       if (Number(actionChanged.changes) !== 1) throw new Error('Run interruption lost the Action fence');
       const activeWorkItem = this.getWorkItem(active.work_item_id);
       const concurrentMode = usesLegacyGraph(activeWorkItem) || isDynamicWorkItem(activeWorkItem);
+      // Resource denial changes only admission, not the owning Run's right to
+      // persist its final progress and release its fences during watcher stop.
+      const stopped = this.isExecutionStopped(active.work_item_id);
+      const nextStatus = stopped || !retryable ? 'needs_attention' : 'ready';
       const itemChanged = concurrentMode
         ? this.db.prepare(`UPDATE work_items SET status = ?, current_action_id = ?, current_run_id = NULL,
-          updated_at = ? WHERE id = ? AND status = 'running'`).run(
-          retryable ? 'ready' : 'needs_attention', action.id, now, active.work_item_id,
+          updated_at = ? WHERE id = ? AND status IN ('running', ?)`).run(
+          nextStatus, action.id, now, active.work_item_id, stopped ? 'needs_attention' : 'running',
         )
         : this.db.prepare(`UPDATE work_items SET status = ?, current_run_id = NULL,
-          updated_at = ? WHERE id = ? AND status = 'running' AND current_action_id = ?
+          updated_at = ? WHERE id = ? AND status IN ('running', ?) AND current_action_id = ?
           AND current_run_id = ?`).run(
-          retryable ? 'ready' : 'needs_attention', now, active.work_item_id, action.id, runId,
+          nextStatus, now, active.work_item_id, stopped ? 'needs_attention' : 'running', action.id, runId,
         );
       if (Number(itemChanged.changes) !== 1) throw new Error('Run interruption lost the WorkItem fence');
       this.appendEvent(active.work_item_id, 'run.interrupted', { retryable, reason }, {
@@ -5186,7 +5285,7 @@ export class WorkItemStore {
       } else {
         changedWorkItem = this.db.prepare(`UPDATE work_items SET status = ?, current_action_id = ?,
           current_run_id = NULL, ledger_revision = ledger_revision + ?, updated_at = ? WHERE id = ? AND current_run_id = ?
-          AND current_action_id = ? AND status = 'running' AND revision = ?`).run(
+          AND current_action_id = ? AND status IN ('running', 'needs_attention') AND revision = ?`).run(
           workItemStatus, currentActionId, ledgerIncrement, now, workItem.id, runId, action.id, nextWorkItem.revision,
         );
       }
@@ -5300,6 +5399,7 @@ export class WorkItemStore {
               WHERE json_extract(payload, '$.turnId') = ? AND status != 'acked'`).run(now, now, turnId);
           }
         }
+        this.resourceControl.coordinatorFailed(row.id, turnId);
         this.appendEvent(row.id, 'coordinator.turn_interrupted', {
           turnId: messages[index].turnId || null,
           error: messages[index].error,

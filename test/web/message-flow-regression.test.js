@@ -1879,6 +1879,20 @@ describe('message flow regressions', () => {
     expect(isExternalOutput('https://example.test/untyped')).toBe(false);
   });
 
+  it('uses only Agent-provided goal progress and canonical delivered responses', () => {
+    const goalProgress = selected => WorkCenterPage.computed.goalProgress.call({ selected });
+    const finalResponses = selected => WorkCenterPage.computed.finalResponses.call({ selected });
+    const oldItem = { acceptanceCriteria: ['Done'], actionCount: 3, completedActionCount: 3 };
+    expect(goalProgress(oldItem)).toBeNull();
+    expect(goalProgress({ goalProgress: {} })).toBeNull();
+    const progress = { criteria: [], completedCriteriaCount: 0, totalCriteriaCount: 0, remainingCriteria: [] };
+    expect(goalProgress({ goalProgress: progress })).toBe(progress);
+    expect(finalResponses(oldItem)).toEqual([]);
+    expect(finalResponses({ finalResult: { summary: 'A Coordinator message is not a delivered answer' } })).toEqual([]);
+    const response = { runId: 'run-1', summary: 'Canonical answer', evidence: [{ kind: 'text', label: 'Observed result' }] };
+    expect(finalResponses({ finalResult: { responses: [null, { summary: '  ' }, response] } })).toEqual([response]);
+  });
+
   it('keeps Work Center inputs available and detail layouts responsive', async () => {
     const component = readFileSync(resolve(import.meta.dirname, '../../web/components/ChatInput.js'), 'utf8');
     const messageComposer = readFileSync(resolve(import.meta.dirname, '../../web/components/MessageComposer.js'), 'utf8');

@@ -1094,6 +1094,175 @@
   font-size: 14px;
 }
 
+/* Resource controls stay in the goal stream; detail and editing are progressive. */
+.work-center-resources {
+  min-width: 0;
+  margin-top: 16px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.work-center-resources h3 { color: var(--text-primary); }
+.work-center-resources p { margin: 8px 0; }
+.work-center-resource-totals,
+.work-center-resource-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+.work-center-resource-totals strong { color: var(--text-primary); }
+.work-center-resource-stop { color: var(--warn-text); }
+.work-center-resource-details summary {
+  width: fit-content;
+  max-width: 100%;
+  min-height: 44px;
+  align-content: center;
+  cursor: pointer;
+}
+.work-center-resource-details summary:focus-visible,
+.work-center-resource-inputs input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.work-center-resource-breakdown,
+.work-center-resource-limits {
+  display: grid;
+  gap: 10px;
+  margin: 10px 0;
+}
+.work-center-resource-breakdown > div,
+.work-center-resource-limits > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.work-center-resource-breakdown dt { flex: 0 1 120px; }
+.work-center-resource-breakdown dd { flex: 1 1 200px; }
+.work-center-resources dd { min-width: 0; margin: 0; }
+.work-center-resource-breakdown dd span { display: block; }
+.work-center-resource-attempts { padding-left: 18px; }
+.work-center-resource-inputs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+.work-center-resource-inputs label { display: grid; min-width: 0; gap: 4px; }
+.work-center-resource-inputs small { display: block; color: var(--text-muted); }
+.work-center-resource-inputs input {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+}
+.work-center-resource-buttons button { max-width: 100%; min-height: 36px; white-space: normal; }
+.work-center-resources :disabled { opacity: 0.55; cursor: not-allowed; }
+
+.work-center-goal-progress,
+.work-center-responses {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.work-center-goal-count {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.work-center-goal-count strong {
+  color: var(--text-primary);
+}
+
+.work-center-goal-criteria {
+  display: grid;
+  gap: 12px;
+  padding: 12px 0 0;
+  list-style: none;
+}
+
+.work-center-goal-criteria > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.work-center-goal-criterion {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.work-center-goal-status {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.work-center-goal-criteria > [data-status="passed"] > .work-center-goal-status,
+.work-center-goal-status[data-status="passed"] {
+  color: var(--success);
+}
+
+.work-center-goal-criteria > [data-status="failed"] > .work-center-goal-status,
+.work-center-goal-status[data-status="failed"] {
+  color: var(--error);
+}
+
+.work-center-goal-evidence {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.work-center-goal-evidence summary {
+  width: fit-content;
+  max-width: 100%;
+  min-height: 44px;
+  align-content: center;
+  cursor: pointer;
+}
+
+.work-center-goal-evidence summary:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.work-center-goal-evidence ul,
+.work-center-goal-blockers ul {
+  padding: 0;
+  list-style: none;
+}
+
+.work-center-goal-evidence li {
+  color: inherit;
+  font-size: inherit;
+}
+
+.work-center-goal-blockers,
+.work-center-goal-delivery,
+.work-center-response + .work-center-response {
+  margin-top: 16px;
+}
+
+.work-center-goal-blockers li {
+  color: var(--text-secondary);
+}
+
+.work-center-response-summary {
+  color: var(--text-primary);
+  white-space: pre-wrap;
+}
+
 .work-center-action-closed {
   padding: 12px 14px;
   border-radius: 10px;

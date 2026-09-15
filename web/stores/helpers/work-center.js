@@ -15,6 +15,7 @@ const DETAIL_SUMMARY_FIELDS = Object.freeze([
   'currentActionId',
   'currentAction',
   'executionStats',
+  'executionControl',
   'failureReason',
   'origin',
   'linkedSessionIds',
@@ -133,8 +134,27 @@ export function workCenterActionRequestScopeKey(agentId, workItemId, actionId, g
   return `${agentId}:${workItemId}:${actionId}:${normalizeWorkCenterActionGeneration(generation)}`;
 }
 
-export function isWorkItemSummaryStale(summary, current) {
+function compareExecutionControl(candidate, current) {
+  const dataRevision = positiveIntegerOrNull(candidate?.dataRevision);
+  const currentDataRevision = positiveIntegerOrNull(current?.dataRevision);
+  if (dataRevision != null || currentDataRevision != null) {
+    // Once versioned usage is known, an old Agent snapshot cannot erase it.
+    if (dataRevision == null) return -1;
+    if (currentDataRevision == null) return 1;
+    return Math.sign(dataRevision - currentDataRevision);
+  }
+  // Compatibility with Agents predating the independent projection version.
+  const revision = numberOrNull(candidate?.revision);
+  const currentRevision = numberOrNull(current?.revision);
+  return revision != null && currentRevision != null ? Math.sign(revision - currentRevision) : 0;
+}
+
+function isWorkItemStateStale(summary, current) {
   if (!summary || !current || summary.id !== current.id) return false;
+  const legacyResourceOrder = positiveIntegerOrNull(summary.executionControl?.dataRevision) == null
+    && positiveIntegerOrNull(current.executionControl?.dataRevision) == null
+    ? compareExecutionControl(summary.executionControl, current.executionControl) : 0;
+  if (legacyResourceOrder < 0) return true;
   const summaryRevision = numberOrNull(summary.revision);
   const currentRevision = numberOrNull(current.revision);
   if (summaryRevision != null && currentRevision != null && summaryRevision !== currentRevision) {
@@ -146,9 +166,36 @@ export function isWorkItemSummaryStale(summary, current) {
       && summaryCoordinatorRevision !== currentCoordinatorRevision) {
     return summaryCoordinatorRevision < currentCoordinatorRevision;
   }
+  if (legacyResourceOrder > 0) return false;
   const summaryUpdatedAt = numberOrNull(summary.updatedAt);
   const currentUpdatedAt = numberOrNull(current.updatedAt);
   return summaryUpdatedAt != null && currentUpdatedAt != null && summaryUpdatedAt < currentUpdatedAt;
+}
+
+export function isWorkItemSummaryStale(summary, current) {
+  if (!summary || !current || summary.id !== current.id) return false;
+  return compareExecutionControl(summary.executionControl, current.executionControl) < 0
+    || isWorkItemStateStale(summary, current);
+}
+
+// Resource and WorkItem/Action projections have independent clocks. Preserve
+// newer usage even when accepting newer Action fields from an older snapshot,
+// and accept a new settlement without rolling back newer Action progress.
+function withLatestExecutionControl(current, candidate, accepted) {
+  const order = compareExecutionControl(candidate.executionControl, current.executionControl);
+  const executionControl = order > 0 || (order === 0 && accepted !== current && candidate.executionControl)
+    ? candidate.executionControl : current.executionControl;
+  let merged = executionControl === accepted.executionControl ? accepted : { ...accepted, executionControl };
+  if (merged.executionStats && executionControl?.usage) {
+    const executionStats = { ...merged.executionStats };
+    for (const key of ['llmRequestCount', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'totalTokens']) {
+      if (Number.isFinite(executionControl.usage[key])) executionStats[key] = executionControl.usage[key];
+    }
+    if (Object.keys(executionStats).some(key => executionStats[key] !== merged.executionStats[key])) {
+      merged = { ...merged, executionStats };
+    }
+  }
+  return merged;
 }
 
 export function isWorkItemDetailResponseStale(detail, current) {
@@ -179,7 +226,7 @@ function isActionProgressStale(currentStats, nextStats) {
 }
 
 export function workItemDetailRefreshIdentity(current, summary) {
-  if (!current || current.id !== summary?.id || isWorkItemSummaryStale(summary, current)) return null;
+  if (!current || current.id !== summary?.id || isWorkItemStateStale(summary, current)) return null;
   const actions = Array.isArray(current.actions) ? current.actions : [];
   const stats = Array.isArray(summary.actionStats) ? summary.actionStats : [];
   const currentActionId = current.currentActionId || null;
@@ -217,7 +264,7 @@ export function workItemDetailRefreshIdentity(current, summary) {
 }
 
 export function workItemDetailNeedsRefresh(current, summary) {
-  if (!current || current.id !== summary?.id || isWorkItemSummaryStale(summary, current)) return false;
+  if (!current || current.id !== summary?.id || isWorkItemStateStale(summary, current)) return false;
   const coordinatorRevision = numberOrNull(summary.coordinatorRevision);
   const currentCoordinatorRevision = numberOrNull(current.coordinatorRevision) ?? 0;
   if (coordinatorRevision != null && coordinatorRevision > currentCoordinatorRevision) return true;
@@ -237,7 +284,11 @@ const PROGRESS_BOUND_SUMMARY_FIELDS = new Set([
 ]);
 
 export function mergeWorkItemSummary(current, summary) {
-  if (!current || current.id !== summary?.id || isWorkItemSummaryStale(summary, current)) return current;
+  if (!current || current.id !== summary?.id) return current;
+  if (isWorkItemStateStale(summary, current)
+      || isOlderResourceOnlySnapshot(current, summary, current.actions, summary.actionStats)) {
+    return withLatestExecutionControl(current, summary, current);
+  }
   const merged = { ...current };
   let aggregateAccepted = !Array.isArray(current.actions) || !Array.isArray(summary.actionStats);
   if (Array.isArray(current.actions) && Array.isArray(summary.actionStats)) {
@@ -279,9 +330,12 @@ export function mergeWorkItemSummary(current, summary) {
   }
   for (const field of DETAIL_SUMMARY_FIELDS) {
     if (!aggregateAccepted && PROGRESS_BOUND_SUMMARY_FIELDS.has(field)) continue;
+    if (field === 'executionControl') continue;
     if (Object.prototype.hasOwnProperty.call(summary, field)) merged[field] = summary[field];
   }
-  return merged;
+  const resourceSource = aggregateAccepted ? summary : current;
+  merged.executionControl = withLatestExecutionControl(current, summary, resourceSource).executionControl;
+  return withLatestExecutionControl(current, merged, merged);
 }
 
 function hasStaleActionProgress(currentStats, nextStats) {
@@ -294,9 +348,19 @@ function hasStaleActionProgress(currentStats, nextStats) {
 }
 
 function isSameWorkItemVersion(current, summary) {
-  return numberOrNull(current?.revision) === numberOrNull(summary?.revision)
+  const independentResources = positiveIntegerOrNull(current?.executionControl?.dataRevision) != null
+    || positiveIntegerOrNull(summary?.executionControl?.dataRevision) != null;
+  return (independentResources
+      || numberOrNull(current?.executionControl?.revision) === numberOrNull(summary?.executionControl?.revision))
+    && numberOrNull(current?.revision) === numberOrNull(summary?.revision)
     && numberOrNull(current?.coordinatorRevision) === numberOrNull(summary?.coordinatorRevision)
     && numberOrNull(current?.updatedAt) === numberOrNull(summary?.updatedAt);
+}
+
+function isOlderResourceOnlySnapshot(current, candidate, currentStats, candidateStats) {
+  return compareExecutionControl(candidate.executionControl, current.executionControl) < 0
+    && isSameWorkItemVersion(current, candidate)
+    && !hasStaleActionProgress(candidateStats, currentStats);
 }
 
 export function isWorkItemDetailStale(detail, current) {
@@ -306,15 +370,25 @@ export function isWorkItemDetailStale(detail, current) {
     && hasStaleActionProgress(current.actions, detail.actions);
 }
 
+export function mergeWorkItemDetail(current, detail) {
+  if (!current || current.id !== detail?.id) return detail;
+  const stateStale = isWorkItemStateStale(detail, current)
+    || isOlderResourceOnlySnapshot(current, detail, current.actions, detail.actions)
+    || (isSameWorkItemVersion(current, detail) && hasStaleActionProgress(current.actions, detail.actions));
+  return withLatestExecutionControl(current, detail, stateStale ? current : detail);
+}
+
 export function applyWorkItemSummary(items, summary) {
   const current = Array.isArray(items) ? items : [];
   const existing = current.find(item => item.id === summary?.id) || null;
-  let nextSummary = existing && isWorkItemSummaryStale(summary, existing) ? existing : summary;
-  if (existing && nextSummary === summary && isSameWorkItemVersion(existing, summary)
-    && hasStaleActionProgress(existing.actionStats, summary.actionStats)) {
+  let nextSummary = existing && isWorkItemStateStale(summary, existing) ? existing : summary;
+  if (existing && nextSummary === summary && (
+    isOlderResourceOnlySnapshot(existing, summary, existing.actionStats, summary.actionStats)
+    || (isSameWorkItemVersion(existing, summary) && hasStaleActionProgress(existing.actionStats, summary.actionStats)))) {
     nextSummary = existing;
   }
   if (!nextSummary?.id) return current;
+  if (existing) nextSummary = withLatestExecutionControl(existing, summary, nextSummary);
   return [nextSummary, ...current.filter(item => item.id !== nextSummary.id)]
     .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
 }
