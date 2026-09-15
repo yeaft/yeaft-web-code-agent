@@ -19,12 +19,15 @@ describe('AgentInstaller', () => {
     vi.stubGlobal('navigator', { clipboard: { writeText } });
     const wrapper = mountInstaller({ agentSecret: "sec'ret" });
 
-    expect(wrapper.findAll('[role="tab"]')).toHaveLength(2);
+    expect(wrapper.findAll('.agent-installer-tab')).toHaveLength(2);
+    expect(wrapper.get('details').element.open).toBe(false);
+    expect(wrapper.get('.agent-installer-tab').attributes('aria-pressed')).toBe('true');
+    expect(wrapper.get('.agent-installer-copy').text()).toBe('installer.copyCommand');
     expect(wrapper.get('code').text()).toContain('/installers/install.sh');
     await wrapper.get('.agent-installer-copy').trigger('click');
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining("--secret 'sec'\"'\"'ret'"));
 
-    await wrapper.findAll('[role="tab"]')[1].trigger('click');
+    await wrapper.findAll('.agent-installer-tab')[1].trigger('click');
     expect(wrapper.get('code').text()).toContain('/installers/install.ps1');
     expect(wrapper.get('code').text()).toContain("-Secret 'sec''ret'");
     wrapper.unmount();
@@ -49,6 +52,7 @@ describe('AgentInstaller', () => {
 
     await wrapper.setProps({ loading: false });
     await wrapper.get('.agent-installer-copy').trigger('click');
+    expect(wrapper.get('details').element.open).toBe(true);
     expect(wrapper.text()).toContain('installer.copyError');
     expect(wrapper.get('.agent-installer-copy').text()).toBe('installer.copyFailed');
     wrapper.unmount();

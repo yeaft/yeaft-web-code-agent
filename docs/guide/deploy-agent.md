@@ -16,7 +16,9 @@ The Agent capability-detects what's installed at startup and exposes only the ba
 
 ## One-line installation (recommended)
 
-In **Settings → Security** or the first-connection guide on your server, select **Linux / macOS** or **Windows PowerShell** and copy the command to the target machine. It includes the current server address and your Agent Secret; you do not need to install the npm package or choose a machine name manually.
+In **Settings → Security** or the first-connection guide on your server, select **Linux / macOS** or **Windows PowerShell**, click **Copy install command**, and paste it into a terminal on the target machine. The full command is collapsed by default; expand **View command** to inspect it or copy manually if clipboard access fails. It includes the current server address and your Agent Secret; you do not need to install the npm package or choose a machine name manually.
+
+With no Agent online and no conversation open, the home page shows only setup guidance, without a message composer or empty model-configuration step. Once an Agent connects, the regular welcome page and composer return; existing conversations remain accessible while an Agent is offline.
 
 Linux / macOS example (replace the sample host and Secret):
 

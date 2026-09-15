@@ -1679,7 +1679,7 @@
 }
 
 .welcome-content {
-  width: min(760px, 100%);
+  width: min(680px, 100%);
   text-align: center;
 }
 
@@ -1703,7 +1703,7 @@
 }
 
 .welcome-subtitle {
-  margin: 0 auto 30px;
+  margin: 0 auto 28px;
   max-width: 460px;
   color: var(--text-secondary);
   font-size: 15px;
@@ -1852,115 +1852,8 @@
   margin-top: 16px;
 }
 
-.welcome-setup-card {
-  width: min(720px, 100%);
-  margin: 0 auto;
+.welcome-setup {
   text-align: left;
-}
-
-.welcome-setup-header {
-  margin-bottom: 22px;
-  text-align: center;
-}
-
-.welcome-setup-kicker {
-  margin-bottom: 8px;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.welcome-setup-title {
-  margin-bottom: 8px;
-  color: var(--text-primary);
-  font-size: 22px;
-  font-weight: 680;
-  letter-spacing: -0.03em;
-}
-
-.welcome-setup-desc,
-.welcome-setup-step-desc {
-  color: var(--text-secondary);
-  font-size: 14px;
-  line-height: 1.55;
-}
-
-.welcome-setup-steps {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.welcome-setup-step {
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
-  gap: 14px;
-}
-
-.welcome-setup-step-number {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: var(--bg-input-wrapper);
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 680;
-}
-
-.welcome-setup-step-title {
-  margin-bottom: 8px;
-  color: var(--text-primary);
-  font-size: 15px;
-  font-weight: 650;
-}
-
-.welcome-setup-error {
-  color: var(--error);
-}
-
-.welcome-command-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: stretch;
-  gap: 8px;
-  min-width: 0;
-}
-
-.welcome-command-row code {
-  min-width: 0;
-  padding: 11px 12px;
-  overflow-x: auto;
-  border-radius: 10px;
-  background: var(--bg-input-wrapper);
-  color: var(--text-primary);
-  font-family: 'SF Mono', Monaco, monospace;
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: nowrap;
-}
-
-.welcome-copy-btn {
-  flex: 0 0 auto;
-  padding: 0 14px;
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.welcome-copy-btn:hover {
-  background: var(--sidebar-hover);
-  color: var(--text-primary);
 }
 
 .welcome-actions {
@@ -2010,15 +1903,6 @@
 @media (max-width: 560px) {
   .welcome-screen {
     padding: 24px 16px;
-  }
-
-  .welcome-command-row {
-    grid-template-columns: 1fr;
-  }
-
-  .welcome-copy-btn {
-    width: 100%;
-    padding: 10px 14px;
   }
 
   .welcome-actions {

@@ -226,9 +226,6 @@ export default {
                 <button type="button" class="btn-primary yeaft-onboarding-primary" @click="openSessionCreate">
                   {{ $t('yeaft.onboarding.createSession') }}
                 </button>
-                <button type="button" class="btn-secondary" @click="openLlmConfig">
-                  {{ $t('yeaft.onboarding.configureLlm') }}
-                </button>
               </div>
             </div>
 
@@ -247,16 +244,6 @@ export default {
                   :error="agentSecretError"
                   @open-settings="openSettings({ initialTab: 'security' })"
                 />
-              </article>
-
-              <article class="yeaft-onboarding-step" role="listitem">
-                <div class="yeaft-onboarding-step-head">
-                  <span class="yeaft-onboarding-step-index">2</span>
-                  <div>
-                    <h2>{{ $t('yeaft.onboarding.llmTitle') }}</h2>
-                    <p>{{ $t('yeaft.onboarding.llmDesc') }}</p>
-                  </div>
-                </div>
               </article>
             </div>
           </div>

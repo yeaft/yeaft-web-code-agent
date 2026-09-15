@@ -41,11 +41,14 @@ test.describe('Dashboard 设置', () => {
 
     const installer = page.locator('.settings-dialog .agent-installer');
     await expect(installer).toBeVisible();
-    await expect(installer.locator('[role="tab"]')).toHaveCount(2);
+    await expect(installer.locator('.agent-installer-tab')).toHaveCount(2);
+    await expect(installer.locator('code')).not.toBeVisible();
+    await installer.locator('summary').click();
+    await expect(installer.locator('code')).toBeVisible();
     await expect(installer.locator('code')).toContainText('/installers/install.sh');
     await expect(installer.locator('code')).toContainText('--secret \'fixture-not-a-real-secret\'');
     await expect(installer.locator('.agent-installer-copy')).toBeEnabled();
-    await installer.locator('[role="tab"]').nth(1).focus();
+    await installer.locator('.agent-installer-tab').nth(1).focus();
     await page.keyboard.press('Enter');
     await expect(installer.locator('code')).toContainText('/installers/install.ps1');
     await expect(installer.locator('code')).toContainText('Invoke-WebRequest -UseBasicParsing');
