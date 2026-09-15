@@ -6403,13 +6403,43 @@ describe('message flow regressions', () => {
     await expect(store.copyCatalogSession(row)).resolves.toMatchObject({ ok: false, error: { message: 'disconnected' } });
     expect(store.sessionForkPendingKey).toBeNull();
 
+    // An Agent process can drop while the browser↔Server socket stays open.
+    // Only requests owned by the online→offline Agent edge are settled.
+    store.agents = [{ id: 'agent-a', online: true }, { id: 'agent-b', online: true }];
+    store._hasHandledAgentList = true;
+    store.sendWsMessage = vi.fn(() => true);
+    const previousWindowPinia = window.Pinia;
+    window.Pinia = { ...window.Pinia, useSessionsStore: () => null };
+    const agentDropCopy = realSessionCrudRequest.call(
+      store,
+      'copy',
+      { sessionId: 'source-session' },
+      { agentId: 'agent-a' },
+    );
+    const otherAgentRename = realSessionCrudRequest.call(
+      store,
+      'rename',
+      { sessionId: 'other-session', name: 'Other' },
+      { agentId: 'agent-b', timeoutMs: 60_000 },
+    );
+    const [copyRequest, renameRequest] = store.sendWsMessage.mock.calls.slice(-2).map(call => call[0]);
+    handleMessage(store, { type: 'agent_list', agents: [{ id: 'agent-b', online: true }] });
+    await expect(agentDropCopy).resolves.toMatchObject({
+      ok: false,
+      requestId: copyRequest.requestId,
+      error: { code: 'agent_offline', message: 'Agent disconnected' },
+    });
+    expect(store._sessionCrudPending.has(copyRequest.requestId)).toBe(false);
+    expect(store._sessionCrudPending.has(renameRequest.requestId)).toBe(true);
+    store._sessionCrudPending.get(renameRequest.requestId).resolve({ ok: true, op: 'rename' });
+    store._sessionCrudPending.delete(renameRequest.requestId);
+    await expect(otherAgentRename).resolves.toMatchObject({ ok: true, op: 'rename' });
+
     // Copy is a durable long operation. It must not inherit the ordinary 10s
     // CRUD timeout and report failure while the Agent is still committing it.
     vi.useFakeTimers();
-    const previousWindowPinia = window.Pinia;
     try {
       store.sendWsMessage = vi.fn(() => true);
-      window.Pinia = { ...window.Pinia, useSessionsStore: () => null };
       const delayed = realSessionCrudRequest.call(store, 'copy', { sessionId: 'source-session' }, { agentId: 'agent-a' });
       const request = store.sendWsMessage.mock.calls.at(-1)[0];
       await vi.advanceTimersByTimeAsync(10_001);

@@ -81,14 +81,36 @@ export function restoreLastViewedConversation(store, agentSetup) {
  */
 export function handleAgentList(store, msg) {
   const previousAgents = Array.isArray(store.agents) ? store.agents : [];
+  const nextAgents = Array.isArray(msg.agents) ? msg.agents : [];
+  const previouslyOnlineAgentIds = new Set(
+    previousAgents.filter(agent => agent?.id && agent.online).map(agent => agent.id),
+  );
+  const nextOnlineAgentIds = new Set(
+    nextAgents.filter(agent => agent?.id && agent.online).map(agent => agent.id),
+  );
+  // The browser↔Server socket remains connected when an Agent process alone
+  // drops. Settle requests owned by that Agent on the online→offline edge so a
+  // durable copy cannot leave its source Composer locked forever. Cold-start
+  // absences and requests for other online Agents are intentionally untouched.
+  for (const [requestId, pending] of store._sessionCrudPending?.entries?.() || []) {
+    if (!pending?.agentId
+        || !previouslyOnlineAgentIds.has(pending.agentId)
+        || nextOnlineAgentIds.has(pending.agentId)) continue;
+    pending.resolve?.({
+      ok: false,
+      requestId,
+      error: { code: 'agent_offline', message: 'Agent disconnected' },
+    });
+    store._sessionCrudPending.delete(requestId);
+  }
   const hadAgentList = store._hasHandledAgentList === true;
   const previousCurrentAgentId = store.currentAgent || null;
   const previousCurrentAgentOnline = !!(previousCurrentAgentId
     && previousAgents.some(a => a && a.id === previousCurrentAgentId && a.online));
-  store.agents = msg.agents;
+  store.agents = nextAgents;
   store._hasHandledAgentList = true;
   for (const [agentId, operations] of Object.entries(store.agentOperations || {})) {
-    const current = msg.agents.find(agent => agent.id === agentId);
+    const current = nextAgents.find(agent => agent.id === agentId);
     for (const operation of ['restart', 'upgrade']) {
       const state = operations?.[operation];
       if (!state?.pending || !state.acknowledged) continue;
@@ -130,7 +152,7 @@ export function handleAgentList(store, msg) {
     const seen = (store._yeaftAgentSeen && store._yeaftAgentSeen.id === trackedAgentId)
       ? store._yeaftAgentSeen
       : null;
-    const nextRec = msg.agents.find(a => a.id === trackedAgentId) || null;
+    const nextRec = nextAgents.find(a => a.id === trackedAgentId) || null;
     const needsReconnectCatchUp = store.currentView === 'yeaft'
       || (store.workCenterOpen && store.workCenterAgentId === trackedAgentId);
     if (needsReconnectCatchUp && detectYeaftAgentRestart(seen, nextRec)) {
@@ -157,8 +179,8 @@ export function handleAgentList(store, msg) {
     }
   }
   {
-    const agentIds = new Set(msg.agents.map(a => a.id));
-    for (const agent of msg.agents) {
+    const agentIds = new Set(nextAgents.map(a => a.id));
+    for (const agent of nextAgents) {
       store.proxyPorts[agent.id] = agent.proxyPorts || [];
       if (agent.yeaftStatus && typeof store.cacheYeaftAgentStatus === 'function') {
         store.cacheYeaftAgentStatus(agent.id, agent.yeaftStatus);
@@ -171,7 +193,7 @@ export function handleAgentList(store, msg) {
     }
   }
   if (store.currentAgent) {
-    const agent = msg.agents.find(a => a.id === store.currentAgent);
+    const agent = nextAgents.find(a => a.id === store.currentAgent);
     if (agent) {
       store.currentAgentInfo = agent;
     }
@@ -183,21 +205,21 @@ export function handleAgentList(store, msg) {
   // appears while the Yeaft page is active, pick it here; the existing
   // reconnect branch below sends select_agent and runs the bootstrap in order.
   if (store.currentView === 'yeaft' && !store.currentAgent) {
-    const online = msg.agents.find(a => a.online);
+    const online = nextAgents.find(a => a.online);
     if (online) {
       store.currentAgent = online.id;
       store.currentAgentInfo = online;
     }
   }
   if (store.currentView === 'yeaft' && typeof store.loadOpenedYeaftSessionsForConnectedAgents === 'function') {
-    const onlineIds = msg.agents.filter(a => a && a.online && a.id).map(a => a.id);
+    const onlineIds = nextAgents.filter(a => a && a.online && a.id).map(a => a.id);
     store.loadOpenedYeaftSessionsForConnectedAgents(onlineIds);
   }
   // ★ 同步所有 agent 的 conversations 到 store.conversations
   {
     const allServerConvs = [];
     const allServerConvIds = new Set();
-    for (const agent of msg.agents) {
+    for (const agent of nextAgents) {
       for (const serverConv of (agent.conversations || [])) {
         if (allServerConvIds.has(serverConv.id)) continue;
         allServerConvIds.add(serverConv.id);
@@ -246,7 +268,7 @@ export function handleAgentList(store, msg) {
     // If a session's agent is in the agent_list but the session is NOT,
     // the server has actively removed it (is_active=0 in DB or agent cleaned up).
     // Previously this just set agentOnline=true which kept dead sessions visible forever.
-    const listedAgentIds = new Set(msg.agents.map(a => a.id));
+    const listedAgentIds = new Set(nextAgents.map(a => a.id));
     store.conversations = store.conversations.filter(conv => {
       if (allServerConvIds.has(conv.id)) return true; // still in server list
       // Don't remove conversations the user is currently viewing
@@ -313,7 +335,7 @@ export function handleAgentList(store, msg) {
   }
   // ★ Reconnect 恢复
   if (store.currentAgent) {
-    const agent = msg.agents.find(a => a.id === store.currentAgent && a.online);
+    const agent = nextAgents.find(a => a.id === store.currentAgent && a.online);
     if (agent) {
       const reconnectEdge = !!store._yeaftReconnectCatchUpPending;
       const agentCameOnline = hadAgentList && !previousCurrentAgentOnline;
@@ -426,7 +448,7 @@ export function handleAgentList(store, msg) {
     if (lastViewed) {
       const conv = store.conversations.find(c => c.id === lastViewed);
       if (conv) {
-        const agent = msg.agents.find(a => a.id === conv.agentId && a.online);
+        const agent = nextAgents.find(a => a.id === conv.agentId && a.online);
         if (agent) {
           console.log('[AutoRestore] Restoring last viewed conversation:', lastViewed, 'on agent:', conv.agentId);
           restoreLastViewedConversation(store, { agentId: conv.agentId, agentInfo: agent });
