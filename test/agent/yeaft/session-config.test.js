@@ -695,6 +695,29 @@ describe('Yeaft session-scoped model config', () => {
     expect(copiedMessages.every(row => row.sessionId === copied.id)).toBe(true);
   });
 
+  it('forks a populated roster with its default VP and reports the source identity for Project inheritance', () => {
+    const root = makeDir();
+    createSession(sessionsRoot(root), {
+      id: 'fork-roster', name: 'Fork roster', roster: ['omni', 'reviewer'],
+      defaultVpId: 'reviewer', announcement: 'Shared instructions', workDir: root,
+    }).close();
+    saveSessionConfig(root, 'fork-roster', { model: 'provider/model', modelEffort: 'max' });
+    ctx.CONFIG = { ...(originalConfig || {}), yeaftDir: root };
+    const start = ctx.messageBuffer.length;
+    handleYeaftCopySession({ requestId: 'fork-roster-request', sessionId: 'fork-roster' });
+    const result = ctx.messageBuffer.slice(start).map(frame => frame.event)
+      .find(event => event?.requestId === 'fork-roster-request');
+    expect(result).toMatchObject({
+      op: 'copy', ok: true, sourceSessionId: 'fork-roster',
+      session: { roster: ['omni', 'reviewer'], defaultVpId: 'reviewer',
+        announcement: 'Shared instructions', workDir: root,
+        config: { model: 'provider/model', modelEffort: 'max' } },
+    });
+    expect(result.session.id).not.toBe('fork-roster');
+    updateSessionConfig(root, result.session.id, { modelEffort: 'low' });
+    expect(loadSessionConfig(root, 'fork-roster').modelEffort).toBe('max');
+  });
+
   it('removes the partial Session when transcript copying fails', () => {
     const root = makeDir();
     createSession(sessionsRoot(root), {

@@ -119,9 +119,12 @@ class TestServer {
 }
 
 export const test = base.extend({
-  testServer: [async ({}, use) => {
+  serverEnv: [{}, { option: true, scope: 'worker' }],
+
+  testServer: [async ({ serverEnv }, use) => {
     const port = await getAvailablePort();
     const server = new TestServer(port);
+    Object.assign(server.env, serverEnv);
     await useTestServer(server, use);
   }, { scope: 'worker' }],
 

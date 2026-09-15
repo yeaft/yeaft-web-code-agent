@@ -30,6 +30,14 @@ Session metadata 和 history 位于所属 Agent 的 Yeaft 目录。`workDir` 是
 
 全能助手可帮助处理问答、研究、写作、翻译、学习、规划、数据分析和编程执行，而不只是澄清需求或转交任务。它会根据任务选择直接回答、使用工具或协作，并遵守项目分工与授权边界。Agent 启动时会将精确匹配旧默认版本的 soul 和对应旧名称、角色、简介升级；用户改写过的 soul 或自定义元数据不会被覆盖。
 
+## Fork 当前 Session
+
+在当前 Session 的侧栏菜单选择 **Fork 当前会话**，或点击 conversation 右上角的 **Fork**。无需填写创建弹窗，完成后自动打开同一 Agent 上的新 Session。
+
+Fork 保留完整持久对话、公告、VP roster/default VP、工作目录和 Session model/effort 配置。原 Session 属于 Project 时，Server 会将新 Session 放入同一 Project，继续使用统一 instruction。原 Session 不变，之后两边的对话和 Session 配置修改彼此独立。
+
+正在生成回复时需等待结束；断线或 Fork 进行中时入口禁用。Fork 不复制后台进程、运行任务、debug trace 或 Session memory 文件；附件引用保持原所有权。Project 继承要求 Server 和 Agent 均支持此能力。
+
 ## 路由一个 turn
 
 没有 mention 的消息发送给 default VP。用 `@VPName` 指定子集：

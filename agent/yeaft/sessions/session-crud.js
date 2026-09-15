@@ -601,8 +601,8 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
 
 /**
  * Create an independent Session from an existing Session's durable state.
- * Project membership and server-owned asset storage intentionally remain with
- * their existing owners; message payloads and their references are preserved.
+ * The Server inherits Project membership when it receives the copy result.
+ * Server-owned assets retain their original ownership; message references are preserved.
  */
 export function copySession(yeaftDir, sourceSessionId, options = {}) {
   const sourceYeaftDir = resolveSessionYeaftDir(yeaftDir, sourceSessionId);

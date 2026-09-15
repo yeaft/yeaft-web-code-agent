@@ -6173,6 +6173,8 @@ describe('message flow regressions', () => {
   it('copies only the active Yeaft Session and opens the returned identity', async () => {
     storeFactories.clear();
     const store = useChatStore();
+    store.connectionState = 'connected';
+    store.agents = [{ id: 'agent-a', online: true }];
     store.sessionCrudRequest = vi.fn(async () => ({
       ok: true,
       op: 'copy',
@@ -6211,6 +6213,7 @@ describe('message flow regressions', () => {
       attachTo: document.body,
       props: {
         sessions: [row],
+        projectStore: store,
         activeRoute: row.routeRef,
         agents: [{ id: 'agent-a', name: 'Agent A', online: true }],
       },
@@ -6218,7 +6221,7 @@ describe('message flow regressions', () => {
     });
     await sidebar.get('.session-dots-btn').trigger('click');
     const menuItems = [...document.body.querySelectorAll('.session-menu-floating .session-menu-item')];
-    const copyAction = menuItems.find(item => item.textContent === 'yeaft.session.copyCurrent');
+    const copyAction = menuItems.find(item => item.textContent === 'yeaft.session.forkCurrent');
     expect(copyAction).toBeTruthy();
     copyAction.click();
     await Vue.nextTick();
@@ -6232,8 +6235,34 @@ describe('message flow regressions', () => {
     });
     await sidebar.get('.session-dots-btn').trigger('click');
     expect([...document.body.querySelectorAll('.session-menu-floating .session-menu-item')]
-      .some(item => item.textContent === 'yeaft.session.copyCurrent')).toBe(false);
+      .some(item => item.textContent === 'yeaft.session.forkCurrent')).toBe(false);
     sidebar.unmount();
+
+    // Both entry points share a pending guard, including errors and reconnect.
+    let finish;
+    store.sessionCrudRequest = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    store.openCatalogSession.mockClear();
+    const copying = store.copyCatalogSession(row);
+    expect(store.sessionForkPendingKey).toBe(row.catalogKey);
+    await expect(store.copyCatalogSession(row)).resolves.toMatchObject({ error: { code: 'fork_pending' } });
+    expect(store.sessionCrudRequest).toHaveBeenCalledTimes(1);
+    finish({ ok: false, error: { code: 'session_running' } });
+    await copying;
+    expect(store.sessionForkPendingKey).toBeNull();
+    expect(store.openCatalogSession).not.toHaveBeenCalled();
+    store.yeaftProcessingSessions = { 'agent-a\u001fsource-session': true };
+    await expect(store.copyCatalogSession(row)).resolves.toMatchObject({ error: { code: 'session_running' } });
+    store.yeaftProcessingSessions = {};
+    store.connectionState = 'reconnecting';
+    await expect(store.copyCatalogSession(row)).resolves.toMatchObject({ error: { code: 'agent_offline' } });
+    store.connectionState = 'connected';
+    store.sessionCrudRequest.mockRejectedValueOnce(new Error('disconnected'));
+    await expect(store.copyCatalogSession(row)).resolves.toMatchObject({ ok: false, error: { message: 'disconnected' } });
+    expect(store.sessionForkPendingKey).toBeNull();
+
+    sessions.applyCrudResult({ ok: true, op: 'copy', session: { id: 'other-tab-fork', name: 'Other tab' } }, 'agent-a', { activate: false });
+    expect(sessions.sessionById('other-tab-fork', 'agent-a')).toBeTruthy();
+    expect(sessions.activeSessionKey).toBe('agent-a\u001fcopied-session');
   });
 
   it('refreshes repeated catalog clicks without clearing cached Session messages', () => {
