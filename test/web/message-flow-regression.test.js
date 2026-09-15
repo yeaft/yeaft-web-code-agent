@@ -6423,6 +6423,11 @@ describe('message flow regressions', () => {
       { agentId: 'agent-b', timeoutMs: 60_000 },
     );
     const [copyRequest, renameRequest] = store.sendWsMessage.mock.calls.slice(-2).map(call => call[0]);
+    store._hasHandledAgentList = false;
+    handleMessage(store, { type: 'agent_list', agents: [{ id: 'agent-b', online: true }] });
+    expect(store._sessionCrudPending.has(copyRequest.requestId)).toBe(true);
+    store.agents = [{ id: 'agent-a', online: true }, { id: 'agent-b', online: true }];
+    store._hasHandledAgentList = true;
     handleMessage(store, { type: 'agent_list', agents: [{ id: 'agent-b', online: true }] });
     await expect(agentDropCopy).resolves.toMatchObject({
       ok: false,

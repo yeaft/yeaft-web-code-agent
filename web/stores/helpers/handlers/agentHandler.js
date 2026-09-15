@@ -82,6 +82,7 @@ export function restoreLastViewedConversation(store, agentSetup) {
 export function handleAgentList(store, msg) {
   const previousAgents = Array.isArray(store.agents) ? store.agents : [];
   const nextAgents = Array.isArray(msg.agents) ? msg.agents : [];
+  const hadAgentList = store._hasHandledAgentList === true;
   const previouslyOnlineAgentIds = new Set(
     previousAgents.filter(agent => agent?.id && agent.online).map(agent => agent.id),
   );
@@ -92,7 +93,9 @@ export function handleAgentList(store, msg) {
   // drops. Settle requests owned by that Agent on the online→offline edge so a
   // durable copy cannot leave its source Composer locked forever. Cold-start
   // absences and requests for other online Agents are intentionally untouched.
-  for (const [requestId, pending] of store._sessionCrudPending?.entries?.() || []) {
+  for (const [requestId, pending] of hadAgentList
+    ? (store._sessionCrudPending?.entries?.() || [])
+    : []) {
     if (!pending?.agentId
         || !previouslyOnlineAgentIds.has(pending.agentId)
         || nextOnlineAgentIds.has(pending.agentId)) continue;
@@ -103,7 +106,6 @@ export function handleAgentList(store, msg) {
     });
     store._sessionCrudPending.delete(requestId);
   }
-  const hadAgentList = store._hasHandledAgentList === true;
   const previousCurrentAgentId = store.currentAgent || null;
   const previousCurrentAgentOnline = !!(previousCurrentAgentId
     && previousAgents.some(a => a && a.id === previousCurrentAgentId && a.online));
