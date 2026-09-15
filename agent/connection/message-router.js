@@ -26,7 +26,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { sendAgentMetricsSnapshot } from '../metrics.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
-import { getLlmConfig, updateLlmConfig, getYeaftSettings, updateYeaftSettings, getPluginConfig, updatePluginConfig, getTelemetrySettings, updateTelemetrySettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../yeaft/config-api.js';
+import { getLlmConfig, updateLlmConfig, getYeaftSettings, updateYeaftSettings, getPluginConfig, updatePluginConfig, getTelemetrySettings, updateTelemetrySettings, getWorkCenterFeatureSettings, updateWorkCenterFeatureSettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../yeaft/config-api.js';
 import { loadConfig } from '../yeaft/config.js';
 import { mutateAgentConfig } from '../yeaft/config-store.js';
 import { discoverLlmModels } from '../llm-model-discovery.js';
@@ -94,6 +94,68 @@ export function applyRegisteredTransport(msg) {
     ctx.serverEncryptionRequired = false;
     console.log('[WS] Server accepts plaintext, disabling outbound encryption');
   }
+}
+
+let workCenterFeatureTransition = Promise.resolve();
+
+export async function applyWorkCenterFeatureUpdate(msg, dependencies = {}) {
+  const run = async () => {
+    const update = dependencies.updateWorkCenterFeatureSettings || updateWorkCenterFeatureSettings;
+    const getSettings = dependencies.getWorkCenterFeatureSettings || getWorkCenterFeatureSettings;
+    const bridge = dependencies.bridge || await import('../yeaft/work-center/bridge.js');
+    const refreshCapabilities = dependencies.refreshAgentCapabilities || ctx.refreshAgentCapabilities;
+    const yeaftDir = dependencies.yeaftDir ?? ctx.CONFIG?.yeaftDir;
+    // Read inside the transition queue so the previous request is observable.
+    const previous = getSettings(yeaftDir);
+    const persisted = update(msg.settings || {}, yeaftDir);
+    if (persisted.error) return { ...persisted, persisted: false, effective: previous.enabled === true };
+
+    bridge.setWorkCenterFeatureEnabled(persisted.enabled);
+    try {
+      if (persisted.enabled) await bridge.bootWorkCenter();
+      else await bridge.shutdownWorkCenter();
+      if (ctx.CONFIG) ctx.CONFIG.workCenterEnabled = persisted.enabled;
+      ctx.workCenterStartupError = null;
+      await refreshCapabilities?.();
+      return {
+        ...persisted,
+        persisted: true,
+        effective: persisted.enabled,
+        sessionTools: persisted.enabled ? 'new_sessions_only' : 'disabled_immediately',
+      };
+    } catch (error) {
+      const rollback = previous.error ? previous : update({ enabled: previous.enabled === true }, yeaftDir);
+      const restored = !rollback.error;
+      let rollbackRuntimeError = null;
+      if (restored) {
+        bridge.setWorkCenterFeatureEnabled(previous.enabled === true);
+        try {
+          if (previous.enabled === true) await bridge.bootWorkCenter();
+          else await bridge.shutdownWorkCenter();
+        } catch (rollbackError) {
+          rollbackRuntimeError = rollbackError?.message || String(rollbackError);
+          bridge.setWorkCenterFeatureEnabled(false);
+        }
+        if (ctx.CONFIG) ctx.CONFIG.workCenterEnabled = previous.enabled === true && !rollbackRuntimeError;
+        try { await refreshCapabilities?.(); } catch { /* original transition error remains authoritative */ }
+      } else {
+        bridge.setWorkCenterFeatureEnabled(false);
+        if (ctx.CONFIG) ctx.CONFIG.workCenterEnabled = false;
+      }
+      const effective = restored && !rollbackRuntimeError ? previous.enabled === true : false;
+      return {
+        ...persisted,
+        enabled: restored ? previous.enabled === true : persisted.enabled,
+        error: `Failed to apply Work Center runtime transition: ${error?.message || error}${rollbackRuntimeError ? `; rollback runtime failed: ${rollbackRuntimeError}` : ''}`,
+        persisted: !restored,
+        effective,
+        rolledBack: restored && !rollbackRuntimeError,
+      };
+    }
+  };
+  const result = workCenterFeatureTransition.then(run, run);
+  workCenterFeatureTransition = result.catch(() => {});
+  return result;
 }
 
 export async function handleMessage(msg) {
@@ -529,6 +591,28 @@ export async function handleMessage(msg) {
         }
       }
       sendToServer({ type: 'telemetry_settings_updated', requestId: msg.requestId, clientId: msg.clientId, ...result });
+      break;
+    }
+
+
+    case 'get_work_center_feature_settings': {
+      const settings = getWorkCenterFeatureSettings(ctx.CONFIG?.yeaftDir);
+      sendToServer({
+        type: 'work_center_feature_settings', requestId: msg.requestId, clientId: msg.clientId, ...settings,
+        effective: ctx.CONFIG?.workCenterEnabled === true,
+        ...(ctx.workCenterStartupError ? { runtimeError: ctx.workCenterStartupError } : {}),
+      });
+      break;
+    }
+
+    case 'update_work_center_feature_settings': {
+      let result;
+      try {
+        result = await applyWorkCenterFeatureUpdate(msg);
+      } catch (error) {
+        result = { error: `Failed to apply Work Center setting: ${error?.message || error}`, persisted: false, effective: ctx.CONFIG?.workCenterEnabled === true };
+      }
+      sendToServer({ type: 'work_center_feature_settings_updated', requestId: msg.requestId, clientId: msg.clientId, ...result });
       break;
     }
 

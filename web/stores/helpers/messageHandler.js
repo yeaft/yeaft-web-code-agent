@@ -1325,6 +1325,40 @@ export function handleMessage(store, msg) {
       break;
     }
 
+
+    case 'work_center_feature_settings':
+    case 'work_center_feature_settings_updated': {
+      const operation = msg.type === 'work_center_feature_settings_updated' ? 'update' : 'load';
+      const pending = msg.requestId ? store._workCenterFeaturePending?.[msg.requestId] : null;
+      if (!pending || pending.agentId !== msg.agentId || pending.operation !== operation) break;
+      clearTimeout(pending.timer);
+      delete store._workCenterFeaturePending[msg.requestId];
+      const record = {
+        enabled: msg.enabled === true,
+        source: msg.source || 'config',
+        overridden: msg.overridden === true,
+        error: msg.error || null,
+        persisted: msg.persisted,
+        effective: msg.effective,
+        rolledBack: msg.rolledBack === true,
+        sessionTools: msg.sessionTools || null,
+        runtimeError: msg.runtimeError || null,
+        unsupported: msg.unsupported === true,
+        loaded: true,
+      };
+      if (store.workCenterFeatureRequestByAgent?.[pending.agentId] === msg.requestId) {
+        store.workCenterFeatureSettingsByAgent = { ...store.workCenterFeatureSettingsByAgent, [pending.agentId]: record };
+      }
+      if (record.error) {
+        const error = new Error(record.error);
+        error.settings = record;
+        pending.reject(error);
+      } else {
+        pending.resolve(record);
+      }
+      break;
+    }
+
     // Search settings — Search tab in YeaftSettings. The store's
     // `loadSearchSettings` / `updateSearchSettings` register one-shot
     // resolvers under `_searchPending`; we pop the matching resolver

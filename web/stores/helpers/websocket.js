@@ -278,6 +278,11 @@ export function connect(store) {
     store.yeaftSessionHydrateRequestId = null;
     store.yeaftSessionHydrateSlices = [];
     store.yeaftSessionHydrateError = null;
+    for (const pending of Object.values(store._workCenterFeaturePending || {})) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error('WebSocket disconnected'));
+    }
+    store._workCenterFeaturePending = {};
     store.pendingAgentSelection = null;
     store.agentSwitching = false;
     const wasUpdating = store.connectionState === 'updating';

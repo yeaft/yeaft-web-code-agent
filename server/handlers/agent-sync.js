@@ -409,14 +409,20 @@ export async function handleAgentSync(agentId, agent, msg) {
     // Local telemetry settings relay. Only bounded config is forwarded;
     // trace payloads stay on the Agent.
     case 'telemetry_settings':
-    case 'telemetry_settings_updated': {
+    case 'telemetry_settings_updated':
+    case 'work_center_feature_settings':
+    case 'work_center_feature_settings_updated': {
       const operation = msg.type === 'yeaft_plugins_updated'
         ? 'plugins:update'
         : msg.type === 'yeaft_plugins'
           ? 'plugins:load'
           : msg.type === 'telemetry_settings_updated'
             ? 'telemetry:update'
-            : 'telemetry:load';
+            : msg.type === 'telemetry_settings'
+              ? 'telemetry:load'
+              : msg.type === 'work_center_feature_settings_updated'
+                ? 'work-center-feature:update'
+                : 'work-center-feature:load';
       await sendAgentSettingsReply(agentId, agent, operation, msg, { ...msg, agentId });
       break;
     }

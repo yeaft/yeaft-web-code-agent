@@ -19,6 +19,8 @@ import {
 // builds without this capability may still inherit the installed package cwd.
 export const SAFE_REMOTE_UPGRADE_CAPABILITY = 'remote_upgrade_safe';
 export const CONTAINER_AGENT_CAPABILITY = 'container_agent';
+export const WORK_CENTER_FEATURE_SETTINGS_CAPABILITY = 'work_center_feature_settings';
+export const WORK_CENTER_FEATURE_SETTINGS_UNSUPPORTED_ERROR = 'This Agent must be upgraded to manage Work Center settings.';
 export const CONTAINER_IMAGE_UPGRADE_REASON = 'container_image_upgrade_required';
 export { YEAFT_PLUGINS_CAPABILITY, YEAFT_PLUGINS_UNSUPPORTED_ERROR };
 
@@ -50,6 +52,19 @@ async function forwardRegisteredAgentRequest({ client, clientId, agentId, operat
   deleteAgentSettingsRequest({ agentId, requestId, clientId });
   await sendToWebClient(client, { type: responseType, agentId, requestId, error: 'Agent is unavailable.' });
   return false;
+}
+
+
+async function rejectUnsupportedWorkCenterFeatureSettings(client, msg, agentId) {
+  await sendToWebClient(client, {
+    type: msg.type === 'update_work_center_feature_settings'
+      ? 'work_center_feature_settings_updated'
+      : 'work_center_feature_settings',
+    agentId,
+    requestId: msg.requestId || null,
+    error: WORK_CENTER_FEATURE_SETTINGS_UNSUPPORTED_ERROR,
+    unsupported: true,
+  });
 }
 
 export function requiresManualUpgradeBridge(capabilities, platform = null) {
@@ -349,6 +364,31 @@ export async function handleClientMisc(clientId, client, msg, checkAgentAccess) 
       await forwardRegisteredAgentRequest({ client, clientId, agentId: a, operation: 'telemetry:update', requestId: msg.requestId,
         message: { type: 'update_telemetry_settings', requestId: msg.requestId, clientId, settings: msg.settings || msg.config || {} },
         responseType: 'telemetry_settings_updated' });
+      break;
+    }
+
+
+    case 'get_work_center_feature_settings': {
+      const a = msg.agentId || client.currentAgent;
+      if (!a || !await checkAgentAccess(a)) break;
+      if (!agents.get(a)?.capabilities?.includes(WORK_CENTER_FEATURE_SETTINGS_CAPABILITY)) {
+        await rejectUnsupportedWorkCenterFeatureSettings(client, msg, a);
+        break;
+      }
+      await forwardRegisteredAgentRequest({ client, clientId, agentId: a, operation: 'work-center-feature:load', requestId: msg.requestId,
+        message: { type: 'get_work_center_feature_settings', requestId: msg.requestId, clientId }, responseType: 'work_center_feature_settings' });
+      break;
+    }
+
+    case 'update_work_center_feature_settings': {
+      const a = msg.agentId || client.currentAgent;
+      if (!a || !await checkAgentAccess(a)) break;
+      if (!agents.get(a)?.capabilities?.includes(WORK_CENTER_FEATURE_SETTINGS_CAPABILITY)) {
+        await rejectUnsupportedWorkCenterFeatureSettings(client, msg, a);
+        break;
+      }
+      await forwardRegisteredAgentRequest({ client, clientId, agentId: a, operation: 'work-center-feature:update', requestId: msg.requestId,
+        message: { type: 'update_work_center_feature_settings', requestId: msg.requestId, clientId, settings: msg.settings || {} }, responseType: 'work_center_feature_settings_updated' });
       break;
     }
 
