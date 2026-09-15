@@ -72,6 +72,17 @@ describe('goal, cost and browser projection integration', () => {
     expect(wire.executionControl.stopReason).toBeNull();
   });
 
+  it('retains remaining counts and prioritizes unmet criteria beyond the projection limit', () => {
+    const criteria = Array.from({ length: 101 }, (_, index) => ({ criterion: `Condition ${index}`,
+      status: index === 100 ? 'unmet' : 'passed', evidenceRunIds: [] }));
+    const wire = projectWorkItemDetail({ id: 'many', actions: [], runs: [], goalProgress: {
+      criteria, completedCriteriaCount: 100, totalCriteriaCount: 101, blockers: [], delivery: {},
+    } });
+    expect(wire.goalProgress).toMatchObject({ completedCriteriaCount: 100, totalCriteriaCount: 101,
+      remainingCriteriaCount: 1, omittedCriteriaCount: 1, remainingCriteria: ['Condition 100'] });
+    expect(wire.goalProgress.criteria[0].criterion).toBe('Condition 100');
+  });
+
   it('bounds browser goal/response projection and preserves old-Agent fallback', () => {
     const legacy = projectWorkItemDetail({ id: 'legacy', revision: 1, acceptanceCriteria: [criterion], actions: [], runs: [] });
     expect(legacy.goalProgress).toBeNull();

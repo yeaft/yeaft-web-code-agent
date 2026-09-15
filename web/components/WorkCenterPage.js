@@ -1550,7 +1550,7 @@ export default {
                               <h3>{{ tr('workCenter.goalProgress', 'Goal progress') }}</h3>
                               <p class="work-center-goal-count" aria-live="polite">
                                 <strong>{{ $t('workCenter.criteriaProgress', { completed: goalProgress.completedCriteriaCount, total: goalProgress.totalCriteriaCount }) }}</strong>
-                                <span v-if="goalProgress.remainingCriteria?.length">{{ $t('workCenter.criteriaRemaining', { count: goalProgress.remainingCriteria.length }) }}</span>
+                                <span v-if="goalProgress.totalCriteriaCount > goalProgress.completedCriteriaCount">{{ $t('workCenter.criteriaRemaining', { count: goalProgress.totalCriteriaCount - goalProgress.completedCriteriaCount }) }}</span>
                                 <span v-else-if="goalProgress.totalCriteriaCount">{{ tr('workCenter.criteriaVerified', 'All criteria verified') }}</span>
                                 <span v-else>{{ tr('workCenter.criteriaPending', 'Acceptance criteria have not been defined yet') }}</span>
                               </p>
@@ -1566,6 +1566,7 @@ export default {
                                   </div>
                                 </li>
                               </ul>
+                              <p v-if="goalProgress.omittedCriteriaCount" class="work-center-muted">{{ $t('workCenter.criteriaOmitted', { count: goalProgress.omittedCriteriaCount }) }}</p>
                               <div v-if="goalProgress.blockers?.length" class="work-center-goal-blockers">
                                 <h3>{{ tr('workCenter.goalBlockers', 'Blockers') }}</h3>
                                 <ul><li v-for="blocker in goalProgress.blockers" :key="blocker.actionId"><strong>{{ statusLabel(blocker.status) }}</strong> · {{ blocker.reason || blocker.actionId }}</li></ul>

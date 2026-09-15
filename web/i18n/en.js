@@ -1887,6 +1887,7 @@ export default {
   'workCenter.goalProgress': 'Goal progress',
   'workCenter.criteriaProgress': '{completed} / {total} criteria verified',
   'workCenter.criteriaRemaining': '{count} remaining',
+  'workCenter.criteriaOmitted': '{count} more criteria omitted from this bounded view; totals include them.',
   'workCenter.criteriaVerified': 'All criteria verified',
   'workCenter.criteriaPending': 'Acceptance criteria have not been defined yet',
   'workCenter.goalStatus.passed': 'Verified',

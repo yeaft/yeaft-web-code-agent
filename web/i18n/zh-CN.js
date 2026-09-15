@@ -1884,6 +1884,7 @@ export default {
   'workCenter.goalProgress': '目标进度',
   'workCenter.criteriaProgress': '{completed} / {total} 项验收条件已验证',
   'workCenter.criteriaRemaining': '剩余 {count} 项',
+  'workCenter.criteriaOmitted': '此有界视图省略了 {count} 项条件，总数仍包含这些条件。',
   'workCenter.criteriaVerified': '所有验收条件已验证',
   'workCenter.criteriaPending': '尚未定义验收条件',
   'workCenter.goalStatus.passed': '已验证',

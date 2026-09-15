@@ -909,7 +909,9 @@ function workItemFailureReason(detail) {
 function projectGoalProgress(progress) {
   if (!progress || !Array.isArray(progress.criteria)) return null;
   const ids = value => Array.isArray(value) ? value.slice(0, 64).map(id => truncateUtf8(String(id), 256)) : [];
-  const criteria = progress.criteria.slice(0, 100).map(item => ({
+  const prioritized = [...progress.criteria.filter(item => item.status !== 'passed'),
+    ...progress.criteria.filter(item => item.status === 'passed')];
+  const criteria = prioritized.slice(0, 100).map(item => ({
     criterion: truncateUtf8(item.criterion || '', 1024),
     status: ['passed', 'failed'].includes(item.status) ? item.status : 'unmet',
     evidenceRunIds: ids(item.evidenceRunIds),
@@ -919,6 +921,8 @@ function projectGoalProgress(progress) {
     contractRevision: count(progress.contractRevision), criteria,
     completedCriteriaCount: count(progress.completedCriteriaCount),
     totalCriteriaCount: count(progress.totalCriteriaCount),
+    remainingCriteriaCount: Math.max(0, count(progress.totalCriteriaCount) - count(progress.completedCriteriaCount)),
+    omittedCriteriaCount: Math.max(0, progress.criteria.length - criteria.length),
     remainingCriteria: criteria.filter(item => item.status !== 'passed').map(item => item.criterion),
     evidenceRunIds: ids(progress.evidenceRunIds),
     blockers: (progress.blockers || []).slice(0, 64).map(blocker => ({

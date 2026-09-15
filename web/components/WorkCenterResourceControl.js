@@ -33,6 +33,7 @@ export default {
       error: '',
       notice: '',
       refreshRequired: false,
+      connectionGeneration: 0,
       active: true,
     };
   },
@@ -71,7 +72,12 @@ export default {
   watch: {
     online: {
       immediate: true,
-      handler(online) { if (!online) this.refreshRequired = true; },
+      handler(online) {
+        if (!online) {
+          this.connectionGeneration += 1;
+          this.refreshRequired = true;
+        }
+      },
     },
   },
   beforeUnmount() { this.active = false; },
@@ -91,6 +97,7 @@ export default {
       if (this.unavailable) return;
       const { id } = this.item;
       const agentId = this.agentId;
+      const connectionGeneration = this.connectionGeneration;
       this.pending = 'refresh';
       this.refreshRequired = true;
       this.formOpen = false;
@@ -98,7 +105,8 @@ export default {
       try {
         const detail = await this.store.getWorkItem(id, agentId);
         if (!this.active) return;
-        if (detail?.id !== id || !detail.executionControl || !this.online) return;
+        if (detail?.id !== id || !detail.executionControl || !this.online
+            || connectionGeneration !== this.connectionGeneration || agentId !== this.agentId || id !== this.item.id) return;
         this.refreshRequired = false;
         this.notice = this.$t('workCenter.resource.reconfirm');
       } catch (error) {
