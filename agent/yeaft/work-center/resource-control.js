@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { LLMAdapter } from '../llm/adapter.js';
 import { normalizeTokenUsage } from '../llm/usage-accounting.js';
 
@@ -46,7 +46,8 @@ export class WorkCenterResourceControl {
         work_item_id TEXT PRIMARY KEY REFERENCES work_items(id) ON DELETE CASCADE,
         limits_json TEXT NOT NULL, stop_reason TEXT, coordinator_failures INTEGER NOT NULL DEFAULT 0,
         retry_after INTEGER NOT NULL DEFAULT 0,
-        revision INTEGER NOT NULL DEFAULT 1, action_attempts_extension INTEGER NOT NULL DEFAULT 0
+        revision INTEGER NOT NULL DEFAULT 1, action_attempts_extension INTEGER NOT NULL DEFAULT 0,
+        data_revision INTEGER NOT NULL DEFAULT 1, projection_hash TEXT
       );
       CREATE TABLE IF NOT EXISTS work_item_action_attempt_limits (
         action_id TEXT PRIMARY KEY REFERENCES actions(id) ON DELETE CASCADE,
@@ -76,6 +77,8 @@ export class WorkCenterResourceControl {
       const columns = this.db.prepare('PRAGMA table_info(work_item_execution_controls)').all().map(row => row.name);
       if (!columns.includes('revision')) this.db.exec('ALTER TABLE work_item_execution_controls ADD COLUMN revision INTEGER NOT NULL DEFAULT 1');
       if (!columns.includes('action_attempts_extension')) this.db.exec('ALTER TABLE work_item_execution_controls ADD COLUMN action_attempts_extension INTEGER NOT NULL DEFAULT 0');
+      if (!columns.includes('data_revision')) this.db.exec('ALTER TABLE work_item_execution_controls ADD COLUMN data_revision INTEGER NOT NULL DEFAULT 1');
+      if (!columns.includes('projection_hash')) this.db.exec('ALTER TABLE work_item_execution_controls ADD COLUMN projection_hash TEXT');
       this.db.exec(`INSERT OR IGNORE INTO work_item_action_attempt_limits (action_id, original_max_attempts)
         SELECT id, MAX(0, max_attempts) FROM actions`);
       // Snapshot pre-ledger data once. Reopening never imports a Run twice.
@@ -129,10 +132,23 @@ export class WorkCenterResourceControl {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, workItemId, kind, runId, requests, estimate,
       status === 'reported' ? usage.totalTokens : Math.max(estimate, usage?.totalTokens || 0),
       usage ? JSON.stringify(usage) : null, status, this.store.now());
+    this.advanceDataRevision(workItemId);
+  }
+
+  advanceDataRevision(id) {
+    // Independent of the user-command CAS and goal revision. Null invalidates
+    // the projection fingerprint: this mutation already advanced its version.
+    this.db.prepare(`UPDATE work_item_execution_controls SET data_revision = data_revision + 1,
+      projection_hash = NULL WHERE work_item_id = ?`).run(id);
   }
 
   snapshot(id) {
+    return this.atomic(() => this.projectSnapshot(id));
+  }
+
+  projectSnapshot(id) {
     const control = this.ensure(id);
+    const now = this.store.now();
     const breakdown = { coordinator: emptyUsage(), actions: emptyUsage() };
     for (const row of this.db.prepare('SELECT * FROM work_item_resource_requests WHERE work_item_id = ?').all(id)) {
       const target = row.kind === 'coordinator' ? breakdown.coordinator : breakdown.actions;
@@ -144,7 +160,7 @@ export class WorkCenterResourceControl {
       if (row.status === 'unknown') target.unknownRequests += row.request_count;
       if (row.status === 'reserved') {
         const live = row.run_id
-          ? this.db.prepare("SELECT 1 FROM runs WHERE id = ? AND status = 'running' AND expires_at > ?").get(row.run_id, this.store.now())
+          ? this.db.prepare("SELECT 1 FROM runs WHERE id = ? AND status = 'running' AND expires_at > ?").get(row.run_id, now)
           : this.db.prepare("SELECT 1 FROM coordinator_provider_turns WHERE id = ? AND status = 'dispatching'").get(row.id.split(':retry:')[0]);
         if (live) target.inFlightRequests += row.request_count;
         else target.unknownRequests += row.request_count;
@@ -156,15 +172,25 @@ export class WorkCenterResourceControl {
     const actionAttempts = this.db.prepare(`SELECT a.id, l.original_max_attempts,
       (SELECT COUNT(*) FROM runs r WHERE r.action_id = a.id) AS attempts
       FROM actions a JOIN work_item_action_attempt_limits l ON l.action_id = a.id
-      WHERE a.work_item_id = ? ORDER BY a.sequence`).all(id).map(row => ({
+      WHERE a.work_item_id = ? ORDER BY a.sequence, a.id`).all(id).map(row => ({
       actionId: row.id, attempts: row.attempts, originalMaxAttempts: row.original_max_attempts,
       effectiveMaxAttempts: Math.min(row.original_max_attempts + control.action_attempts_extension, limits.maxActionAttempts),
     }));
-    return { revision: control.revision, limits, usage,
+    const snapshot = { revision: control.revision, limits, usage,
       actionAttemptsExtension: control.action_attempts_extension, actionAttempts,
       stopReason: parse(control.stop_reason, null), breakdown,
       coordinatorFailures: control.coordinator_failures, retryAfter: control.retry_after,
       tokenAccounting: 'estimated_admission_reported_usage_unknown_retained' };
+    // Attempts and in-flight/unknown classification are derived from other
+    // ledgers (and lease expiry). Version each observed change durably under the
+    // same write transaction, including changes without a reserve or settle.
+    const hash = createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
+    const dataRevision = control.data_revision + (control.projection_hash != null && control.projection_hash !== hash ? 1 : 0);
+    if (control.projection_hash !== hash) {
+      this.db.prepare('UPDATE work_item_execution_controls SET data_revision = ?, projection_hash = ? WHERE work_item_id = ?')
+        .run(dataRevision, hash, id);
+    }
+    return { ...snapshot, dataRevision };
   }
 
   stopped(id) {
@@ -178,6 +204,7 @@ export class WorkCenterResourceControl {
       const changed = this.db.prepare(`UPDATE work_item_execution_controls SET stop_reason = ?, revision = revision + 1
         WHERE work_item_id = ? AND stop_reason IS NULL`).run(JSON.stringify(reason), id);
       if (changed.changes) {
+        this.advanceDataRevision(id);
         this.db.prepare(`UPDATE work_items SET status = CASE WHEN status = 'cancelled' THEN status ELSE 'needs_attention' END,
           updated_at = ? WHERE id = ?`).run(this.store.now(), id);
         this.store.appendEvent(id, 'work_item.execution_stopped', reason);
@@ -217,6 +244,7 @@ export class WorkCenterResourceControl {
       const charged = reported ? usage.totalTokens : Math.max(row.estimated_tokens, usage?.totalTokens || 0);
       this.db.prepare(`UPDATE work_item_resource_requests SET usage_json = ?, charged_tokens = ?, status = ? WHERE id = ?`)
         .run(usage ? JSON.stringify(usage) : row.usage_json, charged, reported ? 'reported' : 'unknown', id);
+      this.advanceDataRevision(row.work_item_id);
       const snapshot = this.snapshot(row.work_item_id);
       if (snapshot.usage.chargedTokens > snapshot.limits.maxTokens) this.stop(row.work_item_id, 'work_item_tokens_exhausted');
       return true;
@@ -242,13 +270,16 @@ export class WorkCenterResourceControl {
   }
 
   coordinatorFailed(id, turnId) {
-    const snapshot = this.snapshot(id);
-    const failures = snapshot.coordinatorFailures + 1;
-    this.db.prepare(`UPDATE work_item_execution_controls SET coordinator_failures = ?, retry_after = ? WHERE work_item_id = ?`)
-      .run(failures, this.store.now() + Math.min(1_000 * (2 ** Math.min(failures - 1, 8)), 300_000), id);
-    if (failures >= snapshot.limits.maxCoordinatorFailures) {
-      this.stop(id, 'coordinator_failures_exhausted', { turnId, failures });
-    }
+    return this.atomic(() => {
+      const snapshot = this.snapshot(id);
+      const failures = snapshot.coordinatorFailures + 1;
+      this.db.prepare(`UPDATE work_item_execution_controls SET coordinator_failures = ?, retry_after = ? WHERE work_item_id = ?`)
+        .run(failures, this.store.now() + Math.min(1_000 * (2 ** Math.min(failures - 1, 8)), 300_000), id);
+      this.advanceDataRevision(id);
+      if (failures >= snapshot.limits.maxCoordinatorFailures) {
+        this.stop(id, 'coordinator_failures_exhausted', { turnId, failures });
+      }
+    });
   }
 
   /** Only an authenticated user command may call this; no model/tool path. */
@@ -268,6 +299,7 @@ export class WorkCenterResourceControl {
       this.db.prepare(`UPDATE work_item_execution_controls SET limits_json = ?, revision = revision + 1,
         action_attempts_extension = action_attempts_extension + ? WHERE work_item_id = ? AND revision = ?`)
         .run(JSON.stringify(limits), additions.maxActionAttempts || 0, id, revision);
+      this.advanceDataRevision(id);
       this.db.prepare('UPDATE work_items SET updated_at = ? WHERE id = ?').run(this.store.now(), id);
       this.store.appendEvent(id, 'work_item.execution_budget_extended', { additions, limits });
       return this.store.getWorkItemDetail(id);
@@ -293,7 +325,7 @@ export class WorkCenterResourceControl {
       if (action && !this.canAttempt(action)) throw new Error('Extend maxActionAttempts before resuming');
     }
     this.db.prepare(`UPDATE work_item_execution_controls SET stop_reason = NULL, retry_after = 0,
-      revision = revision + 1 WHERE work_item_id = ?`).run(id);
+      revision = revision + 1, data_revision = data_revision + 1, projection_hash = NULL WHERE work_item_id = ?`).run(id);
   }
 }
 

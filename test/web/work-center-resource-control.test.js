@@ -3,7 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils';
 import { reactive } from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ResourceControl, { budgetAdditions } from '../../web/components/WorkCenterResourceControl.js';
-import { isWorkItemDetailStale, mergeWorkItemSummary } from '../../web/stores/helpers/work-center.js';
+import { applyWorkItemSummary, isWorkItemDetailStale, mergeWorkItemDetail, mergeWorkItemSummary } from '../../web/stores/helpers/work-center.js';
 import en from '../../web/i18n/en.js';
 import zh from '../../web/i18n/zh-CN.js';
 
@@ -40,6 +40,17 @@ function setup(locale = en) {
   return { item, store };
 }
 const button = text => wrapper.findAll('button').find(node => node.text() === text);
+
+function resourceSnapshot(dataRevision, requests, chargedTokens, progressRevision = 5) {
+  const action = { id: 'action', generation: 1, attempt: 1, progressRevision, status: 'running' };
+  const resourceUsage = { ...usage, llmRequestCount: requests, chargedTokens, reservedTokens: chargedTokens };
+  return {
+    ...itemFixture(), updatedAt: 10, coordinatorRevision: 2, status: 'running',
+    actions: [action], actionStats: [action],
+    executionControl: { ...itemFixture().executionControl, dataRevision, usage: resourceUsage,
+      breakdown: { coordinator: { llmRequestCount: 0 }, actions: resourceUsage }, stopReason: null },
+  };
+}
 
 describe('Work Center resource control', () => {
   it('accepts only nonempty positive safe integer additions for all five limits', () => {
@@ -193,6 +204,75 @@ describe('Work Center resource control', () => {
   });
 });
 
+describe('independently ordered Work Center resource snapshots', () => {
+  it('rejects delayed reservations and accepts lower-cost settlement at identical control/goal/Action/time revisions', () => {
+    const two = resourceSnapshot(12, 2, 200);
+    const three = resourceSnapshot(13, 3, 300);
+    const settled = resourceSnapshot(14, 3, 207);
+    settled.executionControl.usage.reservedTokens = 200;
+    settled.executionControl.usage.totalTokens = 7;
+    for (const merge of [mergeWorkItemSummary, mergeWorkItemDetail, (current, incoming) => applyWorkItemSummary([current], incoming)[0]]) {
+      let current = merge(two, three);
+      expect(current.executionControl).toEqual(three.executionControl);
+      current = merge(current, two);
+      expect(current.executionControl).toEqual(three.executionControl);
+      current = merge(current, settled);
+      expect(current.executionControl).toEqual(settled.executionControl);
+      current = merge(current, three);
+      expect(current.executionControl).toEqual(settled.executionControl);
+    }
+    expect(isWorkItemDetailStale(two, three)).toBe(true);
+    expect(isWorkItemDetailStale(three, settled)).toBe(true);
+    expect(isWorkItemDetailStale(settled, three)).toBe(false);
+  });
+
+  it('preserves an execution stop against an older same-time/same-progress snapshot', () => {
+    const running = resourceSnapshot(12, 2, 200);
+    const stopped = resourceSnapshot(13, 2, 200);
+    stopped.status = 'needs_attention';
+    stopped.executionControl = { ...stopped.executionControl, revision: 8,
+      stopReason: { code: 'run_requests_exhausted', at: 10 } };
+    for (const merge of [mergeWorkItemSummary, mergeWorkItemDetail, (current, incoming) => applyWorkItemSummary([current], incoming)[0]]) {
+      expect(merge(stopped, running).status).toBe('needs_attention');
+      expect(merge(running, stopped).status).toBe('needs_attention');
+      expect(merge(stopped, running).executionControl).toEqual(stopped.executionControl);
+    }
+  });
+
+  it('merges resource and Action versions independently in both directions', () => {
+    const actionNewer = resourceSnapshot(12, 2, 200, 6);
+    const resourceNewer = resourceSnapshot(13, 3, 300, 5);
+    for (const merge of [mergeWorkItemSummary, mergeWorkItemDetail, (current, incoming) => applyWorkItemSummary([current], incoming)[0]]) {
+      const freshUsage = merge(actionNewer, resourceNewer);
+      expect(freshUsage.executionControl).toEqual(resourceNewer.executionControl);
+      expect((freshUsage.actionStats || freshUsage.actions)[0].progressRevision).toBe(6);
+      const freshAction = merge(resourceNewer, actionNewer);
+      expect(freshAction.executionControl).toEqual(resourceNewer.executionControl);
+      expect((freshAction.actions || freshAction.actionStats)[0].progressRevision).toBe(6);
+      const olderState = { ...resourceSnapshot(14, 3, 207), revision: 3, updatedAt: 5 };
+      const settled = merge(freshAction, olderState);
+      expect(settled.executionControl).toEqual(olderState.executionControl);
+      expect(settled.revision).toBe(4);
+      expect(settled.updatedAt).toBe(10);
+    }
+  });
+
+  it('keeps legacy Agents compatible and does not let unversioned details erase known versioned usage', () => {
+    const versioned = resourceSnapshot(13, 3, 300);
+    const legacy = resourceSnapshot(undefined, 2, 200, 6);
+    legacy.executionControl.revision = 8;
+    for (const merge of [mergeWorkItemSummary, mergeWorkItemDetail, (current, incoming) => applyWorkItemSummary([current], incoming)[0]]) {
+      expect(merge(versioned, legacy).executionControl).toEqual(versioned.executionControl);
+      expect(merge(legacy, versioned).executionControl).toEqual(versioned.executionControl);
+    }
+    expect(isWorkItemDetailStale(legacy, versioned)).toBe(true);
+    const old = resourceSnapshot(undefined, 2, 200);
+    const settled = resourceSnapshot(undefined, 2, 107);
+    expect(mergeWorkItemSummary(old, settled).executionControl.usage.chargedTokens).toBe(107);
+    expect(applyWorkItemSummary([old], settled)[0].executionControl.usage.chargedTokens).toBe(107);
+  });
+});
+
 describe('Work Center resource store wire and scope', () => {
   function context() {
     const state = { currentAgent: 'agent-b', workCenterAgentId: 'agent-b', _workCenterListFiltersByAgent: {},
@@ -213,6 +293,64 @@ describe('Work Center resource store wire and scope', () => {
     await store.resumeWorkItem('item', 4, 'agent-a');
     expect(store.workCenterRequest).toHaveBeenLastCalledWith('resume', { id: 'item', revision: 4 }, 'agent-a');
   });
+  it('fences late full detail usage while still accepting lower-cost settlements and independent Action updates', async () => {
+    const store = context();
+    store.getWorkItem = actions.getWorkItem.bind(store);
+    const three = resourceSnapshot(13, 3, 300);
+    store.workCenterDetailByAgent['agent-a'] = three;
+    store.workCenterRequest.mockResolvedValueOnce(resourceSnapshot(12, 2, 200));
+    await store.getWorkItem('item', 'agent-a');
+    expect(store.workCenterDetailByAgent['agent-a'].executionControl).toEqual(three.executionControl);
+    const settled = resourceSnapshot(14, 3, 207);
+    store.workCenterRequest.mockResolvedValueOnce(settled);
+    await store.getWorkItem('item', 'agent-a');
+    expect(store.workCenterDetailByAgent['agent-a'].executionControl).toEqual(settled.executionControl);
+    store.workCenterRequest.mockResolvedValueOnce(three);
+    await store.getWorkItem('item', 'agent-a');
+    expect(store.workCenterDetailByAgent['agent-a'].executionControl).toEqual(settled.executionControl);
+    store.workCenterRequest.mockResolvedValueOnce(resourceSnapshot(undefined, 2, 200, 6));
+    await store.getWorkItem('item', 'agent-a');
+    expect(store.workCenterDetailByAgent['agent-a'].executionControl).toEqual(settled.executionControl);
+    expect(store.workCenterDetailByAgent['agent-a'].actions[0].progressRevision).toBe(6);
+    const newerUsageOldAction = resourceSnapshot(15, 3, 107, 5);
+    store.workCenterRequest.mockResolvedValueOnce(newerUsageOldAction);
+    await store.getWorkItem('item', 'agent-a');
+    expect(store.workCenterDetailByAgent['agent-a'].executionControl).toEqual(newerUsageOldAction.executionControl);
+    expect(store.workCenterDetailByAgent['agent-a'].actions[0].progressRevision).toBe(6);
+  });
+
+  it.each(['current rows', 'cached event outside current query'])('fences old list pages against %s, including events preceding the request', async source => {
+    const store = { ...stores.chat.state(), currentAgent: 'agent-a', workCenterAgentId: 'agent-a',
+      workItemDeleted: () => false, workCenterRequest: vi.fn(),
+    };
+    for (const key of ['listWorkItems', 'loadMoreWorkItems', 'workItemMatchesBoardQuery', 'applyWorkItemBoardSummary']) {
+      store[key] = actions[key].bind(store);
+    }
+    const two = resourceSnapshot(12, 2, 200);
+    const three = resourceSnapshot(13, 3, 300);
+    if (source === 'current rows') store.workCenterItemsByAgent['agent-a'] = [three];
+    else {
+      store._workCenterListEventGenerationByAgent['agent-a'] = 1;
+      store._workCenterListEventsByAgent['agent-a'] = { item: { summary: three, generation: 1, queryKey: 'another-query' } };
+    }
+    store.workCenterRequest.mockResolvedValueOnce({ items: [two], nextCursor: 'page2' });
+    await store.listWorkItems('agent-a');
+    expect(store.workCenterItemsByAgent['agent-a'][0].executionControl).toEqual(three.executionControl);
+    const settled = resourceSnapshot(14, 3, 207);
+    store.workCenterRequest.mockResolvedValueOnce({ items: [settled], nextCursor: 'page2' });
+    await store.listWorkItems('agent-a');
+    expect(store.workCenterItemsByAgent['agent-a'][0].executionControl).toEqual(settled.executionControl);
+    store.workCenterRequest.mockResolvedValueOnce({ items: [three], nextCursor: 'page3' });
+    await store.loadMoreWorkItems('agent-a');
+    expect(store.workCenterItemsByAgent['agent-a'][0].executionControl).toEqual(settled.executionControl);
+    // A cached off-page event must also fence a previously unseen old row.
+    store.workCenterItemsByAgent['agent-a'] = [];
+    store._workCenterListEventsByAgent['agent-a'] = { item: { summary: settled, generation: 1, queryKey: 'another-query' } };
+    store.workCenterRequest.mockResolvedValueOnce({ items: [three] });
+    await store.loadMoreWorkItems('agent-a');
+    expect(store.workCenterItemsByAgent['agent-a'][0].executionControl).toEqual(settled.executionControl);
+  });
+
   it('does not overwrite a newer detail selection when extension completes late', async () => {
     const store = context();
     let resolve;

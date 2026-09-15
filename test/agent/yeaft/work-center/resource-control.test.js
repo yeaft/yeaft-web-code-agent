@@ -50,6 +50,113 @@ afterEach(() => {
 });
 
 describe('Work Center persistent resource control', () => {
+  it('durably versions reservations and lower-cost settlements independently of management CAS, goal and Action progress', () => {
+    const { store, item, path } = fixture();
+    const { run } = store.claimReadyAction('runner');
+    const before = store.getWorkItemDetail(item.id);
+    const request = { workItemId: item.id, kind: 'action', runId: run.id, request: { maxTokens: 100 } };
+    const first = store.reserveWorkItemRequest(request);
+    const second = store.reserveWorkItemRequest(request);
+    const two = store.getWorkItemDetail(item.id);
+    const third = store.reserveWorkItemRequest(request);
+    const three = store.getWorkItemDetail(item.id);
+    expect(two.executionControl.usage.llmRequestCount).toBe(2);
+    expect(three.executionControl.usage.llmRequestCount).toBe(3);
+    expect(three.executionControl.dataRevision).toBeGreaterThan(two.executionControl.dataRevision);
+    expect(three.executionControl.revision).toBe(before.executionControl.revision);
+    expect(three.revision).toBe(before.revision);
+    expect(three.updatedAt).toBe(before.updatedAt);
+    expect(three.actions).toEqual(before.actions);
+    store.settleWorkItemRequest(third.id, { totalTokens: 7 });
+    const settled = store.getExecutionControl(item.id);
+    expect(settled.usage.llmRequestCount).toBe(3);
+    expect(settled.usage.chargedTokens).toBeLessThan(three.executionControl.usage.chargedTokens);
+    expect(settled.dataRevision).toBeGreaterThan(three.executionControl.dataRevision);
+    expect(settled.revision).toBe(before.executionControl.revision);
+    expect(store.reserveWorkItemRequest({ ...request, id: first.id }).allowed).toBe(false);
+    expect(store.settleWorkItemRequest(third.id, { totalTokens: 99 })).toBe(false);
+    expect(store.getExecutionControl(item.id)).toEqual(settled);
+    const reopened = new WorkItemStore(path, { now: () => 1_000 });
+    try {
+      expect(reopened.getExecutionControl(item.id)).toEqual(settled);
+      reopened.settleWorkItemRequest(second.id, null, false);
+      const unknown = store.getExecutionControl(item.id);
+      expect(unknown.dataRevision).toBeGreaterThan(settled.dataRevision);
+      expect(unknown.usage.unknownRequests).toBe(1);
+      expect(unknown.revision).toBe(settled.revision);
+    } finally { reopened.close(); }
+  });
+
+  it('versions derived attempt and in-flight/unknown transitions, including lease expiry and Coordinator dispatch state', () => {
+    const { store, item, advance, path } = fixture();
+    const before = store.getExecutionControl(item.id);
+    const { run } = store.claimReadyAction('runner', 5_000);
+    const attempted = store.getExecutionControl(item.id);
+    expect(attempted.dataRevision).toBeGreaterThan(before.dataRevision);
+    const reservation = store.reserveWorkItemRequest({ workItemId: item.id, kind: 'action', runId: run.id, request: { maxTokens: 100 } });
+    const live = store.getExecutionControl(item.id);
+    expect(live.usage.inFlightRequests).toBe(1);
+    advance();
+    const expired = store.getExecutionControl(item.id);
+    expect(expired.dataRevision).toBeGreaterThan(live.dataRevision);
+    expect(expired.revision).toBe(live.revision);
+    expect(expired.usage).toMatchObject({ inFlightRequests: 0, unknownRequests: 1 });
+    const reopened = new WorkItemStore(path, { now: () => 11_000 });
+    try { expect(reopened.getExecutionControl(item.id)).toEqual(expired); } finally { reopened.close(); }
+    // A late confirmed response is a newer projection even though its charge falls.
+    store.settleWorkItemRequest(reservation.id, { totalTokens: 5 });
+    expect(store.getExecutionControl(item.id).dataRevision).toBeGreaterThan(expired.dataRevision);
+    const started = coordinatorTurn(store, item.id);
+    const turn = store.prepareCoordinatorProviderTurn(item.id, started.turnId, 1, { maxTokens: 100 }, started.fence.claim);
+    store.dispatchCoordinatorProviderTurn(turn.id, started.fence.claim);
+    const dispatching = store.getExecutionControl(item.id);
+    expect(dispatching.usage.inFlightRequests).toBe(1);
+    store.db.prepare("UPDATE coordinator_provider_turns SET status = 'unknown' WHERE id = ?").run(turn.id);
+    const unknown = store.getExecutionControl(item.id);
+    expect(unknown.usage).toMatchObject({ inFlightRequests: 0, unknownRequests: 1 });
+    expect(unknown.dataRevision).toBeGreaterThan(dispatching.dataRevision);
+  });
+
+  it('advances projection versions on control changes without conflating failure usage with management CAS', () => {
+    const { store, item } = fixture();
+    const before = store.getExecutionControl(item.id);
+    store.resourceControl.coordinatorFailed(item.id, 'failed-turn');
+    const failed = store.getExecutionControl(item.id);
+    expect(failed.dataRevision).toBeGreaterThan(before.dataRevision);
+    expect(failed.revision).toBe(before.revision);
+    store.stopExecution(item.id, 'run_requests_exhausted');
+    const stopped = store.getExecutionControl(item.id);
+    expect(stopped.dataRevision).toBeGreaterThan(failed.dataRevision);
+    const extended = store.extendExecutionBudget(item.id, stopped.revision, { maxRequests: 1 }).executionControl;
+    expect(extended.dataRevision).toBeGreaterThan(stopped.dataRevision);
+    store.resourceControl.resume(item.id, extended.revision);
+    const resumed = store.getExecutionControl(item.id);
+    expect(resumed.dataRevision).toBeGreaterThan(extended.dataRevision);
+    expect(resumed.stopReason).toBeNull();
+    expect(store.getWorkItem(item.id).revision).toBe(item.revision);
+  });
+
+  it('additively upgrades the existing resource ledger without reimporting requests or changing CAS/goal revisions', () => {
+    const { store, item, path } = fixture();
+    const { run } = store.claimReadyAction('runner');
+    const request = store.reserveWorkItemRequest({ workItemId: item.id, kind: 'action', runId: run.id, request: { maxTokens: 100 } });
+    store.settleWorkItemRequest(request.id, { totalTokens: 7 });
+    const { dataRevision, ...before } = store.getExecutionControl(item.id);
+    const goalRevision = store.getWorkItem(item.id).revision;
+    store.db.exec('ALTER TABLE work_item_execution_controls DROP COLUMN data_revision; ALTER TABLE work_item_execution_controls DROP COLUMN projection_hash;');
+    store.close();
+    const migrated = new WorkItemStore(path, { now: () => 1_000 });
+    try {
+      const upgraded = migrated.getExecutionControl(item.id);
+      expect(upgraded).toEqual({ ...before, dataRevision: 1 });
+      expect(migrated.getWorkItem(item.id).revision).toBe(goalRevision);
+      const another = new WorkItemStore(path, { now: () => 1_000 });
+      try { expect(another.getExecutionControl(item.id)).toEqual(upgraded); } finally { another.close(); }
+      migrated.reserveWorkItemRequest({ workItemId: item.id, kind: 'action', runId: run.id, request: { maxTokens: 100 } });
+      expect(migrated.getExecutionControl(item.id)).toMatchObject({ dataRevision: 2, usage: { llmRequestCount: 2 } });
+    } finally { migrated.close(); }
+  });
+
   it('blocks real native stream and call entry points before mock fetch', async () => {
     const fetch = vi.fn(() => { throw new Error('No request may reach the transport'); });
     vi.stubGlobal('fetch', fetch);
