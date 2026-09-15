@@ -30,7 +30,7 @@ export default {
       if (this.copyState === 'copying') return this.$t('installer.copying');
       if (this.copyState === 'copied') return this.$t('common.copied');
       if (this.copyState === 'error') return this.$t('installer.copyFailed');
-      return this.$t('common.copy');
+      return this.$t('installer.copyCommand');
     },
     statusText() {
       if (this.loading) return this.$t('installer.secretLoading');
@@ -57,6 +57,7 @@ export default {
         this.copyState = 'copied';
       } catch {
         this.copyState = 'error';
+        if (this.$refs.commandDetails) this.$refs.commandDetails.open = true;
       }
       if (this.copyTimer) clearTimeout(this.copyTimer);
       this.copyTimer = setTimeout(() => { this.copyState = 'idle'; }, COPY_RESET_MS);
@@ -64,36 +65,41 @@ export default {
   },
   template: `
     <div class="agent-installer">
-      <div class="agent-installer-tabs" role="tablist" :aria-label="$t('installer.platformLabel')">
+      <div class="agent-installer-toolbar">
+        <div class="agent-installer-tabs" role="group" :aria-label="$t('installer.platformLabel')">
+          <button
+            v-for="target in ['posix', 'powershell']"
+            :key="target"
+            type="button"
+            class="btn-ghost agent-installer-tab"
+            :class="{ active: platform === target }"
+            :aria-pressed="platform === target"
+            @click="selectPlatform(target)"
+          >{{ $t('installer.' + target) }}</button>
+        </div>
         <button
           type="button"
-          class="agent-installer-tab"
-          :class="{ active: platform === 'posix' }"
-          role="tab"
-          :aria-selected="platform === 'posix'"
-          @click="selectPlatform('posix')"
-        >{{ $t('installer.posix') }}</button>
-        <button
-          type="button"
-          class="agent-installer-tab"
-          :class="{ active: platform === 'powershell' }"
-          role="tab"
-          :aria-selected="platform === 'powershell'"
-          @click="selectPlatform('powershell')"
-        >{{ $t('installer.powershell') }}</button>
-      </div>
-      <div class="agent-installer-command" :class="{ 'is-unavailable': !command }">
-        <code>{{ command || $t('installer.commandUnavailable') }}</code>
-        <button
-          type="button"
-          class="btn-secondary agent-installer-copy"
+          class="btn-primary agent-installer-copy"
           :disabled="!command || loading || copyState === 'copying'"
           @click="copyCommand"
-        >{{ copyLabel }}</button>
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path v-if="copyState === 'copied'" d="m5 12 4 4L19 6" />
+            <template v-else><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></template>
+          </svg>
+          <span>{{ copyLabel }}</span>
+        </button>
       </div>
-      <p class="agent-installer-status" :class="{ 'is-error': error || copyState === 'error' }" aria-live="polite">
+      <p class="agent-installer-instruction">{{ $t('installer.instruction') }}</p>
+      <details ref="commandDetails" class="agent-installer-details">
+        <summary>{{ $t('installer.viewCommand') }}</summary>
+        <div class="agent-installer-command" :class="{ 'is-unavailable': !command }">
+          <code tabindex="0">{{ command || $t('installer.commandUnavailable') }}</code>
+        </div>
+      </details>
+      <p v-if="statusText" class="agent-installer-status" :class="{ 'is-error': error || copyState === 'error' }" aria-live="polite">
         {{ statusText }}
-        <button v-if="showSettingsLink && !loading && !agentSecret" type="button" class="agent-installer-settings" @click="$emit('open-settings')">
+        <button v-if="showSettingsLink && !loading && !agentSecret" type="button" class="btn-ghost agent-installer-settings" @click="$emit('open-settings')">
           {{ $t('installer.openSecurity') }}
         </button>
       </p>

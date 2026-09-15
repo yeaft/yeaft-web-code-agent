@@ -73,8 +73,8 @@ export default {
               <circle cx="24" cy="34" r="3.5" fill="var(--accent-fg)"/>
             </svg>
           </div>
-          <h1 class="welcome-title">Yeaft</h1>
-          <p class="welcome-subtitle">{{ $t('welcome.subtitle') }}</p>
+          <h1 class="welcome-title">{{ onlineAgents.length ? 'Yeaft' : $t('welcome.setupTitle') }}</h1>
+          <p class="welcome-subtitle">{{ $t(onlineAgents.length ? 'welcome.subtitle' : 'welcome.setupDesc') }}</p>
 
           <!-- Agent Status -->
           <div class="welcome-status" v-if="onlineAgents.length > 0">
@@ -82,36 +82,14 @@ export default {
             <span class="status-text">{{ $t('welcome.agentOnline', { count: onlineAgents.length }) }}</span>
           </div>
 
-          <!-- No agents online -->
-          <div class="welcome-section" v-else>
-            <div class="welcome-setup-card">
-              <div class="welcome-setup-header">
-                <div class="welcome-setup-kicker">{{ $t('welcome.setupKicker') }}</div>
-                <div class="welcome-setup-title">{{ $t('welcome.setupTitle') }}</div>
-                <div class="welcome-setup-desc">{{ $t('welcome.setupDesc') }}</div>
-              </div>
-              <ol class="welcome-setup-steps">
-                <li class="welcome-setup-step">
-                  <span class="welcome-setup-step-number">1</span>
-                  <div class="welcome-setup-step-body">
-                    <div class="welcome-setup-step-title">{{ $t('welcome.setupInstallTitle') }}</div>
-                    <AgentInstaller
-                      :agent-secret="welcomeAgentSecret || ''"
-                      :loading="welcomeSetupLoading"
-                      :error="welcomeSetupError"
-                      @open-settings="$emit('open-settings')"
-                    />
-                  </div>
-                </li>
-                <li class="welcome-setup-step">
-                  <span class="welcome-setup-step-number">2</span>
-                  <div class="welcome-setup-step-body">
-                    <div class="welcome-setup-step-title">{{ $t('welcome.setupCopilotTitle') }}</div>
-                    <p class="welcome-setup-step-desc">{{ $t('welcome.setupCopilotDesc') }}</p>
-                  </div>
-                </li>
-              </ol>
-            </div>
+          <!-- A single setup action; no chat controls until an Agent is available. -->
+          <div class="welcome-setup" v-if="onlineAgents.length === 0">
+            <AgentInstaller
+              :agent-secret="welcomeAgentSecret || ''"
+              :loading="welcomeSetupLoading"
+              :error="welcomeSetupError"
+              @open-settings="$emit('open-settings')"
+            />
           </div>
 
           <!-- Quick Actions -->
@@ -657,7 +635,7 @@ export default {
         </template>
       </div>
 
-      <nav class="transcript-navigation" :aria-label="$t('message.navigation')">
+      <nav v-if="store.activeConversationId" class="transcript-navigation" :aria-label="$t('message.navigation')">
         <button
           v-if="activeLongResponseOriginId"
           type="button"

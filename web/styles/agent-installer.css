@@ -1,78 +1,125 @@
 .agent-installer {
   min-width: 0;
   width: 100%;
+  padding: var(--agent-setup-space-lg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--agent-setup-radius);
+  background: var(--bg-sidebar);
+}
+
+.agent-installer-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--agent-setup-space-md);
 }
 
 .agent-installer-tabs {
   display: flex;
-  gap: var(--space-1, 4px);
-  margin-bottom: var(--space-2, 8px);
+  flex-wrap: wrap;
+  gap: var(--agent-setup-space-xs);
+  min-width: 0;
 }
 
 .agent-installer-tab {
   min-width: 0;
-  padding: 6px 10px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
+  min-height: 40px;
+  padding: var(--agent-setup-space-sm) var(--agent-setup-space-md);
+  border: 1px solid transparent;
+  border-radius: var(--agent-setup-control-radius);
   color: var(--text-secondary);
-  background: var(--bg-secondary);
+  background: transparent;
   cursor: pointer;
   font: inherit;
+  font-size: 13px;
 }
 
-.agent-installer-tab:hover,
+.agent-installer-tab:hover {
+  color: var(--text-primary);
+  background: var(--sidebar-hover);
+}
+
 .agent-installer-tab.active {
   color: var(--text-primary);
-  border-color: var(--accent);
+  border-color: var(--border-color);
+  background: var(--bg-main);
 }
 
-.agent-installer-tab:focus-visible,
-.agent-installer-copy:focus-visible,
-.agent-installer-settings:focus-visible {
+.agent-installer :is(button, summary, code):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
-.agent-installer-command {
-  display: flex;
-  align-items: stretch;
-  gap: var(--space-2, 8px);
-  min-width: 0;
+.agent-installer-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--agent-setup-space-sm);
+  flex: 0 0 auto;
+  min-height: 40px;
+  max-width: 100%;
+  padding: var(--agent-setup-space-sm) var(--agent-setup-space-md);
+  border-radius: var(--agent-setup-control-radius);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.agent-installer-copy svg {
+  flex: 0 0 auto;
+}
+
+.agent-installer-instruction {
+  margin: var(--agent-setup-space-lg) 0 var(--agent-setup-space-sm);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.agent-installer-details summary {
+  width: fit-content;
+  padding: var(--agent-setup-space-sm) 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.agent-installer-details summary:hover {
+  color: var(--text-primary);
 }
 
 .agent-installer-command code {
-  flex: 1;
+  display: block;
   min-width: 0;
   max-width: 100%;
-  padding: 10px;
-  overflow-x: auto;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
+  max-height: 240px;
+  margin-top: var(--agent-setup-space-sm);
+  padding: var(--agent-setup-space-md);
+  overflow: auto;
+  border: 1px solid var(--border-light);
+  border-radius: var(--agent-setup-control-radius);
   color: var(--text-primary);
-  background: var(--bg-secondary);
+  background: var(--bg-main);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  font-family: var(--font-mono);
   font-size: 12px;
-  line-height: 1.55;
+  line-height: 1.65;
 }
 
 .agent-installer-command.is-unavailable code {
-  color: var(--text-muted);
-}
-
-.agent-installer-copy {
-  flex: 0 0 auto;
-  align-self: stretch;
+  color: var(--text-secondary);
 }
 
 .agent-installer-status,
 .agent-installer-note {
-  min-height: 1.4em;
-  margin: 6px 0 0;
+  margin: var(--agent-setup-space-md) 0 0;
   color: var(--text-secondary);
   overflow-wrap: anywhere;
   font-size: 12px;
-  line-height: 1.4;
+  line-height: 1.6;
 }
 
 .agent-installer-status.is-error {
@@ -89,14 +136,23 @@
   text-decoration: underline;
 }
 
-@media (max-width: 420px) {
-  .agent-installer-tabs,
-  .agent-installer-command {
+@media (max-width: 560px) {
+  .agent-installer {
+    padding: var(--agent-setup-space-md);
+  }
+
+  .agent-installer-toolbar {
+    align-items: stretch;
     flex-direction: column;
   }
 
-  .agent-installer-tab,
+  .agent-installer-tab {
+    flex: 1 1 auto;
+    min-height: 44px;
+  }
+
   .agent-installer-copy {
     width: 100%;
+    min-height: 44px;
   }
 }
