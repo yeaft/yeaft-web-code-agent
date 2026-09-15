@@ -1750,6 +1750,8 @@ export const useChatStore = defineStore('chat', {
       }
       this.workCenterAgentId = target;
       this.workCenterOpen = true;
+      // Reveal the destination instead of leaving the mobile drawer over it.
+      this.closeSessionSidebar();
       if (target) this.listWorkItems(target).catch(() => {});
       return true;
     },
