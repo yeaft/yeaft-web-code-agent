@@ -835,11 +835,24 @@ describe('Agent file terminal forwarding', () => {
     expect(tabs.openFiles.value.map(file => file.loading)).toEqual([true, true]);
     expect(tabs.fileLoading.value).toBe(true);
 
+    // Request correlation tolerates canonical absolute response paths, but
+    // never tolerates stale request ids or a different file owner.
+    for (const override of [
+      { requestId: 'stale-request' },
+      { agentId: 'agent-b' },
+      { conversationId: 'conversation-b' },
+    ]) {
+      handle(new CustomEvent('workbench-message', { detail: {
+        type: 'file_content', filePath: 'first.md', requestId: firstRequest.requestId,
+        agentId: 'agent-a', conversationId: 'conversation-a', content: 'wrong', ...override,
+      } }));
+    }
+    expect(tabs.openFiles.value.map(file => file.loading)).toEqual([true, true]);
     handle(new CustomEvent('workbench-message', { detail: {
       type: 'file_content',
       agentId: 'agent-a',
       conversationId: 'conversation-a',
-      requestedFilePath: 'first.md',
+      filePath: '/workspace/first.md',
       requestId: firstRequest.requestId,
       content: '# First',
     } }));

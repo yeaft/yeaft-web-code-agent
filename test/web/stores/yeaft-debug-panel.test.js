@@ -126,7 +126,7 @@ describe('YeaftDebugPanel store actions', () => {
   it('closes debug and releases its cached turn when a file opens Workbench directly', async () => {
     store.currentConversation = 'session-1';
     store.workbenchRouteProtocolSupported = true;
-    store.hasCapability = vi.fn(() => true);
+    store.agents = [{ id: 'agent-1', capabilities: ['file_editor', 'workbench_session_routes'] }];
     store.yeaftDebugPanel = {
       open: true,
       status: 'idle',
@@ -162,10 +162,83 @@ describe('YeaftDebugPanel store actions', () => {
     });
   });
 
+  it('opens a Yeaft file against the route owner and its Agent-scoped conversation', async () => {
+    store.currentAgent = 'agent-1';
+    store.currentAgentInfo = { id: 'agent-1', capabilities: ['terminal'] };
+    store.activeSessionRoute = {
+      runtimeProvider: 'yeaft', agentId: 'agent-2', sessionId: 'session-2',
+    };
+    store.currentConversation = 'wrong-page-conversation';
+    store.yeaftConversationId = 'wrong-global-conversation';
+    store.yeaftConversationIdsByAgent = { 'agent-2': 'yeaft-agent-2' };
+    store.workbenchRouteProtocolSupported = true;
+    store.agents = [
+      { id: 'agent-1', capabilities: ['terminal'] },
+      { id: 'agent-2', capabilities: ['file_editor', 'workbench_session_routes'] },
+    ];
+    store.workbenchExpanded = true;
+    const listener = vi.fn();
+    window.addEventListener('open-file-in-explorer', listener);
+
+    expect(store.openFileInExplorer(' docs/owned.md ', { hideTree: true, line: 7 })).toBe(true);
+
+    window.removeEventListener('open-file-in-explorer', listener);
+    expect(listener).toHaveBeenCalledOnce();
+    expect(listener.mock.calls[0][0].detail).toMatchObject({
+      filePath: 'docs/owned.md',
+      agentId: 'agent-2',
+      conversationId: 'yeaft-agent-2',
+      workbenchRouteKey: 'yeaft:agent-2:session-2',
+      hideTree: true,
+      line: 7,
+    });
+  });
+
+  it('uses the CLI conversation identity and returns false without route-owner file capabilities', () => {
+    store.currentAgent = 'agent-1';
+    store.activeSessionRoute = {
+      runtimeProvider: 'claude-code', agentId: 'agent-2', sessionId: 'cli-2',
+    };
+    store.currentConversation = 'cli-2';
+    store.workbenchRouteProtocolSupported = true;
+    store.agents = [{ id: 'agent-2', capabilities: ['file_editor', 'workbench_session_routes'] }];
+    store.workbenchExpanded = true;
+    const listener = vi.fn();
+    window.addEventListener('open-file-in-explorer', listener);
+
+    expect(store.openFileInExplorer('src/cli.js')).toBe(true);
+    expect(listener.mock.calls[0][0].detail).toMatchObject({
+      agentId: 'agent-2', conversationId: 'cli-2',
+      workbenchRouteKey: 'claude-code:agent-2:cli-2',
+    });
+
+    store.agents = [{ id: 'agent-2', capabilities: ['terminal'] }];
+    expect(store.openFileInExplorer('src/rejected.js')).toBe(false);
+    expect(listener).toHaveBeenCalledOnce();
+    window.removeEventListener('open-file-in-explorer', listener);
+  });
+
+  it('resolves references using the route capability inventory and only when Files can open them', () => {
+    store.currentConversation = 'session-1';
+    store.currentAgentInfo = { id: 'agent-1', capabilities: ['terminal'] };
+    store.workbenchRouteProtocolSupported = true;
+    store.agents = [{ id: 'agent-1', capabilities: ['file_editor', 'file_reference_resolution', 'workbench_session_routes'] }];
+    store.sendWsMessage = vi.fn(() => true);
+    expect(store.resolveMessageFileReferences(['src/file.js'])).toEqual(expect.any(String));
+    expect(store.sendWsMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'resolve_file_references', agentId: 'agent-1', references: ['src/file.js'],
+      workbenchRoute: { runtimeProvider: 'yeaft', agentId: 'agent-1', sessionId: 'session-1' },
+    }));
+
+    store.agents = [{ id: 'agent-1', capabilities: ['file_reference_resolution', 'workbench_session_routes'] }];
+    expect(store.resolveMessageFileReferences(['src/file.js'])).toBeNull();
+    expect(store.sendWsMessage).toHaveBeenCalledOnce();
+  });
+
   it('drops a deferred file open when its frozen Session workspace drifts', async () => {
     store.currentConversation = 'session-1';
     store.workbenchRouteProtocolSupported = true;
-    store.hasCapability = vi.fn(() => true);
+    store.agents = [{ id: 'agent-1', capabilities: ['file_editor', 'workbench_session_routes'] }];
     store.workbenchExpanded = false;
     store.effectiveWorkDir = '/workspace/a';
     const dispatched = [];

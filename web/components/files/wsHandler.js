@@ -65,10 +65,13 @@ export function createWsHandler({
           document.body.appendChild(a); a.click(); document.body.removeChild(a);
           return;
         }
-        const responseTab = openFiles.value.find(f => f.path === nFilePath
-          && (!f.agentId || !msg.agentId || f.agentId === msg.agentId)
+        const responseTab = openFiles.value.find(f => (
+          msg.requestId && f.requestId
+            ? msg.requestId === f.requestId
+            : f.path === nFilePath
+        ) && (!f.agentId || !msg.agentId || f.agentId === msg.agentId)
           && (!f.conversationId || !msg.conversationId || f.conversationId === msg.conversationId));
-        if (!responseTab || (responseTab.requestId && msg.requestId && msg.requestId !== responseTab.requestId)) return;
+        if (!responseTab) return;
         responseTab.loading = false;
         if (msg.error) {
           responseTab.loadError = msg.error;
@@ -125,10 +128,13 @@ export function createWsHandler({
           return;
         }
 
-        const responseTab = openFiles.value.find(f => f.path === nFilePath
-          && (!f.agentId || !msg.agentId || f.agentId === msg.agentId)
+        const responseTab = openFiles.value.find(f => (
+          msg.requestId && f.requestId
+            ? msg.requestId === f.requestId
+            : f.path === nFilePath
+        ) && (!f.agentId || !msg.agentId || f.agentId === msg.agentId)
           && (!f.conversationId || !msg.conversationId || f.conversationId === msg.conversationId));
-        if (!responseTab || (responseTab.requestId && msg.requestId && msg.requestId !== responseTab.requestId)) return;
+        if (!responseTab) return;
         responseTab.loading = false;
         if (msg.error) {
           const previewError = msg.errorCode === 'FILE_PREVIEW_TOO_LARGE'
@@ -201,8 +207,9 @@ export function createWsHandler({
             } else {
               Vue.nextTick(() => { setTimeout(() => createEditor(file), 100); });
             }
-            const revealLineNumber = pendingRevealLines.get(nFilePath);
-            pendingRevealLines.delete(nFilePath);
+            const revealPath = responseTab.path;
+            const revealLineNumber = pendingRevealLines.get(revealPath);
+            pendingRevealLines.delete(revealPath);
             revealLine(file, revealLineNumber);
           }
         }

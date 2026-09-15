@@ -265,10 +265,12 @@ export default {
 
     const hasSessionRoutes = Vue.computed(() => (
       store.workbenchRouteProtocolSupported === true
-      && store.hasCapability('workbench_session_routes')
+      && store.hasAgentCapability(activeRoute.value?.agentId, 'workbench_session_routes')
     ));
-    const hasTerminal = Vue.computed(() => hasSessionRoutes.value && store.hasCapability('terminal'));
-    const hasExplorer = Vue.computed(() => hasSessionRoutes.value && store.hasCapability('file_editor'));
+    const hasTerminal = Vue.computed(() => hasSessionRoutes.value
+      && store.hasAgentCapability(activeRoute.value?.agentId, 'terminal'));
+    const hasExplorer = Vue.computed(() => hasSessionRoutes.value
+      && store.hasAgentCapability(activeRoute.value?.agentId, 'file_editor'));
     const canSetupBrowser = Vue.computed(() => (
       store.browserRuntimeServerEnabled === true
       && store.browserRuntimeProtocolSupported === true

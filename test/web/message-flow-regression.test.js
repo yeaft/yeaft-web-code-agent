@@ -452,7 +452,7 @@ describe('message flow regressions', () => {
     store.currentAgentInfo = {
       id: 'agent-files',
       workDir: '/workspace/files',
-      capabilities: ['file_reference_resolution', 'workbench_session_routes'],
+      capabilities: ['file_editor', 'file_reference_resolution', 'workbench_session_routes'],
     };
     store.workbenchRouteProtocolSupported = true;
     store.yeaftAgentId = 'agent-files';
@@ -527,7 +527,7 @@ describe('message flow regressions', () => {
     // Capability refresh/reconnect must allow resolution again without clearing
     // Session caches or asking the user to reload the page.
     store.workbenchRouteProtocolSupported = true;
-    store.currentAgentInfo.capabilities = ['file_reference_resolution', 'workbench_session_routes'];
+    store.currentAgentInfo.capabilities = ['file_editor', 'file_reference_resolution', 'workbench_session_routes'];
     expect(store.resolveMessageFileReferences(['src/file.js'])).toEqual(expect.any(String));
     expect(store.sendWsMessage).toHaveBeenCalledOnce();
     expect(store.sendWsMessage.mock.calls[0][0].workbenchRoute).toEqual({

@@ -48,7 +48,9 @@ Files provides a VS Code-style file tree, editor, and preview surface.
 - use `Ctrl+S` to save on the Agent
 - preview Markdown, images, PDFs, supported Office documents, and browser-supported MP4, M4V, WebM, OGV/OGG, and MOV videos; videos stream from the Agent and can also be downloaded
 
-Opening a file reference from chat opens Workbench directly in Files for the current Session route.
+Clicking a file reference in a response opens Workbench directly in Files for the current Session route, loads the file, and reveals the starting line when specified. Markdown links, inline code, and plain-text paths are supported, including `src/main.js:20-35`, `src/main.js#L20-L35`, and Unicode filenames. Put paths containing spaces in inline code or Markdown links.
+
+References are resolved in batches during streaming and checked again when the response finishes. Only files confirmed by the current Agent inside the Session workspace become clickable; missing, ambiguous, and out-of-workspace paths are not automatically linked. External web links remain web links and are never mapped to local files with the same name.
 
 Non-video binary previews and downloads support files up to 20 MiB. Videos use bounded byte-range streaming and are not subject to that whole-file transfer limit. Session-routed preview URLs do not expire when switching Sessions or when the Server evicts its 10-minute byte cache. On a cache miss, the Server reads the file from the original Agent automatically; no manual URL renewal is needed. Treat the URL as an access credential bound to the original user, Agent, Session, and workspace—do not share it publicly. Access is rechecked on every request; an offline Agent, deleted file, archived Session, or changed workspace can prevent access. Refills read the current file at the original path, not a permanent snapshot. Rotating the Server's `JWT_SECRET` invalidates existing URLs. Legacy previews without Session routes still use temporary caching.
 

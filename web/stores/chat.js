@@ -1592,6 +1592,12 @@ export const useChatStore = defineStore('chat', {
       const caps = state.currentAgentInfo?.capabilities || ['terminal', 'file_editor', 'background_tasks'];
       return caps.includes(capability);
     },
+    // Workbench routes can remain bound to an Agent other than the page-level
+    // currentAgent while Session inventory and history settle. Capability
+    // checks for those routes must use the route owner, not the selected Agent.
+    hasAgentCapability: (state) => (agentId, capability) => (
+      agentHasCapability(state, agentId, capability)
+    ),
     // 获取会话标题
     getConversationTitle: (state) => (conversationId) => {
       return state.customConversationTitles[conversationId] || state.conversationTitles[conversationId] || null;
@@ -8663,10 +8669,9 @@ export const useChatStore = defineStore('chat', {
       const routeKey = workbenchRouteKey(route);
       const supported = routeKey && agentId && conversationId
         && this.workbenchRouteProtocolSupported === true
-        && (agentId === this.currentAgent
-          ? this.hasCapability('file_reference_resolution') && this.hasCapability('workbench_session_routes')
-          : agentHasCapability(this, agentId, 'file_reference_resolution')
-            && agentHasCapability(this, agentId, 'workbench_session_routes'));
+        && agentHasCapability(this, agentId, 'file_reference_resolution')
+        && agentHasCapability(this, agentId, 'file_editor')
+        && agentHasCapability(this, agentId, 'workbench_session_routes');
       const paths = [...new Set((Array.isArray(references) ? references : [])
         .filter(path => typeof path === 'string' && path.trim())
         .map(path => path.trim()))].slice(0, 32);
@@ -8740,10 +8745,8 @@ export const useChatStore = defineStore('chat', {
         ? resolveYeaftConversationIdForSession(this, route.sessionId, agentId)
         : this.currentConversation;
       const canOpenFiles = this.workbenchRouteProtocolSupported === true
-        && (agentId === this.currentAgent
-          ? this.hasCapability('file_editor') && this.hasCapability('workbench_session_routes')
-          : agentHasCapability(this, agentId, 'file_editor')
-            && agentHasCapability(this, agentId, 'workbench_session_routes'));
+        && agentHasCapability(this, agentId, 'file_editor')
+        && agentHasCapability(this, agentId, 'workbench_session_routes');
       if (!agentId || !conversationId || !canOpenFiles) return false;
       const path = typeof filePath === 'string' ? filePath.trim() : '';
       if (!path) return false;
