@@ -323,14 +323,18 @@ export class WorkCenterService {
       case 'extend_budget': {
         if (requestContext.userOriginated !== true) throw new Error('Only explicit user requests can extend execution budget');
         const id = requiredString(payload.id, 'id');
-        const detail = this.store.extendExecutionBudget(id, Number(payload.revision), payload.additions || {});
+        const detail = this.controller.extendBudget(id, payload);
         this.#emit({ type: 'work_item.execution_budget_extended', workItem: detail });
         return detail;
       }
       case 'resume': {
         if (requestContext.userOriginated !== true) throw new Error('Only explicit user requests can resume execution');
         const id = requiredString(payload.id, 'id');
-        const detail = this.controller.resume(id, { revision: payload.revision });
+        if (!Number.isSafeInteger(payload.executionControlRevision)) {
+          throw new Error('executionControlRevision is required to resume a WorkItem');
+        }
+        const detail = this.controller.resume(id, { revision: payload.revision,
+          executionControlRevision: payload.executionControlRevision });
         this.watcher.abortInvalidWorkItemRuns(id);
         if (detail.coordinationMode === DYNAMIC_COORDINATION_MODE) {
           this.#queueDynamicCoordinatorWake(id);

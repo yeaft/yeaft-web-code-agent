@@ -836,12 +836,9 @@ export class WorkItemStore {
     const row = this.db.prepare('SELECT status FROM work_items WHERE id = ?').get(id);
     if (!row || ['done', 'cancelled'].includes(row.status) || this.isExecutionStopped(id)) return false;
     const control = this.getExecutionControl(id);
-    return this.resourceControl.atomic(() => {
-      for (const action of this.db.prepare("SELECT * FROM actions WHERE work_item_id = ? AND status = 'failed'").all(id)) {
-        if (!this.resourceControl.canAttempt(mapAction(action))) return false;
-      }
-      return userMessage || this.now() >= control.retryAfter;
-    });
+    // A failed Action may be closed without retrying it. Enforce lifetime
+    // attempts at Action claim, not before a Coordinator can inspect its result.
+    return userMessage || this.now() >= control.retryAfter;
   }
 
   #initSchema() {
@@ -4291,7 +4288,7 @@ export class WorkItemStore {
     });
   }
 
-  resumeWorkItemAtomic(id, expectedRevision, makeInitialAction) {
+  resumeWorkItemAtomic(id, expectedRevision, makeInitialAction, executionControlRevision) {
     return withTransaction(this.db, () => {
       const workItem = this.getWorkItem(id);
       if (!workItem) return null;
@@ -4302,8 +4299,23 @@ export class WorkItemStore {
       if (workItem.status !== 'cancelled' && !stopped) {
         throw new Error(`WorkItem in ${workItem.status} cannot be resumed`);
       }
+      this.resourceControl.resume(id, executionControlRevision);
+      // Resume changes the execution epoch, never the goal contract. Retire old
+      // Coordinator claims so recovery cannot apply pre-stop guidance later.
+      const nowResumed = this.now();
+      const messages = (workItem.messages || []).map(message => {
+        if (message.role !== 'assistant' || message.status !== 'thinking') return message;
+        const retired = { ...message, status: 'failed', error: 'Explicit user resume superseded this Coordinator turn', updatedAt: nowResumed };
+        this.#appendConversationEntry(id, retired, `coordinator:turn:${message.turnId}:assistant`);
+        this.db.prepare(`UPDATE coordinator_mailbox_entries SET status = 'cancelled',
+          claim_owner = NULL, lease_expires_at = NULL, updated_at = ?
+          WHERE work_item_id = ? AND json_extract(payload, '$.turnId') = ? AND status IN ('pending', 'claimed')`)
+          .run(nowResumed, id, message.turnId);
+        return retired;
+      });
+      this.db.prepare(`UPDATE work_items SET coordinator_revision = coordinator_revision + 1,
+        messages = ?, updated_at = ? WHERE id = ?`).run(stringify(messages), nowResumed, id);
       if (stopped) {
-        this.resourceControl.resume(id);
         this.#invalidateExecution(workItem, 'cancelled', 'cancelled', 'Explicit user resume', this.now());
         this.db.prepare("UPDATE work_items SET status = 'cancelled' WHERE id = ?").run(id);
       }
@@ -4330,7 +4342,7 @@ export class WorkItemStore {
         }
         this.enqueueCoordinatorMailbox(id, 'work_item_resumed', {
           trigger: { workItemId: id, revision: expectedRevision },
-        }, `dynamic:resume:${id}:${expectedRevision}`);
+        }, `dynamic:resume:${id}:${this.getExecutionControl(id).revision}`);
         this.appendEvent(id, 'work_item.resumed', {
           supersededActionIds: cancelledActions.map(action => action.id),
         });

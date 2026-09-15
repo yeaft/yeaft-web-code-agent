@@ -45,8 +45,18 @@ export class WorkCenterResourceControl {
       CREATE TABLE IF NOT EXISTS work_item_execution_controls (
         work_item_id TEXT PRIMARY KEY REFERENCES work_items(id) ON DELETE CASCADE,
         limits_json TEXT NOT NULL, stop_reason TEXT, coordinator_failures INTEGER NOT NULL DEFAULT 0,
-        retry_after INTEGER NOT NULL DEFAULT 0
+        retry_after INTEGER NOT NULL DEFAULT 0,
+        revision INTEGER NOT NULL DEFAULT 1, action_attempts_extension INTEGER NOT NULL DEFAULT 0
       );
+      CREATE TABLE IF NOT EXISTS work_item_action_attempt_limits (
+        action_id TEXT PRIMARY KEY REFERENCES actions(id) ON DELETE CASCADE,
+        original_max_attempts INTEGER NOT NULL
+      );
+      CREATE TRIGGER IF NOT EXISTS work_item_action_attempt_limit_insert
+      AFTER INSERT ON actions BEGIN
+        INSERT OR IGNORE INTO work_item_action_attempt_limits (action_id, original_max_attempts)
+          VALUES (NEW.id, MAX(0, NEW.max_attempts));
+      END;
       CREATE TABLE IF NOT EXISTS work_item_resource_requests (
         id TEXT PRIMARY KEY, work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
         kind TEXT NOT NULL, run_id TEXT, request_count INTEGER NOT NULL DEFAULT 1,
@@ -60,8 +70,15 @@ export class WorkCenterResourceControl {
         SELECT 1 FROM work_item_execution_controls c WHERE c.work_item_id = NEW.id AND c.stop_reason IS NOT NULL
       ) BEGIN UPDATE work_items SET status = 'needs_attention' WHERE id = NEW.id; END;
     `);
-    // Snapshot pre-ledger data once. Reopening never imports a Run twice.
+    // Additive migration from the initial ledger schema; never change the goal
+    // contract revision to represent resource administration.
     this.atomic(() => {
+      const columns = this.db.prepare('PRAGMA table_info(work_item_execution_controls)').all().map(row => row.name);
+      if (!columns.includes('revision')) this.db.exec('ALTER TABLE work_item_execution_controls ADD COLUMN revision INTEGER NOT NULL DEFAULT 1');
+      if (!columns.includes('action_attempts_extension')) this.db.exec('ALTER TABLE work_item_execution_controls ADD COLUMN action_attempts_extension INTEGER NOT NULL DEFAULT 0');
+      this.db.exec(`INSERT OR IGNORE INTO work_item_action_attempt_limits (action_id, original_max_attempts)
+        SELECT id, MAX(0, max_attempts) FROM actions`);
+      // Snapshot pre-ledger data once. Reopening never imports a Run twice.
       for (const item of this.db.prepare(`SELECT id FROM work_items WHERE id NOT IN
         (SELECT work_item_id FROM work_item_execution_controls)`).all()) this.ensure(item.id);
     });
@@ -130,7 +147,16 @@ export class WorkCenterResourceControl {
     }
     const usage = emptyUsage();
     for (const part of Object.values(breakdown)) for (const key of Object.keys(usage)) usage[key] += part[key];
-    return { limits: parse(control.limits_json, DEFAULT_EXECUTION_LIMITS), usage,
+    const limits = parse(control.limits_json, DEFAULT_EXECUTION_LIMITS);
+    const actionAttempts = this.db.prepare(`SELECT a.id, l.original_max_attempts,
+      (SELECT COUNT(*) FROM runs r WHERE r.action_id = a.id) AS attempts
+      FROM actions a JOIN work_item_action_attempt_limits l ON l.action_id = a.id
+      WHERE a.work_item_id = ? ORDER BY a.sequence`).all(id).map(row => ({
+      actionId: row.id, attempts: row.attempts, originalMaxAttempts: row.original_max_attempts,
+      effectiveMaxAttempts: Math.min(row.original_max_attempts + control.action_attempts_extension, limits.maxActionAttempts),
+    }));
+    return { revision: control.revision, limits, usage,
+      actionAttemptsExtension: control.action_attempts_extension, actionAttempts,
       stopReason: parse(control.stop_reason, null), breakdown,
       coordinatorFailures: control.coordinator_failures, retryAfter: control.retry_after,
       tokenAccounting: 'estimated_admission_reported_usage_unknown_retained' };
@@ -144,11 +170,11 @@ export class WorkCenterResourceControl {
     return this.atomic(() => {
       this.ensure(id);
       const reason = { code, at: this.store.now(), ...details };
-      const changed = this.db.prepare(`UPDATE work_item_execution_controls SET stop_reason = ?
+      const changed = this.db.prepare(`UPDATE work_item_execution_controls SET stop_reason = ?, revision = revision + 1
         WHERE work_item_id = ? AND stop_reason IS NULL`).run(JSON.stringify(reason), id);
       if (changed.changes) {
         this.db.prepare(`UPDATE work_items SET status = CASE WHEN status = 'cancelled' THEN status ELSE 'needs_attention' END,
-          revision = revision + 1, updated_at = ? WHERE id = ?`).run(this.store.now(), id);
+          updated_at = ? WHERE id = ?`).run(this.store.now(), id);
         this.store.appendEvent(id, 'work_item.execution_stopped', reason);
       }
       return this.snapshot(id).stopReason;
@@ -204,10 +230,9 @@ export class WorkCenterResourceControl {
   }
 
   canAttempt(action) {
-    const attempts = this.db.prepare('SELECT COUNT(*) AS n FROM runs WHERE action_id = ?').get(action.id).n;
-    const limit = this.snapshot(action.workItemId).limits.maxActionAttempts;
-    if (attempts < limit) return true;
-    this.stop(action.workItemId, 'action_attempts_exhausted', { actionId: action.id, attempts });
+    const entry = this.snapshot(action.workItemId).actionAttempts.find(row => row.actionId === action.id);
+    if (entry && entry.attempts < entry.effectiveMaxAttempts) return true;
+    this.stop(action.workItemId, 'action_attempts_exhausted', entry || { actionId: action.id });
     return false;
   }
 
@@ -224,8 +249,8 @@ export class WorkCenterResourceControl {
   /** Only an authenticated user command may call this; no model/tool path. */
   extend(id, revision, additions = {}) {
     return this.atomic(() => {
-      const item = this.store.getWorkItem(id);
-      if (!item || !Number.isInteger(revision) || item.revision !== revision) throw new Error('WorkItem changed; refresh before extending execution budget');
+      if (!this.store.getWorkItem(id)) throw new Error(`WorkItem not found: ${id}`);
+      this.assertRevision(id, revision);
       if (!additions || typeof additions !== 'object' || Array.isArray(additions)
           || Object.keys(additions).length === 0) throw new Error('Invalid execution budget additions');
       const snapshot = this.snapshot(id);
@@ -235,15 +260,23 @@ export class WorkCenterResourceControl {
             || !Number.isSafeInteger(limits[key] + value)) throw new Error(`Invalid execution budget addition: ${key}`);
         limits[key] += value;
       }
-      this.db.prepare('UPDATE work_item_execution_controls SET limits_json = ? WHERE work_item_id = ?')
-        .run(JSON.stringify(limits), id);
-      this.db.prepare('UPDATE work_items SET revision = revision + 1, updated_at = ? WHERE id = ?').run(this.store.now(), id);
+      this.db.prepare(`UPDATE work_item_execution_controls SET limits_json = ?, revision = revision + 1,
+        action_attempts_extension = action_attempts_extension + ? WHERE work_item_id = ? AND revision = ?`)
+        .run(JSON.stringify(limits), additions.maxActionAttempts || 0, id, revision);
+      this.db.prepare('UPDATE work_items SET updated_at = ? WHERE id = ?').run(this.store.now(), id);
       this.store.appendEvent(id, 'work_item.execution_budget_extended', { additions, limits });
       return this.store.getWorkItemDetail(id);
     });
   }
 
-  resume(id) {
+  assertRevision(id, revision) {
+    if (!Number.isSafeInteger(revision) || this.ensure(id).revision !== revision) {
+      throw new Error('Execution control changed; refresh before changing execution budget or resuming');
+    }
+  }
+
+  resume(id, revision) {
+    if (revision !== undefined || this.stopped(id)) this.assertRevision(id, revision);
     const snapshot = this.snapshot(id);
     if (snapshot.usage.llmRequestCount >= snapshot.limits.maxRequests
         || snapshot.usage.chargedTokens >= snapshot.limits.maxTokens
@@ -254,7 +287,8 @@ export class WorkCenterResourceControl {
       const action = this.store.getAction(snapshot.stopReason.actionId);
       if (action && !this.canAttempt(action)) throw new Error('Extend maxActionAttempts before resuming');
     }
-    this.db.prepare('UPDATE work_item_execution_controls SET stop_reason = NULL, retry_after = 0 WHERE work_item_id = ?').run(id);
+    this.db.prepare(`UPDATE work_item_execution_controls SET stop_reason = NULL, retry_after = 0,
+      revision = revision + 1 WHERE work_item_id = ?`).run(id);
   }
 }
 

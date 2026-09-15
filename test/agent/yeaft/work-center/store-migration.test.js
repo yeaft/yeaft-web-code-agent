@@ -1106,7 +1106,7 @@ describe('Work Center store migration', () => {
       'retry schema21 review repair after event eviction',
     )).toBe(true);
     // This migration fixture deliberately replays more attempts than the default lifetime allowance.
-    store.extendExecutionBudget(reviewRepairItem.id, store.getWorkItem(reviewRepairItem.id).revision, { maxActionAttempts: 3 });
+    store.extendExecutionBudget(reviewRepairItem.id, store.getExecutionControl(reviewRepairItem.id).revision, { maxActionAttempts: 3 });
     const reviewRepairRetryClaim = store.claimReadyAction('schema20-review-boot', 60_000);
     const reviewRepairRetryCalls = [];
     const reviewRepairRetryRunner = new WorkItemRunner({

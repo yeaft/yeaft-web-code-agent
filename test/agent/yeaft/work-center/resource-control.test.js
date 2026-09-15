@@ -146,13 +146,16 @@ describe('Work Center persistent resource control', () => {
     controller.cancel(item.id);
     const service = new WorkCenterService({ store, controller, yeaftDir: f.dir, runner: null });
     const revision = store.getWorkItem(item.id).revision;
-    await expect(service.handle('extend_budget', { id: item.id, revision, additions: { maxTokens: 10_000 } }))
+    const executionControlRevision = store.getExecutionControl(item.id).revision;
+    await expect(service.handle('extend_budget', { id: item.id, executionControlRevision, additions: { maxTokens: 10_000 } }))
       .rejects.toThrow(/explicit user/);
     await expect(service.handle('resume', { id: item.id, revision })).rejects.toThrow(/explicit user/);
-    const extended = await service.handle('extend_budget', { id: item.id, revision, additions: { maxTokens: 10_000 } }, { userOriginated: true });
+    const extended = await service.handle('extend_budget', { id: item.id, executionControlRevision, additions: { maxTokens: 10_000 } }, { userOriginated: true });
     expect(extended.executionControl.stopReason).not.toBeNull();
+    expect(extended.revision).toBe(revision);
+    expect(extended.executionControl.revision).toBe(executionControlRevision + 1);
     expect(store.claimReadyAction('still-blocked')).toBeNull();
-    const resumed = await service.handle('resume', { id: item.id, revision: extended.revision }, { userOriginated: true });
+    const resumed = await service.handle('resume', { id: item.id, revision: extended.revision, executionControlRevision: extended.executionControl.revision }, { userOriginated: true });
     expect(resumed.executionControl.stopReason).toBeNull();
     expect(store.claimReadyAction('resumed')).not.toBeNull();
   });
@@ -172,9 +175,10 @@ describe('Work Center persistent resource control', () => {
     expect(store.getExecutionControl(item.id).stopReason).toMatchObject({ code: 'action_attempts_exhausted', attempts: 2 });
     const reopened = new WorkItemStore(path);
     try { expect(reopened.claimReadyAction('after-restart')).toBeNull(); } finally { reopened.close(); }
-    expect(() => controller.resume(item.id, { revision: store.getWorkItem(item.id).revision })).toThrow(/maxActionAttempts/);
-    const extended = store.extendExecutionBudget(item.id, store.getWorkItem(item.id).revision, { maxActionAttempts: 1 });
-    controller.resume(item.id, { revision: extended.revision });
+    expect(() => controller.resume(item.id, { revision: store.getWorkItem(item.id).revision,
+      executionControlRevision: store.getExecutionControl(item.id).revision })).toThrow(/maxActionAttempts/);
+    const extended = store.extendExecutionBudget(item.id, store.getExecutionControl(item.id).revision, { maxActionAttempts: 1 });
+    controller.resume(item.id, { revision: extended.revision, executionControlRevision: extended.executionControl.revision });
     expect(store.claimReadyAction('explicit-extra')).not.toBeNull();
     expect(store.getWorkItemDetail(item.id).runs).toHaveLength(3);
   });
@@ -303,7 +307,7 @@ describe('Work Center persistent resource control', () => {
       expect(migrated.getExecutionControl(item.id).usage).toMatchObject({ llmRequestCount: 2, totalTokens: 70 });
       const again = new WorkItemStore(path);
       try { expect(again.getExecutionControl(item.id).usage.llmRequestCount).toBe(2); } finally { again.close(); }
-      const revision = migrated.getWorkItem(item.id).revision;
+      const revision = migrated.getExecutionControl(item.id).revision;
       for (const additions of [{ maxTokens: Infinity }, { maxTokens: -1 }, { unbounded: 1 }]) {
         expect(() => migrated.extendExecutionBudget(item.id, revision, additions)).toThrow(/Invalid/);
       }

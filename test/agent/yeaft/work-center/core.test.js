@@ -1887,7 +1887,7 @@ describe('Work Center core', () => {
       }) }); } },
     });
     // This bundled validation scenario intentionally exercises several failed turns.
-    store.extendExecutionBudget(item.id, store.getWorkItem(item.id).revision, { maxCoordinatorFailures: 3 });
+    store.extendExecutionBudget(item.id, store.getExecutionControl(item.id).revision, { maxCoordinatorFailures: 3 });
     const invalidBefore = store.getWorkItemDetail(item.id);
     const invalidTurn = coordinator.message(item.id, {
       text: '用人话解释当前阻塞，不要修改计划。',
