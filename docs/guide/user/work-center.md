@@ -23,7 +23,9 @@ Work Center is not a Session. It can be created from a Session and keeps that or
 
 ## Create a WorkItem
 
-You can open Work Center from the sidebar or start from a Yeaft Session's composer.
+Open the full-screen Work Center using the icon immediately to the left of the sidebar collapse button, or from the collapsed icon rail. You can also start from a Yeaft Session's composer. Select a compatible Agent inside Work Center, then use **Back to chat** to return to your previous conversation. Leaving the page does not stop persistent tasks.
+
+In **Settings → General → Work Center entry**, a switch and **Enabled / Disabled** label show the current preference. This only controls the browser entry; it does not start or stop Agent background tasks. You can still open the page and return when no compatible Agent is online.
 
 For a new WorkItem, provide:
 

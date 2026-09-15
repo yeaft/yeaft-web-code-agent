@@ -495,8 +495,7 @@ async function layoutMetrics(page) {
 
 async function resizeViewportForMainWidth(page, targetWidth) {
   const main = page.locator('.work-center-main');
-  // Resize the real viewport, retaining the sidebar's actual contribution.
-  // Work Center no longer exposes a Workbench resize handle.
+  // Resize the full-screen workspace through the real viewport.
   for (let attempt = 0; attempt < 4; attempt++) {
     const currentWidth = await main.evaluate(element => element.getBoundingClientRect().width);
     const viewport = page.viewportSize();
@@ -739,7 +738,7 @@ test.describe('Work Center responsive UI', () => {
     })).toBe(0);
   });
 
-  test('keeps sidebar and content inside tablet and compact desktop viewports', async ({ chatPage, mockAgent }) => {
+  test('keeps full-screen content inside tablet and compact desktop viewports', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent);
 
     for (const width of [768, 960, 961, 1024]) {
@@ -747,7 +746,9 @@ test.describe('Work Center responsive UI', () => {
       await chatPage.waitForTimeout(350);
       const metrics = await layoutMetrics(chatPage);
 
-      expect(metrics.sidebar.x, `${width}px sidebar x`).toBeGreaterThanOrEqual(0);
+      await expect(chatPage.locator('.session-sidebar-shell')).toBeHidden();
+      expect(metrics.main.x).toBe(0);
+      expect(metrics.main.width).toBe(width);
       expect(metrics.documentScrollWidth, `${width}px document width`).toBeLessThanOrEqual(width);
       expect(metrics.mainScrollWidth, `${width}px main overflow`).toBeLessThanOrEqual(metrics.mainClientWidth + 1);
       expect(metrics.bodyScrollWidth, `${width}px workspace overflow`).toBeLessThanOrEqual(metrics.bodyClientWidth + 1);
@@ -859,6 +860,11 @@ test.describe('Work Center responsive UI', () => {
     const metrics = await layoutMetrics(chatPage);
     expect(metrics.mainScrollWidth).toBeLessThanOrEqual(metrics.mainClientWidth + 1);
     expect(metrics.bodyScrollWidth).toBeLessThanOrEqual(metrics.bodyClientWidth + 1);
+    await expect(chatPage).toHaveURL(/workItemId=/);
+    await chatPage.getByRole('button', { name: 'Back to chat' }).click();
+    await expect(chatPage.locator('.work-center-main')).toHaveCount(0);
+    await expect(chatPage).not.toHaveURL(/workItemId=|workAgentId=|workContent=/);
+    await expect(chatPage.locator('.session-sidebar-shell')).toBeVisible();
   });
 
   test('switches cleanly across the container breakpoint when the viewport is resized', async ({ chatPage, mockAgent }) => {
@@ -2146,10 +2152,8 @@ test.describe('Work Center responsive UI', () => {
     await chatPage.setViewportSize({ width: 720, height: 900 });
     await chatPage.waitForTimeout(350);
 
-    await chatPage.locator('.work-center-sidebar-toggle').click();
-    await expect(chatPage.locator('.session-sidebar-shell')).not.toHaveClass(/collapsed/);
-    await chatPage.locator('.session-sidebar-shell .sidebar-icon-btn[title="Collapse sidebar"]').click();
-    await expect(chatPage.locator('.session-sidebar-shell')).toHaveClass(/collapsed/);
+    await expect(chatPage.locator('.session-sidebar-shell')).toBeHidden();
+    await expect(chatPage.getByRole('button', { name: 'Back to chat' })).toBeVisible();
 
     const create = chatPage.locator('.work-center-header-create');
     await expect(create).toBeVisible();
@@ -2283,9 +2287,8 @@ test.describe('Work Center responsive UI', () => {
     await openWorkCenter(chatPage, mockAgent);
     await chatPage.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
     await chatPage.setViewportSize({ width: 720, height: 780 });
-    await chatPage.locator('.work-center-sidebar-toggle').click();
-    await chatPage.locator('.session-sidebar-shell .sidebar-icon-btn[title="Collapse sidebar"]').click();
-    await expect(chatPage.locator('.session-sidebar-shell')).toHaveClass(/collapsed/);
+    await expect(chatPage.locator('.session-sidebar-shell')).toBeHidden();
+    await expect(chatPage.getByRole('button', { name: 'Back to chat' })).toBeVisible();
     const settingsRequest = respondUntilOperation(mockAgent, 'get_settings', {
       list: { items: [OPEN_ITEM], watcher: { enabled: true } },
       get_settings: WORK_CENTER_SETTINGS,

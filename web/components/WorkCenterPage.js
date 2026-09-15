@@ -482,6 +482,8 @@ export default {
     window.removeEventListener('popstate', this.restoreWorkCenterUrl);
   },
   mounted() {
+    this.returnFocusElement = document.activeElement;
+    this.$nextTick(() => this.$refs.backToChat?.focus({ preventScroll: true }));
     window.addEventListener('popstate', this.restoreWorkCenterUrl);
     this.restoreWorkCenterUrl();
     const draft = this.store.workCenterCreateDraft;
@@ -499,6 +501,19 @@ export default {
     this.applyCreateDefaults();
   },
   methods: {
+    backToChat() {
+      this.store.leaveWorkCenter();
+      this.$nextTick(() => {
+        const source = this.returnFocusElement;
+        const visible = element => element?.isConnected && element.getClientRects().length
+          && getComputedStyle(element).visibility !== 'hidden'
+          && element.getBoundingClientRect().right > 0;
+        const target = visible(source) && source !== document.body ? source
+          : [...document.querySelectorAll('.sidebar-work-center-trigger, .header-sidebar-toggle, .yeaft-topbar-sidebar-toggle')]
+            .find(visible);
+        target?.focus({ preventScroll: true });
+      });
+    },
     tr(key, fallback) {
       const translated = this.$t ? this.$t(key) : key;
       return translated && translated !== key ? translated : fallback;
@@ -1337,13 +1352,13 @@ export default {
     },
   },
   template: `
-    <main class="work-center-main" :class="{ 'workbench-maximized': store.workbenchMaximized && store.workbenchExpanded }">
+    <main class="work-center-main">
         <div class="work-center-shell" :class="{ 'showing-detail': narrowPane !== 'items' }">
-          <header v-if="narrowPane === 'items'" class="work-center-header">
+          <header class="work-center-header">
             <div class="work-center-heading">
-              <button class="work-center-sidebar-toggle" type="button" @click="store.toggleSessionSidebar()"
-                      :title="tr('chat.sidebar.expand', 'Open sidebar')" :aria-label="tr('chat.sidebar.expand', 'Open sidebar')">
-                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3 18h18v-2H3v2Zm0-5h18v-2H3v2Zm0-7v2h18V6H3Z"/></svg>
+              <button ref="backToChat" class="work-center-back-button" type="button" @click="backToChat">
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2Z"/></svg>
+                <span>{{ tr('workCenter.backToChat', 'Back to chat') }}</span>
               </button>
               <h1>{{ tr('workCenter.title', 'Work Center') }}</h1>
               <div v-if="onlineAgents.length" class="work-center-agent-picker">

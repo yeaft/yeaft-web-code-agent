@@ -50,7 +50,6 @@ export default {
           :agents="chatStore.agents"
           :active-agent-id="chatStore.workCenterAgentId"
           :collapsed="true"
-          :active="chatStore.workCenterOpen"
           @open="onOpenWorkCenter"
         />
         <div class="collapsed-spacer"></div>
@@ -80,6 +79,12 @@ export default {
           />
           <div class="sidebar-header-actions">
             <SidebarModeToggle v-if="!chatStore || !chatStore.sessionCatalogLoaded" view="yeaft" @flip="onModeFlip" />
+            <SidebarWorkCenter
+              v-if="chatStore && chatStore.workCenterUiEnabled"
+              :agents="chatStore.agents"
+              :active-agent-id="chatStore.workCenterAgentId"
+              @open="onOpenWorkCenter"
+            />
             <button class="sidebar-icon-btn" :title="tr('chat.sidebar.collapse', 'Collapse')" @click="$emit('toggle-sidebar')">
               <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h13v-2H3v2zm0-5h10v-2H3v2zm0-7v2h13V6H3zm18 9.59L17.42 12 21 8.41 19.59 7l-5 5 5 5L21 15.59z"/></svg>
             </button>
@@ -97,26 +102,15 @@ export default {
         :is-yeaft-session-processing="chatStore.isYeaftSessionProcessing"
         :agents="chatStore.agents"
         :work-center-open="chatStore.workCenterOpen"
-        :work-center-enabled="chatStore.workCenterUiEnabled"
-        :work-center-agent-id="chatStore.workCenterAgentId"
         @select="chatStore.openCatalogSession"
         @create="onUnifiedCreate"
         @create-in-project="onUnifiedCreateInProject"
         @close-work-center="chatStore.leaveWorkCenter"
-        @open-work-center="onOpenWorkCenter"
         @action="onUnifiedSessionAction"
       />
 
       <div v-else class="us-scroll us-scroll-flush">
         <!-- Legacy Yeaft list stays available until the catalog snapshot arrives. -->
-        <SidebarWorkCenter
-          v-if="chatStore && chatStore.workCenterUiEnabled"
-          :agents="chatStore ? chatStore.agents : []"
-          :active-agent-id="chatStore ? chatStore.workCenterAgentId : null"
-          :collapsed="false"
-          :active="chatStore ? chatStore.workCenterOpen : false"
-          @open="onOpenWorkCenter"
-        />
         <div class="session-tab-bar">
           <div class="session-tab session-tab-solo active">
             <svg class="session-tab-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>

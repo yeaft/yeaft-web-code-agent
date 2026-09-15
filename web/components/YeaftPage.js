@@ -104,11 +104,12 @@ export default {
   template: `
     <div class="yeaft-page" ref="pageRef">
       <!-- Mobile sidebar overlay -->
-      <div class="yeaft-sidebar-overlay" v-if="store.sessionSidebarOpen && isMobile" @click="store.closeSessionSidebar()"></div>
+      <div class="yeaft-sidebar-overlay" v-if="store.sessionSidebarOpen && isMobile && !store.workCenterOpen" @click="store.closeSessionSidebar()"></div>
 
       <!-- Left Sidebar — V2 (task-341: V2 is the only sidebar now). -->
       <!-- Legacy sidebar event alias; canonical settings dialog uses session terminology. -->
       <YeaftSidebar
+        v-show="!store.workCenterOpen"
         :collapsed="effectiveSidebarCollapsed"
         @select-group="onSelectGroupV2"
         @select-chat="onSelectChat"
@@ -390,7 +391,7 @@ export default {
         </div><!-- /.yeaft-main-center -->
       </div>
 
-      <WorkbenchPanel v-if="canUseWorkbench" />
+      <WorkbenchPanel v-if="canUseWorkbench" v-show="!store.workCenterOpen" />
 
       <!-- Session status pane: announcement + VP roster + background tasks.
            It sits to the right of the conversation and to the left of debug. -->
@@ -443,7 +444,7 @@ export default {
            group's member editor directly (the previous flow dumped the
            user into VP-Settings, where there was no add-to-group UI). -->
       <SessionInviteModal
-        v-if="shouldShowInviteModal"
+        v-if="!store.workCenterOpen && !store.pluginCenterOpen && shouldShowInviteModal"
         :group-name="inviteGroupName"
         @open-library="onInviteOpenLibrary"
         @dismiss="onInviteDismiss"

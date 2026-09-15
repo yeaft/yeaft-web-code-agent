@@ -52,10 +52,10 @@
    SessionSidebarShell token so Chat and Yeaft stay identical. */
 /* Codex-style unified navigation: Projects group Yeaft Sessions; Recents keeps all providers. */
 .sidebar-primary-actions { display: flex; flex: 0 0 auto; flex-direction: column; padding: 6px 8px 4px; }
-.sidebar-primary-action { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: var(--text-primary); font: inherit; font-size: 14px; cursor: pointer; text-align: left; }
+.sidebar-primary-action { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: var(--text-primary); font: inherit; font-size: 14px; line-height: 20px; cursor: pointer; text-align: left; }
 .sidebar-primary-action:hover, .sidebar-project-header:hover, .sidebar-project-header.drag-over, .recents-section.drag-over { background: var(--sidebar-hover); }
 .sidebar-primary-action:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
-.sidebar-primary-action-icon { width: 18px; height: 18px; flex: 0 0 auto; color: var(--text-secondary); }
+.sidebar-primary-action-icon { display: block; width: 18px; height: 18px; flex: 0 0 auto; color: var(--text-secondary); }
 .sidebar-project-add-button { opacity: 0; pointer-events: none; transition: opacity 0.15s ease; }
 .sidebar-project-add-button .sidebar-project-add-icon { width: 16px; height: 16px; }
 .sidebar-section-heading > .sidebar-project-add-button:disabled { opacity: 0; pointer-events: none; }

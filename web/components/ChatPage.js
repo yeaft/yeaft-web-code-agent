@@ -30,10 +30,10 @@ export default {
     <div class="chat-page" :class="{ 'show-sidebar': store.sessionSidebarOpen }">
 
       <!-- Sidebar Overlay -->
-      <div class="sidebar-overlay" v-if="store.sessionSidebarOpen" @click="store.closeSessionSidebar()"></div>
+      <div class="sidebar-overlay" v-if="store.sessionSidebarOpen && !store.workCenterOpen" @click="store.closeSessionSidebar()"></div>
 
       <!-- Left Sidebar -->
-      <SessionSidebarShell class="sidebar" :collapsed="effectiveSidebarCollapsed">
+      <SessionSidebarShell v-show="!store.workCenterOpen" class="sidebar" :collapsed="effectiveSidebarCollapsed">
         <template #collapsed>
         <!-- Collapsed Icon Bar -->
         <div class="sidebar-collapsed-bar" v-if="effectiveSidebarCollapsed">
@@ -53,7 +53,6 @@ export default {
             :agents="store.agents"
             :active-agent-id="store.workCenterAgentId"
             :collapsed="true"
-            :active="store.workCenterOpen"
             @open="store.enterWorkCenter"
           />
           <div class="collapsed-spacer"></div>
@@ -86,6 +85,12 @@ export default {
                 :view="store.currentView"
                 :disabled="onlineAgentCount === 0"
                 @flip="onModeFlip"
+              />
+              <SidebarWorkCenter
+                v-if="store && store.workCenterUiEnabled"
+                :agents="store.agents"
+                :active-agent-id="store.workCenterAgentId"
+                @open="store.enterWorkCenter"
               />
               <button class="sidebar-icon-btn" @click="onSidebarCollapse" :title="$t('chat.sidebar.collapse')">
                 <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h13v-2H3v2zm0-5h10v-2H3v2zm0-7v2h13V6H3zm18 9.59L17.42 12 21 8.41 19.59 7l-5 5 5 5L21 15.59z"/></svg>
@@ -122,26 +127,15 @@ export default {
           :is-yeaft-session-processing="store.isYeaftSessionProcessing"
           :agents="store.agents"
           :work-center-open="store.workCenterOpen"
-          :work-center-enabled="store.workCenterUiEnabled"
-          :work-center-agent-id="store.workCenterAgentId"
           @select="store.openCatalogSession"
           @create="onUnifiedCreate"
           @create-in-project="onUnifiedCreateInProject"
           @close-work-center="store.leaveWorkCenter"
-          @open-work-center="store.enterWorkCenter"
           @action="onUnifiedSessionAction"
         />
 
         <template v-else>
         <!-- Legacy sidebar stays available until the catalog snapshot arrives. -->
-        <SidebarWorkCenter
-          v-if="store.workCenterUiEnabled"
-          :agents="store.agents"
-          :active-agent-id="store.workCenterAgentId"
-          :collapsed="false"
-          :active="store.workCenterOpen"
-          @open="store.enterWorkCenter"
-        />
         <div class="session-tab-bar">
           <div class="session-tab active session-tab-solo">
             <svg class="session-tab-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
