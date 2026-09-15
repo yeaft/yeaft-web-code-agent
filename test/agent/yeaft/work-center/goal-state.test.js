@@ -352,6 +352,9 @@ describe('goal contract authority and completion persistence', () => {
     expect(store.getWorkItemDetail(created.id).goalProgress.criteria[0]).toMatchObject({ status: 'failed',
       evidenceRunIds: [], conflictingRunIds: [failed.run.id] });
     store.failCoordinatorTurn(turn.turnId, new Error('New verification required'), turn.fence);
+    // Persistent coordinator backoff must elapse before the next automatic turn.
+    let resumedAt = Date.now() + 2000;
+    store.now = () => resumedAt++;
     store.createNextAction(created.id, { type: 'diagnose', workspaceMode: 'read', brief,
       instruction: 'Re-check the corrected counterexample', contractRevision: 1 });
     const correction = store.claimReadyAction('runner');
