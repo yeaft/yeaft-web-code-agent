@@ -30,6 +30,14 @@ When the roster is omitted and the Agent's VP library contains `omni`, the runti
 
 The assistant helps with questions, research, writing, translation, learning, planning, data analysis, and coding tasks—not just clarification or handoffs. It chooses direct answers, tools, or collaboration to suit the task while respecting project ownership and authorization. At Agent startup, exact historical stock souls and their matching old name, role, and description are upgraded; user-edited souls and custom metadata are preserved.
 
+## Fork the current Session
+
+Choose **Fork current session** from the active Session’s sidebar menu, or **Fork** at the top right of the conversation. No setup dialog is needed: the new Session opens automatically on the same Agent.
+
+The fork copies the complete persisted conversation, announcement, VP roster/default VP, working directory, and Session model/effort overrides. If the source belongs to a Project, the Server puts the fork in the same Project, so the shared instruction continues to apply. The source remains unchanged; later conversation and Session setting changes are independent.
+
+Wait for a running response to finish before forking. Forking is unavailable while disconnected or another fork is pending. Background processes, running tasks, debug traces, and Session memory files are not cloned. Attachment references retain their original ownership. Both Server and Agent must support Project inheritance for this behavior.
+
 ## Route a turn
 
 A message without mentions goes to the default VP. Use `@VPName` to address a subset:

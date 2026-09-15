@@ -83,6 +83,30 @@ function syncYeaftSessionMetadata(agentId, agent, event) {
     }
     return { ...event, sessions: decorateYeaftSessionsWithPinned(agentId, event.sessions) };
   }
+  // A fork is a new Session on the same Agent, not a new Project. Resolve
+  // membership here (never from browser/Agent project metadata) before the
+  // successful acknowledgement can focus the new Session in the browser.
+  if (event.ok && ownerId && op === 'copy' && event.sourceSessionId && event.session?.id) {
+    try {
+      if (event.sourceSessionId === event.session.id) throw new Error('Fork must have a new Session identity');
+      transaction(() => {
+        // Replayed acknowledgements must not undo a later user Project move.
+        if (yeaftSessionDb.getForAgent(ownerId, agentId, event.session.id)) return;
+        yeaftSessionDb.upsertFromSnapshot(ownerId, agentId, event.session);
+        yeaftProjectDb.inheritSessionProject(ownerId, agentId, event.sourceSessionId, event.session.id);
+      })();
+    } catch (e) {
+      console.warn('[Server] Fork Project inheritance failed:', e?.message || e);
+      return {
+        ...event,
+        ok: false,
+        error: {
+          code: 'project_inheritance_failed',
+          message: `Fork ${event.session.id} was created, but its Project could not be saved.`,
+        },
+      };
+    }
+  }
   if (!event.ok || !ownerId || !sessionId || (op !== 'archive' && op !== 'delete')) return event;
 
   if (op === 'archive') {

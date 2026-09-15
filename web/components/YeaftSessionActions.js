@@ -1,7 +1,11 @@
 export default {
   name: 'YeaftSessionActions',
-  emits: ['toggle-search', 'reload-messages', 'toggle-session-status', 'toggle-workbench', 'reload-page'],
+  emits: ['toggle-search', 'reload-messages', 'toggle-session-status', 'toggle-workbench', 'reload-page', 'fork-session'],
   props: {
+    showFork: { type: Boolean, default: false },
+    forkDisabled: { type: Boolean, default: false },
+    forkPending: { type: Boolean, default: false },
+    forkTitle: { type: String, default: '' },
     searchOpen: { type: Boolean, default: false },
     loadingMoreHistory: { type: Boolean, default: false },
     sessionStatusVisible: { type: Boolean, default: true },
@@ -11,6 +15,19 @@ export default {
   },
   template: `
     <div class="yeaft-session-actions">
+      <button
+        v-if="showFork"
+        type="button"
+        class="btn-ghost yeaft-fork-btn"
+        :disabled="forkDisabled"
+        :aria-busy="forkPending ? 'true' : 'false'"
+        :title="forkTitle || $t('yeaft.session.forkCurrent')"
+        :aria-label="$t('yeaft.session.forkCurrent')"
+        @click="$emit('fork-session')"
+      >
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v10m12-10v2a4 4 0 0 1-4 4H6"/></svg>
+        <span>{{ $t(forkPending ? 'yeaft.session.forking' : 'yeaft.session.fork') }}</span>
+      </button>
       <button
         ref="searchButtonRef"
         type="button"

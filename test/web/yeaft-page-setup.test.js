@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 import * as Vue from 'vue';
+import { mount } from '@vue/test-utils';
+import YeaftSessionActions from '../../web/components/YeaftSessionActions.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -134,6 +136,35 @@ describe('YeaftPage setup', () => {
     expect(actions).not.toContain('store.yeaftLoadingMoreHistory');
     expect(actions).not.toContain('yeaftSessionHydrateRequestId');
     expect(actions).toContain('@reload-messages="reloadMessages"');
+  });
+
+  it('forks the visible Session from an accessible header action with shared pending state', async () => {
+    chatStore.sessionForkUnavailableReason = vi.fn(() => null);
+    chatStore.copyCatalogSession = vi.fn(async () => ({ ok: true }));
+    const page = YeaftPage.setup();
+    expect(page.forkSessionRow.value).toEqual({ routeRef: {
+      runtimeProvider: 'yeaft', agentId: 'agent-1', sessionId: 'session-1',
+    } });
+    await page.forkCurrentSession();
+    expect(chatStore.copyCatalogSession).toHaveBeenCalledWith(page.forkSessionRow.value);
+    chatStore.sessionForkUnavailableReason = vi.fn(() => 'fork_pending');
+    await page.forkCurrentSession();
+    expect(chatStore.copyCatalogSession).toHaveBeenCalledTimes(1);
+    const actions = mount(YeaftSessionActions, {
+      props: { showFork: true }, global: { mocks: { $t: key => key } },
+    });
+    const fork = actions.get('.yeaft-fork-btn');
+    expect(fork.attributes('aria-label')).toBe('yeaft.session.forkCurrent');
+    await fork.trigger('click');
+    expect(actions.emitted('fork-session')).toHaveLength(1);
+    await actions.setProps({ forkDisabled: true, forkPending: true });
+    expect(fork.attributes('disabled')).toBeDefined();
+    expect(fork.attributes('aria-busy')).toBe('true');
+    await fork.trigger('click');
+    expect(actions.emitted('fork-session')).toHaveLength(1);
+    await actions.setProps({ showFork: false });
+    expect(actions.find('.yeaft-fork-btn').exists()).toBe(false);
+    actions.unmount();
   });
 
   it('defaults Session history search to the user without replacing an explicit sender choice', async () => {

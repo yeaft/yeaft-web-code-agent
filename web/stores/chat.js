@@ -624,6 +624,7 @@ export const useChatStore = defineStore('chat', {
     // unconditional so old encrypted frames still decrypt.
     serverEncryptionRequired: true,
     // 连接状态
+    sessionForkPendingKey: null, // one explicit fork operation at a time across both UI entry points
     connectionState: 'disconnected', // 'disconnected' | 'connecting' | 'connected' | 'reconnecting'
     reconnectAttempts: 0,
     maxReconnectAttempts: 10,
@@ -5816,14 +5817,23 @@ export const useChatStore = defineStore('chat', {
           // payload itself because callers await a single flattened object
           // and have no envelope context. Keep these two channels in sync
           // if you change the wire-stamping rule.
-          if (gs) gs.applyCrudResult(event, msg.agentId || null);
+          const pending = this._sessionCrudPending && this._sessionCrudPending.get(event.requestId);
+          // A fork acknowledgement is broadcast for inventory updates. Only
+          // the initiating tab may focus it, and another Agent must not settle
+          // this tab's request even if it echoes the same request id.
+          if (event.op === 'copy' && pending?.agentId && pending.agentId !== msg.agentId) break;
+          if (event.op === 'copy' && event.projectsAuthoritative === true && Array.isArray(event.projects)) {
+            this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects);
+          }
+          if (gs) gs.applyCrudResult(event, msg.agentId || null, {
+            activate: event.op !== 'copy' || !!pending,
+          });
           if (event.ok && event.op === 'delete' && event.sessionId && msg.agentId) {
             this.clearYeaftHistoryMemory({
               agentId: msg.agentId,
               sessionId: event.sessionId,
             });
           }
-          const pending = this._sessionCrudPending && this._sessionCrudPending.get(event.requestId);
           if (pending) {
             const finish = () => {
               if (this._sessionCrudPending?.get(event.requestId) !== pending) return;
@@ -6592,9 +6602,16 @@ export const useChatStore = defineStore('chat', {
           }
         }, 10000);
         this._sessionCrudPending.set(requestId, {
+          agentId: overrideAgentId || this.currentAgent,
           resolve: (result) => { clearTimeout(timer); resolve(result); },
         });
-        this.sendWsMessage(msg);
+        const sent = this.sendWsMessage(msg);
+        if (op === 'copy' && !sent) {
+          clearTimeout(timer);
+          this._sessionCrudPending.delete(requestId);
+          if (gs?.pending) delete gs.pending[requestId];
+          resolve({ ok: false, op, error: { code: 'agent_offline' } });
+        }
       });
     },
 
@@ -7410,25 +7427,41 @@ export const useChatStore = defineStore('chat', {
       }
       return true;
     },
-    async copyCatalogSession(row) {
+    sessionForkUnavailableReason(row) {
       const route = row?.routeRef;
-      if (route?.runtimeProvider !== 'yeaft' || !route.agentId || !route.sessionId) {
-        return { ok: false, op: 'copy', error: { code: 'bad_route', message: 'Yeaft Session route required' } };
+      if (route?.runtimeProvider !== 'yeaft' || !route.agentId || !route.sessionId) return 'bad_route';
+      if (this.sessionForkPendingKey) return 'fork_pending';
+      if (this.connectionState !== 'connected'
+          || !this.agents.some(agent => agent.id === route.agentId && agent.online)) return 'agent_offline';
+      if (this.isYeaftSessionProcessing(route.sessionId, route.agentId)) return 'session_running';
+      return null;
+    },
+    async copyCatalogSession(row) {
+      const unavailable = this.sessionForkUnavailableReason(row);
+      if (unavailable) return { ok: false, op: 'copy', error: { code: unavailable } };
+      const route = { ...row.routeRef };
+      this.sessionForkPendingKey = yeaftCatalogKey(route.agentId, route.sessionId);
+      try {
+        // Keep the existing copy wire contract for compatible Agent versions.
+        const result = await this.sessionCrudRequest('copy', {
+          sessionId: route.sessionId,
+        }, { agentId: route.agentId });
+        if (!result?.ok || !result.session?.id) return result;
+        const copiedRoute = {
+          runtimeProvider: 'yeaft',
+          agentId: route.agentId,
+          sessionId: result.session.id,
+        };
+        this.openCatalogSession({
+          catalogKey: yeaftCatalogKey(copiedRoute.agentId, copiedRoute.sessionId),
+          routeRef: copiedRoute,
+        });
+        return result;
+      } catch (error) {
+        return { ok: false, op: 'copy', error: { code: 'fork_failed', message: error?.message || String(error) } };
+      } finally {
+        this.sessionForkPendingKey = null;
       }
-      const result = await this.sessionCrudRequest('copy', {
-        sessionId: route.sessionId,
-      }, { agentId: route.agentId });
-      if (!result?.ok || !result.session?.id) return result;
-      const copiedRoute = {
-        runtimeProvider: 'yeaft',
-        agentId: result.session.agentId || route.agentId,
-        sessionId: result.session.id,
-      };
-      this.openCatalogSession({
-        catalogKey: yeaftCatalogKey(copiedRoute.agentId, copiedRoute.sessionId),
-        routeRef: copiedRoute,
-      });
-      return result;
     },
     reorderCatalogSessions(rows) {
       if (!Array.isArray(rows) || rows.length === 0

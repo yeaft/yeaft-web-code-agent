@@ -671,7 +671,7 @@ export default {
           const key = `yeaft.session.error.${code}`;
           const translated = this.$t(key);
           const message = translated === key ? (result?.error?.message || code) : translated;
-          await alertDialog(this.$t('yeaft.session.copyFailed', { message }));
+          await alertDialog(this.$t('yeaft.session.forkFailed', { message }));
         }
       } else if (runtimeProvider === 'yeaft' && action === 'settings') {
         this.store.pendingUnifiedSessionSettings = { sessionId, agentId, section: 'session' };

@@ -529,7 +529,7 @@ test.describe('侧边栏交互', () => {
     await sourceRow.hover();
     await sourceRow.locator('.session-dots-btn').click();
     const copyItem = chatPage.locator('.session-menu-floating .session-menu-item', {
-      hasText: 'Copy from current session',
+      hasText: 'Fork current session',
     });
     await expect(copyItem).toBeVisible();
 

@@ -3664,7 +3664,7 @@ export function handleYeaftCopySession(msg) {
     });
     recordAgentSessionCreated();
     session.config = loadSessionConfig(yeaftDir, session.id);
-    sendSessionCrudResult({ op: 'copy', requestId, ok: true, session });
+    sendSessionCrudResult({ op: 'copy', requestId, ok: true, sourceSessionId: sessionId, session });
     sendSessionSnapshotBroadcast();
   } catch (err) {
     sendSessionCrudResult({ op: 'copy', requestId, ok: false, error: sessionErrorPayload(err) });

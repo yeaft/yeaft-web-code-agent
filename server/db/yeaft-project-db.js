@@ -196,6 +196,23 @@ export const yeaftProjectDb = {
     })();
   },
 
+  /**
+   * Assign a newly registered fork to the source's Project. The caller owns the
+   * Session-registration transaction and replay fence; this is one insert, not
+   * moveSession's independent transaction or a user-requested Project move.
+   */
+  inheritSessionProject(userId, agentId, sourceSessionId, targetSessionId) {
+    const ownerId = requireUserId(userId);
+    const targetAgentId = requireId(agentId, 'invalid_agent_id', 'Agent id');
+    const sourceId = requireId(sourceSessionId, 'invalid_session_id', 'Source Session id');
+    const targetId = requireId(targetSessionId, 'invalid_session_id', 'Fork Session id');
+    if (sourceId === targetId) throw new YeaftProjectDbError('invalid_session_id', 'Fork must have a new identity');
+    const project = stmts.getYeaftProjectForSession.get(ownerId, targetAgentId, sourceId);
+    if (!project) return null;
+    stmts.insertYeaftProjectSessionMembership.run(ownerId, project.id, targetAgentId, targetId, Date.now());
+    return project.id;
+  },
+
   reconcileAgentSessions(userId, agentId, sessionIds) {
     const ownerId = requireUserId(userId);
     const targetAgentId = requireId(agentId, 'invalid_agent_id', 'Agent id');

@@ -1,4 +1,5 @@
 import ChatInput from './ChatInput.js';
+import { alertDialog } from '../utils/dialog.js';
 import AgentInstaller from './AgentInstaller.js';
 import MessageList from './MessageList.js';
 import SettingsPanel from './SettingsPanel.js';
@@ -156,6 +157,11 @@ export default {
           <YeaftSessionActions
             v-if="!showOnboardingGuide"
             class="yeaft-topbar-right"
+            :show-fork="!!forkSessionRow"
+            :fork-disabled="!!forkUnavailableReason"
+            :fork-pending="!!store.sessionForkPendingKey"
+            :fork-title="forkUnavailableReason ? $t('yeaft.session.error.' + forkUnavailableReason) : $t('yeaft.session.forkCurrent')"
+            @fork-session="forkCurrentSession"
             :search-open="historySearchOpen"
             :loading-more-history="store.yeaftManualHistoryRefreshLoading"
             :session-status-visible="sessionStatusVisible"
@@ -1054,6 +1060,26 @@ export default {
       return typeof gs.sessionById === 'function' ? gs.sessionById('grp_default', store.currentAgent || null) : null;
     });
 
+    const forkSessionRow = Vue.computed(() => {
+      const sessionId = store.yeaftActiveSessionFilter || topbarGroup.value?.id;
+      const agentId = store.currentAgent;
+      return sessionId && agentId
+        ? { routeRef: { runtimeProvider: 'yeaft', agentId, sessionId } }
+        : null;
+    });
+    const forkUnavailableReason = Vue.computed(() => store.sessionForkUnavailableReason(forkSessionRow.value));
+    const forkCurrentSession = async () => {
+      if (!forkSessionRow.value || forkUnavailableReason.value) return;
+      const result = await store.copyCatalogSession(forkSessionRow.value);
+      if (!result?.ok) {
+        const code = result?.error?.code || 'unknown';
+        const key = `yeaft.session.error.${code}`;
+        const translated = $t(key);
+        const message = translated === key ? (result?.error?.message || code) : translated;
+        await alertDialog($t('yeaft.session.forkFailed', { message }));
+      }
+    };
+
     const activeSessionIdForSettings = () => resolveActiveSessionIdForSettings({
       activeSessionFilter: store.yeaftActiveSessionFilter,
       sessionsStore: sessionsStore(),
@@ -1535,6 +1561,9 @@ export default {
       debugMode,
       composerMenuOpen,
       topbarGroup,
+      forkSessionRow,
+      forkUnavailableReason,
+      forkCurrentSession,
       topbarSessionTitle,
       topbarFolderPath,
       topbarModel,
