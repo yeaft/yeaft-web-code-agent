@@ -910,7 +910,7 @@ function projectGoalProgress(progress) {
   if (!progress || !Array.isArray(progress.criteria)) return null;
   const ids = value => Array.isArray(value) ? value.slice(0, 64).map(id => truncateUtf8(String(id), 256)) : [];
   const criteria = progress.criteria.slice(0, 100).map(item => ({
-    criterion: truncateUtf8(item.criterion || '', MAX_ACTION_MESSAGE_CHARS),
+    criterion: truncateUtf8(item.criterion || '', 1024),
     status: ['passed', 'failed'].includes(item.status) ? item.status : 'unmet',
     evidenceRunIds: ids(item.evidenceRunIds),
     ...(item.conflictingRunIds ? { conflictingRunIds: ids(item.conflictingRunIds) } : {}),
@@ -991,7 +991,7 @@ export function projectWorkItemDetail(detail, options = {}) {
       responses: Array.isArray(detail.finalResult.responses)
         ? detail.finalResult.responses.slice(0, 24).map(response => ({
             runId: truncateUtf8(response?.runId || '', 256),
-            summary: truncateUtf8(response?.summary || '', MAX_ACTION_MESSAGE_CHARS),
+            summary: truncateUtf8(response?.summary || '', 8 * 1024),
             evidence: projectCanonicalEvidence(response?.evidence),
           })) : [],
       residualRisks: Array.isArray(detail.finalResult.residualRisks)
