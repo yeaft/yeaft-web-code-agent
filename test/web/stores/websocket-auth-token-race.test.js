@@ -216,8 +216,8 @@ describe('websocket auth token races', () => {
     expect(resolveNewCopy).not.toHaveBeenCalled();
     expect(store._sessionCrudPending.has('old-copy')).toBe(false);
     expect(store._sessionCrudPending.has('new-copy')).toBe(true);
-    expect(store.sessionForkPendingKey).toBeNull();
-    expect(store.sessionForkState).toBe('idle');
+    expect(store.sessionForkPendingKey).toBe('yeaft:agent-a:source');
+    expect(store.sessionForkState).toBe('copying');
     expect(sockets).toHaveLength(1);
   });
 
@@ -251,8 +251,11 @@ describe('websocket auth token races', () => {
     expect(resolveFutureRequest).not.toHaveBeenCalled();
     expect(store._sessionCrudPending.has('active-copy')).toBe(false);
     expect(store._sessionCrudPending.has('future-request')).toBe(true);
-    expect(store.sessionForkPendingKey).toBeNull();
-    expect(store.sessionForkState).toBe('idle');
+    // The request owner (`copyCatalogSession`) releases its own UI state in
+    // `finally`; the transport helper must not mutate global state that may
+    // already belong to a newer operation generation.
+    expect(store.sessionForkPendingKey).toBe('yeaft:agent-a:source');
+    expect(store.sessionForkState).toBe('copying');
   });
 
   it('restores encrypted outbound mode before reconnecting to a legacy Server', async () => {

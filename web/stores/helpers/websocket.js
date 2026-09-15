@@ -122,16 +122,10 @@ export function parseWsMessage(store, data) {
 }
 
 function settleSessionCrudForConnection(store, connectionGeneration, code, message) {
-  let settledCopy = false;
   for (const [requestId, pending] of store._sessionCrudPending?.entries?.() || []) {
     if (Number(pending?.connectionGeneration || 0) !== Number(connectionGeneration || 0)) continue;
-    if (pending?.op === 'copy') settledCopy = true;
     pending.resolve?.({ ok: false, requestId, error: { code, message } });
     store._sessionCrudPending.delete(requestId);
-  }
-  if (settledCopy && store.sessionForkPendingKey) {
-    store.sessionForkPendingKey = null;
-    store.sessionForkState = 'idle';
   }
 }
 
