@@ -145,7 +145,7 @@ describe('Work Center core', () => {
     ctx.ws = { readyState: 1, send: vi.fn(value => bridgeFrames.push(JSON.parse(value))) };
     globalThis.WebSocket = { OPEN: 1 };
 
-    for (const deliveryTarget of ['workspace_files', 'pull_request', 'merge']) {
+    for (const deliveryTarget of ['response', 'workspace_files', 'pull_request', 'merge']) {
       const requestId = `create-${deliveryTarget}`;
       await handleWorkCenterRequest({
         requestId,
@@ -180,6 +180,15 @@ describe('Work Center core', () => {
       deliveryTarget: 'merge',
     });
     expect(producerItem.deliveryTarget).toBeNull();
+    await handleWorkCenterRequest({ requestId: 'goal-only', op: 'create', payload: {
+      title: 'Goal-only report', goal: 'Explain this failure', acceptanceCriteria: [],
+      deliveryTarget: 'response', workDir: dir, start: false,
+    } });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(bridgeFrames.find(frame => frame.requestId === 'goal-only')).toMatchObject({
+      ok: true, data: { acceptanceCriteria: ['Explain this failure'], deliveryTarget: 'response',
+        goalProgress: { remainingCriteria: ['Explain this failure'] } },
+    });
   });
 
   it('persists Run identity and projects one continuous Action conversation', async () => {

@@ -249,7 +249,7 @@ Rules:
 - complete: only when every acceptance criterion has canonical completed Run evidence and there are no unfinished Actions after applying optional closeActions. Include summary, ordered acceptanceResults with evidenceRunIds, evidenceRunIds, and residualRisks. Reuse structured outputs already present on canonical Runs; do not create repetitive evidence-packaging Actions.
 - Preserve completed and closed Action history. Never claim tests, review, merge, release, or external effects without canonical Run evidence.
 - Action templates are reusable capabilities, not a prescribed workflow. A simple Action includes its local tools and necessary tests; do not impose research/design/implement/test/review/deliver stages.
-- Read goalProgress.remainingCriteria, delivery, and blockers first. Each new Action must close a concrete current gap. Prefer optional goalRefs: {"criteria":["exact unmet criterion"],"blockerActionIds":["current blocker Action id"],"delivery":false}, plus rationale explaining why this work changes the observed state. Repeating an objective requires goalRefs and a concrete new rationale; do not package already sufficient evidence.
+- Read goalProgress.remainingCriteria, delivery, and blockers first. Resource limits are shared by coordination and all execution, including retries; reserve enough for verification and delivery. Never create a new Action or role merely to evade an exhausted attempt limit. Each new Action must close a concrete current gap. Prefer optional goalRefs: {"criteria":["exact unmet criterion"],"blockerActionIds":["current blocker Action id"],"delivery":false}, plus rationale explaining why this work changes the observed state. Repeating an objective requires goalRefs and a concrete new rationale; do not package already sufficient evidence.
 - response delivery is a substantive answer/report in a canonical completed Run summary with evidence and valid checks; do not invent a file, PR, or extra delivery Action.
 - Never return destructive cancellation. The user owns the explicit cancel control.`;
 
@@ -677,6 +677,13 @@ export function coordinatorSnapshot(detail) {
   return {
     workItem,
     goalProgress,
+    ...(detail.executionControl ? { resources: {
+      limits: detail.executionControl.limits,
+      requestsUsed: detail.executionControl.usage.llmRequestCount,
+      tokensCharged: detail.executionControl.usage.chargedTokens,
+      unknownRequests: detail.executionControl.usage.unknownRequests,
+      tokenAccounting: detail.executionControl.tokenAccounting,
+    } } : {}),
     actions,
     omittedCompletedActionCount: Math.max(0, completed.length - actions.filter(action => ['completed', 'closed'].includes(action.status)).length),
     conversation: coordinatorHistory(detail.messages),
@@ -920,7 +927,7 @@ export class WorkItemCoordinator {
               const capabilities = JSON.stringify(workItemCapabilityContext(vps, {
                 hasAttachments: started.detail.attachments?.length > 0,
               }));
-              const latestMessage = `Current WorkItem snapshot:\n${snapshotText}\n\nAvailable execution capabilities (role metadata is descriptive, not authorization):\n${capabilities}\n\n${recovery ? 'Automatic failure recovery trigger' : 'Latest user message'}:\n${text}${attachmentContext.promptBlock}${correction}`;
+              const latestMessage = `Available execution capabilities (role metadata is descriptive, not authorization):\n${capabilities}\n\nCurrent WorkItem snapshot:\n${snapshotText}\n\n${recovery ? 'Automatic failure recovery trigger' : 'Latest user message'}:\n${text}${attachmentContext.promptBlock}${correction}`;
               const content = attachmentContext.promptParts.length > 0
                 ? [{ type: 'text', text: latestMessage }, ...attachmentContext.promptParts]
                 : latestMessage;

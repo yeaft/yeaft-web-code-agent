@@ -247,13 +247,16 @@ export class WorkCenterService {
             workItemId,
           });
           const shouldStart = payload.start === undefined ? settings.startImmediately : payload.start !== false;
+          const goal = requiredString(payload.goal, 'goal');
+          const requestedCriteria = Array.isArray(payload.acceptanceCriteria)
+            ? payload.acceptanceCriteria.map(value => String(value).trim()).filter(Boolean) : [];
           this.controller.create({
             id: workItemId,
             title: requiredString(payload.title, 'title'),
-            goal: requiredString(payload.goal, 'goal'),
-            acceptanceCriteria: Array.isArray(payload.acceptanceCriteria)
-              ? payload.acceptanceCriteria.map(value => String(value).trim()).filter(Boolean)
-              : [],
+            goal,
+            // With no separate criteria, the user's goal itself is the minimum
+            // contract. Do not force a follow-up or invent broader requirements.
+            acceptanceCriteria: requestedCriteria.length ? requestedCriteria : [goal],
             workflowTemplate,
             workflowSnapshot,
             coordinationMode: DYNAMIC_COORDINATION_MODE,
