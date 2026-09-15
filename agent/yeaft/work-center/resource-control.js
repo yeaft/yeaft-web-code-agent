@@ -97,15 +97,20 @@ export class WorkCenterResourceControl {
     this.db.prepare('INSERT INTO work_item_execution_controls (work_item_id, limits_json) VALUES (?, ?)')
       .run(id, JSON.stringify(DEFAULT_EXECUTION_LIMITS));
     for (const run of this.db.prepare('SELECT * FROM runs WHERE work_item_id = ?').all(id)) {
-      const turns = this.db.prepare(`SELECT COUNT(*) AS n FROM engine_turns WHERE run_id = ? AND status != 'prepared'`).get(run.id).n;
-      const requests = Math.max(count(run.llm_request_count), count(turns), run.status === 'running' ? 1 : 0);
+      const turns = this.db.prepare(`SELECT COUNT(*) AS n,
+        MAX(status IN ('dispatching', 'unknown')) AS unknown FROM engine_turns
+        WHERE run_id = ? AND status != 'prepared'`).get(run.id);
+      // Aggregate Run usage may only cover earlier responses. A later ambiguous
+      // dispatch must retain its estimate even when the Run is already terminal.
+      const unknown = ['running', 'dispatch_unknown'].includes(run.status) || !!turns.unknown;
+      const requests = Math.max(count(run.llm_request_count), count(turns.n), unknown ? 1 : 0);
       if (!requests && !run.total_tokens) continue;
       const usage = normalizeTokenUsage({ inputTokens: run.input_tokens, outputTokens: run.output_tokens,
         cacheReadTokens: run.cache_read_tokens, cacheWriteTokens: run.cache_write_tokens, totalTokens: run.total_tokens });
-      const estimate = run.status === 'running' ? Math.max(usage.totalTokens, requests * UNKNOWN_REQUEST_TOKENS)
+      const estimate = unknown ? Math.max(usage.totalTokens, requests * UNKNOWN_REQUEST_TOKENS)
         : usage.totalTokens || requests * UNKNOWN_REQUEST_TOKENS;
       this.insert({ id: `legacy-run:${run.id}`, workItemId: id, kind: 'action', runId: run.id,
-        requests, estimate, usage, status: usage.totalTokens && run.status !== 'running' ? 'reported' : 'unknown' });
+        requests, estimate, usage, status: usage.totalTokens && !unknown ? 'reported' : 'unknown' });
     }
     for (const turn of this.db.prepare(`SELECT * FROM coordinator_provider_turns WHERE work_item_id = ?
       AND status != 'prepared'`).all(id)) {
@@ -343,6 +348,9 @@ export class WorkCenterResourceAdapter extends LLMAdapter {
         if (this.store.isExecutionStopped(this.workItemId)) {
           throw new WorkCenterResourceStopError(this.store.getExecutionControl(this.workItemId).stopReason);
         }
+        // Early legacy admission is not the last dispatch boundary. Recheck the
+        // original EngineTurn/Run lease without reserving or counting it again.
+        params.onRequestStart?.();
         return;
       }
       start();
@@ -388,8 +396,10 @@ export class WorkCenterResourceAdapter extends LLMAdapter {
 export async function callCoordinatorWithResourceControl(adapter, store, turn, claim, params) {
   const native = adapter instanceof LLMAdapter;
   let suppressFirstCallback = !native;
-  const start = () => {
-    if (!store.dispatchCoordinatorProviderTurn(turn.id, claim)) {
+  const start = (revalidate = false) => {
+    const active = revalidate ? store.isActiveCoordinatorProviderTurn(turn.id, claim)
+      : store.dispatchCoordinatorProviderTurn(turn.id, claim);
+    if (!active) {
       const error = new Error('Coordinator provider turn lost its dispatch fence or execution budget');
       error.retryable = false;
       throw error;
@@ -400,10 +410,9 @@ export async function callCoordinatorWithResourceControl(adapter, store, turn, c
     const response = await adapter.call({ ...params, onRequestStart: () => {
       if (suppressFirstCallback) {
         suppressFirstCallback = false;
-        const item = store.getWorkItem(turn.workItemId);
-        if (store.isExecutionStopped(turn.workItemId) || ['done', 'cancelled'].includes(item?.status)) {
-          throw new WorkCenterResourceStopError(store.getExecutionControl(turn.workItemId).stopReason);
-        }
+        // A resumed WorkItem may be active while this pre-stop claim is stale.
+        // Revalidate it without treating the first callback as a paid retry.
+        start(true);
         return;
       }
       start();

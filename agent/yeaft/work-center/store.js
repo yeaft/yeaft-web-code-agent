@@ -1588,6 +1588,16 @@ export class WorkItemStore {
     return row ? this.#mapCoordinatorProviderTurn(row) : null;
   }
 
+  isActiveCoordinatorProviderTurn(id, claim = {}) {
+    const turn = this.getCoordinatorProviderTurn(id);
+    if (!turn || turn.status !== 'dispatching' || turn.claimOwner !== claim.ownerBootId
+        || turn.claimEpoch !== Number(claim.claimEpoch)
+        || !this.#activeCoordinatorMailboxClaim(turn.coordinatorTurnId, claim)
+        || this.isExecutionStopped(turn.workItemId)) return false;
+    const item = this.getWorkItem(turn.workItemId);
+    return !!item && !['done', 'cancelled'].includes(item.status);
+  }
+
   dispatchCoordinatorProviderTurn(id, claim = {}) {
     return withTransaction(this.db, () => {
       const existing = this.getCoordinatorProviderTurn(id);
@@ -4820,15 +4830,19 @@ export class WorkItemStore {
       if (Number(actionChanged.changes) !== 1) throw new Error('Run interruption lost the Action fence');
       const activeWorkItem = this.getWorkItem(active.work_item_id);
       const concurrentMode = usesLegacyGraph(activeWorkItem) || isDynamicWorkItem(activeWorkItem);
+      // Resource denial changes only admission, not the owning Run's right to
+      // persist its final progress and release its fences during watcher stop.
+      const stopped = this.isExecutionStopped(active.work_item_id);
+      const nextStatus = stopped || !retryable ? 'needs_attention' : 'ready';
       const itemChanged = concurrentMode
         ? this.db.prepare(`UPDATE work_items SET status = ?, current_action_id = ?, current_run_id = NULL,
-          updated_at = ? WHERE id = ? AND status = 'running'`).run(
-          retryable ? 'ready' : 'needs_attention', action.id, now, active.work_item_id,
+          updated_at = ? WHERE id = ? AND status IN ('running', ?)`).run(
+          nextStatus, action.id, now, active.work_item_id, stopped ? 'needs_attention' : 'running',
         )
         : this.db.prepare(`UPDATE work_items SET status = ?, current_run_id = NULL,
-          updated_at = ? WHERE id = ? AND status = 'running' AND current_action_id = ?
+          updated_at = ? WHERE id = ? AND status IN ('running', ?) AND current_action_id = ?
           AND current_run_id = ?`).run(
-          retryable ? 'ready' : 'needs_attention', now, active.work_item_id, action.id, runId,
+          nextStatus, now, active.work_item_id, stopped ? 'needs_attention' : 'running', action.id, runId,
         );
       if (Number(itemChanged.changes) !== 1) throw new Error('Run interruption lost the WorkItem fence');
       this.appendEvent(active.work_item_id, 'run.interrupted', { retryable, reason }, {

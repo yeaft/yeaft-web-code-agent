@@ -10,19 +10,20 @@ import { WorkflowController } from '../../../../agent/yeaft/work-center/controll
 import { WorkCenterService } from '../../../../agent/yeaft/work-center/service.js';
 import { WorkItemCoordinator } from '../../../../agent/yeaft/work-center/coordinator.js';
 import { WorkItemRunner } from '../../../../agent/yeaft/work-center/runner.js';
+import { WorkItemWatcher } from '../../../../agent/yeaft/work-center/watcher.js';
 import { resolveDynamicActionPolicySnapshot } from '../../../../agent/yeaft/work-center/dynamic-coordination.js';
 import { projectWorkItemDetail, projectWorkItemSummary } from '../../../../agent/yeaft/work-center/projection.js';
 import { DEFAULT_EXECUTION_LIMITS, WorkCenterResourceAdapter, estimateRequestTokens, callCoordinatorWithResourceControl } from '../../../../agent/yeaft/work-center/resource-control.js';
 
 const fixtures = [];
-function fixture(dynamic = false) {
+function fixture(dynamic = false, executionSchemaVersion = 2) {
   const dir = mkdtempSync(join(tmpdir(), 'work-center-resource-'));
   let now = 1_000;
   const path = join(dir, 'work.db');
   const store = new WorkItemStore(path, { now: () => now });
   const controller = new WorkflowController(store);
   const item = controller.create({ title: 'Bounded work', goal: 'Never dispatch beyond durable budget',
-    acceptanceCriteria: ['Admission is persistent'], workflowTemplate: 'software-change', workDir: dir,
+    acceptanceCriteria: ['Admission is persistent'], workflowTemplate: 'software-change', workDir: dir, executionSchemaVersion,
     ...(dynamic ? { coordinationMode: 'dynamic', executionSchemaVersion: 3,
       workflowSnapshot: resolveDynamicActionPolicySnapshot({}, 'software-change') } : {}), start: !dynamic });
   const result = { dir, path, store, controller, item, advance: () => { now += 10_000; } };
@@ -293,6 +294,152 @@ describe('Work Center persistent resource control', () => {
     expect(store.getWorkItem(item.id).status).toBe('needs_attention');
     expect(store.claimReadyAction('automatic')).toBeNull();
     expect(store.canAutomaticallyCoordinate(item.id, { userMessage: true })).toBe(false);
+  });
+
+  it.each(['stream', 'call'])('rechecks the original Run and EngineTurn at a delayed legacy %s callback after cancel', async mode => {
+    const { store, item, controller } = fixture();
+    const { action, run } = store.claimReadyAction('runner');
+    const turn = store.prepareEngineTurn(action.id, run.id, 'runner', run.leaseEpoch);
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const dispatch = vi.fn();
+    const invoke = async params => {
+      await gate;
+      params.onRequestStart();
+      dispatch();
+      return { usage: { totalTokens: 7 } };
+    };
+    const adapter = new WorkCenterResourceAdapter({ call: invoke, async *stream(params) {
+      const result = await invoke(params);
+      yield { type: 'usage', ...result.usage };
+    } }, store, item.id, run.id);
+    const params = { maxTokens: 100, onRequestStart: () => {
+      if (!store.claimEngineTurn(turn.id, 'runner', run.leaseEpoch)) throw new Error('Original Run lease lost');
+    } };
+    const pending = mode === 'stream' ? drain(adapter.stream(params)) : adapter.call(params);
+    expect(store.getEngineTurn(turn.id)).toMatchObject({ status: 'dispatching', dispatchAttempt: 1 });
+    controller.cancel(item.id);
+    const rejected = expect(pending).rejects.toThrow(/Original Run lease lost/);
+    release();
+    await rejected;
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(store.getEngineTurn(turn.id).dispatchAttempt).toBe(1);
+    expect(store.getExecutionControl(item.id).usage).toMatchObject({ llmRequestCount: 1, unknownRequests: 1 });
+  });
+
+  it('revalidates admitted legacy callbacks without another reservation or dispatch attempt', async () => {
+    const { store, item } = fixture();
+    limits(store, item.id, { maxRequests: 2, maxRunRequests: 1 });
+    const { action, run } = store.claimReadyAction('runner');
+    const engineTurn = store.prepareEngineTurn(action.id, run.id, 'runner', run.leaseEpoch);
+    const claimEngineTurn = vi.spyOn(store, 'claimEngineTurn');
+    const adapter = new WorkCenterResourceAdapter({ async *stream(params) {
+      await Promise.resolve();
+      params.onRequestStart();
+      yield { type: 'usage', totalTokens: 7 };
+    } }, store, item.id, run.id);
+    await drain(adapter.stream({ maxTokens: 100, onRequestStart: () => {
+      expect(store.claimEngineTurn(engineTurn.id, 'runner', run.leaseEpoch)).not.toBeNull();
+    } }));
+    expect(claimEngineTurn).toHaveBeenCalledTimes(2);
+    expect(store.getEngineTurn(engineTurn.id).dispatchAttempt).toBe(1);
+    const started = coordinatorTurn(store, item.id);
+    const request = { maxTokens: 100 };
+    const turn = store.prepareCoordinatorProviderTurn(item.id, started.turnId, 1, request, started.fence.claim);
+    const checkClaim = vi.spyOn(store, 'isActiveCoordinatorProviderTurn');
+    await callCoordinatorWithResourceControl({ call: async params => {
+      await Promise.resolve();
+      params.onRequestStart();
+      return { usage: { totalTokens: 5 } };
+    } }, store, turn, started.fence.claim, request);
+    expect(checkClaim).toHaveBeenCalledExactlyOnceWith(turn.id, started.fence.claim);
+    expect(store.getExecutionControl(item.id)).toMatchObject({ stopReason: null,
+      usage: { llmRequestCount: 2, totalTokens: 12, unknownRequests: 0, inFlightRequests: 0 } });
+  });
+
+  it('rechecks the original Coordinator claim at a delayed legacy callback after stop and resume', async () => {
+    const { store, item, controller } = fixture();
+    const started = coordinatorTurn(store, item.id);
+    const request = { maxTokens: 100 };
+    const turn = store.prepareCoordinatorProviderTurn(item.id, started.turnId, 1, request, started.fence.claim);
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const dispatch = vi.fn();
+    const pending = callCoordinatorWithResourceControl({ call: async params => {
+      await gate;
+      params.onRequestStart();
+      dispatch();
+      return { usage: { totalTokens: 7 } };
+    } }, store, turn, started.fence.claim, request);
+    expect(store.getCoordinatorProviderTurn(turn.id).status).toBe('dispatching');
+    store.stopExecution(item.id, 'run_requests_exhausted');
+    controller.resume(item.id, { revision: store.getWorkItem(item.id).revision,
+      executionControlRevision: store.getExecutionControl(item.id).revision });
+    expect(store.isExecutionStopped(item.id)).toBe(false);
+    expect(store.getWorkItem(item.id).status).not.toBe('cancelled');
+    const rejected = expect(pending).rejects.toThrow(/dispatch fence/);
+    release();
+    await rejected;
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(store.getExecutionControl(item.id).usage).toMatchObject({ llmRequestCount: 1, unknownRequests: 1 });
+  });
+
+  it.each([1, 2])('persists final owning-lease progress on watcher stop after resource denial in schema %i without clearing the durable stop', async schema => {
+    const { store, item, controller, path } = fixture(false, schema);
+    limits(store, item.id, { maxRunRequests: 1 });
+    const finalProgress = { response: 'Partial response', llmRequestCount: 1, totalTokens: 70 };
+    const runner = { run: vi.fn(options => new Promise(resolve => {
+      options.registerProgressReader(() => finalProgress);
+      options.signal.addEventListener('abort', () => resolve({ outcome: 'retryable' }), { once: true });
+    })) };
+    const watcher = new WorkItemWatcher({ store, controller, runner, ownerBootId: 'runner' });
+    await watcher.tick();
+    const { run, action } = runner.run.mock.calls[0][0];
+    const request = { workItemId: item.id, kind: 'action', runId: run.id, request: { maxTokens: 100 } };
+    const reserved = store.reserveWorkItemRequest(request);
+    store.settleWorkItemRequest(reserved.id, { totalTokens: 70 });
+    expect(store.reserveWorkItemRequest(request).allowed).toBe(false);
+    const stopped = store.getExecutionControl(item.id);
+    expect(store.getWorkItem(item.id).status).toBe('needs_attention');
+    expect(store.interruptRun(run.id, 'wrong-owner', run.leaseEpoch, 'stale', finalProgress)).toBe(false);
+    await expect(watcher.stop()).resolves.toEqual([{ runId: run.id, interrupted: true }]);
+    expect(store.getRun(run.id)).toMatchObject({ status: 'interrupted', ...finalProgress });
+    expect(store.getAction(action.id)).toMatchObject({ status: 'ready', currentRunId: null });
+    expect(store.getWorkItem(item.id)).toMatchObject({ status: 'needs_attention', currentRunId: null });
+    expect(store.getExecutionControl(item.id)).toEqual(stopped);
+    expect(store.claimReadyAction('blocked')).toBeNull();
+    const reopened = new WorkItemStore(path);
+    try {
+      expect(reopened.getRun(run.id)).toMatchObject({ status: 'interrupted', ...finalProgress });
+      expect(reopened.getWorkItem(item.id).status).toBe('needs_attention');
+      expect(reopened.getExecutionControl(item.id).stopReason).toEqual(stopped.stopReason);
+      expect(reopened.claimReadyAction('restart')).toBeNull();
+    } finally { reopened.close(); }
+  });
+
+  it.each(['dispatch_unknown', 'interrupted'])('retains partial legacy usage and unknown dispatch occupancy for a %s Run through migration and reopen', status => {
+    const { store, item, path } = fixture();
+    const { action, run } = store.claimReadyAction('old-agent');
+    const first = store.prepareEngineTurn(action.id, run.id, 'old-agent', run.leaseEpoch);
+    store.claimEngineTurn(first.id, 'old-agent', run.leaseEpoch);
+    store.consumeEngineTurn(first.id, 'old-agent', run.leaseEpoch, { responseText: 'Earlier response' });
+    store.updateRunProgress(run.id, 'old-agent', run.leaseEpoch, { llmRequestCount: 1, totalTokens: 70 });
+    const unknown = store.prepareEngineTurn(action.id, run.id, 'old-agent', run.leaseEpoch);
+    store.claimEngineTurn(unknown.id, 'old-agent', run.leaseEpoch);
+    if (status === 'dispatch_unknown') store.failEngineTurn(unknown.id, 'old-agent', run.leaseEpoch, new Error('Transport lost'));
+    else store.interruptRun(run.id, 'old-agent', run.leaseEpoch);
+    expect(store.getRun(run.id).status).toBe(status);
+    store.db.exec('DROP TRIGGER work_item_execution_stop_status; DROP TABLE work_item_resource_requests; DROP TABLE work_item_execution_controls;');
+    store.close();
+    const migrated = new WorkItemStore(path);
+    try {
+      const usage = migrated.getExecutionControl(item.id).usage;
+      expect(usage).toMatchObject({ llmRequestCount: 2, totalTokens: 70,
+        unknownRequests: 2, inFlightRequests: 0, chargedTokens: 2 * 16_384, reservedTokens: 2 * 16_384 });
+      const reopened = new WorkItemStore(path);
+      try { expect(reopened.getExecutionControl(item.id).usage).toEqual(usage); }
+      finally { reopened.close(); }
+    } finally { migrated.close(); }
   });
 
   it('imports legacy reported and unknown data once, validates extensions and does not double count reopened Runs', () => {
