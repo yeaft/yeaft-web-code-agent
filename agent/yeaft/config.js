@@ -544,6 +544,7 @@ export function loadConfig(overrides = {}) {
     // don't pollute the flat config namespace used by chat code.
     yeaft: normaliseYeaftSection(jsonConfig.yeaft),
     telemetry: normaliseTelemetrySection(jsonConfig.telemetry),
+    workCenter: { enabled: jsonConfig.workCenter?.enabled === true },
     dream: { enabled: jsonConfig.dream?.enabled === true },
     browserRuntime: normaliseBrowserRuntimeSection(jsonConfig.browserRuntime),
 

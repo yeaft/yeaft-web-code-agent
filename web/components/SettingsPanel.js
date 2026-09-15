@@ -269,6 +269,18 @@ export default {
                   </button>
                 </div>
                 <div class="sp-row">
+                  <div class="sp-row-left">
+                    <span class="sp-label">{{ $t('settings.general.workCenter') }}</span>
+                    <span class="sp-desc">{{ workCenterDraft.overridden ? $t('settings.general.workCenterEnvOverride') : $t('settings.general.workCenterDesc') }}</span>
+                  </div>
+                  <button class="sp-btn sp-btn-muted" @click="toggleWorkCenter" :disabled="workCenterDisabled">
+                    {{ workCenterDraft.enabled ? $t('settings.general.workCenterOn') : $t('settings.general.workCenterOff') }}
+                  </button>
+                </div>
+                <p v-if="workCenterUnsupported" class="sp-error">{{ $t('settings.general.workCenterUpgradeRequired') }}</p>
+                <p v-else-if="workCenterDraft.runtimeError" class="sp-error">{{ $t('settings.general.workCenterStartupFailed') }} {{ workCenterDraft.runtimeError }}</p>
+                <p v-if="workCenterError" class="sp-error">{{ workCenterError }}</p>
+                <div class="sp-row">
                   <span class="sp-label">{{ $t('files.officePreviewMode') }}</span>
                   <div class="sp-custom-select" :class="{ open: openDropdown === 'officePreview' }" v-click-outside="() => closeDropdown('officePreview')">
                     <button class="sp-custom-select-trigger" @click="toggleDropdown('officePreview')">
@@ -541,6 +553,11 @@ export default {
         traceTextMaxBytes: 262144,
       },
       telemetrySaving: false,
+      workCenterDraft: { enabled: false, source: 'config', overridden: false },
+      workCenterLoading: false,
+      workCenterSaving: false,
+      workCenterError: '',
+      workCenterGeneration: 0,
       ssoBoundMessage: '',
       ssoConflictMessage: '',
       qrDataUrl: '',
@@ -602,6 +619,19 @@ export default {
     },
     telemetryEnabled() {
       return this.telemetryDraft.enabled !== false;
+    },
+    currentWorkCenterAgentOnline() {
+      const id = this.chatStore.currentAgent;
+      return this.chatStore.connectionState === 'connected'
+        && !!id
+        && this.chatStore.agents?.some(agent => agent.id === id && agent.online !== false);
+    },
+    workCenterDisabled() {
+      return !this.currentWorkCenterAgentOnline || this.workCenterUnsupported || this.workCenterLoading || this.workCenterSaving || this.workCenterDraft.overridden;
+    },
+    workCenterUnsupported() {
+      const agent = this.chatStore.agents?.find(item => item.id === this.chatStore.currentAgent);
+      return !!agent && !agent.capabilities?.includes('work_center_feature_settings');
     },
     themeOptions() {
       return [
@@ -697,6 +727,7 @@ export default {
     if (this.visible) {
       this.applyInitialEntryPoint();
       this.loadTelemetry();
+      this.loadWorkCenterFeature();
       return this.loadData();
     }
     return undefined;
@@ -710,6 +741,7 @@ export default {
       if (val) {
         this.applyInitialEntryPoint();
         this.loadTelemetry();
+        this.loadWorkCenterFeature();
         this.loadData();
         if (this.activeTab === 'sandbox') this.loadSandbox();
       } else {
@@ -718,6 +750,14 @@ export default {
         // Closing settings while a bind QR is up should tear it down too.
         if (this.authStore.qrPanel) this.cancelQrBind();
       }
+    },
+    'chatStore.currentAgent'() {
+      this.workCenterGeneration += 1;
+      this.workCenterLoading = false;
+      this.workCenterSaving = false;
+      this.workCenterDraft = { enabled: false, source: 'config', overridden: false };
+      this.workCenterError = '';
+      if (this.visible) this.loadWorkCenterFeature();
     },
     activeTab(tab) {
       if (tab === 'invitations' && this.authStore.role === 'admin') {
@@ -902,6 +942,48 @@ export default {
     async toggleTelemetry() {
       this.telemetryDraft = { ...this.telemetryDraft, enabled: !this.telemetryEnabled };
       await this.saveTelemetry();
+    },
+
+
+    async loadWorkCenterFeature() {
+      const agentId = this.chatStore.currentAgent;
+      const generation = ++this.workCenterGeneration;
+      this.workCenterError = '';
+      if (!agentId || !this.currentWorkCenterAgentOnline || this.workCenterUnsupported) return;
+      this.workCenterLoading = true;
+      try {
+        const settings = await this.chatStore.loadWorkCenterFeatureSettings(agentId);
+        if (generation === this.workCenterGeneration && agentId === this.chatStore.currentAgent) {
+          this.workCenterDraft = { ...this.workCenterDraft, ...settings };
+        }
+      } catch (error) {
+        if (generation === this.workCenterGeneration && agentId === this.chatStore.currentAgent) {
+          this.workCenterError = error?.message || String(error);
+        }
+      } finally {
+        if (generation === this.workCenterGeneration && agentId === this.chatStore.currentAgent) this.workCenterLoading = false;
+      }
+    },
+
+    async toggleWorkCenter() {
+      if (this.workCenterDisabled) return;
+      const agentId = this.chatStore.currentAgent;
+      const generation = ++this.workCenterGeneration;
+      this.workCenterSaving = true;
+      this.workCenterError = '';
+      try {
+        const settings = await this.chatStore.updateWorkCenterFeatureSettings({ enabled: !this.workCenterDraft.enabled }, agentId);
+        if (generation === this.workCenterGeneration && agentId === this.chatStore.currentAgent) {
+          this.workCenterDraft = { ...this.workCenterDraft, ...settings };
+        }
+      } catch (error) {
+        if (generation === this.workCenterGeneration && agentId === this.chatStore.currentAgent) {
+          if (error?.settings) this.workCenterDraft = { ...this.workCenterDraft, ...error.settings };
+          this.workCenterError = error?.message || String(error);
+        }
+      } finally {
+        if (generation === this.workCenterGeneration && agentId === this.chatStore.currentAgent) this.workCenterSaving = false;
+      }
     },
 
     formatBytes(value) {

@@ -890,6 +890,8 @@ export const useChatStore = defineStore('chat', {
     telemetrySettings: null,
     telemetrySettingsByAgent: {},
     telemetryRequestByAgent: {},
+    workCenterFeatureSettingsByAgent: {},
+    workCenterFeatureRequestByAgent: {},
     agentOperations: {},
     agentUpgradeBatch: null,
     agentDreamState: {},
@@ -6820,6 +6822,33 @@ export const useChatStore = defineStore('chat', {
 
     updateTelemetrySettings(payload, agentId = this.currentAgent) {
       return this.requestTelemetrySettings('update', agentId, payload);
+    },
+
+
+    requestWorkCenterFeatureSettings(operation, agentId, settings = null) {
+      if (!agentId) return Promise.reject(new Error('no agent'));
+      const requestId = `work-center-feature-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      this.workCenterFeatureRequestByAgent = { ...this.workCenterFeatureRequestByAgent, [agentId]: requestId };
+      return new Promise((resolve, reject) => {
+        if (!this._workCenterFeaturePending) this._workCenterFeaturePending = {};
+        const timer = setTimeout(() => {
+          delete this._workCenterFeaturePending[requestId];
+          reject(new Error('Work Center settings request timed out'));
+        }, 15000);
+        this._workCenterFeaturePending[requestId] = { resolve, reject, timer, agentId, operation };
+        this.sendWsMessage({
+          type: operation === 'load' ? 'get_work_center_feature_settings' : 'update_work_center_feature_settings',
+          agentId, requestId, ...(operation === 'update' ? { settings } : {}),
+        });
+      });
+    },
+
+    loadWorkCenterFeatureSettings(agentId = this.currentAgent) {
+      return this.requestWorkCenterFeatureSettings('load', agentId);
+    },
+
+    updateWorkCenterFeatureSettings(settings, agentId = this.currentAgent) {
+      return this.requestWorkCenterFeatureSettings('update', agentId, settings);
     },
 
     restartAgent(agentId) {

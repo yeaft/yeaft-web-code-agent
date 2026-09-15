@@ -316,6 +316,8 @@ function handleAgentDisconnect(agentId, agentName, ws) {
       restart: 'restart_agent_ack', dream: 'dream_enabled_changed', upgrade: 'upgrade_agent_ack',
       'plugins:load': 'yeaft_plugins', 'plugins:update': 'yeaft_plugins_updated',
       'telemetry:load': 'telemetry_settings', 'telemetry:update': 'telemetry_settings_updated',
+      'work-center-feature:load': 'work_center_feature_settings',
+      'work-center-feature:update': 'work_center_feature_settings_updated',
     };
     void sendToWebClient(client, {
       type: responseTypes[pending.operation] || 'agent_request_error',

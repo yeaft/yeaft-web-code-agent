@@ -141,7 +141,7 @@ export async function loadSession(options = {}) {
     serverMode = false,
     dreamEnabled,
     managedCliReady = null,
-    workCenterEnabled = isWorkCenterEnabled(),
+    workCenterEnabled,
   } = options;
 
   // ─── 1. Determine config + store directories ─────────────
@@ -173,6 +173,7 @@ export async function loadSession(options = {}) {
 
   // ─── 2. Load config ───────────────────────────────────
   const config = loadConfig(overrides);
+  const effectiveWorkCenterEnabled = workCenterEnabled ?? isWorkCenterEnabled(process.env, config);
   // fix/dream-cadence-and-ui-trigger: tag config so the dream scheduler
   // can decide whether to keep its interval timer alive (server) or
   // unref it (CLI / tests). Non-persisted — set per-session by caller.
@@ -412,7 +413,7 @@ export async function loadSession(options = {}) {
   // ─── 8. Build tool registry ────────────────────────────
   const taskManager = new TaskManager({ yeaftDir });
   const toolRegistry = createFullRegistry();
-  if (!workCenterEnabled) toolRegistry.unregister('CreateWorkItem');
+  if (!effectiveWorkCenterEnabled) toolRegistry.unregister('CreateWorkItem');
 
   // Register any extra tools from caller
   for (const tool of extraTools) {

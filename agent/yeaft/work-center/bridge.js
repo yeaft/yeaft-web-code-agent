@@ -18,6 +18,7 @@ let initPromise = null;
 let shuttingDown = false;
 let shutdownPromise = null;
 let serviceFactory = null;
+let featureEnabled = false;
 
 const BROWSER_DETAIL_OPS = new Set([
   'get', 'create', 'update', 'start', 'cancel', 'resume', 'extend_budget', 'post_work_item_message', 'action_input', 'retry_action', 'guide', 'retry',
@@ -161,8 +162,9 @@ async function createDefaultService() {
 }
 
 async function ensureWorkCenter() {
-  if (service) return service;
+  if (!featureEnabled) throw new Error('Work Center is disabled');
   if (shuttingDown) throw new Error('Work Center is shutting down');
+  if (service) return service;
   if (initPromise) return initPromise;
   initPromise = (async () => {
     const created = serviceFactory ? await serviceFactory() : await createDefaultService();
@@ -182,7 +184,12 @@ async function ensureWorkCenter() {
 }
 
 export async function bootWorkCenter() {
+  featureEnabled = true;
   return ensureWorkCenter();
+}
+
+export function setWorkCenterFeatureEnabled(enabled) {
+  featureEnabled = enabled === true;
 }
 
 export async function snapshotCurrentSessionContext(sessionId) {
@@ -269,6 +276,7 @@ export async function shutdownWorkCenter() {
   } finally {
     initPromise = null;
     shutdownPromise = null;
+    shuttingDown = false;
   }
 }
 
@@ -277,6 +285,7 @@ export function __testSetWorkCenterService(next) {
   initPromise = null;
   shuttingDown = false;
   shutdownPromise = null;
+  featureEnabled = !!next;
 }
 
 export function __testSetWorkCenterFactory(factory) {
@@ -285,4 +294,5 @@ export function __testSetWorkCenterFactory(factory) {
   initPromise = null;
   shuttingDown = false;
   shutdownPromise = null;
+  featureEnabled = false;
 }
