@@ -30,7 +30,9 @@ export default {
     /** Explicit draft scope. Use this when one conversation contains multiple logical inputs. */
     draftKey: { type: String, default: null },
     /** Structured Session message quote shown above the composer. */
-    quote: { type: Object, default: null }
+    quote: { type: Object, default: null },
+    disabled: { type: Boolean, default: false },
+    disabledPlaceholderKey: { type: String, default: '' }
   },
   emits: ['remove-quote', 'quote-consumed'],
   template: `
@@ -122,9 +124,9 @@ export default {
       <MessageComposer
         ref="messageComposerRef"
         v-model="inputText"
-        :class="{ 'btw-active': store.btwMode }"
-        :placeholder="store.btwMode ? $t('btw.placeholder') : (isCompacting ? $t('chatHeader.compacting') : $t(effectivePlaceholderKey))"
-        :disabled="isCompacting"
+        :class="{ 'btw-active': store.btwMode, 'is-disabled': disabled }"
+        :placeholder="disabled && disabledPlaceholderKey ? $t(disabledPlaceholderKey) : (store.btwMode ? $t('btw.placeholder') : (isCompacting ? $t('chatHeader.compacting') : $t(effectivePlaceholderKey)))"
+        :disabled="isCompacting || disabled"
         :can-send="canSend"
         :show-stop="isStopVisible"
         :input-id="inputElementId"
@@ -472,7 +474,7 @@ export default {
     );
 
     const canSend = Vue.computed(() => {
-      if (isCompacting.value) return false;
+      if (props.disabled || isCompacting.value) return false;
       const hasText = !!inputText.value.trim();
       const hasAttachments = attachments.value.length > 0;
 

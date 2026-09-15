@@ -1595,6 +1595,8 @@ export default {
   'yeaft.session.deletingEllipsis': '删除中…',
   'yeaft.session.rename': '重命名',
   'yeaft.session.copy': '复制会话',
+  'yeaft.session.copying': '正在复制会话…',
+  'yeaft.session.copyComplete': '会话复制完成',
   'yeaft.session.copyFailed': '无法复制会话：{message}',
   // fix-yeaft-session-list-and-menu: 侧栏 ⋯ 菜单和 chat 对齐
   // （置顶 / 设置 / 移除）。真删保留在设置 modal 的删除会话页

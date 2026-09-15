@@ -121,6 +121,20 @@ export function parseWsMessage(store, data) {
   }
 }
 
+function settleSessionCrudForConnection(store, connectionGeneration, code, message) {
+  let settledCopy = false;
+  for (const [requestId, pending] of store._sessionCrudPending?.entries?.() || []) {
+    if (Number(pending?.connectionGeneration || 0) !== Number(connectionGeneration || 0)) continue;
+    if (pending?.op === 'copy') settledCopy = true;
+    pending.resolve?.({ ok: false, requestId, error: { code, message } });
+    store._sessionCrudPending.delete(requestId);
+  }
+  if (settledCopy && store.sessionForkPendingKey) {
+    store.sessionForkPendingKey = null;
+    store.sessionForkState = 'idle';
+  }
+}
+
 export function connect(store) {
   const authStore = useAuthStore();
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -160,6 +174,12 @@ export function connect(store) {
   store.agentSwitching = false;
 
   if (store.ws) {
+    settleSessionCrudForConnection(
+      store,
+      store.chatHistoryConnectionGeneration,
+      'connection_changed',
+      'WebSocket connection changed',
+    );
     store.ws.onopen = null;
     store.ws.onmessage = null;
     store.ws.onclose = null;
@@ -173,7 +193,8 @@ export function connect(store) {
   // reconnect catch-up will issue fresh requests after agent_list arrives.
   store.serverEncryptionRequired = true;
   store.chatHistoryRequestIdSupported = null;
-  store.chatHistoryConnectionGeneration = Number(store.chatHistoryConnectionGeneration || 0) + 1;
+  const connectionGeneration = Number(store.chatHistoryConnectionGeneration || 0) + 1;
+  store.chatHistoryConnectionGeneration = connectionGeneration;
   for (const [requestId, request] of Object.entries(store.projectMutationRequests || {})) {
     request?.resolve?.({
       ok: false,
@@ -283,6 +304,12 @@ export function connect(store) {
       pending.reject(new Error('WebSocket disconnected'));
     }
     store._workCenterFeaturePending = {};
+    settleSessionCrudForConnection(
+      store,
+      connectionGeneration,
+      'agent_offline',
+      'WebSocket disconnected',
+    );
     store.pendingAgentSelection = null;
     store.agentSwitching = false;
     const wasUpdating = store.connectionState === 'updating';

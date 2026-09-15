@@ -1598,6 +1598,8 @@ export default {
   'yeaft.session.deleteConfirm': 'Delete "{name}"? This permanently removes the session and all its data — this cannot be undone.',
   'yeaft.session.rename': 'Rename',
   'yeaft.session.copy': 'Copy session',
+  'yeaft.session.copying': 'Copying session…',
+  'yeaft.session.copyComplete': 'Session copied',
   'yeaft.session.copyFailed': 'Could not copy the session: {message}',
   // fix-yeaft-session-list-and-menu: sidebar ⋯ menu now mirrors chat
   // (pin / open settings / remove). Real delete stays in the settings

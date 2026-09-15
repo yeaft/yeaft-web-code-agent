@@ -160,8 +160,8 @@ export default {
             class="yeaft-topbar-right"
             :show-fork="!!forkSessionRow"
             :fork-disabled="!!forkUnavailableReason"
-            :fork-pending="!!store.sessionForkPendingKey"
-            :fork-title="forkUnavailableReason ? $t('yeaft.session.error.' + forkUnavailableReason) : $t('yeaft.session.copy')"
+            :fork-state="activeSessionForkState"
+            :fork-title="activeSessionForkState === 'copying' ? $t('yeaft.session.copying') : (activeSessionForkState === 'success' ? $t('yeaft.session.copyComplete') : (forkUnavailableReason ? $t('yeaft.session.error.' + forkUnavailableReason) : $t('yeaft.session.copy')))"
             @fork-session="forkCurrentSession"
             :search-open="historySearchOpen"
             :loading-more-history="store.yeaftManualHistoryRefreshLoading"
@@ -300,6 +300,8 @@ export default {
           :quote="messageQuote"
           :cancel-fn="cancelYeaft"
           :show-stop="isProcessing"
+          :disabled="isActiveSessionCopying"
+          disabled-placeholder-key="yeaft.session.copying"
           placeholder-key="yeaft.placeholder"
           @remove-quote="messageQuote = null"
           @quote-consumed="messageQuote = null"
@@ -942,6 +944,7 @@ export default {
     };
 
     const sendMessage = (text, attachmentInfos, quote, quickSend = null) => {
+      if (isActiveSessionCopying.value) return false;
       // task-334m: Pre-check `no_default_vp` before the WS round-trip.
       // If the active group has no roster + no defaultVpId, surface the
       // invite modal instead of sending a message that would round-trip
@@ -1055,6 +1058,16 @@ export default {
         ? { routeRef: { runtimeProvider: 'yeaft', agentId, sessionId } }
         : null;
     });
+    const forkSessionKey = Vue.computed(() => {
+      const route = forkSessionRow.value?.routeRef;
+      return route?.agentId && route?.sessionId ? `yeaft:${route.agentId}:${route.sessionId}` : null;
+    });
+    const activeSessionForkState = Vue.computed(() => (
+      !!forkSessionKey.value && store.sessionForkPendingKey === forkSessionKey.value
+        ? store.sessionForkState
+        : 'idle'
+    ));
+    const isActiveSessionCopying = Vue.computed(() => activeSessionForkState.value === 'copying');
     const forkUnavailableReason = Vue.computed(() => store.sessionForkUnavailableReason(forkSessionRow.value));
     const forkCurrentSession = async () => {
       if (!forkSessionRow.value || forkUnavailableReason.value) return;
@@ -1550,6 +1563,9 @@ export default {
       composerMenuOpen,
       topbarGroup,
       forkSessionRow,
+      forkSessionKey,
+      activeSessionForkState,
+      isActiveSessionCopying,
       forkUnavailableReason,
       forkCurrentSession,
       topbarSessionTitle,

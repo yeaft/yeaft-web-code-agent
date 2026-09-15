@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { spawn } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -7,10 +8,11 @@ import {
   readdirSync,
   readFileSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
+import { hostname, tmpdir } from 'os';
 import {
   ConversationStore,
   parseMessage,
@@ -519,6 +521,180 @@ describe('ConversationStore', () => {
       });
       expect(store.loadRecentBySession(sourceSessionId, 10).map(row => row.id))
         .not.toContain(idMap.get(reflection.id));
+    });
+
+    it('keeps global message ids unique across live append and Session copy stores', () => {
+      const liveStore = new ConversationStore(TEST_DIR);
+      const copyStore = new ConversationStore(TEST_DIR);
+      const sourceSessionId = 'session_copy_interleaved_source';
+      const targetSessionId = 'session_copy_interleaved_target';
+      const first = liveStore.append({ role: 'user', content: 'first', sessionId: sourceSessionId });
+      const second = liveStore.append({ role: 'assistant', content: 'second', sessionId: sourceSessionId });
+
+      const { idMap } = copyStore.copySession(sourceSessionId, targetSessionId);
+      const later = liveStore.append({ role: 'user', content: 'after copy', sessionId: sourceSessionId });
+      const ids = [first.id, second.id, ...idMap.values(), later.id];
+
+      expect(new Set(ids).size).toBe(ids.length);
+      expect(Number(later.id.slice(1))).toBeGreaterThan(Math.max(...[...idMap.values()].map(id => Number(id.slice(1)))));
+    });
+
+    it('recovers a corrupt sequence sidecar by scanning durable messages and invalidates old reservations', () => {
+      const firstStore = new ConversationStore(TEST_DIR);
+      const recoveryStore = new ConversationStore(TEST_DIR);
+      const first = firstStore.append({ role: 'user', content: 'before corruption', sessionId: 'session_sequence_recovery' });
+      writeFileSync(join(TEST_DIR, 'message-sequence.json'), '{not-json');
+
+      const recovered = recoveryStore
+        .append({ role: 'assistant', content: 'after corruption', sessionId: 'session_sequence_recovery' });
+      const later = firstStore
+        .append({ role: 'user', content: 'from old live store', sessionId: 'session_sequence_recovery' });
+
+      expect(new Set([first.id, recovered.id, later.id]).size).toBe(3);
+      expect(Number(recovered.id.slice(1))).toBeGreaterThan(Number(first.id.slice(1)));
+      expect(Number(later.id.slice(1))).toBeGreaterThan(Number(recovered.id.slice(1)));
+      expect(JSON.parse(readFileSync(join(TEST_DIR, 'message-sequence.json'), 'utf8'))).toMatchObject({
+        version: 1,
+        epoch: expect.any(String),
+      });
+    });
+
+    it('does not reclaim an aged lock owned by the live local process', () => {
+      const lockDir = join(TEST_DIR, 'message-sequence.lock');
+      mkdirSync(lockDir, { mode: 0o700 });
+      writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({
+        pid: process.pid,
+        host: hostname(),
+        token: 'live-owner',
+        startedAt: Date.now() - 120_000,
+      }));
+      const old = new Date(Date.now() - 120_000);
+      utimesSync(lockDir, old, old);
+
+      expect(() => new ConversationStore(TEST_DIR).append({
+        role: 'user', content: 'must not steal', sessionId: 'session_live_lock',
+      })).toThrow('Timed out reserving conversation message ids');
+      expect(JSON.parse(readFileSync(join(lockDir, 'owner.json'), 'utf8')).token).toBe('live-owner');
+    });
+
+    it('reclaims an aged lock whose owner belongs to another host identity', () => {
+      const lockDir = join(TEST_DIR, 'message-sequence.lock');
+      mkdirSync(lockDir, { mode: 0o700 });
+      writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({
+        pid: process.pid,
+        host: `${hostname()}-restored-image`,
+        token: 'stale-owner',
+        startedAt: Date.now() - 120_000,
+      }));
+      const old = new Date(Date.now() - 120_000);
+      utimesSync(lockDir, old, old);
+
+      const row = new ConversationStore(TEST_DIR).append({
+        role: 'user', content: 'recovered', sessionId: 'session_stale_lock',
+      });
+
+      expect(row.id).toBe('m0001');
+      expect(existsSync(lockDir)).toBe(false);
+    });
+
+    it('reserves non-overlapping ranges for concurrent Session copy stores', async () => {
+      const sourceSessionId = 'session_copy_concurrent_source';
+      for (let index = 0; index < 20; index += 1) {
+        store.append({ role: index % 2 ? 'assistant' : 'user', content: `row-${index}`, sessionId: sourceSessionId });
+      }
+      const left = new ConversationStore(TEST_DIR);
+      const right = new ConversationStore(TEST_DIR);
+
+      const [leftCopy, rightCopy] = await Promise.all([
+        Promise.resolve().then(() => left.copySession(sourceSessionId, 'session_copy_concurrent_left')),
+        Promise.resolve().then(() => right.copySession(sourceSessionId, 'session_copy_concurrent_right')),
+      ]);
+      const leftIds = [...leftCopy.idMap.values()];
+      const rightIds = [...rightCopy.idMap.values()];
+
+      expect(new Set([...leftIds, ...rightIds]).size).toBe(leftIds.length + rightIds.length);
+    });
+
+    it('reserves non-overlapping message ranges across Agent processes', async () => {
+      const moduleUrl = new URL('../../../../agent/yeaft/conversation/persist.js', import.meta.url).href;
+      const childScript = `
+        const { ConversationStore } = await import(process.env.PERSIST_MODULE_URL);
+        const store = new ConversationStore(process.env.CONVERSATION_ROOT);
+        const rows = Array.from({ length: 300 }, (_, index) => ({
+          role: index % 2 ? 'assistant' : 'user',
+          content: process.env.SESSION_ID + '-' + index,
+          sessionId: process.env.SESSION_ID,
+        }));
+        store.appendBatch(rows);
+      `;
+      const runChild = sessionId => new Promise((resolveChild, rejectChild) => {
+        const child = spawn(process.execPath, ['--input-type=module', '--eval', childScript], {
+          env: {
+            ...process.env,
+            PERSIST_MODULE_URL: moduleUrl,
+            CONVERSATION_ROOT: TEST_DIR,
+            SESSION_ID: sessionId,
+          },
+          stdio: ['ignore', 'ignore', 'pipe'],
+        });
+        let stderr = '';
+        child.stderr.setEncoding('utf8');
+        child.stderr.on('data', chunk => { stderr += chunk; });
+        child.once('error', rejectChild);
+        child.once('exit', code => {
+          if (code === 0) resolveChild();
+          else rejectChild(new Error(`sequence child exited ${code}: ${stderr}`));
+        });
+      });
+
+      await Promise.all([
+        runChild('session_process_left'),
+        runChild('session_process_right'),
+      ]);
+
+      const reader = new ConversationStore(TEST_DIR);
+      const ids = [
+        ...reader.loadAllBySession('session_process_left'),
+        ...reader.loadAllBySession('session_process_right'),
+      ].map(row => row.id);
+      expect(ids).toHaveLength(600);
+      expect(new Set(ids).size).toBe(ids.length);
+    });
+
+    it('copies a large durable transcript through bounded segment writes', () => {
+      const sourceSessionId = 'session_copy_large_source';
+      const targetSessionId = 'session_copy_large_target';
+      const rows = Array.from({ length: 2_000 }, (_, index) => ({
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        content: `large-copy-${index}-${'x'.repeat(256)}`,
+        sessionId: sourceSessionId,
+        ...(index % 17 === 0 ? { internal: true } : {}),
+      }));
+      store.appendBatch(rows);
+      const sourceFirst = store.loadAllBySession(sourceSessionId)[0];
+      store.moveToCold(sourceFirst.id);
+      const coldContent = sourceFirst.content;
+
+      const startedAt = performance.now();
+      const { copiedCount } = store.copySession(sourceSessionId, targetSessionId);
+      const elapsedMs = performance.now() - startedAt;
+      const conversationDir = join(TEST_DIR, 'sessions', targetSessionId, 'conversation');
+      const index = JSON.parse(readFileSync(join(conversationDir, 'index.json'), 'utf8'));
+      const physical = index.segments.flatMap(segment => readFileSync(join(conversationDir, 'segments', segment.file), 'utf8')
+        .trim().split('\n').filter(Boolean).map(JSON.parse));
+
+      expect(copiedCount).toBe(rows.length);
+      expect(index.totalMessages).toBe(rows.length);
+      expect(physical).toHaveLength(rows.length);
+      expect(physical.find(row => row.content === coldContent)).toMatchObject({
+        sessionId: targetSessionId,
+        cold: true,
+      });
+      expect(physical.filter(row => row.internal === true)).toHaveLength(Math.ceil(rows.length / 17));
+      // This is deliberately generous for shared CI. The old per-message index
+      // rewrite path takes tens of seconds for this fixture; the batched path
+      // should remain comfortably bounded without relying on a microbenchmark.
+      expect(elapsedMs).toBeLessThan(5_000);
     });
 
     it('stores many messages in a single JSONL segment with an index', () => {

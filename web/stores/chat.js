@@ -222,6 +222,8 @@ const YEAFT_RECENT_TURNS = 5;
 const YEAFT_HISTORY_DELTA_ROWS = 100;
 const YEAFT_HISTORY_DELTA_BYTES = 512 * 1024;
 const YEAFT_SESSION_INVENTORY_TIMEOUT_MS = 15_000;
+const YEAFT_SESSION_CRUD_TIMEOUT_MS = 10_000;
+const YEAFT_SESSION_COPY_SUCCESS_MS = 450;
 const YEAFT_HISTORY_OUTLINE_RETRY_DELAYS_MS = Object.freeze([150, 300, 600, 1_000]);
 const YEAFT_HISTORY_OUTLINE_RETRYABLE_ERRORS = new Set(['index_building', 'stale_result']);
 const YEAFT_RUNNING_VP_STATES = new Set(['typing', 'thinking', 'retrying', 'streaming', 'tool']);
@@ -625,6 +627,7 @@ export const useChatStore = defineStore('chat', {
     serverEncryptionRequired: true,
     // 连接状态
     sessionForkPendingKey: null, // one explicit copy operation at a time across both UI entry points
+    sessionForkState: 'idle', // idle | copying | success | error
     connectionState: 'disconnected', // 'disconnected' | 'connecting' | 'connected' | 'reconnecting'
     reconnectAttempts: 0,
     maxReconnectAttempts: 10,
@@ -5840,7 +5843,10 @@ export const useChatStore = defineStore('chat', {
             this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects);
           }
           if (gs) gs.applyCrudResult(event, msg.agentId || null, {
-            activate: event.op !== 'copy' || !!pending,
+            // The initiating copy action owns navigation so it can render a
+            // visible success state before entering the new Session. Other
+            // tabs still receive the inventory update without being redirected.
+            activate: event.op !== 'copy',
           });
           if (event.ok && event.op === 'delete' && event.sessionId && msg.agentId) {
             this.clearYeaftHistoryMemory({
@@ -6609,19 +6615,33 @@ export const useChatStore = defineStore('chat', {
       if (gs) gs.markPending(requestId, op);
 
       return new Promise((resolve) => {
-        const timer = setTimeout(() => {
+        // Copy is a durable Agent-side operation. Once accepted by the socket it
+        // may legitimately outlive a browser timer, and timing out locally would
+        // report failure even though the clone is still being committed. Keep
+        // the correlated request open until its result or a real disconnect.
+        const timeoutMs = Number.isFinite(opts.timeoutMs)
+          ? Math.max(1, Number(opts.timeoutMs))
+          : (op === 'copy' ? null : YEAFT_SESSION_CRUD_TIMEOUT_MS);
+        const timer = timeoutMs == null ? null : setTimeout(() => {
           if (this._sessionCrudPending && this._sessionCrudPending.has(requestId)) {
             this._sessionCrudPending.delete(requestId);
-            resolve({ ok: false, op, error: { code: 'timeout', message: 'group_crud timeout' } });
+            if (gs?.pending) delete gs.pending[requestId];
+            resolve({ ok: false, op, error: { code: 'timeout', message: 'session_crud timeout' } });
           }
-        }, 10000);
+        }, timeoutMs);
         this._sessionCrudPending.set(requestId, {
+          op,
           agentId: overrideAgentId || this.currentAgent,
-          resolve: (result) => { clearTimeout(timer); resolve(result); },
+          connectionGeneration: Number(this.chatHistoryConnectionGeneration || 0),
+          resolve: (result) => {
+            if (timer) clearTimeout(timer);
+            if (gs?.pending) delete gs.pending[requestId];
+            resolve(result);
+          },
         });
         const sent = this.sendWsMessage(msg);
         if (op === 'copy' && !sent) {
-          clearTimeout(timer);
+          if (timer) clearTimeout(timer);
           this._sessionCrudPending.delete(requestId);
           if (gs?.pending) delete gs.pending[requestId];
           resolve({ ok: false, op, error: { code: 'agent_offline' } });
@@ -7455,12 +7475,15 @@ export const useChatStore = defineStore('chat', {
       if (unavailable) return { ok: false, op: 'copy', error: { code: unavailable } };
       const route = { ...row.routeRef };
       this.sessionForkPendingKey = yeaftCatalogKey(route.agentId, route.sessionId);
+      this.sessionForkState = 'copying';
       try {
         // Keep the existing copy wire contract for compatible Agent versions.
         const result = await this.sessionCrudRequest('copy', {
           sessionId: route.sessionId,
         }, { agentId: route.agentId });
         if (!result?.ok || !result.session?.id) return result;
+        this.sessionForkState = 'success';
+        await new Promise(resolve => setTimeout(resolve, YEAFT_SESSION_COPY_SUCCESS_MS));
         const copiedRoute = {
           runtimeProvider: 'yeaft',
           agentId: route.agentId,
@@ -7474,6 +7497,7 @@ export const useChatStore = defineStore('chat', {
       } catch (error) {
         return { ok: false, op: 'copy', error: { code: 'fork_failed', message: error?.message || String(error) } };
       } finally {
+        this.sessionForkState = 'idle';
         this.sessionForkPendingKey = null;
       }
     },

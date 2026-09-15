@@ -3472,7 +3472,7 @@ describe('message flow regressions', () => {
     expect(component).toContain(':show-stop="isStopVisible"');
     expect(messageComposer).toContain('v-if="showStop"');
     expect(messageComposer).not.toContain('v-else\n            type="button"\n            class="send-btn"');
-    expect(component).toContain('if (isCompacting.value) return false;');
+    expect(component).toContain('if (props.disabled || isCompacting.value) return false;');
     expect(component).not.toContain('if (isCompacting.value || isStopVisible.value) return false;');
     expect(component).toContain('if (!canSend.value) return;');
     expect(component).not.toContain('if (isStopVisible.value || !canSend.value) return;');
@@ -6305,6 +6305,7 @@ describe('message flow regressions', () => {
   it('copies only the active Yeaft Session and opens the returned identity', async () => {
     storeFactories.clear();
     const store = useChatStore();
+    const realSessionCrudRequest = store.sessionCrudRequest;
     store.connectionState = 'connected';
     store.agents = [{ id: 'agent-a', online: true }];
     store.sessionCrudRequest = vi.fn(async () => ({
@@ -6384,11 +6385,13 @@ describe('message flow regressions', () => {
     store.openCatalogSession.mockClear();
     const copying = store.copyCatalogSession(row);
     expect(store.sessionForkPendingKey).toBe(row.catalogKey);
+    expect(store.sessionForkState).toBe('copying');
     await expect(store.copyCatalogSession(row)).resolves.toMatchObject({ error: { code: 'fork_pending' } });
     expect(store.sessionCrudRequest).toHaveBeenCalledTimes(1);
     finish({ ok: false, error: { code: 'session_running' } });
     await copying;
     expect(store.sessionForkPendingKey).toBeNull();
+    expect(store.sessionForkState).toBe('idle');
     expect(store.openCatalogSession).not.toHaveBeenCalled();
     store.yeaftProcessingSessions = { 'agent-a\u001fsource-session': true };
     await expect(store.copyCatalogSession(row)).resolves.toMatchObject({ error: { code: 'session_running' } });
@@ -6399,6 +6402,28 @@ describe('message flow regressions', () => {
     store.sessionCrudRequest.mockRejectedValueOnce(new Error('disconnected'));
     await expect(store.copyCatalogSession(row)).resolves.toMatchObject({ ok: false, error: { message: 'disconnected' } });
     expect(store.sessionForkPendingKey).toBeNull();
+
+    // Copy is a durable long operation. It must not inherit the ordinary 10s
+    // CRUD timeout and report failure while the Agent is still committing it.
+    vi.useFakeTimers();
+    const previousWindowPinia = window.Pinia;
+    try {
+      store.sendWsMessage = vi.fn(() => true);
+      window.Pinia = { ...window.Pinia, useSessionsStore: () => null };
+      const delayed = realSessionCrudRequest.call(store, 'copy', { sessionId: 'source-session' }, { agentId: 'agent-a' });
+      const request = store.sendWsMessage.mock.calls.at(-1)[0];
+      await vi.advanceTimersByTimeAsync(10_001);
+      expect(store._sessionCrudPending.has(request.requestId)).toBe(true);
+      store._sessionCrudPending.get(request.requestId).resolve({
+        ok: true, op: 'copy', session: { id: 'late-copy', name: 'Late copy' },
+      });
+      store._sessionCrudPending.delete(request.requestId);
+      await expect(delayed).resolves.toMatchObject({ ok: true, session: { id: 'late-copy' } });
+    } finally {
+      window.Pinia = previousWindowPinia;
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
 
     sessions.applyCrudResult({ ok: true, op: 'copy', session: { id: 'other-tab-fork', name: 'Other tab' } }, 'agent-a', { activate: false });
     expect(sessions.sessionById('other-tab-fork', 'agent-a')).toBeTruthy();
