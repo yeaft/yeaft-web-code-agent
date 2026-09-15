@@ -228,14 +228,6 @@ function assertReadPath(toolName, workDir, attachmentFiles, value) {
 }
 
 function assertToolInput(toolName, input, workDir, attachmentFiles) {
-  if (toolName === 'GitRead') {
-    // GitRead has no cwd parameter. The wrapper fixes ctx.cwd to the canonical
-    // workspace; reject path filters escaping that workspace before dispatch.
-    for (const value of Array.isArray(input?.paths) ? input.paths : []) {
-      if (typeof value === 'string') assertPathInside(toolName, workDir, value);
-    }
-    return input;
-  }
   if (toolName === 'Bash') {
     if (input?.background === true) throw new Error('Work Center does not allow background Bash jobs');
     if (input?.cwd && canonicalWorkDir(path.resolve(input.cwd)) !== workDir) {
@@ -422,7 +414,7 @@ export function createSubmitWorkItemPlanTool({
       properties: {
         summary: { type: 'string', minLength: 1, maxLength: 2_000 },
         evidence: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', minLength: 1, maxLength: 1_000 } },
-        acceptanceChecks: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['criterion', 'status', 'evidence'], properties: { criterion: { type: 'string' }, status: { type: 'string', enum: ['passed', 'deferred', 'not_applicable'] }, evidence: { type: 'string', minLength: 1, maxLength: 1_000 } } } },
+        acceptanceChecks: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['criterion', 'status', 'evidence'], properties: { criterion: { type: 'string' }, status: { type: 'string', enum: ['passed', 'failed', 'deferred', 'not_applicable'] }, evidence: { type: 'string', minLength: 1, maxLength: 1_000 } } } },
         contractPatch: { type: 'object', additionalProperties: false, required: ['title', 'goal', 'acceptanceCriteria'], properties: { title: { type: 'string', minLength: 1, maxLength: 200 }, goal: { type: 'string', minLength: 1, maxLength: 8_000 }, acceptanceCriteria: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1, maxLength: 2_000 } } } },
         workItemType: { type: 'string', minLength: 1, maxLength: 64 },
         actions: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'object', additionalProperties: false, required: ['id', 'name', 'type', 'objective', 'approach', 'expectedOutcome', 'candidateVpIds', 'assignmentReason', 'dependsOnActionIds', 'workspaceMode'], properties: {
@@ -478,7 +470,7 @@ function terminalPlanningFields(options = {}) {
   return {
     summary: { type: 'string', minLength: 1, maxLength: 2_000 },
     evidence: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', minLength: 1, maxLength: 1_000 } },
-    acceptanceChecks: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['criterion', 'status', 'evidence'], properties: { criterion: { type: 'string' }, status: { type: 'string', enum: ['passed', 'deferred', 'not_applicable'] }, evidence: { type: 'string', minLength: 1, maxLength: 1_000 } } } },
+    acceptanceChecks: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['criterion', 'status', 'evidence'], properties: { criterion: { type: 'string' }, status: { type: 'string', enum: ['passed', 'failed', 'deferred', 'not_applicable'] }, evidence: { type: 'string', minLength: 1, maxLength: 1_000 } } } },
     ...(options.review === true ? {
       reviewDecision: { type: 'string', const: 'changes_requested' },
     } : {}),
@@ -743,7 +735,7 @@ function completionContract(action, workItem) {
       : '';
   const acceptanceChecks = (workItem?.acceptanceCriteria || []).map(criterion => ({
     criterion,
-    status: 'passed|deferred|not_applicable',
+    status: 'passed|failed|deferred|not_applicable',
     evidence: 'specific evidence reference',
   }));
   return `${toolSubmission}\n\nYou are executing one Work Center Action. Before the terminal JSON, write a concise user-facing response describing what you did and the result. Do not include raw tool output or secrets. End your response with exactly one JSON object, preferably in a json code fence:\n{
@@ -754,7 +746,7 @@ function completionContract(action, workItem) {
   "acceptanceChecks": ${JSON.stringify(acceptanceChecks)},
   "waitingReason": null,
   "error": null${reviewField}${triageField}${planField}
-}\nFor completed, provide at least one concrete evidence item and exactly one acceptanceChecks entry for every current acceptance criterion, in the same order, with status passed, deferred, or not_applicable and a non-empty evidence reference. Report every user-consumable file, URL, PR, or commit in outputs; evidence proves work, while outputs tell the user where the deliverable is. Triage must use its proposed criteria when submitting a contractPatch. An intermediate Action may defer criteria outside its task-specific expected result; the final deliver Action, and an approved review with no downstream work, require every criterion to pass. If a criterion is no longer applicable, ask the WorkItem Coordinator to revise the contract instead of pretending it passed. This is a deterministic submission gate, not independent proof: later verification and delivery Actions must verify the claims. A model turn ending is not completion. Use waiting when user or external input is required. Use retryable only for a transient failure. Do not start background jobs or delegate this Action.`;
+}\nFor completed, provide at least one concrete evidence item and exactly one acceptanceChecks entry for every current acceptance criterion, in the same order, with status passed, failed, deferred, or not_applicable and a non-empty evidence reference. Report every user-consumable file, URL, PR, or commit in outputs; evidence proves work, while outputs tell the user where the deliverable is. Triage must use its proposed criteria when submitting a contractPatch. An intermediate Action may defer criteria outside its task-specific expected result; the final deliver Action, and an approved review with no downstream work, require every criterion to pass. If a criterion is no longer applicable, request user confirmation of any contract change instead of pretending it passed. For response delivery, provide the user-facing conclusion in summary with concrete evidence; no artificial file or PR is required. This is a deterministic submission gate, not independent proof: later verification and delivery Actions must verify the claims. A model turn ending is not completion. Use waiting when user or external input is required. Use retryable only for a transient failure. Do not start background jobs or delegate this Action.`;
 }
 
 function safeCheckpointUrl(value) {

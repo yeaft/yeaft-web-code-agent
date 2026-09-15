@@ -263,7 +263,7 @@ export class WorkCenterService {
             // browser/user request. Trusted model producers may provide
             // Session provenance, but cannot grant themselves delivery rights.
             deliveryTarget: requestContext.userOriginated === true
-              && ['workspace_files', 'pull_request', 'merge'].includes(payload.deliveryTarget)
+              && ['response', 'workspace_files', 'pull_request', 'merge'].includes(payload.deliveryTarget)
               ? payload.deliveryTarget : null,
             reuseMemory: payload.reuseMemory !== false,
             origin: payload.origin && typeof payload.origin === 'object'

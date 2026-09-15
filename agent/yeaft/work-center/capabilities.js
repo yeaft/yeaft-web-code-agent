@@ -5,7 +5,7 @@
  */
 export const WORK_ITEM_TOOL_NAMES = Object.freeze([
   'FileRead', 'FileWrite', 'FileEdit', 'ApplyPatch', 'Glob', 'Grep',
-  'ListDir', 'GitRead', 'Bash', 'WebSearch', 'WebFetch', 'ViewImage', 'Skill',
+  'ListDir', 'Bash', 'WebSearch', 'WebFetch', 'ViewImage', 'Skill',
 ]);
 
 export function workItemBuiltinToolNames(hasAttachments = false) {

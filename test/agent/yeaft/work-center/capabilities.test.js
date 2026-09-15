@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { workItemCapabilityContext } from '../../../../agent/yeaft/work-center/capabilities.js';
 import { createWorkItemToolRegistry, workItemToolPolicySnapshot } from '../../../../agent/yeaft/work-center/runner.js';
 
@@ -22,7 +21,7 @@ describe('Work Center executable capability inventory', () => {
       const capabilities = workItemCapabilityContext([], { hasAttachments });
       expect(capabilities.tools.sort()).toEqual(registry.getAllTools().map(tool => tool.name).sort());
       expect(capabilities.tools.sort()).toEqual(workItemToolPolicySnapshot(workDir, hasAttachments ? [ref] : []).allowedToolNames.sort());
-      expect(capabilities.tools).toContain('GitRead');
+      expect(capabilities.tools).not.toContain('GitRead');
       expect(capabilities.tools).not.toEqual(expect.arrayContaining(['SpawnAgent', 'CreateWorkItem', 'HistorySearch']));
       expect(capabilities.tools.includes('Bash')).toBe(!hasAttachments);
     }
@@ -40,16 +39,4 @@ describe('Work Center executable capability inventory', () => {
     expect(workItemCapabilityContext([{ id: 'x'.repeat(200) }]).vps).toEqual([]);
   });
 
-  it('runs bounded Git evidence in the canonical workspace and rejects escaping path filters', async () => {
-    const workDir = mkdtempSync(join(tmpdir(), 'work-center-git-evidence-'));
-    directories.push(workDir);
-    execFileSync('git', ['init', '--quiet', workDir]);
-    writeFileSync(join(workDir, 'evidence.txt'), 'evidence');
-    const registry = createWorkItemToolRegistry({ workDir, isRunActive: () => true });
-    const result = await registry.execute('GitRead', { operation: 'status' }, { cwd: tmpdir() });
-    expect(String(result)).toContain('evidence.txt');
-    await expect(registry.execute('GitRead', { operation: 'diff', paths: ['../outside'] }, {})).rejects.toThrow(/escapes/);
-    const expired = createWorkItemToolRegistry({ workDir, isRunActive: () => false });
-    await expect(expired.execute('GitRead', { operation: 'status' }, {})).rejects.toThrow(/lease/);
-  });
 });
