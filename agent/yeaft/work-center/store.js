@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { WorkCenterResourceControl, WorkCenterResourceStopError } from './resource-control.js';
 import { normalizeEvidence, normalizeOutputs } from './evidence.js';
 import { currentGoalRuns, deriveGoalProgress, hasContradictoryEvidence, validGoalChecks } from './goal-state.js';
 import { assertCoordinatorContractAuthority, normalizeContractPatch } from './completion-contract.js';
@@ -816,11 +817,31 @@ export class WorkItemStore {
     this.db.exec('PRAGMA synchronous = NORMAL;');
     this.db.exec('PRAGMA foreign_keys = ON;');
     this.#initSchema();
+    this.resourceControl = new WorkCenterResourceControl(this);
     this.recoverCoordinatorMailbox();
     this.recoverCoordinatorProviderTurns();
     this.recoverOperations();
     this.recoverEngineTurns();
     this.recoverInterruptedCoordinatorTurns();
+  }
+
+  getExecutionControl(id) { return this.resourceControl.atomic(() => this.resourceControl.snapshot(id)); }
+  isExecutionStopped(id) { return this.resourceControl.stopped(id); }
+  reserveWorkItemRequest(request) { return this.resourceControl.reserve(request); }
+  settleCoordinatorRequest(id, usage, complete = true) { return this.resourceControl.atomic(() => this.resourceControl.settleCoordinator(id, usage, complete)); }
+  settleWorkItemRequest(id, usage, complete = true) { return this.resourceControl.settle(id, usage, complete); }
+  extendExecutionBudget(id, revision, additions) { return this.resourceControl.extend(id, revision, additions); }
+  stopExecution(id, code, details) { return this.resourceControl.stop(id, code, details); }
+  canAutomaticallyCoordinate(id, { userMessage = false } = {}) {
+    const row = this.db.prepare('SELECT status FROM work_items WHERE id = ?').get(id);
+    if (!row || ['done', 'cancelled'].includes(row.status) || this.isExecutionStopped(id)) return false;
+    const control = this.getExecutionControl(id);
+    return this.resourceControl.atomic(() => {
+      for (const action of this.db.prepare("SELECT * FROM actions WHERE work_item_id = ? AND status = 'failed'").all(id)) {
+        if (!this.resourceControl.canAttempt(mapAction(action))) return false;
+      }
+      return userMessage || this.now() >= control.retryAfter;
+    });
   }
 
   #initSchema() {
@@ -1354,6 +1375,8 @@ export class WorkItemStore {
 
   claimCoordinatorTurn(workItemId, turnId, owner, leaseMs = 60_000) {
     return withTransaction(this.db, () => {
+      const assistant = this.getWorkItem(workItemId)?.messages?.find(message => message.turnId === turnId && message.role === 'assistant');
+      if (!this.canAutomaticallyCoordinate(workItemId, { userMessage: !assistant?.automatic && !assistant?.recovery })) return null;
       const now = this.now();
       const row = this.db.prepare(`SELECT * FROM coordinator_mailbox_entries
         WHERE work_item_id = ? AND json_extract(payload, '$.turnId') = ?
@@ -1406,6 +1429,7 @@ export class WorkItemStore {
 
   claimCoordinatorMailbox(workItemId, owner, leaseMs = 60_000) {
     return withTransaction(this.db, () => {
+      if (!this.canAutomaticallyCoordinate(workItemId)) return null;
       const now = this.now();
       const row = this.db.prepare(`SELECT * FROM coordinator_mailbox_entries
         WHERE work_item_id = ? AND (status = 'pending'
@@ -1537,7 +1561,7 @@ export class WorkItemStore {
   }
 
   #activeCoordinatorMailboxClaim(coordinatorTurnId, claim = {}) {
-    if (!claim.mailboxId || !claim.ownerBootId || !Number.isInteger(Number(claim.claimEpoch))) return null;
+    if (!claim?.mailboxId || !claim.ownerBootId || !Number.isInteger(Number(claim.claimEpoch))) return null;
     return this.db.prepare(`SELECT * FROM coordinator_mailbox_entries WHERE id = ? AND status = 'claimed'
       AND claim_owner = ? AND claim_epoch = ? AND lease_expires_at > ?
       AND json_extract(payload, '$.turnId') = ?`).get(
@@ -1570,7 +1594,16 @@ export class WorkItemStore {
   dispatchCoordinatorProviderTurn(id, claim = {}) {
     return withTransaction(this.db, () => {
       const existing = this.getCoordinatorProviderTurn(id);
-      if (!existing || !this.#activeCoordinatorMailboxClaim(existing.coordinatorTurnId, claim)) return null;
+      if (!existing || !['prepared', 'dispatching'].includes(existing.status)
+          || !this.#activeCoordinatorMailboxClaim(existing.coordinatorTurnId, claim)) return null;
+      const reservation = this.reserveWorkItemRequest({
+        id: existing.status === 'prepared' ? id : `${id}:retry:${randomUUID()}`, workItemId: existing.workItemId,
+        kind: 'coordinator', request: existing.requestBody });
+      if (!reservation.allowed) return null;
+      if (existing.status === 'dispatching') {
+        for (const earlier of this.resourceControl.coordinatorRequestIds(id).slice(1)) this.settleWorkItemRequest(earlier, null, false);
+        return existing;
+      }
       const now = this.now();
       const changed = this.db.prepare(`UPDATE coordinator_provider_turns SET status = 'dispatching',
         dispatched_at = ?, updated_at = ? WHERE id = ? AND status = 'prepared'
@@ -1594,6 +1627,7 @@ export class WorkItemStore {
         stringify(response), responseHash, now, now, id, requestHash,
         claim.ownerBootId, Number(claim.claimEpoch),
       );
+      if (Number(changed.changes) === 1) this.resourceControl.settleCoordinator(id, response?.usage);
       return Number(changed.changes) === 1 ? this.getCoordinatorProviderTurn(id) : null;
     });
   }
@@ -2134,6 +2168,7 @@ export class WorkItemStore {
       const turn = this.getEngineTurn(turnId);
       if (!turn || turn.ownerBootId !== ownerBootId || turn.leaseEpoch !== leaseEpoch) return null;
       if (!this.#activeRunRow(turn.runId, ownerBootId, leaseEpoch, true)) return null;
+      if (this.isExecutionStopped(turn.workItemId)) return null;
       if (turn.status === 'dispatching') return turn;
       if (turn.status !== 'prepared') return null;
       const now = this.now();
@@ -3115,7 +3150,7 @@ export class WorkItemStore {
     }
     return workItems.map(workItem => {
       const actions = actionsByWorkItem.get(workItem.id) || [];
-      return graphExecutionState({ ...workItem, actions, runs: runsByWorkItem.get(workItem.id) || [] }, actions);
+      return graphExecutionState({ ...workItem, executionControl: this.getExecutionControl(workItem.id), actions, runs: runsByWorkItem.get(workItem.id) || [] }, actions);
     });
   }
 
@@ -3124,6 +3159,7 @@ export class WorkItemStore {
     if (!workItem) return null;
     const detail = {
       ...workItem,
+      executionControl: this.getExecutionControl(id),
       actions: this.db.prepare('SELECT * FROM actions WHERE work_item_id = ? ORDER BY sequence').all(id).map(mapAction),
       runs: this.db.prepare('SELECT * FROM runs WHERE work_item_id = ? ORDER BY started_at DESC').all(id).map(mapRun),
       planConflicts: this.listPlanConflicts(id),
@@ -3214,7 +3250,7 @@ export class WorkItemStore {
       );
       if (!mailbox) return null;
       const workItem = this.getWorkItem(mailbox.work_item_id);
-      if (!isDynamicWorkItem(workItem) || ['done', 'cancelled'].includes(workItem.status)) return null;
+      if (!isDynamicWorkItem(workItem) || !this.canAutomaticallyCoordinate(workItem.id)) return null;
       const latest = (workItem.messages || []).at(-1);
       if (latest?.role === 'assistant' && latest.status === 'thinking') return null;
       const now = this.now();
@@ -3306,6 +3342,7 @@ export class WorkItemStore {
       }
       const workItem = this.getWorkItem(id);
       if (!workItem) return null;
+      if (this.isExecutionStopped(id)) throw new WorkCenterResourceStopError(this.getExecutionControl(id).stopReason);
       if (['done', 'cancelled'].includes(workItem.status)) {
         throw new Error(`WorkItem in ${workItem.status} cannot accept Coordinator messages`);
       }
@@ -3438,6 +3475,7 @@ export class WorkItemStore {
       if (!this.#activeCoordinatorMailboxClaim(turnId, claim)) return null;
       const workItem = this.getWorkItem(expected.workItemId);
       if (!workItem) return null;
+      if (this.isExecutionStopped(workItem.id)) throw new WorkCenterResourceStopError(this.getExecutionControl(workItem.id).stopReason);
       if (workItem.revision !== expected.revision
           || workItem.planRevision !== expected.planRevision
           || workItem.ledgerRevision !== expected.ledgerRevision
@@ -3983,7 +4021,9 @@ export class WorkItemStore {
         messages[index],
         `coordinator:turn:${turnId}:assistant`,
       );
-      const dynamicAutomatic = isDynamicWorkItem(workItem) && expected.automatic === true;
+      if (!expected.interrupted) this.resourceControl.coordinatorFailed(workItem.id, turnId);
+      const dynamicAutomatic = isDynamicWorkItem(workItem) && expected.automatic === true
+        && !this.isExecutionStopped(workItem.id);
       if (dynamicAutomatic) {
         if (!this.releaseCoordinatorMailboxClaim(
           claim.mailboxId, claim.ownerBootId, claim.claimEpoch,
@@ -4258,8 +4298,14 @@ export class WorkItemStore {
       if (!Number.isInteger(expectedRevision) || workItem.revision !== expectedRevision) {
         throw new Error('WorkItem changed before it was resumed; refresh and try again');
       }
-      if (workItem.status !== 'cancelled') {
+      const stopped = this.isExecutionStopped(id);
+      if (workItem.status !== 'cancelled' && !stopped) {
         throw new Error(`WorkItem in ${workItem.status} cannot be resumed`);
+      }
+      if (stopped) {
+        this.resourceControl.resume(id);
+        this.#invalidateExecution(workItem, 'cancelled', 'cancelled', 'Explicit user resume', this.now());
+        this.db.prepare("UPDATE work_items SET status = 'cancelled' WHERE id = ?").run(id);
       }
 
       const now = this.now();
@@ -4579,7 +4625,9 @@ export class WorkItemStore {
               )
           )
         ORDER BY a.updated_at ASC, a.sequence ASC`).all();
-      const row = rows.find(candidate => !this.#hasBlockingOperation(candidate.work_item_id, candidate.id));
+      const row = rows.find(candidate => !this.isExecutionStopped(candidate.work_item_id)
+        && !this.#hasBlockingOperation(candidate.work_item_id, candidate.id)
+        && this.resourceControl.canAttempt(mapAction(candidate)));
       if (!row) return null;
       const now = this.now();
       let action = mapAction(row);
@@ -4679,7 +4727,7 @@ export class WorkItemStore {
     if (!row) return null;
     const workItem = this.getWorkItem(row.work_item_id);
     if (usesLegacyGraph(workItem) || isDynamicWorkItem(workItem)) return row;
-    return workItem?.status === 'running' && workItem.currentActionId === row.action_id
+    return (workItem?.status === 'running' || this.isExecutionStopped(workItem?.id)) && workItem.currentActionId === row.action_id
       && workItem.currentRunId === row.id ? row : null;
   }
 
@@ -5211,7 +5259,7 @@ export class WorkItemStore {
       } else {
         changedWorkItem = this.db.prepare(`UPDATE work_items SET status = ?, current_action_id = ?,
           current_run_id = NULL, ledger_revision = ledger_revision + ?, updated_at = ? WHERE id = ? AND current_run_id = ?
-          AND current_action_id = ? AND status = 'running' AND revision = ?`).run(
+          AND current_action_id = ? AND status IN ('running', 'needs_attention') AND revision = ?`).run(
           workItemStatus, currentActionId, ledgerIncrement, now, workItem.id, runId, action.id, nextWorkItem.revision,
         );
       }
@@ -5325,6 +5373,7 @@ export class WorkItemStore {
               WHERE json_extract(payload, '$.turnId') = ? AND status != 'acked'`).run(now, now, turnId);
           }
         }
+        this.resourceControl.coordinatorFailed(row.id, turnId);
         this.appendEvent(row.id, 'coordinator.turn_interrupted', {
           turnId: messages[index].turnId || null,
           error: messages[index].error,

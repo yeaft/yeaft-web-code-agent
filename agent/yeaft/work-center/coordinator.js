@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { resolveMaxOutputTokens } from '../models.js';
+import { callCoordinatorWithResourceControl } from './resource-control.js';
 import { normalizeSessionMessageQuote, sessionMessageQuotePrompt } from '../session-message-quote.js';
 import {
   LLMAuthError,
@@ -791,7 +792,8 @@ export class WorkItemCoordinator {
       : detail?.actions?.find(candidate => (
           candidate.id === detail.currentActionId && candidate.status === 'failed'
         ));
-    if (!detail || ['done', 'cancelled'].includes(detail.status) || action?.status !== 'failed') return null;
+    if (!detail || ['done', 'cancelled'].includes(detail.status) || action?.status !== 'failed'
+        || !this.store.canAutomaticallyCoordinate(id)) return null;
     const started = this.store.beginCoordinatorTurn(id, '', {
       revision: detail.revision,
       planRevision: detail.planRevision,
@@ -947,15 +949,9 @@ export class WorkItemCoordinator {
                 result = providerTurn.response;
               } else {
                 result = await Promise.race([
-                runtime.adapter.call({
+                callCoordinatorWithResourceControl(runtime.adapter, this.store, providerTurn, claim, {
                   ...requestBody,
                   signal: abortController.signal,
-                  onRequestStart: () => {
-                    if (!this.store.dispatchCoordinatorProviderTurn(providerTurn.id, claim)) {
-                      abortController.abort('work_center_coordinator_dispatch_fence_lost');
-                      throw new Error('Coordinator provider turn lost its dispatch fence');
-                    }
-                  },
                 }).then(response => {
                   const persisted = this.store.respondCoordinatorProviderTurn(
                     providerTurn.id, providerTurn.requestHash, response, claim,
@@ -1060,12 +1056,14 @@ export class WorkItemCoordinator {
         : recovery ? 'coordinator.recovery_completed' : 'coordinator.turn_completed', detail);
       return detail;
     } catch (error) {
+      if (providerTurn) this.store.settleCoordinatorRequest(providerTurn.id, null, false);
       if (providerTurn?.status === 'responded') {
         this.store.rejectCoordinatorProviderTurn(providerTurn.id, error, started.fence.claim);
       }
       const detail = this.store.failCoordinatorTurn(started.turnId, error, {
         ...started.fence,
         speaker,
+        interrupted: abortController.signal.aborted || this.shuttingDown,
       });
       if (detail) {
         options.onUpdate?.('coordinator.turn_failed', detail);

@@ -162,6 +162,15 @@ function sumExecutionStats(values) {
   }, emptyExecutionStats());
 }
 
+function combinedExecutionStats(detail) {
+  const stats = Array.isArray(detail.runs) ? sumExecutionStats(detail.runs) : executionStats(detail.executionStats);
+  if (detail.executionControl?.usage) {
+    const usage = executionStats(detail.executionControl.usage);
+    for (const key of Object.keys(usage)) if (!['loopCount', 'toolCount'].includes(key)) stats[key] = usage[key];
+  }
+  return stats;
+}
+
 function actionGeneration(value) {
   return Math.max(1, count(value) || 1);
 }
@@ -765,6 +774,7 @@ function enforceWorkItemBrowserDtoBudget(value, options = {}) {
     status: truncateUtf8(workItem.status, 256),
     currentActionId: truncateUtf8(workItem.currentActionId, 4 * 1024) || null,
     executionStats: workItem.executionStats,
+    executionControl: workItem.executionControl,
     actionCount: count(workItem.actionCount),
     actions: Array.isArray(workItem.actions) ? [] : undefined,
     actionStats: Array.isArray(workItem.actionStats) ? [] : undefined,
@@ -1003,9 +1013,8 @@ export function projectWorkItemDetail(detail, options = {}) {
     attentionActionIds: Array.isArray(detail.attentionActionIds) ? detail.attentionActionIds : undefined,
     mainline,
     currentActionId: detail.currentActionId || null,
-    executionStats: Array.isArray(detail.runs)
-      ? sumExecutionStats(detail.runs)
-      : executionStats(detail.executionStats),
+    executionControl: detail.executionControl,
+    executionStats: combinedExecutionStats(detail),
     reuseMemory: detail.reuseMemory !== false,
     deliveryTarget: ['response', 'workspace_files', 'pull_request', 'merge'].includes(detail.deliveryTarget)
       ? detail.deliveryTarget : null,
@@ -1095,7 +1104,8 @@ export function projectWorkItemSummary(detail) {
         ? detail.actionStats.map(action => ({ ...action })) : [],
       actionCount: count(detail.actionCount),
       completedActionCount: count(detail.completedActionCount),
-      executionStats: executionStats(detail.executionStats),
+      executionStats: combinedExecutionStats(detail),
+      executionControl: detail.executionControl,
       origin: detail.origin?.sessionId ? { sessionId: detail.origin.sessionId } : null,
       linkedSessionIds: Array.isArray(detail.linkedSessionIds) ? detail.linkedSessionIds : [],
       attachmentCount: Array.isArray(detail.attachments) ? detail.attachments.length : 0,
@@ -1130,9 +1140,8 @@ export function projectWorkItemSummary(detail) {
     currentActionId: detail.currentActionId || null,
     actionCount: detail.actions.filter(item => !['superseded', 'cancelled'].includes(item?.status)).length,
     completedActionCount: detail.actions.filter(item => item?.status === 'completed').length,
-    executionStats: Array.isArray(detail.runs)
-      ? sumExecutionStats(detail.runs)
-      : executionStats(detail.executionStats),
+    executionControl: detail.executionControl,
+    executionStats: combinedExecutionStats(detail),
     failureReason: workItemFailureReason(detail),
 
     currentAction: projectCurrentActionSummary(action, projectedAction),

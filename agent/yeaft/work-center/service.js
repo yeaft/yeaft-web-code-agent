@@ -320,7 +320,15 @@ export class WorkCenterService {
         this.#emit({ type: 'work_item.cancelled', workItem: detail });
         return detail;
       }
+      case 'extend_budget': {
+        if (requestContext.userOriginated !== true) throw new Error('Only explicit user requests can extend execution budget');
+        const id = requiredString(payload.id, 'id');
+        const detail = this.store.extendExecutionBudget(id, Number(payload.revision), payload.additions || {});
+        this.#emit({ type: 'work_item.execution_budget_extended', workItem: detail });
+        return detail;
+      }
       case 'resume': {
+        if (requestContext.userOriginated !== true) throw new Error('Only explicit user requests can resume execution');
         const id = requiredString(payload.id, 'id');
         const detail = this.controller.resume(id, { revision: payload.revision });
         this.watcher.abortInvalidWorkItemRuns(id);
@@ -633,7 +641,8 @@ export class WorkCenterService {
     const entry = entries.find(candidate => candidate.payload?.turnId) || entries[0];
     if (!entry) return null;
     const detail = this.store.getWorkItemDetail(workItemId);
-    if (detail?.actions?.some(action => action.status === 'running')) return null;
+    if (!this.store.canAutomaticallyCoordinate(workItemId)
+        || detail?.actions?.some(action => action.status === 'running')) return null;
     let turn;
     try {
       turn = this.coordinator.advance(entry.id, {
@@ -673,6 +682,7 @@ export class WorkCenterService {
     this.store.recoverCoordinatorProviderTurns();
     this.store.recoverCoordinatorMailbox();
     for (const recoverable of this.store.getRecoverableCoordinatorTurns?.() || []) {
+      if (!this.store.canAutomaticallyCoordinate(recoverable.workItemId)) continue;
       const claim = this.store.claimCoordinatorTurn(
         recoverable.workItemId, recoverable.turnId, this.ownerBootId,
       );
@@ -717,6 +727,10 @@ export class WorkCenterService {
     let next = null;
     for (const [key, entry] of this.recoveryQueue) {
       const detail = this.store.getWorkItemDetail(entry.workItemId);
+      if (!this.store.canAutomaticallyCoordinate(entry.workItemId)) {
+        this.recoveryQueue.delete(key);
+        continue;
+      }
       const action = detail?.actions?.find(candidate => candidate.id === entry.actionId);
       if (!detail || ['done', 'cancelled'].includes(detail.status)
           || action?.status !== 'failed'

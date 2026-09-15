@@ -17,6 +17,7 @@ import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { sessionMessageQuotePrompt } from '../session-message-quote.js';
 import { buildWorkItemAttachmentContext } from './attachments.js';
+import { WorkCenterResourceAdapter } from './resource-control.js';
 import { withUsageAccounting } from '../llm/usage-accounting.js';
 import {
   commitActionWorktree,
@@ -1150,6 +1151,7 @@ export class WorkItemRunner {
         )
       : null;
     const isRunActive = () => !signal.aborted
+      && !this.store.isExecutionStopped?.(workItem.id)
       && this.store.isActiveRun(run.id, ownerBootId, run.leaseEpoch);
     const workspaceRuntime = await this.#workspaceRuntime(workspaceDir, workDir, isRunActive);
     const mcpToolNames = workspaceRuntime.mcpTools.map(tool => tool.name);
@@ -1324,7 +1326,8 @@ export class WorkItemRunner {
       return onProgress(currentProgress());
     };
     if (typeof registerProgressReader === 'function') registerProgressReader(currentProgress);
-    const adapter = withUsageAccounting(runtime.adapter, usage => {
+    const adapter = withUsageAccounting(
+      new WorkCenterResourceAdapter(runtime.adapter, this.store, workItem.id, run.id), usage => {
       usageStats.inputTokens += usage.inputTokens;
       usageStats.outputTokens += usage.outputTokens;
       usageStats.cacheReadTokens += usage.cacheReadTokens;

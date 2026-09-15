@@ -13,6 +13,7 @@ import {
 } from '../../../../agent/yeaft/work-center/runner.js';
 import { WorkItemCoordinator } from '../../../../agent/yeaft/work-center/coordinator.js';
 import {
+  LLMAdapter,
   LLMAuthError,
   LLMContextError,
   LLMRateLimitError,
@@ -1885,6 +1886,8 @@ describe('Work Center core', () => {
         },
       }) }); } },
     });
+    // This bundled validation scenario intentionally exercises several failed turns.
+    store.extendExecutionBudget(item.id, store.getWorkItem(item.id).revision, { maxCoordinatorFailures: 3 });
     const invalidBefore = store.getWorkItemDetail(item.id);
     const invalidTurn = coordinator.message(item.id, {
       text: '用人话解释当前阻塞，不要修改计划。',
@@ -1974,8 +1977,10 @@ describe('Work Center core', () => {
       ledgerRevision: cancelBefore.ledgerRevision,
       coordinatorRevision: cancelBefore.coordinatorRevision,
     });
-    controller.cancel(cancellable.id);
+    // Cancellation after dispatch fences an already in-flight response; before
+    // dispatch cancellation now correctly prevents any provider invocation.
     for (let index = 0; index < 10 && !resolveCancelled; index += 1) await new Promise(resolve => setTimeout(resolve, 0));
+    controller.cancel(cancellable.id);
     resolveCancelled({ text: JSON.stringify({
       reply: 'I changed the goal.',
       decision: { kind: 'answer', reason: 'Goal request', contractPatch: null, guidance: [], actions: [] },
@@ -2319,6 +2324,8 @@ describe('Work Center core', () => {
       });
       expect(projectWorkItemDetail(unavailable).messages.at(-1).error)
         .not.toContain('provider temporarily unavailable');
+      // Advance the persisted retry deadline without sleeping in this fixture.
+      recoveryStore.db.prepare('UPDATE work_item_execution_controls SET retry_after = 0 WHERE work_item_id = ?').run(interrupted.item.id);
       const available = await interruptedCoordinator.recover(interrupted.item.id, {
         actionId: interrupted.review.action.id,
         actionGeneration: interrupted.review.action.generation,
@@ -3422,12 +3429,13 @@ describe('Work Center core', () => {
         let originalRequest = null;
         originalCoordinator = new WorkItemCoordinator({
           store: originalStore,
-          runtimeProvider: async () => runtime({
+          // Native adapter can await credentials before its dispatch callback.
+          runtimeProvider: async () => runtime(Object.assign(new LLMAdapter(), {
             call: request => {
               originalRequest = request;
               return new Promise(() => {});
             },
-          }),
+          })),
           policyProvider: async () => ({ modelPolicy: { mode: 'primary' } }),
           registry,
         });
@@ -3710,7 +3718,7 @@ describe('Work Center core', () => {
       claimLeaseMs: 3_600_000,
       runtimeProvider: async () => ({
         config: { primaryModel: 'provider/model', availableModels: [{ id: 'model', ref: 'provider/model', provider: 'provider' }] },
-        adapter: { call: async () => new Promise(() => {}) },
+        adapter: Object.assign(new LLMAdapter(), { call: async () => new Promise(() => {}) }),
       }),
       policyProvider: async () => ({ modelPolicy: { mode: 'primary' } }),
       registry: { listVps: () => [{ id: 'omni', name: 'Omni', role: 'Coordinator', traits: ['triage'] }] },
@@ -3858,7 +3866,7 @@ describe('Work Center core', () => {
             primaryModel: 'provider/model',
             availableModels: [{ id: 'model', ref: 'provider/model', provider: 'provider' }],
           },
-          adapter: { call: async () => new Promise(() => {}) },
+          adapter: Object.assign(new LLMAdapter(), { call: async () => new Promise(() => {}) }),
         }),
         policyProvider: async () => ({ modelPolicy: { mode: 'primary' } }),
         registry: {
