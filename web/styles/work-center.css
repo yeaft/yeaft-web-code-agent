@@ -1997,6 +1997,29 @@
   color: var(--error);
 }
 
+.work-center-notice {
+  display: flex;
+  min-height: 0;
+  padding: 32px 16px;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.work-center-notice p {
+  max-width: 520px;
+  margin: 0;
+  line-height: 1.55;
+}
+
+.work-center-notice-action {
+  min-height: 44px;
+}
+
 .work-center-modal-overlay {
   z-index: 1000;
   background: var(--modal-overlay-bg);

@@ -30,9 +30,9 @@ async function openGeneral(page) {
 
 async function expectEmptyWorkCenter(page) {
   await expect(page.locator('.work-center-main')).toBeVisible();
-  await expect(page.locator('.work-center-main')).toContainText('No compatible');
+  await expect(page.locator('.work-center-main')).toContainText('No online agents');
   await expect(page.locator('.work-center-agent-picker')).toHaveCount(0);
-  await expect(page.locator('.work-center-header-create')).toBeDisabled();
+  await expect(page.locator('.work-center-header-actions')).toHaveCount(0);
   await expect(page.locator('.session-sidebar-shell')).toBeHidden();
   await expect(page.getByRole('button', { name: 'Back to chat' })).toBeVisible();
   const bounds = await page.locator('.work-center-main').boundingBox();

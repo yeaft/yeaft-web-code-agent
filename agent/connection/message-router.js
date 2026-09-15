@@ -108,7 +108,14 @@ export async function applyWorkCenterFeatureUpdate(msg, dependencies = {}) {
     // Read inside the transition queue so the previous request is observable.
     const previous = getSettings(yeaftDir);
     const persisted = update(msg.settings || {}, yeaftDir);
-    if (persisted.error) return { ...persisted, persisted: false, effective: previous.enabled === true };
+    if (persisted.error) {
+      return {
+        ...previous,
+        error: persisted.error,
+        persisted: false,
+        effective: dependencies.runtimeEnabled ?? ctx.CONFIG?.workCenterEnabled === true,
+      };
+    }
 
     bridge.setWorkCenterFeatureEnabled(persisted.enabled);
     try {
@@ -140,7 +147,13 @@ export async function applyWorkCenterFeatureUpdate(msg, dependencies = {}) {
         try { await refreshCapabilities?.(); } catch { /* original transition error remains authoritative */ }
       } else {
         bridge.setWorkCenterFeatureEnabled(false);
+        try {
+          await bridge.shutdownWorkCenter();
+        } catch (shutdownError) {
+          rollbackRuntimeError = shutdownError?.message || String(shutdownError);
+        }
         if (ctx.CONFIG) ctx.CONFIG.workCenterEnabled = false;
+        try { await refreshCapabilities?.(); } catch { /* original transition error remains authoritative */ }
       }
       const effective = restored && !rollbackRuntimeError ? previous.enabled === true : false;
       return {

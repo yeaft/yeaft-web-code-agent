@@ -250,6 +250,36 @@
   font-weight: 500;
 }
 
+.agent-settings-setting-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.agent-settings-setting-status {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.agent-settings-setting-note {
+  color: var(--text-secondary) !important;
+}
+
+.agent-settings-switch.agent-settings-work-center-switch {
+  display: flex;
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  margin: -11px -3px;
+}
+
+.agent-settings-switch.agent-settings-work-center-switch span {
+  inset: 11px 3px;
+}
+
 .agent-settings-input-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -391,8 +421,15 @@
   text-align: center;
 }
 
+.agent-settings-inline-feedback {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
 .agent-settings-inline-message {
-  margin-bottom: 10px;
+  margin: 0;
   color: var(--success);
   font-size: 12px;
 }
@@ -426,6 +463,8 @@
   .agent-settings-input-grid { grid-template-columns: 1fr; }
   .agent-settings-section-heading { align-items: flex-start; }
   .agent-settings-detail-item { grid-template-columns: 1fr; gap: 5px; }
+  .agent-settings-work-center-row { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .agent-settings-work-center-row .agent-settings-setting-control { width: 100%; justify-content: space-between; }
   .agent-settings-maintenance { align-items: flex-start; flex-direction: column; }
   .agent-settings-actions { width: 100%; }
   .agent-settings-actions button { flex: 1; }

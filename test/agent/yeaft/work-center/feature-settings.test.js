@@ -85,6 +85,31 @@ describe('Work Center feature settings', () => {
     expect(result).toMatchObject({ enabled: true, effective: true, persisted: false, rolledBack: true, error: expect.stringContaining('capability broadcast failed') });
   });
 
+  it('shuts down and republishes disabled capabilities when persistence rollback fails', async () => {
+    const bridge = {
+      setWorkCenterFeatureEnabled: vi.fn(),
+      bootWorkCenter: vi.fn(),
+      shutdownWorkCenter: vi.fn(),
+    };
+    const refreshAgentCapabilities = vi.fn()
+      .mockRejectedValueOnce(new Error('capability broadcast failed'))
+      .mockResolvedValueOnce([]);
+    let updateCount = 0;
+    const result = await applyWorkCenterFeatureUpdate({ settings: { enabled: true } }, {
+      yeaftDir: '/tmp/test',
+      getWorkCenterFeatureSettings: () => ({ enabled: false, source: 'config', overridden: false }),
+      updateWorkCenterFeatureSettings: vi.fn(({ enabled }) => (++updateCount === 1
+        ? { enabled, source: 'config', overridden: false }
+        : { enabled: true, source: 'config', overridden: false, error: 'disk is read-only' })),
+      bridge,
+      refreshAgentCapabilities,
+    });
+    expect(bridge.shutdownWorkCenter).toHaveBeenCalledTimes(1);
+    expect(bridge.setWorkCenterFeatureEnabled).toHaveBeenLastCalledWith(false);
+    expect(refreshAgentCapabilities).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ effective: false, persisted: true, rolledBack: false, error: expect.stringContaining('capability broadcast failed') });
+  });
+
   it('documents that enabling registers CreateWorkItem for new Sessions only', async () => {
     const result = await applyWorkCenterFeatureUpdate({ settings: { enabled: true } }, {
       yeaftDir: '/tmp/test',
@@ -94,6 +119,25 @@ describe('Work Center feature settings', () => {
       refreshAgentCapabilities: vi.fn(),
     });
     expect(result).toMatchObject({ enabled: true, effective: true, persisted: true, sessionTools: 'new_sessions_only' });
+  });
+
+  it.each([true, false])('preserves configured state and effective=%s when persistence is rejected', async runtimeEnabled => {
+    const result = await applyWorkCenterFeatureUpdate({ settings: { enabled: false } }, {
+      yeaftDir: '/tmp/test',
+      getWorkCenterFeatureSettings: () => ({ enabled: true, source: 'environment', overridden: true }),
+      updateWorkCenterFeatureSettings: () => ({ enabled: false, source: 'environment', overridden: true, error: 'managed by environment' }),
+      bridge: { setWorkCenterFeatureEnabled: vi.fn(), bootWorkCenter: vi.fn(), shutdownWorkCenter: vi.fn() },
+      refreshAgentCapabilities: vi.fn(),
+      runtimeEnabled,
+    });
+    expect(result).toMatchObject({
+      enabled: true,
+      effective: runtimeEnabled,
+      source: 'environment',
+      overridden: true,
+      persisted: false,
+      error: 'managed by environment',
+    });
   });
 
   it('can boot again after shutdown', async () => {

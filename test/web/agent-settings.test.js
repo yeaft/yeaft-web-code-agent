@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { mount } from '@vue/test-utils';
+import { flushPromises, mount } from '@vue/test-utils';
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
@@ -226,6 +226,189 @@ describe('Agent settings surface', () => {
     await Vue.nextTick();
     await wrapper.get('.save-llm').trigger('click');
     expect(wrapper.emitted('saved')).toEqual([['agent-a']]);
+    wrapper.unmount();
+  });
+
+  it('loads and hot-enables Work Center for the selected capable Agent', async () => {
+    const settings = Vue.reactive({ enabled: false, effective: false, overridden: false, loaded: true });
+    const store = Vue.reactive({
+      agents: [{
+        id: 'agent-a', name: 'Agent A', online: true, capabilities: ['work_center_feature_settings'],
+      }],
+      currentAgent: 'agent-a',
+      agentOperations: {},
+      agentDreamState: {},
+      workCenterFeatureSettingsByAgent: { 'agent-a': settings },
+      loadTelemetrySettings: vi.fn(() => Promise.resolve({})),
+      loadWorkCenterFeatureSettings: vi.fn(() => Promise.resolve(settings)),
+      updateWorkCenterFeatureSettings: vi.fn(async ({ enabled }) => {
+        settings.enabled = enabled;
+        settings.effective = enabled;
+        return { ...settings, sessionTools: enabled ? 'new_sessions_only' : 'disabled_immediately' };
+      }),
+    });
+    globalThis.Pinia = { useChatStore: () => store };
+    globalThis.Vue = Vue;
+    const wrapper = mount(AgentSettingsPanel, {
+      props: { initialAgentId: 'agent-a' },
+      global: { mocks: { $t: key => key }, stubs: { LlmTab: true, QuickSendSettings: true } },
+    });
+    await flushPromises();
+    expect(store.loadWorkCenterFeatureSettings).toHaveBeenCalledWith('agent-a');
+    const toggle = wrapper.get('input[aria-label="agentSettings.workCenter.title"]');
+    expect(toggle.element.checked).toBe(false);
+    expect(toggle.attributes('disabled')).toBeUndefined();
+    await toggle.setValue(true);
+    await flushPromises();
+    expect(store.updateWorkCenterFeatureSettings).toHaveBeenCalledWith({ enabled: true }, 'agent-a');
+    expect(toggle.element.checked).toBe(true);
+    expect(wrapper.emitted('saved')).toEqual([['agent-a']]);
+    expect(wrapper.find('[role="status"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('restores the Work Center switch when saving is rejected', async () => {
+    const settings = Vue.reactive({ enabled: false, effective: false, overridden: false, loaded: true });
+    const error = Object.assign(new Error('managed by environment'), {
+      settings: { enabled: false, effective: false, overridden: true, loaded: true },
+    });
+    const store = Vue.reactive({
+      agents: [{ id: 'agent-a', name: 'Agent A', online: true, capabilities: ['work_center_feature_settings'] }],
+      currentAgent: 'agent-a', agentOperations: {}, agentDreamState: {},
+      workCenterFeatureSettingsByAgent: { 'agent-a': settings },
+      loadTelemetrySettings: vi.fn(() => Promise.resolve({})),
+      loadWorkCenterFeatureSettings: vi.fn(() => Promise.resolve(settings)),
+      updateWorkCenterFeatureSettings: vi.fn(() => Promise.reject(error)),
+    });
+    globalThis.Pinia = { useChatStore: () => store };
+    globalThis.Vue = Vue;
+    const wrapper = mount(AgentSettingsPanel, {
+      props: { initialAgentId: 'agent-a' },
+      global: { mocks: { $t: key => key }, stubs: { LlmTab: true, QuickSendSettings: true } },
+    });
+    await flushPromises();
+    const toggle = wrapper.get('input[aria-label="agentSettings.workCenter.title"]');
+    await toggle.setValue(true);
+    await flushPromises();
+    expect(toggle.element.checked).toBe(false);
+    expect(toggle.attributes('aria-checked')).toBe('false');
+    expect(wrapper.text()).toContain('managed by environment');
+    wrapper.unmount();
+  });
+
+  it('loads Work Center settings when the selected Agent gains capability after reconnect', async () => {
+    const store = Vue.reactive({
+      agents: [{ id: 'agent-a', name: 'Agent A', online: true, capabilities: [] }],
+      currentAgent: 'agent-a', agentOperations: {}, agentDreamState: {},
+      workCenterFeatureSettingsByAgent: {},
+      loadTelemetrySettings: vi.fn(() => Promise.resolve({})),
+      loadWorkCenterFeatureSettings: vi.fn(() => Promise.resolve({ enabled: false, loaded: true })),
+    });
+    globalThis.Pinia = { useChatStore: () => store };
+    globalThis.Vue = Vue;
+    const wrapper = mount(AgentSettingsPanel, {
+      props: { initialAgentId: 'agent-a' },
+      global: { mocks: { $t: key => key }, stubs: { LlmTab: true, QuickSendSettings: true } },
+    });
+    await flushPromises();
+    expect(store.loadWorkCenterFeatureSettings).not.toHaveBeenCalled();
+    store.agents[0].capabilities.push('work_center_feature_settings');
+    await flushPromises();
+    expect(store.loadWorkCenterFeatureSettings).toHaveBeenCalledWith('agent-a');
+    wrapper.unmount();
+  });
+
+  it('keeps Work Center read-only when the Agent version is old', async () => {
+    const store = Vue.reactive({
+      agents: [{ id: 'agent-old', name: 'Old', online: true, capabilities: [] }],
+      currentAgent: 'agent-old',
+      agentOperations: {},
+      agentDreamState: {},
+      workCenterFeatureSettingsByAgent: {},
+      loadTelemetrySettings: vi.fn(() => Promise.resolve({})),
+      loadWorkCenterFeatureSettings: vi.fn(),
+    });
+    globalThis.Pinia = { useChatStore: () => store };
+    globalThis.Vue = Vue;
+    const wrapper = mount(AgentSettingsPanel, {
+      props: { initialAgentId: 'agent-old' },
+      global: { mocks: { $t: key => key }, stubs: { LlmTab: true, QuickSendSettings: true } },
+    });
+    await flushPromises();
+    expect(store.loadWorkCenterFeatureSettings).not.toHaveBeenCalled();
+    expect(wrapper.find('input[aria-label="agentSettings.workCenter.title"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain('agentSettings.workCenter.unsupported');
+    expect(wrapper.text()).toContain('agentSettings.workCenter.upgradeRequired');
+    wrapper.unmount();
+  });
+
+  it('shows the effective Work Center state and locks environment-managed settings', async () => {
+    const settings = Vue.reactive({
+      enabled: true, effective: false, overridden: true, source: 'environment', loaded: true,
+    });
+    const store = Vue.reactive({
+      agents: [{
+        id: 'agent-env', name: 'Managed', online: true, capabilities: ['work_center_feature_settings'],
+      }],
+      currentAgent: 'agent-env',
+      agentOperations: {},
+      agentDreamState: {},
+      workCenterFeatureSettingsByAgent: { 'agent-env': settings },
+      loadTelemetrySettings: vi.fn(() => Promise.resolve({})),
+      loadWorkCenterFeatureSettings: vi.fn(() => Promise.resolve(settings)),
+      updateWorkCenterFeatureSettings: vi.fn(),
+    });
+    globalThis.Pinia = { useChatStore: () => store };
+    globalThis.Vue = Vue;
+    const wrapper = mount(AgentSettingsPanel, {
+      props: { initialAgentId: 'agent-env' },
+      global: { mocks: { $t: key => key }, stubs: { LlmTab: true, QuickSendSettings: true } },
+    });
+    await flushPromises();
+    const toggle = wrapper.get('input[aria-label="agentSettings.workCenter.title"]');
+    expect(toggle.element.checked).toBe(true);
+    expect(toggle.attributes('aria-checked')).toBe('true');
+    expect(toggle.attributes('disabled')).toBeDefined();
+    expect(wrapper.text()).toContain('agentSettings.workCenter.runtimeUnavailable');
+    expect(wrapper.text()).toContain('agentSettings.workCenter.runtimeUnavailableHint');
+    expect(wrapper.text()).toContain('agentSettings.workCenter.runtimeUnavailableMessage');
+    expect(wrapper.text()).not.toContain('agentSettings.workCenter.enabledHint');
+    expect(wrapper.text()).toContain('agentSettings.workCenter.environmentManaged');
+    expect(store.updateWorkCenterFeatureSettings).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('reports a Work Center load failure without leaving the status stuck on loading and retries', async () => {
+    const store = Vue.reactive({
+      agents: [{
+        id: 'agent-error', name: 'Error Agent', online: true, capabilities: ['work_center_feature_settings'],
+      }],
+      currentAgent: 'agent-error',
+      agentOperations: {},
+      agentDreamState: {},
+      workCenterFeatureSettingsByAgent: {},
+      loadTelemetrySettings: vi.fn(() => Promise.resolve({})),
+      loadWorkCenterFeatureSettings: vi.fn()
+        .mockRejectedValueOnce(new Error('offline'))
+        .mockImplementationOnce(() => {
+          const record = { enabled: false, effective: false, overridden: false, loaded: true };
+          store.workCenterFeatureSettingsByAgent = { 'agent-error': record };
+          return Promise.resolve(record);
+        }),
+    });
+    globalThis.Pinia = { useChatStore: () => store };
+    globalThis.Vue = Vue;
+    const wrapper = mount(AgentSettingsPanel, {
+      props: { initialAgentId: 'agent-error' },
+      global: { mocks: { $t: key => key }, stubs: { LlmTab: true, QuickSendSettings: true } },
+    });
+    await flushPromises();
+    expect(wrapper.text()).toContain('agentSettings.workCenter.loadFailedStatus');
+    expect(wrapper.text()).not.toContain('common.loading');
+    await wrapper.get('.agent-settings-inline-feedback button').trigger('click');
+    await flushPromises();
+    expect(store.loadWorkCenterFeatureSettings).toHaveBeenCalledTimes(2);
+    expect(wrapper.text()).toContain('agentSettings.workCenter.disabled');
     wrapper.unmount();
   });
 

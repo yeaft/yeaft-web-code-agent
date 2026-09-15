@@ -107,7 +107,12 @@ describe('Agent-scoped settings lifecycle', () => {
       type: 'work_center_feature_settings_updated', agentId: 'agent-a', requestId: request.requestId,
       enabled: false, effective: false, persisted: false, error: 'runtime failed',
     });
-    await expect(update).rejects.toThrow('runtime failed');
+    const rejection = update.catch(error => error);
+    const error = await rejection;
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toBe('runtime failed');
+    expect(error.settings).toMatchObject({ enabled: false, effective: false, persisted: false, error: 'runtime failed' });
+    expect(store.workCenterFeatureSettingsByAgent['agent-a']).toMatchObject({ enabled: false, effective: false, error: 'runtime failed' });
     expect(store._workCenterFeaturePending[request.requestId]).toBeUndefined();
   });
 

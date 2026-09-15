@@ -54,6 +54,11 @@ export default {
       saving: false,
       createGeneration: 0,
       llmConfigOpen: false,
+      agentSettingsOpen: false,
+      agentSettingsTargetId: null,
+      unavailableAgentStateGeneration: 0,
+      unavailableAgentStateLoading: false,
+      unavailableAgentStateError: '',
       search: '',
       boardVpId: '',
       boardWorkItemType: '',
@@ -86,6 +91,41 @@ export default {
       return this.agents.filter(agent => agent?.online
         && Array.isArray(agent.capabilities) && agent.capabilities.includes('work_center'));
     },
+    configurableDisabledAgents() {
+      return this.agents.filter(agent => {
+        const settings = this.store.workCenterFeatureSettingsByAgent?.[agent?.id];
+        return agent?.online
+          && Array.isArray(agent.capabilities)
+          && agent.capabilities.includes('work_center_feature_settings')
+          && !agent.capabilities.includes('work_center')
+          && settings?.loaded === true
+          && !settings.error
+          && settings.enabled !== true;
+      });
+    },
+    configurableUnavailableAgents() {
+      return this.agents.filter(agent => {
+        const settings = this.store.workCenterFeatureSettingsByAgent?.[agent?.id];
+        return agent?.online
+          && Array.isArray(agent.capabilities)
+          && agent.capabilities.includes('work_center_feature_settings')
+          && !agent.capabilities.includes('work_center')
+          && settings?.loaded === true
+          && !settings.error
+          && settings.enabled === true;
+      });
+    },
+    configurableAgentSettingsLoading() {
+      return this.unavailableAgentStateLoading;
+    },
+    configurableAgentSettingsFailed() {
+      return !!this.unavailableAgentStateError;
+    },
+    hasConfigurableOnlineAgents() {
+      return this.agents.some(agent => agent?.online
+        && agent.capabilities?.includes('work_center_feature_settings'));
+    },
+    hasOnlineAgents() { return this.agents.some(agent => agent?.online); },
     agentId() {
       const selected = this.store.workCenterAgentId;
       return this.onlineAgents.some(agent => agent.id === selected)
@@ -391,6 +431,13 @@ export default {
     },
   },
   watch: {
+    agents: {
+      immediate: true,
+      deep: true,
+      handler() {
+        this.loadUnavailableAgentStates();
+      },
+    },
     agentId: {
       immediate: true,
       handler(id, previousId) {
@@ -478,6 +525,7 @@ export default {
   },
   beforeUnmount() {
     invalidateWorkCenterUrlRestore(this);
+    this.unavailableAgentStateGeneration += 1;
     if (this.boardQueryTimer) clearTimeout(this.boardQueryTimer);
     window.removeEventListener('popstate', this.restoreWorkCenterUrl);
   },
@@ -517,6 +565,36 @@ export default {
     tr(key, fallback) {
       const translated = this.$t ? this.$t(key) : key;
       return translated && translated !== key ? translated : fallback;
+    },
+    async loadUnavailableAgentStates() {
+      const generation = ++this.unavailableAgentStateGeneration;
+      const candidates = this.agents.filter(agent => agent?.online
+        && agent.capabilities?.includes('work_center_feature_settings')
+        && !agent.capabilities.includes('work_center')
+        && (this.store.workCenterFeatureSettingsByAgent?.[agent.id]?.loaded !== true
+          || this.store.workCenterFeatureSettingsByAgent?.[agent.id]?.error));
+      this.unavailableAgentStateLoading = candidates.length > 0;
+      this.unavailableAgentStateError = '';
+      if (candidates.length === 0) return;
+      const results = await Promise.allSettled(candidates.map(agent => this.store.loadWorkCenterFeatureSettings(agent.id)));
+      if (generation !== this.unavailableAgentStateGeneration) return;
+      const failed = results.filter(result => result.status === 'rejected');
+      this.unavailableAgentStateError = failed.length
+        ? (failed[0].reason?.message || this.tr('workCenter.agentStatusLoadFailed', 'Could not check Work Center status.'))
+        : '';
+      this.unavailableAgentStateLoading = false;
+    },
+    openWorkCenterAgentSettings() {
+      const target = this.configurableDisabledAgents[0]
+        || this.configurableUnavailableAgents[0]
+        || this.agents.find(agent => agent?.online)
+        || null;
+      this.agentSettingsTargetId = target?.id || null;
+      this.agentSettingsOpen = true;
+    },
+    closeWorkCenterAgentSettings({ focusBack = false } = {}) {
+      this.agentSettingsOpen = false;
+      if (focusBack) this.$nextTick(() => this.$refs.backToChat?.focus({ preventScroll: true }));
     },
     selectWorkCenterAgent(nextAgentId) {
       if (!nextAgentId || nextAgentId === this.agentId) return;
@@ -1373,7 +1451,7 @@ export default {
                 />
               </div>
             </div>
-            <div class="work-center-header-actions">
+            <div v-if="agentId" class="work-center-header-actions">
               <button class="work-center-icon-button" type="button" @click="settingsOpen = true" :disabled="!agentId"
                       :title="tr('workCenter.settings.title', 'Work Center settings')" :aria-label="tr('workCenter.settings.title', 'Work Center settings')">
                 <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19.43 12.98c.04-.32.07-.65.07-.98s-.03-.66-.08-.98l2.11-1.65a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.61-.22l-2.49 1a7.2 7.2 0 0 0-1.69-.98L14.5 2.42A.49.49 0 0 0 14 2h-4a.49.49 0 0 0-.49.42L9.13 5.07c-.61.25-1.17.59-1.69.98l-2.49-1a.49.49 0 0 0-.61.22l-2 3.46a.49.49 0 0 0 .12.64l2.11 1.65c-.04.32-.08.66-.08.98s.03.66.08.98l-2.11 1.65a.5.5 0 0 0-.12.64l2 3.46c.12.22.38.31.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.04.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.58 1.69-.98l2.49 1c.23.08.49 0 .61-.22l2-3.46a.5.5 0 0 0-.12-.64l-2.11-1.65ZM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5Z"/></svg>
@@ -1413,9 +1491,26 @@ export default {
             </span>
           </div>
 
-          <p v-if="onlineAgents.length === 0" class="work-center-notice">
-            {{ tr('workCenter.noAvailableAgents', 'No compatible online Agents') }}
-          </p>
+          <div v-if="onlineAgents.length === 0" class="work-center-notice">
+            <p v-if="configurableAgentSettingsLoading">{{ tr('workCenter.checkingAgents', 'Checking Work Center availability…') }}</p>
+            <p v-else-if="configurableAgentSettingsFailed">{{ tr('workCenter.agentStatusLoadFailed', 'Could not check Work Center status. Try again.') }}</p>
+            <p v-else-if="configurableUnavailableAgents.length">{{ tr('workCenter.unavailableAgents', 'Work Center is configured on, but its runtime is unavailable. Review this Agent’s settings and logs.') }}</p>
+            <p v-else-if="configurableDisabledAgents.length">
+              {{ configurableDisabledAgents.length === 1
+                ? tr('workCenter.disabledAgents', 'Work Center is disabled on the online Agent.')
+                : $t('workCenter.disabledAgentsMany', { count: configurableDisabledAgents.length }) }}
+            </p>
+            <p v-else-if="hasOnlineAgents">{{ tr('workCenter.upgradeAgents', 'The online Agents do not support Work Center settings.') }}</p>
+            <p v-else>{{ tr('workCenter.noOnlineAgents', 'No online Agents') }}</p>
+            <button v-if="configurableAgentSettingsFailed" type="button" class="btn-secondary work-center-notice-action" @click="loadUnavailableAgentStates">
+              {{ tr('workCenter.retryAgentStatus', 'Retry status check') }}
+            </button>
+            <button v-else-if="hasOnlineAgents && !configurableAgentSettingsLoading" type="button" class="btn-secondary work-center-notice-action" @click="openWorkCenterAgentSettings">
+              {{ configurableDisabledAgents.length || configurableUnavailableAgents.length || hasConfigurableOnlineAgents
+                ? tr('workCenter.openAgentSettings', 'Open Agent settings')
+                : tr('workCenter.openAgentSettingsUpgrade', 'Open Agent settings to upgrade') }}
+            </button>
+          </div>
           <p v-if="error" class="work-center-error">{{ error }}</p>
           <p v-if="deleteWorkItemError" class="work-center-error" role="alert">{{ deleteWorkItemError }}</p>
           <div v-if="onlineAgents.length" class="work-center-body" :class="{ 'is-empty': loaded && !loading && items.length === 0 }" :data-pane="narrowPane">
@@ -1839,6 +1934,7 @@ export default {
 
       <WorkCenterSettingsModal v-if="settingsOpen" :key="agentId" :agent-id="agentId" @close="settingsOpen = false" @saved="refresh" @open-agent-models="settingsOpen = false; llmConfigOpen = true" />
       <AgentSettingsPanel v-if="llmConfigOpen" :initial-agent-id="agentId" initial-category="llm" @close="llmConfigOpen = false" @saved="refreshWorkCenterRuntime" />
+      <AgentSettingsPanel v-if="agentSettingsOpen" :initial-agent-id="agentSettingsTargetId" initial-category="operations" initial-section="work-center" @close="closeWorkCenterAgentSettings()" @saved="closeWorkCenterAgentSettings({ focusBack: true })" />
 
       <div v-if="createOpen" class="modal-overlay work-center-modal-overlay" @click.self="closeCreate">
         <form class="modal-card work-center-modal" role="dialog" aria-modal="true" aria-labelledby="work-center-create-title" @submit.prevent="submitCreate">
