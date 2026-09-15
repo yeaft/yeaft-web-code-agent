@@ -242,12 +242,23 @@ describe('independently ordered Work Center resource snapshots', () => {
   it('merges resource and Action versions independently in both directions', () => {
     const actionNewer = resourceSnapshot(12, 2, 200, 6);
     const resourceNewer = resourceSnapshot(13, 3, 300, 5);
+    for (const [snapshot, loops] of [[actionNewer, 6], [resourceNewer, 5]]) {
+      snapshot.executionStats = { loopCount: loops, toolCount: loops * 2,
+        llmRequestCount: snapshot.executionControl.usage.llmRequestCount,
+        inputTokens: loops * 10, outputTokens: loops, cacheReadTokens: loops, cacheWriteTokens: loops, totalTokens: loops * 13 };
+      for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'totalTokens']) {
+        snapshot.executionControl.usage[key] = snapshot.executionStats[key];
+      }
+    }
     for (const merge of [mergeWorkItemSummary, mergeWorkItemDetail, (current, incoming) => applyWorkItemSummary([current], incoming)[0]]) {
       const freshUsage = merge(actionNewer, resourceNewer);
       expect(freshUsage.executionControl).toEqual(resourceNewer.executionControl);
       expect((freshUsage.actionStats || freshUsage.actions)[0].progressRevision).toBe(6);
       const freshAction = merge(resourceNewer, actionNewer);
       expect(freshAction.executionControl).toEqual(resourceNewer.executionControl);
+      for (const combined of [freshUsage, freshAction]) {
+        expect(combined.executionStats).toEqual({ ...resourceNewer.executionStats, loopCount: 6, toolCount: 12 });
+      }
       expect((freshAction.actions || freshAction.actionStats)[0].progressRevision).toBe(6);
       const olderState = { ...resourceSnapshot(14, 3, 207), revision: 3, updatedAt: 5 };
       const settled = merge(freshAction, olderState);

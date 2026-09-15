@@ -185,7 +185,17 @@ function withLatestExecutionControl(current, candidate, accepted) {
   const order = compareExecutionControl(candidate.executionControl, current.executionControl);
   const executionControl = order > 0 || (order === 0 && accepted !== current && candidate.executionControl)
     ? candidate.executionControl : current.executionControl;
-  return executionControl === accepted.executionControl ? accepted : { ...accepted, executionControl };
+  let merged = executionControl === accepted.executionControl ? accepted : { ...accepted, executionControl };
+  if (merged.executionStats && executionControl?.usage) {
+    const executionStats = { ...merged.executionStats };
+    for (const key of ['llmRequestCount', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'totalTokens']) {
+      if (Number.isFinite(executionControl.usage[key])) executionStats[key] = executionControl.usage[key];
+    }
+    if (Object.keys(executionStats).some(key => executionStats[key] !== merged.executionStats[key])) {
+      merged = { ...merged, executionStats };
+    }
+  }
+  return merged;
 }
 
 export function isWorkItemDetailResponseStale(detail, current) {
@@ -325,7 +335,7 @@ export function mergeWorkItemSummary(current, summary) {
   }
   const resourceSource = aggregateAccepted ? summary : current;
   merged.executionControl = withLatestExecutionControl(current, summary, resourceSource).executionControl;
-  return merged;
+  return withLatestExecutionControl(current, merged, merged);
 }
 
 function hasStaleActionProgress(currentStats, nextStats) {
