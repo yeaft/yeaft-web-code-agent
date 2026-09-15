@@ -241,6 +241,11 @@
   box-shadow: 0 0 0 var(--chat-composer-focus-ring-width) var(--focus-ring);
 }
 
+.input-wrapper.chat-composer.is-disabled {
+  opacity: 0.62;
+  cursor: progress;
+}
+
 .chat-composer > .textarea-wrapper {
   flex: none;
   width: 100%;

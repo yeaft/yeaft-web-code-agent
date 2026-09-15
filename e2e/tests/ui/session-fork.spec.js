@@ -48,12 +48,16 @@ for (const scenario of [
     await page.setViewportSize({ width: scenario.width, height: 800 });
     // Close the mobile sidebar through the same state the toggle controls.
     await page.evaluate(() => { window.Pinia.useChatStore().sessionSidebarOpen = false; });
-    const headerFork = page.getByRole('button', { name: 'Copy session', exact: true });
+    const headerFork = page.locator('.yeaft-fork-btn');
     await expect(headerFork).toBeVisible();
+    await expect(headerFork).toHaveAccessibleName('Copy session');
     await expect(headerFork).toBeEnabled();
     await headerFork.focus();
     await expect(headerFork).toBeFocused();
     await expect(headerFork.locator('svg')).toBeVisible();
+    await expect(headerFork.locator('.yeaft-fork-icon')).toBeVisible();
+    await expect(headerFork.locator('circle')).toHaveCount(3);
+    await expect(headerFork.locator('rect')).toHaveCount(0);
     await expect(headerFork.locator('span')).toHaveCount(0);
     const geometry = await headerFork.evaluate(button => {
       const header = button.closest('.yeaft-topbar');
@@ -116,6 +120,7 @@ for (const scenario of [
     const requestPromise = mockAgent.waitForMessage('yeaft_copy_session');
     await trigger.click();
     await expect.poll(() => page.evaluate(() => !!window.Pinia.useChatStore().sessionForkPendingKey)).toBe(true);
+    await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().sessionForkState)).toBe('copying');
     expect(await page.evaluate(({ agentId, sessionId }) => window.Pinia.useChatStore().copyCatalogSession({
       routeRef: { runtimeProvider: 'yeaft', agentId, sessionId },
     }), { agentId: mockAgent.agentId, sessionId: source.id })).toMatchObject({ error: { code: 'fork_pending' } });
@@ -123,6 +128,11 @@ for (const scenario of [
     expect(request.sessionId).toBe(source.id);
     await expect(headerFork).toBeDisabled();
     await expect(headerFork).toHaveAttribute('aria-busy', 'true');
+    await expect(headerFork).toHaveClass(/is-copying/);
+    await expect(headerFork).toHaveAccessibleName('Copying session…');
+    const composer = page.locator('.yeaft-session-input textarea');
+    await expect(composer).toBeDisabled();
+    await expect(composer).toHaveAttribute('placeholder', 'Copying session…');
     expect(mockAgent._messageHistory.filter(msg => msg.type === 'yeaft_copy_session')).toHaveLength(1);
     mockAgent.send({
       type: 'yeaft_output', event: {
@@ -130,6 +140,12 @@ for (const scenario of [
         requestId: request.requestId, sourceSessionId: source.id, session: copied,
       },
     });
+    await expect(headerFork).toHaveClass(/is-success/);
+    await expect(headerFork).toHaveAccessibleName('Session copied');
+    await expect(headerFork.locator('.yeaft-fork-success-icon')).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().activeSessionRoute?.sessionId), {
+      timeout: 2_000,
+    }).toBe(copied.id);
     sendSnapshot([source, copied]);
     await expect.poll(() => page.evaluate(() => ({
       route: window.Pinia.useChatStore().activeSessionRoute,

@@ -594,9 +594,44 @@
   gap: 8px;
 }
 
+.yeaft-session-action-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .yeaft-fork-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.yeaft-fork-btn.is-copying {
+  opacity: 1;
+  color: var(--accent-blue);
+}
+
+.yeaft-fork-btn.is-copying .yeaft-fork-icon {
+  animation: yeaft-fork-progress 0.9s linear infinite;
+}
+
+.yeaft-fork-btn.is-success {
+  opacity: 1;
+  color: var(--success);
+  background: var(--sidebar-hover);
+}
+
+@keyframes yeaft-fork-progress {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .yeaft-fork-btn.is-copying .yeaft-fork-icon { animation: none; }
 }
 
 .yeaft-topbar-right {

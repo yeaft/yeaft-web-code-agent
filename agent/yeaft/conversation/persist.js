@@ -17,9 +17,10 @@
  * Reference: yeaft-yeaft-core-systems.md §4.1, yeaft-yeaft-brainstorm-v5.1.md
  */
 
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync, statSync, appendFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync, statSync, appendFileSync, rmSync } from 'fs';
 import { createHash, randomUUID } from 'node:crypto';
-import { join, basename } from 'path';
+import { hostname } from 'node:os';
+import { join, basename, resolve } from 'path';
 import { isPermissionError } from '../init.js';
 import { writeAtomic } from '../storage/atomic.js';
 import { pairSanitize } from '../pair-sanitize.js';
@@ -76,6 +77,138 @@ const SEGMENT_LINEAGE_FILE = 'lineage.json';
 const SEGMENT_DIR = 'segments';
 const SEGMENT_TARGET_BYTES = 1024 * 1024;
 const SEGMENT_FIRST_NAME = '000001.jsonl';
+const MESSAGE_SEQUENCE_FILE = 'message-sequence.json';
+const MESSAGE_SEQUENCE_LOCK_DIR = 'message-sequence.lock';
+const MESSAGE_SEQUENCE_LOCK_STALE_MS = 30_000;
+const MESSAGE_SEQUENCE_LOCK_ATTEMPTS = 200;
+const MESSAGE_SEQUENCE_LOCK_RETRY_MS = 5;
+const MESSAGE_SEQUENCE_RESERVATION_SIZE = 256;
+// Shared by every ConversationStore in this process. The durable sidecar owns
+// cross-process uniqueness; this cache only consumes ranges already reserved
+// by this process, so long-lived stores cannot diverge or reuse one another's ids.
+const messageSequenceReservations = new Map();
+
+function sleepSync(ms) {
+  if (ms <= 0) return;
+  const buffer = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(buffer, 0, 0, ms);
+}
+
+function processIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
+}
+
+function readMessageSequenceLock(lockDir) {
+  const details = statSync(lockDir);
+  try {
+    return { owner: JSON.parse(readFileSync(join(lockDir, 'owner.json'), 'utf8')), details };
+  } catch {
+    return { owner: null, details };
+  }
+}
+
+function messageSequenceLockIdentity(owner) {
+  if (!owner) return null;
+  if (typeof owner.token === 'string' && owner.token) return `token:${owner.token}`;
+  return `legacy:${owner.host || ''}:${Number(owner.pid) || 0}:${Number(owner.startedAt) || 0}`;
+}
+
+function messageSequenceLockCanBeTaken(lockDir) {
+  const { owner, details } = readMessageSequenceLock(lockDir);
+  if (owner?.host === hostname()) return !processIsAlive(Number(owner.pid));
+  // Yeaft data roots are local, but a hostname can change after restoring a
+  // machine image. Never steal a live local owner's lock based on age alone;
+  // an unverifiable remote/legacy owner is reclaimable only after the stale
+  // window and only if takeMessageSequenceLock observes the same identity.
+  return Date.now() - details.mtimeMs > MESSAGE_SEQUENCE_LOCK_STALE_MS;
+}
+
+function messageSequenceLockIsOwned(lockDir, token) {
+  try {
+    const owner = JSON.parse(readFileSync(join(lockDir, 'owner.json'), 'utf8'));
+    return owner?.token === token;
+  } catch {
+    return false;
+  }
+}
+
+function releaseMessageSequenceLock(lockDir, token) {
+  if (!messageSequenceLockIsOwned(lockDir, token)) return false;
+  const claimed = `${lockDir}.release-${token}`;
+  try {
+    renameSync(lockDir, claimed);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+  if (!messageSequenceLockIsOwned(claimed, token)) {
+    try { renameSync(claimed, lockDir); } catch {}
+    return false;
+  }
+  rmSync(claimed, { recursive: true, force: true });
+  return true;
+}
+
+function takeMessageSequenceLock(lockDir) {
+  const observed = readMessageSequenceLock(lockDir).owner;
+  if (!messageSequenceLockCanBeTaken(lockDir)) return false;
+  const observedIdentity = messageSequenceLockIdentity(observed);
+  const claimed = `${lockDir}.stale-${randomUUID()}`;
+  try {
+    renameSync(lockDir, claimed);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return true;
+    return false;
+  }
+  const claimedOwner = readMessageSequenceLock(claimed).owner;
+  const ownerChanged = messageSequenceLockIdentity(claimedOwner) !== observedIdentity;
+  const ownerRevived = claimedOwner?.host === hostname()
+    && processIsAlive(Number(claimedOwner.pid));
+  if (ownerChanged || ownerRevived) {
+    try { renameSync(claimed, lockDir); } catch {}
+    return false;
+  }
+  rmSync(claimed, { recursive: true, force: true });
+  return true;
+}
+
+function acquireMessageSequenceLock(lockDir) {
+  for (let attempt = 0; attempt < MESSAGE_SEQUENCE_LOCK_ATTEMPTS; attempt += 1) {
+    const token = randomUUID();
+    try {
+      mkdirSync(lockDir, { mode: 0o700 });
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      try {
+        if (takeMessageSequenceLock(lockDir)) continue;
+      } catch (inspectionError) {
+        if (inspectionError?.code === 'ENOENT') continue;
+        throw inspectionError;
+      }
+      sleepSync(MESSAGE_SEQUENCE_LOCK_RETRY_MS);
+      continue;
+    }
+    try {
+      writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({
+        pid: process.pid,
+        host: hostname(),
+        token,
+        startedAt: Date.now(),
+      }), { flag: 'wx', mode: 0o600 });
+      return token;
+    } catch (error) {
+      rmSync(lockDir, { recursive: true, force: true });
+      throw error;
+    }
+  }
+  throw new Error('Timed out reserving conversation message ids');
+}
 
 function latestTodoWriteSnapshot(toolCalls) {
   if (!Array.isArray(toolCalls)) return null;
@@ -817,6 +950,87 @@ class SegmentStore {
     this.saveIndex();
   }
 
+  /**
+   * Append messages whose persisted ids have already been allocated.
+   * Session copies own a complete ordered snapshot, so publishing segment data
+   * and metadata in batches avoids rewriting the index once per message.
+   *
+   * @param {object[]} messages
+   * @returns {object[]}
+   */
+  appendBatch(messages) {
+    const rows = (messages || []).filter(Boolean);
+    if (rows.length === 0) return [];
+    this.ensure();
+    const idx = this.loadIndex();
+    const establishesAnchor = (Number(idx.totalMessages) || 0) === 0
+      && (!Array.isArray(idx.segments) || idx.segments.length === 0);
+    let firstLine = null;
+    let revisionDelta = 0;
+    const foldedIds = [];
+    let segment = idx.segments[idx.segments.length - 1] || null;
+    let active = segment?.file || idx.activeSegment || SEGMENT_FIRST_NAME;
+    let activePath = join(this.segmentDir, active);
+    let currentSize = existsSync(activePath) ? statSync(activePath).size : 0;
+    let pendingLines = [];
+    let pendingBytes = 0;
+
+    const flush = () => {
+      if (pendingLines.length === 0) return;
+      appendFileSync(activePath, pendingLines.join(''), { encoding: 'utf8', mode: 0o644 });
+      pendingLines = [];
+      pendingBytes = 0;
+    };
+
+    for (const msg of rows) {
+      const line = `${JSON.stringify(msg)}\n`;
+      const lineBytes = Buffer.byteLength(line);
+      if (currentSize + pendingBytes > 0
+          && currentSize + pendingBytes + lineBytes >= SEGMENT_TARGET_BYTES) {
+        flush();
+        active = nextSegmentName(active);
+        activePath = join(this.segmentDir, active);
+        currentSize = existsSync(activePath) ? statSync(activePath).size : 0;
+        segment = null;
+      }
+      if (!segment || segment.file !== active) {
+        const seq = parseSeqFromId(msg.id);
+        segment = { file: active, firstSeq: seq, lastSeq: seq, count: 0, bytes: currentSize };
+        idx.segments.push(segment);
+      }
+      const seq = parseSeqFromId(msg.id);
+      segment.firstSeq = Number.isFinite(segment.firstSeq) ? Math.min(segment.firstSeq, seq) : seq;
+      segment.lastSeq = Number.isFinite(segment.lastSeq) ? Math.max(segment.lastSeq, seq) : seq;
+      segment.count = (segment.count || 0) + 1;
+      segment.bytes = (segment.bytes || 0) + lineBytes;
+      idx.totalMessages = (idx.totalMessages || 0) + 1;
+      idx.lastMessageId = msg.id || null;
+      idx.nextSeq = Math.max(Number(idx.nextSeq) || 1, seq + 1);
+      idx.activeSegment = active;
+      if (!firstLine) firstLine = line;
+      if (msg._reflection || (Array.isArray(msg.foldedMessageIds) && msg.foldedMessageIds.length > 0)) {
+        revisionDelta += 1;
+      }
+      if (msg._reflection && Array.isArray(msg.foldedMessageIds)) foldedIds.push(...msg.foldedMessageIds);
+      pendingLines.push(line);
+      pendingBytes += lineBytes;
+    }
+    flush();
+    idx.revision = (Number(idx.revision) || 0) + revisionDelta;
+    if (foldedIds.length > 0) {
+      idx.foldedMessageIds = Array.from(new Set([
+        ...(Array.isArray(idx.foldedMessageIds) ? idx.foldedMessageIds : []),
+        ...foldedIds.filter(id => typeof id === 'string' && id),
+      ]));
+    }
+    this.#persistCurrentLineage({
+      revision: idx.revision,
+      anchor: establishesAnchor && firstLine ? this.#lineageAnchorForLine(firstLine) : undefined,
+    });
+    this.saveIndex();
+    return rows;
+  }
+
   readAll({ beforeSeq = Infinity, afterSeq = -Infinity, desc = false, includeCold = false } = {}) {
     if (!this.hasData()) return [];
     const idx = this.loadIndex();
@@ -1169,7 +1383,7 @@ export class ConversationStore {
   #chatColdDir;
   #legacyMsgDir;
   #legacyColdDir;
-  #nextSeq;     // next message sequence number across chat/session/legacy
+  #fallbackNextSeq; // process-local ids when the durable allocator is read-only
   #nextSeqByThread; // Map<threadId, number> — per-thread counters (task-314)
 
   /**
@@ -1192,7 +1406,7 @@ export class ConversationStore {
     this.#legacyMsgDir = join(this.#legacyConvDir, 'messages');
     this.#legacyColdDir = join(this.#legacyConvDir, 'cold');
 
-    this.#nextSeq = null;
+    this.#fallbackNextSeq = null;
     this.#nextSeqByThread = new Map();
 
     // Ensure new chat and session-root directories exist (graceful on permission
@@ -1218,6 +1432,17 @@ export class ConversationStore {
   }
 
   // ─── Write API ──────────────────────────────────────────
+
+  #reserveFallbackSeqRange(count) {
+    const size = Math.max(1, Math.floor(Number(count) || 1));
+    if (!Number.isSafeInteger(this.#fallbackNextSeq) || this.#fallbackNextSeq <= 0) {
+      try { this.#fallbackNextSeq = this.#scanNextSeq(); }
+      catch { this.#fallbackNextSeq = Date.now(); }
+    }
+    const first = this.#fallbackNextSeq;
+    this.#fallbackNextSeq += size;
+    return first;
+  }
 
   #markDirty(message, reason, sourceIds = null) {
     const sessionId = message?.sessionId || null;
@@ -1260,7 +1485,26 @@ export class ConversationStore {
    * @returns {object} — the persisted message with id assigned
    */
   append(msg) {
-    const seq = this.#getNextSeq();
+    let seq;
+    try {
+      seq = this.#reserveSeqRange(1);
+    } catch (err) {
+      if (!isPermissionError(err)) throw err;
+      // Live chat remains best-effort when its data root is read-only. The
+      // returned row is usable by the current turn but is intentionally not
+      // persisted; strict operations such as Session copy bypass this path.
+      seq = this.#reserveFallbackSeqRange(1);
+      if (!_permissionWarned) {
+        console.warn(`[Yeaft] Cannot reserve message id: ${err.code} — message not persisted`);
+        _permissionWarned = true;
+      }
+      return {
+        ...msg,
+        id: `m${String(seq).padStart(4, '0')}`,
+        time: msg.time || new Date().toISOString(),
+        tokens_est: msg.tokens_est || estimateTokens(msg.content || ''),
+      };
+    }
     const id = `m${String(seq).padStart(4, '0')}`;
     const fullMsg = {
       ...msg,
@@ -1282,7 +1526,6 @@ export class ConversationStore {
       throw err;
     }
 
-    this.#nextSeq = seq + 1;
     if (fullMsg._reflection || (
       (fullMsg.role === 'user' || fullMsg.role === 'assistant')
       && isVisibleConversationRow(fullMsg)
@@ -1303,7 +1546,65 @@ export class ConversationStore {
    * @returns {object[]} — persisted messages with ids
    */
   appendBatch(messages) {
-    return messages.map(m => this.append(m));
+    const rows = (messages || []).filter(Boolean);
+    if (rows.length === 0) return [];
+    let firstSeq;
+    try {
+      firstSeq = this.#reserveSeqRange(rows.length);
+    } catch (err) {
+      if (!isPermissionError(err)) throw err;
+      firstSeq = this.#reserveFallbackSeqRange(rows.length);
+      if (!_permissionWarned) {
+        console.warn(`[Yeaft] Cannot reserve message ids: ${err.code} — message batch not persisted`);
+        _permissionWarned = true;
+      }
+      return rows.map((msg, index) => ({
+        ...msg,
+        id: `m${String(firstSeq + index).padStart(4, '0')}`,
+        time: msg.time || new Date().toISOString(),
+        tokens_est: msg.tokens_est || estimateTokens(msg.content || ''),
+      }));
+    }
+    const persisted = rows.map((msg, index) => ({
+      ...msg,
+      id: `m${String(firstSeq + index).padStart(4, '0')}`,
+      time: msg.time || new Date().toISOString(),
+      tokens_est: msg.tokens_est || estimateTokens(msg.content || ''),
+    }));
+    const batches = new Map();
+    for (const row of persisted) {
+      const key = row.chatId ? `chat:${row.chatId}` : (row.sessionId ? `session:${row.sessionId}` : 'chat:');
+      const batch = batches.get(key) || [];
+      batch.push(row);
+      batches.set(key, batch);
+    }
+
+    for (const batch of batches.values()) {
+      try {
+        this.#segmentStoreFor(batch[0], { create: true }).appendBatch(batch);
+      } catch (err) {
+        if (isPermissionError(err)) {
+          if (!_permissionWarned) {
+            console.warn(`[Yeaft] Cannot write message batch: ${err.code} — messages not persisted`);
+            _permissionWarned = true;
+          }
+          continue;
+        }
+        throw err;
+      }
+      for (const row of batch) {
+        if (row._reflection || (
+          (row.role === 'user' || row.role === 'assistant')
+          && isVisibleConversationRow(row)
+        )) {
+          this.#markDirty(row, row._reflection ? 'fold' : 'append', [
+            row.id,
+            ...(Array.isArray(row.foldedMessageIds) ? row.foldedMessageIds : []),
+          ]);
+        }
+      }
+    }
+    return persisted;
   }
 
   /**
@@ -1480,7 +1781,9 @@ export class ConversationStore {
     for (const dir of [this.#chatDir, ...this.#sessionConversationDirs({ primaryOnly: true })]) {
       this.#segmentStoreForConversationDir(dir).clear();
     }
-    this.#nextSeq = 1;
+    // Message ids are root-global durable identities. Clearing transcript rows
+    // must not rewind the allocator: another Agent process may still hold a
+    // previously reserved range, and reusing ids would corrupt later history.
     this.updateIndex({ totalMessages: 0, lastMessageId: null });
     this.#markAllDirty('clear');
   }
@@ -1672,15 +1975,18 @@ export class ConversationStore {
     const rows = [...rowsById.values()].sort(compareMessagesBySeq);
     if (rows.length === 0) return { copiedCount: 0, idMap: new Map() };
 
-    const firstSeq = this.#getNextSeq();
+    const firstSeq = this.#reserveSeqRange(rows.length);
     const idMap = new Map(rows.map((row, index) => [
       row.id,
       `m${String(firstSeq + index).padStart(4, '0')}`,
     ]));
     const remapId = id => idMap.get(id) || id;
     const copies = rows.map(row => {
-      const copy = { ...row, sessionId: targetSessionId };
-      delete copy.id;
+      const copy = {
+        ...row,
+        id: idMap.get(row.id),
+        sessionId: targetSessionId,
+      };
       if (idMap.has(row.causalRootId)) copy.causalRootId = remapId(row.causalRootId);
       if (Array.isArray(row.foldedMessageIds)) {
         copy.foldedMessageIds = row.foldedMessageIds.map(remapId);
@@ -1688,19 +1994,16 @@ export class ConversationStore {
       if (Array.isArray(row.sourceMessageIds)) {
         copy.sourceMessageIds = row.sourceMessageIds.map(remapId);
       }
-      if (row.cold === true) delete copy.cold;
       return copy;
     });
-    const written = this.appendBatch(copies);
-    for (let index = 0; index < written.length; index += 1) {
-      if (rows[index].cold === true) this.moveToCold(written[index].id);
-    }
-
-    // append() intentionally treats permission failures as best-effort for live
-    // chat. A Session copy cannot: reporting success with a partial transcript
-    // would make the new Session irrecoverably incomplete. Verify the target's
-    // physical rows before the higher-level CRUD operation commits the clone.
     const target = this.#segmentStoreForConversationDir(this.#sessionConversationDir(targetSessionId));
+    const written = target.appendBatch(copies);
+    this.#markDirty({ sessionId: targetSessionId }, 'copy-session');
+
+    // Live append treats permission failures as best-effort. A Session copy
+    // cannot: reporting success with a partial transcript would make the new
+    // Session irrecoverably incomplete. Verify the physical target rows before
+    // the higher-level CRUD operation commits the clone.
     const persistedIds = new Set(target.readAllRaw({ includeCold: true }).map(row => row.id));
     const expectedIds = [...idMap.values()];
     if (written.length !== rows.length
@@ -2330,7 +2633,6 @@ export class ConversationStore {
         }
       }
     }
-    this.#nextSeq = null;
     this.#markDirty({ sessionId }, 'delete-session');
     return removed;
   }
@@ -2417,7 +2719,6 @@ export class ConversationStore {
       }
     }
     if (removed > 0) {
-      this.#nextSeq = null;
       this.#markAllDirty('compact-orphans');
     }
     return { scanned, removed, orphans, skipped: false };
@@ -3122,12 +3423,12 @@ export class ConversationStore {
   }
 
   /**
-   * Determine the next sequence number by scanning existing files.
+   * Scan the durable stores for the first unused global sequence.
+   * This bootstraps the root sequence sidecar when upgrading from a version
+   * that did not maintain an allocator high-water mark.
    * @returns {number}
    */
-  #getNextSeq() {
-    if (this.#nextSeq != null) return this.#nextSeq;
-
+  #scanNextSeq() {
     let maxSeq = 0;
     for (const dir of [this.#chatDir, ...this.#sessionConversationDirs({ primaryOnly: true })]) {
       const store = this.#segmentStoreForConversationDir(dir);
@@ -3140,14 +3441,80 @@ export class ConversationStore {
       if (!existsSync(dir)) continue;
       for (const file of readdirSync(dir)) {
         const match = file.match(/^m(\d+)\.md$/);
-        if (match) {
-          const seq = parseInt(match[1], 10);
-          if (seq > maxSeq) maxSeq = seq;
-        }
+        if (match) maxSeq = Math.max(maxSeq, parseInt(match[1], 10));
       }
     }
+    return maxSeq + 1;
+  }
 
-    this.#nextSeq = maxSeq + 1;
-    return this.#nextSeq;
+  /**
+   * Reserve one non-overlapping range of global message ids.
+   *
+   * `mkdir` is the cross-process mutex: it is atomic on supported local file
+   * systems and therefore coordinates long-lived stores as well as short-lived
+   * Session-copy stores. The atomic high-water sidecar makes a whole transcript
+   * reservation O(1) once the lock is held, while the disk scan keeps upgrades
+   * and manually restored transcripts safe.
+   *
+   * @param {number} count
+   * @returns {number} first reserved sequence
+   */
+  #reserveSeqRange(count) {
+    const size = Math.max(1, Math.floor(Number(count) || 1));
+    const rootKey = resolve(this.#dir);
+    const sequencePath = join(this.#dir, MESSAGE_SEQUENCE_FILE);
+    const cached = messageSequenceReservations.get(rootKey);
+    if (cached && cached.next + size <= cached.end) {
+      try {
+        const recorded = JSON.parse(readFileSync(sequencePath, 'utf8'));
+        const durableNext = Number(recorded?.nextSeq);
+        if (Number.isSafeInteger(durableNext)
+            && durableNext >= cached.end
+            && typeof recorded?.epoch === 'string'
+            && recorded.epoch === cached.epoch) {
+          const firstSeq = cached.next;
+          cached.next += size;
+          return firstSeq;
+        }
+      } catch {}
+      messageSequenceReservations.delete(rootKey);
+    }
+
+    // Small realtime appends amortize the cross-process lock and sidecar fsync.
+    // Large transcript copies reserve exactly what they need to avoid stranding
+    // an unnecessarily large gap. Gaps after a crash are valid: ids are unique
+    // monotonic identities, not a promise of contiguous durable rows.
+    const durableSize = Math.max(size, MESSAGE_SEQUENCE_RESERVATION_SIZE);
+    const lockDir = join(this.#dir, MESSAGE_SEQUENCE_LOCK_DIR);
+    const lockToken = acquireMessageSequenceLock(lockDir);
+
+    try {
+      let recordedNext = null;
+      let epoch = null;
+      try {
+        const recorded = JSON.parse(readFileSync(sequencePath, 'utf8'));
+        const nextSeq = Number(recorded?.nextSeq);
+        if (Number.isSafeInteger(nextSeq) && nextSeq > 0) {
+          recordedNext = nextSeq;
+          if (typeof recorded.epoch === 'string' && recorded.epoch) epoch = recorded.epoch;
+        }
+      } catch (error) {
+        if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+      }
+      // A syntactically valid sidecar can still be stale after a partial restore
+      // or crash. Never trust it below the durable transcript high-water mark.
+      const scannedNext = this.#scanNextSeq();
+      const firstSeq = Math.max(recordedNext || 1, scannedNext);
+      epoch ||= randomUUID();
+      writeAtomic(sequencePath, `${JSON.stringify({ version: 1, epoch, nextSeq: firstSeq + durableSize })}\n`, { mode: 0o600 });
+      messageSequenceReservations.set(rootKey, {
+        epoch,
+        next: firstSeq + size,
+        end: firstSeq + durableSize,
+      });
+      return firstSeq;
+    } finally {
+      releaseMessageSequenceLock(lockDir, lockToken);
+    }
   }
 }

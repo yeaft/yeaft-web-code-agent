@@ -41,6 +41,19 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('Agent quick-send Composer', () => {
+  it('disables input and sending while an external operation owns the composer', async () => {
+    const sendFn = vi.fn();
+    await create({ sendFn, disabled: true, disabledPlaceholderKey: 'yeaft.session.copying' });
+    const input = wrapper.get('textarea');
+    expect(input.attributes('disabled')).toBeDefined();
+    expect(input.attributes('placeholder')).toBe('yeaft.session.copying');
+    expect(wrapper.get('.chat-composer').classes()).toContain('is-disabled');
+    expect(wrapper.get('.send-btn').attributes('disabled')).toBeDefined();
+    await input.setValue('blocked');
+    await input.trigger('keydown', { key: 'Enter' });
+    expect(sendFn).not.toHaveBeenCalled();
+  });
+
   it('loads configured presets automatically and projects their names into the mobile toolbar', async () => {
     await create();
     expect(store.sendWsMessage).toHaveBeenCalledWith({ type: 'get_llm_config', agentId: 'a1' });

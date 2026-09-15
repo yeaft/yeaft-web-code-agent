@@ -60,6 +60,7 @@ function createStore() {
     parseWsMessage: vi.fn(data => JSON.parse(data)),
     handleMessage: vi.fn(),
     connect: vi.fn(),
+    scheduleReconnect: vi.fn(),
   };
 }
 
@@ -183,6 +184,78 @@ describe('websocket auth token races', () => {
     expect(store._hasHandledYeaftSessionHydrate).toBe(false);
     expect(store.yeaftSessionInventoryCompleteSupported).toBeNull();
     expect(store.yeaftSessionHydrateRequestId).toBeNull();
+  });
+
+  it('settles only old-generation Session copy requests when replacing a socket', async () => {
+    const authStore = createRaceAuthStore();
+    const sockets = installFakeWebSocket();
+    globalThis.location = { protocol: 'https:', host: 'example.test' };
+    const { connect } = await loadWebsocketHelpers(authStore);
+    const store = createStore();
+    const resolveOldCopy = vi.fn();
+    const resolveNewCopy = vi.fn();
+    store.sessionForkPendingKey = 'yeaft:agent-a:source';
+    store.sessionForkState = 'copying';
+    store._sessionCrudPending = new Map([
+      ['old-copy', {
+        op: 'copy', connectionGeneration: 4, resolve: resolveOldCopy,
+      }],
+      ['new-copy', {
+        op: 'copy', connectionGeneration: 5, resolve: resolveNewCopy,
+      }],
+    ]);
+    store.ws = { onopen: vi.fn(), onmessage: vi.fn(), onclose: vi.fn(), close: vi.fn() };
+
+    connect(store);
+
+    expect(resolveOldCopy).toHaveBeenCalledWith({
+      ok: false,
+      requestId: 'old-copy',
+      error: { code: 'connection_changed', message: 'WebSocket connection changed' },
+    });
+    expect(resolveNewCopy).not.toHaveBeenCalled();
+    expect(store._sessionCrudPending.has('old-copy')).toBe(false);
+    expect(store._sessionCrudPending.has('new-copy')).toBe(true);
+    expect(store.sessionForkPendingKey).toBe('yeaft:agent-a:source');
+    expect(store.sessionForkState).toBe('copying');
+    expect(sockets).toHaveLength(1);
+  });
+
+  it('settles only the active socket generation when a real disconnect occurs', async () => {
+    const authStore = createRaceAuthStore();
+    const sockets = installFakeWebSocket();
+    globalThis.location = { protocol: 'https:', host: 'example.test' };
+    const { connect } = await loadWebsocketHelpers(authStore);
+    const store = createStore();
+    const resolveActiveCopy = vi.fn();
+    const resolveFutureRequest = vi.fn();
+
+    connect(store);
+    store._sessionCrudPending = new Map([
+      ['active-copy', {
+        op: 'copy', connectionGeneration: 5, resolve: resolveActiveCopy,
+      }],
+      ['future-request', {
+        op: 'rename', connectionGeneration: 6, resolve: resolveFutureRequest,
+      }],
+    ]);
+    store.sessionForkPendingKey = 'yeaft:agent-a:source';
+    store.sessionForkState = 'copying';
+    sockets[0].onclose({ code: 1006, reason: 'network lost' });
+
+    expect(resolveActiveCopy).toHaveBeenCalledWith({
+      ok: false,
+      requestId: 'active-copy',
+      error: { code: 'agent_offline', message: 'WebSocket disconnected' },
+    });
+    expect(resolveFutureRequest).not.toHaveBeenCalled();
+    expect(store._sessionCrudPending.has('active-copy')).toBe(false);
+    expect(store._sessionCrudPending.has('future-request')).toBe(true);
+    // The request owner (`copyCatalogSession`) releases its own UI state in
+    // `finally`; the transport helper must not mutate global state that may
+    // already belong to a newer operation generation.
+    expect(store.sessionForkPendingKey).toBe('yeaft:agent-a:source');
+    expect(store.sessionForkState).toBe('copying');
   });
 
   it('restores encrypted outbound mode before reconnecting to a legacy Server', async () => {
