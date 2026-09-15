@@ -51,20 +51,7 @@ import {
   renderMainlineContextSnapshot,
 } from './mainline-projection.js';
 
-const WORK_ITEM_TOOL_NAMES = Object.freeze([
-  'FileRead',
-  'FileWrite',
-  'FileEdit',
-  'ApplyPatch',
-  'Glob',
-  'Grep',
-  'ListDir',
-  'Bash',
-  'WebSearch',
-  'WebFetch',
-  'ViewImage',
-  'Skill',
-]);
+import { WORK_ITEM_TOOL_NAMES, workItemBuiltinToolNames } from './capabilities.js';
 const WORK_ITEM_TOOL_ALLOWLIST = new Set(WORK_ITEM_TOOL_NAMES);
 const DEFAULT_PROGRESS_INTERVAL_MS = 200;
 const ACTION_INPUT_QUOTE_MAX_BYTES = 8 * 1024;
@@ -241,6 +228,14 @@ function assertReadPath(toolName, workDir, attachmentFiles, value) {
 }
 
 function assertToolInput(toolName, input, workDir, attachmentFiles) {
+  if (toolName === 'GitRead') {
+    // GitRead has no cwd parameter. The wrapper fixes ctx.cwd to the canonical
+    // workspace; reject path filters escaping that workspace before dispatch.
+    for (const value of Array.isArray(input?.paths) ? input.paths : []) {
+      if (typeof value === 'string') assertPathInside(toolName, workDir, value);
+    }
+    return input;
+  }
   if (toolName === 'Bash') {
     if (input?.background === true) throw new Error('Work Center does not allow background Bash jobs');
     if (input?.cwd && canonicalWorkDir(path.resolve(input.cwd)) !== workDir) {
@@ -272,7 +267,7 @@ function assertToolInput(toolName, input, workDir, attachmentFiles) {
 
 export function workItemToolPolicySnapshot(workDir, attachmentRefs = [], extraToolNames = []) {
   const hasAttachments = attachmentRefs.length > 0;
-  const builtInTools = WORK_ITEM_TOOL_NAMES.filter(name => !hasAttachments || name !== 'Bash');
+  const builtInTools = workItemBuiltinToolNames(hasAttachments);
   return {
     policyVersion: 1,
     allowedToolNames: [...builtInTools, ...extraToolNames],

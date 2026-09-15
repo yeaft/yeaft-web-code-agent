@@ -19,6 +19,7 @@ import { applyCoordinatorReplan } from './plan-mutation.js';
 import { buildWorkItemAttachmentContext } from './attachments.js';
 import { sanitizeDiagnosticText } from './debug-projection.js';
 import { generatedActionGraphRules } from './workflow.js';
+import { workItemCapabilityContext } from './capabilities.js';
 
 const COORDINATOR_MAX_REPLY_CHARS = 8_000;
 const COORDINATOR_MAX_INSTRUCTION_CHARS = 8_000;
@@ -896,7 +897,10 @@ export class WorkItemCoordinator {
           try {
             let result;
             try {
-              const latestMessage = `Current WorkItem snapshot:\n${snapshotText}\n\n${recovery ? 'Automatic failure recovery trigger' : 'Latest user message'}:\n${text}${attachmentContext.promptBlock}${correction}`;
+              const capabilities = JSON.stringify(workItemCapabilityContext(vps, {
+                hasAttachments: started.detail.attachments?.length > 0,
+              }));
+              const latestMessage = `Current WorkItem snapshot:\n${snapshotText}\n\nAvailable execution capabilities (role metadata is descriptive, not authorization):\n${capabilities}\n\n${recovery ? 'Automatic failure recovery trigger' : 'Latest user message'}:\n${text}${attachmentContext.promptBlock}${correction}`;
               const content = attachmentContext.promptParts.length > 0
                 ? [{ type: 'text', text: latestMessage }, ...attachmentContext.promptParts]
                 : latestMessage;
