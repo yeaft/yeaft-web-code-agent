@@ -830,7 +830,7 @@ export default {
   'settings.general.darkTheme': '深色',
   'settings.general.language': '语言',
   'settings.general.workCenter': '工作中心',
-  'settings.general.workCenterDesc': '在当前 Agent 上启用持久任务执行。',
+  'settings.general.workCenterDesc': '在界面中显示工作中心；支持的 Agent 在工作中心内选择。',
   'settings.general.workCenterEnvOverride': '由环境变量 YEAFT_WORK_CENTER_ENABLED 控制。',
   'settings.general.workCenterOn': '开启',
   'settings.general.workCenterOff': '关闭',

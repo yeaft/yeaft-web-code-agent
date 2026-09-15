@@ -81,11 +81,16 @@ export default {
   computed: {
     store() { return Pinia.useChatStore(); },
     chat() { return this.store; },
-    agentId() { return this.store.workCenterAgentId || this.store.currentAgent; },
     agents() { return this.store.agents || []; },
     onlineAgents() {
       return this.agents.filter(agent => agent?.online
         && Array.isArray(agent.capabilities) && agent.capabilities.includes('work_center'));
+    },
+    agentId() {
+      const selected = this.store.workCenterAgentId;
+      return this.onlineAgents.some(agent => agent.id === selected)
+        ? selected
+        : (this.onlineAgents[0]?.id || null);
     },
     workCenterAgentOptions() {
       return this.onlineAgents.map(agent => ({
@@ -406,6 +411,10 @@ export default {
           this.closeFolderPicker();
           this.resetCreateExecutionContext(id);
         }
+        if (this.store.workCenterAgentId !== id) {
+          this.store.enterWorkCenter(id);
+          return;
+        }
         if (id) {
           const listRequest = typeof this.boardFilters === 'function'
             ? this.store.listWorkItems(id, this.boardFilters())
@@ -600,6 +609,7 @@ export default {
       }, 180);
     },
     refresh() {
+      if (!this.agentId) return Promise.resolve([]);
       return this.store.listWorkItems(this.agentId, this.boardFilters()).catch(() => {});
     },
     refreshWorkCenterRuntime(agentId) {
@@ -1336,7 +1346,7 @@ export default {
                 <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3 18h18v-2H3v2Zm0-5h18v-2H3v2Zm0-7v2h18V6H3Z"/></svg>
               </button>
               <h1>{{ tr('workCenter.title', 'Work Center') }}</h1>
-              <div class="work-center-agent-picker">
+              <div v-if="onlineAgents.length" class="work-center-agent-picker">
                 <span class="work-center-agent-dot" aria-hidden="true"></span>
                 <ModernSelect
                   :model-value="agentId"
@@ -1349,22 +1359,22 @@ export default {
               </div>
             </div>
             <div class="work-center-header-actions">
-              <button class="work-center-icon-button" type="button" @click="settingsOpen = true"
+              <button class="work-center-icon-button" type="button" @click="settingsOpen = true" :disabled="!agentId"
                       :title="tr('workCenter.settings.title', 'Work Center settings')" :aria-label="tr('workCenter.settings.title', 'Work Center settings')">
                 <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19.43 12.98c.04-.32.07-.65.07-.98s-.03-.66-.08-.98l2.11-1.65a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.61-.22l-2.49 1a7.2 7.2 0 0 0-1.69-.98L14.5 2.42A.49.49 0 0 0 14 2h-4a.49.49 0 0 0-.49.42L9.13 5.07c-.61.25-1.17.59-1.69.98l-2.49-1a.49.49 0 0 0-.61.22l-2 3.46a.49.49 0 0 0 .12.64l2.11 1.65c-.04.32-.08.66-.08.98s.03.66.08.98l-2.11 1.65a.5.5 0 0 0-.12.64l2 3.46c.12.22.38.31.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.04.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.58 1.69-.98l2.49 1c.23.08.49 0 .61-.22l2-3.46a.5.5 0 0 0-.12-.64l-2.11-1.65ZM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5Z"/></svg>
               </button>
-              <button class="work-center-icon-button" type="button" @click="refresh" :disabled="loading"
+              <button class="work-center-icon-button" type="button" @click="refresh" :disabled="!agentId || loading"
                       :title="tr('workCenter.refresh', 'Refresh')" :aria-label="tr('workCenter.refresh', 'Refresh')">
                 <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M17.65 6.35A8 8 0 1 0 19.73 14h-2.08A6 6 0 1 1 16.22 7.78L13 11h7V4l-2.35 2.35Z"/></svg>
               </button>
-              <button class="work-center-icon-button work-center-header-create" type="button" @click="openCreate" :disabled="onlineAgents.length === 0"
+              <button class="work-center-icon-button work-center-header-create" type="button" @click="openCreate" :disabled="!agentId"
                       :title="tr('workCenter.newWorkItem', 'New work item')" :aria-label="tr('workCenter.newWorkItem', 'New work item')">
                 <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg>
               </button>
             </div>
           </header>
 
-          <div v-if="narrowPane === 'items'" class="work-center-toolbar">
+          <div v-if="narrowPane === 'items' && onlineAgents.length" class="work-center-toolbar">
             <label class="work-center-search">
               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9.5 3a6.5 6.5 0 1 0 4.02 11.61L19.91 21 21 19.91l-6.39-6.39A6.5 6.5 0 0 0 9.5 3Zm0 2a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Z"/></svg>
               <input v-model="search" type="search" :placeholder="tr('workCenter.search', 'Search work items')">
@@ -1393,7 +1403,7 @@ export default {
           </p>
           <p v-if="error" class="work-center-error">{{ error }}</p>
           <p v-if="deleteWorkItemError" class="work-center-error" role="alert">{{ deleteWorkItemError }}</p>
-          <div class="work-center-body" :class="{ 'is-empty': loaded && !loading && items.length === 0 }" :data-pane="narrowPane">
+          <div v-if="onlineAgents.length" class="work-center-body" :class="{ 'is-empty': loaded && !loading && items.length === 0 }" :data-pane="narrowPane">
             <section class="work-center-list work-center-board" :aria-busy="loading || boardLoadingMore ? 'true' : 'false'">
               <div class="work-center-board-lane-tabs" role="tablist" :aria-label="tr('workCenter.board.lanes', 'Work item lanes')">
                 <button v-for="lane in boardLanes" :key="lane.id" type="button" role="tab"

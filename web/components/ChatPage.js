@@ -114,16 +114,20 @@ export default {
           :is-yeaft-session-processing="store.isYeaftSessionProcessing"
           :agents="store.agents"
           :work-center-open="store.workCenterOpen"
+          :work-center-enabled="store.workCenterUiEnabled"
+          :work-center-agent-id="store.workCenterAgentId"
           @select="store.openCatalogSession"
           @create="onUnifiedCreate"
           @create-in-project="onUnifiedCreateInProject"
           @close-work-center="store.leaveWorkCenter"
+          @open-work-center="store.enterWorkCenter"
           @action="onUnifiedSessionAction"
         />
 
         <template v-else>
         <!-- Legacy sidebar stays available until the catalog snapshot arrives. -->
         <SidebarWorkCenter
+          v-if="store.workCenterUiEnabled"
           :agents="store.agents"
           :active-agent-id="store.workCenterAgentId"
           :collapsed="false"
