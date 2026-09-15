@@ -1,4 +1,5 @@
 import { confirmDialog, promptDialog } from '../utils/dialog.js';
+import SidebarWorkCenter from './SidebarWorkCenter.js';
 
 function timestampValue(value) {
   const parsed = typeof value === 'number' ? value : Date.parse(value || '');
@@ -150,7 +151,8 @@ export function calculateFloatingSubmenuPosition(parentRect, menuSize, viewport 
 
 export default {
   name: 'UnifiedSessionList',
-  emits: ['select', 'create', 'create-in-project', 'action', 'project-action', 'close-work-center'],
+  components: { SidebarWorkCenter },
+  emits: ['select', 'create', 'create-in-project', 'action', 'project-action', 'close-work-center', 'open-work-center'],
   props: {
     sessions: { type: Array, default: () => [] },
     projectStore: { type: Object, default: null },
@@ -161,6 +163,8 @@ export default {
     isYeaftSessionProcessing: { type: Function, default: null },
     agents: { type: Array, default: () => [] },
     workCenterOpen: { type: Boolean, default: false },
+    workCenterEnabled: { type: Boolean, default: true },
+    workCenterAgentId: { type: String, default: null },
   },
   data() {
     return {
@@ -876,6 +880,15 @@ export default {
           <span>{{ $t('sidebar.sessions.newChat') }}</span>
         </button>
       </div>
+
+      <SidebarWorkCenter
+        v-if="workCenterEnabled"
+        :agents="agents"
+        :active-agent-id="workCenterAgentId"
+        :collapsed="false"
+        :active="workCenterOpen"
+        @open="$emit('open-work-center', $event)"
+      />
 
       <div class="sidebar-session-results">
         <section class="sidebar-section projects-section" :class="{ 'is-collapsed': isSectionCollapsed('projects') }">

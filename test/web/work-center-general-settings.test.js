@@ -8,30 +8,24 @@ const en = readFileSync(join(root, 'web/i18n/en.js'), 'utf8');
 const zh = readFileSync(join(root, 'web/i18n/zh-CN.js'), 'utf8');
 
 describe('Work Center General settings contract', () => {
-  it('keeps the toggle in General and disables it for unavailable or busy Agent state', () => {
+  it('keeps an Agent-independent UI toggle in General', () => {
     expect(panel.indexOf("activeTab === 'general'")).toBeLessThan(panel.indexOf("settings.general.workCenter"));
-    expect(panel).toContain(':disabled="workCenterDisabled"');
-    expect(panel).toContain("this.chatStore.connectionState === 'connected'");
-    expect(panel).toContain('!this.currentWorkCenterAgentOnline || this.workCenterUnsupported || this.workCenterLoading || this.workCenterSaving || this.workCenterDraft.overridden');
-    expect(panel).toContain("!agent.capabilities?.includes('work_center_feature_settings')");
+    expect(panel).toContain('@click="toggleWorkCenter"');
+    expect(panel).toContain('chatStore.workCenterUiEnabled');
+    expect(panel).toContain('this.chatStore.setWorkCenterUiEnabled(!this.chatStore.workCenterUiEnabled)');
+    expect(panel).not.toContain(':disabled="workCenterDisabled"');
+    expect(panel).not.toContain("!agent.capabilities?.includes('work_center_feature_settings')");
+    expect(panel).not.toContain('loadWorkCenterFeatureSettings');
+    expect(panel).not.toContain('updateWorkCenterFeatureSettings');
   });
 
-  it('fences requests by generation and Agent, reloads on Agent changes, and displays errors', () => {
-    expect(panel).toContain("'chatStore.currentAgent'()");
-    expect(panel).toContain('agentId === this.chatStore.currentAgent');
-    expect(panel).toContain('generation === this.workCenterGeneration');
-    expect(panel).toContain('v-if="workCenterError"');
-    expect(panel).not.toContain('catch { /* disconnected/offline state remains disabled */ }');
-  });
-
-  it('provides bilingual toggle and read-only environment override copy', () => {
+  it('provides bilingual UI visibility copy', () => {
+    expect(en).toContain("Available Agents are selected inside Work Center.");
+    expect(zh).toContain('支持的 Agent 在工作中心内选择。');
     for (const source of [en, zh]) {
       expect(source).toContain("'settings.general.workCenter'");
-      expect(source).toContain("'settings.general.workCenterEnvOverride'");
       expect(source).toContain("'settings.general.workCenterOn'");
       expect(source).toContain("'settings.general.workCenterOff'");
-      expect(source).toContain("'settings.general.workCenterUpgradeRequired'");
-      expect(source).toContain("'settings.general.workCenterStartupFailed'");
     }
   });
 });

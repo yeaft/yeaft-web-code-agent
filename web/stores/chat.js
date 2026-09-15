@@ -954,6 +954,7 @@ export const useChatStore = defineStore('chat', {
     // to the last Chat conversation after bootstrap replaces the active id.
     ...yeaftViewHelpers.createInitialConversationViewState(),
     workCenterOpen: false,
+    workCenterUiEnabled: localStorage.getItem('work-center-ui-enabled') !== 'false',
     workCenterAgentId: null,
     workCenterItemsByAgent: {},
     workCenterListPageByAgent: {},
@@ -1738,13 +1739,10 @@ export const useChatStore = defineStore('chat', {
         && Array.isArray(agent.capabilities) && agent.capabilities.includes('work_center'));
       const target = compatibleAgents.some(agent => agent.id === agentId)
         ? agentId
-        : (compatibleAgents[0]?.id || null);
-      if (!target) {
-        this.workCenterOpen = false;
-        this.workCenterAgentId = null;
-        return false;
-      }
-      if (this.currentAgent !== target) {
+        : (compatibleAgents.some(agent => agent.id === this.workCenterAgentId)
+          ? this.workCenterAgentId
+          : (compatibleAgents[0]?.id || null));
+      if (target && this.currentAgent !== target) {
         this.selectAgent(target);
         this.currentAgent = target;
         const info = this.agents.find(agent => agent.id === target);
@@ -1752,11 +1750,18 @@ export const useChatStore = defineStore('chat', {
       }
       this.workCenterAgentId = target;
       this.workCenterOpen = true;
-      this.listWorkItems(target).catch(() => {});
+      if (target) this.listWorkItems(target).catch(() => {});
       return true;
     },
     leaveWorkCenter() {
       this.workCenterOpen = false;
+    },
+    setWorkCenterUiEnabled(enabled) {
+      this.workCenterUiEnabled = enabled !== false;
+      try {
+        localStorage.setItem('work-center-ui-enabled', String(this.workCenterUiEnabled));
+      } catch (_) { /* keep the in-memory preference when storage is unavailable */ }
+      if (!this.workCenterUiEnabled) this.leaveWorkCenter();
     },
     openPluginCenter(agentId = null) {
       const target = this.agents.find(agent => agent?.online && agent.id === agentId)

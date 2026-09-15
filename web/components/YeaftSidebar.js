@@ -89,16 +89,20 @@ export default {
         :is-yeaft-session-processing="chatStore.isYeaftSessionProcessing"
         :agents="chatStore.agents"
         :work-center-open="chatStore.workCenterOpen"
+        :work-center-enabled="chatStore.workCenterUiEnabled"
+        :work-center-agent-id="chatStore.workCenterAgentId"
         @select="chatStore.openCatalogSession"
         @create="onUnifiedCreate"
         @create-in-project="onUnifiedCreateInProject"
         @close-work-center="chatStore.leaveWorkCenter"
+        @open-work-center="onOpenWorkCenter"
         @action="onUnifiedSessionAction"
       />
 
       <div v-else class="us-scroll us-scroll-flush">
         <!-- Legacy Yeaft list stays available until the catalog snapshot arrives. -->
         <SidebarWorkCenter
+          v-if="chatStore && chatStore.workCenterUiEnabled"
           :agents="chatStore ? chatStore.agents : []"
           :active-agent-id="chatStore ? chatStore.workCenterAgentId : null"
           :collapsed="false"
@@ -443,7 +447,7 @@ export default {
       const target = this.workCenterAgents.find(agent => agent.id === agentId)
         || this.workCenterAgents.find(agent => agent.id === s?.workCenterAgentId)
         || this.workCenterAgents[0];
-      if (target && s && typeof s.enterWorkCenter === 'function') s.enterWorkCenter(target.id);
+      if (s && typeof s.enterWorkCenter === 'function') s.enterWorkCenter(target?.id || null);
     },
     onOpenPlugins() {
       const s = this.chatStore || this.store;

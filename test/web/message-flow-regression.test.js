@@ -2255,7 +2255,8 @@ describe('message flow regressions', () => {
     expect(enMessages['sidebar.projects.assignFailed']).toContain('{message}');
     expect(zhCNMessages['sidebar.projects.assignFailed']).toContain('{message}');
     expect(sidebar.get('.sidebar-navigation').element.children[0].classList).toContain('sidebar-primary-actions');
-    expect(sidebar.get('.sidebar-navigation').element.children[1].classList).toContain('sidebar-session-results');
+    expect(sidebar.get('.sidebar-navigation').element.children[1].classList).toContain('sidebar-work-center');
+    expect(sidebar.get('.sidebar-navigation').element.children[2].classList).toContain('sidebar-session-results');
     expect(sidebar.get('.sidebar-session-results').element.children[0].classList).toContain('projects-section');
     expect(sidebar.get('.sidebar-session-results').element.children[1].classList).toContain('recents-section');
     expect(sidebar.find('input[type="search"]').exists()).toBe(false);
@@ -2966,12 +2967,12 @@ describe('message flow regressions', () => {
       props: { agents: [] },
       global: { mocks: { $t: key => key } },
     });
-    expect(fallbackWorkCenter.get('.sidebar-work-center-trigger').attributes('disabled')).toBeDefined();
+    expect(fallbackWorkCenter.get('.sidebar-work-center-trigger').attributes('disabled')).toBeUndefined();
     expect(fallbackWorkCenter.get('.sidebar-work-center-icon path').attributes('d'))
       .toBe('M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 5v2h10V8H7zm0 4v2h7v-2H7zm0 4v2h5v-2H7z');
     expect(component).not.toContain('M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 5v2h10V8H7zm0 4v2h7v-2H7zm0 4v2h5v-2H7z');
     await fallbackWorkCenter.get('.sidebar-work-center-trigger').trigger('click');
-    expect(fallbackWorkCenter.emitted('open')).toBeUndefined();
+    expect(fallbackWorkCenter.emitted('open')).toEqual([[null]]);
     fallbackWorkCenter.unmount();
 
     const originalFetch = globalThis.fetch;
@@ -3174,6 +3175,13 @@ describe('message flow regressions', () => {
         sessionId: 'legacy-yeaft',
       },
     }));
+    parentStore.agents = [{ id: 'agent-old', name: 'Old Agent', online: true, capabilities: [] }];
+    parentStore.workCenterAgentId = null;
+    parentStore.enterWorkCenter.mockClear();
+    await Vue.nextTick();
+    yeaftSidebar.vm.onOpenWorkCenter(null);
+    expect(parentStore.enterWorkCenter).toHaveBeenCalledOnce();
+    expect(parentStore.enterWorkCenter).toHaveBeenCalledWith(null);
     yeaftSidebar.unmount();
     dialog.unmount();
     globalThis.fetch = originalFetch;
@@ -3513,6 +3521,38 @@ describe('message flow regressions', () => {
     await WorkCenterPage.methods.refreshWorkCenterRuntime.call(workCenterPage.vm, 'agent-a');
     expect(workCenterStore.refreshWorkCenterRuntime).toHaveBeenCalledOnce();
     expect(workCenterStore.refreshWorkCenterRuntime).toHaveBeenCalledWith('agent-a');
+
+    const emptyWorkCenterStore = Vue.reactive({
+      ...workCenterStore,
+      workCenterAgentId: null,
+      agents: [{ id: 'agent-old', name: 'Old Agent', online: true, capabilities: [] }],
+      listWorkItems: vi.fn(() => Promise.resolve([])),
+      loadWorkCenterSettings: vi.fn(() => Promise.resolve(null)),
+    });
+    globalThis.Pinia.useChatStore = () => emptyWorkCenterStore;
+    const emptyWorkCenterPage = mount(WorkCenterPage, {
+      global: {
+        mocks: { $t: key => key },
+        stubs: {
+          WorkCenterActionDetail: true,
+          WorkCenterSettingsModal: true,
+          LlmTab: true,
+        },
+      },
+    });
+    expect(emptyWorkCenterPage.text()).toContain('No compatible online Agents');
+    expect(emptyWorkCenterPage.find('.work-center-agent-picker').exists()).toBe(false);
+    expect(emptyWorkCenterPage.find('.work-center-body').exists()).toBe(false);
+    expect(emptyWorkCenterStore.listWorkItems).not.toHaveBeenCalled();
+    expect(emptyWorkCenterStore.loadWorkCenterSettings).not.toHaveBeenCalled();
+    await emptyWorkCenterPage.vm.refresh();
+    expect(emptyWorkCenterStore.listWorkItems).not.toHaveBeenCalled();
+    emptyWorkCenterStore.enterWorkCenter.mockClear();
+    emptyWorkCenterStore.agents = [{ id: 'agent-new', name: 'New Agent', online: true, capabilities: ['work_center'] }];
+    await Vue.nextTick();
+    expect(emptyWorkCenterStore.enterWorkCenter).toHaveBeenCalledWith('agent-new');
+    emptyWorkCenterPage.unmount();
+    globalThis.Pinia.useChatStore = () => workCenterStore;
 
     const pluginConfigRequests = [];
     const pluginStore = Vue.reactive({
@@ -5515,9 +5555,11 @@ describe('message flow regressions', () => {
     expect(store.enterWorkCenter('stale-agent')).toBe(true);
     expect(store.workCenterAgentId).toBe('agent-b');
     store.agents = [];
-    expect(store.enterWorkCenter('stale-agent')).toBe(false);
-    expect(store.workCenterOpen).toBe(false);
+    store.listWorkItems.mockClear();
+    expect(store.enterWorkCenter('stale-agent')).toBe(true);
+    expect(store.workCenterOpen).toBe(true);
     expect(store.workCenterAgentId).toBe(null);
+    expect(store.listWorkItems).not.toHaveBeenCalled();
 
     const wrapper = mount(UnifiedSessionList, {
       attachTo: document.body,

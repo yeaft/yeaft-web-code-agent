@@ -28,20 +28,16 @@ export default {
       return translated && translated !== key ? translated : fallback;
     },
     toggle() {
-      if (this.collapsed) {
-        const target = this.onlineAgents.find(agent => agent.id === this.activeAgentId) || this.onlineAgents[0];
-        if (target) this.$emit('open', target.id);
-        return;
-      }
-      this.expanded = !this.expanded;
+      const target = this.onlineAgents.find(agent => agent.id === this.activeAgentId) || this.onlineAgents[0];
+      this.$emit('open', target?.id || null);
+      if (!this.collapsed) this.expanded = !this.expanded;
     },
   },
   template: `
     <section class="sidebar-work-center" :class="{ collapsed, active }">
       <div class="session-tab-bar sidebar-work-center-tab-bar">
         <button class="session-tab session-tab-solo sidebar-work-center-trigger" type="button" @click="toggle"
-                :class="{ active }" :disabled="onlineAgents.length === 0"
-                :aria-expanded="expanded ? 'true' : 'false'">
+                :class="{ active }" :aria-expanded="expanded ? 'true' : 'false'">
           <svg class="session-tab-icon sidebar-work-center-icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
             <path fill="currentColor" d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 5v2h10V8H7zm0 4v2h7v-2H7zm0 4v2h5v-2H7z"/>
           </svg>
