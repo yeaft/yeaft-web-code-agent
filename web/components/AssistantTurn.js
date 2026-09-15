@@ -293,8 +293,10 @@ export default {
     const resolvedFileReferences = Vue.reactive(new Map());
     const resolvedMessageImageUrls = Vue.reactive(new Map());
     const pendingMessageImageReads = new Map();
-    let fileReferenceRequestId = null;
+    const pendingFileReferenceRequests = new Map();
+    const requestedFileReferences = new Set();
     let fileReferenceRequestContextKey = '';
+    let fileReferenceTimer = null;
     const t = Vue.inject('t');
 
     // AskUserQuestion — delegate to AskCard component
@@ -363,7 +365,7 @@ export default {
     // Markdown rendering
     configureMarked();
 
-    const renderSegment = (value) => {
+    const segmentText = (value) => {
       let content = value;
       if (typeof content !== 'string') {
         if (Array.isArray(content)) {
@@ -376,7 +378,11 @@ export default {
           content = String(content);
         }
       }
-      content = normalizeTerminalOutput(content);
+      return normalizeTerminalOutput(content || '');
+    };
+
+    const renderSegment = (value) => {
+      const content = segmentText(value);
       if (!content) return '';
       try {
         if (typeof marked !== 'undefined') {
@@ -414,7 +420,7 @@ export default {
       }
       const anchor = event.target?.closest?.('a[href]');
       if (!anchor || !event.currentTarget?.contains?.(anchor)) return;
-      const reference = resolveMessageFileReference(anchor.getAttribute('href'));
+      const reference = resolveMessageFileReference(anchor.getAttribute('href'), { htmlEncoded: false });
       const resolvedPath = anchor.dataset?.resolvedFilePath;
       if (!reference || !resolvedPath) return;
       event.preventDefault();
@@ -443,14 +449,24 @@ export default {
         : []),
     ].join('\u0000'));
     const localImagePaths = new Set();
+    const resetFileReferenceResolution = () => {
+      clearTimeout(fileReferenceTimer);
+      fileReferenceTimer = null;
+      pendingFileReferenceRequests.clear();
+      requestedFileReferences.clear();
+      resolvedFileReferences.clear();
+      resolvedMessageImageUrls.clear();
+      pendingMessageImageReads.clear();
+      fileReferenceRequestContextKey = store.fileReferenceResolutionContextKey || '';
+    };
     const requestFileReferenceResolution = () => {
-      if (props.turn?.isStreaming) return;
+      fileReferenceTimer = null;
       const references = new Set();
       localImagePaths.clear();
       for (const segment of textSegments.value) {
         if (!segment?.content || typeof marked === 'undefined') continue;
         try {
-          const html = marked.parse(typeof segment.content === 'string' ? segment.content : String(segment.content));
+          const html = marked.parse(segmentText(segment.content));
           const workDir = store.effectiveWorkDir || '';
           for (const path of collectMessageFileReferences(html, workDir)) references.add(path);
           for (const path of collectMessageImageReferences(html, workDir)) localImagePaths.add(path);
@@ -463,11 +479,20 @@ export default {
           localImagePaths.add(reference.path);
         }
       }
-      resolvedFileReferences.clear();
-      resolvedMessageImageUrls.clear();
-      pendingMessageImageReads.clear();
-      fileReferenceRequestContextKey = store.fileReferenceResolutionContextKey || '';
-      fileReferenceRequestId = store.resolveMessageFileReferences?.([...references]) || null;
+      // Resolve incrementally while streaming, not on every token. Keep a
+      // bounded per-turn set and batch to the Agent's 32-reference wire limit.
+      const remaining = Math.max(0, 128 - requestedFileReferences.size);
+      const paths = [...references].filter(path => !requestedFileReferences.has(path)).slice(0, remaining);
+      for (let offset = 0; offset < paths.length; offset += 32) {
+        const batch = paths.slice(offset, offset + 32);
+        const requestId = store.resolveMessageFileReferences?.(batch);
+        if (!requestId) continue;
+        batch.forEach(path => requestedFileReferences.add(path));
+        pendingFileReferenceRequests.set(requestId, {
+          contextKey: fileReferenceRequestContextKey,
+          paths: new Set(batch),
+        });
+      }
     };
     const handleFileReferenceResolution = event => {
       const msg = event.detail;
@@ -481,13 +506,13 @@ export default {
         }
         return;
       }
-      if (!fileReferenceRequestId || msg?.type !== 'file_references_resolved'
-          || msg.requestId !== fileReferenceRequestId) return;
-      fileReferenceRequestId = null;
-      if ((store.fileReferenceResolutionContextKey || '') !== fileReferenceRequestContextKey) return;
-      resolvedFileReferences.clear();
+      if (msg?.type !== 'file_references_resolved') return;
+      const pending = pendingFileReferenceRequests.get(msg.requestId);
+      if (!pending) return;
+      pendingFileReferenceRequests.delete(msg.requestId);
+      if ((store.fileReferenceResolutionContextKey || '') !== pending.contextKey) return;
       for (const entry of msg.references || []) {
-        if (!entry?.requestedPath || !entry?.resolvedPath) continue;
+        if (!pending.paths.has(entry?.requestedPath) || !entry?.resolvedPath) continue;
         resolvedFileReferences.set(entry.requestedPath, entry.resolvedPath);
         if (localImagePaths.has(entry.requestedPath)) {
           const requestId = store.requestMessageImagePreview?.(entry.resolvedPath);
@@ -500,18 +525,25 @@ export default {
     };
     Vue.onMounted(() => {
       window.addEventListener('workbench-message', handleFileReferenceResolution);
+      resetFileReferenceResolution();
       requestFileReferenceResolution();
     });
     Vue.onBeforeUnmount(() => {
       window.removeEventListener('workbench-message', handleFileReferenceResolution);
-      pendingMessageImageReads.clear();
+      resetFileReferenceResolution();
     });
     Vue.watch(
       [() => props.turn?.isStreaming, fileReferenceSourceSignature, () => store.fileReferenceResolutionContextKey],
       ([streaming, signature, contextKey], [previousStreaming, previousSignature, previousContextKey]) => {
-        if (!streaming
-            && (previousStreaming || signature !== previousSignature || contextKey !== previousContextKey)) {
+        if (contextKey !== previousContextKey || !streaming) {
+          // Completion rechecks files that were not created yet while streaming;
+          // a changed route discards every response from the previous workspace.
+          resetFileReferenceResolution();
           requestFileReferenceResolution();
+        } else if (signature !== previousSignature || streaming !== previousStreaming) {
+          if (fileReferenceTimer === null) {
+            fileReferenceTimer = setTimeout(requestFileReferenceResolution, 500);
+          }
         }
       },
       { flush: 'post' },

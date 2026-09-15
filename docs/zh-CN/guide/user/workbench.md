@@ -48,7 +48,9 @@ Workbench 使用规范的 Session route。即使两个 Session 位于同一个 A
 - 使用 `Ctrl+S` 保存到 Agent
 - 预览 Markdown、图片、PDF、支持的 Office 文档，以及浏览器支持的 MP4、M4V、WebM、OGV/OGG 和 MOV 视频；视频从 Agent 流式读取，也可直接下载
 
-从聊天消息打开文件引用时，Workbench 会直接进入当前 Session route 对应的文件能力。
+从回复中点击文件引用时，Workbench 会直接进入当前 Session route 对应的文件能力，加载文件内容；引用带行号时定位到起始行。支持 Markdown 链接、行内代码和普通文本中的路径，例如 `src/main.js:20-35`、`src/main.js#L20-L35`、`docs/设计说明.md`。包含空格的路径请使用行内代码或 Markdown 链接。
+
+文件引用会在流式输出期间分批识别，回复结束后再次确认。只有当前 Agent 确认存在于该 Session workspace 中的文件才显示为可点击链接；不存在、重名且无法唯一确定、或 workspace 外的路径不会自动链接。外部网页链接仍在浏览器中打开，不会映射成本地同名文件。
 
 非视频二进制预览和下载支持最大 20 MiB 的文件。视频使用有界字节范围流式传输，不受整文件传输上限影响。支持 Session route 的预览地址不会因切换 Session 或 Server 的 10 分钟文件缓存回收而过期；缓存未命中时，Server 自动从原 Agent 读取，无需手动续期。地址是绑定原用户、Agent、Session 和 workspace 的访问凭据，请勿公开分享。每次访问都会检查当前权限；Agent 离线、文件删除、Session 归档或工作目录变化会导致访问失败。回源读取的是原路径的当前内容，不是永久快照。轮换 Server 的 `JWT_SECRET` 会使既有地址失效。旧版无 Session route 的预览仍使用临时缓存。
 

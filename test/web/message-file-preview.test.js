@@ -64,6 +64,9 @@ const workbenchStore = Vue.reactive({
   hasCapability(capability) {
     return this.capabilities.includes(capability);
   },
+  hasAgentCapability(agentId, capability) {
+    return agentId === this.currentAgent && this.capabilities.includes(capability);
+  },
   toggleWorkbench: vi.fn(),
   toggleWorkbenchMaximized: vi.fn(),
   rememberWorkbenchPanelState: vi.fn(),
@@ -907,6 +910,82 @@ describe('message file preview', () => {
     });
   });
 
+  it('normalizes ranges, encoded labels and Windows file URLs without losing the line', () => {
+    for (const href of ['src/main.js:20-35', 'src/main.js:20:4-35:8', 'src/main.js#L20-L35', 'src/main.js#L20–L35']) {
+      expect(resolveMessageFileReference(href)).toEqual({ path: 'src/main.js', line: 20 });
+    }
+    expect(resolveMessageFileReference('file:///C:/my%20repo/src/main.js#L20-L35'))
+      .toEqual({ path: 'C:/my repo/src/main.js', line: 20 });
+    expect(resolveMessageFileReference('docs/设计%20说明.md#L10-L12'))
+      .toEqual({ path: 'docs/设计 说明.md', line: 10 });
+    expect(resolveMessageFileReference('docs/a&amp;b.md')).toEqual({ path: 'docs/a&b.md', line: null });
+    expect(resolveMessageFileReference('main.js:20-35')).toEqual({ path: 'main.js', line: 20 });
+    expect(resolveMessageFileReference('README:20')).toEqual({ path: 'README', line: 20 });
+    expect(resolveMessageFileReference('https%3A%2F%2Fexample.test%2Fa.md')).toBeNull();
+    expect(resolveMessageFileReference('src/%00file.js')).toBeNull();
+  });
+
+  it('collects Unicode bare paths and never creates nested anchors for code labels', () => {
+    const source = '<p>查看 docs/设计说明.md:10-12。 <code>docs/设计 说明.md#L2-L5</code> '
+      + '<a href="src/main.js#L20-L35"><code>src/main.js</code></a> '
+      + '<a href="https://example.test"><code>src/main.js</code></a> '
+      + 'https://example.test/unrelated.js</p>';
+    expect(collectMessageFileReferences(source)).toEqual(['docs/设计说明.md', 'docs/设计 说明.md', 'src/main.js']);
+    const html = decorateMessageFileReferences(source, {
+      'docs/设计说明.md': 'docs/设计说明.md',
+      'docs/设计 说明.md': 'docs/设计 说明.md',
+      'src/main.js': 'src/main.js',
+    });
+    const host = document.createElement('div');
+    host.innerHTML = html;
+    expect(host.querySelectorAll('a.message-file-reference')).toHaveLength(3);
+    expect(html).not.toMatch(/<a\b[^>]*>\s*<a\b/);
+    expect(host.querySelector('a[href="https://example.test"]').innerHTML).toBe('<code>src/main.js</code>');
+    expect(host.querySelector('a[href="src/main.js#L20-L35"]').textContent).toBe('src/main.js');
+  });
+
+  it('uses consistent HTML text boundaries and does not link fragments of URI schemes', () => {
+    const source = '<p>docs/a&amp;b.md &lt;script&gt; docs/c&#38;d.md main.js:20-35 '
+      + 'mailto:user@example.com data:text/plain,file.js ssh:host/file.js https://host/file.js</p>';
+    expect(collectMessageFileReferences(source)).toEqual(['docs/a&b.md', 'docs/c&d.md', 'main.js']);
+    const html = decorateMessageFileReferences(source, {
+      'docs/a&b.md': 'docs/a&b.md', 'docs/c&d.md': 'docs/c&d.md', 'main.js': 'main.js',
+      'b.md': 'wrong.js', 'file.js': 'wrong.js', 'user@example.com': 'wrong.js',
+    });
+    const host = document.createElement('div');
+    host.innerHTML = html;
+    expect(host.querySelector('script')).toBeNull();
+    expect([...host.querySelectorAll('a')].map(link => link.dataset.resolvedFilePath))
+      .toEqual(['docs/a&b.md', 'docs/c&d.md', 'main.js']);
+    expect(host.textContent).toContain('docs/a&b.md <script> docs/c&d.md');
+    expect(html).not.toContain('data-resolved-file-path="wrong.js"');
+  });
+
+  it('decodes named entities once and never links filename suffixes or protocol-relative URLs', () => {
+    const source = '<p>docs/a&nbsp;b.md docs/a&copy;b.md docs/a&amp;amp;b.md '
+      + 'docs/a&CounterClockwiseContourIntegral;b.md src/valid.js //example.test/remote.js</p>';
+    const paths = ['docs/a\u00a0b.md', 'docs/a©b.md', 'docs/a&amp;b.md', 'docs/a∳b.md', 'src/valid.js'];
+    expect(collectMessageFileReferences(source)).toEqual(paths);
+    const host = document.createElement('div');
+    const original = document.createElement('div');
+    original.innerHTML = source;
+    host.innerHTML = decorateMessageFileReferences(source, {
+      ...Object.fromEntries(paths.map(path => [path, path])),
+      'b.md': 'wrong.js', 'remote.js': 'wrong.js',
+    });
+    expect([...host.querySelectorAll('a')].map(link => link.dataset.resolvedFilePath)).toEqual(paths);
+    expect(host.textContent).toBe(original.textContent);
+    expect(resolveMessageFileReference('//example.test/remote.js')).toBeNull();
+    expect(collectMessageFileReferences('<p>[main.js:20],other.js:30</p>')).toEqual(['main.js', 'other.js']);
+
+    const encoded = '<a href="docs/a&amp;amp;b.md#L3">report</a> <code>docs/a&amp;amp;b.md</code>';
+    expect(collectMessageFileReferences(encoded)).toEqual(['docs/a&amp;b.md']);
+    host.innerHTML = decorateMessageFileReferences(encoded, { 'docs/a&amp;b.md': 'docs/a&amp;b.md' });
+    expect(host.querySelector('a').getAttribute('href')).toBe('docs/a&amp;b.md#L3');
+    expect(resolveMessageFileReference(host.querySelector('a').getAttribute('href'), { htmlEncoded: false }))
+      .toEqual({ path: 'docs/a&amp;b.md', line: 3 });
+  });
+
   it('rejects Git refs and versions without blocking recognizable extensionless files', () => {
     expect(resolveMessageFileReference('origin/main')).toBeNull();
     expect(resolveMessageFileReference('feature/message-preview')).toBeNull();
@@ -1196,6 +1275,79 @@ describe('message file preview', () => {
     expect(resolveMessageFileReferences).toHaveBeenCalledTimes(2);
     expect(resolveMessageFileReferences).toHaveBeenLastCalledWith(['Q:\\M365\\Sydney\\docs\\design-doc.md']);
     wrapper.unmount();
+  });
+
+  it('resolves streaming references in bounded batches and rejects stale or unrelated results', async () => {
+    vi.useFakeTimers();
+    let sequence = 0;
+    const fileReferenceStore = Vue.reactive({
+      fileReferenceResolutionContextKey: 'agent-a:session-a:/workspace',
+      answerUserQuestion: vi.fn(), cancelVpTurn: vi.fn(), openFileInExplorer: vi.fn(),
+      resolveMessageFileReferences: vi.fn(() => `refs-${++sequence}`),
+    });
+    globalThis.Pinia = { defineStore: () => () => ({}), useChatStore: () => fileReferenceStore };
+    globalThis.marked = { setOptions: vi.fn(), parse: vi.fn(value => `<p>${value}</p>`) };
+    globalThis.hljs = undefined;
+    const { default: AssistantTurn } = await import('../../web/components/AssistantTurn.js');
+    const wrapper = mount(AssistantTurn, {
+      props: { turn: {
+        id: 'streaming-links', textContent: '', textSegments: [],
+        toolMsgs: [], imageMsgs: [], isStreaming: true,
+      } },
+      global: {
+        mocks: { $t: key => key }, provide: { t: key => key },
+        stubs: { ToolLine: true, AskCard: true, VpSpeakerHeader: true },
+      },
+    });
+    const update = async (content, isStreaming = true) => wrapper.setProps({ turn: {
+      ...wrapper.props('turn'), textContent: content,
+      textSegments: [{ key: 'result', content, kind: 'result' }], isStreaming,
+    } });
+    const respond = (requestId, references) => window.dispatchEvent(new CustomEvent('workbench-message', {
+      detail: { type: 'file_references_resolved', requestId, references },
+    }));
+    try {
+      const paths = Array.from({ length: 40 }, (_, i) => `src/file-${i}.js`);
+      await update(paths.join(' '));
+      expect(fileReferenceStore.resolveMessageFileReferences).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(fileReferenceStore.resolveMessageFileReferences.mock.calls.map(([batch]) => batch.length)).toEqual([32, 8]);
+      // Out-of-order batches remain independently correlated. An entry outside
+      // the requested batch must never become clickable.
+      respond('refs-2', [
+        { requestedPath: paths[39], resolvedPath: paths[39] },
+        { requestedPath: paths[0], resolvedPath: 'unrelated.js' },
+      ]);
+      respond('refs-1', [{ requestedPath: paths[0], resolvedPath: paths[0] }]);
+      await Vue.nextTick();
+      expect(wrapper.findAll('a.message-file-reference')).toHaveLength(2);
+      await wrapper.get(`a[href="${paths[39]}"]`).trigger('click');
+      expect(fileReferenceStore.openFileInExplorer).toHaveBeenCalledWith(paths[39], { hideTree: true, line: null });
+
+      await update(`${paths.join(' ')} more text`);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(fileReferenceStore.resolveMessageFileReferences).toHaveBeenCalledTimes(2);
+      await update(Array.from({ length: 140 }, (_, i) => `src/file-${i}.js`).join(' '));
+      await vi.advanceTimersByTimeAsync(500);
+      expect(fileReferenceStore.resolveMessageFileReferences.mock.calls.map(([batch]) => batch.length)).toEqual([32, 8, 32, 32, 24]);
+
+      fileReferenceStore.fileReferenceResolutionContextKey = 'agent-b:session-b:/workspace';
+      await Vue.nextTick();
+      expect(wrapper.findAll('a.message-file-reference')).toHaveLength(0);
+      respond('refs-3', [{ requestedPath: paths[1], resolvedPath: 'stale.js' }]);
+      await Vue.nextTick();
+      expect(wrapper.findAll('a.message-file-reference')).toHaveLength(0);
+      // Completion retries paths that did not yet exist during generation.
+      await update('src/newly-created.js', false);
+      const lastRequestId = `refs-${sequence}`;
+      expect(fileReferenceStore.resolveMessageFileReferences).toHaveBeenLastCalledWith(['src/newly-created.js']);
+      respond(lastRequestId, [{ requestedPath: 'src/newly-created.js', resolvedPath: 'src/newly-created.js' }]);
+      await Vue.nextTick();
+      expect(wrapper.findAll('a.message-file-reference')).toHaveLength(1);
+    } finally {
+      wrapper.unmount();
+      vi.useRealTimers();
+    }
   });
 
   it('revalidates file references when completed response content changes', async () => {
