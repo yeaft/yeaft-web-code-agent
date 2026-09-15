@@ -65,7 +65,7 @@ export function deriveGoalProgress(detail) {
     const action = byId.get(run.actionId);
     return action && (!run.workItemId || run.workItemId === detail.id)
       && (!action.workItemId || action.workItemId === detail.id)
-      && ['completed', 'failed', 'waiting'].includes(run.status)
+      && ['completed', 'failed', 'waiting', 'retryable'].includes(run.status)
       && revision(run.executionManifest?.contractRevision ?? action.contractRevision) === revision(detail.revision)
       && revision(run.contextSnapshot?.contract?.revision ?? action.contractRevision) === revision(detail.revision);
   });
@@ -86,15 +86,18 @@ export function deriveGoalProgress(detail) {
   // observation. The writer's own end-to-end proof remains usable.
   const freshProof = proof.filter(run => writes.every(writer => writer.id === run.id
     || (Number(run.startedAt) || observedAt(run)) > observedAt(writer)));
-  const criteria = contract.map((criterion, index) => {
-    // A conflicting current observation cannot be hidden by selecting an older
-    // passing Run. Resolve/supersede the failed Action before claiming success.
-    const passing = freshProof.filter(run => run.acceptanceChecks[index].status === 'passed');
-    const latestPassAt = Math.max(0, ...passing.map(run => Number(run.startedAt) || observedAt(run)));
-    const conflicts = observations.filter(run => observedAt(run) >= latestPassAt
-      && run.acceptanceChecks?.[index]?.criterion === criterion
+  const contradictions = contract.map((criterion, index) => observations.filter(run => (
+    run.acceptanceChecks?.[index]?.criterion === criterion
       && (run.acceptanceChecks[index].status === 'failed'
-        || (run.acceptanceChecks[index].status !== 'not_applicable' && hasContradictoryEvidence(run))));
+        || (run.acceptanceChecks[index].status !== 'not_applicable' && hasContradictoryEvidence(run)))
+  )));
+  const latestContradictionAt = contradictions.map(runs => Math.max(-Infinity, ...runs.map(observedAt)));
+  const criteria = contract.map((criterion, index) => {
+    // A correction establishes new proof; it never revives an older disproved
+    // Run. Overlapping/tied observations cannot establish corrective ordering.
+    const passing = freshProof.filter(run => run.acceptanceChecks[index].status === 'passed'
+      && (Number(run.startedAt) || observedAt(run)) > latestContradictionAt[index]);
+    const conflicts = passing.length ? [] : contradictions[index];
     const evidenceRunIds = passing.map(run => run.id);
     return {
       criterion,
@@ -107,7 +110,11 @@ export function deriveGoalProgress(detail) {
   const outputKind = { workspace_files: 'file', pull_request: 'pr', merge: 'commit' }[target];
   const deliveryRunIds = freshProof.filter(run => target === 'response'
     ? typeof run.summary === 'string' && run.summary.trim()
-      && run.acceptanceChecks.every(check => check.status !== 'failed')
+      // Summaries are indivisible: do not deliver one whose applicable claims
+      // predate a contradiction, even after a different Run corrects it.
+      && run.acceptanceChecks.every((check, index) => check.status !== 'failed'
+        && (check.status === 'not_applicable'
+          || (Number(run.startedAt) || observedAt(run)) > latestContradictionAt[index]))
     : outputKind && normalizeOutputs(run.outputs).some(output => output.kind === outputKind && !NEGATIVE.has(output.status)))
     .map(run => run.id);
   const blockers = (detail?.actions || []).filter(action => ['failed', 'waiting'].includes(action.status))

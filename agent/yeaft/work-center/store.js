@@ -3586,17 +3586,17 @@ export class WorkItemStore {
             type: 'coordinator-guidance', role: 'user', summary: instruction, evidence: [],
           }];
           const nextAction = {
-            ...action, context, generation: action.generation + 1,
+            ...action, context, generation: action.generation + 1, contractRevision: workItem.revision,
           };
           nextAction.instruction = canonicalActionInstruction(workItem, nextAction, context);
           const specHash = actionSpecHash(nextAction);
           const changed = this.db.prepare(`UPDATE actions SET status = 'ready', attempt = 0,
             current_run_id = NULL, lease_epoch = lease_epoch + ?, context = ?, instruction = ?,
-            generation = generation + 1, spec_hash = ?, identity_history = ?, result_run_id = NULL,
+            generation = generation + 1, contract_revision = ?, spec_hash = ?, identity_history = ?, result_run_id = NULL,
             workspace = NULL, updated_at = ? WHERE id = ? AND generation = ?
             AND status NOT IN ('completed', 'superseded', 'cancelled')`).run(
             action.status === 'running' ? 1 : 0,
-            stringify(context), nextAction.instruction, specHash,
+            stringify(context), nextAction.instruction, nextAction.contractRevision, specHash,
             stringify(actionIdentityHistory(action, nextAction.generation, specHash)),
             now, action.id, action.generation,
           );
@@ -3838,14 +3838,14 @@ export class WorkItemStore {
         const context = [...withoutActionInputContext(action.context), {
           type: 'coordinator-guidance', role: 'user', summary: guidance, evidence: [],
         }];
-        const candidate = { ...action, context, generation: action.generation + 1 };
+        const candidate = { ...action, context, generation: action.generation + 1, contractRevision: workItem.revision };
         candidate.instruction = canonicalActionInstruction(workItem, candidate, context);
         const specHash = actionSpecHash(candidate);
         const changed = this.db.prepare(`UPDATE actions SET status = 'ready', attempt = 0,
           current_run_id = NULL, context = ?, instruction = ?, generation = generation + 1,
-          spec_hash = ?, identity_history = ?, result_run_id = NULL, workspace = NULL, updated_at = ?
+          contract_revision = ?, spec_hash = ?, identity_history = ?, result_run_id = NULL, workspace = NULL, updated_at = ?
           WHERE id = ? AND generation = ? AND status IN ('ready', 'waiting', 'failed')`).run(
-          stringify(context), candidate.instruction, specHash,
+          stringify(context), candidate.instruction, candidate.contractRevision, specHash,
           stringify(actionIdentityHistory(action, candidate.generation, specHash)),
           now, action.id, action.generation,
         );

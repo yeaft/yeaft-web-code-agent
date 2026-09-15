@@ -74,7 +74,9 @@ describe('goal progress from durable Run evidence', () => {
     fail.action.status = 'closed';
     expect(deriveGoalProgress(detail(pass, fail)).criteria[0].status).toBe('failed'); // closure is not new proof
     const correction = observation('correction', { run: { endedAt: 30 } });
-    expect(deriveGoalProgress(detail(pass, fail, correction)).remainingCriteria).toEqual([]);
+    expect(deriveGoalProgress(detail(pass, fail, correction))).toMatchObject({ remainingCriteria: [],
+      criteria: [{ status: 'passed', evidenceRunIds: [correction.run.id] }],
+      delivery: { evidenceRunIds: [correction.run.id] } });
     const retry = observation('fail', { action: { generation: 2, status: 'completed' }, run: { id: 'retry-run', actionGeneration: 2,
       endedAt: 30, acceptanceChecks: [{ criterion, status: 'deferred', evidence: 'Did not re-check the counterexample' }] } });
     retry.action.resultRunId = retry.run.id;
@@ -86,6 +88,44 @@ describe('goal progress from durable Run evidence', () => {
       { outputs: [{ kind: 'file', label: 'Report failed', ref: 'report.md', status: 'failed' }] }]) {
       expect(deriveGoalProgress(detail(observation('contradiction', { run }))).criteria[0].status).toBe('failed');
     }
+  });
+
+  it('invalidates proof per criterion and excludes a contradicted response even after correction', () => {
+    const otherCriterion = 'Identify the affected cache versions';
+    const pass = observation('pass', { run: { acceptanceChecks: [
+      { criterion, status: 'passed', evidence: 'Original remedy' },
+      { criterion: otherCriterion, status: 'passed', evidence: 'Version list' },
+    ] } });
+    const fail = observation('fail', { run: { endedAt: 20, acceptanceChecks: [
+      { criterion, status: 'failed', evidence: 'Counterexample' },
+      { criterion: otherCriterion, status: 'not_applicable', evidence: 'Versions unchanged' },
+    ] } });
+    const correction = observation('correction', { run: { startedAt: 21, endedAt: 30, acceptanceChecks: [
+      { criterion, status: 'passed', evidence: 'Corrected remedy' },
+      { criterion: otherCriterion, status: 'deferred', evidence: 'Versions already identified' },
+    ] } });
+    const progress = deriveGoalProgress({ ...detail(pass, fail, correction), acceptanceCriteria: [criterion, otherCriterion] });
+    expect(progress.criteria.map(check => check.evidenceRunIds)).toEqual([[correction.run.id], [pass.run.id]]);
+    expect(progress.delivery.evidenceRunIds).toEqual([correction.run.id]);
+    for (const startedAt of [15, 20]) {
+      correction.run.startedAt = startedAt;
+      expect(deriveGoalProgress({ ...detail(pass, fail, correction), acceptanceCriteria: [criterion, otherCriterion] })
+        .criteria[0].status).toBe('failed');
+    }
+  });
+
+  it('retains terminal retryable counterexamples after deferred retries and requires newer proof', () => {
+    const pass = observation('pass');
+    const retry = observation('retry', { run: { endedAt: 30,
+      acceptanceChecks: [{ criterion, status: 'deferred', evidence: 'Did not re-check' }] } });
+    const historical = { ...retry.run, id: 'retryable-run', status: 'retryable', endedAt: 20,
+      acceptanceChecks: [{ criterion, status: 'failed', evidence: 'Counterexample' }] };
+    const source = detail(pass, retry);
+    source.runs.push(historical);
+    expect(deriveGoalProgress(source).criteria[0]).toMatchObject({ status: 'failed', evidenceRunIds: [],
+      conflictingRunIds: [historical.id] });
+    retry.run.acceptanceChecks[0].status = 'passed';
+    expect(deriveGoalProgress(source).criteria[0]).toMatchObject({ status: 'passed', evidenceRunIds: [retry.run.id] });
   });
 
   it('invalidates earlier checks after a subsequent write, but not unrelated read-only deferred checks', () => {
@@ -252,9 +292,118 @@ describe('goal contract authority and completion persistence', () => {
     const turn = automaticTurn(created.id, 'contradictory-complete');
     const result = completeResult([first.run.id]);
     result.decision.closeActions = [{ actionId: second.id, reason: 'Claim no further work is needed' }];
-    expect(() => store.completeCoordinatorTurn(turn.turnId, result, turn.fence)).toThrow(/contradictory/);
+    expect(() => store.completeCoordinatorTurn(turn.turnId, result, turn.fence)).toThrow(/Completion delivery requires current canonical evidence/);
     expect(store.getWorkItem(created.id).status).not.toBe('done');
     expect(store.getAction(second.id).status).toBe('failed'); // completion transaction rolled back
+  });
+
+  it('requires correcting Run citations and never delivers an obsolete response after a counterexample', () => {
+    const created = setup();
+    createAction(automaticTurn(created.id, 'original-report'));
+    const first = store.claimReadyAction('runner');
+    controller.submit(first.run.id, 'runner', first.run.leaseEpoch, { outcome: 'completed', summary: 'Obsolete remedy',
+      evidence: ['Original check'], acceptanceChecks: [{ criterion, status: 'passed', evidence: 'Original check' }] });
+    const counterexample = store.createNextAction(created.id, { type: 'diagnose', workspaceMode: 'read', brief,
+      instruction: 'Check the counterexample', contractRevision: 1 });
+    const failed = store.claimReadyAction('runner');
+    expect(failed.action.id).toBe(counterexample.id);
+    controller.submit(failed.run.id, 'runner', failed.run.leaseEpoch, { outcome: 'completed', summary: 'Counterexample',
+      evidence: ['Counterexample reproduction'], acceptanceChecks: [{ criterion, status: 'failed', evidence: 'Remedy fails' }] });
+    store.createNextAction(created.id, { type: 'diagnose', workspaceMode: 'read', brief,
+      instruction: 'Correct and re-check the remedy', contractRevision: 1 });
+    const correction = store.claimReadyAction('runner');
+    controller.submit(correction.run.id, 'runner', correction.run.leaseEpoch, { outcome: 'completed', summary: 'Corrected remedy',
+      evidence: ['Corrected check'], acceptanceChecks: [{ criterion, status: 'passed', evidence: 'Corrected check' }] });
+    const turn = automaticTurn(created.id, 'corrected-complete');
+    expect(() => store.completeCoordinatorTurn(turn.turnId, completeResult([first.run.id]), turn.fence)).toThrow(/Completion delivery/);
+    const staleCriterion = completeResult([first.run.id, correction.run.id]);
+    staleCriterion.decision.completion.acceptanceResults[0].evidenceRunIds = [first.run.id];
+    expect(() => store.completeCoordinatorTurn(turn.turnId, staleCriterion, turn.fence)).toThrow(/criterion lacks a passing canonical Run/);
+    expect(store.getWorkItem(created.id).status).not.toBe('done');
+    const completed = store.completeCoordinatorTurn(turn.turnId, completeResult([first.run.id, correction.run.id]), turn.fence);
+    expect(completed.status).toBe('done');
+    expect(completed.finalResult.responses.map(response => [response.runId, response.summary]))
+      .toEqual([[correction.run.id, 'Corrected remedy']]);
+    expect(completed.goalProgress.criteria[0].evidenceRunIds).toEqual([correction.run.id]);
+  });
+
+  it('blocks completion from old proof after a persisted retryable counterexample and a deferred retry', () => {
+    const created = setup();
+    createAction(automaticTurn(created.id, 'retry-report'));
+    const first = store.claimReadyAction('runner');
+    controller.submit(first.run.id, 'runner', first.run.leaseEpoch, { outcome: 'completed', summary: 'Initial remedy',
+      evidence: ['Original check'], acceptanceChecks: [{ criterion, status: 'passed', evidence: 'Original check' }] });
+    store.createNextAction(created.id, { type: 'diagnose', workspaceMode: 'read', brief, maxAttempts: 2,
+      instruction: 'Check the counterexample', contractRevision: 1 });
+    const failed = store.claimReadyAction('runner');
+    controller.submit(failed.run.id, 'runner', failed.run.leaseEpoch, { outcome: 'retryable', summary: 'Counterexample fails',
+      evidence: ['Counterexample'], acceptanceChecks: [{ criterion, status: 'failed', evidence: 'Remedy fails' }] });
+    expect(store.getRun(failed.run.id).status).toBe('retryable');
+    const retry = store.claimReadyAction('runner');
+    expect(retry.action.id).toBe(failed.action.id);
+    controller.submit(retry.run.id, 'runner', retry.run.leaseEpoch, { outcome: 'completed', summary: 'Retry deferred verification',
+      evidence: ['Retry completed'], acceptanceChecks: [{ criterion, status: 'deferred', evidence: 'Did not re-check' }] });
+    store.close();
+    store = new WorkItemStore(join(tempDir, 'work-center.db'));
+    controller = new WorkflowController(store);
+    const turn = automaticTurn(created.id, 'retry-complete');
+    expect(() => store.completeCoordinatorTurn(turn.turnId, completeResult([first.run.id]), turn.fence)).toThrow(/Completion delivery requires current canonical evidence/);
+    expect(() => store.completeCoordinatorTurn(turn.turnId, completeResult([first.run.id, retry.run.id]), turn.fence)).toThrow(/contradictory/);
+    expect(store.getWorkItemDetail(created.id).goalProgress.criteria[0]).toMatchObject({ status: 'failed',
+      evidenceRunIds: [], conflictingRunIds: [failed.run.id] });
+    store.failCoordinatorTurn(turn.turnId, new Error('New verification required'), turn.fence);
+    store.createNextAction(created.id, { type: 'diagnose', workspaceMode: 'read', brief,
+      instruction: 'Re-check the corrected counterexample', contractRevision: 1 });
+    const correction = store.claimReadyAction('runner');
+    controller.submit(correction.run.id, 'runner', correction.run.leaseEpoch, { outcome: 'completed', summary: 'Verified correction',
+      evidence: ['Corrected reproducer'], acceptanceChecks: [{ criterion, status: 'passed', evidence: 'Counterexample now passes' }] });
+    const finalTurn = automaticTurn(created.id, 'retry-corrected-complete');
+    expect(store.completeCoordinatorTurn(finalTurn.turnId, completeResult([correction.run.id]), finalTurn.fence).status).toBe('done');
+  });
+
+  it('rebinds attachment guidance to the current contract and hash without accepting stale Run proof', () => {
+    const created = setup();
+    createAction(automaticTurn(created.id, 'attachment-report'));
+    const first = store.claimReadyAction('runner');
+    controller.submit(first.run.id, 'runner', first.run.leaseEpoch, { outcome: 'completed', summary: 'Pre-attachment report',
+      evidence: ['Original check'], acceptanceChecks: [{ criterion, status: 'passed', evidence: 'Original check' }] });
+    const target = store.createNextAction(created.id, { type: 'diagnose', workspaceMode: 'read', brief,
+      instruction: 'Check the attached reproducer', contractRevision: 1 });
+    const waiting = store.claimReadyAction('runner');
+    controller.submit(waiting.run.id, 'runner', waiting.run.leaseEpoch, { outcome: 'waiting', summary: 'Need reproducer',
+      waitingReason: 'Attach the failing input', evidence: [],
+      acceptanceChecks: [{ criterion, status: 'deferred', evidence: 'Awaiting attachment' }] });
+    const attachment = { id: 'reproducer', name: 'reproducer.txt', mimeType: 'text/plain', size: 20 };
+    const turn = store.claimStartedCoordinatorTurn(store.beginCoordinatorTurn(created.id, 'Use this reproducer.',
+      store.getWorkItemDetail(created.id), { attachments: [attachment], addedAttachments: [attachment] }), 'coordinator');
+    expect(turn.detail.revision).toBe(2);
+    const guided = store.completeCoordinatorTurn(turn.turnId, { reply: 'Checking the attached reproducer.', decision: {
+      kind: 'guide_actions', reason: 'User supplied the missing input',
+      guidance: [{ actionId: target.id, instruction: 'Verify the remedy with the attached reproducer.' }],
+    } }, turn.fence);
+    const action = guided.actions.find(action => action.id === target.id);
+    expect(action).toMatchObject({ status: 'ready', contractRevision: 2, generation: 2, resultRunId: null });
+    expect(action.specHash).not.toBe(target.specHash);
+    // The same canonical spec inserted independently must produce the same hash,
+    // including the newly bound revision, not a hash computed from revision 1.
+    const equivalent = store.createNextAction(created.id, { ...action, id: 'hash-check', status: 'closed' });
+    expect(equivalent.specHash).toBe(action.specHash);
+    expect(guided.goalProgress.remainingCriteria).toEqual([criterion]);
+    expect(guided.goalProgress.delivery.evidenceRunIds).toEqual([]);
+    const fresh = store.claimReadyAction('runner');
+    expect(fresh.action.id).toBe(target.id);
+    expect(store.setRunExecutionSnapshots(fresh.run.id, 'runner', fresh.run.leaseEpoch, {
+      executionManifest: { actionGeneration: fresh.action.generation, actionSpecHash: fresh.action.specHash,
+        contractRevision: fresh.action.contractRevision },
+      contextSnapshot: { contract: { revision: guided.revision } },
+    })).toBe(true);
+    controller.submit(fresh.run.id, 'runner', fresh.run.leaseEpoch, { outcome: 'completed', summary: 'Attachment verified remedy',
+      evidence: ['Attached reproducer passed'], acceptanceChecks: [{ criterion, status: 'passed', evidence: 'Attached input verified' }] });
+    const finalTurn = automaticTurn(created.id, 'attachment-complete');
+    expect(() => store.completeCoordinatorTurn(finalTurn.turnId, completeResult([first.run.id]), finalTurn.fence)).toThrow(/canonical owned Run/);
+    const completed = store.completeCoordinatorTurn(finalTurn.turnId, completeResult([fresh.run.id]), finalTurn.fence);
+    expect(completed.status).toBe('done');
+    expect(completed.goalProgress).toMatchObject({ contractRevision: 2, evidenceRunIds: [fresh.run.id], remainingCriteria: [] });
   });
 
   it('rejects completion after contract refinement even when criterion wording is unchanged', () => {
