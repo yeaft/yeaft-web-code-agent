@@ -25,8 +25,9 @@ export default {
         :aria-label="$t('yeaft.session.forkCurrent')"
         @click="$emit('fork-session')"
       >
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v10m12-10v2a4 4 0 0 1-4 4H6"/></svg>
-        <span>{{ $t(forkPending ? 'yeaft.session.forking' : 'yeaft.session.fork') }}</span>
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v10m12-10v2a4 4 0 0 1-4 4H6"/>
+        </svg>
       </button>
       <button
         ref="searchButtonRef"
