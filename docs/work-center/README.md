@@ -14,7 +14,7 @@ Work Center 是 Yeaft 的 Agent 级持久目标执行系统。`WorkItem` 保存�
 ## 任务优先的用户路径
 
 1. 从 Work Center 或 Session 创建目标，选择 workspace 与交付目标。
-2. Coordinator 补全验收条件，只为当前确有必要的工作创建 Action。
+2. 创建时若没有单列验收条件，直接以用户目标作为最低验收条件。Coordinator 只为当前缺口创建 Action；修改目标、验收或交付边界必须来自用户的明确补充，不能在自动推进时扩大或降低标准。
 3. Run 提交 outcome、证据与验收检查；Coordinator 据此继续、请求人工输入或完成任务。
 4. Agent 提供 `goalProgress` 时，详情展示已验证条件数、剩余条件、阻塞与独立交付状态；浏览器不把 Action 数量当作目标完成度。旧 Agent 保留普通验收列表。
 5. `response` 交付有证据支持的答复，不强制生成代码产物；`workspace_files`、`pull_request`、`merge` 分别要求对应的文件、PR、commit 证据，仍遵守权限与评审策略。

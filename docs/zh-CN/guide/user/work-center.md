@@ -38,7 +38,7 @@ Work Center 不是 Session。它可以从 Session 创建并保留 origin link，
 
 ## 规划与执行
 
-新 WorkItem 使用动态协调。Coordinator 补全目标和验收条件，根据当前事实，只创建下一步真正必要的 Action。不强制走 triage → implement → test → review → deliver 固定流水线。简单研究可能只需一个 Action；代码修改则可能根据证据与风险，需要独立实现、验证或集成。
+新 WorkItem 使用动态协调。创建时未单列验收条件，就直接以用户目标作为最低验收条件。Coordinator 根据当前事实，只创建下一步真正必要的 Action；自动推进不能修改目标或验收标准，只有用户明确补充时才能调整契约。不强制走 triage → implement → test → review → deliver 固定流水线。简单研究可能只需一个 Action；代码修改则可能根据证据与风险，需要独立实现、验证或集成。
 
 每个 Run 复用现有 Yeaft engine，并提交结构化 outcome。Coordinator 据此判断需要继续工作、请求人工回答，还是完成任务。`sourceActionIds` 记录输入结果的来源，不是预建的依赖图。
 

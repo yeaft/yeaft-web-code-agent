@@ -38,7 +38,7 @@ When created from a Session, the runtime stamps the source Session; model input 
 
 ## Planning and execution
 
-New WorkItems use dynamic coordination. The Coordinator refines the goal and acceptance criteria, inspects current facts, and creates only the next necessary Actions. There is no mandatory triage → implement → test → review → deliver sequence. A small research task may need one Action; code changes may need separate implementation, verification, or integration when the evidence and risks justify them.
+New WorkItems use dynamic coordination. If no separate acceptance criteria are supplied, the user goal itself becomes the minimum acceptance condition. The Coordinator inspects current facts and creates only the next necessary Actions; automatic advancement cannot change the goal or criteria. Contract changes require explicit user refinement. There is no mandatory triage → implement → test → review → deliver sequence. A small research task may need one Action; code changes may need separate implementation, verification, or integration when the evidence and risks justify them.
 
 Each Run uses the existing Yeaft engine and submits a structured outcome. The Coordinator then decides whether more work, a human answer, or completion is justified. `sourceActionIds` records where an Action's input results came from; it is not a prebuilt dependency graph.
 
