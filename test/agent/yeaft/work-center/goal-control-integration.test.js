@@ -6,6 +6,7 @@ import { WorkItemStore } from '../../../../agent/yeaft/work-center/store.js';
 import { WorkflowController } from '../../../../agent/yeaft/work-center/controller.js';
 import { prepareDynamicActionMutation, resolveDynamicActionPolicySnapshot } from '../../../../agent/yeaft/work-center/dynamic-coordination.js';
 import { projectWorkItemDetail } from '../../../../agent/yeaft/work-center/projection.js';
+import { coordinatorSnapshot } from '../../../../agent/yeaft/work-center/coordinator.js';
 
 const criterion = 'Explain the verified cause';
 let store;
@@ -45,6 +46,9 @@ describe('goal, cost and browser projection integration', () => {
     expect(before.goalProgress.remainingCriteria).toEqual([]);
     const request = store.reserveWorkItemRequest({ workItemId: item.id, kind: 'coordinator', request: { maxTokens: 50 } });
     store.settleWorkItemRequest(request.id, { inputTokens: 1000, outputTokens: 300 });
+    // Admission/settlement must not alter a persisted Coordinator request hash
+    // when recovery reconstructs its snapshot after a crash.
+    expect(coordinatorSnapshot(store.getWorkItemDetail(item.id))).toEqual(coordinatorSnapshot(before));
     store.stopExecution(item.id, 'work_item_requests_exhausted');
     const extended = store.extendExecutionBudget(item.id, store.getExecutionControl(item.id).revision, { maxRequests: 10 });
     expect(extended.status).toBe('needs_attention');

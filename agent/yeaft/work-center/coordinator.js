@@ -677,13 +677,6 @@ export function coordinatorSnapshot(detail) {
   return {
     workItem,
     goalProgress,
-    ...(detail.executionControl ? { resources: {
-      limits: detail.executionControl.limits,
-      requestsUsed: detail.executionControl.usage.llmRequestCount,
-      tokensCharged: detail.executionControl.usage.chargedTokens,
-      unknownRequests: detail.executionControl.usage.unknownRequests,
-      tokenAccounting: detail.executionControl.tokenAccounting,
-    } } : {}),
     actions,
     omittedCompletedActionCount: Math.max(0, completed.length - actions.filter(action => ['completed', 'closed'].includes(action.status)).length),
     conversation: coordinatorHistory(detail.messages),
