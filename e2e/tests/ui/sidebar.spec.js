@@ -526,11 +526,21 @@ test.describe('侧边栏交互', () => {
       title: 'Current session',
       createdAt: '2026-09-10T00:00:01.000Z',
     };
-    await chatPage.evaluate(({ rows, currentId }) => {
+    await chatPage.evaluate(({ agentId, rows, currentId }) => {
+      const sessionStore = window.Pinia.useSessionsStore();
+      sessionStore.applySnapshot(rows.map(row => ({
+        id: row.routeRef.sessionId,
+        name: row.title,
+        workDir: row.workDir || '',
+        roster: ['omni'],
+        defaultVpId: 'omni',
+        createdAt: row.createdAt,
+        metadataUpdatedAt: row.metadataUpdatedAt,
+      })), agentId);
       const store = window.Pinia.useChatStore();
       store.applySessionCatalogSnapshot(rows, []);
       store.openCatalogSession(rows.find(row => row.routeRef.sessionId === currentId));
-    }, { rows: [source, current], currentId });
+    }, { agentId: mockAgent.agentId, rows: [source, current], currentId });
 
     const sourceRow = chatPage.locator('.session-item', { hasText: 'Copy source' });
     await expect(sourceRow).not.toHaveClass(/active/);
