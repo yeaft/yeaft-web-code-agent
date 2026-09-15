@@ -34,6 +34,8 @@ Action 插入时以独立表保存原始 `maxAttempts`，generation 重置或自
 
 停止期间原有硬停止门禁阻止旧 Coordinator 决策。resume 在同一事务内推进 `coordinator_revision`，将所有 thinking Coordinator 消息置为 failed、撤销对应 pending/claimed mailbox，并按既有执行失效机制结束旧 Runs、推进 Action lease/generation。因此 stop → extend → resume 后旧 claim 不能派发、不能重放恢复或应用旧决策；这不是仅依赖 stop 前后可能相同的 status。请求账本独立于这些执行 fence，迟到 usage 仍可按请求 ID 幂等结算。单独追加预算不改变合约或执行 epoch，当前有效请求/决策无需因此作废。
 
+资源投影另有持久单调 `dataRevision`：预留、结算与控制变化推进该版本；读取快照时在短 SQLite 事务内比较投影指纹，将 Action 尝试及租约过期导致的在途/未知变化纳入排序。它不进入 Coordinator 的可恢复请求快照，也不替代用户命令 CAS。浏览器分别合并资源与 Action 进度；新版结算可以降低 `chargedTokens`，不能用数值取最大值代替版本判断。
+
 ## 浏览器/API 契约
 
 detail 和 summary 都包含 `executionControl`：
@@ -41,6 +43,7 @@ detail 和 summary 都包含 `executionControl`：
 ```js
 {
   revision, // 独立执行管理 CAS 版本，非 WorkItem 合约 revision
+  dataRevision, // 独立单调资源投影版本，用于浏览器乱序合并，不用于管理 CAS
   limits: { maxRequests, maxTokens, maxRunRequests, maxActionAttempts, maxCoordinatorFailures },
   actionAttemptsExtension, // 用户显式累计追加的每 Action 尝试额度
   actionAttempts: [{ actionId, attempts, originalMaxAttempts, effectiveMaxAttempts }],
