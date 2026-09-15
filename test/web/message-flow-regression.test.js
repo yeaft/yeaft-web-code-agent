@@ -3514,6 +3514,7 @@ describe('message flow regressions', () => {
       workCenterListMoreLoadingByAgent: {},
       workCenterSettingsByAgent: {},
       workCenterRuntimeByAgent: {},
+      workCenterFeatureSettingsByAgent: {},
       workCenterItemsByAgent: { 'agent-a': [] },
       workCenterLoadingByAgent: {},
       workCenterLoadedByAgent: {},
@@ -3533,6 +3534,7 @@ describe('message flow regressions', () => {
       workCenterCreateDraft: null,
       listWorkItems: vi.fn(() => Promise.resolve([])),
       loadWorkCenterSettings: vi.fn(() => Promise.resolve(null)),
+      loadWorkCenterFeatureSettings: vi.fn(() => Promise.resolve(null)),
       enterWorkCenter: vi.fn(),
       toggleSessionSidebar: vi.fn(),
     };
@@ -3560,6 +3562,7 @@ describe('message flow regressions', () => {
       ...workCenterStore,
       workCenterAgentId: null,
       agents: [{ id: 'agent-old', name: 'Old Agent', online: true, capabilities: [] }],
+      workCenterFeatureSettingsByAgent: {},
       listWorkItems: vi.fn(() => Promise.resolve([])),
       loadWorkCenterSettings: vi.fn(() => Promise.resolve(null)),
     });
@@ -3574,11 +3577,14 @@ describe('message flow regressions', () => {
         },
       },
     });
-    expect(emptyWorkCenterPage.text()).toContain('No compatible online Agents');
+    expect(emptyWorkCenterPage.text()).toContain('The online Agents do not support Work Center settings');
+    expect(emptyWorkCenterPage.text()).toContain('Open Agent settings to upgrade');
+    expect(emptyWorkCenterPage.find('.work-center-header-actions').exists()).toBe(false);
     expect(emptyWorkCenterPage.find('.work-center-agent-picker').exists()).toBe(false);
     expect(emptyWorkCenterPage.find('.work-center-body').exists()).toBe(false);
     expect(emptyWorkCenterStore.listWorkItems).not.toHaveBeenCalled();
     expect(emptyWorkCenterStore.loadWorkCenterSettings).not.toHaveBeenCalled();
+    expect(emptyWorkCenterStore.loadWorkCenterFeatureSettings).not.toHaveBeenCalled();
     await emptyWorkCenterPage.vm.refresh();
     expect(emptyWorkCenterStore.listWorkItems).not.toHaveBeenCalled();
     emptyWorkCenterStore.enterWorkCenter.mockClear();
@@ -3586,6 +3592,42 @@ describe('message flow regressions', () => {
     await Vue.nextTick();
     expect(emptyWorkCenterStore.enterWorkCenter).toHaveBeenCalledWith('agent-new');
     emptyWorkCenterPage.unmount();
+
+    let rejectFeatureLoad;
+    const retryWorkCenterStore = Vue.reactive({
+      ...workCenterStore,
+      workCenterAgentId: null,
+      agents: [{
+        id: 'agent-configurable', name: 'Configurable Agent', online: true,
+        capabilities: ['work_center_feature_settings'],
+      }],
+      workCenterFeatureSettingsByAgent: {},
+      loadWorkCenterFeatureSettings: vi.fn(() => new Promise((resolve, reject) => {
+        rejectFeatureLoad = reject;
+      })),
+    });
+    globalThis.Pinia.useChatStore = () => retryWorkCenterStore;
+    const retryWorkCenterPage = mount(WorkCenterPage, {
+      global: {
+        mocks: { $t: key => key },
+        stubs: {
+          WorkCenterActionDetail: true,
+          WorkCenterSettingsModal: true,
+          AgentSettingsPanel: true,
+          LlmTab: true,
+        },
+      },
+    });
+    await Vue.nextTick();
+    expect(retryWorkCenterPage.text()).toContain('Checking Work Center availability');
+    rejectFeatureLoad(new Error('timed out'));
+    await vi.waitFor(() => {
+      expect(retryWorkCenterPage.text()).toContain('Could not check Work Center status');
+    });
+    expect(retryWorkCenterPage.text()).not.toContain('Checking Work Center availability');
+    expect(retryWorkCenterPage.text()).not.toContain('The online Agents do not support Work Center settings');
+    expect(retryWorkCenterPage.text()).toContain('Retry status check');
+    retryWorkCenterPage.unmount();
     globalThis.Pinia.useChatStore = () => workCenterStore;
 
     const pluginConfigRequests = [];
