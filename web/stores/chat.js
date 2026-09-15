@@ -1742,12 +1742,8 @@ export const useChatStore = defineStore('chat', {
         : (compatibleAgents.some(agent => agent.id === this.workCenterAgentId)
           ? this.workCenterAgentId
           : (compatibleAgents[0]?.id || null));
-      if (target && this.currentAgent !== target) {
-        this.selectAgent(target);
-        this.currentAgent = target;
-        const info = this.agents.find(agent => agent.id === target);
-        if (info) this.currentAgentInfo = info;
-      }
+      // Work Center requests carry their own Agent identity. Do not switch the
+      // chat Agent: leaving this surface must return to the original Session.
       this.workCenterAgentId = target;
       this.workCenterOpen = true;
       // Reveal the destination instead of leaving the mobile drawer over it.
@@ -1756,7 +1752,12 @@ export const useChatStore = defineStore('chat', {
       return true;
     },
     leaveWorkCenter() {
+      if (!this.workCenterOpen) return;
       this.workCenterOpen = false;
+      const url = new URL(window.location.href);
+      for (const key of ['workAgentId', 'workItemId', 'workContent']) url.searchParams.delete(key);
+      window.history.replaceState({ ...window.history.state, workCenter: false, workCenterContent: false },
+        '', `${url.pathname}${url.search}${url.hash}`);
     },
     setWorkCenterUiEnabled(enabled) {
       this.workCenterUiEnabled = enabled !== false;

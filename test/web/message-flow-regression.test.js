@@ -2255,8 +2255,8 @@ describe('message flow regressions', () => {
     expect(enMessages['sidebar.projects.assignFailed']).toContain('{message}');
     expect(zhCNMessages['sidebar.projects.assignFailed']).toContain('{message}');
     expect(sidebar.get('.sidebar-navigation').element.children[0].classList).toContain('sidebar-primary-actions');
-    expect(sidebar.get('.sidebar-navigation').element.children[1].classList).toContain('sidebar-work-center');
-    expect(sidebar.get('.sidebar-navigation').element.children[2].classList).toContain('sidebar-session-results');
+    expect(sidebar.findComponent(SidebarWorkCenter).exists()).toBe(false);
+    expect(sidebar.get('.sidebar-navigation').element.children[1].classList).toContain('sidebar-session-results');
     expect(sidebar.get('.sidebar-session-results').element.children[0].classList).toContain('projects-section');
     expect(sidebar.get('.sidebar-session-results').element.children[1].classList).toContain('recents-section');
     expect(sidebar.find('input[type="search"]').exists()).toBe(false);
@@ -2973,11 +2973,12 @@ describe('message flow regressions', () => {
     expect(component).not.toContain('M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 5v2h10V8H7zm0 4v2h7v-2H7zm0 4v2h5v-2H7z');
     await fallbackWorkCenter.get('.sidebar-work-center-trigger').trigger('click');
     expect(fallbackWorkCenter.emitted('open')).toEqual([[null]]);
-    await fallbackWorkCenter.setProps({ collapsed: true, active: true });
+    expect(fallbackWorkCenter.get('.sidebar-icon-btn').attributes('aria-label')).toBe('Work Center');
+    await fallbackWorkCenter.setProps({ collapsed: true });
     expect(fallbackWorkCenter.find('.session-tab-bar').exists()).toBe(false);
     const railEntry = fallbackWorkCenter.get('button.collapsed-icon-btn');
     expect(railEntry.attributes('aria-label')).toBe('Work Center');
-    expect(railEntry.attributes('aria-pressed')).toBe('true');
+    expect(railEntry.attributes('aria-expanded')).toBeUndefined();
     await railEntry.trigger('click');
     expect(fallbackWorkCenter.emitted('open')).toEqual([[null], [null]]);
     await fallbackWorkCenter.setProps({ agents: [
@@ -5581,17 +5582,31 @@ describe('message flow regressions', () => {
       { id: 'agent-b', online: true, capabilities: ['work_center'] },
     ];
     store.workCenterAgentId = 'stale-agent';
+    store.currentAgent = 'agent-a';
     store.workCenterOpen = true;
     store.selectAgent = vi.fn();
     store.listWorkItems = vi.fn(() => Promise.resolve([]));
     expect(store.enterWorkCenter('stale-agent')).toBe(true);
     expect(store.workCenterAgentId).toBe('agent-b');
+    expect(store.currentAgent).toBe('agent-a');
+    expect(store.selectAgent).not.toHaveBeenCalled();
     store.agents = [];
     store.listWorkItems.mockClear();
     expect(store.enterWorkCenter('stale-agent')).toBe(true);
     expect(store.workCenterOpen).toBe(true);
     expect(store.workCenterAgentId).toBe(null);
     expect(store.listWorkItems).not.toHaveBeenCalled();
+    const previousUrl = window.location.href;
+    const previousHistoryState = window.history.state;
+    window.history.replaceState({ marker: 'chat', workCenter: true }, '',
+      '?sessionId=original&workItemId=item&workAgentId=agent-b&workContent=action-list#chat');
+    store.leaveWorkCenter();
+    expect(store.workCenterOpen).toBe(false);
+    expect(store.currentAgent).toBe('agent-a');
+    expect(window.location.search).toBe('?sessionId=original');
+    expect(window.location.hash).toBe('#chat');
+    expect(window.history.state).toMatchObject({ marker: 'chat', workCenter: false, workCenterContent: false });
+    window.history.replaceState(previousHistoryState, '', previousUrl);
 
     const wrapper = mount(UnifiedSessionList, {
       attachTo: document.body,

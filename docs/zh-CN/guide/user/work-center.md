@@ -23,7 +23,9 @@ Work Center 不是 Session。它可以从 Session 创建并保留 origin link，
 
 ## 创建 WorkItem
 
-可以从侧栏打开 Work Center，也可以从 Yeaft Session 的 composer 发起。
+侧栏顶部、折叠按钮左侧的工作中心图标会打开全屏 Work Center；侧栏折叠后也可从图标栏进入。也可以从 Yeaft Session 的 composer 发起。工作中心内选择支持的 Agent，点击左上角「返回对话」回到原来的聊天；退出页面不会停止持久任务。
+
+「设置 → 通用 → 工作中心入口」通过开关和「已开启 / 已关闭」显示当前状态。这个偏好只控制浏览器中的入口显示，不会启动或停止 Agent 后台任务。没有兼容在线 Agent 时仍可进入查看提示并返回。
 
 新 WorkItem 需要：
 

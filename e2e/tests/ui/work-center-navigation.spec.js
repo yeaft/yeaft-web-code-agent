@@ -1,40 +1,31 @@
 import { expect } from '@playwright/test';
 import { test } from '../../fixtures/test-server.js';
 
-// Run the same real-click journey against the development modules and the bundle.
+// The same click journeys run against development modules and the production bundle.
 test.use({ serverEnv: { SERVE_DIST: process.env.WC_NAV_PRODUCTION || 'false' } });
 
-async function loadHost(page, serverUrl, host, theme) {
-  await page.addInitScript(({ theme }) => {
-    localStorage.setItem('locale', 'en');
+async function loadHost(page, serverUrl, host, theme, locale = 'en') {
+  await page.addInitScript(({ theme, locale }) => {
+    localStorage.setItem('locale', locale);
     localStorage.setItem('theme', theme);
     if (localStorage.getItem('work-center-ui-enabled') === null) {
       localStorage.setItem('work-center-ui-enabled', 'false');
     }
-  }, { theme });
+  }, { theme, locale });
   await page.goto(serverUrl);
   await expect(page.locator('.chat-page')).toBeVisible();
   await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
   if (host === 'yeaft') {
-    // Only select the host as a fixture. Never set workCenterOpen or invoke its
-    // entry action: General and every Work Center navigation below use clicks.
+    // Select only the host as a fixture; entry and exit below are real clicks.
     await page.evaluate(() => window.Pinia.useChatStore().enterYeaft());
     await expect(page.locator('.yeaft-page')).toBeVisible();
   }
 }
 
-function generalRow(page) {
-  return page.locator('.sp-row').filter({ has: page.locator('.sp-label', { hasText: /^Work Center$/ }) });
-}
-
-async function openGeneral(page, { collapsed = false } = {}) {
-  if (collapsed) {
-    await page.locator('.sidebar-collapsed-bar button[title="Settings"]').click();
-  } else {
-    await page.locator('.sidebar-nav-item').filter({ hasText: 'Settings' }).click();
-  }
+async function openGeneral(page) {
+  await page.locator('.sidebar-nav-item').filter({ hasText: 'Settings' }).click();
   await page.locator('.settings-nav-item').filter({ hasText: 'General' }).click();
-  return generalRow(page);
+  return page.locator('.sp-row').filter({ has: page.getByRole('switch', { name: /Work Center/ }) });
 }
 
 async function expectEmptyWorkCenter(page) {
@@ -42,11 +33,17 @@ async function expectEmptyWorkCenter(page) {
   await expect(page.locator('.work-center-main')).toContainText('No compatible');
   await expect(page.locator('.work-center-agent-picker')).toHaveCount(0);
   await expect(page.locator('.work-center-header-create')).toBeDisabled();
+  await expect(page.locator('.session-sidebar-shell')).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Back to chat' })).toBeVisible();
+  const bounds = await page.locator('.work-center-main').boundingBox();
+  expect(bounds.x).toBe(0);
+  expect(bounds.width).toBe(page.viewportSize().width);
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 }
 
 for (const host of ['chat', 'yeaft']) {
   for (const theme of ['light', 'dark']) {
-    test(`${host} ${theme}: General, expanded and collapsed entries work without Agents`, async ({ page, serverUrl }) => {
+    test(`${host} ${theme}: header and rail open a full-screen workspace with a way back`, async ({ page, serverUrl }, testInfo) => {
       await page.setViewportSize({ width: 1280, height: 800 });
       const requests = [];
       page.on('websocket', socket => socket.on('framesent', ({ payload }) => {
@@ -55,76 +52,130 @@ for (const host of ['chat', 'yeaft']) {
       await loadHost(page, serverUrl, host, theme);
       await expect(page.locator('.sidebar-work-center-trigger')).toHaveCount(0);
       const row = await openGeneral(page);
-      await row.getByRole('switch', { name: 'Work Center' }).click();
-      await expect(row.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
-      await expect(row.getByRole('button', { name: 'Open Work Center' })).toBeVisible();
+      const toggle = row.getByRole('switch');
+      await expect(toggle).toHaveAttribute('aria-checked', 'false');
+      await toggle.click();
+      await expect(toggle).toHaveAttribute('aria-checked', 'true');
+      await expect(row.getByRole('button', { name: 'Open Work Center' })).toHaveCount(0);
+      await page.screenshot({ path: testInfo.outputPath('general-settings.png') });
       await page.locator('.settings-close').click();
-      const visibleEntry = page.locator('.sidebar-work-center-trigger:visible');
-      await expect(visibleEntry).toHaveCount(1);
-      await visibleEntry.click();
+
+      const entry = page.locator('.sidebar-header-actions .sidebar-work-center-trigger');
+      await expect(entry).toBeVisible();
+      await expect(page.locator('.sidebar-navigation .sidebar-work-center-trigger')).toHaveCount(0);
+      const entryRect = await entry.boundingBox();
+      const collapseRect = await page.locator('.sidebar-header-actions button[title="Collapse sidebar"]').boundingBox();
+      expect(entryRect.x + entryRect.width).toBeLessThanOrEqual(collapseRect.x);
+      expect(entryRect.y + entryRect.height / 2).toBe(collapseRect.y + collapseRect.height / 2);
+      const icon = await page.locator('.sidebar-primary-action-icon').boundingBox();
+      const label = await page.locator('.sidebar-primary-action > span').boundingBox();
+      expect(Math.abs(icon.y + icon.height / 2 - label.y - label.height / 2)).toBeLessThanOrEqual(1);
+      await page.screenshot({ path: testInfo.outputPath('sidebar-header.png') });
+      await entry.click();
       await expectEmptyWorkCenter(page);
+      await expect(page.getByRole('button', { name: 'Back to chat' })).toBeFocused();
+      await page.screenshot({ path: testInfo.outputPath('work-center.png') });
+      await page.getByRole('button', { name: 'Back to chat' }).press('Enter');
+      await expect(entry).toBeFocused();
+      await expect(page.locator('.work-center-main')).toHaveCount(0);
 
       await page.locator('.sidebar-header-actions button[title="Collapse sidebar"]').click();
       const railEntry = page.locator('.sidebar-collapsed-bar .sidebar-work-center-trigger');
-      await expect(railEntry).toBeVisible();
-      await expect(visibleEntry).toHaveCount(1);
-      await expect(railEntry).toHaveAttribute('aria-pressed', 'true');
-      // Chat's rail has no Settings control; expand it using the real menu button.
-      if (host === 'chat') await page.locator('.sidebar-collapsed-bar button[title="Expand menu"]').click();
-      await openGeneral(page, { collapsed: host === 'yeaft' });
-      await row.getByRole('switch').click();
-      await expect(page.locator('.sidebar-work-center-trigger')).toHaveCount(0);
-      await expect(page.locator('.work-center-main')).toHaveCount(0);
-      await expect(row.getByRole('button', { name: 'Open Work Center' })).toHaveCount(0);
-      await row.getByRole('switch').click();
-      await row.getByRole('button', { name: 'Open Work Center' }).click();
-      await expect(page.locator('.settings-close')).toHaveCount(0);
-      await expectEmptyWorkCenter(page);
-      // A collapsed entry must open, not merely remain visible while already open.
-      if (host === 'chat') await page.locator('.sidebar-header-actions button[title="Collapse sidebar"]').click();
-      await page.evaluate(() => window.Pinia.useChatStore().leaveWorkCenter());
       await railEntry.focus();
       await railEntry.press('Enter');
       await expectEmptyWorkCenter(page);
+      await page.getByRole('button', { name: 'Back to chat' }).click();
       await expect(railEntry).toBeFocused();
-
-      // Both pre-catalog legacy surfaces retain the same visible destination.
-      await page.evaluate(() => { window.Pinia.useChatStore().sessionCatalogLoaded = false; });
-      await expect(visibleEntry).toHaveCount(1);
+      await expect(page.locator('.session-sidebar-shell')).toHaveClass(/collapsed/);
       await page.locator('.sidebar-collapsed-bar button[title="Expand menu"]').click();
-      await expect(visibleEntry).toHaveCount(1);
-      await visibleEntry.click();
+
+      // Before the catalog arrives there must still be exactly one header entry.
+      await page.evaluate(() => { window.Pinia.useChatStore().sessionCatalogLoaded = false; });
+      await expect(page.locator('.sidebar-work-center-trigger:visible')).toHaveCount(1);
+      await entry.click();
       await expectEmptyWorkCenter(page);
+      await page.getByRole('button', { name: 'Back to chat' }).click();
       expect(requests).toEqual([]);
 
-      // Reload checks persisted preference, not a runtime-only flag.
       await page.reload();
       await expect(page.locator('.sidebar-work-center-trigger:visible')).toHaveCount(1);
-      await page.locator('.sidebar-work-center-trigger:visible').click();
-      await expectEmptyWorkCenter(page);
+      await openGeneral(page);
+      await toggle.click();
+      await expect(toggle).toHaveAttribute('aria-checked', 'false');
+      await page.locator('.settings-close').click();
+      await expect(page.locator('.sidebar-work-center-trigger')).toHaveCount(0);
+      await page.reload();
+      await expect(page.locator('.sidebar-work-center-trigger')).toHaveCount(0);
     });
 
-    test(`${host} ${theme}: 320px General and drawer navigation reveal the destination`, async ({ page, serverUrl }) => {
+    test(`${host} ${theme}: 320px switches, full-screen entry and return are usable`, async ({ page, serverUrl }, testInfo) => {
       await page.setViewportSize({ width: 320, height: 720 });
       await loadHost(page, serverUrl, host, theme);
-      await page.locator(host === 'chat' ? '.header-sidebar-toggle' : '.yeaft-topbar-sidebar-toggle').click();
+      const drawerButton = page.locator(host === 'chat' ? '.header-sidebar-toggle' : '.yeaft-topbar-sidebar-toggle');
+      await drawerButton.click();
       const row = await openGeneral(page);
-      await row.getByRole('switch').click();
-      const directEntry = row.getByRole('button', { name: 'Open Work Center' });
-      await directEntry.scrollIntoViewIfNeeded();
-      const bounds = await directEntry.boundingBox();
+      const toggle = row.getByRole('switch');
+      await toggle.scrollIntoViewIfNeeded();
+      const bounds = await toggle.boundingBox();
       expect(bounds.x).toBeGreaterThanOrEqual(0);
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(320);
-      await directEntry.click();
-      await expectEmptyWorkCenter(page);
-      await expect(page.locator('.sidebar-overlay, .yeaft-sidebar-overlay')).toHaveCount(0);
-      await expect(page.locator('.settings-close')).toHaveCount(0);
-      await page.locator('.work-center-sidebar-toggle').click();
-      await expect(page.locator('.sidebar-overlay, .yeaft-sidebar-overlay')).toBeVisible();
+      await toggle.focus();
+      await toggle.press('Space');
+      await expect(toggle).toHaveAttribute('aria-checked', 'true');
+      await page.screenshot({ path: testInfo.outputPath('general-settings-mobile.png') });
+      await page.locator('.settings-close').click();
       await page.locator('.sidebar-work-center-trigger:visible').click();
-      await expect(page.locator('.sidebar-overlay, .yeaft-sidebar-overlay')).toHaveCount(0);
       await expectEmptyWorkCenter(page);
-      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await expect(page.locator('.sidebar-overlay, .yeaft-sidebar-overlay')).toHaveCount(0);
+      await page.screenshot({ path: testInfo.outputPath('work-center-mobile.png') });
+      await page.getByRole('button', { name: 'Back to chat' }).click();
+      await expect(page.locator('.work-center-main')).toHaveCount(0);
+      await expect(drawerButton).toBeFocused();
+      await drawerButton.click();
+      await expect(page.locator('.sidebar-work-center-trigger:visible')).toHaveCount(1);
     });
   }
+}
+for (const width of [1280, 320]) {
+  test(`Chinese dark ${width}px: current states and failed telemetry changes stay unambiguous`, async ({ page, serverUrl }, testInfo) => {
+    await page.setViewportSize({ width, height: 800 });
+    await loadHost(page, serverUrl, 'chat', 'dark', 'zh-CN');
+    // Control only the remote telemetry response; exercise the actual Settings controls.
+    await page.evaluate(() => {
+      const store = window.Pinia.useChatStore();
+      store.loadTelemetrySettings = () => Promise.resolve({ enabled: true });
+      store.updateTelemetrySettings = () => new Promise((resolve, reject) => {
+        window.rejectTelemetrySave = reject;
+      });
+    });
+    if (width === 320) await page.locator('.header-sidebar-toggle').click();
+    const icon = await page.locator('.sidebar-primary-action-icon').boundingBox();
+    const label = await page.locator('.sidebar-primary-action > span').boundingBox();
+    expect(Math.abs(icon.y + icon.height / 2 - label.y - label.height / 2)).toBeLessThanOrEqual(1);
+    await page.locator('.sidebar-nav-item').filter({ hasText: '设置' }).click();
+    await page.locator('.settings-nav-item').filter({ hasText: '通用' }).click();
+    const telemetry = page.getByRole('switch', { name: '性能遥测' });
+    const telemetryRow = page.locator('.sp-row').filter({ has: telemetry });
+    await expect(telemetry).toHaveAttribute('aria-checked', 'true');
+    await expect(telemetryRow.locator('.sp-setting-status')).toHaveText('已开启');
+    await expect(page.locator('.sp-custom-select-trigger').filter({ hasText: '当前：深色' })).toBeVisible();
+    await expect(page.locator('.sp-custom-select-trigger').filter({ hasText: '当前：中文' })).toBeVisible();
+    await telemetry.focus();
+    await telemetry.press('Space');
+    await expect(telemetry).toBeDisabled();
+    await expect(telemetryRow.locator('.sp-setting-status')).toHaveText('保存中…');
+    await expect(telemetry).toHaveAttribute('aria-checked', 'true');
+    await page.evaluate(() => window.rejectTelemetrySave(new Error('offline')));
+    await expect(telemetry).toBeEnabled();
+    await expect(telemetry).toHaveAttribute('aria-checked', 'true');
+    await expect(telemetryRow.getByRole('alert')).toContainText('无法确认');
+    const entry = page.getByRole('switch', { name: '工作中心入口' });
+    const entryRow = page.locator('.sp-row').filter({ has: entry });
+    await expect(entryRow.locator('.sp-setting-status')).toHaveText('已关闭');
+    await entry.click();
+    await expect(entry).toHaveAttribute('aria-checked', 'true');
+    await expect(entryRow.locator('.sp-setting-status')).toHaveText('已开启');
+    await page.screenshot({ path: testInfo.outputPath('general-settings-chinese.png') });
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
 }
