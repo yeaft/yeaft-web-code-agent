@@ -220,7 +220,7 @@ export default {
                 <div class="sp-row sp-general-select-row">
                   <span class="sp-label">{{ $t('settings.general.theme') }}</span>
                   <div class="sp-custom-select" :class="{ open: openDropdown === 'theme' }" v-click-outside="() => closeDropdown('theme')">
-                    <button class="sp-custom-select-trigger" type="button" aria-haspopup="listbox"
+                    <button class="sp-custom-select-trigger" type="button"
                             :aria-expanded="openDropdown === 'theme'" :aria-label="$t('settings.general.theme')"
                             @click="toggleDropdown('theme')">
                       <span>{{ $t('settings.general.currentValue', { value: themeOptions.find(o => o.value === chatStore.theme)?.label }) }}</span>
@@ -243,7 +243,7 @@ export default {
                 <div class="sp-row sp-general-select-row">
                   <span class="sp-label">{{ $t('settings.general.language') }}</span>
                   <div class="sp-custom-select" :class="{ open: openDropdown === 'language' }" v-click-outside="() => closeDropdown('language')">
-                    <button class="sp-custom-select-trigger" type="button" aria-haspopup="listbox"
+                    <button class="sp-custom-select-trigger" type="button"
                             :aria-expanded="openDropdown === 'language'" :aria-label="$t('settings.general.language')"
                             @click="toggleDropdown('language')">
                       <span>{{ $t('settings.general.currentValue', { value: languageOptions.find(o => o.value === selectedLocale)?.label }) }}</span>
@@ -302,7 +302,7 @@ export default {
                 <div class="sp-row sp-general-select-row">
                   <span class="sp-label">{{ $t('files.officePreviewMode') }}</span>
                   <div class="sp-custom-select" :class="{ open: openDropdown === 'officePreview' }" v-click-outside="() => closeDropdown('officePreview')">
-                    <button class="sp-custom-select-trigger" type="button" aria-haspopup="listbox"
+                    <button class="sp-custom-select-trigger" type="button"
                             :aria-expanded="openDropdown === 'officePreview'" :aria-label="$t('files.officePreviewMode')"
                             @click="toggleDropdown('officePreview')">
                       <span>{{ $t('settings.general.currentValue', { value: officePreviewOptions.find(o => o.value === officePreviewMode)?.label }) }}</span>

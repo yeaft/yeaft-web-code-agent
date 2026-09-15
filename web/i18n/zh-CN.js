@@ -830,7 +830,7 @@ export default {
   'settings.general.darkTheme': '深色',
   'settings.general.language': '语言',
   'settings.general.currentValue': '当前：{value}',
-  'settings.general.workCenter': '工作中心',
+  'settings.general.workCenter': '工作中心入口',
   'settings.general.workCenterDesc': '在侧栏顶栏显示工作中心入口；支持的 Agent 在工作中心内选择。',
   'settings.general.workCenterOn': '已开启',
   'settings.general.workCenterOff': '已关闭',

@@ -865,7 +865,7 @@ export default {
   'settings.general.darkTheme': 'Dark',
   'settings.general.language': 'Language',
   'settings.general.currentValue': 'Current: {value}',
-  'settings.general.workCenter': 'Work Center',
+  'settings.general.workCenter': 'Work Center entry',
   'settings.general.workCenterDesc': 'Show the Work Center entry in the sidebar header. Available Agents are selected inside Work Center.',
   'settings.general.workCenterOn': 'Enabled',
   'settings.general.workCenterOff': 'Disabled',

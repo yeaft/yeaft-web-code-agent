@@ -45,9 +45,12 @@ describe('General settings controls', () => {
 
   it('makes current select values explicit', () => {
     expect(panel.match(/settings\.general\.currentValue/g)).toHaveLength(3);
-    expect(panel.match(/aria-haspopup="listbox"/g)).toHaveLength(3);
+    expect(panel).not.toContain('aria-haspopup="listbox"');
+    expect(panel.match(/:aria-expanded="openDropdown ===/g)).toHaveLength(3);
     expect(en).toContain("'settings.general.currentValue': 'Current: {value}'");
     expect(zh).toContain("'settings.general.currentValue': '当前：{value}'");
+    expect(en).toContain("'settings.general.workCenter': 'Work Center entry'");
+    expect(zh).toContain("'settings.general.workCenter': '工作中心入口'");
   });
 
   it('provides bilingual current-state, location, saving, and error copy', () => {
