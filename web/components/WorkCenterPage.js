@@ -124,6 +124,14 @@ export default {
       if (this.detail?.id === this.selectedId) return this.detail;
       return this.items.find(item => item.id === this.selectedId) || null;
     },
+    goalProgress() {
+      const progress = this.selected?.goalProgress;
+      return Array.isArray(progress?.criteria) ? progress : null;
+    },
+    finalResponses() {
+      const responses = this.selected?.finalResult?.responses;
+      return Array.isArray(responses) ? responses.filter(response => typeof response?.summary === 'string' && response.summary.trim()) : [];
+    },
     selectedAction() {
       const actions = Array.isArray(this.selected?.actions) ? this.selected.actions : [];
       return actions.find(action => action.id === this.selectedActionId) || null;
@@ -491,6 +499,14 @@ export default {
     },
     statusLabel(status) {
       return this.tr(`workCenter.status.${status}`, String(status || '').replace('_', ' '));
+    },
+    goalStatusLabel(status) {
+      return this.tr(`workCenter.goalStatus.${status}`, this.statusLabel(status));
+    },
+    deliveryTargetLabel(target) {
+      const keys = { response: 'Response', workspace_files: 'Files', pull_request: 'Pr', merge: 'Merge' };
+      return keys[target] ? this.tr(`workCenter.deliveryTarget${keys[target]}`, target)
+        : target || this.tr('workCenter.deliveryTargetAsk', 'Ask me before delivery');
     },
     actionLabel(type) {
       return this.tr(`workCenter.action.${type}`, type || '—');
@@ -1527,9 +1543,59 @@ export default {
                               <h3>{{ tr('workCenter.description', 'Description') }}</h3>
                               <p>{{ selected.goal }}</p>
                             </section>
-                            <section v-if="selected.acceptanceCriteria?.length" class="work-center-section work-center-acceptance">
+                            <section v-if="goalProgress" class="work-center-section work-center-acceptance work-center-goal-progress" :aria-label="tr('workCenter.goalProgress', 'Goal progress')">
+                              <h3>{{ tr('workCenter.goalProgress', 'Goal progress') }}</h3>
+                              <p class="work-center-goal-count" aria-live="polite">
+                                <strong>{{ $t('workCenter.criteriaProgress', { completed: goalProgress.completedCriteriaCount, total: goalProgress.totalCriteriaCount }) }}</strong>
+                                <span v-if="goalProgress.remainingCriteria?.length">{{ $t('workCenter.criteriaRemaining', { count: goalProgress.remainingCriteria.length }) }}</span>
+                                <span v-else-if="goalProgress.totalCriteriaCount">{{ tr('workCenter.criteriaVerified', 'All criteria verified') }}</span>
+                                <span v-else>{{ tr('workCenter.criteriaPending', 'Acceptance criteria have not been defined yet') }}</span>
+                              </p>
+                              <ul class="work-center-goal-criteria">
+                                <li v-for="(check, index) in goalProgress.criteria" :key="index" :data-status="check.status">
+                                  <span class="work-center-goal-status">{{ goalStatusLabel(check.status) }}</span>
+                                  <div class="work-center-goal-criterion">
+                                    <span>{{ check.criterion }}</span>
+                                    <details v-if="check.evidenceRunIds?.length" class="work-center-goal-evidence">
+                                      <summary>{{ tr('workCenter.evidenceRuns', 'Evidence Runs') }}</summary>
+                                      <ul><li v-for="runId in check.evidenceRunIds" :key="runId"><code>{{ runId }}</code></li></ul>
+                                    </details>
+                                  </div>
+                                </li>
+                              </ul>
+                              <div v-if="goalProgress.blockers?.length" class="work-center-goal-blockers">
+                                <h3>{{ tr('workCenter.goalBlockers', 'Blockers') }}</h3>
+                                <ul><li v-for="blocker in goalProgress.blockers" :key="blocker.actionId"><strong>{{ statusLabel(blocker.status) }}</strong> · {{ blocker.reason || blocker.actionId }}</li></ul>
+                              </div>
+                              <div v-if="goalProgress.delivery" class="work-center-goal-delivery">
+                                <h3>{{ tr('workCenter.deliveryTarget', 'Delivery target') }}</h3>
+                                <p>{{ deliveryTargetLabel(goalProgress.delivery.target) }} · <span class="work-center-goal-status" :data-status="goalProgress.delivery.status">{{ goalStatusLabel(goalProgress.delivery.status) }}</span></p>
+                                <details v-if="goalProgress.delivery.evidenceRunIds?.length" class="work-center-goal-evidence">
+                                  <summary>{{ tr('workCenter.evidenceRuns', 'Evidence Runs') }}</summary>
+                                  <ul><li v-for="runId in goalProgress.delivery.evidenceRunIds" :key="runId"><code>{{ runId }}</code></li></ul>
+                                </details>
+                              </div>
+                            </section>
+                            <section v-else-if="selected.acceptanceCriteria?.length" class="work-center-section work-center-acceptance">
                               <h3>{{ tr('workCenter.acceptanceCriteria', 'Acceptance criteria') }}</h3>
                               <ul><li v-for="criterion in selected.acceptanceCriteria" :key="criterion">{{ criterion }}</li></ul>
+                            </section>
+                            <section v-if="finalResponses.length" class="work-center-section work-center-responses">
+                              <h3>{{ tr('workCenter.deliveredResponse', 'Delivered response') }}</h3>
+                              <div v-for="(response, index) in finalResponses" :key="response.runId || index" class="work-center-response">
+                                <p class="work-center-response-summary">{{ response.summary }}</p>
+                                <details class="work-center-goal-evidence">
+                                  <summary>{{ tr('workCenter.responseEvidence', 'Response source and evidence') }}</summary>
+                                  <p v-if="response.runId">{{ tr('workCenter.evidenceRuns', 'Evidence Runs') }}: <code>{{ response.runId }}</code></p>
+                                  <ul class="work-center-output-list">
+                                    <li v-for="(evidence, evidenceIndex) in response.evidence || []" :key="evidenceIndex">
+                                      <span>{{ evidence.label || evidence }}<template v-if="evidence.status"> · {{ goalStatusLabel(evidence.status) }}</template></span>
+                                      <a v-if="isExternalOutput(evidence)" :href="evidence.ref" target="_blank" rel="noopener noreferrer">{{ evidence.ref }}</a>
+                                      <code v-else-if="evidence.ref">{{ evidence.ref }}</code>
+                                    </li>
+                                  </ul>
+                                </details>
+                              </div>
                             </section>
                             <section v-if="selected.outputs?.length" class="work-center-section work-center-outputs">
                               <h3>{{ tr('workCenter.outputs', 'Outputs') }}</h3>
@@ -1795,7 +1861,7 @@ export default {
                 <small class="work-center-field-help">{{ tr('workCenter.workDirPickerHelp', 'Select an existing folder on the chosen Agent.') }}</small>
               </label>
               <div class="work-center-create-options">
-                <label><span>{{ tr('workCenter.deliveryTarget', 'Delivery target') }}</span><select v-model="form.deliveryTarget"><option value="">{{ tr('workCenter.deliveryTargetAsk', 'Ask me before delivery') }}</option><option value="workspace_files">{{ tr('workCenter.deliveryTargetFiles', 'Workspace files') }}</option><option value="pull_request">{{ tr('workCenter.deliveryTargetPr', 'Open a pull request') }}</option><option value="merge">{{ tr('workCenter.deliveryTargetMerge', 'Merge an approved pull request') }}</option></select><small class="work-center-field-help">{{ tr('workCenter.deliveryTargetHelp', 'This is the completion boundary, not permission to bypass review or merge policy.') }}</small></label>
+                <label><span>{{ tr('workCenter.deliveryTarget', 'Delivery target') }}</span><select v-model="form.deliveryTarget"><option value="">{{ tr('workCenter.deliveryTargetAsk', 'Ask me before delivery') }}</option><option value="response">{{ tr('workCenter.deliveryTargetResponse', 'Response') }}</option><option value="workspace_files">{{ tr('workCenter.deliveryTargetFiles', 'Workspace files') }}</option><option value="pull_request">{{ tr('workCenter.deliveryTargetPr', 'Open a pull request') }}</option><option value="merge">{{ tr('workCenter.deliveryTargetMerge', 'Merge an approved pull request') }}</option></select><small class="work-center-field-help">{{ tr('workCenter.deliveryTargetHelp', 'This is the completion boundary, not permission to bypass review or merge policy.') }}</small></label>
                 <label class="work-center-checkbox"><input v-model="form.reuseMemory" type="checkbox"><span><strong>{{ tr('workCenter.reuseMemory', 'Use relevant Agent memory and completed work from this project') }}</strong><small>{{ tr('workCenter.reuseMemoryHelp', 'Uses scope-bounded Agent memory and structured results from completed WorkItems in the same project.') }}</small></span></label>
                 <label class="work-center-checkbox"><input v-model="form.start" type="checkbox" @change="onCreateStartInput"><span><strong>{{ tr('workCenter.startImmediately', 'Start immediately') }}</strong><small>{{ tr('workCenter.startImmediatelyHint', 'Turn this off to create a draft you can review first.') }}</small></span></label>
               </div>

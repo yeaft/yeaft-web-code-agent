@@ -2359,6 +2359,113 @@ test.describe('Work Center responsive UI', () => {
     expect(request.payload).not.toHaveProperty('stageOverrides');
   });
 
+  test('creates a response delivery without requesting code artifacts', async ({ chatPage, mockAgent }) => {
+    await openWorkCenter(chatPage, mockAgent);
+    await chatPage.locator('.work-center-header-create').click();
+    const modal = chatPage.locator('.work-center-modal');
+    await modal.getByRole('textbox', { name: /Requirement/ }).fill('Explain the failure with supporting evidence');
+    await modal.getByRole('combobox', { name: /Delivery target/ }).selectOption('response');
+    const createRequest = respondToWorkCenterOp(mockAgent, 'create', OPEN_ITEM_DETAIL);
+    await modal.getByRole('button', { name: 'Create', exact: true }).click();
+    expect((await createRequest).payload.deliveryTarget).toBe('response');
+  });
+
+  test('shows evidence-based goal progress, blockers and delivery instead of Action completion', async ({ chatPage, mockAgent }) => {
+    await openWorkCenter(chatPage, mockAgent);
+    const select = chatPage.locator('.work-center-card').click();
+    await respondToWorkCenterOp(mockAgent, 'get', {
+      ...detailWithActions(4),
+      completedActionCount: 4,
+      deliveryTarget: 'response',
+      acceptanceCriteria: ['Explain the cause', 'Verify the fix', 'Document the result'],
+      goalProgress: {
+        completedCriteriaCount: 1, totalCriteriaCount: 3,
+        remainingCriteria: ['Verify the fix', 'Document the result'],
+        criteria: [
+          { criterion: 'Explain the cause', status: 'passed', evidenceRunIds: ['run-proof'] },
+          { criterion: 'Verify the fix', status: 'failed', evidenceRunIds: [] },
+          { criterion: 'Document the result', status: 'unmet', evidenceRunIds: [] },
+        ],
+        blockers: [{ actionId: 'action-4', status: 'waiting', reason: 'Need the reproduction logs' }],
+        delivery: { target: 'response', status: 'unmet', evidenceRunIds: [] },
+      },
+    });
+    await select;
+    const progress = chatPage.locator('.work-center-goal-progress');
+    await expect(progress).toContainText('1 / 3 criteria verified');
+    await expect(progress).toContainText('2 remaining');
+    await expect(progress.locator('[data-status="failed"]')).toContainText('Verify the fix');
+    await expect(progress.locator('[data-status="unmet"]').first()).toContainText('Document the result');
+    await expect(progress.locator('[data-status="passed"]')).toContainText('run-proof');
+    await expect(progress).toContainText('Need the reproduction logs');
+    await expect(progress).toContainText('Response');
+    await expect(progress).toContainText('Not yet verified');
+    await expect(chatPage.locator('.work-center-content-panel')).not.toBeVisible();
+
+    // Older Agents must not acquire a fabricated goal percentage from Action counts.
+    await chatPage.evaluate(({ agentId, detail }) => {
+      window.Pinia.useChatStore().workCenterDetailByAgent[agentId] = detail;
+    }, { agentId: mockAgent.agentId, detail: OPEN_ITEM_DETAIL });
+    await expect(progress).toHaveCount(0);
+    await expect(chatPage.locator('.work-center-acceptance')).toContainText('The Action flow remains readable');
+  });
+
+  test('keeps delivered responses and goal evidence readable in both themes at 320px', async ({ chatPage, mockAgent }) => {
+    await openWorkCenter(chatPage, mockAgent);
+    const select = chatPage.locator('.work-center-card').click();
+    const criterion = `Explain the result ${'criterion'.repeat(100)}`;
+    const runId = `run-${'evidence'.repeat(50)}`;
+    await respondToWorkCenterOp(mockAgent, 'get', {
+      ...OPEN_ITEM_DETAIL, status: 'done', deliveryTarget: 'response',
+      acceptanceCriteria: [criterion],
+      goalProgress: {
+        completedCriteriaCount: 1, totalCriteriaCount: 1, remainingCriteria: [], blockers: [],
+        criteria: [{ criterion, status: 'passed', evidenceRunIds: [runId] }],
+        delivery: { target: 'response', status: 'passed', evidenceRunIds: [runId] },
+      },
+      finalResult: {
+        responses: [{ runId, summary: `The answer is supported by logs.\n<script>window.untrustedResponse = true</script>\n${'response'.repeat(200)}`,
+          evidence: [{ kind: 'test', label: 'Reproduction confirmed', ref: `logs/${'trace'.repeat(200)}`, status: 'passed' }] }],
+      },
+    });
+    await select;
+    const result = chatPage.locator('.work-center-responses');
+    await expect(result).toContainText('The answer is supported by logs.');
+    await expect(result).toContainText('Reproduction confirmed');
+    await expect(result).toContainText(runId);
+    await expect(chatPage.locator('.work-center-goal-progress')).toContainText('All criteria verified');
+    expect(await chatPage.evaluate(() => window.untrustedResponse)).toBeUndefined();
+    await result.locator('summary').focus();
+    await chatPage.keyboard.press('Enter');
+    await expectVisibleFocus(result.locator('summary'));
+    await expect(result.locator('details')).toHaveAttribute('open', '');
+    await chatPage.locator('.work-center-goal-criteria summary').click();
+    await chatPage.locator('.work-center-goal-delivery summary').click();
+    for (const [theme, locale] of [['light', 'en'], ['light', 'zh-CN'], ['dark', 'en'], ['dark', 'zh-CN']]) {
+      await chatPage.evaluate(async ({ theme, locale }) => {
+        document.documentElement.setAttribute('data-theme', theme);
+        const { setLocale } = await import('/utils/i18n.js');
+        setLocale(locale);
+      }, { theme, locale });
+      await expect(result.locator('h3')).toHaveText(locale === 'zh-CN' ? '交付回复' : 'Delivered response');
+      await expect(chatPage.locator('.work-center-goal-count')).toContainText(locale === 'zh-CN' ? '1 / 1 项验收条件已验证' : '1 / 1 criteria verified');
+      await expect(chatPage.locator('.work-center-goal-delivery')).toContainText(locale === 'zh-CN' ? '回复' : 'Response');
+      for (const width of [1280, 320]) {
+        await chatPage.setViewportSize({ width, height: 720 });
+        await expectNoHorizontalOverflow(chatPage.locator('.work-center-work-item-overview'), {
+          overview: ':scope', progress: '.work-center-goal-progress', criteria: '.work-center-goal-criteria',
+          delivery: '.work-center-goal-delivery', responses: '.work-center-responses', response: '.work-center-response-summary',
+        });
+        const colors = await result.evaluate(element => ({
+          text: getComputedStyle(element).color,
+          background: getComputedStyle(document.querySelector('.work-center-main')).backgroundColor,
+        }));
+        expect(colors.text).not.toBe(colors.background);
+        expect(await chatPage.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      }
+    }
+  });
+
   test('uploads files and binds their references to the Work Item create request', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent);
     await chatPage.locator('.work-center-header-create').click();

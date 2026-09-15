@@ -2,7 +2,7 @@
 
 Work Center is Yeaft's Agent-level durable task system. Use it when a goal must survive beyond one interactive turn, needs role separation or review, may wait for human input, or must recover after a browser disconnect or Agent restart.
 
-![Work Center showing a WorkItem conversation and its Action graph](/images/work-center.png)
+![Work Center showing a WorkItem conversation and its Actions](/images/work-center.png)
 
 ## Mental model
 
@@ -10,12 +10,12 @@ Work Center is Yeaft's Agent-level durable task system. Use it when a goal must 
 WorkItem
   ├── contract: goal, acceptance criteria, workDir, attachments, memory policy
   ├── Coordinator conversation
-  └── Action graph
+  └── Actions created as needed
         └── Run attempts with VP/model/tool snapshots, messages, usage, and evidence
 ```
 
 - A **WorkItem** is the durable goal and user-facing conversation owner.
-- An **Action** is one concrete planned step with an objective, approach, expected result, dependencies, assignment policy, model policy, and workspace policy.
+- An **Action** is one justified unit of work with an objective, approach, expected result, executor/model choice, and workspace policy. Actions support the goal; their count is not a measure of completion.
 - A **Run** is one fenced attempt to execute an Action. Its identity prevents late or stale output from mutating a newer attempt.
 - An **Event** is append-only audit evidence. Current state comes from canonical WorkItem/Action/Run rows, not by replaying UI events.
 
@@ -31,35 +31,53 @@ For a new WorkItem, provide:
 2. the working directory;
 3. optional files (supported image, PDF, or text-based attachments);
 4. whether to reuse eligible prior memory;
-5. whether execution should start immediately.
+5. the delivery target (or ask before delivery);
+6. whether execution should start immediately.
 
 When created from a Session, the runtime stamps the source Session; model input cannot replace that identity.
 
 ## Planning and execution
 
-New WorkItems use AI planning by default:
+New WorkItems use dynamic coordination. The Coordinator refines the goal and acceptance criteria, inspects current facts, and creates only the next necessary Actions. There is no mandatory triage → implement → test → review → deliver sequence. A small research task may need one Action; code changes may need separate implementation, verification, or integration when the evidence and risks justify them.
 
-1. A triage Action inspects the contract and repository context.
-2. Triage submits a specific WorkItem type and 1..8 task-specific Actions.
-3. The controller validates IDs, dependencies, workspace modes, cycles, and the final acceptance gate.
-4. The scheduler claims ready Actions and selects eligible VPs.
-5. Each Run executes through the existing Yeaft engine and must submit a structured outcome.
-6. Completed evidence unlocks dependent Actions. The WorkItem reaches `done` only after the final gate succeeds.
+Each Run uses the existing Yeaft engine and submits a structured outcome. The Coordinator then decides whether more work, a human answer, or completion is justified. `sourceActionIds` records where an Action's input results came from; it is not a prebuilt dependency graph.
 
-The graph must have exactly one final acceptance gate: normally a `deliver` Action, or one terminal approved `review` when no delivery operation is needed. Every other Action must be its transitive dependency.
+### Goal progress, not activity counts
+
+With an Agent that provides `goalProgress`, the WorkItem detail shows **verified acceptance criteria / total criteria**, the remaining count, each criterion's verified/failed/not-yet-verified state, blockers, and a separate delivery state. Unverified and failed rows are the remaining work. Expand **Evidence Runs** to inspect the source Run identities. The browser displays the Agent's evidence projection; it does not infer completion from completed Actions, elapsed time, or model estimates.
+
+All criteria being verified is not by itself delivery. Current canonical Run evidence must support both the criteria and the selected delivery target. Stale or contradictory evidence can leave a criterion unverified or failed. Older Agents without this projection keep the plain acceptance list rather than showing an invented percentage.
+
+The goal, evidence progress, delivered result, and Coordinator conversation stay in one scroll stream. **Actions** opens execution details only when needed; it is not the primary task progress display.
+
+### Choose the completion boundary
+
+| Delivery target | What is delivered |
+| --- | --- |
+| **Response** (`response`) | A substantive answer supported by canonical Run evidence and acceptance checks, such as an explanation, investigation, or recommendation. It does not require a file, PR, or commit. |
+| **Workspace files** (`workspace_files`) | Canonical file outputs in the working directory. |
+| **Open a pull request** (`pull_request`) | Canonical PR output, subject to the repository's review policy. |
+| **Merge an approved pull request** (`merge`) | Canonical commit output, subject to approval and merge policy. |
+| **Ask me before delivery** | The delivery boundary must be confirmed before completion. |
+
+When the Agent supplies `finalResult.responses`, **Delivered response** shows the retained answer and expandable Run source/evidence. An ordinary conversation reply or an executor saying “done” is not a delivered response. Selecting a code target never grants permission to bypass review, publish, deploy, or change access controls.
+
+### Legacy compatibility
+
+Older WorkItems can still use workflow snapshots and dependency/final-gate rules. Those records remain readable; they do not define the new task-first interaction. This UI requires the corresponding Agent projections for evidence progress and response delivery. Rich evidence drilldown and any broader autonomous capabilities in design documents are not implied by these fields.
 
 ## Concurrency and workspace policy
 
-Work Center can run independent ready Actions concurrently up to `maxConcurrentActions` (default 3, configurable from 1 to 12). Dependencies, workspace policy, and repository state still constrain actual concurrency.
+Work Center can run independent ready Actions concurrently up to `maxConcurrentActions` (default 3, configurable from 1 to 12). Workspace conflicts, repository state, and legacy dependencies still constrain actual concurrency.
 
 | Workspace mode | Meaning |
 | --- | --- |
 | `read` | Planner/reviewer contract for an Action that will not mutate files, Git state, services, or external systems. It is not a general OS sandbox. |
 | `shared` | Execute against the canonical working directory; mutating shared work is serialized where required. |
 | `isolated-write` | Execute independent Git changes in a dedicated worktree. |
-| `integrate` | Combine declared isolated-write dependencies; conflicts stop for explicit handling. |
+| `integrate` | Combine isolated-write results from declared sources; conflicts stop for explicit handling. |
 
-If AI planning uses `isolated-write`, the graph must include exactly one integrate Action that depends on every isolated-write Action, and downstream work consumes the integration result.
+Isolated changes need integration before their results can support delivery in the canonical workspace. Dynamic coordination creates this work when needed. Legacy AI-planned graphs retain their single integration-gate rule.
 
 ## VP and model assignment
 
@@ -82,9 +100,9 @@ The main WorkItem conversation targets the **Coordinator**. Use it to:
 - change the goal or acceptance criteria and request a replan;
 - recover from a Coordinator-visible problem.
 
-The Coordinator has no file, shell, or external side-effect tools. Its structured decision can explain, guide Actions, or replan unfinished work.
+The Coordinator has no file, shell, or external side-effect tools. Its structured decisions coordinate Actions, update the contract, request human input, or complete the WorkItem when evidence satisfies the contract.
 
-You can explicitly target a current Action from the composer when it needs corrected context or an answer. Waiting/failed Action recovery is fenced by Action ID, revision, generation, and current Run state. The Action detail view shows its continuous conversation and an Execution tab with retained request/loop/tool evidence.
+You can explicitly target a current Action from the composer when it needs corrected context or an answer. Waiting/failed Action recovery is fenced by Action ID, revision, generation, and current Run state. The Action detail view shows its continuous conversation. Retained execution data is loaded on demand rather than mixed into the main goal view.
 
 ## Outcomes and recovery
 
@@ -119,7 +137,7 @@ Execution evidence can include summaries, acceptance checks, file/test reference
 
 - It is not an unrestricted autonomous deployment service.
 - `read` workspace policy is not a kernel-level sandbox.
-- A completed Action is not enough to mark a WorkItem done; the final acceptance gate must pass.
+- A completed Action is not enough to mark a WorkItem done; the goal criteria and delivery boundary must be supported by current evidence (legacy workflows also retain their final gate).
 - A `turn_end` event is not an Action completion. The executor must submit the structured outcome contract.
 - Work Center memory never grants authority over the current contract or safety rules.
 - Sessions and WorkItems do not share one transcript or one memory owner.

@@ -1094,6 +1094,104 @@
   font-size: 14px;
 }
 
+.work-center-goal-progress,
+.work-center-responses {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.work-center-goal-count {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.work-center-goal-count strong {
+  color: var(--text-primary);
+}
+
+.work-center-goal-criteria {
+  display: grid;
+  gap: 12px;
+  padding: 12px 0 0;
+  list-style: none;
+}
+
+.work-center-goal-criteria > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.work-center-goal-criterion {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.work-center-goal-status {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.work-center-goal-criteria > [data-status="passed"] > .work-center-goal-status,
+.work-center-goal-status[data-status="passed"] {
+  color: var(--success);
+}
+
+.work-center-goal-criteria > [data-status="failed"] > .work-center-goal-status,
+.work-center-goal-status[data-status="failed"] {
+  color: var(--error);
+}
+
+.work-center-goal-evidence {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.work-center-goal-evidence summary {
+  width: fit-content;
+  max-width: 100%;
+  min-height: 44px;
+  align-content: center;
+  cursor: pointer;
+}
+
+.work-center-goal-evidence summary:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.work-center-goal-evidence ul,
+.work-center-goal-blockers ul {
+  padding: 0;
+  list-style: none;
+}
+
+.work-center-goal-evidence li {
+  color: inherit;
+  font-size: inherit;
+}
+
+.work-center-goal-blockers,
+.work-center-goal-delivery,
+.work-center-response + .work-center-response {
+  margin-top: 16px;
+}
+
+.work-center-goal-blockers li {
+  color: var(--text-secondary);
+}
+
+.work-center-response-summary {
+  color: var(--text-primary);
+  white-space: pre-wrap;
+}
+
 .work-center-action-closed {
   padding: 12px 14px;
   border-radius: 10px;
