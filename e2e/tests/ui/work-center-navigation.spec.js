@@ -179,3 +179,42 @@ for (const width of [1280, 320]) {
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   });
 }
+
+test('late Session hydration cannot cover the full-screen Work Center', async ({ page, serverUrl }) => {
+  await loadHost(page, serverUrl, 'yeaft', 'dark');
+  await page.evaluate(() => {
+    window.Pinia.useChatStore().setWorkCenterUiEnabled(true);
+    window.Pinia.useChatStore().sessionCatalogLoaded = false;
+  });
+  await page.locator('.sidebar-work-center-trigger:visible').click();
+  await page.evaluate(() => {
+    const sessions = window.Pinia.useSessionsStore();
+    const key = 'agent-a\u001flate-empty';
+    sessions.sessions[key] = { id: 'late-empty', agentId: 'agent-a', name: 'Late Session', roster: [], defaultVpId: null };
+    sessions.activeSessionKey = key;
+    sessions.activeSessionId = 'late-empty';
+  });
+  await expect(page.locator('.group-invite-overlay')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Back to chat' }).click();
+  await expect(page.locator('.work-center-main')).toHaveCount(0);
+  // The invitation belongs to the conversation, and is still offered on return.
+  await expect(page.locator('.group-invite-overlay')).toBeVisible();
+});
+
+test('reopening Settings ignores a late older telemetry load', async ({ page, serverUrl }) => {
+  await loadHost(page, serverUrl, 'chat', 'light');
+  await page.evaluate(() => {
+    window.telemetryLoads = [];
+    window.Pinia.useChatStore().loadTelemetrySettings = () => new Promise(resolve => window.telemetryLoads.push(resolve));
+  });
+  await openGeneral(page);
+  const telemetry = page.getByRole('switch', { name: 'Performance telemetry' });
+  await expect(telemetry).toBeDisabled();
+  await page.locator('.settings-close').click();
+  await openGeneral(page);
+  await page.evaluate(() => window.telemetryLoads[1]({ enabled: false }));
+  await expect(telemetry).toBeEnabled();
+  await expect(telemetry).toHaveAttribute('aria-checked', 'false');
+  await page.evaluate(() => window.telemetryLoads[0]({ enabled: true }));
+  await expect(telemetry).toHaveAttribute('aria-checked', 'false');
+});

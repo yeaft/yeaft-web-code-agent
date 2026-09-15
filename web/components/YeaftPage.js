@@ -444,7 +444,7 @@ export default {
            group's member editor directly (the previous flow dumped the
            user into VP-Settings, where there was no add-to-group UI). -->
       <SessionInviteModal
-        v-if="shouldShowInviteModal"
+        v-if="!store.workCenterOpen && !store.pluginCenterOpen && shouldShowInviteModal"
         :group-name="inviteGroupName"
         @open-library="onInviteOpenLibrary"
         @dismiss="onInviteDismiss"

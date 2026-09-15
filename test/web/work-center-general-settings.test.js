@@ -73,17 +73,19 @@ describe('General settings controls', () => {
     const context = {
       telemetryDraft: previous,
       telemetryEnabled: true,
+      telemetryGeneration: 0,
+      telemetryAgentId: 'agent-a',
       telemetryLoading: false,
       telemetryLoaded: true,
       telemetrySaving: false,
       telemetryErrorMessage: '',
-      chatStore: { updateTelemetrySettings: vi.fn().mockRejectedValue(new Error('offline')) },
+      chatStore: { currentAgent: 'agent-a', updateTelemetrySettings: vi.fn().mockRejectedValue(new Error('offline')) },
       $t: vi.fn(key => key),
     };
 
     await SettingsPanel.methods.toggleTelemetry.call(context);
 
-    expect(context.chatStore.updateTelemetrySettings).toHaveBeenCalledWith({ enabled: false, retentionDays: 3 });
+    expect(context.chatStore.updateTelemetrySettings).toHaveBeenCalledWith({ enabled: false, retentionDays: 3 }, 'agent-a');
     expect(context.telemetryDraft).toEqual(previous);
     expect(context.telemetrySaving).toBe(false);
     expect(context.telemetryErrorMessage).toBe('settings.general.telemetrySaveFailed');
@@ -93,11 +95,13 @@ describe('General settings controls', () => {
     const context = {
       telemetryDraft: { enabled: true, retentionDays: 3 },
       telemetryEnabled: true,
+      telemetryGeneration: 0,
+      telemetryAgentId: 'agent-a',
       telemetryLoading: false,
       telemetryLoaded: true,
       telemetrySaving: false,
       telemetryErrorMessage: '',
-      chatStore: { updateTelemetrySettings: vi.fn().mockResolvedValue({ enabled: false, retentionDays: 5 }) },
+      chatStore: { currentAgent: 'agent-a', updateTelemetrySettings: vi.fn().mockResolvedValue({ enabled: false, retentionDays: 5 }) },
       $t: vi.fn(key => key),
     };
 
@@ -112,11 +116,13 @@ describe('General settings controls', () => {
     const context = {
       telemetryDraft: previous,
       telemetryEnabled: false,
+      telemetryGeneration: 0,
+      telemetryAgentId: 'agent-a',
       telemetryLoading: false,
       telemetryLoaded: true,
       telemetrySaving: false,
       telemetryErrorMessage: '',
-      chatStore: { updateTelemetrySettings: vi.fn().mockResolvedValue({ enabled: true, error: 'denied' }) },
+      chatStore: { currentAgent: 'agent-a', updateTelemetrySettings: vi.fn().mockResolvedValue({ enabled: true, error: 'denied' }) },
       $t: vi.fn(key => key),
     };
 
@@ -125,4 +131,58 @@ describe('General settings controls', () => {
     expect(context.telemetryDraft).toEqual(previous);
     expect(context.telemetryErrorMessage).toBe('settings.general.telemetrySaveFailed');
   });
+
+  it('ignores superseded telemetry loads and saves after reopening or switching Agent', async () => {
+    const loads = [];
+    const saves = [];
+    const context = {
+      telemetryGeneration: 0, telemetryAgentId: null,
+      telemetryDraft: { enabled: true }, telemetryLoaded: false,
+      telemetryLoading: false, telemetrySaving: false,
+      telemetryErrorMessage: '',
+      get telemetryEnabled() { return this.telemetryDraft.enabled; },
+      chatStore: {
+        currentAgent: 'agent-a',
+        loadTelemetrySettings: vi.fn(() => new Promise((resolve, reject) => loads.push({ resolve, reject }))),
+        updateTelemetrySettings: vi.fn(() => new Promise((resolve, reject) => saves.push({ resolve, reject }))),
+      },
+      $t: key => key,
+    };
+    context.invalidateTelemetry = SettingsPanel.methods.invalidateTelemetry.bind(context);
+    const load = SettingsPanel.methods.loadTelemetry.bind(context);
+    const toggle = SettingsPanel.methods.toggleTelemetry.bind(context);
+    const first = load();
+    const second = load();
+    loads[1].resolve({ enabled: false });
+    await second;
+    loads[0].resolve({ enabled: true });
+    await first;
+    expect(context.telemetryDraft.enabled).toBe(false);
+    expect(context.telemetryLoaded).toBe(true);
+
+    const oldSave = toggle();
+    expect(context.chatStore.updateTelemetrySettings).toHaveBeenCalledWith({ enabled: true }, 'agent-a');
+    expect(context.telemetrySaving).toBe(true);
+    // The visible/currentAgent watchers invalidate old work before loading the new state.
+    context.invalidateTelemetry();
+    context.chatStore.currentAgent = 'agent-b';
+    const nextAgent = load();
+    saves[0].reject(new Error('late old Agent failure'));
+    await oldSave;
+    expect(context.telemetryErrorMessage).toBe('');
+    expect(context.telemetryLoading).toBe(true);
+    loads[2].resolve({ enabled: true });
+    await nextAgent;
+    expect(context.telemetryAgentId).toBe('agent-b');
+    expect(context.telemetryDraft.enabled).toBe(true);
+    expect(context.telemetryLoading).toBe(false);
+
+    const closed = load();
+    context.invalidateTelemetry();
+    loads[3].resolve({ enabled: false });
+    await closed;
+    expect(context.telemetryLoaded).toBe(false);
+    expect(context.telemetryDraft.enabled).toBe(true);
+  });
+
 });

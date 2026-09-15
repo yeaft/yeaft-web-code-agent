@@ -573,6 +573,8 @@ export default {
         rawExchangeMaxBytes: 524288,
         traceTextMaxBytes: 262144,
       },
+      telemetryGeneration: 0,
+      telemetryAgentId: null,
       telemetryLoading: false,
       telemetryLoaded: false,
       telemetrySaving: false,
@@ -738,6 +740,7 @@ export default {
     return undefined;
   },
   beforeUnmount() {
+    this.invalidateTelemetry();
     this.invalidateSandboxLoads();
     this.stopSandboxPolling();
   },
@@ -749,11 +752,16 @@ export default {
         this.loadData();
         if (this.activeTab === 'sandbox') this.loadSandbox();
       } else {
+        this.invalidateTelemetry();
         this.invalidateSandboxLoads();
         this.stopSandboxPolling();
         // Closing settings while a bind QR is up should tear it down too.
         if (this.authStore.qrPanel) this.cancelQrBind();
       }
+    },
+    'chatStore.currentAgent'() {
+      this.invalidateTelemetry();
+      if (this.visible) this.loadTelemetry();
     },
     activeTab(tab) {
       if (tab === 'invitations' && this.authStore.role === 'admin') {
@@ -920,37 +928,59 @@ export default {
     trackOverlayPointerUp,
     clearOverlayPointerGesture,
 
-    async loadTelemetry() {
-      this.telemetryLoading = true;
+    invalidateTelemetry() {
+      this.telemetryGeneration += 1;
+      this.telemetryLoaded = false;
+      this.telemetryLoading = false;
+      this.telemetrySaving = false;
       this.telemetryErrorMessage = '';
+    },
+
+    async loadTelemetry() {
+      this.invalidateTelemetry();
+      const generation = this.telemetryGeneration;
+      const agentId = this.chatStore.currentAgent;
+      this.telemetryAgentId = agentId;
+      const isCurrent = () => generation === this.telemetryGeneration
+        && agentId === this.chatStore.currentAgent;
+      this.telemetryLoading = true;
       try {
-        const settings = await this.chatStore.loadTelemetrySettings();
+        const settings = await this.chatStore.loadTelemetrySettings(agentId);
+        if (!isCurrent()) return;
         if (!settings || settings.error) throw new Error(settings?.error || 'load failed');
         this.telemetryDraft = { ...this.telemetryDraft, ...settings };
         this.telemetryLoaded = true;
       } catch {
+        if (!isCurrent()) return;
         this.telemetryLoaded = false;
         this.telemetryErrorMessage = this.$t('settings.general.telemetryLoadFailed');
       } finally {
-        this.telemetryLoading = false;
+        if (isCurrent()) this.telemetryLoading = false;
       }
     },
 
     async toggleTelemetry() {
-      if (this.telemetryLoading || this.telemetrySaving || !this.telemetryLoaded) return;
+      if (this.telemetryLoading || this.telemetrySaving || !this.telemetryLoaded
+        || this.telemetryAgentId !== this.chatStore.currentAgent) return;
+      const generation = ++this.telemetryGeneration;
+      const agentId = this.telemetryAgentId;
+      const isCurrent = () => generation === this.telemetryGeneration
+        && agentId === this.chatStore.currentAgent;
       const previous = { ...this.telemetryDraft };
       const requested = { ...previous, enabled: !this.telemetryEnabled };
       this.telemetrySaving = true;
       this.telemetryErrorMessage = '';
       try {
-        const settings = await this.chatStore.updateTelemetrySettings(requested);
+        const settings = await this.chatStore.updateTelemetrySettings(requested, agentId);
+        if (!isCurrent()) return;
         if (!settings || settings.error) throw new Error(settings?.error || 'save failed');
         this.telemetryDraft = { ...previous, ...settings };
       } catch {
+        if (!isCurrent()) return;
         this.telemetryDraft = previous;
         this.telemetryErrorMessage = this.$t('settings.general.telemetrySaveFailed');
       } finally {
-        this.telemetrySaving = false;
+        if (isCurrent()) this.telemetrySaving = false;
       }
     },
 
