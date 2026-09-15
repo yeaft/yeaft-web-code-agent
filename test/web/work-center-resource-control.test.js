@@ -185,6 +185,11 @@ describe('Work Center resource control', () => {
     expect(mergeWorkItemSummary(current, fresh).executionControl.revision).toBe(8);
     const usageUpdate = { ...current, executionControl: { ...current.executionControl, usage: { ...usage, totalTokens: 900 } } };
     expect(mergeWorkItemSummary(current, usageUpdate).executionControl.usage.totalTokens).toBe(900);
+    const running = { ...current, actions: [{ id: 'action', attempt: 2, progressRevision: 5 }] };
+    const lateActionEvent = { ...usageUpdate, actionStats: [{ id: 'action', attempt: 1, progressRevision: 3 }] };
+    expect(mergeWorkItemSummary(running, lateActionEvent).executionControl).toBe(current.executionControl);
+    const newerManagement = { ...lateActionEvent, executionControl: { ...fresh.executionControl, stopReason: null } };
+    expect(mergeWorkItemSummary(running, newerManagement).executionControl).toBe(newerManagement.executionControl);
   });
 });
 

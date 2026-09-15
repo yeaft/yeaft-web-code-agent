@@ -284,6 +284,10 @@ export function mergeWorkItemSummary(current, summary) {
   }
   for (const field of DETAIL_SUMMARY_FIELDS) {
     if (!aggregateAccepted && PROGRESS_BOUND_SUMMARY_FIELDS.has(field)) continue;
+    // Usage/attempt updates do not advance the management CAS. Do not let an
+    // old Action event roll them back; a newer explicit stop/extend still wins.
+    if (!aggregateAccepted && field === 'executionControl'
+        && Number(summary.executionControl?.revision || 0) <= Number(current.executionControl?.revision || 0)) continue;
     if (Object.prototype.hasOwnProperty.call(summary, field)) merged[field] = summary[field];
   }
   return merged;
