@@ -60,6 +60,7 @@ export const CORE_TEST_FILES = Object.freeze([
   'test/agent/yeaft/work-center/assignment.test.js',
   'test/agent/yeaft/work-center/core.test.js',
   'test/agent/yeaft/work-center/dynamic-coordination.test.js',
+  'test/agent/yeaft/work-center/goal-state.test.js',
   'test/agent/yeaft/work-center/mainline-projection.test.js',
   'test/agent/yeaft/work-center/runner-policy.test.js',
   'test/agent/yeaft/work-center/store-migration.test.js',

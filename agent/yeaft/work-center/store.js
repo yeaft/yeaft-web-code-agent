@@ -3,11 +3,12 @@ import { mkdirSync, realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { normalizeEvidence, normalizeOutputs } from './evidence.js';
-import { normalizeContractPatch } from './completion-contract.js';
+import { currentGoalRuns, deriveGoalProgress, hasContradictoryEvidence, validGoalChecks } from './goal-state.js';
+import { assertCoordinatorContractAuthority, normalizeContractPatch } from './completion-contract.js';
 import { normalizeActionCheckpoint } from './action-checkpoint.js';
 import { currentActionInputEventIds, runMatchesActionIdentity } from './action-identity.js';
 import { isDynamicWorkItem, usesLegacyGraph } from './execution-mode.js';
-import { normalizeDynamicCompletion } from './dynamic-coordination.js';
+import { normalizeDynamicCompletion, normalizeDynamicGoalRefs } from './dynamic-coordination.js';
 import { canonicalActionInstruction, withoutActionInputContext } from './workflow.js';
 import {
   WORK_CENTER_SCHEMA_VERSION,
@@ -3128,6 +3129,7 @@ export class WorkItemStore {
       planConflicts: this.listPlanConflicts(id),
       events: this.db.prepare('SELECT * FROM events WHERE work_item_id = ? ORDER BY id DESC LIMIT 500').all(id).map(mapEvent),
     };
+    detail.goalProgress = deriveGoalProgress(detail);
     return graphExecutionState(detail, detail.actions);
   }
 
@@ -3454,6 +3456,13 @@ export class WorkItemStore {
       }
       const recovery = coordinatorRecoveryIdentity(persistedRecovery);
       const decision = result?.decision || {};
+      const userOriginated = messages[assistantIndex]?.userOriginated === true
+        && messages[assistantIndex]?.automatic !== true;
+      assertCoordinatorContractAuthority(decision.contractPatch, userOriginated);
+      assertCoordinatorContractAuthority(result?.mutation?.contractPatch, userOriginated);
+      if (expected.userOriginated === true && !userOriginated) {
+        throw new Error('Coordinator user-originated authority does not match the persisted turn');
+      }
       const now = this.now();
       const activeActions = this.db.prepare(`SELECT * FROM actions WHERE work_item_id = ?
         AND status NOT IN ('completed', 'closed', 'superseded', 'cancelled') ORDER BY sequence`).all(workItem.id).map(mapAction);
@@ -3684,20 +3693,22 @@ export class WorkItemStore {
     turnId, result, expected, workItem, messages, assistantIndex, activeActions, now,
   }) {
     const decision = result?.decision || {};
-    if (expected.automatic === true && result?.mutation?.contractPatch?.deliveryTarget) {
-      throw new Error('Automatic Work Center Coordinator delivery target changes are forbidden');
+    const decisionPatch = normalizeContractPatch(decision.contractPatch);
+    const mutationPatch = normalizeContractPatch(result?.mutation?.contractPatch);
+    if (JSON.stringify(decisionPatch) !== JSON.stringify(mutationPatch) && mutationPatch) {
+      throw new Error('Coordinator mutation contractPatch must match the user-originated decision');
     }
-    if (decision.contractPatch?.deliveryTarget && expected.userOriginated !== true) {
-      throw new Error('WorkItem delivery target confirmation requires a user-originated Coordinator turn');
+    if (decisionPatch && !['create_actions', 'request_human'].includes(decision.kind)) {
+      throw new Error('Contract refinement requires create_actions or request_human');
     }
-    if (decision.contractPatch?.deliveryTarget && decision.kind !== 'request_human') {
+    if (decisionPatch?.deliveryTarget && decision.kind !== 'request_human') {
       throw new Error('WorkItem delivery target confirmation requires a user-originated request_human decision');
     }
     let affectedActionIds = [];
     let nextStatus = workItem.status;
     let currentActionId = workItem.currentActionId;
     let finalResult = null;
-    const contractPatch = normalizeContractPatch(decision.contractPatch);
+    const contractPatch = decisionPatch;
     if (decision.kind === 'create_actions'
         && !workItem.deliveryTarget
         && (result?.mutation?.createdActions || []).some(action => (
@@ -3705,11 +3716,18 @@ export class WorkItemStore {
         ))) {
       throw new Error('WorkItem delivery target must be confirmed before creating mutating or delivery Actions');
     }
-    if (contractPatch) {
-      if (contractPatch.title) workItem.title = contractPatch.title;
-      if (contractPatch.goal) workItem.goal = contractPatch.goal;
-      if (contractPatch.acceptanceCriteria) workItem.acceptanceCriteria = contractPatch.acceptanceCriteria;
-      if (contractPatch.deliveryTarget) workItem.deliveryTarget = contractPatch.deliveryTarget;
+    const refined = { ...workItem, ...(contractPatch || {}) };
+    const contractChanged = ['title', 'goal', 'deliveryTarget', 'acceptanceCriteria']
+      .some(key => JSON.stringify(refined[key]) !== JSON.stringify(workItem[key]));
+    if (contractChanged) {
+      this.#invalidateExecution(workItem, 'superseded', 'superseded', 'User refined the WorkItem contract', now);
+      this.db.prepare(`UPDATE work_items SET title = ?, goal = ?, acceptance_criteria = ?,
+        delivery_target = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ?`).run(
+        refined.title, refined.goal, stringify(refined.acceptanceCriteria), refined.deliveryTarget,
+        now, workItem.id, workItem.revision,
+      );
+      workItem = this.getWorkItem(workItem.id);
+      activeActions = [];
     }
 
     if (decision.kind === 'create_actions') {
@@ -3720,7 +3738,11 @@ export class WorkItemStore {
       if (!mutation || !Array.isArray(mutation.createdActions) || mutation.createdActions.length === 0) {
         throw new Error('Dynamic Coordinator Action creation is missing a validated mutation');
       }
-      for (const closure of mutation.closeActions || []) {
+      const goalDetail = this.getWorkItemDetail(workItem.id);
+      for (const candidate of mutation.createdActions) {
+        normalizeDynamicGoalRefs(candidate.brief?.goalRefs, goalDetail, goalDetail.actions);
+      }
+      for (const closure of (contractChanged ? [] : mutation.closeActions || [])) {
         const action = activeActions.find(candidate => candidate.id === closure.actionId);
         if (!action || !['waiting', 'failed'].includes(action.status)) {
           throw new Error('Dynamic Coordinator close target changed before apply');
@@ -3738,7 +3760,7 @@ export class WorkItemStore {
           actionGeneration: action.generation,
         });
       }
-      for (const actionId of mutation.supersedeActionIds || []) {
+      for (const actionId of (contractChanged ? [] : mutation.supersedeActionIds || [])) {
         const action = activeActions.find(candidate => candidate.id === actionId);
         if (!action || !['ready', 'waiting', 'failed'].includes(action.status)) {
           throw new Error('Dynamic Coordinator supersede target changed before apply');
@@ -3749,18 +3771,11 @@ export class WorkItemStore {
           AND status IN ('ready', 'waiting', 'failed')`).run(now, action.id, action.generation);
         if (Number(changed.changes) !== 1) throw new Error('Dynamic Coordinator lost an Action fence');
       }
-      const patch = mutation.contractPatch || null;
-      const title = patch?.title ?? workItem.title;
-      const goal = patch?.goal ?? workItem.goal;
-      const criteria = patch?.acceptanceCriteria ?? workItem.acceptanceCriteria;
-      const contractChanged = title !== workItem.title || goal !== workItem.goal
-        || JSON.stringify(criteria) !== JSON.stringify(workItem.acceptanceCriteria);
       const snapshot = { ...workItem.workflowSnapshot, workItemType: mutation.workItemType };
-      const changedPlan = this.db.prepare(`UPDATE work_items SET title = ?, goal = ?,
-        acceptance_criteria = ?, workflow_snapshot = ?, revision = revision + ?,
+      const changedPlan = this.db.prepare(`UPDATE work_items SET workflow_snapshot = ?,
         plan_revision = plan_revision + 1, updated_at = ? WHERE id = ? AND revision = ?
         AND plan_revision = ? AND ledger_revision = ? AND coordinator_revision = ?`).run(
-        title, goal, stringify(criteria), stringify(snapshot), contractChanged ? 1 : 0,
+        stringify(snapshot),
         now, workItem.id, workItem.revision, workItem.planRevision,
         workItem.ledgerRevision, workItem.coordinatorRevision,
       );
@@ -3838,12 +3853,10 @@ export class WorkItemStore {
         throw new Error('WorkItem has an unsafe blocking Operation and cannot complete');
       }
       finalResult = normalizeDynamicCompletion(decision.completion, workItem.acceptanceCriteria);
-      const canonicalRuns = new Map(this.db.prepare(`SELECT r.* FROM runs r JOIN actions a ON a.id = r.action_id
-        WHERE r.work_item_id = ? AND r.status = 'completed' AND a.result_run_id = r.id`).all(workItem.id)
-        .map(row => {
-          const run = mapRun(row);
-          return [run.id, run];
-        }));
+      const detail = this.getWorkItemDetail(workItem.id);
+      const progress = deriveGoalProgress(detail);
+      const canonicalRuns = new Map(currentGoalRuns(detail)
+        .filter(run => run.status === 'completed').map(run => [run.id, run]));
       const criteria = Array.isArray(workItem.acceptanceCriteria) ? workItem.acceptanceCriteria : [];
       for (const runId of finalResult.evidenceRunIds) {
         const run = canonicalRuns.get(runId);
@@ -3851,17 +3864,18 @@ export class WorkItemStore {
         if (run.evidence.length === 0) {
           throw new Error(`Completion evidence Run has no concrete evidence: ${runId}`);
         }
-        if (!Array.isArray(run.acceptanceChecks) || run.acceptanceChecks.length !== criteria.length
-            || run.acceptanceChecks.some((check, index) => (
-              check?.criterion !== criteria[index] || !check?.status || !String(check?.evidence || '').trim()
-            ))) {
+        if (!validGoalChecks(run, criteria)) {
           throw new Error(`Completion evidence Run has incomplete acceptance checks: ${runId}`);
+        }
+        if (hasContradictoryEvidence(run)) {
+          throw new Error(`Completion evidence Run has contradictory evidence: ${runId}`);
         }
       }
       finalResult.outputs = [];
       const seenOutputs = new Set();
       for (const runId of finalResult.evidenceRunIds) {
         for (const output of canonicalRuns.get(runId)?.outputs || []) {
+          if (['failed', 'error', 'pending'].includes(output.status)) continue;
           const key = `${output.kind}\u0000${output.ref}`;
           if (seenOutputs.has(key)) continue;
           seenOutputs.add(key);
@@ -3873,16 +3887,27 @@ export class WorkItemStore {
         pull_request: 'pr',
         merge: 'commit',
       }[workItem.deliveryTarget];
-      if (!requiredOutputKind) {
+      if (!requiredOutputKind && workItem.deliveryTarget !== 'response') {
         throw new Error('WorkItem delivery target must be confirmed before completion');
       }
-      if (!finalResult.outputs.some(output => output.kind === requiredOutputKind)) {
+      if (requiredOutputKind && !finalResult.outputs.some(output => output.kind === requiredOutputKind)) {
         throw new Error(`WorkItem completion requires a canonical ${requiredOutputKind} output for delivery target ${workItem.deliveryTarget}`);
+      }
+      if (!finalResult.evidenceRunIds.some(runId => progress.delivery.evidenceRunIds.includes(runId))) {
+        throw new Error('Completion delivery requires current canonical evidence after the latest workspace change');
+      }
+      if (workItem.deliveryTarget === 'response') {
+        finalResult.responses = finalResult.evidenceRunIds
+          .filter(runId => progress.delivery.evidenceRunIds.includes(runId))
+          .map(runId => ({ runId, summary: canonicalRuns.get(runId).summary, evidence: canonicalRuns.get(runId).evidence }));
+        if (!finalResult.responses.length) throw new Error('Response delivery requires a canonical completed Run summary with evidence and valid checks');
+      }
+      if (progress.remainingCriteria.length) {
+        throw new Error('Completion has unmet or contradictory current goal criteria');
       }
       for (const [index, acceptanceResult] of finalResult.acceptanceResults.entries()) {
         const provesCriterion = acceptanceResult.evidenceRunIds.some(runId => (
-          canonicalRuns.get(runId)?.acceptanceChecks?.[index]?.criterion === criteria[index]
-          && canonicalRuns.get(runId)?.acceptanceChecks?.[index]?.status === 'passed'
+          progress.criteria[index].evidenceRunIds.includes(runId)
         ));
         if (!provesCriterion) {
           throw new Error(`Completion criterion lacks a passing canonical Run check: ${criteria[index]}`);
@@ -3915,12 +3940,12 @@ export class WorkItemStore {
     const changed = this.db.prepare(`UPDATE work_items SET messages = ?,
       coordinator_revision = coordinator_revision + 1, status = ?, current_action_id = ?,
       current_run_id = NULL, final_result = COALESCE(final_result, ?), title = ?, goal = ?,
-      acceptance_criteria = ?, delivery_target = ?, revision = revision + ?, updated_at = ?
+      acceptance_criteria = ?, delivery_target = ?, updated_at = ?
       WHERE id = ? AND coordinator_revision = ? AND revision = ? AND plan_revision = ?
       AND ledger_revision = ? AND status NOT IN ('done', 'cancelled')`).run(
       stringify(messages), nextStatus, currentActionId, finalResult ? stringify(finalResult) : null,
       workItem.title, workItem.goal, stringify(workItem.acceptanceCriteria), workItem.deliveryTarget,
-      contractPatch ? 1 : 0, now, workItem.id, current.coordinatorRevision, current.revision,
+      now, workItem.id, current.coordinatorRevision, current.revision,
       current.planRevision, current.ledgerRevision,
     );
     if (Number(changed.changes) !== 1) throw new Error('Dynamic Coordinator completion lost its turn fence');

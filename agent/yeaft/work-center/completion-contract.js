@@ -14,12 +14,20 @@ export function normalizeContractPatch(value) {
     patch.acceptanceCriteria = criteria;
   }
   if (Object.hasOwn(value, 'deliveryTarget')) {
-    if (!['workspace_files', 'pull_request', 'merge'].includes(value.deliveryTarget)) {
-      throw new Error('contractPatch.deliveryTarget must be workspace_files, pull_request, or merge');
+    if (!['response', 'workspace_files', 'pull_request', 'merge'].includes(value.deliveryTarget)) {
+      throw new Error('contractPatch.deliveryTarget must be response, workspace_files, pull_request, or merge');
     }
     patch.deliveryTarget = value.deliveryTarget;
   }
   return Object.keys(patch).length > 0 ? patch : null;
+}
+
+// Reject even falsy/raw patch fields before normalization can hide an attempted change.
+export function assertCoordinatorContractAuthority(value, userOriginated) {
+  if (userOriginated === true || !value || typeof value !== 'object') return;
+  if (['title', 'goal', 'acceptanceCriteria', 'deliveryTarget'].some(key => Object.hasOwn(value, key))) {
+    throw new Error('Automatic Work Center Coordinator contract and delivery target changes are forbidden; refinement requires a user-originated turn');
+  }
 }
 
 function normalizeAcceptanceChecks(value, criteria) {
@@ -27,7 +35,7 @@ function normalizeAcceptanceChecks(value, criteria) {
   const checks = value.map((raw, index) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
     const criterion = typeof raw.criterion === 'string' ? raw.criterion.trim() : '';
-    const status = ['passed', 'deferred', 'not_applicable'].includes(raw.status) ? raw.status : '';
+    const status = ['passed', 'failed', 'deferred', 'not_applicable'].includes(raw.status) ? raw.status : '';
     const evidence = typeof raw.evidence === 'string' ? raw.evidence.trim().slice(0, 1_000) : '';
     if (criterion !== criteria[index] || !status || !evidence) return null;
     return { criterion, status, evidence };
