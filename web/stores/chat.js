@@ -624,7 +624,7 @@ export const useChatStore = defineStore('chat', {
     // unconditional so old encrypted frames still decrypt.
     serverEncryptionRequired: true,
     // 连接状态
-    sessionForkPendingKey: null, // one explicit fork operation at a time across both UI entry points
+    sessionForkPendingKey: null, // one explicit copy operation at a time across both UI entry points
     connectionState: 'disconnected', // 'disconnected' | 'connecting' | 'connected' | 'reconnecting'
     reconnectAttempts: 0,
     maxReconnectAttempts: 10,

@@ -48,7 +48,7 @@ for (const scenario of [
     await page.setViewportSize({ width: scenario.width, height: 800 });
     // Close the mobile sidebar through the same state the toggle controls.
     await page.evaluate(() => { window.Pinia.useChatStore().sessionSidebarOpen = false; });
-    const headerFork = page.getByRole('button', { name: 'Fork current session', exact: true });
+    const headerFork = page.getByRole('button', { name: 'Copy session', exact: true });
     await expect(headerFork).toBeVisible();
     await expect(headerFork).toBeEnabled();
     await headerFork.focus();
@@ -110,7 +110,7 @@ for (const scenario of [
       const sourceRow = page.locator('.session-item.active');
       await sourceRow.hover();
       await sourceRow.locator('.session-dots-btn').click();
-      trigger = page.locator('.session-menu-floating .session-menu-item', { hasText: 'Fork current session' });
+      trigger = page.locator('.session-menu-floating .session-menu-item', { hasText: 'Copy session' });
       await expect(trigger).toBeVisible();
     }
     const requestPromise = mockAgent.waitForMessage('yeaft_copy_session');

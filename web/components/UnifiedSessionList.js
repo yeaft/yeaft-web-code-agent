@@ -1040,7 +1040,7 @@ export default {
           <template v-else>
             <button class="session-menu-item" @click.stop="runAction('rename', floatingMenu.row)">{{ $t('chat.sidebar.renameConv') }}</button>
             <template v-if="floatingMenu.row.runtimeProvider === 'yeaft'">
-              <button v-if="isActive(floatingMenu.row)" type="button" class="session-menu-item" :disabled="!!forkUnavailableReason(floatingMenu.row)" :title="forkUnavailableReason(floatingMenu.row) ? $t('yeaft.session.error.' + forkUnavailableReason(floatingMenu.row)) : $t('yeaft.session.forkCurrent')" @click.stop="runAction('copy', floatingMenu.row)">{{ $t('yeaft.session.forkCurrent') }}</button>
+              <button type="button" class="session-menu-item" :disabled="!!forkUnavailableReason(floatingMenu.row)" :title="forkUnavailableReason(floatingMenu.row) ? $t('yeaft.session.error.' + forkUnavailableReason(floatingMenu.row)) : $t('yeaft.session.copy')" @click.stop="runAction('copy', floatingMenu.row)">{{ $t('yeaft.session.copy') }}</button>
               <button class="session-menu-item" @click.stop="runAction('settings', floatingMenu.row)">{{ $t('yeaft.session.openSettings') }}</button>
               <button v-if="floatingMenu.inProject" class="session-menu-item" @click.stop="moveRow(floatingMenu.row, null)">{{ $t('sidebar.projects.remove') }}</button>
               <button class="session-menu-item session-menu-parent" :class="{ active: projectSubmenuOpen }" aria-haspopup="menu" :aria-expanded="projectSubmenuOpen ? 'true' : 'false'" @click.stop="projectSubmenuOpen ? closeProjectMoveList() : openProjectMoveList()">

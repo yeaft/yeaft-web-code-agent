@@ -690,6 +690,44 @@ export function updateSessionAnnouncement(yeaftDir, sessionId, text) {
 }
 
 /**
+ * Update the project directory used to load Session-scoped project context.
+ * Session data remains under the Agent-owned yeaftDir; only the metadata and
+ * manifest projection change. An empty string intentionally clears workDir.
+ */
+export function updateSessionWorkDir(yeaftDir, sessionId, workDir) {
+  if (typeof workDir !== 'string') {
+    throw new SessionCrudError('invalid_workdir', sessionId);
+  }
+  const normalized = normalizeWorkDir(workDir);
+  const ownerYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
+  const handle = requireSession(ownerYeaftDir, sessionId);
+  const previous = handle.getMeta();
+  const next = {
+    ...previous,
+    workDir: normalized,
+    workspaceKey: canonicalWorkspaceKey(normalized),
+    metadataUpdatedAt: new Date().toISOString(),
+  };
+  try {
+    handle.saveMeta(next);
+    try {
+      addOrUpdateManifestSession(yeaftDir, next, handle.dir);
+    } catch (error) {
+      // Keep session.json and the discovery manifest aligned when the second
+      // write fails. The rollback is best-effort; preserve the original error.
+      try {
+        handle.saveMeta(previous);
+        addOrUpdateManifestSession(yeaftDir, previous, handle.dir);
+      } catch {}
+      throw error;
+    }
+    return handle.getMeta();
+  } finally {
+    handle.close();
+  }
+}
+
+/**
  * (A.2.c) Persist the model selected in the group conversation header.
  * Returns the persisted config object so the caller can broadcast it.
  *

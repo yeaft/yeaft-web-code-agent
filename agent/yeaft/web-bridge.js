@@ -84,6 +84,7 @@ import {
   copySession,
   renameSession,
   updateSessionAnnouncement,
+  updateSessionWorkDir,
   archiveSession,
   deleteSession,
   purgeArchivedSessions,
@@ -3737,18 +3738,14 @@ export function handleYeaftRenameSession(msg) {
 }
 
 /**
- * `yeaft_update_group` — generalised group meta patch. Currently accepts
- * `name` and `announcement` keys. Empty patch is rejected; an empty/
+ * `yeaft_update_session` — generalised Session metadata patch. Accepts
+ * `name`, `announcement`, and `workDir`. Empty patch is rejected; an empty/
  * whitespace-only `name` is also rejected up front rather than letting
  * `renameSession` raise a less-specific error deeper in the call stack.
  *
- * Partial-success contract: when a single patch contains BOTH `name` and
- * `announcement`, the rename is committed first; if the announcement
- * write throws, the rename has already persisted on disk and the client
- * receives `ok:false` for the announcement error — i.e. the WS op is not
- * atomic. Today's UI binds Save buttons per pane in `GroupSettingsModal`
- * so this is theoretical; readers extending the patch shape should know
- * the contract permits half-commits.
+ * Partial-success contract: when a single patch contains multiple keys, each
+ * mutator commits independently. Today's UI binds one Save button per field,
+ * so the wire operation normally contains exactly one key.
  */
 export function handleYeaftUpdateSession(msg) {
   const requestId = msg && msg.requestId;
@@ -3758,7 +3755,8 @@ export function handleYeaftUpdateSession(msg) {
   try {
     const hasName = patch && typeof patch.name === 'string' && patch.name.trim().length > 0;
     const hasAnnouncement = patch && typeof patch.announcement === 'string';
-    if (!patch || (!hasName && !hasAnnouncement)) {
+    const hasWorkDir = patch && typeof patch.workDir === 'string';
+    if (!patch || (!hasName && !hasAnnouncement && !hasWorkDir)) {
       throw new SessionCrudError('invalid_patch', sessionId);
     }
     const yeaftDir = ctx.CONFIG?.yeaftDir;
@@ -3768,6 +3766,9 @@ export function handleYeaftUpdateSession(msg) {
     }
     if (hasAnnouncement) {
       group = updateSessionAnnouncement(yeaftDir, sessionId, patch.announcement);
+    }
+    if (hasWorkDir) {
+      group = updateSessionWorkDir(yeaftDir, sessionId, patch.workDir);
     }
     invalidateGroupContext(sessionId);
     sendSessionCrudResult({ op: 'update', requestId, ok: true, session: group });

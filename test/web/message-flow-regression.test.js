@@ -20,6 +20,7 @@ import {
 } from '../../web/components/UnifiedSessionList.js';
 import { openImagePreview } from '../../web/utils/imagePreview.js';
 import SidebarWorkCenter from '../../web/components/SidebarWorkCenter.js';
+import SessionSettingsModal from '../../web/components/SessionSettingsModal.js';
 import enMessages from '../../web/i18n/en.js';
 import zhCNMessages from '../../web/i18n/zh-CN.js';
 import { yeaftHistoryIdentityKey } from '../../web/stores/helpers/yeaft-history-identity.js';
@@ -6310,7 +6311,7 @@ describe('message flow regressions', () => {
     });
     await sidebar.get('.session-dots-btn').trigger('click');
     const menuItems = [...document.body.querySelectorAll('.session-menu-floating .session-menu-item')];
-    const copyAction = menuItems.find(item => item.textContent === 'yeaft.session.forkCurrent');
+    const copyAction = menuItems.find(item => item.textContent === 'yeaft.session.copy');
     expect(copyAction).toBeTruthy();
     copyAction.click();
     await Vue.nextTick();
@@ -6323,8 +6324,16 @@ describe('message flow regressions', () => {
       activeRoute: { runtimeProvider: 'yeaft', agentId: 'agent-a', sessionId: 'other-session' },
     });
     await sidebar.get('.session-dots-btn').trigger('click');
-    expect([...document.body.querySelectorAll('.session-menu-floating .session-menu-item')]
-      .some(item => item.textContent === 'yeaft.session.forkCurrent')).toBe(false);
+    const inactiveCopyAction = [...document.body.querySelectorAll('.session-menu-floating .session-menu-item')]
+      .find(item => item.textContent === 'yeaft.session.copy');
+    expect(inactiveCopyAction).toBeTruthy();
+    expect(inactiveCopyAction.disabled).toBe(false);
+    inactiveCopyAction.click();
+    await Vue.nextTick();
+    expect(sidebar.emitted('action').at(-1)[0]).toMatchObject({
+      action: 'copy',
+      row: { catalogKey: row.catalogKey },
+    });
     sidebar.unmount();
 
     // Both entry points share a pending guard, including errors and reconnect.
@@ -6352,6 +6361,31 @@ describe('message flow regressions', () => {
     sessions.applyCrudResult({ ok: true, op: 'copy', session: { id: 'other-tab-fork', name: 'Other tab' } }, 'agent-a', { activate: false });
     expect(sessions.sessionById('other-tab-fork', 'agent-a')).toBeTruthy();
     expect(sessions.activeSessionKey).toBe('agent-a\u001fcopied-session');
+  });
+
+  it('edits a Session workDir through the target Agent', async () => {
+    const sessionCrudRequest = vi.fn(async () => ({ ok: true, op: 'update' }));
+    const state = {
+      workDirBusy: false,
+      workDirError: '',
+      workDirDraft: '  /workspace/after  ',
+      chat: { sessionCrudRequest },
+      groupId: 'settings-session',
+      targetAgentId: 'agent-b',
+      $t: key => key,
+    };
+
+    expect(SessionSettingsModal.template).toContain('id="session-settings-workdir"');
+    expect(SessionSettingsModal.template).toContain("$t('yeaft.session.settings.workDir.heading')");
+    await SessionSettingsModal.methods.saveWorkDir.call(state);
+
+    expect(sessionCrudRequest).toHaveBeenCalledWith(
+      'update',
+      { sessionId: 'settings-session', patch: { workDir: '/workspace/after' } },
+      { agentId: 'agent-b' },
+    );
+    expect(state.workDirBusy).toBe(false);
+    expect(state.workDirError).toBe('');
   });
 
   it('refreshes repeated catalog clicks without clearing cached Session messages', () => {

@@ -697,6 +697,9 @@ export const useSessionsStore = defineStore('sessions', {
         const key = this.applySnapshotUpsert(session, mutationAgentId);
         if (key && activate) this.setActive(session.id, mutationAgentId);
       }
+      if (result.ok && (result.op === 'rename' || result.op === 'update') && session && session.id) {
+        this.applySnapshotUpsert(session, mutationAgentId);
+      }
       const opSessionId = result.sessionId || result.groupId;
       const allowOwnerlessMutation = this.inventoryIdentityMode === 'legacy-bare';
       const opKey = opSessionId && (mutationAgentId || allowOwnerlessMutation)

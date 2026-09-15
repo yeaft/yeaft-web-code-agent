@@ -157,7 +157,7 @@ describe('YeaftPage setup', () => {
     expect(fork.classes()).not.toContain('btn-ghost');
     expect(fork.text()).toBe('');
     expect(fork.find('svg').exists()).toBe(true);
-    expect(fork.attributes('aria-label')).toBe('yeaft.session.forkCurrent');
+    expect(fork.attributes('aria-label')).toBe('yeaft.session.copy');
     await fork.trigger('click');
     expect(actions.emitted('fork-session')).toHaveLength(1);
     await actions.setProps({ forkDisabled: true, forkPending: true });

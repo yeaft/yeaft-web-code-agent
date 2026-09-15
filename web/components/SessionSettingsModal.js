@@ -2,7 +2,7 @@
  * SessionSettingsModal — unified left-nav / right-pane settings dialog.
  *
  * Replaces the previous standalone SessionMemberEditor. Sections:
- *   - Session        (rename + announcement + delete)
+ *   - Session        (rename + working directory + announcement + delete)
  *   - Members        (roster checkboxes + ★ default-VP picker)
  *
  * Per the design lock: NOT tabs. Always-visible left nav with a single
@@ -62,6 +62,10 @@ export default {
       renameDraft: '',
       renameBusy: false,
       renameError: '',
+      // Project directory draft.
+      workDirDraft: '',
+      workDirBusy: false,
+      workDirError: '',
       // Members busy flag — gates concurrent toggles.
       membersBusy: false,
       membersError: '',
@@ -100,6 +104,9 @@ export default {
     },
     announcement() {
       return this.group && typeof this.group.announcement === 'string' ? this.group.announcement : '';
+    },
+    workDir() {
+      return this.group && typeof this.group.workDir === 'string' ? this.group.workDir : '';
     },
     roster() {
       return this.group && Array.isArray(this.group.roster) ? this.group.roster : [];
@@ -147,10 +154,12 @@ export default {
       if (next === SESSION_SETTINGS_SECTION) {
         this.announcementDraft = this.announcement;
         this.renameDraft = this.groupDisplayName;
+        this.workDirDraft = this.workDir;
       }
       // Clear unrelated errors so they don't haunt other sections.
       this.announcementError = '';
       this.renameError = '';
+      this.workDirError = '';
       this.membersError = '';
       this.deleteError = '';
       this.deleteConfirmText = '';
@@ -172,9 +181,11 @@ export default {
       this.highlightedVpId = this.initialEditVpId || '';
       this.announcementDraft = this.announcement;
       this.renameDraft = this.groupDisplayName;
+      this.workDirDraft = this.workDir;
       this.deleteConfirmText = '';
       this.announcementError = '';
       this.renameError = '';
+      this.workDirError = '';
       this.membersError = '';
       this.deleteError = '';
     },
@@ -203,6 +214,7 @@ export default {
     if (this.section === SESSION_SETTINGS_SECTION) {
       this.announcementDraft = this.announcement;
       this.renameDraft = this.groupDisplayName;
+      this.workDirDraft = this.workDir;
     }
   },
   beforeUnmount() {
@@ -216,12 +228,12 @@ export default {
     onEsc(e) {
       if (e.key !== 'Escape') return;
       // Don't close mid-busy operation.
-      if (this.announcementBusy || this.renameBusy || this.membersBusy || this.deleteBusy) return;
+      if (this.announcementBusy || this.renameBusy || this.workDirBusy || this.membersBusy || this.deleteBusy) return;
       this.requestClose();
     },
     onOverlayClick(event) {
       if (!shouldDismissFromOverlayClick(event)) return;
-      if (this.announcementBusy || this.renameBusy || this.membersBusy || this.deleteBusy) return;
+      if (this.announcementBusy || this.renameBusy || this.workDirBusy || this.membersBusy || this.deleteBusy) return;
       this.requestClose();
     },
     requestClose() { this.$emit('close'); },
@@ -265,6 +277,30 @@ export default {
         }
       } finally {
         this.renameBusy = false;
+      }
+    },
+    // ── Project directory ──────────────────────────────────
+    async saveWorkDir() {
+      if (this.workDirBusy || !this.chat) return;
+      const next = (this.workDirDraft || '').trim();
+      this.workDirBusy = true;
+      this.workDirError = '';
+      try {
+        const res = await this.chat.sessionCrudRequest('update', {
+          sessionId: this.groupId,
+          patch: { workDir: next },
+        }, { agentId: this.targetAgentId });
+        if (!res || !res.ok) {
+          const code = (res && res.error && res.error.code) || 'unknown';
+          const message = (res && res.error && res.error.message) || code;
+          this.workDirError = this.$t('yeaft.session.settings.workDir.saveFailed', { error: message });
+        } else if (typeof res.session?.workDir === 'string') {
+          // The Agent normalizes relative paths; reflect the persisted value so
+          // the Save button returns to its clean state immediately.
+          this.workDirDraft = res.session.workDir;
+        }
+      } finally {
+        this.workDirBusy = false;
       }
     },
     // ── Members ────────────────────────────────────────────
@@ -381,7 +417,7 @@ export default {
             class="group-settings-close"
             type="button"
             @click="requestClose"
-            :disabled="announcementBusy || renameBusy || membersBusy || deleteBusy"
+            :disabled="announcementBusy || renameBusy || workDirBusy || membersBusy || deleteBusy"
             :aria-label="$t('yeaft.session.settings.close')"
           >×</button>
         </header>
@@ -423,6 +459,30 @@ export default {
                     :disabled="renameBusy || !renameDraft.trim() || renameDraft.trim() === groupDisplayName"
                     @click="saveRename"
                   >{{ renameBusy ? $t('yeaft.session.settings.rename.saving') : $t('yeaft.session.settings.rename.save') }}</button>
+                </div>
+              </section>
+
+              <section class="group-settings-card">
+                <h3 class="group-settings-heading">{{ $t('yeaft.session.settings.workDir.heading') }}</h3>
+                <p class="group-settings-help">{{ $t('yeaft.session.settings.workDir.help') }}</p>
+                <label class="group-settings-field-label" for="session-settings-workdir">{{ $t('yeaft.session.settings.workDir.label') }}</label>
+                <input
+                  id="session-settings-workdir"
+                  type="text"
+                  class="group-settings-input"
+                  v-model="workDirDraft"
+                  :placeholder="$t('yeaft.session.settings.workDir.placeholder')"
+                  :disabled="workDirBusy"
+                  @keydown.enter="saveWorkDir"
+                />
+                <p v-if="workDirError" class="group-settings-error" role="alert">{{ workDirError }}</p>
+                <div class="group-settings-actions">
+                  <button
+                    type="button"
+                    class="group-settings-primary"
+                    :disabled="workDirBusy || workDirDraft.trim() === workDir"
+                    @click="saveWorkDir"
+                  >{{ workDirBusy ? $t('yeaft.session.settings.workDir.saving') : $t('yeaft.session.settings.workDir.save') }}</button>
                 </div>
               </section>
 
