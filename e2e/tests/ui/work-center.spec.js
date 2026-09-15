@@ -3019,3 +3019,126 @@ test.describe('Work Center responsive UI', () => {
     await expect(activeLane.locator('.work-center-card')).toHaveCount(1);
   });
 });
+
+function resourceStoppedDetail() {
+  const usage = { llmRequestCount: 200, totalTokens: 1750, chargedTokens: 18134, reservedTokens: 16384, unknownRequests: 1, inFlightRequests: 1 };
+  return {
+    ...OPEN_ITEM_DETAIL, status: 'needs_attention', boardLane: 'needs_attention',
+    executionControl: {
+      revision: 7,
+      limits: { maxRequests: 200, maxTokens: 2000000, maxRunRequests: 40, maxActionAttempts: 3, maxCoordinatorFailures: 3 },
+      usage, coordinatorFailures: 1,
+      breakdown: {
+        coordinator: { ...usage, llmRequestCount: 20 },
+        actions: { ...usage, llmRequestCount: 180 },
+      },
+      actionAttempts: [{ actionId: `action-${'long-id-'.repeat(60)}`, attempts: 2, effectiveMaxAttempts: 3 }],
+      stopReason: { code: 'work_item_requests_exhausted' },
+    },
+  };
+}
+
+async function openResourceDetail(chatPage, mockAgent) {
+  const detail = resourceStoppedDetail();
+  await openWorkCenter(chatPage, mockAgent, [detail]);
+  const select = chatPage.locator('.work-center-card-open').click();
+  await respondToWorkCenterOp(mockAgent, 'get', detail, [detail]);
+  await select;
+  await expect(chatPage.locator('.work-center-resources')).toBeVisible();
+  return detail;
+}
+
+test.describe('Work Center resource budget', () => {
+  test('extends explicitly and resumes with latest CAS; refreshes conflicts without replay', async ({ chatPage, mockAgent }) => {
+    const detail = await openResourceDetail(chatPage, mockAgent);
+    const panel = chatPage.locator('.work-center-resources');
+    const transport = mockAgent.__workCenterTransport;
+    await expect(panel).toContainText('200 / 200');
+    await expect(panel).toContainText('Stopped: lifetime request budget exhausted.');
+    await panel.getByRole('button', { name: 'Extend budget', exact: true }).click();
+    await expect(panel.getByRole('button', { name: 'Confirm budget addition' })).toBeDisabled();
+    await panel.locator('[name="maxRequests"]').fill('9007199254740992');
+    await expect(panel.getByRole('alert')).toContainText('positive safe integers');
+    await expect(panel.getByRole('button', { name: 'Confirm budget addition' })).toBeDisabled();
+    for (const key of Object.keys(detail.executionControl.limits)) await panel.locator(`[name="${key}"]`).fill('2');
+    await panel.getByRole('button', { name: 'Confirm budget addition' }).click();
+    const extension = await transport.next();
+    expect(extension.op).toBe('extend_budget');
+    expect(extension.agentId).toBe(mockAgent.agentId);
+    expect(extension.payload).toEqual({ id: detail.id, executionControlRevision: 7,
+      additions: { maxRequests: 2, maxTokens: 2, maxRunRequests: 2, maxActionAttempts: 2, maxCoordinatorFailures: 2 } });
+    await expect(panel).toHaveAttribute('aria-busy', 'true');
+    await expect(panel.getByRole('button', { name: 'Resume work item' })).toBeDisabled();
+    const extended = structuredClone(detail);
+    extended.executionControl.revision = 8;
+    for (const key of Object.keys(extended.executionControl.limits)) extended.executionControl.limits[key] += 2;
+    await transport.resolve(extension, extended);
+    await respondToWorkCenterOp(mockAgent, 'list', { items: [extended], watcher: { enabled: true } });
+    await expect(panel).toContainText('Execution was not resumed');
+    await expect(panel).toContainText('200 / 202');
+    expect(await transport.takeNow()).toBeNull();
+    await panel.getByRole('button', { name: 'Resume work item' }).click();
+    const resume = await transport.next();
+    expect(resume.op).toBe('resume');
+    expect(resume.payload).toEqual({ id: detail.id, revision: 1, executionControlRevision: 8 });
+    await transport.reject(resume, 'Execution control changed; refresh before changing execution budget or resuming');
+    const refresh = await transport.next();
+    expect(refresh.op).toBe('get');
+    expect(refresh.payload).toEqual({ id: detail.id });
+    const latest = structuredClone(extended);
+    latest.revision = 2;
+    latest.executionControl.revision = 10;
+    await transport.resolve(refresh, latest);
+    await expect(panel.getByRole('alert')).toContainText('Execution control changed');
+    await expect(panel).toContainText('confirm a new operation');
+    expect(await transport.takeNow()).toBeNull();
+    await panel.getByRole('button', { name: 'Resume work item' }).click();
+    const explicitResume = await transport.next();
+    expect(explicitResume.payload).toEqual({ id: detail.id, revision: 2, executionControlRevision: 10 });
+    const resumed = { ...latest, status: 'running', boardLane: 'active',
+      executionControl: { ...latest.executionControl, revision: 11, stopReason: null } };
+    await transport.resolve(explicitResume, resumed);
+    await respondToWorkCenterOp(mockAgent, 'list', { items: [resumed], watcher: { enabled: true } });
+    await expect(panel).toContainText('Resume accepted.');
+    await expect(panel.getByRole('button', { name: 'Resume work item' })).toHaveCount(0);
+  });
+
+  test('resource budget remains readable and keyboard usable in both locales/themes at 320px', async ({ chatPage, mockAgent }) => {
+    await openResourceDetail(chatPage, mockAgent);
+    const panel = chatPage.locator('.work-center-resources');
+    await panel.locator('summary').click();
+    await panel.getByRole('button', { name: 'Extend budget', exact: true }).click();
+    await expect(panel).toContainText('ALL current and future Actions');
+    await expect(panel).toContainText('Reported 1,750 · reserved / unknown 16,384 tokens');
+    await expect(panel).toContainText('Unknown usage: 1 requests · in flight: 1');
+    for (const locale of ['en', 'zh-CN']) {
+      for (const theme of ['light', 'dark']) {
+        await chatPage.evaluate(async ({ locale, theme }) => {
+          document.documentElement.setAttribute('data-theme', theme);
+          const { setLocale } = await import('/utils/i18n.js');
+          setLocale(locale);
+        }, { locale, theme });
+        for (const width of [1280, 320]) {
+          await chatPage.setViewportSize({ width, height: 900 });
+          await expectNoHorizontalOverflow(panel, {
+            panel: ':scope', totals: '.work-center-resource-totals', breakdown: '.work-center-resource-breakdown',
+            form: '.work-center-resource-form', inputs: '.work-center-resource-inputs',
+          });
+          const metrics = await layoutMetrics(chatPage);
+          expect(metrics.documentScrollWidth).toBeLessThanOrEqual(width);
+          await expect(panel).not.toContainText('workCenter.resource.');
+        }
+      }
+    }
+    await panel.locator('[name="maxRequests"]').focus();
+    await expectVisibleFocus(panel.locator('[name="maxRequests"]'));
+    await chatPage.keyboard.press('Tab');
+    await expect(panel.locator('[name="maxTokens"]')).toBeFocused();
+    // Lost connection invalidates editing, including after reconnect, until a user refresh.
+    await chatPage.evaluate(() => { window.Pinia.useChatStore().connectionState = 'reconnecting'; });
+    await expect(panel.locator('[name="maxRequests"]')).toBeDisabled();
+    await chatPage.evaluate(() => { window.Pinia.useChatStore().connectionState = 'connected'; });
+    await expect(panel.locator('[name="maxRequests"]')).toBeDisabled();
+    await expect(panel).toContainText('请刷新后重新确认');
+  });
+});

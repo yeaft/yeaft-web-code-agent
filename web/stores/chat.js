@@ -2502,10 +2502,20 @@ export const useChatStore = defineStore('chat', {
       this.commitWorkCenterDetail(target, detail, generation);
       return detail;
     },
-    async resumeWorkItem(id, revision, agentId = null) {
+    async resumeWorkItem(id, revision, agentId = null, executionControlRevision = undefined) {
       const target = agentId || this.workCenterAgentId || this.currentAgent;
       const generation = this.beginWorkCenterDetailWrite(target);
-      const detail = await this.workCenterRequest('resume', { id, revision }, target);
+      const payload = { id, revision };
+      if (executionControlRevision != null) payload.executionControlRevision = executionControlRevision;
+      const detail = await this.workCenterRequest('resume', payload, target);
+      await this.listWorkItems(target, this._workCenterListFiltersByAgent[target] || {});
+      this.commitWorkCenterDetail(target, detail, generation);
+      return detail;
+    },
+    async extendWorkItemBudget(id, executionControlRevision, additions, agentId = null) {
+      const target = agentId || this.workCenterAgentId || this.currentAgent;
+      const generation = this.beginWorkCenterDetailWrite(target);
+      const detail = await this.workCenterRequest('extend_budget', { id, executionControlRevision, additions }, target);
       await this.listWorkItems(target, this._workCenterListFiltersByAgent[target] || {});
       this.commitWorkCenterDetail(target, detail, generation);
       return detail;

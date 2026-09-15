@@ -66,6 +66,22 @@ When the Agent supplies `finalResult.responses`, **Delivered response** shows th
 
 Older WorkItems can still use workflow snapshots and dependency/final-gate rules. Those records remain readable; they do not define the new task-first interaction. This UI requires the corresponding Agent projections for evidence progress and response delivery. Rich evidence drilldown and any broader autonomous capabilities in design documents are not implied by these fields.
 
+## Resource budget and explicit recovery
+
+WorkItems with resource control show **Resource budget** in the goal detail: lifetime requests and budgeted tokens consumed / limit, a localized stop reason, and expandable **Usage breakdown and limits** for Coordinator and Actions separately. Reported tokens are known usage. Reservations include in-flight and unknown usage, are already included in budgeted tokens, and must not be added again. Unknown usage is not free.
+
+Default limits are **200 lifetime requests**, **2,000,000 lifetime tokens**, **40 requests per Run**, **3 lifetime attempts per Action**, and **3 cumulative Coordinator failures**. Action attempts also respect the Action’s original limit plus explicit extensions; the detail lists used / effective limits. Requests include retries and auxiliary calls. Cancel, restart, a successful turn, or a new generation does not reset cumulative consumption.
+
+Token admission uses an estimate of input plus maximum output before dispatch, replaced by complete reported usage when available. Unknown or partial results retain conservative occupancy. This is **estimated admission, not a hard dollar ceiling or billing guarantee**: actual usage may exceed the estimate, and already dispatched requests cannot be undone. Incomplete historical usage cannot reconstruct a bill.
+
+To continue after a resource stop:
+
+1. Review the reason and limits. Choose **Extend budget** if more resources are needed.
+2. Enter positive safe-integer **additions**, leaving unchanged fields blank. Review and choose **Confirm budget addition**. Adding Action attempts applies to **all current and future Actions** in this WorkItem.
+3. Extension does **not** resume execution, clear the stop reason, or reset usage. Choose **Resume work item** separately when ready. A Run request-limit stop can resume with a new Run without increasing its per-Run limit.
+
+Mutations use the latest execution-control revision, distinct from the goal revision. If an error/conflict occurs, the UI refreshes state and requires a new explicit confirmation; it never automatically retries the mutation. Failed refreshes and reconnects keep changes disabled until refreshed. No model instruction, retry, watcher toggle, or goal edit can grant extra resources or clear a resource stop. Older Agents without this projection keep the existing usage display.
+
 ## Concurrency and workspace policy
 
 Work Center can run independent ready Actions concurrently up to `maxConcurrentActions` (default 3, configurable from 1 to 12). Workspace conflicts, repository state, and legacy dependencies still constrain actual concurrency.

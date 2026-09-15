@@ -15,6 +15,7 @@ const DETAIL_SUMMARY_FIELDS = Object.freeze([
   'currentActionId',
   'currentAction',
   'executionStats',
+  'executionControl',
   'failureReason',
   'origin',
   'linkedSessionIds',
@@ -135,6 +136,9 @@ export function workCenterActionRequestScopeKey(agentId, workItemId, actionId, g
 
 export function isWorkItemSummaryStale(summary, current) {
   if (!summary || !current || summary.id !== current.id) return false;
+  const resourceRevision = numberOrNull(summary.executionControl?.revision);
+  const currentResourceRevision = numberOrNull(current.executionControl?.revision);
+  if (resourceRevision != null && currentResourceRevision != null && resourceRevision < currentResourceRevision) return true;
   const summaryRevision = numberOrNull(summary.revision);
   const currentRevision = numberOrNull(current.revision);
   if (summaryRevision != null && currentRevision != null && summaryRevision !== currentRevision) {
@@ -146,6 +150,7 @@ export function isWorkItemSummaryStale(summary, current) {
       && summaryCoordinatorRevision !== currentCoordinatorRevision) {
     return summaryCoordinatorRevision < currentCoordinatorRevision;
   }
+  if (resourceRevision != null && currentResourceRevision != null && resourceRevision > currentResourceRevision) return false;
   const summaryUpdatedAt = numberOrNull(summary.updatedAt);
   const currentUpdatedAt = numberOrNull(current.updatedAt);
   return summaryUpdatedAt != null && currentUpdatedAt != null && summaryUpdatedAt < currentUpdatedAt;
@@ -294,7 +299,8 @@ function hasStaleActionProgress(currentStats, nextStats) {
 }
 
 function isSameWorkItemVersion(current, summary) {
-  return numberOrNull(current?.revision) === numberOrNull(summary?.revision)
+  return numberOrNull(current?.executionControl?.revision) === numberOrNull(summary?.executionControl?.revision)
+    && numberOrNull(current?.revision) === numberOrNull(summary?.revision)
     && numberOrNull(current?.coordinatorRevision) === numberOrNull(summary?.coordinatorRevision)
     && numberOrNull(current?.updatedAt) === numberOrNull(summary?.updatedAt);
 }

@@ -1,5 +1,6 @@
 import { confirmDialog } from '../utils/dialog.js';
 import WorkCenterActionDetail from './WorkCenterActionDetail.js';
+import WorkCenterResourceControl from './WorkCenterResourceControl.js';
 import WorkCenterSettingsModal from './WorkCenterSettingsModal.js';
 import MessageComposer from './MessageComposer.js';
 import UserTurnBlock from './UserTurnBlock.js';
@@ -24,7 +25,7 @@ export default {
   name: 'WorkCenterPage',
   components: {
     MessageComposer, UserTurnBlock, VpTurnBlock, WorkCenterActionDetail,
-    WorkCenterSettingsModal, AgentSettingsPanel, ModernSelect,
+    WorkCenterSettingsModal, AgentSettingsPanel, ModernSelect, WorkCenterResourceControl,
   },
   mixins: [folderPickerMixin],
   data() {
@@ -1322,7 +1323,7 @@ export default {
     },
     async resumeSelected() {
       if (!this.selected || this.selected.status !== 'cancelled') return;
-      await this.store.resumeWorkItem(this.selected.id, this.selected.revision, this.agentId);
+      await this.store.resumeWorkItem(this.selected.id, this.selected.revision, this.agentId, this.selected.executionControl?.revision);
     },
   },
   template: `
@@ -1477,11 +1478,11 @@ export default {
                                 :title="tr('workCenter.start', 'Start')" :aria-label="tr('workCenter.start', 'Start')">
                           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="m8 5 11 7-11 7V5Z"/></svg>
                         </button>
-                        <button v-else-if="selected.status === 'cancelled'" class="work-center-icon-button work-center-resume-action" type="button" @click="resumeSelected"
+                        <button v-else-if="selected.status === 'cancelled' && !selected.executionControl" class="work-center-icon-button work-center-resume-action" type="button" @click="resumeSelected"
                                 :title="tr('workCenter.resumeWorkItem', 'Resume work item')" :aria-label="tr('workCenter.resumeWorkItem', 'Resume work item')">
                           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6a6 6 0 0 1-9.81 4.62l-1.42 1.42A8 8 0 1 0 12 5Z"/></svg>
                         </button>
-                        <button v-else-if="selected.status !== 'done'" class="work-center-icon-button work-center-stop-action" type="button" @click="cancelSelected"
+                        <button v-else-if="!['done', 'cancelled'].includes(selected.status)" class="work-center-icon-button work-center-stop-action" type="button" @click="cancelSelected"
                                 :title="tr('workCenter.stopWorkItem', 'Stop work item')" :aria-label="tr('workCenter.stopWorkItem', 'Stop work item')">
                           <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg>
                         </button>
@@ -1523,11 +1524,13 @@ export default {
                               <div><dt>{{ tr('workCenter.updated', 'Updated') }}</dt><dd>{{ time(selected.updatedAt) || '—' }}</dd></div>
                               <div v-if="!selected.workItemType && selected.planningMode === 'ai'"><dt>{{ tr('workCenter.workItemType', 'Type') }}</dt><dd>{{ tr('workCenter.planning', 'Planning') }}</dd></div>
                             </dl>
+                            <WorkCenterResourceControl v-if="selected.executionControl" :key="agentId + '::' + selected.id"
+                              :item="selected" :agent-id="agentId" :disabled="detailLoading || !!detailError || detail?.id !== selected.id" />
                             <div class="work-center-usage-summary work-center-detail-usage">
-                              <span>{{ $t('workCenter.llmRequestCount', { count: formatCount(executionStats(selected).llmRequestCount) }) }}</span>
+                              <span v-if="!selected.executionControl">{{ $t('workCenter.llmRequestCount', { count: formatCount(executionStats(selected).llmRequestCount) }) }}</span>
                               <span>{{ $t('workCenter.loopCount', { count: formatCount(executionStats(selected).loopCount) }) }}</span>
                               <span>{{ $t('workCenter.toolCount', { count: formatCount(executionStats(selected).toolCount) }) }}</span>
-                              <span :title="$t('workCenter.tokenBreakdown', { input: formatCount(executionStats(selected).inputTokens), output: formatCount(executionStats(selected).outputTokens), cache: formatCount((executionStats(selected).cacheReadTokens || 0) + (executionStats(selected).cacheWriteTokens || 0)) })">{{ $t('workCenter.tokenCount', { count: formatTokens(executionStats(selected).totalTokens) }) }}</span>
+                              <span v-if="!selected.executionControl" :title="$t('workCenter.tokenBreakdown', { input: formatCount(executionStats(selected).inputTokens), output: formatCount(executionStats(selected).outputTokens), cache: formatCount((executionStats(selected).cacheReadTokens || 0) + (executionStats(selected).cacheWriteTokens || 0)) })">{{ $t('workCenter.tokenCount', { count: formatTokens(executionStats(selected).totalTokens) }) }}</span>
                             </div>
 
                             <div v-if="selected.failureReason" class="work-center-section work-center-failure" role="alert">
