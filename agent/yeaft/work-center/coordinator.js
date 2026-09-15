@@ -240,7 +240,7 @@ Return exactly one JSON object and no surrounding prose:
 
 Rules:
 - answer: explain state only. Never use it for an automatic advance trigger.
-- Never mutate title, goal, acceptanceCriteria, or deliveryTarget during automatic advance/recovery. contractPatch is allowed only for explicit user-originated refinement, never to make existing evidence pass.
+- Never mutate title, goal, acceptanceCriteria, or deliveryTarget during automatic advance/recovery. contractPatch is allowed only for explicit user-originated refinement, never to make existing evidence pass. For an older WorkItem with no acceptance criteria, request_human to establish its completion condition before commissioning new work.
 - create_actions: create 1..8 currently runnable Actions. Every Action needs type, objective, approach, expectedOutcome, capability, candidateVpIds, assignmentReason, sourceActionIds, workspaceMode, and optional maxAttempts/separateFromActionTypes. sourceActionIds are context/audit references, never scheduling dependencies. Do not include dependsOnActionIds, dependsOnStageIds, stages, or a graph.
 - A missing skill/capability label is not a missing execution capability. Prefer an existing VP with a task-specific brief. Missing tools, credentials, or authorization require request_human; never expand roles as a workaround. create_vp is only appropriate when creating a persistent role is itself an explicit user deliverable.
 - closeActions may accompany create_actions. Each entry is {"actionId":"failed or waiting durable Action id","reason":"why it is no longer required"}. Close only work made obsolete by replacement evidence or a clarified contract. Closed Actions remain audit history, are never acceptance evidence, and do not block completion.
