@@ -3,8 +3,14 @@
   flex: 0 0 auto;
 }
 
-.sidebar-work-center.collapsed {
-  padding: 4px 6px;
+.collapsed-icon-btn.sidebar-work-center-trigger {
+  width: 36px;
+  flex-shrink: 0;
+}
+
+.sidebar-work-center-trigger:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: -2px;
 }
 
 .sidebar-work-center-tab-bar {

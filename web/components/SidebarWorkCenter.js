@@ -34,7 +34,15 @@ export default {
     },
   },
   template: `
-    <section class="sidebar-work-center" :class="{ collapsed, active }">
+    <button v-if="collapsed" class="collapsed-icon-btn sidebar-work-center-trigger" type="button"
+            :class="{ active }" :title="tr('workCenter.title', 'Work Center')"
+            :aria-label="tr('workCenter.title', 'Work Center')" :aria-pressed="active"
+            @click="toggle">
+      <svg class="sidebar-work-center-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+        <path fill="currentColor" d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 5v2h10V8H7zm0 4v2h7v-2H7zm0 4v2h5v-2H7z"/>
+      </svg>
+    </button>
+    <section v-else class="sidebar-work-center" :class="{ active }">
       <div class="session-tab-bar sidebar-work-center-tab-bar">
         <button class="session-tab session-tab-solo sidebar-work-center-trigger" type="button" @click="toggle"
                 :class="{ active }" :aria-expanded="expanded ? 'true' : 'false'">

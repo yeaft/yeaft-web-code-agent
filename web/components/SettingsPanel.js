@@ -273,9 +273,15 @@ export default {
                     <span class="sp-label">{{ $t('settings.general.workCenter') }}</span>
                     <span class="sp-desc">{{ $t('settings.general.workCenterDesc') }}</span>
                   </div>
-                  <button class="sp-btn sp-btn-muted" @click="toggleWorkCenter">
-                    {{ chatStore.workCenterUiEnabled ? $t('settings.general.workCenterOn') : $t('settings.general.workCenterOff') }}
-                  </button>
+                  <div class="sp-actions-row">
+                    <button v-if="chatStore.workCenterUiEnabled" class="sp-btn" @click="openWorkCenter">
+                      {{ $t('settings.general.workCenterOpen') }}
+                    </button>
+                    <button class="sp-btn sp-btn-muted" role="switch" :aria-checked="chatStore.workCenterUiEnabled"
+                            :aria-label="$t('settings.general.workCenter')" @click="toggleWorkCenter">
+                      {{ chatStore.workCenterUiEnabled ? $t('settings.general.workCenterOn') : $t('settings.general.workCenterOff') }}
+                    </button>
+                  </div>
                 </div>
                 <div class="sp-row">
                   <span class="sp-label">{{ $t('files.officePreviewMode') }}</span>
@@ -916,6 +922,9 @@ export default {
 
     toggleWorkCenter() {
       this.chatStore.setWorkCenterUiEnabled(!this.chatStore.workCenterUiEnabled);
+    },
+    openWorkCenter() {
+      if (this.chatStore.enterWorkCenter()) this.$emit('close');
     },
 
     formatBytes(value) {

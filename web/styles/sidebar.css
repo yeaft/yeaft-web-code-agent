@@ -40,6 +40,13 @@
   display: none;
 }
 
+/* Unified and legacy lists belong to the expanded surface in both hosts.
+   Outrank the legacy .yeaft-sidebar .us-scroll.us-scroll-flush layout rule. */
+.session-sidebar-shell.collapsed > .sidebar-navigation,
+.session-sidebar-shell.collapsed > .us-scroll.us-scroll-flush {
+  display: none;
+}
+
 /* Collapsed Icon Bar */
 .sidebar-collapsed-bar {
   display: flex;
@@ -628,8 +635,7 @@
   padding: 0 8px;
 }
 
-/* Unified navigation: sessions are the primary object. Work Center lives in
-   the header; the list keeps one compact title/count/create row. */
+/* Unified navigation: primary destinations stay above the scrolling sessions. */
 .sidebar-navigation {
   flex: 1 1 auto;
   display: flex;

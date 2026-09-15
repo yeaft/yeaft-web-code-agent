@@ -2973,6 +2973,20 @@ describe('message flow regressions', () => {
     expect(component).not.toContain('M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 5v2h10V8H7zm0 4v2h7v-2H7zm0 4v2h5v-2H7z');
     await fallbackWorkCenter.get('.sidebar-work-center-trigger').trigger('click');
     expect(fallbackWorkCenter.emitted('open')).toEqual([[null]]);
+    await fallbackWorkCenter.setProps({ collapsed: true, active: true });
+    expect(fallbackWorkCenter.find('.session-tab-bar').exists()).toBe(false);
+    const railEntry = fallbackWorkCenter.get('button.collapsed-icon-btn');
+    expect(railEntry.attributes('aria-label')).toBe('Work Center');
+    expect(railEntry.attributes('aria-pressed')).toBe('true');
+    await railEntry.trigger('click');
+    expect(fallbackWorkCenter.emitted('open')).toEqual([[null], [null]]);
+    await fallbackWorkCenter.setProps({ agents: [
+      { id: 'unsupported', online: true, capabilities: [] },
+      { id: 'offline', online: false, capabilities: ['work_center'] },
+      { id: 'available', online: true, capabilities: ['work_center'] },
+    ] });
+    await railEntry.trigger('click');
+    expect(fallbackWorkCenter.emitted('open').at(-1)).toEqual(['available']);
     fallbackWorkCenter.unmount();
 
     const originalFetch = globalThis.fetch;
@@ -3184,9 +3198,27 @@ describe('message flow regressions', () => {
     expect(parentStore.enterWorkCenter).toHaveBeenCalledWith(null);
     yeaftSidebar.unmount();
     dialog.unmount();
-    globalThis.fetch = originalFetch;
     delete globalThis.Pinia.useChatStore;
     storeFactories.clear();
+    // Both slot surfaces must still render when the optional Pinia host is absent.
+    const noPiniaSidebar = mount(YeaftSidebar, {
+      props: { collapsed: true },
+      global: {
+        mocks: { $t: key => key },
+        stubs: {
+          SessionSidebarShell: shellStub,
+          SessionCreateModal: true,
+          SidebarModeToggle: true,
+          SidebarAgentHeader: true,
+          SidebarWorkCenter: true,
+        },
+      },
+    });
+    expect(noPiniaSidebar.vm.chatStore).toBeNull();
+    expect(noPiniaSidebar.find('.sidebar-collapsed-bar').exists()).toBe(true);
+    expect(noPiniaSidebar.findComponent(SidebarWorkCenter).exists()).toBe(false);
+    noPiniaSidebar.unmount();
+    globalThis.fetch = originalFetch;
 
     expect(chatPageSource).toContain('@create="onUnifiedCreate"');
     expect(chatPageSource).toContain('@create-in-project="onUnifiedCreateInProject"');

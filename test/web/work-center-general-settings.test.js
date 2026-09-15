@@ -13,6 +13,9 @@ describe('Work Center General settings contract', () => {
     expect(panel).toContain('@click="toggleWorkCenter"');
     expect(panel).toContain('chatStore.workCenterUiEnabled');
     expect(panel).toContain('this.chatStore.setWorkCenterUiEnabled(!this.chatStore.workCenterUiEnabled)');
+    expect(panel).toContain('role="switch" :aria-checked="chatStore.workCenterUiEnabled"');
+    expect(panel).toContain('@click="openWorkCenter"');
+    expect(panel).toContain("if (this.chatStore.enterWorkCenter()) this.$emit('close')");
     expect(panel).not.toContain(':disabled="workCenterDisabled"');
     expect(panel).not.toContain("!agent.capabilities?.includes('work_center_feature_settings')");
     expect(panel).not.toContain('loadWorkCenterFeatureSettings');
@@ -26,6 +29,7 @@ describe('Work Center General settings contract', () => {
       expect(source).toContain("'settings.general.workCenter'");
       expect(source).toContain("'settings.general.workCenterOn'");
       expect(source).toContain("'settings.general.workCenterOff'");
+      expect(source).toContain("'settings.general.workCenterOpen'");
     }
   });
 });

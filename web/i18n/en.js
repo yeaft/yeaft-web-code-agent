@@ -866,6 +866,7 @@ export default {
   'settings.general.language': 'Language',
   'settings.general.workCenter': 'Work Center',
   'settings.general.workCenterDesc': 'Show Work Center in the interface. Available Agents are selected inside Work Center.',
+  'settings.general.workCenterOpen': 'Open Work Center',
   'settings.general.workCenterEnvOverride': 'Controlled by the YEAFT_WORK_CENTER_ENABLED environment variable.',
   'settings.general.workCenterOn': 'On',
   'settings.general.workCenterOff': 'Off',
