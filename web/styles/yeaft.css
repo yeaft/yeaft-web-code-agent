@@ -842,10 +842,20 @@
 
 .yeaft-search-btn:hover,
 .yeaft-search-btn.active,
+.yeaft-search-btn:focus-visible,
 .yeaft-reload-btn:hover:not(:disabled),
-.yeaft-fork-btn:hover:not(:disabled) {
+.yeaft-reload-btn:focus-visible,
+.yeaft-fork-btn:hover:not(:disabled),
+.yeaft-fork-btn:focus-visible {
   background: var(--sidebar-hover);
   color: var(--text-primary);
+}
+
+.yeaft-search-btn:focus-visible,
+.yeaft-reload-btn:focus-visible,
+.yeaft-fork-btn:focus-visible {
+  outline: var(--sidebar-focus-ring-width) solid var(--accent-blue);
+  outline-offset: var(--sidebar-focus-ring-offset);
 }
 
 .yeaft-conversation-outline {

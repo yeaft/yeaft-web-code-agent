@@ -61,16 +61,20 @@ for (const scenario of [
       const rect = button.getBoundingClientRect();
       const searchRect = search.getBoundingClientRect();
       const title = header.querySelector('.yeaft-topbar-context').getBoundingClientRect();
+      const styles = getComputedStyle(button);
       return {
         right: rect.right, left: rect.left, width: rect.width, height: rect.height,
         searchWidth: searchRect.width, searchHeight: searchRect.height,
         titleWidth: title.width, overflow: header.scrollWidth - header.clientWidth,
+        outlineStyle: styles.outlineStyle, outlineWidth: styles.outlineWidth,
       };
     });
     expect(geometry.left).toBeGreaterThanOrEqual(0);
     expect(geometry.right).toBeLessThanOrEqual(scenario.width);
     expect(geometry.width).toBe(geometry.searchWidth);
     expect(geometry.height).toBe(geometry.searchHeight);
+    expect(geometry.outlineStyle).toBe('solid');
+    expect(parseFloat(geometry.outlineWidth)).toBeGreaterThan(0);
     expect(geometry.titleWidth).toBeGreaterThan(80);
     expect(geometry.overflow).toBeLessThanOrEqual(1);
     await page.screenshot({ path: testInfo.outputPath('fork-control.png') });
