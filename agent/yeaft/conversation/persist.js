@@ -1383,6 +1383,7 @@ export class ConversationStore {
   #chatColdDir;
   #legacyMsgDir;
   #legacyColdDir;
+  #fallbackNextSeq; // process-local ids when the durable allocator is read-only
   #nextSeqByThread; // Map<threadId, number> — per-thread counters (task-314)
 
   /**
@@ -1405,6 +1406,7 @@ export class ConversationStore {
     this.#legacyMsgDir = join(this.#legacyConvDir, 'messages');
     this.#legacyColdDir = join(this.#legacyConvDir, 'cold');
 
+    this.#fallbackNextSeq = null;
     this.#nextSeqByThread = new Map();
 
     // Ensure new chat and session-root directories exist (graceful on permission
@@ -1430,6 +1432,17 @@ export class ConversationStore {
   }
 
   // ─── Write API ──────────────────────────────────────────
+
+  #reserveFallbackSeqRange(count) {
+    const size = Math.max(1, Math.floor(Number(count) || 1));
+    if (!Number.isSafeInteger(this.#fallbackNextSeq) || this.#fallbackNextSeq <= 0) {
+      try { this.#fallbackNextSeq = this.#scanNextSeq(); }
+      catch { this.#fallbackNextSeq = Date.now(); }
+    }
+    const first = this.#fallbackNextSeq;
+    this.#fallbackNextSeq += size;
+    return first;
+  }
 
   #markDirty(message, reason, sourceIds = null) {
     const sessionId = message?.sessionId || null;
@@ -1472,7 +1485,26 @@ export class ConversationStore {
    * @returns {object} — the persisted message with id assigned
    */
   append(msg) {
-    const seq = this.#reserveSeqRange(1);
+    let seq;
+    try {
+      seq = this.#reserveSeqRange(1);
+    } catch (err) {
+      if (!isPermissionError(err)) throw err;
+      // Live chat remains best-effort when its data root is read-only. The
+      // returned row is usable by the current turn but is intentionally not
+      // persisted; strict operations such as Session copy bypass this path.
+      seq = this.#reserveFallbackSeqRange(1);
+      if (!_permissionWarned) {
+        console.warn(`[Yeaft] Cannot reserve message id: ${err.code} — message not persisted`);
+        _permissionWarned = true;
+      }
+      return {
+        ...msg,
+        id: `m${String(seq).padStart(4, '0')}`,
+        time: msg.time || new Date().toISOString(),
+        tokens_est: msg.tokens_est || estimateTokens(msg.content || ''),
+      };
+    }
     const id = `m${String(seq).padStart(4, '0')}`;
     const fullMsg = {
       ...msg,
@@ -1516,7 +1548,23 @@ export class ConversationStore {
   appendBatch(messages) {
     const rows = (messages || []).filter(Boolean);
     if (rows.length === 0) return [];
-    const firstSeq = this.#reserveSeqRange(rows.length);
+    let firstSeq;
+    try {
+      firstSeq = this.#reserveSeqRange(rows.length);
+    } catch (err) {
+      if (!isPermissionError(err)) throw err;
+      firstSeq = this.#reserveFallbackSeqRange(rows.length);
+      if (!_permissionWarned) {
+        console.warn(`[Yeaft] Cannot reserve message ids: ${err.code} — message batch not persisted`);
+        _permissionWarned = true;
+      }
+      return rows.map((msg, index) => ({
+        ...msg,
+        id: `m${String(firstSeq + index).padStart(4, '0')}`,
+        time: msg.time || new Date().toISOString(),
+        tokens_est: msg.tokens_est || estimateTokens(msg.content || ''),
+      }));
+    }
     const persisted = rows.map((msg, index) => ({
       ...msg,
       id: `m${String(firstSeq + index).padStart(4, '0')}`,
@@ -1733,10 +1781,9 @@ export class ConversationStore {
     for (const dir of [this.#chatDir, ...this.#sessionConversationDirs({ primaryOnly: true })]) {
       this.#segmentStoreForConversationDir(dir).clear();
     }
-    try { unlinkSync(join(this.#dir, MESSAGE_SEQUENCE_FILE)); } catch (error) {
-      if (error?.code !== 'ENOENT' && !isPermissionError(error)) throw error;
-    }
-    messageSequenceReservations.delete(resolve(this.#dir));
+    // Message ids are root-global durable identities. Clearing transcript rows
+    // must not rewind the allocator: another Agent process may still hold a
+    // previously reserved range, and reusing ids would corrupt later history.
     this.updateIndex({ totalMessages: 0, lastMessageId: null });
     this.#markAllDirty('clear');
   }
@@ -3454,7 +3501,10 @@ export class ConversationStore {
       } catch (error) {
         if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
       }
-      const firstSeq = recordedNext ?? this.#scanNextSeq();
+      // A syntactically valid sidecar can still be stale after a partial restore
+      // or crash. Never trust it below the durable transcript high-water mark.
+      const scannedNext = this.#scanNextSeq();
+      const firstSeq = Math.max(recordedNext || 1, scannedNext);
       epoch ||= randomUUID();
       writeAtomic(sequencePath, `${JSON.stringify({ version: 1, epoch, nextSeq: firstSeq + durableSize })}\n`, { mode: 0o600 });
       messageSequenceReservations.set(rootKey, {

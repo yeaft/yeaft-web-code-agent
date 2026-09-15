@@ -539,6 +539,25 @@ describe('ConversationStore', () => {
       expect(Number(later.id.slice(1))).toBeGreaterThan(Math.max(...[...idMap.values()].map(id => Number(id.slice(1)))));
     });
 
+    it('repairs a valid but stale sequence sidecar from the durable high-water mark', () => {
+      const rows = new ConversationStore(TEST_DIR).appendBatch(Array.from({ length: 300 }, (_, index) => ({
+        role: index % 2 ? 'assistant' : 'user',
+        content: `durable-${index}`,
+        sessionId: 'session_stale_sidecar',
+      })));
+      const sequencePath = join(TEST_DIR, 'message-sequence.json');
+      const recorded = JSON.parse(readFileSync(sequencePath, 'utf8'));
+      writeFileSync(sequencePath, `${JSON.stringify({ ...recorded, nextSeq: 2 })}\n`);
+
+      const later = new ConversationStore(TEST_DIR).append({
+        role: 'user', content: 'after stale sidecar', sessionId: 'session_stale_sidecar',
+      });
+
+      expect(Number(later.id.slice(1))).toBeGreaterThan(Number(rows.at(-1).id.slice(1)));
+      expect(JSON.parse(readFileSync(sequencePath, 'utf8')).nextSeq)
+        .toBeGreaterThan(Number(later.id.slice(1)));
+    });
+
     it('recovers a corrupt sequence sidecar by scanning durable messages and invalidates old reservations', () => {
       const firstStore = new ConversationStore(TEST_DIR);
       const recoveryStore = new ConversationStore(TEST_DIR);
@@ -557,6 +576,25 @@ describe('ConversationStore', () => {
         version: 1,
         epoch: expect.any(String),
       });
+    });
+
+    it.skipIf(process.platform === 'win32')('keeps live append best-effort when the allocator root is read-only', () => {
+      const readOnlyRoot = join(TEST_DIR, 'read-only-root');
+      const readOnlyStore = new ConversationStore(readOnlyRoot);
+      chmodSync(readOnlyRoot, 0o555);
+      try {
+        const row = readOnlyStore.append({
+          role: 'user', content: 'ephemeral only', sessionId: 'session_read_only',
+        });
+        const batch = readOnlyStore.appendBatch([
+          { role: 'assistant', content: 'ephemeral batch', sessionId: 'session_read_only' },
+        ]);
+        expect(row).toMatchObject({ role: 'user', content: 'ephemeral only', id: expect.stringMatching(/^m\d+$/) });
+        expect(batch).toHaveLength(1);
+        expect(readOnlyStore.loadAllBySession('session_read_only')).toEqual([]);
+      } finally {
+        chmodSync(readOnlyRoot, 0o755);
+      }
     });
 
     it('does not reclaim an aged lock owned by the live local process', () => {
@@ -2733,11 +2771,16 @@ legacy session`, { encoding: 'utf8' });
       expect(store.countCold()).toBe(0);
     });
 
-    it('should reset sequence numbering', () => {
-      store.append({ role: 'user', content: 'Old' });
+    it('does not reuse global message ids or reset the allocator after clearing transcript rows', () => {
+      const old = store.append({ role: 'user', content: 'Old' });
+      const sequencePath = join(TEST_DIR, 'message-sequence.json');
+      const before = JSON.parse(readFileSync(sequencePath, 'utf8'));
       store.clear();
-      const msg = store.append({ role: 'user', content: 'New' });
-      expect(msg.id).toBe('m0001');
+      const afterClear = JSON.parse(readFileSync(sequencePath, 'utf8'));
+      const msg = new ConversationStore(TEST_DIR).append({ role: 'user', content: 'New' });
+
+      expect(afterClear).toEqual(before);
+      expect(Number(msg.id.slice(1))).toBeGreaterThan(Number(old.id.slice(1)));
     });
   });
 
