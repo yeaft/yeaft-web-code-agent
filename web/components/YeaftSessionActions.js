@@ -18,7 +18,7 @@ export default {
       <button
         v-if="showFork"
         type="button"
-        class="btn-ghost yeaft-fork-btn"
+        class="yeaft-fork-btn"
         :disabled="forkDisabled"
         :aria-busy="forkPending ? 'true' : 'false'"
         :title="forkTitle || $t('yeaft.session.forkCurrent')"

@@ -598,16 +598,40 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 5px;
   min-height: 32px;
-  padding: 0 6px;
-  white-space: nowrap;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
   color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.yeaft-fork-btn:hover:not(:disabled),
+.yeaft-fork-btn:focus-visible {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.yeaft-fork-btn:focus-visible {
+  outline: var(--sidebar-focus-ring-width) solid var(--accent-blue);
+  outline-offset: var(--sidebar-focus-ring-offset);
 }
 
 .yeaft-fork-btn:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
   cursor: not-allowed;
+}
+
+.yeaft-fork-btn svg {
+  flex: 0 0 16px;
 }
 
 .yeaft-topbar-right {
