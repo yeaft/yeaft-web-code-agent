@@ -336,9 +336,10 @@ function sleepWithAbort(ms, signal) {
  *   - `toolCalls` on assistant turns (the LLM's function_call requests)
  *   - `toolCallId` + `isError` on tool turns (the paired tool_result)
  *
- * Content is kept intact for the live protocol. The file-backed debug trace
- * applies its own configured byte budget at persistence time so the model
- * request path never pays an extra copy just for diagnostics.
+ * Content is kept intact for the live protocol. Raw provider exchanges belong
+ * to the loop-level file-backed trace, never to its message snapshots: copying
+ * historical rawRequest values here multiplies retained request bodies on every
+ * tool loop. Do not even traverse diagnostic fields on incoming messages.
  *
  * Pure function — no side effects on the input message.
  *
@@ -348,7 +349,6 @@ function sleepWithAbort(ms, signal) {
 export function mapDebugMessage(m) {
   const out = { role: m.role };
   out.content = m.content;
-  if (m.rawRequest != null) out.rawRequest = m.rawRequest;
   if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
     out.toolCalls = m.toolCalls.map(tc => ({
       id: tc.id,
@@ -3741,7 +3741,10 @@ export class Engine {
       // yielding any post-stream diagnostics. A consumer may stop iterating at
       // any yield; persistence therefore cannot wait for turn_end or even the
       // debug `loop` event below.
-      const assistantMsg = { role: 'assistant', content: responseText, responseKind: 'progress', ...(rawRequest ? { rawRequest } : {}) };
+      // The complete exchange is already owned by the per-loop debug trace.
+      // Keeping it on model history retains every previous request and makes
+      // subsequent debug snapshots grow with cumulative request bodies.
+      const assistantMsg = { role: 'assistant', content: responseText, responseKind: 'progress' };
       if (toolCalls.length > 0) {
         assistantMsg.toolCalls = toolCalls.map(tc => ({
           id: tc.id,

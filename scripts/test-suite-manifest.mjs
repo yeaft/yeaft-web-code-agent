@@ -39,6 +39,7 @@ export const CORE_TEST_FILES = Object.freeze([
   'test/agent/yeaft/harness-integration.test.js',
   'test/agent/yeaft/dream-toggle.test.js',
   'test/agent/yeaft/engine.test.js',
+  'test/agent/yeaft/debug-trace-memory.test.js',
   'test/agent/yeaft/engine-post-compact.test.js',
   'test/agent/yeaft/history-window.test.js',
   'test/yeaft-history-buckets.test.js',
