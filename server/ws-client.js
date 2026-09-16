@@ -16,6 +16,7 @@ import {
   BROWSER_RUNTIME_PROTOCOL,
   BROWSER_RUNTIME_SETUP_PROTOCOL,
   WORKBENCH_ROUTE_PROTOCOL,
+  WORK_CENTER_WORKBENCH_PROTOCOL,
 } from './client-protocol.js';
 import {
   clearWorkbenchCorrelationsForClient,
@@ -112,6 +113,7 @@ export function handleWebConnection(ws, url, req = {}) {
     encryptOutbound: true,
     // Explicit protocols have no omission-based downgrade for security fields.
     workbenchRouteProtocol: 0,
+    workCenterWorkbenchProtocol: 0,
     browserRuntimeProtocol: 0,
     browserRuntimeSetupProtocol: 0,
   });
@@ -141,6 +143,7 @@ export function handleWebConnection(ws, url, req = {}) {
       acceptPlaintext: true,
       yeaftSessionInventoryComplete: true,
       workbenchRouteProtocol: WORKBENCH_ROUTE_PROTOCOL,
+      workCenterWorkbenchProtocol: WORK_CENTER_WORKBENCH_PROTOCOL,
       browserRuntimeProtocol: BROWSER_RUNTIME_PROTOCOL,
       browserRuntimeSetupProtocol: BROWSER_RUNTIME_SETUP_PROTOCOL,
       browserRuntimeEnabled: CONFIG.browserRuntime.enabled,
@@ -259,6 +262,7 @@ async function handleWebMessage(clientId, msg) {
     await sendToWebClient(client, {
       type: 'client_hello_ack',
       workbenchRouteProtocol: client.workbenchRouteProtocol,
+      workCenterWorkbenchProtocol: client.workCenterWorkbenchProtocol,
       browserRuntimeProtocol: client.browserRuntimeProtocol,
       browserRuntimeSetupProtocol: client.browserRuntimeSetupProtocol,
       browserRuntimeEnabled: CONFIG.browserRuntime.enabled,

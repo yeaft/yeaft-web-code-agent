@@ -970,6 +970,11 @@ export function projectWorkItemDetail(detail, options = {}) {
   }
   const projected = {
     id: detail.id,
+    // The browser needs the Agent-resolved workspace only to bind an explicitly
+    // selected WorkItem Workbench. It is not included in board/list projections.
+    workbench: typeof detail.workDir === 'string' && detail.workDir.trim()
+      ? { workDir: detail.workDir.trim() }
+      : null,
     revision: detail.revision,
     planRevision: count(detail.planRevision),
     ledgerRevision: count(detail.ledgerRevision),

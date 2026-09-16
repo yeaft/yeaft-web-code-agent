@@ -7,6 +7,7 @@ import {
 import {
   agentSupportsWorkbenchRequestCorrelation,
   resolveWorkbenchRequest,
+  workbenchPathWithinWorkspace,
 } from '../workbench-route.js';
 import {
   deleteWorkbenchRequest,
@@ -157,6 +158,35 @@ function workbenchFailureResponse({ agentId, msg, resolved, error }) {
   };
 }
 
+const WORKBENCH_PATH_FIELDS = Object.freeze({
+  read_file: ['filePath'],
+  video_metadata: ['filePath'],
+  write_file: ['filePath'],
+  list_directory: ['dirPath'],
+  git_diff: ['filePath'],
+  git_add: ['filePath'],
+  git_reset: ['filePath'],
+  git_restore: ['filePath'],
+  file_search: ['dirPath'],
+  create_file: ['filePath'],
+  delete_files: ['paths'],
+  move_files: ['paths', 'destination'],
+  copy_files: ['paths', 'destination'],
+  upload_to_dir: ['dirPath'],
+});
+
+function workCenterPathsAreConfined(msg, resolved) {
+  if (resolved.route?.runtimeProvider !== 'work-center') return true;
+  for (const field of WORKBENCH_PATH_FIELDS[msg.type] || []) {
+    const values = Array.isArray(msg[field]) ? msg[field] : [msg[field]];
+    for (const value of values) {
+      if (value == null || value === '') continue;
+      if (!workbenchPathWithinWorkspace(value, resolved.workDir)) return false;
+    }
+  }
+  return true;
+}
+
 function canonicalWorkbenchMessage(msg, resolved, { canonicalWorkDir = false } = {}) {
   const {
     _requestUserId: _ignoredUserId,
@@ -168,6 +198,7 @@ function canonicalWorkbenchMessage(msg, resolved, { canonicalWorkDir = false } =
     ...clientFields,
     ...(resolved.conversationId ? { conversationId: resolved.conversationId } : {}),
   };
+  if (!workCenterPathsAreConfined(clientFields, resolved)) return null;
   return {
     ...clientFields,
     agentId: resolved.agentId,
@@ -233,6 +264,10 @@ function correlateWorkbenchRequest({ agentId, clientId, client, msg, resolved, c
 }
 
 async function forwardCorrelatedWorkbenchRequest({ agentId, clientId, client, msg, resolved, canonical }) {
+  if (!canonical) {
+    await denyWorkbenchRoute(client, msg);
+    return true;
+  }
   const outbound = correlateWorkbenchRequest({ agentId, clientId, client, msg, resolved, canonical });
   if (!outbound) return false;
   try {
@@ -465,7 +500,7 @@ export async function handleClientWorkbench(clientId, client, msg, checkAgentAcc
         client,
         msg,
         resolved,
-        canonical: { ...canonical, type: 'list_directory' },
+        canonical: canonical ? { ...canonical, type: 'list_directory' } : null,
       });
       break;
     }

@@ -6,15 +6,17 @@ function cleanRoutePart(value) {
  * Build the stable browser-side identity for one Workbench owner.
  * Each component cache and request must be scoped to this exact route.
  *
- * @param {{runtimeProvider?:string, agentId?:string, sessionId?:string}|null} route
+ * @param {{runtimeProvider?:string, agentId?:string, sessionId?:string, workItemId?:string}|null} route
  * @returns {string}
  */
 export function workbenchRouteKey(route) {
   const runtimeProvider = cleanRoutePart(route?.runtimeProvider);
   const agentId = cleanRoutePart(route?.agentId);
-  const sessionId = cleanRoutePart(route?.sessionId);
-  if (!runtimeProvider || !agentId || !sessionId) return '';
-  return [runtimeProvider, agentId, sessionId]
+  const ownerId = runtimeProvider === 'work-center'
+    ? cleanRoutePart(route?.workItemId)
+    : cleanRoutePart(route?.sessionId);
+  if (!runtimeProvider || !agentId || !ownerId) return '';
+  return [runtimeProvider, agentId, ownerId]
     .map(part => encodeURIComponent(part))
     .join(':');
 }
@@ -62,7 +64,7 @@ export function workbenchMessageScope(message, routeKey) {
  * always come from the route selected when the component was activated.
  *
  * @param {object} store
- * @param {{routeKey:string,runtimeProvider:string,agentId:string,sessionId:string,conversationId:string,workDir:string}} route
+ * @param {{routeKey:string,runtimeProvider:string,agentId:string,sessionId?:string,workItemId?:string,conversationId:string,workDir:string,workspaceLocked?:boolean}} route
  * @returns {object}
  */
 export function createRouteBoundWorkbenchStore(store, route) {
@@ -70,7 +72,9 @@ export function createRouteBoundWorkbenchStore(store, route) {
     const workbenchRoute = {
       runtimeProvider: cleanRoutePart(route.runtimeProvider),
       agentId: cleanRoutePart(route.agentId),
-      sessionId: cleanRoutePart(route.sessionId),
+      ...(route.runtimeProvider === 'work-center'
+        ? { workItemId: cleanRoutePart(route.workItemId) }
+        : { sessionId: cleanRoutePart(route.sessionId) }),
     };
     let workbenchScope = 'main';
     if (message.conversationId === '_folder_picker') workbenchScope = 'files-folder-picker';
@@ -84,7 +88,8 @@ export function createRouteBoundWorkbenchStore(store, route) {
       workbenchScope,
       conversationId: workbenchConversationId(route.routeKey, workbenchScope),
     };
-    if (!Object.hasOwn(scoped, 'workDir') && route.workDir) scoped.workDir = route.workDir;
+    if (route.workspaceLocked === true) scoped.workDir = route.workDir;
+    else if (!Object.hasOwn(scoped, 'workDir') && route.workDir) scoped.workDir = route.workDir;
     return store.sendWsMessage(scoped);
   };
 
@@ -97,7 +102,9 @@ export function createRouteBoundWorkbenchStore(store, route) {
         return {
           runtimeProvider: route.runtimeProvider,
           agentId: route.agentId,
-          sessionId: route.sessionId,
+          ...(route.runtimeProvider === 'work-center'
+            ? { workItemId: route.workItemId }
+            : { sessionId: route.sessionId }),
         };
       }
       if (property === 'sendWsMessage') return sendWsMessage;

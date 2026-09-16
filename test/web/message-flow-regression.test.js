@@ -3499,6 +3499,7 @@ describe('message flow regressions', () => {
     expect(pluginCenterCss).not.toMatch(/#[0-9a-f]{3,8}|rgba?\(/i);
     expect(pluginCenterCss).not.toMatch(/(?:^|[;{])\s*(?:gap|margin(?:-[a-z]+)?|padding(?:-[a-z]+)?|font-size|min-(?:width|height)|max-width|width|height|border(?:-(?:top|right|bottom|left))?|outline(?:-offset)?|border-radius)\s*:\s*-?\d+(?:\.\d+)?(?:px|rem|em)/im);
     const workCenterStore = {
+      hasAgentCapability: () => false,
       workCenterAgentId: 'agent-a',
       currentAgent: 'agent-a',
       agents: [
@@ -3579,7 +3580,8 @@ describe('message flow regressions', () => {
     });
     expect(emptyWorkCenterPage.text()).toContain('The online Agents do not support Work Center settings');
     expect(emptyWorkCenterPage.text()).toContain('Open Agent settings to upgrade');
-    expect(emptyWorkCenterPage.find('.work-center-header-actions').exists()).toBe(false);
+    expect(emptyWorkCenterPage.find('.work-center-header-actions').exists()).toBe(true);
+    expect(emptyWorkCenterPage.find('.work-center-close-button').exists()).toBe(true);
     expect(emptyWorkCenterPage.find('.work-center-agent-picker').exists()).toBe(false);
     expect(emptyWorkCenterPage.find('.work-center-body').exists()).toBe(false);
     expect(emptyWorkCenterStore.listWorkItems).not.toHaveBeenCalled();
@@ -3806,7 +3808,7 @@ describe('message flow regressions', () => {
     expect(workCenterCss).not.toContain('.work-center-triage-summary');
     expect(workCenterCss).toMatch(/@container work-center \(max-width:\s*1024px\)\s*\{[\s\S]*?\.work-center-detail-layout\.content-open \.work-center-conversation-pane\s*\{[^}]*display:\s*none;/s);
     expect(workCenterCss).not.toContain('@container work-center (max-width: 700px)');
-    expect(workCenterCss).toMatch(/\.work-center-detail-heading\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 2fr\) minmax\(0, 1fr\);/s);
+    expect(workCenterCss).toMatch(/\.work-center-detail-heading\s*\{[^}]*display:\s*flex;[^}]*max-width:\s*var\(--work-center-conversation-column-width\);/s);
     expect(workCenterCss).toMatch(/\.work-center-action-description,[\s\S]*?white-space:\s*nowrap;/);
     expect(workCenter).not.toContain('coordinatorRequestedSelectedActionInput');
     expect(workCenter).not.toContain("next?.routedTo === 'coordinator'");
@@ -3814,7 +3816,7 @@ describe('message flow regressions', () => {
     expect(workCenter).not.toContain("message.recovery?.actionId === this.selectedAction.id");
     expect(workCenter).toContain(":class=\"{ 'showing-detail': narrowPane !== 'items' }\"");
     expect(workCenterCss).toMatch(/\.work-center-shell\.showing-detail\s*\{[\s\S]*?padding: 0;/);
-    expect(workCenterCss).toMatch(/\.work-center-detail-heading\s*\{[\s\S]*?min-height: 40px;[\s\S]*?padding: 4px 16px;/);
+    expect(workCenterCss).toMatch(/\.work-center-detail-heading\s*\{[^}]*min-height: 48px;[^}]*padding: 4px var\(--work-center-conversation-gutter\);/);
     expect(workCenter).toContain('workItemMessageSpeaker(message)');
     expect(workCenter).toContain('workCenter.messageSpeakerRole');
     expect(workCenter).not.toContain("tr('workCenter.assistant', 'Yeaft')");

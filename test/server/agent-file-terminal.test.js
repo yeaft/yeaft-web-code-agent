@@ -19,6 +19,7 @@ import {
   handleWriteFile,
   MAX_WORKBENCH_PREVIEW_BYTES,
 } from '../../agent/workbench/file-ops.js';
+import { rememberWorkItemWorkspace, __testResetWorkItemWorkspaces } from '../../server/work-center-workspace-cache.js';
 import { resolveFileReferences } from '../../agent/workbench/file-reference-resolver.js';
 
 const {
@@ -3231,4 +3232,38 @@ describe('Agent file terminal forwarding', () => {
     expect(removeChild).toHaveBeenCalledWith(anchor);
     globalThis.document = previousDocument;
   });
+});
+
+
+it('routes WorkItem file operations through canonical cwd and denies escaped directories', async () => {
+  __testResetWorkItemWorkspaces();
+  installRouteAgent('workbench-agent');
+  agents.get('workbench-agent').capabilities.push('work_center_workbench');
+  rememberWorkItemWorkspace('workbench-user', 'workbench-agent', {
+    id: 'item-1', workbench: { workDir: '/work/item' },
+  });
+  const client = routeClient('workbench-user', { workCenterWorkbenchProtocol: 1 });
+  const route = { runtimeProvider: 'work-center', agentId: 'workbench-agent', workItemId: 'item-1' };
+  const access = vi.fn(async () => true);
+  forwardToAgent.mockClear();
+  await handleClientWorkbench('wc-client', client, {
+    type: 'read_file', requestId: 'read-output', agentId: 'workbench-agent',
+    workbenchRoute: route, filePath: 'docs/result.md', workDir: '/forged/chat-cwd',
+  }, access);
+  expect(forwardToAgent).toHaveBeenCalledWith('workbench-agent', expect.objectContaining({
+    workDir: '/work/item', workbenchRoute: route, conversationId: '_workbench:work-center:workbench-agent:item-1',
+    _workbenchRequestId: expect.any(String),
+  }));
+  forwardToAgent.mockClear();
+  for (const message of [
+    { type: 'list_directory', dirPath: '/outside' },
+    { type: 'read_file', filePath: '../private.txt' },
+    { type: 'write_file', filePath: '../private.txt', content: 'bad' },
+  ]) {
+    await handleClientWorkbench('wc-client', client, {
+      ...message, requestId: 'deny-output', agentId: 'workbench-agent', workbenchRoute: route,
+    }, access);
+  }
+  expect(forwardToAgent).not.toHaveBeenCalled();
+  __testResetWorkItemWorkspaces();
 });

@@ -1800,6 +1800,12 @@ export default {
   'yeaft.toolStats.col.last': '最近',
   'yeaft.toolStats.buttonLabel': '工具统计',
 
+  'workCenter.workbenchUnavailable': '请在新版 Agent 和 Server 上打开有工作目录的工作项以使用工作台。',
+  'workCenter.openOutputFile': '打开文件：{name}',
+  'workCenter.close': '关闭工作中心',
+  'workCenter.searchAndFilters': '搜索与筛选',
+  'workCenter.moreActions': '更多操作',
+  'workCenter.navigation': '工作项导航',
   'workCenter.title': '工作中心',
   'workCenter.subtitle': '由当前 Agent 持续推进的持久工作',
   'workCenter.agent': 'Agent',

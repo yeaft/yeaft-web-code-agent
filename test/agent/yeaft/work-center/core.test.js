@@ -707,13 +707,14 @@ describe('Work Center core', () => {
     expect(sameTimeOlderPage.messages.map(message => message.text)).toEqual(['same-time input']);
 
     const detail = projectWorkItemDetail({
-      id: 'work-item-conversation', revision: 1, planRevision: 0, ledgerRevision: 0,
+      id: 'work-item-conversation', workDir: '/workspace/work-item', revision: 1, planRevision: 0, ledgerRevision: 0,
       coordinatorRevision: 0, title: 'Conversation', goal: 'Keep one Action conversation',
       acceptanceCriteria: [], workflowTemplate: 'software-change', status: 'running',
       lifecycle: 'active', attentionState: 'none', currentActionId: action.id,
       actions: [{ ...action, sequence: 1, type: 'implement', status: 'completed' }],
       runs, events, messages: [], attachments: [], createdAt: 1_000, updatedAt: 1_050,
     });
+    expect(detail.workbench).toEqual({ workDir: '/workspace/work-item' });
     expect(detail.actions[0].messages.map(message => message.text)).toEqual([
       'First execution failed.',
       'Please retry with the corrected constraint.',

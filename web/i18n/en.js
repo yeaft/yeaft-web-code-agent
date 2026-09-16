@@ -1803,6 +1803,12 @@ export default {
   'yeaft.toolStats.col.last': 'Last',
   'yeaft.toolStats.buttonLabel': 'Tool Stats',
 
+  'workCenter.workbenchUnavailable': 'Open a Work Item with a workspace on an updated Agent and Server to use Workbench.',
+  'workCenter.openOutputFile': 'Open file: {name}',
+  'workCenter.close': 'Close Work Center',
+  'workCenter.searchAndFilters': 'Search and filters',
+  'workCenter.moreActions': 'More actions',
+  'workCenter.navigation': 'Work item navigation',
   'workCenter.title': 'Work Center',
   'workCenter.subtitle': 'Persistent work owned by this Agent',
   'workCenter.agent': 'Agent',

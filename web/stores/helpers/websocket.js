@@ -156,6 +156,7 @@ export function connect(store) {
   store._hasHandledYeaftSessionHydrate = false;
   store.yeaftSessionInventoryCompleteSupported = null;
   store.workbenchRouteProtocolSupported = null;
+  store.workCenterWorkbenchProtocolSupported = null;
   store.browserRuntimeProtocolSupported = null;
   store.browserRuntimeSetupProtocolSupported = null;
   store.browserRuntimeServerEnabled = false;
@@ -253,6 +254,7 @@ export function connect(store) {
         type: 'client_hello',
         plaintextOk: true,
         workbenchRouteProtocol: 1,
+        workCenterWorkbenchProtocol: 1,
         browserRuntimeProtocol: 1,
         browserRuntimeSetupProtocol: 1,
       }));
@@ -286,6 +288,7 @@ export function connect(store) {
     store._hasHandledYeaftSessionHydrate = false;
     store.yeaftSessionInventoryCompleteSupported = null;
     store.workbenchRouteProtocolSupported = null;
+    store.workCenterWorkbenchProtocolSupported = null;
     store.browserRuntimeProtocolSupported = null;
     store.browserRuntimeSetupProtocolSupported = null;
     store.browserRuntimeServerEnabled = false;
