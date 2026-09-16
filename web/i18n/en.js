@@ -1953,6 +1953,7 @@ export default {
   'workCenter.actionFlow': 'Action flow',
   'workCenter.viewActions': 'View Actions',
   'workCenter.actionsPanel': 'Actions',
+  'workCenter.resizeActions': 'Resize Actions panel (arrow keys to adjust, Home to reset)',
   'workCenter.closeActions': 'Close Actions',
   'workCenter.actionCount': '{count} Actions',
   'workCenter.noActionSummary': 'No summary yet',

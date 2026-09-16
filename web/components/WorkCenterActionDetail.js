@@ -16,7 +16,7 @@ export default {
     previewingAttachmentId: { type: String, default: null },
     attachmentError: { type: String, default: '' },
   },
-  emits: ['back', 'close', 'load-earlier-messages', 'open-attachment', 'quote', 'edit-as-new'],
+  emits: ['load-earlier-messages', 'open-attachment', 'quote', 'edit-as-new'],
   computed: {
     executorName() {
       return this.action?.assignedVp?.name || this.action?.assignedVp?.id
@@ -134,18 +134,6 @@ export default {
   },
   template: `
     <section class="work-center-action-detail-pane" v-if="action">
-      <header class="work-center-action-detail-header">
-        <button class="work-center-icon-button" type="button" @click="$emit('back')" :title="tr('workCenter.backToActions', 'Back to Actions')" :aria-label="tr('workCenter.backToActions', 'Back to Actions')">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2Z"/></svg>
-        </button>
-        <div class="work-center-action-detail-title">
-          <strong>{{ $t('workCenter.actionNumber', { number: actionSequence() }) }}</strong>
-        </div>
-        <button class="work-center-icon-button" type="button" @click="$emit('close')" :title="tr('workCenter.closeActions', 'Close Actions')" :aria-label="tr('workCenter.closeActions', 'Close Actions')">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4l-6.3 6.31-1.42-1.42L9.17 12l-6.3-6.29 1.42-1.42 6.3 6.31 6.3-6.31 1.41 1.42Z"/></svg>
-        </button>
-      </header>
-
       <div class="work-center-action-detail-scroll">
         <div class="work-center-action-conversation-column">
           <section class="work-center-action-overview">

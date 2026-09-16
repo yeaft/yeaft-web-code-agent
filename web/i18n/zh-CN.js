@@ -1950,6 +1950,7 @@ export default {
   'workCenter.actionFlow': 'Action 流程',
   'workCenter.viewActions': '查看 Actions',
   'workCenter.actionsPanel': 'Actions',
+  'workCenter.resizeActions': '调整 Actions 栏宽度（方向键调整，Home 重置）',
   'workCenter.closeActions': '关闭 Actions',
   'workCenter.actionCount': '{count} 个 Action',
   'workCenter.noActionSummary': '暂无摘要',
