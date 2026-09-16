@@ -98,6 +98,7 @@ export const CORE_TEST_FILES = Object.freeze([
   'test/web/history-sender-filter.test.js',
   'test/web/file-tree-refresh.test.js',
   'test/web/files-response-correlation.test.js',
+  'test/web/file-tabs-read-recovery.test.js',
   'test/web/message-flow-regression.test.js',
   'test/web/agent-settings-lifecycle.test.js',
   'test/web/message-file-preview.test.js',

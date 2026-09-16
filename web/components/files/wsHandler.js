@@ -3,6 +3,7 @@
  * Centralizes all workbench-message handling in one place.
  */
 import { getFileType, isMarkdownFile } from './fileEditor.js';
+import { requestFileContent } from './fileTabs.js';
 import { isWorkbenchMessageForRoute, workbenchMessageScope } from '../../utils/workbench-route.js';
 
 export function createWsHandler({
@@ -255,24 +256,15 @@ export function createWsHandler({
             const agentId = store.currentAgent || null;
             const conversationId = store.currentConversation || '_explorer';
             const workDir = getEffectiveWorkDir();
-            const requestId = `file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
             openFiles.value.push({
-              path: nPath, name, agentId, conversationId, workDir, requestId,
+              path: nPath, name, agentId, conversationId, workDir,
               content: null, originalContent: null,
               isDirty: false, cmInstance: null, fileType,
               blobUrl: null, previewUrl: null,
               previewLoading: fileType !== 'text', localPreviewReady: false, previewError: null,
               loading: true, loadError: null
             });
-            store.sendWsMessage({
-              type: fileType === 'video' ? 'video_metadata' : 'read_file',
-              conversationId,
-              agentId,
-              requestId,
-              filePath: file.path,
-              workDir,
-              _clientId: store.clientId
-            });
+            requestFileContent(store, openFiles.value.at(-1), file.path, { t });
           }
           activeFileIndex.value = (pendingRestoreIndex >= 0 && pendingRestoreIndex < totalFiles)
             ? pendingRestoreIndex : 0;

@@ -295,8 +295,13 @@ export default {
     const pendingMessageImageReads = new Map();
     const pendingFileReferenceRequests = new Map();
     const requestedFileReferences = new Set();
+    const admittedFileReferences = new Set();
+    const retryableFileReferences = new Set();
+    const fileReferenceRetries = new Map();
+    const fileReferenceRechecks = new Map();
     let fileReferenceRequestContextKey = '';
     let fileReferenceTimer = null;
+    let fileReferenceRetryTimer = null;
     const t = Vue.inject('t');
 
     // AskUserQuestion — delegate to AskCard component
@@ -451,15 +456,22 @@ export default {
     const localImagePaths = new Set();
     const resetFileReferenceResolution = () => {
       clearTimeout(fileReferenceTimer);
+      clearTimeout(fileReferenceRetryTimer);
       fileReferenceTimer = null;
+      fileReferenceRetryTimer = null;
       pendingFileReferenceRequests.clear();
       requestedFileReferences.clear();
+      admittedFileReferences.clear();
+      retryableFileReferences.clear();
+      fileReferenceRetries.clear();
+      fileReferenceRechecks.clear();
       resolvedFileReferences.clear();
       resolvedMessageImageUrls.clear();
       pendingMessageImageReads.clear();
       fileReferenceRequestContextKey = store.fileReferenceResolutionContextKey || '';
     };
     const requestFileReferenceResolution = () => {
+      clearTimeout(fileReferenceTimer);
       fileReferenceTimer = null;
       const references = new Set();
       localImagePaths.clear();
@@ -481,18 +493,62 @@ export default {
       }
       // Resolve incrementally while streaming, not on every token. Keep a
       // bounded per-turn set and batch to the Agent's 32-reference wire limit.
-      const remaining = Math.max(0, 128 - requestedFileReferences.size);
-      const paths = [...references].filter(path => !requestedFileReferences.has(path)).slice(0, remaining);
+      const paths = [...references].filter(path => {
+        if (requestedFileReferences.has(path)) return false;
+        if (admittedFileReferences.has(path)) return true;
+        if (admittedFileReferences.size >= 128) return false;
+        admittedFileReferences.add(path);
+        return true;
+      });
       for (let offset = 0; offset < paths.length; offset += 32) {
         const batch = paths.slice(offset, offset + 32);
-        const requestId = store.resolveMessageFileReferences?.(batch);
-        if (!requestId) continue;
         batch.forEach(path => requestedFileReferences.add(path));
+        const requestId = store.resolveMessageFileReferences?.(batch);
+        if (!requestId) {
+          scheduleFileReferenceRetry(batch);
+          continue;
+        }
         pendingFileReferenceRequests.set(requestId, {
           contextKey: fileReferenceRequestContextKey,
           paths: new Set(batch),
         });
       }
+    };
+    // Only transport/Agent errors retry automatically, at most twice per path.
+    // A genuinely missing file is rechecked after subsequent Session work, not
+    // polled forever. Keep the unique-path cap even when retrying a request.
+    const scheduleFileReferenceRetry = paths => {
+      for (const path of paths) {
+        if (!resolvedFileReferences.has(path) && (fileReferenceRetries.get(path) || 0) < 2) {
+          retryableFileReferences.add(path);
+        }
+      }
+      if (!retryableFileReferences.size || fileReferenceRetryTimer !== null) return;
+      fileReferenceRetryTimer = setTimeout(() => {
+        fileReferenceRetryTimer = null;
+        for (const path of retryableFileReferences) {
+          requestedFileReferences.delete(path);
+          fileReferenceRetries.set(path, (fileReferenceRetries.get(path) || 0) + 1);
+        }
+        retryableFileReferences.clear();
+        requestFileReferenceResolution();
+      }, 1500);
+    };
+    const recheckUnresolvedFileReferences = () => {
+      const pendingPaths = new Set([...pendingFileReferenceRequests.values()].flatMap(pending => [...pending.paths]));
+      let needsRecheck = false;
+      for (const path of requestedFileReferences) {
+        // Bound later-turn rechecks too: hundreds of old missing references
+        // must not be scanned on every future turn in a long Session.
+        const rechecks = fileReferenceRechecks.get(path) || 0;
+        if (!resolvedFileReferences.has(path) && !pendingPaths.has(path)
+          && !retryableFileReferences.has(path) && rechecks < 2) {
+          requestedFileReferences.delete(path);
+          fileReferenceRechecks.set(path, rechecks + 1);
+          needsRecheck = true;
+        }
+      }
+      if (needsRecheck) requestFileReferenceResolution();
     };
     const handleFileReferenceResolution = event => {
       const msg = event.detail;
@@ -511,6 +567,10 @@ export default {
       if (!pending) return;
       pendingFileReferenceRequests.delete(msg.requestId);
       if ((store.fileReferenceResolutionContextKey || '') !== pending.contextKey) return;
+      if (msg.error) {
+        scheduleFileReferenceRetry(pending.paths);
+        return;
+      }
       for (const entry of msg.references || []) {
         if (!pending.paths.has(entry?.requestedPath) || !entry?.resolvedPath) continue;
         resolvedFileReferences.set(entry.requestedPath, entry.resolvedPath);
@@ -548,6 +608,13 @@ export default {
       },
       { flush: 'post' },
     );
+    Vue.watch(() => store.isProcessing, (processing, previous) => {
+      // Older completed replies can reference a file created by a later turn.
+      // Recheck only unresolved paths when this Session finishes work.
+      if (previous === true && processing === false && !props.turn?.isStreaming) {
+        recheckUnresolvedFileReferences();
+      }
+    }, { flush: 'post' });
 
     const addCodeBlockCopyButtons = (html) => {
       return html.replace(/<pre><code([^>]*)>([\s\S]*?)<\/code><\/pre>/g,
