@@ -71,10 +71,18 @@ function mountHarness() {
       } })));
     } else if (message.type === 'read_file') {
       const firstRead = ++readAttempts === 1;
-      if (firstRead && failure === 'read-send') return false;
+      if (firstRead && ['read-send', 'restore-send'].includes(failure)) return false;
       if (firstRead && failure === 'read-disconnect') return true;
       const result = firstRead && failure === 'read-error' ? { error: 'temporary read failure' } : { content: CONTENT };
       queueMicrotask(() => respondFile(message, result));
+    } else if (message.type === 'restore_file_tabs' && failure === 'restore-send') {
+      queueMicrotask(() => window.dispatchEvent(new CustomEvent('workbench-message', { detail: {
+        type: 'file_tabs_restored', restoreRequestId: message.restoreRequestId,
+        openFiles: [{ path: 'docs/guide.txt' }], activeIndex: 0,
+        agentId: message.agentId, conversationId: message.conversationId,
+        workbenchRouteKey: message.workbenchRouteKey,
+        workbenchWorkspaceGeneration: message.workbenchWorkspaceGeneration,
+      } })));
     }
     return true;
   };
@@ -199,12 +207,19 @@ test('completed response links recover from a temporary resolver error', async (
   expect(resolves[0].requestId).not.toBe(resolves[1].requestId);
 });
 
-for (const failure of ['read-send', 'read-error', 'read-disconnect']) {
+for (const failure of ['read-send', 'read-error', 'read-disconnect', 'restore-send']) {
   test(`clicking a response link retries ${failure} and rejects the old read`, async ({ page, harness }) => {
     await page.goto(`${harness.url}/?failure=${failure}`);
     const link = page.locator('.message-file-reference');
     await expect(link).toHaveAttribute('data-resolved-file-path', 'docs/guide.txt');
-    await link.click();
+    if (failure === 'restore-send') {
+      // Open Files without a link click so the restored tab owns the first read.
+      await page.evaluate(() => window.dispatchEvent(new CustomEvent('workbench-open-capability', {
+        detail: { routeKey: 'yeaft:agent-b:session-y', capabilityId: 'files' },
+      })));
+    } else {
+      await link.click();
+    }
     if (failure === 'read-disconnect') {
       await expect(page.locator('.file-load-state')).toBeVisible();
       await page.evaluate(() => { window.harness.store.connectionState = 'disconnected'; });
