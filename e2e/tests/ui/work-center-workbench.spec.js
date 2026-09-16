@@ -3,8 +3,11 @@ import { test } from '../../fixtures/test-server.js';
 
 test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true' } });
 
-for (const width of [1440, 320]) {
-  test(`WorkItem files use the shared Workbench without changing chat at ${width}px`, async ({ chatPage: page, mockAgent }, testInfo) => {
+for (const { width, theme } of [
+  { width: 1440, theme: 'light' }, { width: 1440, theme: 'dark' },
+  { width: 320, theme: 'light' }, { width: 320, theme: 'dark' },
+]) {
+  test(`WorkItem files use the shared Workbench without changing chat at ${width}px ${theme}`, async ({ chatPage: page, mockAgent }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
     const detail = {
       id: 'output-item', title: 'Release evidence', goal: 'Inspect the delivered files',
@@ -46,21 +49,26 @@ for (const width of [1440, 320]) {
     };
     mockAgent._messageHandlers.push(respond);
     await page.waitForFunction(() => window.Pinia.useChatStore().workCenterWorkbenchProtocolSupported === true);
-    const before = await page.evaluate(agentId => {
-      document.documentElement.setAttribute('data-theme', 'dark');
+    const before = await page.evaluate(({ agentId, theme }) => {
+      document.documentElement.setAttribute('data-theme', theme);
       const store = window.Pinia.useChatStore();
       const state = { currentAgent: store.currentAgent, currentConversation: store.currentConversation,
         route: store.activeSessionRoute, workDir: store.effectiveWorkDir,
         expanded: store.workbenchExpanded, maximized: store.workbenchMaximized };
       store.enterWorkCenter(agentId);
       return state;
-    }, mockAgent.agentId);
+    }, { agentId: mockAgent.agentId, theme });
     const card = page.locator('.work-center-card-open');
     // Closed lane is a real mobile tab; desktop shows all lanes.
     if (width === 320) await page.locator('.work-center-board-lane-tabs [role="tab"]').last().click();
     await expect(card).toBeVisible();
     await card.click();
     const toggle = page.locator('.work-center-workbench-toggle');
+    await expect(toggle).toBeEnabled();
+    await page.evaluate(() => { window.Pinia.useChatStore().workCenterWorkbenchProtocolSupported = false; });
+    await expect(toggle).toBeDisabled();
+    await expect(page.locator('.work-center-output-file')).toHaveCount(0);
+    await page.evaluate(() => { window.Pinia.useChatStore().workCenterWorkbenchProtocolSupported = true; });
     await expect(toggle).toBeEnabled();
     await expect(page.locator('.work-center-output-file')).toHaveCount(1);
     await expect(page.locator('.work-center-output-list a')).toHaveAttribute('href', 'https://example.test/pull/1');
@@ -95,7 +103,7 @@ for (const width of [1440, 320]) {
       expect(headerBounds.x + headerBounds.width).toBeLessThanOrEqual(panelBounds.x + 1);
       await expect(page.locator('.work-center-close-button')).toBeVisible();
     }
-    await page.screenshot({ path: testInfo.outputPath(`work-center-files-${width}-dark.png`) });
+    await page.screenshot({ path: testInfo.outputPath(`work-center-files-${width}-${theme}.png`) });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await panel.locator('.workbench-panel-close').click();
     await expect(panel).not.toHaveClass(/expanded/);
