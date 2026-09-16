@@ -66,7 +66,7 @@ for (const { width, theme } of [
     if (width === 320) await page.locator('.work-center-board-lane-tabs [role="tab"]').last().click();
     await expect(card).toBeVisible();
     await card.click();
-    const toggle = page.locator('.work-center-workbench-toggle');
+    const toggle = page.locator('.work-center-workbench-toggle:visible');
     await expect(toggle).toBeEnabled();
     await page.evaluate(() => { window.Pinia.useChatStore().workCenterWorkbenchProtocolSupported = false; });
     await expect(toggle).toBeDisabled();
@@ -104,12 +104,17 @@ for (const { width, theme } of [
     } else {
       const headerBounds = await page.locator('.work-center-header').boundingBox();
       expect(headerBounds.x + headerBounds.width).toBeLessThanOrEqual(panelBounds.x + 1);
-      await expect(page.locator('.work-center-close-button')).toBeVisible();
+      await expect(page.locator('.work-center-return')).toBeVisible();
     }
     await page.screenshot({ path: testInfo.outputPath(`work-center-files-${width}-${theme}.png`) });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await panel.locator('.workbench-panel-close').click();
     await expect(panel).not.toHaveClass(/expanded/);
+    // Wait for the panel transition before selecting the launcher: the
+    // container breakpoint moves it between headers while width animates.
+    await panel.evaluate(async element => {
+      await Promise.all(element.getAnimations().map(animation => animation.finished.catch(() => {})));
+    });
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
     await toggle.click();
     await expect(panel).toHaveClass(/expanded/);
@@ -141,7 +146,8 @@ for (const { width, theme } of [
     expect(terminal.workDir).toBe('/tmp/work-item-repo');
     expect(terminal.workbenchRoute).toEqual(read.workbenchRoute);
     await panel.locator('.workbench-panel-close').click();
-    await page.locator('.work-center-close-button').click();
+    if (!await page.locator('.work-center-return').isVisible()) await page.locator('.work-center-navigation-toggle:visible').click();
+    await page.locator('.work-center-return').click();
     const after = await page.evaluate(() => {
       const store = window.Pinia.useChatStore();
       return { currentAgent: store.currentAgent, currentConversation: store.currentConversation,

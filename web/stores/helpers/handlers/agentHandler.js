@@ -110,6 +110,9 @@ export function handleAgentList(store, msg) {
   const previousCurrentAgentOnline = !!(previousCurrentAgentId
     && previousAgents.some(a => a && a.id === previousCurrentAgentId && a.online));
   store.agents = nextAgents;
+  // Sidebar catch-up waits for an authenticated inventory of this socket, not
+  // merely onopen with an old online Agent record. Routine broadcasts dedupe.
+  store.workCenterActivityConnectionGeneration = Number(store.chatHistoryConnectionGeneration || 0);
   store._hasHandledAgentList = true;
   for (const [agentId, operations] of Object.entries(store.agentOperations || {})) {
     const current = nextAgents.find(agent => agent.id === agentId);
