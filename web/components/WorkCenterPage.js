@@ -8,6 +8,7 @@ import VpTurnBlock from './VpTurnBlock.js';
 import AgentSettingsPanel from './AgentSettingsPanel.js';
 import ModernSelect from './ModernSelect.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
+import PaneResizeHandle from './PaneResizeHandle.js';
 import { createWorkCenterWorkbenchContext, workCenterOutputTarget } from '../utils/work-center-workbench.js';
 import folderPickerMixin from './mixins/folder-picker-mixin.js';
 import { normalizeSessionMessageQuote } from '../utils/session-message-quote.js';
@@ -16,6 +17,14 @@ import {
   mergeActionMessages,
   workCenterActionMessageKey,
 } from '../stores/helpers/work-center.js';
+
+function savedActionsPaneWidth() {
+  try {
+    const width = Number(localStorage.getItem('work-center-actions-width'));
+    if (Number.isFinite(width) && width >= 280 && width <= 10000) return width;
+  } catch { /* Browser storage can be disabled. */ }
+  return 400;
+}
 
 function invalidateWorkCenterUrlRestore(target) {
   const generation = (Number(target?.workCenterUrlRestoreGeneration) || 0) + 1;
@@ -27,7 +36,7 @@ export default {
   name: 'WorkCenterPage',
   components: {
     MessageComposer, UserTurnBlock, VpTurnBlock, WorkCenterActionDetail,
-    WorkCenterSettingsModal, AgentSettingsPanel, ModernSelect, WorkCenterResourceControl, WorkbenchPanel,
+    WorkCenterSettingsModal, AgentSettingsPanel, ModernSelect, WorkCenterResourceControl, WorkbenchPanel, PaneResizeHandle,
   },
   mixins: [folderPickerMixin],
   data() {
@@ -37,6 +46,7 @@ export default {
       selectedActionId: null,
       narrowPane: 'items',
       contentPanelOpen: false,
+      actionsPaneWidth: savedActionsPaneWidth(),
       contentStack: [{ type: 'action-list' }],
       staleComposerTarget: null,
       composerTargetValue: 'coordinator',
@@ -487,6 +497,9 @@ export default {
           this.store.loadWorkCenterSettings(id).catch(() => {});
         }
       },
+    },
+    actionsPaneWidth(width) {
+      try { localStorage.setItem('work-center-actions-width', String(width)); } catch { /* Optional preference. */ }
     },
     createDefaultWorkDir() {
       this.applyCreateDefaults();
@@ -1628,7 +1641,8 @@ export default {
 
             <section class="work-center-detail">
               <template v-if="selected">
-                <div class="work-center-detail-layout" :class="{ 'content-open': contentPanelOpen }">
+                <div class="work-center-detail-layout" :class="{ 'content-open': contentPanelOpen }"
+                     :style="{ '--work-center-actions-pane-width': actionsPaneWidth + 'px' }">
                   <div class="work-center-detail-main work-center-conversation-pane">
                     <header class="work-center-detail-heading work-center-conversation-topbar">
                       <nav class="work-center-detail-breadcrumb" :aria-label="tr('workCenter.navigation', 'Work item navigation')">
@@ -1927,6 +1941,9 @@ export default {
                     </section>
                   </div>
 
+                  <PaneResizeHandle v-if="contentPanelOpen" v-model="actionsPaneWidth"
+                                    :label="tr('workCenter.resizeActions', 'Resize Actions panel')"
+                                    controls="work-center-content-panel" />
                   <aside v-if="contentPanelOpen" id="work-center-content-panel" class="work-center-workflow work-center-content-pane" :aria-label="tr('workCenter.actionsPanel', 'Actions')">
                     <template v-if="contentIsActionList">
                       <header class="work-center-content-header">

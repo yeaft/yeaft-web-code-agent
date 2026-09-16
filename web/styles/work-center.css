@@ -875,13 +875,13 @@
 .work-center-detail-heading {
   display: flex;
   width: 100%;
-  max-width: var(--work-center-conversation-column-width);
   min-height: 48px;
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
   margin: 0 auto;
-  padding: 4px var(--work-center-conversation-gutter);
+  /* Navigation aligns with the reading column; controls stay beside the pane. */
+  padding: 4px 8px 4px max(var(--work-center-conversation-gutter), calc((100% - var(--work-center-conversation-column-width)) / 2 + var(--work-center-conversation-gutter)));
   box-sizing: border-box;
   background: var(--bg-main);
 }
@@ -1004,10 +1004,38 @@
 }
 
 .work-center-content-pane {
-  width: var(--work-center-actions-pane-width);
+  width: clamp(280px, var(--work-center-actions-pane-width), calc(100% - 360px));
   min-width: 280px;
-  flex: 0 0 var(--work-center-actions-pane-width);
+  flex: 0 0 clamp(280px, var(--work-center-actions-pane-width), calc(100% - 360px));
   background: var(--bg-main);
+}
+
+/* A zero-net-width hit target keeps the existing pane border as the divider. */
+.work-center-detail-layout > .pane-resize-handle {
+  position: relative;
+  z-index: 21;
+  flex: 0 0 8px;
+  margin: 0 -4px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.work-center-detail-layout > .pane-resize-handle::after {
+  content: '';
+  position: absolute;
+  inset: 0 3px;
+  background: transparent;
+}
+
+.work-center-detail-layout > .pane-resize-handle:hover::after,
+.work-center-detail-layout > .pane-resize-handle.is-dragging::after,
+.work-center-detail-layout > .pane-resize-handle:focus-visible::after {
+  background: var(--accent-blue);
+}
+
+.work-center-detail-layout > .pane-resize-handle:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: -2px;
 }
 
 .work-center-detail-main,
@@ -1036,17 +1064,16 @@
 }
 
 .work-center-work-item-overview {
-  padding: 10px 0 36px;
+  padding: 8px 0 24px;
 }
 
 .work-center-work-item-overview > h1 {
   max-width: 780px;
   margin: 0;
   color: var(--text-primary);
-  font-size: clamp(24px, 2.3vw, 34px);
-  font-weight: 680;
-  line-height: 1.18;
-  letter-spacing: -0.025em;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.4;
   overflow-wrap: anywhere;
 }
 
@@ -1095,7 +1122,7 @@
 }
 
 .work-center-section {
-  margin-top: 24px;
+  margin-top: 16px;
 }
 
 .work-center-section h3 {
@@ -1114,13 +1141,13 @@
 .work-center-primary-result,
 .work-center-primary-outputs,
 .work-center-current-progress {
-  padding-top: 20px;
+  padding-top: 16px;
   border-top: 1px solid var(--border-light);
 }
 
 .work-center-primary-result .work-center-response-summary {
-  font-size: 15px;
-  line-height: 1.7;
+  font-size: 14px;
+  line-height: 1.65;
 }
 
 .work-center-progressive-section {
@@ -1503,7 +1530,7 @@
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
-  padding: 20px 16px 24px;
+  padding: 12px 16px 20px;
 }
 
 .work-center-mainline-progress {
@@ -1871,7 +1898,7 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 24px 0 16px;
+  padding: 12px 0 16px;
   overscroll-behavior: contain;
 }
 
@@ -3062,6 +3089,10 @@
 }
 
 @container work-center (max-width: 1024px) {
+  .work-center-detail-layout > .pane-resize-handle {
+    display: none;
+  }
+
   .work-center-detail-layout.content-open .work-center-conversation-pane {
     display: none;
   }
@@ -3085,6 +3116,10 @@
 }
 
 @media (max-width: 768px) {
+  .work-center-detail-layout > .pane-resize-handle {
+    display: none;
+  }
+
   .work-center-main {
     overflow-x: hidden;
   }

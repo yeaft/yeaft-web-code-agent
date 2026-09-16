@@ -3835,7 +3835,7 @@ describe('message flow regressions', () => {
     expect(workCenter).toContain('work-center-conversation-column');
     expect(workCenter).toContain('work-center-composer-column');
     expect(workCenterCss).toMatch(/\.work-center-detail-layout\s*\{[^}]*display:\s*flex;[^}]*overflow:\s*hidden;/s);
-    expect(workCenterCss).toMatch(/\.work-center-content-pane\s*\{[^}]*width:\s*var\(--work-center-actions-pane-width\);[^}]*flex:\s*0 0 var\(--work-center-actions-pane-width\);/s);
+    expect(workCenterCss).toMatch(/\.work-center-content-pane\s*\{[^}]*width:\s*clamp\(280px, var\(--work-center-actions-pane-width\), calc\(100% - 360px\)\);/s);
     expect(workCenterCss).toMatch(/\.work-center-conversation-scroll\s*\{[^}]*overflow-y:\s*auto;[^}]*overflow-x:\s*hidden;/s);
     expect(workCenterCss).toMatch(/\.work-center-conversation-composer\s*\{[^}]*padding:\s*8px 0 calc\(14px \+ env\(safe-area-inset-bottom, 0px\)\);/s);
     expect(workCenterCss).toMatch(/\.work-center-item-message-input \.work-center-composer-target \.modern-select-trigger\s*\{[^}]*height:\s*var\(--chat-composer-control-size\);[^}]*border-radius:\s*var\(--chat-composer-radius\);[^}]*background:\s*transparent;/s);
@@ -3845,7 +3845,7 @@ describe('message flow regressions', () => {
     expect(workCenterCss).not.toContain('.work-center-triage-summary');
     expect(workCenterCss).toMatch(/@container work-center \(max-width:\s*1024px\)\s*\{[\s\S]*?\.work-center-detail-layout\.content-open \.work-center-conversation-pane\s*\{[^}]*display:\s*none;/s);
     expect(workCenterCss).not.toContain('@container work-center (max-width: 700px)');
-    expect(workCenterCss).toMatch(/\.work-center-detail-heading\s*\{[^}]*display:\s*flex;[^}]*max-width:\s*var\(--work-center-conversation-column-width\);/s);
+    expect(workCenterCss).toMatch(/\.work-center-detail-heading\s*\{[^}]*display:\s*flex;[^}]*width:\s*100%;/s);
     expect(workCenterCss).toMatch(/\.work-center-action-description,[\s\S]*?white-space:\s*nowrap;/);
     expect(workCenter).not.toContain('coordinatorRequestedSelectedActionInput');
     expect(workCenter).not.toContain("next?.routedTo === 'coordinator'");
@@ -3853,7 +3853,7 @@ describe('message flow regressions', () => {
     expect(workCenter).not.toContain("message.recovery?.actionId === this.selectedAction.id");
     expect(workCenter).toContain(":class=\"{ 'showing-detail': narrowPane !== 'items' }\"");
     expect(workCenterCss).toMatch(/\.work-center-shell\.showing-detail\s*\{[\s\S]*?padding: 0;/);
-    expect(workCenterCss).toMatch(/\.work-center-detail-heading\s*\{[^}]*min-height: 48px;[^}]*padding: 4px var\(--work-center-conversation-gutter\);/);
+    expect(workCenterCss).toMatch(/\.work-center-detail-heading\s*\{[^}]*min-height: 48px;[^}]*padding: 4px 8px 4px max\(/);
     expect(workCenter).toContain('workItemMessageSpeaker(message)');
     expect(workCenter).toContain('workCenter.messageSpeakerRole');
     expect(workCenter).not.toContain("tr('workCenter.assistant', 'Yeaft')");

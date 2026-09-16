@@ -835,6 +835,73 @@ test.describe('Work Center responsive UI', () => {
     }
   });
 
+  test('keeps Actions at the pane edge, supports resizing and uses compact Session typography', async ({ chatPage, mockAgent }, testInfo) => {
+    await openWorkCenter(chatPage, mockAgent);
+    await chatPage.setViewportSize({ width: 2400, height: 1000 });
+    const select = chatPage.locator('.work-center-card').click();
+    await respondToWorkCenterOp(mockAgent, 'get', {
+      ...OPEN_ITEM_DETAIL,
+      finalResult: { responses: [{ summary: 'Verified the layout at desktop and mobile sizes.' }] },
+    });
+    await select;
+    const toggle = chatPage.locator('.work-center-actions-button');
+    const left = chatPage.locator('.work-center-conversation-pane');
+    const right = chatPage.locator('.work-center-content-pane');
+    const divider = chatPage.getByRole('separator', { name: /Resize Actions panel/ });
+    const assertEdge = async () => {
+      const a = await toggle.boundingBox();
+      const b = await left.boundingBox();
+      expect(b.x + b.width - a.x - a.width).toBeLessThanOrEqual(9);
+    };
+    await assertEdge();
+    await toggle.click();
+    await assertEdge();
+    await expect(divider).toBeVisible();
+    await expect(chatPage.locator('.work-center-work-item-overview > h1')).toHaveCSS('font-size', '18px');
+    await expect(chatPage.locator('.work-center-primary-result .work-center-response-summary')).toHaveCSS('font-size', '14px');
+    const initial = await right.boundingBox();
+    const grip = await divider.boundingBox();
+    await chatPage.mouse.move(grip.x + grip.width / 2, grip.y + 120);
+    await chatPage.mouse.down();
+    await chatPage.mouse.move(grip.x - 196, grip.y + 120, { steps: 8 });
+    await chatPage.mouse.up();
+    await expect.poll(async () => (await right.boundingBox()).width).toBeCloseTo(initial.width + 200, 0);
+    await assertEdge();
+    await divider.press('ArrowRight');
+    await expect(divider).toHaveAttribute('aria-valuenow', '584');
+    await chatPage.locator('.work-center-action-summary').click();
+    await expect(right).toHaveCSS('width', '584px');
+    await chatPage.getByRole('button', { name: 'Close Actions', exact: true }).click();
+    await expect(toggle).toBeFocused();
+    await toggle.click();
+    await expect(right).toHaveCSS('width', '584px');
+    expect(await chatPage.evaluate(() => localStorage.getItem('work-center-actions-width'))).toBe('584');
+    await divider.press('End');
+    await expect.poll(async () => (await left.boundingBox()).width).toBeGreaterThanOrEqual(360);
+    await chatPage.setViewportSize({ width: 1200, height: 900 });
+    await expect.poll(async () => (await left.boundingBox()).width).toBeGreaterThanOrEqual(360);
+    await divider.press('Home');
+    await expect(right).toHaveCSS('width', '400px');
+    for (const theme of ['light', 'dark']) {
+      await chatPage.setViewportSize({ width: 1600, height: 900 });
+      await chatPage.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
+      await chatPage.screenshot({ path: testInfo.outputPath(`session-density-${theme}.png`) });
+    }
+    // Hiding or unmounting a divider while dragging must release global cursor/selection.
+    const activeGrip = await divider.boundingBox();
+    await chatPage.mouse.move(activeGrip.x + 4, activeGrip.y + 100);
+    await chatPage.mouse.down();
+    await chatPage.setViewportSize({ width: 320, height: 720 });
+    await expect(divider).toBeHidden();
+    await expect(left).toBeHidden();
+    await expect(chatPage.locator('body')).toHaveCSS('cursor', 'auto');
+    await chatPage.mouse.up();
+    await expectNoHorizontalOverflow(right, { pane: ':scope' });
+    await chatPage.getByRole('button', { name: 'Close Actions', exact: true }).click();
+    await expect(left).toBeVisible();
+    await chatPage.screenshot({ path: testInfo.outputPath('session-density-mobile.png') });
+  });
+
   test('keeps Conversation primary and opens Actions only on demand', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent);
     await chatPage.setViewportSize({ width: 1600, height: 900 });
@@ -2637,8 +2704,7 @@ test.describe('Work Center responsive UI', () => {
     for (const [theme, locale] of [['light', 'en'], ['light', 'zh-CN'], ['dark', 'en'], ['dark', 'zh-CN']]) {
       await chatPage.evaluate(async ({ theme, locale }) => {
         document.documentElement.setAttribute('data-theme', theme);
-        const { setLocale } = await import('/utils/i18n.js');
-        setLocale(locale);
+        window.Pinia.useChatStore().changeLocale(locale);
       }, { theme, locale });
       await expect(result.locator('h3')).toHaveText(locale === 'zh-CN' ? '交付回复' : 'Delivered response');
       await expect(requirement.locator(':scope > summary')).toHaveText(locale === 'zh-CN' ? '需求与验收' : 'Requirement and acceptance');
@@ -2990,7 +3056,7 @@ test.describe('Work Center responsive UI', () => {
       expect(metrics.mainBackground).toBe('rgba(0, 0, 0, 0)');
       expect(metrics.layoutDisplay).toBe('flex');
       expect(metrics.breadcrumbTop).toBeGreaterThanOrEqual(4);
-      expect(metrics.actionsRight).toBeGreaterThanOrEqual(10);
+      expect(metrics.actionsRight).toBe(8);
       if (width === 1400) {
         expect(metrics.workflowWidth).toBeGreaterThanOrEqual(380);
         expect(metrics.workflowWidth).toBeLessThanOrEqual(420);
@@ -3319,8 +3385,7 @@ test.describe('Work Center resource budget', () => {
       for (const theme of ['light', 'dark']) {
         await chatPage.evaluate(async ({ locale, theme }) => {
           document.documentElement.setAttribute('data-theme', theme);
-          const { setLocale } = await import('/utils/i18n.js');
-          setLocale(locale);
+          window.Pinia.useChatStore().changeLocale(locale);
         }, { locale, theme });
         for (const width of [1280, 320]) {
           await chatPage.setViewportSize({ width, height: 900 });
