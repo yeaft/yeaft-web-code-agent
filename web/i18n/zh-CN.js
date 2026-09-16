@@ -1266,6 +1266,7 @@ export default {
   'git.cleanWorkDir': '工作区干净，无变更',
   'git.selectAgent': '选择 Agent 后加载 Git 状态',
   'git.selectAgentFirst': '选择 Agent 后加载 Git 状态',
+  'git.workItemRootRequired': '此工作项使用仓库子目录，无法在此操作 Git。文件和终端仍可使用；Git 操作需要工作项以仓库根目录为工作目录。',
   'git.diffOnly': '只看差异',
   'git.fullFile': '看全文',
   'git.zoomIn': '放大字体',

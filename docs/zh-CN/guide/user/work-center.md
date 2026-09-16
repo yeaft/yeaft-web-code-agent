@@ -172,4 +172,4 @@ Execution evidence 可以包含 summary、acceptance check、file/test reference
 
 打开工作项后，通过右上角工作台图标查看它的工作目录。文件产出可直接在共享的 Files 预览器／编辑器中打开；Git 和终端复用聊天中的 Workbench 组件。路由属于所选 Agent 和工作项，不借用进入前的 Session。关闭工作中心不会改变原 Session 的工作目录和面板状态。
 
-需要新版 Server、Agent 及有工作目录的工作项。此路由不提供切换目录：Files、Git 和终端初始目录使用工作项目录。目录外的本地文件引用保留为纯文本，HTTP(S) 链接单独打开。工作项暂不支持 Browser Runtime。文件操作和终端沿用既有 Workbench 权限，不是执行沙箱。
+需要新版 Server、Agent 及有工作目录的工作项。此路由不提供切换目录：Files、Git 和终端初始目录使用工作项目录。Git 仅在工作目录为仓库根目录时可用，防止仓库级操作静默包含工作项之外的文件；子目录工作项仍可使用文件和终端。目录外的本地文件引用保留为纯文本，HTTP(S) 链接单独打开。工作项暂不支持 Browser Runtime。文件操作和终端沿用既有 Workbench 权限，不是执行沙箱。

@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, existsSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
+import {
+  handleGitStatus, handleGitDiff, handleGitAdd, handleGitReset,
+  handleGitRestore, handleGitCommit, handleGitPush,
+} from '../../agent/workbench/git-ops.js';
 import { join } from 'node:path';
 import * as Vue from 'vue';
 import { createWsHandler } from '../../web/components/files/wsHandler.js';
@@ -3317,6 +3322,91 @@ it('rejects WorkItem file mutations through escaped symlinks and new destination
     expect(replies[0].success).toBe(true);
     await handleWriteFile({ ...base, filePath: join(workspace, 'new/result.txt'), content: 'allowed' });
     expect(readFileSync(join(workspace, 'new/result.txt'), 'utf8')).toBe('allowed');
+  } finally {
+    ctx.sendToServer = priorSend;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('keeps WorkItem Git operations at an owned repository root, including canonical aliases', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'wc-git-root-'));
+  const repository = join(root, 'repo');
+  const workspace = join(repository, 'item');
+  const alias = join(root, 'repo-alias');
+  const subAlias = join(root, 'item-alias');
+  mkdirSync(workspace, { recursive: true });
+  const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim();
+  const priorSend = ctx.sendToServer;
+  const replies = [];
+  ctx.sendToServer = message => { replies.push(message); return true; };
+  const base = { workDir: workspace, conversationId: '_workbench:work-center:agent:item',
+    workbenchRoute: { runtimeProvider: 'work-center', agentId: 'agent', workItemId: 'item' } };
+  const run = async (handler, fields = {}) => {
+    replies.length = 0;
+    await handler({ ...base, ...fields });
+    expect(replies).toHaveLength(1);
+    return replies[0];
+  };
+  try {
+    git('init', '-q');
+    writeFileSync(join(repository, 'outside.txt'), 'original');
+    writeFileSync(join(workspace, 'inside.txt'), 'original');
+    git('add', '-A');
+    git('-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'initial');
+    writeFileSync(join(repository, 'outside.txt'), 'staged outside');
+    git('add', 'outside.txt');
+    writeFileSync(join(workspace, 'inside.txt'), 'changed inside');
+    symlinkSync(repository, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    symlinkSync(workspace, subAlias, process.platform === 'win32' ? 'junction' : 'dir');
+    const head = git('rev-parse', 'HEAD');
+    const status = git('status', '--porcelain');
+    const index = git('diff', '--cached');
+    const cases = [
+      [handleGitStatus, {}], [handleGitDiff, { filePath: 'outside.txt' }],
+      [handleGitAdd, { addAll: true }], [handleGitAdd, { filePath: 'outside.txt' }],
+      [handleGitReset, { resetAll: true }], [handleGitReset, { filePath: 'outside.txt' }],
+      [handleGitRestore, { filePath: 'item/inside.txt' }],
+      [handleGitCommit, { commitMessage: 'must not commit outside changes' }],
+      [handleGitPush, {}],
+    ];
+    for (const workDir of [workspace, subAlias]) {
+      for (const [handler, fields] of cases) {
+        const result = await run(handler, { ...fields, workDir });
+        expect(result.error).toContain('repository root');
+        expect(result.success).not.toBe(true);
+        expect(result.files).toBeUndefined();
+        if (handler === handleGitStatus) expect(result.errorCode).toBe('WORK_ITEM_GIT_ROOT_REQUIRED');
+        expect(git('status', '--porcelain')).toBe(status);
+        expect(git('diff', '--cached')).toBe(index);
+        expect(git('rev-parse', 'HEAD')).toBe(head);
+      }
+    }
+    // Existing chat routes can still choose a repository subdirectory.
+    const chatStatus = await run(handleGitStatus, { workbenchRoute: undefined });
+    expect(chatStatus.error).toBeUndefined();
+    expect(chatStatus.files.some(file => file.path === 'outside.txt')).toBe(true);
+    // Root workspaces (including symlink aliases) retain Git functionality.
+    for (const workDir of [repository, alias]) {
+      expect((await run(handleGitStatus, { workDir })).error).toBeUndefined();
+    }
+    expect((await run(handleGitAdd, { workDir: alias, filePath: 'item/inside.txt' })).success).toBe(true);
+    expect((await run(handleGitReset, { workDir: repository, filePath: 'item/inside.txt' })).success).toBe(true);
+    expect((await run(handleGitDiff, { workDir: repository, filePath: 'item/inside.txt' })).diff).toContain('changed inside');
+    // Non-repositories still return their existing meaningful error.
+    const notRepo = await run(handleGitStatus, { workDir: root });
+    expect(notRepo.isGitRepo).toBe(false);
+    expect(notRepo.errorCode).not.toBe('WORK_ITEM_GIT_ROOT_REQUIRED');
+    // Untracked previews must not bypass the Files realpath boundary.
+    const secret = join(root, 'secret.txt');
+    writeFileSync(secret, 'outside secret');
+    symlinkSync(secret, join(repository, 'secret-link.txt'), 'file');
+    for (const filePath of ['secret-link.txt', '../secret.txt']) {
+      const result = await run(handleGitDiff, { workDir: repository, filePath, untracked: true });
+      expect(result.error).toContain('outside the WorkItem workspace');
+      expect(result.newFileContent).toBeUndefined();
+    }
+    writeFileSync(join(repository, 'new.txt'), 'local preview');
+    expect((await run(handleGitDiff, { workDir: repository, filePath: 'new.txt', untracked: true })).newFileContent).toBe('local preview');
   } finally {
     ctx.sendToServer = priorSend;
     rmSync(root, { recursive: true, force: true });

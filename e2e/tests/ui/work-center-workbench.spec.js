@@ -27,6 +27,7 @@ for (const { width, theme } of [
       'file_editor', 'terminal', 'workbench_session_routes',
       'workbench_request_correlation', 'workbench_terminal_cleanup_fence', 'plaintext-ok',
     ] });
+    let gitRootRequired = false;
     const respond = message => {
       if (message.type === 'work_center_request') {
         const data = message.op === 'list' ? { items: [detail] }
@@ -44,7 +45,9 @@ for (const { width, theme } of [
         mockAgent.send({ ...message, type: 'terminal_created', success: true });
       }
       if (message.type === 'git_status') {
-        mockAgent.send({ ...message, type: 'git_status_result', branch: 'main', files: [], ahead: 0, behind: 0 });
+        mockAgent.send({ ...message, type: 'git_status_result', ...(gitRootRequired
+          ? { error: 'Git requires the WorkItem workspace to be the repository root.', errorCode: 'WORK_ITEM_GIT_ROOT_REQUIRED' }
+          : { branch: 'main', files: [], ahead: 0, behind: 0 }) });
       }
     };
     mockAgent._messageHandlers.push(respond);
@@ -122,6 +125,15 @@ for (const { width, theme } of [
     await expect.poll(() => mockAgent.messages('git_status').length).toBeGreaterThan(0);
     expect(mockAgent.messages('git_status').at(-1).workDir).toBe('/tmp/work-item-repo');
     await expect(panel.locator('.git-workdir-input')).toHaveAttribute('readonly', '');
+    await expect(panel.locator('.git-clean')).toBeVisible();
+    // A repository subfolder reports its limitation, never an empty/clean repo.
+    gitRootRequired = true;
+    await panel.locator('.workbench-item-close').last().click();
+    await panel.locator('.workbench-add-btn').click();
+    await panel.locator('.workbench-add-menu [data-workbench-capability="git"]').click();
+    await expect(panel.locator('.git-error-msg')).toContainText('Files and Terminal remain available');
+    await expect(panel.locator('.git-clean')).toHaveCount(0);
+    await expect(panel.locator('.git-commit-section')).toHaveCount(0);
     await panel.locator('.workbench-add-btn').click();
     await panel.locator('.workbench-add-menu [data-workbench-capability="terminal"]').click();
     await expect.poll(() => mockAgent.messages('terminal_create').length).toBeGreaterThan(0);

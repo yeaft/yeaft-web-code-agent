@@ -1268,6 +1268,7 @@ export default {
   'git.cleanWorkDir': 'Working directory clean, no changes',
   'git.selectAgent': 'Select an Agent to load Git status',
   'git.selectAgentFirst': 'Select an Agent to load Git status',
+  'git.workItemRootRequired': 'Git is unavailable because this Work Item uses a repository subfolder. Files and Terminal remain available; Git operations require a Work Item at the repository root.',
   'git.diffOnly': 'Diff only',
   'git.fullFile': 'Full file',
   'git.zoomIn': 'Zoom in',

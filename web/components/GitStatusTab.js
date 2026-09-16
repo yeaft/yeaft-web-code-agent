@@ -444,7 +444,8 @@ export default {
           if (props.routeKey && workbenchMessageScope(msg, props.routeKey) !== 'main') return;
           gitLoading.value = false;
           if (msg.error) {
-            gitError.value = msg.error;
+            gitError.value = msg.errorCode === 'WORK_ITEM_GIT_ROOT_REQUIRED'
+              ? t('git.workItemRootRequired') : msg.error;
             gitBranch.value = null;
             gitFiles.value = [];
             return;

@@ -1,8 +1,27 @@
-import { readFile, writeFile } from 'fs/promises';
-import { join, resolve } from 'path';
+import { readFile, realpath, writeFile } from 'fs/promises';
+import { join, relative, resolve } from 'path';
 import ctx from '../context.js';
 import { execAsync, resolveAndValidatePath, getGitRoot, validateGitPath } from './utils.js';
+import { resolveWorkItemPath } from './work-item-path.js';
 import { sendWorkbenchResult } from './request-routing.js';
+
+// Git paths and bulk operations are repository-scoped. A WorkItem must own
+// that root, rather than silently widening a subdirectory workspace to it.
+async function getWorkbenchGitRoot(msg, workDir) {
+  if (msg.workbenchRoute?.runtimeProvider !== 'work-center') return getGitRoot(workDir);
+  // Do not fall back to cwd on lookup failure: Git itself may ascend from it.
+  const { stdout } = await execAsync('git rev-parse --show-toplevel', {
+    cwd: workDir, timeout: 5000, windowsHide: true,
+  });
+  const gitRoot = stdout.trim();
+  const [workspace, repository] = await Promise.all([realpath(workDir), realpath(gitRoot)]);
+  if (relative(workspace, repository) !== '') {
+    const error = new Error('Git requires the WorkItem workspace to be the repository root. Files and Terminal remain available.');
+    error.code = 'WORK_ITEM_GIT_ROOT_REQUIRED';
+    throw error;
+  }
+  return gitRoot;
+}
 
 export async function handleGitStatus(msg) {
   const { conversationId, _requestUserId } = msg;
@@ -11,15 +30,7 @@ export async function handleGitStatus(msg) {
 
   try {
     // Get git repo root to ensure paths are consistent
-    let gitRoot = workDir;
-    try {
-      const { stdout: rootOut } = await execAsync('git rev-parse --show-toplevel', {
-        cwd: workDir,
-        timeout: 5000,
-        windowsHide: true
-      });
-      gitRoot = rootOut.trim();
-    } catch {}
+    const gitRoot = await getWorkbenchGitRoot(msg, workDir);
 
     const { stdout: statusOut } = await execAsync('git status --porcelain', {
       cwd: gitRoot,
@@ -76,6 +87,7 @@ export async function handleGitStatus(msg) {
       conversationId,
       _requestUserId,
       error: e.message,
+      ...(e.code ? { errorCode: e.code } : {}),
       isGitRepo: !e.message.includes('not a git repository') && !e.message.includes('ENOENT')
     });
   }
@@ -100,20 +112,12 @@ export async function handleGitDiff(msg) {
     }
 
     // Get git repo root — git status paths are relative to this, not workDir
-    let gitRoot = workDir;
-    try {
-      const { stdout: rootOut } = await execAsync('git rev-parse --show-toplevel', {
-        cwd: workDir,
-        timeout: 5000,
-        windowsHide: true
-      });
-      gitRoot = rootOut.trim();
-    } catch {}
+    const gitRoot = await getWorkbenchGitRoot(msg, workDir);
 
     if (untracked) {
       // Untracked files: resolve path relative to git root
       const fullPath = resolve(gitRoot, filePath);
-      const resolved = resolveAndValidatePath(fullPath, gitRoot);
+      const resolved = await resolveWorkItemPath(msg, resolveAndValidatePath(fullPath, gitRoot), workDir);
       const content = await readFile(resolved, 'utf-8');
       sendWorkbenchResult(ctx, msg, {
         type: 'git_diff_result',
@@ -205,7 +209,7 @@ export async function handleGitAdd(msg) {
   const workDir = msg.workDir || conv?.workDir || ctx.CONFIG.workDir;
 
   try {
-    const gitRoot = await getGitRoot(workDir);
+    const gitRoot = await getWorkbenchGitRoot(msg, workDir);
 
     if (addAll) {
       await execAsync('git add -A', { cwd: gitRoot, timeout: 10000, windowsHide: true });
@@ -229,7 +233,7 @@ export async function handleGitReset(msg) {
   const workDir = msg.workDir || conv?.workDir || ctx.CONFIG.workDir;
 
   try {
-    const gitRoot = await getGitRoot(workDir);
+    const gitRoot = await getWorkbenchGitRoot(msg, workDir);
 
     if (resetAll) {
       await execAsync('git reset HEAD', { cwd: gitRoot, timeout: 10000, windowsHide: true });
@@ -258,7 +262,7 @@ export async function handleGitRestore(msg) {
       return;
     }
 
-    const gitRoot = await getGitRoot(workDir);
+    const gitRoot = await getWorkbenchGitRoot(msg, workDir);
     await execAsync(`git restore -- "${filePath}"`, { cwd: gitRoot, timeout: 10000, windowsHide: true });
     sendWorkbenchResult(ctx, msg, { type: 'git_op_result', conversationId, _requestUserId, operation: 'restore', success: true, message: `Restored: ${filePath}` });
   } catch (e) {
@@ -277,7 +281,7 @@ export async function handleGitCommit(msg) {
       return;
     }
 
-    const gitRoot = await getGitRoot(workDir);
+    const gitRoot = await getWorkbenchGitRoot(msg, workDir);
 
     // Write commit message to temp file to avoid shell injection
     const tmpFile = join(gitRoot, '.git', 'WEBCHAT_COMMIT_MSG');
@@ -303,7 +307,7 @@ export async function handleGitPush(msg) {
   const workDir = msg.workDir || conv?.workDir || ctx.CONFIG.workDir;
 
   try {
-    const gitRoot = await getGitRoot(workDir);
+    const gitRoot = await getWorkbenchGitRoot(msg, workDir);
     const { stdout, stderr } = await execAsync('git push', {
       cwd: gitRoot, timeout: 60000, windowsHide: true
     });
