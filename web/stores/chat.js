@@ -2813,10 +2813,13 @@ export const useChatStore = defineStore('chat', {
       const cachedSummary = this._workCenterListEventsByAgent[agentId]?.[summary.id]?.summary || null;
       const activityCurrent = (this.workCenterActivityByAgent[agentId] || [])
         .find(item => item?.id === summary.id) || null;
-      let identityBase = activityCurrent ? [activityCurrent] : [];
+      // Compare all known versions, but prefer the canonical board snapshot
+      // on equal identity. Cached live-event fields must not reappear merely
+      // because an older attempt arrives after a board refresh.
+      let identityBase = cachedSummary ? [cachedSummary] : [];
+      if (activityCurrent) identityBase = applyWorkItemSummary(identityBase, activityCurrent);
       const boardCurrent = current.find(item => item?.id === summary.id) || null;
       if (boardCurrent) identityBase = applyWorkItemSummary(identityBase, boardCurrent);
-      if (cachedSummary) identityBase = applyWorkItemSummary(identityBase, cachedSummary);
       const acceptedSummary = applyWorkItemSummary(identityBase, summary)
         .find(item => item?.id === summary.id) || summary;
       const eventGeneration = Number(this._workCenterListEventGenerationByAgent[agentId] || 0) + 1;

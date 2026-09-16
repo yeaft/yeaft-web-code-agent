@@ -153,6 +153,25 @@ describe('Work Center activity store', () => {
     expect(store.workCenterActivityErrorByAgent).toEqual({});
   });
 
+  it('keeps canonical board fields on equal identity and rejects late older attempts', () => {
+    const live = item('one', 'running', 2, 5);
+    live.actionStats[0] = { ...live.actionStats[0], attempt: 2, response: 'current partial' };
+    const canonical = structuredClone(live);
+    delete canonical.actionStats[0].response;
+    const store = createStore();
+    store.applyWorkCenterEvent('agent-a', { type: 'run.progress', workItem: live });
+    store.workCenterItemsByAgent['agent-a'] = [canonical];
+    const older = item('one', 'running', 2, 4);
+    store.applyWorkCenterEvent('agent-a', { type: 'run.finished', workItem: older });
+    expect(store.workCenterItemsByAgent['agent-a']).toEqual([canonical]);
+    expect(store.workCenterActivityByAgent['agent-a']).toEqual([canonical]);
+    // A genuinely newer activity snapshot still fences an older board/event.
+    store.workCenterActivityByAgent['agent-a'] = [item('one', 'running', 4, 8)];
+    store.applyWorkCenterEvent('agent-a', { type: 'run.progress', workItem: item('one', 'running', 3, 6) });
+    expect(store.workCenterItemsByAgent['agent-a'][0].revision).toBe(4);
+    expect(store.workCenterActivityByAgent['agent-a'][0].actionStats[0].progressRevision).toBe(8);
+  });
+
   it('refreshes once after authenticated reconnect with the same online Agent and preserves detail', async () => {
     const agent = { id: 'agent-a', online: true };
     let snapshot = [item('missed-completion', 'running')];
