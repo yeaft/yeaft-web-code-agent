@@ -353,7 +353,9 @@ function buildRequestSnapshot(info = {}) {
     systemPrompt: String(info.systemPrompt || ''),
     messages: Array.isArray(info.messages) ? cloneJsonValue(info.messages) : [],
     requestInputBreakdown: normalizeRequestInputBreakdown(info.requestInputBreakdown),
-    rawRequest: info.rawRequest ?? null,
+    // Own the latest snapshot: adapters/callers may extend their message array
+    // after endTurn. Keeping that live reference would silently skip raw deltas.
+    rawRequest: cloneRawValue(info.rawRequest) ?? null,
   };
 }
 
@@ -491,19 +493,17 @@ function serializableTraceMeta(trace) {
   }, { totalMs: 0, totalTokens: 0, summaryInputTokens: 0, summaryOutputTokens: 0 });
   const meta = {
     ...trace,
-    loopCount: Number(trace?._releasedLoopCount || 0) + loops.length,
-    toolCount: Number(trace?._releasedToolCount || 0) + tools.length,
-    totalMs: Number(trace?._releasedTotalMs || 0) + usage.totalMs,
-    totalTokens: Number(trace?._releasedTotalTokens || 0) + usage.totalTokens,
-    summaryInputTokens: Number(trace?._releasedSummaryInputTokens || 0) + usage.summaryInputTokens,
-    summaryOutputTokens: Number(trace?._releasedSummaryOutputTokens || 0) + usage.summaryOutputTokens,
-    loopModels: [...new Set([...(trace?._releasedLoopModels || []), ...loops.map(loop => loop?.model).filter(Boolean)])],
-    stopReasons: [...new Set([...(trace?._releasedStopReasons || []), ...loops.map(loop => loop?.stopReason).filter(Boolean)])],
-    toolNames: [...new Set([...(trace?._releasedToolNames || []), ...tools.map(tool => tool?.toolName || tool?.name).filter(Boolean)])],
+    loopCount: loops.length,
+    toolCount: tools.length,
+    ...usage,
+    loopModels: [...new Set(loops.map(loop => loop?.model).filter(Boolean))],
+    stopReasons: [...new Set(loops.map(loop => loop?.stopReason).filter(Boolean))],
+    toolNames: [...new Set(tools.map(tool => tool?.toolName || tool?.name).filter(Boolean))],
   };
-  for (const key of Object.keys(meta)) {
-    if (key.startsWith('_')) delete meta[key];
-  }
+  delete meta._lastSnapshot;
+  delete meta._persistedFormat;
+  delete meta._persistedRequestDir;
+  delete meta._payloadReleased;
   delete meta.baseRequest;
   delete meta.loops;
   delete meta.tools;
@@ -856,6 +856,28 @@ async function readHeaderDetail(rootDir, header) {
   return sameTraceIdentity(trace, header) ? trace : null;
 }
 
+/** Detail reads combine durable payload with records whose append failed. The
+ * compact live rows must never overwrite full disk rows or hide unwritten data. */
+async function readAvailableTrace(rootDir, trace) {
+  if (!trace?._payloadReleased) return trace;
+  const stored = await readHeaderDetail(rootDir, trace);
+  const loops = new Map((stored?.loops || []).map(loop => [loop.turnRowId || loop.loopInstanceId, loop]));
+  for (const loop of trace.loops || []) {
+    if (Object.hasOwn(loop, 'requestDelta')) loops.set(loop.turnRowId || loop.loopInstanceId, loop);
+  }
+  const tools = new Map((stored?.tools || []).map(tool => [tool.id, tool]));
+  for (const tool of trace.tools || []) {
+    if (Object.hasOwn(tool, 'toolOutput')) tools.set(tool.id, tool);
+  }
+  return {
+    ...trace,
+    baseRequest: stored?.baseRequest || null,
+    loops: [...loops.values()].sort((a, b) => (a.loopNumber || 0) - (b.loopNumber || 0)
+      || String(a.turnRowId || '').localeCompare(String(b.turnRowId || ''))),
+    tools: [...tools.values()],
+  };
+}
+
 async function countDirFiles(rootDir) {
   let files = 0;
   let bytes = 0;
@@ -989,10 +1011,10 @@ export class DebugTrace {
       // it to a transport failure or another uncaptured attempt.
       rawRequest: Object.prototype.hasOwnProperty.call(info, 'rawRequest')
         ? info.rawRequest
-        : (trace.baseRequest?.rawRequest ?? null),
+        : (trace._lastSnapshot?.rawRequest ?? trace.baseRequest?.rawRequest ?? null),
     });
     const previousSnapshot = trace._lastSnapshot || this.#reconstructLastSnapshot(trace);
-    if (!trace.baseRequest) {
+    if (!previousSnapshot) {
       trace.baseRequest = {
         systemPrompt: snapshot.systemPrompt,
         messages: Array.isArray(snapshot.messages) ? cloneJsonValue(snapshot.messages) : [],
@@ -1068,8 +1090,6 @@ export class DebugTrace {
     };
     trace.tools.push(tool);
     trace.updatedAt = tool.createdAt;
-    // A tool can settle after the provider's terminal stop reason. Refresh the
-    // header in that case so terminal metadata includes the late durable tool.
     this.#appendTraceRecord(trace, 'tool', tool, { writeMeta: trace.active === false });
     return id;
   }
@@ -1146,8 +1166,8 @@ export class DebugTrace {
     let trace = Array.from(this.#requestCache.values()).find(item => (
       item?.sessionId === requestedSessionId
       && (item.requestId === requestedTurnId || item.traceId === requestedTurnId)
-      && !item._payloadReleased
     )) || null;
+    if (trace) trace = await readAvailableTrace(this.#rootDir, trace);
     if (!trace) {
       const locator = await readJson(turnLocatorPath(this.#rootDir, requestedSessionId, requestedTurnId));
       if (locator?.requestKey && locator.sessionId === requestedSessionId && locator.requestId === requestedTurnId) {
@@ -1224,8 +1244,8 @@ export class DebugTrace {
     await this.#drainWrites();
     const tools = [];
     for (const { trace: header } of this.#traceSummaries().slice().reverse()) {
-      const trace = this.#requestCache.get(header.requestKey)
-        || await readHeaderDetail(this.#rootDir, header);
+      const live = this.#requestCache.get(header.requestKey);
+      const trace = live ? await readAvailableTrace(this.#rootDir, live) : await readHeaderDetail(this.#rootDir, header);
       if (!trace) continue;
       for (const tool of Array.isArray(trace.tools) ? trace.tools : []) {
         const row = traceToolToLegacy(trace, tool);
@@ -1246,8 +1266,8 @@ export class DebugTrace {
     if (!needle) return [];
     const results = [];
     for (const { trace: header } of this.#traceSummaries().slice().reverse()) {
-      const trace = this.#requestCache.get(header.requestKey)
-        || await readHeaderDetail(this.#rootDir, header);
+      const live = this.#requestCache.get(header.requestKey);
+      const trace = live ? await readAvailableTrace(this.#rootDir, live) : await readHeaderDetail(this.#rootDir, header);
       if (!trace || !JSON.stringify(trace).toLowerCase().includes(needle)) continue;
       results.push(...traceToLegacyRows(trace));
       if (results.length >= 50) break;
@@ -1325,6 +1345,10 @@ export class DebugTrace {
   async close() {
     this.#acceptingWrites = false;
     await this.#drainWrites();
+    this.#requestCache.clear();
+    this.#turnIndex.clear();
+    this.#retentionIndex.clear();
+    this.#reconciledRetentionSessions.clear();
   }
 
   /**
@@ -1342,10 +1366,7 @@ export class DebugTrace {
       t?.sessionId === normalizedSessionId
       && t?.traceId === traceId
       && t.active !== false
-      && !(turnNumber === 1 && (
-        (t.loops || []).some(l => l.loopNumber === 1)
-        || (t._releasedLoopNumbers || []).includes(1)
-      ))
+      && !(turnNumber === 1 && (t.loops || []).some(l => l.loopNumber === 1))
     );
     // Cache-only: the write path must NEVER touch disk (that was the O(N^2)
     // event-loop stall). Every trace created in this process lives in
@@ -1419,11 +1440,12 @@ export class DebugTrace {
         .find(item => traceMatchesIdentity(item, sessionId, turnId)) || null;
     }
     if (!trace) return false;
-    trace._lastSnapshot = this.#reconstructLastSnapshot(trace);
-    this.#releasePersistedPayload(trace, [
-      ...(trace.loops || []).map(record => ({ type: 'loop', record })),
-      ...(trace.tools || []).map(record => ({ type: 'tool', record })),
-    ]);
+    // Legacy traces must keep their source payload until format migration has
+    // durably copied it. Event traces already own their history on disk.
+    if (trace._persistedFormat === 'events') {
+      trace._lastSnapshot = this.#reconstructLastSnapshot(trace);
+      this.#releasePersistedPayload(trace, [...trace.loops, ...trace.tools]);
+    }
     this.#requestCache.set(trace.requestKey, trace);
     return true;
   }
@@ -1491,40 +1513,23 @@ export class DebugTrace {
     return tracePathFor(this.#rootDir, trace.sessionId || null, trace.requestKey);
   }
 
-  #releasePersistedPayload(trace, entries) {
-    const loopIds = new Set();
-    const toolIds = new Set();
-    for (const entry of entries) {
-      if (entry.type === 'loop') {
-        const loop = entry.record;
-        loopIds.add(loop.turnRowId || loop.loopInstanceId);
-        const usage = normalizeUsage(loop.usage || {});
-        trace._releasedLoopCount = Number(trace._releasedLoopCount || 0) + 1;
-        trace._releasedTotalMs = Number(trace._releasedTotalMs || 0) + Number(loop.latencyMs || 0);
-        trace._releasedTotalTokens = Number(trace._releasedTotalTokens || 0) + usage.totalTokens;
-        trace._releasedSummaryInputTokens = Number(trace._releasedSummaryInputTokens || 0) + usage.totalInputTokens;
-        trace._releasedSummaryOutputTokens = Number(trace._releasedSummaryOutputTokens || 0) + usage.outputTokens;
-        trace._releasedLoopModels = [...new Set([...(trace._releasedLoopModels || []), loop.model].filter(Boolean))];
-        trace._releasedStopReasons = [...new Set([...(trace._releasedStopReasons || []), loop.stopReason].filter(Boolean))];
-        trace._releasedLoopNumbers = [...new Set([...(trace._releasedLoopNumbers || []), loop.loopNumber])];
-      } else if (entry.type === 'tool') {
-        const tool = entry.record;
-        toolIds.add(tool.id);
-        trace._releasedToolCount = Number(trace._releasedToolCount || 0) + 1;
-        trace._releasedToolNames = [...new Set([
-          ...(trace._releasedToolNames || []),
-          tool.toolName || tool.name,
-        ].filter(Boolean))];
-      }
-    }
-    if (loopIds.size > 0) {
-      trace.loops = (trace.loops || []).filter(loop => !loopIds.has(loop.turnRowId || loop.loopInstanceId));
-      // The first loop delta is self-contained. Once it is durable, the full
-      // base request is redundant; _lastSnapshot is enough for the next delta.
-      trace.baseRequest = null;
-    }
-    if (toolIds.size > 0) trace.tools = (trace.tools || []).filter(tool => !toolIds.has(tool.id));
-    trace._payloadReleased = (trace.loops || []).length === 0 && (trace.tools || []).length === 0;
+  /** Release only exact records known to be durable; newer replacements and
+   * in-flight records keep their payload. Lightweight rows preserve identity,
+   * counts and usage without keeping tool output/response/request bodies. */
+  #releasePersistedPayload(trace, records) {
+    const persisted = new Set(records);
+    trace.loops = (trace.loops || []).map(loop => {
+      if (!persisted.has(loop)) return loop;
+      const { response, toolCalls, rawRequest, rawResponse, requestDelta, ...meta } = loop;
+      return meta;
+    });
+    trace.tools = (trace.tools || []).map(tool => {
+      if (!persisted.has(tool)) return tool;
+      const { toolInput, toolOutput, ...meta } = tool;
+      return meta;
+    });
+    trace.baseRequest = null;
+    trace._payloadReleased = true;
   }
 
   #appendTraceRecord(trace, type, record, { writeMeta = false, evictAfterWrite = false } = {}) {
@@ -1535,7 +1540,9 @@ export class DebugTrace {
     this.#pendingWrites.push({
       trace,
       type,
-      record: cloneJsonValue(record),
+      // Records are private immutable snapshots, already detached from caller
+      // input by endTurn/logTool. Do not serialize+parse a second full copy.
+      record,
       initialize,
       writeMeta: !!writeMeta,
       evictAfterWrite: !!evictAfterWrite,
@@ -1578,18 +1585,18 @@ export class DebugTrace {
       for (const entry of entries) {
         if (!this.#requestCache.has(entry.trace.requestKey)) continue;
         const requestDir = requestDirFor(this.#rootDir, entry.trace.sessionId || null, entry.trace.requestKey);
-        const batch = batches.get(requestDir) || { trace: entry.trace, initialize: false, writeMeta: false, evictAfterWrite: false, entries: [], lines: [] };
+        const batch = batches.get(requestDir) || { trace: entry.trace, initialize: false, writeMeta: false, evictAfterWrite: false, records: [] };
         batch.trace = entry.trace;
         batch.initialize ||= entry.initialize;
         batch.writeMeta ||= entry.writeMeta;
         batch.evictAfterWrite ||= entry.evictAfterWrite;
-        batch.entries.push(entry);
-        batch.lines.push(`${JSON.stringify({ type: entry.type, record: entry.record })}\n`);
+        batch.records.push({ type: entry.type, record: entry.record });
         batches.set(requestDir, batch);
       }
       for (const [requestDir, batch] of batches) {
         const { trace, initialize, writeMeta, evictAfterWrite } = batch;
-        const lines = [...batch.lines];
+        const records = [...batch.records];
+        const durableRecords = batch.records.map(entry => entry.record);
         const legacyRequestDir = trace._persistedFormat === 'legacy'
           ? trace._persistedRequestDir || null
           : null;
@@ -1599,14 +1606,16 @@ export class DebugTrace {
             const meta = serializableTraceMeta(trace);
             if (legacyRequestDir) {
               meta.legacyBaseRequest = cloneJsonValue(trace.baseRequest);
-              const legacyLines = [];
+              const legacyRecords = [];
               for (const loop of Array.isArray(trace.loops) ? trace.loops : []) {
-                legacyLines.push(`${JSON.stringify({ type: 'loop', record: loop })}\n`);
+                legacyRecords.push({ type: 'loop', record: loop });
+                durableRecords.push(loop);
               }
               for (const tool of Array.isArray(trace.tools) ? trace.tools : []) {
-                legacyLines.push(`${JSON.stringify({ type: 'tool', record: tool })}\n`);
+                legacyRecords.push({ type: 'tool', record: tool });
+                durableRecords.push(tool);
               }
-              lines.unshift(...legacyLines);
+              records.unshift(...legacyRecords);
             }
             await atomicWriteText(metaPath, JSON.stringify(meta));
             await atomicWriteText(
@@ -1617,19 +1626,28 @@ export class DebugTrace {
           await ensureDir(requestDir);
           const eventPath = requestEventsPath(requestDir);
           if (initialize) await prepareJsonlAppend(eventPath);
-          await fsp.appendFile(eventPath, lines.join(''), 'utf8');
+          // Serialize/write one record at a time, not all batch strings plus a
+          // second joined string. Raw diagnostics remain lossless on disk.
+          const handle = await fsp.open(eventPath, 'a');
+          try {
+            for (const record of records) await handle.writeFile(`${JSON.stringify(record)}\n`, 'utf8');
+          } finally { await handle.close(); }
           if (writeMeta) {
             const meta = serializableTraceMeta(trace);
             await atomicWriteText(metaPath, JSON.stringify(meta));
             this.#diskHeaders.set(trace.requestKey, meta);
           }
-          this.#releasePersistedPayload(trace, batch.entries);
+          this.#releasePersistedPayload(trace, durableRecords);
           trace._persistedFormat = 'events';
           trace._persistedRequestDir = requestDir;
           if (legacyRequestDir && legacyRequestDir !== requestDir) {
             await removeRequestDirIfIdentityMatches(legacyRequestDir, trace);
           }
           if (evictAfterWrite) {
+            // Retention must not keep a second strong reference to finalized
+            // _lastSnapshot after the primary cache has evicted the request.
+            const retained = this.#retentionIndex.get(trace.sessionId || '')?.get(trace.requestKey);
+            if (retained) retained.trace = serializableTraceMeta(trace);
             this.#requestCache.delete(trace.requestKey);
             this.#initializedRequestKeys.delete(trace.requestKey);
             for (const [turnId, ctx] of this.#turnIndex) {
