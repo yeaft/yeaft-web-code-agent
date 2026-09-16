@@ -1,5 +1,8 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mount, flushPromises } from '@vue/test-utils';
+import { reactive, nextTick } from 'vue';
+import WorkCenterSidebar from '../../web/components/WorkCenterSidebar.js';
 
 const stores = {};
 globalThis.Pinia = {
@@ -149,4 +152,72 @@ describe('Work Center activity store', () => {
     expect(store.workCenterActivityLoadingByAgent).toEqual({});
     expect(store.workCenterActivityErrorByAgent).toEqual({});
   });
+
+  it('refreshes once after authenticated reconnect with the same online Agent and preserves detail', async () => {
+    const agent = { id: 'agent-a', online: true };
+    let snapshot = [item('missed-completion', 'running')];
+    const store = reactive(createStore({
+      agents: [agent], connectionState: 'connected', chatHistoryConnectionGeneration: 1,
+      workCenterActivityConnectionGeneration: 1,
+      workCenterDetailByAgent: { 'agent-a': { id: 'selected-detail' } },
+    }));
+    store.workCenterRequest = vi.fn(async (op, payload) => ({
+      items: payload.status === 'running' ? snapshot : [],
+    }));
+    Pinia.useChatStore = () => store;
+    const wrapper = mount(WorkCenterSidebar, {
+      props: { agents: store.agents, agentId: agent.id },
+      global: { mocks: { $t: key => key } },
+    });
+    try {
+      await flushPromises();
+      expect(store.workCenterRequest).toHaveBeenCalledTimes(2);
+      expect(store.workCenterActivityByAgent['agent-a'].map(row => row.id)).toEqual(['missed-completion']);
+      store.connectionState = 'disconnected';
+      store.chatHistoryConnectionGeneration = 2;
+      await nextTick();
+      snapshot = [item('new-during-disconnect', 'running')];
+      store.connectionState = 'connected';
+      await flushPromises();
+      // Socket open is not an authenticated Agent inventory.
+      expect(store.workCenterRequest).toHaveBeenCalledTimes(2);
+      store.workCenterActivityConnectionGeneration = 2;
+      await flushPromises();
+      expect(store.workCenterRequest).toHaveBeenCalledTimes(4);
+      expect(store.workCenterActivityByAgent['agent-a'].map(row => row.id)).toEqual(['new-during-disconnect']);
+      store.workCenterActivityConnectionGeneration = 2;
+      await wrapper.setProps({ agents: [{ ...agent, latency: 10 }] });
+      await flushPromises();
+      expect(store.workCenterRequest).toHaveBeenCalledTimes(4);
+      expect(store.workCenterDetailByAgent['agent-a']).toEqual({ id: 'selected-detail' });
+      store.chatHistoryConnectionGeneration = 3;
+      await wrapper.setProps({ agents: [{ ...agent, online: false }] });
+      store.workCenterActivityConnectionGeneration = 3;
+      await flushPromises();
+      expect(store.workCenterRequest).toHaveBeenCalledTimes(4);
+    } finally { wrapper.unmount(); }
+  });
+
+  it('rejects old-socket snapshots before starting any follow-up page', async () => {
+    const requests = [];
+    const store = createStore({ chatHistoryConnectionGeneration: 1 });
+    store.workCenterRequest = vi.fn(() => {
+      const request = deferred();
+      requests.push(request);
+      return request.promise;
+    });
+    const oldLoad = store.loadWorkCenterActivity('agent-a');
+    store.chatHistoryConnectionGeneration = 2;
+    requests[0].resolve({ items: [item('old-socket', 'running')], nextCursor: 'page-2' });
+    requests[1].resolve({ items: [] });
+    await oldLoad;
+    expect(store.workCenterActivityByAgent['agent-a']).toBeUndefined();
+    expect(store.workCenterRequest).toHaveBeenCalledTimes(2);
+    const freshLoad = store.loadWorkCenterActivity('agent-a');
+    requests[2].resolve({ items: [item('fresh-socket', 'running')] });
+    requests[3].resolve({ items: [] });
+    await freshLoad;
+    expect(store.workCenterActivityByAgent['agent-a'].map(row => row.id)).toEqual(['fresh-socket']);
+  });
+
 });

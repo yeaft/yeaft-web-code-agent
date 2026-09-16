@@ -33,9 +33,12 @@ async function expectEmptyWorkCenter(page) {
   await expect(page.locator('.work-center-main')).toContainText('No online agents');
   await expect(page.locator('.work-center-agent-picker')).toHaveCount(0);
   await expect(page.locator('.work-center-header-actions')).toHaveCount(1);
-  await expect(page.locator('.work-center-close-button')).toBeVisible();
+  await expect(page.locator('.work-center-close-button')).toHaveCount(0);
+  if (page.viewportSize().width <= 1100) {
+    await page.locator('.work-center-navigation-toggle:visible').click();
+  }
   await expect(page.locator('.session-sidebar-shell')).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Close Work Center' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Return to Session' })).toBeVisible();
   const bounds = await page.locator('.work-center-main').boundingBox();
   expect(bounds.x).toBe(0);
   expect(bounds.width).toBe(page.viewportSize().width);
@@ -74,9 +77,9 @@ for (const host of ['chat', 'yeaft']) {
       await page.screenshot({ path: testInfo.outputPath('sidebar-header.png') });
       await entry.click();
       await expectEmptyWorkCenter(page);
-      await expect(page.getByRole('button', { name: 'Close Work Center' })).toBeFocused();
+      await expect(page.getByRole('button', { name: 'Return to Session' })).toBeFocused();
       await page.screenshot({ path: testInfo.outputPath('work-center.png') });
-      await page.getByRole('button', { name: 'Close Work Center' }).press('Enter');
+      await page.getByRole('button', { name: 'Return to Session' }).press('Enter');
       await expect(entry).toBeFocused();
       await expect(page.locator('.work-center-main')).toHaveCount(0);
 
@@ -85,7 +88,7 @@ for (const host of ['chat', 'yeaft']) {
       await railEntry.focus();
       await railEntry.press('Enter');
       await expectEmptyWorkCenter(page);
-      await page.getByRole('button', { name: 'Close Work Center' }).click();
+      await page.getByRole('button', { name: 'Return to Session' }).click();
       await expect(railEntry).toBeFocused();
       await expect(page.locator('.session-sidebar-shell')).toHaveClass(/collapsed/);
       await page.locator('.sidebar-collapsed-bar button[title="Expand menu"]').click();
@@ -95,7 +98,7 @@ for (const host of ['chat', 'yeaft']) {
       await expect(page.locator('.sidebar-work-center-trigger:visible')).toHaveCount(1);
       await entry.click();
       await expectEmptyWorkCenter(page);
-      await page.getByRole('button', { name: 'Close Work Center' }).click();
+      await page.getByRole('button', { name: 'Return to Session' }).click();
       expect(requests).toEqual([]);
 
       await page.reload();
@@ -129,7 +132,7 @@ for (const host of ['chat', 'yeaft']) {
       await expectEmptyWorkCenter(page);
       await expect(page.locator('.sidebar-overlay, .yeaft-sidebar-overlay')).toHaveCount(0);
       await page.screenshot({ path: testInfo.outputPath('work-center-mobile.png') });
-      await page.getByRole('button', { name: 'Close Work Center' }).click();
+      await page.getByRole('button', { name: 'Return to Session' }).click();
       await expect(page.locator('.work-center-main')).toHaveCount(0);
       await expect(drawerButton).toBeFocused();
       await drawerButton.click();
@@ -196,7 +199,7 @@ test('late Session hydration cannot cover the full-screen Work Center', async ({
     sessions.activeSessionId = 'late-empty';
   });
   await expect(page.locator('.group-invite-overlay')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Close Work Center' }).click();
+  await page.getByRole('button', { name: 'Return to Session' }).click();
   await expect(page.locator('.work-center-main')).toHaveCount(0);
   // The invitation belongs to the conversation, and is still offered on return.
   await expect(page.locator('.group-invite-overlay')).toBeVisible();

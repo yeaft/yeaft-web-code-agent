@@ -964,6 +964,7 @@ export const useChatStore = defineStore('chat', {
     workCenterUiEnabled: localStorage.getItem('work-center-ui-enabled') !== 'false',
     workCenterAgentId: null,
     workCenterItemsByAgent: {},
+    workCenterActivityConnectionGeneration: -1,
     workCenterActivityByAgent: {},
     workCenterActivityLoadingByAgent: {},
     workCenterActivityErrorByAgent: {},
@@ -2101,6 +2102,7 @@ export const useChatStore = defineStore('chat', {
       if (!target) return [];
       const generation = Number(this._workCenterActivityGenerationByAgent[target] || 0) + 1;
       const ownerGeneration = Number(this._workCenterActivityOwnerGeneration || 0);
+      const connectionGeneration = Number(this.chatHistoryConnectionGeneration || 0);
       const eventGeneration = Number(this._workCenterActivityEventGenerationByAgent[target] || 0);
       this._workCenterActivityGenerationByAgent = {
         ...this._workCenterActivityGenerationByAgent, [target]: generation,
@@ -2120,6 +2122,7 @@ export const useChatStore = defineStore('chat', {
             const payload = { status, limit: WORK_CENTER_ACTIVITY_PAGE_LIMIT };
             if (cursor) payload.cursor = cursor;
             const data = await this.workCenterRequest('list', payload, target);
+            if (Number(this.chatHistoryConnectionGeneration || 0) !== connectionGeneration) return [];
             if (Array.isArray(data?.items)) items.push(...data.items);
             const nextCursor = typeof data?.nextCursor === 'string' && data.nextCursor
               ? data.nextCursor : null;
@@ -2130,7 +2133,8 @@ export const useChatStore = defineStore('chat', {
           return items;
         }));
         const requestStillCurrent = this._workCenterActivityGenerationByAgent[target] === generation
-          && Number(this._workCenterActivityOwnerGeneration || 0) === ownerGeneration;
+          && Number(this._workCenterActivityOwnerGeneration || 0) === ownerGeneration
+          && Number(this.chatHistoryConnectionGeneration || 0) === connectionGeneration;
         if (!requestStillCurrent) return pages.flat();
         const currentById = new Map((this.workCenterActivityByAgent[target] || [])
           .map(item => [item.id, item]));
@@ -2152,7 +2156,8 @@ export const useChatStore = defineStore('chat', {
         return merged;
       } catch (err) {
         if (this._workCenterActivityGenerationByAgent[target] === generation
-            && Number(this._workCenterActivityOwnerGeneration || 0) === ownerGeneration) {
+            && Number(this._workCenterActivityOwnerGeneration || 0) === ownerGeneration
+            && Number(this.chatHistoryConnectionGeneration || 0) === connectionGeneration) {
           this.workCenterActivityErrorByAgent = {
             ...this.workCenterActivityErrorByAgent, [target]: err?.message || String(err),
           };

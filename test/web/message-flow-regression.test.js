@@ -1437,6 +1437,8 @@ describe('message flow regressions', () => {
 
   it('refreshes Work Center once after a genuine reconnect and preserves active filters', () => {
     const store = useChatStore();
+    store.chatHistoryConnectionGeneration = 12;
+    store.workCenterActivityConnectionGeneration = 11;
     const activeFilters = {
       lane: 'active',
       keyword: 'reconnect',
@@ -1471,6 +1473,7 @@ describe('message flow regressions', () => {
       agents: [{ ...store.agents[0], latency: 12 }],
     });
 
+    expect(store.workCenterActivityConnectionGeneration).toBe(12);
     expect(store.listWorkItems).toHaveBeenCalledTimes(1);
     expect(store.listWorkItems).toHaveBeenCalledWith('agent-work-center', activeFilters);
     expect(store._yeaftReconnectCatchUpPending).toBe(false);
@@ -3519,12 +3522,12 @@ describe('message flow regressions', () => {
     expect(workCenter).toContain('menu-class="work-center-composer-target-menu yeaft-model-dropdown"');
     expect(workCenter).toContain('@update:model-value="composerTargetValue = $event"');
     expect(workCenter).not.toContain('<select v-model="composerTargetValue"');
-    expect(workCenter).toContain(':options="workCenterAgentOptions"');
-    expect(workCenter).toContain('@update:model-value="selectWorkCenterAgent"');
+    expect(workCenter).toContain('<WorkCenterSidebar');
+    expect(workCenter).toContain('@select-agent="selectWorkCenterAgent"');
     expect(workCenter).not.toContain('<label class="work-center-agent-picker">');
     expect(workCenter).not.toContain('<select :value="agentId"');
     expect(workCenter).toContain("this.store.enterWorkCenter(nextAgentId)");
-    expect(workCenterCss).toMatch(/\.work-center-agent-picker \.modern-select-trigger\s*\{[^}]*background:\s*var\(--bg-input\)/s);
+    expect(workCenterCss).toMatch(/\.work-center-sidebar\s*\{[^}]*background:\s*var\(--bg-sidebar\)/s);
     const pluginCenterCss = readFileSync(resolve(import.meta.dirname, '../../web/styles/plugin-center.css'), 'utf8');
     expect(pluginCenterCss).toContain('background: var(--bg-main);');
     expect(pluginCenterCss).toContain('background: var(--bg-sidebar);');
@@ -3588,7 +3591,7 @@ describe('message flow regressions', () => {
         },
       },
     });
-    expect(workCenterPage.get('.work-center-agent-picker .modern-select-label').text()).toBe('server');
+    expect(workCenterPage.get('.work-center-heading').text()).toBe('server');
     workCenterStore.refreshWorkCenterRuntime = vi.fn(() => Promise.resolve());
     await WorkCenterPage.methods.refreshWorkCenterRuntime.call(workCenterPage.vm, 'agent-b');
     expect(workCenterStore.refreshWorkCenterRuntime).not.toHaveBeenCalled();
@@ -3618,7 +3621,7 @@ describe('message flow regressions', () => {
     expect(emptyWorkCenterPage.text()).toContain('The online Agents do not support Work Center settings');
     expect(emptyWorkCenterPage.text()).toContain('Open Agent settings to upgrade');
     expect(emptyWorkCenterPage.find('.work-center-header-actions').exists()).toBe(true);
-    expect(emptyWorkCenterPage.find('.work-center-close-button').exists()).toBe(true);
+    expect(emptyWorkCenterPage.find('.work-center-return').exists()).toBe(true);
     expect(emptyWorkCenterPage.find('.work-center-agent-picker').exists()).toBe(false);
     expect(emptyWorkCenterPage.find('.work-center-body').exists()).toBe(false);
     expect(emptyWorkCenterStore.listWorkItems).not.toHaveBeenCalled();
@@ -3795,31 +3798,13 @@ describe('message flow regressions', () => {
     pluginCenter.unmount();
 
     globalThis.Pinia.useChatStore = () => workCenterStore;
-    await workCenterPage.get('.work-center-agent-picker .modern-select-trigger').trigger('click');
+    workCenterPage.vm.sidebarExpanded = true;
     await Vue.nextTick();
-    const agentMenu = document.body.querySelector('.work-center-agent-menu');
-    expect(agentMenu).not.toBeNull();
-    expect([...agentMenu.querySelectorAll('.modern-select-option-label')].map(row => row.textContent.trim())).toEqual([
+    const agents = workCenterPage.findAll('.work-center-agent-row');
+    expect(agents.map(row => row.get('span:nth-child(2)').text())).toEqual([
       'server', 'C1', 'C2', 'C3', 'C4', 'C5',
     ]);
-    expect(workCenterCss).toMatch(/\.work-center-agent-menu \.modern-select-list\s*\{[^}]*max-height:\s*min\(164px, var\(--modern-select-list-max-height, 164px\)\);/s);
-    const workCenterAgentListRule = workCenterCss.match(/\.work-center-agent-menu \.modern-select-list\s*\{([^}]*)\}/s)?.[1] || '';
-    expect(workCenterAgentListRule).not.toMatch(/(^|[;\s])height\s*:/);
-    expect(workCenterCss).toMatch(/\.work-center-agent-menu \.modern-select-option\s*\{[^}]*min-height:\s*32px;[^}]*box-sizing:\s*border-box;/s);
-    const agentList = agentMenu.querySelector('.modern-select-list');
-    Object.defineProperty(agentList, 'scrollHeight', { configurable: true, value: 260 });
-    Object.defineProperty(agentMenu, 'scrollHeight', { configurable: true, value: 48 });
-    window.dispatchEvent(new Event('scroll'));
-    await Vue.nextTick();
-    const stableMenuHeight = agentMenu.style.maxHeight;
-    expect(stableMenuHeight).not.toBe('48px');
-    for (let index = 0; index < 6; index += 1) {
-      agentList.dispatchEvent(new Event('scroll', { bubbles: true }));
-      await Vue.nextTick();
-      expect(agentMenu.style.maxHeight).toBe(stableMenuHeight);
-    }
-    agentMenu.querySelectorAll('.modern-select-option')[1].click();
-    await Vue.nextTick();
+    await agents[1].trigger('click');
     expect(workCenterStore.enterWorkCenter).toHaveBeenCalledWith('agent-b');
     workCenterPage.unmount();
     delete globalThis.Vue;
@@ -3829,7 +3814,7 @@ describe('message flow regressions', () => {
     expect(workCenter).not.toContain('class="work-center-action-content-summary"');
     expect(workCenter).toContain("contentPanelOpen: false");
     expect(workCenter).toContain("v-if=\"contentPanelOpen\"");
-    expect(workCenter).toContain("if (this.contentPanelOpen) url.searchParams.set('workContent'");
+    expect(workCenter).toContain("this.contentPanelOpen ? this.contentStackParam() : 'none'");
     expect(workCenter).not.toContain('work-center-conversation-topbar');
     expect(workCenter).not.toContain('work-center-content-header');
     expect(workCenter).toContain('work-center-work-item-overview');
@@ -3844,7 +3829,7 @@ describe('message flow regressions', () => {
     expect(workCenterCss).toMatch(/\.work-center-conversation-column,[\s\S]*?\.work-center-composer-column\s*\{[^}]*max-width:\s*var\(--work-center-conversation-column-width\);/s);
     expect(workCenterCss).not.toMatch(/\.work-center-work-item-overview\s*\{[^}]*overflow-y:/s);
     expect(workCenterCss).not.toContain('.work-center-triage-summary');
-    expect(workCenterCss).toMatch(/@container work-center \(max-width:\s*1024px\)\s*\{[\s\S]*?\.work-center-detail-layout\.content-open \.work-center-conversation-pane\s*\{[^}]*display:\s*none;/s);
+    expect(workCenterCss).toMatch(/@container work-center \(max-width:\s*900px\)\s*\{[\s\S]*?\.work-center-detail-layout\.content-open \.work-center-conversation-pane\s*\{[^}]*display:\s*none;/s);
     expect(workCenterCss).not.toContain('@container work-center (max-width: 700px)');
     expect(workCenterCss).toMatch(/\.work-center-header-main\s*\{[^}]*display:\s*flex;[^}]*flex:\s*1 1 0;/s);
     expect(workCenterCss).toMatch(/\.work-center-action-description,[\s\S]*?white-space:\s*nowrap;/);

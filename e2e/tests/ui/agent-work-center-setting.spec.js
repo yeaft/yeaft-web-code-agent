@@ -78,9 +78,15 @@ for (const scenario of [
     await expect(dialog).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath(`work-center-enabled-${scenario.width}.png`) });
 
-    await expect(workspace.locator('.work-center-agent-picker')).toContainText('Work Center Agent');
+    await expect(workspace.locator('.work-center-heading')).toContainText('Work Center Agent');
     await expect(workspace).not.toContainText(scenario.disabledText);
-    await expect(page.getByRole('button', { name: /Back to chat|返回对话/ })).toBeFocused();
+    if (scenario.width <= 1100) {
+      const navigation = workspace.locator('.work-center-navigation-toggle:visible');
+      await expect(navigation).toBeFocused();
+      await navigation.click();
+    }
+    await expect(workspace.locator('.work-center-agent-list')).toContainText('Work Center Agent');
+    await expect(workspace.locator('.work-center-return')).toBeFocused();
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 }

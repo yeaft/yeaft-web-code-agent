@@ -9,6 +9,7 @@ import AgentSettingsPanel from './AgentSettingsPanel.js';
 import ModernSelect from './ModernSelect.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
 import PaneResizeHandle from './PaneResizeHandle.js';
+import WorkCenterSidebar from './WorkCenterSidebar.js';
 import { createWorkCenterWorkbenchContext, workCenterOutputTarget } from '../utils/work-center-workbench.js';
 import folderPickerMixin from './mixins/folder-picker-mixin.js';
 import { normalizeSessionMessageQuote } from '../utils/session-message-quote.js';
@@ -36,11 +37,13 @@ export default {
   name: 'WorkCenterPage',
   components: {
     MessageComposer, UserTurnBlock, VpTurnBlock, WorkCenterActionDetail,
-    WorkCenterSettingsModal, AgentSettingsPanel, ModernSelect, WorkCenterResourceControl, WorkbenchPanel, PaneResizeHandle,
+    WorkCenterSettingsModal, AgentSettingsPanel, ModernSelect, WorkCenterResourceControl, WorkbenchPanel, PaneResizeHandle, WorkCenterSidebar,
   },
   mixins: [folderPickerMixin],
   data() {
     return {
+      sidebarExpanded: window.innerWidth > 1100,
+      mobileNavigation: window.innerWidth <= 1100,
       selectedId: null,
       workbenchExpanded: false,
       selectedActionId: null,
@@ -147,11 +150,8 @@ export default {
         ? selected
         : (this.onlineAgents[0]?.id || null);
     },
-    workCenterAgentOptions() {
-      return this.onlineAgents.map(agent => ({
-        value: agent.id,
-        label: agent.name || agent.id,
-      }));
+    sidebarAgents() {
+      return this.agents.filter(agent => agent.capabilities?.includes('work_center'));
     },
     watcher() { return this.store.workCenterWatcherByAgent[this.agentId] || null; },
     boardNextCursor() { return this.store.workCenterListPageByAgent[this.agentId]?.nextCursor || null; },
@@ -559,10 +559,13 @@ export default {
     if (this.boardQueryTimer) clearTimeout(this.boardQueryTimer);
     window.removeEventListener('popstate', this.restoreWorkCenterUrl);
     document.removeEventListener('click', this.closeHeaderPopovers);
+    this.navigationMedia?.removeEventListener('change', this.onNavigationResize);
   },
   mounted() {
     this.returnFocusElement = document.activeElement;
-    this.$nextTick(() => this.$refs.backToChat?.focus({ preventScroll: true }));
+    this.navigationMedia = window.matchMedia('(max-width: 1100px)');
+    this.navigationMedia.addEventListener('change', this.onNavigationResize);
+    this.$nextTick(() => this.focusNavigationReturn());
     window.addEventListener('popstate', this.restoreWorkCenterUrl);
     document.addEventListener('click', this.closeHeaderPopovers);
     this.restoreWorkCenterUrl();
@@ -581,6 +584,29 @@ export default {
     this.applyCreateDefaults();
   },
   methods: {
+    onNavigationResize(event) {
+      this.mobileNavigation = event.matches;
+      this.sidebarExpanded = !event.matches;
+    },
+    toggleNavigation() {
+      this.sidebarExpanded = !this.sidebarExpanded;
+      this.$nextTick(() => this.sidebarExpanded && this.mobileNavigation
+        ? this.$refs.navigation?.focusReturn() : this.focusNavigationReturn());
+    },
+    focusNavigationReturn() {
+      if (!this.mobileNavigation) this.$refs.navigation?.focusReturn();
+      else [...(this.$refs.header?.querySelectorAll('.work-center-navigation-toggle') || [])]
+        .find(button => button.getClientRects().length)?.focus({ preventScroll: true });
+    },
+    async selectActivity({ item, actionId }) {
+      const agentId = this.agentId;
+      await this.selectItem(item);
+      if (this.agentId !== agentId || this.selectedId !== item.id || this.detailError) return;
+      if (actionId) {
+        const action = this.selected?.actions?.find(action => action.id === actionId);
+        if (action) this.selectAction(action);
+      }
+    },
     toggleWorkbench() {
       this.$refs.workbench?.toggle();
     },
@@ -641,10 +667,13 @@ export default {
     },
     closeWorkCenterAgentSettings({ focusBack = false } = {}) {
       this.agentSettingsOpen = false;
-      if (focusBack) this.$nextTick(() => this.$refs.backToChat?.focus({ preventScroll: true }));
+      if (focusBack) this.$nextTick(() => this.focusNavigationReturn());
     },
     selectWorkCenterAgent(nextAgentId) {
-      if (!nextAgentId || nextAgentId === this.agentId) return;
+      if (this.mobileNavigation) this.sidebarExpanded = false;
+      if (!nextAgentId || nextAgentId === this.agentId) { this.showItemsPane(); return; }
+      this.saveComposerDraft();
+      this.showItemsPane();
       this.store.enterWorkCenter(nextAgentId);
     },
     statusLabel(status) {
@@ -878,8 +907,7 @@ export default {
       if (this.selectedId) {
         url.searchParams.set('workAgentId', this.agentId || '');
         url.searchParams.set('workItemId', this.selectedId);
-        if (this.contentPanelOpen) url.searchParams.set('workContent', this.contentStackParam());
-        else url.searchParams.delete('workContent');
+        url.searchParams.set('workContent', this.contentPanelOpen ? this.contentStackParam() : 'none');
       } else {
         url.searchParams.delete('workAgentId');
         url.searchParams.delete('workItemId');
@@ -905,7 +933,8 @@ export default {
         if (this.selectedId) this.showItemsPane({ syncUrl: false });
         return;
       }
-      const contentPanelOpen = route.content != null;
+      const contentPanelOpen = route.content == null
+        ? (this.$refs.shell?.clientWidth || window.innerWidth) > 900 : route.content !== 'none';
       const contentStack = this.parseContentStack(route.content);
       const contentRef = contentStack.at(-1);
       if (this.selectedId !== workItemId || this.detail?.id !== workItemId) {
@@ -991,7 +1020,7 @@ export default {
     openWorkItem(itemId, {
       syncUrl = true,
       contentRefs = [{ type: 'action-list' }],
-      contentOpen = false,
+      contentOpen = (this.$refs.shell?.clientWidth || window.innerWidth) > 900,
     } = {}) {
       this.saveComposerDraft();
       this.selectedId = itemId;
@@ -1007,6 +1036,7 @@ export default {
       if (syncUrl) this.syncWorkCenterUrl();
     },
     async selectItem(item) {
+      if (this.mobileNavigation) this.sidebarExpanded = false;
       this.openWorkItem(item.id);
       this.detailLoading = true;
       try {
@@ -1482,24 +1512,24 @@ export default {
     },
   },
   template: `
-    <main class="work-center-main" :aria-label="tr('workCenter.title', 'Work Center')">
-        <div class="work-center-shell" :class="{ 'showing-detail': narrowPane !== 'items' }"
+    <main class="work-center-main" :class="{ 'navigation-open': sidebarExpanded && mobileNavigation }" :aria-label="tr('workCenter.title', 'Work Center')">
+        <WorkCenterSidebar ref="navigation" :agents="sidebarAgents" :agent-id="agentId" :item-id="selectedId"
+                           :action-id="selectedActionId" :expanded="sidebarExpanded"
+                           @back="backToChat" @collapse="toggleNavigation" @select-agent="selectWorkCenterAgent" @select-item="selectActivity" />
+        <button v-if="mobileNavigation && sidebarExpanded" class="work-center-sidebar-scrim" type="button" tabindex="-1"
+                :aria-label="$t('workCenter.hideNavigation')" @click="toggleNavigation"></button>
+        <div ref="shell" class="work-center-shell" :inert="mobileNavigation && sidebarExpanded" :class="{ 'showing-detail': narrowPane !== 'items' }"
              :style="{ '--work-center-actions-pane-width': actionsPaneWidth + 'px' }">
-          <header class="work-center-header" :class="{ 'content-open': narrowPane !== 'items' && selected && contentPanelOpen }">
+          <header ref="header" class="work-center-header" :class="{ 'content-open': narrowPane !== 'items' && selected && contentPanelOpen }">
             <div class="work-center-header-main">
-              <div v-if="narrowPane === 'items' || !selected" class="work-center-heading">
-                <div v-if="onlineAgents.length" class="work-center-agent-picker">
-                  <span class="work-center-agent-dot" aria-hidden="true"></span>
-                  <ModernSelect
-                    :model-value="agentId"
-                    :options="workCenterAgentOptions"
-                    :aria-label="tr('workCenter.selectAgent', 'Select Agent')"
-                    :menu-min-width="160"
-                    menu-class="work-center-agent-menu"
-                    @update:model-value="selectWorkCenterAgent"
-                    />
+              <div class="work-center-header-main-inner">
+                <button class="work-center-icon-button work-center-navigation-toggle" type="button" @click="toggleNavigation"
+                        :aria-label="$t('workCenter.showNavigation')" :aria-expanded="sidebarExpanded" aria-controls="work-center-sidebar">
+                  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" d="M3 4h18v16H3zM9 4v16"/></svg>
+                </button>
+                <div v-if="narrowPane === 'items' || !selected" class="work-center-heading">
+                  <span>{{ agents.find(agent => agent.id === agentId)?.name || tr('workCenter.backToWorkItems', 'Work items') }}</span>
                 </div>
-              </div>
               <nav v-if="narrowPane !== 'items' && selected" class="work-center-detail-breadcrumb" :aria-label="tr('workCenter.navigation', 'Work item navigation')">
                 <button class="work-center-breadcrumb-button" type="button" @click="showItemsPane"
                   :title="tr('workCenter.backToWorkItems', 'Work items')" :aria-label="tr('workCenter.backToWorkItems', 'Work items')">
@@ -1593,13 +1623,14 @@ export default {
                     <span>{{ selected.actionCount || selected.actions?.length || 0 }}</span>
                   </button>
                 </template>
-                <button v-if="narrowPane === 'items' || !selected || !contentPanelOpen" ref="backToChat" class="work-center-icon-button work-center-close-button" type="button" @click="backToChat"
-                  :title="tr('workCenter.close', 'Close Work Center')" :aria-label="tr('workCenter.close', 'Close Work Center')">
-                  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="m6 6 12 12M18 6 6 18"/></svg>
-                </button>
+              </div>
               </div>
             </div>
             <div v-if="narrowPane !== 'items' && selected && contentPanelOpen" class="work-center-header-content">
+              <button class="work-center-icon-button work-center-navigation-toggle" type="button" @click="toggleNavigation"
+                      :aria-label="$t('workCenter.showNavigation')" :aria-expanded="sidebarExpanded" aria-controls="work-center-sidebar">
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" d="M3 4h18v16H3zM9 4v16"/></svg>
+              </button>
               <nav class="work-center-content-title" :aria-label="tr('workCenter.actionsPanel', 'Actions')">
                 <template v-if="!contentIsActionList">
                   <button ref="actionBack" class="work-center-breadcrumb-button" type="button" @click="showActionsPane"
@@ -1620,11 +1651,7 @@ export default {
               </button>
               <button ref="contentClose" class="work-center-icon-button work-center-content-close" type="button" @click="closeContentPanel"
                 :title="tr('workCenter.closeActions', 'Close Actions')" :aria-label="tr('workCenter.closeActions', 'Close Actions')">
-                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" d="M3 4h18v16H3zM14 4v16m-6-8 3 4-3 4"/></svg>
-              </button>
-              <button ref="backToChat" class="work-center-icon-button work-center-close-button" type="button" @click="backToChat"
-                :title="tr('workCenter.close', 'Close Work Center')" :aria-label="tr('workCenter.close', 'Close Work Center')">
-                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="m6 6 12 12M18 6 6 18"/></svg>
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" d="m6 6 12 12M18 6 6 18"/></svg>
               </button>
             </div>
           </header>
@@ -2033,7 +2060,7 @@ export default {
 
           </div>
         </div>
-        <WorkbenchPanel v-if="workbenchContext.available" ref="workbench" :key="workbenchContext.workspaceGeneration"
+        <WorkbenchPanel :inert="mobileNavigation && sidebarExpanded" v-if="workbenchContext.available" ref="workbench" :key="workbenchContext.workspaceGeneration"
                         :owner-route="workbenchContext.ownerRoute" :owner-work-dir="workbenchContext.ownerWorkDir"
                         @expanded-change="workbenchExpanded = $event" />
     </main>
