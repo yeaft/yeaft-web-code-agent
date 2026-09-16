@@ -225,6 +225,7 @@ describe('Work Center core', () => {
       executionStatus: 'quiescent',
       effectCutoff: { status: 'current', closureType: 'recovered_late_settled_completion' },
     });
+  });
 
   it('keeps a bounded tool journal and replaces running entries by tool id', () => {
     let checkpoint = null;
