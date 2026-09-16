@@ -3400,13 +3400,15 @@ it('keeps WorkItem Git operations at an owned repository root, including canonic
     const secret = join(root, 'secret.txt');
     writeFileSync(secret, 'outside secret');
     symlinkSync(secret, join(repository, 'secret-link.txt'), 'file');
-    for (const filePath of ['secret-link.txt', '../secret.txt']) {
-      const result = await run(handleGitDiff, { workDir: repository, filePath, untracked: true });
-      expect(result.error).toContain('outside the WorkItem workspace');
-      expect(result.newFileContent).toBeUndefined();
-    }
     writeFileSync(join(repository, 'new.txt'), 'local preview');
-    expect((await run(handleGitDiff, { workDir: repository, filePath: 'new.txt', untracked: true })).newFileContent).toBe('local preview');
+    for (const workDir of [repository, alias]) {
+      for (const filePath of ['secret-link.txt', '../secret.txt']) {
+        const result = await run(handleGitDiff, { workDir, filePath, untracked: true });
+        expect(result.error).toContain('outside the WorkItem workspace');
+        expect(result.newFileContent).toBeUndefined();
+      }
+      expect((await run(handleGitDiff, { workDir, filePath: 'new.txt', untracked: true })).newFileContent).toBe('local preview');
+    }
   } finally {
     ctx.sendToServer = priorSend;
     rmSync(root, { recursive: true, force: true });

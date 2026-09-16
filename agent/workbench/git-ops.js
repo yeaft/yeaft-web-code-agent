@@ -117,7 +117,9 @@ export async function handleGitDiff(msg) {
     if (untracked) {
       // Untracked files: resolve path relative to git root
       const fullPath = resolve(gitRoot, filePath);
-      const resolved = await resolveWorkItemPath(msg, resolveAndValidatePath(fullPath, gitRoot), workDir);
+      // The root check above proved canonical workspace ownership. Validate
+      // against that same Git root, including when cwd is a symlink alias.
+      const resolved = await resolveWorkItemPath(msg, resolveAndValidatePath(fullPath, gitRoot), gitRoot);
       const content = await readFile(resolved, 'utf-8');
       sendWorkbenchResult(ctx, msg, {
         type: 'git_diff_result',
