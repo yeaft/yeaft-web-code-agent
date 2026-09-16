@@ -615,8 +615,10 @@ test.describe('Work Center responsive UI', () => {
       await expect(breadcrumb).toContainText('Work items');
       await expect(breadcrumb).toContainText(OPEN_ITEM.title);
       const crumbBox = await breadcrumb.boundingBox();
-      const contentBox = await chatPage.locator('.work-center-work-item-overview').boundingBox();
-      expect(Math.abs(crumbBox.x - contentBox.x)).toBeLessThanOrEqual(1);
+      expect(crumbBox.y).toBeGreaterThanOrEqual(headerBox.y);
+      expect(crumbBox.y + crumbBox.height).toBeLessThanOrEqual(headerBox.y + headerBox.height);
+      await expect(header.locator('.work-center-actions-button')).toBeVisible();
+      await expect(chatPage.locator('.work-center-detail header')).toHaveCount(0);
       await chatPage.locator('.work-center-item-message-input textarea').fill('Preserve this draft');
       await chatPage.getByRole('button', { name: /^\d+ Actions$/ }).click();
       const itemBox = await chatPage.locator('.work-center-conversation-pane').boundingBox();
@@ -624,10 +626,11 @@ test.describe('Work Center responsive UI', () => {
       expect(actionsBox.y).toBe(itemBox.y);
       expect(actionsBox.height).toBe(itemBox.height);
       await chatPage.locator('.work-center-action-summary').click();
-      const itemHeader = await chatPage.locator('.work-center-conversation-topbar').boundingBox();
-      const actionHeader = await chatPage.locator('.work-center-action-detail-header').boundingBox();
-      expect(actionHeader.y).toBe(itemHeader.y);
-      expect(actionHeader.height).toBe(itemHeader.height);
+      const actionHeader = await chatPage.locator('.work-center-header-content').boundingBox();
+      expect(actionHeader.y).toBe(headerBox.y);
+      expect(actionHeader.height).toBe(headerBox.height);
+      expect(actionsBox.y).toBe(headerBox.y + headerBox.height);
+      await expect(header.getByRole('button', { name: 'Back to Actions' })).toBeFocused();
       await chatPage.screenshot({ path: testInfo.outputPath(`flat-item-action-${theme}.png`) });
       await chatPage.setViewportSize({ width: 320, height: 720 });
       await expect(chatPage.locator('.work-center-action-detail-pane')).toBeVisible();
@@ -851,13 +854,15 @@ test.describe('Work Center responsive UI', () => {
     const assertEdge = async () => {
       const a = await toggle.boundingBox();
       const b = await left.boundingBox();
-      expect(b.x + b.width - a.x - a.width).toBeLessThanOrEqual(9);
+      const headerPane = await chatPage.locator('.work-center-header-main').boundingBox();
+      expect(headerPane.x + headerPane.width).toBeCloseTo(b.x + b.width, 0);
+      expect(b.x + b.width - a.x - a.width).toBeLessThanOrEqual(await right.count() ? 9 : 47);
     };
     await assertEdge();
     await toggle.click();
     await assertEdge();
     await expect(divider).toBeVisible();
-    await expect(chatPage.locator('.work-center-work-item-overview > h1')).toHaveCSS('font-size', '18px');
+    await expect(chatPage.locator('.work-center-header h1')).toHaveCSS('font-size', '14px');
     await expect(chatPage.locator('.work-center-primary-result .work-center-response-summary')).toHaveCSS('font-size', '14px');
     const initial = await right.boundingBox();
     const grip = await divider.boundingBox();
@@ -926,7 +931,7 @@ test.describe('Work Center responsive UI', () => {
     const detail = chatPage.locator('.work-center-detail');
     const conversation = detail.locator('.work-center-conversation');
     const content = detail.locator('.work-center-content-pane');
-    const actionsButton = detail.getByRole('button', { name: /^\d+ Actions$/ });
+    const actionsButton = chatPage.getByRole('button', { name: /^\d+ Actions$/ });
     await expect(chatPage.locator('.work-center-list')).toBeHidden();
     await expect(detail).toBeVisible();
     await expect(conversation).toBeVisible();
@@ -966,9 +971,9 @@ test.describe('Work Center responsive UI', () => {
     await expect(actionDetail).toBeVisible();
     await expect(actionDetail.locator('textarea')).toHaveCount(0);
     await expect(detail.locator('textarea')).toHaveCount(1);
-    await actionDetail.getByRole('button', { name: 'Back to Actions' }).click();
+    await chatPage.getByRole('button', { name: 'Back to Actions' }).click();
     await expect(content.locator('.work-center-action-list')).toBeVisible();
-    await content.getByRole('button', { name: 'Close Actions' }).click();
+    await chatPage.getByRole('button', { name: 'Close Actions' }).click();
     await expect(content).toHaveCount(0);
     await expect(conversation).toBeVisible();
     await expect(actionsButton).toBeFocused();
@@ -982,7 +987,7 @@ test.describe('Work Center responsive UI', () => {
       const metrics = await layoutMetrics(chatPage);
       expect(metrics.mainScrollWidth, `${width}px main overflow`).toBeLessThanOrEqual(metrics.mainClientWidth + 1);
       expect(metrics.bodyScrollWidth, `${width}px workspace overflow`).toBeLessThanOrEqual(metrics.bodyClientWidth + 1);
-      await content.getByRole('button', { name: 'Close Actions' }).click();
+      await chatPage.getByRole('button', { name: 'Close Actions' }).click();
       await expect(conversation).toBeVisible();
     }
   });
@@ -1098,7 +1103,7 @@ test.describe('Work Center responsive UI', () => {
     const workflow = chatPage.locator('.work-center-workflow');
     await expect(cards).toHaveCount(24);
     const target = chatPage.getByTestId('work-center-composer-target');
-    await workflow.getByRole('button', { name: 'Close Actions' }).click();
+    await chatPage.getByRole('button', { name: 'Close Actions' }).click();
     await target.locator('.modern-select-trigger').click();
     const targetMenu = chatPage.locator('.work-center-composer-target-menu');
     const targetList = targetMenu.locator('.modern-select-list');
@@ -1153,7 +1158,7 @@ test.describe('Work Center responsive UI', () => {
     await expect(chatPage.locator('.work-center-conversation-pane')).toBeHidden();
     await expect(chatPage.locator('.work-center-content-pane')).toBeVisible();
     await expect(workflow).toBeVisible();
-    await workflow.getByRole('button', { name: 'Close Actions' }).click();
+    await chatPage.getByRole('button', { name: 'Close Actions' }).click();
     await expect(chatPage.locator('.work-center-conversation-pane')).toBeVisible();
   });
 
@@ -1182,7 +1187,7 @@ test.describe('Work Center responsive UI', () => {
     await expect(action).not.toContainText('tokens');
     await expect(chatPage.locator('.work-center-detail-usage')).toContainText('4 LLM requests');
     await expect(chatPage.locator('.work-center-detail-usage')).toContainText('1.8k tokens');
-    await chatPage.locator('.work-center-content-pane').getByRole('button', { name: 'Close Actions' }).click();
+    await chatPage.getByRole('button', { name: 'Close Actions' }).click();
     const conversation = chatPage.locator('.work-center-conversation');
     await expect(conversation).toHaveAttribute('aria-label', 'Conversation');
     await expect(conversation.locator('.work-center-coordinator-empty')).toHaveCount(0);
@@ -1412,7 +1417,7 @@ test.describe('Work Center responsive UI', () => {
     await expect(liveResponse.locator('.tool-line')).toHaveCount(2);
     await expect(liveResponse.locator('.tool-line').filter({ hasText: 'Read src/layout.js' })).toHaveClass(/completed/);
 
-    await actionDetail.getByRole('button', { name: 'Close Actions' }).click();
+    await chatPage.getByRole('button', { name: 'Close Actions' }).click();
     await chooseWorkCenterTarget(chatPage, target, 'Send to Action 1');
     await expectWorkCenterTarget(target, 'action:action-1:1', 'Send to Action 1');
     await workItemComposer.focus();
@@ -1564,7 +1569,7 @@ test.describe('Work Center responsive UI', () => {
     const failedComposer = failedConversation.locator('textarea');
     await chatPage.getByRole('button', { name: /^\d+ Actions$/ }).click();
     await chatPage.locator('.work-center-action-summary').click();
-    await chatPage.locator('.work-center-action-detail-pane')
+    await chatPage
       .getByRole('button', { name: 'Close Actions' }).click();
     await chooseWorkCenterTarget(chatPage, failedTarget, 'Send to Action 1');
     await expectWorkCenterTarget(failedTarget, 'action:action-generation:1', 'Send to Action 1');
@@ -1871,7 +1876,7 @@ test.describe('Work Center responsive UI', () => {
     await expect(actionDetail.locator('.work-center-action-failure')).toContainText('Choose this Action in the Work Item composer');
     await expect(actionDetail.locator('textarea')).toHaveCount(0);
 
-    await actionDetail.getByRole('button', { name: 'Close Actions' }).click();
+    await chatPage.getByRole('button', { name: 'Close Actions' }).click();
     await chatPage.getByRole('button', { name: 'Work items', exact: true }).click();
     const selectWaiting = chatPage.locator('.work-center-card', { hasText: WAITING_ITEM.title }).click();
     await respondToWorkCenterOp(mockAgent, 'get', WAITING_ITEM_DETAIL, items);
@@ -1892,7 +1897,7 @@ test.describe('Work Center responsive UI', () => {
     const target = conversation.getByTestId('work-center-composer-target');
     await expect(actionDetail.locator('textarea')).toHaveCount(0);
     await expectWorkCenterTarget(target, 'coordinator', 'Send to Coordinator');
-    await actionDetail.getByRole('button', { name: 'Close Actions' }).click();
+    await chatPage.getByRole('button', { name: 'Close Actions' }).click();
     await chooseWorkCenterTarget(chatPage, target, 'Send to Action 1');
     await expectWorkCenterTarget(target, 'action:action-1:1', 'Send to Action 1');
     await expect(composer).toHaveAttribute('placeholder', 'Message Make the Work Center layout responsive from the Conversation composer');
@@ -1938,8 +1943,8 @@ test.describe('Work Center responsive UI', () => {
     await expect(chatPage.locator('.work-center-danger-zone')).toHaveCount(0);
     const stopBounds = await stop.evaluate(element => {
       const button = element.getBoundingClientRect();
-      const heading = element.closest('.work-center-detail-heading');
-      const title = heading?.querySelector('h2')?.getBoundingClientRect();
+      const heading = element.closest('.work-center-header');
+      const title = heading?.querySelector('h1')?.getBoundingClientRect();
       return {
         height: button.height,
         insideHeading: !!heading,
@@ -1954,8 +1959,8 @@ test.describe('Work Center responsive UI', () => {
     await chatPage.setViewportSize({ width: 430, height: 900 });
     const compactBounds = await stop.evaluate(element => {
       const button = element.getBoundingClientRect();
-      const heading = element.closest('.work-center-detail-heading')?.getBoundingClientRect();
-      const back = element.closest('.work-center-detail')
+      const heading = element.closest('.work-center-header')?.getBoundingClientRect();
+      const back = element.closest('.work-center-header')
         ?.querySelector('.work-center-breadcrumb-button')?.getBoundingClientRect();
       return {
         insideHeading: !!heading && button.left >= heading.left && button.right <= heading.right,
@@ -2084,7 +2089,7 @@ test.describe('Work Center responsive UI', () => {
       await expect(actionDetail.locator('textarea')).toHaveCount(0);
       await expect(actionDetail).not.toContainText('Choose this Action in the Work Item composer');
 
-      await actionDetail.getByRole('button', { name: 'Back to Actions' }).click();
+      await chatPage.getByRole('button', { name: 'Back to Actions' }).click();
       await chatPage.getByRole('button', { name: 'Close Actions' }).click();
       await chatPage.getByRole('button', { name: 'Work items', exact: true }).click();
       await expect(chatPage.locator('.work-center-list')).toBeVisible();
@@ -2186,7 +2191,7 @@ test.describe('Work Center responsive UI', () => {
     }
 
     await chatPage.setViewportSize({ width: 390, height: 720 });
-    await workItem.getByRole('button', { name: 'Close Actions' }).click();
+    await chatPage.getByRole('button', { name: 'Close Actions' }).click();
     await expect(composer).toHaveValue('Preserve this draft while reviewing the Action');
     await expectWorkCenterTarget(workItem.getByTestId('work-center-composer-target'), 'coordinator', 'Send to Coordinator');
   });
@@ -2671,7 +2676,7 @@ test.describe('Work Center responsive UI', () => {
     const progress = overview.locator('.work-center-goal-progress');
     const requirement = overview.locator('.work-center-requirement-details');
     const taskInformation = overview.locator('.work-center-task-information');
-    await expect(overview.locator(':scope > h1')).toHaveText(OPEN_ITEM_DETAIL.title);
+    await expect(chatPage.locator('.work-center-header h1')).toHaveText(OPEN_ITEM_DETAIL.title);
     await expect(result).toContainText('The answer is supported by logs.');
     await expect(result).toContainText('Reproduction confirmed');
     await expect(result).toContainText(runId);
@@ -2681,7 +2686,7 @@ test.describe('Work Center responsive UI', () => {
     const hierarchy = await overview.evaluate(element => {
       const top = selector => element.querySelector(selector)?.getBoundingClientRect().top;
       return {
-        title: top(':scope > h1'),
+        title: document.querySelector('.work-center-header h1').getBoundingClientRect().top,
         result: top('.work-center-primary-result'),
         progress: top('.work-center-goal-progress'),
         requirement: top('.work-center-requirement-details'),
@@ -2714,7 +2719,7 @@ test.describe('Work Center responsive UI', () => {
       for (const width of [1280, 320]) {
         await chatPage.setViewportSize({ width, height: 720 });
         await expectNoHorizontalOverflow(chatPage.locator('.work-center-work-item-overview'), {
-          overview: ':scope', title: ':scope > h1', progress: '.work-center-goal-progress', criteria: '.work-center-goal-criteria',
+          overview: ':scope', progress: '.work-center-goal-progress', criteria: '.work-center-goal-criteria',
           delivery: '.work-center-goal-delivery', responses: '.work-center-responses', response: '.work-center-response-summary',
           requirement: '.work-center-requirement-details', taskInformation: '.work-center-task-information',
         });
@@ -2923,8 +2928,9 @@ test.describe('Work Center responsive UI', () => {
         const composer = detail.querySelector('[data-message-composer]');
         const composerActions = composer.querySelector('.chat-composer-actions');
         const textarea = composer.querySelector('textarea');
-        const breadcrumb = detail.querySelector('.work-center-breadcrumb-button');
-        const actionsButton = detail.querySelector('.work-center-actions-button');
+        const header = document.querySelector('.work-center-header');
+        const breadcrumb = header.querySelector('.work-center-breadcrumb-button');
+        const actionsButton = header.querySelector('.work-center-actions-button');
         const card = detail.querySelector('.work-center-action-card');
         const content = card?.querySelector('.work-center-action-content');
         const streamColumn = detail.querySelector('.work-center-conversation-column');
@@ -2956,8 +2962,8 @@ test.describe('Work Center responsive UI', () => {
           cardHeight: card?.getBoundingClientRect().height ?? 0,
           lineCount: lineRects.length,
           distinctLineTops: new Set(lineRects.map(rect => Math.round(rect.top))).size,
-          breadcrumbTop: Math.round(breadcrumbRect.top - detailRect.top),
-          actionsRight: Math.round(detailRect.right - actionsButtonRect.right),
+          breadcrumbTop: Math.round(breadcrumbRect.top - header.getBoundingClientRect().top),
+          actionsRight: Math.round(mainRect.right - actionsButtonRect.right),
           streamColumnLeft: streamColumnRect.left,
           streamColumnRight: streamColumnRect.right,
           composerColumnLeft: composerColumnRect.left,
@@ -3056,7 +3062,7 @@ test.describe('Work Center responsive UI', () => {
       expect(metrics.mainBackground).toBe('rgba(0, 0, 0, 0)');
       expect(metrics.layoutDisplay).toBe('flex');
       expect(metrics.breadcrumbTop).toBeGreaterThanOrEqual(4);
-      expect(metrics.actionsRight).toBe(8);
+      expect(metrics.actionsRight).toBe(width > 1024 ? 8 : width > 768 ? 46 : 52);
       if (width === 1400) {
         expect(metrics.workflowWidth).toBeGreaterThanOrEqual(380);
         expect(metrics.workflowWidth).toBeLessThanOrEqual(420);
@@ -3159,7 +3165,7 @@ test.describe('Work Center responsive UI', () => {
     await chatPage.locator('.work-center-action-summary').click();
     const actionDetail = chatPage.locator('.work-center-action-detail-pane');
     await expect(actionDetail.locator('textarea')).toHaveCount(0);
-    await actionDetail.getByRole('button', { name: 'Close Actions' }).click();
+    await chatPage.getByRole('button', { name: 'Close Actions' }).click();
 
     await expect(composer).toBeVisible();
     await expect(composer).toHaveValue('Retry with the attached evidence');

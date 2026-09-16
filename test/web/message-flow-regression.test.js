@@ -3830,7 +3830,8 @@ describe('message flow regressions', () => {
     expect(workCenter).toContain("contentPanelOpen: false");
     expect(workCenter).toContain("v-if=\"contentPanelOpen\"");
     expect(workCenter).toContain("if (this.contentPanelOpen) url.searchParams.set('workContent'");
-    expect(workCenter).toContain('work-center-conversation-topbar');
+    expect(workCenter).not.toContain('work-center-conversation-topbar');
+    expect(workCenter).not.toContain('work-center-content-header');
     expect(workCenter).toContain('work-center-work-item-overview');
     expect(workCenter).toContain('work-center-conversation-column');
     expect(workCenter).toContain('work-center-composer-column');
@@ -3845,7 +3846,7 @@ describe('message flow regressions', () => {
     expect(workCenterCss).not.toContain('.work-center-triage-summary');
     expect(workCenterCss).toMatch(/@container work-center \(max-width:\s*1024px\)\s*\{[\s\S]*?\.work-center-detail-layout\.content-open \.work-center-conversation-pane\s*\{[^}]*display:\s*none;/s);
     expect(workCenterCss).not.toContain('@container work-center (max-width: 700px)');
-    expect(workCenterCss).toMatch(/\.work-center-detail-heading\s*\{[^}]*display:\s*flex;[^}]*width:\s*100%;/s);
+    expect(workCenterCss).toMatch(/\.work-center-header-main\s*\{[^}]*display:\s*flex;[^}]*flex:\s*1 1 0;/s);
     expect(workCenterCss).toMatch(/\.work-center-action-description,[\s\S]*?white-space:\s*nowrap;/);
     expect(workCenter).not.toContain('coordinatorRequestedSelectedActionInput');
     expect(workCenter).not.toContain("next?.routedTo === 'coordinator'");
@@ -3853,7 +3854,7 @@ describe('message flow regressions', () => {
     expect(workCenter).not.toContain("message.recovery?.actionId === this.selectedAction.id");
     expect(workCenter).toContain(":class=\"{ 'showing-detail': narrowPane !== 'items' }\"");
     expect(workCenterCss).toMatch(/\.work-center-shell\.showing-detail\s*\{[\s\S]*?padding: 0;/);
-    expect(workCenterCss).toMatch(/\.work-center-detail-heading\s*\{[^}]*min-height: 48px;[^}]*padding: 4px 8px 4px max\(/);
+    expect(workCenterCss).not.toContain('.work-center-detail-heading {');
     expect(workCenter).toContain('workItemMessageSpeaker(message)');
     expect(workCenter).toContain('workCenter.messageSpeakerRole');
     expect(workCenter).not.toContain("tr('workCenter.assistant', 'Yeaft')");
