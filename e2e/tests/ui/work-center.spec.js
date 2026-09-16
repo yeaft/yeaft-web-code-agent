@@ -1213,14 +1213,55 @@ test.describe('Work Center responsive UI', () => {
             executionStats: OPEN_ITEM_DETAIL.actions[0].executionStats,
             liveMessage: {
               id: 'run:run-live', role: 'assistant', kind: 'response', status: 'running',
-              text: 'Live AI response from the active Run.', attachments: [],
+              text: '',
+              toolEvents: [{
+                id: 'tool-read', name: 'Read', status: 'running', resource: 'src/layout.js', startedAt: Date.now(),
+              }],
+              attachments: [],
               createdAt: Date.now(), updatedAt: Date.now(), progressRevision: 5,
             },
           }],
         },
       },
     });
-    await expect(actionDetail.locator('.work-center-action-message', { hasText: 'Live AI response from the active Run.' })).toHaveCount(1);
+    const liveResponse = actionDetail.locator('.work-center-action-message:has(.tool-line)');
+    await expect(liveResponse).toHaveCount(1);
+    await expect(actionDetail.locator('.work-center-action-empty')).toHaveCount(0);
+    await expect(liveResponse.locator('.tool-line')).toContainText('Read src/layout.js');
+    await expect(liveResponse.locator('.tool-line')).toHaveClass(/running/);
+    await expect(liveResponse.locator('.tool-line-status.running')).toBeVisible();
+
+    mockAgent.send({
+      type: 'work_center_event',
+      event: {
+        type: 'run.progress',
+        workItem: {
+          ...OPEN_ITEM,
+          revision: 1,
+          currentActionId: 'action-1',
+          updatedAt: Number(OPEN_ITEM.updatedAt) + 2,
+          actionStats: [{
+            id: 'action-1', status: 'running', progressRevision: 6,
+            executionStats: OPEN_ITEM_DETAIL.actions[0].executionStats,
+            liveMessage: {
+              id: 'run:run-live', role: 'assistant', kind: 'response', status: 'running',
+              text: 'Live AI response from the active Run.',
+              toolEvents: [
+                { id: 'tool-read', name: 'Read', status: 'completed', resource: 'src/layout.js', startedAt: Date.now() - 10 },
+                { id: 'tool-bash', name: 'Bash', status: 'error', startedAt: Date.now() },
+              ],
+              attachments: [],
+              createdAt: Date.now(), updatedAt: Date.now(), progressRevision: 6,
+            },
+          }],
+        },
+      },
+    });
+    await expect(liveResponse.locator('.tool-line').filter({ hasText: 'Bash' })).toHaveClass(/error/);
+    await expect(liveResponse.locator('.tool-line-status.error')).toBeVisible();
+    await liveResponse.getByRole('button', { name: '1 more' }).click();
+    await expect(liveResponse.locator('.tool-line')).toHaveCount(2);
+    await expect(liveResponse.locator('.tool-line').filter({ hasText: 'Read src/layout.js' })).toHaveClass(/completed/);
 
     await actionDetail.getByRole('button', { name: 'Close Actions' }).click();
     await chooseWorkCenterTarget(chatPage, target, 'Send to Action 1');
@@ -1255,7 +1296,6 @@ test.describe('Work Center responsive UI', () => {
     await expect(actionDetail).toHaveCount(0);
     await chatPage.getByRole('button', { name: /^\d+ Actions$/ }).click();
     await chatPage.locator('.work-center-action-summary').click();
-    await expect(actionDetail).toContainText('Live AI response from the active Run.');
 
     mockAgent.send({
       type: 'work_center_event',
@@ -1274,7 +1314,9 @@ test.describe('Work Center responsive UI', () => {
             response: 'FINAL REPLY',
             liveMessage: {
               id: 'run:run-live', runId: 'run-live', role: 'assistant', kind: 'response',
-              status: 'completed', text: 'FINAL REPLY', attachments: [],
+              status: 'completed', text: 'FINAL REPLY',
+              toolEvents: [{ id: 'tool-read', name: 'Read', status: 'completed', resource: 'src/layout.js', startedAt: Date.now() - 10 }],
+              attachments: [],
               generation: 1, attempt: 1,
               createdAt: Date.now(), updatedAt: Date.now(), progressRevision: 6,
             },
@@ -1282,8 +1324,10 @@ test.describe('Work Center responsive UI', () => {
         },
       },
     });
-    await expect(actionDetail.locator('.work-center-action-message', { hasText: 'FINAL REPLY' })).toHaveCount(1);
-    await expect(actionDetail.locator('.work-center-action-message', { hasText: 'Live AI response from the active Run.' })).toHaveCount(0);
+    const finalResponse = actionDetail.locator('.work-center-action-message', { hasText: 'FINAL REPLY' });
+    await expect(finalResponse).toHaveCount(1);
+    await expect(finalResponse.locator('.tool-line').filter({ hasText: 'Read src/layout.js' })).toHaveClass(/completed/);
+    await expect(actionDetail.locator('.work-center-action-message')).toHaveCount(2);
 
     const terminalDetail = {
       ...OPEN_ITEM_DETAIL,
@@ -1299,13 +1343,17 @@ test.describe('Work Center responsive UI', () => {
         response: 'FINAL REPLY',
         messages: [{
           id: 'run:run-live', runId: 'run-live', role: 'assistant', kind: 'response',
-          status: 'completed', text: 'FINAL REPLY', attachments: [],
+          status: 'completed', text: 'FINAL REPLY',
+          toolEvents: [{ id: 'tool-read', name: 'Read', status: 'completed', resource: 'src/layout.js', startedAt: Date.now() - 10 }],
+          attachments: [],
           generation: 1, attempt: 1,
           createdAt: Date.now(), updatedAt: Date.now(), progressRevision: 6,
         }],
         liveMessage: {
           id: 'run:run-live', runId: 'run-live', role: 'assistant', kind: 'response',
-          status: 'completed', text: 'FINAL REPLY', attachments: [],
+          status: 'completed', text: 'FINAL REPLY',
+          toolEvents: [{ id: 'tool-read', name: 'Read', status: 'completed', resource: 'src/layout.js', startedAt: Date.now() - 10 }],
+          attachments: [],
           generation: 1, attempt: 1,
           createdAt: Date.now(), updatedAt: Date.now(), progressRevision: 6,
         },
@@ -1329,8 +1377,9 @@ test.describe('Work Center responsive UI', () => {
         list: { items: [terminalDetail, GENERATION_ITEM], watcher: { enabled: true } },
       })).op,
     ];
-    await expect(actionDetail.locator('.work-center-action-message', { hasText: 'FINAL REPLY' })).toHaveCount(1);
-    await expect(actionDetail.locator('.work-center-action-message', { hasText: 'Live AI response from the active Run.' })).toHaveCount(0);
+    await expect(finalResponse).toHaveCount(1);
+    await expect(finalResponse.locator('.tool-line').filter({ hasText: 'Read src/layout.js' })).toHaveClass(/completed/);
+    await expect(actionDetail.locator('.work-center-action-message')).toHaveCount(1);
     const readFinalState = () => chatPage.evaluate(() => {
       const store = window.Pinia.useChatStore();
       const agentId = store.workCenterAgentId;

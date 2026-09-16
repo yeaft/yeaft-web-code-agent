@@ -53,6 +53,11 @@ import {
   buildMainlineContextSnapshot,
   renderMainlineContextSnapshot,
 } from '../../../../agent/yeaft/work-center/mainline-projection.js';
+import {
+  appendCheckpointToolEvent,
+  normalizeActionCheckpoint,
+  settleCheckpointToolEvents,
+} from '../../../../agent/yeaft/work-center/action-checkpoint.js';
 
 function createInput(overrides = {}) {
   return {
@@ -130,6 +135,50 @@ describe('Work Center core', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+
+  it('keeps a bounded tool journal and replaces running entries by tool id', () => {
+    let checkpoint = null;
+    checkpoint = appendCheckpointToolEvent(checkpoint, {
+      id: 'tool-read', name: 'Read', status: 'running', resource: 'src/current.js', startedAt: 1_010,
+    });
+    checkpoint = appendCheckpointToolEvent(checkpoint, {
+      id: 'tool-read', name: 'Read', status: 'completed', resource: 'src/current.js', startedAt: 1_010,
+    });
+    for (let index = 0; index < 20; index += 1) {
+      checkpoint = appendCheckpointToolEvent(checkpoint, {
+        id: `tool-${index}`, name: 'Bash', status: index === 19 ? 'error' : 'completed',
+      });
+    }
+
+    expect(checkpoint.toolEvents).toHaveLength(16);
+    expect(checkpoint.toolEvents.filter(event => event.id === 'tool-read')).toHaveLength(0);
+    expect(checkpoint.toolEvents.at(-1)).toMatchObject({ id: 'tool-19', status: 'error' });
+    expect(settleCheckpointToolEvents({
+      version: 1,
+      toolEvents: [
+        { id: 'open', name: 'Read', status: 'running' },
+        { id: 'done', name: 'Bash', status: 'completed' },
+      ],
+    })?.toolEvents).toEqual([
+      { id: 'open', name: 'Read', status: 'error' },
+      { id: 'done', name: 'Bash', status: 'completed' },
+    ]);
+    expect(normalizeActionCheckpoint({
+      toolEvents: [{ id: 'fetch', name: 'WebFetch', status: 'running', resource: 'https://example.com/path?secret=value' }],
+    })?.toolEvents[0]).toEqual({
+      id: 'fetch', name: 'WebFetch', status: 'running', resource: 'https://example.com/path',
+    });
+    const longCredential = `https://${'credential'.repeat(40)}@example.com/safe-path?token=secret`;
+    expect(normalizeActionCheckpoint({
+      toolEvents: [
+        { id: 'long-url', name: 'WebFetch', status: 'completed', resource: longCredential },
+        { id: 'invalid-url', name: 'WebFetch', status: 'completed', resource: 'https://user:secret@' },
+      ],
+    })?.toolEvents).toEqual([
+      { id: 'long-url', name: 'WebFetch', status: 'completed', resource: 'https://example.com/safe-path' },
+      { id: 'invalid-url', name: 'WebFetch', status: 'completed' },
+    ]);
+  });
 
   it('preserves browser delivery targets through the bridge without granting producer authority', async () => {
     const bridgeService = new WorkCenterService({
@@ -763,7 +812,16 @@ describe('Work Center core', () => {
         cursorClaim.run.id,
         'cursor-review',
         cursorClaim.run.leaseEpoch,
-        { response: 'running partial response', loopCount: 1 },
+        {
+          response: 'running partial response',
+          loopCount: 1,
+          checkpoint: {
+            version: 1,
+            toolEvents: [{
+              id: 'tool-read', name: 'Read', status: 'running', resource: 'src/current.js', startedAt: 20_250,
+            }],
+          },
+        },
       );
       const progressAction = progressDetail.actions.find(candidate => candidate.id === cursorClaim.action.id);
       const progressPage = projectActionMessagePage(
@@ -781,7 +839,19 @@ describe('Work Center core', () => {
         id: `run:${cursorClaim.run.id}`,
         status: 'running',
         text: 'running partial response',
+        toolEvents: [{
+          id: 'tool-read', name: 'Read', status: 'running', resource: 'src/current.js', startedAt: 20_250,
+        }],
       });
+      progressDetail.runs[0].checkpoint.toolEvents[0].resource = 'https://user:password@example.com/path?token=secret#private';
+      progressDetail.runs[0].checkpoint.toolEvents[0].startedAt = Number.POSITIVE_INFINITY;
+      const sanitizedBrowserAction = cursorService.projectBrowserDetail(progressDetail).actions
+        .find(candidate => candidate.id === progressAction.id);
+      expect(sanitizedBrowserAction.liveMessage.toolEvents[0]).toEqual({
+        id: 'tool-read', name: 'Read', status: 'running', resource: 'https://example.com/path',
+      });
+      expect(JSON.stringify(sanitizedBrowserAction)).not.toContain('password');
+      expect(JSON.stringify(sanitizedBrowserAction)).not.toContain('secret');
 
       cursorNow = 20_300;
       cursorController.submit(

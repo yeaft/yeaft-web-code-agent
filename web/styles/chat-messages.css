@@ -2900,6 +2900,10 @@
   color: var(--success);
 }
 
+.tool-line-status.error {
+  color: var(--error);
+}
+
 .tool-line-status.running {
   display: flex;
   align-items: center;
@@ -2947,6 +2951,10 @@
 
 .tool-line.completed {
   opacity: 0.7;
+}
+
+.tool-line.error {
+  color: var(--error-text);
 }
 
 .tool-line-toggle {

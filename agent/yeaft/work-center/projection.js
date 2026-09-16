@@ -10,6 +10,7 @@ import { runMatchesActionIdentity } from './action-identity.js';
 import { normalizeOutputs } from './evidence.js';
 import { taskSpecificActionBrief } from './workflow.js';
 import { buildMainlineProjection } from './mainline-projection.js';
+import { normalizeActionCheckpoint } from './action-checkpoint.js';
 
 const MAX_ACTION_MESSAGE_CHARS = 16_000;
 const MAX_ACTION_DIAGNOSTIC_CHARS = 8_000;
@@ -293,8 +294,13 @@ function normalizeProjectedMessage(message) {
   const text = typeof message.text === 'string'
     ? message.text.trim().slice(0, MAX_ACTION_MESSAGE_CHARS)
     : '';
+  const checkpoint = normalizeActionCheckpoint({ toolEvents: message.toolEvents });
+  const toolEvents = (checkpoint?.toolEvents || []).map((event, index) => ({
+    ...event,
+    id: event.id || `${index}`,
+  }));
   const attachments = projectAttachments(message.attachments);
-  if (!text && attachments.length === 0) return null;
+  if (!text && attachments.length === 0 && toolEvents.length === 0) return null;
   const speaker = message.role === 'user' ? null : projectVpSpeaker(message.speaker);
   return {
     id: String(message.id || ''),
@@ -302,6 +308,7 @@ function normalizeProjectedMessage(message) {
     kind: message.kind === 'input' ? 'input' : 'response',
     status: message.status || null,
     text,
+    toolEvents,
     attachments,
     ...(projectedMessageQuote(message.quote) ? { quote: projectedMessageQuote(message.quote) } : {}),
     createdAt: count(message.createdAt),
@@ -341,6 +348,7 @@ function runResponseMessage(run) {
     kind: 'response',
     status: run.status || 'running',
     text,
+    toolEvents: run.checkpoint?.toolEvents,
     createdAt: count(run.endedAt || run.startedAt),
     updatedAt: count(run.endedAt || run.startedAt),
     progressRevision: count(run.progressRevision),
