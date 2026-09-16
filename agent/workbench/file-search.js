@@ -1,6 +1,7 @@
 import { readdir, stat } from 'fs/promises';
 import { join, relative, resolve } from 'path';
 import ctx from '../context.js';
+import { resolveWorkItemPath } from './work-item-path.js';
 import { sendWorkbenchResult } from './request-routing.js';
 
 export async function handleFileSearch(msg) {
@@ -15,7 +16,9 @@ export async function handleFileSearch(msg) {
       return;
     }
 
-    const resolved = resolve(searchRoot);
+    const resolved = msg.workbenchRoute?.runtimeProvider === 'work-center'
+      ? await resolveWorkItemPath(msg, searchRoot, workDir)
+      : resolve(searchRoot);
     const results = [];
     const MAX_RESULTS = 100;
     const lowerQuery = query.toLowerCase();

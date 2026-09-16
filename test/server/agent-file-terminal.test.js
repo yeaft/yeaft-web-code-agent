@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as Vue from 'vue';
@@ -17,6 +17,7 @@ import {
   handleVideoMetadata,
   handleVideoChunk,
   handleWriteFile,
+  handleListDirectory, handleCreateFile, handleDeleteFiles, handleMoveFiles, handleCopyFiles, handleUploadToDir,
   MAX_WORKBENCH_PREVIEW_BYTES,
 } from '../../agent/workbench/file-ops.js';
 import { rememberWorkItemWorkspace, __testResetWorkItemWorkspaces } from '../../server/work-center-workspace-cache.js';
@@ -3266,4 +3267,58 @@ it('routes WorkItem file operations through canonical cwd and denies escaped dir
   }
   expect(forwardToAgent).not.toHaveBeenCalled();
   __testResetWorkItemWorkspaces();
+});
+
+
+it('rejects WorkItem file mutations through escaped symlinks and new destinations', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'wc-path-'));
+  const workspace = join(root, 'workspace');
+  const outside = join(root, 'outside');
+  mkdirSync(workspace); mkdirSync(outside);
+  const secret = join(outside, 'secret.txt');
+  writeFileSync(secret, 'untouched');
+  writeFileSync(join(workspace, 'local.txt'), 'local');
+  symlinkSync(outside, join(workspace, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
+  symlinkSync(secret, join(workspace, 'secret-link.txt'), 'file');
+  mkdirSync(join(workspace, 'source'));
+  mkdirSync(join(workspace, 'target/source'), { recursive: true });
+  mkdirSync(join(workspace, 'source/nested'));
+  writeFileSync(join(workspace, 'source/nested/secret.txt'), 'changed');
+  symlinkSync(outside, join(workspace, 'target/source/nested'), process.platform === 'win32' ? 'junction' : 'dir');
+  const base = { workDir: workspace, conversationId: '_workbench:work-center:agent:item',
+    workbenchRoute: { runtimeProvider: 'work-center', agentId: 'agent', workItemId: 'item' } };
+  const priorSend = ctx.sendToServer;
+  const replies = [];
+  ctx.sendToServer = message => { replies.push(message); return true; };
+  try {
+    const cases = [
+      [handleListDirectory, { dirPath: join(workspace, 'escape') }],
+      [handleWriteFile, { filePath: join(workspace, 'escape/secret.txt'), content: 'changed' }],
+      [handleCreateFile, { filePath: join(workspace, 'escape/new/created.txt') }],
+      [handleDeleteFiles, { paths: [join(workspace, 'escape/secret.txt')] }],
+      [handleMoveFiles, { paths: [join(workspace, 'local.txt')], destination: workspace, newName: '../outside/moved.txt' }],
+      [handleCopyFiles, { paths: [join(workspace, 'escape/secret.txt')], destination: workspace }],
+      [handleCopyFiles, { paths: [join(workspace, 'source')], destination: join(workspace, 'target') }],
+      [handleUploadToDir, { dirPath: workspace, files: [{ name: 'secret-link.txt', data: Buffer.from('changed').toString('base64') }] }],
+      [handleUploadToDir, { dirPath: workspace, files: [{ name: '../outside/upload.txt', data: 'YQ==' }] }],
+    ];
+    for (const [handler, fields] of cases) {
+      replies.length = 0;
+      await handler({ ...base, ...fields });
+      expect(replies).toHaveLength(1);
+      expect(replies[0].success === false || Boolean(replies[0].error)).toBe(true);
+      expect(readFileSync(secret, 'utf8')).toBe('untouched');
+    }
+    expect(existsSync(join(outside, 'new'))).toBe(false);
+    expect(existsSync(join(outside, 'moved.txt'))).toBe(false);
+    expect(existsSync(join(outside, 'upload.txt'))).toBe(false);
+    replies.length = 0;
+    await handleCreateFile({ ...base, filePath: join(workspace, 'new/result.txt') });
+    expect(replies[0].success).toBe(true);
+    await handleWriteFile({ ...base, filePath: join(workspace, 'new/result.txt'), content: 'allowed' });
+    expect(readFileSync(join(workspace, 'new/result.txt'), 'utf8')).toBe('allowed');
+  } finally {
+    ctx.sendToServer = priorSend;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
