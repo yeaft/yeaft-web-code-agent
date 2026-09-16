@@ -19,7 +19,7 @@ import { cleanMemoryPromptText, filterMemoryPromptTextForPrompt, filterRelatedSe
 import { makeSegment, serializeSegments } from '../../../agent/yeaft/memory/segment.js';
 import { readCanonicalContentRecord, readScope } from '../../../agent/yeaft/memory/segment-store.js';
 import { syncAll, syncScope } from '../../../agent/yeaft/memory/segment-sync.js';
-import { Engine, buildResidentEntries, estimateProviderInputBreakdown, selectCanonicalMemoryScopes, selectResidentTopicScopes, selectRelatedSessionIds } from '../../../agent/yeaft/engine.js';
+import { Engine, mapDebugMessage, buildResidentEntries, estimateProviderInputBreakdown, selectCanonicalMemoryScopes, selectResidentTopicScopes, selectRelatedSessionIds } from '../../../agent/yeaft/engine.js';
 import { flushAgentPerfTrace } from '../../../agent/yeaft/perf-trace.js';
 import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { withUsageAccounting } from '../../../agent/yeaft/llm/usage-accounting.js';
@@ -2920,36 +2920,79 @@ describe('Engine', () => {
   });
 
   describe('perf trace', () => {
-    it('keeps provider raw request and response complete despite the legacy telemetry budget', async () => {
-      const limit = 64 * 1024;
+    it('keeps raw exchanges lossless on disk without retaining them in successive model/debug histories', async () => {
       const mixedPayload = `${'😀'.repeat(8_000)}${'x'.repeat(320 * 1024)}`;
+      // Legacy/caller-owned messages may carry diagnostics. Projection must not
+      // traverse them (or strip legitimate function-calling/content metadata).
+      const legacyMessage = {
+        role: 'assistant', content: [{ type: 'text', text: 'prior result' }],
+        toolCalls: [{ id: 'prior', name: 'inspect', input: { path: 'a.js' } }],
+        get rawRequest() { throw new Error('must not traverse historical exchange'); },
+      };
+      expect(mapDebugMessage(legacyMessage)).toEqual({
+        role: 'assistant', content: legacyMessage.content, toolCalls: legacyMessage.toolCalls,
+      });
+      expect(mapDebugMessage({ role: 'tool', content: 'failed', toolCallId: 'prior', isError: true }))
+        .toEqual({ role: 'tool', content: 'failed', toolCallId: 'prior', isError: true });
+
+      const traceRoot = mkdtempSync(join(tmpdir(), 'yeaft-engine-request-memory-'));
+      const writer = new DebugTrace(traceRoot);
+      let calls = 0;
+      let lastRequest;
       const adapter = {
         async *stream(params) {
+          calls += 1;
+          for (const message of params.messages) expect(message).not.toHaveProperty('rawRequest');
+          lastRequest = { body: { input: params.messages.map(mapDebugMessage), diagnostic: mixedPayload } };
           params.onRawExchange({
-            rawRequest: { body: mixedPayload },
+            rawRequest: lastRequest,
             rawResponse: { status: 200, body: mixedPayload },
           });
-          yield { type: 'text_delta', text: 'ok' };
-          yield { type: 'stop', stopReason: 'end_turn' };
+          yield { type: 'text_delta', text: `step ${calls}` };
+          if (calls < 12) yield { type: 'tool_call', id: `inspect-${calls}`, name: 'inspect', input: { step: calls } };
+          yield { type: 'stop', stopReason: calls < 12 ? 'tool_use' : 'end_turn' };
         },
       };
       const engine = new Engine({
-        adapter,
-        trace,
-        config: {
-          model: 'test-model',
-          maxOutputTokens: 1024,
-          telemetry: { rawExchangeMaxBytes: limit },
-        },
+        adapter, trace: writer,
+        config: { model: 'test-model', maxOutputTokens: 1024, telemetry: { rawExchangeMaxBytes: 64 * 1024 } },
       });
-
-      const events = [];
-      for await (const event of engine.query({ prompt: 'capture raw exchange' })) events.push(event);
-
-      const loop = events.find(event => event.type === 'loop');
-      expect(loop.rawRequest).toEqual({ body: mixedPayload });
-      expect(loop.rawResponse).toEqual({ status: 200, body: mixedPayload });
-      expect(loop.rawRequest.body.isWellFormed()).toBe(true);
+      engine.registerTool({
+        name: 'inspect', description: 'return evidence',
+        parameters: { type: 'object', properties: { step: { type: 'number' } } },
+        execute: async ({ step }) => `evidence ${step}: ${'x'.repeat(8 * 1024)}`,
+      });
+      try {
+        let loopCount = 0;
+        // Do not retain the event stream in the test either.
+        for await (const event of engine.query({ prompt: 'capture raw exchange', sessionId: 'request-memory' })) {
+          if (event.type !== 'loop') continue;
+          loopCount += 1;
+          expect(event.rawRequest).toEqual(lastRequest);
+          expect(event.rawResponse).toEqual({ status: 200, body: mixedPayload });
+          for (const message of event.messages) expect(message).not.toHaveProperty('rawRequest');
+          expect(Buffer.byteLength(JSON.stringify(event.messages))).toBeLessThan(160 * 1024);
+          await writer.flush();
+        }
+        expect(calls).toBe(12);
+        expect(loopCount).toBe(12);
+        await writer.close();
+        const reader = new DebugTrace(traceRoot);
+        try {
+          const index = await reader.fetchRecentDebugHistory({ sessionId: 'request-memory', indexOnly: true });
+          const detail = await reader.fetchRecentDebugHistory({ sessionId: 'request-memory', detailTurnId: index.turns[0].turnId });
+          expect(detail.loops).toHaveLength(12);
+          expect(detail.loops.at(-1).rawRequest).toEqual(lastRequest);
+          expect(detail.loops.every(loop => loop.rawResponse.body === mixedPayload)).toBe(true);
+          for (const loop of detail.loops) {
+            const messages = loop.requestDelta?.messages || loop.requestDelta?.messagesAppend || [];
+            for (const message of messages) expect(message).not.toHaveProperty('rawRequest');
+          }
+        } finally { await reader.close(); }
+      } finally {
+        await writer.close();
+        rmSync(traceRoot, { recursive: true, force: true });
+      }
     });
 
     it('records LLM request lifecycle events when an inbound perf trace id is present', async () => {
