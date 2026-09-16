@@ -9,6 +9,11 @@ import {
 export default {
   name: 'WorkbenchPanel',
   components: { WorkbenchCapabilityHost, BrowserPanel },
+  emits: ['expanded-change'],
+  props: {
+    ownerRoute: { type: Object, default: null },
+    ownerWorkDir: { type: String, default: '' },
+  },
   template: `
     <div ref="panelRoot" class="workbench-panel" :class="{ expanded: store.workbenchExpanded, maximized: store.workbenchMaximized }" :style="panelStyle">
       <div class="workbench-content" v-show="store.workbenchExpanded">
@@ -226,8 +231,40 @@ export default {
       <div class="resize-handle" @mousedown="startResize" @touchstart.prevent="startResize" v-if="store.workbenchExpanded"></div>
     </div>
   `,
-  setup() {
-    const store = Pinia.useChatStore();
+  setup(props, { emit, expose }) {
+    const chatStore = Pinia.useChatStore();
+    const ownedState = Vue.reactive({ workbenchExpanded: false, workbenchMaximized: false });
+    const ownedPanels = new Map();
+    const ownedActions = {
+      openWorkbench() { ownedState.workbenchExpanded = true; },
+      toggleWorkbench() {
+        ownedState.workbenchExpanded = !ownedState.workbenchExpanded;
+        if (!ownedState.workbenchExpanded) ownedState.workbenchMaximized = false;
+      },
+      toggleWorkbenchMaximized() { ownedState.workbenchMaximized = !ownedState.workbenchMaximized; },
+      rememberWorkbenchPanelState(route, width) {
+        const key = typeof route === 'string' ? route : workbenchRouteKey(route);
+        ownedPanels.set(key, { ...ownedState, width: width || ownedPanels.get(key)?.width });
+      },
+      restoreWorkbenchPanelState(route) {
+        Object.assign(ownedState, { workbenchExpanded: false, workbenchMaximized: false }, ownedPanels.get(workbenchRouteKey(route)));
+      },
+      workbenchPanelWidthForRoute(route) { return ownedPanels.get(workbenchRouteKey(route))?.width || null; },
+    };
+    const store = new Proxy(chatStore, {
+      get(target, key) {
+        if (props.ownerRoute) {
+          if (key === 'activeSessionRoute') return props.ownerRoute;
+          if (key === 'effectiveWorkDir') return props.ownerWorkDir;
+          if (Object.hasOwn(ownedState, key)) return ownedState[key];
+          if (Object.hasOwn(ownedActions, key)) return ownedActions[key];
+        }
+        return Reflect.get(target, key);
+      },
+    });
+    Vue.provide('workbench-store', store);
+    expose({ toggle: () => store.toggleWorkbench() });
+    Vue.watch(() => ownedState.workbenchExpanded, value => emit('expanded-change', value));
     const panelRoot = Vue.ref(null);
     const tabRail = Vue.ref(null);
     const tabList = Vue.ref(null);
@@ -246,9 +283,12 @@ export default {
     const instance = Vue.getCurrentInstance();
     const t = (key, params) => instance?.proxy?.$t?.(key, params) || key;
 
-    const activeRoute = Vue.computed(() => store.activeSessionRoute || null);
+    const activeRoute = Vue.computed(() => props.ownerRoute || store.activeSessionRoute || null);
     const activeRouteKey = Vue.computed(() => workbenchRouteKey(activeRoute.value));
-    const activeWorkDir = Vue.computed(() => store.effectiveWorkDir || '');
+    const isWorkCenterRoute = Vue.computed(() => activeRoute.value?.runtimeProvider === 'work-center');
+    const activeWorkDir = Vue.computed(() => (
+      isWorkCenterRoute.value ? props.ownerWorkDir : (store.effectiveWorkDir || '')
+    ));
     const activeWorkspaceGeneration = Vue.computed(() => (
       workbenchWorkspaceGeneration(activeRouteKey.value, activeWorkDir.value)
     ));
@@ -258,27 +298,37 @@ export default {
       runtimeProvider: activeRoute.value?.runtimeProvider || '',
       agentId: activeRoute.value?.agentId || '',
       sessionId: activeRoute.value?.sessionId || '',
+      workItemId: activeRoute.value?.workItemId || '',
       conversationId: workbenchConversationId(activeRouteKey.value),
       workDir: activeWorkDir.value,
       workspaceGeneration: activeWorkspaceGeneration.value,
+      workspaceLocked: isWorkCenterRoute.value,
     }));
 
     const hasSessionRoutes = Vue.computed(() => (
       store.workbenchRouteProtocolSupported === true
       && store.hasAgentCapability(activeRoute.value?.agentId, 'workbench_session_routes')
+      && (!isWorkCenterRoute.value || (
+        store.workCenterWorkbenchProtocolSupported === true
+        && store.hasAgentCapability(activeRoute.value?.agentId, 'work_center_workbench')
+        && store.hasAgentCapability(activeRoute.value?.agentId, 'workbench_request_correlation')
+        && store.hasAgentCapability(activeRoute.value?.agentId, 'workbench_terminal_cleanup_fence')
+      ))
     ));
     const hasTerminal = Vue.computed(() => hasSessionRoutes.value
       && store.hasAgentCapability(activeRoute.value?.agentId, 'terminal'));
     const hasExplorer = Vue.computed(() => hasSessionRoutes.value
       && store.hasAgentCapability(activeRoute.value?.agentId, 'file_editor'));
     const canSetupBrowser = Vue.computed(() => (
-      store.browserRuntimeServerEnabled === true
+      !isWorkCenterRoute.value
+      && store.browserRuntimeServerEnabled === true
       && store.browserRuntimeProtocolSupported === true
       && store.browserRuntimeSetupProtocolSupported === true
       && store.hasCapability('browser_runtime_setup')
     ));
     const hasBrowser = Vue.computed(() => (
-      store.browserRuntimeServerEnabled === true
+      !isWorkCenterRoute.value
+      && store.browserRuntimeServerEnabled === true
       && store.browserRuntimeProtocolSupported === true
       && store.hasCapability('browser_runtime')
       && store.hasCapability('browser_webrtc')
@@ -911,6 +961,7 @@ export default {
       const initiatingContextKey = workbenchContextKey.value;
       const targetRouteProps = { ...routeProps.value };
       if (!openCapability('files')) return;
+      if (props.ownerRoute) store.openWorkbench();
       Vue.nextTick(() => {
         if (workbenchContextKey.value !== initiatingContextKey) return;
         window.dispatchEvent(new CustomEvent('workbench-open-file-in-active-view', {

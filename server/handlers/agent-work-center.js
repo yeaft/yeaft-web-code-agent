@@ -1,3 +1,4 @@
+import { updateWorkItemWorkspaces } from '../work-center-workspace-cache.js';
 import { forwardAgentEvent } from '../ws-utils.js';
 import { deliverWorkCenterResponse } from './client-work-center.js';
 
@@ -21,6 +22,7 @@ export async function handleAgentWorkCenter(agentId, msg) {
   }
 
   const { agentId: _untrustedAgentId, _requestUserId, ...payload } = msg;
+  updateWorkItemWorkspaces(agentId, payload.event);
   const outgoing = { ...payload, agentId };
   await forwardAgentEvent(agentId, outgoing);
   return true;

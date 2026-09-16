@@ -65,7 +65,7 @@ function authorize(source) {
   if (!CONFIG.skipAuth && (!user || user.deletion_state !== 'active' || !['pro', 'admin'].includes(user.role))) {
     throw failure(403, 'Preview access denied');
   }
-  const client = { userId: source.userId, role: user?.role, workbenchRouteProtocol: 1 };
+  const client = { userId: source.userId, role: user?.role, workbenchRouteProtocol: 1, workCenterWorkbenchProtocol: 1 };
   const accessError = resolveAgentAccessError(source.agentId, client.userId, client.role);
   if (accessError) throw failure(accessError === 'Agent access denied' ? 403 : 503, accessError);
   const generation = currentWorkbenchWorkspaceGeneration({ ...client, route: source.route });

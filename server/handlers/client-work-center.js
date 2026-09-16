@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { CONFIG } from '../config.js';
 import { agents, pendingFiles, previewFiles } from '../context.js';
 import { forwardToAgent, sendToWebClient } from '../ws-utils.js';
+import { forgetWorkItemWorkspace, rememberWorkItemWorkspace } from '../work-center-workspace-cache.js';
 import {
   assertSupportedWorkItemAttachment,
   assertWorkItemAttachmentSize,
@@ -204,6 +205,7 @@ export async function handleClientWorkCenter(client, msg, checkAgentAccess) {
     agentId,
     clientRequestId: typeof msg.requestId === 'string' ? msg.requestId : null,
     attachmentFileIds: resolved.consumedIds,
+    workItemId: typeof resolved.payload?.id === 'string' ? resolved.payload.id : null,
     expiresAt: Date.now() + REQUEST_TIMEOUT_MS,
   });
 
@@ -233,6 +235,11 @@ export async function deliverWorkCenterResponse(agentId, msg) {
   // able to resolve the original fileId and reach the Agent receipt preflight.
   const { agentId: _untrustedAgentId, requestId: _opaqueRequestId, _requestUserId, ...payload } = msg;
   let response = payload;
+  if (msg.ok === true && msg.op === 'delete') {
+    forgetWorkItemWorkspace(pending.client?.userId, agentId, pending.workItemId);
+  } else if (msg.ok === true && msg.data?.id) {
+    rememberWorkItemWorkspace(pending.client?.userId, agentId, msg.data);
+  }
   if (msg.ok === true && msg.op === 'preview_attachment') {
     try {
       const data = payload.data;

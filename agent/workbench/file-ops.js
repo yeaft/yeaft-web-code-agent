@@ -4,6 +4,7 @@ import { join, basename, dirname, extname, isAbsolute, relative, resolve } from 
 import { platform } from 'os';
 import ctx from '../context.js';
 import { resolveAndValidatePath, BINARY_EXTENSIONS, VIDEO_EXTENSIONS } from './utils.js';
+import { resolveWorkItemPath } from './work-item-path.js';
 import { sendWorkbenchResult } from './request-routing.js';
 
 export const MAX_WORKBENCH_PREVIEW_BYTES = 20 * 1024 * 1024;
@@ -271,7 +272,7 @@ export async function handleWriteFile(msg) {
   const workDir = msg.workDir || conv?.workDir || ctx.CONFIG.workDir;
 
   try {
-    const resolved = resolveAndValidatePath(filePath, workDir);
+    const resolved = await resolveWorkItemPath(msg, filePath, workDir);
     await writeFile(resolved, content, 'utf-8');
 
     sendWorkbenchResult(ctx, msg, {
@@ -300,7 +301,8 @@ export async function handleWriteFile(msg) {
 }
 
 export async function handleListDirectory(msg) {
-  const { conversationId, requestId, dirPath, _requestUserId, _requestClientId } = msg;
+  const { conversationId, requestId, _requestUserId, _requestClientId } = msg;
+  const dirPath = msg.dirPath || (msg.workbenchRoute?.runtimeProvider === 'work-center' ? msg.workDir : msg.dirPath);
   const directoryPickerScope = msg.directoryPickerScope === 'agent' ? 'agent' : undefined;
   const conv = ctx.conversations.get(conversationId);
   const workDir = msg.workDir || conv?.workDir || ctx.CONFIG.workDir;
@@ -362,7 +364,7 @@ export async function handleListDirectory(msg) {
   }
 
   try {
-    const resolved = resolveAndValidatePath(dirPath, workDir);
+    const resolved = await resolveWorkItemPath(msg, dirPath, workDir);
     const entries = await readdir(resolved, { withFileTypes: true });
     const result = [];
 
@@ -426,7 +428,7 @@ export async function handleCreateFile(msg) {
   const workDir = msg.workDir || conv?.workDir || ctx.CONFIG.workDir;
 
   try {
-    const resolved = resolveAndValidatePath(filePath, workDir);
+    const resolved = await resolveWorkItemPath(msg, filePath, workDir);
     if (isDirectory) {
       await mkdir(resolved, { recursive: true });
     } else {
@@ -464,7 +466,7 @@ export async function handleDeleteFiles(msg) {
 
     for (const p of paths) {
       try {
-        const resolved = resolveAndValidatePath(p, workDir);
+        const resolved = await resolveWorkItemPath(msg, p, workDir);
         const s = await stat(resolved);
         if (s.isDirectory()) {
           await rm(resolved, { recursive: true, force: true });
@@ -503,7 +505,7 @@ export async function handleMoveFiles(msg) {
     if (!paths || paths.length === 0) throw new Error('No paths specified');
     if (!destination) throw new Error('No destination specified');
 
-    const destResolved = resolveAndValidatePath(destination, workDir);
+    const destResolved = await resolveWorkItemPath(msg, destination, workDir);
     // Ensure destination directory exists
     await mkdir(destResolved, { recursive: true });
 
@@ -512,9 +514,9 @@ export async function handleMoveFiles(msg) {
 
     for (const p of paths) {
       try {
-        const srcResolved = resolveAndValidatePath(p, workDir);
+        const srcResolved = await resolveWorkItemPath(msg, p, workDir);
         const name = (newName && paths.length === 1) ? newName : basename(srcResolved);
-        const destPath = join(destResolved, name);
+        const destPath = await resolveWorkItemPath(msg, join(destResolved, name), workDir);
         if (existsSync(destPath)) {
           throw new Error('Target already exists: ' + name);
         }
@@ -551,7 +553,7 @@ export async function handleCopyFiles(msg) {
     if (!paths || paths.length === 0) throw new Error('No paths specified');
     if (!destination) throw new Error('No destination specified');
 
-    const destResolved = resolveAndValidatePath(destination, workDir);
+    const destResolved = await resolveWorkItemPath(msg, destination, workDir);
     await mkdir(destResolved, { recursive: true });
 
     const copied = [];
@@ -559,7 +561,7 @@ export async function handleCopyFiles(msg) {
 
     for (const p of paths) {
       try {
-        const srcResolved = resolveAndValidatePath(p, workDir);
+        const srcResolved = await resolveWorkItemPath(msg, p, workDir);
         const name = basename(srcResolved);
         let destPath = join(destResolved, name);
 
@@ -574,9 +576,19 @@ export async function handleCopyFiles(msg) {
           } while (existsSync(destPath));
         }
 
+        await resolveWorkItemPath(msg, destPath, workDir);
         const srcStat = await stat(srcResolved);
         if (srcStat.isDirectory()) {
-          await cp(srcResolved, destPath, { recursive: true });
+          await cp(srcResolved, destPath, {
+            recursive: true,
+            ...(msg.workbenchRoute?.runtimeProvider === 'work-center' ? {
+              filter: async (source, target) => {
+                await resolveWorkItemPath(msg, source, workDir);
+                await resolveWorkItemPath(msg, target, workDir);
+                return true;
+              },
+            } : {}),
+          });
         } else {
           await copyFile(srcResolved, destPath);
         }
@@ -611,7 +623,7 @@ export async function handleUploadToDir(msg) {
   try {
     if (!files || files.length === 0) throw new Error('No files specified');
 
-    const targetDir = resolveAndValidatePath(dirPath || workDir, workDir);
+    const targetDir = await resolveWorkItemPath(msg, dirPath || workDir, workDir);
     await mkdir(targetDir, { recursive: true });
 
     const saved = [];
@@ -619,7 +631,7 @@ export async function handleUploadToDir(msg) {
 
     for (const file of files) {
       try {
-        const dest = join(targetDir, file.name);
+        const dest = await resolveWorkItemPath(msg, join(targetDir, file.name), workDir);
         const buffer = Buffer.from(file.data, 'base64');
         await writeFile(dest, buffer);
         saved.push(file.name);

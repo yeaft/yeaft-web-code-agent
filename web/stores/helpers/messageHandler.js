@@ -260,6 +260,7 @@ export function handleMessage(store, msg) {
 
     case 'client_hello_ack':
       store.workbenchRouteProtocolSupported = msg.workbenchRouteProtocol === 1;
+      store.workCenterWorkbenchProtocolSupported = msg.workCenterWorkbenchProtocol === 1;
       store.browserRuntimeProtocolSupported = msg.browserRuntimeProtocol === 1;
       store.browserRuntimeSetupProtocolSupported = msg.browserRuntimeSetupProtocol === 1;
       store.browserRuntimeServerEnabled = msg.browserRuntimeEnabled === true;
@@ -286,6 +287,7 @@ export function handleMessage(store, msg) {
         // auth_result advertises Server support; the route protocol is usable
         // only after Server confirms it processed our client_hello.
         store.workbenchRouteProtocolSupported = false;
+        store.workCenterWorkbenchProtocolSupported = false;
         store.browserRuntimeProtocolSupported = false;
         store.browserRuntimeSetupProtocolSupported = false;
         store.browserRuntimeServerEnabled = msg.browserRuntimeEnabled === true;

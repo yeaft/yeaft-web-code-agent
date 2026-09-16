@@ -1,11 +1,14 @@
+import { posix, win32 } from 'node:path';
 import { CONFIG } from './config.js';
 import { agents } from './context.js';
 import { sessionDb } from './db/session-db.js';
 import { yeaftSessionDb } from './db/yeaft-session-db.js';
+import { getWorkItemWorkspace } from './work-center-workspace-cache.js';
 
 export const WORKBENCH_SESSION_ROUTE_CAPABILITY = 'workbench_session_routes';
 export const WORKBENCH_REQUEST_CORRELATION_CAPABILITY = 'workbench_request_correlation';
 export const WORKBENCH_TERMINAL_CLEANUP_FENCE_CAPABILITY = 'workbench_terminal_cleanup_fence';
+export const WORK_CENTER_WORKBENCH_CAPABILITY = 'work_center_workbench';
 
 function agentHasCapability(agent, capability) {
   return Array.isArray(agent?.capabilities) && agent.capabilities.includes(capability);
@@ -19,7 +22,7 @@ export function agentSupportsWorkbenchTerminalCleanupFence(agent) {
   return agentHasCapability(agent, WORKBENCH_TERMINAL_CLEANUP_FENCE_CAPABILITY);
 }
 
-const PROVIDERS = new Set(['yeaft', 'claude-code', 'copilot']);
+const PROVIDERS = new Set(['yeaft', 'claude-code', 'copilot', 'work-center']);
 const SCOPES = new Set(['main', 'files-folder-picker', 'git-folder-picker']);
 
 function clean(value, maxLength = 300) {
@@ -31,9 +34,11 @@ function clean(value, maxLength = 300) {
 export function workbenchRouteKey(route) {
   const runtimeProvider = clean(route?.runtimeProvider, 32);
   const agentId = clean(route?.agentId);
-  const sessionId = clean(route?.sessionId);
-  if (!PROVIDERS.has(runtimeProvider) || !agentId || !sessionId) return '';
-  return [runtimeProvider, agentId, sessionId]
+  const ownerId = runtimeProvider === 'work-center'
+    ? clean(route?.workItemId)
+    : clean(route?.sessionId);
+  if (!PROVIDERS.has(runtimeProvider) || !agentId || !ownerId) return '';
+  return [runtimeProvider, agentId, ownerId]
     .map(part => encodeURIComponent(part))
     .join(':');
 }
@@ -73,7 +78,9 @@ export function workbenchRouteKeyFromConversationId(conversationId, expectedAgen
     const decodedRoute = {
       runtimeProvider: decodeURIComponent(parts[0]),
       agentId: decodeURIComponent(parts[1]),
-      sessionId: decodeURIComponent(parts[2]),
+      ...(decodeURIComponent(parts[0]) === 'work-center'
+        ? { workItemId: decodeURIComponent(parts[2]) }
+        : { sessionId: decodeURIComponent(parts[2]) }),
     };
     if (expectedAgentId && decodedRoute.agentId !== expectedAgentId) return '';
     return workbenchRouteKey(decodedRoute) === routeKey ? routeKey : '';
@@ -102,6 +109,7 @@ function resolveYeaftRow(client, route) {
 // never the browser's cwd or the Server process cwd.
 function resolveSessionWorkDir(row, route) {
   if (!row) return '';
+  if (route.runtimeProvider === 'work-center') return clean(row.workDir, 4096);
   return clean(route.runtimeProvider === 'yeaft' ? row.workDir : row.work_dir, 4096)
     || clean(agents.get(route.agentId)?.workDir, 4096);
 }
@@ -122,9 +130,40 @@ function resolveChatRow(client, route) {
   return row;
 }
 
+function resolveWorkCenterRoute(client, agent, route) {
+  if (client?.workCenterWorkbenchProtocol !== 1
+      || !agentHasCapability(agent, WORK_CENTER_WORKBENCH_CAPABILITY)
+      || !agentSupportsWorkbenchRequestCorrelation(agent)
+      || !agentSupportsWorkbenchTerminalCleanupFence(agent)) return null;
+  const row = getWorkItemWorkspace(client?.userId, route.agentId, route.workItemId);
+  return row?.workDir ? row : null;
+}
+
+export function workbenchPathWithinWorkspace(filePath, workDir) {
+  const path = clean(filePath, 4096);
+  const root = clean(workDir, 4096);
+  if (!path || !root) return false;
+  // The Agent can run a different OS from the Server. Never use Server cwd.
+  const paths = /^(?:[a-z]:[\\/]|\\\\)/i.test(root) ? win32 : posix;
+  if (!paths.isAbsolute(root)) return false;
+  const resolvedRoot = paths.resolve(root);
+  const candidate = paths.resolve(resolvedRoot, path);
+  const relativePath = paths.relative(resolvedRoot, candidate);
+  return relativePath !== '..'
+    && !relativePath.startsWith(`..${paths.sep}`)
+    && !paths.isAbsolute(relativePath);
+}
+
+function resolveRouteRow(client, route, agent) {
+  if (route.runtimeProvider === 'work-center') return resolveWorkCenterRoute(client, agent, route);
+  return route.runtimeProvider === 'yeaft'
+    ? resolveYeaftRow(client, route)
+    : resolveChatRow(client, route);
+}
+
 /**
  * Validate a browser-provided Workbench route against Server-owned Session
- * metadata and return canonical execution fields. Browser cwd and synthetic
+ * metadata or owner-scoped, Agent-projected WorkItem workspace metadata and return canonical execution fields. Browser cwd and synthetic
  * conversation ids are never authoritative.
  *
  * `legacy: true` preserves old clients that predate route-scoped Workbench.
@@ -135,10 +174,9 @@ function resolveChatRow(client, route) {
  */
 export function currentWorkbenchWorkspaceGeneration({ route, userId, role }) {
   if (!route || !userId) return null;
-  const client = { userId, role };
-  const row = route.runtimeProvider === 'yeaft'
-    ? resolveYeaftRow(client, route)
-    : resolveChatRow(client, route);
+  const client = { userId, role, workCenterWorkbenchProtocol: 1 };
+  const agent = agents.get(route.agentId);
+  const row = resolveRouteRow(client, route, agent);
   if (!row || row.isArchived) return null;
   const workDir = resolveSessionWorkDir(row, route);
   if (!workDir) return '';
@@ -165,17 +203,18 @@ export function resolveWorkbenchRequest(client, msg, targetAgentId, { allowMissi
   }
 
   if (!clientSupportsRoutes || !agentSupportsRoutes) return null;
+  const runtimeProvider = clean(msg.workbenchRoute.runtimeProvider, 32);
   const route = {
-    runtimeProvider: clean(msg.workbenchRoute.runtimeProvider, 32),
+    runtimeProvider,
     agentId: clean(msg.workbenchRoute.agentId),
-    sessionId: clean(msg.workbenchRoute.sessionId),
+    ...(runtimeProvider === 'work-center'
+      ? { workItemId: clean(msg.workbenchRoute.workItemId) }
+      : { sessionId: clean(msg.workbenchRoute.sessionId) }),
   };
   const routeKey = workbenchRouteKey(route);
   if (!routeKey || route.agentId !== targetAgentId) return null;
 
-  const row = route.runtimeProvider === 'yeaft'
-    ? resolveYeaftRow(client, route)
-    : resolveChatRow(client, route);
+  const row = resolveRouteRow(client, route, agent);
   if (row?.isArchived && !allowMissingSession) return null;
   if (!row && !allowMissingSession) return null;
 
@@ -189,6 +228,9 @@ export function resolveWorkbenchRequest(client, msg, targetAgentId, { allowMissi
     ? workbenchWorkspaceGeneration(routeKey, sessionWorkDir)
     : clean(msg.workbenchWorkspaceGeneration, 1600);
   if (!workspaceGeneration && !allowMissingSession) return null;
+  if (runtimeProvider === 'work-center' && !allowMissingSession
+      && msg.workbenchWorkspaceGeneration
+      && msg.workbenchWorkspaceGeneration !== workspaceGeneration) return null;
   return {
     legacy: false,
     route,
@@ -196,10 +238,12 @@ export function resolveWorkbenchRequest(client, msg, targetAgentId, { allowMissi
     scope,
     agentId: route.agentId,
     conversationId: workbenchConversationId(route, scope),
-    // Terminal is pinned to this Server-owned cwd. Git and Files retain their
-    // existing Agent-path picker and use requestedWorkDir after route auth.
+    // A WorkItem owns one canonical workspace. Unlike Session Workbench routes,
+    // Files/Git cannot switch this route to an arbitrary browser-provided cwd.
     workDir: sessionWorkDir,
-    requestedWorkDir: clean(msg.workDir, 4096) || sessionWorkDir,
+    requestedWorkDir: route.runtimeProvider === 'work-center'
+      ? sessionWorkDir
+      : clean(msg.workDir, 4096) || sessionWorkDir,
     workspaceGeneration,
     archived: row?.isArchived === true,
   };

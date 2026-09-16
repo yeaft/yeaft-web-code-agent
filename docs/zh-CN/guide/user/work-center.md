@@ -23,7 +23,7 @@ Work Center 不是 Session。它可以从 Session 创建并保留 origin link，
 
 ## 创建 WorkItem
 
-侧栏顶部、折叠按钮左侧的工作中心图标会打开全屏 Work Center；侧栏折叠后也可从图标栏进入。也可以从 Yeaft Session 的 composer 发起。工作中心内选择支持的 Agent，点击左上角「返回对话」回到原来的聊天；退出页面不会停止持久任务。
+侧栏顶部、折叠按钮左侧的工作中心图标会打开全屏 Work Center；侧栏折叠后也可从图标栏进入。也可以从 Yeaft Session 的 composer 发起。工作中心内选择支持的 Agent，点击顶栏最右侧的关闭图标回到原来的聊天；退出页面不会停止持久任务。顶栏右侧提供搜索和筛选，更多菜单中提供设置与刷新；窄屏下搜索收纳到筛选面板，新建工作项收纳到更多菜单。Item 顶部的「工作项 / 标题」面包屑与正文对齐，点击「工作项」返回看板。Actions 与主对话等高、独立滚动，窄屏下以钻取方式打开，关闭后保留原有对话草稿。
 
 「设置 → 通用 → 工作中心入口」通过开关和「已开启 / 已关闭」显示当前状态。这个偏好只控制浏览器中的入口显示，不会启动或停止 Agent 后台任务。没有兼容在线 Agent 时仍可进入查看提示并返回。
 
@@ -166,3 +166,10 @@ Execution evidence 可以包含 summary、acceptance check、file/test reference
 - [原生 engine 架构](../tech/yeaft-engine.md)
 - [Provider 与 model 配置](../yeaft-config.md)
 - [内部 Work Center domain contract](../../../work-center/domain-contract.md)
+
+
+### 工作目录与产出文件
+
+打开工作项后，通过右上角工作台图标查看它的工作目录。文件产出可直接在共享的 Files 预览器／编辑器中打开；Git 和终端复用聊天中的 Workbench 组件。路由属于所选 Agent 和工作项，不借用进入前的 Session。关闭工作中心不会改变原 Session 的工作目录和面板状态。
+
+需要新版 Server、Agent 及有工作目录的工作项。此路由不提供切换目录：Files、Git 和终端初始目录使用工作项目录。Git 仅在工作目录为仓库根目录时可用，防止仓库级操作静默包含工作项之外的文件；子目录工作项仍可使用文件和终端。目录外的本地文件引用保留为纯文本，HTTP(S) 链接单独打开。工作项暂不支持 Browser Runtime。文件操作和终端沿用既有 Workbench 权限，不是执行沙箱。

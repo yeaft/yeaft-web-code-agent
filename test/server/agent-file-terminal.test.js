@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
+import {
+  handleGitStatus, handleGitDiff, handleGitAdd, handleGitReset,
+  handleGitRestore, handleGitCommit, handleGitPush,
+} from '../../agent/workbench/git-ops.js';
 import { join } from 'node:path';
 import * as Vue from 'vue';
 import { createWsHandler } from '../../web/components/files/wsHandler.js';
@@ -17,8 +22,10 @@ import {
   handleVideoMetadata,
   handleVideoChunk,
   handleWriteFile,
+  handleListDirectory, handleCreateFile, handleDeleteFiles, handleMoveFiles, handleCopyFiles, handleUploadToDir,
   MAX_WORKBENCH_PREVIEW_BYTES,
 } from '../../agent/workbench/file-ops.js';
+import { rememberWorkItemWorkspace, __testResetWorkItemWorkspaces } from '../../server/work-center-workspace-cache.js';
 import { resolveFileReferences } from '../../agent/workbench/file-reference-resolver.js';
 
 const {
@@ -3231,4 +3238,179 @@ describe('Agent file terminal forwarding', () => {
     expect(removeChild).toHaveBeenCalledWith(anchor);
     globalThis.document = previousDocument;
   });
+});
+
+
+it('routes WorkItem file operations through canonical cwd and denies escaped directories', async () => {
+  __testResetWorkItemWorkspaces();
+  installRouteAgent('workbench-agent');
+  agents.get('workbench-agent').capabilities.push('work_center_workbench');
+  rememberWorkItemWorkspace('workbench-user', 'workbench-agent', {
+    id: 'item-1', workbench: { workDir: '/work/item' },
+  });
+  const client = routeClient('workbench-user', { workCenterWorkbenchProtocol: 1 });
+  const route = { runtimeProvider: 'work-center', agentId: 'workbench-agent', workItemId: 'item-1' };
+  const access = vi.fn(async () => true);
+  forwardToAgent.mockClear();
+  await handleClientWorkbench('wc-client', client, {
+    type: 'read_file', requestId: 'read-output', agentId: 'workbench-agent',
+    workbenchRoute: route, filePath: 'docs/result.md', workDir: '/forged/chat-cwd',
+  }, access);
+  expect(forwardToAgent).toHaveBeenCalledWith('workbench-agent', expect.objectContaining({
+    workDir: '/work/item', workbenchRoute: route, conversationId: '_workbench:work-center:workbench-agent:item-1',
+    _workbenchRequestId: expect.any(String),
+  }));
+  forwardToAgent.mockClear();
+  for (const message of [
+    { type: 'list_directory', dirPath: '/outside' },
+    { type: 'read_file', filePath: '../private.txt' },
+    { type: 'write_file', filePath: '../private.txt', content: 'bad' },
+  ]) {
+    await handleClientWorkbench('wc-client', client, {
+      ...message, requestId: 'deny-output', agentId: 'workbench-agent', workbenchRoute: route,
+    }, access);
+  }
+  expect(forwardToAgent).not.toHaveBeenCalled();
+  __testResetWorkItemWorkspaces();
+});
+
+
+it('rejects WorkItem file mutations through escaped symlinks and new destinations', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'wc-path-'));
+  const workspace = join(root, 'workspace');
+  const outside = join(root, 'outside');
+  mkdirSync(workspace); mkdirSync(outside);
+  const secret = join(outside, 'secret.txt');
+  writeFileSync(secret, 'untouched');
+  writeFileSync(join(workspace, 'local.txt'), 'local');
+  symlinkSync(outside, join(workspace, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
+  symlinkSync(secret, join(workspace, 'secret-link.txt'), 'file');
+  mkdirSync(join(workspace, 'source'));
+  mkdirSync(join(workspace, 'target/source'), { recursive: true });
+  mkdirSync(join(workspace, 'source/nested'));
+  writeFileSync(join(workspace, 'source/nested/secret.txt'), 'changed');
+  symlinkSync(outside, join(workspace, 'target/source/nested'), process.platform === 'win32' ? 'junction' : 'dir');
+  const base = { workDir: workspace, conversationId: '_workbench:work-center:agent:item',
+    workbenchRoute: { runtimeProvider: 'work-center', agentId: 'agent', workItemId: 'item' } };
+  const priorSend = ctx.sendToServer;
+  const replies = [];
+  ctx.sendToServer = message => { replies.push(message); return true; };
+  try {
+    const cases = [
+      [handleListDirectory, { dirPath: join(workspace, 'escape') }],
+      [handleWriteFile, { filePath: join(workspace, 'escape/secret.txt'), content: 'changed' }],
+      [handleCreateFile, { filePath: join(workspace, 'escape/new/created.txt') }],
+      [handleDeleteFiles, { paths: [join(workspace, 'escape/secret.txt')] }],
+      [handleMoveFiles, { paths: [join(workspace, 'local.txt')], destination: workspace, newName: '../outside/moved.txt' }],
+      [handleCopyFiles, { paths: [join(workspace, 'escape/secret.txt')], destination: workspace }],
+      [handleCopyFiles, { paths: [join(workspace, 'source')], destination: join(workspace, 'target') }],
+      [handleUploadToDir, { dirPath: workspace, files: [{ name: 'secret-link.txt', data: Buffer.from('changed').toString('base64') }] }],
+      [handleUploadToDir, { dirPath: workspace, files: [{ name: '../outside/upload.txt', data: 'YQ==' }] }],
+    ];
+    for (const [handler, fields] of cases) {
+      replies.length = 0;
+      await handler({ ...base, ...fields });
+      expect(replies).toHaveLength(1);
+      expect(replies[0].success === false || Boolean(replies[0].error)).toBe(true);
+      expect(readFileSync(secret, 'utf8')).toBe('untouched');
+    }
+    expect(existsSync(join(outside, 'new'))).toBe(false);
+    expect(existsSync(join(outside, 'moved.txt'))).toBe(false);
+    expect(existsSync(join(outside, 'upload.txt'))).toBe(false);
+    replies.length = 0;
+    await handleCreateFile({ ...base, filePath: join(workspace, 'new/result.txt') });
+    expect(replies[0].success).toBe(true);
+    await handleWriteFile({ ...base, filePath: join(workspace, 'new/result.txt'), content: 'allowed' });
+    expect(readFileSync(join(workspace, 'new/result.txt'), 'utf8')).toBe('allowed');
+  } finally {
+    ctx.sendToServer = priorSend;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('keeps WorkItem Git operations at an owned repository root, including canonical aliases', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'wc-git-root-'));
+  const repository = join(root, 'repo');
+  const workspace = join(repository, 'item');
+  const alias = join(root, 'repo-alias');
+  const subAlias = join(root, 'item-alias');
+  mkdirSync(workspace, { recursive: true });
+  const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim();
+  const priorSend = ctx.sendToServer;
+  const replies = [];
+  ctx.sendToServer = message => { replies.push(message); return true; };
+  const base = { workDir: workspace, conversationId: '_workbench:work-center:agent:item',
+    workbenchRoute: { runtimeProvider: 'work-center', agentId: 'agent', workItemId: 'item' } };
+  const run = async (handler, fields = {}) => {
+    replies.length = 0;
+    await handler({ ...base, ...fields });
+    expect(replies).toHaveLength(1);
+    return replies[0];
+  };
+  try {
+    git('init', '-q');
+    writeFileSync(join(repository, 'outside.txt'), 'original');
+    writeFileSync(join(workspace, 'inside.txt'), 'original');
+    git('add', '-A');
+    git('-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'initial');
+    writeFileSync(join(repository, 'outside.txt'), 'staged outside');
+    git('add', 'outside.txt');
+    writeFileSync(join(workspace, 'inside.txt'), 'changed inside');
+    symlinkSync(repository, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    symlinkSync(workspace, subAlias, process.platform === 'win32' ? 'junction' : 'dir');
+    const head = git('rev-parse', 'HEAD');
+    const status = git('status', '--porcelain');
+    const index = git('diff', '--cached');
+    const cases = [
+      [handleGitStatus, {}], [handleGitDiff, { filePath: 'outside.txt' }],
+      [handleGitAdd, { addAll: true }], [handleGitAdd, { filePath: 'outside.txt' }],
+      [handleGitReset, { resetAll: true }], [handleGitReset, { filePath: 'outside.txt' }],
+      [handleGitRestore, { filePath: 'item/inside.txt' }],
+      [handleGitCommit, { commitMessage: 'must not commit outside changes' }],
+      [handleGitPush, {}],
+    ];
+    for (const workDir of [workspace, subAlias]) {
+      for (const [handler, fields] of cases) {
+        const result = await run(handler, { ...fields, workDir });
+        expect(result.error).toContain('repository root');
+        expect(result.success).not.toBe(true);
+        expect(result.files).toBeUndefined();
+        if (handler === handleGitStatus) expect(result.errorCode).toBe('WORK_ITEM_GIT_ROOT_REQUIRED');
+        expect(git('status', '--porcelain')).toBe(status);
+        expect(git('diff', '--cached')).toBe(index);
+        expect(git('rev-parse', 'HEAD')).toBe(head);
+      }
+    }
+    // Existing chat routes can still choose a repository subdirectory.
+    const chatStatus = await run(handleGitStatus, { workbenchRoute: undefined });
+    expect(chatStatus.error).toBeUndefined();
+    expect(chatStatus.files.some(file => file.path === 'outside.txt')).toBe(true);
+    // Root workspaces (including symlink aliases) retain Git functionality.
+    for (const workDir of [repository, alias]) {
+      expect((await run(handleGitStatus, { workDir })).error).toBeUndefined();
+    }
+    expect((await run(handleGitAdd, { workDir: alias, filePath: 'item/inside.txt' })).success).toBe(true);
+    expect((await run(handleGitReset, { workDir: repository, filePath: 'item/inside.txt' })).success).toBe(true);
+    expect((await run(handleGitDiff, { workDir: repository, filePath: 'item/inside.txt' })).diff).toContain('changed inside');
+    // Non-repositories still return their existing meaningful error.
+    const notRepo = await run(handleGitStatus, { workDir: root });
+    expect(notRepo.isGitRepo).toBe(false);
+    expect(notRepo.errorCode).not.toBe('WORK_ITEM_GIT_ROOT_REQUIRED');
+    // Untracked previews must not bypass the Files realpath boundary.
+    const secret = join(root, 'secret.txt');
+    writeFileSync(secret, 'outside secret');
+    symlinkSync(secret, join(repository, 'secret-link.txt'), 'file');
+    writeFileSync(join(repository, 'new.txt'), 'local preview');
+    for (const workDir of [repository, alias]) {
+      for (const filePath of ['secret-link.txt', '../secret.txt']) {
+        const result = await run(handleGitDiff, { workDir, filePath, untracked: true });
+        expect(result.error).toContain('outside the WorkItem workspace');
+        expect(result.newFileContent).toBeUndefined();
+      }
+      expect((await run(handleGitDiff, { workDir, filePath: 'new.txt', untracked: true })).newFileContent).toBe('local preview');
+    }
+  } finally {
+    ctx.sendToServer = priorSend;
+    rmSync(root, { recursive: true, force: true });
+  }
 });

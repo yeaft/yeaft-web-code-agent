@@ -9,10 +9,12 @@ export default {
     routeKey: { type: String, required: true },
     runtimeProvider: { type: String, required: true },
     agentId: { type: String, required: true },
-    sessionId: { type: String, required: true },
+    sessionId: { type: String, default: '' },
+    workItemId: { type: String, default: '' },
     conversationId: { type: String, required: true },
     workDir: { type: String, default: '' },
     workspaceGeneration: { type: String, required: true },
+    workspaceLocked: { type: Boolean, default: false },
   },
   template: `
     <div ref="terminalRoot" class="terminal-tab">
@@ -47,7 +49,7 @@ export default {
     </div>
   `,
   setup(props) {
-    const store = createRouteBoundWorkbenchStore(Pinia.useChatStore(), props);
+    const store = createRouteBoundWorkbenchStore(Vue.inject('workbench-store', null) || Pinia.useChatStore(), props);
     const t = Vue.inject('t');
 
     const terminals = Vue.reactive({});

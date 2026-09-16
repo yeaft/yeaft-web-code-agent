@@ -11,18 +11,20 @@ export default {
     routeKey: { type: String, required: true },
     runtimeProvider: { type: String, required: true },
     agentId: { type: String, required: true },
-    sessionId: { type: String, required: true },
+    sessionId: { type: String, default: '' },
+    workItemId: { type: String, default: '' },
     conversationId: { type: String, required: true },
     workDir: { type: String, default: '' },
     workspaceGeneration: { type: String, required: true },
+    workspaceLocked: { type: Boolean, default: false },
   },
   template: `
     <div class="git-status-tab git-three-col">
       <!-- 左栏: 文件列表 -->
       <div class="git-col-files">
-        <!-- 工作目录选择（始终可见） -->
+        <!-- WorkItem routes display, but cannot replace, their owned workspace. -->
         <div class="git-workdir-row">
-          <button class="wb-btn-sm" @click="openFolderPicker" :title="$t('git.selectFolder')">
+          <button v-if="!workspaceLocked" class="wb-btn-sm" @click="openFolderPicker" :title="$t('git.selectFolder')">
             <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z"/></svg>
           </button>
           <input
@@ -31,8 +33,9 @@ export default {
             @keypress.enter="changeGitWorkDir"
             class="git-workdir-input"
             :title="$t('git.workDir')"
+            :readonly="workspaceLocked"
           />
-          <button class="wb-btn-sm" @click="changeGitWorkDir" :title="$t('git.loadStatus')">
+          <button v-if="!workspaceLocked" class="wb-btn-sm" @click="changeGitWorkDir" :title="$t('git.loadStatus')">
             <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
           </button>
         </div>
@@ -262,7 +265,7 @@ export default {
     </div>
   `,
   setup(props) {
-    const store = createRouteBoundWorkbenchStore(Pinia.useChatStore(), props);
+    const store = createRouteBoundWorkbenchStore(Vue.inject('workbench-store', null) || Pinia.useChatStore(), props);
     const t = Vue.inject('t');
 
     // --- Helpers for VSCode-style file display ---
@@ -289,8 +292,10 @@ export default {
 
     // --- Git work directory ---
     const defaultWorkDir = Vue.computed(() => store.effectiveWorkDir || '');
-    const gitWorkDir = Vue.ref('');
-    const effectiveGitWorkDir = Vue.computed(() => gitWorkDir.value.trim() || defaultWorkDir.value);
+    const gitWorkDir = Vue.ref(props.workspaceLocked ? defaultWorkDir.value : '');
+    const effectiveGitWorkDir = Vue.computed(() => (
+      props.workspaceLocked ? defaultWorkDir.value : (gitWorkDir.value.trim() || defaultWorkDir.value)
+    ));
 
     // --- Git Diff state ---
     const selectedGitFile = Vue.ref(null);
@@ -439,7 +444,8 @@ export default {
           if (props.routeKey && workbenchMessageScope(msg, props.routeKey) !== 'main') return;
           gitLoading.value = false;
           if (msg.error) {
-            gitError.value = msg.error;
+            gitError.value = msg.errorCode === 'WORK_ITEM_GIT_ROOT_REQUIRED'
+              ? t('git.workItemRootRequired') : msg.error;
             gitBranch.value = null;
             gitFiles.value = [];
             return;

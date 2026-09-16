@@ -757,7 +757,7 @@ describe('agent capability advertisement', () => {
     ]) {
       expect(source).toContain(`'${capability}'`);
     }
-    expect(source).toMatch(/if \(ctx\.CONFIG\?\.workCenterEnabled === true\) \{\s*capabilities\.push\('work_center', 'work_center_message_v2'\)/s);
+    expect(source).toMatch(/if \(ctx\.CONFIG\?\.workCenterEnabled === true\) \{\s*capabilities\.push\('work_center', 'work_center_message_v2', 'work_center_workbench'\)/s);
     expect(source).not.toMatch(/const capabilities = \[[^\]]*'work_center'/s);
   });
 });

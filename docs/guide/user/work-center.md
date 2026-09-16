@@ -23,7 +23,7 @@ Work Center is not a Session. It can be created from a Session and keeps that or
 
 ## Create a WorkItem
 
-Open the full-screen Work Center using the icon immediately to the left of the sidebar collapse button, or from the collapsed icon rail. You can also start from a Yeaft Session's composer. Select a compatible Agent inside Work Center, then use **Back to chat** to return to your previous conversation. Leaving the page does not stop persistent tasks.
+Open the full-screen Work Center using the icon immediately to the left of the sidebar collapse button, or from the collapsed icon rail. You can also start from a Yeaft Session's composer. Select a compatible Agent inside Work Center, then use the close icon at the far right of the header to return to your previous conversation. Leaving the page does not stop persistent tasks. Search and filters share the header; settings and refresh are in the more-actions menu. On narrow screens, search moves into the filters panel and creating a work item moves into the more-actions menu. The **Work items / title** breadcrumb aligns with the content; select **Work items** to return to the board. Actions and the main conversation have aligned, full-height panes with independent scrolling. Narrow screens use drilldown navigation and retain the conversation draft on return.
 
 In **Settings → General → Work Center entry**, a switch and **Enabled / Disabled** label show the current preference. This only controls the browser entry; it does not start or stop Agent background tasks. You can still open the page and return when no compatible Agent is online.
 
@@ -166,3 +166,10 @@ Execution evidence can include summaries, acceptance checks, file/test reference
 - [Native engine architecture](../tech/yeaft-engine.md)
 - [Provider and model configuration](../yeaft-config.md)
 - [Internal Work Center domain contract](../../work-center/domain-contract.md)
+
+
+### Workspace and output files
+
+Open a Work Item and use the Workbench icon in the top-right header to browse its workspace. File outputs open directly in the shared Files viewer/editor; Git and Terminal reuse the same Workbench components as chat. The route belongs to the selected Agent and Work Item, not the Session you came from. Closing Work Center leaves that Session’s workspace and panel state unchanged.
+
+Workbench requires updated Server and Agent versions and a Work Item workspace. The folder picker is unavailable on this route: Files, Git and the initial Terminal directory use the Work Item workspace. Git is available only when the workspace is the repository root, so repository-wide operations cannot silently include files outside the Work Item. A subfolder workspace can still use Files and Terminal. Local output references outside that directory remain plain text. HTTP(S) links open separately. Browser Runtime is not available for Work Items. File operations and Terminal retain the existing Workbench permissions; this is not an execution sandbox.
