@@ -961,7 +961,7 @@ test.describe('Work Center responsive UI', () => {
     const breadcrumb = await chatPage.locator('.work-center-detail-breadcrumb').boundingBox();
     const overview = await chatPage.locator('.work-center-work-item-overview').boundingBox();
     expect(breadcrumb.x).toBeCloseTo(overview.x, 0);
-    await divider.focus();
+    await tabTo(chatPage, '.pane-resize-handle');
     expect(await divider.evaluate(element => getComputedStyle(element, '::after').backgroundColor))
       .not.toBe('rgba(0, 0, 0, 0)');
     await expect(chatPage.locator('.work-center-header h1')).toHaveCSS('font-size', '14px');
