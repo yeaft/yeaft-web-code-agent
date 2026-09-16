@@ -504,6 +504,7 @@ function serializableTraceMeta(trace) {
   delete meta._persistedFormat;
   delete meta._persistedRequestDir;
   delete meta._payloadReleased;
+  delete meta._failedAppend;
   delete meta.baseRequest;
   delete meta.loops;
   delete meta.tools;
@@ -556,6 +557,8 @@ async function countRequestEvents(requestDir) {
   }
   let loopCount = 0;
   let toolCount = 0;
+  const loopIds = new Set();
+  const toolIds = new Set();
   const stream = createReadStream(requestEventsPath(requestDir), { encoding: 'utf8' });
   stream.on('error', () => {});
   try {
@@ -564,8 +567,13 @@ async function countRequestEvents(requestDir) {
       if (!line.trim()) continue;
       try {
         const event = JSON.parse(line);
-        if (event?.type === 'loop' && event.record) loopCount += 1;
-        else if (event?.type === 'tool' && event.record) toolCount += 1;
+        if (event?.type === 'loop' && event.record) {
+          const id = event.record.turnRowId || event.record.loopInstanceId || `${event.record.loopNumber || 0}`;
+          if (!loopIds.has(id)) { loopIds.add(id); loopCount += 1; }
+        } else if (event?.type === 'tool' && event.record) {
+          const id = event.record.id || `${event.record.turnRowId || ''}:${event.record.toolCallId || ''}`;
+          if (!toolIds.has(id)) { toolIds.add(id); toolCount += 1; }
+        }
       } catch { /* Ignore one torn final append. */ }
     }
   } catch { /* Missing/unreadable event file counts as empty. */ }
@@ -1345,6 +1353,19 @@ export class DebugTrace {
   async close() {
     this.#acceptingWrites = false;
     await this.#drainWrites();
+    // One final bounded retry, also for a failure with no later loop/finalize.
+    // Persistent disk errors retain diagnostics rather than silently evicting.
+    for (const trace of this.#requestCache.values()) {
+      const failed = trace._failedAppend;
+      if (!failed) continue;
+      delete trace._failedAppend;
+      for (const entry of failed.records) {
+        this.#pendingWrites.push({ trace, ...entry, initialize: true,
+          writeMeta: failed.writeMeta, evictAfterWrite: failed.evictAfterWrite });
+      }
+    }
+    await this.#drainWrites();
+    if ([...this.#requestCache.values()].some(trace => trace._failedAppend)) return;
     this.#requestCache.clear();
     this.#turnIndex.clear();
     this.#retentionIndex.clear();
@@ -1594,7 +1615,18 @@ export class DebugTrace {
         batches.set(requestDir, batch);
       }
       for (const [requestDir, batch] of batches) {
-        const { trace, initialize, writeMeta, evictAfterWrite } = batch;
+        const { trace } = batch;
+        // A failed append may contain the base/delta for every later loop.
+        // Retry it before new records (including finalize); do not run a timer
+        // retry loop on a full disk. Record identity makes partial replay safe.
+        if (trace._failedAppend) {
+          const failed = trace._failedAppend;
+          batch.records.unshift(...failed.records);
+          batch.initialize = true; // recheck metadata and repair any partial tail
+          batch.writeMeta ||= failed.writeMeta;
+          batch.evictAfterWrite ||= failed.evictAfterWrite;
+        }
+        const { initialize, writeMeta, evictAfterWrite } = batch;
         const records = [...batch.records];
         const durableRecords = batch.records.map(entry => entry.record);
         const legacyRequestDir = trace._persistedFormat === 'legacy'
@@ -1637,6 +1669,7 @@ export class DebugTrace {
             await atomicWriteText(metaPath, JSON.stringify(meta));
             this.#diskHeaders.set(trace.requestKey, meta);
           }
+          delete trace._failedAppend;
           this.#releasePersistedPayload(trace, durableRecords);
           trace._persistedFormat = 'events';
           trace._persistedRequestDir = requestDir;
@@ -1655,6 +1688,9 @@ export class DebugTrace {
             }
           }
         } catch (err) {
+          // Keep immutable entries until a later append/close can durably retry
+          // them. In particular, finalize must not evict a failed base/delta.
+          trace._failedAppend = { records: batch.records, writeMeta, evictAfterWrite };
           console.warn('[Yeaft] debug trace append failed:', err?.message || err);
         }
       }

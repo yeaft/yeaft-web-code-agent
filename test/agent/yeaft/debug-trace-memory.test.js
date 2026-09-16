@@ -116,6 +116,104 @@ describe('DebugTrace active payload release', () => {
     }
   });
 
+  it.each(['first', 'middle', 'partial'])('replays a %s append failure before finalize and survives restart', async (failure) => {
+    const root = await traceRoot();
+    const writer = new DebugTrace(root);
+    const identity = { sessionId: 'replay-session', traceId: 'replay-turn' };
+    const messages = [];
+    const append = (number) => {
+      messages.push({ role: 'user', content: `request-${number}` });
+      const turn = writer.startTurn({ ...identity, turnNumber: number });
+      writer.endTurn(turn, {
+        messages, rawRequest: { body: { messages } },
+        rawResponse: { body: `raw-${number}` },
+        responseText: `response-${number}`, stopReason: 'tool_use',
+      });
+      writer.logTool(turn, { toolName: 'Inspect', toolInput: `input-${number}`, toolOutput: `output-${number}` });
+    };
+    if (failure !== 'first') { append(1); await writer.flush(); }
+    const originalOpen = fs.open.bind(fs);
+    const open = vi.spyOn(fs, 'open');
+    if (failure === 'partial') {
+      open.mockImplementationOnce(async (...args) => {
+        const handle = await originalOpen(...args);
+        const write = handle.writeFile.bind(handle);
+        let calls = 0;
+        handle.writeFile = async (text, ...rest) => {
+          if (++calls === 2) {
+            await write(text.slice(0, 25), ...rest);
+            throw new Error('simulated partial append');
+          }
+          return write(text, ...rest);
+        };
+        return handle;
+      });
+    } else open.mockRejectedValueOnce(new Error('simulated append failure'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const failedNumber = failure === 'first' ? 1 : 2;
+      append(failedNumber);
+      await writer.flush();
+      expect(warn).toHaveBeenCalled();
+      // The retry can fail too: it must retain both prior and newer deltas.
+      open.mockRejectedValueOnce(new Error('retry failed'));
+      append(failedNumber + 1);
+      await writer.flush();
+      open.mockRestore();
+      writer.finalizeQuery(identity.traceId, { sessionId: identity.sessionId });
+      await writer.close();
+
+      const reader = new DebugTrace(root);
+      try {
+        const detail = await reader.fetchTurnDebug({ sessionId: identity.sessionId, turnId: identity.traceId });
+        const numbers = Array.from({ length: failedNumber + 1 }, (_, i) => i + 1);
+        expect(detail.loops.map(loop => loop.response)).toEqual(numbers.map(i => `response-${i}`));
+        expect(detail.loops.map(loop => loop.rawResponse.body)).toEqual(numbers.map(i => `raw-${i}`));
+        expect(detail.loops.at(-1).messages).toEqual(messages);
+        expect(detail.loops.at(-1).rawRequest.body.messages).toEqual(messages);
+        const tools = await reader.queryTools({ name: 'Inspect' });
+        expect(tools.map(tool => tool.tool_output).sort()).toEqual(numbers.map(i => `output-${i}`));
+        expect(await reader.stats()).toMatchObject({ requestCount: 1, turnCount: numbers.length, toolCount: numbers.length });
+        const index = await reader.fetchRecentDebugHistory({ sessionId: identity.sessionId, indexOnly: true });
+        expect(index.turns[0]).toMatchObject({ loopCount: numbers.length });
+        const requestsDir = join(root, 'sessions', identity.sessionId, 'debug', 'requests');
+        const [requestKey] = await fs.readdir(requestsDir);
+        const meta = JSON.parse(await readFile(join(requestsDir, requestKey, 'meta.json'), 'utf8'));
+        expect(meta).toMatchObject({ active: false, finalStopReason: 'end_turn', loopCount: numbers.length, toolCount: numbers.length });
+        expect(meta).not.toHaveProperty('_failedAppend');
+      } finally { await reader.close(); }
+    } finally {
+      open.mockRestore();
+      warn.mockRestore();
+      await writer.close();
+    }
+  });
+
+  it('retries an otherwise idle failed append once at close', async () => {
+    const root = await traceRoot();
+    const writer = new DebugTrace(root);
+    const open = vi.spyOn(fs, 'open').mockRejectedValueOnce(new Error('temporary disk failure'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const turn = writer.startTurn({ sessionId: 'close-session', traceId: 'close-turn', turnNumber: 1 });
+      writer.endTurn(turn, { messages: [{ role: 'user', content: 'keep me' }], responseText: 'durable after close' });
+      await writer.flush();
+      expect(warn).toHaveBeenCalled();
+      open.mockRestore();
+      await writer.close();
+      const reader = new DebugTrace(root);
+      try {
+        const detail = await reader.fetchTurnDebug({ sessionId: 'close-session', turnId: 'close-turn' });
+        expect(detail.loops).toHaveLength(1);
+        expect(detail.loops[0].response).toBe('durable after close');
+      } finally { await reader.close(); }
+    } finally {
+      open.mockRestore();
+      warn.mockRestore();
+      await writer.close();
+    }
+  });
+
   it('persists terminal metadata and tools that arrive after the stop reason across restart', async () => {
     const root = await traceRoot();
     const sessionId = 'late-tool-session';
