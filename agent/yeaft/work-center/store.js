@@ -1742,7 +1742,7 @@ export class WorkItemStore {
 
   #hasBlockingOperation(workItemId, actionId = null) {
     const rows = this.db.prepare(`SELECT idempotency_key FROM operations
-      WHERE work_item_id = ? AND concurrency_policy = 'blocking'
+      WHERE work_item_id = ? AND concurrency_policy = 'blocking' AND operation_type != 'Bash'
         AND (? IS NULL OR action_id IS NULL OR action_id = ?)`)
       .all(workItemId, actionId, actionId);
     return rows.some(row => !this.operationSafeToProceed(row.idempotency_key));
@@ -1805,11 +1805,19 @@ export class WorkItemStore {
       const active = this.#activeRunRow(operation.runId, ownerBootId, leaseEpoch, true);
       if (!active || active.work_item_id !== operation.workItemId
           || active.action_id !== operation.actionId) {
-        this.db.prepare(`UPDATE operations SET effect_status = 'unknown',
-          execution_status = 'hazardous_orphan', effect_cutoff = ?, result = ?, completed_at = ?,
+        const settled = operation.operationType === 'Bash'
+          && ['applied', 'not_applied', 'failed_no_effect'].includes(effectStatus);
+        this.db.prepare(`UPDATE operations SET effect_status = ?,
+          execution_status = ?, effect_cutoff = ?, result = ?, completed_at = ?,
           updated_at = ? WHERE idempotency_key = ? AND execution_status = 'running'
           AND owner_boot_id = ? AND owner_lease_epoch = ?`).run(
-          stringify({ status: 'stale', closureType: 'late_completion', closedAt: now }),
+          settled ? effectStatus : 'unknown',
+          settled ? 'quiescent' : 'hazardous_orphan',
+          stringify({
+            status: settled ? 'current' : 'stale',
+            closureType: settled ? 'late_settled_completion' : 'late_completion',
+            closedAt: now,
+          }),
           stringify({ attemptedEffectStatus: effectStatus, reportedResult: result }),
           now, now, idempotencyKey, ownerBootId, leaseEpoch,
         );
@@ -1830,6 +1838,19 @@ export class WorkItemStore {
   recoverOperations() {
     return withTransaction(this.db, () => {
       const now = this.now();
+      const reconciled = this.db.prepare(`UPDATE operations SET
+        effect_status = json_extract(result, '$.attemptedEffectStatus'),
+        execution_status = 'quiescent', effect_cutoff = ?, completed_at = COALESCE(completed_at, ?),
+        updated_at = ? WHERE operation_type = 'Bash'
+        AND execution_status = 'hazardous_orphan' AND effect_status = 'unknown'
+        AND json_extract(result, '$.attemptedEffectStatus') IN
+          ('applied', 'not_applied', 'failed_no_effect')`).run(
+        stringify({
+          status: 'current', closureType: 'recovered_late_settled_completion', closedAt: now,
+        }),
+        now,
+        now,
+      );
       const unstarted = this.db.prepare(`UPDATE operations SET effect_status = 'failed_no_effect',
         execution_status = 'quiescent', effect_cutoff = ?, result = ?, completed_at = ?, updated_at = ?
         WHERE effect_status = 'pending' AND execution_status = 'not_started'`).run(
@@ -1842,7 +1863,7 @@ export class WorkItemStore {
         effect_cutoff = ?, updated_at = ? WHERE execution_status IN ('running', 'cancel_requested')`).run(
         stringify({ status: 'stale', closureType: 'restart_unknown', closedAt: now }), now,
       );
-      return Number(unstarted.changes) + Number(hazardous.changes);
+      return Number(reconciled.changes) + Number(unstarted.changes) + Number(hazardous.changes);
     });
   }
 
@@ -4631,6 +4652,7 @@ export class WorkItemStore {
             SELECT 1 FROM operations unsafe_operation
             WHERE unsafe_operation.work_item_id = w.id
               AND unsafe_operation.concurrency_policy = 'blocking'
+              AND unsafe_operation.operation_type != 'Bash'
               AND unsafe_operation.effect_status NOT IN ('applied', 'not_applied', 'failed_no_effect')
           )
           AND NOT EXISTS (

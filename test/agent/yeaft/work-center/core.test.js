@@ -136,6 +136,97 @@ describe('Work Center core', () => {
   });
 
 
+  it('retries Actions after an interrupted Bash without bypassing other unknown side effects', () => {
+    const bashItem = controller.create(createInput({ id: 'bash-retry', workDir: dir }));
+    const bashClaim = store.claimReadyAction('bash-owner', 5_000);
+    expect(bashClaim?.workItem.id).toBe(bashItem.id);
+    expect(store.createAndClaimOperation({
+      workItemId: bashItem.id,
+      actionId: bashClaim.action.id,
+      runId: bashClaim.run.id,
+      operationType: 'Bash',
+      idempotencyKey: 'interrupted-bash',
+      replayPolicy: 'never_automatic',
+    }, 'bash-owner', bashClaim.run.leaseEpoch, false)).not.toBeNull();
+    expect(store.interruptRun(
+      bashClaim.run.id, 'bash-owner', bashClaim.run.leaseEpoch, 'simulated interruption',
+    )).toBe(true);
+    expect(store.getOperationByKey('interrupted-bash')).toMatchObject({
+      effectStatus: 'pending', executionStatus: 'running',
+    });
+    store.recoverOperations();
+    expect(store.getOperationByKey('interrupted-bash')).toMatchObject({
+      effectStatus: 'unknown', executionStatus: 'hazardous_orphan',
+    });
+    expect(store.claimReadyAction('bash-retry-owner', 5_000)).toMatchObject({
+      workItem: { id: bashItem.id },
+    });
+
+    const externalItem = controller.create(createInput({
+      id: 'external-effect-fence', workDir: join(dir, 'external-effect-fence'),
+    }));
+    const externalClaim = store.claimReadyAction('external-owner', 5_000);
+    expect(externalClaim?.workItem.id).toBe(externalItem.id);
+    expect(store.createAndClaimOperation({
+      workItemId: externalItem.id,
+      actionId: externalClaim.action.id,
+      runId: externalClaim.run.id,
+      operationType: 'external-publish',
+      idempotencyKey: 'unknown-external-effect',
+      replayPolicy: 'never_automatic',
+    }, 'external-owner', externalClaim.run.leaseEpoch, false)).not.toBeNull();
+    expect(store.interruptRun(
+      externalClaim.run.id, 'external-owner', externalClaim.run.leaseEpoch, 'simulated interruption',
+    )).toBe(true);
+    expect(store.claimReadyAction('must-remain-fenced', 5_000)).toBeNull();
+  });
+
+  it('keeps a settled Bash result when completion arrives after its Run lease', () => {
+    const item = controller.create(createInput({ id: 'late-bash-result', workDir: dir }));
+    const claim = store.claimReadyAction('late-owner', 50);
+    expect(store.createAndClaimOperation({
+      workItemId: item.id,
+      actionId: claim.action.id,
+      runId: claim.run.id,
+      operationType: 'Bash',
+      idempotencyKey: 'late-settled-bash',
+      replayPolicy: 'never_automatic',
+    }, 'late-owner', claim.run.leaseEpoch, false)).not.toBeNull();
+    now += 51;
+    expect(store.completeOperation(
+      'late-settled-bash', 'late-owner', claim.run.leaseEpoch, 'applied', { exitCode: 0 },
+    )).toBe(false);
+    expect(store.getOperationByKey('late-settled-bash')).toMatchObject({
+      effectStatus: 'applied',
+      executionStatus: 'quiescent',
+      effectCutoff: { status: 'current', closureType: 'late_settled_completion' },
+    });
+  });
+
+  it('reconciles legacy late-settled operation records during recovery', () => {
+    const item = controller.create(createInput({ id: 'legacy-bash-result', workDir: dir }));
+    const claim = store.claimReadyAction('legacy-owner', 5_000);
+    store.createAndClaimOperation({
+      workItemId: item.id,
+      actionId: claim.action.id,
+      runId: claim.run.id,
+      operationType: 'Bash',
+      idempotencyKey: 'legacy-late-bash',
+      replayPolicy: 'never_automatic',
+    }, 'legacy-owner', claim.run.leaseEpoch, false);
+    store.db.prepare(`UPDATE operations SET effect_status = 'unknown',
+      execution_status = 'hazardous_orphan', result = ? WHERE idempotency_key = ?`).run(
+      JSON.stringify({ attemptedEffectStatus: 'failed_no_effect', reportedResult: { exitCode: 1 } }),
+      'legacy-late-bash',
+    );
+    expect(store.recoverOperations()).toBe(1);
+    expect(store.getOperationByKey('legacy-late-bash')).toMatchObject({
+      effectStatus: 'failed_no_effect',
+      executionStatus: 'quiescent',
+      effectCutoff: { status: 'current', closureType: 'recovered_late_settled_completion' },
+    });
+  });
+
   it('keeps a bounded tool journal and replaces running entries by tool id', () => {
     let checkpoint = null;
     checkpoint = appendCheckpointToolEvent(checkpoint, {
