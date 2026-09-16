@@ -128,6 +128,19 @@ export function createFileTabs(store, {
     }
   };
 
+  // A WebSocket disconnect loses the outstanding response. Invalidate its id
+  // so a delayed reply cannot satisfy a later click or overwrite local edits.
+  const interruptFileReads = () => {
+    for (const file of openFiles.value) {
+      if (!file.loading) continue;
+      file.requestId = nextFileReadRequestId();
+      file.loading = false;
+      file.previewLoading = false;
+      file.loadError = t('files.readInterrupted');
+      file.previewError = file.loadError;
+    }
+  };
+
   const canRetryFileRead = file => !file.loading && !file.isDirty
     && (file.loadError || ((!file.fileType || file.fileType === 'text') && file.content == null))
     && ((!file.fileType || file.fileType === 'text')
@@ -302,7 +315,7 @@ export function createFileTabs(store, {
     fileTabsMap, openFiles, activeFileIndex, activeFile,
     fileLoading, fileSaving, tabRevision, bumpTabRevision,
     beginTabsRestoreRequest, acceptTabsRestoreRequest,
-    saveTabsState, restoreTabsState, openFileInTab,
+    saveTabsState, restoreTabsState, openFileInTab, interruptFileReads,
     switchToTab, closeFileTab, closeFileTabs,
     closeTabsToLeft, closeTabsToRight, closeOtherTabs, closeAllTabs,
     saveFile,

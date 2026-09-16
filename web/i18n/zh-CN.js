@@ -1294,6 +1294,7 @@ export default {
   'files.emptyDir': '空目录',
   'files.loadingFile': '加载文件...',
   'files.readSendFailed': '文件请求未发送。请检查连接，然后再次点击文件重试。',
+  'files.readInterrupted': '文件读取已中断。请重新连接，然后再次点击文件重试。',
   'files.searchPlaceholder': '搜索...',
   'files.replacePlaceholder': '替换...',
   'files.replace': '替换',

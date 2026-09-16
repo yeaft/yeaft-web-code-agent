@@ -848,6 +848,10 @@ export default {
       }
     });
 
+    Vue.watch(() => liveStore.connectionState, (state, previous) => {
+      if (previous === 'connected' && state !== 'connected') tabs.interruptFileReads();
+    }, { flush: 'sync' });
+
     Vue.watch(() => store.theme, (newTheme) => {
       const file = tabs.activeFile.value;
       if (file?.cmInstance) file.cmInstance.setOption('theme', newTheme === 'dark' ? 'material-darker' : 'default');

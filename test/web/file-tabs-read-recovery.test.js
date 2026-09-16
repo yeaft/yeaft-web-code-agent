@@ -74,6 +74,27 @@ describe('file tab read recovery', () => {
     expect(file).toMatchObject({ loading: true, loadError: null, requestId: reads[1].requestId });
   });
 
+  it('interrupts pending reads on disconnect and allows another click without reloading successful tabs', () => {
+    const { tabs, sendWsMessage } = harness();
+    tabs.openFileInTab('docs/loaded.txt', 'loaded.txt', route);
+    const loaded = tabs.activeFile.value;
+    loaded.content = 'saved content';
+    loaded.loading = false;
+    const loadedRequestId = loaded.requestId;
+    tabs.openFileInTab('docs/pending.txt', 'pending.txt', route);
+    const pending = tabs.activeFile.value;
+    const oldRequestId = pending.requestId;
+    tabs.interruptFileReads();
+    expect(pending).toMatchObject({ loading: false, content: null, loadError: 'files.readInterrupted' });
+    expect(pending.requestId).not.toBe(oldRequestId);
+    expect(loaded).toMatchObject({ content: 'saved content', loadError: null, requestId: loadedRequestId });
+    tabs.openFileInTab('docs/pending.txt', 'pending.txt', route);
+    expect(pending).toMatchObject({ loading: true, loadError: null });
+    const reads = sendWsMessage.mock.calls.map(([msg]) => msg).filter(msg => msg.type === 'read_file');
+    expect(reads).toHaveLength(3);
+    expect(reads[2].requestId).not.toBe(oldRequestId);
+  });
+
   it('does not duplicate an in-flight read or retry over dirty and loaded content', () => {
     const { tabs, sendWsMessage } = harness();
     tabs.openFileInTab('docs/readme.txt', 'readme.txt', route);

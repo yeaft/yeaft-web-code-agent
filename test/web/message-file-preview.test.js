@@ -1350,6 +1350,120 @@ describe('message file preview', () => {
     }
   });
 
+  async function mountRecoveringReferences(content = 'docs/guide.txt') {
+    let sequence = 0;
+    const store = Vue.reactive({
+      fileReferenceResolutionContextKey: 'agent-a:session-a:/workspace',
+      isProcessing: false,
+      answerUserQuestion: vi.fn(), cancelVpTurn: vi.fn(), openFileInExplorer: vi.fn(),
+      resolveMessageFileReferences: vi.fn(() => `refs-${++sequence}`),
+    });
+    globalThis.Vue = Vue;
+    globalThis.Pinia = { defineStore: () => () => ({}), useChatStore: () => store };
+    globalThis.marked = { setOptions: vi.fn(), parse: vi.fn(value => `<p>${value}</p>`) };
+    globalThis.hljs = undefined;
+    const { default: AssistantTurn } = await import('../../web/components/AssistantTurn.js');
+    const wrapper = mount(AssistantTurn, {
+      props: { turn: {
+        id: 'recovering-links', textContent: content,
+        textSegments: [{ key: 'result', content, kind: 'result' }],
+        toolMsgs: [], imageMsgs: [], isStreaming: false,
+      } },
+      global: {
+        mocks: { $t: key => key }, provide: { t: key => key },
+        stubs: { ToolLine: true, AskCard: true, VpSpeakerHeader: true },
+      },
+    });
+    const respond = (requestId, detail = {}) => window.dispatchEvent(new CustomEvent('workbench-message', {
+      detail: { type: 'file_references_resolved', requestId, references: [], ...detail },
+    }));
+    return { wrapper, store, respond };
+  }
+
+  it('recovers transient resolution errors without changing a completed reply', async () => {
+    vi.useFakeTimers();
+    const { wrapper, store, respond } = await mountRecoveringReferences();
+    try {
+      respond('refs-1', { error: 'Agent temporarily unavailable' });
+      await vi.advanceTimersByTimeAsync(1499);
+      expect(store.resolveMessageFileReferences).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(store.resolveMessageFileReferences).toHaveBeenCalledTimes(2);
+      respond('refs-2', { references: [{ requestedPath: 'docs/guide.txt', resolvedPath: 'docs/guide.txt' }] });
+      await Vue.nextTick();
+      await wrapper.get('.message-file-reference').trigger('click');
+      expect(store.openFileInExplorer).toHaveBeenCalledWith('docs/guide.txt', { hideTree: true, line: null });
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(store.resolveMessageFileReferences).toHaveBeenCalledTimes(2);
+    } finally { wrapper.unmount(); vi.useRealTimers(); }
+  });
+
+  it('bounds failed sends and errors to two retries while retaining the 128-path cap', async () => {
+    vi.useFakeTimers();
+    const { wrapper, store, respond } = await mountRecoveringReferences(
+      Array.from({ length: 140 }, (_, i) => `src/file-${i}.js`).join(' '),
+    );
+    try {
+      expect(store.resolveMessageFileReferences).toHaveBeenCalledTimes(4);
+      for (let i = 1; i <= 4; i++) respond(`refs-${i}`, { error: 'timeout' });
+      store.resolveMessageFileReferences.mockReturnValue(null);
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(store.resolveMessageFileReferences).toHaveBeenCalledTimes(12);
+      const calls = store.resolveMessageFileReferences.mock.calls.map(([paths]) => paths);
+      expect(calls.every(paths => paths.length <= 32)).toBe(true);
+      expect(new Set(calls.flat()).size).toBe(128);
+      expect(wrapper.findAll('.message-file-reference')).toHaveLength(0);
+    } finally { wrapper.unmount(); vi.useRealTimers(); }
+  });
+
+  it('cancels retries on route changes and unmount and rejects old responses', async () => {
+    vi.useFakeTimers();
+    const { wrapper, store, respond } = await mountRecoveringReferences();
+    try {
+      respond('refs-1', { error: 'timeout' });
+      store.fileReferenceResolutionContextKey = 'agent-b:session-b:/other';
+      await Vue.nextTick();
+      expect(store.resolveMessageFileReferences).toHaveBeenCalledTimes(2);
+      respond('refs-1', { references: [{ requestedPath: 'docs/guide.txt', resolvedPath: 'wrong.txt' }] });
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(store.resolveMessageFileReferences).toHaveBeenCalledTimes(2);
+      expect(wrapper.findAll('.message-file-reference')).toHaveLength(0);
+      respond('refs-2', { error: 'timeout' });
+    } finally {
+      wrapper.unmount();
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(store.resolveMessageFileReferences).toHaveBeenCalledTimes(2);
+      vi.useRealTimers();
+    }
+  });
+
+  it('rechecks only unresolved paths after later Session work and stops polling missing files', async () => {
+    vi.useFakeTimers();
+    const { wrapper, store, respond } = await mountRecoveringReferences('docs/guide.txt docs/later.txt docs/missing.txt');
+    const finishWork = async () => {
+      store.isProcessing = true;
+      await Vue.nextTick();
+      store.isProcessing = false;
+      await Vue.nextTick();
+    };
+    try {
+      respond('refs-1', { references: [{ requestedPath: 'docs/guide.txt', resolvedPath: 'docs/guide.txt' }] });
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(store.resolveMessageFileReferences).toHaveBeenCalledTimes(1);
+      await finishWork();
+      expect(store.resolveMessageFileReferences).toHaveBeenLastCalledWith(['docs/later.txt', 'docs/missing.txt']);
+      respond('refs-2', { references: [{ requestedPath: 'docs/later.txt', resolvedPath: 'docs/later.txt' }] });
+      await Vue.nextTick();
+      expect(wrapper.findAll('.message-file-reference')).toHaveLength(2);
+      await finishWork();
+      expect(store.resolveMessageFileReferences).toHaveBeenLastCalledWith(['docs/missing.txt']);
+      respond('refs-3');
+      await finishWork();
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(store.resolveMessageFileReferences).toHaveBeenCalledTimes(3);
+    } finally { wrapper.unmount(); vi.useRealTimers(); }
+  });
+
   it('revalidates file references when completed response content changes', async () => {
     const resolveMessageFileReferences = vi.fn()
       .mockReturnValueOnce('file-refs-old')

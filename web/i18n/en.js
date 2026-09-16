@@ -1296,6 +1296,7 @@ export default {
   'files.emptyDir': 'Empty directory',
   'files.loadingFile': 'Loading file...',
   'files.readSendFailed': 'The file request was not sent. Check the connection, then click the file again to retry.',
+  'files.readInterrupted': 'The file read was interrupted. Reconnect, then click the file again to retry.',
   'files.searchPlaceholder': 'Search...',
   'files.replacePlaceholder': 'Replace...',
   'files.replace': 'Replace',

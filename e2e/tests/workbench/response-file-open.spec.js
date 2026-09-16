@@ -45,23 +45,36 @@ function mountHarness() {
     theme: 'light',
   });
   const requests = [];
+  const failure = new URLSearchParams(location.search).get('failure');
+  let resolveAttempts = 0;
+  let readAttempts = 0;
+  // Deliberately omit requestedFilePath and return the canonical absolute
+  // path. The request id must correlate this response to the relative tab.
+  const respondFile = (message, result = { content: CONTENT }) => {
+    window.dispatchEvent(new CustomEvent('workbench-message', { detail: {
+      type: 'file_content', requestId: message.requestId,
+      filePath: '/fixture/project/docs/guide.txt', ...result,
+      agentId: message.agentId, conversationId: message.conversationId,
+      workbenchRouteKey: message.workbenchRouteKey,
+      workbenchWorkspaceGeneration: message.workbenchWorkspaceGeneration,
+    } }));
+  };
   store.sendWsMessage = message => {
     requests.push(structuredClone(message));
     if (message.type === 'resolve_file_references') {
+      const fail = ++resolveAttempts === 1 && failure === 'resolve-error';
       queueMicrotask(() => window.dispatchEvent(new CustomEvent('workbench-message', { detail: {
         type: 'file_references_resolved', requestId: message.requestId,
-        references: message.references.map(requestedPath => ({ requestedPath, resolvedPath: 'docs/guide.txt' })),
+        ...(fail ? { error: 'temporary resolver failure' } : {
+          references: message.references.map(requestedPath => ({ requestedPath, resolvedPath: 'docs/guide.txt' })),
+        }),
       } })));
     } else if (message.type === 'read_file') {
-      // Deliberately omit requestedFilePath and return the canonical absolute
-      // path. The request id must correlate this response to the relative tab.
-      queueMicrotask(() => window.dispatchEvent(new CustomEvent('workbench-message', { detail: {
-        type: 'file_content', requestId: message.requestId,
-        filePath: '/fixture/project/docs/guide.txt', content: CONTENT,
-        agentId: message.agentId, conversationId: message.conversationId,
-        workbenchRouteKey: message.workbenchRouteKey,
-        workbenchWorkspaceGeneration: message.workbenchWorkspaceGeneration,
-      } })));
+      const firstRead = ++readAttempts === 1;
+      if (firstRead && failure === 'read-send') return false;
+      if (firstRead && failure === 'read-disconnect') return true;
+      const result = firstRead && failure === 'read-error' ? { error: 'temporary read failure' } : { content: CONTENT };
+      queueMicrotask(() => respondFile(message, result));
     }
     return true;
   };
@@ -79,7 +92,7 @@ function mountHarness() {
   app.config.globalProperties.$t = key => key;
   app.mount('#app');
   window.harness = {
-    store, requests, sessions,
+    store, requests, sessions, respondFile,
     async useCli() {
       store.currentView = 'chat';
       store.conversations = [{ id: 'cli-1', agentId: 'agent-b', provider: 'claude-code' }];
@@ -177,3 +190,41 @@ test('response links load real Files across cold/open/close, routes, line, mobil
   const cliRead = await page.evaluate(() => window.harness.requests.filter(item => item.type === 'read_file').at(-1));
   expect(cliRead).toMatchObject({ agentId: 'agent-b', conversationId: '_workbench:claude-code:agent-b:cli-1', filePath: 'docs/guide.txt' });
 });
+
+test('completed response links recover from a temporary resolver error', async ({ page, harness }) => {
+  await page.goto(`${harness.url}/?failure=resolve-error`);
+  await clickResolvedReference(page);
+  const resolves = await page.evaluate(() => window.harness.requests.filter(msg => msg.type === 'resolve_file_references'));
+  expect(resolves).toHaveLength(2);
+  expect(resolves[0].requestId).not.toBe(resolves[1].requestId);
+});
+
+for (const failure of ['read-send', 'read-error', 'read-disconnect']) {
+  test(`clicking a response link retries ${failure} and rejects the old read`, async ({ page, harness }) => {
+    await page.goto(`${harness.url}/?failure=${failure}`);
+    const link = page.locator('.message-file-reference');
+    await expect(link).toHaveAttribute('data-resolved-file-path', 'docs/guide.txt');
+    await link.click();
+    if (failure === 'read-disconnect') {
+      await expect(page.locator('.file-load-state')).toBeVisible();
+      await page.evaluate(() => { window.harness.store.connectionState = 'disconnected'; });
+      await expect(page.locator('.file-load-error')).toContainText('files.readInterrupted');
+      await page.evaluate(() => { window.harness.store.connectionState = 'connected'; });
+    }
+    await expect(page.locator('.file-load-error')).toBeVisible();
+    const oldRead = await page.evaluate(() => window.harness.requests.find(msg => msg.type === 'read_file'));
+    await clickResolvedReference(page);
+    await expect.poll(() => page.evaluate(() => document.querySelector('.CodeMirror')?.CodeMirror?.getCursor().line)).toBe(2);
+    const reads = await page.evaluate(() => window.harness.requests.filter(msg => msg.type === 'read_file'));
+    expect(reads).toHaveLength(2);
+    expect(reads[1].requestId).not.toBe(oldRead.requestId);
+    expect(reads[1]).toMatchObject({ agentId: 'agent-b', filePath: 'docs/guide.txt', workbenchRouteKey: 'yeaft:agent-b:session-y' });
+
+    // A delayed old request must not replace the recovered editor content.
+    await page.evaluate(message => window.harness.respondFile(message, { content: 'STALE FILE CONTENT' }), oldRead);
+    await expect(page.locator('.CodeMirror')).toContainText('target line');
+    await expect(page.locator('.CodeMirror')).not.toContainText('STALE FILE CONTENT');
+    await link.click();
+    expect(await page.evaluate(() => window.harness.requests.filter(msg => msg.type === 'read_file').length)).toBe(2);
+  });
+}
