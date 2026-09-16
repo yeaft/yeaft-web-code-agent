@@ -3864,8 +3864,8 @@ describe('message flow regressions', () => {
     expect(workCenter).not.toContain('work-center-action-view-switch');
     expect(workCenter).not.toContain('work-center-action-execution');
     expect(workCenterCss).not.toContain('width: min(100%, 1120px);');
-    expect(variables).toContain('--work-center-conversation-column-width: var(--session-content-width);');
-    expect(variables).toContain('--work-center-conversation-gutter: 16px;');
+    expect(variables).toContain('--work-center-conversation-column-width: 960px;');
+    expect(variables).toContain('--work-center-conversation-gutter: 20px;');
     expect(variables).toContain('--work-center-actions-pane-width: 400px;');
     expect(workCenter).toContain("import UserTurnBlock from './UserTurnBlock.js'");
     expect(workCenter).toContain("import VpTurnBlock from './VpTurnBlock.js'");
