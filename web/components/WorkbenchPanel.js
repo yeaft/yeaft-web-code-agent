@@ -961,7 +961,7 @@ export default {
       const initiatingContextKey = workbenchContextKey.value;
       const targetRouteProps = { ...routeProps.value };
       if (!openCapability('files')) return;
-      store.openWorkbench();
+      if (props.ownerRoute) store.openWorkbench();
       Vue.nextTick(() => {
         if (workbenchContextKey.value !== initiatingContextKey) return;
         window.dispatchEvent(new CustomEvent('workbench-open-file-in-active-view', {
