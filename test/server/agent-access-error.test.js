@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CONFIG } from '../../server/config.js';
 import {
@@ -10,7 +10,7 @@ import {
   registerAgentSettingsRequest,
   webClients,
 } from '../../server/context.js';
-import { sessionDb, yeaftProjectDb, yeaftSessionDb, sessionUiMetadataDb } from '../../server/database.js';
+import { userDb, sessionDb, yeaftProjectDb, yeaftSessionDb, sessionUiMetadataDb } from '../../server/database.js';
 import {
   buildHiddenSessionCatalog,
   buildSessionCatalog,
@@ -63,6 +63,84 @@ describe('resolveAgentAccessError', () => {
     pendingAgentConnections.clear();
     pendingAgentSettingsRequests.clear();
     webClients.clear();
+  });
+
+  it.each(['owner', 'agent', 'provider', 'live-owner', 'live-agent', 'live-provider'])(
+    'rejects resume Web ID conflicts in %s before forwarding', async conflict => {
+      CONFIG.skipAuth = false;
+      const forwarded = [];
+      const replies = [];
+      const agent = {
+        id: 'resume-agent', encryptOutbound: false, ownerId: 'user-1', conversations: new Map(),
+        ws: { readyState: WS_OPEN, send: payload => forwarded.push(JSON.parse(payload)) },
+      };
+      agents.set(agent.id, agent);
+      const row = { id: 'resume-web-id', user_id: 'user-1', agent_id: agent.id, provider: 'copilot' };
+      if (conflict === 'owner') row.user_id = 'user-2';
+      if (conflict === 'agent') row.agent_id = 'other-agent';
+      if (conflict === 'provider') row.provider = 'claude-code';
+      if (conflict.startsWith('live-')) {
+        const liveAgent = conflict === 'live-agent'
+          ? { ownerId: 'user-1', conversations: new Map() } : agent;
+        if (liveAgent !== agent) agents.set('other-agent', liveAgent);
+        liveAgent.conversations.set(row.id, {
+          id: row.id, userId: conflict === 'live-owner' ? 'user-2' : 'user-1',
+          provider: conflict === 'live-provider' ? 'claude-code' : 'copilot',
+        });
+      }
+      const client = {
+        encryptOutbound: false, userId: 'user-1', role: 'user', currentAgent: 'unchanged',
+        ws: { readyState: WS_OPEN, send: payload => replies.push(JSON.parse(payload)) },
+      };
+      const get = vi.spyOn(sessionDb, 'get').mockReturnValue(conflict.startsWith('live-') ? null : row);
+      try {
+        await handleClientConversation('resume-client', client, {
+          type: 'resume_conversation', conversationId: row.id, agentId: agent.id,
+          provider: 'copilot', claudeSessionId: 'cli-id',
+        }, async () => true);
+        expect(forwarded).toEqual([]);
+        expect(replies).toEqual([{ type: 'error', message: 'Permission denied' }]);
+        expect(client.currentAgent).toBe('unchanged');
+      } finally { get.mockRestore(); }
+    },
+  );
+
+  it.each(['claude-code', 'copilot'])('resumes an owned %s Web ID without a provider and preserves scoped CLI siblings', async provider => {
+    CONFIG.skipAuth = false;
+    const id = `resume-${provider}-${Date.now()}-${Math.random()}`;
+    const userId = userDb.getOrCreate(id).id;
+    const forwarded = [];
+    const replies = [];
+    const sibling = { id: 'other-provider', userId: userId, claudeSessionId: 'cli-id', provider: provider === 'copilot' ? 'claude-code' : 'copilot' };
+    const agent = {
+      id: 'resume-agent', name: 'Resume', encryptOutbound: false, ownerId: userId,
+      conversations: new Map([
+        [sibling.id, sibling],
+        ['stale', { id: 'stale', userId: userId, claudeSessionId: 'cli-id', provider }],
+      ]),
+      ws: { readyState: WS_OPEN, send: payload => forwarded.push(JSON.parse(payload)) },
+    };
+    const other = { id: 'other-agent', ownerId: userId, ws: { readyState: WS_OPEN }, conversations: new Map([['other-web-id', { id: 'other-web-id', provider, claudeSessionId: 'cli-id', userId }]]) };
+    agents.set(agent.id, agent);
+    agents.set(other.id, other);
+    sessionDb.create(id, agent.id, agent.name, '/repo', 'cli-id', null, userId, provider);
+    const client = {
+      encryptOutbound: false, userId: userId, role: 'user', authenticated: true, currentAgent: agent.id,
+      ws: { readyState: WS_OPEN, send: payload => replies.push(JSON.parse(payload)) },
+    };
+    webClients.set('resume-client', client);
+    await handleClientConversation('resume-client', client, {
+      type: 'resume_conversation', conversationId: id, agentId: agent.id, claudeSessionId: 'cli-id',
+    }, async () => true);
+    expect(forwarded).toEqual([expect.objectContaining({ conversationId: id, provider, userId: userId })]);
+    await handleAgentConversation(agent.id, agent, {
+      ...forwarded[0], type: 'conversation_resumed', workDir: '/repo', historyMessages: [],
+    });
+    expect(agent.conversations.has('stale')).toBe(false);
+    expect(agent.conversations.get(sibling.id)).toBe(sibling);
+    expect(other.conversations.has('other-web-id')).toBe(true);
+    expect(sessionDb.get(id)).toMatchObject({ agent_id: agent.id, user_id: userId, provider });
+    expect(replies).toContainEqual(expect.objectContaining({ type: 'conversation_resumed', conversationId: id, provider, agentId: agent.id }));
   });
 
   it('preserves telemetry correlation and replies only to the originating browser', async () => {

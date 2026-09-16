@@ -104,37 +104,6 @@ function normalizeHistoryRowIdentity(row, agentId = null) {
   return row;
 }
 
-function isLiveYeaftHistoryRow(row) {
-  if (!row || row.isHistory === true) return false;
-  if (row.isStreaming || isOptimisticYeaftUserRow(row)) return true;
-  // Recent refresh preserves local rows newer than its persisted window. Those
-  // rows may predate clientMessageId stamping, but they still carry a local
-  // timestamp and no durable seq.
-  return !Number.isFinite(row.seq) && Number.isFinite(row.timestamp);
-}
-
-function yeaftHistorySortKey(row) {
-  const live = isLiveYeaftHistoryRow(row);
-  const seq = Number.isFinite(row?.seq) ? row.seq : null;
-  const timestamp = Number.isFinite(row?.timestamp) ? row.timestamp : 0;
-  // Use one lexicographic key for every row. Persisted rows with timestamps are
-  // chronological across storage generations. When timestamps are absent, the
-  // legacy rank sorts before sequenced storage; the live rank is always last.
-  if (live) return [2, timestamp, seq ?? 0];
-  return [1, timestamp, seq ?? -1];
-}
-
-export function __testSortYeaftRowsBySequence(rows) {
-  rows.sort((a, b) => {
-    const aKey = yeaftHistorySortKey(a);
-    const bKey = yeaftHistorySortKey(b);
-    for (let index = 0; index < aKey.length; index += 1) {
-      if (aKey[index] !== bKey[index]) return aKey[index] - bKey[index];
-    }
-    return 0;
-  });
-}
-
 function rowSessionId(row) {
   return row ? (row.sessionId ?? row.groupId ?? null) : null;
 }
@@ -258,15 +227,23 @@ function promoteVisibleYeaftHistoryConversation(store, msg, sessionId, conversat
   store.activeConversations = [conversationId];
 }
 
-/** Mark all pending tool-use messages as completed for a conversation */
-export function markAllToolsCompleted(store, convId) {
+/** Complete pending tools, optionally scoped to one native Session turn. */
+export function markAllToolsCompleted(store, convId, scope = null) {
   const msgs = store.messagesMap[convId] || [];
   for (const msg of msgs) {
+    // Native Sessions share one Agent conversation; another turn's terminal
+    // frame has no authority to expire this turn's waiting AskUser request.
+    if (scope && Object.entries(scope).some(([field, value]) => value && msg[field] !== value)) continue;
     if (msg.type === 'tool-use' && !msg.hasResult) {
       msg.hasResult = true;
       // Expire unanswered AskUserQuestion cards so they show expired state
       if (msg.toolName === 'AskUserQuestion' && !msg.askAnswered && !msg.selectedAnswers) {
         msg.isHistory = true;
+        msg.askExpired = true;
+        msg.askPending = false;
+        msg.pendingAnswers = null;
+        msg.askSubmittedAt = null;
+        msg.askError = null;
         msg.askRequestId = null;
       }
     }
@@ -334,7 +311,9 @@ export function handleConversationResumed(store, msg) {
   const resumedAgent = store.agents.find(a => a.id === msg.agentId);
   store.conversations = store.conversations.filter(c =>
     c.id !== msg.conversationId &&
-    !(c.claudeSessionId && c.claudeSessionId === msg.claudeSessionId)
+    !(c.claudeSessionId && c.claudeSessionId === msg.claudeSessionId &&
+      c.agentId === msg.agentId &&
+      (c.provider || 'claude-code') === (msg.provider || 'claude-code'))
   );
   store.conversations.push({
     id: msg.conversationId,
@@ -797,6 +776,8 @@ function applyAskUserHistoryResult(row, result, questions) {
   row.askPending = false;
   row.pendingAnswers = null;
   row.askSubmitGeneration = null;
+  row.askSubmittedAt = null;
+  row.askError = null;
   row.hasResult = true;
   row.isHistory = true;
   if (result.status === 'answered') {
@@ -901,6 +882,12 @@ function formatYeaftHistoryMessages(incomingMessages, msgSessionId, mode, existi
           ...(speakerVpId ? { vpId: speakerVpId, speakerVpId } : {}),
           ...(m.responseKind === 'progress' || m.responseKind === 'result' ? { responseKind: m.responseKind } : {}),
           ...(Number.isInteger(m.llmCallCount) && m.llmCallCount > 0 ? { llmCallCount: m.llmCallCount } : {}),
+          ...(Number.isFinite(m.inputTokens) && m.inputTokens >= 0 ? { inputTokens: m.inputTokens } : {}),
+          ...(Number.isFinite(m.outputTokens) && m.outputTokens >= 0 ? { outputTokens: m.outputTokens } : {}),
+          ...(Number.isFinite(m.totalTokens) && m.totalTokens >= 0 ? { totalTokens: m.totalTokens } : {}),
+          ...(Number.isFinite(m.totalMs) && m.totalMs >= 0 ? { totalMs: m.totalMs } : {}),
+          ...(typeof m.model === 'string' && m.model ? { model: m.model } : {}),
+          ...(typeof m.effort === 'string' && m.effort ? { effort: m.effort } : {}),
           ...(m.incomplete === true ? { incomplete: true } : {}),
           ...(typeof m.stopReason === 'string' && m.stopReason ? { stopReason: m.stopReason } : {}),
           isStreaming: false,
@@ -944,6 +931,7 @@ function formatYeaftHistoryMessages(incomingMessages, msgSessionId, mode, existi
           startTime: timestamp || 0,
           sessionId: rowSessionId,
           turnId,
+          ...(m.threadId ? { threadId: m.threadId } : {}),
           ...executionOriginMeta,
           ...(speakerVpId ? { vpId: speakerVpId, speakerVpId } : {}),
           isStreaming: false,

@@ -127,9 +127,16 @@ test.describe('Workbench', () => {
     await openYeaftWorkbench(chatPage, mockAgent);
 
     const panel = chatPage.locator('.workbench-panel');
-    await expect(panel.locator('.workbench-launcher')).toBeVisible();
+    const launcher = panel.locator('.workbench-launcher');
+    await expect(launcher).toBeVisible();
     await expect(panel.locator('.workbench-capability-card')).toHaveCount(4);
     await expect(panel.locator('.workbench-item-tab')).toHaveCount(0);
+    await expect(panel.locator('.workbench-capability-host')).toBeHidden();
+    expect(await launcher.evaluate(element => {
+      const launcherRect = element.getBoundingClientRect();
+      const panelRect = element.closest('.workbench-panel').getBoundingClientRect();
+      return Math.abs(launcherRect.bottom - panelRect.bottom) <= 1;
+    })).toBe(true);
     await openCapabilityLauncher(panel);
     await expect(panel.locator('.workbench-add-menu-item')).toHaveCount(4);
     await expect(capability(panel, 'terminal')).toBeVisible();
@@ -140,6 +147,17 @@ test.describe('Workbench', () => {
     await expect.poll(() => mockAgent.messages().filter(message => [
       'terminal_create', 'git_status', 'list_directory', 'restore_file_tabs',
     ].includes(message.type)).length).toBe(0);
+
+    await capability(panel, 'git').click();
+    await expect(panel.locator('.git-status-tab')).toBeVisible();
+    await closeActiveWorkbenchItem(panel);
+    await expect(launcher).toBeVisible();
+    await expect(panel.locator('.workbench-capability-host')).toBeHidden();
+    expect(await launcher.evaluate(element => {
+      const launcherRect = element.getBoundingClientRect();
+      const panelRect = element.closest('.workbench-panel').getBoundingClientRect();
+      return Math.abs(launcherRect.bottom - panelRect.bottom) <= 1;
+    })).toBe(true);
   });
 
   test('keeps open-file controls reachable with overflowing tabs and supports batch close actions', async ({ chatPage, mockAgent }) => {
@@ -372,6 +390,85 @@ test.describe('Workbench', () => {
     await expect.poll(() => mockAgent.messages('terminal_create').length).toBe(2);
     await expect.poll(() => mockAgent.messages('terminal_close')
       .filter(message => [terminalA.terminalId, terminalB.terminalId].includes(message.terminalId)).length).toBe(0);
+  });
+
+  test('preserves expanded folders on refresh and removes a folder that disappeared', async ({ chatPage, mockAgent }) => {
+    await openYeaftWorkbench(chatPage, mockAgent);
+    const panel = chatPage.locator('.workbench-panel');
+    await openCapability(panel, 'files');
+    await expect(panel.locator('.files-tab')).toBeVisible();
+
+    const replyListing = (request, entries, error = undefined) => {
+      mockAgent.send({
+        ...request,
+        type: 'directory_listing',
+        entries,
+        error,
+      });
+    };
+    const rootRequest = await mockAgent.waitForMessage('list_directory');
+    replyListing(rootRequest, [
+      { name: 'src', type: 'directory' },
+      { name: 'README.md', type: 'file', size: 64 },
+    ]);
+
+    const srcRow = panel.locator('.tree-item', { hasText: 'src' });
+    await expect(srcRow).toBeVisible();
+    await srcRow.click();
+    const srcRequest = await mockAgent.waitForMessage('list_directory');
+    replyListing(srcRequest, [
+      { name: 'components', type: 'directory' },
+      { name: 'index.js', type: 'file', size: 32 },
+    ]);
+
+    const componentsRow = panel.locator('.tree-item', { hasText: 'components' });
+    await expect(componentsRow).toBeVisible();
+    await componentsRow.click();
+    const componentsRequest = await mockAgent.waitForMessage('list_directory');
+    replyListing(componentsRequest, [{ name: 'App.js', type: 'file', size: 128 }]);
+    await expect(panel.locator('.tree-item', { hasText: 'App.js' })).toBeVisible();
+
+    const refreshButton = panel.getByRole('button', { name: 'Refresh' });
+    let listRequestCount = mockAgent.messages('list_directory').length;
+    await refreshButton.click();
+    await expect.poll(() => mockAgent.messages('list_directory').length).toBe(listRequestCount + 3);
+    const firstRefresh = mockAgent.messages('list_directory').slice(listRequestCount);
+    const firstByPath = Object.fromEntries(firstRefresh.map(request => [request.dirPath, request]));
+    expect(Object.keys(firstByPath).sort()).toEqual(['/tmp/test', '/tmp/test/src', '/tmp/test/src/components']);
+    // Respond out of order: open child state must survive until its parents arrive.
+    replyListing(firstByPath['/tmp/test/src/components'], [{ name: 'App.js', type: 'file', size: 128 }]);
+    replyListing(firstByPath['/tmp/test/src'], [
+      { name: 'components', type: 'directory' },
+      { name: 'index.js', type: 'file', size: 32 },
+    ]);
+    replyListing(firstByPath['/tmp/test'], [
+      { name: 'src', type: 'directory' },
+      { name: 'README.md', type: 'file', size: 64 },
+    ]);
+    await expect(srcRow).toHaveClass(/tree-expanded/);
+    await expect(componentsRow).toHaveClass(/tree-expanded/);
+    await expect(panel.locator('.tree-item', { hasText: 'App.js' })).toBeVisible();
+
+    listRequestCount = mockAgent.messages('list_directory').length;
+    await refreshButton.click();
+    await expect.poll(() => mockAgent.messages('list_directory').length).toBe(listRequestCount + 3);
+    const secondRefresh = mockAgent.messages('list_directory').slice(listRequestCount);
+    const secondByPath = Object.fromEntries(secondRefresh.map(request => [request.dirPath, request]));
+    replyListing(secondByPath['/tmp/test'], [
+      { name: 'src', type: 'directory' },
+      { name: 'README.md', type: 'file', size: 64 },
+    ]);
+    replyListing(secondByPath['/tmp/test/src'], [
+      { name: 'index.js', type: 'file', size: 32 },
+      { name: 'new.js', type: 'file', size: 48 },
+    ]);
+    // The now-missing child can still finish after its parent removed it.
+    replyListing(secondByPath['/tmp/test/src/components'], [], 'Directory does not exist');
+
+    await expect(srcRow).toHaveClass(/tree-expanded/);
+    await expect(panel.locator('.tree-item', { hasText: 'new.js' })).toBeVisible();
+    await expect(panel.locator('.tree-item', { hasText: 'components' })).toHaveCount(0);
+    await expect(panel.locator('.tree-item', { hasText: 'App.js' })).toHaveCount(0);
   });
 
   for (const theme of ['light', 'dark']) {
@@ -664,11 +761,41 @@ test.describe('Workbench', () => {
     }
   });
 
-  test('uses one launcher column at 320px without horizontal overflow', async ({ chatPage, mockAgent }) => {
+  test('fits all four launcher entries in one 320px column without scrolling', async ({ chatPage, mockAgent }) => {
     await chatPage.setViewportSize({ width: 320, height: 720 });
     await openYeaftWorkbench(chatPage, mockAgent);
 
     const panel = chatPage.locator('.workbench-panel');
+    const launcher = panel.locator('.workbench-launcher');
+    await expect(launcher).toBeVisible();
+    await expect(panel.locator('.workbench-capability-card')).toHaveCount(4);
+    await expect(panel.locator('.workbench-capability-host')).toBeHidden();
+    const launcherGeometry = await launcher.evaluate(element => {
+      const launcherRect = element.getBoundingClientRect();
+      const panelRect = element.closest('.workbench-panel').getBoundingClientRect();
+      return {
+        fillsPanel: Math.abs(launcherRect.bottom - panelRect.bottom) <= 1,
+        // Four entries are the whole chooser; a phone viewport must show them
+        // without a scroll step the user has to discover.
+        scrollable: element.scrollHeight > element.clientHeight,
+        noHorizontalOverflow: element.scrollWidth <= element.clientWidth + 1,
+      };
+    });
+    expect(launcherGeometry).toEqual({
+      fillsPanel: true,
+      scrollable: false,
+      noHorizontalOverflow: true,
+    });
+    // Every entry, including the last, must be fully inside the viewport.
+    const cards = panel.locator('.workbench-capability-card');
+    const cardCount = await cards.count();
+    for (let index = 0; index < cardCount; index += 1) {
+      const cardBox = await cards.nth(index).boundingBox();
+      expect(cardBox).not.toBeNull();
+      expect(cardBox.y).toBeGreaterThanOrEqual(0);
+      expect(cardBox.y + cardBox.height).toBeLessThanOrEqual(720);
+    }
+
     await openCapabilityLauncher(panel);
     const panelBox = await panel.boundingBox();
     expect(panelBox).not.toBeNull();

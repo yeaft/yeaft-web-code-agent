@@ -2,6 +2,7 @@
  * Shared Markdown rendering utilities
  */
 import { t } from './i18n.js';
+import { mathExtensions } from './markdown-math.js';
 
 let _configured = false;
 let _mermaidInitializedTheme = null;
@@ -209,6 +210,7 @@ export function configureMarked() {
     breaks: true,
     gfm: true
   });
+  marked.use?.({ extensions: mathExtensions() });
   _configured = true;
 }
 

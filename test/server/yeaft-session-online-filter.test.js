@@ -24,6 +24,7 @@ const updateProjectInstruction = vi.fn();
 const deleteProject = vi.fn();
 const reorderProjects = vi.fn();
 const moveProjectSession = vi.fn();
+const inheritSessionProject = vi.fn();
 const contextForSession = vi.fn(() => null);
 const getForAgent = vi.fn(() => null);
 const deleteYeaftSessionForAgent = vi.fn();
@@ -70,6 +71,7 @@ vi.mock('../../server/database.js', () => ({
     delete: deleteProject,
     reorder: reorderProjects,
     moveSession: moveProjectSession,
+    inheritSessionProject,
     contextForSession,
   },
   yeaftSessionDb: {
@@ -129,6 +131,7 @@ afterEach(() => {
   deleteProject.mockClear();
   reorderProjects.mockClear();
   moveProjectSession.mockClear();
+  inheritSessionProject.mockReset();
   contextForSession.mockReset();
   contextForSession.mockReturnValue(null);
   reconcileFromSnapshot.mockClear();
@@ -156,6 +159,80 @@ afterEach(() => {
 });
 
 describe('Yeaft Session online Agent filtering', () => {
+  it('registers a fork and inherits its Project atomically using real SQLite, without crossing owner/Agent scopes', async () => {
+    const { yeaftProjectDb: projects, yeaftSessionDb: sessions, userDb } = await vi.importActual('../../server/database.js');
+    const { transaction } = await import('../../server/db/connection.js');
+    const owner = userDb.getOrCreate('fork-db-owner');
+    const other = userDb.getOrCreate('fork-db-other');
+    const register = (ownerId, agentId, sourceId, targetId, fail = false) => transaction(() => {
+      sessions.upsertFromSnapshot(ownerId, agentId, { id: targetId, name: 'Fork' });
+      projects.inheritSessionProject(ownerId, agentId, sourceId, targetId);
+      if (fail) throw new Error('forced rollback');
+    })();
+    try {
+      const project = projects.create(owner.id, 'Fork Project');
+      projects.updateInstruction(owner.id, project.id, 'Keep instruction');
+      projects.moveSession(owner.id, { agentId: 'agent-a', sessionId: 'source', projectId: project.id });
+      register(owner.id, 'agent-a', 'source', 'target');
+      expect(sessions.getForAgent(owner.id, 'agent-a', 'target')).toBeTruthy();
+      expect(projects.contextForSession(owner.id, 'agent-a', 'target')).toMatchObject({
+        projectId: project.id, projectInstruction: 'Keep instruction',
+      });
+      register(owner.id, 'agent-b', 'source', 'target');
+      register(other.id, 'agent-a', 'source', 'target');
+      register(owner.id, 'agent-a', 'standalone', 'standalone-target');
+      expect(projects.contextForSession(owner.id, 'agent-b', 'target')).toBeNull();
+      expect(projects.contextForSession(other.id, 'agent-a', 'target')).toBeNull();
+      expect(projects.contextForSession(owner.id, 'agent-a', 'standalone-target')).toBeNull();
+      expect(() => register(owner.id, 'agent-a', 'source', 'partial', true)).toThrow('forced rollback');
+      expect(sessions.getForAgent(owner.id, 'agent-a', 'partial')).toBeUndefined();
+      expect(projects.contextForSession(owner.id, 'agent-a', 'partial')).toBeNull();
+    } finally {
+      for (const user of [owner, other]) {
+        for (const session of sessions.getByUser(user.id)) sessions.deleteForAgent(user.id, session.agentId, session.id);
+        userDb.deleteUser(user.id);
+      }
+    }
+  });
+
+  it('inherits a fork Project before acknowledging success, scoped by owner and Agent, for both wire envelopes', async () => {
+    CONFIG.skipAuth = false;
+    const owner = { authenticated: true, userId: 'fork-owner', sent: [] };
+    const other = { authenticated: true, userId: 'other-owner', sent: [] };
+    webClients.set('fork-tab', owner);
+    webClients.set('other-tab', other);
+    const agent = { ownerId: 'fork-owner' };
+    for (const nested of [true, false]) {
+      getForAgent.mockReturnValue(null);
+      inheritSessionProject.mockClear();
+      upsertFromSnapshot.mockClear();
+      const event = { type: 'session_crud_result', op: 'copy', ok: true,
+        sourceSessionId: 'same-id', requestId: 'copy-request',
+        session: { id: 'fork-id', name: 'Fork', projectId: 'untrusted-project' } };
+      const envelope = nested ? { type: 'yeaft_output', event } : event;
+      await handleAgentOutput('fork-agent', agent, envelope);
+      expect(upsertFromSnapshot).toHaveBeenCalledWith('fork-owner', 'fork-agent', event.session);
+      expect(inheritSessionProject).toHaveBeenCalledWith('fork-owner', 'fork-agent', 'same-id', 'fork-id');
+      expect(moveProjectSession).not.toHaveBeenCalled(); // no nested transaction
+      const reply = nested ? owner.sent.at(-1).event : owner.sent.at(-1);
+      expect(reply).toMatchObject({ ok: true, projectsAuthoritative: true });
+      expect(other.sent).toHaveLength(0);
+
+      getForAgent.mockReturnValue({ id: 'fork-id' });
+      await handleAgentOutput('fork-agent', agent, envelope);
+      expect(inheritSessionProject).toHaveBeenCalledTimes(1); // replay cannot undo a user move
+      getForAgent.mockReturnValue(null);
+      inheritSessionProject.mockImplementationOnce(() => { throw new Error('Project write failed'); });
+      await handleAgentOutput('fork-agent', agent, envelope);
+      const failed = nested ? owner.sent.at(-1).event : owner.sent.at(-1);
+      expect(failed).toMatchObject({ ok: false, error: { code: 'project_inheritance_failed' } });
+      await handleAgentOutput('fork-agent', agent, nested
+        ? { type: 'yeaft_output', event: { ...event, ok: false } }
+        : { ...event, ok: false });
+      expect(inheritSessionProject).toHaveBeenCalledTimes(2);
+    }
+  });
+
   const verifyCatalogProjection = () => {
     const registry = new Map([
       ['agent-online', { ws: { readyState: 1 } }],
@@ -412,6 +489,46 @@ describe('Yeaft Session online Agent filtering', () => {
       },
     }]);
     expect(forwardToAgent).not.toHaveBeenCalledWith('missing-agent', expect.anything());
+
+    const answerIdentity = {
+      requestId: 'ask-offline', sessionId: 'session-original', vpId: 'vp-original',
+      turnId: 'turn-original', threadId: 'thread-original',
+      toolCallId: 'call-original', conversationId: 'conversation-original',
+    };
+    for (const failure of ['no-agent', 'denied', 'missing', 'closed', 'false', 'throw']) {
+      const answerClient = { userId: 'user-1', currentAgent: 'agent-other', sent: [] };
+      if (failure === 'no-agent') answerClient.currentAgent = null;
+      agents.set('ask-agent', { ws: { readyState: failure === 'closed' ? 3 : 1 }, ownerId: 'user-1' });
+      const agentId = failure === 'no-agent' ? null : failure === 'missing' ? 'missing-agent' : 'ask-agent';
+      forwardToAgent.mockClear();
+      if (failure === 'false') forwardToAgent.mockResolvedValueOnce(false);
+      if (failure === 'throw') forwardToAgent.mockRejectedValueOnce(new Error('send failed'));
+      await handleClientConversation('client-answer', answerClient, {
+        type: 'yeaft_ask_user_answer', ...answerIdentity, agentId, answers: { Continue: 'Yes' },
+      }, async () => failure !== 'denied');
+      expect(answerClient.sent).toEqual([{
+        type: 'yeaft_output', agentId, requestId: answerIdentity.requestId,
+        conversationId: answerIdentity.conversationId, sessionId: answerIdentity.sessionId,
+        vpId: answerIdentity.vpId, turnId: answerIdentity.turnId, threadId: answerIdentity.threadId,
+        event: {
+          type: 'ask_user_answer_rejected', requestId: answerIdentity.requestId,
+          toolCallId: answerIdentity.toolCallId, reason: 'agent_unavailable',
+        },
+      }]);
+      expect(sendToWebClient).toHaveBeenLastCalledWith(answerClient, answerClient.sent[0]);
+      if (failure !== 'false' && failure !== 'throw') expect(forwardToAgent).not.toHaveBeenCalled();
+    }
+    const answerClient = { userId: 'user-1', currentAgent: 'agent-other', sent: [] };
+    forwardToAgent.mockClear();
+    await handleClientConversation('client-answer', answerClient, {
+      type: 'unify_ask_user_answer', ...answerIdentity, agentId: 'ask-agent',
+      answers: { Continue: 'Yes' }, _requestClientId: 'spoofed-client',
+    }, allow);
+    expect(answerClient.sent).toEqual([]);
+    expect(forwardToAgent).toHaveBeenCalledWith('ask-agent', {
+      type: 'yeaft_ask_user_answer', ...answerIdentity, answers: { Continue: 'Yes' },
+      _requestClientId: 'client-answer',
+    });
 
     client.sent = [];
     await handleClientConversation('client-1', client, {

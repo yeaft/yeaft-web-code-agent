@@ -350,6 +350,13 @@ export default {
       }
       return !!this.processingConversations?.[row?.routeRef?.sessionId];
     },
+    forkUnavailableReason(row) {
+      if (typeof this.resolvedProjectStore?.sessionForkUnavailableReason === 'function') {
+        return this.resolvedProjectStore.sessionForkUnavailableReason(row);
+      }
+      if (!this.canEditRow(row)) return 'agent_offline';
+      return this.isProcessing(row) ? 'session_running' : null;
+    },
     isUnread(row) {
       return typeof this.isSessionUnread === 'function' ? !!this.isSessionUnread(row) : false;
     },
@@ -474,6 +481,7 @@ export default {
     async runAction(action, row) {
       this.closeMenus();
       if (!this.canEditRow(row)) return;
+      if (action === 'copy' && this.forkUnavailableReason(row)) return;
       if (action === 'rename') {
         const title = await promptDialog(this.$t('yeaft.session.renamePrompt', { name: row.title }), row.title);
         if (!title?.trim() || title.trim() === row.title) return;
@@ -1032,6 +1040,7 @@ export default {
           <template v-else>
             <button class="session-menu-item" @click.stop="runAction('rename', floatingMenu.row)">{{ $t('chat.sidebar.renameConv') }}</button>
             <template v-if="floatingMenu.row.runtimeProvider === 'yeaft'">
+              <button type="button" class="session-menu-item" :disabled="!!forkUnavailableReason(floatingMenu.row)" :title="forkUnavailableReason(floatingMenu.row) ? $t('yeaft.session.error.' + forkUnavailableReason(floatingMenu.row)) : $t('yeaft.session.copy')" @click.stop="runAction('copy', floatingMenu.row)">{{ $t('yeaft.session.copy') }}</button>
               <button class="session-menu-item" @click.stop="runAction('settings', floatingMenu.row)">{{ $t('yeaft.session.openSettings') }}</button>
               <button v-if="floatingMenu.inProject" class="session-menu-item" @click.stop="moveRow(floatingMenu.row, null)">{{ $t('sidebar.projects.remove') }}</button>
               <button class="session-menu-item session-menu-parent" :class="{ active: projectSubmenuOpen }" aria-haspopup="menu" :aria-expanded="projectSubmenuOpen ? 'true' : 'false'" @click.stop="projectSubmenuOpen ? closeProjectMoveList() : openProjectMoveList()">

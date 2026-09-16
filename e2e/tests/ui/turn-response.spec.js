@@ -42,7 +42,142 @@ function debugPanelScript() {
   `;
 }
 
+function askUserScript() {
+  return `
+    window.Pinia = { defineStore: () => () => ({}) };
+    const { default: AskCard } = await import('/web/components/AskCard.js');
+    const { answerUserQuestion } = await import('/web/stores/helpers/conversation.js');
+    const { default: en } = await import('/web/i18n/en.js');
+    const { default: zh } = await import('/web/i18n/zh-CN.js');
+    const row = Vue.reactive({ type: 'tool-use', toolName: 'AskUserQuestion',
+      toolId: 'call-ask', askRequestId: 'ask-browser', sessionId: 'session-original',
+      vpId: 'vp-ask', turnId: 'turn-ask', threadId: 'branch-ask', agentId: 'agent-ask',
+      askQuestions: [{ question: 'Continue after switching Sessions?', options: [{ label: 'Yes' }] }] });
+    window.__sent = [];
+    const store = { currentAgent: 'other-agent', yeaftActiveSessionFilter: 'other-session',
+      messagesMap: { 'yeaft-browser': [row] }, processingConversations: {},
+      sendWsMessage: frame => { window.__sent.push(frame); return true; } };
+    const visible = Vue.ref(true);
+    const app = Vue.createApp({ components: { AskCard },
+      setup() { return { row, visible,
+        submit: (id, answers) => answerUserQuestion(store, id, answers, 'yeaft-browser') }; },
+      template: '<button class="btn-secondary" @click="visible = !visible">Switch Session</button><AskCard v-if="visible" :ask-msg="row" @submit="submit" />' });
+    window.__locale = Vue.reactive({ value: 'en' });
+    app.config.globalProperties.$t = key => (window.__locale.value === 'en' ? en : zh)[key] || key;
+    app.mount('#app');
+    window.__ask = row;
+    window.__ready = true;
+  `;
+}
+
+function originNavigationHarnessHtml() {
+  return `<!doctype html>
+<html data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/web/dist/style.bundle.css">
+  <style>
+    html, body, #app { height: 100%; margin: 0; }
+    body { background: var(--bg-main); color: var(--text-primary); }
+    .origin-harness { height: 100%; display: flex; flex-direction: column; }
+    .origin-harness .chat-container { flex: 1; padding: 0; }
+    .origin-question, .origin-short-question, .origin-next { padding: 20px 0; }
+    .origin-long-response .assistant-turn { min-height: 1500px; }
+    .origin-next { min-height: 900px; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script src="/web/vendor/vue.global.prod.js"></script>
+  <script type="module">
+    window.Pinia = {
+      defineStore: () => () => ({}),
+      useChatStore: () => ({ answerUserQuestion() {}, cancelVpTurn() {} }),
+    };
+    window.marked = {
+      setOptions() {},
+      parse(text) { return '<p>' + String(text).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;') + '</p>'; },
+    };
+    window.hljs = undefined;
+    const { default: VpTurnBlock } = await import('/web/components/VpTurnBlock.js');
+    const { resolveLongResponseOrigin } = await import('/web/utils/response-origin-navigation.js');
+    const shortText = 'A concise response should not receive its own navigation action.';
+    const responseText = Array.from({ length: 90 }, (_, index) => 'Response section ' + (index + 1) + ' explains the implementation and verification details.').join(' ');
+    const makeTurn = (id, text) => Vue.reactive({
+      id, turnId: id, textContent: text,
+      textSegments: [{ key: 'result', content: text, kind: 'result', explicitKind: true, isStreaming: false }],
+      toolMsgs: [], imageMsgs: [], todoMsg: null, askMsg: null, messages: [],
+      isStreaming: false, isActive: false, speakerVpId: 'vp-origin', speakerTimestamp: Date.now(),
+    });
+    const shortTurn = makeTurn('turn-short', shortText);
+    const turn = makeTurn('turn-origin', responseText);
+    const scroller = Vue.ref(null);
+    const activeOriginId = Vue.ref('');
+    const jumpCount = Vue.ref(0);
+    let updateRaf = null;
+    const updateNavigation = () => {
+      updateRaf = null;
+      const viewport = scroller.value.getBoundingClientRect();
+      activeOriginId.value = resolveLongResponseOrigin({
+        viewportTop: viewport.top,
+        viewportHeight: scroller.value.clientHeight,
+        responses: Array.from(scroller.value.querySelectorAll('[data-response-origin-id]')).map(element => {
+          const rect = element.getBoundingClientRect();
+          return { originMessageId: element.dataset.responseOriginId, top: rect.top, bottom: rect.bottom, height: rect.height };
+        }),
+      });
+    };
+    const scheduleNavigation = () => {
+      if (updateRaf != null) return;
+      updateRaf = requestAnimationFrame(updateNavigation);
+    };
+    const jumpToQuestion = () => {
+      jumpCount.value += 1;
+      activeOriginId.value = '';
+      scroller.value.scrollTo({ top: 0, behavior: 'instant' });
+      document.querySelector('.origin-question')?.classList.add('msg-flash');
+    };
+    const app = Vue.createApp({
+      components: { VpTurnBlock },
+      setup() {
+        Vue.onMounted(() => { scroller.value.addEventListener('scroll', scheduleNavigation, { passive: true }); scheduleNavigation(); });
+        Vue.onUnmounted(() => scroller.value?.removeEventListener('scroll', scheduleNavigation));
+        return { shortTurn, turn, scroller, activeOriginId, jumpCount, jumpToQuestion };
+      },
+      template: ` + "`" + `<div class="yeaft-page origin-harness">
+        <main ref="scroller" class="chat-container">
+          <div class="messages">
+            <section class="origin-short-question msg-row">Short question</section>
+            <VpTurnBlock :turn="shortTurn" display-name-override="Yeaft" :interactive-speaker="false" origin-message-id="question-short" />
+            <section class="origin-question msg-row" data-msg-id="question-origin">How should this feature work?</section>
+            <div class="virtual-transcript-item origin-long-response" data-response-boundary>
+              <VpTurnBlock :turn="turn" display-name-override="Yeaft" :interactive-speaker="false" origin-message-id="question-origin" />
+            </div>
+            <section class="origin-next">Following conversation</section>
+          </div>
+          <nav class="transcript-navigation" aria-label="Conversation navigation">
+            <button v-if="activeOriginId" type="button" class="transcript-navigation-btn response-origin-btn"
+              aria-label="Back to this turn’s question" title="Back to this turn’s question" @click="jumpToQuestion">↑ Turn</button>
+            <button type="button" class="transcript-navigation-btn scroll-to-latest">↓ Latest</button>
+          </nav>
+        </main>
+        <output data-jump-count>{{ jumpCount }}</output>
+      </div>` + "`" + `,
+    });
+    const translate = key => ({ 'message.backToCurrentTurn': 'Back to this turn’s question' })[key] || key;
+    app.config.globalProperties.$t = translate;
+    app.provide('t', translate);
+    app.mount('#app');
+    window.__ready = true;
+  </script>
+</body>
+</html>`;
+}
+
 function harnessHtml(debug = false) {
+  if (debug === 'ask') return harnessHtml()
+    .replace(/<script type="module">[\s\S]*?<\/script>/, () => '<script type="module">' + askUserScript() + '</script>');
   if (debug) return harnessHtml()
     .replace(/<script type="module">[\s\S]*?<\/script>/, () => '<script type="module">' + debugPanelScript() + '</script>');
   return `<!doctype html>
@@ -85,14 +220,22 @@ function harnessHtml(debug = false) {
         { key: 'progress', content: '[Inspect files](#details)', kind: 'progress', explicitKind: true, isStreaming: false },
         { key: 'result', content: '## 改动', kind: 'result', explicitKind: true, isStreaming: false },
       ],
-      toolMsgs: [], imageMsgs: [],
+      toolMsgs: [{
+        toolName: 'FileRead', toolInput: { file_path: 'README.md' },
+        toolResult: 'read complete', hasResult: true, startTime: Date.now() - 500,
+      }], imageMsgs: [],
       todoMsg: { toolInput: { todos: [{ content: 'Verify spacing', status: 'pending' }] } },
       askMsg: null, messages: [], isStreaming: false, isActive: false,
+      speakerVpId: 'vp-ui', speakerTimestamp: Date.now() - 15_000,
+      startedAt: Date.now() - 15_000, totalMs: 15_000,
+      model: 'provider/model-v2', effort: 'high', llmCallCount: 3,
+      inputTokens: 1_200, outputTokens: 34, totalTokens: 1_234,
     });
+    const nowMs = Vue.ref(Date.now());
     const app = Vue.createApp({
       components: { VpTurnBlock },
-      setup() { return { turn }; },
-      template: '<VpTurnBlock :turn="turn" />',
+      setup() { return { turn, nowMs }; },
+      template: '<VpTurnBlock :turn="turn" :now-ms="nowMs" display-name-override="Yeaft" :interactive-speaker="false" />',
     });
     const translate = (key, params = {}) => {
       const labels = {
@@ -102,12 +245,15 @@ function harnessHtml(debug = false) {
         'message.nextImage': 'Next image',
       };
       if (key === 'message.imagePosition') return 'Image ' + params.current + ' of ' + params.total;
+      if (key === 'yeaft.message.llmCalls') return params.count + ' LLM calls';
+      if (key === 'yeaft.message.tokenUsage') return 'Total ' + params.total + ' · Input ' + params.input + ' · Output ' + params.output;
       return labels[key] || key;
     };
     app.config.globalProperties.$t = translate;
     app.provide('t', translate);
     app.mount('#app');
     window.__turn = turn;
+    window.__nowMs = nowMs;
     window.__finalizeTurnResponseSegments = finalizeTurnResponseSegments;
     window.__ready = true;
   </script>
@@ -125,9 +271,11 @@ test.beforeAll(async () => {
   });
   server = createServer((request, response) => {
     const pathname = new URL(request.url, 'http://127.0.0.1').pathname;
-    if (pathname === '/__turn-response' || pathname === '/__debug-panel') {
+    if (pathname === '/__turn-response' || pathname === '/__debug-panel' || pathname === '/__ask-user' || pathname === '/__origin-navigation') {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      response.end(harnessHtml(pathname === '/__debug-panel'));
+      response.end(pathname === '/__origin-navigation'
+        ? originNavigationHarnessHtml()
+        : harnessHtml(pathname === '/__ask-user' ? 'ask' : pathname === '/__debug-panel'));
       return;
     }
     if (pathname === '/gallery-a.png' || pathname === '/gallery-b.png') {
@@ -176,6 +324,56 @@ test.afterAll(async () => {
   await new Promise(resolveClose => server.close(resolveClose));
 });
 
+test('AskUser waits for confirmation after Session switching and allows an explicit retry', async ({ page }) => {
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.message));
+  await page.clock.install();
+  await page.goto(`${baseUrl}/__ask-user`);
+  await expect.poll(() => page.evaluate(() => window.__ready === true).then(ready => ready ? 'ready' : pageErrors.join('\n'))).toBe('ready');
+  const switchSession = page.getByRole('button', { name: 'Switch Session' });
+  await switchSession.click();
+  await page.clock.fastForward(3 * 60_000);
+  await switchSession.click();
+  await page.getByRole('button', { name: 'Yes', exact: true }).click();
+  await page.getByRole('button', { name: 'Submit Answer' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.ask-summary')).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText('Waiting for Agent confirmation');
+  expect(await page.evaluate(() => window.__sent[0])).toMatchObject({
+    type: 'yeaft_ask_user_answer', agentId: 'agent-ask', sessionId: 'session-original', threadId: 'branch-ask',
+  });
+  await switchSession.click();
+  await page.clock.fastForward(16_000);
+  await switchSession.click();
+  await expect(page.getByRole('status')).toContainText('No confirmation yet');
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
+    for (const width of [1280, 320]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.evaluate(() => { window.__ask.pendingAnswers = { q: 'Long answer '.repeat(70) }; });
+      await expect(page.getByRole('button', { name: 'Resend answer' })).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    }
+  }
+  await page.getByRole('button', { name: 'Resend answer' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('status')).toContainText('Waiting for Agent confirmation');
+  expect(await page.evaluate(() => window.__sent.length)).toBe(2);
+  await page.evaluate(() => {
+    window.__locale.value = 'zh';
+    window.__ask.askPending = false;
+    window.__ask.askRequestId = null;
+    window.__ask.askExpired = true;
+    window.__ask.askError = 'unavailable';
+  });
+  await expect(page.locator('.ask-expired-hint')).toContainText('已失效');
+  await expect(page.getByRole('button', { name: 'Yes', exact: true })).toBeDisabled();
+  await expect(page.locator('.ask-summary')).toHaveCount(0);
+  await page.evaluate(() => { window.__ask.askExpired = false; window.__ask.askAnswered = true; window.__ask.selectedAnswers = { q: 'Yes' }; });
+  await expect(page.locator('.ask-summary')).toContainText('Yes');
+  expect(pageErrors).toEqual([]);
+});
+
 test('debug panel keeps one latest request and full loop tools across themes and mobile', async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   const pageErrors = [];
@@ -206,6 +404,13 @@ test('debug panel keeps one latest request and full loop tools across themes and
   expect(markdown.match(/LATEST_BODY/g)).toHaveLength(1);
   expect(markdown).not.toMatch(/OLD_BODY|OLD_SYSTEM/);
 
+  await page.evaluate(() => {
+    window.__debugStore.yeaftDebugLoops.push({ turnId: 'debug-turn', loopNumber: 3 });
+  });
+  await expect(request.locator('pre')).toContainText('LATEST_BODY');
+  await expect(request.locator('.yeaft-debug-section-meta')).toHaveText('Loop 2');
+  await expect(system.locator('.yeaft-debug-section-meta')).toHaveText('Loop 2');
+
   for (const theme of ['light', 'dark']) {
     await page.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
     for (const width of [1280, 320]) {
@@ -226,14 +431,81 @@ test('debug panel keeps one latest request and full loop tools across themes and
   }
   await page.evaluate(() => {
     window.__debugStore.yeaftDebugLoops[1].rawRequest = null;
-    window.__debugStore.yeaftDebugLoops[1].systemPrompt = '';
     window.__locale.value = 'zh';
+  });
+  await expect(request.locator('pre')).toContainText('OLD_BODY');
+  await expect(request).toContainText('最近可用请求体');
+  await expect(request.locator('.yeaft-debug-section-meta')).toHaveText('Loop 1');
+  await expect(system.locator('pre')).toHaveText('LATEST_SYSTEM');
+  await expect(system.locator('.yeaft-debug-section-meta')).toHaveText('Loop 2');
+  await request.getByRole('button', { name: '复制', exact: true }).click();
+  expect(JSON.parse(await page.evaluate(() => navigator.clipboard.readText())).input).toBe('OLD_BODY');
+  await page.evaluate(() => {
+    for (const loop of window.__debugStore.yeaftDebugLoops) {
+      loop.rawRequest = null;
+      loop.systemPrompt = '';
+    }
   });
   await expect(request.locator('pre')).toHaveCount(0);
   await expect(request.getByRole('button', { name: '复制', exact: true })).toBeDisabled();
-  await expect(request).toContainText('最新 Loop 的请求体不可用。');
-  await expect(system).toContainText('最新 Loop 的系统提示不可用。');
+  await expect(request).toContainText('此 Turn 暂无可用请求体。');
+  await expect(system).toContainText('此 Turn 暂无可用系统提示。');
   await expect(result).toContainText('RESULT_TAIL');
+});
+
+test('shows one turn action above latest only while reading a two-viewport response', async ({ page }) => {
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.message));
+  await page.goto(`${baseUrl}/__origin-navigation`);
+  await page.waitForFunction(() => window.__ready === true);
+
+  const scroller = page.locator('.chat-container');
+  const button = page.getByRole('button', { name: 'Back to this turn’s question' });
+  const latest = page.getByRole('button', { name: '↓ Latest' });
+  const question = page.locator('.origin-question');
+  await expect(button).toHaveCount(0);
+  await expect(page.locator('.assistant-turn[data-response-origin-id="question-short"]')).toHaveCount(1);
+
+  for (const { width, height, theme } of [
+    { width: 1280, height: 640, theme: 'light' },
+    { width: 320, height: 640, theme: 'dark' },
+  ]) {
+    await page.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
+    await page.setViewportSize({ width, height });
+    await scroller.evaluate(element => { element.scrollTop = 1000; });
+    await expect(button).toBeVisible();
+    await expect(button).toHaveText('↑ Turn');
+    await expect(page.locator('.response-origin-btn')).toHaveCount(1);
+    const layout = await page.evaluate(() => {
+      const navRect = document.querySelector('.transcript-navigation').getBoundingClientRect();
+      const buttonRect = document.querySelector('.response-origin-btn').getBoundingClientRect();
+      const latestRect = document.querySelector('.scroll-to-latest').getBoundingClientRect();
+      const scrollerRect = document.querySelector('.chat-container').getBoundingClientRect();
+      return {
+        buttonBottom: buttonRect.bottom,
+        latestTop: latestRect.top,
+        navBottom: navRect.bottom,
+        scrollerBottom: scrollerRect.bottom,
+        documentWidth: document.documentElement.scrollWidth,
+        viewportWidth: document.documentElement.clientWidth,
+      };
+    });
+    expect(layout.buttonBottom).toBeLessThan(layout.latestTop);
+    expect(layout.navBottom).toBeLessThanOrEqual(layout.scrollerBottom - 11);
+    expect(layout.navBottom).toBeGreaterThanOrEqual(layout.scrollerBottom - 14);
+    expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth);
+
+    await button.click();
+    await expect.poll(() => scroller.evaluate(element => element.scrollTop)).toBe(0);
+    await expect(question).toHaveClass(/msg-flash/);
+    await expect(button).toHaveCount(0);
+  }
+
+  await scroller.evaluate(element => { element.scrollTop = element.scrollHeight; });
+  await expect(button).toHaveCount(0);
+  await expect(latest).toBeVisible();
+  await expect(page.locator('[data-jump-count]')).toHaveText('2');
+  expect(pageErrors).toEqual([]);
 });
 
 test('keeps progress visible and distinct from the final result across themes and mobile', async ({ page }) => {
@@ -252,6 +524,16 @@ test('keeps progress visible and distinct from the final result across themes an
   await expect(result.locator('h2')).toHaveText('改动');
   await expect(page.locator('.turn-response-progress')).toBeVisible();
   await expect(todos).toBeVisible();
+  const tool = page.locator('.turn-actions');
+  const elapsed = page.locator('.vp-turn-block-elapsed').first();
+  const footer = page.locator('.turn-footer');
+  await expect(tool).toBeVisible();
+  await expect(elapsed).toHaveText('15s');
+  await expect(footer).toContainText('model-v2');
+  await expect(footer).not.toContainText('provider/');
+  await expect(footer).not.toContainText('high');
+  await expect(footer).toContainText('3 LLM calls');
+  await expect(page.locator('.turn-token-meta')).toContainText('Total 1,234 · Input 1,200 · Output 34');
 
   await page.evaluate(() => {
     const contradictoryMessage = {
@@ -309,13 +591,31 @@ test('keeps progress visible and distinct from the final result across themes an
   expect(layout.progressPaddingLeft).toBe(0);
 
   await page.evaluate(() => {
+    window.__turn.totalMs = null;
+    window.__turn.startedAt = Date.now() - 21_000;
     window.__turn.isActive = true;
+    window.__turn.isStreaming = false;
+    window.__turn.toolMsgs[0].hasResult = false;
+    window.__turn.toolMsgs[0].toolResult = null;
+    window.__turn.toolMsgs[0].startTime = Date.now();
+    window.__nowMs.value = Date.now();
   });
-  await expect(progress).toBeVisible();
-  await expect(progressList).toBeVisible();
+  await expect(elapsed).toHaveText(/2[01]s/);
+  await expect(elapsed).toHaveClass(/is-live/);
+  await page.evaluate(() => {
+    window.__nowMs.value += 2_000;
+  });
+  await expect(elapsed).toHaveText(/2[23]s/);
   await page.evaluate(() => {
     window.__turn.isActive = false;
+    window.__turn.totalMs = 21_000;
+    window.__turn.toolMsgs[0].hasResult = true;
+    window.__turn.toolMsgs[0].toolResult = 'read complete';
   });
+  await expect(elapsed).toHaveText('21s');
+  await page.waitForTimeout(1_100);
+  await expect(elapsed).toHaveText('21s');
+  await expect(elapsed).not.toHaveClass(/is-live/);
   await expect(progress).toBeVisible();
   await expect(progressList).toBeVisible();
 
@@ -330,15 +630,73 @@ test('keeps progress visible and distinct from the final result across themes an
     expect(colors.result).not.toBe(colors.background);
   }
 
-  await page.setViewportSize({ width: 430, height: 800 });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  await page.setViewportSize({ width: 720, height: 800 });
+  expect(await page.locator('.turn-content').evaluate(element => (
+    parseFloat(getComputedStyle(element).paddingRight)
+  ))).toBe(40);
+
+  await page.evaluate(() => {
+    document.body.style.padding = '0';
+    const app = document.querySelector('#app');
+    app.classList.add('chat-container');
+    Object.assign(app.style, { width: '100%', maxWidth: 'none', height: '400px', margin: '0' });
+    const shell = document.createElement('div');
+    shell.className = 'yeaft-page';
+    app.before(shell);
+    shell.append(app);
+    const turn = app.querySelector(':scope > .vp-turn-block');
+    const messages = document.createElement('div');
+    messages.className = 'messages';
+    turn.before(messages);
+    messages.append(turn);
+    const overflow = document.createElement('div');
+    overflow.style.height = '800px';
+    messages.append(overflow);
+  });
+
+  const readMobileGeometry = () => page.evaluate(() => {
+    const scroller = document.querySelector('.chat-container');
+    const content = document.querySelector('.turn-content');
+    const toolRow = document.querySelector('.turn-actions');
+    const scrollerRect = scroller.getBoundingClientRect();
+    const contentRect = content.getBoundingClientRect();
+    const toolRect = toolRow.getBoundingClientRect();
+    const contentStyle = getComputedStyle(content);
+    return {
+      contentLeft: contentRect.left,
+      contentRight: contentRect.right,
+      toolLeft: toolRect.left,
+      toolRight: toolRect.right,
+      contentPaddingLeft: parseFloat(contentStyle.paddingLeft),
+      contentPaddingRight: parseFloat(contentStyle.paddingRight),
+      responseLeftGutter: contentRect.left - scrollerRect.left + parseFloat(contentStyle.paddingLeft),
+      responseRightGutter: scrollerRect.right - contentRect.right + parseFloat(contentStyle.paddingRight),
+      scrollbarGutter: getComputedStyle(scroller).scrollbarGutter,
+    };
+  });
+  for (const width of [720, 320]) {
+    await page.setViewportSize({ width, height: 800 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    const mobileGeometry = await readMobileGeometry();
+    expect(mobileGeometry.contentLeft).toBeCloseTo(mobileGeometry.toolLeft, 0);
+    expect(mobileGeometry.contentRight).toBeCloseTo(mobileGeometry.toolRight, 0);
+    expect(mobileGeometry.contentPaddingLeft).toBe(mobileGeometry.contentPaddingRight);
+    expect(mobileGeometry.scrollbarGutter).toBe('stable both-edges');
+    expect(mobileGeometry.responseLeftGutter).toBeCloseTo(mobileGeometry.responseRightGutter, 0);
+  }
   expect(await readLayout()).toMatchObject({
     todoBorderTopWidth: '0px',
     todoPaddingLeft: 16,
     todoPaddingRight: 16,
   });
+  await expect(page.locator('.turn-token-meta')).toBeHidden();
+  await expect(footer).toContainText('model-v2');
+  await expect(footer).toContainText('3 LLM calls');
   await expect(result.locator('h2')).toBeVisible();
 
+  // The gallery interaction below retains its original tablet-size pointer
+  // geometry; the response layout itself has already been verified at 320px.
+  await page.setViewportSize({ width: 430, height: 800 });
   await page.evaluate(() => {
     window.__turn.imageMsgs = [
       { id: 'gallery-a', src: '/gallery-a.png', filename: 'Gallery A' },
@@ -353,10 +711,16 @@ test('keeps progress visible and distinct from the final result across themes an
   await thumbnails.first().click();
   const preview = page.locator('.image-preview-overlay');
   await expect(preview).toBeVisible();
-  await expect(preview.locator('.image-preview-img')).toHaveAttribute('src', '/gallery-a.png');
+  const previewImage = preview.locator('.image-preview-img');
+  await expect(previewImage).toHaveAttribute('src', '/gallery-a.png');
   await expect(preview.locator('.image-preview-position')).toHaveText('Image 1 of 2');
+  await previewImage.hover({ position: { x: 300, y: 200 } });
+  await page.mouse.wheel(0, -100);
+  await expect.poll(() => previewImage.evaluate(image => image.style.transform)).toContain('scale(1.25)');
+  await expect(previewImage).toHaveClass(/is-zoomed/);
   await preview.locator('.image-preview-next').click();
-  await expect(preview.locator('.image-preview-img')).toHaveAttribute('src', '/gallery-b.png');
+  await expect(previewImage).toHaveAttribute('src', '/gallery-b.png');
+  await expect(previewImage).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 0, 0)');
   await expect(preview.locator('.image-preview-position')).toHaveText('Image 2 of 2');
   await page.keyboard.press('ArrowLeft');
   await expect(preview.locator('.image-preview-img')).toHaveAttribute('src', '/gallery-a.png');

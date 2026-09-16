@@ -1,7 +1,7 @@
 /*
  * Service — macOS (launchd) platform implementation
  */
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import { existsSync, writeFileSync, unlinkSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
@@ -12,33 +12,37 @@ export function getLaunchdPlistPath(instanceId = DEFAULT_INSTANCE_ID) {
   return join(homedir(), 'Library', 'LaunchAgents', `${getLaunchdLabel(instanceId)}.plist`);
 }
 
-function generateLaunchdPlist(config) {
+const xmlText = value => String(value).replace(/[&<>"']/g, char => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;',
+})[char]);
+
+export function generateLaunchdPlist(config) {
   const nodePath = getNodePath();
   const cliPath = getCliPath();
   const logDir = getLogDir(config.instanceId);
   const label = getLaunchdLabel(config.instanceId);
 
   const envDict = [];
-  if (config.instanceId) envDict.push(`      <key>YEAFT_AGENT_INSTANCE</key>\n      <string>${config.instanceId}</string>`);
-  if (config.serverUrl) envDict.push(`      <key>SERVER_URL</key>\n      <string>${config.serverUrl}</string>`);
-  if (config.agentName) envDict.push(`      <key>AGENT_NAME</key>\n      <string>${config.agentName}</string>`);
-  if (config.agentSecret) envDict.push(`      <key>AGENT_SECRET</key>\n      <string>${config.agentSecret}</string>`);
-  if (config.workDir) envDict.push(`      <key>WORK_DIR</key>\n      <string>${config.workDir}</string>`);
-  if (config.yeaftDir) envDict.push(`      <key>YEAFT_DIR</key>\n      <string>${config.yeaftDir}</string>`);
+  if (config.instanceId) envDict.push(`      <key>YEAFT_AGENT_INSTANCE</key>\n      <string>${xmlText(config.instanceId)}</string>`);
+  if (config.serverUrl) envDict.push(`      <key>SERVER_URL</key>\n      <string>${xmlText(config.serverUrl)}</string>`);
+  if (config.agentName) envDict.push(`      <key>AGENT_NAME</key>\n      <string>${xmlText(config.agentName)}</string>`);
+  if (config.agentSecret) envDict.push(`      <key>AGENT_SECRET</key>\n      <string>${xmlText(config.agentSecret)}</string>`);
+  if (config.workDir) envDict.push(`      <key>WORK_DIR</key>\n      <string>${xmlText(config.workDir)}</string>`);
+  if (config.yeaftDir) envDict.push(`      <key>YEAFT_DIR</key>\n      <string>${xmlText(config.yeaftDir)}</string>`);
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>${label}</string>
+    <string>${xmlText(label)}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>${nodePath}</string>
-        <string>${cliPath}</string>
+        <string>${xmlText(nodePath)}</string>
+        <string>${xmlText(cliPath)}</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>${config.workDir || homedir()}</string>
+    <string>${xmlText(config.workDir || homedir())}</string>
     <key>EnvironmentVariables</key>
     <dict>
 ${envDict.join('\n')}
@@ -53,9 +57,9 @@ ${envDict.join('\n')}
     <key>ThrottleInterval</key>
     <integer>10</integer>
     <key>StandardOutPath</key>
-    <string>${logDir}/out.log</string>
+    <string>${xmlText(`${logDir}/out.log`)}</string>
     <key>StandardErrorPath</key>
-    <string>${logDir}/error.log</string>
+    <string>${xmlText(`${logDir}/error.log`)}</string>
 </dict>
 </plist>
 `;
@@ -68,10 +72,10 @@ export function macInstall(config) {
   mkdirSync(getLogDir(config.instanceId), { recursive: true });
   // Unload first if exists
   if (existsSync(plistPath)) {
-    try { execSync(`launchctl unload ${plistPath} 2>/dev/null`); } catch {}
+    try { execFileSync('launchctl', ['unload', plistPath], { stdio: 'pipe' }); } catch {}
   }
   writeFileSync(plistPath, generateLaunchdPlist(config));
-  execSync(`launchctl load ${plistPath}`);
+  execFileSync('launchctl', ['load', plistPath]);
   console.log(`Service installed and started: ${getLaunchdLabel(config.instanceId)}`);
   console.log(`\nManage with:`);
   console.log(`  yeaft-agent status --name ${config.instanceId}`);
@@ -83,7 +87,7 @@ export function macInstall(config) {
 export function macUninstall(instanceId = DEFAULT_INSTANCE_ID) {
   const plistPath = getLaunchdPlistPath(instanceId);
   if (existsSync(plistPath)) {
-    try { execSync(`launchctl unload ${plistPath}`); } catch {}
+    try { execFileSync('launchctl', ['unload', plistPath]); } catch {}
     unlinkSync(plistPath);
   }
   console.log(`Service uninstalled: ${getLaunchdLabel(instanceId)}`);
@@ -95,14 +99,14 @@ export function macStart(instanceId = DEFAULT_INSTANCE_ID) {
     console.error('Service not installed. Run "yeaft-agent install" first.');
     process.exit(1);
   }
-  execSync(`launchctl load ${plistPath}`);
+  execFileSync('launchctl', ['load', plistPath]);
   console.log(`Service started: ${getLaunchdLabel(instanceId)}`);
 }
 
 export function macStop(instanceId = DEFAULT_INSTANCE_ID) {
   const plistPath = getLaunchdPlistPath(instanceId);
   if (existsSync(plistPath)) {
-    execSync(`launchctl unload ${plistPath}`);
+    execFileSync('launchctl', ['unload', plistPath]);
   }
   console.log(`Service stopped: ${getLaunchdLabel(instanceId)}`);
 }

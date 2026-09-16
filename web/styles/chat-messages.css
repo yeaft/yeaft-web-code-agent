@@ -1198,6 +1198,34 @@
   font-size: 14px;
 }
 
+/* KaTeX inherits the theme's text color. Only the formula scrolls on mobile. */
+.math-display {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin: 0.7em 0;
+}
+
+.math-display .katex-display {
+  margin: 0;
+  padding: 0.2em 0;
+  text-align: left;
+}
+
+.math-inline {
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  vertical-align: middle;
+}
+
+.math-fallback {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .markdown-body h1,
 .markdown-body h2,
 .markdown-body h3,
@@ -1499,8 +1527,22 @@
   align-items: center;
   justify-content: flex-end;
   padding: 2px 8px 4px;
+  gap: 8px;
   opacity: 0;
   transition: opacity 0.15s;
+}
+
+.turn-response-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-right: auto;
+}
+
+.turn-model-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .assistant-turn:hover .turn-footer,
@@ -1817,8 +1859,20 @@
   max-height: 90vh;
   object-fit: contain;
   border-radius: 8px;
-  cursor: default;
+  cursor: zoom-in;
   box-shadow: var(--modal-shadow);
+  transform-origin: center;
+  touch-action: none;
+  user-select: none;
+  will-change: transform;
+}
+
+.image-preview-img.is-zoomed {
+  cursor: grab;
+}
+
+.image-preview-img.is-zoomed.is-dragging {
+  cursor: grabbing;
 }
 
 .image-preview-close,
@@ -1871,15 +1925,61 @@
   transform: translateX(-50%);
 }
 
+.image-preview-zoom-controls {
+  position: absolute;
+  top: var(--image-preview-control-offset);
+  left: 50%;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: var(--image-preview-control-radius);
+  background: var(--bg-main);
+  box-shadow: var(--modal-shadow);
+  transform: translateX(-50%);
+}
+
+.image-preview-zoom-button,
+.image-preview-zoom-reset {
+  height: var(--image-preview-control-size);
+  padding: 0 12px;
+  border: 0;
+  border-right: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.image-preview-zoom-reset {
+  min-width: 68px;
+}
+
+.image-preview-zoom-button:last-child {
+  border-right: 0;
+}
+
+.image-preview-zoom-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .image-preview-close:hover,
 .image-preview-close:focus-visible,
 .image-preview-navigation:hover,
-.image-preview-navigation:focus-visible {
+.image-preview-navigation:focus-visible,
+.image-preview-zoom-button:hover:not(:disabled),
+.image-preview-zoom-button:focus-visible,
+.image-preview-zoom-reset:hover,
+.image-preview-zoom-reset:focus-visible {
   background: var(--sidebar-hover);
 }
 
 .image-preview-close:focus-visible,
-.image-preview-navigation:focus-visible {
+.image-preview-navigation:focus-visible,
+.image-preview-zoom-button:focus-visible,
+.image-preview-zoom-reset:focus-visible {
   outline: var(--image-preview-focus-ring-width) solid var(--accent-blue);
   outline-offset: var(--image-preview-focus-ring-offset);
 }
@@ -1888,6 +1988,15 @@
   .image-preview-img {
     max-width: calc(100vw - 2 * var(--image-preview-mobile-gutter));
     max-height: calc(100vh - var(--image-preview-mobile-reserved-height));
+  }
+
+  .image-preview-zoom-controls {
+    top: auto;
+    bottom: var(--image-preview-control-offset);
+  }
+
+  .image-preview-position {
+    bottom: calc(var(--image-preview-control-offset) + var(--image-preview-control-size) + 12px);
   }
 }
 
@@ -1980,6 +2089,28 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.ask-pending {
+  border-left-color: var(--border-color);
+}
+
+.ask-pending-answer {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.ask-pending .btn-secondary {
+  margin-top: 10px;
+}
+
+.ask-card-wrapper {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ask-card .ask-expired-hint {
+  overflow-wrap: anywhere;
 }
 
 .ask-icon-row {
@@ -2769,6 +2900,10 @@
   color: var(--success);
 }
 
+.tool-line-status.error {
+  color: var(--error);
+}
+
 .tool-line-status.running {
   display: flex;
   align-items: center;
@@ -2816,6 +2951,10 @@
 
 .tool-line.completed {
   opacity: 0.7;
+}
+
+.tool-line.error {
+  color: var(--error-text);
 }
 
 .tool-line-toggle {
@@ -3015,31 +3154,50 @@
 }
 
 
-/* Scroll-to-latest floating button (chat + Yeaft message list) */
-.scroll-to-latest {
+/* Viewport-owned transcript navigation. The long-response action shares the
+   existing latest-button anchor instead of adding a control to every reply. */
+.transcript-navigation {
   position: sticky;
   bottom: 12px;
-  width: max-content;
-  margin-left: auto;
-  margin-right: 24px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 14px;
-  border-radius: 16px;
-  background: var(--bg-sidebar);
-  border: 1px solid var(--border-color);
-  color: var(--text-secondary);
-  font-size: 12px;
-  cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-  transition: opacity 0.2s, transform 0.2s, background 0.15s;
   z-index: 10;
+  width: max-content;
+  margin: 0 24px 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
 }
 
-.scroll-to-latest:hover {
+.transcript-navigation-btn {
+  min-height: 32px;
+  width: max-content;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  background: var(--bg-sidebar);
+  color: var(--text-secondary);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  pointer-events: auto;
+  transition: opacity 0.2s, transform 0.2s, background 0.15s, color 0.15s;
+}
+
+.transcript-navigation-btn:hover,
+.transcript-navigation-btn:focus-visible {
   background: var(--sidebar-hover);
   color: var(--text-primary);
+}
+
+.transcript-navigation-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .scroll-to-latest.is-hidden {
@@ -3048,12 +3206,45 @@
   pointer-events: none;
 }
 
-[data-theme="dark"] .scroll-to-latest {
+[data-theme="dark"] .transcript-navigation-btn {
   box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+}
+
+@media (max-width: 640px) {
+  .transcript-navigation {
+    right: max(12px, env(safe-area-inset-right));
+    margin-right: 0;
+  }
+
+  .transcript-navigation-btn {
+    min-height: 36px;
+    padding-inline: 13px;
+  }
+}
+
+/* The Yeaft mobile shell starts at 768px. Remove the desktop copy-action
+   reservation at that same breakpoint so 641–768px phone viewports do not
+   leave an extra 40px of whitespace on the response's right edge. Keep the
+   wider breakpoint scoped to Yeaft so CLI Chat retains its existing layout. */
+@media (max-width: 768px) {
+  .yeaft-page .turn-content {
+    padding-right: 0;
+  }
 }
 
 /* Mobile: keep necessary code blocks readable without turning replies into huge cards. */
 @media (max-width: 640px) {
+  /* Preserve the existing narrow-screen behavior for every chat surface. */
+  .turn-content {
+    padding-right: 0;
+  }
+
+  /* Token detail is intentionally desktop-only; model and call count remain
+     compact enough for the mobile response footer. */
+  .turn-token-meta {
+    display: none;
+  }
+
   .code-block-wrapper {
     margin: 0.75em 0;
     border-radius: 6px;

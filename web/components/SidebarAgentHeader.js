@@ -10,8 +10,10 @@ export default {
     restartingAgents: { type: Object, default: () => ({}) },
     upgradingAgents: { type: Object, default: () => ({}) },
     showAgentActions: { type: Boolean, default: false },
+    canUpgradeAll: { type: Boolean, default: false },
+    upgradingAll: { type: Boolean, default: false },
   },
-  emits: ['open-agent-settings', 'restart-agent', 'upgrade-agent'],
+  emits: ['open-agent-settings', 'restart-agent', 'upgrade-agent', 'upgrade-all-agents'],
   data() {
     return { open: false };
   },
@@ -88,13 +90,24 @@ export default {
           </div>
           <div v-if="onlineAgents.length === 0" class="agent-dropdown-empty">{{ tr('chat.agent.none', 'No agents online') }}</div>
         </div>
-        <button
-          type="button"
-          class="agent-dropdown-settings-option"
-          @click.stop="open = false; $emit('open-agent-settings')"
-        >
-          {{ tr('agentSettings.open', 'Agent settings') }}
-        </button>
+        <div class="agent-dropdown-footer">
+          <button
+            type="button"
+            class="agent-dropdown-settings-option"
+            @click.stop="open = false; $emit('open-agent-settings')"
+          >
+            {{ tr('agentSettings.open', 'Agent settings') }}
+          </button>
+          <button
+            type="button"
+            class="agent-dropdown-settings-option agent-dropdown-upgrade-all-option"
+            @click.stop="$emit('upgrade-all-agents')"
+            :disabled="!canUpgradeAll || upgradingAll"
+          >
+            <span v-if="upgradingAll" class="agent-dropdown-upgrade-all-spinner" aria-hidden="true"></span>
+            <span>{{ upgradingAll ? tr('chat.agent.upgradingAll', 'Upgrading all…') : tr('chat.agent.upgradeAll', 'Upgrade all') }}</span>
+          </button>
+        </div>
       </div>
     </div>
   `,

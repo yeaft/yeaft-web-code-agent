@@ -19,11 +19,12 @@ import { cleanMemoryPromptText, filterMemoryPromptTextForPrompt, filterRelatedSe
 import { makeSegment, serializeSegments } from '../../../agent/yeaft/memory/segment.js';
 import { readCanonicalContentRecord, readScope } from '../../../agent/yeaft/memory/segment-store.js';
 import { syncAll, syncScope } from '../../../agent/yeaft/memory/segment-sync.js';
-import { Engine, buildResidentEntries, selectCanonicalMemoryScopes, selectResidentTopicScopes, selectRelatedSessionIds } from '../../../agent/yeaft/engine.js';
+import { Engine, buildResidentEntries, estimateProviderInputBreakdown, selectCanonicalMemoryScopes, selectResidentTopicScopes, selectRelatedSessionIds } from '../../../agent/yeaft/engine.js';
 import { flushAgentPerfTrace } from '../../../agent/yeaft/perf-trace.js';
 import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { withUsageAccounting } from '../../../agent/yeaft/llm/usage-accounting.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
+import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
 import { AmsRegistry } from '../../../agent/yeaft/memory/ams-registry.js';
 import { writeContent, writeSummary } from '../../../agent/yeaft/memory/store.js';
 import { NullTrace, DebugTrace, projectDebugDetailForWire } from '../../../agent/yeaft/debug-trace.js';
@@ -51,8 +52,6 @@ import {
   projectDocWriteScopesNeedingReload,
   selectProjectDocContext,
 } from '../../../agent/yeaft/sessions/project-doc.js';
-import todoWriteTool from '../../../agent/yeaft/tools/todo-write.js';
-import startPlanTool from '../../../agent/yeaft/tools/start-plan.js';
 import {
   cleanupManagedCliRuntimePaths,
   ensureManagedCliTools,
@@ -147,15 +146,20 @@ describe('active tool exposure and scoped prompts', () => {
     const registry = createFullRegistry();
     const toolNames = registry.getToolNames();
     const baseline = resolveActiveToolNames({ toolNames, prompt: 'Explain this code.' });
+    expect(toolNames).not.toContain('RepoWorkflow');
+    expect(baseline.has('GitRead')).toBe(false);
+    expect(CONDITIONAL_BUILTIN_TOOL_NAMES.has('GitRead')).toBe(true);
 
-    expect(toolNames).toContain('StartPlan');
+    for (const name of ['StartPlan', 'TodoWrite']) {
+      expect(toolNames).not.toContain(name);
+      expect(baseline.has(name)).toBe(false);
+    }
     expect([...baseline]).toEqual(expect.arrayContaining([
       'WebSearch',
       'WebFetch',
       'ViewImage',
       'EnterWorktree',
       'ExitWorktree',
-      'TodoWrite',
       'FileRead',
       'FileEdit',
       'Bash',
@@ -197,7 +201,17 @@ describe('active tool exposure and scoped prompts', () => {
       prompt: 'Run the task.',
     }).has('SpawnAgent')).toBe(true);
 
+    expect(resolveActiveToolNames({ toolNames, prompt: '继续', messages: [
+      { role: 'assistant', content: '下一步审查 diff。' },
+    ] }).has('GitRead')).toBe(true);
+    expect(resolveActiveToolNames({ toolNames: ['FileRead'], gitReadAlwaysVisible: true }).has('GitRead')).toBe(false);
     const ordinaryLanguageCases = [
+      ['Inspect GitRead failures', 'GitRead', {}],
+      ['Show the branch diff', 'GitRead', {}],
+      ['Review this pull request', 'GitRead', {}],
+      ['检查工作区状态', 'GitRead', {}],
+      ['查看提交历史', 'GitRead', {}],
+      ['Continue.', 'GitRead', { gitReadAlwaysVisible: true }],
       ['What did we decide about authentication?', 'HistorySearch', {}],
       ['Please have another worker inspect this independently.', 'SpawnAgent', {}],
       ['Make me a logo for this project.', 'ImageGeneration', { imageGenerationConfigured: true }],
@@ -226,6 +240,37 @@ describe('active tool exposure and scoped prompts', () => {
     ]));
   });
 
+  it('cannot rediscover retired checklist tools even when explicitly requested', async () => {
+    mockAdapter.pushResponse([
+      { type: 'tool_call', id: 'discover-plan', name: 'DiscoverTools', input: { query: 'TodoWrite StartPlan planning checklist' } },
+      { type: 'stop', stopReason: 'tool_use' },
+    ]);
+    mockAdapter.pushResponse([
+      { type: 'text_delta', text: 'I can discuss an approach without a checklist tool.' },
+      { type: 'stop', stopReason: 'end_turn' },
+    ]);
+    const registry = createFullRegistry();
+    const engine = new Engine({
+      adapter: mockAdapter,
+      trace,
+      config: { model: 'test-model', maxOutputTokens: 1024 },
+      toolRegistry: registry,
+    });
+    const events = [];
+    for await (const event of engine.query({ prompt: 'Use TodoWrite and StartPlan to plan this task.' })) events.push(event);
+    const discovery = events.find(event => event.type === 'tool_end' && event.name === 'DiscoverTools');
+    expect(discovery).toMatchObject({ isError: false });
+    const discoveredNames = JSON.parse(discovery.output).tools.map(tool => tool.name);
+    for (const name of ['StartPlan', 'TodoWrite']) {
+      expect(discoveredNames).not.toContain(name);
+      expect(registry.getToolNames()).not.toContain(name);
+      for (const call of mockAdapter.callLog) {
+        expect(call.tools.map(tool => tool.name)).not.toContain(name);
+        expect(call.system).not.toContain(name);
+      }
+    }
+  });
+
   it('discovers conditional and flattened MCP capabilities without lexical reachability gaps', async () => {
     const registry = createFullRegistry();
     const mcpManager = {
@@ -250,6 +295,7 @@ describe('active tool exposure and scoped prompts', () => {
         parameters: tool.parameters,
       }));
     const paraphrases = [
+      ['Inspect local repository evidence', 'GitRead'],
       ['Bring back the approach we used for login.', 'HistorySearch'],
       ['Ask a separate specialist to examine this.', 'SpawnAgent'],
       ['I need artwork for the launch header.', 'ImageGeneration'],
@@ -672,21 +718,23 @@ describe('active tool exposure and scoped prompts', () => {
     expect([...inferProjectDocScopes({ pathHints: ['web/stores/chat.js'] })]).toContain('web');
   });
 
-  it('uses stable core plus active guidance without repeating the tool catalogue', () => {
-    const concise = buildSystemPrompt({ language: 'en', toolNames: ['WebSearch', 'FileRead'] });
-    const planned = buildSystemPrompt({ language: 'en', toolNames: ['FileRead', 'StartPlan', 'TodoWrite'] });
+  it('uses the stable core without repeating tool schemas or runtime guidance', () => {
+    const system = buildSystemPrompt({ language: 'en' });
+    const retiredTools = buildSystemPrompt({
+      language: 'en',
+      toolNames: ['FileRead', 'StartPlan', 'TodoWrite'],
+    });
 
-    expect(concise).toContain('Session Participant');
-    expect(concise).toContain('Active Tool Guidance');
-    expect(concise).toContain('Read existing files before editing');
-    expect(concise).toContain('do not revert changes you did not make');
-    expect(concise).toContain('Do not amend commits unless the user explicitly asks');
-    expect(concise).toContain('Do not use `git reset --hard` or `git clean -f` without user approval');
-    expect(concise).toContain('never replace the current turn\'s task');
-    expect(concise).not.toContain('Available tools:');
-    expect(concise).not.toContain('For non-trivial multi-step work');
-    expect(planned).toContain('For non-trivial multi-step work');
-    expect(planned).not.toContain('Available tools: FileRead');
+    expect(system).toContain('Session Participant');
+    expect(system).toContain('do not revert changes you did not make');
+    expect(system).toContain('Do not amend commits unless the user explicitly asks');
+    expect(system).toContain('Do not use `git reset --hard` or `git clean -f` without user approval');
+    expect(system).toContain('never replace the current turn\'s task');
+    expect(system).not.toContain('Active Tool Guidance');
+    expect(system).not.toContain('Available tools:');
+    expect(system).not.toContain('For non-trivial multi-step work');
+    expect(retiredTools).toEqual(buildSystemPrompt({ language: 'en', toolNames: ['FileRead'] }));
+    expect(retiredTools).not.toMatch(/StartPlan|TodoWrite/);
   });
 
   it('preserves image generation configuration through the authoritative loader', () => {
@@ -726,7 +774,6 @@ describe('active tool exposure and scoped prompts', () => {
     }
     const taskManager = {
       listActiveTasks: () => [...activeTasks],
-      renderActiveTasksForPrompt: () => activeTasks.length > 0 ? 'task_live is running' : '',
     };
     mockAdapter.pushResponse([
       { type: 'tool_call', id: 'start_bg', name: 'Bash', input: { command: 'npm start', background: true } },
@@ -751,7 +798,8 @@ describe('active tool exposure and scoped prompts', () => {
       'ReadTaskLog',
       'CancelTask',
     ]));
-    expect(mockAdapter.callLog[1].system).toContain('task_live is running');
+    expect(mockAdapter.callLog[1].system).not.toContain('task_live is running');
+    expect(mockAdapter.callLog[1].system).not.toContain('Possibly Relevant Tasks');
   });
 
   it('reloads unclassified and Bash write rules before executing against a large project doc', async () => {
@@ -2477,6 +2525,48 @@ describe('Engine memory prompt hygiene', () => {
 });
 
 describe('Engine', () => {
+  describe('provider input token diagnostics', () => {
+    it('splits the final request at the history boundary and includes tool schemas', () => {
+      const breakdown = estimateProviderInputBreakdown({
+        systemPrompt: 'system instructions',
+        messages: [
+          { role: 'user', content: 'older question' },
+          { role: 'assistant', content: 'older answer' },
+          { role: 'user', content: 'current question' },
+        ],
+        historyMessageCount: 2,
+        toolDefs: [{ name: 'Read', description: 'Read a file', parameters: { type: 'object' } }],
+      });
+
+      expect(breakdown.systemPromptTokens).toBeGreaterThan(0);
+      expect(breakdown.historyMessageTokens).toBeGreaterThan(0);
+      expect(breakdown.toolDefinitionTokens).toBeGreaterThan(0);
+      expect(breakdown.currentTurnTokens).toBeGreaterThan(0);
+      expect(breakdown.totalEstimatedTokens).toBe(
+        breakdown.systemPromptTokens
+        + breakdown.historyMessageTokens
+        + breakdown.toolDefinitionTokens
+        + breakdown.currentTurnTokens,
+      );
+    });
+
+    it('clamps invalid history boundaries without inventing input', () => {
+      expect(estimateProviderInputBreakdown()).toEqual({
+        systemPromptTokens: 0,
+        historyMessageTokens: 0,
+        toolDefinitionTokens: 0,
+        currentTurnTokens: 0,
+        totalEstimatedTokens: 0,
+      });
+      const breakdown = estimateProviderInputBreakdown({
+        messages: [{ role: 'user', content: 'current' }],
+        historyMessageCount: 99,
+      });
+      expect(breakdown.historyMessageTokens).toBeGreaterThan(0);
+      expect(breakdown.currentTurnTokens).toBe(0);
+    });
+  });
+
   describe('constructor', () => {
     it('bounds signed thinking and object tool output in the actual Engine adapter request', async () => {
       const adapter = new MockAdapter();
@@ -2901,6 +2991,7 @@ describe('Engine', () => {
         ]));
         expect(rows.every(row => row.traceId === 'pt-engine-1')).toBe(true);
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -3333,6 +3424,7 @@ describe('Engine', () => {
         expect(events.find(event => event.type === 'error')).toBeTruthy();
         expect(conversationStore.loadRecentBySession('session-prewrite', 10)).toHaveLength(1);
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -3384,6 +3476,7 @@ describe('Engine', () => {
           executionOrigin: 'route_forward',
         })));
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -3430,6 +3523,7 @@ describe('Engine', () => {
         ]);
         expect(persisted[1]).not.toHaveProperty('executionOrigin');
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -3476,6 +3570,7 @@ describe('Engine', () => {
           }),
         ]);
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -3495,7 +3590,7 @@ describe('Engine', () => {
         const engine = new Engine({
           adapter: mockAdapter,
           trace,
-          config: { model: 'test-model', maxOutputTokens: 1024 },
+          config: { model: 'test-model', modelEffort: 'high', maxOutputTokens: 1024 },
           conversationStore,
           yeaftDir,
           vpId: 'vp-linus',
@@ -3522,6 +3617,8 @@ describe('Engine', () => {
           turnId: 'vp-turn-tool',
           responseKind: 'progress',
           llmCallCount: 2,
+          model: 'test-model',
+          effort: 'high',
         });
         expect(persisted[2]).toMatchObject({
           toolCallId: 'call_incremental',
@@ -3570,6 +3667,7 @@ describe('Engine', () => {
           llmCallCount: 2,
         });
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -3751,15 +3849,12 @@ describe('Engine', () => {
           text: 'durable reflection summary',
           usage: { inputTokens: 10, outputTokens: 5 },
         });
-        adapter.pushResponse([
-          ...Array.from({ length: 30 }, (_, index) => ({
-            type: 'tool_call',
-            id: `call_fold_${index}`,
-            name: 'fold_tool',
-            input: { index },
-          })),
-          { type: 'stop', stopReason: 'tool_use' },
-        ]);
+        for (let index = 0; index < 30; index += 1) {
+          adapter.pushResponse([
+            { type: 'tool_call', id: `call_fold_${index}`, name: 'fold_tool', input: { index } },
+            { type: 'stop', stopReason: 'tool_use' },
+          ]);
+        }
         adapter.pushResponse([
           { type: 'text_delta', text: 'finished after fold' },
           { type: 'stop', stopReason: 'end_turn' },
@@ -3779,7 +3874,7 @@ describe('Engine', () => {
         });
 
         for await (const _event of engine.query({
-          prompt: 'run thirty tools',
+          prompt: 'run thirty tool loops',
           sessionId: 'session-t1-fold',
           causalRootId: 'root-t1-fold',
         })) {
@@ -3802,11 +3897,12 @@ describe('Engine', () => {
         expect(durable.some(message => Array.isArray(message.toolCalls) && message.toolCalls.length > 0)).toBe(false);
         expect(durable.at(-1)).toMatchObject({ role: 'assistant', content: 'finished after fold' });
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
 
-    it('persists a T2 carry-forward reflection and hides the original tool arc after restart', async () => {
+    it('persists a T2 carry-forward reflection even when the next request cannot retain recent history', async () => {
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-t2-fold-persist-'));
       try {
         const conversationStore = new ConversationStore(yeaftDir);
@@ -3855,14 +3951,18 @@ describe('Engine', () => {
         }
         await Promise.resolve();
         const firstTurn = conversationStore.loadRecentBySession('session-t2-fold', Infinity);
-        for await (const _event of engine.query({
+        const secondEvents = [];
+        for await (const event of engine.query({
           prompt: 'continue after t2',
           messages: firstTurn,
           sessionId: 'session-t2-fold',
           causalRootId: 'root-t2-current',
-        })) {
-          // consume
-        }
+        })) secondEvents.push(event);
+        // A tiny history/request budget degrades by dropping old rows; the
+        // configured recent-turn count is not a hard request-success floor.
+        expect(secondEvents.find(event => event.type === 'error')).toBeUndefined();
+        expect(secondEvents.filter(event => event.type === 'turn_end' && event.terminal)).toHaveLength(1);
+        expect(adapter.callLog).toHaveLength(3);
 
         const restarted = new ConversationStore(yeaftDir);
         const durable = restarted.loadRecentBySession(
@@ -3878,8 +3978,10 @@ describe('Engine', () => {
         ]);
         expect(durable.some(message => message.role === 'tool')).toBe(false);
         expect(durable.some(message => Array.isArray(message.toolCalls) && message.toolCalls.length > 0)).toBe(false);
-        expect(durable.at(-1)).toMatchObject({ role: 'assistant', content: 'second turn finished' });
+        expect(durable.some(message => message.content === 'second turn finished')).toBe(true);
+        expect(durable.some(message => message.role === 'user' && message.content === 'continue after t2')).toBe(true);
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -3915,6 +4017,7 @@ describe('Engine', () => {
           { role: 'assistant', content: 'one reply' },
         ]);
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -3961,6 +4064,7 @@ describe('Engine', () => {
           expect.objectContaining({ role: 'assistant', content: 'first part' }),
         ]);
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -4001,6 +4105,14 @@ describe('Engine', () => {
           type: 'turn_open',
           turnId: 'vp-turn-ui-1',
         }));
+        expect(events).toContainEqual(expect.objectContaining({
+          type: 'turn_close',
+          turnId: 'vp-turn-ui-1',
+          inputTokens: 8,
+          outputTokens: 3,
+          totalTokens: 11,
+          totalMs: expect.any(Number),
+        }));
         expect(events.map(e => e.type)).toContain('turn_end');
         const loaded = conversationStore.loadRecentBySession('session-turn-id', 10);
         expect(loaded).toHaveLength(1);
@@ -4033,11 +4145,70 @@ describe('Engine', () => {
         ]);
         await debugTrace.close();
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
 
-    it('loads query-selected canonical content into the system prompt and debug event', async () => {
+    it('does not load Dream memory for WorkItem turns while the runtime path is disabled', async () => {
+      const search = vi.fn(() => [{
+        id: 'disabled-memory', scope: 'sessions/g1', kind: 'context',
+        tags: ['canonical-content'], sourceMessages: [], body: 'MUST_NOT_REACH_PROMPT', rank: -1,
+        createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
+      }]);
+      mockAdapter.pushResponse([
+        { type: 'text_delta', text: 'ok' },
+        { type: 'stop', stopReason: 'end_turn' },
+      ]);
+      const engine = new Engine({
+        adapter: mockAdapter,
+        trace,
+        config: { model: 'claude-test', maxOutputTokens: 2048, language: 'en' },
+        memoryIndex: { search },
+      });
+
+      const events = [];
+      for await (const event of engine.query({
+        scenario: 'work-item', prompt: 'do not recall memory', sessionId: 'g1',
+        vpPersona: { vpId: 'vp1', name: 'VP One' },
+      })) events.push(event);
+
+      expect(search).not.toHaveBeenCalled();
+      expect(mockAdapter.callLog[0].system).not.toContain('MUST_NOT_REACH_PROMPT');
+      expect(events.some(event => event.type === 'memory_used')).toBe(false);
+      expect(events.some(event => event.type === 'dream_memory_loaded')).toBe(false);
+    });
+
+    it('does not load Dream memory for child-agent turns', async () => {
+      const search = vi.fn(() => [{
+        id: 'disabled-child-memory', scope: 'sessions/g1/vp/child', kind: 'context',
+        tags: ['canonical-content'], sourceMessages: [], body: 'CHILD_MEMORY_MUST_NOT_REACH_PROMPT', rank: -1,
+        createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
+      }]);
+      mockAdapter.pushResponse([
+        { type: 'text_delta', text: 'ok' },
+        { type: 'stop', stopReason: 'end_turn' },
+      ]);
+      const engine = new Engine({
+        adapter: mockAdapter,
+        trace,
+        config: { model: 'claude-test', maxOutputTokens: 2048, language: 'en' },
+        memoryIndex: { search },
+      });
+
+      const events = [];
+      for await (const event of engine.query({
+        prompt: 'child agent must not recall memory', sessionId: 'g1',
+        vpPersona: { vpId: 'child', name: 'Child Agent', subAgent: true },
+      })) events.push(event);
+
+      expect(search).not.toHaveBeenCalled();
+      expect(mockAdapter.callLog[0].system).not.toContain('CHILD_MEMORY_MUST_NOT_REACH_PROMPT');
+      expect(events.some(event => event.type === 'memory_used')).toBe(false);
+      expect(events.some(event => event.type === 'dream_memory_loaded')).toBe(false);
+    });
+
+    it.skip('keeps explicitly scoped WorkItem canonical memory compatible while Dream loading is disabled', async () => {
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-dream-load-'));
       await writeContent(
         { kind: 'session', id: 'g1' },
@@ -4097,6 +4268,7 @@ describe('Engine', () => {
 
       const events = [];
       for await (const event of engine.query({
+        scenario: 'work-item',
         prompt: 'dream recall test',
         sessionId: 'g1',
         vpPersona: { vpId: 'vp1', name: 'VP One' },
@@ -4130,6 +4302,7 @@ describe('Engine', () => {
         { type: 'stop', stopReason: 'end_turn' },
       ]);
       for await (const _event of engine.query({
+        scenario: 'work-item',
         prompt: 'dream recall test',
         sessionId: 'g1',
         vpPersona: { vpId: 'vp2', name: 'VP Two' },
@@ -4218,6 +4391,7 @@ describe('Engine', () => {
         amsRegistry: new AmsRegistry({ yeaftDir: legacyDir, config: {} }),
       });
       for await (const _event of legacyEngine.query({
+        scenario: 'work-item',
         prompt: 'legacy recall',
         sessionId: 'legacy-session',
         vpPersona: { vpId: 'vp1', name: 'VP One' },
@@ -4280,6 +4454,7 @@ describe('Engine', () => {
 
         const debugEvents = [];
         for await (const event of debugEngine.query({
+          scenario: 'work-item',
           prompt: 'optimize Dream memory relevance',
           sessionId: 'g1',
           vpPersona: { vpId: 'vp1', name: 'VP One' },
@@ -4379,6 +4554,7 @@ describe('Engine', () => {
 
         const events = [];
         for await (const event of engine.query({
+          scenario: 'work-item',
           prompt: '检查 timeout cleanup failure',
           sessionId: 'current-session',
           projectSessionIds: ['sibling-session'],
@@ -4395,8 +4571,8 @@ describe('Engine', () => {
         expect(system).not.toContain('m174797 assistant/linus');
         expect(system).not.toContain('m174798 tool:');
         expect(system).not.toContain('### 相关记忆');
-        expect(system).toContain('## 可能相关的任务');
-        expect(system).toContain('- 子 Agent timeout-reviewer (子 Agent，运行中)');
+        expect(system).not.toContain('## 可能相关的任务');
+        expect(system).not.toContain('timeout-reviewer');
         expect(system).not.toContain('Review timeout recovery and verify Engine continuation');
         expect(system).not.toContain('<active_tasks>');
         expect(system).not.toContain('/private/sub-agent/events.jsonl');
@@ -4430,6 +4606,7 @@ describe('Engine', () => {
           { type: 'stop', stopReason: 'end_turn' },
         ]);
         for await (const _event of engine.query({
+          scenario: 'work-item',
           prompt: 'Yeaft 设置页',
           sessionId: 'current-session',
           projectSessionIds: ['ui-sibling-session'],
@@ -4475,6 +4652,7 @@ describe('Engine', () => {
           { type: 'stop', stopReason: 'end_turn' },
         ]);
         for await (const _event of engine.query({
+          scenario: 'work-item',
           prompt: 'MCP',
           sessionId: 'current-session',
           projectSessionIds: ['mcp-sibling-session'],
@@ -4521,6 +4699,7 @@ describe('Engine', () => {
         ]);
         const fencedEvents = [];
         for await (const event of engine.query({
+          scenario: 'work-item',
           prompt: 'MCP',
           sessionId: 'current-session',
           projectSessionIds: ['fenced-mcp-sibling'],
@@ -4544,6 +4723,7 @@ describe('Engine', () => {
         ]);
         const indentedUserEvents = [];
         for await (const event of engine.query({
+          scenario: 'work-item',
           prompt: 'MCP',
           sessionId: 'current-session',
           projectSessionIds: [],
@@ -4584,6 +4764,7 @@ describe('Engine', () => {
               taskManager,
             });
             for await (const event of productionCodeEngine.query({
+              scenario: 'work-item',
               prompt: 'MCP',
               sessionId: 'current-session',
               projectSessionIds: [],
@@ -4618,6 +4799,7 @@ describe('Engine', () => {
             taskManager,
           });
           for await (const _event of productionPostgresEngine.query({
+            scenario: 'work-item',
             prompt: 'PostgreSQL',
             sessionId: 'current-session',
             projectSessionIds: [],
@@ -4631,6 +4813,7 @@ describe('Engine', () => {
         expect(postgresSystem).toContain('**user**: # PostgreSQL');
         expect(postgresSystem).toContain('PostgreSQL stores the workspace metadata for this project');
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     }
@@ -4819,7 +5002,6 @@ describe('Engine', () => {
           getTask() {
             return { status: 'running', updatedAt: new Date().toISOString() };
           },
-          renderActiveTasksForPrompt() { return ''; },
         },
         sessionId: 'session-active-task',
       });
@@ -4880,7 +5062,6 @@ describe('Engine', () => {
               ? { status: 'running', updatedAt: new Date(0).toISOString() }
               : { status: 'running', updatedAt: new Date().toISOString() };
           },
-          renderActiveTasksForPrompt() { return ''; },
         },
         sessionId: 'session-mixed-tasks',
       });
@@ -5018,6 +5199,7 @@ describe('Engine', () => {
           }),
         ]));
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -5299,7 +5481,6 @@ describe('Engine', () => {
       });
       const startedTasks = [];
       const bashTaskManager = {
-        renderActiveTasksForPrompt: () => '',
         startShellTask: input => {
           startedTasks.push(input);
           return { id: 'task_after_timeout', status: 'running', log: { path: '/tmp/task.log' } };
@@ -5632,8 +5813,8 @@ describe('Engine', () => {
   });
 
   describe('multiple tool calls in one turn', () => {
-    it('runs explicitly safe read-only tools with a bounded parallel lane and commits in call order', async () => {
-      const calls = Array.from({ length: 5 }, (_, index) => ({
+    it('runs twelve explicitly safe reads together and commits in call order', async () => {
+      const calls = Array.from({ length: 12 }, (_, index) => ({
         type: 'tool_call',
         id: `parallel-read-${index + 1}`,
         name: 'parallel_read',
@@ -5662,8 +5843,8 @@ describe('Engine', () => {
         async execute({ index }) {
           active += 1;
           maxActive = Math.max(maxActive, active);
-          if (active === 4) releaseFirstWave();
-          if (index < 4) await firstWave;
+          if (active === 12) releaseFirstWave();
+          await firstWave;
           active -= 1;
           return `result-${index + 1}`;
         },
@@ -5676,22 +5857,14 @@ describe('Engine', () => {
       });
 
       const events = [];
-      for await (const event of engine.query({ prompt: 'read five independent inputs' })) events.push(event);
+      for await (const event of engine.query({ prompt: 'read twelve independent inputs' })) events.push(event);
 
-      expect(maxActive).toBe(4);
+      expect(maxActive).toBe(12);
       expect(events
         .filter(event => event.type === 'tool_start' || event.type === 'tool_end')
         .map(event => `${event.type}:${event.id}`)).toEqual([
-        'tool_start:parallel-read-1',
-        'tool_start:parallel-read-2',
-        'tool_start:parallel-read-3',
-        'tool_start:parallel-read-4',
-        'tool_end:parallel-read-1',
-        'tool_end:parallel-read-2',
-        'tool_end:parallel-read-3',
-        'tool_end:parallel-read-4',
-        'tool_start:parallel-read-5',
-        'tool_end:parallel-read-5',
+        ...calls.map(call => `tool_start:${call.id}`),
+        ...calls.map(call => `tool_end:${call.id}`),
       ]);
       expect(mockAdapter.callLog[1].messages
         .filter(message => message.role === 'tool')
@@ -5901,9 +6074,9 @@ describe('Engine', () => {
       expect(mockAdapter.callLog[2].messages.at(-1).content).toContain('file contents');
     }
 
-    it('reuses identical deterministic reads and ends a plan-only control batch', async () => {
-      await verifyIdenticalReadReuse();
-      mockAdapter = new MockAdapter();
+    it('reuses identical deterministic reads', verifyIdenticalReadReuse);
+
+    it('rejects retired checklist calls and continues work instead of ending at plan_recorded', async () => {
       mockAdapter.pushResponse([
         { type: 'tool_call', id: 'plan-1', name: 'StartPlan', input: { topic: 'inspect the issue' } },
         { type: 'tool_call', id: 'todo-1', name: 'TodoWrite', input: {
@@ -5911,32 +6084,53 @@ describe('Engine', () => {
         } },
         { type: 'stop', stopReason: 'tool_use' },
       ]);
+      mockAdapter.pushResponse([
+        { type: 'tool_call', id: 'read-1', name: 'read', input: {} },
+        { type: 'stop', stopReason: 'tool_use' },
+      ]);
+      mockAdapter.pushResponse([
+        { type: 'text_delta', text: 'Inspected the issue without a checklist.' },
+        { type: 'stop', stopReason: 'end_turn' },
+      ]);
 
+      const registry = createFullRegistry();
+      for (const name of ['StartPlan', 'TodoWrite']) {
+        await expect(registry.execute(name, {})).rejects.toThrow(`Unknown tool: ${name}`);
+      }
       const engine = new Engine({
         adapter: mockAdapter,
         trace,
         config: { model: 'test-model', maxOutputTokens: 1024 },
+        toolRegistry: registry,
       });
-      engine.registerTool({
-        name: 'StartPlan',
-        description: 'Start plan',
+      const read = vi.fn(async () => 'file contents');
+      registry.register(defineTool({
+        name: 'read',
+        description: 'Read',
         parameters: { type: 'object' },
         isReadOnly: () => true,
-        execute: async () => 'plan instruction',
-      });
-      engine.registerTool({
-        name: 'TodoWrite',
-        description: 'Write todos',
-        parameters: { type: 'object' },
-        isReadOnly: () => true,
-        execute: async () => '{"success":true}',
-      });
+        execute: read,
+      }));
 
       const events = [];
       for await (const event of engine.query({ prompt: 'inspect the issue' })) events.push(event);
 
-      expect(mockAdapter.callLog).toHaveLength(1);
-      expect(events.find(event => event.type === 'turn_end' && event.stopReason === 'plan_recorded')).toMatchObject({ terminal: true });
+      expect(mockAdapter.callLog).toHaveLength(3);
+      expect(read).toHaveBeenCalledTimes(1);
+      for (const name of ['StartPlan', 'TodoWrite']) {
+        expect(events.find(event => event.type === 'tool_end' && event.name === name)).toMatchObject({ isError: true });
+        for (const call of mockAdapter.callLog) {
+          expect(call.tools.map(tool => tool.name)).not.toContain(name);
+        }
+      }
+      expect(mockAdapter.callLog[1].messages.filter(message => message.role === 'tool'))
+        .toEqual(expect.arrayContaining([
+          expect.objectContaining({ toolCallId: 'plan-1', isError: true }),
+          expect.objectContaining({ toolCallId: 'todo-1', isError: true }),
+        ]));
+      expect(events.some(event => event.stopReason === 'plan_recorded')).toBe(false);
+      expect(events.filter(event => event.type === 'turn_end' && event.terminal).at(-1))
+        .toMatchObject({ stopReason: 'end_turn' });
     });
 
     it('invalidates cached reads before successful and failed workspace mutations', async () => {
@@ -6202,10 +6396,12 @@ describe('Engine', () => {
           name: 'FoldHelper',
           input: { index },
         });
-        mockAdapter.pushResponse([
-          ...Array.from({ length: 31 }, (_, index) => makeToolCall(index)),
-          { type: 'stop', stopReason: 'tool_use' },
-        ]);
+        for (let index = 0; index < 30; index += 1) {
+          mockAdapter.pushResponse([
+            makeToolCall(index),
+            { type: 'stop', stopReason: 'tool_use' },
+          ]);
+        }
         // T1 reflection uses adapter.call(), which is recorded between the
         // initial tool stream and the continuation stream.
         mockAdapter.pushResponse([
@@ -6217,17 +6413,18 @@ describe('Engine', () => {
           { type: 'stop', stopReason: 'end_turn' },
         ]);
 
+        const config = {
+          model: 'test-model',
+          maxOutputTokens: 1024,
+          asyncTaskWaitTimeoutMs: 1_000,
+          // Force the initial reflection gate. Restore a real window before
+          // continuation: a one-token window cannot carry completion text.
+          maxContextTokens: 1,
+        };
         const engine = new Engine({
           adapter: mockAdapter,
           trace,
-          config: {
-            model: 'test-model',
-            maxOutputTokens: 1024,
-            asyncTaskWaitTimeoutMs: 1_000,
-            // Session reflection is pressure-gated. Make the 31-call batch
-            // exceed the threshold so this covers the durable T1 path.
-            maxContextTokens: 1,
-          },
+          config,
           conversationStore,
           yeaftDir,
         });
@@ -6236,6 +6433,7 @@ describe('Engine', () => {
           description: 'Produce a foldable tool result.',
           parameters: { type: 'object' },
           execute: async (input, ctx) => {
+            config.maxContextTokens = 128000;
             if (input.index === 0) ctx.registerAsyncTask(taskId);
             return `tool output ${input.index}`;
           },
@@ -6254,10 +6452,10 @@ describe('Engine', () => {
         }
 
         expect(completionAccepted).toBe(true);
-        // stream #1, the synchronous T1 reflector call, stream #2 (which
-        // waits), then stream #3 carrying the continuation note.
-        expect(mockAdapter.callLog).toHaveLength(4);
-        const continuationMessages = mockAdapter.callLog[3].messages;
+        // 30 tool loops, the synchronous T1 reflector call, one wait response,
+        // then the request carrying the continuation note.
+        expect(mockAdapter.callLog).toHaveLength(33);
+        const continuationMessages = mockAdapter.callLog.at(-1).messages;
         // The provider transcript retains the original folded tool result as
         // historical context, but the late completion itself must be injected
         // only as a continuation note rather than a reconstructed raw arc.
@@ -6293,6 +6491,7 @@ describe('Engine', () => {
           internal: true,
         });
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -6358,6 +6557,7 @@ describe('Engine', () => {
         expect(Buffer.byteLength(durableToolResult.content, 'utf8')).toBeGreaterThan(TOOL_RESULT_MAX_BYTES);
         expect(events.find(event => event.type === 'tool_result_update')?.content).toBe(completion);
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -6926,14 +7126,16 @@ describe('Engine', () => {
       expect(turnEnds[0].stopReason).toBe('error');
     });
 
-    it('surfaces context overflow without a summary call or retry loop', async () => {
+    it('shrinks and retries provider context overflow without a compact LLM call', async () => {
       const { LLMContextError } = await import('../../../agent/yeaft/llm/adapter.js');
       let streamCalls = 0;
       let summaryCalls = 0;
       const adapter = {
         async *stream() {
           streamCalls += 1;
-          throw new LLMContextError('context window exceeded');
+          if (streamCalls === 1) throw new LLMContextError('context window exceeded');
+          yield { type: 'text_delta', text: 'recovered' };
+          yield { type: 'stop', stopReason: 'end_turn' };
         },
         async call() {
           summaryCalls += 1;
@@ -6952,11 +7154,48 @@ describe('Engine', () => {
       const events = [];
       for await (const event of engine.query({ prompt: 'hello' })) events.push(event);
 
-      expect(streamCalls).toBe(1);
+      expect(streamCalls).toBe(2);
       expect(summaryCalls).toBe(0);
       expect(events.some(event => event.type === 'consolidate')).toBe(false);
-      expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+      expect(events.filter(event => event.type === 'error')).toHaveLength(0);
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'llm_retry', reason: 'context_overflow_recovery',
+      }));
       expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toHaveLength(1);
+    });
+
+    it('continues after partial output on context overflow without redisplaying it', async () => {
+      const { LLMContextError } = await import('../../../agent/yeaft/llm/adapter.js');
+      const requests = [];
+      const adapter = {
+        async *stream(params) {
+          requests.push(params);
+          if (requests.length === 1) {
+            yield { type: 'text_delta', text: 'partial answer' };
+            throw new LLMContextError('context window exceeded after output');
+          }
+          yield { type: 'text_delta', text: ' resumed answer' };
+          yield { type: 'stop', stopReason: 'end_turn' };
+        },
+      };
+      const engine = new Engine({
+        adapter,
+        trace,
+        config: { model: 'test-model', maxOutputTokens: 1024 },
+        conversationStore: { append() { return null; } },
+      });
+
+      const events = [];
+      for await (const event of engine.query({ prompt: 'hello' })) events.push(event);
+
+      expect(requests).toHaveLength(2);
+      expect(events.filter(event => event.type === 'text_delta').map(event => event.text))
+        .toEqual(['partial answer', ' resumed answer']);
+      expect(requests[1].messages.filter(message =>
+        message.role === 'assistant' && message.content === 'partial answer')).toHaveLength(1);
+      expect(requests[1].messages.at(-1).role).toBe('user');
+      expect(requests[1].messages.at(-1).content).not.toBe('hello');
+      expect(events.filter(event => event.type === 'error')).toHaveLength(0);
     });
 
     it('marks rate-limit and server errors retryable without retries', async () => {
@@ -7194,6 +7433,10 @@ describe('Engine', () => {
       }));
       expect(events.filter(e => e.type === 'error')).toHaveLength(0);
       expect(events).toContainEqual(expect.objectContaining({ type: 'text_delta', text: 'fallback ok' }));
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'turn_close',
+        model: 'fallback-model',
+      }));
 
       // A retry after visible text must continue from the accepted prefix on a
       // fresh request instead of replaying the original prompt and duplicating
@@ -7636,6 +7879,7 @@ describe('Engine', () => {
           }),
         ]);
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
 
@@ -8083,6 +8327,76 @@ describe('Engine', () => {
   });
 
   describe('debug trace integration', () => {
+    it.each([
+      { name: 'null latest capture with a newer prompt', rawLoops: [1, 2], promptLoops: [1, 3] },
+      { name: 'empty latest prompt with a newer capture', rawLoops: [1, 3], promptLoops: [1, 2] },
+      { name: 'prompt available without any capture', rawLoops: [], promptLoops: [1, 2] },
+      { name: 'capture available without any prompt', rawLoops: [1, 2], promptLoops: [] },
+      { name: 'no available snapshots', rawLoops: [], promptLoops: [] },
+      { name: 'latest snapshots after a capture gap', rawLoops: [1, 4], promptLoops: [1, 4] },
+    ])('keeps bounded snapshots on their source loops: $name', async ({ rawLoops, promptLoops }) => {
+      const traceRoot = mkdtempSync(join(tmpdir(), 'yeaft-trace-available-'));
+      const writer = new DebugTrace(traceRoot);
+      let reader;
+      const sessionId = 'available-session';
+      const traceId = 'available-turn';
+      const loopIds = [];
+      const requestFor = loopNumber => ({
+        body: { model: 'test-model', input: [{ role: 'user', content: `request ${loopNumber}` }] },
+      });
+      const messagesFor = loopNumber => [{ role: 'user', content: `messages ${loopNumber}` }];
+      const breakdownFor = loopNumber => ({
+        systemPromptTokens: loopNumber,
+        historyMessageTokens: loopNumber + 1,
+        toolDefinitionTokens: loopNumber + 2,
+        currentTurnTokens: loopNumber + 3,
+        totalEstimatedTokens: (loopNumber * 4) + 6,
+      });
+      const assertSnapshots = (detail) => {
+        expect(detail.loops).toHaveLength(4);
+        for (const [index, loop] of detail.loops.entries()) {
+          const loopNumber = index + 1;
+          expect(loop).toMatchObject({
+            loopInstanceId: loopIds[index],
+            loopNumber,
+            rawRequest: loopNumber === rawLoops.at(-1) ? requestFor(loopNumber) : null,
+            systemPrompt: loopNumber === promptLoops.at(-1) ? `prompt ${loopNumber}` : '',
+            messages: loopNumber === 4 ? messagesFor(4) : [],
+            requestInputBreakdown: breakdownFor(loopNumber),
+          });
+          expect(loop).not.toHaveProperty('requestBase');
+          expect(loop).not.toHaveProperty('requestDelta');
+        }
+        expect(detail.loops.filter(loop => loop.rawRequest != null)).toHaveLength(rawLoops.length ? 1 : 0);
+        expect(detail.loops.filter(loop => loop.systemPrompt)).toHaveLength(promptLoops.length ? 1 : 0);
+      };
+
+      try {
+        for (let loopNumber = 1; loopNumber <= 4; loopNumber += 1) {
+          const turnId = writer.startTurn({ traceId, sessionId, turnNumber: loopNumber });
+          loopIds.push(turnId);
+          writer.endTurn(turnId, {
+            rawRequest: rawLoops.includes(loopNumber) ? requestFor(loopNumber) : null,
+            systemPrompt: promptLoops.includes(loopNumber) ? `prompt ${loopNumber}` : '',
+            messages: messagesFor(loopNumber),
+            requestInputBreakdown: breakdownFor(loopNumber),
+            stopReason: loopNumber === 4 ? 'end_turn' : 'tool_use',
+          });
+        }
+        await writer.flush();
+        assertSnapshots(await writer.fetchTurnDebug({ sessionId, turnId: traceId }));
+        writer.finalizeQuery(traceId, { sessionId, stopReason: 'end_turn' });
+        await writer.close();
+
+        reader = new DebugTrace(traceRoot);
+        assertSnapshots(await reader.fetchTurnDebug({ sessionId, turnId: traceId }));
+      } finally {
+        await reader?.close();
+        await writer.close();
+        rmSync(traceRoot, { recursive: true, force: true });
+      }
+    });
+
     it('should record turns and tools in debug trace', async () => {
       const dbTrace = new DebugTrace(TEST_DB);
 
@@ -8393,6 +8707,7 @@ describe('Engine', () => {
           expect(legacyStats).toMatchObject({ turnCount: 2, toolCount: 0, requestCount: 1 });
           const legacyDetail = await legacyReader.fetchTurnDebug({ sessionId: 'legacy-session', turnId: 'legacy-turn' });
           expect(legacyDetail.loops.map(loop => loop.response)).toEqual(['legacy-1', 'legacy-2']);
+          expect(legacyDetail.loops.every(loop => loop.requestInputBreakdown == null)).toBe(true);
           const rawPayloadSearch = await legacyReader.fetchRecentDebugHistory({
             sessionId: 'legacy-session',
             indexOnly: true,
@@ -8937,7 +9252,7 @@ describe('Engine', () => {
   });
 
   describe('active scope in system prompt', () => {
-    it('should render session id and session members without current member or group label', async () => {
+    it('omits bookkeeping metadata while retaining multi-VP routing', async () => {
       mockAdapter.pushResponse([
         { type: 'text_delta', text: 'ok' },
         { type: 'stop', stopReason: 'end_turn' },
@@ -8960,19 +9275,15 @@ describe('Engine', () => {
       }
 
       const call = mockAdapter.callLog[0];
-      expect(call.system).toContain('## Current session context');
-      expect(call.system).toContain('Session ID: session_active');
-      expect(call.system).not.toContain('session_member:');
-      expect(call.system).not.toContain('session_members:');
-      expect(call.system).not.toContain('session_topics:');
-      expect(call.system).toContain('Session members: vp-omni, vp-martin, vp-linus');
+      expect(call.system).not.toContain('## Current session context');
+      expect(call.system).not.toContain('Session ID: session_active');
       expect(call.system).not.toContain('Current focus:');
-      expect(call.system).not.toContain('group: session_active');
-      expect(call.system).not.toContain('\nvp: vp-linus');
-      expect(call.system).not.toContain('\nmembers: vp-omni');
+      expect(call.system).toContain('## multi_vp_routing');
+      expect(call.system).toContain('Current VP: vp-linus');
+      expect(call.system).toContain('Forwardable VPs: vp-omni, vp-martin');
     });
 
-    it('derives current focus only from query-selected canonical topic scopes', async () => {
+    it('does not infer Session focus from Dream topics for Session or WorkItem turns', async () => {
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-topics-'));
       try {
         mkdirSync(join(yeaftDir, 'memory', 'sessions', 'session_active', 'topic', 'dream', 'segments'), { recursive: true });
@@ -9011,9 +9322,20 @@ describe('Engine', () => {
         }
 
         const call = mockAdapter.callLog[0];
-        expect(call.system).toContain('Current focus: Dream memory segment extraction and organization');
+        expect(call.system).not.toContain('Current focus: Dream memory segment extraction and organization');
+        mockAdapter.pushResponse([
+          { type: 'text_delta', text: 'ok' },
+          { type: 'stop', stopReason: 'end_turn' },
+        ]);
+        for await (const _event of engine.query({
+          prompt: 'inspect canonical segments', scenario: 'work-item',
+          sessionId: 'session_active',
+          vpPersona: { vpId: 'vp-linus', displayName: 'Linus' },
+        })) { /* consume */ }
+        expect(mockAdapter.callLog.at(-1).system).not.toContain('Current focus: Dream memory segment extraction and organization');
         expect(call.system).not.toContain('session_topics: dream/segments');
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
     });
@@ -9067,7 +9389,7 @@ describe('Engine', () => {
       expect(call.system).not.toContain('核心原则');
     }
 
-    it('uses English and Chinese system prompts with configured tool guidance', async () => {
+    it('uses localized system prompts without duplicating tool schemas', async () => {
       await verifyEnglishSystemPrompt();
       mockAdapter = new MockAdapter();
       mockAdapter.pushResponse([
@@ -9122,7 +9444,6 @@ describe('Engine', () => {
 
       const enSystem = buildSystemPrompt({
         language: 'en',
-        toolNames: ['TodoWrite', 'PromptAgent'],
         projectLabel: 'Yeaft (project-123)',
         projectInstruction: 'Run the shared Project verification before release.',
       });
@@ -9130,8 +9451,20 @@ describe('Engine', () => {
         language: 'zh',
         projectLabel: 'Yeaft（project-123）',
         projectInstruction: '发布前执行统一验证。',
-        toolNames: ['TodoWrite', 'PromptAgent'],
       });
+
+      const bilingualChildSystem = buildSystemPrompt({
+        language: 'en',
+        vpPersona: {
+          displayName: 'Parent/child',
+          persona: '<!-- lang:en -->\nParent soul\n<!-- lang:zh -->\n父角色灵魂',
+          runtimePreamble: '## You are a sub-agent\n\nMission: return the child result.',
+        },
+      });
+      expect(bilingualChildSystem).toContain('Parent soul');
+      expect(bilingualChildSystem).not.toContain('父角色灵魂');
+      expect(bilingualChildSystem).toContain('## You are a sub-agent');
+      expect(bilingualChildSystem).toContain('Mission: return the child result.');
 
       expect(enSystem).toContain('[Project Instruction]');
       expect(enSystem).toContain('The current Session belongs to Project Yeaft (project-123). The unified instruction for this Project is:');
@@ -9147,55 +9480,22 @@ describe('Engine', () => {
       })).toContain('当前 Session 隶属于当前 Project。当前 Project 的统一 instruction 是：');
       expect(buildSystemPrompt({ language: 'en', projectInstruction: '   ' }))
         .not.toContain('[Project Instruction]');
-      expect(enSystem).toContain('Accuracy first: start with the smallest targeted call');
-      expect(enSystem).toContain('only when every call is already necessary');
-      expect(enSystem).toContain('Otherwise run them sequentially');
-      expect(enSystem).toContain('do not speculative-batch the investigation');
-      expect(enSystem).toContain('write a brief visible plan');
-      expect(enSystem).toContain('or stop after planning unless user input genuinely blocks the first step');
-      expect(enSystem).toContain('After PromptAgent queues follow-up work, call WaitAgent in the same parent turn');
-      expect(enSystem).toContain('Relay the reply or continue the dependent work');
+      expect(enSystem).not.toContain('Active Tool Guidance');
+      expect(enSystem).not.toContain('Accuracy first: start with the smallest targeted call');
+      expect(enSystem).not.toContain('After PromptAgent queues follow-up work');
+      expect(enSystem).not.toMatch(/TodoWrite|StartPlan|write a brief visible plan/);
       expect(zhSystem).toContain('当前 Session 隶属于 Project Yeaft（project-123）。当前 Project 的统一 instruction 是：');
       expect(zhSystem).toContain('发布前执行统一验证。');
-      expect(zhSystem).toContain('准确性优先：先用能解决当前未知的最小定向调用');
-      expect(zhSystem).toContain('否则串行执行');
-      expect(zhSystem).toContain('不要推测性批量展开调查');
-      expect(zhSystem).toContain('先写简短可见计划');
-      expect(zhSystem).toContain('只有用户信息确实阻塞第一步时才在规划后停下');
-      expect(zhSystem).toContain('PromptAgent 排队后续工作后，必须在同一个父级 turn 调用 WaitAgent');
-      expect(zhSystem).toContain('随后转述结果或继续依赖该结果的工作');
+      expect(zhSystem).not.toContain('当前工具指引');
+      expect(zhSystem).not.toContain('准确性优先：先用能解决当前未知的最小定向调用');
+      expect(zhSystem).not.toContain('PromptAgent 排队后续工作后');
+      expect(zhSystem).not.toMatch(/TodoWrite|StartPlan|先写简短可见计划/);
 
-      expect(todoWriteTool.description.en).toContain('PLAN WITHOUT AN EXTRA MODEL ROUND');
-      expect(todoWriteTool.description.en).toContain('do not call a separate planning-mode tool first');
-      expect(todoWriteTool.description.zh).toContain('不要浪费额外模型回合进入规划模式');
-      expect(todoWriteTool.description.zh).toContain('不要先调用单独的规划模式工具');
-      expect(todoWriteTool.description.en).toContain('BATCH WITH WORK');
-      expect(todoWriteTool.description.en).toContain('necessity, argument-independence, and safety-independence test');
-      expect(todoWriteTool.description.en).toContain('Do not speculative-batch an investigation');
-      expect(todoWriteTool.description.en).toContain('only after evidence');
-      expect(todoWriteTool.description.en).toContain('make unnecessary');
-      expect(todoWriteTool.description.en).toContain('standalone TodoWrite remains valid');
-      expect(todoWriteTool.description.zh).toContain('和工作工具合批');
-      expect(todoWriteTool.description.zh).toContain('必要性、参数独立性和安全独立性检查');
-      expect(todoWriteTool.description.zh).toContain('不要推测性批量展开调查');
-      expect(todoWriteTool.description.zh).toContain('只有已有证据时');
-      expect(todoWriteTool.description.zh).toContain('TodoWrite 仍可单独调用');
-
-      const enPlan = await startPlanTool.execute(
-        { topic: 'Batch plan setup with its first investigation' },
-        { config: { language: 'en' }, vpPersona: {} },
-      );
-      const zhPlan = await startPlanTool.execute(
-        { topic: '把计划建立和第一批调查工具合批' },
-        { config: { language: 'zh-CN' }, vpPersona: {} },
-      );
-
-      expect(enPlan).toContain('only when that call is already necessary and its arguments and safety do not depend on another result');
-      expect(enPlan).toContain('do not speculative-batch the investigation');
-      expect(enPlan).toContain('Stop after the plan only when the first step must ask the user');
-      expect(zhPlan).toContain('只有第一个工作工具调用已经确定有必要');
-      expect(zhPlan).toContain('不要推测性批量展开调查');
-      expect(zhPlan).toContain('只有第一步必须询问用户时才在计划后停下');
+      for (const language of ['en', 'zh']) {
+        const customInstruction = 'Discuss the plan first; legacy notes mention TodoWrite and StartPlan.';
+        expect(buildSystemPrompt({ language, projectInstruction: customInstruction }))
+          .toContain(customInstruction);
+      }
 
       const enToolDefs = Object.fromEntries(createFullRegistry().getToolDefs('en')
         .map(tool => [tool.name, tool.description]));

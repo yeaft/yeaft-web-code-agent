@@ -159,7 +159,7 @@ async function openDefaultUserSearch(wrapper, store, results = [
   await Vue.nextTick();
 }
 
-function mountPage({ renderComposer = false } = {}) {
+function mountPage({ renderComposer = false, renderOriginLinks = false } = {}) {
   const stubs = {
     YeaftSidebar: true,
     WorkbenchPanel: true,
@@ -183,6 +183,12 @@ function mountPage({ renderComposer = false } = {}) {
     ReflectionCard: true,
     SubAgentCard: true,
   };
+  if (renderOriginLinks) {
+    stubs.AssistantTurn = {
+      props: ['originMessageId'],
+      template: '<span class="assistant-turn-stub" :data-response-origin-id="originMessageId || null">{{ originMessageId }}</span>',
+    };
+  }
   if (!renderComposer) stubs.ChatInput = true;
   return mount(YeaftPage, {
     attachTo: document.body,
@@ -432,6 +438,72 @@ describe('Yeaft history result rendered reveal', () => {
 
   historyScenario('keeps interleaved history frames in one block per VP execution and splits a later handoff', async () => {
     await expectInterleavedVpExecutionBlocks({ isHistory: true });
+  });
+
+  it('jumps each response back to the user question that started its message block', async () => {
+    vi.useFakeTimers();
+    const store = primeStore();
+    store.yeaftMessageWindowState[yeaftHistoryIdentityKey('agent-a', 'same')] = { visibleTurns: 20 };
+    store.messagesMap['conv-a'] = [
+      { id: 'u1', type: 'user', content: 'Compare both approaches', sessionId: 'same', timestamp: 1 },
+      { id: 'a1', type: 'assistant', content: 'First response', sessionId: 'same', turnId: 'turn-a', status: 'completed', timestamp: 2 },
+      { id: 'a2', type: 'assistant', content: 'Second response', sessionId: 'same', turnId: 'turn-b', status: 'completed', timestamp: 3 },
+      { id: 'orphan-a', type: 'assistant', content: 'Orphan response', sessionId: 'same', turnId: 'turn-orphan', status: 'completed', timestamp: 4 },
+    ];
+    // A system row creates a real message-block boundary without becoming an
+    // origin. The assistant after it must not link to the previous question.
+    store.messagesMap['conv-a'].splice(3, 0, {
+      id: 'sys1', type: 'system', content: 'Boundary', sessionId: 'same', timestamp: 3.5,
+    });
+
+    const wrapper = mountPage({ renderOriginLinks: true });
+    await flushPromises();
+    await Vue.nextTick();
+
+    const responses = wrapper.findAll('[data-response-origin-id]');
+    expect(responses).toHaveLength(2);
+    expect(responses.map(response => response.attributes('data-response-origin-id'))).toEqual(['u1', 'u1']);
+    expect(wrapper.findAll('.response-origin-btn')).toHaveLength(0);
+
+    const messageList = wrapper.getComponent({ name: 'MessageList' });
+    const scroller = messageList.get('main.chat-container').element;
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, get: () => 400 });
+    scroller.getBoundingClientRect = () => ({ top: 0, bottom: 400, height: 400, left: 0, right: 800, width: 800 });
+    responses.forEach((response, index) => {
+      response.element.getBoundingClientRect = () => index === 0
+        ? ({ top: -200, bottom: 800, height: 1000, left: 0, right: 800, width: 800 })
+        : ({ top: 820, bottom: 920, height: 100, left: 0, right: 800, width: 800 });
+    });
+    scroller.dispatchEvent(new Event('scroll'));
+    vi.advanceTimersByTime(16);
+    await Vue.nextTick();
+
+    const originButton = messageList.get('.response-origin-btn');
+    expect(originButton.text()).toBe('message.currentTurn');
+    expect(originButton.attributes('aria-label')).toBe('message.backToCurrentTurn');
+    expect(messageList.findAll('.response-origin-btn')).toHaveLength(1);
+
+    const virtualTranscript = wrapper.getComponent({ name: 'VirtualTranscript' });
+    const scrollToKey = vi.fn(async () => true);
+    const anchorTarget = vi.fn(() => true);
+    virtualTranscript.vm.$.exposed.scrollToKey = scrollToKey;
+    virtualTranscript.vm.$.exposed.anchorTarget = anchorTarget;
+
+    await originButton.trigger('click');
+    await flushPromises();
+    await Vue.nextTick();
+
+    expect(scrollToKey).toHaveBeenCalledOnce();
+    expect(scrollToKey).toHaveBeenCalledWith('block_u1', { align: 'start' });
+    const questionRow = wrapper.get('[data-msg-id="u1"]');
+    expect(anchorTarget).toHaveBeenCalledWith('block_u1', questionRow.element, { align: 'start' });
+    expect(questionRow.classes()).toContain('msg-flash');
+    expect(messageList.find('.response-origin-btn').exists()).toBe(false);
+
+    vi.advanceTimersByTime(1800);
+    await Vue.nextTick();
+    expect(questionRow.classes()).not.toContain('msg-flash');
+    wrapper.unmount();
   });
 
   it('keeps composer menus click-driven and opens LLM configuration from the menu item', async () => {

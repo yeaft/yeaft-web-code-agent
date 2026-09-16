@@ -149,6 +149,7 @@ export default {
           <KeepAlive :max="8">
             <WorkbenchCapabilityHost
               v-if="activeRouteKey"
+              v-show="activeToolCapability"
               :key="workbenchContextKey"
               :active-capability="activeToolCapability"
               :retained-capabilities="routeHostState.openCapabilities"
@@ -264,10 +265,12 @@ export default {
 
     const hasSessionRoutes = Vue.computed(() => (
       store.workbenchRouteProtocolSupported === true
-      && store.hasCapability('workbench_session_routes')
+      && store.hasAgentCapability(activeRoute.value?.agentId, 'workbench_session_routes')
     ));
-    const hasTerminal = Vue.computed(() => hasSessionRoutes.value && store.hasCapability('terminal'));
-    const hasExplorer = Vue.computed(() => hasSessionRoutes.value && store.hasCapability('file_editor'));
+    const hasTerminal = Vue.computed(() => hasSessionRoutes.value
+      && store.hasAgentCapability(activeRoute.value?.agentId, 'terminal'));
+    const hasExplorer = Vue.computed(() => hasSessionRoutes.value
+      && store.hasAgentCapability(activeRoute.value?.agentId, 'file_editor'));
     const canSetupBrowser = Vue.computed(() => (
       store.browserRuntimeServerEnabled === true
       && store.browserRuntimeProtocolSupported === true
@@ -476,6 +479,16 @@ export default {
       closeLauncher();
       rememberCapability();
       return true;
+    };
+
+    const handleOpenCapability = event => {
+      const detail = event.detail;
+      if (!detail || detail.routeKey !== activeRouteKey.value
+        || !['terminal', 'files', 'git'].includes(detail.capabilityId)
+        || !capabilityCards.value.some(item => item.id === detail.capabilityId && item.available)) return;
+      if (!openCapability(detail.capabilityId)) return;
+      store.openWorkbench();
+      detail.accepted = true;
     };
 
     const confirmFilesCapabilityClose = ({ routeKey, workspaceGeneration }) => new Promise(resolve => {
@@ -934,6 +947,7 @@ export default {
 
     Vue.onMounted(() => {
       window.addEventListener('open-file-in-explorer', handleOpenFile);
+      window.addEventListener('workbench-open-capability', handleOpenCapability);
       window.addEventListener('workbench-file-items-changed', handleFileItemsChanged);
       document.addEventListener('click', handleDocumentClick);
       if (typeof ResizeObserver !== 'undefined' && panelRoot.value) {
@@ -956,6 +970,7 @@ export default {
     Vue.onUnmounted(() => {
       cancelActiveResize();
       window.removeEventListener('open-file-in-explorer', handleOpenFile);
+      window.removeEventListener('workbench-open-capability', handleOpenCapability);
       window.removeEventListener('workbench-file-items-changed', handleFileItemsChanged);
       document.removeEventListener('click', handleDocumentClick);
       window.removeEventListener('resize', scheduleTabOverflowUpdate);

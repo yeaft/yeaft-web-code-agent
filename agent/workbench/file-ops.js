@@ -1,12 +1,177 @@
-import { readFile, writeFile, readdir, stat, unlink, rename, mkdir, rm, copyFile, cp } from 'fs/promises';
+import { open, readFile, realpath, writeFile, readdir, stat, unlink, rename, mkdir, rm, copyFile, cp } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, basename, dirname, extname } from 'path';
+import { join, basename, dirname, extname, isAbsolute, relative, resolve } from 'path';
 import { platform } from 'os';
 import ctx from '../context.js';
-import { resolveAndValidatePath, BINARY_EXTENSIONS } from './utils.js';
+import { resolveAndValidatePath, BINARY_EXTENSIONS, VIDEO_EXTENSIONS } from './utils.js';
 import { sendWorkbenchResult } from './request-routing.js';
 
 export const MAX_WORKBENCH_PREVIEW_BYTES = 20 * 1024 * 1024;
+export const WORKBENCH_FILE_CHUNK_BYTES = 1024 * 1024;
+export const WORKBENCH_VIDEO_CHUNK_BYTES = 1024 * 1024;
+
+async function canonicalWorkspaceReadPath(filePath, workDir, errorMessage = 'File is outside the active workspace.') {
+  const canonicalRoot = await realpath(resolve(workDir));
+  const canonicalFile = await realpath(resolveAndValidatePath(filePath, canonicalRoot));
+  const relativePath = relative(canonicalRoot, canonicalFile);
+  const outside = relativePath === '..'
+    || relativePath.startsWith(`..${platform() === 'win32' ? '\\' : '/'}`)
+    || isAbsolute(relativePath);
+  if (outside) {
+    const error = new Error(errorMessage);
+    error.code = 'FILE_OUTSIDE_WORKSPACE';
+    throw error;
+  }
+  return canonicalFile;
+}
+
+async function validateResponseImagePath(filePath, workDir) {
+  const canonicalFile = await canonicalWorkspaceReadPath(
+    filePath,
+    workDir,
+    'Response image is outside the active workspace.',
+  );
+  const mimeType = BINARY_EXTENSIONS[extname(canonicalFile).toLowerCase()];
+  if (!mimeType?.startsWith('image/')) throw new Error('Response preview only supports image files.');
+  return canonicalFile;
+}
+
+async function canonicalVideoFile(filePath, workDir) {
+  const canonicalRoot = await realpath(resolve(workDir));
+  const resolved = await realpath(resolveAndValidatePath(filePath, canonicalRoot));
+  const relativePath = relative(canonicalRoot, resolved);
+  const outside = relativePath === '..'
+    || relativePath.startsWith(`..${platform() === 'win32' ? '\\' : '/'}`)
+    || isAbsolute(relativePath);
+  if (outside) throw new Error('Video is outside the active workspace.');
+  const mimeType = VIDEO_EXTENSIONS[extname(resolved).toLowerCase()];
+  if (!mimeType) throw new Error('Unsupported video format.');
+  return { resolved, mimeType };
+}
+
+export async function handleVideoMetadata(msg) {
+  const { conversationId, filePath, requestId, _requestUserId, _requestClientId } = msg;
+  try {
+    const { resolved, mimeType } = await canonicalVideoFile(filePath, msg.workDir || ctx.CONFIG.workDir);
+    const handle = await open(resolved, 'r');
+    try {
+      const fileStat = await handle.stat();
+      if (!fileStat.isFile() || !Number.isSafeInteger(fileStat.size)) throw new Error('Video path is not a supported file.');
+      await sendWorkbenchResult(ctx, msg, {
+        type: 'video_metadata', conversationId, requestId, _requestUserId, _requestClientId,
+        filePath: resolved, requestedFilePath: filePath, size: fileStat.size, mimeType,
+        mtimeMs: fileStat.mtimeMs,
+      });
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    await sendWorkbenchResult(ctx, msg, {
+      type: 'video_metadata', conversationId, requestId, _requestUserId, _requestClientId,
+      filePath, requestedFilePath: filePath, error: error.message,
+      errorCode: error.code || 'VIDEO_METADATA_FAILED',
+    });
+  }
+}
+
+export async function handleVideoChunk(msg) {
+  const { conversationId, filePath, requestId, _requestUserId, _requestClientId } = msg;
+  let handle;
+  try {
+    const { resolved, mimeType } = await canonicalVideoFile(filePath, msg.workDir || ctx.CONFIG.workDir);
+    handle = await open(resolved, 'r');
+    const fileStat = await handle.stat();
+    if (!fileStat.isFile() || !Number.isSafeInteger(fileStat.size)) throw new Error('Video path is not a supported file.');
+    const start = Number(msg.start);
+    const requestedEnd = Number(msg.end);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd)
+        || start < 0 || requestedEnd < start || start >= fileStat.size) {
+      const error = new Error('Invalid video byte range.');
+      error.code = 'VIDEO_RANGE_INVALID';
+      throw error;
+    }
+    if (Number(msg.expectedSize) !== fileStat.size || Number(msg.expectedMtimeMs) !== fileStat.mtimeMs) {
+      const error = new Error('Video changed since the preview was opened.');
+      error.code = 'VIDEO_FILE_CHANGED';
+      throw error;
+    }
+    const end = Math.min(requestedEnd, fileStat.size - 1);
+    if ((end - start + 1) > WORKBENCH_VIDEO_CHUNK_BYTES) {
+      const error = new Error('Video byte range exceeds the chunk limit.');
+      error.code = 'VIDEO_RANGE_TOO_LARGE';
+      throw error;
+    }
+    const buffer = Buffer.alloc(end - start + 1);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
+    if (bytesRead !== buffer.length) {
+      const error = new Error('Video changed while it was being read.');
+      error.code = 'VIDEO_FILE_CHANGED';
+      throw error;
+    }
+    const outcome = await sendWorkbenchResult(ctx, msg, {
+      type: 'video_chunk', conversationId, requestId, _requestUserId, _requestClientId,
+      filePath: resolved, requestedFilePath: filePath, start, end, size: fileStat.size,
+      mtimeMs: fileStat.mtimeMs, mimeType, content: buffer.toString('base64'),
+    });
+    if (outcome === 'dropped') console.warn('[Agent] Video chunk was dropped before delivery');
+  } catch (error) {
+    await sendWorkbenchResult(ctx, msg, {
+      type: 'video_chunk', conversationId, requestId, _requestUserId, _requestClientId,
+      filePath, requestedFilePath: filePath, start: msg.start, end: msg.end,
+      error: error.message, errorCode: error.code || 'VIDEO_CHUNK_FAILED',
+    });
+  } finally {
+    await handle?.close();
+  }
+}
+
+async function reportFileTransferDropped(msg, base) {
+  const errorResult = {
+    ...base,
+    type: 'file_content',
+    content: '',
+    binary: false,
+    error: 'File transfer was dropped before it could be delivered.',
+    errorCode: 'FILE_TRANSFER_DROPPED',
+  };
+  return sendWorkbenchResult(ctx, msg, errorResult);
+}
+
+async function sendBinaryFile(msg, base, buffer, mimeType) {
+  const supportsChunks = ctx.serverCapabilities?.has?.('workbench_file_content_chunks')
+    && ctx.agentCapabilities?.includes?.('workbench_file_content_chunks')
+    && msg._workbenchRequestId;
+  if (!supportsChunks || buffer.length <= WORKBENCH_FILE_CHUNK_BYTES) {
+    const outcome = await sendWorkbenchResult(ctx, msg, {
+      ...base,
+      type: 'file_content',
+      content: buffer.toString('base64'),
+      binary: true,
+      mimeType,
+    });
+    if (outcome === 'dropped') await reportFileTransferDropped(msg, base);
+    return;
+  }
+
+  const chunkCount = Math.ceil(buffer.length / WORKBENCH_FILE_CHUNK_BYTES);
+  for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+    const start = chunkIndex * WORKBENCH_FILE_CHUNK_BYTES;
+    const outcome = await sendWorkbenchResult(ctx, msg, {
+      ...base,
+      type: 'file_content_chunk',
+      binary: true,
+      mimeType,
+      chunkIndex,
+      chunkCount,
+      totalBytes: buffer.length,
+      content: buffer.subarray(start, start + WORKBENCH_FILE_CHUNK_BYTES).toString('base64'),
+    });
+    if (outcome === 'dropped') {
+      await reportFileTransferDropped(msg, base);
+      return;
+    }
+  }
+}
 
 export async function handleReadFile(msg) {
   const { conversationId, filePath, requestId, _requestUserId, _requestClientId } = msg;
@@ -15,14 +180,21 @@ export async function handleReadFile(msg) {
   const workDir = msg.workDir || conv?.workDir || ctx.CONFIG.workDir;
 
   try {
-    const resolved = resolveAndValidatePath(filePath, workDir);
+    const resolved = msg.responseImagePreview
+      ? await validateResponseImagePath(filePath, workDir)
+      : await canonicalWorkspaceReadPath(filePath, workDir);
     const ext = extname(resolved).toLowerCase();
+    if (VIDEO_EXTENSIONS[ext]) {
+      const error = new Error('Video files require the Workbench streaming protocol.');
+      error.code = 'VIDEO_STREAM_REQUIRED';
+      throw error;
+    }
     const mimeType = BINARY_EXTENSIONS[ext];
 
     if (mimeType) {
       const fileStat = await stat(resolved);
-      if (!msg.download && fileStat.size > MAX_WORKBENCH_PREVIEW_BYTES) {
-        const error = new Error(`File is too large to preview (${(fileStat.size / 1024 / 1024).toFixed(1)} MB). The preview limit is 20 MB.`);
+      if (fileStat.size > MAX_WORKBENCH_PREVIEW_BYTES) {
+        const error = new Error(`File is too large to transfer (${(fileStat.size / 1024 / 1024).toFixed(1)} MB). The file limit is 20 MB.`);
         error.code = 'FILE_PREVIEW_TOO_LARGE';
         error.details = {
           sizeBytes: fileStat.size,
@@ -30,22 +202,16 @@ export async function handleReadFile(msg) {
         };
         throw error;
       }
-      // Binary file: read as Buffer, send base64. Downloads bypass only the
-      // rendering limit; the WebSocket transport still enforces its own cap.
       const buffer = await readFile(resolved);
       console.log('[Agent] Sending binary file_content:', { filePath: resolved, size: buffer.length, mimeType, conversationId });
-      sendWorkbenchResult(ctx, msg, {
-        type: 'file_content',
+      await sendBinaryFile(msg, {
         conversationId,
         requestId,
         _requestUserId,
         _requestClientId,
         filePath: resolved,
         requestedFilePath: filePath,
-        content: buffer.toString('base64'),
-        binary: true,
-        mimeType
-      });
+      }, buffer, mimeType);
     } else {
       // Text file: read as utf-8
       const content = await readFile(resolved, 'utf-8');

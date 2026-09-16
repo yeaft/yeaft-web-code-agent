@@ -100,6 +100,13 @@ export const userStatsDb = {
     return stmts.getUserStatsById.get(userId) || null;
   },
 
+  recordTurnCompleted(userId, completedAt = Date.now()) {
+    if (!userId) return;
+    const timestamp = Number(completedAt);
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return;
+    stmts.updateLastTurnCompletedAt.run(userId, timestamp, timestamp);
+  },
+
   /**
    * Convert one cumulative agent snapshot into an idempotent user delta.
    * A new metric epoch means the agent process restarted and counters began at

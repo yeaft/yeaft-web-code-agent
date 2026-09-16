@@ -45,6 +45,13 @@ export default {
         <button class="collapsed-icon-btn" @click="$emit('back')" :title="tr('yeaft.back', 'Back')">
           <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
         </button>
+        <SidebarWorkCenter
+          v-if="chatStore && chatStore.workCenterUiEnabled"
+          :agents="chatStore.agents"
+          :active-agent-id="chatStore.workCenterAgentId"
+          :collapsed="true"
+          @open="onOpenWorkCenter"
+        />
         <div class="collapsed-spacer"></div>
         <button class="collapsed-icon-btn" @click="$emit('open-settings')" :title="tr('chat.sidebar.settings', 'Settings')">
           <svg viewBox="0 0 24 24" width="18" height="18"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="currentColor"/></svg>
@@ -63,15 +70,21 @@ export default {
             :restarting-agents="restartingAgents"
             :upgrading-agents="upgradingAgents"
             :show-agent-actions="true"
+            :can-upgrade-all="bulkUpgradableAgents.length > 0"
+            :upgrading-all="!!chatStore?.agentUpgradeBatch?.pending"
             @open-agent-settings="$emit('open-agent-settings')"
             @restart-agent="restartAgent"
             @upgrade-agent="upgradeAgent"
+            @upgrade-all-agents="upgradeAllAgents"
           />
           <div class="sidebar-header-actions">
             <SidebarModeToggle v-if="!chatStore || !chatStore.sessionCatalogLoaded" view="yeaft" @flip="onModeFlip" />
-            <button class="sidebar-icon-btn sidebar-work-center-header-btn" :class="{ active: chatStore && chatStore.workCenterOpen }" :disabled="workCenterAgents.length === 0" :title="tr('workCenter.title', 'Work Center')" :aria-label="tr('workCenter.title', 'Work Center')" @click="onOpenWorkCenter()">
-              <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path fill="currentColor" d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 5v2h10V8H7zm0 4v2h7v-2H7zm0 4v2h5v-2H7z"/></svg>
-            </button>
+            <SidebarWorkCenter
+              v-if="chatStore && chatStore.workCenterUiEnabled"
+              :agents="chatStore.agents"
+              :active-agent-id="chatStore.workCenterAgentId"
+              @open="onOpenWorkCenter"
+            />
             <button class="sidebar-icon-btn" :title="tr('chat.sidebar.collapse', 'Collapse')" @click="$emit('toggle-sidebar')">
               <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h13v-2H3v2zm0-5h10v-2H3v2zm0-7v2h13V6H3zm18 9.59L17.42 12 21 8.41 19.59 7l-5 5 5 5L21 15.59z"/></svg>
             </button>
@@ -98,13 +111,6 @@ export default {
 
       <div v-else class="us-scroll us-scroll-flush">
         <!-- Legacy Yeaft list stays available until the catalog snapshot arrives. -->
-        <SidebarWorkCenter
-          :agents="chatStore ? chatStore.agents : []"
-          :active-agent-id="chatStore ? chatStore.workCenterAgentId : null"
-          :collapsed="false"
-          :active="chatStore ? chatStore.workCenterOpen : false"
-          @open="onOpenWorkCenter"
-        />
         <div class="session-tab-bar">
           <div class="session-tab session-tab-solo active">
             <svg class="session-tab-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
@@ -263,7 +269,8 @@ export default {
       this.openGroupSettings({ id: pending.sessionId, agentId: pending.agentId }, pending.section || 'session');
     }
     this._agentUpgradeAckHandler = (event) => {
-      const { success, error, alreadyLatest, version, reason, currentNode, requiredNode } = event.detail || {};
+      const { success, error, alreadyLatest, version, reason, currentNode, requiredNode, batchId } = event.detail || {};
+      if (batchId) return;
       if (!success) {
         if (reason === 'node_incompatible') {
           alertDialog(this.$t('chat.agent.nodeIncompatible', {
@@ -282,10 +289,17 @@ export default {
         alertDialog(this.$t('chat.agent.alreadyLatest', { version: version || '' }));
       }
     };
-    if (typeof window !== 'undefined') window.addEventListener('agent-upgrade-ack', this._agentUpgradeAckHandler);
+    this._agentUpgradeBatchHandler = (event) => this.showAgentUpgradeBatchSummary(event.detail || {});
+    if (typeof window !== 'undefined') {
+      window.addEventListener('agent-upgrade-ack', this._agentUpgradeAckHandler);
+      window.addEventListener('agent-upgrade-batch-complete', this._agentUpgradeBatchHandler);
+    }
   },
   beforeUnmount() {
-    if (typeof window !== 'undefined') window.removeEventListener('agent-upgrade-ack', this._agentUpgradeAckHandler);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('agent-upgrade-ack', this._agentUpgradeAckHandler);
+      window.removeEventListener('agent-upgrade-batch-complete', this._agentUpgradeBatchHandler);
+    }
   },
   computed: {
     // Resolve the Pinia store lazily. Guarded so unit tests that mount
@@ -338,6 +352,10 @@ export default {
     },
     upgradingAgents() {
       return Object.fromEntries(Object.entries(this.chatStore?.agentOperations || {}).filter(([, value]) => value.upgrade?.pending));
+    },
+    bulkUpgradableAgents() {
+      const s = this.chatStore || this.store;
+      return typeof s?.getUpgradableAgents === 'function' ? s.getUpgradableAgents() : [];
     },
     chatStore() {
       // Needed for `sessionCrudRequest` and the Yeaft session pin menu.
@@ -431,7 +449,7 @@ export default {
       const target = this.workCenterAgents.find(agent => agent.id === agentId)
         || this.workCenterAgents.find(agent => agent.id === s?.workCenterAgentId)
         || this.workCenterAgents[0];
-      if (target && s && typeof s.enterWorkCenter === 'function') s.enterWorkCenter(target.id);
+      if (s && typeof s.enterWorkCenter === 'function') s.enterWorkCenter(target?.id || null);
     },
     onOpenPlugins() {
       const s = this.chatStore || this.store;
@@ -452,6 +470,21 @@ export default {
       const name = agent?.name || agentId;
       if (!await confirmDialog(this.$t('chat.agent.upgradeConfirm', { name }))) return;
       s.upgradeAgent(agentId);
+    },
+    async upgradeAllAgents() {
+      const s = this.chatStore || this.store;
+      const candidates = this.bulkUpgradableAgents;
+      if (!s || candidates.length === 0) return;
+      const skipped = Math.max(0, (s.agents || []).length - candidates.length);
+      if (!await confirmDialog(this.$t('chat.agent.upgradeAllConfirm', { count: candidates.length, skipped }))) return;
+      s.upgradeAllAgents();
+    },
+    showAgentUpgradeBatchSummary(batch) {
+      const results = Object.values(batch?.results || {});
+      const upgraded = results.filter(result => result.status === 'upgraded').length;
+      const latest = results.filter(result => result.status === 'already_latest').length;
+      const failed = results.filter(result => result.status === 'failed').length;
+      alertDialog(this.$t('chat.agent.upgradeAllSummary', { upgraded, latest, failed, skipped: batch?.skippedCount || 0 }));
     },
     // task-334m: session-create + selection handlers.
     onGroupCreated(_group) {
@@ -476,7 +509,7 @@ export default {
       this.sessionCreateOpen = false;
       this.sessionCreateProject = null;
     },
-    onUnifiedSessionAction({ action, row, title, sessions } = {}) {
+    async onUnifiedSessionAction({ action, row, title, sessions } = {}) {
       if (!row?.routeRef) return;
       const s = this.chatStore || this.store;
       const { runtimeProvider, agentId, sessionId } = row.routeRef;
@@ -486,6 +519,15 @@ export default {
         s?.reorderCatalogSessions?.(sessions);
       } else if (action === 'pin') {
         s?.toggleCatalogSessionPin?.(row);
+      } else if (runtimeProvider === 'yeaft' && action === 'copy') {
+        const result = await s?.copyCatalogSession?.(row);
+        if (!result?.ok) {
+          const code = result?.error?.code || 'unknown';
+          const key = `yeaft.session.error.${code}`;
+          const translated = this.$t(key);
+          const message = translated === key ? (result?.error?.message || code) : translated;
+          await alertDialog(this.$t('yeaft.session.copyFailed', { message }));
+        }
       } else if (runtimeProvider === 'yeaft' && action === 'settings') {
         this.openGroupSettings({ id: sessionId, agentId }, 'session');
       } else if (action === 'remove') {

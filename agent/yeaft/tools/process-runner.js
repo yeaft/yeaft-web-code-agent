@@ -119,7 +119,7 @@ function processGroupIsInactive(pid) {
  *
  * @param {string} command
  * @param {string[]} args
- * @param {{ cwd?: string, signal?: AbortSignal, timeoutMs?: number, maxBytes?: number, env?: NodeJS.ProcessEnv, preserveCarriageReturns?: boolean, killGraceMs?: number, gracefulTerminationDeadline?: number, terminationDeadline?: number, forceSettleMs?: number, treeKillTimeoutMs?: number, requireExitConfirmation?: boolean, requireProcessGroupExit?: boolean, systemdScope?: { unit: string, systemctlPath: string, env?: NodeJS.ProcessEnv } | null, onSettled?: (() => void) | null, platform?: NodeJS.Platform, spawnProcess?: typeof spawn, spawnProcessSync?: typeof spawnSync }} [options]
+ * @param {{ cwd?: string, signal?: AbortSignal, timeoutMs?: number, maxBytes?: number, outputLimitAction?: 'stop'|'head-tail', env?: NodeJS.ProcessEnv, preserveCarriageReturns?: boolean, killGraceMs?: number, gracefulTerminationDeadline?: number, terminationDeadline?: number, forceSettleMs?: number, treeKillTimeoutMs?: number, requireExitConfirmation?: boolean, requireProcessGroupExit?: boolean, systemdScope?: { unit: string, systemctlPath: string, env?: NodeJS.ProcessEnv } | null, onSettled?: (() => void) | null, platform?: NodeJS.Platform, spawnProcess?: typeof spawn, spawnProcessSync?: typeof spawnSync }} [options]
  * @returns {Promise<{ code: number, stdout: string, stderr: string, truncated: boolean, timedOut: boolean, terminationError?: string }>}
  */
 export function runProcess(command, args, options = {}) {
@@ -135,6 +135,7 @@ export function runProcess(command, args, options = {}) {
     const maxBytes = Number.isFinite(options.maxBytes)
       ? Math.max(0, options.maxBytes)
       : DEFAULT_MAX_BYTES;
+    const keepOutputTail = options.outputLimitAction === 'head-tail';
     const killGraceMs = Number.isFinite(options.killGraceMs)
       ? Math.max(0, options.killGraceMs)
       : DEFAULT_KILL_GRACE_MS;
@@ -212,6 +213,18 @@ export function runProcess(command, args, options = {}) {
     };
     const decode = (chunks, wasTruncated, preserveCarriageReturns = false) => {
       const decoder = new StringDecoder('utf8');
+      if (wasTruncated && keepOutputTail) {
+        const buffer = Buffer.concat(chunks);
+        const marker = '\n[Process output middle omitted]\n';
+        const budget = Math.max(0, maxBytes - Buffer.byteLength(marker));
+        const headEnd = Math.floor(budget / 2);
+        let tailStart = buffer.length - (budget - headEnd);
+        while (tailStart < buffer.length && (buffer[tailStart] & 0xc0) === 0x80) tailStart += 1;
+        const head = decoder.write(buffer.subarray(0, headEnd));
+        const tail = new StringDecoder('utf8').write(buffer.subarray(tailStart));
+        const value = head + marker.slice(0, maxBytes) + tail;
+        return preserveCarriageReturns ? value : value.replace(/\r/g, '');
+      }
       let value = decoder.write(Buffer.concat(chunks));
       if (!wasTruncated) value += decoder.end();
       return preserveCarriageReturns ? value : value.replace(/\r/g, '');
@@ -357,6 +370,21 @@ export function runProcess(command, args, options = {}) {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       const current = isStdout ? stdoutBytes : stderrBytes;
       const remaining = maxBytes - current;
+      if (keepOutputTail && (buffer.length > remaining || (isStdout ? stdoutTruncated : stderrTruncated))) {
+        const prior = Buffer.concat(target);
+        const headSize = Math.floor(maxBytes / 2);
+        const tailSize = maxBytes - headSize;
+        const head = prior.length >= headSize ? prior.subarray(0, headSize)
+          : Buffer.concat([prior, buffer.subarray(0, headSize - prior.length)]);
+        const tail = buffer.length >= tailSize ? buffer.subarray(buffer.length - tailSize)
+          : Buffer.concat([prior.subarray(Math.max(0, prior.length - (tailSize - buffer.length))), buffer]);
+        // Copy slices so a tiny retained tail cannot retain an unbounded chunk.
+        target.splice(0, target.length, Buffer.from(head), Buffer.from(tail));
+        truncated = true;
+        if (isStdout) { stdoutTruncated = true; stdoutBytes = maxBytes; }
+        else { stderrTruncated = true; stderrBytes = maxBytes; }
+        return;
+      }
       if (remaining <= 0) {
         truncated = true;
         if (isStdout) stdoutTruncated = true;

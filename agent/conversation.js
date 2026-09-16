@@ -423,10 +423,12 @@ export async function resumeConversation(msg) {
   console.log(`[Resume] claudeSessionId: ${claudeSessionId}`);
   console.log(`[Resume] workDir: ${effectiveWorkDir} (lazy start)`);
 
-  // 清理旧条目：同 conversationId 或同 claudeSessionId 的条目（避免重复恢复同一个 session 累积）
+  // 清理旧条目：CLI session ID 只在当前实例的同 owner/provider 内去重。
   let priorProviderOptions = null;
   for (const [id, conv] of ctx.conversations) {
-    if (id === conversationId || (claudeSessionId && conv.claudeSessionId === claudeSessionId)) {
+    if (id === conversationId || (claudeSessionId && conv.claudeSessionId === claudeSessionId &&
+      (conv.providerName || DEFAULT_PROVIDER) === provider &&
+      (conv.userId || null) === (userId || null))) {
       console.log(`[Resume] Cleaning up old conversation: ${id} (claudeSessionId: ${conv.claudeSessionId})`);
       if (conv.providerOptions && !priorProviderOptions) priorProviderOptions = conv.providerOptions;
       let cleanupDriver = null;

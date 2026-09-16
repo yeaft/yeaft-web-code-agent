@@ -4,13 +4,15 @@ import VpSpeakerHeader from './VpSpeakerHeader.js';
 import { normalizeTerminalOutput } from '../utils/terminal-output.js';
 import { normalizeRouteForwardDisplay } from '../utils/route-forward-display.js';
 import { getTodoDisplayState } from '../utils/todo-display-state.js';
-import { renderMermaidIn } from '../utils/markdown.js';
+import { configureMarked, renderMermaidIn } from '../utils/markdown.js';
 import { openImagePreview } from '../utils/imagePreview.js';
 import { formatSessionMessageDateTime, quoteFromAssistantTurn } from '../utils/session-message-quote.js';
 import {
   collectMessageFileReferences,
+  collectMessageImageReferences,
   decorateMessageFileReferences,
   resolveMessageFileReference,
+  resolveMessageImageFileReference,
 } from '../utils/message-file-reference.js';
 
 export default {
@@ -60,6 +62,7 @@ export default {
     },
     sessionActions: { type: Boolean, default: false },
     quoteAuthor: { type: String, default: '' },
+    originMessageId: { type: String, default: '' },
     // VpTurnBlock opts into the turn-scoped debug action. Keeping this
     // opt-in preserves the legacy Chat footer unchanged.
     showDebugAction: { type: Boolean, default: false },
@@ -67,7 +70,12 @@ export default {
   },
   emits: ['update-actions-expanded', 'update-tool-expanded', 'toggle-response-collapse', 'quote', 'open-debug'],
   template: `
-    <div class="assistant-turn" ref="turnRef" :class="{ streaming: turn.isStreaming, 'has-vp-speaker': !!turn.speakerVpId, 'has-turn-debug-action': showDebugAction }">
+    <div
+      class="assistant-turn"
+      ref="turnRef"
+      :class="{ streaming: turn.isStreaming, 'has-vp-speaker': !!turn.speakerVpId, 'has-turn-debug-action': showDebugAction }"
+      :data-response-origin-id="originMessageId || null"
+    >
       <!-- 0. task-334-ui-b: VP speaker header — only when a speakerVpId is
            bound AND the upstream consecutive-collapse decided this turn
            should show the attribution. Legacy 1:1 chat turns leave
@@ -150,6 +158,7 @@ export default {
               :tool-input="tool.toolInput"
               :tool-result="tool.toolResult"
               :has-result="!!tool.hasResult"
+              :is-error="!!tool.isError"
               :start-time="tool.startTime"
               :expanded="toolExpandedValue(tool, i, 'history')"
               @update:expanded="value => updateToolExpanded(tool, i, 'history', value)"
@@ -169,6 +178,7 @@ export default {
             :tool-input="latestTool.toolInput"
             :tool-result="latestTool.toolResult"
             :has-result="!!latestTool.hasResult"
+            :is-error="!!latestTool.isError"
             :start-time="latestTool.startTime"
             :expanded="toolExpandedValue(latestTool, latestToolIndex, 'latest')"
             @update:expanded="value => updateToolExpanded(latestTool, latestToolIndex, 'latest', value)"
@@ -199,14 +209,24 @@ export default {
       </div>
 
       <!-- 6. Response footer actions (visible on hover) -->
-      <div class="turn-footer" v-if="(turn.textContent || responseCollapsible || showDebugAction || (sessionActions && (turn.todoMsg || turn.toolMsgs?.length))) && !turn.isStreaming">
-        <span
-          v-if="turnTime && !turn.speakerVpId"
-          class="turn-time"
-          :title="turnTimeFull"
-          :aria-label="$t('yeaft.message.timeAria', { time: turnTimeFull })"
-        >{{ turnTime }}</span>
-        <span v-if="turn.llmCallCount > 0" class="turn-time">{{ $t(turn.llmCallCount === 1 ? 'yeaft.message.llmCall' : 'yeaft.message.llmCalls', { count: turn.llmCallCount }) }}</span>
+      <div
+        class="turn-footer"
+        v-if="(turn.textContent || responseCollapsible || showDebugAction || (sessionActions && (turn.todoMsg || turn.toolMsgs?.length))) && !turn.isStreaming"
+      >
+        <div
+          v-if="(turnTime && !turn.speakerVpId) || responseModelMeta || turn.llmCallCount > 0 || responseTokenMeta"
+          class="turn-response-meta"
+        >
+          <span
+            v-if="turnTime && !turn.speakerVpId"
+            class="turn-time"
+            :title="turnTimeFull"
+            :aria-label="$t('yeaft.message.timeAria', { time: turnTimeFull })"
+          >{{ turnTime }}</span>
+          <span v-if="responseModelMeta" class="turn-time turn-model-meta" :title="responseModelMeta">{{ responseModelMeta }}</span>
+          <span v-if="turn.llmCallCount > 0" class="turn-time">{{ $t(turn.llmCallCount === 1 ? 'yeaft.message.llmCall' : 'yeaft.message.llmCalls', { count: turn.llmCallCount }) }}</span>
+          <span v-if="responseTokenMeta" class="turn-time turn-token-meta" :title="responseTokenMeta">{{ responseTokenMeta }}</span>
+        </div>
         <button
           v-if="showDebugAction"
           type="button"
@@ -273,7 +293,17 @@ export default {
     const turnRef = Vue.ref(null);
     const failedImages = Vue.reactive(new Set());
     const resolvedFileReferences = Vue.reactive(new Map());
-    let fileReferenceRequestId = null;
+    const resolvedMessageImageUrls = Vue.reactive(new Map());
+    const pendingMessageImageReads = new Map();
+    const pendingFileReferenceRequests = new Map();
+    const requestedFileReferences = new Set();
+    const admittedFileReferences = new Set();
+    const retryableFileReferences = new Set();
+    const fileReferenceRetries = new Map();
+    const fileReferenceRechecks = new Map();
+    let fileReferenceRequestContextKey = '';
+    let fileReferenceTimer = null;
+    let fileReferenceRetryTimer = null;
     const t = Vue.inject('t');
 
     // AskUserQuestion — delegate to AskCard component
@@ -340,23 +370,9 @@ export default {
     };
 
     // Markdown rendering
-    const configureMarked = () => {
-      if (typeof marked !== 'undefined') {
-        marked.setOptions({
-          highlight: function(code, lang) {
-            if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
-              try { return hljs.highlight(code, { language: lang }).value; } catch (e) {}
-            }
-            return code;
-          },
-          breaks: true,
-          gfm: true
-        });
-      }
-    };
     configureMarked();
 
-    const renderSegment = (value) => {
+    const segmentText = (value) => {
       let content = value;
       if (typeof content !== 'string') {
         if (Array.isArray(content)) {
@@ -369,7 +385,11 @@ export default {
           content = String(content);
         }
       }
-      content = normalizeTerminalOutput(content);
+      return normalizeTerminalOutput(content || '');
+    };
+
+    const renderSegment = (value) => {
+      const content = segmentText(value);
       if (!content) return '';
       try {
         if (typeof marked !== 'undefined') {
@@ -377,6 +397,8 @@ export default {
           return decorateMessageFileReferences(
             wrapTables(addCodeBlockCopyButtons(html)),
             resolvedFileReferences,
+            resolvedMessageImageUrls,
+            store.effectiveWorkDir || '',
           );
         }
       } catch (e) {
@@ -386,9 +408,26 @@ export default {
     };
 
     const onMarkdownClick = (event) => {
+      const image = event.target?.closest?.('img');
+      if (image && event.currentTarget?.contains?.(image)) {
+        const src = image.getAttribute('src');
+        if (src) {
+          event.preventDefault();
+          event.stopPropagation();
+          openImagePreview(src, {
+            alt: image.getAttribute('alt') || t('message.imagePreview'),
+            closeLabel: t('common.close'),
+            zoomOutLabel: t('message.zoomOut'),
+            zoomInLabel: t('message.zoomIn'),
+            resetZoomLabel: t('message.resetZoom'),
+            trigger: image,
+          });
+        }
+        return;
+      }
       const anchor = event.target?.closest?.('a[href]');
       if (!anchor || !event.currentTarget?.contains?.(anchor)) return;
-      const reference = resolveMessageFileReference(anchor.getAttribute('href'));
+      const reference = resolveMessageFileReference(anchor.getAttribute('href'), { htmlEncoded: false });
       const resolvedPath = anchor.dataset?.resolvedFilePath;
       if (!reference || !resolvedPath) return;
       event.preventDefault();
@@ -407,50 +446,177 @@ export default {
     const progressSegments = Vue.computed(() => textSegments.value.filter(segment => segment.kind !== 'result'));
     const resultSegments = Vue.computed(() => textSegments.value.filter(segment => segment.kind === 'result'));
 
-    const fileReferenceSourceSignature = Vue.computed(() => textSegments.value.map(segment => {
-      if (typeof segment?.content === 'string') return segment.content;
-      return segment?.content == null ? '' : JSON.stringify(segment.content);
-    }).join('\u0000'));
+    const fileReferenceSourceSignature = Vue.computed(() => [
+      ...textSegments.value.map(segment => {
+        if (typeof segment?.content === 'string') return segment.content;
+        return segment?.content == null ? '' : JSON.stringify(segment.content);
+      }),
+      ...(Array.isArray(props.turn?.imageMsgs)
+        ? props.turn.imageMsgs.map(image => image?.src || image?.fileId || '')
+        : []),
+    ].join('\u0000'));
+    const localImagePaths = new Set();
+    const resetFileReferenceResolution = () => {
+      clearTimeout(fileReferenceTimer);
+      clearTimeout(fileReferenceRetryTimer);
+      fileReferenceTimer = null;
+      fileReferenceRetryTimer = null;
+      pendingFileReferenceRequests.clear();
+      requestedFileReferences.clear();
+      admittedFileReferences.clear();
+      retryableFileReferences.clear();
+      fileReferenceRetries.clear();
+      fileReferenceRechecks.clear();
+      resolvedFileReferences.clear();
+      resolvedMessageImageUrls.clear();
+      pendingMessageImageReads.clear();
+      fileReferenceRequestContextKey = store.fileReferenceResolutionContextKey || '';
+    };
     const requestFileReferenceResolution = () => {
-      if (props.turn?.isStreaming) return;
+      clearTimeout(fileReferenceTimer);
+      fileReferenceTimer = null;
       const references = new Set();
+      localImagePaths.clear();
       for (const segment of textSegments.value) {
         if (!segment?.content || typeof marked === 'undefined') continue;
         try {
-          const html = marked.parse(typeof segment.content === 'string' ? segment.content : String(segment.content));
-          for (const path of collectMessageFileReferences(html)) references.add(path);
+          const html = marked.parse(segmentText(segment.content));
+          const workDir = store.effectiveWorkDir || '';
+          for (const path of collectMessageFileReferences(html, workDir)) references.add(path);
+          for (const path of collectMessageImageReferences(html, workDir)) localImagePaths.add(path);
         } catch (_) {}
       }
-      resolvedFileReferences.clear();
-      fileReferenceRequestId = store.resolveMessageFileReferences?.([...references]) || null;
+      for (const image of Array.isArray(props.turn?.imageMsgs) ? props.turn.imageMsgs : []) {
+        const reference = resolveMessageImageFileReference(image?.src, store.effectiveWorkDir || '');
+        if (reference) {
+          references.add(reference.path);
+          localImagePaths.add(reference.path);
+        }
+      }
+      // Resolve incrementally while streaming, not on every token. Keep a
+      // bounded per-turn set and batch to the Agent's 32-reference wire limit.
+      const paths = [...references].filter(path => {
+        if (requestedFileReferences.has(path)) return false;
+        if (admittedFileReferences.has(path)) return true;
+        if (admittedFileReferences.size >= 128) return false;
+        admittedFileReferences.add(path);
+        return true;
+      });
+      for (let offset = 0; offset < paths.length; offset += 32) {
+        const batch = paths.slice(offset, offset + 32);
+        batch.forEach(path => requestedFileReferences.add(path));
+        const requestId = store.resolveMessageFileReferences?.(batch);
+        if (!requestId) {
+          scheduleFileReferenceRetry(batch);
+          continue;
+        }
+        pendingFileReferenceRequests.set(requestId, {
+          contextKey: fileReferenceRequestContextKey,
+          paths: new Set(batch),
+        });
+      }
+    };
+    // Only transport/Agent errors retry automatically, at most twice per path.
+    // A genuinely missing file is rechecked after subsequent Session work, not
+    // polled forever. Keep the unique-path cap even when retrying a request.
+    const scheduleFileReferenceRetry = paths => {
+      for (const path of paths) {
+        if (!resolvedFileReferences.has(path) && (fileReferenceRetries.get(path) || 0) < 2) {
+          retryableFileReferences.add(path);
+        }
+      }
+      if (!retryableFileReferences.size || fileReferenceRetryTimer !== null) return;
+      fileReferenceRetryTimer = setTimeout(() => {
+        fileReferenceRetryTimer = null;
+        for (const path of retryableFileReferences) {
+          requestedFileReferences.delete(path);
+          fileReferenceRetries.set(path, (fileReferenceRetries.get(path) || 0) + 1);
+        }
+        retryableFileReferences.clear();
+        requestFileReferenceResolution();
+      }, 1500);
+    };
+    const recheckUnresolvedFileReferences = () => {
+      const pendingPaths = new Set([...pendingFileReferenceRequests.values()].flatMap(pending => [...pending.paths]));
+      let needsRecheck = false;
+      for (const path of requestedFileReferences) {
+        // Bound later-turn rechecks too: hundreds of old missing references
+        // must not be scanned on every future turn in a long Session.
+        const rechecks = fileReferenceRechecks.get(path) || 0;
+        if (!resolvedFileReferences.has(path) && !pendingPaths.has(path)
+          && !retryableFileReferences.has(path) && rechecks < 2) {
+          requestedFileReferences.delete(path);
+          fileReferenceRechecks.set(path, rechecks + 1);
+          needsRecheck = true;
+        }
+      }
+      if (needsRecheck) requestFileReferenceResolution();
     };
     const handleFileReferenceResolution = event => {
       const msg = event.detail;
-      if (!fileReferenceRequestId || msg?.type !== 'file_references_resolved'
-          || msg.requestId !== fileReferenceRequestId) return;
-      fileReferenceRequestId = null;
-      resolvedFileReferences.clear();
+      if (msg?.type === 'file_content') {
+        const pending = pendingMessageImageReads.get(msg.requestId);
+        if (!pending) return;
+        pendingMessageImageReads.delete(msg.requestId);
+        if (pending.contextKey !== (store.fileReferenceResolutionContextKey || '')) return;
+        if (!msg.error && msg.binary && msg.previewUrl) {
+          resolvedMessageImageUrls.set(pending.requestedPath, msg.previewUrl);
+        }
+        return;
+      }
+      if (msg?.type !== 'file_references_resolved') return;
+      const pending = pendingFileReferenceRequests.get(msg.requestId);
+      if (!pending) return;
+      pendingFileReferenceRequests.delete(msg.requestId);
+      if ((store.fileReferenceResolutionContextKey || '') !== pending.contextKey) return;
+      if (msg.error) {
+        scheduleFileReferenceRetry(pending.paths);
+        return;
+      }
       for (const entry of msg.references || []) {
-        if (entry?.requestedPath && entry?.resolvedPath) {
-          resolvedFileReferences.set(entry.requestedPath, entry.resolvedPath);
+        if (!pending.paths.has(entry?.requestedPath) || !entry?.resolvedPath) continue;
+        resolvedFileReferences.set(entry.requestedPath, entry.resolvedPath);
+        if (localImagePaths.has(entry.requestedPath)) {
+          const requestId = store.requestMessageImagePreview?.(entry.resolvedPath);
+          if (requestId) pendingMessageImageReads.set(requestId, {
+            requestedPath: entry.requestedPath,
+            contextKey: fileReferenceRequestContextKey,
+          });
         }
       }
     };
     Vue.onMounted(() => {
       window.addEventListener('workbench-message', handleFileReferenceResolution);
+      resetFileReferenceResolution();
       requestFileReferenceResolution();
     });
-    Vue.onBeforeUnmount(() => window.removeEventListener('workbench-message', handleFileReferenceResolution));
+    Vue.onBeforeUnmount(() => {
+      window.removeEventListener('workbench-message', handleFileReferenceResolution);
+      resetFileReferenceResolution();
+    });
     Vue.watch(
       [() => props.turn?.isStreaming, fileReferenceSourceSignature, () => store.fileReferenceResolutionContextKey],
       ([streaming, signature, contextKey], [previousStreaming, previousSignature, previousContextKey]) => {
-        if (!streaming
-            && (previousStreaming || signature !== previousSignature || contextKey !== previousContextKey)) {
+        if (contextKey !== previousContextKey || !streaming) {
+          // Completion rechecks files that were not created yet while streaming;
+          // a changed route discards every response from the previous workspace.
+          resetFileReferenceResolution();
           requestFileReferenceResolution();
+        } else if (signature !== previousSignature || streaming !== previousStreaming) {
+          if (fileReferenceTimer === null) {
+            fileReferenceTimer = setTimeout(requestFileReferenceResolution, 500);
+          }
         }
       },
       { flush: 'post' },
     );
+    Vue.watch(() => store.isProcessing, (processing, previous) => {
+      // Older completed replies can reference a file created by a later turn.
+      // Recheck only unresolved paths when this Session finishes work.
+      if (previous === true && processing === false && !props.turn?.isStreaming) {
+        recheckUnresolvedFileReferences();
+      }
+    }, { flush: 'post' });
 
     const addCodeBlockCopyButtons = (html) => {
       return html.replace(/<pre><code([^>]*)>([\s\S]*?)<\/code><\/pre>/g,
@@ -612,7 +778,10 @@ export default {
 
     // Image helpers
     const imageSrc = (msg) => {
-      if (msg?.src) return msg.src;
+      if (msg?.src) {
+        const reference = resolveMessageImageFileReference(msg.src, store.effectiveWorkDir || '');
+        return reference ? (resolvedMessageImageUrls.get(reference.path) || '') : msg.src;
+      }
       if (!msg?.fileId) return '';
       const token = msg.previewToken || '';
       return `/api/preview/${msg.fileId}?token=${token}`;
@@ -639,6 +808,9 @@ export default {
       openImagePreview(images[initialIndex].src, {
         alt: images[initialIndex].alt,
         closeLabel: t('common.close'),
+        zoomOutLabel: t('message.zoomOut'),
+        zoomInLabel: t('message.zoomIn'),
+        resetZoomLabel: t('message.resetZoom'),
         previousLabel: t('message.previousImage'),
         nextLabel: t('message.nextImage'),
         positionLabel: (current, total) => t('message.imagePosition', { current, total }),
@@ -680,12 +852,34 @@ export default {
       props.turn,
       props.quoteAuthor || t('message.assistant')
     ));
+    const responseModelMeta = Vue.computed(() => {
+      const configuredModel = typeof props.turn?.model === 'string' ? props.turn.model.trim() : '';
+      if (!configuredModel) return '';
+      const slashIndex = configuredModel.lastIndexOf('/');
+      return slashIndex >= 0 ? configuredModel.slice(slashIndex + 1) : configuredModel;
+    });
+    const responseTokenMeta = Vue.computed(() => {
+      const input = Number.isFinite(props.turn?.inputTokens) ? Math.max(0, Math.round(props.turn.inputTokens)) : null;
+      const output = Number.isFinite(props.turn?.outputTokens) ? Math.max(0, Math.round(props.turn.outputTokens)) : null;
+      const total = Number.isFinite(props.turn?.totalTokens)
+        ? Math.max(0, Math.round(props.turn.totalTokens))
+        : (input != null && output != null ? input + output : null);
+      if (total == null || input == null || output == null || (total === 0 && input === 0 && output === 0)) return '';
+      const formatTokenCount = value => new Intl.NumberFormat().format(value);
+      return t('yeaft.message.tokenUsage', {
+        total: formatTokenCount(total),
+        input: formatTokenCount(input),
+        output: formatTokenCount(output),
+      });
+    });
 
     return {
       onStopTurn,
       turnTime,
       turnTimeFull,
       assistantQuote,
+      responseModelMeta,
+      responseTokenMeta,
       copied,
       fullCopied,
       expanded,

@@ -1,11 +1,10 @@
 import {
   formatRepoWorkflowError,
-  landRepoWorkflow,
   prepareRepoReview,
   prepareRepoWorkflow,
 } from './repo-workflow.js';
 
-const COMMANDS = new Set(['prepare', 'review-prep', 'land']);
+const COMMANDS = new Set(['prepare', 'review-prep']);
 
 function requireValue(argv, index, option) {
   const value = argv[index + 1];
@@ -47,13 +46,6 @@ export function parseRepoWorkflowArgs(argv) {
       case '--name': options.name = value; break;
       case '--worktree': options.worktreePath = value; break;
       case '--pr': options.pr = parseInteger(value, arg); break;
-      case '--reviewed-head': options.reviewedHead = value; break;
-      case '--reviewed-snapshot': options.reviewedSnapshot = value; break;
-      case '--tag-prefix': options.tagPrefix = value; break;
-      case '--tag-start': options.tagStart = parseInteger(value, arg); break;
-      case '--workflow': options.workflow = value; break;
-      case '--wait-timeout-ms': options.waitTimeoutMs = parseInteger(value, arg); break;
-      case '--poll-interval-ms': options.pollIntervalMs = parseInteger(value, arg); break;
       default: throw new Error(`Unknown option: ${arg}`);
     }
   }
@@ -61,17 +53,39 @@ export function parseRepoWorkflowArgs(argv) {
 }
 
 export function repoWorkflowHelp(command = null) {
-  const common = `Common options:\n  --cwd <path>          Repository or worktree path (default: current directory)\n  --remote <name>       Git remote (default: origin)`;
+  const common = `Common options:
+  --cwd <path>          Repository or worktree path (default: current directory)
+  --remote <name>       Git remote (default: origin)`;
   if (command === 'prepare') {
-    return `Usage: yeaft-repo prepare --name <name> [options]\n\nFetch the default branch and create or reuse an exact-base development worktree.\n\nOptions:\n  --name <name>         Worktree and yeaft-wt/<name> branch name\n  --base <branch>       Base branch (default: repository default)\n  --worktree <path>     Worktree path\n${common}`;
+    return `Usage: yeaft-repo prepare --name <name> [options]
+
+Fetch the default branch and create or reuse an exact-base development worktree.
+
+Options:
+  --name <name>         Worktree and yeaft-wt/<name> branch name
+  --base <branch>       Base branch (default: repository default)
+  --worktree <path>     Worktree path
+${common}`;
   }
   if (command === 'review-prep') {
-    return `Usage: yeaft-repo review-prep --pr <number> [options]\n\nFreeze GitHub PR head/base/merge refs and create a clean detached review worktree.\n\nOptions:\n  --pr <number>         Pull request number\n  --name <name>         Review worktree name\n  --worktree <path>     Review worktree path\n${common}`;
+    return `Usage: yeaft-repo review-prep --pr <number> [options]
+
+Freeze GitHub PR head/base/merge refs and create or reuse a clean detached review worktree.
+
+Options:
+  --pr <number>         Pull request number
+  --name <name>         Review worktree name
+  --worktree <path>     Review worktree path
+${common}`;
   }
-  if (command === 'land') {
-    return `Usage: yeaft-repo land [options]\n\nLanding is unavailable from the standalone CLI. Use RepoWorkflow inside a Session turn carrying a host-issued, exact-review approval capability.\n${common}`;
-  }
-  return `yeaft-repo — deterministic GitHub repository workflow\n\nUsage:\n  yeaft-repo prepare --name <name> [options]\n  yeaft-repo review-prep --pr <number> [options]\n\nThe standalone CLI cannot land pull requests; Session landing requires a host-issued approval capability.\nEach command emits one JSON result. GitHub repositories require authenticated git and gh CLIs.\nRun yeaft-repo <command> --help for command options.`;
+  return `yeaft-repo — deterministic GitHub worktree preparation
+
+Usage:
+  yeaft-repo prepare --name <name> [options]
+  yeaft-repo review-prep --pr <number> [options]
+
+Each command emits one JSON result. GitHub repositories require authenticated git and gh CLIs.
+Run yeaft-repo <command> --help for command options.`;
 }
 
 export async function runRepoWorkflowCli(argv, dependencies = {}) {
@@ -83,19 +97,13 @@ export async function runRepoWorkflowCli(argv, dependencies = {}) {
       writeOut(repoWorkflowHelp(parsed.command));
       return 0;
     }
-    let result;
-    if (parsed.command === 'prepare') {
-      result = await prepareRepoWorkflow(parsed.options, dependencies);
-    } else if (parsed.command === 'review-prep') {
-      result = await prepareRepoReview(parsed.options, dependencies);
-    } else {
-      result = await landRepoWorkflow(parsed.options, dependencies);
-    }
+    const result = parsed.command === 'prepare'
+      ? await prepareRepoWorkflow(parsed.options, dependencies)
+      : await prepareRepoReview(parsed.options, dependencies);
     writeOut(JSON.stringify(result));
     return 0;
   } catch (error) {
-    const result = formatRepoWorkflowError(error);
-    writeErr(JSON.stringify(result));
+    writeErr(JSON.stringify(formatRepoWorkflowError(error)));
     return 1;
   }
 }

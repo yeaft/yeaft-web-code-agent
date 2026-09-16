@@ -36,6 +36,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { snapshotEffortDecision } from '../effort.js';
 
 const DEFAULT_DIR = path.join(os.homedir(), '.yeaft', 'sub-agents');
 const MAX_BYTES = 2 * 1024 * 1024;      // 2 MiB before rotation
@@ -203,6 +204,9 @@ function serialize(evt) {
     out.error = typeof evt.error === 'string'
       ? evt.error
       : (evt.error.message || String(evt.error));
+  }
+  if (evt.parentEffortDecision && (evt.type === 'sub_agent_spawned' || evt.type === 'sub_agent_effort_snapshot')) {
+    out.parentEffortDecision = snapshotEffortDecision(evt.parentEffortDecision);
   }
   if (evt.status) out.status = evt.status;
   if (typeof evt.tokens === 'number') out.tokens = evt.tokens;

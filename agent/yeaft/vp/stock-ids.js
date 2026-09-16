@@ -38,6 +38,8 @@ const STOCK_VP_ID_LIST = Object.freeze([
   'einstein',
   // arts / culture
   'kubrick', 'miyazaki',
+  // industry assistants
+  'software-omni', 'writing-omni', 'short-video-omni', 'quant-omni',
   // assistant
   'omni',
 ]);

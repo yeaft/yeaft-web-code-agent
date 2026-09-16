@@ -8,11 +8,28 @@ import { createQuickOpen } from './files/quickOpen.js';
 import { createFolderPicker } from './files/folderPicker.js';
 import { createFileTabs } from './files/fileTabs.js';
 import { createWsHandler } from './files/wsHandler.js';
+import { openImagePreview } from '../utils/imagePreview.js';
 import {
   createRouteBoundWorkbenchStore,
   workbenchRouteKey,
   workbenchWorkspaceGeneration,
 } from '../utils/workbench-route.js';
+
+export function updateMediaPreviewState(file, event, errorMessage = '') {
+  const eventSrc = event?.currentTarget?.src || event?.target?.src;
+  if (!file?.blobUrl || !eventSrc) return false;
+  let expectedSrc = file.blobUrl;
+  try {
+    expectedSrc = new URL(file.blobUrl, `${location.protocol}//${location.host}`).href;
+  } catch {}
+  if (eventSrc !== expectedSrc) return false;
+  file.previewLoading = false;
+  file.previewError = errorMessage || null;
+  return true;
+}
+
+// Compatibility export for image-specific callers and tests.
+export const updateImagePreviewState = updateMediaPreviewState;
 
 export function createFileCloseEventHandlers({ liveStore, props, tabs, isDisposed }) {
   const isCurrentEvent = event => (
@@ -108,7 +125,7 @@ export default {
         </button>
       </div>
       <!-- 左栏: 层级目录树 -->
-      <div class="file-col-tree" :class="{ 'drop-active': externalDropActive }" :style="{ flex: '0 0 ' + treePanelWidth + 'px', transition: isTreeResizing ? 'none' : undefined, fontSize: fontSize + 'px' }" @wheel.ctrl.prevent="onWheel"
+      <div class="file-col-tree" :class="{ 'drop-active': externalDropActive }" :style="{ flex: '0 0 ' + treePanelWidth + 'px', transition: isTreeResizing ? 'none' : undefined, fontSize: fontSize + 'px' }" @wheel.ctrl="onWheel"
         @dragover.prevent="onTreeDragOver($event)"
         @dragleave="onTreeDragLeave($event)"
         @drop.prevent="onTreeDrop($event)"
@@ -147,7 +164,7 @@ export default {
               <button class="vscode-action-btn" @click="showNewFileDialog('directory')" :title="$t('files.newFolder')">
                 <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-1 8h-3v3h-2v-3h-3v-2h3V9h2v3h3v2z"/></svg>
               </button>
-              <button class="vscode-action-btn" @click="loadRootDirectory" :title="$t('common.refresh')">
+              <button class="vscode-action-btn" @click="refresh" :title="$t('common.refresh')">
                 <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
               </button>
               <button class="vscode-action-btn" @click="openFolderPicker" :title="$t('files.openFolder')">
@@ -254,7 +271,7 @@ export default {
       </div>
 
       <!-- 右栏: 文件编辑器（带标签页） -->
-      <div class="file-col-content" v-if="openFiles.length > 0" @wheel.ctrl.prevent="onWheel">
+      <div class="file-col-content" v-if="openFiles.length > 0" @wheel.ctrl="onWheel">
         <!-- Mobile back navigation bar -->
         <div class="mobile-file-back-bar" v-if="isMobile">
           <button class="mobile-back-btn" @click="mobileGoBack">
@@ -280,9 +297,17 @@ export default {
               <button type="button" class="file-action-btn file-action-text" :class="{ active: mdPreviewMode }" @click="mdPreviewMode = true">{{ $t('files.preview') }}</button>
               <button type="button" class="file-action-btn file-action-text" :class="{ active: !mdPreviewMode }" @click="switchToMdEdit">{{ $t('files.edit') }}</button>
             </template>
-            <button type="button" class="zoom-btn" @click="zoomOut" :title="$t('git.zoomOut')">−</button>
-            <span class="zoom-label">{{ fontSize }}</span>
-            <button type="button" class="zoom-btn" @click="zoomIn" :title="$t('git.zoomIn')">+</button>
+            <template v-if="isTextZoomAvailable">
+              <button type="button" class="zoom-btn" @click="zoomOut" :title="$t('git.zoomOut')">−</button>
+              <span class="zoom-label">{{ fontSize }}</span>
+              <button type="button" class="zoom-btn" @click="zoomIn" :title="$t('git.zoomIn')">+</button>
+            </template>
+            <button
+              v-if="activeFile.fileType === 'video'"
+              type="button"
+              class="file-action-btn file-action-text"
+              @click="downloadActiveFile"
+            >{{ $t('files.download') }}</button>
             <button type="button" class="file-action-btn" :class="{ active: activeFile.isDirty }" @click="saveFile" :disabled="!activeFile.isDirty || fileSaving" :title="$t('common.save') + ' (Ctrl+S)'">
               <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M17 3H5c-1.11 0-2 .89-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/></svg>
             </button>
@@ -372,8 +397,44 @@ export default {
           <!-- 图片预览 -->
           <div v-else-if="activeFile.fileType === 'image'" class="file-preview-container">
             <div v-if="activeFile.previewError" class="preview-error">{{ activeFile.previewError }}</div>
-            <div v-else-if="activeFile.previewLoading || !activeFile.blobUrl" class="preview-loading"><span class="spinner-mini"></span> {{ $t('files.loadingPreview') }}</div>
-            <img v-else :src="activeFile.blobUrl" class="file-preview-image" />
+            <template v-else>
+              <div v-if="activeFile.previewLoading || !activeFile.blobUrl" class="preview-loading"><span class="spinner-mini"></span> {{ $t('files.loadingPreview') }}</div>
+              <button
+                v-if="activeFile.blobUrl"
+                v-show="!activeFile.previewLoading"
+                type="button"
+                class="file-preview-image-button"
+                @click="openActiveImagePreview($event.currentTarget)"
+                :title="$t('message.imagePreview')"
+              >
+                <img
+                  :src="activeFile.blobUrl"
+                  :alt="activeFile.name"
+                  class="file-preview-image"
+                  @load="onImagePreviewLoad(activeFile, $event)"
+                  @error="onImagePreviewError(activeFile, $event)"
+                />
+              </button>
+            </template>
+          </div>
+          <!-- 视频预览 -->
+          <div v-else-if="activeFile.fileType === 'video'" class="file-preview-container file-preview-video-container">
+            <div v-if="activeFile.previewError" class="preview-error">{{ activeFile.previewError }}</div>
+            <template v-else>
+              <div v-if="activeFile.previewLoading || !activeFile.blobUrl" class="preview-loading"><span class="spinner-mini"></span> {{ $t('files.loadingPreview') }}</div>
+              <video
+                v-if="activeFile.blobUrl"
+                v-show="!activeFile.previewLoading"
+                :src="activeFile.blobUrl"
+                :aria-label="activeFile.name"
+                class="file-preview-video"
+                controls
+                preload="metadata"
+                playsinline
+                @loadedmetadata="onVideoPreviewLoad(activeFile, $event)"
+                @error="onVideoPreviewError(activeFile, $event)"
+              ></video>
+            </template>
           </div>
         </template>
       </div>
@@ -561,6 +622,26 @@ export default {
       if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
       return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     };
+    const onImagePreviewLoad = (file, event) => updateMediaPreviewState(file, event);
+    const onImagePreviewError = (file, event) => (
+      updateMediaPreviewState(file, event, t('files.previewLoadFailed'))
+    );
+    const onVideoPreviewLoad = (file, event) => updateMediaPreviewState(file, event);
+    const onVideoPreviewError = (file, event) => (
+      updateMediaPreviewState(file, event, t('files.videoPreviewLoadFailed'))
+    );
+    const openActiveImagePreview = trigger => {
+      const file = tabs.activeFile.value;
+      if (!file?.blobUrl) return;
+      openImagePreview(file.blobUrl, {
+        alt: file.name || t('message.imagePreview'),
+        closeLabel: t('common.close'),
+        zoomOutLabel: t('message.zoomOut'),
+        zoomInLabel: t('message.zoomIn'),
+        resetZoomLabel: t('message.resetZoom'),
+        trigger,
+      });
+    };
 
     // --- DOM refs ---
     const rootEl = Vue.ref(null);
@@ -584,7 +665,15 @@ export default {
     };
     const zoomIn = () => setFontSize(fontSize.value + 1);
     const zoomOut = () => setFontSize(fontSize.value - 1);
-    const onWheel = (e) => { e.deltaY < 0 ? zoomIn() : zoomOut(); };
+    const isTextZoomAvailable = Vue.computed(() => {
+      const file = tabs?.activeFile.value;
+      return !!file && (!file.fileType || file.fileType === 'text');
+    });
+    const onWheel = (e) => {
+      if (!isTextZoomAvailable.value) return;
+      e.preventDefault();
+      e.deltaY < 0 ? zoomIn() : zoomOut();
+    };
 
     // --- Resizable tree panel ---
     const treePanelWidth = Vue.ref(parseInt(localStorage.getItem('filePanelWidth')) || 220);
@@ -728,6 +817,10 @@ export default {
     const onDrop = (event, entry) => ops.onDrop(event, entry, ops.handleExternalFileDrop);
     const onTreeDrop = (event) => ops.onTreeDrop(event, tree.treeRootPath.value, ops.handleExternalFileDrop);
     const goToLineConfirm = () => qo.goToLineConfirm(tabs.activeFile);
+    const downloadActiveFile = () => {
+      const file = tabs.activeFile.value;
+      if (file) ops.downloadFile({ path: file.path, type: 'file' });
+    };
 
     // --- Watchers ---
     Vue.watch(() => store.currentAgent, () => {
@@ -754,6 +847,10 @@ export default {
         tree.loadTreeDirectory(dir);
       }
     });
+
+    Vue.watch(() => liveStore.connectionState, (state, previous) => {
+      if (previous === 'connected' && state !== 'connected') tabs.interruptFileReads();
+    }, { flush: 'sync' });
 
     Vue.watch(() => store.theme, (newTheme) => {
       const file = tabs.activeFile.value;
@@ -923,7 +1020,7 @@ export default {
       store, debugStatus: editor.debugStatus, rootEl,
       treeVisible,
       isMobile, mobileView, mobileGoBack,
-      fontSize, zoomIn, zoomOut, onWheel,
+      fontSize, zoomIn, zoomOut, isTextZoomAvailable, onWheel, openActiveImagePreview,
       treePath: tree.treePath, treeRootPath: tree.treeRootPath,
       treeNodes: tree.treeNodes, flattenedTree: tree.flattenedTree,
       editingTreePath: tree.editingTreePath, treePathInputRef: tree.treePathInputRef,
@@ -975,7 +1072,7 @@ export default {
       contextMenu: ops.contextMenu, showContextMenu: ops.showContextMenu,
       hideContextMenu: ops.hideContextMenu,
       ctxRename: ops.ctxRename, ctxCopy: ops.ctxCopy, ctxMoveTo: ops.ctxMoveTo,
-      ctxDelete, ctxDownload: ops.ctxDownload,
+      ctxDelete, ctxDownload: ops.ctxDownload, downloadActiveFile,
       renameDialogVisible: ops.renameDialogVisible, renameNewName: ops.renameNewName,
       renameInput: ops.renameInput, confirmRename: ops.confirmRename,
       dragState: ops.dragState, externalDropActive: ops.externalDropActive,
@@ -989,6 +1086,7 @@ export default {
       folderPickerSelectItem: fp.folderPickerSelectItem, folderPickerEnter: fp.folderPickerEnter,
       confirmFolderPicker: fp.confirmFolderPicker,
       getFileIcon: () => '', getFileIconHtml, getFolderIcon, formatSize,
+      onImagePreviewLoad, onImagePreviewError, onVideoPreviewLoad, onVideoPreviewError,
       refresh: tree.refresh, placeholderPath: Vue.computed(() => {
         const dir = getEffectiveWorkDir();
         return dir ? t('files.workDir', { dir }) : t('files.enterDirPath');

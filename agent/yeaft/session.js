@@ -49,7 +49,8 @@ import { ensureDefaultSessionIfEmpty, migrateRegisteredWorkDirSessions } from '.
 import { seedDefaultVps } from './vp/seed-defaults.js';
 import { topUpDefaultVps } from './vp/seed-topup.js';
 import { archiveLegacyScopes } from './memory/seed-backfill.js';
-import { createV2DreamScheduler, bootInitEmptyGroups, bootCatchUpStaleDream } from './dream/session-wiring.js';
+// Dream scheduler wiring is intentionally not imported while the runtime path is disabled.
+// import { createV2DreamScheduler, bootInitEmptyGroups, bootCatchUpStaleDream } from './dream/session-wiring.js';
 import { isWorkCenterEnabled } from './work-center/feature.js';
 import { openSegmentIndex } from './memory/index-db.js';
 import { syncAll as syncSegmentIndex } from './memory/segment-sync.js';
@@ -140,7 +141,7 @@ export async function loadSession(options = {}) {
     serverMode = false,
     dreamEnabled,
     managedCliReady = null,
-    workCenterEnabled = isWorkCenterEnabled(),
+    workCenterEnabled,
   } = options;
 
   // ─── 1. Determine config + store directories ─────────────
@@ -172,6 +173,7 @@ export async function loadSession(options = {}) {
 
   // ─── 2. Load config ───────────────────────────────────
   const config = loadConfig(overrides);
+  const effectiveWorkCenterEnabled = workCenterEnabled ?? isWorkCenterEnabled(process.env, config);
   // fix/dream-cadence-and-ui-trigger: tag config so the dream scheduler
   // can decide whether to keep its interval timer alive (server) or
   // unref it (CLI / tests). Non-persisted — set per-session by caller.
@@ -179,7 +181,7 @@ export async function loadSession(options = {}) {
   if (typeof dreamEnabled === 'boolean') config.dream.enabled = dreamEnabled;
 
   // Propagate the (clamped) cold-start replay window to the conversation
-  // store. The default is 20 turns; a user wanting more recall after a
+  // store. The default is 10 turns; a user wanting more recall after a
   // fresh boot sets `yeaft.recentTurnsLimit` in ~/.yeaft/config.json.
   // Called once per session boot — subsequent boots overwrite the
   // module-level default safely (single-process model).
@@ -411,7 +413,7 @@ export async function loadSession(options = {}) {
   // ─── 8. Build tool registry ────────────────────────────
   const taskManager = new TaskManager({ yeaftDir });
   const toolRegistry = createFullRegistry();
-  if (!workCenterEnabled) toolRegistry.unregister('CreateWorkItem');
+  if (!effectiveWorkCenterEnabled) toolRegistry.unregister('CreateWorkItem');
 
   // Register any extra tools from caller
   for (const tool of extraTools) {
@@ -473,50 +475,20 @@ export async function loadSession(options = {}) {
   });
 
 
-  // ─── 9a. Create dream scheduler ────────────
-  // The legacy R6 dream-scheduler was retired alongside recall-r6;
-  // dream is the only active path (the `config.memoryV2` opt-out
-  // flag was retired in task-710 — wiring is unconditional).
-  // partialSession lets the v2 scheduler dereference adapter/config/
-  // engine/trace lazily — safe because callers attach more fields
-  // after this line.
-  const partialSession = {
-    yeaftDir,
-    adapter,
-    config,
-    engine,
-    trace,
-  };
-  const dreamScheduler = createV2DreamScheduler(partialSession);
-
-  // task-710: kick a dream pass at boot for any group that has user
-  // messages but zero memory segments in the FTS index. Without this a
-  // freshly opened agent had to wait an hour (or for the nudge counter
-  // to cross 50) before the first segment landed and recall could find
-  // anything. Fire-and-forget; failure logs at debug only.
-  if (memoryIndex && !config._readOnly) {
-    bootInitEmptyGroups({
-      yeaftDir,
-      memoryIndex,
-      dreamScheduler,
-      config,
-    }).catch(() => { /* best-effort boot init */ });
-  }
-
-  // fix/dream-cadence-and-ui-trigger: stale-cadence catch-up. If the
-  // newest per-group lastDreamAt across all groups is older than
-  // DREAM_INTERVAL_HOURS (or absent and there's user traffic), fire a
-  // single non-manual tick now. Independent of the interval timer —
-  // necessary because production observed 12 days between scheduled
-  // ticks (the unref'd interval did not fire reliably on long-lived
-  // server processes).
-  if (!config._readOnly) {
-    bootCatchUpStaleDream({
-      yeaftDir,
-      dreamScheduler,
-      config,
-    }).catch(() => { /* best-effort catch-up */ });
-  }
+  // ─── 9a. Dream runtime temporarily disabled ────────────
+  // Message history now supplies turn context. Keep the Dream implementation
+  // and persisted data intact, but do not create a scheduler or run boot-time
+  // initialization/catch-up while the replacement is evaluated.
+  //
+  // const partialSession = { yeaftDir, adapter, config, engine, trace };
+  // const dreamScheduler = createV2DreamScheduler(partialSession);
+  // if (memoryIndex && !config._readOnly) {
+  //   bootInitEmptyGroups({ yeaftDir, memoryIndex, dreamScheduler, config }).catch(() => {});
+  // }
+  // if (!config._readOnly) {
+  //   bootCatchUpStaleDream({ yeaftDir, dreamScheduler, config }).catch(() => {});
+  // }
+  const dreamScheduler = null;
 
   // H2.f.5 retired the old session-level thread engine registry, input queue,
   // and dispatcher. The session exposes a default `engine`; PR #797 keeps

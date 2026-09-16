@@ -10,39 +10,139 @@
 import { test } from '../../fixtures/test-server.js';
 import { expect } from '@playwright/test';
 
-/**
- * Helper: open the new-conversation modal and create a conversation.
- */
-async function openConversationModal(chatPage) {
-  // The catalog sidebar is the normal post-handshake surface. Keep the
-  // legacy tab fallback so this test remains valid against older servers.
-  const catalogCreate = chatPage.locator('.sidebar-primary-action');
-  if (await catalogCreate.isVisible().catch(() => false)) {
-    await catalogCreate.click();
-    const modal = chatPage.locator('.yeaft-session-create-modal');
-    await expect(modal).toBeVisible({ timeout: 5000 });
-    await modal.locator('.resume-control-row').nth(1).locator('.modern-select-trigger').click();
-    await chatPage.locator('.yeaft-session-create-select-menu .modern-select-option', {
-      hasText: 'Claude Code',
-    }).click();
-    return modal;
-  }
-
-  await chatPage.locator('.session-tab-add-btn').click();
-  const modal = chatPage.locator('.modal.resume-modal');
-  await expect(modal).toBeVisible({ timeout: 5000 });
-  return modal;
-}
-
-async function createConversation(chatPage) {
-  const beforeCount = await chatPage.locator('.session-item').count();
-  const modal = await openConversationModal(chatPage);
-  await modal.locator('.resume-modal-footer .modern-btn').click();
-  await expect(modal).not.toBeVisible({ timeout: 5000 });
-  await expect(chatPage.locator('.session-item')).toHaveCount(beforeCount + 1, { timeout: 5000 });
-}
+import { createConversation, openConversationModal } from '../../helpers/conversation.js';
 
 test.describe('Conversation Management', () => {
+  test('orders active Session messages chronologically across switches and history replay', async ({ chatPage, mockAgent }) => {
+    await chatPage.evaluate(({ agentId }) => {
+      const store = window.Pinia.useChatStore();
+      const sessions = window.Pinia.useSessionsStore();
+      sessions.applySnapshot(['order-A', 'order-B'].map(id => ({ id, name: id, roster: ['omni'], defaultVpId: 'omni' })), agentId);
+      sessions.setActive('order-A', agentId);
+      store.currentAgent = agentId;
+      store._hasHandledAgentList = true;
+      store._hasHandledYeaftSessionHydrate = true;
+      store.yeaftSessionHydrateError = null;
+      store.yeaftHistoryLoadError = null;
+      store.yeaftSessionAgentById = { 'order-A': agentId, 'order-B': agentId };
+      store.yeaftConversationId = 'order-conversation';
+      store.yeaftConversationIdsByAgent = { [agentId]: 'order-conversation' };
+      store.messagesMap['order-conversation'] = [
+        { id: 'client-order', clientMessageId: 'client-order', type: 'user', content: 'Earlier A prompt', sessionId: 'order-A', timestamp: 1000 },
+        { id: 'client-B', type: 'user', content: 'Only B prompt', sessionId: 'order-B', timestamp: 1500 },
+      ];
+      store.activeConversations = ['order-conversation'];
+      store.yeaftActiveSessionFilter = 'order-A';
+      store.currentView = 'yeaft';
+      window.__switchOrderSession = id => {
+        sessions.setActive(id, agentId);
+        store.setActiveSessionFilter(id, { agentId });
+      };
+    }, { agentId: mockAgent.agentId });
+    await expect(chatPage.locator('.message.user')).toContainText('Earlier A prompt');
+    await chatPage.evaluate(() => window.__switchOrderSession('order-B'));
+    await expect(chatPage.locator('.message.user')).toContainText('Only B prompt');
+    await chatPage.evaluate(({ agentId }) => {
+      const store = window.Pinia.useChatStore();
+      const request = store.beginYeaftHistoryLoad({ agentId, sessionId: 'order-A', mode: 'recent' });
+      store.handleMessage({
+        type: 'yeaft_history_chunk', conversationId: 'order-conversation', agentId,
+        sessionId: 'order-A', mode: 'recent', requestId: request.requestId,
+        messages: [{ id: 'm0020', seq: 20, role: 'assistant', content: 'Later A progress', sessionId: 'order-A', turnId: 'turn-A', speakerVpId: 'omni', ts: 2000 }],
+        oldestSeq: 20, latestSeq: 20, hasMore: false,
+      });
+    }, { agentId: mockAgent.agentId });
+    await expect(chatPage.locator('.assistant-turn')).toHaveCount(0);
+    await chatPage.evaluate(() => window.__switchOrderSession('order-A'));
+    const orderedRows = chatPage.locator('.message.user, .assistant-turn');
+    await expect(orderedRows).toHaveCount(2);
+    await expect(orderedRows.nth(0)).toContainText('Earlier A prompt');
+    await expect(orderedRows.nth(1)).toContainText('Later A progress');
+    await expect(chatPage.getByText('Only B prompt', { exact: true })).toHaveCount(0);
+    await chatPage.evaluate(({ agentId }) => {
+      const store = window.Pinia.useChatStore();
+      for (const text of ['Continued A output', ' still running']) {
+        store.handleYeaftOutput({
+          agentId, conversationId: 'order-conversation', sessionId: 'order-A', vpId: 'omni', turnId: 'turn-A-next',
+          data: { type: 'assistant', message: { id: 'live-order', content: text }, ts: 3000 },
+        });
+      }
+    }, { agentId: mockAgent.agentId });
+    for (const [theme, width] of [['light', 1280], ['dark', 320]]) {
+      await chatPage.setViewportSize({ width, height: 800 });
+      await chatPage.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+      await chatPage.evaluate(() => window.__switchOrderSession('order-B'));
+      await expect(orderedRows).toHaveCount(1);
+      await expect(orderedRows.first()).toContainText('Only B prompt');
+      await chatPage.evaluate(() => window.__switchOrderSession('order-A'));
+      await expect(orderedRows.first()).toContainText('Earlier A prompt');
+      await expect(orderedRows.last()).toContainText('Continued A output still running');
+      const boxes = await orderedRows.evaluateAll(rows => rows.map(row => row.getBoundingClientRect().top));
+      expect(boxes).toEqual([...boxes].sort((a, b) => a - b));
+    }
+  });
+
+  for (const [theme, width] of [['light', 1280], ['dark', 320]]) {
+    test(`keeps real Session sends above streamed replies (${theme}, ${width}px)`, async ({ chatPage, mockAgent }) => {
+      await chatPage.setViewportSize({ width, height: 800 });
+      await chatPage.evaluate(({ agentId, theme }) => {
+        const store = window.Pinia.useChatStore();
+        const sessions = window.Pinia.useSessionsStore();
+        sessions.applySnapshot(['live-A', 'live-B'].map(id => ({ id, name: id, roster: ['omni'], defaultVpId: 'omni' })), agentId);
+        sessions.setActive('live-A', agentId);
+        store.currentAgent = agentId;
+        store._hasHandledAgentList = true;
+        store._hasHandledYeaftSessionHydrate = true;
+        store.yeaftSessionHydrateError = null;
+        store.yeaftHistoryLoadError = null;
+        store.yeaftSessionAgentById = { 'live-A': agentId, 'live-B': agentId };
+        store.yeaftConversationId = 'live-order-conversation';
+        store.yeaftConversationIdsByAgent = { [agentId]: 'live-order-conversation' };
+        store.messagesMap['live-order-conversation'] = [];
+        store.activeConversations = ['live-order-conversation'];
+        store.yeaftActiveSessionFilter = 'live-A';
+        store.currentView = 'yeaft';
+        document.documentElement.dataset.theme = theme;
+        window.__switchLiveSession = id => {
+          sessions.setActive(id, agentId);
+          store.setActiveSessionFilter(id, { agentId });
+        };
+      }, { agentId: mockAgent.agentId, theme });
+      const rows = chatPage.locator('.message.user, .assistant-turn');
+      const prompts = ['Please tag the merge', 'Then check the workflow'];
+      const replies = ['I will verify main and push the tag', 'Checking the workflow'];
+      for (let round = 0; round < prompts.length; round += 1) {
+        // Use the actual composer, not a hand-made timestamped user fixture.
+        await chatPage.locator('.yeaft-session-input textarea').fill(prompts[round]);
+        await chatPage.locator('.yeaft-session-input').getByRole('button', { name: 'Send', exact: true }).click();
+        await expect.poll(() => mockAgent._receivedMessages.some(message => (
+          message.type === 'yeaft_session_send' && message.text === prompts[round]
+        ))).toBe(true);
+        await expect(rows.last()).toContainText(prompts[round]);
+        await chatPage.evaluate(({ agentId, round, reply }) => {
+          const store = window.Pinia.useChatStore();
+          for (const text of [reply.slice(0, 8), reply.slice(8)]) {
+            store.handleYeaftOutput({
+              agentId, conversationId: 'live-order-conversation', sessionId: 'live-A',
+              vpId: 'omni', turnId: `turn-${round}`,
+              data: { type: 'assistant', message: { id: `reply-${round}`, content: text }, ts: Date.now() },
+            });
+          }
+        }, { agentId: mockAgent.agentId, round, reply: replies[round] });
+        await expect(rows).toHaveCount((round + 1) * 2);
+        await expect(rows.nth(round * 2)).toContainText(prompts[round]);
+        await expect(rows.last()).toContainText(replies[round]);
+        // Session switching cannot hide this failure by forcing a full reload.
+        await chatPage.evaluate(() => window.__switchLiveSession('live-B'));
+        await expect(rows).toHaveCount(0);
+        await chatPage.evaluate(() => window.__switchLiveSession('live-A'));
+        await expect(rows.last()).toContainText(replies[round]);
+      }
+      const boxes = await rows.evaluateAll(elements => elements.map(row => row.getBoundingClientRect().top));
+      expect(boxes).toEqual([...boxes].sort((a, b) => a - b));
+    });
+  }
+
   test('should create a new conversation via modal', async ({ chatPage, mockAgent }) => {
     const initialCount = await chatPage.locator('.session-item').count();
 
@@ -54,16 +154,10 @@ test.describe('Conversation Management', () => {
 
   test('should select agent in conversation modal', async ({ chatPage, mockAgent }) => {
     const modal = await openConversationModal(chatPage);
-    const agentSelect = modal.locator('.modern-select-trigger').first();
-    if (await agentSelect.isVisible().catch(() => false)) {
-      await expect(agentSelect).toBeVisible();
-      await agentSelect.click();
-      await expect(chatPage.locator('.yeaft-session-create-select-menu .modern-select-option')).toHaveCount(1);
-    } else {
-      const legacyAgentSelect = modal.locator('.resume-select').first();
-      await expect(legacyAgentSelect).toBeVisible();
-      expect(await legacyAgentSelect.locator('option').count()).toBeGreaterThanOrEqual(2);
-    }
+    const agentSelect = modal.getByRole('combobox', { name: 'Agent', exact: true });
+    await expect(agentSelect).toBeVisible();
+    await agentSelect.click();
+    await expect(chatPage.getByRole('option')).toHaveCount(1);
 
     await modal.locator('.resume-close-btn').click();
     await expect(modal).not.toBeVisible();
@@ -88,6 +182,17 @@ test.describe('Conversation Management', () => {
     await expect(chatPage.locator('.session-item')).toHaveCount(initialCount + 1);
     const created = mockAgent._receivedMessages.filter(m => m.type === 'create_conversation').at(-1);
     expect(created?.conversationId).toBeTruthy();
+    // A CLI's native history identity differs from the Web conversation ID.
+    // Real providers publish this binding once their native session is known.
+    const cliSessionId = `cli-${created.conversationId}`;
+    mockAgent.send({
+      type: 'session_id_update',
+      conversationId: created.conversationId,
+      claudeSessionId: cliSessionId,
+    });
+    await expect.poll(() => chatPage.evaluate(id => (
+      window.Pinia.useChatStore().conversations.find(conv => conv.id === id)?.claudeSessionId
+    ), created.conversationId)).toBe(cliSessionId);
 
     const activeItem = chatPage.locator('.session-item.active');
     const removeButton = activeItem.locator('.session-quick-action:has(.session-remove-icon)');
@@ -99,14 +204,53 @@ test.describe('Conversation Management', () => {
     expect(mockAgent._receivedMessages.filter(m => m.type === 'delete_conversation'
       && m.conversationId === created.conversationId)).toHaveLength(0);
 
-    await chatPage.locator('.sidebar-primary-action').click();
-    await expect(chatPage.locator('.yeaft-session-create-modal')).toBeVisible();
+    // Resume lists now come from Agent-owned CLI history, not the hidden catalog.
+    // Use retained conversations so a real deletion also prevents recovery.
+    mockAgent._messageHandlers.push(message => {
+      if (message.type === 'resume_conversation') {
+        if (message.claudeSessionId !== cliSessionId) return;
+        const retained = mockAgent.conversations.get(created.conversationId);
+        if (!retained) return;
+        mockAgent.send({
+          type: 'conversation_resumed',
+          conversationId: message.conversationId,
+          claudeSessionId: message.claudeSessionId,
+          workDir: retained.workDir,
+          provider: message.provider,
+          historyMessages: [],
+        });
+        return;
+      }
+      if (message.type !== 'list_history_sessions') return;
+      mockAgent.send({
+        type: 'history_sessions_list',
+        requestId: message.requestId,
+        sessions: [...mockAgent.conversations.entries()]
+          .filter(([, session]) => session.workDir === message.workDir)
+          .filter(([conversationId]) => conversationId === created.conversationId)
+          .map(([, session]) => ({ ...session, sessionId: cliSessionId })),
+      });
+    });
+    const modal = await openConversationModal(chatPage);
+    await modal.locator('.workdir-input-group input').fill(created.workDir);
+
     const hiddenSession = chatPage.locator('.yeaft-session-create-modal .resume-list-item', {
-      hasText: created.conversationId.slice(0, 8),
+      hasText: cliSessionId.slice(0, 8),
     });
     await expect(hiddenSession).toBeVisible();
     await hiddenSession.click();
     await expect(chatPage.locator('.yeaft-session-create-modal')).not.toBeVisible({ timeout: 5000 });
+    await expect.poll(() => chatPage.evaluate(id => {
+      const store = window.Pinia.useChatStore();
+      return {
+        visible: store.sessionCatalog.some(row => row.routeRef?.sessionId === id),
+        hidden: store.hiddenSessionCatalog.some(row => row.routeRef?.sessionId === id),
+      };
+    }, created.conversationId), { timeout: 10000 }).toEqual({ visible: true, hidden: false });
+    expect(mockAgent._receivedMessages.filter(m => m.type === 'resume_conversation').at(-1))
+      .toMatchObject({ conversationId: created.conversationId, claudeSessionId: cliSessionId });
+    // Verify server-backed visibility, not just the optimistic catalog update.
+    await chatPage.reload();
     await expect.poll(() => chatPage.evaluate(id => {
       const store = window.Pinia.useChatStore();
       return {

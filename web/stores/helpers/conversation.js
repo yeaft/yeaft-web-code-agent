@@ -6,6 +6,7 @@ import { ensureConnected } from './websocket.js';
 import { markAllToolsCompleted } from './handlers/conversationHandler.js';
 import { t } from '../../utils/i18n.js';
 import { EXPERT_ROLES, buildClientExpertMessage } from '../../utils/expert-roles.js';
+import { normalizeChatRuntimeProvider } from './session-catalog.js';
 
 function agentIdsForYeaftConversation(store, conversationId) {
   if (!conversationId || !store?.yeaftConversationIdsByAgent) return [];
@@ -105,10 +106,28 @@ export function resumeConversation(store, claudeSessionId, workDir, agentId = nu
     disallowedTools = disallowedToolsOrOptions;
     if (maybeOptions && typeof maybeOptions === 'object') options = maybeOptions;
   }
+  // CLI history IDs are not Web conversation IDs. Reuse the existing Web
+  // identity on this Agent/provider so resume keeps its catalog metadata and
+  // persisted messages instead of creating a duplicate sidebar row.
+  const provider = normalizeChatRuntimeProvider(options.provider);
+  const existing = (store.conversations || []).find(conv => (
+    conv.type !== 'yeaft'
+    && conv.agentId === targetAgent
+    && normalizeChatRuntimeProvider(conv.provider) === provider
+    && conv.claudeSessionId === claudeSessionId
+  ));
+  const hiddenRow = existing && (store.hiddenSessionCatalog || []).find(row => (
+    row.routeRef?.agentId === targetAgent
+    && row.routeRef?.runtimeProvider === provider
+    && row.routeRef?.sessionId === existing.id
+  ));
+  if (hiddenRow && store.restoreCatalogSession(hiddenRow) !== true) return;
+
   setSessionLoading(store, true, t('chat.session.loadingHistory'));
   const msg = {
     type: 'resume_conversation',
     agentId: targetAgent,
+    ...(existing ? { conversationId: existing.id } : {}),
     claudeSessionId,
     workDir: workDir || store.currentAgentWorkDir
   };
@@ -442,7 +461,9 @@ export function answerUserQuestion(store, requestId, answers, conversationId) {
     m.type === 'tool-use' && m.toolName === 'AskUserQuestion' && m.askRequestId === requestId
   );
   const isYeaftPrompt = store.currentView === 'yeaft' || !!chatMsg?.sessionId;
-  if (isYeaftPrompt && chatMsg?.askPending) return;
+  if (isYeaftPrompt && (!chatMsg || chatMsg.askAnswered || chatMsg.askExpired)) return false;
+  // A resend is explicit and bounded; lack of acknowledgement is not failure.
+  if (isYeaftPrompt && chatMsg.askPending && Date.now() - (chatMsg.askSubmittedAt || 0) < 15_000) return false;
   const sessionId = chatMsg?.sessionId || store.yeaftActiveSessionFilter || null;
   const cardAgentId = typeof chatMsg?.agentId === 'string' && chatMsg.agentId
     ? chatMsg.agentId
@@ -488,16 +509,17 @@ export function answerUserQuestion(store, requestId, answers, conversationId) {
     chatMsg.askAnswered = true;
     chatMsg.selectedAnswers = answers;
   } else if (chatMsg && sent !== false) {
-    // Keep the submitted answer visible until the Agent sends the terminal
-    // `ask_user_answered`/`ask_user_expired` event. A timer here creates a
-    // false failure state: a slow provider or reconnect clears the optimistic
-    // marker while the request is still live, so the same question reopens.
     chatMsg.askPending = true;
     chatMsg.pendingAnswers = answers;
+    chatMsg.askSubmittedAt = Date.now();
+    chatMsg.askError = null;
+  } else if (chatMsg) {
+    chatMsg.askError = 'send_failed';
   }
 
-  // 立刻进入 processing 状态，显示"思考中"指示器
-  if (sent !== false && convId && !store.processingConversations[convId]) {
+  // A browser send is not Agent acceptance. Native prompts remain in their
+  // current execution state until the Agent confirms/continues the turn.
+  if (!isYeaftPrompt && sent !== false && convId && !store.processingConversations[convId]) {
     store.processingConversations[convId] = true;
     if (store._closedAt?.[convId]) {
       delete store._closedAt[convId];

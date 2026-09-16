@@ -2,7 +2,8 @@
  * tool-folding/index.js — V7 reflection subsystem entry (PR-L).
  *
  * Exposes:
- *   - Constants TOOL_BATCH_SIZE, TURN_SUMMARY_THRESHOLD, DUP_TOOL_THRESHOLD
+ *   - Constants TOOL_LOOP_REFLECTION_INTERVAL, TURN_SUMMARY_THRESHOLD,
+ *     DUP_TOOL_THRESHOLD
  *   - Reflector helpers (T1 sync, T2 async, fallback stub)
  *   - Helpers for collapsing message ranges into a single assistant
  *     reflection message
@@ -10,19 +11,10 @@
  *
  * The constants are NOT config-driven — V7 design freezes them in code.
  *
- * Invariant: TURN_SUMMARY_THRESHOLD < TOOL_BATCH_SIZE. T1 runs inside the
- * turn and collapses history in place; T2 fires at end_turn and is gated
- * by `t1CollapsesDone === 0` (engine.js). If T2 were ever set ≥ T1, T1
- * would collapse first and T2 could never fire — silently disabling the
- * end-of-turn reflection path. Keep a usefully wide gap between the two
- * so the (T2, T1) band where T2-alone applies stays meaningful.
- *
- * TOOL_BATCH_SIZE history: was 13 originally; raised to 30 (2026-05-15)
- * after user feedback that 13 fired too often inside a single task and
- * fragmented otherwise-coherent tool arcs into multiple reflections. 30
- * keeps the periodic-reflection contract (it still fires every N tools,
- * not just once) but gives a single task arc room to breathe before the
- * arc gets collapsed.
+ * T1 runs inside the turn and collapses history in place. Its cadence is
+ * measured in provider tool loops (assistant tool_use batch → execution →
+ * next provider boundary), not in the number of calls inside a batch. A model
+ * returning 30 parallel tools has completed one loop, not thirty.
  *
  * TURN_SUMMARY_THRESHOLD history: was 5 originally; raised to 8
  * (2026-05-18). 5 was too aggressive — small "read a few files, edit one,
@@ -32,7 +24,9 @@
  * before the next turn's history grows.
  */
 
-export const TOOL_BATCH_SIZE = 30;
+export const TOOL_LOOP_REFLECTION_INTERVAL = 30;
+// Compatibility for external imports; the engine uses the loop-specific name.
+export const TOOL_BATCH_SIZE = TOOL_LOOP_REFLECTION_INTERVAL;
 export const TURN_SUMMARY_THRESHOLD = 8;
 export const DUP_TOOL_THRESHOLD = 3;
 

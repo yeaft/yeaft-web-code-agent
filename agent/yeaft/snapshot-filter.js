@@ -76,6 +76,7 @@ export function filterSnapshotForVp(snapshot, vpId) {
         const copy = { ...m };
         delete copy.toolCalls;
         delete copy.thinkingBlocks;
+        delete copy.providerState;
         out.push(copy);
       }
       continue;

@@ -25,6 +25,7 @@ vi.mock('../../../agent/yeaft/status-cache.js', () => ({
 const ctx = (await import('../../../agent/context.js')).default;
 const { ConversationStore } = await import('../../../agent/yeaft/conversation/persist.js');
 const { AnthropicAdapter } = await import('../../../agent/yeaft/llm/anthropic.js');
+const { createProviderContext, createProviderState } = await import('../../../agent/yeaft/llm/provider-state.js');
 const { trimSnapshotForBudget } = await import('../../../agent/yeaft/history-window.js');
 const { pairSanitize } = await import('../../../agent/yeaft/pair-sanitize.js');
 const { filterSnapshotForVp } = await import('../../../agent/yeaft/snapshot-filter.js');
@@ -80,31 +81,113 @@ describe('Yeaft load-history first paint', () => {
     ctx.CONFIG = null;
   });
 
-  it('resolves the pending AskUser request with its answer identity', async () => {
-    const answerPromise = __testHooks.seedPendingUserPrompt({
-      requestId: 'ask-bridge-flow',
-      sessionId: 'session-bridge-flow',
-      vpId: 'vp-bridge-flow',
-      threadId: 'thread-bridge-flow',
-      turnId: 'turn-bridge-flow',
-      toolCallId: 'call-bridge-flow',
-    });
+  it('replays human-paced AskUser requests and bounded terminal results without crossing identities', async () => {
+    vi.useFakeTimers();
+    __testHooks.resetPendingUserPrompts();
+    const identity = {
+      requestId: 'ask-bridge-flow', sessionId: 'session-bridge-flow',
+      vpId: 'vp-bridge-flow', threadId: 'thread-bridge-flow',
+      turnId: 'turn-bridge-flow', toolCallId: 'call-bridge-flow',
+      conversationId: 'conversation-original', _requestClientId: 'browser-submitting',
+    };
+    const expectRejected = (submitted, reason) => {
+      expect(sent.at(-1)).toMatchObject({
+        type: 'yeaft_output', conversationId: submitted.conversationId,
+        _requestClientId: submitted._requestClientId,
+        sessionId: submitted.sessionId, vpId: submitted.vpId,
+        turnId: submitted.turnId, threadId: submitted.threadId,
+        event: {
+          type: 'ask_user_answer_rejected', requestId: submitted.requestId,
+          toolCallId: submitted.toolCallId, reason,
+        },
+      });
+      expect(sent.at(-1).event).not.toHaveProperty('answers');
+      expect(sent.at(-1).event).not.toHaveProperty('questions');
+    };
+    try {
+      __testHooks.setYeaftConversationIdForTest(identity.conversationId);
+      const answerPromise = __testHooks.seedPendingUserPrompt(identity);
+      sent.length = 0;
+      __testHooks.replayPendingUserPrompts('other-session');
+      expect(sent).toEqual([]);
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      __testHooks.setYeaftConversationIdForTest('conversation-reconnected');
+      __testHooks.replayPendingUserPrompts(identity.sessionId);
+      expect(sent.at(-1)).toMatchObject({
+        sessionId: identity.sessionId, turnId: identity.turnId,
+        event: { type: 'ask_user_question', requestId: identity.requestId, replay: true },
+      });
+      for (const field of ['sessionId', 'vpId', 'turnId', 'threadId', 'toolCallId']) {
+        const wrong = { ...identity, [field]: `wrong-${field}` };
+        expect(handleYeaftAskUserAnswer(wrong)).toBe(false);
+        expectRejected(wrong, 'identity_mismatch');
+      }
+      const submitted = { ...identity, conversationId: 'conversation-reconnected', answers: { Continue: 'Yes' } };
+      expect(handleYeaftAskUserAnswer(submitted)).toBe(true);
+      await expect(answerPromise).resolves.toEqual({ Continue: 'Yes' });
+      expect(sent.at(-1).conversationId).toBe(submitted.conversationId);
+      const terminal = sent.at(-1).event;
+      expect(terminal).toMatchObject({ type: 'ask_user_answered', answers: submitted.answers });
+      expect(handleYeaftAskUserAnswer({ ...submitted, answers: { Continue: 'No' } })).toBe(true);
+      expect(sent.at(-1).event).toEqual(terminal);
+      expect(sent.at(-1)).toMatchObject({
+        conversationId: submitted.conversationId, _requestClientId: submitted._requestClientId,
+      });
+      expect(handleYeaftAskUserAnswer({ requestId: identity.requestId })).toBe(true);
+      expect(sent.at(-1).event).toEqual(terminal);
+      const wrongTerminal = { ...identity, sessionId: 'other-session' };
+      expect(handleYeaftAskUserAnswer(wrongTerminal)).toBe(false);
+      expectRejected(wrongTerminal, 'identity_mismatch');
+      const missing = { ...identity, requestId: 'missing-request' };
+      expect(handleYeaftAskUserAnswer(missing)).toBe(false);
+      expectRejected(missing, 'unavailable');
 
-    expect(handleYeaftAskUserAnswer({
-      requestId: 'ask-bridge-flow',
-      sessionId: 'session-bridge-flow',
-      vpId: 'vp-bridge-flow',
-      threadId: 'thread-bridge-flow',
-      turnId: 'turn-bridge-flow',
-      toolCallId: 'call-bridge-flow',
-      answers: { Continue: 'Yes' },
-    })).toBe(true);
-    await expect(answerPromise).resolves.toEqual({ Continue: 'Yes' });
+      // A blocked event loop may delay the timer past its deadline.
+      const late = { ...identity, requestId: 'late-request' };
+      const latePromise = __testHooks.seedPendingUserPrompt({ ...late, expiresAt: Date.now() + 1 });
+      vi.setSystemTime(Date.now() + 2);
+      expect(handleYeaftAskUserAnswer(late)).toBe(false);
+      expectRejected(late, 'unavailable');
+      await expect(latePromise).resolves.toEqual({ __yeaftTimedOut: true });
+      const expired = sent.find(msg => msg.event?.requestId === late.requestId && msg.event.type === 'ask_user_expired').event;
+      const replayStart = sent.length;
+      expect(handleYeaftAskUserAnswer(late)).toBe(false);
+      expect(sent.slice(replayStart)).toContainEqual(expect.objectContaining({ event: expired }));
 
-    expect(handleYeaftAskUserAnswer({
-      requestId: 'ask-bridge-flow',
-      answers: { Continue: 'No' },
-    })).toBe(false);
+      const timed = { ...identity, requestId: 'timer-request' };
+      const timedPromise = __testHooks.seedPendingUserPrompt(timed);
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      await expect(timedPromise).resolves.toEqual({ __yeaftTimedOut: true });
+      expect(sent.at(-1).event).toMatchObject({ type: 'ask_user_expired', requestId: timed.requestId });
+
+      const aborted = { ...identity, requestId: 'aborted-request' };
+      const controller = new AbortController();
+      const abortedPromise = __testHooks.seedPendingUserPrompt({ ...aborted, signal: controller.signal });
+      const abortExpectation = expect(abortedPromise).rejects.toThrow('aborted');
+      controller.abort();
+      await abortExpectation;
+      expect(sent.at(-1).event).toMatchObject({ type: 'ask_user_expired', requestId: aborted.requestId });
+      sent.length = 0;
+      __testHooks.replayPendingUserPrompts(identity.sessionId);
+      expect(sent).toEqual([]);
+      expect(handleYeaftAskUserAnswer(aborted)).toBe(false);
+      expectRejected(aborted, 'unavailable');
+
+      // Evict old terminal entries; neither stale nor duplicate answers resolve again.
+      for (let index = 0; index < 256; index++) {
+        const next = { ...identity, requestId: `bounded-${index}` };
+        const result = __testHooks.seedPendingUserPrompt(next);
+        expect(handleYeaftAskUserAnswer(next)).toBe(true);
+        await expect(result).resolves.toEqual({});
+      }
+      expect(handleYeaftAskUserAnswer(identity)).toBe(false);
+      expectRejected(identity, 'unavailable');
+      expect(handleYeaftAskUserAnswer({ ...identity, requestId: 'bounded-0' })).toBe(true);
+    } finally {
+      __testHooks.resetPendingUserPrompts();
+      __testHooks.setYeaftConversationIdForTest(null);
+      vi.useRealTimers();
+    }
   });
 
   it('filters internal rows and uses a collision-resistant virtual conversation id', () => {
@@ -282,6 +365,12 @@ describe('Yeaft load-history first paint', () => {
       sessionId: 'session-fast',
       responseKind: 'progress',
       llmCallCount: 3,
+      inputTokens: 1200,
+      outputTokens: 34,
+      totalTokens: 1234,
+      totalMs: 5234,
+      model: 'provider/model-v2',
+      effort: 'high',
       toolCalls: [
         { id: 'todo-old', name: 'TodoWrite', input: { todos: [{ content: 'Old', status: 'pending' }] } },
         { id: 'bash', name: 'Bash', input: { command: 'true' } },
@@ -294,6 +383,12 @@ describe('Yeaft load-history first paint', () => {
       toolCalls: [{ id: 'bash', name: 'Bash', input: { command: 'true' } }],
       responseKind: 'progress',
       llmCallCount: 3,
+      inputTokens: 1200,
+      outputTokens: 34,
+      totalTokens: 1234,
+      totalMs: 5234,
+      model: 'provider/model-v2',
+      effort: 'high',
     });
 
     expect(__testHooks.projectVisibleHistoryChunkMessages([{
@@ -992,7 +1087,13 @@ describe('Yeaft load-history first paint', () => {
     const calls = [];
     try {
       const store = new ConversationStore(dir);
-      const thinkingBlocks = [{ thinking: 'restart-safe reasoning', signature: 'restart-signature' }];
+      const requestIdentity = { instanceScope: dir, ownerScope: 'fixture', sessionId: 'session-signed', vpId: 'vp-linus', threadId: 'main' };
+      const providerContext = createProviderContext({ protocol: 'anthropic', baseUrl: 'https://anthropic.test',
+        credentialScopeId: 'fixture-account', model: 'claude-sonnet-4.5', capabilities: { nativeReasoningState: true } });
+      const providerState = createProviderState({ context: providerContext, identity: requestIdentity, items: [
+        { type: 'thinking', thinking: 'restart-safe reasoning', signature: 'restart-signature' },
+        { type: 'tool_use', id: 'call-signed', name: 'Inspect', input: { path: 'README.md' } },
+      ] });
       store.append({ role: 'user', content: 'use the tool', sessionId: 'session-signed', turnId: 'turn-signed' });
       store.append({
         role: 'assistant',
@@ -1001,7 +1102,7 @@ describe('Yeaft load-history first paint', () => {
         turnId: 'turn-signed',
         speakerVpId: 'vp-linus',
         toolCalls: [{ id: 'call-signed', name: 'Inspect', input: { path: 'README.md' } }],
-        thinkingBlocks,
+        providerState,
       });
       store.append({
         role: 'tool',
@@ -1026,7 +1127,7 @@ describe('Yeaft load-history first paint', () => {
         expect.objectContaining({
           role: 'assistant',
           toolCalls: [{ id: 'call-signed', name: 'Inspect', input: { path: 'README.md' } }],
-          thinkingBlocks,
+          providerState,
         }),
         expect.objectContaining({ role: 'tool', toolCallId: 'call-signed' }),
       ]));
@@ -1042,7 +1143,7 @@ describe('Yeaft load-history first paint', () => {
         };
       });
       const adapter = new AnthropicAdapter({ apiKey: 'key', baseUrl: 'https://anthropic.test' });
-      await adapter.call({ model: 'claude-sonnet-4.5', system: '', messages: ownerSnapshot });
+      await adapter.call({ model: 'claude-sonnet-4.5', system: '', messages: ownerSnapshot, requestIdentity, providerContext });
       const assistantWire = calls[0].body.messages.find(message => message.role === 'assistant');
       expect(assistantWire.content).toEqual([
         { type: 'thinking', thinking: 'restart-safe reasoning', signature: 'restart-signature' },
@@ -1492,6 +1593,10 @@ describe('Yeaft load-history first paint', () => {
         [handleYeaftUpdateSession, {
           sessionId: 'session-live',
           patch: { announcement: 'after' },
+        }],
+        [handleYeaftUpdateSession, {
+          sessionId: 'session-live',
+          patch: { workDir: join(dir, 'next-workspace') },
         }],
         [handleYeaftSessionAddMember, { sessionId: 'session-live', vpId: 'martin' }],
         [handleYeaftSessionSetDefaultVp, { sessionId: 'session-live', vpId: 'martin' }],

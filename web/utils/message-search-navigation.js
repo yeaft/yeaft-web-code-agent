@@ -32,10 +32,18 @@ function renderedEntryIds(item) {
   return ids;
 }
 
-export function shouldDismissHistorySearch(target) {
-  return !target?.closest?.(
-    '.yeaft-conversation-outline, .yeaft-conversation-outline-sender-menu, .yeaft-search-btn',
-  );
+const HISTORY_SEARCH_SURFACE_SELECTOR = [
+  '.yeaft-conversation-outline',
+  '.yeaft-conversation-outline-sender-menu',
+  '.yeaft-search-btn',
+].join(', ');
+
+export function shouldDismissHistorySearch(target, eventPath = []) {
+  if (target?.closest?.(HISTORY_SEARCH_SURFACE_SELECTOR)) return false;
+  // A panel action can synchronously update state and remove its button before
+  // the click reaches document. The dispatch-time composed path still records
+  // that the click originated inside the panel, unlike target.closest().
+  return !eventPath.some(node => node?.matches?.(HISTORY_SEARCH_SURFACE_SELECTOR));
 }
 
 export async function revealOutlineResult({ result, revealWindow, nextTick, revealMessage, isMobile, closeOutline }) {

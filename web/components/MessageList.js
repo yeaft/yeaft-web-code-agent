@@ -1,10 +1,5 @@
 import { useAuthStore } from '../stores/auth.js';
-import {
-  getAgentInstallCommand,
-  getAgentLlmCommand,
-  getAgentServiceCommand,
-  getServerWsUrl,
-} from '../utils/agentSetup.js';
+import AgentInstaller from './AgentInstaller.js';
 import MessageItem from './MessageItem.js';
 import AssistantTurn from './AssistantTurn.js';
 import VpTurnBlock from './VpTurnBlock.js';
@@ -38,6 +33,7 @@ import {
 import { navigateToPersistedMessage } from '../utils/message-search-navigation.js';
 import { formatSessionMessageDateTime } from '../utils/session-message-quote.js';
 import { appendTurnResponseSegment, finalizeTurnResponseSegments } from '../utils/turn-response.js';
+import { resolveLongResponseOrigin } from '../utils/response-origin-navigation.js';
 // task-757: appendTypingPlaceholders removed from the pipeline.
 // The standalone typing card it produced (at the bottom of the
 // conversation) showed "[VP] is typing…" in a separate row that
@@ -54,7 +50,7 @@ import { appendTurnResponseSegment, finalizeTurnResponseSegments } from '../util
 
 export default {
   name: 'MessageList',
-  components: { MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, UserTurnBlock, VirtualTranscript },
+  components: { AgentInstaller, MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, UserTurnBlock, VirtualTranscript },
   template: `
     <main class="chat-container" ref="containerRef">
       <!-- Session Loading Overlay - only covers message area -->
@@ -77,8 +73,8 @@ export default {
               <circle cx="24" cy="34" r="3.5" fill="var(--accent-fg)"/>
             </svg>
           </div>
-          <h1 class="welcome-title">Yeaft</h1>
-          <p class="welcome-subtitle">{{ $t('welcome.subtitle') }}</p>
+          <h1 class="welcome-title">{{ onlineAgents.length ? 'Yeaft' : $t('welcome.setupTitle') }}</h1>
+          <p class="welcome-subtitle">{{ $t(onlineAgents.length ? 'welcome.subtitle' : 'welcome.setupDesc') }}</p>
 
           <!-- Agent Status -->
           <div class="welcome-status" v-if="onlineAgents.length > 0">
@@ -86,52 +82,14 @@ export default {
             <span class="status-text">{{ $t('welcome.agentOnline', { count: onlineAgents.length }) }}</span>
           </div>
 
-          <!-- No agents online -->
-          <div class="welcome-section" v-else>
-            <div class="welcome-setup-card">
-              <div class="welcome-setup-header">
-                <div class="welcome-setup-kicker">{{ $t('welcome.setupKicker') }}</div>
-                <div class="welcome-setup-title">{{ $t('welcome.setupTitle') }}</div>
-                <div class="welcome-setup-desc">{{ $t('welcome.setupDesc') }}</div>
-              </div>
-              <ol class="welcome-setup-steps">
-                <li class="welcome-setup-step">
-                  <span class="welcome-setup-step-number">1</span>
-                  <div class="welcome-setup-step-body">
-                    <div class="welcome-setup-step-title">{{ $t('welcome.setupInstallTitle') }}</div>
-                    <div class="welcome-command-row">
-                      <code>{{ welcomeInstallCommand }}</code>
-                      <button type="button" class="welcome-copy-btn" @click="copyWelcomeCommand(welcomeInstallCommand)">{{ $t('common.copy') }}</button>
-                    </div>
-                  </div>
-                </li>
-                <li class="welcome-setup-step">
-                  <span class="welcome-setup-step-number">2</span>
-                  <div class="welcome-setup-step-body">
-                    <div class="welcome-setup-step-title">{{ $t('welcome.setupRunTitle') }}</div>
-                    <p class="welcome-setup-step-desc" v-if="welcomeSetupLoading">{{ $t('welcome.setupSecretLoading') }}</p>
-                    <p class="welcome-setup-step-desc welcome-setup-error" v-else-if="welcomeSetupError">{{ $t('welcome.setupSecretError') }}</p>
-                    <div class="welcome-command-row" v-if="welcomeServiceCommand">
-                      <code>{{ welcomeServiceCommand }}</code>
-                      <button type="button" class="welcome-copy-btn" @click="copyWelcomeCommand(welcomeServiceCommand)">{{ $t('common.copy') }}</button>
-                    </div>
-                    <button v-else type="button" class="welcome-btn setup-agent-btn" @click="$emit('open-settings')">
-                      {{ $t('welcome.openSecuritySettings') }}
-                    </button>
-                  </div>
-                </li>
-                <li class="welcome-setup-step">
-                  <span class="welcome-setup-step-number">3</span>
-                  <div class="welcome-setup-step-body">
-                    <div class="welcome-setup-step-title">{{ $t('welcome.setupCopilotTitle') }}</div>
-                    <div class="welcome-command-row">
-                      <code>{{ welcomeLlmCommand }}</code>
-                      <button type="button" class="welcome-copy-btn" @click="copyWelcomeCommand(welcomeLlmCommand)">{{ $t('common.copy') }}</button>
-                    </div>
-                  </div>
-                </li>
-              </ol>
-            </div>
+          <!-- A single setup action; no chat controls until an Agent is available. -->
+          <div class="welcome-setup" v-if="onlineAgents.length === 0">
+            <AgentInstaller
+              :agent-secret="welcomeAgentSecret || ''"
+              :loading="welcomeSetupLoading"
+              :error="welcomeSetupError"
+              @open-settings="$emit('open-settings')"
+            />
           </div>
 
           <!-- Quick Actions -->
@@ -237,6 +195,7 @@ export default {
                   :response-collapsible="responseToggleBelongsToItem(block, item)"
                   :response-collapsed="block.responseCollapsed"
                   :response-toggle-label="responseCollapseLabel(block)"
+                  :origin-message-id="block.originMessageId"
                   @quote="$emit('quote-message', $event)"
                   @toggle-response-collapse="toggleMessageTurnResponse(block)"
                   @open-debug="onOpenTurnDebug(item)"
@@ -251,6 +210,7 @@ export default {
                   :response-collapsible="responseToggleBelongsToItem(block, item)"
                   :response-collapsed="block.responseCollapsed"
                   :response-toggle-label="responseCollapseLabel(block)"
+                  :origin-message-id="block.originMessageId"
                   @update-actions-expanded="value => setAssistantTurnActionsExpanded(item, value)"
                   @update-tool-expanded="setToolExpanded"
                   @quote="$emit('quote-message', $event)"
@@ -675,9 +635,21 @@ export default {
         </template>
       </div>
 
-      <button type="button" class="scroll-to-latest" :class="{ 'is-hidden': isAtBottom }" @click="scrollToLatest">
-        {{ $t('message.scrollToLatest') }}
-      </button>
+      <nav v-if="store.activeConversationId" class="transcript-navigation" :aria-label="$t('message.navigation')">
+        <button
+          v-if="activeLongResponseOriginId"
+          type="button"
+          class="transcript-navigation-btn response-origin-btn"
+          @click="jumpToOrigin(activeLongResponseOriginId)"
+          :title="$t('message.backToCurrentTurn')"
+          :aria-label="$t('message.backToCurrentTurn')"
+        >
+          {{ $t('message.currentTurn') }}
+        </button>
+        <button type="button" class="transcript-navigation-btn scroll-to-latest" :class="{ 'is-hidden': isAtBottom }" @click="scrollToLatest">
+          {{ $t('message.scrollToLatest') }}
+        </button>
+      </nav>
     </main>
   `,
   emits: ['new-conversation', 'resume-conversation', 'open-settings', 'quote-message', 'edit-message-as-new'],
@@ -841,7 +813,6 @@ export default {
       return store.agents.filter(a => a.online);
     });
 
-    const welcomeProfile = Vue.ref(null);
     const welcomeAgentSecret = Vue.ref(null);
     const welcomeSetupLoading = Vue.ref(false);
     const welcomeSetupError = Vue.ref('');
@@ -850,20 +821,11 @@ export default {
     let lastWelcomeAuthToken = authStore.token || '';
 
     const resetWelcomeAgentSetup = () => {
-      welcomeProfile.value = null;
       welcomeAgentSecret.value = null;
       welcomeSetupError.value = '';
       welcomeSetupPromise = null;
       welcomeSetupRequestSeq += 1;
     };
-
-    const welcomeInstallCommand = getAgentInstallCommand();
-    const welcomeLlmCommand = getAgentLlmCommand();
-    const welcomeServiceCommand = Vue.computed(() => getAgentServiceCommand({
-      profile: welcomeProfile.value,
-      agentSecret: welcomeAgentSecret.value,
-      serverWsUrl: getServerWsUrl(location),
-    }));
 
     const welcomeHeaders = () => {
       const headers = { 'Content-Type': 'application/json' };
@@ -880,13 +842,8 @@ export default {
       welcomeSetupPromise = (async () => {
         const requestToken = authStore.token || '';
         const headers = welcomeHeaders();
-        const [profileRes, secretRes] = await Promise.all([
-          fetch('/api/user/profile', { headers }),
-          fetch('/api/user/agent-secret', { headers }),
-        ]);
-        const profileData = profileRes.ok ? await profileRes.json() : null;
+        const secretRes = await fetch('/api/user/agent-secret', { headers });
         if (requestSeq !== welcomeSetupRequestSeq || requestToken !== (authStore.token || '')) return;
-        if (profileData) welcomeProfile.value = profileData;
         if (!secretRes.ok) {
           let message = '';
           try { message = (await secretRes.json())?.error || ''; } catch {}
@@ -907,12 +864,6 @@ export default {
           welcomeSetupPromise = null;
         });
       return welcomeSetupPromise;
-    };
-
-    const copyWelcomeCommand = async (text) => {
-      if (!text) return;
-      try { await navigator.clipboard.writeText(text); }
-      catch (err) { console.warn('Failed to copy welcome setup command:', err); }
     };
 
     const fallbackUiKeys = new WeakMap();
@@ -988,21 +939,45 @@ export default {
 
       const finishTurn = () => {
         if (currentTurn) {
-          currentTurn.isActive = !!(currentTurn.turnId && Object.values(store.activeVpTurns || {}).some((row) => (
-            ((row?.turnId || null) === currentTurn.turnId
-              || (!row?.turnId && store.activeVpTurns?.[currentTurn.turnId] === row))
-            && (!store.currentAgent || !row?.agentId || row.agentId === store.currentAgent)
-          )));
+          const activeTurnMeta = currentTurn.turnId
+            ? Object.values(store.activeVpTurns || {}).find((row) => (
+              ((row?.turnId || null) === currentTurn.turnId
+                || (!row?.turnId && store.activeVpTurns?.[currentTurn.turnId] === row))
+              && (!store.currentAgent || !row?.agentId || row.agentId === store.currentAgent)
+            )) || null
+            : null;
+          currentTurn.isActive = !!activeTurnMeta;
+          if (Number.isFinite(activeTurnMeta?.startedAt)) currentTurn.startedAt = activeTurnMeta.startedAt;
           finalizeTurnResponseSegments(currentTurn);
           const persistedLlmCallCount = currentTurn.messages.reduce((count, message) => (
             Number.isInteger(message?.llmCallCount) && message.llmCallCount > count
               ? message.llmCallCount
               : count
           ), 0);
-          const liveLlmCallCount = currentTurn.turnId
-            ? store.yeaftDebugTurnsById?.[currentTurn.turnId]?.loopCount
-            : 0;
-          currentTurn.llmCallCount = Math.max(persistedLlmCallCount, liveLlmCallCount || 0);
+          const liveTurnMeta = currentTurn.turnId
+            ? store.yeaftDebugTurnsById?.[currentTurn.turnId]
+            : null;
+          currentTurn.llmCallCount = Math.max(persistedLlmCallCount, liveTurnMeta?.loopCount || 0);
+          const persistedResponseMeta = [...currentTurn.messages].reverse().find(message => (
+            message?.type === 'assistant'
+            && (message.model || message.effort
+              || Number.isFinite(message.inputTokens)
+              || Number.isFinite(message.outputTokens)
+              || Number.isFinite(message.totalTokens)
+              || Number.isFinite(message.totalMs)
+              || Number.isFinite(message.turnDurationMs))
+          ));
+          currentTurn.model = liveTurnMeta?.model || persistedResponseMeta?.model || null;
+          currentTurn.effort = liveTurnMeta?.effort || persistedResponseMeta?.effort || null;
+          for (const key of ['inputTokens', 'outputTokens', 'totalTokens']) {
+            const liveValue = liveTurnMeta?.[key];
+            const persistedValue = persistedResponseMeta?.[key];
+            if (Number.isFinite(liveValue)) currentTurn[key] = liveValue;
+            else if (Number.isFinite(persistedValue)) currentTurn[key] = persistedValue;
+          }
+          if (Number.isFinite(liveTurnMeta?.totalMs)) currentTurn.totalMs = liveTurnMeta.totalMs;
+          else if (Number.isFinite(persistedResponseMeta?.totalMs)) currentTurn.totalMs = persistedResponseMeta.totalMs;
+          else if (Number.isFinite(persistedResponseMeta?.turnDurationMs)) currentTurn.totalMs = persistedResponseMeta.turnDurationMs;
           // Has the VP produced anything the user/group can see?
           // Tools are NOT user-visible content — they're internal
           // activity. A route_forward call shows up as a tool chip
@@ -1107,6 +1082,11 @@ export default {
           speakerTimestamp: 0,
           speakerStateCause: '',
           showSpeakerHeader: false,
+          startedAt: 0,
+          totalMs: null,
+          inputTokens: null,
+          outputTokens: null,
+          totalTokens: null,
           turnId: null,
         };
       };
@@ -1277,6 +1257,7 @@ export default {
             uiKey: meta.uiKey,
             vpId: meta.vpId,
             messageId: meta.messageId,
+            originMessageId: item.type === 'user' ? item.id : '',
             items: [item],
           };
           return;
@@ -1380,12 +1361,25 @@ export default {
     // updates must not pull the transcript back down until they explicitly
     // return to the latest row or switch sessions.
     const isAtBottom = Vue.ref(true);
+    const activeLongResponseOriginId = Vue.ref('');
     const autoFollowPaused = Vue.ref(false);
     const SCROLL_THRESHOLD = virtualTranscriptDefaults.bottomThreshold;
     let loadMoreArmed = true;
 
-    const hasStreamingMessage = Vue.computed(() => {
-      return store.messages.some(m => m.isStreaming);
+    const hasStreamingMessage = Vue.computed(() => (
+      store.messages.some(m => m.isStreaming)
+    ));
+
+    // Text streaming can pause while a VP executes tools. Keep the response
+    // duration clock tied to the active turn lifecycle instead of changing the
+    // existing typing-dots semantics of `hasStreamingMessage`.
+    const hasRunningVpTurn = Vue.computed(() => {
+      const currentAgentId = store.currentAgent || null;
+      const currentSessionId = store.yeaftActiveSessionFilter || store.activeYeaftSessionId || null;
+      return Object.values(store.activeVpTurns || {}).some(turn => (
+        (!currentAgentId || !turn?.agentId || turn.agentId === currentAgentId)
+        && (!currentSessionId || !turn?.sessionId || turn.sessionId === currentSessionId)
+      ));
     });
 
     const showInitialMessagesLoading = Vue.computed(() => {
@@ -1420,10 +1414,10 @@ export default {
     // pseudo-turn synth in `turnGroups` reads `store.vpsTypingInCurrentConv`
     // directly, so we no longer need a separate computed here.
 
-    // VP-block redesign Phase 3: a single page-shared "now" ref that
-    // ticks once per second WHILE any turn is streaming. VpTurnBlock
-    // reads it via prop to compute its live elapsed counter. We tick
-    // only during streaming to avoid wasted re-renders when idle.
+    // VP-block redesign Phase 3: a single page-shared "now" ref that ticks
+    // once per second while any VP turn is active, including pauses in text
+    // streaming during tool execution. VpTurnBlock reads it via prop to compute
+    // the live elapsed counter; idle transcripts do not keep a timer running.
     //
     // Why one shared ref (not one per VpTurnBlock instance): a multi-VP
     // group can have 5+ in-flight turns simultaneously; per-component
@@ -1445,9 +1439,9 @@ export default {
       }
     };
     Vue.watch(
-      hasStreamingMessage,
-      (streaming) => {
-        if (streaming) {
+      hasRunningVpTurn,
+      (running) => {
+        if (running) {
           // Take an immediate sample so the "started 0s ago" reads
           // accurately on the first paint, not after the next 1s tick.
           nowMs.value = Date.now();
@@ -1738,6 +1732,55 @@ export default {
     }
 
     // Scroll handling
+    let responseNavigationRafId = null;
+    let responseNavigationResizeObserver = null;
+    const observedResponseElements = new Set();
+
+    const syncResponseNavigationObservers = (responseElements) => {
+      if (!responseNavigationResizeObserver) return;
+      const nextElements = new Set(responseElements);
+      for (const element of observedResponseElements) {
+        if (nextElements.has(element)) continue;
+        responseNavigationResizeObserver.unobserve(element);
+        observedResponseElements.delete(element);
+      }
+      for (const element of nextElements) {
+        if (observedResponseElements.has(element)) continue;
+        responseNavigationResizeObserver.observe(element);
+        observedResponseElements.add(element);
+      }
+    };
+
+    const updateResponseNavigation = () => {
+      responseNavigationRafId = null;
+      const container = containerRef.value;
+      if (!container) {
+        activeLongResponseOriginId.value = '';
+        return;
+      }
+      const viewport = container.getBoundingClientRect?.();
+      const responseEls = Array.from(container.querySelectorAll?.('[data-response-origin-id]') || []);
+      syncResponseNavigationObservers(responseEls);
+      activeLongResponseOriginId.value = resolveLongResponseOrigin({
+        viewportTop: viewport?.top || 0,
+        viewportHeight: container.clientHeight || viewport?.height || 0,
+        responses: responseEls.map((element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            originMessageId: element.dataset?.responseOriginId || '',
+            top: rect.top,
+            bottom: rect.bottom,
+            height: rect.height,
+          };
+        }),
+      });
+    };
+
+    const scheduleResponseNavigationUpdate = () => {
+      if (responseNavigationRafId != null) return;
+      responseNavigationRafId = requestAnimationFrame(updateResponseNavigation);
+    };
+
     const checkIfAtBottom = () => {
       if (!containerRef.value) return true;
       const { scrollTop, scrollHeight, clientHeight } = containerRef.value;
@@ -1832,6 +1875,7 @@ export default {
       virtualTranscriptRef.value?.setBottomFollowEnabled?.(isAtBottom.value);
       if (!userScrollInteractionActive) lastObservedScrollTop = Number(scrollTop || 0);
       maybeLoadMoreNearTop(scrollTop || 0, clientHeight || 0);
+      scheduleResponseNavigationUpdate();
     };
 
     const preserveScrollAnchorDuringLoad = (loadFn, loadingRef) => {
@@ -1966,6 +2010,7 @@ export default {
           containerRef.value.clientHeight || 0,
         );
       }
+      scheduleResponseNavigationUpdate();
     };
 
     const scrollToBottom = () => {
@@ -2039,7 +2084,10 @@ export default {
       { immediate: true }
     );
 
-    Vue.watch(visibleTranscriptTailSignature, smartScrollToBottom);
+    Vue.watch(visibleTranscriptTailSignature, () => {
+      smartScrollToBottom();
+      Vue.nextTick(scheduleResponseNavigationUpdate);
+    });
     Vue.watch(previewShowTypingDots, (show) => { if (show) smartScrollToBottom(); });
     // Reset local transcript state only when the user actually navigates to a
     // different conversation. Yeaft history loading may replace the transport
@@ -2056,6 +2104,30 @@ export default {
 
     const flashMsgId = Vue.ref(null);
     let flashGeneration = 0;
+    const flashMessageRow = (rowId) => {
+      const generation = ++flashGeneration;
+      flashMsgId.value = rowId;
+      setTimeout(() => {
+        if (generation === flashGeneration) flashMsgId.value = null;
+      }, 1800);
+    };
+
+    const jumpToOrigin = async (originMessageId) => {
+      if (!originMessageId) return false;
+      const block = messageBlocks.value.find(item => item?.originMessageId === originMessageId);
+      if (!block?.id) return false;
+      activeLongResponseOriginId.value = '';
+      pauseAutoFollow();
+      const moved = await virtualTranscriptRef.value?.scrollToKey?.(block.id, { align: 'start' });
+      if (!moved) return false;
+      await Vue.nextTick();
+      const rows = containerRef.value?.querySelectorAll?.('[data-msg-id]') || [];
+      const row = Array.from(rows).find(el => el?.dataset?.msgId === originMessageId) || null;
+      if (!row) return false;
+      virtualTranscriptRef.value?.anchorTarget?.(block.id, row, { align: 'start' });
+      flashMessageRow(originMessageId);
+      return true;
+    };
 
     const revealMessage = async (target) => {
       if (!target) return false;
@@ -2074,13 +2146,7 @@ export default {
           return Array.from(rows).find(el => el?.dataset?.msgId === rowId) || null;
         },
         anchorRow: (blockId, _rowId, row, options) => virtualTranscriptRef.value?.anchorTarget?.(blockId, row, options),
-        flashRow: (rowId) => {
-          const generation = ++flashGeneration;
-          flashMsgId.value = rowId;
-          setTimeout(() => {
-            if (generation === flashGeneration) flashMsgId.value = null;
-          }, 1800);
-        },
+        flashRow: flashMessageRow,
       });
       return revealed;
     };
@@ -2088,7 +2154,11 @@ export default {
     expose({ revealMessage });
 
     Vue.onMounted(() => {
+      if (typeof ResizeObserver !== 'undefined') {
+        responseNavigationResizeObserver = new ResizeObserver(scheduleResponseNavigationUpdate);
+      }
       scrollToBottom();
+      Vue.nextTick(scheduleResponseNavigationUpdate);
       if (containerRef.value) {
         containerRef.value.addEventListener('wheel', markUserScrollIntent, { passive: true });
         containerRef.value.addEventListener('touchmove', markUserScrollIntent, { passive: true });
@@ -2110,6 +2180,11 @@ export default {
       window.removeEventListener('pointerup', onPointerScrollEnd);
       window.removeEventListener('pointercancel', onPointerScrollEnd);
       window.removeEventListener('keydown', onScrollKey);
+      if (responseNavigationRafId != null) cancelAnimationFrame(responseNavigationRafId);
+      responseNavigationRafId = null;
+      responseNavigationResizeObserver?.disconnect();
+      responseNavigationResizeObserver = null;
+      observedResponseElements.clear();
       clearUserScrollInteraction();
       if (typingTimer) { clearInterval(typingTimer); typingTimer = null; }
       if (typingHideTimer) { clearTimeout(typingHideTimer); typingHideTimer = null; }
@@ -2122,6 +2197,7 @@ export default {
       containerRef,
       virtualTranscriptRef,
       flashMsgId,
+      jumpToOrigin,
       hasStreamingMessage,
       nowMs,
       showTypingDots,
@@ -2146,12 +2222,9 @@ export default {
       questionRX,
       refreshSession,
       onlineAgents,
-      welcomeInstallCommand,
-      welcomeLlmCommand,
-      welcomeServiceCommand,
+      welcomeAgentSecret,
       welcomeSetupLoading,
       welcomeSetupError,
-      copyWelcomeCommand,
       turnGroups,
       messageBlocks,
       virtualTranscriptIdentity,
@@ -2177,6 +2250,7 @@ export default {
       onClickLoadMore,
       onVirtualTranscriptScrollState,
       isAtBottom,
+      activeLongResponseOriginId,
       scrollToLatest,
     };
   }

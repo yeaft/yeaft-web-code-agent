@@ -2,10 +2,7 @@ import { useAuthStore } from '../stores/auth.js';
 import { isMobile, isInAlipay, isInWeChat } from '../utils/device.js';
 import {
   getAgentContainerCommand,
-  getAgentInstallCommand,
-  getAgentLlmCommand,
   getAgentName,
-  getAgentServiceCommand,
   getServerWsUrl,
 } from '../utils/agentSetup.js';
 import {
@@ -15,15 +12,17 @@ import {
   trackOverlayPointerUp,
 } from '../utils/overlay-dismiss.js';
 import DashboardTab from './DashboardTab.js';
+import AgentInstaller from './AgentInstaller.js';
 import VpCrudPanel from './VpCrudPanel.js';
 import SearchSettingsTab from './SearchSettingsTab.js';
 import McpTab from './McpTab.js';
+import UserShortcutsSettings from './UserShortcutsSettings.js';
 import { loadSandboxState } from '../utils/sandbox-api.js';
 import { confirmDialog } from '../utils/dialog.js';
 
 export default {
   name: 'SettingsPanel',
-  components: { DashboardTab, VpCrudPanel, SearchSettingsTab, McpTab },
+  components: { DashboardTab, AgentInstaller, VpCrudPanel, SearchSettingsTab, McpTab, UserShortcutsSettings },
   props: {
     visible: Boolean,
     initialTab: { type: String, default: '' },
@@ -160,23 +159,8 @@ export default {
                   <span class="sp-warning" v-if="resetConfirm">{{ $t('settings.security.resetWarning') }}</span>
                 </div>
                 <div class="sp-cmd-group" :aria-label="$t('settings.security.agentSetupCommands')">
-                  <div class="sp-cmd-row">
-                    <span class="sp-cmd-label">{{ $t('settings.security.agentCmdInstall') }}</span>
-                    <code class="sp-cmd">{{ agentInstallCommand }}</code>
-                    <button class="sp-icon-btn" @click="copyText(agentInstallCommand)" :title="$t('common.copy')">
-                      <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
-                    </button>
-                  </div>
-                  <div class="sp-cmd-row">
-                    <span class="sp-cmd-label">{{ $t('settings.security.agentCmdService') }}</span>
-                    <template v-if="agentSecret">
-                      <code class="sp-cmd">{{ agentServiceCommand }}</code>
-                      <button class="sp-icon-btn" @click="copyText(agentServiceCommand)" :title="$t('common.copy')">
-                        <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
-                      </button>
-                    </template>
-                    <span v-else class="sp-cmd sp-cmd-placeholder">{{ $t('settings.security.agentCmdNeedsSecret') }}</span>
-                  </div>
+                  <span class="sp-cmd-label">{{ $t('settings.security.agentCmdInstall') }}</span>
+                  <AgentInstaller :agent-secret="agentSecret || ''" :show-settings-link="false" />
                   <div class="sp-cmd-row">
                     <span class="sp-cmd-label">{{ $t('settings.security.agentCmdContainer') }}</span>
                     <template v-if="agentSecret">
@@ -188,13 +172,6 @@ export default {
                     <span v-else class="sp-cmd sp-cmd-placeholder">{{ $t('settings.security.agentCmdNeedsSecret') }}</span>
                   </div>
                   <p class="sp-desc">{{ $t('settings.security.agentCmdContainerDesc') }}</p>
-                  <div class="sp-cmd-row">
-                    <span class="sp-cmd-label">{{ $t('settings.security.agentCmdLlm') }}</span>
-                    <code class="sp-cmd">{{ agentLlmCommand }}</code>
-                    <button class="sp-icon-btn" @click="copyText(agentLlmCommand)" :title="$t('common.copy')">
-                      <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
-                    </button>
-                  </div>
                   <p class="sp-desc">{{ $t('settings.security.agentCmdLlmDesc') }}</p>
                 </div>
               </div>
@@ -240,11 +217,13 @@ export default {
             <!-- General -->
             <div v-show="activeTab === 'general'" class="settings-pane">
               <div class="sp-group">
-                <div class="sp-row">
+                <div class="sp-row sp-general-select-row">
                   <span class="sp-label">{{ $t('settings.general.theme') }}</span>
                   <div class="sp-custom-select" :class="{ open: openDropdown === 'theme' }" v-click-outside="() => closeDropdown('theme')">
-                    <button class="sp-custom-select-trigger" @click="toggleDropdown('theme')">
-                      <span>{{ themeOptions.find(o => o.value === chatStore.theme)?.label }}</span>
+                    <button class="sp-custom-select-trigger" type="button"
+                            :aria-expanded="openDropdown === 'theme'" :aria-label="$t('settings.general.theme')"
+                            @click="toggleDropdown('theme')">
+                      <span>{{ $t('settings.general.currentValue', { value: themeOptions.find(o => o.value === chatStore.theme)?.label }) }}</span>
                       <svg class="sp-custom-select-chevron" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
                     </button>
                     <div class="sp-custom-select-menu" v-show="openDropdown === 'theme'">
@@ -261,11 +240,13 @@ export default {
                     </div>
                   </div>
                 </div>
-                <div class="sp-row">
+                <div class="sp-row sp-general-select-row">
                   <span class="sp-label">{{ $t('settings.general.language') }}</span>
                   <div class="sp-custom-select" :class="{ open: openDropdown === 'language' }" v-click-outside="() => closeDropdown('language')">
-                    <button class="sp-custom-select-trigger" @click="toggleDropdown('language')">
-                      <span>{{ languageOptions.find(o => o.value === selectedLocale)?.label }}</span>
+                    <button class="sp-custom-select-trigger" type="button"
+                            :aria-expanded="openDropdown === 'language'" :aria-label="$t('settings.general.language')"
+                            @click="toggleDropdown('language')">
+                      <span>{{ $t('settings.general.currentValue', { value: languageOptions.find(o => o.value === selectedLocale)?.label }) }}</span>
                       <svg class="sp-custom-select-chevron" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
                     </button>
                     <div class="sp-custom-select-menu" v-show="openDropdown === 'language'">
@@ -282,20 +263,49 @@ export default {
                     </div>
                   </div>
                 </div>
-                <div class="sp-row">
-                  <div class="sp-row-left">
-                    <span class="sp-label">{{ $t('settings.general.telemetry') }}</span>
-                    <span class="sp-desc">{{ $t('settings.general.telemetryDesc') }}</span>
+                <div class="sp-row sp-setting-row">
+                  <div class="sp-row-left sp-setting-copy">
+                    <span id="general-telemetry-label" class="sp-label">{{ $t('settings.general.telemetry') }}</span>
+                    <span id="general-telemetry-desc" class="sp-desc">{{ $t('settings.general.telemetryDesc') }}</span>
                   </div>
-                  <button class="sp-btn sp-btn-muted" @click="toggleTelemetry" :disabled="telemetrySaving">
-                    {{ telemetryEnabled ? $t('settings.general.telemetryOn') : $t('settings.general.telemetryOff') }}
-                  </button>
+                  <div class="sp-setting-switch-control">
+                    <span class="sp-setting-status" aria-live="polite">
+                      {{ telemetryLoading ? $t('settings.general.telemetryLoading') : (telemetrySaving ? $t('settings.general.telemetrySaving') : (telemetryLoaded ? (telemetryEnabled ? $t('settings.general.telemetryOn') : $t('settings.general.telemetryOff')) : $t('settings.general.telemetryUnavailable'))) }}
+                    </span>
+                    <button class="sp-setting-switch" :class="{ active: telemetryLoaded && telemetryEnabled }"
+                            type="button" role="switch" :aria-checked="telemetryLoaded && telemetryEnabled"
+                            aria-labelledby="general-telemetry-label" aria-describedby="general-telemetry-desc"
+                            :disabled="telemetryLoading || telemetrySaving || !telemetryLoaded"
+                            @click="toggleTelemetry">
+                      <span class="sp-setting-switch-knob" aria-hidden="true"></span>
+                    </button>
+                  </div>
+                  <span v-if="telemetryErrorMessage" class="sp-setting-error" role="alert">{{ telemetryErrorMessage }}</span>
                 </div>
-                <div class="sp-row">
+                <div class="sp-row sp-setting-row">
+                  <div class="sp-row-left sp-setting-copy">
+                    <span id="general-work-center-label" class="sp-label">{{ $t('settings.general.workCenter') }}</span>
+                    <span id="general-work-center-desc" class="sp-desc">{{ $t('settings.general.workCenterDesc') }}</span>
+                  </div>
+                  <div class="sp-setting-switch-control">
+                    <span class="sp-setting-status">
+                      {{ chatStore.workCenterUiEnabled ? $t('settings.general.workCenterOn') : $t('settings.general.workCenterOff') }}
+                    </span>
+                    <button class="sp-setting-switch" :class="{ active: chatStore.workCenterUiEnabled }"
+                            type="button" role="switch" :aria-checked="chatStore.workCenterUiEnabled"
+                            aria-labelledby="general-work-center-label" aria-describedby="general-work-center-desc"
+                            @click="toggleWorkCenter">
+                      <span class="sp-setting-switch-knob" aria-hidden="true"></span>
+                    </button>
+                  </div>
+                </div>
+                <div class="sp-row sp-general-select-row">
                   <span class="sp-label">{{ $t('files.officePreviewMode') }}</span>
                   <div class="sp-custom-select" :class="{ open: openDropdown === 'officePreview' }" v-click-outside="() => closeDropdown('officePreview')">
-                    <button class="sp-custom-select-trigger" @click="toggleDropdown('officePreview')">
-                      <span>{{ officePreviewOptions.find(o => o.value === officePreviewMode)?.label }}</span>
+                    <button class="sp-custom-select-trigger" type="button"
+                            :aria-expanded="openDropdown === 'officePreview'" :aria-label="$t('files.officePreviewMode')"
+                            @click="toggleDropdown('officePreview')">
+                      <span>{{ $t('settings.general.currentValue', { value: officePreviewOptions.find(o => o.value === officePreviewMode)?.label }) }}</span>
                       <svg class="sp-custom-select-chevron" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
                     </button>
                     <div class="sp-custom-select-menu" v-show="openDropdown === 'officePreview'">
@@ -313,6 +323,7 @@ export default {
                   </div>
                 </div>
               </div>
+              <UserShortcutsSettings />
             </div>
 
             <!-- Managed Sandbox -->
@@ -562,7 +573,12 @@ export default {
         rawExchangeMaxBytes: 524288,
         traceTextMaxBytes: 262144,
       },
+      telemetryGeneration: 0,
+      telemetryAgentId: null,
+      telemetryLoading: false,
+      telemetryLoaded: false,
       telemetrySaving: false,
+      telemetryErrorMessage: '',
       ssoBoundMessage: '',
       ssoConflictMessage: '',
       qrDataUrl: '',
@@ -667,25 +683,12 @@ export default {
     serverWsUrl() {
       return getServerWsUrl(location);
     },
-    agentInstallCommand() {
-      return getAgentInstallCommand();
-    },
-    agentServiceCommand() {
-      return getAgentServiceCommand({
-        profile: this.profile,
-        agentSecret: this.agentSecret,
-        serverWsUrl: this.serverWsUrl,
-      });
-    },
     agentContainerCommand() {
       return getAgentContainerCommand({
         profile: this.profile,
         agentSecret: this.agentSecret,
         serverWsUrl: this.serverWsUrl,
       });
-    },
-    agentLlmCommand() {
-      return getAgentLlmCommand();
     },
     ssoProviderRows() {
       const auth = this.authStore;
@@ -737,6 +740,7 @@ export default {
     return undefined;
   },
   beforeUnmount() {
+    this.invalidateTelemetry();
     this.invalidateSandboxLoads();
     this.stopSandboxPolling();
   },
@@ -748,11 +752,16 @@ export default {
         this.loadData();
         if (this.activeTab === 'sandbox') this.loadSandbox();
       } else {
+        this.invalidateTelemetry();
         this.invalidateSandboxLoads();
         this.stopSandboxPolling();
         // Closing settings while a bind QR is up should tear it down too.
         if (this.authStore.qrPanel) this.cancelQrBind();
       }
+    },
+    'chatStore.currentAgent'() {
+      this.invalidateTelemetry();
+      if (this.visible) this.loadTelemetry();
     },
     activeTab(tab) {
       if (tab === 'invitations' && this.authStore.role === 'admin') {
@@ -919,24 +928,65 @@ export default {
     trackOverlayPointerUp,
     clearOverlayPointerGesture,
 
-    async loadTelemetry() {
-      const settings = await this.chatStore.loadTelemetrySettings();
-      if (settings && !settings.error) this.telemetryDraft = { ...this.telemetryDraft, ...settings };
+    invalidateTelemetry() {
+      this.telemetryGeneration += 1;
+      this.telemetryLoaded = false;
+      this.telemetryLoading = false;
+      this.telemetrySaving = false;
+      this.telemetryErrorMessage = '';
     },
 
-    async saveTelemetry() {
-      this.telemetrySaving = true;
+    async loadTelemetry() {
+      this.invalidateTelemetry();
+      const generation = this.telemetryGeneration;
+      const agentId = this.chatStore.currentAgent;
+      this.telemetryAgentId = agentId;
+      const isCurrent = () => generation === this.telemetryGeneration
+        && agentId === this.chatStore.currentAgent;
+      this.telemetryLoading = true;
       try {
-        const settings = await this.chatStore.updateTelemetrySettings(this.telemetryDraft);
-        if (settings && !settings.error) this.telemetryDraft = { ...this.telemetryDraft, ...settings };
+        const settings = await this.chatStore.loadTelemetrySettings(agentId);
+        if (!isCurrent()) return;
+        if (!settings || settings.error) throw new Error(settings?.error || 'load failed');
+        this.telemetryDraft = { ...this.telemetryDraft, ...settings };
+        this.telemetryLoaded = true;
+      } catch {
+        if (!isCurrent()) return;
+        this.telemetryLoaded = false;
+        this.telemetryErrorMessage = this.$t('settings.general.telemetryLoadFailed');
       } finally {
-        this.telemetrySaving = false;
+        if (isCurrent()) this.telemetryLoading = false;
       }
     },
 
     async toggleTelemetry() {
-      this.telemetryDraft = { ...this.telemetryDraft, enabled: !this.telemetryEnabled };
-      await this.saveTelemetry();
+      if (this.telemetryLoading || this.telemetrySaving || !this.telemetryLoaded
+        || this.telemetryAgentId !== this.chatStore.currentAgent) return;
+      const generation = ++this.telemetryGeneration;
+      const agentId = this.telemetryAgentId;
+      const isCurrent = () => generation === this.telemetryGeneration
+        && agentId === this.chatStore.currentAgent;
+      const previous = { ...this.telemetryDraft };
+      const requested = { ...previous, enabled: !this.telemetryEnabled };
+      this.telemetrySaving = true;
+      this.telemetryErrorMessage = '';
+      try {
+        const settings = await this.chatStore.updateTelemetrySettings(requested, agentId);
+        if (!isCurrent()) return;
+        if (!settings || settings.error) throw new Error(settings?.error || 'save failed');
+        this.telemetryDraft = { ...previous, ...settings };
+      } catch {
+        if (!isCurrent()) return;
+        this.telemetryDraft = previous;
+        this.telemetryErrorMessage = this.$t('settings.general.telemetrySaveFailed');
+      } finally {
+        if (isCurrent()) this.telemetrySaving = false;
+      }
+    },
+
+
+    toggleWorkCenter() {
+      this.chatStore.setWorkCenterUiEnabled(!this.chatStore.workCenterUiEnabled);
     },
 
     formatBytes(value) {

@@ -113,6 +113,7 @@ export function registerWorkbenchRequest({
   terminalId = null,
   allowLegacyCorrelation = false,
   onTimeout = null,
+  onResponse = null,
 }) {
   if (!agentId || !clientId || !userId || !routeKey || !conversationId
       || !workspaceGeneration || !requestType) return null;
@@ -144,6 +145,7 @@ export function registerWorkbenchRequest({
     terminalId,
     allowLegacyCorrelation: allowLegacyCorrelation === true,
     onTimeout,
+    onResponse,
     expiresAt: Date.now() + REQUEST_TTL_MS,
     timeout: null,
   };
@@ -159,6 +161,15 @@ function consumePending(key, pending) {
   pendingRequests.delete(key);
   if (pending.timeout) clearTimeout(pending.timeout);
   pending.timeout = null;
+  return pending;
+}
+
+export function peekWorkbenchRequest({ agentId, requestId, responseType, routeKey = null }) {
+  if (!agentId || !requestId || !responseType) return null;
+  prune();
+  const pending = pendingRequests.get(requestKey(agentId, requestId));
+  if (!pending || !pending.expectedResponseTypes.has(responseType)) return null;
+  if (routeKey && pending.routeKey !== routeKey) return null;
   return pending;
 }
 
@@ -317,6 +328,7 @@ export function clearWorkbenchCorrelationsForAgent(agentId) {
   if (!agentId) return;
   for (const [key, pending] of pendingRequests) {
     if (pending?.agentId !== agentId) continue;
+    if (pending.onResponse) pending.onTimeout?.(pending, 'disconnect');
     pendingRequests.delete(key);
     if (pending.timeout) clearTimeout(pending.timeout);
     pending.timeout = null;

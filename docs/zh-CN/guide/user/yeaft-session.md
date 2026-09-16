@@ -30,6 +30,14 @@ Session metadata 和 history 位于所属 Agent 的 Yeaft 目录。`workDir` 是
 
 全能助手可帮助处理问答、研究、写作、翻译、学习、规划、数据分析和编程执行，而不只是澄清需求或转交任务。它会根据任务选择直接回答、使用工具或协作，并遵守项目分工与授权边界。Agent 启动时会将精确匹配旧默认版本的 soul 和对应旧名称、角色、简介升级；用户改写过的 soul 或自定义元数据不会被覆盖。
 
+## Fork 当前 Session
+
+在当前 Session 的侧栏菜单选择 **Fork 当前会话**，或点击 conversation 右上角的 **Fork**。无需填写创建弹窗，完成后自动打开同一 Agent 上的新 Session。
+
+Fork 保留完整持久对话、公告、VP roster/default VP、工作目录和 Session model/effort 配置。原 Session 属于 Project 时，Server 会将新 Session 放入同一 Project，继续使用统一 instruction。原 Session 不变，之后两边的对话和 Session 配置修改彼此独立。
+
+正在生成回复时需等待结束；断线或 Fork 进行中时入口禁用。Fork 不复制后台进程、运行任务、debug trace 或 Session memory 文件；附件引用保持原所有权。Project 继承要求 Server 和 Agent 均支持此能力。
+
 ## 路由一个 turn
 
 没有 mention 的消息发送给 default VP。用 `@VPName` 指定子集：
@@ -47,6 +55,14 @@ Session metadata 和 history 位于所属 Agent 的 Yeaft 目录。`workDir` 是
 ```
 
 选择多个 VP 时，Yeaft 只持久化一条 canonical user message，然后 fan-out 到独立 VP engine。每个 VP 有自己的 persona 和 memory view，流式输出自己的回复，并使用当前 Session 允许的工具；共享 timeline 会保留 speaker identity。
+
+## 规划与进度
+
+原生引擎已禁用 `TodoWrite` 和 `StartPlan`，不再为展示清单而要求模型反复更新步骤或额外调用规划工具。工具注册表和 `DiscoverTools` 都不提供这两项能力。
+
+你仍可要求 VP“先调查并给出方案，不要修改代码”，通过普通回复讨论目标、约束、风险和验证方法。当前没有单独的 Plan Mode 开关；这类对话要求不等于文件系统只读沙箱。
+
+旧 Session 中的 checklist 仍可回放；Claude Code / Copilot CLI 自身的工具行为不受影响。需要跨 turn 的持久任务状态与验收时，使用 [Work Center](./work-center.md)。用户自定义的 Project 指令、VP soul 和 `planInstruction` 数据不会被自动改写；如果自定义指令仍强制要求调用旧工具，应自行更新。
 
 ## Handoff 与 sub-agent
 
@@ -70,6 +86,14 @@ Yeaft 页面提供：
 - 可选 debug panel，用于检查 provider request、memory recall、tools、tokens 和 stop reason。
 
 Debug output 可能包含 project 文本与 tool result，只应由当前 owner 使用，不要随意导出或共享。
+
+### 回答 AskUser 提问
+
+VP 调用 `AskUser` 时会出现交互卡片。切换 Session 后返回，只要 Agent 中的提问仍有效，就可以继续回答。
+
+- 点击提交后显示“等待 Agent 确认”，不代表回答已被接受；收到 Agent 确认或已持久化的回答历史后才显示成功摘要。
+- 15 秒仍未收到确认时，可以检查连接并使用“重发回答”；重发沿用原问题身份，不会重复完成同一个提问。
+- Agent 暂不可用时显示可重试提示；问题已过期、执行已取消或 Agent 重启后等待请求已丢失时，需要让 VP 重新提问。重发不会复活已经结束的 turn。
 
 ## 用 Project 组织 Session
 

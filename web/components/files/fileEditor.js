@@ -7,6 +7,7 @@
 const OFFICE_EXT = new Set(['.docx', '.xlsx', '.xls', '.pptx', '.ppt']);
 const PDF_EXT = new Set(['.pdf']);
 const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico']);
+const VIDEO_EXT = new Set(['.mp4', '.m4v', '.webm', '.ogv', '.ogg', '.mov']);
 const MD_EXT = new Set(['.md', '.markdown', '.mdx']);
 
 export function getFileType(name) {
@@ -16,6 +17,7 @@ export function getFileType(name) {
   if (OFFICE_EXT.has(ext)) return 'office';
   if (PDF_EXT.has(ext)) return 'pdf';
   if (IMAGE_EXT.has(ext)) return 'image';
+  if (VIDEO_EXT.has(ext)) return 'video';
   return 'text';
 }
 

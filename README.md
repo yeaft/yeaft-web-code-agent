@@ -44,6 +44,10 @@ Some internal wire types and storage paths retain historical names such as `grou
 
 The Web UI also includes a terminal, Git status/diff, file browser/editor, port proxy, split-screen CLI conversations, an Expert Panel for Claude Code conversations, usage administration, light/dark themes, and English/Chinese localization.
 
+### Math in Markdown messages
+
+Markdown messages render LaTeX formulas locally with KaTeX: use `$E=mc^2$` or `\(E=mc^2\)` inline, and `$$...$$` or `\[...\]` for display equations (including multiple lines). Code spans and code blocks stay literal. Unsupported formulas remain readable source text; long equations scroll horizontally on narrow screens. This supports KaTeX's math syntax, not complete LaTeX documents, and requires no runtime CDN.
+
 ## Current native Yeaft capabilities
 
 ### Sessions and Projects
@@ -114,6 +118,10 @@ The default service instance is the exception: it uses `~/.yeaft/config.json`. A
 Claude Code and Copilot CLI conversations require their corresponding CLI to be installed and authenticated separately.
 
 ### Connect an Agent to an existing server
+
+Recommended: open **Settings → Security**, choose **Linux / macOS** or **Windows PowerShell**, and copy the one-line installer command. It checks Node.js/npm, installs the Agent in an isolated user directory, and starts a new instance named `<hostname>-<four random digits>` with your server address and Secret. Existing Node installations and running Agents are not replaced. See [Agent Setup](docs/guide/deploy-agent.md) for platform requirements, security notes and management commands.
+
+Manual alternative:
 
 ```bash
 npm install -g @yeaft/webchat-agent

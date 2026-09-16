@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { assertCoordinatorContractAuthority, normalizeContractPatch } from './completion-contract.js';
+import { deriveGoalProgress } from './goal-state.js';
 import {
   BUILT_IN_ACTION_TYPES,
   MAX_WORK_ITEM_ACTIONS,
@@ -110,7 +112,9 @@ export function prepareDynamicActionMutation({
   actions,
   decision,
   availableVpIds = null,
+  automatic = false,
 }) {
+  assertCoordinatorContractAuthority(decision?.contractPatch, !automatic);
   if (!isDynamicWorkItem(workItem)) {
     throw new Error('Work Center dynamic Action creation requires a Coordinator-driven WorkItem');
   }
@@ -131,10 +135,20 @@ export function prepareDynamicActionMutation({
   if (supersedeActionIds.some(actionId => closeActionIds.has(actionId))) {
     throw new Error('Work Center cannot both close and supersede the same Action');
   }
+  const contractPatch = normalizeContractPatch(decision.contractPatch);
   const effectiveWorkItem = {
     ...workItem,
-    ...(decision.contractPatch || {}),
+    ...(contractPatch || {}),
   };
+  if (contractPatch && ['title', 'goal', 'acceptanceCriteria', 'deliveryTarget']
+    .some(key => JSON.stringify(effectiveWorkItem[key]) !== JSON.stringify(workItem[key]))) {
+    effectiveWorkItem.revision = (Number(workItem.revision) || 1) + 1;
+  }
+  const progress = deriveGoalProgress({ ...effectiveWorkItem, actions });
+  if (progress.totalCriteriaCount > 0 && !progress.remainingCriteria.length
+      && progress.delivery.status === 'passed' && !progress.blockers.length) {
+    throw new Error('Action creation requires an unmet goal condition or blocker; current evidence already supports completion');
+  }
   const createdActions = requested.map((raw, index) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
       throw new Error('Work Center Coordinator Action specification must be an object');
@@ -187,6 +201,18 @@ export function prepareDynamicActionMutation({
         throw new Error(`Work Center integrate Action source is not a completed isolated write: ${invalid}`);
       }
     }
+    // Optional refs are persisted inside the existing brief envelope, keeping
+    // historical Actions readable without a schema migration.
+    const goalRefs = normalizeDynamicGoalRefs(raw.goalRefs, effectiveWorkItem, actions);
+    const repeated = actions.some(previous => !['closed', 'superseded', 'cancelled'].includes(previous.status)
+      && previous.type === type && previous.brief?.objective === brief.objective)
+      || requested.slice(0, index).some(previous => previous.type === type && previous.objective?.trim() === brief.objective);
+    const rationale = raw.rationale || (goalRefs ? raw.goalRefs.rationale : '');
+    if (repeated && (!goalRefs || typeof rationale !== 'string' || rationale.trim().length < 20)) {
+      throw new Error('Repeated Action requires goalRefs and a concrete rationale explaining the remaining gap or changed evidence');
+    }
+    if (goalRefs) brief.goalRefs = goalRefs;
+    if (typeof rationale === 'string' && rationale.trim()) brief.rationale = rationale.trim().slice(0, 2_000);
     const action = {
       id,
       type,
@@ -233,9 +259,32 @@ export function prepareDynamicActionMutation({
     createdActions,
     closeActions,
     supersedeActionIds,
-    contractPatch: decision.contractPatch || null,
+    contractPatch,
     workItemType,
   };
+}
+
+/** Optional explicit connection to an unmet criterion, delivery boundary, or blocker. */
+export function normalizeDynamicGoalRefs(value, workItem, actions = []) {
+  if (value == null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) throw new Error('Action goalRefs must be an object');
+  const criteria = uniqueStrings(value.criteria);
+  const blockerActionIds = uniqueStrings(value.blockerActionIds);
+  const delivery = value.delivery === true;
+  const progress = deriveGoalProgress({ ...workItem, actions });
+  if (!criteria.length && !blockerActionIds.length && !delivery) {
+    throw new Error('Action goalRefs must address an unmet criterion, delivery condition, or blocker');
+  }
+  if (criteria.some(criterion => !progress.remainingCriteria.includes(criterion))) {
+    throw new Error('Action goalRefs references an unknown or already satisfied criterion');
+  }
+  if (blockerActionIds.some(id => !progress.blockers.some(blocker => blocker.actionId === id))) {
+    throw new Error('Action goalRefs references an unknown or resolved blocker');
+  }
+  if (delivery && progress.delivery.status === 'passed') {
+    throw new Error('Action goalRefs references an already satisfied delivery condition');
+  }
+  return { criteria, blockerActionIds, delivery };
 }
 
 function normalizeEvidenceRunIds(value) {

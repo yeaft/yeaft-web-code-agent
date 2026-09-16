@@ -11,7 +11,10 @@ describe('packaged local runtime', () => {
     const runtimeDir = join(agentDir, 'local-runtime');
     try {
       mkdirSync(join(rootDir, 'server'), { recursive: true });
-      mkdirSync(join(rootDir, 'web', 'dist'), { recursive: true });
+      mkdirSync(join(rootDir, 'web', 'dist', 'installers'), { recursive: true });
+      for (const file of ['install.sh', 'install.ps1']) {
+        writeFileSync(join(rootDir, 'web', 'dist', 'installers', file), `bootstrap ${file}\n`);
+      }
       mkdirSync(agentDir, { recursive: true });
       writeFileSync(join(rootDir, 'server', 'index.js'), "import '../agent/container-manager.js';\n");
       writeFileSync(join(rootDir, 'web', 'dist', 'index.html'), '<main>Yeaft</main>');
@@ -25,6 +28,9 @@ describe('packaged local runtime', () => {
         .toBe('{"version":"1.2.3"}\n');
       expect(existsSync(join(runtimeDir, 'server', 'index.js'))).toBe(true);
       expect(existsSync(join(runtimeDir, 'web', 'index.html'))).toBe(true);
+      for (const file of ['install.sh', 'install.ps1']) {
+        expect(readFileSync(join(runtimeDir, 'web', 'installers', file), 'utf8')).toBe(`bootstrap ${file}\n`);
+      }
     } finally {
       rmSync(rootDir, { recursive: true, force: true });
     }

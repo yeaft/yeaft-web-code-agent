@@ -9,7 +9,12 @@ import { defineTool } from './types.js';
 
 /** Strip HTML tags and normalize whitespace for readability. */
 function htmlToText(html) {
-  return html
+  // Remove common site chrome before applying the caller's length budget.
+  // Fall back for pages whose only content is navigation; raw/API is untouched.
+  const cleaned = html.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+  const withoutChrome = cleaned.replace(/<(nav|footer)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+  const source = withoutChrome.replace(/<[^>]+>/g, '').trim() ? withoutChrome : cleaned;
+  return source
     // Remove script/style blocks
     .replace(/<script[\s\S]*?<\/script>/gi, '')
     .replace(/<style[\s\S]*?<\/style>/gi, '')

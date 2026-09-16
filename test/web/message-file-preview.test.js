@@ -10,8 +10,10 @@ import {
 import * as Vue from 'vue';
 import {
   collectMessageFileReferences,
+  collectMessageImageReferences,
   decorateMessageFileReferences,
   resolveMessageFileReference,
+  resolveMessageImageFileReference,
 } from '../../web/utils/message-file-reference.js';
 
 const readWeb = path => readFileSync(resolve(process.cwd(), 'web', path), 'utf8');
@@ -61,6 +63,9 @@ const workbenchStore = Vue.reactive({
   workbenchRouteProtocolSupported: true,
   hasCapability(capability) {
     return this.capabilities.includes(capability);
+  },
+  hasAgentCapability(agentId, capability) {
+    return agentId === this.currentAgent && this.capabilities.includes(capability);
   },
   toggleWorkbench: vi.fn(),
   toggleWorkbenchMaximized: vi.fn(),
@@ -542,6 +547,7 @@ describe('Workbench capability launcher', () => {
       'directory_listing',
       'file_search_result',
       'file_tabs_restored',
+      'video_metadata',
     ]) {
       expect(isWorkbenchMessageForRoute({
         type,
@@ -897,6 +903,87 @@ describe('message file preview', () => {
     expect(resolveMessageFileReference('https://example.test/design-doc.md')).toBeNull();
     expect(resolveMessageFileReference('#section')).toBeNull();
     expect(resolveMessageFileReference('/api/files/readme.md')).toBeNull();
+    expect(resolveMessageImageFileReference('/assistant.png', '/workspace')).toBeNull();
+    expect(resolveMessageImageFileReference('/web/images/assistant.png', '/workspace')).toBeNull();
+    expect(resolveMessageImageFileReference('/workspace/screens/result.png', '/workspace')).toEqual({
+      path: '/workspace/screens/result.png', line: null,
+    });
+  });
+
+  it('normalizes ranges, encoded labels and Windows file URLs without losing the line', () => {
+    for (const href of ['src/main.js:20-35', 'src/main.js:20:4-35:8', 'src/main.js#L20-L35', 'src/main.js#L20–L35']) {
+      expect(resolveMessageFileReference(href)).toEqual({ path: 'src/main.js', line: 20 });
+    }
+    expect(resolveMessageFileReference('file:///C:/my%20repo/src/main.js#L20-L35'))
+      .toEqual({ path: 'C:/my repo/src/main.js', line: 20 });
+    expect(resolveMessageFileReference('docs/设计%20说明.md#L10-L12'))
+      .toEqual({ path: 'docs/设计 说明.md', line: 10 });
+    expect(resolveMessageFileReference('docs/a&amp;b.md')).toEqual({ path: 'docs/a&b.md', line: null });
+    expect(resolveMessageFileReference('main.js:20-35')).toEqual({ path: 'main.js', line: 20 });
+    expect(resolveMessageFileReference('README:20')).toEqual({ path: 'README', line: 20 });
+    expect(resolveMessageFileReference('https%3A%2F%2Fexample.test%2Fa.md')).toBeNull();
+    expect(resolveMessageFileReference('src/%00file.js')).toBeNull();
+  });
+
+  it('collects Unicode bare paths and never creates nested anchors for code labels', () => {
+    const source = '<p>查看 docs/设计说明.md:10-12。 <code>docs/设计 说明.md#L2-L5</code> '
+      + '<a href="src/main.js#L20-L35"><code>src/main.js</code></a> '
+      + '<a href="https://example.test"><code>src/main.js</code></a> '
+      + 'https://example.test/unrelated.js</p>';
+    expect(collectMessageFileReferences(source)).toEqual(['docs/设计说明.md', 'docs/设计 说明.md', 'src/main.js']);
+    const html = decorateMessageFileReferences(source, {
+      'docs/设计说明.md': 'docs/设计说明.md',
+      'docs/设计 说明.md': 'docs/设计 说明.md',
+      'src/main.js': 'src/main.js',
+    });
+    const host = document.createElement('div');
+    host.innerHTML = html;
+    expect(host.querySelectorAll('a.message-file-reference')).toHaveLength(3);
+    expect(html).not.toMatch(/<a\b[^>]*>\s*<a\b/);
+    expect(host.querySelector('a[href="https://example.test"]').innerHTML).toBe('<code>src/main.js</code>');
+    expect(host.querySelector('a[href="src/main.js#L20-L35"]').textContent).toBe('src/main.js');
+  });
+
+  it('uses consistent HTML text boundaries and does not link fragments of URI schemes', () => {
+    const source = '<p>docs/a&amp;b.md &lt;script&gt; docs/c&#38;d.md main.js:20-35 '
+      + 'mailto:user@example.com data:text/plain,file.js ssh:host/file.js https://host/file.js</p>';
+    expect(collectMessageFileReferences(source)).toEqual(['docs/a&b.md', 'docs/c&d.md', 'main.js']);
+    const html = decorateMessageFileReferences(source, {
+      'docs/a&b.md': 'docs/a&b.md', 'docs/c&d.md': 'docs/c&d.md', 'main.js': 'main.js',
+      'b.md': 'wrong.js', 'file.js': 'wrong.js', 'user@example.com': 'wrong.js',
+    });
+    const host = document.createElement('div');
+    host.innerHTML = html;
+    expect(host.querySelector('script')).toBeNull();
+    expect([...host.querySelectorAll('a')].map(link => link.dataset.resolvedFilePath))
+      .toEqual(['docs/a&b.md', 'docs/c&d.md', 'main.js']);
+    expect(host.textContent).toContain('docs/a&b.md <script> docs/c&d.md');
+    expect(html).not.toContain('data-resolved-file-path="wrong.js"');
+  });
+
+  it('decodes named entities once and never links filename suffixes or protocol-relative URLs', () => {
+    const source = '<p>docs/a&nbsp;b.md docs/a&copy;b.md docs/a&amp;amp;b.md '
+      + 'docs/a&CounterClockwiseContourIntegral;b.md src/valid.js //example.test/remote.js</p>';
+    const paths = ['docs/a\u00a0b.md', 'docs/a©b.md', 'docs/a&amp;b.md', 'docs/a∳b.md', 'src/valid.js'];
+    expect(collectMessageFileReferences(source)).toEqual(paths);
+    const host = document.createElement('div');
+    const original = document.createElement('div');
+    original.innerHTML = source;
+    host.innerHTML = decorateMessageFileReferences(source, {
+      ...Object.fromEntries(paths.map(path => [path, path])),
+      'b.md': 'wrong.js', 'remote.js': 'wrong.js',
+    });
+    expect([...host.querySelectorAll('a')].map(link => link.dataset.resolvedFilePath)).toEqual(paths);
+    expect(host.textContent).toBe(original.textContent);
+    expect(resolveMessageFileReference('//example.test/remote.js')).toBeNull();
+    expect(collectMessageFileReferences('<p>[main.js:20],other.js:30</p>')).toEqual(['main.js', 'other.js']);
+
+    const encoded = '<a href="docs/a&amp;amp;b.md#L3">report</a> <code>docs/a&amp;amp;b.md</code>';
+    expect(collectMessageFileReferences(encoded)).toEqual(['docs/a&amp;b.md']);
+    host.innerHTML = decorateMessageFileReferences(encoded, { 'docs/a&amp;b.md': 'docs/a&amp;b.md' });
+    expect(host.querySelector('a').getAttribute('href')).toBe('docs/a&amp;b.md#L3');
+    expect(resolveMessageFileReference(host.querySelector('a').getAttribute('href'), { htmlEncoded: false }))
+      .toEqual({ path: 'docs/a&amp;b.md', line: 3 });
   });
 
   it('rejects Git refs and versions without blocking recognizable extensionless files', () => {
@@ -916,7 +1003,38 @@ describe('message file preview', () => {
     expect(resolveMessageFileReference('.gitignore')).toEqual({ path: '.gitignore', line: null });
   });
 
-  it('collects and decorates Agent-confirmed file paths in ordinary response text', () => {
+  it('holds local Markdown images until an authorized preview URL is available', () => {
+    const source = '<p><img src="/workspace/screens/result.png" alt="result"> <img src="https://example.test/remote.png"></p>';
+    expect(collectMessageImageReferences(source, '/workspace')).toEqual(['/workspace/screens/result.png']);
+    expect(collectMessageFileReferences(source, '/workspace')).toEqual(['/workspace/screens/result.png']);
+
+    const pending = decorateMessageFileReferences(source, new Map(), new Map(), '/workspace');
+    expect(pending).not.toContain('src="/workspace/screens/result.png"');
+    expect(pending).toContain('data-local-image-path="/workspace/screens/result.png"');
+    expect(pending).toContain('src="https://example.test/remote.png"');
+
+    const resolved = decorateMessageFileReferences(source, new Map(), new Map([
+      ['/workspace/screens/result.png', '/api/preview/image-1?token=secret'],
+    ]), '/workspace');
+    expect(resolved).toContain('src="/api/preview/image-1?token=secret"');
+    expect(resolved).toContain('data-local-image-path="/workspace/screens/result.png"');
+  });
+
+  it('makes recognizable file paths clickable before optional Agent resolution', () => {
+    const source = '<p>Try <code>README.md:1</code>, docs/guide.md#L3, and <a href="docs/spec.md#L8">the spec</a>.</p>';
+    const host = document.createElement('div');
+    host.innerHTML = decorateMessageFileReferences(source);
+
+    const links = [...host.querySelectorAll('a.message-file-reference')];
+    expect(links.map(link => [link.textContent, link.dataset.resolvedFilePath])).toEqual([
+      ['README.md:1', 'README.md'],
+      ['the spec', 'docs/spec.md'],
+    ]);
+    expect(resolveMessageFileReference(links[0].getAttribute('href'), { htmlEncoded: false }))
+      .toEqual({ path: 'README.md', line: 1 });
+  });
+
+  it('prefers Agent-confirmed paths but keeps recognizable unresolved paths clickable', () => {
     const source = [
       '<p>Changed web/components/AssistantTurn.js:410 and missing/not-created.js.</p>',
       '<p><strong>Also:</strong> docs/design-doc.md#L119, but not origin/main or v1.0.486.</p>',
@@ -962,8 +1080,7 @@ describe('message file preview', () => {
     ]));
 
     expect(html).toContain('data-resolved-file-path="docs/design-doc.md" class="message-file-reference"');
-    expect(html).toContain('notes');
-    expect(html).not.toContain('href="docs/notes.md"');
+    expect(html).toContain('href="docs/notes.md" data-resolved-file-path="docs/notes.md"');
     expect(html).toContain('data-resolved-file-path="web/components/WorkbenchPanel.js" class="message-file-reference"');
     expect(html).toContain('<code>origin/main</code>');
     expect(html).toContain('<code>v1.0.403</code>');
@@ -1011,7 +1128,7 @@ describe('message file preview', () => {
     });
 
     expect(resolveMessageFileReferences).toHaveBeenCalledWith(['docs/design-doc.md']);
-    expect(wrapper.find('a[href="docs/design-doc.md#L119"]').exists()).toBe(false);
+    expect(wrapper.find('a[href="docs/design-doc.md#L119"]').exists()).toBe(true);
     window.dispatchEvent(new CustomEvent('workbench-message', { detail: {
       type: 'file_references_resolved',
       requestId: 'file-refs-request',
@@ -1023,6 +1140,100 @@ describe('message file preview', () => {
 
     await wrapper.get('a[href="https://example.test"]').trigger('click');
     expect(openFileInExplorer).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it('maps a local response image through resolution and a route-scoped preview read', async () => {
+    const resolveMessageFileReferences = vi.fn(() => 'resolve-image');
+    const requestMessageImagePreview = vi.fn(() => 'read-image');
+    const fileReferenceStore = Vue.reactive({
+      effectiveWorkDir: '/workspace',
+      fileReferenceResolutionContextKey: 'connected:agent-1:session-a:/workspace',
+      answerUserQuestion: vi.fn(), cancelVpTurn: vi.fn(), openFileInExplorer: vi.fn(),
+      resolveMessageFileReferences, requestMessageImagePreview,
+    });
+    globalThis.Vue = Vue;
+    globalThis.Pinia = {
+      defineStore: () => () => ({}),
+      useChatStore: () => fileReferenceStore,
+    };
+    globalThis.marked = {
+      setOptions: vi.fn(),
+      parse: vi.fn(() => '<p><img src="/workspace/screens/result.png" alt="result"></p>'),
+    };
+    globalThis.hljs = undefined;
+    const { default: AssistantTurn } = await import('../../web/components/AssistantTurn.js');
+    const wrapper = mount(AssistantTurn, {
+      props: {
+        turn: {
+          id: 'turn-local-image', textContent: 'image',
+          textSegments: [{ key: 'result', content: 'image', kind: 'result' }],
+          toolMsgs: [], imageMsgs: [], todoMsg: null, askMsg: null, isStreaming: false,
+        },
+      },
+      global: {
+        mocks: { $t: key => key }, provide: { t: key => key },
+        stubs: { ToolLine: true, AskCard: true, VpSpeakerHeader: true },
+      },
+    });
+
+    expect(resolveMessageFileReferences).toHaveBeenCalledWith(['/workspace/screens/result.png']);
+    expect(wrapper.find('.turn-text img').exists()).toBe(false);
+    window.dispatchEvent(new CustomEvent('workbench-message', { detail: {
+      type: 'file_references_resolved', requestId: 'resolve-image',
+      references: [{ requestedPath: '/workspace/screens/result.png', resolvedPath: 'screens/result.png' }],
+    } }));
+    await Vue.nextTick();
+    expect(requestMessageImagePreview).toHaveBeenCalledWith('screens/result.png');
+    expect(wrapper.find('.turn-text img').exists()).toBe(false);
+
+    window.dispatchEvent(new CustomEvent('workbench-message', { detail: {
+      type: 'file_content', requestId: 'read-image', binary: true,
+      previewUrl: '/api/preview/image-1?token=secret',
+    } }));
+    await Vue.nextTick();
+    expect(wrapper.get('.turn-text img').attributes('src')).toBe('/api/preview/image-1?token=secret');
+    wrapper.unmount();
+  });
+
+  it('opens a linked Markdown image without navigating its parent anchor', async () => {
+    globalThis.Vue = Vue;
+    globalThis.Pinia = {
+      defineStore: () => () => ({}),
+      useChatStore: () => ({
+        effectiveWorkDir: '/workspace', fileReferenceResolutionContextKey: '',
+        answerUserQuestion: vi.fn(), cancelVpTurn: vi.fn(),
+        resolveMessageFileReferences: vi.fn(() => null), openFileInExplorer: vi.fn(),
+      }),
+    };
+    globalThis.marked = {
+      setOptions: vi.fn(),
+      parse: vi.fn(() => '<p><a href="https://example.test"><img src="https://cdn.test/image.png" alt="linked"></a></p>'),
+    };
+    globalThis.hljs = undefined;
+    const { default: AssistantTurn } = await import('../../web/components/AssistantTurn.js');
+    const wrapper = mount(AssistantTurn, {
+      props: {
+        turn: {
+          id: 'turn-linked-image', textContent: 'image',
+          textSegments: [{ key: 'result', content: 'image', kind: 'result' }],
+          toolMsgs: [], imageMsgs: [], todoMsg: null, askMsg: null, isStreaming: false,
+        },
+      },
+      global: {
+        mocks: { $t: key => key }, provide: { t: key => key },
+        stubs: { ToolLine: true, AskCard: true, VpSpeakerHeader: true },
+      },
+    });
+    const bubbled = vi.fn();
+    wrapper.element.addEventListener('click', bubbled);
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true });
+    wrapper.get('.turn-text img').element.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+    expect(bubbled).not.toHaveBeenCalled();
+    expect(document.body.querySelector('.image-preview-overlay')).not.toBeNull();
+    document.body.querySelector('.image-preview-close').click();
+    document.body.querySelector('.image-preview-overlay')?.dispatchEvent(new Event('transitionend'));
     wrapper.unmount();
   });
 
@@ -1077,6 +1288,193 @@ describe('message file preview', () => {
     expect(resolveMessageFileReferences).toHaveBeenCalledTimes(2);
     expect(resolveMessageFileReferences).toHaveBeenLastCalledWith(['Q:\\M365\\Sydney\\docs\\design-doc.md']);
     wrapper.unmount();
+  });
+
+  it('resolves streaming references in bounded batches and rejects stale or unrelated results', async () => {
+    vi.useFakeTimers();
+    let sequence = 0;
+    const fileReferenceStore = Vue.reactive({
+      fileReferenceResolutionContextKey: 'agent-a:session-a:/workspace',
+      answerUserQuestion: vi.fn(), cancelVpTurn: vi.fn(), openFileInExplorer: vi.fn(),
+      resolveMessageFileReferences: vi.fn(() => `refs-${++sequence}`),
+    });
+    globalThis.Pinia = { defineStore: () => () => ({}), useChatStore: () => fileReferenceStore };
+    globalThis.marked = { setOptions: vi.fn(), parse: vi.fn(value => `<p>${value}</p>`) };
+    globalThis.hljs = undefined;
+    const { default: AssistantTurn } = await import('../../web/components/AssistantTurn.js');
+    const wrapper = mount(AssistantTurn, {
+      props: { turn: {
+        id: 'streaming-links', textContent: '', textSegments: [],
+        toolMsgs: [], imageMsgs: [], isStreaming: true,
+      } },
+      global: {
+        mocks: { $t: key => key }, provide: { t: key => key },
+        stubs: { ToolLine: true, AskCard: true, VpSpeakerHeader: true },
+      },
+    });
+    const update = async (content, isStreaming = true) => wrapper.setProps({ turn: {
+      ...wrapper.props('turn'), textContent: content,
+      textSegments: [{ key: 'result', content, kind: 'result' }], isStreaming,
+    } });
+    const respond = (requestId, references) => window.dispatchEvent(new CustomEvent('workbench-message', {
+      detail: { type: 'file_references_resolved', requestId, references },
+    }));
+    try {
+      const paths = Array.from({ length: 40 }, (_, i) => `src/file-${i}.js`);
+      await update(paths.join(' '));
+      expect(fileReferenceStore.resolveMessageFileReferences).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(fileReferenceStore.resolveMessageFileReferences.mock.calls.map(([batch]) => batch.length)).toEqual([32, 8]);
+      // Out-of-order batches remain independently correlated. An entry outside
+      // the requested batch must never become clickable.
+      respond('refs-2', [
+        { requestedPath: paths[39], resolvedPath: paths[39] },
+        { requestedPath: paths[0], resolvedPath: 'unrelated.js' },
+      ]);
+      respond('refs-1', [{ requestedPath: paths[0], resolvedPath: paths[0] }]);
+      await Vue.nextTick();
+      expect(wrapper.findAll('a.message-file-reference')).toHaveLength(2);
+      await wrapper.get(`a[href="${paths[39]}"]`).trigger('click');
+      expect(fileReferenceStore.openFileInExplorer).toHaveBeenCalledWith(paths[39], { hideTree: true, line: null });
+
+      await update(`${paths.join(' ')} more text`);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(fileReferenceStore.resolveMessageFileReferences).toHaveBeenCalledTimes(2);
+      await update(Array.from({ length: 140 }, (_, i) => `src/file-${i}.js`).join(' '));
+      await vi.advanceTimersByTimeAsync(500);
+      expect(fileReferenceStore.resolveMessageFileReferences.mock.calls.map(([batch]) => batch.length)).toEqual([32, 8, 32, 32, 24]);
+
+      fileReferenceStore.fileReferenceResolutionContextKey = 'agent-b:session-b:/workspace';
+      await Vue.nextTick();
+      expect(wrapper.findAll('a.message-file-reference')).toHaveLength(0);
+      respond('refs-3', [{ requestedPath: paths[1], resolvedPath: 'stale.js' }]);
+      await Vue.nextTick();
+      expect(wrapper.findAll('a.message-file-reference')).toHaveLength(0);
+      // Completion retries paths that did not yet exist during generation.
+      await update('src/newly-created.js', false);
+      const lastRequestId = `refs-${sequence}`;
+      expect(fileReferenceStore.resolveMessageFileReferences).toHaveBeenLastCalledWith(['src/newly-created.js']);
+      respond(lastRequestId, [{ requestedPath: 'src/newly-created.js', resolvedPath: 'src/newly-created.js' }]);
+      await Vue.nextTick();
+      expect(wrapper.findAll('a.message-file-reference')).toHaveLength(1);
+    } finally {
+      wrapper.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  async function mountRecoveringReferences(content = 'docs/guide.txt') {
+    let sequence = 0;
+    const store = Vue.reactive({
+      fileReferenceResolutionContextKey: 'agent-a:session-a:/workspace',
+      isProcessing: false,
+      answerUserQuestion: vi.fn(), cancelVpTurn: vi.fn(), openFileInExplorer: vi.fn(),
+      resolveMessageFileReferences: vi.fn(() => `refs-${++sequence}`),
+    });
+    globalThis.Vue = Vue;
+    globalThis.Pinia = { defineStore: () => () => ({}), useChatStore: () => store };
+    globalThis.marked = { setOptions: vi.fn(), parse: vi.fn(value => `<p>${value}</p>`) };
+    globalThis.hljs = undefined;
+    const { default: AssistantTurn } = await import('../../web/components/AssistantTurn.js');
+    const wrapper = mount(AssistantTurn, {
+      props: { turn: {
+        id: 'recovering-links', textContent: content,
+        textSegments: [{ key: 'result', content, kind: 'result' }],
+        toolMsgs: [], imageMsgs: [], isStreaming: false,
+      } },
+      global: {
+        mocks: { $t: key => key }, provide: { t: key => key },
+        stubs: { ToolLine: true, AskCard: true, VpSpeakerHeader: true },
+      },
+    });
+    const respond = (requestId, detail = {}) => window.dispatchEvent(new CustomEvent('workbench-message', {
+      detail: { type: 'file_references_resolved', requestId, references: [], ...detail },
+    }));
+    return { wrapper, store, respond };
+  }
+
+  it('recovers transient resolution errors without changing a completed reply', async () => {
+    vi.useFakeTimers();
+    const { wrapper, store, respond } = await mountRecoveringReferences();
+    try {
+      respond('refs-1', { error: 'Agent temporarily unavailable' });
+      await vi.advanceTimersByTimeAsync(1499);
+      expect(store.resolveMessageFileReferences).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(store.resolveMessageFileReferences).toHaveBeenCalledTimes(2);
+      respond('refs-2', { references: [{ requestedPath: 'docs/guide.txt', resolvedPath: 'docs/guide.txt' }] });
+      await Vue.nextTick();
+      await wrapper.get('.message-file-reference').trigger('click');
+      expect(store.openFileInExplorer).toHaveBeenCalledWith('docs/guide.txt', { hideTree: true, line: null });
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(store.resolveMessageFileReferences).toHaveBeenCalledTimes(2);
+    } finally { wrapper.unmount(); vi.useRealTimers(); }
+  });
+
+  it('bounds failed sends and errors to two retries while retaining the 128-path cap', async () => {
+    vi.useFakeTimers();
+    const { wrapper, store, respond } = await mountRecoveringReferences(
+      Array.from({ length: 140 }, (_, i) => `src/file-${i}.js`).join(' '),
+    );
+    try {
+      expect(store.resolveMessageFileReferences).toHaveBeenCalledTimes(4);
+      for (let i = 1; i <= 4; i++) respond(`refs-${i}`, { error: 'timeout' });
+      store.resolveMessageFileReferences.mockReturnValue(null);
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(store.resolveMessageFileReferences).toHaveBeenCalledTimes(12);
+      const calls = store.resolveMessageFileReferences.mock.calls.map(([paths]) => paths);
+      expect(calls.every(paths => paths.length <= 32)).toBe(true);
+      expect(new Set(calls.flat()).size).toBe(128);
+      expect(wrapper.findAll('.message-file-reference')).toHaveLength(0);
+    } finally { wrapper.unmount(); vi.useRealTimers(); }
+  });
+
+  it('cancels retries on route changes and unmount and rejects old responses', async () => {
+    vi.useFakeTimers();
+    const { wrapper, store, respond } = await mountRecoveringReferences();
+    try {
+      respond('refs-1', { error: 'timeout' });
+      store.fileReferenceResolutionContextKey = 'agent-b:session-b:/other';
+      await Vue.nextTick();
+      expect(store.resolveMessageFileReferences).toHaveBeenCalledTimes(2);
+      respond('refs-1', { references: [{ requestedPath: 'docs/guide.txt', resolvedPath: 'wrong.txt' }] });
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(store.resolveMessageFileReferences).toHaveBeenCalledTimes(2);
+      expect(wrapper.findAll('.message-file-reference')).toHaveLength(0);
+      respond('refs-2', { error: 'timeout' });
+    } finally {
+      wrapper.unmount();
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(store.resolveMessageFileReferences).toHaveBeenCalledTimes(2);
+      vi.useRealTimers();
+    }
+  });
+
+  it('rechecks only unresolved paths after later Session work and stops polling missing files', async () => {
+    vi.useFakeTimers();
+    const { wrapper, store, respond } = await mountRecoveringReferences('docs/guide.txt docs/later.txt docs/missing.txt');
+    const finishWork = async () => {
+      store.isProcessing = true;
+      await Vue.nextTick();
+      store.isProcessing = false;
+      await Vue.nextTick();
+    };
+    try {
+      respond('refs-1', { references: [{ requestedPath: 'docs/guide.txt', resolvedPath: 'docs/guide.txt' }] });
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(store.resolveMessageFileReferences).toHaveBeenCalledTimes(1);
+      await finishWork();
+      expect(store.resolveMessageFileReferences).toHaveBeenLastCalledWith(['docs/later.txt', 'docs/missing.txt']);
+      respond('refs-2', { references: [{ requestedPath: 'docs/later.txt', resolvedPath: 'docs/later.txt' }] });
+      await Vue.nextTick();
+      expect(wrapper.findAll('.message-file-reference')).toHaveLength(2);
+      await finishWork();
+      expect(store.resolveMessageFileReferences).toHaveBeenLastCalledWith(['docs/missing.txt']);
+      respond('refs-3');
+      await finishWork();
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(store.resolveMessageFileReferences).toHaveBeenCalledTimes(3);
+    } finally { wrapper.unmount(); vi.useRealTimers(); }
   });
 
   it('revalidates file references when completed response content changes', async () => {
@@ -1205,6 +1603,7 @@ describe('message file preview', () => {
     expect(filesCss).toMatch(/\.file-col-content\s*\{[^}]*overflow:\s*hidden;[^}]*min-height:\s*0;/s);
     expect(filesCss).toMatch(/\.file-editor-container \.CodeMirror-scroll\s*\{[^}]*overflow:\s*scroll !important;[^}]*scrollbar-gutter:\s*stable;/s);
     expect(workbench).toContain('<WorkbenchCapabilityHost');
+    expect(workbench).toMatch(/<WorkbenchCapabilityHost\s+v-if="activeRouteKey"\s+v-show="activeToolCapability"/);
     expect(capabilityHost).toContain("activeCapability ? 'capability-' + activeCapability : ''");
     expect(workbenchCss).toMatch(/\.workbench-capability-host\s*\{[^}]*min-height:\s*0;[^}]*overflow:\s*hidden;/s);
     const terminalTab = readWeb('components/TerminalTab.js');
@@ -1245,6 +1644,9 @@ describe('message file preview', () => {
     expect(yeaftPage.indexOf('<WorkbenchPanel')).toBeGreaterThan(yeaftPage.indexOf('<div class="yeaft-main"'));
     const yeaftCss = readWeb('styles/yeaft.css');
     expect(yeaftCss).toMatch(/\.yeaft-main\.workbench-maximized\s*\{[^}]*display:\s*none;/s);
+    expect(yeaftCss).toMatch(/\.yeaft-main\s*\{[^}]*min-height:\s*0;/s);
+    expect(workbenchCss).toMatch(/\.workbench-panel\s*\{[^}]*min-height:\s*0;/s);
+    expect(workbenchCss).toMatch(/\.workbench-content\s*\{[^}]*flex:\s*1;[^}]*min-height:\s*0;/s);
     expect(yeaftCss).not.toContain('.yeaft-main.workbench-maximized > .yeaft-main-center');
     expect(yeaftSidebar).not.toContain('@click="onToggleWorkbench"');
   });

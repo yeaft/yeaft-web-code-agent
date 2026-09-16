@@ -87,6 +87,57 @@ describe('Agent-scoped settings lifecycle', () => {
     expect(Object.keys(store._telemetryPending)).toHaveLength(0);
   });
 
+  it('correlates Work Center feature settings by Agent, request, and operation', async () => {
+    const store = freshStore();
+    const load = store.loadWorkCenterFeatureSettings('agent-a');
+    const request = store.sendWsMessage.mock.calls.at(-1)[0];
+    handleMessage(store, { type: 'work_center_feature_settings_updated', agentId: 'agent-a', requestId: request.requestId, enabled: true });
+    expect(store._workCenterFeaturePending[request.requestId]).toBeTruthy();
+    handleMessage(store, { type: 'work_center_feature_settings', agentId: 'agent-b', requestId: request.requestId, enabled: true });
+    expect(store._workCenterFeaturePending[request.requestId]).toBeTruthy();
+    handleMessage(store, { type: 'work_center_feature_settings', agentId: 'agent-a', requestId: request.requestId, enabled: false, source: 'environment', overridden: true });
+    await expect(load).resolves.toMatchObject({ enabled: false, source: 'environment', overridden: true });
+  });
+
+  it('rejects correlated Work Center errors instead of waiting for timeout', async () => {
+    const store = freshStore();
+    const update = store.updateWorkCenterFeatureSettings({ enabled: true }, 'agent-a');
+    const request = store.sendWsMessage.mock.calls.at(-1)[0];
+    handleMessage(store, {
+      type: 'work_center_feature_settings_updated', agentId: 'agent-a', requestId: request.requestId,
+      enabled: false, effective: false, persisted: false, error: 'runtime failed',
+    });
+    const rejection = update.catch(error => error);
+    const error = await rejection;
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toBe('runtime failed');
+    expect(error.settings).toMatchObject({ enabled: false, effective: false, persisted: false, error: 'runtime failed' });
+    expect(store.workCenterFeatureSettingsByAgent['agent-a']).toMatchObject({ enabled: false, effective: false, error: 'runtime failed' });
+    expect(store._workCenterFeaturePending[request.requestId]).toBeUndefined();
+  });
+
+  it('settles Work Center requests with a typed error when the Agent disconnects', async () => {
+    vi.useRealTimers();
+    CONFIG.skipAuth = true;
+    const store = freshStore();
+    const client = {
+      authenticated: true, userId: 'user-1', role: 'user',
+      ws: { readyState: WS_OPEN, send: payload => handleMessage(store, JSON.parse(payload)) },
+    };
+    webClients.set('browser-origin', client);
+    const socket = new MockWebSocket(WS_OPEN);
+    const url = new URL('ws://localhost/?type=agent&id=agent-a&name=agent-a&instanceId=agent-a&capabilities=plaintext-ok');
+    handleAgentConnection(socket, url);
+    const challenge = socket.getLastMessage();
+    socket.simulateMessage({ type: 'auth', tempId: challenge.tempId, secret: '', capabilities: ['plaintext-ok'], version: '1.0.0' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const pending = store.loadWorkCenterFeatureSettings('agent-a');
+    const requestId = store.sendWsMessage.mock.calls.at(-1)[0].requestId;
+    expect(registerAgentSettingsRequest({ agentId: 'agent-a', operation: 'work-center-feature:load', requestId, clientId: 'browser-origin' })).toBe(true);
+    socket.close(1000, 'test disconnect');
+    await expect(pending).rejects.toThrow(/disconnected/i);
+  });
+
   it('does not settle concurrent browser mutations from identity-less legacy replies', async () => {
     const firstBrowser = freshStore();
     const firstUpdate = firstBrowser.updateTelemetrySettings({ enabled: false }, 'agent-a');
@@ -159,6 +210,74 @@ describe('Agent-scoped settings lifecycle', () => {
     expect(store.agentOperations['agent-a'].upgrade).toMatchObject({ pending: true, error: null });
     handleMessage(store, { type: 'upgrade_agent_ack', agentId: 'agent-a', requestId: upgradeRequestId, success: false, error: 'nope' });
     expect(store.agentOperations['agent-a'].upgrade).toMatchObject({ pending: false, error: 'nope' });
+  });
+
+  it('upgrades only safe online Agents and settles the batch after terminal outcomes', () => {
+    const store = freshStore();
+    store.agents = [
+      { id: 'agent-a', online: true, version: '1.0.0', capabilities: ['remote_upgrade_safe'] },
+      { id: 'agent-b', online: true, version: '1.0.0', capabilities: ['remote_upgrade_safe'] },
+      { id: 'agent-offline', online: false, version: '1.0.0', capabilities: ['remote_upgrade_safe'] },
+      { id: 'agent-container', online: true, version: '1.0.0', capabilities: ['remote_upgrade_safe', 'container_agent'] },
+      { id: 'agent-legacy', online: true, version: '1.0.0', capabilities: [] },
+    ];
+    const completed = vi.fn();
+    window.addEventListener('agent-upgrade-batch-complete', completed);
+
+    expect(store.getUpgradableAgents().map(agent => agent.id)).toEqual(['agent-a', 'agent-b']);
+    expect(store.upgradeAllAgents()).toBe(2);
+    expect(store.upgradeAllAgents()).toBeNull();
+    expect(store.sendWsMessage.mock.calls.map(([message]) => message.agentId)).toEqual(['agent-a', 'agent-b']);
+    expect(new Set(store.sendWsMessage.mock.calls.map(([message]) => message.requestId)).size).toBe(2);
+    const batchId = store.agentUpgradeBatch.id;
+    expect(store.agentUpgradeBatch).toMatchObject({ pending: true, skippedCount: 3, agentIds: ['agent-a', 'agent-b'] });
+    expect(store.agentOperations['agent-a'].upgrade.batchId).toBe(batchId);
+    expect(store.agentOperations['agent-b'].upgrade.batchId).toBe(batchId);
+
+    handleMessage(store, {
+      type: 'upgrade_agent_ack', agentId: 'agent-a', requestId: 'stale', success: true, alreadyLatest: true,
+    });
+    expect(store.agentUpgradeBatch.results).toEqual({});
+
+    handleMessage(store, {
+      type: 'upgrade_agent_ack', agentId: 'agent-a', requestId: store.agentOperations['agent-a'].upgrade.requestId,
+      success: true, alreadyLatest: true, version: '1.0.0',
+    });
+    expect(store.agentUpgradeBatch.results['agent-a']).toMatchObject({ status: 'already_latest', version: '1.0.0' });
+    expect(store.agentUpgradeBatch.pending).toBe(true);
+    expect(completed).not.toHaveBeenCalled();
+
+    handleMessage(store, {
+      type: 'upgrade_agent_ack', agentId: 'agent-b', requestId: store.agentOperations['agent-b'].upgrade.requestId,
+      success: true,
+    });
+    expect(store.agentOperations['agent-b'].upgrade).toMatchObject({ pending: true, acknowledged: true });
+    handleMessage(store, {
+      type: 'agent_list',
+      agents: store.agents.map(agent => agent.id === 'agent-b' ? { ...agent, version: '1.0.1' } : agent),
+    });
+
+    expect(store.agentUpgradeBatch.pending).toBe(false);
+    expect(store.agentUpgradeBatch.results['agent-b']).toMatchObject({ status: 'upgraded' });
+    expect(completed).toHaveBeenCalledTimes(1);
+    window.removeEventListener('agent-upgrade-batch-complete', completed);
+  });
+
+  it('records a bulk upgrade timeout as a failed terminal result', async () => {
+    const store = freshStore();
+    store.agents = [
+      { id: 'agent-a', online: true, version: '1.0.0', capabilities: ['remote_upgrade_safe'] },
+    ];
+    const completed = vi.fn();
+    window.addEventListener('agent-upgrade-batch-complete', completed);
+
+    expect(store.upgradeAllAgents()).toBe(1);
+    await vi.advanceTimersByTimeAsync(120001);
+
+    expect(store.agentUpgradeBatch).toMatchObject({ pending: false, skippedCount: 0 });
+    expect(store.agentUpgradeBatch.results['agent-a']).toMatchObject({ status: 'failed', error: 'timeout' });
+    expect(completed).toHaveBeenCalledTimes(1);
+    window.removeEventListener('agent-upgrade-batch-complete', completed);
   });
 
   it('settles a synthesized Dream rejection through the web handler', async () => {
@@ -270,4 +389,20 @@ describe('Agent-scoped settings lifecycle', () => {
     handleMessage(store, { type: 'dream_enabled_changed', agentId: 'agent-a', enabled: true });
     expect(store.agents[0].dreamEnabled).toBe(false);
   });
+
+  it('returns a correlated unsupported response immediately for an old Agent', async () => {
+    CONFIG.skipAuth = true;
+    const sent = [];
+    const client = { currentAgent: 'agent-a', ws: { readyState: WS_OPEN, send: payload => sent.push(JSON.parse(payload)) } };
+    agents.set('agent-a', { capabilities: ['plaintext-ok'], ws: new MockWebSocket(WS_OPEN) });
+    await handleClientMisc('browser-origin', client, {
+      type: 'get_work_center_feature_settings', agentId: 'agent-a', requestId: 'wc-old-1',
+    }, async () => true);
+    expect(sent).toContainEqual(expect.objectContaining({
+      type: 'work_center_feature_settings', agentId: 'agent-a', requestId: 'wc-old-1', unsupported: true,
+      error: expect.stringMatching(/upgraded/i),
+    }));
+    expect(pendingAgentSettingsRequests.size).toBe(0);
+  });
+
 });

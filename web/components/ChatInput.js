@@ -9,6 +9,7 @@ import VpMentionAutocomplete, {
   vpMentionOptionId,
 } from './VpMentionAutocomplete.js';
 import MessageComposer from './MessageComposer.js';
+import { useUserShortcuts, matchShortcut } from '../utils/user-shortcuts.js';
 
 export default {
   name: 'ChatInput',
@@ -16,6 +17,8 @@ export default {
   props: {
     /** Custom send function: (text, attachmentInfos) => void. Overrides store.sendMessage. */
     sendFn: { type: Function, default: null },
+    /** Explicit opt-in: CLI / Work Center do not support native per-turn model overrides. */
+    quickSendEnabled: { type: Boolean, default: false },
     /** Custom cancel/stop function. Overrides store.cancelExecution. */
     cancelFn: { type: Function, default: null },
     /** i18n key for placeholder text. Defaults to 'chatInput.placeholder'. */
@@ -26,10 +29,10 @@ export default {
     conversationId: { type: String, default: null },
     /** Explicit draft scope. Use this when one conversation contains multiple logical inputs. */
     draftKey: { type: String, default: null },
-    /** Optional Session-only action that opens a Work Center creation draft. */
-    workItemFn: { type: Function, default: null },
     /** Structured Session message quote shown above the composer. */
-    quote: { type: Object, default: null }
+    quote: { type: Object, default: null },
+    disabled: { type: Boolean, default: false },
+    disabledPlaceholderKey: { type: String, default: '' }
   },
   emits: ['remove-quote', 'quote-consumed'],
   template: `
@@ -98,12 +101,32 @@ export default {
         accept="image/*,text/*,.pdf,.doc,.docx,.xls,.xlsx,.json,.md,.py,.js,.ts,.css,.html"
         class="file-input-hidden"
       />
+      <div
+        v-if="quickSends.length && inputFocused"
+        class="mobile-quick-send-bar"
+        role="toolbar"
+        :aria-label="$t('quickSend.composer.label')"
+      >
+        <button
+          v-for="(preset, index) in quickSends"
+          :key="preset.id || index"
+          type="button"
+          class="mobile-quick-send-button"
+          :disabled="!canQuickSend"
+          :title="preset.name"
+          :aria-label="$t('quickSend.composer.send', { number: index + 1, name: preset.name })"
+          @pointerdown.prevent
+          @click="sendQuick(preset)"
+        >
+          <span>{{ preset.name }}</span>
+        </button>
+      </div>
       <MessageComposer
         ref="messageComposerRef"
         v-model="inputText"
-        :class="{ 'btw-active': store.btwMode }"
-        :placeholder="store.btwMode ? $t('btw.placeholder') : (isCompacting ? $t('chatHeader.compacting') : $t(effectivePlaceholderKey))"
-        :disabled="isCompacting"
+        :class="{ 'btw-active': store.btwMode, 'is-disabled': disabled }"
+        :placeholder="disabled && disabledPlaceholderKey ? $t(disabledPlaceholderKey) : (store.btwMode ? $t('btw.placeholder') : (isCompacting ? $t('chatHeader.compacting') : $t(effectivePlaceholderKey)))"
+        :disabled="isCompacting || disabled"
         :can-send="canSend"
         :show-stop="isStopVisible"
         :input-id="inputElementId"
@@ -116,6 +139,7 @@ export default {
         @input="handleInput"
         @keydown="handleKeydown"
         @paste="handlePaste"
+        @focus="inputFocused = true"
         @blur="onBlur"
         @send="send"
         @stop="cancelExecution"
@@ -175,16 +199,6 @@ export default {
           >
             <svg viewBox="0 0 24 24" width="20" height="20"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></svg>
           </label>
-          <button
-            v-if="workItemFn && !store.btwMode"
-            class="work-item-draft-btn"
-            type="button"
-            @click="workItemFn(inputText.trim())"
-            :title="$t('workCenter.fromSession')"
-            :aria-label="$t('workCenter.fromSession')"
-          >
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 5v2h10V8H7zm0 4v2h7v-2H7zm0 4v2h5v-2H7z"/></svg>
-          </button>
           <span v-if="store.btwMode" class="btw-input-tag">BTW</span>
           <slot name="actions-start"></slot>
         </template>
@@ -201,6 +215,7 @@ export default {
     // task-338-F4: resolve groups store for Yeaft group-chat dispatch routing.
     const sessionsStore = (Pinia.useSessionsStore ? Pinia.useSessionsStore() : null);
     const inputText = Vue.ref('');
+    const inputFocused = Vue.ref(false);
     const messageComposerRef = Vue.ref(null);
     const inputRef = Vue.computed(() => messageComposerRef.value?.getTextarea?.() || null);
     const componentUid = Vue.getCurrentInstance()?.uid ?? 0;
@@ -459,7 +474,7 @@ export default {
     );
 
     const canSend = Vue.computed(() => {
-      if (isCompacting.value) return false;
+      if (props.disabled || isCompacting.value) return false;
       const hasText = !!inputText.value.trim();
       const hasAttachments = attachments.value.length > 0;
 
@@ -476,6 +491,46 @@ export default {
       const notUploading = !uploading.value && attachments.value.every(hasValidFileId);
       return hasContent && store.currentAgent && store.currentConversation && notUploading;
     });
+
+    const { preferences: shortcutPreferences } = useUserShortcuts();
+    const quickSends = Vue.computed(() => {
+      if (!props.quickSendEnabled || store.btwMode) return [];
+      const config = store.llmConfig?.[store.currentAgent];
+      if (!config?.loaded || config.error) return [];
+      const items = config.agentConfig?.quickSends || config.effectiveConfig?.quickSends || [];
+      return Array.isArray(items) ? items.slice(0, 5) : [];
+    });
+    const canQuickSend = Vue.computed(() => canSend.value && store.connectionState === 'connected'
+      && store.agents?.some(agent => agent.id === store.currentAgent && agent.online));
+    Vue.watch(() => [props.quickSendEnabled,
+      store.currentAgent, store.connectionState, store.agents?.find(agent => agent.id === store.currentAgent)?.online],
+    ([enabled, agentId, connection, online]) => {
+      if (enabled && agentId && connection === 'connected' && online) {
+        store.sendWsMessage({ type: 'get_llm_config', agentId });
+      }
+    }, { immediate: true });
+    const sendQuick = (preset) => {
+      if (!canQuickSend.value || !quickSends.value.includes(preset)) return;
+      send({ model: preset.model, effort: preset.effort ?? null, maxOutputTokens: preset.maxOutputTokens ?? null });
+    };
+
+    const isMobileViewport = () => {
+      if (typeof window === 'undefined') return false;
+      try {
+        return typeof window.matchMedia === 'function'
+          ? window.matchMedia('(max-width: 768px)').matches
+          : Number(window.innerWidth) <= 768;
+      } catch (_) {
+        return false;
+      }
+    };
+    const exitMobileInput = () => {
+      if (!isMobileViewport()) return;
+      inputRef.value?.blur();
+      const activeElement = globalThis.document?.activeElement;
+      if (activeElement?.closest?.('[data-message-composer]')) activeElement.blur?.();
+      inputFocused.value = false;
+    };
 
     const autoResize = () => messageComposerRef.value?.autoResize?.();
 
@@ -526,6 +581,7 @@ export default {
     };
 
     const onBlur = () => {
+      inputFocused.value = false;
       // 延迟关闭以允许 mousedown 事件触发
       setTimeout(() => {
         showAutocomplete.value = false;
@@ -685,8 +741,10 @@ export default {
       });
     };
 
-    const send = () => {
+    const send = (quickSend = null) => {
       if (!canSend.value) return;
+      // Vue's ordinary send event has no preset; never treat a DOM event as configuration.
+      if (!quickSend || typeof quickSend.model !== 'string') quickSend = null;
 
       showAutocomplete.value = false;
       showExpertAutocomplete.value = false;
@@ -707,14 +765,17 @@ export default {
           }));
 
         const attachmentPayload = attachmentInfos.length > 0 ? attachmentInfos : undefined;
-        if (props.quote) props.sendFn(trimmed, attachmentPayload, props.quote);
-        else props.sendFn(trimmed, attachmentPayload);
+        const accepted = quickSend
+          ? props.sendFn(trimmed, attachmentPayload, props.quote, quickSend)
+          : props.quote ? props.sendFn(trimmed, attachmentPayload, props.quote) : props.sendFn(trimmed, attachmentPayload);
+        if (accepted === false) return;
 
         attachments.value = [];
         if (props.quote) emit('quote-consumed');
         inputText.value = '';
         if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
         resetTextareaSize();
+        exitMobileInput();
         return;
       }
 
@@ -726,6 +787,7 @@ export default {
         inputText.value = '';
         if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
         resetTextareaSize();
+        exitMobileInput();
         return;
       }
 
@@ -735,6 +797,7 @@ export default {
         inputText.value = '';
         if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
         resetTextareaSize();
+        exitMobileInput();
         return;
       }
 
@@ -779,6 +842,7 @@ export default {
         inputText.value = '';
         if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
         resetTextareaSize();
+        exitMobileInput();
         return;
       }
 
@@ -791,12 +855,25 @@ export default {
       if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
 
       resetTextareaSize();
+      exitMobileInput();
     };
 
     const handleKeydown = (e) => {
       // IME owns every key while composing. Safari can report isComposing=false
       // for the confirmation keydown but keeps the standard process keyCode.
       if (e.isComposing || e.keyCode === 229) return;
+      if (!e.defaultPrevented && props.quickSendEnabled) {
+        const slot = [1, 2, 3, 4, 5].find(number => matchShortcut(e, shortcutPreferences.value.bindings[`quickSend${number}`]));
+        const preset = slot ? quickSends.value[slot - 1] : null;
+        // An unconfigured or currently unavailable quick-send shortcut is inert:
+        // do not consume Alt+1..5 unless this keypress can actually send.
+        if (!e.repeat && preset && canQuickSend.value) {
+          e.preventDefault();
+          e.stopPropagation();
+          sendQuick(preset);
+          return;
+        }
+      }
 
       // Esc exits btw mode
       if (e.key === 'Escape' && store.btwMode) {
@@ -906,6 +983,7 @@ export default {
     return {
       store,
       inputText,
+      inputFocused,
       inputRef,
       messageComposerRef,
       inputAreaRef,
@@ -913,6 +991,10 @@ export default {
       attachments,
       uploading,
       canSend,
+      quickSends,
+      canQuickSend,
+      shortcutPreferences,
+      sendQuick,
       isCompacting,
       isStopVisible,
       effectivePlaceholderKey,

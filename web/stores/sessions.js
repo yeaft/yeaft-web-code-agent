@@ -682,7 +682,7 @@ export const useSessionsStore = defineStore('sessions', {
     },
 
     /** Record a `group_crud_result` for UI feedback. */
-    applyCrudResult(result, agentId = null) {
+    applyCrudResult(result, agentId = null, { activate = true } = {}) {
       if (!result) return;
       this.lastCrudResult = { ...result, at: Date.now() };
       if (result.requestId && this.pending[result.requestId]) {
@@ -693,9 +693,12 @@ export const useSessionsStore = defineStore('sessions', {
       if (result.ok && result.op === 'list' && Array.isArray(result.sessions)) {
         this.applySnapshot(result.sessions, mutationAgentId);
       }
-      if (result.ok && (result.op === 'create' || result.op === 'restore') && session && session.id) {
+      if (result.ok && (result.op === 'create' || result.op === 'copy' || result.op === 'restore') && session && session.id) {
         const key = this.applySnapshotUpsert(session, mutationAgentId);
-        if (key) this.setActive(session.id, mutationAgentId);
+        if (key && activate) this.setActive(session.id, mutationAgentId);
+      }
+      if (result.ok && (result.op === 'rename' || result.op === 'update') && session && session.id) {
+        this.applySnapshotUpsert(session, mutationAgentId);
       }
       const opSessionId = result.sessionId || result.groupId;
       const allowOwnerlessMutation = this.inventoryIdentityMode === 'legacy-bare';

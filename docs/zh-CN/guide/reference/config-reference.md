@@ -37,6 +37,8 @@
 | `credentialProvider` | `string` | △ | 动态凭证名（当前仅支持 `github-copilot`） |
 | `protocol` | `'anthropic' \| 'openai-responses'` | — | provider 级 wire 协议；per-model 覆盖优先 |
 | `models` | `(string \| ModelEntry)[]` | ✓ | 该 provider 服务的 model |
+| `credentialScopeId` | `string` | — | 原生 reasoning 回传与缓存的稳定、非敏感账号归属；动态凭据/自定义 endpoint 必填，官方静态 key 路径默认使用 key 指纹。换账号时更换；仅轮换 token 时保持 |
+| `capabilities` | `object` | — | `nativeReasoningState`、`promptCaching`、`parallelToolCalls` 布尔开关；`translation: true` 强制关闭这三项。模型级覆盖优先 |
 
 > chat-completions 协议已在 Phase 7（v0.1.590）移除。当前合法值只有 `anthropic` 和 `openai-responses`。
 
@@ -50,6 +52,36 @@ model 项可以是裸字符串（`"gpt-5"`），也可以是对象：
 | `protocol` | `'anthropic' \| 'openai-responses'` | — | 覆盖 provider 协议 |
 | `contextWindow` | `number` | — | 覆盖该 model 的注册表默认 |
 | `maxOutput` | `number` | — | 覆盖该 model 的注册表输出默认 |
+| `capabilities` | `object` | — | 逐字段覆盖 provider 的协议能力开关 |
+
+#### Reasoning 连续性与缓存
+
+官方 `https://api.openai.com/v1` 和 `https://api.anthropic.com` 默认启用协议能力；未知代理默认关闭。仅在确认代理和上游完整支持后设置 `capabilities`，不要根据模型名称推断能力。Messages 转 Chat Completions 不等于原生 Anthropic 透传。
+
+```json
+{
+  "name": "verified-proxy",
+  "baseUrl": "https://proxy.example/v1",
+  "protocol": "openai-responses",
+  "credentialScopeId": "account-a",
+  "capabilities": {
+    "nativeReasoningState": true,
+    "promptCaching": true,
+    "parallelToolCalls": true
+  },
+  "models": ["gpt-5"]
+}
+```
+
+这是能力配置片段；凭据沿用已有 `apiKey` 或 `credentialProvider`。不会自动探测或修改在线配置。Responses 使用 `store: false`、加密 reasoning 原生 output 回传和隔离到实例/Session/VP/thread 的稳定 cache key。Anthropic 保留 thinking/signature/redacted block 顺序，并在 system、tools、最近 user/tool result 设置最多三个 ephemeral 缓存断点；不对 thinking block 设置缓存。
+
+私有状态随实例 transcript 保存，不进入普通消息、搜索、跨 VP 或子 Agent 的上下文投影。原生 Anthropic 签名工具回合在模型、账号、归属或消息投影不一致时终止，不能通过丢弃签名静默继续。官方 endpoint 使用静态 API key 时，缺失的 `credentialScopeId` 默认使用完整密码学 key 指纹（不保存 key 本身），重启保持一致，换 key 后失效。动态凭据与自定义 endpoint 仍需显式 scope；缺失时不会发送缓存或保存无归属的 reasoning。旧 `thinkingBlocks` 可以读取，但不再直接回传；含旧签名的工具历史会提示开启新上下文。原生 signed thinking 工具响应缺少能力/归属配置时也会明确终止，需先配置已验证的直通路径。原始请求/响应调试数据是单独的数据层，仍应视为敏感数据。
+
+发送缓存字段只表示请求了缓存；以 provider 返回的 cache usage 判断命中。缓存通常减少计费输入和延迟，不减少 HTTP 请求数。`reasoningTokens` 仅在上游提供时记录，是 output tokens 的子集，不重复计入总量。
+
+子 Agent 使用生成 SpawnAgent/PromptAgent 工具调用的父请求实际 effort 快照，最高 `high`；未知父默认保守 `medium`，不同模型选择不高于上限的支持档位，无法表示时显式报错。`/max`、配置 boost、`extraBody` 和关闭 thinking feature flag 均不能绕过最终 payload 上限。
+
+安全只读工具按共享段并发，不再统一限制为四个；写入、未知工具及控制工具保持独占 barrier。读取路径时提前补载对应项目规则，但同一模型响应里的写入仍不能使用尚未进入模型上下文的规则 scope。`projectDocMaxBytes: 0` 仍禁用规则加载。
 
 其他字段会被静默忽略。模型显示名等 UI 元数据来自打包好的 `models.js` / `models-dev.js`，不走用户 config。
 
@@ -59,7 +91,8 @@ model 项可以是裸字符串（`"gpt-5"`），也可以是对象：
 "yeaft": {
   "maxConcurrentThreads": 6,
   "autoArchiveIdleDays":  30,
-  "recentTurnsLimit":     20,
+  "recentTurnsLimit":     10,
+  "relatedTurnsLimit":    5,
   "multiVp": { "enabled": true },
   "dream":   { "DREAM_INTERVAL_HOURS": 1, "MIN_NEW_PER_GROUP": 20, "MAX_DREAM_PROMPT_CHARS": 96000 }
 }
@@ -69,7 +102,8 @@ model 项可以是裸字符串（`"gpt-5"`），也可以是对象：
 | --- | --- | --- | --- | --- |
 | `maxConcurrentThreads` | `number` | `6` | `1–50` | ThreadEngineRegistry 并发上限；含常驻的 `main` thread |
 | `autoArchiveIdleDays` | `number` | `30` | `1–3650` | thread 自动归档的空闲天数 |
-| `recentTurnsLimit` | `number` | `20` | `1–500` | 启动/重连后的冷启回放窗口；更早 transcript 仍可通过历史分页/搜索获取 |
+| `recentTurnsLimit` | `number` | `10` | `1–500` | 保留冷启回放配置兼容；provider 默认争取最近 10 turn，预算不足时从最旧端缩减并尽量保护 3 turn。连 3 个完整 turn 也装不下时，取消相关召回，只压缩这 3 个 turn 的临时 provider 副本，并将工具回放收窄到最新 1 turn |
+| `relatedTurnsLimit` | `number` | `5` | `0–5` | 当前 Session 自动相关召回上限；只选明显相关的完整问答，实际可为 0–5 个 turn。0 关闭召回；旧值 8/10 读取时收敛到 5 |
 | `multiVp.enabled` | `boolean` | `false` | — | 为兼容保留的 legacy feature flag；当前 Session UI 不把它作为 mode gate |
 | `dream.*` | object | 见 [dream/limits.js](https://github.com/yeaft/yeaft-web-code-agent/blob/main/agent/yeaft/dream/limits.js) | — | 任何 `DEFAULT_LIMITS` 里的 UPPER_CASE 常量都可覆盖 |
 

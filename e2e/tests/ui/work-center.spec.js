@@ -21,6 +21,7 @@ const WORK_CENTER_SETTINGS = {
       test: 'Test the change', review: 'Review independently', integrate: 'Integrate the changes',
       document: 'Document the result',
       operate: 'Operate safely', deliver: 'Deliver the result', write: 'Write the content',
+      create_vp: 'Create the requested VP',
       custom: 'Complete the custom Action',
     },
     workflows: [{
@@ -492,30 +493,27 @@ async function layoutMetrics(page) {
   });
 }
 
-async function resizeWorkbenchForMainWidth(page, targetWidth) {
-  await page.waitForTimeout(350);
+async function resizeViewportForMainWidth(page, targetWidth) {
+  const main = page.locator('.work-center-main');
+  // Resize the full-screen workspace through the real viewport.
   for (let attempt = 0; attempt < 4; attempt++) {
-    const resized = await page.evaluate(width => {
-      const handle = document.querySelector('.workbench-panel .resize-handle');
-      const main = document.querySelector('.work-center-main');
-      if (!handle || !main) return null;
-      const currentWidth = main.getBoundingClientRect().width;
-      if (Math.abs(currentWidth - width) <= 0.25) return currentWidth;
-      const handleBox = handle.getBoundingClientRect();
-      const startX = handleBox.x + handleBox.width / 2;
-      const targetX = startX + currentWidth - width;
-      handle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: startX }));
-      document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: targetX }));
-      document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: targetX }));
-      return currentWidth;
-    }, targetWidth);
-    if (resized == null) throw new Error('Workbench resize geometry is unavailable');
-    await page.waitForTimeout(350);
-    const actualWidth = await page.locator('.work-center-main').evaluate(element => element.getBoundingClientRect().width);
+    const currentWidth = await main.evaluate(element => element.getBoundingClientRect().width);
+    const viewport = page.viewportSize();
+    await page.setViewportSize({
+      ...viewport,
+      width: Math.round(viewport.width + targetWidth - currentWidth),
+    });
+    await main.evaluate(async () => {
+      await Promise.all(document.getAnimations()
+        .filter(animation => Number.isFinite(animation.effect?.getComputedTiming().endTime))
+        .map(animation => animation.finished.catch(() => {})));
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    });
+    const actualWidth = await main.evaluate(element => element.getBoundingClientRect().width);
     if (Math.abs(actualWidth - targetWidth) <= 0.25) return actualWidth;
   }
-  const actualWidth = await page.locator('.work-center-main').evaluate(element => element.getBoundingClientRect().width);
-  throw new Error(`Workbench resize did not converge: expected ${targetWidth}px, received ${actualWidth}px`);
+  await expect.poll(() => main.evaluate(element => element.getBoundingClientRect().width))
+    .toBeCloseTo(targetWidth, 1);
 }
 
 async function chooseWorkCenterTarget(page, target, label) {
@@ -740,7 +738,7 @@ test.describe('Work Center responsive UI', () => {
     })).toBe(0);
   });
 
-  test('keeps sidebar and content inside tablet and compact desktop viewports', async ({ chatPage, mockAgent }) => {
+  test('keeps full-screen content inside tablet and compact desktop viewports', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent);
 
     for (const width of [768, 960, 961, 1024]) {
@@ -748,7 +746,9 @@ test.describe('Work Center responsive UI', () => {
       await chatPage.waitForTimeout(350);
       const metrics = await layoutMetrics(chatPage);
 
-      expect(metrics.sidebar.x, `${width}px sidebar x`).toBeGreaterThanOrEqual(0);
+      await expect(chatPage.locator('.session-sidebar-shell')).toBeHidden();
+      expect(metrics.main.x).toBe(0);
+      expect(metrics.main.width).toBe(width);
       expect(metrics.documentScrollWidth, `${width}px document width`).toBeLessThanOrEqual(width);
       expect(metrics.mainScrollWidth, `${width}px main overflow`).toBeLessThanOrEqual(metrics.mainClientWidth + 1);
       expect(metrics.bodyScrollWidth, `${width}px workspace overflow`).toBeLessThanOrEqual(metrics.bodyClientWidth + 1);
@@ -841,7 +841,7 @@ test.describe('Work Center responsive UI', () => {
     }
   });
 
-  test('switches to drilldown when the Workbench reduces the actual Work Center width', async ({ chatPage, mockAgent }) => {
+  test('switches to drilldown when viewport resizing reduces the actual Work Center width', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent);
     await chatPage.setViewportSize({ width: 1600, height: 900 });
     const select = chatPage.locator('.work-center-card').click();
@@ -852,8 +852,7 @@ test.describe('Work Center responsive UI', () => {
     await expect(chatPage.locator('.work-center-detail')).toBeVisible();
     await expect(chatPage.locator('.work-center-action-detail-pane')).toBeHidden();
 
-    await chatPage.locator('.session-sidebar-shell .sidebar-icon-btn[title="Workbench"]').click();
-    await expect(chatPage.locator('.workbench-panel')).toHaveClass(/expanded/);
+    await resizeViewportForMainWidth(chatPage, 1024);
     await expect(chatPage.locator('.work-center-list')).toBeHidden();
     await expect(chatPage.locator('.work-center-detail')).toBeVisible();
     await expect(chatPage.locator('.work-center-action-detail-pane')).toBeHidden();
@@ -861,9 +860,14 @@ test.describe('Work Center responsive UI', () => {
     const metrics = await layoutMetrics(chatPage);
     expect(metrics.mainScrollWidth).toBeLessThanOrEqual(metrics.mainClientWidth + 1);
     expect(metrics.bodyScrollWidth).toBeLessThanOrEqual(metrics.bodyClientWidth + 1);
+    await expect(chatPage).toHaveURL(/workItemId=/);
+    await chatPage.getByRole('button', { name: 'Back to chat' }).click();
+    await expect(chatPage.locator('.work-center-main')).toHaveCount(0);
+    await expect(chatPage).not.toHaveURL(/workItemId=|workAgentId=|workContent=/);
+    await expect(chatPage.locator('.session-sidebar-shell')).toBeVisible();
   });
 
-  test('switches cleanly across the container breakpoint when the Workbench is dragged wider', async ({ chatPage, mockAgent }) => {
+  test('switches cleanly across the container breakpoint when the viewport is resized', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent);
     await chatPage.setViewportSize({ width: 1920, height: 900 });
     const select = chatPage.locator('.work-center-card').click();
@@ -874,10 +878,7 @@ test.describe('Work Center responsive UI', () => {
     await chatPage.locator('.work-center-action-summary').click();
     const actionPane = chatPage.locator('.work-center-action-detail-pane');
     await expect(actionPane).toBeVisible();
-    await chatPage.locator('.session-sidebar-shell .sidebar-icon-btn[title="Workbench"]').click();
-    await expect(chatPage.locator('.workbench-panel')).toHaveClass(/expanded/);
-
-    await resizeWorkbenchForMainWidth(chatPage, 1280);
+    await resizeViewportForMainWidth(chatPage, 1280);
     let metrics = await layoutMetrics(chatPage);
     expect(metrics.main.width).toBeGreaterThan(1250);
     await expect(chatPage.locator('.work-center-list')).toBeHidden();
@@ -899,7 +900,7 @@ test.describe('Work Center responsive UI', () => {
       attachmentChip: '.work-center-attachment-chip',
     });
 
-    await resizeWorkbenchForMainWidth(chatPage, 1200);
+    await resizeViewportForMainWidth(chatPage, 1200);
     metrics = await layoutMetrics(chatPage);
     expect(metrics.main.width).toBeGreaterThan(1160);
     expect(metrics.main.width).toBeLessThanOrEqual(1250);
@@ -922,13 +923,13 @@ test.describe('Work Center responsive UI', () => {
       attachmentChip: '.work-center-attachment-chip',
     });
 
-    await resizeWorkbenchForMainWidth(chatPage, 1025);
+    await resizeViewportForMainWidth(chatPage, 1025);
     metrics = await layoutMetrics(chatPage);
     expect(metrics.main.width).toBeGreaterThan(1024);
     await expect(chatPage.locator('.work-center-conversation-pane')).toBeVisible();
     await expect(actionPane).toBeVisible();
 
-    await resizeWorkbenchForMainWidth(chatPage, 1024);
+    await resizeViewportForMainWidth(chatPage, 1024);
     metrics = await layoutMetrics(chatPage);
     expect(metrics.main.width).toBeLessThanOrEqual(1024);
     await expect(chatPage.locator('.work-center-conversation-pane')).toBeHidden();
@@ -956,7 +957,8 @@ test.describe('Work Center responsive UI', () => {
     const targetMenu = chatPage.locator('.work-center-composer-target-menu');
     const targetList = targetMenu.locator('.modern-select-list');
     await expect(targetMenu).toBeVisible();
-    await chatPage.waitForTimeout(180);
+    await expect(targetMenu).not.toHaveClass(/ms-pop-enter-(?:from|active|to)/);
+    await expect.poll(() => targetMenu.evaluate(element => getComputedStyle(element).transform)).toBe('none');
     const targetMenuHeight = await targetMenu.evaluate(element => element.getBoundingClientRect().height);
     for (let index = 0; index < 8; index += 1) {
       await targetList.evaluate((element, step) => {
@@ -1211,14 +1213,55 @@ test.describe('Work Center responsive UI', () => {
             executionStats: OPEN_ITEM_DETAIL.actions[0].executionStats,
             liveMessage: {
               id: 'run:run-live', role: 'assistant', kind: 'response', status: 'running',
-              text: 'Live AI response from the active Run.', attachments: [],
+              text: '',
+              toolEvents: [{
+                id: 'tool-read', name: 'Read', status: 'running', resource: 'src/layout.js', startedAt: Date.now(),
+              }],
+              attachments: [],
               createdAt: Date.now(), updatedAt: Date.now(), progressRevision: 5,
             },
           }],
         },
       },
     });
-    await expect(actionDetail.locator('.work-center-action-message', { hasText: 'Live AI response from the active Run.' })).toHaveCount(1);
+    const liveResponse = actionDetail.locator('.work-center-action-message:has(.tool-line)');
+    await expect(liveResponse).toHaveCount(1);
+    await expect(actionDetail.locator('.work-center-action-empty')).toHaveCount(0);
+    await expect(liveResponse.locator('.tool-line')).toContainText('Read src/layout.js');
+    await expect(liveResponse.locator('.tool-line')).toHaveClass(/running/);
+    await expect(liveResponse.locator('.tool-line-status.running')).toBeVisible();
+
+    mockAgent.send({
+      type: 'work_center_event',
+      event: {
+        type: 'run.progress',
+        workItem: {
+          ...OPEN_ITEM,
+          revision: 1,
+          currentActionId: 'action-1',
+          updatedAt: Number(OPEN_ITEM.updatedAt) + 2,
+          actionStats: [{
+            id: 'action-1', status: 'running', progressRevision: 6,
+            executionStats: OPEN_ITEM_DETAIL.actions[0].executionStats,
+            liveMessage: {
+              id: 'run:run-live', role: 'assistant', kind: 'response', status: 'running',
+              text: 'Live AI response from the active Run.',
+              toolEvents: [
+                { id: 'tool-read', name: 'Read', status: 'completed', resource: 'src/layout.js', startedAt: Date.now() - 10 },
+                { id: 'tool-bash', name: 'Bash', status: 'error', startedAt: Date.now() },
+              ],
+              attachments: [],
+              createdAt: Date.now(), updatedAt: Date.now(), progressRevision: 6,
+            },
+          }],
+        },
+      },
+    });
+    await expect(liveResponse.locator('.tool-line').filter({ hasText: 'Bash' })).toHaveClass(/error/);
+    await expect(liveResponse.locator('.tool-line-status.error')).toBeVisible();
+    await liveResponse.getByRole('button', { name: '1 more' }).click();
+    await expect(liveResponse.locator('.tool-line')).toHaveCount(2);
+    await expect(liveResponse.locator('.tool-line').filter({ hasText: 'Read src/layout.js' })).toHaveClass(/completed/);
 
     await actionDetail.getByRole('button', { name: 'Close Actions' }).click();
     await chooseWorkCenterTarget(chatPage, target, 'Send to Action 1');
@@ -1253,7 +1296,6 @@ test.describe('Work Center responsive UI', () => {
     await expect(actionDetail).toHaveCount(0);
     await chatPage.getByRole('button', { name: /^\d+ Actions$/ }).click();
     await chatPage.locator('.work-center-action-summary').click();
-    await expect(actionDetail).toContainText('Live AI response from the active Run.');
 
     mockAgent.send({
       type: 'work_center_event',
@@ -1272,7 +1314,9 @@ test.describe('Work Center responsive UI', () => {
             response: 'FINAL REPLY',
             liveMessage: {
               id: 'run:run-live', runId: 'run-live', role: 'assistant', kind: 'response',
-              status: 'completed', text: 'FINAL REPLY', attachments: [],
+              status: 'completed', text: 'FINAL REPLY',
+              toolEvents: [{ id: 'tool-read', name: 'Read', status: 'completed', resource: 'src/layout.js', startedAt: Date.now() - 10 }],
+              attachments: [],
               generation: 1, attempt: 1,
               createdAt: Date.now(), updatedAt: Date.now(), progressRevision: 6,
             },
@@ -1280,8 +1324,10 @@ test.describe('Work Center responsive UI', () => {
         },
       },
     });
-    await expect(actionDetail.locator('.work-center-action-message', { hasText: 'FINAL REPLY' })).toHaveCount(1);
-    await expect(actionDetail.locator('.work-center-action-message', { hasText: 'Live AI response from the active Run.' })).toHaveCount(0);
+    const finalResponse = actionDetail.locator('.work-center-action-message', { hasText: 'FINAL REPLY' });
+    await expect(finalResponse).toHaveCount(1);
+    await expect(finalResponse.locator('.tool-line').filter({ hasText: 'Read src/layout.js' })).toHaveClass(/completed/);
+    await expect(actionDetail.locator('.work-center-action-message')).toHaveCount(2);
 
     const terminalDetail = {
       ...OPEN_ITEM_DETAIL,
@@ -1297,13 +1343,17 @@ test.describe('Work Center responsive UI', () => {
         response: 'FINAL REPLY',
         messages: [{
           id: 'run:run-live', runId: 'run-live', role: 'assistant', kind: 'response',
-          status: 'completed', text: 'FINAL REPLY', attachments: [],
+          status: 'completed', text: 'FINAL REPLY',
+          toolEvents: [{ id: 'tool-read', name: 'Read', status: 'completed', resource: 'src/layout.js', startedAt: Date.now() - 10 }],
+          attachments: [],
           generation: 1, attempt: 1,
           createdAt: Date.now(), updatedAt: Date.now(), progressRevision: 6,
         }],
         liveMessage: {
           id: 'run:run-live', runId: 'run-live', role: 'assistant', kind: 'response',
-          status: 'completed', text: 'FINAL REPLY', attachments: [],
+          status: 'completed', text: 'FINAL REPLY',
+          toolEvents: [{ id: 'tool-read', name: 'Read', status: 'completed', resource: 'src/layout.js', startedAt: Date.now() - 10 }],
+          attachments: [],
           generation: 1, attempt: 1,
           createdAt: Date.now(), updatedAt: Date.now(), progressRevision: 6,
         },
@@ -1327,8 +1377,9 @@ test.describe('Work Center responsive UI', () => {
         list: { items: [terminalDetail, GENERATION_ITEM], watcher: { enabled: true } },
       })).op,
     ];
-    await expect(actionDetail.locator('.work-center-action-message', { hasText: 'FINAL REPLY' })).toHaveCount(1);
-    await expect(actionDetail.locator('.work-center-action-message', { hasText: 'Live AI response from the active Run.' })).toHaveCount(0);
+    await expect(finalResponse).toHaveCount(1);
+    await expect(finalResponse.locator('.tool-line').filter({ hasText: 'Read src/layout.js' })).toHaveClass(/completed/);
+    await expect(actionDetail.locator('.work-center-action-message')).toHaveCount(1);
     const readFinalState = () => chatPage.evaluate(() => {
       const store = window.Pinia.useChatStore();
       const agentId = store.workCenterAgentId;
@@ -1773,7 +1824,6 @@ test.describe('Work Center responsive UI', () => {
     });
     expect(stopColors.actual).toBe(stopColors.expected);
 
-    chatPage.once('dialog', dialog => dialog.accept());
     const cancelResponses = (async () => {
       const operations = [];
       while (!operations.some(request => request.op === 'cancel')
@@ -1787,6 +1837,11 @@ test.describe('Work Center responsive UI', () => {
       return operations;
     })();
     await stop.click();
+    const confirmation = chatPage.getByRole('dialog').filter({
+      hasText: 'Stop this work item and its unfinished Actions?',
+    });
+    await expect(confirmation).toBeVisible();
+    await confirmation.getByRole('button', { name: 'OK', exact: true }).click();
     const cancelOps = await cancelResponses;
     expect(cancelOps.some(request => request.op === 'list')).toBe(true);
     expect(cancelOps.find(request => request.op === 'cancel').payload).toEqual({ id: OPEN_ITEM.id });
@@ -2070,7 +2125,8 @@ test.describe('Work Center responsive UI', () => {
       }
     })();
 
-    await chatPage.locator('.sidebar-work-center-header-btn').click();
+    const entered = await chatPage.evaluate(() => window.Pinia.useChatStore().enterWorkCenter());
+    expect(entered).toBe(true);
     const pendingSettings = await settingsRequest;
     await expect(chatPage.locator('.work-center-main')).toBeVisible();
     await chatPage.locator('.work-center-header-create').click();
@@ -2110,6 +2166,7 @@ test.describe('Work Center responsive UI', () => {
       type: 'directory_listing',
       conversationId: directoryRequest.conversationId,
       requestId: directoryRequest.requestId,
+      _workbenchRequestId: directoryRequest._workbenchRequestId,
       dirPath: '/tmp/test',
       entries: [
         { name: 'project-alpha', type: 'directory' },
@@ -2144,10 +2201,8 @@ test.describe('Work Center responsive UI', () => {
     await chatPage.setViewportSize({ width: 720, height: 900 });
     await chatPage.waitForTimeout(350);
 
-    await chatPage.locator('.work-center-sidebar-toggle').click();
-    await expect(chatPage.locator('.session-sidebar-shell')).not.toHaveClass(/collapsed/);
-    await chatPage.locator('.session-sidebar-shell .sidebar-icon-btn[title="Collapse sidebar"]').click();
-    await expect(chatPage.locator('.session-sidebar-shell')).toHaveClass(/collapsed/);
+    await expect(chatPage.locator('.session-sidebar-shell')).toBeHidden();
+    await expect(chatPage.getByRole('button', { name: 'Back to chat' })).toBeVisible();
 
     const create = chatPage.locator('.work-center-header-create');
     await expect(create).toBeVisible();
@@ -2168,6 +2223,8 @@ test.describe('Work Center responsive UI', () => {
     });
     await chatPage.locator('.work-center-header-actions .work-center-icon-button').first().click();
     await settingsRequest;
+    // Opening the modal starts its own load after the page-level settings load.
+    await respondToWorkCenterOp(mockAgent, 'get_settings', WORK_CENTER_SETTINGS);
     const modal = chatPage.locator('.work-center-settings-card');
     await expect(modal).toBeVisible();
     const box = await modal.boundingBox();
@@ -2180,7 +2237,8 @@ test.describe('Work Center responsive UI', () => {
     await chatPage.getByRole('button', { name: 'Models', exact: true }).click();
     const modelStages = chatPage.locator('.work-center-model-stage');
     await expect(modelStages).toHaveCount(expectedModelPolicyCount());
-    const coordinatorStage = modelStages.nth(1);
+    const coordinatorStage = modelStages.filter({ has: chatPage.locator('strong', { hasText: /^Coordinator$/ }) });
+    await expect(coordinatorStage).toHaveCount(1);
     const modelStage = modelStages.last();
     await expect(modelStage).toContainText('Fallback for all Actions');
     const effort = modelStage.locator('.work-center-model-effort');
@@ -2204,6 +2262,7 @@ test.describe('Work Center responsive UI', () => {
     await expect(coordinatorStage.locator('select').nth(1)).toHaveValue('provider/review');
     await expect(coordinatorStage.locator('.work-center-model-effort select')).toHaveValue('medium');
 
+    const expectedCoordinatorPolicy = { mode: 'specific', model: 'provider/review', effort: 'medium' };
     const saveResponse = respondUntilOperation(mockAgent, 'update_settings', {
       list: { items: [OPEN_ITEM], watcher: { enabled: true } },
       get_settings: WORK_CENTER_SETTINGS,
@@ -2216,7 +2275,8 @@ test.describe('Work Center responsive UI', () => {
     const saveRequest = await saveResponse;
     expect(saveRequest.payload.settings).toMatchObject({ revision: 7 });
     expect(saveRequest.payload.settings.coordinatorModelPolicy)
-      .toEqual(WORK_CENTER_SETTINGS.settings.coordinatorModelPolicy);
+      .toEqual(expectedCoordinatorPolicy);
+    expect(saveRequest.payload.settings.modelPolicy.mode).toBe('inherit');
     await respondToWorkCenterOp(
       mockAgent, 'list', { items: [OPEN_ITEM], watcher: { enabled: true } }, [OPEN_ITEM],
     );
@@ -2230,7 +2290,7 @@ test.describe('Work Center responsive UI', () => {
       };
     }, mockAgent.agentId)).toEqual({
       revision: 8,
-      coordinatorModelPolicy: WORK_CENTER_SETTINGS.settings.coordinatorModelPolicy,
+      coordinatorModelPolicy: expectedCoordinatorPolicy,
     });
   });
 
@@ -2276,9 +2336,8 @@ test.describe('Work Center responsive UI', () => {
     await openWorkCenter(chatPage, mockAgent);
     await chatPage.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
     await chatPage.setViewportSize({ width: 720, height: 780 });
-    await chatPage.locator('.work-center-sidebar-toggle').click();
-    await chatPage.locator('.session-sidebar-shell .sidebar-icon-btn[title="Collapse sidebar"]').click();
-    await expect(chatPage.locator('.session-sidebar-shell')).toHaveClass(/collapsed/);
+    await expect(chatPage.locator('.session-sidebar-shell')).toBeHidden();
+    await expect(chatPage.getByRole('button', { name: 'Back to chat' })).toBeVisible();
     const settingsRequest = respondUntilOperation(mockAgent, 'get_settings', {
       list: { items: [OPEN_ITEM], watcher: { enabled: true } },
       get_settings: WORK_CENTER_SETTINGS,
@@ -2335,11 +2394,11 @@ test.describe('Work Center responsive UI', () => {
     await expect(modal.getByRole('button', { name: 'General', exact: true })).toHaveCount(0);
   });
 
-  test('creates from a goal contract and leaves planning to AI triage', async ({ chatPage, mockAgent }) => {
+  test('creates from a goal contract and leaves planning to the Coordinator', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent);
     await chatPage.locator('.work-center-header-create').click();
-    await expect(chatPage.locator('.work-center-plan-preview')).toContainText('AI-planned execution');
-    await expect(chatPage.locator('.work-center-plan-preview')).toContainText('Triage chooses the task type');
+    await expect(chatPage.locator('.work-center-plan-preview')).toContainText('Coordinator-driven execution');
+    await expect(chatPage.locator('.work-center-plan-preview')).toContainText('The Coordinator chooses the next Actions and executors from the current evidence');
     await expect(chatPage.locator('.work-center-plan-stages')).toHaveCount(0);
 
     await chatPage.locator('.work-center-modal').getByRole('textbox', { name: /Requirement/ })
@@ -2350,6 +2409,125 @@ test.describe('Work Center responsive UI', () => {
     expect(request.payload.workItemType).toBe('auto');
     expect(request.payload).not.toHaveProperty('workflowTemplate');
     expect(request.payload).not.toHaveProperty('stageOverrides');
+  });
+
+  test('creates a response delivery without requesting code artifacts', async ({ chatPage, mockAgent }) => {
+    await openWorkCenter(chatPage, mockAgent);
+    await chatPage.locator('.work-center-header-create').click();
+    const modal = chatPage.locator('.work-center-modal');
+    await modal.getByRole('textbox', { name: /Requirement/ }).fill('Explain the failure with supporting evidence');
+    await modal.getByRole('combobox', { name: /Delivery target/ }).selectOption('response');
+    const createRequest = respondToWorkCenterOp(mockAgent, 'create', OPEN_ITEM_DETAIL);
+    await modal.getByRole('button', { name: 'Create', exact: true }).click();
+    expect((await createRequest).payload.deliveryTarget).toBe('response');
+  });
+
+  test('shows evidence-based goal progress, blockers and delivery instead of Action completion', async ({ chatPage, mockAgent }) => {
+    await openWorkCenter(chatPage, mockAgent);
+    const select = chatPage.locator('.work-center-card').click();
+    await respondToWorkCenterOp(mockAgent, 'get', {
+      ...detailWithActions(4),
+      completedActionCount: 4,
+      deliveryTarget: 'response',
+      acceptanceCriteria: ['Explain the cause', 'Verify the fix', 'Document the result'],
+      goalProgress: {
+        completedCriteriaCount: 1, totalCriteriaCount: 3,
+        remainingCriteria: ['Verify the fix', 'Document the result'],
+        criteria: [
+          { criterion: 'Explain the cause', status: 'passed', evidenceRunIds: ['run-proof'] },
+          { criterion: 'Verify the fix', status: 'failed', evidenceRunIds: [] },
+          { criterion: 'Document the result', status: 'unmet', evidenceRunIds: [] },
+        ],
+        blockers: [{ actionId: 'action-4', status: 'waiting', reason: 'Need the reproduction logs' }],
+        delivery: { target: 'response', status: 'unmet', evidenceRunIds: [] },
+      },
+    });
+    await select;
+    const progress = chatPage.locator('.work-center-goal-progress');
+    await expect(progress).toContainText('1 / 3 criteria verified');
+    await expect(progress).toContainText('2 remaining');
+    await expect(progress.locator('[data-status="failed"]')).toContainText('Verify the fix');
+    await expect(progress.locator('[data-status="unmet"]').first()).toContainText('Document the result');
+    await expect(progress.locator('[data-status="passed"]')).toContainText('run-proof');
+    await expect(progress).toContainText('Need the reproduction logs');
+    await expect(progress).toContainText('Response');
+    await expect(progress).toContainText('Not yet verified');
+    await expect(chatPage.locator('.work-center-content-panel')).not.toBeVisible();
+
+    // A bounded legacy projection may omit the only unmet row. Counts remain authoritative.
+    await chatPage.evaluate(agentId => {
+      const item = window.Pinia.useChatStore().workCenterDetailByAgent[agentId];
+      item.goalProgress = { ...item.goalProgress, completedCriteriaCount: 100, totalCriteriaCount: 101,
+        remainingCriteria: [], omittedCriteriaCount: 1,
+        criteria: [{ criterion: 'Visible passed criterion', status: 'passed', evidenceRunIds: [] }] };
+    }, mockAgent.agentId);
+    await expect(progress).toContainText('100 / 101 criteria verified');
+    await expect(progress).toContainText('1 remaining');
+    await expect(progress).not.toContainText('All criteria verified');
+    await expect(progress).toContainText('1 more criteria omitted');
+
+    // Older Agents must not acquire a fabricated goal percentage from Action counts.
+    await chatPage.evaluate(({ agentId, detail }) => {
+      window.Pinia.useChatStore().workCenterDetailByAgent[agentId] = detail;
+    }, { agentId: mockAgent.agentId, detail: OPEN_ITEM_DETAIL });
+    await expect(progress).toHaveCount(0);
+    await expect(chatPage.locator('.work-center-acceptance')).toContainText('The Action flow remains readable');
+  });
+
+  test('keeps delivered responses and goal evidence readable in both themes at 320px', async ({ chatPage, mockAgent }) => {
+    await openWorkCenter(chatPage, mockAgent);
+    const select = chatPage.locator('.work-center-card').click();
+    const criterion = `Explain the result ${'criterion'.repeat(100)}`;
+    const runId = `run-${'evidence'.repeat(50)}`;
+    await respondToWorkCenterOp(mockAgent, 'get', {
+      ...OPEN_ITEM_DETAIL, status: 'done', deliveryTarget: 'response',
+      acceptanceCriteria: [criterion],
+      goalProgress: {
+        completedCriteriaCount: 1, totalCriteriaCount: 1, remainingCriteria: [], blockers: [],
+        criteria: [{ criterion, status: 'passed', evidenceRunIds: [runId] }],
+        delivery: { target: 'response', status: 'passed', evidenceRunIds: [runId] },
+      },
+      finalResult: {
+        responses: [{ runId, summary: `The answer is supported by logs.\n<script>window.untrustedResponse = true</script>\n${'response'.repeat(200)}`,
+          evidence: [{ kind: 'test', label: 'Reproduction confirmed', ref: `logs/${'trace'.repeat(200)}`, status: 'passed' }] }],
+      },
+    });
+    await select;
+    const result = chatPage.locator('.work-center-responses');
+    await expect(result).toContainText('The answer is supported by logs.');
+    await expect(result).toContainText('Reproduction confirmed');
+    await expect(result).toContainText(runId);
+    await expect(chatPage.locator('.work-center-goal-progress')).toContainText('All criteria verified');
+    expect(await chatPage.evaluate(() => window.untrustedResponse)).toBeUndefined();
+    await result.locator('summary').focus();
+    await chatPage.keyboard.press('Enter');
+    await expectVisibleFocus(result.locator('summary'));
+    await expect(result.locator('details')).toHaveAttribute('open', '');
+    await chatPage.locator('.work-center-goal-criteria summary').click();
+    await chatPage.locator('.work-center-goal-delivery summary').click();
+    for (const [theme, locale] of [['light', 'en'], ['light', 'zh-CN'], ['dark', 'en'], ['dark', 'zh-CN']]) {
+      await chatPage.evaluate(async ({ theme, locale }) => {
+        document.documentElement.setAttribute('data-theme', theme);
+        const { setLocale } = await import('/utils/i18n.js');
+        setLocale(locale);
+      }, { theme, locale });
+      await expect(result.locator('h3')).toHaveText(locale === 'zh-CN' ? '交付回复' : 'Delivered response');
+      await expect(chatPage.locator('.work-center-goal-count')).toContainText(locale === 'zh-CN' ? '1 / 1 项验收条件已验证' : '1 / 1 criteria verified');
+      await expect(chatPage.locator('.work-center-goal-delivery')).toContainText(locale === 'zh-CN' ? '回复' : 'Response');
+      for (const width of [1280, 320]) {
+        await chatPage.setViewportSize({ width, height: 720 });
+        await expectNoHorizontalOverflow(chatPage.locator('.work-center-work-item-overview'), {
+          overview: ':scope', progress: '.work-center-goal-progress', criteria: '.work-center-goal-criteria',
+          delivery: '.work-center-goal-delivery', responses: '.work-center-responses', response: '.work-center-response-summary',
+        });
+        const colors = await result.evaluate(element => ({
+          text: getComputedStyle(element).color,
+          background: getComputedStyle(document.querySelector('.work-center-main')).backgroundColor,
+        }));
+        expect(colors.text).not.toBe(colors.background);
+        expect(await chatPage.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      }
+    }
   });
 
   test('uploads files and binds their references to the Work Item create request', async ({ chatPage, mockAgent }) => {
@@ -2903,5 +3081,128 @@ test.describe('Work Center responsive UI', () => {
     const activeLane = chatPage.locator('.work-center-board-lane[data-lane="active"]');
     await expect(activeLane).toBeVisible();
     await expect(activeLane.locator('.work-center-card')).toHaveCount(1);
+  });
+});
+
+function resourceStoppedDetail() {
+  const usage = { llmRequestCount: 200, totalTokens: 1750, chargedTokens: 18134, reservedTokens: 16384, unknownRequests: 1, inFlightRequests: 1 };
+  return {
+    ...OPEN_ITEM_DETAIL, status: 'needs_attention', boardLane: 'needs_attention',
+    executionControl: {
+      revision: 7,
+      limits: { maxRequests: 200, maxTokens: 2000000, maxRunRequests: 40, maxActionAttempts: 3, maxCoordinatorFailures: 3 },
+      usage, coordinatorFailures: 1,
+      breakdown: {
+        coordinator: { ...usage, llmRequestCount: 20 },
+        actions: { ...usage, llmRequestCount: 180 },
+      },
+      actionAttempts: [{ actionId: `action-${'long-id-'.repeat(60)}`, attempts: 2, effectiveMaxAttempts: 3 }],
+      stopReason: { code: 'work_item_requests_exhausted' },
+    },
+  };
+}
+
+async function openResourceDetail(chatPage, mockAgent) {
+  const detail = resourceStoppedDetail();
+  await openWorkCenter(chatPage, mockAgent, [detail]);
+  const select = chatPage.locator('.work-center-card-open').click();
+  await respondToWorkCenterOp(mockAgent, 'get', detail, [detail]);
+  await select;
+  await expect(chatPage.locator('.work-center-resources')).toBeVisible();
+  return detail;
+}
+
+test.describe('Work Center resource budget', () => {
+  test('extends explicitly and resumes with latest CAS; refreshes conflicts without replay', async ({ chatPage, mockAgent }) => {
+    const detail = await openResourceDetail(chatPage, mockAgent);
+    const panel = chatPage.locator('.work-center-resources');
+    const transport = mockAgent.__workCenterTransport;
+    await expect(panel).toContainText('200 / 200');
+    await expect(panel).toContainText('Stopped: lifetime request budget exhausted.');
+    await panel.getByRole('button', { name: 'Extend budget', exact: true }).click();
+    await expect(panel.getByRole('button', { name: 'Confirm budget addition' })).toBeDisabled();
+    await panel.locator('[name="maxRequests"]').fill('9007199254740992');
+    await expect(panel.getByRole('alert')).toContainText('positive safe integers');
+    await expect(panel.getByRole('button', { name: 'Confirm budget addition' })).toBeDisabled();
+    for (const key of Object.keys(detail.executionControl.limits)) await panel.locator(`[name="${key}"]`).fill('2');
+    await panel.getByRole('button', { name: 'Confirm budget addition' }).click();
+    const extension = await transport.next();
+    expect(extension.op).toBe('extend_budget');
+    expect(extension.agentId).toBe(mockAgent.agentId);
+    expect(extension.payload).toEqual({ id: detail.id, executionControlRevision: 7,
+      additions: { maxRequests: 2, maxTokens: 2, maxRunRequests: 2, maxActionAttempts: 2, maxCoordinatorFailures: 2 } });
+    await expect(panel).toHaveAttribute('aria-busy', 'true');
+    await expect(panel.getByRole('button', { name: 'Resume work item' })).toBeDisabled();
+    const extended = structuredClone(detail);
+    extended.executionControl.revision = 8;
+    for (const key of Object.keys(extended.executionControl.limits)) extended.executionControl.limits[key] += 2;
+    await transport.resolve(extension, extended);
+    await respondToWorkCenterOp(mockAgent, 'list', { items: [extended], watcher: { enabled: true } });
+    await expect(panel).toContainText('Execution was not resumed');
+    await expect(panel).toContainText('200 / 202');
+    expect(await transport.takeNow()).toBeNull();
+    await panel.getByRole('button', { name: 'Resume work item' }).click();
+    const resume = await transport.next();
+    expect(resume.op).toBe('resume');
+    expect(resume.payload).toEqual({ id: detail.id, revision: 1, executionControlRevision: 8 });
+    await transport.reject(resume, 'Execution control changed; refresh before changing execution budget or resuming');
+    const refresh = await transport.next();
+    expect(refresh.op).toBe('get');
+    expect(refresh.payload).toEqual({ id: detail.id });
+    const latest = structuredClone(extended);
+    latest.revision = 2;
+    latest.executionControl.revision = 10;
+    await transport.resolve(refresh, latest);
+    await expect(panel.getByRole('alert')).toContainText('Execution control changed');
+    await expect(panel).toContainText('confirm a new operation');
+    expect(await transport.takeNow()).toBeNull();
+    await panel.getByRole('button', { name: 'Resume work item' }).click();
+    const explicitResume = await transport.next();
+    expect(explicitResume.payload).toEqual({ id: detail.id, revision: 2, executionControlRevision: 10 });
+    const resumed = { ...latest, status: 'running', boardLane: 'active',
+      executionControl: { ...latest.executionControl, revision: 11, stopReason: null } };
+    await transport.resolve(explicitResume, resumed);
+    await respondToWorkCenterOp(mockAgent, 'list', { items: [resumed], watcher: { enabled: true } });
+    await expect(panel).toContainText('Resume accepted.');
+    await expect(panel.getByRole('button', { name: 'Resume work item' })).toHaveCount(0);
+  });
+
+  test('resource budget remains readable and keyboard usable in both locales/themes at 320px', async ({ chatPage, mockAgent }) => {
+    await openResourceDetail(chatPage, mockAgent);
+    const panel = chatPage.locator('.work-center-resources');
+    await panel.locator('summary').click();
+    await panel.getByRole('button', { name: 'Extend budget', exact: true }).click();
+    await expect(panel).toContainText('ALL current and future Actions');
+    await expect(panel).toContainText('Reported 1,750 · reserved / unknown 16,384 tokens');
+    await expect(panel).toContainText('Unknown usage: 1 requests · in flight: 1');
+    for (const locale of ['en', 'zh-CN']) {
+      for (const theme of ['light', 'dark']) {
+        await chatPage.evaluate(async ({ locale, theme }) => {
+          document.documentElement.setAttribute('data-theme', theme);
+          const { setLocale } = await import('/utils/i18n.js');
+          setLocale(locale);
+        }, { locale, theme });
+        for (const width of [1280, 320]) {
+          await chatPage.setViewportSize({ width, height: 900 });
+          await expectNoHorizontalOverflow(panel, {
+            panel: ':scope', totals: '.work-center-resource-totals', breakdown: '.work-center-resource-breakdown',
+            form: '.work-center-resource-form', inputs: '.work-center-resource-inputs',
+          });
+          const metrics = await layoutMetrics(chatPage);
+          expect(metrics.documentScrollWidth).toBeLessThanOrEqual(width);
+          await expect(panel).not.toContainText('workCenter.resource.');
+        }
+      }
+    }
+    await panel.locator('[name="maxRequests"]').focus();
+    await expectVisibleFocus(panel.locator('[name="maxRequests"]'));
+    await chatPage.keyboard.press('Tab');
+    await expect(panel.locator('[name="maxTokens"]')).toBeFocused();
+    // Lost connection invalidates editing, including after reconnect, until a user refresh.
+    await chatPage.evaluate(() => { window.Pinia.useChatStore().connectionState = 'reconnecting'; });
+    await expect(panel.locator('[name="maxRequests"]')).toBeDisabled();
+    await chatPage.evaluate(() => { window.Pinia.useChatStore().connectionState = 'connected'; });
+    await expect(panel.locator('[name="maxRequests"]')).toBeDisabled();
+    await expect(panel).toContainText('请刷新后重新确认');
   });
 });

@@ -48,7 +48,7 @@ import {
 import {
   applyWorkItemSummary,
   isWorkItemDetailResponseStale,
-  isWorkItemDetailStale,
+  mergeWorkItemDetail,
   mergeActionMessages,
   normalizeWorkCenterActionGeneration,
   workCenterActionMessageKey,
@@ -222,6 +222,8 @@ const YEAFT_RECENT_TURNS = 5;
 const YEAFT_HISTORY_DELTA_ROWS = 100;
 const YEAFT_HISTORY_DELTA_BYTES = 512 * 1024;
 const YEAFT_SESSION_INVENTORY_TIMEOUT_MS = 15_000;
+const YEAFT_SESSION_CRUD_TIMEOUT_MS = 10_000;
+const YEAFT_SESSION_COPY_SUCCESS_MS = 450;
 const YEAFT_HISTORY_OUTLINE_RETRY_DELAYS_MS = Object.freeze([150, 300, 600, 1_000]);
 const YEAFT_HISTORY_OUTLINE_RETRYABLE_ERRORS = new Set(['index_building', 'stale_result']);
 const YEAFT_RUNNING_VP_STATES = new Set(['typing', 'thinking', 'retrying', 'streaming', 'tool']);
@@ -382,6 +384,16 @@ function hasPendingToolCall(state, conversationId, sessionId) {
 }
 
 function applyAskUserTerminal(row, event) {
+  if (event.type === 'ask_user_answer_rejected' && (row.askAnswered || row.askExpired)) return;
+  // Relay/network errors are retryable, unlike an unavailable request. Keep
+  // the submitted answer and request identity so it can be resent explicitly.
+  if (event.type === 'ask_user_answer_rejected' && event.reason === 'agent_unavailable') {
+    row.askError = 'agent_unavailable';
+    row.askSubmittedAt = 0;
+    return;
+  }
+  row.askError = event.type === 'ask_user_answer_rejected' ? event.reason || 'unavailable' : null;
+  row.askSubmittedAt = null;
   if (event.type === 'ask_user_answered') {
     row.askAnswered = true;
     row.selectedAnswers = event.answers || {};
@@ -477,6 +489,17 @@ function resolveAgentIdForSession(state, sessionId, explicitAgentId = null) {
     if (mapped) return mapped;
   }
   return state?.currentAgent || null;
+}
+
+function resolveYeaftWorkbenchWorkDir(state) {
+  const sessionId = resolveActiveYeaftSessionId(state);
+  const agentId = resolveAgentIdForSession(state, sessionId);
+  const session = getSessionsStore()?.sessionById?.(sessionId, agentId);
+  const agent = state.currentAgentInfo?.id === agentId
+    ? state.currentAgentInfo
+    : state.agents?.find(row => row?.id === agentId);
+  const cleanWorkDir = value => typeof value === 'string' ? value.trim() : '';
+  return cleanWorkDir(session?.workDir) || cleanWorkDir(agent?.workDir);
 }
 
 function isAgentVersionAtLeast(version, minimum) {
@@ -603,6 +626,8 @@ export const useChatStore = defineStore('chat', {
     // unconditional so old encrypted frames still decrypt.
     serverEncryptionRequired: true,
     // 连接状态
+    sessionForkPendingKey: null, // one explicit copy operation at a time across both UI entry points
+    sessionForkState: 'idle', // idle | copying | success | error
     connectionState: 'disconnected', // 'disconnected' | 'connecting' | 'connected' | 'reconnecting'
     reconnectAttempts: 0,
     maxReconnectAttempts: 10,
@@ -869,7 +894,10 @@ export const useChatStore = defineStore('chat', {
     telemetrySettings: null,
     telemetrySettingsByAgent: {},
     telemetryRequestByAgent: {},
+    workCenterFeatureSettingsByAgent: {},
+    workCenterFeatureRequestByAgent: {},
     agentOperations: {},
+    agentUpgradeBatch: null,
     agentDreamState: {},
     // Last live Tavily /usage probe.
     //   { plan, used, limit, paygoUsed, paygoLimit } | { error }
@@ -929,6 +957,7 @@ export const useChatStore = defineStore('chat', {
     // to the last Chat conversation after bootstrap replaces the active id.
     ...yeaftViewHelpers.createInitialConversationViewState(),
     workCenterOpen: false,
+    workCenterUiEnabled: localStorage.getItem('work-center-ui-enabled') !== 'false',
     workCenterAgentId: null,
     workCenterItemsByAgent: {},
     workCenterListPageByAgent: {},
@@ -1507,25 +1536,11 @@ export const useChatStore = defineStore('chat', {
     // Chat mode: the conversation's project dir (`currentWorkDir`) takes
     // precedence, falling back to the agent's cwd. Preserves prior behavior.
     //
-    // Yeaft mode: the Chat agent's cwd is the wrong default — it leaks
-    // whichever Chat conversation the user last opened into the group's
-    // workbench. Precedence:
-    //   1. active group's own workDir (groups don't carry one on main yet,
-    //      but the lookup is wired so the day they do, no consumer changes
-    //      are needed),
-    //   2. agent's ~/.yeaft home, advertised via session_ready.yeaftDir,
-    //   3. agent cwd as a final fallback if session_ready hasn't landed.
-    //
-    // Until `yeaftSessionReady`, we still return the fallback chain rather
-    // than '' so first-paint Files/Git RPCs don't hit a no-op — a brief
-    // flicker is preferable to a blank workbench during the ~1 tick gap.
+    // Yeaft mode matches Server route resolution: Session cwd, then its
+    // owning Agent's execution cwd. yeaftDir owns runtime data, not code.
     effectiveWorkDir: (state) => {
       if (state.currentView === 'yeaft') {
-        const groupWorkDir = getSessionsStore()?.activeSession?.workDir;
-        return groupWorkDir
-          || state.yeaftYeaftDir
-          || state.currentAgentInfo?.workDir
-          || '';
+        return resolveYeaftWorkbenchWorkDir(state);
       }
       return state.currentWorkDir || state.currentAgentInfo?.workDir || '';
     },
@@ -1555,10 +1570,7 @@ export const useChatStore = defineStore('chat', {
       const canResolve = agentHasCapability(state, agentId, 'file_reference_resolution');
       if (!agentId || !conversationId || !canResolve) return '';
       const workDir = state.currentView === 'yeaft'
-        ? getSessionsStore()?.activeSession?.workDir
-          || state.yeaftYeaftDir
-          || state.currentAgentInfo?.workDir
-          || ''
+        ? resolveYeaftWorkbenchWorkDir(state)
         : state.currentWorkDir || state.currentAgentInfo?.workDir || '';
       return JSON.stringify([
         state.connectionState,
@@ -1571,6 +1583,7 @@ export const useChatStore = defineStore('chat', {
         workDir,
         agentHasCapability(state, agentId, 'file_editor'),
         agentHasCapability(state, agentId, 'workbench_session_routes'),
+        agentHasCapability(state, agentId, 'response_image_preview'),
       ]);
     },
     // 当前 Agent 的能力列表
@@ -1582,6 +1595,12 @@ export const useChatStore = defineStore('chat', {
       const caps = state.currentAgentInfo?.capabilities || ['terminal', 'file_editor', 'background_tasks'];
       return caps.includes(capability);
     },
+    // Workbench routes can remain bound to an Agent other than the page-level
+    // currentAgent while Session inventory and history settle. Capability
+    // checks for those routes must use the route owner, not the selected Agent.
+    hasAgentCapability: (state) => (agentId, capability) => (
+      agentHasCapability(state, agentId, capability)
+    ),
     // 获取会话标题
     getConversationTitle: (state) => (conversationId) => {
       return state.customConversationTitles[conversationId] || state.conversationTitles[conversationId] || null;
@@ -1729,25 +1748,32 @@ export const useChatStore = defineStore('chat', {
         && Array.isArray(agent.capabilities) && agent.capabilities.includes('work_center'));
       const target = compatibleAgents.some(agent => agent.id === agentId)
         ? agentId
-        : (compatibleAgents[0]?.id || null);
-      if (!target) {
-        this.workCenterOpen = false;
-        this.workCenterAgentId = null;
-        return false;
-      }
-      if (this.currentAgent !== target) {
-        this.selectAgent(target);
-        this.currentAgent = target;
-        const info = this.agents.find(agent => agent.id === target);
-        if (info) this.currentAgentInfo = info;
-      }
+        : (compatibleAgents.some(agent => agent.id === this.workCenterAgentId)
+          ? this.workCenterAgentId
+          : (compatibleAgents[0]?.id || null));
+      // Work Center requests carry their own Agent identity. Do not switch the
+      // chat Agent: leaving this surface must return to the original Session.
       this.workCenterAgentId = target;
       this.workCenterOpen = true;
-      this.listWorkItems(target).catch(() => {});
+      // Reveal the destination instead of leaving the mobile drawer over it.
+      this.closeSessionSidebar();
+      if (target) this.listWorkItems(target).catch(() => {});
       return true;
     },
     leaveWorkCenter() {
+      if (!this.workCenterOpen) return;
       this.workCenterOpen = false;
+      const url = new URL(window.location.href);
+      for (const key of ['workAgentId', 'workItemId', 'workContent']) url.searchParams.delete(key);
+      window.history.replaceState({ ...window.history.state, workCenter: false, workCenterContent: false },
+        '', `${url.pathname}${url.search}${url.hash}`);
+    },
+    setWorkCenterUiEnabled(enabled) {
+      this.workCenterUiEnabled = enabled !== false;
+      try {
+        localStorage.setItem('work-center-ui-enabled', String(this.workCenterUiEnabled));
+      } catch (_) { /* keep the in-memory preference when storage is unavailable */ }
+      if (!this.workCenterUiEnabled) this.leaveWorkCenter();
     },
     openPluginCenter(agentId = null) {
       const target = this.agents.find(agent => agent?.online && agent.id === agentId)
@@ -2068,8 +2094,17 @@ export const useChatStore = defineStore('chat', {
           && this._workCenterListQueryByAgent[target] === queryKey
           && this.workCenterAgentId === target;
         if (requestStillCurrent) {
-          let mergedItems = items;
           const events = this._workCenterListEventsByAgent[target] || {};
+          const currentById = new Map((this.workCenterItemsByAgent[target] || []).map(item => [item.id, item]));
+          // A list response can carry an older resource projection even when it
+          // was requested after the last event. Fence matching rows, not only
+          // events that arrived while this request was pending.
+          let mergedItems = items.flatMap(item => {
+            const cached = events[item.id]?.summary;
+            const previous = applyWorkItemSummary(cached ? [cached] : [], currentById.get(item.id));
+            const accepted = applyWorkItemSummary(previous, item)[0];
+            return this.workItemMatchesBoardQuery(accepted, normalizedFilters) ? [accepted] : [];
+          });
           for (const entry of Object.values(events)) {
             if (Number(entry?.generation) <= eventGeneration || entry?.queryKey !== queryKey) continue;
             mergedItems = this.applyWorkItemBoardSummary(
@@ -2124,13 +2159,16 @@ export const useChatStore = defineStore('chat', {
               || currentPage?.nextCursor !== cursor
               || this.workCenterAgentId !== target) return [];
           let merged = [...(this.workCenterItemsByAgent[target] || [])];
+          const events = this._workCenterListEventsByAgent[target] || {};
           for (const item of Array.isArray(data?.items) ? data.items : []) {
             if (this.workItemDeleted(target, item?.id)) continue;
             const index = merged.findIndex(current => current.id === item.id);
-            if (index < 0) merged.push(item);
-            else merged[index] = applyWorkItemSummary([merged[index]], item)[0];
+            const cached = events[item.id]?.summary;
+            const previous = applyWorkItemSummary(cached ? [cached] : [], index < 0 ? null : merged[index]);
+            const accepted = applyWorkItemSummary(previous, item)[0];
+            if (index >= 0) merged.splice(index, 1);
+            if (this.workItemMatchesBoardQuery(accepted, filters)) merged.splice(index < 0 ? merged.length : index, 0, accepted);
           }
-          const events = this._workCenterListEventsByAgent[target] || {};
           for (const entry of Object.values(events)) {
             if (Number(entry?.generation) <= eventGeneration || entry?.queryKey !== queryKey) continue;
             merged = this.applyWorkItemBoardSummary(merged, entry.summary, filters);
@@ -2202,8 +2240,9 @@ export const useChatStore = defineStore('chat', {
       if (generation != null
           && Number(this._workCenterDetailRequestGenerationByAgent[agentId] || 0) !== generation) return false;
       const current = this.workCenterDetailByAgent[agentId];
-      if (current?.id === detail?.id && isWorkItemDetailStale(detail, current)) return false;
-      this.workCenterDetailByAgent = { ...this.workCenterDetailByAgent, [agentId]: detail };
+      const accepted = mergeWorkItemDetail(current, detail);
+      if (current && accepted === current) return false;
+      this.workCenterDetailByAgent = { ...this.workCenterDetailByAgent, [agentId]: accepted };
       return true;
     },
     async getWorkItem(id, agentId = null) {
@@ -2496,10 +2535,20 @@ export const useChatStore = defineStore('chat', {
       this.commitWorkCenterDetail(target, detail, generation);
       return detail;
     },
-    async resumeWorkItem(id, revision, agentId = null) {
+    async resumeWorkItem(id, revision, agentId = null, executionControlRevision = undefined) {
       const target = agentId || this.workCenterAgentId || this.currentAgent;
       const generation = this.beginWorkCenterDetailWrite(target);
-      const detail = await this.workCenterRequest('resume', { id, revision }, target);
+      const payload = { id, revision };
+      if (executionControlRevision != null) payload.executionControlRevision = executionControlRevision;
+      const detail = await this.workCenterRequest('resume', payload, target);
+      await this.listWorkItems(target, this._workCenterListFiltersByAgent[target] || {});
+      this.commitWorkCenterDetail(target, detail, generation);
+      return detail;
+    },
+    async extendWorkItemBudget(id, executionControlRevision, additions, agentId = null) {
+      const target = agentId || this.workCenterAgentId || this.currentAgent;
+      const generation = this.beginWorkCenterDetailWrite(target);
+      const detail = await this.workCenterRequest('extend_budget', { id, executionControlRevision, additions }, target);
       await this.listWorkItems(target, this._workCenterListFiltersByAgent[target] || {});
       this.commitWorkCenterDetail(target, detail, generation);
       return detail;
@@ -2602,11 +2651,12 @@ export const useChatStore = defineStore('chat', {
         && Number(current.revision) === Number(revision)
         && currentAction
         && Number(currentAction.generation) === Number(actionGeneration);
+      const accepted = mergeWorkItemDetail(current, detail);
       if (this._workCenterActionInputGenerationByAgent[target] === generation
         && requestStillCurrent
-        && !isWorkItemDetailResponseStale(detail, current)) {
-        this.workCenterDetailByAgent = { ...this.workCenterDetailByAgent, [target]: detail };
-        return detail;
+        && !isWorkItemDetailResponseStale(accepted, current)) {
+        this.workCenterDetailByAgent = { ...this.workCenterDetailByAgent, [target]: accepted };
+        return accepted;
       }
       return current?.id === id ? current : detail;
     },
@@ -3428,13 +3478,17 @@ export const useChatStore = defineStore('chat', {
      *                               isImage?:boolean,mimeType?:string}>,
      *           quote?:object}} payload
      */
-    sendYeaftSessionMessage({ groupId, text, mentions, attachments, quote }) {
+    sendYeaftSessionMessage({ groupId, text, mentions, attachments, quote, quickSend }) {
       // Route by the session's owning agent, not a page-level pointer. A
       // cross-agent click or a late session_ready replay used to leave the
       // old `yeaftAgentId` pointing at a different agent, so the send hit an
       // agent that has no such session on disk → "Session not found".
       const targetAgentId = resolveAgentIdForSession(this, groupId);
-      if (!groupId || !targetAgentId) return;
+      if (!groupId || !targetAgentId) return false;
+      // Presets originate from the visible Agent. Reject a stale cross-Agent send
+      // rather than applying another instance's model catalog to this Session.
+      if (quickSend && (targetAgentId !== this.currentAgent || this.connectionState !== 'connected'
+        || !this.agents?.some(agent => agent.id === targetAgentId && agent.online))) return false;
       const safeAttachments = Array.isArray(attachments)
         ? attachments.filter((a) => a && a.fileId)
         : [];
@@ -3447,7 +3501,8 @@ export const useChatStore = defineStore('chat', {
       const hasAttachments = safeAttachments.length > 0;
       if (!text?.trim() && !hasAttachments) return;
       const effectiveText = text?.trim() ? text : '(attached files)';
-      const clientMessageId = `u_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+      const sentAt = Date.now();
+      const clientMessageId = `u_${sentAt.toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
       const perfTraceId = createPerfTraceId();
       this.yeaftPerfTraceByMessageId = {
         ...(this.yeaftPerfTraceByMessageId || {}),
@@ -3476,6 +3531,10 @@ export const useChatStore = defineStore('chat', {
           uiKey: yeaftOptimisticMessageIdentity(targetAgentId, groupId, clientMessageId),
           type: 'user',
           content: effectiveText,
+          // This direct repository write bypasses addMessageToConversation's
+          // timestamp normalization. Anchor the optimistic row at send time so
+          // timestamped replies cannot sort before it while history is pending.
+          timestamp: sentAt,
           sessionId: groupId,
           // Use the client message id as the optimistic local turn id so
           // the row has a stable message-block key until server frames arrive.
@@ -3525,6 +3584,11 @@ export const useChatStore = defineStore('chat', {
         text: effectiveText,
         mentions: Array.isArray(mentions) ? mentions : [],
         perfTraceId,
+        ...(quickSend ? { quickSend: {
+          model: quickSend.model,
+          effort: quickSend.effort ?? null,
+          maxOutputTokens: quickSend.maxOutputTokens ?? null,
+        } } : {}),
         ...(safeQuote ? { quote: safeQuote } : {}),
       };
       if (safeAttachments.length > 0) {
@@ -4903,6 +4967,12 @@ export const useChatStore = defineStore('chat', {
               existingRow.toolName = 'AskUserQuestion';
               if (event.toolCallId && !existingRow.toolId) existingRow.toolId = event.toolCallId;
               existingRow.agentId = identity.agentId || existingRow.agentId || null;
+              // History rows may lack routing fields. Hydrate from the live
+              // request, not the currently selected Session/thread.
+              for (const field of ['sessionId', 'vpId', 'turnId', 'threadId']) {
+                if (identity[field]) existingRow[field] = identity[field];
+              }
+              existingRow.hasResult = false;
               existingRow.askRequestId = event.requestId;
               existingRow.askQuestions = event.questions || [];
               existingRow.askCreatedAt = event.createdAt || null;
@@ -4954,6 +5024,7 @@ export const useChatStore = defineStore('chat', {
         }
 
         case 'ask_user_answered':
+        case 'ask_user_answer_rejected':
         case 'ask_user_expired': {
           const conversationId = resolveYeaftEnvelopeConversationId(this, msg.agentId || null, msg.conversationId);
           if (!conversationId || !event.requestId) break;
@@ -5125,6 +5196,8 @@ export const useChatStore = defineStore('chat', {
             openedAt: event.at || Date.now(),
             closedAt: null,
             totalMs: 0,
+            inputTokens: 0,
+            outputTokens: 0,
             totalTokens: 0,
             loopCount: 0,
             memoryLoaded: null,
@@ -5134,6 +5207,14 @@ export const useChatStore = defineStore('chat', {
             detailsLoaded: true,
           };
           this.yeaftDebugTurnsById = { ...this.yeaftDebugTurnsById, [event.turnId]: turn };
+          const activeTurnKey = yeaftTurnStateKey(this, msg.agentId || null, event.turnId);
+          const activeTurn = this.activeVpTurns?.[activeTurnKey];
+          if (activeTurn && Number.isFinite(event.at)) {
+            this.activeVpTurns = {
+              ...this.activeVpTurns,
+              [activeTurnKey]: { ...activeTurn, startedAt: event.at },
+            };
+          }
           if (!this.yeaftDebugTurnOrder.includes(event.turnId)) {
             this.yeaftDebugTurnOrder = [...this.yeaftDebugTurnOrder, event.turnId];
           }
@@ -5149,9 +5230,13 @@ export const useChatStore = defineStore('chat', {
             [event.turnId]: {
               ...prev,
               closedAt: Date.now(),
-              totalMs: event.totalMs || 0,
-              totalTokens: event.totalTokens || 0,
+              ...(Number.isFinite(event.totalMs) ? { totalMs: event.totalMs } : {}),
+              ...(Number.isFinite(event.inputTokens) ? { inputTokens: event.inputTokens } : {}),
+              ...(Number.isFinite(event.outputTokens) ? { outputTokens: event.outputTokens } : {}),
+              ...(Number.isFinite(event.totalTokens) ? { totalTokens: event.totalTokens } : {}),
               loopCount: event.loopCount || prev.loopCount || 0,
+              ...(typeof event.model === 'string' && event.model ? { model: event.model } : {}),
+              ...(typeof event.effort === 'string' && event.effort ? { effort: event.effort } : {}),
             },
           };
           break;
@@ -5749,14 +5834,26 @@ export const useChatStore = defineStore('chat', {
           // payload itself because callers await a single flattened object
           // and have no envelope context. Keep these two channels in sync
           // if you change the wire-stamping rule.
-          if (gs) gs.applyCrudResult(event, msg.agentId || null);
+          const pending = this._sessionCrudPending && this._sessionCrudPending.get(event.requestId);
+          // A fork acknowledgement is broadcast for inventory updates. Only
+          // the initiating tab may focus it, and another Agent must not settle
+          // this tab's request even if it echoes the same request id.
+          if (event.op === 'copy' && pending?.agentId && pending.agentId !== msg.agentId) break;
+          if (event.op === 'copy' && event.projectsAuthoritative === true && Array.isArray(event.projects)) {
+            this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects);
+          }
+          if (gs) gs.applyCrudResult(event, msg.agentId || null, {
+            // The initiating copy action owns navigation so it can render a
+            // visible success state before entering the new Session. Other
+            // tabs still receive the inventory update without being redirected.
+            activate: event.op !== 'copy',
+          });
           if (event.ok && event.op === 'delete' && event.sessionId && msg.agentId) {
             this.clearYeaftHistoryMemory({
               agentId: msg.agentId,
               sessionId: event.sessionId,
             });
           }
-          const pending = this._sessionCrudPending && this._sessionCrudPending.get(event.requestId);
           if (pending) {
             const finish = () => {
               if (this._sessionCrudPending?.get(event.requestId) !== pending) return;
@@ -6484,6 +6581,7 @@ export const useChatStore = defineStore('chat', {
       const typeMap = {
         list: 'yeaft_list_sessions',
         create: 'yeaft_create_session',
+        copy: 'yeaft_copy_session',
         rename: 'yeaft_rename_session',
         update: 'yeaft_update_session',
         update_config: 'yeaft_update_session_config',
@@ -6517,16 +6615,37 @@ export const useChatStore = defineStore('chat', {
       if (gs) gs.markPending(requestId, op);
 
       return new Promise((resolve) => {
-        const timer = setTimeout(() => {
+        // Copy is a durable Agent-side operation. Once accepted by the socket it
+        // may legitimately outlive a browser timer, and timing out locally would
+        // report failure even though the clone is still being committed. Keep
+        // the correlated request open until its result or a real disconnect.
+        const timeoutMs = Number.isFinite(opts.timeoutMs)
+          ? Math.max(1, Number(opts.timeoutMs))
+          : (op === 'copy' ? null : YEAFT_SESSION_CRUD_TIMEOUT_MS);
+        const timer = timeoutMs == null ? null : setTimeout(() => {
           if (this._sessionCrudPending && this._sessionCrudPending.has(requestId)) {
             this._sessionCrudPending.delete(requestId);
-            resolve({ ok: false, op, error: { code: 'timeout', message: 'group_crud timeout' } });
+            if (gs?.pending) delete gs.pending[requestId];
+            resolve({ ok: false, op, error: { code: 'timeout', message: 'session_crud timeout' } });
           }
-        }, 10000);
+        }, timeoutMs);
         this._sessionCrudPending.set(requestId, {
-          resolve: (result) => { clearTimeout(timer); resolve(result); },
+          op,
+          agentId: overrideAgentId || this.currentAgent,
+          connectionGeneration: Number(this.chatHistoryConnectionGeneration || 0),
+          resolve: (result) => {
+            if (timer) clearTimeout(timer);
+            if (gs?.pending) delete gs.pending[requestId];
+            resolve(result);
+          },
         });
-        this.sendWsMessage(msg);
+        const sent = this.sendWsMessage(msg);
+        if (op === 'copy' && !sent) {
+          if (timer) clearTimeout(timer);
+          this._sessionCrudPending.delete(requestId);
+          if (gs?.pending) delete gs.pending[requestId];
+          resolve({ ok: false, op, error: { code: 'agent_offline' } });
+        }
       });
     },
 
@@ -6756,6 +6875,33 @@ export const useChatStore = defineStore('chat', {
       return this.requestTelemetrySettings('update', agentId, payload);
     },
 
+
+    requestWorkCenterFeatureSettings(operation, agentId, settings = null) {
+      if (!agentId) return Promise.reject(new Error('no agent'));
+      const requestId = `work-center-feature-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      this.workCenterFeatureRequestByAgent = { ...this.workCenterFeatureRequestByAgent, [agentId]: requestId };
+      return new Promise((resolve, reject) => {
+        if (!this._workCenterFeaturePending) this._workCenterFeaturePending = {};
+        const timer = setTimeout(() => {
+          delete this._workCenterFeaturePending[requestId];
+          reject(new Error('Work Center settings request timed out'));
+        }, 15000);
+        this._workCenterFeaturePending[requestId] = { resolve, reject, timer, agentId, operation };
+        this.sendWsMessage({
+          type: operation === 'load' ? 'get_work_center_feature_settings' : 'update_work_center_feature_settings',
+          agentId, requestId, ...(operation === 'update' ? { settings } : {}),
+        });
+      });
+    },
+
+    loadWorkCenterFeatureSettings(agentId = this.currentAgent) {
+      return this.requestWorkCenterFeatureSettings('load', agentId);
+    },
+
+    updateWorkCenterFeatureSettings(settings, agentId = this.currentAgent) {
+      return this.requestWorkCenterFeatureSettings('update', agentId, settings);
+    },
+
     restartAgent(agentId) {
       if (!agentId || this.agentOperations?.[agentId]?.restart?.pending) return false;
       const requestId = `restart-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -6765,14 +6911,69 @@ export const useChatStore = defineStore('chat', {
       return true;
     },
 
-    upgradeAgent(agentId) {
+    upgradeAgent(agentId, batchId = null) {
       if (!agentId || this.agentOperations?.[agentId]?.upgrade?.pending) return false;
       const agent = this.agents.find(item => item.id === agentId);
       const requestId = `upgrade-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const timer = setTimeout(() => this.finishAgentOperation(agentId, 'upgrade', 'timeout'), 120000);
-      this.agentOperations = { ...this.agentOperations, [agentId]: { ...(this.agentOperations[agentId] || {}), upgrade: { pending: true, acknowledged: false, startedAt: Date.now(), requestId, oldVersion: agent?.version || null, timer, error: null } } };
+      this.agentOperations = { ...this.agentOperations, [agentId]: { ...(this.agentOperations[agentId] || {}), upgrade: { pending: true, acknowledged: false, startedAt: Date.now(), requestId, oldVersion: agent?.version || null, batchId, timer, error: null } } };
       this.sendWsMessage({ type: 'upgrade_agent', agentId, requestId });
       return true;
+    },
+
+    getUpgradableAgents() {
+      return (this.agents || []).filter(agent => (
+        agent?.online
+        && Array.isArray(agent.capabilities)
+        && agent.capabilities.includes('remote_upgrade_safe')
+        && !agent.capabilities.includes('container_agent')
+        && !this.agentOperations?.[agent.id]?.restart?.pending
+        && !this.agentOperations?.[agent.id]?.upgrade?.pending
+      ));
+    },
+
+    upgradeAllAgents() {
+      if (this.agentUpgradeBatch?.pending) return null;
+      const candidates = this.getUpgradableAgents();
+      if (candidates.length === 0) return null;
+      const batch = {
+        id: `upgrade-batch-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        pending: true,
+        startedAt: Date.now(),
+        agentIds: candidates.map(agent => agent.id),
+        skippedCount: Math.max(0, (this.agents || []).length - candidates.length),
+        results: {},
+      };
+      this.agentUpgradeBatch = batch;
+      for (const agent of candidates) {
+        if (!this.upgradeAgent(agent.id, batch.id)) {
+          this.recordAgentUpgradeBatchResult(agent.id, { status: 'failed', error: 'not_started' }, batch.id);
+        }
+      }
+      return batch.agentIds.length;
+    },
+
+    recordAgentUpgradeBatchResult(agentId, result = {}, batchId = null) {
+      const batch = this.agentUpgradeBatch;
+      if (!batch?.pending || (batchId && batch.id !== batchId) || !batch.agentIds.includes(agentId) || batch.results[agentId]) return null;
+      const next = {
+        ...batch,
+        results: {
+          ...batch.results,
+          [agentId]: {
+            status: result.status || 'failed',
+            error: result.error || null,
+            version: result.version || null,
+            reason: result.reason || null,
+          },
+        },
+      };
+      const settled = next.agentIds.every(id => next.results[id]);
+      this.agentUpgradeBatch = settled ? { ...next, pending: false, completedAt: Date.now() } : next;
+      if (settled && typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('agent-upgrade-batch-complete', { detail: this.agentUpgradeBatch }));
+      }
+      return settled ? this.agentUpgradeBatch : null;
     },
 
     finishAgentOperation(agentId, operation, error = null) {
@@ -6780,6 +6981,11 @@ export const useChatStore = defineStore('chat', {
       if (!current) return;
       clearTimeout(current.timer);
       this.agentOperations = { ...this.agentOperations, [agentId]: { ...(this.agentOperations[agentId] || {}), [operation]: { ...current, pending: false, timer: null, error } } };
+      if (operation === 'upgrade' && current.batchId) {
+        this.recordAgentUpgradeBatchResult(agentId, error
+          ? { status: 'failed', error }
+          : { status: 'upgraded' }, current.batchId);
+      }
     },
 
     // ─── Search settings (Tavily backend + key + on-demand quota) ───
@@ -7254,6 +7460,46 @@ export const useChatStore = defineStore('chat', {
         return false;
       }
       return true;
+    },
+    sessionForkUnavailableReason(row) {
+      const route = row?.routeRef;
+      if (route?.runtimeProvider !== 'yeaft' || !route.agentId || !route.sessionId) return 'bad_route';
+      if (this.sessionForkPendingKey) return 'fork_pending';
+      if (this.connectionState !== 'connected'
+          || !this.agents.some(agent => agent.id === route.agentId && agent.online)) return 'agent_offline';
+      if (this.isYeaftSessionProcessing(route.sessionId, route.agentId)) return 'session_running';
+      return null;
+    },
+    async copyCatalogSession(row) {
+      const unavailable = this.sessionForkUnavailableReason(row);
+      if (unavailable) return { ok: false, op: 'copy', error: { code: unavailable } };
+      const route = { ...row.routeRef };
+      this.sessionForkPendingKey = yeaftCatalogKey(route.agentId, route.sessionId);
+      this.sessionForkState = 'copying';
+      try {
+        // Keep the existing copy wire contract for compatible Agent versions.
+        const result = await this.sessionCrudRequest('copy', {
+          sessionId: route.sessionId,
+        }, { agentId: route.agentId });
+        if (!result?.ok || !result.session?.id) return result;
+        this.sessionForkState = 'success';
+        await new Promise(resolve => setTimeout(resolve, YEAFT_SESSION_COPY_SUCCESS_MS));
+        const copiedRoute = {
+          runtimeProvider: 'yeaft',
+          agentId: route.agentId,
+          sessionId: result.session.id,
+        };
+        this.openCatalogSession({
+          catalogKey: yeaftCatalogKey(copiedRoute.agentId, copiedRoute.sessionId),
+          routeRef: copiedRoute,
+        });
+        return result;
+      } catch (error) {
+        return { ok: false, op: 'copy', error: { code: 'fork_failed', message: error?.message || String(error) } };
+      } finally {
+        this.sessionForkState = 'idle';
+        this.sessionForkPendingKey = null;
+      }
     },
     reorderCatalogSessions(rows) {
       if (!Array.isArray(rows) || rows.length === 0
@@ -8447,10 +8693,9 @@ export const useChatStore = defineStore('chat', {
       const routeKey = workbenchRouteKey(route);
       const supported = routeKey && agentId && conversationId
         && this.workbenchRouteProtocolSupported === true
-        && (agentId === this.currentAgent
-          ? this.hasCapability('file_reference_resolution') && this.hasCapability('workbench_session_routes')
-          : agentHasCapability(this, agentId, 'file_reference_resolution')
-            && agentHasCapability(this, agentId, 'workbench_session_routes'));
+        && agentHasCapability(this, agentId, 'file_reference_resolution')
+        && agentHasCapability(this, agentId, 'file_editor')
+        && agentHasCapability(this, agentId, 'workbench_session_routes');
       const paths = [...new Set((Array.isArray(references) ? references : [])
         .filter(path => typeof path === 'string' && path.trim())
         .map(path => path.trim()))].slice(0, 32);
@@ -8474,6 +8719,41 @@ export const useChatStore = defineStore('chat', {
       return sent ? requestId : null;
     },
 
+    requestMessageImagePreview(filePath) {
+      const route = this.activeSessionRoute;
+      const agentId = route?.agentId || this.currentAgent || null;
+      const conversationId = route?.runtimeProvider === 'yeaft'
+        ? resolveYeaftConversationIdForSession(this, route.sessionId, agentId)
+        : this.currentConversation;
+      const routeKey = workbenchRouteKey(route);
+      const supported = routeKey && agentId && conversationId
+        && this.workbenchRouteProtocolSupported === true
+        && (agentId === this.currentAgent
+          ? this.hasCapability('file_editor') && this.hasCapability('workbench_session_routes')
+            && this.hasCapability('response_image_preview')
+          : agentHasCapability(this, agentId, 'file_editor')
+            && agentHasCapability(this, agentId, 'workbench_session_routes')
+            && agentHasCapability(this, agentId, 'response_image_preview'));
+      const path = typeof filePath === 'string' ? filePath.trim() : '';
+      if (!supported || !path) return null;
+      const requestId = `message_image_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+      const sent = this.sendWsMessage({
+        type: 'read_file',
+        requestId,
+        filePath: path,
+        responseImagePreview: true,
+        agentId,
+        conversationId,
+        workDir: this.effectiveWorkDir || '',
+        workbenchRoute: {
+          runtimeProvider: route.runtimeProvider,
+          agentId: route.agentId,
+          sessionId: route.sessionId,
+        },
+      });
+      return sent ? requestId : null;
+    },
+
     openFileInExplorer(filePath, { hideTree = false, line = null } = {}) {
       const activeRoute = this.activeSessionRoute;
       const route = activeRoute ? {
@@ -8489,10 +8769,8 @@ export const useChatStore = defineStore('chat', {
         ? resolveYeaftConversationIdForSession(this, route.sessionId, agentId)
         : this.currentConversation;
       const canOpenFiles = this.workbenchRouteProtocolSupported === true
-        && (agentId === this.currentAgent
-          ? this.hasCapability('file_editor') && this.hasCapability('workbench_session_routes')
-          : agentHasCapability(this, agentId, 'file_editor')
-            && agentHasCapability(this, agentId, 'workbench_session_routes'));
+        && agentHasCapability(this, agentId, 'file_editor')
+        && agentHasCapability(this, agentId, 'workbench_session_routes');
       if (!agentId || !conversationId || !canOpenFiles) return false;
       const path = typeof filePath === 'string' ? filePath.trim() : '';
       if (!path) return false;

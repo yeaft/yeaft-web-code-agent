@@ -1078,10 +1078,16 @@ export function handleMessage(store, msg) {
       const matches = !!msg.requestId && current?.requestId === msg.requestId;
       if (!current?.pending || !matches) break;
       if (current.pending) {
-        if (!msg.success || msg.alreadyLatest) store.finishAgentOperation?.(msg.agentId, 'upgrade', msg.error || null);
-        else store.agentOperations = { ...store.agentOperations, [msg.agentId]: { ...(store.agentOperations[msg.agentId] || {}), upgrade: { ...current, acknowledged: true } } };
+        if (!msg.success || msg.alreadyLatest) {
+          if (current.batchId && msg.alreadyLatest) {
+            store.recordAgentUpgradeBatchResult?.(msg.agentId, { status: 'already_latest', version: msg.version || null }, current.batchId);
+          } else if (current.batchId && !msg.success) {
+            store.recordAgentUpgradeBatchResult?.(msg.agentId, { status: 'failed', error: msg.error || null, reason: msg.reason || null, version: msg.version || null }, current.batchId);
+          }
+          store.finishAgentOperation?.(msg.agentId, 'upgrade', msg.error || null);
+        } else store.agentOperations = { ...store.agentOperations, [msg.agentId]: { ...(store.agentOperations[msg.agentId] || {}), upgrade: { ...current, acknowledged: true } } };
       }
-      window.dispatchEvent(new CustomEvent('agent-upgrade-ack', { detail: { agentId: msg.agentId, requestId: msg.requestId, success: msg.success, error: msg.error, alreadyLatest: msg.alreadyLatest, version: msg.version, reason: msg.reason, currentNode: msg.currentNode, requiredNode: msg.requiredNode, requiredCapability: msg.requiredCapability } }));
+      window.dispatchEvent(new CustomEvent('agent-upgrade-ack', { detail: { agentId: msg.agentId, requestId: msg.requestId, batchId: current.batchId || null, success: msg.success, error: msg.error, alreadyLatest: msg.alreadyLatest, version: msg.version, reason: msg.reason, currentNode: msg.currentNode, requiredNode: msg.requiredNode, requiredCapability: msg.requiredCapability } }));
       break;
     }
 
@@ -1107,6 +1113,7 @@ export function handleMessage(store, msg) {
     case 'terminal_closed':
     case 'terminal_error':
     case 'file_content':
+    case 'video_metadata':
     case 'file_references_resolved':
     case 'file_saved':
     case 'directory_listing':
@@ -1315,6 +1322,40 @@ export function handleMessage(store, msg) {
         if (store.currentAgent === pending.agentId) store.telemetrySettings = record;
       }
       pending.resolve(record);
+      break;
+    }
+
+
+    case 'work_center_feature_settings':
+    case 'work_center_feature_settings_updated': {
+      const operation = msg.type === 'work_center_feature_settings_updated' ? 'update' : 'load';
+      const pending = msg.requestId ? store._workCenterFeaturePending?.[msg.requestId] : null;
+      if (!pending || pending.agentId !== msg.agentId || pending.operation !== operation) break;
+      clearTimeout(pending.timer);
+      delete store._workCenterFeaturePending[msg.requestId];
+      const record = {
+        enabled: msg.enabled === true,
+        source: msg.source || 'config',
+        overridden: msg.overridden === true,
+        error: msg.error || null,
+        persisted: msg.persisted,
+        effective: msg.effective,
+        rolledBack: msg.rolledBack === true,
+        sessionTools: msg.sessionTools || null,
+        runtimeError: msg.runtimeError || null,
+        unsupported: msg.unsupported === true,
+        loaded: true,
+      };
+      if (store.workCenterFeatureRequestByAgent?.[pending.agentId] === msg.requestId) {
+        store.workCenterFeatureSettingsByAgent = { ...store.workCenterFeatureSettingsByAgent, [pending.agentId]: record };
+      }
+      if (record.error) {
+        const error = new Error(record.error);
+        error.settings = record;
+        pending.reject(error);
+      } else {
+        pending.resolve(record);
+      }
       break;
     }
 

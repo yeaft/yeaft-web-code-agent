@@ -124,6 +124,7 @@
   display: flex;
   flex-direction: row;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -593,6 +594,46 @@
   gap: 8px;
 }
 
+.yeaft-session-action-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.yeaft-fork-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.yeaft-fork-btn.is-copying {
+  opacity: 1;
+  color: var(--accent-blue);
+}
+
+.yeaft-fork-btn.is-copying .yeaft-fork-icon {
+  animation: yeaft-fork-progress 0.9s linear infinite;
+}
+
+.yeaft-fork-btn.is-success {
+  opacity: 1;
+  color: var(--success);
+  background: var(--sidebar-hover);
+}
+
+@keyframes yeaft-fork-progress {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .yeaft-fork-btn.is-copying .yeaft-fork-icon { animation: none; }
+}
+
 .yeaft-topbar-right {
   grid-column: 3;
   grid-row: 1;
@@ -603,12 +644,14 @@
 .yeaft-topbar-right :where(
   .yeaft-topbar-vp-toggle,
   .yeaft-search-btn,
-  .yeaft-reload-btn
+  .yeaft-reload-btn,
+  .yeaft-fork-btn
 ),
 .yeaft-session-actions :where(
   .yeaft-topbar-vp-toggle,
   .yeaft-search-btn,
-  .yeaft-reload-btn
+  .yeaft-reload-btn,
+  .yeaft-fork-btn
 ) {
   width: 32px;
   height: 32px;
@@ -619,12 +662,14 @@
 .yeaft-topbar-right :where(
   .yeaft-topbar-vp-toggle,
   .yeaft-search-btn,
-  .yeaft-reload-btn
+  .yeaft-reload-btn,
+  .yeaft-fork-btn
 ) svg,
 .yeaft-session-actions :where(
   .yeaft-topbar-vp-toggle,
   .yeaft-search-btn,
-  .yeaft-reload-btn
+  .yeaft-reload-btn,
+  .yeaft-fork-btn
 ) svg {
   width: 18px;
   height: 18px;
@@ -811,7 +856,8 @@
 
 .yeaft-clear-btn,
 .yeaft-search-btn,
-.yeaft-reload-btn {
+.yeaft-reload-btn,
+.yeaft-fork-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -831,9 +877,20 @@
 
 .yeaft-search-btn:hover,
 .yeaft-search-btn.active,
-.yeaft-reload-btn:hover:not(:disabled) {
+.yeaft-search-btn:focus-visible,
+.yeaft-reload-btn:hover:not(:disabled),
+.yeaft-reload-btn:focus-visible,
+.yeaft-fork-btn:hover:not(:disabled),
+.yeaft-fork-btn:focus-visible {
   background: var(--sidebar-hover);
   color: var(--text-primary);
+}
+
+.yeaft-search-btn:focus-visible,
+.yeaft-reload-btn:focus-visible,
+.yeaft-fork-btn:focus-visible {
+  outline: var(--sidebar-focus-ring-width) solid var(--accent-blue);
+  outline-offset: var(--sidebar-focus-ring-offset);
 }
 
 .yeaft-conversation-outline {
@@ -2023,7 +2080,14 @@
     grid-row: 1;
   }
 
-  /* Yeaft conversation: narrower padding on mobile */
+  /* Yeaft conversation: narrower padding on mobile. Some Android WebViews
+     allocate a classic vertical scrollbar inside the scrolling box. Reserving
+     its gutter on both inline edges keeps the response column optically and
+     geometrically centered while preserving overflow behavior. */
+  .yeaft-page .chat-container {
+    scrollbar-gutter: stable both-edges;
+  }
+
   .yeaft-page .messages {
     max-width: 100%;
     padding: 0 10px;
@@ -5038,5 +5102,15 @@
 
   .yeaft-onboarding-step-head {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Keep the complete mobile action set on its own compact row. */
+@media (max-width: 480px) {
+  .yeaft-topbar-context { grid-column: 2 / -1; }
+  .yeaft-topbar-right {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    gap: 4px;
   }
 }

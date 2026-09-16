@@ -8,6 +8,7 @@
  * Modeled after Claude Code's Read tool.
  */
 
+import { createHash } from 'node:crypto';
 import { defineTool } from './types.js';
 import { readFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -27,11 +28,10 @@ const BINARY_EXTS = new Set([
 /** Max file size to read (10 MB). */
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
-/** Default number of lines to read. Aligned with the "large file = >3000
- *  lines" rule in templates/{base,common-rules,tool-guidance}.md so a
- *  ≤3000-line file is returned in one call (no silent truncation that
- *  would trigger a follow-up `offset:3000` call — that's exactly the
- *  round-trip this tool's prompt guidance promises to avoid). */
+/** Default number of lines to read. Aligned with the FileRead tool schema's
+ *  "large file = >3000 lines" rule so a ≤3000-line file is returned in one
+ *  call (no silent truncation that would trigger a follow-up `offset:3000`
+ *  call — exactly the round-trip the tool guidance avoids). */
 const DEFAULT_LIMIT = 3000;
 
 /** Keep raw output close to the model-facing 32 KiB budget while leaving
@@ -76,6 +76,34 @@ function formatLinesWithinBudget(allLines, startLine, endLine, startColumn = 0, 
     nextColumn = 0;
   }
   return { text: parts.join(''), nextLine, nextColumn };
+}
+
+// Query-local observations are hints only: always read the current file and
+// never suppress ranges. Hashing observed bytes handles same-size/mtime edits.
+function describeRead(ctx, path, content, start, end, startColumn, nextColumn) {
+  const version = createHash('sha256').update(content).digest('hex').slice(0, 16);
+  const observations = ctx?.fileReadObservations;
+  const previous = observations?.get(path);
+  const ranges = previous?.version === version ? previous.ranges : [];
+  const overlaps = ranges.filter(([from, to]) => from < end && to > start)
+    .map(([from, to]) => `${Math.max(from, start) + 1}-${Math.min(to, end)}`);
+  // Partial Unicode lines are not considered fully observed.
+  const from = start + (startColumn > 0 ? 1 : 0);
+  const to = end - (nextColumn > 0 ? 1 : 0);
+  if (observations && to > from) {
+    const merged = [...ranges, [from, to]].sort((a, b) => a[0] - b[0]).reduce((out, range) => {
+      const last = out.at(-1);
+      if (last && range[0] <= last[1]) last[1] = Math.max(last[1], range[1]);
+      else out.push([...range]);
+      return out;
+    }, []);
+    observations.delete(path);
+    observations.set(path, { version, ranges: merged.slice(-16) });
+    if (observations.size > 64) observations.delete(observations.keys().next().value);
+  }
+  const hint = overlaps.length
+    ? ` Previously returned unchanged lines in this query: ${overlaps.slice(0, 4).join(', ')}. Read other ranges only if needed.` : '';
+  return `\n[File: ${path}; observed version: ${version}.${hint}]`;
 }
 
 export default defineTool({
@@ -141,7 +169,9 @@ Guidelines:
   },
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
-  cacheWithinQuery: true,
+  // The workspace may change outside this Engine (editor, process, peer).
+  // Observation hints must describe a fresh read, never a cached snapshot.
+  cacheWithinQuery: false,
   async execute(input, ctx) {
     const { file_path, offset = 0, column_offset = 0, limit = DEFAULT_LIMIT } = input;
     if (!file_path) return JSON.stringify({ error: 'file_path is required' });
@@ -202,6 +232,8 @@ Guidelines:
       const startColumn = column_offset;
       const { text: numbered, nextLine, nextColumn } = formatLinesWithinBudget(allLines, startLine, endLine, startColumn);
 
+      const shownEnd = nextColumn > 0 ? nextLine + 1 : nextLine;
+      const observation = describeRead(ctx, absPath, content, startLine, shownEnd, startColumn, nextColumn);
       const hasMoreContent = nextColumn > 0 || nextLine < totalLines;
       if (startLine > 0 || startColumn > 0 || hasMoreContent) {
         const continuation = hasMoreContent
@@ -209,11 +241,10 @@ Guidelines:
             ? ` Continue with offset=${nextLine}, column_offset=${nextColumn}.`
             : ` Continue with offset=${nextLine}.`
           : '';
-        const shownEnd = nextColumn > 0 ? nextLine + 1 : nextLine;
-        return `${numbered}\n\n[Showing lines ${startLine + 1}-${shownEnd} of ${totalLines} total.${continuation}]`;
+        return `${numbered}\n\n[Showing lines ${startLine + 1}-${shownEnd} of ${totalLines} total.${continuation}]${observation}`;
       }
 
-      return numbered;
+      return numbered + observation;
     } catch (err) {
       return JSON.stringify({ error: `Failed to read file: ${err.message}` });
     }

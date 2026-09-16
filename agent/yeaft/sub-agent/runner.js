@@ -17,7 +17,7 @@
  *     after PromptAgent
  *   - a durable output log at ~/.yeaft/sub-agents/<agentId>.log mirroring
  *     every onEvent (see output-log.js)
- *   - a liveness snapshot (toolUseCount, tokenCount, lastEventAt, …) the
+ *   - a liveness snapshot (toolUseCount, usageTokens, outputChars, lastEventAt, …) the
  *     parent reads through WaitAgent / ListAgents
  *
  * The runner is fire-and-forget: `startSubAgent(agent, deps)` schedules a
@@ -36,8 +36,10 @@
  */
 
 import { Engine } from '../engine.js';
+import { snapshotEffortDecision } from '../effort.js';
 import { SubAgentToolRegistry, resolveSubAgentBudget, createExecutionStats } from './execution-control.js';
 import { getPersona } from '../personas.js';
+import { RESTRICTED_TOOLS, createChildToolPolicy } from './tool-access.js';
 import { buildSpawnedPreamble } from './spawned-prompt.js';
 import { STATUS, isTerminalAgentStatus } from './status.js';
 import { createOutputLog } from './output-log.js';
@@ -58,21 +60,8 @@ async function loadTickAgent() {
   return _tickAgent;
 }
 
-const RESTRICTED_TOOLS = new Set([
-  'SpawnAgent',
-  'Agent',          // legacy alias
-  'PromptAgent',
-  'SendMessage',    // legacy alias
-  'WaitAgent',
-  'CloseAgent',
-  'ListAgents',
-  'RouteForward',
-  'AskUser',
-  'CreateWorkItem',
-]);
-
-/** How long an idle sub-agent may wait for a follow-up before the watchdog reaps it. */
-const IDLE_ABANDON_MS = 5 * 60 * 1000; // 5 minutes
+/** Retained idle agents have no implicit lifetime deadline. */
+const IDLE_ABANDON_MS = 0;
 
 /** Cap on agent.lastResult (mid-stream preview) — keeps memory bounded. */
 const LAST_RESULT_MAX_CHARS = 8 * 1024;
@@ -84,24 +73,11 @@ const LAST_RESULT_MAX_CHARS = 8 * 1024;
  * @param {ToolRegistry|null} parentRegistry
  * @returns {ToolRegistry}
  */
-export function buildChildToolRegistry(parentRegistry, { agent = null, stopBudget = null } = {}) {
-  const preset = agent?.personaData || getPersona(agent?.persona);
-  // Implementers retain work tools; read-only roles are a structural allowlist.
-  // Resolve legacy template names (Read) to canonical FileRead before filtering.
-  const allowed = preset && preset.id !== 'implementer'
-    ? new Set([...preset.tools.map(name => parentRegistry?.get(name)?.name || (name === 'Read' ? 'FileRead' : name)), 'DiscoverTools'])
-    : null;
-  const child = new SubAgentToolRegistry({
-    agent, stopBudget,
-    allows: tool => !RESTRICTED_TOOLS.has(tool.name) && (!allowed || allowed.has(tool.name)),
-  });
-  if (!parentRegistry || typeof parentRegistry.getAllTools !== 'function') {
-    return child;
-  }
-  for (const t of parentRegistry.getAllTools()) {
-    if (RESTRICTED_TOOLS.has(t.name)) continue;
-    child.register(t);
-  }
+export function buildChildToolRegistry(parentRegistry, { agent = null } = {}) {
+  const policy = createChildToolPolicy(parentRegistry, agent);
+  const child = new SubAgentToolRegistry({ agent, allows: policy.allows });
+  policy.refresh(child);
+  if (agent) agent.refreshToolPolicy = () => policy.refresh(child);
   return child;
 }
 
@@ -150,6 +126,8 @@ export function startSubAgent(agent, deps = {}) {
   if (!agent || typeof agent !== 'object') return;
   if (agent.__driverStarted) return; // idempotent
   agent.__driverStarted = true;
+  // Re-freeze restored JSON snapshots; never consult live parent config here.
+  agent.parentEffortDecision = snapshotEffortDecision(agent.parentEffortDecision);
 
   let subEngine = null;
   let outputLog = null;
@@ -159,16 +137,16 @@ export function startSubAgent(agent, deps = {}) {
     // turns must not pollute the user-facing conversation history. The
     // memory stores are shared so memory recall still works for the
     // sub-agent (matches parent VP persona memory).
-    agent.budget = resolveSubAgentBudget(agent.budget, agent.persona);
+    agent.budget = resolveSubAgentBudget(agent.budget);
     agent.execution = agent.execution || createExecutionStats();
-    const childRegistry = buildChildToolRegistry(deps.parentToolRegistry, {
-      agent,
-      stopBudget: reason => stopForBudget(agent, reason),
-    });
+    const childRegistry = buildChildToolRegistry(deps.parentToolRegistry, { agent });
     subEngine = new Engine({
       adapter: deps.adapter,
       trace: deps.trace,
-      config: { ...deps.config, _readOnly: true },
+      config: {
+        ...deps.config, _readOnly: true,
+        _gitReadAlwaysVisible: (agent.personaData || getPersona(agent.persona))?.id === 'reviewer',
+      },
       conversationStore: null,
       memoryIndex: deps.memoryIndex || null,
       memoryStore: deps.memoryStore || null,
@@ -200,7 +178,7 @@ export function startSubAgent(agent, deps = {}) {
     if (agent.taskId && deps.taskManager && agent.parentSessionId) {
       try { deps.taskManager.setTaskLogPath(agent.parentSessionId, agent.taskId, agent.outputFile); } catch { /* ignore */ }
     }
-    outputLog.write({ type: 'sub_agent_spawned', agentId: agent.id, agentName: agent.name, mission: agent.mission || agent.task || '' });
+    outputLog.write({ type: 'sub_agent_spawned', agentId: agent.id, agentName: agent.name, mission: agent.mission || agent.task || '', parentEffortDecision: agent.parentEffortDecision });
 
     // Compose the system-prompt-overlay we want injected.
     const preamble = buildSpawnedPreamble({
@@ -211,6 +189,7 @@ export function startSubAgent(agent, deps = {}) {
       expectedOutput: agent.expected_output,
       presetPrompt: (agent.personaData || getPersona(agent.persona))?.systemPrompt,
       budget: agent.budget,
+      allowTools: agent.allowTools || [],
       language: deps.language ?? deps.config?.language ?? 'en',
     });
 
@@ -218,10 +197,12 @@ export function startSubAgent(agent, deps = {}) {
       deps.parentVpPersona && typeof deps.parentVpPersona === 'object'
         ? { ...deps.parentVpPersona }
         : {};
-    baseVpPersona.persona =
-      [(baseVpPersona.persona || '').trim(), preamble.trim()]
-        .filter(Boolean)
-        .join('\n\n');
+    // Keep the spawned-agent contract outside the inherited VP soul. Stock
+    // souls can contain bilingual section markers, and persona rendering selects
+    // one language section before provider dispatch; appending the preamble to
+    // that source can therefore discard the child identity and mission. The
+    // prompt renderer appends this runtime-only block after soul selection.
+    baseVpPersona.runtimePreamble = preamble.trim();
     if (!baseVpPersona.displayName || !String(baseVpPersona.displayName).trim()) {
       baseVpPersona.displayName = `${deps.parentName || 'Parent'}/${agent.name || 'sub-agent'}`;
     }
@@ -257,6 +238,7 @@ export function startSubAgent(agent, deps = {}) {
     agent.outputFile = null;
     agent.subEngine = null;
     agent.subVpPersona = null;
+    agent.refreshToolPolicy = null;
     agent.__driverStarted = false;
     throw err;
   }
@@ -271,9 +253,8 @@ export function startSubAgent(agent, deps = {}) {
  *      liveness + lastResult.
  *   3. Stash the final assistant text on agent.result, tickAgent for
  *      budget enforcement, mark idle.
- *   4. Wait for either a new PromptAgent (status flips to running) OR
- *      CloseAgent (status=='closed') OR the idle watchdog firing
- *      (status=='abandoned').
+ *   4. Wait for PromptAgent or CloseAgent. An idle abandonment timeout is
+ *      available only when the embedding caller explicitly configures one.
  */
 function buildWallTimeBudgetResult(agent, reason) {
   return {
@@ -302,7 +283,13 @@ function armWallTimeWatchdog(agent, deps) {
   const remainingMs = Math.max(0, startedAt + wallTimeMs - Date.now());
   const timer = setTimeout(() => {
     if (isTerminalAgentStatus(agent.status)) return;
-    const reason = `wall_time_ms (${wallTimeMs}) exceeded`;
+    // Node timers above 2^31-1 overflow to 1ms. Large explicit ceilings are
+    // chunked without changing the original deadline.
+    if (Date.now() < startedAt + agent.budget.wall_time_ms) {
+      agent.rearmWallTimeWatchdog?.();
+      return;
+    }
+    const reason = `wall_time_ms (${agent.budget.wall_time_ms}) exceeded`;
     agent.result = buildWallTimeBudgetResult(agent, reason);
     agent.partial_output = agent.result.partial_output || '';
     if (agent.abortController && !agent.abortController.signal.aborted) {
@@ -313,15 +300,20 @@ function armWallTimeWatchdog(agent, deps) {
       diagnostic: 'wall_time_watchdog',
       deps,
     });
-  }, remainingMs);
+  }, Math.min(remainingMs, 2 ** 31 - 1));
   timer.unref?.();
   return timer;
 }
 
 async function driveSubAgent(agent, subEngine, vpPersona, deps) {
   const onEvent = typeof deps.onEvent === 'function' ? deps.onEvent : null;
-  const wallTimeWatchdog = armWallTimeWatchdog(agent, deps);
-  const idleAbandonMs = typeof deps.idleAbandonMs === 'number' && deps.idleAbandonMs > 0
+  let wallTimeWatchdog = null;
+  agent.rearmWallTimeWatchdog = () => {
+    if (wallTimeWatchdog) clearTimeout(wallTimeWatchdog);
+    wallTimeWatchdog = armWallTimeWatchdog(agent, deps);
+  };
+  agent.rearmWallTimeWatchdog();
+  const idleAbandonMs = Number.isFinite(deps.idleAbandonMs) && deps.idleAbandonMs > 0
     ? deps.idleAbandonMs : IDLE_ABANDON_MS;
 
   const wrapEvt = (evt) => ({
@@ -357,6 +349,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
     if (typeof entry === 'string') {
       return {
         prompt: entry,
+        parentEffortDecision: snapshotEffortDecision(agent.parentEffortDecision),
         projectSessionIds: Array.isArray(deps.projectSessionIds)
           ? deps.projectSessionIds.slice()
           : [],
@@ -371,6 +364,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
     if (!entry || typeof entry !== 'object' || typeof entry.prompt !== 'string') return null;
     return {
       prompt: entry.prompt,
+      parentEffortDecision: snapshotEffortDecision(entry.parentEffortDecision ?? agent.parentEffortDecision),
       projectSessionIds: Array.isArray(entry.projectSessionIds)
         ? entry.projectSessionIds.slice()
         : [],
@@ -389,6 +383,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
     if (agent.mission && !agent.__missionSeeded) {
       agent.pendingPrompts.push({
         prompt: agent.mission,
+        parentEffortDecision: agent.parentEffortDecision,
         projectSessionIds: Array.isArray(deps.projectSessionIds)
           ? deps.projectSessionIds.slice()
           : [],
@@ -406,8 +401,8 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
     while (!isTerminalAgentStatus(agent.status)) {
       const queuedPrompt = dequeueNextUserPrompt();
       if (!queuedPrompt) {
-        // No queued work — go idle and wait for PromptAgent / CloseAgent /
-        // watchdog.
+        // No queued work — retain the agent for PromptAgent / CloseAgent.
+        // A caller-provided idleAbandonMs may opt into automatic cleanup.
         agent.status = STATUS.IDLE;
         agent.idleSince = Date.now();
         emit({ type: 'sub_agent_status', status: STATUS.IDLE });
@@ -448,19 +443,24 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
       agent.lastResult = '';
       agent.result = '';
       let assistantText = '';
+      let budgetReportText = '';
       let endedNormally = false;
       let streamError = null;
-      const turnTokenStart = agent.liveness?.tokenCount || 0;
       const priorUsageTokens = agent.usage?.tokens || 0;
       let turnUsageTokens = 0;
       try {
+        agent.activeParentEffortDecision = queuedPrompt.parentEffortDecision;
+        emit({ type: 'sub_agent_effort_snapshot', parentEffortDecision: queuedPrompt.parentEffortDecision });
         const stream = subEngine.query({
           prompt: queuedPrompt.prompt,
           messages: agent.engineMessages,
           signal: agent.abortController?.signal,
-          scenario: 'chat',
+          scenario: 'sub_agent',
+          isSubAgent: true,
+          parentEffortDecision: queuedPrompt.parentEffortDecision,
           vpPersona,
           sessionId: agent.parentSessionId || deps.parentSessionId || null,
+          threadId: agent.id,
           // SpawnAgent records the caller-provided cwd on the agent. Thread it
           // into the child Engine just like a parent query's workDir so child
           // file tools resolve relative paths in the requested workspace.
@@ -488,6 +488,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
 
           if (evt && evt.type === 'text_delta' && typeof evt.text === 'string') {
             assistantText += evt.text;
+            if (agent.budgetReportStarted) budgetReportText += evt.text;
             // Mid-stream visibility: keep lastResult fresh so a parent
             // calling WaitAgent during a long generation sees what the
             // child is currently saying, not stale text from the prior
@@ -514,7 +515,8 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
           }
         }
       } catch (err) {
-        if (!agent.budgetStopReason) {
+        streamError = err && err.message ? err.message : String(err);
+        if (!agent.budgetStopReason && !agent.toolBudgetReason && !agent.executionBudgetReason) {
           transitionTerminal(agent, STATUS.FAILED, {
             error: err && err.message ? err.message : String(err),
             diagnostic: 'query_error',
@@ -528,6 +530,25 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
         agent.result = buildWallTimeBudgetResult(agent, agent.budgetStopReason);
         transitionTerminal(agent, STATUS.COMPLETED, {
           error: agent.budgetStopReason, diagnostic: 'execution_budget', deps,
+        });
+        return;
+      }
+
+      if (isTerminalAgentStatus(agent.status)) return;
+
+      if (agent.executionBudgetReason || agent.toolBudgetReason) {
+        // A report is evidence, not proof that the assigned review completed.
+        // Prefer its complete text over the concatenated progress preview.
+        const partial = budgetReportText.trim() || assistantText.trim();
+        agent.partial_output = partial || 'No final report was produced before the tool limit. The investigation is incomplete; inspect the execution log before retrying.';
+        const reason = agent.executionBudgetReason || agent.toolBudgetReason;
+        agent.result = buildWallTimeBudgetResult(agent, reason);
+        agent.result.reporting = { attempted: !!agent.budgetReportStarted, received: !!budgetReportText.trim() };
+        if (streamError) agent.result.reporting.error = streamError;
+        agent.usage.turns += 1;
+        agent.result.usage = { ...agent.usage };
+        transitionTerminal(agent, STATUS.COMPLETED, {
+          error: reason, diagnostic: 'execution_budget_report', deps,
         });
         return;
       }
@@ -574,13 +595,12 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
       try {
         const tickAgent = await loadTickAgent();
         if (typeof tickAgent === 'function') {
-          const textTokenDelta = Math.max(0, (agent.liveness?.tokenCount || 0) - turnTokenStart);
-          const tokenDelta = turnUsageTokens > 0 ? turnUsageTokens : textTokenDelta;
-          // Usage events are exposed live; tickAgent adds the turn delta once.
+          // Provider usage is authoritative. If a provider omits usage, keep the
+          // count unknown/unchanged rather than disguising output characters as tokens.
           agent.usage.tokens = priorUsageTokens;
           tickResult = tickAgent(agent.id, {
             turns: 1,
-            tokens: tokenDelta,
+            tokens: turnUsageTokens,
             partial_output: assistantText,
           });
         }
@@ -611,6 +631,8 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
     }
   } finally {
     if (wallTimeWatchdog) clearTimeout(wallTimeWatchdog);
+    agent.rearmWallTimeWatchdog = null;
+    agent.refreshToolPolicy = null;
     // Always clean up driver-owned resources. We intentionally do NOT
     // unset agent.result / agent.lastResult / agent.liveness / agent.
     // outputFile — those are observable by the parent after termination.

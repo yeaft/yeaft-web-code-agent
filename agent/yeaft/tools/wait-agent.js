@@ -24,7 +24,7 @@
  *              from every text_delta).
  *
  * Every envelope includes `outputFile` (durable per-agent JSONL log) and
- * `liveness` (toolUseCount, tokenCount, msSinceLastEvent, recentTools,
+ * `liveness` (toolUseCount, usageTokens, outputChars, msSinceLastEvent, recentTools,
  * lastEventType) so the model can distinguish "stuck" from "still
  * working" and can Read the log directly when it needs the full
  * timeline.
@@ -57,10 +57,10 @@ function nextStepsFor(status, opts = {}) {
   }
   if (opts.timedOut && opts.stale) {
     return (
-      'Sub-agent still has a running record but appears stalled. Do NOT keep ' +
-      'calling WaitAgent in a loop. Use ListAgents/outputFile to inspect it, ' +
-      'CloseAgent if you want to stop it, or report the stalled background ' +
-      'task and start a fresh agent if needed.'
+      'No observable event arrived within the diagnostic threshold. This does ' +
+      'not prove the provider or tool is dead. Do NOT keep calling WaitAgent ' +
+      'in a blind loop; inspect outputFile, then use CloseAgent only if you ' +
+      'actually intend to cancel, or report that the background task is quiet.'
     );
   }
   if (opts.timedOut && opts.mustCollectReply) {
@@ -197,7 +197,7 @@ export default defineTool({
     en: `Wait for a sub-agent's next state change (turn end, terminal, or wait-timeout) and retrieve a status envelope.
 
 Returns JSON with explicit \`status\`, latest \`result\` text, \`liveness\`
-counters (toolUseCount, tokenCount, msSinceLastEvent, recentTools), the
+counters (actual toolUseCount, provider usageTokens, outputChars, msSinceLastEvent, recentTools), the
 durable \`outputFile\` path you can Read at any time, and a status-specific
 \`next_steps\` directive telling you what to call next.
 
@@ -214,16 +214,16 @@ Status semantics:
 
 After WaitAgent returns, act on the status. A non-stale timeout after PromptAgent
 has 'mustCollectReply=true': call WaitAgent again with a larger bounded timeout in
-the same parent turn until idle/terminal. A stale/stalled agent breaks that loop:
-inspect/report/close it instead. For ordinary SpawnAgent background work, use
-ListAgents or later completion notifications instead of repeatedly re-waiting.
+the same parent turn until idle/terminal. A stale diagnostic breaks that blind
+wait loop but does not cancel or prove failure: inspect outputFile before deciding.
+For ordinary SpawnAgent background work, use ListAgents or later completion
+notifications instead of repeatedly re-waiting.
 
 The default wait is a bounded 5000ms poll; callers may request up to 300000ms
-(5 minutes). Never use an unbounded blind loop: every wait is capped, liveness is
-checked after each timeout, and stale/stalled is the explicit stop condition.`,
+(5 minutes). This caps one WaitAgent call only, not the sub-agent lifetime.`,
     zh: `等待子 Agent 的下一次状态变更（turn 结束、终止或等待超时）并获取状态信封。
 
-返回 JSON，含明确的 status、最新的 result 文本、liveness 计数器（toolUseCount、tokenCount、
+返回 JSON，含明确的 status、最新的 result 文本、liveness 计数器（实际 toolUseCount、provider usageTokens、outputChars、
 msSinceLastEvent、recentTools）、可随时 Read 的持久化 outputFile 路径，以及状态相关的 next_steps
 指令告诉你下一步该调用什么。
 
@@ -237,11 +237,11 @@ msSinceLastEvent、recentTools）、可随时 Read 的持久化 outputFile 路�
 
 PromptAgent 后若非 stale/stalled 的有界等待超时，必须在同一父级 turn 使用更大的有界 timeout
 再次调用 WaitAgent，直到 idle/terminal；不要改用 ListAgents/notification 丢下未收集的回复。
-关键——如果信封显示 stale/stalled，子 Agent 可能卡死或空转。不要反复调用 WaitAgent——向用户
-报告情况，决定是 CloseAgent（带 close_reason）还是重试。
+若信封显示 stale/stalled，应停止盲目等待并检查 outputFile；它只是诊断，不会取消任务，也不能证明
+provider 或工具已经卡死。仅在确实要取消时使用 CloseAgent。
 
 普通 SpawnAgent 异步流程仍用 ListAgents 做非阻塞状态检查，并依赖后续 completion
-notification；不要对普通后台任务盲目循环等待。每次等待都有上限，stale/stalled 是停止条件。`
+notification；默认 5000ms、最大 300000ms 仅限制单次 WaitAgent 调用，不限制子 Agent 生命周期。`
   },
   parameters: {
     type: 'object',
@@ -258,8 +258,8 @@ notification；不要对普通后台任务盲目循环等待。每次等待都�
         minimum: 0,
         maximum: 300000,
         description: {
-          en: 'Maximum time to wait in milliseconds (default: 5000 short poll, max: 300000 / 5 minutes)',
-          zh: '最长等待时间，单位毫秒（默认 5000 短轮询，最大 300000 / 5 分钟）',
+          en: 'Maximum duration of this wait call, not the sub-agent lifetime (default: 5000, max: 300000)',
+          zh: '本次等待调用的最长时间，不是子 Agent 生命周期（默认 5000，最大 300000）',
         },
       },
     },

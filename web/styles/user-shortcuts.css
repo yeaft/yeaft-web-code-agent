@@ -1,0 +1,24 @@
+.user-shortcuts-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px 0;
+}
+.user-shortcuts-settings h3 { font-size: 14px; color: var(--text-primary); }
+.user-shortcuts-settings > .btn-secondary { align-self: flex-start; white-space: normal; }
+.user-shortcuts-toggle { display: flex; align-items: center; gap: 8px; color: var(--text-primary); font-size: 13px; }
+.user-shortcuts-toggle input { accent-color: var(--accent-blue); }
+.user-shortcuts-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; }
+.user-shortcuts-label { display: flex; flex: 1 1 160px; flex-direction: column; gap: 4px; color: var(--text-primary); font-size: 13px; min-width: 0; }
+.user-shortcuts-label small { color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.user-shortcuts-controls { display: flex; gap: 4px; max-width: 100%; min-width: 0; }
+.user-shortcuts-record { min-width: 120px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.user-shortcuts-record.recording { border-color: var(--accent-blue); color: var(--accent-blue); }
+.user-shortcuts-error { flex-basis: 100%; color: var(--error); font-size: 12px; overflow-wrap: anywhere; }
+.user-shortcuts-settings button:focus-visible, .user-shortcuts-toggle input:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+@media (max-width: 480px) {
+  .user-shortcuts-label { flex-basis: 100%; }
+  .user-shortcuts-controls { width: 100%; }
+  .user-shortcuts-record { flex: 1; min-width: 0; }
+}

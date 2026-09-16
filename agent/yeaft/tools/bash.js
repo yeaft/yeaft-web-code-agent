@@ -77,6 +77,7 @@ function runCommand(command, { cwd, timeout, signal, runtimePlatform, runProcess
     signal,
     timeoutMs: timeout,
     maxBytes: MAX_OUTPUT,
+    outputLimitAction: 'head-tail',
     requireExitConfirmation: true,
     systemdScope: invocation.systemdControl,
     onSettled: invocation.cleanup || null,
@@ -86,6 +87,7 @@ function runCommand(command, { cwd, timeout, signal, runtimePlatform, runProcess
     stderr: result.stderr,
     exitCode: result.code,
     timedOut: result.timedOut,
+    truncated: result.truncated,
     terminationError: result.terminationError || null,
   }));
 }
@@ -103,7 +105,7 @@ Guidelines:
 - Commands run in the working directory (cwd from context)
 - Match command syntax to the Agent OS shown in the runtime_platform prompt
 - Timeout defaults to 2 minutes (max 10 minutes)
-- Large outputs are truncated at 256KB
+- Large outputs retain a bounded head/tail (256KB per stream); capture limits do not stop the command. Use background tasks for persistent full logs
 - Use absolute paths when possible
 - Avoid interactive commands (no stdin support)
 - Use background=true for long-running or persistent tasks that should survive across turns
@@ -116,7 +118,7 @@ Guidelines:
 使用指南：
 - 命令在工作目录中执行（上下文中的 cwd）
 - 默认超时 2 分钟（最大 10 分钟）
-- 大输出在 256KB 处截断
+- 大输出有界保留首尾（每个流 256KB），不因输出上限终止命令；需要持久完整日志时使用后台任务
 - 尽量使用绝对路径
 - 避免交互式命令（不支持 stdin）
 - 长时间或需要跨 turn 持续存在的任务使用 background=true
@@ -136,8 +138,8 @@ Guidelines:
       cwd: {
         type: 'string',
         description: {
-          en: 'Working directory for the command (default: engine cwd)',
-          zh: '命令的工作目录（默认为引擎当前目录）',
+          en: 'Working directory; relative paths resolve against engine cwd',
+          zh: '命令工作目录；相对路径以引擎当前目录为基准',
         },
       },
       timeout_ms: {
@@ -189,9 +191,7 @@ Guidelines:
     if (!command) throw new Error('command is required');
 
     // Resolve working directory
-    const cwd = inputCwd
-      ? resolve(inputCwd)
-      : (ctx?.cwd || process.cwd());
+    const cwd = resolve(ctx?.cwd || process.cwd(), inputCwd || '.');
 
     if (!existsSync(cwd)) {
       throw new Error(`Working directory does not exist: ${cwd}`);
@@ -217,7 +217,7 @@ Guidelines:
             threadId: ctx.threadId || 'main',
           },
         });
-        return `Started background task ${task.id}.\nStatus: ${task.status}\nLog: ${task.log?.path || ''}\nThe task is detached from this turn. Use ListTasks, ReadTaskLog, or CancelTask to inspect or control it.`;
+        return `Started background task ${task.id}.\nWorking directory: ${cwd}\nStatus: ${task.status}\nLog: ${task.log?.path || ''}\nThe task is detached from this turn. Use ListTasks, ReadTaskLog, or CancelTask to inspect or control it.`;
       } catch (err) {
         throw new Error(err?.message || String(err));
       }
@@ -236,6 +236,7 @@ Guidelines:
       const parts = [];
       if (result.stdout) parts.push(result.stdout);
       if (result.stderr) parts.push(`STDERR:\n${result.stderr}`);
+      if (result.truncated) parts.push('[Captured output truncated; command exit/timeout status is reported separately. Use a background task for a durable log.]');
       if (result.timedOut) parts.push(`\n(Command timed out after ${timeout}ms)`);
       if (result.terminationError) {
         parts.push([
@@ -258,10 +259,11 @@ Guidelines:
 
       const output = parts.join('\n');
       if (result.exitCode !== 0) {
-        return `Exit code: ${result.exitCode}\n${output}`;
+        return `Exit code: ${result.exitCode}\nWorking directory: ${cwd}\n${output}`;
       }
       return output || '(no output)';
     } catch (err) {
+      err.message = `${err.message} (working directory: ${cwd})`;
       if (err?.name === 'ProcessTerminationError') err.fatalToolTimeout = true;
       throw err;
     }

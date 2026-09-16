@@ -1,17 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as Vue from 'vue';
 import { createWsHandler } from '../../web/components/files/wsHandler.js';
 import { createFileTabs } from '../../web/components/files/fileTabs.js';
 import { createFilePreview } from '../../web/components/files/filePreview.js';
+import { getFileType } from '../../web/components/files/fileEditor.js';
+import { updateImagePreviewState, updateMediaPreviewState } from '../../web/components/FilesTab.js';
 import { resolveDialog, useDialogState } from '../../web/utils/dialog.js';
 import ctx from '../../agent/context.js';
 import { CONFIG } from '../../server/config.js';
 import { userDb, yeaftSessionDb } from '../../server/database.js';
 import {
   handleReadFile,
+  handleVideoMetadata,
+  handleVideoChunk,
   handleWriteFile,
   MAX_WORKBENCH_PREVIEW_BYTES,
 } from '../../agent/workbench/file-ops.js';
@@ -65,6 +69,7 @@ const {
   __testResetWorkbenchCorrelations,
   getWorkbenchTerminalOwner,
 } = await import('../../server/workbench-correlation.js');
+const { __testResetFileContentAssemblies } = await import('../../server/file-content-assembly.js');
 const {
   workbenchRouteKey,
   workbenchWorkspaceGeneration,
@@ -102,6 +107,7 @@ async function registerRouteRequest({
   clientId = 'client-1',
   userId = 'user-1',
   workDir = '/workspace/session-1',
+  agentWorkDir = '',
   requestId = null,
   extra = {},
   agentCapabilities = null,
@@ -110,6 +116,7 @@ async function registerRouteRequest({
   const client = routeClient(userId, { currentAgent: agentId });
   webClients.set(clientId, client);
   installRouteAgent(agentId, [{ id: sessionId, workDir, userId }]);
+  agents.get(agentId).workDir = agentWorkDir;
   if (Array.isArray(agentCapabilities)) agents.get(agentId).capabilities = [...agentCapabilities];
   forwardToAgent.mockClear();
   const handled = await handleClientWorkbench(
@@ -149,6 +156,30 @@ describe('Agent file reference resolution', () => {
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('confines automatic response references to the canonical workspace', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'yeaft-file-references-root-'));
+    const outside = mkdtempSync(join(tmpdir(), 'yeaft-file-references-outside-'));
+    try {
+      const fs = await import('node:fs/promises');
+      await fs.mkdir(join(root, 'images'), { recursive: true });
+      await fs.writeFile(join(root, 'images', 'inside.png'), 'inside');
+      await fs.writeFile(join(outside, 'outside.png'), 'outside');
+      symlinkSync(join(outside, 'outside.png'), join(root, 'images', 'escaped.png'));
+
+      await expect(resolveFileReferences([
+        join(root, 'images', 'inside.png'),
+        join(outside, 'outside.png'),
+        'images/escaped.png',
+        '../outside.png',
+      ], root)).resolves.toEqual([
+        { requestedPath: join(root, 'images', 'inside.png'), resolvedPath: 'images/inside.png' },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
     }
   });
 
@@ -229,6 +260,7 @@ describe('Agent file terminal forwarding', () => {
     sendToWebClient.mockClear();
     sendToAgent.mockClear();
     __testResetWorkbenchCorrelations();
+    __testResetFileContentAssemblies();
     agents.clear();
     previewFiles.clear();
     userFileTabs.clear();
@@ -238,6 +270,25 @@ describe('Agent file terminal forwarding', () => {
   afterEach(() => {
     CONFIG.skipAuth = originalSkipAuth;
     for (const userId of createdUsers.splice(0)) userDb.deleteUser(userId);
+  });
+
+  it('fails closed when a client requests automatic image preview from an old Agent', async () => {
+    const { client } = await registerRouteRequest({
+      type: 'read_file',
+      requestId: 'old-agent-image',
+      extra: { filePath: 'screens/result.png', responseImagePreview: true },
+      agentCapabilities: ['workbench_session_routes', 'workbench_request_correlation'],
+    });
+    expect(forwardToAgent).not.toHaveBeenCalled();
+    expect(sendToWebClient).toHaveBeenCalledWith(client, expect.objectContaining({
+      type: 'file_content', requestId: 'old-agent-image', agentId: 'agent-1',
+      conversationId: '_workbench:yeaft:agent-1:session-1',
+      workbenchRouteKey: 'yeaft:agent-1:session-1',
+      workbenchWorkspaceGeneration: workbenchWorkspaceGeneration(
+        'yeaft:agent-1:session-1', '/workspace/session-1',
+      ),
+      error: 'Response image preview is not supported by this Agent',
+    }));
   });
 
   it('authorizes a Yeaft Workbench route and replaces browser cwd with canonical Session metadata', async () => {
@@ -257,7 +308,7 @@ describe('Agent file terminal forwarding', () => {
     });
     try {
       agents.set(agentId, {
-        capabilities: ['workbench_session_routes', 'workbench_request_correlation'],
+        capabilities: ['workbench_session_routes', 'workbench_request_correlation', 'response_image_preview'],
       });
       const handled = await handleClientWorkbench(
         'client-route',
@@ -298,6 +349,24 @@ describe('Agent file terminal forwarding', () => {
       expect(forwardToAgent.mock.calls[0][1]).not.toHaveProperty('_requestUserId');
       expect(forwardToAgent.mock.calls[0][1]).not.toHaveProperty('_requestClientId');
       expect(forwardToAgent.mock.calls[0][1].workDir).not.toBe('/browser/forged');
+
+      forwardToAgent.mockClear();
+      await handleClientWorkbench(
+        'client-route',
+        {
+          userId, role: 'pro', currentAgent: agentId,
+          currentConversation: 'shared-yeaft-conversation', workbenchRouteProtocol: 1,
+        },
+        {
+          type: 'read_file', responseImagePreview: true, filePath: 'screens/result.png',
+          agentId, workDir: '/browser/forged', workbenchRoute: route,
+        },
+        async requestedAgentId => requestedAgentId === agentId,
+      );
+      expect(forwardToAgent).toHaveBeenCalledWith(agentId, expect.objectContaining({
+        type: 'read_file', responseImagePreview: true,
+        workDir: canonicalWorkDir, filePath: 'screens/result.png',
+      }));
 
       forwardToAgent.mockClear();
       await handleClientWorkbench(
@@ -642,6 +711,28 @@ describe('Agent file terminal forwarding', () => {
     }
   });
 
+  it('requests video metadata instead of transferring a video through read_file', () => {
+    globalThis.Vue = Vue;
+    const sendWsMessage = vi.fn();
+    const tabs = createFileTabs({
+      currentAgent: 'agent-a', currentConversation: 'conversation-a', sendWsMessage,
+    }, {
+      normalizePath: value => value, getEffectiveWorkDir: () => '/workspace',
+      editorContainer: Vue.ref({}), createEditor: vi.fn(), destroyEditor: vi.fn(),
+      clearFindMarkers: vi.fn(), saveCurrentUndoHistory: vi.fn(), saveAllUndoHistory: vi.fn(),
+      cleanupUndoHistory: vi.fn(), deleteConversationHistory: vi.fn(), mdPreviewMode: Vue.ref(false),
+      renderOfficeLocal: vi.fn(), performFind: vi.fn(), findBarVisible: Vue.ref(false),
+      findQuery: Vue.ref(''), t: key => key,
+    });
+    tabs.openFileInTab('media/demo.mp4', 'demo.mp4', {
+      agentId: 'agent-a', conversationId: 'conversation-a', workDir: '/workspace',
+    });
+    expect(tabs.activeFile.value).toMatchObject({ fileType: 'video', previewLoading: true });
+    expect(sendWsMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: 'video_metadata', filePath: 'media/demo.mp4', workDir: '/workspace',
+    }));
+  });
+
   it('closes file tabs in batches while preserving the nearest active tab', async () => {
     globalThis.Vue = Vue;
     const createEditor = vi.fn();
@@ -744,11 +835,24 @@ describe('Agent file terminal forwarding', () => {
     expect(tabs.openFiles.value.map(file => file.loading)).toEqual([true, true]);
     expect(tabs.fileLoading.value).toBe(true);
 
+    // Request correlation tolerates canonical absolute response paths, but
+    // never tolerates stale request ids or a different file owner.
+    for (const override of [
+      { requestId: 'stale-request' },
+      { agentId: 'agent-b' },
+      { conversationId: 'conversation-b' },
+    ]) {
+      handle(new CustomEvent('workbench-message', { detail: {
+        type: 'file_content', filePath: 'first.md', requestId: firstRequest.requestId,
+        agentId: 'agent-a', conversationId: 'conversation-a', content: 'wrong', ...override,
+      } }));
+    }
+    expect(tabs.openFiles.value.map(file => file.loading)).toEqual([true, true]);
     handle(new CustomEvent('workbench-message', { detail: {
       type: 'file_content',
       agentId: 'agent-a',
       conversationId: 'conversation-a',
-      requestedFilePath: 'first.md',
+      filePath: '/workspace/first.md',
       requestId: firstRequest.requestId,
       content: '# First',
     } }));
@@ -1297,6 +1401,125 @@ describe('Agent file terminal forwarding', () => {
     expect(sent.filter(msg => msg.type === 'write_file')).toHaveLength(3);
   });
 
+  it('confines file editor reads to real files inside the canonical workspace', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'yeaft-file-read-root-'));
+    const outside = mkdtempSync(join(tmpdir(), 'yeaft-file-read-outside-'));
+    const sent = [];
+    const previousConfig = ctx.CONFIG;
+    const previousSend = ctx.sendToServer;
+    writeFileSync(join(workDir, 'README.md'), 'inside readme');
+    writeFileSync(join(outside, 'secret.md'), 'outside secret');
+    symlinkSync(join(outside, 'secret.md'), join(workDir, 'escaped.md'));
+    ctx.CONFIG = { workDir };
+    ctx.sendToServer = msg => sent.push(msg);
+    try {
+      for (const [requestId, filePath] of [
+        ['inside', 'README.md'],
+        ['parent', join('..', outside.split(/[\\/]/).pop(), 'secret.md')],
+        ['absolute', join(outside, 'secret.md')],
+        ['symlink', 'escaped.md'],
+      ]) {
+        await handleReadFile({ conversationId: '_explorer', requestId, workDir, filePath });
+      }
+      expect(sent[0]).toMatchObject({ requestId: 'inside', content: 'inside readme' });
+      for (const response of sent.slice(1)) {
+        expect(response).toMatchObject({
+          error: 'File is outside the active workspace.',
+          errorCode: 'FILE_OUTSIDE_WORKSPACE',
+        });
+        expect(response.content).toBe('');
+      }
+    } finally {
+      ctx.CONFIG = previousConfig;
+      ctx.sendToServer = previousSend;
+      rmSync(workDir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('revalidates automatic response image reads inside the canonical workspace', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'yeaft-response-image-root-'));
+    const outside = mkdtempSync(join(tmpdir(), 'yeaft-response-image-outside-'));
+    const sent = [];
+    const previousConfig = ctx.CONFIG;
+    const previousSend = ctx.sendToServer;
+    writeFileSync(join(workDir, 'inside.png'), Buffer.from('inside'));
+    writeFileSync(join(workDir, 'note.txt'), 'text');
+    writeFileSync(join(outside, 'outside.png'), Buffer.from('outside'));
+    symlinkSync(join(outside, 'outside.png'), join(workDir, 'escaped.png'));
+    ctx.CONFIG = { workDir };
+    ctx.sendToServer = msg => sent.push(msg);
+    try {
+      for (const [requestId, filePath] of [
+        ['inside', 'inside.png'], ['escaped', 'escaped.png'], ['text', 'note.txt'],
+      ]) {
+        await handleReadFile({
+          conversationId: '_explorer', requestId, workDir, filePath,
+          responseImagePreview: true,
+        });
+      }
+      expect(sent[0]).toMatchObject({ requestId: 'inside', binary: true, mimeType: 'image/png' });
+      expect(sent[1]).toMatchObject({ requestId: 'escaped', error: 'Response image is outside the active workspace.' });
+      expect(sent[2]).toMatchObject({ requestId: 'text', error: 'Response preview only supports image files.' });
+    } finally {
+      ctx.CONFIG = previousConfig;
+      ctx.sendToServer = previousSend;
+      rmSync(workDir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('streams video metadata and bounded byte ranges without the 20 MB preview limit', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'yeaft-video-stream-'));
+    const videoPath = join(workDir, 'large.mp4');
+    const sent = [];
+    const previousConfig = ctx.CONFIG;
+    const previousSend = ctx.sendToServer;
+    writeFileSync(videoPath, Buffer.from('0123456789'));
+    const largeSize = MAX_WORKBENCH_PREVIEW_BYTES + 17;
+    truncateSync(videoPath, largeSize);
+    ctx.CONFIG = { workDir };
+    ctx.sendToServer = msg => sent.push(msg);
+    try {
+      await handleReadFile({
+        conversationId: '_explorer', requestId: 'legacy-video-read', workDir, filePath: 'large.mp4',
+      });
+      expect(sent[0]).toMatchObject({
+        type: 'file_content', requestId: 'legacy-video-read', errorCode: 'VIDEO_STREAM_REQUIRED',
+      });
+
+      await handleVideoMetadata({
+        conversationId: '_explorer', requestId: 'video-meta', workDir, filePath: 'large.mp4',
+      });
+      expect(sent[1]).toMatchObject({
+        type: 'video_metadata', requestId: 'video-meta', filePath: videoPath,
+        requestedFilePath: 'large.mp4', size: largeSize, mimeType: 'video/mp4',
+      });
+      expect(sent[1]).not.toHaveProperty('content');
+
+      await handleVideoChunk({
+        conversationId: '_explorer', requestId: 'video-range', workDir, filePath: 'large.mp4',
+        start: 2, end: 6, expectedSize: largeSize, expectedMtimeMs: sent[1].mtimeMs,
+      });
+      expect(sent[2]).toMatchObject({
+        type: 'video_chunk', requestId: 'video-range', start: 2, end: 6,
+        size: largeSize, mimeType: 'video/mp4', content: Buffer.from('23456').toString('base64'),
+      });
+
+      await handleVideoChunk({
+        conversationId: '_explorer', requestId: 'oversized-range', workDir, filePath: 'large.mp4',
+        start: 0, end: (1024 * 1024), expectedSize: largeSize, expectedMtimeMs: sent[1].mtimeMs,
+      });
+      expect(sent[3]).toMatchObject({
+        type: 'video_chunk', requestId: 'oversized-range', errorCode: 'VIDEO_RANGE_TOO_LARGE',
+      });
+    } finally {
+      ctx.CONFIG = previousConfig;
+      ctx.sendToServer = previousSend;
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
   it('rejects binary previews over 20 MB before reading file content', async () => {
     const workDir = mkdtempSync(join(tmpdir(), 'yeaft-file-preview-'));
     const imagePath = join(workDir, 'large.png');
@@ -1319,7 +1542,7 @@ describe('Agent file terminal forwarding', () => {
         requestId: 'preview-large',
         requestedFilePath: 'large.png',
         errorCode: 'FILE_PREVIEW_TOO_LARGE',
-        error: expect.stringContaining('preview limit is 20 MB'),
+        error: expect.stringContaining('file limit is 20 MB'),
         errorDetails: {
           sizeBytes: MAX_WORKBENCH_PREVIEW_BYTES + 1,
           limitBytes: MAX_WORKBENCH_PREVIEW_BYTES,
@@ -1329,6 +1552,146 @@ describe('Agent file terminal forwarding', () => {
     } finally {
       ctx.CONFIG = previousConfig;
       ctx.sendToServer = previousSend;
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts exactly 20 MB and sends it as twenty bounded chunks', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'yeaft-file-limit-'));
+    const imagePath = join(workDir, 'limit.png');
+    const chunks = [];
+    const previousConfig = ctx.CONFIG;
+    const previousSend = ctx.sendToServer;
+    const previousAgentCapabilities = ctx.agentCapabilities;
+    const previousServerCapabilities = ctx.serverCapabilities;
+    writeFileSync(imagePath, Buffer.alloc(1));
+    truncateSync(imagePath, MAX_WORKBENCH_PREVIEW_BYTES);
+    ctx.CONFIG = { workDir };
+    ctx.agentCapabilities = ['workbench_file_content_chunks'];
+    ctx.serverCapabilities = new Set(['workbench_file_content_chunks']);
+    ctx.sendToServer = async msg => {
+      chunks.push({
+        type: msg.type,
+        chunkIndex: msg.chunkIndex,
+        chunkCount: msg.chunkCount,
+        totalBytes: msg.totalBytes,
+        decodedBytes: Buffer.byteLength(msg.content, 'base64'),
+      });
+      return 'sent';
+    };
+    try {
+      await handleReadFile({
+        conversationId: '_explorer',
+        requestId: 'preview-limit',
+        _workbenchRequestId: 'internal-limit',
+        workbenchRouteKey: 'route-key',
+        workbenchWorkspaceGeneration: 'generation-1',
+        workDir,
+        filePath: 'limit.png',
+      });
+      expect(chunks).toHaveLength(20);
+      expect(chunks.map(chunk => chunk.chunkIndex)).toEqual(Array.from({ length: 20 }, (_, index) => index));
+      expect(chunks.every(chunk => chunk.type === 'file_content_chunk')).toBe(true);
+      expect(chunks.every(chunk => chunk.chunkCount === 20)).toBe(true);
+      expect(chunks.every(chunk => chunk.totalBytes === MAX_WORKBENCH_PREVIEW_BYTES)).toBe(true);
+      expect(chunks.every(chunk => chunk.decodedBytes === 1024 * 1024)).toBe(true);
+    } finally {
+      ctx.CONFIG = previousConfig;
+      ctx.sendToServer = previousSend;
+      ctx.agentCapabilities = previousAgentCapabilities;
+      ctx.serverCapabilities = previousServerCapabilities;
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('chunks correlated binary files after Agent and Server capability negotiation', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'yeaft-file-chunks-'));
+    const imagePath = join(workDir, 'large.png');
+    const image = Buffer.alloc(1024 * 1024 + 17, 0x5a);
+    const sent = [];
+    const previousConfig = ctx.CONFIG;
+    const previousSend = ctx.sendToServer;
+    const previousAgentCapabilities = ctx.agentCapabilities;
+    const previousServerCapabilities = ctx.serverCapabilities;
+    writeFileSync(imagePath, image);
+    ctx.CONFIG = { workDir };
+    ctx.agentCapabilities = ['workbench_file_content_chunks'];
+    ctx.serverCapabilities = new Set(['workbench_file_content_chunks']);
+    ctx.sendToServer = async msg => {
+      sent.push(msg);
+      return 'sent';
+    };
+    try {
+      await handleReadFile({
+        conversationId: '_explorer',
+        requestId: 'preview-chunked',
+        _workbenchRequestId: 'internal-chunked',
+        workbenchRouteKey: 'route-key',
+        workbenchWorkspaceGeneration: 'generation-1',
+        workDir,
+        filePath: 'large.png',
+      });
+      expect(sent).toHaveLength(2);
+      expect(sent.map(message => message.type)).toEqual([
+        'file_content_chunk',
+        'file_content_chunk',
+      ]);
+      expect(sent.map(message => message.chunkIndex)).toEqual([0, 1]);
+      expect(sent.every(message => message.chunkCount === 2)).toBe(true);
+      expect(sent.every(message => message.totalBytes === image.length)).toBe(true);
+      // Compare every byte without the per-element overhead of deep equality
+      // on a MiB-sized typed array (which can exhaust the test's time budget).
+      expect(Buffer.from(sent[0].content, 'base64').equals(image.subarray(0, 1024 * 1024))).toBe(true);
+      expect(Buffer.from(sent[1].content, 'base64').equals(image.subarray(1024 * 1024))).toBe(true);
+      expect(sent.every(message => message._workbenchRequestId === 'internal-chunked')).toBe(true);
+      expect(sent.every(message => message.workbenchRouteKey === 'route-key')).toBe(true);
+      expect(sent.every(message => message.workbenchWorkspaceGeneration === 'generation-1')).toBe(true);
+    } finally {
+      ctx.CONFIG = previousConfig;
+      ctx.sendToServer = previousSend;
+      ctx.agentCapabilities = previousAgentCapabilities;
+      ctx.serverCapabilities = previousServerCapabilities;
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports an explicit transfer error when a legacy single-frame response is dropped', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'yeaft-file-legacy-drop-'));
+    const imagePath = join(workDir, 'large.png');
+    const sent = [];
+    const previousConfig = ctx.CONFIG;
+    const previousSend = ctx.sendToServer;
+    const previousAgentCapabilities = ctx.agentCapabilities;
+    const previousServerCapabilities = ctx.serverCapabilities;
+    writeFileSync(imagePath, Buffer.alloc(1024 * 1024 + 1, 0x31));
+    ctx.CONFIG = { workDir };
+    ctx.agentCapabilities = ['workbench_file_content_chunks'];
+    ctx.serverCapabilities = new Set();
+    ctx.sendToServer = async msg => {
+      sent.push(msg);
+      return sent.length === 1 ? 'dropped' : 'sent';
+    };
+    try {
+      await handleReadFile({
+        conversationId: '_explorer',
+        requestId: 'preview-legacy-drop',
+        _workbenchRequestId: 'internal-legacy-drop',
+        workDir,
+        filePath: 'large.png',
+      });
+      expect(sent).toHaveLength(2);
+      expect(sent[0]).toMatchObject({ type: 'file_content', binary: true });
+      expect(sent[1]).toMatchObject({
+        type: 'file_content',
+        binary: false,
+        errorCode: 'FILE_TRANSFER_DROPPED',
+      });
+      expect(sent[1].content).toBe('');
+    } finally {
+      ctx.CONFIG = previousConfig;
+      ctx.sendToServer = previousSend;
+      ctx.agentCapabilities = previousAgentCapabilities;
+      ctx.serverCapabilities = previousServerCapabilities;
       rmSync(workDir, { recursive: true, force: true });
     }
   });
@@ -2258,6 +2621,65 @@ describe('Agent file terminal forwarding', () => {
     expect(sendToWebClient.mock.calls[0][0]).not.toBe(first.client);
   });
 
+  it.each(['', '   ', '/session/explicit'])('resolves history file references with canonical cwd %j', async workDir => {
+    const expectedWorkDir = workDir.trim() || '/agent/default';
+    const { outbound, client } = await registerRouteRequest({
+      type: 'resolve_file_references',
+      workDir,
+      agentWorkDir: '/agent/default',
+      requestId: 'old-session-refs',
+      extra: { workDir: '/browser/untrusted', references: ['README.md'] },
+    });
+    expect(outbound).toMatchObject({
+      workDir: expectedWorkDir,
+      workbenchWorkspaceGeneration: workbenchWorkspaceGeneration('yeaft:agent-1:session-1', expectedWorkDir),
+    });
+    sendToWebClient.mockClear();
+    await handleAgentFileTerminal('agent-1', agents.get('agent-1'), {
+      type: 'file_references_resolved',
+      conversationId: outbound.conversationId,
+      _workbenchRequestId: outbound._workbenchRequestId,
+      references: [{ requestedPath: 'README.md', resolvedPath: 'README.md' }],
+    });
+    expect(sendToWebClient).toHaveBeenCalledExactlyOnceWith(client, expect.objectContaining({
+      type: 'file_references_resolved', requestId: 'old-session-refs',
+    }));
+  });
+
+  it('drops a delayed fallback response when the Agent default directory changes', async () => {
+    const { outbound } = await registerRouteRequest({
+      type: 'resolve_file_references', workDir: '', agentWorkDir: '/agent/before',
+      requestId: 'default-change', extra: { references: ['README.md'] },
+    });
+    agents.get('agent-1').workDir = '/agent/after';
+    sendToWebClient.mockClear();
+    await handleAgentFileTerminal('agent-1', agents.get('agent-1'), {
+      type: 'file_references_resolved', conversationId: outbound.conversationId,
+      _workbenchRequestId: outbound._workbenchRequestId, references: [],
+    });
+    expect(sendToWebClient).not.toHaveBeenCalled();
+  });
+
+  it.each(['missing', 'archived', 'no-default'])('isolates rejected %s history file previews from chat', async kind => {
+    const client = routeClient('user-1', { currentAgent: 'agent-1' });
+    installRouteAgent('agent-1', kind === 'missing' ? [] : [{
+      id: 'session-1', userId: 'user-1', workDir: '', isArchived: kind === 'archived',
+    }]);
+    agents.get('agent-1').workDir = kind === 'no-default' ? '' : '/agent/default';
+    forwardToAgent.mockClear();
+    sendToWebClient.mockClear();
+    await handleClientWorkbench('client-1', client, {
+      type: 'resolve_file_references', agentId: 'agent-1', requestId: 'denied-refs',
+      workDir: '/browser/untrusted', references: ['README.md'],
+      workbenchRoute: { runtimeProvider: 'yeaft', agentId: 'agent-1', sessionId: 'session-1' },
+    }, async () => true);
+    expect(forwardToAgent).not.toHaveBeenCalled();
+    expect(sendToWebClient).toHaveBeenCalledExactlyOnceWith(client, expect.objectContaining({
+      type: 'file_references_resolved', requestId: 'denied-refs', references: [],
+      error: 'Invalid Workbench Session route',
+    }));
+  });
+
   it('keeps resolved file references correlated to the requesting browser and route', async () => {
     const { outbound, client } = await registerRouteRequest({
       type: 'resolve_file_references',
@@ -2297,6 +2719,151 @@ describe('Agent file terminal forwarding', () => {
       references: [],
     });
     expect(sendToWebClient).not.toHaveBeenCalled();
+  });
+
+  it('reassembles correlated binary chunks into a token-protected HTTP preview', async () => {
+    const { outbound, client } = await registerRouteRequest({
+      type: 'read_file',
+      requestId: 'chunked-file-request',
+      extra: { filePath: 'docs/large.png' },
+    });
+    const first = Buffer.alloc(1024 * 1024, 0x61);
+    const second = Buffer.from('tail');
+    const common = {
+      conversationId: outbound.conversationId,
+      _workbenchRequestId: outbound._workbenchRequestId,
+      workbenchRouteKey: outbound.workbenchRouteKey,
+      workbenchWorkspaceGeneration: outbound.workbenchWorkspaceGeneration,
+      filePath: '/workspace/docs/large.png',
+      requestedFilePath: 'docs/large.png',
+      binary: true,
+      mimeType: 'image/png',
+      chunkCount: 2,
+      totalBytes: first.length + second.length,
+    };
+    sendToWebClient.mockClear();
+    await handleAgentFileTerminal('agent-1', {}, {
+      ...common,
+      type: 'file_content_chunk',
+      chunkIndex: 0,
+      content: first.toString('base64'),
+    });
+    expect(sendToWebClient).not.toHaveBeenCalled();
+
+    await handleAgentFileTerminal('agent-1', {}, {
+      ...common,
+      type: 'file_content_chunk',
+      chunkIndex: 1,
+      content: second.toString('base64'),
+    });
+
+    expect(sendToWebClient).toHaveBeenCalledOnce();
+    expect(sendToWebClient.mock.calls[0][0]).toBe(client);
+    const forwarded = sendToWebClient.mock.calls[0][1];
+    expect(forwarded).toMatchObject({
+      type: 'file_content',
+      requestId: 'chunked-file-request',
+      requestedFilePath: 'docs/large.png',
+      binary: true,
+      mimeType: 'image/png',
+      previewUrl: expect.stringMatching(/^\/api\/preview\//),
+    });
+    expect(forwarded).not.toHaveProperty('content');
+    expect(previewFiles.get(forwarded.fileId)?.buffer?.equals(Buffer.concat([first, second]))).toBe(true);
+    expect(forwarded.previewUrl).toContain(`token=${forwarded.previewToken}`);
+  });
+
+  it('fails closed and consumes the correlation when binary chunks arrive out of order', async () => {
+    const { outbound } = await registerRouteRequest({
+      type: 'read_file',
+      requestId: 'invalid-chunk-request',
+      extra: { filePath: 'docs/broken.png' },
+    });
+    const common = {
+      conversationId: outbound.conversationId,
+      _workbenchRequestId: outbound._workbenchRequestId,
+      workbenchRouteKey: outbound.workbenchRouteKey,
+      workbenchWorkspaceGeneration: outbound.workbenchWorkspaceGeneration,
+      filePath: '/workspace/docs/broken.png',
+      requestedFilePath: 'docs/broken.png',
+      binary: true,
+      mimeType: 'image/png',
+      chunkCount: 2,
+      totalBytes: 1024 * 1024 + 1,
+    };
+    sendToWebClient.mockClear();
+    await handleAgentFileTerminal('agent-1', {}, {
+      ...common,
+      type: 'file_content_chunk',
+      chunkIndex: 1,
+      content: Buffer.from('x').toString('base64'),
+    });
+    expect(sendToWebClient).toHaveBeenCalledOnce();
+    expect(sendToWebClient.mock.calls[0][1]).toMatchObject({
+      type: 'file_content',
+      requestId: 'invalid-chunk-request',
+      binary: false,
+      errorCode: 'FILE_TRANSFER_INVALID',
+    });
+    expect(previewFiles.size).toBe(0);
+
+    sendToWebClient.mockClear();
+    await handleAgentFileTerminal('agent-1', {}, {
+      ...common,
+      type: 'file_content_chunk',
+      chunkIndex: 0,
+      content: Buffer.alloc(1024 * 1024).toString('base64'),
+    });
+    expect(sendToWebClient).not.toHaveBeenCalled();
+  });
+
+  it('classifies browser video containers separately from text and binary previews', () => {
+    for (const name of ['clip.mp4', 'clip.m4v', 'clip.webm', 'clip.ogv', 'clip.ogg', 'clip.mov']) {
+      expect(getFileType(name)).toBe('video');
+    }
+    expect(getFileType('clip.mp3')).toBe('text');
+    expect(getFileType('clip.mp4.txt')).toBe('text');
+  });
+
+  it('projects video metadata as a route-bound stream URL and fails closed for old Agents', async () => {
+    const supported = [
+      'terminal', 'file_editor', 'workbench_session_routes',
+      'workbench_request_correlation', 'workbench_video_stream',
+    ];
+    const { outbound, client } = await registerRouteRequest({
+      type: 'video_metadata', requestId: 'video-request-1',
+      extra: { filePath: 'media/demo.mp4' }, agentCapabilities: supported,
+    });
+    expect(outbound).toMatchObject({
+      type: 'video_metadata', filePath: 'media/demo.mp4', workDir: '/workspace/session-1',
+    });
+    sendToWebClient.mockClear();
+    await handleAgentFileTerminal('agent-1', {}, {
+      type: 'video_metadata', conversationId: outbound.conversationId,
+      _workbenchRequestId: outbound._workbenchRequestId,
+      filePath: '/workspace/session-1/media/demo.mp4', requestedFilePath: 'media/demo.mp4',
+      size: 100 * 1024 * 1024, mtimeMs: 1234, mimeType: 'video/mp4',
+    });
+    const [, projected] = sendToWebClient.mock.calls[0];
+    expect(sendToWebClient.mock.calls[0][0]).toBe(client);
+    expect(projected).toMatchObject({
+      type: 'video_metadata', requestId: 'video-request-1', filePath: 'media/demo.mp4',
+      size: 100 * 1024 * 1024, mimeType: 'video/mp4', videoStream: true,
+    });
+    expect(projected.previewUrl).toMatch(/^\/api\/preview\/.+token=wbv1\./);
+    expect(projected).not.toHaveProperty('mtimeMs');
+
+    sendToWebClient.mockClear();
+    await registerRouteRequest({
+      type: 'video_metadata', requestId: 'video-old-agent',
+      extra: { filePath: 'media/demo.mp4' },
+      agentCapabilities: ['file_editor', 'workbench_session_routes', 'workbench_request_correlation'],
+    });
+    expect(forwardToAgent).not.toHaveBeenCalled();
+    expect(sendToWebClient).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      type: 'video_metadata', requestId: 'video-old-agent',
+      error: 'Video streaming is not supported by this Agent',
+    }));
   });
 
   it('preserves the requested path when projecting a correlated binary file response', async () => {
@@ -2383,7 +2950,6 @@ describe('Agent file terminal forwarding', () => {
         : key,
     }).handleWorkbenchMessage;
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, blob: async () => new Blob(['image']) });
-    const createObjectUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:preview');
 
     handle(new CustomEvent('workbench-message', { detail: { ...forwarded, agentId: 'agent-2' } }));
     handle(new CustomEvent('workbench-message', { detail: { ...forwarded, conversationId: 'session-2' } }));
@@ -2392,12 +2958,69 @@ describe('Agent file terminal forwarding', () => {
     expect(relativeTab.previewLoading).toBe(true);
 
     handle(new CustomEvent('workbench-message', { detail: forwarded }));
-    await vi.waitFor(() => expect(relativeTab.blobUrl).toBe('blob:preview'));
-    expect(relativeTab.previewLoading).toBe(false);
+    expect(relativeTab.blobUrl).toBe(`https://yeaft.test${forwarded.previewUrl}`);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(relativeTab.previewLoading).toBe(true);
     expect(wrongOwnerTab.blobUrl).toBeNull();
     expect(wrongOwnerTab.previewLoading).toBe(true);
+
+    expect(updateImagePreviewState(relativeTab, {
+      currentTarget: { src: relativeTab.blobUrl },
+    })).toBe(true);
+    expect(relativeTab.previewLoading).toBe(false);
+    expect(relativeTab.previewError).toBeNull();
+
+    relativeTab.blobUrl = 'https://yeaft.test/api/preview/new?token=new';
+    relativeTab.previewLoading = true;
+    expect(updateImagePreviewState(relativeTab, {
+      currentTarget: { src: `https://yeaft.test${forwarded.previewUrl}` },
+    }, 'stale failure')).toBe(false);
+    expect(relativeTab.previewLoading).toBe(true);
+    expect(relativeTab.previewError).toBeNull();
+    expect(updateImagePreviewState(relativeTab, {
+      currentTarget: { src: relativeTab.blobUrl },
+    }, 'preview failed')).toBe(true);
+    expect(relativeTab.previewLoading).toBe(false);
+    expect(relativeTab.previewError).toBe('preview failed');
     fetchSpy.mockRestore();
-    createObjectUrl.mockRestore();
+  });
+
+  it('maps video metadata to a streamed preview URL and fences stale media events', () => {
+    globalThis.Vue = Vue;
+    globalThis.location = { protocol: 'https:', host: 'yeaft.test' };
+    const videoTab = {
+      path: 'media/demo.mp4', name: 'demo.mp4', fileType: 'video', agentId: 'agent-1',
+      conversationId: 'session-1', requestId: 'video-request', loading: true,
+      previewLoading: true, previewError: null, blobUrl: null,
+    };
+    const openFiles = Vue.ref([videoTab]);
+    const handle = createWsHandler({
+      store: { currentConversation: 'session-1', currentAgent: 'agent-1' },
+      normalizePath: value => value, getEffectiveWorkDir: () => '/workspace', openFiles,
+      activeFileIndex: Vue.ref(0), activeFile: Vue.computed(() => videoTab), fileSaving: Vue.ref(false),
+      saveTabsState: vi.fn(), createEditor: vi.fn(), openFileInTab: vi.fn(),
+      tree: {}, setTreeVisible: vi.fn(), fp: {}, qo: {}, ops: { takePendingDownload: () => null },
+      mdPreviewMode: Vue.ref(false), renderOfficeLocal: vi.fn(), editorContainer: Vue.ref(null),
+      t: key => key,
+    }).handleWorkbenchMessage;
+    handle(new CustomEvent('workbench-message', { detail: {
+      type: 'video_metadata', agentId: 'agent-1', conversationId: 'session-1',
+      requestId: 'video-request', requestedFilePath: 'media/demo.mp4', videoStream: true,
+      previewUrl: '/api/preview/video-1?token=wbv1.secret', size: 50 * 1024 * 1024,
+    } }));
+    expect(videoTab).toMatchObject({
+      loading: false, fileType: 'video', previewLoading: true,
+      blobUrl: 'https://yeaft.test/api/preview/video-1?token=wbv1.secret',
+    });
+    expect(updateMediaPreviewState(videoTab, {
+      currentTarget: { src: videoTab.blobUrl },
+    })).toBe(true);
+    expect(videoTab.previewLoading).toBe(false);
+    videoTab.blobUrl = 'https://yeaft.test/api/preview/video-2?token=wbv1.new';
+    expect(updateMediaPreviewState(videoTab, {
+      currentTarget: { src: 'https://yeaft.test/api/preview/video-1?token=wbv1.secret' },
+    }, 'stale error')).toBe(false);
+    expect(videoTab.previewError).toBeNull();
   });
 
   it('keeps a local Office preview loading until its fetch and render complete', async () => {

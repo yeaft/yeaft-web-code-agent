@@ -25,6 +25,7 @@
  *   - tool_result.toolCallId ← → function_call_output.call_id (direct passthrough)
  */
 
+import { enforceSubAgentEffortPayload, captureEffortDecision } from '../effort.js';
 import {
   LLMAdapter,
   LLMRateLimitError,
@@ -49,6 +50,8 @@ import {
   getThinkingCapability,
   mapEffortToOpenAIReasoning,
 } from '../models.js';
+
+import { createProviderContext, createProviderState, replayProviderState, providerStateBytes, applyResponsesContinuity, reasoningUsage } from './provider-state.js';
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 
@@ -163,7 +166,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
    * Assistant tool_calls → separate { type:'function_call', call_id, name, arguments } items
    * Tool message → { type:'function_call_output', call_id, output }
    */
-  #translateInput(messages) {
+  #translateInput(messages, context, identity) {
     const input = [];
     for (const msg of messages) {
       if (msg.role === 'system') {
@@ -177,6 +180,8 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
           content: this.#translateUserContent(msg.content),
         });
       } else if (msg.role === 'assistant') {
+        const native = replayProviderState(msg, context, identity);
+        if (native) { input.push(...native); continue; }
         // Emit a message item if there is text content
         if (msg.content && typeof msg.content === 'string' && msg.content.trim()) {
           input.push({
@@ -263,12 +268,14 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
    * `api-key` headers are auto-redacted (see `redactRawRequest` in
    * `adapter.js`); request-body fields are caller-controlled.
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, effortContext = {}, extraBody, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart }) {
+  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, effortContext = {}, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart }) {
     if (signal?.aborted) throw new LLMAbortError();
 
+    const context = providerContext || createProviderContext({ protocol: 'openai-responses', baseUrl: this.#baseUrl, model });
+    const input = this.#translateInput(messages, context, requestIdentity);
     const body = {
       model,
-      input: this.#translateInput(messages),
+      input,
       stream: true,
       max_output_tokens: maxTokens,
     };
@@ -291,6 +298,12 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     }
 
     if (extraBody) Object.assign(body, extraBody);
+    body.model = model; // Origin binding must describe the actual dispatched model.
+    applyResponsesContinuity(body, { context, identity: requestIdentity, input, onProviderDiagnostics });
+    const effortDecision = effortConstraint
+      ? enforceSubAgentEffortPayload(body, { model, protocol: 'openai-responses', effortContext, effortConstraint })
+      : captureEffortDecision({ body, model, protocol: 'openai-responses', effortContext, requested: effort, source: effortSource || 'scenario' });
+    onEffortDecision?.(effortDecision);
     const wireBody = toWellFormedJson(body);
 
     const url = `${this.#baseUrl}/responses`;
@@ -334,6 +347,31 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       throw this.#classifyError(response.status, errorBody, response);
     }
 
+    if (response.headers?.get('content-type')?.includes('application/json')) {
+      const result = await response.json();
+      const items = Array.isArray(result.output) ? result.output : [];
+      for (const item of items) {
+        if (item.type === 'message') {
+          for (const part of item.content || []) if (part.type === 'output_text') yield { type: 'text_delta', text: part.text };
+        } else if (item.type === 'function_call') {
+          let input = {};
+          try { input = JSON.parse(item.arguments); } catch { /* legacy projection */ }
+          yield { type: 'tool_call', id: item.call_id, name: item.name, input };
+        }
+      }
+      if (['completed', 'incomplete'].includes(result.status)) {
+        const state = createProviderState({ context, identity: requestIdentity, items, responseId: result.id });
+        if (state) yield { type: 'provider_state', providerState: state, providerStateBytes: providerStateBytes(state) };
+      }
+      const usage = result.usage || {};
+      yield { type: 'usage', inputTokens: usage.input_tokens || 0, outputTokens: usage.output_tokens || 0,
+        cacheReadTokens: usage.input_tokens_details?.cached_tokens || 0, cacheWriteTokens: 0,
+        cacheTokensAreIncludedInInput: true,
+              ...reasoningUsage(usage, 'openai-responses') };
+      if (result.status === 'failed') throw new LLMServerError('OpenAI JSON response failed', 0);
+      yield { type: 'stop', stopReason: this.#mapStopReason(result, false) };
+      return;
+    }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     // Incremental O(n) line splitter (see SseLineBuffer): the old
@@ -349,6 +387,8 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     /** call_ids already emitted as tool_call events (to avoid duplicating on completed fallback). */
     const emittedToolCallIds = new Set();
     let sawToolCall = false;
+    const completedItems = new Map();
+    let emittedText = false;
 
     // Keep raw SSE chunks only until the engine receives the bounded exchange
     // callback. The engine owns the configured byte budget; the adapter avoids
@@ -389,7 +429,10 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
 
           const type = event.type;
 
-          if (type === 'response.output_item.added') {
+          if (sawTerminalEvent) continue;
+          if (type === 'response.output_item.done') {
+            if (Number.isInteger(event.output_index) && event.item) completedItems.set(event.output_index, event.item);
+          } else if (type === 'response.output_item.added') {
             const item = event.item;
             const idx = event.output_index;
             if (item?.type === 'function_call') {
@@ -401,6 +444,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
             }
           } else if (type === 'response.output_text.delta') {
             if (typeof event.delta === 'string' && event.delta.length > 0) {
+              emittedText = true;
               yield { type: 'text_delta', text: event.delta };
             }
           } else if (type === 'response.function_call_arguments.delta') {
@@ -439,7 +483,12 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
 
             // Fallback: flush any function_call items in the final output that we
             // didn't see a .done event for (defensive against partial streams).
-            const outputArr = Array.isArray(respObj.output) ? respObj.output : [];
+            const outputArr = Array.isArray(respObj.output) ? respObj.output : [...completedItems].sort(([a], [b]) => a - b).map(([, item]) => item);
+            if (!emittedText) {
+              for (const item of outputArr) if (item?.type === 'message') {
+                for (const part of item.content || []) if (part?.type === 'output_text') yield { type: 'text_delta', text: part.text };
+              }
+            }
             for (const item of outputArr) {
               if (item?.type !== 'function_call') continue;
               const cid = item.call_id || item.id || '';
@@ -460,6 +509,9 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
               };
             }
 
+            const state = createProviderState({ context, identity: requestIdentity, items: outputArr, responseId: respObj.id });
+            if (state) yield { type: 'provider_state', providerState: state, providerStateBytes: providerStateBytes(state) };
+
             // Usage
             const usage = respObj.usage || {};
             yield {
@@ -469,6 +521,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
               cacheReadTokens: usage.input_tokens_details?.cached_tokens || 0,
               cacheWriteTokens: 0,
               cacheTokensAreIncludedInInput: true,
+              ...reasoningUsage(usage, 'openai-responses'),
             };
 
             yield {
@@ -527,12 +580,14 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
    * expose them, mirror the stream() instrumentation. Parity with
    * anthropic.js's `call()`.
    */
-  async call({ model, system, messages, maxTokens = 4096, effort, effortSource, effortContext = {}, extraBody, signal, onRequestStart }) {
+  async call({ model, system, messages, maxTokens = 4096, effort, effortSource, effortContext = {}, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRequestStart }) {
     if (signal?.aborted) throw new LLMAbortError();
 
+    const context = providerContext || createProviderContext({ protocol: 'openai-responses', baseUrl: this.#baseUrl, model });
+    const input = this.#translateInput(messages, context, requestIdentity);
     const body = {
       model,
-      input: this.#translateInput(messages),
+      input,
       max_output_tokens: maxTokens,
     };
     if (system) body.instructions = system;
@@ -549,6 +604,12 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     }
 
     if (extraBody) Object.assign(body, extraBody);
+    body.model = model; // Origin binding must describe the actual dispatched model.
+    applyResponsesContinuity(body, { context, identity: requestIdentity, input, onProviderDiagnostics });
+    const effortDecision = effortConstraint
+      ? enforceSubAgentEffortPayload(body, { model, protocol: 'openai-responses', effortContext, effortConstraint })
+      : captureEffortDecision({ body, model, protocol: 'openai-responses', effortContext, requested: effort, source: effortSource || 'scenario' });
+    onEffortDecision?.(effortDecision);
     const wireBody = toWellFormedJson(body);
 
     let response;
@@ -594,6 +655,8 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     const usage = result.usage || {};
     return {
       text,
+      providerState: ['completed', 'incomplete'].includes(result.status)
+        ? createProviderState({ context, identity: requestIdentity, items: result.output, responseId: result.id }) : null,
       stopReason: this.#mapStopReason(result, false),
       usage: {
         inputTokens: usage.input_tokens || 0,
@@ -601,6 +664,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
         cacheReadTokens: usage.input_tokens_details?.cached_tokens || 0,
         cacheWriteTokens: 0,
         cacheTokensAreIncludedInInput: true,
+              ...reasoningUsage(usage, 'openai-responses'),
       },
     };
   }

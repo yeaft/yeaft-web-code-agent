@@ -20,6 +20,7 @@ import {
 } from '../../web/components/UnifiedSessionList.js';
 import { openImagePreview } from '../../web/utils/imagePreview.js';
 import SidebarWorkCenter from '../../web/components/SidebarWorkCenter.js';
+import SessionSettingsModal from '../../web/components/SessionSettingsModal.js';
 import enMessages from '../../web/i18n/en.js';
 import zhCNMessages from '../../web/i18n/zh-CN.js';
 import { yeaftHistoryIdentityKey } from '../../web/stores/helpers/yeaft-history-identity.js';
@@ -116,7 +117,71 @@ globalThis.Pinia = {
   useSessionsStore: () => runtimeSessionsStore,
 };
 const { useChatStore } = await import('../../web/stores/chat.js');
-const { answerUserQuestion } = await import('../../web/stores/helpers/conversation.js');
+const { answerUserQuestion, resumeConversation } = await import('../../web/stores/helpers/conversation.js');
+
+describe('CLI resume identity', () => {
+  it.each(['claude-code', 'copilot'])('keeps other Agent/provider rows on a %s resume response', provider => {
+    const store = {
+      agents: [{ id: 'agent-a' }, { id: 'agent-b' }],
+      conversations: [
+        { id: 'other-agent', agentId: 'agent-b', provider, claudeSessionId: 'cli-id' },
+        { id: 'other-provider', agentId: 'agent-a', provider: provider === 'copilot' ? 'claude-code' : 'copilot', claudeSessionId: 'cli-id' },
+        { id: 'stale', agentId: 'agent-a', provider: provider === 'claude-code' ? undefined : provider, claudeSessionId: 'cli-id' },
+      ],
+      panels: [], messagesMap: {}, chatSessionState: {},
+      sendWsMessage: vi.fn(), addMessage: vi.fn(), saveOpenSessions: vi.fn(),
+    };
+    handleConversationResumed(store, {
+      conversationId: 'web-id', agentId: 'agent-a', provider,
+      claudeSessionId: 'cli-id', workDir: '/repo', dbMessages: [],
+    });
+    expect(store.conversations.map(row => row.id)).toEqual(['other-agent', 'other-provider', 'web-id']);
+    expect(store.sendWsMessage).toHaveBeenCalledWith({ type: 'select_conversation', conversationId: 'web-id' });
+  });
+
+  it.each(['claude-code', 'copilot'])('retains the hidden Web identity for %s on the selected Agent', provider => {
+    vi.useFakeTimers();
+    try {
+      const row = {
+        catalogKey: 'chat:web-id',
+        routeRef: { runtimeProvider: provider, agentId: 'agent-a', sessionId: 'web-id' },
+      };
+      const store = {
+        currentAgent: 'agent-a',
+        conversations: [
+          { id: 'other-agent', agentId: 'agent-b', provider, claudeSessionId: 'cli-id' },
+          { id: 'other-provider', agentId: 'agent-a', provider: provider === 'copilot' ? 'claude-code' : 'copilot', claudeSessionId: 'cli-id' },
+          { id: 'web-id', agentId: 'agent-a', provider, claudeSessionId: 'cli-id' },
+        ],
+        hiddenSessionCatalog: [row],
+        restoreCatalogSession: vi.fn(() => true),
+        sendWsMessage: vi.fn(),
+      };
+      resumeConversation(store, 'cli-id', '/repo', null, { provider });
+      expect(store.restoreCatalogSession).toHaveBeenCalledWith(row);
+      expect(store.sendWsMessage).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'resume_conversation', conversationId: 'web-id', claudeSessionId: 'cli-id', agentId: 'agent-a', provider,
+      }));
+
+      store.restoreCatalogSession.mockReturnValue(false);
+      store.sendWsMessage.mockClear();
+      resumeConversation(store, 'cli-id', '/repo', null, { provider });
+      expect(store.sendWsMessage).not.toHaveBeenCalled();
+
+      store.hiddenSessionCatalog = [];
+      resumeConversation(store, 'cli-id', '/repo', null, { provider });
+      expect(store.sendWsMessage).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'web-id' }));
+
+      store.sendWsMessage.mockClear();
+      resumeConversation(store, 'unknown-cli-id', '/repo', null, { provider });
+      expect(store.sendWsMessage).toHaveBeenCalledWith(expect.objectContaining({ claudeSessionId: 'unknown-cli-id' }));
+      expect(store.sendWsMessage.mock.calls[0][0]).not.toHaveProperty('conversationId');
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+});
 const { default: AssistantTurn } = await import('../../web/components/AssistantTurn.js');
 const { default: MessageItem } = await import('../../web/components/MessageItem.js');
 const { useSessionsStore } = await import('../../web/stores/sessions.js');
@@ -126,8 +191,8 @@ const { default: ChatPage } = await import('../../web/components/ChatPage.js');
 const { default: YeaftSidebar } = await import('../../web/components/YeaftSidebar.js');
 const { default: WorkCenterPage } = await import('../../web/components/WorkCenterPage.js');
 const { default: PluginCenterPage } = await import('../../web/components/PluginCenterPage.js');
+const { sortYeaftConversationRows } = await import('../../web/stores/helpers/conversation-repository.js');
 const {
-  __testSortYeaftRowsBySequence,
   handleConversationCreated,
   handleConversationResumed,
   handleSyncMessagesResult,
@@ -387,7 +452,7 @@ describe('message flow regressions', () => {
     store.currentAgentInfo = {
       id: 'agent-files',
       workDir: '/workspace/files',
-      capabilities: ['file_reference_resolution', 'workbench_session_routes'],
+      capabilities: ['file_editor', 'file_reference_resolution', 'workbench_session_routes'],
     };
     store.workbenchRouteProtocolSupported = true;
     store.yeaftAgentId = 'agent-files';
@@ -409,6 +474,33 @@ describe('message flow regressions', () => {
       conversationId: 'yeaft-agent-files',
       workDir: '/workspace/files',
     });
+  });
+
+  it('sends response image reads through the active Session route', () => {
+    storeFactories.clear();
+    runtimeSessionsStore.sessionList = [{ id: 'session-files', agentId: 'agent-files' }];
+    const store = useChatStore();
+    store.currentView = 'yeaft';
+    store.currentAgent = 'agent-files';
+    store.currentAgentInfo = {
+      id: 'agent-files', workDir: '/workspace/files',
+      capabilities: ['file_editor', 'workbench_session_routes', 'response_image_preview'],
+    };
+    store.workbenchRouteProtocolSupported = true;
+    store.yeaftAgentId = 'agent-files';
+    store.yeaftConversationId = 'yeaft-agent-files';
+    store.yeaftConversationIdsByAgent = { 'agent-files': 'yeaft-agent-files' };
+    store.yeaftActiveSessionFilter = 'session-files';
+    store.sendWsMessage = vi.fn(() => true);
+
+    expect(store.requestMessageImagePreview('screens/result.png')).toEqual(expect.any(String));
+    expect(store.sendWsMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'read_file', responseImagePreview: true, filePath: 'screens/result.png',
+      agentId: 'agent-files', conversationId: 'yeaft-agent-files', workDir: '/workspace/files',
+      workbenchRoute: {
+        runtimeProvider: 'yeaft', agentId: 'agent-files', sessionId: 'session-files',
+      },
+    }));
   });
 
   it.each([
@@ -435,12 +527,31 @@ describe('message flow regressions', () => {
     // Capability refresh/reconnect must allow resolution again without clearing
     // Session caches or asking the user to reload the page.
     store.workbenchRouteProtocolSupported = true;
-    store.currentAgentInfo.capabilities = ['file_reference_resolution', 'workbench_session_routes'];
+    store.currentAgentInfo.capabilities = ['file_editor', 'file_reference_resolution', 'workbench_session_routes'];
     expect(store.resolveMessageFileReferences(['src/file.js'])).toEqual(expect.any(String));
     expect(store.sendWsMessage).toHaveBeenCalledOnce();
     expect(store.sendWsMessage.mock.calls[0][0].workbenchRoute).toEqual({
       runtimeProvider: 'yeaft', agentId: 'agent-files', sessionId: 'session-files',
     });
+  });
+
+  it('uses the owning Agent default for an empty Session cwd, never another Agent or runtime data', () => {
+    storeFactories.clear();
+    runtimeSessionsStore.sessionList = [{ id: 'session-files', agentId: 'agent-files', workDir: '  ' }];
+    const store = useChatStore();
+    store.currentView = 'yeaft';
+    store.currentAgent = 'other-agent';
+    store.currentAgentInfo = { id: 'other-agent', workDir: '/other/workspace' };
+    store.agents = [{ id: 'agent-files', workDir: '/workspace/default', capabilities: ['file_reference_resolution'] }];
+    store.yeaftActiveSessionFilter = 'session-files';
+    store.yeaftSessionAgentById = { 'session-files': 'agent-files' };
+    store.yeaftYeaftDir = '/instance/runtime-data';
+    expect(store.effectiveWorkDir).toBe('/workspace/default');
+    runtimeSessionsStore.sessionList[0].workDir = '/workspace/session';
+    expect(store.effectiveWorkDir).toBe('/workspace/session');
+    runtimeSessionsStore.sessionList[0].workDir = '';
+    store.agents = [];
+    expect(store.effectiveWorkDir).toBe('');
   });
 
   it('changes the file-reference resolution context when route readiness changes', () => {
@@ -473,7 +584,10 @@ describe('message flow regressions', () => {
     const readyKey = store.fileReferenceResolutionContextKey;
     expect(readyKey).not.toBe(connectingKey);
 
-    store.yeaftYeaftDir = '/workspace/ready';
+    store.yeaftYeaftDir = '/instance/runtime-data';
+    expect(store.effectiveWorkDir).toBe('/workspace/files');
+    expect(store.fileReferenceResolutionContextKey).toBe(readyKey);
+    store.currentAgentInfo.workDir = '/workspace/ready';
     const workDirKey = store.fileReferenceResolutionContextKey;
     expect(workDirKey).not.toBe(readyKey);
 
@@ -523,7 +637,7 @@ describe('message flow regressions', () => {
     }
   });
 
-  it('keeps a submitted AskUser answer through replay until the Agent confirms it', () => {
+  it('restores AskUser routing and keeps submission distinct from confirmation across remount and retries', async () => {
     vi.useFakeTimers();
     try {
       const conversationId = 'yeaft-ask-replay';
@@ -553,12 +667,71 @@ describe('message flow regressions', () => {
       const sendWsMessage = vi.fn(() => true);
       store.sendWsMessage = sendWsMessage;
 
-      answerUserQuestion(store, 'ask-replay', { 'Continue?': 'Yes' }, conversationId);
-      expect(store.messagesMap[conversationId][0]).toMatchObject({
-        askPending: true,
-        pendingAnswers: { 'Continue?': 'Yes' },
-        askRequestId: 'ask-replay',
-      });
+      const { default: AskCard } = await import('../../web/components/AskCard.js');
+      const row = store.messagesMap[conversationId][0];
+      // A replay after Session switching must hydrate history's missing thread.
+      delete row.threadId;
+      row.isHistory = true;
+      row.hasResult = true;
+      const envelope = { type: 'yeaft_output', agentId: 'agent-ask', conversationId, sessionId,
+        vpId: 'vp-ask', turnId: 'turn-ask', threadId: 'branch-ask' };
+      store.handleYeaftOutput({ ...envelope, event: {
+        type: 'ask_user_question', replay: true, requestId: 'ask-replay', toolCallId: 'call-ask-replay',
+        questions: row.askQuestions,
+      } });
+      expect(row).toMatchObject({ threadId: 'branch-ask', agentId: 'agent-ask', hasResult: false, isHistory: false });
+      // Another turn on the shared Agent conversation must not expire this prompt.
+      for (const sibling of [
+        { sessionId: 'other-session' },
+        { vpId: 'other-vp' },
+        { turnId: 'other-turn' },
+        { threadId: 'other-thread' },
+      ]) {
+        store.handleYeaftOutput({ ...envelope, ...sibling, data: { type: 'result' } });
+        expect(row).toMatchObject({ hasResult: false, askRequestId: 'ask-replay' });
+        expect(row.askExpired).not.toBe(true);
+      }
+      // The selected Session is not the question's routing identity.
+      store.yeaftActiveSessionFilter = 'other-session';
+      store.processingConversations = {};
+      vi.advanceTimersByTime(3 * 60_000);
+      const mountCard = () => mount(AskCard, { props: { askMsg: row,
+        onSubmit: (id, answers) => answerUserQuestion(store, id, answers, conversationId) },
+        global: { mocks: { $t: key => enMessages[key] || key } } });
+      let card = mountCard();
+      try {
+        sendWsMessage.mockReturnValueOnce(false);
+        await card.get('.ask-opt').trigger('click');
+        await card.get('.ask-submit').trigger('click');
+        expect(card.get('[role="alert"]').text()).toContain('not sent');
+        expect(row.askPending).not.toBe(true);
+        await card.get('.ask-submit').trigger('click');
+        expect(sendWsMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+          sessionId, agentId: 'agent-ask', threadId: 'branch-ask', turnId: 'turn-ask',
+        }));
+        expect(store.processingConversations[conversationId]).not.toBe(true);
+        expect(card.find('.ask-summary').exists()).toBe(false);
+        expect(card.get('[role="status"]').text()).toContain('Waiting for Agent confirmation');
+        expect(row).toMatchObject({ askPending: true, pendingAnswers: { 'Continue?': 'Yes' } });
+        card.unmount();
+        card = mountCard();
+        expect(card.find('.ask-summary').exists()).toBe(false);
+        expect(card.find('.btn-secondary').exists()).toBe(false);
+        vi.advanceTimersByTime(15_001);
+        await Vue.nextTick();
+        expect(card.get('[role="status"]').text()).toContain('No confirmation yet');
+        await card.get('.btn-secondary').trigger('click');
+        expect(sendWsMessage).toHaveBeenCalledTimes(3);
+        expect(card.find('.btn-secondary').exists()).toBe(false);
+        store.handleYeaftOutput({ ...envelope, event: { type: 'ask_user_answer_rejected',
+          requestId: 'ask-replay', toolCallId: 'call-ask-replay', reason: 'agent_unavailable' } });
+        await Vue.nextTick();
+        expect(card.get('[role="status"]').text()).toContain('Agent is unavailable');
+        await card.get('.btn-secondary').trigger('click');
+        expect(sendWsMessage).toHaveBeenCalledTimes(4);
+      } finally {
+        card.unmount();
+      }
 
       vi.advanceTimersByTime(10_001);
       expect(store.messagesMap[conversationId][0]).toMatchObject({
@@ -574,7 +747,7 @@ describe('message flow regressions', () => {
         sessionId,
         vpId: 'vp-ask',
         turnId: 'turn-ask',
-        threadId: 'main',
+        threadId: 'branch-ask',
         event: {
           type: 'ask_user_question',
           requestId: 'ask-replay',
@@ -597,7 +770,7 @@ describe('message flow regressions', () => {
         sessionId,
         vpId: 'vp-ask',
         turnId: 'turn-ask',
-        threadId: 'main',
+        threadId: 'branch-ask',
         event: {
           type: 'ask_user_answered',
           requestId: 'ask-replay',
@@ -612,7 +785,27 @@ describe('message flow regressions', () => {
         askPending: false,
         askRequestId: null,
       });
+      const confirmedCard = mountCard();
+      expect(confirmedCard.get('.ask-summary').text()).toContain('Yes');
+      confirmedCard.unmount();
+      // A stale rejection must not undo a confirmed answer.
+      store.handleYeaftOutput({ ...envelope, event: { type: 'ask_user_answer_rejected',
+        requestId: 'ask-replay', toolCallId: 'call-ask-replay', reason: 'unavailable' } });
+      expect(row.askAnswered).toBe(true);
+      for (const reason of ['unavailable', 'identity_mismatch']) {
+        Object.assign(row, { askAnswered: false, selectedAnswers: null, askPending: true,
+          askRequestId: 'ask-rejected', pendingAnswers: { 'Continue?': 'Yes' } });
+        store.handleYeaftOutput({ ...envelope, event: { type: 'ask_user_answer_rejected',
+          requestId: 'ask-rejected', toolCallId: 'call-ask-replay', reason } });
+        expect(row).toMatchObject({ askExpired: true, askPending: false, askError: reason, askRequestId: null });
+        const expiredCard = mountCard();
+        expect(expiredCard.find('.ask-summary').exists()).toBe(false);
+        expect(expiredCard.get('.ask-expired-hint').text()).toMatch(/expired|no longer matches/);
+        expiredCard.unmount();
+        row.askExpired = false;
+      }
     } finally {
+      vi.clearAllTimers();
       vi.useRealTimers();
     }
   });
@@ -1308,6 +1501,53 @@ describe('message flow regressions', () => {
     expect(store.listWorkItems).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps live response timing and final token metadata on the same turn identity', () => {
+    storeFactories.clear();
+    const store = useChatStore();
+    const agentId = 'agent-response-meta';
+    const sessionId = 'session-response-meta';
+    const turnId = 'turn-response-meta';
+
+    store.currentView = 'yeaft';
+    store.currentAgent = agentId;
+    store.activeVpTurns = {};
+    store.yeaftDebugTurnsById = {};
+    store.yeaftDebugTurnOrder = [];
+
+    store.handleYeaftOutput({
+      agentId,
+      event: { type: 'vp_turn_start', sessionId, vpId: 'omni', turnId, ts: 1_000 },
+    });
+    expect(Object.values(store.activeVpTurns)).toContainEqual(expect.objectContaining({
+      agentId, sessionId, turnId, startedAt: 1_000,
+    }));
+
+    store.handleYeaftOutput({
+      agentId,
+      event: { type: 'turn_open', sessionId, vpId: 'omni', turnId, at: 1_200 },
+    });
+    expect(Object.values(store.activeVpTurns)).toContainEqual(expect.objectContaining({
+      turnId, startedAt: 1_200,
+    }));
+
+    store.handleYeaftOutput({
+      agentId,
+      event: {
+        type: 'turn_close', sessionId, vpId: 'omni', turnId,
+        totalMs: 5_234, inputTokens: 1_200, outputTokens: 34, totalTokens: 1_234,
+        loopCount: 3, model: 'provider/model-v2',
+      },
+    });
+    expect(store.yeaftDebugTurnsById[turnId]).toMatchObject({
+      totalMs: 5_234,
+      inputTokens: 1_200,
+      outputTokens: 34,
+      totalTokens: 1_234,
+      loopCount: 3,
+      model: 'provider/model-v2',
+    });
+  });
+
   it('prunes completed Yeaft resident turns at terminal metadata boundaries', async () => {
     const { useChatStore } = await import('../../web/stores/chat.js');
     const store = useChatStore();
@@ -1640,6 +1880,20 @@ describe('message flow regressions', () => {
     expect(isExternalOutput('https://example.test/untyped')).toBe(false);
   });
 
+  it('uses only Agent-provided goal progress and canonical delivered responses', () => {
+    const goalProgress = selected => WorkCenterPage.computed.goalProgress.call({ selected });
+    const finalResponses = selected => WorkCenterPage.computed.finalResponses.call({ selected });
+    const oldItem = { acceptanceCriteria: ['Done'], actionCount: 3, completedActionCount: 3 };
+    expect(goalProgress(oldItem)).toBeNull();
+    expect(goalProgress({ goalProgress: {} })).toBeNull();
+    const progress = { criteria: [], completedCriteriaCount: 0, totalCriteriaCount: 0, remainingCriteria: [] };
+    expect(goalProgress({ goalProgress: progress })).toBe(progress);
+    expect(finalResponses(oldItem)).toEqual([]);
+    expect(finalResponses({ finalResult: { summary: 'A Coordinator message is not a delivered answer' } })).toEqual([]);
+    const response = { runId: 'run-1', summary: 'Canonical answer', evidence: [{ kind: 'text', label: 'Observed result' }] };
+    expect(finalResponses({ finalResult: { responses: [null, { summary: '  ' }, response] } })).toEqual([response]);
+  });
+
   it('keeps Work Center inputs available and detail layouts responsive', async () => {
     const component = readFileSync(resolve(import.meta.dirname, '../../web/components/ChatInput.js'), 'utf8');
     const messageComposer = readFileSync(resolve(import.meta.dirname, '../../web/components/MessageComposer.js'), 'utf8');
@@ -1777,10 +2031,42 @@ describe('message flow regressions', () => {
       initialIndex: 0,
       trigger: previewTrigger,
     });
-    expect(previewOverlay.querySelector('.image-preview-img').getAttribute('src')).toBe('/preview-a.png');
+    const previewImage = previewOverlay.querySelector('.image-preview-img');
+    expect(previewImage.getAttribute('src')).toBe('/preview-a.png');
     expect(previewOverlay.querySelector('.image-preview-position').textContent).toBe('1 / 3');
+    const zoomControls = previewOverlay.querySelector('.image-preview-zoom-controls');
+    expect(zoomControls).not.toBeNull();
+    expect(zoomControls.querySelector('.image-preview-zoom-reset').textContent).toBe('100%');
+    Object.defineProperties(previewOverlay, {
+      clientWidth: { configurable: true, value: 800 },
+      clientHeight: { configurable: true, value: 600 },
+    });
+    Object.defineProperties(previewImage, {
+      offsetWidth: { configurable: true, value: 800 },
+      offsetHeight: { configurable: true, value: 600 },
+    });
+    previewOverlay.getBoundingClientRect = () => ({ left: 0, top: 0, width: 800, height: 600 });
+    const zoomEvent = new WheelEvent('wheel', {
+      deltaY: -100,
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperties(zoomEvent, {
+      clientX: { configurable: true, value: 600 },
+      clientY: { configurable: true, value: 300 },
+    });
+    previewImage.dispatchEvent(zoomEvent);
+    expect(zoomEvent.defaultPrevented).toBe(true);
+    expect(zoomControls.querySelector('.image-preview-zoom-reset').textContent).toBe('125%');
+    expect(previewImage.style.transform).toBe('translate(-50px, 0px) scale(1.25)');
+    expect(previewImage.classList.contains('is-zoomed')).toBe(true);
+    zoomControls.querySelector('.image-preview-zoom-reset').click();
+    expect(zoomControls.querySelector('.image-preview-zoom-reset').textContent).toBe('100%');
+    zoomControls.querySelectorAll('.image-preview-zoom-button')[1].click();
+    expect(zoomControls.querySelector('.image-preview-zoom-reset').textContent).toBe('125%');
     previewOverlay.querySelector('.image-preview-next').click();
-    expect(previewOverlay.querySelector('.image-preview-img').getAttribute('src')).toBe('/preview-b.png');
+    expect(previewImage.getAttribute('src')).toBe('/preview-b.png');
+    expect(previewImage.style.transform).toBe('translate(0px, 0px) scale(1)');
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
     expect(previewOverlay.querySelector('.image-preview-img').getAttribute('src')).toBe('/preview-a.png');
     previewOverlay.querySelector('.image-preview-previous').click();
@@ -1970,6 +2256,7 @@ describe('message flow regressions', () => {
     expect(enMessages['sidebar.projects.assignFailed']).toContain('{message}');
     expect(zhCNMessages['sidebar.projects.assignFailed']).toContain('{message}');
     expect(sidebar.get('.sidebar-navigation').element.children[0].classList).toContain('sidebar-primary-actions');
+    expect(sidebar.findComponent(SidebarWorkCenter).exists()).toBe(false);
     expect(sidebar.get('.sidebar-navigation').element.children[1].classList).toContain('sidebar-session-results');
     expect(sidebar.get('.sidebar-session-results').element.children[0].classList).toContain('projects-section');
     expect(sidebar.get('.sidebar-session-results').element.children[1].classList).toContain('recents-section');
@@ -2681,12 +2968,27 @@ describe('message flow regressions', () => {
       props: { agents: [] },
       global: { mocks: { $t: key => key } },
     });
-    expect(fallbackWorkCenter.get('.sidebar-work-center-trigger').attributes('disabled')).toBeDefined();
+    expect(fallbackWorkCenter.get('.sidebar-work-center-trigger').attributes('disabled')).toBeUndefined();
     expect(fallbackWorkCenter.get('.sidebar-work-center-icon path').attributes('d'))
       .toBe('M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 5v2h10V8H7zm0 4v2h7v-2H7zm0 4v2h5v-2H7z');
-    expect(component).toContain('M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 5v2h10V8H7zm0 4v2h7v-2H7zm0 4v2h5v-2H7z');
+    expect(component).not.toContain('M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 5v2h10V8H7zm0 4v2h7v-2H7zm0 4v2h5v-2H7z');
     await fallbackWorkCenter.get('.sidebar-work-center-trigger').trigger('click');
-    expect(fallbackWorkCenter.emitted('open')).toBeUndefined();
+    expect(fallbackWorkCenter.emitted('open')).toEqual([[null]]);
+    expect(fallbackWorkCenter.get('.sidebar-icon-btn').attributes('aria-label')).toBe('Work Center');
+    await fallbackWorkCenter.setProps({ collapsed: true });
+    expect(fallbackWorkCenter.find('.session-tab-bar').exists()).toBe(false);
+    const railEntry = fallbackWorkCenter.get('button.collapsed-icon-btn');
+    expect(railEntry.attributes('aria-label')).toBe('Work Center');
+    expect(railEntry.attributes('aria-expanded')).toBeUndefined();
+    await railEntry.trigger('click');
+    expect(fallbackWorkCenter.emitted('open')).toEqual([[null], [null]]);
+    await fallbackWorkCenter.setProps({ agents: [
+      { id: 'unsupported', online: true, capabilities: [] },
+      { id: 'offline', online: false, capabilities: ['work_center'] },
+      { id: 'available', online: true, capabilities: ['work_center'] },
+    ] });
+    await railEntry.trigger('click');
+    expect(fallbackWorkCenter.emitted('open').at(-1)).toEqual(['available']);
     fallbackWorkCenter.unmount();
 
     const originalFetch = globalThis.fetch;
@@ -2818,8 +3120,7 @@ describe('message flow regressions', () => {
       runtimeProvider: 'copilot',
       routeRef: { runtimeProvider: 'copilot', agentId: 'agent-a', sessionId: 'legacy-chat' },
     }));
-    await chatPage.get('.sidebar-work-center-header-btn').trigger('click');
-    expect(parentStore.enterWorkCenter).toHaveBeenCalledWith('agent-a');
+    expect(chatPage.find('.sidebar-work-center-header-btn').exists()).toBe(false);
     chatPage.unmount();
 
     parentStore.currentView = 'yeaft';
@@ -2890,26 +3191,53 @@ describe('message flow regressions', () => {
         sessionId: 'legacy-yeaft',
       },
     }));
+    parentStore.agents = [{ id: 'agent-old', name: 'Old Agent', online: true, capabilities: [] }];
+    parentStore.workCenterAgentId = null;
+    parentStore.enterWorkCenter.mockClear();
+    await Vue.nextTick();
+    yeaftSidebar.vm.onOpenWorkCenter(null);
+    expect(parentStore.enterWorkCenter).toHaveBeenCalledOnce();
+    expect(parentStore.enterWorkCenter).toHaveBeenCalledWith(null);
     yeaftSidebar.unmount();
     dialog.unmount();
-    globalThis.fetch = originalFetch;
     delete globalThis.Pinia.useChatStore;
     storeFactories.clear();
+    // Both slot surfaces must still render when the optional Pinia host is absent.
+    const noPiniaSidebar = mount(YeaftSidebar, {
+      props: { collapsed: true },
+      global: {
+        mocks: { $t: key => key },
+        stubs: {
+          SessionSidebarShell: shellStub,
+          SessionCreateModal: true,
+          SidebarModeToggle: true,
+          SidebarAgentHeader: true,
+          SidebarWorkCenter: true,
+        },
+      },
+    });
+    expect(noPiniaSidebar.vm.chatStore).toBeNull();
+    expect(noPiniaSidebar.find('.sidebar-collapsed-bar').exists()).toBe(true);
+    expect(noPiniaSidebar.findComponent(SidebarWorkCenter).exists()).toBe(false);
+    noPiniaSidebar.unmount();
+    globalThis.fetch = originalFetch;
 
     expect(chatPageSource).toContain('@create="onUnifiedCreate"');
     expect(chatPageSource).toContain('@create-in-project="onUnifiedCreateInProject"');
     expect(chatPageSource).not.toContain('</template>\n      </main>');
-    expect(chatPageSource).toContain('sidebar-work-center-header-btn');
+    expect(chatPageSource).not.toContain('sidebar-work-center-header-btn');
+    expect(chatPageSource).not.toContain('workCenterAgents');
+    expect(chatPageSource).not.toContain('openWorkCenter');
     expect(yeaftSidebarSource).toContain(':is-session-unread="isCatalogSessionUnread"');
     expect(chatPageSource).toContain('@action="onUnifiedSessionAction"');
     expect(yeaftSidebarSource).toContain('@action="onUnifiedSessionAction"');
     expect(yeaftSidebarSource).toContain('@create="onUnifiedCreate"');
     expect(yeaftSidebarSource).toContain('@create-in-project="onUnifiedCreateInProject"');
-    expect(yeaftSidebarSource).toContain('sidebar-work-center-header-btn');
+    expect(yeaftSidebarSource).not.toContain('sidebar-work-center-header-btn');
     const workItemIconPath = 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 5v2h10V8H7zm0 4v2h7v-2H7zm0 4v2h5v-2H7z';
-    expect(component).toContain(workItemIconPath);
-    expect(chatPageSource).toContain(workItemIconPath);
-    expect(yeaftSidebarSource).toContain(workItemIconPath);
+    expect(component).not.toContain(workItemIconPath);
+    expect(chatPageSource).not.toContain(workItemIconPath);
+    expect(yeaftSidebarSource).not.toContain(workItemIconPath);
     expect(chatPageSource).toContain(':project-store="store"');
     expect(chatPageSource).toContain(':active-route="store.activeSessionRoute"');
     expect(yeaftSidebarSource).toContain(':project-store="chatStore"');
@@ -3144,7 +3472,7 @@ describe('message flow regressions', () => {
     expect(component).toContain(':show-stop="isStopVisible"');
     expect(messageComposer).toContain('v-if="showStop"');
     expect(messageComposer).not.toContain('v-else\n            type="button"\n            class="send-btn"');
-    expect(component).toContain('if (isCompacting.value) return false;');
+    expect(component).toContain('if (props.disabled || isCompacting.value) return false;');
     expect(component).not.toContain('if (isCompacting.value || isStopVisible.value) return false;');
     expect(component).toContain('if (!canSend.value) return;');
     expect(component).not.toContain('if (isStopVisible.value || !canSend.value) return;');
@@ -3186,6 +3514,7 @@ describe('message flow regressions', () => {
       workCenterListMoreLoadingByAgent: {},
       workCenterSettingsByAgent: {},
       workCenterRuntimeByAgent: {},
+      workCenterFeatureSettingsByAgent: {},
       workCenterItemsByAgent: { 'agent-a': [] },
       workCenterLoadingByAgent: {},
       workCenterLoadedByAgent: {},
@@ -3205,6 +3534,7 @@ describe('message flow regressions', () => {
       workCenterCreateDraft: null,
       listWorkItems: vi.fn(() => Promise.resolve([])),
       loadWorkCenterSettings: vi.fn(() => Promise.resolve(null)),
+      loadWorkCenterFeatureSettings: vi.fn(() => Promise.resolve(null)),
       enterWorkCenter: vi.fn(),
       toggleSessionSidebar: vi.fn(),
     };
@@ -3227,6 +3557,78 @@ describe('message flow regressions', () => {
     await WorkCenterPage.methods.refreshWorkCenterRuntime.call(workCenterPage.vm, 'agent-a');
     expect(workCenterStore.refreshWorkCenterRuntime).toHaveBeenCalledOnce();
     expect(workCenterStore.refreshWorkCenterRuntime).toHaveBeenCalledWith('agent-a');
+
+    const emptyWorkCenterStore = Vue.reactive({
+      ...workCenterStore,
+      workCenterAgentId: null,
+      agents: [{ id: 'agent-old', name: 'Old Agent', online: true, capabilities: [] }],
+      workCenterFeatureSettingsByAgent: {},
+      listWorkItems: vi.fn(() => Promise.resolve([])),
+      loadWorkCenterSettings: vi.fn(() => Promise.resolve(null)),
+    });
+    globalThis.Pinia.useChatStore = () => emptyWorkCenterStore;
+    const emptyWorkCenterPage = mount(WorkCenterPage, {
+      global: {
+        mocks: { $t: key => key },
+        stubs: {
+          WorkCenterActionDetail: true,
+          WorkCenterSettingsModal: true,
+          LlmTab: true,
+        },
+      },
+    });
+    expect(emptyWorkCenterPage.text()).toContain('The online Agents do not support Work Center settings');
+    expect(emptyWorkCenterPage.text()).toContain('Open Agent settings to upgrade');
+    expect(emptyWorkCenterPage.find('.work-center-header-actions').exists()).toBe(false);
+    expect(emptyWorkCenterPage.find('.work-center-agent-picker').exists()).toBe(false);
+    expect(emptyWorkCenterPage.find('.work-center-body').exists()).toBe(false);
+    expect(emptyWorkCenterStore.listWorkItems).not.toHaveBeenCalled();
+    expect(emptyWorkCenterStore.loadWorkCenterSettings).not.toHaveBeenCalled();
+    expect(emptyWorkCenterStore.loadWorkCenterFeatureSettings).not.toHaveBeenCalled();
+    await emptyWorkCenterPage.vm.refresh();
+    expect(emptyWorkCenterStore.listWorkItems).not.toHaveBeenCalled();
+    emptyWorkCenterStore.enterWorkCenter.mockClear();
+    emptyWorkCenterStore.agents = [{ id: 'agent-new', name: 'New Agent', online: true, capabilities: ['work_center'] }];
+    await Vue.nextTick();
+    expect(emptyWorkCenterStore.enterWorkCenter).toHaveBeenCalledWith('agent-new');
+    emptyWorkCenterPage.unmount();
+
+    let rejectFeatureLoad;
+    const retryWorkCenterStore = Vue.reactive({
+      ...workCenterStore,
+      workCenterAgentId: null,
+      agents: [{
+        id: 'agent-configurable', name: 'Configurable Agent', online: true,
+        capabilities: ['work_center_feature_settings'],
+      }],
+      workCenterFeatureSettingsByAgent: {},
+      loadWorkCenterFeatureSettings: vi.fn(() => new Promise((resolve, reject) => {
+        rejectFeatureLoad = reject;
+      })),
+    });
+    globalThis.Pinia.useChatStore = () => retryWorkCenterStore;
+    const retryWorkCenterPage = mount(WorkCenterPage, {
+      global: {
+        mocks: { $t: key => key },
+        stubs: {
+          WorkCenterActionDetail: true,
+          WorkCenterSettingsModal: true,
+          AgentSettingsPanel: true,
+          LlmTab: true,
+        },
+      },
+    });
+    await Vue.nextTick();
+    expect(retryWorkCenterPage.text()).toContain('Checking Work Center availability');
+    rejectFeatureLoad(new Error('timed out'));
+    await vi.waitFor(() => {
+      expect(retryWorkCenterPage.text()).toContain('Could not check Work Center status');
+    });
+    expect(retryWorkCenterPage.text()).not.toContain('Checking Work Center availability');
+    expect(retryWorkCenterPage.text()).not.toContain('The online Agents do not support Work Center settings');
+    expect(retryWorkCenterPage.text()).toContain('Retry status check');
+    retryWorkCenterPage.unmount();
+    globalThis.Pinia.useChatStore = () => workCenterStore;
 
     const pluginConfigRequests = [];
     const pluginStore = Vue.reactive({
@@ -5223,15 +5625,31 @@ describe('message flow regressions', () => {
       { id: 'agent-b', online: true, capabilities: ['work_center'] },
     ];
     store.workCenterAgentId = 'stale-agent';
+    store.currentAgent = 'agent-a';
     store.workCenterOpen = true;
     store.selectAgent = vi.fn();
     store.listWorkItems = vi.fn(() => Promise.resolve([]));
     expect(store.enterWorkCenter('stale-agent')).toBe(true);
     expect(store.workCenterAgentId).toBe('agent-b');
+    expect(store.currentAgent).toBe('agent-a');
+    expect(store.selectAgent).not.toHaveBeenCalled();
     store.agents = [];
-    expect(store.enterWorkCenter('stale-agent')).toBe(false);
-    expect(store.workCenterOpen).toBe(false);
+    store.listWorkItems.mockClear();
+    expect(store.enterWorkCenter('stale-agent')).toBe(true);
+    expect(store.workCenterOpen).toBe(true);
     expect(store.workCenterAgentId).toBe(null);
+    expect(store.listWorkItems).not.toHaveBeenCalled();
+    const previousUrl = window.location.href;
+    const previousHistoryState = window.history.state;
+    window.history.replaceState({ marker: 'chat', workCenter: true }, '',
+      '?sessionId=original&workItemId=item&workAgentId=agent-b&workContent=action-list#chat');
+    store.leaveWorkCenter();
+    expect(store.workCenterOpen).toBe(false);
+    expect(store.currentAgent).toBe('agent-a');
+    expect(window.location.search).toBe('?sessionId=original');
+    expect(window.location.hash).toBe('#chat');
+    expect(window.history.state).toMatchObject({ marker: 'chat', workCenter: false, workCenterContent: false });
+    window.history.replaceState(previousHistoryState, '', previousUrl);
 
     const wrapper = mount(UnifiedSessionList, {
       attachTo: document.body,
@@ -5823,19 +6241,35 @@ describe('message flow regressions', () => {
     expect(exactModal.vm.hiddenSessions).toBeUndefined();
     expect(exactModal.text()).not.toContain('sidebar.sessions.hidden');
 
-    // Hiding only changes the sidebar catalog. The folder result remains a
-    // directly openable current Session and must not send restore/unhide writes.
+    // Hiding only changes the sidebar catalog. Selecting that current Session
+    // from the create/restore modal must reverse the hidden metadata before it
+    // opens the preserved identity. The restored row keeps its renamed catalog
+    // title and emits `created` so the "add Session to Project" entry point can
+    // run its normal move_session callback.
+    hiddenRow.title = 'Inv';
+    exactChatStore.hiddenSessionCatalog = [{ ...hiddenRow, hidden: true }];
     exactModal.vm.scannedSessions = [{
-      id: 'grp_default', name: 'B default', agentId: 'agent-b', workDir: '/repo-b',
+      id: 'grp_default', name: 'Inv', agentId: 'agent-b', workDir: '/repo-b',
     }];
     exactSessionsStore.applySnapshot([], 'agent-b');
     exactChatStore.sendWsMessage.mockClear();
     exactModal.vm.selectSession(exactModal.vm.sessionsInDir[0]);
     expect(exactChatStore.sendWsMessage.mock.calls.map(call => call[0].type)).not.toContain('yeaft_restore_session');
-    expect(exactChatStore.sendWsMessage.mock.calls.map(call => call[0].type)).not.toContain('set_session_ui_metadata');
-    expect(exactChatStore.hiddenSessionCatalog).toEqual([
-      expect.objectContaining({ catalogKey: hiddenRow.catalogKey, hidden: true }),
+    expect(exactChatStore.sendWsMessage.mock.calls.map(call => call[0])).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'set_session_ui_metadata',
+        catalogKey: hiddenRow.catalogKey,
+        routeRef: hiddenRow.routeRef,
+        hidden: false,
+      }),
+    ]));
+    expect(exactChatStore.hiddenSessionCatalog).toEqual([]);
+    expect(exactChatStore.sessionCatalog).toEqual([
+      expect.objectContaining({ catalogKey: hiddenRow.catalogKey, title: 'Inv', hidden: false }),
     ]);
+    expect(exactModal.emitted('created')?.at(-1)?.[0]).toEqual(expect.objectContaining({
+      id: 'grp_default', name: 'Inv', agentId: 'agent-b',
+    }));
 
     exactChatStore.sendWsMessage.mockClear();
     exactChatStore.sendYeaftSessionMessage({ groupId: 'grp_default', text: 'route only to B' });
@@ -5866,6 +6300,194 @@ describe('message flow regressions', () => {
     window.Pinia = originalWindowPinia;
 
     wrapper.unmount();
+  });
+
+  it('copies only the active Yeaft Session and opens the returned identity', async () => {
+    storeFactories.clear();
+    const store = useChatStore();
+    const realSessionCrudRequest = store.sessionCrudRequest;
+    store.connectionState = 'connected';
+    store.agents = [{ id: 'agent-a', online: true }];
+    store.sessionCrudRequest = vi.fn(async () => ({
+      ok: true,
+      op: 'copy',
+      session: { id: 'copied-session', name: 'Source copy', agentId: 'agent-a' },
+    }));
+    store.openCatalogSession = vi.fn(() => true);
+    const row = {
+      catalogKey: 'yeaft:agent-a:source-session',
+      runtimeProvider: 'yeaft',
+      routeRef: { runtimeProvider: 'yeaft', agentId: 'agent-a', sessionId: 'source-session' },
+      title: 'Source',
+      availability: 'online',
+    };
+
+    await expect(store.copyCatalogSession(row)).resolves.toMatchObject({ ok: true, op: 'copy' });
+    expect(store.sessionCrudRequest).toHaveBeenCalledWith(
+      'copy',
+      { sessionId: 'source-session' },
+      { agentId: 'agent-a' },
+    );
+    expect(store.openCatalogSession).toHaveBeenCalledWith({
+      catalogKey: 'yeaft:agent-a:copied-session',
+      routeRef: { runtimeProvider: 'yeaft', agentId: 'agent-a', sessionId: 'copied-session' },
+    });
+
+    const sessions = useSessionsStore();
+    sessions.applyCrudResult({
+      ok: true,
+      op: 'copy',
+      session: { id: 'copied-session', name: 'Source copy' },
+    }, 'agent-a');
+    expect(sessions.sessionById('copied-session', 'agent-a')).toMatchObject({ name: 'Source copy' });
+    expect(sessions.activeSessionKey).toBe('agent-a\u001fcopied-session');
+
+    const sidebar = mount(UnifiedSessionList, {
+      attachTo: document.body,
+      props: {
+        sessions: [row],
+        projectStore: store,
+        activeRoute: row.routeRef,
+        agents: [{ id: 'agent-a', name: 'Agent A', online: true }],
+      },
+      global: { mocks: { $t: key => key } },
+    });
+    await sidebar.get('.session-dots-btn').trigger('click');
+    const menuItems = [...document.body.querySelectorAll('.session-menu-floating .session-menu-item')];
+    const copyAction = menuItems.find(item => item.textContent === 'yeaft.session.copy');
+    expect(copyAction).toBeTruthy();
+    copyAction.click();
+    await Vue.nextTick();
+    expect(sidebar.emitted('action').at(-1)[0]).toMatchObject({
+      action: 'copy',
+      row: { catalogKey: row.catalogKey },
+    });
+
+    await sidebar.setProps({
+      activeRoute: { runtimeProvider: 'yeaft', agentId: 'agent-a', sessionId: 'other-session' },
+    });
+    await sidebar.get('.session-dots-btn').trigger('click');
+    const inactiveCopyAction = [...document.body.querySelectorAll('.session-menu-floating .session-menu-item')]
+      .find(item => item.textContent === 'yeaft.session.copy');
+    expect(inactiveCopyAction).toBeTruthy();
+    expect(inactiveCopyAction.disabled).toBe(false);
+    inactiveCopyAction.click();
+    await Vue.nextTick();
+    expect(sidebar.emitted('action').at(-1)[0]).toMatchObject({
+      action: 'copy',
+      row: { catalogKey: row.catalogKey },
+    });
+    sidebar.unmount();
+
+    // Both entry points share a pending guard, including errors and reconnect.
+    let finish;
+    store.sessionCrudRequest = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    store.openCatalogSession.mockClear();
+    const copying = store.copyCatalogSession(row);
+    expect(store.sessionForkPendingKey).toBe(row.catalogKey);
+    expect(store.sessionForkState).toBe('copying');
+    await expect(store.copyCatalogSession(row)).resolves.toMatchObject({ error: { code: 'fork_pending' } });
+    expect(store.sessionCrudRequest).toHaveBeenCalledTimes(1);
+    finish({ ok: false, error: { code: 'session_running' } });
+    await copying;
+    expect(store.sessionForkPendingKey).toBeNull();
+    expect(store.sessionForkState).toBe('idle');
+    expect(store.openCatalogSession).not.toHaveBeenCalled();
+    store.yeaftProcessingSessions = { 'agent-a\u001fsource-session': true };
+    await expect(store.copyCatalogSession(row)).resolves.toMatchObject({ error: { code: 'session_running' } });
+    store.yeaftProcessingSessions = {};
+    store.connectionState = 'reconnecting';
+    await expect(store.copyCatalogSession(row)).resolves.toMatchObject({ error: { code: 'agent_offline' } });
+    store.connectionState = 'connected';
+    store.sessionCrudRequest.mockRejectedValueOnce(new Error('disconnected'));
+    await expect(store.copyCatalogSession(row)).resolves.toMatchObject({ ok: false, error: { message: 'disconnected' } });
+    expect(store.sessionForkPendingKey).toBeNull();
+
+    // An Agent process can drop while the browser↔Server socket stays open.
+    // Only requests owned by the online→offline Agent edge are settled.
+    store.agents = [{ id: 'agent-a', online: true }, { id: 'agent-b', online: true }];
+    store._hasHandledAgentList = true;
+    store.sendWsMessage = vi.fn(() => true);
+    const previousWindowPinia = window.Pinia;
+    window.Pinia = { ...window.Pinia, useSessionsStore: () => null };
+    const agentDropCopy = realSessionCrudRequest.call(
+      store,
+      'copy',
+      { sessionId: 'source-session' },
+      { agentId: 'agent-a' },
+    );
+    const otherAgentRename = realSessionCrudRequest.call(
+      store,
+      'rename',
+      { sessionId: 'other-session', name: 'Other' },
+      { agentId: 'agent-b', timeoutMs: 60_000 },
+    );
+    const [copyRequest, renameRequest] = store.sendWsMessage.mock.calls.slice(-2).map(call => call[0]);
+    store._hasHandledAgentList = false;
+    handleMessage(store, { type: 'agent_list', agents: [{ id: 'agent-b', online: true }] });
+    expect(store._sessionCrudPending.has(copyRequest.requestId)).toBe(true);
+    store.agents = [{ id: 'agent-a', online: true }, { id: 'agent-b', online: true }];
+    store._hasHandledAgentList = true;
+    handleMessage(store, { type: 'agent_list', agents: [{ id: 'agent-b', online: true }] });
+    await expect(agentDropCopy).resolves.toMatchObject({
+      ok: false,
+      requestId: copyRequest.requestId,
+      error: { code: 'agent_offline', message: 'Agent disconnected' },
+    });
+    expect(store._sessionCrudPending.has(copyRequest.requestId)).toBe(false);
+    expect(store._sessionCrudPending.has(renameRequest.requestId)).toBe(true);
+    store._sessionCrudPending.get(renameRequest.requestId).resolve({ ok: true, op: 'rename' });
+    store._sessionCrudPending.delete(renameRequest.requestId);
+    await expect(otherAgentRename).resolves.toMatchObject({ ok: true, op: 'rename' });
+
+    // Copy is a durable long operation. It must not inherit the ordinary 10s
+    // CRUD timeout and report failure while the Agent is still committing it.
+    vi.useFakeTimers();
+    try {
+      store.sendWsMessage = vi.fn(() => true);
+      const delayed = realSessionCrudRequest.call(store, 'copy', { sessionId: 'source-session' }, { agentId: 'agent-a' });
+      const request = store.sendWsMessage.mock.calls.at(-1)[0];
+      await vi.advanceTimersByTimeAsync(10_001);
+      expect(store._sessionCrudPending.has(request.requestId)).toBe(true);
+      store._sessionCrudPending.get(request.requestId).resolve({
+        ok: true, op: 'copy', session: { id: 'late-copy', name: 'Late copy' },
+      });
+      store._sessionCrudPending.delete(request.requestId);
+      await expect(delayed).resolves.toMatchObject({ ok: true, session: { id: 'late-copy' } });
+    } finally {
+      window.Pinia = previousWindowPinia;
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+
+    sessions.applyCrudResult({ ok: true, op: 'copy', session: { id: 'other-tab-fork', name: 'Other tab' } }, 'agent-a', { activate: false });
+    expect(sessions.sessionById('other-tab-fork', 'agent-a')).toBeTruthy();
+    expect(sessions.activeSessionKey).toBe('agent-a\u001fcopied-session');
+  });
+
+  it('edits a Session workDir through the target Agent', async () => {
+    const sessionCrudRequest = vi.fn(async () => ({ ok: true, op: 'update' }));
+    const state = {
+      workDirBusy: false,
+      workDirError: '',
+      workDirDraft: '  /workspace/after  ',
+      chat: { sessionCrudRequest },
+      groupId: 'settings-session',
+      targetAgentId: 'agent-b',
+      $t: key => key,
+    };
+
+    expect(SessionSettingsModal.template).toContain('id="session-settings-workdir"');
+    expect(SessionSettingsModal.template).toContain("$t('yeaft.session.settings.workDir.heading')");
+    await SessionSettingsModal.methods.saveWorkDir.call(state);
+
+    expect(sessionCrudRequest).toHaveBeenCalledWith(
+      'update',
+      { sessionId: 'settings-session', patch: { workDir: '/workspace/after' } },
+      { agentId: 'agent-b' },
+    );
+    expect(state.workDirBusy).toBe(false);
+    expect(state.workDirError).toBe('');
   });
 
   it('refreshes repeated catalog clicks without clearing cached Session messages', () => {
@@ -6143,6 +6765,74 @@ describe('message flow regressions', () => {
       },
     });
     expect(store.yeaftActiveTasksBySession['agent-b\u001fsession-b']).toBeUndefined();
+  });
+
+  it('orders real optimistic sends before live replies and preserves order through history reconciliation', () => {
+    storeFactories.clear();
+    vi.useFakeTimers();
+    const sentAt = Date.parse('2026-09-10T14:34:00Z');
+    vi.setSystemTime(sentAt);
+    runtimeSessionsStore.sessionList = [{ id: 'live-order', agentId: 'agent-a' }];
+    runtimeSessionsStore.setActive('live-order', 'agent-a');
+    const store = useChatStore();
+    store.sendWsMessage = vi.fn(() => true);
+    store.currentView = 'yeaft';
+    store.currentAgent = 'agent-a';
+    store.yeaftActiveSessionFilter = 'live-order';
+    store.yeaftSessionAgentById = { 'live-order': 'agent-a' };
+    store.yeaftConversationId = 'live-order-conversation';
+    store.yeaftConversationIdsByAgent = { 'agent-a': 'live-order-conversation' };
+    store.activeConversations = ['live-order-conversation'];
+    const output = (id, text) => store.handleYeaftOutput({
+      agentId: 'agent-a', conversationId: 'live-order-conversation', sessionId: 'live-order',
+      vpId: 'omni', turnId: `turn-${id}`,
+      data: { type: 'assistant', message: { id, content: text }, ts: Date.now() },
+    });
+    const rows = () => store.messagesMap['live-order-conversation'];
+    try {
+      // Do not seed timestamped fixtures: exercise the production send action.
+      store.sendYeaftSessionMessage({ groupId: 'live-order', text: 'Please tag the merge' });
+      const user = rows()[0];
+      const uiKey = user.uiKey;
+      vi.setSystemTime(sentAt + 1000);
+      output('reply-one', 'I will verify main');
+      output('reply-one', ' and push the tag');
+      expect(rows().map(row => row.content)).toEqual([
+        'Please tag the merge', 'I will verify main and push the tag',
+      ]);
+      expect(user.timestamp).toBe(sentAt);
+
+      vi.setSystemTime(sentAt + 2000);
+      store.sendYeaftSessionMessage({ groupId: 'live-order', text: 'Then check the workflow' });
+      const secondUser = rows().at(-1);
+      vi.setSystemTime(sentAt + 3000);
+      output('reply-two', 'Checking the workflow');
+      expect(rows().map(row => row.type)).toEqual(['user', 'assistant', 'user', 'assistant']);
+      expect(secondUser.timestamp).toBe(sentAt + 2000);
+
+      // A delayed persisted echo replaces the first optimistic identity/time,
+      // keeps its UI key, and does not move either pending user row to the tail.
+      const request = store.beginYeaftHistoryLoad({ agentId: 'agent-a', sessionId: 'live-order', mode: 'recent' });
+      store.handleMessage({
+        type: 'yeaft_history_chunk', agentId: 'agent-a', conversationId: 'live-order-conversation',
+        sessionId: 'live-order', requestId: request.requestId, mode: 'recent',
+        messages: [{
+          id: 'm0001', seq: 1, role: 'user', content: user.content,
+          clientMessageId: user.clientMessageId, sessionId: 'live-order', ts: sentAt + 100,
+        }],
+        oldestSeq: 1, latestSeq: 1, hasMore: false,
+      });
+      expect(rows()).toHaveLength(4);
+      expect(rows()[0]).toMatchObject({ messageId: 'm0001', uiKey, timestamp: sentAt + 100 });
+      expect(rows().map(row => row.type)).toEqual(['user', 'assistant', 'user', 'assistant']);
+      expect(rows().at(-1).content).toBe('Checking the workflow');
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      storeFactories.clear();
+      runtimeSessionsStore.sessionList = [];
+      runtimeSessionsStore.setActive(null, null);
+    }
   });
 
   it('keeps background Yeaft output routed while promoting the visible local conversation', () => {
@@ -6762,7 +7452,7 @@ describe('message flow regressions', () => {
     // A refresh can merge persisted rows from different storage generations.
     // Sequence is comparable only when both rows have it: a newly persisted row
     // must not jump above older legacy history merely because the legacy row has
-    // no m#### id, and a live optimistic tail must remain last.
+    // no m#### id. Live optimistic rows must use the same chronology.
     store.messagesMap[bridgeConversationId] = [{
       id: optimisticId,
       messageId: optimisticId,
@@ -6852,11 +7542,11 @@ describe('message flow regressions', () => {
     ];
     for (const rows of permutations) {
       const sorted = rows.map(row => ({ ...row }));
-      __testSortYeaftRowsBySequence(sorted);
+      sortYeaftConversationRows(sorted);
       expect(sorted.map(row => row.content)).toEqual([
+        'live permutation',
         'legacy permutation',
         'sequenced permutation',
-        'live permutation',
       ]);
     }
 

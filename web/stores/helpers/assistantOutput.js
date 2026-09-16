@@ -386,7 +386,12 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
     if (!store._turnCompletedConvs) store._turnCompletedConvs = new Set();
     store._turnCompletedConvs.add(conversationId);
     execStatus.currentTool = null;
-    markAllToolsCompleted(store, conversationId);
+    markAllToolsCompleted(store, conversationId, store._currentYeaftSessionId ? {
+      sessionId: store._currentYeaftSessionId,
+      vpId: store._currentYeaftVpId,
+      turnId: store._currentYeaftTurnId,
+      threadId: store._currentYeaftThreadId,
+    } : null);
     const msgs = store.messagesMap[conversationId] || [];
     // ★ Display result text only when no assistant message exists for this turn.
     // Normal conversation: text was already streamed via 'assistant' messages,

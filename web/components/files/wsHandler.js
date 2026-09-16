@@ -3,6 +3,7 @@
  * Centralizes all workbench-message handling in one place.
  */
 import { getFileType, isMarkdownFile } from './fileEditor.js';
+import { requestFileContent } from './fileTabs.js';
 import { isWorkbenchMessageForRoute, workbenchMessageScope } from '../../utils/workbench-route.js';
 
 export function createWsHandler({
@@ -48,6 +49,50 @@ export function createWsHandler({
     const messageScope = workbenchMessageScope(msg, routeKey);
 
     switch (msg.type) {
+      case 'video_metadata': {
+        const nFilePath = normalizePath(msg.requestedFilePath || msg.filePath);
+        const downloadPath = ops.takePendingDownload(msg.requestId);
+        if (downloadPath) {
+          if (msg.error || !msg.videoStream || !msg.previewUrl) {
+            ops.showFileOpFeedback?.(false, msg.error || t('files.videoStreamUnavailable'));
+            return;
+          }
+          const downloadName = normalizePath(downloadPath).split('/').pop() || 'video';
+          const a = document.createElement('a');
+          const downloadUrl = new URL(msg.previewUrl, `${location.protocol}//${location.host}`);
+          downloadUrl.searchParams.set('download', '1');
+          a.href = downloadUrl.href;
+          a.download = downloadName;
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
+          return;
+        }
+        const responseTab = openFiles.value.find(f => (
+          msg.requestId && f.requestId
+            ? msg.requestId === f.requestId
+            : f.path === nFilePath
+        ) && (!f.agentId || !msg.agentId || f.agentId === msg.agentId)
+          && (!f.conversationId || !msg.conversationId || f.conversationId === msg.conversationId));
+        if (!responseTab) return;
+        responseTab.loading = false;
+        if (msg.error) {
+          responseTab.loadError = msg.error;
+          responseTab.previewLoading = false;
+          responseTab.previewError = msg.error;
+          return;
+        }
+        if (!msg.videoStream || !msg.previewUrl) {
+          responseTab.loadError = t('files.videoStreamUnavailable');
+          responseTab.previewLoading = false;
+          responseTab.previewError = responseTab.loadError;
+          return;
+        }
+        responseTab.fileType = 'video';
+        responseTab.blobUrl = new URL(msg.previewUrl, `${location.protocol}//${location.host}`).href;
+        responseTab.previewLoading = true;
+        responseTab.previewError = null;
+        saveTabsState(store.currentConversation);
+        break;
+      }
       case 'directory_listing': {
         if (messageScope === 'files-folder-picker') {
           fp.handleFolderPickerListing(msg);
@@ -84,10 +129,13 @@ export function createWsHandler({
           return;
         }
 
-        const responseTab = openFiles.value.find(f => f.path === nFilePath
-          && (!f.agentId || !msg.agentId || f.agentId === msg.agentId)
+        const responseTab = openFiles.value.find(f => (
+          msg.requestId && f.requestId
+            ? msg.requestId === f.requestId
+            : f.path === nFilePath
+        ) && (!f.agentId || !msg.agentId || f.agentId === msg.agentId)
           && (!f.conversationId || !msg.conversationId || f.conversationId === msg.conversationId));
-        if (!responseTab || (responseTab.requestId && msg.requestId && msg.requestId !== responseTab.requestId)) return;
+        if (!responseTab) return;
         responseTab.loading = false;
         if (msg.error) {
           const previewError = msg.errorCode === 'FILE_PREVIEW_TOO_LARGE'
@@ -107,18 +155,16 @@ export function createWsHandler({
           const file = responseTab;
           file.loadError = null;
           if (msg.binary) {
-            const previewBaseUrl = `${location.protocol}//${location.host}/api/preview/${msg.fileId}?token=${msg.previewToken}`;
+            const origin = `${location.protocol}//${location.host}`;
+            const previewBaseUrl = msg.previewUrl
+              ? new URL(msg.previewUrl, origin).href
+              : `${origin}/api/preview/${msg.fileId}?token=${msg.previewToken}`;
             const ft = file.fileType || getFileType(file.name);
             file.fileType = ft;
             if (ft === 'pdf' || ft === 'image') {
-              fetch(previewBaseUrl)
-                .then(r => {
-                  if (!r.ok) throw new Error(`Preview request failed (${r.status})`);
-                  return r.blob();
-                })
-                .then(blob => { file.blobUrl = URL.createObjectURL(blob); })
-                .catch(e => { file.previewError = e.message; })
-                .finally(() => { file.previewLoading = false; });
+              file.blobUrl = previewBaseUrl;
+              file.previewError = null;
+              file.previewLoading = ft === 'image';
             } else if (ft === 'office') {
               const mode = localStorage.getItem('officePreviewMode') || 'local';
               if (mode === 'online') {
@@ -162,8 +208,9 @@ export function createWsHandler({
             } else {
               Vue.nextTick(() => { setTimeout(() => createEditor(file), 100); });
             }
-            const revealLineNumber = pendingRevealLines.get(nFilePath);
-            pendingRevealLines.delete(nFilePath);
+            const revealPath = responseTab.path;
+            const revealLineNumber = pendingRevealLines.get(revealPath);
+            pendingRevealLines.delete(revealPath);
             revealLine(file, revealLineNumber);
           }
         }
@@ -209,24 +256,15 @@ export function createWsHandler({
             const agentId = store.currentAgent || null;
             const conversationId = store.currentConversation || '_explorer';
             const workDir = getEffectiveWorkDir();
-            const requestId = `file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
             openFiles.value.push({
-              path: nPath, name, agentId, conversationId, workDir, requestId,
+              path: nPath, name, agentId, conversationId, workDir,
               content: null, originalContent: null,
               isDirty: false, cmInstance: null, fileType,
               blobUrl: null, previewUrl: null,
               previewLoading: fileType !== 'text', localPreviewReady: false, previewError: null,
               loading: true, loadError: null
             });
-            store.sendWsMessage({
-              type: 'read_file',
-              conversationId,
-              agentId,
-              requestId,
-              filePath: file.path,
-              workDir,
-              _clientId: store.clientId
-            });
+            requestFileContent(store, openFiles.value.at(-1), file.path, { t });
           }
           activeFileIndex.value = (pendingRestoreIndex >= 0 && pendingRestoreIndex < totalFiles)
             ? pendingRestoreIndex : 0;

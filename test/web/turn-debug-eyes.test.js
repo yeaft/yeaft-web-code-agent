@@ -42,6 +42,7 @@ window.Pinia = globalThis.Pinia;
 
 const { default: VpTurnBlock } = await import('../../web/components/VpTurnBlock.js');
 const { default: YeaftDebugPanel } = await import('../../web/components/YeaftDebugPanel.js');
+const { apportionRequestInput } = await import('../../web/components/yeaft-debug-helpers.js');
 const { handleMessage } = await import('../../web/stores/helpers/messageHandler.js');
 
 function makeTurn(overrides = {}) {
@@ -86,16 +87,85 @@ describe('VpTurnBlock debug action', () => {
     expect(wrapper.find('.vp-turn-block-actions').exists()).toBe(false);
   });
 
-  it('shows the provider-call count on a finished response', () => {
+  it('shows only the model name before calls and desktop token metadata', () => {
+    const translate = (key, vars = {}) => {
+      if (key === 'yeaft.message.llmCalls') return `${vars.count} LLM calls`;
+      if (key === 'yeaft.message.tokenUsage') return `Total ${vars.total} · Input ${vars.input} · Output ${vars.output}`;
+      return key;
+    };
     const wrapper = mount(VpTurnBlock, {
-      props: { turn: makeTurn({ llmCallCount: 3 }) },
+      props: {
+        turn: makeTurn({
+          model: 'provider/model-v2',
+          effort: 'high',
+          llmCallCount: 3,
+          inputTokens: 1200,
+          outputTokens: 34,
+          totalTokens: 1234,
+        }),
+      },
       global: {
-        mocks: { $t: (key, vars) => key === 'yeaft.message.llmCalls' ? `${vars.count} LLM calls` : key },
-        provide: { t: key => key },
+        mocks: { $t: translate },
+        provide: { t: translate },
       },
     });
 
-    expect(wrapper.find('.turn-footer').text()).toContain('3 LLM calls');
+    const footerText = wrapper.find('.turn-footer').text();
+    expect(footerText).toContain('model-v2');
+    expect(footerText).not.toContain('provider/');
+    expect(footerText).not.toContain('High');
+    expect(footerText).toContain('3 LLM calls');
+    expect(footerText).toContain('Total 1,234 · Input 1,200 · Output 34');
+    expect(footerText.indexOf('model-v2')).toBeLessThan(footerText.indexOf('3 LLM calls'));
+    expect(wrapper.find('.turn-token-meta').exists()).toBe(true);
+  });
+
+  it('keeps elapsed time running through tool execution and freezes on completion', async () => {
+    const turn = makeTurn({
+      isStreaming: false,
+      isActive: true,
+      startedAt: 1_000,
+      totalMs: null,
+    });
+    const wrapper = mount(VpTurnBlock, {
+      props: { turn, nowMs: 4_900 },
+      global: { mocks: { $t: key => key }, provide: { t: key => key } },
+    });
+
+    expect(wrapper.find('.vp-turn-block-elapsed').text()).toBe('3s');
+    expect(wrapper.find('.vp-turn-block-elapsed').classes()).toContain('is-live');
+    expect(wrapper.find('.vp-turn-block-elapsed').attributes('aria-live')).toBe('polite');
+
+    await wrapper.setProps({
+      turn: { ...turn, isActive: false, totalMs: 5_200 },
+      nowMs: 99_000,
+    });
+    expect(wrapper.find('.vp-turn-block-elapsed').text()).toBe('5s');
+    expect(wrapper.find('.vp-turn-block-elapsed').classes()).not.toContain('is-live');
+    expect(wrapper.find('.vp-turn-block-elapsed').attributes('aria-live')).toBe('off');
+  });
+
+  it('spells out duration units instead of a colon clock next to the start time', () => {
+    const cases = [
+      [0, '0s'],
+      [3_400, '3s'],
+      [59_900, '59s'],
+      [60_000, '1m0s'],
+      [310_000, '5m10s'],
+      [3_600_000, '1h0m0s'],
+      [3_661_000, '1h1m1s'],
+    ];
+    for (const [totalMs, expected] of cases) {
+      const wrapper = mount(VpTurnBlock, {
+        props: {
+          turn: makeTurn({ isActive: false, isStreaming: false, totalMs }),
+          nowMs: 99_000,
+        },
+        global: { mocks: { $t: key => key }, provide: { t: key => key } },
+      });
+      expect(wrapper.find('.vp-turn-block-elapsed').text()).toBe(expected);
+      wrapper.unmount();
+    }
   });
 
   it('does not render the debug action while the turn is streaming', () => {
@@ -135,6 +205,73 @@ describe('VpTurnBlock debug action', () => {
     });
     await wrapper.find('.debug-turn-action-btn').trigger('click');
     expect(wrapper.emitted('open-debug')).toHaveLength(1);
+  });
+});
+
+describe('request input token breakdown', () => {
+  it('apportions the provider input total exactly across four request sections', () => {
+    const split = apportionRequestInput(101, {
+      systemPromptTokens: 10,
+      historyMessageTokens: 20,
+      toolDefinitionTokens: 30,
+      currentTurnTokens: 40,
+    });
+    expect(split).toEqual({ systemPrompt: 10, historyMessages: 20, tools: 30, currentTurn: 41 });
+    expect(Object.values(split).reduce((sum, value) => sum + value, 0)).toBe(101);
+  });
+
+  it('attributes an unclassified legacy total to the current turn', () => {
+    expect(apportionRequestInput(17, null)).toEqual({
+      systemPrompt: 0,
+      historyMessages: 0,
+      tools: 0,
+      currentTurn: 17,
+    });
+  });
+
+  it('uses the full provider input total whether cache tokens are separate or already included', () => {
+    const estimate = {
+      systemPromptTokens: 1,
+      historyMessageTokens: 1,
+      toolDefinitionTokens: 1,
+      currentTurnTokens: 1,
+    };
+    const usageTotalInputTokens = YeaftDebugPanel.methods.usageTotalInputTokens;
+    const separateTotal = usageTotalInputTokens({
+      inputTokens: 20,
+      cacheReadTokens: 60,
+      cacheWriteTokens: 20,
+    });
+    const includedTotal = usageTotalInputTokens({
+      inputTokens: 100,
+      cacheReadTokens: 60,
+      cacheWriteTokens: 20,
+      totalInputTokens: 100,
+    });
+    expect(separateTotal).toBe(100);
+    expect(includedTotal).toBe(100);
+    expect(apportionRequestInput(separateTotal, estimate)).toEqual({
+      systemPrompt: 25,
+      historyMessages: 25,
+      tools: 25,
+      currentTurn: 25,
+    });
+    expect(apportionRequestInput(includedTotal, estimate)).toEqual({
+      systemPrompt: 25,
+      historyMessages: 25,
+      tools: 25,
+      currentTurn: 25,
+    });
+  });
+
+  it('does not claim a four-section breakdown for legacy traces', () => {
+    expect(YeaftDebugPanel.methods.hasRequestInputBreakdown({
+      inputSystemPrompt: null,
+      inputHistoryMessages: null,
+      inputToolDefinitions: null,
+      inputCurrentTurn: null,
+      inputTotal: 17,
+    })).toBe(false);
   });
 });
 
@@ -201,6 +338,13 @@ describe('handleMessage turn-level panel status', () => {
         response: 'The loop detail is present.',
         toolCalls: [],
         usage: { inputTokens: 12, outputTokens: 6, totalTokens: 18 },
+        requestInputBreakdown: {
+          systemPromptTokens: 4,
+          historyMessageTokens: 3,
+          toolDefinitionTokens: 2,
+          currentTurnTokens: 3,
+          totalEstimatedTokens: 12,
+        },
         latencyMs: 42,
       }, {
         turnId: 'turn-abc',
@@ -215,6 +359,13 @@ describe('handleMessage turn-level panel status', () => {
         response: 'The second loop detail is present.',
         toolCalls: [],
         usage: { inputTokens: 20, outputTokens: 7, totalTokens: 27 },
+        requestInputBreakdown: {
+          systemPromptTokens: 5,
+          historyMessageTokens: 6,
+          toolDefinitionTokens: 4,
+          currentTurnTokens: 5,
+          totalEstimatedTokens: 20,
+        },
         latencyMs: 50,
       }],
       dreamEvents: [],
@@ -243,6 +394,11 @@ describe('handleMessage turn-level panel status', () => {
     expect(wrapper.get('.yeaft-debug-notice').text()).toBe('yeaft.debugHistoryTruncated');
     expect(wrapper.findAll('.yeaft-debug-loop-num').map(node => node.text())).toEqual(['Loop 1', 'Loop 2']);
     expect(wrapper.findAll('.yeaft-debug-loop-model').map(node => node.text())).toEqual(['provider/model-a', 'provider/model-a']);
+    const secondLoopHeader = wrapper.findAll('.yeaft-debug-loop-header')[1];
+    expect(secondLoopHeader.text()).toContain('yeaft.debugInputSystemShort 5');
+    expect(secondLoopHeader.text()).toContain('yeaft.debugInputHistoryShort 6');
+    expect(secondLoopHeader.text()).toContain('yeaft.debugInputToolsShort 4');
+    expect(secondLoopHeader.text()).toContain('yeaft.debugInputCurrentShort 5');
 
     const latestSystem = wrapper.get('.yeaft-debug-latest-system-prompt');
     await latestSystem.get('.yeaft-debug-show-btn').trigger('click');
@@ -317,12 +473,35 @@ describe('handleMessage turn-level panel status', () => {
     expect(markdown).not.toContain('OLD_SYSTEM');
     expect(markdown).not.toContain('x-request-id');
 
-    // New projection and explicit null must not recover the previous request,
-    // even when legacy base fields remain on the latest record.
+    // Progress metadata arriving after hydration must not hide loaded data.
+    store.yeaftDebugLoops.push({ turnId: 'turn-abc', loopNumber: 3 });
+    await Vue.nextTick();
+    expect(request.get('pre').text()).toContain('LATEST_BODY');
+    expect(request.get('.yeaft-debug-section-meta').text()).toBe('Loop 2');
+    expect(system.get('pre').text()).toBe('LATEST_SYSTEM');
+
+    // Each field falls back independently and keeps its own source Loop.
     store.yeaftDebugLoops[1].rawRequest = null;
-    store.yeaftDebugLoops[1].rawRequestBase = loops[0].rawRequest;
+    store.yeaftDebugLoops[1].rawRequestBase = { body: 'MUST_NOT_INHERIT' };
+    await Vue.nextTick();
+    expect(request.get('pre').text()).toContain('OLD_BODY');
+    expect(request.get('.yeaft-debug-section-meta').text()).toBe('Loop 1');
+    expect(system.get('.yeaft-debug-section-meta').text()).toBe('Loop 2');
+    await wrapper.get('.yeaft-debug-turn-copy').trigger('click');
+    expect(copy.mock.lastCall[0]).toContain('yeaft.debugLatestRequestBody (Loop 1)');
+    expect(copy.mock.lastCall[0]).toContain('yeaft.debugLatestSystemPrompt (Loop 2)');
+    expect(copy.mock.lastCall[0]).not.toContain('MUST_NOT_INHERIT');
     store.yeaftDebugLoops[1].systemPrompt = '';
     await Vue.nextTick();
+    expect(system.get('pre').text()).toBe('OLD_SYSTEM');
+    expect(system.get('.yeaft-debug-section-meta').text()).toBe('Loop 1');
+
+    // Only genuinely empty turns show unavailable and disable the actions.
+    store.yeaftDebugLoops[0].rawRequest = null;
+    store.yeaftDebugLoops[0].systemPrompt = '';
+    await Vue.nextTick();
+    expect(request.find('.yeaft-debug-section-meta').exists()).toBe(false);
+    expect(system.find('.yeaft-debug-section-meta').exists()).toBe(false);
     expect(request.find('pre').exists()).toBe(false);
     expect(request.get('.yeaft-debug-copy-btn').attributes('disabled')).toBeDefined();
     expect(request.get('.yeaft-debug-show-btn').attributes('disabled')).toBeDefined();
@@ -345,7 +524,7 @@ describe('handleMessage turn-level panel status', () => {
     expect(JSON.parse(vm.latestRequestForTurn(turn).bodyText).input).toHaveLength(2);
     expect(turn.loops[0]).toBe(latest);
     latest.rawRequest = null;
-    expect(vm.latestRequestForTurn(turn)).toMatchObject({ loopNumber: 3, bodyText: null, systemPrompt: 'latest' });
+    expect(vm.latestRequestForTurn(turn)).toMatchObject({ bodyLoopNumber: 1, bodyText: 'old', systemPromptLoopNumber: 3, systemPrompt: 'latest' });
     expect(vm.latestRequestForTurn({ loops: [] })).toBeNull();
   });
 

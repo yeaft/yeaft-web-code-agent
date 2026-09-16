@@ -67,7 +67,7 @@ unless discard_changes is set to true.`,
   },
   isDestructive: (input) => input?.action === 'remove',
   async execute(input, ctx) {
-    const worktreePath = resolve(input.path);
+    const worktreePath = resolve(ctx?.cwd || process.cwd(), input.path);
     const mainCwd = ctx?.cwd || process.cwd();
 
     if (!existsSync(worktreePath)) {

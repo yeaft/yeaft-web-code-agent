@@ -1,4 +1,6 @@
 import ChatInput from './ChatInput.js';
+import { alertDialog } from '../utils/dialog.js';
+import AgentInstaller from './AgentInstaller.js';
 import MessageList from './MessageList.js';
 import SettingsPanel from './SettingsPanel.js';
 import AgentSettingsPanel from './AgentSettingsPanel.js';
@@ -98,15 +100,16 @@ export function visibleSessionStatusTasks(taskMap) {
 
 export default {
   name: 'YeaftPage',
-  components: { ChatInput, MessageList, SettingsPanel, AgentSettingsPanel, YeaftSidebar, SessionInviteModal, SessionCreateModal, SessionSettingsModal, PluginCenterPage, WorkbenchPanel, WorkCenterPage, YeaftDebugPanel, VpTimelinePane, YeaftSessionActions, YeaftConversationOutline },
+  components: { ChatInput, AgentInstaller, MessageList, SettingsPanel, AgentSettingsPanel, YeaftSidebar, SessionInviteModal, SessionCreateModal, SessionSettingsModal, PluginCenterPage, WorkbenchPanel, WorkCenterPage, YeaftDebugPanel, VpTimelinePane, YeaftSessionActions, YeaftConversationOutline },
   template: `
     <div class="yeaft-page" ref="pageRef">
       <!-- Mobile sidebar overlay -->
-      <div class="yeaft-sidebar-overlay" v-if="store.sessionSidebarOpen && isMobile" @click="store.closeSessionSidebar()"></div>
+      <div class="yeaft-sidebar-overlay" v-if="store.sessionSidebarOpen && isMobile && !store.workCenterOpen" @click="store.closeSessionSidebar()"></div>
 
       <!-- Left Sidebar — V2 (task-341: V2 is the only sidebar now). -->
       <!-- Legacy sidebar event alias; canonical settings dialog uses session terminology. -->
       <YeaftSidebar
+        v-show="!store.workCenterOpen"
         :collapsed="effectiveSidebarCollapsed"
         @select-group="onSelectGroupV2"
         @select-chat="onSelectChat"
@@ -155,6 +158,11 @@ export default {
           <YeaftSessionActions
             v-if="!showOnboardingGuide"
             class="yeaft-topbar-right"
+            :show-fork="!!forkSessionRow"
+            :fork-disabled="!!forkUnavailableReason"
+            :fork-state="activeSessionForkState"
+            :fork-title="activeSessionForkState === 'copying' ? $t('yeaft.session.copying') : (activeSessionForkState === 'success' ? $t('yeaft.session.copyComplete') : (forkUnavailableReason ? $t('yeaft.session.error.' + forkUnavailableReason) : $t('yeaft.session.copy')))"
+            @fork-session="forkCurrentSession"
             :search-open="historySearchOpen"
             :loading-more-history="store.yeaftManualHistoryRefreshLoading"
             :session-status-visible="sessionStatusVisible"
@@ -219,9 +227,6 @@ export default {
                 <button type="button" class="btn-primary yeaft-onboarding-primary" @click="openSessionCreate">
                   {{ $t('yeaft.onboarding.createSession') }}
                 </button>
-                <button type="button" class="btn-secondary" @click="openLlmConfig">
-                  {{ $t('yeaft.onboarding.configureLlm') }}
-                </button>
               </div>
             </div>
 
@@ -234,44 +239,12 @@ export default {
                     <p>{{ $t('yeaft.onboarding.installDesc') }}</p>
                   </div>
                 </div>
-                <div class="yeaft-onboarding-command">
-                  <code>{{ installAgentCommand }}</code>
-                  <button type="button" class="yeaft-onboarding-copy" @click="copyOnboardingCommand('install', installAgentCommand)">
-                    {{ copiedOnboardingCommand === 'install' ? $t('common.copied') : $t('common.copy') }}
-                  </button>
-                </div>
-              </article>
-
-              <article class="yeaft-onboarding-step" role="listitem">
-                <div class="yeaft-onboarding-step-head">
-                  <span class="yeaft-onboarding-step-index">2</span>
-                  <div>
-                    <h2>{{ $t('yeaft.onboarding.connectTitle') }}</h2>
-                    <p>{{ $t('yeaft.onboarding.connectDesc') }}</p>
-                  </div>
-                </div>
-                <div class="yeaft-onboarding-command">
-                  <code>{{ connectAgentCommand }}</code>
-                  <button type="button" class="yeaft-onboarding-copy" :disabled="!agentSecret" @click="copyOnboardingCommand('connect', connectAgentCommand)">
-                    {{ copiedOnboardingCommand === 'connect' ? $t('common.copied') : $t('common.copy') }}
-                  </button>
-                </div>
-              </article>
-
-              <article class="yeaft-onboarding-step" role="listitem">
-                <div class="yeaft-onboarding-step-head">
-                  <span class="yeaft-onboarding-step-index">3</span>
-                  <div>
-                    <h2>{{ $t('yeaft.onboarding.llmTitle') }}</h2>
-                    <p>{{ $t('yeaft.onboarding.llmDesc') }}</p>
-                  </div>
-                </div>
-                <div class="yeaft-onboarding-command">
-                  <code>{{ copilotCommand }}</code>
-                  <button type="button" class="yeaft-onboarding-copy" @click="copyOnboardingCommand('copilot', copilotCommand)">
-                    {{ copiedOnboardingCommand === 'copilot' ? $t('common.copied') : $t('common.copy') }}
-                  </button>
-                </div>
+                <AgentInstaller
+                  :agent-secret="agentSecret"
+                  :loading="agentSecretLoading"
+                  :error="agentSecretError"
+                  @open-settings="openSettings({ initialTab: 'security' })"
+                />
               </article>
             </div>
           </div>
@@ -323,10 +296,12 @@ export default {
           :conversation-id="store.yeaftConversationId"
           :draft-key="yeaftInputDraftKey"
           :send-fn="sendMessage"
+          quick-send-enabled
           :quote="messageQuote"
           :cancel-fn="cancelYeaft"
           :show-stop="isProcessing"
-          :work-item-fn="openWorkItemDraft"
+          :disabled="isActiveSessionCopying"
+          disabled-placeholder-key="yeaft.session.copying"
           placeholder-key="yeaft.placeholder"
           @remove-quote="messageQuote = null"
           @quote-consumed="messageQuote = null"
@@ -418,7 +393,7 @@ export default {
         </div><!-- /.yeaft-main-center -->
       </div>
 
-      <WorkbenchPanel v-if="canUseWorkbench" />
+      <WorkbenchPanel v-if="canUseWorkbench" v-show="!store.workCenterOpen" />
 
       <!-- Session status pane: announcement + VP roster + background tasks.
            It sits to the right of the conversation and to the left of debug. -->
@@ -471,7 +446,7 @@ export default {
            group's member editor directly (the previous flow dumped the
            user into VP-Settings, where there was no add-to-group UI). -->
       <SessionInviteModal
-        v-if="shouldShowInviteModal"
+        v-if="!store.workCenterOpen && !store.pluginCenterOpen && shouldShowInviteModal"
         :group-name="inviteGroupName"
         @open-library="onInviteOpenLibrary"
         @dismiss="onInviteDismiss"
@@ -525,11 +500,9 @@ export default {
     const agentSettingsAgentId = Vue.ref(null);
     const agentSettingsInitialCategory = Vue.ref('operations');
     const sessionCreateOpen = Vue.ref(false);
-    const copiedOnboardingCommand = Vue.ref('');
     const agentSecret = Vue.ref('');
     const agentSecretLoading = Vue.ref(false);
     const agentSecretError = Vue.ref('');
-    let copiedOnboardingTimer = null;
     const settingsInitialTab = Vue.ref('vp');
     const settingsInitialEditVpId = Vue.ref(null);
     // feat-vp-list-ui-polish: template ref to the embedded ChatInput so we
@@ -865,7 +838,8 @@ export default {
       else openHistorySearch();
     };
     const closeHistorySearchOutside = (event) => {
-      if (historySearchOpen.value && shouldDismissHistorySearch(event.target)) closeHistorySearch();
+      const eventPath = typeof event.composedPath === 'function' ? event.composedPath() : [];
+      if (historySearchOpen.value && shouldDismissHistorySearch(event.target, eventPath)) closeHistorySearch();
     };
     const onHistorySearchQuery = (query) => {
       historySearchQuery.value = query;
@@ -969,7 +943,8 @@ export default {
       store.leaveYeaft();
     };
 
-    const sendMessage = (text, attachmentInfos, quote) => {
+    const sendMessage = (text, attachmentInfos, quote, quickSend = null) => {
+      if (isActiveSessionCopying.value) return false;
       // task-334m: Pre-check `no_default_vp` before the WS round-trip.
       // If the active group has no roster + no defaultVpId, surface the
       // invite modal instead of sending a message that would round-trip
@@ -978,7 +953,7 @@ export default {
       if (gs && gs.activeNeedsInvite) {
         const g = gs.activeSession;
         if (g) inviteDismissedFor.delete(g.id); // force show
-        return;
+        return false;
       }
       // Yeaft is conceptually a single conversation backed by a group.
       // The main pane filter is the authoritative group currently on screen;
@@ -992,7 +967,7 @@ export default {
       // store helper strips `fileId` shape for the wire and keeps the
       // preview/name/mimeType on the local message render.
       const attachments = Array.isArray(attachmentInfos) ? attachmentInfos : undefined;
-      store.sendYeaftSessionMessage({ groupId, text, mentions, attachments, quote });
+      return store.sendYeaftSessionMessage({ groupId, text, mentions, attachments, quote, ...(quickSend ? { quickSend } : {}) });
     };
 
     const setMessageQuote = (quote) => {
@@ -1013,11 +988,6 @@ export default {
       const gs = sessionsStore();
       const sessionId = store.yeaftActiveSessionFilter || gs?.activeSessionId || null;
       if (sessionId) store.cancelYeaftSession(sessionId);
-    };
-
-    const openWorkItemDraft = (seedGoal = '') => {
-      const session = topbarGroup.value;
-      if (session) store.enterWorkCenterFromSession(session, seedGoal);
     };
 
     const toggleSidebar = () => {
@@ -1080,6 +1050,36 @@ export default {
       }
       return typeof gs.sessionById === 'function' ? gs.sessionById('grp_default', store.currentAgent || null) : null;
     });
+
+    const forkSessionRow = Vue.computed(() => {
+      const sessionId = store.yeaftActiveSessionFilter || topbarGroup.value?.id;
+      const agentId = store.currentAgent;
+      return sessionId && agentId
+        ? { routeRef: { runtimeProvider: 'yeaft', agentId, sessionId } }
+        : null;
+    });
+    const forkSessionKey = Vue.computed(() => {
+      const route = forkSessionRow.value?.routeRef;
+      return route?.agentId && route?.sessionId ? `yeaft:${route.agentId}:${route.sessionId}` : null;
+    });
+    const activeSessionForkState = Vue.computed(() => (
+      !!forkSessionKey.value && store.sessionForkPendingKey === forkSessionKey.value
+        ? store.sessionForkState
+        : 'idle'
+    ));
+    const isActiveSessionCopying = Vue.computed(() => activeSessionForkState.value === 'copying');
+    const forkUnavailableReason = Vue.computed(() => store.sessionForkUnavailableReason(forkSessionRow.value));
+    const forkCurrentSession = async () => {
+      if (!forkSessionRow.value || forkUnavailableReason.value) return;
+      const result = await store.copyCatalogSession(forkSessionRow.value);
+      if (!result?.ok) {
+        const code = result?.error?.code || 'unknown';
+        const key = `yeaft.session.error.${code}`;
+        const translated = $t(key);
+        const message = translated === key ? (result?.error?.message || code) : translated;
+        await alertDialog($t('yeaft.session.copyFailed', { message }));
+      }
+    };
 
     const activeSessionIdForSettings = () => resolveActiveSessionIdForSettings({
       activeSessionFilter: store.yeaftActiveSessionFilter,
@@ -1232,7 +1232,7 @@ export default {
     // task-343: VP library lives inside Settings as a tab. Helper to open
     // Settings at a specific tab (used by SessionInviteModal CTA).
     const openSettings = ({ initialTab = 'vp', editVpId = null } = {}) => {
-      settingsInitialTab.value = ['vp', 'search', 'mcp'].includes(initialTab) ? initialTab : 'vp';
+      settingsInitialTab.value = ['vp', 'search', 'mcp', 'security'].includes(initialTab) ? initialTab : 'vp';
       settingsInitialEditVpId.value = settingsInitialTab.value === 'vp' ? (editVpId || null) : null;
       showSettings.value = true;
     };
@@ -1275,24 +1275,6 @@ export default {
 
     const onSessionCreated = (_session) => {
       sessionCreateOpen.value = false;
-    };
-
-    const copyOnboardingCommand = async (key, command) => {
-      if (!command) return;
-      if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) return;
-      try {
-        const text = typeof command === 'string' ? command : (command?.value || '');
-        if (!text) return;
-        await navigator.clipboard.writeText(text);
-        copiedOnboardingCommand.value = key || '';
-        if (copiedOnboardingTimer) clearTimeout(copiedOnboardingTimer);
-        copiedOnboardingTimer = setTimeout(() => {
-          copiedOnboardingCommand.value = '';
-          copiedOnboardingTimer = null;
-        }, 1800);
-      } catch (_) {
-        // Clipboard is best-effort; the command remains visible for manual copy.
-      }
     };
 
     // task-334m: Group invite modal wiring. The modal is shown whenever
@@ -1358,14 +1340,6 @@ export default {
     Vue.watch(showOnboardingGuide, (visible) => {
       if (visible) loadAgentSecret();
     }, { immediate: true });
-    const installAgentCommand = 'npm install -g @yeaft/webchat-agent';
-    const connectAgentCommand = Vue.computed(() => {
-      const origin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'http://localhost:3456';
-      const serverUrl = origin.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
-      const secret = agentSecret.value || $t('yeaft.onboarding.secretPending');
-      return `yeaft-agent install --server ${serverUrl} --name yeaft-agent --secret ${secret}`;
-    });
-    const copilotCommand = 'gh auth login && yeaft-agent llm use github-copilot --model gpt-5.5';
     const onInviteOpenLibrary = () => {
       const g = activeGroupForInvite.value;
       if (g) inviteDismissedFor.add(g.id);
@@ -1449,13 +1423,6 @@ export default {
         }
       },
     );
-
-    if (typeof Vue.onBeforeUnmount === 'function') {
-      Vue.onBeforeUnmount(() => {
-        if (copiedOnboardingTimer) clearTimeout(copiedOnboardingTimer);
-        copiedOnboardingTimer = null;
-      });
-    }
 
     const onSettingsSaved = () => {
       showSettings.value = false;
@@ -1595,6 +1562,12 @@ export default {
       debugMode,
       composerMenuOpen,
       topbarGroup,
+      forkSessionRow,
+      forkSessionKey,
+      activeSessionForkState,
+      isActiveSessionCopying,
+      forkUnavailableReason,
+      forkCurrentSession,
       topbarSessionTitle,
       topbarFolderPath,
       topbarModel,
@@ -1639,7 +1612,6 @@ export default {
       setMessageQuote,
       editMessageAsNew,
       cancelYeaft,
-      openWorkItemDraft,
       toggleSidebar,
       closeDebug,
       reloadMessages,
@@ -1656,8 +1628,6 @@ export default {
       clearOverlayPointerGesture,
       openSessionCreate,
       onSessionCreated,
-      copyOnboardingCommand,
-      copiedOnboardingCommand,
       formatTokens,
       formatModelCtx,
       toggleSettings,
@@ -1676,9 +1646,6 @@ export default {
       isActiveGroupEmpty,
       conversationInventoryReady,
       showOnboardingGuide,
-      installAgentCommand,
-      connectAgentCommand,
-      copilotCommand,
       agentSecret,
       agentSecretLoading,
       agentSecretError,

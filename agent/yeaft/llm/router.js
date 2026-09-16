@@ -30,6 +30,7 @@ import {
   isGitHubCopilotProvider,
   normalizeKnownProviderForRuntime,
 } from './known-providers.js';
+import { createProviderContext } from './provider-state.js';
 import { pairSanitize } from '../pair-sanitize.js';
 
 /**
@@ -46,6 +47,7 @@ export function normalizeModelEntry(entry) {
   }
   if (entry && typeof entry === 'object' && typeof entry.id === 'string' && entry.id) {
     const out = { id: entry.id };
+    if (entry.capabilities && typeof entry.capabilities === 'object') out.capabilities = { ...entry.capabilities };
     if (typeof entry.protocol === 'string' && entry.protocol) {
       out.protocol = entry.protocol;
     }
@@ -643,6 +645,11 @@ export class AdapterRouter extends LLMAdapter {
     while (true) {
       const resolved = await this.#resolveAdapter(params.model, dispatchSnapshot);
       const provider = this.#getProviderForModel(params.model, dispatchSnapshot);
+      const providerContext = createProviderContext({ protocol: resolved.protocol, baseUrl: provider?.baseUrl,
+        providerId: provider?.name, credentialScopeId: provider?.credentialScopeId,
+        staticApiKey: provider?.credentialProvider ? undefined : provider?.apiKey, model: resolved.modelId,
+        capabilities: { ...provider?.capabilities, ...resolved.entry?.capabilities },
+      });
       const effortContext = {
         protocol: resolved.protocol,
         supportsEffort: resolved.entry?.supportsEffort,
@@ -653,7 +660,7 @@ export class AdapterRouter extends LLMAdapter {
       const filtered = filterEffortForModel({ ...params, model: resolved.modelId }, resolved);
       const sanitized = sanitizeMessagesForWire(filtered);
       try {
-        yield* resolved.adapter.stream({ ...sanitized, model: resolved.modelId, effortContext, rawExchangeMaxBytes: params.rawExchangeMaxBytes });
+        yield* resolved.adapter.stream({ ...sanitized, model: resolved.modelId, effortContext, providerContext, rawExchangeMaxBytes: params.rawExchangeMaxBytes });
         return;
       } catch (err) {
         this.#annotateAuthError(err, provider, params.model);
@@ -676,6 +683,11 @@ export class AdapterRouter extends LLMAdapter {
     while (true) {
       const resolved = await this.#resolveAdapter(params.model, dispatchSnapshot);
       const provider = this.#getProviderForModel(params.model, dispatchSnapshot);
+      const providerContext = createProviderContext({ protocol: resolved.protocol, baseUrl: provider?.baseUrl,
+        providerId: provider?.name, credentialScopeId: provider?.credentialScopeId,
+        staticApiKey: provider?.credentialProvider ? undefined : provider?.apiKey, model: resolved.modelId,
+        capabilities: { ...provider?.capabilities, ...resolved.entry?.capabilities },
+      });
       const effortContext = {
         protocol: resolved.protocol,
         supportsEffort: resolved.entry?.supportsEffort,
@@ -686,7 +698,7 @@ export class AdapterRouter extends LLMAdapter {
       const filtered = filterEffortForModel({ ...params, model: resolved.modelId }, resolved);
       const sanitized = sanitizeMessagesForWire(filtered);
       try {
-        return await resolved.adapter.call({ ...sanitized, model: resolved.modelId, effortContext });
+        return await resolved.adapter.call({ ...sanitized, model: resolved.modelId, effortContext, providerContext });
       } catch (err) {
         this.#annotateAuthError(err, provider, params.model);
         if (err?.statusCode !== 401 || refreshedCredential

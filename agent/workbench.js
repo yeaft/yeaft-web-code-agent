@@ -6,7 +6,7 @@
 export { resolveAndValidatePath, getGitRoot, validateGitPath } from './workbench/utils.js';
 
 export {
-  handleReadFile, handleWriteFile, handleListDirectory,
+  handleReadFile, handleVideoMetadata, handleVideoChunk, handleWriteFile, handleListDirectory,
   handleCreateFile, handleDeleteFiles, handleMoveFiles, handleCopyFiles, handleUploadToDir
 } from './workbench/file-ops.js';
 

@@ -10,6 +10,16 @@ Open via the **⚙ gear** at the bottom of the sidebar. Settings live in a **fix
   - **Local render** — built-in viewer, no network
   - **Office Online** — Microsoft's online viewer; requires the Agent file URL to be reachable from the public Internet
 
+### Custom shortcuts and quick sends
+
+**General → Custom shortcuts** controls personal key bindings and the **Show quick sends** toggle. Quick-send buttons start hidden; new users receive simple `Alt + key` defaults and can replace or clear any binding. Preferences are isolated by signed-in user in this browser, not synchronized across devices.
+
+Create up to five presets under **Agent settings → Quick send**. Each preset stores its name, model, effort and maximum output tokens in that Agent instance's `config.json`. Blank effort uses the runtime default. Blank maximum output tokens uses the selected model's resolved output limit, not the Session's previous model budget; enter a positive integer to use a smaller budget. The request is always capped to the actual model's output limit, including fallback retries. Each Agent has its own model catalog and presets.
+
+When enabled, native Yeaft Session Composers add a small mode selector beside the ordinary send button. Open it to send the current draft, attachments and quote with one preset, or use that preset's shortcut directly. Session defaults and ordinary Enter sending are unchanged. CLI Chat and Work Center do not show this selector.
+
+Defaults: terminal `Alt/Option+T`, files `Alt/Option+O`, Git workbench `Alt/Option+G`, new Session `Alt/Option+N`, close an open workbench `Alt/Option+W`, and quick-send slots `Alt/Option+1…5`. Known browser/application conflicts such as `Ctrl+T` and `Ctrl+F` are rejected; operating systems and extensions may reserve additional combinations. Global actions stay available while the message Composer is focused, and avoid editors, terminals, dialogs and other text fields. Quick-send bindings only operate in the Composer and ignore IME composition and key repeat.
+
 ## Account
 
 - **Username** — login name (read-only)

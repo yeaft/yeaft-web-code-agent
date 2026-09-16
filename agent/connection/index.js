@@ -8,6 +8,7 @@ import { cleanupTerminalsForDisconnect } from '../terminal.js';
 export function resetConnectionTransport() {
   ctx.sessionKey = null;
   ctx.serverEncryptionRequired = true;
+  ctx.serverCapabilities = new Set();
   ctx.pendingAuthTempId = null;
 }
 

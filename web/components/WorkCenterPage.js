@@ -1,5 +1,6 @@
 import { confirmDialog } from '../utils/dialog.js';
 import WorkCenterActionDetail from './WorkCenterActionDetail.js';
+import WorkCenterResourceControl from './WorkCenterResourceControl.js';
 import WorkCenterSettingsModal from './WorkCenterSettingsModal.js';
 import MessageComposer from './MessageComposer.js';
 import UserTurnBlock from './UserTurnBlock.js';
@@ -24,7 +25,7 @@ export default {
   name: 'WorkCenterPage',
   components: {
     MessageComposer, UserTurnBlock, VpTurnBlock, WorkCenterActionDetail,
-    WorkCenterSettingsModal, AgentSettingsPanel, ModernSelect,
+    WorkCenterSettingsModal, AgentSettingsPanel, ModernSelect, WorkCenterResourceControl,
   },
   mixins: [folderPickerMixin],
   data() {
@@ -53,6 +54,11 @@ export default {
       saving: false,
       createGeneration: 0,
       llmConfigOpen: false,
+      agentSettingsOpen: false,
+      agentSettingsTargetId: null,
+      unavailableAgentStateGeneration: 0,
+      unavailableAgentStateLoading: false,
+      unavailableAgentStateError: '',
       search: '',
       boardVpId: '',
       boardWorkItemType: '',
@@ -80,11 +86,51 @@ export default {
   computed: {
     store() { return Pinia.useChatStore(); },
     chat() { return this.store; },
-    agentId() { return this.store.workCenterAgentId || this.store.currentAgent; },
     agents() { return this.store.agents || []; },
     onlineAgents() {
       return this.agents.filter(agent => agent?.online
         && Array.isArray(agent.capabilities) && agent.capabilities.includes('work_center'));
+    },
+    configurableDisabledAgents() {
+      return this.agents.filter(agent => {
+        const settings = this.store.workCenterFeatureSettingsByAgent?.[agent?.id];
+        return agent?.online
+          && Array.isArray(agent.capabilities)
+          && agent.capabilities.includes('work_center_feature_settings')
+          && !agent.capabilities.includes('work_center')
+          && settings?.loaded === true
+          && !settings.error
+          && settings.enabled !== true;
+      });
+    },
+    configurableUnavailableAgents() {
+      return this.agents.filter(agent => {
+        const settings = this.store.workCenterFeatureSettingsByAgent?.[agent?.id];
+        return agent?.online
+          && Array.isArray(agent.capabilities)
+          && agent.capabilities.includes('work_center_feature_settings')
+          && !agent.capabilities.includes('work_center')
+          && settings?.loaded === true
+          && !settings.error
+          && settings.enabled === true;
+      });
+    },
+    configurableAgentSettingsLoading() {
+      return this.unavailableAgentStateLoading;
+    },
+    configurableAgentSettingsFailed() {
+      return !!this.unavailableAgentStateError;
+    },
+    hasConfigurableOnlineAgents() {
+      return this.agents.some(agent => agent?.online
+        && agent.capabilities?.includes('work_center_feature_settings'));
+    },
+    hasOnlineAgents() { return this.agents.some(agent => agent?.online); },
+    agentId() {
+      const selected = this.store.workCenterAgentId;
+      return this.onlineAgents.some(agent => agent.id === selected)
+        ? selected
+        : (this.onlineAgents[0]?.id || null);
     },
     workCenterAgentOptions() {
       return this.onlineAgents.map(agent => ({
@@ -123,6 +169,14 @@ export default {
     selected() {
       if (this.detail?.id === this.selectedId) return this.detail;
       return this.items.find(item => item.id === this.selectedId) || null;
+    },
+    goalProgress() {
+      const progress = this.selected?.goalProgress;
+      return Array.isArray(progress?.criteria) ? progress : null;
+    },
+    finalResponses() {
+      const responses = this.selected?.finalResult?.responses;
+      return Array.isArray(responses) ? responses.filter(response => typeof response?.summary === 'string' && response.summary.trim()) : [];
     },
     selectedAction() {
       const actions = Array.isArray(this.selected?.actions) ? this.selected.actions : [];
@@ -377,6 +431,13 @@ export default {
     },
   },
   watch: {
+    agents: {
+      immediate: true,
+      deep: true,
+      handler() {
+        this.loadUnavailableAgentStates();
+      },
+    },
     agentId: {
       immediate: true,
       handler(id, previousId) {
@@ -396,6 +457,10 @@ export default {
         if (previousId && id !== previousId) {
           this.closeFolderPicker();
           this.resetCreateExecutionContext(id);
+        }
+        if (this.store.workCenterAgentId !== id) {
+          this.store.enterWorkCenter(id);
+          return;
         }
         if (id) {
           const listRequest = typeof this.boardFilters === 'function'
@@ -460,10 +525,13 @@ export default {
   },
   beforeUnmount() {
     invalidateWorkCenterUrlRestore(this);
+    this.unavailableAgentStateGeneration += 1;
     if (this.boardQueryTimer) clearTimeout(this.boardQueryTimer);
     window.removeEventListener('popstate', this.restoreWorkCenterUrl);
   },
   mounted() {
+    this.returnFocusElement = document.activeElement;
+    this.$nextTick(() => this.$refs.backToChat?.focus({ preventScroll: true }));
     window.addEventListener('popstate', this.restoreWorkCenterUrl);
     this.restoreWorkCenterUrl();
     const draft = this.store.workCenterCreateDraft;
@@ -481,9 +549,52 @@ export default {
     this.applyCreateDefaults();
   },
   methods: {
+    backToChat() {
+      this.store.leaveWorkCenter();
+      this.$nextTick(() => {
+        const source = this.returnFocusElement;
+        const visible = element => element?.isConnected && element.getClientRects().length
+          && getComputedStyle(element).visibility !== 'hidden'
+          && element.getBoundingClientRect().right > 0;
+        const target = visible(source) && source !== document.body ? source
+          : [...document.querySelectorAll('.sidebar-work-center-trigger, .header-sidebar-toggle, .yeaft-topbar-sidebar-toggle')]
+            .find(visible);
+        target?.focus({ preventScroll: true });
+      });
+    },
     tr(key, fallback) {
       const translated = this.$t ? this.$t(key) : key;
       return translated && translated !== key ? translated : fallback;
+    },
+    async loadUnavailableAgentStates() {
+      const generation = ++this.unavailableAgentStateGeneration;
+      const candidates = this.agents.filter(agent => agent?.online
+        && agent.capabilities?.includes('work_center_feature_settings')
+        && !agent.capabilities.includes('work_center')
+        && (this.store.workCenterFeatureSettingsByAgent?.[agent.id]?.loaded !== true
+          || this.store.workCenterFeatureSettingsByAgent?.[agent.id]?.error));
+      this.unavailableAgentStateLoading = candidates.length > 0;
+      this.unavailableAgentStateError = '';
+      if (candidates.length === 0) return;
+      const results = await Promise.allSettled(candidates.map(agent => this.store.loadWorkCenterFeatureSettings(agent.id)));
+      if (generation !== this.unavailableAgentStateGeneration) return;
+      const failed = results.filter(result => result.status === 'rejected');
+      this.unavailableAgentStateError = failed.length
+        ? (failed[0].reason?.message || this.tr('workCenter.agentStatusLoadFailed', 'Could not check Work Center status.'))
+        : '';
+      this.unavailableAgentStateLoading = false;
+    },
+    openWorkCenterAgentSettings() {
+      const target = this.configurableDisabledAgents[0]
+        || this.configurableUnavailableAgents[0]
+        || this.agents.find(agent => agent?.online)
+        || null;
+      this.agentSettingsTargetId = target?.id || null;
+      this.agentSettingsOpen = true;
+    },
+    closeWorkCenterAgentSettings({ focusBack = false } = {}) {
+      this.agentSettingsOpen = false;
+      if (focusBack) this.$nextTick(() => this.$refs.backToChat?.focus({ preventScroll: true }));
     },
     selectWorkCenterAgent(nextAgentId) {
       if (!nextAgentId || nextAgentId === this.agentId) return;
@@ -491,6 +602,14 @@ export default {
     },
     statusLabel(status) {
       return this.tr(`workCenter.status.${status}`, String(status || '').replace('_', ' '));
+    },
+    goalStatusLabel(status) {
+      return this.tr(`workCenter.goalStatus.${status}`, this.statusLabel(status));
+    },
+    deliveryTargetLabel(target) {
+      const keys = { response: 'Response', workspace_files: 'Files', pull_request: 'Pr', merge: 'Merge' };
+      return keys[target] ? this.tr(`workCenter.deliveryTarget${keys[target]}`, target)
+        : target || this.tr('workCenter.deliveryTargetAsk', 'Ask me before delivery');
     },
     actionLabel(type) {
       return this.tr(`workCenter.action.${type}`, type || '—');
@@ -583,6 +702,7 @@ export default {
       }, 180);
     },
     refresh() {
+      if (!this.agentId) return Promise.resolve([]);
       return this.store.listWorkItems(this.agentId, this.boardFilters()).catch(() => {});
     },
     refreshWorkCenterRuntime(agentId) {
@@ -1306,20 +1426,20 @@ export default {
     },
     async resumeSelected() {
       if (!this.selected || this.selected.status !== 'cancelled') return;
-      await this.store.resumeWorkItem(this.selected.id, this.selected.revision, this.agentId);
+      await this.store.resumeWorkItem(this.selected.id, this.selected.revision, this.agentId, this.selected.executionControl?.revision);
     },
   },
   template: `
-    <main class="work-center-main" :class="{ 'workbench-maximized': store.workbenchMaximized && store.workbenchExpanded }">
+    <main class="work-center-main">
         <div class="work-center-shell" :class="{ 'showing-detail': narrowPane !== 'items' }">
-          <header v-if="narrowPane === 'items'" class="work-center-header">
+          <header class="work-center-header">
             <div class="work-center-heading">
-              <button class="work-center-sidebar-toggle" type="button" @click="store.toggleSessionSidebar()"
-                      :title="tr('chat.sidebar.expand', 'Open sidebar')" :aria-label="tr('chat.sidebar.expand', 'Open sidebar')">
-                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3 18h18v-2H3v2Zm0-5h18v-2H3v2Zm0-7v2h18V6H3Z"/></svg>
+              <button ref="backToChat" class="work-center-back-button" type="button" @click="backToChat">
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2Z"/></svg>
+                <span>{{ tr('workCenter.backToChat', 'Back to chat') }}</span>
               </button>
               <h1>{{ tr('workCenter.title', 'Work Center') }}</h1>
-              <div class="work-center-agent-picker">
+              <div v-if="onlineAgents.length" class="work-center-agent-picker">
                 <span class="work-center-agent-dot" aria-hidden="true"></span>
                 <ModernSelect
                   :model-value="agentId"
@@ -1331,23 +1451,23 @@ export default {
                 />
               </div>
             </div>
-            <div class="work-center-header-actions">
-              <button class="work-center-icon-button" type="button" @click="settingsOpen = true"
+            <div v-if="agentId" class="work-center-header-actions">
+              <button class="work-center-icon-button" type="button" @click="settingsOpen = true" :disabled="!agentId"
                       :title="tr('workCenter.settings.title', 'Work Center settings')" :aria-label="tr('workCenter.settings.title', 'Work Center settings')">
                 <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19.43 12.98c.04-.32.07-.65.07-.98s-.03-.66-.08-.98l2.11-1.65a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.61-.22l-2.49 1a7.2 7.2 0 0 0-1.69-.98L14.5 2.42A.49.49 0 0 0 14 2h-4a.49.49 0 0 0-.49.42L9.13 5.07c-.61.25-1.17.59-1.69.98l-2.49-1a.49.49 0 0 0-.61.22l-2 3.46a.49.49 0 0 0 .12.64l2.11 1.65c-.04.32-.08.66-.08.98s.03.66.08.98l-2.11 1.65a.5.5 0 0 0-.12.64l2 3.46c.12.22.38.31.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.04.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.58 1.69-.98l2.49 1c.23.08.49 0 .61-.22l2-3.46a.5.5 0 0 0-.12-.64l-2.11-1.65ZM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5Z"/></svg>
               </button>
-              <button class="work-center-icon-button" type="button" @click="refresh" :disabled="loading"
+              <button class="work-center-icon-button" type="button" @click="refresh" :disabled="!agentId || loading"
                       :title="tr('workCenter.refresh', 'Refresh')" :aria-label="tr('workCenter.refresh', 'Refresh')">
                 <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M17.65 6.35A8 8 0 1 0 19.73 14h-2.08A6 6 0 1 1 16.22 7.78L13 11h7V4l-2.35 2.35Z"/></svg>
               </button>
-              <button class="work-center-icon-button work-center-header-create" type="button" @click="openCreate" :disabled="onlineAgents.length === 0"
+              <button class="work-center-icon-button work-center-header-create" type="button" @click="openCreate" :disabled="!agentId"
                       :title="tr('workCenter.newWorkItem', 'New work item')" :aria-label="tr('workCenter.newWorkItem', 'New work item')">
                 <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg>
               </button>
             </div>
           </header>
 
-          <div v-if="narrowPane === 'items'" class="work-center-toolbar">
+          <div v-if="narrowPane === 'items' && onlineAgents.length" class="work-center-toolbar">
             <label class="work-center-search">
               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9.5 3a6.5 6.5 0 1 0 4.02 11.61L19.91 21 21 19.91l-6.39-6.39A6.5 6.5 0 0 0 9.5 3Zm0 2a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Z"/></svg>
               <input v-model="search" type="search" :placeholder="tr('workCenter.search', 'Search work items')">
@@ -1371,12 +1491,29 @@ export default {
             </span>
           </div>
 
-          <p v-if="onlineAgents.length === 0" class="work-center-notice">
-            {{ tr('workCenter.noAvailableAgents', 'No compatible online Agents') }}
-          </p>
+          <div v-if="onlineAgents.length === 0" class="work-center-notice">
+            <p v-if="configurableAgentSettingsLoading">{{ tr('workCenter.checkingAgents', 'Checking Work Center availability…') }}</p>
+            <p v-else-if="configurableAgentSettingsFailed">{{ tr('workCenter.agentStatusLoadFailed', 'Could not check Work Center status. Try again.') }}</p>
+            <p v-else-if="configurableUnavailableAgents.length">{{ tr('workCenter.unavailableAgents', 'Work Center is configured on, but its runtime is unavailable. Review this Agent’s settings and logs.') }}</p>
+            <p v-else-if="configurableDisabledAgents.length">
+              {{ configurableDisabledAgents.length === 1
+                ? tr('workCenter.disabledAgents', 'Work Center is disabled on the online Agent.')
+                : $t('workCenter.disabledAgentsMany', { count: configurableDisabledAgents.length }) }}
+            </p>
+            <p v-else-if="hasOnlineAgents">{{ tr('workCenter.upgradeAgents', 'The online Agents do not support Work Center settings.') }}</p>
+            <p v-else>{{ tr('workCenter.noOnlineAgents', 'No online Agents') }}</p>
+            <button v-if="configurableAgentSettingsFailed" type="button" class="btn-secondary work-center-notice-action" @click="loadUnavailableAgentStates">
+              {{ tr('workCenter.retryAgentStatus', 'Retry status check') }}
+            </button>
+            <button v-else-if="hasOnlineAgents && !configurableAgentSettingsLoading" type="button" class="btn-secondary work-center-notice-action" @click="openWorkCenterAgentSettings">
+              {{ configurableDisabledAgents.length || configurableUnavailableAgents.length || hasConfigurableOnlineAgents
+                ? tr('workCenter.openAgentSettings', 'Open Agent settings')
+                : tr('workCenter.openAgentSettingsUpgrade', 'Open Agent settings to upgrade') }}
+            </button>
+          </div>
           <p v-if="error" class="work-center-error">{{ error }}</p>
           <p v-if="deleteWorkItemError" class="work-center-error" role="alert">{{ deleteWorkItemError }}</p>
-          <div class="work-center-body" :class="{ 'is-empty': loaded && !loading && items.length === 0 }" :data-pane="narrowPane">
+          <div v-if="onlineAgents.length" class="work-center-body" :class="{ 'is-empty': loaded && !loading && items.length === 0 }" :data-pane="narrowPane">
             <section class="work-center-list work-center-board" :aria-busy="loading || boardLoadingMore ? 'true' : 'false'">
               <div class="work-center-board-lane-tabs" role="tablist" :aria-label="tr('workCenter.board.lanes', 'Work item lanes')">
                 <button v-for="lane in boardLanes" :key="lane.id" type="button" role="tab"
@@ -1461,11 +1598,11 @@ export default {
                                 :title="tr('workCenter.start', 'Start')" :aria-label="tr('workCenter.start', 'Start')">
                           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="m8 5 11 7-11 7V5Z"/></svg>
                         </button>
-                        <button v-else-if="selected.status === 'cancelled'" class="work-center-icon-button work-center-resume-action" type="button" @click="resumeSelected"
+                        <button v-else-if="selected.status === 'cancelled' && !selected.executionControl" class="work-center-icon-button work-center-resume-action" type="button" @click="resumeSelected"
                                 :title="tr('workCenter.resumeWorkItem', 'Resume work item')" :aria-label="tr('workCenter.resumeWorkItem', 'Resume work item')">
                           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6a6 6 0 0 1-9.81 4.62l-1.42 1.42A8 8 0 1 0 12 5Z"/></svg>
                         </button>
-                        <button v-else-if="selected.status !== 'done'" class="work-center-icon-button work-center-stop-action" type="button" @click="cancelSelected"
+                        <button v-else-if="!['done', 'cancelled'].includes(selected.status)" class="work-center-icon-button work-center-stop-action" type="button" @click="cancelSelected"
                                 :title="tr('workCenter.stopWorkItem', 'Stop work item')" :aria-label="tr('workCenter.stopWorkItem', 'Stop work item')">
                           <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg>
                         </button>
@@ -1507,11 +1644,13 @@ export default {
                               <div><dt>{{ tr('workCenter.updated', 'Updated') }}</dt><dd>{{ time(selected.updatedAt) || '—' }}</dd></div>
                               <div v-if="!selected.workItemType && selected.planningMode === 'ai'"><dt>{{ tr('workCenter.workItemType', 'Type') }}</dt><dd>{{ tr('workCenter.planning', 'Planning') }}</dd></div>
                             </dl>
+                            <WorkCenterResourceControl v-if="selected.executionControl" :key="agentId + '::' + selected.id"
+                              :item="selected" :agent-id="agentId" :disabled="detailLoading || !!detailError || detail?.id !== selected.id" />
                             <div class="work-center-usage-summary work-center-detail-usage">
-                              <span>{{ $t('workCenter.llmRequestCount', { count: formatCount(executionStats(selected).llmRequestCount) }) }}</span>
+                              <span v-if="!selected.executionControl">{{ $t('workCenter.llmRequestCount', { count: formatCount(executionStats(selected).llmRequestCount) }) }}</span>
                               <span>{{ $t('workCenter.loopCount', { count: formatCount(executionStats(selected).loopCount) }) }}</span>
                               <span>{{ $t('workCenter.toolCount', { count: formatCount(executionStats(selected).toolCount) }) }}</span>
-                              <span :title="$t('workCenter.tokenBreakdown', { input: formatCount(executionStats(selected).inputTokens), output: formatCount(executionStats(selected).outputTokens), cache: formatCount((executionStats(selected).cacheReadTokens || 0) + (executionStats(selected).cacheWriteTokens || 0)) })">{{ $t('workCenter.tokenCount', { count: formatTokens(executionStats(selected).totalTokens) }) }}</span>
+                              <span v-if="!selected.executionControl" :title="$t('workCenter.tokenBreakdown', { input: formatCount(executionStats(selected).inputTokens), output: formatCount(executionStats(selected).outputTokens), cache: formatCount((executionStats(selected).cacheReadTokens || 0) + (executionStats(selected).cacheWriteTokens || 0)) })">{{ $t('workCenter.tokenCount', { count: formatTokens(executionStats(selected).totalTokens) }) }}</span>
                             </div>
 
                             <div v-if="selected.failureReason" class="work-center-section work-center-failure" role="alert">
@@ -1527,9 +1666,60 @@ export default {
                               <h3>{{ tr('workCenter.description', 'Description') }}</h3>
                               <p>{{ selected.goal }}</p>
                             </section>
-                            <section v-if="selected.acceptanceCriteria?.length" class="work-center-section work-center-acceptance">
+                            <section v-if="goalProgress" class="work-center-section work-center-acceptance work-center-goal-progress" :aria-label="tr('workCenter.goalProgress', 'Goal progress')">
+                              <h3>{{ tr('workCenter.goalProgress', 'Goal progress') }}</h3>
+                              <p class="work-center-goal-count" aria-live="polite">
+                                <strong>{{ $t('workCenter.criteriaProgress', { completed: goalProgress.completedCriteriaCount, total: goalProgress.totalCriteriaCount }) }}</strong>
+                                <span v-if="goalProgress.totalCriteriaCount > goalProgress.completedCriteriaCount">{{ $t('workCenter.criteriaRemaining', { count: goalProgress.totalCriteriaCount - goalProgress.completedCriteriaCount }) }}</span>
+                                <span v-else-if="goalProgress.totalCriteriaCount">{{ tr('workCenter.criteriaVerified', 'All criteria verified') }}</span>
+                                <span v-else>{{ tr('workCenter.criteriaPending', 'Acceptance criteria have not been defined yet') }}</span>
+                              </p>
+                              <ul class="work-center-goal-criteria">
+                                <li v-for="(check, index) in goalProgress.criteria" :key="index" :data-status="check.status">
+                                  <span class="work-center-goal-status">{{ goalStatusLabel(check.status) }}</span>
+                                  <div class="work-center-goal-criterion">
+                                    <span>{{ check.criterion }}</span>
+                                    <details v-if="check.evidenceRunIds?.length" class="work-center-goal-evidence">
+                                      <summary>{{ tr('workCenter.evidenceRuns', 'Evidence Runs') }}</summary>
+                                      <ul><li v-for="runId in check.evidenceRunIds" :key="runId"><code>{{ runId }}</code></li></ul>
+                                    </details>
+                                  </div>
+                                </li>
+                              </ul>
+                              <p v-if="goalProgress.omittedCriteriaCount" class="work-center-muted">{{ $t('workCenter.criteriaOmitted', { count: goalProgress.omittedCriteriaCount }) }}</p>
+                              <div v-if="goalProgress.blockers?.length" class="work-center-goal-blockers">
+                                <h3>{{ tr('workCenter.goalBlockers', 'Blockers') }}</h3>
+                                <ul><li v-for="blocker in goalProgress.blockers" :key="blocker.actionId"><strong>{{ statusLabel(blocker.status) }}</strong> · {{ blocker.reason || blocker.actionId }}</li></ul>
+                              </div>
+                              <div v-if="goalProgress.delivery" class="work-center-goal-delivery">
+                                <h3>{{ tr('workCenter.deliveryTarget', 'Delivery target') }}</h3>
+                                <p>{{ deliveryTargetLabel(goalProgress.delivery.target) }} · <span class="work-center-goal-status" :data-status="goalProgress.delivery.status">{{ goalStatusLabel(goalProgress.delivery.status) }}</span></p>
+                                <details v-if="goalProgress.delivery.evidenceRunIds?.length" class="work-center-goal-evidence">
+                                  <summary>{{ tr('workCenter.evidenceRuns', 'Evidence Runs') }}</summary>
+                                  <ul><li v-for="runId in goalProgress.delivery.evidenceRunIds" :key="runId"><code>{{ runId }}</code></li></ul>
+                                </details>
+                              </div>
+                            </section>
+                            <section v-else-if="selected.acceptanceCriteria?.length" class="work-center-section work-center-acceptance">
                               <h3>{{ tr('workCenter.acceptanceCriteria', 'Acceptance criteria') }}</h3>
                               <ul><li v-for="criterion in selected.acceptanceCriteria" :key="criterion">{{ criterion }}</li></ul>
+                            </section>
+                            <section v-if="finalResponses.length" class="work-center-section work-center-responses">
+                              <h3>{{ tr('workCenter.deliveredResponse', 'Delivered response') }}</h3>
+                              <div v-for="(response, index) in finalResponses" :key="response.runId || index" class="work-center-response">
+                                <p class="work-center-response-summary">{{ response.summary }}</p>
+                                <details class="work-center-goal-evidence">
+                                  <summary>{{ tr('workCenter.responseEvidence', 'Response source and evidence') }}</summary>
+                                  <p v-if="response.runId">{{ tr('workCenter.evidenceRuns', 'Evidence Runs') }}: <code>{{ response.runId }}</code></p>
+                                  <ul class="work-center-output-list">
+                                    <li v-for="(evidence, evidenceIndex) in response.evidence || []" :key="evidenceIndex">
+                                      <span>{{ evidence.label || evidence }}<template v-if="evidence.status"> · {{ goalStatusLabel(evidence.status) }}</template></span>
+                                      <a v-if="isExternalOutput(evidence)" :href="evidence.ref" target="_blank" rel="noopener noreferrer">{{ evidence.ref }}</a>
+                                      <code v-else-if="evidence.ref">{{ evidence.ref }}</code>
+                                    </li>
+                                  </ul>
+                                </details>
+                              </div>
                             </section>
                             <section v-if="selected.outputs?.length" class="work-center-section work-center-outputs">
                               <h3>{{ tr('workCenter.outputs', 'Outputs') }}</h3>
@@ -1744,6 +1934,7 @@ export default {
 
       <WorkCenterSettingsModal v-if="settingsOpen" :key="agentId" :agent-id="agentId" @close="settingsOpen = false" @saved="refresh" @open-agent-models="settingsOpen = false; llmConfigOpen = true" />
       <AgentSettingsPanel v-if="llmConfigOpen" :initial-agent-id="agentId" initial-category="llm" @close="llmConfigOpen = false" @saved="refreshWorkCenterRuntime" />
+      <AgentSettingsPanel v-if="agentSettingsOpen" :initial-agent-id="agentSettingsTargetId" initial-category="operations" initial-section="work-center" @close="closeWorkCenterAgentSettings()" @saved="closeWorkCenterAgentSettings({ focusBack: true })" />
 
       <div v-if="createOpen" class="modal-overlay work-center-modal-overlay" @click.self="closeCreate">
         <form class="modal-card work-center-modal" role="dialog" aria-modal="true" aria-labelledby="work-center-create-title" @submit.prevent="submitCreate">
@@ -1795,7 +1986,7 @@ export default {
                 <small class="work-center-field-help">{{ tr('workCenter.workDirPickerHelp', 'Select an existing folder on the chosen Agent.') }}</small>
               </label>
               <div class="work-center-create-options">
-                <label><span>{{ tr('workCenter.deliveryTarget', 'Delivery target') }}</span><select v-model="form.deliveryTarget"><option value="">{{ tr('workCenter.deliveryTargetAsk', 'Ask me before delivery') }}</option><option value="workspace_files">{{ tr('workCenter.deliveryTargetFiles', 'Workspace files') }}</option><option value="pull_request">{{ tr('workCenter.deliveryTargetPr', 'Open a pull request') }}</option><option value="merge">{{ tr('workCenter.deliveryTargetMerge', 'Merge an approved pull request') }}</option></select><small class="work-center-field-help">{{ tr('workCenter.deliveryTargetHelp', 'This is the completion boundary, not permission to bypass review or merge policy.') }}</small></label>
+                <label><span>{{ tr('workCenter.deliveryTarget', 'Delivery target') }}</span><select v-model="form.deliveryTarget"><option value="">{{ tr('workCenter.deliveryTargetAsk', 'Ask me before delivery') }}</option><option value="response">{{ tr('workCenter.deliveryTargetResponse', 'Response') }}</option><option value="workspace_files">{{ tr('workCenter.deliveryTargetFiles', 'Workspace files') }}</option><option value="pull_request">{{ tr('workCenter.deliveryTargetPr', 'Open a pull request') }}</option><option value="merge">{{ tr('workCenter.deliveryTargetMerge', 'Merge an approved pull request') }}</option></select><small class="work-center-field-help">{{ tr('workCenter.deliveryTargetHelp', 'This is the completion boundary, not permission to bypass review or merge policy.') }}</small></label>
                 <label class="work-center-checkbox"><input v-model="form.reuseMemory" type="checkbox"><span><strong>{{ tr('workCenter.reuseMemory', 'Use relevant Agent memory and completed work from this project') }}</strong><small>{{ tr('workCenter.reuseMemoryHelp', 'Uses scope-bounded Agent memory and structured results from completed WorkItems in the same project.') }}</small></span></label>
                 <label class="work-center-checkbox"><input v-model="form.start" type="checkbox" @change="onCreateStartInput"><span><strong>{{ tr('workCenter.startImmediately', 'Start immediately') }}</strong><small>{{ tr('workCenter.startImmediatelyHint', 'Turn this off to create a draft you can review first.') }}</small></span></label>
               </div>

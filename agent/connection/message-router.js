@@ -10,7 +10,7 @@ import { decodeKey } from '../encryption.js';
 import { handleTerminalCreate, handleTerminalInput, handleTerminalResize, handleTerminalClose } from '../terminal.js';
 import { handleProxyHttpRequest, handleProxyWsOpen, handleProxyWsMessage, handleProxyWsClose } from '../proxy.js';
 import {
-  handleReadFile, handleWriteFile, handleListDirectory,
+  handleReadFile, handleVideoMetadata, handleVideoChunk, handleWriteFile, handleListDirectory,
   handleGitStatus, handleGitDiff, handleGitAdd, handleGitReset, handleGitRestore, handleGitCommit, handleGitPush,
   handleFileSearch, handleResolveFileReferences, handleCreateFile, handleDeleteFiles, handleMoveFiles, handleCopyFiles, handleUploadToDir, handleTransferFiles
 } from '../workbench.js';
@@ -26,12 +26,12 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { sendAgentMetricsSnapshot } from '../metrics.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
-import { getLlmConfig, updateLlmConfig, getYeaftSettings, updateYeaftSettings, getPluginConfig, updatePluginConfig, getTelemetrySettings, updateTelemetrySettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../yeaft/config-api.js';
+import { getLlmConfig, updateLlmConfig, getYeaftSettings, updateYeaftSettings, getPluginConfig, updatePluginConfig, getTelemetrySettings, updateTelemetrySettings, getWorkCenterFeatureSettings, updateWorkCenterFeatureSettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../yeaft/config-api.js';
 import { loadConfig } from '../yeaft/config.js';
 import { mutateAgentConfig } from '../yeaft/config-store.js';
 import { discoverLlmModels } from '../llm-model-discovery.js';
 import { fetchModelsDev } from '../yeaft/llm/models-dev.js';
-import { handleYeaftSessionSend, handleYeaftAskUserAnswer, handleYeaftSubAgentPrompt, handleYeaftTaskCancel, handleYeaftModeSwitch, handleYeaftModelSwitch, resetYeaftSession, refreshLiveSessionConfig, setLiveDreamEnabled, handleYeaftLoadHistory, handleYeaftLoadHistoryOutline, handleYeaftSearchHistory, handleYeaftLoadHistoryWindow, handleYeaftLoadMoreHistory, handleYeaftAbortThread, handleYeaftAbortAll, handleYeaftAbortTurn, handleYeaftVpSubscribe, handleYeaftVpCreate, handleYeaftVpUpdate, handleYeaftVpDelete, handleYeaftVpRead, handleYeaftListSessions, handleYeaftProjectContextSync, handleYeaftProjectMutation, handleYeaftCreateSession, handleYeaftRenameSession, handleYeaftUpdateSession, handleYeaftUpdateSessionConfig, handleYeaftArchiveSession, handleYeaftDeleteSession, handleYeaftSessionAddMember, handleYeaftSessionRemoveMember, handleYeaftSessionSetDefaultVp, handleYeaftScanWorkdirSessions, handleYeaftRestoreSession, handleYeaftDreamTrigger, handleYeaftFetchToolStats, handleYeaftFetchDebugHistory, handleYeaftMcpList, handleYeaftMcpAdd, handleYeaftMcpRemove, handleYeaftMcpReload, handleYeaftPluginCatalog, handleYeaftManagedSkill, ensureSessionLoaded, broadcastLanguageChange, broadcastYeaftSessionSnapshotEager, broadcastYeaftVpSnapshotEager, preloadYeaftSkillSlashCommands } from '../yeaft/web-bridge.js';
+import { handleYeaftSessionSend, handleYeaftAskUserAnswer, handleYeaftSubAgentPrompt, handleYeaftTaskCancel, handleYeaftModeSwitch, handleYeaftModelSwitch, resetYeaftSession, refreshLiveSessionConfig, setLiveDreamEnabled, handleYeaftLoadHistory, handleYeaftLoadHistoryOutline, handleYeaftSearchHistory, handleYeaftLoadHistoryWindow, handleYeaftLoadMoreHistory, handleYeaftAbortThread, handleYeaftAbortAll, handleYeaftAbortTurn, handleYeaftVpSubscribe, handleYeaftVpCreate, handleYeaftVpUpdate, handleYeaftVpDelete, handleYeaftVpRead, handleYeaftListSessions, handleYeaftProjectContextSync, handleYeaftProjectMutation, handleYeaftCreateSession, handleYeaftCopySession, handleYeaftRenameSession, handleYeaftUpdateSession, handleYeaftUpdateSessionConfig, handleYeaftArchiveSession, handleYeaftDeleteSession, handleYeaftSessionAddMember, handleYeaftSessionRemoveMember, handleYeaftSessionSetDefaultVp, handleYeaftScanWorkdirSessions, handleYeaftRestoreSession, handleYeaftDreamTrigger, handleYeaftFetchToolStats, handleYeaftFetchDebugHistory, handleYeaftMcpList, handleYeaftMcpAdd, handleYeaftMcpRemove, handleYeaftMcpReload, handleYeaftPluginCatalog, handleYeaftManagedSkill, ensureSessionLoaded, broadcastLanguageChange, broadcastYeaftSessionSnapshotEager, broadcastYeaftVpSnapshotEager, preloadYeaftSkillSlashCommands } from '../yeaft/web-bridge.js';
 import { startYeaftStatusRefresh, forceRefreshYeaftStatus } from '../yeaft/status-cache.js';
 import { handleWorkCenterRequest } from '../yeaft/work-center/bridge.js';
 import { handleBrowserRuntimeMessage } from '../browser-runtime/messages.js';
@@ -82,6 +82,7 @@ export async function applyLlmConfigUpdate(msg, dependencies = {}) {
 }
 
 export function applyRegisteredTransport(msg) {
+  ctx.serverCapabilities = new Set(Array.isArray(msg.serverCapabilities) ? msg.serverCapabilities : []);
   if (msg.sessionKey) {
     ctx.sessionKey = decodeKey(msg.sessionKey);
     console.log('Encryption enabled');
@@ -93,6 +94,81 @@ export function applyRegisteredTransport(msg) {
     ctx.serverEncryptionRequired = false;
     console.log('[WS] Server accepts plaintext, disabling outbound encryption');
   }
+}
+
+let workCenterFeatureTransition = Promise.resolve();
+
+export async function applyWorkCenterFeatureUpdate(msg, dependencies = {}) {
+  const run = async () => {
+    const update = dependencies.updateWorkCenterFeatureSettings || updateWorkCenterFeatureSettings;
+    const getSettings = dependencies.getWorkCenterFeatureSettings || getWorkCenterFeatureSettings;
+    const bridge = dependencies.bridge || await import('../yeaft/work-center/bridge.js');
+    const refreshCapabilities = dependencies.refreshAgentCapabilities || ctx.refreshAgentCapabilities;
+    const yeaftDir = dependencies.yeaftDir ?? ctx.CONFIG?.yeaftDir;
+    // Read inside the transition queue so the previous request is observable.
+    const previous = getSettings(yeaftDir);
+    const persisted = update(msg.settings || {}, yeaftDir);
+    if (persisted.error) {
+      return {
+        ...previous,
+        error: persisted.error,
+        persisted: false,
+        effective: dependencies.runtimeEnabled ?? ctx.CONFIG?.workCenterEnabled === true,
+      };
+    }
+
+    bridge.setWorkCenterFeatureEnabled(persisted.enabled);
+    try {
+      if (persisted.enabled) await bridge.bootWorkCenter();
+      else await bridge.shutdownWorkCenter();
+      if (ctx.CONFIG) ctx.CONFIG.workCenterEnabled = persisted.enabled;
+      ctx.workCenterStartupError = null;
+      await refreshCapabilities?.();
+      return {
+        ...persisted,
+        persisted: true,
+        effective: persisted.enabled,
+        sessionTools: persisted.enabled ? 'new_sessions_only' : 'disabled_immediately',
+      };
+    } catch (error) {
+      const rollback = previous.error ? previous : update({ enabled: previous.enabled === true }, yeaftDir);
+      const restored = !rollback.error;
+      let rollbackRuntimeError = null;
+      if (restored) {
+        bridge.setWorkCenterFeatureEnabled(previous.enabled === true);
+        try {
+          if (previous.enabled === true) await bridge.bootWorkCenter();
+          else await bridge.shutdownWorkCenter();
+        } catch (rollbackError) {
+          rollbackRuntimeError = rollbackError?.message || String(rollbackError);
+          bridge.setWorkCenterFeatureEnabled(false);
+        }
+        if (ctx.CONFIG) ctx.CONFIG.workCenterEnabled = previous.enabled === true && !rollbackRuntimeError;
+        try { await refreshCapabilities?.(); } catch { /* original transition error remains authoritative */ }
+      } else {
+        bridge.setWorkCenterFeatureEnabled(false);
+        try {
+          await bridge.shutdownWorkCenter();
+        } catch (shutdownError) {
+          rollbackRuntimeError = shutdownError?.message || String(shutdownError);
+        }
+        if (ctx.CONFIG) ctx.CONFIG.workCenterEnabled = false;
+        try { await refreshCapabilities?.(); } catch { /* original transition error remains authoritative */ }
+      }
+      const effective = restored && !rollbackRuntimeError ? previous.enabled === true : false;
+      return {
+        ...persisted,
+        enabled: restored ? previous.enabled === true : persisted.enabled,
+        error: `Failed to apply Work Center runtime transition: ${error?.message || error}${rollbackRuntimeError ? `; rollback runtime failed: ${rollbackRuntimeError}` : ''}`,
+        persisted: !restored,
+        effective,
+        rolledBack: restored && !rollbackRuntimeError,
+      };
+    }
+  };
+  const result = workCenterFeatureTransition.then(run, run);
+  workCenterFeatureTransition = result.catch(() => {});
+  return result;
 }
 
 export async function handleMessage(msg) {
@@ -250,6 +326,14 @@ export async function handleMessage(msg) {
       await handleReadFile(msg);
       break;
 
+    case 'video_metadata':
+      await handleVideoMetadata(msg);
+      break;
+
+    case 'video_chunk':
+      await handleVideoChunk(msg);
+      break;
+
     case 'write_file':
       await handleWriteFile(msg);
       break;
@@ -392,7 +476,7 @@ export async function handleMessage(msg) {
     // LLM configuration (read/write this agent's ~/.yeaft/config.json)
     case 'get_llm_config': {
       const config = getLlmConfig(ctx.CONFIG?.yeaftDir);
-      sendToServer({ type: 'llm_config', ...config });
+      sendToServer({ type: 'llm_config', requestId: msg.requestId, ...config });
       break;
     }
 
@@ -520,6 +604,28 @@ export async function handleMessage(msg) {
         }
       }
       sendToServer({ type: 'telemetry_settings_updated', requestId: msg.requestId, clientId: msg.clientId, ...result });
+      break;
+    }
+
+
+    case 'get_work_center_feature_settings': {
+      const settings = getWorkCenterFeatureSettings(ctx.CONFIG?.yeaftDir);
+      sendToServer({
+        type: 'work_center_feature_settings', requestId: msg.requestId, clientId: msg.clientId, ...settings,
+        effective: ctx.CONFIG?.workCenterEnabled === true,
+        ...(ctx.workCenterStartupError ? { runtimeError: ctx.workCenterStartupError } : {}),
+      });
+      break;
+    }
+
+    case 'update_work_center_feature_settings': {
+      let result;
+      try {
+        result = await applyWorkCenterFeatureUpdate(msg);
+      } catch (error) {
+        result = { error: `Failed to apply Work Center setting: ${error?.message || error}`, persisted: false, effective: ctx.CONFIG?.workCenterEnabled === true };
+      }
+      sendToServer({ type: 'work_center_feature_settings_updated', requestId: msg.requestId, clientId: msg.clientId, ...result });
       break;
     }
 
@@ -696,6 +802,9 @@ export async function handleMessage(msg) {
     case 'unify_create_group':
     case 'yeaft_create_session':
       handleYeaftCreateSession(msg);
+      break;
+    case 'yeaft_copy_session':
+      handleYeaftCopySession(msg);
       break;
     case 'yeaft_rename_group':
     case 'unify_rename_group':

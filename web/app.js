@@ -13,6 +13,7 @@ import YeaftPage from './components/YeaftPage.js';
 import SplitPane from './components/SplitPane.js';
 import ToolLine from './components/ToolLine.js';
 import AppDialog from './components/AppDialog.js';
+import UserShortcutsRuntime from './components/UserShortcutsRuntime.js';
 import { removeLegacyYeaftHistoryDatabase } from './stores/helpers/legacy-yeaft-history-cache-cleanup.js';
 
 removeLegacyYeaftHistoryDatabase();
@@ -26,12 +27,13 @@ window.Pinia = {
 };
 
 const App = {
-  components: { LoginPage, ChatPage, YeaftPage, AppDialog },
+  components: { LoginPage, ChatPage, YeaftPage, AppDialog, UserShortcutsRuntime },
   template: `
     <AppDialog />
     <div v-if="!authStore.initialized" class="auth-bootstrap" aria-busy="true"><span class="session-loading-spinner"></span></div>
     <LoginPage v-else-if="!authStore.isAuthenticated" />
     <template v-else>
+      <UserShortcutsRuntime />
       <YeaftPage v-if="chatStore.currentView === 'yeaft'" />
       <ChatPage v-else />
     </template>

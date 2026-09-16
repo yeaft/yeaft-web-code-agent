@@ -44,6 +44,10 @@ Yeaft 是运行在自有机器上的代码 Agent 的 Web 控制面。同一个�
 
 Web UI 还提供终端、Git 状态与 diff、文件浏览/编辑、端口代理、CLI conversation 分屏、Claude Code conversation 的 Expert Panel、用量管理、light/dark theme，以及中英文切换。
 
+### Markdown 消息中的数学公式
+
+Markdown 消息通过本地 KaTeX 渲染 LaTeX 公式：行内使用 `$E=mc^2$` 或 `\(E=mc^2\)`，独立公式使用 `$$...$$` 或 `\[...\]`（可包含多行）。行内代码和代码块保持原样，不支持的公式保留为可读源码，长公式在窄屏中可横向滚动。支持范围是 KaTeX 数学语法，不是完整 LaTeX 文档；运行时无需 CDN。
+
 ## 当前原生 Yeaft 能力
 
 ### Session 与 Project
@@ -114,6 +118,10 @@ Default service instance 是例外，使用 `~/.yeaft/config.json`。自定义 `
 Claude Code 和 Copilot CLI conversation 仍需要分别安装并登录对应 CLI。
 
 ### 连接已有 Server
+
+推荐：打开 **设置 → 安全**，选择 **Linux / macOS** 或 **Windows PowerShell**，复制一键安装命令。脚本会检查 Node.js/npm、在独立用户目录安装 Agent，并使用当前服务器地址和 Secret 启动 `<机器名>-<四位随机数>` 新实例，不替换已有 Node 或正在运行的 Agent。平台要求、安全注意事项和管理方式见 [Agent 安装](docs/zh-CN/guide/deploy-agent.md)。
+
+手动安装方式：
 
 ```bash
 npm install -g @yeaft/webchat-agent

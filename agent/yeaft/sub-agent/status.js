@@ -14,7 +14,7 @@
  *            ↓        ↓
  *            failed   completed
  *            ↓        ↓
- *            closed   abandoned (idle too long; reaped by watchdog)
+ *            closed   abandoned (only with an explicit idle timeout)
  *
  * - 'created'   : registry record exists but the driver hasn't taken a
  *                  step yet. Transient — flips to 'running' on first tick.
@@ -26,10 +26,10 @@
  * - 'failed'    : terminal — driver/adapter/stream raised; agent.error set.
  * - 'closed'    : terminal — CloseAgent called (or driver finally{} reaped
  *                  a cleanly-finishing agent).
- * - 'abandoned' : terminal — idle watchdog tripped (no prompt arrived in
- *                  IDLE_ABANDON_MS). Distinct from 'closed' so the parent
- *                  can tell "the parent forgot about me" from "the parent
- *                  deliberately wrapped me up".
+ * - 'abandoned' : terminal — an embedding caller's explicit idle timeout
+ *                  elapsed. Distinct from 'closed' so the parent can tell
+ *                  automatic cleanup from deliberate finalization. There is
+ *                  no default idle lifetime deadline.
  */
 
 export const STATUS = Object.freeze({

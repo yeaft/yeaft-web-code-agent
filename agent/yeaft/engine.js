@@ -9,7 +9,7 @@
  *   5. If tool_calls → execute tools → append results → goto 3
  *   6. Persist each completed message at its durability boundary
  *   7. If max_tokens → auto-continue (up to maxContinueTurns)
- *   8. On LLMContextError → fail the turn; no summary or hidden maintenance call
+ *   8. On LLMContextError → shrink the request copy and retry without replaying tools
  *   9. On retryable error with fallbackModel → switch model → retry
  *
  * Pattern derived from Claude Code's query loop (src/query.ts).
@@ -22,7 +22,7 @@ import { promises as fsp } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { getRuntimePlatformInfo } from './runtime-platform.js';
-import { LLMAbortError, LLMAuthError, LLMPolicyError, LLMRateLimitError, LLMServerError, LLMStreamIdleTimeoutError } from './llm/adapter.js';
+import { LLMAbortError, LLMAuthError, LLMContextError, LLMPolicyError, LLMRateLimitError, LLMServerError, LLMStreamIdleTimeoutError } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes, memoryScopeLabel } from './sessions/pre-flow.js';
 import {
   readProjectDoc,
@@ -33,7 +33,15 @@ import {
   DEFAULT_PROJECT_DOC_MAX_BYTES,
 } from './sessions/project-doc.js';
 import { archiveToolResults } from './archive/tool-results.js';
-import { trimSnapshotForBudget } from './history-window.js';
+import {
+  trimSnapshotForBudget,
+  estimateMessageTokens,
+  estimateMessagesTokens as estimateHistoryMessagesTokens,
+  buildHistoryBuckets,
+  fitProviderRequestToContext,
+} from './history-window.js';
+import { recallConversationTurns } from './conversation/history-index.js';
+import { parseSeqFromId } from './conversation/persist.js';
 import { isVpForeign, readContent as readScopeContent } from './memory/store.js';
 import { ActiveMemorySet } from './memory/ams.js';
 import { cleanMemoryPromptText } from './memory/prompt-cleanup.js';
@@ -42,13 +50,22 @@ import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 // Default thread marker for legacy / non-group flows. Group VP runtime may
 // pass a real threadId per (sessionId, vpId, threadId) engine instance.
 const MAIN_THREAD_ID = 'main';
-import { pickEffort, parseEffortPrefix } from './effort.js';
-import { DEFAULT_CONTEXT_WINDOW, normalizeEffort, resolveContextWindow, resolveModel } from './models.js';
+import { pickEffort, parseEffortPrefix, snapshotEffortDecision } from './effort.js';
+import { bindProviderState } from './llm/provider-state.js';
+import {
+  POST_COMPACT_CONTEXT_RATIO,
+  generatePostCompact,
+  loadPostCompact,
+  postCompactPath,
+  removePostCompactIfSource,
+  savePostCompact,
+} from './post-compact.js';
+import { DEFAULT_CONTEXT_WINDOW, getModelInfo, normalizeEffort, parseModelRef, resolveContextWindow, resolveMaxOutputTokens, resolveModel } from './models.js';
 import { lookupModelLimitSync } from './llm/models-dev.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
 import { approxTokens, computeBudget } from './memory/budget.js';
-import { COLLAB_TOOL_POLICY, isToolErrorOutput, localizeVisibleText, normalizeToolOutput, truncateToolResultIfNeeded } from './tools/registry.js';
+import { COLLAB_TOOL_POLICY, isToolErrorOutput, toolValidationError, localizeVisibleText, normalizeToolOutput, truncateToolResultIfNeeded } from './tools/registry.js';
 import { CONDITIONAL_BUILTIN_TOOL_NAMES, resolveActiveToolNames } from './tools/activation.js';
 import { discoverToolCapabilities } from './tools/discover-tools.js';
 import { agentBelongsToScope, getAgentRegistry } from './tools/agent.js';
@@ -56,7 +73,7 @@ import { createPluginSkillManager } from './plugins.js';
 import { extractDisplayImages, stripDisplayImageData } from './image-assets.js';
 import { acknowledgePendingNotifications, formatNotificationsForPrompt, peekPendingNotifications } from './sub-agent/notifications.js';
 import {
-  TOOL_BATCH_SIZE,
+  TOOL_LOOP_REFLECTION_INTERVAL,
   TURN_SUMMARY_THRESHOLD,
   DUP_TOOL_THRESHOLD,
   ExecLog,
@@ -77,7 +94,7 @@ import {
  * conversations (user report: Yeaft loop errored at the cap). The engine
  * now runs until the LLM itself returns stopReason='end_turn' or a
  * non-retryable error surfaces. Real runaway loops are still bounded by:
- *   • provider rate limits / context window (LLMContextError is surfaced)
+ *   • provider rate limits / context recovery exhaustion
  *   • user-initiated abort (AbortController / cancel)
  *   • MAX_CONTINUE_TURNS for the max_tokens auto-continue path
  */
@@ -90,7 +107,8 @@ const MAX_CONTINUE_TURNS = 3;
  * network, or subprocess reads. Only tools whose metadata explicitly declares
  * both read-only and concurrency-safe execution enter this lane.
  */
-const MAX_CONCURRENT_READ_ONLY_TOOLS = 4;
+// Safe shared tools run together within the finite provider batch. Unsafe tools
+// form exclusive barriers; resource-specific limits belong to the owning tool.
 
 /** Maximum silence while a visible turn waits for a result-producing task. */
 const DEFAULT_ASYNC_TASK_WAIT_TIMEOUT_MS = 120_000;
@@ -399,6 +417,41 @@ export function estimateMessagesTokens(system, messages) {
     }
   }
   return total;
+}
+
+/**
+ * Estimate the input composition of the exact provider request copy. These are
+ * diagnostic estimates only; provider usage remains authoritative for billing.
+ * `historyMessageCount` is the final post-fit boundary between historical rows
+ * and current-turn rows.
+ *
+ * @param {{ systemPrompt?:string, messages?:Array<object>, historyMessageCount?:number, toolDefs?:Array<object> }} input
+ * @returns {{systemPromptTokens:number, historyMessageTokens:number, toolDefinitionTokens:number, currentTurnTokens:number, totalEstimatedTokens:number}}
+ */
+export function estimateProviderInputBreakdown({
+  systemPrompt = '',
+  messages = [],
+  historyMessageCount = 0,
+  toolDefs = [],
+} = {}) {
+  const source = Array.isArray(messages) ? messages : [];
+  const split = Math.max(0, Math.min(
+    source.length,
+    Number.isInteger(historyMessageCount) ? historyMessageCount : 0,
+  ));
+  const systemPromptTokens = approxTokens(typeof systemPrompt === 'string' ? systemPrompt : '');
+  const historyMessageTokens = estimateHistoryMessagesTokens(source.slice(0, split));
+  const currentTurnTokens = estimateHistoryMessagesTokens(source.slice(split));
+  const toolDefinitionTokens = Array.isArray(toolDefs) && toolDefs.length > 0
+    ? approxTokens(JSON.stringify(toolDefs))
+    : 0;
+  return {
+    systemPromptTokens,
+    historyMessageTokens,
+    toolDefinitionTokens,
+    currentTurnTokens,
+    totalEstimatedTokens: systemPromptTokens + historyMessageTokens + toolDefinitionTokens + currentTurnTokens,
+  };
 }
 
 export const GROUP_CONTEXT_PRESSURE_RATIO = 0.8;
@@ -718,12 +771,17 @@ export class Engine {
    *     prior turn's history is rewritten with the reflection. If still
    *     pending, the engine falls back to the exec-log stub.
    *   • `#reflectedTurns` — Set<turnNumber>; ensures T1 fires at most
-   *     once per turn (when toolCount crosses TOOL_BATCH_SIZE).
+   *     once per reflection interval measured in tool loops.
    */
   #execLog = null;
   #pendingT2 = new Map();
   #reflectedTurns = new Set();
   #__queryCounter = 0;
+
+  /** Derived post-response summaries, keyed by Session/VP/thread scope. */
+  #postCompactSummaries = new Map();
+  #postCompactLoaded = new Set();
+  #postCompactRevisions = new Map();
 
   /** @type {string} */
   #currentThreadId = MAIN_THREAD_ID;
@@ -1233,8 +1291,8 @@ export class Engine {
   }
 
   /**
-   * Build the system prompt with the AMS-rendered Memory block, the
-   * Active Scope block, and skill content. The legacy multi-path
+   * Build the system prompt with the AMS-rendered Memory block, routing
+   * metadata, and skill content. The legacy multi-path
    * Memory injection (FTS-formatted + AMS snapshot + Layer-A summaries +
    * userProfile + coreMemory) was retired in DESIGN-PROMPT v1; callers
    * now thread a single `memoryInjection` string composed upstream from
@@ -1243,8 +1301,7 @@ export class Engine {
    * Routes through `buildWorkerPrompt`, which:
    *   - Lays in the persona-as-identity block (or Yeaft identity fallback)
    *   - Adds the Memory section (passed in as `memoryInjection`)
-   *   - Adds the structured Active Scope block (`activeScope`)
-   *   - Forwards optional `taskCtx` for the legacy task-context sub-block
+   *   - Adds multi-VP routing metadata from `activeScope` when applicable
    *
    * @param {object} args
    * @param {string} args.prompt — user prompt (for skill relevance matching)
@@ -1256,11 +1313,10 @@ export class Engine {
    * @param {string} [args.projectLabel] — current Project name and id for prompt attribution
    * @param {string} [args.workCenterInstructions] — frozen Agent-level Work Center policy
    * @param {string} [args.projectDoc] — resolved CLAUDE.md / AGENTS.md text (already truncated)
-   * @param {object} [args.taskCtx] — legacy task-context sub-block (optional)
    * @param {string} [args.explicitSkillName] — leading /skill:<name> command, if present
    * @returns {string}
    */
-  #buildSystemPrompt({ prompt, memoryInjection, vpPersona, activeScope, sessionAnnouncement, projectInstruction, projectLabel, workCenterInstructions, projectDoc, taskCtx, activeTasks, collabToolPolicy = null, activeToolNames = null, promptNotices = [], explicitSkillName, resolvedSkillContent = null } = {}) {
+  #buildSystemPrompt({ prompt, memoryInjection, vpPersona, activeScope, sessionAnnouncement, projectInstruction, projectLabel, workCenterInstructions, projectDoc, promptNotices = [], explicitSkillName, resolvedSkillContent = null } = {}) {
     // #runQuery resolves Skill selection at each provider-request boundary so
     // a live Plugin policy change cannot leave stale content in the next prompt.
     // Keep the local fallback for internal callers that do not need selection
@@ -1275,21 +1331,8 @@ export class Engine {
       }
     }
 
-    // Prompt guidance must describe the same canonical capability
-    // intersection that reaches provider schemas and execution.
-    const registeredToolNames = this.#toolRegistry
-      ? this.#toolRegistry.getToolNames({
-          plugins: this.#config?.plugins,
-          collabToolPolicy,
-        })
-      : Array.from(this.#tools.keys());
-    const toolNames = activeToolNames instanceof Set
-      ? registeredToolNames.filter(name => activeToolNames.has(name))
-      : registeredToolNames;
-
     return buildWorkerPrompt({
       language: this.#config.language || 'en',
-      toolNames,
       memoryInjection,
       skillContent,
       vpPersona,
@@ -1300,8 +1343,6 @@ export class Engine {
       workCenterInstructions,
       projectDoc,
       runtimePlatform: getRuntimePlatformInfo(),
-      taskCtx,
-      activeTasks,
       promptNotices,
       // Worker-shape harness is descriptive metadata for human inspection;
       // production prompts skip it to save tokens. Re-enable via env when
@@ -1390,6 +1431,8 @@ export class Engine {
   #buildToolContext(signal, vpCtx) {
     return {
       signal,
+      effortDecision: snapshotEffortDecision(vpCtx?.effortDecision),
+      requestIdentity: vpCtx?.requestIdentity,
       yeaftDir: this.#yeaftDir,
       managedCliReady: this.#managedCliReady,
       runtimePlatform: getRuntimePlatformInfo(),
@@ -1434,19 +1477,14 @@ export class Engine {
       // VP-aware tool). Undefined when running in non-group / no-VP flows.
       router: vpCtx?.router,
       senderVpId: vpCtx?.senderVpId,
-      // Active VP persona — surfaced so tools like `StartPlan` can read
-      // the optional `planInstruction` override without re-reading
-      // role.md. Mirrors the symmetry already present in
-      // `parentEngineDeps.parentVpPersona` below — sub-agents inherit it
-      // through the parent deps; tools at this level read it directly.
+      // Active VP persona for VP-aware tools and inherited sub-agent context.
       // Null in non-VP / test contexts.
       vpPersona: vpCtx?.vpPersona || null,
       inboundEnvelope: vpCtx?.inboundEnvelope,
       taskId: vpCtx?.taskId,
       taskMembers: vpCtx?.taskMembers,
-      // TodoWrite per-VP cache hooks. Threaded from web-bridge so each
-      // VP keeps its own todo list (see todo-write.js, web-bridge.js).
-      // Null in non-VP / test contexts — tools tolerate missing slots.
+      // Legacy todo cache hooks retained for embedding callers and replay.
+      // Native checklist tools are no longer registered.
       getCurrentTodos: vpCtx?.getCurrentTodos || null,
       setCurrentTodos: vpCtx?.setCurrentTodos || null,
       askUser: typeof vpCtx?.askUser === 'function'
@@ -1589,6 +1627,7 @@ export class Engine {
     if (message.toolCallId) record.toolCallId = message.toolCallId;
     if (Array.isArray(message.toolCalls) && message.toolCalls.length > 0) record.toolCalls = message.toolCalls;
     if (Array.isArray(message.thinkingBlocks) && message.thinkingBlocks.length > 0) record.thinkingBlocks = message.thinkingBlocks;
+    if (message.providerState) record.providerState = message.providerState;
     if (message.isError) record.isError = true;
     if (message.imageAssetAnchor) record.imageAssetAnchor = true;
     if (message._reflection) record._reflection = true;
@@ -1623,7 +1662,7 @@ export class Engine {
       : message.content != null;
     const hasToolCalls = Array.isArray(message.toolCalls) && message.toolCalls.length > 0;
     const hasThinking = Array.isArray(message.thinkingBlocks) && message.thinkingBlocks.length > 0;
-    if (!hasContent && !hasToolCalls && !hasThinking && message.role !== 'tool') return null;
+    if (!hasContent && !hasToolCalls && !hasThinking && !message.providerState && message.role !== 'tool') return null;
     return this.#conversationStore.append(this.#conversationRecord(message, context));
   }
 
@@ -1875,7 +1914,7 @@ export class Engine {
     }
   }
 
-  async *#queryLifecycle({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null } = {}) {
+  async *#queryLifecycle({ prompt, promptParts = null, messages = [], signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       const error = new Error('prompt is required and must be a non-empty string');
       yield {
@@ -1967,7 +2006,7 @@ export class Engine {
     try {
       this.#currentThreadId = threadId || MAIN_THREAD_ID;
       this.#currentCausalRootId = effectiveCausalRootId;
-      yield* this.#runQuery({ prompt: effectivePrompt, promptParts: effectivePromptParts, messages, signal: runSignal, userEffort: explicitUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds, projectInstruction, projectLabel, vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted, causalRootId: effectiveCausalRootId, getCurrentTodos, setCurrentTodos, askUser, threadId: this.#currentThreadId, vpTurnId, drainPendingUserMessages, prepareProviderRequest, startProviderRequest, finishProviderRequest, failProviderRequest, closePendingUserInput, collabToolPolicy: effectiveCollabToolPolicy, explicitSkillName: parsedSkill.skillName, retryLifecycle });
+      yield* this.#runQuery({ prompt: effectivePrompt, promptParts: effectivePromptParts, messages, signal: runSignal, turnConfig: turnConfig ? { model: turnConfig.model, effort: turnConfig.effort, maxOutputTokens: turnConfig.maxOutputTokens } : null, userEffort: explicitUserEffort, scenario, isSubAgent, parentEffortDecision, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds, projectInstruction, projectLabel, vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted, currentUserMessage, causalRootId: effectiveCausalRootId, getCurrentTodos, setCurrentTodos, askUser, threadId: this.#currentThreadId, vpTurnId, drainPendingUserMessages, prepareProviderRequest, startProviderRequest, finishProviderRequest, failProviderRequest, closePendingUserInput, collabToolPolicy: effectiveCollabToolPolicy, explicitSkillName: parsedSkill.skillName, retryLifecycle });
     } finally {
       // Closing the async generator at a visible retry boundary means the
       // continuation never reached a provider. Keep it out of history and
@@ -2022,7 +2061,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, explicitSkillName = null, retryLifecycle }) {
+  async *#runQuery({ prompt, promptParts = null, messages, signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, explicitSkillName = null, retryLifecycle }) {
 
     const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
       ? collabToolPolicy
@@ -2047,12 +2086,27 @@ export class Engine {
     // standalone/CLI callers pass it per query.
     this.#sessionId = runtimeSessionId || null;
     this.#currentThreadId = runtimeThreadId;
+    const requestIdentity = Object.freeze({
+      instanceScope: this.#yeaftDir || '',
+      ownerScope: this.#yeaftDir ? 'instance-local-owner' : '',
+      sessionId: runtimeSessionId || this.#chatId || '',
+      vpId: this.#vpId || senderVpId || vpPersona?.vpId || 'default',
+      threadId: runtimeThreadId,
+    });
+    const effortConstraint = isSubAgent || scenario === 'sub_agent' || vpPersona?.subAgent
+      ? Object.freeze({ parentDecision: snapshotEffortDecision(parentEffortDecision) }) : null;
     const queryStartedAt = Date.now();
     const userQuestionPreview = String(prompt || '').slice(0, 200);
     const queryVpId = vpPersona && typeof vpPersona === 'object'
       && typeof vpPersona.vpId === 'string'
       ? vpPersona.vpId
       : (typeof senderVpId === 'string' ? senderVpId : null);
+    const postCompactScope = this.#postCompactScope({
+      sessionId: runtimeSessionId,
+      vpId: queryVpId,
+      threadId: runtimeThreadId,
+    });
+    const postCompactState = await this.#beginPostCompactScope(postCompactScope);
     // Exact read-only tool results are safe to reuse within one query only
     // when no intervening mutation can have changed the workspace. The map is
     // intentionally local to this query; cross-turn reuse belongs to the
@@ -2079,10 +2133,66 @@ export class Engine {
     // memory pre-flow or provider request can fail. The Web Session bridge
     // already writes one shared user row before multi-VP fan-out, so those
     // callers set userAlreadyPersisted and every VP skips this append.
+    const internalTrigger = !!inboundEnvelope?.msg?.meta?.injectedBy;
+    let persistedQueryUser = currentUserMessage;
     if (!userAlreadyPersisted) {
-      this.#persistConversationMessage({ role: 'user', content: prompt, userAuthored: true }, {
-        sessionId: runtimeSessionId,
-      });
+      persistedQueryUser = this.#persistConversationMessage({
+        role: internalTrigger ? 'assistant' : 'user', content: prompt,
+        ...(internalTrigger ? { internal: true } : { userAuthored: true }),
+      }, { sessionId: runtimeSessionId });
+    }
+    // Native Session history, including internal wakeups, comes from the
+    // canonical message transcript. Dream memory loading is temporarily
+    // disabled for every scenario (including Work Center and child agents)
+    // while message-history recall is evaluated as its replacement. Keep the
+    // downstream memory pipeline intact behind this single switch so it can be
+    // restored without migrating or deleting persisted memory data.
+    const useMessageHistory = scenario !== 'work-item' && !!runtimeSessionId && !vpPersona?.subAgent;
+    // const useDreamMemory = scenario === 'work-item' || !!vpPersona?.subAgent
+    //   || (!runtimeSessionId && !internalTrigger);
+    const useDreamMemory = false;
+    const recentTurnCap = Math.max(10, this.#config.yeaft?.recentTurnsLimit ?? 10);
+    const relatedTurnCap = Math.min(5, this.#config.yeaft?.relatedTurnsLimit ?? 5);
+    let relatedHistoryTurns = [];
+    let historyRecallMeta = { source: 'messages', status: 'disabled' };
+    if (useMessageHistory && !internalTrigger && this.#conversationStore?.loadRecentBySession) {
+      // Bounded canonical rows, not the lossy bridge cache. Threads share the
+      // Session transcript; only tool arcs and thinking are VP-private.
+      const clientId = inboundEnvelope?.msg?.meta?.clientMessageId;
+      if (!persistedQueryUser && clientId) {
+        // Compatibility only: bridge callers carry the durable row directly.
+        // A missing identity outside this bounded lookup fails closed below.
+        persistedQueryUser = this.#conversationStore.loadRecentBySession(runtimeSessionId, recentTurnCap + 1)
+          .find(m => m.role === 'user' && m.clientMessageId === clientId);
+      }
+      const beforeSeq = Number.isFinite(persistedQueryUser?.seq)
+        ? persistedQueryUser.seq : parseSeqFromId(persistedQueryUser?.id);
+      if (Number.isFinite(beforeSeq)) {
+        const loadHistory = this.#conversationStore.loadProviderHistoryBySession
+          || this.#conversationStore.loadRecentBySession;
+        const tail = await loadHistory.call(this.#conversationStore, runtimeSessionId, recentTurnCap, { beforeSeq });
+        messages = tail.filter(m => parseSeqFromId(m.id) < beforeSeq
+          && (m.role !== 'tool' || !queryVpId || m.speakerVpId === queryVpId))
+          .map(m => {
+            if (m.role !== 'assistant' || !queryVpId || m.speakerVpId === queryVpId) return m;
+            const { toolCalls, thinkingBlocks, ...textOnly } = m;
+            return textOnly;
+          });
+        if (relatedTurnCap > 0 && this.#yeaftDir) {
+          try {
+            const recalled = await recallConversationTurns(this.#yeaftDir, runtimeSessionId, prompt, {
+              beforeSeq, limit: relatedTurnCap,
+            });
+            relatedHistoryTurns = recalled.turns || [];
+            historyRecallMeta = { source: 'messages', status: 'ready', ...recalled.meta };
+          } catch (error) {
+            // Cold/stale index degrades to recent history, never a full scan.
+            historyRecallMeta = { source: 'messages', status: error?.code || 'unavailable' };
+          }
+        }
+      } else {
+        historyRecallMeta = { source: 'messages', status: 'missing_current_user_fence' };
+      }
     }
 
     const perfTraceId = typeof inboundEnvelope?._perfTraceId === 'string' && inboundEnvelope._perfTraceId.trim()
@@ -2111,7 +2221,7 @@ export class Engine {
     let memoryInjection = '';
     let recallEntryCount = 0;
 
-    const topicScopesForMemory = await this.#loadSessionTopicScopes(sessionId);
+    const topicScopesForMemory = !useDreamMemory ? [] : await this.#loadSessionTopicScopes(sessionId);
     const projectScopesForMemory = Array.isArray(projectSessionIds)
       ? projectSessionIds.flatMap(id => [
           `sessions/${id}`,
@@ -2119,7 +2229,7 @@ export class Engine {
           `group/${id}`,
         ])
       : [];
-    const recallResult = await this.#recallMemory(prompt, {
+    const recallResult = !useDreamMemory ? { entries: [], meta: {} } : await this.#recallMemory(prompt, {
       sessionId,
       vpId: vpPersona && typeof vpPersona === 'object' && typeof vpPersona.vpId === 'string'
         ? vpPersona.vpId
@@ -2148,7 +2258,7 @@ export class Engine {
 
     // Load canonical content only for scopes selected by ranked FTS records.
     // summary.md remains catalog metadata and never enters the prompt.
-    const summaries = await this.#loadLayerASummaries({
+    const summaries = !useDreamMemory ? {} : await this.#loadLayerASummaries({
       sessionId,
       vpId: vpPersona && typeof vpPersona === 'object' && typeof vpPersona.vpId === 'string'
         ? vpPersona.vpId
@@ -2167,7 +2277,7 @@ export class Engine {
       && typeof vpPersona.vpId === 'string'
       ? vpPersona.vpId
       : (typeof senderVpId === 'string' ? senderVpId : null);
-    const amsContext = this.#prepareAms({
+    const amsContext = !useDreamMemory ? null : this.#prepareAms({
       sessionId,
       ownVpId: ownVpIdForAms,
       summaries,
@@ -2177,9 +2287,14 @@ export class Engine {
     if (amsContext && amsContext.snapshotBlock) {
       memoryInjection = amsContext.snapshotBlock;
     }
+    if (postCompactState.summary) {
+      const block = `## Prior conversation compact\n${postCompactState.summary}`;
+      memoryInjection = memoryInjection ? `${memoryInjection}\n\n${block}` : block;
+    }
     const loadedMemoryForDebug = loadedMemoryDebugEntries(amsContext?.snapshot);
     const loadedMemoryMetaForDebug = {
-      recallLimit: resolveMemoryRecallLimit(this.#config),
+      ...(useMessageHistory ? historyRecallMeta : {}),
+      recallLimit: useMessageHistory ? relatedTurnCap : resolveMemoryRecallLimit(this.#config),
       recallCandidates: Number.isFinite(recallResult?.meta?.hitCount)
         ? recallResult.meta.hitCount
         : (recallResult && Array.isArray(recallResult.entries) ? recallResult.entries.length : 0),
@@ -2210,21 +2325,16 @@ export class Engine {
         }))
       : [];
 
-    // ─── Active Scope (DESIGN-PROMPT §3 ④) ──────────────────────
-    // Structured per-turn scope summary: session + vp + members + envelope routing
-    // info. Long-form scope content lives in AMS — this block carries
-    // only IDs + tiny labels. (Feature scope retired 2026-05-13.)
-    const activeSessionTopics = topicScopesForResident
-      .map(scope => scope.replace(/^sessions\/[^/]+\/topic\//, ''));
+    // ─── Multi-VP routing scope ──────────────────────────────────
+    // Only identity and peer membership affect the routing contract rendered in
+    // the system prompt. Session bookkeeping and inferred topics remain in their
+    // owning runtime/memory paths instead of being mirrored into prompt metadata.
     const activeScope = {
-      sessionId: sessionId || '',
-      sessionMember: ownVpIdForAms || '',
+      vpId: ownVpIdForAms || '',
       sessionMembers: Array.isArray(sessionMembers) ? sessionMembers : [],
-      sessionTopics: activeSessionTopics,
-      envelope: inboundEnvelope || null,
     };
 
-    const projectDocSource = this.#getProjectDocBlock(workDir);
+    let projectDocSource = this.#getProjectDocBlock(workDir);
     let projectDocLoadedPathHints = [];
     let projectDocContext = selectProjectDocContext(projectDocSource, {
       prompt,
@@ -2236,11 +2346,6 @@ export class Engine {
       && typeof this.#taskManager.listActiveTasks === 'function'
       ? this.#taskManager.listActiveTasks(runtimeSessionId)
       : [];
-    let activeTasks = this.#taskManager
-      ? this.#taskManager.renderActiveTasksForPrompt(runtimeSessionId, {
-          language: this.#config.language || 'en',
-        })
-      : '';
     const registeredToolNames = this.#toolRegistry
       ? this.#toolRegistry.getToolNames({
           collabToolPolicy: effectiveCollabToolPolicy,
@@ -2251,6 +2356,7 @@ export class Engine {
     const resolveCurrentActiveToolNames = () => this.#toolRegistry
       ? resolveActiveToolNames({
           toolNames: registeredToolNames,
+          gitReadAlwaysVisible: this.#config?._gitReadAlwaysVisible === true,
           prompt,
           messages,
           collabToolPolicy: effectiveCollabToolPolicy,
@@ -2311,9 +2417,6 @@ export class Engine {
       projectLabel,
       workCenterInstructions,
       projectDoc: projectDocContext.text,
-      activeTasks,
-      collabToolPolicy: effectiveCollabToolPolicy,
-      activeToolNames,
       promptNotices,
       explicitSkillName,
       resolvedSkillContent,
@@ -2356,11 +2459,14 @@ export class Engine {
         : prompt;
     }
     const conversationMessages = [
-      ...trimSnapshotForBudget(messages, {
+      ...(useMessageHistory ? messages : trimSnapshotForBudget(messages, {
         messageTokenBudget: this.#config.messageTokenBudget,
         language: this.#config.language,
-      }),
-      { role: 'user', content: finalUserContent },
+      })),
+      { role: 'user', content: finalUserContent,
+        ...(persistedQueryUser?.id ? { id: persistedQueryUser.id, seq: parseSeqFromId(persistedQueryUser.id) } : {}),
+        ...(persistedQueryUser?.clientMessageId ? { clientMessageId: persistedQueryUser.clientMessageId } : {}),
+      },
     ];
 
     const groupReflectionGate = shouldAllowGroupReflection({
@@ -2399,18 +2505,18 @@ export class Engine {
     // `turnStartIdx` is where the current user message lives; the arc
     // we may collapse spans (arcStartIdx .. last assistant/tool).
     //
-    // Periodic-T1 fix: T1 must fire EVERY TOOL_BATCH_SIZE (30) tool
-    // calls, not just the first batch. So instead of a one-shot boolean,
+    // Periodic T1 fires every 30 tool loops, not every 30 calls. A single
+    // provider batch can contain many parallel calls but is still one loop.
     // track:
-    //   • `lastT1AtToolCount` — toolCount snapshot at the last T1
+    //   • `lastT1AtLoopCount` — tool-loop snapshot at the last T1
     //     ATTEMPT (success OR error). Trigger when
-    //     `queryToolCount - lastT1AtToolCount >= TOOL_BATCH_SIZE`.
+    //     `completedToolLoops - lastT1AtLoopCount >= interval`.
     //   • `arcStartIdx` — first index of the current (uncollapsed)
     //     tool arc. Initialised to turnStartIdx + 1; reset after each
     //     successful T1 collapse to `conversationMessages.length`
     //     (i.e. the slot the next assistant message will land in).
     //   • `t1CollapsesDone` — count of T1 firings that ACTUALLY
-    //     rewrote history. Distinct from `lastT1AtToolCount` because
+    //     rewrote history. Distinct from `lastT1AtLoopCount` because
     //     the catch block bumps the latter to back off after a
     //     transient reflector error WITHOUT having collapsed
     //     anything. The T2 schedule check below is gated on this
@@ -2418,13 +2524,15 @@ export class Engine {
     //     fall back at end_turn").
     const turnStartIdx = conversationMessages.length - 1;
     let queryToolCount = 0;
-    let lastT1AtToolCount = 0;
+    let lastT1AtLoopCount = 0;
     let arcStartIdx = turnStartIdx + 1;
     let t1CollapsesDone = 0;
     // Duplicate policy is scoped to one user query. Only successful, real
     // executions increment these counters; errors and cache reuse do not.
     const queryDuplicateCounts = new Map();
     const queryDuplicateSuppressions = new Map();
+    const queryValidationFailures = new Map();
+    const fileReadObservations = new Map();
     let duplicateReminderAwaitingResponse = false;
     const queryNumber = (this.#__queryCounter = (this.#__queryCounter || 0) + 1);
 
@@ -2478,13 +2586,19 @@ export class Engine {
     let displayImageAnchorMessage = null;
     let lastPersistedAssistantMessage = null;
     let lastPersistedAssistantTextMessage = null;
+    let lastSuccessfulModel = null;
+    let lastSuccessfulEffort = null;
     // `refreshConfig()` may publish a new Session model while a stream or a
     // tool is running. Apply it only before the next provider request; the
     // current request keeps the snapshot captured below.
-    let currentModel = this.#config.model;
+    let currentModel = turnConfig?.model || this.#config.model;
     let primaryModelAtLastBoundary = currentModel;
     let cumulativeInputTokens = 0;
     let cumulativeOutputTokens = 0;
+    let maxContextOccupancyRatio = 0;
+    let peakContextTokens = 0;
+    let peakContextWindow = 0;
+    let postCompactCandidate = null;
     let activeProviderRequest = null;
     // Skill events describe the selection injected into each provider request.
     // The first request must report its initial selection; later loops report
@@ -2498,12 +2612,6 @@ export class Engine {
     // control to other VPs cleanly. Reset to null at the top of every
     // outer-loop iteration so the flag never carries across turns.
     let endTurnRequested = null;
-    // StartPlan is a control tool. If the model emits only the checklist after
-    // it, there is no new workspace fact to interpret: persist the plan and
-    // close the turn instead of spending another provider request on a
-    // TodoWrite-only control round. A later user turn can continue the first
-    // pending step; a batch that includes a real work tool always continues.
-    let planBootstrapPending = false;
 
     // LLM retry bookkeeping (rate-limit / 5xx / transient network errors).
     // Counts CONSECUTIVE retryable failures on the same turn — reset to 0
@@ -2516,6 +2624,11 @@ export class Engine {
     let consecutiveRetryableErrors = 0;
     let consecutiveForbiddenErrors = 0;
     let contentPolicyRecoveryAttempts = 0;
+    let contextOverflowRecoveryAttempts = 0;
+    // A provider can know about framing/tokenizer overhead that our monotonic
+    // estimator cannot. Each real overflow retries the same unexecuted request
+    // with a smaller provider-only window; no transcript row is rewritten.
+    let providerContextScale = 1;
 
     while (true) {
       turnNumber++;
@@ -2526,7 +2639,7 @@ export class Engine {
       // Keep a retry fallback selected by this query; replacing it here would
       // turn an exhausted primary into an endless retry loop.
       if (currentModel === primaryModelAtLastBoundary) {
-        const refreshedPrimaryModel = this.#config.model;
+        const refreshedPrimaryModel = turnConfig?.model || this.#config.model;
         if (refreshedPrimaryModel !== primaryModelAtLastBoundary) {
           currentModel = refreshedPrimaryModel;
           primaryModelAtLastBoundary = refreshedPrimaryModel;
@@ -2538,6 +2651,21 @@ export class Engine {
       // this request. Fallback retries intentionally retain their selected
       // model, but still use the current policy and configured effort.
       const requestConfig = { ...this.#config };
+      // Overlay only the request snapshot. Never publish temporary settings via
+      // refreshConfig or mutate the shared config / AdapterRouter catalog.
+      if (turnConfig) {
+        requestConfig.model = currentModel;
+        const entry = requestConfig.availableModels?.find(model => model.ref === currentModel);
+        requestConfig.modelInfo = getModelInfo(parseModelRef(currentModel).modelId, entry) || null;
+        if (turnConfig.effort != null) requestConfig.modelEffort = turnConfig.effort;
+        // Blank means the selected model's default cap, not the Session's
+        // previous model budget. Re-resolve at every boundary (including fallback
+        // retries / catalog refresh), without leaking the old global ceiling.
+        const outputLimit = resolveMaxOutputTokens(parseModelRef(currentModel).modelId, {
+          modelInfo: requestConfig.modelInfo,
+        });
+        requestConfig.maxOutputTokens = Math.min(turnConfig.maxOutputTokens ?? outputLimit, outputLimit);
+      }
       // Capture the matching provider catalog in the same synchronous boundary
       // as config/model. Preflight may yield user/task events before the stream
       // is built, but one request must never mix two refresh revisions.
@@ -2620,7 +2748,9 @@ export class Engine {
         });
       };
       const toolCalls = [];
-      const thinkingBlocks = []; // task-327d: collected from adapter for round-trip
+      const thinkingBlocks = []; // Legacy adapter compatibility only.
+      let providerState = null;
+      let requestEffortDecision = snapshotEffortDecision();
       let stopReason = 'end_turn';
       const totalUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cacheInputDeltaTokens: 0 };
       // Raw provider exchange is diagnostic source data, not model context or
@@ -2698,17 +2828,18 @@ export class Engine {
         && typeof this.#taskManager.listActiveTasks === 'function'
         ? this.#taskManager.listActiveTasks(runtimeSessionId)
         : [];
-      activeTasks = this.#taskManager
-        ? this.#taskManager.renderActiveTasksForPrompt(runtimeSessionId, {
-            language: this.#config.language || 'en',
-          })
-        : '';
       activeToolNames = resolveCurrentActiveToolNames();
       for (const name of [...discoveredToolNames]) {
         if (this.#toolRegistry?.has(name)) activeToolNames?.add(name);
         else discoveredToolNames.delete(name);
       }
       toolDefs = this.#getToolDefs(effectiveCollabToolPolicy, activeToolNames);
+      // Only a child registry supplies this policy. Budget exhaustion closes
+      // investigation, not the evidence-bearing conversation: reserve one
+      // tool-free response for a useful handoff, under the existing signal.
+      const executionPolicy = isSubAgent
+        ? this.#toolRegistry?.prepareProviderRequest?.() : null;
+      if (executionPolicy?.finalize) toolDefs = [];
       ({ resolvedSkillContent, resolvedSkills, skillResolutionError } = resolveSkillPromptState({
         skillManager: this.#skillManager,
         prompt,
@@ -2726,13 +2857,16 @@ export class Engine {
       reportedSkillNames = currentSkillNames;
       reportedSkillError = skillResolutionError;
       systemPrompt = buildCurrentSystemPrompt();
+      if (executionPolicy?.prompt) systemPrompt += `\n\n${executionPolicy.prompt}`;
+      let requestDebugMessages = [];
+      let requestInputBreakdown = null;
 
       try {
         // Resolve effort per provider request so a saved Session effort takes
         // effect at the next loop. A caller override or `/effort` prefix stays
         // fixed for this query and still wins over live Session config.
         const configuredEffort = normalizeEffort(requestConfig.modelEffort);
-        const requestUserEffort = userEffort || configuredEffort || null;
+        const requestUserEffort = normalizeEffort(turnConfig?.effort) || userEffort || configuredEffort || null;
         let resolvedEffort = pickEffort({ scenario, toolLoopTurns, userEffort: requestUserEffort });
 
         // DESIGN.md §9.16: thinking-mode precedence chain. When a VP
@@ -2741,7 +2875,7 @@ export class Engine {
         // routerPlan, the VP's role default, and the global config all
         // outrank the scenario picker for `'high'|'max'`. UI/userEffort
         // is already honoured by pickEffort (highest precedence).
-        if (vpPersona && vpPersona.vpId) {
+        if (!requestUserEffort && vpPersona && vpPersona.vpId) {
           const priorPlan = extractPriorPlan(conversationMessages, vpPersona.vpId);
           const thinkingCfg = (this.#config && this.#config.thinking) || {};
           // PR-I: live routerPlan.thinking — when the dispatcher passes
@@ -2784,9 +2918,37 @@ export class Engine {
         // query tape remain complete; no summary is generated and no history
         // rows are rewritten. This also protects later tool-loop requests,
         // not just the initial snapshot assembled by the bridge.
-        const requestHistory = trimSnapshotForBudget(conversationMessages, {
-          messageTokenBudget: requestConfig.messageTokenBudget,
+        // Retry continuation is part of the active turn. Like the opening user
+        // row and tool-loop traffic, it must not consume the 32K history budget.
+        const historyBudget = Math.max(0, requestConfig.messageTokenBudget || 32768);
+        const buckets = useMessageHistory ? buildHistoryBuckets(conversationMessages, {
+          prompt,
+          relatedTurns: relatedHistoryTurns,
+          recentTurnCap: Math.max(10, requestConfig.yeaft?.recentTurnsLimit ?? 10),
+          relatedTurnCap: Math.min(5, requestConfig.yeaft?.relatedTurnsLimit ?? 5),
+          messageTokenBudget: historyBudget,
+          // Completed turns contribute only visible user/assistant text. The
+          // active turn starts at turnStartIdx and keeps its complete tool
+          // protocol for every in-loop provider request.
+          keepToolTurns: 0,
+          currentTurnStartIndex: turnStartIdx,
           language: requestConfig.language,
+        }) : null;
+        let historyMessageCount;
+        const requestHistory = buckets?.messages || (() => {
+          const historical = trimSnapshotForBudget(conversationMessages.slice(0, turnStartIdx), {
+            messageTokenBudget: historyBudget,
+            keepToolTurns: 0,
+            language: requestConfig.language,
+          });
+          historyMessageCount = historical.length;
+          return [...historical, ...conversationMessages.slice(turnStartIdx)];
+        })();
+        if (buckets) {
+          historyMessageCount = requestHistory.length - (buckets.meta?.current?.messageCount || 0);
+        }
+        if (buckets) this.#trace.log?.('history_buckets', {
+          sessionId: runtimeSessionId, turnId: queryTurnId, ...historyRecallMeta, ...buckets.meta,
         });
         let wireMessages = stripMetaForWire(pendingContinuationForRequest
           ? [...requestHistory, pendingContinuationForRequest]
@@ -2806,6 +2968,41 @@ export class Engine {
             // repeat this best-effort archive lookup without losing history.
             wireMessages = swept.nextMessages;
           } catch { /* best-effort */ }
+        }
+
+        // Final request boundary: account for every component against the
+        // actual model window. The 32K budget above applies only to historical
+        // rows; current-turn rows are paid here together with system, schemas,
+        // and the model-specific output reserve. This runs on every tool-loop
+        // request and again with tighter headroom after a provider overflow.
+        const requestMaxOutputTokens = Math.max(1, Math.min(
+          requestConfig.maxOutputTokens || resolveMaxOutputTokens(currentModel, requestConfig),
+          resolveMaxOutputTokens(currentModel, requestConfig),
+          executionPolicy?.maxOutputTokens || Infinity,
+        ));
+        const toolSchemaTokens = toolDefs.length > 0
+          ? approxTokens(JSON.stringify(toolDefs)) : 0;
+        const fittedRequest = fitProviderRequestToContext(wireMessages, {
+          contextWindow: Math.max(1, Math.floor(currentContextWindow * providerContextScale)),
+          systemTokens: estimateMessagesTokens(systemPrompt, []),
+          toolSchemaTokens,
+          outputReserve: requestMaxOutputTokens,
+          historyMessageCount,
+          historyTokenBudget: historyBudget,
+          language: requestConfig.language,
+        });
+        wireMessages = fittedRequest.messages;
+        historyMessageCount = fittedRequest.meta.historyMessagesAfter;
+        if (fittedRequest.meta.droppedHistoryMessages > 0
+          || fittedRequest.meta.droppedCurrentMessages > 0
+          || providerContextScale < 1) {
+          this.#trace.log?.('request_context_trim', {
+            sessionId: runtimeSessionId,
+            turnId: queryTurnId,
+            model: currentModel,
+            recoveryAttempt: contextOverflowRecoveryAttempts,
+            ...fittedRequest.meta,
+          });
         }
 
         // task-704b: pre-flight total-token guard. Even with the per-tool
@@ -2851,6 +3048,17 @@ export class Engine {
           }
         }
 
+        // Freeze diagnostics only after every provider-only trim/sweep has
+        // completed, so debug describes the exact request copy rather than the
+        // durable transcript or an earlier preflight candidate.
+        requestDebugMessages = wireMessages.map(mapDebugMessage);
+        requestInputBreakdown = estimateProviderInputBreakdown({
+          systemPrompt,
+          messages: wireMessages,
+          historyMessageCount: Math.min(historyMessageCount, wireMessages.length),
+          toolDefs,
+        });
+
         // Capture only the provider route before the visible boundary. The
         // returned async iterable must not make a request or write durable
         // state; both the retry continuation and Work Center EngineTurn remain
@@ -2876,7 +3084,12 @@ export class Engine {
           retryLifecycle.pendingContinuation = null;
           continuationCommitted = true;
         };
+        let childDispatchReserved = false;
         const commitDispatch = () => {
+          if (isSubAgent && !childDispatchReserved) {
+            this.#toolRegistry?.reserveProviderRequest?.({ reporting: !!executionPolicy?.finalize });
+            childDispatchReserved = true;
+          }
           if (!activeProviderRequest && typeof prepareProviderRequest === 'function') {
             activeProviderRequest = prepareProviderRequest({
               turnNumber,
@@ -2894,8 +3107,12 @@ export class Engine {
           system: systemPrompt,
           messages: wireMessages,
           tools: toolDefs.length > 0 ? toolDefs : undefined,
-          maxTokens: requestConfig.maxOutputTokens || 16384,
+          maxTokens: requestMaxOutputTokens,
           effort: resolvedEffort,
+          effortConstraint,
+          requestIdentity,
+          onEffortDecision: decision => { requestEffortDecision = snapshotEffortDecision(decision); },
+          onProviderDiagnostics: info => traceRequest('llm.capabilities', { detail: info }),
           effortSource: requestUserEffort ? 'user' : 'auto',
           signal,
           onRawExchange: captureRawExchange,
@@ -2956,6 +3173,9 @@ export class Engine {
               responseText += event.text;
               yield event;
               break;
+            case 'provider_state':
+              providerState = event.providerState;
+              break;
             case 'thinking_delta':
               yield event;
               break;
@@ -2976,6 +3196,9 @@ export class Engine {
               }
               break;
             case 'tool_call':
+              // No dispatch or orphan protocol rows during the reserved report,
+              // even if an adapter ignores the absence of tool definitions.
+              if (executionPolicy?.finalize) break;
               if (toolCalls.length === 0) {
                 traceRequest('llm.first_tool_call', {
                   durationMs: perfNowMs() - requestPerfStart,
@@ -2993,6 +3216,9 @@ export class Engine {
               const cacheInputDeltaTokens = event.cacheTokensAreIncludedInInput ? 0 : cacheReadTokens + cacheWriteTokens;
               totalUsage.inputTokens += inputTokens;
               totalUsage.outputTokens += outputTokens;
+              if (Number.isFinite(event.reasoningTokens) && event.reasoningTokens >= 0) {
+                totalUsage.reasoningTokens = (totalUsage.reasoningTokens || 0) + event.reasoningTokens;
+              }
               totalUsage.cacheReadTokens += cacheReadTokens;
               totalUsage.cacheWriteTokens += cacheWriteTokens;
               totalUsage.cacheInputDeltaTokens += cacheInputDeltaTokens;
@@ -3062,6 +3288,40 @@ export class Engine {
             responseTextBytes: Buffer.byteLength(responseText, 'utf8'),
           },
         });
+        const requestContextOccupancy = (totalUsage.inputTokens || 0)
+          + (totalUsage.cacheInputDeltaTokens || 0)
+          + (totalUsage.outputTokens || 0);
+        const requestContextOccupancyRatio = requestContextOccupancy / currentContextWindow;
+        if (requestContextOccupancyRatio >= maxContextOccupancyRatio) {
+          maxContextOccupancyRatio = requestContextOccupancyRatio;
+          peakContextTokens = requestContextOccupancy;
+          peakContextWindow = currentContextWindow;
+        }
+        // Trigger from the peak request, but summarize the latest provider
+        // state so an earlier, fuller tool loop cannot omit later reflection,
+        // tool results, or the final answer from the derived artifact.
+        postCompactCandidate = {
+          scope: postCompactScope,
+          revision: postCompactState.revision,
+          sessionId: runtimeSessionId,
+          turnId: queryTurnId,
+          model: currentModel,
+          config: requestConfig,
+          adapter: requestAdapter,
+          messages: [
+            ...wireMessages.map(message => ({ ...message })),
+            ...(toolCalls.length === 0 && responseText
+              ? [{ role: 'assistant', content: responseText }]
+              : []),
+          ],
+          contextTokens: peakContextTokens,
+          contextWindow: peakContextWindow,
+        };
+        // This request completed normally. Preserve the actual model and the
+        // adapter-resolved effort so the visible response can identify the last
+        // successful provider call (including fallback-model switches).
+        lastSuccessfulModel = currentModel;
+        lastSuccessfulEffort = requestEffortDecision.effective || resolvedEffort || null;
         // Stream completed without throwing — reset the retry counter so
         // the next turn starts with a clean budget. In-band adapter errors
         // are converted to throws above so they share the real error path.
@@ -3084,11 +3344,13 @@ export class Engine {
             latencyMs,
             responseText,
             systemPrompt,
-            messages: conversationMessages.map(mapDebugMessage),
+            messages: requestDebugMessages,
+            requestInputBreakdown,
             toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
             usage: {
               inputTokens: totalUsage.inputTokens || 0,
               outputTokens: totalUsage.outputTokens || 0,
+              ...(totalUsage.reasoningTokens !== undefined ? { reasoningTokens: totalUsage.reasoningTokens } : {}),
               cacheReadTokens: totalUsage.cacheReadTokens || 0,
               cacheWriteTokens: totalUsage.cacheWriteTokens || 0,
               totalInputTokens: (totalUsage.inputTokens || 0) + (totalUsage.cacheInputDeltaTokens || 0),
@@ -3176,11 +3438,32 @@ export class Engine {
         const earlyIsRateLimit = err instanceof LLMRateLimitError;
         const earlyIsTransient = err instanceof LLMServerError;
         const earlyIsContentPolicy = err instanceof LLMPolicyError;
+        const earlyIsContextOverflow = err instanceof LLMContextError;
         // A completed tool_call has already crossed the streaming boundary to
         // the caller. Replaying that request would publish a duplicate call and
         // leave ambiguous execution ownership, so only pre-tool failures are
         // eligible for transparent retry or model fallback.
-        const canReplayProviderRequest = toolCalls.length === 0;
+        const canReplayProviderRequest = toolCalls.length === 0 && !executionPolicy?.finalize;
+        if (earlyIsContextOverflow && canReplayProviderRequest
+          && contextOverflowRecoveryAttempts < 3) {
+          contextOverflowRecoveryAttempts += 1;
+          providerContextScale *= 0.75;
+          endAttemptTrace('context_overflow_retry');
+          if (responseText) prepareRetryContinuation();
+          yield {
+            type: 'llm_retry',
+            attempt: contextOverflowRecoveryAttempts,
+            maxRetries: 3,
+            delayMs: 0,
+            reason: 'context_overflow_recovery',
+            recoveryMode: responseText ? 'continue' : 'restart',
+            errorName: err.name,
+            statusCode: err.statusCode ?? null,
+            message: 'Provider rejected the context; retrying with a smaller request copy.',
+          };
+          yield { type: 'turn_end', turnNumber, stopReason: 'llm_retry', threadId };
+          continue;
+        }
         if (earlyIsContentPolicy && canReplayProviderRequest && contentPolicyRecoveryAttempts === 0) {
           contentPolicyRecoveryAttempts = 1;
           endAttemptTrace('llm_retry');
@@ -3330,11 +3613,13 @@ export class Engine {
           // error path too — failure traces are the most valuable for
           // hydration.
           systemPrompt,
-          messages: conversationMessages.map(mapDebugMessage),
+          messages: requestDebugMessages,
+          requestInputBreakdown,
           toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
           usage: {
             inputTokens: totalUsage.inputTokens || 0,
             outputTokens: totalUsage.outputTokens || 0,
+            ...(totalUsage.reasoningTokens !== undefined ? { reasoningTokens: totalUsage.reasoningTokens } : {}),
             cacheReadTokens: totalUsage.cacheReadTokens || 0,
             cacheWriteTokens: totalUsage.cacheWriteTokens || 0,
             totalInputTokens: (totalUsage.inputTokens || 0) + (totalUsage.cacheInputDeltaTokens || 0),
@@ -3355,12 +3640,14 @@ export class Engine {
           loopNumber: turnNumber,
           model: currentModel,
           systemPrompt,
-          messages: conversationMessages.map(mapDebugMessage),
+          messages: requestDebugMessages,
+          requestInputBreakdown,
           response: responseText || `Error: ${err.message}`,
           toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
           usage: {
             inputTokens: totalUsage.inputTokens || 0,
             outputTokens: errLoopOutputTokens,
+            ...(totalUsage.reasoningTokens !== undefined ? { reasoningTokens: totalUsage.reasoningTokens } : {}),
             cacheReadTokens: totalUsage.cacheReadTokens || 0,
             cacheWriteTokens: totalUsage.cacheWriteTokens || 0,
             totalInputTokens: errLoopInputTokens,
@@ -3433,11 +3720,13 @@ export class Engine {
         // in-memory — without these columns the user can never see
         // history from before the panel was opened.
         systemPrompt,
-        messages: conversationMessages.map(mapDebugMessage),
+        messages: requestDebugMessages,
+        requestInputBreakdown,
         toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
         usage: {
           inputTokens: totalUsage.inputTokens || 0,
           outputTokens: totalUsage.outputTokens || 0,
+          ...(totalUsage.reasoningTokens !== undefined ? { reasoningTokens: totalUsage.reasoningTokens } : {}),
           cacheReadTokens: totalUsage.cacheReadTokens || 0,
           cacheWriteTokens: totalUsage.cacheWriteTokens || 0,
           totalInputTokens: turnInputTokens,
@@ -3460,13 +3749,10 @@ export class Engine {
           input: tc.input,
         }));
       }
-      if (thinkingBlocks.length > 0) {
-        assistantMsg.thinkingBlocks = thinkingBlocks.map(tb => (
-          tb.redacted
-            ? { redacted: true, data: tb.data, signature: tb.signature }
-            : { thinking: tb.thinking, signature: tb.signature }
-        ));
-      }
+      const boundProviderState = bindProviderState(providerState, assistantMsg);
+      if (boundProviderState) assistantMsg.providerState = boundProviderState;
+      // New private reasoning is persisted only with verified provider ownership;
+      // never downgrade it to the origin-free legacy thinkingBlocks format.
       if (vpPersona && vpPersona.vpId) {
         const planForThisVp = (vpPlan && typeof vpPlan === 'object'
           && typeof vpPlan.vpId === 'string' && vpPlan.vpId === vpPersona.vpId)
@@ -3530,12 +3816,14 @@ export class Engine {
         loopNumber: turnNumber,
         model: currentModel,
         systemPrompt,
-        messages: conversationMessages.map(mapDebugMessage),
+        messages: requestDebugMessages,
+        requestInputBreakdown,
         response: responseText,
         toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
         usage: {
           inputTokens: totalUsage.inputTokens || 0,
           outputTokens: loopOutputTokens,
+          ...(totalUsage.reasoningTokens !== undefined ? { reasoningTokens: totalUsage.reasoningTokens } : {}),
           cacheReadTokens: totalUsage.cacheReadTokens || 0,
           cacheWriteTokens: totalUsage.cacheWriteTokens || 0,
           totalInputTokens: loopInputTokens,
@@ -3557,6 +3845,14 @@ export class Engine {
       // Private router metadata is stripped only at the next wire boundary.
       conversationMessages.push(assistantMsg);
       fullResponseText += responseText;
+
+      // The reporting allowance is exactly one provider response, not another
+      // investigation loop. Ignore unsolicited calls even from a noncompliant
+      // adapter, and never auto-continue a truncated reporting response.
+      if (executionPolicy?.finalize) {
+        yield { type: 'turn_end', turnNumber, stopReason: 'budget_report', threadId, terminal: true };
+        break;
+      }
 
       // ─── Handle max_tokens → auto-continue ────────────
       // A suppressed call leaves a synthetic reminder as the latest user
@@ -3773,8 +4069,8 @@ export class Engine {
         // `#applyPendingT2Reflections` carries the result forward.
         //
         // Periodic-T1 fix: gate on `t1CollapsesDone === 0`, NOT
-        // `lastT1AtToolCount === 0`. The catch block of T1 bumps
-        // `lastT1AtToolCount` after a reflector error to avoid
+        // `lastT1AtLoopCount === 0`. The catch block of T1 advances
+        // `lastT1AtLoopCount` after a reflector error to avoid
         // tight-loop retries — but no collapse happened, so T2 should
         // still be allowed to fall back at end_turn. Fowler-review
         // critical finding.
@@ -3841,6 +4137,8 @@ export class Engine {
       // We re-create the closure each iteration because endTurnRequested
       // is a per-query local (reset implicitly at the top of #runQuery).
       const toolCtx = this.#buildToolContext(signal, {
+        effortDecision: snapshotEffortDecision(requestEffortDecision),
+        requestIdentity,
         router,
         senderVpId,
         sessionId: runtimeSessionId,
@@ -3986,6 +4284,7 @@ export class Engine {
         };
         return {
           ...toolCtx,
+          fileReadObservations,
           currentToolCall: () => ({ ...stableToolCall }),
           askUser: typeof askUser === 'function'
             ? input => askUser(input, { ...stableToolCall })
@@ -4021,9 +4320,8 @@ export class Engine {
             && duplicatePolicyForCall(tc) !== 'suppress'
             && !mayMutateWorkspaceAfterReturn(this, tc.name, tc.input)) {
           const parallelCalls = [];
-          const segmentCacheKeys = new Set();
           for (let candidateIndex = toolCallIndex;
-            candidateIndex < toolCalls.length && parallelCalls.length < MAX_CONCURRENT_READ_ONLY_TOOLS;
+            candidateIndex < toolCalls.length;
             candidateIndex += 1) {
             const candidate = toolCalls[candidateIndex];
             if (!toolAllowedForRequest(candidate)
@@ -4032,20 +4330,26 @@ export class Engine {
                 || mayMutateWorkspaceAfterReturn(this, candidate.name, candidate.input)) break;
             const candidateKey = `${candidate.name}\u001f${argsHashOf(candidate.input)}`;
             const candidateCacheable = isCacheableTool(this, candidate.name, candidate.input);
-            // Keep identical cacheable reads on the serial commit path so the
-            // second call reuses the first result instead of duplicating I/O.
-            if (candidateCacheable
-                && (readOnlyToolResults.has(candidateKey) || segmentCacheKeys.has(candidateKey))) break;
+            // Already committed reads reuse their result on the commit path.
+            if (!readOnlyToolReuseDisabled && candidateCacheable
+                && readOnlyToolResults.has(candidateKey)) break;
             parallelCalls.push(candidate);
-            if (candidateCacheable) segmentCacheKeys.add(candidateKey);
           }
 
           if (parallelCalls.length > 1) {
             const executions = [];
+            const inFlightReads = new Map();
             for (const call of parallelCalls) {
-              if (signal?.aborted) {
-                abortedDuringTools = true;
+              if (signal?.aborted || toolBatchBarrier) {
+                if (signal?.aborted) abortedDuringTools = true;
                 break;
+              }
+              const cacheKey = `${call.name}\u001f${argsHashOf(call.input)}`;
+              const cacheable = !readOnlyToolReuseDisabled && isCacheableTool(this, call.name, call.input);
+              const sharedExecution = cacheable ? inFlightReads.get(cacheKey) : null;
+              if (sharedExecution) {
+                executions.push(sharedExecution.then(result => ({ ...result, call, shared: true })));
+                continue;
               }
               announcedParallelToolCalls.add(call.id);
               yield {
@@ -4059,7 +4363,8 @@ export class Engine {
                 abortedDuringTools = true;
                 break;
               }
-              executions.push((async () => {
+              if (toolBatchBarrier) break;
+              const execution = (async () => {
                 const startedAt = Date.now();
                 const callContext = toolContextForCall(call);
                 const toolErrorOutput = this.#toolRegistry
@@ -4073,7 +4378,9 @@ export class Engine {
                 } catch (error) {
                   return { call, startedAt, durationMs: Date.now() - startedAt, error, toolErrorOutput };
                 }
-              })());
+              })();
+              executions.push(execution);
+              if (cacheable) inFlightReads.set(cacheKey, execution);
             }
             const completed = await Promise.all(executions);
             for (const execution of completed) {
@@ -4130,7 +4437,12 @@ export class Engine {
         const missingProjectDocScopes = hasTool && !readOnlyTool
           ? projectDocWriteScopesNeedingReload(projectDocContext, toolProjectDocPathHints)
           : new Set();
-        const needsProjectDocReload = missingProjectDocScopes.size > 0;
+        // A changed rule source was not present in the request that generated
+        // this write, even when its scope label is unchanged. Never replay it.
+        const freshProjectDocSource = hasTool && !readOnlyTool
+          ? this.#getProjectDocBlock(workDir) : projectDocSource;
+        const projectDocSourceChanged = freshProjectDocSource !== projectDocSource;
+        const needsProjectDocReload = missingProjectDocScopes.size > 0 || projectDocSourceChanged;
 
         if (abortSkipped) {
           output = `Skipped ${tc.name} because the turn was aborted before this tool started.`;
@@ -4173,6 +4485,7 @@ export class Engine {
           isError = true;
           yield { type: 'tool_end', id: tc.id, name: tc.name, output, isError: true, threadId: this.currentThreadId };
         } else if (needsProjectDocReload) {
+          projectDocSource = freshProjectDocSource;
           projectDocLoadedPathHints = [...new Set([
             ...projectDocLoadedPathHints,
             ...toolProjectDocPathHints,
@@ -4319,6 +4632,15 @@ export class Engine {
 
         currentToolCallForAsyncTask = null;
 
+        // Record concrete inputs, never tool/file prose. Apply only after the
+        // whole batch: a read cannot authorize a same-response write whose
+        // model has not yet received the newly selected rules.
+        if (hasTool && readOnlyTool && !skipped && !isError) {
+          projectDocLoadedPathHints = [...new Set([
+            ...projectDocLoadedPathHints, ...toolProjectDocPathHints,
+          ])].slice(-128);
+        }
+
         if (!skipped && !duplicateCallSuppressed && !isError && !reusedReadOnlyResult
             && duplicateCallPolicy !== 'allow') {
           const nextDuplicateCount = successfulDuplicateCount + 1;
@@ -4336,6 +4658,15 @@ export class Engine {
               lastResultBrief: dupInfo.lastResultBrief,
             }));
           }
+        }
+        const validationError = isError && !skipped ? toolValidationError(output) : null;
+        if (validationError) {
+          const key = `${duplicateCallKey}:${validationError}`;
+          const count = (queryValidationFailures.get(key) || 0) + 1;
+          queryValidationFailures.set(key, count);
+          if (count === 2) pendingDupReminders.push(
+            `[system note] ${tc.name} rejected the same arguments twice before execution: ${validationError.slice(0, 300)}. Correct the arguments using its schema/error hint or choose a different tool. No operation was performed; repeating unchanged arguments will not help.`,
+          );
         }
         const toolDurationMs = readyParallelExecution?.durationMs ?? (Date.now() - toolStartTime);
 
@@ -4387,9 +4718,6 @@ export class Engine {
           reusedCallId: reusedReadOnlyCallId,
         });
 
-        if (!skipped && !duplicateCallSuppressed && !reusedReadOnlyResult && tc.name === 'StartPlan') {
-          planBootstrapPending = true;
-        }
         if (!skipped && !duplicateCallSuppressed && !reusedReadOnlyResult
             && !readOnlyToolReuseDisabled && cacheableTool) {
           readOnlyToolResults.set(duplicateKey, {
@@ -4446,6 +4774,19 @@ export class Engine {
         if (fatalToolError) throw fatalToolError;
       }
 
+      // Preload rules for observed read paths before the next provider input.
+      // No tool from the just-completed response can benefit retroactively.
+      projectDocSource = this.#getProjectDocBlock(workDir);
+      const nextProjectDocContext = selectProjectDocContext(projectDocSource, {
+        prompt, messages, pathHints: projectDocLoadedPathHints,
+        forcedScopes: [...projectDocContext.selectedScopes],
+        language: this.#config.language || 'en',
+      });
+      if (nextProjectDocContext.text !== projectDocContext.text) {
+        projectDocContext = nextProjectDocContext;
+        systemPrompt = buildCurrentSystemPrompt();
+      }
+
       // PR-L: flush any duplicate-call reminders queued during the batch.
       // Pushed AFTER the for-loop so the tool_use → tool_result pairing
       // is intact; the next adapter.stream() will see the reminder as a
@@ -4470,36 +4811,6 @@ export class Engine {
         };
         break;
       }
-
-      // A plan bootstrap that produced only a TodoWrite has no executable work
-      // to feed back to the provider. Close it here. This is intentionally
-      // narrow: StartPlan + TodoWrite is a valid planning result, but a batch
-      // containing any other tool must continue so the model can inspect its
-      // result before deciding what to do next.
-      const onlyPlanControls = planBootstrapPending
-        && toolCalls.length > 0
-        && toolCalls.every(call => call.name === 'StartPlan' || call.name === 'TodoWrite')
-        && toolCalls.some(call => call.name === 'TodoWrite')
-        && !toolBatchBarrier
-        && !endTurnRequested
-        && !abortedDuringTools
-        && !signal?.aborted;
-      if (onlyPlanControls) {
-        const hasPendingStep = toolCalls
-          .filter(call => call.name === 'TodoWrite')
-          .some(call => Array.isArray(call.input?.todos)
-            && call.input.todos.some(todo => todo?.status === 'pending' || todo?.status === 'in_progress'));
-        yield {
-          type: 'turn_end',
-          turnNumber,
-          stopReason: 'plan_recorded',
-          detail: { nextStep: hasPendingStep ? 'pending_work_tools' : 'none', toolCount: toolCalls.length },
-          threadId,
-          terminal: true,
-        };
-        break;
-      }
-      planBootstrapPending = false;
 
       // A batch barrier deliberately returns control to the provider. Any
       // handoff requested by an earlier call belongs to the invalidated plan
@@ -4536,29 +4847,28 @@ export class Engine {
         break;
       }
 
-      // PR-L: T1 in-turn (synchronous) reflection. Fires once per
-      // adapter loop iteration where ≥ TOOL_BATCH_SIZE (30) tool
-      // calls have accumulated since the last T1 firing — not just
-      // the first batch of the query(). Generates a markdown reflection
+      // PR-L: T1 in-turn (synchronous) reflection. Fires every 30 completed
+      // tool loops. A provider response containing many parallel tool calls is
+      // one loop, not many. Generates a markdown reflection
       // over the assistant+tool arc since the last T1 firing (or
       // since the user prompt for the first batch) and rewrites that
       // range to a SINGLE synthetic user message before the next
       // adapter.stream() runs.
       //
       // Loop semantics:
-      //   - First batch: arcStartIdx = turnStartIdx + 1, fires when
-      //     queryToolCount reaches TOOL_BATCH_SIZE.
-      //   - Each subsequent batch: arcStartIdx is updated to the slot
+      //   - First interval: arcStartIdx = turnStartIdx + 1.
+      //   - Each subsequent interval: arcStartIdx is updated to the slot
       //     right after the just-inserted reflection message; fires
-      //     again whenever TOOL_BATCH_SIZE more tools have run since
-      //     lastT1AtToolCount.
-      //   - The dedup Set key includes `lastT1AtToolCount` so each
-      //     batch within the same query gets a distinct entry — without
+      //     again whenever 30 more tool loops have completed.
+      //   - The dedup Set key includes the loop count so each interval
+      //     within the same query gets a distinct entry — without
       //     this the second batch would be silently skipped.
-      const t1BatchDue = queryToolCount - lastT1AtToolCount >= TOOL_BATCH_SIZE;
-      if (groupReflectionAllowed && t1BatchDue && !toolBatchBarrier
+      const completedToolLoops = toolLoopTurns + 1;
+      const t1BatchDue = completedToolLoops - lastT1AtLoopCount
+        >= TOOL_LOOP_REFLECTION_INTERVAL;
+      if (t1BatchDue && !toolBatchBarrier
           && !abortedDuringTools && !signal?.aborted) {
-        const t1DedupKey = `${queryNumber}:t1:${queryToolCount}`;
+        const t1DedupKey = `${queryNumber}:t1-loop:${completedToolLoops}`;
         if (this.#reflectedTurns.has(t1DedupKey)) {
           // Defensive: should never hit since t1BatchDue gates re-entry
           // and queryNumber namespaces queries. Kept as belt-and-
@@ -4626,10 +4936,10 @@ export class Engine {
           // immediately after it, i.e. at conversationMessages.length
           // (the next assistant message will land here).
           arcStartIdx = conversationMessages.length;
-          lastT1AtToolCount = queryToolCount;
+          lastT1AtLoopCount = completedToolLoops;
           // Bump the success counter — used by the T2 schedule check
           // to decide whether T2 still has work to do at end_turn.
-          // Distinct from lastT1AtToolCount which the catch block
+          // Distinct from lastT1AtLoopCount which the catch block
           // also bumps (but without rewriting history).
           t1CollapsesDone += 1;
           yield {
@@ -4659,9 +4969,9 @@ export class Engine {
             status: 'error',
             error: err && err.message || String(err),
           };
-          // Advance lastT1AtToolCount past this batch so we don't
+          // Advance lastT1AtLoopCount past this interval so we don't
           // tight-loop on a hiccuping reflector. The next attempt is
-          // TOOL_BATCH_SIZE tools from now, not immediately. arcStartIdx is
+          // another 30 tool loops from now, not immediately. arcStartIdx is
           // left alone because history wasn't rewritten — the tail still
           // begins where it did. The trade-off: the next batch's
           // reflection will cover the tools that just failed too,
@@ -4670,7 +4980,7 @@ export class Engine {
           // We do NOT bump t1CollapsesDone — see the variable's
           // declaration comment. This keeps the T2 fallback path live
           // when every T1 attempt has errored.
-          lastT1AtToolCount = queryToolCount;
+          lastT1AtLoopCount = completedToolLoops;
         }
         }
       }
@@ -4694,13 +5004,21 @@ export class Engine {
       // Loop back to call adapter again with tool results
     }
 
-    // Store the final provider-call count on the response row itself. Debug
-    // events are transient; the response card must retain the count after a
-    // reload without inventing a second counter.
+    const totalMs = Date.now() - queryStartedAt;
+    const totalTokens = cumulativeInputTokens + cumulativeOutputTokens;
+    // Store final provider metadata on the response row itself. Debug events
+    // are transient; the response card must retain model, call count, token
+    // usage, and duration after a reload.
     const llmCountMessage = lastPersistedAssistantTextMessage || lastPersistedAssistantMessage;
     if (llmCountMessage && typeof this.#conversationStore?.update === 'function') {
       const updated = this.#conversationStore.update(llmCountMessage, {
         llmCallCount: turnNumber,
+        inputTokens: cumulativeInputTokens,
+        outputTokens: cumulativeOutputTokens,
+        totalTokens,
+        totalMs,
+        ...(lastSuccessfulModel ? { model: lastSuccessfulModel } : {}),
+        ...(lastSuccessfulEffort ? { effort: lastSuccessfulEffort } : {}),
       });
       if (updated?.id === lastPersistedAssistantTextMessage?.id) lastPersistedAssistantTextMessage = updated;
       if (updated?.id === lastPersistedAssistantMessage?.id) lastPersistedAssistantMessage = updated;
@@ -4714,10 +5032,84 @@ export class Engine {
       type: 'turn_close',
       turnId: queryTurnId,
       threadId,
-      totalMs: Date.now() - queryStartedAt,
-      totalTokens: cumulativeInputTokens + cumulativeOutputTokens,
+      totalMs,
+      inputTokens: cumulativeInputTokens,
+      outputTokens: cumulativeOutputTokens,
+      totalTokens,
       loopCount: turnNumber,
+      ...(lastSuccessfulModel ? { model: lastSuccessfulModel } : {}),
+      ...(lastSuccessfulEffort ? { effort: lastSuccessfulEffort } : {}),
     };
+
+    // The visible response is complete at the yield above. Only when the
+    // consumer resumes past that boundary do we inspect pressure and launch
+    // best-effort post compact. It never blocks this turn or the next one.
+    if (postCompactCandidate
+      && maxContextOccupancyRatio >= POST_COMPACT_CONTEXT_RATIO) {
+      this.#schedulePostCompact(postCompactCandidate);
+    }
+  }
+
+  #postCompactScope({ sessionId, vpId, threadId }) {
+    if (!this.#yeaftDir || !sessionId) return null;
+    const path = postCompactPath(this.#yeaftDir, { sessionId, vpId, threadId });
+    return { key: path, path };
+  }
+
+  async #beginPostCompactScope(scope) {
+    if (!scope) return { revision: 0, summary: '' };
+    const revision = (this.#postCompactRevisions.get(scope.key) || 0) + 1;
+    this.#postCompactRevisions.set(scope.key, revision);
+    if (!this.#postCompactLoaded.has(scope.key)) {
+      this.#postCompactLoaded.add(scope.key);
+      const artifact = await loadPostCompact(scope.path);
+      if (artifact) this.#postCompactSummaries.set(scope.key, artifact);
+    }
+    return {
+      revision,
+      summary: this.#postCompactSummaries.get(scope.key)?.summary || '',
+    };
+  }
+
+  #schedulePostCompact(candidate) {
+    const { scope, revision } = candidate;
+    if (!scope || this.#postCompactRevisions.get(scope.key) !== revision) return;
+    const compactMaxTokens = Math.max(512, Math.min(4096,
+      resolveMaxOutputTokens(candidate.model, candidate.config)));
+    const task = async () => {
+      try {
+        const summary = await generatePostCompact({
+          adapter: candidate.adapter,
+          model: candidate.model,
+          messages: candidate.messages,
+          maxTokens: compactMaxTokens,
+        });
+        const current = () => this.#postCompactRevisions.get(scope.key) === revision;
+        if (!current()) return;
+        const artifact = {
+          summary,
+          model: candidate.model,
+          sourceTurnId: candidate.turnId,
+          sourceRevision: revision,
+          sourceContextTokens: candidate.contextTokens,
+          contextWindow: candidate.contextWindow,
+          createdAt: new Date().toISOString(),
+        };
+        if (await savePostCompact(scope.path, artifact, current)) {
+          if (current()) this.#postCompactSummaries.set(scope.key, artifact);
+          else await removePostCompactIfSource(scope.path, candidate.turnId);
+        }
+      } catch (error) {
+        // A response already reached the user. Compact failure is diagnostic
+        // only and must not create a late error event.
+        this.#trace.log?.('post_compact_failed', {
+          sessionId: candidate.sessionId,
+          turnId: candidate.turnId,
+          message: String(error?.message || error).slice(0, 200),
+        });
+      }
+    };
+    void task();
   }
 
   /**

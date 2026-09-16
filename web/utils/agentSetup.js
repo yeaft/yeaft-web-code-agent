@@ -4,6 +4,44 @@ export function getServerWsUrl(locationLike = globalThis.location) {
   return `${protocol}//${host}`;
 }
 
+export function getInstallerBaseUrl(locationLike = globalThis.location) {
+  const origin = locationLike?.origin;
+  if (origin && origin !== 'null') return origin.replace(/\/$/, '');
+  const protocol = locationLike?.protocol === 'https:' ? 'https:' : 'http:';
+  const host = locationLike?.host || 'localhost';
+  return `${protocol}//${host}`;
+}
+
+export function escapePosixArgument(value) {
+  return `'${String(value).replace(/'/g, `'"'"'`)}'`;
+}
+
+export function escapePowerShellArgument(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+export function getAgentInstallerCommand({
+  platform = 'posix',
+  agentSecret = '',
+  serverWsUrl,
+  locationLike = globalThis.location,
+} = {}) {
+  if (!agentSecret) return '';
+  const server = serverWsUrl || getServerWsUrl(locationLike);
+  const baseUrl = getInstallerBaseUrl(locationLike);
+
+  if (platform === 'powershell') {
+    const scriptUrl = escapePowerShellArgument(`${baseUrl}/installers/install.ps1`);
+    return `& { param($Server, $Secret) $tls = [Net.ServicePointManager]::SecurityProtocol; try { [Net.ServicePointManager]::SecurityProtocol = $tls -bor [Net.SecurityProtocolType]::Tls12; & ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing ${scriptUrl} -MaximumRedirection 0 -ErrorAction Stop).Content)) -Server $Server -Secret $Secret } finally { [Net.ServicePointManager]::SecurityProtocol = $tls } } -Server ${escapePowerShellArgument(server)} -Secret ${escapePowerShellArgument(agentSecret)}`;
+  }
+
+  const scriptUrl = escapePosixArgument(`${baseUrl}/installers/install.sh`);
+  const transport = baseUrl.startsWith('https:')
+    ? "--proto '=https' --proto-redir '=https' --tlsv1.2"
+    : "--proto '=http,https' --proto-redir '=http,https'";
+  return `(tmp=$(mktemp) && trap 'rm -f "$tmp"' EXIT && curl -fSL ${transport} ${scriptUrl} -o "$tmp" && sh "$tmp" --server ${escapePosixArgument(server)} --secret ${escapePosixArgument(agentSecret)})`;
+}
+
 export function getAgentInstallCommand() {
   return 'npm install -g @yeaft/webchat-agent';
 }

@@ -5,6 +5,32 @@ import { confirmDialog } from '../../utils/dialog.js';
  */
 import { getFileType, isMarkdownFile } from './fileEditor.js';
 
+const nextFileReadRequestId = () => `file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+/** Shared initial/retry/restore read; file owns the Agent, conversation and workspace. */
+export function requestFileContent(store, file, filePath, { requestId = nextFileReadRequestId(), t = key => key } = {}) {
+  file.requestId = requestId;
+  file.loading = true;
+  file.loadError = null;
+  file.previewError = null;
+  file.previewLoading = file.fileType !== 'text';
+  const sent = store.sendWsMessage({
+    type: file.fileType === 'video' ? 'video_metadata' : 'read_file',
+    conversationId: file.conversationId,
+    agentId: file.agentId,
+    requestId,
+    filePath,
+    workDir: file.workDir,
+    _clientId: store.clientId
+  });
+  if (sent === false) {
+    file.loading = false;
+    file.previewLoading = false;
+    file.loadError = t('files.readSendFailed');
+    file.previewError = file.loadError;
+  }
+}
+
 export function createFileTabs(store, {
   normalizePath, getEffectiveWorkDir,
   editorContainer, createEditor, destroyEditor,
@@ -103,6 +129,25 @@ export function createFileTabs(store, {
     });
   };
 
+  // A WebSocket disconnect loses the outstanding response. Invalidate its id
+  // so a delayed reply cannot satisfy a later click or overwrite local edits.
+  const interruptFileReads = () => {
+    for (const file of openFiles.value) {
+      if (!file.loading) continue;
+      file.requestId = nextFileReadRequestId();
+      file.loading = false;
+      file.previewLoading = false;
+      file.loadError = t('files.readInterrupted');
+      file.previewError = file.loadError;
+    }
+  };
+
+  const canRetryFileRead = file => !file.loading && !file.isDirty
+    && (file.loadError || ((!file.fileType || file.fileType === 'text') && file.content == null))
+    && ((!file.fileType || file.fileType === 'text')
+      ? file.content == null
+      : !file.blobUrl && !file.previewUrl && !file.localPreviewReady);
+
   function openFileInTab(fullPath, name, route = {}) {
     const nPath = normalizePath(fullPath);
     const agentId = route.agentId || store.currentAgent || null;
@@ -120,6 +165,10 @@ export function createFileTabs(store, {
           const file = openFiles.value[existingIndex];
           if (file && file.content != null && (!file.fileType || file.fileType === 'text')) createEditor(file);
         });
+      }
+      const existingFile = openFiles.value[existingIndex];
+      if (canRetryFileRead(existingFile)) {
+        requestFileContent(store, existingFile, fullPath, { t });
       }
       saveTabsState(store.currentConversation);
       return;
@@ -141,18 +190,9 @@ export function createFileTabs(store, {
     if (fileType === 'text') destroyEditor();
     saveTabsState(store.currentConversation);
 
-    const requestId = route.requestId || `file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const requestId = route.requestId || nextFileReadRequestId();
     const openedFile = openFiles.value[activeFileIndex.value];
-    if (openedFile) openedFile.requestId = requestId;
-    store.sendWsMessage({
-      type: 'read_file',
-      conversationId,
-      agentId,
-      requestId,
-      filePath: fullPath,
-      workDir,
-      _clientId: store.clientId
-    });
+    if (openedFile) requestFileContent(store, openedFile, fullPath, { requestId, t });
   }
 
   const switchToTab = (index) => {
@@ -211,7 +251,7 @@ export function createFileTabs(store, {
 
     for (const file of filesToClose) {
       cleanupUndoHistory(file.conversationId || store.currentConversation, file.path);
-      if (file.blobUrl) URL.revokeObjectURL(file.blobUrl);
+      if (file.blobUrl?.startsWith?.('blob:')) URL.revokeObjectURL(file.blobUrl);
     }
     for (const file of filesToClose) {
       const currentIndex = openFiles.value.indexOf(file);
@@ -276,7 +316,7 @@ export function createFileTabs(store, {
     fileTabsMap, openFiles, activeFileIndex, activeFile,
     fileLoading, fileSaving, tabRevision, bumpTabRevision,
     beginTabsRestoreRequest, acceptTabsRestoreRequest,
-    saveTabsState, restoreTabsState, openFileInTab,
+    saveTabsState, restoreTabsState, openFileInTab, interruptFileReads,
     switchToTab, closeFileTab, closeFileTabs,
     closeTabsToLeft, closeTabsToRight, closeOtherTabs, closeAllTabs,
     saveFile,

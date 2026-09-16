@@ -16,7 +16,7 @@ export default {
     ariaControls: { type: String, default: null },
     ariaActivedescendant: { type: String, default: null },
   },
-  emits: ['update:modelValue', 'input', 'keydown', 'paste', 'blur', 'send', 'stop'],
+  emits: ['update:modelValue', 'input', 'keydown', 'paste', 'focus', 'blur', 'send', 'stop'],
   setup(props, { emit }) {
     const textareaWrapperRef = Vue.ref(null);
     const textareaRef = Vue.ref(null);
@@ -124,11 +124,13 @@ export default {
           @input="onInput"
           @keydown="$emit('keydown', $event)"
           @paste="$emit('paste', $event)"
+          @focus="$emit('focus', $event)"
           @blur="$emit('blur', $event)"
         ></textarea>
       </div>
       <div class="chat-composer-actions">
         <div class="chat-composer-actions-start"><slot name="start-actions"></slot></div>
+        <slot name="quick-actions"></slot>
         <div class="chat-composer-actions-end">
           <slot name="end-actions-before"></slot>
           <button

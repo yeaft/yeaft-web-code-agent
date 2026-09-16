@@ -17,6 +17,7 @@ import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { sessionMessageQuotePrompt } from '../session-message-quote.js';
 import { buildWorkItemAttachmentContext } from './attachments.js';
+import { WorkCenterResourceAdapter } from './resource-control.js';
 import { withUsageAccounting } from '../llm/usage-accounting.js';
 import {
   commitActionWorktree,
@@ -29,6 +30,7 @@ import {
 import {
   appendCheckpointToolEvent,
   renderActionResumeBlock,
+  settleCheckpointToolEvents,
 } from './action-checkpoint.js';
 import { createSkillManager } from '../skills.js';
 import { loadMCPConfig } from '../config.js';
@@ -51,20 +53,7 @@ import {
   renderMainlineContextSnapshot,
 } from './mainline-projection.js';
 
-const WORK_ITEM_TOOL_NAMES = Object.freeze([
-  'FileRead',
-  'FileWrite',
-  'FileEdit',
-  'ApplyPatch',
-  'Glob',
-  'Grep',
-  'ListDir',
-  'Bash',
-  'WebSearch',
-  'WebFetch',
-  'ViewImage',
-  'Skill',
-]);
+import { WORK_ITEM_TOOL_NAMES, workItemBuiltinToolNames } from './capabilities.js';
 const WORK_ITEM_TOOL_ALLOWLIST = new Set(WORK_ITEM_TOOL_NAMES);
 const DEFAULT_PROGRESS_INTERVAL_MS = 200;
 const ACTION_INPUT_QUOTE_MAX_BYTES = 8 * 1024;
@@ -272,7 +261,7 @@ function assertToolInput(toolName, input, workDir, attachmentFiles) {
 
 export function workItemToolPolicySnapshot(workDir, attachmentRefs = [], extraToolNames = []) {
   const hasAttachments = attachmentRefs.length > 0;
-  const builtInTools = WORK_ITEM_TOOL_NAMES.filter(name => !hasAttachments || name !== 'Bash');
+  const builtInTools = workItemBuiltinToolNames(hasAttachments);
   return {
     policyVersion: 1,
     allowedToolNames: [...builtInTools, ...extraToolNames],
@@ -427,7 +416,7 @@ export function createSubmitWorkItemPlanTool({
       properties: {
         summary: { type: 'string', minLength: 1, maxLength: 2_000 },
         evidence: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', minLength: 1, maxLength: 1_000 } },
-        acceptanceChecks: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['criterion', 'status', 'evidence'], properties: { criterion: { type: 'string' }, status: { type: 'string', enum: ['passed', 'deferred', 'not_applicable'] }, evidence: { type: 'string', minLength: 1, maxLength: 1_000 } } } },
+        acceptanceChecks: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['criterion', 'status', 'evidence'], properties: { criterion: { type: 'string' }, status: { type: 'string', enum: ['passed', 'failed', 'deferred', 'not_applicable'] }, evidence: { type: 'string', minLength: 1, maxLength: 1_000 } } } },
         contractPatch: { type: 'object', additionalProperties: false, required: ['title', 'goal', 'acceptanceCriteria'], properties: { title: { type: 'string', minLength: 1, maxLength: 200 }, goal: { type: 'string', minLength: 1, maxLength: 8_000 }, acceptanceCriteria: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1, maxLength: 2_000 } } } },
         workItemType: { type: 'string', minLength: 1, maxLength: 64 },
         actions: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'object', additionalProperties: false, required: ['id', 'name', 'type', 'objective', 'approach', 'expectedOutcome', 'candidateVpIds', 'assignmentReason', 'dependsOnActionIds', 'workspaceMode'], properties: {
@@ -483,7 +472,7 @@ function terminalPlanningFields(options = {}) {
   return {
     summary: { type: 'string', minLength: 1, maxLength: 2_000 },
     evidence: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', minLength: 1, maxLength: 1_000 } },
-    acceptanceChecks: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['criterion', 'status', 'evidence'], properties: { criterion: { type: 'string' }, status: { type: 'string', enum: ['passed', 'deferred', 'not_applicable'] }, evidence: { type: 'string', minLength: 1, maxLength: 1_000 } } } },
+    acceptanceChecks: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['criterion', 'status', 'evidence'], properties: { criterion: { type: 'string' }, status: { type: 'string', enum: ['passed', 'failed', 'deferred', 'not_applicable'] }, evidence: { type: 'string', minLength: 1, maxLength: 1_000 } } } },
     ...(options.review === true ? {
       reviewDecision: { type: 'string', const: 'changes_requested' },
     } : {}),
@@ -748,7 +737,7 @@ function completionContract(action, workItem) {
       : '';
   const acceptanceChecks = (workItem?.acceptanceCriteria || []).map(criterion => ({
     criterion,
-    status: 'passed|deferred|not_applicable',
+    status: 'passed|failed|deferred|not_applicable',
     evidence: 'specific evidence reference',
   }));
   return `${toolSubmission}\n\nYou are executing one Work Center Action. Before the terminal JSON, write a concise user-facing response describing what you did and the result. Do not include raw tool output or secrets. End your response with exactly one JSON object, preferably in a json code fence:\n{
@@ -759,7 +748,7 @@ function completionContract(action, workItem) {
   "acceptanceChecks": ${JSON.stringify(acceptanceChecks)},
   "waitingReason": null,
   "error": null${reviewField}${triageField}${planField}
-}\nFor completed, provide at least one concrete evidence item and exactly one acceptanceChecks entry for every current acceptance criterion, in the same order, with status passed, deferred, or not_applicable and a non-empty evidence reference. Report every user-consumable file, URL, PR, or commit in outputs; evidence proves work, while outputs tell the user where the deliverable is. Triage must use its proposed criteria when submitting a contractPatch. An intermediate Action may defer criteria outside its task-specific expected result; the final deliver Action, and an approved review with no downstream work, require every criterion to pass. If a criterion is no longer applicable, ask the WorkItem Coordinator to revise the contract instead of pretending it passed. This is a deterministic submission gate, not independent proof: later verification and delivery Actions must verify the claims. A model turn ending is not completion. Use waiting when user or external input is required. Use retryable only for a transient failure. Do not start background jobs or delegate this Action.`;
+}\nFor completed, provide at least one concrete evidence item and exactly one acceptanceChecks entry for every current acceptance criterion, in the same order, with status passed, failed, deferred, or not_applicable and a non-empty evidence reference. Report every user-consumable file, URL, PR, or commit in outputs; evidence proves work, while outputs tell the user where the deliverable is. Triage must use its proposed criteria when submitting a contractPatch. An intermediate Action may defer criteria outside its task-specific expected result; the final deliver Action, and an approved review with no downstream work, require every criterion to pass. If a criterion is no longer applicable, request user confirmation of any contract change instead of pretending it passed. For response delivery, provide the user-facing conclusion in summary with concrete evidence; no artificial file or PR is required. This is a deterministic submission gate, not independent proof: later verification and delivery Actions must verify the claims. A model turn ending is not completion. Use waiting when user or external input is required. Use retryable only for a transient failure. Do not start background jobs or delegate this Action.`;
 }
 
 function safeCheckpointUrl(value) {
@@ -1163,6 +1152,7 @@ export class WorkItemRunner {
         )
       : null;
     const isRunActive = () => !signal.aborted
+      && !this.store.isExecutionStopped?.(workItem.id)
       && this.store.isActiveRun(run.id, ownerBootId, run.leaseEpoch);
     const workspaceRuntime = await this.#workspaceRuntime(workspaceDir, workDir, isRunActive);
     const mcpToolNames = workspaceRuntime.mcpTools.map(tool => tool.name);
@@ -1314,6 +1304,7 @@ export class WorkItemRunner {
     let checkpoint = null;
     let terminalEngineError = null;
     const toolInputs = new Map();
+    const toolStartedAt = new Map();
     const usageStats = {
       llmRequestCount: 0,
       inputTokens: 0,
@@ -1329,6 +1320,14 @@ export class WorkItemRunner {
       ...executionStats(),
       checkpoint,
     });
+    const settleOpenTools = (status = 'error') => {
+      const settled = settleCheckpointToolEvents(checkpoint, status);
+      const changed = settled !== checkpoint;
+      checkpoint = settled;
+      toolInputs.clear();
+      toolStartedAt.clear();
+      return changed;
+    };
     const reportProgress = (force = false) => {
       if (typeof onProgress !== 'function') return;
       const now = Date.now();
@@ -1337,7 +1336,8 @@ export class WorkItemRunner {
       return onProgress(currentProgress());
     };
     if (typeof registerProgressReader === 'function') registerProgressReader(currentProgress);
-    const adapter = withUsageAccounting(runtime.adapter, usage => {
+    const adapter = withUsageAccounting(
+      new WorkCenterResourceAdapter(runtime.adapter, this.store, workItem.id, run.id), usage => {
       usageStats.inputTokens += usage.inputTokens;
       usageStats.outputTokens += usage.outputTokens;
       usageStats.cacheReadTokens += usage.cacheReadTokens;
@@ -1482,16 +1482,33 @@ export class WorkItemRunner {
             response: publicWorkItemResponse(event.response),
           });
         }
-        else if (event?.type === 'tool_start') toolInputs.set(event.id, event.input);
+        else if (event?.type === 'tool_start') {
+          const startedAt = Date.now();
+          toolInputs.set(event.id, event.input);
+          toolStartedAt.set(event.id, startedAt);
+          checkpoint = appendCheckpointToolEvent(checkpoint, {
+            id: event.id,
+            name: event.name,
+            status: 'running',
+            resource: checkpointResource(event.name, event.input, workDir),
+            startedAt,
+          });
+          reportProgress(true);
+        }
         else if (event?.type === 'tool_end') {
           toolCount += 1;
           const input = toolInputs.get(event.id);
           toolInputs.delete(event.id);
+          const startedAt = toolStartedAt.get(event.id);
+          toolStartedAt.delete(event.id);
           checkpoint = appendCheckpointToolEvent(checkpoint, {
+            id: event.id,
             name: event.name,
             status: event.isError ? 'error' : 'completed',
             resource: checkpointResource(event.name, input, workDir),
+            startedAt,
           });
+          reportProgress(true);
         }
         else if (event?.type === 'error' && !terminalEngineError) {
           terminalEngineError = event.error instanceof Error
@@ -1533,11 +1550,13 @@ export class WorkItemRunner {
         throw stopped;
       }
     } catch (error) {
+      if (settleOpenTools('error')) reportProgress(true);
       error.workItemExecutionStats = currentProgress();
       throw error;
     } finally {
       try { engine.abort?.('work_item_run_finished'); } catch {}
     }
+    settleOpenTools('error');
     const response = publicWorkItemResponse(text);
     reportProgress(true);
     const submittedPlan = !replanToolEnabled ? planCollector.value : null;

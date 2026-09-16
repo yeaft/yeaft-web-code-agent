@@ -111,9 +111,9 @@ export default {
                       {{ $t('settings.dashboard.traffic') }}
                       <span class="db-sort-arrow" v-if="userSort.field === 'traffic'">{{ userSort.order === 'asc' ? '▲' : '▼' }}</span>
                     </th>
-                    <th class="db-th-sort" @click="toggleSort('user', 'lastLoginAt')">
-                      {{ $t('settings.dashboard.lastLogin') }}
-                      <span class="db-sort-arrow" v-if="userSort.field === 'lastLoginAt'">{{ userSort.order === 'asc' ? '▲' : '▼' }}</span>
+                    <th class="db-th-sort" @click="toggleSort('user', 'lastTurnCompletedAt')">
+                      {{ $t('settings.dashboard.lastTurnCompleted') }}
+                      <span class="db-sort-arrow" v-if="userSort.field === 'lastTurnCompletedAt'">{{ userSort.order === 'asc' ? '▲' : '▼' }}</span>
                     </th>
                   </tr>
                 </thead>
@@ -128,7 +128,7 @@ export default {
                     <td class="db-cell-num">{{ formatNumber(user.requestCount) }}</td>
                     <td class="db-cell-num" :title="userTokenTitle(user)">{{ formatCompactNumber(user.totalTokens) }}</td>
                     <td class="db-cell-num">{{ formatBytes(user.bytesSent + user.bytesReceived) }}</td>
-                    <td class="db-cell-time">{{ formatRelativeTime(user.lastLoginAt) }}</td>
+                    <td class="db-cell-time">{{ formatRelativeTime(user.lastTurnCompletedAt) }}</td>
                   </tr>
                 </tbody>
               </table>
@@ -154,7 +154,7 @@ export default {
                   <span>·</span>
                   <span>{{ formatBytes(user.bytesSent + user.bytesReceived) }}</span>
                 </div>
-                <div class="db-user-card-meta">{{ $t('settings.dashboard.lastLogin') }}: {{ formatRelativeTime(user.lastLoginAt) }}</div>
+                <div class="db-user-card-meta">{{ $t('settings.dashboard.lastTurnCompleted') }}: {{ formatRelativeTime(user.lastTurnCompletedAt) }}</div>
               </div>
               <div v-if="filteredUserStats.length === 0" class="db-empty">{{ $t('settings.dashboard.noUserData') }}</div>
               <button v-if="userVisibleCount < sortedUserStats.length" class="db-load-more" @click="userVisibleCount += ${PAGE_SIZE}">
@@ -275,9 +275,9 @@ export default {
       error: false,
       overview: { totalUsers: 0, onlineUsers: 0, onlineAgents: 0, todayMessages: 0, totalTokens: 0, agentMetrics: null },
       detailDimension: 'users',
-      statsPeriod: 'all',
+      statsPeriod: 'today',
       userActivityFilter: 'all',
-      agentTimeFilter: 'all',
+      agentTimeFilter: 'today',
       agentActivityFilter: 'all',
       userStats: [],
       agents: [],

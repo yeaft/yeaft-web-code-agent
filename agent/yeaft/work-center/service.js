@@ -247,13 +247,16 @@ export class WorkCenterService {
             workItemId,
           });
           const shouldStart = payload.start === undefined ? settings.startImmediately : payload.start !== false;
+          const goal = requiredString(payload.goal, 'goal');
+          const requestedCriteria = Array.isArray(payload.acceptanceCriteria)
+            ? payload.acceptanceCriteria.map(value => String(value).trim()).filter(Boolean) : [];
           this.controller.create({
             id: workItemId,
             title: requiredString(payload.title, 'title'),
-            goal: requiredString(payload.goal, 'goal'),
-            acceptanceCriteria: Array.isArray(payload.acceptanceCriteria)
-              ? payload.acceptanceCriteria.map(value => String(value).trim()).filter(Boolean)
-              : [],
+            goal,
+            // With no separate criteria, the user's goal itself is the minimum
+            // contract. Do not force a follow-up or invent broader requirements.
+            acceptanceCriteria: requestedCriteria.length ? requestedCriteria : [goal],
             workflowTemplate,
             workflowSnapshot,
             coordinationMode: DYNAMIC_COORDINATION_MODE,
@@ -263,7 +266,7 @@ export class WorkCenterService {
             // browser/user request. Trusted model producers may provide
             // Session provenance, but cannot grant themselves delivery rights.
             deliveryTarget: requestContext.userOriginated === true
-              && ['workspace_files', 'pull_request', 'merge'].includes(payload.deliveryTarget)
+              && ['response', 'workspace_files', 'pull_request', 'merge'].includes(payload.deliveryTarget)
               ? payload.deliveryTarget : null,
             reuseMemory: payload.reuseMemory !== false,
             origin: payload.origin && typeof payload.origin === 'object'
@@ -320,9 +323,21 @@ export class WorkCenterService {
         this.#emit({ type: 'work_item.cancelled', workItem: detail });
         return detail;
       }
-      case 'resume': {
+      case 'extend_budget': {
+        if (requestContext.userOriginated !== true) throw new Error('Only explicit user requests can extend execution budget');
         const id = requiredString(payload.id, 'id');
-        const detail = this.controller.resume(id, { revision: payload.revision });
+        const detail = this.controller.extendBudget(id, payload);
+        this.#emit({ type: 'work_item.execution_budget_extended', workItem: detail });
+        return detail;
+      }
+      case 'resume': {
+        if (requestContext.userOriginated !== true) throw new Error('Only explicit user requests can resume execution');
+        const id = requiredString(payload.id, 'id');
+        if (!Number.isSafeInteger(payload.executionControlRevision)) {
+          throw new Error('executionControlRevision is required to resume a WorkItem');
+        }
+        const detail = this.controller.resume(id, { revision: payload.revision,
+          executionControlRevision: payload.executionControlRevision });
         this.watcher.abortInvalidWorkItemRuns(id);
         if (detail.coordinationMode === DYNAMIC_COORDINATION_MODE) {
           this.#queueDynamicCoordinatorWake(id);
@@ -633,7 +648,8 @@ export class WorkCenterService {
     const entry = entries.find(candidate => candidate.payload?.turnId) || entries[0];
     if (!entry) return null;
     const detail = this.store.getWorkItemDetail(workItemId);
-    if (detail?.actions?.some(action => action.status === 'running')) return null;
+    if (!this.store.canAutomaticallyCoordinate(workItemId)
+        || detail?.actions?.some(action => action.status === 'running')) return null;
     let turn;
     try {
       turn = this.coordinator.advance(entry.id, {
@@ -673,6 +689,7 @@ export class WorkCenterService {
     this.store.recoverCoordinatorProviderTurns();
     this.store.recoverCoordinatorMailbox();
     for (const recoverable of this.store.getRecoverableCoordinatorTurns?.() || []) {
+      if (!this.store.canAutomaticallyCoordinate(recoverable.workItemId)) continue;
       const claim = this.store.claimCoordinatorTurn(
         recoverable.workItemId, recoverable.turnId, this.ownerBootId,
       );
@@ -717,6 +734,10 @@ export class WorkCenterService {
     let next = null;
     for (const [key, entry] of this.recoveryQueue) {
       const detail = this.store.getWorkItemDetail(entry.workItemId);
+      if (!this.store.canAutomaticallyCoordinate(entry.workItemId)) {
+        this.recoveryQueue.delete(key);
+        continue;
+      }
       const action = detail?.actions?.find(candidate => candidate.id === entry.actionId);
       if (!detail || ['done', 'cancelled'].includes(detail.status)
           || action?.status !== 'failed'

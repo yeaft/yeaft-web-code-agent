@@ -1,14 +1,7 @@
 import { test } from '../../fixtures/test-server.js';
 import { expect } from '@playwright/test';
 
-/** Helper: create a conversation via modal */
-async function createConversation(chatPage) {
-  await chatPage.locator('.session-tab-add-btn').click();
-  await expect(chatPage.locator('.modal.resume-modal')).toBeVisible({ timeout: 5000 });
-  await chatPage.locator('.resume-modal-footer .modern-btn').click();
-  await expect(chatPage.locator('.modal.resume-modal')).not.toBeVisible({ timeout: 5000 });
-  await expect(chatPage.locator('.session-item.active')).toBeVisible({ timeout: 5000 });
-}
+import { createConversation } from '../../helpers/conversation.js';
 
 test.describe('Server 重启恢复', () => {
   test('server 重启后 client 自动重连', async ({ chatPage, testServer, mockAgent }) => {

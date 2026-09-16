@@ -35,7 +35,7 @@
  *                           user prompt at the head of the next turn.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -81,6 +81,7 @@ import sendMessage from '../../../agent/yeaft/tools/send-message.js';
 import waitAgent from '../../../agent/yeaft/tools/wait-agent.js';
 import closeAgent from '../../../agent/yeaft/tools/close-agent.js';
 import listAgents from '../../../agent/yeaft/tools/list-agents.js';
+import listTasks from '../../../agent/yeaft/tools/list-tasks.js';
 
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
@@ -535,8 +536,8 @@ describe('wait-agent envelope shape', () => {
       expect(adapter.streamCalls).toHaveLength(1);
       expect(adapter.streamCalls[0].system).toContain('OLD PROJECT INSTRUCTION MUST DISAPPEAR');
       expect(adapter.streamCalls[0].system).not.toContain('Old sibling experience should be visible');
-      expect(adapter.streamCalls[0].system).toContain('Sub-agent recall must survive the single AMS render outlet.');
-      expect(scopeFilters[0]).toContain('sessions/old-sibling');
+      expect(adapter.streamCalls[0].system).not.toContain('Sub-agent recall must survive the single AMS render outlet.');
+      expect(scopeFilters).toEqual([]);
 
       const updated = JSON.parse(await sendMessage.execute({
         agent_id: agent.id,
@@ -556,8 +557,7 @@ describe('wait-agent envelope shape', () => {
       expect(adapter.streamCalls[1].system).not.toContain('New sibling experience should replace the old Project context.');
       expect(adapter.streamCalls[1].system).not.toContain('Old sibling experience should be visible');
       expect(adapter.streamCalls[1].system).not.toContain('OLD PROJECT INSTRUCTION MUST DISAPPEAR');
-      expect(scopeFilters[1]).toContain('sessions/new-sibling');
-      expect(scopeFilters[1]).not.toContain('sessions/old-sibling');
+      expect(scopeFilters).toEqual([]);
 
       const cleared = JSON.parse(await sendMessage.execute({
         agent_id: agent.id,
@@ -577,8 +577,7 @@ describe('wait-agent envelope shape', () => {
       expect(adapter.streamCalls[2].system).not.toContain('NEW PROJECT INSTRUCTION');
       expect(adapter.streamCalls[2].system).not.toContain('Old sibling experience should be visible');
       expect(adapter.streamCalls[2].system).not.toContain('New sibling experience should replace');
-      expect(scopeFilters[2]).not.toContain('sessions/old-sibling');
-      expect(scopeFilters[2]).not.toContain('sessions/new-sibling');
+      expect(scopeFilters).toEqual([]);
     } finally {
       await closeAgent.execute({ agent_id: agent.id }, ownerContext);
       await new Promise(resolve => setTimeout(resolve, 80));
@@ -668,5 +667,71 @@ describe('engine prepends sub-agent notifications to the next user turn', () => 
 });
 
 // -------------------------------------------------------------------------
-// 10. ListAgents reports outputFile + liveness for live agents
+// 10. Compact model-facing status projections
 // -------------------------------------------------------------------------
+
+describe('compact status projections', () => {
+  beforeEach(() => _resetAgentRegistry());
+
+  it('keeps ListAgents observable without copying result tails or duplicate fields', async () => {
+    const liveness = makeLiveness();
+    bumpLivenessFromEvent(liveness, { type: 'text_delta', text: 'visible volume' });
+    bumpLivenessFromEvent(liveness, { type: 'usage', inputTokens: 7, outputTokens: 3 });
+    liveness.toolUseCount = 2;
+    getAgentRegistry().set('agent-compact', {
+      id: 'agent-compact', name: 'compact', status: STATUS.RUNNING,
+      task: 'x'.repeat(300), result: 'secret final result', lastResult: 'secret tail',
+      outputFile: '/tmp/compact.log', error: null, messages: ['large transcript'],
+      usage: { turns: 3, llmCalls: 4, startedAt: Date.now() },
+      execution: { toolCalls: 2, completedCalls: 2, failedCalls: 0,
+        repeatedResults: 0, recentCalls: [], warning: null },
+      budget: { max_tool_calls: 10, max_llm_calls: 20 }, allowTools: ['Bash'], controlRevision: 2,
+      liveness, parentSessionId: 'session-compact', parentVpId: 'vp-compact',
+    });
+    const result = JSON.parse(await listAgents.execute({}, {
+      parentEngineDeps: { parentSessionId: 'session-compact', parentVpId: 'vp-compact' },
+    }));
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0]).toMatchObject({
+      id: 'agent-compact', status: STATUS.RUNNING, outputFile: '/tmp/compact.log',
+      usage: { toolExecutions: 2, llmRequests: 4, providerTokens: 10, turns: 3 },
+      activity: { outputChars: 14 }, hasResult: true,
+      control: { limits: { max_tool_calls: 10, max_llm_calls: 20 },
+        remainingToolCalls: 8, remainingLlmCalls: 16, remainingWallTimeMs: null,
+        reportingLlmCalls: 0, allowTools: ['Bash'], controlRevision: 2 },
+    });
+    expect(result.agents[0].task).toHaveLength(200);
+    for (const key of ['result', 'resultTail', 'messages', 'createdAt', 'liveness', 'lastEventAt', 'stalled']) {
+      expect(result.agents[0]).not.toHaveProperty(key);
+    }
+    expect(JSON.stringify(result)).not.toContain('secret');
+    expect(result.agents[0].next_step).toMatch(/Continue parent work/i);
+  });
+
+  it('projects ListTasks compactly without changing TaskManager snapshots', async () => {
+    const full = {
+      id: 'task-1', kind: 'sub_agent', title: 'Investigate lifecycle', status: 'running',
+      resultDelivery: 'status_only', updatedAt: 123,
+      runtime: { subAgentId: 'agent-1', cwd: '/private/worktree', pid: 999 },
+      log: { path: '/tmp/task-1.log', content: 'very long log' },
+      result: { text: 'very long result' }, source: { prompt: 'private prompt' },
+    };
+    const taskManager = { listActiveTasks: vi.fn(() => [full]) };
+    const result = JSON.parse(await listTasks.execute({}, { taskManager, sessionId: 'session-1' }));
+    expect(taskManager.listActiveTasks).toHaveBeenCalledWith('session-1');
+    expect(result.tasks).toEqual([{
+      id: 'task-1', kind: 'sub_agent', title: 'Investigate lifecycle', status: 'running',
+      resultDelivery: 'status_only', updatedAt: 123, agentId: 'agent-1', logPath: '/tmp/task-1.log',
+    }]);
+    expect(result.next_steps).toMatch(/ReadTaskLog/);
+    expect(result.next_steps).toMatch(/sub_agent tasks use WaitAgent\/CloseAgent/);
+    const shell = { ...full, kind: 'shell', runtime: { cancelRequestedAt: 'now', cancelEscalatedAt: 'later', cancelEscalationFailed: true } };
+    taskManager.listActiveTasks.mockReturnValueOnce([shell]);
+    const cancelling = JSON.parse(await listTasks.execute({}, { taskManager, sessionId: 'session-1' }));
+    expect(cancelling.tasks[0]).toMatchObject({ cancelPending: true, cancelEscalated: true, cancelEscalationFailed: true });
+    expect(cancelling.next_steps).toMatch(/shell tasks use CancelTask/);
+    expect(full.runtime.cwd).toBe('/private/worktree');
+    expect(full.log.content).toBe('very long log');
+    expect(JSON.stringify(result)).not.toMatch(/private|very long|pid/);
+  });
+});

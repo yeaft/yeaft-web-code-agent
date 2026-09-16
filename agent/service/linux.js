@@ -12,17 +12,30 @@ export function getSystemdServicePath(instanceId = DEFAULT_INSTANCE_ID) {
   return join(homedir(), '.config', 'systemd', 'user', `${getServiceName(instanceId)}.service`);
 }
 
+// systemd unit values use C-style quoting and percent specifier expansion.
+function quoteUnit(value, { executable = false } = {}) {
+  let escaped = String(value).replace(/%/g, '%%');
+  if (executable) escaped = escaped.replace(/\$/g, '$$$$');
+  return JSON.stringify(escaped);
+}
+
+function unitPath(value) {
+  const path = String(value);
+  if (/[\r\n\0]/.test(path)) throw new Error('Service paths cannot contain line breaks or NUL');
+  return path.replace(/%/g, '%%');
+}
+
 export function generateSystemdUnit(config) {
   const nodePath = getNodePath();
   const cliPath = getCliPath();
   const logDir = getLogDir(config.instanceId);
   const envLines = [];
-  if (config.instanceId) envLines.push(`Environment=YEAFT_AGENT_INSTANCE=${config.instanceId}`);
-  if (config.serverUrl) envLines.push(`Environment=SERVER_URL=${config.serverUrl}`);
-  if (config.agentName) envLines.push(`Environment=AGENT_NAME=${config.agentName}`);
-  if (config.agentSecret) envLines.push(`Environment=AGENT_SECRET=${config.agentSecret}`);
-  if (config.workDir) envLines.push(`Environment=WORK_DIR=${config.workDir}`);
-  if (config.yeaftDir) envLines.push(`Environment=YEAFT_DIR=${config.yeaftDir}`);
+  if (config.instanceId) envLines.push(`Environment=${quoteUnit(`YEAFT_AGENT_INSTANCE=${config.instanceId}`)}`);
+  if (config.serverUrl) envLines.push(`Environment=${quoteUnit(`SERVER_URL=${config.serverUrl}`)}`);
+  if (config.agentName) envLines.push(`Environment=${quoteUnit(`AGENT_NAME=${config.agentName}`)}`);
+  if (config.agentSecret) envLines.push(`Environment=${quoteUnit(`AGENT_SECRET=${config.agentSecret}`)}`);
+  if (config.workDir) envLines.push(`Environment=${quoteUnit(`WORK_DIR=${config.workDir}`)}`);
+  if (config.yeaftDir) envLines.push(`Environment=${quoteUnit(`YEAFT_DIR=${config.yeaftDir}`)}`);
 
   // Include node's bin dir in PATH for claude CLI access
   const nodeBinDir = dirname(nodePath);
@@ -34,17 +47,17 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${nodePath} ${cliPath}
-WorkingDirectory=${config.workDir || homedir()}
+ExecStart=${quoteUnit(nodePath, { executable: true })} ${quoteUnit(cliPath, { executable: true })}
+WorkingDirectory=${unitPath(config.workDir || homedir())}
 Restart=on-failure
 RestartSec=10
 KillMode=mixed
 TimeoutStopSec=15
 ${envLines.join('\n')}
-Environment=PATH=${nodeBinDir}:${homedir()}/.local/bin:${homedir()}/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+Environment=${quoteUnit(`PATH=${nodeBinDir}:${homedir()}/.local/bin:${homedir()}/.npm-global/bin:/usr/local/bin:/usr/bin:/bin`)}
 
-StandardOutput=append:${logDir}/out.log
-StandardError=append:${logDir}/error.log
+StandardOutput=append:${unitPath(`${logDir}/out.log`)}
+StandardError=append:${unitPath(`${logDir}/error.log`)}
 
 [Install]
 WantedBy=default.target

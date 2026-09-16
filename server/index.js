@@ -11,6 +11,7 @@ import { CONFIG, isEmailConfigured, validateProductionConfig } from './config.js
 import { agents, webClients, userFileTabs, userStatsDeltas } from './context.js';
 import { invitationDb, userDb, userStatsDb, closeDb } from './database.js';
 import { registerApiRoutes } from './api.js';
+import { registerInstallerRoutes } from './routes/installer-routes.js';
 import { registerProxyRoutes, handleProxyWebSocketUpgrade } from './proxy.js';
 import { handleAgentConnection } from './ws-agent.js';
 import { handleWebConnection } from './ws-client.js';
@@ -139,6 +140,7 @@ app.use(compression({
 const webDir = process.env.WEB_DIR || (process.env.SERVE_DIST === 'true'
   ? join(__dirname, '../web/dist')
   : join(__dirname, '../web'));
+registerInstallerRoutes(app, webDir);
 app.use(express.static(webDir, {
   maxAge: process.env.SERVE_DIST === 'true' ? '1y' : 0,
   etag: true,

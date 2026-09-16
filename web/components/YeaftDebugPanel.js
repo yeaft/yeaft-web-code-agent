@@ -26,7 +26,7 @@
  *   - turn   [copy turn]              → markdown summary
  */
 import { buildDreamDebugItems, filterDreamDebugItems, previewText } from './dream-debug-model.js';
-import { splitTokenBreakdown, apportionToBuckets, formatClockTime, reconstructDebugRawRequest } from './yeaft-debug-helpers.js';
+import { splitTokenBreakdown, apportionToBuckets, apportionRequestInput, formatClockTime, reconstructDebugRawRequest } from './yeaft-debug-helpers.js';
 
 const INITIAL_REQUEST_HISTORY_LIMIT = 1;
 const SEARCH_REQUEST_HISTORY_LIMIT = 5;
@@ -732,10 +732,17 @@ export default {
       const realOut = Math.max(0, Number(u.outputTokens) || 0);
       const realTotal = Math.max(0, this.usageTotalTokens(u) || (realIn + realOut));
       const inSplit = apportionToBuckets(realIn, est.inputMessageTokens, est.inputToolTokens);
+      const requestSplit = loop.requestInputBreakdown
+        ? apportionRequestInput(realIn, loop.requestInputBreakdown)
+        : null;
       const outSplit = apportionToBuckets(realOut, est.outputMessageTokens, est.outputToolTokens);
       return {
         inputMessage: inSplit.message,
         inputTool: inSplit.tool,
+        inputSystemPrompt: requestSplit?.systemPrompt ?? null,
+        inputHistoryMessages: requestSplit?.historyMessages ?? null,
+        inputToolDefinitions: requestSplit?.tools ?? null,
+        inputCurrentTurn: requestSplit?.currentTurn ?? null,
         outputMessage: outSplit.message,
         outputTool: outSplit.tool,
         inputTotal: realIn,
@@ -812,6 +819,22 @@ export default {
       const t = Number(total) || 0;
       if (t <= 0 || p <= 0) return '0%';
       return `${Math.round((p / t) * 100)}%`;
+    },
+    hasRequestInputBreakdown(b) {
+      return b?.inputSystemPrompt != null
+        && b?.inputHistoryMessages != null
+        && b?.inputToolDefinitions != null
+        && b?.inputCurrentTurn != null;
+    },
+    requestInputBreakdownTitle(b) {
+      const x = b || {};
+      return this.$t('yeaft.debugInputTokenBreakdown', {
+        total: Number(x.inputTotal) || 0,
+        system: Number(x.inputSystemPrompt) || 0,
+        history: Number(x.inputHistoryMessages) || 0,
+        tools: Number(x.inputToolDefinitions) || 0,
+        current: Number(x.inputCurrentTurn) || 0,
+      });
     },
     tokenBreakdownTitle(b) {
       const x = b || {};
@@ -1053,23 +1076,39 @@ export default {
       this.copyText(JSON.stringify(tool, null, 2), 'tool record');
     },
     latestRequestForTurn(turn) {
-      // Older Agents may send every request; select by loop identity, never by
-      // payload availability. A missing latest capture must not expose an older one.
-      const loop = (turn.loops || []).reduce((latest, candidate) => {
-        if (!candidate) return latest;
-        return !latest || Number(candidate.loopNumber || 0) >= Number(latest.loopNumber || 0) ? candidate : latest;
-      }, null);
-      if (!loop) return null;
-      const rawRequest = this.rawRequestForLoop(loop);
-      const body = rawRequest?.body;
+      // Live progress can outrun detail hydration. Select each available field
+      // independently within this Turn and label its real source, rather than
+      // hiding a loaded snapshot behind a newer metadata-only loop.
+      const loops = (turn.loops || []).filter(Boolean)
+        .slice().sort((a, b) => Number(b.loopNumber || 0) - Number(a.loopNumber || 0));
+      if (!loops.length) return null;
+      let body = null;
+      let bodyLoopNumber = null;
+      let systemPrompt = '';
+      let systemPromptLoopNumber = null;
+      for (const loop of loops) {
+        if (body == null) {
+          const candidate = this.rawRequestForLoop(loop)?.body;
+          if (candidate != null) {
+            body = candidate;
+            bodyLoopNumber = loop.loopNumber;
+          }
+        }
+        if (!systemPrompt && loop.systemPrompt) {
+          systemPrompt = loop.systemPrompt;
+          systemPromptLoopNumber = loop.loopNumber;
+        }
+        if (body != null && systemPrompt) break;
+      }
       return {
-        loopNumber: loop.loopNumber,
+        bodyLoopNumber,
+        systemPromptLoopNumber,
         bodyText: body == null ? null : (typeof body === 'string' ? body : JSON.stringify(body, null, 2)),
-        systemPrompt: loop.systemPrompt || '',
+        systemPrompt,
       };
     },
     rawRequestForLoop(loop) {
-      // Explicit null means the latest capture is unavailable. Only older
+      // Explicit null means this loop's capture is unavailable. Only older
       // records without this field may use their own structural delta/base.
       if (loop?.rawRequest !== undefined) return loop.rawRequest;
       return reconstructDebugRawRequest(loop?.rawRequestBase ?? loop?.requestBase?.rawRequest ?? null, loop?.requestDelta || null);
@@ -1114,14 +1153,14 @@ export default {
       lines.push('');
       const latestRequest = this.latestRequestForTurn(turn);
       if (latestRequest) {
-        lines.push(`## ${this.$t('yeaft.debugLatestRequestBody')} (Loop ${latestRequest.loopNumber})`);
+        lines.push(`## ${this.$t('yeaft.debugLatestRequestBody')}${latestRequest.bodyLoopNumber != null ? ` (Loop ${latestRequest.bodyLoopNumber})` : ''}`);
         lines.push('');
         if (latestRequest.bodyText != null) {
           lines.push('```json', latestRequest.bodyText, '```');
         } else {
           lines.push(this.$t('yeaft.debugRequestBodyUnavailable'));
         }
-        lines.push('', `## ${this.$t('yeaft.debugLatestSystemPrompt')} (Loop ${latestRequest.loopNumber})`, '');
+        lines.push('', `## ${this.$t('yeaft.debugLatestSystemPrompt')}${latestRequest.systemPromptLoopNumber != null ? ` (Loop ${latestRequest.systemPromptLoopNumber})` : ''}`, '');
         if (latestRequest.systemPrompt) {
           lines.push('```text', latestRequest.systemPrompt, '```');
         } else {
@@ -1482,7 +1521,7 @@ export default {
               <div class="yeaft-debug-section yeaft-debug-latest-request">
                 <div class="yeaft-debug-section-row">
                   <span class="yeaft-debug-section-title">{{ $t('yeaft.debugLatestRequestBody') }}</span>
-                  <span class="yeaft-debug-section-meta">Loop {{ turn.latestRequest.loopNumber }}</span>
+                  <span v-if="turn.latestRequest.bodyLoopNumber != null" class="yeaft-debug-section-meta">Loop {{ turn.latestRequest.bodyLoopNumber }}</span>
                   <button type="button" class="yeaft-debug-copy-btn" :disabled="turn.latestRequest.bodyText == null" @click="copyText(turn.latestRequest.bodyText, $t('yeaft.debugLatestRequestBody'))">{{ $t('common.copy') }}</button>
                   <button type="button" class="yeaft-debug-show-btn" :disabled="turn.latestRequest.bodyText == null" :aria-expanded="isSectionExpanded(turn.turnId, 'latest-request')" @click="toggleSection(turn.turnId, 'latest-request')">
                     {{ $t(isSectionExpanded(turn.turnId, 'latest-request') ? 'yeaft.debugHideDetails' : 'yeaft.debugShowDetails') }}
@@ -1494,7 +1533,7 @@ export default {
               <div class="yeaft-debug-section yeaft-debug-latest-system-prompt">
                 <div class="yeaft-debug-section-row">
                   <span class="yeaft-debug-section-title">{{ $t('yeaft.debugLatestSystemPrompt') }}</span>
-                  <span class="yeaft-debug-section-meta">Loop {{ turn.latestRequest.loopNumber }}</span>
+                  <span v-if="turn.latestRequest.systemPromptLoopNumber != null" class="yeaft-debug-section-meta">Loop {{ turn.latestRequest.systemPromptLoopNumber }}</span>
                   <button type="button" class="yeaft-debug-copy-btn" :disabled="!turn.latestRequest.systemPrompt" @click="copyText(turn.latestRequest.systemPrompt, $t('yeaft.debugLatestSystemPrompt'))">{{ $t('common.copy') }}</button>
                   <button type="button" class="yeaft-debug-show-btn" :disabled="!turn.latestRequest.systemPrompt" :aria-expanded="isSectionExpanded(turn.turnId, 'latest-system')" @click="toggleSection(turn.turnId, 'latest-system')">
                     {{ $t(isSectionExpanded(turn.turnId, 'latest-system') ? 'yeaft.debugHideDetails' : 'yeaft.debugShowDetails') }}
@@ -1568,8 +1607,14 @@ export default {
                     <span class="yeaft-debug-loop-total" :title="formatUsageBreakdown(loop.usage)">{{ formatTokens(usageTotalTokens(loop.usage)) }} tok</span>
                     <span
                       class="yeaft-debug-loop-token"
-                      :title="'input total ' + loop.tokenBreakdown.inputTotal + ' = message ' + loop.tokenBreakdown.inputMessage + ' + tool ' + loop.tokenBreakdown.inputTool + ' (estimated split)'"
+                      :title="hasRequestInputBreakdown(loop.tokenBreakdown) ? requestInputBreakdownTitle(loop.tokenBreakdown) : ('input total ' + loop.tokenBreakdown.inputTotal + ' = message ' + loop.tokenBreakdown.inputMessage + ' + tool ' + loop.tokenBreakdown.inputTool + ' (estimated split)')"
                     >in {{ formatTokens(usageTotalInputTokens(loop.usage)) }}</span>
+                    <template v-if="hasRequestInputBreakdown(loop.tokenBreakdown)">
+                      <span class="yeaft-debug-loop-token" :title="requestInputBreakdownTitle(loop.tokenBreakdown)">{{ $t('yeaft.debugInputSystemShort') }} {{ formatTokens(loop.tokenBreakdown.inputSystemPrompt) }}</span>
+                      <span class="yeaft-debug-loop-token" :title="requestInputBreakdownTitle(loop.tokenBreakdown)">{{ $t('yeaft.debugInputHistoryShort') }} {{ formatTokens(loop.tokenBreakdown.inputHistoryMessages) }}</span>
+                      <span class="yeaft-debug-loop-token" :title="requestInputBreakdownTitle(loop.tokenBreakdown)">{{ $t('yeaft.debugInputToolsShort') }} {{ formatTokens(loop.tokenBreakdown.inputToolDefinitions) }}</span>
+                      <span class="yeaft-debug-loop-token" :title="requestInputBreakdownTitle(loop.tokenBreakdown)">{{ $t('yeaft.debugInputCurrentShort') }} {{ formatTokens(loop.tokenBreakdown.inputCurrentTurn) }}</span>
+                    </template>
                     <span
                       class="yeaft-debug-loop-token"
                       :title="'output total ' + loop.tokenBreakdown.outputTotal + ' = message ' + loop.tokenBreakdown.outputMessage + ' + tool ' + loop.tokenBreakdown.outputTool + ' (estimated split)'"

@@ -216,6 +216,14 @@ export function isToolErrorOutput(output) {
   return parseToolErrorOutput(output) !== null;
 }
 
+// Only an explicit, side-effect-free validation envelope qualifies. Runtime
+// failures (network, tests, IO) must never be guessed to be invalid arguments.
+export function toolValidationError(output) {
+  const parsed = parseToolErrorOutput(output);
+  return parsed?.code === 'invalid_arguments' && parsed.errorEffect === 'none'
+    ? parsed.error : null;
+}
+
 export function toolErrorEffect(output) {
   return parseToolErrorOutput(output)?.errorEffect === 'none' ? 'none' : 'unknown';
 }
@@ -245,6 +253,16 @@ export function truncateToolResultIfNeeded(output, { toolName, language } = {}) 
   }
   marker = truncateUtf8(marker, TOOL_RESULT_MAX_BYTES);
   const contentBudget = Math.max(0, TOOL_RESULT_MAX_BYTES - Buffer.byteLength(marker, 'utf8'));
+  if (toolName === 'Bash' && contentBudget > 256) {
+    const omission = normalizeLanguage(language) === 'zh'
+      ? '\n[中间输出省略；以下为末尾]\n' : '\n[Middle omitted; output tail follows]\n';
+    const budget = contentBudget - Buffer.byteLength(omission, 'utf8');
+    const headBudget = Math.floor(budget / 2);
+    const buffer = Buffer.from(text, 'utf8');
+    let start = buffer.length - (budget - headBudget);
+    while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) start += 1;
+    return truncateUtf8(text, headBudget) + omission + buffer.subarray(start).toString('utf8') + marker;
+  }
   return truncateUtf8(text, contentBudget) + marker;
 }
 

@@ -107,7 +107,7 @@ export default {
           type="button"
           class="yeaft-conversation-outline-more"
           :disabled="searchState.loading"
-          @click="$emit('load-more-search')"
+          @click.stop="$emit('load-more-search')"
         >{{ $t('yeaft.outline.moreMatches') }}</button>
       </div>
     </section>

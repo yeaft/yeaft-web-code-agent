@@ -176,6 +176,13 @@ export class WorkflowController {
     return this.store.getWorkItemDetail(id);
   }
 
+  extendBudget(id, input = {}) {
+    if (!Number.isSafeInteger(input.executionControlRevision)) {
+      throw new Error('executionControlRevision is required to extend execution budget');
+    }
+    return this.store.extendExecutionBudget(id, input.executionControlRevision, input.additions || {});
+  }
+
   resume(id, input = {}) {
     const revision = Number(input.revision);
     if (!Number.isInteger(revision) || revision < 1) {
@@ -195,7 +202,7 @@ export class WorkflowController {
           renderSessionContextSnapshot(workItem.sessionContext),
         ),
       };
-    });
+    }, input.executionControlRevision);
     if (!detail) throw new Error(`WorkItem not found: ${id}`);
     return detail;
   }

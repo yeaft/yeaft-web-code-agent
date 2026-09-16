@@ -17,8 +17,8 @@
 以下路径和行为已删除：
 
 - turn 结束后自动调用 LLM 生成累计 conversation summary；
-- `compact.md`、`conversation/compact/*.md` 的新读写；
-- `<conversation_summary>` prompt 注入；
+- 旧 `compact.md`、`conversation/compact/*.md` 的新读写；
+- 旧 `<conversation_summary>` prompt 注入（响应后的 fenced post compact 使用独立 artifact）；
 - `LLMContextError` 触发隐藏摘要调用和重试；
 - post-turn `Compactor`、`history-compact` LLM summarizer、compact WS 事件。
 

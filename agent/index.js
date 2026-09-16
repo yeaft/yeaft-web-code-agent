@@ -25,7 +25,7 @@ import {
 } from './upgrade-command.js';
 import { loadConfig as loadYeaftConfig } from './yeaft/config.js';
 import { initYeaftDir } from './yeaft/init.js';
-import { isWorkCenterEnabled } from './yeaft/work-center/feature.js';
+import { isWorkCenterEnabled, startWorkCenterFeature } from './yeaft/work-center/feature.js';
 import { updateBrowserRuntimeSettings } from './yeaft/config-api.js';
 import { bootBrowserRuntime, shutdownBrowserRuntime } from './browser-runtime/index.js';
 import {
@@ -139,7 +139,7 @@ const CONFIG = {
   workDir: WORK_DIR,
   yeaftDir: YEAFT_DIR,
   telemetry: loadYeaftConfig({ dir: YEAFT_DIR }).telemetry,
-  workCenterEnabled: isWorkCenterEnabled(),
+  workCenterEnabled: isWorkCenterEnabled(process.env, loadYeaftConfig({ dir: YEAFT_DIR })),
   reconnectInterval: fileConfig.reconnectInterval,
   agentSecret,
   // 显式禁用的工具（非 MCP 相关）
@@ -177,9 +177,9 @@ async function detectCapabilities() {
   // agent build can speak plaintext WS frames. New servers see this and
   // flip `agent.encryptOutbound = false`, stopping outbound encryption
   // to this peer. Old servers ignore the unknown capability token.
-  const capabilities = ['background_tasks', 'file_editor', 'ping_session', 'plaintext-ok', 'workbench_session_routes', 'workbench_request_correlation', 'workbench_terminal_cleanup_fence', 'session_history_search', 'session_history_outline', 'session_history_window_prefetch', 'file_reference_resolution', 'yeaft_plugins', 'yeaft_managed_skills', 'settings_request_correlation'];
+  const capabilities = ['background_tasks', 'file_editor', 'ping_session', 'plaintext-ok', 'workbench_session_routes', 'workbench_request_correlation', 'workbench_terminal_cleanup_fence', 'workbench_file_content_chunks', 'workbench_video_stream', 'session_history_search', 'session_history_outline', 'session_history_window_prefetch', 'file_reference_resolution', 'response_image_preview', 'yeaft_plugins', 'yeaft_managed_skills', 'settings_request_correlation', 'work_center_feature_settings'];
   capabilities.push(getAgentUpgradeCapability());
-  if (isWorkCenterEnabled()) {
+  if (ctx.CONFIG?.workCenterEnabled === true) {
     capabilities.push('work_center', 'work_center_message_v2');
     if (process.platform === 'linux') capabilities.push('work_item_attachments');
   }
@@ -192,6 +192,12 @@ async function detectCapabilities() {
   console.log(`[Capabilities] Detected: ${capabilities.join(', ')}`);
   return capabilities;
 }
+
+ctx.refreshAgentCapabilities = async () => {
+  ctx.agentCapabilities = await detectCapabilities();
+  ctx.sendToServer?.({ type: 'agent_capabilities_updated', capabilities: ctx.agentCapabilities });
+  return ctx.agentCapabilities;
+};
 
 // 确保依赖已安装。node-pty 已被 @homebridge/node-pty-prebuilt-multiarch
 // 取代（regular dep + 全平台预编译），不再需要 optionalDependency 的特判。
@@ -459,7 +465,6 @@ process.on('SIGTERM', async () => {
   } catch (err) {
     console.warn(`[BrowserRuntime] startup probe failed: ${err?.message || err}`);
   }
-  ctx.agentCapabilities = await detectCapabilities();
   // Prime the models.dev community catalog so the Yeaft engine's *synchronous*
   // hot path (engine.js / config.js / cli.js all read context-window inline)
   // can resolve real per-model limits without bubbling async up through every
@@ -472,16 +477,21 @@ process.on('SIGTERM', async () => {
   } catch (err) {
     console.warn(`[Agent] models.dev prime failed (will use config/defaults): ${err?.message || err}`);
   }
-  if (isWorkCenterEnabled()) {
-    try {
-      const { bootWorkCenter } = await import('./yeaft/work-center/bridge.js');
-      await bootWorkCenter();
+  if (ctx.CONFIG?.workCenterEnabled === true) {
+    const bridge = await import('./yeaft/work-center/bridge.js');
+    const startup = await startWorkCenterFeature(true, bridge.bootWorkCenter);
+    ctx.CONFIG.workCenterEnabled = startup.effective;
+    ctx.workCenterStartupError = startup.runtimeError;
+    if (startup.effective) {
       console.log('[Agent] Work Center watcher started');
-    } catch (err) {
-      console.warn(`[Agent] Work Center failed to start: ${err?.message || err}`);
+    } else {
+      bridge.setWorkCenterFeatureEnabled(false);
+      console.warn(`[Agent] Work Center failed to start: ${startup.runtimeError}`);
     }
   } else {
     console.log('[Agent] Work Center disabled; watcher not started');
   }
+  // Runtime capabilities must reflect the effective startup state.
+  ctx.agentCapabilities = await detectCapabilities();
   connect();
 })();

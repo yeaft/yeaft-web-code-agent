@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { spawn } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -7,10 +8,11 @@ import {
   readdirSync,
   readFileSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
+import { hostname, tmpdir } from 'os';
 import {
   ConversationStore,
   parseMessage,
@@ -117,6 +119,33 @@ Hello`;
     expect(msg.clientMessageId).toBe('u_local_123');
     expect(msg.causalRootId).toBe('root_123');
     expect(msg.content).toBe('Hello');
+  });
+
+  it('round-trips assistant response model metadata', () => {
+    const store = new ConversationStore(TEST_DIR);
+    store.append({
+      role: 'assistant',
+      content: 'Completed',
+      sessionId: 'session_response_meta',
+      model: 'provider/model-v2',
+      effort: 'high',
+      llmCallCount: 3,
+      inputTokens: 1200,
+      outputTokens: 34,
+      totalTokens: 1234,
+      totalMs: 5234,
+    });
+
+    const [loaded] = new ConversationStore(TEST_DIR).loadAllBySession('session_response_meta');
+    expect(loaded).toMatchObject({
+      model: 'provider/model-v2',
+      effort: 'high',
+      llmCallCount: 3,
+      inputTokens: 1200,
+      outputTokens: 34,
+      totalTokens: 1234,
+      totalMs: 5234,
+    });
   });
 
   it('round-trips Session message quote metadata', () => {
@@ -421,6 +450,290 @@ describe('ConversationStore', () => {
       expect(loaded[0].content).toContain('[Task finished]');
     });
 
+
+    it('copies the complete durable Session transcript with independent message ids', () => {
+      const sourceSessionId = 'session_copy_source';
+      const targetSessionId = 'session_copy_target';
+      const user = store.append({
+        role: 'user',
+        content: 'original question',
+        sessionId: sourceSessionId,
+        clientMessageId: 'client-stable',
+      });
+      const assistant = store.append({
+        role: 'assistant',
+        content: 'original answer',
+        sessionId: sourceSessionId,
+        causalRootId: user.id,
+        sourceMessageIds: [user.id, 'external-message-id'],
+        toolCalls: [{ id: 'tool-call-stable', name: 'Read', input: {} }],
+      });
+      const reflection = store.foldMessages([user, assistant], {
+        role: 'assistant',
+        content: 'folded summary',
+        sessionId: sourceSessionId,
+        _reflection: true,
+        causalRootId: user.id,
+      });
+      store.moveToCold(user.id);
+
+      // A migration crash can leave an older markdown copy beside segments.
+      // It must not create a duplicate in the cloned transcript.
+      const legacyDir = join(TEST_DIR, 'sessions', sourceSessionId, 'conversation', 'messages');
+      mkdirSync(legacyDir, { recursive: true });
+      writeFileSync(join(legacyDir, `${assistant.id}.md`), `---\nid: ${assistant.id}\nrole: assistant\nsessionId: ${sourceSessionId}\n---\nstale duplicate`);
+
+      const { copiedCount, idMap } = store.copySession(sourceSessionId, targetSessionId);
+      expect(copiedCount).toBe(3);
+      expect(idMap.size).toBe(3);
+      const copiedRows = new ConversationStore(TEST_DIR)
+        .copySession(targetSessionId, 'session_copy_probe');
+      expect(copiedRows.copiedCount).toBe(3);
+
+      const targetSegment = join(TEST_DIR, 'sessions', targetSessionId, 'conversation', 'segments', '000001.jsonl');
+      const physicalRows = readFileSync(targetSegment, 'utf8').trim().split('\n').map(JSON.parse);
+      expect(physicalRows.map(row => row.content)).toEqual([
+        'original question',
+        'original answer',
+        'folded summary',
+      ]);
+      expect(physicalRows.map(row => row.id)).toEqual([
+        idMap.get(user.id),
+        idMap.get(assistant.id),
+        idMap.get(reflection.id),
+      ]);
+      expect(physicalRows[0]).toMatchObject({
+        sessionId: targetSessionId,
+        clientMessageId: 'client-stable',
+        cold: true,
+      });
+      expect(physicalRows[1]).toMatchObject({
+        sessionId: targetSessionId,
+        causalRootId: idMap.get(user.id),
+        sourceMessageIds: [idMap.get(user.id), 'external-message-id'],
+        toolCalls: [{ id: 'tool-call-stable', name: 'Read', input: {} }],
+      });
+      expect(physicalRows[2]).toMatchObject({
+        sessionId: targetSessionId,
+        _reflection: true,
+        causalRootId: idMap.get(user.id),
+        foldedMessageIds: [idMap.get(user.id), idMap.get(assistant.id)],
+      });
+      expect(store.loadRecentBySession(sourceSessionId, 10).map(row => row.id))
+        .not.toContain(idMap.get(reflection.id));
+    });
+
+    it('keeps global message ids unique across live append and Session copy stores', () => {
+      const liveStore = new ConversationStore(TEST_DIR);
+      const copyStore = new ConversationStore(TEST_DIR);
+      const sourceSessionId = 'session_copy_interleaved_source';
+      const targetSessionId = 'session_copy_interleaved_target';
+      const first = liveStore.append({ role: 'user', content: 'first', sessionId: sourceSessionId });
+      const second = liveStore.append({ role: 'assistant', content: 'second', sessionId: sourceSessionId });
+
+      const { idMap } = copyStore.copySession(sourceSessionId, targetSessionId);
+      const later = liveStore.append({ role: 'user', content: 'after copy', sessionId: sourceSessionId });
+      const ids = [first.id, second.id, ...idMap.values(), later.id];
+
+      expect(new Set(ids).size).toBe(ids.length);
+      expect(Number(later.id.slice(1))).toBeGreaterThan(Math.max(...[...idMap.values()].map(id => Number(id.slice(1)))));
+    });
+
+    it('repairs a valid but stale sequence sidecar from the durable high-water mark', () => {
+      const rows = new ConversationStore(TEST_DIR).appendBatch(Array.from({ length: 300 }, (_, index) => ({
+        role: index % 2 ? 'assistant' : 'user',
+        content: `durable-${index}`,
+        sessionId: 'session_stale_sidecar',
+      })));
+      const sequencePath = join(TEST_DIR, 'message-sequence.json');
+      const recorded = JSON.parse(readFileSync(sequencePath, 'utf8'));
+      writeFileSync(sequencePath, `${JSON.stringify({ ...recorded, nextSeq: 2 })}\n`);
+
+      const later = new ConversationStore(TEST_DIR).append({
+        role: 'user', content: 'after stale sidecar', sessionId: 'session_stale_sidecar',
+      });
+
+      expect(Number(later.id.slice(1))).toBeGreaterThan(Number(rows.at(-1).id.slice(1)));
+      expect(JSON.parse(readFileSync(sequencePath, 'utf8')).nextSeq)
+        .toBeGreaterThan(Number(later.id.slice(1)));
+    });
+
+    it('recovers a corrupt sequence sidecar by scanning durable messages and invalidates old reservations', () => {
+      const firstStore = new ConversationStore(TEST_DIR);
+      const recoveryStore = new ConversationStore(TEST_DIR);
+      const first = firstStore.append({ role: 'user', content: 'before corruption', sessionId: 'session_sequence_recovery' });
+      writeFileSync(join(TEST_DIR, 'message-sequence.json'), '{not-json');
+
+      const recovered = recoveryStore
+        .append({ role: 'assistant', content: 'after corruption', sessionId: 'session_sequence_recovery' });
+      const later = firstStore
+        .append({ role: 'user', content: 'from old live store', sessionId: 'session_sequence_recovery' });
+
+      expect(new Set([first.id, recovered.id, later.id]).size).toBe(3);
+      expect(Number(recovered.id.slice(1))).toBeGreaterThan(Number(first.id.slice(1)));
+      expect(Number(later.id.slice(1))).toBeGreaterThan(Number(recovered.id.slice(1)));
+      expect(JSON.parse(readFileSync(join(TEST_DIR, 'message-sequence.json'), 'utf8'))).toMatchObject({
+        version: 1,
+        epoch: expect.any(String),
+      });
+    });
+
+    it.skipIf(process.platform === 'win32')('keeps live append best-effort when the allocator root is read-only', () => {
+      const readOnlyRoot = join(TEST_DIR, 'read-only-root');
+      const readOnlyStore = new ConversationStore(readOnlyRoot);
+      chmodSync(readOnlyRoot, 0o555);
+      try {
+        const row = readOnlyStore.append({
+          role: 'user', content: 'ephemeral only', sessionId: 'session_read_only',
+        });
+        const batch = readOnlyStore.appendBatch([
+          { role: 'assistant', content: 'ephemeral batch', sessionId: 'session_read_only' },
+        ]);
+        expect(row).toMatchObject({ role: 'user', content: 'ephemeral only', id: expect.stringMatching(/^m\d+$/) });
+        expect(batch).toHaveLength(1);
+        expect(readOnlyStore.loadAllBySession('session_read_only')).toEqual([]);
+      } finally {
+        chmodSync(readOnlyRoot, 0o755);
+      }
+    });
+
+    it('does not reclaim an aged lock owned by the live local process', () => {
+      const lockDir = join(TEST_DIR, 'message-sequence.lock');
+      mkdirSync(lockDir, { mode: 0o700 });
+      writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({
+        pid: process.pid,
+        host: hostname(),
+        token: 'live-owner',
+        startedAt: Date.now() - 120_000,
+      }));
+      const old = new Date(Date.now() - 120_000);
+      utimesSync(lockDir, old, old);
+
+      expect(() => new ConversationStore(TEST_DIR).append({
+        role: 'user', content: 'must not steal', sessionId: 'session_live_lock',
+      })).toThrow('Timed out reserving conversation message ids');
+      expect(JSON.parse(readFileSync(join(lockDir, 'owner.json'), 'utf8')).token).toBe('live-owner');
+    });
+
+    it('reclaims an aged lock whose owner belongs to another host identity', () => {
+      const lockDir = join(TEST_DIR, 'message-sequence.lock');
+      mkdirSync(lockDir, { mode: 0o700 });
+      writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({
+        pid: process.pid,
+        host: `${hostname()}-restored-image`,
+        token: 'stale-owner',
+        startedAt: Date.now() - 120_000,
+      }));
+      const old = new Date(Date.now() - 120_000);
+      utimesSync(lockDir, old, old);
+
+      const row = new ConversationStore(TEST_DIR).append({
+        role: 'user', content: 'recovered', sessionId: 'session_stale_lock',
+      });
+
+      expect(row.id).toBe('m0001');
+      expect(existsSync(lockDir)).toBe(false);
+    });
+
+    it('reserves non-overlapping ranges for concurrent Session copy stores', async () => {
+      const sourceSessionId = 'session_copy_concurrent_source';
+      for (let index = 0; index < 20; index += 1) {
+        store.append({ role: index % 2 ? 'assistant' : 'user', content: `row-${index}`, sessionId: sourceSessionId });
+      }
+      const left = new ConversationStore(TEST_DIR);
+      const right = new ConversationStore(TEST_DIR);
+
+      const [leftCopy, rightCopy] = await Promise.all([
+        Promise.resolve().then(() => left.copySession(sourceSessionId, 'session_copy_concurrent_left')),
+        Promise.resolve().then(() => right.copySession(sourceSessionId, 'session_copy_concurrent_right')),
+      ]);
+      const leftIds = [...leftCopy.idMap.values()];
+      const rightIds = [...rightCopy.idMap.values()];
+
+      expect(new Set([...leftIds, ...rightIds]).size).toBe(leftIds.length + rightIds.length);
+    });
+
+    it('reserves non-overlapping message ranges across Agent processes', async () => {
+      const moduleUrl = new URL('../../../../agent/yeaft/conversation/persist.js', import.meta.url).href;
+      const childScript = `
+        const { ConversationStore } = await import(process.env.PERSIST_MODULE_URL);
+        const store = new ConversationStore(process.env.CONVERSATION_ROOT);
+        const rows = Array.from({ length: 300 }, (_, index) => ({
+          role: index % 2 ? 'assistant' : 'user',
+          content: process.env.SESSION_ID + '-' + index,
+          sessionId: process.env.SESSION_ID,
+        }));
+        store.appendBatch(rows);
+      `;
+      const runChild = sessionId => new Promise((resolveChild, rejectChild) => {
+        const child = spawn(process.execPath, ['--input-type=module', '--eval', childScript], {
+          env: {
+            ...process.env,
+            PERSIST_MODULE_URL: moduleUrl,
+            CONVERSATION_ROOT: TEST_DIR,
+            SESSION_ID: sessionId,
+          },
+          stdio: ['ignore', 'ignore', 'pipe'],
+        });
+        let stderr = '';
+        child.stderr.setEncoding('utf8');
+        child.stderr.on('data', chunk => { stderr += chunk; });
+        child.once('error', rejectChild);
+        child.once('exit', code => {
+          if (code === 0) resolveChild();
+          else rejectChild(new Error(`sequence child exited ${code}: ${stderr}`));
+        });
+      });
+
+      await Promise.all([
+        runChild('session_process_left'),
+        runChild('session_process_right'),
+      ]);
+
+      const reader = new ConversationStore(TEST_DIR);
+      const ids = [
+        ...reader.loadAllBySession('session_process_left'),
+        ...reader.loadAllBySession('session_process_right'),
+      ].map(row => row.id);
+      expect(ids).toHaveLength(600);
+      expect(new Set(ids).size).toBe(ids.length);
+    });
+
+    it('copies a large durable transcript through bounded segment writes', () => {
+      const sourceSessionId = 'session_copy_large_source';
+      const targetSessionId = 'session_copy_large_target';
+      const rows = Array.from({ length: 2_000 }, (_, index) => ({
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        content: `large-copy-${index}-${'x'.repeat(256)}`,
+        sessionId: sourceSessionId,
+        ...(index % 17 === 0 ? { internal: true } : {}),
+      }));
+      store.appendBatch(rows);
+      const sourceFirst = store.loadAllBySession(sourceSessionId)[0];
+      store.moveToCold(sourceFirst.id);
+      const coldContent = sourceFirst.content;
+
+      const startedAt = performance.now();
+      const { copiedCount } = store.copySession(sourceSessionId, targetSessionId);
+      const elapsedMs = performance.now() - startedAt;
+      const conversationDir = join(TEST_DIR, 'sessions', targetSessionId, 'conversation');
+      const index = JSON.parse(readFileSync(join(conversationDir, 'index.json'), 'utf8'));
+      const physical = index.segments.flatMap(segment => readFileSync(join(conversationDir, 'segments', segment.file), 'utf8')
+        .trim().split('\n').filter(Boolean).map(JSON.parse));
+
+      expect(copiedCount).toBe(rows.length);
+      expect(index.totalMessages).toBe(rows.length);
+      expect(physical).toHaveLength(rows.length);
+      expect(physical.find(row => row.content === coldContent)).toMatchObject({
+        sessionId: targetSessionId,
+        cold: true,
+      });
+      expect(physical.filter(row => row.internal === true)).toHaveLength(Math.ceil(rows.length / 17));
+      // This is deliberately generous for shared CI. The old per-message index
+      // rewrite path takes tens of seconds for this fixture; the batched path
+      // should remain comfortably bounded without relying on a microbenchmark.
+      expect(elapsedMs).toBeLessThan(5_000);
+    });
 
     it('stores many messages in a single JSONL segment with an index', () => {
       for (let i = 0; i < 25; i += 1) {
@@ -1953,6 +2266,49 @@ legacy session`, { encoding: 'utf8' });
       expect(readCounts.count).toBeLessThan(10);
     });
 
+    it('loads 20 provider turns across dense tool arcs without changing the bounded UI reader', async () => {
+      for (let turn = 0; turn < 24; turn++) {
+        store.append({ role: 'user', content: 'same question', sessionId: 'grp_a', clientMessageId: `q${turn}` });
+        for (let call = 0; call < 8; call++) {
+          const id = `c${turn}-${call}`;
+          store.append({ role: 'assistant', content: '', sessionId: 'grp_a',
+            toolCalls: [{ id, name: 'Read', input: {} }] });
+          store.append({ role: 'tool', content: 'result', sessionId: 'grp_a', toolCallId: id });
+        }
+        store.append({ role: 'assistant', content: `answer ${turn}`, sessionId: 'grp_a' });
+      }
+      const current = store.append({ role: 'user', content: 'current', sessionId: 'grp_a' });
+      store.append({ role: 'user', content: 'queued future', sessionId: 'grp_a' });
+      const beforeSeq = Number(current.id.slice(1));
+      let yielded = false;
+      setImmediate(() => { yielded = true; });
+      const history = await store.loadProviderHistoryBySession('grp_a', 20, { beforeSeq });
+      expect(yielded).toBe(true);
+      expect(history.filter(m => m.role === 'user').map(m => m.clientMessageId))
+        .toEqual(Array.from({ length: 20 }, (_, i) => `q${i + 4}`));
+      expect(history.filter(m => m.role === 'tool')).toHaveLength(20 * 8);
+      expect(history.at(-1).content).toBe('answer 23');
+      expect(store.loadRecentBySession('grp_a', 20, { beforeSeq }).filter(m => m.role === 'user').length).toBeLessThan(20);
+    });
+
+    it('stops at the requested oldest user without reading the previous dense turn', async () => {
+      const sessionId = 'provider-window-boundary';
+      const directory = join(TEST_DIR, 'sessions', sessionId, 'conversation', 'messages');
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, 'm1.md'), '---\nid: m1\nrole: assistant\nsessionId: provider-window-boundary\n---\nold dense turn');
+      for (let i = 0; i < 20; i++) {
+        const id = `m${i + 2}`;
+        writeFileSync(join(directory, `${id}.md`), `---\nid: ${id}\nrole: user\nsessionId: ${sessionId}\n---\nquestion ${i}`);
+      }
+      const original = store.readMessageFile;
+      store.readMessageFile = function(path, ...args) {
+        if (path.endsWith('/m1.md')) throw new Error('must not read the excluded turn');
+        return original.call(this, path, ...args);
+      };
+      const rows = await store.loadProviderHistoryBySession(sessionId, 20);
+      expect(rows.map(row => row.id)).toEqual(Array.from({ length: 20 }, (_, i) => `m${i + 2}`));
+    });
+
     it('projects persisted AskUser answers without exposing ordinary tool results', () => {
       store.append({ role: 'user', content: 'latest q', sessionId: 'grp_a' });
       store.append({
@@ -2415,11 +2771,16 @@ legacy session`, { encoding: 'utf8' });
       expect(store.countCold()).toBe(0);
     });
 
-    it('should reset sequence numbering', () => {
-      store.append({ role: 'user', content: 'Old' });
+    it('does not reuse global message ids or reset the allocator after clearing transcript rows', () => {
+      const old = store.append({ role: 'user', content: 'Old' });
+      const sequencePath = join(TEST_DIR, 'message-sequence.json');
+      const before = JSON.parse(readFileSync(sequencePath, 'utf8'));
       store.clear();
-      const msg = store.append({ role: 'user', content: 'New' });
-      expect(msg.id).toBe('m0001');
+      const afterClear = JSON.parse(readFileSync(sequencePath, 'utf8'));
+      const msg = new ConversationStore(TEST_DIR).append({ role: 'user', content: 'New' });
+
+      expect(afterClear).toEqual(before);
+      expect(Number(msg.id.slice(1))).toBeGreaterThan(Number(old.id.slice(1)));
     });
   });
 

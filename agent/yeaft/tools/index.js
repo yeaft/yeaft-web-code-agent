@@ -22,7 +22,6 @@ import { ToolRegistry } from './registry.js';
 import skillTool from './skill.js';
 import enterWorktree from './enter-worktree.js';
 import exitWorktree from './exit-worktree.js';
-import repoWorkflow from './repo-workflow.js';
 
 // --- P0 Core tools ---
 import askUser from './ask-user.js';
@@ -33,6 +32,7 @@ import discoverTools from './discover-tools.js';
 
 // --- P0 File tools ---
 import bash from './bash.js';
+import gitRead from './git-read.js';
 import fileRead from './file-read.js';
 import fileWrite from './file-write.js';
 import fileEdit from './file-edit.js';
@@ -47,6 +47,7 @@ import cancelTask from './cancel-task.js';
 
 // --- P1 Agent tools ---
 import agentTool from './agent.js';
+import updateAgent from './update-agent.js';
 import sendMessage from './send-message.js';
 import waitAgent from './wait-agent.js';
 import closeAgent from './close-agent.js';
@@ -55,9 +56,7 @@ import listAgents from './list-agents.js';
 // --- P1 Routing tools (task-334d) ---
 import routeForward from './route-forward.js';
 
-// --- P1 Progress tracking ---
-import todoWrite from './todo-write.js';
-import startPlan from './start-plan.js';
+// --- P1 Durable work ---
 import createWorkItem from './create-work-item.js';
 
 // H2.f.4: user-facing thread tools (spawnThread/switchThread/listThreads/...)
@@ -67,9 +66,8 @@ import createWorkItem from './create-work-item.js';
 // Feature tools (FeatureCreate/Update/List/Get/Progress/Memory + Followup
 // + UpdatePlan + feature_summary_post) and the FeatureArc auto-creation
 // system were removed in 2026-05-13 — they were defined but never used in
-// production, contributing ~2900 lines of dead code. The TodoWrite tool
-// above replaces them as the actual progress-tracking surface the LLM
-// uses for multi-step tasks.
+// production, contributing ~2900 lines of dead code. Native checklist tools
+// are also retired; durable execution belongs to Work Center.
 
 // --- P2 Auxiliary tools ---
 // task-333b L1 delete: ToolSearch and WriteStdin removed — the function-call
@@ -90,7 +88,6 @@ export const allTools = [
   skillTool,
   enterWorktree,
   exitWorktree,
-  repoWorkflow,
 
   // P0 Core
   askUser,
@@ -101,6 +98,7 @@ export const allTools = [
 
   // P0 File
   bash,
+  gitRead,
   fileRead,
   fileWrite,
   fileEdit,
@@ -115,6 +113,7 @@ export const allTools = [
 
   // P1 Agent
   agentTool,
+  updateAgent,
   sendMessage,
   waitAgent,
   closeAgent,
@@ -123,9 +122,7 @@ export const allTools = [
   // P1 Routing (task-334d)
   routeForward,
 
-  // P1 Progress tracking
-  todoWrite,
-  startPlan,
+  // P1 Durable work
   createWorkItem,
 
   // P2 Auxiliary

@@ -18,9 +18,10 @@ let initPromise = null;
 let shuttingDown = false;
 let shutdownPromise = null;
 let serviceFactory = null;
+let featureEnabled = false;
 
 const BROWSER_DETAIL_OPS = new Set([
-  'get', 'create', 'update', 'start', 'cancel', 'resume', 'post_work_item_message', 'action_input', 'retry_action', 'guide', 'retry',
+  'get', 'create', 'update', 'start', 'cancel', 'resume', 'extend_budget', 'post_work_item_message', 'action_input', 'retry_action', 'guide', 'retry',
 ]);
 const BROWSER_ACTION_DEBUG_OPS = new Set(['get_action_messages', 'get_action_requests', 'get_action_request']);
 // `files` is an internal server-to-Agent field. The browser relay rejects any
@@ -39,7 +40,8 @@ const BROWSER_FILE_FIELDS = Object.freeze({
   ],
   action_input: ['id', 'text', 'actionId', 'revision', 'generation', 'quote', 'files'],
   retry_action: ['id', 'actionId', 'revision', 'generation'],
-  resume: ['id', 'revision'],
+  resume: ['id', 'revision', 'executionControlRevision'],
+  extend_budget: ['id', 'executionControlRevision', 'additions'],
   delete: ['id', 'revision'],
   guide: ['id', 'guidance', 'actionId', 'revision', 'generation', 'files'],
   get_action_messages: ['id', 'actionId', 'generation', 'cursor', 'limit'],
@@ -160,8 +162,9 @@ async function createDefaultService() {
 }
 
 async function ensureWorkCenter() {
-  if (service) return service;
+  if (!featureEnabled) throw new Error('Work Center is disabled');
   if (shuttingDown) throw new Error('Work Center is shutting down');
+  if (service) return service;
   if (initPromise) return initPromise;
   initPromise = (async () => {
     const created = serviceFactory ? await serviceFactory() : await createDefaultService();
@@ -181,7 +184,12 @@ async function ensureWorkCenter() {
 }
 
 export async function bootWorkCenter() {
+  featureEnabled = true;
   return ensureWorkCenter();
+}
+
+export function setWorkCenterFeatureEnabled(enabled) {
+  featureEnabled = enabled === true;
 }
 
 export async function snapshotCurrentSessionContext(sessionId) {
@@ -268,6 +276,7 @@ export async function shutdownWorkCenter() {
   } finally {
     initPromise = null;
     shutdownPromise = null;
+    shuttingDown = false;
   }
 }
 
@@ -276,6 +285,7 @@ export function __testSetWorkCenterService(next) {
   initPromise = null;
   shuttingDown = false;
   shutdownPromise = null;
+  featureEnabled = !!next;
 }
 
 export function __testSetWorkCenterFactory(factory) {
@@ -284,4 +294,5 @@ export function __testSetWorkCenterFactory(factory) {
   initPromise = null;
   shuttingDown = false;
   shutdownPromise = null;
+  featureEnabled = false;
 }

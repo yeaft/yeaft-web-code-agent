@@ -20,7 +20,6 @@ export const ALWAYS_VISIBLE_TOOL_NAMES = Object.freeze([
   'Glob',
   'Grep',
   'ListDir',
-  'TodoWrite',
   'ViewImage',
 ]);
 
@@ -31,6 +30,7 @@ export const BACKGROUND_TASK_TOOL_NAMES = Object.freeze([
 ]);
 
 export const SUB_AGENT_MANAGEMENT_TOOL_NAMES = Object.freeze([
+  'UpdateAgent',
   'PromptAgent',
   'WaitAgent',
   'CloseAgent',
@@ -38,6 +38,7 @@ export const SUB_AGENT_MANAGEMENT_TOOL_NAMES = Object.freeze([
 ]);
 
 export const CONDITIONAL_BUILTIN_TOOL_NAMES = new Set([
+  'GitRead',
   'HistorySearch',
   'DiskUsage',
   'ApplyPatch',
@@ -45,33 +46,28 @@ export const CONDITIONAL_BUILTIN_TOOL_NAMES = new Set([
   'ReadTaskLog',
   'CancelTask',
   'SpawnAgent',
+  'UpdateAgent',
   'PromptAgent',
   'WaitAgent',
   'CloseAgent',
   'ListAgents',
   'RouteForward',
   'CreateWorkItem',
-  // Legacy compatibility only. New planning is a single provider response:
-  // visible prose + TodoWrite + the first justified work-tool call. Keeping the
-  // definition registered lets old direct callers resolve it without paying a
-  // dedicated StartPlan -> provider -> TodoWrite round trip on every new task.
-  'StartPlan',
   'JsRepl',
   'NotebookEdit',
   'ImageGeneration',
-  'RepoWorkflow',
 ]);
 
+const GIT_INTENT_RE = /(?:\bgit(?:read)?\b|\bdiff\b|\breview\b|\bcommit(?:s)?\b|\bbranch(?:es)?\b|\bworktree\b|\bpull request\b|\bPR\b|代码审查|审查|评审|提交|分支|工作树|工作区(?:状态|改动)|合并|变更差异)/iu;
 const HISTORY_INTENT_RE = /(?:\bhistory\b|\b(?:prior|previous) (?:chat|conversation|discussion)\b|\bprevious(?:ly)? discussed\b|\bwhat did we (?:decide|discuss|say|agree)\b|\b(?:our|the) (?:earlier|last) decision\b|历史|之前(?:的)?(?:对话|讨论|会话|决定)|过去(?:的)?会话|我们(?:之前|上次)(?:决定|讨论|说)了什么)/iu;
 const DISK_INTENT_RE = /(?:\bdisk (?:usage|space|full)\b|\bstorage (?:usage|space|full)\b|\blargest director|\benospc\b|\bno space left on device\b|磁盘(?:占用|空间|已满)|存储空间|目录占用|空间不足)/iu;
-const PATCH_INTENT_RE = /(?:\bapply (?:a )?patch\b|\bunified diff\b|\bpatch file\b|应用补丁|统一 diff|补丁文件)/iu;
+const PATCH_INTENT_RE = /(?:\b(?:implement|refactor|fix|edit)\b|修复|重构|修改|实现|\bapply (?:a )?patch\b|\bunified diff\b|\bpatch file\b|应用补丁|统一 diff|补丁文件)/iu;
 const TASK_INTENT_RE = /(?:\bbackground (?:task|job|command|process)\b|\btask[_-][a-z0-9]+\b|\btask log\b|后台(?:任务|命令|进程)|任务日志)/iu;
 const SUB_AGENT_INTENT_RE = /(?:\bsub[ -]?agent\b|\bagent(?:s)?\b|\bparallel(?:ize| work| task| review)?\b|\bindependent(?:ly| review)?\b|\banother (?:worker|reviewer|agent)\b|\bdelegate\b|\b(?:run|start|launch|spawn) (?:the |a )?(?:task|child)\b|子 ?Agent|并行(?:处理|工作|任务|审查)?|独立(?:处理|审查)?|另一个(?:人|助手|Agent)|委派)/iu;
 const WORK_ITEM_INTENT_RE = /(?:\bwork ?center\b|\bwork ?item\b|\bdurable tracking\b|\bcross[- ]turn\b|\blong[- ]running goal\b|\bacross multiple (?:turns|sessions)\b|\buntil (?:it is|it's) finished\b|工作中心|工作项|持久(?:任务|跟踪)|跨 ?turn|跨多个会话|长期任务|持续跟踪)/iu;
 const REPL_INTENT_RE = /(?:\bjs ?repl\b|\bjavascript (?:calculation|experiment|evaluation)\b|\bcalculate\b|\bdata transform\b|JavaScript (?:计算|实验|求值)|数据转换|快速计算)/iu;
 const NOTEBOOK_INTENT_RE = /(?:\.ipynb\b|\bjupyter\b|\bnotebook (?:cell|file)\b|Jupyter|笔记本单元格)/iu;
 const IMAGE_GENERATION_INTENT_RE = /(?:\b(?:generate|make|design|draw) (?:me |us )?(?:an? |the )?(?:image|picture|logo|icon|illustration|graphic)\b|\bcreate (?:me |us )?(?:an? |the )?(?:illustration|image|picture|logo|icon|graphic)\b|生成(?:一张)?(?:图片|图像|标志|图标|插图)|创建(?:一张)?(?:插图|图片|图像|标志|图标)|画(?:一张)?(?:图|图片|图标))/iu;
-const REPO_WORKFLOW_INTENT_RE = /(?:\b(?:git |github )?(?:worktree|pull request|pr) (?:workflow|review|merge|landing|prepare)\b|\b(?:review|merge|land|prepare) (?:a |the )?(?:github )?(?:pull request|pr)\b|\bhead[- ]match(?:ed)? merge\b|\bmerge (?:and|\+) tag\b|\breview[- ]prep\b|\bye?aft-repo\b|仓库(?:工作流|流程)|准备(?:开发|审查|review) worktree|(?:审查|评审|合并|准备) ?(?:github )?(?:pr|pull request|拉取请求)|合并(?:并|和)?打 tag|精确 head 合并)/iu;
 const MCP_INTENT_RE = /(?:\bmcp\b|model context protocol|模型上下文协议)/iu;
 
 function messageText(message) {
@@ -126,6 +122,7 @@ function matchedMcpTools(intentText, toolNames) {
  *   activeTasks?: object[],
  *   subAgentToolsActivated?: boolean,
  *   imageGenerationConfigured?: boolean,
+ *   gitReadAlwaysVisible?: boolean,
  * }} opts
  * @returns {Set<string>}
  */
@@ -137,6 +134,7 @@ export function resolveActiveToolNames({
   activeTasks = [],
   subAgentToolsActivated = false,
   imageGenerationConfigured = false,
+  gitReadAlwaysVisible = false,
 } = {}) {
   const registered = new Set(Array.isArray(toolNames) ? toolNames : []);
   const active = new Set(ALWAYS_VISIBLE_TOOL_NAMES.filter(name => registered.has(name)));
@@ -145,6 +143,7 @@ export function resolveActiveToolNames({
   const hasActiveTasks = tasks.length > 0;
   const hasSubAgentTask = tasks.some(task => task?.kind === 'sub_agent');
 
+  if (gitReadAlwaysVisible || GIT_INTENT_RE.test(intentText)) active.add('GitRead');
   if (HISTORY_INTENT_RE.test(intentText)) active.add('HistorySearch');
   if (DISK_INTENT_RE.test(intentText)) active.add('DiskUsage');
   if (PATCH_INTENT_RE.test(intentText)) active.add('ApplyPatch');
@@ -163,7 +162,6 @@ export function resolveActiveToolNames({
   if (REPL_INTENT_RE.test(intentText)) active.add('JsRepl');
   if (NOTEBOOK_INTENT_RE.test(intentText)) active.add('NotebookEdit');
   if (imageGenerationConfigured && IMAGE_GENERATION_INTENT_RE.test(intentText)) active.add('ImageGeneration');
-  if (REPO_WORKFLOW_INTENT_RE.test(intentText)) active.add('RepoWorkflow');
 
   for (const name of matchedMcpTools(intentText, toolNames)) active.add(name);
 

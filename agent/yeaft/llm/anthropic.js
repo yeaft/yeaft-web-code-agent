@@ -24,6 +24,7 @@ import {
   createBoundedTextAccumulator,
   toWellFormedJson,
 } from './adapter.js';
+import { enforceSubAgentEffortPayload, captureEffortDecision } from '../effort.js';
 import {
   normalizeEffort,
   thinkingBudgetForEffort,
@@ -60,6 +61,8 @@ function applyAnthropicThinking(body, model, effort, effortContext = {}) {
     }
   }
 }
+
+import { ProviderStateError, createProviderContext, createProviderState, replayProviderState, providerStateBytes, applyAnthropicCaching, reasoningUsage } from './provider-state.js';
 
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
 const API_VERSION = '2023-06-01';
@@ -144,7 +147,7 @@ export class AnthropicAdapter extends LLMAdapter {
    * @param {import('./adapter.js').UnifiedMessage[]} messages
    * @returns {object[]}
    */
-  #translateMessages(messages) {
+  #translateMessages(messages, context, identity) {
     const result = [];
     for (const msg of messages) {
       if (msg.role === 'system') continue; // system goes separately
@@ -152,24 +155,13 @@ export class AnthropicAdapter extends LLMAdapter {
         const content = translateUserContent(msg.content);
         if (content) result.push({ role: 'user', content });
       } else if (msg.role === 'assistant') {
+        const native = replayProviderState(msg, context, identity);
+        if (native) { result.push({ role: 'assistant', content: native }); continue; }
         const content = [];
-        // task-327d: Anthropic requires thinking blocks to appear BEFORE
-        // any text / tool_use in the content array on echo-back. When the
-        // previous turn produced thinking blocks (with server-signed
-        // signature), we MUST replay them verbatim or the next request
-        // 400s with "content[].thinking in the thinking mode must be
-        // passed back to the API". Order is mandatory.
-        if (Array.isArray(msg.thinkingBlocks)) {
-          for (const tb of msg.thinkingBlocks) {
-            if (!tb || typeof tb.signature !== 'string' || !tb.signature) continue;
-            if (tb.redacted) {
-              if (typeof tb.data !== 'string') continue;
-              content.push({ type: 'redacted_thinking', data: tb.data, signature: tb.signature });
-            } else {
-              if (typeof tb.thinking !== 'string') continue;
-              content.push({ type: 'thinking', thinking: tb.thinking, signature: tb.signature });
-            }
-          }
+        // Legacy records remain readable, but have no trustworthy wire origin.
+        // Never replay their signatures into an arbitrary current account/model.
+        if (!msg.providerState && msg.thinkingBlocks?.length && msg.toolCalls?.length) {
+          throw new ProviderStateError('legacy signed tool history has no origin; start a new context');
         }
         if (hasNonEmptyText(msg.content)) {
           content.push({ type: 'text', text: msg.content });
@@ -246,14 +238,16 @@ export class AnthropicAdapter extends LLMAdapter {
    * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'xhigh'|'max', effortSource?: 'user'|'auto', effortContext?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void }} params
    * @returns {AsyncGenerator<import('./adapter.js').StreamEvent>}
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, effortContext, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart }) {
+  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, effortContext, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart }) {
     if (signal?.aborted) throw new LLMAbortError();
 
+    const context = providerContext || createProviderContext({ protocol: 'anthropic', baseUrl: this.#baseUrl, model });
+    const translatedMessages = this.#translateMessages(messages, context, requestIdentity);
     const body = {
       model,
       max_tokens: maxTokens,
       system,
-      messages: this.#translateMessages(messages),
+      messages: translatedMessages,
       stream: true,
     };
 
@@ -267,6 +261,15 @@ export class AnthropicAdapter extends LLMAdapter {
 
     const translatedTools = this.#translateTools(tools);
     if (translatedTools) body.tools = translatedTools;
+    if (extraBody) Object.assign(body, extraBody);
+    body.model = model; // Do not let extraBody bypass origin/model ownership.
+    body.messages = translatedMessages;
+    body.system = system;
+    applyAnthropicCaching(body, context, onProviderDiagnostics);
+    const effortDecision = effortConstraint
+      ? enforceSubAgentEffortPayload(body, { model, protocol: 'anthropic', effortContext, effortConstraint })
+      : captureEffortDecision({ body, model, protocol: 'anthropic', effortContext, requested: effort, source: effortSource || 'scenario' });
+    onEffortDecision?.(effortDecision);
     const wireBody = toWellFormedJson(body);
 
     const url = `${this.#baseUrl}/v1/messages`;
@@ -308,6 +311,28 @@ export class AnthropicAdapter extends LLMAdapter {
       throw this.#classifyError(response.status, errorBody, response);
     }
 
+    // Some native-compatible gateways return a complete JSON response even
+    // when streaming was requested. Seal exactly the same native blocks.
+    if ((response.headers?.get('content-type') || '').includes('application/json')) {
+      const result = await response.json();
+      const state = createProviderState({ context, identity: requestIdentity, items: result.content, responseId: result.id });
+      for (const block of result.content || []) {
+        if (block.type === 'text') yield { type: 'text_delta', text: block.text };
+        if (block.type === 'tool_use') yield { type: 'tool_call', id: block.id, name: block.name, input: block.input };
+        if (block.type === 'thinking') yield { type: 'thinking_block_end', thinking: block.thinking, signature: block.signature };
+        if (block.type === 'redacted_thinking') yield { type: 'thinking_block_end', redacted: true, data: block.data };
+      }
+      if (state) yield { type: 'provider_state', providerState: state, providerStateBytes: providerStateBytes(state) };
+      yield { type: 'usage', inputTokens: result.usage?.input_tokens || 0, outputTokens: result.usage?.output_tokens || 0,
+        cacheReadTokens: result.usage?.cache_read_input_tokens || 0, cacheWriteTokens: result.usage?.cache_creation_input_tokens || 0,
+        ...reasoningUsage(result.usage, 'anthropic') };
+      yield { type: 'stop', stopReason: this.#mapStopReason(result.stop_reason) };
+      if (onRawExchange) {
+        try { onRawExchange({ rawRequest, rawResponse: { status: response.status, headers: safeHeaders(response), body: result } }); } catch { /* diagnostic only */ }
+      }
+      return;
+    }
+
     // Parse SSE stream
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -327,6 +352,10 @@ export class AnthropicAdapter extends LLMAdapter {
     // signature → next turn 400s identically).
     /** @type {Map<number, { kind: string, [k: string]: any }>} */
     const blockByIndex = new Map();
+    const completedBlocks = new Map();
+    let responseId;
+    let stateFailed = false;
+    let cumulativeReasoningTokens = 0;
     // Keep raw SSE chunks only until the engine receives the bounded exchange
     // callback. The engine owns the configured byte budget; the adapter avoids
     // quadratic string concatenation by storing chunks separately.
@@ -370,9 +399,13 @@ export class AnthropicAdapter extends LLMAdapter {
           if (type === 'content_block_start') {
             const block = event.content_block;
             const idx = event.index;
-            if (block?.type === 'tool_use') {
+            if (block?.type === 'text') {
+              blockByIndex.set(idx, { kind: 'text', text: block.text || '', native: block });
+              if (block.text) yield { type: 'text_delta', text: block.text };
+            } else if (block?.type === 'tool_use') {
               blockByIndex.set(idx, {
                 kind: 'tool_use',
+                native: block,
                 id: block.id,
                 name: block.name,
                 input: '',
@@ -380,6 +413,7 @@ export class AnthropicAdapter extends LLMAdapter {
             } else if (block?.type === 'thinking') {
               blockByIndex.set(idx, {
                 kind: 'thinking',
+                native: block,
                 thinking: typeof block.thinking === 'string' ? block.thinking : '',
                 signature: typeof block.signature === 'string' ? block.signature : '',
               });
@@ -390,6 +424,7 @@ export class AnthropicAdapter extends LLMAdapter {
               // 400s with the same "must be passed back" error.
               blockByIndex.set(idx, {
                 kind: 'redacted_thinking',
+                native: block,
                 data: typeof block.data === 'string' ? block.data : '',
                 signature: typeof block.signature === 'string' ? block.signature : '',
               });
@@ -399,6 +434,7 @@ export class AnthropicAdapter extends LLMAdapter {
             const idx = event.index;
             const st = blockByIndex.get(idx);
             if (delta?.type === 'text_delta') {
+              if (st?.kind === 'text') st.text += delta.text || '';
               yield { type: 'text_delta', text: delta.text };
             } else if (delta?.type === 'thinking_delta') {
               // Forward delta for live UI; ALSO accumulate for round-trip.
@@ -422,10 +458,12 @@ export class AnthropicAdapter extends LLMAdapter {
             } else if (st.kind === 'tool_use') {
               let parsedInput = {};
               try {
-                parsedInput = st.input ? JSON.parse(st.input) : {};
+                parsedInput = st.input ? JSON.parse(st.input) : st.native.input || {};
               } catch {
                 parsedInput = {};
+                stateFailed = true;
               }
+              completedBlocks.set(idx, { ...st.native, input: parsedInput });
               yield {
                 type: 'tool_call',
                 id: st.id,
@@ -452,11 +490,15 @@ export class AnthropicAdapter extends LLMAdapter {
                 };
               }
             }
+            if (st?.kind === 'text') completedBlocks.set(idx, { ...st.native, text: st.text });
+            if (st?.kind === 'thinking') completedBlocks.set(idx, { ...st.native, thinking: st.thinking, signature: st.signature });
+            if (st?.kind === 'redacted_thinking') completedBlocks.set(idx, { type: 'redacted_thinking', data: st.data });
             blockByIndex.delete(idx);
           } else if (type === 'message_delta') {
             const stopReason = event.delta?.stop_reason;
             if (stopReason) {
-              sawStop = true;
+              // Only message_stop seals native state. EOF after message_delta
+              // must not silently complete a signed tool turn without its state.
               yield {
                 type: 'stop',
                 stopReason: this.#mapStopReason(stopReason),
@@ -469,24 +511,40 @@ export class AnthropicAdapter extends LLMAdapter {
               const nextOutputTokens = Math.max(0, Number(event.usage.output_tokens) || 0);
               const outputTokens = Math.max(0, nextOutputTokens - cumulativeOutputTokens);
               cumulativeOutputTokens = Math.max(cumulativeOutputTokens, nextOutputTokens);
+              const reasoning = reasoningUsage(event.usage, 'anthropic');
+              if (reasoning.reasoningTokens !== undefined) {
+                const next = reasoning.reasoningTokens;
+                reasoning.reasoningTokens = Math.max(0, next - cumulativeReasoningTokens);
+                cumulativeReasoningTokens = Math.max(cumulativeReasoningTokens, next);
+              }
               yield {
                 type: 'usage',
+                ...reasoning,
                 inputTokens: 0, // Only in message_start
                 outputTokens,
               };
             }
           } else if (type === 'message_stop') {
             sawStop = true;
+            if (!stateFailed && blockByIndex.size === 0) {
+              const state = createProviderState({ context, identity: requestIdentity, responseId,
+                items: [...completedBlocks].sort(([a], [b]) => a - b).map(([, block]) => block) });
+              if (state) yield { type: 'provider_state', providerState: state, providerStateBytes: providerStateBytes(state) };
+            }
           } else if (type === 'message_start') {
             sawMessageStart = true;
+            responseId = event.message?.id;
             // Usage from message_start
             if (event.message?.usage) {
               cumulativeOutputTokens = Math.max(
                 cumulativeOutputTokens,
                 Math.max(0, Number(event.message.usage.output_tokens) || 0),
               );
+              const reasoning = reasoningUsage(event.message.usage, 'anthropic');
+              cumulativeReasoningTokens = reasoning.reasoningTokens || 0;
               yield {
                 type: 'usage',
+                ...reasoning,
                 inputTokens: event.message.usage.input_tokens || 0,
                 outputTokens: cumulativeOutputTokens,
                 cacheReadTokens: event.message.usage.cache_read_input_tokens || 0,
@@ -494,6 +552,7 @@ export class AnthropicAdapter extends LLMAdapter {
               };
             }
           } else if (type === 'error') {
+            stateFailed = true;
             yield {
               type: 'error',
               error: new Error(event.error?.message || 'Unknown streaming error'),
@@ -538,14 +597,16 @@ export class AnthropicAdapter extends LLMAdapter {
    * models silently drop the param. max_tokens auto-widens to budget+1024
    * when needed.
    */
-  async call({ model, system, messages, maxTokens = 4096, effort, effortSource, effortContext, signal, onRequestStart }) {
+  async call({ model, system, messages, maxTokens = 4096, effort, effortSource, effortContext, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRequestStart }) {
     if (signal?.aborted) throw new LLMAbortError();
 
+    const context = providerContext || createProviderContext({ protocol: 'anthropic', baseUrl: this.#baseUrl, model });
+    const translatedMessages = this.#translateMessages(messages, context, requestIdentity);
     const body = {
       model,
       max_tokens: maxTokens,
       system,
-      messages: this.#translateMessages(messages),
+      messages: translatedMessages,
     };
 
     // task-327c: mirror stream()'s thinking injection for side queries.
@@ -553,6 +614,15 @@ export class AnthropicAdapter extends LLMAdapter {
     if ((thinkingV1Enabled() || effortSource === 'user') && normEffort) {
       applyAnthropicThinking(body, model, normEffort, effortContext);
     }
+    if (extraBody) Object.assign(body, extraBody);
+    body.model = model; // Do not let extraBody bypass origin/model ownership.
+    body.messages = translatedMessages;
+    body.system = system;
+    applyAnthropicCaching(body, context, onProviderDiagnostics);
+    const effortDecision = effortConstraint
+      ? enforceSubAgentEffortPayload(body, { model, protocol: 'anthropic', effortContext, effortConstraint })
+      : captureEffortDecision({ body, model, protocol: 'anthropic', effortContext, requested: effort, source: effortSource || 'scenario' });
+    onEffortDecision?.(effortDecision);
     const wireBody = toWellFormedJson(body);
 
     let response;
@@ -581,8 +651,10 @@ export class AnthropicAdapter extends LLMAdapter {
 
     return {
       text,
+      providerState: createProviderState({ context, identity: requestIdentity, items: result.content, responseId: result.id }),
       stopReason: this.#mapStopReason(result.stop_reason),
       usage: {
+        ...reasoningUsage(result.usage, 'anthropic'),
         inputTokens: result.usage?.input_tokens || 0,
         outputTokens: result.usage?.output_tokens || 0,
         cacheReadTokens: result.usage?.cache_read_input_tokens || 0,

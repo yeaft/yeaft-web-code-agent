@@ -31,15 +31,16 @@ import {
 import { buildPluginCatalog, createPluginSkillManager } from '../../../agent/yeaft/plugins.js';
 import { loadSession } from '../../../agent/yeaft/session.js';
 import { MCPManager } from '../../../agent/yeaft/mcp.js';
-import { __testGetOrCreateVpEngine, __testHooks, __testLoadPluginCatalogMcpConfig, __testResetVpState, __testResolveVpEffectiveConfig, __testSetSession, handleYeaftCreateSession, handleYeaftLoadHistoryOutline, handleYeaftManagedSkill, handleYeaftSubAgentPrompt, handleYeaftTaskCancel, handleYeaftUpdateSessionConfig, handleYeaftVpSubscribe, refreshLiveSessionConfig } from '../../../agent/yeaft/web-bridge.js';
+import { __testGetOrCreateVpEngine, __testHooks, __testLoadPluginCatalogMcpConfig, __testResetVpState, __testResolveVpEffectiveConfig, __testSetSession, handleYeaftCopySession, handleYeaftCreateSession, handleYeaftLoadHistoryOutline, handleYeaftManagedSkill, handleYeaftSubAgentPrompt, handleYeaftTaskCancel, handleYeaftUpdateSessionConfig, handleYeaftVpSubscribe, refreshLiveSessionConfig } from '../../../agent/yeaft/web-bridge.js';
 import { _resetAgentRegistry, getAgentRegistry } from '../../../agent/yeaft/tools/agent.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
+import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
 import { loadSessionConfig, normalizeSessionConfig, resolveSessionConfig, saveSessionConfig } from '../../../agent/yeaft/sessions/session-config.js';
 import { createSession } from '../../../agent/yeaft/sessions/session-store.js';
 import { isMultiVpEnabled, setMultiVpEnabled } from '../../../agent/yeaft/sessions/feature-flag.js';
 import { DEFAULT_VPS } from '../../../agent/yeaft/vp/seed-defaults.js';
-import { registerSessionWorkDir, renameSession, sessionsRoot, snapshotSessions, updateSessionConfig } from '../../../agent/yeaft/sessions/session-crud.js';
+import { copySession, registerSessionWorkDir, renameSession, sessionsRoot, snapshotSessions, updateSessionConfig } from '../../../agent/yeaft/sessions/session-crud.js';
 import {
   createProject,
   deleteProject,
@@ -650,6 +651,123 @@ describe('Yeaft session-scoped model config', () => {
       code: 'DREAM_OUTPUT_TRUNCATED',
       message: 'Dream update response exceeded the 8192-token output limit',
     });
+  });
+
+  it('copies Session metadata, config, and durable messages to an independent identity', () => {
+    const root = makeDir();
+    const workDir = join(root, 'workspace');
+    mkdirSync(workDir, { recursive: true });
+    const source = createSession(sessionsRoot(root), {
+      id: 'copy-source',
+      name: 'Source',
+      roster: [],
+      defaultVpId: null,
+      announcement: 'Keep this context',
+      workDir,
+    });
+    source.close();
+    saveSessionConfig(root, 'copy-source', {
+      model: 'github-copilot/gpt-5.5',
+      modelEffort: 'high',
+    });
+    const conversation = new ConversationStore(root);
+    conversation.append({ role: 'user', content: 'Question', sessionId: 'copy-source' });
+    conversation.append({ role: 'assistant', content: 'Answer', sessionId: 'copy-source' });
+
+    const copied = copySession(root, 'copy-source', { libDir: join(root, 'virtual-persons') });
+
+    expect(copied).toMatchObject({
+      name: 'Source copy',
+      roster: [],
+      defaultVpId: null,
+      announcement: 'Keep this context',
+      workDir,
+      copiedMessageCount: 2,
+    });
+    expect(copied.id).not.toBe('copy-source');
+    expect(loadSessionConfig(root, copied.id)).toEqual({
+      model: 'github-copilot/gpt-5.5',
+      modelEffort: 'high',
+    });
+    expect(conversation.loadAllBySession('copy-source').map(row => row.content)).toEqual(['Question', 'Answer']);
+    const copiedMessages = conversation.loadAllBySession(copied.id);
+    expect(copiedMessages.map(row => row.content)).toEqual(['Question', 'Answer']);
+    expect(copiedMessages.every(row => row.sessionId === copied.id)).toBe(true);
+  });
+
+  it('forks a populated roster with its default VP and reports the source identity for Project inheritance', () => {
+    const root = makeDir();
+    createSession(sessionsRoot(root), {
+      id: 'fork-roster', name: 'Fork roster', roster: ['omni', 'reviewer'],
+      defaultVpId: 'reviewer', announcement: 'Shared instructions', workDir: root,
+    }).close();
+    saveSessionConfig(root, 'fork-roster', { model: 'provider/model', modelEffort: 'max' });
+    ctx.CONFIG = { ...(originalConfig || {}), yeaftDir: root };
+    const start = ctx.messageBuffer.length;
+    handleYeaftCopySession({ requestId: 'fork-roster-request', sessionId: 'fork-roster' });
+    const result = ctx.messageBuffer.slice(start).map(frame => frame.event)
+      .find(event => event?.requestId === 'fork-roster-request');
+    expect(result).toMatchObject({
+      op: 'copy', ok: true, sourceSessionId: 'fork-roster',
+      session: { roster: ['omni', 'reviewer'], defaultVpId: 'reviewer',
+        announcement: 'Shared instructions', workDir: root,
+        config: { model: 'provider/model', modelEffort: 'max' } },
+    });
+    expect(result.session.id).not.toBe('fork-roster');
+    updateSessionConfig(root, result.session.id, { modelEffort: 'low' });
+    expect(loadSessionConfig(root, 'fork-roster').modelEffort).toBe('max');
+  });
+
+  it('removes the partial Session when transcript copying fails', () => {
+    const root = makeDir();
+    createSession(sessionsRoot(root), {
+      id: 'copy-failure-source',
+      name: 'Failure source',
+      roster: [],
+      defaultVpId: null,
+    }).close();
+    const copyTranscript = vi.spyOn(ConversationStore.prototype, 'copySession')
+      .mockImplementationOnce(() => { throw new Error('copy transcript failed'); });
+
+    try {
+      expect(() => copySession(root, 'copy-failure-source', {
+        libDir: join(root, 'virtual-persons'),
+      })).toThrow('copy transcript failed');
+    } finally {
+      copyTranscript.mockRestore();
+    }
+
+    expect(snapshotSessions(root).map(row => row.id)).toEqual(['copy-failure-source']);
+  });
+
+  it('rejects copying a running Session before creating a partial copy', () => {
+    const root = makeDir();
+    createSession(sessionsRoot(root), {
+      id: 'copy-running',
+      name: 'Running source',
+      roster: ['omni'],
+      defaultVpId: 'omni',
+    }).close();
+    ctx.CONFIG = { ...(originalConfig || {}), yeaftDir: root };
+    __testHooks.seedVpStatus({
+      sessionId: 'copy-running',
+      vpId: 'omni',
+      state: 'streaming',
+      turnId: 'turn-running',
+    });
+
+    const responseStart = ctx.messageBuffer.length;
+    handleYeaftCopySession({ requestId: 'copy-running-request', sessionId: 'copy-running' });
+    const response = ctx.messageBuffer.slice(responseStart)
+      .map(frame => frame.event)
+      .find(event => event?.type === 'session_crud_result' && event.requestId === 'copy-running-request');
+
+    expect(response).toMatchObject({
+      op: 'copy',
+      ok: false,
+      error: { code: 'session_running' },
+    });
+    expect(snapshotSessions(root).map(row => row.id)).toEqual(['copy-running']);
   });
 
   it('creates an empty-roster Session from the active Agent instance VP library', () => {
@@ -2078,6 +2196,7 @@ describe('Yeaft session-scoped model config', () => {
     });
     expect(bridgeAgent.pendingPrompts[0]).toEqual({
       prompt: 'use current Project context',
+      parentEffortDecision: expect.objectContaining({ effective: null, source: 'unknown', wireMode: 'omitted' }),
       projectSessionIds: ['session-b'],
       projectLabel: `Beta (${beta.id})`,
       projectInstruction: 'Use the shared release checklist.',
@@ -2093,6 +2212,7 @@ describe('Yeaft session-scoped model config', () => {
     });
     expect(bridgeAgent.pendingPrompts[1]).toEqual({
       prompt: 'clear Project context',
+      parentEffortDecision: expect.objectContaining({ effective: null, source: 'unknown', wireMode: 'omitted' }),
       projectSessionIds: [],
       projectLabel: '',
       projectInstruction: '',
@@ -2131,16 +2251,6 @@ describe('Yeaft session-scoped model config', () => {
       && frame.event.success === true
       && frame.event.task?.status === 'cancelled')).toBe(true);
 
-    expect(__testHooks.buildProjectSharedBlock({
-      projectId: beta.id,
-      projectName: 'Beta',
-      sessionIds: [],
-    })).toContain(`Project: Beta (${beta.id})`);
-    expect(__testHooks.buildProjectSharedBlock({
-      projectId: beta.id,
-      projectName: 'Beta',
-      sessionIds: ['session-b'],
-    }, '[Session session-b]\n共享发布决策')).toContain('this Project on this Agent only');
     expect(await __testHooks.sharedProjectContext(root, 'session-outside', {
       language: 'zh',
       sessionIds: ['session-b'],
@@ -2434,7 +2544,7 @@ describe('Yeaft session-scoped model config', () => {
       toolRegistry: registry,
       skillManager: null,
       mcpManager: { disconnectAll: async () => {}, status: () => [] },
-      taskManager: { renderActiveTasksForPrompt: () => '' },
+      taskManager: {},
       toolStats: null,
       status: { skills: 0, mcpServers: [], mcpFailed: [], tools: 1 },
     });
@@ -2521,7 +2631,7 @@ describe('Yeaft session-scoped model config', () => {
       toolRegistry: null,
       skillManager: null,
       mcpManager: null,
-      taskManager: { renderActiveTasksForPrompt: () => '' },
+      taskManager: {},
       toolStats: null,
     });
 
@@ -2597,7 +2707,7 @@ describe('Yeaft session-scoped model config', () => {
       toolRegistry: null,
       skillManager: null,
       mcpManager: null,
-      taskManager: { renderActiveTasksForPrompt: () => '' },
+      taskManager: {},
       toolStats: null,
     });
 
@@ -2611,6 +2721,17 @@ describe('Yeaft session-scoped model config', () => {
     expect(loadSessionConfig(root, sessionId)).toEqual({});
   });
 
+
+  it('does not initialize the Dream scheduler while the runtime path is disabled', async () => {
+    const root = makeDir();
+    let session = null;
+    try {
+      session = await loadSession({ dir: root, skipMCP: true, skipSkills: true });
+      expect(session.dreamScheduler).toBeNull();
+    } finally {
+      await session?.shutdown?.();
+    }
+  });
 
   it('omits the Work Center producer tool by default and restores it when explicitly enabled', async () => {
     const root = makeDir();

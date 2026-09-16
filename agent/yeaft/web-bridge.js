@@ -24,6 +24,7 @@ import { buildDreamOutputSnapshot } from './dream/output-snapshot.js';
 import { Engine } from './engine.js';
 import { loadSession } from './session.js';
 import { loadAgentMCPConfig, loadConfig, loadMCPConfig } from './config.js';
+import { resolveMaxOutputTokens } from './models.js';
 import {
   createManagedProjectSkill,
   createManagedSkill,
@@ -76,17 +77,14 @@ import { hydrateYeaftStatusFromSession } from './status-cache.js';
 import { handleVpSubscribe } from './vp/vp-bridge.js';
 import { createVp, updateVp, deleteVp, readVp, VpCrudError } from './vp/vp-crud.js';
 import { scanVpLibrary } from './vp/vp-store.js';
-import {
-  bindRepoApprovalCapability,
-  createRouter,
-  isRepoApprovalCapability,
-  revokeRepoApprovalCapability,
-} from './routing/router.js';
+import { createRouter } from './routing/router.js';
 import {
   SessionCrudError,
   createSessionFromSpec,
+  copySession,
   renameSession,
   updateSessionAnnouncement,
+  updateSessionWorkDir,
   archiveSession,
   deleteSession,
   purgeArchivedSessions,
@@ -107,7 +105,7 @@ import { loadSessionConfig, normalizeSessionConfig, resolveSessionConfig, Sessio
 import { updateSessionConfig } from './sessions/session-crud.js';
 import { createCoordinator } from './sessions/coordinator.js';
 import { seedDefaultSession } from './sessions/seed-default.js';
-import { trimHistoryCacheForRuntime, trimSnapshotForBudget } from './history-window.js';
+import { trimHistoryCacheForRuntime } from './history-window.js';
 import { persistYeaftAttachments, attachmentsForPersistence, persistedAttachmentPreviewPayload } from './attachments.js';
 import { normalizeSessionMessageQuote, sessionMessageQuotePrompt } from './session-message-quote.js';
 import { ConversationStore, parseSeqFromId, projectVisibleSessionMessages } from './conversation/persist.js';
@@ -160,7 +158,8 @@ const SKILL_RELOAD_INTERVAL_MS = 2_000;
  * loads the Session.
  * @type {Map<string, {
  *   resolve:Function,
- *   reject?:Function,
+ *   reject:Function,
+ *   conversationId:string|null,
  *   sessionId:string,
  *   vpId:string,
  *   threadId:string,
@@ -176,6 +175,9 @@ const SKILL_RELOAD_INTERVAL_MS = 2_000;
  *   onAbort?:Function,
  * }>} */
 const pendingUserPrompts = new Map();
+// Instance-local retry receipts, never persisted with Session runtime data.
+const terminalUserPrompts = new Map();
+const MAX_TERMINAL_USER_PROMPTS = 256;
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -467,22 +469,6 @@ const turnAbortCtrls = new Map();
  * @type {Map<string, { sessionId: string, vpId: string, threadId: string, key: string }>}
  */
 const turnAbortMeta = new Map();
-/** @type {Map<string, { capability: object, sessionId: string, vpId: string }>} Exact-turn repo approvals, never persisted or projected. */
-const turnRepoApprovals = new Map();
-
-function revokeTurnRepoApproval(turnId) {
-  const grant = turnRepoApprovals.get(turnId);
-  turnRepoApprovals.delete(turnId);
-  return grant ? revokeRepoApprovalCapability(grant.capability) : false;
-}
-
-function revokeRepoApprovalsForRecipient(sessionId, vpId) {
-  for (const [turnId, grant] of turnRepoApprovals.entries()) {
-    if (grant.sessionId !== sessionId || grant.vpId !== vpId) continue;
-    revokeTurnRepoApproval(turnId);
-  }
-}
-
 /**
  * Per-VP status broker — the agent-side authority for VP timeline
  * status. Lazy-initialized on first use because `sendSessionEvent` is
@@ -752,25 +738,6 @@ function legacyProjectContext(yeaftDir, sessionId) {
     projectInstruction: project.instruction || '',
     sessionIds: project.sessionIds,
   }, sessionId);
-}
-
-function buildProjectSharedBlock(projectContext, summaries = '') {
-  const context = normalizeProjectContext(projectContext, null);
-  const body = typeof summaries === 'string' ? summaries.trim() : '';
-  if (!context?.projectId && !body) return '';
-  const lines = ['[Project Shared Context]'];
-  if (context?.projectId) {
-    const label = context.projectName
-      ? `${context.projectName} (${context.projectId})`
-      : context.projectId;
-    lines.push(`Project: ${label}`);
-    lines.push('Sharing boundary: sibling Sessions in this Project on this Agent only.');
-  } else {
-    lines.push('Sharing boundary: sibling Sessions in the same Project on this Agent only.');
-  }
-  lines.push('Read-only memory summaries preserve each source Session identity.');
-  if (body) lines.push('', body);
-  return lines.join('\n');
 }
 
 function vpKey(sessionId, vpId) {
@@ -1188,7 +1155,6 @@ function invalidateGroupContext(sessionId, { abortRuntime = false } = {}) {
   }
   for (const [turnId, meta] of Array.from(turnAbortMeta.entries())) {
     if (meta?.sessionId !== sessionId) continue;
-    revokeTurnRepoApproval(turnId);
     turnAbortCtrls.delete(turnId);
     turnAbortMeta.delete(turnId);
   }
@@ -1421,6 +1387,11 @@ function projectPersistedToHistoryEntry(m, { includeReflections = false } = {}) 
   if (m.imageAssetAnchor) entry.imageAssetAnchor = true;
   if (m.responseKind === 'progress' || m.responseKind === 'result') entry.responseKind = m.responseKind;
   if (Number.isInteger(m.llmCallCount) && m.llmCallCount > 0) entry.llmCallCount = m.llmCallCount;
+  for (const key of ['inputTokens', 'outputTokens', 'totalTokens', 'totalMs']) {
+    if (Number.isFinite(m[key]) && m[key] >= 0) entry[key] = m[key];
+  }
+  if (typeof m.model === 'string' && m.model) entry.model = m.model;
+  if (typeof m.effort === 'string' && m.effort) entry.effort = m.effort;
   if (m.incomplete === true) entry.incomplete = true;
   if (typeof m.stopReason === 'string' && m.stopReason) entry.stopReason = m.stopReason;
   if (m.sessionId) entry.sessionId = m.sessionId;
@@ -1442,14 +1413,13 @@ function projectPersistedToHistoryEntry(m, { includeReflections = false } = {}) 
   // in the runtime history owner so a restart does not create a tool arc with
   // its required thinking prefix missing. `filterSnapshotForVp` strips these
   // blocks from other VPs before any provider request.
-  if (Array.isArray(m.thinkingBlocks) && m.thinkingBlocks.length > 0) {
+  if (m.providerState) entry.providerState = m.providerState;
+  if (!m.providerState && Array.isArray(m.thinkingBlocks) && m.thinkingBlocks.length > 0) {
     const thinkingBlocks = m.thinkingBlocks
       .filter(tb => tb
-        && typeof tb.signature === 'string'
-        && tb.signature
         && (tb.redacted === true
           ? typeof tb.data === 'string'
-          : typeof tb.thinking === 'string'))
+          : typeof tb.thinking === 'string' && typeof tb.signature === 'string' && tb.signature))
       .map(tb => tb.redacted === true
         ? { redacted: true, data: tb.data, signature: tb.signature }
         : { thinking: tb.thinking, signature: tb.signature });
@@ -1462,13 +1432,14 @@ function projectPersistedToHistoryEntry(m, { includeReflections = false } = {}) 
   if (Array.isArray(m.attachments) && m.attachments.length > 0) entry.attachments = m.attachments;
   if (m.quote && typeof m.quote === 'object') entry.quote = m.quote;
   if (Array.isArray(m.todos)) entry.todos = m.todos;
-  if ((entry.role === 'user' || entry.role === 'assistant') && !entry.content && !entry.attachments && !entry.images && !entry.toolCalls && !entry.thinkingBlocks && !entry.todos && !entry.askUserResults) return null;
+  if ((entry.role === 'user' || entry.role === 'assistant') && !entry.content && !entry.attachments && !entry.images && !entry.toolCalls && !entry.thinkingBlocks && !entry.providerState && !entry.todos && !entry.askUserResults) return null;
   return entry;
 }
 
 function projectPersistedToVisibleHistoryEntry(m) {
   if (!isVisibleConversationRow(m)) return null;
   const entry = projectPersistedToHistoryEntry(m);
+  if (entry) { delete entry.providerState; delete entry.thinkingBlocks; }
   return entry && (entry.role === 'user' || entry.role === 'assistant') ? entry : null;
 }
 
@@ -1562,6 +1533,12 @@ function projectVisibleHistoryChunkMessages(messages = []) {
       ...(m.speakerVpId ? { speakerVpId: m.speakerVpId } : {}),
       ...(m.responseKind === 'progress' || m.responseKind === 'result' ? { responseKind: m.responseKind } : {}),
       ...(Number.isInteger(m.llmCallCount) && m.llmCallCount > 0 ? { llmCallCount: m.llmCallCount } : {}),
+      ...(Number.isFinite(m.inputTokens) && m.inputTokens >= 0 ? { inputTokens: m.inputTokens } : {}),
+      ...(Number.isFinite(m.outputTokens) && m.outputTokens >= 0 ? { outputTokens: m.outputTokens } : {}),
+      ...(Number.isFinite(m.totalTokens) && m.totalTokens >= 0 ? { totalTokens: m.totalTokens } : {}),
+      ...(Number.isFinite(m.totalMs) && m.totalMs >= 0 ? { totalMs: m.totalMs } : {}),
+      ...(typeof m.model === 'string' && m.model ? { model: m.model } : {}),
+      ...(typeof m.effort === 'string' && m.effort ? { effort: m.effort } : {}),
       ...(m.incomplete === true ? { incomplete: true } : {}),
       ...(typeof m.stopReason === 'string' && m.stopReason ? { stopReason: m.stopReason } : {}),
       ...(Array.isArray(m.todos) ? { todos: m.todos } : {}),
@@ -2161,21 +2138,12 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
   let related = false;
 
   const meta = envelope?.msg?.meta || {};
-  const repoApproval = envelope?._repoApproval;
-  const hasRepoApproval = isRepoApprovalCapability(repoApproval);
-  if (envelope?.msg?.role === 'user' || envelope?.msg?.from === 'user') {
-    revokeRepoApprovalsForRecipient(sessionId, vpId);
-  }
   const isTaskResult = meta.injectedBy === 'task_result';
   const sourceThreadId = typeof meta.sourceThreadId === 'string' && meta.sourceThreadId.trim()
     ? meta.sourceThreadId.trim()
     : null;
 
-  if (hasRepoApproval) {
-    // Approval is an execution capability, not text. It must never collapse
-    // into a related thread's pendingQueries/rescue path.
-    thread = getOrCreateVpThread({ sessionId, vpId, title: fallbackTitle(text) });
-  } else if (isTaskResult && sourceThreadId) {
+  if (isTaskResult && sourceThreadId) {
     thread = getOrCreateVpThread({ sessionId, vpId, threadId: sourceThreadId, title: fallbackTitle(text) });
   } else if (runningThreads.length === 0) {
     thread = getOrCreateVpThread({ sessionId, vpId, title: fallbackTitle(text) });
@@ -2218,12 +2186,6 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
   if (!thread) return null;
   rememberThreadMessage(thread, envelope?.msg);
   const turnId = `${randomUUID().slice(0, 8)}:${vpId}`;
-  if (hasRepoApproval) {
-    if (!bindRepoApprovalCapability(repoApproval, { sessionId, recipientVpId: vpId, turnId })) {
-      return null;
-    }
-    turnRepoApprovals.set(turnId, { capability: repoApproval, sessionId, vpId });
-  }
   const perfTraceId = envelope?._perfTraceId || envelope?.perfTraceId || null;
   if (perfTraceId) {
     recordAgentPerfTrace(ctx.CONFIG, {
@@ -2238,7 +2200,9 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
     });
   }
 
-  if (related) {
+  // An append shares the running query's request config. A quick send owns
+  // a separate query, so retain its envelope in this thread's normal inbox.
+  if (related && !envelope?._turnConfig) {
     const content = promptParts || prompt;
     const injectedBy = envelope?.msg?.meta?.injectedBy;
     const isInternalAppend = injectedBy === 'route_forward' || injectedBy === 'task_result';
@@ -2264,6 +2228,7 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
       related = false;
     } else {
       persistInboundMessageOnceByMsgId({
+        envelope,
         msgId: envelope?.msg?.id,
         text,
         sessionId,
@@ -2364,6 +2329,7 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
           const isInternal = injectedBy === 'route_forward' || injectedBy === 'task_result';
           const senderVpId = isInternal ? (meta.senderVpId || envelope?.msg?.from || null) : null;
           persistInboundMessageOnceByMsgId({
+            envelope,
             msgId: envMsgId,
             text,
             sessionId,
@@ -2395,7 +2361,6 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
       } catch (err) {
         console.warn('[Yeaft] driveVp: runVpTurn failed', vpId, err?.message || err);
       } finally {
-        revokeTurnRepoApproval(turnId);
         turnAbortCtrls.delete(turnId);
         turnAbortMeta.delete(turnId);
         if (vpAborts.get(key) === vpAbort) vpAborts.delete(key);
@@ -2530,7 +2495,6 @@ export async function __testResetVpState() {
     if (Array.isArray(inbox)) inbox.length = 0;
   }
   vpThreads.clear();
-  for (const turnId of turnRepoApprovals.keys()) revokeTurnRepoApproval(turnId);
   turnAbortCtrls.clear();
   turnAbortMeta.clear();
   await __testDrainVpDrivers();
@@ -3034,10 +2998,10 @@ function mergedStatusForProjectRuntime(runtime, ownerSession = session) {
 }
 
 /** Send a Yeaft Session metadata event over the legacy-compatible envelope. */
-function sendSessionEvent(event, { sessionId, chatId, vpId, turnId, threadId, requestId, requestClientId, perfTraceId } = {}) {
+function sendSessionEvent(event, { sessionId, chatId, vpId, turnId, threadId, requestId, requestClientId, perfTraceId, conversationId = yeaftConversationId } = {}) {
   sendToServer({
     type: 'yeaft_output',
-    conversationId: yeaftConversationId,
+    conversationId,
     ...(perfTraceId ? { perfTraceId } : {}),
     ...(requestId ? { requestId } : {}),
     ...(requestClientId ? { _requestClientId: requestClientId } : {}),
@@ -3083,26 +3047,52 @@ function replayPendingUserPrompts(sessionId) {
   }
 }
 
-function settlePendingUserPrompt(requestId, pending, { answers = null, timedOut = false } = {}) {
+function registerPendingUserPrompt(requestId, pending) {
+  pending.onAbort = () => settlePendingUserPrompt(requestId, pending, { aborted: true });
+  pending.timer = setTimeout(() => {
+    settlePendingUserPrompt(requestId, pending, { timedOut: true });
+  }, Math.max(0, pending.expiresAt - Date.now()));
+  pending.timer.unref?.();
+  pendingUserPrompts.set(requestId, pending);
+  if (pending.signal?.aborted) pending.onAbort();
+  else pending.signal?.addEventListener('abort', pending.onAbort, { once: true });
+}
+
+function settlePendingUserPrompt(requestId, pending, { answers = null, timedOut = false, aborted = false } = {}) {
   if (pendingUserPrompts.get(requestId) !== pending) return false;
   pendingUserPrompts.delete(requestId);
   if (pending.timer) clearTimeout(pending.timer);
   if (pending.signal && pending.onAbort) {
     try { pending.signal.removeEventListener('abort', pending.onAbort); } catch { /* ignore */ }
   }
-  try { pending.resumeQueryTimer?.(); } catch { /* best-effort */ }
-  sendSessionEvent({
-    type: timedOut ? 'ask_user_expired' : 'ask_user_answered',
+  if (!aborted) {
+    try { pending.resumeQueryTimer?.(); } catch { /* best-effort */ }
+  }
+  const expired = timedOut || aborted;
+  const event = {
+    type: expired ? 'ask_user_expired' : 'ask_user_answered',
     requestId,
     toolCallId: pending.toolCallId || null,
-    ...(timedOut ? { expiredAt: Date.now() } : { answers: answers || {} }),
-  }, {
+    ...(expired ? { expiredAt: Date.now() } : { answers: answers || {} }),
+  };
+  const identity = {
+    requestId,
+    toolCallId: pending.toolCallId,
+    conversationId: pending.conversationId,
     sessionId: pending.sessionId,
     vpId: pending.vpId,
     threadId: pending.threadId,
     turnId: pending.turnId,
-  });
-  pending.resolve(timedOut ? { __yeaftTimedOut: true } : (answers || {}));
+  };
+  terminalUserPrompts.set(requestId, { identity, event });
+  while (terminalUserPrompts.size > MAX_TERMINAL_USER_PROMPTS) {
+    terminalUserPrompts.delete(terminalUserPrompts.keys().next().value);
+  }
+  // Like prompt replay, live settlement belongs to the current projection,
+  // not the conversation generation captured when the question was created.
+  sendSessionEvent(event, { ...identity, conversationId: yeaftConversationId || pending.conversationId });
+  if (aborted) pending.reject(new Error('aborted'));
+  else pending.resolve(timedOut ? { __yeaftTimedOut: true } : (answers || {}));
   return true;
 }
 
@@ -3660,6 +3650,28 @@ export function handleYeaftCreateSession(msg) {
   }
 }
 
+export function handleYeaftCopySession(msg) {
+  const requestId = msg && msg.requestId;
+  const sessionId = msg && (msg.sessionId || msg.groupId);
+  try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const source = decorateSessionsWithRuntimeState(snapshotSessions(yeaftDir))
+      .find(session => session?.id === sessionId);
+    if (!source) throw new SessionCrudError('not_found', sessionId);
+    if (source.running) throw new SessionCrudError('session_running', sessionId, 'Cannot copy a running Session');
+    const session = copySession(yeaftDir, sessionId, {
+      ...configuredVpPaths(),
+      name: msg && msg.name,
+    });
+    recordAgentSessionCreated();
+    session.config = loadSessionConfig(yeaftDir, session.id);
+    sendSessionCrudResult({ op: 'copy', requestId, ok: true, sourceSessionId: sessionId, session });
+    sendSessionSnapshotBroadcast();
+  } catch (err) {
+    sendSessionCrudResult({ op: 'copy', requestId, ok: false, error: sessionErrorPayload(err) });
+  }
+}
+
 /**
  * `yeaft_scan_workdir_sessions` — compatibility endpoint for the retired
  * workdir Session scan flow. Session data now lives under the user-level
@@ -3726,18 +3738,14 @@ export function handleYeaftRenameSession(msg) {
 }
 
 /**
- * `yeaft_update_group` — generalised group meta patch. Currently accepts
- * `name` and `announcement` keys. Empty patch is rejected; an empty/
+ * `yeaft_update_session` — generalised Session metadata patch. Accepts
+ * `name`, `announcement`, and `workDir`. Empty patch is rejected; an empty/
  * whitespace-only `name` is also rejected up front rather than letting
  * `renameSession` raise a less-specific error deeper in the call stack.
  *
- * Partial-success contract: when a single patch contains BOTH `name` and
- * `announcement`, the rename is committed first; if the announcement
- * write throws, the rename has already persisted on disk and the client
- * receives `ok:false` for the announcement error — i.e. the WS op is not
- * atomic. Today's UI binds Save buttons per pane in `GroupSettingsModal`
- * so this is theoretical; readers extending the patch shape should know
- * the contract permits half-commits.
+ * Partial-success contract: when a single patch contains multiple keys, each
+ * mutator commits independently. Today's UI binds one Save button per field,
+ * so the wire operation normally contains exactly one key.
  */
 export function handleYeaftUpdateSession(msg) {
   const requestId = msg && msg.requestId;
@@ -3747,7 +3755,8 @@ export function handleYeaftUpdateSession(msg) {
   try {
     const hasName = patch && typeof patch.name === 'string' && patch.name.trim().length > 0;
     const hasAnnouncement = patch && typeof patch.announcement === 'string';
-    if (!patch || (!hasName && !hasAnnouncement)) {
+    const hasWorkDir = patch && typeof patch.workDir === 'string';
+    if (!patch || (!hasName && !hasAnnouncement && !hasWorkDir)) {
       throw new SessionCrudError('invalid_patch', sessionId);
     }
     const yeaftDir = ctx.CONFIG?.yeaftDir;
@@ -3757,6 +3766,9 @@ export function handleYeaftUpdateSession(msg) {
     }
     if (hasAnnouncement) {
       group = updateSessionAnnouncement(yeaftDir, sessionId, patch.announcement);
+    }
+    if (hasWorkDir) {
+      group = updateSessionWorkDir(yeaftDir, sessionId, patch.workDir);
     }
     invalidateGroupContext(sessionId);
     sendSessionCrudResult({ op: 'update', requestId, ok: true, session: group });
@@ -4525,8 +4537,12 @@ function handleEngineEvent(event, hctx) {
         turnId: event.turnId,
         threadId: event.threadId,
         totalMs: event.totalMs,
+        inputTokens: event.inputTokens,
+        outputTokens: event.outputTokens,
         totalTokens: event.totalTokens,
         loopCount: event.loopCount,
+        ...(typeof event.model === 'string' && event.model ? { model: event.model } : {}),
+        ...(typeof event.effort === 'string' && event.effort ? { effort: event.effort } : {}),
         ts: Date.now(),
       }, envelope);
       break;
@@ -4742,6 +4758,27 @@ function handleEngineEvent(event, hctx) {
  *   - No legacy "no-session" fallback paths — they were the source of the
  *     router_unavailable bug fixed in v0.1.671.
  */
+/** Validate a one-message override against the loaded Agent catalog, never Session config. */
+export function validateQuickSend(value, config) {
+  if (value === undefined) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('quickSend must be an object');
+  }
+  const { model, effort, maxOutputTokens } = value;
+  const entry = typeof model === 'string' && model.includes('/')
+    ? config?.availableModels?.find(candidate => candidate.ref === model)
+    : null;
+  if (!entry) throw new Error('quickSend.model must name an available provider/model');
+  if (effort !== null && (typeof effort !== 'string' || !entry.effortOptions?.includes(effort))) {
+    throw new Error('quickSend.effort is not supported by the selected model');
+  }
+  if (maxOutputTokens !== null && (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 1
+      || maxOutputTokens > resolveMaxOutputTokens(entry.id, { modelInfo: entry }))) {
+    throw new Error('quickSend.maxOutputTokens must be null or a positive integer within the model output limit');
+  }
+  return { model, effort, maxOutputTokens };
+}
+
 async function runYeaftSessionSend(msg) {
   if (!msg || typeof msg !== 'object') return;
   const { text } = msg;
@@ -4795,6 +4832,20 @@ async function runYeaftSessionSend(msg) {
       message: { content: [{ type: 'text', text: '⚠️ Yeaft session error: no yeaft directory configured.' }] },
     }, { sessionId });
     sendSessionOutputFrame({ type: 'result', result_text: '' }, { sessionId });
+    return;
+  }
+
+  // Reject malformed overrides before boot, roster changes, attachment writes,
+  // or coordinator persistence. The error includes the client id for retry.
+  let turnConfig = null;
+  try {
+    if (msg.quickSend !== undefined) {
+      turnConfig = validateQuickSend(msg.quickSend, loadConfig({ dir: yeaftDir }));
+    }
+  } catch (err) {
+    sendSessionOutputFrame({ type: 'error', code: 'invalid_quick_send',
+      message: err.message, clientMessageId: msg.id || null }, { sessionId });
+    sendSessionOutputFrame({ type: 'result', result_text: '', is_error: true }, { sessionId });
     return;
   }
 
@@ -4979,6 +5030,7 @@ async function runYeaftSessionSend(msg) {
       // Live form — adapters need the base64 image blocks; runVpTurn
       // reads `_promptParts` off the envelope rather than going
       // back to disk on every fan-out target. NOT persisted.
+      _turnConfig: turnConfig,
       _promptParts: attachmentBundle.promptParts,
       _promptSuffix: attachmentBundle.promptSuffix,
       _perfTraceId: perfTraceId,
@@ -5164,6 +5216,12 @@ export function buildVpQueryOpts({ vpId, sessionCoordinator, sessionId, envelope
   // envelope inside router.forward.
   if (envelope && typeof envelope === 'object') {
     out.inboundEnvelope = envelope;
+    // Only direct delivery of this user message inherits quick-send settings.
+    // RouteForward and background reentry keep the recipient's own defaults.
+    if (envelope._turnConfig && !envelope.msg?.meta?.injectedBy
+        && (envelope.msg?.role === 'user' || envelope.msg?.from === 'user')) {
+      out.turnConfig = { ...envelope._turnConfig };
+    }
   }
   // TodoWrite per-thread isolation. Bind closures that read/write a slot
   // keyed by `${sessionId}::${vpId}::${threadId}` so concurrent threads for
@@ -5346,7 +5404,6 @@ async function runVpTurnWithEscalation(args) {
     graceMs: ESCALATE_AFTER_ABORT_MS,
     onEscalate: () => {
       if (escalationState.escalated) return;
-      revokeTurnRepoApproval(turnId);
       escalationState.escalated = true;
       escalationState.terminalEmitted = true;
       console.error(
@@ -5565,7 +5622,6 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       queryTimer = setTimeout(() => {
         if (!vpAbort.signal.aborted) {
           console.error(`[Yeaft] query timeout after ${queryTimeoutMs / 1000}s of silence — aborting VP ${vpId}`);
-          revokeTurnRepoApproval(turnId);
           try { vpAbort.abort(); } catch { /* best-effort */ }
         }
       }, queryTimeoutMs);
@@ -5573,7 +5629,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
     resetQueryTimer();
 
     // Emit turn_start so frontend can create the message block.
-    sendSessionEvent({ type: 'vp_turn_start', vpId, threadId, turnId, sessionId, title: thread?.title || '' }, envelope);
+    sendSessionEvent({ type: 'vp_turn_start', vpId, threadId, turnId, sessionId, title: thread?.title || '', ts: turnStartAt }, envelope);
     // vp-status: LLM call about to start, no text/tool yet → 'thinking'.
     try {
       getVpStatusBroker().transition({ sessionId, vpId, threadId, title: thread?.title || '', state: 'thinking', turnId, messageCount: thread?.messageIds?.length || 0 });
@@ -5615,16 +5671,9 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
           ? `${projectContext.projectName} (${projectContext.projectId})`
           : (projectContext?.projectId || '');
         queryOpts.projectInstruction = projectContext?.projectInstruction || '';
-        // Related Session summaries now enter through Engine's single AMS
-        // memory outlet. Keep this announcement limited to Project identity and
-        // sharing boundaries so parent VP prompts do not duplicate the same prose
-        // that sub-agents receive through memory.
-        const sharedBlock = buildProjectSharedBlock(projectContext);
-        if (sharedBlock) {
-          queryOpts.sessionAnnouncement = queryOpts.sessionAnnouncement
-            ? `${queryOpts.sessionAnnouncement}\n\n${sharedBlock}`
-            : sharedBlock;
-        }
+        // Project sibling identity remains available to Engine memory recall via
+        // projectSessionIds. Do not mirror internal sharing metadata into the
+        // user-authored Session announcement shown to the model.
       }
       let turnSessionMeta = null;
       try { turnSessionMeta = sessionCoordinator?.group?.getMeta?.() || null; } catch { turnSessionMeta = null; }
@@ -5672,14 +5721,10 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         markEngineTerminal,
         markTurnEnd,
       };
-      // Always trim the snapshot before passing to engine.query. This is a
-      // deterministic provider-request window; it never calls an LLM or
-      // changes the persisted transcript. See `trimSnapshotForBudget`.
+      // The runtime cache is already bounded. Preserve its candidates here:
+      // Engine allocates recent + related turns together at each provider boundary.
       const trimStart = perfNowMs();
-      const trimmedMessages = trimSnapshotForBudget(baseSnapshot, {
-        messageTokenBudget: session?.config?.messageTokenBudget,
-        language: session?.config?.language,
-      });
+      const trimmedMessages = baseSnapshot;
       if (perfTraceId) {
         recordAgentPerfTrace(ctx.CONFIG, {
           traceId: perfTraceId,
@@ -5707,6 +5752,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         // each write a copy of the user message, and history replay
         // would render the user's prompt N times.
         userAlreadyPersisted: true,
+        currentUserMessage: inboundEnvelope?._persistedUserMessage || null,
         askUser: ({ question, options }, toolCall = null) => new Promise((resolve, reject) => {
           const requestId = `ask_${randomUUID()}`;
           const signal = vpAbort.signal;
@@ -5721,6 +5767,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
           const pending = {
             resolve,
             reject,
+            conversationId: yeaftConversationId,
             sessionId,
             vpId,
             threadId,
@@ -5735,20 +5782,8 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
             signal,
             onAbort: null,
           };
-          const onAbort = () => {
-            if (pendingUserPrompts.get(requestId) !== pending) return;
-            pendingUserPrompts.delete(requestId);
-            if (pending.timer) clearTimeout(pending.timer);
-            reject(new Error('aborted'));
-          };
-          pending.onAbort = onAbort;
-          pending.timer = setTimeout(() => {
-            settlePendingUserPrompt(requestId, pending, { timedOut: true });
-          }, ASK_USER_TIMEOUT_MS);
-          if (typeof pending.timer.unref === 'function') pending.timer.unref();
-          pendingUserPrompts.set(requestId, pending);
-          signal.addEventListener('abort', onAbort, { once: true });
-          sendPendingUserPrompt(requestId, pending);
+          registerPendingUserPrompt(requestId, pending);
+          if (pendingUserPrompts.has(requestId)) sendPendingUserPrompt(requestId, pending);
         }),
         threadId,
         vpTurnId: turnId,
@@ -6102,7 +6137,7 @@ function appendTurnToSessionHistory(sessionId, threadId, vpId, prompts, assistan
  * @returns {boolean} true if this call wrote the row, false if a prior
  *   call already wrote it (dedup hit).
  */
-function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = 'main', role, speakerVpId, attachments, quote, internal = false, ts = null, clientMessageId = null }) {
+function persistInboundMessageOnceByMsgId({ envelope = null, msgId, text, sessionId, threadId = 'main', role, speakerVpId, attachments, quote, internal = false, ts = null, clientMessageId = null }) {
   if (!session?.conversationStore) return false;
   // No msgId means no dedup key — caller is responsible for guarding.
   // Both call sites already do (`if (envMsgId && text)` and
@@ -6111,8 +6146,11 @@ function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = '
   // every call would mint a unique id and write a duplicate row, which
   // is the exact bug this helper exists to prevent.
   if (!msgId || typeof msgId !== 'string') return false;
-  const dedupKey = `${msgId}::${threadId || 'main'}`;
-  if (_persistedUserMsgIds.has(dedupKey)) return false;
+  const dedupKey = `${sessionId || ''}::${msgId}::${threadId || 'main'}`;
+  if (_persistedUserMsgIds.has(dedupKey)) {
+    if (envelope) envelope._persistedUserMessage = _persistedInboundRows.get(dedupKey) || null;
+    return false;
+  }
   // Mark BEFORE the empty-text bail. If a later same-id call arrives
   // with non-empty text (e.g. a route_forward injection that the first
   // caller passed in with empty text), the Set must already remember
@@ -6131,6 +6169,7 @@ function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = '
       const v = iter.next();
       if (v.done) break;
       _persistedUserMsgIds.delete(v.value);
+      _persistedInboundRows.delete(v.value);
     }
   }
   try {
@@ -6170,7 +6209,9 @@ function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = '
     if (ts && typeof ts === 'string') {
       record.time = ts;
     }
-    session.conversationStore.append(record);
+    const persisted = session.conversationStore.append(record);
+    _persistedInboundRows.set(dedupKey, persisted);
+    if (envelope) envelope._persistedUserMessage = persisted;
     return true;
   } catch (err) {
     console.warn(
@@ -6186,6 +6227,7 @@ function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = '
  * starts with no stale msg-ids.
  */
 const _persistedUserMsgIds = new Set();
+const _persistedInboundRows = new Map();
 
 /**
  * Abort every in-flight VP turn and clear all queued envelopes across
@@ -6264,10 +6306,6 @@ function emitQueuedTurnAbort(meta, turnId) {
 }
 
 function abortAllVpRuntime(aborted, sessionId = null) {
-  for (const [turnId, meta] of Array.from(turnAbortMeta.entries())) {
-    if (sessionId && meta?.sessionId !== sessionId) continue;
-    revokeTurnRepoApproval(turnId);
-  }
   for (const [key, ctrl] of vpAborts) {
     if (sessionId && !key.startsWith(`${sessionId}::`)) continue;
     try {
@@ -6310,7 +6348,6 @@ export function handleYeaftAbortThread(_msg = {}) {
       const meta = turnAbortMeta.get(turnId);
       if ((meta?.threadId || 'main') !== targetThreadId) continue;
       try { if (!ctrl.signal.aborted) { ctrl.abort(); aborted.push(turnId); } } catch { /* best-effort */ }
-      revokeTurnRepoApproval(turnId);
       turnAbortCtrls.delete(turnId);
       turnAbortMeta.delete(turnId);
     }
@@ -6329,7 +6366,6 @@ export function handleYeaftAbortThread(_msg = {}) {
   for (const [turnId, ctrl] of turnAbortCtrls) {
     try { if (!ctrl.signal.aborted) { ctrl.abort(); aborted.push(turnId); } } catch { /* best-effort */ }
   }
-  for (const turnId of turnAbortMeta.keys()) revokeTurnRepoApproval(turnId);
   turnAbortCtrls.clear();
   turnAbortMeta.clear();
   abortAllVpRuntime(aborted);
@@ -6356,12 +6392,10 @@ export function handleYeaftAbortAll(msg = {}) {
     const meta = turnAbortMeta.get(turnId);
     if (sessionId && meta?.sessionId !== sessionId) continue;
     try { if (!ctrl.signal.aborted) { ctrl.abort(); aborted.push(turnId); } } catch { /* best-effort */ }
-    revokeTurnRepoApproval(turnId);
     turnAbortCtrls.delete(turnId);
     turnAbortMeta.delete(turnId);
   }
   if (!sessionId) {
-    for (const turnId of turnAbortMeta.keys()) revokeTurnRepoApproval(turnId);
     turnAbortCtrls.clear();
     turnAbortMeta.clear();
   }
@@ -6408,7 +6442,6 @@ export function handleYeaftAbortTurn(msg = {}) {
       success = true;
       abortedTurnIds.push(turnId);
     }
-    revokeTurnRepoApproval(turnId);
     turnAbortCtrls.delete(turnId);
     turnAbortMeta.delete(turnId);
   }
@@ -6823,16 +6856,42 @@ export async function handleYeaftFetchDebugHistory(msg = {}) {
 }
 
 /** Resolve a pending Yeaft AskUser prompt from the web UI. */
-export function handleYeaftAskUserAnswer(msg) {
+export function handleYeaftAskUserAnswer(msg = {}) {
   const requestId = typeof msg?.requestId === 'string' ? msg.requestId : '';
+  const rejectAnswer = reason => {
+    // Echo only submitted identity: never expose the actual pending scope.
+    sendSessionEvent({
+      type: 'ask_user_answer_rejected', requestId,
+      toolCallId: msg?.toolCallId || null, reason,
+    }, {
+      requestId, requestClientId: msg?._requestClientId,
+      conversationId: msg?.conversationId ?? null,
+      sessionId: msg?.sessionId, vpId: msg?.vpId,
+      turnId: msg?.turnId, threadId: msg?.threadId,
+    });
+    return false;
+  };
   const pending = pendingUserPrompts.get(requestId);
-  if (!pending) return false;
-  if (msg.sessionId && msg.sessionId !== pending.sessionId) return false;
-  if (msg.vpId && msg.vpId !== pending.vpId) return false;
-  if (msg.turnId && msg.turnId !== pending.turnId) return false;
-  if (msg.threadId && msg.threadId !== pending.threadId) return false;
-  if (msg.toolCallId && msg.toolCallId !== pending.toolCallId) return false;
-
+  const terminal = terminalUserPrompts.get(requestId);
+  const identity = pending || terminal?.identity;
+  if (!identity) return rejectAnswer('unavailable');
+  // Retain legacy optional identity matching. conversationId is a projection
+  // generation, not Session ownership; it can change after a reconnect.
+  for (const field of ['sessionId', 'vpId', 'turnId', 'threadId', 'toolCallId']) {
+    if (msg[field] && msg[field] !== identity[field]) return rejectAnswer('identity_mismatch');
+  }
+  if (!pending) {
+    sendSessionEvent(terminal.event, {
+      ...terminal.identity,
+      conversationId: msg.conversationId ?? terminal.identity.conversationId,
+      requestClientId: msg._requestClientId,
+    });
+    return terminal.event.type === 'ask_user_answered' ? true : rejectAnswer('unavailable');
+  }
+  if (pending.expiresAt <= Date.now()) {
+    settlePendingUserPrompt(requestId, pending, { timedOut: true });
+    return rejectAnswer('unavailable');
+  }
   return settlePendingUserPrompt(requestId, pending, { answers: msg.answers || {} });
 }
 
@@ -7078,7 +7137,7 @@ export async function handleYeaftLoadHistory(msg) {
   // `lim` is now expressed in TURNS, not raw messages. `loadRecent` and
   // `loadRecentBySession` use turn-based slicing so the cut never lands
   // mid-tool-arc. Pass `undefined` to use the persistence-layer default
-  // (DEFAULT_RECENT_TURNS = 20 turns).
+  // (DEFAULT_RECENT_TURNS = 10 turns).
   const pickRecent = (store, lim) =>
     sessionId ? store.loadRecentBySession(sessionId, lim) : store.loadRecent(lim);
   let historyAlreadyReplayed = false;
@@ -7719,7 +7778,6 @@ export async function resetYeaftSession() {
     try { if (!ctrl.signal.aborted) ctrl.abort(); } catch { /* best-effort */ }
   }
   vpAborts.clear();
-  for (const turnId of turnAbortMeta.keys()) revokeTurnRepoApproval(turnId);
   turnAbortCtrls.clear();
   turnAbortMeta.clear();
   vpInboxes.clear();
@@ -7734,6 +7792,7 @@ export async function resetYeaftSession() {
   // History-dedup cache is keyed by per-session coordinator msg ids;
   // a fresh session resets the id space, so clear the cache too.
   _persistedUserMsgIds.clear();
+  _persistedInboundRows.clear();
   // vp-status: nuke the broker table too. Drivers above have just
   // been aborted, so any in-flight `settleIdle` from their outer
   // `finally` blocks is racing this reset. Clearing here makes the
@@ -8112,7 +8171,6 @@ export function handleYeaftMcpReload(msg = {}) {
 export const __testHooks = {
   loadProjects,
   sharedProjectContext,
-  buildProjectSharedBlock,
   normalizeProjectContext,
   handleProjectContextSyncForTest(msg) {
     handleYeaftProjectContextSync(msg);
@@ -8198,17 +8256,15 @@ export const __testHooks = {
     return loadAndBroadcastYeaftSkillSlashCommands();
   },
   resetAbortState() {
-    for (const turnId of turnRepoApprovals.keys()) revokeTurnRepoApproval(turnId);
     turnAbortCtrls.clear();
     turnAbortMeta.clear();
     vpAborts.clear();
     vpInboxes.clear();
   },
-  seedPendingUserPrompt({ requestId = 'ask-test', sessionId = 'session-test', vpId = 'vp-test', threadId = 'main', turnId = 'turn-test', toolCallId = 'call-test', question = 'Continue?', options = [], createdAt = Date.now(), expiresAt = Date.now() + ASK_USER_TIMEOUT_MS } = {}) {
-    let resolved;
-    const promise = new Promise(resolve => { resolved = resolve; });
-    pendingUserPrompts.set(requestId, { resolve: resolved, sessionId, vpId, threadId, turnId, toolCallId, question, options, createdAt, expiresAt, timer: null });
-    return promise;
+  seedPendingUserPrompt({ requestId = 'ask-test', sessionId = 'session-test', vpId = 'vp-test', threadId = 'main', turnId = 'turn-test', toolCallId = 'call-test', conversationId = yeaftConversationId, question = 'Continue?', options = [], createdAt = Date.now(), expiresAt = Date.now() + ASK_USER_TIMEOUT_MS, signal = null } = {}) {
+    return new Promise((resolve, reject) => {
+      registerPendingUserPrompt(requestId, { resolve, reject, conversationId, sessionId, vpId, threadId, turnId, toolCallId, question, options, createdAt, expiresAt, signal });
+    });
   },
   replayPendingUserPrompts,
   settlePendingUserPromptForTest(requestId, opts = {}) {
@@ -8218,8 +8274,10 @@ export const __testHooks = {
   resetPendingUserPrompts() {
     for (const pending of pendingUserPrompts.values()) {
       if (pending.timer) clearTimeout(pending.timer);
+      if (pending.onAbort) pending.signal?.removeEventListener('abort', pending.onAbort);
     }
     pendingUserPrompts.clear();
+    terminalUserPrompts.clear();
   },
   resetVpStatusBroker() {
     if (vpStatusBroker) vpStatusBroker.reset();

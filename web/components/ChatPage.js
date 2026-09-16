@@ -30,10 +30,10 @@ export default {
     <div class="chat-page" :class="{ 'show-sidebar': store.sessionSidebarOpen }">
 
       <!-- Sidebar Overlay -->
-      <div class="sidebar-overlay" v-if="store.sessionSidebarOpen" @click="store.closeSessionSidebar()"></div>
+      <div class="sidebar-overlay" v-if="store.sessionSidebarOpen && !store.workCenterOpen" @click="store.closeSessionSidebar()"></div>
 
       <!-- Left Sidebar -->
-      <SessionSidebarShell class="sidebar" :collapsed="effectiveSidebarCollapsed">
+      <SessionSidebarShell v-show="!store.workCenterOpen" class="sidebar" :collapsed="effectiveSidebarCollapsed">
         <template #collapsed>
         <!-- Collapsed Icon Bar -->
         <div class="sidebar-collapsed-bar" v-if="effectiveSidebarCollapsed">
@@ -48,6 +48,13 @@ export default {
           <button class="collapsed-icon-btn" @click="onUnifiedCreate" :disabled="onlineAgentCount === 0" :title="$t('chat.sidebar.newConv')">
             <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
           </button>
+          <SidebarWorkCenter
+            v-if="store.workCenterUiEnabled"
+            :agents="store.agents"
+            :active-agent-id="store.workCenterAgentId"
+            :collapsed="true"
+            @open="store.enterWorkCenter"
+          />
           <div class="collapsed-spacer"></div>
           <button class="collapsed-icon-btn" @click="store.toggleTheme()" :title="store.theme === 'dark' ? $t('chat.sidebar.lightMode') : $t('chat.sidebar.darkMode')">
             <svg v-if="store.theme === 'dark'" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zM2 13h2c.55 0 1-.45 1-1s-.45-1-1-1H2c-.55 0-1 .45-1 1s.45 1 1 1zm18 0h2c.55 0 1-.45 1-1s-.45-1-1-1h-2c-.55 0-1 .45-1 1s.45 1 1 1zM11 2v2c0 .55.45 1 1 1s1-.45 1-1V2c0-.55-.45-1-1-1s-1 .45-1 1zm0 18v2c0 .55.45 1 1 1s1-.45 1-1v-2c0-.55-.45-1-1-1s-1 .45-1 1zM5.99 4.58c-.39-.39-1.03-.39-1.41 0-.39.39-.39 1.03 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0s.39-1.03 0-1.41L5.99 4.58zm12.37 12.37c-.39-.39-1.03-.39-1.41 0-.39.39-.39 1.03 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0 .39-.39.39-1.03 0-1.41l-1.06-1.06zm1.06-10.96c.39-.39.39-1.03 0-1.41-.39-.39-1.03-.39-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06zM7.05 18.36c.39-.39.39-1.03 0-1.41-.39-.39-1.03-.39-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06z"/></svg>
@@ -65,9 +72,12 @@ export default {
               :restarting-agents="restartingAgents"
               :upgrading-agents="upgradingAgents"
               :show-agent-actions="true"
+              :can-upgrade-all="bulkUpgradableAgents.length > 0"
+              :upgrading-all="!!store.agentUpgradeBatch?.pending"
               @open-agent-settings="openAgentSettings(store.currentAgent || null)"
               @restart-agent="restartAgent"
               @upgrade-agent="upgradeAgent"
+              @upgrade-all-agents="upgradeAllAgents"
             />
             <div class="sidebar-header-actions">
               <SidebarModeToggle
@@ -76,9 +86,12 @@ export default {
                 :disabled="onlineAgentCount === 0"
                 @flip="onModeFlip"
               />
-              <button class="sidebar-icon-btn sidebar-work-center-header-btn" :class="{ active: store.workCenterOpen }" :disabled="workCenterAgents.length === 0" @click="openWorkCenter()" :title="$t('workCenter.title')" :aria-label="$t('workCenter.title')">
-                <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path fill="currentColor" d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 5v2h10V8H7zm0 4v2h7v-2H7zm0 4v2h5v-2H7z"/></svg>
-              </button>
+              <SidebarWorkCenter
+                v-if="store && store.workCenterUiEnabled"
+                :agents="store.agents"
+                :active-agent-id="store.workCenterAgentId"
+                @open="store.enterWorkCenter"
+              />
               <button class="sidebar-icon-btn" @click="onSidebarCollapse" :title="$t('chat.sidebar.collapse')">
                 <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h13v-2H3v2zm0-5h10v-2H3v2zm0-7v2h13V6H3zm18 9.59L17.42 12 21 8.41 19.59 7l-5 5 5 5L21 15.59z"/></svg>
               </button>
@@ -123,13 +136,6 @@ export default {
 
         <template v-else>
         <!-- Legacy sidebar stays available until the catalog snapshot arrives. -->
-        <SidebarWorkCenter
-          :agents="store.agents"
-          :active-agent-id="store.workCenterAgentId"
-          :collapsed="false"
-          :active="store.workCenterOpen"
-          @open="store.enterWorkCenter"
-        />
         <div class="session-tab-bar">
           <div class="session-tab active session-tab-solo">
             <svg class="session-tab-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
@@ -268,7 +274,7 @@ export default {
                 @open-settings="showSettingsPanel = true"
               />
               <BtwOverlay />
-              <ChatInput :conversation-id="store.activeConversationId" />
+              <ChatInput v-if="store.activeConversationId || onlineAgents.length > 0" :conversation-id="store.activeConversationId" />
             </div>
             <!-- Right Panel overlay (mobile only) -->
             <div class="expert-panel-overlay" v-if="store.activeRightPanel" @click="store.activeRightPanel = null"></div>
@@ -531,6 +537,9 @@ export default {
     upgradingAgents() {
       return Object.fromEntries(Object.entries(this.store.agentOperations || {}).filter(([, value]) => value.upgrade?.pending));
     },
+    bulkUpgradableAgents() {
+      return typeof this.store.getUpgradableAgents === 'function' ? this.store.getUpgradableAgents() : [];
+    },
     providerOptions() {
       return [
         { value: 'claude-code', label: this.$t('provider.claudeCode') },
@@ -557,9 +566,6 @@ export default {
     },
     onlineAgentCount() {
       return this.onlineAgents.length;
-    },
-    workCenterAgents() {
-      return this.onlineAgents.filter(agent => Array.isArray(agent.capabilities) && agent.capabilities.includes('work_center'));
     },
     isMobileView() {
       return this.windowWidth <= 768;
@@ -653,13 +659,7 @@ export default {
         await alertDialog(this.$t('sidebar.projects.assignFailed', { name: project.name, message }));
       }
     },
-    openWorkCenter(agentId = null) {
-      const target = this.workCenterAgents.find(agent => agent.id === agentId)
-        || this.workCenterAgents.find(agent => agent.id === this.store.workCenterAgentId)
-        || this.workCenterAgents[0];
-      if (target) this.store.enterWorkCenter(target.id);
-    },
-    onUnifiedSessionAction({ action, row, title, sessions } = {}) {
+    async onUnifiedSessionAction({ action, row, title, sessions } = {}) {
       if (!row?.routeRef) return;
       const { runtimeProvider, agentId, sessionId } = row.routeRef;
       if (action === 'rename') {
@@ -670,6 +670,15 @@ export default {
         this.store.toggleCatalogSessionPin(row);
       } else if (action === 'remove') {
         this.store.hideCatalogSession(row);
+      } else if (runtimeProvider === 'yeaft' && action === 'copy') {
+        const result = await this.store.copyCatalogSession(row);
+        if (!result?.ok) {
+          const code = result?.error?.code || 'unknown';
+          const key = `yeaft.session.error.${code}`;
+          const translated = this.$t(key);
+          const message = translated === key ? (result?.error?.message || code) : translated;
+          await alertDialog(this.$t('yeaft.session.copyFailed', { message }));
+        }
       } else if (runtimeProvider === 'yeaft' && action === 'settings') {
         this.store.pendingUnifiedSessionSettings = { sessionId, agentId, section: 'session' };
         this.store.openCatalogSession(row);
@@ -959,6 +968,20 @@ export default {
       if (!await confirmDialog(this.$t('chat.agent.upgradeConfirm', { name }))) return;
       this.store.upgradeAgent(agentId);
     },
+    async upgradeAllAgents() {
+      const candidates = this.bulkUpgradableAgents;
+      if (candidates.length === 0) return;
+      const skipped = Math.max(0, (this.store.agents || []).length - candidates.length);
+      if (!await confirmDialog(this.$t('chat.agent.upgradeAllConfirm', { count: candidates.length, skipped }))) return;
+      this.store.upgradeAllAgents();
+    },
+    showAgentUpgradeBatchSummary(batch) {
+      const results = Object.values(batch?.results || {});
+      const upgraded = results.filter(result => result.status === 'upgraded').length;
+      const latest = results.filter(result => result.status === 'already_latest').length;
+      const failed = results.filter(result => result.status === 'failed').length;
+      alertDialog(this.$t('chat.agent.upgradeAllSummary', { upgraded, latest, failed, skipped: batch?.skippedCount || 0 }));
+    },
     // Folder picker methods
     closeFolderPicker() {
       this.folderPickerOpen = false;
@@ -1128,7 +1151,8 @@ export default {
     fetch('/api/version').then(r => r.json()).then(d => { this.serverVersion = d.version; }).catch(() => {});
 
     this._agentUpgradeAckHandler = (event) => {
-      const { success, error, alreadyLatest, version, reason, currentNode, requiredNode } = event.detail || {};
+      const { success, error, alreadyLatest, version, reason, currentNode, requiredNode, batchId } = event.detail || {};
+      if (batchId) return;
       if (!success) {
         if (reason === 'node_incompatible') {
           alertDialog(this.$t('chat.agent.nodeIncompatible', {
@@ -1147,13 +1171,16 @@ export default {
         alertDialog(this.$t('chat.agent.alreadyLatest', { version: version || '' }));
       }
     };
+    this._agentUpgradeBatchHandler = (event) => this.showAgentUpgradeBatchSummary(event.detail || {});
     window.addEventListener('agent-upgrade-ack', this._agentUpgradeAckHandler);
+    window.addEventListener('agent-upgrade-batch-complete', this._agentUpgradeBatchHandler);
   },
   beforeUnmount() {
     document.removeEventListener('click', this._clickOutsideHandler);
     window.removeEventListener('resize', this.handleResize);
     window.removeEventListener('workbench-message', this.handleFolderPickerMessage);
     window.removeEventListener('agent-upgrade-ack', this._agentUpgradeAckHandler);
+    window.removeEventListener('agent-upgrade-batch-complete', this._agentUpgradeBatchHandler);
     if (this._folderPickerTimer) clearTimeout(this._folderPickerTimer);
   }
 };

@@ -26,7 +26,7 @@ export function getEcosystemPath(instanceId = DEFAULT_INSTANCE_ID) {
   return join(getConfigDir(instanceId), 'ecosystem.config.cjs');
 }
 
-function generateEcosystem(config) {
+export function generateEcosystem(config) {
   const nodePath = getNodePath();
   const cliPath = getCliPath();
   const cliDir = dirname(cliPath);
@@ -43,18 +43,18 @@ function generateEcosystem(config) {
 
   return `module.exports = {
   apps: [{
-    name: '${pm2AppName}',
-    script: '${cliPath.replace(/\\/g, '\\\\')}',
-    interpreter: '${nodePath.replace(/\\/g, '\\\\')}',
-    cwd: '${cliDir.replace(/\\/g, '\\\\')}',
+    name: ${JSON.stringify(pm2AppName)},
+    script: ${JSON.stringify(cliPath)},
+    interpreter: ${JSON.stringify(nodePath)},
+    cwd: ${JSON.stringify(cliDir)},
     env: ${JSON.stringify(env, null, 6)},
     autorestart: true,
     watch: false,
     max_restarts: 10,
     restart_delay: 5000,
     log_date_format: 'YYYY-MM-DD HH:mm:ss',
-    error_file: '${join(logDir, 'error.log').replace(/\\/g, '\\\\')}',
-    out_file: '${join(logDir, 'out.log').replace(/\\/g, '\\\\')}',
+    error_file: ${JSON.stringify(join(logDir, 'error.log'))},
+    out_file: ${JSON.stringify(join(logDir, 'out.log'))},
     merge_logs: true,
     max_memory_restart: '500M',
   }]
@@ -105,6 +105,7 @@ export function winInstall(config) {
   // pm2-startup doesn't work well on Windows, use Startup folder approach
   const trayScript = join(dirname(getCliPath()), 'scripts', 'agent-tray.ps1');
   const startupDir = join(process.env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
+  mkdirSync(startupDir, { recursive: true });
   const startupBat = join(startupDir, `${pm2AppName}.bat`);
   // Resurrect pm2 processes + launch tray icon
   let batContent = `@echo off\r\npm2 resurrect\r\n`;

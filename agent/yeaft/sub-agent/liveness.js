@@ -22,7 +22,8 @@
  *
  * @returns {{
  *   toolUseCount: number,
- *   tokenCount: number,
+ *   usageTokens: number,
+ *   outputChars: number,
  *   eventCount: number,
  *   lastEventAt: number,
  *   lastEventType: string|null,
@@ -32,7 +33,8 @@
 export function makeLiveness() {
   return {
     toolUseCount: 0,
-    tokenCount: 0,
+    usageTokens: 0,
+    outputChars: 0,
     eventCount: 0,
     lastEventAt: 0,
     lastEventType: null,
@@ -54,12 +56,15 @@ export function bumpLivenessFromEvent(liveness, evt) {
   liveness.lastEventAt = Date.now();
   liveness.lastEventType = evt.type || liveness.lastEventType;
   if (evt.type === 'text_delta' && typeof evt.text === 'string') {
-    // Coarse "have we produced output" signal. Token count is not exact —
-    // it's character-based — but it lets the parent see "yes, the model
-    // is generating".
-    liveness.tokenCount += evt.text.length;
-  } else if (evt.type === 'tool_start' || evt.type === 'tool_call') {
-    liveness.toolUseCount += 1;
+    // This is explicitly output volume, never represented as provider tokens.
+    liveness.outputChars += evt.text.length;
+  } else if (evt.type === 'usage') {
+    const cacheTokens = evt.cacheTokensAreIncludedInInput ? 0
+      : (evt.cacheReadTokens || 0) + (evt.cacheWriteTokens || 0);
+    liveness.usageTokens += (evt.inputTokens || 0) + (evt.outputTokens || 0) + cacheTokens;
+  } else if (evt.type === 'tool_start') {
+    // Keep the bounded activity trail here. Actual executions are counted at
+    // SubAgentToolRegistry.execute(), then copied into liveness by the runner.
     const name = evt.toolName || evt.name || (evt.tool && evt.tool.name) || null;
     if (name) {
       liveness.recentTools.push(name);
@@ -81,7 +86,8 @@ export function snapshotLiveness(liveness, now = Date.now()) {
   if (!liveness) {
     return {
       toolUseCount: 0,
-      tokenCount: 0,
+      usageTokens: 0,
+      outputChars: 0,
       eventCount: 0,
       lastEventAt: null,
       msSinceLastEvent: null,
@@ -91,7 +97,8 @@ export function snapshotLiveness(liveness, now = Date.now()) {
   }
   return {
     toolUseCount: liveness.toolUseCount,
-    tokenCount: liveness.tokenCount,
+    usageTokens: liveness.usageTokens,
+    outputChars: liveness.outputChars,
     eventCount: liveness.eventCount,
     lastEventAt: liveness.lastEventAt || null,
     msSinceLastEvent: liveness.lastEventAt ? Math.max(0, now - liveness.lastEventAt) : null,
@@ -134,8 +141,17 @@ export function diagnoseAgentLiveness(agent, opts = {}) {
     execution: agent?.execution ? {
       ...agent.execution,
       recentCalls: agent.execution.recentCalls.map(call => ({ ...call })),
-      remainingToolCalls: Math.max(0, (agent.budget?.max_tool_calls || 0) - agent.execution.toolCalls),
-      limits: agent.budget,
+      remainingToolCalls: agent.budget?.max_tool_calls === undefined ? null
+        : Math.max(0, agent.budget.max_tool_calls - agent.execution.toolCalls),
+      limits: { ...agent.budget },
+      llmCalls: agent.usage?.llmCalls || 0,
+      reportingLlmCalls: agent.usage?.reportingLlmCalls || 0,
+      remainingLlmCalls: agent.budget?.max_llm_calls === undefined ? null
+        : Math.max(0, agent.budget.max_llm_calls - (agent.usage?.llmCalls || 0)),
+      remainingWallTimeMs: agent.budget?.wall_time_ms === undefined ? null
+        : Math.max(0, agent.budget.wall_time_ms - (now - (agent.usage?.startedAt || now))),
+      allowTools: [...(agent.allowTools || [])],
+      controlRevision: agent.controlRevision || 0,
       progressNote: 'Execution counts and repeated results are diagnostics, not proof of semantic progress or stalling.',
     } : null,
     msSinceLastEvent: liveness.msSinceLastEvent ?? msSinceActivity,
@@ -143,7 +159,7 @@ export function diagnoseAgentLiveness(agent, opts = {}) {
     stalled: stale,
     stallThresholdMs: thresholdMs,
     diagnostic: stale
-      ? `No sub-agent activity for ${msSinceActivity}ms; treat it as stalled instead of waiting in a loop.`
+      ? `No observable sub-agent event for ${msSinceActivity}ms. This is diagnostic only: the provider or tool may still be working; inspect the log before deciding whether to cancel.`
       : null,
   };
 }

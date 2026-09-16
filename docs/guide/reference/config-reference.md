@@ -37,6 +37,8 @@ This chapter is the **field-by-field** reference for an Agent instance's Yeaft `
 | `credentialProvider` | `string` | △ | Dynamic credential name (currently only `github-copilot`) |
 | `protocol` | `'anthropic' \| 'openai-responses'` | — | Provider-level wire protocol; per-model overrides win |
 | `models` | `(string \| ModelEntry)[]` | ✓ | Models served by this provider |
+| `credentialScopeId` | `string` | — | Stable, non-secret account scope for native reasoning replay and caching. Required for dynamic credentials/custom endpoints; official static-key routes default to a key fingerprint. Change when switching accounts; preserve when rotating tokens |
+| `capabilities` | `object` | — | Boolean `nativeReasoningState`, `promptCaching`, `parallelToolCalls`; `translation: true` disables all three. Model overrides take precedence |
 
 > The chat-completions protocol was removed in Phase 7 (v0.1.590). Only `anthropic` and `openai-responses` are valid.
 
@@ -50,6 +52,36 @@ A model entry can be either the bare id string (`"gpt-5"`) or an object:
 | `protocol` | `'anthropic' \| 'openai-responses'` | — | Overrides the provider protocol |
 | `contextWindow` | `number` | — | Overrides the registry default for this model |
 | `maxOutput` | `number` | — | Overrides the registry default output cap |
+| `capabilities` | `object` | — | Per-field overrides of provider protocol capabilities |
+
+#### Reasoning continuity and caching
+
+The official `https://api.openai.com/v1` and `https://api.anthropic.com` endpoints enable native capabilities by default. Unknown proxies default to disabled. Enable capabilities only after verifying both the proxy and upstream; model names do not prove support. Translating Messages into Chat Completions is not native Anthropic passthrough.
+
+```json
+{
+  "name": "verified-proxy",
+  "baseUrl": "https://proxy.example/v1",
+  "protocol": "openai-responses",
+  "credentialScopeId": "account-a",
+  "capabilities": {
+    "nativeReasoningState": true,
+    "promptCaching": true,
+    "parallelToolCalls": true
+  },
+  "models": ["gpt-5"]
+}
+```
+
+This is a capability fragment; retain your existing `apiKey` or `credentialProvider`. No automatic probing or live configuration changes occur. Responses uses `store: false`, native encrypted reasoning replay, and a stable cache key scoped to instance/Session/VP/thread. Anthropic preserves thinking/signature/redacted block order and adds at most three ephemeral cache breakpoints on system, tools, and the latest user/tool-result boundary, never on thinking blocks.
+
+Private state persists with the instance transcript but is excluded from ordinary message, search, cross-VP and child-agent context projections. Signed Anthropic tool turns fail closed on model, account, owner or message-projection mismatches rather than silently dropping signatures. For official endpoints using a static API key, an omitted `credentialScopeId` defaults to a full cryptographic key fingerprint (never the key itself), stable across restarts and invalidated by key rotation. Dynamic credentials and custom endpoints require an explicit scope; without one, caching is not sent and unowned reasoning is not persisted. Legacy `thinkingBlocks` remain readable but are never replayed directly; signed legacy tool history requires a fresh context. A native signed-thinking tool response without capability/ownership configuration also terminates explicitly: configure the verified native route first. Raw request/response debugging is a separate sensitive data layer.
+
+Sending cache fields requests caching; only provider cache usage establishes a hit. Caching usually reduces billed input and latency, not HTTP request count. `reasoningTokens`, when reported upstream, is a subset of output tokens and is not added again to totals.
+
+Child agents inherit a snapshot of the actual parent request effort that produced SpawnAgent/PromptAgent, capped at `high`. Unknown parent defaults conservatively use `medium`; different models select a supported tier no higher than the ceiling or fail explicitly. `/max`, config boosts, `extraBody`, and disabling the thinking feature flag cannot bypass the final payload cap.
+
+Safe read-only tools run in shared segments without a uniform four-call cap; writes, unknown tools and control tools retain exclusive barriers. Read paths preload applicable project rules, but writes in the same model response still cannot use rule scopes the model has not seen. `projectDocMaxBytes: 0` continues to disable rule loading.
 
 Anything else on a model entry is silently ignored. UI affordances like display names live in the bundled `models.js` / `models-dev.js` registries, not in user config.
 
@@ -59,7 +91,8 @@ Anything else on a model entry is silently ignored. UI affordances like display 
 "yeaft": {
   "maxConcurrentThreads": 6,
   "autoArchiveIdleDays":  30,
-  "recentTurnsLimit":     20,
+  "recentTurnsLimit":     10,
+  "relatedTurnsLimit":    5,
   "multiVp": { "enabled": true },
   "dream":   { "DREAM_INTERVAL_HOURS": 1, "MIN_NEW_PER_GROUP": 20, "MAX_DREAM_PROMPT_CHARS": 96000 }
 }
@@ -69,7 +102,8 @@ Anything else on a model entry is silently ignored. UI affordances like display 
 | --- | --- | --- | --- | --- |
 | `maxConcurrentThreads` | `number` | `6` | `1–50` | Concurrent ThreadEngineRegistry cap; includes the always-on `main` thread |
 | `autoArchiveIdleDays` | `number` | `30` | `1–3650` | Idle days before a thread is auto-archived |
-| `recentTurnsLimit` | `number` | `20` | `1–500` | Cold-start replay window after boot/reconnect; older transcript remains available through history pagination/search |
+| `recentTurnsLimit` | `number` | `10` | `1–500` | Compatible cold-start replay setting. Provider history targets the latest 10 turns and shrinks from the oldest end under budget pressure. It protects a three-turn floor when possible; if three complete turns still do not fit, related recall is omitted, those three turns are compressed in the disposable provider copy, and tool replay narrows to the newest turn |
+| `relatedTurnsLimit` | `number` | `5` | `0–5` | Same-Session automatic related-turn cap; only clearly relevant full turns are included (0–5 actual turns). Set 0 to disable; older 8/10 values read as 5 |
 | `multiVp.enabled` | `boolean` | `false` | — | Legacy feature flag retained for compatibility; the current Session UI does not use it as a mode gate |
 | `dream.*` | object | see [dream/limits.js](https://github.com/yeaft/yeaft-web-code-agent/blob/main/agent/yeaft/dream/limits.js) | — | Overrides any UPPER_CASE constant in `DEFAULT_LIMITS` |
 

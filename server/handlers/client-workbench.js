@@ -50,6 +50,10 @@ async function denyWorkbenchRoute(client, msg) {
     error,
   });
   if (response) await sendToWebClient(client, response);
+  // History file-link previews are background requests, not failed chat turns.
+  // Their correlated result already terminates the request without polluting
+  // the conversation (or stopping an unrelated streaming answer).
+  if (msg?.type === 'resolve_file_references' && response) return;
   await sendToWebClient(client, { type: 'error', message: error });
 }
 
@@ -58,6 +62,7 @@ const AGENT_DIRECTORY_PICKER_CONVERSATION = '_workdir_picker';
 const RESPONSE_TYPES = Object.freeze({
   terminal_create: ['terminal_created', 'terminal_error'],
   read_file: ['file_content'],
+  video_metadata: ['video_metadata'],
   resolve_file_references: ['file_references_resolved'],
   write_file: ['file_saved'],
   list_directory: ['directory_listing'],
@@ -79,6 +84,7 @@ const RESPONSE_TYPES = Object.freeze({
 const TIMEOUT_RESPONSE_TYPES = Object.freeze({
   terminal_create: 'terminal_error',
   read_file: 'file_content',
+  video_metadata: 'video_metadata',
   resolve_file_references: 'file_references_resolved',
   write_file: 'file_saved',
   list_directory: 'directory_listing',
@@ -120,8 +126,8 @@ function workbenchFailureResponse({ agentId, msg, resolved, error }) {
   if (msg.type === 'terminal_create') {
     return { ...response, terminalId: msg.terminalId || null, message: error };
   }
-  if (msg.type === 'read_file') {
-    return { ...response, filePath: msg.filePath };
+  if (msg.type === 'read_file' || msg.type === 'video_metadata') {
+    return { ...response, filePath: msg.filePath, requestedFilePath: msg.filePath };
   }
   if (msg.type === 'resolve_file_references') {
     return { ...response, references: [] };
@@ -166,7 +172,7 @@ function canonicalWorkbenchMessage(msg, resolved, { canonicalWorkDir = false } =
     ...clientFields,
     agentId: resolved.agentId,
     conversationId: resolved.conversationId,
-    workDir: canonicalWorkDir ? resolved.workDir : resolved.requestedWorkDir,
+    workDir: (canonicalWorkDir || msg?.responseImagePreview) ? resolved.workDir : resolved.requestedWorkDir,
     workbenchRoute: resolved.route,
     workbenchRouteKey: resolved.routeKey,
     workbenchWorkspaceGeneration: resolved.workspaceGeneration,
@@ -304,7 +310,8 @@ export async function handleClientWorkbench(clientId, client, msg, checkAgentAcc
     }
 
     case 'resolve_file_references':
-    case 'read_file': {
+    case 'read_file':
+    case 'video_metadata': {
       const fileAgentId = msg.agentId || client.currentAgent;
       if (!fileAgentId) { console.warn('[Server] read_file: no agentId'); return; }
       if (!await checkAgentAccess(fileAgentId)) return;
@@ -314,6 +321,27 @@ export async function handleClientWorkbench(clientId, client, msg, checkAgentAcc
         return;
       }
       const fileConvId = resolved.conversationId || msg.conversationId || client.currentConversation || '_explorer';
+      if (msg.type === 'video_metadata'
+          && (!agents.get(fileAgentId)?.capabilities?.includes?.('workbench_video_stream')
+            || !agentSupportsWorkbenchRequestCorrelation(agents.get(fileAgentId)))) {
+        await sendToWebClient(client, workbenchFailureResponse({
+          agentId: fileAgentId,
+          msg,
+          resolved: { ...resolved, conversationId: fileConvId },
+          error: 'Video streaming is not supported by this Agent',
+        }));
+        return;
+      }
+      if (msg.responseImagePreview
+          && !agents.get(fileAgentId)?.capabilities?.includes?.('response_image_preview')) {
+        await sendToWebClient(client, workbenchFailureResponse({
+          agentId: fileAgentId,
+          msg,
+          resolved: { ...resolved, conversationId: fileConvId },
+          error: 'Response image preview is not supported by this Agent',
+        }));
+        return;
+      }
       console.log(`[Server] Forwarding ${msg.type} to agent ${fileAgentId}, conv=${fileConvId}${msg.filePath ? `, path=${msg.filePath}` : ''}`);
       await forwardCorrelatedWorkbenchRequest({
         agentId: fileAgentId,
@@ -321,7 +349,10 @@ export async function handleClientWorkbench(clientId, client, msg, checkAgentAcc
         client,
         msg,
         resolved,
-        canonical: canonicalWorkbenchMessage(msg, { ...resolved, conversationId: fileConvId }),
+        canonical: canonicalWorkbenchMessage(msg, { ...resolved, conversationId: fileConvId }, {
+          canonicalWorkDir: !resolved.legacy
+            && (msg.type === 'resolve_file_references' || msg.type === 'video_metadata'),
+        }),
       });
       break;
     }

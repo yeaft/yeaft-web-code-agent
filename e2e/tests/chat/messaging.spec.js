@@ -8,24 +8,14 @@
  */
 import { test } from '../../fixtures/test-server.js';
 import { expect } from '@playwright/test';
+import { createConversation } from '../../helpers/conversation.js';
 
 /**
  * Helper: create a conversation and return the conversationId.
  * Gets the conversationId from the mockAgent's received create_conversation message.
  */
 async function createConversationAndGetId(chatPage, mockAgent) {
-  const beforeCount = await chatPage.locator('.session-item').count();
-
-  // Click "New Conversation" in the Chat session tab
-  await chatPage.locator('.session-tab-add-btn').click();
-  await expect(chatPage.locator('.modal.resume-modal')).toBeVisible({ timeout: 5000 });
-
-  // Click create button
-  await chatPage.locator('.resume-modal-footer .modern-btn').click();
-  await expect(chatPage.locator('.modal.resume-modal')).not.toBeVisible({ timeout: 5000 });
-
-  // Wait for session item to appear (conversation created)
-  await expect(chatPage.locator('.session-item')).toHaveCount(beforeCount + 1, { timeout: 5000 });
+  await createConversation(chatPage);
 
   // Get the conversationId from the mockAgent's received create_conversation message
   const createMsg = mockAgent._receivedMessages.filter(m => m.type === 'create_conversation').pop();

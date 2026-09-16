@@ -1,6 +1,16 @@
 import { confirmDialog } from '../utils/dialog.js';
 import LlmTab from './LlmTab.js';
 import ModernSelect from './ModernSelect.js';
+import QuickSendSettings from './QuickSendSettings.js';
+
+const FOCUSABLE_SELECTOR = [
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  'a[href]',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',');
 
 const DEFAULT_TELEMETRY = Object.freeze({
   enabled: true,
@@ -13,15 +23,16 @@ const DEFAULT_TELEMETRY = Object.freeze({
 
 export default {
   name: 'AgentSettingsPanel',
-  components: { LlmTab, ModernSelect },
+  components: { LlmTab, ModernSelect, QuickSendSettings },
   props: {
     initialAgentId: { type: String, default: null },
     initialCategory: { type: String, default: 'operations' },
+    initialSection: { type: String, default: '' },
   },
   emits: ['close', 'saved'],
   template: `
-    <div class="settings-overlay" @click.self="$emit('close')">
-      <section class="agent-settings-dialog" role="dialog" aria-modal="true" :aria-label="$t('agentSettings.title')">
+    <div class="settings-overlay" @click.self="closePanel">
+      <section ref="dialog" class="agent-settings-dialog" role="dialog" aria-modal="true" tabindex="-1" :aria-label="$t('agentSettings.title')">
         <button class="settings-close agent-settings-close" type="button" :aria-label="$t('common.close')" @click="$emit('close')">&times;</button>
 
         <div class="agent-settings-body">
@@ -51,6 +62,10 @@ export default {
               <button type="button" class="agent-settings-nav-item" :class="{ active: activeCategory === 'llm' }" @click="activeCategory = 'llm'">
                 <svg viewBox="0 0 24 24" width="17" height="17"><path fill="currentColor" d="M12 2a4 4 0 0 1 3.87 3h.63a3.5 3.5 0 0 1 2.62 5.82A4 4 0 0 1 17 18.87V20h-2v-2h1a2 2 0 0 0 .45-3.95l-.8-.18.03-.82a1.5 1.5 0 0 0 1.72-2.43l-.68-.69.5-.84A1.5 1.5 0 0 0 16.5 7H14V6a2 2 0 1 0-4 0v12a2 2 0 1 0 4 0h2a4 4 0 0 1-7 2.65A4 4 0 0 1 4.13 15H4a3.5 3.5 0 0 1-1.7-6.56A4 4 0 0 1 9 4.35 4 4 0 0 1 12 2zM6 6a2 2 0 0 0-1.9 2.62l.3.9-.88.38A1.5 1.5 0 0 0 4 13h2v1a2 2 0 0 0 2 2V6.5A2 2 0 0 0 6 6z"/></svg>
                 {{ $t('agentSettings.categories.llm') }}
+              </button>
+              <button type="button" class="agent-settings-nav-item" :class="{ active: activeCategory === 'quick-send' }" @click="activeCategory = 'quick-send'">
+                <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path fill="currentColor" d="m13 2-9 12h7l-1 8 10-13h-7l1-7z"/></svg>
+                {{ $t('quickSend.title') }}
               </button>
             </nav>
           </aside>
@@ -97,6 +112,40 @@ export default {
                   </label>
                 </div>
                 <p v-if="dreamState.error" class="error">{{ dreamState.error }}</p>
+                <div class="agent-settings-row agent-settings-work-center-row">
+                  <div>
+                    <strong ref="workCenterHeading" tabindex="-1">{{ $t('agentSettings.workCenter.title') }}</strong>
+                    <p>{{ workCenterDescription }}</p>
+                    <p v-if="workCenterSettings?.overridden" class="agent-settings-setting-note">
+                      {{ $t('agentSettings.workCenter.environmentManaged') }}
+                    </p>
+                  </div>
+                  <div class="agent-settings-setting-control">
+                    <span class="agent-settings-setting-status">{{ workCenterStatus }}</span>
+                    <template v-if="workCenterSupported">
+                      <label class="agent-settings-switch agent-settings-work-center-switch">
+                        <input
+                          type="checkbox"
+                          role="switch"
+                          :aria-label="$t('agentSettings.workCenter.title')"
+                          :aria-checked="workCenterDraftEnabled ? 'true' : 'false'"
+                          :checked="workCenterDraftEnabled"
+                          :disabled="!canToggleWorkCenter"
+                          @change="setWorkCenterEnabled($event.target.checked)"
+                        >
+                        <span aria-hidden="true"></span>
+                      </label>
+                    </template>
+                  </div>
+                </div>
+                <div v-if="workCenterMessage" class="agent-settings-inline-feedback">
+                  <p class="agent-settings-inline-message" :class="{ error: workCenterError }" :role="workCenterError ? 'alert' : 'status'">
+                    {{ workCenterMessage }}
+                  </p>
+                  <button v-if="workCenterLoadFailed && workCenterSupported" class="btn-ghost" type="button" :disabled="workCenterLoading" @click="loadWorkCenterFeature">
+                    {{ $t('common.retry') }}
+                  </button>
+                </div>
                 <div class="agent-settings-maintenance">
                   <p>{{ $t('agentSettings.maintenance.description') }}</p>
                   <div class="agent-settings-actions">
@@ -142,6 +191,8 @@ export default {
               </template>
             </section>
 
+            <QuickSendSettings v-else-if="activeCategory === 'quick-send'" :agent-id="selectedAgentId" @saved="$emit('saved', $event)" />
+
             <div v-else class="agent-settings-llm">
               <div v-if="llmMessage" class="agent-settings-inline-message" :class="{ error: llmMessageError }">{{ llmMessage }}</div>
               <LlmTab context="yeaft" :agent-id="selectedAgentId" @message="onLlmMessage" @saved="$emit('saved', selectedAgentId)" />
@@ -154,7 +205,7 @@ export default {
   `,
   data() {
     return {
-      activeCategory: ['operations', 'trace', 'llm'].includes(this.initialCategory) ? this.initialCategory : 'operations',
+      activeCategory: ['operations', 'trace', 'llm', 'quick-send'].includes(this.initialCategory) ? this.initialCategory : 'operations',
       selectedAgentId: null,
       telemetryDraft: { ...DEFAULT_TELEMETRY },
       telemetryLoading: false,
@@ -162,6 +213,15 @@ export default {
       telemetryMessage: '',
       telemetryError: false,
       telemetryGeneration: 0,
+      workCenterLoading: false,
+      workCenterSaving: false,
+      workCenterMessage: '',
+      workCenterError: false,
+      workCenterGeneration: 0,
+      workCenterLoadFailed: false,
+      workCenterDraftEnabled: false,
+      workCenterAgentSignature: '',
+      previousFocus: null,
       llmMessage: '',
       llmMessageError: false,
     };
@@ -181,7 +241,61 @@ export default {
     restarting() { return this.operations.restart?.pending === true; },
     upgrading() { return this.operations.upgrade?.pending === true; },
     dreamState() { return this.store.agentDreamState?.[this.selectedAgentId] || {}; },
+    workCenterSettings() { return this.store.workCenterFeatureSettingsByAgent?.[this.selectedAgentId] || null; },
+    workCenterEnabled() { return this.workCenterSettings?.enabled === true; },
+    selectedWorkCenterAgentSignature() {
+      const agent = this.selectedAgent;
+      return agent ? `${agent.id}:${agent.online === true}:${agent.capabilities?.includes('work_center_feature_settings') === true}` : '';
+    },
+    workCenterSupported() {
+      return this.selectedAgent?.capabilities?.includes('work_center_feature_settings') === true;
+    },
+    canToggleWorkCenter() {
+      return this.selectedAgent?.online === true
+        && this.workCenterSupported
+        && !this.workCenterLoading
+        && !this.workCenterSaving
+        && !this.workCenterLoadFailed
+        && this.workCenterSettings?.loaded === true
+        && this.workCenterSettings?.overridden !== true;
+    },
+    workCenterStatus() {
+      if (!this.selectedAgent?.online) return this.$t('agentSettings.offline');
+      if (!this.workCenterSupported || this.workCenterSettings?.unsupported) return this.$t('agentSettings.workCenter.unsupported');
+      if (this.workCenterLoadFailed) return this.$t('agentSettings.workCenter.loadFailedStatus');
+      if (this.workCenterLoading || !this.workCenterSettings?.loaded) return this.$t('common.loading');
+      if (this.workCenterSaving) return this.$t('common.saving');
+      if (this.workCenterSettings.enabled && this.workCenterSettings.effective === false) return this.$t('agentSettings.workCenter.runtimeUnavailable');
+      return this.workCenterEnabled
+        ? this.$t('agentSettings.workCenter.enabled')
+        : this.$t('agentSettings.workCenter.disabled');
+    },
+    workCenterDescription() {
+      if (!this.workCenterSupported) return this.$t('agentSettings.workCenter.upgradeRequired');
+      if (this.workCenterSettings?.enabled && this.workCenterSettings?.effective === false) {
+        return this.$t('agentSettings.workCenter.runtimeUnavailableHint');
+      }
+      return this.workCenterEnabled
+        ? this.$t('agentSettings.workCenter.enabledHint')
+        : this.$t('agentSettings.workCenter.disabledHint');
+    },
     busy() { return this.restarting || this.upgrading; },
+  },
+  mounted() {
+    this.previousFocus = document.activeElement;
+    document.addEventListener('keydown', this.onDialogKeydown);
+    this.$nextTick(() => {
+      const target = this.initialSection === 'work-center'
+        ? this.$refs.workCenterHeading
+        : this.$refs.dialog?.querySelector('.settings-close');
+      target?.focus?.({ preventScroll: true });
+      if (this.initialSection === 'work-center') target?.scrollIntoView?.({ block: 'center' });
+    });
+  },
+  beforeUnmount() {
+    document.removeEventListener('keydown', this.onDialogKeydown);
+    const previous = this.previousFocus;
+    this.$nextTick(() => { if (previous?.isConnected) previous.focus?.(); });
   },
   watch: {
     agents: {
@@ -193,6 +307,25 @@ export default {
         }
       },
     },
+    selectedWorkCenterAgentSignature: {
+      immediate: true,
+      handler(signature, previous) {
+        if (!signature || signature === previous || signature === this.workCenterAgentSignature) return;
+        this.workCenterAgentSignature = signature;
+        const agent = this.selectedAgent;
+        this.workCenterGeneration += 1;
+        this.workCenterLoading = false;
+        this.workCenterSaving = false;
+        this.workCenterMessage = '';
+        this.workCenterError = false;
+        this.workCenterLoadFailed = false;
+        this.workCenterDraftEnabled = this.workCenterEnabled;
+        if (agent?.online && this.workCenterSupported) this.loadWorkCenterFeature();
+      },
+    },
+    workCenterEnabled(enabled) {
+      if (!this.workCenterSaving) this.workCenterDraftEnabled = enabled;
+    },
   },
   methods: {
     selectAgent(agentId) {
@@ -203,9 +336,18 @@ export default {
       this.telemetryDraft = { ...DEFAULT_TELEMETRY };
       this.telemetryMessage = '';
       this.telemetryError = false;
+      this.workCenterGeneration += 1;
+      this.workCenterLoading = false;
+      this.workCenterSaving = false;
+      this.workCenterMessage = '';
+      this.workCenterError = false;
+      this.workCenterLoadFailed = false;
+      this.workCenterDraftEnabled = this.store.workCenterFeatureSettingsByAgent?.[agentId]?.enabled === true;
+      this.workCenterAgentSignature = '';
       this.llmMessage = '';
       this.llmMessageError = false;
-      if (agentId && this.agents.find(agent => agent.id === agentId)?.online) this.loadTelemetry();
+      const selected = this.agents.find(agent => agent.id === agentId);
+      if (agentId && selected?.online) this.loadTelemetry();
     },
     onLlmMessage(message, isError = false) {
       this.llmMessage = message;
@@ -249,6 +391,88 @@ export default {
         this.telemetryMessage = error?.message || this.$t('agentSettings.telemetry.saveFailed');
       } finally {
         if (generation === this.telemetryGeneration && agentId === this.selectedAgentId) this.telemetrySaving = false;
+      }
+    },
+    async loadWorkCenterFeature() {
+      const agentId = this.selectedAgentId;
+      if (!agentId) return;
+      const generation = ++this.workCenterGeneration;
+      this.workCenterLoading = true;
+      this.workCenterMessage = '';
+      this.workCenterLoadFailed = false;
+      try {
+        const settings = await this.store.loadWorkCenterFeatureSettings(agentId);
+        if (generation !== this.workCenterGeneration || agentId !== this.selectedAgentId) return;
+        this.workCenterDraftEnabled = settings.enabled === true;
+        this.workCenterError = settings.enabled === true && settings.effective === false;
+        this.workCenterMessage = this.workCenterError
+          ? (settings.runtimeError || this.$t('agentSettings.workCenter.runtimeUnavailableMessage'))
+          : '';
+      } catch (error) {
+        if (generation !== this.workCenterGeneration || agentId !== this.selectedAgentId) return;
+        this.workCenterError = true;
+        this.workCenterLoadFailed = true;
+        this.workCenterMessage = error?.settings?.unsupported
+          ? this.$t('agentSettings.workCenter.upgradeRequired')
+          : (error?.message || this.$t('agentSettings.workCenter.loadFailed'));
+      } finally {
+        if (generation === this.workCenterGeneration && agentId === this.selectedAgentId) this.workCenterLoading = false;
+      }
+    },
+    async setWorkCenterEnabled(enabled) {
+      const agentId = this.selectedAgentId;
+      if (!agentId || !this.canToggleWorkCenter) return;
+      const generation = ++this.workCenterGeneration;
+      this.workCenterDraftEnabled = enabled;
+      this.workCenterSaving = true;
+      this.workCenterMessage = '';
+      try {
+        const settings = await this.store.updateWorkCenterFeatureSettings({ enabled }, agentId);
+        if (generation !== this.workCenterGeneration || agentId !== this.selectedAgentId) return;
+        this.workCenterDraftEnabled = settings.enabled === true;
+        const effective = settings.effective === true
+          || (settings.effective == null && settings.enabled === true);
+        this.workCenterError = settings.enabled === true && !effective;
+        this.workCenterMessage = this.workCenterError
+          ? (settings.runtimeError || this.$t('agentSettings.workCenter.runtimeUnavailableMessage'))
+          : '';
+        this.$emit('saved', agentId);
+      } catch (error) {
+        if (generation !== this.workCenterGeneration || agentId !== this.selectedAgentId) return;
+        this.workCenterDraftEnabled = error?.settings?.enabled === true
+          || (error?.settings?.enabled == null && this.workCenterEnabled);
+        this.workCenterError = true;
+        this.workCenterMessage = error?.message || this.$t('agentSettings.workCenter.saveFailed');
+      } finally {
+        if (generation === this.workCenterGeneration && agentId === this.selectedAgentId) this.workCenterSaving = false;
+      }
+    },
+    closePanel() {
+      this.$emit('close');
+    },
+    onDialogKeydown(event) {
+      if (event.defaultPrevented || document.querySelector('.app-dialog-overlay')) return;
+      if (event.target && !this.$refs.dialog?.contains(event.target)) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        this.closePanel();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const controls = Array.from(this.$refs.dialog?.querySelectorAll(FOCUSABLE_SELECTOR) || []);
+      if (controls.length === 0) {
+        event.preventDefault();
+        this.$refs.dialog?.focus?.();
+        return;
+      }
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
       }
     },
     setDreamEnabled(enabled) {

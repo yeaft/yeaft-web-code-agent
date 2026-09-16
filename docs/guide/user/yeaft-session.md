@@ -30,6 +30,14 @@ When the roster is omitted and the Agent's VP library contains `omni`, the runti
 
 The assistant helps with questions, research, writing, translation, learning, planning, data analysis, and coding tasks—not just clarification or handoffs. It chooses direct answers, tools, or collaboration to suit the task while respecting project ownership and authorization. At Agent startup, exact historical stock souls and their matching old name, role, and description are upgraded; user-edited souls and custom metadata are preserved.
 
+## Fork the current Session
+
+Choose **Fork current session** from the active Session’s sidebar menu, or **Fork** at the top right of the conversation. No setup dialog is needed: the new Session opens automatically on the same Agent.
+
+The fork copies the complete persisted conversation, announcement, VP roster/default VP, working directory, and Session model/effort overrides. If the source belongs to a Project, the Server puts the fork in the same Project, so the shared instruction continues to apply. The source remains unchanged; later conversation and Session setting changes are independent.
+
+Wait for a running response to finish before forking. Forking is unavailable while disconnected or another fork is pending. Background processes, running tasks, debug traces, and Session memory files are not cloned. Attachment references retain their original ownership. Both Server and Agent must support Project inheritance for this behavior.
+
 ## Route a turn
 
 A message without mentions goes to the default VP. Use `@VPName` to address a subset:
@@ -47,6 +55,14 @@ A message without mentions goes to the default VP. Use `@VPName` to address a su
 ```
 
 When several VPs are selected, Yeaft persists one canonical user message and fans the turn out to independent VP engines. Each VP has its own persona and memory view, streams its own response, and uses the current Session's allowed tools. The shared timeline keeps speaker identity visible.
+
+## Planning and progress
+
+The native engine no longer provides `TodoWrite` or `StartPlan`. It does not require repeated checklist updates or an extra planning-tool call just to display progress. Neither the tool registry nor `DiscoverTools` exposes these tools.
+
+You can still ask a VP to “investigate and propose an approach without changing code,” using ordinary replies to discuss goals, constraints, risks, and validation. There is currently no dedicated Plan Mode switch; a conversational request is not a read-only filesystem sandbox.
+
+Existing Session checklists remain replayable, and Claude Code / Copilot CLI tool behavior is unchanged. Use [Work Center](./work-center.md) for durable cross-turn execution state and acceptance checks. Custom Project instructions, VP souls, and `planInstruction` data are not rewritten automatically; update any custom instructions that still require the retired tools.
 
 ## Handoffs and sub-agents
 
@@ -70,6 +86,14 @@ The Yeaft page provides:
 - an optional debug panel for provider requests, memory recall, tools, tokens, and stop reasons.
 
 Debug output can contain project text and tool results. It is for the current owner and should not be exported or shared casually.
+
+### Answer AskUser questions
+
+A VP's `AskUser` call appears as an interactive card. You can switch Sessions and return to answer while the request remains active on the Agent.
+
+- Submitting shows “Waiting for Agent confirmation,” not success. The success summary appears only after an Agent acknowledgement or persisted answer history arrives.
+- If confirmation has not arrived after 15 seconds, check the connection and use **Resend answer**. A resend retains the original question identity and does not complete the same question twice.
+- An unavailable Agent produces a retryable notice. If the question expired, execution was cancelled, or an Agent restart lost the waiting request, ask the VP to pose the question again. Resending does not revive an ended turn.
 
 ## Organize Sessions with Projects
 

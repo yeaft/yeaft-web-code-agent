@@ -32,6 +32,7 @@ const C = {
   sql:      '#E38C00',
   svg:      '#FFB13B',
   img:      '#26A69A',
+  video:    '#7E57C2',
   git:      '#F05032',
   docker:   '#2496ED',
   config:   '#6D8086',
@@ -140,6 +141,14 @@ const icons = {
   gif:  () => fileWithText(C.img, 'GIF'),
   ico:  () => fileWithText(C.img, 'ICO'),
   webp: () => fileWithText(C.img, 'WP'),
+
+  // Video
+  mp4:  () => fileWithText(C.video, 'MP4'),
+  m4v:  () => fileWithText(C.video, 'M4V'),
+  webm: () => fileWithText(C.video, 'WEB'),
+  ogv:  () => fileWithText(C.video, 'OGV'),
+  ogg:  () => fileWithText(C.video, 'OGG'),
+  mov:  () => fileWithText(C.video, 'MOV'),
 
   // Config
   lock: () => fileSvg(C.lock),

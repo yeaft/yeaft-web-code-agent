@@ -45,6 +45,50 @@ describe('Session message quote UI wiring', () => {
     vi.unstubAllGlobals();
   });
 
+  it('marks a streaming response origin without rendering a per-response navigation button', async () => {
+    globalThis.Vue = Vue;
+    globalThis.Pinia = {
+      defineStore: () => () => ({}),
+      useChatStore: () => ({ answerUserQuestion: vi.fn(), cancelVpTurn: vi.fn() }),
+    };
+    globalThis.marked = { setOptions: vi.fn(), parse: vi.fn(text => `<p>${text}</p>`) };
+    globalThis.hljs = undefined;
+    const { default: AssistantTurn } = await import('../../web/components/AssistantTurn.js');
+    const streamingTurn = {
+      id: 'turn-live', turnId: 'turn-live', textContent: 'Working',
+      textSegments: [{ key: 'segment-live', content: 'Working', kind: 'progress', isStreaming: true }],
+      toolMsgs: [], imageMsgs: [], todoMsg: null, askMsg: null,
+      isStreaming: true, messages: [],
+    };
+    const wrapper = mount(AssistantTurn, {
+      props: { turn: streamingTurn, originMessageId: 'question-1', sessionActions: true },
+      global: {
+        mocks: { $t: key => key },
+        provide: { t: key => key },
+        stubs: { ToolLine: true, AskCard: true, VpSpeakerHeader: true },
+      },
+    });
+
+    expect(wrapper.get('.assistant-turn').attributes('data-response-origin-id')).toBe('question-1');
+    expect(wrapper.find('.response-origin-btn').exists()).toBe(false);
+    expect(wrapper.find('.turn-footer').exists()).toBe(false);
+    expect(wrapper.find('.copy-full-btn').exists()).toBe(false);
+
+    const withoutOrigin = mount(AssistantTurn, {
+      props: { turn: streamingTurn },
+      global: {
+        mocks: { $t: key => key },
+        provide: { t: key => key },
+        stubs: { ToolLine: true, AskCard: true, VpSpeakerHeader: true },
+      },
+    });
+    expect(withoutOrigin.get('.assistant-turn').attributes('data-response-origin-id')).toBeUndefined();
+    expect(withoutOrigin.find('.response-origin-btn').exists()).toBe(false);
+    expect(withoutOrigin.find('.turn-footer').exists()).toBe(false);
+    withoutOrigin.unmount();
+    wrapper.unmount();
+  });
+
   it('keeps user attachments inside the bubble and separates turn progress from the final Markdown result', async () => {
     const user = readFileSync(resolve(process.cwd(), 'web/components/MessageItem.js'), 'utf8');
     const bubbleStart = user.indexOf('class="message-user-block"');
@@ -453,7 +497,7 @@ describe('Session message quote UI wiring', () => {
 
     const { default: ChatInput } = await import('../../web/components/ChatInput.js');
     const inputWrapper = mount(ChatInput, {
-      props: { showStop: true, workItemFn: vi.fn() },
+      props: { showStop: true },
       slots: {
         'actions-start': '<button class="composer-start-slot" type="button">Start</button>',
         'actions-end-before': '<button class="composer-model-slot" type="button">Model</button>',
@@ -476,13 +520,10 @@ describe('Session message quote UI wiring', () => {
     expect(actionRow.element.parentElement).toBe(composer.element);
     expect(textarea.element.compareDocumentPosition(actionRow.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(startActions.findAll('.attach-btn')).toHaveLength(1);
-    expect(startActions.findAll('.work-item-draft-btn')).toHaveLength(1);
+    expect(startActions.findAll('.work-item-draft-btn')).toHaveLength(0);
     expect(startActions.findAll('.composer-start-slot')).toHaveLength(1);
     expect(startActions.findAll('.composer-model-slot')).toHaveLength(0);
     expect(startActions.get('.attach-btn').element.compareDocumentPosition(
-      startActions.get('.work-item-draft-btn').element,
-    ) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(startActions.get('.work-item-draft-btn').element.compareDocumentPosition(
       startActions.get('.composer-start-slot').element,
     ) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(endActions.findAll('.composer-model-slot')).toHaveLength(1);
@@ -491,7 +532,7 @@ describe('Session message quote UI wiring', () => {
     expect(endActions.findAll('.send-btn')).toHaveLength(2);
     expect(endActions.get('.stop-btn').element.compareDocumentPosition(endActions.findAll('.send-btn')[1].element)
       & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect([...composer.element.children].filter(child => child.matches('.attach-btn, .work-item-draft-btn, .send-btn'))).toHaveLength(0);
+    expect([...composer.element.children].filter(child => child.matches('.attach-btn, .send-btn'))).toHaveLength(0);
     expect(observeComposer).toHaveBeenCalledWith(composer.get('.textarea-wrapper').element);
 
     let composerScrollHeight = 96;

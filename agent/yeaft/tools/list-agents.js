@@ -1,40 +1,36 @@
-/**
- * list-agents.js — List all active (and optionally terminal) sub-agents.
- *
- * Returns: { agents: [{ id, name, status, task, outputFile, liveness,
- * lastEventAt, msSinceLastEvent, error, hasResult, createdAt }, …] }.
- *
- * The default filter drops `closed` agents to stay tidy; pass
- * include_closed=true (or include_terminal=true) to see them all. The
- * include_closed alias is kept for backward-compat with the old shape.
- */
+/** Compact, caller-scoped status projection for sub-agent orchestration. */
 
 import { defineTool } from './types.js';
 import { agentBelongsToCaller, getAgentRegistry } from './agent.js';
-import { isTerminalAgentStatus } from '../sub-agent/status.js';
+import { isTerminalAgentStatus, STATUS } from '../sub-agent/status.js';
 import { diagnoseAgentLiveness } from '../sub-agent/liveness.js';
+
+function nextStepFor(agent, liveness) {
+  if (isTerminalAgentStatus(agent.status)) {
+    return 'Use WaitAgent to collect the final result, or read outputFile for the full timeline.';
+  }
+  if (agent.status === STATUS.IDLE) {
+    return 'Use WaitAgent to collect the reply; PromptAgent only if follow-up guidance is needed.';
+  }
+  if (liveness.stale) {
+    return 'Diagnostic only: inspect outputFile before deciding whether to CloseAgent; do not assume the work is dead.';
+  }
+  return 'Continue parent work; completion arrives by notification. Read outputFile only when detailed progress is needed.';
+}
 
 export default defineTool({
   name: 'ListAgents',
   description: {
-    en: `List all sub-agents and their current status.
+    en: `List caller-owned sub-agents as compact status references.
 
-Returns id, name, status, mission/task summary, durable outputFile path,
-liveness counters (toolUseCount, tokenCount, msSinceLastEvent, recentTools),
-stale/stalled diagnostics, result tail, and message count for each agent. Use
-this as the primary non-blocking monitor for async sub-agent work, and Read
-\`outputFile\` for any single agent if you need its full timeline.
+Returns identity, status, bounded mission summary, durable outputFile, actual tool/LLM/token usage, recent activity, diagnostic staleness, and an actionable next step. It does not copy result text or the full log; use WaitAgent for a reply and Read outputFile for the timeline.
 
-By default only non-closed agents are returned. Pass include_closed=true
-to also list closed/failed/abandoned/completed agents.`,
-    zh: `列出所有子 Agent 及其当前状态。
+By default terminal agents are omitted. Pass include_closed=true to include them.`,
+    zh: `以紧凑状态引用列出调用方拥有的子 Agent。
 
-返回每个 Agent 的 id、name、status、mission/task 摘要、持久化 outputFile 路径、
-liveness 计数器（toolUseCount、tokenCount、msSinceLastEvent、recentTools）、
-stale/stalled 诊断、result 尾部和消息数量。将此作为异步子 Agent 工作的主要非阻塞监控工具；
-如需查看某个 Agent 的完整时间线，可 Read 其 outputFile。
+返回身份、状态、有界任务摘要、持久化 outputFile、真实工具/LLM/token 用量、最近活动、诊断性 stale 状态和有效下一步。不复制结果文本或完整日志；回复用 WaitAgent 获取，时间线用 Read outputFile 查看。
 
-默认只返回未关闭的 Agent。传 include_closed=true 可同时列出 closed/failed/abandoned/completed 的 Agent。`
+默认省略终止 Agent；传 include_closed=true 可包含。`,
   },
   parameters: {
     type: 'object',
@@ -42,15 +38,15 @@ stale/stalled 诊断、result 尾部和消息数量。将此作为异步子 Agen
       include_closed: {
         type: 'boolean',
         description: {
-          en: 'Include closed/failed/abandoned/completed agents in the list (default: false)',
-          zh: '在列表中包含已关闭/失败/放弃/完成的 Agent（默认 false）',
+          en: 'Include terminal agents (default: false)',
+          zh: '包含终止 Agent（默认 false）',
         },
       },
       include_terminal: {
         type: 'boolean',
         description: {
-          en: 'Alias for include_closed — include all terminal-status agents in the list',
-          zh: 'include_closed 的别名 — 列出所有已终止状态的 Agent',
+          en: 'Backward-compatible alias for include_closed',
+          zh: 'include_closed 的兼容别名',
         },
       },
     },
@@ -61,51 +57,57 @@ stale/stalled 诊断、result 尾部和消息数量。将此作为异步子 Agen
   duplicateCallPolicy: () => 'allow',
   async execute(input, ctx) {
     const includeTerminal = Boolean(input?.include_closed || input?.include_terminal);
-    const agents = getAgentRegistry();
     const now = Date.now();
+    const agents = [];
 
-    const agentList = [];
-    for (const [id, agent] of agents) {
+    for (const [id, agent] of getAgentRegistry()) {
       if (!agentBelongsToCaller(agent, ctx)) continue;
       if (!includeTerminal && isTerminalAgentStatus(agent.status)) continue;
-      const liveness = diagnoseAgentLiveness(agent, { now });
-      const resultText = (typeof agent.result === 'string' && agent.result)
-        ? agent.result
-        : (agent.lastResult || '');
-      agentList.push({
+      const live = diagnoseAgentLiveness(agent, { now });
+      const execution = live.execution;
+      agents.push({
         id,
         name: agent.name,
         status: agent.status,
         task: typeof agent.task === 'string' ? agent.task.slice(0, 200) : null,
         outputFile: agent.outputFile || null,
-        liveness,
-        lastEventAt: liveness.lastEventAt,
-        msSinceLastEvent: liveness.msSinceLastEvent,
-        lastEventType: liveness.lastEventType,
-        stale: liveness.stale,
-        stalled: liveness.stalled,
-        diagnostic: liveness.diagnostic,
+        activity: {
+          lastEventAt: live.lastEventAt,
+          msSinceLastEvent: live.msSinceLastEvent,
+          lastEventType: live.lastEventType,
+          recentTools: live.recentTools,
+          outputChars: live.outputChars,
+        },
+        usage: {
+          toolExecutions: execution?.toolCalls || 0,
+          llmRequests: execution?.llmCalls || agent.usage?.llmCalls || 0,
+          providerTokens: live.usageTokens,
+          turns: agent.usage?.turns || 0,
+        },
+        control: {
+          limits: execution?.limits || { ...agent.budget },
+          remainingToolCalls: execution?.remainingToolCalls ?? null,
+          remainingLlmCalls: execution?.remainingLlmCalls ?? null,
+          remainingWallTimeMs: execution?.remainingWallTimeMs ?? null,
+          reportingLlmCalls: execution?.reportingLlmCalls || 0,
+          allowTools: execution?.allowTools || [...(agent.allowTools || [])],
+          controlRevision: execution?.controlRevision || 0,
+        },
+        stale: live.stale,
+        diagnostic: live.diagnostic,
         error: agent.error || null,
         hasResult: Boolean(agent.result || agent.lastResult),
-        resultTail: resultText ? resultText.slice(-1000) : '',
-        messages: Array.isArray(agent.messages) ? agent.messages.length : 0,
-        turns: agent.usage?.turns || 0,
-        createdAt: agent.createdAt,
-      });
-    }
-
-    if (agentList.length === 0) {
-      return JSON.stringify({
-        agents: [],
-        message: includeTerminal
-          ? 'No sub-agents in the registry'
-          : 'No active sub-agents (pass include_closed=true to see terminal ones)',
+        next_step: nextStepFor(agent, live),
       });
     }
 
     return JSON.stringify({
-      agents: agentList,
-      totalCount: agentList.length,
-    }, null, 2);
+      agents,
+      ...(agents.length === 0 ? {
+        message: includeTerminal
+          ? 'No sub-agents in the registry'
+          : 'No active sub-agents (pass include_closed=true to see terminal ones)',
+      } : {}),
+    });
   },
 });
