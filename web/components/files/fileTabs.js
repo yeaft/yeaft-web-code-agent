@@ -103,6 +103,37 @@ export function createFileTabs(store, {
     });
   };
 
+  const nextFileReadRequestId = () => `file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+  const requestFileContent = (file, filePath, requestId = nextFileReadRequestId()) => {
+    file.requestId = requestId;
+    file.loading = true;
+    file.loadError = null;
+    file.previewError = null;
+    file.previewLoading = file.fileType !== 'text';
+    const sent = store.sendWsMessage({
+      type: file.fileType === 'video' ? 'video_metadata' : 'read_file',
+      conversationId: file.conversationId,
+      agentId: file.agentId,
+      requestId,
+      filePath,
+      workDir: file.workDir,
+      _clientId: store.clientId
+    });
+    if (sent === false) {
+      file.loading = false;
+      file.previewLoading = false;
+      file.loadError = t('files.readSendFailed');
+      file.previewError = file.loadError;
+    }
+  };
+
+  const canRetryFileRead = file => !file.loading && !file.isDirty
+    && (file.loadError || ((!file.fileType || file.fileType === 'text') && file.content == null))
+    && ((!file.fileType || file.fileType === 'text')
+      ? file.content == null
+      : !file.blobUrl && !file.previewUrl && !file.localPreviewReady);
+
   function openFileInTab(fullPath, name, route = {}) {
     const nPath = normalizePath(fullPath);
     const agentId = route.agentId || store.currentAgent || null;
@@ -120,6 +151,10 @@ export function createFileTabs(store, {
           const file = openFiles.value[existingIndex];
           if (file && file.content != null && (!file.fileType || file.fileType === 'text')) createEditor(file);
         });
+      }
+      const existingFile = openFiles.value[existingIndex];
+      if (canRetryFileRead(existingFile)) {
+        requestFileContent(existingFile, fullPath);
       }
       saveTabsState(store.currentConversation);
       return;
@@ -141,18 +176,9 @@ export function createFileTabs(store, {
     if (fileType === 'text') destroyEditor();
     saveTabsState(store.currentConversation);
 
-    const requestId = route.requestId || `file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const requestId = route.requestId || nextFileReadRequestId();
     const openedFile = openFiles.value[activeFileIndex.value];
-    if (openedFile) openedFile.requestId = requestId;
-    store.sendWsMessage({
-      type: fileType === 'video' ? 'video_metadata' : 'read_file',
-      conversationId,
-      agentId,
-      requestId,
-      filePath: fullPath,
-      workDir,
-      _clientId: store.clientId
-    });
+    if (openedFile) requestFileContent(openedFile, fullPath, requestId);
   }
 
   const switchToTab = (index) => {
