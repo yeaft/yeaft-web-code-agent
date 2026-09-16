@@ -21,11 +21,34 @@ export const BUILT_IN_ACTION_TYPES = Object.freeze([
 ]);
 const STAGE_TYPES = new Set(BUILT_IN_ACTION_TYPES);
 const ASSIGNMENT_MODES = new Set(['auto', 'pool', 'fixed', 'planned']);
-const MODEL_MODES = new Set(['inherit', 'primary', 'fast', 'specific']);
-const MODEL_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+const MODEL_MODES = new Set(['inherit', 'primary', 'fast', 'specific', 'tag']);
+const MODEL_EFFORTS = new Set(['medium', 'high', 'xhigh']);
 const WORKSPACE_MODES = new Set(['shared', 'read', 'isolated-write', 'integrate']);
-const HIGH_EFFORT_ACTION_TYPES = new Set(['triage', 'research', 'design', 'diagnose', 'review']);
 const ACTION_CONTEXT_QUOTE_MAX_BYTES = 8 * 1024;
+
+export const DEFAULT_WORK_CENTER_MODEL_TAGS = Object.freeze({
+  fast: 'gpt-5.6-luna',
+  balanced: 'gpt-5.6-sol',
+  ultimate: 'gpt-6-astra',
+});
+
+const ULTIMATE_ACTION_TYPES = new Set(['triage', 'research', 'design', 'diagnose', 'review']);
+const FAST_ACTION_TYPES = new Set(['document', 'deliver', 'write']);
+
+function normalizeModelTags(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value)
+    ? value
+    : DEFAULT_WORK_CENTER_MODEL_TAGS;
+  return Object.fromEntries(Object.entries(source)
+    .map(([tag, model]) => [canonicalActionId(tag), typeof model === 'string' ? model.trim() : ''])
+    .filter(([tag, model]) => tag && model));
+}
+
+function defaultActionModelTag(type) {
+  if (ULTIMATE_ACTION_TYPES.has(type)) return { tag: 'ultimate', effort: 'xhigh' };
+  if (FAST_ACTION_TYPES.has(type)) return { tag: 'fast', effort: 'medium' };
+  return { tag: 'balanced', effort: 'high' };
+}
 
 const DEFAULT_STAGE_INSTRUCTIONS = Object.freeze({
   triage: 'Turn the request into an executable contract. Inspect relevant repository facts before deciding the flow. Classify the WorkItem, identify constraints, risks, dependencies, and missing acceptance criteria, then plan only the Actions needed for this task. Do not implement. If the goal or acceptance criteria must change, submit a contractPatch and explain why.',
@@ -97,26 +120,26 @@ const DEFAULT_SOFTWARE_CHANGE_STAGES = Object.freeze([
   {
     id: 'triage', name: 'Triage', type: 'triage',
     assignmentPolicy: { mode: 'auto', capability: 'triage', candidateVpIds: [], fixedVpId: null, separateFromStageTypes: [] },
-    modelPolicy: { mode: 'inherit', model: null, effort: null },
+    modelPolicy: { mode: 'tag', tag: 'ultimate', effort: 'xhigh' },
     maxAttempts: 2,
   },
   {
     id: 'implement', name: 'Implement', type: 'implement',
     assignmentPolicy: { mode: 'auto', capability: 'implement', candidateVpIds: [], fixedVpId: null, separateFromStageTypes: [] },
-    modelPolicy: { mode: 'inherit', model: null, effort: null },
+    modelPolicy: { mode: 'tag', tag: 'balanced', effort: 'high' },
     maxAttempts: 2,
   },
   {
     id: 'review', name: 'Review', type: 'review',
     assignmentPolicy: { mode: 'auto', capability: 'review', candidateVpIds: [], fixedVpId: null, separateFromStageTypes: ['implement'] },
-    modelPolicy: { mode: 'inherit', model: null, effort: null },
+    modelPolicy: { mode: 'tag', tag: 'ultimate', effort: 'xhigh' },
     maxAttempts: 2,
     changesRequestedStageId: 'implement',
   },
   {
     id: 'deliver', name: 'Deliver', type: 'deliver',
     assignmentPolicy: { mode: 'auto', capability: 'deliver', candidateVpIds: [], fixedVpId: null, separateFromStageTypes: [] },
-    modelPolicy: { mode: 'inherit', model: null, effort: null },
+    modelPolicy: { mode: 'tag', tag: 'fast', effort: 'medium' },
     maxAttempts: 2,
   },
 ]);
@@ -183,14 +206,18 @@ export function normalizeModelPolicy(value) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const mode = MODEL_MODES.has(source.mode) ? source.mode : 'inherit';
   const model = typeof source.model === 'string' && source.model.trim() ? source.model.trim() : null;
+  const tag = typeof source.tag === 'string' && source.tag.trim()
+    ? canonicalActionId(source.tag)
+    : null;
   const effort = MODEL_EFFORTS.has(source.effort) ? source.effort : null;
   if (mode === 'specific' && !model) throw new Error('Specific Work Center model policy requires a model');
-  return { mode, model, effort };
+  if (mode === 'tag' && !tag) throw new Error('Tagged Work Center model policy requires a tag');
+  return { mode, model, tag, effort };
 }
 
 export function defaultActionModelPolicy(type, fallback = null) {
-  const base = normalizeModelPolicy(fallback);
-  return { ...base, effort: HIGH_EFFORT_ACTION_TYPES.has(type) ? 'high' : 'medium' };
+  if (fallback) return normalizeModelPolicy(fallback);
+  return normalizeModelPolicy({ mode: 'tag', ...defaultActionModelTag(type) });
 }
 
 export function normalizeActionModelPolicies(value, fallback = null) {
@@ -308,8 +335,9 @@ export function defaultWorkCenterSettings() {
     maxConcurrentActions: 3,
     defaultWorkDir: '',
     globalInstructions: '',
-    modelPolicy: { mode: 'inherit', model: null, effort: null },
-    coordinatorModelPolicy: { mode: 'inherit', model: null, effort: 'high' },
+    modelTags: { ...DEFAULT_WORK_CENTER_MODEL_TAGS },
+    modelPolicy: normalizeModelPolicy({ mode: 'tag', tag: 'balanced', effort: 'high' }),
+    coordinatorModelPolicy: normalizeModelPolicy({ mode: 'tag', tag: 'ultimate', effort: 'xhigh' }),
     actionModelPolicies: normalizeActionModelPolicies(),
     actionInstructions: normalizeActionInstructions(),
     workflows: [normalizeWorkflowDefinition({
@@ -347,6 +375,7 @@ export function normalizeWorkCenterSettings(value) {
     maxConcurrentActions: Math.min(Math.max(Number(source.maxConcurrentActions) || 3, 1), 12),
     defaultWorkDir: typeof source.defaultWorkDir === 'string' ? source.defaultWorkDir.trim() : '',
     globalInstructions: normalizeGlobalInstructions(source.globalInstructions),
+    modelTags: normalizeModelTags(source.modelTags),
     modelPolicy: normalizeModelPolicy(source.modelPolicy || migratedModelPolicy),
     coordinatorModelPolicy: normalizeModelPolicy(
       source.coordinatorModelPolicy || { ...(source.modelPolicy || migratedModelPolicy), effort: 'high' },

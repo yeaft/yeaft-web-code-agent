@@ -6,6 +6,13 @@ import {
 } from '../utils/overlay-dismiss.js';
 
 const ACTION_TYPES = ['triage', 'research', 'design', 'diagnose', 'implement', 'migrate', 'test', 'review', 'integrate', 'document', 'operate', 'deliver', 'write', 'create_vp', 'custom'];
+const MODEL_TAGS = ['fast', 'balanced', 'ultimate'];
+const ALLOWED_EFFORTS = new Set(['medium', 'high', 'xhigh']);
+const DEFAULT_MODEL_TAGS = Object.freeze({
+  fast: 'gpt-5.6-luna',
+  balanced: 'gpt-5.6-sol',
+  ultimate: 'gpt-6-astra',
+});
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -43,10 +50,18 @@ function defaultSettingsDraft() {
     maxConcurrentActions: 3,
     defaultWorkDir: '',
     globalInstructions: '',
-    modelPolicy: { mode: 'inherit', model: null, effort: null },
-    coordinatorModelPolicy: { mode: 'inherit', model: null, effort: 'high' },
+    modelTags: { ...DEFAULT_MODEL_TAGS },
+    modelPolicy: { mode: 'tag', model: null, tag: 'balanced', effort: 'high' },
+    coordinatorModelPolicy: { mode: 'tag', model: null, tag: 'ultimate', effort: 'xhigh' },
     actionModelPolicies: Object.fromEntries(ACTION_TYPES.map(type => [type, {
-      mode: 'inherit', model: null, effort: ['triage', 'research', 'design', 'diagnose', 'review'].includes(type) ? 'high' : 'medium',
+      mode: 'tag',
+      model: null,
+      tag: ['triage', 'research', 'design', 'diagnose', 'review'].includes(type)
+        ? 'ultimate'
+        : ['document', 'deliver', 'write'].includes(type) ? 'fast' : 'balanced',
+      effort: ['triage', 'research', 'design', 'diagnose', 'review'].includes(type)
+        ? 'xhigh'
+        : ['document', 'deliver', 'write'].includes(type) ? 'medium' : 'high',
     }])),
     actionInstructions: Object.fromEntries(ACTION_TYPES.map(type => [type, ''])),
     workflows: [{
@@ -68,6 +83,7 @@ function defaultSettingsDraft() {
 
 export function supportsDynamicSettings(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (!value.modelTags || typeof value.modelTags !== 'object' || Array.isArray(value.modelTags)) return false;
   if (!value.modelPolicy || typeof value.modelPolicy !== 'object' || Array.isArray(value.modelPolicy)) return false;
   if (!value.coordinatorModelPolicy || typeof value.coordinatorModelPolicy !== 'object'
       || Array.isArray(value.coordinatorModelPolicy)) return false;
@@ -106,17 +122,23 @@ export function normalizeSettingsDraft(value, defaultStageInstructions = {}) {
   return {
     ...defaultSettingsDraft(),
     ...source,
+    modelTags: {
+      ...DEFAULT_MODEL_TAGS,
+      ...(source.modelTags || {}),
+    },
     modelPolicy: {
-      mode: 'inherit',
+      mode: 'tag',
       model: null,
-      effort: null,
+      tag: 'balanced',
+      effort: 'high',
       ...(migratedModelPolicy || {}),
       ...(source.modelPolicy || {}),
     },
     coordinatorModelPolicy: {
-      mode: 'inherit',
+      mode: 'tag',
       model: null,
-      effort: 'high',
+      tag: 'ultimate',
+      effort: 'xhigh',
       ...(source.coordinatorModelPolicy || {}),
     },
     actionModelPolicies: Object.fromEntries(ACTION_TYPES.map(type => [
@@ -345,6 +367,7 @@ export default {
     },
     modelRefForStage(stage) {
       if (stage.modelPolicy.mode === 'specific') return stage.modelPolicy.model;
+      if (stage.modelPolicy.mode === 'tag') return this.draft?.modelTags?.[stage.modelPolicy.tag] || null;
       if (stage.modelPolicy.mode === 'primary') return this.runtime.primaryModel || null;
       if (stage.modelPolicy.mode === 'fast') return this.runtime.fastModel || null;
       return null;
@@ -352,14 +375,23 @@ export default {
     modelForStage(stage) {
       const ref = this.modelRefForStage(stage);
       if (!ref) return null;
-      return this.models.find(item => (item.ref || item.id) === ref) || null;
+      return this.models.find(item => item.ref === ref || item.id === ref) || null;
+    },
+    modelTagSelection(tag) {
+      const ref = this.draft?.modelTags?.[tag] || null;
+      const model = this.models.find(item => item.ref === ref || item.id === ref);
+      return model?.ref || model?.id || ref;
     },
     effortOptionsForStage(stage) {
       const model = this.modelForStage(stage);
-      if (model) return Array.isArray(model.effortOptions) ? model.effortOptions : [];
+      if (model) return Array.isArray(model.effortOptions)
+        ? model.effortOptions.filter(effort => ALLOWED_EFFORTS.has(effort))
+        : [];
       if (stage.modelPolicy.mode === 'inherit') {
         return [...new Set(this.models.flatMap(item => (
-          Array.isArray(item.effortOptions) ? item.effortOptions : []
+          Array.isArray(item.effortOptions)
+            ? item.effortOptions.filter(effort => ALLOWED_EFFORTS.has(effort))
+            : []
         )))];
       }
       return [];
@@ -387,11 +419,16 @@ export default {
       if (mode === 'specific' && !stage.modelPolicy.model) {
         stage.modelPolicy.model = this.models[0]?.ref || this.models[0]?.id || null;
       }
+      if (mode === 'tag' && !stage.modelPolicy.tag) stage.modelPolicy.tag = MODEL_TAGS[0];
       this.normalizeStageEffort(stage);
     },
     setStageModel(stage, model) {
       stage.modelPolicy.model = model || null;
       this.normalizeStageEffort(stage);
+    },
+    setModelTag(tag, model) {
+      this.draft.modelTags[tag] = model || null;
+      this.normalizeDraftEffort();
     },
     async save() {
       if (!this.draft || this.saving || this.settingsUnsupported) return;
@@ -500,6 +537,15 @@ export default {
                     <small>{{ $t('workCenter.settings.maxConcurrentActionsHelp') }}</small>
                   </label>
                 </article>
+                <article v-for="tag in ['fast', 'balanced', 'ultimate']" :key="tag" class="work-center-model-stage">
+                  <strong>{{ $t('workCenter.settings.modelTag.' + tag) }}</strong>
+                  <label>{{ $t('workCenter.settings.model') }}
+                    <select :value="modelTagSelection(tag)" :disabled="settingsUnsupported" @change="setModelTag(tag, $event.target.value)">
+                      <option v-if="draft.modelTags[tag] && !modelForStage({ modelPolicy: { mode: 'tag', tag } })" :value="draft.modelTags[tag]" disabled>{{ draft.modelTags[tag] }}</option>
+                      <option v-for="model in models" :key="model.ref || model.id" :value="model.ref || model.id">{{ model.provider }} · {{ model.label || model.id }}</option>
+                    </select>
+                  </label>
+                </article>
                 <article class="work-center-model-stage">
                   <strong>{{ $t('workCenter.settings.coordinatorModel') }}</strong>
                   <label>{{ $t('workCenter.settings.modelPolicy') }}
@@ -507,7 +553,13 @@ export default {
                       <option value="inherit">{{ $t('workCenter.settings.model.inherit') }}</option>
                       <option value="primary">{{ $t('workCenter.settings.model.primary') }}</option>
                       <option value="fast">{{ $t('workCenter.settings.model.fast') }}</option>
+                      <option value="tag">{{ $t('workCenter.settings.model.tag') }}</option>
                       <option value="specific">{{ $t('workCenter.settings.model.specific') }}</option>
+                    </select>
+                  </label>
+                  <label v-if="draft.coordinatorModelPolicy.mode === 'tag'">{{ $t('workCenter.settings.modelTag') }}
+                    <select v-model="draft.coordinatorModelPolicy.tag" :disabled="settingsUnsupported">
+                      <option v-for="tag in ['fast', 'balanced', 'ultimate']" :key="tag" :value="tag">{{ $t('workCenter.settings.modelTag.' + tag) }}</option>
                     </select>
                   </label>
                   <label v-if="draft.coordinatorModelPolicy.mode === 'specific'">{{ $t('workCenter.settings.model') }}
@@ -530,7 +582,13 @@ export default {
                       <option value="inherit">{{ $t('workCenter.settings.model.inherit') }}</option>
                       <option value="primary">{{ $t('workCenter.settings.model.primary') }}</option>
                       <option value="fast">{{ $t('workCenter.settings.model.fast') }}</option>
+                      <option value="tag">{{ $t('workCenter.settings.model.tag') }}</option>
                       <option value="specific">{{ $t('workCenter.settings.model.specific') }}</option>
+                    </select>
+                  </label>
+                  <label v-if="draft.actionModelPolicies[type].mode === 'tag'">{{ $t('workCenter.settings.modelTag') }}
+                    <select v-model="draft.actionModelPolicies[type].tag" :disabled="settingsUnsupported">
+                      <option v-for="tag in ['fast', 'balanced', 'ultimate']" :key="tag" :value="tag">{{ $t('workCenter.settings.modelTag.' + tag) }}</option>
                     </select>
                   </label>
                   <label v-if="draft.actionModelPolicies[type].mode === 'specific'">{{ $t('workCenter.settings.model') }}
@@ -552,7 +610,13 @@ export default {
                       <option value="inherit">{{ $t('workCenter.settings.model.inherit') }}</option>
                       <option value="primary">{{ $t('workCenter.settings.model.primary') }}</option>
                       <option value="fast">{{ $t('workCenter.settings.model.fast') }}</option>
+                      <option value="tag">{{ $t('workCenter.settings.model.tag') }}</option>
                       <option value="specific">{{ $t('workCenter.settings.model.specific') }}</option>
+                    </select>
+                  </label>
+                  <label v-if="draft.modelPolicy.mode === 'tag'">{{ $t('workCenter.settings.modelTag') }}
+                    <select v-model="draft.modelPolicy.tag" :disabled="settingsUnsupported">
+                      <option v-for="tag in ['fast', 'balanced', 'ultimate']" :key="tag" :value="tag">{{ $t('workCenter.settings.modelTag.' + tag) }}</option>
                     </select>
                   </label>
                   <label v-if="draft.modelPolicy.mode === 'specific'">{{ $t('workCenter.settings.model') }}

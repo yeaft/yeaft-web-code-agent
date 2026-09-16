@@ -73,9 +73,9 @@ describe('GPT-5.5+ ultra effort', () => {
       .toBeUndefined();
   });
 
-  it('keeps ultra valid through Work Center policy and model assignment', () => {
+  it('keeps provider ultra support separate from Work Center Action effort policy', () => {
     expect(normalizeModelPolicy({ mode: 'specific', model: 'openai/gpt-5.5', effort: 'ultra' }))
-      .toEqual({ mode: 'specific', model: 'openai/gpt-5.5', effort: 'ultra' });
+      .toEqual({ mode: 'specific', model: 'openai/gpt-5.5', tag: null, effort: null });
     expect(resolveWorkItemModel({
       primaryModel: 'openai/gpt-5.5',
       availableModels: [{
@@ -86,7 +86,7 @@ describe('GPT-5.5+ ultra effort', () => {
       }],
     }, {}, { mode: 'specific', model: 'openai/gpt-5.5', effort: 'ultra' })).toMatchObject({
       model: 'openai/gpt-5.5',
-      effort: 'ultra',
+      effort: null,
     });
   });
 

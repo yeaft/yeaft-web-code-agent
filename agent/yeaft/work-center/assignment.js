@@ -162,17 +162,21 @@ function availableModel(config, ref) {
   if (models.length === 0) return null;
   const parsed = parseModelRef(ref);
   return models.find(model => model.ref === ref)
-    || models.find(model => !parsed.providerName && model.id === parsed.modelId)
+    || models.find(model => model.id === parsed.modelId
+      && (!parsed.providerName || model.provider === parsed.providerName))
     || null;
 }
 
-export function resolveWorkItemModel(config, vp, rawPolicy) {
+export function resolveWorkItemModel(config, vp, rawPolicy, modelTags = {}) {
   const policy = normalizeModelPolicy(rawPolicy);
   let model;
   let source;
   if (policy.mode === 'specific') {
     model = policy.model;
     source = 'stage-specific';
+  } else if (policy.mode === 'tag') {
+    model = modelTags[policy.tag] || null;
+    source = `tag:${policy.tag}`;
   } else if (policy.mode === 'primary') {
     model = config.primaryModel || config.model || null;
     source = 'agent-primary';
@@ -191,8 +195,9 @@ export function resolveWorkItemModel(config, vp, rawPolicy) {
   if (Array.isArray(config.availableModels) && config.availableModels.length > 0 && !available) {
     throw policyError(`Configured Work Center model is unavailable: ${model}`);
   }
+  if (policy.mode === 'tag' && available?.ref) model = available.ref;
   const effortOptions = Array.isArray(available?.effortOptions) ? available.effortOptions : [];
-  const effortOrder = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+  const effortOrder = ['medium', 'high', 'xhigh'];
   const requestedIndex = effortOrder.indexOf(policy.effort);
   const effort = !policy.effort || effortOptions.length === 0
     ? null

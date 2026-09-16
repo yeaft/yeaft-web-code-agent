@@ -88,6 +88,36 @@ describe('Mainline projection', () => {
     expect(serialized).not.toContain('Abcdefghijklmnopqrstuvwxyz1234567890');
   });
 
+  it('keeps full results only at their source edge to avoid repeating tokens', () => {
+    const source = {
+      id: 'source', stageId: 'research', type: 'research', sequence: 1,
+      generation: 1, specHash: 'source-hash', status: 'completed', sourceActionIds: [], resultRunId: 'run-source',
+    };
+    const current = {
+      id: 'current', stageId: 'current', type: 'implement', sequence: 2,
+      generation: 1, specHash: 'current-hash', status: 'ready', sourceActionIds: [source.id],
+    };
+    const snapshot = buildMainlineContextSnapshot(detail({
+      coordinationMode: 'dynamic',
+      actions: [source, current],
+      runs: [{
+        id: 'run-source', actionId: source.id, actionGeneration: 1,
+        actionSpecHash: source.specHash, status: 'completed', summary: 'Reusable source summary',
+        evidence: ['specific source evidence'], endedAt: 4,
+      }],
+    }), current).contextSnapshot;
+
+    expect(snapshot.canonicalCompletedResultsIndex[source.id]).toEqual({
+      runId: 'run-source', status: 'completed', endedAt: 4,
+    });
+    expect(snapshot.sourceResults[0].result).toMatchObject({
+      summary: 'Reusable source summary', evidence: ['specific source evidence'],
+    });
+    expect(snapshot.siblingResults).not.toHaveProperty(source.id);
+    expect(JSON.stringify(snapshot).match(/Reusable source summary/g)).toHaveLength(1);
+    expect(JSON.stringify(snapshot).match(/specific source evidence/g)).toHaveLength(1);
+  });
+
   it('redacts and bounds failed source results for dynamic model context', () => {
     const source = {
       id: 'source', stageId: 'source', type: 'research', sequence: 1,
