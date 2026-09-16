@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { selectWorkItemVp } from '../../../../agent/yeaft/work-center/assignment.js';
+import { resolveWorkItemModel, selectWorkItemVp } from '../../../../agent/yeaft/work-center/assignment.js';
+import {
+  defaultWorkCenterSettings,
+  normalizeModelPolicy,
+  normalizeWorkCenterSettings,
+} from '../../../../agent/yeaft/work-center/workflow.js';
 
 const vps = [
   { id: 'zeta', role: 'Systems Engineer', area: 'engineering' },
@@ -81,5 +86,65 @@ describe('Work Center VP assignment', () => {
     expect(() => select({
       mode: 'planned', candidateVpIds: ['missing/value'], assignmentReason: 'plan',
     })).toThrow(/No configured Work Center VP candidates are available.*mode=planned.*candidates=missing-value/);
+  });
+});
+
+describe('Work Center model tags', () => {
+  const availableModels = [
+    { id: 'gpt-5.6-luna', ref: 'openai/gpt-5.6-luna', effortOptions: ['medium', 'high', 'xhigh', 'max'] },
+    { id: 'gpt-5.6-sol', ref: 'openai/gpt-5.6-sol', effortOptions: ['medium', 'high', 'xhigh'] },
+    { id: 'gpt-6-astra', ref: 'openai/gpt-6-astra', effortOptions: ['high', 'xhigh', 'max'] },
+    { id: 'untagged', ref: 'openai/untagged', effortOptions: ['medium'] },
+  ];
+
+  it('ships a small default tag catalog and scenario-specific policies', () => {
+    const settings = defaultWorkCenterSettings();
+
+    expect(settings.modelTags).toEqual({
+      fast: 'gpt-5.6-luna',
+      balanced: 'gpt-5.6-sol',
+      ultimate: 'gpt-6-astra',
+    });
+    expect(settings.actionModelPolicies.implement).toMatchObject({ mode: 'tag', tag: 'balanced', effort: 'high' });
+    expect(settings.actionModelPolicies.research).toMatchObject({ mode: 'tag', tag: 'ultimate', effort: 'xhigh' });
+    expect(settings.actionModelPolicies.deliver).toMatchObject({ mode: 'tag', tag: 'fast', effort: 'medium' });
+  });
+
+  it('selects an available model by tag without requiring every model to be tagged', () => {
+    const resolved = resolveWorkItemModel(
+      { availableModels },
+      {},
+      { mode: 'tag', tag: 'balanced', effort: 'high' },
+      { balanced: 'gpt-5.6-sol' },
+    );
+
+    expect(resolved).toMatchObject({
+      model: 'openai/gpt-5.6-sol',
+      effort: 'high',
+      source: 'tag:balanced',
+    });
+  });
+
+  it('rejects missing tags and never resolves forbidden effort levels', () => {
+    expect(() => resolveWorkItemModel(
+      { availableModels }, {}, { mode: 'tag', tag: 'missing', effort: 'high' }, {},
+    )).toThrow(/has no configured model/);
+    expect(normalizeModelPolicy({ mode: 'tag', tag: 'ultimate', effort: 'max' }))
+      .toEqual({ mode: 'tag', model: null, tag: 'ultimate', effort: null });
+    expect(resolveWorkItemModel(
+      { availableModels }, {}, { mode: 'tag', tag: 'ultimate', effort: 'xhigh' },
+      { ultimate: 'gpt-6-astra' },
+    ).effort).toBe('xhigh');
+  });
+
+  it('normalizes legacy settings while adding defaults without tagging unrelated models', () => {
+    const settings = normalizeWorkCenterSettings({
+      revision: 4,
+      modelPolicy: { mode: 'primary', effort: 'high' },
+    });
+
+    expect(settings.revision).toBe(4);
+    expect(settings.modelTags).toEqual(defaultWorkCenterSettings().modelTags);
+    expect(Object.values(settings.modelTags)).not.toContain('untagged');
   });
 });

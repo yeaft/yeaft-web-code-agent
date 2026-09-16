@@ -21,6 +21,10 @@ import {
 import { openImagePreview } from '../../web/utils/imagePreview.js';
 import SidebarWorkCenter from '../../web/components/SidebarWorkCenter.js';
 import SessionSettingsModal from '../../web/components/SessionSettingsModal.js';
+import WorkCenterSettingsModal, {
+  normalizeSettingsDraft,
+  supportsDynamicSettings,
+} from '../../web/components/WorkCenterSettingsModal.js';
 import enMessages from '../../web/i18n/en.js';
 import zhCNMessages from '../../web/i18n/zh-CN.js';
 import { yeaftHistoryIdentityKey } from '../../web/stores/helpers/yeaft-history-identity.js';
@@ -443,6 +447,39 @@ describe('app dialog contracts', () => {
 });
 
 describe('message flow regressions', () => {
+  it('normalizes Work Center model tags and exposes only supported effort levels', () => {
+    const draft = normalizeSettingsDraft({
+      revision: 4,
+      modelPolicy: { mode: 'primary', effort: 'max' },
+      coordinatorModelPolicy: { mode: 'tag', tag: 'ultimate', effort: 'xhigh' },
+      actionModelPolicies: {},
+      actionInstructions: Object.fromEntries([
+        'triage', 'research', 'design', 'diagnose', 'implement', 'migrate', 'test', 'review',
+        'integrate', 'document', 'operate', 'deliver', 'write', 'create_vp', 'custom',
+      ].map(type => [type, ''])),
+    });
+    const methods = WorkCenterSettingsModal.methods;
+    const context = {
+      draft,
+      models: [{
+        id: 'gpt-6-astra', ref: 'openai/gpt-6-astra',
+        effortOptions: ['low', 'medium', 'high', 'xhigh', 'max'],
+      }],
+      runtime: {},
+      modelRefForStage: methods.modelRefForStage,
+      modelForStage: methods.modelForStage,
+    };
+
+    expect(draft.modelTags).toEqual({
+      fast: 'gpt-5.6-luna', balanced: 'gpt-5.6-sol', ultimate: 'gpt-6-astra',
+    });
+    expect(supportsDynamicSettings(draft)).toBe(true);
+    expect(methods.modelTagSelection.call(context, 'ultimate')).toBe('openai/gpt-6-astra');
+    expect(methods.effortOptionsForStage.call(context, {
+      modelPolicy: { mode: 'tag', tag: 'ultimate', effort: 'xhigh' },
+    })).toEqual(['medium', 'high', 'xhigh']);
+  });
+
   it('resolves file references per response instead of dropping later turns at the 32-path cap', () => {
     storeFactories.clear();
     runtimeSessionsStore.sessionList = [{ id: 'session-files', agentId: 'agent-files' }];

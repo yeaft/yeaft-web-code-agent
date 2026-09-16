@@ -37,7 +37,11 @@ import { loadMCPConfig } from '../config.js';
 import { MCPManager } from '../mcp.js';
 import { buildMcpFlattenedTools } from '../tools/mcp-tools.js';
 import { recallWorkspaceSessionContext } from './workspace-context.js';
-import { applyGeneratedPlan, BUILT_IN_ACTION_TYPES } from './workflow.js';
+import {
+  applyGeneratedPlan,
+  BUILT_IN_ACTION_TYPES,
+  DEFAULT_WORK_CENTER_MODEL_TAGS,
+} from './workflow.js';
 import { isDynamicWorkItem, usesMainlineContext } from './execution-mode.js';
 import {
   applyAdditivePlanProposal,
@@ -1081,8 +1085,10 @@ export class WorkItemRunner {
   async run({ workItem, action, run, signal, ownerBootId, onProgress, registerProgressReader, registerInputWake, onEngineEvent = null }) {
     assertCreateVpActionAuthority(workItem, action, this.registry);
     const runtime = await this.runtimeProvider();
+    const settings = this.policyProvider ? await this.policyProvider() : null;
     const currentSettings = ['ai', 'coordinator'].includes(workItem?.workflowSnapshot?.planningMode)
-      && this.policyProvider ? await this.policyProvider() : null;
+      ? settings
+      : null;
     const currentModelPolicy = currentSettings?.actionModelPolicies?.[action.type]
       || currentSettings?.actionModelPolicies?.custom
       || currentSettings?.modelPolicy
@@ -1125,7 +1131,16 @@ export class WorkItemRunner {
       error.retryable = false;
       throw error;
     }
-    const resolvedModel = resolveWorkItemModel(runtime.config, vp, executionAction.modelPolicy);
+    const fallbackModel = runtime.config.primaryModel || runtime.config.model || null;
+    const modelTags = settings?.modelTags || Object.fromEntries(
+      Object.keys(DEFAULT_WORK_CENTER_MODEL_TAGS).map(tag => [tag, fallbackModel]),
+    );
+    const resolvedModel = resolveWorkItemModel(
+      runtime.config,
+      vp,
+      executionAction.modelPolicy,
+      modelTags,
+    );
     const memoryBlock = recallWorkItemMemory(
       { ...runtime, yeaftDir: runtime.yeaftDir || this.yeaftDir },
       workItem,

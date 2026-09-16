@@ -20,7 +20,10 @@ import { isDynamicWorkItem } from './execution-mode.js';
 import { applyCoordinatorReplan } from './plan-mutation.js';
 import { buildWorkItemAttachmentContext } from './attachments.js';
 import { sanitizeDiagnosticText } from './debug-projection.js';
-import { generatedActionGraphRules } from './workflow.js';
+import {
+  DEFAULT_WORK_CENTER_MODEL_TAGS,
+  generatedActionGraphRules,
+} from './workflow.js';
 import { workItemCapabilityContext } from './capabilities.js';
 
 const COORDINATOR_MAX_REPLY_CHARS = 8_000;
@@ -900,7 +903,12 @@ export class WorkItemCoordinator {
             ...(settings?.modelPolicy || {}),
             effort: settings?.actionModelPolicies?.triage?.effort || settings?.modelPolicy?.effort || 'high',
           };
-          resolved = resolveWorkItemModel(runtime.config, assignment.vp, coordinatorPolicy);
+          resolved = resolveWorkItemModel(
+            runtime.config,
+            assignment.vp,
+            coordinatorPolicy,
+            settings?.modelTags || DEFAULT_WORK_CENTER_MODEL_TAGS,
+          );
         } catch (error) {
           throw coordinatorExecutionError(error, 'selection', language);
         }

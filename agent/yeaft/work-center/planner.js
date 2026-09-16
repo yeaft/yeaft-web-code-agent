@@ -1,5 +1,5 @@
 import { resolveWorkItemModel, selectWorkItemVp } from './assignment.js';
-import { resolveWorkflowSnapshot } from './workflow.js';
+import { normalizeWorkCenterSettings, resolveWorkflowSnapshot } from './workflow.js';
 
 function publicVp(vp) {
   return vp ? {
@@ -17,6 +17,7 @@ function publicVp(vp) {
 }
 
 export function previewWorkCenterPlan({ settings, workflowId, stageOverrides, registry, config }) {
+  const normalizedSettings = normalizeWorkCenterSettings(settings);
   const workflow = resolveWorkflowSnapshot(settings, workflowId, stageOverrides);
   const vps = registry.listVps();
   const syntheticRuns = [];
@@ -28,7 +29,12 @@ export function previewWorkCenterPlan({ settings, workflowId, stageOverrides, re
         vps,
         priorRuns: syntheticRuns,
       });
-      const model = resolveWorkItemModel(config, assignment.vp, stage.modelPolicy);
+      const model = resolveWorkItemModel(
+        config,
+        assignment.vp,
+        stage.modelPolicy,
+        normalizedSettings.modelTags,
+      );
       syntheticRuns.push({
         actionType: stage.type,
         roleSnapshot: { actionType: stage.type },
