@@ -77,6 +77,8 @@ model 项可以是裸字符串（`"gpt-5"`），也可以是对象：
 
 私有状态随实例 transcript 保存，不进入普通消息、搜索、跨 VP 或子 Agent 的上下文投影。原生 Anthropic 签名工具回合在模型、账号、归属或消息投影不一致时终止，不能通过丢弃签名静默继续。官方 endpoint 使用静态 API key 时，缺失的 `credentialScopeId` 默认使用完整密码学 key 指纹（不保存 key 本身），重启保持一致，换 key 后失效。动态凭据与自定义 endpoint 仍需显式 scope；缺失时不会发送缓存或保存无归属的 reasoning。旧 `thinkingBlocks` 可以读取，但不再直接回传；含旧签名的工具历史会提示开启新上下文。原生 signed thinking 工具响应缺少能力/归属配置时也会明确终止，需先配置已验证的直通路径。原始请求/响应调试数据是单独的数据层，仍应视为敏感数据。
 
+调试原始请求/响应按 loop 独立保存，不挂入普通 assistant 历史或下一轮消息快照。活跃调试 trace 在成功写入后释放旧 loop/tool 的大正文，只保留最新请求快照、轻量索引和未写成功的数据；详情按需从文件恢复。这个内存优化不截断原始调试数据，也不会清理既有历史文件。
+
 发送缓存字段只表示请求了缓存；以 provider 返回的 cache usage 判断命中。缓存通常减少计费输入和延迟，不减少 HTTP 请求数。`reasoningTokens` 仅在上游提供时记录，是 output tokens 的子集，不重复计入总量。
 
 子 Agent 使用生成 SpawnAgent/PromptAgent 工具调用的父请求实际 effort 快照，最高 `high`；未知父默认保守 `medium`，不同模型选择不高于上限的支持档位，无法表示时显式报错。`/max`、配置 boost、`extraBody` 和关闭 thinking feature flag 均不能绕过最终 payload 上限。
