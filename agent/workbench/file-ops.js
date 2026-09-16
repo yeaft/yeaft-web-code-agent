@@ -10,14 +10,27 @@ export const MAX_WORKBENCH_PREVIEW_BYTES = 20 * 1024 * 1024;
 export const WORKBENCH_FILE_CHUNK_BYTES = 1024 * 1024;
 export const WORKBENCH_VIDEO_CHUNK_BYTES = 1024 * 1024;
 
-async function validateResponseImagePath(filePath, workDir) {
+async function canonicalWorkspaceReadPath(filePath, workDir, errorMessage = 'File is outside the active workspace.') {
   const canonicalRoot = await realpath(resolve(workDir));
   const canonicalFile = await realpath(resolveAndValidatePath(filePath, canonicalRoot));
   const relativePath = relative(canonicalRoot, canonicalFile);
   const outside = relativePath === '..'
     || relativePath.startsWith(`..${platform() === 'win32' ? '\\' : '/'}`)
     || isAbsolute(relativePath);
-  if (outside) throw new Error('Response image is outside the active workspace.');
+  if (outside) {
+    const error = new Error(errorMessage);
+    error.code = 'FILE_OUTSIDE_WORKSPACE';
+    throw error;
+  }
+  return canonicalFile;
+}
+
+async function validateResponseImagePath(filePath, workDir) {
+  const canonicalFile = await canonicalWorkspaceReadPath(
+    filePath,
+    workDir,
+    'Response image is outside the active workspace.',
+  );
   const mimeType = BINARY_EXTENSIONS[extname(canonicalFile).toLowerCase()];
   if (!mimeType?.startsWith('image/')) throw new Error('Response preview only supports image files.');
   return canonicalFile;
@@ -169,7 +182,7 @@ export async function handleReadFile(msg) {
   try {
     const resolved = msg.responseImagePreview
       ? await validateResponseImagePath(filePath, workDir)
-      : resolveAndValidatePath(filePath, workDir);
+      : await canonicalWorkspaceReadPath(filePath, workDir);
     const ext = extname(resolved).toLowerCase();
     if (VIDEO_EXTENSIONS[ext]) {
       const error = new Error('Video files require the Workbench streaming protocol.');

@@ -1401,6 +1401,42 @@ describe('Agent file terminal forwarding', () => {
     expect(sent.filter(msg => msg.type === 'write_file')).toHaveLength(3);
   });
 
+  it('confines file editor reads to real files inside the canonical workspace', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'yeaft-file-read-root-'));
+    const outside = mkdtempSync(join(tmpdir(), 'yeaft-file-read-outside-'));
+    const sent = [];
+    const previousConfig = ctx.CONFIG;
+    const previousSend = ctx.sendToServer;
+    writeFileSync(join(workDir, 'README.md'), 'inside readme');
+    writeFileSync(join(outside, 'secret.md'), 'outside secret');
+    symlinkSync(join(outside, 'secret.md'), join(workDir, 'escaped.md'));
+    ctx.CONFIG = { workDir };
+    ctx.sendToServer = msg => sent.push(msg);
+    try {
+      for (const [requestId, filePath] of [
+        ['inside', 'README.md'],
+        ['parent', join('..', outside.split(/[\\/]/).pop(), 'secret.md')],
+        ['absolute', join(outside, 'secret.md')],
+        ['symlink', 'escaped.md'],
+      ]) {
+        await handleReadFile({ conversationId: '_explorer', requestId, workDir, filePath });
+      }
+      expect(sent[0]).toMatchObject({ requestId: 'inside', content: 'inside readme' });
+      for (const response of sent.slice(1)) {
+        expect(response).toMatchObject({
+          error: 'File is outside the active workspace.',
+          errorCode: 'FILE_OUTSIDE_WORKSPACE',
+        });
+        expect(response.content).toBe('');
+      }
+    } finally {
+      ctx.CONFIG = previousConfig;
+      ctx.sendToServer = previousSend;
+      rmSync(workDir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it('revalidates automatic response image reads inside the canonical workspace', async () => {
     const workDir = mkdtempSync(join(tmpdir(), 'yeaft-response-image-root-'));
     const outside = mkdtempSync(join(tmpdir(), 'yeaft-response-image-outside-'));

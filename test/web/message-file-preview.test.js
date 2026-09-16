@@ -1020,7 +1020,21 @@ describe('message file preview', () => {
     expect(resolved).toContain('data-local-image-path="/workspace/screens/result.png"');
   });
 
-  it('collects and decorates Agent-confirmed file paths in ordinary response text', () => {
+  it('makes recognizable file paths clickable before optional Agent resolution', () => {
+    const source = '<p>Try <code>README.md:1</code>, docs/guide.md#L3, and <a href="docs/spec.md#L8">the spec</a>.</p>';
+    const host = document.createElement('div');
+    host.innerHTML = decorateMessageFileReferences(source);
+
+    const links = [...host.querySelectorAll('a.message-file-reference')];
+    expect(links.map(link => [link.textContent, link.dataset.resolvedFilePath])).toEqual([
+      ['README.md:1', 'README.md'],
+      ['the spec', 'docs/spec.md'],
+    ]);
+    expect(resolveMessageFileReference(links[0].getAttribute('href'), { htmlEncoded: false }))
+      .toEqual({ path: 'README.md', line: 1 });
+  });
+
+  it('prefers Agent-confirmed paths but keeps recognizable unresolved paths clickable', () => {
     const source = [
       '<p>Changed web/components/AssistantTurn.js:410 and missing/not-created.js.</p>',
       '<p><strong>Also:</strong> docs/design-doc.md#L119, but not origin/main or v1.0.486.</p>',
@@ -1066,8 +1080,7 @@ describe('message file preview', () => {
     ]));
 
     expect(html).toContain('data-resolved-file-path="docs/design-doc.md" class="message-file-reference"');
-    expect(html).toContain('notes');
-    expect(html).not.toContain('href="docs/notes.md"');
+    expect(html).toContain('href="docs/notes.md" data-resolved-file-path="docs/notes.md"');
     expect(html).toContain('data-resolved-file-path="web/components/WorkbenchPanel.js" class="message-file-reference"');
     expect(html).toContain('<code>origin/main</code>');
     expect(html).toContain('<code>v1.0.403</code>');
@@ -1115,7 +1128,7 @@ describe('message file preview', () => {
     });
 
     expect(resolveMessageFileReferences).toHaveBeenCalledWith(['docs/design-doc.md']);
-    expect(wrapper.find('a[href="docs/design-doc.md#L119"]').exists()).toBe(false);
+    expect(wrapper.find('a[href="docs/design-doc.md#L119"]').exists()).toBe(true);
     window.dispatchEvent(new CustomEvent('workbench-message', { detail: {
       type: 'file_references_resolved',
       requestId: 'file-refs-request',

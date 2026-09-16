@@ -45,7 +45,12 @@ function mountHarness() {
     theme: 'light',
   });
   const requests = [];
-  const failure = new URLSearchParams(location.search).get('failure');
+  const params = new URLSearchParams(location.search);
+  const failure = params.get('failure');
+  const inlineFallback = params.get('source') === 'inline-fallback';
+  if (inlineFallback) {
+    store.agents[1].capabilities = store.agents[1].capabilities.filter(capability => capability !== 'file_reference_resolution');
+  }
   let resolveAttempts = 0;
   let readAttempts = 0;
   // Deliberately omit requestedFilePath and return the canonical absolute
@@ -88,7 +93,11 @@ function mountHarness() {
   };
   const turn = reactive({
     isStreaming: false,
-    textSegments: [{ key: 'result', kind: 'result', content: '[open guide](docs/guide.txt#L3)' }],
+    textSegments: [{
+      key: 'result',
+      kind: 'result',
+      content: inlineFallback ? 'Try `docs/guide.txt:3`' : '[open guide](docs/guide.txt#L3)',
+    }],
   });
   const app = createApp({
     components: { AssistantTurn, WorkbenchPanel },
@@ -199,11 +208,28 @@ test('response links load real Files across cold/open/close, routes, line, mobil
   expect(cliRead).toMatchObject({ agentId: 'agent-b', conversationId: '_workbench:claude-code:agent-b:cli-1', filePath: 'docs/guide.txt' });
 });
 
+test('inline-code file references open Files without the optional resolution capability', async ({ page, harness }) => {
+  await page.goto(`${harness.url}/?source=inline-fallback`);
+  const link = page.locator('.message-file-reference');
+  await expect(link).toHaveText('docs/guide.txt:3');
+  await expect(link).toHaveAttribute('data-resolved-file-path', 'docs/guide.txt');
+  await link.click();
+  await expect(page.locator('.CodeMirror')).toContainText('target line');
+  await expect.poll(() => page.evaluate(() => document.querySelector('.CodeMirror')?.CodeMirror?.getCursor().line)).toBe(2);
+  const requests = await page.evaluate(() => window.harness.requests);
+  expect(requests.some(message => message.type === 'resolve_file_references')).toBe(false);
+  expect(requests.find(message => message.type === 'read_file')).toMatchObject({
+    agentId: 'agent-b', filePath: 'docs/guide.txt', workbenchRouteKey: 'yeaft:agent-b:session-y',
+  });
+});
+
 test('completed response links recover from a temporary resolver error', async ({ page, harness }) => {
   await page.goto(`${harness.url}/?failure=resolve-error`);
   await clickResolvedReference(page);
+  await expect.poll(() => page.evaluate(() => (
+    window.harness.requests.filter(msg => msg.type === 'resolve_file_references').length
+  ))).toBe(2);
   const resolves = await page.evaluate(() => window.harness.requests.filter(msg => msg.type === 'resolve_file_references'));
-  expect(resolves).toHaveLength(2);
   expect(resolves[0].requestId).not.toBe(resolves[1].requestId);
 });
 

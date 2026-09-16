@@ -157,8 +157,9 @@ function decorateTextFileReferences(text, resolved) {
   return offset ? result + escapeAttribute(decoded.slice(offset)) : text;
 }
 
-/** Render only Agent-confirmed references as file links. Unconfirmed Markdown
- * file anchors are downgraded to plain text; inline code remains inline code. */
+/** Render explicit Markdown links and inline-code file references immediately,
+ * using Agent-confirmed canonical paths when available. Ordinary bare paths
+ * remain unlinked until confirmed to avoid noisy false positives. */
 export function decorateMessageFileReferences(html, resolvedReferences = {}, resolvedImageUrls = {}, workDir = '') {
   if (typeof html !== 'string' || !html) return html || '';
   const resolved = resolvedReferences instanceof Map
@@ -181,8 +182,7 @@ export function decorateMessageFileReferences(html, resolvedReferences = {}, res
     (match, _attrs, _quote, href, label) => {
       const reference = resolveMessageFileReference(href);
       if (!reference) return match;
-      const resolvedPath = resolved.get(reference.path);
-      if (!resolvedPath) return label;
+      const resolvedPath = resolved.get(reference.path) || reference.path;
       return `<a href="${escapeAttribute(decodeHtml(href))}" data-resolved-file-path="${escapeAttribute(resolvedPath)}" class="message-file-reference">${label}</a>`;
     });
 
@@ -190,8 +190,8 @@ export function decorateMessageFileReferences(html, resolvedReferences = {}, res
     if (protectedElement || !codeText) return match;
     const decoded = decodeHtml(codeText);
     const reference = resolveMessageFileReference(decoded, { htmlEncoded: false });
-    const resolvedPath = reference && resolved.get(reference.path);
-    if (!reference || !resolvedPath) return match;
+    if (!reference) return match;
+    const resolvedPath = resolved.get(reference.path) || reference.path;
     return `<a href="${escapeAttribute(decoded)}" data-resolved-file-path="${escapeAttribute(resolvedPath)}" class="message-file-reference"><code>${codeText}</code></a>`;
   });
 
