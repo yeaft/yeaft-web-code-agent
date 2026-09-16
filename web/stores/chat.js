@@ -242,6 +242,9 @@ const YEAFT_CATALOG_STATUS_FIELDS = Object.freeze([
 ]);
 const YEAFT_RETIRED_CATALOG_EPOCH_LIMIT = 8;
 const YEAFT_ASK_TERMINAL_CACHE_LIMIT = 64;
+const WORK_CENTER_ACTIVITY_STATUSES = Object.freeze(['running', 'waiting']);
+const WORK_CENTER_ACTIVITY_PAGE_LIMIT = 100;
+const WORK_CENTER_ACTIVITY_MAX_PAGES_PER_STATUS = 10;
 function workCenterClientMessageKey(agentId, workItemId) {
   return `${agentId || ''}:${workItemId || ''}`;
 }
@@ -961,6 +964,13 @@ export const useChatStore = defineStore('chat', {
     workCenterUiEnabled: localStorage.getItem('work-center-ui-enabled') !== 'false',
     workCenterAgentId: null,
     workCenterItemsByAgent: {},
+    workCenterActivityByAgent: {},
+    workCenterActivityLoadingByAgent: {},
+    workCenterActivityErrorByAgent: {},
+    _workCenterActivityGenerationByAgent: {},
+    _workCenterActivityEventGenerationByAgent: {},
+    _workCenterActivityEventsByAgent: {},
+    _workCenterActivityOwnerGeneration: 0,
     workCenterListPageByAgent: {},
     workCenterListMoreLoadingByAgent: {},
     _workCenterListGenerationByAgent: {},
@@ -1926,9 +1936,11 @@ export const useChatStore = defineStore('chat', {
         this._workCenterBrowserFence = null;
         this.workCenterComposerDrafts = {};
         this.workCenterMessageOutbox = {};
+        this.clearWorkCenterActivityState();
         return false;
       }
       if (!isWorkCenterBrowserFenceCurrent(this._workCenterBrowserFence)) {
+        this.clearWorkCenterActivityState();
         const persisted = readWorkCenterBrowserState(fence);
         this._workCenterBrowserFence = fence;
         this.workCenterComposerDrafts = persisted.drafts;
@@ -1940,6 +1952,16 @@ export const useChatStore = defineStore('chat', {
       this._workCenterBrowserFence = null;
       this.workCenterComposerDrafts = {};
       this.workCenterMessageOutbox = {};
+      this.clearWorkCenterActivityState();
+    },
+    clearWorkCenterActivityState() {
+      this._workCenterActivityOwnerGeneration = Number(this._workCenterActivityOwnerGeneration || 0) + 1;
+      this.workCenterActivityByAgent = {};
+      this.workCenterActivityLoadingByAgent = {};
+      this.workCenterActivityErrorByAgent = {};
+      this._workCenterActivityGenerationByAgent = {};
+      this._workCenterActivityEventGenerationByAgent = {};
+      this._workCenterActivityEventsByAgent = {};
     },
     workCenterComposerKey(agentId, workItemId) {
       return workCenterClientMessageKey(agentId, workItemId);
@@ -2064,6 +2086,86 @@ export const useChatStore = defineStore('chat', {
       const accepted = merged.find(item => item?.id === summary?.id) || null;
       if (!accepted || this.workItemMatchesBoardQuery(accepted, filters)) return merged;
       return merged.filter(item => item.id !== accepted.id);
+    },
+    workItemIsActive(summary) {
+      return !!summary && WORK_CENTER_ACTIVITY_STATUSES.includes(summary.status);
+    },
+    applyWorkItemActivitySummary(items, summary) {
+      const merged = applyWorkItemSummary(items, summary);
+      const accepted = merged.find(item => item?.id === summary?.id) || null;
+      if (!accepted || this.workItemIsActive(accepted)) return merged;
+      return merged.filter(item => item.id !== accepted.id);
+    },
+    async loadWorkCenterActivity(agentId = null) {
+      const target = agentId || this.workCenterAgentId || this.currentAgent;
+      if (!target) return [];
+      const generation = Number(this._workCenterActivityGenerationByAgent[target] || 0) + 1;
+      const ownerGeneration = Number(this._workCenterActivityOwnerGeneration || 0);
+      const eventGeneration = Number(this._workCenterActivityEventGenerationByAgent[target] || 0);
+      this._workCenterActivityGenerationByAgent = {
+        ...this._workCenterActivityGenerationByAgent, [target]: generation,
+      };
+      this.workCenterActivityLoadingByAgent = {
+        ...this.workCenterActivityLoadingByAgent, [target]: true,
+      };
+      this.workCenterActivityErrorByAgent = {
+        ...this.workCenterActivityErrorByAgent, [target]: null,
+      };
+      try {
+        const pages = await Promise.all(WORK_CENTER_ACTIVITY_STATUSES.map(async status => {
+          const items = [];
+          const cursors = new Set();
+          let cursor = null;
+          for (let page = 0; page < WORK_CENTER_ACTIVITY_MAX_PAGES_PER_STATUS; page += 1) {
+            const payload = { status, limit: WORK_CENTER_ACTIVITY_PAGE_LIMIT };
+            if (cursor) payload.cursor = cursor;
+            const data = await this.workCenterRequest('list', payload, target);
+            if (Array.isArray(data?.items)) items.push(...data.items);
+            const nextCursor = typeof data?.nextCursor === 'string' && data.nextCursor
+              ? data.nextCursor : null;
+            if (!nextCursor || cursors.has(nextCursor)) break;
+            cursors.add(nextCursor);
+            cursor = nextCursor;
+          }
+          return items;
+        }));
+        const requestStillCurrent = this._workCenterActivityGenerationByAgent[target] === generation
+          && Number(this._workCenterActivityOwnerGeneration || 0) === ownerGeneration;
+        if (!requestStillCurrent) return pages.flat();
+        const currentById = new Map((this.workCenterActivityByAgent[target] || [])
+          .map(item => [item.id, item]));
+        const events = this._workCenterActivityEventsByAgent[target] || {};
+        let merged = [];
+        for (const item of pages.flat()) {
+          if (!item?.id || this.workItemDeleted(target, item.id)) continue;
+          const cached = events[item.id]?.summary;
+          let previous = currentById.get(item.id);
+          if (cached) previous = applyWorkItemSummary(previous ? [previous] : [], cached)[0];
+          const accepted = applyWorkItemSummary(previous ? [previous] : [], item)[0] || item;
+          merged = this.applyWorkItemActivitySummary(merged, accepted);
+        }
+        for (const entry of Object.values(this._workCenterActivityEventsByAgent[target] || {})) {
+          if (Number(entry?.generation) <= eventGeneration) continue;
+          merged = this.applyWorkItemActivitySummary(merged, entry.summary);
+        }
+        this.workCenterActivityByAgent = { ...this.workCenterActivityByAgent, [target]: merged };
+        return merged;
+      } catch (err) {
+        if (this._workCenterActivityGenerationByAgent[target] === generation
+            && Number(this._workCenterActivityOwnerGeneration || 0) === ownerGeneration) {
+          this.workCenterActivityErrorByAgent = {
+            ...this.workCenterActivityErrorByAgent, [target]: err?.message || String(err),
+          };
+        }
+        throw err;
+      } finally {
+        if (this._workCenterActivityGenerationByAgent[target] === generation
+            && Number(this._workCenterActivityOwnerGeneration || 0) === ownerGeneration) {
+          this.workCenterActivityLoadingByAgent = {
+            ...this.workCenterActivityLoadingByAgent, [target]: false,
+          };
+        }
+      }
     },
     async listWorkItems(agentId = null, filters = {}) {
       const target = agentId || this.workCenterAgentId || this.currentAgent;
@@ -2209,6 +2311,10 @@ export const useChatStore = defineStore('chat', {
       this.workCenterItemsByAgent = {
         ...this.workCenterItemsByAgent,
         [agentId]: (this.workCenterItemsByAgent[agentId] || []).filter(item => item.id !== id),
+      };
+      this.workCenterActivityByAgent = {
+        ...this.workCenterActivityByAgent,
+        [agentId]: (this.workCenterActivityByAgent[agentId] || []).filter(item => item.id !== id),
       };
       if (this.workCenterDetailByAgent[agentId]?.id === id) {
         this.workCenterDetailByAgent = { ...this.workCenterDetailByAgent, [agentId]: null };
@@ -2700,9 +2806,12 @@ export const useChatStore = defineStore('chat', {
       if (this.workItemDeleted(agentId, summary.id)) return;
       const filters = this._workCenterListFiltersByAgent[agentId] || {};
       const cachedSummary = this._workCenterListEventsByAgent[agentId]?.[summary.id]?.summary || null;
-      const identityBase = current.some(item => item?.id === summary.id)
-        ? current
-        : (cachedSummary ? [cachedSummary] : []);
+      const activityCurrent = (this.workCenterActivityByAgent[agentId] || [])
+        .find(item => item?.id === summary.id) || null;
+      let identityBase = activityCurrent ? [activityCurrent] : [];
+      const boardCurrent = current.find(item => item?.id === summary.id) || null;
+      if (boardCurrent) identityBase = applyWorkItemSummary(identityBase, boardCurrent);
+      if (cachedSummary) identityBase = applyWorkItemSummary(identityBase, cachedSummary);
       const acceptedSummary = applyWorkItemSummary(identityBase, summary)
         .find(item => item?.id === summary.id) || summary;
       const eventGeneration = Number(this._workCenterListEventGenerationByAgent[agentId] || 0) + 1;
@@ -2719,6 +2828,23 @@ export const useChatStore = defineStore('chat', {
             summary: acceptedSummary,
           },
         },
+      };
+      const activityEventGeneration = Number(this._workCenterActivityEventGenerationByAgent[agentId] || 0) + 1;
+      this._workCenterActivityEventGenerationByAgent = {
+        ...this._workCenterActivityEventGenerationByAgent, [agentId]: activityEventGeneration,
+      };
+      this._workCenterActivityEventsByAgent = {
+        ...this._workCenterActivityEventsByAgent,
+        [agentId]: {
+          ...(this._workCenterActivityEventsByAgent[agentId] || {}),
+          [summary.id]: { generation: activityEventGeneration, summary: acceptedSummary },
+        },
+      };
+      this.workCenterActivityByAgent = {
+        ...this.workCenterActivityByAgent,
+        [agentId]: this.applyWorkItemActivitySummary(
+          this.workCenterActivityByAgent[agentId] || [], acceptedSummary,
+        ),
       };
       const nextItems = this.applyWorkItemBoardSummary(current, acceptedSummary, filters);
       this.workCenterItemsByAgent = {
