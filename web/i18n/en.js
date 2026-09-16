@@ -1966,6 +1966,8 @@ export default {
   'workCenter.dependencies': 'Source Actions',
   'workCenter.actionResult': 'Latest result',
   'workCenter.currentProgress': 'Current progress',
+  'workCenter.requirementAndAcceptance': 'Requirement and acceptance',
+  'workCenter.taskInformation': 'Task information and usage',
   'workCenter.actionMessages': 'Messages',
   'workCenter.loops': 'loops',
   'workCenter.tools': 'tools',

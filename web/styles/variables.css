@@ -230,9 +230,9 @@ select option:checked {
   --terminal-bg-bright-magenta: #e1d0eb;
   --terminal-bg-bright-cyan: #cfe4e8;
   --terminal-bg-bright-white: #fafaf8;
-  /* Work Center follows the same content geometry as Session. */
-  --work-center-conversation-column-width: var(--session-content-width);
-  --work-center-conversation-gutter: 16px;
+  /* Work Center keeps Session-like flow while preserving a readable task column. */
+  --work-center-conversation-column-width: 960px;
+  --work-center-conversation-gutter: 20px;
   --work-center-conversation-gutter-compact: 10px;
   --work-center-actions-pane-width: 400px;
   /* Chat composer geometry */

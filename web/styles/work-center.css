@@ -569,7 +569,7 @@
   position: relative;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 24px;
+  gap: 0;
   overflow: auto;
   background: transparent;
 }
@@ -583,14 +583,32 @@
   min-width: 0;
   min-height: 100%;
   flex-direction: column;
+  padding: 0 18px;
+  border-left: 1px solid var(--border-light);
   background: transparent;
+}
+
+.work-center-board-lane:first-of-type {
+  padding-left: 4px;
+  border-left: 0;
+}
+
+.work-center-board-lane:last-of-type {
+  padding-right: 4px;
 }
 
 .work-center-board-lane-header {
   display: flex;
+  min-height: 46px;
   align-items: center;
-  justify-content: space-between;
-  padding: 12px 4px;
+  padding: 4px 0;
+}
+
+.work-center-board-lane-title {
+  display: inline-flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 7px;
 }
 
 .work-center-board-lane-header h2 {
@@ -609,8 +627,8 @@
 .work-center-board-cards {
   display: grid;
   align-content: start;
-  gap: 10px;
-  padding: 4px 0 12px;
+  gap: 12px;
+  padding: 2px 0 20px;
 }
 
 .work-center-board-empty {
@@ -632,14 +650,18 @@
   width: 100%;
   min-width: 0;
   border: 1px solid var(--border-light);
-  border-radius: 10px;
+  border-radius: 12px;
   background: var(--bg-main);
   color: var(--text-primary);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--text-primary) 4%, transparent);
+  transition: border-color 0.15s, background-color 0.15s, box-shadow 0.15s, transform 0.15s;
 }
 
 .work-center-card:hover {
   border-color: var(--border-color);
   background: var(--sidebar-hover);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--text-primary) 7%, transparent);
+  transform: translateY(-1px);
 }
 
 .work-center-card.active {
@@ -650,8 +672,8 @@
 .work-center-card-open {
   display: grid;
   min-width: 0;
-  padding: 12px 42px 12px 12px;
-  gap: 7px;
+  padding: 14px 42px 14px 14px;
+  gap: 9px;
   color: inherit;
   text-align: left;
 }
@@ -685,8 +707,7 @@
 }
 
 .work-center-card-head,
-.work-center-card-meta,
-.work-center-card-foot {
+.work-center-card-meta {
   display: flex;
   min-width: 0;
   align-items: center;
@@ -697,16 +718,20 @@
 .work-center-card-title,
 .work-center-card-goal,
 .work-center-card-current-action,
-.work-center-card-meta span {
+.work-center-card-meta span,
+.work-center-card-files {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .work-center-card-title {
+  display: -webkit-box;
   font-size: 14px;
   font-weight: 650;
-  white-space: nowrap;
+  line-height: 1.42;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .work-center-card-goal {
@@ -719,24 +744,31 @@
 }
 
 .work-center-card-current-action {
+  padding-left: 9px;
+  border-left: 2px solid var(--accent-blue);
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 1.45;
   white-space: nowrap;
 }
 
 .work-center-card-meta,
-.work-center-card-foot,
+.work-center-card-files,
 .work-center-card-updated {
   color: var(--text-muted);
   font-size: 10px;
+}
+
+.work-center-card-meta {
+  padding-top: 2px;
 }
 
 .work-center-card-meta span:first-child {
   color: var(--text-secondary);
 }
 
-.work-center-card-foot {
-  margin-top: 2px;
+.work-center-card-files {
+  white-space: nowrap;
 }
 
 .work-center-usage-summary {
@@ -788,6 +820,14 @@
   .work-center-status[data-status="running"] > span,
   .work-center-conversation-status > span {
     animation: none;
+  }
+
+  .work-center-card {
+    transition: none;
+  }
+
+  .work-center-card:hover {
+    transform: none;
   }
 }
 
@@ -996,7 +1036,18 @@
 }
 
 .work-center-work-item-overview {
-  padding: 6px 0 30px;
+  padding: 10px 0 36px;
+}
+
+.work-center-work-item-overview > h1 {
+  max-width: 780px;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: clamp(24px, 2.3vw, 34px);
+  font-weight: 680;
+  line-height: 1.18;
+  letter-spacing: -0.025em;
+  overflow-wrap: anywhere;
 }
 
 .work-center-work-item-kicker {
@@ -1005,7 +1056,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 12px;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
   color: var(--text-muted);
   font-size: 11px;
 }
@@ -1060,6 +1111,73 @@
   line-height: 1.6;
 }
 
+.work-center-primary-result,
+.work-center-primary-outputs,
+.work-center-current-progress {
+  padding-top: 20px;
+  border-top: 1px solid var(--border-light);
+}
+
+.work-center-primary-result .work-center-response-summary {
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.work-center-progressive-section {
+  padding-top: 16px;
+  border-top: 1px solid var(--border-light);
+}
+
+.work-center-progressive-section > summary {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  list-style: none;
+}
+
+.work-center-progressive-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+.work-center-progressive-section > summary::before {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  content: '';
+  transform: rotate(-45deg);
+  transition: transform 0.15s;
+}
+
+.work-center-progressive-section[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.work-center-progressive-section > summary:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+.work-center-progressive-section > .work-center-description,
+.work-center-progressive-section > .work-center-detail-meta {
+  margin-top: 8px;
+}
+
+.work-center-progressive-section > .work-center-section {
+  margin-top: 18px;
+}
+
+.work-center-task-information .work-center-resources {
+  margin-top: 20px;
+}
+
 .work-center-description p,
 .work-center-acceptance li {
   color: var(--text-primary);
@@ -1073,6 +1191,13 @@
   color: var(--text-secondary);
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+
+.work-center-resources-priority {
+  padding: 14px 16px;
+  border-left: 3px solid var(--warn-text);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--warn-bg);
 }
 
 .work-center-resources h3 { color: var(--text-primary); }
@@ -3067,6 +3192,8 @@
     display: none;
     width: 100%;
     min-height: 0;
+    padding: 0;
+    border-left: 0;
   }
 
   .work-center-board-lane.mobile-active {

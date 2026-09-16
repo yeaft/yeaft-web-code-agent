@@ -1575,8 +1575,10 @@ export default {
                        :class="{ 'mobile-active': mobileBoardLane === lane.id }"
                        :data-lane="lane.id" :aria-labelledby="'work-center-lane-' + lane.id">
                 <header class="work-center-board-lane-header">
-                  <h2 :id="'work-center-lane-' + lane.id">{{ lane.title }}</h2>
-                  <span>{{ lane.items.length }}</span>
+                  <div class="work-center-board-lane-title">
+                    <h2 :id="'work-center-lane-' + lane.id">{{ lane.title }}</h2>
+                    <span>{{ lane.items.length }}</span>
+                  </div>
                 </header>
                 <div class="work-center-board-cards">
                   <article v-for="item in lane.items" :key="item.id"
@@ -1589,18 +1591,15 @@ export default {
                         <span class="work-center-card-updated">{{ time(item.updatedAt) }}</span>
                       </span>
                       <span class="work-center-card-title">{{ item.title }}</span>
-                      <span class="work-center-card-goal">{{ item.goal }}</span>
                       <span v-if="boardAction(item)" class="work-center-card-current-action">
                         {{ boardAction(item).objective || actionLabel(boardAction(item).type) }}
                       </span>
+                      <span v-else-if="item.goal && item.goal !== item.title" class="work-center-card-goal">{{ item.goal }}</span>
                       <span class="work-center-card-meta">
                         <span>{{ boardExecutorLabel(item) }}</span>
                         <span>{{ boardActionCountLabel(item) }}</span>
                       </span>
-                      <span class="work-center-card-foot">
-                        <span>{{ tr('workCenter.created', 'Created') }} {{ time(item.createdAt) }}</span>
-                        <span v-if="item.attachmentCount">{{ item.attachmentCount }} {{ tr('workCenter.files', 'files') }}</span>
-                      </span>
+                      <span v-if="item.attachmentCount" class="work-center-card-files">{{ item.attachmentCount }} {{ tr('workCenter.files', 'files') }}</span>
                     </button>
                     <button class="work-center-card-delete" type="button" @click.stop="deleteWorkItem(item)"
                             :disabled="!workItemCanDelete(item) || workItemDeleting(item)"
@@ -1685,22 +1684,9 @@ export default {
                             <div class="work-center-work-item-kicker">
                               <span class="work-center-status" :data-status="selected.status"><span aria-hidden="true"></span>{{ statusLabel(selected.status) }}</span>
                               <span v-if="selected.workItemType">{{ selected.workItemType }}</span>
-                              <span>{{ time(selected.updatedAt) || '—' }}</span>
+                              <span>{{ tr('workCenter.updated', 'Updated') }} {{ time(selected.updatedAt) || '—' }}</span>
                             </div>
-                            <dl class="work-center-detail-meta">
-                              <div v-if="selected.workDir" class="work-center-meta-wide"><dt>{{ tr('workCenter.workDir', 'Working directory') }}</dt><dd :title="selected.workDir">{{ selected.workDir }}</dd></div>
-                              <div><dt>{{ tr('workCenter.created', 'Created') }}</dt><dd>{{ time(selected.createdAt) || '—' }}</dd></div>
-                              <div><dt>{{ tr('workCenter.updated', 'Updated') }}</dt><dd>{{ time(selected.updatedAt) || '—' }}</dd></div>
-                              <div v-if="!selected.workItemType && selected.planningMode === 'ai'"><dt>{{ tr('workCenter.workItemType', 'Type') }}</dt><dd>{{ tr('workCenter.planning', 'Planning') }}</dd></div>
-                            </dl>
-                            <WorkCenterResourceControl v-if="selected.executionControl" :key="agentId + '::' + selected.id"
-                              :item="selected" :agent-id="agentId" :disabled="detailLoading || !!detailError || detail?.id !== selected.id" />
-                            <div class="work-center-usage-summary work-center-detail-usage">
-                              <span v-if="!selected.executionControl">{{ $t('workCenter.llmRequestCount', { count: formatCount(executionStats(selected).llmRequestCount) }) }}</span>
-                              <span>{{ $t('workCenter.loopCount', { count: formatCount(executionStats(selected).loopCount) }) }}</span>
-                              <span>{{ $t('workCenter.toolCount', { count: formatCount(executionStats(selected).toolCount) }) }}</span>
-                              <span v-if="!selected.executionControl" :title="$t('workCenter.tokenBreakdown', { input: formatCount(executionStats(selected).inputTokens), output: formatCount(executionStats(selected).outputTokens), cache: formatCount((executionStats(selected).cacheReadTokens || 0) + (executionStats(selected).cacheWriteTokens || 0)) })">{{ $t('workCenter.tokenCount', { count: formatTokens(executionStats(selected).totalTokens) }) }}</span>
-                            </div>
+                            <h1>{{ selected.title }}</h1>
 
                             <div v-if="selected.failureReason" class="work-center-section work-center-failure" role="alert">
                               <h3>{{ tr('workCenter.failureReason', 'Failure reason') }}</h3>
@@ -1711,9 +1697,42 @@ export default {
                               <p>{{ selected.waitingReason }}</p>
                               <small class="work-center-muted">{{ tr('workCenter.answerWithTarget', 'Choose the relevant target in the Conversation composer, then reply.') }}</small>
                             </div>
-                            <section class="work-center-section work-center-description">
-                              <h3>{{ tr('workCenter.description', 'Description') }}</h3>
-                              <p>{{ selected.goal }}</p>
+                            <WorkCenterResourceControl v-if="selected.executionControl" :key="agentId + '::' + selected.id"
+                              :class="{ 'work-center-resources-priority': !!selected.executionControl.stopReason }"
+                              :item="selected" :agent-id="agentId" :disabled="detailLoading || !!detailError || detail?.id !== selected.id" />
+                            <section v-if="finalResponses.length" class="work-center-section work-center-responses work-center-primary-result">
+                              <h3>{{ tr('workCenter.deliveredResponse', 'Delivered response') }}</h3>
+                              <div v-for="(response, index) in finalResponses" :key="response.runId || index" class="work-center-response">
+                                <p class="work-center-response-summary">{{ response.summary }}</p>
+                                <details class="work-center-goal-evidence">
+                                  <summary>{{ tr('workCenter.responseEvidence', 'Response source and evidence') }}</summary>
+                                  <p v-if="response.runId">{{ tr('workCenter.evidenceRuns', 'Evidence Runs') }}: <code>{{ response.runId }}</code></p>
+                                  <ul class="work-center-output-list">
+                                    <li v-for="(evidence, evidenceIndex) in response.evidence || []" :key="evidenceIndex">
+                                      <span>{{ evidence.label || evidence }}<template v-if="evidence.status"> · {{ goalStatusLabel(evidence.status) }}</template></span>
+                                      <a v-if="isExternalOutput(evidence)" :href="evidence.ref" target="_blank" rel="noopener noreferrer">{{ evidence.ref }}</a>
+                                      <code v-else-if="evidence.ref">{{ evidence.ref }}</code>
+                                    </li>
+                                  </ul>
+                                </details>
+                              </div>
+                            </section>
+                            <section v-if="selected.outputs?.length" class="work-center-section work-center-outputs work-center-primary-outputs">
+                              <h3>{{ tr('workCenter.outputs', 'Outputs') }}</h3>
+                              <ul class="work-center-output-list">
+                                <li v-for="output in selected.outputs" :key="output.kind + ':' + output.ref">
+                                  <strong>{{ output.label }}</strong>
+                                  <a v-if="isExternalOutput(output)" :href="output.ref" target="_blank" rel="noopener noreferrer">{{ output.ref }}</a>
+                                  <button v-else-if="canOpenOutput(output)" type="button" class="work-center-output-file" @click="openOutput(output)"
+                                          :aria-label="$t('workCenter.openOutputFile', { name: output.label || output.ref })"><code>{{ output.ref }}</code></button>
+                                  <code v-else>{{ output.ref }}</code>
+                                </li>
+                              </ul>
+                            </section>
+                            <section v-if="boardAction(selected) && !finalResponses.length" class="work-center-section work-center-current-progress">
+                              <h3>{{ tr('workCenter.currentProgress', 'Current progress') }}</h3>
+                              <p>{{ boardAction(selected).objective || boardAction(selected).brief?.objective || actionLabel(boardAction(selected).type) }}</p>
+                              <small class="work-center-muted">{{ boardExecutorLabel(selected) }}</small>
                             </section>
                             <section v-if="goalProgress" class="work-center-section work-center-acceptance work-center-goal-progress" :aria-label="tr('workCenter.goalProgress', 'Goal progress')">
                               <h3>{{ tr('workCenter.goalProgress', 'Goal progress') }}</h3>
@@ -1749,39 +1768,33 @@ export default {
                                 </details>
                               </div>
                             </section>
-                            <section v-else-if="selected.acceptanceCriteria?.length" class="work-center-section work-center-acceptance">
-                              <h3>{{ tr('workCenter.acceptanceCriteria', 'Acceptance criteria') }}</h3>
-                              <ul><li v-for="criterion in selected.acceptanceCriteria" :key="criterion">{{ criterion }}</li></ul>
-                            </section>
-                            <section v-if="finalResponses.length" class="work-center-section work-center-responses">
-                              <h3>{{ tr('workCenter.deliveredResponse', 'Delivered response') }}</h3>
-                              <div v-for="(response, index) in finalResponses" :key="response.runId || index" class="work-center-response">
-                                <p class="work-center-response-summary">{{ response.summary }}</p>
-                                <details class="work-center-goal-evidence">
-                                  <summary>{{ tr('workCenter.responseEvidence', 'Response source and evidence') }}</summary>
-                                  <p v-if="response.runId">{{ tr('workCenter.evidenceRuns', 'Evidence Runs') }}: <code>{{ response.runId }}</code></p>
-                                  <ul class="work-center-output-list">
-                                    <li v-for="(evidence, evidenceIndex) in response.evidence || []" :key="evidenceIndex">
-                                      <span>{{ evidence.label || evidence }}<template v-if="evidence.status"> · {{ goalStatusLabel(evidence.status) }}</template></span>
-                                      <a v-if="isExternalOutput(evidence)" :href="evidence.ref" target="_blank" rel="noopener noreferrer">{{ evidence.ref }}</a>
-                                      <code v-else-if="evidence.ref">{{ evidence.ref }}</code>
-                                    </li>
-                                  </ul>
-                                </details>
+                            <details class="work-center-section work-center-progressive-section work-center-requirement-details" :open="!finalResponses.length">
+                              <summary>{{ tr('workCenter.requirementAndAcceptance', 'Requirement and acceptance') }}</summary>
+                              <section class="work-center-description">
+                                <h3>{{ tr('workCenter.description', 'Description') }}</h3>
+                                <p>{{ selected.goal }}</p>
+                              </section>
+                              <section v-if="!goalProgress && selected.acceptanceCriteria?.length" class="work-center-section work-center-acceptance">
+                                <h3>{{ tr('workCenter.acceptanceCriteria', 'Acceptance criteria') }}</h3>
+                                <ul><li v-for="criterion in selected.acceptanceCriteria" :key="criterion">{{ criterion }}</li></ul>
+                              </section>
+                            </details>
+                            <details class="work-center-section work-center-progressive-section work-center-task-information">
+                              <summary>{{ tr('workCenter.taskInformation', 'Task information and usage') }}</summary>
+                              <dl class="work-center-detail-meta">
+                                <div v-if="selected.workDir" class="work-center-meta-wide"><dt>{{ tr('workCenter.workDir', 'Working directory') }}</dt><dd :title="selected.workDir">{{ selected.workDir }}</dd></div>
+                                <div><dt>{{ tr('workCenter.created', 'Created') }}</dt><dd>{{ time(selected.createdAt) || '—' }}</dd></div>
+                                <div><dt>{{ tr('workCenter.updated', 'Updated') }}</dt><dd>{{ time(selected.updatedAt) || '—' }}</dd></div>
+                                <div v-if="!selected.workItemType && selected.planningMode === 'ai'"><dt>{{ tr('workCenter.workItemType', 'Type') }}</dt><dd>{{ tr('workCenter.planning', 'Planning') }}</dd></div>
+                              </dl>
+                              <div class="work-center-usage-summary work-center-detail-usage">
+                                <span v-if="!selected.executionControl">{{ $t('workCenter.llmRequestCount', { count: formatCount(executionStats(selected).llmRequestCount) }) }}</span>
+                                <span>{{ $t('workCenter.loopCount', { count: formatCount(executionStats(selected).loopCount) }) }}</span>
+                                <span>{{ $t('workCenter.toolCount', { count: formatCount(executionStats(selected).toolCount) }) }}</span>
+                                <span v-if="!selected.executionControl" :title="$t('workCenter.tokenBreakdown', { input: formatCount(executionStats(selected).inputTokens), output: formatCount(executionStats(selected).outputTokens), cache: formatCount((executionStats(selected).cacheReadTokens || 0) + (executionStats(selected).cacheWriteTokens || 0)) })">{{ $t('workCenter.tokenCount', { count: formatTokens(executionStats(selected).totalTokens) }) }}</span>
                               </div>
-                            </section>
-                            <section v-if="selected.outputs?.length" class="work-center-section work-center-outputs">
-                              <h3>{{ tr('workCenter.outputs', 'Outputs') }}</h3>
-                              <ul class="work-center-output-list">
-                                <li v-for="output in selected.outputs" :key="output.kind + ':' + output.ref">
-                                  <strong>{{ output.label }}</strong>
-                                  <a v-if="isExternalOutput(output)" :href="output.ref" target="_blank" rel="noopener noreferrer">{{ output.ref }}</a>
-                                  <button v-else-if="canOpenOutput(output)" type="button" class="work-center-output-file" @click="openOutput(output)"
-                                          :aria-label="$t('workCenter.openOutputFile', { name: output.label || output.ref })"><code>{{ output.ref }}</code></button>
-                                  <code v-else>{{ output.ref }}</code>
-                                </li>
-                              </ul>
-                            </section>
+                            </details>
+
                             <section v-if="selected.attachments?.length" class="work-center-section work-center-attachments">
                               <h3>{{ tr('workCenter.attachments', 'Attachments') }}</h3>
                               <div class="work-center-attachment-list">

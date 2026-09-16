@@ -1963,6 +1963,8 @@ export default {
   'workCenter.dependencies': '来源 Action',
   'workCenter.actionResult': '最新结果',
   'workCenter.currentProgress': '当前进度',
+  'workCenter.requirementAndAcceptance': '需求与验收',
+  'workCenter.taskInformation': '任务信息与用量',
   'workCenter.actionMessages': '消息',
   'workCenter.loops': '个 Loop',
   'workCenter.tools': '次工具调用',
