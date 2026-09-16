@@ -21,6 +21,7 @@ export default {
     toolInput: { type: Object, default: null },
     toolResult: { default: null },
     hasResult: { type: Boolean, default: false },
+    isError: { type: Boolean, default: false },
     compact: { type: Boolean, default: false },
     startTime: { type: Number, default: 0 },
     expanded: { type: Boolean, default: null }
@@ -28,10 +29,11 @@ export default {
   emits: ['update:expanded'],
   template: `
     <div>
-      <div class="tool-line" :class="{ expandable: hasExpandableContent, expanded: isExpanded, completed: hasResult, running: !hasResult }" @click="toggle">
+      <div class="tool-line" :class="{ expandable: hasExpandableContent, expanded: isExpanded, completed: hasResult && !isError, error: isError, running: !hasResult && !isError }" @click="toggle">
         <span class="tool-line-icon">{{ getToolIcon(toolName) }}</span>
         <span class="tool-line-text">{{ getToolOneLine(toolName, toolInput) }}</span>
-        <span class="tool-line-status completed" v-if="hasResult">\u2713</span>
+        <span class="tool-line-status error" v-if="isError">\u2715</span>
+        <span class="tool-line-status completed" v-else-if="hasResult">\u2713</span>
         <span class="tool-line-status running" v-else><span class="tool-dots"><span></span><span></span><span></span></span></span>
         <span class="tool-line-time" v-if="formattedTime">{{ formattedTime }}</span>
         <span class="tool-line-toggle" v-if="hasExpandableContent" @click.stop="toggle">
@@ -154,6 +156,7 @@ export default {
 
     const getToolOneLine = (toolName, input) => {
       if (!input) return toolName;
+      if (input.displayResource) return `${toolName} ${input.displayResource}`;
       if (toolName === 'Read' && input.file_path) {
         let line = `Read ${input.file_path}`;
         if (input.offset || input.limit) {

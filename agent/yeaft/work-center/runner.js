@@ -30,6 +30,7 @@ import {
 import {
   appendCheckpointToolEvent,
   renderActionResumeBlock,
+  settleCheckpointToolEvents,
 } from './action-checkpoint.js';
 import { createSkillManager } from '../skills.js';
 import { loadMCPConfig } from '../config.js';
@@ -1303,6 +1304,7 @@ export class WorkItemRunner {
     let checkpoint = null;
     let terminalEngineError = null;
     const toolInputs = new Map();
+    const toolStartedAt = new Map();
     const usageStats = {
       llmRequestCount: 0,
       inputTokens: 0,
@@ -1318,6 +1320,14 @@ export class WorkItemRunner {
       ...executionStats(),
       checkpoint,
     });
+    const settleOpenTools = (status = 'error') => {
+      const settled = settleCheckpointToolEvents(checkpoint, status);
+      const changed = settled !== checkpoint;
+      checkpoint = settled;
+      toolInputs.clear();
+      toolStartedAt.clear();
+      return changed;
+    };
     const reportProgress = (force = false) => {
       if (typeof onProgress !== 'function') return;
       const now = Date.now();
@@ -1472,16 +1482,33 @@ export class WorkItemRunner {
             response: publicWorkItemResponse(event.response),
           });
         }
-        else if (event?.type === 'tool_start') toolInputs.set(event.id, event.input);
+        else if (event?.type === 'tool_start') {
+          const startedAt = Date.now();
+          toolInputs.set(event.id, event.input);
+          toolStartedAt.set(event.id, startedAt);
+          checkpoint = appendCheckpointToolEvent(checkpoint, {
+            id: event.id,
+            name: event.name,
+            status: 'running',
+            resource: checkpointResource(event.name, event.input, workDir),
+            startedAt,
+          });
+          reportProgress(true);
+        }
         else if (event?.type === 'tool_end') {
           toolCount += 1;
           const input = toolInputs.get(event.id);
           toolInputs.delete(event.id);
+          const startedAt = toolStartedAt.get(event.id);
+          toolStartedAt.delete(event.id);
           checkpoint = appendCheckpointToolEvent(checkpoint, {
+            id: event.id,
             name: event.name,
             status: event.isError ? 'error' : 'completed',
             resource: checkpointResource(event.name, input, workDir),
+            startedAt,
           });
+          reportProgress(true);
         }
         else if (event?.type === 'error' && !terminalEngineError) {
           terminalEngineError = event.error instanceof Error
@@ -1523,11 +1550,13 @@ export class WorkItemRunner {
         throw stopped;
       }
     } catch (error) {
+      if (settleOpenTools('error')) reportProgress(true);
       error.workItemExecutionStats = currentProgress();
       throw error;
     } finally {
       try { engine.abort?.('work_item_run_finished'); } catch {}
     }
+    settleOpenTools('error');
     const response = publicWorkItemResponse(text);
     reportProgress(true);
     const submittedPlan = !replanToolEnabled ? planCollector.value : null;

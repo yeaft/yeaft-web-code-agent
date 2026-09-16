@@ -1,4 +1,5 @@
 const MAX_TOOL_EVENTS = 16;
+const MAX_TOOL_ID_LENGTH = 256;
 const MAX_TOOL_NAME_LENGTH = 80;
 const MAX_RESOURCE_LENGTH = 240;
 const MAX_RESPONSE_LENGTH = 4_000;
@@ -9,27 +10,33 @@ function boundedString(value, maxLength) {
 }
 
 function safeResource(value) {
-  const resource = boundedString(value, MAX_RESOURCE_LENGTH);
-  if (!resource) return '';
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) return '';
+  const looksLikeHttpUrl = /^https?:/i.test(raw);
   try {
-    const url = new URL(resource);
+    const url = new URL(raw);
     if (['http:', 'https:'].includes(url.protocol)) {
       return `${url.protocol}//${url.host}${url.pathname}`.slice(0, MAX_RESOURCE_LENGTH);
     }
-  } catch {}
-  return resource;
+    if (looksLikeHttpUrl) return '';
+  } catch {
+    if (looksLikeHttpUrl) return '';
+  }
+  return raw.slice(0, MAX_RESOURCE_LENGTH);
 }
 
 function normalizeToolEvent(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const name = boundedString(value.name, MAX_TOOL_NAME_LENGTH);
   if (!name) return null;
-  const event = {
-    name,
-    status: value.status === 'error' ? 'error' : 'completed',
-  };
+  const status = ['running', 'error'].includes(value.status) ? value.status : 'completed';
+  const event = { name, status };
+  const id = boundedString(value.id, MAX_TOOL_ID_LENGTH);
+  if (id) event.id = id;
   const resource = safeResource(value.resource);
   if (resource) event.resource = resource;
+  const startedAt = Number(value.startedAt);
+  if (Number.isFinite(startedAt) && startedAt > 0) event.startedAt = startedAt;
   return event;
 }
 
@@ -48,9 +55,25 @@ export function normalizeActionCheckpoint(value) {
 
 export function appendCheckpointToolEvent(checkpoint, event) {
   const current = normalizeActionCheckpoint(checkpoint) || { version: 1, toolEvents: [] };
+  const normalized = normalizeToolEvent(event);
+  if (!normalized) return current;
+  const toolEvents = normalized.id
+    ? current.toolEvents.filter(item => item.id !== normalized.id)
+    : current.toolEvents;
   return normalizeActionCheckpoint({
     ...current,
-    toolEvents: [...current.toolEvents, event],
+    toolEvents: [...toolEvents, normalized],
+  });
+}
+
+export function settleCheckpointToolEvents(checkpoint, status = 'error') {
+  const current = normalizeActionCheckpoint(checkpoint);
+  if (!current?.toolEvents.some(event => event.status === 'running')) return current;
+  return normalizeActionCheckpoint({
+    ...current,
+    toolEvents: current.toolEvents.map(event => (
+      event.status === 'running' ? { ...event, status } : event
+    )),
   });
 }
 
