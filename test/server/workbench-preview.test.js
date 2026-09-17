@@ -148,7 +148,8 @@ describe('streaming Workbench video URLs', () => {
       'content-length': String(1048579),
       'content-disposition': 'inline; filename="video.mp4"',
     });
-    expect(response.body).toEqual(videoBytes.subarray(3, 1048582));
+    expect(Buffer.isBuffer(response.body)).toBe(true);
+    expect(response.body.equals(videoBytes.subarray(3, 1048582))).toBe(true);
     expect(state.previewFiles.size).toBe(0);
   });
 
@@ -166,7 +167,8 @@ describe('streaming Workbench video URLs', () => {
     const response = await responsePromise;
     expect(response.status).toBe(200);
     expect(response.headers['content-disposition']).toBe('attachment; filename="video.mp4"');
-    expect(response.body).toEqual(videoBytes);
+    expect(Buffer.isBuffer(response.body)).toBe(true);
+    expect(response.body.equals(videoBytes)).toBe(true);
     expect(state.outbound.map(msg => msg.end - msg.start + 1))
       .toEqual([WORKBENCH_VIDEO_CHUNK_BYTES, WORKBENCH_VIDEO_CHUNK_BYTES, 17]);
   }, 20000);

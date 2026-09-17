@@ -1600,7 +1600,10 @@
   color: var(--text-primary);
   overflow: hidden;
   box-shadow: var(--modal-shadow);
+  color-scheme: light;
 }
+
+[data-theme="dark"] .workdir-picker .folder-picker-dialog { color-scheme: dark; }
 
 .workdir-picker .folder-picker-header {
   flex: 0 0 auto;
@@ -1687,24 +1690,23 @@
 }
 
 .workdir-picker .folder-picker-navigation { margin-top: 8px; gap: 2px; }
-.workdir-picker .folder-picker-root { padding: 6px 8px; font-size: 12px; }
 .workdir-picker .folder-picker-breadcrumbs {
   flex: 1;
   overflow-x: auto;
-  gap: 2px;
+  gap: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
   color: var(--text-muted);
-  scrollbar-width: thin;
 }
 .workdir-picker .folder-picker-breadcrumbs > * { flex-shrink: 0; }
+/* Read as a normal path, not padded chips. Keep the full-height hit targets. */
 .workdir-picker .folder-picker-breadcrumbs .btn {
-  min-width: 28px;
-  max-width: 180px;
-  padding: 6px;
+  min-width: 0;
+  padding: 6px 0;
+  border: 0;
   display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: inherit;
   font-weight: 400;
 }
 .workdir-picker .folder-picker-breadcrumbs [aria-current] {
@@ -1721,8 +1723,19 @@
   background: transparent;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
 }
+
+/* `thin` alone lets Chromium use a light native scrollbar in dark mode and
+   overrides the global WebKit styling. Match the workbench file-tree palette. */
+.workdir-picker .folder-picker-list,
+.workdir-picker .folder-picker-breadcrumbs {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) transparent;
+}
+.workdir-picker :is(.folder-picker-list, .folder-picker-breadcrumbs)::-webkit-scrollbar { width: 8px; height: 8px; }
+.workdir-picker :is(.folder-picker-list, .folder-picker-breadcrumbs)::-webkit-scrollbar-track { background: transparent; }
+.workdir-picker :is(.folder-picker-list, .folder-picker-breadcrumbs)::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
+.workdir-picker :is(.folder-picker-list, .folder-picker-breadcrumbs)::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 .workdir-picker .folder-picker-item {
   display: flex;
@@ -1782,7 +1795,5 @@
   .workdir-picker .folder-picker-icon,
   .workdir-picker .folder-picker-address .folder-picker-icon { width: 44px; height: 44px; }
   .workdir-picker .folder-picker-input { height: 44px; font-size: 16px; }
-  .workdir-picker .folder-picker-navigation { flex-wrap: wrap; }
-  .workdir-picker .folder-picker-breadcrumbs { flex-basis: 100%; }
   .workdir-picker .folder-picker-footer > div > button { flex: 1; }
 }
