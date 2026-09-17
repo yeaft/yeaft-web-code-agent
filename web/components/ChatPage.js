@@ -1,3 +1,5 @@
+import { folderPickerData, folderPickerMethods, folderPickerComputed } from './mixins/folder-picker-mixin.js';
+import FolderPickerDialog from './FolderPickerDialog.js';
 import { alertDialog, confirmDialog } from '../utils/dialog.js';
 import ChatHeader from './ChatHeader.js';
 import MessageList from './MessageList.js';
@@ -25,7 +27,7 @@ import { collapseSidebar } from '../utils/sidebar-collapse.js';
 
 export default {
   name: 'ChatPage',
-  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, WorkCenterPage, SettingsPanel, AgentSettingsPanel, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarModeToggle, SidebarAgentHeader, SidebarWorkCenter, SessionSidebarShell, UnifiedSessionList, SessionCreateModal },
+  components: { FolderPickerDialog, ChatHeader, MessageList, ChatInput, WorkbenchPanel, WorkCenterPage, SettingsPanel, AgentSettingsPanel, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarModeToggle, SidebarAgentHeader, SidebarWorkCenter, SessionSidebarShell, UnifiedSessionList, SessionCreateModal },
   template: `
     <div class="chat-page" :class="{ 'show-sidebar': store.sessionSidebarOpen }">
 
@@ -456,40 +458,9 @@ export default {
       <!-- Settings Panel -->
 
       <!-- Folder Picker Dialog -->
-      <div class="folder-picker-overlay" v-if="folderPickerOpen" @click.self="closeFolderPicker">
-        <div class="folder-picker-dialog">
-          <div class="folder-picker-header">
-            <span>{{ $t('modal.folderPicker.title') }}</span>
-            <button class="wb-btn-sm" @click="closeFolderPicker">&times;</button>
-          </div>
-          <div class="folder-picker-path">
-            <button class="wb-btn-sm" @click="folderPickerNavigateUp" :disabled="!folderPickerPath" :title="$t('modal.folderPicker.parentDir')">
-              <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
-            </button>
-            <span class="folder-picker-current">{{ folderPickerPath || $t('common.rootDir') }}</span>
-          </div>
-          <div class="folder-picker-list">
-            <div class="git-loading" v-if="folderPickerLoading" style="padding:12px"><span class="spinner-mini"></span> {{ $t('common.loading') }}</div>
-            <template v-else>
-              <div
-                v-for="entry in folderPickerEntries"
-                :key="entry.name"
-                class="tree-item tree-dir folder-picker-item"
-                :class="{ 'folder-picker-selected': folderPickerSelected === entry.name }"
-                @click="folderPickerSelectItem(entry)"
-                @dblclick="folderPickerEnter(entry)"
-              >
-                <span class="tree-icon"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg></span>
-                <span class="tree-name">{{ entry.name }}</span>
-              </div>
-              <div class="tree-empty" v-if="folderPickerEntries.length === 0">{{ $t('common.noSubdirectories') }}</div>
-            </template>
-          </div>
-          <div class="folder-picker-footer">
-            <button class="modern-btn primary" @click="confirmFolderPicker" :disabled="!folderPickerPath">{{ $t('common.confirm') }}</button>
-          </div>
-        </div>
-      </div>
+        <FolderPickerDialog v-if="folderPickerOpen" :state="folderPickerState"
+          @navigate="loadFolderPickerDir" @edit-path="folderPickerEditPath"
+          @confirm="confirmFolderPicker" @close="closeFolderPicker" />
     </div>
   `,
   data() {
@@ -510,14 +481,7 @@ export default {
       historyLoaded: false,
       windowWidth: window.innerWidth,
       // Folder picker state
-      folderPickerOpen: false,
-      folderPickerPath: '',
-      folderPickerEntries: [],
-      folderPickerLoading: false,
-      folderPickerSelected: '',
-      folderPickerTarget: '', // 'convModal'
-      _folderPickerRequestId: null,
-      _folderPickerRequestAgentId: null,
+      ...folderPickerData(),
       serverVersion: '',
       chatGroupCollapsed: false,
       sidebarTab: 'chat',
@@ -528,6 +492,9 @@ export default {
     };
   },
   computed: {
+    ...folderPickerComputed,
+    chat() { return this.store; },
+    folderPickerAgentId() { return this.convModalAgent; },
     store() {
       return Pinia.useChatStore();
     },
@@ -982,151 +949,21 @@ export default {
       const failed = results.filter(result => result.status === 'failed').length;
       alertDialog(this.$t('chat.agent.upgradeAllSummary', { upgraded, latest, failed, skipped: batch?.skippedCount || 0 }));
     },
-    // Folder picker methods
-    closeFolderPicker() {
-      this.folderPickerOpen = false;
-      this._folderPickerRequestId = null;
-      this._folderPickerRequestAgentId = null;
-      if (this._folderPickerTimer) {
-        clearTimeout(this._folderPickerTimer);
-        this._folderPickerTimer = null;
-      }
+    ...folderPickerMethods,
+    folderPickerInitialDir() {
+      return this.convModalWorkDir || this.store.agents.find(a => a.id === this.convModalAgent)?.workDir || '';
     },
-    openFolderPicker(target) {
-      const agentId = this.convModalAgent;
-      if (!agentId) return;
-      this.folderPickerTarget = target;
-      this.folderPickerOpen = true;
-      this.folderPickerSelected = '';
-      this.folderPickerLoading = true;
-      const currentWorkDir = this.convModalWorkDir;
-      const agent = this.store.agents.find(a => a.id === agentId);
-      const defaultDir = currentWorkDir || agent?.workDir || '';
-      this.folderPickerPath = defaultDir;
-      this.folderPickerEntries = [];
-      const requestId = `folder-picker-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      this._folderPickerRequestId = requestId;
-      this._folderPickerRequestAgentId = agentId;
-      const sendRequest = () => {
-        this.store.sendWsMessage({
-          type: 'list_directory',
-          conversationId: '_workdir_picker',
-          directoryPickerScope: 'agent',
-          requestId,
-          agentId,
-          dirPath: defaultDir,
-        });
-      };
-      sendRequest();
-      if (this._folderPickerTimer) clearTimeout(this._folderPickerTimer);
-      this._folderPickerTimer = setTimeout(() => {
-        if (this.folderPickerLoading && this.folderPickerOpen) {
-          console.log('[FolderPicker] Retrying initial directory request for:', defaultDir);
-          sendRequest();
-        }
-      }, 5000);
-    },
-    loadFolderPickerDir(dirPath) {
-      const agentId = this.convModalAgent;
-      if (!agentId) return;
-      this.folderPickerLoading = true;
-      this.folderPickerSelected = '';
-      this.folderPickerEntries = [];
-      const requestId = `folder-picker-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      this._folderPickerRequestId = requestId;
-      this._folderPickerRequestAgentId = agentId;
-      const sendRequest = () => {
-        this.store.sendWsMessage({
-          type: 'list_directory',
-          conversationId: '_workdir_picker',
-          directoryPickerScope: 'agent',
-          requestId,
-          agentId,
-          dirPath,
-        });
-      };
-      sendRequest();
-      // Retry once if no response within 5 seconds
-      if (this._folderPickerTimer) clearTimeout(this._folderPickerTimer);
-      this._folderPickerTimer = setTimeout(() => {
-        if (this.folderPickerLoading && this.folderPickerOpen) {
-          console.log('[FolderPicker] Retrying directory request for:', dirPath);
-          sendRequest();
-        }
-      }, 5000);
-    },
-    folderPickerNavigateUp() {
-      if (!this.folderPickerPath) return;
-      const isWin = this.folderPickerPath.includes('\\');
-      const sep = isWin ? '\\' : '/';
-      const parts = this.folderPickerPath.replace(/[/\\]$/, '').split(/[/\\]/);
-      parts.pop();
-      if (parts.length === 0) {
-        this.folderPickerPath = '';
-        this.loadFolderPickerDir('');
-      } else if (isWin && parts.length === 1 && /^[A-Za-z]:$/.test(parts[0])) {
-        this.folderPickerPath = parts[0] + '\\';
-        this.loadFolderPickerDir(parts[0] + '\\');
-      } else {
-        const parent = parts.join(sep);
-        this.folderPickerPath = parent;
-        this.loadFolderPickerDir(parent);
-      }
-    },
-    folderPickerSelectItem(entry) {
-      this.folderPickerSelected = entry.name;
-    },
-    folderPickerEnter(entry) {
-      const isWin = this.folderPickerPath.includes('\\') || /^[A-Z]:/.test(entry.name);
-      const sep = isWin ? '\\' : '/';
-      let newPath;
-      if (!this.folderPickerPath) {
-        // At root level: Windows drive (C:) or Unix root (/)
-        if (/^[A-Z]:$/.test(entry.name)) {
-          newPath = entry.name + '\\';
-        } else {
-          newPath = '/' + entry.name;
-        }
-      } else {
-        newPath = this.folderPickerPath.replace(/[/\\]$/, '') + sep + entry.name;
-      }
-      this.folderPickerPath = newPath;
-      this.loadFolderPickerDir(newPath);
-    },
-    confirmFolderPicker() {
-      let path = this.folderPickerPath;
-      if (!path) return;
-      if (this.folderPickerSelected) {
-        const sep = path.includes('\\') ? '\\' : '/';
-        path = path.replace(/[/\\]$/, '') + sep + this.folderPickerSelected;
-      }
+    folderPickerSetWorkDir(path) {
       this.convModalWorkDir = path;
       this.selectedResumeSession = null;
       if (this.convModalAgent) {
         this.store.listHistorySessionsForAgent(this.convModalAgent, path, this.convModalProvider);
         this.historyLoaded = true;
       }
-      this.closeFolderPicker();
     },
-    handleFolderPickerMessage(event) {
-      const msg = event.detail;
-      if (!msg || msg.type !== 'directory_listing' || msg.conversationId !== '_workdir_picker') return;
-      if (!this.folderPickerOpen
-          || !this._folderPickerRequestId
-          || msg.requestId !== this._folderPickerRequestId
-          || this.convModalAgent !== this._folderPickerRequestAgentId) return;
-      if (this._folderPickerTimer) {
-        clearTimeout(this._folderPickerTimer);
-        this._folderPickerTimer = null;
-      }
-      this._folderPickerRequestId = null;
-      this._folderPickerRequestAgentId = null;
-      this.folderPickerLoading = false;
-      this.folderPickerEntries = (msg.entries || [])
-        .filter(e => e.type === 'directory')
-        .sort((a, b) => a.name.localeCompare(b.name));
-      if (msg.dirPath != null) this.folderPickerPath = msg.dirPath;
-    }
+  },
+  watch: {
+    folderPickerAgentId() { this.closeFolderPicker(); },
   },
   mounted() {
     if (this.store.openUnifiedChatCreate) {
@@ -1181,6 +1018,6 @@ export default {
     window.removeEventListener('workbench-message', this.handleFolderPickerMessage);
     window.removeEventListener('agent-upgrade-ack', this._agentUpgradeAckHandler);
     window.removeEventListener('agent-upgrade-batch-complete', this._agentUpgradeBatchHandler);
-    if (this._folderPickerTimer) clearTimeout(this._folderPickerTimer);
+    this.invalidateFolderPickerRequest();
   }
 };

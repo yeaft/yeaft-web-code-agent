@@ -1,3 +1,4 @@
+import FolderPickerDialog from './FolderPickerDialog.js';
 /**
  * SessionCreateModal — chat-style "new session" modal.
  *
@@ -32,7 +33,7 @@ import VpAvatar from './VpAvatar.js';
 import ModernSelect from './ModernSelect.js';
 import { getLastPathSegment, formatResumeDate } from '../utils/path-segments.js';
 import { buildVpDomainSections } from '../utils/vp-domains.js';
-import { folderPickerData, folderPickerMethods } from './mixins/folder-picker-mixin.js';
+import { folderPickerData, folderPickerMethods, folderPickerComputed } from './mixins/folder-picker-mixin.js';
 
 const OMNI_VP_ID = 'omni';
 
@@ -72,7 +73,7 @@ export function resolveVpRosterPopupLayout(anchorRect, boundaryRect, viewportRec
 
 export default {
   name: 'SessionCreateModal',
-  components: { VpAvatar, ModernSelect },
+  components: { FolderPickerDialog, VpAvatar, ModernSelect },
   props: {
     initialProvider: { type: String, default: 'yeaft' },
     initialAgentId: { type: String, default: null },
@@ -333,40 +334,9 @@ export default {
         </div>
 
         <!-- Folder picker -->
-        <div class="folder-picker-overlay yeaft-folder-picker-overlay" v-if="folderPickerOpen" @click.self="closeFolderPicker">
-          <div class="folder-picker-dialog yeaft-folder-picker-dialog">
-            <div class="folder-picker-header">
-              <span>{{ $t('modal.folderPicker.title') }}</span>
-              <button class="wb-btn-sm" type="button" @click="closeFolderPicker">&times;</button>
-            </div>
-            <div class="folder-picker-path">
-              <button class="wb-btn-sm" type="button" @click="folderPickerNavigateUp" :disabled="!folderPickerPath" :title="$t('modal.folderPicker.parentDir')">
-                <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
-              </button>
-              <span class="folder-picker-current">{{ folderPickerPath || $t('common.rootDir') }}</span>
-            </div>
-            <div class="folder-picker-list">
-              <div class="git-loading" v-if="folderPickerLoading" style="padding:12px"><span class="spinner-mini"></span> {{ $t('common.loading') }}</div>
-              <template v-else>
-                <div
-                  v-for="entry in folderPickerEntries"
-                  :key="entry.name"
-                  class="tree-item tree-dir folder-picker-item"
-                  :class="{ 'folder-picker-selected': folderPickerSelected === entry.name }"
-                  @click="folderPickerSelectItem(entry)"
-                  @dblclick="folderPickerEnter(entry)"
-                >
-                  <span class="tree-icon"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg></span>
-                  <span class="tree-name">{{ entry.name }}</span>
-                </div>
-                <div class="tree-empty" v-if="folderPickerEntries.length === 0">{{ $t('common.noSubdirectories') }}</div>
-              </template>
-            </div>
-            <div class="folder-picker-footer">
-              <button class="modern-btn primary" type="button" @click="confirmFolderPicker" :disabled="!folderPickerPath">{{ $t('common.confirm') }}</button>
-            </div>
-          </div>
-        </div>
+        <FolderPickerDialog v-if="folderPickerOpen" :state="folderPickerState"
+          @navigate="loadFolderPickerDir" @edit-path="folderPickerEditPath"
+          @confirm="confirmFolderPicker" @close="closeFolderPicker" />
       </div>
     </div>
     </Teleport>
@@ -419,6 +389,7 @@ export default {
     };
   },
   computed: {
+    ...folderPickerComputed,
     chat() {
       try {
         if (typeof window !== 'undefined' && window.Pinia?.useChatStore) return window.Pinia.useChatStore();
@@ -614,6 +585,7 @@ export default {
     this.applyDefaultSelection();
   },
   watch: {
+    folderPickerAgentId() { this.closeFolderPicker(); },
     // Re-apply default selection once vpList hydrates after mount.
     // Watch the VP identity signature, not only length: switching agents can
     // return the same number of VPs in a different library. The create UI must
@@ -697,7 +669,7 @@ export default {
     window.removeEventListener('workbench-message', this.handleFolderPickerMessage);
     document.removeEventListener('click', this.handleOutsideRosterClick, true);
     if (this._vpRosterLayoutFrame) cancelAnimationFrame(this._vpRosterLayoutFrame);
-    if (this._folderPickerTimer) clearTimeout(this._folderPickerTimer);
+    this.invalidateFolderPickerRequest();
     if (this.vpSnapshotTimer) clearTimeout(this.vpSnapshotTimer);
   },
   methods: {

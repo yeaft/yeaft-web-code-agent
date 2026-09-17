@@ -1,3 +1,4 @@
+import FolderPickerDialog from './FolderPickerDialog.js';
 import NavigationIcon from './NavigationIcon.js';
 import { formatElapsed } from '../stores/helpers/turn-timing.js';
 import { confirmDialog } from '../utils/dialog.js';
@@ -39,7 +40,7 @@ function invalidateWorkCenterUrlRestore(target) {
 
 export default {
   name: 'WorkCenterPage',
-  components: { NavigationIcon,
+  components: { FolderPickerDialog, NavigationIcon,
     MessageComposer, UserTurnBlock, VpTurnBlock, WorkCenterActionDetail, WorkCenterActionReference,
     WorkCenterSettingsModal, AgentSettingsPanel, ModernSelect, WorkCenterResourceControl, WorkbenchPanel, PaneResizeHandle, WorkCenterSidebar,
   },
@@ -2379,50 +2380,9 @@ export default {
             </button>
           </footer>
 
-          <div class="work-center-directory-overlay" v-if="folderPickerOpen" @click.self="closeFolderPicker">
-            <div class="work-center-directory-dialog" role="dialog" aria-modal="true" aria-labelledby="work-center-directory-title">
-              <header class="work-center-directory-header">
-                <div>
-                  <h3 id="work-center-directory-title">{{ tr('modal.folderPicker.title', 'Select work directory') }}</h3>
-                  <p>{{ tr('workCenter.folderPickerHint', 'Choose the project folder this Work Item can read and modify.') }}</p>
-                </div>
-                <button class="modal-close" type="button" @click="closeFolderPicker" :aria-label="tr('common.close', 'Close')">×</button>
-              </header>
-              <div class="work-center-directory-path">
-                <button class="btn-ghost work-center-directory-up" type="button" @click="folderPickerNavigateUp" :disabled="!folderPickerPath" :aria-label="tr('modal.folderPicker.parentDir', 'Parent directory')">
-                  <NavigationIcon name="back" :size="16" />
-                </button>
-                <span class="work-center-directory-current" :title="folderPickerPath">{{ folderPickerPath || tr('common.rootDir', 'Root') }}</span>
-              </div>
-              <div class="work-center-directory-list" role="listbox" :aria-busy="folderPickerLoading">
-                <div class="work-center-directory-state" v-if="folderPickerLoading"><span class="spinner-mini"></span><span>{{ tr('common.loading', 'Loading') }}</span></div>
-                <template v-else>
-                  <button
-                    v-for="entry in folderPickerEntries"
-                    :key="entry.name"
-                    class="work-center-directory-item"
-                    :class="{ selected: folderPickerSelected === entry.name }"
-                    type="button"
-                    role="option"
-                    :aria-selected="folderPickerSelected === entry.name"
-                    @click="folderPickerSelectItem(entry)"
-                    @dblclick="folderPickerEnter(entry)"
-                  >
-                    <span class="work-center-directory-icon"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2Z"/></svg></span>
-                    <span>{{ entry.name }}</span>
-                  </button>
-                  <div class="work-center-directory-state" v-if="folderPickerEntries.length === 0">{{ tr('common.noSubdirectories', 'No subdirectories') }}</div>
-                </template>
-              </div>
-              <footer class="work-center-directory-footer">
-                <span>{{ tr('workCenter.folderPickerSelectionHint', 'Double-click to open a folder, or select it and confirm.') }}</span>
-                <div>
-                  <button class="btn-secondary" type="button" @click="closeFolderPicker">{{ tr('common.cancel', 'Cancel') }}</button>
-                  <button class="btn-primary" type="button" @click="confirmFolderPicker" :disabled="!folderPickerPath">{{ tr('common.confirm', 'Confirm') }}</button>
-                </div>
-              </footer>
-            </div>
-          </div>
+        <FolderPickerDialog v-if="folderPickerOpen" :state="folderPickerState"
+          @navigate="loadFolderPickerDir" @edit-path="folderPickerEditPath"
+          @confirm="confirmFolderPicker" @close="closeFolderPicker" />
         </form>
       </div>
   `,

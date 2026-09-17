@@ -1,3 +1,5 @@
+import FolderPickerDialog from './FolderPickerDialog.js';
+import folderPickerMixin from './mixins/folder-picker-mixin.js';
 /**
  * SessionSettingsModal — unified left-nav / right-pane settings dialog.
  *
@@ -40,6 +42,8 @@ function normalizeSettingsSection(section) {
 
 export default {
   name: 'SessionSettingsModal',
+  components: { FolderPickerDialog },
+  mixins: [folderPickerMixin],
   emits: ['close', 'open-vp-library'],
   props: {
     groupId: { type: String, required: true },
@@ -77,6 +81,10 @@ export default {
     };
   },
   computed: {
+    folderPickerAgentId() { return this.targetAgentId; },
+    defaultWorkDir() {
+      return this.chat?.agents?.find(agent => agent.id === this.targetAgentId)?.workDir || '';
+    },
     chat() {
       try { return window.Pinia?.useChatStore?.() || null; } catch (_) { return null; }
     },
@@ -221,12 +229,14 @@ export default {
     window.removeEventListener('keydown', this.onEsc);
   },
   methods: {
+    folderPickerInitialDir() { return this.workDirDraft || this.workDir || this.defaultWorkDir; },
+    folderPickerSetWorkDir(path) { this.workDirDraft = path; },
     trackOverlayPointerDown,
     trackOverlayPointerUp,
     clearOverlayPointerGesture,
 
     onEsc(e) {
-      if (e.key !== 'Escape') return;
+      if (e.key !== 'Escape' || this.folderPickerOpen) return;
       // Don't close mid-busy operation.
       if (this.announcementBusy || this.renameBusy || this.workDirBusy || this.membersBusy || this.deleteBusy) return;
       this.requestClose();
@@ -477,6 +487,7 @@ export default {
                 />
                 <p v-if="workDirError" class="group-settings-error" role="alert">{{ workDirError }}</p>
                 <div class="group-settings-actions">
+                  <button class="btn-secondary" type="button" @click="openFolderPicker" :disabled="workDirBusy || !folderPickerAgentId">{{ $t('modal.newConv.browse') }}</button>
                   <button
                     type="button"
                     class="group-settings-primary"
@@ -633,6 +644,9 @@ export default {
         </div>
       </div>
     </div>
+      <FolderPickerDialog v-if="folderPickerOpen" :state="folderPickerState"
+          @navigate="loadFolderPickerDir" @edit-path="folderPickerEditPath"
+          @confirm="confirmFolderPicker" @close="closeFolderPicker" />
     </Teleport>
   `,
 };

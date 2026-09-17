@@ -586,6 +586,16 @@ export default {
   'modal.resume.selectAgent': 'Please select an online Agent first',
 
   'modal.folderPicker.title': 'Select Work Directory',
+  'modal.folderPicker.root': 'Root / drives',
+  'modal.folderPicker.path': 'Directory path',
+  'modal.folderPicker.go': 'Go',
+  'modal.folderPicker.ancestors': 'Directory ancestors',
+  'modal.folderPicker.directories': 'Subdirectories',
+  'modal.folderPicker.navigationHint': 'Click a folder to open it, then select the current directory.',
+  'modal.folderPicker.selectCurrent': 'Select this directory',
+  'modal.folderPicker.loadFailed': 'Cannot open this directory. Check the path and permissions, or retry.',
+  'modal.folderPicker.unavailable': 'Agent unavailable. Reconnect and retry.',
+  'modal.folderPicker.timeout': 'Directory request timed out. Please retry.',
   'modal.folderPicker.parentDir': 'Parent Directory',
 
   // ============ Welcome Screen ============
