@@ -69,6 +69,12 @@ The CLI uses a separate OAuth token from the IDE plugin. Run `copilot auth login
 
 ## Yeaft Code Agent
 
+### Does an empty Plugins page mean the Agent has no tools or Skills?
+
+Not necessarily. Earlier versions depended on an initialized native Session, so an online Agent could return an empty inventory before its native runtime started. Inventory discovery now reads built-in tools and bundled/user Skills directly. When the selected Agent matches the current Session, it also reads project Skills from that Session's working directory. You do not need to send a message first, and discovery does not start inference or connect to MCP servers.
+
+Loading, errors, and empty inventory have distinct states; an empty inventory is no longer labeled as having all available capabilities enabled. Older Agents can still return empty inventories and need an Agent-side upgrade. Zero MCP servers can be normal: Plugins lists only the Agent's own MCP configuration, not the complete runtime set merged with external user and project configurations. Plugin selections apply to the Yeaft native engine, not to Claude Code or Copilot CLI permissions.
+
 ### "No LLM provider configured" when sending a message
 
 Edit the selected Agent instance's resolved `config.json` and add at least one provider entry — see [Yeaft Engine Config](./yeaft-config.md) for paths and schema. Pick a `primaryModel` that exists in one of your `providers[].models` lists.

@@ -149,6 +149,12 @@ export default {
         !== JSON.stringify(this.normalizedSelection(this.savedSelection));
     },
     statusSummary() {
+      if (!this.agentId) return this.$t('yeaft.plugins.noAgent');
+      if (!this.agentSupportsPlugins) return this.$t('yeaft.plugins.upgradeRequired');
+      if (this.loading || this.configLoading) return this.$t('yeaft.plugins.loading');
+      const error = this.catalogRecord?.error || this.configLoadError;
+      if (error) return this.$t('yeaft.plugins.loadError', { error });
+      if (!this.hasCatalog) return this.$t('yeaft.plugins.empty');
       return this.hasExplicitSelection
         ? this.$t('yeaft.plugins.selectedSummary', { count: this.enabledCount })
         : this.$t('yeaft.plugins.allAvailable');
@@ -444,7 +450,7 @@ export default {
               <h2>{{ selectedAgent?.name || selectedAgent?.id || $t('yeaft.plugins.noAgent') }}</h2>
               <p>{{ statusSummary }}</p>
             </div>
-            <div class="plugin-center-overview-stats">
+            <div v-if="configReady && !loading && !catalogRecord?.error && hasCatalog" class="plugin-center-overview-stats">
               <span class="plugin-center-enabled-count"><strong>{{ enabledCount }}</strong> / {{ totalCount }}</span>
               <span>{{ $t('yeaft.plugins.enabledLabel') }}</span>
             </div>

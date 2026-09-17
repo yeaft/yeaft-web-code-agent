@@ -17,6 +17,7 @@
 
 import { delimiter, join } from 'node:path';
 import { COLLAB_TOOL_POLICY } from './tools/registry.js';
+import { createFullRegistry } from './tools/index.js';
 import { existsSync, lstatSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_YEAFT_DIR } from './init.js';
@@ -3360,9 +3361,15 @@ function resolvePluginCatalogRuntime(workDir = '') {
   const active = runtimeBelongsToOwner(runtime, owner)
     ? runtime
     : (baseRuntime && runtimeBelongsToOwner(baseRuntime, owner) ? baseRuntime : null);
+  const yeaftDir = ctx.CONFIG?.yeaftDir || session?.yeaftDir || DEFAULT_YEAFT_DIR;
+  // Inventory belongs to the Agent, not an initialized inference runtime.
+  // Read Skills afresh for the requested scope (empty means Agent-only), so a
+  // cold/unvisited project never inherits another Session's Skills. Do not boot
+  // a Session, load a provider, or connect MCP just to inspect capabilities.
   return {
-    toolRegistry: session?.toolRegistry || null,
-    skillManager: active?.skillManager || session?.skillManager || null,
+    toolRegistry: createFullRegistry(),
+    skillManager: createSkillManager(yeaftDir, normalizedWorkDir),
+    mcpConfig: loadPluginCatalogMcpConfig(yeaftDir),
     mcpManager: active?.mcpManager || session?.mcpManager || null,
   };
 }
@@ -3439,11 +3446,8 @@ function reloadManagedSkillRuntime(scope, workDir = '') {
   if (scope === 'user') reloadActiveSkills(owner);
 }
 
-function managedSkillCatalog(yeaftDir, workDir = '') {
-  const normalizedWorkDir = normalizeSessionWorkDir(workDir);
-  const runtime = resolvePluginCatalogRuntime(normalizedWorkDir);
-  const manager = createSkillManager(yeaftDir, normalizedWorkDir || process.cwd());
-  return buildPluginCatalog({ ...runtime, skillManager: manager });
+function managedSkillCatalog(workDir = '') {
+  return buildPluginCatalog(resolvePluginCatalogRuntime(workDir));
 }
 
 /**
@@ -3479,7 +3483,7 @@ export function handleYeaftManagedSkill(msg = {}) {
         ? createManagedSkill(join(yeaftDir, 'skills'), msg.skill || {})
         : removeManagedSkill(join(yeaftDir, 'skills'), msg.name));
     reloadManagedSkillRuntime(scope, managedSession?.workDir || '');
-    const catalog = managedSkillCatalog(yeaftDir, managedSession?.workDir || '');
+    const catalog = managedSkillCatalog(managedSession?.workDir || '');
     respond({ scope, sessionId: managedSession?.sessionId || null, result, catalog, error: null });
   } catch (err) {
     respond({ scope, sessionId: null, catalog: { tools: [], skills: [], skillSources: [], mcpServers: [] }, error: err?.message || String(err) });
@@ -3495,10 +3499,7 @@ export function handleYeaftPluginCatalog(msg = {}) {
   const requestId = msg.requestId || null;
   const requestedWorkDir = normalizeSessionWorkDir(msg.workDir);
   try {
-    const runtime = resolvePluginCatalogRuntime(requestedWorkDir);
-    const yeaftDir = ctx.CONFIG?.yeaftDir || session?.yeaftDir || DEFAULT_YEAFT_DIR;
-    runtime.mcpConfig = loadPluginCatalogMcpConfig(yeaftDir);
-    const catalog = buildPluginCatalog(runtime);
+    const catalog = buildPluginCatalog(resolvePluginCatalogRuntime(requestedWorkDir));
     sendToServer({
       type: 'yeaft_plugin_catalog_result',
       requestId,

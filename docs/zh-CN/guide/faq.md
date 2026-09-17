@@ -69,6 +69,12 @@ CLI 用的 OAuth token 和 IDE 插件不是同一个。在 agent 机器上跑 `c
 
 ## Yeaft Code Agent
 
+### 插件页显示工具和技能都是 0，是否表示 Agent 没有能力？
+
+不一定。旧实现依赖已初始化的原生 Session，在线但尚未启动原生运行时的 Agent 可能返回空目录。当前实现直接发现内置工具、内置及用户 Skills；所选 Agent 与当前 Session 匹配时还会读取该 Session 工作目录中的项目 Skills，不需要先发送消息，也不会为了读取目录启动推理或连接 MCP。
+
+加载中、加载失败和空目录会分别显示，不再将空目录标为“已启用全部可用能力”。旧 Agent 仍可能返回空目录，需要升级 Agent 端才能修复目录发现。MCP 数量为 0 可以是正常情况：插件页只列出该 Agent 自有的 MCP 配置，不是运行时合并外部用户及项目配置后的完整连接清单。插件选择作用于 Yeaft 原生引擎，不是 Claude Code / Copilot CLI 的统一权限设置。
+
 ### 发消息时报 "No LLM provider configured"
 
 编辑所选 Agent instance 解析出的 `config.json`，添加至少一个 provider entry；路径和 schema 见 [Yeaft 引擎配置](./yeaft-config.md)。`primaryModel` 必须存在于 `providers[].models`。
