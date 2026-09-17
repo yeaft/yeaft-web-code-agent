@@ -32,7 +32,8 @@ development without file conflicts. Useful for:
 - Parallel feature development
 
 The worktree is created in .yeaft/worktrees/ with a new branch based on HEAD.
-Returns the worktree path and branch name.`,
+Returns the worktree path and branch name. Does NOT switch the execution cwd.
+Use the returned path explicitly for Bash/GitRead cwd, file paths, and child-agent cwd.`,
     zh: `创建一个独立的 git worktree 用于开发。
 
 创建带独立分支的新 git worktree，允许并行开发无文件冲突。适用于：
@@ -40,7 +41,7 @@ Returns the worktree path and branch name.`,
 - 合并前隔离测试改动
 - 并行功能开发
 
-Worktree 创建在 .yeaft/worktrees/ 中，基于 HEAD 创建新分支。返回 worktree 路径和分支名。`
+Worktree 创建在 .yeaft/worktrees/ 中，基于 HEAD 创建新分支。返回 worktree 路径和分支名，不切换执行 cwd；后续 Bash/GitRead、文件路径及子 Agent cwd 必须显式使用返回路径。`
   },
   parameters: {
     type: 'object',
@@ -107,6 +108,9 @@ Worktree 创建在 .yeaft/worktrees/ 中，基于 HEAD 创建新分支。返回 
         branch: branchName,
         baseRef,
         name,
+        executionCwd: resolve(cwd),
+        cwdChanged: false,
+        nextStep: 'Use path explicitly as Bash/GitRead/SpawnAgent cwd or as the base for absolute file paths.',
         message: `Created worktree "${name}" at ${worktreeDir} on branch ${branchName}`,
       });
     } catch (err) {

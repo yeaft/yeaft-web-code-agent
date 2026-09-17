@@ -1666,9 +1666,9 @@ export class Engine {
     return this.#conversationStore.append(this.#conversationRecord(message, context));
   }
 
-  #persistFoldedRange(messages, startIdx, endIdx, reflection, context = {}) {
+  #persistFoldedRange(foldedMessages, reflection, context = {}) {
     if (!this.#canPersistConversation() || typeof this.#conversationStore?.foldMessages !== 'function') return null;
-    const persistedRows = (messages || []).slice(startIdx, endIdx + 1)
+    const persistedRows = (foldedMessages || [])
       .map(message => message?._persistedMessageId || message?.id)
       .filter(id => typeof id === 'string' && id)
       .map(id => ({ id }));
@@ -4101,6 +4101,10 @@ export class Engine {
               assistantText,
               language: this.#config.language,
               signal,
+              onComplete: diagnostic => this.#trace.log?.('tool_reflection', {
+                sessionId: runtimeSessionId, turnId: queryTurnId,
+                trigger: 't2', model: this.#config.model, ...diagnostic,
+              }),
             });
             // Detach: never await. The promise outlives this query() and
             // the next call will pick it up (or use the fallback stub if
@@ -4904,24 +4908,25 @@ export class Engine {
             assistantText,
             language: this.#config.language,
             signal,
+            onComplete: diagnostic => this.#trace.log?.('tool_reflection', {
+              sessionId: runtimeSessionId, turnId: queryTurnId,
+              trigger: 't1', model: this.#config.model, ...diagnostic,
+            }),
           });
-          const next = collapseRangeToReflection(
+          const { messages: next, reflection: reflectionMessage, foldedMessages } = collapseRangeToReflection(
             conversationMessages, batchStart, batchEnd, content,
           );
-          const reflectionMessage = next[batchStart];
-          const durableRowsInRange = conversationMessages
-            .slice(batchStart, batchEnd + 1)
+          const durableRowsInRange = foldedMessages
             .some(message => message?._persistedMessageId || message?.id);
           const persistedReflection = this.#persistFoldedRange(
-            conversationMessages,
-            batchStart,
-            batchEnd,
+            foldedMessages,
             reflectionMessage,
             { sessionId: runtimeSessionId, model: currentModel, executionOrigin },
           );
           if (durableRowsInRange && !persistedReflection) {
             throw new Error('T1 reflection could not publish its durable range replacement');
           }
+          if (persistedReflection?.id) reflectionMessage._persistedMessageId = persistedReflection.id;
           // Raw tool rows inside the replacement range are now tombstoned in
           // durable history. Late async completions must follow the folded
           // continuation path rather than appending to those stale rows.
@@ -4934,11 +4939,12 @@ export class Engine {
           }
           conversationMessages.length = 0;
           for (const m of next) conversationMessages.push(m);
-          // After collapse: the just-inserted reflection lives at
-          // index `batchStart`. The next tool arc therefore starts
+          // The preserved users precede the reflection. The next arc starts
           // immediately after it, i.e. at conversationMessages.length
           // (the next assistant message will land here).
           arcStartIdx = conversationMessages.length;
+          // Read hints must not imply raw ranges remain in model context.
+          fileReadObservations.clear();
           lastT1AtLoopCount = completedToolLoops;
           // Bump the success counter — used by the T2 schedule check
           // to decide whether T2 still has work to do at end_turn.
@@ -5214,15 +5220,11 @@ export class Engine {
       }
 
       // Rewrite history and publish the same logical replacement to disk.
-      const next = collapseRangeToReflection(conversationMessages, startIdx, endIdx, content);
-      const reflectionMessage = next[startIdx];
-      const durableRowsInRange = conversationMessages
-        .slice(startIdx, endIdx + 1)
+      const { messages: next, reflection: reflectionMessage, foldedMessages } = collapseRangeToReflection(conversationMessages, startIdx, endIdx, content);
+      const durableRowsInRange = foldedMessages
         .some(message => message?._persistedMessageId || message?.id);
       const persistedReflection = this.#persistFoldedRange(
-        conversationMessages,
-        startIdx,
-        endIdx,
+        foldedMessages,
         reflectionMessage,
         {
           ...context,
@@ -5231,6 +5233,7 @@ export class Engine {
         },
       );
       if (durableRowsInRange && !persistedReflection) continue;
+      if (persistedReflection?.id) reflectionMessage._persistedMessageId = persistedReflection.id;
       // T2 replaces this arc in durable and in-memory history just like T1.
       // Forget its raw result handles before a late async task can append to a
       // tombstoned tool row at the next provider boundary.

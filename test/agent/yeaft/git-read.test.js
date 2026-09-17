@@ -65,7 +65,7 @@ describe('GitRead argument construction', () => {
   });
 
   it('normalizes required-schema empty placeholders without ignoring meaningful mistakes', async () => {
-    const placeholders = { base: '', head: '', revision: '', paths: [], limit: 20 };
+    const placeholders = { cwd: '', base: '', head: '', revision: '', paths: [], limit: 20 };
     for (const operation of ['status', 'diff', 'show', 'log']) {
       expect(buildGitReadArgs({ operation, ...placeholders })).toEqual(buildGitReadArgs({ operation }));
       expect(buildGitReadArgs({ operation, base: null, head: null, revision: null, paths: null, limit: null }))
@@ -147,6 +147,8 @@ describe('GitRead execution', () => {
     expect(formatted).toContain('truncated: true');
     expect(formatted).toContain('[Output truncated by GitRead;');
     expect(formatted).not.toContain('\uFFFD');
+    const longIdentity = formatGitReadResult('log', { code: 0, stdout: 'ok' }, { resolvedCwd: '/' + '\u0001'.repeat(40_000) });
+    expect(Buffer.byteLength(longIdentity)).toBeLessThanOrEqual(MAX_RESULT_BYTES);
 
     for (const cwd of ['/' + 'x'.repeat(40_000), '/' + '\u0001\"\\改'.repeat(4000)]) {
       const failure = formatGitReadResult('log', { code: 128, stderr: 'fatal' }, { resolvedCwd: cwd });
@@ -197,6 +199,50 @@ describe('GitRead execution', () => {
     const log = await gitRead.execute({ operation: 'log', limit: 1 }, { cwd: root });
     expect(log).toContain('base commit');
     expect(log).toContain('truncated: false');
+  });
+
+  it('targets a linked worktree explicitly without reading another checkout or repository', async () => {
+    const root = createRepository();
+    const worktree = join(root, 'linked');
+    git(root, 'worktree', 'add', '-b', 'child-branch', worktree);
+    writeFileSync(join(root, 'tracked.txt'), 'MAIN ONLY\n');
+    writeFileSync(join(worktree, 'tracked.txt'), 'CHILD ONLY\n');
+    for (const cwd of [worktree, 'linked']) {
+      const output = await gitRead.execute({ operation: 'diff', cwd }, { cwd: root });
+      expect(output).toContain(`resolvedCwd: ${JSON.stringify(worktree)}`);
+      expect(output).toContain('+CHILD ONLY');
+      expect(output).not.toContain('MAIN ONLY');
+    }
+    const output = await gitRead.execute({ operation: 'status' }, { cwd: root });
+    expect(output).toContain(`resolvedCwd: ${JSON.stringify(root)}`);
+    const outside = createRepository();
+    const failure = JSON.parse(await gitRead.execute({ operation: 'log', cwd: outside }, { cwd: root }));
+    expect(failure).toMatchObject({ code: 'git_cwd_outside_repository', errorEffect: 'none', resolvedCwd: outside });
+    // A nested independent repository is not a linked worktree.
+    const nested = join(root, 'other');
+    git(root, 'clone', '--local', outside, nested);
+    expect(JSON.parse(await gitRead.execute({ operation: 'log', cwd: nested }, { cwd: root })).code)
+      .toBe('git_cwd_outside_repository');
+    expect(JSON.parse(await gitRead.execute({ operation: 'log', cwd: 'missing' }, { cwd: root })))
+      .toMatchObject({ errorEffect: 'none', stage: 'resolve_cwd' });
+    expect(buildGitReadArgs({ operation: 'status', cwd: 3 }).error).toContain('cwd must');
+    expect(buildGitReadArgs({ operation: 'status', cwd: 'a\nb' }).error).toContain('cwd must');
+  });
+
+  it('does not let inherited Git directory overrides redirect the requested evidence', async () => {
+    const root = createRepository();
+    const outside = createRepository();
+    git(outside, 'commit', '--allow-empty', '-m', 'UNRELATED REPO');
+    const previous = process.env.GIT_DIR;
+    process.env.GIT_DIR = join(outside, '.git');
+    try {
+      const output = await gitRead.execute({ operation: 'log' }, { cwd: root });
+      expect(output).toContain('base commit');
+      expect(output).not.toContain('UNRELATED REPO');
+    } finally {
+      if (previous === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = previous;
+    }
   });
 
   it.each(['clean', 'process'])('does not invoke a configured %s filter during worktree or object reads', async filter => {

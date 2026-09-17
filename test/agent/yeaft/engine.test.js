@@ -19,6 +19,8 @@ import { cleanMemoryPromptText, filterMemoryPromptTextForPrompt, filterRelatedSe
 import { makeSegment, serializeSegments } from '../../../agent/yeaft/memory/segment.js';
 import { readCanonicalContentRecord, readScope } from '../../../agent/yeaft/memory/segment-store.js';
 import { syncAll, syncScope } from '../../../agent/yeaft/memory/segment-sync.js';
+import { collapseRangeToReflection } from '../../../agent/yeaft/tool-folding/index.js';
+import { runT1Reflection } from '../../../agent/yeaft/tool-folding/t1-reflector.js';
 import { Engine, mapDebugMessage, buildResidentEntries, estimateProviderInputBreakdown, selectCanonicalMemoryScopes, selectResidentTopicScopes, selectRelatedSessionIds } from '../../../agent/yeaft/engine.js';
 import { flushAgentPerfTrace } from '../../../agent/yeaft/perf-trace.js';
 import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
@@ -3883,6 +3885,94 @@ describe('Engine', () => {
         terminal: true,
       }));
     });
+    it('identifies folded rows without swallowing users, prior reflections or control notes', () => {
+      const original = { role: 'user', content: 'original' };
+      const kept = [
+        { role: 'user', content: 'actual follow-up', id: 'user-1' },
+        { role: 'user', content: 'completion', internal: true, id: 'note-1' },
+        { role: 'user', content: 'duplicate reminder', internal: true },
+        { role: 'user', content: 'prior summary', _reflection: true },
+      ];
+      const assistant = { role: 'assistant', toolCalls: [{ id: 'a' }], id: 'assistant-1' };
+      const tool = { role: 'tool', toolCallId: 'a', id: 'tool-1' };
+      const rows = [original, assistant, ...kept, tool];
+      const replacement = collapseRangeToReflection(rows, 1, rows.length - 1, 'summary');
+      expect(replacement.foldedMessages).toEqual([assistant, tool]);
+      expect(replacement.messages).toEqual([original, ...kept, replacement.reflection]);
+      expect(replacement.reflection).toMatchObject({ _reflection: true, content: expect.stringContaining('summary') });
+      expect(rows).toHaveLength(7);
+      expect(collapseRangeToReflection(rows, -1, 100, 'bad')).toEqual({ messages: rows, reflection: null, foldedMessages: [] });
+    });
+
+    it('records reflection usage on success and empty output without double-accounting', async () => {
+      const onComplete = vi.fn();
+      const params = { model: 'test', originalUserMsg: 'task', toolPairs: [], onComplete };
+      const adapter = { call: vi.fn().mockResolvedValue({ text: 'ok', usage: {
+        inputTokens: 20, outputTokens: 2, cacheReadTokens: 15, cacheTokensAreIncludedInInput: true,
+      } }) };
+      expect(await runT1Reflection({ ...params, adapter })).toMatchObject({ usage: { totalTokens: 22 } });
+      adapter.call.mockResolvedValue({ text: '', usage: { inputTokens: 2, outputTokens: 0 } });
+      await expect(runT1Reflection({ ...params, adapter })).rejects.toThrow('empty');
+      expect(onComplete.mock.calls.map(([d]) => [d.status, d.usage.totalTokens, d.usageReported]))
+        .toEqual([['ready', 22, true], ['error', 2, true]]);
+    });
+
+    it('folds successive T1 batches across appended users and internal notifications, including restart', async () => {
+      const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-fold-controls-'));
+      try {
+        const conversationStore = new ConversationStore(yeaftDir);
+        const adapter = new MockAdapter();
+        adapter.call = vi.fn().mockResolvedValue({ text: 'summary', usage: { inputTokens: 5, outputTokens: 2 } });
+        for (let index = 0; index < 60; index++) adapter.pushResponse([
+          { type: 'tool_call', id: `fold_${index}`, name: 'fold_control', input: { index } },
+          { type: 'stop', stopReason: 'tool_use' },
+        ]);
+        adapter.pushResponse([{ type: 'text_delta', text: 'done' }, { type: 'stop', stopReason: 'end_turn' }]);
+        const foldSpy = vi.spyOn(conversationStore, 'foldMessages');
+        const pending = [];
+        const engine = new Engine({ adapter, trace, conversationStore, yeaftDir,
+          config: { model: 'test-model', maxOutputTokens: 1024, maxContextTokens: 128000 } });
+        engine.registerTool({ name: 'fold_control', description: 'test', parameters: { type: 'object' },
+          execute: async ({ index }) => {
+            if (index === 2 || index === 32) pending.push(
+              { content: `user addition ${index}` },
+              { content: `task completion ${index}`, internal: true },
+            );
+            return `result ${index}`;
+          },
+        });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'task', sessionId: 'fold-controls',
+          drainPendingUserMessages: () => pending.splice(0) })) events.push(event);
+        expect(events.filter(e => e.type === 'reflection' && e.status === 'ready' && e.trigger === 't1')).toHaveLength(2);
+        expect(events.filter(e => e.type === 'reflection' && e.status === 'error')).toEqual([]);
+        const messages = adapter.callLog.at(-1).messages;
+        expect(messages.filter(m => m.role === 'tool')).toEqual([]);
+        for (const index of [2, 32]) {
+          expect(messages.some(m => String(m.content).includes(`user addition ${index}`))).toBe(true);
+          expect(messages.some(m => String(m.content).includes(`task completion ${index}`))).toBe(true);
+        }
+        const restarted = new ConversationStore(yeaftDir);
+        const durable = restarted.loadRecentBySession('fold-controls', Infinity, { includeReflections: true });
+        expect(durable.filter(m => m._reflection)).toHaveLength(2);
+        expect(foldSpy).toHaveBeenCalledTimes(2);
+        for (const [folded, reflection] of foldSpy.mock.calls) {
+          expect(folded).toHaveLength(60);
+          expect(reflection._reflection).toBe(true);
+        }
+        expect(durable.filter(m => m.role === 'tool')).toEqual([]);
+        for (const index of [2, 32]) expect(durable.some(m => m.content === `user addition ${index}`)).toBe(true);
+        // Preserved controls/users are not in either reflection's tombstone set.
+        const preservedIds = durable.filter(m => String(m.content).includes('addition') || String(m.content).includes('completion')).map(m => m.id);
+        for (const reflection of durable.filter(m => m._reflection)) {
+          expect(reflection.foldedMessageIds.some(id => preservedIds.includes(id))).toBe(false);
+        }
+      } finally {
+        await closeConversationHistoryIndexes();
+        rmSync(yeaftDir, { recursive: true, force: true });
+      }
+    });
+
     it('persists a T1 folding reflection and hides the original tool arc after restart', async () => {
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-t1-fold-persist-'));
       try {
@@ -3963,6 +4053,7 @@ describe('Engine', () => {
           })),
           { type: 'stop', stopReason: 'tool_use' },
         ]);
+        adapter.pushResponse([{ type: 'tool_call', id: 't2_after_append', name: 't2_fold_tool', input: { index: 10 } }, { type: 'stop', stopReason: 'tool_use' }]);
         adapter.pushResponse([
           { type: 'text_delta', text: 'first turn finished' },
           { type: 'stop', stopReason: 'end_turn' },
@@ -3982,7 +4073,10 @@ describe('Engine', () => {
           name: 't2_fold_tool',
           description: 'returns one result',
           parameters: { type: 'object', properties: { index: { type: 'number' } } },
-          execute: async ({ index }) => `result ${index}`,
+          execute: async ({ index }) => {
+            if (index === 0) engine.appendUserMessage('keep this real appended user');
+            return `result ${index}`;
+          },
         });
 
         for await (const _event of engine.query({
@@ -4005,7 +4099,7 @@ describe('Engine', () => {
         // configured recent-turn count is not a hard request-success floor.
         expect(secondEvents.find(event => event.type === 'error')).toBeUndefined();
         expect(secondEvents.filter(event => event.type === 'turn_end' && event.terminal)).toHaveLength(1);
-        expect(adapter.callLog).toHaveLength(3);
+        expect(adapter.callLog).toHaveLength(4);
 
         const restarted = new ConversationStore(yeaftDir);
         const durable = restarted.loadRecentBySession(
@@ -4022,6 +4116,7 @@ describe('Engine', () => {
         expect(durable.some(message => message.role === 'tool')).toBe(false);
         expect(durable.some(message => Array.isArray(message.toolCalls) && message.toolCalls.length > 0)).toBe(false);
         expect(durable.some(message => message.content === 'second turn finished')).toBe(true);
+        expect(durable.some(message => message.role === 'user' && message.content === 'keep this real appended user')).toBe(true);
         expect(durable.some(message => message.role === 'user' && message.content === 'continue after t2')).toBe(true);
       } finally {
         await closeConversationHistoryIndexes();

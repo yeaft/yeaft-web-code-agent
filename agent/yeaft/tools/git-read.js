@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import { realpath } from 'node:fs/promises';
 import { defineTool } from './types.js';
 import { runProcess } from './process-runner.js';
 
@@ -58,9 +59,9 @@ function errorOutput(message, operation) {
 // arguments belonging to another operation.
 function normalizeInput(input) {
   const result = { ...input };
-  for (const key of ['base', 'head', 'revision', 'paths', 'limit']) {
+  for (const key of ['cwd', 'base', 'head', 'revision', 'paths', 'limit']) {
     if (result[key] === null || result[key] === undefined
-        || (['base', 'head', 'revision'].includes(key) && result[key] === '')
+        || (['cwd', 'base', 'head', 'revision'].includes(key) && result[key] === '')
         || (key === 'paths' && Array.isArray(result[key]) && result[key].length === 0)
         || (key === 'limit' && result.operation !== 'log' && result[key] === DEFAULT_LOG_LIMIT)) {
       delete result[key];
@@ -101,18 +102,22 @@ export function buildGitReadArgs(input) {
 
   input = normalizeInput(input);
   const { operation } = input;
+  if (input.cwd !== undefined && (typeof input.cwd !== 'string'
+      || input.cwd.length > MAX_VALUE_LENGTH || /[\0\r\n]/u.test(input.cwd))) {
+    return { error: 'cwd must be a path of at most 4096 characters without NUL or newlines' };
+  }
   if (!['status', 'diff', 'show', 'log'].includes(operation)) {
     return { error: 'operation must be one of: status, diff, show, log' };
   }
 
   if (operation === 'status') {
-    const error = unexpectedInput(input, new Set(['operation']));
+    const error = unexpectedInput(input, new Set(['operation', 'cwd']));
     if (error) return { error };
     return { args: [...COMMON_ARGS, 'status', '--short', '--branch', '--untracked-files=normal', '--ignore-submodules=all'] };
   }
 
   if (operation === 'diff') {
-    const error = unexpectedInput(input, new Set(['operation', 'base', 'head', 'paths']))
+    const error = unexpectedInput(input, new Set(['operation', 'cwd', 'base', 'head', 'paths']))
       || validatePaths(input.paths)
       || (input.base !== undefined ? validateValue(input.base, 'base') : null)
       || (input.head !== undefined ? validateValue(input.head, 'head') : null);
@@ -133,7 +138,7 @@ export function buildGitReadArgs(input) {
   }
 
   if (operation === 'show') {
-    const error = unexpectedInput(input, new Set(['operation', 'revision', 'paths']))
+    const error = unexpectedInput(input, new Set(['operation', 'cwd', 'revision', 'paths']))
       || validatePaths(input.paths)
       || (input.revision !== undefined ? validateValue(input.revision, 'revision') : null);
     if (error) return { error };
@@ -146,7 +151,7 @@ export function buildGitReadArgs(input) {
     };
   }
 
-  const error = unexpectedInput(input, new Set(['operation', 'revision', 'limit']))
+  const error = unexpectedInput(input, new Set(['operation', 'cwd', 'revision', 'limit']))
     || (input.revision !== undefined ? validateValue(input.revision, 'revision') : null);
   if (error) return { error };
   const limit = input.limit === undefined ? DEFAULT_LOG_LIMIT : input.limit;
@@ -170,13 +175,15 @@ function takeUtf8(text, maxBytes) {
   return buffer.subarray(0, end).toString('utf8');
 }
 
-function formatSuccess(operation, result) {
+function formatSuccess(operation, result, resolvedCwd) {
   const sections = [];
   if (result.stdout) sections.push(`STDOUT:\n${result.stdout}`);
   if (result.stderr) sections.push(`STDERR:\n${result.stderr}`);
   const body = sections.join('\n');
   const baseHeader = truncated => [
     `operation: ${operation}`,
+    `resolvedCwd: ${JSON.stringify(takeUtf8(resolvedCwd ?? '', 1024))}`,
+    ...(Buffer.byteLength(resolvedCwd || '', 'utf8') > 1024 ? ['cwdTruncated: true'] : []),
     `exitCode: ${result.code}`,
     'timedOut: false',
     `truncated: ${truncated}`,
@@ -226,7 +233,7 @@ function boundedFailure(fields, output = '') {
 
 export function formatGitReadResult(operation, result, { resolvedCwd, stage = operation } = {}) {
   if (result.code === 0 && !result.timedOut && !result.truncated && !result.terminationError) {
-    return formatSuccess(operation, result);
+    return formatSuccess(operation, result, resolvedCwd);
   }
   const code = result.terminationError ? 'git_exit_unconfirmed'
     : result.timedOut ? 'git_timeout'
@@ -260,6 +267,8 @@ Supported operations are intentionally limited:
 - show: exactly one commit (HEAD by default; tags are peeled to commits), optionally narrowed by paths. Ranges and non-commit objects are rejected.
 - log: a compact bounded commit list (20 entries by default, maximum 50).
 
+cwd defaults to the execution directory; an override must resolve to the same repository (including linked worktrees). Creation does not switch cwd. Every result identifies the resolved directory.
+
 GitRead never fetches, writes Git state, or creates worktrees. It disables pagers, external diff, textconv, content filters, optional locks, fsmonitor, and submodule traversal. Filter-normalized files (such as LFS) show raw worktree bytes; submodule status needs separate inspection. Revisions and paths beginning with "-" are rejected. Output reports truncation. Git failures, timeouts and capture-limit stops return an error with bounded diagnostics.`,
     zh: `有界读取本地 Git 证据，不使用 shell，也不访问网络。
 
@@ -269,12 +278,15 @@ GitRead never fetches, writes Git state, or creates worktrees. It disables pager
 - show：显示唯一提交（默认 HEAD；tag 解析到 commit），可用 paths 缩小范围。拒绝范围及非 commit 对象。
 - log：紧凑且有界的提交列表（默认 20 条，最多 50 条）。
 
+cwd 默认执行目录；指定目录必须属于同一仓库（可为关联 worktree）。创建 worktree 不切换 cwd，需显式指定。结果始终标明实际目录。
+
 GitRead 不 fetch、不写 Git 状态、不创建 worktree。它禁用 pager、external diff、textconv、内容 filter、optional locks、fsmonitor 和子模块遍历。LFS 等 filter 文件显示原始工作区字节，子模块状态需单独检查。拒绝以 "-" 开头的 revision 与路径；结果明确标识是否截断；Git 失败、超时及捕获上限终止返回含有界诊断的错误。`,
   },
   parameters: {
     type: 'object',
     additionalProperties: false,
     properties: {
+      cwd: { type: 'string', maxLength: MAX_VALUE_LENGTH, description: 'Optional repository/worktree directory; relative to execution cwd. Must belong to the same repository. Empty means execution cwd.' },
       operation: { type: 'string', enum: ['status', 'diff', 'show', 'log'] },
       base: { type: 'string', maxLength: MAX_VALUE_LENGTH, description: 'diff only; empty/omitted means working-tree changes against HEAD' },
       head: { type: 'string', maxLength: MAX_VALUE_LENGTH, description: 'diff only; requires base, empty/omitted defaults to HEAD' },
@@ -296,11 +308,16 @@ GitRead 不 fetch、不写 Git 状态、不创建 worktree。它禁用 pager、e
     const built = buildGitReadArgs(input);
     if (built.error) return errorOutput(built.error, input?.operation);
     input = normalizeInput(input);
-    const cwd = resolve(ctx?.cwd || process.cwd());
+    const contextCwd = resolve(ctx?.cwd || process.cwd());
+    let cwd = resolve(contextCwd, input.cwd || '.');
     let stage = input.operation;
     try {
       const run = ctx?.[RUN_PROCESS_OVERRIDE] || runProcess;
       const startedAt = Date.now();
+      // Ambient Git location overrides must not redirect evidence elsewhere.
+      const env = { ...process.env };
+      for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE',
+        'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE']) delete env[key];
       const options = {
         cwd,
         signal: ctx?.signal,
@@ -308,7 +325,7 @@ GitRead 不 fetch、不写 Git 状态、不创建 worktree。它禁用 pager、e
         maxBytes: MAX_CAPTURE_BYTES,
         requireExitConfirmation: true,
         env: {
-          ...process.env,
+          ...env,
           GIT_PAGER: 'cat',
           PAGER: 'cat',
           GIT_EXTERNAL_DIFF: '',
@@ -318,13 +335,38 @@ GitRead 不 fetch、不写 Git 状态、不创建 worktree。它禁用 pager、e
           NO_COLOR: '1',
         },
       };
-      const read = (command, args) => {
+      const read = (command, args, readCwd = cwd) => {
         const remaining = TIMEOUT_MS - (Date.now() - startedAt);
         if (remaining <= 0) {
           throw Object.assign(new Error('Git read timed out'), { code: 'git_timeout', timedOut: true });
         }
-        return run(command, args, { ...options, timeoutMs: remaining });
+        return run(command, args, { ...options, cwd: readCwd, timeoutMs: remaining });
       };
+      if (cwd !== contextCwd) {
+        stage = 'resolve_cwd';
+        cwd = await realpath(cwd);
+        const commonDirectory = async directory => {
+          const result = await read('git', [
+            ...COMMON_ARGS, 'rev-parse', '--git-common-dir',
+          ], directory);
+          if (result.code !== 0 || result.truncated || result.timedOut || result.terminationError) {
+            throw Object.assign(new Error('Cannot resolve Git repository identity'), { result });
+          }
+          const value = result.stdout.replace(/\r?\n$/, '');
+          if (!value) throw new Error('Missing Git common directory');
+          // --git-common-dir may be relative on older Git. Avoid
+          // --path-format (unsupported versions echo it as a path).
+          return realpath(resolve(directory, value));
+        };
+        const owner = await commonDirectory(contextCwd);
+        if (await commonDirectory(cwd) !== owner) {
+          return boundedFailure({
+            error: 'cwd must belong to the execution repository or one of its linked worktrees',
+            errorEffect: 'none', code: 'git_cwd_outside_repository', operation: input.operation,
+            stage, resolvedCwd: cwd,
+          });
+        }
+      }
       // Only these operations inspect worktree bytes. Object-only reads must
       // not pay for filter discovery or fail on an unusable worktree filter.
       const readsWorktree = input.operation === 'status'
