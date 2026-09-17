@@ -368,7 +368,7 @@ describe('recurring schedules', () => {
     try {
       expect(migrated.getWorkItem(plan.id)).toMatchObject({ status: 'draft', goal: plan.goal,
         schedule: { status: 'scheduled', scheduledFor: plan.schedule.scheduledFor, recurrence: null, runCount: 0 } });
-      expect(migrated.db.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get().value).toBe('41');
+      expect(migrated.db.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get().value).toBe('42');
     } finally { migrated.close(); }
   });
 
