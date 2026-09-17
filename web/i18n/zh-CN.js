@@ -125,6 +125,8 @@ export default {
   'chat.agent.select': '选择 Agent',
   'chat.agent.manage': '管理 Agent',
   'chat.agent.count': '{count} agents',
+  'chat.agent.updatesAvailable': '{count} 个 Agent 可升级',
+  'chat.agent.updateAvailable': '可升级至 v{version}',
   'chat.agent.none': '暂无 Agent',
   'chat.agent.restarting': '重启中',
   'agentSettings.open': 'Agent 设置',
@@ -548,6 +550,16 @@ export default {
   'modal.resume.selectAgent': '请先选择一个在线的 Agent',
 
   'modal.folderPicker.title': '选择工作目录',
+  'modal.folderPicker.root': '根目录 / 驱动器',
+  'modal.folderPicker.path': '目录路径',
+  'modal.folderPicker.go': '前往',
+  'modal.folderPicker.ancestors': '上级目录导航',
+  'modal.folderPicker.directories': '子目录',
+  'modal.folderPicker.navigationHint': '点击文件夹进入，再选择当前目录。',
+  'modal.folderPicker.selectCurrent': '选择当前目录',
+  'modal.folderPicker.loadFailed': '无法打开此目录。请检查路径和权限，或重试。',
+  'modal.folderPicker.unavailable': 'Agent 不可用，请连接后重试。',
+  'modal.folderPicker.timeout': '目录请求超时，请重试。',
   'modal.folderPicker.parentDir': '上级目录',
 
   // ============ Welcome Screen ============

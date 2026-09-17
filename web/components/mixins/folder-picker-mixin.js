@@ -1,86 +1,51 @@
-/**
- * folder-picker-mixin — shared "browse + pick a directory" workflow.
- *
- * Originally extracted so SessionCreateModal and the standalone
- * SessionRestoreModal could share the same folder-picker UX without
- * copying 90 lines of glue. The restore modal was later folded back into
- * SessionCreateModal; WorkCenterPage now also consumes the mixin for its
- * project directory field. The mixin owns:
- *
- *  - Data:   folderPickerOpen / folderPickerPath / folderPickerEntries /
- *            folderPickerLoading / folderPickerSelected / _folderPickerTimer /
- *            _folderPickerRequestId / _folderPickerRequestAgentId
- *  - Methods: openFolderPicker / closeFolderPicker / requestFolderPickerDir /
- *             loadFolderPickerDir / folderPickerNavigateUp /
- *             folderPickerSelectItem / folderPickerEnter / confirmFolderPicker /
- *             handleFolderPickerMessage
- *
- * Components consuming this mixin must provide:
- *  - computed `folderPickerAgentId` — string, currently-targeted agent id.
- *  - computed `defaultWorkDir` — string, workdir to seed picker if none set.
- *  - computed `chat` — chat store (must expose `sendWsMessage`).
- *  - method   `folderPickerInitialDir()` — string, dir to open the picker at
- *                                          (typically `this.workDir || this.defaultWorkDir`).
- *  - method   `folderPickerSetWorkDir(path)` — called when user confirms a path.
- *
- * The wire shape is pinned by folder-picker tests:
- *  - sends `{ type:'list_directory', conversationId:'_workdir_picker', directoryPickerScope:'agent', requestId, agentId, dirPath }`
- *  - listens to `workbench-message` window events; reducer accepts only the
- *    current requestId while the picker is open and still targets the same agent.
- * Do not rename `requestFolderPickerDir` / `handleFolderPickerMessage`.
- *
- * ⚠️  CONSUMPTION HAZARD — DO NOT do this:
- *     export default { mixins: [folderPickerMixin], ...{ data() {...}, methods: {...} } }
- *
- * Some components historically spread their own `data` / `methods` over the
- * mixin object. That works for pure-options merges but DOUBLE-REGISTERS the
- * picker's lifecycle hooks if Vue ever changes its merge strategy — and it
- * silently shadows the picker's own `data()` keys when the consumer also
- * returns an object literal. The supported form is the explicit
- * `mixins: [folderPickerMixin]` array on the component options object. See
- * SessionCreateModal.js for the working example.
+/** Shared Agent-scoped, read-only work-directory picker workflow.
+ * Consumers provide folderPickerAgentId, chat, folderPickerInitialDir() and
+ * folderPickerSetWorkDir(path). Use the mixin, or spread data/computed/methods
+ * and register handleFolderPickerMessage / invalidateFolderPickerRequest.
  */
-
 export const folderPickerData = () => ({
   folderPickerOpen: false,
   folderPickerPath: '',
+  folderPickerDraft: '',
   folderPickerEntries: [],
   folderPickerLoading: false,
-  folderPickerSelected: '',
+  folderPickerLoaded: false,
+  folderPickerLoadedAgentId: null,
+  folderPickerError: '',
+  folderPickerErrorDetail: '',
   _folderPickerTimer: null,
   _folderPickerRequestId: null,
   _folderPickerRequestAgentId: null,
 });
 
-let folderPickerRequestSequence = 0;
+export const folderPickerComputed = {
+  folderPickerState() {
+    return {
+      path: this.folderPickerPath,
+      draft: this.folderPickerDraft,
+      entries: this.folderPickerEntries,
+      loading: this.folderPickerLoading,
+      error: this.folderPickerError,
+      errorDetail: this.folderPickerErrorDetail,
+      canConfirm: this.canConfirmFolderPicker(),
+    };
+  },
+};
 
-function nextFolderPickerRequestId() {
-  folderPickerRequestSequence += 1;
-  return `folder-picker-${Date.now()}-${folderPickerRequestSequence}`;
-}
+let folderPickerRequestSequence = 0;
 
 export const folderPickerMethods = {
   openFolderPicker() {
-    const agentId = this.folderPickerAgentId;
-    if (!agentId || !this.chat || typeof this.chat.sendWsMessage !== 'function') return;
+    if (!this.folderPickerAgentId || !this.chat?.sendWsMessage) return;
     this.folderPickerOpen = true;
-    this.folderPickerSelected = '';
-    this.folderPickerLoading = true;
-    const initial = typeof this.folderPickerInitialDir === 'function'
-      ? (this.folderPickerInitialDir() || '')
-      : (this.defaultWorkDir || '');
-    this.folderPickerPath = initial;
-    this.folderPickerEntries = [];
-    this.requestFolderPickerDir(initial);
+    this.loadFolderPickerDir(this.folderPickerInitialDir?.() || this.defaultWorkDir || '');
   },
 
   invalidateFolderPickerRequest() {
     this._folderPickerRequestId = null;
     this._folderPickerRequestAgentId = null;
-    if (this._folderPickerTimer) {
-      clearTimeout(this._folderPickerTimer);
-      this._folderPickerTimer = null;
-    }
+    if (this._folderPickerTimer) clearTimeout(this._folderPickerTimer);
+    this._folderPickerTimer = null;
   },
 
   closeFolderPicker() {
@@ -88,117 +53,113 @@ export const folderPickerMethods = {
     this.invalidateFolderPickerRequest();
   },
 
-  requestFolderPickerDir(dirPath) {
+  failFolderPicker(error, detail = '') {
+    this.invalidateFolderPickerRequest();
+    this.folderPickerLoading = false;
+    this.folderPickerLoaded = false;
+    this.folderPickerError = error;
+    this.folderPickerErrorDetail = detail;
+  },
+
+  requestFolderPickerDir(dirPath, retry = false) {
     const agentId = this.folderPickerAgentId;
-    if (!agentId || !this.chat || typeof this.chat.sendWsMessage !== 'function') return;
-    const requestId = nextFolderPickerRequestId();
+    this.invalidateFolderPickerRequest();
+    if (!agentId || !this.chat?.sendWsMessage) {
+      this.failFolderPicker('unavailable');
+      return;
+    }
+    const requestId = `folder-picker-${Date.now()}-${++folderPickerRequestSequence}`;
     this._folderPickerRequestId = requestId;
     this._folderPickerRequestAgentId = agentId;
-    this.chat.sendWsMessage({
-      type: 'list_directory',
-      conversationId: '_workdir_picker',
-      directoryPickerScope: 'agent',
-      requestId,
-      agentId,
-      dirPath,
-    });
-    if (this._folderPickerTimer) clearTimeout(this._folderPickerTimer);
+    try {
+      const sent = this.chat.sendWsMessage({
+        type: 'list_directory',
+        conversationId: '_workdir_picker',
+        directoryPickerScope: 'agent',
+        requestId,
+        agentId,
+        dirPath,
+      });
+      if (sent === false) {
+        this.failFolderPicker('unavailable');
+        return;
+      }
+    } catch (_) {
+      this.failFolderPicker('unavailable');
+      return;
+    }
     this._folderPickerTimer = setTimeout(() => {
-      if (this.folderPickerLoading && this.folderPickerOpen
-          && this._folderPickerRequestId === requestId
-          && this.folderPickerAgentId === agentId) {
-        this.requestFolderPickerDir(dirPath);
+      if (!this.folderPickerOpen || this._folderPickerRequestId !== requestId) return;
+      if (this.folderPickerAgentId !== agentId) {
+        this.failFolderPicker('unavailable');
+      } else if (retry) {
+        this.failFolderPicker('timeout');
+      } else {
+        this.requestFolderPickerDir(dirPath, true);
       }
     }, 5000);
   },
 
   loadFolderPickerDir(dirPath) {
+    // A bare Windows drive means its root, not its per-drive working directory.
+    const path = /^[a-z]:$/i.test(dirPath) ? dirPath + '\\' : dirPath;
+    this.folderPickerPath = path;
+    this.folderPickerDraft = path;
     this.folderPickerLoading = true;
-    this.folderPickerSelected = '';
+    this.folderPickerLoaded = false;
+    this.folderPickerLoadedAgentId = null;
+    this.folderPickerError = '';
+    this.folderPickerErrorDetail = '';
     this.folderPickerEntries = [];
-    this.requestFolderPickerDir(dirPath);
+    this.requestFolderPickerDir(path);
   },
 
-  folderPickerNavigateUp() {
-    if (!this.folderPickerPath) return;
-    const isWin = this.folderPickerPath.includes('\\');
-    const sep = isWin ? '\\' : '/';
-    const parts = this.folderPickerPath.replace(/[/\\]$/, '').split(/[/\\]/);
-    parts.pop();
-    if (parts.length === 0) {
-      this.folderPickerPath = '';
-      this.loadFolderPickerDir('');
-    } else if (isWin && parts.length === 1 && /^[A-Za-z]:$/.test(parts[0])) {
-      this.folderPickerPath = parts[0] + '\\';
-      this.loadFolderPickerDir(this.folderPickerPath);
-    } else {
-      const parent = parts.join(sep);
-      this.folderPickerPath = parent;
-      this.loadFolderPickerDir(parent);
-    }
-  },
+  folderPickerEditPath(path) { this.folderPickerDraft = path; },
 
-  folderPickerSelectItem(entry) { this.folderPickerSelected = entry.name; },
-
-  folderPickerEnter(entry) {
-    const isWin = this.folderPickerPath.includes('\\') || /^[A-Z]:/.test(entry.name);
-    const sep = isWin ? '\\' : '/';
-    let newPath;
-    if (!this.folderPickerPath) {
-      newPath = /^[A-Z]:$/.test(entry.name) ? entry.name + '\\' : '/' + entry.name;
-    } else {
-      newPath = this.folderPickerPath.replace(/[/\\]$/, '') + sep + entry.name;
-    }
-    this.folderPickerPath = newPath;
-    this.loadFolderPickerDir(newPath);
+  canConfirmFolderPicker() {
+    return !!(this.folderPickerOpen && this.folderPickerPath && this.folderPickerLoaded
+      && !this.folderPickerLoading && !this.folderPickerError
+      && this.folderPickerDraft === this.folderPickerPath
+      && this.folderPickerLoadedAgentId === this.folderPickerAgentId);
   },
 
   confirmFolderPicker() {
-    let path = this.folderPickerPath;
-    if (!path) return;
-    if (this.folderPickerSelected) {
-      const sep = path.includes('\\') ? '\\' : '/';
-      path = path.replace(/[/\\]$/, '') + sep + this.folderPickerSelected;
-    }
-    if (typeof this.folderPickerSetWorkDir === 'function') {
-      this.folderPickerSetWorkDir(path);
-    }
+    if (!this.canConfirmFolderPicker()) return;
+    this.folderPickerSetWorkDir?.(this.folderPickerPath);
     this.closeFolderPicker();
   },
 
   handleFolderPickerMessage(event) {
     const msg = event.detail;
     if (!msg || msg.type !== 'directory_listing' || msg.conversationId !== '_workdir_picker') return;
-    if (!this.folderPickerOpen
-        || !this._folderPickerRequestId
-        || msg.requestId !== this._folderPickerRequestId
-        || this.folderPickerAgentId !== this._folderPickerRequestAgentId) return;
-    if (this._folderPickerTimer) {
-      clearTimeout(this._folderPickerTimer);
-      this._folderPickerTimer = null;
+    if (!this.folderPickerOpen || !this._folderPickerRequestId
+      || msg.requestId !== this._folderPickerRequestId
+      || this.folderPickerAgentId !== this._folderPickerRequestAgentId
+      || (msg.agentId != null && msg.agentId !== this._folderPickerRequestAgentId)) return;
+    if (msg.error || !Array.isArray(msg.entries) || typeof msg.dirPath !== 'string') {
+      this.failFolderPicker('loadFailed', typeof msg.error === 'string' ? msg.error : '');
+      return;
     }
-    this._folderPickerRequestId = null;
-    this._folderPickerRequestAgentId = null;
+    this.invalidateFolderPickerRequest();
     this.folderPickerLoading = false;
-    this.folderPickerEntries = (msg.entries || [])
-      .filter(e => e.type === 'directory')
+    this.folderPickerLoaded = true;
+    this.folderPickerLoadedAgentId = this.folderPickerAgentId;
+    this.folderPickerEntries = msg.entries
+      .filter(e => e?.type === 'directory' && typeof e.name === 'string')
       .sort((a, b) => a.name.localeCompare(b.name));
-    if (msg.dirPath != null) this.folderPickerPath = msg.dirPath;
+    // Keep a path being edited while a request is in flight; it isn't confirmed.
+    if (this.folderPickerDraft === this.folderPickerPath) this.folderPickerDraft = msg.dirPath;
+    this.folderPickerPath = msg.dirPath;
   },
 };
 
-/**
- * Convenience Options-API mixin object. Components can either:
- *   1. Spread the named exports above into their own data/methods, or
- *   2. Add this object to their `mixins: []`.
- *
- * SessionCreateModal uses option 1 to keep its tightly-co-located workdir
- * picker logic obvious. Future consumers with no other state to mix in
- * may prefer option 2.
- */
 export const folderPickerMixin = {
-  data() { return folderPickerData(); },
-  methods: { ...folderPickerMethods },
+  data: folderPickerData,
+  computed: folderPickerComputed,
+  methods: folderPickerMethods,
+  watch: {
+    folderPickerAgentId() { this.closeFolderPicker(); },
+  },
   mounted() {
     window.addEventListener('workbench-message', this.handleFolderPickerMessage);
   },
