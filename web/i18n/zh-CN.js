@@ -1865,6 +1865,7 @@ export default {
   'workCenter.lastMonth': '最近 30 天',
   'workCenter.assignment.planned': '计划分配',
   'workCenter.created': '创建于',
+  'workCenter.executionDuration': '执行用时',
   'workCenter.files': '个文件',
   'workCenter.loadMore': '加载更多',
   'workCenter.activeItems': '执行中的工作',

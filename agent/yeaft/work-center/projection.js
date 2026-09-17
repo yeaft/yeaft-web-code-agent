@@ -592,6 +592,33 @@ function projectAssignmentPolicy(policy) {
   };
 }
 
+// Only current-identity Run execution counts; queue/retry gaps are not runtime.
+// Keep the active start separate so the browser can tick without polling the Agent.
+function actionTiming(action, runs, matchingRuns) {
+  if (!Array.isArray(runs)) {
+    return {
+      executionDurationMs: Number.isFinite(action.executionDurationMs) && action.executionDurationMs >= 0
+        ? action.executionDurationMs : null,
+      executionStartedAt: Number.isFinite(action.executionStartedAt) && action.executionStartedAt > 0
+        ? action.executionStartedAt : null,
+    };
+  }
+  let executionDurationMs = null;
+  let executionStartedAt = null;
+  for (const run of matchingRuns) {
+    const start = run.startedAt;
+    if (!Number.isFinite(start) || start <= 0) continue;
+    const end = run.endedAt || run.terminalAt;
+    if (Number.isFinite(end) && end >= start) {
+      executionDurationMs = (executionDurationMs || 0) + end - start;
+    } else if (!end && !run.terminalStatus && run.status === 'running' && action.status === 'running') {
+      executionDurationMs ??= 0;
+      executionStartedAt = Math.max(executionStartedAt || 0, start);
+    }
+  }
+  return { executionDurationMs, executionStartedAt };
+}
+
 function projectAction(action, runs, events, includeBody = true) {
   if (!action) return null;
   const execution = actionExecution(action, runs, events, includeBody);
@@ -622,6 +649,7 @@ function projectAction(action, runs, events, includeBody = true) {
     sequence: action.sequence,
     createdAt: count(action.createdAt),
     updatedAt: count(action.updatedAt),
+    ...actionTiming(action, runs, matchingRuns),
     type: action.type,
     stageId: action.stageId || action.type,
     assignmentPolicy: alreadyProjected
@@ -707,6 +735,8 @@ function projectActionStats(detail, liveActionId = bodyActionId(detail)) {
       sequence: projected.sequence,
       createdAt: projected.createdAt,
       updatedAt: projected.updatedAt,
+      executionDurationMs: projected.executionDurationMs,
+      executionStartedAt: projected.executionStartedAt,
       assignedVp: projected.assignedVp,
       contentSummary: projected.contentSummary,
       executionStats: projected.executionStats,
