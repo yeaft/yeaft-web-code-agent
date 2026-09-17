@@ -35,6 +35,7 @@ import { agentBelongsToCaller, getAgentRegistry } from './agent.js';
 import { isTerminalAgentStatus, STATUS } from '../sub-agent/status.js';
 import { diagnoseAgentLiveness } from '../sub-agent/liveness.js';
 import { consumeNotificationForAgent } from '../sub-agent/notifications.js';
+import { describeAgentLifecycle, describeAgentOutcome } from '../sub-agent/outcome.js';
 
 /**
  * Build the status-specific next-step guidance the LLM reads after a wait.
@@ -54,6 +55,9 @@ function nextStepsFor(status, opts = {}) {
       'larger budget, or report the cutoff to the user. Do NOT present this ' +
       'as an ordinary successful completion.'
     );
+  }
+  if (opts.incomplete) {
+    return 'Sub-agent lifecycle ended with incomplete evidence. Inspect outcome and final_report; do not present partial verdict text as a completed review.';
   }
   if (opts.timedOut && opts.stale) {
     return (
@@ -157,12 +161,15 @@ function buildEnvelope(agent, { timedOut = false } = {}) {
     next_steps: nextStepsFor(status, {
       timedOut,
       budgetExceeded: !!budgetResult,
+      incomplete: isTerminalAgentStatus(status) && !describeAgentOutcome(agent).complete,
       stale: liveness.stale,
       mustCollectReply: mustCollectReply && !liveness.stale,
     }),
     agentId: agent.id,
     name: agent.name,
     status,
+    lifecycle: describeAgentLifecycle(agent),
+    outcome: describeAgentOutcome(agent),
     error: agent.error || null,
     outputFile: agent.outputFile || null,
     liveness,
@@ -185,7 +192,16 @@ function buildEnvelope(agent, { timedOut = false } = {}) {
     env.budget_status = budgetResult.status;
     env.budget_reason = budgetResult.reason || null;
     env.partial_output = budgetResult.partial_output || '';
+    env.incomplete = true;
+    env.truncated = Boolean(budgetResult.truncated || budgetResult.final_report?.truncated);
+    env.final_report = budgetResult.final_report || null;
     env.budget_usage = budgetResult.usage || null;
+  }
+  if (agent.finalizationRequested) {
+    env.incomplete = true;
+    env.final_report = agent.finalReport || null;
+    env.truncated = Boolean(agent.finalReport?.truncated);
+    env.partial_output = resultText;
   }
   env.result = resultText;
   return env;

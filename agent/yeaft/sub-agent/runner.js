@@ -42,6 +42,7 @@ import { getPersona } from '../personas.js';
 import { RESTRICTED_TOOLS, createChildToolPolicy } from './tool-access.js';
 import { buildSpawnedPreamble } from './spawned-prompt.js';
 import { STATUS, isTerminalAgentStatus } from './status.js';
+import { describeAgentOutcome } from './outcome.js';
 import { createOutputLog } from './output-log.js';
 import { makeLiveness, bumpLivenessFromEvent } from './liveness.js';
 import { consumeNotificationForAgent, enqueueTerminalNotification } from './notifications.js';
@@ -259,6 +260,8 @@ export function startSubAgent(agent, deps = {}) {
 function buildWallTimeBudgetResult(agent, reason) {
   return {
     status: 'budget_exceeded',
+    outcome: 'incomplete',
+    complete: false,
     partial_output: agent.partial_output || agent.lastResult
       || (typeof agent.result === 'string' ? agent.result : agent.result?.partial_output) || '',
     reason,
@@ -343,6 +346,19 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
   };
 
   const dequeueNextUserPrompt = () => {
+    if (agent.finalizationRequested && !agent.finalizationStarted) {
+      agent.finalizationStarted = true;
+      return {
+        // The parent's reason is audit evidence, not a child prompt. The
+        // registry supplies the authenticated control instruction separately.
+        prompt: 'Return the requested evidence-only final report; identify any unchecked scope.',
+        finalization: true,
+        parentEffortDecision: snapshotEffortDecision(agent.parentEffortDecision),
+        projectSessionIds: Array.isArray(deps.projectSessionIds) ? deps.projectSessionIds.slice() : [],
+        projectLabel: typeof deps.projectLabel === 'string' ? deps.projectLabel : '',
+        projectInstruction: typeof deps.projectInstruction === 'string' ? deps.projectInstruction : '',
+      };
+    }
     if (!Array.isArray(agent.pendingPrompts)) agent.pendingPrompts = [];
     const entry = agent.pendingPrompts.shift();
     if (!entry) return null;
@@ -444,7 +460,9 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
       agent.result = '';
       let assistantText = '';
       let budgetReportText = '';
+      let finalReportText = '';
       let endedNormally = false;
+      let outputTruncated = false;
       let streamError = null;
       const priorUsageTokens = agent.usage?.tokens || 0;
       let turnUsageTokens = 0;
@@ -489,6 +507,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
           if (evt && evt.type === 'text_delta' && typeof evt.text === 'string') {
             assistantText += evt.text;
             if (agent.budgetReportStarted) budgetReportText += evt.text;
+            if (agent.finalizationStarted) finalReportText += evt.text;
             // Mid-stream visibility: keep lastResult fresh so a parent
             // calling WaitAgent during a long generation sees what the
             // child is currently saying, not stale text from the prior
@@ -509,6 +528,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
             streamError = evt.error.message || String(evt.error);
           }
           if (evt && evt.type === 'stop') {
+            if (evt.stopReason === 'max_tokens') outputTruncated = true;
             if (evt.stopReason === 'end_turn' || evt.stopReason === 'stop_sequence') {
               endedNormally = true;
             }
@@ -544,11 +564,30 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
         const reason = agent.executionBudgetReason || agent.toolBudgetReason;
         agent.result = buildWallTimeBudgetResult(agent, reason);
         agent.result.reporting = { attempted: !!agent.budgetReportStarted, received: !!budgetReportText.trim() };
+        agent.result.truncated = outputTruncated;
+        agent.result.final_report = {
+          reserved: true,
+          received: !!budgetReportText.trim(),
+          truncated: outputTruncated,
+          text: budgetReportText.trim(),
+        };
         if (streamError) agent.result.reporting.error = streamError;
         agent.usage.turns += 1;
         agent.result.usage = { ...agent.usage };
         transitionTerminal(agent, STATUS.COMPLETED, {
           error: reason, diagnostic: 'execution_budget_report', deps,
+        });
+        return;
+      }
+
+      if (agent.finalizationRequested) {
+        agent.finalReport = { reserved: true, received: !!finalReportText.trim(),
+          truncated: outputTruncated, text: finalReportText.trim() };
+        agent.result = finalReportText.trim() || assistantText.trim();
+        agent.lastResult = capTail(agent.result, LAST_RESULT_MAX_CHARS);
+        agent.usage.turns += 1;
+        transitionTerminal(agent, STATUS.COMPLETED, {
+          error: streamError, diagnostic: 'parent_requested_finalization', deps,
         });
         return;
       }
@@ -673,11 +712,13 @@ function finalizeTerminal(agent, status, { error, deps } = {}) {
   if (agent.__terminalNotified) return;
   agent.__terminalNotified = true;
 
+  const outcome = describeAgentOutcome(agent);
   const evt = {
     type: 'sub_agent_status',
     agentId: agent.id,
     agentName: agent.name,
     status,
+    outcome: outcome.status,
     error: error || agent.error || null,
     parentSessionId: agent.parentSessionId || deps?.parentSessionId || null,
     parentVpId: agent.parentVpId || deps?.parentVpId || null,
@@ -686,14 +727,17 @@ function finalizeTerminal(agent, status, { error, deps } = {}) {
   try { agent.outputLog?.write(evt); } catch { /* ignore */ }
   if (agent.taskId && deps?.taskManager && agent.parentSessionId) {
     const budgetExceeded = agent.result?.status === 'budget_exceeded';
-    const taskStatus = budgetExceeded ? 'failed' : status === STATUS.COMPLETED ? 'succeeded'
+    const taskStatus = outcome.status === 'incomplete' ? 'failed' : status === STATUS.COMPLETED ? 'succeeded'
       : status === STATUS.CLOSED ? 'cancelled'
         : 'failed';
     try {
       deps.taskManager.completeTask(agent.parentSessionId, agent.taskId, {
         status: taskStatus,
-        error: budgetExceeded ? agent.result.reason : (error || agent.error || null),
-        summary: budgetExceeded ? JSON.stringify(agent.result) : status === STATUS.COMPLETED
+        error: outcome.status === 'incomplete' ? (agent.result?.reason || outcome.reason) : (error || agent.error || null),
+        summary: budgetExceeded ? JSON.stringify(agent.result) : agent.finalizationRequested
+          ? JSON.stringify({ outcome: outcome.status, complete: false, reason: outcome.reason,
+            partial_output: agent.result || agent.lastResult || '', final_report: agent.finalReport || null })
+          : status === STATUS.COMPLETED
           ? (typeof agent.result === 'string' ? agent.result : (agent.lastResult || null))
           : null,
       });
@@ -731,6 +775,10 @@ function finalizeTerminal(agent, status, { error, deps } = {}) {
         budgetExceeded: !!budgetResult,
         budgetReason: budgetResult?.reason || null,
         budgetUsage: budgetResult?.usage || null,
+        outcome: outcome.status,
+        incomplete: !outcome.complete,
+        truncated: outcome.truncated,
+        finalReport: budgetResult?.final_report || agent.finalReport || null,
       });
     } catch { /* never let the notification queue throw kill the driver */ }
   }
@@ -754,6 +802,9 @@ function waitUntilResumed(agent, idleAbandonMs) {
         return resolve('terminal');
       }
       if (Array.isArray(agent.pendingPrompts) && agent.pendingPrompts.length > 0) {
+        return resolve('prompt');
+      }
+      if (agent.finalizationRequested && !agent.finalizationStarted) {
         return resolve('prompt');
       }
       if (idleAbandonMs > 0 && Date.now() - start >= idleAbandonMs) {

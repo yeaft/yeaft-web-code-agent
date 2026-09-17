@@ -31,6 +31,26 @@
 
 状态列表只投影紧凑运行状态和结果引用，不携带完整任务日志；保留显式预算、剩余额度、授权与控制 revision，以及 shell 取消中的状态。子 Agent 使用 WaitAgent/CloseAgent 收集/取消，shell 使用 ReadTaskLog/CancelTask。详细输出通过已有日志读取或结果收集接口获取。预算与进度应按实际执行、provider usage 统计，不以重复事件或字符长度冒充工具次数和 token。
 
+## 等待与完成证据
+
+- `WaitTask` 按 task ID 有界等待（默认 120 秒、最多 600 秒），仅返回状态、退出码、日志引用和末端位置，不读取/消费日志，不取消命令、不自动重试，也不改变 `status_only` 的唤回策略。`log.endOffset` 是文件大小，不是已消费游标；读取应使用上次 ReadTaskLog 的 offset。任务工具限定当前 Session 并沿用 VP ownership；取消等待只清理监听，不取消后台任务。
+- `Bash` 非零退出、超时确认/未确认及退出未确认使用 JSON 错误信封，`errorEffect: unknown`、`replaySafe: false` 明确可能已有副作用。模型侧大输出裁剪保留可解析 JSON 和日志首尾；成功命令打印的应用层 `error` 字段不再被误认作工具失败。启动/工具异常仍走异常通道。
+- 子 Agent `lifecycle` 表示是否仍在执行，`outcome` 表示结果完整性；预算截断的 `APPROVE` 只是部分证据。Wait/List/Close 与通知保留 incomplete、截断和保留报告信息；Close 不覆盖已有终态证据。
+- `UpdateAgent(request_finalize: true)` 请求一次基于已有证据的无工具报告；已派发操作可先完成，新的工具派发被阻止。该控制不通过压低预算实现，reason 仅作审计记录。主动收尾仍标为 incomplete，不能自动升格为完整 review；父级必须检查未完成范围。默认无累计预算不变。
+
+## 当前 turn 折叠与证据归属
+
+- T1/T2 的范围替换显式返回新摘要、保留消息和实际折叠行，不按原数组起点猜摘要位置。范围内的真实用户补充、异步通知、重复调用提示与先前摘要保留；持久化只 tombstone 被替换的 assistant/tool 行。原始行仍 append-only 保留。
+- 折叠后清除当前 query 的文件已读范围提示，避免误导模型认为旧正文仍在上下文。仍然允许修改后复核，不抑制文件读取。
+- 原有 reflection 请求记录 `tool_reflection` 诊断：来源 turn、T1/T2、模型、耗时、成功/失败及实际返回的 usage。没有 usage 的失败明确标记 `usageReported: false`，不能把零当作没有费用；不复制摘要正文或敏感工具内容。Adapter 仍是总量统计真源，不重复记账。本次不新增 reflection 请求，也不改变现有 T2 触发策略。
+- `EnterWorktree` 只创建、不切换目录，回执显式标记 `cwdChanged: false`。`GitRead.cwd` 相对当前执行目录解析，可指定同一仓库的关联 worktree；通过 canonical common Git dir 校验身份，拒绝其他仓库（包括嵌套独立仓库）。成功与运行失败均标明 `resolvedCwd`，不继承可重定向仓库的 Git 环境字段。此限制是工具契约，不是防御恶意并发路径替换的 OS sandbox。
+
+## 交付证据与机械重复
+
+不新建自动相关性判断或验证缓存。审查和验证应注明工作目录、base/head SHA、命令与结果；这些身份改变时，说明原证据覆盖范围，再对实际受影响部分补验。不能因为旧 head 曾通过就声称新 head 已通过，也不因清理失败重复执行远端合并。
+
+合并与本地清理解耦：使用 head-match 合并；若后续 worktree/branch 删除失败，先查询 PR 的 `merged` 与 `mergeCommit` 确认远端结果，然后只重试本任务清理。不要把 `gh pr merge --delete-branch` 的本地清理错误当作远端未合并。
+
 ## 验收重点
 
 - 默认无累计预算，显式预算仍准确终止且保留有界收尾机会。

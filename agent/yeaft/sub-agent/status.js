@@ -21,8 +21,8 @@
  * - 'running'   : the sub-engine is processing a prompt.
  * - 'idle'      : the previous turn ended cleanly and the queue is empty.
  *                  The driver is parked in waitUntilResumed().
- * - 'completed' : terminal success — typically set by tickAgent() when a
- *                  budget cutoff is hit cleanly with a partial_output.
+ * - 'completed' : terminal lifecycle state. Inspect the separate outcome;
+ *                  a budget cutoff also ends the lifecycle but is incomplete.
  * - 'failed'    : terminal — driver/adapter/stream raised; agent.error set.
  * - 'closed'    : terminal — CloseAgent called (or driver finally{} reaped
  *                  a cleanly-finishing agent).
@@ -72,7 +72,7 @@ export function describeAgentStatus(status) {
     case STATUS.CREATED:    return 'just spawned';
     case STATUS.RUNNING:    return 'running a turn';
     case STATUS.IDLE:       return 'idle (turn ended, queue empty)';
-    case STATUS.COMPLETED:  return 'completed (terminal)';
+    case STATUS.COMPLETED:  return 'completed lifecycle (terminal; inspect outcome)';
     case STATUS.FAILED:     return 'failed (terminal)';
     case STATUS.CLOSED:     return 'closed (terminal)';
     case STATUS.ABANDONED:  return 'abandoned by idle watchdog (terminal)';

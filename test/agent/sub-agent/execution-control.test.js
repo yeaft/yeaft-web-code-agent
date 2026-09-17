@@ -335,6 +335,7 @@ describe('sub-agent execution control', () => {
       expect(calls).toBe(mode === 'tokens' ? 0 : 2);
       expect(requests).toHaveLength(mode === 'tokens' ? 1 : mode === 'parallel' ? 2 : 3);
       expect(agent.result.status).toBe('budget_exceeded');
+      expect(agent.result).toMatchObject({ outcome: 'incomplete', complete: false });
       expect(completions).toHaveLength(1);
       expect(completions[0]).toMatchObject({ sessionId: 'session-budget', taskId: 'task-budget', status: 'failed' });
       expect(JSON.parse(completions[0].summary)).toEqual(agent.result);
@@ -345,6 +346,12 @@ describe('sub-agent execution control', () => {
         expect(agent.result.partial_output).toContain('progress;');
       } else expect(agent.result.partial_output).toContain('FINAL: evidence-1 and evidence-2');
       if (!['tokens', 'report-tokens', 'wall-time'].includes(mode)) {
+        expect(agent.result.final_report).toMatchObject({
+          reserved: true,
+          received: !['empty', 'error'].includes(mode),
+          truncated: mode === 'truncated',
+        });
+        expect(agent.result.truncated).toBe(mode === 'truncated');
         expect(agent.result.reporting).toMatchObject({ attempted: true, received: !['empty', 'error'].includes(mode) });
         if (mode === 'error') expect(agent.result.reporting.error).toContain('report unavailable');
         else if (mode !== 'empty') expect(agent.result.partial_output).not.toContain('progress;');

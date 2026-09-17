@@ -13,6 +13,10 @@ import { runProcess } from '../../../agent/yeaft/tools/process-runner.js';
 import webFetch from '../../../agent/yeaft/tools/web-fetch.js';
 import { resolveActiveToolNames } from '../../../agent/yeaft/tools/activation.js';
 import exitWorktree from '../../../agent/yeaft/tools/exit-worktree.js';
+import waitTask from '../../../agent/yeaft/tools/wait-task.js';
+import listTasks from '../../../agent/yeaft/tools/list-tasks.js';
+import readTaskLog from '../../../agent/yeaft/tools/read-task-log.js';
+import cancelTask from '../../../agent/yeaft/tools/cancel-task.js';
 import gitRead, { createGitReadTool, MAX_RESULT_BYTES } from '../../../agent/yeaft/tools/git-read.js';
 import { ToolRegistry, truncateToolResultIfNeeded, toolValidationError } from '../../../agent/yeaft/tools/registry.js';
 import { estimateContentTokens, estimateMessageTokens, estimateMessagesTokens, trimSnapshotForBudget } from '../../../agent/yeaft/history-window.js';
@@ -354,8 +358,72 @@ describe('tool efficiency contracts', () => {
     expect(output).toContain(child);
     expect(JSON.parse(await exitWorktree.execute({ path: 'child', action: 'keep' }, ctx)).path).toBe(child);
     await expect(tool.execute({ command: 'pwd', cwd: 'missing' }, ctx)).rejects.toThrow(join(root, 'missing'));
-    runProcessImpl.mockResolvedValueOnce({ code: 2, stdout: '', stderr: 'failed' });
-    expect(await tool.execute({ command: 'exit 2', cwd: '.' }, ctx)).toContain(`Working directory: ${root}`);
+    runProcessImpl.mockResolvedValueOnce({ code: 2, stdout: '', stderr: 'failed', timedOut: false });
+    const failed = JSON.parse(await tool.execute({ command: 'exit 2', cwd: '.' }, ctx));
+    expect(failed).toMatchObject({
+      code: 'bash_exit_nonzero',
+      failureType: 'exit_nonzero',
+      exitCode: 2,
+      status: 'Exit code: 2',
+      workingDirectory: `Working directory: ${root}`,
+      replaySafe: false,
+    });
+    runProcessImpl.mockResolvedValueOnce({ code: 3, stdout: 'HEAD\n' + '\u0000改"\\'.repeat(40000) + '\nTAIL', stderr: '', timedOut: false });
+    const large = await tool.execute({ command: 'large failure' }, ctx);
+    const projected = truncateToolResultIfNeeded(large, { toolName: 'Bash' });
+    expect(Buffer.byteLength(projected)).toBeLessThanOrEqual(32 * 1024);
+    const envelope = JSON.parse(projected);
+    expect(envelope).toMatchObject({ exitCode: 3, truncated: true, errorEffect: 'unknown', replaySafe: false });
+    expect(envelope.output).toContain('HEAD');
+    expect(envelope.output).toContain('TAIL');
+    runProcessImpl.mockResolvedValueOnce({ code: 0, stdout: '{"error":"application data"}', stderr: '', timedOut: false });
+    expect(await tool.execute({ command: 'json output' }, ctx)).toContain('Exit code: 0');
+    const toolFailure = new Error('spawn failed');
+    toolFailure.code = 'ENOENT';
+    runProcessImpl.mockRejectedValueOnce(toolFailure);
+    await expect(tool.execute({ command: 'echo unreachable', cwd: '.' }, ctx)).rejects.toMatchObject({
+      code: 'ENOENT',
+      message: `spawn failed (working directory: ${root})`,
+    });
+  });
+
+  it('keeps Session task status, waiting, logs, and cancellation owner-scoped', async () => {
+    const task = {
+      id: 'task_1',
+      ownerVpId: 'vp_1',
+      status: 'succeeded',
+      result: { exitCode: 0, signal: null },
+      log: { path: '/tmp/task.log', bytes: 987, preview: 'must not leak' },
+    };
+    const waitForTask = vi.fn(async () => ({ ok: true, timedOut: false, task }));
+    const taskManager = {
+      waitForTask,
+      listActiveTasks: vi.fn(() => []),
+      readTaskLog: vi.fn(() => ({ text: '', bytes: 0, nextOffset: 0 })),
+      cancelTask: vi.fn(() => ({ ok: true, task })),
+    };
+    const signal = new AbortController().signal;
+    const ctx = { sessionId: 'session_1', currentVpId: 'vp_1', signal, taskManager };
+    const waited = JSON.parse(await waitTask.execute({ taskId: task.id, timeout_ms: 5 }, ctx));
+
+    expect(waitForTask).toHaveBeenCalledWith('session_1', task.id, expect.objectContaining({
+      timeoutMs: 5, ownerVpId: 'vp_1', signal,
+    }));
+    expect(waited).toEqual(expect.objectContaining({
+      taskId: task.id, status: 'succeeded', terminal: true, exitCode: 0,
+      log: { path: '/tmp/task.log', bytes: 987, endOffset: 987 },
+    }));
+    expect(JSON.stringify(waited)).not.toContain('must not leak');
+
+    await listTasks.execute({}, ctx);
+    await readTaskLog.execute({ taskId: task.id }, ctx);
+    await cancelTask.execute({ taskId: task.id }, ctx);
+    expect(taskManager.listActiveTasks).toHaveBeenCalledWith('session_1', 'vp_1');
+    expect(taskManager.readTaskLog).toHaveBeenCalledWith('session_1', task.id, expect.any(Object), 'vp_1');
+    expect(taskManager.cancelTask).toHaveBeenCalledWith('session_1', task.id, 'vp_1');
+    for (const tool of [waitTask, listTasks, readTaskLog, cancelTask]) {
+      expect(JSON.parse(await tool.execute({ taskId: task.id, sessionId: 'foreign' }, ctx)).error).toContain('current Session');
+    }
   });
 
   it('returns file version and overlap hints without suppressing new or changed reads', async () => {

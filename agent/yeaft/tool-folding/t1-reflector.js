@@ -16,6 +16,7 @@
  */
 
 import { buildReflectionPrompt } from './reflection-prompt.js';
+import { normalizeTokenUsage } from '../llm/usage-accounting.js';
 
 /**
  * @param {{
@@ -26,22 +27,42 @@ import { buildReflectionPrompt } from './reflection-prompt.js';
  *   assistantText?: string,
  *   language?: string,
  *   signal?: AbortSignal,
+ *   onComplete?: (diagnostic: object) => void,
  * }} p
- * @returns {Promise<{ content: string, durationMs: number }>}
+ * @returns {Promise<{ content: string, durationMs: number, usage: object }>}
  */
-export async function runT1Reflection({ adapter, model, originalUserMsg, toolPairs, assistantText, language, signal }) {
+export async function runT1Reflection({ adapter, model, originalUserMsg, toolPairs, assistantText, language, signal, onComplete }) {
   const t0 = Date.now();
   const prompt = buildReflectionPrompt({ originalUserMsg, toolPairs, assistantText, language });
-  const result = await adapter.call({
-    model,
-    system: prompt,
-    messages: [{ role: 'user', content: 'Produce the reflection now.' }],
-    maxTokens: 2048,
-    signal,
-  });
-  const content = (result && typeof result.text === 'string') ? result.text.trim() : '';
-  if (!content) {
-    throw new Error('T1 reflection returned empty content');
+  let result;
+  let failure;
+  try {
+    result = await adapter.call({
+      model,
+      system: prompt,
+      messages: [{ role: 'user', content: 'Produce the reflection now.' }],
+      maxTokens: 2048,
+      signal,
+    });
+    const content = (result && typeof result.text === 'string') ? result.text.trim() : '';
+    if (!content) {
+      throw new Error('T1 reflection returned empty content');
+    }
+    return { content, durationMs: Date.now() - t0, usage: normalizeTokenUsage(result?.usage) };
+  } catch (error) {
+    failure = error;
+    throw error;
+  } finally {
+    // Diagnostic only; the adapter owns billing/usage accounting. Never
+    // double-charge it or fail a completed reflection on a logging error.
+    try {
+      onComplete?.({
+        status: failure ? 'error' : 'ready',
+        durationMs: Date.now() - t0,
+        usage: normalizeTokenUsage(result?.usage),
+        usageReported: !!result?.usage,
+        ...(failure ? { error: String(failure.message || failure).slice(0, 512) } : {}),
+      });
+    } catch { /* best-effort diagnostics */ }
   }
-  return { content, durationMs: Date.now() - t0 };
 }

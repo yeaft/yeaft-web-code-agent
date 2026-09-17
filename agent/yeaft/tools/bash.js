@@ -166,7 +166,7 @@ Guidelines:
     },
     required: ['command'],
   },
-  errorOutput: null,
+  errorOutput: 'json-error-envelope',
   // Foreground Bash owns a bounded timeout and process-tree cleanup state
   // machine. A second ToolRegistry timer can preempt that cleanup and turn an
   // owned exit 124 into a fatal orphan, so it must stay disabled for this tool.
@@ -217,7 +217,7 @@ Guidelines:
             threadId: ctx.threadId || 'main',
           },
         });
-        return `Started background task ${task.id}.\nWorking directory: ${cwd}\nStatus: ${task.status}\nLog: ${task.log?.path || ''}\nThe task is detached from this turn. Use ListTasks, ReadTaskLog, or CancelTask to inspect or control it.`;
+        return `Started background task ${task.id}.\nWorking directory: ${cwd}\nStatus: ${task.status}\nLog: ${task.log?.path || ''}\nThe task is detached from this turn. Use WaitTask for bounded waiting, ReadTaskLog for output, ListTasks for active status, or CancelTask when cancellation is intended.`;
       } catch (err) {
         throw new Error(err?.message || String(err));
       }
@@ -258,10 +258,35 @@ Guidelines:
       }
 
       const output = parts.join('\n');
-      if (result.exitCode !== 0) {
-        return `Exit code: ${result.exitCode}\nWorking directory: ${cwd}\n${output}`;
+      if (result.exitCode !== 0 || result.timedOut || result.terminationError) {
+        const failureType = result.timedOut
+          ? (result.terminationError ? 'timeout_unconfirmed' : 'timeout_confirmed')
+          : result.terminationError || result.exitCode === null ? 'exit_unconfirmed' : 'exit_nonzero';
+        return JSON.stringify({
+          error: result.timedOut
+            ? `Command timed out after ${timeout}ms${result.terminationError ? '; process-tree termination was not confirmed' : ''}.`
+            : `Command exited with code ${result.exitCode}.`,
+          code: `bash_${failureType}`,
+          errorEffect: 'unknown',
+          failureType,
+          exitCode: Number.isInteger(result.exitCode) ? result.exitCode : null,
+          status: `Exit code: ${result.exitCode}`,
+          workingDirectory: `Working directory: ${cwd}`,
+          timedOut: result.timedOut === true,
+          terminationConfirmed: result.timedOut ? !result.terminationError : null,
+          terminationError: result.terminationError || null,
+          cwd,
+          output: output || '(no output)',
+          replaySafe: false,
+        });
       }
-      return output || '(no output)';
+      // A successful command may print application JSON containing `error`.
+      // Do not let it masquerade as a tool-level failure envelope.
+      let successfulOutput = output || '(no output)';
+      try {
+        if (JSON.parse(successfulOutput)?.error) successfulOutput = `Exit code: 0\n${successfulOutput}`;
+      } catch { /* ordinary command output */ }
+      return successfulOutput;
     } catch (err) {
       err.message = `${err.message} (working directory: ${cwd})`;
       if (err?.name === 'ProcessTerminationError') err.fatalToolTimeout = true;

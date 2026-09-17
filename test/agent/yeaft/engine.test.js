@@ -19,6 +19,8 @@ import { cleanMemoryPromptText, filterMemoryPromptTextForPrompt, filterRelatedSe
 import { makeSegment, serializeSegments } from '../../../agent/yeaft/memory/segment.js';
 import { readCanonicalContentRecord, readScope } from '../../../agent/yeaft/memory/segment-store.js';
 import { syncAll, syncScope } from '../../../agent/yeaft/memory/segment-sync.js';
+import { collapseRangeToReflection } from '../../../agent/yeaft/tool-folding/index.js';
+import { runT1Reflection } from '../../../agent/yeaft/tool-folding/t1-reflector.js';
 import { Engine, mapDebugMessage, buildResidentEntries, estimateProviderInputBreakdown, selectCanonicalMemoryScopes, selectResidentTopicScopes, selectRelatedSessionIds } from '../../../agent/yeaft/engine.js';
 import { flushAgentPerfTrace } from '../../../agent/yeaft/perf-trace.js';
 import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
@@ -190,6 +192,7 @@ describe('active tool exposure and scoped prompts', () => {
       'ListAgents',
       'ListTasks',
       'ReadTaskLog',
+      'WaitTask',
       'CancelTask',
       'RouteForward',
       'CreateWorkItem',
@@ -763,7 +766,7 @@ describe('active tool exposure and scoped prompts', () => {
         return 'Started background task task_live.';
       },
     });
-    for (const name of ['ListTasks', 'ReadTaskLog', 'CancelTask']) {
+    for (const name of ['ListTasks', 'ReadTaskLog', 'WaitTask', 'CancelTask']) {
       registry.register({
         name,
         description: `${name} description`,
@@ -796,6 +799,7 @@ describe('active tool exposure and scoped prompts', () => {
     expect(mockAdapter.callLog[1].tools.map(tool => tool.name)).toEqual(expect.arrayContaining([
       'ListTasks',
       'ReadTaskLog',
+      'WaitTask',
       'CancelTask',
     ]));
     expect(mockAdapter.callLog[1].system).not.toContain('task_live is running');
@@ -3883,6 +3887,94 @@ describe('Engine', () => {
         terminal: true,
       }));
     });
+    it('identifies folded rows without swallowing users, prior reflections or control notes', () => {
+      const original = { role: 'user', content: 'original' };
+      const kept = [
+        { role: 'user', content: 'actual follow-up', id: 'user-1' },
+        { role: 'user', content: 'completion', internal: true, id: 'note-1' },
+        { role: 'user', content: 'duplicate reminder', internal: true },
+        { role: 'user', content: 'prior summary', _reflection: true },
+      ];
+      const assistant = { role: 'assistant', toolCalls: [{ id: 'a' }], id: 'assistant-1' };
+      const tool = { role: 'tool', toolCallId: 'a', id: 'tool-1' };
+      const rows = [original, assistant, ...kept, tool];
+      const replacement = collapseRangeToReflection(rows, 1, rows.length - 1, 'summary');
+      expect(replacement.foldedMessages).toEqual([assistant, tool]);
+      expect(replacement.messages).toEqual([original, ...kept, replacement.reflection]);
+      expect(replacement.reflection).toMatchObject({ _reflection: true, content: expect.stringContaining('summary') });
+      expect(rows).toHaveLength(7);
+      expect(collapseRangeToReflection(rows, -1, 100, 'bad')).toEqual({ messages: rows, reflection: null, foldedMessages: [] });
+    });
+
+    it('records reflection usage on success and empty output without double-accounting', async () => {
+      const onComplete = vi.fn();
+      const params = { model: 'test', originalUserMsg: 'task', toolPairs: [], onComplete };
+      const adapter = { call: vi.fn().mockResolvedValue({ text: 'ok', usage: {
+        inputTokens: 20, outputTokens: 2, cacheReadTokens: 15, cacheTokensAreIncludedInInput: true,
+      } }) };
+      expect(await runT1Reflection({ ...params, adapter })).toMatchObject({ usage: { totalTokens: 22 } });
+      adapter.call.mockResolvedValue({ text: '', usage: { inputTokens: 2, outputTokens: 0 } });
+      await expect(runT1Reflection({ ...params, adapter })).rejects.toThrow('empty');
+      expect(onComplete.mock.calls.map(([d]) => [d.status, d.usage.totalTokens, d.usageReported]))
+        .toEqual([['ready', 22, true], ['error', 2, true]]);
+    });
+
+    it('folds successive T1 batches across appended users and internal notifications, including restart', async () => {
+      const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-fold-controls-'));
+      try {
+        const conversationStore = new ConversationStore(yeaftDir);
+        const adapter = new MockAdapter();
+        adapter.call = vi.fn().mockResolvedValue({ text: 'summary', usage: { inputTokens: 5, outputTokens: 2 } });
+        for (let index = 0; index < 60; index++) adapter.pushResponse([
+          { type: 'tool_call', id: `fold_${index}`, name: 'fold_control', input: { index } },
+          { type: 'stop', stopReason: 'tool_use' },
+        ]);
+        adapter.pushResponse([{ type: 'text_delta', text: 'done' }, { type: 'stop', stopReason: 'end_turn' }]);
+        const foldSpy = vi.spyOn(conversationStore, 'foldMessages');
+        const pending = [];
+        const engine = new Engine({ adapter, trace, conversationStore, yeaftDir,
+          config: { model: 'test-model', maxOutputTokens: 1024, maxContextTokens: 128000 } });
+        engine.registerTool({ name: 'fold_control', description: 'test', parameters: { type: 'object' },
+          execute: async ({ index }) => {
+            if (index === 2 || index === 32) pending.push(
+              { content: `user addition ${index}` },
+              { content: `task completion ${index}`, internal: true },
+            );
+            return `result ${index}`;
+          },
+        });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'task', sessionId: 'fold-controls',
+          drainPendingUserMessages: () => pending.splice(0) })) events.push(event);
+        expect(events.filter(e => e.type === 'reflection' && e.status === 'ready' && e.trigger === 't1')).toHaveLength(2);
+        expect(events.filter(e => e.type === 'reflection' && e.status === 'error')).toEqual([]);
+        const messages = adapter.callLog.at(-1).messages;
+        expect(messages.filter(m => m.role === 'tool')).toEqual([]);
+        for (const index of [2, 32]) {
+          expect(messages.some(m => String(m.content).includes(`user addition ${index}`))).toBe(true);
+          expect(messages.some(m => String(m.content).includes(`task completion ${index}`))).toBe(true);
+        }
+        const restarted = new ConversationStore(yeaftDir);
+        const durable = restarted.loadRecentBySession('fold-controls', Infinity, { includeReflections: true });
+        expect(durable.filter(m => m._reflection)).toHaveLength(2);
+        expect(foldSpy).toHaveBeenCalledTimes(2);
+        for (const [folded, reflection] of foldSpy.mock.calls) {
+          expect(folded).toHaveLength(60);
+          expect(reflection._reflection).toBe(true);
+        }
+        expect(durable.filter(m => m.role === 'tool')).toEqual([]);
+        for (const index of [2, 32]) expect(durable.some(m => m.content === `user addition ${index}`)).toBe(true);
+        // Preserved controls/users are not in either reflection's tombstone set.
+        const preservedIds = durable.filter(m => String(m.content).includes('addition') || String(m.content).includes('completion')).map(m => m.id);
+        for (const reflection of durable.filter(m => m._reflection)) {
+          expect(reflection.foldedMessageIds.some(id => preservedIds.includes(id))).toBe(false);
+        }
+      } finally {
+        await closeConversationHistoryIndexes();
+        rmSync(yeaftDir, { recursive: true, force: true });
+      }
+    });
+
     it('persists a T1 folding reflection and hides the original tool arc after restart', async () => {
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-t1-fold-persist-'));
       try {
@@ -3945,7 +4037,7 @@ describe('Engine', () => {
       }
     });
 
-    it('persists a T2 carry-forward reflection even when the next request cannot retain recent history', async () => {
+    it.each(['prepended', 'evicted'])('persists a T2 carry-forward reflection with stable wire identity when history is %s', async historyMode => {
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-t2-fold-persist-'));
       try {
         const conversationStore = new ConversationStore(yeaftDir);
@@ -3963,6 +4055,7 @@ describe('Engine', () => {
           })),
           { type: 'stop', stopReason: 'tool_use' },
         ]);
+        adapter.pushResponse([{ type: 'tool_call', id: 't2_after_append', name: 't2_fold_tool', input: { index: 10 } }, { type: 'stop', stopReason: 'tool_use' }]);
         adapter.pushResponse([
           { type: 'text_delta', text: 'first turn finished' },
           { type: 'stop', stopReason: 'end_turn' },
@@ -3982,22 +4075,28 @@ describe('Engine', () => {
           name: 't2_fold_tool',
           description: 'returns one result',
           parameters: { type: 'object', properties: { index: { type: 'number' } } },
-          execute: async ({ index }) => `result ${index}`,
+          execute: async ({ index }) => {
+            if (index === 0) engine.appendUserMessage('keep this real appended user');
+            return `result ${index}`;
+          },
         });
 
-        for await (const _event of engine.query({
+        const firstEvents = [];
+        for await (const event of engine.query({
           prompt: 'run nine tools',
           sessionId: 'session-t2-fold',
           causalRootId: 'root-t2-origin',
-        })) {
-          // consume
-        }
+        })) firstEvents.push(event);
         await Promise.resolve();
-        const firstTurn = conversationStore.loadRecentBySession('session-t2-fold', Infinity);
+        const firstTurn = [
+          { role: 'user', content: 'Unrelated historical prompt must survive' },
+          { role: 'assistant', content: 'Unrelated historical answer must survive' },
+          ...conversationStore.loadRecentBySession('session-t2-fold', Infinity),
+        ];
         const secondEvents = [];
         for await (const event of engine.query({
           prompt: 'continue after t2',
-          messages: firstTurn,
+          messages: historyMode === 'evicted' ? firstTurn.slice(0, 2) : firstTurn,
           sessionId: 'session-t2-fold',
           causalRootId: 'root-t2-current',
         })) secondEvents.push(event);
@@ -4005,7 +4104,12 @@ describe('Engine', () => {
         // configured recent-turn count is not a hard request-success floor.
         expect(secondEvents.find(event => event.type === 'error')).toBeUndefined();
         expect(secondEvents.filter(event => event.type === 'turn_end' && event.terminal)).toHaveLength(1);
-        expect(adapter.callLog).toHaveLength(3);
+        expect(adapter.callLog).toHaveLength(4);
+        const pending = firstEvents.find(event => event.type === 'reflection' && event.trigger === 't2' && event.status === 'pending');
+        const ready = secondEvents.find(event => event.type === 'reflection' && event.trigger === 't2' && event.status === 'ready');
+        expect(pending).toBeTruthy();
+        expect(ready).toMatchObject({ turnId: pending.turnId, trigger: pending.trigger, loopRange: pending.loopRange });
+        expect(ready.loopRange.every(index => index >= 0)).toBe(true);
 
         const restarted = new ConversationStore(yeaftDir);
         const durable = restarted.loadRecentBySession(
@@ -4022,6 +4126,7 @@ describe('Engine', () => {
         expect(durable.some(message => message.role === 'tool')).toBe(false);
         expect(durable.some(message => Array.isArray(message.toolCalls) && message.toolCalls.length > 0)).toBe(false);
         expect(durable.some(message => message.content === 'second turn finished')).toBe(true);
+        expect(durable.some(message => message.role === 'user' && message.content === 'keep this real appended user')).toBe(true);
         expect(durable.some(message => message.role === 'user' && message.content === 'continue after t2')).toBe(true);
       } finally {
         await closeConversationHistoryIndexes();
@@ -5496,8 +5601,21 @@ describe('Engine', () => {
         cwd: process.cwd(),
         requestToolBatchBarrier: reason => barrierRequests.push(reason),
       });
-      expect(confirmedTimeoutOutput).toContain('Exit code: 124');
-      expect(ordinaryFailureOutput).toContain('Exit code: 2');
+      expect(JSON.parse(confirmedTimeoutOutput)).toMatchObject({
+        code: 'bash_timeout_confirmed',
+        failureType: 'timeout_confirmed',
+        exitCode: 124,
+        timedOut: true,
+        terminationConfirmed: true,
+        replaySafe: false,
+      });
+      expect(JSON.parse(ordinaryFailureOutput)).toMatchObject({
+        code: 'bash_exit_nonzero',
+        failureType: 'exit_nonzero',
+        exitCode: 2,
+        timedOut: false,
+        replaySafe: false,
+      });
       expect(barrierRequests).toEqual([
         expect.objectContaining({ kind: 'owned_timeout' }),
       ]);
@@ -5580,7 +5698,14 @@ describe('Engine', () => {
       expect(recoveryAdapter.callLog).toHaveLength(3);
       const timeoutToolMessage = recoveryAdapter.callLog[1].messages
         .find(message => message.toolCallId === 'call_unconfirmed_timeout');
-      expect(timeoutToolMessage).toMatchObject({ isError: false });
+      expect(timeoutToolMessage).toMatchObject({ isError: true });
+      expect(JSON.parse(timeoutToolMessage.content)).toMatchObject({
+        code: 'bash_timeout_unconfirmed',
+        failureType: 'timeout_unconfirmed',
+        timedOut: true,
+        terminationConfirmed: false,
+        replaySafe: false,
+      });
       expect(timeoutToolMessage.content).toContain('Exit code: 124');
       expect(timeoutToolMessage.content).toContain('Process tree did not exit within 5ms after SIGKILL: powershell.exe');
       expect(timeoutToolMessage.content).toContain('The command may still be running.');
@@ -5662,7 +5787,7 @@ describe('Engine', () => {
         const barrierProviderMessages = batchBarrierAdapter.callLog[1].messages;
         expect(barrierProviderMessages
           .find(message => message.toolCallId === 'call_batch_timeout')).toMatchObject({
-            isError: false,
+            isError: true,
             content: expect.stringContaining('The command may still be running.'),
           });
         expect(barrierProviderMessages
@@ -5684,7 +5809,7 @@ describe('Engine', () => {
         expect(batchBarrierEvents.filter(event => event.type === 'tool_start').map(event => event.name))
           .toEqual(['Bash']);
         expect(batchBarrierEvents.filter(event => event.type === 'tool_end')).toEqual([
-          expect.objectContaining({ id: 'call_batch_timeout', name: 'Bash', isError: false }),
+          expect.objectContaining({ id: 'call_batch_timeout', name: 'Bash', isError: true }),
           expect.objectContaining({
             id: 'call_write_after_timeout',
             name: 'FileWrite',
@@ -5802,13 +5927,13 @@ describe('Engine', () => {
               expect(bashAdapter.callLog).toHaveLength(2);
               expect(bashAdapter.callLog[1].messages.find(message => message.role === 'tool')).toMatchObject({
                 toolCallId: 'call_bash_timeout',
-                isError: false,
+                isError: true,
               });
               expect(bashAdapter.callLog[1].messages.find(message => message.role === 'tool').content)
                 .toContain('Exit code: 124');
               expect(bashEvents.find(event => event.type === 'tool_end')).toMatchObject({
                 id: 'call_bash_timeout',
-                isError: false,
+                isError: true,
               });
               expect(bashEvents.find(event => event.type === 'error')).toBeUndefined();
               expect(bashEvents.filter(event => event.type === 'turn_end').at(-1)).toMatchObject({

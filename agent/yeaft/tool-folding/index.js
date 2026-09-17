@@ -5,7 +5,7 @@
  *   - Constants TOOL_LOOP_REFLECTION_INTERVAL, TURN_SUMMARY_THRESHOLD,
  *     DUP_TOOL_THRESHOLD
  *   - Reflector helpers (T1 sync, T2 async, fallback stub)
- *   - Helpers for collapsing message ranges into a single assistant
+ *   - Helpers for collapsing message ranges into a single synthetic user
  *     reflection message
  *   - Duplicate-reminder text formatter
  *
@@ -42,13 +42,13 @@ export { buildFallbackStub } from './fallback-stub.js';
 
 /**
  * Collapse messages[startIdx..endIdx] (inclusive) into a single
- * `{ role: 'user', content }` reflection message. Returns a NEW array; does
- * not mutate the input.
+ * `{ role: 'user', content }` reflection message. Returns an explicit
+ * replacement record; does not mutate the input.
  *
  * The original assistant+tool sequence (the action arc) is replaced by ONE
  * synthetic user message carrying the reflection summary. User messages
- * that happened to appear inside the range stay put (defensive — the caller
- * normally passes a range that contains only assistant+tool).
+ * inside the range are preserved before the summary, including appended
+ * prompts, async completion notifications and duplicate-call reminders.
  *
  * Why role='user' (not 'assistant'):
  *   The Anthropic Messages API requires the messages array to end with a
@@ -68,11 +68,13 @@ export { buildFallbackStub } from './fallback-stub.js';
  * @param {number} startIdx
  * @param {number} endIdx
  * @param {string} reflectionContent
- * @returns {Array}
+ * @returns {{messages: Array, reflection: object|null, foldedMessages: Array}}
  */
 export function collapseRangeToReflection(messages, startIdx, endIdx, reflectionContent) {
-  if (!Array.isArray(messages)) return messages;
-  if (startIdx < 0 || endIdx < startIdx || endIdx >= messages.length) return messages;
+  if (!Array.isArray(messages) || !Number.isInteger(startIdx) || !Number.isInteger(endIdx)
+      || startIdx < 0 || endIdx < startIdx || endIdx >= messages.length) {
+    return { messages, reflection: null, foldedMessages: [] };
+  }
   const before = messages.slice(0, startIdx);
   const collapsed = messages.slice(startIdx, endIdx + 1);
   const after = messages.slice(endIdx + 1);
@@ -101,7 +103,13 @@ export function collapseRangeToReflection(messages, startIdx, endIdx, reflection
     content: wrappedContent,
     _reflection: true,
   };
-  return [...before, ...preservedUsers, reflectionMsg, ...after];
+  return {
+    messages: [...before, ...preservedUsers, reflectionMsg, ...after],
+    reflection: reflectionMsg,
+    // Only replaced rows may be tombstoned. Preserved users include real
+    // appended prompts and internal completion/reminder messages.
+    foldedMessages: collapsed.filter(m => m && m.role !== 'user'),
+  };
 }
 
 /**

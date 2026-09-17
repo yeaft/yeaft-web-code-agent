@@ -27,6 +27,9 @@ export default defineTool({
   duplicateCallPolicy: () => 'allow',
   async execute(input = {}, ctx = {}) {
     if (!ctx.taskManager) return JSON.stringify({ error: 'task manager unavailable' });
+    if (ctx.sessionId && input.sessionId && input.sessionId !== ctx.sessionId) {
+      return JSON.stringify({ error: 'Task access is limited to the current Session', errorEffect: 'none' });
+    }
     const taskId = input.taskId;
     if (!taskId) return JSON.stringify({ error: 'taskId is required' });
     const sessionId = input.sessionId || ctx.sessionId || 'default';
@@ -35,7 +38,7 @@ export default defineTool({
       offset: input.offset,
       maxBytes: input.maxBytes,
       tail: typeof input.tail === 'boolean' ? input.tail : !hasOffset,
-    });
-    return JSON.stringify(result, null, 2);
+    }, ctx.currentVpId || null);
+    return JSON.stringify(result || { error: `Unknown task: ${taskId}` }, null, 2);
   },
 });

@@ -17,7 +17,7 @@
  * Reference: yeaft-yeaft-implementation-plan.md §3.1, §4 (Phase 2)
  */
 
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import { promises as fsp } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
@@ -50,6 +50,13 @@ import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 // Default thread marker for legacy / non-group flows. Group VP runtime may
 // pass a real threadId per (sessionId, vpId, threadId) engine instance.
 const MAIN_THREAD_ID = 'main';
+
+function foldingMessageKey(message) {
+  return message?._persistedMessageId || message?.id || createHash('sha256').update(JSON.stringify([
+    message?.role, message?.toolCallId, message?.toolCalls, message?.content,
+  ])).digest('hex');
+}
+
 import { pickEffort, parseEffortPrefix, snapshotEffortDecision } from './effort.js';
 import { bindProviderState } from './llm/provider-state.js';
 import {
@@ -1666,9 +1673,9 @@ export class Engine {
     return this.#conversationStore.append(this.#conversationRecord(message, context));
   }
 
-  #persistFoldedRange(messages, startIdx, endIdx, reflection, context = {}) {
+  #persistFoldedRange(foldedMessages, reflection, context = {}) {
     if (!this.#canPersistConversation() || typeof this.#conversationStore?.foldMessages !== 'function') return null;
-    const persistedRows = (messages || []).slice(startIdx, endIdx + 1)
+    const persistedRows = (foldedMessages || [])
       .map(message => message?._persistedMessageId || message?.id)
       .filter(id => typeof id === 'string' && id)
       .map(id => ({ id }));
@@ -4101,6 +4108,10 @@ export class Engine {
               assistantText,
               language: this.#config.language,
               signal,
+              onComplete: diagnostic => this.#trace.log?.('tool_reflection', {
+                sessionId: runtimeSessionId, turnId: queryTurnId,
+                trigger: 't2', model: this.#config.model, ...diagnostic,
+              }),
             });
             // Detach: never await. The promise outlives this query() and
             // the next call will pick it up (or use the fallback stub if
@@ -4111,6 +4122,12 @@ export class Engine {
             const info = {
               promise,
               loopRange: [arcStart, arcEnd],
+              // Absolute indexes do not survive history-window reconstruction.
+              arcKeys: conversationMessages.slice(arcStart, arcEnd + 1).map(foldingMessageKey),
+              arcRows: conversationMessages.slice(arcStart, arcEnd + 1).map(message => ({
+                role: message.role, id: message.id, _persistedMessageId: message._persistedMessageId,
+                toolCallId: message.toolCallId, toolCalls: message.toolCalls?.map(call => ({ id: call.id })),
+              })),
               count: pairs.length,
               originalUserMsg: prompt,
               originatingTurnId: queryTurnId,
@@ -4904,24 +4921,25 @@ export class Engine {
             assistantText,
             language: this.#config.language,
             signal,
+            onComplete: diagnostic => this.#trace.log?.('tool_reflection', {
+              sessionId: runtimeSessionId, turnId: queryTurnId,
+              trigger: 't1', model: this.#config.model, ...diagnostic,
+            }),
           });
-          const next = collapseRangeToReflection(
+          const { messages: next, reflection: reflectionMessage, foldedMessages } = collapseRangeToReflection(
             conversationMessages, batchStart, batchEnd, content,
           );
-          const reflectionMessage = next[batchStart];
-          const durableRowsInRange = conversationMessages
-            .slice(batchStart, batchEnd + 1)
+          const durableRowsInRange = foldedMessages
             .some(message => message?._persistedMessageId || message?.id);
           const persistedReflection = this.#persistFoldedRange(
-            conversationMessages,
-            batchStart,
-            batchEnd,
+            foldedMessages,
             reflectionMessage,
             { sessionId: runtimeSessionId, model: currentModel, executionOrigin },
           );
           if (durableRowsInRange && !persistedReflection) {
             throw new Error('T1 reflection could not publish its durable range replacement');
           }
+          if (persistedReflection?.id) reflectionMessage._persistedMessageId = persistedReflection.id;
           // Raw tool rows inside the replacement range are now tombstoned in
           // durable history. Late async completions must follow the folded
           // continuation path rather than appending to those stale rows.
@@ -4934,11 +4952,12 @@ export class Engine {
           }
           conversationMessages.length = 0;
           for (const m of next) conversationMessages.push(m);
-          // After collapse: the just-inserted reflection lives at
-          // index `batchStart`. The next tool arc therefore starts
+          // The preserved users precede the reflection. The next arc starts
           // immediately after it, i.e. at conversationMessages.length
           // (the next assistant message will land here).
           arcStartIdx = conversationMessages.length;
+          // Read hints must not imply raw ranges remain in model context.
+          fileReadObservations.clear();
           lastT1AtLoopCount = completedToolLoops;
           // Bump the success counter — used by the T2 schedule check
           // to decide whether T2 still has work to do at end_turn.
@@ -5180,12 +5199,13 @@ export class Engine {
     this.#pendingT2.clear();
 
     for (const [turnNumber, info] of drained) {
-      const range = info.loopRange;
-      if (!Array.isArray(range) || range.length !== 2) continue;
-      const [startIdx, endIdx] = range;
-      if (startIdx < 0 || endIdx < startIdx || endIdx >= conversationMessages.length) {
-        continue;
-      }
+      const keys = info.arcKeys;
+      if (!Array.isArray(keys) || keys.length === 0) continue;
+      const currentKeys = conversationMessages.map(foldingMessageKey);
+      const startIdx = currentKeys.findIndex((key, index) => key === keys[0]
+        && keys.every((expected, offset) => currentKeys[index + offset] === expected));
+      const endIdx = startIdx + keys.length - 1;
+      const rangePresent = startIdx >= 0;
 
       // PR-L follow-up: deterministic readiness check. The info record
       // carries `ready / result / error` flags that are flipped from the
@@ -5214,15 +5234,13 @@ export class Engine {
       }
 
       // Rewrite history and publish the same logical replacement to disk.
-      const next = collapseRangeToReflection(conversationMessages, startIdx, endIdx, content);
-      const reflectionMessage = next[startIdx];
-      const durableRowsInRange = conversationMessages
-        .slice(startIdx, endIdx + 1)
+      const { messages: next, reflection: reflectionMessage, foldedMessages } = rangePresent
+        ? collapseRangeToReflection(conversationMessages, startIdx, endIdx, content)
+        : collapseRangeToReflection(info.arcRows, 0, info.arcRows.length - 1, content);
+      const durableRowsInRange = foldedMessages
         .some(message => message?._persistedMessageId || message?.id);
       const persistedReflection = this.#persistFoldedRange(
-        conversationMessages,
-        startIdx,
-        endIdx,
+        foldedMessages,
         reflectionMessage,
         {
           ...context,
@@ -5231,26 +5249,31 @@ export class Engine {
         },
       );
       if (durableRowsInRange && !persistedReflection) continue;
+      if (persistedReflection?.id) reflectionMessage._persistedMessageId = persistedReflection.id;
       // T2 replaces this arc in durable and in-memory history just like T1.
       // Forget its raw result handles before a late async task can append to a
       // tombstoned tool row at the next provider boundary.
-      const foldedToolCallIds = conversationMessages
-        .slice(startIdx, endIdx + 1)
+      const foldedToolCallIds = foldedMessages
         .filter(message => message?.role === 'tool' && message.toolCallId)
         .map(message => message.toolCallId);
       for (const toolCallId of foldedToolCallIds) {
         this.#persistedToolMessages.delete(toolCallId);
       }
-      // Mutate in place so caller's reference stays valid.
-      conversationMessages.length = 0;
-      for (const m of next) conversationMessages.push(m);
+      // History may have evicted the old arc. Publish only its original
+      // durable row IDs; never replace unrelated rows at stale indexes.
+      if (rangePresent) {
+        conversationMessages.length = 0;
+        for (const m of next) conversationMessages.push(m);
+      }
 
       yield {
         type: 'reflection',
         turnId: info.originatingTurnId || null,
         trigger,
         status: 'ready',
-        loopRange: [startIdx, endIdx],
+        // Wire identity must match the original pending card, even if the
+        // history window shifted or evicted its internal replacement range.
+        loopRange: info.loopRange,
         toolCount: info.count || 0,
         content,
         durationMs,

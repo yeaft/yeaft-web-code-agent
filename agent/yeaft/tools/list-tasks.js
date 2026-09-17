@@ -44,14 +44,21 @@ export default defineTool({
   cacheWithinQuery: false,
   async execute(input = {}, ctx = {}) {
     if (!ctx.taskManager) return JSON.stringify({ error: 'task manager unavailable' });
+    if (ctx.sessionId && input.sessionId && input.sessionId !== ctx.sessionId) {
+      return JSON.stringify({ error: 'Task access is limited to the current Session', errorEffect: 'none' });
+    }
     const sessionId = input.sessionId || ctx.sessionId || null;
-    const tasks = ctx.taskManager.listActiveTasks(sessionId)
+    const ownerVpId = ctx.currentVpId || null;
+    const activeTasks = ownerVpId
+      ? ctx.taskManager.listActiveTasks(sessionId, ownerVpId)
+      : ctx.taskManager.listActiveTasks(sessionId);
+    const tasks = activeTasks
       .map(compactTaskSnapshot)
       .filter(Boolean);
     return JSON.stringify({
       tasks,
       next_steps: tasks.length > 0
-        ? 'ReadTaskLog reads output by task id. For sub_agent tasks use WaitAgent/CloseAgent with agentId to collect/cancel; for shell tasks use CancelTask only when cancellation is intended. cancelPending is not proof the process has stopped.'
+        ? 'WaitTask waits by task id without reading the log. ReadTaskLog reads output by task id. For sub_agent tasks use WaitAgent/CloseAgent with agentId to collect/cancel; for shell tasks use CancelTask only when cancellation is intended. cancelPending is not proof the process has stopped.'
         : 'No active tasks require follow-up.',
     });
   },

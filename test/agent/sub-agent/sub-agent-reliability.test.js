@@ -274,6 +274,26 @@ describe('notifications queue', () => {
   });
 
 
+  it('labels budget terminal notifications as incomplete and preserves final-report evidence', () => {
+    enqueueTerminalNotification({
+      agentId: 'budget-child', agentName: 'reviewer', status: 'completed',
+      result: 'APPROVE', budgetExceeded: true, budgetReason: 'max_tool_calls reached',
+      outcome: 'incomplete', incomplete: true, truncated: true,
+      finalReport: { reserved: true, received: true, truncated: true, text: 'APPROVE' },
+      parentVpId: 'vp-budget', parentSessionId: 'session-budget',
+    });
+    const text = formatNotificationsForPrompt(consumePendingNotifications({
+      parentVpId: 'vp-budget', sessionId: 'session-budget',
+    }));
+    expect(text).toContain('status="completed" outcome="incomplete"');
+    expect(text).toContain('incomplete: true');
+    expect(text).toContain('truncated: true');
+    expect(text).toContain('finalReportReserved: true');
+    expect(text).toContain('partialOutput:');
+    expect(text).toContain('APPROVE');
+  });
+
+
 });
 
 // -------------------------------------------------------------------------
@@ -364,6 +384,28 @@ describe('wait-agent envelope shape', () => {
     });
     expect(waited.next_steps).toMatch(/ListAgents later/i);
     expect(waited.next_steps).not.toMatch(/must be collected/i);
+  });
+
+  it('separates completed lifecycle from an incomplete budget outcome in WaitAgent', async () => {
+    const agent = {
+      id: 'agent-budget', name: 'budget', status: STATUS.COMPLETED,
+      result: { status: 'budget_exceeded', outcome: 'incomplete', complete: false,
+        partial_output: 'APPROVE', reason: 'max_tool_calls reached', usage: { turns: 1 },
+        truncated: true, final_report: { reserved: true, received: true, truncated: true, text: 'APPROVE' } },
+      lastResult: '', error: null, messages: [], usage: { turns: 1, startedAt: Date.now() },
+      outputFile: '/tmp/budget.log', liveness: makeLiveness(), parentSessionId: null,
+      parentVpId: 'vp-test', pendingPrompts: [],
+    };
+    getAgentRegistry().set(agent.id, agent);
+    const waited = JSON.parse(await waitAgent.execute({ agent_id: agent.id, timeout_ms: 0 }, vpTestCtx));
+    expect(waited).toMatchObject({
+      status: STATUS.COMPLETED,
+      lifecycle: { status: STATUS.COMPLETED, terminal: true },
+      outcome: { status: 'incomplete', complete: false, reason: 'budget_exceeded', truncated: true },
+      budgetExceeded: true, incomplete: true, truncated: true, partial_output: 'APPROVE',
+      final_report: { reserved: true, received: true, truncated: true },
+    });
+    expect(waited.next_steps).toContain('Do NOT present this as an ordinary successful completion');
   });
 
   it('scoped tools reject agents owned by another session', async () => {
@@ -696,6 +738,8 @@ describe('compact status projections', () => {
       id: 'agent-compact', status: STATUS.RUNNING, outputFile: '/tmp/compact.log',
       usage: { toolExecutions: 2, llmRequests: 4, providerTokens: 10, turns: 3 },
       activity: { outputChars: 14 }, hasResult: true,
+      lifecycle: { status: STATUS.RUNNING, terminal: false },
+      outcome: { status: 'pending', complete: false },
       control: { limits: { max_tool_calls: 10, max_llm_calls: 20 },
         remainingToolCalls: 8, remainingLlmCalls: 16, remainingWallTimeMs: null,
         reportingLlmCalls: 0, allowTools: ['Bash'], controlRevision: 2 },

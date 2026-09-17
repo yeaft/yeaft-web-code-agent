@@ -22,9 +22,12 @@ export default defineTool({
   isReadOnly: () => false,
   async execute(input = {}, ctx = {}) {
     if (!ctx.taskManager) return JSON.stringify({ error: 'task manager unavailable' });
+    if (ctx.sessionId && input.sessionId && input.sessionId !== ctx.sessionId) {
+      return JSON.stringify({ error: 'Task access is limited to the current Session', errorEffect: 'none' });
+    }
     const taskId = input.taskId;
     if (!taskId) return JSON.stringify({ error: 'taskId is required' });
     const sessionId = input.sessionId || ctx.sessionId || 'default';
-    return JSON.stringify(ctx.taskManager.cancelTask(sessionId, taskId), null, 2);
+    return JSON.stringify(ctx.taskManager.cancelTask(sessionId, taskId, ctx.currentVpId || null), null, 2);
   },
 });

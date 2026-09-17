@@ -159,6 +159,8 @@ export function checkBudget(agent, now = Date.now()) {
 export function budgetExceededResult(agent, reason) {
   return {
     status: 'budget_exceeded',
+    outcome: 'incomplete',
+    complete: false,
     partial_output: agent.partial_output || agent.result || '',
     reason,
     usage: { ...(agent.usage || {}) },
@@ -168,7 +170,8 @@ export function budgetExceededResult(agent, reason) {
 /**
  * Apply an incremental delta to an agent's usage, then check budget.
  * If exceeded: abort the agent's signal, set result to the budget envelope,
- * flip status to 'completed', and return the envelope. Otherwise returns null.
+ * end the lifecycle as 'completed' with an explicitly incomplete outcome, and
+ * return the envelope. Otherwise returns null.
  *
  * Call this at each turn boundary inside the sub-agent's execution loop.
  *

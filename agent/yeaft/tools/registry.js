@@ -242,6 +242,35 @@ export function truncateToolResultIfNeeded(output, { toolName, language } = {}) 
   const originalBytes = Buffer.byteLength(text, 'utf8');
   if (originalBytes <= TOOL_RESULT_MAX_BYTES) return text;
 
+  // Preserve the error contract in the model projection; raw tool output
+  // remains available to tracing/persistence before this budget is applied.
+  if (toolName === 'Bash') {
+    const failure = parseToolErrorOutput(text);
+    if (failure && failure.code?.startsWith('bash_')) {
+      const projected = { ...failure, truncated: true, originalBytes };
+      for (const [key, value] of Object.entries(projected)) {
+        if (key !== 'output' && typeof value === 'string') projected[key] = truncateUtf8(value, 1024);
+      }
+      const source = typeof failure.output === 'string' ? failure.output : '';
+      const buffer = Buffer.from(source, 'utf8');
+      const sample = bytes => {
+        const half = Math.floor(bytes / 2);
+        let start = Math.max(0, buffer.length - half);
+        while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) start += 1;
+        return truncateUtf8(source, half) + '\n[Middle omitted by tool result budget]\n' + buffer.subarray(start).toString('utf8');
+      };
+      let low = 0, high = Math.min(buffer.length, TOOL_RESULT_MAX_BYTES);
+      while (low < high) {
+        const mid = Math.ceil((low + high) / 2);
+        projected.output = sample(mid);
+        if (Buffer.byteLength(JSON.stringify(projected), 'utf8') <= TOOL_RESULT_MAX_BYTES) low = mid;
+        else high = mid - 1;
+      }
+      projected.output = sample(low);
+      return JSON.stringify(projected);
+    }
+  }
+
   const markerFor = name => normalizeLanguage(language) === 'zh'
     ? `\n\n[已截断：${name} 返回 ${formatSize(originalBytes)}，上限为 ${formatSize(TOOL_RESULT_MAX_BYTES)}；原因：单个 tool result 超过 ${formatSize(TOOL_RESULT_MAX_BYTES)}，模型消息历史不会看到剩余内容]`
     : `\n\n[truncated: ${name} returned ${formatSize(originalBytes)}, capped at ${formatSize(TOOL_RESULT_MAX_BYTES)}; reason: single tool result exceeded ${formatSize(TOOL_RESULT_MAX_BYTES)}, the model message history will not see the rest]`;
