@@ -191,6 +191,11 @@ export function projectConfirmedAssetImages(messages, { ownerId, agentId, sessio
         ? toolCallIds.has(image.sourceToolCallId)
         : message.imageAssetAnchor === true;
     });
+    const toolOrder = [...toolCallIds];
+    projectedImages.sort((a, b) => (
+      toolOrder.indexOf(a.sourceToolCallId) - toolOrder.indexOf(b.sourceToolCallId)
+      || (a.sourceImageIndex ?? 0) - (b.sourceImageIndex ?? 0)
+    ));
     return projectedImages.length > 0 ? { ...rest, images: projectedImages } : rest;
   });
 }
@@ -560,6 +565,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
           height: msg.metadata?.height ?? msg.image.height,
           turnId: msg.turnId || null,
           sourceToolCallId: msg.sourceToolCallId || null,
+          sourceImageIndex: msg.sourceImageIndex,
           vpId: msg.vpId || null,
           threadId: msg.threadId || null,
         });
@@ -571,7 +577,8 @@ export async function handleAgentOutput(agentId, agent, msg) {
           ...(msg.turnId ? { turnId: msg.turnId } : {}),
           ...(msg.threadId ? { threadId: msg.threadId } : {}),
           image: msg.sourceToolCallId
-            ? { ...image, sourceToolCallId: msg.sourceToolCallId }
+            ? { ...image, sourceToolCallId: msg.sourceToolCallId,
+              ...(Number.isInteger(msg.sourceImageIndex) && msg.sourceImageIndex >= 0 ? { sourceImageIndex: msg.sourceImageIndex } : {}) }
             : image,
           _requestUserId: agent.ownerId,
         });

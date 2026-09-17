@@ -704,23 +704,25 @@ describe('Yeaft conversation loading state', () => {
         content: '',
         sessionId: 'g1',
         turnId: 'turn-image',
-        images: [{ assetId: 'asset-1', sourceToolCallId: 'source-image-tool', mimeType: 'image/png', filename: 'result.png', src: '/api/yeaft/assets/scope/asset?token=secret' }],
+        images: [0, 1].map(sourceImageIndex => ({ assetId: 'asset-1', sourceToolCallId: 'source-image-tool', sourceImageIndex, mimeType: 'image/png', filename: 'result.png', src: '/api/yeaft/assets/scope/asset?token=secret' })),
       }],
       oldestSeq: 1,
       hasMore: false,
     });
 
-    expect(store.messagesMap['yeaft-1']).toEqual([
+    expect(store.messagesMap['yeaft-1']).toEqual([0, 1].map(sourceImageIndex =>
       expect.objectContaining({
         type: 'chat-image',
         assetId: 'asset-1',
         sourceToolCallId: 'source-image-tool',
+        sourceImageIndex,
         sessionId: 'g1',
         turnId: 'turn-image',
         src: '/api/yeaft/assets/scope/asset?token=secret',
         isHistory: true,
       }),
-    ]);
+    ));
+    expect(new Set(store.messagesMap['yeaft-1'].map(row => row.id)).size).toBe(2);
   });
 
   it('projects the durable RouteForward execution origin onto history rows', () => {

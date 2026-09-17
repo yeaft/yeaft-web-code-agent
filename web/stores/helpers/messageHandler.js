@@ -479,6 +479,7 @@ export function handleMessage(store, msg) {
         && row.sessionId === msg.sessionId && row.turnId === msg.turnId
         && (row.speakerVpId || row.vpId || '') === (msg.vpId || '')
         && (row.sourceToolCallId || '') === (msg.image.sourceToolCallId || '')
+        && row.sourceImageIndex === msg.image.sourceImageIndex
       );
       if (!duplicate) store.addMessageToConversation(conversationId, {
         type: 'chat-image', ...msg.image,

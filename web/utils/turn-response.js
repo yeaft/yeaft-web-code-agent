@@ -87,6 +87,11 @@ export function orderResponseImageMessages(messages = []) {
     relocated.add(message);
   }
   if (relocated.size === 0) return messages;
+  // Delivery retries can arrive out of order; the tool's original image order
+  // is independent of both upload time and an asset's first-ever creation time.
+  for (const images of anchored.values()) {
+    images.sort((a, b) => (a.sourceImageIndex ?? 0) - (b.sourceImageIndex ?? 0));
+  }
   const ordered = [];
   for (const message of messages) {
     if (relocated.has(message)) continue;
@@ -97,7 +102,7 @@ export function orderResponseImageMessages(messages = []) {
 }
 
 export function responseImageKey(image) {
-  return JSON.stringify([image.assetId || image.id, image.sourceToolCallId || '', image.turnId || '']);
+  return JSON.stringify([image.assetId || image.id, image.sourceToolCallId || '', image.turnId || '', image.sourceImageIndex ?? '']);
 }
 
 /** Interleave compact image groups with the surrounding response text. */

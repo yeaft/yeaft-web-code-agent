@@ -466,7 +466,7 @@ describe('Yeaft load-history first paint', () => {
     }, handlerCtx);
     expect(handlerCtx.resetQueryTimer).toHaveBeenCalledTimes(1);
     expect(enqueueAsset).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: 'session-fast', turnId: 'turn-error', sourceToolCallId: 'call-slow',
+      sessionId: 'session-fast', turnId: 'turn-error', sourceToolCallId: 'call-slow', sourceImageIndex: 0,
     }));
     ctx.assetOutbox = null;
 

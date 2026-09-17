@@ -181,6 +181,14 @@ describe('Yeaft Session online Agent filtering', () => {
     expect(projectConfirmedAssetImages([messages[0]], scope, assets)[0].images).toEqual([source]);
     expect(projectConfirmedAssetImages([messages[2]], scope, assets)[0].images).toEqual([legacy]);
     expect(messages[0]).not.toHaveProperty('images');
+    // Asset creation order is A/B; this tool returned B/A/A.
+    assets.describeTurns.mockReturnValue(new Map([['turn', [
+      { ...source, assetId: 'a', sourceImageIndex: 1 },
+      { ...source, assetId: 'a', sourceImageIndex: 2 },
+      { ...source, assetId: 'b', sourceImageIndex: 0 },
+    ]]]));
+    expect(projectConfirmedAssetImages([messages[0]], scope, assets)[0].images.map(image => [image.assetId, image.sourceImageIndex]))
+      .toEqual([['b', 0], ['a', 1], ['a', 2]]);
   });
 
   it('relays each uploaded image source in the live asset-ready frame', async () => {
@@ -191,15 +199,15 @@ describe('Yeaft Session online Agent filtering', () => {
     try {
       await handleAgentOutput('agent', { ownerId: 'owner' }, {
         type: 'yeaft_asset_put', conversationId: 'conversation', sessionId: 'session',
-        vpId: 'vp', turnId: 'turn', sourceToolCallId: 'call-image', deliveryId: 'delivery',
+        vpId: 'vp', turnId: 'turn', sourceToolCallId: 'call-image', sourceImageIndex: 0, deliveryId: 'delivery',
         image: { previewData: { data: 'png', mimeType: 'image/png' } },
       });
       expect(put).toHaveBeenCalledWith(expect.objectContaining({
         ownerId: 'owner', agentId: 'agent', sessionId: 'session',
-        turnId: 'turn', vpId: 'vp', sourceToolCallId: 'call-image',
+        turnId: 'turn', vpId: 'vp', sourceToolCallId: 'call-image', sourceImageIndex: 0,
       }));
       expect(forwardToClients).toHaveBeenCalledWith('agent', 'conversation', expect.objectContaining({
-        type: 'yeaft_asset_ready', image: { assetId: 'asset', src: '/asset.png', sourceToolCallId: 'call-image' },
+        type: 'yeaft_asset_ready', image: { assetId: 'asset', src: '/asset.png', sourceToolCallId: 'call-image', sourceImageIndex: 0 },
         _requestUserId: 'owner',
       }));
     } finally {

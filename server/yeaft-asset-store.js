@@ -196,7 +196,7 @@ export function createYeaftAssetStore({
   collectGarbage();
 
   return {
-    put({ ownerId, agentId, sessionId, assetId, data, mimeType, filename, width = null, height = null, turnId = null, vpId = null, threadId = null, sourceToolCallId = null }) {
+    put({ ownerId, agentId, sessionId, assetId, data, mimeType, filename, width = null, height = null, turnId = null, vpId = null, threadId = null, sourceToolCallId = null, sourceImageIndex = null }) {
       if (!ownerId || !agentId || !sessionId) throw new Error('Asset owner, agent, and Session are required');
       const buffer = Buffer.isBuffer(data) ? data : Buffer.from(String(data || ''), 'base64');
       if (!buffer.length || buffer.length > MAX_ASSET_BYTES) throw new Error(`Image asset must be between 1 byte and ${MAX_ASSET_BYTES} bytes`);
@@ -233,10 +233,12 @@ export function createYeaftAssetStore({
         const association = {
           turnId,
           ...(typeof sourceToolCallId === 'string' && sourceToolCallId ? { sourceToolCallId } : {}),
+          ...(Number.isInteger(sourceImageIndex) && sourceImageIndex >= 0 ? { sourceImageIndex } : {}),
           ...(vpId ? { vpId } : {}),
         };
         if (!turnAssociations.some(item => item.turnId === association.turnId
           && item.sourceToolCallId === association.sourceToolCallId
+          && item.sourceImageIndex === association.sourceImageIndex
           && item.vpId === association.vpId)) turnAssociations.push(association);
       }
       const metadata = {
@@ -340,6 +342,7 @@ export function createYeaftAssetStore({
               result.get(turnId).push({
                 ...image,
                 ...(association.sourceToolCallId ? { sourceToolCallId: association.sourceToolCallId } : {}),
+                ...(Number.isInteger(association.sourceImageIndex) ? { sourceImageIndex: association.sourceImageIndex } : {}),
                 ...(association.vpId ? { vpId: association.vpId } : {}),
               });
             }

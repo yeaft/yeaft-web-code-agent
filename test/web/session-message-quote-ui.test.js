@@ -193,6 +193,17 @@ describe('Session message quote UI wiring', () => {
       { ...scope, type: 'tool-use', toolId: 'call2' }, ...store.messagesMap.conv], imageMsgs: store.messagesMap.conv, textSegments: [] };
     [intro, middle].forEach(row => appendTurnResponseSegment(turn, row));
     expect(buildTurnResponseBlocks(turn, turn.textSegments).map(block => block.kind)).toEqual(['progress', 'images', 'progress', 'images']);
+    const first = { ...frame, image: { ...frame.image, sourceImageIndex: 0 } };
+    const second = { ...frame, image: { ...frame.image, sourceImageIndex: 1 } };
+    store.messagesMap.conv = [];
+    handleMessage(store, second);
+    handleMessage(store, first);
+    handleMessage(store, first);
+    expect(store.messagesMap.conv).toHaveLength(2);
+    const reordered = orderResponseImageMessages([{ ...scope, type: 'tool-use', toolId: 'call1' }, ...store.messagesMap.conv]);
+    expect(reordered.slice(1).map(row => row.sourceImageIndex)).toEqual([0, 1]);
+    expect(buildTurnResponseBlocks({ messages: reordered, imageMsgs: store.messagesMap.conv }, [])[0].items.map(image => image.sourceImageIndex))
+      .toEqual([0, 1]);
   });
 
   it('keeps user attachments inside the bubble and separates turn progress from the final Markdown result', async () => {

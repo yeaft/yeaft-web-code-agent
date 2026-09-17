@@ -101,6 +101,23 @@ describe('Yeaft asset store', () => {
   });
 
 
+  it('preserves per-tool image indices when old assets are reused in reverse order', () => {
+    const assets = store();
+    const scope = { ownerId: 'u', agentId: 'a', sessionId: 's' };
+    const a = assets.put({ ...scope, data: PNG, turnId: 'old' });
+    const b = assets.put({ ...scope, data: PNG_2, turnId: 'old' });
+    for (const [sourceImageIndex, data] of [PNG_2, PNG, PNG].entries()) {
+      const input = { ...scope, data, turnId: 'new', vpId: 'vp', sourceToolCallId: 'tool', sourceImageIndex };
+      assets.put(input);
+      assets.put(input); // delivery retry must not add an occurrence
+    }
+    const reopened = createYeaftAssetStore({ root: dirs.at(-1), secret: 'test-secret' });
+    const images = reopened.describeTurn({ ...scope, turnId: 'new' });
+    expect(images).toHaveLength(3);
+    expect(images.sort((x, y) => x.sourceImageIndex - y.sourceImageIndex).map(image => [image.assetId, image.sourceImageIndex]))
+      .toEqual([[b.assetId, 0], [a.assetId, 1], [a.assetId, 2]]);
+  });
+
   it('deletes only the requested Session scope', () => {
     const assets = store();
     const first = assets.put({ ownerId: 'u', agentId: 'a', sessionId: 's1', data: PNG });
