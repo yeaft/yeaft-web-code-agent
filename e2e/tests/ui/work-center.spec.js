@@ -1139,7 +1139,7 @@ test.describe('Work Center responsive UI', () => {
     const detail = chatPage.locator('.work-center-detail');
     const conversation = detail.locator('.work-center-conversation');
     const content = detail.locator('.work-center-content-pane');
-    const actionsButton = chatPage.getByRole('button', { name: /^\d+ Actions$/ });
+    const actionsButton = chatPage.getByRole('button', { name: 'View Actions', exact: true });
     await expect(chatPage.locator('.work-center-list')).toBeHidden();
     await expect(detail).toBeVisible();
     await expect(conversation).toBeVisible();
@@ -3228,9 +3228,10 @@ test.describe('Work Center responsive UI', () => {
       });
 
       if (width > 1024) {
-        expect(metrics.lineCount).toBe(3);
+        expect(metrics.lineCount).toBe(4);
         expect(metrics.distinctLineTops).toBeGreaterThanOrEqual(1);
-        expect(metrics.cardHeight).toBeLessThanOrEqual(75);
+        // The fourth compact row contains creation time and runtime.
+        expect(metrics.cardHeight).toBeLessThanOrEqual(91);
       } else {
         expect(metrics.lineCount).toBe(0);
         expect(metrics.cardHeight).toBe(0);
