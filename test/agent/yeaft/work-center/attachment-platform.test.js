@@ -17,6 +17,7 @@ import {
   persistWorkItemAttachments,
   readWorkItemAttachment,
   removeWorkItemAttachments,
+  removeWorkItemAttachmentFiles,
 } from '../../../../agent/yeaft/work-center/attachments.js';
 import {
   assertWorkItemAttachmentPlatform,
@@ -48,7 +49,9 @@ describe('WorkItem attachment platforms', () => {
     expect(() => assertWorkItemAttachmentPlatform('freebsd')).toThrow(/unavailable on freebsd/);
   });
 
-  it.each([...new Set([actualPlatform, 'darwin', 'win32'])])('persists, appends, reads, clones, projects and removes on %s', platform => {
+  // Linux also exercises the portable branches locally. Native CI must use its
+  // real mode/delete semantics, not pretend Windows has POSIX permissions.
+  it.each(actualPlatform === 'linux' ? ['linux', 'darwin', 'win32'] : [actualPlatform])('persists, appends, reads, clones, projects and removes on %s', platform => {
     usePortablePlatform(platform);
     const base = realpathSync(mkdtempSync(join(tmpdir(), 'work-item-portable-')));
     directories.push(base);
@@ -78,6 +81,14 @@ describe('WorkItem attachment platforms', () => {
     expect(readWorkItemAttachment({ id: 'clone', attachments: cloned }, cloned[1].id, { root }).data)
       .toBe(Buffer.from('second attachment').toString('base64'));
 
+    // The service uses single-file removal to roll back uncommitted appends.
+    // Exercise it separately from recursive rm (which handles Windows read-only
+    // attributes differently), and keep the committed sibling intact.
+    removeWorkItemAttachmentFiles(root, 'source', appended);
+    expect(existsSync(join(root, 'source', appended[0].storageName))).toBe(false);
+    expect(readWorkItemAttachment({ id: 'source', attachments }, attachments[0].id, { root }).data)
+      .toBe(Buffer.from('portable attachment').toString('base64'));
+    removeWorkItemAttachmentFiles(root, 'source', appended);
     removeWorkItemAttachments(root, 'source');
     expect(existsSync(join(root, 'source'))).toBe(false);
     expect(readdirSync(root).some(name => name.startsWith('.remove-'))).toBe(false);

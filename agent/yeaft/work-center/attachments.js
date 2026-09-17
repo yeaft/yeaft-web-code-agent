@@ -245,7 +245,11 @@ function writeAttachmentFile(directoryState, storageName, buffer) {
     const filePath = join(directoryState.itemDirectory, storageName);
     const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL
       | (constants.O_NOFOLLOW || 0);
-    const descriptor = openSync(filePath, flags, 0o400);
+    // Windows maps missing write bits to a read-only attribute, which can block
+    // single-file rollback. Integrity is checked by size and SHA-256 on reads;
+    // POSIX platforms keep the existing read-only file mode.
+    const fileMode = process.platform === 'win32' ? 0o600 : 0o400;
+    const descriptor = openSync(filePath, flags, fileMode);
     try {
       assertRegularFileIdentity(descriptor, filePath, 'WorkItem attachment file');
       const actualPath = realpathSync(filePath);
@@ -253,7 +257,7 @@ function writeAttachmentFile(directoryState, storageName, buffer) {
         throw new Error('WorkItem attachment path escapes its owner');
       }
       writeFileSync(descriptor, buffer);
-      fchmodSync(descriptor, 0o400);
+      fchmodSync(descriptor, fileMode);
       assertPortableDirectoryState(directoryState);
     } finally {
       closeSync(descriptor);
