@@ -164,8 +164,8 @@ export class WorkflowController {
     return detail;
   }
 
-  startScheduled(id, scheduledAt) {
-    return this.store.startWorkItemAtomic(id, workItem => {
+  startScheduled(id, scheduledAt, cloneAttachments = null) {
+    return this.store.dispatchScheduledWorkItem(id, scheduledAt, workItem => {
       const action = initialActionFor(workItem);
       if (workItem.reuseMemory === false) return action;
       const context = this.store.getReusableContext(workItem.workDir, workItem.id);
@@ -174,7 +174,7 @@ export class WorkflowController {
         context,
         instruction: actionInstruction(action, workItem, context, renderSessionContextSnapshot(workItem.sessionContext)),
       };
-    }, { scheduledAt });
+    }, cloneAttachments);
   }
 
   update(id, patch) {

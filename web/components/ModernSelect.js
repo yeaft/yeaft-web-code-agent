@@ -104,12 +104,15 @@ export default {
         });
       }
     }
-    function close() { open.value = false; }
+    function close(restoreFocus = false) {
+      open.value = false;
+      if (restoreFocus) Vue.nextTick(() => triggerEl.value?.focus());
+    }
     function pick(opt) {
-      if (!opt || opt.disabled) return;
+      if (props.disabled || !opt || opt.disabled) return;
       emit('update:modelValue', opt.value);
       emit('change', opt.value);
-      close();
+      close(true);
     }
     function moveActive(step) {
       if (!filtered.value.length) return;
@@ -127,7 +130,13 @@ export default {
         if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown') { e.preventDefault(); toggle(); }
         return;
       }
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); return; }
+      if (e.key === 'Tab') {
+        // Return to the form's tab order before the browser advances focus.
+        if (searchEl.value === document.activeElement) triggerEl.value?.focus();
+        close();
+        return;
+      }
       if (e.key === 'ArrowDown') { e.preventDefault(); moveActive(1); }
       else if (e.key === 'ArrowUp') { e.preventDefault(); moveActive(-1); }
       else if (e.key === 'Enter') {
@@ -153,6 +162,8 @@ export default {
       window.removeEventListener('resize', onViewportChange);
       window.removeEventListener('scroll', onViewportChange, true);
     });
+    Vue.watch(search, () => { activeIdx.value = filtered.value.findIndex(option => !option.disabled); });
+    Vue.watch(() => props.disabled, value => { if (value) close(); });
     Vue.watch(() => props.modelValue, () => { /* re-sync handled by computed */ });
 
     return {
@@ -189,23 +200,27 @@ export default {
         <transition name="ms-pop">
           <div
             v-if="open"
-            :id="menuId"
             class="modern-select-menu"
             :class="menuClass"
             :style="menuStyle"
             ref="menuEl"
-            role="listbox"
           >
             <div v-if="searchable" class="modern-select-search">
               <input
                 type="text"
                 v-model="search"
                 ref="searchEl"
+                role="combobox"
+                aria-autocomplete="list"
+                :aria-label="ariaLabel || ($t ? $t('common.search') : 'Search')"
+                aria-expanded="true"
+                :aria-controls="menuId"
+                :aria-activedescendant="activeOptionId"
                 :placeholder="$t ? $t('common.search') || 'Search…' : 'Search…'"
                 @keydown="onKey"
               >
             </div>
-            <div class="modern-select-list" ref="listEl">
+            <div class="modern-select-list" ref="listEl" :id="menuId" role="listbox" :aria-label="ariaLabel || undefined">
               <div v-if="loading" class="modern-select-empty">…</div>
               <div v-else-if="!filtered.length" class="modern-select-empty">{{ emptyText }}</div>
               <div

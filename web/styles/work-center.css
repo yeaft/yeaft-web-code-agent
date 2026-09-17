@@ -2495,6 +2495,81 @@
   line-height: 1.4;
 }
 
+.work-center-scheduling-section { padding-block: var(--work-center-space-2); }
+.work-center-execution-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--work-center-space-1);
+  padding: var(--work-center-space-1);
+  border-radius: 10px;
+  background: var(--bg-sidebar);
+}
+.work-center-execution-modes .btn-secondary {
+  flex: 1;
+  border-color: transparent;
+  background: transparent;
+  white-space: normal;
+}
+.work-center-execution-modes .btn-secondary[aria-pressed="true"] {
+  background: var(--bg-main);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+.work-center-schedule-editor { display: grid; min-width: 0; gap: var(--work-center-space-4); }
+.work-center-schedule-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--work-center-space-3);
+}
+.work-center-schedule-field {
+  display: grid;
+  min-width: 0;
+  gap: var(--work-center-space-2);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.work-center-schedule-field input[type="number"] {
+  min-width: 0;
+  width: 100%;
+  padding: 10px 12px;
+  font: inherit;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-input);
+}
+.work-center-schedule-field input:focus-visible,
+.work-center-schedule-weekdays button:focus-visible,
+.work-center-execution-modes button:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+.work-center-schedule-field .modern-select-trigger { min-height: 40px; }
+.work-center-schedule-weekdays { border: 0; min-width: 0; }
+.work-center-schedule-weekdays legend {
+  margin-bottom: var(--work-center-space-2);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.work-center-schedule-weekdays > div { display: flex; flex-wrap: wrap; gap: var(--work-center-space-1); }
+.work-center-schedule-weekdays .btn-secondary { flex: 1 0 32px; min-height: 36px; padding: var(--work-center-space-2) var(--work-center-space-1); }
+.work-center-schedule-weekdays button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.work-center-schedule-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--work-center-space-1) var(--work-center-space-2);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.work-center-schedule-preview strong { color: var(--text-primary); font-size: 13px; }
+.work-center-create-error { padding-inline: 20px; max-height: 64px; overflow: auto; }
+@media (max-width: 480px) {
+  .work-center-schedule-fields { grid-template-columns: minmax(0, 1fr); }
+  .work-center-execution-modes .btn-secondary { padding-inline: var(--work-center-space-1); }
+}
+
 .work-center-create-options {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

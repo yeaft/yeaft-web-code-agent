@@ -3887,3 +3887,220 @@ test.describe('Work Center resource budget', () => {
     await expect(panel).toContainText('请刷新后重新确认');
   });
 });
+
+async function openScheduleForm(page, mockAgent, recurring = true) {
+  await openWorkCenter(page, mockAgent, []);
+  mockAgent.__recurringSchedules = recurring;
+  // Hydrate capability through the real settings action/response rather than patching Pinia.
+  await page.evaluate(agentId => {
+    const store = window.Pinia.useChatStore();
+    store.__scheduleSettingsLoaded = false;
+    void store.loadWorkCenterSettings(agentId).then(() => { store.__scheduleSettingsLoaded = true; });
+  }, mockAgent.agentId);
+  // Mount may already have queued a settings read. Resolve both reads with the
+  // advertised response; do not mistake the first response for the latest CAS generation.
+  for (let index = 0; index < 8; index++) {
+    const request = await mockAgent.__workCenterTransport.takeNow();
+    if (!request) break;
+    const runtime = { ...WORK_CENTER_SETTINGS.runtime, ...(recurring ? { recurringSchedules: true } : {}) };
+    const data = request.op === 'get_settings' ? { ...WORK_CENTER_SETTINGS, runtime }
+      : request.op === 'get_runtime' ? runtime
+      : request.op === 'list' ? { items: [], watcher: { enabled: true } } : null;
+    if (data == null) throw new Error(`Unexpected schedule setup op ${request.op}`);
+    await mockAgent.__workCenterTransport.resolve(request, data);
+  }
+  await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().__scheduleSettingsLoaded)).toBe(true);
+  await expect.poll(() => page.evaluate(agentId => window.Pinia.useChatStore().workCenterSettingsLoadingByAgent[agentId], mockAgent.agentId)).toBe(false);
+  await page.locator('.work-center-header-create').click();
+  const dialog = page.locator('.work-center-modal');
+  await dialog.locator('textarea').fill('Check project health and report changes since the previous run.');
+  await dialog.getByRole('button', { name: 'Schedule', exact: true }).click();
+  // Select a future day using the real calendar, including its keyboard path.
+  await dialog.locator('.schedule-date-picker__trigger').click();
+  await page.keyboard.press('PageDown');
+  await page.keyboard.press('Enter');
+  await dialog.getByRole('textbox', { name: 'Time · 24-hour', exact: true }).fill('0930');
+  await expect(dialog.getByRole('textbox', { name: 'Time · 24-hour', exact: true })).toHaveValue('09:30');
+  return dialog;
+}
+
+async function takeScheduleCreate(mockAgent) {
+  for (let index = 0; index < 8; index++) {
+    const request = await mockAgent.__workCenterTransport.next();
+    if (request.op === 'create') return request;
+    const data = request.op === 'list_delivery_instructions' ? { values: [] } : request.op === 'list' ? { items: [] }
+      : request.op === 'get_settings' ? { ...WORK_CENTER_SETTINGS, runtime: { ...WORK_CENTER_SETTINGS.runtime, recurringSchedules: mockAgent.__recurringSchedules } }
+      : request.op === 'get_runtime' ? { ...WORK_CENTER_SETTINGS.runtime, recurringSchedules: mockAgent.__recurringSchedules } : null;
+    if (data == null) throw new Error(`Unexpected scheduling op ${request.op}`);
+    await mockAgent.__workCenterTransport.resolve(request, data);
+  }
+  throw new Error('No create request');
+}
+
+async function chooseScheduleOption(page, label, option) {
+  await page.getByRole('combobox', { name: label, exact: true }).click();
+  await page.getByRole('option', { name: option, exact: true }).click();
+}
+
+test.describe('Work Center scheduling', () => {
+  test('recurring schedule submits wall-time rules and retains errors for retry', async ({ chatPage, mockAgent }) => {
+    const dialog = await openScheduleForm(chatPage, mockAgent);
+    await chooseScheduleOption(chatPage, 'Repeat', 'Every week');
+    await dialog.getByRole('button', { name: 'Wednesday', exact: true }).click();
+    await chooseScheduleOption(chatPage, 'Ends', 'After a number of runs');
+    await dialog.getByRole('spinbutton', { name: 'Total runs · 1–1,000' }).fill('4');
+    await expect(dialog.locator('.work-center-schedule-preview')).toBeVisible();
+    const submit = dialog.locator('.work-center-modal-footer .btn-primary');
+    await submit.click();
+    const request = await takeScheduleCreate(mockAgent);
+    expect(request.op).toBe('create');
+    expect(request.payload.start).toBe(false);
+    expect(request.payload.scheduledFor).toBeGreaterThan(Date.now());
+    expect(request.payload.recurrence).toMatchObject({ frequency: 'weekly', time: '09:30', weekdays: [1, 3], maxRuns: 4, endsAt: null });
+    expect(request.payload.recurrence.timeZone).toBeTruthy();
+    await expect(submit).toBeDisabled();
+    await mockAgent.__workCenterTransport.reject(request, 'Schedule could not be saved');
+    await expect(dialog.getByRole('alert')).toHaveText('Schedule could not be saved');
+    await expect(submit).toBeEnabled();
+    await expect(dialog.getByRole('combobox', { name: 'Repeat', exact: true })).toContainText('Every week');
+  });
+
+  test('time zone search restores focus and the form tab order', async ({ chatPage, mockAgent }) => {
+    const dialog = await openScheduleForm(chatPage, mockAgent);
+    const trigger = dialog.getByRole('combobox', { name: 'Time zone', exact: true });
+    await trigger.focus();
+    await chatPage.keyboard.press('Enter');
+    const search = chatPage.locator('.modern-select-search input');
+    await expect(search).toBeFocused();
+    await search.fill('Asia/Shanghai');
+    await chatPage.keyboard.press('Enter');
+    await expect(trigger).toBeFocused();
+    await expect(trigger).toContainText('Asia/Shanghai');
+    await chatPage.keyboard.press('Enter');
+    await expect(search).toBeFocused();
+    await chatPage.keyboard.press('Escape');
+    await expect(trigger).toBeFocused();
+    await chatPage.keyboard.press('Enter');
+    await expect(search).toBeFocused();
+    await chatPage.keyboard.press('Tab');
+    await expect(dialog.locator('.schedule-date-picker__trigger')).toBeFocused();
+    await expect(search).toHaveCount(0);
+  });
+
+  test('first schedule opened after a long page stay gets a fresh default', async ({ chatPage, mockAgent }) => {
+    await openWorkCenter(chatPage, mockAgent, []);
+    const later = Date.now() + 3 * 3600000;
+    await chatPage.clock.setFixedTime(later);
+    await chatPage.locator('.work-center-header-create').click();
+    const dialog = chatPage.locator('.work-center-modal');
+    await dialog.getByRole('button', { name: 'Schedule', exact: true }).click();
+    await expect(dialog.locator('.work-center-schedule-preview')).toBeVisible();
+    await expect(dialog.getByRole('status')).toHaveCount(0);
+    await dialog.getByRole('textbox', { name: 'Time · 24-hour', exact: true }).fill('2359');
+    await dialog.getByRole('button', { name: 'Save draft', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Schedule', exact: true }).click();
+    await expect(dialog.getByRole('textbox', { name: 'Time · 24-hour', exact: true })).toHaveValue('23:59');
+  });
+
+  test('recurring plan is read-only and pause/resume retain its revision', async ({ chatPage, mockAgent }) => {
+    let detail = { ...OPEN_ITEM_DETAIL, id: 'recurring-plan', title: 'Weekly check', status: 'draft', actions: [], currentAction: null, currentActionId: null,
+      schedule: { status: 'scheduled', scheduledFor: Date.now() + 3600000, recurrence: { frequency: 'weekly', timeZone: 'Asia/Shanghai', time: '09:00', weekdays: [1] }, runCount: 2, lastWorkItemId: 'latest-run',
+        lastError: null } };
+    await openWorkCenter(chatPage, mockAgent, [detail]);
+    const select = chatPage.locator('.work-center-card-open').click();
+    await respondToWorkCenterOp(mockAgent, 'get', detail, [detail]);
+    await select;
+    await expect(chatPage.locator('.work-center-conversation-readonly')).toContainText('This is a schedule');
+    const retryNotice = chatPage.locator('.work-center-error[role="status"]');
+    await expect(retryNotice).toHaveCount(0);
+    const failed = { ...detail, revision: detail.revision + 1, updatedAt: Date.now(), actionStats: [],
+      schedule: { ...detail.schedule, lastError: { code: 'schedule_dispatch_failed', message: 'Do not render raw server diagnostics', at: Date.now() } } };
+    mockAgent.send({ type: 'work_center_event', event: { type: 'work_item.schedule_failed', workItem: failed } });
+    await expect(retryNotice).toContainText('It will retry automatically');
+    await expect(chatPage.locator('.work-center-main')).not.toContainText('Do not render raw server diagnostics');
+    detail = { ...failed, revision: failed.revision + 1, updatedAt: Date.now(), schedule: { ...failed.schedule, lastError: null } };
+    mockAgent.send({ type: 'work_center_event', event: { type: 'work_item.schedule_advanced', workItem: detail } });
+    await expect(retryNotice).toHaveCount(0);
+    mockAgent.send({ type: 'work_center_event', event: { type: 'work_item.schedule_failed', workItem: failed } });
+    await expect(retryNotice).toHaveCount(0);
+    await expect(chatPage.locator('.work-center-item-message-input')).toHaveCount(0);
+    await expect(chatPage.locator('.work-center-header-actions').getByRole('button', { name: 'Start', exact: true })).toHaveCount(0);
+    for (const enabled of [false, true]) {
+      await chatPage.getByRole('button', { name: enabled ? 'Resume schedule' : 'Pause schedule', exact: true }).click();
+      const request = await mockAgent.__workCenterTransport.next();
+      expect(request.op).toBe('update_schedule');
+      expect(request.payload).toEqual({ id: detail.id, schedule: { enabled, revision: detail.revision } });
+      detail = { ...detail, revision: detail.revision + 1, schedule: { ...detail.schedule, status: enabled ? 'scheduled' : 'paused', lastError: null } };
+      await mockAgent.__workCenterTransport.resolve(request, detail);
+      await respondToWorkCenterOp(mockAgent, 'list', { items: [detail], watcher: { enabled: true } });
+      await expect(chatPage.getByRole('button', { name: enabled ? 'Pause schedule' : 'Resume schedule', exact: true })).toBeEnabled();
+    }
+  });
+
+  test('older Agent keeps one-time scheduling and disables repetition', async ({ chatPage, mockAgent }) => {
+    const dialog = await openScheduleForm(chatPage, mockAgent, false);
+    await expect(dialog.locator('.work-center-field-help', { hasText: 'does not advertise recurring schedules' })).toBeVisible();
+    await dialog.getByRole('combobox', { name: 'Repeat', exact: true }).click();
+    await expect(chatPage.getByRole('option', { name: 'Every day', exact: true })).toHaveAttribute('aria-disabled', 'true');
+    await chatPage.keyboard.press('Escape');
+    const time = dialog.getByRole('textbox', { name: 'Time · 24-hour', exact: true });
+    await time.fill('25:99');
+    await expect(dialog.getByRole('status')).toContainText('valid date and time');
+    await expect(dialog.getByRole('button', { name: 'Create schedule', exact: true })).toBeDisabled();
+    await time.fill('09:30');
+    await dialog.getByRole('button', { name: 'Create schedule', exact: true }).click();
+    const request = await takeScheduleCreate(mockAgent);
+    expect(request.op).toBe('create');
+    expect(request.payload.recurrence).toBeNull();
+    expect(request.payload.start).toBe(false);
+    expect(request.payload.scheduledFor).toBeGreaterThan(Date.now());
+    await mockAgent.__workCenterTransport.reject(request, 'Test completed');
+  });
+
+  test('calendar follows themes, narrow layout, locale and keyboard without native popups', async ({ chatPage, mockAgent }, testInfo) => {
+    const errors = [];
+    chatPage.on('pageerror', error => errors.push(error.message));
+    const dialog = await openScheduleForm(chatPage, mockAgent);
+    await chooseScheduleOption(chatPage, 'Repeat', 'Every week');
+    const editor = dialog.locator('.work-center-schedule-editor');
+    for (const theme of ['light', 'dark']) {
+      await chatPage.evaluate(theme => document.documentElement.setAttribute('data-theme', theme), theme);
+      for (const width of [1280, 320]) {
+        await chatPage.setViewportSize({ width, height: 900 });
+        const trigger = dialog.locator('.schedule-date-picker__trigger').first();
+        await trigger.click();
+        const panel = dialog.locator('.schedule-date-picker__panel');
+        await expect(panel).toBeVisible();
+        await expect(panel.locator('button[data-date]:focus')).toHaveCount(1);
+        await chatPage.keyboard.press('ArrowRight');
+        await expectVisibleFocus(panel.locator('button[data-date]:focus'));
+        await panel.scrollIntoViewIfNeeded();
+        const metrics = await dialog.evaluate(element => {
+          const panel = element.querySelector('.schedule-date-picker__panel');
+          const rect = panel.getBoundingClientRect();
+          const body = element.querySelector('.work-center-modal-body');
+          return { left: rect.left, right: rect.right, width: innerWidth, scrollWidth: body.scrollWidth, clientWidth: body.clientWidth,
+            background: getComputedStyle(panel).backgroundColor, expected: getComputedStyle(document.documentElement).getPropertyValue('--bg-subtle').trim() };
+        });
+        expect(metrics.left).toBeGreaterThanOrEqual(0);
+        expect(metrics.right).toBeLessThanOrEqual(width);
+        expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
+        if (theme === 'dark') expect(metrics.background).not.toBe('rgb(255, 255, 255)');
+        await chatPage.screenshot({ path: testInfo.outputPath(`schedule-${theme}-${width}.png`) });
+        await panel.locator('button[data-date]:not(:disabled)').first().focus();
+        await chatPage.keyboard.press('Escape');
+        await expect(panel).toHaveCount(0);
+        await expect(trigger).toBeFocused();
+        await expect(dialog.locator('.work-center-modal-footer')).toBeInViewport();
+      }
+    }
+    await chatPage.evaluate(async () => (await import('/utils/i18n.js')).setLocale('zh-CN'));
+    await expect(dialog.locator('.work-center-form-section-heading h3', { hasText: '执行时间' })).toBeVisible();
+    await dialog.locator('.schedule-date-picker__trigger').first().click();
+    await expect(dialog.locator('.schedule-date-picker__month')).toContainText('月');
+    await dialog.locator('.schedule-date-picker__panel').scrollIntoViewIfNeeded();
+    await chatPage.screenshot({ path: testInfo.outputPath('schedule-dark-320-zh.png') });
+    await expect(editor.locator('input[type="datetime-local"], input[type="date"], input[type="time"]')).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+});
