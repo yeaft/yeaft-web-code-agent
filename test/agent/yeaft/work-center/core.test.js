@@ -384,6 +384,7 @@ describe('Work Center core', () => {
         service.handle.mockRejectedValueOnce(Object.assign(new Error('Rejected'), { code }));
         await handleWorkCenterRequest({ requestId: code, op: 'action_input', payload: {} });
       }
+      await new Promise(resolve => setImmediate(resolve));
       expect(frames[0]).toMatchObject({ ok: false, errorCode: 'WORK_CENTER_INPUT_STALE' });
       expect(frames[1]).not.toHaveProperty('errorCode');
     } finally {
