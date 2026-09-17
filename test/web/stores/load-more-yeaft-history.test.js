@@ -34,7 +34,7 @@ globalThis.Pinia = globalThis.Pinia || {
   defineStore: () => () => ({}),
 };
 
-const { handleYeaftHistoryChunk } = await import('../../../web/stores/helpers/handlers/conversationHandler.js');
+const { handleYeaftHistoryChunk, handleYeaftHistoryWindow } = await import('../../../web/stores/helpers/handlers/conversationHandler.js');
 const { yeaftHistoryIdentityKey } = await import('../../../web/stores/helpers/yeaft-history-identity.js');
 const {
   isDurableYeaftHistoryRow,
@@ -961,6 +961,94 @@ describe('Yeaft conversation loading state', () => {
     ]);
     expect(store.yeaftSessionAgentById.g1).toBe('agent-1');
     expect(store.continueYeaftHistoryDelta).not.toHaveBeenCalled();
+  });
+
+  it.each(['stream', 'revision'])('commits a correlated %s replacement and still rejects stale replies', async (change) => {
+    const source = await readFile(new URL('../../../web/stores/chat.js', import.meta.url), 'utf8');
+    const start = source.indexOf('    clearYeaftHistoryMemory({');
+    const end = source.indexOf('\n    getYeaftMessageWindowKey(', start);
+    const { clearYeaftHistoryMemory } = new Function(
+      'yeaftHistoryIdentityKey', 'isDurableYeaftHistoryRow',
+      `return ({${source.slice(start, end)}});`,
+    )(yeaftHistoryIdentityKey, isDurableYeaftHistoryRow);
+    const sessionKey = yeaftHistoryIdentityKey('agent-1', 'g1');
+    const store = mkStore({
+      yeaftActiveSessionFilter: 'g1',
+      yeaftConversationIdsByAgent: { 'agent-1': 'yeaft-1' },
+      yeaftSessionAgentById: { g1: 'agent-1' },
+      yeaftSessionHistoryState: {
+        [sessionKey]: { loaded: true, latestSeq: 90, streamId: 'old', revision: 4 },
+      },
+      messagesMap: { 'yeaft-1': [
+        { id: 'm0090', type: 'assistant', content: 'stale', sessionId: 'g1', isHistory: true },
+        { id: 'live', type: 'assistant', content: 'live', sessionId: 'g1', isStreaming: true },
+      ] },
+      clearYeaftHistoryMemory,
+      syncActiveYeaftHistoryLoad() { return syncActiveYeaftHistoryLoad(this); },
+      isCurrentYeaftHistoryResponse(msg) { return isCurrentYeaftHistoryResponse(this, msg); },
+      finishYeaftHistoryLoad(msg, patch, frame) { return finishYeaftHistoryLoad(this, msg, patch, frame); },
+    });
+    const stale = beginYeaftHistoryLoad(store, { agentId: 'agent-1', sessionId: 'g1', mode: 'delta' });
+    const request = beginYeaftHistoryLoad(store, { agentId: 'agent-1', sessionId: 'g1', mode: 'delta' });
+    const reply = {
+      agentId: 'agent-1', conversationId: 'yeaft-1', sessionId: 'g1',
+      requestId: request.requestId, mode: 'delta',
+      streamId: change === 'stream' ? 'new' : 'old', revision: change === 'stream' ? 0 : 5,
+      oldestSeq: 1, nextBeforeSeq: 1, latestSeq: 2, hasMore: true,
+      messages: [{ id: 'm0002', role: 'assistant', content: 'replacement', sessionId: 'g1' }],
+    };
+    // A completion arriving first must not retire the correlated chunk fence.
+    store.finishYeaftHistoryLoad(reply, { latestSeq: 999 }, 'completion');
+    handleYeaftHistoryChunk(store, { ...reply, requestId: stale.requestId });
+    expect(store.messagesMap['yeaft-1'].map(row => row.content)).toEqual(['stale', 'live']);
+    handleYeaftHistoryChunk(store, reply);
+    expect(store.yeaftSessionHistoryState[sessionKey]).toMatchObject({
+      loaded: true, loading: false, requestId: null, generation: request.generation,
+      streamId: reply.streamId, revision: reply.revision, latestSeq: 2,
+      serverOldestFetchedSeq: 1, serverHasMore: true, hasMore: true,
+    });
+    expect(store.yeaftLoadingMoreHistory).toBe(false);
+    expect(store.yeaftOldestLoadedSeq).toBe(1);
+    expect(store.messagesMap['yeaft-1'].map(row => row.content)).toEqual(['replacement', 'live']);
+    expect(store.yeaftSessionAgentById.g1).toBe('agent-1');
+    expect(store.finishYeaftHistoryLoad(reply, { latestSeq: 999 }, 'completion')).toBeNull();
+    handleYeaftHistoryChunk(store, { ...reply, requestId: stale.requestId, messages: [] });
+    expect(store.yeaftSessionHistoryState[sessionKey].latestSeq).toBe(2);
+  });
+
+  it.each(['recent', 'delta', 'older', 'window', 'prefetch'])('fills same-ID tools and images via %s without duplicating or detaching resident rows', (mode) => {
+    const store = mkStore({ yeaftActiveSessionFilter: 'g1' });
+    const message = {
+      id: 'm0010', role: 'assistant', content: 'answer', sessionId: 'g1', turnId: 'turn-1',
+      toolCalls: [{ id: 'tool-1', name: 'Bash', input: { command: 'pwd' } }],
+      images: [{ assetId: 'asset-1', sourceToolCallId: 'tool-1', sourceImageIndex: 0 }],
+    };
+    const envelope = {
+      agentId: 'agent-1', conversationId: 'yeaft-1', sessionId: 'g1',
+      oldestSeq: 10, latestSeq: 10, hasMore: false,
+    };
+    handleYeaftHistoryChunk(store, { ...envelope, mode: 'recent', messages: [message] });
+    const originalText = store.messagesMap['yeaft-1'].find(row => row.type === 'assistant');
+    const complete = {
+      ...message,
+      toolCalls: [...message.toolCalls, { id: 'tool-2', name: 'FileRead', input: { file_path: 'README.md' } }],
+      images: [...message.images, { assetId: 'asset-1', sourceToolCallId: 'tool-2', sourceImageIndex: 0 }],
+    };
+    const replay = () => {
+      const response = { ...envelope, messages: [message, complete], requestId: 'window-1',
+        entryId: 'entry-1', sourceMessageIds: ['m0010'], prefetch: mode === 'prefetch' };
+      if (mode === 'window' || mode === 'prefetch') handleYeaftHistoryWindow(store, response);
+      else handleYeaftHistoryChunk(store, { ...response, requestId: null, mode });
+    };
+    replay();
+    replay();
+    const rows = store.messagesMap['yeaft-1'];
+    expect(rows.filter(row => row.type === 'assistant')).toEqual([originalText]);
+    expect(rows.find(row => row.type === 'assistant')).toBe(originalText);
+    expect(rows.filter(row => row.type === 'tool-use').map(row => row.toolId)).toEqual(['tool-1', 'tool-2']);
+    expect(rows.filter(row => row.type === 'chat-image').map(row => row.sourceToolCallId)).toEqual(['tool-1', 'tool-2']);
+    expect(new Set(rows.map(row => row.stableKey)).size).toBe(5);
+    expect(rows.every(row => row._historyWindowDetached !== true && row._historyWindowPrefetched !== true)).toBe(true);
   });
 
   it('keeps optimistic sends visible when a recent history reply races them', () => {

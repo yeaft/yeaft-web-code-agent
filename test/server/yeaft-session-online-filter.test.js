@@ -191,6 +191,55 @@ describe('Yeaft Session online Agent filtering', () => {
       .toEqual([['b', 0], ['a', 1], ['a', 2]]);
   });
 
+  it('restores confirmed tool images from a folded transcript after reopening both stores', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { ConversationStore } = await import('../../agent/yeaft/conversation/persist.js');
+    const { createYeaftAssetStore } = await import('../../server/yeaft-asset-store.js');
+    const root = mkdtempSync(join(tmpdir(), 'folded-confirmed-images-'));
+    const scope = { ownerId: 'owner', agentId: 'agent', sessionId: 'session-images' };
+    const assetOptions = { root: join(root, 'assets'), secret: 'test-secret' };
+    try {
+      const store = new ConversationStore(root);
+      const assets = createYeaftAssetStore(assetOptions);
+      const identity = { sessionId: scope.sessionId, turnId: 'turn-images', threadId: 'turn-images', speakerVpId: 'vp1' };
+      store.append({ ...identity, role: 'user', content: 'Show the screenshot' });
+      const call = store.append({
+        ...identity, role: 'assistant', content: 'Screenshot progress',
+        toolCalls: [{ id: 'view-image', name: 'ViewImage', input: { file_path: 'screen.png' } }],
+      });
+      const result = store.append({ ...identity, role: 'tool', toolCallId: 'view-image', content: 'Screenshot loaded' });
+      const beforeUpload = projectConfirmedAssetImages(store.loadVisibleBySession(scope.sessionId, null, 10).messages, scope, assets);
+      expect(beforeUpload.find(row => row.id === call.id)).not.toHaveProperty('images');
+      const image = assets.put({
+        ...scope, turnId: identity.turnId, vpId: 'vp1', sourceToolCallId: 'view-image', sourceImageIndex: 0,
+        data: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'),
+        mimeType: 'image/png',
+      });
+      store.foldMessages([call, result], { ...identity, role: 'user', content: 'private model fold', _reflection: true });
+      store.append({ ...identity, role: 'assistant', content: 'Final response', imageAssetAnchor: true });
+      const reopened = new ConversationStore(root);
+      const reopenedAssets = createYeaftAssetStore(assetOptions);
+      for (const rows of [
+        reopened.loadVisibleBySession(scope.sessionId, null, 10).messages,
+        reopened.loadAfterSeqByGroup(scope.sessionId, 0, { limit: 100 }).messages,
+      ]) {
+        const projected = projectConfirmedAssetImages(rows, scope, reopenedAssets);
+        expect(projected.find(row => row.id === call.id)).toMatchObject({
+          content: 'Screenshot progress',
+          images: [expect.objectContaining({ assetId: image.assetId, sourceToolCallId: 'view-image', sourceImageIndex: 0 })],
+        });
+        expect(projected.some(row => row._reflection || row.content === 'private model fold')).toBe(false);
+        expect(projected.find(row => row.content === 'Final response')).not.toHaveProperty('images');
+        expect(projectConfirmedAssetImages(rows, { ...scope, agentId: 'other-agent' }, reopenedAssets).some(row => row.images?.length)).toBe(false);
+        expect(projectConfirmedAssetImages(rows.map(row => ({ ...row, speakerVpId: 'other-vp' })), scope, reopenedAssets).some(row => row.images?.length)).toBe(false);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('relays each uploaded image source in the live asset-ready frame', async () => {
     const { yeaftAssetStore } = await import('../../server/yeaft-asset-store.js');
     const put = vi.spyOn(yeaftAssetStore, 'put').mockReturnValue({ assetId: 'asset', src: '/asset.png' });

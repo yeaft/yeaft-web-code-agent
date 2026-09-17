@@ -7167,7 +7167,8 @@ export async function handleYeaftLoadHistory(msg) {
     const afterSeqRaw = cacheIdentityMatches && msg && Number.isFinite(msg.afterSeq) ? msg.afterSeq : null;
     const afterMessageId = (msg && typeof msg.afterMessageId === 'string') ? msg.afterMessageId : null;
     let afterSeq = afterSeqRaw;
-    if (afterSeq === null && afterMessageId && typeof session.conversationStore.getMessageSeqById === 'function') {
+    // A message-id cursor cannot bypass a stream/revision reset either.
+    if (cacheIdentityMatches && afterSeq === null && afterMessageId && typeof session.conversationStore.getMessageSeqById === 'function') {
       afterSeq = session.conversationStore.getMessageSeqById(afterMessageId);
     }
     if (sessionId && afterSeq !== null && typeof session.conversationStore.loadAfterSeqByGroup === 'function') {
@@ -7317,18 +7318,18 @@ export async function handleYeaftLoadHistory(msg) {
     );
     const afterSeqRaw = cacheIdentityMatches && msg && Number.isFinite(msg.afterSeq) ? msg.afterSeq : null;
     traceDuration('history.cold_store_open', coldStoreStart);
-    if (sessionId && (afterSeqRaw !== null || afterMessageId)) {
-      let afterSeq = afterSeqRaw;
-      if (afterSeq === null && afterMessageId && typeof coldStore.getMessageSeqById === 'function') {
-        afterSeq = coldStore.getMessageSeqById(afterMessageId);
-      }
+    let afterSeq = afterSeqRaw;
+    if (cacheIdentityMatches && afterSeq === null && afterMessageId && typeof coldStore.getMessageSeqById === 'function') {
+      afterSeq = coldStore.getMessageSeqById(afterMessageId);
+    }
+    // Match the warm path: stale or unresolvable cursors require a recent
+    // replay, not an empty delta that leaves a partial browser cache intact.
+    if (sessionId && afterSeq !== null && typeof coldStore.loadAfterSeqByGroup === 'function') {
       const loadStart = perfNowMs();
-      const delta = afterSeq !== null && typeof coldStore.loadAfterSeqByGroup === 'function'
-        ? coldStore.loadAfterSeqByGroup(sessionId, afterSeq, {
-            limit: deltaLimit,
-            maxBytes: deltaMaxBytes,
-          })
-        : { messages: [], latestSeq: null, hasMoreAfter: false };
+      const delta = coldStore.loadAfterSeqByGroup(sessionId, afterSeq, {
+        limit: deltaLimit,
+        maxBytes: deltaMaxBytes,
+      });
       traceDuration('history.store_load_delta', loadStart, { detail: { count: delta.messages?.length || 0, afterSeq, cold: true } });
       const emitStart = perfNowMs();
       const projectedMessages = emitHistoryChunk({

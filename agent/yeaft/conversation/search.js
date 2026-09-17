@@ -7,6 +7,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { parseMessage, parseSeqFromId } from './persist.js';
+import { isVisibleConversationRow } from './internal-control.js';
 
 function parseJsonLine(line) {
   if (!line || !line.trim()) return null;
@@ -38,7 +39,7 @@ function searchableContent(msg) {
 }
 
 function matchesMessage(msg, terms) {
-  if (!msg || msg.role === 'tool') return false;
+  if (!msg || msg.role === 'tool' || !isVisibleConversationRow(msg)) return false;
   const content = searchableContent(msg).toLocaleLowerCase();
   return content.length > 0 && terms.every(term => content.includes(term));
 }

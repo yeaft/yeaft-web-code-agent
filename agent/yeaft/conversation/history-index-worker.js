@@ -9,10 +9,10 @@ import {
   findLiteralSearch,
   normalizeLiteralSearch,
 } from './visible-entry.js';
-import { fingerprintConversationSources } from './history-index-state.js';
+import { fingerprintConversationSources, HISTORY_INDEX_SCHEMA_VERSION } from './history-index-state.js';
 import { extractRecallTerms, scoreRecallTurn, normalizeRecallLimit, RECALL_LIMITS } from './recall-relevance.js';
 
-const INDEX_SCHEMA_VERSION = 2;
+const INDEX_SCHEMA_VERSION = HISTORY_INDEX_SCHEMA_VERSION;
 const SHORT_BLOOM_BYTES = 256;
 const BUILD_YIELD_INTERVAL = 64;
 const QUERY_BATCH_ROWS = 128;
