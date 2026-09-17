@@ -758,11 +758,12 @@ export class WorkCenterService {
           this.#emit({ type: 'work_item.schedule_advanced', workItem: source });
         }
         if (detail && detail.id !== id) this.#emit({ type: 'work_item.created', workItem: detail });
-      } catch (error) {
+      } catch {
         for (const owner of createdAttachmentOwners) {
           if (!this.store.getWorkItem(owner)) removeWorkItemAttachments(this.attachmentRoot, owner);
         }
-        this.#emit({ type: 'work_item.schedule_failed', workItemId: id, error: error.message });
+        const workItem = this.store.recordScheduleFailure(id);
+        if (workItem) this.#emit({ type: 'work_item.schedule_failed', workItem });
       }
     }
   }

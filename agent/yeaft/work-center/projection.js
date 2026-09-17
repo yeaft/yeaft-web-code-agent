@@ -27,6 +27,24 @@ const MAX_HISTORICAL_BRIEF_CHARS = 256;
 const MAX_CURRENT_BRIEF_BYTES = 8 * 1024;
 export const MAX_WORK_ITEM_BROWSER_DTO_BYTES = 512 * 1024;
 
+function projectSchedule(schedule) {
+  if (!schedule) return null;
+  return {
+    status: schedule.status,
+    scheduledFor: schedule.scheduledFor ?? null,
+    triggeredAt: schedule.triggeredAt ?? null,
+    recurrence: schedule.recurrence || null,
+    runCount: count(schedule.runCount),
+    lastWorkItemId: schedule.lastWorkItemId || null,
+    // Do not forward caller-provided diagnostic text, stack, paths or metadata.
+    lastError: schedule.lastError ? {
+      code: 'schedule_dispatch_failed',
+      message: 'Scheduled execution could not start. The plan will retry automatically; check its configuration and attachments.',
+      at: count(schedule.lastError.at),
+    } : null,
+  };
+}
+
 function jsonByteLength(value) {
   return Buffer.byteLength(JSON.stringify(value), 'utf8');
 }
@@ -1094,7 +1112,7 @@ export function projectWorkItemDetail(detail, options = {}) {
     executionControl: detail.executionControl,
     executionStats: combinedExecutionStats(detail),
     reuseMemory: detail.reuseMemory !== false,
-    schedule: detail.schedule || null,
+    schedule: projectSchedule(detail.schedule),
     sourceScheduleId: detail.sourceScheduleId || null,
     scheduledOccurrenceAt: detail.scheduledOccurrenceAt ?? null,
     deliveryTarget: ['response', 'workspace_files', 'pull_request', 'merge'].includes(detail.deliveryTarget)
@@ -1207,7 +1225,7 @@ export function projectWorkItemSummary(detail) {
       executionStats: combinedExecutionStats(detail),
       executionControl: detail.executionControl,
       origin: detail.origin?.sessionId ? { sessionId: detail.origin.sessionId } : null,
-      schedule: detail.schedule || null,
+      schedule: projectSchedule(detail.schedule),
       sourceScheduleId: detail.sourceScheduleId || null,
       scheduledOccurrenceAt: detail.scheduledOccurrenceAt ?? null,
       linkedSessionIds: Array.isArray(detail.linkedSessionIds) ? detail.linkedSessionIds : [],
@@ -1250,7 +1268,7 @@ export function projectWorkItemSummary(detail) {
     currentAction: projectCurrentActionSummary(action, projectedAction),
     actionStats: projectActionStats(detail, null),
     origin: detail.origin?.sessionId ? { sessionId: detail.origin.sessionId } : null,
-    schedule: detail.schedule || null,
+    schedule: projectSchedule(detail.schedule),
     sourceScheduleId: detail.sourceScheduleId || null,
     scheduledOccurrenceAt: detail.scheduledOccurrenceAt ?? null,
     linkedSessionIds: Array.isArray(detail.linkedSessionIds) ? detail.linkedSessionIds : [],

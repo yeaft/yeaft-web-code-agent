@@ -3079,6 +3079,7 @@ export class WorkItemStore {
 
   getWorkItem(id) {
     const workItem = mapWorkItem(this.db.prepare('SELECT * FROM work_items WHERE id = ?').get(id));
+    if (workItem?.schedule) workItem.schedule.lastError = this.getScheduleLastError(id);
     if (!usesLegacyGraph(workItem) && !isDynamicWorkItem(workItem)) return workItem;
     const actions = this.db.prepare('SELECT * FROM actions WHERE work_item_id = ? ORDER BY sequence')
       .all(id).map(mapAction);
@@ -3122,6 +3123,34 @@ export class WorkItemStore {
         recoveryAttempts: Math.max(0, Number(row.recovery_attempts) || 0),
         lastRecoveryAt: Math.max(0, Number(row.last_recovery_at) || 0),
       }));
+  }
+
+  // Event IDs, not timestamps, order failures and clearing transitions (which may
+  // share a clock tick). Unrelated plan edits must not hide a dispatch failure.
+  getScheduleLastError(id) {
+    const event = this.db.prepare(`SELECT type, created_at FROM events WHERE work_item_id = ?
+      AND type IN ('work_item.schedule_failed', 'work_item.schedule_triggered',
+        'work_item.schedule_advanced', 'work_item.schedule_updated', 'work_item.started')
+      ORDER BY id DESC LIMIT 1`).get(id);
+    return event?.type === 'work_item.schedule_failed' ? {
+      code: 'schedule_dispatch_failed',
+      message: 'Scheduled execution could not start. The plan will retry automatically; check its configuration and attachments.',
+      at: Number(event.created_at),
+    } : null;
+  }
+
+  recordScheduleFailure(id) {
+    return withTransaction(this.db, () => {
+      const workItem = this.getWorkItem(id);
+      if (workItem?.status !== 'draft' || workItem.schedule?.status !== 'scheduled'
+          || workItem.schedule.lastError) return null;
+      // One durable notification per uninterrupted failure episode, even across
+      // restarts. Never persist exception text: it may contain paths or secrets.
+      this.appendEvent(id, 'work_item.schedule_failed', { code: 'schedule_dispatch_failed' });
+      this.db.prepare('UPDATE work_items SET revision = revision + 1, updated_at = ? WHERE id = ?')
+        .run(this.now(), id);
+      return this.getWorkItemDetail(id);
+    });
   }
 
   listDueScheduledWorkItemIds(now = this.now()) {
@@ -3321,6 +3350,7 @@ export class WorkItemStore {
       runsByWorkItem.get(row.work_item_id).push(mapRun(row));
     }
     return workItems.map(workItem => {
+      if (workItem.schedule) workItem.schedule.lastError = this.getScheduleLastError(workItem.id);
       const actions = actionsByWorkItem.get(workItem.id) || [];
       return graphExecutionState({ ...workItem, executionControl: this.getExecutionControl(workItem.id), actions, runs: runsByWorkItem.get(workItem.id) || [] }, actions);
     });

@@ -64,7 +64,7 @@ describe('scheduled WorkItems', () => {
     item = await service.handle('update_schedule', { id: item.id, scheduledFor: 8_000, enabled: true });
     expect(projectWorkItemSummary(item).schedule).toEqual({
       status: 'scheduled', scheduledFor: 8_000, triggeredAt: null,
-      recurrence: null, runCount: 0, lastWorkItemId: null,
+      recurrence: null, runCount: 0, lastWorkItemId: null, lastError: null,
     });
   });
 
@@ -202,6 +202,34 @@ describe('recurring schedules', () => {
     expect(controller.startScheduled(item.id, epoch('2026-03-11T15:00:00Z'))).toBeNull();
     await expect(service.handle('update_schedule', { id: item.id, enabled: false })).rejects.toThrow(/pending/);
   });
+
+  it.each(['trigger', 'advance', 'update', 'one-shot'])(
+    'durably clears a failure after %s, without losing it to unrelated plan edits', async outcome => {
+      const { service, controller, store, dir, setNow } = fixture();
+      const plan = await createPlan(service, outcome === 'one-shot' ? null : daily);
+      if (outcome === 'advance') controller.startScheduled(plan.id, epoch('2026-03-06T14:00:00Z'));
+      setNow('2026-03-07T14:00:00Z');
+      const failed = store.recordScheduleFailure(plan.id);
+      expect(failed.schedule.lastError).toMatchObject({ code: 'schedule_dispatch_failed', at: epoch('2026-03-07T14:00:00Z') });
+      expect(store.recordScheduleFailure(plan.id)).toBeNull();
+      if (outcome !== 'one-shot') controller.update(plan.id, { goal: 'Updated report' });
+      expect(store.getWorkItem(plan.id).schedule.lastError).toEqual(failed.schedule.lastError);
+      if (outcome === 'update') {
+        expect(store.updateWorkItemSchedule(plan.id, { enabled: false }).schedule.lastError).toBeNull();
+      } else {
+        controller.startScheduled(plan.id, epoch('2026-03-07T14:00:00Z'));
+      }
+      expect(store.getWorkItem(plan.id).schedule.lastError).toBeNull();
+      expect(store.listWorkItems().find(item => item.id === plan.id).schedule.lastError).toBeNull();
+      const reopened = new WorkItemStore(join(dir, 'work-center', 'work-center.db'));
+      try { expect(reopened.getWorkItemDetail(plan.id).schedule.lastError).toBeNull(); }
+      finally { reopened.close(); }
+      if (outcome === 'trigger' || outcome === 'advance') {
+        expect(store.recordScheduleFailure(plan.id).schedule.lastError).not.toBeNull();
+        expect(store.getWorkItemDetail(plan.id).events.filter(event => event.type === 'work_item.schedule_failed')).toHaveLength(2);
+      }
+    },
+  );
 
   it('rolls back spawn and advancement together and survives reopening without duplicates', async () => {
     const { service, controller, store, dir, setNow } = fixture();
