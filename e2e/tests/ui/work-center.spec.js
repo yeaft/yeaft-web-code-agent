@@ -2572,7 +2572,7 @@ test.describe('Work Center responsive UI', () => {
     expect(request.payload.workDir).toBe('/tmp/test');
     expect(request.payload.workItemType).toBe('auto');
     expect(request.payload.titleSource).toBe('coordinator_pending');
-    expect(request.payload.goal).toBe('Fix dynamic planning with the smallest safe flow');
+    expect(request.payload.goal).toBe('Use the directory shown in the form');
   });
 
   test('uses the Work Center design system for directory selection', async ({ chatPage, mockAgent }) => {
