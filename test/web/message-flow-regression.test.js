@@ -6090,7 +6090,7 @@ describe('message flow regressions', () => {
     expect(sessionCreateCss).toMatch(/\.yeaft-session-create-modal \.resume-control-label\s*\{[^}]*width:\s*96px;[^}]*flex:\s*0 0 96px;/s);
     expect(sessionCreateCss).toMatch(/\.yeaft-session-create-modal \.modern-select-trigger\s*\{[^}]*border-radius:\s*10px;/s);
     const pickerCss = readFileSync(resolve(import.meta.dirname, '../../web/styles/files.css'), 'utf8');
-    expect(pickerCss).toMatch(/\.workdir-picker \.folder-picker-dialog\s*\{[^}]*height:\s*min\(560px, calc\(100dvh - 48px\)\);[^}]*overflow:\s*hidden;/s);
+    expect(pickerCss).toMatch(/\.workdir-picker \.folder-picker-dialog\s*\{[^}]*height:\s*min\(520px, calc\(100dvh - 48px\)\);[^}]*overflow:\s*hidden;/s);
     expect(pickerCss).toMatch(/\.workdir-picker \.folder-picker-list\s*\{[^}]*flex:\s*1 1 auto;[^}]*min-height:\s*0;[^}]*max-height:\s*none;[^}]*overflow-y:\s*auto;/s);
     expect(pickerCss).toMatch(/\.workdir-picker \.folder-picker-item\s*\{[^}]*font-family:\s*inherit;[^}]*font-size:\s*14px;/s);
     expect(pickerCss).not.toMatch(/\.workdir-picker[^}]*#[0-9a-f]{3,6}/i);
