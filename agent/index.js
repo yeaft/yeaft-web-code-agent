@@ -26,6 +26,7 @@ import {
 import { loadConfig as loadYeaftConfig } from './yeaft/config.js';
 import { initYeaftDir } from './yeaft/init.js';
 import { isWorkCenterEnabled, startWorkCenterFeature } from './yeaft/work-center/feature.js';
+import { supportsWorkItemAttachments } from './yeaft/work-center/attachment-platform.js';
 import { updateBrowserRuntimeSettings } from './yeaft/config-api.js';
 import { bootBrowserRuntime, shutdownBrowserRuntime } from './browser-runtime/index.js';
 import {
@@ -181,7 +182,7 @@ async function detectCapabilities() {
   capabilities.push(getAgentUpgradeCapability());
   if (ctx.CONFIG?.workCenterEnabled === true) {
     capabilities.push('work_center', 'work_center_message_v2', 'work_center_workbench');
-    if (process.platform === 'linux') capabilities.push('work_item_attachments');
+    if (supportsWorkItemAttachments()) capabilities.push('work_item_attachments');
   }
   const pty = await loadNodePty();
   if (pty) capabilities.push('terminal');
