@@ -106,6 +106,7 @@ export default {
       attachmentsUploading: false,
       createAttachmentError: '',
       deliveryInstructionOptions: [],
+      customDeliveryTarget: false,
       deliveryInstructionsGeneration: 0,
       previewingAttachmentId: null,
       attachmentPreviewError: '',
@@ -115,7 +116,6 @@ export default {
         workDir: '',
         deliveryTarget: '',
         deliveryInstructions: '',
-        reuseMemory: true,
         start: true,
         scheduled: false,
         scheduleDraft: scheduleDraft(),
@@ -173,6 +173,34 @@ export default {
     },
     sidebarAgents() {
       return this.agents.filter(agent => agent.capabilities?.includes('work_center'));
+    },
+    createAgentOptions() {
+      return this.sidebarAgents.map(agent => ({
+        value: agent.id,
+        label: agent.name || agent.id,
+        badge: agent.online ? '' : this.$t('workCenter.offline'),
+        disabled: !agent.online,
+      }));
+    },
+    deliveryTargetOptions() {
+      return ['', 'response', 'workspace_files', 'pull_request', 'merge'].map(value => ({
+        value, label: this.deliveryTargetLabel(value),
+      })).concat(
+        { value: 'custom', label: this.$t('workCenter.deliveryTargetCustom') },
+        this.deliveryInstructionOptions.map(value => ({ value: `history:${value}`, label: value })),
+      );
+    },
+    deliveryTargetChoice: {
+      get() { return this.customDeliveryTarget ? 'custom' : this.form.deliveryTarget; },
+      set(value) {
+        const fromHistory = value.startsWith('history:');
+        this.customDeliveryTarget = value === 'custom' || fromHistory;
+        // Free text is a goal, never an authorization enum. Switching away also
+        // clears hidden instructions so the selected built-in is unambiguous.
+        this.form.deliveryTarget = this.customDeliveryTarget ? '' : value;
+        this.form.deliveryInstructions = fromHistory ? value.slice(8)
+          : this.customDeliveryTarget ? this.form.deliveryInstructions : '';
+      },
     },
     watcher() { return this.store.workCenterWatcherByAgent[this.agentId] || null; },
     boardNextCursor() { return this.store.workCenterListPageByAgent[this.agentId]?.nextCursor || null; },
@@ -636,9 +664,9 @@ export default {
       workDir: draft.workDir || '',
       deliveryTarget: draft.deliveryTarget || '',
       deliveryInstructions: draft.deliveryInstructions || '',
-      reuseMemory: true,
       start: this.settings?.startImmediately !== false,
     };
+    this.customDeliveryTarget = !!this.form.deliveryInstructions.trim();
     this.createOpen = true;
     this.workDirTouched = !!String(draft.workDir || '').trim();
     this.startTouched = false;
@@ -1541,6 +1569,13 @@ export default {
       if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
       return `${(size / 1024 / 1024).toFixed(1)} MB`;
     },
+    async focusCustomDeliveryInput() {
+      // ModernSelect restores trigger focus after emitting change. Wait for that
+      // close pass before moving focus to the newly revealed custom input.
+      await this.$nextTick();
+      await this.$nextTick();
+      if (this.createOpen && this.customDeliveryTarget) this.$refs.customDeliveryInput?.focus();
+    },
     async loadDeliveryInstructionOptions() {
       const agentId = this.agentId;
       const generation = ++this.deliveryInstructionsGeneration;
@@ -1592,7 +1627,8 @@ export default {
     },
     async submitCreate() {
       const requirement = String(this.form.requirement || this.form.goal || this.form.title || '').trim();
-      if (this.saving || this.attachmentsUploading || !this.agentId || !requirement || !this.form.workDir.trim()) return;
+      if (this.saving || this.attachmentsUploading || !this.agentId || !requirement || !this.form.workDir.trim()
+        || (this.customDeliveryTarget && !this.form.deliveryInstructions.trim())) return;
       const schedule = this.form.scheduled ? scheduleFormResult(this.form.scheduleDraft) : {};
       if (schedule.error || (schedule.recurrence && !this.recurringSchedulesSupported)) return;
       this.createError = '';
@@ -1612,7 +1648,7 @@ export default {
           acceptanceCriteria: [],
           workItemType: 'auto',
           workDir: this.form.workDir.trim(),
-          deliveryTarget: this.form.deliveryTarget || null,
+          deliveryTarget: this.customDeliveryTarget ? null : this.form.deliveryTarget || null,
           deliveryInstructions: this.form.deliveryInstructions.trim() || null,
           origin: draftOwnedByAgent ? (draft.origin || null) : null,
           linkedSessionIds: draftOwnedByAgent ? (draft.linkedSessionIds || []) : [],
@@ -1624,7 +1660,7 @@ export default {
             size: attachment.size,
           }))
             : [],
-          reuseMemory: this.form.reuseMemory,
+          reuseMemory: true,
           start: this.form.scheduled ? false : this.form.start,
           scheduledFor: schedule.scheduledFor || null,
           recurrence: schedule.recurrence || null,
@@ -1636,11 +1672,11 @@ export default {
           workDir: '',
           deliveryTarget: '',
           deliveryInstructions: '',
-          reuseMemory: true,
           start: this.settings?.startImmediately !== false,
           scheduled: false,
           scheduleDraft: scheduleDraft(),
         };
+        this.customDeliveryTarget = false;
         this.store.workCenterCreateDraft = null;
         this.createAttachments = [];
         this.workDirTouched = false;
@@ -2394,9 +2430,8 @@ export default {
           <div class="work-center-modal-body">
             <section class="work-center-form-section work-center-requirement-section">
               <label>{{ $t('workCenter.selectAgent') }}
-                <select class="work-center-create-agent" :value="agentId" :disabled="saving" @change="selectCreateAgent($event.target.value)">
-                  <option v-for="agent in sidebarAgents" :key="agent.id" :value="agent.id" :disabled="!agent.online">{{ agent.name || agent.id }}{{ agent.online ? '' : ' · ' + $t('workCenter.offline') }}</option>
-                </select>
+                <ModernSelect class="work-center-create-agent" :model-value="agentId" :options="createAgentOptions"
+                  :disabled="saving" :aria-label="$t('workCenter.selectAgent')" @update:model-value="selectCreateAgent" />
               </label>
               <label>{{ tr('workCenter.requirement', 'Requirement') }}
                 <textarea ref="createRequirement" v-model="form.requirement" rows="8" required autofocus @paste="onCreateRequirementPaste" :placeholder="tr('workCenter.requirementHint', 'Describe the problem, desired outcome, and any constraints in your own words')"></textarea>
@@ -2437,11 +2472,18 @@ export default {
                 </div>
                 <small class="work-center-field-help">{{ tr('workCenter.workDirPickerHelp', 'Select an existing folder on the chosen Agent.') }}</small>
               </label>
-              <div class="work-center-create-options">
-                <label><span>{{ tr('workCenter.deliveryTarget', 'Delivery target') }}</span><select v-model="form.deliveryTarget"><option value="">{{ tr('workCenter.deliveryTargetAsk', 'Ask me before delivery') }}</option><option value="response">{{ tr('workCenter.deliveryTargetResponse', 'Response') }}</option><option value="workspace_files">{{ tr('workCenter.deliveryTargetFiles', 'Workspace files') }}</option><option value="pull_request">{{ tr('workCenter.deliveryTargetPr', 'Open a pull request') }}</option><option value="merge">{{ tr('workCenter.deliveryTargetMerge', 'Merge an approved pull request') }}</option></select><small class="work-center-field-help">{{ tr('workCenter.deliveryTargetHelp', 'This is the completion boundary, not permission to bypass review or merge policy.') }}</small></label>
-                <label><span>{{ tr('workCenter.deliveryInstructions', 'Delivery goal') }}</span><input v-model="form.deliveryInstructions" type="text" maxlength="500" list="work-center-delivery-instructions" :placeholder="tr('workCenter.deliveryInstructionsHint', 'For example: publish a release and summarize the changes')"><datalist id="work-center-delivery-instructions"><option v-for="value in deliveryInstructionOptions" :key="value" :value="value"></option></datalist><small class="work-center-field-help">{{ tr('workCenter.deliveryInstructionsHelp', 'Choose a previous goal or enter a new one. This does not grant extra delivery permissions.') }}</small></label>
-                <label class="work-center-checkbox"><input v-model="form.reuseMemory" type="checkbox"><span><strong>{{ tr('workCenter.reuseMemory', 'Use relevant Agent memory and completed work from this project') }}</strong><small>{{ tr('workCenter.reuseMemoryHelp', 'Uses scope-bounded Agent memory and structured results from completed WorkItems in the same project.') }}</small></span></label>
-              </div>
+              <label class="work-center-delivery-field">
+                <span>{{ $t('workCenter.deliveryTarget') }}</span>
+                <div class="work-center-delivery-row" :class="{ 'is-custom': customDeliveryTarget }">
+                  <ModernSelect v-model="deliveryTargetChoice" :options="deliveryTargetOptions" :disabled="saving"
+                    :menu-min-width="360" menu-class="work-center-delivery-menu"
+                    :aria-label="$t('workCenter.deliveryTarget')" @change="focusCustomDeliveryInput" />
+                  <input v-if="customDeliveryTarget" ref="customDeliveryInput" v-model="form.deliveryInstructions"
+                    type="text" maxlength="500" required :disabled="saving" :aria-label="$t('workCenter.deliveryTargetCustom')"
+                    :placeholder="$t('workCenter.deliveryInstructionsHint')">
+                </div>
+                <small v-if="customDeliveryTarget" class="work-center-field-help">{{ $t('workCenter.deliveryCustomHelp') }}</small>
+              </label>
             </section>
             <section class="work-center-form-section work-center-scheduling-section">
               <div class="work-center-form-section-heading"><h3>{{ $t('workCenter.scheduling.heading') }}</h3></div>
@@ -2461,7 +2503,7 @@ export default {
           <p v-if="createError" class="work-center-error work-center-create-error" role="alert">{{ createError }}</p>
           <footer class="work-center-modal-footer">
             <button class="btn-secondary" type="button" @click="closeCreate">{{ tr('common.cancel', 'Cancel') }}</button>
-            <button class="btn-primary" type="submit" :disabled="saving || attachmentsUploading || !agentId || !form.requirement.trim() || !form.workDir.trim() || !!createScheduleResult.error || (form.scheduled && form.scheduleDraft.frequency !== 'once' && !recurringSchedulesSupported)">
+            <button class="btn-primary" type="submit" :disabled="saving || attachmentsUploading || !agentId || !form.requirement.trim() || !form.workDir.trim() || (customDeliveryTarget && !form.deliveryInstructions.trim()) || !!createScheduleResult.error || (form.scheduled && form.scheduleDraft.frequency !== 'once' && !recurringSchedulesSupported)">
               {{ saving ? tr('workCenter.creating', 'Creating…') : form.scheduled ? $t('workCenter.scheduling.create') : tr('workCenter.create', 'Create') }}
             </button>
           </footer>

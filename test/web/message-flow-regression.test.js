@@ -3561,7 +3561,7 @@ describe('message flow regressions', () => {
     expect(workCenter).toContain('<WorkCenterSidebar');
     expect(workCenter).toContain('@select-agent="selectWorkCenterAgent"');
     expect(workCenter).not.toContain('<label class="work-center-agent-picker">');
-    expect(workCenter).toContain('class="work-center-create-agent" :value="agentId"');
+    expect(workCenter).toContain('class="work-center-create-agent" :model-value="agentId"');
     expect(workCenter).toContain("this.store.enterWorkCenter(nextAgentId)");
     expect(workCenterCss).toMatch(/\.work-center-sidebar\s*\{[^}]*background:\s*var\(--bg-sidebar\)/s);
     const pluginCenterCss = readFileSync(resolve(import.meta.dirname, '../../web/styles/plugin-center.css'), 'utf8');

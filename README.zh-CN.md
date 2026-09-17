@@ -71,7 +71,7 @@ Markdown 消息通过本地 KaTeX 渲染 LaTeX 公式：行内使用 `$E=mc^2$` 
 
 Work Center 用来处理必须跨越一次交互 turn 的目标。当前实现包括：
 
-- 持久 WorkItem 合同：`goal`、acceptance criteria、工作目录、attachments 和 memory reuse policy；
+- 持久 WorkItem 合同：`goal`、acceptance criteria、工作目录、attachments 和 memory reuse policy；附件存储支持 Linux、macOS 和 Windows，并在 Agent 本地执行类型、大小、归属、路径、符号链接和内容完整性校验；
 - WorkItem 级 Coordinator conversation，用于查询状态、追加指导、修改合同和 replan；
 - AI 规划并校验 Action graph：依赖关系、唯一 final acceptance gate，以及配置允许范围内的并发 Action；
 - auto/pool/fixed VP 分配、model/effort policy、review 角色隔离、retry/waiting/failed 状态和明确的人工恢复输入；

@@ -71,7 +71,7 @@ Markdown messages render LaTeX formulas locally with KaTeX: use `$E=mc^2$` or `\
 
 Work Center is for goals that must survive beyond one interactive turn. Its current implementation provides:
 
-- a durable WorkItem contract (`goal`, acceptance criteria, working directory, attachments, and memory-reuse policy);
+- a durable WorkItem contract (`goal`, acceptance criteria, working directory, attachments, and memory-reuse policy); attachment storage supports Linux, macOS, and Windows with Agent-local type, size, ownership, path, symlink, and content-integrity checks;
 - a WorkItem-level Coordinator conversation for status questions, guidance, contract changes, and replanning;
 - AI-planned Action graphs with validated dependencies, one final acceptance gate, and up to the configured concurrent Action limit;
 - automatic/pool/fixed VP assignment, model and effort policies, review separation, retry/waiting/failed states, and explicit human recovery input;
