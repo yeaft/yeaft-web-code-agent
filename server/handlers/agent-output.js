@@ -170,19 +170,33 @@ function hydrateInlinePreviewData(data) {
   return message === data.message ? data : { ...data, message };
 }
 
-function projectConfirmedAssetImages(messages, { ownerId, agentId, sessionId }) {
-  const turnIds = messages
-    .filter(message => message?.role === 'assistant' && message.imageAssetAnchor === true)
+export function projectConfirmedAssetImages(messages, { ownerId, agentId, sessionId }, assetStore = yeaftAssetStore) {
+  const turnIds = [...new Set(messages
+    .filter(message => message?.role === 'assistant')
     .map(message => message.turnId || message.threadId || null)
-    .filter(Boolean);
-  const imagesByTurn = yeaftAssetStore.describeTurns({ ownerId, agentId, sessionId, turnIds });
+    .filter(Boolean))];
+  const imagesByTurn = assetStore.describeTurns({ ownerId, agentId, sessionId, turnIds });
   return messages.map((message) => {
     if (!message || message.role !== 'assistant') return message;
     const { images: _pendingImages, ...rest } = message;
-    if (message.imageAssetAnchor !== true) return rest;
     const turnId = message.turnId || message.threadId || null;
     const images = turnId ? imagesByTurn.get(turnId) || [] : [];
-    return images.length > 0 ? { ...rest, images } : rest;
+    const toolCallIds = new Set((Array.isArray(message.toolCalls) ? message.toolCalls : [])
+      .map(toolCall => toolCall?.id)
+      .filter(Boolean));
+    const vpId = message.speakerVpId || message.vpId || null;
+    const projectedImages = images.filter(image => {
+      if (image.vpId && image.vpId !== vpId) return false;
+      return image.sourceToolCallId
+        ? toolCallIds.has(image.sourceToolCallId)
+        : message.imageAssetAnchor === true;
+    });
+    const toolOrder = [...toolCallIds];
+    projectedImages.sort((a, b) => (
+      toolOrder.indexOf(a.sourceToolCallId) - toolOrder.indexOf(b.sourceToolCallId)
+      || (a.sourceImageIndex ?? 0) - (b.sourceImageIndex ?? 0)
+    ));
+    return projectedImages.length > 0 ? { ...rest, images: projectedImages } : rest;
   });
 }
 
@@ -550,6 +564,8 @@ export async function handleAgentOutput(agentId, agent, msg) {
           width: msg.metadata?.width ?? msg.image.width,
           height: msg.metadata?.height ?? msg.image.height,
           turnId: msg.turnId || null,
+          sourceToolCallId: msg.sourceToolCallId || null,
+          sourceImageIndex: msg.sourceImageIndex,
           vpId: msg.vpId || null,
           threadId: msg.threadId || null,
         });
@@ -560,7 +576,11 @@ export async function handleAgentOutput(agentId, agent, msg) {
           ...(msg.vpId ? { vpId: msg.vpId } : {}),
           ...(msg.turnId ? { turnId: msg.turnId } : {}),
           ...(msg.threadId ? { threadId: msg.threadId } : {}),
-          image, _requestUserId: agent.ownerId,
+          image: msg.sourceToolCallId
+            ? { ...image, sourceToolCallId: msg.sourceToolCallId,
+              ...(Number.isInteger(msg.sourceImageIndex) && msg.sourceImageIndex >= 0 ? { sourceImageIndex: msg.sourceImageIndex } : {}) }
+            : image,
+          _requestUserId: agent.ownerId,
         });
         ok = true;
       } catch (err) {

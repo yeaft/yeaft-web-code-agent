@@ -6,6 +6,7 @@ import { normalizeRouteForwardDisplay } from '../utils/route-forward-display.js'
 import { getTodoDisplayState } from '../utils/todo-display-state.js';
 import { configureMarked, renderMermaidIn } from '../utils/markdown.js';
 import { openImagePreview } from '../utils/imagePreview.js';
+import { buildTurnResponseBlocks, responseImageKey } from '../utils/turn-response.js';
 import { formatSessionMessageDateTime, quoteFromAssistantTurn } from '../utils/session-message-quote.js';
 import {
   collectMessageFileReferences,
@@ -91,9 +92,9 @@ export default {
       />
 
       <div class="turn-message-block" :data-turn-id="turn.turnId || ''">
-        <!-- 1. Text content -->
-        <div v-if="textSegments.length > 0" class="turn-content">
-          <div class="turn-header">
+        <!-- 1. Response content in transcript order -->
+        <div v-if="responseBlocks.length > 0" class="turn-content">
+          <div v-if="textSegments.length > 0" class="turn-header">
             <!-- Session message blocks are keyed by turn/message identity; no thread pill is rendered. -->
             <button class="copy-btn" @click="copyContent" :title="copied ? $t('message.copied') : $t('message.copy')">
               <svg v-if="!copied" viewBox="0 0 24 24" width="16" height="16">
@@ -104,26 +105,35 @@ export default {
               </svg>
             </button>
           </div>
-          <div v-if="progressSegments.length > 0" class="turn-progress-group">
-            <div class="turn-progress-list">
-              <div
-                v-for="segment in progressSegments"
-                :key="segment.key"
-                class="turn-response-segment turn-response-progress"
-              >
-                <div class="turn-text markdown-body" v-html="renderSegment(segment.content)" @click="onMarkdownClick"></div>
-                <span v-if="segment.isStreaming" class="cursor-blink"></span>
+          <template v-for="block in responseBlocks" :key="block.key">
+            <div v-if="block.kind === 'progress'" class="turn-progress-group">
+              <div class="turn-progress-list">
+                <div v-for="segment in block.items" :key="segment.key"
+                     class="turn-response-segment turn-response-progress">
+                  <div class="turn-text markdown-body" v-html="renderSegment(segment.content)" @click="onMarkdownClick"></div>
+                  <span v-if="segment.isStreaming" class="cursor-blink"></span>
+                </div>
               </div>
             </div>
-          </div>
-          <div
-            v-for="segment in resultSegments"
-            :key="segment.key"
-            class="turn-response-segment turn-response-result"
-          >
-            <div class="turn-text markdown-body" v-html="renderSegment(segment.content)" @click="onMarkdownClick"></div>
-            <span v-if="segment.isStreaming" class="cursor-blink"></span>
-          </div>
+            <div v-else-if="block.kind === 'images'" class="turn-images">
+              <button v-for="img in block.items" :key="responseImageKey(img)" type="button"
+                      class="turn-image-item" :aria-label="img.filename || $t('message.imagePreview')" @click="previewImage(img, $event.currentTarget)">
+                <img v-if="imageSrc(img) && !failedImages.has(img.assetId || img.id)"
+                     :src="imageSrc(img)" :alt="img.filename || $t('message.imagePreview')"
+                     class="chat-screenshot" loading="lazy" decoding="async"
+                     @error="handleImageError(img)" />
+                <span v-else class="turn-image-fallback">
+                  <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
+                  <span>{{ $t('message.imageUnavailable') }}</span>
+                </span>
+              </button>
+            </div>
+            <div v-else v-for="segment in block.items" :key="segment.key"
+                 class="turn-response-segment turn-response-result">
+              <div class="turn-text markdown-body" v-html="renderSegment(segment.content)" @click="onMarkdownClick"></div>
+              <span v-if="segment.isStreaming" class="cursor-blink"></span>
+            </div>
+          </template>
         </div>
 
       <!-- 2. VP hand-off messages (RouteForward) -->
@@ -184,21 +194,6 @@ export default {
             @update:expanded="value => updateToolExpanded(latestTool, latestToolIndex, 'latest', value)"
           />
         </div>
-      </div>
-
-      <!-- 4. Images from Claude response (screenshots, etc.) -->
-      <div v-if="turn.imageMsgs && turn.imageMsgs.length > 0" class="turn-images">
-        <button v-for="img in turn.imageMsgs" :key="img.assetId || img.id" type="button"
-                class="turn-image-item" @click="previewImage(img, $event.currentTarget)">
-          <img v-if="imageSrc(img) && !failedImages.has(img.assetId || img.id)"
-               :src="imageSrc(img)" :alt="img.filename || $t('message.imagePreview')"
-               class="chat-screenshot" loading="lazy" decoding="async"
-               @error="handleImageError(img)" />
-          <span v-else class="turn-image-fallback">
-            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
-            <span>{{ $t('message.imageUnavailable') }}</span>
-          </span>
-        </button>
       </div>
 
       <!-- 5. AskUserQuestion interactive card -->
@@ -443,8 +438,7 @@ export default {
         ? [{ key: 'legacy-result', content: props.turn.textContent, kind: 'result', isStreaming: props.turn.isStreaming === true }]
         : [];
     });
-    const progressSegments = Vue.computed(() => textSegments.value.filter(segment => segment.kind !== 'result'));
-    const resultSegments = Vue.computed(() => textSegments.value.filter(segment => segment.kind === 'result'));
+    const responseBlocks = Vue.computed(() => buildTurnResponseBlocks(props.turn, textSegments.value));
 
     const fileReferenceSourceSignature = Vue.computed(() => [
       ...textSegments.value.map(segment => {
@@ -792,7 +786,7 @@ export default {
     };
 
     const previewableImages = Vue.computed(() => (
-      (Array.isArray(props.turn?.imageMsgs) ? props.turn.imageMsgs : [])
+      responseBlocks.value.filter(block => block.kind === 'images').flatMap(block => block.items)
         .map(image => ({
           image,
           src: imageSrc(image),
@@ -895,8 +889,8 @@ export default {
       toolExpandedValue,
       updateToolExpanded,
       textSegments,
-      progressSegments,
-      resultSegments,
+      responseBlocks,
+      responseImageKey,
       renderSegment,
       onMarkdownClick,
       copyContent,

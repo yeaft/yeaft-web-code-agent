@@ -159,34 +159,41 @@
   flex-shrink: 0;
 }
 
-/* Turn: Images (screenshots from Claude tools) */
+/* Response images stay beside the surrounding text, without stretching small
+   images or filling a row with a tall gallery. Originals remain in the viewer. */
 .turn-images {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 280px));
-  gap: 10px;
-  padding: 10px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  margin-block: 12px;
 }
 
 .turn-image-item {
   display: flex;
-  width: 100%;
-  min-height: 120px;
+  max-width: 100%;
   padding: 0;
   align-items: center;
   justify-content: center;
   overflow: hidden;
   border: 1px solid var(--border-color);
-  border-radius: 10px;
+  border-radius: var(--image-preview-control-radius);
   background: var(--bg-sidebar);
   color: var(--text-muted);
   cursor: zoom-in;
 }
 
+.turn-image-item:focus-visible {
+  outline: var(--image-preview-focus-ring-width) solid var(--accent-color);
+  outline-offset: var(--image-preview-focus-ring-offset);
+}
+
 .chat-screenshot {
   display: block;
-  width: 100%;
-  max-width: 100%;
-  max-height: 360px;
+  width: auto;
+  height: auto;
+  max-width: min(240px, 100%);
+  max-height: 160px;
   object-fit: contain;
   transition: opacity 0.2s;
 }

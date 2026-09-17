@@ -508,6 +508,80 @@ test('shows one turn action above latest only while reading a two-viewport respo
   expect(pageErrors).toEqual([]);
 });
 
+for (const theme of ['light', 'dark']) {
+  for (const width of [1280, 320]) {
+    test(`response images stay inline and compact (${theme}, ${width}px)`, async ({ page }, testInfo) => {
+      const errors = [];
+      page.on('pageerror', error => errors.push(error.message));
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto(`${baseUrl}/__turn-response`);
+      await page.waitForFunction(() => window.__ready === true);
+      await page.evaluate(async theme => {
+        document.documentElement.setAttribute('data-theme', theme);
+        const { appendTurnResponseSegment } = await import('/web/utils/turn-response.js');
+        const messages = [
+          { id: 'intro', type: 'assistant', content: 'The architecture keeps responsibilities separate.', responseKind: 'progress' },
+          { id: 'tool-a', type: 'tool-use', toolId: 'call-a' },
+          { id: 'detail', type: 'assistant', content: 'The release checklist is shown below.', responseKind: 'progress' },
+          { id: 'tool-b', type: 'tool-use', toolId: 'call-b' },
+          // Upload completion is reversed and arrives after later text.
+          { id: 'image-b', type: 'chat-image', sourceToolCallId: 'call-b', src: '/gallery-b.png', filename: 'Release checklist' },
+          { id: 'image-a', type: 'chat-image', sourceToolCallId: 'call-a', src: '/gallery-a.png', filename: 'Architecture overview' },
+        ];
+        const turn = window.__turn;
+        Object.assign(turn, { messages, textSegments: [], textContent: '', todoMsg: null, toolMsgs: [],
+          imageMsgs: messages.filter(row => row.type === 'chat-image'), isStreaming: true });
+        messages.filter(row => row.type === 'assistant').forEach(row => appendTurnResponseSegment(turn, row));
+        window.__appendResponse = appendTurnResponseSegment;
+      }, theme);
+      const images = page.locator('.turn-image-item');
+      await expect(images).toHaveCount(2);
+      await expect.poll(() => images.locator('img').evaluateAll(nodes => nodes.every(node => node.complete && node.naturalWidth > 0))).toBe(true);
+      const order = () => page.locator('.turn-content > :not(.turn-header)').evaluateAll(nodes => nodes.map(node => (
+        node.classList.contains('turn-images') ? node.querySelector('img')?.alt : node.textContent.trim()
+      )));
+      const expected = ['The architecture keeps responsibilities separate.', 'Architecture overview', 'The release checklist is shown below.', 'Release checklist'];
+      expect(await order()).toEqual(expected);
+      await page.evaluate(() => {
+        const result = { id: 'final', type: 'assistant', content: 'Final summary: all checks passed.', responseKind: 'result' };
+        window.__turn.messages.push(result);
+        window.__appendResponse(window.__turn, result);
+        window.__turn.isStreaming = false;
+      });
+      expect(await order()).toEqual([...expected, 'Final summary: all checks passed.']);
+      // A history replay deserializes rows; it must retain exactly the live order.
+      await page.evaluate(() => {
+        window.__turn.messages = JSON.parse(JSON.stringify(window.__turn.messages));
+        window.__turn.imageMsgs = JSON.parse(JSON.stringify(window.__turn.imageMsgs));
+        window.__turn.isHistory = true;
+      });
+      expect(await order()).toEqual([...expected, 'Final summary: all checks passed.']);
+      for (const image of await images.locator('img').all()) {
+        const rect = await image.boundingBox();
+        expect(rect.width).toBeLessThanOrEqual(240);
+        expect(rect.height).toBeLessThanOrEqual(160);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`inline-images-${theme}-${width}.png`), fullPage: true });
+      await images.first().focus();
+      expect(await images.first().evaluate(node => getComputedStyle(node).outlineStyle)).toBe('solid');
+      await page.keyboard.press('Enter');
+      const viewer = page.locator('.image-preview-overlay');
+      await expect(viewer).toBeVisible();
+      await expect(viewer.locator('.image-preview-img')).toHaveAttribute('src', '/gallery-a.png');
+      await viewer.locator('.image-preview-next').click();
+      await expect(viewer.locator('.image-preview-img')).toHaveAttribute('src', '/gallery-b.png');
+      await page.keyboard.press('Escape');
+      await expect(viewer).toHaveCount(0);
+      await expect(images.first()).toBeFocused();
+      await page.evaluate(() => { window.__turn.imageMsgs[1].src = '/missing-image.png'; });
+      await expect(page.locator('.turn-image-fallback')).toHaveCount(1);
+      await expect(page.locator('.turn-response-result')).toContainText('Final summary');
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
 test('keeps progress visible and distinct from the final result across themes and mobile', async ({ page }) => {
   await page.goto(`${baseUrl}/__turn-response`);
   await page.waitForFunction(() => window.__ready === true);

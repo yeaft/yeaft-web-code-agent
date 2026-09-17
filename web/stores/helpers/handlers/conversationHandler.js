@@ -941,10 +941,14 @@ function formatYeaftHistoryMessages(incomingMessages, msgSessionId, mode, existi
       }
       for (const image of Array.isArray(m.images) ? m.images : []) {
         if (!image?.assetId) continue;
+        const imageKey = image.sourceToolCallId
+          ? `${image.assetId}:tool:${encodeURIComponent(image.sourceToolCallId)}`
+          : image.assetId;
+        const occurrenceKey = Number.isInteger(image.sourceImageIndex) ? `${imageKey}:index:${image.sourceImageIndex}` : imageKey;
         formatted.push({
-          id: `${stableId || messageId || turnId}:image:${image.assetId}`,
-          messageId: `${stableId || messageId || turnId}:image:${image.assetId}`,
-          ...(durableKey ? { stableKey: `${durableKey}:image:${image.assetId}` } : {}),
+          id: `${stableId || messageId || turnId}:image:${occurrenceKey}`,
+          messageId: `${stableId || messageId || turnId}:image:${occurrenceKey}`,
+          ...(durableKey ? { stableKey: `${durableKey}:image:${occurrenceKey}` } : {}),
           ...historyEntryMeta,
           seq: Number.isFinite(m.seq) ? m.seq : parsePersistedHistorySeq(stableId),
           type: 'chat-image', ...image, timestamp, sessionId: rowSessionId, turnId,

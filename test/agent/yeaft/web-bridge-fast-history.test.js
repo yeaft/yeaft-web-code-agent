@@ -449,6 +449,9 @@ describe('Yeaft load-history first paint', () => {
     expect(handlerCtx.pauseQueryTimer).toHaveBeenCalledTimes(1);
     expect(handlerCtx.resetQueryTimer).not.toHaveBeenCalled();
 
+    const enqueueAsset = vi.fn(() => 'delivery-asset-anchor');
+    const drainAssets = vi.fn(async () => {});
+    ctx.assetOutbox = { enqueue: enqueueAsset, drain: drainAssets };
     __testHandleEngineEvent({
       type: 'tool_end',
       id: 'call-slow',
@@ -456,8 +459,16 @@ describe('Yeaft load-history first paint', () => {
       output: 'done',
       isError: false,
       threadId: 'main',
+      displayImages: [{
+        assetId: 'asset-1', mimeType: 'image/png', filename: 'tool.png',
+        previewData: { data: 'image-data', mimeType: 'image/png', filename: 'tool.png' },
+      }],
     }, handlerCtx);
     expect(handlerCtx.resetQueryTimer).toHaveBeenCalledTimes(1);
+    expect(enqueueAsset).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'session-fast', turnId: 'turn-error', sourceToolCallId: 'call-slow', sourceImageIndex: 0,
+    }));
+    ctx.assetOutbox = null;
 
     expect(sent).toContainEqual(expect.objectContaining({
       event: expect.objectContaining({
