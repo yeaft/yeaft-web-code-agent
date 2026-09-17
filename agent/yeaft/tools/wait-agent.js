@@ -35,6 +35,7 @@ import { agentBelongsToCaller, getAgentRegistry } from './agent.js';
 import { isTerminalAgentStatus, STATUS } from '../sub-agent/status.js';
 import { diagnoseAgentLiveness } from '../sub-agent/liveness.js';
 import { consumeNotificationForAgent } from '../sub-agent/notifications.js';
+import { describeAgentLifecycle, describeAgentOutcome } from '../sub-agent/outcome.js';
 
 /**
  * Build the status-specific next-step guidance the LLM reads after a wait.
@@ -163,6 +164,8 @@ function buildEnvelope(agent, { timedOut = false } = {}) {
     agentId: agent.id,
     name: agent.name,
     status,
+    lifecycle: describeAgentLifecycle(agent),
+    outcome: describeAgentOutcome(agent),
     error: agent.error || null,
     outputFile: agent.outputFile || null,
     liveness,
@@ -185,6 +188,9 @@ function buildEnvelope(agent, { timedOut = false } = {}) {
     env.budget_status = budgetResult.status;
     env.budget_reason = budgetResult.reason || null;
     env.partial_output = budgetResult.partial_output || '';
+    env.incomplete = true;
+    env.truncated = Boolean(budgetResult.truncated || budgetResult.final_report?.truncated);
+    env.final_report = budgetResult.final_report || null;
     env.budget_usage = budgetResult.usage || null;
   }
   env.result = resultText;

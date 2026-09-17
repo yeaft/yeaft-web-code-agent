@@ -104,6 +104,10 @@ export function enqueueTerminalNotification(input) {
     budgetExceeded: Boolean(input.budgetExceeded),
     budgetReason: input.budgetReason || null,
     budgetUsage: input.budgetUsage || null,
+    outcome: input.outcome || (input.budgetExceeded ? 'incomplete' : null),
+    incomplete: Boolean(input.incomplete || input.budgetExceeded),
+    truncated: Boolean(input.truncated),
+    finalReport: input.finalReport || null,
     createdAt: Date.now(),
   };
   const key = bucketKey(scope);
@@ -218,17 +222,29 @@ export function formatNotificationsForPrompt(notifs) {
   );
   for (const n of notifs) {
     parts.push('');
-    parts.push(`<notification agent="${n.agentName}" id="${n.agentId}" status="${n.status}" turns="${n.turns}">`);
+    parts.push(`<notification agent="${n.agentName}" id="${n.agentId}" status="${n.status}" outcome="${n.outcome || 'unknown'}" turns="${n.turns}">`);
     if (n.error) parts.push(`  error: ${n.error}`);
+    if (n.incomplete) {
+      parts.push('  incomplete: true');
+      parts.push('  warning: This is partial evidence, not task success; do not treat verdict text such as APPROVE as a completed review.');
+    }
+    if (n.truncated) parts.push('  truncated: true');
     if (n.budgetExceeded) {
       parts.push('  budgetExceeded: true');
       if (n.budgetReason) parts.push(`  budgetReason: ${n.budgetReason}`);
       if (n.budgetUsage) parts.push(`  budgetUsage: ${JSON.stringify(n.budgetUsage)}`);
     }
     if (n.outputFile) parts.push(`  outputFile: ${n.outputFile}`);
+    if (n.finalReport) {
+      parts.push(`  finalReportReserved: ${Boolean(n.finalReport.reserved)}`);
+      parts.push(`  finalReportReceived: ${Boolean(n.finalReport.received)}`);
+      parts.push(`  finalReportTruncated: ${Boolean(n.finalReport.truncated)}`);
+    }
     if (n.result) {
-      const r = n.result.length > 1500 ? n.result.slice(0, 1500) + '…(truncated)' : n.result;
-      parts.push('  result:');
+      const clipped = n.result.length > 1500;
+      const r = clipped ? n.result.slice(0, 1500) + '…(display truncated)' : n.result;
+      if (clipped) parts.push('  displayTruncated: true');
+      parts.push(n.incomplete ? '  partialOutput:' : '  result:');
       parts.push(`    ${r.split('\n').join('\n    ')}`);
     }
     parts.push('</notification>');

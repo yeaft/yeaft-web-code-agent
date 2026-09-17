@@ -64,6 +64,13 @@ export class SubAgentToolRegistry extends ToolRegistry {
     const limit = agent.budget?.max_tool_calls;
     const llmLimit = agent.budget?.max_llm_calls;
     const llmCalls = agent.usage?.llmCalls || 0;
+    if (agent.finalizationRequested) {
+      return {
+        finalize: true,
+        maxOutputTokens: 4096,
+        prompt: '[Parent wrap-up control] Stop investigating and do not call tools. Return the final task report now using only evidence already collected. State verification, incomplete work, and blockers honestly; do not claim success merely because the lifecycle is ending.',
+      };
+    }
     const reason = limit && stats.toolCalls >= limit ? `max_tool_calls (${limit}) reached`
       : llmLimit && llmCalls >= llmLimit ? `max_llm_calls (${llmLimit}) reached` : null;
     if (reason) {
@@ -112,6 +119,9 @@ export class SubAgentToolRegistry extends ToolRegistry {
     // after cancellation, even when the underlying tool ignores AbortSignal.
     const signal = agent.abortController?.signal;
     if (signal?.aborted) throw new Error(String(signal.reason || 'Sub-agent aborted'));
+    if (agent.finalizationRequested) {
+      throw new Error('Parent requested finalization; no further child tools may execute');
+    }
     const stats = agent.execution || (agent.execution = createExecutionStats());
     const limit = agent.budget?.max_tool_calls;
     if (limit !== undefined && stats.toolCalls >= limit) {

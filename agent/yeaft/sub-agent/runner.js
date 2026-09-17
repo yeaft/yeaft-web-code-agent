@@ -259,6 +259,8 @@ export function startSubAgent(agent, deps = {}) {
 function buildWallTimeBudgetResult(agent, reason) {
   return {
     status: 'budget_exceeded',
+    outcome: 'incomplete',
+    complete: false,
     partial_output: agent.partial_output || agent.lastResult
       || (typeof agent.result === 'string' ? agent.result : agent.result?.partial_output) || '',
     reason,
@@ -343,6 +345,19 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
   };
 
   const dequeueNextUserPrompt = () => {
+    if (agent.finalizationRequested && !agent.finalizationStarted) {
+      agent.finalizationStarted = true;
+      return {
+        // The parent's reason is audit evidence, not a child prompt. The
+        // registry supplies the authenticated control instruction separately.
+        prompt: '',
+        finalization: true,
+        parentEffortDecision: snapshotEffortDecision(agent.parentEffortDecision),
+        projectSessionIds: Array.isArray(deps.projectSessionIds) ? deps.projectSessionIds.slice() : [],
+        projectLabel: typeof deps.projectLabel === 'string' ? deps.projectLabel : '',
+        projectInstruction: typeof deps.projectInstruction === 'string' ? deps.projectInstruction : '',
+      };
+    }
     if (!Array.isArray(agent.pendingPrompts)) agent.pendingPrompts = [];
     const entry = agent.pendingPrompts.shift();
     if (!entry) return null;
@@ -445,6 +460,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
       let assistantText = '';
       let budgetReportText = '';
       let endedNormally = false;
+      let outputTruncated = false;
       let streamError = null;
       const priorUsageTokens = agent.usage?.tokens || 0;
       let turnUsageTokens = 0;
@@ -509,6 +525,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
             streamError = evt.error.message || String(evt.error);
           }
           if (evt && evt.type === 'stop') {
+            if (evt.stopReason === 'max_tokens') outputTruncated = true;
             if (evt.stopReason === 'end_turn' || evt.stopReason === 'stop_sequence') {
               endedNormally = true;
             }
@@ -544,6 +561,13 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
         const reason = agent.executionBudgetReason || agent.toolBudgetReason;
         agent.result = buildWallTimeBudgetResult(agent, reason);
         agent.result.reporting = { attempted: !!agent.budgetReportStarted, received: !!budgetReportText.trim() };
+        agent.result.truncated = outputTruncated;
+        agent.result.final_report = {
+          reserved: true,
+          received: !!budgetReportText.trim(),
+          truncated: outputTruncated,
+          text: budgetReportText.trim(),
+        };
         if (streamError) agent.result.reporting.error = streamError;
         agent.usage.turns += 1;
         agent.result.usage = { ...agent.usage };
@@ -609,6 +633,14 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
         // tickAgent already flipped status to 'completed' and aborted
         // the signal. Still want a terminal-status event + notification.
         finalizeTerminal(agent, STATUS.COMPLETED, { error: null, deps });
+        return;
+      }
+
+      if (queuedPrompt.finalization || agent.finalizationRequested) {
+        transitionTerminal(agent, STATUS.COMPLETED, {
+          diagnostic: 'parent_requested_finalization', deps,
+        });
+        emit({ type: 'sub_agent_turn_end', content: assistantText, status: STATUS.COMPLETED });
         return;
       }
 
@@ -678,6 +710,9 @@ function finalizeTerminal(agent, status, { error, deps } = {}) {
     agentId: agent.id,
     agentName: agent.name,
     status,
+    outcome: agent.result?.status === 'budget_exceeded' ? 'incomplete'
+      : status === STATUS.COMPLETED ? 'succeeded'
+        : status === STATUS.CLOSED ? 'cancelled' : 'failed',
     error: error || agent.error || null,
     parentSessionId: agent.parentSessionId || deps?.parentSessionId || null,
     parentVpId: agent.parentVpId || deps?.parentVpId || null,
@@ -731,6 +766,12 @@ function finalizeTerminal(agent, status, { error, deps } = {}) {
         budgetExceeded: !!budgetResult,
         budgetReason: budgetResult?.reason || null,
         budgetUsage: budgetResult?.usage || null,
+        outcome: budgetResult ? 'incomplete'
+          : status === STATUS.COMPLETED ? 'succeeded'
+            : status === STATUS.CLOSED ? 'cancelled' : 'failed',
+        incomplete: !!budgetResult,
+        truncated: Boolean(budgetResult?.truncated || budgetResult?.final_report?.truncated),
+        finalReport: budgetResult?.final_report || null,
       });
     } catch { /* never let the notification queue throw kill the driver */ }
   }
@@ -754,6 +795,9 @@ function waitUntilResumed(agent, idleAbandonMs) {
         return resolve('terminal');
       }
       if (Array.isArray(agent.pendingPrompts) && agent.pendingPrompts.length > 0) {
+        return resolve('prompt');
+      }
+      if (agent.finalizationRequested && !agent.finalizationStarted) {
         return resolve('prompt');
       }
       if (idleAbandonMs > 0 && Date.now() - start >= idleAbandonMs) {

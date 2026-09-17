@@ -128,6 +128,23 @@ describe('parent-owned live child controls', () => {
     expect(JSON.parse(await spawnAgent.execute({ name: 'bad', mission: 'x', allow_tools: ['NoTool'] }, ctx)).error).toBeTruthy();
   });
 
+  it('requests cooperative tool-free finalization without treating reason as a prompt', async () => {
+    const agent = record();
+    agent.status = 'idle';
+    agent.pendingPrompts = [];
+    const child = new SubAgentToolRegistry({ agent }).register(tool('Bash'));
+    const result = await update({ request_finalize: true,
+      reason: 'Parent has enough evidence; wrap up now.' });
+    expect(result).toMatchObject({ success: true, finalizationRequested: true });
+    expect(agent.pendingPrompts).toEqual([]);
+    expect(agent.diagnostics.at(-1)).toMatchObject({ requestFinalize: true });
+    const policy = child.prepareProviderRequest();
+    expect(policy).toMatchObject({ finalize: true, maxOutputTokens: 4096 });
+    expect(policy.prompt).toContain('evidence already collected');
+    expect(policy.prompt).not.toContain('Parent has enough evidence');
+    await expect(child.execute('Bash', {})).rejects.toThrow(/finalization/);
+  });
+
   it('reserves real provider dispatches and permits only one separate report', () => {
     const agent = record({ max_llm_calls: 2 });
     const child = new SubAgentToolRegistry({ agent });

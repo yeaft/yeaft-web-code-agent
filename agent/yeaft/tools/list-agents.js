@@ -4,6 +4,7 @@ import { defineTool } from './types.js';
 import { agentBelongsToCaller, getAgentRegistry } from './agent.js';
 import { isTerminalAgentStatus, STATUS } from '../sub-agent/status.js';
 import { diagnoseAgentLiveness } from '../sub-agent/liveness.js';
+import { describeAgentLifecycle, describeAgentOutcome } from '../sub-agent/outcome.js';
 
 function nextStepFor(agent, liveness) {
   if (isTerminalAgentStatus(agent.status)) {
@@ -69,6 +70,8 @@ By default terminal agents are omitted. Pass include_closed=true to include them
         id,
         name: agent.name,
         status: agent.status,
+        lifecycle: describeAgentLifecycle(agent),
+        outcome: describeAgentOutcome(agent),
         task: typeof agent.task === 'string' ? agent.task.slice(0, 200) : null,
         outputFile: agent.outputFile || null,
         activity: {
