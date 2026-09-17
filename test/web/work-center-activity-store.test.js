@@ -257,6 +257,21 @@ describe('Work Center activity store', () => {
     expect(store.workCenterActivityByAgent['agent-a'].map(row => row.id)).toEqual(['other']);
   });
 
+  it('accepts a new Coordinator lifecycle with no overlapping Actions and loads its reply', async () => {
+    const store = createStore({ workCenterAgentId: 'agent-a' });
+    const terminal = { ...item('one', 'done', 5), lifecycle: 'done', coordinatorRevision: 2,
+      actions: [{ id: 'old-action', status: 'closed' }], messages: [] };
+    store.workCenterDetailByAgent['agent-a'] = terminal;
+    const next = { ...item('one', 'running', 6), lifecycle: 'open', coordinatorRevision: 3,
+      currentActionId: null, currentAction: null, actionStats: [] };
+    const detail = { ...next, actions: [], messages: [{ text: 'New plan' }] };
+    store.workCenterRequest = vi.fn(async () => detail);
+    store.applyWorkCenterEvent('agent-a', { type: 'coordinator.turn_completed', workItem: next });
+    expect(store.workCenterDetailByAgent['agent-a']).toMatchObject({ status: 'running', lifecycle: 'open' });
+    await flushPromises();
+    expect(store.workCenterDetailByAgent['agent-a'].messages).toEqual([{ text: 'New plan' }]);
+  });
+
   it.each(['done', 'cancelled'])('does not resurrect %s from equal-version list/events/details', async status => {
     const store = createStore({ workCenterAgentId: 'agent-a' });
     const terminal = { ...item('one', status, 5), lifecycle: status, coordinatorRevision: 3 };

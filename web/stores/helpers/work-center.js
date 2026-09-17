@@ -334,7 +334,11 @@ export function mergeWorkItemSummary(current, summary) {
       }
       return { ...action, ...stats };
     });
-    if (!matchedStats) aggregateAccepted = false;
+    // A new Coordinator turn can replace/close the entire Action set. Its
+    // lifecycle must advance with its version, even when no old Action matches;
+    // otherwise we manufacture an equal-version terminal snapshot that blocks
+    // the subsequent authoritative detail response.
+    if (!matchedStats) aggregateAccepted = Number(summary.coordinatorRevision) > Number(current.coordinatorRevision || 0);
   }
   for (const field of DETAIL_SUMMARY_FIELDS) {
     if (!aggregateAccepted && PROGRESS_BOUND_SUMMARY_FIELDS.has(field)) continue;
