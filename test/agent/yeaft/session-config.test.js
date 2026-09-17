@@ -128,6 +128,9 @@ describe('Yeaft Plugin catalog discovery', () => {
   it('discovers cold-start assets and fresh project scopes without starting inference or MCP', () => {
     const root = makeDir();
     const workDir = tempRoot('yeaft-catalog-project-');
+    const bundledDir = tempRoot('yeaft-catalog-bundled-');
+    const originalBundledDir = process.env.YEAFT_SKILLS_BUNDLED_DIR;
+    writeFileSync(join(bundledDir, 'catalog-bundled-fixture.md'), '---\nname: catalog-bundled-fixture\ndescription: Bundled fixture\n---\nCheck bundled discovery.\n');
     mkdirSync(join(root, 'skills'), { recursive: true });
     mkdirSync(join(workDir, '.yeaft', 'skills'), { recursive: true });
     const skill = description => `---\nname: catalog-check\ndescription: ${description}\n---\nCheck the catalog.\n`;
@@ -155,6 +158,8 @@ describe('Yeaft Plugin catalog discovery', () => {
       return ctx.outboundSendQueue.at(-1).msg;
     };
     try {
+      // CI need not have the developer's external bundled Skills installed.
+      process.env.YEAFT_SKILLS_BUNDLED_DIR = bundledDir;
       const cold = request('cold');
       expect(cold).toMatchObject({
         type: 'yeaft_plugin_catalog_result', requestId: 'cold', _requestClientId: 'catalog-client', error: null,
@@ -164,7 +169,7 @@ describe('Yeaft Plugin catalog discovery', () => {
       ]));
       expect(cold.catalog.skills).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: 'catalog-check', tier: 'user', description: 'User version' }),
-        expect.objectContaining({ tier: 'bundled' }),
+        expect.objectContaining({ id: 'catalog-bundled-fixture', tier: 'bundled', description: 'Bundled fixture' }),
       ]));
       expect(cold.catalog.mcpServers).toEqual([expect.objectContaining({ id: 'catalog-mcp', ready: null })]);
       expect(existsSync(join(root, 'sessions'))).toBe(false);
@@ -182,6 +187,8 @@ describe('Yeaft Plugin catalog discovery', () => {
       expect(request('agent-only').catalog.skills.find(item => item.id === 'catalog-check')).toMatchObject({ tier: 'user' });
       expect(connect).not.toHaveBeenCalled();
     } finally {
+      if (originalBundledDir === undefined) delete process.env.YEAFT_SKILLS_BUNDLED_DIR;
+      else process.env.YEAFT_SKILLS_BUNDLED_DIR = originalBundledDir;
       connect.mockRestore();
       Object.assign(ctx, savedContext);
     }
