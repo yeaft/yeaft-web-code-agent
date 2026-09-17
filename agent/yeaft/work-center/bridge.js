@@ -254,6 +254,7 @@ export async function handleWorkCenterRequest(msg) {
       op,
       ok: false,
       error: err?.message || String(err),
+      ...(err?.code === 'WORK_CENTER_INPUT_STALE' ? { errorCode: err.code } : {}),
       _requestUserId: msg._requestUserId || null,
     });
   }

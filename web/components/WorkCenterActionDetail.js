@@ -11,6 +11,7 @@ export default {
     actions: { type: Array, default: () => [] },
     action: { type: Object, default: null },
     canMessage: { type: Boolean, default: false },
+    replyDisabled: { type: Boolean, default: false },
     messages: { type: Array, default: () => [] },
     messagesNextCursor: { type: [String, Number], default: null },
     messagesLoading: { type: Boolean, default: false },
@@ -18,7 +19,7 @@ export default {
     previewingAttachmentId: { type: String, default: null },
     attachmentError: { type: String, default: '' },
   },
-  emits: ['select-action', 'load-earlier-messages', 'open-attachment', 'quote', 'edit-as-new'],
+  emits: ['select-action', 'reply', 'load-earlier-messages', 'open-attachment', 'quote', 'edit-as-new'],
   computed: {
     executorName() {
       return this.action?.assignedVp?.name || this.action?.assignedVp?.id
@@ -163,7 +164,10 @@ export default {
           </section>
 
           <section v-if="waitingQuestion" id="work-center-action-waiting-question" class="work-center-action-waiting" role="status">
-            <strong>{{ tr('workCenter.waitingQuestionTitle', 'Input required') }}</strong>
+            <div class="work-center-reply-heading">
+              <strong>{{ tr('workCenter.waitingQuestionTitle', 'Input required') }}</strong>
+              <button v-if="canMessage" type="button" class="btn-secondary" :disabled="replyDisabled" @click="$emit('reply', action)">{{ $t('workCenter.replyToAction') }}</button>
+            </div>
             <p>{{ waitingQuestion }}</p>
           </section>
           <section v-if="action.status === 'closed' && action.closeReason" class="work-center-action-closed" role="status">

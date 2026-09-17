@@ -335,14 +335,14 @@ async function installWorkCenterTransport(chatPage) {
         pending.resolve(response);
       }, { id: request.id, data });
     },
-    async reject(request, message) {
-      await chatPage.evaluate(({ id, message: errorMessage }) => {
+    async reject(request, message, code = undefined) {
+      await chatPage.evaluate(({ id, message: errorMessage, code }) => {
         const store = window.Pinia.useChatStore();
         const pending = store.__workCenterE2EInflight?.[id];
         if (!pending) throw new Error(`Missing Work Center E2E request ${id}`);
         delete store.__workCenterE2EInflight[id];
-        pending.reject(new Error(errorMessage));
-      }, { id: request.id, message });
+        pending.reject(Object.assign(new Error(errorMessage), { code }));
+      }, { id: request.id, message, code });
     },
   };
   workCenterTransports.set(chatPage, transport);
@@ -2134,8 +2134,8 @@ test.describe('Work Center responsive UI', () => {
     const target = conversation.getByTestId('work-center-composer-target');
     await expect(actionDetail.locator('textarea')).toHaveCount(0);
     await expectWorkCenterTarget(target, 'coordinator', 'Send to Coordinator');
-    await chatPage.getByRole('button', { name: 'Close Actions' }).click();
-    await chooseWorkCenterTarget(chatPage, target, 'Send to Action 1');
+    await waitingQuestion.getByRole('button', { name: 'Reply to this Action', exact: true }).click();
+    await expect(composer).toBeFocused();
     await expectWorkCenterTarget(target, 'action:action-1:1', 'Send to Action 1');
     await expect(composer).toHaveAttribute('placeholder', 'Message Make the Work Center layout responsive from the Conversation composer');
 
@@ -2167,6 +2167,67 @@ test.describe('Work Center responsive UI', () => {
       revision: 1,
       text: 'Use PostgreSQL and explain the migration tradeoff.',
     });
+  });
+
+  test('answers a Coordinator question and recovers a rejected Action reply without locking the draft', async ({ chatPage, mockAgent }) => {
+    await chatPage.setViewportSize({ width: 320, height: 800 });
+    const detail = structuredClone(WAITING_ITEM_DETAIL);
+    detail.currentActionId = null;
+    delete detail.currentAction;
+    delete detail.messages[0].recovery;
+    detail.messages[0].decision.question = 'May we use an isolated worktree and leave the existing diff untouched?';
+    await openWorkCenter(chatPage, mockAgent, [WAITING_ITEM]);
+    const selecting = chatPage.locator('.work-center-card', { hasText: WAITING_ITEM.title }).click();
+    await respondToWorkCenterOp(mockAgent, 'get', detail, [WAITING_ITEM]);
+    await selecting;
+    await chatPage.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
+    const conversation = chatPage.locator('.work-center-conversation');
+    const composer = conversation.locator('textarea');
+    const target = conversation.getByTestId('work-center-composer-target');
+    const prompt = chatPage.locator('.work-center-resume');
+    await prompt.getByRole('button', { name: 'Reply to Coordinator', exact: true }).click();
+    await expect(composer).toBeFocused();
+    await expectWorkCenterTarget(target, 'coordinator', 'Send to Coordinator');
+    await composer.fill('Use a new worktree; do not touch the existing diff.');
+    const coordinatorReply = respondToWorkCenterOp(mockAgent, 'post_work_item_message', { accepted: true });
+    await conversation.locator('.send-btn').click();
+    expect((await coordinatorReply).payload.target).toEqual({ kind: 'coordinator' });
+    await expect(composer).toHaveValue('');
+
+    await ensureActionsOpen(chatPage);
+    await chatPage.locator('.work-center-action-summary').click();
+    await chatPage.locator('#work-center-action-waiting-question').getByRole('button', { name: 'Reply to this Action' }).click();
+    await expect(composer).toBeFocused();
+    await expectWorkCenterTarget(target, 'action:action-1:1', 'Send to Action 1');
+    await composer.fill('Keep all existing changes untouched.');
+    await conversation.locator('input[type="file"]').setInputFiles({
+      name: 'constraints.txt', mimeType: 'text/plain', buffer: Buffer.from('Preserve existing changes'),
+    });
+    await expect(conversation.locator('.work-center-message-draft-attachments')).toContainText('constraints.txt');
+    const requestPromise = mockAgent.__workCenterTransport.next();
+    await conversation.locator('.send-btn').click();
+    const rejected = await requestPromise;
+    const fresh = { ...detail, revision: 2 };
+    const refreshing = respondToWorkCenterOp(mockAgent, 'get', fresh);
+    await mockAgent.__workCenterTransport.reject(rejected,
+      'Action changed before input was applied; refresh and try again', 'WORK_CENTER_INPUT_STALE');
+    await refreshing;
+    await expect(composer).toBeEnabled();
+    await expect(composer).toHaveValue('Keep all existing changes untouched.');
+    await expect(conversation.locator('.work-center-message-draft-attachments')).toContainText('constraints.txt');
+    await expect(conversation.getByText('An unconfirmed request is locked to its original identity.')).toHaveCount(0);
+    await expect(conversation.locator('.work-center-error')).toContainText('Your reply was not applied');
+    const retryPromise = mockAgent.__workCenterTransport.next();
+    await conversation.locator('.send-btn').click();
+    const retried = await retryPromise;
+    expect(retried.payload.revision).toBe(2);
+    expect(retried.payload.clientMessageId).not.toBe(rejected.payload.clientMessageId);
+    expect(retried.payload.attachments).toEqual(rejected.payload.attachments);
+    const listing = respondToWorkCenterOp(mockAgent, 'list', { items: [WAITING_ITEM] });
+    await mockAgent.__workCenterTransport.resolve(retried, fresh);
+    await listing;
+    await expect(composer).toHaveValue('');
+    expect(await chatPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
   test('uses compact stop controls and resumes a stopped Work Item', async ({ chatPage, mockAgent }) => {

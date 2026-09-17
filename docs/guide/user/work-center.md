@@ -132,7 +132,9 @@ The main WorkItem conversation targets the **Coordinator**. Use it to:
 
 The Coordinator has no file, shell, or external side-effect tools. Its structured decisions coordinate Actions, update the contract, request human input, or complete the WorkItem when evidence satisfies the contract.
 
-You can explicitly target a current Action from the composer when it needs corrected context or an answer. Waiting/failed Action recovery is fenced by Action ID, revision, generation, and current Run state. The Action detail view shows its continuous conversation. Retained execution data is loaded on demand rather than mixed into the main goal view.
+Waiting prompts offer **Reply to Coordinator** or **Reply to this Action**. Clicking selects the recipient and focuses the conversation composer; it neither sends nor approves anything. Human questions in Action details also offer a direct reply button. Merely opening an Action never redirects a draft, and you can still select the target manually.
+
+Waiting/failed Action recovery is fenced by Action ID, revision, generation, and current Run state. Dynamic Items accept replies to any eligible Action, not just a single current Action. A confirmed stale-target rejection preserves text and attachments, unlocks the request, and refreshes details for you to check before resending. Unknown delivery after a timeout or disconnect retains the original request identity to prevent duplicate application. The Action detail view shows its continuous conversation. Retained execution data is loaded on demand rather than mixed into the main goal view.
 
 ## Outcomes and recovery
 

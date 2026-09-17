@@ -132,7 +132,9 @@ WorkItem 主对话默认面向 **Coordinator**，用于：
 
 Coordinator 没有 file、shell 或 external side-effect tool。它通过 structured decision 协调 Action、更新合同、请求人工输入，或在证据满足合同时完成 WorkItem。
 
-当当前 Action 需要修正 context 或回答时，可以在 composer 明确选择它。Waiting/failed Action recovery 受 Action ID、revision、generation 和当前 Run state fence 保护。Action detail 展示连续 conversation；保留的执行数据按需加载，不混入主要目标视图。
+等待提示提供「回复协调者」或「回复这个 Action」入口；点击后会选择对应接收者并聚焦下方输入框，不会自动发送或代表批准。Action 详情中的人工问题也有直接回复入口，打开详情本身不会改变草稿接收者。也可以在 composer 手动选择目标。
+
+Waiting/failed Action recovery 受 Action ID、revision、generation 和当前 Run state fence 保护；动态模式下可回复任何符合条件的 Action，不依赖唯一的 current Action。服务端明确拒绝过期目标时，会保留文字和附件、解除请求锁定并刷新详情，供用户核对后重发；超时或断线等送达未知情况仍保留原请求身份以防重复应用。Action detail 展示连续 conversation；保留的执行数据按需加载，不混入主要目标视图。
 
 ## Outcome 与 recovery
 

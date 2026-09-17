@@ -235,6 +235,28 @@ export default {
     contentIsActionList() {
       return this.contentRef.type === 'action-list';
     },
+    waitingPrompt() {
+      if (this.selected?.status !== 'waiting') return null;
+      const latest = this.selected.messages?.findLast(message => message.role === 'assistant' && message.decision);
+      const actions = this.selected.actions || [];
+      if (latest?.role === 'assistant' && latest.decision?.kind === 'request_human') {
+        const recoveryAction = actions.find(action => action.id === latest.recovery?.actionId
+          && action.generation === latest.recovery?.actionGeneration && action.status === 'waiting');
+        return {
+          question: latest.decision.question || this.selected.waitingReason || latest.text,
+          action: recoveryAction || null,
+        };
+      }
+      const action = actions.find(candidate => candidate.id === this.selected.currentActionId
+        && candidate.status === 'waiting');
+      const question = action?.canonicalResult?.waitingReason || this.selected.waitingReason;
+      return question ? { question, action: action || null } : null;
+    },
+    replyEntryDisabled() {
+      return this.coordinatorReadOnly || this.detailLoading || !!this.detailError
+        || this.workItemMessageSending || this.workItemMessageAttachmentsUploading
+        || !!this.pendingMessageEnvelope;
+    },
     composerTargetIsCoordinator() {
       return this.composerTargetValue === 'coordinator';
     },
@@ -1158,6 +1180,21 @@ export default {
       this.workItemMessageSending = false;
       return true;
     },
+    replyToWaitingPrompt(action = null) {
+      if (this.replyEntryDisabled || (action && !this.canMessageAction(action))
+        || (!action && this.coordinatorThinking)) return;
+      // Explicit user choice only: opening an Action never redirects the draft.
+      this.composerTargetValue = action ? `action:${action.id}:${action.generation}` : 'coordinator';
+      this.staleComposerTarget = null;
+      this.workItemMessageError = '';
+      this.saveComposerDraft();
+      if ((this.$refs.shell?.clientWidth || window.innerWidth) <= 900) this.closeContentPanel();
+      this.$nextTick(() => {
+        const textarea = this.$refs.workItemComposer?.getTextarea?.();
+        textarea?.scrollIntoView?.({ block: 'nearest' });
+        textarea?.focus?.();
+      });
+    },
     chooseCoordinatorTarget() {
       if (this.pendingMessageEnvelope
         && !this.clearPendingMessageEnvelope({ preserveAttachments: true })) return;
@@ -1581,8 +1618,20 @@ export default {
         }
       } catch (error) {
         if (this.workItemComposerScope === scope && this.actionInputRequestGeneration === requestGeneration) {
-          this.workItemMessageError = error?.message || String(error);
-          this.saveComposerDraft();
+          if (error?.code === 'WORK_CENTER_INPUT_STALE') {
+            // A typed pre-apply rejection is not an unknown delivery. Preserve
+            // the text, quote and attachments, but release the old request fence.
+            this.clearPendingMessageEnvelope({ preserveAttachments: true });
+            await this.$nextTick();
+            if (this.workItemComposerScope !== scope) return;
+            this.workItemMessageError = this.$t('workCenter.inputStale');
+            this.saveComposerDraft();
+            this.store.getWorkItem(itemId, this.agentId).catch(() => {});
+          } else {
+            // Timeout, disconnect and untyped errors may follow an applied write.
+            this.workItemMessageError = error?.message || String(error);
+            this.saveComposerDraft();
+          }
         }
       } finally {
         if (this.workItemComposerScope === scope && this.actionInputRequestGeneration === requestGeneration) {
@@ -1874,10 +1923,13 @@ export default {
                           <h3>{{ tr('workCenter.failureReason', 'Failure reason') }}</h3>
                           <p>{{ selected.failureReason }}</p>
                         </div>
-                        <div v-if="selected.status === 'waiting' && selected.waitingReason" class="work-center-section work-center-resume">
-                          <h3>{{ tr('workCenter.resumeAnswer', 'Answer the waiting question') }}</h3>
-                          <p>{{ selected.waitingReason }}</p>
-                          <small class="work-center-muted">{{ tr('workCenter.answerWithTarget', 'Choose the relevant target in the Conversation composer, then reply.') }}</small>
+                        <div v-if="waitingPrompt" class="work-center-section work-center-resume" role="status">
+                          <div class="work-center-reply-heading">
+                            <h3>{{ tr('workCenter.waitingQuestionTitle', 'Input required') }}</h3>
+                            <button type="button" class="btn-secondary" :disabled="replyEntryDisabled || (waitingPrompt.action ? !canMessageAction(waitingPrompt.action) : coordinatorThinking)" @click="replyToWaitingPrompt(waitingPrompt.action)">{{ waitingPrompt.action ? $t('workCenter.replyToAction') : $t('workCenter.replyToCoordinator') }}</button>
+                          </div>
+                          <p>{{ waitingPrompt.question }}</p>
+                          <small class="work-center-muted">{{ $t('workCenter.replyHelp') }}</small>
                         </div>
                         <button v-if="selected.executionControl?.stopReason && infoTab !== 'usage'" type="button" class="btn-ghost work-center-info-resource-alert" @click="selectInfoTab('usage')">
                           {{ $t('workCenter.resource.stopped') }} · {{ $t('workCenter.infoTab.usage') }} →
@@ -2190,6 +2242,8 @@ export default {
                       v-else
                       :action="selectedAction"
                       :can-message="canMessageAction(selectedAction)"
+                      :reply-disabled="replyEntryDisabled"
+                      @reply="replyToWaitingPrompt"
                       :actions="selected.actions || []"
                       @select-action="selectAction"
                       :messages="actionMessages"

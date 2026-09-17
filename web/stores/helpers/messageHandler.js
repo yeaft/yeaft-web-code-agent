@@ -256,7 +256,11 @@ export function handleMessage(store, msg) {
       clearTimeout(pending.timer);
       delete store.workCenterPending[msg.requestId];
       if (msg.ok) pending.resolve(msg.data);
-      else pending.reject(new Error(msg.error || 'Work Center request failed'));
+      else {
+        const error = new Error(msg.error || 'Work Center request failed');
+        if (msg.errorCode === 'WORK_CENTER_INPUT_STALE') error.code = msg.errorCode;
+        pending.reject(error);
+      }
       break;
     }
 
